@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { ConflictError } from "@goatcitadel/contracts";
 import { Pool } from "pg";
+import { ChatSessionLifecycleRepository } from "./chat-session-lifecycle-repo.js";
 import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
 import { ChatSessionPrefsRepository } from "./chat-session-prefs-repo.js";
 import { PostgresDatabaseClient } from "./postgres/client.js";
@@ -57,7 +58,14 @@ test(
       const autonomyA = new SessionAutonomyPrefsRepository(clientA);
       const autonomyB = new SessionAutonomyPrefsRepository(clientB);
 
-      assert.equal(metaA.ensure(sessionId).revision, 1);
+      new ChatSessionLifecycleRepository(clientA).initialize({
+        workspaceId: "default",
+        sessionId,
+        actorId: "test-fixture",
+        idempotencyKey: `test:lifecycle:init:${sessionId}`,
+        correlationId: `test:correlation:lifecycle:init:${sessionId}`,
+      });
+      assert.equal(metaA.get(sessionId)?.revision, 1);
       assert.equal(metaB.get(sessionId)?.revision, 1);
       assert.equal(metaA.patchWithRevision(sessionId, { title: "Winner" }, 1).revision, 2);
       assert.throws(

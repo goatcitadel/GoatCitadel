@@ -1,6 +1,5 @@
 import type { Storage } from "@goatcitadel/storage";
 import { DurableWorkerInterruptionError } from "./durable-run-service.js";
-import type { PreparedSkillMutationPlan } from "./skill-mutation-service.js";
 
 const CANONICAL_RECEIPT_METADATA_KEY = "generalChatPostCommitCanonical";
 const CANONICAL_RECEIPT_VERSION = 1;
@@ -11,31 +10,145 @@ export type GeneralChatPostCommitCanonicalEffect = "commitments" | "background_r
 export type GeneralChatPostCommitCanonicalStage =
   | "commitments_write"
   | "background_counter"
-  | "background_memory"
-  | "background_skill"
+  | "background_evidence"
   | "memory_maintenance_evaluation";
 
-export interface GeneralChatPostCommitStageReceipt {
-  completedAt: string;
-  result: Record<string, unknown>;
-}
+export type GeneralChatPostCommitStageDisposition = "completed" | "late_blocked";
+export type ChatPostCommitAuthorityDecision = "allowed" | "late_blocked";
+
+export type GeneralChatPostCommitStageReceipt =
+  | {
+      completedAt: string;
+      /** Absent only on legacy v1 receipts, which are equivalent to completed. */
+      disposition?: "completed";
+      result: Record<string, unknown>;
+    }
+  | {
+      completedAt: string;
+      disposition: "late_blocked";
+      /** Intentionally no result: late authority failures must retain no provider/domain content. */
+    };
 
 interface GeneralChatPostCommitCanonicalReceipt {
   version: 1;
   effect: GeneralChatPostCommitCanonicalEffect;
   stages: Partial<Record<GeneralChatPostCommitCanonicalStage, GeneralChatPostCommitStageReceipt>>;
-  backgroundSkillDecision?: GeneralChatPostCommitBackgroundSkillDecision;
 }
 
-export type GeneralChatPostCommitBackgroundSkillDecision =
-  | { version: 1; shouldAuthor: false }
-  | { version: 1; shouldAuthor: true; plan: PreparedSkillMutationPlan };
+/** Frozen session authority. Callers must never reconstruct this from current session metadata. */
+export interface ChatPostCommitFrozenParentAdmissionIdentity {
+  admissionId: string;
+  sessionIncarnationId: string;
+  workspaceId: string;
+  sessionId: string;
+  turnId: string;
+  aggregateRevision: number;
+  controllerGeneration: number;
+  materialSha256: string;
+}
+
+/** Replayable synchronous child authority; it never occupies the active-turn slot. */
+export interface ChatPostCommitFrozenChildAdmissionIdentity {
+  admissionId: string;
+  sessionIncarnationId: string;
+  workspaceId: string;
+  sessionId: string;
+  aggregateRevision: number;
+  controllerGeneration: number;
+  actorKind: "operator" | "external_companion" | "system";
+  actorId: string;
+  operation: "chat_post_commit_child";
+  materialSha256: string;
+}
+
+export interface ChatPostCommitChildDurableClaim {
+  durableRunId: string;
+  leaseOwnerId: string;
+  attemptCount: number;
+}
+
+export interface ChatPostCommitFrozenEligibility {
+  version: 1;
+  autonomyEnabledAtParentSettlement: boolean;
+  evalIntegrityTurn: boolean;
+  humanSession: boolean;
+}
+
+/** Explicit parent/child authority supplied by the durable boundary. */
+export interface ChatPostCommitEffectAuthorityContext {
+  parent: ChatPostCommitFrozenParentAdmissionIdentity;
+  child: ChatPostCommitFrozenChildAdmissionIdentity;
+  childDurableClaim: ChatPostCommitChildDurableClaim;
+  /** Frozen alongside the child payload/material; never reconstructed from current session state. */
+  postCommitEligibility: ChatPostCommitFrozenEligibility;
+}
+
+export interface ChatPostCommitStageAuthorityInput {
+  authority: ChatPostCommitEffectAuthorityContext;
+  parentRunId: string;
+  postCommitGenerationId: string;
+  childRunId: string;
+  sourceTurnId: string;
+  postCommitEligibility: ChatPostCommitFrozenEligibility;
+  effect: GeneralChatPostCommitCanonicalEffect;
+  stage: GeneralChatPostCommitCanonicalStage;
+  terminal: boolean;
+}
+
+export interface ChatPostCommitAtomicStageCallbackContext {
+  disposition: ChatPostCommitAuthorityDecision;
+  /** Exact active synchronous child admission; D3 intentionally treats the storage record as opaque. */
+  admission: unknown;
+  durableRunVersion: number;
+}
+
+export interface ChatPostCommitAtomicStageCallbackResult<TValue> {
+  /** May preserve the storage decision or reduce allowed to late_blocked; never upgrade it. */
+  disposition: ChatPostCommitAuthorityDecision;
+  value: TValue;
+}
+
+export interface ChatPostCommitAtomicStageOutcome<TValue> {
+  disposition: ChatPostCommitAuthorityDecision;
+  value: TValue;
+  /** Resulting admission: active for an allowed nonterminal stage, otherwise completed/cancelled. */
+  admission: unknown;
+}
+
+/**
+ * Storage-agnostic seam for the D2 integrator. `run` locks the session and exact
+ * active synchronous child admission before the exact durable claim, then calls
+ * the synchronous callback under those locks. After the callback, an allowed
+ * nonterminal stage retains the active admission, an allowed terminal stage
+ * completes it, and any late-blocked stage cancels it. Any throw rolls all
+ * writes back together.
+ */
+export interface ChatPostCommitAtomicStageAuthorityPort {
+  run<TValue>(
+    input: ChatPostCommitStageAuthorityInput,
+    callback: (context: ChatPostCommitAtomicStageCallbackContext) => ChatPostCommitAtomicStageCallbackResult<TValue>,
+  ): ChatPostCommitAtomicStageOutcome<TValue>;
+}
 
 export interface GeneralChatPostCommitStageIdentity {
   effectRunId: string;
   expectedLeaseOwnerId: string;
   effect: GeneralChatPostCommitCanonicalEffect;
   stage: GeneralChatPostCommitCanonicalStage;
+}
+
+export interface GeneralChatPostCommitStageCommitOptions {
+  authority?: {
+    context: ChatPostCommitEffectAuthorityContext;
+    parentRunId: string;
+    postCommitGenerationId: string;
+    port: ChatPostCommitAtomicStageAuthorityPort;
+    terminal: boolean;
+  };
+  /** Used when pre-dispatch already denied authority; provider/domain apply is skipped. */
+  forcedDisposition?: "late_blocked";
+  /** Re-evaluated synchronously under the atomic authority locks; may only reduce to late_blocked. */
+  denyOnlyBlocked?: () => boolean;
 }
 
 export interface GeneralChatPostCommitStageCommitResult<TValue> {
@@ -46,8 +159,7 @@ export interface GeneralChatPostCommitStageCommitResult<TValue> {
 
 /**
  * Reads an already-committed stage receipt so durable retries can avoid another
- * provider call. Canonical writes still go through {@link commitGeneralChatPostCommitStage},
- * which rechecks the receipt under a database-clock lease fence.
+ * provider call. Canonical writes still go through {@link commitGeneralChatPostCommitStage}.
  */
 export function readGeneralChatPostCommitStage(
   storage: ChatPostCommitEffectReceiptStoragePort,
@@ -55,97 +167,137 @@ export function readGeneralChatPostCommitStage(
 ): GeneralChatPostCommitStageReceipt | undefined {
   const run = storage.durableRuns.getRun(identity.effectRunId);
   assertEffectRunIdentity(run.workflowKey, run.metadata, identity.effect);
-  return readCanonicalReceipt(run.metadata, identity.effect)?.stages[identity.stage];
+  const receipt = readCanonicalReceipt(run.metadata, identity.effect)?.stages[identity.stage];
+  return receipt ? sanitizeStageReceipt(identity.stage, receipt) : undefined;
 }
 
-export function readGeneralChatPostCommitBackgroundSkillDecision(
-  storage: ChatPostCommitEffectReceiptStoragePort,
-  identity: Omit<GeneralChatPostCommitStageIdentity, "expectedLeaseOwnerId">,
-): GeneralChatPostCommitBackgroundSkillDecision | undefined {
-  assertBackgroundSkillIdentity(identity);
-  const run = storage.durableRuns.getRun(identity.effectRunId);
-  assertEffectRunIdentity(run.workflowKey, run.metadata, identity.effect);
-  return readCanonicalReceipt(run.metadata, identity.effect)?.backgroundSkillDecision;
-}
-
-/** Persist the first validated provider decision under the fresh child lease. */
-export function commitGeneralChatPostCommitBackgroundSkillDecision(
-  storage: ChatPostCommitEffectReceiptStoragePort,
-  identity: GeneralChatPostCommitStageIdentity,
-  proposed: GeneralChatPostCommitBackgroundSkillDecision,
-): GeneralChatPostCommitBackgroundSkillDecision {
-  assertBackgroundSkillIdentity(identity);
-  if (!isBackgroundSkillDecision(proposed)) {
-    throw new Error("Durable Chat background-skill decision is malformed.");
-  }
-  return storage.runImmediateTransaction(() => {
-    const locked = requireFreshEffectLease(storage, identity);
-    const currentReceipt =
-      readCanonicalReceipt(locked.metadata, identity.effect) ?? createCanonicalReceipt(identity.effect);
-    if (currentReceipt.backgroundSkillDecision) {
-      return currentReceipt.backgroundSkillDecision;
-    }
-    const updatedAt = new Date().toISOString();
-    storage.durableRuns.updateRun({
-      runId: locked.runId,
-      status: locked.status,
-      metadata: {
-        ...(locked.metadata ?? {}),
-        [CANONICAL_RECEIPT_METADATA_KEY]: {
-          ...currentReceipt,
-          backgroundSkillDecision: proposed,
-        },
-      },
-      updatedAt,
-      expectedVersion: locked.version,
-    });
-    return proposed;
-  });
+/** Convert a receipt into a safe service result without exposing late provider/domain content. */
+export function readGeneralChatPostCommitStageResult(
+  receipt: GeneralChatPostCommitStageReceipt,
+): Record<string, unknown> {
+  return receipt.disposition === "late_blocked"
+    ? { status: "late_blocked", disposition: "late_blocked" }
+    : receipt.result;
 }
 
 /**
- * Serializes one canonical post-commit write against the deterministic child
- * run. The database clock, current lease owner, domain write, and stage receipt
- * are checked/committed in the same transaction. Provider reads must happen
- * before this callback; `apply` must remain synchronous.
+ * Serializes one canonical post-commit write. Lock order is deliberately:
+ * outer transaction -> session/admission guard -> exact child lease -> domain
+ * write + receipt -> authority settlement. Provider reads happen beforehand;
+ * `apply` remains synchronous.
  */
 export function commitGeneralChatPostCommitStage<TValue>(
   storage: ChatPostCommitEffectReceiptStoragePort,
   identity: GeneralChatPostCommitStageIdentity,
   apply: () => { value: TValue; result: Record<string, unknown> },
+  options: GeneralChatPostCommitStageCommitOptions = {},
 ): GeneralChatPostCommitStageCommitResult<TValue> {
+  // A completed immutable receipt is authoritative replay truth. Its terminal
+  // admission may already be closed, so do not call the active-authority guard
+  // or settlement callback again.
+  const fastReplay = readGeneralChatPostCommitStage(storage, identity);
+  if (fastReplay) {
+    return { replayed: true, receipt: fastReplay };
+  }
   return storage.runImmediateTransaction(() => {
-    const locked = requireFreshEffectLease(storage, identity);
-    const currentReceipt =
-      readCanonicalReceipt(locked.metadata, identity.effect) ?? createCanonicalReceipt(identity.effect);
-    const existing = currentReceipt.stages[identity.stage];
-    if (existing) {
-      return { replayed: true, receipt: existing };
-    }
+    const authorityInput = options.authority
+      ? {
+          authority: options.authority.context,
+          parentRunId: options.authority.parentRunId,
+          postCommitGenerationId: options.authority.postCommitGenerationId,
+          childRunId: options.authority.context.childDurableClaim.durableRunId,
+          sourceTurnId: options.authority.context.parent.turnId,
+          postCommitEligibility: options.authority.context.postCommitEligibility,
+          effect: identity.effect,
+          stage: identity.stage,
+          terminal: options.authority.terminal,
+        }
+      : undefined;
+    const commitUnderAuthority = (
+      callbackContext: ChatPostCommitAtomicStageCallbackContext,
+    ): GeneralChatPostCommitStageCommitResult<TValue> => {
+      assertAuthorityDecision(callbackContext.disposition);
+      if (!Number.isSafeInteger(callbackContext.durableRunVersion) || callbackContext.durableRunVersion < 1) {
+        throw new Error("Durable Chat post-commit authority returned an invalid durable run version.");
+      }
+      const disposition = callbackContext.disposition === "allowed" ? "completed" : "late_blocked";
 
-    const applied = apply();
-    const stageReceipt: GeneralChatPostCommitStageReceipt = {
-      completedAt: new Date().toISOString(),
-      result: applied.result,
-    };
-    storage.durableRuns.updateRun({
-      runId: locked.runId,
-      status: locked.status,
-      metadata: {
-        ...(locked.metadata ?? {}),
-        [CANONICAL_RECEIPT_METADATA_KEY]: {
-          ...currentReceipt,
-          stages: {
-            ...currentReceipt.stages,
-            [identity.stage]: stageReceipt,
+      // The authority wrapper has locked session/admission and the exact claim
+      // before this defensive exact child-run lock/read.
+      const locked = requireFreshEffectLease(storage, identity);
+      if (locked.version !== callbackContext.durableRunVersion) {
+        throw new Error("Durable Chat post-commit authority and effect lease versions diverged.");
+      }
+      const currentReceipt =
+        readCanonicalReceipt(locked.metadata, identity.effect) ?? createCanonicalReceipt(identity.effect);
+      const existing = currentReceipt.stages[identity.stage];
+      if (existing) {
+        return { replayed: true, receipt: sanitizeStageReceipt(identity.stage, existing) };
+      }
+
+      const completedAt = new Date().toISOString();
+      let value: TValue | undefined;
+      let stageReceipt: GeneralChatPostCommitStageReceipt;
+      if (disposition === "late_blocked") {
+        stageReceipt = { completedAt, disposition: "late_blocked" };
+      } else {
+        const applied = apply();
+        value = applied.value;
+        stageReceipt = {
+          completedAt,
+          disposition: "completed",
+          result: sanitizeStageResult(identity.stage, applied.result),
+        };
+      }
+      storage.durableRuns.updateRun({
+        runId: locked.runId,
+        status: locked.status,
+        metadata: {
+          ...(locked.metadata ?? {}),
+          [CANONICAL_RECEIPT_METADATA_KEY]: {
+            ...currentReceipt,
+            stages: {
+              ...currentReceipt.stages,
+              [identity.stage]: stageReceipt,
+            },
           },
         },
-      },
-      updatedAt: stageReceipt.completedAt,
-      expectedVersion: locked.version,
+        updatedAt: completedAt,
+        expectedVersion: locked.version,
+      });
+      return { replayed: false, ...(value === undefined ? {} : { value }), receipt: stageReceipt };
+    };
+
+    if (!authorityInput) {
+      const run = storage.durableRuns.getRun(identity.effectRunId);
+      const disposition = reduceAuthorityDecision("allowed", options);
+      return commitUnderAuthority({ disposition, admission: undefined, durableRunVersion: run.version });
+    }
+    let callbackDisposition: ChatPostCommitAuthorityDecision | undefined;
+    const outcome = options.authority!.port.run(authorityInput, (callbackContext) => {
+      callbackDisposition = reduceAuthorityDecision(callbackContext.disposition, options);
+      return {
+        disposition: callbackDisposition,
+        value: commitUnderAuthority({ ...callbackContext, disposition: callbackDisposition }),
+      };
     });
-    return { replayed: false, value: applied.value, receipt: stageReceipt };
+    assertAuthorityDecision(outcome.disposition);
+    if (!callbackDisposition || outcome.disposition !== callbackDisposition) {
+      throw new Error("Durable Chat post-commit atomic authority outcome conflicts with its callback.");
+    }
+    return outcome.value;
   });
+}
+
+function reduceAuthorityDecision(
+  authorityDecision: ChatPostCommitAuthorityDecision,
+  options: GeneralChatPostCommitStageCommitOptions,
+): ChatPostCommitAuthorityDecision {
+  return authorityDecision === "late_blocked" ||
+    options.forcedDisposition === "late_blocked" ||
+    options.denyOnlyBlocked?.()
+    ? "late_blocked"
+    : "allowed";
 }
 
 function assertEffectRunIdentity(
@@ -181,14 +333,6 @@ function createCanonicalReceipt(effect: GeneralChatPostCommitCanonicalEffect): G
   };
 }
 
-function assertBackgroundSkillIdentity(
-  identity: Omit<GeneralChatPostCommitStageIdentity, "expectedLeaseOwnerId">,
-): void {
-  if (identity.effect !== "background_review" || identity.stage !== "background_skill") {
-    throw new Error("Durable background-skill decisions belong only to the background_review/background_skill stage.");
-  }
-}
-
 function readCanonicalReceipt(
   metadata: Record<string, unknown> | undefined,
   effect: GeneralChatPostCommitCanonicalEffect,
@@ -201,61 +345,152 @@ function readCanonicalReceipt(
     throw new Error("Durable Chat post-commit canonical receipt is malformed.");
   }
   const record = value as Record<string, unknown>;
-  if (
-    record.version !== CANONICAL_RECEIPT_VERSION ||
-    record.effect !== effect ||
-    !isStageMap(record.stages) ||
-    (record.backgroundSkillDecision !== undefined && !isBackgroundSkillDecision(record.backgroundSkillDecision))
-  ) {
+  if (record.version !== CANONICAL_RECEIPT_VERSION || record.effect !== effect || !isStageMap(record.stages)) {
     throw new Error("Durable Chat post-commit canonical receipt does not match its child effect.");
   }
-  return record as unknown as GeneralChatPostCommitCanonicalReceipt;
+  // Return a sanitized shape. In particular, legacy backgroundSkillDecision
+  // blobs (which contained raw Markdown) are never copied into a new write.
+  return {
+    version: CANONICAL_RECEIPT_VERSION,
+    effect,
+    stages: sanitizeCanonicalStageMap(effect, record.stages as Record<string, GeneralChatPostCommitStageReceipt>),
+  };
 }
 
-function isBackgroundSkillDecision(value: unknown): value is GeneralChatPostCommitBackgroundSkillDecision {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return false;
+function sanitizeCanonicalStageMap(
+  effect: GeneralChatPostCommitCanonicalEffect,
+  stages: Record<string, GeneralChatPostCommitStageReceipt>,
+): GeneralChatPostCommitCanonicalReceipt["stages"] {
+  const allowedStages: GeneralChatPostCommitCanonicalStage[] =
+    effect === "commitments"
+      ? ["commitments_write"]
+      : effect === "background_review"
+        ? ["background_counter", "background_evidence"]
+        : ["memory_maintenance_evaluation"];
+  const sanitized: GeneralChatPostCommitCanonicalReceipt["stages"] = {};
+  for (const stage of allowedStages) {
+    const receipt = stages[stage];
+    if (receipt) {
+      sanitized[stage] = sanitizeStageReceipt(stage, receipt);
+    }
   }
-  const decision = value as { version?: unknown; shouldAuthor?: unknown; plan?: unknown };
-  if (decision.version !== 1) {
-    return false;
-  }
-  if (decision.shouldAuthor === false) {
-    return true;
-  }
-  if (
-    decision.shouldAuthor !== true ||
-    !decision.plan ||
-    typeof decision.plan !== "object" ||
-    Array.isArray(decision.plan)
-  ) {
-    return false;
-  }
-  const plan = decision.plan as Partial<PreparedSkillMutationPlan>;
-  return (
-    plan.version === 1 &&
-    typeof plan.skillId === "string" &&
-    typeof plan.evaluationRunId === "string" &&
-    typeof plan.skillMarkdown === "string" &&
-    typeof plan.preparedAt === "string" &&
-    typeof plan.changeHash === "string"
-  );
+  return sanitized;
 }
 
 function isStageMap(value: unknown): value is GeneralChatPostCommitCanonicalReceipt["stages"] {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
   }
-  return Object.values(value).every(
-    (stage) =>
-      Boolean(stage) &&
-      typeof stage === "object" &&
-      !Array.isArray(stage) &&
-      typeof (stage as { completedAt?: unknown }).completedAt === "string" &&
-      Boolean(
-        (stage as { result?: unknown }).result &&
-        typeof (stage as { result?: unknown }).result === "object" &&
-        !Array.isArray((stage as { result?: unknown }).result),
-      ),
-  );
+  return Object.values(value).every((stage) => {
+    if (!stage || typeof stage !== "object" || Array.isArray(stage)) {
+      return false;
+    }
+    const candidate = stage as { completedAt?: unknown; disposition?: unknown; result?: unknown };
+    if (typeof candidate.completedAt !== "string") {
+      return false;
+    }
+    if (candidate.disposition === "late_blocked") {
+      return candidate.result === undefined;
+    }
+    return (
+      (candidate.disposition === undefined || candidate.disposition === "completed") &&
+      Boolean(candidate.result) &&
+      typeof candidate.result === "object" &&
+      !Array.isArray(candidate.result)
+    );
+  });
+}
+
+function assertAuthorityDecision(value: string): asserts value is ChatPostCommitAuthorityDecision {
+  if (value !== "allowed" && value !== "late_blocked") {
+    throw new Error(`Unsupported durable Chat post-commit authority decision: ${value}`);
+  }
+}
+
+const SAFE_SKIP_REASONS = new Set([
+  "autonomous_turn",
+  "autonomy_disabled",
+  "counter_not_due",
+  "delegated_child",
+  "eval_integrity",
+  "frozen_eligibility_invalid",
+  "non_human_session",
+]);
+
+function sanitizeStageReceipt(
+  stage: GeneralChatPostCommitCanonicalStage,
+  receipt: GeneralChatPostCommitStageReceipt,
+): GeneralChatPostCommitStageReceipt {
+  if (receipt.disposition === "late_blocked") {
+    return { completedAt: receipt.completedAt, disposition: "late_blocked" };
+  }
+  return {
+    completedAt: receipt.completedAt,
+    disposition: "completed",
+    result: sanitizeStageResult(stage, receipt.result),
+  };
+}
+
+function sanitizeStageResult(
+  stage: GeneralChatPostCommitCanonicalStage,
+  result: Record<string, unknown>,
+): Record<string, unknown> {
+  const skipped = sanitizeSkippedResult(result);
+  if (skipped && stage !== "background_counter") {
+    return skipped;
+  }
+  switch (stage) {
+    case "commitments_write":
+      return result.status === "classified" && isNonNegativeInteger(result.persistedCount)
+        ? { status: "classified", persistedCount: result.persistedCount }
+        : redactedReplayResult();
+    case "background_counter":
+      return typeof result.due === "boolean" ? { due: result.due } : redactedReplayResult();
+    case "background_evidence": {
+      if (result.status !== "evidence_recorded" || !Array.isArray(result.memoryEvidenceFingerprints)) {
+        return redactedReplayResult();
+      }
+      const memoryEvidenceFingerprints = result.memoryEvidenceFingerprints.filter(isSha256Value);
+      if (memoryEvidenceFingerprints.length !== result.memoryEvidenceFingerprints.length) {
+        return redactedReplayResult();
+      }
+      const skillEvidenceFingerprint = isSha256Value(result.skillEvidenceFingerprint)
+        ? result.skillEvidenceFingerprint
+        : undefined;
+      return {
+        status: "evidence_recorded",
+        memoryFactCount: memoryEvidenceFingerprints.length,
+        memoryEvidenceFingerprints,
+        skillProposed: Boolean(skillEvidenceFingerprint),
+        ...(skillEvidenceFingerprint ? { skillEvidenceFingerprint } : {}),
+        promotionDisposition: "governed_review_required",
+      };
+    }
+    case "memory_maintenance_evaluation":
+      return result.status === "production_dark"
+        ? {
+            status: "production_dark",
+            reason: "governed_memory_promotion_not_implemented",
+            enqueueDisposition: "not_enqueued",
+          }
+        : redactedReplayResult();
+  }
+}
+
+function sanitizeSkippedResult(result: Record<string, unknown>): Record<string, unknown> | undefined {
+  return result.status === "skipped" && typeof result.reason === "string" && SAFE_SKIP_REASONS.has(result.reason)
+    ? { status: "skipped", reason: result.reason }
+    : undefined;
+}
+
+function redactedReplayResult(): Record<string, unknown> {
+  return { status: "replay_redacted", reason: "canonical_result_not_allowlisted" };
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isSha256Value(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
 }

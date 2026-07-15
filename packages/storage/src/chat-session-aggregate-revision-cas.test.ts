@@ -63,7 +63,7 @@ describe("Chat session aggregate revision CAS", () => {
         account: "local",
         timestamp: createdAt,
       });
-      const initialA = storageA.chatSessionMeta.ensure(sessionId, createdAt);
+      const initialA = storageA.chatSessionMeta.ensure(sessionId, createdAt, "default");
       const initialB = storageB.chatSessionMeta.get(sessionId);
       assert.equal(initialA.revision, 1);
       assert.equal(initialB?.revision, 1);

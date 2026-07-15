@@ -202,6 +202,20 @@
   background: transparent;
 }
 
+.mc-next-thread-system-notice {
+  position: relative;
+  display: grid;
+  margin: 0.12rem 0 0.4rem;
+  padding-left: 0.66rem;
+  border-left: 2px solid color-mix(in oklab, var(--gc-risk-caution) 54%, var(--mc-area-color));
+}
+
+.mc-next-thread-system-notice .mc-next-thread-bubble.assistant {
+  padding: 0.62rem 0.74rem;
+  border-color: color-mix(in oklab, var(--gc-risk-caution) 24%, var(--mc-border-subtle));
+  background: color-mix(in oklab, var(--gc-risk-caution) 7%, var(--mc-surface-1));
+}
+
 /*
  * Caveat: content-visibility: auto lets the UA skip rendering off-screen turns,
  * but its visibility heuristic is viewport-based and independent of the

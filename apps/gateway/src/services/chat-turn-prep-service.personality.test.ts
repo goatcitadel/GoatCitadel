@@ -53,7 +53,7 @@ function createHost(
   const host = {
     storage: {
       chatSessionMeta: {
-        ensure: vi.fn(() => ({
+        get: vi.fn(() => ({
           sessionId: "session-1",
           workspaceId: "default",
           lifecycleStatus: "active",

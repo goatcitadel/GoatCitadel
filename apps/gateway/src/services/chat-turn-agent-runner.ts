@@ -62,12 +62,14 @@ import {
 } from "@goatcitadel/gateway-core";
 import { estimateTokensFromText } from "@goatcitadel/memory-core";
 import {
+  HEARTBEAT_SYSTEM_ACTOR_ID,
   verifyChatTurnCapabilityCatalogBinding,
   verifyChatTurnCapabilityProfile,
   verifyChatTurnCapabilitySkillBindings,
   verifyCapabilityCatalogEntryUniqueness,
   type Storage,
 } from "@goatcitadel/storage";
+import type { SystemHeartbeatTurnPrepPosture } from "./chat-turn-prep-service.js";
 import { EXPLICIT_WEB_PHRASES, hasLiveDataIntent, hasResearchListIntent } from "../orchestration/live-data-detect.js";
 import type { McpBrowserFallbackTarget } from "./mcp-runtime.js";
 import {
@@ -530,6 +532,8 @@ export interface ChatTurnAgentRunnerInput {
   canonicalWriteFence?: <T>(work: () => T) => T;
   /** Server-authored immutable upper bound for this governed turn. */
   capabilityProfile?: ChatTurnCapabilityProfileRecord;
+  /** Exact validated server-only posture for a storage-admitted heartbeat occurrence. */
+  serverOnlyPosture?: Readonly<SystemHeartbeatTurnPrepPosture>;
   /** Original admitted content when a durable continuation adds answered-prompt context. */
   capabilityProfileContent?: string;
   /** Stable provider/model/capability-selection dimension for compaction hysteresis. */
@@ -839,6 +843,52 @@ interface ToolEffectScope {
   runId?: string;
 }
 
+type SystemHeartbeatRunnerPostureInput = Pick<
+  ChatTurnAgentRunnerInput,
+  | "serverOnlyPosture"
+  | "capabilityProfile"
+  | "operatorId"
+  | "authActorId"
+  | "authActorSource"
+  | "permissionProfileId"
+  | "policyRunId"
+  | "turnId"
+  | "sessionId"
+>;
+
+function isExactSystemHeartbeatRunnerPosture(input: SystemHeartbeatRunnerPostureInput): boolean {
+  const posture = input.serverOnlyPosture;
+  const profileIdentity = input.capabilityProfile?.identity;
+  return Boolean(
+    posture &&
+    posture.kind === "system_heartbeat" &&
+    posture.actorId === HEARTBEAT_SYSTEM_ACTOR_ID &&
+    posture.operation === "chat_system_heartbeat" &&
+    posture.occurrenceId.trim() &&
+    posture.claimSha256.trim() &&
+    posture.durableRunId.trim() &&
+    input.operatorId === HEARTBEAT_SYSTEM_ACTOR_ID &&
+    input.authActorId === HEARTBEAT_SYSTEM_ACTOR_ID &&
+    input.authActorSource === "none" &&
+    input.permissionProfileId === HEARTBEAT_PERMISSION_PROFILE_ID &&
+    input.policyRunId === posture.durableRunId &&
+    profileIdentity?.turnId === input.turnId &&
+    profileIdentity.sessionId === input.sessionId &&
+    profileIdentity.durableRunId === posture.durableRunId &&
+    profileIdentity.operatorId === HEARTBEAT_SYSTEM_ACTOR_ID &&
+    profileIdentity.authActorId === HEARTBEAT_SYSTEM_ACTOR_ID &&
+    profileIdentity.authActorSource === "none",
+  );
+}
+
+function throwSystemHeartbeatToolInvocationBlocked(toolName: string): never {
+  const error = new Error(
+    `System heartbeat tool ${toolName} cannot execute because interactive approval is forbidden.`,
+  );
+  error.name = "SystemHeartbeatToolInvocationBlockedError";
+  throw error;
+}
+
 export function buildTurnToolPolicyContext(
   input: Partial<ChatTurnAgentRunnerInput>,
   overrides: Partial<ToolPolicyActorContext> = {},
@@ -919,8 +969,80 @@ export class ChatTurnAgentRunner {
     return this.buildToolSchema(input, intents);
   }
 
+  private filterSystemHeartbeatCapabilityToolSchema(
+    input: ChatTurnAgentRunnerInput,
+    schema: ResolvedChatTurnToolSchema,
+  ): ResolvedChatTurnToolSchema {
+    if (!isExactSystemHeartbeatRunnerPosture(input)) {
+      return schema;
+    }
+    const policyDecisions: ResolvedChatTurnToolSchema["policyDecisions"] = [];
+    const allowedCanonicalNames = new Set<string>();
+    for (const canonicalName of schema.canonicalToModel.keys()) {
+      if (!this.deps.evaluateToolAccess) {
+        policyDecisions.push({
+          toolName: canonicalName,
+          allowed: false,
+          requiresApproval: false,
+          reasonCodes: ["policy_evaluation_unavailable"],
+        });
+        continue;
+      }
+      try {
+        const access = this.deps.evaluateToolAccess({
+          toolName: canonicalName,
+          sessionId: input.sessionId,
+          agentId: "assistant",
+          taskId: input.policyTaskId,
+          runId: input.policyRunId,
+          args: buildToolAccessProbeArgs(canonicalName, this.deps.safeWriteFallbackDir),
+          permissionProfileId: input.permissionProfileId,
+          localOperatorOverrideId: input.localOperatorOverrideId,
+          surface: input.mode,
+          policyContext: buildTurnToolPolicyContext(input),
+        });
+        policyDecisions.push({
+          toolName: canonicalName,
+          allowed: access.allowed,
+          requiresApproval: access.requiresApproval,
+          reasonCodes: [...access.reasonCodes],
+          ...(access.matchedGrantId ? { matchedGrantId: access.matchedGrantId } : {}),
+        });
+        if (access.allowed && !access.requiresApproval) {
+          allowedCanonicalNames.add(canonicalName);
+        }
+      } catch {
+        policyDecisions.push({
+          toolName: canonicalName,
+          allowed: false,
+          requiresApproval: false,
+          reasonCodes: ["policy_evaluation_failed"],
+        });
+      }
+    }
+    const canonicalToModel = new Map(
+      [...schema.canonicalToModel].filter(([canonicalName]) => allowedCanonicalNames.has(canonicalName)),
+    );
+    const modelToCanonical = new Map(
+      [...schema.modelToCanonical].filter(([, canonicalName]) => allowedCanonicalNames.has(canonicalName)),
+    );
+    return {
+      tools: schema.tools.filter((tool) => {
+        const modelName = extractProviderToolName(tool);
+        return Boolean(modelName && modelToCanonical.has(modelName));
+      }),
+      modelToCanonical,
+      canonicalToModel,
+      policyDecisions,
+    };
+  }
+
   private runCanonicalWrite<T>(input: Pick<ChatTurnAgentRunnerInput, "canonicalWriteFence">, work: () => T): T {
     return input.canonicalWriteFence ? input.canonicalWriteFence(work) : work();
+  }
+
+  private assertExternalDispatch(input: Pick<ChatTurnAgentRunnerInput, "canonicalWriteFence">): void {
+    this.runCanonicalWrite(input, () => undefined);
   }
 
   private invokeTurnTool(
@@ -1441,7 +1563,7 @@ export class ChatTurnAgentRunner {
         promptLabRepoInspectionAssist ||
         promptLabPrefetchFilePaths.length > 0);
     const desiredPromptLabConcreteReads = resolvePromptLabDesiredConcreteReadCount(promptLabTaskForInspection);
-    const toolSchema = input.capabilityProfile
+    const admittedToolSchema = input.capabilityProfile
       ? toolSchemaFromCapabilityProfile(
           input,
           input.capabilityProfile,
@@ -1449,6 +1571,7 @@ export class ChatTurnAgentRunner {
           this.deps.listCapabilityCatalog?.("callable"),
         )
       : await this.resolveCapabilityToolSchema(input);
+    const toolSchema = this.filterSystemHeartbeatCapabilityToolSchema(input, admittedToolSchema);
     const catalogToolNames = this.deps.listToolCatalog().map((tool) => tool.toolName);
     const promptLabConcreteReadToolName = promptLabShouldInspectFilesForTurn
       ? resolvePromptLabConcreteReadToolName(toolSchema.canonicalToModel, catalogToolNames)
@@ -3058,6 +3181,7 @@ export class ChatTurnAgentRunner {
               try {
                 const aggregate = createCompletionStreamAggregate();
                 streamWasFirstProviderRequest = beginProviderRequest(completionRequest);
+                this.assertExternalDispatch(input);
                 for await (const rawChunk of this.deps.createChatCompletionStream(
                   {
                     ...completionRequest,
@@ -3107,6 +3231,7 @@ export class ChatTurnAgentRunner {
                   );
                 }
                 beginProviderRequest(completionRequest);
+                this.assertExternalDispatch(input);
                 completion = await this.deps.createChatCompletion(
                   completionRequest,
                   completionUsageAttribution(
@@ -3117,6 +3242,7 @@ export class ChatTurnAgentRunner {
               }
             } else {
               completedFirstProviderRequest = beginProviderRequest(completionRequest);
+              this.assertExternalDispatch(input);
               completion = await this.deps.createChatCompletion(
                 completionRequest,
                 completionUsageAttribution(`loop:${loop}`, loop === 0 ? "chat_initial" : "chat_tool_loop"),
@@ -4042,6 +4168,9 @@ export class ChatTurnAgentRunner {
         if (isAuthoritativeModelUsageAccountingError(error)) {
           throw error;
         }
+        if (error instanceof Error && error.name === "SystemHeartbeatToolInvocationBlockedError") {
+          throw error;
+        }
         if (isChatTurnAbortError(error, input.signal)) {
           finalStatus = "cancelled";
           assistantContent = "";
@@ -4534,6 +4663,7 @@ export class ChatTurnAgentRunner {
     input: Pick<
       ChatTurnAgentRunnerInput,
       | "sessionId"
+      | "turnId"
       | "webMode"
       | "mode"
       | "content"
@@ -4547,6 +4677,8 @@ export class ChatTurnAgentRunner {
       | "policyRunId"
       | "policyTaskId"
       | "subagentPolicy"
+      | "capabilityProfile"
+      | "serverOnlyPosture"
     >,
     intents: {
       liveData: boolean;
@@ -4620,6 +4752,7 @@ export class ChatTurnAgentRunner {
     const suggestedTools = new Set(selectExecutionPlanSuggestedTools(activePlan));
     const failedCounts = buildRecentToolFailureCounts(recentToolRuns);
     const filteredCatalog: ToolCatalogEntry[] = [];
+    const exactSystemHeartbeat = isExactSystemHeartbeatRunnerPosture(input);
     const policyDecisions: ResolvedChatTurnToolSchema["policyDecisions"] = [];
     const restrictedAutonomousProfile =
       input.permissionProfileId === SCHEDULED_TURN_PERMISSION_PROFILE_ID ||
@@ -4712,7 +4845,9 @@ export class ChatTurnAgentRunner {
         continue;
       }
       if (!this.deps.evaluateToolAccess) {
-        filteredCatalog.push(tool);
+        if (!exactSystemHeartbeat) {
+          filteredCatalog.push(tool);
+        }
         continue;
       }
       try {
@@ -4735,7 +4870,7 @@ export class ChatTurnAgentRunner {
           reasonCodes: [...access.reasonCodes],
           ...(access.matchedGrantId ? { matchedGrantId: access.matchedGrantId } : {}),
         });
-        if (!access.allowed) {
+        if (!access.allowed || (exactSystemHeartbeat && access.requiresApproval)) {
           continue;
         }
       } catch {
@@ -4896,10 +5031,25 @@ export class ChatTurnAgentRunner {
     if (!current.allowed) {
       return `Current deny-wins policy narrowed ${tool.toolName} after capability admission.`;
     }
+    if (isExactSystemHeartbeatRunnerPosture(input) && current.requiresApproval) {
+      return `System heartbeat tool ${tool.toolName} is blocked because heartbeat_interactive_approval_forbidden.`;
+    }
     if (frozen.requiresApproval && !current.requiresApproval) {
       return `Current policy would broaden ${tool.toolName} beyond the profile's frozen approval posture.`;
     }
     return undefined;
+  }
+
+  private assertSystemHeartbeatToolInvocationAllowed(
+    input: ChatTurnAgentRunnerInput,
+    tool: { toolName: string; args: Record<string, unknown> },
+  ): void {
+    if (!isExactSystemHeartbeatRunnerPosture(input)) {
+      return;
+    }
+    if (this.resolveCapabilityProfileInvocationBlock(input, tool)) {
+      throwSystemHeartbeatToolInvocationBlocked(tool.toolName);
+    }
   }
 
   private async executeToolCall(input: {
@@ -5070,6 +5220,13 @@ export class ChatTurnAgentRunner {
       evalIntegrityTurn: input.input.normalizationProfile === "prompt_pack_harness",
       quickWebProfile: input.input.normalizationProfile === "quick_web",
     });
+    // Heartbeat policy is re-evaluated before even creating a tool-run row.
+    // This is deliberately independent from catalog filtering: policy can
+    // narrow or gain an approval requirement after provider admission.
+    this.assertSystemHeartbeatToolInvocationAllowed(input.input, {
+      toolName: preflight.toolName,
+      args: preflight.args,
+    });
     const startedAt = new Date().toISOString();
     const toolRunId = randomUUID();
     let effectPotential = this.resolveToolEffectPotential(input.input, preflight.toolName);
@@ -5139,6 +5296,9 @@ export class ChatTurnAgentRunner {
       args: preflight.args,
     });
     if (capabilityProfileBlock) {
+      if (isExactSystemHeartbeatRunnerPosture(input.input)) {
+        throwSystemHeartbeatToolInvocationBlocked(preflight.toolName);
+      }
       const updated = this.patchToolRun(input.input, created.toolRunId, {
         status: "blocked",
         ...this.buildToolEffectPatch({ potential: effectPotential, phase: "pre_dispatch_blocked" }),
@@ -5320,6 +5480,13 @@ export class ChatTurnAgentRunner {
     };
 
     try {
+      // Central last-moment guard for serial, synthetic, and parallel calls.
+      // The policy-engine's heartbeat ceiling guarantees that the following
+      // invocation cannot materialize approval state after this check.
+      this.assertSystemHeartbeatToolInvocationAllowed(input.input, {
+        toolName: preflight.toolName,
+        args: preflight.args,
+      });
       const result = await this.invokeTurnTool(
         input.input,
         {
@@ -5643,7 +5810,10 @@ export class ChatTurnAgentRunner {
         },
       };
     } catch (error) {
-      if (isDurableControlError(error)) {
+      if (
+        isDurableControlError(error) ||
+        (error instanceof Error && error.name === "SystemHeartbeatToolInvocationBlockedError")
+      ) {
         throw error;
       }
       if (MCP_BROWSER_FALLBACK_TOOL_NAMES.has(preflight.toolName)) {
@@ -6418,6 +6588,7 @@ export class ChatTurnAgentRunner {
     let usage: ChatStreamUsageRecord | null = null;
     try {
       providerCalls += 1;
+      this.assertExternalDispatch(input.input);
       const completion = await this.deps.createChatCompletion(
         {
           providerId: input.input.providerId,
@@ -6513,6 +6684,7 @@ export class ChatTurnAgentRunner {
     let usage: ChatStreamUsageRecord | null = null;
     try {
       providerCalls += 1;
+      this.assertExternalDispatch(input.input);
       const completion = await this.deps.createChatCompletion(
         {
           providerId: input.input.providerId,

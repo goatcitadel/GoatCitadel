@@ -52,6 +52,16 @@ import {
 import { buildApprovalRemoteTokenConnectorDeliveryPayload } from "./approval-connector-delivery.js";
 import { ApprovalRemoteTokenSecretService } from "./approval-remote-token-secret.js";
 import { buildGatewayExternalSideEffectReplayJob } from "./external-side-effect-replay-job-service.js";
+import {
+  computeEffectiveChatTurnRequestMaterialSha256,
+  computeFrozenChatTurnAdmissionMaterialSha256,
+} from "./session-control-service.js";
+import {
+  buildHeartbeatDecisionReceipt,
+  HEARTBEAT_DECISION_RAW_OUTPUT_METADATA_KEY,
+  HEARTBEAT_DECISION_RECEIPT_METADATA_KEY,
+} from "./chat-durable-runtime-authority.js";
+import { IDEMPOTENT_REALTIME_ENVELOPE_KEY } from "./realtime-event-service.js";
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -365,6 +375,7 @@ describe("durable Chat post-commit effect workflow", () => {
     const parent = {
       ...buildRunWithPayload("chat.turn.execute", {
         version: "chat.turn.execute.v1",
+        workspaceId: "workspace-post-commit-1",
         sessionId: "session-post-commit-1",
         turnId: "turn-post-commit-1",
         userMessageId: "user-post-commit-1",
@@ -384,9 +395,10 @@ describe("durable Chat post-commit effect workflow", () => {
     } satisfies DurableRunRecord;
     let child = {
       ...buildRunWithPayload("chat.post_commit.effect", {
-        version: "chat.post_commit.effect.v1",
+        version: "chat.post_commit.effect.v2",
         parentRunId,
-        generationId,
+        postCommitGenerationId: generationId,
+        effect: "commitments",
         traceStatus: "completed",
         input: {
           effect: "commitments",
@@ -395,15 +407,51 @@ describe("durable Chat post-commit effect workflow", () => {
           turnId: "turn-post-commit-1",
           autonomous: false,
         },
+        childAdmission: {
+          admissionId: "child-admission-post-commit-1",
+          sessionIncarnationId: "incarnation:session-post-commit-1",
+          workspaceId: "workspace-post-commit-1",
+          sessionId: "session-post-commit-1",
+          aggregateRevision: 1,
+          controllerGeneration: 1,
+          actorKind: "operator",
+          actorId: "operator:test",
+          operation: "chat_post_commit_child",
+          materialSha256: "a".repeat(64),
+        },
+        postCommitEligibility: {
+          version: 1,
+          autonomyEnabledAtParentSettlement: true,
+          evalIntegrityTurn: false,
+          humanSession: true,
+        },
       }),
       runId: childRunId,
       metadata: {
         parentRunId,
-        generationId,
+        postCommitGenerationId: generationId,
         effect: "commitments",
         workspaceId: "workspace-post-commit-1",
         sessionId: "session-post-commit-1",
         turnId: "turn-post-commit-1",
+        childAdmission: {
+          admissionId: "child-admission-post-commit-1",
+          sessionIncarnationId: "incarnation:session-post-commit-1",
+          workspaceId: "workspace-post-commit-1",
+          sessionId: "session-post-commit-1",
+          aggregateRevision: 1,
+          controllerGeneration: 1,
+          actorKind: "operator",
+          actorId: "operator:test",
+          operation: "chat_post_commit_child",
+          materialSha256: "a".repeat(64),
+        },
+        postCommitEligibility: {
+          version: 1,
+          autonomyEnabledAtParentSettlement: true,
+          evalIntegrityTurn: false,
+          humanSession: true,
+        },
       },
     } satisfies DurableRunRecord;
     let releaseEffect!: () => void;
@@ -484,8 +532,17 @@ describe("durable Chat post-commit effect workflow", () => {
         effect: "commitments",
         userText: "canonical user text",
         assistantText: "canonical assistant text",
+        postCommitEligibility: expect.objectContaining({ humanSession: true }),
       }),
-      expect.objectContaining({ effectRunId: childRunId, parentRunId, generationId }),
+      expect.objectContaining({
+        effectRunId: childRunId,
+        parentRunId,
+        generationId,
+        postCommitAuthority: expect.objectContaining({
+          child: expect.objectContaining({ admissionId: "child-admission-post-commit-1" }),
+          childDurableClaim: expect.objectContaining({ durableRunId: childRunId, leaseOwnerId: "test-claim-1" }),
+        }),
+      }),
     );
     releaseEffect();
     await execution;
@@ -521,9 +578,10 @@ describe("durable-execution-service orchestration workflow", () => {
     expect(
       parseGeneralChatPostCommitEffectWorkflowPayload(
         buildRunWithPayload("chat.post_commit.effect", {
-          version: "chat.post_commit.effect.v1",
+          version: "chat.post_commit.effect.v2",
           parentRunId: "parent-1",
-          generationId: "generation-1",
+          postCommitGenerationId: "generation-1",
+          effect: "memory_maintenance",
           traceStatus: "completed",
           input: {
             effect: "memory_maintenance",
@@ -531,6 +589,24 @@ describe("durable-execution-service orchestration workflow", () => {
             workspaceId: "workspace-1",
             turnId: "turn-1",
             delegatedChild: false,
+          },
+          childAdmission: {
+            admissionId: "child-admission-1",
+            sessionIncarnationId: "incarnation-1",
+            workspaceId: "workspace-1",
+            sessionId: "session-1",
+            aggregateRevision: 1,
+            controllerGeneration: 1,
+            actorKind: "operator",
+            actorId: "operator:test",
+            operation: "chat_post_commit_child",
+            materialSha256: "b".repeat(64),
+          },
+          postCommitEligibility: {
+            version: 1,
+            autonomyEnabledAtParentSettlement: true,
+            evalIntegrityTurn: false,
+            humanSession: true,
           },
         }),
       ),
@@ -2593,8 +2669,8 @@ describe("durable-execution-service orchestration workflow", () => {
       persistChatStreamChunk: vi.fn(),
     };
 
-    await executeDurableChatTurnRun(host as never, run);
-    await executeDurableChatTurnRun(host as never, run);
+    await executeDurableChatTurnRun(withTestDurableAdmissionOwner(host) as never, run);
+    await executeDurableChatTurnRun(withTestDurableAdmissionOwner(host) as never, run);
 
     expect(finalizeDurableChatRun).toHaveBeenCalledWith(run.runId, prepared, terminalTrace, "replacement-worker");
     expect(reconcileGeneralChatPostCommit).toHaveBeenCalledTimes(2);
@@ -2602,6 +2678,9 @@ describe("durable-execution-service orchestration workflow", () => {
     expect(persistLearnedMemory).toHaveBeenCalledTimes(1);
     expect(scheduleMaintenance).toHaveBeenCalledTimes(1);
     expect(reconcileAutonomousChatPostCommit).toHaveBeenCalledWith(run.runId);
+    expect(reconcileAutonomousChatPostCommit.mock.invocationCallOrder[0]).toBeLessThan(
+      reconcileGeneralChatPostCommit.mock.invocationCallOrder[0]!,
+    );
     expect(host.registerActiveChatTurnStream).not.toHaveBeenCalled();
     expect(executePreparedAgentChatTurnBackground).not.toHaveBeenCalled();
   });
@@ -2645,7 +2724,9 @@ describe("durable-execution-service orchestration workflow", () => {
       persistChatStreamChunk: vi.fn(),
     };
 
-    await expect(executeDurableChatTurnRun(host as never, run)).rejects.toThrow(/linked user message/i);
+    await expect(executeDurableChatTurnRun(withTestDurableAdmissionOwner(host) as never, run)).rejects.toThrow(
+      /linked user message/i,
+    );
 
     expect(prepareAgentChatTurn).not.toHaveBeenCalled();
     expect(host.registerActiveChatTurnStream).not.toHaveBeenCalled();
@@ -2701,7 +2782,9 @@ describe("durable-execution-service orchestration workflow", () => {
       persistChatStreamChunk: vi.fn(),
     };
 
-    await expect(executeDurableChatTurnRun(host as never, run)).rejects.toThrow(/durable run linkage/i);
+    await expect(executeDurableChatTurnRun(withTestDurableAdmissionOwner(host) as never, run)).rejects.toThrow(
+      /durable run linkage/i,
+    );
 
     expect(host.prepareAgentChatTurn).not.toHaveBeenCalled();
     expect(host.registerActiveChatTurnStream).not.toHaveBeenCalled();
@@ -2767,7 +2850,7 @@ describe("durable-execution-service orchestration workflow", () => {
         persistChatStreamChunk: vi.fn(),
       };
 
-      await executeDurableChatTurnRun(host as never, run);
+      await executeDurableChatTurnRun(withTestDurableAdmissionOwner(host) as never, run);
 
       expect(finalizeDurableChatRun).toHaveBeenCalledWith(run.runId, prepared, trace, "replacement-worker");
       expect(reconcileGeneralChatPostCommit).toHaveBeenCalledWith(run.runId);
@@ -2868,8 +2951,8 @@ describe("durable-execution-service orchestration workflow", () => {
       persistChatStreamChunk: vi.fn(),
     };
 
-    await executeDurableChatTurnRun(host as never, run);
-    await executeDurableChatTurnRun(host as never, run);
+    await executeDurableChatTurnRun(withTestDurableAdmissionOwner(host) as never, run);
+    await executeDurableChatTurnRun(withTestDurableAdmissionOwner(host) as never, run);
 
     expect(finalizeDurableChatRun).toHaveBeenCalledWith(run.runId, prepared, trace, "replacement-worker");
     expect(reconcileGeneralChatPostCommit).toHaveBeenCalledTimes(2);
@@ -2947,6 +3030,13 @@ describe("durable-execution-service orchestration workflow", () => {
       publishRealtime: vi.fn(),
     };
 
+    expect(() => executeGeneralChatPostCommit(host as never, run)).toThrow(/canonical durable progress owner/);
+    expect(host.recordCapabilityGapFromTrace).not.toHaveBeenCalled();
+    expect(host.extractAndPersistLearnedMemory).not.toHaveBeenCalled();
+    expect(host.recordTurnCommitments).not.toHaveBeenCalled();
+    expect(host.scheduleBackgroundReviewIfDue).not.toHaveBeenCalled();
+    expect(host.scheduleMemoryMaintenancePostTurnEvaluation).not.toHaveBeenCalled();
+
     expect(() =>
       executeGeneralChatPostCommit(host as never, run, {
         generationId: "generation-stale-wait",
@@ -2955,23 +3045,40 @@ describe("durable-execution-service orchestration workflow", () => {
         completedEffects: [],
         runEffect: vi.fn(),
         publishEffect: vi.fn(),
+        enqueueDurableEffect: vi.fn(),
       }),
     ).toThrow(/targets waiting_for_approval, but the canonical trace is completed/);
     expect(host.recordCapabilityGapFromTrace).not.toHaveBeenCalled();
 
-    const result = executeGeneralChatPostCommit(host as never, run);
+    const enqueueDurableEffect = vi.fn((input: { effect: string }) => `durable-child-${input.effect}`);
+    const result = executeGeneralChatPostCommit(host as never, run, {
+      generationId: "generation-post-commit",
+      requestedAt: "2026-07-11T00:00:00.000Z",
+      targetTraceStatus: "completed",
+      completedEffects: [],
+      runEffect: vi.fn((_effect, callback) => {
+        callback();
+        return true;
+      }),
+      publishEffect: vi.fn((_effect, callback) => {
+        callback();
+        return true;
+      }),
+      enqueueDurableEffect,
+    });
 
     expect(host.recordCapabilityGapFromTrace).toHaveBeenCalledTimes(1);
-    expect(host.extractAndPersistLearnedMemory).toHaveBeenCalledTimes(2);
-    expect(host.recordTurnCommitments).toHaveBeenCalledTimes(1);
-    expect(host.scheduleBackgroundReviewIfDue).toHaveBeenCalledWith(
-      expect.objectContaining({ turnId: "turn-post-commit", delegatedChild: false }),
+    expect(host.extractAndPersistLearnedMemory).not.toHaveBeenCalled();
+    expect(host.recordTurnCommitments).not.toHaveBeenCalled();
+    expect(enqueueDurableEffect).toHaveBeenCalledTimes(3);
+    expect(enqueueDurableEffect).toHaveBeenCalledWith(
+      expect.objectContaining({ effect: "background_review", turnId: "turn-post-commit", delegatedChild: false }),
     );
-    expect(host.scheduleMemoryMaintenancePostTurnEvaluation).toHaveBeenCalledWith({
-      sessionId: "session-post-commit",
-      turnId: "turn-post-commit",
-      delegatedChild: false,
-    });
+    expect(enqueueDurableEffect).toHaveBeenCalledWith(
+      expect.objectContaining({ effect: "memory_maintenance", turnId: "turn-post-commit", delegatedChild: false }),
+    );
+    expect(host.scheduleBackgroundReviewIfDue).not.toHaveBeenCalled();
+    expect(host.scheduleMemoryMaintenancePostTurnEvaluation).not.toHaveBeenCalled();
     expect(host.publishRealtime).toHaveBeenCalledTimes(1);
     expect(enqueueAfterHooks).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -2984,12 +3091,146 @@ describe("durable-execution-service orchestration workflow", () => {
       turnId: "turn-post-commit",
       agentEnd: "reconciled",
       learnedMemory: {
-        user: "reconciled",
-        assistant: "reconciled",
+        user: "not_applicable",
+        assistant: "not_applicable",
       },
-      memoryMaintenance: "reconciled",
+      commitments: "durably_enqueued",
+      backgroundReview: "durably_enqueued",
+      memoryMaintenance: "durably_enqueued",
     });
   });
+
+  it.each([
+    { rawOutput: '{"notify":false}', notify: false },
+    {
+      rawOutput: '{"notify":true,"message":"  Rotate the backup secret now.  "}',
+      notify: true,
+    },
+  ])(
+    "publishes one deterministic content-free Chat invalidation only when a system heartbeat notify decision is $notify",
+    ({ rawOutput, notify }) => {
+      const base = buildExactSystemHeartbeatRun();
+      const payload = parseDurableChatTurnPayload(base)!;
+      const decision = buildHeartbeatDecisionReceipt({
+        occurrenceId: String((base.payload as Record<string, unknown>).heartbeatOccurrenceId),
+        claimSha256: String((base.payload as Record<string, unknown>).heartbeatClaimSha256),
+        rawOutput,
+      });
+      const run = {
+        ...base,
+        status: "completed" as const,
+        metadata: {
+          ...(base.metadata ?? {}),
+          [HEARTBEAT_DECISION_RECEIPT_METADATA_KEY]: decision.receipt,
+          [HEARTBEAT_DECISION_RAW_OUTPUT_METADATA_KEY]: rawOutput,
+        },
+      };
+      const trace = {
+        turnId: payload.turnId,
+        sessionId: payload.sessionId,
+        userMessageId: payload.userMessageId,
+        assistantMessageId: payload.assistantMessageId,
+        status: "completed",
+        completion: { status: "complete", repaired: false },
+        routing: {},
+        toolRuns: [],
+        citations: [],
+      } as ChatTurnTraceRecord;
+      const assistantMessage = notify
+        ? {
+            messageId: payload.assistantMessageId,
+            sessionId: payload.sessionId,
+            role: "assistant",
+            actorType: "system",
+            actorId: "system-heartbeat",
+            content: "Rotate the backup secret now.",
+          }
+        : undefined;
+      const publishRealtime = vi.fn();
+      const host = {
+        storage: {
+          chatMessages: {
+            get: vi.fn((messageId: string) =>
+              messageId === payload.assistantMessageId ? assistantMessage : undefined,
+            ),
+          },
+          chatTurnTraces: { get: vi.fn(() => trace) },
+          chatToolRuns: { listByTurn: vi.fn(() => []) },
+        },
+        hooksService: { runInlineHooks: vi.fn(), enqueueAfterHooks: vi.fn() },
+        recordCapabilityGapFromTrace: vi.fn(),
+        extractAndPersistLearnedMemory: vi.fn(),
+        recordTurnCommitments: vi.fn(),
+        scheduleBackgroundReviewIfDue: vi.fn(),
+        scheduleMemoryMaintenancePostTurnEvaluation: vi.fn(),
+        scheduleChatMemoryContextPrewarm: vi.fn(),
+        publishRealtime,
+      };
+      const publishEffect = vi.fn((_effect, callback: () => void) => {
+        callback();
+        return true;
+      });
+      const progress = {
+        generationId: "heartbeat-generation-1",
+        requestedAt: "2026-07-11T00:00:00.000Z",
+        targetTraceStatus: "completed" as const,
+        completedEffects: [],
+        runEffect: vi.fn((_effect, callback: () => void) => {
+          callback();
+          return true;
+        }),
+        publishEffect,
+        enqueueDurableEffect: vi.fn(),
+      };
+
+      const first = executeGeneralChatPostCommit(host as never, run, progress);
+      const second = executeGeneralChatPostCommit(host as never, run, progress);
+
+      if (!notify) {
+        expect(first.realtime).toBe("not_applicable");
+        expect(second.realtime).toBe("not_applicable");
+        expect(publishEffect).not.toHaveBeenCalled();
+        expect(publishRealtime).not.toHaveBeenCalled();
+        return;
+      }
+
+      expect(first.realtime).toBe("reconciled");
+      expect(second.realtime).toBe("reconciled");
+      expect(publishEffect).toHaveBeenCalledTimes(2);
+      expect(publishRealtime).toHaveBeenCalledTimes(2);
+      const firstPublish = publishRealtime.mock.calls[0];
+      const replayPublish = publishRealtime.mock.calls[1];
+      expect(replayPublish).toEqual(firstPublish);
+      expect(firstPublish).toEqual([
+        "chat_heartbeat_message_committed",
+        "chat",
+        {
+          type: "chat_heartbeat_message_committed",
+          sessionId: payload.sessionId,
+          turnId: payload.turnId,
+          assistantMessageId: payload.assistantMessageId,
+          occurrenceId: "heartbeat-occurrence-1",
+          [IDEMPOTENT_REALTIME_ENVELOPE_KEY]: {
+            deliveryId: `${run.runId}:heartbeat-generation-1:heartbeat-message:${payload.assistantMessageId}`,
+            occurredAt: "2026-07-11T00:00:00.000Z",
+          },
+        },
+        {
+          eventClass: "domain_fact",
+          eventAuthority: "retained_stream",
+          links: {
+            sessionId: payload.sessionId,
+            turnId: payload.turnId,
+            runId: run.runId,
+          },
+        },
+      ]);
+      const publicPayload = JSON.stringify(firstPublish);
+      expect(publicPayload).not.toContain(rawOutput);
+      expect(publicPayload).not.toContain("Rotate the backup secret now.");
+      expect(publicPayload).not.toContain("activeLeafTurnId");
+    },
+  );
 
   it.each(["failed", "cancelled"] as const)(
     "reconciles a %s Chat trace without assistant output as agent-end only",
@@ -3052,7 +3293,11 @@ describe("durable-execution-service orchestration workflow", () => {
         publishRealtime: vi.fn(),
       };
 
-      const result = executeGeneralChatPostCommit(host as never, run);
+      const result = executeGeneralChatPostCommit(
+        host as never,
+        run,
+        buildTestPostCommitProgress(status, `generation-${status}`),
+      );
 
       expect(enqueueAfterHooks).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -3148,7 +3393,11 @@ describe("durable-execution-service orchestration workflow", () => {
         publishRealtime: vi.fn(),
       };
 
-      const result = executeGeneralChatPostCommit(host as never, run);
+      const result = executeGeneralChatPostCommit(
+        host as never,
+        run,
+        buildTestPostCommitProgress(status, `generation-fallback-${status}`),
+      );
 
       expect(host.extractAndPersistLearnedMemory).not.toHaveBeenCalled();
       expect(host.recordCapabilityGapFromTrace).not.toHaveBeenCalled();
@@ -3228,7 +3477,11 @@ describe("durable-execution-service orchestration workflow", () => {
       publishRealtime: vi.fn(),
     };
 
-    const result = executeGeneralChatPostCommit(host as never, run);
+    const result = executeGeneralChatPostCommit(
+      host as never,
+      run,
+      buildTestPostCommitProgress("waiting_for_approval", "generation-wait-post-commit"),
+    );
 
     expect(host.recordCapabilityGapFromTrace).toHaveBeenCalledTimes(1);
     expect(host.publishRealtime).toHaveBeenCalledTimes(1);
@@ -3332,7 +3585,7 @@ describe("durable-execution-service orchestration workflow", () => {
       persistChatStreamChunk,
     };
 
-    await executeDurableChatTurnRun(host as never, run);
+    await executeDurableChatTurnRun(withTestDurableAdmissionOwner(host) as never, run);
 
     expect(host.registerActiveChatTurnStream).toHaveBeenCalledWith("session-1", "turn-1", run.runId, {
       continuation: true,
@@ -3573,7 +3826,9 @@ describe("durable-execution-service orchestration workflow", () => {
       persistChatStreamChunk: vi.fn(),
     };
 
-    await executeDurableChatTurnRun(host as never, run, { signal: abortController.signal });
+    await executeDurableChatTurnRun(withTestDurableAdmissionOwner(host) as never, run, {
+      signal: abortController.signal,
+    });
 
     expect(host.registerActiveChatTurnStream).toHaveBeenCalledWith("session-1", "turn-1", run.runId, undefined);
 
@@ -3646,7 +3901,7 @@ describe("durable-execution-service orchestration workflow", () => {
       persistChatStreamChunk: vi.fn(),
     };
 
-    await executeDurableChatTurnRun(host as never, run);
+    await executeDurableChatTurnRun(withTestDurableAdmissionOwner(host) as never, run);
 
     expect(host.registerActiveChatTurnStream).toHaveBeenCalledWith("session-1", "turn-1", run.runId, {
       continuation: true,
@@ -3677,7 +3932,9 @@ describe("durable-execution-service orchestration workflow", () => {
       prepareAgentChatTurn: vi.fn(),
     };
 
-    await expect(executeDurableChatTurnRun(host as never, run)).rejects.toThrow(/autonomy kill switch/i);
+    await expect(executeDurableChatTurnRun(withTestDurableAdmissionOwner(host) as never, run)).rejects.toThrow(
+      /autonomy kill switch/i,
+    );
     expect(host.prepareAgentChatTurn).not.toHaveBeenCalled();
     expect(executePreparedAgentChatTurnBackground).not.toHaveBeenCalled();
   });
@@ -4146,10 +4403,617 @@ describe("durable-execution-service orchestration workflow", () => {
 });
 
 function buildRunWithPayload(workflowKey: string, payload: Record<string, unknown>): DurableRunRecord {
+  const runId = "durable-run-1";
+  const normalizedPayload =
+    workflowKey === "chat.turn.execute" && payload.version === "chat.turn.execute.v1"
+      ? buildAdmittedChatTurnV2Fixture(payload, runId)
+      : payload;
   return {
     ...buildRun(),
     workflowKey,
+    payload: normalizedPayload,
+  };
+}
+
+function buildAdmittedChatTurnV2Fixture(payload: Record<string, unknown>, runId: string): Record<string, unknown> {
+  const sessionId = String(payload.sessionId ?? "session-1");
+  const turnId = String(payload.turnId ?? "turn-1");
+  const request = {
+    ...((payload.request as Record<string, unknown> | undefined) ?? { content: "test" }),
+    policyRunId:
+      typeof (payload.request as Record<string, unknown> | undefined)?.policyRunId === "string"
+        ? (payload.request as Record<string, unknown>).policyRunId
+        : runId,
+  };
+  const admissionMaterialSha256 = computeFrozenChatTurnAdmissionMaterialSha256(request as never);
+  return {
+    ...payload,
+    version: "chat.turn.execute.v2",
+    admissionId: `admission:${turnId}`,
+    sessionIncarnationId: `incarnation:${sessionId}`,
+    admissionMaterialSha256,
+    workspaceId: typeof payload.workspaceId === "string" ? payload.workspaceId : "default",
+    admissionAggregateRevision: 1,
+    admissionControllerGeneration: 1,
+    effectiveRequestMaterialSha256: computeEffectiveChatTurnRequestMaterialSha256(
+      admissionMaterialSha256,
+      request as never,
+    ),
+    requestActor: { actorKind: "operator", actorId: "operator:test" },
+    request,
+  };
+}
+
+function buildExactSystemHeartbeatRun(): DurableRunRecord {
+  const runId = "durable-heartbeat-1";
+  const sessionId = "session-heartbeat-1";
+  const turnId = "turn-heartbeat-1";
+  const request = {
+    content: "Perform the bounded heartbeat check and return the exact decision object.",
+    permissionProfileId: "heartbeat-restricted",
+    policyRunId: runId,
+  };
+  const admissionMaterialSha256 = computeFrozenChatTurnAdmissionMaterialSha256(request as never);
+  return {
+    ...buildRun(),
+    runId,
+    workflowKey: "chat.turn.execute",
+    payload: {
+      version: "chat.turn.execute.v2",
+      admissionId: `admission:${turnId}`,
+      sessionIncarnationId: `incarnation:${sessionId}`,
+      admissionMaterialSha256,
+      workspaceId: "default",
+      admissionAggregateRevision: 1,
+      admissionControllerGeneration: 1,
+      effectiveRequestMaterialSha256: computeEffectiveChatTurnRequestMaterialSha256(
+        admissionMaterialSha256,
+        request as never,
+      ),
+      requestActor: { actorKind: "system", actorId: "system-heartbeat" },
+      sessionId,
+      turnId,
+      userMessageId: "user-heartbeat-ephemeral-1",
+      assistantMessageId: "assistant-heartbeat-1",
+      branchKind: "new",
+      threadEventType: "chat_thread_turn_appended",
+      request,
+      heartbeatOccurrenceId: "heartbeat-occurrence-1",
+      heartbeatClaimSha256: "a".repeat(64),
+      heartbeatEvaluatedPolicySha256: "b".repeat(64),
+      heartbeatFrozenObjectiveSha256: "c".repeat(64),
+    },
+    metadata: {
+      autonomous: {
+        kind: "heartbeat",
+        systemActorId: "system-heartbeat",
+        deliverMode: "on_notify",
+      },
+    },
+    leaseOwnerId: "heartbeat-worker-1",
+    attemptCount: 1,
+  };
+}
+
+function createExactSystemHeartbeatRuntimeHarness(run: DurableRunRecord) {
+  const payload = parseDurableChatTurnPayload(run)!;
+  let currentRun = structuredClone(run);
+  let trace = {
+    turnId: payload.turnId,
+    sessionId: payload.sessionId,
+    userMessageId: payload.userMessageId,
+    status: "running",
+    durable: { runId: run.runId, status: "running" },
+    toolRuns: [],
+    citations: [],
+    routing: {},
+  } as ChatTurnTraceRecord;
+  let messages = new Map<string, Record<string, unknown>>();
+  let failRunUpdateOnce = false;
+  let authoritySuperseded = false;
+  const runImmediateTransaction = <T>(work: () => T): T => {
+    const runSnapshot = structuredClone(currentRun);
+    const traceSnapshot = structuredClone(trace);
+    const messageSnapshot = new Map([...messages].map(([key, value]) => [key, structuredClone(value)] as const));
+    try {
+      return work();
+    } catch (error) {
+      currentRun = runSnapshot;
+      trace = traceSnapshot;
+      messages = messageSnapshot;
+      throw error;
+    }
+  };
+  const host = withTestDurableAdmissionOwner({
+    storage: {
+      runImmediateTransaction,
+      chatMessages: {
+        get: vi.fn((messageId: string) => messages.get(messageId)),
+        upsert: vi.fn((message: Record<string, unknown>) => {
+          messages.set(String(message.messageId), structuredClone(message));
+          return message;
+        }),
+      },
+      chatTurnTraces: {
+        get: vi.fn(() => trace),
+        getForUpdate: vi.fn(() => trace),
+        patch: vi.fn((_turnId: string, patch: Partial<ChatTurnTraceRecord>) => {
+          trace = { ...trace, ...structuredClone(patch) } as ChatTurnTraceRecord;
+          return trace;
+        }),
+        patchIfStatus: vi.fn(
+          (_turnId: string, expectedStatuses: ChatTurnTraceRecord["status"][], patch: Partial<ChatTurnTraceRecord>) => {
+            if (!expectedStatuses.includes(trace.status)) return undefined;
+            trace = { ...trace, ...structuredClone(patch) } as ChatTurnTraceRecord;
+            return trace;
+          },
+        ),
+      },
+      chatToolRuns: { listByTurn: vi.fn(() => []) },
+      durableRuns: {
+        getRun: vi.fn(() => currentRun),
+        lockFreshActiveLeaseForUpdate: vi.fn((runId: string, leaseOwnerId: string) =>
+          currentRun.runId === runId && currentRun.status === "running" && currentRun.leaseOwnerId === leaseOwnerId
+            ? currentRun
+            : undefined,
+        ),
+        updateRun: vi.fn((input: Record<string, unknown>) => {
+          if (failRunUpdateOnce) {
+            failRunUpdateOnce = false;
+            throw new Error("heartbeat decision persistence failpoint");
+          }
+          currentRun = {
+            ...currentRun,
+            ...input,
+            version: currentRun.version + 1,
+          } as DurableRunRecord;
+          return currentRun;
+        }),
+      },
+    },
+    durableRunService: {
+      scheduleRunningWorkflowRetry: vi.fn(() => ({ ...currentRun, status: "queued" as const })),
+      requestRunProcessing: vi.fn(),
+    },
+    prepareAgentChatTurn: vi.fn(async (_sessionId: string, _request: unknown, options: Record<string, unknown>) => ({
+      turnId: payload.turnId,
+      userEventId: payload.userMessageId,
+      assistantMessageId: payload.assistantMessageId,
+      branchKind: payload.branchKind,
+      content: payload.request.content,
+      turnAdmission: options.turnAdmission,
+      serverOnlyPosture: options.serverOnlyPosture,
+    })),
+    registerActiveChatTurnStream: vi.fn(() => ({
+      registrationId: "heartbeat-stream-registration",
+      sessionId: payload.sessionId,
+      turnId: payload.turnId,
+      runId: run.runId,
+    })),
+    finalizeDurableChatRun: vi.fn(() => {
+      currentRun = {
+        ...currentRun,
+        status: "completed",
+        leaseOwnerId: undefined,
+        leaseHeartbeatAt: undefined,
+        leaseExpiresAt: undefined,
+      };
+    }),
+    persistChatStreamChunk: vi.fn(),
+    reconcileAutonomousChatPostCommit: vi.fn(async () => true),
+    reconcileGeneralChatPostCommit: vi.fn(async () => true),
+    steerService: { drainPending: vi.fn(() => []) },
+    hooksService: {
+      runInlineHooks: vi.fn(async () => ({ runs: [] })),
+      enqueueAfterHooks: vi.fn(),
+    },
+    updateActiveLeafOrThrow: vi.fn(),
+    publishRealtime: vi.fn(),
+    recordDevDiagnostic: vi.fn(),
+    recordRuntimeDecision: vi.fn(),
+    recordCapabilityGapFromTrace: vi.fn(),
+    collectCapabilityUpgradeSuggestions: vi.fn(async () => []),
+    collectSpecialistCandidateSuggestions: vi.fn(() => []),
+    createHydratedChatTurnTrace: vi.fn((_turnId: string, value: ChatTurnTraceRecord) => value),
+  });
+  host.sessionControlRuntimeOwner.assertActiveTurnWrite.mockImplementation(() => {
+    if (authoritySuperseded) {
+      throw new Error("authority_superseded");
+    }
+  });
+  return {
+    host,
     payload,
+    getCurrentRun: () => currentRun,
+    getTrace: () => trace,
+    getMessages: () => messages,
+    replaceDecisionRawOutput: (rawOutput: string) => {
+      currentRun = {
+        ...currentRun,
+        metadata: {
+          ...(currentRun.metadata ?? {}),
+          [HEARTBEAT_DECISION_RAW_OUTPUT_METADATA_KEY]: rawOutput,
+        },
+        version: currentRun.version + 1,
+      };
+    },
+    failNextRunUpdate: () => {
+      failRunUpdateOnce = true;
+    },
+    supersedeAuthority: () => {
+      authoritySuperseded = true;
+      currentRun = {
+        ...currentRun,
+        status: "cancelled",
+        leaseOwnerId: undefined,
+        leaseHeartbeatAt: undefined,
+        leaseExpiresAt: undefined,
+      };
+    },
+  };
+}
+
+function withTestDurableAdmissionOwner<T extends Record<string, unknown>>(
+  host: T,
+): T & {
+  sessionControlRuntimeOwner: {
+    withDurableClaim: ReturnType<typeof vi.fn>;
+    assertActiveTurnWrite: ReturnType<typeof vi.fn>;
+  };
+} {
+  const owned = host as T & {
+    sessionControlRuntimeOwner: {
+      withDurableClaim: ReturnType<typeof vi.fn>;
+      assertActiveTurnWrite: ReturnType<typeof vi.fn>;
+    };
+  };
+  owned.sessionControlRuntimeOwner ??= {
+    withDurableClaim: vi.fn(
+      (
+        identity: Record<string, unknown>,
+        admittedRequest: Record<string, unknown>,
+        requestActor: Record<string, unknown>,
+        durableClaim: Record<string, unknown>,
+        systemHeartbeatOccurrence?: Record<string, unknown>,
+      ) => ({
+        identity,
+        admittedRequest,
+        requestActor,
+        durableClaim,
+        ...(systemHeartbeatOccurrence ? { systemHeartbeatOccurrence } : {}),
+      }),
+    ),
+    assertActiveTurnWrite: vi.fn(),
+  };
+  return owned;
+}
+
+describe("exact system-heartbeat durable runtime", () => {
+  function installProviderResult(
+    harness: ReturnType<typeof createExactSystemHeartbeatRuntimeHarness>,
+    rawOutput: string,
+    beforeIngest?: () => void,
+    completion: ChatTurnTraceRecord["completion"] | null = {
+      status: "complete",
+      repaired: false,
+    },
+  ): void {
+    vi.mocked(executePreparedAgentChatTurnBackground)
+      .mockReset()
+      .mockImplementation(async (dispatchHost) => {
+        await dispatchHost.hooksService.runInlineHooks({} as never);
+        dispatchHost.persistChatStreamChunk(
+          {
+            type: "delta",
+            sessionId: harness.payload.sessionId,
+            turnId: harness.payload.turnId,
+            messageId: harness.payload.assistantMessageId,
+            delta: rawOutput,
+          },
+          harness.getCurrentRun().runId,
+          undefined as never,
+        );
+        beforeIngest?.();
+        await dispatchHost.ingestEvent(
+          "heartbeat-decision-event",
+          {
+            eventId: harness.payload.assistantMessageId,
+            message: { role: "assistant", content: rawOutput },
+          } as never,
+          {
+            onCommit: () => {
+              dispatchHost.storage.chatTurnTraces.patch(harness.payload.turnId, {
+                assistantMessageId: harness.payload.assistantMessageId,
+                status: "completed",
+                ...(completion ? { completion } : {}),
+                finishedAt: "2026-07-15T20:00:00.000Z",
+              });
+            },
+          },
+        );
+      });
+  }
+
+  it("atomically commits an exact silent decision without transcript, branch, realtime, or hook writes", async () => {
+    const run = buildExactSystemHeartbeatRun();
+    const harness = createExactSystemHeartbeatRuntimeHarness(run);
+    const rawOutput = '{"notify":false}';
+    installProviderResult(harness, rawOutput);
+
+    await executeDurableChatTurnRun(harness.host as never, run);
+
+    const expected = buildHeartbeatDecisionReceipt({
+      occurrenceId: "heartbeat-occurrence-1",
+      claimSha256: "a".repeat(64),
+      rawOutput,
+    });
+    expect(harness.getCurrentRun().metadata).toMatchObject({
+      [HEARTBEAT_DECISION_RECEIPT_METADATA_KEY]: expected.receipt,
+      [HEARTBEAT_DECISION_RAW_OUTPUT_METADATA_KEY]: rawOutput,
+    });
+    expect(harness.getTrace()).toMatchObject({ status: "completed", completion: { status: "complete" } });
+    expect(harness.getMessages().size).toBe(0);
+    expect(harness.host.hooksService.runInlineHooks).not.toHaveBeenCalled();
+    expect(harness.host.updateActiveLeafOrThrow).not.toHaveBeenCalled();
+    expect(harness.host.publishRealtime).not.toHaveBeenCalled();
+    expect(harness.host.persistChatStreamChunk).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["raw code-unit ceiling", ["x".repeat(65_537)]],
+    ["delta chunk ceiling", Array.from({ length: 8_193 }, () => "")],
+  ])("bounds heartbeat decision streaming at the %s before any durable decision artifact", async (_case, deltas) => {
+    const run = buildExactSystemHeartbeatRun();
+    const harness = createExactSystemHeartbeatRuntimeHarness(run);
+    vi.mocked(executePreparedAgentChatTurnBackground)
+      .mockReset()
+      .mockImplementation(async (dispatchHost) => {
+        for (const delta of deltas) {
+          dispatchHost.persistChatStreamChunk(
+            {
+              type: "delta",
+              sessionId: harness.payload.sessionId,
+              turnId: harness.payload.turnId,
+              messageId: harness.payload.assistantMessageId,
+              delta,
+            },
+            run.runId,
+            undefined as never,
+          );
+        }
+      });
+
+    await expect(executeDurableChatTurnRun(harness.host as never, run)).rejects.toMatchObject({
+      name: "DurableWorkerInterruptionError",
+    });
+
+    expect(harness.host.durableRunService.scheduleRunningWorkflowRetry).toHaveBeenCalledWith(
+      run.runId,
+      "heartbeat_decision_stream_oversized",
+      "system-heartbeat",
+      run.leaseOwnerId,
+    );
+    expect(harness.host.durableRunService.requestRunProcessing).toHaveBeenCalledTimes(1);
+    expect(harness.getCurrentRun().metadata?.[HEARTBEAT_DECISION_RECEIPT_METADATA_KEY]).toBeUndefined();
+    expect(harness.getCurrentRun().metadata?.[HEARTBEAT_DECISION_RAW_OUTPUT_METADATA_KEY]).toBeUndefined();
+    expect(harness.getTrace().status).toBe("running");
+    expect(harness.getMessages().size).toBe(0);
+    expect(harness.host.finalizeDurableChatRun).not.toHaveBeenCalled();
+    expect(harness.host.publishRealtime).not.toHaveBeenCalled();
+  });
+
+  it("rolls back completed trace, evidence, and output at the post-trace failpoint, then replays cleanly", async () => {
+    const run = buildExactSystemHeartbeatRun();
+    const harness = createExactSystemHeartbeatRuntimeHarness(run);
+    const rawOutput = '{"notify":true,"message":"Disk pressure high"}';
+    harness.failNextRunUpdate();
+    installProviderResult(harness, rawOutput);
+
+    await expect(executeDurableChatTurnRun(harness.host as never, run)).rejects.toMatchObject({
+      name: "DurableWorkerInterruptionError",
+    });
+    expect(harness.getTrace().status).toBe("running");
+    expect(harness.getCurrentRun().metadata?.[HEARTBEAT_DECISION_RECEIPT_METADATA_KEY]).toBeUndefined();
+    expect(harness.getCurrentRun().metadata?.[HEARTBEAT_DECISION_RAW_OUTPUT_METADATA_KEY]).toBeUndefined();
+    expect(harness.getMessages().size).toBe(0);
+    expect(harness.host.durableRunService.scheduleRunningWorkflowRetry).toHaveBeenCalledWith(
+      run.runId,
+      "heartbeat_decision_commit_failed",
+      "system-heartbeat",
+      run.leaseOwnerId,
+    );
+
+    await executeDurableChatTurnRun(harness.host as never, run);
+
+    expect(harness.getTrace().status).toBe("completed");
+    expect(harness.getCurrentRun().metadata?.[HEARTBEAT_DECISION_RAW_OUTPUT_METADATA_KEY]).toBe(rawOutput);
+    expect(harness.getMessages().get("assistant-heartbeat-1")).toMatchObject({
+      role: "assistant",
+      actorType: "system",
+      actorId: "system-heartbeat",
+      content: "Disk pressure high",
+    });
+  });
+
+  it.each([
+    ["missing", null],
+    ["repaired", { status: "complete" as const, repaired: true }],
+    ["extra-key", { status: "complete" as const, repaired: false, finishReason: "stop" }],
+  ])(
+    "rolls back a completed heartbeat trace with %s completion evidence and schedules bounded retry",
+    async (_case, completion) => {
+      const run = buildExactSystemHeartbeatRun();
+      const harness = createExactSystemHeartbeatRuntimeHarness(run);
+      installProviderResult(harness, '{"notify":true,"message":"Disk pressure high"}', undefined, completion);
+
+      await expect(executeDurableChatTurnRun(harness.host as never, run)).rejects.toMatchObject({
+        name: "DurableWorkerInterruptionError",
+      });
+
+      expect(harness.getTrace().status).toBe("running");
+      expect(harness.getTrace().completion).toBeUndefined();
+      expect(harness.getCurrentRun().metadata?.[HEARTBEAT_DECISION_RECEIPT_METADATA_KEY]).toBeUndefined();
+      expect(harness.getCurrentRun().metadata?.[HEARTBEAT_DECISION_RAW_OUTPUT_METADATA_KEY]).toBeUndefined();
+      expect(harness.getMessages().size).toBe(0);
+      expect(harness.host.durableRunService.scheduleRunningWorkflowRetry).toHaveBeenCalledWith(
+        run.runId,
+        "heartbeat_decision_incomplete",
+        "system-heartbeat",
+        run.leaseOwnerId,
+      );
+      expect(harness.host.durableRunService.requestRunProcessing).toHaveBeenCalledTimes(1);
+      expect(harness.host.finalizeDurableChatRun).not.toHaveBeenCalled();
+      expect(harness.host.publishRealtime).not.toHaveBeenCalled();
+    },
+  );
+
+  it("fences a late provider result after operator preemption without decision, transcript, or effects", async () => {
+    const run = buildExactSystemHeartbeatRun();
+    const harness = createExactSystemHeartbeatRuntimeHarness(run);
+    installProviderResult(harness, '{"notify":true,"message":"Late output"}', harness.supersedeAuthority);
+
+    await expect(executeDurableChatTurnRun(harness.host as never, run)).rejects.toMatchObject({
+      name: "DurableWorkerInterruptionError",
+      message: expect.stringMatching(/superseded/i),
+    });
+
+    expect(harness.getCurrentRun().status).toBe("cancelled");
+    expect(harness.getCurrentRun().metadata?.[HEARTBEAT_DECISION_RECEIPT_METADATA_KEY]).toBeUndefined();
+    expect(harness.getCurrentRun().metadata?.[HEARTBEAT_DECISION_RAW_OUTPUT_METADATA_KEY]).toBeUndefined();
+    expect(harness.getTrace().status).toBe("running");
+    expect(harness.getMessages().size).toBe(0);
+    expect(harness.host.durableRunService.scheduleRunningWorkflowRetry).not.toHaveBeenCalled();
+    expect(harness.host.reconcileAutonomousChatPostCommit).not.toHaveBeenCalled();
+    expect(harness.host.reconcileGeneralChatPostCommit).not.toHaveBeenCalled();
+    expect(harness.host.publishRealtime).not.toHaveBeenCalled();
+  });
+
+  it.each(['{"notify":false}', '{"notify":true,"message":"  Disk pressure high  "}'])(
+    "finalizes a decision-committed heartbeat after a lost finalization window without redispatch",
+    async (rawOutput) => {
+      const run = buildExactSystemHeartbeatRun();
+      const harness = createExactSystemHeartbeatRuntimeHarness(run);
+      installProviderResult(harness, rawOutput);
+
+      await executeDurableChatTurnRun(harness.host as never, run);
+      expect(harness.getCurrentRun().status).toBe("running");
+      expect(harness.getTrace()).toMatchObject({ status: "completed", completion: { status: "complete" } });
+      expect(harness.getCurrentRun().metadata?.[HEARTBEAT_DECISION_RAW_OUTPUT_METADATA_KEY]).toBe(rawOutput);
+
+      await executeDurableChatTurnRun(harness.host as never, harness.getCurrentRun());
+
+      expect(executePreparedAgentChatTurnBackground).toHaveBeenCalledTimes(1);
+      expect(harness.host.finalizeDurableChatRun).toHaveBeenCalledTimes(1);
+      expect(harness.getCurrentRun().status).toBe("completed");
+      if (rawOutput === '{"notify":false}') {
+        expect(harness.getMessages().size).toBe(0);
+      } else {
+        expect(harness.getMessages().get("assistant-heartbeat-1")).toMatchObject({
+          actorType: "system",
+          actorId: "system-heartbeat",
+          content: "Disk pressure high",
+        });
+      }
+    },
+  );
+
+  it("rejects decision evidence drift after storage commit and before recovered worker entry without redispatch", async () => {
+    const run = buildExactSystemHeartbeatRun();
+    const harness = createExactSystemHeartbeatRuntimeHarness(run);
+    installProviderResult(harness, '{"notify":true,"message":"Disk pressure high"}');
+
+    await executeDurableChatTurnRun(harness.host as never, run);
+    expect(harness.getTrace()).toMatchObject({ status: "completed", completion: { status: "complete" } });
+    expect(harness.getCurrentRun().metadata?.[HEARTBEAT_DECISION_RECEIPT_METADATA_KEY]).toBeDefined();
+
+    harness.replaceDecisionRawOutput('{"notify":true,"message":"Different bytes"}');
+
+    await expect(executeDurableChatTurnRun(harness.host as never, harness.getCurrentRun())).rejects.toThrow(
+      /decision evidence|receipt|raw output/i,
+    );
+    expect(executePreparedAgentChatTurnBackground).toHaveBeenCalledTimes(1);
+    expect(harness.host.finalizeDurableChatRun).not.toHaveBeenCalled();
+    expect(harness.host.durableRunService.scheduleRunningWorkflowRetry).not.toHaveBeenCalled();
+    expect(harness.host.durableRunService.requestRunProcessing).not.toHaveBeenCalled();
+    expect(harness.getCurrentRun().status).toBe("running");
+  });
+
+  it.each(['{"notify":false}', '{"notify":true,"message":"Disk pressure high"}'])(
+    "never routes exact heartbeat decision output through autonomous delivery or legacy cleanup",
+    (rawOutput) => {
+      const run = buildExactSystemHeartbeatRun();
+      const decision = buildHeartbeatDecisionReceipt({
+        occurrenceId: "heartbeat-occurrence-1",
+        claimSha256: "a".repeat(64),
+        rawOutput,
+      });
+      const completedRun = {
+        ...run,
+        status: "completed" as const,
+        metadata: {
+          ...run.metadata,
+          [HEARTBEAT_DECISION_RECEIPT_METADATA_KEY]: decision.receipt,
+          [HEARTBEAT_DECISION_RAW_OUTPUT_METADATA_KEY]: rawOutput,
+          autonomousChatPostCommitPending: { version: 1, requestedAt: "2026-07-15T20:00:00.000Z" },
+        },
+      } satisfies DurableRunRecord;
+      const enqueue = vi.fn(() => "delivery-run-forbidden");
+      const cleanup = vi.fn(() => ({ status: "completed" as const }));
+      const host = {
+        storage: {
+          durableRuns: { getRun: vi.fn(() => completedRun) },
+          chatTurnTraces: { get: vi.fn() },
+          chatMessages: { get: vi.fn() },
+        },
+        enqueueAutonomousChannelDelivery: enqueue,
+        cleanupSilentHeartbeatTurn: cleanup,
+      };
+
+      expect(executeAutonomousChatPostCommit(host as never, completedRun)).toEqual({
+        delivery: { status: "skipped", reason: "system_heartbeat_inline_output" },
+        heartbeatCleanup: { status: "not_required" },
+      });
+      expect(enqueue).not.toHaveBeenCalled();
+      expect(cleanup).not.toHaveBeenCalled();
+      expect(host.storage.chatTurnTraces.get).not.toHaveBeenCalled();
+      expect(host.storage.chatMessages.get).not.toHaveBeenCalled();
+    },
+  );
+
+  it("terminalizes an unrecoverable exact heartbeat without public error chunks", async () => {
+    const run = buildExactSystemHeartbeatRun();
+    const harness = createExactSystemHeartbeatRuntimeHarness(run);
+
+    await markDurableWorkflowUnrecoverable(harness.host as never, run, "heartbeat decision remained malformed");
+
+    expect(harness.getTrace()).toMatchObject({
+      status: "failed",
+      failure: {
+        message: "heartbeat decision remained malformed",
+        retryable: false,
+      },
+      durable: { runId: run.runId, status: "failed" },
+    });
+    expect(harness.host.persistChatStreamChunk).not.toHaveBeenCalled();
+    expect(harness.getMessages().size).toBe(0);
+  });
+});
+
+function buildTestPostCommitProgress(targetTraceStatus: ChatTurnTraceRecord["status"], generationId: string) {
+  return {
+    generationId,
+    requestedAt: "2026-07-11T00:00:00.000Z",
+    targetTraceStatus,
+    completedEffects: [],
+    runEffect: vi.fn((_effect, callback: () => void) => {
+      callback();
+      return true;
+    }),
+    publishEffect: vi.fn((_effect, callback: () => void) => {
+      callback();
+      return true;
+    }),
+    enqueueDurableEffect: vi.fn((input: { effect: string }) => `durable-child-${input.effect}`),
   };
 }
 

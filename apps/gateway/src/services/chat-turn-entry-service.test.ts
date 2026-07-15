@@ -59,6 +59,7 @@ import {
 } from "./chat-turn-entry-service.js";
 import { ChatTurnStreamRegistrationMismatchError } from "./chat-turn-execution-registry.js";
 import { routeWithModelRouter } from "./model-router-decision-service.js";
+import { computeChatTurnAdmissionMaterialSha256 } from "./session-control-service.js";
 
 function createPreparedTurn(overrides: Record<string, unknown> = {}) {
   const userMessage: ChatMessageRecord = {
@@ -165,6 +166,7 @@ function createTrace(patch: Partial<ChatTurnTraceRecord> = {}): ChatTurnTraceRec
 
 function createHost(turnRuntimeResult: Record<string, unknown>) {
   let trace = createTrace();
+  let binding: Record<string, unknown> | undefined;
   const patchedTraces: Array<Partial<ChatTurnTraceRecord>> = [];
   const controller = new AbortController();
 
@@ -179,12 +181,22 @@ function createHost(turnRuntimeResult: Record<string, unknown>) {
       },
     },
     storage: {
+      runImmediateTransaction: vi.fn((work) => work()),
       chatSessionPrefs: {
         ensure: vi.fn(() => ({ providerId: "primary", model: "primary-model", mode: "chat" })),
       },
       chatSessionBindings: {
-        get: vi.fn(() => undefined),
-        upsert: vi.fn((input) => ({ ...input, transport: input.transport ?? "llm", writable: true })),
+        get: vi.fn(() => binding),
+        upsert: vi.fn((input) => {
+          binding = {
+            sessionId: input.sessionId,
+            transport: input.transport ?? "llm",
+            writable: input.writable ?? true,
+            createdAt: "2026-05-14T00:00:00.000Z",
+            updatedAt: "2026-05-14T00:00:00.000Z",
+          };
+          return binding;
+        }),
       },
       chatReflectionAttempts: {
         create: vi.fn(),
@@ -204,6 +216,31 @@ function createHost(turnRuntimeResult: Record<string, unknown>) {
         createRun: vi.fn(),
       },
     },
+    sessionControlRuntimeOwner: {
+      admitOperatorChatTurn: vi.fn((input) => ({
+        identity: {
+          admissionId: `admission-${input.turnId}`,
+          sessionIncarnationId: "incarnation-1",
+          workspaceId: "default",
+          sessionId: input.sessionId,
+          turnId: input.turnId,
+          aggregateRevision: 1,
+          controllerGeneration: 1,
+          materialSha256: computeChatTurnAdmissionMaterialSha256(input.request),
+        },
+        admittedRequest: input.request,
+        requestActor: { actorKind: "operator", actorId: input.actorId },
+        requestClaim: { runtimeOwnerId: `runtime-${input.turnId}`, leaseRevision: 1 },
+      })),
+      startRequestLeaseHeartbeat: vi.fn(() => ({ stop: vi.fn(), assertHealthy: vi.fn() })),
+      renewRequestLease: vi.fn(),
+      bindDurableRun: vi.fn((admission) => {
+        admission.requestClaim = undefined;
+      }),
+      withDurableClaim: vi.fn(),
+      assertActiveTurnWrite: vi.fn(),
+      closeTurnWrite: vi.fn(),
+    },
     llmService: {
       getRuntimeConfig: vi.fn(() => ({
         activeProviderId: "primary",
@@ -220,7 +257,14 @@ function createHost(turnRuntimeResult: Record<string, unknown>) {
     withEphemeralStreamEnvelope: vi.fn(async function* (stream: AsyncGenerator<Record<string, unknown>>) {
       yield* stream;
     }),
-    prepareAgentChatTurn: vi.fn(async () => createPreparedTurn()),
+    prepareAgentChatTurn: vi.fn(async (_sessionId, _input, options) =>
+      createPreparedTurn({
+        turnId: options?.turnId ?? "turn-1",
+        userEventId: options?.userMessageId ?? "user-1",
+        assistantMessageId: options?.assistantMessageId ?? "assistant-1",
+        turnAdmission: options?.turnAdmission,
+      }),
+    ),
     requireChatTurnContext: vi.fn(async () => ({
       trace: createTrace({ parentTurnId: "turn-root" }),
       userMessage: {
@@ -564,7 +608,7 @@ describe("agentSendChatMessage", () => {
 
     expect(host.ingestEvent).not.toHaveBeenCalled();
     expect(host.patchedTraces).not.toContainEqual(expect.objectContaining({ status: "completed" }));
-    expect(host.endActiveChatTurnExecution).toHaveBeenCalledWith("turn-1", controller);
+    expect(host.endActiveChatTurnExecution).toHaveBeenCalledWith(expect.any(String), controller);
   });
 
   it("registers a turn-scoped agent.fanout executor before the runtime runs and disposes it afterwards", async () => {
@@ -752,31 +796,31 @@ describe("agentSendChatMessage", () => {
 
     expect(result.assistantMessage).toEqual(
       expect.objectContaining({
-        messageId: "assistant-1",
+        messageId: expect.any(String),
         content: "Completed answer.",
       }),
     );
     expect(host.turnRuntime.run).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: "session-1",
-        turnId: "turn-1",
+        turnId: result.turnId,
         content: "hello",
-        outputMessageId: "assistant-1",
+        outputMessageId: result.assistantMessage?.messageId,
         signal: expect.any(AbortSignal),
       }),
     );
     expect(host.ingestEvent).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({
-        eventId: "assistant-1",
+        eventId: result.assistantMessage?.messageId,
         message: { role: "assistant", content: "Completed answer." },
       }),
       expect.objectContaining({ onCommit: expect.any(Function) }),
     );
     expect(host.storage.chatTurnTraces.patch).toHaveBeenCalledWith(
-      "turn-1",
+      result.turnId,
       expect.objectContaining({
-        assistantMessageId: "assistant-1",
+        assistantMessageId: result.assistantMessage?.messageId,
         status: "completed",
         retrieval: { mode: "off" },
         guidance: expect.objectContaining({ workspaceId: "default" }),
@@ -786,33 +830,25 @@ describe("agentSendChatMessage", () => {
     expect(host.recordCapabilityGapFromTrace).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: "session-1",
-        turnId: "turn-1",
+        turnId: result.turnId,
       }),
     );
-    expect(host.scheduleBackgroundReviewIfDue).toHaveBeenCalledWith(
-      expect.objectContaining({
-        turnId: "turn-1",
-        delegatedChild: false,
-      }),
-    );
-    expect(host.scheduleMemoryMaintenancePostTurnEvaluation).toHaveBeenCalledWith({
-      sessionId: "session-1",
-      turnId: "turn-1",
-      delegatedChild: false,
-    });
+    expect(host.recordTurnCommitments).not.toHaveBeenCalled();
+    expect(host.scheduleBackgroundReviewIfDue).not.toHaveBeenCalled();
+    expect(host.scheduleMemoryMaintenancePostTurnEvaluation).not.toHaveBeenCalled();
     expect(host.publishRealtime).toHaveBeenCalledWith(
       "chat_thread_updated",
       "chat",
       expect.objectContaining({
         type: "chat_thread_turn_appended",
-        activeLeafTurnId: "turn-1",
+        activeLeafTurnId: result.turnId,
       }),
       expect.anything(),
     );
     expect(host.endActiveChatTurnExecution).toHaveBeenCalled();
   });
 
-  it("marks delegated-child post-turn schedules explicitly on the non-stream path", async () => {
+  it("does not run legacy provider schedulers for delegated-child non-stream turns", async () => {
     const host = createHost({
       assistantContent: "Child answer.",
       assistantModel: "primary-model",
@@ -832,14 +868,9 @@ describe("agentSendChatMessage", () => {
       expect.objectContaining({ parentDelegationStepId: "run-1:step-1" }),
     );
 
-    expect(host.scheduleBackgroundReviewIfDue).toHaveBeenCalledWith(
-      expect.objectContaining({ turnId: "turn-1", delegatedChild: true }),
-    );
-    expect(host.scheduleMemoryMaintenancePostTurnEvaluation).toHaveBeenCalledWith({
-      sessionId: "session-1",
-      turnId: "turn-1",
-      delegatedChild: true,
-    });
+    expect(host.recordTurnCommitments).not.toHaveBeenCalled();
+    expect(host.scheduleBackgroundReviewIfDue).not.toHaveBeenCalled();
+    expect(host.scheduleMemoryMaintenancePostTurnEvaluation).not.toHaveBeenCalled();
   });
 
   it("inherits actor, permission profile, and override context for automatic proactive suggestions", async () => {
@@ -879,7 +910,7 @@ describe("agentSendChatMessage", () => {
     );
   });
 
-  it("persists approval waits without writing an assistant message", async () => {
+  it("fails a non-durable approval wait closed instead of orphaning a request lease", async () => {
     const approvalTrace = createTrace({
       status: "waiting_for_approval",
       failure: {
@@ -896,20 +927,22 @@ describe("agentSendChatMessage", () => {
       turnTrace: approvalTrace,
     });
 
-    const result = await agentSendChatMessage(host, "session-1", { content: "read local file", mode: "code" });
+    await expect(agentSendChatMessage(host, "session-1", { content: "read local file", mode: "code" })).rejects.toThrow(
+      /must transfer mutation authority to a durable run/i,
+    );
 
-    expect(result.assistantMessage).toBeUndefined();
     expect(host.ingestEvent).not.toHaveBeenCalled();
     expect(host.storage.chatTurnTraces.patch).toHaveBeenCalledWith(
-      "turn-1",
+      expect.any(String),
       expect.objectContaining({
         reflection: expect.objectContaining({ attempted: false }),
         proactive: { runId: undefined, mode: "off" },
         failure: approvalTrace.failure,
       }),
     );
-    expect(host.updateActiveLeafOrThrow).toHaveBeenCalledWith("session-1", "parent-1", "turn-1");
-    expect(result.trace?.failure).toEqual(approvalTrace.failure);
+    expect(host.sessionControlRuntimeOwner.closeTurnWrite).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "cancelled" }),
+    );
   });
 
   it("runs a reflection retry for failed autonomous LLM turns and persists the recovered answer", async () => {
@@ -1031,7 +1064,7 @@ describe("agentSendChatMessage", () => {
         content: "original prompt",
         contextRefs: [{ kind: "attachment", ref: "attachment-retry" }],
       }),
-      expect.objectContaining({ turnId: "turn-1" }),
+      expect.objectContaining({ turnId: expect.any(String), turnAdmission: expect.any(Object) }),
       "chat_thread_turn_retried",
     );
     expect(result.assistantMessage?.content).toBe("dispatched:chat_thread_turn_retried");
@@ -1062,7 +1095,7 @@ describe("agentSendChatMessage", () => {
       host,
       "session-1",
       expect.objectContaining({ content: "edited prompt" }),
-      expect.objectContaining({ turnId: "turn-1" }),
+      expect.objectContaining({ turnId: expect.any(String), turnAdmission: expect.any(Object) }),
       "chat_thread_turn_edited",
     );
     expect(result.assistantMessage?.content).toBe("dispatched:chat_thread_turn_edited");
@@ -1088,7 +1121,7 @@ describe("agentSendChatMessage", () => {
       host,
       "session-1",
       expect.objectContaining({ content: "hello", mode: "chat" }),
-      expect.objectContaining({ turnId: "turn-1" }),
+      expect.objectContaining({ turnId: expect.any(String), turnAdmission: expect.any(Object) }),
       expect.objectContaining({ transport: "discord" }),
       "chat_thread_turn_appended",
       expect.objectContaining({ abortSignal: undefined }),
@@ -1097,7 +1130,7 @@ describe("agentSendChatMessage", () => {
       host,
       "session-1",
       expect.objectContaining({ mode: "chat" }),
-      expect.objectContaining({ turnId: "turn-1" }),
+      expect.objectContaining({ turnId: expect.any(String), turnAdmission: expect.any(Object) }),
       expect.objectContaining({ transport: "discord" }),
       "chat_thread_turn_retried",
     );
@@ -1105,7 +1138,7 @@ describe("agentSendChatMessage", () => {
       host,
       "session-1",
       expect.objectContaining({ content: "edited prompt" }),
-      expect.objectContaining({ turnId: "turn-1" }),
+      expect.objectContaining({ turnId: expect.any(String), turnAdmission: expect.any(Object) }),
       expect.objectContaining({ transport: "discord" }),
       "chat_thread_turn_edited",
     );
@@ -1128,11 +1161,11 @@ describe("agentSendChatMessage", () => {
       host,
       "session-1",
       expect.objectContaining({ content: "hello" }),
-      expect.objectContaining({ turnId: "turn-1" }),
+      expect.objectContaining({ turnId: expect.any(String), turnAdmission: expect.any(Object) }),
       expect.objectContaining({ transport: "slack" }),
       "chat_thread_turn_appended",
     );
-    expect(chunks.at(-1)).toEqual(expect.objectContaining({ type: "done", turnId: "turn-1" }));
+    expect(chunks.at(-1)).toEqual(expect.objectContaining({ type: "done", turnId: expect.any(String) }));
   });
 
   it("keeps durable streamed send runs alive when the SSE abort signal fires", async () => {
@@ -1170,11 +1203,11 @@ describe("agentSendChatMessage", () => {
 
     expect(host.cancelDurableChatRun).not.toHaveBeenCalled();
     expect(host.getActiveChatTurnExecution("turn-1")?.controller.signal.aborted).toBe(false);
-    expect(host.streamPersistedChatTurnEvents).toHaveBeenCalledWith("session-1", "turn-1", {
+    expect(host.streamPersistedChatTurnEvents).toHaveBeenCalledWith("session-1", expect.any(String), {
       liveTail: true,
       signal: controller.signal,
     });
-    expect(chunks.at(-1)).toEqual(expect.objectContaining({ type: "done", turnId: "turn-1" }));
+    expect(chunks.at(-1)).toEqual(expect.objectContaining({ type: "done", turnId: expect.any(String) }));
   });
 
   it("still aborts non-durable streamed send execution when the SSE abort signal fires", async () => {
@@ -1213,7 +1246,7 @@ describe("agentSendChatMessage", () => {
 
     expect(host.cancelDurableChatRun).not.toHaveBeenCalled();
     expect(host.getActiveChatTurnExecution("turn-1")?.controller.signal.aborted).toBe(true);
-    expect(chunks.at(-1)).toEqual(expect.objectContaining({ type: "done", turnId: "turn-1" }));
+    expect(chunks.at(-1)).toEqual(expect.objectContaining({ type: "done", turnId: expect.any(String) }));
   });
 
   it("streams retry and edit turns through integration envelopes when bound off LLM", async () => {
@@ -1232,7 +1265,7 @@ describe("agentSendChatMessage", () => {
       host,
       "session-1",
       expect.objectContaining({ mode: "chat" }),
-      expect.objectContaining({ turnId: "turn-1" }),
+      expect.objectContaining({ turnId: expect.any(String), turnAdmission: expect.any(Object) }),
       expect.objectContaining({ transport: "slack" }),
       "chat_thread_turn_retried",
     );
@@ -1240,13 +1273,13 @@ describe("agentSendChatMessage", () => {
       host,
       "session-1",
       expect.objectContaining({ content: "edit" }),
-      expect.objectContaining({ turnId: "turn-1" }),
+      expect.objectContaining({ turnId: expect.any(String), turnAdmission: expect.any(Object) }),
       expect.objectContaining({ transport: "slack" }),
       "chat_thread_turn_edited",
     );
     expect(dispatchMocks.launchPreparedAgentChatTurnStream).not.toHaveBeenCalled();
-    expect(retryChunks.at(-1)).toEqual(expect.objectContaining({ type: "done", turnId: "turn-1" }));
-    expect(editChunks.at(-1)).toEqual(expect.objectContaining({ type: "done", turnId: "turn-1" }));
+    expect(retryChunks.at(-1)).toEqual(expect.objectContaining({ type: "done", turnId: expect.any(String) }));
+    expect(editChunks.at(-1)).toEqual(expect.objectContaining({ type: "done", turnId: expect.any(String) }));
   });
 
   it("streams retry and edit turns through persisted turn events after launching prepared execution", async () => {
@@ -1276,17 +1309,19 @@ describe("agentSendChatMessage", () => {
         content: "original prompt",
         contextRefs: [{ kind: "memory_item", ref: "memory-retry" }],
       }),
-      expect.objectContaining({ turnId: "turn-1" }),
+      expect.objectContaining({ turnId: expect.any(String), turnAdmission: expect.any(Object) }),
       "chat_thread_turn_retried",
     );
     expect(dispatchMocks.launchPreparedAgentChatTurnStream).toHaveBeenCalledWith(
       host,
       "session-1",
       expect.objectContaining({ content: "edit" }),
-      expect.objectContaining({ turnId: "turn-1" }),
+      expect.objectContaining({ turnId: expect.any(String), turnAdmission: expect.any(Object) }),
       "chat_thread_turn_edited",
     );
-    expect(host.streamPersistedChatTurnEvents).toHaveBeenCalledWith("session-1", "turn-1", { liveTail: true });
+    expect(host.streamPersistedChatTurnEvents).toHaveBeenCalledWith("session-1", expect.any(String), {
+      liveTail: true,
+    });
     expect(retryChunks.map((chunk) => chunk.type)).toEqual(["trace_update", "done"]);
     expect(editChunks.map((chunk) => chunk.type)).toEqual(["trace_update", "done"]);
   });

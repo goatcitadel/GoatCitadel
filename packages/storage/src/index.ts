@@ -39,6 +39,8 @@ import { MeshCapabilityPublicationRepository } from "./mesh-capability-publicati
 import { RemoteWorkerAdmissionRepository } from "./remote-worker-admission-repo.js";
 import { RemoteWorkerAssignmentRepository } from "./remote-worker-assignment-repo.js";
 import { SessionControlRepository } from "./session-control-repo.js";
+import { SessionMutationAdmissionRepository } from "./session-mutation-admission-repo.js";
+import { HeartbeatOccurrenceRepository } from "./heartbeat-occurrence-repo.js";
 import { MemoryContextRepository } from "./memory-context-repo.js";
 import { ContextManifestRepository } from "./context-manifest-repo.js";
 import { MemoryQmdRunRepository } from "./memory-qmd-run-repo.js";
@@ -53,6 +55,7 @@ import { CommsDeliveryRepository } from "./comms-delivery-repo.js";
 import { ChatProjectRepository } from "./chat-project-repo.js";
 import { ChatSessionRevisionRepository } from "./chat-session-revision-repo.js";
 import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
+import { ChatSessionLifecycleRepository } from "./chat-session-lifecycle-repo.js";
 import { ChatSessionListRepository } from "./chat-session-list-repo.js";
 import { ChatSessionProjectRepository } from "./chat-session-project-repo.js";
 import { ChatSessionWorkbenchRepository } from "./chat-session-workbench-repo.js";
@@ -213,6 +216,17 @@ export interface DeleteChatSessionDataResult {
   attachments: ChatAttachmentRecord[];
 }
 
+export interface DeleteChatSessionTreeInput {
+  workspaceId: string;
+  rootSessionId: string;
+  expectedRootRevision: number;
+  actorId?: string;
+  idempotencyKey?: string;
+  correlationId?: string;
+}
+
+export type ReplayChatSessionTreeDeletionInput = Omit<DeleteChatSessionTreeInput, "workspaceId">;
+
 export class Storage {
   private modelUsageRecoverySweepTimer?: ReturnType<typeof setInterval>;
   public readonly db: DatabaseClient;
@@ -254,6 +268,8 @@ export class Storage {
   public readonly remoteWorkerAdmissions: RemoteWorkerAdmissionRepository;
   public readonly remoteWorkerAssignments: RemoteWorkerAssignmentRepository;
   public readonly sessionControls: SessionControlRepository;
+  public readonly sessionMutationAdmissions: SessionMutationAdmissionRepository;
+  public readonly heartbeatOccurrences: HeartbeatOccurrenceRepository;
   public readonly memoryContexts: MemoryContextRepository;
   public readonly contextManifests: ContextManifestRepository;
   public readonly memoryQmdRuns: MemoryQmdRunRepository;
@@ -265,6 +281,7 @@ export class Storage {
   public readonly chatProjects: ChatProjectRepository;
   public readonly chatSessionRevisions: ChatSessionRevisionRepository;
   public readonly chatSessionMeta: ChatSessionMetaRepository;
+  public readonly chatSessionLifecycles: ChatSessionLifecycleRepository;
   public readonly chatSessionLists: ChatSessionListRepository;
   public readonly chatSessionProjects: ChatSessionProjectRepository;
   public readonly chatSessionWorkbench: ChatSessionWorkbenchRepository;
@@ -399,6 +416,8 @@ export class Storage {
     this.remoteWorkerAdmissions = new RemoteWorkerAdmissionRepository(this.db);
     this.remoteWorkerAssignments = new RemoteWorkerAssignmentRepository(this.db);
     this.sessionControls = new SessionControlRepository(this.db);
+    this.sessionMutationAdmissions = new SessionMutationAdmissionRepository(this.db);
+    this.heartbeatOccurrences = new HeartbeatOccurrenceRepository(this.db);
     this.memoryContexts = new MemoryContextRepository(this.db);
     this.contextManifests = new ContextManifestRepository(this.db);
     this.memoryQmdRuns = new MemoryQmdRunRepository(this.db);
@@ -409,6 +428,7 @@ export class Storage {
     this.commsDeliveries = new CommsDeliveryRepository(this.db);
     this.chatProjects = new ChatProjectRepository(this.db);
     this.chatSessionRevisions = new ChatSessionRevisionRepository(this.db);
+    this.chatSessionLifecycles = new ChatSessionLifecycleRepository(this.db);
     this.chatSessionMeta = new ChatSessionMetaRepository(this.db);
     this.chatSessionLists = new ChatSessionListRepository(this.db);
     this.chatSessionProjects = new ChatSessionProjectRepository(this.db);
@@ -547,6 +567,63 @@ export class Storage {
       throw new ValidationError({ code: "FIELD_REQUIRED", field: "sessionId" });
     }
 
+    const meta = this.chatSessionMeta.get(normalizedSessionId);
+    if (!meta) {
+      this.chatSessionRevisions.ensure(normalizedSessionId);
+      throw new Error(`Chat session metadata is missing for ${normalizedSessionId}`);
+    }
+    const results = this.deleteChatSessionTreeWithRevision({
+      workspaceId: meta.workspaceId,
+      rootSessionId: normalizedSessionId,
+      expectedRootRevision: expectedRevision,
+    });
+    const root = results.find((result) => result.sessionId === normalizedSessionId);
+    if (!root) {
+      throw new Error(`Chat session deletion did not return root ${normalizedSessionId}`);
+    }
+    return {
+      ...root,
+      cleanupRelPaths: dedupeStrings(results.flatMap((result) => result.cleanupRelPaths)),
+      attachments: results.flatMap((result) => result.attachments),
+    };
+  }
+
+  public deleteChatSessionTreeWithRevision(input: DeleteChatSessionTreeInput): DeleteChatSessionDataResult[] {
+    const idempotencyKey =
+      input.idempotencyKey ?? `lifecycle:delete:${input.rootSessionId}:${input.expectedRootRevision}`;
+    const outcome = this.chatSessionLifecycles.deleteTree(
+      {
+        workspaceId: input.workspaceId,
+        rootSessionId: input.rootSessionId,
+        expectedRootRevision: input.expectedRootRevision,
+        actorId: input.actorId ?? "operator",
+        idempotencyKey,
+        correlationId: input.correlationId ?? idempotencyKey,
+      },
+      (node) => this.deletePreparedChatSessionDataWithRevision(node.sessionId, node.revision),
+    );
+    return outcome.disposition === "deleted"
+      ? outcome.results
+      : outcome.nodes.map((node) => canonicalDeletionReplayResult(node.sessionId));
+  }
+
+  public replayChatSessionTreeDeletion(input: ReplayChatSessionTreeDeletionInput): DeleteChatSessionDataResult[] {
+    const idempotencyKey =
+      input.idempotencyKey ?? `lifecycle:delete:${input.rootSessionId}:${input.expectedRootRevision}`;
+    const outcome = this.chatSessionLifecycles.replayDeletionTree({
+      rootSessionId: input.rootSessionId,
+      expectedRootRevision: input.expectedRootRevision,
+      actorId: input.actorId ?? "operator",
+      idempotencyKey,
+      correlationId: input.correlationId ?? idempotencyKey,
+    });
+    return outcome.nodes.map((node) => canonicalDeletionReplayResult(node.sessionId));
+  }
+
+  private deletePreparedChatSessionDataWithRevision(
+    normalizedSessionId: string,
+    expectedRevision: number,
+  ): DeleteChatSessionDataResult {
     const attachments = this.chatAttachments.listBySession(normalizedSessionId, 10_000);
     const cleanupRelPaths = dedupeStrings([
       ...attachments.map((record) => record.storageRelPath),
@@ -658,6 +735,7 @@ export class Storage {
       const simpleSessionDeletes = [
         "proactive_actions",
         "proactive_runs",
+        "agent_commitments",
         "learned_memory_conflicts",
         "learned_memory_items",
         "chat_reflection_attempts",
@@ -697,7 +775,6 @@ export class Storage {
         "chat_session_projects",
         "chat_session_workbench",
         "chat_attachments",
-        "chat_session_meta",
       ];
       for (const table of simpleSessionDeletes) {
         this.db.prepare(`DELETE FROM ${table} WHERE session_id = ?`).run(sid);
@@ -760,6 +837,10 @@ function dedupeStrings(values: Array<string | undefined>): string[] {
   return deduped;
 }
 
+function canonicalDeletionReplayResult(sessionId: string): DeleteChatSessionDataResult {
+  return { sessionId, deleted: true, cleanupRelPaths: [], attachments: [] };
+}
+
 export { createDatabase, createSqliteSchemaBlueprint, ensureParentDir } from "./sqlite.js";
 export type {
   SqliteOptions,
@@ -799,6 +880,8 @@ export * from "./mesh-capability-publication-repo.js";
 export * from "./remote-worker-admission-repo.js";
 export * from "./remote-worker-assignment-repo.js";
 export * from "./session-control-repo.js";
+export * from "./session-mutation-admission-repo.js";
+export * from "./heartbeat-occurrence-repo.js";
 export * from "./memory-context-repo.js";
 export * from "./memory-qmd-run-repo.js";
 export * from "./tool-grant-repo.js";
@@ -809,6 +892,7 @@ export * from "./comms-delivery-repo.js";
 export * from "./chat-project-repo.js";
 export * from "./chat-session-revision-repo.js";
 export * from "./chat-session-meta-repo.js";
+export * from "./chat-session-lifecycle-repo.js";
 export * from "./chat-session-list-repo.js";
 export * from "./chat-session-project-repo.js";
 export * from "./chat-session-branch-state-repo.js";

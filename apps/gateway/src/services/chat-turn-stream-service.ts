@@ -66,7 +66,6 @@ import {
 } from "./chat-turn-helpers.js";
 import type { ChatStreamMutationLifecycle, PreparedChatExecutionPlanResolution } from "./chat-turn-types.js";
 import { buildChatTurnRealtimeOptions } from "./chat-turn-realtime.js";
-import { isAutonomousTurnRequest } from "./gateway/autonomous-turn-policy.js";
 import {
   enforcePreparedRoutedContextOrchestrationBypass,
   resolvePreparedTurnMode,
@@ -76,6 +75,7 @@ import type { HooksService } from "./hooks-service.js";
 import { enqueueAgentEndHook, observeBeforeAssistantMessageWrite } from "./chat-turn-stream-events.js";
 import type {
   ChatTurnActiveExecutionControl,
+  ChatTurnAdmissionControl,
   ChatTurnMemorySideEffects,
   ChatTurnRealtimeEmitter,
   ChatTurnSteerCollaborator,
@@ -127,6 +127,7 @@ const LOCAL_BUSINESS_LOCATION_PATTERN =
 export interface ChatTurnStreamHost
   extends
     ChatTurnActiveExecutionControl,
+    ChatTurnAdmissionControl,
     ChatTurnMemorySideEffects,
     ChatTurnRealtimeEmitter,
     ChatTurnSteerCollaborator,
@@ -732,6 +733,7 @@ export async function executePreparedModeOrchestration(
             : request;
         const logicalOperationId = attribution.operationId ?? `orchestration-call-${completionIndex}`;
         const logicalDispatchGeneration = attribution.dispatchGeneration ?? `${logicalOperationId}:generation-1`;
+        canonicalWriteFence(() => undefined);
         return host.createChatCompletion(
           {
             ...composed,
@@ -1712,10 +1714,12 @@ export async function* streamChatModelCouncil(
   host: ChatTurnStreamHost,
   prepared: PreparedAgentChatTurn,
   signal?: AbortSignal,
+  canonicalWriteFence: ChatTurnCanonicalWriteFence = executeUnfencedChatTurnWrite,
 ): AsyncGenerator<ChatStreamChunkDraft> {
   if (!host.executeChatModelCouncil) {
     throw new Error("Model council runtime collaborator is unavailable.");
   }
+  canonicalWriteFence(() => undefined);
   const result = await host.executeChatModelCouncil(prepared, signal);
   if (result.usage || result.modelUsageEventIds.length > 0) {
     yield {
@@ -2131,51 +2135,9 @@ export async function* streamPreparedAgentChatTurn(
             },
             buildChatTurnRealtimeOptions({ sessionId, turnId }),
           );
-          host.extractAndPersistLearnedMemory(sessionId, prepared.content, {
-            role: "user",
-            sourceRef: prepared.userEventId,
-            trace: hydratedTrace,
-          });
-          host.extractAndPersistLearnedMemory(sessionId, finalText, {
-            role: "assistant",
-            sourceRef: assistantMessageId,
-            trace: hydratedTrace,
-          });
-          // P1-F3: infer future follow-up check-ins from a successful turn (streaming
-          // path). Fire-and-forget beside learned-memory; host applies all guards.
-          // Autonomous self-wake turns are excluded (no self-feeding loop on output).
-          if (hydratedTrace.status === "completed") {
-            const autonomousTurn = isAutonomousTurnRequest(input);
-            const delegatedChild = Boolean(prepared.parentDelegationStepId);
-            host.recordTurnCommitments({
-              sessionId,
-              workspaceId: prepared.workspaceId,
-              userText: prepared.content,
-              assistantText: finalText,
-              autonomous: autonomousTurn,
-            });
-            // P2-S1: counter-gated self-improvement review (fire-and-forget). The host
-            // gates on master autonomy / eval-integrity / non-human + the turn counter.
-            host.scheduleBackgroundReviewIfDue({
-              sessionId,
-              workspaceId: prepared.workspaceId,
-              turnId,
-              userText: prepared.content,
-              assistantText: finalText,
-              delegatedChild,
-              autonomous: autonomousTurn,
-            });
-          }
-          host.scheduleChatMemoryContextPrewarm({
-            sessionId,
-            prompt: finalText,
-            relationScope: "self",
-          });
-          host.scheduleMemoryMaintenancePostTurnEvaluation({
-            sessionId,
-            turnId,
-            delegatedChild: Boolean(prepared.parentDelegationStepId),
-          });
+          // Direct learned-memory promotion, commitments, and post-turn
+          // prewarm are production-dark. Canonical durable post-commit owns
+          // governed children and inspectable evidence.
           enqueueAgentEndHook(host, {
             workspaceId: prepared.workspaceId,
             sessionId,
@@ -2288,7 +2250,7 @@ export async function* streamPreparedAgentChatTurn(
     }
     const serverContextUsageAttribution = buildPreparedRoutedContextUsageAttribution(prepared);
     const directStream = input.modelCouncil?.enabled
-      ? streamChatModelCouncil(host, prepared, controller.signal)
+      ? streamChatModelCouncil(host, prepared, controller.signal, canonicalWriteFence)
       : runDirectTurnStreamWithSubagentFanout(
           host,
           prepared,
@@ -2365,6 +2327,7 @@ export async function* streamPreparedAgentChatTurn(
               signal: controller.signal,
               canonicalWriteFence,
               capabilityProfile: prepared.capabilityProfile,
+              ...(prepared.serverOnlyPosture ? { serverOnlyPosture: prepared.serverOnlyPosture } : {}),
               capabilityProfileContent: prepared.capabilityProfileContent,
               compactionDimensionHash: prepared.compactionDimensionHash,
               ...(serverContextUsageAttribution ? { serverContextUsageAttribution } : {}),
@@ -2812,51 +2775,9 @@ export async function* streamPreparedAgentChatTurn(
             },
             buildChatTurnRealtimeOptions({ sessionId, turnId }),
           );
-          host.extractAndPersistLearnedMemory(sessionId, prepared.content, {
-            role: "user",
-            sourceRef: prepared.userEventId,
-            trace: hydratedTrace,
-          });
-          host.extractAndPersistLearnedMemory(sessionId, finalText, {
-            role: "assistant",
-            sourceRef: assistantMessageId,
-            trace: hydratedTrace,
-          });
-          // P1-F3: infer future follow-up check-ins from a successful turn (durable
-          // streaming path). Fire-and-forget beside learned-memory; host guards apply.
-          // Autonomous self-wake turns are excluded (no self-feeding loop on output).
-          if (hydratedTrace.status === "completed") {
-            const autonomousTurn = isAutonomousTurnRequest(input);
-            const delegatedChild = Boolean(prepared.parentDelegationStepId);
-            host.recordTurnCommitments({
-              sessionId,
-              workspaceId: prepared.workspaceId,
-              userText: prepared.content,
-              assistantText: finalText,
-              autonomous: autonomousTurn,
-            });
-            // P2-S1: counter-gated self-improvement review (fire-and-forget). The host
-            // gates on master autonomy / eval-integrity / non-human + the turn counter.
-            host.scheduleBackgroundReviewIfDue({
-              sessionId,
-              workspaceId: prepared.workspaceId,
-              turnId,
-              userText: prepared.content,
-              assistantText: finalText,
-              delegatedChild,
-              autonomous: autonomousTurn,
-            });
-          }
-          host.scheduleChatMemoryContextPrewarm({
-            sessionId,
-            prompt: finalText,
-            relationScope: "self",
-          });
-          host.scheduleMemoryMaintenancePostTurnEvaluation({
-            sessionId,
-            turnId,
-            delegatedChild: Boolean(prepared.parentDelegationStepId),
-          });
+          // Direct learned-memory promotion, commitments, and post-turn
+          // prewarm are production-dark. Canonical durable post-commit owns
+          // governed children and inspectable evidence.
         });
       }
     }
@@ -2897,7 +2818,13 @@ export async function* streamPreparedAgentChatTurn(
     if (durableControlReason) {
       throw durableControlReason;
     }
-    if (controller.signal.aborted || isChatTurnCancelledError(error)) {
+    const exactSystemHeartbeat = Boolean(
+      prepared.serverOnlyPosture?.kind === "system_heartbeat" &&
+      prepared.serverOnlyPosture.actorId === "system-heartbeat" &&
+      prepared.serverOnlyPosture.operation === "chat_system_heartbeat" &&
+      prepared.serverOnlyPosture.durableRunId.trim().length > 0,
+    );
+    if (controller.signal.aborted || (!exactSystemHeartbeat && isChatTurnCancelledError(error))) {
       const trace = host.markChatTurnCancelled(sessionId, turnId);
       yield {
         type: "trace_update",

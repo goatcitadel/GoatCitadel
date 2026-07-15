@@ -1,6 +1,6 @@
 import type { DatabaseClient } from "./db.js";
 import type { ChatProactiveMode, ChatReflectionMode, ChatRetrievalMode } from "@goatcitadel/contracts";
-import { clampInt, NotFoundError } from "@goatcitadel/contracts";
+import { clampInt, ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import { ChatSessionRevisionRepository } from "./chat-session-revision-repo.js";
 
 interface SessionAutonomyPrefsRow {
@@ -69,6 +69,14 @@ export interface SessionAutonomyPrefsPatchInput {
   activeHours?: SessionActiveHoursWindow;
 }
 
+export interface ConsumeHeartbeatCadenceInput {
+  sessionId: string;
+  occurrenceId: string;
+  claimedAt: string;
+  expectedLastProactiveAt?: string;
+  expectedLastProactiveRunId?: string;
+}
+
 /** Default active-hours window: 08:00–22:00 local (matches the F3 sweep default). */
 export const DEFAULT_SESSION_ACTIVE_HOURS: SessionActiveHoursWindow = { start: 8, end: 22 };
 
@@ -125,20 +133,24 @@ export class SessionAutonomyPrefsRepository {
         cooldown_seconds = excluded.cooldown_seconds,
         retrieval_mode = excluded.retrieval_mode,
         reflection_mode = excluded.reflection_mode,
-        last_proactive_at = excluded.last_proactive_at,
-        last_proactive_run_id = excluded.last_proactive_run_id,
+        last_proactive_at = session_autonomy_prefs.last_proactive_at,
+        last_proactive_run_id = session_autonomy_prefs.last_proactive_run_id,
         heartbeat_enabled = excluded.heartbeat_enabled,
         heartbeat_interval_seconds = excluded.heartbeat_interval_seconds,
         active_hours_json = excluded.active_hours_json,
         updated_at = excluded.updated_at
     `);
+    const exactPriorPredicate =
+      db.dialect === "postgres"
+        ? "last_proactive_at IS NOT DISTINCT FROM @expectedLastProactiveAt AND last_proactive_run_id IS NOT DISTINCT FROM @expectedLastProactiveRunId"
+        : "last_proactive_at IS @expectedLastProactiveAt AND last_proactive_run_id IS @expectedLastProactiveRunId";
     this.touchStmt = db.prepare(`
       UPDATE session_autonomy_prefs
       SET
         last_proactive_at = @lastProactiveAt,
         last_proactive_run_id = @runId,
         updated_at = @updatedAt
-      WHERE session_id = @sessionId
+      WHERE session_id = @sessionId AND ${exactPriorPredicate}
     `);
   }
 
@@ -181,8 +193,11 @@ export class SessionAutonomyPrefsRepository {
     input: SessionAutonomyPrefsPatchInput,
     now = new Date().toISOString(),
   ): SessionAutonomyPrefsRecord {
-    const current = this.ensure(sessionId, now);
-    return this.patchWithRevision(sessionId, input, current.revision, now);
+    return this.db.transaction("immediate", () => {
+      this.acquireSessionLock(sessionId);
+      const current = this.ensure(sessionId, now);
+      return this.patchWithRevision(sessionId, input, current.revision, now);
+    });
   }
 
   public patchWithRevision(
@@ -191,13 +206,16 @@ export class SessionAutonomyPrefsRepository {
     expectedRevision: number,
     now = new Date().toISOString(),
   ): SessionAutonomyPrefsRecord {
-    const result = this.revisions.runWithRevision(
-      sessionId,
-      expectedRevision,
-      () => this.patchWithinAggregate(sessionId, input, expectedRevision, now),
-      now,
-    );
-    return { ...result.value, revision: result.revision };
+    return this.db.transaction("immediate", () => {
+      this.acquireSessionLock(sessionId);
+      const result = this.revisions.runWithRevision(
+        sessionId,
+        expectedRevision,
+        () => this.patchWithinAggregate(sessionId, input, expectedRevision, now),
+        now,
+      );
+      return { ...result.value, revision: result.revision };
+    });
   }
 
   /**
@@ -211,6 +229,7 @@ export class SessionAutonomyPrefsRepository {
     revision: number,
     now = new Date().toISOString(),
   ): { value: SessionAutonomyPrefsRecord; changed: boolean } {
+    this.acquireSessionLock(sessionId);
     const current = this.get(sessionId) ?? this.createDefaultsUnchecked(sessionId, now, revision);
     const next: SessionAutonomyPrefsRecord = {
       ...current,
@@ -237,15 +256,45 @@ export class SessionAutonomyPrefsRepository {
     return { value: { ...this.requireRecord(sessionId), revision }, changed: true };
   }
 
-  public touch(sessionId: string, runId: string, now = new Date().toISOString()): SessionAutonomyPrefsRecord {
-    this.ensure(sessionId, now);
-    this.touchStmt.run({
-      sessionId,
-      runId,
-      lastProactiveAt: now,
-      updatedAt: now,
+  public touch(sessionId: string, runId: string, now?: string): SessionAutonomyPrefsRecord {
+    const normalizedSessionId = requireIdentifier(sessionId, "sessionId");
+    const normalizedRunId = requireIdentifier(runId, "runId");
+    return this.db.transaction("immediate", () => {
+      this.acquireSessionLock(normalizedSessionId);
+      const candidateAt = now === undefined ? this.readDatabaseTime() : requireCanonicalTimestamp(now, "now");
+      this.ensure(normalizedSessionId, candidateAt);
+      const current = this.requireLockedRecord(normalizedSessionId);
+      return this.advanceCadenceExact(current, normalizedRunId, candidateAt);
     });
-    return this.requireRecord(sessionId);
+  }
+
+  /**
+   * Transaction-internal heartbeat cadence CAS. The caller owns the outer
+   * session transaction; this method reuses the same session lock and never
+   * bumps the operator-facing chat aggregate revision.
+   */
+  public consumeHeartbeatCadenceWithinSessionLock(input: ConsumeHeartbeatCadenceInput): SessionAutonomyPrefsRecord {
+    const sessionId = requireIdentifier(input.sessionId, "sessionId");
+    const occurrenceId = requireIdentifier(input.occurrenceId, "occurrenceId");
+    const claimedAt = requireCanonicalTimestamp(input.claimedAt, "claimedAt");
+    const expectedAt = input.expectedLastProactiveAt
+      ? requireCanonicalTimestamp(input.expectedLastProactiveAt, "expectedLastProactiveAt")
+      : undefined;
+    const expectedRunId = input.expectedLastProactiveRunId
+      ? requireIdentifier(input.expectedLastProactiveRunId, "expectedLastProactiveRunId")
+      : undefined;
+    if (Boolean(expectedAt) !== Boolean(expectedRunId)) {
+      throw new ValidationError({ field: "expectedPriorCadence" });
+    }
+    this.acquireSessionLock(sessionId);
+    const current = this.requireLockedRecord(sessionId);
+    if (current.lastProactiveAt === claimedAt && current.lastProactiveRunId === occurrenceId) {
+      return current;
+    }
+    if (current.lastProactiveAt !== expectedAt || current.lastProactiveRunId !== expectedRunId) {
+      throw cadenceConflict("Session proactive cadence changed while claiming a heartbeat.");
+    }
+    return this.advanceCadenceExact(current, occurrenceId, claimedAt);
   }
 
   public listBySessionIds(sessionIds: string[]): Map<string, SessionAutonomyPrefsRecord> {
@@ -295,6 +344,67 @@ export class SessionAutonomyPrefsRepository {
       throw new NotFoundError({ entity: "session autonomy prefs", id: sessionId });
     }
     return record;
+  }
+
+  private requireLockedRecord(sessionId: string): SessionAutonomyPrefsRecord {
+    const row = toSessionAutonomyPrefsRow(
+      this.db
+        .prepare(
+          `SELECT prefs.*, meta.revision AS aggregate_revision
+           FROM session_autonomy_prefs prefs
+           LEFT JOIN chat_session_meta meta ON meta.session_id = prefs.session_id
+           WHERE prefs.session_id = @sessionId${this.db.dialect === "postgres" ? " FOR UPDATE OF prefs" : ""}`,
+        )
+        .get({ sessionId }),
+    );
+    if (!row) throw new NotFoundError({ entity: "session autonomy prefs", id: sessionId });
+    return mapRow(row);
+  }
+
+  private advanceCadenceExact(
+    current: SessionAutonomyPrefsRecord,
+    runId: string,
+    candidateAt: string,
+  ): SessionAutonomyPrefsRecord {
+    if (current.lastProactiveAt) {
+      const ordering = Date.parse(candidateAt) - Date.parse(current.lastProactiveAt);
+      if (!Number.isFinite(ordering) || ordering < 0) {
+        return current;
+      }
+      if (ordering === 0) {
+        if (current.lastProactiveRunId === runId) return current;
+        throw cadenceConflict("Equal proactive cadence timestamps require the same run identity.");
+      }
+    }
+    const updatedAt = Date.parse(candidateAt) >= Date.parse(current.updatedAt) ? candidateAt : current.updatedAt;
+    const result = this.touchStmt.run({
+      sessionId: current.sessionId,
+      runId,
+      lastProactiveAt: candidateAt,
+      updatedAt,
+      expectedLastProactiveAt: current.lastProactiveAt ?? null,
+      expectedLastProactiveRunId: current.lastProactiveRunId ?? null,
+    });
+    if (result.changes !== 1) {
+      throw cadenceConflict("Session proactive cadence changed while applying a monotonic update.");
+    }
+    return this.requireLockedRecord(current.sessionId);
+  }
+
+  private readDatabaseTime(): string {
+    const sql =
+      this.db.dialect === "postgres"
+        ? `SELECT to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS now`
+        : `SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now') AS now`;
+    const row = this.db.prepare(sql).get<{ now: string }>();
+    if (!row?.now) throw new TypeError("database clock did not return a timestamp");
+    return row.now;
+  }
+
+  private acquireSessionLock(sessionId: string): void {
+    if (this.db.dialect === "postgres") {
+      this.db.prepare("SELECT pg_advisory_xact_lock(hashtextextended(@sessionId, 411))").get({ sessionId });
+    }
   }
 }
 
@@ -430,4 +540,20 @@ function toWriteParams(next: SessionAutonomyPrefsRecord, createdAt: string): Rec
     createdAt,
     updatedAt: next.updatedAt,
   };
+}
+
+function requireIdentifier(value: string, field: string): string {
+  const normalized = value.trim();
+  if (normalized.length < 1 || normalized.length > 512) throw new ValidationError({ field });
+  return normalized;
+}
+
+function requireCanonicalTimestamp(value: string, field: string): string {
+  const epoch = Date.parse(value);
+  if (!Number.isFinite(epoch) || new Date(epoch).toISOString() !== value) throw new ValidationError({ field });
+  return value;
+}
+
+function cadenceConflict(message: string): ConflictError {
+  return new ConflictError({ code: "WRITE_CONFLICT", message });
 }

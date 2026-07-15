@@ -1,7 +1,7 @@
 import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { generateKeyPairSync, sign } from "node:crypto";
+import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Pool } from "pg";
 import {
@@ -271,6 +271,7 @@ function buildAuthHarness(options: { storage?: Storage; rootDir?: string } = {})
     storage: {
       approvals: storage.approvals,
       approvalEvents: storage.approvalEvents,
+      sessionControls: storage.sessionControls,
       runImmediateTransaction: storage.runImmediateTransaction.bind(storage),
       audit: {
         append: vi.fn(async (_stream: string, payload: Record<string, unknown>) => {
@@ -381,6 +382,111 @@ function createCompanionSigningKeys(): { publicKeyPem: string; privateKeyPem: st
     publicKeyPem: publicKey.export({ type: "spki", format: "pem" }).toString(),
     privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
   };
+}
+
+interface ActiveCompanionControlFixture {
+  grantId: string;
+  companionSessionId: string;
+  activeChatSessionId: string;
+  pendingChatSessionId: string;
+  pendingRequestId: string;
+}
+
+async function createActiveCompanionControlFixture(
+  harness: AuthHarness,
+  seed: string,
+): Promise<ActiveCompanionControlFixture> {
+  const grantId = `grant-control-${seed}`;
+  const authRequestId = `auth-request-control-${seed}`;
+  const now = harness.storage.gatewaySql.readDatabaseNow();
+  const expiresAt = new Date(Date.parse(now) + 24 * 60 * 60 * 1_000).toISOString();
+  harness.storage.gatewaySql
+    .prepare(
+      `INSERT INTO auth_device_requests (
+         request_id, approval_id, request_secret_hash, device_label, device_type, platform,
+         status, created_at, expires_at, resolved_at, resolved_by, principal_purpose
+       ) VALUES (
+         @requestId, @approvalId, @secretHash, 'Control client', 'desktop', 'test',
+         'approved', @now, @expiresAt, @now, 'operator:test', 'session_control_client'
+       )`,
+    )
+    .run({
+      requestId: authRequestId,
+      approvalId: `approval-control-${seed}`,
+      secretHash: testSha256(`secret:${seed}`),
+      now,
+      expiresAt,
+    });
+  harness.storage.gatewaySql
+    .prepare(
+      `INSERT INTO auth_device_grants (
+         grant_id, request_id, token_hash, device_label, device_type, platform, granted_by,
+         created_at, expires_at, metadata_json, principal_purpose
+       ) VALUES (
+         @grantId, @requestId, @tokenHash, 'Control client', 'desktop', 'test', 'operator:test',
+         @now, @expiresAt, '{}', 'session_control_client'
+       )`,
+    )
+    .run({
+      grantId,
+      requestId: authRequestId,
+      tokenHash: testSha256(`device-token:${seed}`),
+      now,
+      expiresAt,
+    });
+  const keys = createCompanionSigningKeys();
+  const companion = await exchangeCompanionSessionFromDeviceGrant(harness.deps, grantId, {
+    signingPublicKeyPem: keys.publicKeyPem,
+    clientName: `Control client ${seed}`,
+  });
+  const activeChatSessionId = `chat-active-${seed}`;
+  const pendingChatSessionId = `chat-pending-${seed}`;
+  for (const sessionId of [activeChatSessionId, pendingChatSessionId]) {
+    harness.storage.chatSessionLifecycles.initialize({
+      workspaceId: "default",
+      sessionId,
+      actorId: "operator:test",
+      idempotencyKey: `lifecycle:init:${sessionId}`,
+      correlationId: `correlation:lifecycle:init:${sessionId}`,
+    });
+  }
+  const createControlRequest = (sessionId: string, suffix: string) =>
+    harness.storage.sessionControls.createExternalRequest({
+      workspaceId: "default",
+      sessionId,
+      companionSessionId: companion.sessionId,
+      deviceGrantId: grantId,
+      clientInstanceId: `client-${seed}`,
+      principalPurpose: "session_control_client",
+      expectedGeneration: 1,
+      tokenHashSha256: testSha256(`control-token:${seed}:${suffix}`),
+      capabilities: ["send", "read"],
+      idempotencyKey: `control-request:${seed}:${suffix}`,
+      correlationId: `correlation:control-request:${seed}:${suffix}`,
+    });
+  const activeRequest = createControlRequest(activeChatSessionId, "active");
+  harness.storage.sessionControls.handoff({
+    workspaceId: "default",
+    sessionId: activeChatSessionId,
+    requestId: activeRequest.request.requestId,
+    expectedGeneration: 1,
+    effectiveCapabilities: ["send", "read"],
+    operatorActorId: "operator:test",
+    idempotencyKey: `control-handoff:${seed}`,
+    correlationId: `correlation:control-handoff:${seed}`,
+  });
+  const pendingRequest = createControlRequest(pendingChatSessionId, "pending");
+  return {
+    grantId,
+    companionSessionId: companion.sessionId,
+    activeChatSessionId,
+    pendingChatSessionId,
+    pendingRequestId: pendingRequest.request.requestId,
+  };
+}
+
+function testSha256(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 function signCompanionRequest(input: {
@@ -1429,6 +1535,15 @@ describe("settings-auth-service device access lifecycle", () => {
 
     const revoked = await revokeDeviceAccessGrant(harness.deps, grantId, "operator:test");
     expect(revoked.revokedAt).toBeDefined();
+    expect(
+      harness.storage.gatewaySql
+        .prepare(
+          `SELECT binding_kind, binding_id
+           FROM chat_session_control_auth_revoke_receipts
+           WHERE binding_kind = 'device_grant' AND binding_id = @grantId`,
+        )
+        .get({ grantId }),
+    ).toEqual({ binding_kind: "device_grant", binding_id: grantId });
     expect(validateDeviceAccessToken(harness.deps, approved.deviceToken!)).toBeUndefined();
     expect(harness.auditRecords.map((record) => record.event)).toEqual(
       expect.arrayContaining([
@@ -1446,6 +1561,60 @@ describe("settings-auth-service device access lifecycle", () => {
         "auth_device_grant_revoked",
       ]),
     );
+  });
+
+  it("rolls back device-grant auth revocation and session-control evidence when projection fails", async () => {
+    const harness = buildAuthHarness();
+    const fixture = await createActiveCompanionControlFixture(harness, "device-rollback");
+    const receiptCountBefore = harness.storage.gatewaySql
+      .prepare(
+        `SELECT COUNT(*) AS count FROM chat_session_control_auth_revoke_receipts
+         WHERE binding_kind = 'device_grant' AND binding_id = @grantId`,
+      )
+      .get<{ count: number }>({ grantId: fixture.grantId })!.count;
+    const originalPrepare = harness.deps.gatewaySql.prepare.bind(harness.deps.gatewaySql);
+    let grantSelectCount = 0;
+    vi.spyOn(harness.deps.gatewaySql, "prepare").mockImplementation((sql: string) => {
+      const statement = originalPrepare(sql);
+      if (sql.includes("SELECT * FROM auth_device_grants") && ++grantSelectCount === 2) {
+        return new Proxy(statement, {
+          get(target, prop, receiver) {
+            if (prop === "get")
+              return () => {
+                throw new Error("projection failed");
+              };
+            return Reflect.get(target, prop, receiver);
+          },
+        }) as never;
+      }
+      return statement;
+    });
+
+    await expect(revokeDeviceAccessGrant(harness.deps, fixture.grantId, "operator:test")).rejects.toThrow(
+      "projection failed",
+    );
+    expect(
+      harness.storage.gatewaySql
+        .prepare("SELECT revoked_at FROM auth_device_grants WHERE grant_id = @grantId")
+        .get({ grantId: fixture.grantId }),
+    ).toEqual({ revoked_at: null });
+    expect(
+      harness.storage.gatewaySql
+        .prepare(
+          `SELECT COUNT(*) AS count FROM chat_session_control_auth_revoke_receipts
+           WHERE binding_kind = 'device_grant' AND binding_id = @grantId`,
+        )
+        .get<{ count: number }>({ grantId: fixture.grantId })!.count,
+    ).toBe(receiptCountBefore);
+    expect(harness.storage.sessionControls.getControl("default", fixture.activeChatSessionId)).toMatchObject({
+      ownerKind: "external_companion",
+      leaseState: "external_live",
+    });
+    expect(
+      harness.storage.gatewaySql
+        .prepare("SELECT status FROM chat_session_control_requests WHERE request_id = @requestId")
+        .get({ requestId: fixture.pendingRequestId }),
+    ).toEqual({ status: "pending" });
   });
 
   it.each(["2099-01-01T00:00:00.000Z", "2000-01-01T00:00:00.000Z"])(
@@ -2222,6 +2391,156 @@ describe("settings-auth-service companion session lifecycle", () => {
       ]),
     );
     expect(harness.realtimeEvents.map((event) => event.eventType)).toContain("auth_companion_session_revoked");
+  });
+
+  it.each(["companion_revoke", "device_revoke", "exchange"] as const)(
+    "%s revokes active and pending session-control authority in the auth transaction",
+    async (operation) => {
+      const harness = buildAuthHarness();
+      const fixture = await createActiveCompanionControlFixture(harness, operation);
+      expect(harness.storage.sessionControls.getControl("default", fixture.activeChatSessionId)).toMatchObject({
+        ownerKind: "external_companion",
+        leaseState: "external_live",
+      });
+
+      let replacementSessionId: string | undefined;
+      if (operation === "companion_revoke") {
+        await revokeCompanionSession(harness.deps, fixture.companionSessionId, "operator:test");
+      } else if (operation === "device_revoke") {
+        await revokeDeviceAccessGrant(harness.deps, fixture.grantId, "operator:test");
+      } else {
+        const replacement = await exchangeCompanionSessionFromDeviceGrant(harness.deps, fixture.grantId, {
+          signingPublicKeyPem: createCompanionSigningKeys().publicKeyPem,
+          clientName: "Replacement control client",
+        });
+        replacementSessionId = replacement.sessionId;
+      }
+
+      expect(harness.storage.sessionControls.getControl("default", fixture.activeChatSessionId)).toMatchObject({
+        ownerKind: "operator",
+        leaseState: "operator_active",
+        lastEventReasonCode: "auth_revoked",
+      });
+      expect(
+        harness.storage.gatewaySql
+          .prepare("SELECT status FROM chat_session_control_requests WHERE request_id = @requestId")
+          .get({ requestId: fixture.pendingRequestId }),
+      ).toEqual({ status: "cancelled" });
+      const bindingKind = operation === "companion_revoke" ? "companion_session" : "device_grant";
+      const bindingId = operation === "companion_revoke" ? fixture.companionSessionId : fixture.grantId;
+      expect(
+        harness.storage.gatewaySql
+          .prepare(
+            `SELECT target_count, session_count
+             FROM chat_session_control_auth_revoke_receipts
+             WHERE binding_kind = @bindingKind AND binding_id = @bindingId
+             ORDER BY created_at DESC LIMIT 1`,
+          )
+          .get<{ target_count: number; session_count: number }>({ bindingKind, bindingId }),
+      ).toMatchObject({ target_count: 2, session_count: 2 });
+      if (replacementSessionId) {
+        expect(replacementSessionId).not.toBe(fixture.companionSessionId);
+        expect(getCompanionSessionRecord(harness.deps, fixture.companionSessionId).revokedAt).toBeDefined();
+        expect(getCompanionSessionRecord(harness.deps, replacementSessionId).revokedAt).toBeUndefined();
+      }
+    },
+  );
+
+  it("rolls companion-session control revocation back when the auth projection fails", async () => {
+    const harness = buildAuthHarness();
+    const fixture = await createActiveCompanionControlFixture(harness, "companion-rollback");
+    const originalPrepare = harness.deps.gatewaySql.prepare.bind(harness.deps.gatewaySql);
+    let sessionProjectionCount = 0;
+    vi.spyOn(harness.deps.gatewaySql, "prepare").mockImplementation((sql: string) => {
+      const statement = originalPrepare(sql);
+      if (sql.includes("FROM companion_sessions s") && sql.includes("WHERE s.session_id = @sessionId")) {
+        sessionProjectionCount += 1;
+        if (sessionProjectionCount === 2) {
+          return new Proxy(statement, {
+            get(target, prop, receiver) {
+              if (prop === "get")
+                return () => {
+                  throw new Error("companion projection failed");
+                };
+              return Reflect.get(target, prop, receiver);
+            },
+          }) as never;
+        }
+      }
+      return statement;
+    });
+
+    await expect(revokeCompanionSession(harness.deps, fixture.companionSessionId, "operator:test")).rejects.toThrow(
+      "companion projection failed",
+    );
+    expect(getCompanionSessionRecord(harness.deps, fixture.companionSessionId).revokedAt).toBeUndefined();
+    expect(harness.storage.sessionControls.getControl("default", fixture.activeChatSessionId)).toMatchObject({
+      ownerKind: "external_companion",
+      leaseState: "external_live",
+    });
+    expect(
+      harness.storage.gatewaySql
+        .prepare(
+          `SELECT 1 FROM chat_session_control_auth_revoke_receipts
+           WHERE binding_kind = 'companion_session' AND binding_id = @sessionId`,
+        )
+        .get({ sessionId: fixture.companionSessionId }),
+    ).toBeUndefined();
+  });
+
+  it("rolls replacement exchange control/auth revocation back when session insertion fails", async () => {
+    const harness = buildAuthHarness();
+    const fixture = await createActiveCompanionControlFixture(harness, "exchange-rollback");
+    const receiptCountBefore = harness.storage.gatewaySql
+      .prepare(
+        `SELECT COUNT(*) AS count FROM chat_session_control_auth_revoke_receipts
+         WHERE binding_kind = 'device_grant' AND binding_id = @grantId`,
+      )
+      .get<{ count: number }>({ grantId: fixture.grantId })!.count;
+    const originalPrepare = harness.deps.gatewaySql.prepare.bind(harness.deps.gatewaySql);
+    let intercepted = false;
+    vi.spyOn(harness.deps.gatewaySql, "prepare").mockImplementation((sql: string) => {
+      const statement = originalPrepare(sql);
+      if (!intercepted && sql.includes("INSERT INTO companion_sessions")) {
+        intercepted = true;
+        return new Proxy(statement, {
+          get(target, prop, receiver) {
+            if (prop === "run") {
+              return (params: unknown) => {
+                target.run(params);
+                throw new Error("replacement insert failed");
+              };
+            }
+            return Reflect.get(target, prop, receiver);
+          },
+        }) as never;
+      }
+      return statement;
+    });
+
+    await expect(
+      exchangeCompanionSessionFromDeviceGrant(harness.deps, fixture.grantId, {
+        signingPublicKeyPem: createCompanionSigningKeys().publicKeyPem,
+      }),
+    ).rejects.toThrow("replacement insert failed");
+    expect(getCompanionSessionRecord(harness.deps, fixture.companionSessionId).revokedAt).toBeUndefined();
+    expect(harness.storage.sessionControls.getControl("default", fixture.activeChatSessionId)).toMatchObject({
+      ownerKind: "external_companion",
+      leaseState: "external_live",
+    });
+    expect(
+      harness.storage.gatewaySql
+        .prepare(
+          `SELECT COUNT(*) AS count FROM chat_session_control_auth_revoke_receipts
+           WHERE binding_kind = 'device_grant' AND binding_id = @grantId`,
+        )
+        .get<{ count: number }>({ grantId: fixture.grantId })!.count,
+    ).toBe(receiptCountBefore);
+    expect(
+      harness.storage.gatewaySql
+        .prepare("SELECT COUNT(*) AS count FROM companion_sessions WHERE grant_id = @grantId")
+        .get<{ count: number }>({ grantId: fixture.grantId })!.count,
+    ).toBe(1);
   });
 
   it("issues and validates companion credentials from database time under host-clock skew", async () => {

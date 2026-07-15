@@ -12,6 +12,7 @@ describe("createChatTurnRuntimeHost", () => {
     expect(host.backgroundTasks).toBe(source.values.backgroundTasks);
     expect(host.hooksService).toBe(source.values.hooksService);
     expect(host.llmService).toBe(source.values.llmService);
+    expect(host.sessionControlRuntimeOwner).toBe(source.values.sessionControlRuntimeOwner);
 
     source.values.config = { assistant: { durable: { enabled: false } } };
     expect(host.config).toBe(source.values.config);
@@ -46,6 +47,8 @@ describe("createChatTurnRuntimeHost", () => {
     expect(host.resolveRuntimeGuidance("workspace-1")).toBe("guidance");
     expect(host.resolveThreadKnowledgeContext("session-1", "query")).toBe("knowledge");
     expect(host.routeFromSession({ sessionId: "session-1" } as never)).toBe("route");
+    const admission = { identity: { admissionId: "admission-1" } } as never;
+    expect(host.assertTurnAdmissionWrite?.(admission)).toBe("admission-asserted");
 
     const leaseResult = await host.withChatTurnWriteLease("session-1", "send", async () => "leased");
     expect(leaseResult).toBe("leased");
@@ -175,10 +178,12 @@ function createSourceHost(options: { listLlmModels?: boolean } = {}) {
     backgroundTasks: new Set(),
     hooksService: { kind: "hooks" },
     llmService: { kind: "llm" },
+    sessionControlRuntimeOwner: { kind: "session-control-runtime-owner" },
     subagentFanout: { register: vi.fn(() => () => {}) },
   };
   const fns = {
     buildDefaultChatPersonalityOverlay: vi.fn(() => "overlay"),
+    assertTurnAdmissionWrite: vi.fn(() => "admission-asserted"),
     buildLlmMessagesFromBranchPath: vi.fn(async () => "messages"),
     ensureChatSessionModelDefaults: vi.fn(async () => "model-defaults"),
     ensureChatSessionRuntimeGrants: vi.fn(async () => "runtime-grants"),
@@ -259,6 +264,9 @@ function createSourceHost(options: { listLlmModels?: boolean } = {}) {
     },
     get llmService() {
       return values.llmService;
+    },
+    get sessionControlRuntimeOwner() {
+      return values.sessionControlRuntimeOwner;
     },
     get subagentFanout() {
       return values.subagentFanout;

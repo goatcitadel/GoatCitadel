@@ -50,6 +50,7 @@ export const SESSION_CONTROL_EVENT_REASON_CODES = [
   "auth_revoked",
   "session_deleted",
   "session_reactivated",
+  "heartbeat_preempted",
   "mutation_denied",
 ] as const;
 
@@ -164,6 +165,7 @@ const OPERATOR_CURRENT_EVENT_REASONS = new Set<SessionControlEventReasonCode>([
   "emergency_takeover",
   "auth_revoked",
   "session_reactivated",
+  "heartbeat_preempted",
   "mutation_denied",
 ]);
 const EXTERNAL_CURRENT_EVENT_REASONS = new Set<SessionControlEventReasonCode>([
@@ -889,6 +891,15 @@ function validateSessionControlEventTransition(
         event.previousOwnerKind === undefined &&
         event.nextOwnerKind === "operator" &&
         event.previousLeaseState === "deleted" &&
+        event.nextLeaseState === "operator_active" &&
+        event.actorKind === "operator";
+      break;
+    case "heartbeat_preempted":
+      valid =
+        nextGeneration &&
+        event.previousOwnerKind === "operator" &&
+        event.nextOwnerKind === "operator" &&
+        event.previousLeaseState === "operator_active" &&
         event.nextLeaseState === "operator_active" &&
         event.actorKind === "operator";
       break;

@@ -174,6 +174,8 @@ export interface CancelSessionControlRequestOutcome {
 
 export interface AuthRevokeSessionControlsOutcome {
   disposition: "created" | "replayed";
+  occurredAt: string;
+  occurredAtBasis: "operation" | "legacy_receipt";
   controls: SessionControlRecord[];
 }
 
@@ -290,6 +292,36 @@ interface AuthRevokeReceiptRow {
   session_count: number | bigint | string;
   event_set_sha256: string;
   created_at: string;
+}
+
+interface AuthRevokeOperationRow {
+  idempotency_key: string;
+  request_sha256: string;
+  binding_kind: string;
+  binding_id: string;
+  actor_id: string;
+  correlation_id: string;
+  target_count: number | bigint | string;
+  session_count: number | bigint | string;
+  event_set_sha256: string;
+  occurred_at: string;
+}
+
+interface AuthRevokeOperationTargetRow {
+  operation_idempotency_key: string;
+  target_index: number | bigint | string;
+  target_kind: "pending_request" | "current_grant";
+  workspace_id: string;
+  session_id: string;
+  request_id: string | null;
+  generation: number | bigint | string;
+  control_revision: number | bigint | string;
+  owner_kind: "operator" | "external_companion";
+  lease_state: "operator_active" | "external_live" | "external_stale";
+  event_id: string;
+  event_sequence: number | bigint | string;
+  event_idempotency_key: string;
+  event_reason_code: "auth_revoked" | "mutation_denied" | "request_expired";
 }
 
 interface DatabaseClockRow {
@@ -1002,6 +1034,9 @@ export class SessionControlRepository {
         if (receipt) {
           return this.replayAuthRevokeReceipt(receipt, normalized, requestSha256);
         }
+        if (this.findAuthRevokeOperation(normalized.idempotencyKey)) {
+          throw stateConflict("SESSION_CONTROL_STATE_CORRUPT", "Auth revoke operation has no immutable receipt.");
+        }
         const orphanRoot = this.db
           .prepare(
             `SELECT event_id FROM chat_session_control_events
@@ -1028,11 +1063,6 @@ export class SessionControlRepository {
         const candidateSessionIds = [
           ...new Set([...pendingCandidates, ...grantCandidates].map((candidate) => candidate.session_id)),
         ].sort();
-        if (candidateSessionIds.length === 0) {
-          const clock = this.readDatabaseClock();
-          this.insertAuthRevokeReceipt(normalized, requestSha256, [], clock.now);
-          return { disposition: "created", controls: [] };
-        }
         for (const sessionId of candidateSessionIds) this.acquireSessionLock(sessionId);
         const pending = this.db
           .prepare(
@@ -1048,18 +1078,147 @@ export class SessionControlRepository {
              ORDER BY session_id ASC${this.db.dialect === "postgres" ? " FOR UPDATE" : ""}`,
           )
           .all<GrantRow>({ bindingId: normalized.bindingId });
+        const occurredAt = this.readDatabaseClock().now;
         const touchedSessions = new Set<string>();
         let evidenceIndex = 0;
         const evidenceIdempotencyKey = (kind: "pending" | "grant", sessionId: string, targetId: string): string => {
           if (evidenceIndex++ === 0) return normalized.idempotencyKey;
-          return `${normalized.idempotencyKey}::${deriveId("scare", kind, sessionId, targetId)}`;
+          return deriveAuthRevokeEvidenceIdempotencyKey(normalized.idempotencyKey, kind, sessionId, targetId);
         };
+        const nextEventSequences = new Map<string, number>();
+        const nextEventSequence = (sessionId: string): number => {
+          const previous =
+            nextEventSequences.get(sessionId) ??
+            asNonNegativeInteger(
+              this.db
+                .prepare(
+                  "SELECT COALESCE(MAX(event_sequence), 0) AS sequence FROM chat_session_control_events WHERE session_id = @sessionId",
+                )
+                .get<{ sequence: number | bigint | string }>({ sessionId })?.sequence ?? 0,
+            );
+          const next = previous + 1;
+          nextEventSequences.set(sessionId, next);
+          return next;
+        };
+        const pendingPlan: Array<{
+          request: RequestRow;
+          current: GrantRow;
+          event: EventRow;
+          target: AuthRevokeOperationTargetRow;
+        }> = [];
+        const grantPlan: Array<{ current: GrantRow; event: EventRow; target: AuthRevokeOperationTargetRow }> = [];
+        let targetIndex = 0;
         for (const request of pending) {
           this.assertRequestIntegrity(request);
           const current = this.requireCurrentGrant(request.workspace_id, request.session_id, true);
           const generation = asPositiveInteger(current.generation);
-          const clock = this.readDatabaseClock();
-          const expired = request.expires_at <= clock.now;
+          const expired = request.expires_at <= occurredAt;
+          const idempotencyKey = evidenceIdempotencyKey("pending", request.session_id, request.request_id);
+          const reasonCode = expired ? "request_expired" : "mutation_denied";
+          const eventSequence = nextEventSequence(request.session_id);
+          const eventId = deriveId("sce", request.workspace_id, request.session_id, idempotencyKey, reasonCode);
+          const event: EventRow = {
+            event_id: eventId,
+            workspace_id: request.workspace_id,
+            session_id: request.session_id,
+            event_sequence: eventSequence,
+            request_id: request.request_id,
+            previous_generation: generation,
+            next_generation: generation,
+            previous_owner_kind: current.owner_kind,
+            next_owner_kind: current.owner_kind,
+            previous_lease_state: current.lease_state,
+            next_lease_state: current.lease_state,
+            reason_code: reasonCode,
+            actor_kind: "system",
+            actor_id: normalized.actorId,
+            companion_session_id: request.companion_session_id,
+            device_grant_id: request.device_grant_id,
+            idempotency_key: idempotencyKey,
+            request_sha256: requestSha256,
+            correlation_id: normalized.correlationId,
+            created_at: occurredAt,
+          };
+          pendingPlan.push({
+            request,
+            current,
+            event,
+            target: {
+              operation_idempotency_key: normalized.idempotencyKey,
+              target_index: targetIndex++,
+              target_kind: "pending_request",
+              workspace_id: request.workspace_id,
+              session_id: request.session_id,
+              request_id: request.request_id,
+              generation,
+              control_revision: asPositiveInteger(current.control_revision),
+              owner_kind: current.owner_kind as "operator" | "external_companion",
+              lease_state: current.lease_state as "operator_active" | "external_live" | "external_stale",
+              event_id: eventId,
+              event_sequence: eventSequence,
+              event_idempotency_key: idempotencyKey,
+              event_reason_code: reasonCode,
+            },
+          });
+        }
+        for (const current of lockedGrants) {
+          this.assertGrantIntegrity(current);
+          const generation = asPositiveInteger(current.generation);
+          const nextGeneration = incrementGeneration(generation);
+          const idempotencyKey = evidenceIdempotencyKey("grant", current.session_id, String(generation));
+          const eventSequence = nextEventSequence(current.session_id);
+          const eventId = deriveId("sce", current.workspace_id, current.session_id, idempotencyKey, "auth_revoked");
+          const event: EventRow = {
+            event_id: eventId,
+            workspace_id: current.workspace_id,
+            session_id: current.session_id,
+            event_sequence: eventSequence,
+            request_id: current.request_id,
+            previous_generation: generation,
+            next_generation: nextGeneration,
+            previous_owner_kind: "external_companion",
+            next_owner_kind: "operator",
+            previous_lease_state: current.lease_state,
+            next_lease_state: "operator_active",
+            reason_code: "auth_revoked",
+            actor_kind: "system",
+            actor_id: normalized.actorId,
+            companion_session_id: current.companion_session_id,
+            device_grant_id: current.device_grant_id,
+            idempotency_key: idempotencyKey,
+            request_sha256: requestSha256,
+            correlation_id: normalized.correlationId,
+            created_at: occurredAt,
+          };
+          grantPlan.push({
+            current,
+            event,
+            target: {
+              operation_idempotency_key: normalized.idempotencyKey,
+              target_index: targetIndex++,
+              target_kind: "current_grant",
+              workspace_id: current.workspace_id,
+              session_id: current.session_id,
+              request_id: current.request_id,
+              generation,
+              control_revision: asPositiveInteger(current.control_revision),
+              owner_kind: "external_companion",
+              lease_state: current.lease_state as "external_live" | "external_stale",
+              event_id: eventId,
+              event_sequence: eventSequence,
+              event_idempotency_key: idempotencyKey,
+              event_reason_code: "auth_revoked",
+            },
+          });
+        }
+        const predictedEvents = [...pendingPlan.map((item) => item.event), ...grantPlan.map((item) => item.event)];
+        const targets = [...pendingPlan.map((item) => item.target), ...grantPlan.map((item) => item.target)];
+        this.insertAuthRevokeOperation(normalized, requestSha256, predictedEvents, occurredAt);
+        for (const target of targets) this.insertAuthRevokeOperationTarget(target);
+
+        for (const plan of pendingPlan) {
+          const { request, current, event } = plan;
+          const expired = event.reason_code === "request_expired";
           const result = this.db
             .prepare(
               `UPDATE chat_session_control_requests
@@ -1069,7 +1228,7 @@ export class SessionControlRepository {
             )
             .run({
               status: expired ? "expired" : "cancelled",
-              decidedAt: clock.now,
+              decidedAt: occurredAt,
               actorId: normalized.actorId,
               decisionReasonCode: expired ? "request_expired" : "request_cancelled",
               requestId: request.request_id,
@@ -1081,8 +1240,8 @@ export class SessionControlRepository {
             workspaceId: request.workspace_id,
             sessionId: request.session_id,
             requestId: request.request_id,
-            previousGeneration: generation,
-            nextGeneration: generation,
+            previousGeneration: asPositiveInteger(event.previous_generation ?? 0),
+            nextGeneration: asPositiveInteger(event.next_generation),
             previousOwnerKind: current.owner_kind as "operator" | "external_companion",
             nextOwnerKind: current.owner_kind as "operator" | "external_companion",
             previousLeaseState: current.lease_state as "operator_active" | "external_live" | "external_stale",
@@ -1092,27 +1251,26 @@ export class SessionControlRepository {
             actorId: normalized.actorId,
             companionSessionId: request.companion_session_id,
             deviceGrantId: request.device_grant_id,
-            idempotencyKey: evidenceIdempotencyKey("pending", request.session_id, request.request_id),
+            idempotencyKey: event.idempotency_key,
             requestSha256,
             correlationId: normalized.correlationId,
-            createdAt: clock.now,
+            createdAt: occurredAt,
           });
           touchedSessions.add(`${request.workspace_id}\u0000${request.session_id}`);
         }
-        for (const current of lockedGrants) {
-          this.assertGrantIntegrity(current);
+        for (const plan of grantPlan) {
+          const { current, event } = plan;
           const generation = asPositiveInteger(current.generation);
           const nextGeneration = incrementGeneration(generation);
-          const eventIdempotencyKey = evidenceIdempotencyKey("grant", current.session_id, String(generation));
-          const clock = this.readDatabaseClock();
-          this.terminalizeCurrentGrant(current, "revoked", clock.now);
+          const eventIdempotencyKey = event.idempotency_key;
+          this.terminalizeCurrentGrant(current, "revoked", occurredAt);
           this.insertOperatorGeneration({
             workspaceId: current.workspace_id,
             sessionId: current.session_id,
             generation: nextGeneration,
             idempotencyKey: eventIdempotencyKey,
             requestSha256,
-            now: clock.now,
+            now: occurredAt,
           });
           this.insertEvent({
             workspaceId: current.workspace_id,
@@ -1132,7 +1290,7 @@ export class SessionControlRepository {
             idempotencyKey: eventIdempotencyKey,
             requestSha256,
             correlationId: normalized.correlationId,
-            createdAt: clock.now,
+            createdAt: occurredAt,
           });
           touchedSessions.add(`${current.workspace_id}\u0000${current.session_id}`);
         }
@@ -1140,10 +1298,14 @@ export class SessionControlRepository {
         if (evidence.length !== pending.length + lockedGrants.length) {
           throw stateConflict("SESSION_CONTROL_STATE_CORRUPT", "Auth revoke event set is corrupt.");
         }
-        const clock = this.readDatabaseClock();
-        this.insertAuthRevokeReceipt(normalized, requestSha256, evidence, clock.now);
+        if (authRevokeEventSetSha256(evidence) !== authRevokeEventSetSha256(predictedEvents)) {
+          throw stateConflict("SESSION_CONTROL_STATE_CORRUPT", "Auth revoke event set changed after it was frozen.");
+        }
+        this.insertAuthRevokeReceipt(normalized, requestSha256, evidence, occurredAt);
         return {
           disposition: "created",
+          occurredAt,
+          occurredAtBasis: "operation",
           controls: [...touchedSessions].sort().map((value) => {
             const [workspaceId, sessionId] = value.split("\u0000") as [string, string];
             return this.getControl(workspaceId, sessionId);
@@ -1381,6 +1543,25 @@ export class SessionControlRepository {
       .get<AuthRevokeReceiptRow>({ idempotencyKey });
   }
 
+  private findAuthRevokeOperation(idempotencyKey: string): AuthRevokeOperationRow | undefined {
+    return this.db
+      .prepare(
+        `SELECT * FROM chat_session_control_auth_revoke_operations
+         WHERE idempotency_key = @idempotencyKey`,
+      )
+      .get<AuthRevokeOperationRow>({ idempotencyKey });
+  }
+
+  private listAuthRevokeOperationTargets(idempotencyKey: string): AuthRevokeOperationTargetRow[] {
+    return this.db
+      .prepare(
+        `SELECT * FROM chat_session_control_auth_revoke_operation_targets
+         WHERE operation_idempotency_key = @idempotencyKey
+         ORDER BY target_index ASC`,
+      )
+      .all<AuthRevokeOperationTargetRow>({ idempotencyKey });
+  }
+
   private listAuthRevokeEvents(requestSha256: string): EventRow[] {
     return this.db
       .prepare(
@@ -1399,13 +1580,78 @@ export class SessionControlRepository {
     assertExactReplay(receipt.request_sha256, requestSha256, "session control auth revoke coupling");
     const events = this.listAuthRevokeEvents(receipt.request_sha256);
     const sessionKeys = this.assertAuthRevokeReceiptEvidence(receipt, normalized, events);
+    const operation = this.findAuthRevokeOperation(receipt.idempotency_key);
     return {
       disposition: "replayed",
+      occurredAt: operation?.occurred_at ?? receipt.created_at,
+      occurredAtBasis: operation ? "operation" : "legacy_receipt",
       controls: sessionKeys.map((value) => {
         const [workspaceId, sessionId] = value.split("\u0000") as [string, string];
         return this.getControl(workspaceId, sessionId);
       }),
     };
+  }
+
+  private insertAuthRevokeOperation(
+    normalized: ReturnType<typeof normalizeAuthRevokeInput>,
+    requestSha256: string,
+    events: readonly EventRow[],
+    occurredAt: string,
+  ): void {
+    const sessionCount = new Set(events.map((event) => `${event.workspace_id}\u0000${event.session_id}`)).size;
+    this.db
+      .prepare(
+        `INSERT INTO chat_session_control_auth_revoke_operations (
+           idempotency_key, request_sha256, binding_kind, binding_id, actor_id,
+           correlation_id, target_count, session_count, event_set_sha256, occurred_at
+         ) VALUES (
+           @idempotencyKey, @requestSha256, @bindingKind, @bindingId, @actorId,
+           @correlationId, @targetCount, @sessionCount, @eventSetSha256, @occurredAt
+         )`,
+      )
+      .run({
+        idempotencyKey: normalized.idempotencyKey,
+        requestSha256,
+        bindingKind: normalized.bindingKind,
+        bindingId: normalized.bindingId,
+        actorId: normalized.actorId,
+        correlationId: normalized.correlationId,
+        targetCount: events.length,
+        sessionCount,
+        eventSetSha256: authRevokeEventSetSha256(events),
+        occurredAt,
+      });
+  }
+
+  private insertAuthRevokeOperationTarget(target: AuthRevokeOperationTargetRow): void {
+    this.db
+      .prepare(
+        `INSERT INTO chat_session_control_auth_revoke_operation_targets (
+           operation_idempotency_key, target_index, target_kind, workspace_id, session_id,
+           request_id, generation, control_revision, owner_kind, lease_state,
+           event_id, event_sequence, event_idempotency_key, event_reason_code
+         ) VALUES (
+           @operationIdempotencyKey, @targetIndex, @targetKind, @workspaceId, @sessionId,
+           @requestId, @generation, @controlRevision, @ownerKind, @leaseState,
+           @eventId, @eventSequence, @eventIdempotencyKey, @eventReasonCode
+         )`,
+      )
+      .run({
+        operationIdempotencyKey: target.operation_idempotency_key,
+        targetIndex: target.target_index,
+        targetKind: target.target_kind,
+        workspaceId: target.workspace_id,
+        sessionId: target.session_id,
+        requestId: target.request_id,
+        generation: target.generation,
+        controlRevision: target.control_revision,
+        ownerKind: target.owner_kind,
+        leaseState: target.lease_state,
+        eventId: target.event_id,
+        eventSequence: target.event_sequence,
+        eventIdempotencyKey: target.event_idempotency_key,
+        eventReasonCode: target.event_reason_code,
+      });
   }
 
   private insertAuthRevokeReceipt(
@@ -1460,6 +1706,8 @@ export class SessionControlRepository {
     const targetCount = asNonNegativeInteger(receipt.target_count);
     const sessionCount = asNonNegativeInteger(receipt.session_count);
     const sessionKeys = [...new Set(events.map((event) => `${event.workspace_id}\u0000${event.session_id}`))].sort();
+    const operation = this.findAuthRevokeOperation(receipt.idempotency_key);
+    const targets = operation ? this.listAuthRevokeOperationTargets(receipt.idempotency_key) : [];
     for (const event of events) {
       this.mapEvent(event);
     }
@@ -1473,6 +1721,9 @@ export class SessionControlRepository {
       (event) =>
         event.request_sha256 === receipt.request_sha256 &&
         event.correlation_id === receipt.correlation_id &&
+        (operation
+          ? event.created_at === operation.occurred_at
+          : isCanonicalTimestamp(event.created_at) && event.created_at <= receipt.created_at) &&
         event.actor_kind === "system" &&
         event.actor_id === receipt.actor_id &&
         ["auth_revoked", "mutation_denied", "request_expired"].includes(event.reason_code) &&
@@ -1480,9 +1731,37 @@ export class SessionControlRepository {
           ? event.companion_session_id === receipt.binding_id
           : event.device_grant_id === receipt.binding_id),
     );
+    const operationMatches =
+      !operation ||
+      (operation.idempotency_key === receipt.idempotency_key &&
+        operation.request_sha256 === receipt.request_sha256 &&
+        operation.binding_kind === receipt.binding_kind &&
+        operation.binding_id === receipt.binding_id &&
+        operation.actor_id === receipt.actor_id &&
+        operation.correlation_id === receipt.correlation_id &&
+        asNonNegativeInteger(operation.target_count) === targetCount &&
+        asNonNegativeInteger(operation.session_count) === sessionCount &&
+        operation.event_set_sha256 === receipt.event_set_sha256 &&
+        operation.occurred_at === receipt.created_at &&
+        targets.length === targetCount &&
+        targets.every((target, index) => {
+          const event = events.find((candidate) => candidate.event_id === target.event_id);
+          return (
+            asNonNegativeInteger(target.target_index) === index &&
+            event !== undefined &&
+            event.workspace_id === target.workspace_id &&
+            event.session_id === target.session_id &&
+            event.request_id === target.request_id &&
+            asPositiveInteger(event.event_sequence) === asPositiveInteger(target.event_sequence) &&
+            event.idempotency_key === target.event_idempotency_key &&
+            event.reason_code === target.event_reason_code &&
+            asPositiveInteger(event.previous_generation ?? 0) === asPositiveInteger(target.generation)
+          );
+        }));
     const rootCount = events.filter((event) => event.idempotency_key === receipt.idempotency_key).length;
     if (
       !materialMatches ||
+      !operationMatches ||
       !isCanonicalTimestamp(receipt.created_at) ||
       targetCount !== events.length ||
       sessionCount !== sessionKeys.length ||
@@ -2331,28 +2610,36 @@ function sha256(value: string): string {
 function authRevokeEventSetSha256(events: readonly EventRow[]): string {
   return sha256(
     canonicalJsonString(
-      events.map((event) => ({
-        actorId: event.actor_id,
-        actorKind: event.actor_kind,
-        companionSessionId: event.companion_session_id,
-        correlationId: event.correlation_id,
-        createdAt: event.created_at,
-        deviceGrantId: event.device_grant_id,
-        eventId: event.event_id,
-        eventSequence: asPositiveInteger(event.event_sequence),
-        idempotencyKey: event.idempotency_key,
-        nextGeneration: asPositiveInteger(event.next_generation),
-        nextLeaseState: event.next_lease_state,
-        nextOwnerKind: event.next_owner_kind,
-        previousGeneration: event.previous_generation === null ? null : asPositiveInteger(event.previous_generation),
-        previousLeaseState: event.previous_lease_state,
-        previousOwnerKind: event.previous_owner_kind,
-        reasonCode: event.reason_code,
-        requestId: event.request_id,
-        requestSha256: event.request_sha256,
-        sessionId: event.session_id,
-        workspaceId: event.workspace_id,
-      })),
+      [...events]
+        .sort(
+          (left, right) =>
+            left.workspace_id.localeCompare(right.workspace_id) ||
+            left.session_id.localeCompare(right.session_id) ||
+            asPositiveInteger(left.event_sequence) - asPositiveInteger(right.event_sequence) ||
+            left.event_id.localeCompare(right.event_id),
+        )
+        .map((event) => ({
+          actorId: event.actor_id,
+          actorKind: event.actor_kind,
+          companionSessionId: event.companion_session_id,
+          correlationId: event.correlation_id,
+          createdAt: event.created_at,
+          deviceGrantId: event.device_grant_id,
+          eventId: event.event_id,
+          eventSequence: asPositiveInteger(event.event_sequence),
+          idempotencyKey: event.idempotency_key,
+          nextGeneration: asPositiveInteger(event.next_generation),
+          nextLeaseState: event.next_lease_state,
+          nextOwnerKind: event.next_owner_kind,
+          previousGeneration: event.previous_generation === null ? null : asPositiveInteger(event.previous_generation),
+          previousLeaseState: event.previous_lease_state,
+          previousOwnerKind: event.previous_owner_kind,
+          reasonCode: event.reason_code,
+          requestId: event.request_id,
+          requestSha256: event.request_sha256,
+          sessionId: event.session_id,
+          workspaceId: event.workspace_id,
+        })),
     ),
   );
 }
@@ -2368,6 +2655,15 @@ function operationSha256(operation: string, value: unknown): string {
 
 function deriveId(prefix: string, ...parts: string[]): string {
   return `${prefix}_${sha256(canonicalJsonString(parts)).slice(0, 48)}`;
+}
+
+function deriveAuthRevokeEvidenceIdempotencyKey(
+  rootIdempotencyKey: string,
+  kind: "pending" | "grant",
+  sessionId: string,
+  targetId: string,
+): string {
+  return deriveId("scare", rootIdempotencyKey, kind, sessionId, targetId);
 }
 
 function assertExactReplay(storedSha256: string, requestSha256: string, label: string): void {

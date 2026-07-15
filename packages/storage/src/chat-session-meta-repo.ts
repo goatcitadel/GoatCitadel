@@ -1,12 +1,14 @@
 import type { DatabaseClient } from "./db.js";
-import { ValidationError } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import type { ChatFolderRecord, ChatSessionOrigin } from "@goatcitadel/contracts";
 import { ChatSessionRevisionRepository } from "./chat-session-revision-repo.js";
+import { ChatSessionLifecycleRepository } from "./chat-session-lifecycle-repo.js";
 
 export interface ChatSessionMetaRecord {
   sessionId: string;
   revision: number;
-  workspaceId?: string;
+  workspaceId: string;
+  lifecycleIntentId?: string;
   title?: string;
   origin?: ChatSessionOrigin;
   includeInHistory: boolean;
@@ -28,6 +30,7 @@ interface ChatSessionMetaRow {
   session_id: string;
   revision: number | null | undefined;
   workspace_id: string;
+  lifecycle_intent_id: string | null | undefined;
   title: string | null;
   origin: string | null;
   include_in_history: number;
@@ -64,29 +67,21 @@ export interface ChatSessionMetaPatchInput {
 export class ChatSessionMetaRepository {
   private readonly getStmt;
   private readonly getForUpdateStmt;
-  private readonly insertStmt;
   private readonly updateStmt;
   private readonly incrementGoalTurnsStmt;
   private readonly revisions;
+  private readonly lifecycle;
 
   public constructor(private readonly db: DatabaseClient) {
     this.revisions = new ChatSessionRevisionRepository(db);
+    this.lifecycle = new ChatSessionLifecycleRepository(db);
     this.getStmt = db.prepare("SELECT * FROM chat_session_meta WHERE session_id = ?");
     this.getForUpdateStmt = db.prepare(
       `SELECT * FROM chat_session_meta WHERE session_id = ?${db.dialect === "postgres" ? " FOR UPDATE" : ""}`,
     );
-    this.insertStmt = db.prepare(`
-      INSERT INTO chat_session_meta (
-        session_id, workspace_id, title, origin, include_in_history, pinned, lifecycle_status, archived_at, folder_id, folder_name, tags_json, pinned_goal, goal_turn_budget, goal_turns_used, goal_set_at, created_at, updated_at
-      ) VALUES (
-        @sessionId, @workspaceId, @title, @origin, @includeInHistory, @pinned, @lifecycleStatus, @archivedAt, @folderId, @folderName, @tagsJson, @pinnedGoal, @goalTurnBudget, @goalTurnsUsed, @goalSetAt, @createdAt, @updatedAt
-      )
-      ON CONFLICT(session_id) DO NOTHING
-    `);
     this.updateStmt = db.prepare(`
       UPDATE chat_session_meta
-      SET workspace_id = @workspaceId,
-          title = @title,
+      SET title = @title,
           origin = @origin,
           include_in_history = @includeInHistory,
           pinned = @pinned,
@@ -121,29 +116,21 @@ export class ChatSessionMetaRepository {
     return row ? mapRow(row) : undefined;
   }
 
-  public ensure(sessionId: string, now = new Date().toISOString(), workspaceId = "default"): ChatSessionMetaRecord {
+  public ensure(sessionId: string, now = new Date().toISOString(), workspaceId?: string): ChatSessionMetaRecord {
     const existing = this.get(sessionId);
     if (existing) {
+      if (workspaceId !== undefined && sanitizeWorkspaceId(workspaceId) !== existing.workspaceId) {
+        throw new ConflictError({ code: "STATE_CONFLICT", message: "chat session workspace is immutable" });
+      }
       return existing;
     }
-    this.insertStmt.run({
+    if (workspaceId === undefined) {
+      throw new NotFoundError({ entity: "Chat session", id: sessionId });
+    }
+    this.lifecycle.ensureActive({
       sessionId,
       workspaceId: sanitizeWorkspaceId(workspaceId),
-      title: null,
-      origin: null,
-      includeInHistory: 1,
-      pinned: 0,
-      lifecycleStatus: "active",
-      archivedAt: null,
-      folderId: null,
-      folderName: null,
-      tagsJson: "[]",
-      pinnedGoal: null,
-      goalTurnBudget: null,
-      goalTurnsUsed: 0,
-      goalSetAt: null,
-      createdAt: now,
-      updatedAt: now,
+      metadataTimestamp: now,
     });
     const row = toChatSessionMetaRow(this.getStmt.get(sessionId));
     if (!row) {
@@ -172,6 +159,9 @@ export class ChatSessionMetaRepository {
       expectedRevision,
       () => {
         const current = this.requireRow(sessionId, "patch");
+        if (input.workspaceId !== undefined && sanitizeWorkspaceId(input.workspaceId) !== current.workspaceId) {
+          throw new ConflictError({ code: "STATE_CONFLICT", message: "chat session workspace is immutable" });
+        }
         const normalizedFolderName = input.folderName !== undefined ? sanitizeOptional(input.folderName) : undefined;
         const normalizedFolderId =
           input.folderId !== undefined
@@ -183,10 +173,7 @@ export class ChatSessionMetaRepository {
               : undefined;
         const next = {
           sessionId,
-          workspaceId:
-            input.workspaceId !== undefined
-              ? sanitizeWorkspaceId(input.workspaceId)
-              : sanitizeWorkspaceId(current.workspaceId ?? "default"),
+          workspaceId: sanitizeWorkspaceId(current.workspaceId ?? "default"),
           title: input.title !== undefined ? sanitizeOptional(input.title) : (current.title ?? null),
           origin: input.origin !== undefined ? sanitizeOrigin(input.origin) : sanitizeOrigin(current.origin),
           includeInHistory:
@@ -206,7 +193,8 @@ export class ChatSessionMetaRepository {
         if (isSemanticNoop(current, next)) {
           return { value: current, changed: false };
         }
-        this.updateStmt.run(next);
+        const { workspaceId: _workspaceId, ...updateParams } = next;
+        this.updateStmt.run(updateParams);
         return { value: this.requireRow(sessionId, "patch"), changed: true };
       },
       now,
@@ -309,6 +297,9 @@ function isChatSessionMetaRow(value: unknown): value is ChatSessionMetaRow {
     typeof value.session_id === "string" &&
     (typeof value.revision === "number" || value.revision === null || value.revision === undefined) &&
     typeof value.workspace_id === "string" &&
+    (typeof value.lifecycle_intent_id === "string" ||
+      value.lifecycle_intent_id === null ||
+      value.lifecycle_intent_id === undefined) &&
     (typeof value.title === "string" || value.title === null) &&
     (typeof value.origin === "string" || value.origin === null) &&
     typeof value.include_in_history === "number" &&
@@ -336,6 +327,7 @@ function mapRow(row: ChatSessionMetaRow): ChatSessionMetaRecord {
     sessionId: row.session_id,
     revision: normalizeRevision(row.revision),
     workspaceId: row.workspace_id,
+    lifecycleIntentId: row.lifecycle_intent_id ?? undefined,
     title: row.title ?? undefined,
     origin:
       row.origin === "operator" || row.origin === "prompt_pack" || row.origin === "system" ? row.origin : undefined,

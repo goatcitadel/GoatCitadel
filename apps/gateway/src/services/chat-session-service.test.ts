@@ -248,6 +248,15 @@ describe("chat session service", () => {
       expect(first.sessionKey).toMatch(/^mission:operator:chat_[0-9a-f]{24}$/u);
       expect(listChatSessions(deps, { workspaceId: "default", includeHidden: true })).toHaveLength(2);
       expect(deps.ensureChatSessionRuntimeGrants).toHaveBeenCalledTimes(3);
+      expect(() =>
+        ensureChatSessionWithStableKey(deps, "delegation-run-a:step-a", {
+          workspaceId: "other-workspace",
+          title: "Must not move",
+          mode: "chat",
+        }),
+      ).toThrow("stable chat session key already belongs to another workspace");
+      expect(storage.chatSessionMeta.get(first.sessionId)?.workspaceId).toBe("default");
+      expect(storage.chatSessionMeta.get(first.sessionId)?.title).toBe("Delegate - Coder");
     } finally {
       cleanup();
     }
@@ -805,12 +814,14 @@ describe("chat session service", () => {
     try {
       const deps = createDeps(storage);
       const session = createChatSession(deps, { workspaceId: "default", title: "Delete me" });
-      const deleteSpy = vi.spyOn(storage, "deleteChatSessionDataWithRevision").mockReturnValue({
-        sessionId: session.sessionId,
-        deleted: true,
-        cleanupRelPaths: ["chat/sess/file.txt"],
-        attachments: [],
-      });
+      const deleteSpy = vi.spyOn(storage, "deleteChatSessionTreeWithRevision").mockReturnValue([
+        {
+          sessionId: session.sessionId,
+          deleted: true,
+          cleanupRelPaths: ["chat/sess/file.txt"],
+          attachments: [],
+        },
+      ]);
       vi.spyOn(storage.transcripts, "delete").mockRejectedValue(new Error("transcript locked"));
       deps.removeChatSessionStoredFile = vi.fn().mockRejectedValue(new Error("missing file"));
 
@@ -819,7 +830,14 @@ describe("chat session service", () => {
         sessionId: session.sessionId,
       });
 
-      expect(deleteSpy).toHaveBeenCalledWith(session.sessionId, session.revision);
+      expect(deleteSpy).toHaveBeenCalledWith({
+        workspaceId: "default",
+        rootSessionId: session.sessionId,
+        expectedRootRevision: session.revision,
+        actorId: "operator",
+        idempotencyKey: `lifecycle:delete:${session.sessionId}:${session.revision}`,
+        correlationId: `chat-session-delete:${session.sessionId}:${session.revision}`,
+      });
       expect(deps.clearChatTurnWriteLease).toHaveBeenCalledWith(session.sessionId);
       expect(deps.operatorSummaryCache.invalidate).toHaveBeenCalled();
       expect(deps.removeChatSessionStoredFile).toHaveBeenCalledWith("chat/sess/file.txt");
@@ -828,6 +846,60 @@ describe("chat session service", () => {
         sessionId: session.sessionId,
         mode: "hard",
       });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("replays an acknowledged-lost delete after session metadata removal without transport pre-reads", async () => {
+    const { storage, cleanup } = createStorage();
+    try {
+      const deps = createDeps(storage);
+      deps.getSession = vi.fn(deps.getSession);
+      const session = createChatSession(deps, { workspaceId: "default", title: "Delete replay" });
+      const expectedRevision = session.revision;
+
+      await expect(deleteChatSession(deps, session.sessionId, expectedRevision)).resolves.toEqual({
+        deleted: true,
+        sessionId: session.sessionId,
+      });
+      expect(storage.sessions.listBySessionIds([session.sessionId]).size).toBe(0);
+      expect(storage.chatSessionMeta.get(session.sessionId)).toBeUndefined();
+
+      vi.mocked(deps.getSession).mockClear();
+      vi.mocked(deps.requireChatSession).mockClear();
+      const replaySpy = vi.spyOn(storage, "replayChatSessionTreeDeletion");
+      await expect(deleteChatSession(deps, session.sessionId, expectedRevision)).resolves.toEqual({
+        deleted: true,
+        sessionId: session.sessionId,
+      });
+
+      expect(replaySpy).toHaveBeenCalledWith({
+        rootSessionId: session.sessionId,
+        expectedRootRevision: expectedRevision,
+        actorId: "operator",
+        idempotencyKey: `lifecycle:delete:${session.sessionId}:${expectedRevision}`,
+        correlationId: `chat-session-delete:${session.sessionId}:${expectedRevision}`,
+      });
+      expect(deps.getSession).not.toHaveBeenCalled();
+      expect(deps.requireChatSession).not.toHaveBeenCalled();
+
+      await expect(deleteChatSession(deps, session.sessionId, expectedRevision + 1)).rejects.toMatchObject({
+        code: "ENTITY_NOT_FOUND",
+      });
+      storage.chatSessionLifecycles.reactivate({
+        workspaceId: "default",
+        sessionId: session.sessionId,
+        expectedTerminalGeneration: 1,
+        actorId: "operator",
+        idempotencyKey: `lifecycle:reactivate:${session.sessionId}:2`,
+        correlationId: `chat-session-reactivate:${session.sessionId}:2`,
+      });
+      await expect(deleteChatSession(deps, session.sessionId, expectedRevision)).rejects.toMatchObject({
+        code: "STATE_CONFLICT",
+        details: { sessionLifecycleCode: "CHAT_SESSION_DELETE_REPLAY_REACTIVATED" },
+      });
+      expect(storage.chatSessionMeta.get(session.sessionId)?.workspaceId).toBe("default");
     } finally {
       cleanup();
     }

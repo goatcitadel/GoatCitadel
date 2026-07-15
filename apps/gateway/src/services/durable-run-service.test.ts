@@ -9,11 +9,34 @@ import type { ServiceContext } from "./service-context.js";
 import {
   computeDurableBaselineDrift,
   DurableRunService,
+  DurableWorkerInterruptionError,
   resolveDurableWorkflowTimeoutMs,
   type DurableRunServiceLogger,
 } from "./durable-run-service.js";
-import { GENERAL_CHAT_POST_COMMIT_EFFECTS, type GeneralChatPostCommitProgress } from "./chat-durable-run-service.js";
+import {
+  GENERAL_CHAT_POST_COMMIT_EFFECTS,
+  finalizeDurableChatRun,
+  type GeneralChatPostCommitProgress,
+} from "./chat-durable-run-service.js";
+import { executeGeneralChatPostCommit } from "./durable-execution-service.js";
+import {
+  buildChatTurnRuntimeAuthoritySeal,
+  withChatTurnRuntimeAuthority,
+  withChatTurnRuntimeAuthorityCheckpoint,
+} from "./chat-durable-runtime-authority.js";
+import { DURABLE_RETRY_POLICY_DEFAULT } from "./durable-retry-policy.js";
+import {
+  computeEffectiveChatTurnRequestMaterialSha256,
+  computeFrozenChatTurnAdmissionMaterialSha256,
+} from "./session-control-service.js";
 import { SharedHostLifecycleService } from "./shared-host-lifecycle-service.js";
+
+const TEST_POST_COMMIT_ELIGIBILITY = {
+  version: 1 as const,
+  autonomyEnabledAtParentSettlement: true,
+  evalIntegrityTurn: false,
+  humanSession: true,
+};
 
 describe("DurableRunService", () => {
   it("applies the workflow timeout to Cowork chat turn runs as a watchdog", () => {
@@ -677,7 +700,7 @@ describe("DurableRunService", () => {
     });
     const onAutonomousChatPostCommit = vi.fn(async () => {
       await callbackGate;
-      return { delivery: { status: "enqueued" } };
+      return { delivery: { status: "enqueued", runId: "autonomous-delivery:concurrent" } };
     });
     const createService = () =>
       new DurableRunService(createContext(runs, [], []) as unknown as ServiceContext, {
@@ -820,18 +843,13 @@ describe("DurableRunService", () => {
   });
 
   it("recovers general Chat post-commit work once and clears its durable marker", async () => {
-    const run = {
-      ...createRun("run-general-post-commit", "completed"),
-      metadata: {
-        generalChatPostCommitPending: {
-          version: 1,
-          generationId: "generation-general",
-          traceStatus: "completed",
-          requestedAt: "2026-03-14T00:00:01.000Z",
-          completedEffects: [],
-        },
-      },
-    };
+    const fixture = createAdmittedChatRuntimeFixture({
+      runId: "run-general-post-commit",
+      status: "completed",
+      generationId: "generation-general",
+      traceStatus: "completed",
+    });
+    const run = fixture.run;
     const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
     const backgroundTasks = new Set<Promise<void>>();
     const enqueueAgentEnd = vi.fn();
@@ -846,7 +864,9 @@ describe("DurableRunService", () => {
       }
       return { status: "completed" };
     });
-    const service = new DurableRunService(createContext(runs, [], []) as unknown as ServiceContext, {
+    const context = createContext(runs, [], []);
+    installAdmittedChatRuntimeFixture(context, fixture);
+    const service = new DurableRunService(context as unknown as ServiceContext, {
       backgroundTasks,
       workflowRegistry: {
         executeWorkflow: vi.fn(),
@@ -876,18 +896,13 @@ describe("DurableRunService", () => {
   });
 
   it("resumes after a later general Chat consumer fails without repeating earlier committed effects", async () => {
-    const run = {
-      ...createRun("run-general-post-commit-partial", "completed"),
-      metadata: {
-        generalChatPostCommitPending: {
-          version: 1,
-          generationId: "generation-partial",
-          traceStatus: "completed",
-          requestedAt: "2026-03-14T00:00:01.000Z",
-          completedEffects: [],
-        },
-      },
-    };
+    const fixture = createAdmittedChatRuntimeFixture({
+      runId: "run-general-post-commit-partial",
+      status: "completed",
+      generationId: "generation-partial",
+      traceStatus: "completed",
+    });
+    const run = fixture.run;
     const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
     const persistLearnedMemory = vi.fn();
     const advanceBackgroundReview = vi.fn();
@@ -910,7 +925,9 @@ describe("DurableRunService", () => {
         return { status: "completed" };
       },
     );
-    const service = new DurableRunService(createContext(runs, [], []) as unknown as ServiceContext, {
+    const context = createContext(runs, [], []);
+    installAdmittedChatRuntimeFixture(context, fixture);
+    const service = new DurableRunService(context as unknown as ServiceContext, {
       backgroundTasks: new Set(),
       workflowRegistry: {
         executeWorkflow: vi.fn(),
@@ -936,19 +953,17 @@ describe("DurableRunService", () => {
   });
 
   it("does not let a stale post-commit reconciler clear a newer trace generation", async () => {
-    const run = {
-      ...createRun("run-general-post-commit-generation-race", "waiting"),
-      metadata: {
-        generalChatPostCommitPending: {
-          version: 1,
-          generationId: "generation-waiting",
-          traceStatus: "waiting_for_approval",
-          requestedAt: "2026-03-14T00:00:01.000Z",
-          completedEffects: [],
-        },
-      },
-    };
+    const fixture = createAdmittedChatRuntimeFixture({
+      runId: "run-general-post-commit-generation-race",
+      status: "waiting",
+      generationId: "generation-waiting",
+      traceStatus: "waiting_for_approval",
+      transitionAt: "2026-03-14T00:00:01.000Z",
+    });
+    const run = fixture.run;
     const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const context = createContext(runs, [], []);
+    const runtimeEvidence = installAdmittedChatRuntimeFixture(context, fixture);
     const observedGenerations: string[] = [];
     const onGeneralChatPostCommit = vi.fn(
       async (_observed: DurableRunRecord, progress: GeneralChatPostCommitProgress) => {
@@ -958,27 +973,29 @@ describe("DurableRunService", () => {
         }
         if (progress.generationId === "generation-waiting") {
           const current = runs.get(run.runId)!;
+          const replacement = createAdmittedChatRuntimeFixture({
+            runId: run.runId,
+            status: "completed",
+            generationId: "generation-completed",
+            traceStatus: "completed",
+            transitionAt: "2026-03-14T00:00:02.000Z",
+          });
           runs.set(run.runId, {
             ...current,
             status: "completed",
             version: current.version + 1,
-            metadata: {
-              ...(current.metadata ?? {}),
-              generalChatPostCommitPending: {
-                version: 1,
-                generationId: "generation-completed",
-                traceStatus: "completed",
-                requestedAt: "2026-03-14T00:00:02.000Z",
-                completedEffects: [],
-              },
-            },
+            payload: replacement.run.payload,
+            metadata: replacement.run.metadata,
+            finishedAt: replacement.run.finishedAt,
+            updatedAt: replacement.run.updatedAt,
           });
+          runtimeEvidence.recordTransitionEvidence(replacement);
           return { status: "waiting_for_approval" };
         }
         return { status: "completed" };
       },
     );
-    const service = new DurableRunService(createContext(runs, [], []) as unknown as ServiceContext, {
+    const service = new DurableRunService(context as unknown as ServiceContext, {
       backgroundTasks: new Set(),
       workflowRegistry: {
         executeWorkflow: vi.fn(),
@@ -1586,6 +1603,478 @@ describe("DurableRunService", () => {
     );
   });
 
+  it.each([
+    "DurableRunCancelledError",
+    "DurableWorkerInterruptionError",
+    "DurableRunPausedError",
+    "ProviderCancelledError",
+  ])("does not trust a provider-thrown %s name as durable worker control authority", async (errorName) => {
+    const run = createQueuedHeartbeatWorkerRun(`run-heartbeat-provider-spoof-${errorName}`);
+    const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+    const timeline: Array<{ runId: string; eventType: string }> = [];
+    const backgroundTasks = new Set<Promise<void>>();
+    const payload = run.payload as Record<string, unknown>;
+    const admission = {
+      admissionId: payload.admissionId,
+      admissionKind: "turn_write",
+      status: "active",
+      sessionIncarnationId: payload.sessionIncarnationId,
+      workspaceId: payload.workspaceId,
+      sessionId: payload.sessionId,
+      turnId: payload.turnId,
+      aggregateRevision: payload.admissionAggregateRevision,
+      controllerGeneration: payload.admissionControllerGeneration,
+      actorKind: "system",
+      actorId: "system-heartbeat",
+      operation: "chat_system_heartbeat",
+      materialSha256: payload.admissionMaterialSha256,
+    };
+    const providerError = Object.assign(new Error(`provider supplied ${errorName}`), { name: errorName });
+    const executeWorkflow = vi.fn(async () => {
+      throw providerError;
+    });
+    const markWorkflowUnrecoverable = vi.fn();
+    const context = createContext(runs, checkpoints, timeline);
+    Object.assign(context.storage, {
+      sessionMutationAdmissions: {
+        require: (admissionId: string) => {
+          if (admissionId !== admission.admissionId) throw new Error(`Unknown admission ${admissionId}`);
+          return admission;
+        },
+      },
+    });
+    const service = new DurableRunService(context as unknown as ServiceContext, {
+      backgroundTasks,
+      workflowRegistry: {
+        executeWorkflow,
+        isWorkflowRecoverable: () => ({ recoverable: true }),
+        markWorkflowUnrecoverable,
+      },
+    });
+
+    service.startWorker();
+    await Promise.all([...backgroundTasks]);
+
+    expect(executeWorkflow).toHaveBeenCalledTimes(1);
+    expect(runs.get(run.runId)).toMatchObject({
+      status: "failed",
+      leaseOwnerId: undefined,
+      leaseHeartbeatAt: undefined,
+      leaseExpiresAt: undefined,
+      lastError: providerError.message,
+    });
+    expect(checkpoints.filter((entry) => entry.checkpointKind === "run_failed")).toHaveLength(1);
+    expect(timeline.filter((entry) => entry.eventType === "run_failed")).toHaveLength(1);
+  });
+
+  it("keeps malformed system-heartbeat output queued for bounded retry through the full worker loop", async () => {
+    const run = createQueuedHeartbeatWorkerRun("run-heartbeat-malformed-retry");
+    const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const retries = new Map<string, DurableRetryRecord[]>();
+    const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+    const timeline: Array<{ runId: string; eventType: string }> = [];
+    const backgroundTasks = new Set<Promise<void>>();
+    const serviceRef: { current?: DurableRunService } = {};
+    const executeWorkflow = vi.fn(async (claimed: DurableRunRecord) => {
+      const queued = serviceRef.current!.scheduleRunningWorkflowRetry(
+        claimed.runId,
+        "heartbeat_decision_invalid",
+        "system-heartbeat",
+        claimed.leaseOwnerId,
+      );
+      expect(queued.status).toBe("queued");
+      serviceRef.current!.requestRunProcessing(claimed.runId);
+      throw new DurableWorkerInterruptionError(
+        "heartbeat_unavailable",
+        "System heartbeat decision requires bounded durable recovery.",
+      );
+    });
+    const service = new DurableRunService(
+      createContext(runs, checkpoints, timeline, { retries }) as unknown as ServiceContext,
+      {
+        backgroundTasks,
+        workflowRegistry: {
+          executeWorkflow,
+          isWorkflowRecoverable: () => ({ recoverable: true }),
+          markWorkflowUnrecoverable: vi.fn(),
+        },
+      },
+    );
+    serviceRef.current = service;
+
+    service.startWorker();
+    await Promise.all([...backgroundTasks]);
+
+    expect(executeWorkflow).toHaveBeenCalledTimes(1);
+    expect(runs.get(run.runId)).toMatchObject({
+      status: "queued",
+      attemptCount: 1,
+      leaseOwnerId: undefined,
+      leaseHeartbeatAt: undefined,
+      leaseExpiresAt: undefined,
+      lastError: undefined,
+      finishedAt: undefined,
+    });
+    expect(retries.get(run.runId)).toEqual([
+      expect.objectContaining({
+        attemptNo: 1,
+        reason: "heartbeat_decision_invalid",
+        nextRetryAt: expect.any(String),
+      }),
+    ]);
+    expect(checkpoints.filter((entry) => entry.checkpointKind === "run_failed")).toHaveLength(0);
+    expect(timeline.filter((entry) => entry.eventType === "run_failed")).toHaveLength(0);
+    expect(timeline.filter((entry) => entry.eventType === "run_retry_scheduled")).toHaveLength(1);
+  });
+
+  it("terminalizes exhausted malformed system-heartbeat output exactly once without worker fallthrough", async () => {
+    const run = createQueuedHeartbeatWorkerRun(
+      "run-heartbeat-malformed-exhausted",
+      DURABLE_RETRY_POLICY_DEFAULT.maxAttempts,
+    );
+    const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const retries = new Map<string, DurableRetryRecord[]>();
+    const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+    const timeline: Array<{ runId: string; eventType: string }> = [];
+    const backgroundTasks = new Set<Promise<void>>();
+    const context = createContext(runs, checkpoints, timeline, { retries });
+    const payload = run.payload as Record<string, unknown>;
+    const admission = {
+      admissionId: payload.admissionId,
+      admissionKind: "turn_write",
+      status: "active",
+      sessionIncarnationId: payload.sessionIncarnationId,
+      workspaceId: payload.workspaceId,
+      sessionId: payload.sessionId,
+      turnId: payload.turnId,
+      aggregateRevision: payload.admissionAggregateRevision,
+      controllerGeneration: payload.admissionControllerGeneration,
+      actorKind: "system",
+      actorId: "system-heartbeat",
+      operation: "chat_system_heartbeat",
+      materialSha256: payload.admissionMaterialSha256,
+    };
+    Object.assign(context.storage, {
+      sessionMutationAdmissions: {
+        require: (admissionId: string) => {
+          if (admissionId !== admission.admissionId) throw new Error(`Unknown admission ${admissionId}`);
+          return admission;
+        },
+      },
+    });
+    const serviceRef: { current?: DurableRunService } = {};
+    const executeWorkflow = vi.fn(async (claimed: DurableRunRecord) => {
+      const terminal = serviceRef.current!.scheduleRunningWorkflowRetry(
+        claimed.runId,
+        "heartbeat_decision_invalid",
+        "system-heartbeat",
+        claimed.leaseOwnerId,
+      );
+      expect(terminal.status).toBe("failed");
+      serviceRef.current!.stopAdmission();
+      throw new DurableWorkerInterruptionError(
+        "heartbeat_unavailable",
+        "System heartbeat exhausted its bounded decision recovery.",
+      );
+    });
+    const service = new DurableRunService(context as unknown as ServiceContext, {
+      backgroundTasks,
+      workflowRegistry: {
+        executeWorkflow,
+        isWorkflowRecoverable: () => ({ recoverable: true }),
+        markWorkflowUnrecoverable: vi.fn(),
+      },
+    });
+    serviceRef.current = service;
+
+    service.startWorker();
+    await Promise.all([...backgroundTasks]);
+
+    const terminal = runs.get(run.runId)!;
+    expect(executeWorkflow).toHaveBeenCalledTimes(1);
+    expect(terminal).toMatchObject({
+      status: "failed",
+      attemptCount: DURABLE_RETRY_POLICY_DEFAULT.maxAttempts + 1,
+      leaseOwnerId: undefined,
+      leaseHeartbeatAt: undefined,
+      leaseExpiresAt: undefined,
+      lastError: "retry_exhausted:heartbeat_decision_invalid",
+      metadata: {
+        generalChatPostCommitPending: {
+          postCommitEligibility: {
+            version: 1,
+            autonomyEnabledAtParentSettlement: false,
+            evalIntegrityTurn: false,
+            humanSession: false,
+          },
+        },
+        linkedFinalizationPending: expect.any(Object),
+        chatRetryExhaustionDeadLetterPending: expect.any(Object),
+      },
+    });
+    expect(terminal.metadata).not.toHaveProperty("heartbeatDecisionReceipt");
+    expect(terminal.metadata).not.toHaveProperty("heartbeatDecisionRawOutput");
+    expect(checkpoints.filter((entry) => entry.checkpointKind === "run_failed")).toHaveLength(1);
+    expect(timeline.filter((entry) => entry.eventType === "run_failed")).toHaveLength(1);
+    expect(timeline.filter((entry) => entry.eventType === "run_retry_budget_exhausted")).toHaveLength(1);
+  });
+
+  it("preserves a preempted system-heartbeat lease interruption without falling through to failure", async () => {
+    const run = createQueuedHeartbeatWorkerRun("run-heartbeat-preempted");
+    const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+    const timeline: Array<{ runId: string; eventType: string }> = [];
+    const backgroundTasks = new Set<Promise<void>>();
+    const executeWorkflow = vi.fn(async () => {
+      throw new DurableWorkerInterruptionError(
+        "lease_lost",
+        "System heartbeat write authority was superseded by an operator.",
+      );
+    });
+    const service = new DurableRunService(createContext(runs, checkpoints, timeline) as unknown as ServiceContext, {
+      backgroundTasks,
+      workflowRegistry: {
+        executeWorkflow,
+        isWorkflowRecoverable: () => ({ recoverable: true }),
+        markWorkflowUnrecoverable: vi.fn(),
+      },
+    });
+
+    service.startWorker();
+    await Promise.all([...backgroundTasks]);
+
+    expect(executeWorkflow).toHaveBeenCalledTimes(1);
+    expect(runs.get(run.runId)).toMatchObject({
+      status: "running",
+      leaseOwnerId: expect.any(String),
+    });
+    expect(checkpoints.filter((entry) => entry.checkpointKind === "run_failed")).toHaveLength(0);
+    expect(timeline.filter((entry) => entry.eventType === "run_failed")).toHaveLength(0);
+  });
+
+  it("keeps approval-required system-heartbeat terminalization non-retryable in the worker loop", async () => {
+    const baseRun = createQueuedHeartbeatWorkerRun("run-heartbeat-approval-blocked");
+    const request = (baseRun.payload as { request: Record<string, unknown> }).request;
+    const admissionMaterialSha256 = computeFrozenChatTurnAdmissionMaterialSha256(request as never);
+    const run = {
+      ...baseRun,
+      payload: {
+        ...baseRun.payload,
+        admissionMaterialSha256,
+        effectiveRequestMaterialSha256: computeEffectiveChatTurnRequestMaterialSha256(
+          admissionMaterialSha256,
+          request as never,
+        ),
+      },
+    } satisfies DurableRunRecord;
+    const payload = run.payload as Record<string, unknown>;
+    const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const retries = new Map<string, DurableRetryRecord[]>();
+    const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+    const timeline: Array<{ runId: string; eventType: string }> = [];
+    const backgroundTasks = new Set<Promise<void>>();
+    const context = createContext(runs, checkpoints, timeline, { retries });
+    const messages = new Map<string, Record<string, unknown>>();
+    const approvals = new Map<string, Record<string, unknown>>();
+    const createApproval = vi.fn((approval: Record<string, unknown>) => {
+      approvals.set(String(approval.approvalId), approval);
+      return approval;
+    });
+    const createToolRun = vi.fn();
+    const enqueueApprovalWait = vi.fn();
+    const closeHeartbeatOccurrence = vi.fn();
+    const admission = {
+      admissionId: payload.admissionId,
+      admissionKind: "turn_write",
+      status: "active",
+      sessionIncarnationId: payload.sessionIncarnationId,
+      workspaceId: payload.workspaceId,
+      sessionId: payload.sessionId,
+      turnId: payload.turnId,
+      aggregateRevision: payload.admissionAggregateRevision,
+      controllerGeneration: payload.admissionControllerGeneration,
+      actorKind: "system",
+      actorId: "system-heartbeat",
+      operation: "chat_system_heartbeat",
+      materialSha256: payload.admissionMaterialSha256,
+    } as Record<string, unknown>;
+    const closeTurnWrite = vi.fn((input: { status: "completed" | "cancelled"; correlationId: string }) => {
+      admission.status = input.status;
+      admission.terminalAuthorityKind = "durable_terminal";
+      admission.terminalDurableRunId = input.correlationId;
+      admission.terminalDurableRunStatus = "failed";
+      closeHeartbeatOccurrence(String(payload.heartbeatOccurrenceId), "failed");
+      return admission;
+    });
+    let traceState = {
+      turnId: payload.turnId,
+      sessionId: payload.sessionId,
+      userMessageId: payload.userMessageId,
+      assistantMessageId: payload.assistantMessageId,
+      status: "running",
+      durable: { runId: run.runId, status: "running" },
+      toolRuns: [],
+      citations: [],
+      routing: {},
+      startedAt: "2026-03-14T00:00:00.000Z",
+    } as unknown as ChatTurnTraceRecord;
+    const chatTurnTraces = {
+      get: vi.fn(() => traceState),
+      patch: vi.fn((_turnId: string, patch: Partial<ChatTurnTraceRecord>) => {
+        traceState = { ...traceState, ...structuredClone(patch) } as ChatTurnTraceRecord;
+        return traceState;
+      }),
+    };
+    const chatMessages = {
+      get: vi.fn((messageId: string) => messages.get(messageId)),
+      upsert: vi.fn((message: Record<string, unknown>) => {
+        messages.set(String(message.messageId), message);
+        return message;
+      }),
+    };
+    const chatToolRuns = {
+      listByTurn: vi.fn(() => []),
+      create: createToolRun,
+    };
+    Object.assign(context.storage, {
+      approvals: { create: createApproval },
+      chatMessages,
+      chatTurnTraces,
+      chatToolRuns,
+      sessionMutationAdmissions: {
+        require: (admissionId: string) => {
+          if (admissionId !== admission.admissionId) throw new Error(`Unknown admission ${admissionId}`);
+          return admission;
+        },
+        settleTurnWriteAuthority: () => ({ disposition: "current", admission }),
+        closeTurnWrite,
+      },
+      chatSessionMeta: {
+        get: () => ({
+          sessionId: payload.sessionId,
+          workspaceId: payload.workspaceId,
+          revision: payload.admissionAggregateRevision,
+          origin: "system",
+        }),
+      },
+    });
+    Object.assign(context.storage.durableRuns, {
+      lockFreshActiveLeaseForUpdate: (runId: string, leaseOwnerId: string) => {
+        const current = runs.get(runId);
+        return current?.status === "running" && current.leaseOwnerId === leaseOwnerId ? current : undefined;
+      },
+    });
+    const postCommitHost = {
+      storage: context.storage,
+      recordCapabilityGapFromTrace: vi.fn(),
+      publishRealtime: vi.fn(),
+      hooksService: { enqueueAfterHooks: vi.fn() },
+    };
+    const serviceRef: { current?: DurableRunService } = {};
+    const executeWorkflow = vi.fn(async (claimed: DurableRunRecord) => {
+      traceState = {
+        ...traceState,
+        status: "waiting_for_approval",
+        pendingApprovalSummary: undefined,
+        toolRuns: [],
+        completion: { status: "interrupted", repaired: false },
+      } as ChatTurnTraceRecord;
+      const prepared = {
+        session: { sessionId: payload.sessionId },
+        workspaceId: payload.workspaceId,
+        turnId: payload.turnId,
+        userEventId: payload.userMessageId,
+        userMessage: {
+          messageId: payload.userMessageId,
+          sessionId: payload.sessionId,
+          role: "user",
+          actorType: "system",
+          actorId: "system-heartbeat",
+          content: request.content,
+          timestamp: "2026-03-14T00:00:00.000Z",
+        },
+        assistantMessageId: payload.assistantMessageId,
+        content: request.content,
+        turnAdmission: {
+          identity: {
+            admissionId: payload.admissionId,
+            sessionIncarnationId: payload.sessionIncarnationId,
+            workspaceId: payload.workspaceId,
+            sessionId: payload.sessionId,
+            turnId: payload.turnId,
+            aggregateRevision: payload.admissionAggregateRevision,
+            controllerGeneration: payload.admissionControllerGeneration,
+            materialSha256: payload.admissionMaterialSha256,
+          },
+          admittedRequest: request,
+          requestActor: payload.requestActor,
+        },
+      };
+      finalizeDurableChatRun(
+        {
+          runImmediateTransaction: context.storage.runImmediateTransaction,
+          durableRuns: context.storage.durableRuns,
+          chatToolRuns,
+          chatToolArtifacts: { listByTurn: vi.fn(() => []) },
+          chatMessages,
+          recordDurableTimelineEvent: (runId, eventType) =>
+            context.storage.durableRunEvents.append({ runId, eventType }),
+          chatTurnTraces,
+          resolvePostCommitEligibility: () => ({
+            version: 1,
+            autonomyEnabledAtParentSettlement: false,
+            evalIntegrityTurn: false,
+            humanSession: false,
+          }),
+        } as never,
+        claimed.runId,
+        prepared as never,
+        traceState,
+        claimed.leaseOwnerId,
+      );
+      serviceRef.current!.requestRunProcessing(claimed.runId);
+    });
+    const service = new DurableRunService(context as unknown as ServiceContext, {
+      backgroundTasks,
+      workflowRegistry: {
+        executeWorkflow,
+        isWorkflowRecoverable: () => ({ recoverable: true }),
+        markWorkflowUnrecoverable: vi.fn(),
+      },
+      onGeneralChatPostCommit: async (observed, progress) =>
+        executeGeneralChatPostCommit(postCommitHost as never, observed, progress),
+    });
+    serviceRef.current = service;
+
+    service.startWorker();
+    await Promise.all([...backgroundTasks]);
+
+    expect(executeWorkflow).toHaveBeenCalledTimes(1);
+    expect(runs.get(run.runId)).toMatchObject({
+      status: "failed",
+      attemptCount: 0,
+      lastError: "System heartbeat tool execution requires an approval and was blocked.",
+    });
+    expect(runs.get(run.runId)?.metadata).not.toHaveProperty("generalChatPostCommitPending");
+    expect(runs.get(run.runId)?.metadata).not.toHaveProperty("waitForEvent");
+    expect(retries.get(run.runId)).toBeUndefined();
+    expect(checkpoints.filter((entry) => entry.checkpointKind === "run_failed")).toHaveLength(1);
+    expect(checkpoints.filter((entry) => entry.checkpointKind === "run_waiting")).toHaveLength(0);
+    expect(timeline.filter((entry) => entry.eventType === "run_failed")).toHaveLength(1);
+    expect(timeline.filter((entry) => entry.eventType === "run_waiting")).toHaveLength(0);
+    expect(createApproval).not.toHaveBeenCalled();
+    expect(approvals.size).toBe(0);
+    expect(enqueueApprovalWait).not.toHaveBeenCalled();
+    expect(createToolRun).not.toHaveBeenCalled();
+    expect(messages.size).toBe(0);
+    expect(chatMessages.upsert).not.toHaveBeenCalled();
+    expect([...runs.values()].filter((candidate) => candidate.workflowKey === "approval.wait")).toHaveLength(0);
+    expect(closeTurnWrite).toHaveBeenCalledTimes(1);
+    expect(closeHeartbeatOccurrence).toHaveBeenCalledTimes(1);
+    expect(executeWorkflow).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects a running retry after the worker lease expired", () => {
     const run = {
       ...createRun("run-hook-expired-retry", "running", "hook.delivery"),
@@ -1727,6 +2216,105 @@ describe("DurableRunService", () => {
     ]);
     expect(timeline.map((item) => item.eventType)).toEqual(
       expect.arrayContaining(["run_started", "run_dead_lettered", "run_retry_budget_exhausted"]),
+    );
+  });
+
+  it("finalizes an admitted v2 Chat failure before projecting retry exhaustion to dead letter", async () => {
+    const admissionMaterialSha256 = "a".repeat(64);
+    const run = {
+      ...createRun("run-chat-retry-exhausted", "running", "chat.turn.execute"),
+      attemptCount: 3,
+      maxAttempts: 3,
+      leaseOwnerId: "worker-chat",
+      leaseHeartbeatAt: "2026-03-14T00:00:01.000Z",
+      leaseExpiresAt: "2999-03-14T00:00:01.000Z",
+      payload: {
+        version: "chat.turn.execute.v2",
+        admissionId: "admission-chat",
+        sessionIncarnationId: "incarnation-chat",
+        workspaceId: "default",
+        sessionId: "session-chat",
+        turnId: "turn-chat",
+        admissionMaterialSha256,
+        admissionAggregateRevision: 7,
+        admissionControllerGeneration: 2,
+        requestActor: { actorKind: "system", actorId: "system:test" },
+      },
+      metadata: {
+        retryPolicy: { maxAttempts: 3, baseDelayMs: 5_000, maxDelayMs: 60_000, backoffMultiplier: 2 },
+      },
+    };
+    const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+    const timeline: Array<{ runId: string; eventType: string }> = [];
+    const deadLetters = new Map<
+      string,
+      { dead_letter_id: string; run_id: string; reason: string; resolved_at?: string; resolution_note?: string }
+    >();
+    const context = createContext(runs, checkpoints, timeline, { deadLetters });
+    const admission = {
+      admissionId: "admission-chat",
+      admissionKind: "turn_write",
+      status: "active",
+      sessionIncarnationId: "incarnation-chat",
+      workspaceId: "default",
+      sessionId: "session-chat",
+      turnId: "turn-chat",
+      aggregateRevision: 7,
+      controllerGeneration: 2,
+      actorKind: "system",
+      actorId: "system:test",
+      materialSha256: admissionMaterialSha256,
+    } as Record<string, unknown>;
+    Object.assign(context.storage, {
+      sessionMutationAdmissions: {
+        require: () => admission,
+        settleTurnWriteAuthority: () => ({ disposition: "current", admission }),
+        closeTurnWrite: () => {
+          admission.status = "cancelled";
+          admission.terminalAuthorityKind = "durable_terminal";
+          admission.terminalDurableRunId = run.runId;
+          admission.terminalDurableRunStatus = "failed";
+          return admission;
+        },
+      },
+      chatSessionMeta: {
+        get: () => ({ sessionId: "session-chat", workspaceId: "default", revision: 7, origin: "system" }),
+      },
+    });
+    const service = new DurableRunService(context as unknown as ServiceContext, {
+      backgroundTasks: new Set(),
+      workflowRegistry: {
+        executeWorkflow: vi.fn(),
+        isWorkflowRecoverable: () => ({ recoverable: true }),
+        markWorkflowUnrecoverable: vi.fn(),
+      },
+      onGeneralChatPostCommit: async (_observed, progress) => {
+        for (const effect of GENERAL_CHAT_POST_COMMIT_EFFECTS) progress.runEffect(effect, () => undefined);
+        return { status: "failed" };
+      },
+    });
+
+    const failed = service.scheduleRunningWorkflowRetry(run.runId, "provider exhausted", "worker", "worker-chat");
+    expect(failed.status).toBe("failed");
+    expect(failed.metadata).toMatchObject({
+      linkedFinalizationPending: expect.any(Object),
+      generalChatPostCommitPending: expect.objectContaining({ traceStatus: "failed" }),
+      chatRetryExhaustionDeadLetterPending: expect.objectContaining({ attemptNo: 4, maxAttempts: 3 }),
+      chatTurnRuntimeAuthority: expect.any(Object),
+    });
+    expect(deadLetters.size).toBe(0);
+
+    expect(await service.reconcileGeneralChatPostCommit(run.runId)).toBe(true);
+    expect(runs.get(run.runId)).toMatchObject({ status: "dead_lettered", attemptCount: 4 });
+    expect(admission).toMatchObject({
+      status: "cancelled",
+      terminalAuthorityKind: "durable_terminal",
+      terminalDurableRunStatus: "failed",
+    });
+    expect(deadLetters.size).toBe(1);
+    expect(timeline.map((entry) => entry.eventType)).toEqual(
+      expect.arrayContaining(["run_failed", "run_retry_budget_exhausted", "run_dead_lettered"]),
     );
   });
 
@@ -2268,23 +2856,25 @@ describe("DurableRunService", () => {
   ])(
     "atomically converges a $traceStatus Chat trace and durable run on operator cancellation",
     async ({ runStatus, traceStatus }) => {
-      const run = {
-        ...createRun(`run-chat-cancel-${runStatus}`, runStatus),
-        payload: {
-          version: "chat.turn.execute.v1",
-          sessionId: "session-cancel",
-          turnId: `turn-cancel-${runStatus}`,
-          userMessageId: `user-cancel-${runStatus}`,
-          assistantMessageId: `assistant-cancel-${runStatus}`,
-          branchKind: "new",
-          threadEventType: "chat_thread_turn_appended",
-          request: { content: "Cancel this turn." },
-        },
-      };
+      const turnId = `turn-cancel-${runStatus}`;
+      const fixture = createAdmittedChatRuntimeFixture({
+        runId: `run-chat-cancel-${runStatus}`,
+        status: runStatus,
+        ...(runStatus === "waiting"
+          ? {
+              generationId: `generation-cancel-${runStatus}`,
+              traceStatus: "waiting_for_approval" as const,
+            }
+          : {}),
+        sessionId: "session-cancel",
+        turnId,
+      });
+      const run = fixture.run;
       const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
       const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
       const timeline: Array<{ runId: string; eventType: string }> = [];
       const context = createContext(runs, checkpoints, timeline);
+      installAdmittedChatRuntimeFixture(context, fixture);
       const lockOrder: string[] = [];
       Object.assign(context.storage.durableRuns, {
         getRunForUpdate: (runId: string) => {
@@ -2297,9 +2887,9 @@ describe("DurableRunService", () => {
         },
       });
       let trace: ChatTurnTraceRecord = {
-        turnId: run.payload.turnId,
-        sessionId: run.payload.sessionId,
-        userMessageId: run.payload.userMessageId,
+        turnId,
+        sessionId: "session-cancel",
+        userMessageId: `user:${run.runId}`,
         branchKind: "new",
         status: traceStatus,
         mode: "chat",
@@ -2630,7 +3220,7 @@ describe("DurableRunService", () => {
     }
   });
 
-  it("moves timed-out Cowork chat turns to waiting with operator resume metadata", async () => {
+  it("quarantines legacy v1 Cowork runs before their timeout watchdog can execute", async () => {
     vi.useFakeTimers();
     try {
       const run = {
@@ -2662,31 +3252,28 @@ describe("DurableRunService", () => {
       await Promise.allSettled(tasks);
 
       expect(runs.get(run.runId)).toMatchObject({
-        status: "waiting",
+        status: "failed",
         leaseOwnerId: undefined,
         leaseExpiresAt: undefined,
-        lastError: undefined,
+        lastError:
+          "Legacy durable Chat run lacks immutable session-incarnation admission and requires manual reconciliation.",
         metadata: expect.objectContaining({
-          waitForEvent: {
-            eventKey: "cowork.turn.operator_resume",
-            correlationId: run.runId,
-          },
-          coworkWatchdog: expect.objectContaining({
-            reason: "workflow_timeout",
-            timeoutMs: 50,
+          linkedFinalization: expect.objectContaining({
+            reasonSha256: "9b1780c77826cd3cc9aee375b00a84e7b8091b922ed32c40205e8ff3f520aa82",
           }),
         }),
       });
-      expect(checkpoints.map((item) => item.checkpointKind)).toContain("run_waiting");
-      expect(timeline.map((item) => item.eventType)).toContain("run_waiting");
-      expect(timeline.map((item) => item.eventType)).not.toContain("run_failed");
+      expect(checkpoints.map((item) => item.checkpointKind)).toContain("run_failed");
+      expect(timeline.map((item) => item.eventType)).toContain("run_failed");
+      expect(timeline.map((item) => item.eventType)).not.toContain("run_waiting");
       expect(publishRealtime).toHaveBeenCalledWith(
         "system",
         "durable",
         expect.objectContaining({
-          type: "durable_run_waiting",
+          type: "durable_run_failed",
           runId: run.runId,
-          reason: "cowork_workflow_timeout",
+          error:
+            "Legacy durable Chat run lacks immutable session-incarnation admission and requires manual reconciliation.",
         }),
         expect.objectContaining({
           eventClass: "domain_fact",
@@ -3223,6 +3810,13 @@ function createContext(
   },
 ) {
   const retries = options?.retries ?? new Map<string, DurableRetryRecord[]>();
+  const checkpointRecords: Array<{
+    checkpointId: string;
+    runId: string;
+    checkpointKind: string;
+    state: Record<string, unknown>;
+    createdAt: string;
+  }> = [];
   const deadLetters =
     options?.deadLetters ??
     new Map<
@@ -3457,13 +4051,29 @@ function createContext(
                 run.status === "running" && typeof run.leaseExpiresAt === "string" && run.leaseExpiresAt <= nowIso,
             )
             .map((run) => run.runId),
-        createCheckpoint: (input: { runId: string; checkpointKind: string }) => {
+        createCheckpoint: (input: {
+          runId: string;
+          checkpointKind: string;
+          state?: Record<string, unknown>;
+          createdAt?: string;
+        }) => {
           checkpoints.push({
             runId: input.runId,
             checkpointKind: input.checkpointKind,
           });
+          checkpointRecords.push({
+            checkpointId: `checkpoint-${checkpointRecords.length + 1}`,
+            runId: input.runId,
+            checkpointKind: input.checkpointKind,
+            state: input.state ?? {},
+            createdAt: input.createdAt ?? new Date().toISOString(),
+          });
           return input;
         },
+        getLatestCheckpointByKind: (runId: string, checkpointKind: string) =>
+          checkpointRecords
+            .filter((checkpoint) => checkpoint.runId === runId && checkpoint.checkpointKind === checkpointKind)
+            .at(-1),
         getDeadLetterById: (deadLetterId: string) => {
           const row = deadLetters.get(deadLetterId);
           if (!row) {
@@ -3538,6 +4148,283 @@ function createContext(
     requireFeatureEnabled: () => undefined,
     isFeatureEnabled: options?.isFeatureEnabled ?? (() => true),
     normalizeWorkspaceId: (workspaceId?: string) => workspaceId ?? "default",
+  };
+}
+
+interface AdmittedChatRuntimeFixture {
+  run: DurableRunRecord;
+  admission: Record<string, unknown> & {
+    admissionId: string;
+    status: "active" | "completed" | "cancelled";
+  };
+  checkpointKind?: "run_waiting" | "run_completed" | "run_failed" | "run_cancelled";
+  checkpointState?: Record<string, unknown>;
+  assistantMessage?: {
+    messageId: string;
+    sessionId: string;
+    role: "assistant";
+    actorType: "agent";
+    actorId: string;
+    content: string;
+    timestamp: string;
+  };
+}
+
+function createAdmittedChatRuntimeFixture(input: {
+  runId: string;
+  status: "running" | "waiting" | "completed" | "failed" | "cancelled";
+  generationId?: string;
+  traceStatus?: "waiting_for_approval" | "completed" | "failed" | "cancelled";
+  transitionAt?: string;
+  sessionId?: string;
+  turnId?: string;
+}): AdmittedChatRuntimeFixture {
+  const sessionId = input.sessionId ?? `session:${input.runId}`;
+  const turnId = input.turnId ?? `turn:${input.runId}`;
+  const workspaceId = "default";
+  const admissionId = `admission:${input.runId}`;
+  const sessionIncarnationId = `incarnation:${input.runId}`;
+  const admissionMaterialSha256 = "a".repeat(64);
+  const actorKind = "system" as const;
+  const actorId = "system:test";
+  const userMessageId = `user:${input.runId}`;
+  const assistantMessageId = `assistant:${input.runId}`;
+  const transitionAt = input.transitionAt ?? "2026-03-14T00:00:01.000Z";
+  const payload = {
+    version: "chat.turn.execute.v2",
+    admissionId,
+    sessionIncarnationId,
+    workspaceId,
+    sessionId,
+    turnId,
+    userMessageId,
+    assistantMessageId,
+    branchKind: "append",
+    threadEventType: "chat_thread_turn_appended",
+    admissionMaterialSha256,
+    effectiveRequestMaterialSha256: "b".repeat(64),
+    admissionAggregateRevision: 7,
+    admissionControllerGeneration: 2,
+    requestActor: { actorKind, actorId },
+    request: { content: "Exercise exact durable authority." },
+  };
+  const admission: AdmittedChatRuntimeFixture["admission"] = {
+    admissionId,
+    admissionKind: "turn_write",
+    status: "active",
+    sessionIncarnationId,
+    workspaceId,
+    sessionId,
+    turnId,
+    aggregateRevision: 7,
+    controllerGeneration: 2,
+    actorKind,
+    actorId,
+    operation: "chat_send",
+    materialSha256: admissionMaterialSha256,
+  };
+  let metadata: Record<string, unknown> = {
+    retryPolicy: { ...DURABLE_RETRY_POLICY_DEFAULT },
+  };
+  let checkpointKind: AdmittedChatRuntimeFixture["checkpointKind"];
+  let checkpointState: Record<string, unknown> | undefined;
+  let assistantMessage: AdmittedChatRuntimeFixture["assistantMessage"];
+  if (input.status !== "running") {
+    const generationId = input.generationId ?? `generation:${input.runId}`;
+    const traceStatus =
+      input.traceStatus ??
+      (input.status === "waiting" ? "waiting_for_approval" : input.status === "completed" ? "completed" : input.status);
+    const waitForEvent = {
+      eventKey: "approval.resolved",
+      correlationId: `approval:${generationId}`,
+    };
+    const outputText = `Canonical output for ${input.runId}`;
+    const authority = buildChatTurnRuntimeAuthoritySeal({
+      runId: input.runId,
+      turnId,
+      transitionKind: input.status === "waiting" ? "waiting" : "terminal",
+      durableStatus: input.status,
+      traceStatus,
+      transitionAt,
+      postCommitGenerationId: generationId,
+      postCommitEligibility: TEST_POST_COMMIT_ELIGIBILITY,
+      ...(input.status === "waiting" ? { waitForEvent } : {}),
+      ...(input.status === "completed"
+        ? {
+            terminalOutput: {
+              assistantMessageId,
+              outputText,
+              outputSummary: outputText,
+            },
+          }
+        : {}),
+      requiredFinalizers: ["general"],
+    });
+    metadata = withChatTurnRuntimeAuthority(
+      {
+        ...metadata,
+        generalChatPostCommitPending: {
+          version: 1,
+          generationId,
+          traceStatus,
+          requestedAt: transitionAt,
+          postCommitEligibility: TEST_POST_COMMIT_ELIGIBILITY,
+          completedEffects: [],
+          durableEffectRunIds: {},
+        },
+        ...(input.status === "waiting" ? { waitForEvent } : {}),
+        ...(input.status === "completed"
+          ? {
+              outputText,
+              finalOutput: outputText,
+              outputSummary: outputText,
+              finalSummary: outputText,
+            }
+          : {}),
+      },
+      authority,
+    );
+    checkpointKind =
+      input.status === "waiting"
+        ? "run_waiting"
+        : input.status === "completed"
+          ? "run_completed"
+          : input.status === "failed"
+            ? "run_failed"
+            : "run_cancelled";
+    checkpointState = withChatTurnRuntimeAuthorityCheckpoint(
+      input.status === "waiting"
+        ? { waitForEvent }
+        : input.status === "completed"
+          ? { assistantMessageId, outputText, outputSummary: outputText }
+          : {},
+      authority,
+    );
+    if (input.status === "completed") {
+      assistantMessage = {
+        messageId: assistantMessageId,
+        sessionId,
+        role: "assistant",
+        actorType: "agent",
+        actorId: "assistant",
+        content: outputText,
+        timestamp: transitionAt,
+      };
+    }
+  }
+  return {
+    run: {
+      ...createRun(input.runId, input.status, "chat.turn.execute"),
+      payload,
+      metadata,
+      ...(input.status === "completed" || input.status === "failed" || input.status === "cancelled"
+        ? { finishedAt: transitionAt }
+        : {}),
+    },
+    admission,
+    ...(checkpointKind ? { checkpointKind, checkpointState } : {}),
+    ...(assistantMessage ? { assistantMessage } : {}),
+  };
+}
+
+function installAdmittedChatRuntimeFixture(
+  context: ReturnType<typeof createContext>,
+  fixture: AdmittedChatRuntimeFixture,
+): {
+  recordTransitionEvidence(next: AdmittedChatRuntimeFixture): void;
+} {
+  const admission = fixture.admission;
+  const assistantMessages = new Map<string, NonNullable<AdmittedChatRuntimeFixture["assistantMessage"]>>();
+  const recordTransitionEvidence = (next: AdmittedChatRuntimeFixture) => {
+    if (next.checkpointKind && next.checkpointState) {
+      context.storage.durableRuns.createCheckpoint({
+        runId: next.run.runId,
+        checkpointKind: next.checkpointKind,
+        state: next.checkpointState,
+        createdAt: next.run.finishedAt ?? next.run.updatedAt,
+      });
+    }
+    if (next.assistantMessage) {
+      assistantMessages.set(next.assistantMessage.messageId, next.assistantMessage);
+    }
+  };
+  Object.assign(context.storage, {
+    sessionMutationAdmissions: {
+      require: (admissionId: string) => {
+        if (admissionId !== admission.admissionId) throw new Error(`Unknown admission ${admissionId}`);
+        return admission;
+      },
+      settleTurnWriteAuthority: () => ({ disposition: "current", admission }),
+      closeTurnWrite: (input: { status: "completed" | "cancelled"; correlationId: string }) => {
+        admission.status = input.status;
+        admission.terminalAuthorityKind = "durable_terminal";
+        admission.terminalDurableRunId = input.correlationId;
+        admission.terminalDurableRunStatus = input.status === "completed" ? "completed" : "cancelled";
+        return admission;
+      },
+    },
+    chatSessionMeta: {
+      get: (sessionId: string) =>
+        sessionId === fixture.run.payload.sessionId
+          ? { sessionId, workspaceId: "default", revision: 7, origin: "operator" }
+          : undefined,
+    },
+    chatMessages: {
+      get: (messageId: string) => assistantMessages.get(messageId),
+    },
+  });
+  recordTransitionEvidence(fixture);
+  return { recordTransitionEvidence };
+}
+
+function createQueuedHeartbeatWorkerRun(
+  runId: string,
+  attemptCount = 0,
+  maxAttempts = DURABLE_RETRY_POLICY_DEFAULT.maxAttempts,
+): DurableRunRecord {
+  const sessionId = `session:${runId}`;
+  const turnId = `turn:${runId}`;
+  const admissionMaterialSha256 = "a".repeat(64);
+  return {
+    ...createRun(runId, "queued", "chat.turn.execute"),
+    attemptCount,
+    maxAttempts,
+    payload: {
+      version: "chat.turn.execute.v2",
+      admissionId: `admission:${runId}`,
+      sessionIncarnationId: `incarnation:${runId}`,
+      workspaceId: "default",
+      sessionId,
+      turnId,
+      userMessageId: `user:${runId}`,
+      assistantMessageId: `assistant:${runId}`,
+      branchKind: "new",
+      threadEventType: "chat_thread_turn_appended",
+      admissionMaterialSha256,
+      effectiveRequestMaterialSha256: "b".repeat(64),
+      admissionAggregateRevision: 7,
+      admissionControllerGeneration: 2,
+      requestActor: { actorKind: "system", actorId: "system-heartbeat" },
+      request: {
+        content: "Perform the bounded heartbeat check and return the exact decision object.",
+        permissionProfileId: "heartbeat-restricted",
+        policyRunId: runId,
+      },
+      heartbeatOccurrenceId: `occurrence:${runId}`,
+      heartbeatClaimSha256: "c".repeat(64),
+      heartbeatEvaluatedPolicySha256: "d".repeat(64),
+      heartbeatFrozenObjectiveSha256: "e".repeat(64),
+    },
+    metadata: {
+      retryPolicy: { ...DURABLE_RETRY_POLICY_DEFAULT, maxAttempts },
+      autonomous: {
+        kind: "heartbeat",
+        systemActorId: "system-heartbeat",
+        sourceRunId: runId,
+        reason: `heartbeat self-wake:${sessionId}`,
+        deliverMode: "on_notify",
+      },
+    },
   };
 }
 

@@ -107,9 +107,10 @@ function buildCatalogSnapshot(includeTrustedSkill = false): CapabilityCatalogSna
 }
 
 function buildProfile(
-  options: { requiresApproval?: boolean; trustedSkill?: boolean } = {},
+  options: { requiresApproval?: boolean; trustedSkill?: boolean; heartbeat?: boolean } = {},
 ): ChatTurnCapabilityProfileRecord {
   const requiresApproval = options.requiresApproval ?? false;
+  const heartbeat = options.heartbeat ?? false;
   const snapshot = buildCatalogSnapshot(options.trustedSkill);
   return sealChatTurnCapabilityProfile({
     profileId: "chat-capability-profile-turn-frozen",
@@ -119,9 +120,10 @@ function buildProfile(
       sessionId: "session-frozen",
       workspaceId: "workspace-frozen",
       citadelId: "citadel-frozen",
-      operatorId: "operator-frozen",
-      authActorId: "operator-frozen",
-      authActorSource: "token",
+      ...(heartbeat ? { durableRunId: "run-heartbeat" } : {}),
+      operatorId: heartbeat ? "system-heartbeat" : "operator-frozen",
+      authActorId: heartbeat ? "system-heartbeat" : "operator-frozen",
+      authActorSource: heartbeat ? "none" : "token",
     },
     source: { channel: "chat", account: "default" },
     catalog: {
@@ -182,8 +184,8 @@ function buildProfile(
     governance: {
       activeGrants: [],
       permission: {
-        profileId: "safe",
-        approvalMode: "approve_all",
+        profileId: heartbeat ? "heartbeat-restricted" : "safe",
+        approvalMode: heartbeat ? "bypass" : "approve_all",
         profileHash: "e".repeat(64),
       },
       policyDecisions: [
@@ -203,7 +205,7 @@ function buildProfile(
           : []),
       ],
       approval: {
-        mode: "approve_all",
+        mode: heartbeat ? "bypass" : "approve_all",
         selectedToolCount: 1,
         toolsRequiringApproval: requiresApproval ? ["browser.search"] : [],
         approvalGranted: false,
@@ -255,6 +257,25 @@ function buildInput(profile: ChatTurnCapabilityProfileRecord) {
     permissionProfileId: "safe",
     historyMessages: [{ role: "user" as const, content: "Search public sources." }],
     capabilityProfile: profile,
+  };
+}
+
+function buildHeartbeatInput(profile: ChatTurnCapabilityProfileRecord) {
+  return {
+    ...buildInput(profile),
+    operatorId: "system-heartbeat",
+    authActorId: "system-heartbeat",
+    authActorSource: "none" as const,
+    permissionProfileId: "heartbeat-restricted",
+    policyRunId: "run-heartbeat",
+    serverOnlyPosture: {
+      kind: "system_heartbeat" as const,
+      actorId: "system-heartbeat" as const,
+      operation: "chat_system_heartbeat" as const,
+      occurrenceId: "heartbeat-occurrence-1",
+      claimSha256: "a".repeat(64),
+      durableRunId: "run-heartbeat",
+    },
   };
 }
 
@@ -351,6 +372,70 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
       status: "blocked",
       error: expect.stringContaining("broaden"),
     });
+  });
+
+  it("terminally blocks exact system-heartbeat approval drift before invocation or tool-row creation", async () => {
+    const createChatCompletion = vi
+      .fn()
+      .mockResolvedValueOnce(namedToolCallCompletion("browser.search", { query: "heartbeat status" }));
+    const invokeTool = vi.fn();
+    const profile = buildProfile({ heartbeat: true });
+    const storage = createProfileStorage(profile);
+    const runner = new ChatTurnAgentRunner({
+      storage: storage as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      listCapabilityCatalog: () => liveCallableCatalog(profile),
+      createChatCompletion,
+      invokeTool,
+      evaluateToolAccess: vi
+        .fn()
+        .mockReturnValueOnce({ allowed: true, requiresApproval: false, reasonCodes: ["heartbeat_allow"] })
+        .mockReturnValue({
+          allowed: true,
+          requiresApproval: true,
+          reasonCodes: ["risk_posture_drift"],
+        }),
+    });
+
+    await expect(runner.run(buildHeartbeatInput(profile))).rejects.toMatchObject({
+      name: "SystemHeartbeatToolInvocationBlockedError",
+    });
+
+    expect(createChatCompletion).toHaveBeenCalledTimes(1);
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(storage.chatToolRuns.listByTurn("turn-frozen")).toEqual([]);
+  });
+
+  it("omits approval-requiring tools from the exact system-heartbeat provider catalog", async () => {
+    const completionRequests: ChatCompletionRequest[] = [];
+    const createChatCompletion = vi.fn(async (request: ChatCompletionRequest) => {
+      completionRequests.push(request);
+      return {
+        model: "model-a",
+        choices: [{ index: 0, message: { role: "assistant", content: '{"notify":false}' } }],
+      };
+    });
+    const invokeTool = vi.fn();
+    const profile = buildProfile({ heartbeat: true });
+    const storage = createProfileStorage(profile);
+    const runner = new ChatTurnAgentRunner({
+      storage: storage as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      listCapabilityCatalog: () => liveCallableCatalog(profile),
+      createChatCompletion,
+      invokeTool,
+      evaluateToolAccess: vi.fn(() => ({
+        allowed: true,
+        requiresApproval: true,
+        reasonCodes: ["risk_posture_drift"],
+      })),
+    });
+
+    await runner.run(buildHeartbeatInput(profile));
+
+    expect(completionRequests[0]?.tools).toBeUndefined();
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(storage.chatToolRuns.listByTurn("turn-frozen")).toEqual([]);
   });
 
   it.each([

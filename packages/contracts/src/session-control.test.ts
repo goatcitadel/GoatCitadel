@@ -51,7 +51,12 @@ const NOW = "2026-07-14T12:00:00.000Z";
 
 function operatorControl(
   generation = 3,
-  lastEventReasonCode: "release" | "operator_revoke" | "emergency_takeover" | "session_initialized" = "release",
+  lastEventReasonCode:
+    | "release"
+    | "operator_revoke"
+    | "emergency_takeover"
+    | "session_initialized"
+    | "heartbeat_preempted" = "release",
 ) {
   return {
     workspaceId: "workspace-a",
@@ -588,6 +593,41 @@ describe("event and response transition truth", () => {
         }),
       ).nextGeneration,
     ).toBe(3);
+    expect(
+      parseSessionControlEventRecord(
+        event({
+          previousGeneration: 3,
+          nextGeneration: 4,
+          previousOwnerKind: "operator",
+          nextOwnerKind: "operator",
+          previousLeaseState: "operator_active",
+          nextLeaseState: "operator_active",
+          reasonCode: "heartbeat_preempted",
+          actorKind: "operator",
+        }),
+      ).reasonCode,
+    ).toBe("heartbeat_preempted");
+    for (const invalid of [
+      { nextGeneration: 3 },
+      { nextOwnerKind: "external_companion" as const },
+      { actorKind: "system" as const },
+    ]) {
+      expect(() =>
+        parseSessionControlEventRecord(
+          event({
+            previousGeneration: 3,
+            nextGeneration: 4,
+            previousOwnerKind: "operator",
+            nextOwnerKind: "operator",
+            previousLeaseState: "operator_active",
+            nextLeaseState: "operator_active",
+            reasonCode: "heartbeat_preempted",
+            actorKind: "operator",
+            ...invalid,
+          }),
+        ),
+      ).toThrow(/event record is invalid/u);
+    }
   });
 
   it("binds every response to its exact request, owner, and generation outcome", () => {

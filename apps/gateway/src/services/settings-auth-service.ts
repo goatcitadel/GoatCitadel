@@ -147,7 +147,10 @@ export interface SettingsRuntimeDependencies {
 export interface SettingsAuthRuntimeDependencies {
   readonly config: GatewayRuntimeConfig;
   readonly gatewaySql: Storage["gatewaySql"];
-  readonly storage: Pick<Storage, "audit" | "runImmediateTransaction" | "approvals" | "approvalEvents">;
+  readonly storage: Pick<
+    Storage,
+    "audit" | "runImmediateTransaction" | "approvals" | "approvalEvents" | "sessionControls"
+  >;
   /**
    * In-memory, single-use store for approved device-access tokens. The
    * plaintext token is NEVER persisted at rest; it lives here between approval
@@ -1724,59 +1727,40 @@ export async function revokeDeviceAccessGrant(
   grantId: string,
   revokedBy: string,
 ): Promise<DeviceAccessGrantContractRecord> {
-  const existingRow = deps.gatewaySql
-    .prepare(
-      `
-    SELECT *
-    FROM auth_device_grants
-    WHERE grant_id = @grantId
-    LIMIT 1
-  `,
-    )
-    .get({ grantId }) as Record<string, unknown> | undefined;
-  if (!existingRow) {
-    throw new NotFoundError("Device access grant not found.");
-  }
-
-  const revokedAt = new Date().toISOString();
-  deps.gatewaySql
-    .prepare(
-      `
-    UPDATE auth_device_grants
-    SET revoked_at = COALESCE(revoked_at, @revokedAt)
-    WHERE grant_id = @grantId
-  `,
-    )
-    .run({
-      grantId,
-      revokedAt,
-    });
-  deps.gatewaySql
-    .prepare(
-      `
-    UPDATE companion_sessions
-    SET revoked_at = COALESCE(revoked_at, @revokedAt)
-    WHERE grant_id = @grantId
-  `,
-    )
-    .run({
-      grantId,
-      revokedAt,
-    });
-
-  const grant = mapAuthDeviceGrantRow(
-    (deps.gatewaySql
+  const normalizedGrantId = requireAuthRevokeIdentifier(grantId, "grantId");
+  const normalizedRevokedBy = requireAuthRevokeIdentifier(revokedBy, "revokedBy");
+  let result!: DeviceAccessGrantContractRecord;
+  deps.storage.runImmediateTransaction(() => {
+    const revokeIdentity = buildAuthControlRevokeIdentity("device_grant", normalizedGrantId, normalizedRevokedBy);
+    deps.storage.sessionControls.revokeByAuthBinding(revokeIdentity);
+    const existingRow = deps.gatewaySql
       .prepare(
-        `
-      SELECT *
-      FROM auth_device_grants
-      WHERE grant_id = @grantId
-      LIMIT 1
-    `,
+        `SELECT * FROM auth_device_grants
+         WHERE grant_id = @grantId
+         LIMIT 1${deps.gatewaySql.dialect === "postgres" ? " FOR UPDATE" : ""}`,
       )
-      .get({ grantId }) as Record<string, unknown> | undefined) ?? existingRow,
-  );
-  const result = toDeviceAccessGrantRecord(grant);
+      .get({ grantId: normalizedGrantId }) as Record<string, unknown> | undefined;
+    if (!existingRow) throw new NotFoundError("Device access grant not found.");
+    const revokedAt = deps.gatewaySql.readDatabaseNow();
+    deps.gatewaySql
+      .prepare(
+        `UPDATE auth_device_grants
+         SET revoked_at = COALESCE(revoked_at, @revokedAt)
+         WHERE grant_id = @grantId`,
+      )
+      .run({ grantId: normalizedGrantId, revokedAt });
+    deps.gatewaySql
+      .prepare(
+        `UPDATE companion_sessions
+         SET revoked_at = COALESCE(revoked_at, @revokedAt)
+         WHERE grant_id = @grantId`,
+      )
+      .run({ grantId: normalizedGrantId, revokedAt });
+    const updatedRow = deps.gatewaySql
+      .prepare("SELECT * FROM auth_device_grants WHERE grant_id = @grantId LIMIT 1")
+      .get({ grantId: normalizedGrantId }) as Record<string, unknown> | undefined;
+    result = toDeviceAccessGrantRecord(mapAuthDeviceGrantRow(updatedRow ?? existingRow));
+  });
 
   await deps.storage.audit.append("approvals", {
     event: "auth.device_grant.revoke",
@@ -1904,6 +1888,7 @@ export async function exchangeCompanionSessionFromDeviceGrant(
   grantId: string,
   input: CompanionSessionExchangeInput,
 ): Promise<CompanionSessionExchangeResponse> {
+  const normalizedGrantId = requireAuthRevokeIdentifier(grantId, "grantId");
   const signingPublicKeyPem = normalizeCompanionSigningPublicKeyPem(input.signingPublicKeyPem);
   assertCompanionSigningPublicKeyPem(signingPublicKeyPem);
 
@@ -1918,6 +1903,10 @@ export async function exchangeCompanionSessionFromDeviceGrant(
   let metadata: Record<string, unknown> = {};
 
   deps.storage.runImmediateTransaction(() => {
+    const replacementActorId = `companion:${sessionId}`;
+    deps.storage.sessionControls.revokeByAuthBinding(
+      buildAuthControlRevokeIdentity("device_grant", normalizedGrantId, replacementActorId),
+    );
     const grantRow = deps.gatewaySql
       .prepare(
         `
@@ -1929,11 +1918,13 @@ export async function exchangeCompanionSessionFromDeviceGrant(
           LIMIT 1${clock.lockRow}
         `,
       )
-      .get({ grantId }) as Record<string, unknown> | undefined;
+      .get({ grantId: normalizedGrantId }) as Record<string, unknown> | undefined;
     if (!grantRow) {
       throw new NotFoundError("Device access grant not found.");
     }
     grant = mapAuthDeviceGrantRow(grantRow);
+    const principalPurpose =
+      grantRow.principal_purpose === "session_control_client" ? "session_control_client" : "general_companion";
     ({ issuedAt, accessTokenExpiresAt, refreshTokenExpiresAt } = createCompanionCredentialWindow(deps));
     metadata = {
       ...grant.metadata,
@@ -1953,7 +1944,7 @@ export async function exchangeCompanionSessionFromDeviceGrant(
     `,
       )
       .run({
-        grantId,
+        grantId: normalizedGrantId,
         revokedAt: issuedAt,
       });
 
@@ -1971,7 +1962,8 @@ export async function exchangeCompanionSessionFromDeviceGrant(
         signature_algorithm,
         created_at,
         last_rotated_at,
-        metadata_json
+        metadata_json,
+        principal_purpose
       ) VALUES (
         @sessionId,
         @grantId,
@@ -1983,13 +1975,14 @@ export async function exchangeCompanionSessionFromDeviceGrant(
         @signatureAlgorithm,
         @createdAt,
         @lastRotatedAt,
-        @metadataJson
+        @metadataJson,
+        @principalPurpose
       )
     `,
       )
       .run({
         sessionId,
-        grantId,
+        grantId: normalizedGrantId,
         accessTokenHash: hashSensitiveToken(accessToken),
         accessTokenExpiresAt,
         refreshTokenHash: hashSensitiveToken(refreshToken),
@@ -1999,6 +1992,7 @@ export async function exchangeCompanionSessionFromDeviceGrant(
         createdAt: issuedAt,
         lastRotatedAt: issuedAt,
         metadataJson: JSON.stringify(metadata),
+        principalPurpose,
       });
 
     const finalGrant = deps.gatewaySql
@@ -2280,6 +2274,7 @@ export function getActiveCompanionSessionById(
 export function getCompanionSessionById(
   deps: SettingsAuthRuntimeDependencies,
   sessionId: string,
+  forUpdate = false,
 ): CompanionSessionRecord | undefined {
   const row = deps.gatewaySql
     .prepare(
@@ -2295,7 +2290,7 @@ export function getCompanionSessionById(
       INNER JOIN auth_device_grants g
         ON g.grant_id = s.grant_id
       WHERE s.session_id = @sessionId
-      LIMIT 1
+      LIMIT 1${forUpdate && deps.gatewaySql.dialect === "postgres" ? " FOR UPDATE OF s" : ""}
     `,
     )
     .get({
@@ -2433,29 +2428,28 @@ export async function revokeCompanionSession(
   sessionId: string,
   revokedBy: string,
 ): Promise<CompanionSessionRevokeResponse> {
-  const session = getCompanionSessionById(deps, sessionId);
-  if (!session) {
-    throw new NotFoundError("Companion session not found.");
-  }
-
-  const revokedAt = new Date().toISOString();
-  deps.gatewaySql
-    .prepare(
-      `
-    UPDATE companion_sessions
-    SET revoked_at = COALESCE(revoked_at, @revokedAt)
-    WHERE session_id = @sessionId
-  `,
-    )
-    .run({
-      sessionId,
-      revokedAt,
-    });
-
-  const updated = getCompanionSessionById(deps, sessionId) ?? {
-    ...session,
-    revokedAt,
-  };
+  const normalizedSessionId = requireAuthRevokeIdentifier(sessionId, "sessionId");
+  const normalizedRevokedBy = requireAuthRevokeIdentifier(revokedBy, "revokedBy");
+  let updated!: CompanionSessionRecord;
+  deps.storage.runImmediateTransaction(() => {
+    const revokeIdentity = buildAuthControlRevokeIdentity(
+      "companion_session",
+      normalizedSessionId,
+      normalizedRevokedBy,
+    );
+    deps.storage.sessionControls.revokeByAuthBinding(revokeIdentity);
+    const session = getCompanionSessionById(deps, normalizedSessionId, true);
+    if (!session) throw new NotFoundError("Companion session not found.");
+    const revokedAt = deps.gatewaySql.readDatabaseNow();
+    deps.gatewaySql
+      .prepare(
+        `UPDATE companion_sessions
+         SET revoked_at = COALESCE(revoked_at, @revokedAt)
+         WHERE session_id = @sessionId`,
+      )
+      .run({ sessionId: normalizedSessionId, revokedAt });
+    updated = getCompanionSessionById(deps, normalizedSessionId) ?? { ...session, revokedAt };
+  });
   const record = toCompanionSessionAdminRecord(updated);
 
   await deps.storage.audit.append("approvals", {
@@ -2875,6 +2869,30 @@ export function verifyCompanionRequestSignature(
 class CompanionRequestTimestampBoundaryError extends Error {}
 
 class CompanionRequestSessionBoundaryError extends Error {}
+
+function requireAuthRevokeIdentifier(value: string, field: string): string {
+  const normalized = value.trim();
+  if (!normalized) throw new ValidationError({ code: "FIELD_REQUIRED", field });
+  if (normalized.length > 256) throw new ValidationError({ field });
+  return normalized;
+}
+
+function buildAuthControlRevokeIdentity(
+  bindingKind: "companion_session" | "device_grant",
+  bindingId: string,
+  actorId: string,
+) {
+  const materialSha256 = createHash("sha256")
+    .update(JSON.stringify({ version: 1, bindingKind, bindingId, actorId }), "utf8")
+    .digest("hex");
+  return {
+    bindingKind,
+    bindingId,
+    actorId,
+    idempotencyKey: `auth-control-revoke:v1:${materialSha256}`,
+    correlationId: `auth-revoke:${materialSha256}`,
+  } as const;
+}
 
 function rejectStaleCompanionRequest(
   deps: SettingsAuthRuntimeDependencies,

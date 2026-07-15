@@ -48,6 +48,7 @@ import type {
   ChatTurnIntegrationDispatch,
   ChatTurnStreamLifecycleControl,
 } from "./chat-turn-runtime-collaborators.js";
+import { DurableWorkerInterruptionError } from "./durable-run-service.js";
 
 export interface ChatTurnDispatchHost
   extends
@@ -56,7 +57,7 @@ export interface ChatTurnDispatchHost
     ChatTurnIntegrationDispatch,
     ChatTurnStreamLifecycleControl {
   readonly storage: chatTurnStreamService.ChatTurnStreamHost["storage"] &
-    Pick<Storage, "durableRuns" | "runImmediateTransaction">;
+    Pick<Storage, "durableRuns" | "runImmediateTransaction" | "sessionMutationAdmissions">;
   updateActiveLeafOrThrow(sessionId: string, previousActiveTurnId: string | undefined, nextActiveTurnId: string): void;
 }
 
@@ -503,6 +504,25 @@ export async function executePreparedAgentChatTurnBackground(
       }
       throw cancellation;
     }
+    if (isExactSystemHeartbeatApprovalBlock(prepared, durableRunId, error)) {
+      options.streamRegistration.requireActive(prepared.turnId);
+      const currentTrace = host.storage.chatTurnTraces.get(prepared.turnId);
+      tryPatchChatTurnTraceIfStatus(host.storage.chatTurnTraces, prepared.turnId, CHAT_TURN_ACTIVE_STATUSES, {
+        status: "failed",
+        finishedAt: new Date().toISOString(),
+        failure: {
+          failureClass: "approval_required",
+          message: "System heartbeat tool execution was blocked because interactive approval is forbidden.",
+          retryable: false,
+        },
+        completion: {
+          finishReason: currentTrace.completion?.finishReason,
+          status: "interrupted",
+          repaired: Boolean(currentTrace.completion?.repaired),
+        },
+      });
+      return;
+    }
     const interruption = readDurableRecoveryInterruption(options.abortSignal, error);
     if (interruption) {
       preserveForDurableRecovery = true;
@@ -648,38 +668,94 @@ export async function executePreparedAgentChatTurnBackground(
   }
 }
 
+function isExactSystemHeartbeatApprovalBlock(
+  prepared: PreparedAgentChatTurn,
+  durableRunId: string | undefined,
+  error: unknown,
+): boolean {
+  const posture = prepared.serverOnlyPosture;
+  return Boolean(
+    error instanceof Error &&
+    (error.name === "SystemHeartbeatToolInvocationBlockedError" ||
+      error.name === "SystemHeartbeatApprovalRequiredError") &&
+    durableRunId &&
+    posture?.kind === "system_heartbeat" &&
+    posture.actorId === "system-heartbeat" &&
+    posture.operation === "chat_system_heartbeat" &&
+    posture.durableRunId === durableRunId,
+  );
+}
+
 export function buildDurableChatCanonicalWriteFence(
   host: ChatTurnDispatchHost,
   prepared: PreparedAgentChatTurn,
   durableRunId: string | undefined,
   options: {
-    streamRegistration: ActiveChatTurnStreamExecution;
+    streamRegistration?: ActiveChatTurnStreamExecution;
     durableLeaseOwnerId?: string;
   },
 ): chatTurnStreamService.ChatTurnCanonicalWriteFence | undefined {
+  const admission = prepared.turnAdmission;
+  const assertActiveAdmission = (): void => {
+    try {
+      host.sessionControlRuntimeOwner.assertActiveTurnWrite(admission!);
+    } catch (error) {
+      if (
+        durableRunId &&
+        prepared.serverOnlyPosture?.kind === "system_heartbeat" &&
+        prepared.serverOnlyPosture.actorId === "system-heartbeat" &&
+        prepared.serverOnlyPosture.operation === "chat_system_heartbeat" &&
+        prepared.serverOnlyPosture.durableRunId === durableRunId
+      ) {
+        const interruption = new DurableWorkerInterruptionError(
+          "lease_lost",
+          "System heartbeat canonical write authority was superseded.",
+        );
+        interruption.cause = error;
+        throw interruption;
+      }
+      throw error;
+    }
+  };
   if (!durableRunId) {
-    return undefined;
+    if (!admission) {
+      return undefined;
+    }
+    return <T>(work: () => T): T =>
+      host.storage.runImmediateTransaction(() => {
+        assertActiveAdmission();
+        const result = work();
+        assertActiveAdmission();
+        return result;
+      });
+  }
+  if (!admission) {
+    throw new Error(`Durable Chat turn ${prepared.turnId} has no immutable mutation admission.`);
+  }
+  if (!options.streamRegistration) {
+    throw new Error(`Durable Chat turn ${prepared.turnId} has no active stream registration.`);
   }
   const expectedLeaseOwnerId = options.durableLeaseOwnerId?.trim();
   return <T>(work: () => T): T => {
-    options.streamRegistration.requireActive(prepared.turnId);
+    options.streamRegistration!.requireActive(prepared.turnId);
     return host.storage.runImmediateTransaction(() => {
       const requireFreshLease = () => {
-        options.streamRegistration.requireActive(prepared.turnId);
+        options.streamRegistration!.requireActive(prepared.turnId);
         if (
           !expectedLeaseOwnerId ||
           !host.storage.durableRuns.lockFreshActiveLeaseForUpdate(durableRunId, expectedLeaseOwnerId)
         ) {
-          const error = new Error(
+          throw new DurableWorkerInterruptionError(
+            "lease_lost",
             `Durable Chat worker lost canonical write ownership for run ${durableRunId}; ` +
               `lease ${expectedLeaseOwnerId ?? "missing"} is no longer active.`,
           );
-          error.name = "DurableWorkerInterruptionError";
-          throw error;
         }
       };
+      assertActiveAdmission();
       requireFreshLease();
       const result = work();
+      assertActiveAdmission();
       requireFreshLease();
       return result;
     });
@@ -705,6 +781,9 @@ export function launchPreparedAgentChatTurnStream(
   const streamRegistration = host.registerActiveChatTurnStream(sessionId, prepared.turnId, durableRun?.runId, {
     ...(durableRun ? { reservation: true } : {}),
   });
+  const admissionWriteFence = buildDurableChatCanonicalWriteFence(host, prepared, durableRun?.runId, {
+    streamRegistration,
+  });
   recordChatDispatchDiagnosticSafely(host, {
     level: "info",
     category: "chat",
@@ -729,7 +808,9 @@ export function launchPreparedAgentChatTurnStream(
       persistPreparedChatCapabilityAdmission(host.storage, prepared);
       persistInitialChatTurnTrace({ chatTurnTraces: host.storage.chatTurnTraces }, prepared, input);
     };
-    if (typeof host.storage.runImmediateTransaction === "function") {
+    if (admissionWriteFence) {
+      admissionWriteFence(admit);
+    } else if (typeof host.storage.runImmediateTransaction === "function") {
       host.storage.runImmediateTransaction(admit);
     } else {
       if (prepared.capabilityProfile) {
@@ -744,7 +825,11 @@ export function launchPreparedAgentChatTurnStream(
     return durableRun.runId;
   }
   if (durableRequested) {
-    if (persistDurableUnavailableFailure(host, sessionId, prepared, streamRegistration)) {
+    if (
+      admissionWriteFence
+        ? admissionWriteFence(() => persistDurableUnavailableFailure(host, sessionId, prepared, streamRegistration))
+        : persistDurableUnavailableFailure(host, sessionId, prepared, streamRegistration)
+    ) {
       options?.mutationLifecycle?.markCommitted();
     }
     return undefined;
@@ -875,6 +960,8 @@ export async function sendPreparedIntegrationChatTurn(
   let deliveryCommitted = false;
   let deliveryEvidence: IntegrationDeliveryEvidence = {};
   let traceCreated = false;
+  const canonicalWriteFence = buildDurableChatCanonicalWriteFence(host, prepared, undefined, {});
+  const fencedWrite = <T>(work: () => T): T => (canonicalWriteFence ? canonicalWriteFence(work) : work());
   try {
     const admit = () => {
       persistPreparedChatCapabilityAdmission(storage, prepared);
@@ -908,7 +995,9 @@ export async function sendPreparedIntegrationChatTurn(
         startedAt,
       });
     };
-    if (typeof storage.runImmediateTransaction === "function") {
+    if (canonicalWriteFence) {
+      canonicalWriteFence(admit);
+    } else if (typeof storage.runImmediateTransaction === "function") {
       storage.runImmediateTransaction(admit);
     } else {
       if (prepared.capabilityProfile) {
@@ -925,7 +1014,8 @@ export async function sendPreparedIntegrationChatTurn(
     if (!binding.writable) {
       throw new Error("Session binding is not writable");
     }
-    host.ensureSessionInternalToolGrant(sessionId, "channel.send", "system-integration-compose");
+    fencedWrite(() => host.ensureSessionInternalToolGrant(sessionId, "channel.send", "system-integration-compose"));
+    fencedWrite(() => undefined);
     const deliveryResult = host.requireExecutedToolResult(
       "channel.send",
       await host.commsSend({
@@ -990,15 +1080,14 @@ export async function sendPreparedIntegrationChatTurn(
       },
       {
         onCommit: () => {
-          trace = patchChatTurnTraceIfStatus(storage.chatTurnTraces, prepared.turnId, ["running"], completionPatch);
+          trace = fencedWrite(() =>
+            patchChatTurnTraceIfStatus(storage.chatTurnTraces, prepared.turnId, ["running"], completionPatch),
+          );
         },
       },
     );
-    trace ??= patchChatTurnTraceIfStatus(
-      storage.chatTurnTraces,
-      prepared.turnId,
-      ["running", "completed"],
-      completionPatch,
+    trace ??= fencedWrite(() =>
+      patchChatTurnTraceIfStatus(storage.chatTurnTraces, prepared.turnId, ["running", "completed"], completionPatch),
     );
     const assistantMessage: ChatMessageRecord = {
       messageId: assistantMessageId,
@@ -1014,7 +1103,7 @@ export async function sendPreparedIntegrationChatTurn(
       toolRuns: [],
       citations: [],
     };
-    host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, prepared.turnId);
+    fencedWrite(() => host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, prepared.turnId));
     host.publishRealtime(
       "chat_thread_updated",
       "chat",
@@ -1114,27 +1203,29 @@ export async function sendPreparedIntegrationChatTurn(
       });
       throw new IntegrationDeliveryPostCommitError(prepared.turnId, deliveryEvidence, error);
     }
-    tryPatchChatTurnTraceIfStatus(storage.chatTurnTraces, prepared.turnId, CHAT_TURN_ACTIVE_STATUSES, {
-      status: "failed",
-      finishedAt: new Date().toISOString(),
-      retrieval: prepared.retrievalTrace,
-      reflection: {
-        attempted: false,
-        attemptCount: 0,
-        outcome: "not_needed",
-      },
-      proactive: {
-        runId: prepared.autonomy.lastProactiveRunId,
-        mode: prepared.autonomy.proactiveMode,
-      },
-      guidance: {
-        workspaceId: prepared.workspaceId,
-        globalFilesUsed: prepared.resolvedGuidance.globalFilesUsed,
-        workspaceFilesUsed: prepared.resolvedGuidance.workspaceFilesUsed,
-        truncated: prepared.resolvedGuidance.truncated,
-      },
-      citations: [],
-    });
+    fencedWrite(() =>
+      tryPatchChatTurnTraceIfStatus(storage.chatTurnTraces, prepared.turnId, CHAT_TURN_ACTIVE_STATUSES, {
+        status: "failed",
+        finishedAt: new Date().toISOString(),
+        retrieval: prepared.retrievalTrace,
+        reflection: {
+          attempted: false,
+          attemptCount: 0,
+          outcome: "not_needed",
+        },
+        proactive: {
+          runId: prepared.autonomy.lastProactiveRunId,
+          mode: prepared.autonomy.proactiveMode,
+        },
+        guidance: {
+          workspaceId: prepared.workspaceId,
+          globalFilesUsed: prepared.resolvedGuidance.globalFilesUsed,
+          workspaceFilesUsed: prepared.resolvedGuidance.workspaceFilesUsed,
+          truncated: prepared.resolvedGuidance.truncated,
+        },
+        citations: [],
+      }),
+    );
     throw error;
   } finally {
     detachAbortListener?.();

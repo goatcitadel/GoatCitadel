@@ -10,6 +10,7 @@ import type {
   ToolInvokeRequest,
   ToolPolicyConfig,
 } from "@goatcitadel/contracts";
+import { HEARTBEAT_READ_ONLY_ALLOW, HEARTBEAT_RESTRICTED_PROFILE } from "@goatcitadel/contracts";
 import { Storage } from "@goatcitadel/storage";
 import { ToolPolicyEngine } from "./engine.js";
 import { ToolRegistry } from "./tool-registry.js";
@@ -125,6 +126,20 @@ function createCustomAllowedRegistry(): ToolRegistry {
   ]);
 }
 
+function createHeartbeatBoundaryRegistry(): ToolRegistry {
+  return new ToolRegistry(
+    [...HEARTBEAT_READ_ONLY_ALLOW, "browser.search", "synthetic.safe", "ordinary.safe"].map((name) => ({
+      name,
+      category: "ops" as const,
+      riskLevel: "safe" as const,
+      requiresApproval: false,
+      description: `Registered policy-boundary test tool ${name}.`,
+      pack: "core" as const,
+      readOnly: true,
+    })),
+  );
+}
+
 const policyConfig: ToolPolicyConfig = {
   profiles: {
     danger: ["*"],
@@ -148,6 +163,211 @@ const host = (...parts: string[]): string => parts.join(".");
 const EXAMPLE_HOST = host("example", "com");
 const API_EXAMPLE_HOST = host("api", "example", "com");
 const BLOCKED_EXAMPLE_HOST = host("blocked", "example");
+
+describe("ToolPolicyEngine permission profile upper bound", () => {
+  it("executes the exact heartbeat read surface without materializing interactive approvals", async () => {
+    const storage = createStorageStub();
+    const engine = new ToolPolicyEngine(policyConfig, storage, createHeartbeatBoundaryRegistry());
+
+    for (const toolName of HEARTBEAT_READ_ONLY_ALLOW) {
+      const result = await engine.invoke({
+        toolName,
+        args: {},
+        agentId: "heartbeat",
+        sessionId: "session-heartbeat",
+        dryRun: true,
+        policyContext: {
+          permissionProfileId: HEARTBEAT_RESTRICTED_PROFILE.profileId,
+          permissionProfile: HEARTBEAT_RESTRICTED_PROFILE,
+        },
+      });
+      expect(result.outcome).toBe("executed");
+    }
+
+    expect(storage.approvals.create).not.toHaveBeenCalled();
+    expect(storage.approvals.createWithTtlDuration).not.toHaveBeenCalled();
+    expect(storage.pendingApprovalActions.upsertPending).not.toHaveBeenCalled();
+    expect(storage.approvalEvents.append).not.toHaveBeenCalled();
+  });
+
+  it("blocks an exact heartbeat tool when a new Ward would otherwise create an interactive approval", async () => {
+    const storage = createStorageStub();
+    Object.assign(storage, {
+      citadels: {
+        listWards: vi.fn((citadelId: string) =>
+          citadelId === "citadel-heartbeat"
+            ? [
+                {
+                  wardId: "ward-heartbeat-review",
+                  citadelId,
+                  name: "Review heartbeat reads",
+                  actionPattern: "time.now",
+                  effect: "require_approval",
+                  createdAt: "2026-07-15T00:00:00.000Z",
+                },
+              ]
+            : [],
+        ),
+      },
+    });
+    const engine = new ToolPolicyEngine(policyConfig, storage, createHeartbeatBoundaryRegistry());
+
+    const result = await engine.invoke({
+      toolName: "time.now",
+      args: {},
+      agentId: "heartbeat",
+      sessionId: "session-heartbeat",
+      citadelId: "citadel-heartbeat",
+      dryRun: true,
+      policyContext: {
+        permissionProfileId: HEARTBEAT_RESTRICTED_PROFILE.profileId,
+        permissionProfile: HEARTBEAT_RESTRICTED_PROFILE,
+      },
+    });
+
+    expect(result).toMatchObject({
+      outcome: "blocked",
+      audit: {
+        reasonCodes: expect.arrayContaining([
+          "citadel_ward_requires_approval",
+          "heartbeat_interactive_approval_forbidden",
+        ]),
+      },
+    });
+    expect(storage.toolAccessDecisions.record).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        allowed: false,
+        requiresApproval: false,
+        reasonCodes: expect.arrayContaining(["heartbeat_interactive_approval_forbidden"]),
+      }),
+    );
+    expect(storage.approvals.create).not.toHaveBeenCalled();
+    expect(storage.approvals.createWithTtlDuration).not.toHaveBeenCalled();
+    expect(storage.pendingApprovalActions.upsertPending).not.toHaveBeenCalled();
+    expect(storage.approvalEvents.append).not.toHaveBeenCalled();
+  });
+
+  it("keeps the heartbeat profile authoritative over broad config, agent allows, grants, and local override", () => {
+    const storage = createStorageStub();
+    const allowAllGrant = {
+      grantId: "grant-all",
+      toolPattern: "*",
+      decision: "allow",
+      scope: "session",
+      scopeRef: "session-heartbeat",
+      grantType: "persistent",
+      createdBy: "operator",
+      createdAt: "2026-07-15T00:00:00.000Z",
+    } as const;
+    vi.mocked(storage.toolGrants.list).mockReturnValue([allowAllGrant]);
+    const config: ToolPolicyConfig = {
+      ...policyConfig,
+      tools: { ...policyConfig.tools, allow: ["*"] },
+      agents: { heartbeat: { tools: { allow: ["*"] } } },
+    };
+    const engine = new ToolPolicyEngine(config, storage, createHeartbeatBoundaryRegistry());
+    const localOperatorOverride = {
+      overrideId: "override-heartbeat",
+      label: "Cannot widen a profile",
+      status: "active" as const,
+      scope: "session" as const,
+      scopeRef: "session-heartbeat",
+      operatorId: "operator",
+      reason: "Verify the active profile remains the upper bound.",
+      createdBy: "operator",
+      createdAt: "2026-07-15T00:00:00.000Z",
+      expiresAt: "2999-07-15T00:00:00.000Z",
+    };
+    const evaluate = (toolName: string) =>
+      engine.evaluateAccess({
+        toolName,
+        args: {},
+        agentId: "heartbeat",
+        sessionId: "session-heartbeat",
+        policyContext: {
+          permissionProfileId: HEARTBEAT_RESTRICTED_PROFILE.profileId,
+          permissionProfile: HEARTBEAT_RESTRICTED_PROFILE,
+          localOperatorOverrideId: localOperatorOverride.overrideId,
+          localOperatorOverride,
+        },
+      });
+
+    for (const toolName of HEARTBEAT_READ_ONLY_ALLOW) {
+      expect(evaluate(toolName)).toMatchObject({ allowed: true, requiresApproval: false });
+    }
+    for (const toolName of ["browser.search", "synthetic.safe"]) {
+      expect(evaluate(toolName)).toMatchObject({
+        allowed: false,
+        requiresApproval: false,
+        reasonCodes: ["permission_profile_upper_bound"],
+      });
+    }
+  });
+
+  it("preserves scoped grants inside an ordinary profile without allowing them to escape it", () => {
+    const storage = createStorageStub();
+    const allowAllGrant = {
+      grantId: "grant-ordinary",
+      toolPattern: "*",
+      decision: "allow",
+      scope: "session",
+      scopeRef: "session-ordinary",
+      grantType: "persistent",
+      createdBy: "operator",
+      createdAt: "2026-07-15T00:00:00.000Z",
+    } as const;
+    vi.mocked(storage.toolGrants.list).mockReturnValue([allowAllGrant]);
+    const profile = createPermissionProfile({ approvalMode: "approve_all", toolPatterns: ["ordinary.safe"] });
+    const engine = new ToolPolicyEngine(
+      { ...policyConfig, tools: { ...policyConfig.tools, allow: ["*"] } },
+      storage,
+      createHeartbeatBoundaryRegistry(),
+    );
+    const evaluate = (toolName: string) =>
+      engine.evaluateAccess({
+        toolName,
+        args: {},
+        agentId: "ordinary",
+        sessionId: "session-ordinary",
+        policyContext: { permissionProfileId: profile.profileId, permissionProfile: profile },
+      });
+
+    expect(evaluate("ordinary.safe")).toMatchObject({
+      allowed: true,
+      requiresApproval: false,
+      matchedGrantId: "grant-ordinary",
+    });
+    expect(evaluate("synthetic.safe")).toMatchObject({
+      allowed: false,
+      reasonCodes: ["permission_profile_upper_bound"],
+    });
+  });
+
+  it("preserves additive global and scoped-grant semantics when no permission profile is active", () => {
+    const storage = createStorageStub();
+    const allowGrant = {
+      grantId: "grant-no-profile",
+      toolPattern: "synthetic.safe",
+      decision: "allow",
+      scope: "session",
+      scopeRef: "session-no-profile",
+      grantType: "persistent",
+      createdBy: "operator",
+      createdAt: "2026-07-15T00:00:00.000Z",
+    } as const;
+    vi.mocked(storage.toolGrants.list).mockReturnValue([allowGrant]);
+    const engine = new ToolPolicyEngine(policyConfig, storage, createHeartbeatBoundaryRegistry());
+
+    expect(
+      engine.evaluateAccess({
+        toolName: "synthetic.safe",
+        args: {},
+        agentId: "ordinary",
+        sessionId: "session-no-profile",
+      }),
+    ).toMatchObject({ allowed: true, requiresApproval: false, matchedGrantId: "grant-no-profile" });
+  });
+});
 
 describe("ToolPolicyEngine grants", () => {
   it("passes grant list, create, and revoke operations through to storage", () => {

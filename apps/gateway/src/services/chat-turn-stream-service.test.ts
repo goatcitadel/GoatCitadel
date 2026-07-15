@@ -6,6 +6,12 @@ import { ChatTurnExecutionRegistry } from "./chat-turn-execution-registry.js";
 import type { ChatTurnStreamHost } from "./chat-turn-stream-service.js";
 import { routeWithModelRouter } from "./model-router-decision-service.js";
 
+const { isChatTurnCancelledErrorMock } = vi.hoisted(() => ({
+  isChatTurnCancelledErrorMock: vi.fn(
+    (error: unknown) => error instanceof Error && error.name === "ProviderCancelledError",
+  ),
+}));
+
 vi.mock("./chat-turn-helpers.js", () => ({
   buildDelegationFailureGuidance: () => "fallback guidance",
   buildEmptyAssistantTurnFallbackText: () => "Recovered empty assistant output.",
@@ -17,7 +23,7 @@ vi.mock("./chat-turn-helpers.js", () => ({
   dedupeChatCitations: (items: unknown[]) => items,
   isIncompleteDelegatedTraceFailure: (failure: { failureClass?: string } | undefined) =>
     failure?.failureClass === "tool_run_budget_exceeded",
-  isChatTurnCancelledError: () => false,
+  isChatTurnCancelledError: isChatTurnCancelledErrorMock,
   mergeExecutionPlanStepStatuses: (_steps: unknown, next: unknown) => next,
   patchChatTurnTraceIfStatus: (
     repository: {
@@ -1181,7 +1187,7 @@ describe("streamPreparedAgentChatTurn", () => {
     expect(chunks.some((chunk) => chunk.type === "capability_upgrade_suggestion")).toBe(true);
   });
 
-  it("flags post-turn hooks autonomous:false for an interactive (human) turn", async () => {
+  it("retires direct commitments and legacy provider schedulers for an interactive turn", async () => {
     const host = createHost();
     for await (const _chunk of streamPreparedAgentChatTurn(
       host,
@@ -1192,22 +1198,12 @@ describe("streamPreparedAgentChatTurn", () => {
     )) {
       // drain
     }
-    expect(host.recordTurnCommitments).toHaveBeenCalledWith(expect.objectContaining({ autonomous: false }));
-    expect(host.scheduleBackgroundReviewIfDue).toHaveBeenCalledWith(
-      expect.objectContaining({
-        autonomous: false,
-        turnId: "turn-1",
-        delegatedChild: false,
-      }),
-    );
-    expect(host.scheduleMemoryMaintenancePostTurnEvaluation).toHaveBeenCalledWith({
-      sessionId: "session-1",
-      turnId: "turn-1",
-      delegatedChild: false,
-    });
+    expect(host.recordTurnCommitments).not.toHaveBeenCalled();
+    expect(host.scheduleBackgroundReviewIfDue).not.toHaveBeenCalled();
+    expect(host.scheduleMemoryMaintenancePostTurnEvaluation).not.toHaveBeenCalled();
   });
 
-  it("marks delegated-child post-turn schedules explicitly", async () => {
+  it("does not run legacy provider schedulers for delegated-child streamed turns", async () => {
     const host = createHost();
     for await (const _chunk of streamPreparedAgentChatTurn(
       host,
@@ -1223,17 +1219,12 @@ describe("streamPreparedAgentChatTurn", () => {
       expect.objectContaining({ parentDelegationStepId: "run-1:step-1" }),
     );
 
-    expect(host.scheduleBackgroundReviewIfDue).toHaveBeenCalledWith(
-      expect.objectContaining({ turnId: "turn-1", delegatedChild: true }),
-    );
-    expect(host.scheduleMemoryMaintenancePostTurnEvaluation).toHaveBeenCalledWith({
-      sessionId: "session-1",
-      turnId: "turn-1",
-      delegatedChild: true,
-    });
+    expect(host.recordTurnCommitments).not.toHaveBeenCalled();
+    expect(host.scheduleBackgroundReviewIfDue).not.toHaveBeenCalled();
+    expect(host.scheduleMemoryMaintenancePostTurnEvaluation).not.toHaveBeenCalled();
   });
 
-  it("flags post-turn hooks autonomous:true for a heartbeat-restricted turn (P1-F2/F3 loop guard)", async () => {
+  it("retires autonomous direct commitments and provider schedulers", async () => {
     const host = createHost();
     for await (const _chunk of streamPreparedAgentChatTurn(
       host,
@@ -1244,10 +1235,9 @@ describe("streamPreparedAgentChatTurn", () => {
     )) {
       // drain
     }
-    // The classifier + background review must be told this is an autonomous turn
-    // so the host short-circuits them (no self-feeding cost-amplifying loop).
-    expect(host.recordTurnCommitments).toHaveBeenCalledWith(expect.objectContaining({ autonomous: true }));
-    expect(host.scheduleBackgroundReviewIfDue).toHaveBeenCalledWith(expect.objectContaining({ autonomous: true }));
+    expect(host.recordTurnCommitments).not.toHaveBeenCalled();
+    expect(host.scheduleBackgroundReviewIfDue).not.toHaveBeenCalled();
+    expect(host.scheduleMemoryMaintenancePostTurnEvaluation).not.toHaveBeenCalled();
   });
 
   it("persists advisory-only orchestration plans without delegated execution", async () => {
@@ -1537,6 +1527,42 @@ describe("streamPreparedAgentChatTurn", () => {
     );
     expect(host.markChatTurnCancelled).toHaveBeenCalledWith("session-1", "turn-1");
     expect(host.endActiveChatTurnExecution).toHaveBeenCalledWith("turn-1", controller);
+  });
+
+  it("does not let a provider cancellation-name spoof cancel an exact system heartbeat", async () => {
+    const host = createHost();
+    const providerError = Object.assign(new Error("provider supplied a cancellation-like error"), {
+      name: "ProviderCancelledError",
+    });
+    host.turnRuntime.runStream = vi.fn(async function* () {
+      yield* [] as Iterable<never>;
+      throw providerError;
+    }) as never;
+    const prepared = createPreparedTurn() as unknown as Record<string, unknown>;
+    prepared.serverOnlyPosture = {
+      kind: "system_heartbeat",
+      actorId: "system-heartbeat",
+      operation: "chat_system_heartbeat",
+      occurrenceId: "heartbeat-occurrence-1",
+      claimSha256: "a".repeat(64),
+      durableRunId: "run-1",
+    };
+
+    await expect(async () => {
+      for await (const _chunk of streamPreparedAgentChatTurn(
+        host,
+        "session-1",
+        { content: "heartbeat", mode: "chat" } as never,
+        prepared as never,
+        "chat_thread_turn_appended",
+        undefined,
+      )) {
+        // The provider throws before yielding any chunk.
+      }
+    }).rejects.toBe(providerError);
+
+    expect(host.markChatTurnCancelled).not.toHaveBeenCalled();
+    expect(host.endActiveChatTurnExecution).toHaveBeenCalled();
   });
 
   it("surfaces an authoritative cleanup settlement fault even when the turn signal is already aborted", async () => {

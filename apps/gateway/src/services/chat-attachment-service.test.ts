@@ -38,6 +38,14 @@ async function createHost(
     account: "operator",
     timestamp: now.toISOString(),
   });
+  storage.chatSessionLifecycles.initialize({
+    workspaceId,
+    sessionId: "sess-1",
+    actorId: "test-fixture",
+    idempotencyKey: "test:lifecycle:init:sess-1",
+    correlationId: "test:correlation:lifecycle:init:sess-1",
+    metadataTimestamp: now.toISOString(),
+  });
   storage.chatSessionMeta.patch(
     "sess-1",
     {

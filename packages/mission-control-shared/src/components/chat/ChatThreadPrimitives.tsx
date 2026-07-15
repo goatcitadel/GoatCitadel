@@ -3,6 +3,7 @@ import {
   isChatTurnActiveStatus,
   type ChatMode,
   type ChatStreamingPreview,
+  type ChatThreadSystemNoticeRecord,
   type ChatThreadTurnRecord,
 } from "@goatcitadel/contracts";
 import { Badge } from "../ui";
@@ -325,6 +326,26 @@ export function ChatThreadNotices({ notices }: { notices: ChatThreadNotice[] }) 
         </li>
       ))}
     </ul>
+  );
+}
+
+export function ChatThreadSystemNoticeCard({ notice }: { notice: ChatThreadSystemNoticeRecord }) {
+  return (
+    <section
+      className="mc-next-thread-system-notice"
+      aria-label="Heartbeat notification"
+      data-notice-id={notice.noticeId}
+    >
+      <div className="mc-next-thread-bubble assistant">
+        <p className="mc-next-thread-meta">
+          <strong>GoatCitadel</strong> · <ActorTimestamp timestamp={notice.message.timestamp} />{" "}
+          <Badge variant="outline" className="align-middle">
+            Heartbeat
+          </Badge>
+        </p>
+        <AssistantMessageRenderer role="assistant" content={notice.message.content} />
+      </div>
+    </section>
   );
 }
 

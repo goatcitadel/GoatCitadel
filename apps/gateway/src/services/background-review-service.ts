@@ -7,12 +7,6 @@ import type {
   OperatorProfileFact,
   OperatorProfileFactKind,
 } from "@goatcitadel/contracts";
-import type { RecordOperatorProfileFactsResult } from "./operator-profile-service.js";
-import type {
-  DraftSkillMutationInput,
-  PreparedSkillMutationPlan,
-  SkillMutationResult,
-} from "./skill-mutation-service.js";
 import { createUtilityModelUsageAttribution } from "./utility-model-usage-attribution.js";
 import { runBoundedUtilityModelCall } from "./utility-model-call.js";
 import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
@@ -21,19 +15,14 @@ import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-c
  * P2-S1 — Background-review (the self-improvement learning loop).
  *
  * After a *successful* root turn, the agent reflects on the just-completed
- * transcript and (a) distills durable, cross-session operator facts and (b) — if
- * a genuinely reusable procedure emerged — authors or patches ONE skill from
- * experience. This is Hermes' core differentiator ported onto GoatCitadel's
- * governance spine, so the agent improves across sessions.
+ * transcript and produces content-minimized evidence for later governed review.
+ * It never writes OperatorProfile state, skill lifecycle state, or skill files.
  *
  * Implementation: the proven, lower-risk **structured-extraction** pattern (the
  * same shape as the F3 commitment classifier) rather than a replayed,
  * tool-restricted delegated agent fork. We make cheap, read-only model call(s)
- * that emit strict JSON (no tool calls), then persist via the EXISTING governed
- * services — {@link recordOperatorProfileFacts} (secret-blocked, snapshotted,
- * autonomy-gated) and the skill mutation path (jailed write, validated,
- * candidate-only, snapshotted; auto-promotion is the governed activation path's
- * job, never this service's).
+ * that emit strict JSON (no tool calls). Durable callers may retain only counts
+ * and stable fingerprints; raw fact/suggestion content remains response-local.
  *
  * Safety:
  *   - Runs ONLY on successful, human, non-eval, non-replay sessions (the caller
@@ -41,11 +30,9 @@ import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-c
  *   - An ANTI-SELF-POISONING filter drops transient / environment-dependent
  *     failures and negative tool claims so the agent cannot harden a one-off
  *     error into a durable rule or a refusal.
- *   - Secrets are always blocked (the operator-profile gate enforces this).
- *   - With autonomy OFF every write is propose-only (the governed services
- *     enforce this) — this service still runs the extraction but persists nothing
- *     that would auto-apply.
- *   - The whole pass is best-effort: any model/parse/persist error is swallowed
+ *   - It has no mutation dependencies, so extraction cannot directly promote
+ *     memory or skill state even if autonomy is enabled.
+ *   - The whole pass is best-effort: any model/parse error is swallowed
  *     so it can never crash or fail the turn path.
  */
 
@@ -54,7 +41,7 @@ const MAX_TRANSCRIPT_CHARS = 8_000;
 const MAX_FACTS_PER_REVIEW = 8;
 const MAX_FACT_LENGTH = 280;
 const MIN_FACT_CONFIDENCE = 0.6;
-const MAX_SKILL_MARKDOWN_CHARS = 8_000;
+const MAX_SKILL_SUMMARY_CHARS = 400;
 
 const VALID_FACT_KINDS: readonly OperatorProfileFactKind[] = ["preference", "goal", "constraint", "fact"];
 
@@ -88,11 +75,7 @@ export interface BackgroundReviewMemoryFact {
 export interface BackgroundReviewSkillSuggestion {
   /** Whether the model judged a reusable procedure worth authoring emerged. */
   shouldAuthor: boolean;
-  /** Optional stable skill id; derived from frontmatter name when omitted. */
-  skillId?: string;
-  /** The full `SKILL.md` (frontmatter + body) to author/patch. */
-  skillMarkdown?: string;
-  /** Short human-readable summary persisted into provenance. */
+  /** Response-local description of the reusable procedure. Never persisted raw. */
   summary?: string;
 }
 
@@ -128,19 +111,18 @@ export interface BackgroundReviewUsageLineage {
 export interface BackgroundReviewResult {
   /** Whether the review actually ran (guards passed + transcript present). */
   ran: boolean;
-  /** Facts that survived filtering and were handed to the profile service. */
+  /** Response-local facts that survived filtering. They are never promoted here. */
   memoryFacts: OperatorProfileFact[];
-  /** The profile write result, when a memory write was attempted. */
-  memoryWrite?: RecordOperatorProfileFactsResult;
-  /** The skill mutation result, when a skill was authored/patched. */
-  skillMutation?: SkillMutationResult;
-  /** Skill suggestion outcome: did the model propose authoring + did it apply. */
+  /** Stable, content-free evidence suitable for durable receipts. */
+  memoryEvidenceFingerprints: string[];
+  /** Whether the model found a possible reusable procedure. No direct promotion occurs. */
   skillProposed: boolean;
-  /**
-   * A one-line, user-visible summary marker (Hermes "💾 Self-improvement
-   * review: …" spirit). Present ONLY when something was actually written.
-   */
+  /** Stable fingerprint of the response-local suggestion, when one exists. */
+  skillEvidenceFingerprint?: string;
+  /** @deprecated Retained as an always-absent compatibility field during shared-owner migration. */
   summaryMarker?: string;
+  /** @deprecated Background review never creates a mutation; retained only for source compatibility. */
+  skillMutation?: { skillId: string };
 }
 
 export interface BackgroundReviewModelDefaults {
@@ -158,26 +140,6 @@ export interface BackgroundReviewServiceDeps {
   resolveModelDefaults(): BackgroundReviewModelDefaults;
   /** Resolve the execution api-style so we can gate `response_format`/`temperature`. */
   resolveApiStyle(providerId?: string, model?: string): LlmApiStyle;
-  /**
-   * Persist durable operator facts via the governed operator-profile service
-   * (secrets blocked, snapshotted, autonomy-gated). Returns the write outcome.
-   */
-  recordOperatorProfileFacts(workspaceId: string, facts: OperatorProfileFact[]): RecordOperatorProfileFactsResult;
-  /**
-   * Author or patch a single skill via the governed skill-mutation service
-   * (validated, jailed, candidate-only, snapshotted). Returns the mutation
-   * result. Implementations must NOT promote the skill to callable here.
-   */
-  draftSkillMutation(input: {
-    skillMarkdown: string;
-    skillId?: string;
-    evaluationRunId?: string;
-    sourceTurnId?: string;
-    summary?: string;
-  }): Promise<SkillMutationResult>;
-  prepareDurableSkillMutation(input: DraftSkillMutationInput): PreparedSkillMutationPlan;
-  applyPreparedSkillMutationFilesSync(plan: PreparedSkillMutationPlan): void;
-  commitPreparedSkillMutation(plan: PreparedSkillMutationPlan): SkillMutationResult;
   now?: () => Date;
   timeoutMs?: number;
 }
@@ -191,7 +153,12 @@ export class BackgroundReviewService {
    * is empty, and swallows every downstream error. Never throws.
    */
   public async runBackgroundReview(input: BackgroundReviewTurnInput): Promise<BackgroundReviewResult> {
-    const empty: BackgroundReviewResult = { ran: false, memoryFacts: [], skillProposed: false };
+    const empty: BackgroundReviewResult = {
+      ran: false,
+      memoryFacts: [],
+      memoryEvidenceFingerprints: [],
+      skillProposed: false,
+    };
 
     // Re-assert the safety guards even though the caller resolves them: never run
     // on disabled-autonomy, eval-integrity, non-human, or failed turns.
@@ -209,7 +176,7 @@ export class BackgroundReviewService {
       return empty;
     }
 
-    // (b) Memory extraction → durable facts → governed profile write.
+    // Memory/skill model outputs are response-local. This service has no write ports.
     const usageLineage: BackgroundReviewUsageLineage = {
       workspaceId: input.workspaceId,
       sessionId: input.sessionId,
@@ -217,26 +184,14 @@ export class BackgroundReviewService {
       effectExecutionId: input.effectExecutionId,
     };
     const memoryFacts = await this.extractMemoryFacts(transcript, input.signal, usageLineage);
-    let memoryWrite: RecordOperatorProfileFactsResult | undefined;
-    if (memoryFacts.length > 0) {
-      memoryWrite = this.safeRecordFacts(input.workspaceId, memoryFacts, Boolean(input.effectExecutionId));
-    }
-
-    // (c) Skill suggestion → optionally author/patch ONE skill (candidate).
     const suggestion = await this.suggestSkill(transcript, input.signal, usageLineage);
-    let skillMutation: SkillMutationResult | undefined;
-    if (suggestion.shouldAuthor && suggestion.skillMarkdown) {
-      skillMutation = await this.safeDraftSkill(suggestion, input.sourceTurnId, input.effectExecutionId);
-    }
-
-    const summaryMarker = buildSummaryMarker(memoryWrite, skillMutation);
+    const skillEvidenceFingerprint = buildBackgroundReviewSkillEvidenceFingerprint(suggestion);
     return {
       ran: true,
       memoryFacts,
-      ...(memoryWrite ? { memoryWrite } : {}),
-      ...(skillMutation ? { skillMutation } : {}),
+      memoryEvidenceFingerprints: buildBackgroundReviewMemoryEvidenceFingerprints(memoryFacts),
       skillProposed: suggestion.shouldAuthor,
-      ...(summaryMarker ? { summaryMarker } : {}),
+      ...(skillEvidenceFingerprint ? { skillEvidenceFingerprint } : {}),
     };
   }
 
@@ -304,37 +259,6 @@ export class BackgroundReviewService {
     return this.suggestSkill(buildTranscript(userText, assistantText), signal, usageLineage);
   }
 
-  /** Commit precomputed facts through the existing governed profile boundary. */
-  public recordMemoryFacts(
-    workspaceId: string,
-    facts: OperatorProfileFact[],
-    options: { strict?: boolean } = {},
-  ): RecordOperatorProfileFactsResult | undefined {
-    return this.safeRecordFacts(workspaceId, facts, options.strict === true);
-  }
-
-  /** Validate and freeze a provider suggestion before durable persistence. */
-  public prepareSuggestedSkillMutation(
-    suggestion: BackgroundReviewSkillSuggestion,
-    sourceTurnId: string | undefined,
-    effectExecutionId: string,
-  ): PreparedSkillMutationPlan | undefined {
-    if (!suggestion.shouldAuthor || !suggestion.skillMarkdown) {
-      return undefined;
-    }
-    return this.deps.prepareDurableSkillMutation(buildSkillMutationInput(suggestion, sourceTurnId, effectExecutionId));
-  }
-
-  /** Create or verify the exact plan-owned files outside any database transaction. */
-  public applyPreparedSkillMutationFiles(plan: PreparedSkillMutationPlan): void {
-    this.deps.applyPreparedSkillMutationFilesSync(plan);
-  }
-
-  /** Commit lifecycle state only; the durable caller owns the receipt transaction. */
-  public commitPreparedSkillMutation(plan: PreparedSkillMutationPlan): SkillMutationResult {
-    return this.deps.commitPreparedSkillMutation(plan);
-  }
-
   // ── internals ────────────────────────────────────────────────────────
 
   private async callStrictJson(
@@ -395,74 +319,6 @@ export class BackgroundReviewService {
     }
     return extractMessageContent(response);
   }
-
-  private safeRecordFacts(
-    workspaceId: string,
-    facts: OperatorProfileFact[],
-    strictPersistence: boolean,
-  ): RecordOperatorProfileFactsResult | undefined {
-    try {
-      return this.deps.recordOperatorProfileFacts(workspaceId, facts);
-    } catch (error) {
-      if (strictPersistence) {
-        throw error;
-      }
-      // A persistence failure must never crash the background pass.
-      return undefined;
-    }
-  }
-
-  private async safeDraftSkill(
-    suggestion: BackgroundReviewSkillSuggestion,
-    sourceTurnId?: string,
-    effectExecutionId?: string,
-  ): Promise<SkillMutationResult | undefined> {
-    if (!suggestion.skillMarkdown) {
-      return undefined;
-    }
-    try {
-      return await this.deps.draftSkillMutation(buildSkillMutationInput(suggestion, sourceTurnId, effectExecutionId));
-    } catch (error) {
-      if (effectExecutionId) {
-        throw error;
-      }
-      // Validation/jail/secret rejection (or any write error) is non-fatal: the
-      // skill mutation service rejects unsafe drafts by throwing, and a rejected
-      // draft must not crash the review.
-      return undefined;
-    }
-  }
-}
-
-function buildSkillMutationInput(
-  suggestion: BackgroundReviewSkillSuggestion,
-  sourceTurnId?: string,
-  effectExecutionId?: string,
-): {
-  skillMarkdown: string;
-  skillId?: string;
-  evaluationRunId?: string;
-  sourceTurnId?: string;
-  summary?: string;
-} {
-  if (!suggestion.skillMarkdown) {
-    throw new Error("A skill mutation requires non-empty Markdown.");
-  }
-  return {
-    skillMarkdown: suggestion.skillMarkdown,
-    ...(effectExecutionId
-      ? { skillId: buildBackgroundReviewEffectSkillId(effectExecutionId), evaluationRunId: effectExecutionId }
-      : suggestion.skillId
-        ? { skillId: suggestion.skillId }
-        : {}),
-    ...(sourceTurnId ? { sourceTurnId } : {}),
-    ...(suggestion.summary ? { summary: suggestion.summary } : {}),
-  };
-}
-
-function buildBackgroundReviewEffectSkillId(effectExecutionId: string): string {
-  const digest = createHash("sha256").update(effectExecutionId).digest("hex").slice(0, 24);
-  return `background-review-${digest}`;
 }
 
 // ── pure helpers ───────────────────────────────────────────────────────
@@ -501,27 +357,24 @@ function buildMemoryUserPrompt(transcript: string): string {
 function buildSkillSystemPrompt(): string {
   return (
     "You review a single completed chat transcript and decide whether a REUSABLE, repeatable " +
-    "procedure emerged that is worth capturing as a reusable skill for future sessions — a " +
-    "generalizable method, not a one-off answer.\n\n" +
-    "Author a skill ONLY when ALL hold:\n" +
+    "procedure emerged that may be worth a later governed skill proposal — a generalizable " +
+    "method, not a one-off answer. You produce evidence only and never author a skill.\n\n" +
+    "Mark a possible procedure ONLY when ALL hold:\n" +
     "- A concrete, repeatable procedure was demonstrated (steps that would help next time).\n" +
     "- It generalizes beyond this exact request.\n" +
     "- It does NOT encode transient failures, environment quirks, or 'tool X is broken' claims.\n" +
     "- It contains NO secrets, credentials, network calls, scripts, or executable commands.\n\n" +
-    "If no durable procedure emerged, set shouldAuthor=false and omit skillMarkdown. Author AT MOST " +
-    "ONE skill. The skill body is plain Markdown documentation (frontmatter + prose steps), never " +
-    "code to execute. Return STRICT JSON only."
+    "If no durable procedure emerged, set shouldAuthor=false and omit summary. Never emit Markdown, " +
+    "code, commands, or an activation request. Return STRICT JSON only."
   );
 }
 
 function buildSkillUserPrompt(transcript: string): string {
   return (
-    "From the transcript below, decide whether to author one reusable skill.\n" +
-    'Return an object: { "shouldAuthor", "skillId", "skillMarkdown", "summary" }.\n' +
+    "From the transcript below, decide whether one reusable procedure may merit governed review.\n" +
+    'Return an object: { "shouldAuthor", "summary" }.\n' +
     "- shouldAuthor: boolean — true only if a genuinely reusable procedure emerged\n" +
-    "- skillId: optional short slug (e.g. 'summarize-csv-exports'); omit to derive from the title\n" +
-    "- skillMarkdown: the full SKILL.md (YAML frontmatter with name + description, then Markdown body)\n" +
-    "- summary: a one-line description of what the skill captures\n\n" +
+    "- summary: a short, non-sensitive description of the procedure; no Markdown or commands\n\n" +
     `TRANSCRIPT:\n${transcript}`
   );
 }
@@ -593,6 +446,12 @@ function normalizeFact(entry: unknown): OperatorProfileFact | undefined {
   if (isSelfPoisoning(content)) {
     return undefined;
   }
+  // The former OperatorProfile mutation boundary also blocked secrets. Because
+  // this service now persists only fingerprints, keep the same gate before a
+  // secret can influence even derived durable evidence.
+  if (looksSensitiveEvidence(content)) {
+    return undefined;
+  }
   const confidence = normalizeConfidence(entry.confidence);
   // Confidence-gate: only durable, high-confidence facts persist.
   if (confidence < MIN_FACT_CONFIDENCE) {
@@ -610,40 +469,40 @@ function parseSkillSuggestion(content: string): BackgroundReviewSkillSuggestion 
   if (!shouldAuthor) {
     return { shouldAuthor: false };
   }
-  const skillMarkdown = normalizeText(parsed.skillMarkdown, MAX_SKILL_MARKDOWN_CHARS, { trim: false });
-  if (skillMarkdown === undefined) {
-    // Model said author but gave nothing usable: treat as no-op.
+  const summary = normalizeText(parsed.summary, MAX_SKILL_SUMMARY_CHARS);
+  if (summary === undefined || looksUnsafeSkillEvidence(summary)) {
     return { shouldAuthor: false };
   }
-  const skillId = normalizeSlug(parsed.skillId);
-  const summary = normalizeText(parsed.summary, MAX_FACT_LENGTH);
   return {
     shouldAuthor: true,
-    skillMarkdown,
-    ...(skillId ? { skillId } : {}),
-    ...(summary ? { summary } : {}),
+    summary,
   };
 }
 
-function buildSummaryMarker(
-  memoryWrite: RecordOperatorProfileFactsResult | undefined,
-  skillMutation: SkillMutationResult | undefined,
+export function buildBackgroundReviewMemoryEvidenceFingerprints(facts: OperatorProfileFact[]): string[] {
+  const fingerprints = facts.flatMap((fact) => {
+    const normalized = normalizeFact(fact);
+    return normalized
+      ? [
+          stableEvidenceFingerprint(
+            `${normalized.kind}\n${normalized.content.trim().toLowerCase()}\n${normalized.confidence.toFixed(6)}`,
+          ),
+        ]
+      : [];
+  });
+  return [...new Set(fingerprints)].sort((left, right) => left.localeCompare(right));
+}
+
+export function buildBackgroundReviewSkillEvidenceFingerprint(
+  suggestion: BackgroundReviewSkillSuggestion,
 ): string | undefined {
-  const parts: string[] = [];
-  if (memoryWrite && memoryWrite.outcome === "applied" && memoryWrite.record) {
-    // Only count it as "remembered" when something actually applied (not blocked
-    // / proposed-only under autonomy-off).
-    parts.push("updated durable memory");
-  } else if (memoryWrite && memoryWrite.outcome === "proposed") {
-    parts.push("proposed durable memory");
-  }
-  if (skillMutation) {
-    parts.push(`drafted skill "${skillMutation.skillId}"`);
-  }
-  if (parts.length === 0) {
+  if (!suggestion.shouldAuthor) {
     return undefined;
   }
-  return `💾 Self-improvement review: ${parts.join("; ")}.`;
+  const summary = normalizeText(suggestion.summary, MAX_SKILL_SUMMARY_CHARS);
+  return summary && !looksUnsafeSkillEvidence(summary)
+    ? stableEvidenceFingerprint(summary.trim().toLowerCase())
+    : undefined;
 }
 
 // ── primitive normalizers ──────────────────────────────────────────────
@@ -681,19 +540,6 @@ function normalizeText(value: unknown, maxLength: number, options: { trim?: bool
     return undefined;
   }
   return truncate(candidate, maxLength);
-}
-
-function normalizeSlug(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const slug = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 120);
-  return slug.length > 0 ? slug : undefined;
 }
 
 function parseLooseJson(content: string): unknown {
@@ -744,6 +590,26 @@ function extractMessageContent(response: ChatCompletionResponse): string {
 
 function truncate(value: string, maxLength: number): string {
   return value.length <= maxLength ? value : `${value.slice(0, maxLength)}...`;
+}
+
+function stableEvidenceFingerprint(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function looksUnsafeSkillEvidence(value: string): boolean {
+  return (
+    /(^|\s)(?:rm\s+-|del\s+\/|curl\s+|wget\s+|powershell\s+|bash\s+|cmd\s+\/)/i.test(value) ||
+    looksSensitiveEvidence(value) ||
+    /```|---\s*$|<script/i.test(value)
+  );
+}
+
+function looksSensitiveEvidence(value: string): boolean {
+  return (
+    /api[_-]?key|token|secret|password|private[_-]?key|bearer\s+[a-z0-9._-]+/i.test(value) ||
+    /\bsk-[a-z0-9-]{8,}\b/i.test(value) ||
+    /\bghp_[a-z0-9]{10,}\b/i.test(value)
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

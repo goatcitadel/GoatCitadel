@@ -6,7 +6,10 @@ import path from "node:path";
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
+import { DatabaseSync } from "node:sqlite";
 import { createDatabase } from "./sqlite.js";
+import { ChatSessionLifecycleRepository } from "./chat-session-lifecycle-repo.js";
+import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
 
 const createdFiles: string[] = [];
 
@@ -36,7 +39,423 @@ describe("sqlite schema migrations", () => {
     assert.equal(rows.length >= 4, true);
     assert.equal(rows[0]?.version, 1);
     assert.equal(rows[rows.length - 1]?.version, rows.length);
+    assert.deepEqual(
+      { ...rows.at(-1) },
+      {
+        version: 174,
+        name: "durable_heartbeat_occurrence_authority",
+      },
+    );
     db.close();
+  });
+
+  it("keeps migration 174 content-free, deferred, append-only, and recovery-indexed", () => {
+    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-hx411-174-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const db = createDatabase({ dbPath });
+
+    const columns = db.prepare("PRAGMA table_info(chat_heartbeat_occurrences)").all() as Array<{
+      name: string;
+      notnull: number;
+    }>;
+    const columnNames = columns.map((column) => column.name);
+    for (const required of [
+      "occurrence_id",
+      "admission_id",
+      "user_message_id",
+      "assistant_message_id",
+      "turn_id",
+      "expected_durable_run_id",
+      "durable_run_id",
+      "capability_profile_id",
+      "capability_profile_hash",
+      "state",
+      "revision",
+      "updated_at",
+    ]) {
+      assert.ok(columnNames.includes(required), `expected heartbeat occurrence column ${required}`);
+    }
+    assert.equal(columns.find((column) => column.name === "durable_run_id")?.notnull, 0);
+    assert.equal(columns.find((column) => column.name === "capability_profile_id")?.notnull, 0);
+    assert.equal(columns.find((column) => column.name === "capability_profile_hash")?.notnull, 0);
+    for (const forbidden of [
+      "prompt",
+      "response",
+      "content",
+      "message_body",
+      "tool_result",
+      "provider_payload",
+      "request_json",
+      "response_json",
+    ]) {
+      assert.equal(
+        columnNames.some((column) => column.toLowerCase().includes(forbidden)),
+        false,
+      );
+    }
+
+    const tableSql = (
+      db
+        .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'chat_heartbeat_occurrences'")
+        .get() as { sql: string }
+    ).sql;
+    assert.equal((tableSql.match(/DEFERRABLE INITIALLY DEFERRED/gu) ?? []).length, 3);
+    assert.match(tableSql, /durable_run_id IS NOT NULL AND durable_run_id = expected_durable_run_id/gu);
+    assert.match(tableSql, /CHECK\(admission_material_sha256 = frozen_request_sha256\)/u);
+    assert.match(tableSql, /user_message_id TEXT NOT NULL UNIQUE/gu);
+    assert.match(tableSql, /assistant_message_id TEXT NOT NULL UNIQUE/gu);
+    assert.doesNotMatch(tableSql, /dead_lettered/u);
+
+    const indexes = db
+      .prepare("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'chat_heartbeat_occurrences'")
+      .all() as Array<{ name: string; sql: string | null }>;
+    assert.match(
+      indexes.find((index) => index.name === "idx_chat_heartbeat_occurrences_one_open")?.sql ?? "",
+      /UNIQUE INDEX[\s\S]*WHERE state IN \('admitted', 'durable_bound'\)/u,
+    );
+    assert.match(
+      indexes.find((index) => index.name === "idx_chat_heartbeat_occurrences_recovery")?.sql ?? "",
+      /\(state, updated_at, occurrence_id\)/u,
+    );
+
+    const triggers = db
+      .prepare("SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'chat_heartbeat_occurrences'")
+      .all() as Array<{ name: string; sql: string }>;
+    assert.deepEqual(triggers.map((trigger) => trigger.name).sort(), [
+      "trg_chat_heartbeat_occurrences_insert_guard",
+      "trg_chat_heartbeat_occurrences_no_delete",
+      "trg_chat_heartbeat_occurrences_terminal_evidence_guard",
+      "trg_chat_heartbeat_occurrences_transition_guard",
+    ]);
+    assert.match(
+      triggers.find((trigger) => trigger.name.endsWith("insert_guard"))?.sql ?? "",
+      /admission\.operation = 'chat_system_heartbeat'[\s\S]*prefs\.last_proactive_run_id = NEW\.occurrence_id/u,
+    );
+    assert.match(
+      triggers.find((trigger) => trigger.name.endsWith("insert_guard"))?.sql ?? "",
+      /NEW\.admission_material_sha256 <> NEW\.frozen_request_sha256/u,
+    );
+    assert.match(
+      triggers.find((trigger) => trigger.name.endsWith("transition_guard"))?.sql ?? "",
+      /NEW\.revision <> OLD\.revision \+ 1[\s\S]*NEW\.durable_run_id <> OLD\.expected_durable_run_id/u,
+    );
+    const terminalGuardSql = triggers.find((trigger) => trigger.name.endsWith("terminal_evidence_guard"))?.sql ?? "";
+    assert.match(terminalGuardSql, /heartbeatDecisionReceipt[\s\S]*heartbeatDecisionRawOutput/u);
+    assert.match(terminalGuardSql, /gc_sha256\(gc_canonical_json/u);
+    assert.match(terminalGuardSql, /gc_js_trim/u);
+    assert.match(terminalGuardSql, /gc_unicode_scalar_length/u);
+    assert.match(terminalGuardSql, /heartbeat_input[\s\S]*trace\.user_message_id/u);
+    assert.match(terminalGuardSql, /message\.actor_type = 'system'[\s\S]*message\.actor_id = 'system-heartbeat'/u);
+    assert.match(terminalGuardSql, /heartbeatCleanup\.status'\) = 'not_required'/u);
+    assert.match(terminalGuardSql, /generalChatPostCommit\.completedEffects'\) = 0/u);
+    assert.match(
+      triggers.find((trigger) => trigger.name.endsWith("no_delete"))?.sql ?? "",
+      /BEFORE DELETE ON chat_heartbeat_occurrences/u,
+    );
+    const admissionGuardSql = (
+      db
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'trg_chat_session_mutation_admissions_update_guard'",
+        )
+        .get() as { sql: string }
+    ).sql;
+    assert.match(admissionGuardSql, /heartbeat occurrence request-runtime reclaim/u);
+    assert.match(
+      admissionGuardSql,
+      /julianday\(OLD\.runtime_lease_expires_at\) <= julianday\(NEW\.runtime_last_heartbeat_at\)[\s\S]*NEW\.runtime_lease_expires_at = strftime\([\s\S]*'\+60 seconds'[\s\S]*occurrence\.state = 'admitted'/u,
+    );
+    const reclaimStart = admissionGuardSql.indexOf("heartbeat occurrence request-runtime reclaim");
+    const reclaimEnd = admissionGuardSql.indexOf(
+      "OR (NEW.status = 'active' AND OLD.status = 'active'\n          AND OLD.runtime_lease_relinquished_at IS NULL\n          AND NEW.runtime_lease_relinquished_at IS NOT NULL",
+      reclaimStart,
+    );
+    assert.ok(reclaimStart >= 0 && reclaimEnd > reclaimStart);
+    assert.doesNotMatch(admissionGuardSql.slice(reclaimStart, reclaimEnd), /julianday\('now'\)/u);
+    assert.match(admissionGuardSql, /heartbeat preemption terminal timestamp evidence/u);
+    assert.match(
+      admissionGuardSql,
+      /occurrence\.frozen_request_sha256 = OLD\.material_sha256[\s\S]*occurrence\.aggregate_revision = OLD\.aggregate_revision[\s\S]*occurrence\.controller_generation = OLD\.controller_generation/u,
+    );
+    assert.match(
+      admissionGuardSql,
+      /julianday\(OLD\.runtime_lease_expires_at\) > julianday\('now'\)[\s\S]*NEW\.runtime_lease_revision = OLD\.runtime_lease_revision \+ 1/u,
+    );
+    const controlEventTableSql = (
+      db
+        .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'chat_session_control_events'")
+        .get() as { sql: string }
+    ).sql;
+    assert.match(controlEventTableSql, /reason_code[\s\S]*'heartbeat_preempted'/u);
+    const preemptionEventGuard = (
+      db
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'trg_chat_session_control_events_heartbeat_preempted_guard'",
+        )
+        .get() as { sql: string }
+    ).sql;
+    assert.match(
+      preemptionEventGuard,
+      /NEW\.next_generation = NEW\.previous_generation \+ 1[\s\S]*NEW\.actor_kind = 'operator'/u,
+    );
+    assert.match(preemptionEventGuard, /prior\.lease_state = 'operator_active'[\s\S]*prior\.is_current = 1/u);
+    assert.doesNotMatch(preemptionEventGuard, /julianday\('now'\)|strftime\([^)]*'now'/u);
+    const preemptionGrantGuard = (
+      db
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'trg_chat_session_control_grants_heartbeat_preempted_guard'",
+        )
+        .get() as { sql: string }
+    ).sql;
+    assert.match(
+      preemptionGrantGuard,
+      /event_row\.reason_code = 'heartbeat_preempted'[\s\S]*event_row\.created_at = NEW\.created_at/u,
+    );
+    db.close();
+  });
+
+  it("does not record 173 when its authority predecessors are missing", () => {
+    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-hx411-missing-predecessors-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const partial = new DatabaseSync(dbPath);
+    partial.exec(`
+      CREATE TABLE schema_migrations (
+        version INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        applied_at TEXT NOT NULL
+      );
+      WITH RECURSIVE versions(version) AS (
+        SELECT 1
+        UNION ALL
+        SELECT version + 1 FROM versions WHERE version < 172
+      )
+      INSERT INTO schema_migrations(version, name, applied_at)
+      SELECT version, 'predecessor-' || version, '2026-07-15T00:00:00.000Z'
+      FROM versions;
+    `);
+    partial.close();
+
+    assert.throws(
+      () => createDatabase({ dbPath }),
+      /migration 173 requires chat_session_meta and chat_session_control_grants predecessors/iu,
+    );
+    const inspect = new DatabaseSync(dbPath);
+    assert.equal(inspect.prepare("SELECT 1 FROM schema_migrations WHERE version = 173").get(), undefined);
+    assert.equal(
+      inspect
+        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'chat_session_lifecycle_intents'")
+        .get(),
+      undefined,
+    );
+    inspect.close();
+  });
+
+  it("upgrades 172 to 173 once and permits only exact deletion binding for legacy metadata", () => {
+    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-hx411-173-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const before = createDatabase({ dbPath });
+    new ChatSessionMetaRepository(before).ensure("legacy-session", "2026-07-14T00:00:00.000Z", "legacy-workspace");
+    rewindSessionLifecycleMigration(before);
+    seedLegacyCapabilityProfile(before, {
+      profileId: "legacy-profile",
+      turnId: "legacy-turn",
+      sessionId: "legacy-session",
+      workspaceId: "legacy-workspace",
+      profileHash: "a".repeat(64),
+    });
+    seedLegacyRoutedContextSnapshot(before, {
+      snapshotId: "legacy-snapshot",
+      profileId: "legacy-profile",
+      profileHash: "a".repeat(64),
+      turnId: "legacy-turn",
+      sessionId: "legacy-session",
+      workspaceId: "legacy-workspace",
+    });
+    before.close();
+
+    const migrated = createDatabase({ dbPath });
+    assert.equal(
+      (
+        migrated
+          .prepare("SELECT lifecycle_intent_id FROM chat_session_meta WHERE session_id = 'legacy-session'")
+          .get() as { lifecycle_intent_id: string | null }
+      ).lifecycle_intent_id,
+      null,
+    );
+    assert.equal(
+      (
+        migrated.prepare("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 173").get() as {
+          count: number;
+        }
+      ).count,
+      1,
+    );
+    assert.deepEqual(
+      {
+        ...(migrated
+          .prepare(
+            `SELECT binding.turn_id, profile_binding.profile_id, profile_binding.profile_hash,
+                    binding.workspace_id, binding.session_id,
+                    binding.session_incarnation_id, binding.admission_id
+             FROM chat_turn_session_incarnation_bindings binding
+             JOIN chat_turn_capability_profile_incarnation_bindings profile_binding
+               ON profile_binding.turn_id = binding.turn_id
+             WHERE binding.turn_id = 'legacy-turn'`,
+          )
+          .get() as Record<string, unknown>),
+      },
+      {
+        turn_id: "legacy-turn",
+        profile_id: "legacy-profile",
+        profile_hash: "a".repeat(64),
+        workspace_id: "legacy-workspace",
+        session_id: "legacy-session",
+        session_incarnation_id: "legacy-session-incarnation:legacy-session",
+        admission_id: null,
+      },
+    );
+    for (const table of [
+      "chat_session_lifecycle_intents",
+      "chat_session_mutation_admissions",
+      "chat_session_mutation_admission_events",
+    ]) {
+      assert.equal(
+        (
+          migrated
+            .prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = ?")
+            .get(table) as { count: number }
+        ).count,
+        1,
+      );
+    }
+    assert.throws(
+      () =>
+        migrated
+          .prepare("UPDATE chat_session_meta SET lifecycle_intent_id = 'forged' WHERE session_id = 'legacy-session'")
+          .run(),
+      /lifecycle intent/iu,
+    );
+    const lifecycle = new ChatSessionLifecycleRepository(migrated);
+    migrated.transaction("immediate", () => {
+      lifecycle.deleteTree(
+        {
+          workspaceId: "legacy-workspace",
+          rootSessionId: "legacy-session",
+          expectedRootRevision: 1,
+          actorId: "operator-a",
+          idempotencyKey: "lifecycle:delete:legacy-session",
+          correlationId: "correlation:lifecycle:delete:legacy-session",
+        },
+        () => undefined,
+      );
+    });
+    assert.equal(
+      migrated.prepare("SELECT 1 FROM chat_session_meta WHERE session_id = 'legacy-session'").get(),
+      undefined,
+    );
+    migrated.close();
+
+    const replay = createDatabase({ dbPath });
+    assert.equal(
+      (replay.prepare("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 173").get() as { count: number })
+        .count,
+      1,
+    );
+    replay.close();
+  });
+
+  it("rolls back 173 for zero, duplicate, and orphan current-control corruption", () => {
+    for (const variant of ["zero", "duplicate", "orphan"] as const) {
+      const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-hx411-173-${variant}-${randomUUID()}.db`);
+      createdFiles.push(dbPath);
+      const before = createDatabase({ dbPath });
+      new ChatSessionMetaRepository(before).ensure("corrupt-session", undefined, "workspace-a");
+      rewindSessionLifecycleMigration(before);
+      if (variant === "zero") {
+        before.exec("DROP TRIGGER IF EXISTS trg_chat_session_control_grants_update_guard");
+        before
+          .prepare(
+            `UPDATE chat_session_control_grants
+           SET is_current = 0, lease_state = 'deleted', control_revision = control_revision + 1,
+               updated_at = created_at, terminal_at = created_at
+           WHERE session_id = 'corrupt-session'`,
+          )
+          .run();
+      } else if (variant === "orphan") {
+        before.prepare("DELETE FROM chat_session_meta WHERE session_id = 'corrupt-session'").run();
+      } else {
+        before.exec(`
+          DROP TRIGGER IF EXISTS trg_chat_session_control_grants_insert_guard;
+          DROP INDEX IF EXISTS idx_chat_session_control_grants_one_current;
+        `);
+        before
+          .prepare(
+            `INSERT INTO chat_session_control_grants (
+             workspace_id, session_id, generation, is_current, owner_kind, lease_state,
+             request_id, companion_session_id, device_grant_id, client_instance_id, principal_purpose,
+             requested_capabilities_json, requested_capabilities_sha256,
+             effective_capabilities_json, effective_capabilities_sha256,
+             token_sha256, token_expires_at, last_heartbeat_at, lease_expires_at, reconnect_expires_at,
+             control_revision, transition_idempotency_key, transition_request_sha256,
+             created_at, updated_at, terminal_at
+           )
+           SELECT workspace_id, session_id, generation + 1, 1, owner_kind, lease_state,
+             request_id, companion_session_id, device_grant_id, client_instance_id, principal_purpose,
+             requested_capabilities_json, requested_capabilities_sha256,
+             effective_capabilities_json, effective_capabilities_sha256,
+             token_sha256, token_expires_at, last_heartbeat_at, lease_expires_at, reconnect_expires_at,
+             control_revision, transition_idempotency_key || ':duplicate', transition_request_sha256,
+             created_at, updated_at, terminal_at
+           FROM chat_session_control_grants WHERE session_id = 'corrupt-session' AND generation = 1`,
+          )
+          .run();
+      }
+      before.close();
+
+      assert.throws(() => createDatabase({ dbPath }), /CHECK constraint|preflight|constraint failed/iu);
+      const inspect = new DatabaseSync(dbPath);
+      assert.equal(inspect.prepare("SELECT 1 FROM schema_migrations WHERE version = 173").get(), undefined);
+      assert.equal(
+        inspect
+          .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'chat_session_lifecycle_intents'")
+          .get(),
+        undefined,
+      );
+      inspect.close();
+    }
+  });
+
+  it("rolls back 173 instead of inventing authority for mismatched legacy snapshot/profile rows", () => {
+    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-hx411-profile-mismatch-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const before = createDatabase({ dbPath });
+    rewindSessionLifecycleMigration(before);
+    seedLegacyCapabilityProfile(before, {
+      profileId: "mismatched-profile",
+      turnId: "mismatched-turn",
+      sessionId: "mismatched-session",
+      workspaceId: "workspace-a",
+      profileHash: "a".repeat(64),
+    });
+    seedLegacyRoutedContextSnapshot(before, {
+      snapshotId: "mismatched-snapshot",
+      profileId: "mismatched-profile",
+      profileHash: "b".repeat(64),
+      turnId: "mismatched-turn",
+      sessionId: "mismatched-session",
+      workspaceId: "workspace-a",
+    });
+    before.close();
+
+    assert.throws(() => createDatabase({ dbPath }), /CHECK constraint|preflight|constraint failed/iu);
+    const inspect = new DatabaseSync(dbPath);
+    assert.equal(inspect.prepare("SELECT 1 FROM schema_migrations WHERE version = 173").get(), undefined);
+    assert.equal(
+      inspect
+        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'chat_turn_session_incarnation_bindings'")
+        .get(),
+      undefined,
+    );
+    inspect.close();
   });
 
   it("creates hot-path chat projection and index migrations", () => {
@@ -817,3 +1236,102 @@ describe("sqlite schema migrations", () => {
     assert.equal(exitCode, 0);
   });
 });
+
+function seedLegacyCapabilityProfile(
+  db: ReturnType<typeof createDatabase>,
+  input: {
+    profileId: string;
+    turnId: string;
+    sessionId: string;
+    workspaceId: string;
+    profileHash: string;
+  },
+): void {
+  db.prepare(
+    `INSERT INTO chat_turn_capability_profiles (
+       profile_id, turn_id, session_id, workspace_id, durable_run_id, operator_id, auth_actor_id,
+       schema_version, profile_hash, catalog_snapshot_id, inspectable_hash, callable_hash,
+       selection_hash, governance_hash, preflight_fingerprint, profile_json, created_at
+     ) VALUES (
+       @profileId, @turnId, @sessionId, @workspaceId, NULL, NULL, NULL,
+       'chat.turn-capability-profile.v1', @profileHash, 'legacy-catalog', @digest, @digest,
+       @digest, @digest, @digest, '{}', '2026-07-14T00:00:00.000Z'
+     )`,
+  ).run({ ...input, digest: "c".repeat(64) });
+}
+
+function seedLegacyRoutedContextSnapshot(
+  db: ReturnType<typeof createDatabase>,
+  input: {
+    snapshotId: string;
+    profileId: string;
+    profileHash: string;
+    turnId: string;
+    sessionId: string;
+    workspaceId: string;
+  },
+): void {
+  db.prepare(
+    `INSERT INTO chat_routed_context_snapshots (
+       snapshot_id, schema_version, turn_id, session_id, workspace_id,
+       capability_profile_id, capability_profile_hash, source_request_hash, content_hash, snapshot_hash,
+       effective_provider_id, effective_model, context_window_tokens, prompt_reserved_tokens,
+       output_reserved_tokens, hard_cap_tokens, effective_budget_tokens, used_tokens,
+       source_count, included_count, truncated_count, omitted_count, already_attached_count,
+       estimator_version, budget_policy_version, snapshot_json, created_at
+     ) VALUES (
+       @snapshotId, 'chat.routed-context-snapshot.v1', @turnId, @sessionId, @workspaceId,
+       @profileId, @profileHash, @sourceHash, @contentHash, @snapshotHash,
+       'provider-a', 'model-a', 1000, 100, 100, 800, 700, 0,
+       0, 0, 0, 0, 0, 'gc-approx-tokens.v1', 'chat.routed-context-budget.v1', '{}',
+       '2026-07-14T00:00:00.000Z'
+     )`,
+  ).run({
+    ...input,
+    sourceHash: "d".repeat(64),
+    contentHash: "e".repeat(64),
+    snapshotHash: "f".repeat(64),
+  });
+}
+
+function rewindSessionLifecycleMigration(db: ReturnType<typeof createDatabase>): void {
+  const triggers = db
+    .prepare(
+      `SELECT name FROM sqlite_master
+       WHERE type = 'trigger'
+         AND (
+           name LIKE 'trg_chat_session_lifecycle_%'
+           OR name LIKE 'trg_chat_session_meta_lifecycle_%'
+           OR name = 'trg_chat_session_meta_workspace_and_intent_update_guard'
+           OR name = 'trg_chat_session_control_operator_generation_lifecycle_guard'
+           OR name LIKE 'trg_chat_session_mutation_%'
+           OR name LIKE 'trg_chat_turn_session_incarnation_%'
+           OR name LIKE 'trg_chat_turn_mutation_admission_durable_bindings_%'
+           OR name LIKE 'trg_chat_turn_capability_profile_incarnation_bindings_%'
+           OR name LIKE 'trg_chat_turn_user_input_continuation_seals_%'
+           OR name LIKE 'trg_chat_heartbeat_occurrences_%'
+           OR name = 'trg_chat_turn_capability_profiles_incarnation_insert_guard'
+           OR name = 'trg_chat_routed_context_snapshots_incarnation_insert_guard'
+         )
+       ORDER BY name`,
+    )
+    .all() as Array<{ name: string }>;
+  for (const trigger of triggers) db.exec(`DROP TRIGGER "${trigger.name}"`);
+  db.prepare("UPDATE chat_session_meta SET lifecycle_intent_id = NULL").run();
+  db.exec(`
+    DROP INDEX IF EXISTS idx_chat_session_meta_lifecycle_intent;
+    DROP INDEX IF EXISTS idx_chat_session_meta_deletion_intent;
+    DROP TABLE IF EXISTS chat_heartbeat_occurrences;
+    DROP TABLE IF EXISTS chat_turn_user_input_continuation_seals;
+    DROP TABLE IF EXISTS chat_turn_mutation_admission_durable_bindings;
+    DROP TABLE IF EXISTS chat_turn_capability_profile_incarnation_bindings;
+    DROP TABLE IF EXISTS chat_turn_session_incarnation_bindings;
+    DROP TABLE IF EXISTS chat_session_mutation_admission_events;
+    DROP TABLE IF EXISTS chat_session_mutation_admissions;
+    DROP TABLE IF EXISTS chat_session_lifecycle_intents;
+    DROP TABLE IF EXISTS chat_session_control_auth_revoke_operation_targets;
+    DROP TABLE IF EXISTS chat_session_control_auth_revoke_operations;
+  `);
+  db.prepare("DELETE FROM schema_migrations WHERE version = 174").run();
+  db.prepare("DELETE FROM schema_migrations WHERE version = 173").run();
+}

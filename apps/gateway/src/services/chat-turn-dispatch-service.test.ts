@@ -9,8 +9,13 @@ vi.mock("./chat-turn-helpers.js", async (importOriginal) => ({
   splitIntoChunks: (value: string) => [value],
 }));
 
-const { launchPreparedAgentChatTurnStream, shouldUseDurableExecution } =
-  await import("./chat-turn-dispatch-service.js");
+const {
+  buildDurableChatCanonicalWriteFence,
+  executePreparedAgentChatTurnBackground,
+  launchPreparedAgentChatTurnStream,
+  shouldUseDurableExecution,
+} = await import("./chat-turn-dispatch-service.js");
+const chatTurnStreamService = await import("./chat-turn-stream-service.js");
 const { sendPreparedIntegrationChatTurn, streamPreparedIntegrationChatTurn } =
   await import("./chat-turn-dispatch-service.js");
 
@@ -620,6 +625,101 @@ describe("chat turn dispatch durable ownership", () => {
       }),
     );
   });
+
+  it("terminalizes exact system-heartbeat approval drift without approval-wait or stream projections", async () => {
+    const blocked = new Error("heartbeat_interactive_approval_forbidden");
+    blocked.name = "SystemHeartbeatToolInvocationBlockedError";
+    const streamSpy = vi
+      .spyOn(chatTurnStreamService, "streamPreparedAgentChatTurn")
+      .mockImplementation(async function* () {
+        yield* [];
+        throw blocked;
+      });
+    const host = createHost();
+    const prepared = {
+      ...(createPrepared("chat") as Record<string, unknown>),
+      serverOnlyPosture: {
+        kind: "system_heartbeat",
+        actorId: "system-heartbeat",
+        operation: "chat_system_heartbeat",
+        occurrenceId: "heartbeat-occurrence-1",
+        claimSha256: "a".repeat(64),
+        durableRunId: "durable-heartbeat-1",
+      },
+    } as never;
+    const streamRegistration = host.registerActiveChatTurnStream("session-1", "turn-1", "durable-heartbeat-1");
+
+    try {
+      await executePreparedAgentChatTurnBackground(
+        host,
+        "session-1",
+        { content: "heartbeat" },
+        prepared,
+        "chat_thread_turn_appended",
+        "durable-heartbeat-1",
+        undefined,
+        {
+          streamRegistration,
+          skipMessageStart: true,
+          durableLeaseOwnerId: "heartbeat-worker-1",
+        },
+      );
+    } finally {
+      streamSpy.mockRestore();
+    }
+
+    expect(host.storage.chatTurnTraces.get("turn-1")).toMatchObject({
+      status: "failed",
+      failure: {
+        failureClass: "approval_required",
+        retryable: false,
+      },
+      completion: { status: "interrupted" },
+    });
+    expect(host.persistChatStreamChunk).not.toHaveBeenCalled();
+    expect(host.recordDevDiagnostic).not.toHaveBeenCalled();
+    expect(host.storage.chatMessages.upsert).not.toHaveBeenCalled();
+    expect(host.storage.approvals.create).not.toHaveBeenCalled();
+    expect(host.finalizeDurableChatRun).toHaveBeenCalledTimes(1);
+    expect(host.finalizeDurableChatRun).toHaveBeenCalledWith(
+      "durable-heartbeat-1",
+      prepared,
+      expect.objectContaining({ status: "failed" }),
+      "heartbeat-worker-1",
+    );
+  });
+
+  it("translates only exact heartbeat admission supersession into durable interruption before callback writes", () => {
+    const host = createHost();
+    vi.mocked(host.sessionControlRuntimeOwner.assertActiveTurnWrite).mockImplementation(() => {
+      throw new Error("authority_superseded");
+    });
+    const prepared = {
+      ...(createPrepared("chat") as Record<string, unknown>),
+      serverOnlyPosture: {
+        kind: "system_heartbeat",
+        actorId: "system-heartbeat",
+        operation: "chat_system_heartbeat",
+        occurrenceId: "heartbeat-occurrence-1",
+        claimSha256: "a".repeat(64),
+        durableRunId: "durable-heartbeat-1",
+      },
+    } as never;
+    const streamRegistration = host.registerActiveChatTurnStream("session-1", "turn-1", "durable-heartbeat-1");
+    const fence = buildDurableChatCanonicalWriteFence(host, prepared, "durable-heartbeat-1", {
+      streamRegistration,
+      durableLeaseOwnerId: "heartbeat-worker-1",
+    });
+    const work = vi.fn();
+
+    expect(() => fence!(work)).toThrow(
+      expect.objectContaining({
+        name: "DurableWorkerInterruptionError",
+        message: expect.stringMatching(/superseded/i),
+      }),
+    );
+    expect(work).not.toHaveBeenCalled();
+  });
 });
 
 function createHost(
@@ -673,8 +773,17 @@ function createHost(
       },
     },
     storage: {
+      runImmediateTransaction: <T>(work: () => T): T => work(),
       durableRuns: {
         getRun: vi.fn(() => ({ status: "running" })),
+        lockFreshActiveLeaseForUpdate: vi.fn(() => ({ status: "running" })),
+      },
+      chatMessages: {
+        get: vi.fn(() => undefined),
+        upsert: vi.fn(),
+      },
+      approvals: {
+        create: vi.fn(),
       },
       chatTurnTraces: {
         create: createTrace,
@@ -691,6 +800,9 @@ function createHost(
         get: vi.fn(() => traceState),
       },
     } as never,
+    sessionControlRuntimeOwner: {
+      assertActiveTurnWrite: vi.fn(),
+    },
     backgroundTasks: new Set(),
     isFeatureEnabled: vi.fn((flag: string) => flag === "durableKernelV1Enabled"),
     streamPersistedChatTurnEvents: vi.fn(async function* () {}),
@@ -744,6 +856,20 @@ function createPrepared(mode: "chat" | "cowork" | "code", normalizedOverrides: R
       actorId: "operator",
       content: "hello",
       timestamp: "2026-04-11T00:00:00.000Z",
+    },
+    turnAdmission: {
+      identity: {
+        admissionId: "admission:turn-1",
+        sessionIncarnationId: "incarnation:session-1",
+        workspaceId: "default",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        aggregateRevision: 1,
+        controllerGeneration: 1,
+        materialSha256: "a".repeat(64),
+      },
+      admittedRequest: { content: "hello" },
+      requestActor: { actorKind: "operator", actorId: "operator" },
     },
     assistantMessageId: "assistant-1",
     parentTurnId: "turn-0",

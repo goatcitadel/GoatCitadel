@@ -22,6 +22,7 @@ import { ExternalSideEffectRunRepository } from "../external-side-effect-run-rep
 import { RemoteActionTokenRepository } from "../remote-action-token-repo.js";
 import { ToolGrantRepository } from "../tool-grant-repo.js";
 import { Storage } from "../index.js";
+import { ChatSessionLifecycleRepository } from "../chat-session-lifecycle-repo.js";
 import {
   assertSingleObservabilityChain,
   runConcurrentObservabilityWorkers,
@@ -53,17 +54,26 @@ test(
     );
     let locker: PoolClient | undefined;
     let contender: PoolClient | undefined;
+    let lifecycleDb: PostgresSyncDatabaseClient | undefined;
 
     try {
       await adminPool.query(`CREATE SCHEMA ${schemaName}`);
       await runPostgresMigrations(migrationClient, POSTGRES_MIGRATIONS);
-      await scopedPool.query(
-        `INSERT INTO chat_session_meta (
-           session_id, workspace_id, include_in_history, pinned, lifecycle_status, tags_json,
-           goal_turns_used, created_at, updated_at
-         ) VALUES ($1, 'workspace-a', 1, 0, 'active', '[]', 0, $2, $2)`,
-        [sessionId, "2026-07-13T00:00:00.000Z"],
-      );
+      lifecycleDb = new PostgresSyncDatabaseClient({
+        connectionString: scopedUrl.toString(),
+        database: "goatcitadel_test",
+        applicationName: `coverage-usage-lifecycle-${suffix}`,
+        pool: { max: 1, connectionTimeoutMs: 10_000 },
+      });
+      lifecycleDb.exec(`SET search_path TO ${schemaName}`);
+      new ChatSessionLifecycleRepository(lifecycleDb).initialize({
+        workspaceId: "workspace-a",
+        sessionId,
+        actorId: "operator-test",
+        idempotencyKey: `lifecycle:init:${sessionId}`,
+        correlationId: `correlation:lifecycle:init:${sessionId}`,
+        metadataTimestamp: "2026-07-13T00:00:00.000Z",
+      });
       await scopedPool.query(
         `INSERT INTO chat_turn_traces (
            turn_id, session_id, user_message_id, status, mode, web_mode, memory_mode,
@@ -121,8 +131,26 @@ test(
       await locker.query("COMMIT");
       await contender.query("DELETE FROM model_usage_events WHERE event_id = $1", [eventId]);
       await contender.query("DELETE FROM chat_turn_traces WHERE turn_id = $1", [turnId]);
-      await contender.query("DELETE FROM chat_session_meta WHERE session_id = $1", [sessionId]);
+      await assert.rejects(
+        contender.query("DELETE FROM chat_session_meta WHERE session_id = $1", [sessionId]),
+        (error: unknown) => (error as { code?: string }).code === "23514",
+      );
+      const lifecycle = new ChatSessionLifecycleRepository(lifecycleDb);
+      lifecycleDb.transaction("immediate", () => {
+        lifecycle.deleteTree(
+          {
+            workspaceId: "workspace-a",
+            rootSessionId: sessionId,
+            expectedRootRevision: 1,
+            actorId: "operator-test",
+            idempotencyKey: `lifecycle:delete:${sessionId}`,
+            correlationId: `correlation:lifecycle:delete:${sessionId}`,
+          },
+          () => undefined,
+        );
+      });
     } finally {
+      lifecycleDb?.close();
       if (contender) {
         try {
           await contender.query("ROLLBACK");

@@ -311,4 +311,229 @@ describe("protected Postgres migration integrity", () => {
       /chat_messages|chat_turn_traces|model_usage_events|durable_runs|gateway_route|listener|(?:plaintext|secret|value)_token/iu,
     );
   });
+
+  it("keeps HX-411 migration 115 paired, preflighted, lifecycle-total, and content-free", () => {
+    const migration = POSTGRES_MIGRATIONS.find((candidate) => candidate.version === 115);
+    assert.equal(migration?.name, "session_control_lifecycle_and_mutation_admission");
+    assert.equal(migration?.batchedStatements, undefined);
+    const sql = migration?.sql ?? "";
+    for (const table of [
+      "chat_session_control_auth_revoke_operations",
+      "chat_session_control_auth_revoke_operation_targets",
+      "chat_session_lifecycle_intents",
+      "chat_session_mutation_admissions",
+      "chat_session_mutation_admission_events",
+    ]) {
+      assert.match(sql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`, "u"));
+    }
+    assert.match(sql, /LEFT JOIN chat_session_control_grants control[\s\S]*control\.session_id IS NULL/u);
+    assert.match(sql, /LEFT JOIN chat_session_meta meta[\s\S]*meta\.session_id IS NULL/u);
+    assert.match(sql, /GROUP BY session_id HAVING COUNT\(\*\) <> 1/u);
+    assert.match(sql, /session control lifecycle preflight invariant violated/u);
+    assert.match(sql, /ALTER TABLE chat_session_meta ADD COLUMN IF NOT EXISTS lifecycle_intent_id TEXT/u);
+    assert.match(sql, /fk_chat_session_control_auth_revoke_operation_receipt[\s\S]*DEFERRABLE INITIALLY DEFERRED/u);
+    assert.match(
+      sql,
+      /idx_chat_session_mutation_admissions_one_active_turn[\s\S]*WHERE admission_kind = 'turn_write' AND status = 'active'/u,
+    );
+    assert.match(sql, /BEFORE INSERT OR UPDATE OR DELETE ON chat_session_meta/u);
+    assert.match(sql, /AFTER INSERT ON chat_session_meta/u);
+    assert.match(sql, /session_initialized/u);
+    assert.match(sql, /session_reactivated/u);
+    assert.match(sql, /session_deleted/u);
+    assert.match(sql, /mutation_admission_events_no_update/u);
+    assert.match(sql, /mutation_admission_events_no_delete/u);
+    assert.match(sql, /pg_advisory_xact_lock\(hashtextextended\(NEW\.session_id, 411\)\)/u);
+    assert.match(
+      sql,
+      /encode\(sha256\(convert_to\([\s\S]*chatTurnAdmissionHandoff,childRunIds[\s\S]*childRunIdsSha256/u,
+    );
+    assert.match(
+      sql,
+      /FROM durable_runs child_run[\s\S]*child_run\.workflow_key = 'chat\.post_commit\.effect'[\s\S]*child_admission\.operation = 'chat_post_commit_child'/u,
+    );
+    assert.match(
+      sql,
+      /OLD\.admission_kind = 'synchronous'[\s\S]*NEW\.terminal_authority_kind = 'post_commit_child_stage'[\s\S]*run\.version = NEW\.terminal_durable_run_version/u,
+    );
+    assert.doesNotMatch(
+      sql,
+      /chat_messages|model_usage_events|gateway_route|listener|message_body|prompt_body|tool_result|approval_body/iu,
+    );
+  });
+
+  it("keeps HX-411 migration 116 content-free, catalog-normalized, deferred, and recovery-indexed", () => {
+    const migration = POSTGRES_MIGRATIONS.find((candidate) => candidate.version === 116);
+    assert.equal(migration?.name, "durable_heartbeat_occurrence_authority");
+    assert.equal(migration?.batchedStatements, undefined);
+    const sql = migration?.sql ?? "";
+
+    assert.match(sql, /CREATE TABLE IF NOT EXISTS chat_heartbeat_occurrences\b/u);
+    for (const column of [
+      "admission_id",
+      "user_message_id",
+      "assistant_message_id",
+      "turn_id",
+      "expected_durable_run_id",
+      "durable_run_id",
+      "capability_profile_id",
+      "capability_profile_hash",
+      "revision",
+      "updated_at",
+    ]) {
+      assert.match(sql, new RegExp(`\\b${column}\\b`, "u"));
+    }
+    assert.match(
+      sql,
+      /state = 'durable_bound'[\s\S]*durable_run_id IS NOT NULL[\s\S]*durable_run_id = expected_durable_run_id/u,
+    );
+    assert.match(
+      sql,
+      /state = 'terminal'[\s\S]*durable_run_id IS NOT NULL[\s\S]*durable_run_id = expected_durable_run_id/u,
+    );
+    assert.match(sql, /user_message_id TEXT NOT NULL UNIQUE/u);
+    assert.match(sql, /assistant_message_id TEXT NOT NULL UNIQUE/u);
+    assert.match(sql, /durable_run_id TEXT UNIQUE CHECK\(durable_run_id IS NULL/u);
+    assert.match(sql, /capability_profile_id TEXT UNIQUE CHECK\([\s\S]*capability_profile_id IS NULL/u);
+    assert.match(sql, /CHECK\(admission_material_sha256 = frozen_request_sha256\)/u);
+    assert.doesNotMatch(sql, /terminal_status[\s\S]{0,200}dead_lettered/u);
+
+    assert.match(sql, /DO \$heartbeat_occurrence_catalog_normalize\$/u);
+    assert.match(sql, /LOCK TABLE chat_heartbeat_occurrences IN ACCESS EXCLUSIVE MODE/u);
+    assert.match(sql, /requires the new table to be empty/u);
+    assert.match(sql, /constraint_def\.contype IN \('c', 'f'\)/u);
+    assert.match(sql, /ADD CONSTRAINT gc_hbo_identity_shape CHECK/u);
+    assert.match(sql, /admission_material_sha256 = frozen_request_sha256/u);
+    assert.match(sql, /ADD CONSTRAINT gc_hbo_prior_cadence_pair CHECK/u);
+    assert.match(sql, /ADD CONSTRAINT gc_hbo_state_shape CHECK/u);
+    assert.match(sql, /IF check_count <> 3 OR fk_count <> 3 THEN/u);
+    assert.match(sql, /constraint_def\.convalidated[\s\S]*constraint_def\.condeferrable/u);
+    for (const constraint of [
+      "fk_chat_heartbeat_occurrence_admission",
+      "fk_chat_heartbeat_occurrence_durable_run",
+      "fk_chat_heartbeat_occurrence_capability_profile",
+    ]) {
+      assert.match(
+        sql,
+        new RegExp(
+          `ADD CONSTRAINT ${constraint}[\\s\\S]*?ON UPDATE NO ACTION ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED`,
+          "u",
+        ),
+      );
+    }
+
+    for (const timestamp of [
+      "prior_last_proactive_at",
+      "observed_session_activity_at",
+      "claimed_at",
+      "durable_bound_at",
+      "terminal_at",
+      "abandoned_at",
+      "updated_at",
+    ]) {
+      assert.match(
+        sql,
+        new RegExp(
+          `to_char\\(gc_try_parse_timestamptz\\(${timestamp}\\) AT TIME ZONE 'UTC',[\\s\\S]*?= ${timestamp}`,
+          "u",
+        ),
+      );
+    }
+
+    assert.match(
+      sql,
+      /CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_heartbeat_occurrences_one_open[\s\S]*WHERE state IN \('admitted', 'durable_bound'\)/u,
+    );
+    assert.match(
+      sql,
+      /CREATE INDEX IF NOT EXISTS idx_chat_heartbeat_occurrences_recovery[\s\S]*\(state, updated_at, occurrence_id\)/u,
+    );
+    assert.match(
+      sql,
+      /gc_heartbeat_occurrence_insert_guard[\s\S]*admission\.operation = 'chat_system_heartbeat'[\s\S]*prefs\.last_proactive_run_id = NEW\.occurrence_id/u,
+    );
+    assert.match(
+      sql,
+      /gc_heartbeat_occurrence_insert_guard[\s\S]*NEW\.admission_material_sha256 <> NEW\.frozen_request_sha256/u,
+    );
+    assert.match(
+      sql,
+      /gc_heartbeat_occurrence_transition_guard[\s\S]*NEW\.revision <> OLD\.revision \+ 1[\s\S]*NEW\.durable_run_id <> OLD\.expected_durable_run_id/u,
+    );
+    assert.match(sql, /gc_heartbeat_occurrence_no_delete[\s\S]*append\/transition-only/u);
+    for (const trigger of ["insert_guard", "transition_guard", "terminal_evidence_guard", "no_delete"]) {
+      assert.match(
+        sql,
+        new RegExp(`CREATE TRIGGER trg_chat_heartbeat_occurrences_${trigger}[\\s\\S]*chat_heartbeat_occurrences`, "u"),
+      );
+    }
+    assert.match(sql, /CREATE OR REPLACE FUNCTION gc_canonical_jsonb/u);
+    assert.match(sql, /CREATE OR REPLACE FUNCTION gc_js_trim/u);
+    assert.match(sql, /CREATE OR REPLACE FUNCTION gc_unicode_scalar_length/u);
+    assert.match(sql, /gc_heartbeat_decision_raw_is_exact/u);
+    assert.match(sql, /heartbeatDecisionReceipt[\s\S]*heartbeatDecisionRawOutput/u);
+    assert.match(sql, /heartbeat_input[\s\S]*trace\.user_message_id/u);
+    assert.match(sql, /message\.actor_type = 'system'[\s\S]*message\.actor_id = 'system-heartbeat'/u);
+    assert.match(sql, /heartbeatCleanup\}'[\s\S]*"not_required"/u);
+    assert.match(sql, /generalChatPostCommit,completedEffects\}'\) = 0/u);
+
+    assert.match(sql, /DO \$heartbeat_admission_reclaim_guard_upgrade\$/u);
+    assert.match(sql, /pg_get_functiondef\(to_regprocedure\('gc_session_mutation_admission_guard\(\)'\)\)/u);
+    assert.match(sql, /heartbeat occurrence request-runtime reclaim/u);
+    assert.match(
+      sql,
+      /gc_try_parse_timestamptz\(OLD\.runtime_lease_expires_at\)[\s\S]*<= gc_try_parse_timestamptz\(NEW\.runtime_last_heartbeat_at\)[\s\S]*interval '60 seconds'[\s\S]*occurrence\.state = 'admitted'/u,
+    );
+    const reclaimStart = sql.indexOf("heartbeat occurrence request-runtime reclaim");
+    const reclaimEnd = sql.indexOf("$heartbeat_reclaim_branch$;", reclaimStart);
+    assert.ok(reclaimStart >= 0 && reclaimEnd > reclaimStart);
+    assert.doesNotMatch(sql.slice(reclaimStart, reclaimEnd), /clock_timestamp\(\)/u);
+    assert.match(
+      sql,
+      /occurrence\.frozen_request_sha256 = OLD\.material_sha256[\s\S]*occurrence\.aggregate_revision = OLD\.aggregate_revision[\s\S]*occurrence\.controller_generation = OLD\.controller_generation/u,
+    );
+    assert.match(sql, /mutation-admission guard upgrade assertion failed/u);
+    assert.match(sql, /DO \$heartbeat_preempted_reason_upgrade\$/u);
+    assert.match(sql, /ADD CONSTRAINT gc_sce_reason_code CHECK\(reason_code IN \([\s\S]*'heartbeat_preempted'/u);
+    assert.match(
+      sql,
+      /gc_heartbeat_preempted_event_guard\(\)[\s\S]*NEW\.next_generation = NEW\.previous_generation \+ 1[\s\S]*NEW\.actor_kind = 'operator'/u,
+    );
+    const preemptionEventGuardSql =
+      sql.match(
+        /CREATE OR REPLACE FUNCTION gc_heartbeat_preempted_event_guard\(\)[\s\S]*?\$\$ LANGUAGE plpgsql;/u,
+      )?.[0] ?? "";
+    assert.ok(preemptionEventGuardSql);
+    assert.doesNotMatch(preemptionEventGuardSql, /clock_timestamp\(\)|statement_timestamp\(\)|now\(\)/u);
+    assert.match(sql, /DO \$heartbeat_preemption_control_clock_guards\$/u);
+    assert.match(sql, /heartbeat preemption grant terminal clock evidence/u);
+    assert.match(sql, /heartbeat preemption successor clock evidence/u);
+    assert.match(sql, /heartbeat preemption terminal timestamp evidence/u);
+    assert.match(sql, /heartbeat preemption occurrence timestamp evidence/u);
+    assert.match(
+      sql,
+      /gc_heartbeat_preempted_operator_generation_guard\(\)[\s\S]*event_row\.reason_code = 'heartbeat_preempted'[\s\S]*event_row\.created_at = NEW\.created_at/u,
+    );
+
+    assert.match(sql, /DO \$heartbeat_profile_fk_preflight\$/u);
+    assert.match(sql, /LOCK TABLE chat_turn_capability_profile_incarnation_bindings IN SHARE ROW EXCLUSIVE MODE/u);
+    assert.match(sql, /LOCK TABLE chat_turn_capability_profiles IN SHARE MODE/u);
+    assert.match(sql, /heartbeat profile binding FK repair orphan preflight failed/u);
+    assert.match(sql, /constraint_def\.conkey = ARRAY\[source_attnum\]::SMALLINT\[\]/u);
+    assert.match(sql, /constraint_def\.confkey = ARRAY\[target_attnum\]::SMALLINT\[\]/u);
+    assert.match(sql, /ADD CONSTRAINT fk_chat_turn_cap_profile_binding_profile/u);
+    assert.match(
+      sql,
+      /FOREIGN KEY\(profile_id\) REFERENCES chat_turn_capability_profiles\(profile_id\)[\s\S]*ON UPDATE NO ACTION ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED/u,
+    );
+    assert.match(sql, /IF mapping_count <> 1 OR good_count <> 1 THEN/u);
+    assert.match(
+      sql,
+      /constraint_def\.condeferrable AND constraint_def\.condeferred AND constraint_def\.convalidated[\s\S]*constraint_def\.confdeltype = 'a' AND constraint_def\.confupdtype = 'a'/u,
+    );
+    assert.doesNotMatch(
+      sql,
+      /model_usage_events|gateway_route|listener|message_body|prompt_body|response_body|tool_result|provider_payload|request_json|response_json/iu,
+    );
+  });
 });

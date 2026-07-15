@@ -16,6 +16,24 @@ import {
 } from "./approval-resolution-effects-service.js";
 import { APPROVAL_OBSERVABILITY_REALTIME_ENVELOPE_KEY } from "./realtime-event-service.js";
 import type { ServiceContext } from "./service-context.js";
+import {
+  buildChatTurnRuntimeAuthoritySeal,
+  withChatTurnRuntimeAuthority,
+  withChatTurnRuntimeAuthorityCheckpoint,
+} from "./chat-durable-runtime-authority.js";
+import { markGeneralChatPostCommitPending } from "./chat-durable-run-service.js";
+import { DURABLE_RETRY_POLICY_DEFAULT } from "./durable-retry-policy.js";
+import {
+  computeEffectiveChatTurnRequestMaterialSha256,
+  computeFrozenChatTurnAdmissionMaterialSha256,
+} from "./session-control-service.js";
+
+const APPROVAL_TEST_POST_COMMIT_ELIGIBILITY = {
+  version: 1 as const,
+  autonomyEnabledAtParentSettlement: true,
+  evalIntegrityTurn: false,
+  humanSession: true,
+};
 
 describe("approval-resolution-effects-service", () => {
   it("derives compatibility wake metadata from effect rows", () => {
@@ -2308,16 +2326,18 @@ describe("approval-resolution-effects-service", () => {
     const now = "2026-04-11T00:00:00.000Z";
     const runId = "durable-child-atomic";
     const turnId = "child-turn-atomic";
-    storage.durableRuns.createRun({
+    createExactWaitingApprovalRun(storage, {
       runId,
-      workflowKey: "chat.turn.execute",
-      status: "waiting",
+      sessionId: "child-session-atomic",
+      turnId,
+      userMessageId: "child-user-atomic",
       now,
     });
     const trace = storage.chatTurnTraces.create({
       turnId,
       sessionId: "child-session-atomic",
       userMessageId: "child-user-atomic",
+      assistantMessageId: `assistant-approved-${turnId}`,
       status: "waiting_for_approval",
       mode: "chat",
       webMode: "auto",
@@ -2357,11 +2377,13 @@ describe("approval-resolution-effects-service", () => {
       ).toThrow("child trace patch unavailable");
 
       expect(storage.durableRuns.getRun(runId).status).toBe("waiting");
-      expect(storage.durableRuns.listCheckpoints(runId)).toEqual([]);
+      expect(storage.durableRuns.listCheckpoints(runId)).toEqual([
+        expect.objectContaining({ checkpointKind: "run_waiting" }),
+      ]);
       expect(storage.chatMessages.get(`assistant-approved-${turnId}`)).toBeUndefined();
       expect(storage.chatTurnTraces.get(turnId)).toMatchObject({
         status: "waiting_for_approval",
-        assistantMessageId: undefined,
+        assistantMessageId: `assistant-approved-${turnId}`,
         durable: { runId, status: "waiting", checkpointKind: "run_waiting" },
       });
       expect(publishRealtime).not.toHaveBeenCalled();
@@ -2387,16 +2409,18 @@ describe("approval-resolution-effects-service", () => {
     const parentTurnId = "turn-parent-approved-unknown";
     const parentSessionId = "session-parent-approved-unknown";
     const delegationRunId = "delegation-approved-unknown";
-    storage.durableRuns.createRun({
+    createExactWaitingApprovalRun(storage, {
       runId,
-      workflowKey: "chat.turn.execute",
-      status: "waiting",
+      sessionId,
+      turnId,
+      userMessageId: "user-approved-unknown",
       now,
     });
     const trace = storage.chatTurnTraces.create({
       turnId,
       sessionId,
       userMessageId: "user-approved-unknown",
+      assistantMessageId: `assistant-approved-${turnId}`,
       status: "waiting_for_approval",
       mode: "chat",
       webMode: "auto",
@@ -2406,10 +2430,11 @@ describe("approval-resolution-effects-service", () => {
       durable: { runId, status: "waiting", checkpointKind: "run_waiting" },
       startedAt: now,
     });
-    storage.durableRuns.createRun({
+    createExactWaitingApprovalRun(storage, {
       runId: parentRunId,
-      workflowKey: "chat.turn.execute",
-      status: "waiting",
+      sessionId: parentSessionId,
+      turnId: parentTurnId,
+      userMessageId: "user-parent-approved-unknown",
       now,
     });
     storage.chatDelegationRuns.create({
@@ -2438,6 +2463,7 @@ describe("approval-resolution-effects-service", () => {
       turnId: parentTurnId,
       sessionId: parentSessionId,
       userMessageId: "user-parent-approved-unknown",
+      assistantMessageId: `assistant-approved-${parentTurnId}`,
       status: "waiting_for_approval",
       mode: "cowork",
       webMode: "auto",
@@ -2568,6 +2594,7 @@ describe("approval-resolution-effects-service", () => {
         lastError: "The remote outcome is unknown after dispatch.",
       });
       expect(storage.durableRuns.listCheckpoints(runId)).toEqual([
+        expect.objectContaining({ checkpointKind: "run_waiting" }),
         expect.objectContaining({ checkpointKind: "run_failed" }),
       ]);
       expect(storage.chatDelegationSteps.get(`${delegationRunId}:worker`)).toMatchObject({
@@ -2719,16 +2746,18 @@ describe("approval-resolution-effects-service", () => {
     const runId = "durable-parent-atomic";
     const turnId = "parent-turn-atomic";
     const delegationRunId = "delegation-run-atomic";
-    storage.durableRuns.createRun({
+    createExactWaitingApprovalRun(storage, {
       runId,
-      workflowKey: "chat.turn.execute",
-      status: "waiting",
+      sessionId: "parent-session-atomic",
+      turnId,
+      userMessageId: "parent-user-atomic",
       now,
     });
     storage.chatTurnTraces.create({
       turnId,
       sessionId: "parent-session-atomic",
       userMessageId: "parent-user-atomic",
+      assistantMessageId: `assistant-approved-${turnId}`,
       status: "waiting_for_approval",
       mode: "cowork",
       webMode: "auto",
@@ -2811,11 +2840,13 @@ describe("approval-resolution-effects-service", () => {
       ).toThrow("parent trace patch unavailable");
 
       expect(storage.durableRuns.getRun(runId).status).toBe("waiting");
-      expect(storage.durableRuns.listCheckpoints(runId)).toEqual([]);
+      expect(storage.durableRuns.listCheckpoints(runId)).toEqual([
+        expect.objectContaining({ checkpointKind: "run_waiting" }),
+      ]);
       expect(storage.chatMessages.get(`assistant-approved-${turnId}`)).toBeUndefined();
       expect(storage.chatTurnTraces.get(turnId)).toMatchObject({
         status: "waiting_for_approval",
-        assistantMessageId: undefined,
+        assistantMessageId: `assistant-approved-${turnId}`,
         durable: { runId, status: "waiting", checkpointKind: "run_waiting" },
       });
       expect(publishRealtime).not.toHaveBeenCalled();
@@ -2834,16 +2865,18 @@ describe("approval-resolution-effects-service", () => {
     const runId = "durable-parent-fanin";
     const turnId = "parent-turn-fanin";
     const delegationRunId = "delegation-run-fanin";
-    storage.durableRuns.createRun({
+    createExactWaitingApprovalRun(storage, {
       runId,
-      workflowKey: "chat.turn.execute",
-      status: "waiting",
+      sessionId: "parent-session-fanin",
+      turnId,
+      userMessageId: "parent-user-fanin",
       now,
     });
     storage.chatTurnTraces.create({
       turnId,
       sessionId: "parent-session-fanin",
       userMessageId: "parent-user-fanin",
+      assistantMessageId: `assistant-approved-${turnId}`,
       status: "waiting_for_approval",
       mode: "cowork",
       webMode: "auto",
@@ -3053,10 +3086,11 @@ describe("approval-resolution-effects-service", () => {
     const now = "2026-04-11T00:00:00.000Z";
     const runId = "durable-cancelled-after-snapshot";
     const turnId = "turn-cancelled-after-snapshot";
-    storage.durableRuns.createRun({
+    createExactWaitingApprovalRun(storage, {
       runId,
-      workflowKey: "chat.turn.execute",
-      status: "waiting",
+      sessionId: "session-same-receipt-replay",
+      turnId,
+      userMessageId: "user-same-receipt-replay",
       now,
     });
     const staleWaitingTrace = storage.chatTurnTraces.create({
@@ -3104,8 +3138,13 @@ describe("approval-resolution-effects-service", () => {
         }),
       ).toThrow(/canonical Chat turn .* is already cancelled/i);
 
-      expect(storage.durableRuns.getRun(runId)).toMatchObject({ status: "waiting", metadata: undefined });
-      expect(storage.durableRuns.listCheckpoints(runId)).toEqual([]);
+      expect(storage.durableRuns.getRun(runId)).toMatchObject({
+        status: "waiting",
+        metadata: expect.objectContaining({ chatTurnRuntimeAuthority: expect.any(Object) }),
+      });
+      expect(storage.durableRuns.listCheckpoints(runId)).toEqual([
+        expect.objectContaining({ checkpointKind: "run_waiting" }),
+      ]);
       expect(storage.chatMessages.get(`assistant-approved-${turnId}`)).toBeUndefined();
       expect(storage.chatTurnTraces.get(turnId)).toMatchObject({
         status: "cancelled",
@@ -3123,16 +3162,19 @@ describe("approval-resolution-effects-service", () => {
     const replayAt = "2026-04-11T00:00:02.000Z";
     const runId = "durable-same-receipt-replay";
     const turnId = "turn-same-receipt-replay";
-    storage.durableRuns.createRun({
+    createExactWaitingApprovalRun(storage, {
       runId,
-      workflowKey: "chat.turn.execute",
-      status: "waiting",
+      sessionId: "session-same-receipt-replay",
+      turnId,
+      userMessageId: "user-same-receipt-replay",
+      assistantMessageId: `assistant-approved-${turnId}`,
       now,
     });
     const waitingTrace = storage.chatTurnTraces.create({
       turnId,
       sessionId: "session-same-receipt-replay",
       userMessageId: "user-same-receipt-replay",
+      assistantMessageId: `assistant-approved-${turnId}`,
       status: "waiting_for_approval",
       mode: "chat",
       webMode: "auto",
@@ -3259,161 +3301,122 @@ describe("approval-resolution-effects-service", () => {
   });
 
   it("records completion and installs a fresh approved-turn post-commit generation atomically", () => {
-    let durableRun = {
-      runId: "durable-waiting",
-      status: "waiting" as const,
-      version: 4,
-      metadata: {
-        autonomous: { kind: "cron" },
-        generalChatPostCommitPending: {
-          version: 1,
-          generationId: "waiting-generation",
-          traceStatus: "waiting_for_approval",
-          requestedAt: "2026-04-10T00:00:00.000Z",
-          completedEffects: [],
-        },
-      },
-    };
-    const updateRun = vi.fn((input: Record<string, unknown>) => {
-      durableRun = { ...durableRun, ...input, status: "completed", version: 5 } as typeof durableRun;
-      return durableRun;
+    const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
+    const now = "2026-04-11T00:00:00.000Z";
+    const runId = "durable-waiting";
+    const turnId = "turn-approved";
+    const assistantMessageId = `assistant-approved-${turnId}`;
+    createExactWaitingApprovalRun(storage, {
+      runId,
+      sessionId: "session-approved",
+      turnId,
+      userMessageId: "user-approved",
+      assistantMessageId,
+      now,
     });
-    const createCheckpoint = vi.fn();
+    storage.chatTurnTraces.create({
+      turnId,
+      sessionId: "session-approved",
+      userMessageId: "user-approved",
+      assistantMessageId,
+      status: "waiting_for_approval",
+      mode: "chat",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      routing: {},
+      durable: { runId, status: "waiting", checkpointKind: "run_waiting" },
+      startedAt: now,
+    });
+    const updateRun = vi.spyOn(storage.durableRuns, "updateRun");
+    const createCheckpoint = vi.spyOn(storage.durableRuns, "createCheckpoint");
     const recordDurableTimelineEvent = vi.fn();
-    const runImmediateTransaction = vi.fn(<T>(work: () => T): T => work());
-    const service = new ApprovalEffectsService(
-      {
-        storage: {
-          durableRuns: {
-            getRun: vi.fn(() => durableRun),
-            updateRun,
-            createCheckpoint,
-          },
-          runImmediateTransaction,
-        },
-        publishRealtime: vi.fn(),
-      } as unknown as ServiceContext,
-      {
-        backgroundTasks: new Set(),
-        wakeDurableRun: vi.fn(),
-        requestRunProcessing: vi.fn(),
-        findProactiveDurableRunIdsForApproval: vi.fn(() => []),
-        executeCodeModePendingApproval: vi.fn(),
-        executeApprovedPendingAction: vi.fn(),
-        enqueueAfterHooks: vi.fn(),
-        resolveApprovalHookWorkspaceId: vi.fn(() => "workspace-1"),
-        recordDurableTimelineEvent,
-      },
-    );
-
-    const result = (
-      service as unknown as {
-        completeDurableRunIfPresent(
-          runId: string,
-          input: {
-            now: string;
-            outputText: string;
-            checkpointState: Record<string, unknown>;
-            postCommit?: { approvalId: string; turnId: string; traceStatus: ChatTurnTraceRecord["status"] };
-          },
-        ): string | undefined;
-      }
-    ).completeDurableRunIfPresent("durable-waiting", {
-      now: "2026-04-11T00:00:00.000Z",
-      outputText: "approved output",
-      checkpointState: { status: "completed", approvalId: "approval-1", turnId: "turn-approved" },
-      postCommit: { approvalId: "approval-1", turnId: "turn-approved", traceStatus: "completed" },
+    const service = new ApprovalEffectsService({ storage, publishRealtime: vi.fn() } as unknown as ServiceContext, {
+      ...createApprovalEffectDeps(),
+      recordDurableTimelineEvent,
     });
-
-    expect(result).toBe("completed");
-    expect(runImmediateTransaction).toHaveBeenCalledTimes(1);
-    expect(createCheckpoint).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: "durable-waiting", checkpointKind: "run_completed" }),
-    );
-    expect(recordDurableTimelineEvent).toHaveBeenCalledWith("durable-waiting", "run_completed", {
-      status: "completed",
-      approvalId: "approval-1",
-      turnId: "turn-approved",
-    });
-    expect(updateRun).toHaveBeenCalledWith(
-      expect.objectContaining({
-        metadata: expect.objectContaining({
-          generalChatPostCommitPending: expect.objectContaining({
-            version: 1,
-            traceStatus: "completed",
-            generationId: expect.not.stringMatching(/^waiting-generation$/),
-            completedEffects: [],
-          }),
-          autonomousChatPostCommitPending: expect.objectContaining({ version: 1 }),
-          approvalMaterializedPostCommit: expect.objectContaining({
-            version: 1,
-            approvalId: "approval-1",
-            turnId: "turn-approved",
-            traceStatus: "completed",
-          }),
-        }),
-      }),
-    );
-
-    const completedMetadata = {
-      ...((durableRun as unknown as { metadata: Record<string, unknown> }).metadata ?? {}),
-    };
-    delete completedMetadata.generalChatPostCommitPending;
-    delete completedMetadata.autonomousChatPostCommitPending;
-    (durableRun as unknown as { metadata: Record<string, unknown> }).metadata = completedMetadata;
-
-    const replayResult = (
-      service as unknown as {
-        completeDurableRunIfPresent(
-          runId: string,
-          input: {
-            now: string;
-            outputText: string;
-            checkpointState: Record<string, unknown>;
-            postCommit?: { approvalId: string; turnId: string; traceStatus: ChatTurnTraceRecord["status"] };
-          },
-        ): string | undefined;
-      }
-    ).completeDurableRunIfPresent("durable-waiting", {
-      now: "2026-04-11T00:00:01.000Z",
-      outputText: "approved output",
-      checkpointState: { status: "completed", approvalId: "approval-1", turnId: "turn-approved" },
-      postCommit: { approvalId: "approval-1", turnId: "turn-approved", traceStatus: "completed" },
-    });
-
-    expect(replayResult).toBe("completed");
-    expect(updateRun).toHaveBeenCalledTimes(1);
-    expect(createCheckpoint).toHaveBeenCalledTimes(1);
-    expect(recordDurableTimelineEvent).toHaveBeenCalledTimes(1);
-
-    (durableRun as unknown as { metadata: Record<string, unknown> }).metadata = {
-      ...completedMetadata,
-      approvalMaterializedPostCommit: {
-        version: 1,
-        approvalId: "approval-other",
-        turnId: "turn-other",
-      },
-    };
-    expect(() =>
+    const complete = (at: string) =>
       (
         service as unknown as {
           completeDurableRunIfPresent(
-            runId: string,
+            currentRunId: string,
             input: {
               now: string;
               outputText: string;
               checkpointState: Record<string, unknown>;
-              postCommit?: { approvalId: string; turnId: string; traceStatus: ChatTurnTraceRecord["status"] };
+              postCommit: { approvalId: string; turnId: string; traceStatus: ChatTurnTraceRecord["status"] };
             },
           ): string | undefined;
         }
-      ).completeDurableRunIfPresent("durable-waiting", {
-        now: "2026-04-11T00:00:02.000Z",
+      ).completeDurableRunIfPresent(runId, {
+        now: at,
         outputText: "approved output",
-        checkpointState: { status: "completed", approvalId: "approval-1", turnId: "turn-approved" },
-        postCommit: { approvalId: "approval-1", turnId: "turn-approved", traceStatus: "completed" },
-      }),
-    ).toThrow(/already materialized by approval approval-other/i);
+        checkpointState: { status: "completed", approvalId: "approval-1", turnId },
+        postCommit: { approvalId: "approval-1", turnId, traceStatus: "completed" },
+      });
+
+    try {
+      expect(complete(now)).toBe("completed");
+      const completed = storage.durableRuns.getRun(runId);
+      const waitingGeneration = `waiting-generation:${runId}`;
+      expect(completed).toMatchObject({
+        status: "completed",
+        metadata: expect.objectContaining({
+          generalChatPostCommitPending: expect.objectContaining({
+            version: 1,
+            traceStatus: "completed",
+            generationId: expect.not.stringMatching(new RegExp(`^${waitingGeneration}$`)),
+            completedEffects: [],
+          }),
+          approvalMaterializedPostCommit: expect.objectContaining({
+            version: 1,
+            approvalId: "approval-1",
+            turnId,
+            traceStatus: "completed",
+          }),
+          chatTurnRuntimeAuthority: expect.objectContaining({
+            material: expect.objectContaining({
+              transitionKind: "terminal",
+              requiredFinalizers: ["general"],
+              terminalOutput: expect.objectContaining({
+                assistantMessageId,
+                outputTextSha256: expect.any(String),
+                outputSummarySha256: expect.any(String),
+              }),
+            }),
+          }),
+        }),
+      });
+      expect(completed.metadata?.autonomousChatPostCommitPending).toBeUndefined();
+      expect(storage.durableRuns.getLatestCheckpointByKind(runId, "run_completed")?.state).toEqual(
+        expect.objectContaining({
+          status: "completed",
+          approvalId: "approval-1",
+          turnId,
+          assistantMessageId,
+          outputText: "approved output",
+          chatTurnRuntimeAuthority: expect.any(Object),
+        }),
+      );
+      expect(recordDurableTimelineEvent).toHaveBeenCalledWith(
+        runId,
+        "run_completed",
+        expect.objectContaining({
+          status: "completed",
+          approvalId: "approval-1",
+          turnId,
+          assistantMessageId,
+          outputText: "approved output",
+        }),
+      );
+
+      expect(complete("2026-04-11T00:00:01.000Z")).toBe("completed");
+      expect(updateRun).toHaveBeenCalledTimes(1);
+      expect(createCheckpoint).toHaveBeenCalledTimes(1);
+      expect(recordDurableTimelineEvent).toHaveBeenCalledTimes(1);
+    } finally {
+      storage.close();
+    }
   });
 
   it("converges retries from two child approvals on one delegation-parent materialization identity", () => {
@@ -3422,16 +3425,18 @@ describe("approval-resolution-effects-service", () => {
     const runId = "durable-parent-two-approvals";
     const turnId = "turn-parent-two-approvals";
     const materializationKey = "delegation:delegation-two-approvals:parent:turn-parent-two-approvals";
-    storage.durableRuns.createRun({
+    createExactWaitingApprovalRun(storage, {
       runId,
-      workflowKey: "chat.turn.execute",
-      status: "waiting",
+      sessionId: "session-parent-two-approvals",
+      turnId,
+      userMessageId: "user-parent-two-approvals",
       now,
     });
     storage.chatTurnTraces.create({
       turnId,
       sessionId: "session-parent-two-approvals",
       userMessageId: "user-parent-two-approvals",
+      assistantMessageId: `assistant-approved-${turnId}`,
       status: "waiting_for_approval",
       mode: "chat",
       webMode: "auto",
@@ -3503,16 +3508,18 @@ describe("approval-resolution-effects-service", () => {
     const runId = "durable-parent-identity-boundary";
     const turnId = "turn-parent-identity-boundary";
     const materializationKey = "delegation:delegation-one:parent:turn-parent-identity-boundary";
-    storage.durableRuns.createRun({
+    createExactWaitingApprovalRun(storage, {
       runId,
-      workflowKey: "chat.turn.execute",
-      status: "waiting",
+      sessionId: "session-parent-identity-boundary",
+      turnId,
+      userMessageId: "user-parent-identity-boundary",
       now,
     });
     storage.chatTurnTraces.create({
       turnId,
       sessionId: "session-parent-identity-boundary",
       userMessageId: "user-parent-identity-boundary",
+      assistantMessageId: `assistant-approved-${turnId}`,
       status: "waiting_for_approval",
       mode: "chat",
       webMode: "auto",
@@ -3574,74 +3581,89 @@ describe("approval-resolution-effects-service", () => {
   });
 
   it("fails closed when a competing approval wins the durable completion conflict", () => {
-    let durableRun = {
-      runId: "durable-conflict",
-      status: "waiting" as "waiting" | "completed",
-      version: 4,
-      metadata: {} as Record<string, unknown>,
-    };
-    const updateRun = vi.fn(() => {
-      durableRun = {
-        ...durableRun,
-        status: "completed",
-        version: 5,
-        metadata: {
-          approvalMaterializedPostCommit: {
-            version: 1,
-            approvalId: "approval-other",
-            turnId: "turn-other",
-          },
-        },
-      };
+    const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
+    const now = "2026-04-11T00:00:00.000Z";
+    const runId = "durable-conflict";
+    const turnId = "turn-approved";
+    const assistantMessageId = `assistant-approved-${turnId}`;
+    createExactWaitingApprovalRun(storage, {
+      runId,
+      sessionId: "session-conflict",
+      turnId,
+      userMessageId: "user-conflict",
+      assistantMessageId,
+      now,
+    });
+    storage.chatTurnTraces.create({
+      turnId,
+      sessionId: "session-conflict",
+      userMessageId: "user-conflict",
+      assistantMessageId,
+      status: "waiting_for_approval",
+      mode: "chat",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      routing: {},
+      durable: { runId, status: "waiting", checkpointKind: "run_waiting" },
+      startedAt: now,
+    });
+    const readRun = storage.durableRuns.getRun.bind(storage.durableRuns);
+    let conflictWon = false;
+    vi.spyOn(storage.durableRuns, "getRun").mockImplementation((currentRunId) => {
+      const current = readRun(currentRunId);
+      return conflictWon
+        ? {
+            ...current,
+            status: "completed",
+            version: current.version + 1,
+            metadata: {
+              ...(current.metadata ?? {}),
+              approvalMaterializedPostCommit: {
+                version: 1,
+                approvalId: "approval-other",
+                turnId: "turn-other",
+              },
+            },
+          }
+        : current;
+    });
+    vi.spyOn(storage.durableRuns, "updateRun").mockImplementation(() => {
+      conflictWon = true;
       throw new ConflictError({
         code: "STATE_CONFLICT",
         message: "lost completion race",
       });
     });
     const service = new ApprovalEffectsService(
-      {
-        storage: {
-          durableRuns: {
-            getRun: vi.fn(() => durableRun),
-            updateRun,
-            createCheckpoint: vi.fn(),
-          },
-          runImmediateTransaction: vi.fn(<T>(work: () => T): T => work()),
-        },
-        publishRealtime: vi.fn(),
-      } as unknown as ServiceContext,
-      {
-        backgroundTasks: new Set(),
-        wakeDurableRun: vi.fn(),
-        requestRunProcessing: vi.fn(),
-        findProactiveDurableRunIdsForApproval: vi.fn(() => []),
-        executeCodeModePendingApproval: vi.fn(),
-        executeApprovedPendingAction: vi.fn(),
-        enqueueAfterHooks: vi.fn(),
-        resolveApprovalHookWorkspaceId: vi.fn(() => "workspace-1"),
-      },
+      { storage, publishRealtime: vi.fn() } as unknown as ServiceContext,
+      createApprovalEffectDeps(),
     );
 
-    expect(() =>
-      (
-        service as unknown as {
-          completeDurableRunIfPresent(
-            runId: string,
-            input: {
-              now: string;
-              outputText: string;
-              checkpointState: Record<string, unknown>;
-              postCommit: { approvalId: string; turnId: string; traceStatus: ChatTurnTraceRecord["status"] };
-            },
-          ): string | undefined;
-        }
-      ).completeDurableRunIfPresent("durable-conflict", {
-        now: "2026-04-11T00:00:00.000Z",
-        outputText: "approved output",
-        checkpointState: { status: "completed" },
-        postCommit: { approvalId: "approval-1", turnId: "turn-approved", traceStatus: "completed" },
-      }),
-    ).toThrow(/already materialized by approval approval-other/i);
+    try {
+      expect(() =>
+        (
+          service as unknown as {
+            completeDurableRunIfPresent(
+              currentRunId: string,
+              input: {
+                now: string;
+                outputText: string;
+                checkpointState: Record<string, unknown>;
+                postCommit: { approvalId: string; turnId: string; traceStatus: ChatTurnTraceRecord["status"] };
+              },
+            ): string | undefined;
+          }
+        ).completeDurableRunIfPresent(runId, {
+          now,
+          outputText: "approved output",
+          checkpointState: { status: "completed" },
+          postCommit: { approvalId: "approval-1", turnId, traceStatus: "completed" },
+        }),
+      ).toThrow(/already materialized by approval approval-other/i);
+    } finally {
+      storage.close();
+    }
   });
 
   it("leaves running Chat and delegation truth untouched until the durable run parks", () => {
@@ -4837,10 +4859,11 @@ describe("approval-resolution-effects-service", () => {
       childTurnId: "child-turn-1",
       durableRunId: "child-durable-run",
     };
-    const childTrace: ChatTurnTraceRecord = {
+    let childTrace: ChatTurnTraceRecord = {
       turnId: "child-turn-1",
       sessionId: "child-session-1",
       userMessageId: "user-child-1",
+      assistantMessageId: "assistant-approved-child-turn-1",
       branchKind: "append",
       status: "waiting_for_approval",
       mode: "cowork",
@@ -4858,10 +4881,11 @@ describe("approval-resolution-effects-service", () => {
         recommendedAction: "retry",
       },
     };
-    const parentTrace: ChatTurnTraceRecord = {
+    let parentTrace: ChatTurnTraceRecord = {
       turnId: "parent-turn-1",
       sessionId: "parent-session-1",
       userMessageId: "user-parent-1",
+      assistantMessageId: "assistant-approved-parent-turn-1",
       branchKind: "append",
       status: "waiting_for_approval",
       mode: "cowork",
@@ -4893,16 +4917,57 @@ describe("approval-resolution-effects-service", () => {
         steps: [],
       },
     };
+    const childDurable = createExactWaitingApprovalFixture({
+      runId: "child-durable-run",
+      sessionId: childTrace.sessionId,
+      turnId: childTrace.turnId,
+      userMessageId: childTrace.userMessageId,
+      assistantMessageId: childTrace.assistantMessageId!,
+      now: childTrace.startedAt,
+    });
+    const parentDurable = createExactWaitingApprovalFixture({
+      runId: "parent-durable-run",
+      sessionId: parentTrace.sessionId,
+      turnId: parentTrace.turnId,
+      userMessageId: parentTrace.userMessageId,
+      assistantMessageId: parentTrace.assistantMessageId!,
+      now: parentTrace.startedAt,
+    });
+    const durableState = new Map<string, Record<string, unknown>>([
+      [childDurable.run.runId, childDurable.run],
+      [parentDurable.run.runId, parentDurable.run],
+    ]);
+    const durableFixtureByRunId = new Map([
+      [childDurable.run.runId, childDurable],
+      [parentDurable.run.runId, parentDurable],
+    ]);
+    const durableFixtureByAdmissionId = new Map([
+      [childDurable.admission.admissionId, childDurable],
+      [parentDurable.admission.admissionId, parentDurable],
+    ]);
     const completeEffect = vi.fn(() => ({ status: "completed" as const }));
     const markResolved = vi.fn();
     const chatMessagesUpsert = vi.fn();
     const chatToolRunsPatch = vi.fn();
-    const chatTurnTracesPatch = vi.fn();
-    const durableUpdateRun = vi.fn((input: Record<string, unknown>) => ({
-      runId: input.runId,
-      status: input.status,
-      metadata: input.metadata,
-    }));
+    const chatTurnTracesPatch = vi.fn((turnId: string, patch: Partial<ChatTurnTraceRecord>) => {
+      if (turnId === childTrace.turnId) {
+        childTrace = { ...childTrace, ...patch } as ChatTurnTraceRecord;
+        return childTrace;
+      }
+      parentTrace = { ...parentTrace, ...patch } as ChatTurnTraceRecord;
+      return parentTrace;
+    });
+    const durableUpdateRun = vi.fn((input: Record<string, unknown>) => {
+      const runId = String(input.runId);
+      const current = durableState.get(runId)!;
+      const next = {
+        ...current,
+        ...input,
+        version: Number(current.version) + 1,
+      };
+      durableState.set(runId, next);
+      return next;
+    });
     const durableCreateCheckpoint = vi.fn();
     const delegationStepMaterialize = vi.fn((input: Partial<ChatDelegationStepRecord>) => {
       parentStep = { ...parentStep, ...input } as ChatDelegationStepRecord;
@@ -4962,9 +5027,16 @@ describe("approval-resolution-effects-service", () => {
             listBySession: vi.fn(() => [parentTrace]),
           },
           durableRuns: {
-            getRun: vi.fn((runId: string) => ({ runId, status: "waiting", metadata: {} })),
+            getRun: vi.fn((runId: string) => durableState.get(runId)),
+            getLatestCheckpointByKind: vi.fn((runId: string, kind: string) => {
+              const fixture = durableFixtureByRunId.get(runId);
+              return kind === "run_waiting" ? fixture?.checkpoint : undefined;
+            }),
             updateRun: durableUpdateRun,
             createCheckpoint: durableCreateCheckpoint,
+          },
+          sessionMutationAdmissions: {
+            require: vi.fn((admissionId: string) => durableFixtureByAdmissionId.get(admissionId)?.admission),
           },
           chatDelegationSteps: {
             listParentsByChildSessionIds: vi.fn(
@@ -5034,11 +5106,7 @@ describe("approval-resolution-effects-service", () => {
         publishRealtime: vi.fn(),
       } as unknown as ServiceContext,
       {
-        backgroundTasks: new Set(),
-        wakeDurableRun: vi.fn(),
-        requestRunProcessing: vi.fn(),
-        findProactiveDurableRunIdsForApproval: vi.fn(() => []),
-        executeCodeModePendingApproval: vi.fn(),
+        ...createApprovalEffectDeps(),
         executeApprovedPendingAction: vi.fn(async () => ({
           outcome: "executed",
           policyReason: "approved",
@@ -5050,8 +5118,6 @@ describe("approval-resolution-effects-service", () => {
             format: "pptx",
           },
         })),
-        enqueueAfterHooks: vi.fn(),
-        resolveApprovalHookWorkspaceId: vi.fn(() => "workspace-1"),
       },
     );
     effectState = {
@@ -5950,6 +6016,192 @@ function createEffect(overrides: Partial<ApprovalEffectRecord>): ApprovalEffectR
   };
 }
 
+function createExactWaitingApprovalFixture(input: {
+  runId: string;
+  sessionId: string;
+  turnId: string;
+  userMessageId: string;
+  assistantMessageId: string;
+  now: string;
+}) {
+  const request = { content: `Approval test ${input.turnId}` };
+  const requestActor = { actorKind: "operator" as const, actorId: "operator:test" };
+  const admissionMaterialSha256 = computeFrozenChatTurnAdmissionMaterialSha256(request);
+  const admission = {
+    admissionId: `admission:${input.runId}`,
+    admissionKind: "turn_write",
+    sessionIncarnationId: `incarnation:${input.sessionId}`,
+    workspaceId: "default",
+    sessionId: input.sessionId,
+    turnId: input.turnId,
+    materialSha256: admissionMaterialSha256,
+    aggregateRevision: 1,
+    controllerGeneration: 1,
+    actorKind: requestActor.actorKind,
+    actorId: requestActor.actorId,
+  };
+  const payload = {
+    version: "chat.turn.execute.v2",
+    admissionId: admission.admissionId,
+    sessionIncarnationId: admission.sessionIncarnationId,
+    admissionMaterialSha256,
+    workspaceId: admission.workspaceId,
+    admissionAggregateRevision: admission.aggregateRevision,
+    admissionControllerGeneration: admission.controllerGeneration,
+    effectiveRequestMaterialSha256: computeEffectiveChatTurnRequestMaterialSha256(admissionMaterialSha256, request),
+    requestActor,
+    sessionId: input.sessionId,
+    turnId: input.turnId,
+    userMessageId: input.userMessageId,
+    assistantMessageId: input.assistantMessageId,
+    branchKind: "append",
+    threadEventType: "chat_thread_turn_appended",
+    request,
+  };
+  const generationId = `waiting-generation:${input.runId}`;
+  const waitForEvent = { eventKey: "approval.resolved", correlationId: `approval:${input.turnId}` };
+  const authority = buildChatTurnRuntimeAuthoritySeal({
+    runId: input.runId,
+    turnId: input.turnId,
+    transitionKind: "waiting",
+    durableStatus: "waiting",
+    traceStatus: "waiting_for_approval",
+    transitionAt: input.now,
+    postCommitGenerationId: generationId,
+    postCommitEligibility: APPROVAL_TEST_POST_COMMIT_ELIGIBILITY,
+    waitForEvent,
+    requiredFinalizers: ["general"],
+  });
+  const metadata = withChatTurnRuntimeAuthority(
+    markGeneralChatPostCommitPending(
+      { retryPolicy: { ...DURABLE_RETRY_POLICY_DEFAULT }, waitForEvent },
+      input.now,
+      "waiting_for_approval",
+      APPROVAL_TEST_POST_COMMIT_ELIGIBILITY,
+      generationId,
+    ),
+    authority,
+  );
+  return {
+    admission,
+    run: {
+      runId: input.runId,
+      workflowKey: "chat.turn.execute",
+      status: "waiting",
+      version: 1,
+      attempt: 0,
+      maxAttempts: DURABLE_RETRY_POLICY_DEFAULT.maxAttempts,
+      payload,
+      metadata,
+      createdAt: input.now,
+      updatedAt: input.now,
+    } as Record<string, unknown> & { runId: string },
+    checkpoint: {
+      checkpointId: `checkpoint:${input.runId}:waiting`,
+      runId: input.runId,
+      checkpointKind: "run_waiting",
+      state: withChatTurnRuntimeAuthorityCheckpoint({ waitForEvent }, authority),
+      createdAt: input.now,
+    },
+  };
+}
+
+function createExactWaitingApprovalRun(
+  storage: Storage,
+  input: {
+    runId: string;
+    sessionId: string;
+    turnId: string;
+    userMessageId: string;
+    assistantMessageId?: string;
+    now: string;
+  },
+) {
+  const assistantMessageId = input.assistantMessageId ?? `assistant-approved-${input.turnId}`;
+  const request = { content: `Approval test ${input.turnId}` };
+  const requestActor = { actorKind: "operator" as const, actorId: "operator:test" };
+  const lifecycle = storage.chatSessionLifecycles.ensureActive({
+    workspaceId: "default",
+    sessionId: input.sessionId,
+    actorId: requestActor.actorId,
+    idempotencyKey: `lifecycle:${input.sessionId}`,
+    correlationId: `lifecycle:${input.sessionId}`,
+    metadataTimestamp: input.now,
+  });
+  const admissionMaterialSha256 = computeFrozenChatTurnAdmissionMaterialSha256(request);
+  const admission = storage.sessionMutationAdmissions.admit({
+    workspaceId: "default",
+    sessionId: input.sessionId,
+    expectedSessionIncarnationId: lifecycle.intent.sessionIncarnationId,
+    turnId: input.turnId,
+    runtimeOwnerId: `approval-test:${input.runId}`,
+    admissionKind: "turn_write",
+    aggregateRevision: 1,
+    controllerGeneration: lifecycle.generation,
+    actorKind: requestActor.actorKind,
+    actorId: requestActor.actorId,
+    operation: "chat_send",
+    materialSha256: admissionMaterialSha256,
+    idempotencyKey: `admission:${input.runId}`,
+    correlationId: `admission:${input.runId}`,
+  }).admission;
+  const payload = {
+    version: "chat.turn.execute.v2",
+    admissionId: admission.admissionId,
+    sessionIncarnationId: admission.sessionIncarnationId,
+    admissionMaterialSha256,
+    workspaceId: admission.workspaceId,
+    admissionAggregateRevision: admission.aggregateRevision,
+    admissionControllerGeneration: admission.controllerGeneration,
+    effectiveRequestMaterialSha256: computeEffectiveChatTurnRequestMaterialSha256(admissionMaterialSha256, request),
+    requestActor,
+    sessionId: input.sessionId,
+    turnId: input.turnId,
+    userMessageId: input.userMessageId,
+    assistantMessageId,
+    branchKind: "append",
+    threadEventType: "chat_thread_turn_appended",
+    request,
+  };
+  const generationId = `waiting-generation:${input.runId}`;
+  const waitForEvent = { eventKey: "approval.resolved", correlationId: `approval:${input.turnId}` };
+  const authority = buildChatTurnRuntimeAuthoritySeal({
+    runId: input.runId,
+    turnId: input.turnId,
+    transitionKind: "waiting",
+    durableStatus: "waiting",
+    traceStatus: "waiting_for_approval",
+    transitionAt: input.now,
+    postCommitGenerationId: generationId,
+    postCommitEligibility: APPROVAL_TEST_POST_COMMIT_ELIGIBILITY,
+    waitForEvent,
+    requiredFinalizers: ["general"],
+  });
+  const pendingMetadata = markGeneralChatPostCommitPending(
+    { retryPolicy: { ...DURABLE_RETRY_POLICY_DEFAULT }, waitForEvent },
+    input.now,
+    "waiting_for_approval",
+    APPROVAL_TEST_POST_COMMIT_ELIGIBILITY,
+    generationId,
+  );
+  const run = storage.durableRuns.createRun({
+    runId: input.runId,
+    workflowKey: "chat.turn.execute",
+    status: "waiting",
+    maxAttempts: DURABLE_RETRY_POLICY_DEFAULT.maxAttempts,
+    payload,
+    metadata: withChatTurnRuntimeAuthority(pendingMetadata, authority),
+    now: input.now,
+  });
+  storage.durableRuns.createCheckpoint({
+    runId: input.runId,
+    checkpointKind: "run_waiting",
+    state: withChatTurnRuntimeAuthorityCheckpoint({ waitForEvent }, authority),
+    createdAt: input.now,
+  });
+  return run;
+}
+
 function createApprovalEffectDeps() {
   return {
     backgroundTasks: new Set<Promise<void>>(),
@@ -5960,6 +6212,7 @@ function createApprovalEffectDeps() {
     executeApprovedPendingAction: vi.fn(),
     enqueueAfterHooks: vi.fn(),
     resolveApprovalHookWorkspaceId: vi.fn(() => "workspace-1"),
+    resolvePostCommitEligibility: vi.fn(() => APPROVAL_TEST_POST_COMMIT_ELIGIBILITY),
     recordApprovalResolutionSignals: vi.fn(),
   };
 }

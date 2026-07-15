@@ -634,6 +634,8 @@ describe("chat turn dispatch loop 31 execution coverage", () => {
     const cancellation = Object.assign(new Error("operator cancelled durable run"), {
       name: "DurableRunCancelledError",
     });
+    const abortController = new AbortController();
+    abortController.abort(cancellation);
     streamPreparedAgentChatTurn.mockImplementation(async function* () {
       yield* [];
       throw cancellation;
@@ -658,7 +660,11 @@ describe("chat turn dispatch loop 31 execution coverage", () => {
           "chat_thread_turn_appended",
           "run-1",
           undefined,
-          { streamRegistration: registration, durableLeaseOwnerId: "worker-a" },
+          {
+            streamRegistration: registration,
+            durableLeaseOwnerId: "worker-a",
+            abortSignal: abortController.signal,
+          },
         ),
       ).rejects.toBe(cancellation);
 
@@ -685,6 +691,62 @@ describe("chat turn dispatch loop 31 execution coverage", () => {
       );
       expect(host.recordDevDiagnostic).not.toHaveBeenCalled();
       expect(host.finalizeDurableChatRun).not.toHaveBeenCalled();
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("treats an untrusted provider cancellation-name spoof as an ordinary failed turn", async () => {
+    vi.useFakeTimers();
+    const spoofedCancellation = Object.assign(new Error("provider supplied this error name"), {
+      name: "DurableRunCancelledError",
+    });
+    streamPreparedAgentChatTurn.mockImplementation(async function* () {
+      yield* [];
+      throw spoofedCancellation;
+    });
+    const trace = {
+      turnId: "turn-1",
+      sessionId: "session-1",
+      status: "running",
+      routing: {},
+      durable: { runId: "run-1", status: "running", checkpointKind: "run_started" },
+    } as ChatTurnTraceRecord;
+    const host = createHost({ traceState: trace });
+    const registration = host.registerActiveChatTurnStream("session-1", "turn-1", "run-1");
+
+    try {
+      await dispatchService.executePreparedAgentChatTurnBackground(
+        host,
+        "session-1",
+        { content: "hello" },
+        createPrepared(),
+        "chat_thread_turn_appended",
+        "run-1",
+        undefined,
+        { streamRegistration: registration, durableLeaseOwnerId: "worker-a" },
+      );
+
+      expect(host.storage.chatTurnTraces.patch).toHaveBeenCalledWith(
+        "turn-1",
+        expect.objectContaining({
+          status: "failed",
+          failure: expect.objectContaining({ message: spoofedCancellation.message, retryable: true }),
+          completion: expect.objectContaining({ status: "interrupted" }),
+        }),
+      );
+      expect(host.storage.chatTurnTraces.patch).not.toHaveBeenCalledWith(
+        "turn-1",
+        expect.objectContaining({ status: "cancelled" }),
+      );
+      expect(host.finalizeDurableChatRun).toHaveBeenCalledWith(
+        "run-1",
+        expect.objectContaining({ turnId: "turn-1" }),
+        expect.anything(),
+        "worker-a",
+      );
+      expect(registration.completed).toBe(true);
     } finally {
       vi.clearAllTimers();
       vi.useRealTimers();
@@ -799,14 +861,23 @@ function createHost(
       },
     },
     storage: {
+      runImmediateTransaction: vi.fn((work: () => unknown) => work()),
       durableRuns: {
         getRun: vi.fn(() => ({ status: "running" })),
+        lockFreshActiveLeaseForUpdate: vi.fn(() => ({
+          runId: "run-1",
+          status: "running",
+          leaseOwnerId: "worker-a",
+        })),
       },
       chatTurnTraces: {
         get: vi.fn(() => traceState),
         patch: vi.fn((_turnId: string, patch: Partial<ChatTurnTraceRecord>) => ({ ...traceState, ...patch })),
       },
     } as never,
+    sessionControlRuntimeOwner: {
+      assertActiveTurnWrite: vi.fn(),
+    },
     backgroundTasks: new Set(),
     isFeatureEnabled: vi.fn((flag: string) => flag === "durableKernelV1Enabled"),
     beginDurableChatRun: options.beginDurableChatRun ?? vi.fn(() => undefined),
@@ -851,6 +922,20 @@ function createPrepared() {
       timestamp: "2026-04-11T00:00:00.000Z",
     },
     content: "hello",
+    turnAdmission: {
+      identity: {
+        admissionId: "admission:turn-1",
+        sessionIncarnationId: "incarnation:session-1",
+        workspaceId: "default",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        aggregateRevision: 1,
+        controllerGeneration: 1,
+        materialSha256: "a".repeat(64),
+      },
+      admittedRequest: { content: "hello" },
+      requestActor: { actorKind: "operator", actorId: "operator" },
+    },
     normalized: {
       mode: "chat",
     },

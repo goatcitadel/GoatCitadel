@@ -30,6 +30,7 @@ import type { OperatorSummaryCache } from "./gateway/operator-summary-cache.js";
 import type { PromptPackService } from "./prompt-pack-service.js";
 import type { RealtimeEventService } from "./realtime-event-service.js";
 import type { RuntimeLifecycleReadService } from "./runtime-lifecycle-read-service.js";
+import { projectDurableRouteResponse } from "./durable-public-projection.js";
 import { createRouteService, type RoutePort, type RouteService } from "./route-service-factory.js";
 
 export const dashboardRouteMethods = [
@@ -788,7 +789,7 @@ async function buildObserveRunTrace(
       },
     },
   };
-  return redactStructuredSecrets(trace).value;
+  return projectDurableRouteResponse(trace);
 }
 
 function safeRunTraceFilenameSegment(value: string): string {

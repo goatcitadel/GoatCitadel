@@ -25,6 +25,85 @@ export interface ChatStreamMutationLifecycle {
   markCommitted(): void;
 }
 
+/**
+ * Immutable authority for every canonical write produced by one Chat turn.
+ *
+ * The identity is admitted before routing or preparation mutates session state
+ * and is carried explicitly across process and durable-run boundaries. It must
+ * never be reconstructed from the session's current lifecycle metadata: a
+ * deleted and reactivated session may already be in a later incarnation by the
+ * time an old callback arrives.
+ */
+export interface TurnAdmissionIdentity {
+  admissionId: string;
+  sessionIncarnationId: string;
+  workspaceId: string;
+  sessionId: string;
+  turnId: string;
+  aggregateRevision: number;
+  controllerGeneration: number;
+  materialSha256: string;
+}
+
+/** Database-clock request owner used before a turn is bound to a durable run. */
+export interface TurnAdmissionRequestClaim {
+  runtimeOwnerId: string;
+  leaseRevision: number;
+}
+
+/** Exact durable worker claim required for authority-bearing durable writes. */
+export interface TurnAdmissionDurableClaim {
+  durableRunId: string;
+  leaseOwnerId: string;
+  attemptCount: number;
+}
+
+export type FrozenChatTurnExecutionRequest = Omit<
+  ChatSendMessageRequest,
+  "signal" | "operatorId" | "authActorId" | "authActorSource"
+>;
+
+export interface FrozenChatTurnRequestActor {
+  actorKind: "operator" | "external_companion" | "system";
+  actorId: string;
+  operatorId?: string;
+  authActorId?: string;
+  authActorSource?: ChatSendMessageRequest["authActorSource"];
+}
+
+/**
+ * Server-authored discriminator for the one heartbeat occurrence that owns a
+ * system Chat admission. Generic system turns deliberately do not receive it.
+ */
+export interface SystemHeartbeatOccurrenceTurnAdmission {
+  kind: "system_heartbeat_occurrence";
+  operation: "chat_system_heartbeat";
+  occurrenceId: string;
+  correlationId: string;
+  claimSha256: string;
+  durableRunId: string;
+}
+
+export interface ChatTurnSurfaceDerivation {
+  version: 1;
+  originalMode: ChatSendMessageRequest["mode"] | null;
+  originalAutoRoute: boolean | null;
+  effectiveMode: "chat";
+  effectiveAutoRoute: false;
+}
+
+export interface ActiveTurnAdmission {
+  identity: TurnAdmissionIdentity;
+  /** Request-runtime-only snapshot; durable payloads retain only one effective request plus a reversible derivation. */
+  admittedRequest: FrozenChatTurnExecutionRequest;
+  /** Exact server-derived actor authority frozen at admission. */
+  requestActor: FrozenChatTurnRequestActor;
+  /** Exact occurrence authority, present only for a storage-admitted heartbeat. */
+  systemHeartbeatOccurrence?: Readonly<SystemHeartbeatOccurrenceTurnAdmission>;
+  requestClaim?: TurnAdmissionRequestClaim;
+  durableClaim?: TurnAdmissionDurableClaim;
+}
+
 export interface PreparedAgentChatTurnDispatchOptions {
   abortSignal?: AbortSignal;
   onChildDurableRunLaunched?: (runId: string) => void;
@@ -65,7 +144,22 @@ export interface PreparedChatExecutionPlanResolution {
 }
 
 export interface DurableChatTurnExecutionPayload {
-  version: "chat.turn.execute.v1";
+  version: "chat.turn.execute.v2";
+  admissionId: string;
+  sessionIncarnationId: string;
+  admissionMaterialSha256: string;
+  workspaceId: string;
+  admissionAggregateRevision: number;
+  admissionControllerGeneration: number;
+  effectiveRequestMaterialSha256: string;
+  /** Exact server-owned derivation used only when the admitted request omitted policyRunId. */
+  policyRunIdDerivation?: {
+    version: 1;
+    kind: "durable_run_id";
+    runId: string;
+  };
+  surfaceDerivation?: ChatTurnSurfaceDerivation;
+  requestActor: FrozenChatTurnRequestActor;
   sessionId: string;
   turnId: string;
   userMessageId: string;
@@ -79,7 +173,7 @@ export interface DurableChatTurnExecutionPayload {
   parentTurnId?: string;
   sourceTurnId?: string;
   threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited";
-  request: ChatSendMessageRequest;
+  request: FrozenChatTurnExecutionRequest;
   userInputResponses?: DurableChatTurnUserInputResumeRecord[];
 }
 

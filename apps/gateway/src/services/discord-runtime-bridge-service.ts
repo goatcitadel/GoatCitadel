@@ -46,6 +46,7 @@ export interface DiscordRouteSessionRecord {
 
 export interface DiscordRuntimeBridgeHost {
   readonly storage: {
+    runImmediateTransaction<T>(callback: () => T): T;
     chatSessionBindings: {
       upsert(
         input: {
@@ -61,6 +62,7 @@ export interface DiscordRuntimeBridgeHost {
     };
     chatSessionMeta: {
       ensure(sessionId: string, now?: string, workspaceId?: string): { workspaceId?: string };
+      get(sessionId: string): { workspaceId?: string } | undefined;
     };
     chatSessionPrefs: {
       ensure(sessionId: string, now?: string): void;
@@ -248,30 +250,40 @@ export function ensureDiscordChatSession(
     threadId: route.threadId,
   });
   const now = new Date().toISOString();
-  host.storage.sessions.upsert({
-    sessionId: resolution.sessionId,
-    sessionKey: resolution.sessionKey,
-    kind: resolution.kind,
-    channel: "discord",
-    account: input.connectionId,
-    displayName: input.displayName?.trim() || undefined,
-    timestamp: now,
+  const existingMeta = host.storage.chatSessionMeta.get(resolution.sessionId);
+  if (existingMeta?.workspaceId && existingMeta.workspaceId !== DEFAULT_DISCORD_WORKSPACE_ID) {
+    throw new Error("stable Discord session key already belongs to another workspace");
+  }
+  host.storage.runImmediateTransaction(() => {
+    const lockedMeta = host.storage.chatSessionMeta.get(resolution.sessionId);
+    if (lockedMeta?.workspaceId && lockedMeta.workspaceId !== DEFAULT_DISCORD_WORKSPACE_ID) {
+      throw new Error("stable Discord session key already belongs to another workspace");
+    }
+    host.storage.sessions.upsert({
+      sessionId: resolution.sessionId,
+      sessionKey: resolution.sessionKey,
+      kind: resolution.kind,
+      channel: "discord",
+      account: input.connectionId,
+      displayName: input.displayName?.trim() || undefined,
+      timestamp: now,
+    });
+    host.storage.chatSessionMeta.ensure(resolution.sessionId, now, DEFAULT_DISCORD_WORKSPACE_ID);
+    host.storage.chatSessionPrefs.ensure(resolution.sessionId, now);
+    host.storage.chatSessionBindings.upsert(
+      {
+        sessionId: resolution.sessionId,
+        workspaceId: DEFAULT_DISCORD_WORKSPACE_ID,
+        transport: "integration",
+        connectionId: input.connectionId,
+        target: input.target,
+        writable: true,
+      },
+      now,
+    );
   });
   host.operatorSummaryCache.invalidate();
-  host.storage.chatSessionMeta.ensure(resolution.sessionId, now, DEFAULT_DISCORD_WORKSPACE_ID);
-  host.storage.chatSessionPrefs.ensure(resolution.sessionId, now);
   host.ensureChatSessionRuntimeGrants(resolution.sessionId);
-  host.storage.chatSessionBindings.upsert(
-    {
-      sessionId: resolution.sessionId,
-      workspaceId: DEFAULT_DISCORD_WORKSPACE_ID,
-      transport: "integration",
-      connectionId: input.connectionId,
-      target: input.target,
-      writable: true,
-    },
-    now,
-  );
   return host.requireChatSession(resolution.sessionId);
 }
 

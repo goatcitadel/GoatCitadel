@@ -17,6 +17,7 @@ import {
   type ChannelTypingResult,
   type ChannelUnsendInput,
   ConflictError,
+  canonicalJsonString,
   type ConnectorRecord,
   type McpInvokeRequest,
   type McpInvokeResponse,
@@ -46,6 +47,8 @@ import {
   verifyChatRoutedContextSnapshot,
   verifyChatTurnCapabilityCatalogBinding,
   verifyChatTurnCapabilitySkillBindings,
+  type PostCommitChildAdmissionIdentity,
+  type PostCommitEligibility,
   type Storage,
 } from "@goatcitadel/storage";
 import type { ApprovalRemoteTokenSecretService } from "./approval-remote-token-secret.js";
@@ -55,6 +58,7 @@ import type { ChatProactiveService } from "./chat-proactive-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
 import {
   hasAutonomousChatPostCommitPending,
+  persistPreparedChatCapabilityAdmission,
   readGeneralChatPostCommitPendingMarker,
   type GeneralChatPostCommitDurableEffectInput,
   type GeneralChatPostCommitDurableEffectExecutionInput,
@@ -62,13 +66,34 @@ import {
   type GeneralChatPostCommitEffect,
   type GeneralChatPostCommitProgress,
 } from "./chat-durable-run-service.js";
-import { upsertChatCapabilityProfileSystemInstruction, type PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
+import {
+  upsertChatCapabilityProfileSystemInstruction,
+  type PreparedAgentChatTurn,
+  type SystemHeartbeatTurnPrepPosture,
+} from "./chat-turn-prep-service.js";
+import {
+  HEARTBEAT_DECISION_RAW_OUTPUT_METADATA_KEY,
+  HEARTBEAT_DECISION_RECEIPT_METADATA_KEY,
+  buildHeartbeatDecisionReceipt,
+  type ExactHeartbeatDecision,
+  type HeartbeatDecisionReceipt,
+} from "./chat-durable-runtime-authority.js";
 import { buildChatTurnRealtimeOptions } from "./chat-turn-realtime.js";
 import { enqueueAgentEndHook } from "./chat-turn-stream-events.js";
-import type { DurableChatTurnExecutionPayload, DurableChatTurnUserInputResumeRecord } from "./chat-turn-types.js";
+import type {
+  ActiveTurnAdmission,
+  DurableChatTurnExecutionPayload,
+  DurableChatTurnUserInputResumeRecord,
+} from "./chat-turn-types.js";
+import {
+  computeEffectiveChatTurnRequestMaterialSha256,
+  computeFrozenChatTurnAdmissionMaterialSha256,
+  reconstructAdmittedChatTurnRequest,
+} from "./session-control-service.js";
 import type { CuratorService } from "./curator-service.js";
+import type { ChatPostCommitEffectAuthorityContext } from "./chat-post-commit-effect-receipt.js";
 import { parseOrchestrationWorkflowPayload as parseOrchestrationLifecycleWorkflowPayload } from "./orchestration-lifecycle-state-helpers.js";
-import type { DurableRunService } from "./durable-run-service.js";
+import { DurableWorkerInterruptionError, type DurableRunService } from "./durable-run-service.js";
 import type { HooksService } from "./hooks-service.js";
 import { IDEMPOTENT_REALTIME_ENVELOPE_KEY } from "./realtime-event-service.js";
 import type { MemoryLifecycleService } from "./memory-lifecycle-service.js";
@@ -171,11 +196,14 @@ export interface DurableExecutionHost extends chatTurnDispatchService.ChatTurnDi
       parentTurnId?: string;
       existingUserMessage?: PreparedAgentChatTurn["userMessage"];
       ingestUserMessage?: boolean;
+      userMessageId?: string;
       turnId?: string;
       assistantMessageId?: string;
       capabilityProfileId?: string;
       capabilityProfileHash?: string;
       capabilityProfileContent?: string;
+      turnAdmission?: import("./chat-turn-types.js").ActiveTurnAdmission;
+      serverOnlyPosture?: SystemHeartbeatTurnPrepPosture;
     },
   ): Promise<PreparedAgentChatTurn>;
   requireConnectorRecord(connectorId: string): ConnectorRecord;
@@ -240,6 +268,7 @@ export interface GeneralChatPostCommitEffectExecutionContext extends DurableWork
   parentRunId: string;
   generationId: string;
   leaseOwnerId: string;
+  postCommitAuthority: ChatPostCommitEffectAuthorityContext;
 }
 
 export interface DurableWorkflowFinalizationContext {
@@ -279,6 +308,7 @@ export type DurableChatTurnWorkflowHost = chatTurnDispatchService.ChatTurnDispat
   Pick<
     DurableExecutionHost,
     | "storage"
+    | "durableRunService"
     | "prepareAgentChatTurn"
     | "registerActiveChatTurnStream"
     | "persistChatStreamChunk"
@@ -448,12 +478,110 @@ export type DurableChatTurnPayload = DurableChatTurnExecutionPayload & {
   routedContextSnapshotHash?: string;
 };
 
+interface ExactSystemHeartbeatExecutionIdentity {
+  occurrenceId: string;
+  claimSha256: string;
+}
+
+interface ExactSystemHeartbeatExecutionDecision {
+  rawOutput: string;
+  decision: ExactHeartbeatDecision;
+  receipt: HeartbeatDecisionReceipt;
+}
+
+function readExactSystemHeartbeatExecutionIdentity(
+  run: DurableRunRecord,
+  payload: DurableChatTurnPayload,
+): ExactSystemHeartbeatExecutionIdentity | undefined {
+  const heartbeatPayload = payload as DurableChatTurnPayload & {
+    heartbeatOccurrenceId?: unknown;
+    heartbeatClaimSha256?: unknown;
+    heartbeatEvaluatedPolicySha256?: unknown;
+    heartbeatFrozenObjectiveSha256?: unknown;
+  };
+  const fields = [
+    heartbeatPayload.heartbeatOccurrenceId,
+    heartbeatPayload.heartbeatClaimSha256,
+    heartbeatPayload.heartbeatEvaluatedPolicySha256,
+    heartbeatPayload.heartbeatFrozenObjectiveSha256,
+  ];
+  if (fields.every((value) => value === undefined)) {
+    if (
+      run.metadata?.[HEARTBEAT_DECISION_RECEIPT_METADATA_KEY] !== undefined ||
+      run.metadata?.[HEARTBEAT_DECISION_RAW_OUTPUT_METADATA_KEY] !== undefined
+    ) {
+      throw new Error(`Non-heartbeat Chat run ${run.runId} contains heartbeat decision evidence.`);
+    }
+    return undefined;
+  }
+  const autonomous = run.metadata?.autonomous;
+  if (
+    typeof heartbeatPayload.heartbeatOccurrenceId !== "string" ||
+    !heartbeatPayload.heartbeatOccurrenceId.trim() ||
+    typeof heartbeatPayload.heartbeatClaimSha256 !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(heartbeatPayload.heartbeatClaimSha256) ||
+    typeof heartbeatPayload.heartbeatEvaluatedPolicySha256 !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(heartbeatPayload.heartbeatEvaluatedPolicySha256) ||
+    typeof heartbeatPayload.heartbeatFrozenObjectiveSha256 !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(heartbeatPayload.heartbeatFrozenObjectiveSha256) ||
+    payload.requestActor.actorKind !== "system" ||
+    payload.requestActor.actorId !== "system-heartbeat" ||
+    !autonomous ||
+    typeof autonomous !== "object" ||
+    Array.isArray(autonomous) ||
+    (autonomous as Record<string, unknown>).kind !== "heartbeat" ||
+    (autonomous as Record<string, unknown>).systemActorId !== "system-heartbeat"
+  ) {
+    throw new Error(`Durable Chat run ${run.runId} has malformed system-heartbeat execution identity.`);
+  }
+  return {
+    occurrenceId: heartbeatPayload.heartbeatOccurrenceId,
+    claimSha256: heartbeatPayload.heartbeatClaimSha256,
+  };
+}
+
+function readExactSystemHeartbeatExecutionDecision(
+  run: DurableRunRecord,
+  identity: ExactSystemHeartbeatExecutionIdentity,
+): ExactSystemHeartbeatExecutionDecision | undefined {
+  const rawOutput = run.metadata?.[HEARTBEAT_DECISION_RAW_OUTPUT_METADATA_KEY];
+  const observedReceipt = run.metadata?.[HEARTBEAT_DECISION_RECEIPT_METADATA_KEY];
+  if (rawOutput === undefined && observedReceipt === undefined) return undefined;
+  if (typeof rawOutput !== "string" || observedReceipt === undefined) {
+    throw new Error(`System heartbeat ${run.runId} has incomplete decision evidence.`);
+  }
+  const expected = buildHeartbeatDecisionReceipt({
+    occurrenceId: identity.occurrenceId,
+    claimSha256: identity.claimSha256,
+    rawOutput,
+  });
+  if (canonicalJsonString(observedReceipt) !== canonicalJsonString(expected.receipt)) {
+    throw new Error(`System heartbeat ${run.runId} decision receipt drifted from its raw output.`);
+  }
+  return { rawOutput, ...expected };
+}
+
 export function parseDurableChatTurnPayload(run: DurableRunRecord): DurableChatTurnPayload | undefined {
   const payload = run.payload as Partial<DurableChatTurnPayload> | undefined;
-  if (!payload || payload.version !== "chat.turn.execute.v1") {
+  if (!payload || payload.version !== "chat.turn.execute.v2") {
     return undefined;
   }
   if (
+    typeof payload.admissionId !== "string" ||
+    !payload.admissionId.trim() ||
+    typeof payload.sessionIncarnationId !== "string" ||
+    !payload.sessionIncarnationId.trim() ||
+    typeof payload.admissionMaterialSha256 !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(payload.admissionMaterialSha256) ||
+    typeof payload.workspaceId !== "string" ||
+    !payload.workspaceId.trim() ||
+    !Number.isSafeInteger(payload.admissionAggregateRevision) ||
+    Number(payload.admissionAggregateRevision) < 1 ||
+    !Number.isSafeInteger(payload.admissionControllerGeneration) ||
+    Number(payload.admissionControllerGeneration) < 1 ||
+    typeof payload.effectiveRequestMaterialSha256 !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(payload.effectiveRequestMaterialSha256) ||
+    !isFrozenChatTurnRequestActor(payload.requestActor) ||
     typeof payload.sessionId !== "string" ||
     typeof payload.turnId !== "string" ||
     typeof payload.userMessageId !== "string" ||
@@ -463,6 +591,28 @@ export function parseDurableChatTurnPayload(run: DurableRunRecord): DurableChatT
     !payload.request ||
     typeof payload.request !== "object"
   ) {
+    return undefined;
+  }
+  const request = payload.request as DurableChatTurnPayload["request"];
+  if (["signal", "operatorId", "authActorId", "authActorSource"].some((key) => key in request)) {
+    return undefined;
+  }
+  if (!isExactChatTurnSurfaceDerivation(payload.surfaceDerivation)) {
+    return undefined;
+  }
+  if (!isExactDurablePolicyRunIdDerivation(payload, request, run.runId)) {
+    return undefined;
+  }
+  try {
+    const admittedRequest = reconstructAdmittedChatTurnRequest(request, payload.surfaceDerivation);
+    if (
+      computeFrozenChatTurnAdmissionMaterialSha256(admittedRequest) !== payload.admissionMaterialSha256 ||
+      computeEffectiveChatTurnRequestMaterialSha256(payload.admissionMaterialSha256, request) !==
+        payload.effectiveRequestMaterialSha256
+    ) {
+      return undefined;
+    }
+  } catch {
     return undefined;
   }
   if (
@@ -488,7 +638,82 @@ export function parseDurableChatTurnPayload(run: DurableRunRecord): DurableChatT
   ) {
     return undefined;
   }
-  return payload as DurableChatTurnPayload;
+  const parsed = payload as DurableChatTurnPayload;
+  try {
+    readExactSystemHeartbeatExecutionIdentity(run, parsed);
+  } catch {
+    return undefined;
+  }
+  return parsed;
+}
+
+function isExactDurablePolicyRunIdDerivation(
+  payload: Partial<DurableChatTurnPayload>,
+  request: DurableChatTurnPayload["request"],
+  durableRunId: string,
+): boolean {
+  const declaredPolicyRunId = typeof request.policyRunId === "string" ? request.policyRunId.trim() : undefined;
+  if (request.policyRunId !== undefined && !declaredPolicyRunId) return false;
+  if (declaredPolicyRunId) return payload.policyRunIdDerivation === undefined;
+  const derivation = payload.policyRunIdDerivation;
+  return Boolean(
+    derivation &&
+    typeof derivation === "object" &&
+    !Array.isArray(derivation) &&
+    Object.keys(derivation).sort().join(",") === "kind,runId,version" &&
+    derivation.version === 1 &&
+    derivation.kind === "durable_run_id" &&
+    derivation.runId === durableRunId,
+  );
+}
+
+function isFrozenChatTurnRequestActor(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const actor = value as Record<string, unknown>;
+  const allowed = new Set(["actorKind", "actorId", "operatorId", "authActorId", "authActorSource"]);
+  if (Object.keys(actor).some((key) => !allowed.has(key))) return false;
+  const actorKind = actor.actorKind;
+  const hasExactKind = actorKind === "operator" || actorKind === "external_companion" || actorKind === "system";
+  const hasOperatorProjection =
+    actor.operatorId !== undefined || actor.authActorId !== undefined || actor.authActorSource !== undefined;
+  return (
+    hasExactKind &&
+    typeof actor.actorId === "string" &&
+    Boolean(actor.actorId.trim()) &&
+    (actorKind === "operator" || !hasOperatorProjection) &&
+    (actor.operatorId === undefined || typeof actor.operatorId === "string") &&
+    (actor.authActorId === undefined || typeof actor.authActorId === "string") &&
+    (actor.authActorSource === undefined || typeof actor.authActorSource === "string")
+  );
+}
+
+function isExactChatTurnSurfaceDerivation(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const derivation = value as Record<string, unknown>;
+  if (
+    Object.keys(derivation).sort().join("|") !==
+    ["effectiveAutoRoute", "effectiveMode", "originalAutoRoute", "originalMode", "version"].sort().join("|")
+  ) {
+    return false;
+  }
+  return (
+    derivation.version === 1 &&
+    derivation.effectiveMode === "chat" &&
+    derivation.effectiveAutoRoute === false &&
+    (derivation.originalMode === null || typeof derivation.originalMode === "string") &&
+    (derivation.originalAutoRoute === null || typeof derivation.originalAutoRoute === "boolean")
+  );
+}
+
+/**
+ * Legacy v1 Chat runs predate immutable session-incarnation admission. They
+ * are detected explicitly so recovery can terminalize/manual-reconcile them;
+ * they are never upgraded by looking up the session's current incarnation.
+ */
+export function isLegacyUnadmittedDurableChatTurnPayload(run: DurableRunRecord): boolean {
+  const payload = run.payload as { version?: unknown } | undefined;
+  return payload?.version === "chat.turn.execute.v1";
 }
 
 function containsRawDurableRoutedContext(value: unknown): boolean {
@@ -523,15 +748,22 @@ export function parseGeneralChatPostCommitEffectWorkflowPayload(
   const payload = run.payload as Partial<GeneralChatPostCommitEffectWorkflowPayload> | undefined;
   if (
     !payload ||
-    payload.version !== "chat.post_commit.effect.v1" ||
+    Object.keys(payload as Record<string, unknown>)
+      .sort()
+      .join(",") !==
+      "childAdmission,effect,input,parentRunId,postCommitEligibility,postCommitGenerationId,traceStatus,version" ||
+    payload.version !== "chat.post_commit.effect.v2" ||
     typeof payload.parentRunId !== "string" ||
     !payload.parentRunId.trim() ||
-    typeof payload.generationId !== "string" ||
-    !payload.generationId.trim() ||
+    typeof payload.postCommitGenerationId !== "string" ||
+    !payload.postCommitGenerationId.trim() ||
     typeof payload.traceStatus !== "string" ||
     !payload.input ||
     typeof payload.input !== "object" ||
-    !isGeneralChatPostCommitDurableEffectInput(payload.input)
+    !isGeneralChatPostCommitDurableEffectInput(payload.input) ||
+    payload.effect !== payload.input.effect ||
+    !isPostCommitChildAdmissionIdentity(payload.childAdmission) ||
+    !isPostCommitEligibility(payload.postCommitEligibility)
   ) {
     return undefined;
   }
@@ -549,7 +781,10 @@ function isGeneralChatPostCommitDurableEffectInput(
     return false;
   }
   if (input.effect === "memory_maintenance") {
-    return typeof input.delegatedChild === "boolean";
+    return (
+      Object.keys(input).sort().join(",") === "delegatedChild,effect,sessionId,turnId,workspaceId" &&
+      typeof input.delegatedChild === "boolean"
+    );
   }
   if (
     (input.effect !== "commitments" && input.effect !== "background_review") ||
@@ -557,7 +792,53 @@ function isGeneralChatPostCommitDurableEffectInput(
   ) {
     return false;
   }
-  return input.effect !== "background_review" || typeof input.delegatedChild === "boolean";
+  if (input.effect === "commitments") {
+    return Object.keys(input).sort().join(",") === "autonomous,effect,sessionId,turnId,workspaceId";
+  }
+  return (
+    Object.keys(input).sort().join(",") === "autonomous,delegatedChild,effect,sessionId,turnId,workspaceId" &&
+    typeof input.delegatedChild === "boolean"
+  );
+}
+
+function isPostCommitChildAdmissionIdentity(value: unknown): value is PostCommitChildAdmissionIdentity {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const admission = value as Partial<PostCommitChildAdmissionIdentity>;
+  return (
+    Object.keys(value as Record<string, unknown>)
+      .sort()
+      .join(",") ===
+      "actorId,actorKind,admissionId,aggregateRevision,controllerGeneration,materialSha256,operation,sessionId,sessionIncarnationId,workspaceId" &&
+    Boolean(readRequiredString(admission.admissionId)) &&
+    Boolean(readRequiredString(admission.sessionIncarnationId)) &&
+    Boolean(readRequiredString(admission.workspaceId)) &&
+    Boolean(readRequiredString(admission.sessionId)) &&
+    Number.isSafeInteger(admission.aggregateRevision) &&
+    Number(admission.aggregateRevision) > 0 &&
+    Number.isSafeInteger(admission.controllerGeneration) &&
+    Number(admission.controllerGeneration) > 0 &&
+    (admission.actorKind === "operator" ||
+      admission.actorKind === "external_companion" ||
+      admission.actorKind === "system") &&
+    Boolean(readRequiredString(admission.actorId)) &&
+    admission.operation === "chat_post_commit_child" &&
+    typeof admission.materialSha256 === "string" &&
+    /^[a-f0-9]{64}$/u.test(admission.materialSha256)
+  );
+}
+
+function isPostCommitEligibility(value: unknown): value is PostCommitEligibility {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const eligibility = value as Partial<PostCommitEligibility>;
+  return (
+    Object.keys(value as Record<string, unknown>)
+      .sort()
+      .join(",") === "autonomyEnabledAtParentSettlement,evalIntegrityTurn,humanSession,version" &&
+    eligibility.version === 1 &&
+    typeof eligibility.autonomyEnabledAtParentSettlement === "boolean" &&
+    typeof eligibility.evalIntegrityTurn === "boolean" &&
+    typeof eligibility.humanSession === "boolean"
+  );
 }
 
 function readRequiredString(value: unknown): string | undefined {
@@ -1751,29 +2032,89 @@ export async function executeDurableChatTurnRun(
   assertAutonomousDurableRunAllowed(host, run);
   const payload = parseDurableChatTurnPayload(run);
   if (!payload) {
+    if (isLegacyUnadmittedDurableChatTurnPayload(run)) {
+      const legacyError = new Error(
+        `Legacy durable Chat run ${run.runId} has no immutable session-incarnation admission and requires manual reconciliation.`,
+      );
+      legacyError.name = "LegacyDurableChatAdmissionRequiredError";
+      throw legacyError;
+    }
     throw new Error("Durable chat run payload is invalid or incomplete.");
   }
-  const userMessage = host.storage.chatMessages.get(payload.userMessageId);
-  if (!userMessage) {
-    throw new NotFoundError({ entity: "Chat message", id: payload.userMessageId });
+  const leaseOwnerId = run.leaseOwnerId?.trim();
+  if (run.status !== "running" || !leaseOwnerId || !Number.isSafeInteger(run.attemptCount)) {
+    throw new Error(`Durable Chat run ${run.runId} has no fresh running execution claim.`);
   }
-  const userMessageError = validateDurableChatLinkedUserMessage(userMessage, payload);
-  if (userMessageError) {
-    throw new Error(userMessageError);
+  const heartbeatIdentity = readExactSystemHeartbeatExecutionIdentity(run, payload);
+  const turnAdmission = host.sessionControlRuntimeOwner.withDurableClaim(
+    {
+      admissionId: payload.admissionId,
+      sessionIncarnationId: payload.sessionIncarnationId,
+      workspaceId: payload.workspaceId,
+      sessionId: payload.sessionId,
+      turnId: payload.turnId,
+      aggregateRevision: payload.admissionAggregateRevision,
+      controllerGeneration: payload.admissionControllerGeneration,
+      materialSha256: payload.admissionMaterialSha256,
+    },
+    reconstructAdmittedChatTurnRequest(payload.request, payload.surfaceDerivation),
+    payload.requestActor,
+    { durableRunId: run.runId, leaseOwnerId, attemptCount: run.attemptCount },
+    heartbeatIdentity
+      ? {
+          kind: "system_heartbeat_occurrence",
+          operation: "chat_system_heartbeat",
+          occurrenceId: heartbeatIdentity.occurrenceId,
+          correlationId: heartbeatIdentity.occurrenceId,
+          claimSha256: heartbeatIdentity.claimSha256,
+          durableRunId: run.runId,
+        }
+      : undefined,
+  );
+  host.sessionControlRuntimeOwner.assertActiveTurnWrite(turnAdmission);
+  const userMessage = host.storage.chatMessages.get(payload.userMessageId);
+  if (heartbeatIdentity) {
+    if (userMessage) {
+      throw new Error(`System heartbeat ${run.runId} cannot execute with a persisted input message.`);
+    }
+    if ((payload.userInputResponses?.length ?? 0) > 0) {
+      throw new Error(`System heartbeat ${run.runId} cannot resume operator input.`);
+    }
+  } else {
+    if (!userMessage) {
+      throw new NotFoundError({ entity: "Chat message", id: payload.userMessageId });
+    }
+    const userMessageError = validateDurableChatLinkedUserMessage(userMessage, payload);
+    if (userMessageError) {
+      throw new Error(userMessageError);
+    }
   }
   const routedContextSnapshot = loadAndVerifyDurableChatRoutedContextSnapshot(host, run, payload);
-  const recoveryTrace = validateCommittedDurableChatTurnRecoveryTrace(host, payload, run.runId, userMessage);
+  const recoveryTrace = validateCommittedDurableChatTurnRecoveryTrace(host, payload, run.runId, userMessage, run);
   if (recoveryTrace.outcome === "invalid") {
     throw new Error(recoveryTrace.reason);
   }
   const committedRecoveryTrace = recoveryTrace.outcome === "valid" ? recoveryTrace.trace : undefined;
-  const resumedContent = buildDurableChatTurnResumeContent(userMessage.content, payload.userInputResponses);
-  const resumedUserMessage =
-    resumedContent === userMessage.content ? userMessage : { ...userMessage, content: resumedContent };
+  const resumedContent = heartbeatIdentity
+    ? payload.request.content
+    : buildDurableChatTurnResumeContent(userMessage!.content, payload.userInputResponses);
+  const resumedUserMessage = heartbeatIdentity
+    ? undefined
+    : resumedContent === userMessage!.content
+      ? userMessage
+      : { ...userMessage!, content: resumedContent };
+  const { actorId: _admissionActorId, actorKind: _admissionActorKind, ...requestActor } = payload.requestActor;
   const request = {
     ...payload.request,
+    ...(heartbeatIdentity
+      ? {
+          operatorId: "system-heartbeat",
+          authActorId: "system-heartbeat",
+          authActorSource: "none" as const,
+        }
+      : requestActor),
     content: resumedContent,
-    policyRunId: payload.request.policyRunId ?? run.runId,
+    policyRunId: payload.request.policyRunId ?? payload.policyRunIdDerivation?.runId,
     signal: context?.signal,
   };
   const capabilityProfileStore = host.storage.chatTurnCapabilityProfiles;
@@ -1787,14 +2128,29 @@ export async function executeDurableChatTurnRun(
     branchKind: payload.branchKind,
     sourceTurnId: payload.sourceTurnId,
     parentTurnId: payload.parentTurnId,
-    existingUserMessage: resumedUserMessage,
+    ...(resumedUserMessage ? { existingUserMessage: resumedUserMessage } : {}),
     ingestUserMessage: false,
+    ...(heartbeatIdentity ? { userMessageId: payload.userMessageId } : {}),
     turnId: payload.turnId,
     assistantMessageId: payload.assistantMessageId,
     capabilityProfileId: payload.capabilityProfileId ?? existingCapabilityProfile?.profileId,
     capabilityProfileHash: payload.capabilityProfileHash ?? existingCapabilityProfile?.hashes.profileHash,
-    capabilityProfileContent: userMessage.content,
+    capabilityProfileContent: heartbeatIdentity ? payload.request.content : userMessage!.content,
+    turnAdmission,
+    ...(heartbeatIdentity
+      ? {
+          serverOnlyPosture: {
+            kind: "system_heartbeat" as const,
+            actorId: "system-heartbeat" as const,
+            operation: "chat_system_heartbeat" as const,
+            occurrenceId: heartbeatIdentity.occurrenceId,
+            claimSha256: heartbeatIdentity.claimSha256,
+            durableRunId: run.runId,
+          },
+        }
+      : {}),
   });
+  host.sessionControlRuntimeOwner.assertActiveTurnWrite(turnAdmission);
   assertDurableChatCapabilityProfileBinding(run.runId, payload, prepared);
   if (routedContextSnapshot) {
     injectFrozenDurableChatRoutedContext(prepared, routedContextSnapshot);
@@ -1822,13 +2178,15 @@ export async function executeDurableChatTurnRun(
     verifyChatTurnCapabilityCatalogBinding(durableProfile, catalogSnapshot);
     verifyChatTurnCapabilitySkillBindings(durableProfile, host.storage.skillLifecycle.list());
     host.storage.runImmediateTransaction(() => {
-      prepared.capabilityCatalogSnapshot = host.storage.capabilityCatalogSnapshots.create(catalogSnapshot);
-      prepared.capabilityProfile = capabilityProfileStore.create(durableProfile);
+      host.sessionControlRuntimeOwner.assertActiveTurnWrite(turnAdmission);
+      prepared.capabilityProfile = durableProfile;
+      persistPreparedChatCapabilityAdmission(host.storage, prepared);
       host.storage.chatTurnTraces.patch(payload.turnId, {
         capabilitySnapshotId: durableProfile.catalog.snapshotId,
         capabilityProfileId: durableProfile.profileId,
         capabilityProfileHash: durableProfile.hashes.profileHash,
       });
+      host.sessionControlRuntimeOwner.assertActiveTurnWrite(turnAdmission);
     });
   }
   throwIfDurableWorkflowAborted(context);
@@ -1839,11 +2197,10 @@ export async function executeDurableChatTurnRun(
       ? finalizedRun.status === "waiting"
       : isDurableRunTerminal(finalizedRun.status);
     if (!finalizedAsExpected) {
-      const error = new Error(
+      throw new DurableWorkerInterruptionError(
+        "lease_lost",
         `Durable Chat recovery for ${run.runId} could not commit ${committedRecoveryTrace.status} state under lease ${run.leaseOwnerId ?? "unknown"}.`,
       );
-      error.name = "DurableWorkerInterruptionError";
-      throw error;
     }
     await reconcileDurableChatPostCommit(host, finalizedRun, payload);
     return;
@@ -1855,8 +2212,11 @@ export async function executeDurableChatTurnRun(
     run.runId,
     continuation ? { continuation: true } : undefined,
   );
+  const dispatchHost = heartbeatIdentity
+    ? createSystemHeartbeatDispatchHost(host, run, payload, heartbeatIdentity, turnAdmission)
+    : host;
   await chatTurnDispatchService.executePreparedAgentChatTurnBackground(
-    host,
+    dispatchHost,
     payload.sessionId,
     request,
     prepared,
@@ -1871,6 +2231,214 @@ export async function executeDurableChatTurnRun(
     },
   );
   await reconcileDurableChatPostCommit(host, run, payload);
+}
+
+function createSystemHeartbeatDispatchHost(
+  host: DurableChatTurnWorkflowHost,
+  run: DurableRunRecord,
+  payload: DurableChatTurnPayload,
+  heartbeatIdentity: ExactSystemHeartbeatExecutionIdentity,
+  turnAdmission: ActiveTurnAdmission,
+): DurableChatTurnWorkflowHost {
+  const maxRawCodeUnits = 65_536;
+  const maxDeltaChunks = 8_192;
+  let rawOutput = "";
+  let rawDeltaChunkCount = 0;
+  const retryWithoutDecisionEvidence = (reason: string): never => {
+    try {
+      const scheduled = host.durableRunService.scheduleRunningWorkflowRetry(
+        run.runId,
+        reason,
+        "system-heartbeat",
+        run.leaseOwnerId,
+      );
+      if (scheduled.status === "queued") {
+        host.durableRunService.requestRunProcessing(run.runId);
+      }
+    } catch (recoveryError) {
+      void recoveryError;
+      // A superseding operator admission or lost durable lease owns recovery.
+    }
+    throw new DurableWorkerInterruptionError(
+      "heartbeat_unavailable",
+      "System heartbeat decision requires bounded durable recovery.",
+    );
+  };
+  const persistDecision = (
+    decisionContext: ExactSystemHeartbeatExecutionDecision,
+    commitCompletedTrace: (() => void) | undefined,
+  ): void => {
+    host.storage.runImmediateTransaction(() => {
+      try {
+        host.sessionControlRuntimeOwner.assertActiveTurnWrite(turnAdmission);
+      } catch {
+        throw new DurableWorkerInterruptionError("lease_lost", "System heartbeat write authority was superseded.");
+      }
+      const current = host.storage.durableRuns.lockFreshActiveLeaseForUpdate(run.runId, run.leaseOwnerId!);
+      if (!current) {
+        throw new DurableWorkerInterruptionError("lease_lost", "System heartbeat durable lease was superseded.");
+      }
+      const currentIdentity = readExactSystemHeartbeatExecutionIdentity(current, payload);
+      if (
+        !currentIdentity ||
+        currentIdentity.occurrenceId !== heartbeatIdentity.occurrenceId ||
+        currentIdentity.claimSha256 !== heartbeatIdentity.claimSha256
+      ) {
+        throw new Error(`System heartbeat ${run.runId} execution identity drifted before decision commit.`);
+      }
+      if (host.storage.chatMessages.get(payload.userMessageId)) {
+        throw new Error(`System heartbeat ${run.runId} cannot persist decision evidence beside an input message.`);
+      }
+      const existingDecision = readExactSystemHeartbeatExecutionDecision(current, currentIdentity);
+      if (
+        existingDecision &&
+        (existingDecision.rawOutput !== decisionContext.rawOutput ||
+          canonicalJsonString(existingDecision.receipt) !== canonicalJsonString(decisionContext.receipt))
+      ) {
+        throw new Error(`System heartbeat ${run.runId} decision evidence changed within one occurrence.`);
+      }
+      commitCompletedTrace?.();
+      const completedTrace = host.storage.chatTurnTraces.get(payload.turnId);
+      if (completedTrace.status !== "completed" || !isExactSystemHeartbeatCompletion(completedTrace.completion)) {
+        const incomplete = new Error("System heartbeat completion callback did not commit an exact completed trace.");
+        incomplete.name = "SystemHeartbeatDecisionIncompleteError";
+        throw incomplete;
+      }
+      if (!existingDecision) {
+        host.storage.durableRuns.updateRun({
+          runId: run.runId,
+          status: "running",
+          metadata: {
+            ...(current.metadata ?? {}),
+            [HEARTBEAT_DECISION_RECEIPT_METADATA_KEY]: decisionContext.receipt,
+            [HEARTBEAT_DECISION_RAW_OUTPUT_METADATA_KEY]: decisionContext.rawOutput,
+          },
+          updatedAt: new Date().toISOString(),
+          expectedVersion: current.version,
+        });
+      }
+      const existingAssistant = host.storage.chatMessages.get(payload.assistantMessageId);
+      if (!decisionContext.decision.notify) {
+        if (existingAssistant) {
+          throw new Error(`Silent system heartbeat ${run.runId} already has visible assistant output.`);
+        }
+      } else {
+        const normalizedMessage = decisionContext.decision.normalizedMessage;
+        if (
+          existingAssistant &&
+          (existingAssistant.sessionId !== payload.sessionId ||
+            existingAssistant.role !== "assistant" ||
+            existingAssistant.actorType !== "system" ||
+            existingAssistant.actorId !== "system-heartbeat" ||
+            existingAssistant.content !== normalizedMessage)
+        ) {
+          throw new Error(`System heartbeat ${run.runId} assistant output conflicts with its decision receipt.`);
+        }
+        if (!existingAssistant) {
+          host.storage.chatMessages.upsert({
+            messageId: payload.assistantMessageId,
+            sessionId: payload.sessionId,
+            role: "assistant",
+            actorType: "system",
+            actorId: "system-heartbeat",
+            content: normalizedMessage,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      }
+      try {
+        host.sessionControlRuntimeOwner.assertActiveTurnWrite(turnAdmission);
+      } catch {
+        throw new DurableWorkerInterruptionError("lease_lost", "System heartbeat write authority was superseded.");
+      }
+    });
+  };
+  const ingestEvent: DurableChatTurnWorkflowHost["ingestEvent"] = async (_idempotencyKey, event, options) => {
+    if (
+      event.eventId !== payload.assistantMessageId ||
+      event.message?.role !== "assistant" ||
+      typeof event.message.content !== "string" ||
+      event.message.content !== rawOutput
+    ) {
+      return retryWithoutDecisionEvidence("heartbeat_decision_stream_mismatch");
+    }
+    let decisionContext: ExactSystemHeartbeatExecutionDecision;
+    try {
+      decisionContext = {
+        rawOutput,
+        ...buildHeartbeatDecisionReceipt({
+          occurrenceId: heartbeatIdentity.occurrenceId,
+          claimSha256: heartbeatIdentity.claimSha256,
+          rawOutput,
+        }),
+      };
+    } catch {
+      return retryWithoutDecisionEvidence("heartbeat_decision_invalid");
+    }
+    try {
+      persistDecision(decisionContext, options?.onCommit);
+    } catch (error) {
+      if (error instanceof DurableWorkerInterruptionError) {
+        throw error;
+      }
+      return retryWithoutDecisionEvidence(
+        error instanceof Error && error.name === "SystemHeartbeatDecisionIncompleteError"
+          ? "heartbeat_decision_incomplete"
+          : "heartbeat_decision_commit_failed",
+      );
+    }
+    return undefined;
+  };
+  const persistChatStreamChunk: DurableChatTurnWorkflowHost["persistChatStreamChunk"] = (chunk) => {
+    if (chunk.type === "delta") {
+      rawDeltaChunkCount += 1;
+      if (rawDeltaChunkCount > maxDeltaChunks || rawOutput.length + chunk.delta.length > maxRawCodeUnits) {
+        return retryWithoutDecisionEvidence("heartbeat_decision_stream_oversized");
+      }
+      rawOutput += chunk.delta;
+      return;
+    }
+    if (chunk.type === "approval_required") {
+      const blocked = new Error("System heartbeat tool execution cannot enter approval waiting.");
+      blocked.name = "SystemHeartbeatApprovalRequiredError";
+      throw blocked;
+    }
+  };
+  const steerService = new Proxy(host.steerService, {
+    get(target, property) {
+      if (property === "drainPending") return () => [];
+      const value = Reflect.get(target, property, target) as unknown;
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const hooksService = new Proxy(host.hooksService, {
+    get(target, property) {
+      if (property === "runInlineHooks") return async () => ({ runs: [] });
+      if (property === "enqueueAfterHooks") return () => undefined;
+      const value = Reflect.get(target, property, target) as unknown;
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const overrides = new Map<PropertyKey, unknown>([
+    ["ingestEvent", ingestEvent],
+    ["persistChatStreamChunk", persistChatStreamChunk],
+    ["publishRealtime", () => undefined],
+    ["updateActiveLeafOrThrow", () => undefined],
+    ["recordDevDiagnostic", () => undefined],
+    ["recordRuntimeDecision", () => undefined],
+    ["recordCapabilityGapFromTrace", () => undefined],
+    ["collectCapabilityUpgradeSuggestions", async () => []],
+    ["collectSpecialistCandidateSuggestions", () => []],
+    ["steerService", steerService],
+    ["hooksService", hooksService],
+  ]);
+  return new Proxy(host, {
+    get(target, property) {
+      if (overrides.has(property)) return overrides.get(property);
+      const value = Reflect.get(target, property, target) as unknown;
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
 }
 
 export function loadAndVerifyDurableChatRoutedContextSnapshot(
@@ -1977,11 +2545,13 @@ async function reconcileDurableChatPostCommit(
   run: DurableRunRecord,
   payload: DurableChatTurnExecutionPayload,
 ): Promise<void> {
+  if (typeof host.reconcileAutonomousChatPostCommit === "function") {
+    await host.reconcileAutonomousChatPostCommit(run.runId);
+  }
   if (typeof host.reconcileGeneralChatPostCommit === "function") {
     await host.reconcileGeneralChatPostCommit(run.runId);
   }
   if (typeof host.reconcileAutonomousChatPostCommit === "function") {
-    await host.reconcileAutonomousChatPostCommit(run.runId);
     return;
   }
   // Compatibility fallback for narrow hosts. Shipped Gateway hosts use the
@@ -2023,16 +2593,17 @@ async function executeGeneralChatPostCommitEffectRun(
   if (!payload) {
     throw new Error(`Durable Chat post-commit effect payload is invalid for run ${run.runId}.`);
   }
-  const provenance = assertGeneralChatPostCommitEffectProvenance(port, run, payload);
-  const executionInput = hydrateGeneralChatPostCommitEffectInput(port, payload.input, provenance);
   if (!run.leaseOwnerId) {
     throw new Error(`Durable Chat post-commit effect ${run.runId} is missing its claimed lease owner.`);
   }
+  const provenance = assertGeneralChatPostCommitEffectProvenance(port, run, payload);
+  const executionInput = hydrateGeneralChatPostCommitEffectInput(port, payload.input, provenance);
   const result = await port.executeGeneralChatPostCommitDurableEffect(executionInput, {
     effectRunId: run.runId,
     parentRunId: payload.parentRunId,
-    generationId: payload.generationId,
+    generationId: payload.postCommitGenerationId,
     leaseOwnerId: run.leaseOwnerId,
+    postCommitAuthority: provenance.authority,
     ...(context?.signal ? { signal: context.signal } : {}),
   });
   throwIfDurableWorkflowAborted(context);
@@ -2041,7 +2612,7 @@ async function executeGeneralChatPostCommitEffectRun(
     workflow: "chat.post_commit.effect",
     status: "completed",
     parentRunId: payload.parentRunId,
-    generationId: payload.generationId,
+    postCommitGenerationId: payload.postCommitGenerationId,
     effect: payload.input.effect,
     workspaceId: payload.input.workspaceId,
     sessionId: payload.input.sessionId,
@@ -2054,7 +2625,11 @@ function assertGeneralChatPostCommitEffectProvenance(
   port: DurableChatPostCommitEffectWorkflowPort,
   run: DurableRunRecord,
   payload: GeneralChatPostCommitEffectWorkflowPayload,
-): { parentPayload: DurableChatTurnExecutionPayload; trace: ChatTurnTraceRecord } {
+): {
+  parentPayload: DurableChatTurnExecutionPayload;
+  trace: ChatTurnTraceRecord;
+  authority: ChatPostCommitEffectAuthorityContext;
+} {
   const parent = port.storage.durableRuns.getRun(payload.parentRunId);
   const parentPayload = parseDurableChatTurnPayload(parent);
   if (
@@ -2072,9 +2647,9 @@ function assertGeneralChatPostCommitEffectProvenance(
       }
     | undefined;
   const linkedRunId =
-    pending?.generationId === payload.generationId
+    pending?.generationId === payload.postCommitGenerationId
       ? pending.durableEffectRunIds[payload.input.effect]
-      : completed?.generationId === payload.generationId
+      : completed?.generationId === payload.postCommitGenerationId
         ? completed.durableEffectRunIds?.[payload.input.effect]
         : undefined;
   if (linkedRunId !== run.runId) {
@@ -2082,28 +2657,60 @@ function assertGeneralChatPostCommitEffectProvenance(
   }
   const trace = port.storage.chatTurnTraces.get(payload.input.turnId);
   const traceWorkspaceId = trace.guidance?.workspaceId?.trim() || "default";
+  const metadataChildAdmission = run.metadata?.childAdmission;
+  const metadataEligibility = run.metadata?.postCommitEligibility;
   if (
     trace.sessionId !== payload.input.sessionId ||
     traceWorkspaceId !== payload.input.workspaceId ||
     run.metadata?.parentRunId !== payload.parentRunId ||
-    run.metadata?.generationId !== payload.generationId ||
+    run.metadata?.postCommitGenerationId !== payload.postCommitGenerationId ||
     run.metadata?.effect !== payload.input.effect ||
     run.metadata?.workspaceId !== payload.input.workspaceId ||
     run.metadata?.sessionId !== payload.input.sessionId ||
-    run.metadata?.turnId !== payload.input.turnId
+    run.metadata?.turnId !== payload.input.turnId ||
+    !isPostCommitChildAdmissionIdentity(metadataChildAdmission) ||
+    !samePostCommitChildAdmission(metadataChildAdmission, payload.childAdmission) ||
+    !isPostCommitEligibility(metadataEligibility) ||
+    !samePostCommitEligibility(metadataEligibility, payload.postCommitEligibility)
   ) {
     throw new Error(`Durable Chat post-commit effect ${run.runId} has inconsistent workspace/session/turn provenance.`);
   }
-  return { parentPayload, trace };
+  return {
+    parentPayload,
+    trace,
+    authority: {
+      parent: {
+        admissionId: parentPayload.admissionId,
+        sessionIncarnationId: parentPayload.sessionIncarnationId,
+        workspaceId: parentPayload.workspaceId,
+        sessionId: parentPayload.sessionId,
+        turnId: parentPayload.turnId,
+        aggregateRevision: parentPayload.admissionAggregateRevision,
+        controllerGeneration: parentPayload.admissionControllerGeneration,
+        materialSha256: parentPayload.admissionMaterialSha256,
+      },
+      child: payload.childAdmission,
+      childDurableClaim: {
+        durableRunId: run.runId,
+        leaseOwnerId: run.leaseOwnerId!,
+        attemptCount: run.attemptCount,
+      },
+      postCommitEligibility: payload.postCommitEligibility,
+    },
+  };
 }
 
 function hydrateGeneralChatPostCommitEffectInput(
   port: DurableChatPostCommitEffectWorkflowPort,
   input: GeneralChatPostCommitDurableEffectInput,
-  provenance: { parentPayload: DurableChatTurnExecutionPayload; trace: ChatTurnTraceRecord },
+  provenance: {
+    parentPayload: DurableChatTurnExecutionPayload;
+    trace: ChatTurnTraceRecord;
+    authority: ChatPostCommitEffectAuthorityContext;
+  },
 ): GeneralChatPostCommitDurableEffectExecutionInput {
   if (input.effect === "memory_maintenance") {
-    return input;
+    return { ...input, postCommitEligibility: provenance.authority.postCommitEligibility };
   }
   const userMessage = port.storage.chatMessages.get(provenance.parentPayload.userMessageId);
   const assistantMessage = provenance.trace.assistantMessageId
@@ -2122,7 +2729,35 @@ function hydrateGeneralChatPostCommitEffectInput(
     ...input,
     userText: userMessage.content,
     assistantText: assistantMessage.content,
+    postCommitEligibility: provenance.authority.postCommitEligibility,
   };
+}
+
+function samePostCommitChildAdmission(
+  left: PostCommitChildAdmissionIdentity,
+  right: PostCommitChildAdmissionIdentity,
+): boolean {
+  return (
+    left.admissionId === right.admissionId &&
+    left.sessionIncarnationId === right.sessionIncarnationId &&
+    left.workspaceId === right.workspaceId &&
+    left.sessionId === right.sessionId &&
+    left.aggregateRevision === right.aggregateRevision &&
+    left.controllerGeneration === right.controllerGeneration &&
+    left.actorKind === right.actorKind &&
+    left.actorId === right.actorId &&
+    left.operation === right.operation &&
+    left.materialSha256 === right.materialSha256
+  );
+}
+
+function samePostCommitEligibility(left: PostCommitEligibility, right: PostCommitEligibility): boolean {
+  return (
+    left.version === right.version &&
+    left.autonomyEnabledAtParentSettlement === right.autonomyEnabledAtParentSettlement &&
+    left.evalIntegrityTurn === right.evalIntegrityTurn &&
+    left.humanSession === right.humanSession
+  );
 }
 
 export function executeGeneralChatPostCommit(
@@ -2134,8 +2769,12 @@ export function executeGeneralChatPostCommit(
   if (!payload) {
     throw new Error("Durable chat run payload is invalid or incomplete.");
   }
+  const heartbeatIdentity = readExactSystemHeartbeatExecutionIdentity(run, payload);
   const userMessage = host.storage.chatMessages.get(payload.userMessageId);
-  const recoveryTrace = validateCommittedDurableChatTurnRecoveryTrace(host, payload, run.runId, userMessage);
+  if (heartbeatIdentity && userMessage) {
+    throw new Error(`System heartbeat ${run.runId} post-commit found a persisted input message.`);
+  }
+  const recoveryTrace = validateCommittedDurableChatTurnRecoveryTrace(host, payload, run.runId, userMessage, run);
   if (recoveryTrace.outcome !== "valid") {
     throw new Error(
       recoveryTrace.outcome === "invalid"
@@ -2144,6 +2783,12 @@ export function executeGeneralChatPostCommit(
     );
   }
   const trace = recoveryTrace.trace;
+  const heartbeatDecision = heartbeatIdentity
+    ? readExactSystemHeartbeatExecutionDecision(run, heartbeatIdentity)
+    : undefined;
+  if (heartbeatIdentity && trace.status === "completed" && !heartbeatDecision) {
+    throw new Error(`System heartbeat ${run.runId} post-commit is missing its exact decision evidence.`);
+  }
   if (progress && trace.status !== progress.targetTraceStatus) {
     throw new Error(
       `Durable Chat post-commit generation ${progress.generationId} targets ${progress.targetTraceStatus}, but the canonical trace is ${trace.status}.`,
@@ -2156,14 +2801,18 @@ export function executeGeneralChatPostCommit(
   const workspaceId = trace.guidance?.workspaceId?.trim() || "default";
   const autonomous = isAutonomousTurnRequest(payload.request);
   const hasTranscript = Boolean(
+    !heartbeatIdentity &&
     isChatTurnTerminalStatus(trace.status) &&
     userMessage?.role === "user" &&
     assistantMessage?.role === "assistant" &&
     assistantMessage.content.trim().length > 0,
   );
-  const delegatedChild = Boolean(userMessage?.parentDelegationStepId);
+  const delegatedChild = Boolean(!heartbeatIdentity && userMessage?.parentDelegationStepId);
   const completed = trace.status === "completed";
   const transcriptCompleted = hasTranscript && completed;
+  if (transcriptCompleted && !progress) {
+    throw new Error("Completed Chat post-commit effects require the canonical durable progress owner.");
+  }
   const runEffect = (
     effect: GeneralChatPostCommitEffect,
     applicable: boolean,
@@ -2176,16 +2825,14 @@ export function executeGeneralChatPostCommit(
       return "not_applicable";
     }
     if (!progress) {
-      callback();
-      return "reconciled";
+      throw new Error(`Chat post-commit effect ${effect} requires the canonical durable progress owner.`);
     }
     return progress.runEffect(effect, callback) ? "reconciled" : "already_reconciled";
   };
   const enqueueDurableEffect = (
     input: GeneralChatPostCommitDurableEffectInput,
     applicable: boolean,
-    compatibilityCallback: () => void,
-  ): "durably_enqueued" | "already_enqueued" | "not_applicable" | "reconciled" => {
+  ): "durably_enqueued" | "already_enqueued" | "not_applicable" => {
     if (!applicable) {
       if (progress) {
         progress.runEffect(input.effect, () => undefined);
@@ -2193,34 +2840,27 @@ export function executeGeneralChatPostCommit(
       return "not_applicable";
     }
     if (!progress) {
-      compatibilityCallback();
-      return "reconciled";
+      throw new Error(`Chat post-commit effect ${input.effect} requires the canonical durable progress owner.`);
     }
     return progress.enqueueDurableEffect(input) ? "durably_enqueued" : "already_enqueued";
   };
 
-  const capabilityGap = runEffect("capability_gap", hasTranscript || trace.status === "waiting_for_approval", () => {
-    host.recordCapabilityGapFromTrace({
-      sessionId: payload.sessionId,
-      turnId: payload.turnId,
-      content: userMessage!.content,
-      trace: hydratedTrace,
-    });
-  });
-  const learnedMemoryUser = runEffect("learned_memory_user", hasTranscript, () => {
-    host.extractAndPersistLearnedMemory(payload.sessionId, userMessage!.content, {
-      role: "user",
-      sourceRef: userMessage!.messageId,
-      trace: hydratedTrace,
-    });
-  });
-  const learnedMemoryAssistant = runEffect("learned_memory_assistant", hasTranscript, () => {
-    host.extractAndPersistLearnedMemory(payload.sessionId, assistantMessage!.content, {
-      role: "assistant",
-      sourceRef: assistantMessage!.messageId,
-      trace: hydratedTrace,
-    });
-  });
+  const capabilityGap = runEffect(
+    "capability_gap",
+    !heartbeatIdentity && (hasTranscript || trace.status === "waiting_for_approval"),
+    () => {
+      host.recordCapabilityGapFromTrace({
+        sessionId: payload.sessionId,
+        turnId: payload.turnId,
+        content: userMessage!.content,
+        trace: hydratedTrace,
+      });
+    },
+  );
+  progress?.runEffect("learned_memory_user", () => undefined);
+  const learnedMemoryUser = "not_applicable" as const;
+  progress?.runEffect("learned_memory_assistant", () => undefined);
+  const learnedMemoryAssistant = "not_applicable" as const;
   const commitmentsInput: GeneralChatPostCommitDurableEffectInput = {
     effect: "commitments",
     sessionId: payload.sessionId,
@@ -2228,15 +2868,7 @@ export function executeGeneralChatPostCommit(
     turnId: payload.turnId,
     autonomous,
   };
-  const commitments = enqueueDurableEffect(commitmentsInput, transcriptCompleted, () => {
-    host.recordTurnCommitments({
-      sessionId: payload.sessionId,
-      workspaceId,
-      userText: userMessage!.content,
-      assistantText: assistantMessage!.content,
-      autonomous,
-    });
-  });
+  const commitments = enqueueDurableEffect(commitmentsInput, transcriptCompleted);
   const backgroundReviewInput: GeneralChatPostCommitDurableEffectInput = {
     effect: "background_review",
     sessionId: payload.sessionId,
@@ -2245,17 +2877,7 @@ export function executeGeneralChatPostCommit(
     delegatedChild,
     autonomous,
   };
-  const backgroundReview = enqueueDurableEffect(backgroundReviewInput, transcriptCompleted, () => {
-    host.scheduleBackgroundReviewIfDue({
-      sessionId: payload.sessionId,
-      workspaceId,
-      turnId: payload.turnId,
-      userText: userMessage!.content,
-      assistantText: assistantMessage!.content,
-      delegatedChild,
-      autonomous,
-    });
-  });
+  const backgroundReview = enqueueDurableEffect(backgroundReviewInput, transcriptCompleted);
   const memoryMaintenanceInput: GeneralChatPostCommitDurableEffectInput = {
     effect: "memory_maintenance",
     sessionId: payload.sessionId,
@@ -2263,22 +2885,47 @@ export function executeGeneralChatPostCommit(
     turnId: payload.turnId,
     delegatedChild,
   };
-  const memoryMaintenance = enqueueDurableEffect(memoryMaintenanceInput, transcriptCompleted, () => {
-    host.scheduleMemoryMaintenancePostTurnEvaluation({
-      sessionId: payload.sessionId,
-      turnId: payload.turnId,
-      delegatedChild,
-    });
-  });
-  const memoryPrewarm = runEffect("memory_prewarm", hasTranscript, () => {
-    host.scheduleChatMemoryContextPrewarm({
-      sessionId: payload.sessionId,
-      prompt: assistantMessage!.content,
-      relationScope: "self",
-    });
-  });
-  const realtimeApplicable = hasTranscript || isDurableChatWaitingStatus(trace.status);
+  const memoryMaintenance = enqueueDurableEffect(memoryMaintenanceInput, transcriptCompleted);
+  progress?.runEffect("memory_prewarm", () => undefined);
+  const memoryPrewarm = "not_applicable" as const;
+  const realtimeApplicable = heartbeatIdentity
+    ? trace.status === "completed" && heartbeatDecision?.decision.notify === true
+    : hasTranscript || isDurableChatWaitingStatus(trace.status);
   const publishThreadUpdate = () => {
+    if (heartbeatIdentity) {
+      if (
+        !heartbeatDecision?.decision.notify ||
+        !assistantMessage ||
+        assistantMessage.messageId !== payload.assistantMessageId
+      ) {
+        throw new Error(`System heartbeat ${run.runId} cannot publish an unbound message invalidation.`);
+      }
+      host.publishRealtime(
+        "chat_heartbeat_message_committed",
+        "chat",
+        {
+          type: "chat_heartbeat_message_committed",
+          sessionId: payload.sessionId,
+          turnId: payload.turnId,
+          assistantMessageId: payload.assistantMessageId,
+          occurrenceId: heartbeatIdentity.occurrenceId,
+          ...(progress
+            ? {
+                [IDEMPOTENT_REALTIME_ENVELOPE_KEY]: {
+                  deliveryId: `${run.runId}:${progress.generationId}:heartbeat-message:${payload.assistantMessageId}`,
+                  occurredAt: progress.requestedAt,
+                },
+              }
+            : {}),
+        },
+        buildChatTurnRealtimeOptions({
+          sessionId: payload.sessionId,
+          turnId: payload.turnId,
+          runId: run.runId,
+        }),
+      );
+      return;
+    }
     host.publishRealtime(
       "chat_thread_updated",
       "chat",
@@ -2304,12 +2951,11 @@ export function executeGeneralChatPostCommit(
     progress?.runEffect("realtime", () => undefined);
     realtime = "not_applicable";
   } else if (!progress) {
-    publishThreadUpdate();
-    realtime = "reconciled";
+    throw new Error("Chat post-commit realtime delivery requires the canonical durable progress owner.");
   } else {
     realtime = progress.publishEffect("realtime", publishThreadUpdate) ? "reconciled" : "already_reconciled";
   }
-  const agentEnd = runEffect("agent_end", true, () => {
+  const agentEnd = runEffect("agent_end", !heartbeatIdentity, () => {
     enqueueAgentEndHook(host, {
       workspaceId,
       sessionId: payload.sessionId,
@@ -2341,6 +2987,16 @@ export function executeGeneralChatPostCommit(
     memoryPrewarm,
     backgroundReview,
   };
+}
+
+function isExactSystemHeartbeatCompletion(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const completion = value as Record<string, unknown>;
+  return (
+    Object.keys(completion).sort().join(",") === "repaired,status" &&
+    completion.status === "complete" &&
+    completion.repaired === false
+  );
 }
 
 function isDurableChatStreamContinuation(run: DurableRunRecord, payload: DurableChatTurnExecutionPayload): boolean {
@@ -2405,12 +3061,27 @@ function validateCommittedDurableChatTurnRecoveryTrace(
   payload: DurableChatTurnExecutionPayload,
   expectedRunId: string,
   observedUserMessage?: { role?: unknown; sessionId?: unknown },
+  observedRun?: DurableRunRecord,
 ): DurableChatRecoveryTraceValidation {
+  let heartbeatIdentity: ExactSystemHeartbeatExecutionIdentity | undefined;
+  let durableRun: DurableRunRecord;
+  try {
+    durableRun = observedRun ?? host.storage.durableRuns.getRun(expectedRunId);
+    heartbeatIdentity = readExactSystemHeartbeatExecutionIdentity(durableRun, payload as DurableChatTurnPayload);
+  } catch {
+    return { outcome: "invalid", reason: "Durable Chat recovery has malformed execution identity evidence." };
+  }
   const trace = readDurableChatTurnTrace(host, payload.turnId);
   const userMessage = observedUserMessage ?? host.storage.chatMessages.get(payload.userMessageId);
-  const userMessageError = validateDurableChatLinkedUserMessage(userMessage, payload);
-  if (userMessageError) {
-    return { outcome: "invalid", reason: userMessageError };
+  if (heartbeatIdentity) {
+    if (userMessage) {
+      return { outcome: "invalid", reason: "System heartbeat recovery cannot contain a persisted input message." };
+    }
+  } else {
+    const userMessageError = validateDurableChatLinkedUserMessage(userMessage, payload);
+    if (userMessageError) {
+      return { outcome: "invalid", reason: userMessageError };
+    }
   }
   if (!trace) {
     return { outcome: "not_resting" };
@@ -2439,6 +3110,63 @@ function validateCommittedDurableChatTurnRecoveryTrace(
   const assistantMessage = trace.assistantMessageId
     ? host.storage.chatMessages.get(trace.assistantMessageId)
     : undefined;
+  if (heartbeatIdentity) {
+    let heartbeatDecision: ExactSystemHeartbeatExecutionDecision | undefined;
+    try {
+      heartbeatDecision = readExactSystemHeartbeatExecutionDecision(durableRun, heartbeatIdentity);
+    } catch {
+      return { outcome: "invalid", reason: "System heartbeat recovery has invalid decision evidence." };
+    }
+    if (trace.status === "completed") {
+      if (!heartbeatDecision) {
+        // A legacy/crashed producer may have committed the trace before its
+        // receipt. Re-enter the provider under the bounded durable retry path;
+        // never finalize an unreconstructable completed heartbeat.
+        return { outcome: "not_resting", trace };
+      }
+      if (!isExactSystemHeartbeatCompletion(trace.completion)) {
+        return { outcome: "not_resting", trace };
+      }
+      if (!heartbeatDecision.decision.notify) {
+        if (assistantMessage) {
+          return { outcome: "invalid", reason: "Silent system heartbeat recovery contains visible output." };
+        }
+      } else if (
+        !assistantMessage ||
+        assistantMessage.sessionId !== payload.sessionId ||
+        assistantMessage.role !== "assistant" ||
+        assistantMessage.actorType !== "system" ||
+        assistantMessage.actorId !== "system-heartbeat" ||
+        assistantMessage.content !== heartbeatDecision.decision.normalizedMessage
+      ) {
+        return { outcome: "invalid", reason: "System heartbeat recovery output conflicts with its decision." };
+      }
+      return { outcome: "valid", trace };
+    }
+    if (heartbeatDecision) {
+      return { outcome: "invalid", reason: "Non-completed system heartbeat recovery contains decision evidence." };
+    }
+    if (assistantMessage) {
+      return { outcome: "invalid", reason: "Non-completed system heartbeat recovery contains visible output." };
+    }
+    if (
+      trace.status === "partial" ||
+      trace.status === "waiting_for_tool" ||
+      trace.status === "waiting_for_user_input"
+    ) {
+      return { outcome: "not_resting", trace };
+    }
+    if (trace.status === "waiting_for_approval") {
+      const toolRuns = host.storage.chatToolRuns.listByTurn(payload.turnId);
+      if (!hasDurableChatWaitingEvidence(trace, toolRuns)) {
+        return {
+          outcome: "invalid",
+          reason: `Durable Chat trace ${payload.turnId} lacks canonical evidence for ${trace.status}.`,
+        };
+      }
+    }
+    return { outcome: "valid", trace };
+  }
   if (assistantMessage && (assistantMessage.role !== "assistant" || assistantMessage.sessionId !== payload.sessionId)) {
     return {
       outcome: "invalid",
@@ -2564,6 +3292,13 @@ export function maybeEnqueueAutonomousDelivery(
   if (currentRun.status !== "completed" || !hasAutonomousChatPostCommitPending(currentRun)) {
     return undefined;
   }
+  const heartbeatIdentity = readExactSystemHeartbeatExecutionIdentity(currentRun, payload as DurableChatTurnPayload);
+  if (heartbeatIdentity) {
+    if (!readExactSystemHeartbeatExecutionDecision(currentRun, heartbeatIdentity)) {
+      throw new Error(`System heartbeat ${currentRun.runId} is missing its exact decision evidence.`);
+    }
+    return undefined;
+  }
   const autonomous = (currentRun.metadata as { autonomous?: AutonomousTurnMetadata } | undefined)?.autonomous;
   if (!autonomous || typeof autonomous !== "object") {
     return undefined;
@@ -2603,13 +3338,10 @@ function readCurrentDurableRun(host: DurableChatTurnWorkflowHost, run: DurableRu
 }
 
 /**
- * After a heartbeat (`metadata.autonomous.kind:"heartbeat"`) chat turn completes,
- * keep it invisible in the user's transcript unless it notified. A heartbeat
- * runs inside the human session and persists a seed user message plus a
- * `{notify:false}` assistant message every interval; without cleanup the user
- * would see that noise on every tick. When the turn did NOT signal `notify`, the
- * gateway prunes both messages + the trace and reverts the branch leaf. No-op
- * for non-heartbeat turns, notifying heartbeats, or when no cleanup hook exists.
+ * Compatibility cleanup for pre-occurrence heartbeat turns that persisted seed
+ * transcript rows. Exact occurrence heartbeats never enter this path: their
+ * producer atomically omits silent output and persists notifying output as a
+ * system-authored assistant message without creating a user row or branch leaf.
  */
 export function maybeCleanupSilentHeartbeatTurn(
   host: DurableChatTurnWorkflowHost,
@@ -2621,6 +3353,13 @@ export function maybeCleanupSilentHeartbeatTurn(
   }
   const currentRun = readCurrentDurableRun(host, run);
   if (currentRun.status !== "completed" || !hasAutonomousChatPostCommitPending(currentRun)) {
+    return { status: "not_required" };
+  }
+  const heartbeatIdentity = readExactSystemHeartbeatExecutionIdentity(currentRun, payload as DurableChatTurnPayload);
+  if (heartbeatIdentity) {
+    if (!readExactSystemHeartbeatExecutionDecision(currentRun, heartbeatIdentity)) {
+      throw new Error(`System heartbeat ${currentRun.runId} is missing its exact decision evidence.`);
+    }
     return { status: "not_required" };
   }
   const autonomous = (currentRun.metadata as { autonomous?: AutonomousTurnMetadata } | undefined)?.autonomous;
@@ -2657,6 +3396,16 @@ export function executeAutonomousChatPostCommit(
   if (currentRun.status !== "completed" || !hasAutonomousChatPostCommitPending(currentRun)) {
     return {
       delivery: { status: "skipped", reason: "parent_not_pending" },
+      heartbeatCleanup: { status: "not_required" },
+    };
+  }
+  const heartbeatIdentity = readExactSystemHeartbeatExecutionIdentity(currentRun, payload);
+  if (heartbeatIdentity) {
+    if (!readExactSystemHeartbeatExecutionDecision(currentRun, heartbeatIdentity)) {
+      throw new Error(`System heartbeat ${currentRun.runId} is missing its exact decision evidence.`);
+    }
+    return {
+      delivery: { status: "skipped", reason: "system_heartbeat_inline_output" },
       heartbeatCleanup: { status: "not_required" },
     };
   }
@@ -2702,9 +3451,14 @@ function isDurableChatTurnRecoverable(
 ): { recoverable: boolean; reason?: string } {
   const payload = parseDurableChatTurnPayload(run);
   if (!payload) {
-    return { recoverable: false, reason: "Durable chat run payload is invalid or incomplete." };
+    return {
+      recoverable: false,
+      reason: isLegacyUnadmittedDurableChatTurnPayload(run)
+        ? "Legacy durable Chat run lacks immutable session-incarnation admission and requires manual reconciliation."
+        : "Durable chat run payload is invalid or incomplete.",
+    };
   }
-  const recoveryTrace = validateCommittedDurableChatTurnRecoveryTrace(host, payload, run.runId);
+  const recoveryTrace = validateCommittedDurableChatTurnRecoveryTrace(host, payload, run.runId, undefined, run);
   if (recoveryTrace.outcome === "valid") {
     return { recoverable: true };
   }
@@ -2948,6 +3702,7 @@ function markDurableChatTurnUnrecoverable(
   if (!payload) {
     return;
   }
+  const systemHeartbeat = Boolean(readExactSystemHeartbeatExecutionIdentity(run, payload));
   const durableFailure = {
     runId: run.runId,
     status: "failed" as const,
@@ -2978,8 +3733,8 @@ function markDurableChatTurnUnrecoverable(
       failure: {
         failureClass: "unknown",
         message: reason,
-        retryable: true,
-        recommendedAction: "retry",
+        retryable: !systemHeartbeat,
+        ...(!systemHeartbeat ? { recommendedAction: "retry" as const } : {}),
       },
       completion: {
         finishReason: trace.completion?.finishReason,
@@ -3000,15 +3755,17 @@ function markDurableChatTurnUnrecoverable(
       }
       return;
     }
-    host.persistChatStreamChunk(
-      {
-        type: "error",
-        sessionId: payload.sessionId,
-        turnId: payload.turnId,
-        error: reason,
-      },
-      run.runId,
-    );
+    if (!systemHeartbeat) {
+      host.persistChatStreamChunk(
+        {
+          type: "error",
+          sessionId: payload.sessionId,
+          turnId: payload.turnId,
+          error: reason,
+        },
+        run.runId,
+      );
+    }
   });
 }
 

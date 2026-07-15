@@ -29,6 +29,7 @@ import {
 } from "@goatcitadel/policy-engine";
 import { listSkillExportTargets, renderSkillExportPreview, SkillsService } from "@goatcitadel/skills";
 import {
+  type PostCommitEligibility,
   type Storage,
   type SessionAutonomyPrefsPatchInput,
   type SessionAutonomyPrefsRecord,
@@ -437,6 +438,7 @@ import {
   restoreSkillRevisionSnapshot,
 } from "./improvement-snapshot-service.js";
 import type { BackgroundReviewService } from "./background-review-service.js";
+import type { ChatPostCommitEffectAuthorityPort } from "./chat-post-commit-effect-service.js";
 import type { CommitmentClassifierService } from "./gateway/commitment-classifier-service.js";
 import { createChatPostCommitRuntime } from "./gateway/chat-post-commit-runtime.js";
 import * as orchestrationLifecycleService from "./orchestration-lifecycle-service.js";
@@ -538,6 +540,17 @@ import { SubagentFanoutRuntime } from "./chat-subagent-fanout-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
 import { createChatTurnRuntimeHost, type ChatTurnRuntimeHost } from "./chat-turn-runtime-host-composition.js";
 import { ChatTurnRuntimeService } from "./chat-turn-runtime-service.js";
+import {
+  cancelExpiredUnboundChatTurnAdmissionsOnBoot,
+  getSessionControlRuntimeOwner,
+  type SessionControlRuntimeOwner,
+} from "./session-control-runtime-owner.js";
+import { HeartbeatOccurrenceService } from "./heartbeat-occurrence-service.js";
+import {
+  computeEffectiveChatTurnRequestMaterialSha256,
+  deriveChatTurnSurfaceDerivation,
+  freezeChatTurnExecutionRequest,
+} from "./session-control-service.js";
 import { createChatCompactionBreakerActionServiceForGateway } from "./chat-compaction-breaker-runtime-service.js";
 import type { ChatCompactionBreakerActionService } from "./chat-compaction-breaker-action-service.js";
 import {
@@ -808,6 +821,8 @@ async function transitionLlamaCppRuntimeConfig(
 export class GatewayService {
   public config: GatewayRuntimeConfig;
   public readonly storage: Storage;
+  public readonly sessionControlRuntimeOwner: SessionControlRuntimeOwner;
+  private readonly heartbeatOccurrenceService: HeartbeatOccurrenceService;
   private readonly eventIngestService: EventIngestService;
   public readonly modelUsageAccounting: ModelUsageAccountingService;
   public readonly policyEngine: ToolPolicyEngine;
@@ -953,6 +968,7 @@ export class GatewayService {
     this.config = applyDurableExecutionBaselineToConfig(inputConfig);
     const config = this.config;
     this.storage = createGatewayStorage(config);
+    this.sessionControlRuntimeOwner = getSessionControlRuntimeOwner(this.storage);
     this.modelUsageAccounting = new ModelUsageAccountingService(
       this.storage.modelUsageEvents,
       `gateway:${config.assistant.mesh.nodeId}:${randomUUID()}`,
@@ -1471,10 +1487,40 @@ export class GatewayService {
         durableExecutionService.executeAutonomousChatPostCommit(this.buildDurableChatTurnWorkflowHost(), run, context),
       onGeneralChatPostCommit: (run, progress) =>
         durableExecutionService.executeGeneralChatPostCommit(this.buildDurableChatTurnWorkflowHost(), run, progress),
+      resolvePostCommitEligibility: (sessionId) => this.resolvePostCommitEligibility(sessionId),
       evaluateContinuationGate: (run) => this.evaluateDurableContinuationGate(run),
       recordEvidenceEnvelope: (input) => this.evidenceEnvelopeService.createEnvelope(input),
       taskLifecycle: createDurableTaskAutoBlockBridge(this.taskLifecycleService),
       sharedHostLifecycle: this.sharedHostLifecycle,
+    });
+    this.heartbeatOccurrenceService = new HeartbeatOccurrenceService({
+      storage: this.storage,
+      sessionControlRuntimeOwner: this.sessionControlRuntimeOwner,
+      canEnqueueHeartbeat: () =>
+        !this.isFeatureEnabled("autonomyV1Disabled") && this.isFeatureEnabled("durableKernelV1Enabled"),
+      enqueuePreclaimedHeartbeat: async (input) => {
+        const run = await enqueueAutonomousChatTurn(this.chatAutonomousTurnDeps(), {
+          sessionId: input.occurrence.sessionId,
+          prompt: input.prompt,
+          runId: input.sourceRunId,
+          systemActorId: "system-heartbeat",
+          reason: input.reason,
+          kind: "heartbeat",
+          deliverMode: "on_notify",
+          heartbeatOccurrence: {
+            occurrence: input.occurrence,
+            turnAdmission: input.turnAdmission,
+            request: input.request,
+          },
+        });
+        return Boolean(run?.runId);
+      },
+      getDurableRun: (runId) => this.storage.durableRuns.getRun(runId),
+      recoverDurableRun: async (runId) => {
+        this.durableRunService.requestRunProcessing(runId);
+        await this.durableRunService.reconcileAutonomousChatPostCommit(runId);
+        await this.durableRunService.reconcileGeneralChatPostCommit(runId);
+      },
     });
     this.hooksService = new HooksService(serviceCtx, {
       createDurableRun: (input, options) => this.durableRunService.createDurableRun(input, options),
@@ -1541,6 +1587,7 @@ export class GatewayService {
         }),
       enqueueAfterHooks: (input) => this.hooksService.enqueueAfterHooks(input),
       resolveApprovalHookWorkspaceId: (payload) => this.resolveApprovalHookWorkspaceId(payload),
+      resolvePostCommitEligibility: (sessionId) => this.resolvePostCommitEligibility(sessionId),
       recordDurableTimelineEvent: (runId, eventType, payload) =>
         this.recordDurableTimelineEvent(runId, eventType, payload),
       recordApprovalResolutionSignals: (approval) => {
@@ -1898,19 +1945,47 @@ export class GatewayService {
           : this.createDurableRun(input),
       getDurableRun: (runId) => this.getDurableRun(runId),
     });
+    const chatPostCommitEffectAuthority: ChatPostCommitEffectAuthorityPort = {
+      predispatch: ({ authority, parentRunId, postCommitGenerationId, effect }) => {
+        const outcome = this.storage.sessionMutationAdmissions.assertPostCommitChildDispatchAuthority({
+          childAdmission: authority.child,
+          parentRunId,
+          postCommitGenerationId,
+          effect,
+          childRunId: authority.childDurableClaim.durableRunId,
+          sourceTurnId: authority.parent.turnId,
+          postCommitEligibility: authority.postCommitEligibility,
+          durableClaim: authority.childDurableClaim,
+        });
+        return outcome.disposition;
+      },
+      atomicStage: {
+        run: (input, callback) =>
+          this.storage.sessionMutationAdmissions.runPostCommitChildStage(
+            {
+              childAdmission: input.authority.child,
+              parentRunId: input.parentRunId,
+              postCommitGenerationId: input.postCommitGenerationId,
+              effect: input.effect,
+              childRunId: input.childRunId,
+              sourceTurnId: input.sourceTurnId,
+              postCommitEligibility: input.postCommitEligibility,
+              stage: input.stage,
+              terminal: input.terminal,
+              durableClaim: input.authority.childDurableClaim,
+            },
+            callback,
+          ),
+      },
+    };
     const chatPostCommitRuntime = createChatPostCommitRuntime({
       storage: this.storage,
       createChatCompletion: (request, attribution) => this.createChatCompletion(request, attribution),
       resolveModelDefaults: () => this.getPromptJudgeModelDefaults(),
       resolveApiStyle: (providerId, model) => this.llmService.resolveExecutionApiStyle(providerId, model),
-      operatorProfileService: this.operatorProfileService,
-      autonomyControlService: this.autonomyControlService,
-      skillMutationService: this.skillMutationService,
-      memoryMaintenanceService: this.memoryMaintenanceService,
+      effectAuthority: chatPostCommitEffectAuthority,
       isAutonomyDisabled: () => this.isFeatureEnabled("autonomyV1Disabled"),
-      isReplayScratchSession: (sessionId) => this.isReplayScratchSession(sessionId),
       publishRealtime,
-      requestDurableRunProcessing: (runId) => this.durableRunService.requestRunProcessing(runId),
       recordDurableTimelineEvent: (runId, eventType, payload) =>
         this.recordDurableTimelineEvent(runId, eventType, payload),
       recordImprovementDurableRunCompletion: (run, state) => this.recordImprovementDurableRunCompletion(run, state),
@@ -2218,6 +2293,7 @@ export class GatewayService {
   private buildChatTurnRuntimeHost(): ChatTurnRuntimeHost {
     const host = {
       storage: this.storage,
+      sessionControlRuntimeOwner: this.sessionControlRuntimeOwner,
       turnRuntime: this.turnRuntime,
       backgroundTasks: this.backgroundTasks,
       hooksService: this.hooksService,
@@ -2233,6 +2309,7 @@ export class GatewayService {
         return this.cancelDurableRun(runId, actorId);
       },
       buildChatOrchestrationSummary: (input) => this.buildChatOrchestrationSummary(input),
+      assertTurnAdmissionWrite: (admission) => this.sessionControlRuntimeOwner.assertActiveTurnWrite(admission),
       buildDefaultChatPersonalityOverlay: () => this.buildDefaultChatPersonalityOverlay(),
       buildLlmMessagesFromBranchPath: (sessionId, pathTurnIds, currentUserMessage, options, state) =>
         this.buildLlmMessagesFromBranchPath(sessionId, pathTurnIds, currentUserMessage, options, state),
@@ -2281,6 +2358,8 @@ export class GatewayService {
       },
       prepareAgentChatTurn: (sessionId, input, options) => this.prepareAgentChatTurn(sessionId, input, options),
       recordRuntimeDecision: (input) => this.recordRuntimeDecision(input),
+      recoverDecisionCommittedHeartbeat: (identity) =>
+        this.heartbeatOccurrenceService.recoverDecisionCommittedForOperatorPreemption(identity),
       publishRealtime: (channel, topic, payload, options) => this.publishRealtime(channel, topic, payload, options),
       recordCapabilityGapFromTrace: (input) => this.recordCapabilityGapFromTrace(input),
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
@@ -2407,6 +2486,8 @@ export class GatewayService {
     return {
       config: this.config,
       storage: this.storage,
+      durableRunService: this.durableRunService,
+      sessionControlRuntimeOwner: this.sessionControlRuntimeOwner,
       backgroundTasks: this.backgroundTasks,
       turnRuntime: this.turnRuntime,
       steerService: this.steerService,
@@ -2693,6 +2774,19 @@ export class GatewayService {
     // canonical generation before this runtime was constructed. Startup must
     // not invent a semantic config mutation or revision merely to rewrite a
     // compatibility projection.
+    const heartbeatRecovery = await this.heartbeatOccurrenceService.recoverAll();
+    if (heartbeatRecovery.scanned > 0) {
+      log.info("recovered durable heartbeat occurrences after restart", { ...heartbeatRecovery });
+    }
+    const expiredUnboundTurnAdmissionIds = cancelExpiredUnboundChatTurnAdmissionsOnBoot(
+      this.sessionControlRuntimeOwner,
+      `gateway-startup:${randomUUID()}`,
+    );
+    if (expiredUnboundTurnAdmissionIds.length > 0) {
+      log.info("cancelled expired unbound Chat turn admissions after restart", {
+        count: expiredUnboundTurnAdmissionIds.length,
+      });
+    }
     this.startProactiveScheduler();
     if (!maintenanceSchedulerDisabled) {
       this.startMaintenanceScheduler();
@@ -4819,9 +4913,15 @@ export class GatewayService {
       capabilityProfileId?: string;
       capabilityProfileHash?: string;
       capabilityProfileContent?: string;
+      turnAdmission?: import("./chat-turn-types.js").ActiveTurnAdmission;
+      serverOnlyPosture?: chatTurnPrepService.SystemHeartbeatTurnPrepPosture;
     },
   ): Promise<chatTurnPrepService.PreparedAgentChatTurn> {
     return chatTurnPrepService.prepareAgentChatTurn(this, sessionId, input, options);
+  }
+
+  public assertTurnAdmissionWrite(admission: import("./chat-turn-types.js").ActiveTurnAdmission): void {
+    this.sessionControlRuntimeOwner.assertActiveTurnWrite(admission);
   }
 
   public resolvePendingCompactionBreakerForceAction(
@@ -5784,9 +5884,44 @@ export class GatewayService {
     prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
     input: ChatSendMessageRequest,
     threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
+    durableRunId: string,
   ): DurableChatTurnExecutionPayload {
+    const admission = prepared.turnAdmission?.identity;
+    if (!admission) {
+      throw new Error(`Durable Chat turn ${prepared.turnId} has no frozen mutation admission.`);
+    }
+    if (!prepared.turnAdmission) {
+      throw new Error(`Durable Chat turn ${prepared.turnId} has no admitted request snapshot.`);
+    }
+    const durableRequest = freezeChatTurnExecutionRequest(input);
+    const normalizedDurableRunId = durableRunId.trim();
+    if (!normalizedDurableRunId) {
+      throw new Error(`Durable Chat turn ${prepared.turnId} has no durable run identity for policy derivation.`);
+    }
+    const surfaceDerivation = deriveChatTurnSurfaceDerivation(prepared.turnAdmission.admittedRequest, durableRequest);
     return {
-      version: "chat.turn.execute.v1",
+      version: "chat.turn.execute.v2",
+      admissionId: admission.admissionId,
+      sessionIncarnationId: admission.sessionIncarnationId,
+      admissionMaterialSha256: admission.materialSha256,
+      workspaceId: admission.workspaceId,
+      admissionAggregateRevision: admission.aggregateRevision,
+      admissionControllerGeneration: admission.controllerGeneration,
+      effectiveRequestMaterialSha256: computeEffectiveChatTurnRequestMaterialSha256(
+        admission.materialSha256,
+        durableRequest,
+      ),
+      ...(!durableRequest.policyRunId
+        ? {
+            policyRunIdDerivation: {
+              version: 1 as const,
+              kind: "durable_run_id" as const,
+              runId: normalizedDurableRunId,
+            },
+          }
+        : {}),
+      ...(surfaceDerivation ? { surfaceDerivation } : {}),
+      requestActor: prepared.turnAdmission.requestActor,
       sessionId: prepared.session.sessionId,
       turnId: prepared.turnId,
       userMessageId: prepared.userEventId,
@@ -5798,9 +5933,7 @@ export class GatewayService {
       sourceTurnId: prepared.sourceTurnId,
       threadEventType,
       request: {
-        ...input,
-        content: prepared.content,
-        attachments: prepared.userMessage.attachments?.map((item) => item.attachmentId),
+        ...durableRequest,
       },
     };
   }
@@ -5862,6 +5995,7 @@ export class GatewayService {
       listChatSessions: (query) => this.listChatSessions(query),
       getSessionIdleSeconds: (sessionId) => this.getSessionIdleSeconds(sessionId),
       hasRunningTurn: (sessionId) => this.hasRunningTurn(sessionId),
+      claimAndEnqueueHeartbeat: (input) => this.heartbeatOccurrenceService.claimAndEnqueue(input),
       isReplayScratchSession: (sessionId) => this.isReplayScratchSession(sessionId),
       getSession: (sessionId) => this.getSession(sessionId),
       normalizeWorkspaceId: (workspaceId) => this.normalizeWorkspaceId(workspaceId),
@@ -5871,12 +6005,14 @@ export class GatewayService {
       listConnectorRecords: (kind) => this.listConnectorRecords(kind),
       listToolCatalog: () => this.listToolCatalog(),
       registerSyntheticPermissionProfile: (profile) => this.registerSyntheticPermissionProfile(profile),
+      sessionControlRuntimeOwner: this.sessionControlRuntimeOwner,
       prepareAgentChatTurn: (sessionId, request, options) => this.prepareAgentChatTurn(sessionId, request, options),
-      buildDurableChatTurnPayloadRecord: (prepared, request) =>
+      buildDurableChatTurnPayloadRecord: (prepared, request, durableRunId) =>
         durableChatTurnPayloadToRecord(
-          this.createDurableChatTurnPayload(prepared, request, "chat_thread_turn_appended"),
+          this.createDurableChatTurnPayload(prepared, request, "chat_thread_turn_appended", durableRunId),
         ),
       createDurableRun: (input) => this.durableRunService.createDurableRun(input, { publishRealtime: false }),
+      getDurableRun: (runId) => this.storage.durableRuns.getRun(runId),
       persistChatStreamChunk: (chunk, runId) => this.persistChatStreamChunk(chunk, runId),
       onDurableRunCommitted: (run) =>
         this.publishRealtime("system", "durable", {
@@ -5903,6 +6039,7 @@ export class GatewayService {
   }
 
   private async runHeartbeatSweep(): Promise<void> {
+    await this.heartbeatOccurrenceService.recoverAll();
     await runHeartbeatSweep(this.chatAutonomousTurnDeps());
   }
 
@@ -6010,14 +6147,29 @@ export class GatewayService {
         shouldUseDurableExecution: this.shouldUseDurableExecution(prepared, input),
         runImmediateTransaction: (callback) => this.storage.runImmediateTransaction(callback),
         createDurableRun: (runInput) => this.durableRunService.createDurableRun(runInput, { publishRealtime: false }),
-        buildDurablePayloadRecord: (preparedTurn, request, eventType) =>
-          durableChatTurnPayloadToRecord(this.createDurableChatTurnPayload(preparedTurn, request, eventType)),
+        buildDurablePayloadRecord: (preparedTurn, request, eventType, durableRunId) =>
+          durableChatTurnPayloadToRecord(
+            this.createDurableChatTurnPayload(preparedTurn, request, eventType, durableRunId),
+          ),
         persistChatStreamChunk: (chunk, durableRunId) => this.persistChatStreamChunk(chunk, durableRunId),
         chatTurnTraces: this.storage.chatTurnTraces,
         capabilityCatalogSnapshots: this.storage.capabilityCatalogSnapshots,
         chatTurnCapabilityProfiles: this.storage.chatTurnCapabilityProfiles,
+        sessionMutationAdmissions: this.storage.sessionMutationAdmissions,
         routedContextSnapshots: this.storage.routedContextSnapshots,
         skillLifecycle: this.storage.skillLifecycle,
+        assertTurnAdmissionWrite: (preparedTurn) => {
+          if (!preparedTurn.turnAdmission) {
+            throw new Error(`Durable Chat turn ${preparedTurn.turnId} has no mutation admission to assert.`);
+          }
+          this.sessionControlRuntimeOwner.assertActiveTurnWrite(preparedTurn.turnAdmission);
+        },
+        bindTurnAdmissionToDurableRun: (preparedTurn, durableRunId) => {
+          if (!preparedTurn.turnAdmission) {
+            throw new Error(`Durable Chat turn ${preparedTurn.turnId} has no mutation admission to bind.`);
+          }
+          this.sessionControlRuntimeOwner.bindDurableRun(preparedTurn.turnAdmission, durableRunId);
+        },
         onDurableRunCommitted: (run) =>
           this.publishRealtime("system", "durable", {
             type: "durable_run_created",
@@ -6032,6 +6184,16 @@ export class GatewayService {
       threadEventType,
       options,
     );
+  }
+
+  private resolvePostCommitEligibility(sessionId: string): PostCommitEligibility {
+    const origin = this.storage.chatSessionMeta.get(sessionId)?.origin;
+    return {
+      version: 1,
+      autonomyEnabledAtParentSettlement: !this.isFeatureEnabled("autonomyV1Disabled"),
+      evalIntegrityTurn: origin === "prompt_pack",
+      humanSession: origin !== "system" && origin !== "prompt_pack" && !this.isReplayScratchSession(sessionId),
+    };
   }
 
   public finalizeDurableChatRun(
@@ -6050,6 +6212,7 @@ export class GatewayService {
         recordDurableTimelineEvent: (durableRunId, eventType, payload) =>
           this.recordDurableTimelineEvent(durableRunId, eventType, payload),
         chatTurnTraces: this.storage.chatTurnTraces,
+        resolvePostCommitEligibility: (sessionId) => this.resolvePostCommitEligibility(sessionId),
       },
       runId,
       prepared,
@@ -9547,9 +9710,10 @@ export class GatewayService {
       .listBySession(sessionId, 12)
       .slice(0, 6)
       .map(chatGeneratedArtifactService.buildGeneratedArtifactReference);
-    const meta =
-      this.storage.chatSessionMeta.get(sessionId) ??
-      this.storage.chatSessionMeta.ensure(sessionId, undefined, project?.workspaceId ?? DEFAULT_WORKSPACE_ID);
+    const meta = this.storage.chatSessionMeta.get(sessionId);
+    if (!meta) {
+      throw new NotFoundError({ entity: "Canonical Chat session metadata", id: sessionId });
+    }
     return toChatSessionRecord(session, { ...meta, mode: prefs?.mode ?? "chat" }, project, { generatedArtifacts });
   }
 

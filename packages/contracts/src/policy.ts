@@ -174,7 +174,7 @@ export const HEARTBEAT_RESTRICTED_PROFILE: PermissionProfileRecord = {
   builtin: true,
   status: "active",
   scope: "global",
-  approvalMode: "approve_all",
+  approvalMode: "bypass",
   toolPatterns: [...HEARTBEAT_READ_ONLY_ALLOW],
   allow: [],
   deny: [...HEARTBEAT_RESTRICTED_DENY],

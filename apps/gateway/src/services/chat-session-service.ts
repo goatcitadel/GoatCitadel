@@ -311,6 +311,10 @@ function upsertChatSessionForPeer(
   };
   const now = new Date().toISOString();
   deps.storage.runImmediateTransaction(() => {
+    const existingMeta = deps.storage.chatSessionMeta.get(resolution.sessionId);
+    if (existingMeta && deps.normalizeWorkspaceId(existingMeta.workspaceId) !== workspaceId) {
+      throw new Error("stable chat session key already belongs to another workspace");
+    }
     deps.storage.sessions.upsert({
       sessionId: resolution.sessionId,
       sessionKey: resolution.sessionKey,
@@ -579,18 +583,49 @@ export async function deleteChatSession(
   sessionId: string,
   expectedRevision?: number,
 ): Promise<{ deleted: boolean; sessionId: string }> {
-  deps.getSession(sessionId);
-  const current = deps.requireChatSession(sessionId);
-  const deletionResults = deps.storage.runImmediateTransaction(() => {
-    // Validate the operator's parent snapshot before deleting any side-chat
-    // children. The outer IMMEDIATE transaction keeps that fence stable until
-    // the complete aggregate delete commits.
-    deps.storage.chatSessionRevisions.runWithRevision(sessionId, expectedRevision ?? current.revision, () => ({
-      value: undefined,
-      changed: false,
-    }));
-    return deleteChatSessionDataTree(deps, sessionId, expectedRevision ?? current.revision);
-  });
+  let currentWithoutExpectedRevision: ChatSessionRecord | undefined;
+  if (expectedRevision === undefined) {
+    deps.getSession(sessionId);
+    currentWithoutExpectedRevision = deps.requireChatSession(sessionId);
+  }
+  const rootRevision = expectedRevision ?? currentWithoutExpectedRevision!.revision;
+  const idempotencyKey = `lifecycle:delete:${sessionId}:${rootRevision}`;
+  const correlationId = `chat-session-delete:${sessionId}:${rootRevision}`;
+  let deletionResults: ReturnType<Storage["deleteChatSessionTreeWithRevision"]>;
+  if (expectedRevision !== undefined) {
+    try {
+      deletionResults = deps.storage.replayChatSessionTreeDeletion({
+        rootSessionId: sessionId,
+        expectedRootRevision: rootRevision,
+        actorId: "operator",
+        idempotencyKey,
+        correlationId,
+      });
+    } catch (error) {
+      const liveReplayConflict =
+        error instanceof ConflictError && error.details?.sessionLifecycleCode === "CHAT_SESSION_DELETE_REPLAY_LIVE";
+      if (!liveReplayConflict) throw error;
+      const currentMeta = deps.storage.chatSessionMeta.get(sessionId);
+      if (!currentMeta) throw error;
+      deletionResults = deps.storage.deleteChatSessionTreeWithRevision({
+        workspaceId: deps.normalizeWorkspaceId(currentMeta.workspaceId),
+        rootSessionId: sessionId,
+        expectedRootRevision: rootRevision,
+        actorId: "operator",
+        idempotencyKey,
+        correlationId,
+      });
+    }
+  } else {
+    deletionResults = deps.storage.deleteChatSessionTreeWithRevision({
+      workspaceId: deps.normalizeWorkspaceId(currentWithoutExpectedRevision!.workspaceId),
+      rootSessionId: sessionId,
+      expectedRootRevision: rootRevision,
+      actorId: "operator",
+      idempotencyKey,
+      correlationId,
+    });
+  }
   for (const deleted of deletionResults) {
     deps.clearChatTurnWriteLease(deleted.sessionId);
   }
@@ -618,21 +653,6 @@ export async function deleteChatSession(
     deleted: deletionResults.some((result) => result.sessionId === sessionId && result.deleted),
     sessionId,
   };
-}
-
-function deleteChatSessionDataTree(
-  deps: ChatSessionDependencies,
-  sessionId: string,
-  expectedRevision: number,
-): Array<{ sessionId: string; deleted: boolean; cleanupRelPaths: string[] }> {
-  const results: Array<{ sessionId: string; deleted: boolean; cleanupRelPaths: string[] }> = [];
-  const childSessionId = deps.storage.chatSideChats.getByParentSession(sessionId)?.childSessionId;
-  if (childSessionId && childSessionId !== sessionId) {
-    const childRevision = deps.storage.chatSessionRevisions.ensure(childSessionId).revision;
-    results.push(...deleteChatSessionDataTree(deps, childSessionId, childRevision));
-  }
-  results.push(deps.storage.deleteChatSessionDataWithRevision(sessionId, expectedRevision));
-  return results;
 }
 
 function trimTitleForSideChat(value: string): string {

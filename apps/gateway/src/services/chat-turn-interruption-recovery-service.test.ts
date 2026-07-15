@@ -668,6 +668,13 @@ describe("reconcileInterruptedChatTurns", () => {
 
   it("adopts session prefs for a synthesized trace when they exist", () => {
     const storage = createStorage();
+    storage.chatSessionLifecycles.initialize({
+      workspaceId: "default",
+      sessionId: "session-b",
+      actorId: "test-fixture",
+      idempotencyKey: "test:lifecycle:init:session-b",
+      correlationId: "test:correlation:lifecycle:init:session-b",
+    });
     storage.chatSessionPrefs.ensure("session-b");
     storage.chatSessionPrefs.patch("session-b", { mode: "cowork", thinkingLevel: "extended" });
     storage.chatMessages.upsert(userMessage({ sessionId: "session-b", messageId: "msg-orphan-b" }));

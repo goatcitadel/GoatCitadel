@@ -8,6 +8,8 @@ import { __sqliteInternals, createDatabase } from "./sqlite.js";
 const db = createDatabase({ dbPath: ":memory:" });
 const postgresMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 114);
 const postgresSql = postgresMigration?.sql ?? "";
+const postgresLifecycleMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 115);
+const postgresLifecycleSql = postgresLifecycleMigration?.sql ?? "";
 
 after(() => db.close());
 
@@ -218,14 +220,12 @@ describe("HX-411 session-control schema parity", () => {
     assert.match(schemaSql(db), /strftime\('%Y-%m-%dT%H:%M:%fZ'/u);
   });
 
-  it("backfills operator generation one without installing chat-session lifecycle triggers", () => {
+  it("backfills operator generation one before lifecycle enforcement", () => {
     assert.match(postgresSql, /FROM chat_session_meta meta/u);
     assert.match(postgresSql, /'operator'[\s\S]*'operator_active'/u);
     assert.match(postgresSql, /'session_initialized'[\s\S]*'system'/u);
-    for (const sql of [schemaSql(db), postgresSql]) {
-      assert.doesNotMatch(sql, /TRIGGER[^;]*(?:INSERT|DELETE|UPDATE) ON chat_session_meta/iu);
-      assert.doesNotMatch(sql, /FOREIGN KEY[^;]*REFERENCES chat_session_meta/iu);
-    }
+    assert.doesNotMatch(postgresSql, /TRIGGER[^;]*(?:INSERT|DELETE|UPDATE) ON chat_session_meta/iu);
+    assert.doesNotMatch(postgresSql, /FOREIGN KEY[^;]*REFERENCES chat_session_meta/iu);
     const legacy = new DatabaseSync(":memory:");
     try {
       legacy.exec(`
@@ -260,6 +260,14 @@ describe("HX-411 session-control schema parity", () => {
         VALUES ('legacy-companion', 'legacy-auth-grant', '2099-01-01T00:00:00.000Z');
       `);
       __sqliteInternals.applySchemaMigrationForTest(172, legacy);
+      const preLifecycleSchema = (
+        legacy
+          .prepare("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'chat_session_meta'")
+          .all() as Array<{ sql: string }>
+      )
+        .map((row) => row.sql)
+        .join("\n");
+      assert.doesNotMatch(preLifecycleSchema, /lifecycle/iu);
       for (const [table, idColumn, id] of [
         ["auth_device_requests", "request_id", "legacy-auth-request"],
         ["auth_device_grants", "grant_id", "legacy-auth-grant"],
@@ -308,6 +316,39 @@ describe("HX-411 session-control schema parity", () => {
     }
   });
 
+  it("pairs SQLite 173 and PostgreSQL 115 lifecycle and mutation-admission authority", () => {
+    assert.equal(postgresLifecycleMigration?.name, "session_control_lifecycle_and_mutation_admission");
+    assert.equal(postgresLifecycleMigration?.batchedStatements, undefined);
+    const sqliteSql = lifecycleSchemaSql(db);
+    for (const table of [
+      "chat_session_lifecycle_intents",
+      "chat_session_mutation_admissions",
+      "chat_session_mutation_admission_events",
+    ]) {
+      assert.match(postgresLifecycleSql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`, "u"));
+      assert.ok(tableColumns(db, table).length > 0, `${table} is missing from SQLite 173`);
+    }
+    assert.equal(tableColumns(db, "chat_session_meta").includes("lifecycle_intent_id"), true);
+    assert.match(postgresLifecycleSql, /lifecycle preflight invariant violated/u);
+    for (const sql of [sqliteSql, postgresLifecycleSql]) {
+      assert.match(sql, /chat_session_meta_lifecycle/u);
+      assert.match(sql, /session_initialized/u);
+      assert.match(sql, /session_reactivated/u);
+      assert.match(sql, /session_deleted/u);
+      assert.match(sql, /mutation_admissions_one_active_turn/u);
+      assert.match(sql, /mutation_admission_events_no_update/u);
+      assert.match(sql, /mutation_admission_events_no_delete/u);
+      assert.match(sql, /material_sha256/u);
+      assert.doesNotMatch(
+        sql,
+        /message_body|prompt_body|structured_part_body|attachment_body|context_body|tool_result|result_body|approval_body/iu,
+      );
+    }
+    assert.match(sqliteSql, /AFTER INSERT ON chat_session_meta/u);
+    assert.match(postgresLifecycleSql, /AFTER INSERT ON chat_session_meta/u);
+    assert.match(postgresLifecycleSql, /pg_advisory_xact_lock\(hashtextextended\(NEW\.session_id, 411\)\)/u);
+  });
+
   it("keeps the paired migration additive and outside Chat content, usage, and route owners", () => {
     assert.doesNotMatch(
       postgresSql,
@@ -315,7 +356,7 @@ describe("HX-411 session-control schema parity", () => {
     );
     assert.doesNotMatch(
       postgresSql,
-      /chat_messages|chat_turn_traces|model_usage_events|durable_runs|gateway_route|listener|session_control_client.*route/iu,
+      /chat_messages|model_usage_events|gateway_route|listener|session_control_client.*route/iu,
     );
   });
 });
@@ -355,5 +396,31 @@ function authPurposeSchemaSql(client: DatabaseClient): string {
       .all() as Array<{ name: string; sql: string }>
   )
     .map((row) => `${row.name}\n${row.sql ?? ""}`)
+    .join("\n");
+}
+
+function lifecycleSchemaSql(client: DatabaseClient): string {
+  return (
+    client
+      .prepare(
+        `SELECT name, sql FROM sqlite_master
+         WHERE sql IS NOT NULL
+           AND (
+             name IN (
+               'chat_session_meta',
+               'chat_session_lifecycle_intents',
+               'chat_session_mutation_admissions',
+               'chat_session_mutation_admission_events'
+             )
+             OR name LIKE 'trg_chat_session_%lifecycle%'
+             OR name LIKE 'trg_chat_session_%mutation_admission%'
+             OR name LIKE 'idx_chat_session_%lifecycle%'
+             OR name LIKE 'idx_chat_session_%mutation_admission%'
+           )
+         ORDER BY name`,
+      )
+      .all() as Array<{ name: string; sql: string }>
+  )
+    .map((row) => `${row.name}\n${row.sql}`)
     .join("\n");
 }

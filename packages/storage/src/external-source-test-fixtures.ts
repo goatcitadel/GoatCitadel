@@ -13,6 +13,7 @@ import {
   type ExternalSourceScanRecord,
 } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
+import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
 import {
   deriveExternalSourceImportIdempotencyKey,
   computeExternalSourceArtifactSetSha256,
@@ -264,17 +265,11 @@ export function buildExternalSourceImportFixture(catalog: ExternalSourceCatalogF
 }
 
 export function insertSyntheticChatSession(db: DatabaseClient, sessionId = "session-1"): void {
-  db.prepare(
-    `
-    INSERT INTO chat_session_meta (session_id, workspace_id, created_at, updated_at)
-    VALUES (@sessionId, @workspaceId, @createdAt, @updatedAt)
-  `,
-  ).run({
+  new ChatSessionMetaRepository(db).ensure(
     sessionId,
-    workspaceId: EXTERNAL_SOURCE_TEST_WORKSPACE_ID,
-    createdAt: EXTERNAL_SOURCE_TEST_TIMESTAMP,
-    updatedAt: EXTERNAL_SOURCE_TEST_TIMESTAMP,
-  });
+    EXTERNAL_SOURCE_TEST_TIMESTAMP,
+    EXTERNAL_SOURCE_TEST_WORKSPACE_ID,
+  );
 }
 
 export function insertApprovedKnowledgeEffect(

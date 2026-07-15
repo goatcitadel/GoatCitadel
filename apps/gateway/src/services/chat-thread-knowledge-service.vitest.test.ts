@@ -35,6 +35,14 @@ function seedSession(storage: Storage, sessionId: string, workspaceId = "default
     account: "operator",
     timestamp: now,
   });
+  storage.chatSessionLifecycles.initialize({
+    workspaceId,
+    sessionId,
+    actorId: "test-fixture",
+    idempotencyKey: `test:lifecycle:init:${sessionId}`,
+    correlationId: `test:correlation:lifecycle:init:${sessionId}`,
+    metadataTimestamp: now,
+  });
   storage.chatSessionMeta.patch(
     sessionId,
     {

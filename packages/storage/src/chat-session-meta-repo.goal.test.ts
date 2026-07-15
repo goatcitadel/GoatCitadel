@@ -37,7 +37,7 @@ describe("ChatSessionMetaRepository goal slot", () => {
   });
 
   it("ensures default goal fields are absent on a fresh session", () => {
-    const record = repo.ensure("s-1");
+    const record = repo.ensure("s-1", undefined, "default");
     assert.equal(record.pinnedGoal, undefined);
     assert.equal(record.goalTurnBudget, undefined);
     assert.equal(record.goalTurnsUsed, 0);
@@ -45,7 +45,7 @@ describe("ChatSessionMetaRepository goal slot", () => {
   });
 
   it("persists pinnedGoal + budget on patch and resets goalTurnsUsed", () => {
-    repo.ensure("s-2");
+    repo.ensure("s-2", undefined, "default");
     const patched = repo.patch("s-2", {
       pinnedGoal: "ship kanban",
       goalTurnBudget: 12,
@@ -58,7 +58,7 @@ describe("ChatSessionMetaRepository goal slot", () => {
   });
 
   it("increments goalTurnsUsed independently of patch", () => {
-    repo.ensure("s-3");
+    repo.ensure("s-3", undefined, "default");
     repo.patch("s-3", {
       pinnedGoal: "ship kanban",
       goalTurnBudget: 3,
@@ -72,7 +72,7 @@ describe("ChatSessionMetaRepository goal slot", () => {
   });
 
   it("clears the goal via patch with explicit null", () => {
-    repo.ensure("s-4");
+    repo.ensure("s-4", undefined, "default");
     repo.patch("s-4", {
       pinnedGoal: "x",
       goalTurnBudget: 5,
@@ -91,7 +91,7 @@ describe("ChatSessionMetaRepository goal slot", () => {
   });
 
   it("does not clobber other fields when incrementing goal turns used", () => {
-    repo.ensure("s-5");
+    repo.ensure("s-5", undefined, "default");
     repo.patch("s-5", {
       title: "Important session",
       pinnedGoal: "ship kanban",

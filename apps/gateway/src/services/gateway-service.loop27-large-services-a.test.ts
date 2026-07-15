@@ -1212,4 +1212,14 @@ describe("GatewayService loop 27 large service coverage", () => {
     await (GatewayService.prototype as any).ensureChatMessageProjection.call(gateway, "session-1");
     expect(gateway.storage.chatMessages.upsertMany).toHaveBeenCalledTimes(1);
   });
+
+  it("does not promote a transport-only session into canonical Chat metadata on read", () => {
+    const { gateway } = createGatewayHarness();
+    gateway.storage.chatSessionMeta.get.mockReturnValue(undefined);
+
+    expect(() => GatewayService.prototype.requireChatSession.call(gateway, "transport-only")).toThrow(
+      /canonical chat session metadata/i,
+    );
+    expect(gateway.storage.chatSessionMeta.ensure).not.toHaveBeenCalled();
+  });
 });

@@ -59,4 +59,34 @@ describe("GatewayService.buildChatTurnRuntimeHost", () => {
 
     expect(finalizeDurableChatRun).toHaveBeenCalledWith("run-1", {}, {}, "lease-owner-1");
   });
+
+  it("exposes the exact session-control runtime owner and admission assertion", () => {
+    const assertActiveTurnWrite = vi.fn();
+    const sessionControlRuntimeOwner = { assertActiveTurnWrite };
+    const stub = {
+      storage: { runtimeDecisionTraces: {}, chatSessionPrefs: { get: vi.fn() } },
+      sessionControlRuntimeOwner,
+      turnRuntime: {},
+      backgroundTasks: new Set(),
+      hooksService: {},
+      llmService: {},
+      steerService: {},
+      config: {},
+      improvementService: { listSurfaceRouteOverrideExemplars: vi.fn(() => []) },
+      subagentFanout: {},
+    };
+    const host = (
+      GatewayService.prototype as unknown as {
+        buildChatTurnRuntimeHost(this: unknown): {
+          sessionControlRuntimeOwner: unknown;
+          assertTurnAdmissionWrite?: (admission: unknown) => void;
+        };
+      }
+    ).buildChatTurnRuntimeHost.call(stub);
+    const admission = { identity: { admissionId: "admission-1" } };
+
+    expect(host.sessionControlRuntimeOwner).toBe(sessionControlRuntimeOwner);
+    host.assertTurnAdmissionWrite?.(admission);
+    expect(assertActiveTurnWrite).toHaveBeenCalledWith(admission);
+  });
 });

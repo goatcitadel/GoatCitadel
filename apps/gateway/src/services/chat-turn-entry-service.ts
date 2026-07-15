@@ -11,6 +11,7 @@ import type {
   ChatCapabilityUpgradeSuggestion,
   ChatCancelTurnResponse,
   ChatMode,
+  ChatSessionBindingRecord,
   ChatTurnBranchKind,
   ChatMessageRecord,
   RoutingPreflightRequest,
@@ -41,7 +42,6 @@ import {
   patchChatTurnTraceIfStatus,
 } from "./chat-turn-helpers.js";
 import { buildChatTurnRealtimeOptions } from "./chat-turn-realtime.js";
-import { isAutonomousTurnRequest } from "./gateway/autonomous-turn-policy.js";
 import {
   enforcePreparedRoutedContextOrchestrationBypass,
   resolvePreparedTurnMode,
@@ -55,10 +55,17 @@ import { applySurfaceRoutingPreflight } from "./surface-router-entry.js";
 import type { SurfaceClassification } from "./surface-router-heuristics.js";
 import type { SurfaceRouteRequest } from "./surface-router-service.js";
 import type { SurfaceRouteOverrideSignalInput } from "./improvement-service.js";
-import type { ChatStreamMutationLifecycle } from "./chat-turn-types.js";
+import {
+  computeChatTurnAdmissionMaterialSha256,
+  resolveChatTurnAdmissionActorId,
+  type AuthenticatedOperatorAdmissionContext,
+  type DecisionCommittedHeartbeatRecoveryIdentity,
+} from "./session-control-service.js";
+import type { ActiveTurnAdmission, ChatStreamMutationLifecycle } from "./chat-turn-types.js";
 import { persistInitialChatTurnTrace, persistPreparedChatCapabilityAdmission } from "./chat-durable-run-service.js";
 import type {
   ChatTurnActiveExecutionControl,
+  ChatTurnAdmissionControl,
   ChatTurnLeaseControl,
   ChatTurnMemorySideEffects,
   ChatTurnRealtimeEmitter,
@@ -91,7 +98,20 @@ export interface AgentChatTurnRequestOptions {
   abortSignal?: AbortSignal;
   onChildDurableRunLaunched?: (runId: string) => void;
   turnIdentity?: AgentChatTurnIdentity;
+  /** Pre-admitted authority used only by deterministic internal callers/recovery. */
+  turnAdmission?: ActiveTurnAdmission;
   assertDispatchOwnership?: () => void;
+  /** Present only on authenticated operator HTTP route calls. */
+  authenticatedOperator?: AuthenticatedOperatorAdmissionContext;
+}
+
+export interface OperatorChatTurnRequestOptions {
+  authenticatedOperator?: AuthenticatedOperatorAdmissionContext;
+}
+
+export interface OperatorChatTurnStreamRequestOptions extends OperatorChatTurnRequestOptions {
+  abortSignal?: AbortSignal;
+  mutationLifecycle?: ChatStreamMutationLifecycle;
 }
 
 export interface ChatTurnEntryHost
@@ -108,6 +128,7 @@ export interface ChatTurnEntryHost
       | keyof ChatTurnStreamLifecycleControl
       | keyof ChatTurnTranscriptIngress
     >,
+    ChatTurnAdmissionControl,
     ChatTurnActiveExecutionControl,
     ChatTurnLeaseControl,
     ChatTurnMemorySideEffects,
@@ -116,6 +137,7 @@ export interface ChatTurnEntryHost
     ChatTurnTranscriptIngress {
   readonly storage: ChatTurnEntryStorage;
   readonly turnRuntime: Pick<TurnRuntime, "run" | "runStream">;
+  recoverDecisionCommittedHeartbeat(identity: DecisionCommittedHeartbeatRecoveryIdentity): Promise<void>;
   prepareAgentChatTurn(
     sessionId: string,
     input: ChatSendMessageRequest,
@@ -129,6 +151,7 @@ export interface ChatTurnEntryHost
       turnId?: string;
       assistantMessageId?: string;
       mutationLifecycle?: ChatStreamMutationLifecycle;
+      turnAdmission?: ActiveTurnAdmission;
     },
   ): Promise<PreparedAgentChatTurn>;
   requireChatTurnContext(
@@ -180,6 +203,29 @@ export interface ChatTurnResumeHost {
 
 export type ChatTurnPreflightHost = ChatTurnEntryHost & ChatRouteResolutionDependencies;
 
+interface EntryOperatorAdmissionInput {
+  sessionId: string;
+  turnId: string;
+  request: ChatSendMessageRequest;
+  actorId: string;
+  idempotencyKey: string;
+  correlationId: string;
+}
+
+async function admitEntryOperatorChatTurn(
+  host: ChatTurnEntryHost,
+  input: EntryOperatorAdmissionInput,
+  authenticatedOperator?: AuthenticatedOperatorAdmissionContext,
+): Promise<ActiveTurnAdmission> {
+  if (!authenticatedOperator) {
+    return host.sessionControlRuntimeOwner.admitOperatorChatTurn(input);
+  }
+  return host.sessionControlRuntimeOwner.admitAuthenticatedOperatorChatTurnWithHeartbeatRecovery(
+    { ...input, authenticatedOperator },
+    (identity) => host.recoverDecisionCommittedHeartbeat(identity),
+  );
+}
+
 export async function agentSendChatMessage(
   host: ChatTurnEntryHost,
   sessionId: string,
@@ -193,148 +239,383 @@ export async function agentSendChatMessage(
     if (canonicalResponse) {
       return canonicalResponse;
     }
-    options?.assertDispatchOwnership?.();
-    input = await applySurfaceRoutingPreflight(host, sessionId, input, (error) => {
-      host.recordDevDiagnostic({
-        level: "warn",
-        category: "chat",
-        event: "chat.surface_router.failed",
-        message: "Surface auto-router failed; continuing with the provided/default mode",
+    const turnIdentity =
+      options?.turnIdentity ??
+      ({
+        turnId: randomUUID(),
+        userMessageId: randomUUID(),
+        assistantMessageId: `assistant-${randomUUID()}`,
+      } satisfies AgentChatTurnIdentity);
+    const admissionActorId = resolveTurnAdmissionActorId(input);
+    const turnAdmission =
+      options?.turnAdmission ??
+      (await admitEntryOperatorChatTurn(
+        host,
+        {
+          sessionId,
+          turnId: turnIdentity.turnId,
+          request: input,
+          actorId: admissionActorId,
+          idempotencyKey: `chat-turn-admit:${turnIdentity.turnId}`,
+          correlationId: turnIdentity.turnId,
+        },
+        options?.authenticatedOperator,
+      ));
+    assertEntryTurnAdmission(turnAdmission, sessionId, turnIdentity.turnId, input);
+    const admissionHeartbeat = host.sessionControlRuntimeOwner.startRequestLeaseHeartbeat(turnAdmission);
+    let terminalEntryResponse: ChatSendMessageResponse | undefined;
+    let entryCompletedNormally = false;
+    try {
+      assertEntryAdmissionActive(host, turnAdmission, admissionHeartbeat);
+      options?.assertDispatchOwnership?.();
+      input = await applySurfaceRoutingPreflight(
+        createAdmissionGuardedSurfaceHost(host, turnAdmission, admissionHeartbeat),
         sessionId,
-        context: { error: error instanceof Error ? error.message : String(error) },
-      });
-    });
-    const requireDurableExecution = Boolean(options?.turnIdentity && input.policyRunId?.trim());
-    const existingBinding = host.storage.chatSessionBindings.get(sessionId);
-    if (requireDurableExecution && existingBinding?.transport !== undefined && existingBinding.transport !== "llm") {
-      throw new Error("Deterministic delegated Chat execution requires an LLM session binding.");
-    }
-    const routeDescriptor = resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
-      action: "send",
-      providerId: input.providerId,
-      model: input.model,
-      mode: input.mode,
-      webMode: input.webMode,
-      thinkingLevel: input.thinkingLevel,
-      speedMode: input.speedMode,
-      subagentPolicy: input.subagentPolicy,
-      prefsOverride: input.prefsOverride,
-    });
-    host.recordDevDiagnostic({
-      level: "info",
-      category: "chat",
-      event: "chat.turn.start",
-      message: "Starting mission chat turn",
-      sessionId,
-      providerId: input.providerId,
-      modelId: input.model,
-      context: {
+        input,
+        (error) => {
+          host.recordDevDiagnostic({
+            level: "warn",
+            category: "chat",
+            event: "chat.surface_router.failed",
+            message: "Surface auto-router failed; continuing with the provided/default mode",
+            sessionId,
+            context: { error: error instanceof Error ? error.message : String(error) },
+          });
+        },
+      );
+      assertEntryAdmissionActive(host, turnAdmission, admissionHeartbeat);
+      const requireDurableExecution = Boolean(options?.turnIdentity && input.policyRunId?.trim());
+      const binding = resolveAdmissionFencedChatSessionBinding(
+        host,
+        turnAdmission,
+        admissionHeartbeat,
+        sessionId,
+        turnAdmission.identity.workspaceId,
+      );
+      if (requireDurableExecution && binding.transport !== "llm") {
+        throw new Error("Deterministic delegated Chat execution requires an LLM session binding.");
+      }
+      const routeDescriptor = resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
+        action: "send",
+        providerId: input.providerId,
+        model: input.model,
         mode: input.mode,
         webMode: input.webMode,
         thinkingLevel: input.thinkingLevel,
         speedMode: input.speedMode,
         subagentPolicy: input.subagentPolicy,
-        routePreflight: {
-          requestedProviderId: routeDescriptor.requestedProviderId,
-          requestedModel: routeDescriptor.requestedModel,
-          effectiveProviderId: routeDescriptor.effectiveProviderId,
-          effectiveModel: routeDescriptor.effectiveModel,
-          selectionSource: routeDescriptor.selectionSource,
-          fallbackPolicy: routeDescriptor.fallbackPolicy,
+        prefsOverride: input.prefsOverride,
+      });
+      host.recordDevDiagnostic({
+        level: "info",
+        category: "chat",
+        event: "chat.turn.start",
+        message: "Starting mission chat turn",
+        sessionId,
+        providerId: input.providerId,
+        modelId: input.model,
+        context: {
+          mode: input.mode,
+          webMode: input.webMode,
+          thinkingLevel: input.thinkingLevel,
+          speedMode: input.speedMode,
+          subagentPolicy: input.subagentPolicy,
+          routePreflight: {
+            requestedProviderId: routeDescriptor.requestedProviderId,
+            requestedModel: routeDescriptor.requestedModel,
+            effectiveProviderId: routeDescriptor.effectiveProviderId,
+            effectiveModel: routeDescriptor.effectiveModel,
+            selectionSource: routeDescriptor.selectionSource,
+            fallbackPolicy: routeDescriptor.fallbackPolicy,
+          },
+        },
+      });
+      const prepared = await host.prepareAgentChatTurn(sessionId, input, {
+        branchKind: "append",
+        turnId: turnIdentity.turnId,
+        userMessageId: turnIdentity.userMessageId,
+        assistantMessageId: turnIdentity.assistantMessageId,
+        turnAdmission,
+      });
+      assertEntryAdmissionActive(host, turnAdmission, admissionHeartbeat);
+      const useDurableExecution = chatTurnDispatchService.shouldUseDurableExecution(
+        host,
+        prepared,
+        input,
+        requireDurableExecution,
+      );
+      if (binding.transport !== "llm") {
+        assertEntryAdmissionActive(host, turnAdmission, admissionHeartbeat);
+        options?.assertDispatchOwnership?.();
+        terminalEntryResponse = await chatTurnDispatchService.sendPreparedIntegrationChatTurn(
+          host,
+          sessionId,
+          input,
+          prepared,
+          binding,
+          "chat_thread_turn_appended",
+          { abortSignal: options?.abortSignal },
+        );
+        assertWaitingResponseHasDurableOwner(turnAdmission, terminalEntryResponse);
+        entryCompletedNormally = true;
+        return terminalEntryResponse;
+      }
+      const routedContextOrchestrationBypassed = enforcePreparedRoutedContextOrchestrationBypass(prepared);
+      const modeOrchestration =
+        requireDurableExecution || routedContextOrchestrationBypassed
+          ? undefined
+          : await host.resolvePreparedTurnOrchestration(prepared);
+      if (modeOrchestration) {
+        host.recordDevDiagnostic({
+          level: "info",
+          category: "orchestration",
+          event: "chat.orchestration.selected",
+          message: "Routing mission chat turn through orchestration",
+          sessionId,
+          turnId: prepared.turnId,
+        });
+        assertEntryAdmissionActive(host, turnAdmission, admissionHeartbeat);
+        terminalEntryResponse = await chatTurnDispatchService.consumePreparedAgentChatTurn(
+          host,
+          sessionId,
+          input,
+          prepared,
+          "chat_thread_turn_appended",
+          modeOrchestration,
+          {
+            abortSignal: options?.abortSignal,
+            onChildDurableRunLaunched: options?.onChildDurableRunLaunched,
+            assertDispatchOwnership: options?.assertDispatchOwnership,
+            durableRunId: options?.turnIdentity
+              ? buildDeterministicAgentDurableRunId(options.turnIdentity.turnId)
+              : undefined,
+            requireDurableExecution,
+          },
+        );
+        assertWaitingResponseHasDurableOwner(turnAdmission, terminalEntryResponse);
+        entryCompletedNormally = true;
+        return terminalEntryResponse;
+      }
+      if (requireDurableExecution || useDurableExecution) {
+        assertEntryAdmissionActive(host, turnAdmission, admissionHeartbeat);
+        terminalEntryResponse = await chatTurnDispatchService.consumePreparedAgentChatTurn(
+          host,
+          sessionId,
+          input,
+          prepared,
+          "chat_thread_turn_appended",
+          undefined,
+          {
+            abortSignal: options?.abortSignal,
+            onChildDurableRunLaunched: options?.onChildDurableRunLaunched,
+            assertDispatchOwnership: options?.assertDispatchOwnership,
+            durableRunId: options?.turnIdentity
+              ? buildDeterministicAgentDurableRunId(options.turnIdentity.turnId)
+              : undefined,
+            requireDurableExecution,
+          },
+        );
+        assertWaitingResponseHasDurableOwner(turnAdmission, terminalEntryResponse);
+        entryCompletedNormally = true;
+        return terminalEntryResponse;
+      }
+      assertEntryAdmissionActive(host, turnAdmission, admissionHeartbeat);
+      terminalEntryResponse = await runAgentSendChatMessageLlmPath(host, sessionId, input, prepared, options);
+      assertWaitingResponseHasDurableOwner(turnAdmission, terminalEntryResponse);
+      entryCompletedNormally = true;
+      return terminalEntryResponse;
+    } finally {
+      admissionHeartbeat.stop();
+      if (turnAdmission.requestClaim) {
+        host.sessionControlRuntimeOwner.closeTurnWrite({
+          admission: turnAdmission,
+          status:
+            entryCompletedNormally && terminalEntryResponse?.trace?.status !== "cancelled" ? "completed" : "cancelled",
+          actorId: admissionActorId,
+          idempotencyKey: `chat-turn-close:${turnIdentity.turnId}`,
+          correlationId: turnIdentity.turnId,
+        });
+      }
+    }
+  });
+}
+
+function resolveTurnAdmissionActorId(input: ChatSendMessageRequest): string {
+  return resolveChatTurnAdmissionActorId(input);
+}
+
+function createEntryTurnIdentity(): AgentChatTurnIdentity {
+  return {
+    turnId: randomUUID(),
+    userMessageId: randomUUID(),
+    assistantMessageId: `assistant-${randomUUID()}`,
+  };
+}
+
+function closeEntryRequestAdmission(
+  host: ChatTurnEntryHost,
+  admission: ActiveTurnAdmission,
+  heartbeat: import("./session-control-runtime-owner.js").TurnAdmissionHeartbeatHandle,
+  actorId: string,
+  terminalStatus: ChatTurnTraceRecord["status"] | undefined,
+  completedNormally: boolean,
+): void {
+  heartbeat.stop();
+  if (!admission.requestClaim) return;
+  host.sessionControlRuntimeOwner.closeTurnWrite({
+    admission,
+    status: completedNormally && terminalStatus !== "cancelled" ? "completed" : "cancelled",
+    actorId,
+    idempotencyKey: `chat-turn-close:${admission.identity.turnId}`,
+    correlationId: admission.identity.turnId,
+  });
+}
+
+function assertEntryTurnAdmission(
+  admission: ActiveTurnAdmission,
+  sessionId: string,
+  turnId: string,
+  request: ChatSendMessageRequest,
+): void {
+  if (
+    admission.identity.sessionId !== sessionId ||
+    admission.identity.turnId !== turnId ||
+    admission.identity.materialSha256 !== computeChatTurnAdmissionMaterialSha256(request)
+  ) {
+    throw new Error("The admitted Chat turn identity does not match the entry request.");
+  }
+}
+
+function assertEntryAdmissionActive(
+  host: ChatTurnEntryHost,
+  admission: ActiveTurnAdmission,
+  heartbeat: import("./session-control-runtime-owner.js").TurnAdmissionHeartbeatHandle,
+): void {
+  heartbeat.assertHealthy();
+  host.sessionControlRuntimeOwner.assertActiveTurnWrite(admission);
+}
+
+function assertWaitingResponseHasDurableOwner(admission: ActiveTurnAdmission, response: ChatSendMessageResponse): void {
+  const waiting = Boolean(
+    response.trace &&
+    (["waiting_for_tool", "waiting_for_approval", "waiting_for_user_input"].includes(response.trace.status) ||
+      response.trace.failure?.failureClass === "approval_required"),
+  );
+  if (waiting && admission.requestClaim) {
+    throw new Error("A waiting Chat turn must transfer mutation authority to a durable run before returning.");
+  }
+}
+
+function captureStreamTerminalStatus(
+  chunk: ChatStreamChunk,
+  current: ChatTurnTraceRecord["status"] | undefined,
+): ChatTurnTraceRecord["status"] | undefined {
+  if (chunk.type === "trace_update") return chunk.trace.status;
+  if (chunk.type === "approval_required") return "waiting_for_approval";
+  if (chunk.type === "user_input_required") return "waiting_for_user_input";
+  if (chunk.type === "error") return "failed";
+  return current;
+}
+
+function assertWaitingStreamHasDurableOwner(
+  admission: ActiveTurnAdmission,
+  terminalStatus: ChatTurnTraceRecord["status"] | undefined,
+): void {
+  if (
+    terminalStatus &&
+    ["waiting_for_tool", "waiting_for_approval", "waiting_for_user_input"].includes(terminalStatus) &&
+    admission.requestClaim
+  ) {
+    throw new Error("A waiting streamed Chat turn must transfer mutation authority to a durable run before returning.");
+  }
+}
+
+function createAdmissionGuardedSurfaceHost(
+  host: ChatTurnEntryHost,
+  admission: ActiveTurnAdmission,
+  heartbeat: import("./session-control-runtime-owner.js").TurnAdmissionHeartbeatHandle,
+) {
+  return {
+    surfaceRouter: host.surfaceRouter,
+    readChatSessionMode: host.readChatSessionMode,
+    persistChatSessionMode: host.persistChatSessionMode
+      ? (sessionId: string, mode: ChatMode) => {
+          heartbeat.assertHealthy();
+          host.storage.runImmediateTransaction(() => {
+            assertEntryAdmissionActive(host, admission, heartbeat);
+            host.persistChatSessionMode?.(sessionId, mode);
+            assertEntryAdmissionActive(host, admission, heartbeat);
+          });
+        }
+      : undefined,
+    recordSurfaceRouteOverrideSignal: host.recordSurfaceRouteOverrideSignal
+      ? (input: SurfaceRouteOverrideSignalInput) => {
+          heartbeat.assertHealthy();
+          host.storage.runImmediateTransaction(() => {
+            assertEntryAdmissionActive(host, admission, heartbeat);
+            host.recordSurfaceRouteOverrideSignal?.(input);
+            assertEntryAdmissionActive(host, admission, heartbeat);
+          });
+        }
+      : undefined,
+    normalizeWorkspaceId: (workspaceId?: string) => host.normalizeWorkspaceId(workspaceId),
+    storage: {
+      ...host.storage,
+      chatSessionMeta: {
+        ensure: (targetSessionId: string) => {
+          heartbeat.assertHealthy();
+          return host.storage.runImmediateTransaction(() => {
+            assertEntryAdmissionActive(host, admission, heartbeat);
+            const meta = host.storage.chatSessionMeta.get(targetSessionId);
+            if (!meta) {
+              throw new Error(`Chat session not found: ${targetSessionId}`);
+            }
+            assertEntryAdmissionActive(host, admission, heartbeat);
+            return meta;
+          });
         },
       },
-    });
-    const prepared = await host.prepareAgentChatTurn(
-      sessionId,
-      input,
-      options?.turnIdentity
-        ? {
-            branchKind: "append",
-            turnId: options.turnIdentity.turnId,
-            userMessageId: options.turnIdentity.userMessageId,
-            assistantMessageId: options.turnIdentity.assistantMessageId,
-          }
-        : { branchKind: "append" },
-    );
-    const useDurableExecution = chatTurnDispatchService.shouldUseDurableExecution(
-      host,
-      prepared,
-      input,
-      requireDurableExecution,
-    );
-    const binding =
-      existingBinding ??
+    },
+  };
+}
+
+function resolveAdmissionFencedChatSessionBinding(
+  host: ChatTurnEntryHost,
+  admission: ActiveTurnAdmission,
+  heartbeat: import("./session-control-runtime-owner.js").TurnAdmissionHeartbeatHandle,
+  sessionId: string,
+  workspaceId: string,
+): ChatSessionBindingRecord {
+  heartbeat.assertHealthy();
+  return host.storage.runImmediateTransaction(() => {
+    assertEntryAdmissionActive(host, admission, heartbeat);
+    const resolved =
+      host.storage.chatSessionBindings.get(sessionId) ??
       host.storage.chatSessionBindings.upsert({
         sessionId,
-        workspaceId: prepared.workspaceId,
+        workspaceId,
         transport: "llm",
         writable: true,
       });
-    if (binding.transport !== "llm") {
-      options?.assertDispatchOwnership?.();
-      return chatTurnDispatchService.sendPreparedIntegrationChatTurn(
-        host,
-        sessionId,
-        input,
-        prepared,
-        binding,
-        "chat_thread_turn_appended",
-        { abortSignal: options?.abortSignal },
-      );
+    const persisted = host.storage.chatSessionBindings.get(sessionId);
+    if (!persisted || !sameChatSessionBindingIdentity(resolved, persisted)) {
+      throw new Error(`Chat session binding ${sessionId} changed during admitted turn routing.`);
     }
-    const routedContextOrchestrationBypassed = enforcePreparedRoutedContextOrchestrationBypass(prepared);
-    const modeOrchestration =
-      requireDurableExecution || routedContextOrchestrationBypassed
-        ? undefined
-        : await host.resolvePreparedTurnOrchestration(prepared);
-    if (modeOrchestration) {
-      host.recordDevDiagnostic({
-        level: "info",
-        category: "orchestration",
-        event: "chat.orchestration.selected",
-        message: "Routing mission chat turn through orchestration",
-        sessionId,
-        turnId: prepared.turnId,
-      });
-      return chatTurnDispatchService.consumePreparedAgentChatTurn(
-        host,
-        sessionId,
-        input,
-        prepared,
-        "chat_thread_turn_appended",
-        modeOrchestration,
-        {
-          abortSignal: options?.abortSignal,
-          onChildDurableRunLaunched: options?.onChildDurableRunLaunched,
-          assertDispatchOwnership: options?.assertDispatchOwnership,
-          durableRunId: options?.turnIdentity
-            ? buildDeterministicAgentDurableRunId(options.turnIdentity.turnId)
-            : undefined,
-          requireDurableExecution,
-        },
-      );
-    }
-    if (requireDurableExecution || useDurableExecution) {
-      return chatTurnDispatchService.consumePreparedAgentChatTurn(
-        host,
-        sessionId,
-        input,
-        prepared,
-        "chat_thread_turn_appended",
-        undefined,
-        {
-          abortSignal: options?.abortSignal,
-          onChildDurableRunLaunched: options?.onChildDurableRunLaunched,
-          assertDispatchOwnership: options?.assertDispatchOwnership,
-          durableRunId: options?.turnIdentity
-            ? buildDeterministicAgentDurableRunId(options.turnIdentity.turnId)
-            : undefined,
-          requireDurableExecution,
-        },
-      );
-    }
-    return runAgentSendChatMessageLlmPath(host, sessionId, input, prepared, options);
+    assertEntryAdmissionActive(host, admission, heartbeat);
+    return persisted;
   });
+}
+
+function sameChatSessionBindingIdentity(left: ChatSessionBindingRecord, right: ChatSessionBindingRecord): boolean {
+  return (
+    left.sessionId === right.sessionId &&
+    left.transport === right.transport &&
+    left.connectionId === right.connectionId &&
+    left.target === right.target &&
+    left.writable === right.writable &&
+    left.createdAt === right.createdAt &&
+    left.updatedAt === right.updatedAt
+  );
 }
 
 async function loadCanonicalAgentTurnResponse(
@@ -808,47 +1089,9 @@ async function runAgentSendChatMessageLlmPath(
       trace: hydratedTrace,
     });
 
-    host.extractAndPersistLearnedMemory(sessionId, prepared.content, {
-      role: "user",
-      sourceRef: prepared.userEventId,
-      trace: hydratedTrace,
-    });
-    host.extractAndPersistLearnedMemory(sessionId, assistantText, {
-      role: "assistant",
-      sourceRef: assistantEventId,
-      trace: hydratedTrace,
-    });
-    // P1-F3: infer future follow-up check-ins from a successful turn's transcript
-    // (fire-and-forget, beside learned-memory). The host applies the autonomy /
-    // eval-integrity / non-human guards and swallows errors. Autonomous self-wake
-    // turns are excluded (no self-feeding classifier/review loop on their output).
-    if (finalTraceStatus === "completed") {
-      const autonomousTurn = isAutonomousTurnRequest(input);
-      const delegatedChild = Boolean(prepared.parentDelegationStepId);
-      host.recordTurnCommitments({
-        sessionId,
-        workspaceId: prepared.workspaceId,
-        userText: prepared.content,
-        assistantText,
-        autonomous: autonomousTurn,
-      });
-      // P2-S1: counter-gated self-improvement review (fire-and-forget). The host
-      // gates on master autonomy / eval-integrity / non-human + the turn counter.
-      host.scheduleBackgroundReviewIfDue({
-        sessionId,
-        workspaceId: prepared.workspaceId,
-        turnId,
-        userText: prepared.content,
-        assistantText,
-        delegatedChild,
-        autonomous: autonomousTurn,
-      });
-      host.scheduleMemoryMaintenancePostTurnEvaluation({
-        sessionId,
-        turnId,
-        delegatedChild,
-      });
-    }
+    // Learned-memory promotion and commitments are production-dark on this
+    // compatibility path. Canonical Chat completion owns governed post-commit
+    // work through admitted durable children.
     host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
     host.publishRealtime(
       "chat_thread_updated",
@@ -959,126 +1202,170 @@ export async function* agentSendChatMessageStream(
   host: ChatTurnEntryHost,
   sessionId: string,
   input: ChatSendMessageRequest,
-  options?: { abortSignal?: AbortSignal; mutationLifecycle?: ChatStreamMutationLifecycle },
+  options?: OperatorChatTurnStreamRequestOptions,
 ): AsyncGenerator<ChatStreamChunk> {
   yield* host.withChatTurnWriteLeaseStream(sessionId, "agent-send/stream", () => {
     return (async function* (): AsyncGenerator<ChatStreamChunk> {
-      input = await applySurfaceRoutingPreflight(host, sessionId, input, (error) => {
-        host.recordDevDiagnostic({
-          level: "warn",
-          category: "chat",
-          event: "chat.surface_router.failed",
-          message: "Surface auto-router failed; continuing with the provided/default mode",
+      const turnIdentity = createEntryTurnIdentity();
+      const admissionActorId = resolveTurnAdmissionActorId(input);
+      const turnAdmission = await admitEntryOperatorChatTurn(
+        host,
+        {
           sessionId,
-          context: { error: error instanceof Error ? error.message : String(error) },
+          turnId: turnIdentity.turnId,
+          request: input,
+          actorId: admissionActorId,
+          idempotencyKey: `chat-turn-admit:${turnIdentity.turnId}`,
+          correlationId: turnIdentity.turnId,
+        },
+        options?.authenticatedOperator,
+      );
+      assertEntryTurnAdmission(turnAdmission, sessionId, turnIdentity.turnId, input);
+      const heartbeat = host.sessionControlRuntimeOwner.startRequestLeaseHeartbeat(turnAdmission);
+      let completedNormally = false;
+      let terminalStatus: ChatTurnTraceRecord["status"] | undefined;
+      try {
+        input = await applySurfaceRoutingPreflight(
+          createAdmissionGuardedSurfaceHost(host, turnAdmission, heartbeat),
+          sessionId,
+          input,
+          (error) => {
+            host.recordDevDiagnostic({
+              level: "warn",
+              category: "chat",
+              event: "chat.surface_router.failed",
+              message: "Surface auto-router failed; continuing with the provided/default mode",
+              sessionId,
+              context: { error: error instanceof Error ? error.message : String(error) },
+            });
+          },
+        );
+        assertEntryAdmissionActive(host, turnAdmission, heartbeat);
+        const binding = resolveAdmissionFencedChatSessionBinding(
+          host,
+          turnAdmission,
+          heartbeat,
+          sessionId,
+          turnAdmission.identity.workspaceId,
+        );
+        host.recordDevDiagnostic({
+          level: "info",
+          category: "chat",
+          event: "chat.stream.start",
+          message: "Starting streamed mission chat turn",
+          sessionId,
+          providerId: input.providerId,
+          modelId: input.model,
+          context: {
+            mode: input.mode,
+            webMode: input.webMode,
+            thinkingLevel: input.thinkingLevel,
+            speedMode: input.speedMode,
+            subagentPolicy: input.subagentPolicy,
+          },
         });
-      });
-      host.recordDevDiagnostic({
-        level: "info",
-        category: "chat",
-        event: "chat.stream.start",
-        message: "Starting streamed mission chat turn",
-        sessionId,
-        providerId: input.providerId,
-        modelId: input.model,
-        context: {
+        const routeDescriptor = resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
+          action: "send",
+          providerId: input.providerId,
+          model: input.model,
           mode: input.mode,
           webMode: input.webMode,
           thinkingLevel: input.thinkingLevel,
           speedMode: input.speedMode,
           subagentPolicy: input.subagentPolicy,
-        },
-      });
-      const routeDescriptor = resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
-        action: "send",
-        providerId: input.providerId,
-        model: input.model,
-        mode: input.mode,
-        webMode: input.webMode,
-        thinkingLevel: input.thinkingLevel,
-        speedMode: input.speedMode,
-        subagentPolicy: input.subagentPolicy,
-        prefsOverride: input.prefsOverride,
-      });
-      host.recordDevDiagnostic({
-        level: "info",
-        category: "chat",
-        event: "chat.stream.preflight",
-        message: "Resolved streamed send routing before execution",
-        sessionId,
-        providerId: routeDescriptor.effectiveProviderId,
-        modelId: routeDescriptor.effectiveModel,
-        context: {
-          selectionSource: routeDescriptor.selectionSource,
-          fallbackPolicy: routeDescriptor.fallbackPolicy,
-        },
-      });
-      const prepared = await host.prepareAgentChatTurn(sessionId, input, {
-        branchKind: "append",
-        ...(options?.mutationLifecycle ? { mutationLifecycle: options.mutationLifecycle } : {}),
-      });
-      const binding =
-        host.storage.chatSessionBindings.get(sessionId) ??
-        host.storage.chatSessionBindings.upsert({
-          sessionId,
-          workspaceId: prepared.workspaceId,
-          transport: "llm",
-          writable: true,
+          prefsOverride: input.prefsOverride,
         });
-      if (binding.transport !== "llm") {
-        const integrationOptions =
-          options?.abortSignal || options?.mutationLifecycle
-            ? {
-                ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
-                ...(options.mutationLifecycle ? { mutationLifecycle: options.mutationLifecycle } : {}),
-              }
-            : undefined;
-        const stream = integrationOptions
-          ? chatTurnDispatchService.streamPreparedIntegrationChatTurn(
+        host.recordDevDiagnostic({
+          level: "info",
+          category: "chat",
+          event: "chat.stream.preflight",
+          message: "Resolved streamed send routing before execution",
+          sessionId,
+          providerId: routeDescriptor.effectiveProviderId,
+          modelId: routeDescriptor.effectiveModel,
+          context: {
+            selectionSource: routeDescriptor.selectionSource,
+            fallbackPolicy: routeDescriptor.fallbackPolicy,
+          },
+        });
+        const prepared = await host.prepareAgentChatTurn(sessionId, input, {
+          branchKind: "append",
+          turnId: turnIdentity.turnId,
+          userMessageId: turnIdentity.userMessageId,
+          assistantMessageId: turnIdentity.assistantMessageId,
+          turnAdmission,
+          ...(options?.mutationLifecycle ? { mutationLifecycle: options.mutationLifecycle } : {}),
+        });
+        assertEntryAdmissionActive(host, turnAdmission, heartbeat);
+        if (binding.transport !== "llm") {
+          const integrationOptions =
+            options?.abortSignal || options?.mutationLifecycle
+              ? {
+                  ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
+                  ...(options.mutationLifecycle ? { mutationLifecycle: options.mutationLifecycle } : {}),
+                }
+              : undefined;
+          const stream = integrationOptions
+            ? chatTurnDispatchService.streamPreparedIntegrationChatTurn(
+                host,
+                sessionId,
+                input,
+                prepared,
+                binding,
+                "chat_thread_turn_appended",
+                integrationOptions,
+              )
+            : chatTurnDispatchService.streamPreparedIntegrationChatTurn(
+                host,
+                sessionId,
+                input,
+                prepared,
+                binding,
+                "chat_thread_turn_appended",
+              );
+          for await (const chunk of host.withEphemeralStreamEnvelope(stream)) {
+            terminalStatus = captureStreamTerminalStatus(chunk, terminalStatus);
+            yield chunk;
+          }
+          assertWaitingStreamHasDurableOwner(turnAdmission, terminalStatus);
+          completedNormally = true;
+          return;
+        }
+        assertEntryAdmissionActive(host, turnAdmission, heartbeat);
+        const durableRunId = options?.mutationLifecycle
+          ? chatTurnDispatchService.launchPreparedAgentChatTurnStream(
               host,
               sessionId,
               input,
               prepared,
-              binding,
               "chat_thread_turn_appended",
-              integrationOptions,
+              undefined,
+              { mutationLifecycle: options.mutationLifecycle },
             )
-          : chatTurnDispatchService.streamPreparedIntegrationChatTurn(
+          : chatTurnDispatchService.launchPreparedAgentChatTurnStream(
               host,
               sessionId,
               input,
               prepared,
-              binding,
               "chat_thread_turn_appended",
             );
-        yield* host.withEphemeralStreamEnvelope(stream);
-        return;
-      }
-      const durableRunId = options?.mutationLifecycle
-        ? chatTurnDispatchService.launchPreparedAgentChatTurnStream(
-            host,
-            sessionId,
-            input,
-            prepared,
-            "chat_thread_turn_appended",
-            undefined,
-            { mutationLifecycle: options.mutationLifecycle },
-          )
-        : chatTurnDispatchService.launchPreparedAgentChatTurnStream(
-            host,
-            sessionId,
-            input,
-            prepared,
-            "chat_thread_turn_appended",
-          );
-      const detachAbortListener = bindStreamAbortToTurn(host, prepared.turnId, durableRunId, options?.abortSignal);
-      try {
-        yield* host.streamPersistedChatTurnEvents(sessionId, prepared.turnId, {
-          liveTail: true,
-          ...(options?.abortSignal ? { signal: options.abortSignal } : {}),
-        });
+        if (!turnAdmission.requestClaim) heartbeat.stop();
+        const detachAbortListener = bindStreamAbortToTurn(host, prepared.turnId, durableRunId, options?.abortSignal);
+        try {
+          for await (const chunk of host.streamPersistedChatTurnEvents(sessionId, prepared.turnId, {
+            liveTail: true,
+            ...(options?.abortSignal ? { signal: options.abortSignal } : {}),
+          })) {
+            terminalStatus = captureStreamTerminalStatus(chunk, terminalStatus);
+            yield chunk;
+          }
+          assertWaitingStreamHasDurableOwner(turnAdmission, terminalStatus);
+          completedNormally = true;
+        } finally {
+          detachAbortListener?.();
+        }
       } finally {
-        detachAbortListener?.();
+        closeEntryRequestAdmission(host, turnAdmission, heartbeat, admissionActorId, terminalStatus, completedNormally);
       }
     })();
   });
@@ -1089,6 +1376,7 @@ export async function retryChatTurn(
   sessionId: string,
   turnId: string,
   overrides: Partial<ChatSendMessageRequest> = {},
+  options?: OperatorChatTurnRequestOptions,
 ): Promise<ChatSendMessageResponse> {
   return host.withChatTurnWriteLease(sessionId, "retry-turn", async () => {
     const current = await requireEntryChatTurnContext(host, sessionId, turnId);
@@ -1141,38 +1429,74 @@ export async function retryChatTurn(
         fallbackPolicy: routeDescriptor.fallbackPolicy,
       },
     });
-    const prepared = await host.prepareAgentChatTurn(sessionId, request, {
-      branchKind: "retry",
-      sourceTurnId: turnId,
-      parentTurnId: current.trace.parentTurnId,
-      existingUserMessage: current.userMessage,
-      ingestUserMessage: false,
-    });
-    const binding =
-      host.storage.chatSessionBindings.get(sessionId) ??
-      host.storage.chatSessionBindings.upsert({
+    const turnIdentity = createEntryTurnIdentity();
+    const admissionActorId = resolveTurnAdmissionActorId(request);
+    const turnAdmission = await admitEntryOperatorChatTurn(
+      host,
+      {
         sessionId,
-        workspaceId: prepared.workspaceId,
-        transport: "llm",
-        writable: true,
-      });
-    if (binding.transport !== "llm") {
-      return chatTurnDispatchService.sendPreparedIntegrationChatTurn(
-        host,
-        sessionId,
+        turnId: turnIdentity.turnId,
         request,
-        prepared,
-        binding,
-        "chat_thread_turn_retried",
+        actorId: admissionActorId,
+        idempotencyKey: `chat-turn-admit:${turnIdentity.turnId}`,
+        correlationId: turnIdentity.turnId,
+      },
+      options?.authenticatedOperator,
+    );
+    const heartbeat = host.sessionControlRuntimeOwner.startRequestLeaseHeartbeat(turnAdmission);
+    let response: ChatSendMessageResponse | undefined;
+    let completedNormally = false;
+    try {
+      assertEntryAdmissionActive(host, turnAdmission, heartbeat);
+      const binding = resolveAdmissionFencedChatSessionBinding(
+        host,
+        turnAdmission,
+        heartbeat,
+        sessionId,
+        turnAdmission.identity.workspaceId,
+      );
+      const prepared = await host.prepareAgentChatTurn(sessionId, request, {
+        branchKind: "retry",
+        turnId: turnIdentity.turnId,
+        userMessageId: current.userMessage.messageId,
+        assistantMessageId: turnIdentity.assistantMessageId,
+        sourceTurnId: turnId,
+        parentTurnId: current.trace.parentTurnId,
+        existingUserMessage: current.userMessage,
+        ingestUserMessage: false,
+        turnAdmission,
+      });
+      assertEntryAdmissionActive(host, turnAdmission, heartbeat);
+      response =
+        binding.transport !== "llm"
+          ? await chatTurnDispatchService.sendPreparedIntegrationChatTurn(
+              host,
+              sessionId,
+              request,
+              prepared,
+              binding,
+              "chat_thread_turn_retried",
+            )
+          : await chatTurnDispatchService.consumePreparedAgentChatTurn(
+              host,
+              sessionId,
+              request,
+              prepared,
+              "chat_thread_turn_retried",
+            );
+      assertWaitingResponseHasDurableOwner(turnAdmission, response);
+      completedNormally = true;
+      return response;
+    } finally {
+      closeEntryRequestAdmission(
+        host,
+        turnAdmission,
+        heartbeat,
+        admissionActorId,
+        response?.trace?.status,
+        completedNormally,
       );
     }
-    return chatTurnDispatchService.consumePreparedAgentChatTurn(
-      host,
-      sessionId,
-      request,
-      prepared,
-      "chat_thread_turn_retried",
-    );
   });
 }
 
@@ -1181,7 +1505,7 @@ export async function* retryChatTurnStream(
   sessionId: string,
   turnId: string,
   overrides: Partial<ChatSendMessageRequest> = {},
-  options?: { abortSignal?: AbortSignal; mutationLifecycle?: ChatStreamMutationLifecycle },
+  options?: OperatorChatTurnStreamRequestOptions,
 ): AsyncGenerator<ChatStreamChunk> {
   yield* host.withChatTurnWriteLeaseStream(sessionId, "retry-turn/stream", () => {
     return (async function* (): AsyncGenerator<ChatStreamChunk> {
@@ -1209,102 +1533,141 @@ export async function* retryChatTurnStream(
         policyTaskId: overrides.policyTaskId,
         contextRefs: overrides.contextRefs,
       };
-      const routeDescriptor = resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
-        action: "retry",
-        turnId,
-        providerId: request.providerId,
-        model: request.model,
-        mode: request.mode,
-        webMode: request.webMode,
-        thinkingLevel: request.thinkingLevel,
-        speedMode: request.speedMode,
-        subagentPolicy: request.subagentPolicy,
-        prefsOverride: request.prefsOverride,
-      });
-      host.recordDevDiagnostic({
-        level: "info",
-        category: "chat",
-        event: "chat.turn.retry_stream_preflight",
-        message: "Resolved streamed retry routing before execution",
-        sessionId,
-        turnId,
-        providerId: routeDescriptor.effectiveProviderId,
-        modelId: routeDescriptor.effectiveModel,
-        context: {
-          selectionSource: routeDescriptor.selectionSource,
-          fallbackPolicy: routeDescriptor.fallbackPolicy,
-        },
-      });
-      const prepared = await host.prepareAgentChatTurn(sessionId, request, {
-        branchKind: "retry",
-        sourceTurnId: turnId,
-        parentTurnId: current.trace.parentTurnId,
-        existingUserMessage: current.userMessage,
-        ingestUserMessage: false,
-        ...(options?.mutationLifecycle ? { mutationLifecycle: options.mutationLifecycle } : {}),
-      });
-      const binding =
-        host.storage.chatSessionBindings.get(sessionId) ??
-        host.storage.chatSessionBindings.upsert({
+      const turnIdentity = createEntryTurnIdentity();
+      const admissionActorId = resolveTurnAdmissionActorId(request);
+      const turnAdmission = await admitEntryOperatorChatTurn(
+        host,
+        {
           sessionId,
-          workspaceId: prepared.workspaceId,
-          transport: "llm",
-          writable: true,
+          turnId: turnIdentity.turnId,
+          request,
+          actorId: admissionActorId,
+          idempotencyKey: `chat-turn-admit:${turnIdentity.turnId}`,
+          correlationId: turnIdentity.turnId,
+        },
+        options?.authenticatedOperator,
+      );
+      assertEntryTurnAdmission(turnAdmission, sessionId, turnIdentity.turnId, request);
+      const heartbeat = host.sessionControlRuntimeOwner.startRequestLeaseHeartbeat(turnAdmission);
+      let completedNormally = false;
+      let terminalStatus: ChatTurnTraceRecord["status"] | undefined;
+      try {
+        assertEntryAdmissionActive(host, turnAdmission, heartbeat);
+        const binding = resolveAdmissionFencedChatSessionBinding(
+          host,
+          turnAdmission,
+          heartbeat,
+          sessionId,
+          turnAdmission.identity.workspaceId,
+        );
+        const routeDescriptor = resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
+          action: "retry",
+          turnId,
+          providerId: request.providerId,
+          model: request.model,
+          mode: request.mode,
+          webMode: request.webMode,
+          thinkingLevel: request.thinkingLevel,
+          speedMode: request.speedMode,
+          subagentPolicy: request.subagentPolicy,
+          prefsOverride: request.prefsOverride,
         });
-      if (binding.transport !== "llm") {
-        const integrationOptions =
-          options?.abortSignal || options?.mutationLifecycle
-            ? {
-                ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
-                ...(options.mutationLifecycle ? { mutationLifecycle: options.mutationLifecycle } : {}),
-              }
-            : undefined;
-        const stream = integrationOptions
-          ? chatTurnDispatchService.streamPreparedIntegrationChatTurn(
+        host.recordDevDiagnostic({
+          level: "info",
+          category: "chat",
+          event: "chat.turn.retry_stream_preflight",
+          message: "Resolved streamed retry routing before execution",
+          sessionId,
+          turnId,
+          providerId: routeDescriptor.effectiveProviderId,
+          modelId: routeDescriptor.effectiveModel,
+          context: {
+            selectionSource: routeDescriptor.selectionSource,
+            fallbackPolicy: routeDescriptor.fallbackPolicy,
+          },
+        });
+        const prepared = await host.prepareAgentChatTurn(sessionId, request, {
+          branchKind: "retry",
+          turnId: turnIdentity.turnId,
+          userMessageId: current.userMessage.messageId,
+          assistantMessageId: turnIdentity.assistantMessageId,
+          sourceTurnId: turnId,
+          parentTurnId: current.trace.parentTurnId,
+          existingUserMessage: current.userMessage,
+          ingestUserMessage: false,
+          turnAdmission,
+          ...(options?.mutationLifecycle ? { mutationLifecycle: options.mutationLifecycle } : {}),
+        });
+        assertEntryAdmissionActive(host, turnAdmission, heartbeat);
+        if (binding.transport !== "llm") {
+          const integrationOptions =
+            options?.abortSignal || options?.mutationLifecycle
+              ? {
+                  ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
+                  ...(options.mutationLifecycle ? { mutationLifecycle: options.mutationLifecycle } : {}),
+                }
+              : undefined;
+          const stream = integrationOptions
+            ? chatTurnDispatchService.streamPreparedIntegrationChatTurn(
+                host,
+                sessionId,
+                request,
+                prepared,
+                binding,
+                "chat_thread_turn_retried",
+                integrationOptions,
+              )
+            : chatTurnDispatchService.streamPreparedIntegrationChatTurn(
+                host,
+                sessionId,
+                request,
+                prepared,
+                binding,
+                "chat_thread_turn_retried",
+              );
+          for await (const chunk of host.withEphemeralStreamEnvelope(stream)) {
+            terminalStatus = captureStreamTerminalStatus(chunk, terminalStatus);
+            yield chunk;
+          }
+          assertWaitingStreamHasDurableOwner(turnAdmission, terminalStatus);
+          completedNormally = true;
+          return;
+        }
+        assertEntryAdmissionActive(host, turnAdmission, heartbeat);
+        const durableRunId = options?.mutationLifecycle
+          ? chatTurnDispatchService.launchPreparedAgentChatTurnStream(
               host,
               sessionId,
               request,
               prepared,
-              binding,
               "chat_thread_turn_retried",
-              integrationOptions,
+              undefined,
+              { mutationLifecycle: options.mutationLifecycle },
             )
-          : chatTurnDispatchService.streamPreparedIntegrationChatTurn(
+          : chatTurnDispatchService.launchPreparedAgentChatTurnStream(
               host,
               sessionId,
               request,
               prepared,
-              binding,
               "chat_thread_turn_retried",
             );
-        yield* host.withEphemeralStreamEnvelope(stream);
-        return;
-      }
-      const durableRunId = options?.mutationLifecycle
-        ? chatTurnDispatchService.launchPreparedAgentChatTurnStream(
-            host,
-            sessionId,
-            request,
-            prepared,
-            "chat_thread_turn_retried",
-            undefined,
-            { mutationLifecycle: options.mutationLifecycle },
-          )
-        : chatTurnDispatchService.launchPreparedAgentChatTurnStream(
-            host,
-            sessionId,
-            request,
-            prepared,
-            "chat_thread_turn_retried",
-          );
-      const detachAbortListener = bindStreamAbortToTurn(host, prepared.turnId, durableRunId, options?.abortSignal);
-      try {
-        yield* host.streamPersistedChatTurnEvents(sessionId, prepared.turnId, {
-          liveTail: true,
-          ...(options?.abortSignal ? { signal: options.abortSignal } : {}),
-        });
+        if (!turnAdmission.requestClaim) heartbeat.stop();
+        const detachAbortListener = bindStreamAbortToTurn(host, prepared.turnId, durableRunId, options?.abortSignal);
+        try {
+          for await (const chunk of host.streamPersistedChatTurnEvents(sessionId, prepared.turnId, {
+            liveTail: true,
+            ...(options?.abortSignal ? { signal: options.abortSignal } : {}),
+          })) {
+            terminalStatus = captureStreamTerminalStatus(chunk, terminalStatus);
+            yield chunk;
+          }
+          assertWaitingStreamHasDurableOwner(turnAdmission, terminalStatus);
+          completedNormally = true;
+        } finally {
+          detachAbortListener?.();
+        }
       } finally {
-        detachAbortListener?.();
+        closeEntryRequestAdmission(host, turnAdmission, heartbeat, admissionActorId, terminalStatus, completedNormally);
       }
     })();
   });
@@ -1315,6 +1678,7 @@ export async function editChatTurn(
   sessionId: string,
   turnId: string,
   input: ChatSendMessageRequest,
+  options?: OperatorChatTurnRequestOptions,
 ): Promise<ChatSendMessageResponse> {
   return host.withChatTurnWriteLease(sessionId, "edit-turn", async () => {
     const current = await requireEntryChatTurnContext(host, sessionId, turnId);
@@ -1348,36 +1712,72 @@ export async function editChatTurn(
         fallbackPolicy: routeDescriptor.fallbackPolicy,
       },
     });
-    const prepared = await host.prepareAgentChatTurn(sessionId, request, {
-      branchKind: "edit",
-      sourceTurnId: turnId,
-      parentTurnId: current.trace.parentTurnId,
-    });
-    const binding =
-      host.storage.chatSessionBindings.get(sessionId) ??
-      host.storage.chatSessionBindings.upsert({
+    const turnIdentity = createEntryTurnIdentity();
+    const admissionActorId = resolveTurnAdmissionActorId(request);
+    const turnAdmission = await admitEntryOperatorChatTurn(
+      host,
+      {
         sessionId,
-        workspaceId: prepared.workspaceId,
-        transport: "llm",
-        writable: true,
-      });
-    if (binding.transport !== "llm") {
-      return chatTurnDispatchService.sendPreparedIntegrationChatTurn(
-        host,
-        sessionId,
+        turnId: turnIdentity.turnId,
         request,
-        prepared,
-        binding,
-        "chat_thread_turn_edited",
+        actorId: admissionActorId,
+        idempotencyKey: `chat-turn-admit:${turnIdentity.turnId}`,
+        correlationId: turnIdentity.turnId,
+      },
+      options?.authenticatedOperator,
+    );
+    const heartbeat = host.sessionControlRuntimeOwner.startRequestLeaseHeartbeat(turnAdmission);
+    let response: ChatSendMessageResponse | undefined;
+    let completedNormally = false;
+    try {
+      assertEntryAdmissionActive(host, turnAdmission, heartbeat);
+      const binding = resolveAdmissionFencedChatSessionBinding(
+        host,
+        turnAdmission,
+        heartbeat,
+        sessionId,
+        turnAdmission.identity.workspaceId,
+      );
+      const prepared = await host.prepareAgentChatTurn(sessionId, request, {
+        branchKind: "edit",
+        turnId: turnIdentity.turnId,
+        userMessageId: turnIdentity.userMessageId,
+        assistantMessageId: turnIdentity.assistantMessageId,
+        sourceTurnId: turnId,
+        parentTurnId: current.trace.parentTurnId,
+        turnAdmission,
+      });
+      assertEntryAdmissionActive(host, turnAdmission, heartbeat);
+      response =
+        binding.transport !== "llm"
+          ? await chatTurnDispatchService.sendPreparedIntegrationChatTurn(
+              host,
+              sessionId,
+              request,
+              prepared,
+              binding,
+              "chat_thread_turn_edited",
+            )
+          : await chatTurnDispatchService.consumePreparedAgentChatTurn(
+              host,
+              sessionId,
+              request,
+              prepared,
+              "chat_thread_turn_edited",
+            );
+      assertWaitingResponseHasDurableOwner(turnAdmission, response);
+      completedNormally = true;
+      return response;
+    } finally {
+      closeEntryRequestAdmission(
+        host,
+        turnAdmission,
+        heartbeat,
+        admissionActorId,
+        response?.trace?.status,
+        completedNormally,
       );
     }
-    return chatTurnDispatchService.consumePreparedAgentChatTurn(
-      host,
-      sessionId,
-      request,
-      prepared,
-      "chat_thread_turn_edited",
-    );
   });
 }
 
@@ -1386,7 +1786,7 @@ export async function* editChatTurnStream(
   sessionId: string,
   turnId: string,
   input: ChatSendMessageRequest,
-  options?: { abortSignal?: AbortSignal; mutationLifecycle?: ChatStreamMutationLifecycle },
+  options?: OperatorChatTurnStreamRequestOptions,
 ): AsyncGenerator<ChatStreamChunk> {
   yield* host.withChatTurnWriteLeaseStream(sessionId, "edit-turn/stream", () => {
     return (async function* (): AsyncGenerator<ChatStreamChunk> {
@@ -1395,100 +1795,139 @@ export async function* editChatTurnStream(
         ...input,
         attachments: input.attachments ?? current.userMessage.attachments?.map((item) => item.attachmentId),
       };
-      const routeDescriptor = resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
-        action: "edit",
-        turnId,
-        providerId: request.providerId,
-        model: request.model,
-        mode: request.mode,
-        webMode: request.webMode,
-        thinkingLevel: request.thinkingLevel,
-        speedMode: request.speedMode,
-        subagentPolicy: request.subagentPolicy,
-        prefsOverride: request.prefsOverride,
-      });
-      host.recordDevDiagnostic({
-        level: "info",
-        category: "chat",
-        event: "chat.turn.edit_stream_preflight",
-        message: "Resolved streamed edit routing before execution",
-        sessionId,
-        turnId,
-        providerId: routeDescriptor.effectiveProviderId,
-        modelId: routeDescriptor.effectiveModel,
-        context: {
-          selectionSource: routeDescriptor.selectionSource,
-          fallbackPolicy: routeDescriptor.fallbackPolicy,
-        },
-      });
-      const prepared = await host.prepareAgentChatTurn(sessionId, request, {
-        branchKind: "edit",
-        sourceTurnId: turnId,
-        parentTurnId: current.trace.parentTurnId,
-        ...(options?.mutationLifecycle ? { mutationLifecycle: options.mutationLifecycle } : {}),
-      });
-      const binding =
-        host.storage.chatSessionBindings.get(sessionId) ??
-        host.storage.chatSessionBindings.upsert({
+      const turnIdentity = createEntryTurnIdentity();
+      const admissionActorId = resolveTurnAdmissionActorId(request);
+      const turnAdmission = await admitEntryOperatorChatTurn(
+        host,
+        {
           sessionId,
-          workspaceId: prepared.workspaceId,
-          transport: "llm",
-          writable: true,
+          turnId: turnIdentity.turnId,
+          request,
+          actorId: admissionActorId,
+          idempotencyKey: `chat-turn-admit:${turnIdentity.turnId}`,
+          correlationId: turnIdentity.turnId,
+        },
+        options?.authenticatedOperator,
+      );
+      assertEntryTurnAdmission(turnAdmission, sessionId, turnIdentity.turnId, request);
+      const heartbeat = host.sessionControlRuntimeOwner.startRequestLeaseHeartbeat(turnAdmission);
+      let completedNormally = false;
+      let terminalStatus: ChatTurnTraceRecord["status"] | undefined;
+      try {
+        assertEntryAdmissionActive(host, turnAdmission, heartbeat);
+        const binding = resolveAdmissionFencedChatSessionBinding(
+          host,
+          turnAdmission,
+          heartbeat,
+          sessionId,
+          turnAdmission.identity.workspaceId,
+        );
+        const routeDescriptor = resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
+          action: "edit",
+          turnId,
+          providerId: request.providerId,
+          model: request.model,
+          mode: request.mode,
+          webMode: request.webMode,
+          thinkingLevel: request.thinkingLevel,
+          speedMode: request.speedMode,
+          subagentPolicy: request.subagentPolicy,
+          prefsOverride: request.prefsOverride,
         });
-      if (binding.transport !== "llm") {
-        const integrationOptions =
-          options?.abortSignal || options?.mutationLifecycle
-            ? {
-                ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
-                ...(options.mutationLifecycle ? { mutationLifecycle: options.mutationLifecycle } : {}),
-              }
-            : undefined;
-        const stream = integrationOptions
-          ? chatTurnDispatchService.streamPreparedIntegrationChatTurn(
+        host.recordDevDiagnostic({
+          level: "info",
+          category: "chat",
+          event: "chat.turn.edit_stream_preflight",
+          message: "Resolved streamed edit routing before execution",
+          sessionId,
+          turnId,
+          providerId: routeDescriptor.effectiveProviderId,
+          modelId: routeDescriptor.effectiveModel,
+          context: {
+            selectionSource: routeDescriptor.selectionSource,
+            fallbackPolicy: routeDescriptor.fallbackPolicy,
+          },
+        });
+        const prepared = await host.prepareAgentChatTurn(sessionId, request, {
+          branchKind: "edit",
+          turnId: turnIdentity.turnId,
+          userMessageId: turnIdentity.userMessageId,
+          assistantMessageId: turnIdentity.assistantMessageId,
+          sourceTurnId: turnId,
+          parentTurnId: current.trace.parentTurnId,
+          turnAdmission,
+          ...(options?.mutationLifecycle ? { mutationLifecycle: options.mutationLifecycle } : {}),
+        });
+        assertEntryAdmissionActive(host, turnAdmission, heartbeat);
+        if (binding.transport !== "llm") {
+          const integrationOptions =
+            options?.abortSignal || options?.mutationLifecycle
+              ? {
+                  ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
+                  ...(options.mutationLifecycle ? { mutationLifecycle: options.mutationLifecycle } : {}),
+                }
+              : undefined;
+          const stream = integrationOptions
+            ? chatTurnDispatchService.streamPreparedIntegrationChatTurn(
+                host,
+                sessionId,
+                request,
+                prepared,
+                binding,
+                "chat_thread_turn_edited",
+                integrationOptions,
+              )
+            : chatTurnDispatchService.streamPreparedIntegrationChatTurn(
+                host,
+                sessionId,
+                request,
+                prepared,
+                binding,
+                "chat_thread_turn_edited",
+              );
+          for await (const chunk of host.withEphemeralStreamEnvelope(stream)) {
+            terminalStatus = captureStreamTerminalStatus(chunk, terminalStatus);
+            yield chunk;
+          }
+          assertWaitingStreamHasDurableOwner(turnAdmission, terminalStatus);
+          completedNormally = true;
+          return;
+        }
+        assertEntryAdmissionActive(host, turnAdmission, heartbeat);
+        const durableRunId = options?.mutationLifecycle
+          ? chatTurnDispatchService.launchPreparedAgentChatTurnStream(
               host,
               sessionId,
               request,
               prepared,
-              binding,
               "chat_thread_turn_edited",
-              integrationOptions,
+              undefined,
+              { mutationLifecycle: options.mutationLifecycle },
             )
-          : chatTurnDispatchService.streamPreparedIntegrationChatTurn(
+          : chatTurnDispatchService.launchPreparedAgentChatTurnStream(
               host,
               sessionId,
               request,
               prepared,
-              binding,
               "chat_thread_turn_edited",
             );
-        yield* host.withEphemeralStreamEnvelope(stream);
-        return;
-      }
-      const durableRunId = options?.mutationLifecycle
-        ? chatTurnDispatchService.launchPreparedAgentChatTurnStream(
-            host,
-            sessionId,
-            request,
-            prepared,
-            "chat_thread_turn_edited",
-            undefined,
-            { mutationLifecycle: options.mutationLifecycle },
-          )
-        : chatTurnDispatchService.launchPreparedAgentChatTurnStream(
-            host,
-            sessionId,
-            request,
-            prepared,
-            "chat_thread_turn_edited",
-          );
-      const detachAbortListener = bindStreamAbortToTurn(host, prepared.turnId, durableRunId, options?.abortSignal);
-      try {
-        yield* host.streamPersistedChatTurnEvents(sessionId, prepared.turnId, {
-          liveTail: true,
-          ...(options?.abortSignal ? { signal: options.abortSignal } : {}),
-        });
+        if (!turnAdmission.requestClaim) heartbeat.stop();
+        const detachAbortListener = bindStreamAbortToTurn(host, prepared.turnId, durableRunId, options?.abortSignal);
+        try {
+          for await (const chunk of host.streamPersistedChatTurnEvents(sessionId, prepared.turnId, {
+            liveTail: true,
+            ...(options?.abortSignal ? { signal: options.abortSignal } : {}),
+          })) {
+            terminalStatus = captureStreamTerminalStatus(chunk, terminalStatus);
+            yield chunk;
+          }
+          assertWaitingStreamHasDurableOwner(turnAdmission, terminalStatus);
+          completedNormally = true;
+        } finally {
+          detachAbortListener?.();
+        }
       } finally {
-        detachAbortListener?.();
+        closeEntryRequestAdmission(host, turnAdmission, heartbeat, admissionActorId, terminalStatus, completedNormally);
       }
     })();
   });

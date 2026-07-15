@@ -14,6 +14,7 @@ import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 import type { ChatStreamMutationLifecycle } from "./chat-turn-types.js";
 import type { ChatSteerService } from "./chat-steer-service.js";
 import type { ActiveChatTurnStreamExecution } from "./chat-turn-execution-registry.js";
+import type { SessionControlRuntimeOwner } from "./session-control-runtime-owner.js";
 
 export type ChatTurnRealtimeOptions = Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">;
 
@@ -44,6 +45,20 @@ export interface ChatTurnActiveExecutionControl {
       }
     | undefined;
   markChatTurnCancelled(sessionId: string, turnId: string, cancelledBy?: string): ChatTurnTraceRecord;
+}
+
+export interface ChatTurnAdmissionControl {
+  readonly sessionControlRuntimeOwner: Pick<
+    SessionControlRuntimeOwner,
+    | "admitOperatorChatTurn"
+    | "admitAuthenticatedOperatorChatTurnWithHeartbeatRecovery"
+    | "startRequestLeaseHeartbeat"
+    | "renewRequestLease"
+    | "bindDurableRun"
+    | "withDurableClaim"
+    | "assertActiveTurnWrite"
+    | "closeTurnWrite"
+  >;
 }
 
 export interface ChatTurnLeaseControl {

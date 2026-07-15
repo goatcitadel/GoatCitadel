@@ -77,6 +77,9 @@ function createHost(): DiscordRuntimeBridgeHost & {
 
   return {
     storage: {
+      runImmediateTransaction<T>(callback: () => T): T {
+        return callback();
+      },
       systemSettings: systemSettings as DiscordRuntimeBridgeHost["storage"]["systemSettings"],
       sessions: {
         upsert(record: { sessionId: string; displayName?: string }) {
@@ -100,6 +103,7 @@ function createHost(): DiscordRuntimeBridgeHost & {
       } as DiscordRuntimeBridgeHost["storage"]["sessions"],
       chatSessionMeta: {
         ensure: vi.fn(),
+        get: vi.fn(() => undefined),
       } as unknown as DiscordRuntimeBridgeHost["storage"]["chatSessionMeta"],
       chatSessionPrefs: {
         ensure: vi.fn(),
@@ -331,6 +335,22 @@ describe("discord-runtime-bridge-service contract behavior", () => {
         peer: "user-1",
       }),
     ).toEqual({ peer: "user-1", room: "other-channel", threadId: undefined });
+  });
+
+  it("rejects a cross-workspace stable Discord identity before any session mutation", () => {
+    const host = createHost();
+    vi.mocked(host.storage.chatSessionMeta.get).mockReturnValue({ workspaceId: "other-workspace" });
+
+    expect(() =>
+      ensureDiscordChatSession(host, {
+        connectionId: "discord-1",
+        target: "channel-1",
+        displayName: "Ops Channel",
+      }),
+    ).toThrow("stable Discord session key already belongs to another workspace");
+    expect(host.sessionsById.size).toBe(0);
+    expect(host.storage.chatSessionMeta.ensure).not.toHaveBeenCalled();
+    expect(host.storage.chatSessionBindings.upsert).not.toHaveBeenCalled();
   });
 
   it("resolves Discord approval commands with remote action token semantics", async () => {

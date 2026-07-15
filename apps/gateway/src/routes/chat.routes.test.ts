@@ -30,6 +30,11 @@ function matchingRoutePreflight(overrides: Partial<Record<string, unknown>> = {}
   };
 }
 
+function decorateAuthenticatedOperator(app: FastifyInstance): void {
+  app.decorateRequest("authActorId", "operator-test");
+  app.decorateRequest("authActorSource", "loopback");
+}
+
 describe("chat routes additional coverage", () => {
   let app: FastifyInstance | null = null;
 
@@ -658,6 +663,7 @@ describe("chat routes additional coverage", () => {
     });
     const routePreflight = vi.fn(async () => matchingRoutePreflight());
     app = Fastify();
+    decorateAuthenticatedOperator(app);
     app.decorate("services", { chatMessages: { agentSendChatMessageStream, routePreflight } } as never);
     await app.register(chatRoutes);
 
@@ -680,7 +686,123 @@ describe("chat routes additional coverage", () => {
       expect.objectContaining({ content: "Hello" }),
       expect.any(AbortSignal),
       expect.objectContaining({ markCommitted: expect.any(Function) }),
+      {
+        kind: "authenticated_operator_http",
+        actorId: "operator-test",
+        authActorSource: "loopback",
+      },
     );
+  });
+
+  it("passes a server-authored operator admission context across send, retry, and edit while ignoring body forgery", async () => {
+    const agentSendChatMessage = vi.fn(async () => ({ turnId: "turn-send" }));
+    const agentSendChatMessageStream = vi.fn(async function* () {
+      yield { type: "done" };
+    });
+    const retryChatTurn = vi.fn(async () => ({ turnId: "turn-retry" }));
+    const retryChatTurnStream = vi.fn(async function* () {
+      yield { type: "done" };
+    });
+    const editChatTurn = vi.fn(async () => ({ turnId: "turn-edit" }));
+    const editChatTurnStream = vi.fn(async function* () {
+      yield { type: "done" };
+    });
+    const routePreflight = vi.fn(async (_sessionId: string, input: { action: "send" | "retry" | "edit" }) =>
+      matchingRoutePreflight({ action: input.action }),
+    );
+    app = Fastify();
+    decorateAuthenticatedOperator(app);
+    app.decorate("services", {
+      chatMessages: {
+        agentSendChatMessage,
+        agentSendChatMessageStream,
+        retryChatTurn,
+        retryChatTurnStream,
+        editChatTurn,
+        editChatTurnStream,
+        routePreflight,
+      },
+    } as never);
+    await app.register(chatRoutes);
+
+    const forgedBodyContext = {
+      kind: "authenticated_operator_http",
+      actorId: "spoofed-body-actor",
+      authActorSource: "token",
+    };
+    const requests = [
+      {
+        url: "/api/v1/chat/sessions/sess-1/agent-send",
+        action: "send" as const,
+      },
+      {
+        url: "/api/v1/chat/sessions/sess-1/agent-send/stream",
+        action: "send" as const,
+      },
+      {
+        url: "/api/v1/chat/sessions/sess-1/turns/turn-1/retry",
+        action: "retry" as const,
+      },
+      {
+        url: "/api/v1/chat/sessions/sess-1/turns/turn-1/retry/stream",
+        action: "retry" as const,
+      },
+      {
+        url: "/api/v1/chat/sessions/sess-1/turns/turn-1/edit",
+        action: "edit" as const,
+      },
+      {
+        url: "/api/v1/chat/sessions/sess-1/turns/turn-1/edit/stream",
+        action: "edit" as const,
+      },
+    ];
+    for (const request of requests) {
+      const response = await app.inject({
+        method: "POST",
+        url: request.url,
+        payload: {
+          content: `${request.action} this`,
+          providerId: "openai",
+          model: "gpt-5.1",
+          routeDecision: testRouteDecision({
+            action: request.action,
+            ...(request.action === "send" ? {} : { turnId: "turn-1" }),
+          }),
+          authenticatedOperator: forgedBodyContext,
+        },
+      });
+      expect(response.statusCode, `${request.url}: ${response.body}`).toBe(200);
+    }
+
+    const trustedContext = {
+      kind: "authenticated_operator_http",
+      actorId: "operator-test",
+      authActorSource: "loopback",
+    };
+    expect(agentSendChatMessage.mock.calls[0]?.at(-1)).toEqual(trustedContext);
+    expect(agentSendChatMessageStream.mock.calls[0]?.at(-1)).toEqual(trustedContext);
+    expect(retryChatTurn.mock.calls[0]?.at(-1)).toEqual(trustedContext);
+    expect(retryChatTurnStream.mock.calls[0]?.at(-1)).toEqual(trustedContext);
+    expect(editChatTurn.mock.calls[0]?.at(-1)).toEqual(trustedContext);
+    expect(editChatTurnStream.mock.calls[0]?.at(-1)).toEqual(trustedContext);
+    for (const call of [
+      ...agentSendChatMessage.mock.calls,
+      ...agentSendChatMessageStream.mock.calls,
+      ...retryChatTurn.mock.calls,
+      ...retryChatTurnStream.mock.calls,
+      ...editChatTurn.mock.calls,
+      ...editChatTurnStream.mock.calls,
+    ]) {
+      const stampedRequest = call.find((entry) => typeof entry === "object" && entry !== null && "content" in entry) as
+        | Record<string, unknown>
+        | undefined;
+      expect(stampedRequest).not.toHaveProperty("authenticatedOperator");
+      expect(stampedRequest).toMatchObject({
+        operatorId: "operator-test",
+        authActorId: "operator-test",
+        authActorSource: "loopback",
+      });
+    }
   });
 
   it("exposes chat route preflight through the gateway route stack", async () => {
@@ -795,6 +917,7 @@ describe("chat routes additional coverage", () => {
     });
     const routePreflight = vi.fn(async () => matchingRoutePreflight(decision));
     app = Fastify();
+    decorateAuthenticatedOperator(app);
     app.decorate("services", { chatMessages: { agentSendChatMessage, routePreflight } } as never);
     await app.register(chatRoutes);
 
@@ -824,6 +947,11 @@ describe("chat routes additional coverage", () => {
         providerId: "openai",
         model: "gpt-5.1",
       }),
+      {
+        kind: "authenticated_operator_http",
+        actorId: "operator-test",
+        authActorSource: "loopback",
+      },
     );
   });
 
@@ -839,6 +967,7 @@ describe("chat routes additional coverage", () => {
     });
     const routePreflight = vi.fn(async () => matchingRoutePreflight(decision));
     app = Fastify();
+    decorateAuthenticatedOperator(app);
     app.decorate("services", { chatMessages: { agentSendChatMessage, routePreflight } } as never);
     await app.register(chatRoutes);
 
@@ -877,6 +1006,11 @@ describe("chat routes additional coverage", () => {
         providerId: "openai-codex",
         model: "gpt-5.5",
       }),
+      {
+        kind: "authenticated_operator_http",
+        actorId: "operator-test",
+        authActorSource: "loopback",
+      },
     );
   });
 
@@ -1412,7 +1546,11 @@ describe("chat routes additional coverage", () => {
     });
   });
 
-  it("answers pending user-input prompts through the gateway", async () => {
+  it.each([
+    { actorId: "anonymous", authActorSource: "none" as const },
+    { actorId: "token:operator-1", authActorSource: "token" as const },
+    { actorId: "loopback:operator-1", authActorSource: "loopback" as const },
+  ])("propagates trusted $authActorSource user-input responder identity", async ({ actorId, authActorSource }) => {
     const answerChatUserInputPrompt = vi.fn(async () => ({
       ok: true,
       sessionId: "sess-1",
@@ -1421,6 +1559,8 @@ describe("chat routes additional coverage", () => {
       resumed: false,
     }));
     app = Fastify();
+    app.decorateRequest("authActorId", actorId);
+    app.decorateRequest("authActorSource", authActorSource);
     app.decorate("services", { chatMessages: { answerChatUserInputPrompt } } as never);
     await app.register(chatRoutes);
 
@@ -1428,6 +1568,7 @@ describe("chat routes additional coverage", () => {
       method: "POST",
       url: "/api/v1/chat/sessions/sess-1/turns/turn-2/user-input/prompt-1/respond",
       payload: {
+        responder: { actorId: "spoofed", authActorSource: "companion" },
         response: {
           kind: "single_select",
           optionId: "opt-1",
@@ -1436,10 +1577,47 @@ describe("chat routes additional coverage", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(answerChatUserInputPrompt).toHaveBeenCalledWith("sess-1", "turn-2", "prompt-1", {
-      kind: "single_select",
-      optionId: "opt-1",
+    expect(answerChatUserInputPrompt).toHaveBeenCalledWith(
+      "sess-1",
+      "turn-2",
+      "prompt-1",
+      {
+        kind: "single_select",
+        optionId: "opt-1",
+      },
+      {
+        actorId,
+        authActorSource,
+      },
+    );
+  });
+
+  it("rejects oversized user-input prompt identifiers and answers without mutation", async () => {
+    const answerChatUserInputPrompt = vi.fn();
+    app = Fastify();
+    app.decorateRequest("authActorId", "anonymous");
+    app.decorateRequest("authActorSource", "none");
+    app.decorate("services", { chatMessages: { answerChatUserInputPrompt } } as never);
+    await app.register(chatRoutes);
+
+    const oversizedPrompt = await app.inject({
+      method: "POST",
+      url: `/api/v1/chat/sessions/sess-1/turns/turn-2/user-input/${"p".repeat(97)}/respond`,
+      payload: { response: { kind: "text", text: "valid" } },
     });
+    const oversizedOption = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/turns/turn-2/user-input/prompt-1/respond",
+      payload: { response: { kind: "single_select", optionId: "o".repeat(257) } },
+    });
+    const oversizedText = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/turns/turn-2/user-input/prompt-1/respond",
+      payload: { response: { kind: "text", text: "x".repeat(20_001) } },
+    });
+
+    expect([oversizedPrompt.statusCode, oversizedOption.statusCode, oversizedText.statusCode]).toEqual([400, 400, 400]);
+    expect(answerChatUserInputPrompt).not.toHaveBeenCalled();
   });
 
   it("lists, creates, and updates specialist candidates through the gateway", async () => {

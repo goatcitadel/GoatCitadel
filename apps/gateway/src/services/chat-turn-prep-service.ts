@@ -15,6 +15,7 @@ import {
   canonicalJsonString,
   DEFAULT_CITADEL_ID,
   ConflictError,
+  NotFoundError,
 } from "@goatcitadel/contracts";
 import type {
   CapabilityCatalogSnapshotRecord,
@@ -35,7 +36,7 @@ import type {
   RuntimeDecisionTraceAppendInput,
   SessionMeta,
 } from "@goatcitadel/contracts";
-import type { SessionAutonomyPrefsRecord, Storage } from "@goatcitadel/storage";
+import { HEARTBEAT_SYSTEM_ACTOR_ID, type SessionAutonomyPrefsRecord, type Storage } from "@goatcitadel/storage";
 import { normalizeAgentInputFromSend, type NormalizedAgentInputFromSend } from "./chat-agent-input-normalization.js";
 import { executionProfileFromNormalizationProfile } from "./chat-turn-execution-profile.js";
 import { extractPrimaryUserTaskContent } from "./chat-agent-prompt-lab-contract.js";
@@ -84,7 +85,11 @@ import {
   shouldBypassOrchestrationWithModelRouter,
   withModelRouterOrchestrationDecision,
 } from "./model-router-decision-service.js";
-import type { ChatStreamMutationLifecycle, PreparedChatExecutionPlanResolution } from "./chat-turn-types.js";
+import type {
+  ActiveTurnAdmission,
+  ChatStreamMutationLifecycle,
+  PreparedChatExecutionPlanResolution,
+} from "./chat-turn-types.js";
 import type { LlmService } from "./llm-service.js";
 import type { ResolvedThreadKnowledgeContext } from "./chat-thread-knowledge-service.js";
 import { createUtilityModelUsageAttribution } from "./utility-model-usage-attribution.js";
@@ -137,6 +142,8 @@ type ChatTurnPrepStorage = Pick<
   | "chatSessionProjects"
   | "chatSideChats"
   | "chatSpecialistCandidates"
+  | "runImmediateTransaction"
+  | "sessionAutonomyPrefs"
   | "systemSettings"
   | "workspaces"
 > & {
@@ -145,6 +152,7 @@ type ChatTurnPrepStorage = Pick<
 
 export interface ChatTurnPrepHost {
   readonly storage: ChatTurnPrepStorage;
+  assertTurnAdmissionWrite?(admission: ActiveTurnAdmission): void;
   readonly llmService: Pick<LlmService, "getModelContextWindow" | "getRuntimeConfig">;
   getSession(sessionId: string): SessionMeta;
   ensureChatSessionRuntimeGrants(sessionId: string): void;
@@ -269,6 +277,10 @@ export interface PreparedAgentChatTurn {
   conversationMessages: ChatMessageRecord[];
   history: ChatCompletionRequest["messages"];
   turnId: string;
+  /** Frozen pre-routing mutation authority. Required on every production turn. */
+  turnAdmission?: ActiveTurnAdmission;
+  /** Validated server-only heartbeat identity; absent on every other turn. */
+  serverOnlyPosture?: Readonly<SystemHeartbeatTurnPrepPosture>;
   assistantMessageId: string;
   parentTurnId?: string;
   /** Canonical delegation lineage. Unlike parentTurnId, this is absent on normal branch appends. */
@@ -285,6 +297,21 @@ export interface PreparedAgentChatTurn {
   routedContextSnapshot?: ChatRoutedContextSnapshotRecord;
   /** Stable provider/model/capability-selection dimension used by compaction and first-call usage. */
   compactionDimensionHash: string;
+}
+
+/**
+ * Server-only preparation posture for a storage-admitted heartbeat occurrence.
+ * It is deliberately a typed discriminant rather than an ID-prefix convention:
+ * only the exact system-heartbeat admission may use it, and it performs no
+ * operator-semantic preparation writes.
+ */
+export interface SystemHeartbeatTurnPrepPosture {
+  kind: "system_heartbeat";
+  actorId: typeof HEARTBEAT_SYSTEM_ACTOR_ID;
+  operation: "chat_system_heartbeat";
+  occurrenceId: string;
+  claimSha256: string;
+  durableRunId: string;
 }
 
 export function resolvePreparedTurnMode(
@@ -435,22 +462,42 @@ export async function prepareAgentChatTurn(
     turnId?: string;
     assistantMessageId?: string;
     mutationLifecycle?: ChatStreamMutationLifecycle;
+    /** Explicit authority admitted before any routing or preparation mutation. */
+    turnAdmission?: ActiveTurnAdmission;
     capabilityProfileId?: string;
     capabilityProfileHash?: string;
     /** Original admitted user content when this is a durable continuation. */
     capabilityProfileContent?: string;
+    /** Exact server-only posture; never accepted from a client request. */
+    serverOnlyPosture?: SystemHeartbeatTurnPrepPosture;
   },
 ): Promise<PreparedAgentChatTurn> {
+  const turnId = options?.turnId ?? randomUUID();
+  const systemHeartbeatPosture = readSystemHeartbeatTurnPrepPosture(input, options, turnId);
+  assertPrepTurnAdmission(host, options?.turnAdmission);
   const session = host.getSession(sessionId);
-  host.ensureChatSessionRuntimeGrants(sessionId);
-  const sessionMeta = host.storage.chatSessionMeta.ensure(sessionId);
+  if (!systemHeartbeatPosture) {
+    prepCanonicalWrite(host, options?.turnAdmission, () => host.ensureChatSessionRuntimeGrants(sessionId));
+  }
+  const sessionMeta = host.storage.chatSessionMeta.get(sessionId);
+  if (!sessionMeta) {
+    throw new NotFoundError({ entity: "Chat session", id: sessionId });
+  }
   assertChatSessionActive(sessionId, sessionMeta.lifecycleStatus);
   const workspaceId = host.normalizeWorkspaceId(sessionMeta.workspaceId);
+  if (options?.turnAdmission?.identity.workspaceId !== undefined) {
+    const identity = options.turnAdmission.identity;
+    if (identity.workspaceId !== workspaceId || identity.sessionId !== sessionId || identity.turnId !== turnId) {
+      throw new ConflictError({
+        message: "The Chat turn admission does not match the prepared workspace/session/turn.",
+      });
+    }
+  }
   const citadelId = host.storage.workspaces?.find(workspaceId)?.citadelId ?? DEFAULT_CITADEL_ID;
   const branchKind = options?.branchKind ?? "append";
   const sessionStatePromise = host.loadChatTurnSessionState(sessionId);
   let existingUserMessage = options?.existingUserMessage;
-  if (!existingUserMessage && options?.userMessageId) {
+  if (!systemHeartbeatPosture && !existingUserMessage && options?.userMessageId) {
     const candidate = (await sessionStatePromise).messagesById.get(options.userMessageId);
     if (candidate) {
       if (
@@ -467,7 +514,12 @@ export async function prepareAgentChatTurn(
   if (!content) {
     throw new Error("content is required");
   }
-  const turnId = options?.turnId ?? randomUUID();
+  if (options?.turnAdmission) {
+    const identity = options.turnAdmission.identity;
+    if (identity.sessionId !== sessionId || identity.turnId !== turnId) {
+      throw new ConflictError({ message: "The Chat turn admission does not match the prepared session and turn." });
+    }
+  }
   if (Boolean(options?.capabilityProfileId) !== Boolean(options?.capabilityProfileHash)) {
     throw new Error("A durable Chat capability profile id and hash must be supplied together.");
   }
@@ -506,22 +558,46 @@ export async function prepareAgentChatTurn(
     : normalizedCandidate;
   const executionProfile = executionProfileFromNormalizationProfile(normalized.normalizationProfile);
   const quickWebTurn = executionProfile === "quick_web";
-  if (branchKind !== "retry") {
-    host.maybeAutoTitleChatSession(sessionId, content);
+  if (!systemHeartbeatPosture && branchKind !== "retry") {
+    prepCanonicalWrite(host, options?.turnAdmission, () => host.maybeAutoTitleChatSession(sessionId, content));
   }
 
   const route = host.routeFromSession(session);
   const ingestUserMessage = options?.ingestUserMessage ?? !existingUserMessage;
   let userEventId = existingUserMessage?.messageId ?? "";
   let userMessage: ChatMessageRecord;
-  if (ingestUserMessage || !existingUserMessage) {
+  if (systemHeartbeatPosture) {
+    const deterministicMessageId = options?.userMessageId?.trim();
+    if (!deterministicMessageId) {
+      throw new Error("System heartbeat preparation requires its deterministic internal message identity.");
+    }
+    const sessionState = await sessionStatePromise;
+    if (sessionState.messagesById.has(deterministicMessageId)) {
+      throw new ConflictError({
+        message: "System heartbeat internal input identity conflicts with a persisted Chat message.",
+      });
+    }
+    userEventId = deterministicMessageId;
+    userMessage = {
+      messageId: deterministicMessageId,
+      sessionId,
+      // The current objective must remain a user-role model input, but its
+      // provenance is explicitly system-owned and it is never persisted.
+      role: "user",
+      actorType: "system",
+      actorId: HEARTBEAT_SYSTEM_ACTOR_ID,
+      content,
+      timestamp: new Date().toISOString(),
+    };
+  } else if (ingestUserMessage || !existingUserMessage) {
+    assertPrepTurnAdmission(host, options?.turnAdmission);
     const uploadAttachments = host.storage.chatAttachments.listByIds(input.attachments ?? [], workspaceId);
     const inputParts = appendMobileContextParts(
       normalizeChatInputParts(content, input.parts, uploadAttachments),
       input.mobileContext,
     );
     userEventId = options?.userMessageId ?? randomUUID();
-    await recordMobileContextTurnProvenance(host, sessionId, userEventId, input.mobileContext);
+    let userIngestAdmissionChecked = false;
     await host.ingestEvent(
       randomUUID(),
       {
@@ -544,13 +620,23 @@ export async function prepareAgentChatTurn(
           parentDelegationStepId: input.parentDelegationStepId,
         },
       },
-      options?.mutationLifecycle
-        ? {
-            onCommit: () => options.mutationLifecycle?.commitAlongsideCanonicalWrite?.(),
-            afterCommit: () => options.mutationLifecycle?.markCommitted(),
-          }
-        : undefined,
+      {
+        onCommit: () => {
+          assertPrepTurnAdmission(host, options?.turnAdmission);
+          userIngestAdmissionChecked = true;
+          options?.mutationLifecycle?.commitAlongsideCanonicalWrite?.();
+        },
+        afterCommit: () => options?.mutationLifecycle?.markCommitted(),
+      },
     );
+    assertPrepTurnAdmission(host, options?.turnAdmission);
+    if (options?.turnAdmission && !userIngestAdmissionChecked) {
+      throw new ConflictError({ message: "The Chat user-message ingest skipped its mutation-admission fence." });
+    }
+    // Append-only evidence for a user-message commit that already happened.
+    // This does not claim current session authority and is intentionally kept
+    // separate from normal turn writes.
+    await recordMobileContextTurnProvenance(host, sessionId, userEventId, input.mobileContext);
     const attachments = uploadAttachments.map((item) => ({
       attachmentId: item.attachmentId,
       fileName: item.fileName,
@@ -601,16 +687,26 @@ export async function prepareAgentChatTurn(
   });
   const splitPrefs = splitChatPrefsPatch(prefsOverride);
   let persistedPrefs: ChatSessionPrefsRecord;
-  if (boundCapabilityProfile) {
-    persistedPrefs = host.storage.chatSessionPrefs.ensure(sessionId);
-  } else {
-    if (Object.keys(splitPrefs.autonomyPatch).length > 0) {
-      host.patchSessionAutonomyPrefs(sessionId, splitPrefs.autonomyPatch);
+  if (systemHeartbeatPosture) {
+    const existingPrefs = host.storage.chatSessionPrefs.get(sessionId);
+    if (!existingPrefs) {
+      throw new Error(`System heartbeat session ${sessionId} has no persisted Chat preferences.`);
     }
-    persistedPrefs = host.ensureChatSessionModelDefaults(
-      sessionId,
-      host.storage.chatSessionPrefs.patch(sessionId, splitPrefs.basePatch),
+    persistedPrefs = existingPrefs;
+  } else if (boundCapabilityProfile) {
+    persistedPrefs = prepCanonicalWrite(host, options?.turnAdmission, () =>
+      host.storage.chatSessionPrefs.ensure(sessionId),
     );
+  } else {
+    persistedPrefs = prepCanonicalWrite(host, options?.turnAdmission, () => {
+      if (Object.keys(splitPrefs.autonomyPatch).length > 0) {
+        host.patchSessionAutonomyPrefs(sessionId, splitPrefs.autonomyPatch);
+      }
+      return host.ensureChatSessionModelDefaults(
+        sessionId,
+        host.storage.chatSessionPrefs.patch(sessionId, splitPrefs.basePatch),
+      );
+    });
   }
   const prefs: ChatSessionPrefsRecord = boundCapabilityProfile
     ? {
@@ -639,7 +735,12 @@ export async function prepareAgentChatTurn(
     effectiveProviderRoute?.effectiveModel ??
     input.model ??
     prefs.model;
-  const persistedAutonomy = host.getSessionAutonomyPrefs(sessionId);
+  const persistedAutonomy = systemHeartbeatPosture
+    ? host.storage.sessionAutonomyPrefs.get(sessionId)
+    : host.getSessionAutonomyPrefs(sessionId);
+  if (!persistedAutonomy) {
+    throw new Error(`System heartbeat session ${sessionId} has no persisted autonomy preferences.`);
+  }
   const autonomy: SessionAutonomyPrefsRecord = boundCapabilityProfile
     ? {
         ...persistedAutonomy,
@@ -806,6 +907,9 @@ export async function prepareAgentChatTurn(
           // non-mutating history for both profile selection and execution.
           persistState: false,
         });
+  if (systemHeartbeatPosture) {
+    compactionDimension = { ...compactionDimension, persistState: false };
+  }
   let history = await host.buildLlmMessagesFromBranchPath(
     sessionId,
     contextPathTurnIds,
@@ -856,6 +960,9 @@ export async function prepareAgentChatTurn(
         model: effectiveModel,
         profile: tentativeResolution.profile,
       });
+      if (systemHeartbeatPosture) {
+        compactionDimension = { ...compactionDimension, persistState: false };
+      }
       history = await host.buildLlmMessagesFromBranchPath(
         sessionId,
         contextPathTurnIds,
@@ -898,7 +1005,9 @@ export async function prepareAgentChatTurn(
       message: "The capability selection changed after history compaction. Refresh route status and retry.",
     });
   }
-  compactionDimension = sealedCompactionDimension;
+  compactionDimension = systemHeartbeatPosture
+    ? { ...sealedCompactionDimension, persistState: false }
+    : sealedCompactionDimension;
   if (
     input.routeDecision?.capabilityFingerprint &&
     capabilityProfile?.preflightFingerprint !== input.routeDecision.capabilityFingerprint
@@ -960,33 +1069,36 @@ export async function prepareAgentChatTurn(
     history = upsertChatRoutedContextSystemInstruction(history, routedContextSnapshot.contextText);
   }
 
-  if (sessionMeta.pinnedGoal) {
-    const turnsUsed = host.storage.chatSessionMeta.incrementGoalTurnsUsed(sessionId);
-    const { cleared } = advanceGoalForTurn({
-      turnsUsed,
-      turnBudget: sessionMeta.goalTurnBudget ?? null,
+  if (!systemHeartbeatPosture && sessionMeta.pinnedGoal) {
+    prepCanonicalWrite(host, options?.turnAdmission, () => {
+      const turnsUsed = host.storage.chatSessionMeta.incrementGoalTurnsUsed(sessionId);
+      const { cleared } = advanceGoalForTurn({
+        turnsUsed,
+        turnBudget: sessionMeta.goalTurnBudget ?? null,
+      });
+      if (cleared) {
+        host.storage.chatSessionMeta.patchWithRevision(
+          sessionId,
+          {
+            pinnedGoal: null,
+            goalTurnBudget: null,
+            goalSetAt: null,
+          },
+          sessionMeta.revision,
+        );
+      }
     });
-    if (cleared) {
-      host.storage.chatSessionMeta.patchWithRevision(
-        sessionId,
-        {
-          pinnedGoal: null,
-          goalTurnBudget: null,
-          goalSetAt: null,
-        },
-        sessionMeta.revision,
-      );
-    }
   }
 
   const recoveryActorId = resolveCompactionRecoveryActor(input);
-  const pendingForceAction = recoveryActorId
-    ? host.resolvePendingCompactionBreakerForceAction?.({
-        sessionId,
-        sealedDimensionHash: sealedCompactionDimension.dimensionHash,
-        actorId: recoveryActorId,
-      })
-    : undefined;
+  const pendingForceAction =
+    !systemHeartbeatPosture && recoveryActorId
+      ? host.resolvePendingCompactionBreakerForceAction?.({
+          sessionId,
+          sealedDimensionHash: sealedCompactionDimension.dimensionHash,
+          actorId: recoveryActorId,
+        })
+      : undefined;
   if (pendingForceAction) {
     compactionDimension = {
       ...sealedCompactionDimension,
@@ -1036,6 +1148,8 @@ export async function prepareAgentChatTurn(
     conversationMessages,
     history,
     turnId,
+    ...(options?.turnAdmission ? { turnAdmission: options.turnAdmission } : {}),
+    ...(systemHeartbeatPosture ? { serverOnlyPosture: Object.freeze({ ...systemHeartbeatPosture }) } : {}),
     assistantMessageId: options?.assistantMessageId ?? `assistant-${randomUUID()}`,
     parentTurnId,
     parentDelegationStepId: userMessage.parentDelegationStepId ?? input.parentDelegationStepId,
@@ -1048,13 +1162,73 @@ export async function prepareAgentChatTurn(
     ...(capabilityResolution ? { capabilityCatalogSnapshot: capabilityResolution.catalogSnapshot } : {}),
     ...(routedContextSnapshot ? { routedContextSnapshot } : {}),
   };
-  recordPreparedTurnDecisions(host, prepared, {
-    projectId,
-    missingRequiredProjectBinding,
-    guidanceFileCount: resolvedGuidance.globalFilesUsed.length + resolvedGuidance.workspaceFilesUsed.length,
-    threadKnowledgeCitationCount: threadKnowledgeContext.citations.length,
-  });
+  if (!systemHeartbeatPosture) {
+    prepCanonicalWrite(host, options?.turnAdmission, () =>
+      recordPreparedTurnDecisions(host, prepared, {
+        projectId,
+        missingRequiredProjectBinding,
+        guidanceFileCount: resolvedGuidance.globalFilesUsed.length + resolvedGuidance.workspaceFilesUsed.length,
+        threadKnowledgeCitationCount: threadKnowledgeContext.citations.length,
+      }),
+    );
+  }
   return prepared;
+}
+
+function readSystemHeartbeatTurnPrepPosture(
+  input: ChatSendMessageRequest,
+  options: Parameters<typeof prepareAgentChatTurn>[3],
+  turnId: string,
+): SystemHeartbeatTurnPrepPosture | undefined {
+  const posture = options?.serverOnlyPosture;
+  if (!posture) return undefined;
+  const admission = options?.turnAdmission;
+  const occurrence = admission?.systemHeartbeatOccurrence;
+  if (
+    posture.kind !== "system_heartbeat" ||
+    posture.actorId !== HEARTBEAT_SYSTEM_ACTOR_ID ||
+    posture.operation !== "chat_system_heartbeat" ||
+    !posture.occurrenceId ||
+    !posture.claimSha256 ||
+    !posture.durableRunId ||
+    !admission ||
+    !occurrence ||
+    occurrence.kind !== "system_heartbeat_occurrence" ||
+    occurrence.operation !== posture.operation ||
+    occurrence.occurrenceId !== posture.occurrenceId ||
+    occurrence.correlationId !== posture.occurrenceId ||
+    occurrence.claimSha256 !== posture.claimSha256 ||
+    occurrence.durableRunId !== posture.durableRunId ||
+    admission.identity.turnId !== turnId ||
+    admission.requestActor.actorKind !== "system" ||
+    admission.requestActor.actorId !== HEARTBEAT_SYSTEM_ACTOR_ID ||
+    input.operatorId !== HEARTBEAT_SYSTEM_ACTOR_ID ||
+    input.authActorId !== HEARTBEAT_SYSTEM_ACTOR_ID ||
+    input.authActorSource !== "none" ||
+    options?.ingestUserMessage !== false ||
+    options?.existingUserMessage !== undefined
+  ) {
+    throw new ConflictError({ message: "System heartbeat preparation lacks its exact server-only admission posture." });
+  }
+  return posture;
+}
+
+function assertPrepTurnAdmission(host: ChatTurnPrepHost, admission: ActiveTurnAdmission | undefined): void {
+  if (!admission) return;
+  if (!host.assertTurnAdmissionWrite) {
+    throw new ConflictError({ message: "The Chat preparation host cannot verify its mutation admission." });
+  }
+  host.assertTurnAdmissionWrite(admission);
+}
+
+function prepCanonicalWrite<T>(host: ChatTurnPrepHost, admission: ActiveTurnAdmission | undefined, work: () => T): T {
+  if (!admission) return work();
+  return host.storage.runImmediateTransaction(() => {
+    assertPrepTurnAdmission(host, admission);
+    const result = work();
+    assertPrepTurnAdmission(host, admission);
+    return result;
+  });
 }
 
 function resolveCompactionRecoveryActor(input: ChatSendMessageRequest): string | undefined {

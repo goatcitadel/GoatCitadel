@@ -1099,7 +1099,16 @@ describe("EventIngestService canonical usage references", () => {
       account: "local",
       timestamp: "2026-07-13T00:00:00.000Z",
     });
-    storage.chatSessionMeta.ensure(sessionId, "2026-07-13T00:00:00.000Z", workspaceId);
+    if (!storage.chatSessionMeta.get(sessionId)) {
+      storage.chatSessionLifecycles.initialize({
+        workspaceId,
+        sessionId,
+        actorId: "test-fixture",
+        idempotencyKey: `test:lifecycle:init:${sessionId}`,
+        correlationId: `test:correlation:lifecycle:init:${sessionId}`,
+        metadataTimestamp: "2026-07-13T00:00:00.000Z",
+      });
+    }
     if (!input?.skipTurnTrace) {
       storage.chatTurnTraces.create({
         turnId,

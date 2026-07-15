@@ -23,15 +23,44 @@ import type {
 } from "@goatcitadel/contracts";
 import {
   buildToolEffectEvidence,
+  canonicalJsonString,
   ConflictError,
   isChatTurnTerminalStatus,
   NotFoundError,
 } from "@goatcitadel/contracts";
-import { getRequestAttribution, runWithIsolatedRequestAttribution, type Storage } from "@goatcitadel/storage";
+import {
+  getRequestAttribution,
+  runWithIsolatedRequestAttribution,
+  type PostCommitEligibility,
+  type Storage,
+} from "@goatcitadel/storage";
 import { APPROVAL_OBSERVABILITY_REALTIME_ENVELOPE_KEY } from "./realtime-event-service.js";
 import { materializeApprovedSkillHubIntent, type SkillHubLifecycleApplyResult } from "./skill-hub-lifecycle-service.js";
 import type { ApprovalRemoteTokenSecretService } from "./approval-remote-token-secret.js";
-import { markTerminalChatPostCommitPending } from "./chat-durable-run-service.js";
+import {
+  AUTONOMOUS_CHAT_POST_COMMIT_PENDING_METADATA_KEY,
+  GENERAL_CHAT_POST_COMMIT_PENDING_METADATA_KEY,
+  markTerminalChatPostCommitPending,
+  mergeCanonicalDurableChatTerminalOutputMetadata,
+  resetChatTurnRuntimeTransitionMetadata,
+} from "./chat-durable-run-service.js";
+import {
+  CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY,
+  buildChatTurnRuntimeAuthoritySeal,
+  readChatTurnRuntimeAuthoritySeal,
+  readExactGeneralChatPostCommitPendingMarker,
+  readExactGeneralChatPostCommitSettlement,
+  verifyAutonomousChatAdmissionRunMetadata,
+  verifyCheckpointAnchoredChatTurnRuntimeAuthority,
+  withChatTurnRuntimeAuthority,
+  withChatTurnRuntimeAuthorityCheckpoint,
+} from "./chat-durable-runtime-authority.js";
+import { assertDurableRetryPolicyMatchesRun, DURABLE_RETRY_POLICY_DEFAULT } from "./durable-retry-policy.js";
+import {
+  computeEffectiveChatTurnRequestMaterialSha256,
+  computeFrozenChatTurnAdmissionMaterialSha256,
+  reconstructAdmittedChatTurnRequest,
+} from "./session-control-service.js";
 import { readToolDomainExecutionFailure, type ToolDomainExecutionFailure } from "./tool-domain-result-truth.js";
 import type { SharedHostLifecycleAdmissionPort, SharedHostWorkReservation } from "./shared-host-lifecycle-service.js";
 
@@ -87,6 +116,153 @@ interface ChatMaterializationProjection {
   options: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">;
 }
 
+function buildApprovalTerminalCheckpointState(
+  input: Record<string, unknown>,
+  terminalStatus: "completed" | "failed",
+  assistantMessageId: string,
+  outputText: string,
+  outputSummary: string,
+): Record<string, unknown> {
+  const checkpoint = { ...input };
+  for (const key of ["finalOutput", "finalSummary", "outputMessageId", "outputTraceStatus"]) {
+    delete checkpoint[key];
+  }
+  if (terminalStatus === "completed") {
+    return { ...checkpoint, assistantMessageId, outputText, outputSummary };
+  }
+  for (const key of ["assistantMessageId", "outputText", "outputSummary"]) {
+    delete checkpoint[key];
+  }
+  return checkpoint;
+}
+
+function requireExactApprovalChatParentAuthority(
+  storage: ApprovalEffectsServiceContext["storage"],
+  run: DurableRunRecord,
+  trace: ChatTurnTraceRecord | undefined,
+  expectedTurnId: string,
+): { sessionId: string } {
+  const payload =
+    run.payload && typeof run.payload === "object" && !Array.isArray(run.payload)
+      ? (run.payload as Record<string, unknown>)
+      : {};
+  const request = payload.request;
+  const requestActor = payload.requestActor;
+  if (
+    run.workflowKey !== "chat.turn.execute" ||
+    run.status !== "waiting" ||
+    payload.version !== "chat.turn.execute.v2" ||
+    typeof payload.admissionId !== "string" ||
+    typeof payload.sessionIncarnationId !== "string" ||
+    typeof payload.workspaceId !== "string" ||
+    typeof payload.sessionId !== "string" ||
+    typeof payload.turnId !== "string" ||
+    typeof payload.userMessageId !== "string" ||
+    typeof payload.assistantMessageId !== "string" ||
+    typeof payload.admissionMaterialSha256 !== "string" ||
+    typeof payload.effectiveRequestMaterialSha256 !== "string" ||
+    !Number.isSafeInteger(payload.admissionAggregateRevision) ||
+    !Number.isSafeInteger(payload.admissionControllerGeneration) ||
+    !request ||
+    typeof request !== "object" ||
+    Array.isArray(request) ||
+    !requestActor ||
+    typeof requestActor !== "object" ||
+    Array.isArray(requestActor) ||
+    payload.turnId !== expectedTurnId ||
+    !trace ||
+    trace.turnId !== payload.turnId ||
+    trace.sessionId !== payload.sessionId ||
+    trace.userMessageId !== payload.userMessageId ||
+    trace.assistantMessageId !== payload.assistantMessageId ||
+    (trace.status !== "waiting_for_approval" && trace.status !== "running")
+  ) {
+    throw new Error(`Durable run ${run.runId} has no canonical Chat parent context for approval post-commit.`);
+  }
+  const admission = storage.sessionMutationAdmissions.require(payload.admissionId);
+  const admittedRequest = reconstructAdmittedChatTurnRequest(request as never, payload.surfaceDerivation as never);
+  if (
+    admission.admissionKind !== "turn_write" ||
+    admission.sessionIncarnationId !== payload.sessionIncarnationId ||
+    admission.workspaceId !== payload.workspaceId ||
+    admission.sessionId !== payload.sessionId ||
+    admission.turnId !== payload.turnId ||
+    admission.materialSha256 !== payload.admissionMaterialSha256 ||
+    admission.aggregateRevision !== payload.admissionAggregateRevision ||
+    admission.controllerGeneration !== payload.admissionControllerGeneration ||
+    admission.actorKind !== (requestActor as Record<string, unknown>).actorKind ||
+    admission.actorId !== (requestActor as Record<string, unknown>).actorId ||
+    computeFrozenChatTurnAdmissionMaterialSha256(admittedRequest) !== payload.admissionMaterialSha256 ||
+    computeEffectiveChatTurnRequestMaterialSha256(payload.admissionMaterialSha256, request as never) !==
+      payload.effectiveRequestMaterialSha256
+  ) {
+    throw new Error(`Durable run ${run.runId} approval parent drifted from its mutation admission.`);
+  }
+  assertDurableRetryPolicyMatchesRun(run.metadata?.retryPolicy, run.maxAttempts, DURABLE_RETRY_POLICY_DEFAULT);
+  if (run.metadata?.autonomousAdmission !== undefined) {
+    verifyAutonomousChatAdmissionRunMetadata(run, { admission, trace });
+  } else if (
+    run.metadata?.[AUTONOMOUS_CHAT_POST_COMMIT_PENDING_METADATA_KEY] !== undefined ||
+    run.metadata?.autonomousChatPostCommit !== undefined
+  ) {
+    throw new Error(`Durable run ${run.runId} carries autonomous finalizer evidence without autonomous admission.`);
+  }
+  const authority = readChatTurnRuntimeAuthoritySeal(run.metadata?.[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY]);
+  if (
+    !authority ||
+    authority.material.runId !== run.runId ||
+    authority.material.turnId !== payload.turnId ||
+    authority.material.transitionKind !== "waiting" ||
+    authority.material.durableStatus !== "waiting" ||
+    authority.material.traceStatus !== "waiting_for_approval" ||
+    canonicalJsonString(run.metadata?.waitForEvent) !== canonicalJsonString(authority.material.waitForEvent)
+  ) {
+    throw new Error(`Durable run ${run.runId} has no exact waiting approval runtime authority.`);
+  }
+  const checkpoint = storage.durableRuns.getLatestCheckpointByKind(run.runId, "run_waiting");
+  if (!checkpoint) {
+    throw new Error(`Durable run ${run.runId} has no latest waiting approval authority checkpoint.`);
+  }
+  verifyCheckpointAnchoredChatTurnRuntimeAuthority(run.metadata, checkpoint.state);
+  if (
+    ["outputText", "finalOutput", "outputSummary", "finalSummary", "outputMessageId", "outputTraceStatus"].some(
+      (key) => run.metadata?.[key] !== undefined,
+    ) ||
+    ["assistantMessageId", "outputText", "outputSummary", "outputMessageId", "outputTraceStatus"].some(
+      (key) => checkpoint.state[key] !== undefined,
+    ) ||
+    run.metadata?.linkedFinalizationPending !== undefined ||
+    run.metadata?.linkedFinalization !== undefined ||
+    run.metadata?.chatTurnAdmissionHandoff !== undefined
+  ) {
+    throw new Error(`Durable run ${run.runId} carries stale terminal evidence while waiting for approval.`);
+  }
+  const pending = readExactGeneralChatPostCommitPendingMarker(
+    run.metadata?.[GENERAL_CHAT_POST_COMMIT_PENDING_METADATA_KEY],
+  );
+  const settlement = readExactGeneralChatPostCommitSettlement(run.metadata?.generalChatPostCommit);
+  const matchingPending =
+    pending &&
+    pending.generationId === authority.material.postCommitGenerationId &&
+    pending.traceStatus === authority.material.traceStatus &&
+    pending.requestedAt === authority.material.transitionAt &&
+    canonicalJsonString(pending.postCommitEligibility) ===
+      canonicalJsonString(authority.material.postCommitEligibility);
+  const matchingSettlement =
+    settlement &&
+    settlement.generationId === authority.material.postCommitGenerationId &&
+    settlement.traceStatus === authority.material.traceStatus &&
+    settlement.requestedAt === authority.material.transitionAt &&
+    canonicalJsonString(settlement.postCommitEligibility) ===
+      canonicalJsonString(authority.material.postCommitEligibility) &&
+    (settlement.settlementStatus === "completed" || settlement.settlementStatus === "settled_with_failures") &&
+    typeof settlement.completedAt === "string";
+  if (Boolean(pending) === Boolean(settlement) || (!matchingPending && !matchingSettlement)) {
+    throw new Error(`Durable run ${run.runId} waiting approval finalizer drifted from runtime authority.`);
+  }
+  return { sessionId: payload.sessionId };
+}
+
 export interface ApprovalChatTurnResumeResult {
   resumed: boolean;
   turnId?: string;
@@ -125,6 +301,7 @@ export interface ApprovalEffectsServiceDeps {
     payload: Record<string, unknown>;
   }): void;
   resolveApprovalHookWorkspaceId(payload: Record<string, unknown>): string;
+  resolvePostCommitEligibility?(sessionId: string): PostCommitEligibility;
   recordDurableTimelineEvent?(
     runId: string,
     eventType: "run_completed" | "run_failed",
@@ -155,6 +332,7 @@ export interface ApprovalEffectsServiceContext {
     | "chatExecutionPlans"
     | "chatTurnTraces"
     | "durableRuns"
+    | "sessionMutationAdmissions"
     | "runImmediateTransaction"
     | "orchestration"
     | "audit"
@@ -2067,16 +2245,68 @@ export class ApprovalEffectsService {
           finalized = true;
           return;
         }
-        let metadata: Record<string, unknown> = {
-          ...(latest.metadata ?? {}),
-          outputText: input.outputText,
-          finalOutput: input.outputText,
-          outputSummary: summarizeText(input.outputText),
-          finalSummary: summarizeText(input.outputText),
-        };
+        const outputSummary = summarizeText(input.outputText);
+        const assistantMessageId =
+          linkedTrace?.assistantMessageId ?? `assistant-approved-${input.postCommit?.turnId ?? runId}`;
+        let metadata: Record<string, unknown> =
+          mergeCanonicalDurableChatTerminalOutputMetadata(
+            latest.metadata,
+            terminalStatus === "completed"
+              ? { assistantMessageId, outputText: input.outputText, outputSummary }
+              : undefined,
+          ) ?? {};
+        let checkpointState = buildApprovalTerminalCheckpointState(
+          input.checkpointState,
+          terminalStatus,
+          assistantMessageId,
+          input.outputText,
+          outputSummary,
+        );
         if (input.postCommit && !matchingReceipt) {
           const generationId = randomUUID();
-          metadata = markTerminalChatPostCommitPending(metadata, input.now, input.postCommit.traceStatus, generationId);
+          const parentPayload = requireExactApprovalChatParentAuthority(
+            this.ctx.storage,
+            latest,
+            linkedTrace,
+            input.postCommit.turnId,
+          );
+          const postCommitEligibility = this.deps.resolvePostCommitEligibility?.(parentPayload.sessionId);
+          if (!postCommitEligibility) {
+            throw new Error(`Durable run ${runId} cannot freeze approval post-commit eligibility.`);
+          }
+          metadata = resetChatTurnRuntimeTransitionMetadata(metadata);
+          const includeAutonomous = latest.metadata?.autonomousAdmission !== undefined;
+          metadata = markTerminalChatPostCommitPending(
+            metadata,
+            input.now,
+            input.postCommit.traceStatus,
+            postCommitEligibility,
+            generationId,
+            { includeAutonomous },
+          );
+          const authority = buildChatTurnRuntimeAuthoritySeal({
+            runId,
+            turnId: input.postCommit.turnId,
+            transitionKind: "terminal",
+            durableStatus: terminalStatus,
+            traceStatus: input.postCommit.traceStatus,
+            transitionAt: input.now,
+            postCommitGenerationId: generationId,
+            postCommitEligibility,
+            ...(terminalStatus === "completed"
+              ? {
+                  terminalOutput: {
+                    assistantMessageId,
+                    outputText: input.outputText,
+                    outputSummary,
+                  },
+                }
+              : {}),
+            requiredFinalizers:
+              terminalStatus === "completed" && includeAutonomous ? ["autonomous", "general"] : ["general"],
+          });
+          metadata = withChatTurnRuntimeAuthority(metadata, authority);
+          checkpointState = withChatTurnRuntimeAuthorityCheckpoint(checkpointState, authority);
           metadata[APPROVAL_MATERIALIZED_POST_COMMIT_METADATA_KEY] = {
             version: 1,
             approvalId: input.postCommit.approvalId,
@@ -2105,10 +2335,10 @@ export class ApprovalEffectsService {
           this.ctx.storage.durableRuns.createCheckpoint({
             runId,
             checkpointKind,
-            state: input.checkpointState,
+            state: checkpointState,
             createdAt: input.now,
           });
-          this.deps.recordDurableTimelineEvent?.(runId, checkpointKind, input.checkpointState);
+          this.deps.recordDurableTimelineEvent?.(runId, checkpointKind, checkpointState);
         }
         finalized = true;
       });

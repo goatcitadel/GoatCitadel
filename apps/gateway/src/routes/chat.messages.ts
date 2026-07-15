@@ -26,6 +26,10 @@ import {
 } from "./chat.shared.js";
 import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
 import { projectAndCapChatHistoryWindow, projectChatHistoryContinuation } from "../services/chat-history-service.js";
+import {
+  createAuthenticatedOperatorAdmissionContext as createBrandedAuthenticatedOperatorAdmissionContext,
+  type AuthenticatedOperatorAdmissionContext,
+} from "../services/session-control-service.js";
 
 const listMessagesSchema = z.object({
   limit: z.coerce.number().int().positive().max(1000).default(200),
@@ -333,6 +337,18 @@ function stampChatOperatorContext<TInput extends Partial<ChatSendMessageRequest>
   } as TInput;
 }
 
+function resolveAuthenticatedOperatorAdmissionContext(
+  request: FastifyRequest,
+): AuthenticatedOperatorAdmissionContext | undefined {
+  if (!request.authActorId?.trim() || !["none", "token", "basic", "loopback"].includes(request.authActorSource)) {
+    return undefined;
+  }
+  return createBrandedAuthenticatedOperatorAdmissionContext({
+    actorId: request.authActorId,
+    authActorSource: request.authActorSource,
+  });
+}
+
 const routePreflightSchema = z.object({
   action: z.enum(["send", "retry", "edit"]),
   turnId: z.string().optional(),
@@ -361,11 +377,11 @@ const answerUserInputPromptSchema = z.object({
   response: z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("single_select"),
-      optionId: z.string().min(1),
+      optionId: z.string().trim().min(1).max(256),
     }),
     z.object({
       kind: z.literal("text"),
-      text: z.string().trim().min(1),
+      text: z.string().trim().min(1).max(20_000),
     }),
   ]),
 });
@@ -515,6 +531,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
       const sent = await fastify.services.chatMessages.agentSendChatMessage(
         params.data.sessionId,
         stampChatOperatorContext(request, body.data),
+        resolveAuthenticatedOperatorAdmissionContext(request),
       );
       markMutationCommitted(request);
       return reply.send(sent);
@@ -599,6 +616,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
           stampChatOperatorContext(request, body.data),
           signal,
           lifecycle,
+          resolveAuthenticatedOperatorAdmissionContext(request),
         ),
       { trackMutation: true },
     );
@@ -677,7 +695,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
         .object({
           sessionId: z.string().min(1),
           turnId: z.string().min(1),
-          promptId: z.string().min(1),
+          promptId: z.string().trim().min(1).max(96),
         })
         .safeParse(request.params);
       const body = answerUserInputPromptSchema.safeParse(request.body);
@@ -695,6 +713,10 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
           params.data.turnId,
           params.data.promptId,
           body.data.response,
+          {
+            actorId: request.authActorId,
+            authActorSource: request.authActorSource,
+          },
         );
         markMutationCommitted(request);
         return reply.send(result);
@@ -749,6 +771,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
         params.data.sessionId,
         params.data.turnId,
         stampChatOperatorContext(request, body.data),
+        resolveAuthenticatedOperatorAdmissionContext(request),
       );
       markMutationCommitted(request);
       return reply.send(result);
@@ -794,6 +817,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
           stampChatOperatorContext(request, body.data),
           signal,
           lifecycle,
+          resolveAuthenticatedOperatorAdmissionContext(request),
         ),
       { trackMutation: true },
     );
@@ -825,6 +849,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
         params.data.sessionId,
         params.data.turnId,
         stampChatOperatorContext(request, body.data),
+        resolveAuthenticatedOperatorAdmissionContext(request),
       );
       markMutationCommitted(request);
       return reply.send(result);
@@ -870,6 +895,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
           stampChatOperatorContext(request, body.data),
           signal,
           lifecycle,
+          resolveAuthenticatedOperatorAdmissionContext(request),
         ),
       { trackMutation: true },
     );

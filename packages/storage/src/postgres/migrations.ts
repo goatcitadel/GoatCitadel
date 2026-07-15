@@ -8469,4 +8469,3560 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
       $$;
     `,
   },
+  {
+    version: 115,
+    name: "session_control_lifecycle_and_mutation_admission",
+    sql: `
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1
+          FROM chat_session_meta meta
+          LEFT JOIN chat_session_control_grants control
+            ON control.session_id = meta.session_id AND control.is_current = 1
+          WHERE control.session_id IS NULL OR control.workspace_id <> meta.workspace_id
+        ) OR EXISTS (
+          SELECT 1
+          FROM chat_session_control_grants control
+          LEFT JOIN chat_session_meta meta ON meta.session_id = control.session_id
+          WHERE control.is_current = 1
+            AND (meta.session_id IS NULL OR meta.workspace_id <> control.workspace_id)
+        ) OR EXISTS (
+          SELECT session_id FROM chat_session_control_grants WHERE is_current = 1
+          GROUP BY session_id HAVING COUNT(*) <> 1
+        ) THEN
+          RAISE EXCEPTION 'session control lifecycle preflight invariant violated' USING ERRCODE = '23514';
+        END IF;
+      END;
+      $$;
+
+      ALTER TABLE chat_session_meta ADD COLUMN IF NOT EXISTS lifecycle_intent_id TEXT;
+      ALTER TABLE chat_session_meta ADD COLUMN IF NOT EXISTS deletion_intent_id TEXT;
+
+      CREATE TABLE IF NOT EXISTS chat_session_control_auth_revoke_operations (
+        idempotency_key TEXT PRIMARY KEY CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+        request_sha256 TEXT NOT NULL CHECK(request_sha256 ~ '^[0-9a-f]{64}$'),
+        binding_kind TEXT NOT NULL CHECK(binding_kind IN ('companion_session', 'device_grant')),
+        binding_id TEXT NOT NULL CHECK(length(binding_id) BETWEEN 1 AND 256),
+        actor_id TEXT NOT NULL CHECK(length(actor_id) BETWEEN 1 AND 256),
+        correlation_id TEXT NOT NULL CHECK(length(correlation_id) BETWEEN 1 AND 256),
+        target_count BIGINT NOT NULL CHECK(target_count >= 0),
+        session_count BIGINT NOT NULL CHECK(session_count >= 0),
+        event_set_sha256 TEXT NOT NULL CHECK(event_set_sha256 ~ '^[0-9a-f]{64}$'),
+        occurred_at TEXT NOT NULL CHECK(gc_try_parse_timestamptz(occurred_at) IS NOT NULL),
+        CONSTRAINT fk_chat_session_control_auth_revoke_operation_receipt
+          FOREIGN KEY(idempotency_key) REFERENCES chat_session_control_auth_revoke_receipts(idempotency_key)
+          DEFERRABLE INITIALLY DEFERRED,
+        CHECK((target_count = 0 AND session_count = 0
+          AND event_set_sha256 = '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945')
+          OR (target_count > 0 AND session_count BETWEEN 1 AND target_count))
+      );
+
+      ALTER TABLE chat_session_control_auth_revoke_operations
+        DROP CONSTRAINT IF EXISTS chat_session_control_auth_revoke_operation_idempotency_key_fkey;
+      ALTER TABLE chat_session_control_auth_revoke_operations
+        DROP CONSTRAINT IF EXISTS fk_chat_session_control_auth_revoke_operation_receipt;
+      ALTER TABLE chat_session_control_auth_revoke_operations
+        ADD CONSTRAINT fk_chat_session_control_auth_revoke_operation_receipt
+        FOREIGN KEY(idempotency_key) REFERENCES chat_session_control_auth_revoke_receipts(idempotency_key)
+        DEFERRABLE INITIALLY DEFERRED;
+
+      CREATE TABLE IF NOT EXISTS chat_session_control_auth_revoke_operation_targets (
+        operation_idempotency_key TEXT NOT NULL,
+        target_index BIGINT NOT NULL CHECK(target_index >= 0),
+        target_kind TEXT NOT NULL CHECK(target_kind IN ('pending_request', 'current_grant')),
+        workspace_id TEXT NOT NULL CHECK(length(workspace_id) BETWEEN 1 AND 256),
+        session_id TEXT NOT NULL CHECK(length(session_id) BETWEEN 1 AND 256),
+        request_id TEXT,
+        generation BIGINT NOT NULL CHECK(generation > 0),
+        control_revision BIGINT NOT NULL CHECK(control_revision > 0),
+        owner_kind TEXT NOT NULL CHECK(owner_kind IN ('operator', 'external_companion')),
+        lease_state TEXT NOT NULL CHECK(lease_state IN ('operator_active', 'external_live', 'external_stale')),
+        event_id TEXT NOT NULL UNIQUE CHECK(length(event_id) BETWEEN 1 AND 256),
+        event_sequence BIGINT NOT NULL CHECK(event_sequence > 0),
+        event_idempotency_key TEXT NOT NULL UNIQUE CHECK(length(event_idempotency_key) BETWEEN 1 AND 512),
+        event_reason_code TEXT NOT NULL CHECK(event_reason_code IN ('auth_revoked', 'mutation_denied', 'request_expired')),
+        PRIMARY KEY(operation_idempotency_key, target_index),
+        UNIQUE(operation_idempotency_key, target_kind, session_id, request_id, generation),
+        FOREIGN KEY(operation_idempotency_key)
+          REFERENCES chat_session_control_auth_revoke_operations(idempotency_key) ON DELETE RESTRICT,
+        CHECK((target_kind = 'pending_request' AND request_id IS NOT NULL)
+          OR (target_kind = 'current_grant' AND owner_kind = 'external_companion'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_chat_session_control_auth_revoke_targets_session
+        ON chat_session_control_auth_revoke_operation_targets(operation_idempotency_key, session_id, target_index);
+
+      CREATE TABLE IF NOT EXISTS chat_session_lifecycle_intents (
+        intent_id TEXT PRIMARY KEY CHECK(length(intent_id) BETWEEN 1 AND 256),
+        session_incarnation_id TEXT NOT NULL CHECK(length(session_incarnation_id) BETWEEN 1 AND 320),
+        workspace_id TEXT NOT NULL CHECK(length(workspace_id) BETWEEN 1 AND 256),
+        session_id TEXT NOT NULL CHECK(length(session_id) BETWEEN 1 AND 256),
+        intent_kind TEXT NOT NULL CHECK(intent_kind IN ('initialize', 'reactivate', 'delete')),
+        expected_generation BIGINT CHECK(expected_generation IS NULL OR expected_generation > 0),
+        next_generation BIGINT NOT NULL CHECK(next_generation > 0),
+        expected_revision BIGINT CHECK(expected_revision IS NULL OR expected_revision > 0),
+        actor_kind TEXT NOT NULL CHECK(actor_kind IN ('operator', 'system')),
+        actor_id TEXT NOT NULL CHECK(length(actor_id) BETWEEN 1 AND 256),
+        idempotency_key TEXT NOT NULL UNIQUE CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+        request_sha256 TEXT NOT NULL CHECK(request_sha256 ~ '^[0-9a-f]{64}$'),
+        correlation_id TEXT NOT NULL CHECK(length(correlation_id) BETWEEN 1 AND 256),
+        event_id TEXT NOT NULL UNIQUE CHECK(length(event_id) BETWEEN 1 AND 256),
+        created_at TEXT NOT NULL CHECK(gc_try_parse_timestamptz(created_at) IS NOT NULL),
+        UNIQUE(workspace_id, session_id, intent_kind, next_generation),
+        CHECK((intent_kind = 'initialize' AND expected_generation IS NULL AND next_generation = 1
+            AND expected_revision IS NULL AND actor_kind = 'system')
+          OR (intent_kind = 'reactivate' AND expected_generation IS NOT NULL
+            AND next_generation = expected_generation + 1 AND expected_revision IS NULL)
+          OR (intent_kind = 'delete' AND expected_generation IS NOT NULL
+            AND next_generation = expected_generation AND expected_revision IS NOT NULL))
+      );
+      CREATE INDEX IF NOT EXISTS idx_chat_session_lifecycle_intents_session
+        ON chat_session_lifecycle_intents(session_id, next_generation, intent_kind);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_session_meta_lifecycle_intent
+        ON chat_session_meta(lifecycle_intent_id) WHERE lifecycle_intent_id IS NOT NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_session_meta_deletion_intent
+        ON chat_session_meta(deletion_intent_id) WHERE deletion_intent_id IS NOT NULL;
+
+      CREATE TABLE IF NOT EXISTS chat_session_mutation_admissions (
+        admission_id TEXT PRIMARY KEY CHECK(length(admission_id) BETWEEN 1 AND 256),
+        session_incarnation_id TEXT NOT NULL CHECK(length(session_incarnation_id) BETWEEN 1 AND 320),
+        workspace_id TEXT NOT NULL CHECK(length(workspace_id) BETWEEN 1 AND 256),
+        session_id TEXT NOT NULL CHECK(length(session_id) BETWEEN 1 AND 256),
+        turn_id TEXT UNIQUE CHECK(turn_id IS NULL OR length(turn_id) BETWEEN 1 AND 256),
+        runtime_owner_id TEXT CHECK(runtime_owner_id IS NULL OR length(runtime_owner_id) BETWEEN 1 AND 256),
+        runtime_last_heartbeat_at TEXT CHECK(
+          runtime_last_heartbeat_at IS NULL OR gc_try_parse_timestamptz(runtime_last_heartbeat_at) IS NOT NULL
+        ),
+        runtime_lease_expires_at TEXT CHECK(
+          runtime_lease_expires_at IS NULL OR gc_try_parse_timestamptz(runtime_lease_expires_at) IS NOT NULL
+        ),
+        runtime_lease_revision BIGINT CHECK(runtime_lease_revision IS NULL OR runtime_lease_revision > 0),
+        runtime_lease_relinquished_at TEXT CHECK(
+          runtime_lease_relinquished_at IS NULL OR gc_try_parse_timestamptz(runtime_lease_relinquished_at) IS NOT NULL
+        ),
+        admission_kind TEXT NOT NULL CHECK(admission_kind IN ('synchronous', 'turn_write')),
+        aggregate_revision BIGINT NOT NULL CHECK(aggregate_revision > 0),
+        controller_generation BIGINT NOT NULL CHECK(controller_generation > 0),
+        actor_kind TEXT NOT NULL CHECK(actor_kind IN ('operator', 'external_companion', 'system')),
+        actor_id TEXT NOT NULL CHECK(length(actor_id) BETWEEN 1 AND 256),
+        operation TEXT NOT NULL CHECK(length(operation) BETWEEN 1 AND 128),
+        material_sha256 TEXT NOT NULL CHECK(material_sha256 ~ '^[0-9a-f]{64}$'),
+        status TEXT NOT NULL CHECK(status IN ('active', 'completed', 'cancelled')),
+        idempotency_key TEXT NOT NULL UNIQUE CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+        request_sha256 TEXT NOT NULL CHECK(request_sha256 ~ '^[0-9a-f]{64}$'),
+        correlation_id TEXT NOT NULL CHECK(length(correlation_id) BETWEEN 1 AND 256),
+        admit_event_id TEXT NOT NULL UNIQUE CHECK(length(admit_event_id) BETWEEN 1 AND 256),
+        created_at TEXT NOT NULL CHECK(gc_try_parse_timestamptz(created_at) IS NOT NULL),
+        closed_at TEXT CHECK(closed_at IS NULL OR gc_try_parse_timestamptz(closed_at) IS NOT NULL),
+        terminal_actor_id TEXT,
+        terminal_event_id TEXT UNIQUE,
+        terminal_idempotency_key TEXT UNIQUE,
+        terminal_correlation_id TEXT,
+        terminal_authority_kind TEXT CHECK(terminal_authority_kind IS NULL OR terminal_authority_kind IN (
+          'synchronous', 'request_runtime', 'durable_run', 'durable_terminal', 'expired_recovery',
+          'lifecycle_delete', 'authority_superseded', 'post_commit_child_stage'
+        )),
+        terminal_runtime_owner_id TEXT CHECK(
+          terminal_runtime_owner_id IS NULL OR length(terminal_runtime_owner_id) BETWEEN 1 AND 256
+        ),
+        terminal_runtime_lease_revision BIGINT CHECK(
+          terminal_runtime_lease_revision IS NULL OR terminal_runtime_lease_revision > 0
+        ),
+        terminal_durable_run_id TEXT CHECK(
+          terminal_durable_run_id IS NULL OR length(terminal_durable_run_id) BETWEEN 1 AND 256
+        ),
+        terminal_durable_lease_owner_id TEXT CHECK(
+          terminal_durable_lease_owner_id IS NULL OR length(terminal_durable_lease_owner_id) BETWEEN 1 AND 256
+        ),
+        terminal_durable_attempt_count BIGINT CHECK(
+          terminal_durable_attempt_count IS NULL OR terminal_durable_attempt_count >= 0
+        ),
+        terminal_durable_run_version BIGINT CHECK(
+          terminal_durable_run_version IS NULL OR terminal_durable_run_version > 0
+        ),
+        terminal_durable_run_status TEXT CHECK(
+          terminal_durable_run_status IS NULL OR terminal_durable_run_status IN (
+            'running', 'completed', 'failed', 'cancelled', 'dead_lettered'
+          )
+        ),
+        terminal_lifecycle_intent_id TEXT CHECK(
+          terminal_lifecycle_intent_id IS NULL OR length(terminal_lifecycle_intent_id) BETWEEN 1 AND 256
+        ),
+        terminal_control_event_id TEXT CHECK(
+          terminal_control_event_id IS NULL OR length(terminal_control_event_id) BETWEEN 1 AND 256
+        ),
+        CHECK((status = 'active' AND closed_at IS NULL AND terminal_actor_id IS NULL
+            AND terminal_event_id IS NULL AND terminal_idempotency_key IS NULL AND terminal_correlation_id IS NULL)
+          OR (status IN ('completed', 'cancelled') AND closed_at IS NOT NULL
+            AND length(terminal_actor_id) BETWEEN 1 AND 256 AND length(terminal_event_id) BETWEEN 1 AND 256
+            AND length(terminal_idempotency_key) BETWEEN 1 AND 512
+            AND length(terminal_correlation_id) BETWEEN 1 AND 256)),
+        CHECK((admission_kind = 'turn_write' AND turn_id IS NOT NULL
+            AND runtime_owner_id IS NOT NULL AND runtime_last_heartbeat_at IS NOT NULL
+            AND runtime_lease_expires_at IS NOT NULL AND runtime_lease_revision IS NOT NULL
+            AND gc_try_parse_timestamptz(runtime_lease_expires_at)
+              > gc_try_parse_timestamptz(runtime_last_heartbeat_at))
+          OR (admission_kind = 'synchronous' AND turn_id IS NULL
+            AND runtime_owner_id IS NULL AND runtime_last_heartbeat_at IS NULL
+            AND runtime_lease_expires_at IS NULL AND runtime_lease_revision IS NULL
+            AND runtime_lease_relinquished_at IS NULL)),
+        CHECK(
+          (status = 'active' AND terminal_authority_kind IS NULL
+            AND terminal_runtime_owner_id IS NULL AND terminal_runtime_lease_revision IS NULL
+            AND terminal_durable_run_id IS NULL AND terminal_durable_lease_owner_id IS NULL
+            AND terminal_durable_attempt_count IS NULL AND terminal_durable_run_version IS NULL
+            AND terminal_durable_run_status IS NULL AND terminal_lifecycle_intent_id IS NULL
+            AND terminal_control_event_id IS NULL)
+          OR (status IN ('completed', 'cancelled') AND (
+            (terminal_authority_kind = 'synchronous'
+              AND terminal_runtime_owner_id IS NULL AND terminal_runtime_lease_revision IS NULL
+              AND terminal_durable_run_id IS NULL AND terminal_durable_lease_owner_id IS NULL
+              AND terminal_durable_attempt_count IS NULL AND terminal_durable_run_version IS NULL
+              AND terminal_durable_run_status IS NULL AND terminal_lifecycle_intent_id IS NULL
+              AND terminal_control_event_id IS NULL)
+            OR (terminal_authority_kind IN ('request_runtime', 'expired_recovery')
+              AND terminal_runtime_owner_id IS NOT NULL AND terminal_runtime_lease_revision IS NOT NULL
+              AND terminal_durable_run_id IS NULL AND terminal_durable_lease_owner_id IS NULL
+              AND terminal_durable_attempt_count IS NULL AND terminal_durable_run_version IS NULL
+              AND terminal_durable_run_status IS NULL AND terminal_lifecycle_intent_id IS NULL
+              AND terminal_control_event_id IS NULL)
+            OR (terminal_authority_kind = 'durable_run'
+              AND terminal_runtime_owner_id IS NULL AND terminal_runtime_lease_revision IS NULL
+              AND terminal_durable_run_id IS NOT NULL AND terminal_durable_lease_owner_id IS NOT NULL
+              AND terminal_durable_attempt_count IS NOT NULL AND terminal_durable_run_version IS NOT NULL
+              AND terminal_durable_run_status = 'running' AND terminal_lifecycle_intent_id IS NULL
+              AND terminal_control_event_id IS NULL)
+            OR (terminal_authority_kind = 'durable_terminal'
+              AND terminal_runtime_owner_id IS NULL AND terminal_runtime_lease_revision IS NULL
+              AND terminal_durable_run_id IS NOT NULL AND terminal_durable_lease_owner_id IS NULL
+              AND terminal_durable_attempt_count IS NULL AND terminal_durable_run_version IS NOT NULL
+              AND terminal_durable_run_status IN ('completed', 'failed', 'cancelled', 'dead_lettered')
+              AND terminal_lifecycle_intent_id IS NULL AND terminal_control_event_id IS NULL)
+            OR (terminal_authority_kind = 'lifecycle_delete'
+              AND terminal_runtime_owner_id IS NULL AND terminal_runtime_lease_revision IS NULL
+              AND terminal_durable_run_id IS NULL AND terminal_durable_lease_owner_id IS NULL
+              AND terminal_durable_attempt_count IS NULL AND terminal_durable_run_version IS NULL
+              AND terminal_durable_run_status IS NULL AND terminal_lifecycle_intent_id IS NOT NULL
+              AND terminal_control_event_id IS NULL)
+            OR (terminal_authority_kind = 'authority_superseded'
+              AND terminal_runtime_owner_id IS NULL AND terminal_runtime_lease_revision IS NULL
+              AND terminal_durable_run_id IS NULL AND terminal_durable_lease_owner_id IS NULL
+              AND terminal_durable_attempt_count IS NULL AND terminal_durable_run_version IS NULL
+              AND terminal_durable_run_status IS NULL AND terminal_lifecycle_intent_id IS NULL
+              AND terminal_control_event_id IS NOT NULL)
+            OR (terminal_authority_kind = 'post_commit_child_stage'
+              AND terminal_runtime_owner_id IS NULL AND terminal_runtime_lease_revision IS NULL
+              AND terminal_durable_run_id IS NOT NULL AND terminal_durable_lease_owner_id IS NOT NULL
+              AND terminal_durable_attempt_count IS NOT NULL AND terminal_durable_run_version IS NOT NULL
+              AND terminal_durable_run_status = 'running' AND terminal_lifecycle_intent_id IS NULL
+              AND terminal_control_event_id IS NULL)
+          ))
+        )
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_session_mutation_admissions_one_active_turn
+        ON chat_session_mutation_admissions(session_id)
+        WHERE admission_kind = 'turn_write' AND status = 'active';
+      CREATE INDEX IF NOT EXISTS idx_chat_session_mutation_admissions_active
+        ON chat_session_mutation_admissions(workspace_id, session_id, status, created_at, admission_id);
+
+      CREATE TABLE IF NOT EXISTS chat_session_mutation_admission_events (
+        event_id TEXT PRIMARY KEY CHECK(length(event_id) BETWEEN 1 AND 256),
+        admission_id TEXT NOT NULL,
+        session_incarnation_id TEXT NOT NULL CHECK(length(session_incarnation_id) BETWEEN 1 AND 320),
+        workspace_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        turn_id TEXT CHECK(turn_id IS NULL OR length(turn_id) BETWEEN 1 AND 256),
+        runtime_owner_id TEXT CHECK(runtime_owner_id IS NULL OR length(runtime_owner_id) BETWEEN 1 AND 256),
+        runtime_lease_revision BIGINT CHECK(runtime_lease_revision IS NULL OR runtime_lease_revision > 0),
+        event_sequence BIGINT NOT NULL CHECK(event_sequence IN (1, 2)),
+        event_type TEXT NOT NULL CHECK(event_type IN ('admitted', 'completed', 'cancelled')),
+        admission_kind TEXT NOT NULL CHECK(admission_kind IN ('synchronous', 'turn_write')),
+        aggregate_revision BIGINT NOT NULL CHECK(aggregate_revision > 0),
+        controller_generation BIGINT NOT NULL CHECK(controller_generation > 0),
+        actor_kind TEXT NOT NULL CHECK(actor_kind IN ('operator', 'external_companion', 'system')),
+        actor_id TEXT NOT NULL CHECK(length(actor_id) BETWEEN 1 AND 256),
+        operation TEXT NOT NULL CHECK(length(operation) BETWEEN 1 AND 128),
+        material_sha256 TEXT NOT NULL CHECK(material_sha256 ~ '^[0-9a-f]{64}$'),
+        idempotency_key TEXT NOT NULL UNIQUE CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+        request_sha256 TEXT NOT NULL CHECK(request_sha256 ~ '^[0-9a-f]{64}$'),
+        correlation_id TEXT NOT NULL CHECK(length(correlation_id) BETWEEN 1 AND 256),
+        terminal_authority_kind TEXT,
+        terminal_runtime_owner_id TEXT,
+        terminal_runtime_lease_revision BIGINT,
+        terminal_durable_run_id TEXT,
+        terminal_durable_lease_owner_id TEXT,
+        terminal_durable_attempt_count BIGINT,
+        terminal_durable_run_version BIGINT,
+        terminal_durable_run_status TEXT,
+        terminal_lifecycle_intent_id TEXT,
+        terminal_control_event_id TEXT,
+        created_at TEXT NOT NULL CHECK(gc_try_parse_timestamptz(created_at) IS NOT NULL),
+        UNIQUE(admission_id, event_sequence),
+        FOREIGN KEY(admission_id) REFERENCES chat_session_mutation_admissions(admission_id) ON DELETE RESTRICT
+      );
+      CREATE INDEX IF NOT EXISTS idx_chat_session_mutation_admission_events_admission
+        ON chat_session_mutation_admission_events(admission_id, event_sequence);
+
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1
+          FROM chat_routed_context_snapshots snapshot
+          LEFT JOIN chat_turn_capability_profiles profile
+            ON profile.profile_id = snapshot.capability_profile_id
+          WHERE profile.profile_id IS NULL
+            OR profile.turn_id <> snapshot.turn_id
+            OR profile.session_id <> snapshot.session_id
+            OR profile.workspace_id <> snapshot.workspace_id
+            OR profile.profile_hash <> snapshot.capability_profile_hash
+        ) THEN
+          RAISE EXCEPTION 'legacy routed context snapshot and capability profile authority conflicts'
+            USING ERRCODE = '23514';
+        END IF;
+      END;
+      $$;
+
+      CREATE TABLE IF NOT EXISTS chat_turn_session_incarnation_bindings (
+        turn_id TEXT PRIMARY KEY CHECK(length(turn_id) BETWEEN 1 AND 256),
+        workspace_id TEXT NOT NULL CHECK(length(workspace_id) BETWEEN 1 AND 256),
+        session_id TEXT NOT NULL CHECK(length(session_id) BETWEEN 1 AND 256),
+        session_incarnation_id TEXT NOT NULL CHECK(length(session_incarnation_id) BETWEEN 1 AND 320),
+        admission_id TEXT UNIQUE,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(admission_id) REFERENCES chat_session_mutation_admissions(admission_id)
+          ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED,
+        CHECK(admission_id IS NOT NULL
+          OR session_incarnation_id = 'legacy-session-incarnation:' || session_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_chat_turn_session_incarnation_bindings_session
+        ON chat_turn_session_incarnation_bindings(workspace_id, session_id, session_incarnation_id, turn_id);
+
+      INSERT INTO chat_turn_session_incarnation_bindings (
+        turn_id, workspace_id, session_id, session_incarnation_id, admission_id, created_at
+      )
+      SELECT turn_id, workspace_id, session_id,
+        'legacy-session-incarnation:' || session_id, NULL, created_at
+      FROM chat_turn_capability_profiles
+      ON CONFLICT(turn_id) DO NOTHING;
+
+      CREATE TABLE IF NOT EXISTS chat_turn_capability_profile_incarnation_bindings (
+        profile_id TEXT PRIMARY KEY CHECK(length(profile_id) BETWEEN 1 AND 256),
+        turn_id TEXT NOT NULL UNIQUE CHECK(length(turn_id) BETWEEN 1 AND 256),
+        profile_hash TEXT NOT NULL CHECK(profile_hash ~ '^[0-9a-f]{64}$'),
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(turn_id) REFERENCES chat_turn_session_incarnation_bindings(turn_id) ON DELETE RESTRICT,
+        FOREIGN KEY(profile_id) REFERENCES chat_turn_capability_profiles(profile_id)
+          ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED
+      );
+
+      INSERT INTO chat_turn_capability_profile_incarnation_bindings (
+        profile_id, turn_id, profile_hash, created_at
+      )
+      SELECT profile_id, turn_id, profile_hash, created_at
+      FROM chat_turn_capability_profiles
+      ON CONFLICT(profile_id) DO NOTHING;
+
+      CREATE TABLE IF NOT EXISTS chat_turn_mutation_admission_durable_bindings (
+        admission_id TEXT PRIMARY KEY CHECK(length(admission_id) BETWEEN 1 AND 256),
+        turn_id TEXT NOT NULL UNIQUE CHECK(length(turn_id) BETWEEN 1 AND 256),
+        workspace_id TEXT NOT NULL CHECK(length(workspace_id) BETWEEN 1 AND 256),
+        session_id TEXT NOT NULL CHECK(length(session_id) BETWEEN 1 AND 256),
+        session_incarnation_id TEXT NOT NULL CHECK(length(session_incarnation_id) BETWEEN 1 AND 320),
+        durable_run_id TEXT NOT NULL UNIQUE CHECK(length(durable_run_id) BETWEEN 1 AND 256),
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(admission_id) REFERENCES chat_session_mutation_admissions(admission_id) ON DELETE RESTRICT,
+        FOREIGN KEY(turn_id) REFERENCES chat_turn_session_incarnation_bindings(turn_id) ON DELETE RESTRICT,
+        FOREIGN KEY(durable_run_id) REFERENCES durable_runs(run_id)
+          ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED
+      );
+
+      CREATE TABLE IF NOT EXISTS chat_turn_user_input_continuation_seals (
+        seal_id TEXT PRIMARY KEY CHECK(length(seal_id) BETWEEN 1 AND 256),
+        version BIGINT NOT NULL CHECK(version = 1),
+        admission_id TEXT NOT NULL CHECK(length(admission_id) BETWEEN 1 AND 256),
+        session_incarnation_id TEXT NOT NULL CHECK(length(session_incarnation_id) BETWEEN 1 AND 320),
+        workspace_id TEXT NOT NULL CHECK(length(workspace_id) BETWEEN 1 AND 256),
+        session_id TEXT NOT NULL CHECK(length(session_id) BETWEEN 1 AND 256),
+        turn_id TEXT NOT NULL CHECK(length(turn_id) BETWEEN 1 AND 256),
+        durable_run_id TEXT NOT NULL CHECK(length(durable_run_id) BETWEEN 1 AND 256),
+        prompt_id TEXT NOT NULL CHECK(length(prompt_id) BETWEEN 1 AND 256),
+        event_key TEXT NOT NULL CHECK(event_key = 'chat.user_input.resolved'),
+        correlation_id TEXT NOT NULL CHECK(length(correlation_id) BETWEEN 1 AND 256),
+        resume_record_sha256 TEXT NOT NULL CHECK(resume_record_sha256 ~ '^[0-9a-f]{64}$'),
+        responder_actor_id TEXT NOT NULL CHECK(length(responder_actor_id) BETWEEN 1 AND 256),
+        responder_auth_actor_source TEXT NOT NULL CHECK(responder_auth_actor_source IN (
+          'none', 'token', 'basic', 'loopback', 'sse', 'device', 'companion', 'a2a_peer'
+        )),
+        waiting_run_version BIGINT NOT NULL CHECK(waiting_run_version > 0),
+        queued_run_version BIGINT NOT NULL CHECK(queued_run_version = waiting_run_version + 1),
+        resolved_at TEXT NOT NULL CHECK(gc_try_parse_timestamptz(resolved_at) IS NOT NULL),
+        material_sha256 TEXT NOT NULL CHECK(material_sha256 ~ '^[0-9a-f]{64}$'),
+        UNIQUE(admission_id, durable_run_id, prompt_id),
+        UNIQUE(durable_run_id, prompt_id),
+        CHECK(correlation_id = prompt_id),
+        FOREIGN KEY(admission_id) REFERENCES chat_session_mutation_admissions(admission_id) ON DELETE RESTRICT,
+        FOREIGN KEY(turn_id) REFERENCES chat_turn_session_incarnation_bindings(turn_id) ON DELETE RESTRICT,
+        FOREIGN KEY(durable_run_id) REFERENCES durable_runs(run_id) ON DELETE RESTRICT
+      );
+      CREATE INDEX IF NOT EXISTS idx_chat_turn_user_input_continuation_seals_run
+        ON chat_turn_user_input_continuation_seals(durable_run_id, prompt_id);
+
+      CREATE OR REPLACE FUNCTION gc_reject_session_lifecycle_immutable_mutation()
+      RETURNS trigger AS $$
+      BEGIN
+        RAISE EXCEPTION 'session lifecycle authority is immutable' USING ERRCODE = '23514';
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE OR REPLACE FUNCTION gc_session_lifecycle_intent_insert_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF gc_try_parse_timestamptz(NEW.created_at) IS NULL
+          OR abs(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(NEW.created_at) - clock_timestamp()))) > 1
+          OR (NEW.intent_kind IN ('initialize', 'reactivate')
+            AND NEW.session_incarnation_id <> NEW.intent_id)
+          OR (NEW.intent_kind = 'delete' AND NOT EXISTS (
+            SELECT 1 FROM chat_session_meta meta
+            JOIN chat_session_control_grants control
+              ON control.session_id = meta.session_id AND control.is_current = 1
+            WHERE meta.session_id = NEW.session_id AND meta.workspace_id = NEW.workspace_id
+              AND meta.revision = NEW.expected_revision AND meta.deletion_intent_id IS NULL
+              AND NEW.session_incarnation_id = COALESCE(
+                meta.lifecycle_intent_id,
+                'legacy-session-incarnation:' || meta.session_id
+              )
+              AND control.workspace_id = NEW.workspace_id
+              AND control.generation = NEW.expected_generation
+              AND control.owner_kind = 'operator' AND control.lease_state = 'operator_active'
+          ))
+          OR EXISTS (SELECT 1 FROM chat_session_control_events WHERE idempotency_key = NEW.idempotency_key) THEN
+          RAISE EXCEPTION 'chat session lifecycle intent invariant violated' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_chat_session_lifecycle_intents_insert_guard
+        BEFORE INSERT ON chat_session_lifecycle_intents FOR EACH ROW
+        EXECUTE FUNCTION gc_session_lifecycle_intent_insert_guard();
+      CREATE TRIGGER trg_chat_session_lifecycle_intents_no_update
+        BEFORE UPDATE ON chat_session_lifecycle_intents FOR EACH ROW
+        EXECUTE FUNCTION gc_reject_session_lifecycle_immutable_mutation();
+      CREATE TRIGGER trg_chat_session_lifecycle_intents_no_delete
+        BEFORE DELETE ON chat_session_lifecycle_intents FOR EACH ROW
+        EXECUTE FUNCTION gc_reject_session_lifecycle_immutable_mutation();
+
+      CREATE OR REPLACE FUNCTION gc_chat_session_meta_lifecycle_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF TG_OP = 'INSERT' THEN
+          PERFORM pg_advisory_xact_lock(hashtextextended(NEW.session_id, 411));
+          IF NEW.lifecycle_intent_id IS NULL OR NEW.deletion_intent_id IS NOT NULL OR NOT EXISTS (
+            SELECT 1 FROM chat_session_lifecycle_intents intent
+            WHERE intent.intent_id = NEW.lifecycle_intent_id
+              AND intent.workspace_id = NEW.workspace_id AND intent.session_id = NEW.session_id
+              AND intent.intent_kind IN ('initialize', 'reactivate')
+              AND intent.session_incarnation_id = intent.intent_id
+              AND NOT EXISTS (SELECT 1 FROM chat_session_control_events event_row
+                WHERE event_row.idempotency_key = intent.idempotency_key)
+              AND ((intent.intent_kind = 'initialize' AND intent.next_generation = 1
+                    AND NOT EXISTS (SELECT 1 FROM chat_session_control_grants prior
+                      WHERE prior.session_id = NEW.session_id))
+                OR (intent.intent_kind = 'reactivate'
+                    AND NOT EXISTS (SELECT 1 FROM chat_session_control_grants current_row
+                      WHERE current_row.session_id = NEW.session_id AND current_row.is_current = 1)
+                    AND (SELECT MAX(prior.generation) FROM chat_session_control_grants prior
+                         WHERE prior.session_id = NEW.session_id) = intent.expected_generation
+                    AND EXISTS (SELECT 1 FROM chat_session_control_grants terminal
+                      WHERE terminal.session_id = NEW.session_id AND terminal.generation = intent.expected_generation
+                        AND terminal.workspace_id = NEW.workspace_id AND terminal.is_current = 0
+                        AND terminal.owner_kind = 'operator' AND terminal.lease_state = 'deleted')))
+          ) THEN
+            RAISE EXCEPTION 'chat session metadata requires an exact lifecycle intent' USING ERRCODE = '23514';
+          END IF;
+          RETURN NEW;
+        ELSIF TG_OP = 'UPDATE' THEN
+          IF NEW.workspace_id <> OLD.workspace_id
+            OR NEW.session_id <> OLD.session_id
+            OR NEW.lifecycle_intent_id IS DISTINCT FROM OLD.lifecycle_intent_id
+            OR (NEW.deletion_intent_id IS DISTINCT FROM OLD.deletion_intent_id AND NOT (
+              OLD.deletion_intent_id IS NULL AND NEW.deletion_intent_id IS NOT NULL
+              AND EXISTS (
+                SELECT 1 FROM chat_session_lifecycle_intents intent
+                JOIN chat_session_control_grants control
+                  ON control.session_id = OLD.session_id AND control.is_current = 1
+                WHERE intent.intent_id = NEW.deletion_intent_id AND intent.intent_kind = 'delete'
+                  AND intent.workspace_id = OLD.workspace_id AND intent.session_id = OLD.session_id
+                  AND intent.session_incarnation_id = COALESCE(
+                    OLD.lifecycle_intent_id,
+                    'legacy-session-incarnation:' || OLD.session_id
+                  )
+                  AND intent.expected_revision = OLD.revision
+                  AND intent.expected_generation = control.generation
+                  AND control.workspace_id = OLD.workspace_id AND control.owner_kind = 'operator'
+                  AND control.lease_state = 'operator_active'
+                  AND NOT EXISTS (SELECT 1 FROM chat_session_control_events event_row
+                    WHERE event_row.idempotency_key = intent.idempotency_key)
+              )
+            )) THEN
+            RAISE EXCEPTION 'chat session workspace is immutable and lifecycle intent replacement is restricted'
+              USING ERRCODE = '23514';
+          END IF;
+          RETURN NEW;
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM chat_session_lifecycle_intents intent
+          JOIN chat_session_control_grants terminal
+            ON terminal.session_id = OLD.session_id AND terminal.generation = intent.expected_generation
+          JOIN chat_session_control_events event_row
+            ON event_row.session_id = OLD.session_id AND event_row.idempotency_key = intent.idempotency_key
+          WHERE intent.intent_id = OLD.deletion_intent_id AND intent.intent_kind = 'delete'
+            AND intent.workspace_id = OLD.workspace_id AND intent.session_id = OLD.session_id
+            AND intent.session_incarnation_id = COALESCE(
+              OLD.lifecycle_intent_id,
+              'legacy-session-incarnation:' || OLD.session_id
+            )
+            AND intent.expected_revision = OLD.revision
+            AND terminal.workspace_id = OLD.workspace_id AND terminal.is_current = 0
+            AND terminal.owner_kind = 'operator' AND terminal.lease_state = 'deleted'
+            AND terminal.terminal_at = intent.created_at
+            AND event_row.reason_code = 'session_deleted'
+            AND event_row.previous_generation = intent.expected_generation
+            AND event_row.next_generation = intent.expected_generation
+            AND event_row.created_at = intent.created_at
+            AND NOT EXISTS (SELECT 1 FROM chat_session_control_grants current_row
+              WHERE current_row.session_id = OLD.session_id AND current_row.is_current = 1)
+            AND NOT EXISTS (SELECT 1 FROM chat_session_control_requests request_row
+              WHERE request_row.session_id = OLD.session_id AND request_row.status = 'pending')
+            AND NOT EXISTS (SELECT 1 FROM chat_session_mutation_admissions admission
+              WHERE admission.session_id = OLD.session_id AND admission.status = 'active')
+        ) THEN
+          RAISE EXCEPTION 'chat session metadata delete requires terminal lifecycle evidence' USING ERRCODE = '23514';
+        END IF;
+        RETURN OLD;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_chat_session_meta_lifecycle_guard
+        BEFORE INSERT OR UPDATE OR DELETE ON chat_session_meta FOR EACH ROW
+        EXECUTE FUNCTION gc_chat_session_meta_lifecycle_guard();
+
+      CREATE OR REPLACE FUNCTION gc_chat_session_meta_lifecycle_after_insert()
+      RETURNS trigger AS $$
+      DECLARE intent chat_session_lifecycle_intents%ROWTYPE;
+      DECLARE next_sequence BIGINT;
+      BEGIN
+        SELECT * INTO STRICT intent FROM chat_session_lifecycle_intents WHERE intent_id = NEW.lifecycle_intent_id;
+        INSERT INTO chat_session_control_grants (
+          workspace_id, session_id, generation, is_current, owner_kind, lease_state,
+          requested_capabilities_json, requested_capabilities_sha256,
+          effective_capabilities_json, effective_capabilities_sha256,
+          control_revision, transition_idempotency_key, transition_request_sha256, created_at, updated_at
+        ) VALUES (
+          intent.workspace_id, intent.session_id, intent.next_generation, 1, 'operator', 'operator_active',
+          '[]', '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945',
+          '[]', '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945',
+          1, intent.idempotency_key, intent.request_sha256, intent.created_at, intent.created_at
+        );
+        SELECT COALESCE(MAX(event_sequence), 0) + 1 INTO next_sequence
+        FROM chat_session_control_events WHERE session_id = intent.session_id;
+        INSERT INTO chat_session_control_events (
+          event_id, workspace_id, session_id, event_sequence, request_id,
+          previous_generation, next_generation, previous_owner_kind, next_owner_kind,
+          previous_lease_state, next_lease_state, reason_code, actor_kind, actor_id,
+          companion_session_id, device_grant_id, idempotency_key, request_sha256, correlation_id, created_at
+        ) VALUES (
+          intent.event_id, intent.workspace_id, intent.session_id, next_sequence, NULL,
+          intent.expected_generation, intent.next_generation,
+          CASE WHEN intent.intent_kind = 'reactivate' THEN 'operator' ELSE NULL END, 'operator',
+          CASE WHEN intent.intent_kind = 'reactivate' THEN 'deleted' ELSE NULL END, 'operator_active',
+          CASE WHEN intent.intent_kind = 'initialize' THEN 'session_initialized' ELSE 'session_reactivated' END,
+          intent.actor_kind, intent.actor_id, NULL, NULL, intent.idempotency_key,
+          intent.request_sha256, intent.correlation_id, intent.created_at
+        );
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_chat_session_meta_lifecycle_after_insert
+        AFTER INSERT ON chat_session_meta FOR EACH ROW EXECUTE FUNCTION gc_chat_session_meta_lifecycle_after_insert();
+
+      CREATE OR REPLACE FUNCTION gc_session_control_operator_generation_lifecycle_guard()
+      RETURNS trigger AS $$
+      DECLARE prior_generation BIGINT;
+      DECLARE prior_state TEXT;
+      BEGIN
+        IF NEW.owner_kind <> 'operator' THEN RETURN NEW; END IF;
+        SELECT generation, lease_state INTO prior_generation, prior_state
+        FROM chat_session_control_grants WHERE session_id = NEW.session_id
+        ORDER BY generation DESC LIMIT 1;
+        IF (prior_generation IS NULL OR prior_state = 'deleted') AND NOT EXISTS (
+          SELECT 1 FROM chat_session_meta meta
+          JOIN chat_session_lifecycle_intents intent ON intent.intent_id = meta.lifecycle_intent_id
+          WHERE meta.session_id = NEW.session_id AND meta.workspace_id = NEW.workspace_id
+            AND intent.intent_kind IN ('initialize', 'reactivate')
+            AND intent.next_generation = NEW.generation
+            AND intent.idempotency_key = NEW.transition_idempotency_key
+            AND intent.request_sha256 = NEW.transition_request_sha256
+        ) THEN
+          RAISE EXCEPTION 'operator generation requires exact lifecycle intent' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_chat_session_control_operator_generation_lifecycle_guard
+        BEFORE INSERT ON chat_session_control_grants FOR EACH ROW
+        EXECUTE FUNCTION gc_session_control_operator_generation_lifecycle_guard();
+
+      CREATE OR REPLACE FUNCTION gc_session_mutation_admission_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF TG_OP = 'INSERT' THEN
+          PERFORM pg_advisory_xact_lock(hashtextextended(NEW.session_id, 411));
+          IF NEW.status <> 'active'
+            OR gc_try_parse_timestamptz(NEW.created_at) IS NULL
+            OR abs(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(NEW.created_at) - clock_timestamp()))) > 1
+            OR (NEW.admission_kind = 'turn_write' AND (
+              NEW.runtime_lease_revision <> 1
+              OR NEW.runtime_lease_relinquished_at IS NOT NULL
+              OR NEW.runtime_last_heartbeat_at <> NEW.created_at
+              OR abs(EXTRACT(EPOCH FROM (
+                gc_try_parse_timestamptz(NEW.runtime_last_heartbeat_at) - clock_timestamp()
+              ))) > 1
+              OR abs(EXTRACT(EPOCH FROM (
+                gc_try_parse_timestamptz(NEW.runtime_lease_expires_at) - clock_timestamp()
+              )) - 60) > 1
+            ))
+            OR NOT EXISTS (
+              SELECT 1 FROM chat_session_meta meta
+              JOIN chat_session_control_grants control
+                ON control.session_id = meta.session_id AND control.is_current = 1
+              WHERE meta.session_id = NEW.session_id AND meta.workspace_id = NEW.workspace_id
+                AND meta.revision = NEW.aggregate_revision AND meta.deletion_intent_id IS NULL
+                AND NEW.session_incarnation_id = COALESCE(
+                  meta.lifecycle_intent_id,
+                  'legacy-session-incarnation:' || meta.session_id
+                )
+                AND control.workspace_id = NEW.workspace_id
+                AND control.generation = NEW.controller_generation
+                AND ((NEW.actor_kind IN ('operator', 'system')
+                      AND control.owner_kind = 'operator' AND control.lease_state = 'operator_active')
+                  OR (NEW.actor_kind = 'external_companion'
+                      AND control.owner_kind = 'external_companion' AND control.lease_state = 'external_live'
+                      AND control.companion_session_id = NEW.actor_id))
+            ) THEN
+            RAISE EXCEPTION 'session mutation admission authority invariant violated' USING ERRCODE = '23514';
+          END IF;
+          RETURN NEW;
+        END IF;
+        IF NEW.admission_id <> OLD.admission_id OR NEW.workspace_id <> OLD.workspace_id
+          OR NEW.session_id <> OLD.session_id
+          OR NEW.session_incarnation_id <> OLD.session_incarnation_id
+          OR NEW.turn_id IS DISTINCT FROM OLD.turn_id
+          OR NEW.runtime_owner_id IS DISTINCT FROM OLD.runtime_owner_id
+          OR NEW.admission_kind <> OLD.admission_kind
+          OR NEW.aggregate_revision <> OLD.aggregate_revision
+          OR NEW.controller_generation <> OLD.controller_generation
+          OR NEW.actor_kind <> OLD.actor_kind OR NEW.actor_id <> OLD.actor_id
+          OR NEW.operation <> OLD.operation OR NEW.material_sha256 <> OLD.material_sha256
+          OR NEW.idempotency_key <> OLD.idempotency_key OR NEW.request_sha256 <> OLD.request_sha256
+          OR NEW.correlation_id <> OLD.correlation_id OR NEW.admit_event_id <> OLD.admit_event_id
+          OR NEW.created_at <> OLD.created_at OR OLD.status <> 'active'
+          OR NOT (
+            (NEW.status = 'active' AND OLD.status = 'active'
+              AND OLD.runtime_lease_relinquished_at IS NULL
+              AND gc_try_parse_timestamptz(OLD.runtime_lease_expires_at) > clock_timestamp()
+              AND NEW.runtime_lease_relinquished_at IS NULL
+              AND NEW.runtime_lease_revision = OLD.runtime_lease_revision + 1
+              AND gc_try_parse_timestamptz(NEW.runtime_last_heartbeat_at)
+                >= gc_try_parse_timestamptz(OLD.runtime_last_heartbeat_at)
+              AND abs(EXTRACT(EPOCH FROM (
+                gc_try_parse_timestamptz(NEW.runtime_last_heartbeat_at) - clock_timestamp()
+              ))) <= 1
+              AND abs(EXTRACT(EPOCH FROM (
+                gc_try_parse_timestamptz(NEW.runtime_lease_expires_at) - clock_timestamp()
+              )) - 60) <= 1
+              AND NEW.closed_at IS NOT DISTINCT FROM OLD.closed_at
+              AND NEW.terminal_actor_id IS NOT DISTINCT FROM OLD.terminal_actor_id
+              AND NEW.terminal_event_id IS NOT DISTINCT FROM OLD.terminal_event_id
+              AND NEW.terminal_idempotency_key IS NOT DISTINCT FROM OLD.terminal_idempotency_key
+              AND NEW.terminal_correlation_id IS NOT DISTINCT FROM OLD.terminal_correlation_id
+              AND NOT EXISTS (
+                SELECT 1 FROM chat_turn_mutation_admission_durable_bindings durable_binding
+                WHERE durable_binding.admission_id = OLD.admission_id
+              ))
+            OR (NEW.status = 'active' AND OLD.status = 'active'
+              AND OLD.runtime_lease_relinquished_at IS NULL
+              AND NEW.runtime_lease_relinquished_at IS NOT NULL
+              AND abs(EXTRACT(EPOCH FROM (
+                gc_try_parse_timestamptz(NEW.runtime_lease_relinquished_at) - clock_timestamp()
+              ))) <= 1
+              AND NEW.runtime_lease_revision = OLD.runtime_lease_revision + 1
+              AND NEW.runtime_last_heartbeat_at = OLD.runtime_last_heartbeat_at
+              AND NEW.runtime_lease_expires_at = OLD.runtime_lease_expires_at
+              AND NEW.closed_at IS NOT DISTINCT FROM OLD.closed_at
+              AND NEW.terminal_actor_id IS NOT DISTINCT FROM OLD.terminal_actor_id
+              AND NEW.terminal_event_id IS NOT DISTINCT FROM OLD.terminal_event_id
+              AND NEW.terminal_idempotency_key IS NOT DISTINCT FROM OLD.terminal_idempotency_key
+              AND NEW.terminal_correlation_id IS NOT DISTINCT FROM OLD.terminal_correlation_id
+              AND EXISTS (
+                SELECT 1 FROM chat_turn_mutation_admission_durable_bindings durable_binding
+                WHERE durable_binding.admission_id = OLD.admission_id
+                  AND durable_binding.turn_id = OLD.turn_id
+                  AND durable_binding.session_incarnation_id = OLD.session_incarnation_id
+              ))
+            OR (NEW.status IN ('completed', 'cancelled')
+              AND NEW.runtime_last_heartbeat_at IS NOT DISTINCT FROM OLD.runtime_last_heartbeat_at
+              AND NEW.runtime_lease_expires_at IS NOT DISTINCT FROM OLD.runtime_lease_expires_at
+              AND NEW.runtime_lease_revision IS NOT DISTINCT FROM OLD.runtime_lease_revision
+              AND NEW.runtime_lease_relinquished_at IS NOT DISTINCT FROM OLD.runtime_lease_relinquished_at
+              AND gc_try_parse_timestamptz(NEW.closed_at) IS NOT NULL
+              AND abs(EXTRACT(EPOCH FROM (
+                gc_try_parse_timestamptz(NEW.closed_at) - clock_timestamp()
+              ))) <= 1
+              AND (
+                (OLD.admission_kind = 'synchronous' AND NEW.terminal_authority_kind = 'synchronous')
+                OR (OLD.admission_kind = 'turn_write' AND NEW.terminal_authority_kind = 'request_runtime'
+                  AND OLD.runtime_lease_relinquished_at IS NULL
+                  AND gc_try_parse_timestamptz(OLD.runtime_lease_expires_at) > clock_timestamp()
+                  AND NEW.terminal_runtime_owner_id = OLD.runtime_owner_id
+                  AND NEW.terminal_runtime_lease_revision = OLD.runtime_lease_revision
+                  AND NOT EXISTS (
+                    SELECT 1 FROM chat_turn_mutation_admission_durable_bindings durable_binding
+                    WHERE durable_binding.admission_id = OLD.admission_id
+                  ))
+                OR (OLD.admission_kind = 'turn_write' AND NEW.terminal_authority_kind = 'expired_recovery'
+                  AND NEW.status = 'cancelled'
+                  AND OLD.runtime_lease_relinquished_at IS NULL
+                  AND gc_try_parse_timestamptz(OLD.runtime_lease_expires_at) <= clock_timestamp()
+                  AND NEW.terminal_runtime_owner_id = OLD.runtime_owner_id
+                  AND NEW.terminal_runtime_lease_revision = OLD.runtime_lease_revision
+                  AND NOT EXISTS (
+                    SELECT 1 FROM chat_turn_mutation_admission_durable_bindings durable_binding
+                    WHERE durable_binding.admission_id = OLD.admission_id
+                  ))
+                OR (OLD.admission_kind = 'turn_write' AND NEW.terminal_authority_kind = 'durable_run'
+                  AND EXISTS (
+                    SELECT 1
+                    FROM chat_turn_mutation_admission_durable_bindings durable_binding
+                    JOIN durable_runs run ON run.run_id = durable_binding.durable_run_id
+                    WHERE durable_binding.admission_id = OLD.admission_id
+                      AND durable_binding.turn_id = OLD.turn_id
+                      AND durable_binding.workspace_id = OLD.workspace_id
+                      AND durable_binding.session_id = OLD.session_id
+                      AND durable_binding.session_incarnation_id = OLD.session_incarnation_id
+                      AND run.run_id = NEW.terminal_durable_run_id
+                      AND run.workflow_key = 'chat.turn.execute' AND run.status = 'running'
+                      AND run.lease_owner_id = NEW.terminal_durable_lease_owner_id
+                      AND run.attempt_count = NEW.terminal_durable_attempt_count
+                      AND run.version = NEW.terminal_durable_run_version
+                      AND gc_try_parse_timestamptz(run.lease_expires_at) > clock_timestamp()
+                      AND gc_try_parse_jsonb(run.payload_json) ->> 'version' = 'chat.turn.execute.v2'
+                      AND gc_try_parse_jsonb(run.payload_json) ->> 'admissionId' = OLD.admission_id
+                      AND gc_try_parse_jsonb(run.payload_json) ->> 'sessionIncarnationId' = OLD.session_incarnation_id
+                      AND gc_try_parse_jsonb(run.payload_json) ->> 'admissionMaterialSha256' = OLD.material_sha256
+                      AND gc_try_parse_jsonb(run.payload_json) ->> 'workspaceId' = OLD.workspace_id
+                      AND jsonb_typeof(gc_try_parse_jsonb(run.payload_json) -> 'admissionAggregateRevision') = 'number'
+                      AND gc_try_parse_jsonb(run.payload_json) ->> 'admissionAggregateRevision' ~ '^[1-9][0-9]*$'
+                      AND (gc_try_parse_jsonb(run.payload_json) ->> 'admissionAggregateRevision')::BIGINT
+                        = OLD.aggregate_revision
+                      AND jsonb_typeof(gc_try_parse_jsonb(run.payload_json) -> 'admissionControllerGeneration') = 'number'
+                      AND gc_try_parse_jsonb(run.payload_json) ->> 'admissionControllerGeneration' ~ '^[1-9][0-9]*$'
+                      AND (gc_try_parse_jsonb(run.payload_json) ->> 'admissionControllerGeneration')::BIGINT
+                        = OLD.controller_generation
+                      AND gc_try_parse_jsonb(run.payload_json) ->> 'sessionId' = OLD.session_id
+                      AND gc_try_parse_jsonb(run.payload_json) ->> 'turnId' = OLD.turn_id
+                  ))
+                OR (OLD.admission_kind = 'turn_write' AND NEW.terminal_authority_kind = 'durable_terminal'
+                  AND EXISTS (
+                    SELECT 1
+                    FROM chat_turn_mutation_admission_durable_bindings durable_binding
+                    JOIN durable_runs run ON run.run_id = durable_binding.durable_run_id
+                    WHERE durable_binding.admission_id = OLD.admission_id
+                      AND durable_binding.turn_id = OLD.turn_id
+                      AND durable_binding.workspace_id = OLD.workspace_id
+                      AND durable_binding.session_id = OLD.session_id
+                      AND durable_binding.session_incarnation_id = OLD.session_incarnation_id
+                      AND run.run_id = NEW.terminal_durable_run_id
+                      AND run.workflow_key = 'chat.turn.execute'
+                      AND run.status = NEW.terminal_durable_run_status
+                      AND run.status IN ('completed', 'failed', 'cancelled', 'dead_lettered')
+                      AND ((run.status = 'completed' AND NEW.status = 'completed')
+                        OR (run.status <> 'completed' AND NEW.status = 'cancelled'))
+                      AND run.version = NEW.terminal_durable_run_version
+                      AND run.lease_owner_id IS NULL AND run.lease_expires_at IS NULL
+                      AND gc_try_parse_jsonb(run.payload_json) ->> 'version' = 'chat.turn.execute.v2'
+                      AND gc_try_parse_jsonb(run.payload_json) ->> 'admissionId' = OLD.admission_id
+                      AND gc_try_parse_jsonb(run.payload_json) ->> 'sessionIncarnationId' = OLD.session_incarnation_id
+                      AND gc_try_parse_jsonb(run.payload_json) ->> 'admissionMaterialSha256' = OLD.material_sha256
+                      AND gc_try_parse_jsonb(run.payload_json) ->> 'workspaceId' = OLD.workspace_id
+                      AND jsonb_typeof(gc_try_parse_jsonb(run.payload_json) -> 'admissionAggregateRevision') = 'number'
+                      AND gc_try_parse_jsonb(run.payload_json) ->> 'admissionAggregateRevision' ~ '^[1-9][0-9]*$'
+                      AND (gc_try_parse_jsonb(run.payload_json) ->> 'admissionAggregateRevision')::BIGINT
+                        = OLD.aggregate_revision
+                      AND jsonb_typeof(gc_try_parse_jsonb(run.payload_json) -> 'admissionControllerGeneration') = 'number'
+                      AND gc_try_parse_jsonb(run.payload_json) ->> 'admissionControllerGeneration' ~ '^[1-9][0-9]*$'
+                      AND (gc_try_parse_jsonb(run.payload_json) ->> 'admissionControllerGeneration')::BIGINT
+                        = OLD.controller_generation
+                      AND gc_try_parse_jsonb(run.payload_json) ->> 'sessionId' = OLD.session_id
+                      AND gc_try_parse_jsonb(run.payload_json) ->> 'turnId' = OLD.turn_id
+                      AND gc_try_parse_jsonb(run.metadata_json) ? 'chatTurnAdmissionHandoff'
+                      AND NOT (gc_try_parse_jsonb(run.metadata_json) ? 'linkedFinalizationPending')
+                      AND NOT (gc_try_parse_jsonb(run.metadata_json) ? 'autonomousChatPostCommitPending')
+                      AND NOT (gc_try_parse_jsonb(run.metadata_json) ? 'generalChatPostCommitPending')
+                      AND jsonb_typeof(gc_try_parse_jsonb(run.metadata_json)
+                        -> 'chatTurnAdmissionHandoff') = 'object'
+                      AND (gc_try_parse_jsonb(run.metadata_json) -> 'chatTurnAdmissionHandoff') ?& ARRAY[
+                        'admissionId', 'childRunIds', 'childRunIdsSha256', 'committedAt',
+                        'parentLocalEffectsStatus', 'parentRunId', 'postCommitGenerationId',
+                        'sessionIncarnationId', 'turnId', 'version'
+                      ]
+                      AND (gc_try_parse_jsonb(run.metadata_json) -> 'chatTurnAdmissionHandoff') - ARRAY[
+                        'admissionId', 'childRunIds', 'childRunIdsSha256', 'committedAt',
+                        'parentLocalEffectsStatus', 'parentRunId', 'postCommitGenerationId',
+                        'sessionIncarnationId', 'turnId', 'version'
+                      ] = '{}'::JSONB
+                      AND jsonb_typeof(gc_try_parse_jsonb(run.metadata_json)
+                        #> '{chatTurnAdmissionHandoff,version}') = 'number'
+                      AND gc_try_parse_jsonb(run.metadata_json) #>> '{chatTurnAdmissionHandoff,version}' = '1'
+                      AND gc_try_parse_jsonb(run.metadata_json) #>> '{chatTurnAdmissionHandoff,admissionId}'
+                        = OLD.admission_id
+                      AND gc_try_parse_jsonb(run.metadata_json) #>> '{chatTurnAdmissionHandoff,sessionIncarnationId}'
+                        = OLD.session_incarnation_id
+                      AND gc_try_parse_jsonb(run.metadata_json) #>> '{chatTurnAdmissionHandoff,turnId}' = OLD.turn_id
+                      AND gc_try_parse_jsonb(run.metadata_json) #>> '{chatTurnAdmissionHandoff,parentRunId}' = run.run_id
+                      AND jsonb_typeof(gc_try_parse_jsonb(run.metadata_json)
+                        #> '{chatTurnAdmissionHandoff,postCommitGenerationId}') = 'string'
+                      AND length(gc_try_parse_jsonb(run.metadata_json)
+                        #>> '{chatTurnAdmissionHandoff,postCommitGenerationId}') > 0
+                      AND gc_try_parse_jsonb(run.metadata_json)
+                        #>> '{chatTurnAdmissionHandoff,parentLocalEffectsStatus}' = 'settled'
+                      AND jsonb_typeof(gc_try_parse_jsonb(run.metadata_json)
+                        -> 'generalChatPostCommit') = 'object'
+                      AND gc_try_parse_jsonb(run.metadata_json)
+                        #>> '{generalChatPostCommit,generationId}' = gc_try_parse_jsonb(run.metadata_json)
+                          #>> '{chatTurnAdmissionHandoff,postCommitGenerationId}'
+                      AND gc_try_parse_jsonb(run.metadata_json)
+                        #>> '{generalChatPostCommit,parentLocalEffectsStatus}' = 'settled'
+                      AND jsonb_typeof(gc_try_parse_jsonb(run.metadata_json)
+                        #> '{generalChatPostCommit,completedEffects}') = 'array'
+                      AND (
+                        SELECT COUNT(DISTINCT local_effect.value #>> '{}')
+                        FROM jsonb_array_elements(gc_try_parse_jsonb(run.metadata_json)
+                          #> '{generalChatPostCommit,completedEffects}') local_effect(value)
+                        WHERE jsonb_typeof(local_effect.value) = 'string'
+                          AND local_effect.value #>> '{}' IN ('capability_gap', 'realtime', 'agent_end')
+                      ) = 3
+                      AND jsonb_typeof(gc_try_parse_jsonb(run.metadata_json)
+                        #> '{chatTurnAdmissionHandoff,childRunIds}') = 'array'
+                      AND encode(sha256(convert_to((
+                        SELECT '[' || COALESCE(string_agg(marker_child.value::TEXT, ',' ORDER BY marker_child.ordinal), '') || ']'
+                        FROM jsonb_array_elements(gc_try_parse_jsonb(run.metadata_json)
+                          #> '{chatTurnAdmissionHandoff,childRunIds}')
+                          WITH ORDINALITY marker_child(value, ordinal)
+                      ), 'UTF8')), 'hex') = gc_try_parse_jsonb(run.metadata_json)
+                        #>> '{chatTurnAdmissionHandoff,childRunIdsSha256}'
+                      AND gc_try_parse_timestamptz(gc_try_parse_jsonb(run.metadata_json)
+                        #>> '{chatTurnAdmissionHandoff,committedAt}') IS NOT NULL
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM jsonb_array_elements(gc_try_parse_jsonb(run.metadata_json)
+                          #> '{chatTurnAdmissionHandoff,childRunIds}') WITH ORDINALITY left_child(value, ordinal)
+                        JOIN jsonb_array_elements(gc_try_parse_jsonb(run.metadata_json)
+                          #> '{chatTurnAdmissionHandoff,childRunIds}') WITH ORDINALITY right_child(value, ordinal)
+                          ON left_child.ordinal < right_child.ordinal
+                        WHERE jsonb_typeof(left_child.value) <> 'string'
+                          OR jsonb_typeof(right_child.value) <> 'string'
+                          OR length(left_child.value #>> '{}') = 0
+                          OR length(right_child.value #>> '{}') = 0
+                          OR left_child.value #>> '{}' >= right_child.value #>> '{}'
+                      )
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM jsonb_array_elements(gc_try_parse_jsonb(run.metadata_json)
+                          #> '{chatTurnAdmissionHandoff,childRunIds}') marker_child(value)
+                        WHERE jsonb_typeof(marker_child.value) <> 'string' OR NOT EXISTS (
+                          SELECT 1
+                          FROM durable_runs child_run
+                          JOIN chat_session_mutation_admissions child_admission
+                            ON child_admission.admission_id = gc_try_parse_jsonb(child_run.payload_json)
+                              #>> '{childAdmission,admissionId}'
+                          WHERE child_run.run_id = marker_child.value #>> '{}'
+                            AND child_run.workflow_key = 'chat.post_commit.effect'
+                            AND gc_try_parse_jsonb(child_run.payload_json) ->> 'version'
+                              = 'chat.post_commit.effect.v2'
+                            AND gc_try_parse_jsonb(child_run.payload_json) ->> 'parentRunId' = run.run_id
+                            AND gc_try_parse_jsonb(child_run.payload_json) ->> 'postCommitGenerationId'
+                              = gc_try_parse_jsonb(run.metadata_json)
+                                #>> '{chatTurnAdmissionHandoff,postCommitGenerationId}'
+                            AND jsonb_typeof(gc_try_parse_jsonb(child_run.payload_json) -> 'effect') = 'string'
+                            AND gc_try_parse_jsonb(child_run.payload_json) ->> 'effect' IN (
+                              'commitments', 'background_review', 'memory_maintenance'
+                            )
+                            AND jsonb_typeof(gc_try_parse_jsonb(child_run.payload_json) -> 'traceStatus') = 'string'
+                            AND length(gc_try_parse_jsonb(child_run.payload_json) ->> 'traceStatus') > 0
+                            AND gc_try_parse_jsonb(child_run.payload_json) ->> 'effect'
+                              = gc_try_parse_jsonb(child_run.metadata_json) ->> 'effect'
+                            AND gc_try_parse_jsonb(child_run.payload_json) ->> 'parentRunId'
+                              = gc_try_parse_jsonb(child_run.metadata_json) ->> 'parentRunId'
+                            AND gc_try_parse_jsonb(child_run.payload_json) ->> 'postCommitGenerationId'
+                              = gc_try_parse_jsonb(child_run.metadata_json) ->> 'postCommitGenerationId'
+                            AND gc_try_parse_jsonb(child_run.payload_json) -> 'childAdmission'
+                              = gc_try_parse_jsonb(child_run.metadata_json) -> 'childAdmission'
+                            AND gc_try_parse_jsonb(child_run.payload_json) -> 'postCommitEligibility'
+                              = gc_try_parse_jsonb(child_run.metadata_json) -> 'postCommitEligibility'
+                            AND gc_try_parse_jsonb(child_run.metadata_json) ->> 'workspaceId' = OLD.workspace_id
+                            AND gc_try_parse_jsonb(child_run.metadata_json) ->> 'sessionId' = OLD.session_id
+                            AND gc_try_parse_jsonb(child_run.metadata_json) ->> 'turnId' = OLD.turn_id
+                            AND jsonb_typeof(gc_try_parse_jsonb(child_run.payload_json)
+                              -> 'childAdmission') = 'object'
+                            AND (gc_try_parse_jsonb(child_run.payload_json) -> 'childAdmission') ?& ARRAY[
+                              'actorId', 'actorKind', 'admissionId', 'aggregateRevision',
+                              'controllerGeneration', 'materialSha256', 'operation', 'sessionId',
+                              'sessionIncarnationId', 'workspaceId'
+                            ]
+                            AND (gc_try_parse_jsonb(child_run.payload_json) -> 'childAdmission') - ARRAY[
+                              'actorId', 'actorKind', 'admissionId', 'aggregateRevision',
+                              'controllerGeneration', 'materialSha256', 'operation', 'sessionId',
+                              'sessionIncarnationId', 'workspaceId'
+                            ] = '{}'::JSONB
+                            AND child_admission.admission_id = gc_try_parse_jsonb(child_run.payload_json)
+                              #>> '{childAdmission,admissionId}'
+                            AND child_admission.session_incarnation_id = gc_try_parse_jsonb(child_run.payload_json)
+                              #>> '{childAdmission,sessionIncarnationId}'
+                            AND child_admission.workspace_id = gc_try_parse_jsonb(child_run.payload_json)
+                              #>> '{childAdmission,workspaceId}'
+                            AND child_admission.session_id = gc_try_parse_jsonb(child_run.payload_json)
+                              #>> '{childAdmission,sessionId}'
+                            AND jsonb_typeof(gc_try_parse_jsonb(child_run.payload_json)
+                              #> '{childAdmission,aggregateRevision}') = 'number'
+                            AND gc_try_parse_jsonb(child_run.payload_json)
+                              #>> '{childAdmission,aggregateRevision}' ~ '^[1-9][0-9]*$'
+                            AND child_admission.aggregate_revision = (gc_try_parse_jsonb(child_run.payload_json)
+                              #>> '{childAdmission,aggregateRevision}')::BIGINT
+                            AND child_admission.aggregate_revision >= OLD.aggregate_revision
+                            AND jsonb_typeof(gc_try_parse_jsonb(child_run.payload_json)
+                              #> '{childAdmission,controllerGeneration}') = 'number'
+                            AND gc_try_parse_jsonb(child_run.payload_json)
+                              #>> '{childAdmission,controllerGeneration}' ~ '^[1-9][0-9]*$'
+                            AND child_admission.controller_generation = (gc_try_parse_jsonb(child_run.payload_json)
+                              #>> '{childAdmission,controllerGeneration}')::BIGINT
+                            AND child_admission.actor_kind = gc_try_parse_jsonb(child_run.payload_json)
+                              #>> '{childAdmission,actorKind}'
+                            AND child_admission.actor_id = gc_try_parse_jsonb(child_run.payload_json)
+                              #>> '{childAdmission,actorId}'
+                            AND child_admission.operation = gc_try_parse_jsonb(child_run.payload_json)
+                              #>> '{childAdmission,operation}'
+                            AND child_admission.material_sha256 = gc_try_parse_jsonb(child_run.payload_json)
+                              #>> '{childAdmission,materialSha256}'
+                            AND jsonb_typeof(gc_try_parse_jsonb(child_run.payload_json)
+                              -> 'postCommitEligibility') = 'object'
+                            AND (gc_try_parse_jsonb(child_run.payload_json) -> 'postCommitEligibility') ?& ARRAY[
+                              'autonomyEnabledAtParentSettlement', 'evalIntegrityTurn', 'humanSession', 'version'
+                            ]
+                            AND (gc_try_parse_jsonb(child_run.payload_json) -> 'postCommitEligibility') - ARRAY[
+                              'autonomyEnabledAtParentSettlement', 'evalIntegrityTurn', 'humanSession', 'version'
+                            ] = '{}'::JSONB
+                            AND jsonb_typeof(gc_try_parse_jsonb(child_run.payload_json)
+                              #> '{postCommitEligibility,version}') = 'number'
+                            AND gc_try_parse_jsonb(child_run.payload_json)
+                              #>> '{postCommitEligibility,version}' = '1'
+                            AND jsonb_typeof(gc_try_parse_jsonb(child_run.payload_json)
+                              #> '{postCommitEligibility,autonomyEnabledAtParentSettlement}') = 'boolean'
+                            AND jsonb_typeof(gc_try_parse_jsonb(child_run.payload_json)
+                              #> '{postCommitEligibility,evalIntegrityTurn}') = 'boolean'
+                            AND jsonb_typeof(gc_try_parse_jsonb(child_run.payload_json)
+                              #> '{postCommitEligibility,humanSession}') = 'boolean'
+                            AND child_admission.admission_kind = 'synchronous'
+                            AND child_admission.turn_id IS NULL
+                            AND child_admission.session_incarnation_id = OLD.session_incarnation_id
+                            AND child_admission.workspace_id = OLD.workspace_id
+                            AND child_admission.session_id = OLD.session_id
+                            AND child_admission.controller_generation = OLD.controller_generation
+                            AND child_admission.actor_kind = OLD.actor_kind
+                            AND child_admission.actor_id = OLD.actor_id
+                            AND child_admission.operation = 'chat_post_commit_child'
+                            AND child_admission.material_sha256 = encode(sha256(convert_to(
+                              '{"childRunId":' || to_jsonb(child_run.run_id)::TEXT
+                              || ',"effect":' || to_jsonb(gc_try_parse_jsonb(child_run.payload_json)
+                                ->> 'effect')::TEXT
+                              || ',"operation":"chat_post_commit_child"'
+                              || ',"parentRunId":' || to_jsonb(run.run_id)::TEXT
+                              || ',"postCommitEligibility":{"autonomyEnabledAtParentSettlement":'
+                              || (gc_try_parse_jsonb(child_run.payload_json)
+                                #> '{postCommitEligibility,autonomyEnabledAtParentSettlement}')::TEXT
+                              || ',"evalIntegrityTurn":' || (gc_try_parse_jsonb(child_run.payload_json)
+                                #> '{postCommitEligibility,evalIntegrityTurn}')::TEXT
+                              || ',"humanSession":' || (gc_try_parse_jsonb(child_run.payload_json)
+                                #> '{postCommitEligibility,humanSession}')::TEXT
+                              || ',"version":1}'
+                              || ',"postCommitGenerationId":' || to_jsonb(gc_try_parse_jsonb(run.metadata_json)
+                                #>> '{chatTurnAdmissionHandoff,postCommitGenerationId}')::TEXT
+                              || ',"sessionId":' || to_jsonb(OLD.session_id)::TEXT
+                              || ',"sessionIncarnationId":' || to_jsonb(OLD.session_incarnation_id)::TEXT
+                              || ',"sourceTurnId":' || to_jsonb(OLD.turn_id)::TEXT
+                              || ',"version":1'
+                              || ',"workspaceId":' || to_jsonb(OLD.workspace_id)::TEXT || '}',
+                              'UTF8'
+                            )), 'hex')
+                        )
+                      )
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM durable_runs omitted_child
+                        WHERE omitted_child.workflow_key = 'chat.post_commit.effect'
+                          AND gc_try_parse_jsonb(omitted_child.payload_json) ->> 'version'
+                            = 'chat.post_commit.effect.v2'
+                          AND gc_try_parse_jsonb(omitted_child.payload_json) ->> 'parentRunId' = run.run_id
+                          AND gc_try_parse_jsonb(omitted_child.payload_json) ->> 'postCommitGenerationId'
+                            = gc_try_parse_jsonb(run.metadata_json)
+                              #>> '{chatTurnAdmissionHandoff,postCommitGenerationId}'
+                          AND NOT EXISTS (
+                            SELECT 1
+                            FROM jsonb_array_elements(gc_try_parse_jsonb(run.metadata_json)
+                              #> '{chatTurnAdmissionHandoff,childRunIds}') listed_child(value)
+                            WHERE listed_child.value #>> '{}' = omitted_child.run_id
+                          )
+                      )
+                  ))
+                OR (OLD.admission_kind = 'synchronous'
+                  AND NEW.terminal_authority_kind = 'post_commit_child_stage'
+                  AND NEW.terminal_actor_id = 'system:chat-post-commit-stage'
+                  AND NEW.terminal_correlation_id = NEW.terminal_durable_run_id
+                  AND EXISTS (
+                    SELECT 1 FROM durable_runs run
+                    WHERE run.run_id = NEW.terminal_durable_run_id
+                      AND run.workflow_key = 'chat.post_commit.effect' AND run.status = 'running'
+                      AND run.lease_owner_id = NEW.terminal_durable_lease_owner_id
+                      AND run.attempt_count = NEW.terminal_durable_attempt_count
+                      AND run.version = NEW.terminal_durable_run_version
+                      AND gc_try_parse_timestamptz(run.lease_expires_at) > clock_timestamp()
+                      AND gc_try_parse_jsonb(run.payload_json) ->> 'version' = 'chat.post_commit.effect.v2'
+                      AND jsonb_typeof(gc_try_parse_jsonb(run.payload_json) -> 'effect') = 'string'
+                      AND gc_try_parse_jsonb(run.payload_json) ->> 'effect' IN (
+                        'commitments', 'background_review', 'memory_maintenance'
+                      )
+                      AND jsonb_typeof(gc_try_parse_jsonb(run.payload_json) -> 'traceStatus') = 'string'
+                      AND length(gc_try_parse_jsonb(run.payload_json) ->> 'traceStatus') > 0
+                      AND jsonb_typeof(gc_try_parse_jsonb(run.payload_json) -> 'childAdmission') = 'object'
+                      AND (gc_try_parse_jsonb(run.payload_json) -> 'childAdmission') ?& ARRAY[
+                        'actorId', 'actorKind', 'admissionId', 'aggregateRevision',
+                        'controllerGeneration', 'materialSha256', 'operation', 'sessionId',
+                        'sessionIncarnationId', 'workspaceId'
+                      ]
+                      AND (gc_try_parse_jsonb(run.payload_json) -> 'childAdmission') - ARRAY[
+                        'actorId', 'actorKind', 'admissionId', 'aggregateRevision',
+                        'controllerGeneration', 'materialSha256', 'operation', 'sessionId',
+                        'sessionIncarnationId', 'workspaceId'
+                      ] = '{}'::JSONB
+                      AND gc_try_parse_jsonb(run.payload_json) #>> '{childAdmission,admissionId}'
+                        = OLD.admission_id
+                      AND gc_try_parse_jsonb(run.payload_json) #>> '{childAdmission,sessionIncarnationId}'
+                        = OLD.session_incarnation_id
+                      AND gc_try_parse_jsonb(run.payload_json) #>> '{childAdmission,workspaceId}'
+                        = OLD.workspace_id
+                      AND gc_try_parse_jsonb(run.payload_json) #>> '{childAdmission,sessionId}' = OLD.session_id
+                      AND jsonb_typeof(gc_try_parse_jsonb(run.payload_json)
+                        #> '{childAdmission,aggregateRevision}') = 'number'
+                      AND gc_try_parse_jsonb(run.payload_json)
+                        #>> '{childAdmission,aggregateRevision}' ~ '^[1-9][0-9]*$'
+                      AND (gc_try_parse_jsonb(run.payload_json)
+                        #>> '{childAdmission,aggregateRevision}')::BIGINT = OLD.aggregate_revision
+                      AND jsonb_typeof(gc_try_parse_jsonb(run.payload_json)
+                        #> '{childAdmission,controllerGeneration}') = 'number'
+                      AND gc_try_parse_jsonb(run.payload_json)
+                        #>> '{childAdmission,controllerGeneration}' ~ '^[1-9][0-9]*$'
+                      AND (gc_try_parse_jsonb(run.payload_json)
+                        #>> '{childAdmission,controllerGeneration}')::BIGINT = OLD.controller_generation
+                      AND gc_try_parse_jsonb(run.payload_json) #>> '{childAdmission,actorKind}' = OLD.actor_kind
+                      AND gc_try_parse_jsonb(run.payload_json) #>> '{childAdmission,actorId}' = OLD.actor_id
+                      AND gc_try_parse_jsonb(run.payload_json) #>> '{childAdmission,operation}' = OLD.operation
+                      AND gc_try_parse_jsonb(run.payload_json) #>> '{childAdmission,materialSha256}'
+                        = OLD.material_sha256
+                      AND gc_try_parse_jsonb(run.payload_json) -> 'childAdmission'
+                        = gc_try_parse_jsonb(run.metadata_json) -> 'childAdmission'
+                      AND gc_try_parse_jsonb(run.payload_json) -> 'postCommitEligibility'
+                        = gc_try_parse_jsonb(run.metadata_json) -> 'postCommitEligibility'
+                      AND jsonb_typeof(gc_try_parse_jsonb(run.payload_json)
+                        -> 'postCommitEligibility') = 'object'
+                      AND (gc_try_parse_jsonb(run.payload_json) -> 'postCommitEligibility') ?& ARRAY[
+                        'autonomyEnabledAtParentSettlement', 'evalIntegrityTurn', 'humanSession', 'version'
+                      ]
+                      AND (gc_try_parse_jsonb(run.payload_json) -> 'postCommitEligibility') - ARRAY[
+                        'autonomyEnabledAtParentSettlement', 'evalIntegrityTurn', 'humanSession', 'version'
+                      ] = '{}'::JSONB
+                      AND jsonb_typeof(gc_try_parse_jsonb(run.payload_json)
+                        #> '{postCommitEligibility,version}') = 'number'
+                      AND gc_try_parse_jsonb(run.payload_json) #>> '{postCommitEligibility,version}' = '1'
+                      AND jsonb_typeof(gc_try_parse_jsonb(run.payload_json)
+                        #> '{postCommitEligibility,autonomyEnabledAtParentSettlement}') = 'boolean'
+                      AND jsonb_typeof(gc_try_parse_jsonb(run.payload_json)
+                        #> '{postCommitEligibility,evalIntegrityTurn}') = 'boolean'
+                      AND jsonb_typeof(gc_try_parse_jsonb(run.payload_json)
+                        #> '{postCommitEligibility,humanSession}') = 'boolean'
+                      AND gc_try_parse_jsonb(run.payload_json) ->> 'parentRunId'
+                        = gc_try_parse_jsonb(run.metadata_json) ->> 'parentRunId'
+                      AND gc_try_parse_jsonb(run.payload_json) ->> 'postCommitGenerationId'
+                        = gc_try_parse_jsonb(run.metadata_json) ->> 'postCommitGenerationId'
+                      AND gc_try_parse_jsonb(run.payload_json) ->> 'effect'
+                        = gc_try_parse_jsonb(run.metadata_json) ->> 'effect'
+                      AND gc_try_parse_jsonb(run.metadata_json) ->> 'workspaceId' = OLD.workspace_id
+                      AND gc_try_parse_jsonb(run.metadata_json) ->> 'sessionId' = OLD.session_id
+                      AND jsonb_typeof(gc_try_parse_jsonb(run.metadata_json) -> 'turnId') = 'string'
+                      AND length(gc_try_parse_jsonb(run.metadata_json) ->> 'turnId') > 0
+                      AND OLD.material_sha256 = encode(sha256(convert_to(
+                        '{"childRunId":' || to_jsonb(run.run_id)::TEXT
+                        || ',"effect":' || to_jsonb(gc_try_parse_jsonb(run.payload_json) ->> 'effect')::TEXT
+                        || ',"operation":"chat_post_commit_child"'
+                        || ',"parentRunId":' || to_jsonb(gc_try_parse_jsonb(run.payload_json)
+                          ->> 'parentRunId')::TEXT
+                        || ',"postCommitEligibility":{"autonomyEnabledAtParentSettlement":'
+                        || (gc_try_parse_jsonb(run.payload_json)
+                          #> '{postCommitEligibility,autonomyEnabledAtParentSettlement}')::TEXT
+                        || ',"evalIntegrityTurn":' || (gc_try_parse_jsonb(run.payload_json)
+                          #> '{postCommitEligibility,evalIntegrityTurn}')::TEXT
+                        || ',"humanSession":' || (gc_try_parse_jsonb(run.payload_json)
+                          #> '{postCommitEligibility,humanSession}')::TEXT
+                        || ',"version":1}'
+                        || ',"postCommitGenerationId":' || to_jsonb(gc_try_parse_jsonb(run.payload_json)
+                          ->> 'postCommitGenerationId')::TEXT
+                        || ',"sessionId":' || to_jsonb(OLD.session_id)::TEXT
+                        || ',"sessionIncarnationId":' || to_jsonb(OLD.session_incarnation_id)::TEXT
+                        || ',"sourceTurnId":' || to_jsonb(gc_try_parse_jsonb(run.metadata_json)
+                          ->> 'turnId')::TEXT
+                        || ',"version":1'
+                        || ',"workspaceId":' || to_jsonb(OLD.workspace_id)::TEXT || '}',
+                        'UTF8'
+                      )), 'hex')
+                      AND ((NEW.status = 'completed' AND (
+                        (gc_try_parse_jsonb(run.payload_json) ->> 'effect' = 'commitments'
+                          AND NEW.terminal_idempotency_key = 'chat-post-commit-child-stage:v2:'
+                            || run.run_id || ':commitments_write:allowed')
+                        OR (gc_try_parse_jsonb(run.payload_json) ->> 'effect' = 'background_review'
+                          AND NEW.terminal_idempotency_key = 'chat-post-commit-child-stage:v2:'
+                            || run.run_id || ':background_evidence:allowed')
+                        OR (gc_try_parse_jsonb(run.payload_json) ->> 'effect' = 'memory_maintenance'
+                          AND NEW.terminal_idempotency_key = 'chat-post-commit-child-stage:v2:'
+                            || run.run_id || ':memory_maintenance_evaluation:allowed')
+                      )) OR (NEW.status = 'cancelled' AND (
+                        (gc_try_parse_jsonb(run.payload_json) ->> 'effect' = 'commitments'
+                          AND NEW.terminal_idempotency_key = 'chat-post-commit-child-stage:v2:'
+                            || run.run_id || ':commitments_write:late_blocked')
+                        OR (gc_try_parse_jsonb(run.payload_json) ->> 'effect' = 'background_review'
+                          AND NEW.terminal_idempotency_key IN (
+                            'chat-post-commit-child-stage:v2:' || run.run_id || ':background_counter:late_blocked',
+                            'chat-post-commit-child-stage:v2:' || run.run_id || ':background_evidence:late_blocked'
+                          ))
+                        OR (gc_try_parse_jsonb(run.payload_json) ->> 'effect' = 'memory_maintenance'
+                          AND NEW.terminal_idempotency_key = 'chat-post-commit-child-stage:v2:'
+                            || run.run_id || ':memory_maintenance_evaluation:late_blocked')
+                      )))
+                  ))
+                OR (NEW.terminal_authority_kind = 'lifecycle_delete'
+                  AND NEW.status = 'cancelled'
+                  AND EXISTS (
+                    SELECT 1 FROM chat_session_lifecycle_intents intent
+                    JOIN chat_session_meta meta ON meta.deletion_intent_id = intent.intent_id
+                    WHERE intent.intent_id = NEW.terminal_lifecycle_intent_id
+                      AND intent.intent_kind = 'delete'
+                      AND intent.workspace_id = OLD.workspace_id AND intent.session_id = OLD.session_id
+                      AND intent.session_incarnation_id = OLD.session_incarnation_id
+                      AND meta.workspace_id = OLD.workspace_id AND meta.session_id = OLD.session_id
+                      AND intent.actor_id = NEW.terminal_actor_id
+                      AND intent.correlation_id = NEW.terminal_correlation_id
+                      AND intent.created_at = NEW.closed_at
+                      AND NEW.terminal_idempotency_key = 'lifecycle:delete:admission:' || OLD.admission_id
+                  ))
+                OR (NEW.terminal_authority_kind = 'authority_superseded'
+                  AND NEW.status = 'cancelled'
+                  AND NEW.terminal_actor_id = 'system:session-authority'
+                  AND NEW.terminal_correlation_id = NEW.terminal_control_event_id
+                  AND NEW.terminal_idempotency_key = 'admission:authority-superseded:'
+                    || OLD.admission_id || ':' || NEW.terminal_control_event_id
+                  AND EXISTS (
+                    SELECT 1
+                    FROM chat_session_meta meta
+                    JOIN chat_session_control_grants control
+                      ON control.session_id = meta.session_id AND control.is_current = 1
+                    JOIN chat_session_control_events event_row
+                      ON event_row.session_id = control.session_id
+                      AND event_row.idempotency_key = control.transition_idempotency_key
+                    WHERE meta.session_id = OLD.session_id
+                      AND control.workspace_id = meta.workspace_id
+                      AND event_row.event_id = NEW.terminal_control_event_id
+                      AND event_row.next_generation = control.generation
+                      AND (meta.workspace_id <> OLD.workspace_id
+                        OR COALESCE(meta.lifecycle_intent_id, 'legacy-session-incarnation:' || meta.session_id)
+                          <> OLD.session_incarnation_id
+                        OR control.generation <> OLD.controller_generation
+                        OR (OLD.actor_kind IN ('operator', 'system')
+                          AND NOT (control.owner_kind = 'operator' AND control.lease_state = 'operator_active'))
+                        OR (OLD.actor_kind = 'external_companion'
+                          AND NOT (control.owner_kind = 'external_companion'
+                            AND control.lease_state = 'external_live'
+                            AND control.companion_session_id = OLD.actor_id)))
+                  ))
+              ))
+          ) THEN
+          RAISE EXCEPTION 'session mutation admission identity and material are immutable' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_chat_session_mutation_admissions_guard
+        BEFORE INSERT OR UPDATE ON chat_session_mutation_admissions FOR EACH ROW
+        EXECUTE FUNCTION gc_session_mutation_admission_guard();
+
+      CREATE OR REPLACE FUNCTION gc_session_mutation_admission_event()
+      RETURNS trigger AS $$
+      BEGIN
+        IF TG_OP = 'INSERT' THEN
+          INSERT INTO chat_session_mutation_admission_events (
+            event_id, admission_id, session_incarnation_id, workspace_id, session_id, turn_id,
+            runtime_owner_id, runtime_lease_revision,
+            event_sequence, event_type,
+            admission_kind, aggregate_revision, controller_generation, actor_kind, actor_id,
+            operation, material_sha256, idempotency_key, request_sha256, correlation_id,
+            terminal_authority_kind, terminal_runtime_owner_id, terminal_runtime_lease_revision,
+            terminal_durable_run_id, terminal_durable_lease_owner_id, terminal_durable_attempt_count,
+            terminal_durable_run_version, terminal_durable_run_status, terminal_lifecycle_intent_id,
+            terminal_control_event_id,
+            created_at
+          ) VALUES (
+            NEW.admit_event_id, NEW.admission_id, NEW.session_incarnation_id,
+            NEW.workspace_id, NEW.session_id, NEW.turn_id,
+            NEW.runtime_owner_id, NEW.runtime_lease_revision, 1, 'admitted',
+            NEW.admission_kind, NEW.aggregate_revision, NEW.controller_generation, NEW.actor_kind, NEW.actor_id,
+            NEW.operation, NEW.material_sha256, NEW.idempotency_key, NEW.request_sha256,
+            NEW.correlation_id,
+            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+            NEW.created_at
+          );
+        ELSIF NEW.status <> OLD.status THEN
+          INSERT INTO chat_session_mutation_admission_events (
+            event_id, admission_id, session_incarnation_id, workspace_id, session_id, turn_id,
+            runtime_owner_id, runtime_lease_revision,
+            event_sequence, event_type,
+            admission_kind, aggregate_revision, controller_generation, actor_kind, actor_id,
+            operation, material_sha256, idempotency_key, request_sha256, correlation_id,
+            terminal_authority_kind, terminal_runtime_owner_id, terminal_runtime_lease_revision,
+            terminal_durable_run_id, terminal_durable_lease_owner_id, terminal_durable_attempt_count,
+            terminal_durable_run_version, terminal_durable_run_status, terminal_lifecycle_intent_id,
+            terminal_control_event_id,
+            created_at
+          ) VALUES (
+            NEW.terminal_event_id, NEW.admission_id, NEW.session_incarnation_id,
+            NEW.workspace_id, NEW.session_id, NEW.turn_id,
+            NEW.runtime_owner_id, NEW.runtime_lease_revision, 2, NEW.status,
+            NEW.admission_kind, NEW.aggregate_revision, NEW.controller_generation, NEW.actor_kind,
+            NEW.terminal_actor_id, NEW.operation, NEW.material_sha256, NEW.terminal_idempotency_key,
+            NEW.request_sha256, NEW.terminal_correlation_id,
+            NEW.terminal_authority_kind, NEW.terminal_runtime_owner_id, NEW.terminal_runtime_lease_revision,
+            NEW.terminal_durable_run_id, NEW.terminal_durable_lease_owner_id, NEW.terminal_durable_attempt_count,
+            NEW.terminal_durable_run_version, NEW.terminal_durable_run_status, NEW.terminal_lifecycle_intent_id,
+            NEW.terminal_control_event_id,
+            NEW.closed_at
+          );
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_chat_session_mutation_admissions_event
+        AFTER INSERT OR UPDATE ON chat_session_mutation_admissions FOR EACH ROW
+        EXECUTE FUNCTION gc_session_mutation_admission_event();
+      CREATE TRIGGER trg_chat_session_mutation_admissions_no_delete
+        BEFORE DELETE ON chat_session_mutation_admissions FOR EACH ROW
+        EXECUTE FUNCTION gc_reject_session_lifecycle_immutable_mutation();
+      CREATE TRIGGER trg_chat_session_mutation_admission_events_no_update
+        BEFORE UPDATE ON chat_session_mutation_admission_events FOR EACH ROW
+        EXECUTE FUNCTION gc_reject_session_lifecycle_immutable_mutation();
+      CREATE TRIGGER trg_chat_session_mutation_admission_events_no_delete
+        BEFORE DELETE ON chat_session_mutation_admission_events FOR EACH ROW
+        EXECUTE FUNCTION gc_reject_session_lifecycle_immutable_mutation();
+
+      CREATE OR REPLACE FUNCTION gc_chat_turn_session_incarnation_binding_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.session_id, 411));
+        IF NEW.admission_id IS NULL OR NOT EXISTS (
+          SELECT 1 FROM chat_session_mutation_admissions admission
+          WHERE admission.admission_id = NEW.admission_id AND admission.status = 'active'
+            AND admission.admission_kind = 'turn_write'
+            AND admission.turn_id = NEW.turn_id
+            AND admission.workspace_id = NEW.workspace_id AND admission.session_id = NEW.session_id
+            AND admission.session_incarnation_id = NEW.session_incarnation_id
+        ) THEN
+          RAISE EXCEPTION 'chat turn session incarnation authority invariant violated' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_chat_turn_session_incarnation_bindings_insert_guard
+        BEFORE INSERT ON chat_turn_session_incarnation_bindings FOR EACH ROW
+        EXECUTE FUNCTION gc_chat_turn_session_incarnation_binding_guard();
+      CREATE TRIGGER trg_chat_turn_session_incarnation_bindings_no_update
+        BEFORE UPDATE ON chat_turn_session_incarnation_bindings FOR EACH ROW
+        EXECUTE FUNCTION gc_reject_session_lifecycle_immutable_mutation();
+      CREATE TRIGGER trg_chat_turn_session_incarnation_bindings_no_delete
+        BEFORE DELETE ON chat_turn_session_incarnation_bindings FOR EACH ROW
+        EXECUTE FUNCTION gc_reject_session_lifecycle_immutable_mutation();
+
+      CREATE OR REPLACE FUNCTION gc_chat_turn_durable_admission_binding_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.session_id, 411));
+        IF NOT EXISTS (
+          SELECT 1
+          FROM chat_session_mutation_admissions admission
+          JOIN chat_turn_session_incarnation_bindings binding
+            ON binding.admission_id = admission.admission_id AND binding.turn_id = admission.turn_id
+          JOIN durable_runs run ON run.run_id = NEW.durable_run_id
+          WHERE admission.admission_id = NEW.admission_id
+            AND admission.status = 'active' AND admission.admission_kind = 'turn_write'
+            AND admission.runtime_lease_relinquished_at IS NULL
+            AND gc_try_parse_timestamptz(admission.runtime_lease_expires_at) > clock_timestamp()
+            AND admission.turn_id = NEW.turn_id
+            AND admission.workspace_id = NEW.workspace_id AND admission.session_id = NEW.session_id
+            AND admission.session_incarnation_id = NEW.session_incarnation_id
+            AND binding.workspace_id = NEW.workspace_id AND binding.session_id = NEW.session_id
+            AND binding.session_incarnation_id = NEW.session_incarnation_id
+            AND run.workflow_key = 'chat.turn.execute'
+            AND run.status IN ('queued', 'running', 'waiting', 'paused')
+            AND jsonb_typeof(gc_try_parse_jsonb(run.payload_json)) = 'object'
+            AND gc_try_parse_jsonb(run.payload_json) ->> 'version' = 'chat.turn.execute.v2'
+            AND gc_try_parse_jsonb(run.payload_json) ->> 'admissionId' = admission.admission_id
+            AND gc_try_parse_jsonb(run.payload_json) ->> 'sessionIncarnationId' = admission.session_incarnation_id
+            AND gc_try_parse_jsonb(run.payload_json) ->> 'admissionMaterialSha256' = admission.material_sha256
+            AND gc_try_parse_jsonb(run.payload_json) ->> 'workspaceId' = admission.workspace_id
+            AND jsonb_typeof(gc_try_parse_jsonb(run.payload_json) -> 'admissionAggregateRevision') = 'number'
+            AND gc_try_parse_jsonb(run.payload_json) ->> 'admissionAggregateRevision' ~ '^[1-9][0-9]*$'
+            AND (gc_try_parse_jsonb(run.payload_json) ->> 'admissionAggregateRevision')::BIGINT
+              = admission.aggregate_revision
+            AND jsonb_typeof(gc_try_parse_jsonb(run.payload_json) -> 'admissionControllerGeneration') = 'number'
+            AND gc_try_parse_jsonb(run.payload_json) ->> 'admissionControllerGeneration' ~ '^[1-9][0-9]*$'
+            AND (gc_try_parse_jsonb(run.payload_json) ->> 'admissionControllerGeneration')::BIGINT
+              = admission.controller_generation
+            AND gc_try_parse_jsonb(run.payload_json) ->> 'sessionId' = admission.session_id
+            AND gc_try_parse_jsonb(run.payload_json) ->> 'turnId' = admission.turn_id
+        ) THEN
+          RAISE EXCEPTION 'chat turn durable admission binding authority invariant violated'
+            USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_chat_turn_mutation_admission_durable_bindings_insert_guard
+        BEFORE INSERT ON chat_turn_mutation_admission_durable_bindings FOR EACH ROW
+        EXECUTE FUNCTION gc_chat_turn_durable_admission_binding_guard();
+      CREATE TRIGGER trg_chat_turn_mutation_admission_durable_bindings_no_update
+        BEFORE UPDATE ON chat_turn_mutation_admission_durable_bindings FOR EACH ROW
+        EXECUTE FUNCTION gc_reject_session_lifecycle_immutable_mutation();
+      CREATE TRIGGER trg_chat_turn_mutation_admission_durable_bindings_no_delete
+        BEFORE DELETE ON chat_turn_mutation_admission_durable_bindings FOR EACH ROW
+        EXECUTE FUNCTION gc_reject_session_lifecycle_immutable_mutation();
+
+      CREATE OR REPLACE FUNCTION gc_chat_turn_user_input_continuation_seal_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.session_id, 411));
+        IF abs(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(NEW.resolved_at) - clock_timestamp()))) > 1
+          OR NOT EXISTS (
+            SELECT 1
+            FROM chat_session_mutation_admissions admission
+            JOIN chat_turn_mutation_admission_durable_bindings durable_binding
+              ON durable_binding.admission_id = admission.admission_id
+            JOIN durable_runs run ON run.run_id = durable_binding.durable_run_id
+            JOIN chat_turn_traces trace ON trace.turn_id = admission.turn_id
+            WHERE admission.admission_id = NEW.admission_id
+              AND admission.status = 'active' AND admission.admission_kind = 'turn_write'
+              AND admission.session_incarnation_id = NEW.session_incarnation_id
+              AND admission.workspace_id = NEW.workspace_id
+              AND admission.session_id = NEW.session_id
+              AND admission.turn_id = NEW.turn_id
+              AND durable_binding.durable_run_id = NEW.durable_run_id
+              AND run.workflow_key = 'chat.turn.execute' AND run.status = 'waiting'
+              AND run.version = NEW.waiting_run_version
+              AND trace.session_id = NEW.session_id AND trace.status = 'waiting_for_user_input'
+              AND jsonb_typeof(gc_try_parse_jsonb(trace.pending_user_input_json)) = 'object'
+              AND gc_try_parse_jsonb(trace.pending_user_input_json) ->> 'promptId' = NEW.prompt_id
+              AND gc_try_parse_jsonb(trace.pending_user_input_json) ->> 'turnId' = NEW.turn_id
+          ) THEN
+          RAISE EXCEPTION 'chat turn user-input continuation seal authority invariant violated'
+            USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_chat_turn_user_input_continuation_seals_insert_guard
+        BEFORE INSERT ON chat_turn_user_input_continuation_seals FOR EACH ROW
+        EXECUTE FUNCTION gc_chat_turn_user_input_continuation_seal_guard();
+      CREATE TRIGGER trg_chat_turn_user_input_continuation_seals_no_update
+        BEFORE UPDATE ON chat_turn_user_input_continuation_seals FOR EACH ROW
+        EXECUTE FUNCTION gc_reject_session_lifecycle_immutable_mutation();
+      CREATE TRIGGER trg_chat_turn_user_input_continuation_seals_no_delete
+        BEFORE DELETE ON chat_turn_user_input_continuation_seals FOR EACH ROW
+        EXECUTE FUNCTION gc_reject_session_lifecycle_immutable_mutation();
+
+      CREATE OR REPLACE FUNCTION gc_chat_turn_capability_profile_binding_guard()
+      RETURNS trigger AS $$
+      DECLARE bound_session_id TEXT;
+      BEGIN
+        SELECT session_id INTO bound_session_id
+        FROM chat_turn_session_incarnation_bindings WHERE turn_id = NEW.turn_id;
+        IF bound_session_id IS NULL THEN
+          RAISE EXCEPTION 'chat turn capability profile binding authority invariant violated'
+            USING ERRCODE = '23514';
+        END IF;
+        PERFORM pg_advisory_xact_lock(hashtextextended(bound_session_id, 411));
+        IF NOT EXISTS (
+          SELECT 1
+          FROM chat_turn_session_incarnation_bindings binding
+          JOIN chat_session_mutation_admissions admission
+            ON admission.admission_id = binding.admission_id
+          WHERE binding.turn_id = NEW.turn_id
+            AND admission.status = 'active' AND admission.admission_kind = 'turn_write'
+            AND admission.turn_id = NEW.turn_id
+            AND admission.workspace_id = binding.workspace_id
+            AND admission.session_id = binding.session_id
+            AND admission.session_incarnation_id = binding.session_incarnation_id
+        ) THEN
+          RAISE EXCEPTION 'chat turn capability profile binding authority invariant violated'
+            USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_chat_turn_capability_profile_incarnation_bindings_insert_guard
+        BEFORE INSERT ON chat_turn_capability_profile_incarnation_bindings FOR EACH ROW
+        EXECUTE FUNCTION gc_chat_turn_capability_profile_binding_guard();
+      CREATE TRIGGER trg_chat_turn_capability_profile_incarnation_bindings_no_update
+        BEFORE UPDATE ON chat_turn_capability_profile_incarnation_bindings FOR EACH ROW
+        EXECUTE FUNCTION gc_reject_session_lifecycle_immutable_mutation();
+      CREATE TRIGGER trg_chat_turn_capability_profile_incarnation_bindings_no_delete
+        BEFORE DELETE ON chat_turn_capability_profile_incarnation_bindings FOR EACH ROW
+        EXECUTE FUNCTION gc_reject_session_lifecycle_immutable_mutation();
+
+      CREATE OR REPLACE FUNCTION gc_chat_turn_capability_profile_incarnation_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.session_id, 411));
+        IF NOT EXISTS (
+          SELECT 1
+          FROM chat_turn_capability_profile_incarnation_bindings profile_binding
+          JOIN chat_turn_session_incarnation_bindings binding
+            ON binding.turn_id = profile_binding.turn_id
+          JOIN chat_session_mutation_admissions admission
+            ON admission.admission_id = binding.admission_id
+          WHERE binding.turn_id = NEW.turn_id
+            AND profile_binding.profile_id = NEW.profile_id
+            AND profile_binding.profile_hash = NEW.profile_hash
+            AND profile_binding.created_at = NEW.created_at
+            AND binding.workspace_id = NEW.workspace_id AND binding.session_id = NEW.session_id
+            AND admission.status = 'active' AND admission.admission_kind = 'turn_write'
+            AND admission.turn_id = NEW.turn_id
+            AND admission.workspace_id = binding.workspace_id
+            AND admission.session_id = binding.session_id
+            AND admission.session_incarnation_id = binding.session_incarnation_id
+        ) THEN
+          RAISE EXCEPTION 'chat turn capability profile requires a frozen session incarnation'
+            USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_chat_turn_capability_profiles_incarnation_insert_guard
+        BEFORE INSERT ON chat_turn_capability_profiles FOR EACH ROW
+        EXECUTE FUNCTION gc_chat_turn_capability_profile_incarnation_guard();
+
+      CREATE OR REPLACE FUNCTION gc_chat_routed_context_snapshot_incarnation_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.session_id, 411));
+        IF NOT EXISTS (
+          SELECT 1
+          FROM chat_turn_capability_profiles profile
+          JOIN chat_turn_capability_profile_incarnation_bindings profile_binding
+            ON profile_binding.profile_id = profile.profile_id AND profile_binding.turn_id = profile.turn_id
+          JOIN chat_turn_session_incarnation_bindings binding
+            ON binding.turn_id = profile.turn_id
+          JOIN chat_session_mutation_admissions admission
+            ON admission.admission_id = binding.admission_id
+          WHERE profile.profile_id = NEW.capability_profile_id
+            AND profile.profile_hash = NEW.capability_profile_hash
+            AND profile.turn_id = NEW.turn_id AND profile.session_id = NEW.session_id
+            AND profile.workspace_id = NEW.workspace_id
+            AND profile_binding.profile_hash = NEW.capability_profile_hash
+            AND binding.session_id = NEW.session_id AND binding.workspace_id = NEW.workspace_id
+            AND admission.status = 'active' AND admission.admission_kind = 'turn_write'
+            AND admission.turn_id = NEW.turn_id
+            AND admission.workspace_id = binding.workspace_id
+            AND admission.session_id = binding.session_id
+            AND admission.session_incarnation_id = binding.session_incarnation_id
+        ) THEN
+          RAISE EXCEPTION 'chat routed context snapshot requires an exact incarnation-bound profile'
+            USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_chat_routed_context_snapshots_incarnation_insert_guard
+        BEFORE INSERT ON chat_routed_context_snapshots FOR EACH ROW
+        EXECUTE FUNCTION gc_chat_routed_context_snapshot_incarnation_guard();
+
+      CREATE OR REPLACE FUNCTION gc_auth_revoke_operation_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF abs(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(NEW.occurred_at) - clock_timestamp()))) > 1
+          OR EXISTS (SELECT 1 FROM chat_session_control_auth_revoke_receipts receipt
+            WHERE receipt.idempotency_key = NEW.idempotency_key)
+          OR EXISTS (SELECT 1 FROM chat_session_control_events event_row
+            WHERE event_row.request_sha256 = NEW.request_sha256 OR event_row.idempotency_key = NEW.idempotency_key) THEN
+          RAISE EXCEPTION 'session control auth revoke operation invariant violated' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_chat_session_control_auth_revoke_operations_guard
+        BEFORE INSERT ON chat_session_control_auth_revoke_operations FOR EACH ROW
+        EXECUTE FUNCTION gc_auth_revoke_operation_guard();
+      CREATE TRIGGER trg_chat_session_control_auth_revoke_operations_no_update
+        BEFORE UPDATE ON chat_session_control_auth_revoke_operations FOR EACH ROW
+        EXECUTE FUNCTION gc_reject_session_lifecycle_immutable_mutation();
+      CREATE TRIGGER trg_chat_session_control_auth_revoke_operations_no_delete
+        BEFORE DELETE ON chat_session_control_auth_revoke_operations FOR EACH ROW
+        EXECUTE FUNCTION gc_reject_session_lifecycle_immutable_mutation();
+
+      CREATE OR REPLACE FUNCTION gc_auth_revoke_target_guard()
+      RETURNS trigger AS $$
+      DECLARE operation chat_session_control_auth_revoke_operations%ROWTYPE;
+      DECLARE prior_events BIGINT;
+      DECLARE prior_targets BIGINT;
+      BEGIN
+        SELECT * INTO STRICT operation FROM chat_session_control_auth_revoke_operations
+          WHERE idempotency_key = NEW.operation_idempotency_key FOR UPDATE;
+        IF EXISTS (SELECT 1 FROM chat_session_control_auth_revoke_receipts receipt
+          WHERE receipt.idempotency_key = operation.idempotency_key) OR NEW.target_index >= operation.target_count THEN
+          RAISE EXCEPTION 'session control auth revoke target invariant violated' USING ERRCODE = '23514';
+        END IF;
+        SELECT COUNT(*) INTO prior_events FROM chat_session_control_events WHERE session_id = NEW.session_id;
+        SELECT COUNT(*) INTO prior_targets FROM chat_session_control_auth_revoke_operation_targets
+          WHERE operation_idempotency_key = NEW.operation_idempotency_key AND session_id = NEW.session_id;
+        IF NEW.event_sequence <> prior_events + prior_targets + 1 OR NOT (
+          (NEW.target_kind = 'pending_request' AND NEW.event_reason_code IN ('mutation_denied', 'request_expired')
+            AND EXISTS (
+              SELECT 1 FROM chat_session_control_requests request_row
+              JOIN chat_session_control_grants control
+                ON control.session_id = request_row.session_id AND control.is_current = 1
+              WHERE request_row.request_id = NEW.request_id AND request_row.status = 'pending'
+                AND request_row.workspace_id = NEW.workspace_id AND request_row.session_id = NEW.session_id
+                AND control.workspace_id = NEW.workspace_id AND control.generation = NEW.generation
+                AND control.control_revision = NEW.control_revision AND control.owner_kind = NEW.owner_kind
+                AND control.lease_state = NEW.lease_state
+                AND ((operation.binding_kind = 'companion_session' AND request_row.companion_session_id = operation.binding_id)
+                  OR (operation.binding_kind = 'device_grant' AND request_row.device_grant_id = operation.binding_id))
+                AND ((gc_try_parse_timestamptz(request_row.expires_at) <= gc_try_parse_timestamptz(operation.occurred_at)
+                      AND NEW.event_reason_code = 'request_expired')
+                  OR (gc_try_parse_timestamptz(request_row.expires_at) > gc_try_parse_timestamptz(operation.occurred_at)
+                      AND NEW.event_reason_code = 'mutation_denied'))
+            ))
+          OR (NEW.target_kind = 'current_grant' AND NEW.event_reason_code = 'auth_revoked'
+            AND EXISTS (
+              SELECT 1 FROM chat_session_control_grants control
+              WHERE control.session_id = NEW.session_id AND control.workspace_id = NEW.workspace_id
+                AND control.generation = NEW.generation AND control.control_revision = NEW.control_revision
+                AND control.is_current = 1 AND control.owner_kind = 'external_companion'
+                AND control.lease_state = NEW.lease_state AND control.request_id = NEW.request_id
+                AND ((operation.binding_kind = 'companion_session' AND control.companion_session_id = operation.binding_id)
+                  OR (operation.binding_kind = 'device_grant' AND control.device_grant_id = operation.binding_id))
+            ))
+        ) THEN
+          RAISE EXCEPTION 'session control auth revoke target invariant violated' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER trg_chat_session_control_auth_revoke_targets_guard
+        BEFORE INSERT ON chat_session_control_auth_revoke_operation_targets FOR EACH ROW
+        EXECUTE FUNCTION gc_auth_revoke_target_guard();
+      CREATE TRIGGER trg_chat_session_control_auth_revoke_targets_no_update
+        BEFORE UPDATE ON chat_session_control_auth_revoke_operation_targets FOR EACH ROW
+        EXECUTE FUNCTION gc_reject_session_lifecycle_immutable_mutation();
+      CREATE TRIGGER trg_chat_session_control_auth_revoke_targets_no_delete
+        BEFORE DELETE ON chat_session_control_auth_revoke_operation_targets FOR EACH ROW
+        EXECUTE FUNCTION gc_reject_session_lifecycle_immutable_mutation();
+
+      CREATE OR REPLACE FUNCTION gc_session_control_request_transition_guard()
+      RETURNS trigger AS $$
+      DECLARE auth_bypass BOOLEAN := FALSE;
+      BEGIN
+        SELECT EXISTS (
+          SELECT 1 FROM chat_session_control_auth_revoke_operation_targets target
+          JOIN chat_session_control_auth_revoke_operations operation
+            ON operation.idempotency_key = target.operation_idempotency_key
+          WHERE target.target_kind = 'pending_request' AND target.request_id = OLD.request_id
+            AND target.workspace_id = OLD.workspace_id AND target.session_id = OLD.session_id
+            AND operation.occurred_at = NEW.decided_at
+            AND NOT EXISTS (SELECT 1 FROM chat_session_control_auth_revoke_receipts receipt
+              WHERE receipt.idempotency_key = operation.idempotency_key)
+        ) INTO auth_bypass;
+        IF OLD.status <> 'pending'
+          OR NEW.request_id <> OLD.request_id OR NEW.workspace_id <> OLD.workspace_id
+          OR NEW.session_id <> OLD.session_id OR NEW.companion_session_id <> OLD.companion_session_id
+          OR NEW.device_grant_id <> OLD.device_grant_id OR NEW.client_instance_id <> OLD.client_instance_id
+          OR NEW.principal_purpose <> OLD.principal_purpose OR NEW.token_sha256 <> OLD.token_sha256
+          OR NEW.requested_capabilities_json <> OLD.requested_capabilities_json
+          OR NEW.requested_capabilities_sha256 <> OLD.requested_capabilities_sha256
+          OR NEW.requested_generation <> OLD.requested_generation OR NEW.idempotency_key <> OLD.idempotency_key
+          OR NEW.request_sha256 <> OLD.request_sha256 OR NEW.expires_at <> OLD.expires_at
+          OR NEW.created_at <> OLD.created_at OR NEW.status = 'pending'
+          OR (abs(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(NEW.decided_at) - clock_timestamp()))) > 1
+            AND NOT auth_bypass) THEN
+          RAISE EXCEPTION 'session control request transition invariant violated' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE OR REPLACE FUNCTION gc_session_control_grant_insert_guard()
+      RETURNS trigger AS $$
+      DECLARE prior_generation BIGINT;
+      DECLARE prior_workspace TEXT;
+      DECLARE database_now TIMESTAMPTZ := clock_timestamp();
+      DECLARE auth_bypass BOOLEAN := FALSE;
+      BEGIN
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.session_id, 411));
+        SELECT MAX(generation), MIN(workspace_id) INTO prior_generation, prior_workspace
+        FROM chat_session_control_grants WHERE session_id = NEW.session_id;
+        SELECT EXISTS (
+          SELECT 1 FROM chat_session_control_auth_revoke_operation_targets target
+          JOIN chat_session_control_auth_revoke_operations operation
+            ON operation.idempotency_key = target.operation_idempotency_key
+          WHERE target.target_kind = 'current_grant'
+            AND target.workspace_id = NEW.workspace_id AND target.session_id = NEW.session_id
+            AND target.generation + 1 = NEW.generation
+            AND target.event_idempotency_key = NEW.transition_idempotency_key
+            AND operation.request_sha256 = NEW.transition_request_sha256
+            AND operation.occurred_at = NEW.created_at AND operation.occurred_at = NEW.updated_at
+            AND NEW.owner_kind = 'operator' AND NEW.lease_state = 'operator_active'
+            AND NOT EXISTS (SELECT 1 FROM chat_session_control_auth_revoke_receipts receipt
+              WHERE receipt.idempotency_key = operation.idempotency_key)
+        ) INTO auth_bypass;
+        IF NEW.is_current <> 1 OR (prior_workspace IS NOT NULL AND prior_workspace <> NEW.workspace_id)
+          OR (prior_generation IS NULL AND NEW.generation <> 1)
+          OR (prior_generation IS NOT NULL AND NEW.generation <> prior_generation + 1)
+          OR ((abs(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(NEW.created_at) - database_now))) > 1
+            OR abs(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(NEW.updated_at) - database_now))) > 1)
+            AND NOT auth_bypass) THEN
+          RAISE EXCEPTION 'session control generation, workspace, or database-clock invariant violated' USING ERRCODE = '23514';
+        END IF;
+        IF NEW.owner_kind = 'external_companion' AND NOT EXISTS (
+          SELECT 1 FROM chat_session_control_requests request_row
+          JOIN chat_session_control_tokens token_row ON token_row.token_sha256 = NEW.token_sha256
+          WHERE request_row.request_id = NEW.request_id
+            AND request_row.workspace_id = NEW.workspace_id AND request_row.session_id = NEW.session_id
+            AND request_row.companion_session_id = NEW.companion_session_id
+            AND request_row.device_grant_id = NEW.device_grant_id
+            AND request_row.client_instance_id = NEW.client_instance_id
+            AND request_row.principal_purpose = NEW.principal_purpose
+            AND request_row.requested_capabilities_json = NEW.requested_capabilities_json
+            AND request_row.requested_capabilities_sha256 = NEW.requested_capabilities_sha256
+            AND request_row.status = 'activated' AND request_row.decision_reason_code = 'handoff'
+            AND request_row.activated_generation = request_row.requested_generation + 1
+            AND request_row.activated_generation <= NEW.generation
+            AND token_row.workspace_id = NEW.workspace_id AND token_row.session_id = NEW.session_id
+            AND ((NEW.generation = request_row.activated_generation AND NEW.token_sha256 = request_row.token_sha256)
+              OR (NEW.generation > request_row.activated_generation AND EXISTS (
+                SELECT 1 FROM chat_session_control_grants prior
+                WHERE prior.workspace_id = NEW.workspace_id AND prior.session_id = NEW.session_id
+                  AND prior.generation = NEW.generation - 1 AND prior.owner_kind = 'external_companion'
+                  AND prior.request_id = NEW.request_id
+                  AND prior.companion_session_id = NEW.companion_session_id
+                  AND prior.device_grant_id = NEW.device_grant_id
+                  AND prior.client_instance_id = NEW.client_instance_id
+                  AND prior.principal_purpose = NEW.principal_purpose
+                  AND prior.requested_capabilities_json = NEW.requested_capabilities_json
+                  AND prior.requested_capabilities_sha256 = NEW.requested_capabilities_sha256
+                  AND prior.effective_capabilities_json = NEW.effective_capabilities_json
+                  AND prior.effective_capabilities_sha256 = NEW.effective_capabilities_sha256)))
+            AND ((NEW.requested_capabilities_json = '["send"]' AND NEW.effective_capabilities_json = '["send"]')
+              OR (NEW.requested_capabilities_json = '["send","read"]'
+                AND NEW.effective_capabilities_json IN ('["send"]', '["send","read"]')))
+        ) THEN
+          RAISE EXCEPTION 'session control external request binding invariant violated' USING ERRCODE = '23514';
+        END IF;
+        IF NEW.owner_kind = 'external_companion' AND NOT EXISTS (
+          SELECT 1 FROM companion_sessions companion_session
+          JOIN auth_device_grants device_grant ON device_grant.grant_id = companion_session.grant_id
+          JOIN auth_device_requests device_request ON device_request.request_id = device_grant.request_id
+          WHERE companion_session.session_id = NEW.companion_session_id
+            AND companion_session.grant_id = NEW.device_grant_id
+            AND companion_session.principal_purpose = NEW.principal_purpose
+            AND device_grant.principal_purpose = NEW.principal_purpose
+            AND device_request.principal_purpose = NEW.principal_purpose
+            AND NEW.principal_purpose = 'session_control_client'
+            AND companion_session.revoked_at IS NULL AND device_grant.revoked_at IS NULL
+            AND gc_try_parse_timestamptz(companion_session.refresh_token_expires_at) > database_now
+            AND (device_grant.expires_at IS NULL OR gc_try_parse_timestamptz(device_grant.expires_at) > database_now)
+        ) THEN
+          RAISE EXCEPTION 'session control external auth binding invariant violated' USING ERRCODE = '23514';
+        END IF;
+        IF NEW.owner_kind = 'external_companion' AND (
+          abs(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(NEW.token_expires_at) - database_now)) - 900) > 1
+          OR abs(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(NEW.lease_expires_at) - database_now)) - 60) > 1
+          OR abs(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(NEW.reconnect_expires_at) - database_now)) - 300) > 1
+          OR abs(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(NEW.last_heartbeat_at) - database_now))) > 1
+        ) THEN
+          RAISE EXCEPTION 'session control external database-clock invariant violated' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE OR REPLACE FUNCTION gc_session_control_grant_update_guard()
+      RETURNS trigger AS $$
+      DECLARE database_now TIMESTAMPTZ := clock_timestamp();
+      DECLARE valid_transition BOOLEAN := FALSE;
+      DECLARE auth_bypass BOOLEAN := FALSE;
+      BEGIN
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.session_id, 411));
+        SELECT EXISTS (
+          SELECT 1 FROM chat_session_control_auth_revoke_operation_targets target
+          JOIN chat_session_control_auth_revoke_operations operation
+            ON operation.idempotency_key = target.operation_idempotency_key
+          WHERE target.target_kind = 'current_grant'
+            AND target.workspace_id = OLD.workspace_id AND target.session_id = OLD.session_id
+            AND target.generation = OLD.generation AND target.control_revision = OLD.control_revision
+            AND operation.occurred_at = NEW.updated_at AND NEW.terminal_at = operation.occurred_at
+            AND NOT EXISTS (SELECT 1 FROM chat_session_control_auth_revoke_receipts receipt
+              WHERE receipt.idempotency_key = operation.idempotency_key)
+        ) INTO auth_bypass;
+        IF OLD.is_current <> 1 OR OLD.terminal_at IS NOT NULL
+          OR NEW.workspace_id <> OLD.workspace_id OR NEW.session_id <> OLD.session_id
+          OR NEW.generation <> OLD.generation OR NEW.owner_kind <> OLD.owner_kind
+          OR NEW.request_id IS DISTINCT FROM OLD.request_id
+          OR NEW.companion_session_id IS DISTINCT FROM OLD.companion_session_id
+          OR NEW.device_grant_id IS DISTINCT FROM OLD.device_grant_id
+          OR NEW.client_instance_id IS DISTINCT FROM OLD.client_instance_id
+          OR NEW.principal_purpose IS DISTINCT FROM OLD.principal_purpose
+          OR NEW.requested_capabilities_json <> OLD.requested_capabilities_json
+          OR NEW.requested_capabilities_sha256 <> OLD.requested_capabilities_sha256
+          OR NEW.effective_capabilities_json <> OLD.effective_capabilities_json
+          OR NEW.effective_capabilities_sha256 <> OLD.effective_capabilities_sha256
+          OR NEW.token_sha256 IS DISTINCT FROM OLD.token_sha256
+          OR NEW.token_expires_at IS DISTINCT FROM OLD.token_expires_at
+          OR NEW.transition_idempotency_key <> OLD.transition_idempotency_key
+          OR NEW.transition_request_sha256 <> OLD.transition_request_sha256
+          OR NEW.created_at <> OLD.created_at OR NEW.control_revision <> OLD.control_revision + 1
+          OR NEW.updated_at < OLD.updated_at
+          OR (abs(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(NEW.updated_at) - database_now))) > 1
+            AND NOT auth_bypass) THEN
+          RAISE EXCEPTION 'session control current generation transition invariant violated' USING ERRCODE = '23514';
+        END IF;
+        valid_transition := OLD.owner_kind = 'external_companion' AND OLD.lease_state = 'external_live'
+          AND NEW.is_current = 1 AND NEW.lease_state = 'external_live' AND NEW.terminal_at IS NULL
+          AND gc_try_parse_timestamptz(NEW.last_heartbeat_at) >= gc_try_parse_timestamptz(OLD.last_heartbeat_at)
+          AND abs(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(NEW.last_heartbeat_at) - database_now))) <= 1
+          AND abs(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(NEW.lease_expires_at) - database_now)) - 60) <= 1
+          AND abs(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(NEW.reconnect_expires_at) - database_now)) - 300) <= 1;
+        valid_transition := valid_transition OR (OLD.owner_kind = 'external_companion' AND OLD.lease_state = 'external_live'
+          AND NEW.is_current = 1 AND NEW.lease_state = 'external_stale' AND NEW.terminal_at IS NULL
+          AND NEW.last_heartbeat_at = OLD.last_heartbeat_at AND NEW.lease_expires_at = OLD.lease_expires_at
+          AND NEW.reconnect_expires_at = OLD.reconnect_expires_at);
+        valid_transition := valid_transition OR (NEW.is_current = 0
+          AND NEW.lease_state IN ('released', 'revoked', 'superseded', 'deleted')
+          AND NEW.terminal_at = NEW.updated_at
+          AND NEW.last_heartbeat_at IS NOT DISTINCT FROM OLD.last_heartbeat_at
+          AND NEW.lease_expires_at IS NOT DISTINCT FROM OLD.lease_expires_at
+          AND NEW.reconnect_expires_at IS NOT DISTINCT FROM OLD.reconnect_expires_at);
+        IF NOT valid_transition THEN
+          RAISE EXCEPTION 'session control current generation transition invariant violated' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE OR REPLACE FUNCTION gc_session_control_event_insert_guard()
+      RETURNS trigger AS $$
+      DECLARE auth_related BOOLEAN := FALSE;
+      DECLARE auth_exact BOOLEAN := FALSE;
+      BEGIN
+        IF NEW.request_id IS NOT NULL AND NOT EXISTS (
+          SELECT 1 FROM chat_session_control_requests request_row
+          WHERE request_row.request_id = NEW.request_id
+            AND request_row.workspace_id = NEW.workspace_id AND request_row.session_id = NEW.session_id
+            AND request_row.companion_session_id = NEW.companion_session_id
+            AND request_row.device_grant_id = NEW.device_grant_id
+        ) THEN
+          RAISE EXCEPTION 'session control event request attribution invariant violated' USING ERRCODE = '23514';
+        END IF;
+        SELECT EXISTS (SELECT 1 FROM chat_session_control_auth_revoke_operations operation
+          WHERE operation.request_sha256 = NEW.request_sha256
+            AND NOT EXISTS (SELECT 1 FROM chat_session_control_auth_revoke_receipts receipt
+              WHERE receipt.idempotency_key = operation.idempotency_key))
+          OR EXISTS (SELECT 1 FROM chat_session_control_auth_revoke_operations operation
+            WHERE operation.idempotency_key = NEW.idempotency_key)
+          OR EXISTS (SELECT 1 FROM chat_session_control_auth_revoke_operation_targets target
+            WHERE target.event_idempotency_key = NEW.idempotency_key) INTO auth_related;
+        IF auth_related THEN
+          SELECT EXISTS (
+            SELECT 1 FROM chat_session_control_auth_revoke_operation_targets target
+            JOIN chat_session_control_auth_revoke_operations operation
+              ON operation.idempotency_key = target.operation_idempotency_key
+            WHERE target.event_id = NEW.event_id AND target.event_sequence = NEW.event_sequence
+              AND target.event_idempotency_key = NEW.idempotency_key
+              AND target.event_reason_code = NEW.reason_code
+              AND target.workspace_id = NEW.workspace_id AND target.session_id = NEW.session_id
+              AND operation.request_sha256 = NEW.request_sha256
+              AND operation.correlation_id = NEW.correlation_id AND operation.actor_id = NEW.actor_id
+              AND NEW.actor_kind = 'system' AND operation.occurred_at = NEW.created_at
+              AND NOT EXISTS (SELECT 1 FROM chat_session_control_auth_revoke_receipts receipt
+                WHERE receipt.idempotency_key = operation.idempotency_key)
+              AND ((target.target_kind = 'pending_request' AND NEW.request_id = target.request_id
+                    AND NEW.previous_generation = target.generation AND NEW.next_generation = target.generation
+                    AND NEW.previous_owner_kind = target.owner_kind AND NEW.next_owner_kind = target.owner_kind
+                    AND NEW.previous_lease_state = target.lease_state AND NEW.next_lease_state = target.lease_state)
+                OR (target.target_kind = 'current_grant' AND NEW.request_id = target.request_id
+                    AND NEW.previous_generation = target.generation AND NEW.next_generation = target.generation + 1
+                    AND NEW.previous_owner_kind = 'external_companion' AND NEW.next_owner_kind = 'operator'
+                    AND NEW.previous_lease_state = target.lease_state AND NEW.next_lease_state = 'operator_active'))
+          ) INTO auth_exact;
+          IF NOT auth_exact THEN
+            RAISE EXCEPTION 'session control auth revoke event invariant violated' USING ERRCODE = '23514';
+          END IF;
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE OR REPLACE FUNCTION gc_session_control_auth_revoke_receipt_insert_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM chat_session_control_auth_revoke_operations operation
+          WHERE operation.idempotency_key = NEW.idempotency_key
+            AND operation.request_sha256 = NEW.request_sha256
+            AND operation.binding_kind = NEW.binding_kind AND operation.binding_id = NEW.binding_id
+            AND operation.actor_id = NEW.actor_id AND operation.correlation_id = NEW.correlation_id
+            AND operation.target_count = NEW.target_count AND operation.session_count = NEW.session_count
+            AND operation.event_set_sha256 = NEW.event_set_sha256 AND operation.occurred_at = NEW.created_at
+            AND (SELECT COUNT(*) FROM chat_session_control_auth_revoke_operation_targets target
+                 WHERE target.operation_idempotency_key = operation.idempotency_key) = operation.target_count
+            AND (SELECT COUNT(DISTINCT (target.workspace_id, target.session_id))
+                 FROM chat_session_control_auth_revoke_operation_targets target
+                 WHERE target.operation_idempotency_key = operation.idempotency_key) = operation.session_count
+            AND NOT EXISTS (
+              SELECT 1 FROM chat_session_control_auth_revoke_operation_targets target
+              LEFT JOIN chat_session_control_events event_row
+                ON event_row.event_id = target.event_id AND event_row.event_sequence = target.event_sequence
+                AND event_row.idempotency_key = target.event_idempotency_key
+                AND event_row.reason_code = target.event_reason_code
+                AND event_row.workspace_id = target.workspace_id AND event_row.session_id = target.session_id
+                AND event_row.request_sha256 = operation.request_sha256
+                AND event_row.correlation_id = operation.correlation_id
+                AND event_row.actor_kind = 'system' AND event_row.actor_id = operation.actor_id
+                AND event_row.created_at = operation.occurred_at
+              WHERE target.operation_idempotency_key = operation.idempotency_key AND event_row.event_id IS NULL
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM chat_session_control_events event_row
+              WHERE event_row.request_sha256 = operation.request_sha256
+                AND NOT EXISTS (SELECT 1 FROM chat_session_control_auth_revoke_operation_targets target
+                  WHERE target.operation_idempotency_key = operation.idempotency_key
+                    AND target.event_id = event_row.event_id)
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM chat_session_control_auth_revoke_operation_targets target
+              WHERE target.operation_idempotency_key = operation.idempotency_key AND (
+                (target.target_kind = 'pending_request' AND NOT EXISTS (
+                  SELECT 1 FROM chat_session_control_requests request_row
+                  WHERE request_row.request_id = target.request_id
+                    AND request_row.status IN ('cancelled', 'expired')
+                    AND request_row.decided_at = operation.occurred_at
+                    AND request_row.decided_by_actor_id = operation.actor_id))
+                OR (target.target_kind = 'current_grant' AND (
+                  NOT EXISTS (SELECT 1 FROM chat_session_control_grants prior
+                    WHERE prior.session_id = target.session_id AND prior.generation = target.generation
+                      AND prior.is_current = 0 AND prior.lease_state = 'revoked'
+                      AND prior.control_revision = target.control_revision + 1
+                      AND prior.updated_at = operation.occurred_at AND prior.terminal_at = operation.occurred_at)
+                  OR NOT EXISTS (SELECT 1 FROM chat_session_control_grants successor
+                    WHERE successor.session_id = target.session_id AND successor.generation = target.generation + 1
+                      AND successor.workspace_id = target.workspace_id AND successor.is_current = 1
+                      AND successor.owner_kind = 'operator' AND successor.lease_state = 'operator_active'
+                      AND successor.transition_idempotency_key = target.event_idempotency_key
+                      AND successor.transition_request_sha256 = operation.request_sha256
+                      AND successor.created_at = operation.occurred_at AND successor.updated_at = operation.occurred_at)))
+              ))
+        ) THEN
+          RAISE EXCEPTION 'session control auth revoke receipt invariant violated' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+    `,
+  },
+  {
+    version: 116,
+    name: "durable_heartbeat_occurrence_authority",
+    sql: `
+      DO $heartbeat_preempted_reason_upgrade$
+      DECLARE constraint_row RECORD;
+      BEGIN
+        LOCK TABLE chat_session_control_events IN ACCESS EXCLUSIVE MODE;
+        FOR constraint_row IN
+          SELECT constraint_def.conname
+          FROM pg_constraint constraint_def
+          WHERE constraint_def.conrelid = to_regclass('chat_session_control_events')
+            AND constraint_def.contype = 'c'
+            AND pg_get_constraintdef(constraint_def.oid) LIKE '%reason_code%'
+            AND pg_get_constraintdef(constraint_def.oid) LIKE '%request_created%'
+            AND pg_get_constraintdef(constraint_def.oid) LIKE '%mutation_denied%'
+        LOOP
+          EXECUTE format(
+            'ALTER TABLE chat_session_control_events DROP CONSTRAINT %I',
+            constraint_row.conname
+          );
+        END LOOP;
+        ALTER TABLE chat_session_control_events
+          ADD CONSTRAINT gc_sce_reason_code CHECK(reason_code IN (
+            'session_initialized', 'request_created', 'request_rejected', 'request_expired',
+            'request_cancelled', 'handoff', 'heartbeat', 'lease_stale', 'reconnect',
+            'identity_revoked', 'release', 'operator_revoke', 'emergency_takeover',
+            'auth_revoked', 'session_deleted', 'session_reactivated', 'mutation_denied',
+            'heartbeat_preempted'
+          ));
+      END;
+      $heartbeat_preempted_reason_upgrade$;
+
+      DO $heartbeat_preemption_control_clock_guards$
+      DECLARE function_sql TEXT;
+      DECLARE upgraded_sql TEXT;
+      DECLARE anchor TEXT := 'AND NOT auth_bypass) THEN';
+      BEGIN
+        SELECT pg_get_functiondef(to_regprocedure('gc_session_control_request_transition_guard()'))
+          INTO function_sql;
+        IF function_sql IS NULL THEN
+          RAISE EXCEPTION 'Postgres migration 116 requires the session-control request transition guard'
+            USING ERRCODE = '23514';
+        END IF;
+        IF strpos(function_sql, 'heartbeat-preempt-request_') = 0 THEN
+          upgraded_sql := replace(function_sql, anchor, $request_clock_evidence$AND NOT auth_bypass
+            AND NOT EXISTS (
+              SELECT 1 FROM chat_session_control_events event_row
+              WHERE left(event_row.idempotency_key, 26) = 'heartbeat-preempt-request_'
+                AND event_row.workspace_id = OLD.workspace_id
+                AND event_row.session_id = OLD.session_id
+                AND event_row.request_id = OLD.request_id
+                AND event_row.previous_generation = OLD.requested_generation
+                AND event_row.next_generation = OLD.requested_generation
+                AND event_row.previous_owner_kind = 'operator'
+                AND event_row.next_owner_kind = 'operator'
+                AND event_row.previous_lease_state = 'operator_active'
+                AND event_row.next_lease_state = 'operator_active'
+                AND event_row.reason_code = NEW.decision_reason_code
+                AND ((NEW.status = 'expired' AND event_row.reason_code = 'request_expired')
+                  OR (NEW.status = 'cancelled' AND event_row.reason_code = 'request_cancelled'))
+                AND event_row.actor_kind = 'operator'
+                AND event_row.actor_id = NEW.decided_by_actor_id
+                AND event_row.companion_session_id = OLD.companion_session_id
+                AND event_row.device_grant_id = OLD.device_grant_id
+                AND event_row.created_at = NEW.decided_at
+            )) THEN$request_clock_evidence$);
+          IF upgraded_sql = function_sql THEN
+            RAISE EXCEPTION 'Postgres migration 116 could not upgrade the request clock guard'
+              USING ERRCODE = '23514';
+          END IF;
+          EXECUTE upgraded_sql;
+        END IF;
+
+        SELECT pg_get_functiondef(to_regprocedure('gc_session_control_grant_update_guard()'))
+          INTO function_sql;
+        IF function_sql IS NULL THEN
+          RAISE EXCEPTION 'Postgres migration 116 requires the session-control grant update guard'
+            USING ERRCODE = '23514';
+        END IF;
+        IF strpos(function_sql, 'heartbeat preemption grant terminal clock evidence') = 0 THEN
+          upgraded_sql := replace(function_sql, anchor, $grant_update_clock_evidence$AND NOT auth_bypass
+            AND NOT EXISTS (
+              SELECT 1 FROM chat_session_control_events event_row
+              WHERE left(event_row.idempotency_key, 18) = 'heartbeat-preempt_'
+                /* heartbeat preemption grant terminal clock evidence */
+                AND event_row.workspace_id = OLD.workspace_id
+                AND event_row.session_id = OLD.session_id
+                AND event_row.request_id IS NULL
+                AND event_row.previous_generation = OLD.generation
+                AND event_row.next_generation = OLD.generation + 1
+                AND event_row.previous_owner_kind = 'operator'
+                AND event_row.next_owner_kind = 'operator'
+                AND event_row.previous_lease_state = 'operator_active'
+                AND event_row.next_lease_state = 'operator_active'
+                AND event_row.reason_code = 'heartbeat_preempted'
+                AND event_row.actor_kind = 'operator'
+                AND event_row.companion_session_id IS NULL
+                AND event_row.device_grant_id IS NULL
+                AND event_row.created_at = NEW.updated_at
+                AND NEW.terminal_at = NEW.updated_at
+            )) THEN$grant_update_clock_evidence$);
+          IF upgraded_sql = function_sql THEN
+            RAISE EXCEPTION 'Postgres migration 116 could not upgrade the grant update clock guard'
+              USING ERRCODE = '23514';
+          END IF;
+          EXECUTE upgraded_sql;
+        END IF;
+
+        SELECT pg_get_functiondef(to_regprocedure('gc_session_control_grant_insert_guard()'))
+          INTO function_sql;
+        IF function_sql IS NULL THEN
+          RAISE EXCEPTION 'Postgres migration 116 requires the session-control grant insert guard'
+            USING ERRCODE = '23514';
+        END IF;
+        IF strpos(function_sql, 'heartbeat preemption successor clock evidence') = 0 THEN
+          upgraded_sql := replace(function_sql, anchor, $grant_insert_clock_evidence$AND NOT auth_bypass
+            AND NOT EXISTS (
+              SELECT 1 FROM chat_session_control_events event_row
+              WHERE left(event_row.idempotency_key, 18) = 'heartbeat-preempt_'
+                /* heartbeat preemption successor clock evidence */
+                AND event_row.workspace_id = NEW.workspace_id
+                AND event_row.session_id = NEW.session_id
+                AND event_row.request_id IS NULL
+                AND event_row.previous_generation = NEW.generation - 1
+                AND event_row.next_generation = NEW.generation
+                AND event_row.previous_owner_kind = 'operator'
+                AND event_row.next_owner_kind = 'operator'
+                AND event_row.previous_lease_state = 'operator_active'
+                AND event_row.next_lease_state = 'operator_active'
+                AND event_row.reason_code = 'heartbeat_preempted'
+                AND event_row.actor_kind = 'operator'
+                AND event_row.companion_session_id IS NULL
+                AND event_row.device_grant_id IS NULL
+                AND event_row.idempotency_key = NEW.transition_idempotency_key
+                AND event_row.request_sha256 = NEW.transition_request_sha256
+                AND event_row.created_at = NEW.created_at
+                AND NEW.updated_at = NEW.created_at
+            )) THEN$grant_insert_clock_evidence$);
+          IF upgraded_sql = function_sql THEN
+            RAISE EXCEPTION 'Postgres migration 116 could not upgrade the grant insert clock guard'
+              USING ERRCODE = '23514';
+          END IF;
+          EXECUTE upgraded_sql;
+        END IF;
+      END;
+      $heartbeat_preemption_control_clock_guards$;
+
+      CREATE OR REPLACE FUNCTION gc_heartbeat_preempted_event_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF NEW.reason_code = 'heartbeat_preempted' AND NOT (
+          NEW.request_id IS NULL
+          AND NEW.previous_generation IS NOT NULL
+          AND NEW.next_generation = NEW.previous_generation + 1
+          AND NEW.previous_owner_kind = 'operator' AND NEW.next_owner_kind = 'operator'
+          AND NEW.previous_lease_state = 'operator_active' AND NEW.next_lease_state = 'operator_active'
+          AND NEW.actor_kind = 'operator'
+          AND NEW.companion_session_id IS NULL AND NEW.device_grant_id IS NULL
+          AND NEW.event_sequence = COALESCE((
+            SELECT MAX(prior_event.event_sequence) + 1
+            FROM chat_session_control_events prior_event
+            WHERE prior_event.session_id = NEW.session_id
+          ), 1)
+          AND EXISTS (
+            SELECT 1 FROM chat_session_control_grants prior
+            WHERE prior.workspace_id = NEW.workspace_id AND prior.session_id = NEW.session_id
+              AND prior.generation = NEW.previous_generation
+              AND prior.owner_kind = 'operator' AND prior.lease_state = 'operator_active'
+              AND prior.is_current = 1 AND prior.terminal_at IS NULL
+            )
+          AND NOT EXISTS (
+            SELECT 1 FROM chat_session_control_grants successor
+            WHERE successor.workspace_id = NEW.workspace_id AND successor.session_id = NEW.session_id
+              AND successor.generation = NEW.next_generation
+          )
+        ) THEN
+          RAISE EXCEPTION 'heartbeat preemption event invariant violated' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      DROP TRIGGER IF EXISTS trg_chat_session_control_events_heartbeat_preempted_guard
+        ON chat_session_control_events;
+      CREATE TRIGGER trg_chat_session_control_events_heartbeat_preempted_guard
+        BEFORE INSERT ON chat_session_control_events FOR EACH ROW
+        EXECUTE FUNCTION gc_heartbeat_preempted_event_guard();
+
+      CREATE OR REPLACE FUNCTION gc_heartbeat_preempted_settlement_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF NOT (
+          EXISTS (
+            SELECT 1 FROM chat_session_control_grants prior
+            WHERE prior.workspace_id = NEW.workspace_id AND prior.session_id = NEW.session_id
+              AND prior.generation = NEW.previous_generation
+              AND prior.owner_kind = 'operator' AND prior.lease_state = 'superseded'
+              AND prior.is_current = 0 AND prior.terminal_at = NEW.created_at
+              AND prior.updated_at = NEW.created_at
+          )
+          AND EXISTS (
+            SELECT 1 FROM chat_session_control_grants successor
+            WHERE successor.workspace_id = NEW.workspace_id AND successor.session_id = NEW.session_id
+              AND successor.generation = NEW.next_generation AND successor.is_current = 1
+              AND successor.owner_kind = 'operator' AND successor.lease_state = 'operator_active'
+              AND successor.transition_idempotency_key = NEW.idempotency_key
+              AND successor.transition_request_sha256 = NEW.request_sha256
+              AND successor.created_at = NEW.created_at AND successor.updated_at = NEW.created_at
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM chat_session_control_requests request_row
+            WHERE request_row.workspace_id = NEW.workspace_id AND request_row.session_id = NEW.session_id
+              AND request_row.requested_generation = NEW.previous_generation
+              AND request_row.status = 'pending'
+          )
+          AND EXISTS (
+            SELECT 1 FROM chat_heartbeat_occurrences occurrence
+            JOIN chat_session_mutation_admissions heartbeat_admission
+              ON heartbeat_admission.admission_id = occurrence.admission_id
+            WHERE occurrence.workspace_id = NEW.workspace_id AND occurrence.session_id = NEW.session_id
+              AND occurrence.controller_generation = NEW.previous_generation
+              AND occurrence.state = 'abandoned' AND occurrence.abandoned_at = NEW.created_at
+              AND heartbeat_admission.status = 'cancelled'
+              AND ((occurrence.abandonment_reason = 'admission_closed'
+                AND occurrence.durable_run_id IS NULL
+                AND heartbeat_admission.terminal_authority_kind = 'request_runtime'
+                AND heartbeat_admission.terminal_control_event_id IS NULL
+                AND heartbeat_admission.terminal_correlation_id = NEW.event_id)
+              OR (occurrence.abandonment_reason = 'authority_drift'
+                AND occurrence.durable_run_id = occurrence.expected_durable_run_id
+                AND heartbeat_admission.terminal_authority_kind = 'authority_superseded'
+                AND heartbeat_admission.terminal_control_event_id = NEW.event_id))
+          )
+          AND EXISTS (
+            SELECT 1 FROM chat_session_mutation_admissions operator_admission
+            WHERE operator_admission.workspace_id = NEW.workspace_id
+              AND operator_admission.session_id = NEW.session_id
+              AND operator_admission.controller_generation = NEW.next_generation
+              AND operator_admission.admission_kind = 'turn_write'
+              AND operator_admission.actor_kind = 'operator'
+              AND operator_admission.actor_id = NEW.actor_id
+              AND operator_admission.correlation_id = NEW.correlation_id
+              AND operator_admission.status = 'active'
+          )
+        ) THEN
+          RAISE EXCEPTION 'heartbeat preemption settlement invariant violated' USING ERRCODE = '23514';
+        END IF;
+        RETURN NULL;
+      END;
+      $$ LANGUAGE plpgsql;
+      DROP TRIGGER IF EXISTS trg_chat_session_control_events_heartbeat_preempted_settlement
+        ON chat_session_control_events;
+      CREATE CONSTRAINT TRIGGER trg_chat_session_control_events_heartbeat_preempted_settlement
+        AFTER INSERT ON chat_session_control_events
+        DEFERRABLE INITIALLY DEFERRED
+        FOR EACH ROW WHEN (NEW.reason_code = 'heartbeat_preempted')
+        EXECUTE FUNCTION gc_heartbeat_preempted_settlement_guard();
+
+      CREATE OR REPLACE FUNCTION gc_heartbeat_preempted_operator_generation_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF NEW.owner_kind = 'operator' AND EXISTS (
+          SELECT 1 FROM chat_session_control_grants prior
+          WHERE prior.session_id = NEW.session_id AND prior.workspace_id = NEW.workspace_id
+            AND prior.generation = NEW.generation - 1
+            AND prior.owner_kind = 'operator' AND prior.lease_state = 'superseded'
+        ) AND NOT EXISTS (
+          SELECT 1 FROM chat_session_control_events event_row
+          WHERE event_row.workspace_id = NEW.workspace_id AND event_row.session_id = NEW.session_id
+            AND event_row.previous_generation = NEW.generation - 1
+            AND event_row.next_generation = NEW.generation
+            AND event_row.previous_owner_kind = 'operator' AND event_row.next_owner_kind = 'operator'
+            AND event_row.previous_lease_state = 'operator_active'
+            AND event_row.next_lease_state = 'operator_active'
+            AND event_row.reason_code = 'heartbeat_preempted' AND event_row.actor_kind = 'operator'
+            AND event_row.request_id IS NULL AND event_row.companion_session_id IS NULL
+            AND event_row.device_grant_id IS NULL
+            AND event_row.idempotency_key = NEW.transition_idempotency_key
+            AND event_row.request_sha256 = NEW.transition_request_sha256
+            AND event_row.created_at = NEW.created_at AND NEW.updated_at = NEW.created_at
+        ) THEN
+          RAISE EXCEPTION 'operator heartbeat-preemption generation lacks its exact event'
+            USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      DROP TRIGGER IF EXISTS trg_chat_session_control_grants_heartbeat_preempted_guard
+        ON chat_session_control_grants;
+      CREATE TRIGGER trg_chat_session_control_grants_heartbeat_preempted_guard
+        BEFORE INSERT ON chat_session_control_grants FOR EACH ROW
+        EXECUTE FUNCTION gc_heartbeat_preempted_operator_generation_guard();
+
+      CREATE TABLE IF NOT EXISTS chat_heartbeat_occurrences (
+        occurrence_id TEXT PRIMARY KEY CHECK(length(occurrence_id) BETWEEN 1 AND 256),
+        workspace_id TEXT NOT NULL CHECK(length(workspace_id) BETWEEN 1 AND 256),
+        session_id TEXT NOT NULL CHECK(length(session_id) BETWEEN 1 AND 256),
+        session_incarnation_id TEXT NOT NULL CHECK(length(session_incarnation_id) BETWEEN 1 AND 320),
+        admission_id TEXT NOT NULL UNIQUE CHECK(length(admission_id) BETWEEN 1 AND 256),
+        admission_request_sha256 TEXT NOT NULL CHECK(admission_request_sha256 ~ '^[0-9a-f]{64}$'),
+        admission_idempotency_key TEXT NOT NULL CHECK(length(admission_idempotency_key) BETWEEN 1 AND 512),
+        admission_correlation_id TEXT NOT NULL CHECK(length(admission_correlation_id) BETWEEN 1 AND 256),
+        runtime_owner_id TEXT NOT NULL CHECK(length(runtime_owner_id) BETWEEN 1 AND 256),
+        system_actor_id TEXT NOT NULL CHECK(system_actor_id = 'system-heartbeat'),
+        admission_material_sha256 TEXT NOT NULL CHECK(admission_material_sha256 ~ '^[0-9a-f]{64}$'),
+        evaluated_policy_sha256 TEXT NOT NULL CHECK(evaluated_policy_sha256 ~ '^[0-9a-f]{64}$'),
+        frozen_request_sha256 TEXT NOT NULL CHECK(frozen_request_sha256 ~ '^[0-9a-f]{64}$'),
+        frozen_objective_sha256 TEXT NOT NULL CHECK(frozen_objective_sha256 ~ '^[0-9a-f]{64}$'),
+        claim_sha256 TEXT NOT NULL UNIQUE CHECK(claim_sha256 ~ '^[0-9a-f]{64}$'),
+        aggregate_revision BIGINT NOT NULL CHECK(aggregate_revision > 0),
+        controller_generation BIGINT NOT NULL CHECK(controller_generation > 0),
+        prior_last_proactive_at TEXT CHECK(
+          prior_last_proactive_at IS NULL OR gc_try_parse_timestamptz(prior_last_proactive_at) IS NOT NULL
+        ),
+        prior_last_proactive_run_id TEXT CHECK(
+          prior_last_proactive_run_id IS NULL OR length(prior_last_proactive_run_id) BETWEEN 1 AND 256
+        ),
+        heartbeat_interval_seconds BIGINT NOT NULL CHECK(heartbeat_interval_seconds BETWEEN 900 AND 86400),
+        cooldown_seconds BIGINT NOT NULL CHECK(cooldown_seconds BETWEEN 0 AND 3600),
+        idle_floor_seconds BIGINT NOT NULL CHECK(idle_floor_seconds BETWEEN 0 AND 86400),
+        observed_session_activity_at TEXT NOT NULL CHECK(
+          gc_try_parse_timestamptz(observed_session_activity_at) IS NOT NULL
+        ),
+        user_message_id TEXT NOT NULL UNIQUE CHECK(length(user_message_id) BETWEEN 1 AND 256),
+        assistant_message_id TEXT NOT NULL UNIQUE CHECK(length(assistant_message_id) BETWEEN 1 AND 256),
+        turn_id TEXT NOT NULL UNIQUE CHECK(length(turn_id) BETWEEN 1 AND 256),
+        expected_durable_run_id TEXT NOT NULL UNIQUE CHECK(length(expected_durable_run_id) BETWEEN 1 AND 256),
+        durable_run_id TEXT UNIQUE CHECK(durable_run_id IS NULL OR length(durable_run_id) BETWEEN 1 AND 256),
+        capability_profile_id TEXT UNIQUE CHECK(
+          capability_profile_id IS NULL OR length(capability_profile_id) BETWEEN 1 AND 256
+        ),
+        capability_profile_hash TEXT CHECK(
+          capability_profile_hash IS NULL OR capability_profile_hash ~ '^[0-9a-f]{64}$'
+        ),
+        state TEXT NOT NULL CHECK(state IN ('admitted', 'durable_bound', 'terminal', 'abandoned')),
+        revision BIGINT NOT NULL CHECK(revision > 0),
+        claimed_at TEXT NOT NULL CHECK(gc_try_parse_timestamptz(claimed_at) IS NOT NULL),
+        durable_bound_at TEXT CHECK(
+          durable_bound_at IS NULL OR gc_try_parse_timestamptz(durable_bound_at) IS NOT NULL
+        ),
+        terminal_at TEXT CHECK(terminal_at IS NULL OR gc_try_parse_timestamptz(terminal_at) IS NOT NULL),
+        abandoned_at TEXT CHECK(abandoned_at IS NULL OR gc_try_parse_timestamptz(abandoned_at) IS NOT NULL),
+        terminal_status TEXT CHECK(
+          terminal_status IS NULL OR terminal_status IN ('completed', 'failed', 'cancelled')
+        ),
+        terminal_handoff_sha256 TEXT CHECK(
+          terminal_handoff_sha256 IS NULL OR terminal_handoff_sha256 ~ '^[0-9a-f]{64}$'
+        ),
+        abandonment_reason TEXT CHECK(
+          abandonment_reason IS NULL OR abandonment_reason IN ('admission_closed', 'authority_drift', 'lifecycle_drift')
+        ),
+        updated_at TEXT NOT NULL CHECK(gc_try_parse_timestamptz(updated_at) IS NOT NULL),
+        CONSTRAINT fk_chat_heartbeat_occurrence_admission
+          FOREIGN KEY(admission_id) REFERENCES chat_session_mutation_admissions(admission_id)
+          ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED,
+        CONSTRAINT fk_chat_heartbeat_occurrence_durable_run
+          FOREIGN KEY(durable_run_id) REFERENCES durable_runs(run_id)
+          ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED,
+        CONSTRAINT fk_chat_heartbeat_occurrence_capability_profile
+          FOREIGN KEY(capability_profile_id) REFERENCES chat_turn_capability_profiles(profile_id)
+          ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED,
+        CHECK(admission_material_sha256 = frozen_request_sha256),
+        CHECK((prior_last_proactive_at IS NULL) = (prior_last_proactive_run_id IS NULL)),
+        CHECK(
+          (state = 'admitted' AND durable_bound_at IS NULL AND terminal_at IS NULL AND abandoned_at IS NULL
+            AND terminal_status IS NULL AND terminal_handoff_sha256 IS NULL AND abandonment_reason IS NULL
+            AND durable_run_id IS NULL AND capability_profile_id IS NULL AND capability_profile_hash IS NULL
+            AND revision = 1 AND updated_at = claimed_at)
+          OR (state = 'durable_bound' AND durable_bound_at IS NOT NULL AND terminal_at IS NULL AND abandoned_at IS NULL
+            AND terminal_status IS NULL AND terminal_handoff_sha256 IS NULL AND abandonment_reason IS NULL
+            AND durable_run_id IS NOT NULL AND durable_run_id = expected_durable_run_id
+            AND capability_profile_id IS NOT NULL AND capability_profile_hash IS NOT NULL)
+          OR (state = 'terminal' AND durable_bound_at IS NOT NULL AND terminal_at IS NOT NULL AND abandoned_at IS NULL
+            AND terminal_status IS NOT NULL AND terminal_handoff_sha256 IS NOT NULL AND abandonment_reason IS NULL
+            AND durable_run_id IS NOT NULL AND durable_run_id = expected_durable_run_id
+            AND capability_profile_id IS NOT NULL AND capability_profile_hash IS NOT NULL)
+          OR (state = 'abandoned' AND terminal_at IS NULL AND abandoned_at IS NOT NULL
+            AND terminal_status IS NULL AND terminal_handoff_sha256 IS NULL AND abandonment_reason IS NOT NULL
+            AND (
+              (durable_bound_at IS NULL AND durable_run_id IS NULL
+                AND capability_profile_id IS NULL AND capability_profile_hash IS NULL)
+              OR (abandonment_reason = 'authority_drift' AND durable_bound_at IS NOT NULL
+                AND durable_run_id IS NOT NULL AND durable_run_id = expected_durable_run_id
+                AND capability_profile_id IS NOT NULL AND capability_profile_hash IS NOT NULL)
+            ))
+        )
+      );
+
+      DO $heartbeat_occurrence_catalog_normalize$
+      DECLARE constraint_row RECORD;
+      DECLARE check_count INTEGER;
+      DECLARE fk_count INTEGER;
+      BEGIN
+        LOCK TABLE chat_heartbeat_occurrences IN ACCESS EXCLUSIVE MODE;
+        IF EXISTS (SELECT 1 FROM chat_heartbeat_occurrences) THEN
+          RAISE EXCEPTION 'heartbeat occurrence catalog normalization requires the new table to be empty'
+            USING ERRCODE = '23514';
+        END IF;
+        FOR constraint_row IN
+          SELECT constraint_def.conname
+          FROM pg_constraint constraint_def
+          WHERE constraint_def.conrelid = to_regclass('chat_heartbeat_occurrences')
+            AND constraint_def.contype IN ('c', 'f')
+        LOOP
+          EXECUTE format('ALTER TABLE chat_heartbeat_occurrences DROP CONSTRAINT %I', constraint_row.conname);
+        END LOOP;
+
+        ALTER TABLE chat_heartbeat_occurrences
+          ADD CONSTRAINT gc_hbo_identity_shape CHECK(
+            length(occurrence_id) BETWEEN 1 AND 256
+            AND length(workspace_id) BETWEEN 1 AND 256
+            AND length(session_id) BETWEEN 1 AND 256
+            AND length(session_incarnation_id) BETWEEN 1 AND 320
+            AND length(admission_id) BETWEEN 1 AND 256
+            AND admission_request_sha256 ~ '^[0-9a-f]{64}$'
+            AND length(admission_idempotency_key) BETWEEN 1 AND 512
+            AND length(admission_correlation_id) BETWEEN 1 AND 256
+            AND length(runtime_owner_id) BETWEEN 1 AND 256
+            AND system_actor_id = 'system-heartbeat'
+            AND admission_material_sha256 ~ '^[0-9a-f]{64}$'
+            AND evaluated_policy_sha256 ~ '^[0-9a-f]{64}$'
+            AND frozen_request_sha256 ~ '^[0-9a-f]{64}$'
+            AND admission_material_sha256 = frozen_request_sha256
+            AND frozen_objective_sha256 ~ '^[0-9a-f]{64}$'
+            AND claim_sha256 ~ '^[0-9a-f]{64}$'
+            AND aggregate_revision > 0 AND controller_generation > 0
+            AND (prior_last_proactive_at IS NULL OR (
+              gc_try_parse_timestamptz(prior_last_proactive_at) IS NOT NULL
+              AND to_char(gc_try_parse_timestamptz(prior_last_proactive_at) AT TIME ZONE 'UTC',
+                'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = prior_last_proactive_at
+            ))
+            AND (prior_last_proactive_run_id IS NULL OR length(prior_last_proactive_run_id) BETWEEN 1 AND 256)
+            AND heartbeat_interval_seconds BETWEEN 900 AND 86400
+            AND cooldown_seconds BETWEEN 0 AND 3600
+            AND idle_floor_seconds BETWEEN 0 AND 86400
+            AND gc_try_parse_timestamptz(observed_session_activity_at) IS NOT NULL
+            AND to_char(gc_try_parse_timestamptz(observed_session_activity_at) AT TIME ZONE 'UTC',
+              'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = observed_session_activity_at
+            AND length(user_message_id) BETWEEN 1 AND 256
+            AND length(assistant_message_id) BETWEEN 1 AND 256
+            AND length(turn_id) BETWEEN 1 AND 256
+            AND length(expected_durable_run_id) BETWEEN 1 AND 256
+            AND (durable_run_id IS NULL OR length(durable_run_id) BETWEEN 1 AND 256)
+            AND (capability_profile_id IS NULL OR length(capability_profile_id) BETWEEN 1 AND 256)
+            AND (capability_profile_hash IS NULL OR capability_profile_hash ~ '^[0-9a-f]{64}$')
+            AND state IN ('admitted', 'durable_bound', 'terminal', 'abandoned')
+            AND revision > 0
+            AND gc_try_parse_timestamptz(claimed_at) IS NOT NULL
+            AND to_char(gc_try_parse_timestamptz(claimed_at) AT TIME ZONE 'UTC',
+              'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = claimed_at
+            AND (durable_bound_at IS NULL OR (
+              gc_try_parse_timestamptz(durable_bound_at) IS NOT NULL
+              AND to_char(gc_try_parse_timestamptz(durable_bound_at) AT TIME ZONE 'UTC',
+                'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = durable_bound_at
+            ))
+            AND (terminal_at IS NULL OR (
+              gc_try_parse_timestamptz(terminal_at) IS NOT NULL
+              AND to_char(gc_try_parse_timestamptz(terminal_at) AT TIME ZONE 'UTC',
+                'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = terminal_at
+            ))
+            AND (abandoned_at IS NULL OR (
+              gc_try_parse_timestamptz(abandoned_at) IS NOT NULL
+              AND to_char(gc_try_parse_timestamptz(abandoned_at) AT TIME ZONE 'UTC',
+                'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = abandoned_at
+            ))
+            AND (terminal_status IS NULL OR terminal_status IN ('completed', 'failed', 'cancelled'))
+            AND (terminal_handoff_sha256 IS NULL OR terminal_handoff_sha256 ~ '^[0-9a-f]{64}$')
+            AND (abandonment_reason IS NULL OR abandonment_reason IN (
+              'admission_closed', 'authority_drift', 'lifecycle_drift'
+            ))
+            AND gc_try_parse_timestamptz(updated_at) IS NOT NULL
+            AND to_char(gc_try_parse_timestamptz(updated_at) AT TIME ZONE 'UTC',
+              'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = updated_at
+          ),
+          ADD CONSTRAINT gc_hbo_prior_cadence_pair CHECK(
+            (prior_last_proactive_at IS NULL) = (prior_last_proactive_run_id IS NULL)
+          ),
+          ADD CONSTRAINT gc_hbo_state_shape CHECK(
+            (state = 'admitted' AND durable_bound_at IS NULL AND terminal_at IS NULL AND abandoned_at IS NULL
+              AND terminal_status IS NULL AND terminal_handoff_sha256 IS NULL AND abandonment_reason IS NULL
+              AND durable_run_id IS NULL AND capability_profile_id IS NULL AND capability_profile_hash IS NULL
+              AND revision = 1 AND updated_at = claimed_at)
+            OR (state = 'durable_bound' AND durable_bound_at IS NOT NULL AND terminal_at IS NULL
+              AND abandoned_at IS NULL AND terminal_status IS NULL AND terminal_handoff_sha256 IS NULL
+              AND abandonment_reason IS NULL AND durable_run_id IS NOT NULL
+              AND durable_run_id = expected_durable_run_id
+              AND capability_profile_id IS NOT NULL AND capability_profile_hash IS NOT NULL)
+            OR (state = 'terminal' AND durable_bound_at IS NOT NULL AND terminal_at IS NOT NULL
+              AND abandoned_at IS NULL AND terminal_status IS NOT NULL AND terminal_handoff_sha256 IS NOT NULL
+              AND abandonment_reason IS NULL AND durable_run_id IS NOT NULL
+              AND durable_run_id = expected_durable_run_id
+              AND capability_profile_id IS NOT NULL AND capability_profile_hash IS NOT NULL)
+            OR (state = 'abandoned' AND terminal_at IS NULL
+              AND abandoned_at IS NOT NULL AND terminal_status IS NULL AND terminal_handoff_sha256 IS NULL
+              AND abandonment_reason IS NOT NULL AND (
+                (durable_bound_at IS NULL AND durable_run_id IS NULL
+                  AND capability_profile_id IS NULL AND capability_profile_hash IS NULL)
+                OR (abandonment_reason = 'authority_drift' AND durable_bound_at IS NOT NULL
+                  AND durable_run_id IS NOT NULL AND durable_run_id = expected_durable_run_id
+                  AND capability_profile_id IS NOT NULL AND capability_profile_hash IS NOT NULL)
+              ))
+          ),
+          ADD CONSTRAINT fk_chat_heartbeat_occurrence_admission
+            FOREIGN KEY(admission_id) REFERENCES chat_session_mutation_admissions(admission_id)
+            ON UPDATE NO ACTION ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED,
+          ADD CONSTRAINT fk_chat_heartbeat_occurrence_durable_run
+            FOREIGN KEY(durable_run_id) REFERENCES durable_runs(run_id)
+            ON UPDATE NO ACTION ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED,
+          ADD CONSTRAINT fk_chat_heartbeat_occurrence_capability_profile
+            FOREIGN KEY(capability_profile_id) REFERENCES chat_turn_capability_profiles(profile_id)
+            ON UPDATE NO ACTION ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED;
+
+        SELECT COUNT(*) INTO check_count
+        FROM pg_constraint constraint_def
+        WHERE constraint_def.conrelid = to_regclass('chat_heartbeat_occurrences')
+          AND constraint_def.contype = 'c' AND constraint_def.convalidated
+          AND constraint_def.conname IN ('gc_hbo_identity_shape', 'gc_hbo_prior_cadence_pair', 'gc_hbo_state_shape');
+        SELECT COUNT(*) INTO fk_count
+        FROM pg_constraint constraint_def
+        WHERE constraint_def.conrelid = to_regclass('chat_heartbeat_occurrences')
+          AND constraint_def.contype = 'f' AND constraint_def.condeferrable AND constraint_def.condeferred
+          AND constraint_def.convalidated AND constraint_def.confdeltype = 'a' AND constraint_def.confupdtype = 'a'
+          AND constraint_def.conname IN (
+            'fk_chat_heartbeat_occurrence_admission',
+            'fk_chat_heartbeat_occurrence_durable_run',
+            'fk_chat_heartbeat_occurrence_capability_profile'
+          );
+        IF check_count <> 3 OR fk_count <> 3 THEN
+          RAISE EXCEPTION 'heartbeat occurrence catalog normalization assertion failed' USING ERRCODE = '23514';
+        END IF;
+      END;
+      $heartbeat_occurrence_catalog_normalize$;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_heartbeat_occurrences_one_open
+        ON chat_heartbeat_occurrences(session_id)
+        WHERE state IN ('admitted', 'durable_bound');
+      CREATE INDEX IF NOT EXISTS idx_chat_heartbeat_occurrences_recovery
+        ON chat_heartbeat_occurrences(state, updated_at, occurrence_id);
+      CREATE INDEX IF NOT EXISTS idx_chat_heartbeat_occurrences_session
+        ON chat_heartbeat_occurrences(workspace_id, session_id, claimed_at, occurrence_id);
+
+      CREATE OR REPLACE FUNCTION gc_heartbeat_occurrence_insert_guard()
+      RETURNS trigger AS $$
+      DECLARE database_now TIMESTAMPTZ := clock_timestamp();
+      BEGIN
+        IF NEW.state <> 'admitted' OR NEW.revision <> 1 OR NEW.updated_at <> NEW.claimed_at
+          OR NEW.admission_material_sha256 <> NEW.frozen_request_sha256
+          OR abs(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(NEW.claimed_at) - database_now))) > 1
+          OR NOT EXISTS (
+          SELECT 1 FROM chat_session_mutation_admissions admission
+          WHERE admission.admission_id = NEW.admission_id
+            AND admission.workspace_id = NEW.workspace_id
+            AND admission.session_id = NEW.session_id
+            AND admission.session_incarnation_id = NEW.session_incarnation_id
+            AND admission.turn_id = NEW.turn_id
+            AND admission.runtime_owner_id = NEW.runtime_owner_id
+            AND admission.actor_kind = 'system'
+            AND admission.actor_id = NEW.system_actor_id
+            AND admission.operation = 'chat_system_heartbeat'
+            AND admission.material_sha256 = NEW.admission_material_sha256
+            AND admission.request_sha256 = NEW.admission_request_sha256
+            AND admission.idempotency_key = NEW.admission_idempotency_key
+            AND admission.correlation_id = NEW.admission_correlation_id
+            AND admission.aggregate_revision = NEW.aggregate_revision
+            AND admission.controller_generation = NEW.controller_generation
+            AND admission.status = 'active'
+        ) OR NOT EXISTS (
+          SELECT 1 FROM session_autonomy_prefs prefs
+          WHERE prefs.session_id = NEW.session_id
+            AND prefs.last_proactive_at = NEW.claimed_at
+            AND prefs.last_proactive_run_id = NEW.occurrence_id
+        ) OR EXISTS (
+          SELECT 1 FROM chat_messages message
+          WHERE message.message_id IN (NEW.user_message_id, NEW.assistant_message_id)
+        ) THEN
+          RAISE EXCEPTION 'heartbeat occurrence admission or cadence invariant violated' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE OR REPLACE FUNCTION gc_heartbeat_occurrence_transition_guard()
+      RETURNS trigger AS $$
+      DECLARE database_now TIMESTAMPTZ := clock_timestamp();
+      BEGIN
+        IF NEW.occurrence_id <> OLD.occurrence_id
+          OR NEW.workspace_id <> OLD.workspace_id OR NEW.session_id <> OLD.session_id
+          OR NEW.session_incarnation_id <> OLD.session_incarnation_id OR NEW.admission_id <> OLD.admission_id
+          OR NEW.admission_request_sha256 <> OLD.admission_request_sha256
+          OR NEW.admission_idempotency_key <> OLD.admission_idempotency_key
+          OR NEW.admission_correlation_id <> OLD.admission_correlation_id
+          OR NEW.runtime_owner_id <> OLD.runtime_owner_id OR NEW.system_actor_id <> OLD.system_actor_id
+          OR NEW.admission_material_sha256 <> OLD.admission_material_sha256
+          OR NEW.evaluated_policy_sha256 <> OLD.evaluated_policy_sha256
+          OR NEW.frozen_request_sha256 <> OLD.frozen_request_sha256
+          OR NEW.frozen_objective_sha256 <> OLD.frozen_objective_sha256
+          OR NEW.claim_sha256 <> OLD.claim_sha256
+          OR NEW.aggregate_revision <> OLD.aggregate_revision
+          OR NEW.controller_generation <> OLD.controller_generation
+          OR NEW.prior_last_proactive_at IS DISTINCT FROM OLD.prior_last_proactive_at
+          OR NEW.prior_last_proactive_run_id IS DISTINCT FROM OLD.prior_last_proactive_run_id
+          OR NEW.heartbeat_interval_seconds <> OLD.heartbeat_interval_seconds
+          OR NEW.cooldown_seconds <> OLD.cooldown_seconds OR NEW.idle_floor_seconds <> OLD.idle_floor_seconds
+          OR NEW.observed_session_activity_at <> OLD.observed_session_activity_at
+          OR NEW.user_message_id <> OLD.user_message_id OR NEW.assistant_message_id <> OLD.assistant_message_id
+          OR NEW.turn_id <> OLD.turn_id OR NEW.expected_durable_run_id <> OLD.expected_durable_run_id
+          OR NEW.claimed_at <> OLD.claimed_at
+          OR NEW.revision <> OLD.revision + 1
+          OR gc_try_parse_timestamptz(NEW.updated_at) < gc_try_parse_timestamptz(OLD.updated_at)
+          OR (abs(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(NEW.updated_at) - database_now))) > 1
+            AND NOT (
+              NEW.state = 'abandoned' AND NEW.abandoned_at = NEW.updated_at
+              AND EXISTS (
+                SELECT 1
+                FROM chat_session_control_events event_row
+                JOIN chat_session_control_grants successor
+                  ON successor.workspace_id = event_row.workspace_id
+                  AND successor.session_id = event_row.session_id
+                  AND successor.generation = event_row.next_generation
+                JOIN chat_session_mutation_admissions admission
+                  ON admission.admission_id = OLD.admission_id
+                WHERE left(event_row.idempotency_key, 18) = 'heartbeat-preempt_'
+                  /* heartbeat preemption occurrence timestamp evidence */
+                  AND event_row.reason_code = 'heartbeat_preempted'
+                  AND event_row.workspace_id = OLD.workspace_id
+                  AND event_row.session_id = OLD.session_id
+                  AND event_row.previous_generation = OLD.controller_generation
+                  AND event_row.next_generation = OLD.controller_generation + 1
+                  AND event_row.previous_owner_kind = 'operator'
+                  AND event_row.next_owner_kind = 'operator'
+                  AND event_row.previous_lease_state = 'operator_active'
+                  AND event_row.next_lease_state = 'operator_active'
+                  AND event_row.request_id IS NULL
+                  AND event_row.actor_kind = 'operator'
+                  AND event_row.companion_session_id IS NULL
+                  AND event_row.device_grant_id IS NULL
+                  AND event_row.created_at = NEW.updated_at
+                  AND successor.is_current = 1
+                  AND successor.owner_kind = 'operator'
+                  AND successor.lease_state = 'operator_active'
+                  AND successor.transition_idempotency_key = event_row.idempotency_key
+                  AND successor.transition_request_sha256 = event_row.request_sha256
+                  AND successor.created_at = event_row.created_at
+                  AND successor.updated_at = event_row.created_at
+                  AND admission.status = 'cancelled'
+                  AND admission.closed_at = event_row.created_at
+                  AND ((OLD.state = 'admitted'
+                    AND NEW.abandonment_reason = 'admission_closed'
+                    AND admission.terminal_authority_kind = 'request_runtime'
+                    AND admission.terminal_control_event_id IS NULL
+                    AND admission.terminal_correlation_id = event_row.event_id)
+                  OR (OLD.state = 'durable_bound'
+                    AND NEW.abandonment_reason = 'authority_drift'
+                    AND admission.terminal_authority_kind = 'authority_superseded'
+                    AND admission.terminal_control_event_id = event_row.event_id))
+                  AND NOT EXISTS (
+                    SELECT 1 FROM chat_session_control_requests request_row
+                    WHERE request_row.workspace_id = event_row.workspace_id
+                      AND request_row.session_id = event_row.session_id
+                      AND request_row.requested_generation = event_row.previous_generation
+                      AND request_row.status = 'pending'
+                  )
+              )
+            ))
+          OR (OLD.state <> 'admitted' AND (
+            NEW.durable_run_id IS DISTINCT FROM OLD.durable_run_id
+            OR NEW.capability_profile_id IS DISTINCT FROM OLD.capability_profile_id
+            OR NEW.capability_profile_hash IS DISTINCT FROM OLD.capability_profile_hash
+          ))
+          OR (OLD.state = 'admitted' AND NEW.state = 'durable_bound' AND (
+            NEW.durable_run_id <> OLD.expected_durable_run_id
+            OR NEW.durable_bound_at <> NEW.updated_at
+            OR NOT EXISTS (
+              SELECT 1 FROM chat_turn_mutation_admission_durable_bindings binding
+              WHERE binding.admission_id = OLD.admission_id AND binding.turn_id = OLD.turn_id
+                AND binding.workspace_id = OLD.workspace_id AND binding.session_id = OLD.session_id
+                AND binding.session_incarnation_id = OLD.session_incarnation_id
+                AND binding.durable_run_id = OLD.expected_durable_run_id
+            )
+            OR NOT EXISTS (
+              SELECT 1 FROM chat_turn_capability_profile_incarnation_bindings profile_binding
+              WHERE profile_binding.profile_id = NEW.capability_profile_id
+                AND profile_binding.turn_id = OLD.turn_id
+                AND profile_binding.profile_hash = NEW.capability_profile_hash
+            )
+            OR EXISTS (
+              SELECT 1 FROM chat_messages message
+              WHERE message.message_id IN (OLD.user_message_id, OLD.assistant_message_id)
+            )
+          ))
+          OR (OLD.state = 'durable_bound' AND NEW.state = 'terminal' AND (
+            NEW.durable_bound_at IS DISTINCT FROM OLD.durable_bound_at OR NEW.terminal_at <> NEW.updated_at
+            OR NOT EXISTS (
+              SELECT 1 FROM chat_session_mutation_admissions admission
+              JOIN durable_runs run ON run.run_id = OLD.durable_run_id
+              WHERE admission.admission_id = OLD.admission_id
+                AND admission.status IN ('completed', 'cancelled')
+                AND admission.terminal_authority_kind = 'durable_terminal'
+                AND admission.terminal_durable_run_id = OLD.durable_run_id
+                AND admission.terminal_durable_run_status = NEW.terminal_status
+                AND run.status = NEW.terminal_status
+            )
+          ))
+          OR (OLD.state = 'admitted' AND NEW.state = 'abandoned' AND (
+            NEW.abandoned_at <> NEW.updated_at
+            OR EXISTS (
+              SELECT 1 FROM chat_turn_mutation_admission_durable_bindings binding
+              WHERE binding.admission_id = OLD.admission_id
+            )
+            OR NOT EXISTS (
+              SELECT 1 FROM chat_session_mutation_admissions admission
+              WHERE admission.admission_id = OLD.admission_id AND admission.status <> 'active'
+                AND (
+                  (NEW.abandonment_reason = 'admission_closed'
+                    AND admission.terminal_authority_kind IN ('expired_recovery', 'request_runtime'))
+                  OR (NEW.abandonment_reason = 'authority_drift'
+                    AND admission.terminal_authority_kind = 'authority_superseded')
+                  OR (NEW.abandonment_reason = 'lifecycle_drift'
+                    AND admission.terminal_authority_kind = 'lifecycle_delete')
+                )
+            )
+          ))
+          OR (OLD.state = 'durable_bound' AND NEW.state = 'abandoned' AND (
+            NEW.abandoned_at <> NEW.updated_at OR NEW.abandonment_reason <> 'authority_drift'
+            OR NEW.durable_bound_at IS DISTINCT FROM OLD.durable_bound_at
+            OR NOT EXISTS (
+              SELECT 1 FROM chat_turn_mutation_admission_durable_bindings binding
+              WHERE binding.admission_id = OLD.admission_id AND binding.turn_id = OLD.turn_id
+                AND binding.workspace_id = OLD.workspace_id AND binding.session_id = OLD.session_id
+                AND binding.session_incarnation_id = OLD.session_incarnation_id
+                AND binding.durable_run_id = OLD.durable_run_id
+            )
+            OR NOT EXISTS (
+              SELECT 1
+              FROM chat_session_mutation_admissions admission
+              JOIN durable_runs run ON run.run_id = OLD.durable_run_id
+              JOIN chat_session_control_events event_row
+                ON event_row.event_id = admission.terminal_control_event_id
+              WHERE admission.admission_id = OLD.admission_id
+                AND admission.status = 'cancelled'
+                AND admission.terminal_authority_kind = 'authority_superseded'
+                AND event_row.reason_code = 'heartbeat_preempted'
+                AND event_row.workspace_id = OLD.workspace_id AND event_row.session_id = OLD.session_id
+                AND event_row.previous_generation = OLD.controller_generation
+                AND event_row.next_generation = OLD.controller_generation + 1
+                AND event_row.previous_owner_kind = 'operator' AND event_row.next_owner_kind = 'operator'
+                AND event_row.previous_lease_state = 'operator_active'
+                AND event_row.next_lease_state = 'operator_active'
+                AND event_row.actor_kind = 'operator'
+                AND run.workflow_key = 'chat.turn.execute' AND run.status = 'cancelled'
+                AND run.lease_owner_id IS NULL AND run.lease_expires_at IS NULL
+                AND run.lease_heartbeat_at IS NULL AND run.finished_at = NEW.updated_at
+            )
+          ))
+          OR NOT (
+            (OLD.state = 'admitted' AND NEW.state IN ('durable_bound', 'abandoned'))
+            OR (OLD.state = 'durable_bound' AND NEW.state IN ('terminal', 'abandoned'))
+          ) THEN
+          RAISE EXCEPTION 'heartbeat occurrence transition invariant violated' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE OR REPLACE FUNCTION gc_canonical_jsonb(value JSONB)
+      RETURNS TEXT AS $$
+      DECLARE body TEXT;
+      BEGIN
+        IF value IS NULL THEN RETURN NULL; END IF;
+        CASE jsonb_typeof(value)
+          WHEN 'object' THEN
+            SELECT COALESCE(string_agg(
+              to_jsonb(entry.key)::TEXT || ':' || gc_canonical_jsonb(entry.value),
+              ',' ORDER BY entry.key COLLATE "C"
+            ), '') INTO body
+            FROM jsonb_each(value) entry;
+            RETURN '{' || body || '}';
+          WHEN 'array' THEN
+            SELECT COALESCE(string_agg(
+              gc_canonical_jsonb(entry.value), ',' ORDER BY entry.ordinality
+            ), '') INTO body
+            FROM jsonb_array_elements(value) WITH ORDINALITY entry(value, ordinality);
+            RETURN '[' || body || ']';
+          ELSE
+            RETURN value::TEXT;
+        END CASE;
+      END;
+      $$ LANGUAGE plpgsql IMMUTABLE STRICT;
+
+      CREATE OR REPLACE FUNCTION gc_sha256_text(value TEXT)
+      RETURNS TEXT AS $$
+        SELECT encode(sha256(convert_to(value, 'UTF8')), 'hex');
+      $$ LANGUAGE sql IMMUTABLE STRICT;
+
+      CREATE OR REPLACE FUNCTION gc_js_trim(value TEXT)
+      RETURNS TEXT AS $$
+        SELECT btrim(value, U&'\\0009\\000A\\000B\\000C\\000D\\0020\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000\\FEFF');
+      $$ LANGUAGE sql IMMUTABLE STRICT;
+
+      CREATE OR REPLACE FUNCTION gc_unicode_scalar_length(value TEXT)
+      RETURNS INTEGER AS $$
+        SELECT char_length(value);
+      $$ LANGUAGE sql IMMUTABLE STRICT;
+
+      CREATE OR REPLACE FUNCTION gc_heartbeat_decision_raw_is_exact(value TEXT)
+      RETURNS BOOLEAN AS $$
+      DECLARE parsed JSON;
+      DECLARE key_count INTEGER;
+      DECLARE normalized_message TEXT;
+      BEGIN
+        parsed := value::JSON;
+        IF json_typeof(parsed) <> 'object' THEN RETURN FALSE; END IF;
+        SELECT COUNT(*) INTO key_count FROM json_each(parsed);
+        IF EXISTS (SELECT 1 FROM json_each(parsed) field WHERE field.key NOT IN ('message', 'notify')) THEN
+          RETURN FALSE;
+        END IF;
+        IF json_typeof(parsed -> 'notify') = 'boolean' AND (parsed ->> 'notify')::BOOLEAN = FALSE THEN
+          RETURN key_count = 1;
+        END IF;
+        IF json_typeof(parsed -> 'notify') = 'boolean' AND (parsed ->> 'notify')::BOOLEAN = TRUE
+          AND key_count = 2 AND json_typeof(parsed -> 'message') = 'string' THEN
+          normalized_message := gc_js_trim(parsed ->> 'message');
+          RETURN gc_unicode_scalar_length(normalized_message) BETWEEN 1 AND 4000;
+        END IF;
+        RETURN FALSE;
+      EXCEPTION WHEN OTHERS THEN
+        RETURN FALSE;
+      END;
+      $$ LANGUAGE plpgsql IMMUTABLE STRICT;
+
+      CREATE OR REPLACE FUNCTION gc_heartbeat_decision_notify(value TEXT)
+      RETURNS BOOLEAN AS $$
+        SELECT CASE WHEN gc_heartbeat_decision_raw_is_exact(value)
+          THEN ((value::JSON) ->> 'notify')::BOOLEAN ELSE NULL END;
+      $$ LANGUAGE sql IMMUTABLE STRICT;
+
+      CREATE OR REPLACE FUNCTION gc_heartbeat_decision_normalized_message(value TEXT)
+      RETURNS TEXT AS $$
+        SELECT CASE WHEN gc_heartbeat_decision_raw_is_exact(value)
+          AND ((value::JSON) ->> 'notify')::BOOLEAN
+          THEN gc_js_trim((value::JSON) ->> 'message') ELSE NULL END;
+      $$ LANGUAGE sql IMMUTABLE STRICT;
+
+      CREATE OR REPLACE FUNCTION gc_heartbeat_occurrence_terminal_evidence_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF OLD.state = 'durable_bound' AND NEW.state = 'terminal' AND NOT EXISTS (
+          SELECT 1
+          FROM (
+            SELECT run.*,
+                   gc_try_parse_jsonb(run.payload_json) AS payload,
+                   gc_try_parse_jsonb(run.metadata_json) AS metadata
+            FROM durable_runs run
+            WHERE run.run_id = OLD.durable_run_id
+          ) run
+          JOIN chat_turn_traces trace ON trace.turn_id = OLD.turn_id
+          WHERE run.workflow_key = 'chat.turn.execute'
+            AND run.status = NEW.terminal_status
+            AND run.status IN ('completed', 'failed', 'cancelled')
+            AND run.lease_owner_id IS NULL AND run.lease_expires_at IS NULL
+            AND jsonb_typeof(run.payload) = 'object' AND jsonb_typeof(run.metadata) = 'object'
+            AND jsonb_typeof(run.metadata -> 'autonomousAdmission') = 'object'
+            AND (
+              SELECT COUNT(*) FROM jsonb_object_keys(run.metadata -> 'autonomousAdmission')
+            ) = 2
+            AND NOT EXISTS (
+              SELECT 1 FROM jsonb_object_keys(run.metadata -> 'autonomousAdmission') admission_seal_field
+              WHERE admission_seal_field NOT IN ('material', 'materialSha256')
+            )
+            AND jsonb_typeof(run.metadata #> '{autonomousAdmission,material}') = 'object'
+            AND (
+              SELECT COUNT(*) FROM jsonb_object_keys(run.metadata #> '{autonomousAdmission,material}')
+            ) = 8
+            AND NOT EXISTS (
+              SELECT 1 FROM jsonb_object_keys(
+                run.metadata #> '{autonomousAdmission,material}'
+              ) autonomous_material_field
+              WHERE autonomous_material_field NOT IN (
+                'version', 'identity', 'sessionId', 'objectiveSha256', 'autonomous',
+                'admission', 'capability', 'cronAdmission'
+              )
+            )
+            AND run.metadata #>> '{autonomousAdmission,material,version}' = 'chat.autonomous.admission.v1'
+            AND run.metadata #>> '{autonomousAdmission,materialSha256}'
+              = gc_sha256_text(gc_canonical_jsonb(run.metadata #> '{autonomousAdmission,material}'))
+            AND run.metadata #>> '{autonomousAdmission,material,identity,userMessageId}'
+              = run.payload ->> 'userMessageId'
+            AND run.metadata #>> '{autonomousAdmission,material,identity,assistantMessageId}'
+              = run.payload ->> 'assistantMessageId'
+            AND run.metadata #>> '{autonomousAdmission,material,identity,turnId}' = OLD.turn_id
+            AND run.metadata #>> '{autonomousAdmission,material,identity,durableRunId}' = run.run_id
+            AND run.metadata #>> '{autonomousAdmission,material,sessionId}' = OLD.session_id
+            AND jsonb_typeof(run.metadata -> 'objective') = 'string'
+            AND run.metadata ->> 'objective' = run.payload #>> '{request,content}'
+            AND run.metadata #>> '{autonomousAdmission,material,objectiveSha256}'
+              = gc_sha256_text(gc_canonical_jsonb(run.metadata -> 'objective'))
+            AND jsonb_typeof(run.metadata #> '{autonomousAdmission,material,autonomous}') = 'object'
+            AND NOT EXISTS (
+              SELECT 1 FROM jsonb_object_keys(
+                run.metadata #> '{autonomousAdmission,material,autonomous}'
+              ) autonomous_field
+              WHERE autonomous_field NOT IN (
+                'kind', 'systemActorId', 'sourceRunId', 'reason', 'deliverMode',
+                'deliveryChannel', 'profilePosture', 'commitmentId'
+              )
+            )
+            AND run.metadata #>> '{autonomousAdmission,material,autonomous,kind}' = 'heartbeat'
+            AND run.metadata #>> '{autonomousAdmission,material,autonomous,systemActorId}' = 'system-heartbeat'
+            AND run.metadata #>> '{autonomousAdmission,material,autonomous,deliverMode}' = 'on_notify'
+            AND length(run.metadata #>> '{autonomousAdmission,material,autonomous,sourceRunId}') BETWEEN 1 AND 256
+            AND length(run.metadata #>> '{autonomousAdmission,material,autonomous,reason}') BETWEEN 1 AND 4096
+            AND run.metadata -> 'autonomous'
+              = run.metadata #> '{autonomousAdmission,material,autonomous}'
+            AND run.payload #>> '{requestActor,actorKind}' = 'system'
+            AND run.payload #>> '{requestActor,actorId}' = 'system-heartbeat'
+            AND run.metadata #>> '{autonomousAdmission,material,admission,admissionId}'
+              = run.payload ->> 'admissionId'
+            AND run.metadata #>> '{autonomousAdmission,material,admission,sessionIncarnationId}'
+              = run.payload ->> 'sessionIncarnationId'
+            AND run.metadata #>> '{autonomousAdmission,material,admission,workspaceId}'
+              = run.payload ->> 'workspaceId'
+            AND run.metadata #>> '{autonomousAdmission,material,admission,admissionMaterialSha256}'
+              = run.payload ->> 'admissionMaterialSha256'
+            AND run.metadata #>> '{autonomousAdmission,material,admission,effectiveRequestMaterialSha256}'
+              = run.payload ->> 'effectiveRequestMaterialSha256'
+            AND run.metadata #>> '{autonomousAdmission,material,capability,profileId}'
+              = run.payload ->> 'capabilityProfileId'
+            AND run.metadata #>> '{autonomousAdmission,material,capability,profileHash}'
+              = run.payload ->> 'capabilityProfileHash'
+            AND run.metadata #>> '{autonomousAdmission,material,capability,profileId}'
+              = run.metadata ->> 'capabilityProfileId'
+            AND run.metadata #>> '{autonomousAdmission,material,capability,profileHash}'
+              = run.metadata ->> 'capabilityProfileHash'
+            AND length(run.metadata #>> '{autonomousAdmission,material,capability,snapshotId}') BETWEEN 1 AND 256
+            AND jsonb_typeof(run.metadata #> '{autonomousAdmission,material,cronAdmission}') = 'null'
+            AND jsonb_typeof(run.metadata -> 'chatTurnRuntimeAuthority') = 'object'
+            AND jsonb_typeof(run.metadata #> '{chatTurnRuntimeAuthority,material}') = 'object'
+            AND (
+              SELECT COUNT(*) FROM jsonb_object_keys(run.metadata -> 'chatTurnRuntimeAuthority')
+            ) = 2
+            AND NOT EXISTS (
+              SELECT 1 FROM jsonb_object_keys(run.metadata -> 'chatTurnRuntimeAuthority') authority_field
+              WHERE authority_field NOT IN ('material', 'materialSha256')
+            )
+            AND (
+              SELECT COUNT(*) FROM jsonb_object_keys(
+                run.metadata #> '{chatTurnRuntimeAuthority,material}'
+              )
+            ) = CASE run.status WHEN 'completed' THEN 14 ELSE 13 END
+            AND NOT EXISTS (
+              SELECT 1 FROM jsonb_object_keys(
+                run.metadata #> '{chatTurnRuntimeAuthority,material}'
+              ) material_field
+              WHERE material_field NOT IN (
+                'version', 'runId', 'turnId', 'transitionKind', 'durableStatus', 'traceStatus',
+                'transitionAt', 'postCommitGenerationId', 'postCommitEligibility', 'waitForEvent',
+                'terminalOutput', 'linkedFinalization', 'requiredFinalizers', 'heartbeatDecisionReceipt'
+              )
+            )
+            AND (
+              (run.status = 'completed'
+                AND jsonb_typeof(run.metadata #> '{chatTurnRuntimeAuthority,material,heartbeatDecisionReceipt}')
+                  = 'object')
+              OR (run.status IN ('failed', 'cancelled')
+                AND NOT (run.metadata #> '{chatTurnRuntimeAuthority,material}' ? 'heartbeatDecisionReceipt'))
+            )
+            AND run.metadata #>> '{chatTurnRuntimeAuthority,materialSha256}'
+              = gc_sha256_text(gc_canonical_jsonb(
+                  run.metadata #> '{chatTurnRuntimeAuthority,material}'
+                ))
+            AND run.metadata #>> '{chatTurnRuntimeAuthority,material,version}'
+              = 'chat.turn.runtime-authority.v1'
+            AND run.metadata #>> '{chatTurnRuntimeAuthority,material,runId}' = run.run_id
+            AND run.metadata #>> '{chatTurnRuntimeAuthority,material,turnId}' = OLD.turn_id
+            AND run.metadata #>> '{chatTurnRuntimeAuthority,material,durableStatus}' = run.status
+            AND run.metadata #>> '{chatTurnRuntimeAuthority,material,traceStatus}' = trace.status
+            AND gc_try_parse_timestamptz(
+                  run.metadata #>> '{chatTurnRuntimeAuthority,material,transitionAt}'
+                ) IS NOT NULL
+            AND to_char(gc_try_parse_timestamptz(
+                  run.metadata #>> '{chatTurnRuntimeAuthority,material,transitionAt}'
+                ) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+              = run.metadata #>> '{chatTurnRuntimeAuthority,material,transitionAt}'
+            AND jsonb_typeof(run.metadata #> '{chatTurnRuntimeAuthority,material,postCommitEligibility}')
+              = 'object'
+            AND (
+              SELECT COUNT(*) FROM jsonb_object_keys(
+                run.metadata #> '{chatTurnRuntimeAuthority,material,postCommitEligibility}'
+              )
+            ) = 4
+            AND NOT EXISTS (
+              SELECT 1 FROM jsonb_object_keys(
+                run.metadata #> '{chatTurnRuntimeAuthority,material,postCommitEligibility}'
+              ) eligibility_field
+              WHERE eligibility_field NOT IN (
+                'version', 'autonomyEnabledAtParentSettlement', 'evalIntegrityTurn', 'humanSession'
+              )
+            )
+            AND run.metadata #>> '{chatTurnRuntimeAuthority,material,postCommitEligibility,version}' = '1'
+            AND run.metadata #> '{chatTurnRuntimeAuthority,material,postCommitEligibility,autonomyEnabledAtParentSettlement}'
+              = 'false'::jsonb
+            AND run.metadata #> '{chatTurnRuntimeAuthority,material,postCommitEligibility,evalIntegrityTurn}'
+              = 'false'::jsonb
+            AND run.metadata #> '{chatTurnRuntimeAuthority,material,postCommitEligibility,humanSession}'
+              = 'false'::jsonb
+            AND jsonb_typeof(run.metadata #> '{chatTurnRuntimeAuthority,material,waitForEvent}') = 'null'
+            AND NOT (run.metadata ? 'waitForEvent')
+            AND NOT (run.metadata ? 'linkedFinalizationPending')
+            AND NOT (run.metadata ? 'autonomousChatPostCommitPending')
+            AND NOT (run.metadata ? 'generalChatPostCommitPending')
+            AND trace.session_id = OLD.session_id
+            AND trace.user_message_id = run.payload ->> 'userMessageId'
+            AND trace.assistant_message_id = run.payload ->> 'assistantMessageId'
+            AND NOT EXISTS (
+              SELECT 1 FROM chat_messages heartbeat_input
+              WHERE heartbeat_input.message_id = trace.user_message_id
+            )
+            AND jsonb_typeof(gc_try_parse_jsonb(trace.durable_json)) = 'object'
+            AND gc_try_parse_jsonb(trace.durable_json) ->> 'runId' = run.run_id
+            AND gc_try_parse_jsonb(trace.durable_json) ->> 'status' = run.status
+            AND gc_try_parse_jsonb(trace.durable_json) ->> 'checkpointKind' = CASE run.status
+              WHEN 'completed' THEN 'run_completed'
+              WHEN 'failed' THEN 'run_failed'
+              ELSE 'run_cancelled'
+            END
+            AND (
+              (run.status = 'completed' AND trace.status = 'completed')
+              OR (run.status IN ('failed', 'cancelled') AND trace.status = run.status)
+            )
+            AND EXISTS (
+              SELECT 1
+              FROM durable_checkpoints checkpoint
+              WHERE checkpoint.checkpoint_id = (
+                  SELECT latest.checkpoint_id
+                  FROM durable_checkpoints latest
+                  WHERE latest.run_id = run.run_id
+                    AND latest.checkpoint_kind = CASE run.status
+                      WHEN 'completed' THEN 'run_completed'
+                      WHEN 'failed' THEN 'run_failed'
+                      ELSE 'run_cancelled'
+                    END
+                  ORDER BY latest.created_at DESC, latest.checkpoint_id DESC LIMIT 1
+                )
+                AND jsonb_typeof(gc_try_parse_jsonb(checkpoint.state_json)) = 'object'
+                AND gc_try_parse_jsonb(checkpoint.state_json) -> 'chatTurnRuntimeAuthority'
+                  = run.metadata -> 'chatTurnRuntimeAuthority'
+                AND (
+                  (run.status = 'completed'
+                    AND jsonb_typeof(run.metadata -> 'heartbeatDecisionReceipt') = 'object'
+                    AND jsonb_typeof(gc_try_parse_jsonb(checkpoint.state_json)
+                      -> 'heartbeatDecisionReceipt') = 'object'
+                    AND jsonb_typeof(run.metadata -> 'heartbeatDecisionRawOutput') = 'string'
+                    AND jsonb_typeof(gc_try_parse_jsonb(checkpoint.state_json)
+                      -> 'heartbeatDecisionRawOutput') = 'string'
+                    AND run.metadata -> 'heartbeatDecisionReceipt'
+                      = run.metadata #> '{chatTurnRuntimeAuthority,material,heartbeatDecisionReceipt}'
+                    AND gc_try_parse_jsonb(checkpoint.state_json) -> 'heartbeatDecisionReceipt'
+                      = run.metadata -> 'heartbeatDecisionReceipt'
+                    AND gc_try_parse_jsonb(checkpoint.state_json) ->> 'heartbeatDecisionRawOutput'
+                      = run.metadata ->> 'heartbeatDecisionRawOutput'
+                    AND (
+                      SELECT COUNT(*) FROM jsonb_object_keys(run.metadata -> 'heartbeatDecisionReceipt')
+                    ) = 6
+                    AND NOT EXISTS (
+                      SELECT 1 FROM jsonb_object_keys(
+                        run.metadata -> 'heartbeatDecisionReceipt'
+                      ) receipt_field
+                      WHERE receipt_field NOT IN (
+                        'version', 'occurrenceId', 'claimSha256', 'rawOutputSha256',
+                        'notify', 'normalizedMessageSha256'
+                      )
+                    )
+                    AND run.metadata #>> '{heartbeatDecisionReceipt,version}' = '1'
+                    AND run.metadata #>> '{heartbeatDecisionReceipt,occurrenceId}' = OLD.occurrence_id
+                    AND run.metadata #>> '{heartbeatDecisionReceipt,claimSha256}' = OLD.claim_sha256
+                    AND run.metadata #>> '{heartbeatDecisionReceipt,rawOutputSha256}'
+                      = gc_sha256_text(run.metadata ->> 'heartbeatDecisionRawOutput')
+                    AND gc_heartbeat_decision_raw_is_exact(
+                      run.metadata ->> 'heartbeatDecisionRawOutput'
+                    )
+                    AND run.metadata #> '{heartbeatDecisionReceipt,notify}'
+                      = to_jsonb(gc_heartbeat_decision_notify(
+                        run.metadata ->> 'heartbeatDecisionRawOutput'
+                      ))
+                    AND (
+                      (gc_heartbeat_decision_notify(run.metadata ->> 'heartbeatDecisionRawOutput') = FALSE
+                        AND jsonb_typeof(run.metadata
+                          #> '{heartbeatDecisionReceipt,normalizedMessageSha256}') = 'null')
+                      OR
+                      (gc_heartbeat_decision_notify(run.metadata ->> 'heartbeatDecisionRawOutput') = TRUE
+                        AND run.metadata #>> '{heartbeatDecisionReceipt,normalizedMessageSha256}'
+                          = gc_sha256_text(gc_heartbeat_decision_normalized_message(
+                            run.metadata ->> 'heartbeatDecisionRawOutput'
+                          )))
+                    ))
+                  OR
+                  (run.status IN ('failed', 'cancelled')
+                    AND NOT (run.metadata ? 'heartbeatDecisionReceipt')
+                    AND NOT (run.metadata ? 'heartbeatDecisionRawOutput')
+                    AND NOT (gc_try_parse_jsonb(checkpoint.state_json) ? 'heartbeatDecisionReceipt')
+                    AND NOT (gc_try_parse_jsonb(checkpoint.state_json) ? 'heartbeatDecisionRawOutput'))
+                )
+                AND (
+                  (run.status = 'completed'
+                    AND (
+                      (gc_heartbeat_decision_notify(run.metadata ->> 'heartbeatDecisionRawOutput') = TRUE
+                        AND gc_try_parse_jsonb(checkpoint.state_json) ->> 'assistantMessageId'
+                          = run.payload ->> 'assistantMessageId'
+                        AND gc_try_parse_jsonb(checkpoint.state_json) ->> 'outputText'
+                          = run.metadata ->> 'outputText'
+                        AND gc_try_parse_jsonb(checkpoint.state_json) ->> 'outputSummary'
+                          = run.metadata ->> 'outputSummary')
+                      OR
+                      (gc_heartbeat_decision_notify(run.metadata ->> 'heartbeatDecisionRawOutput') = FALSE
+                        AND NOT (gc_try_parse_jsonb(checkpoint.state_json) ? 'assistantMessageId')
+                        AND NOT (gc_try_parse_jsonb(checkpoint.state_json) ? 'outputText')
+                        AND NOT (gc_try_parse_jsonb(checkpoint.state_json) ? 'outputSummary'))
+                    ))
+                  OR (run.status IN ('failed', 'cancelled')
+                    AND NOT (gc_try_parse_jsonb(checkpoint.state_json) ? 'assistantMessageId')
+                    AND NOT (gc_try_parse_jsonb(checkpoint.state_json) ? 'outputText')
+                    AND NOT (gc_try_parse_jsonb(checkpoint.state_json) ? 'outputSummary'))
+                )
+            )
+            AND (
+              (run.metadata #>> '{chatTurnRuntimeAuthority,material,transitionKind}' = 'linked_finalization'
+                AND run.status = 'failed'
+                AND run.metadata #> '{chatTurnRuntimeAuthority,material,requiredFinalizers}'
+                  = '["linked","general"]'::jsonb
+                AND jsonb_typeof(run.metadata #> '{chatTurnRuntimeAuthority,material,linkedFinalization}')
+                  = 'object'
+                AND jsonb_typeof(run.metadata -> 'linkedFinalization') = 'object'
+                AND run.metadata #>> '{linkedFinalization,finalizationId}'
+                  = run.metadata #>> '{chatTurnRuntimeAuthority,material,linkedFinalization,finalizationId}'
+                AND run.metadata #>> '{linkedFinalization,requestedAt}'
+                  = run.metadata #>> '{chatTurnRuntimeAuthority,material,linkedFinalization,requestedAt}'
+                AND run.metadata #>> '{linkedFinalization,reasonSha256}'
+                  = run.metadata #>> '{chatTurnRuntimeAuthority,material,linkedFinalization,reasonSha256}'
+                AND jsonb_typeof(run.metadata #> '{chatTurnRuntimeAuthority,material,terminalOutput}') = 'null'
+                AND NOT (run.metadata ? 'autonomousChatPostCommit'))
+              OR
+              (run.metadata #>> '{chatTurnRuntimeAuthority,material,transitionKind}' = 'terminal'
+                AND jsonb_typeof(run.metadata #> '{chatTurnRuntimeAuthority,material,linkedFinalization}') = 'null'
+                AND NOT (run.metadata ? 'linkedFinalization')
+                AND (
+                  (run.status = 'completed'
+                    AND jsonb_typeof(run.metadata -> 'autonomousChatPostCommit') = 'object'
+                    AND run.metadata #> '{chatTurnRuntimeAuthority,material,requiredFinalizers}'
+                      = '["autonomous","general"]'::jsonb
+                    AND run.metadata #>> '{autonomousChatPostCommit,generationId}'
+                      = run.metadata #>> '{chatTurnRuntimeAuthority,material,postCommitGenerationId}'
+                    AND run.metadata #>> '{autonomousChatPostCommit,requestedAt}'
+                      = run.metadata #>> '{chatTurnRuntimeAuthority,material,transitionAt}'
+                    AND jsonb_typeof(run.metadata #> '{autonomousChatPostCommit,completedAt}') = 'string'
+                    AND run.metadata #> '{autonomousChatPostCommit,heartbeatCleanup}'
+                      = '{"status":"not_required"}'::jsonb
+                    AND (
+                      (gc_heartbeat_decision_notify(run.metadata ->> 'heartbeatDecisionRawOutput') = FALSE
+                        AND jsonb_typeof(run.metadata
+                          #> '{chatTurnRuntimeAuthority,material,terminalOutput}') = 'null'
+                        AND NOT (run.metadata ? 'outputText') AND NOT (run.metadata ? 'finalOutput')
+                        AND NOT (run.metadata ? 'outputSummary') AND NOT (run.metadata ? 'finalSummary')
+                        AND NOT EXISTS (
+                          SELECT 1 FROM chat_messages message
+                          WHERE message.message_id = run.payload ->> 'assistantMessageId'
+                        ))
+                      OR
+                      (gc_heartbeat_decision_notify(run.metadata ->> 'heartbeatDecisionRawOutput') = TRUE
+                        AND jsonb_typeof(run.metadata
+                          #> '{chatTurnRuntimeAuthority,material,terminalOutput}') = 'object'
+                        AND (
+                          SELECT COUNT(*) FROM jsonb_object_keys(
+                            run.metadata #> '{chatTurnRuntimeAuthority,material,terminalOutput}'
+                          )
+                        ) = 3
+                        AND NOT EXISTS (
+                          SELECT 1 FROM jsonb_object_keys(
+                            run.metadata #> '{chatTurnRuntimeAuthority,material,terminalOutput}'
+                          ) output_field
+                          WHERE output_field NOT IN (
+                            'assistantMessageId', 'outputTextSha256', 'outputSummarySha256'
+                          )
+                        )
+                        AND jsonb_typeof(run.metadata -> 'outputText') = 'string'
+                        AND jsonb_typeof(run.metadata -> 'outputSummary') = 'string'
+                        AND run.metadata ->> 'outputText'
+                          = gc_heartbeat_decision_normalized_message(
+                            run.metadata ->> 'heartbeatDecisionRawOutput'
+                          )
+                        AND run.metadata #>> '{chatTurnRuntimeAuthority,material,terminalOutput,assistantMessageId}'
+                          = run.payload ->> 'assistantMessageId'
+                        AND run.metadata #>> '{chatTurnRuntimeAuthority,material,terminalOutput,outputTextSha256}'
+                          = gc_sha256_text(gc_canonical_jsonb(run.metadata -> 'outputText'))
+                        AND run.metadata #>> '{chatTurnRuntimeAuthority,material,terminalOutput,outputSummarySha256}'
+                          = gc_sha256_text(gc_canonical_jsonb(run.metadata -> 'outputSummary'))
+                        AND run.metadata ->> 'finalOutput' = run.metadata ->> 'outputText'
+                        AND run.metadata ->> 'finalSummary' = run.metadata ->> 'outputSummary'
+                        AND EXISTS (
+                          SELECT 1 FROM chat_messages message
+                          WHERE message.message_id = run.payload ->> 'assistantMessageId'
+                            AND message.session_id = OLD.session_id
+                            AND message.role = 'assistant' AND message.actor_type = 'system'
+                            AND message.actor_id = 'system-heartbeat'
+                            AND message.content = run.metadata ->> 'outputText'
+                        ))
+                    ))
+                  OR
+                  (run.status IN ('failed', 'cancelled')
+                    AND jsonb_typeof(run.metadata #> '{chatTurnRuntimeAuthority,material,terminalOutput}') = 'null'
+                    AND NOT (run.metadata ? 'outputText') AND NOT (run.metadata ? 'finalOutput')
+                    AND NOT (run.metadata ? 'outputSummary') AND NOT (run.metadata ? 'finalSummary')
+                    AND NOT (run.metadata ? 'autonomousChatPostCommit')
+                    AND run.metadata #> '{chatTurnRuntimeAuthority,material,requiredFinalizers}'
+                      = '["general"]'::jsonb)
+                ))
+            )
+            AND jsonb_typeof(run.metadata -> 'generalChatPostCommit') = 'object'
+            AND run.metadata #>> '{generalChatPostCommit,generationId}'
+              = run.metadata #>> '{chatTurnRuntimeAuthority,material,postCommitGenerationId}'
+            AND run.metadata #>> '{generalChatPostCommit,traceStatus}' = trace.status
+            AND run.metadata #>> '{generalChatPostCommit,requestedAt}'
+              = run.metadata #>> '{chatTurnRuntimeAuthority,material,transitionAt}'
+            AND run.metadata #> '{generalChatPostCommit,postCommitEligibility}'
+              = run.metadata #> '{chatTurnRuntimeAuthority,material,postCommitEligibility}'
+            AND run.metadata #>> '{generalChatPostCommit,parentLocalEffectsStatus}' = 'settled'
+            AND jsonb_typeof(run.metadata #> '{generalChatPostCommit,parentLocalEffectsSettledAt}') = 'string'
+            AND jsonb_typeof(run.metadata #> '{generalChatPostCommit,completedEffects}') = 'array'
+            AND jsonb_typeof(run.metadata #> '{generalChatPostCommit,durableEffectRunIds}') = 'object'
+            AND jsonb_typeof(run.metadata #> '{generalChatPostCommit,durableEffectOutcomes}') = 'object'
+            AND jsonb_array_length(run.metadata #> '{generalChatPostCommit,completedEffects}') = 0
+            AND (
+              SELECT COUNT(*) FROM jsonb_object_keys(
+                run.metadata #> '{generalChatPostCommit,durableEffectRunIds}'
+              )
+            ) = 0
+            AND (
+              SELECT COUNT(*) FROM jsonb_object_keys(
+                run.metadata #> '{generalChatPostCommit,durableEffectOutcomes}'
+              )
+            ) = 0
+            AND run.metadata #>> '{generalChatPostCommit,childOutcomeAuthority}' = 'child_durable_runs'
+            AND run.metadata #>> '{generalChatPostCommit,settlementStatus}'
+              IN ('completed', 'settled_with_failures')
+            AND jsonb_typeof(run.metadata #> '{generalChatPostCommit,completedAt}') = 'string'
+            AND (
+              SELECT COUNT(*) FROM jsonb_each_text(
+                CASE WHEN jsonb_typeof(run.metadata #> '{generalChatPostCommit,durableEffectRunIds}') = 'object'
+                  THEN run.metadata #> '{generalChatPostCommit,durableEffectRunIds}' ELSE '{}'::jsonb END
+              )
+            ) = (
+              SELECT COUNT(DISTINCT child_id.value) FROM jsonb_each_text(
+                CASE WHEN jsonb_typeof(run.metadata #> '{generalChatPostCommit,durableEffectRunIds}') = 'object'
+                  THEN run.metadata #> '{generalChatPostCommit,durableEffectRunIds}' ELSE '{}'::jsonb END
+              ) child_id
+            )
+            AND NOT EXISTS (
+              SELECT 1
+              FROM jsonb_each_text(
+                CASE WHEN jsonb_typeof(run.metadata #> '{generalChatPostCommit,durableEffectRunIds}') = 'object'
+                  THEN run.metadata #> '{generalChatPostCommit,durableEffectRunIds}' ELSE '{}'::jsonb END
+              ) effect_run
+              LEFT JOIN jsonb_each(
+                CASE WHEN jsonb_typeof(run.metadata #> '{generalChatPostCommit,durableEffectOutcomes}') = 'object'
+                  THEN run.metadata #> '{generalChatPostCommit,durableEffectOutcomes}' ELSE '{}'::jsonb END
+              ) effect_outcome ON effect_outcome.key = effect_run.key
+              LEFT JOIN durable_runs child_run ON child_run.run_id = effect_run.value
+              LEFT JOIN chat_session_mutation_admissions child_admission
+                ON child_admission.admission_id = gc_try_parse_jsonb(child_run.payload_json)
+                  #>> '{childAdmission,admissionId}'
+              WHERE effect_run.key NOT IN ('background_review', 'commitments', 'memory_maintenance')
+                OR effect_outcome.key IS NULL OR jsonb_typeof(effect_outcome.value) <> 'object'
+                OR effect_outcome.value ->> 'runId' <> effect_run.value
+                OR child_run.run_id IS NULL OR child_run.workflow_key <> 'chat.post_commit.effect'
+                OR child_run.status NOT IN ('completed', 'failed', 'cancelled', 'dead_lettered')
+                OR child_run.status <> effect_outcome.value ->> 'status'
+                OR child_run.lease_owner_id IS NOT NULL OR child_run.lease_expires_at IS NOT NULL
+                OR gc_try_parse_jsonb(child_run.payload_json) ->> 'parentRunId' <> run.run_id
+                OR gc_try_parse_jsonb(child_run.payload_json) ->> 'postCommitGenerationId'
+                  <> run.metadata #>> '{generalChatPostCommit,generationId}'
+                OR gc_try_parse_jsonb(child_run.payload_json) ->> 'effect' <> effect_run.key
+                OR child_admission.admission_id IS NULL
+                OR child_admission.status <> CASE child_run.status
+                  WHEN 'completed' THEN 'completed' ELSE 'cancelled' END
+                OR child_admission.terminal_authority_kind <> 'post_commit_child_stage'
+                OR child_admission.terminal_durable_run_id <> child_run.run_id
+                OR child_admission.terminal_durable_run_status <> 'running'
+                OR child_admission.terminal_durable_lease_owner_id IS NULL
+                OR child_admission.terminal_durable_attempt_count IS NULL
+                OR child_admission.terminal_durable_run_version IS NULL
+            )
+            AND NOT EXISTS (
+              SELECT 1
+              FROM jsonb_each(
+                CASE WHEN jsonb_typeof(run.metadata #> '{generalChatPostCommit,durableEffectOutcomes}') = 'object'
+                  THEN run.metadata #> '{generalChatPostCommit,durableEffectOutcomes}' ELSE '{}'::jsonb END
+              ) effect_outcome
+              LEFT JOIN jsonb_each_text(
+                CASE WHEN jsonb_typeof(run.metadata #> '{generalChatPostCommit,durableEffectRunIds}') = 'object'
+                  THEN run.metadata #> '{generalChatPostCommit,durableEffectRunIds}' ELSE '{}'::jsonb END
+              ) effect_run ON effect_run.key = effect_outcome.key
+              WHERE effect_run.key IS NULL
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM durable_runs omitted_child
+              WHERE omitted_child.workflow_key = 'chat.post_commit.effect'
+                AND gc_try_parse_jsonb(omitted_child.payload_json) ->> 'parentRunId' = run.run_id
+                AND gc_try_parse_jsonb(omitted_child.payload_json) ->> 'postCommitGenerationId'
+                  = run.metadata #>> '{generalChatPostCommit,generationId}'
+                AND NOT EXISTS (
+                  SELECT 1 FROM jsonb_each_text(
+                    CASE WHEN jsonb_typeof(run.metadata #> '{generalChatPostCommit,durableEffectRunIds}') = 'object'
+                      THEN run.metadata #> '{generalChatPostCommit,durableEffectRunIds}' ELSE '{}'::jsonb END
+                  ) admitted_child WHERE admitted_child.value = omitted_child.run_id
+                )
+            )
+            AND jsonb_typeof(run.metadata -> 'chatTurnAdmissionHandoff') = 'object'
+            AND (
+              SELECT COUNT(*) FROM jsonb_object_keys(run.metadata -> 'chatTurnAdmissionHandoff')
+            ) = 10
+            AND NOT EXISTS (
+              SELECT 1 FROM jsonb_object_keys(run.metadata -> 'chatTurnAdmissionHandoff') marker_field
+              WHERE marker_field NOT IN (
+                'version', 'admissionId', 'sessionIncarnationId', 'turnId', 'parentRunId',
+                'postCommitGenerationId', 'parentLocalEffectsStatus', 'childRunIds',
+                'childRunIdsSha256', 'committedAt'
+              )
+            )
+            AND run.metadata #>> '{chatTurnAdmissionHandoff,version}' = '1'
+            AND run.metadata #>> '{chatTurnAdmissionHandoff,admissionId}' = OLD.admission_id
+            AND run.metadata #>> '{chatTurnAdmissionHandoff,sessionIncarnationId}' = OLD.session_incarnation_id
+            AND run.metadata #>> '{chatTurnAdmissionHandoff,turnId}' = OLD.turn_id
+            AND run.metadata #>> '{chatTurnAdmissionHandoff,parentRunId}' = run.run_id
+            AND run.metadata #>> '{chatTurnAdmissionHandoff,postCommitGenerationId}'
+              = run.metadata #>> '{generalChatPostCommit,generationId}'
+            AND run.metadata #>> '{chatTurnAdmissionHandoff,parentLocalEffectsStatus}' = 'settled'
+            AND jsonb_typeof(run.metadata #> '{chatTurnAdmissionHandoff,childRunIds}') = 'array'
+            AND run.metadata #>> '{chatTurnAdmissionHandoff,childRunIdsSha256}'
+              = gc_sha256_text(gc_canonical_jsonb(
+                  run.metadata #> '{chatTurnAdmissionHandoff,childRunIds}'
+                ))
+            AND gc_try_parse_timestamptz(
+                  run.metadata #>> '{chatTurnAdmissionHandoff,committedAt}'
+                ) IS NOT NULL
+            AND to_char(gc_try_parse_timestamptz(
+                  run.metadata #>> '{chatTurnAdmissionHandoff,committedAt}'
+                ) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+              = run.metadata #>> '{chatTurnAdmissionHandoff,committedAt}'
+            AND jsonb_array_length(run.metadata #> '{chatTurnAdmissionHandoff,childRunIds}') = (
+              SELECT COUNT(*) FROM jsonb_each_text(
+                CASE WHEN jsonb_typeof(run.metadata #> '{generalChatPostCommit,durableEffectRunIds}') = 'object'
+                  THEN run.metadata #> '{generalChatPostCommit,durableEffectRunIds}' ELSE '{}'::jsonb END
+              )
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM jsonb_array_elements_text(
+                CASE WHEN jsonb_typeof(run.metadata #> '{chatTurnAdmissionHandoff,childRunIds}') = 'array'
+                  THEN run.metadata #> '{chatTurnAdmissionHandoff,childRunIds}' ELSE '[]'::jsonb END
+              ) WITH ORDINALITY marker_child(value, ordinality)
+              WHERE EXISTS (
+                SELECT 1 FROM jsonb_array_elements_text(
+                  CASE WHEN jsonb_typeof(run.metadata #> '{chatTurnAdmissionHandoff,childRunIds}') = 'array'
+                    THEN run.metadata #> '{chatTurnAdmissionHandoff,childRunIds}' ELSE '[]'::jsonb END
+                ) WITH ORDINALITY prior_marker_child(value, ordinality)
+                WHERE prior_marker_child.ordinality < marker_child.ordinality
+                  AND prior_marker_child.value >= marker_child.value
+              ) OR NOT EXISTS (
+                SELECT 1 FROM jsonb_each_text(
+                  CASE WHEN jsonb_typeof(run.metadata #> '{generalChatPostCommit,durableEffectRunIds}') = 'object'
+                    THEN run.metadata #> '{generalChatPostCommit,durableEffectRunIds}' ELSE '{}'::jsonb END
+                ) effect_run WHERE effect_run.value = marker_child.value
+              )
+            )
+        ) THEN
+          RAISE EXCEPTION 'heartbeat occurrence terminal runtime evidence invariant violated'
+            USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE OR REPLACE FUNCTION gc_heartbeat_occurrence_no_delete()
+      RETURNS trigger AS $$
+      BEGIN
+        RAISE EXCEPTION 'heartbeat occurrences are append/transition-only' USING ERRCODE = '23514';
+      END;
+      $$ LANGUAGE plpgsql;
+
+      DROP TRIGGER IF EXISTS trg_chat_heartbeat_occurrences_insert_guard ON chat_heartbeat_occurrences;
+      CREATE TRIGGER trg_chat_heartbeat_occurrences_insert_guard
+        BEFORE INSERT ON chat_heartbeat_occurrences FOR EACH ROW
+        EXECUTE FUNCTION gc_heartbeat_occurrence_insert_guard();
+      DROP TRIGGER IF EXISTS trg_chat_heartbeat_occurrences_transition_guard ON chat_heartbeat_occurrences;
+      CREATE TRIGGER trg_chat_heartbeat_occurrences_transition_guard
+        BEFORE UPDATE ON chat_heartbeat_occurrences FOR EACH ROW
+        EXECUTE FUNCTION gc_heartbeat_occurrence_transition_guard();
+      DROP TRIGGER IF EXISTS trg_chat_heartbeat_occurrences_terminal_evidence_guard ON chat_heartbeat_occurrences;
+      CREATE TRIGGER trg_chat_heartbeat_occurrences_terminal_evidence_guard
+        BEFORE UPDATE ON chat_heartbeat_occurrences FOR EACH ROW
+        EXECUTE FUNCTION gc_heartbeat_occurrence_terminal_evidence_guard();
+      DROP TRIGGER IF EXISTS trg_chat_heartbeat_occurrences_no_delete ON chat_heartbeat_occurrences;
+      CREATE TRIGGER trg_chat_heartbeat_occurrences_no_delete
+        BEFORE DELETE ON chat_heartbeat_occurrences FOR EACH ROW
+        EXECUTE FUNCTION gc_heartbeat_occurrence_no_delete();
+
+      DO $heartbeat_admission_reclaim_guard_upgrade$
+      DECLARE function_sql TEXT;
+      DECLARE anchor TEXT := $heartbeat_reclaim_anchor$(NEW.status = 'active' AND OLD.status = 'active'
+              AND OLD.runtime_lease_relinquished_at IS NULL
+              AND gc_try_parse_timestamptz(OLD.runtime_lease_expires_at) > clock_timestamp()$heartbeat_reclaim_anchor$;
+      DECLARE replacement TEXT := $heartbeat_reclaim_branch$(NEW.status = 'active' AND OLD.status = 'active'
+              /* heartbeat occurrence request-runtime reclaim */
+              AND OLD.admission_kind = 'turn_write'
+              AND OLD.actor_kind = 'system' AND OLD.actor_id = 'system-heartbeat'
+              AND OLD.operation = 'chat_system_heartbeat'
+              AND OLD.runtime_lease_relinquished_at IS NULL
+              AND gc_try_parse_timestamptz(OLD.runtime_lease_expires_at)
+                <= gc_try_parse_timestamptz(NEW.runtime_last_heartbeat_at)
+              AND NEW.runtime_lease_relinquished_at IS NULL
+              AND NEW.runtime_lease_revision = OLD.runtime_lease_revision + 1
+              AND gc_try_parse_timestamptz(NEW.runtime_last_heartbeat_at)
+                >= gc_try_parse_timestamptz(OLD.runtime_last_heartbeat_at)
+              AND gc_try_parse_timestamptz(NEW.runtime_lease_expires_at)
+                = gc_try_parse_timestamptz(NEW.runtime_last_heartbeat_at) + interval '60 seconds'
+              AND NEW.closed_at IS NOT DISTINCT FROM OLD.closed_at
+              AND NEW.terminal_actor_id IS NOT DISTINCT FROM OLD.terminal_actor_id
+              AND NEW.terminal_event_id IS NOT DISTINCT FROM OLD.terminal_event_id
+              AND NEW.terminal_idempotency_key IS NOT DISTINCT FROM OLD.terminal_idempotency_key
+              AND NEW.terminal_correlation_id IS NOT DISTINCT FROM OLD.terminal_correlation_id
+              AND NOT EXISTS (
+                SELECT 1 FROM chat_turn_mutation_admission_durable_bindings durable_binding
+                WHERE durable_binding.admission_id = OLD.admission_id
+              )
+              AND EXISTS (
+                SELECT 1 FROM chat_heartbeat_occurrences occurrence
+                WHERE occurrence.admission_id = OLD.admission_id
+                  AND occurrence.workspace_id = OLD.workspace_id
+                  AND occurrence.session_id = OLD.session_id
+                  AND occurrence.session_incarnation_id = OLD.session_incarnation_id
+                  AND occurrence.turn_id = OLD.turn_id
+                  AND occurrence.runtime_owner_id = OLD.runtime_owner_id
+                  AND occurrence.system_actor_id = OLD.actor_id
+                  AND occurrence.admission_material_sha256 = OLD.material_sha256
+                  AND occurrence.frozen_request_sha256 = OLD.material_sha256
+                  AND occurrence.admission_request_sha256 = OLD.request_sha256
+                  AND occurrence.admission_idempotency_key = OLD.idempotency_key
+                  AND occurrence.admission_correlation_id = OLD.correlation_id
+                  AND occurrence.aggregate_revision = OLD.aggregate_revision
+                  AND occurrence.controller_generation = OLD.controller_generation
+                  AND occurrence.state = 'admitted'
+              ))
+            OR $heartbeat_reclaim_branch$;
+      DECLARE terminal_effects_anchor TEXT := $heartbeat_terminal_effects_anchor$(
+                        SELECT COUNT(DISTINCT local_effect.value #>> '{}')
+                        FROM jsonb_array_elements(gc_try_parse_jsonb(run.metadata_json)
+                          #> '{generalChatPostCommit,completedEffects}') local_effect(value)
+                        WHERE jsonb_typeof(local_effect.value) = 'string'
+                          AND local_effect.value #>> '{}' IN ('capability_gap', 'realtime', 'agent_end')
+                      ) = 3$heartbeat_terminal_effects_anchor$;
+      DECLARE terminal_effects_replacement TEXT := $heartbeat_terminal_effects_branch$(
+                        (
+                          SELECT COUNT(DISTINCT local_effect.value #>> '{}')
+                          FROM jsonb_array_elements(gc_try_parse_jsonb(run.metadata_json)
+                            #> '{generalChatPostCommit,completedEffects}') local_effect(value)
+                          WHERE jsonb_typeof(local_effect.value) = 'string'
+                            AND local_effect.value #>> '{}' IN ('capability_gap', 'realtime', 'agent_end')
+                        ) = 3
+                        OR (
+                          /* heartbeat occurrence durable-terminal zero-effect handoff */
+                          OLD.actor_kind = 'system' AND OLD.actor_id = 'system-heartbeat'
+                          AND OLD.operation = 'chat_system_heartbeat'
+                          AND jsonb_array_length(gc_try_parse_jsonb(run.metadata_json)
+                            #> '{generalChatPostCommit,completedEffects}') = 0
+                          AND EXISTS (
+                            SELECT 1 FROM chat_heartbeat_occurrences heartbeat_occurrence
+                            WHERE heartbeat_occurrence.admission_id = OLD.admission_id
+                              AND heartbeat_occurrence.workspace_id = OLD.workspace_id
+                              AND heartbeat_occurrence.session_id = OLD.session_id
+                              AND heartbeat_occurrence.session_incarnation_id = OLD.session_incarnation_id
+                              AND heartbeat_occurrence.turn_id = OLD.turn_id
+                              AND heartbeat_occurrence.durable_run_id = run.run_id
+                              AND heartbeat_occurrence.state = 'durable_bound'
+                              AND heartbeat_occurrence.controller_generation = OLD.controller_generation
+                              AND heartbeat_occurrence.aggregate_revision = OLD.aggregate_revision
+                              AND heartbeat_occurrence.admission_material_sha256 = OLD.material_sha256
+                              AND heartbeat_occurrence.frozen_request_sha256 = OLD.material_sha256
+                              AND gc_try_parse_jsonb(run.payload_json) ->> 'heartbeatOccurrenceId'
+                                = heartbeat_occurrence.occurrence_id
+                              AND gc_try_parse_jsonb(run.payload_json) ->> 'heartbeatClaimSha256'
+                                = heartbeat_occurrence.claim_sha256
+                          )
+                        )
+                      )$heartbeat_terminal_effects_branch$;
+      DECLARE terminal_clock_anchor TEXT := $heartbeat_terminal_clock_anchor$abs(EXTRACT(EPOCH FROM (
+                gc_try_parse_timestamptz(NEW.closed_at) - clock_timestamp()
+              ))) <= 1$heartbeat_terminal_clock_anchor$;
+      DECLARE terminal_clock_replacement TEXT := $heartbeat_terminal_clock_evidence$(
+                abs(EXTRACT(EPOCH FROM (
+                  gc_try_parse_timestamptz(NEW.closed_at) - clock_timestamp()
+                ))) <= 1
+                OR EXISTS (
+                  SELECT 1
+                  FROM chat_session_control_events event_row
+                  JOIN chat_session_control_grants successor
+                    ON successor.workspace_id = event_row.workspace_id
+                    AND successor.session_id = event_row.session_id
+                    AND successor.generation = event_row.next_generation
+                  JOIN chat_heartbeat_occurrences occurrence
+                    ON occurrence.admission_id = OLD.admission_id
+                  WHERE left(event_row.idempotency_key, 18) = 'heartbeat-preempt_'
+                    /* heartbeat preemption terminal timestamp evidence */
+                    AND event_row.reason_code = 'heartbeat_preempted'
+                    AND event_row.workspace_id = OLD.workspace_id
+                    AND event_row.session_id = OLD.session_id
+                    AND event_row.previous_generation = OLD.controller_generation
+                    AND event_row.next_generation = OLD.controller_generation + 1
+                    AND event_row.previous_owner_kind = 'operator'
+                    AND event_row.next_owner_kind = 'operator'
+                    AND event_row.previous_lease_state = 'operator_active'
+                    AND event_row.next_lease_state = 'operator_active'
+                    AND event_row.request_id IS NULL
+                    AND event_row.actor_kind = 'operator'
+                    AND event_row.companion_session_id IS NULL
+                    AND event_row.device_grant_id IS NULL
+                    AND event_row.created_at = NEW.closed_at
+                    AND successor.is_current = 1
+                    AND successor.owner_kind = 'operator'
+                    AND successor.lease_state = 'operator_active'
+                    AND successor.transition_idempotency_key = event_row.idempotency_key
+                    AND successor.transition_request_sha256 = event_row.request_sha256
+                    AND successor.created_at = event_row.created_at
+                    AND successor.updated_at = event_row.created_at
+                    AND occurrence.workspace_id = OLD.workspace_id
+                    AND occurrence.session_id = OLD.session_id
+                    AND occurrence.controller_generation = OLD.controller_generation
+                    AND occurrence.state IN ('admitted', 'durable_bound')
+                    AND OLD.actor_kind = 'system'
+                    AND OLD.actor_id = 'system-heartbeat'
+                    AND OLD.operation = 'chat_system_heartbeat'
+                    AND ((occurrence.state = 'admitted'
+                      AND NEW.terminal_authority_kind = 'request_runtime'
+                      AND NEW.terminal_control_event_id IS NULL
+                      AND NEW.terminal_correlation_id = event_row.event_id)
+                    OR (occurrence.state = 'durable_bound'
+                      AND NEW.terminal_authority_kind = 'authority_superseded'
+                      AND NEW.terminal_control_event_id = event_row.event_id))
+                    AND NOT EXISTS (
+                      SELECT 1 FROM chat_session_control_requests request_row
+                      WHERE request_row.workspace_id = event_row.workspace_id
+                        AND request_row.session_id = event_row.session_id
+                        AND request_row.requested_generation = event_row.previous_generation
+                        AND request_row.status = 'pending'
+                    )
+                )
+              )$heartbeat_terminal_clock_evidence$;
+      BEGIN
+        SELECT pg_get_functiondef(to_regprocedure('gc_session_mutation_admission_guard()')) INTO function_sql;
+        IF function_sql IS NULL THEN
+          RAISE EXCEPTION 'Postgres migration 116 requires the mutation-admission guard'
+            USING ERRCODE = '23514';
+        END IF;
+        IF strpos(function_sql, 'heartbeat occurrence request-runtime reclaim') = 0 THEN
+          IF strpos(function_sql, anchor) = 0 THEN
+            RAISE EXCEPTION 'Postgres migration 116 could not locate the mutation-admission guard upgrade anchor'
+              USING ERRCODE = '23514';
+          END IF;
+          function_sql := replace(function_sql, anchor, replacement || anchor);
+        END IF;
+        IF strpos(function_sql, 'heartbeat occurrence durable-terminal zero-effect handoff') = 0 THEN
+          IF strpos(function_sql, terminal_effects_anchor) = 0 THEN
+            RAISE EXCEPTION 'Postgres migration 116 could not locate the durable-terminal effects guard anchor'
+              USING ERRCODE = '23514';
+          END IF;
+          function_sql := replace(function_sql, terminal_effects_anchor, terminal_effects_replacement);
+        END IF;
+        IF strpos(function_sql, 'heartbeat preemption terminal timestamp evidence') = 0 THEN
+          IF strpos(function_sql, terminal_clock_anchor) = 0 THEN
+            RAISE EXCEPTION 'Postgres migration 116 could not locate the terminal clock guard anchor'
+              USING ERRCODE = '23514';
+          END IF;
+          function_sql := replace(function_sql, terminal_clock_anchor, terminal_clock_replacement);
+        END IF;
+        EXECUTE function_sql;
+        SELECT pg_get_functiondef(to_regprocedure('gc_session_mutation_admission_guard()')) INTO function_sql;
+        IF strpos(function_sql, 'heartbeat occurrence request-runtime reclaim') = 0
+          OR strpos(function_sql, 'heartbeat occurrence durable-terminal zero-effect handoff') = 0
+          OR strpos(function_sql, 'heartbeat preemption terminal timestamp evidence') = 0 THEN
+          RAISE EXCEPTION 'Postgres migration 116 mutation-admission guard upgrade assertion failed'
+            USING ERRCODE = '23514';
+        END IF;
+      END;
+      $heartbeat_admission_reclaim_guard_upgrade$;
+
+      DO $heartbeat_profile_fk_preflight$
+      BEGIN
+        LOCK TABLE chat_turn_capability_profile_incarnation_bindings IN SHARE ROW EXCLUSIVE MODE;
+        LOCK TABLE chat_turn_capability_profiles IN SHARE MODE;
+        IF EXISTS (
+          SELECT 1
+          FROM chat_turn_capability_profile_incarnation_bindings binding
+          LEFT JOIN chat_turn_capability_profiles profile ON profile.profile_id = binding.profile_id
+          WHERE profile.profile_id IS NULL
+        ) THEN
+          RAISE EXCEPTION 'heartbeat profile binding FK repair orphan preflight failed' USING ERRCODE = '23514';
+        END IF;
+      END;
+      $heartbeat_profile_fk_preflight$;
+
+      DO $heartbeat_profile_fk_repair$
+      DECLARE source_attnum SMALLINT;
+      DECLARE target_attnum SMALLINT;
+      DECLARE constraint_row RECORD;
+      DECLARE mapping_count INTEGER;
+      DECLARE good_count INTEGER;
+      BEGIN
+        SELECT attnum::SMALLINT INTO source_attnum
+        FROM pg_attribute
+        WHERE attrelid = to_regclass('chat_turn_capability_profile_incarnation_bindings')
+          AND attname = 'profile_id' AND NOT attisdropped;
+        SELECT attnum::SMALLINT INTO target_attnum
+        FROM pg_attribute
+        WHERE attrelid = to_regclass('chat_turn_capability_profiles')
+          AND attname = 'profile_id' AND NOT attisdropped;
+        IF source_attnum IS NULL OR target_attnum IS NULL THEN
+          RAISE EXCEPTION 'heartbeat profile binding FK repair catalog preflight failed' USING ERRCODE = '23514';
+        END IF;
+        FOR constraint_row IN
+          SELECT constraint_def.conname
+          FROM pg_constraint constraint_def
+          WHERE constraint_def.contype = 'f'
+            AND constraint_def.conrelid = to_regclass('chat_turn_capability_profile_incarnation_bindings')
+            AND constraint_def.confrelid = to_regclass('chat_turn_capability_profiles')
+            AND constraint_def.conkey = ARRAY[source_attnum]::SMALLINT[]
+            AND constraint_def.confkey = ARRAY[target_attnum]::SMALLINT[]
+        LOOP
+          EXECUTE format(
+            'ALTER TABLE chat_turn_capability_profile_incarnation_bindings DROP CONSTRAINT %I',
+            constraint_row.conname
+          );
+        END LOOP;
+        EXECUTE 'ALTER TABLE chat_turn_capability_profile_incarnation_bindings
+          ADD CONSTRAINT fk_chat_turn_cap_profile_binding_profile
+          FOREIGN KEY(profile_id) REFERENCES chat_turn_capability_profiles(profile_id)
+          ON UPDATE NO ACTION ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED';
+        SELECT COUNT(*) INTO mapping_count
+        FROM pg_constraint constraint_def
+        WHERE constraint_def.contype = 'f'
+          AND constraint_def.conrelid = to_regclass('chat_turn_capability_profile_incarnation_bindings')
+          AND constraint_def.confrelid = to_regclass('chat_turn_capability_profiles')
+          AND constraint_def.conkey = ARRAY[source_attnum]::SMALLINT[]
+          AND constraint_def.confkey = ARRAY[target_attnum]::SMALLINT[];
+        SELECT COUNT(*) INTO good_count
+        FROM pg_constraint constraint_def
+        WHERE constraint_def.contype = 'f'
+          AND constraint_def.conrelid = to_regclass('chat_turn_capability_profile_incarnation_bindings')
+          AND constraint_def.confrelid = to_regclass('chat_turn_capability_profiles')
+          AND constraint_def.conkey = ARRAY[source_attnum]::SMALLINT[]
+          AND constraint_def.confkey = ARRAY[target_attnum]::SMALLINT[]
+          AND constraint_def.conname = 'fk_chat_turn_cap_profile_binding_profile'
+          AND constraint_def.condeferrable AND constraint_def.condeferred AND constraint_def.convalidated
+          AND constraint_def.confdeltype = 'a' AND constraint_def.confupdtype = 'a';
+        IF mapping_count <> 1 OR good_count <> 1 THEN
+          RAISE EXCEPTION 'heartbeat profile binding FK repair catalog assertion failed' USING ERRCODE = '23514';
+        END IF;
+      END;
+      $heartbeat_profile_fk_repair$;
+    `,
+  },
 ];

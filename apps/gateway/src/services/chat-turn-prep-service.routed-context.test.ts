@@ -207,7 +207,7 @@ function createHarness(
       chatAttachments: { listByIds: vi.fn(() => []) },
       chatProjects: {},
       chatSessionMeta: {
-        ensure: vi.fn(() => ({
+        get: vi.fn(() => ({
           sessionId: SESSION_ID,
           workspaceId: WORKSPACE_ID,
           lifecycleStatus: "active",

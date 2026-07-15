@@ -58,6 +58,7 @@ export class DurableRunRepository {
   private readonly statusCountsStmt;
   private readonly insertCheckpointStmt;
   private readonly listCheckpointsStmt;
+  private readonly latestCheckpointByKindStmt;
   private readonly upsertRetryStmt;
   private readonly upsertRetryWithDatabaseClockStmt;
   private readonly listRetriesStmt;
@@ -375,6 +376,12 @@ export class DurableRunRepository {
       WHERE run_id = ?
       ORDER BY created_at ASC
       LIMIT ?
+    `);
+    this.latestCheckpointByKindStmt = db.prepare(`
+      SELECT * FROM durable_checkpoints
+      WHERE run_id = @runId AND checkpoint_kind = @checkpointKind
+      ORDER BY created_at DESC, checkpoint_id DESC
+      LIMIT 1
     `);
     this.upsertRetryStmt = db.prepare(`
       INSERT INTO durable_retries (
@@ -905,6 +912,38 @@ export class DurableRunRepository {
       ) as Record<string, unknown>,
       createdAt: row.created_at,
     }));
+  }
+
+  /**
+   * Reads the newest checkpoint of one exact kind without relying on the
+   * oldest-first, capped diagnostic listing. Checkpoint identity is the stable
+   * tie-break when producers share the same canonical millisecond timestamp.
+   */
+  public getLatestCheckpointByKind(
+    runId: string,
+    checkpointKind: DurableCheckpointRecord["checkpointKind"],
+  ): DurableCheckpointRecord | undefined {
+    const raw = this.latestCheckpointByKindStmt.get({ runId, checkpointKind });
+    const rows = toDurableCheckpointRows(raw ? [raw] : []);
+    const row = rows[0];
+    if (!row) return undefined;
+    return {
+      checkpointId: row.checkpoint_id,
+      runId: row.run_id,
+      checkpointKind: row.checkpoint_kind,
+      state: loadAndSanitize(
+        row.state_json,
+        {
+          store: "durable_checkpoint.state",
+          rowId: row.checkpoint_id,
+          parse: parseJsonObject,
+          onQuarantine: this.options.quarantine ? (e) => this.options.quarantine!.record(e) : undefined,
+          log: this.options.logger,
+        },
+        {},
+      ) as Record<string, unknown>,
+      createdAt: row.created_at,
+    };
   }
 
   public upsertRetry(input: {

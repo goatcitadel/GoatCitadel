@@ -14,6 +14,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { MemoryMaintenanceRepository, buildMemoryWorkspaceScopeSql } from "./memory-maintenance-repo.js";
 import { createDatabase } from "./sqlite.js";
+import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
 
 const createdFiles: string[] = [];
 
@@ -74,29 +75,17 @@ function insertEligibleSession(input: {
   assistantMessageId?: string | null;
 }): void {
   const now = input.finishedAt;
-  input.db
-    .prepare(
-      `
-    INSERT INTO chat_session_meta (
-      session_id,
-      workspace_id,
-      title,
-      origin,
-      include_in_history,
-      created_at,
-      updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?)
-  `,
-    )
-    .run(
-      input.sessionId,
-      input.workspaceId,
-      `Session ${input.sessionId}`,
-      input.origin ?? "operator",
-      input.includeInHistory ?? 1,
-      now,
-      now,
-    );
+  const meta = new ChatSessionMetaRepository(input.db);
+  meta.ensure(input.sessionId, now, input.workspaceId);
+  meta.patch(
+    input.sessionId,
+    {
+      title: `Session ${input.sessionId}`,
+      origin: (input.origin ?? "operator") as "operator" | "prompt_pack" | "system",
+      includeInHistory: (input.includeInHistory ?? 1) !== 0,
+    },
+    now,
+  );
   input.db
     .prepare(
       `

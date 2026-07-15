@@ -1,14 +1,36 @@
 import { describe, expect, it, vi } from "vitest";
 import { ConflictError, ValidationError } from "@goatcitadel/contracts";
-import type { ChatTurnTraceRecord, DurableRunRecord } from "@goatcitadel/contracts";
+import type {
+  ChatMessageRecord,
+  ChatTurnTraceRecord,
+  ChatUserInputPromptResponse,
+  DurableCheckpointRecord,
+  DurableRunRecord,
+} from "@goatcitadel/contracts";
+import type { HeartbeatOccurrenceRecord, VerifiedTerminalTurnWriteHandoff } from "@goatcitadel/storage";
 import {
-  answerChatUserInputPrompt,
+  answerChatUserInputPrompt as answerChatUserInputPromptRuntime,
   getChatThread,
   getTurnContextManifestForSession,
   selectChatBranchTurn,
   type ChatMessageRouteRuntimeHost,
 } from "./chat-message-route-runtime.js";
 import type { ChatTurnSessionState } from "./chat-turn-prep-service.js";
+import {
+  computeEffectiveChatTurnRequestMaterialSha256,
+  computeFrozenChatTurnAdmissionMaterialSha256,
+} from "./session-control-service.js";
+import {
+  CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY,
+  HEARTBEAT_DECISION_RAW_OUTPUT_METADATA_KEY,
+  HEARTBEAT_DECISION_RECEIPT_METADATA_KEY,
+  buildAutonomousChatAdmissionMetadataMaterial,
+  buildChatTurnRuntimeAuthoritySeal,
+  buildHeartbeatDecisionReceipt,
+  sealAutonomousChatAdmissionMetadata,
+} from "./chat-durable-runtime-authority.js";
+
+const TEST_RESPONDER = { actorId: "operator:test", authActorSource: "token" } as const;
 
 describe("chat-message-route-runtime", () => {
   it("builds chat threads and records branch selection realtime truth", async () => {
@@ -37,6 +59,197 @@ describe("chat-message-route-runtime", () => {
     );
     expect(selected.activeLeafTurnId).toBe("turn-child-b");
     expect(selected.turns.map((turn) => turn.turnId)).toEqual(["turn-root", "turn-child-b"]);
+  });
+
+  it("projects an exact retained heartbeat separately without changing branch truth", async () => {
+    const state = createThreadState();
+    const heartbeat = createHeartbeatThreadFixture();
+    state.traces.push(heartbeat.trace);
+    const runtime = createRuntime({
+      state,
+      durableRun: heartbeat.run,
+      durableCheckpoint: heartbeat.checkpoint,
+      heartbeatOccurrence: heartbeat.occurrence,
+      terminalHandoff: heartbeat.terminalHandoff,
+      canonicalMessageOverrides: new Map([[heartbeat.message.messageId, heartbeat.message]]),
+    });
+
+    const thread = await getChatThread(runtime, "sess-1");
+    const loadOptions = vi.mocked(runtime.loadChatTurnSessionState).mock.calls[0]?.[1];
+
+    expect(thread.turns.map((turn) => turn.turnId)).toEqual(["turn-root", "turn-child-a"]);
+    expect(thread.activeLeafTurnId).toBe("turn-child-a");
+    expect(thread.systemNotices).toEqual([
+      expect.objectContaining({
+        kind: "system_heartbeat",
+        noticeId: heartbeat.message.messageId,
+        turnId: heartbeat.trace.turnId,
+        message: expect.objectContaining({ content: "Disk pressure high." }),
+      }),
+    ]);
+    expect(state.messagesById.has(heartbeat.trace.userMessageId)).toBe(false);
+    expect(loadOptions?.isConversationTrace?.(heartbeat.trace)).toBe(false);
+    expect(loadOptions?.isConversationTrace?.(state.traces[0]!)).toBe(true);
+
+    const selected = await selectChatBranchTurn(runtime, "sess-1", "turn-root");
+    expect(selected.activeLeafTurnId).toBe("turn-child-b");
+    expect(selected.turns.map((turn) => turn.turnId)).toEqual(["turn-root", "turn-child-b"]);
+    expect(selected.systemNotices.map((notice) => notice.noticeId)).toEqual([heartbeat.message.messageId]);
+
+    state.messagesById.set(heartbeat.trace.userMessageId, {
+      ...heartbeat.message,
+      messageId: heartbeat.trace.userMessageId,
+      role: "user",
+      content: "illicit hidden input",
+    });
+    await expect(selectChatBranchTurn(runtime, "sess-1", heartbeat.trace.turnId)).rejects.toThrow("not found");
+    expect(runtime.storage.chatSessionBranchState.setActiveLeaf).toHaveBeenCalledTimes(1);
+  });
+
+  it("reloads a notice-only session through canonical message hydration without creating a branch", async () => {
+    const heartbeat = createHeartbeatThreadFixture();
+    const state = {
+      session: { sessionId: "sess-1" },
+      activeLeafTurnId: undefined,
+      traces: [heartbeat.trace],
+      childrenByTurnId: new Map(),
+      messagesById: new Map(),
+    } as unknown as ChatTurnSessionState;
+    const runtime = createRuntime({
+      state,
+      durableRun: heartbeat.run,
+      durableCheckpoint: heartbeat.checkpoint,
+      heartbeatOccurrence: heartbeat.occurrence,
+      terminalHandoff: heartbeat.terminalHandoff,
+      canonicalMessageOverrides: new Map([[heartbeat.message.messageId, heartbeat.message]]),
+    });
+
+    const thread = await getChatThread(runtime, "sess-1");
+
+    expect(thread.turns).toEqual([]);
+    expect(thread.activeLeafTurnId).toBeUndefined();
+    expect(thread.selectedTurnId).toBeUndefined();
+    expect(thread.systemNotices.map((notice) => notice.message.content)).toEqual(["Disk pressure high."]);
+    expect(state.messagesById.size).toBe(0);
+  });
+
+  it.each([
+    {
+      label: "silent decision",
+      mutate: (fixture: ReturnType<typeof createHeartbeatThreadFixture>) => {
+        fixture.run.metadata![HEARTBEAT_DECISION_RAW_OUTPUT_METADATA_KEY] = '{"notify":false}';
+      },
+    },
+    {
+      label: "malformed decision evidence",
+      mutate: (fixture: ReturnType<typeof createHeartbeatThreadFixture>) => {
+        delete fixture.run.metadata![HEARTBEAT_DECISION_RECEIPT_METADATA_KEY];
+      },
+    },
+    {
+      label: "nonterminal run",
+      mutate: (fixture: ReturnType<typeof createHeartbeatThreadFixture>) => {
+        fixture.run.status = "running";
+      },
+    },
+    {
+      label: "message drift",
+      mutate: (fixture: ReturnType<typeof createHeartbeatThreadFixture>) => {
+        fixture.message.content = "Different bytes";
+      },
+    },
+    {
+      label: "checkpoint drift",
+      mutate: (fixture: ReturnType<typeof createHeartbeatThreadFixture>) => {
+        fixture.checkpoint.state.outputSummary = "Different bytes";
+      },
+    },
+    {
+      label: "occurrence-owner drift",
+      mutate: (fixture: ReturnType<typeof createHeartbeatThreadFixture>) => {
+        fixture.occurrence.claimSha256 = "f".repeat(64);
+      },
+    },
+    {
+      label: "terminal-handoff drift",
+      mutate: (fixture: ReturnType<typeof createHeartbeatThreadFixture>) => {
+        fixture.terminalHandoff.handoffSha256 = "0".repeat(64);
+      },
+    },
+    {
+      label: "completion-shape drift",
+      mutate: (fixture: ReturnType<typeof createHeartbeatThreadFixture>) => {
+        (fixture.trace.completion as Record<string, unknown>).finishReason = "stop";
+      },
+    },
+  ])("omits $label from the public thread", async ({ mutate }) => {
+    const state = createThreadState();
+    const heartbeat = createHeartbeatThreadFixture();
+    mutate(heartbeat);
+    state.traces.push(heartbeat.trace);
+    state.messagesById.set(heartbeat.message.messageId, heartbeat.message);
+    const runtime = createRuntime({
+      state,
+      durableRun: heartbeat.run,
+      durableCheckpoint: heartbeat.checkpoint,
+      heartbeatOccurrence: heartbeat.occurrence,
+      terminalHandoff: heartbeat.terminalHandoff,
+    });
+
+    const thread = await getChatThread(runtime, "sess-1");
+
+    expect(thread.systemNotices).toEqual([]);
+    expect(thread.turns.map((turn) => turn.turnId)).toEqual(["turn-root", "turn-child-a"]);
+  });
+
+  it("omits a heartbeat when canonical storage contains a hidden input row that the loaded page missed", async () => {
+    const state = createThreadState();
+    const heartbeat = createHeartbeatThreadFixture();
+    state.traces.push(heartbeat.trace);
+    state.messagesById.set(heartbeat.message.messageId, heartbeat.message);
+    const hiddenUserMessage: ChatMessageRecord = {
+      messageId: heartbeat.trace.userMessageId,
+      sessionId: "sess-1",
+      role: "user",
+      actorType: "system",
+      actorId: "system-heartbeat",
+      content: "must never persist",
+      timestamp: "2026-07-15T10:00:00.000Z",
+    };
+    const runtime = createRuntime({
+      state,
+      durableRun: heartbeat.run,
+      durableCheckpoint: heartbeat.checkpoint,
+      heartbeatOccurrence: heartbeat.occurrence,
+      terminalHandoff: heartbeat.terminalHandoff,
+      canonicalMessageOverrides: new Map([[hiddenUserMessage.messageId, hiddenUserMessage]]),
+    });
+
+    const thread = await getChatThread(runtime, "sess-1");
+
+    expect(thread.systemNotices).toEqual([]);
+    expect(thread.turns.map((turn) => turn.turnId)).toEqual(["turn-root", "turn-child-a"]);
+  });
+
+  it("omits a heartbeat that drifted into the active conversation leaf", async () => {
+    const state = createThreadState();
+    const heartbeat = createHeartbeatThreadFixture();
+    state.traces.push(heartbeat.trace);
+    state.messagesById.set(heartbeat.message.messageId, heartbeat.message);
+    state.activeLeafTurnId = heartbeat.trace.turnId;
+    const runtime = createRuntime({
+      state,
+      durableRun: heartbeat.run,
+      durableCheckpoint: heartbeat.checkpoint,
+      heartbeatOccurrence: heartbeat.occurrence,
+      terminalHandoff: heartbeat.terminalHandoff,
+    });
+
+    const thread = await getChatThread(runtime, "sess-1");
+
+    expect(thread.systemNotices).toEqual([]);
+    expect(thread.turns.map((turn) => turn.turnId)).toEqual(["turn-root", "turn-child-b"]);
+    expect(thread.activeLeafTurnId).toBe("turn-child-b");
   });
 
   it("limits generated-artifact lookup to renderable thread turns", async () => {
@@ -112,30 +325,18 @@ describe("chat-message-route-runtime", () => {
     expect(getTurnContextManifestForSession(runtime, "sess-1", "turn-1")).toEqual({ manifestId: "manifest-1" });
   });
 
-  it("rejects inactive or mismatched user-input prompts before waking durable execution", async () => {
+  it("validates mismatched active prompts before invoking the atomic continuation owner", async () => {
     const runtime = createRuntime({
       trace: createTrace({
-        status: "completed",
+        status: "waiting_for_user_input",
+        durable: { runId: "run-1" },
         pendingUserInput: {
           promptId: "prompt-1",
-          kind: "text",
-          question: "Need detail?",
+          kind: "single_select",
+          question: "Pick one",
+          options: [{ optionId: "a", label: "A" }],
         },
       }),
-    });
-
-    await expect(
-      answerChatUserInputPrompt(runtime, "sess-1", "turn-1", "prompt-1", { kind: "text", text: "details" }),
-    ).rejects.toThrow(ValidationError);
-
-    runtime.trace = createTrace({
-      status: "waiting_for_user_input",
-      pendingUserInput: {
-        promptId: "prompt-1",
-        kind: "single_select",
-        question: "Pick one",
-        options: [{ optionId: "a", label: "A" }],
-      },
     });
 
     await expect(
@@ -153,6 +354,7 @@ describe("chat-message-route-runtime", () => {
 
     runtime.trace = createTrace({
       status: "waiting_for_user_input",
+      durable: { runId: "run-1" },
       pendingUserInput: {
         promptId: "prompt-2",
         kind: "text",
@@ -164,7 +366,7 @@ describe("chat-message-route-runtime", () => {
     ).rejects.toThrow("requires non-empty text");
   });
 
-  it("persists text prompt answers and wakes the linked durable chat turn", async () => {
+  it("atomically resolves text input under the exact admission and queues processing", async () => {
     const runtime = createRuntime({
       trace: createTrace({
         status: "waiting_for_user_input",
@@ -177,10 +379,6 @@ describe("chat-message-route-runtime", () => {
         },
       }),
       durableRun: createDurableRun("run-1", "waiting"),
-      wakeResult: {
-        outcome: "woke",
-        run: createDurableRun("run-1", "queued"),
-      },
     });
 
     const result = await answerChatUserInputPrompt(runtime, "sess-1", "turn-1", "prompt-text", {
@@ -194,31 +392,26 @@ describe("chat-message-route-runtime", () => {
       resumedRunId: "run-1",
       resumedTurnId: "turn-1",
     });
-    expect(runtime.storage.durableRuns.updateRun).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: "run-1",
-        expectedVersion: 3,
-        payload: expect.objectContaining({
-          userInputResponses: [
-            expect.objectContaining({
-              promptId: "prompt-text",
-              response: { kind: "text", text: "Continue with the safe path." },
-            }),
-          ],
-        }),
-      }),
-    );
-    expect(runtime.durableRunService.wakeDurableRun).toHaveBeenCalledWith(
-      "run-1",
-      expect.objectContaining({
-        eventKey: "chat.user_input.resolved",
-        correlationId: "prompt-text",
-      }),
-    );
-    expect(runtime.storage.chatTurnTraces.patch).toHaveBeenCalledWith("turn-1", {
-      status: "running",
-      pendingUserInput: null,
+    expect(runtime.storage.sessionMutationAdmissions.resolveDurableChatUserInput).toHaveBeenCalledWith({
+      admissionIdentity: {
+        admissionId: "admission-1",
+        sessionIncarnationId: "incarnation-1",
+        workspaceId: "workspace-1",
+        sessionId: "sess-1",
+        turnId: "turn-1",
+        aggregateRevision: 7,
+        controllerGeneration: 3,
+        materialSha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      },
+      durableRunId: "run-1",
+      expectedWaitingRunVersion: 3,
+      promptId: "prompt-text",
+      eventKey: "chat.user_input.resolved",
+      correlationId: "prompt-text",
+      responder: TEST_RESPONDER,
+      response: { kind: "text", text: "Continue with the safe path." },
     });
+    expect(runtime.durableRunService.requestRunProcessing).toHaveBeenCalledWith("run-1");
     expect(runtime.recordDevDiagnostic).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "chat.user_input_prompt.answered",
@@ -226,10 +419,11 @@ describe("chat-message-route-runtime", () => {
         turnId: "turn-1",
       }),
     );
+    expect(JSON.stringify(runtime.recordDevDiagnostic.mock.calls)).not.toContain("Continue with the safe path");
+    expect(JSON.stringify(runtime.publishRealtime.mock.calls)).not.toContain("Continue with the safe path");
   });
 
-  it("records selected option details and treats queued durable updates as resumed", async () => {
-    const updatedRun = createDurableRun("run-2", "queued");
+  it("passes selected options to storage without echoing the answer", async () => {
     const runtime = createRuntime({
       trace: createTrace({
         status: "waiting_for_user_input",
@@ -242,12 +436,6 @@ describe("chat-message-route-runtime", () => {
         },
       }),
       durableRun: createDurableRun("run-2", "waiting"),
-      updatedRun,
-      wakeResult: {
-        outcome: "ignored",
-        detail: "already queued",
-        run: updatedRun,
-      },
     });
 
     await expect(
@@ -257,24 +445,60 @@ describe("chat-message-route-runtime", () => {
       }),
     ).resolves.toMatchObject({ resumed: true });
 
-    expect(runtime.storage.durableRuns.updateRun).toHaveBeenCalledWith(
+    expect(runtime.storage.sessionMutationAdmissions.resolveDurableChatUserInput).toHaveBeenCalledWith(
       expect.objectContaining({
-        payload: expect.objectContaining({
-          userInputResponses: [
-            expect.objectContaining({
-              selectedOption: {
-                optionId: "safe",
-                label: "Safe path",
-                description: "Bounded continuation",
-              },
-            }),
-          ],
-        }),
+        response: { kind: "single_select", optionId: "safe" },
       }),
     );
+    expect(JSON.stringify(runtime.recordDevDiagnostic.mock.calls)).not.toContain("safe");
   });
 
-  it("raises conflicts for missing durable links, invalid payloads, and failed wakeups", async () => {
+  it("allows an exact sealed replay after the trace has advanced and does not re-enqueue terminal work", async () => {
+    const runtime = createRuntime({
+      trace: createTrace({
+        status: "running",
+        durable: { runId: "run-replay" },
+        pendingUserInput: undefined,
+      }),
+      durableRun: createDurableRun("run-replay", "running"),
+      resolveOutcome: {
+        disposition: "replayed",
+        run: { runId: "run-replay", status: "completed", version: 8 },
+      },
+    });
+
+    await expect(
+      answerChatUserInputPrompt(runtime, "sess-1", "turn-1", "prompt-1", { kind: "text", text: "yes" }),
+    ).resolves.toMatchObject({ resumed: true, resumedRunId: "run-replay" });
+
+    expect(runtime.storage.sessionMutationAdmissions.resolveDurableChatUserInput).toHaveBeenCalledTimes(1);
+    expect(runtime.durableRunService.requestRunProcessing).not.toHaveBeenCalled();
+    expect(runtime.recordDevDiagnostic).not.toHaveBeenCalled();
+    expect(runtime.publishRealtime).not.toHaveBeenCalled();
+  });
+
+  it("re-requests idempotent processing for a queued sealed replay without publishing a second event", async () => {
+    const runtime = createRuntime({
+      trace: createTrace({
+        status: "running",
+        durable: { runId: "run-replay-queued" },
+        pendingUserInput: undefined,
+      }),
+      durableRun: createDurableRun("run-replay-queued", "queued"),
+      resolveOutcome: {
+        disposition: "replayed",
+        run: { runId: "run-replay-queued", status: "queued", version: 4 },
+      },
+    });
+
+    await answerChatUserInputPrompt(runtime, "sess-1", "turn-1", "prompt-1", { kind: "text", text: "yes" });
+
+    expect(runtime.durableRunService.requestRunProcessing).toHaveBeenCalledOnce();
+    expect(runtime.recordDevDiagnostic).not.toHaveBeenCalled();
+    expect(runtime.publishRealtime).not.toHaveBeenCalled();
+  });
+
+  it("raises conflicts for missing durable links and invalid durable admission payloads", async () => {
     const noRunRuntime = createRuntime({
       trace: createTrace({
         status: "waiting_for_user_input",
@@ -312,43 +536,34 @@ describe("chat-message-route-runtime", () => {
         text: "yes",
       }),
     ).rejects.toThrow("missing a valid chat turn payload");
-
-    const failedWakeRuntime = createRuntime({
-      trace: createTrace({
-        status: "waiting_for_user_input",
-        durable: { runId: "run-failed" },
-        pendingUserInput: {
-          promptId: "prompt-1",
-          kind: "text",
-          question: "Continue?",
-        },
-      }),
-      durableRun: createDurableRun("run-failed", "waiting"),
-      updatedRun: createDurableRun("run-failed", "waiting"),
-      wakeResult: {
-        outcome: "ignored",
-        detail: "run is paused",
-        run: createDurableRun("run-failed", "waiting"),
-      },
-    });
-
-    await expect(
-      answerChatUserInputPrompt(failedWakeRuntime, "sess-1", "turn-1", "prompt-1", {
-        kind: "text",
-        text: "yes",
-      }),
-    ).rejects.toThrow("run is paused");
   });
 });
+
+function answerChatUserInputPrompt(
+  runtime: ChatMessageRouteRuntimeHost,
+  sessionId: string,
+  turnId: string,
+  promptId: string,
+  response: ChatUserInputPromptResponse,
+) {
+  return answerChatUserInputPromptRuntime(runtime, sessionId, turnId, promptId, response, TEST_RESPONDER);
+}
 
 function createRuntime(input: {
   state?: ChatTurnSessionState;
   trace?: Partial<ChatTurnTraceRecord>;
   contextManifest?: Record<string, unknown>;
   durableRun?: DurableRunRecord;
-  updatedRun?: DurableRunRecord;
-  wakeResult?: Record<string, unknown>;
+  durableCheckpoint?: DurableCheckpointRecord;
+  heartbeatOccurrence?: HeartbeatOccurrenceRecord;
+  terminalHandoff?: VerifiedTerminalTurnWriteHandoff;
+  canonicalMessageOverrides?: Map<string, ChatMessageRecord>;
+  resolveOutcome?: {
+    disposition: "resolved" | "replayed";
+    run: { runId: string; status: string; version: number };
+  };
 }): ChatMessageRouteRuntimeHost & { trace: ChatTurnTraceRecord } {
+  const threadState = input.state ?? createThreadState();
   const runtime = {
     trace: createTrace(input.trace),
     storage: {
@@ -365,20 +580,225 @@ function createRuntime(input: {
       contextManifests: {
         maybeGetDetailByTurn: vi.fn(() => input.contextManifest),
       },
+      chatMessages: {
+        get: vi.fn(
+          (messageId: string) =>
+            input.canonicalMessageOverrides?.get(messageId) ?? threadState.messagesById.get(messageId),
+        ),
+      },
       durableRuns: {
-        updateRun: vi.fn(() => input.updatedRun ?? createDurableRun("run-updated", "running")),
+        getLatestCheckpointByKind: vi.fn(() => input.durableCheckpoint),
+      },
+      heartbeatOccurrences: {
+        find: vi.fn(() => input.heartbeatOccurrence),
+      },
+      sessionMutationAdmissions: {
+        findVerifiedTerminalTurnWriteHandoff: vi.fn(() => input.terminalHandoff),
+        resolveDurableChatUserInput: vi.fn((request) => ({
+          disposition: input.resolveOutcome?.disposition ?? "resolved",
+          run: input.resolveOutcome?.run ?? {
+            runId: request.durableRunId,
+            status: "queued",
+            version: request.expectedWaitingRunVersion + 1,
+          },
+          seal: {},
+          responseRecord: {},
+        })),
       },
     },
     durableRunService: {
       getDurableRun: vi.fn(() => input.durableRun ?? createDurableRun("run-1", "waiting")),
-      wakeDurableRun: vi.fn(() => input.wakeResult ?? { outcome: "woke", run: createDurableRun("run-1", "queued") }),
+      requestRunProcessing: vi.fn(),
     },
     getSession: vi.fn(),
-    loadChatTurnSessionState: vi.fn(async () => input.state ?? createThreadState()),
+    loadChatTurnSessionState: vi.fn(async () => threadState),
     publishRealtime: vi.fn(),
     recordDevDiagnostic: vi.fn(),
   } as unknown as ChatMessageRouteRuntimeHost & { trace: ChatTurnTraceRecord };
   return runtime;
+}
+
+function createHeartbeatThreadFixture(): {
+  run: DurableRunRecord;
+  checkpoint: DurableCheckpointRecord;
+  occurrence: HeartbeatOccurrenceRecord;
+  terminalHandoff: VerifiedTerminalTurnWriteHandoff;
+  trace: ChatTurnTraceRecord;
+  message: ChatMessageRecord;
+} {
+  const runId = "run-heartbeat-1";
+  const turnId = "turn-heartbeat-1";
+  const userMessageId = "ephemeral-heartbeat-1";
+  const assistantMessageId = "assistant-heartbeat-1";
+  const occurrenceId = "heartbeat-occurrence-1";
+  const claimSha256 = "a".repeat(64);
+  const content = "Disk pressure high.";
+  const rawOutput = `{"notify":true,"message":"${content}"}`;
+  const request = {
+    content: "Perform the bounded heartbeat check and return the exact decision object.",
+    permissionProfileId: "heartbeat-restricted",
+    policyRunId: runId,
+  };
+  const admissionMaterialSha256 = computeFrozenChatTurnAdmissionMaterialSha256(request);
+  const payload = {
+    version: "chat.turn.execute.v2" as const,
+    admissionId: "admission-heartbeat-1",
+    sessionIncarnationId: "incarnation-heartbeat-1",
+    admissionMaterialSha256,
+    workspaceId: "workspace-1",
+    admissionAggregateRevision: 7,
+    admissionControllerGeneration: 3,
+    effectiveRequestMaterialSha256: computeEffectiveChatTurnRequestMaterialSha256(admissionMaterialSha256, request),
+    requestActor: { actorKind: "system" as const, actorId: "system-heartbeat" },
+    sessionId: "sess-1",
+    turnId,
+    userMessageId,
+    assistantMessageId,
+    branchKind: "append" as const,
+    threadEventType: "chat_heartbeat_message_committed",
+    request,
+    heartbeatOccurrenceId: occurrenceId,
+    heartbeatClaimSha256: claimSha256,
+    heartbeatEvaluatedPolicySha256: "b".repeat(64),
+    heartbeatFrozenObjectiveSha256: "c".repeat(64),
+  };
+  const autonomous = {
+    kind: "heartbeat" as const,
+    systemActorId: "system-heartbeat",
+    sourceRunId: runId,
+    reason: "bounded session heartbeat",
+    deliverMode: "on_notify" as const,
+  };
+  const decision = buildHeartbeatDecisionReceipt({ occurrenceId, claimSha256, rawOutput });
+  const authority = buildChatTurnRuntimeAuthoritySeal({
+    runId,
+    turnId,
+    transitionKind: "terminal",
+    durableStatus: "completed",
+    traceStatus: "completed",
+    transitionAt: "2026-07-15T10:01:00.000Z",
+    postCommitGenerationId: "heartbeat-generation-1",
+    postCommitEligibility: {
+      version: 1,
+      autonomyEnabledAtParentSettlement: false,
+      evalIntegrityTurn: false,
+      humanSession: false,
+    },
+    terminalOutput: {
+      assistantMessageId,
+      outputText: content,
+      outputSummary: content,
+    },
+    heartbeatDecisionReceipt: decision.receipt,
+    requiredFinalizers: ["autonomous", "general"],
+  });
+  const autonomousAdmission = sealAutonomousChatAdmissionMetadata(
+    buildAutonomousChatAdmissionMetadataMaterial({
+      identity: { userMessageId, turnId, assistantMessageId, durableRunId: runId },
+      sessionId: "sess-1",
+      objective: request.content,
+      autonomous,
+      payload,
+    }),
+  );
+  const run = {
+    runId,
+    workflowKey: "chat.turn.execute",
+    status: "completed",
+    attemptCount: 1,
+    maxAttempts: 3,
+    version: 8,
+    payload,
+    metadata: {
+      objective: request.content,
+      autonomous,
+      autonomousAdmission,
+      [HEARTBEAT_DECISION_RAW_OUTPUT_METADATA_KEY]: rawOutput,
+      [HEARTBEAT_DECISION_RECEIPT_METADATA_KEY]: decision.receipt,
+      [CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY]: authority,
+      outputText: content,
+      outputSummary: content,
+      finalOutput: content,
+      finalSummary: content,
+    },
+    createdAt: "2026-07-15T10:00:00.000Z",
+    updatedAt: "2026-07-15T10:01:00.000Z",
+    finishedAt: "2026-07-15T10:01:00.000Z",
+  } satisfies DurableRunRecord;
+  const checkpoint = {
+    checkpointId: "checkpoint-heartbeat-1",
+    runId,
+    checkpointKind: "run_completed",
+    state: {
+      [CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY]: authority,
+      [HEARTBEAT_DECISION_RAW_OUTPUT_METADATA_KEY]: rawOutput,
+      [HEARTBEAT_DECISION_RECEIPT_METADATA_KEY]: decision.receipt,
+      assistantMessageId,
+      outputText: content,
+      outputSummary: content,
+    },
+    createdAt: "2026-07-15T10:01:00.000Z",
+  } satisfies DurableCheckpointRecord;
+  const occurrence: HeartbeatOccurrenceRecord = {
+    occurrenceId,
+    workspaceId: payload.workspaceId,
+    sessionId: payload.sessionId,
+    sessionIncarnationId: payload.sessionIncarnationId,
+    admissionId: payload.admissionId,
+    admissionRequestSha256: "d".repeat(64),
+    admissionIdempotencyKey: "heartbeat-idempotency-1",
+    admissionCorrelationId: occurrenceId,
+    runtimeOwnerId: "gateway-runtime-owner",
+    systemActorId: "system-heartbeat",
+    admissionMaterialSha256: payload.admissionMaterialSha256,
+    evaluatedPolicySha256: payload.heartbeatEvaluatedPolicySha256,
+    frozenRequestSha256: "e".repeat(64),
+    frozenObjectiveSha256: payload.heartbeatFrozenObjectiveSha256,
+    claimSha256,
+    aggregateRevision: payload.admissionAggregateRevision,
+    controllerGeneration: payload.admissionControllerGeneration,
+    priorCadence: {},
+    heartbeatIntervalSeconds: 300,
+    cooldownSeconds: 60,
+    idleFloorSeconds: 30,
+    observedSessionActivityAt: "2026-07-15T09:55:00.000Z",
+    state: "terminal",
+    revision: 3,
+    claimedAt: "2026-07-15T10:00:00.000Z",
+    updatedAt: "2026-07-15T10:01:00.000Z",
+    boundDurableRunId: runId,
+    durableBoundAt: "2026-07-15T10:00:01.000Z",
+    terminalAt: "2026-07-15T10:01:00.000Z",
+    terminalStatus: "completed",
+    terminalHandoffSha256: "f".repeat(64),
+    userMessageId,
+    assistantMessageId,
+    turnId,
+    durableRunId: runId,
+  };
+  const terminalHandoff: VerifiedTerminalTurnWriteHandoff = {
+    durableRunStatus: "completed",
+    traceStatus: "completed",
+    handoffSha256: occurrence.terminalHandoffSha256!,
+  };
+  const trace = createTrace({
+    turnId,
+    userMessageId,
+    assistantMessageId,
+    completion: { status: "complete", repaired: false },
+    finishedAt: "2026-07-15T10:01:00.000Z",
+    durable: { runId, status: "completed", checkpointKind: "run_completed" },
+  });
+  const message: ChatMessageRecord = {
+    messageId: assistantMessageId,
+    sessionId: "sess-1",
+    role: "assistant",
+    actorType: "system",
+    actorId: "system-heartbeat",
+    content,
+    timestamp: "2026-07-15T10:01:00.000Z",
+  };
+  return { run, checkpoint, occurrence, terminalHandoff, trace, message };
 }
 
 function createThreadState(): ChatTurnSessionState {
@@ -448,19 +868,40 @@ function createTrace(overrides: Partial<ChatTurnTraceRecord> = {}): ChatTurnTrac
 }
 
 function createDurableRun(runId: string, status: string): DurableRunRecord {
+  const request = { content: "continue" };
+  const admissionMaterialSha256 = computeFrozenChatTurnAdmissionMaterialSha256(request);
   return {
     runId,
+    workflowKey: "chat.turn.execute",
     status,
     version: 3,
     payload: {
-      version: "chat.turn.execute.v1",
+      version: "chat.turn.execute.v2",
+      admissionId: "admission-1",
+      sessionIncarnationId: "incarnation-1",
+      admissionMaterialSha256,
+      workspaceId: "workspace-1",
+      admissionAggregateRevision: 7,
+      admissionControllerGeneration: 3,
+      effectiveRequestMaterialSha256: computeEffectiveChatTurnRequestMaterialSha256(admissionMaterialSha256, request),
+      policyRunIdDerivation: {
+        version: 1,
+        kind: "durable_run_id",
+        runId,
+      },
+      requestActor: {
+        actorKind: "operator",
+        actorId: TEST_RESPONDER.actorId,
+        authActorId: TEST_RESPONDER.actorId,
+        authActorSource: "token",
+      },
       sessionId: "sess-1",
       turnId: "turn-1",
       userMessageId: "user-1",
       assistantMessageId: "assistant-1",
       branchKind: "append",
       threadEventType: "chat_thread_turn_appended",
-      request: { content: "continue" },
+      request,
     },
   } as DurableRunRecord;
 }

@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseClient } from "./db.js";
 import { createDatabase } from "./sqlite.js";
 import { ChatProjectRepository } from "./chat-project-repo.js";
+import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
 import { ChatSessionProjectRepository } from "./chat-session-project-repo.js";
 
 const createdFiles: string[] = [];
@@ -27,6 +28,7 @@ function createStore(): { db: DatabaseClient; repo: ChatSessionProjectRepository
   const dbPath = path.join(os.tmpdir(), `goatcitadel-chat-session-project-${randomUUID()}.db`);
   createdFiles.push(dbPath);
   const db = createDatabase({ dbPath });
+  new ChatSessionMetaRepository(db).ensure("session-a", undefined, "workspace-a");
   const project = new ChatProjectRepository(db).create(
     {
       workspaceId: "workspace-a",

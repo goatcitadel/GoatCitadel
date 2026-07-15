@@ -120,6 +120,9 @@ function createDeferredInitHarness(overrides: Record<string, unknown> = {}) {
       startWorker: vi.fn(),
       stopWorker: vi.fn(),
     },
+    heartbeatOccurrenceService: {
+      recoverAll: vi.fn(async () => ({ scanned: 0, busy: 0, reclaimed: 0, resumed: 0, terminal: 0, closed: 0 })),
+    },
     ensureCostReportCronJob: vi.fn(async () => undefined),
     ensureMemoryFlushCronJob: vi.fn(async () => undefined),
     ensureMemoryConsolidationCronJob: vi.fn(async () => undefined),
@@ -146,6 +149,9 @@ function createDeferredInitHarness(overrides: Record<string, unknown> = {}) {
     startOrchestrationWorktreeReapScheduler: vi.fn(),
     startProactiveScheduler: vi.fn(),
     scheduleProviderCatalogPrewarm: vi.fn(),
+    sessionControlRuntimeOwner: {
+      cancelExpiredUnboundTurnAdmissions: vi.fn(() => []),
+    },
     storage: {
       realtimeStreamLeases: {
         closeOpenForNode: vi.fn(() => 2),
@@ -235,6 +241,21 @@ describe("GatewayService loop 22 deferred lifecycle", () => {
     expect(gateway.npuSidecar.init).toHaveBeenCalled();
     expect(gateway.llamaCppRuntime.init).toHaveBeenCalled();
     expect(gateway.configGenerationService.completeRuntimeOwnerReconciliation).toHaveBeenCalled();
+    expect(gateway.sessionControlRuntimeOwner.cancelExpiredUnboundTurnAdmissions).toHaveBeenCalledWith({
+      actorId: "system:gateway-startup",
+      idempotencyKeyPrefix: "gateway-startup:expired-unbound-chat-turn",
+      correlationId: expect.stringMatching(/^gateway-startup:/u),
+      limit: 100,
+    });
+    expect(gateway.heartbeatOccurrenceService.recoverAll.mock.invocationCallOrder[0]).toBeLessThan(
+      gateway.sessionControlRuntimeOwner.cancelExpiredUnboundTurnAdmissions.mock.invocationCallOrder[0],
+    );
+    expect(gateway.heartbeatOccurrenceService.recoverAll.mock.invocationCallOrder[0]).toBeLessThan(
+      gateway.startProactiveScheduler.mock.invocationCallOrder[0],
+    );
+    expect(
+      gateway.sessionControlRuntimeOwner.cancelExpiredUnboundTurnAdmissions.mock.invocationCallOrder[0],
+    ).toBeLessThan(gateway.startProactiveScheduler.mock.invocationCallOrder[0]);
     expect(gateway.startProactiveScheduler).toHaveBeenCalled();
     expect(gateway.startMaintenanceScheduler).toHaveBeenCalled();
     expect(gateway.startOrchestrationWorktreeReapScheduler).toHaveBeenCalled();
@@ -245,6 +266,25 @@ describe("GatewayService loop 22 deferred lifecycle", () => {
     expect(gateway.mediaVoiceService.resumeInterruptedMediaJobs).toHaveBeenCalled();
     expect(gateway.promptPackService.resumeInterruptedBenchmarkRuns).toHaveBeenCalled();
     expect(gateway.scheduleProviderCatalogPrewarm).toHaveBeenCalled();
+  });
+
+  it("recovers occurrences before every advisory heartbeat sweep", async () => {
+    const order: string[] = [];
+    const gateway = createGatewayHarness({
+      heartbeatOccurrenceService: {
+        recoverAll: vi.fn(async () => {
+          order.push("recover");
+        }),
+      },
+      isFeatureEnabled: vi.fn(() => {
+        order.push("advisory-sweep");
+        return true;
+      }),
+    });
+
+    await (GatewayService.prototype as any).runHeartbeatSweep.call(gateway);
+
+    expect(order).toEqual(["recover", "advisory-sweep"]);
   });
 
   it("reconciles a committed cron generation before clearing the startup marker", async () => {

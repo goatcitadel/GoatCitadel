@@ -20,7 +20,7 @@ import type {
   ToolPolicyConfig,
   ToolRiskLevel,
 } from "@goatcitadel/contracts";
-import { evaluateWards } from "@goatcitadel/contracts";
+import { evaluateWards, HEARTBEAT_PERMISSION_PROFILE_ID, HEARTBEAT_RESTRICTED_PROFILE } from "@goatcitadel/contracts";
 import type { CitadelWardRecord, WardEffect } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { randomUUID } from "node:crypto";
@@ -106,6 +106,14 @@ function isFullWebAccessEligibleTool(toolName: string): boolean {
 
 function hasFullWebAccess(request: Pick<ToolAccessEvaluateRequest, "toolName" | "policyContext">): boolean {
   return isFullWebAccessEligibleTool(request.toolName) && request.policyContext?.fullWebAccess !== false;
+}
+
+function isExactBuiltInHeartbeatProfile(request: Pick<ToolAccessEvaluateRequest, "policyContext">): boolean {
+  const context = request.policyContext;
+  return (
+    context?.permissionProfileId === HEARTBEAT_PERMISSION_PROFILE_ID &&
+    isDeepStrictEqual(context.permissionProfile, HEARTBEAT_RESTRICTED_PROFILE)
+  );
 }
 
 function assertHostAllowedForRequest(
@@ -882,6 +890,22 @@ export class ToolPolicyEngine {
       return withPolicy(deny(riskLevel, "unknown_tool", `unknown tool ${request.toolName}`));
     }
 
+    // An active permission profile is a capability ceiling, not another
+    // additive allow source. Global/agent/profile allows, scoped grants, and a
+    // local operator override may change posture only for tools already inside
+    // this surface; none may widen it. Global deny remains the earlier,
+    // absolute deny-wins gate and no-profile requests keep legacy semantics.
+    const activePermissionProfile =
+      request.policyContext?.permissionProfile?.status === "active"
+        ? request.policyContext.permissionProfile
+        : undefined;
+    if (
+      activePermissionProfile &&
+      !matchesAnyToolPattern(new Set(activePermissionProfile.toolPatterns), request.toolName)
+    ) {
+      return withPolicy(deny(riskLevel, "permission_profile_upper_bound", "tool not available in resolved policy"));
+    }
+
     // Effective Citadel scope. Gateway runtime paths resolve the parent Citadel
     // from the workspace and pass it on the request, so Wards always enforce on
     // the correct scope. Requests without a citadelId are unscoped (global) and
@@ -1052,6 +1076,26 @@ export class ToolPolicyEngine {
       accessReason.reasonCodes.push("official_search_provider_consent_required");
       accessReason.policyReason = "official search provider consent is required";
     }
+
+    // A silent heartbeat has no operator waiting on an approval lifecycle. If
+    // policy drift (for example a new Ward), argument classification, risk, or
+    // filesystem posture would ordinarily escalate one of its exact read-only
+    // tools, fail closed instead of creating an approval that can park forever.
+    // Match the complete built-in record as well as its resolved id so a custom
+    // profile that merely reuses the id cannot inherit this special posture.
+    if (requiresApproval && isExactBuiltInHeartbeatProfile(request)) {
+      return withWard({
+        allowed: false,
+        reasonCodes: [...new Set([...accessReason.reasonCodes, "heartbeat_interactive_approval_forbidden"])],
+        requiresApproval: false,
+        riskLevel,
+        policyReason: "silent heartbeat tool escalation is blocked because interactive approval is unavailable",
+        permissionProfileId: policy.permissionProfileId,
+        localOperatorOverrideId: localOperatorOverrideAuditId,
+        approvalMode: policy.approvalMode,
+      });
+    }
+
     const effectiveAllowGrant = officialSearchRequest
       ? officialSearchConsentGrant
       : grantDecision?.decision === "allow"

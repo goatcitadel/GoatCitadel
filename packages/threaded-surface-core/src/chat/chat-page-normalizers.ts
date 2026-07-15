@@ -36,11 +36,35 @@ export function flattenThreadMessages(thread: ChatThreadResponse | null): ChatMe
   if (!thread) {
     return [];
   }
-  return thread.turns.flatMap((turn) => {
+  const messages = thread.turns.flatMap((turn) => {
     const items: ChatMessageRecord[] = [turn.userMessage];
     if (turn.assistantMessage) {
       items.push(turn.assistantMessage);
     }
     return items;
   });
+  const notices = (thread.systemNotices ?? [])
+    .map((notice, index) => ({ message: notice.message, index }))
+    .sort((left, right) => {
+      const timestampOrder = toTimestampMs(left.message.timestamp) - toTimestampMs(right.message.timestamp);
+      return timestampOrder || left.index - right.index;
+    });
+  const merged: ChatMessageRecord[] = [];
+  let noticeIndex = 0;
+  for (const message of messages) {
+    const messageTimestamp = toTimestampMs(message.timestamp);
+    while (noticeIndex < notices.length && toTimestampMs(notices[noticeIndex]!.message.timestamp) < messageTimestamp) {
+      merged.push(notices[noticeIndex++]!.message);
+    }
+    merged.push(message);
+  }
+  while (noticeIndex < notices.length) {
+    merged.push(notices[noticeIndex++]!.message);
+  }
+  return merged;
+}
+
+function toTimestampMs(value: string): number {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
 }

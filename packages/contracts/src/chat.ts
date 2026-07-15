@@ -1984,11 +1984,27 @@ export interface ChatThreadTurnRecord {
   thinking?: string;
 }
 
+/**
+ * A retained, system-authored notification that belongs in the chronological
+ * thread timeline but is not a conversation turn. In particular, it has no
+ * persisted or synthetic user message and never participates in branch state.
+ */
+export interface ChatThreadSystemNoticeRecord {
+  kind: "system_heartbeat";
+  noticeId: string;
+  turnId: string;
+  message: ChatMessageRecord;
+}
+
 export interface ChatThreadResponse {
   sessionId: string;
   activeLeafTurnId?: string;
   selectedTurnId?: string;
   turns: ChatThreadTurnRecord[];
+  /** Additive retained-system projection; absent on older cached responses. */
+  systemNotices?: ChatThreadSystemNoticeRecord[];
+  /** Count omitted before the bounded retained-system projection. */
+  systemNoticeHiddenCount?: number;
 }
 
 export interface ChatStreamUsageRecord {

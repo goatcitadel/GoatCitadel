@@ -30,17 +30,11 @@ interface ChatSessionRevisionRow {
  */
 export class ChatSessionRevisionRepository {
   private readonly getStmt;
-  private readonly ensureStmt;
   private readonly fenceStmt;
   private readonly bumpStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare("SELECT session_id, revision FROM chat_session_meta WHERE session_id = ?");
-    this.ensureStmt = db.prepare(`
-      INSERT INTO chat_session_meta (session_id, revision, created_at, updated_at)
-      VALUES (@sessionId, 1, @createdAt, @updatedAt)
-      ON CONFLICT(session_id) DO NOTHING
-    `);
     this.fenceStmt = db.prepare(`
       UPDATE chat_session_meta
       SET revision = revision
@@ -62,9 +56,8 @@ export class ChatSessionRevisionRepository {
     return row ? { sessionId: row.session_id, revision: row.revision } : undefined;
   }
 
-  public ensure(sessionId: string, now = new Date().toISOString()): ChatSessionRevisionRecord {
+  public ensure(sessionId: string, _now = new Date().toISOString()): ChatSessionRevisionRecord {
     const normalizedSessionId = normalizeSessionId(sessionId);
-    this.ensureStmt.run({ sessionId: normalizedSessionId, createdAt: now, updatedAt: now });
     const record = this.get(normalizedSessionId);
     if (!record) {
       throw new NotFoundError({ entity: "chat session revision", id: normalizedSessionId });

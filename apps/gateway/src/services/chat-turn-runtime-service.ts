@@ -7,14 +7,14 @@ import type {
   ChatStreamChunk,
 } from "@goatcitadel/contracts";
 import * as chatTurnEntryService from "./chat-turn-entry-service.js";
-import type { AgentChatTurnRequestOptions } from "./chat-turn-entry-service.js";
+import type {
+  AgentChatTurnRequestOptions,
+  OperatorChatTurnRequestOptions,
+  OperatorChatTurnStreamRequestOptions,
+} from "./chat-turn-entry-service.js";
 import type { ChatTurnRuntimeHost } from "./chat-turn-runtime-host-composition.js";
-import type { ChatStreamMutationLifecycle } from "./chat-turn-types.js";
 
-export interface ChatTurnStreamRequestOptions {
-  abortSignal?: AbortSignal;
-  mutationLifecycle?: ChatStreamMutationLifecycle;
-}
+export type ChatTurnStreamRequestOptions = OperatorChatTurnStreamRequestOptions;
 
 export interface ChatTurnRuntime {
   agentSendChatMessage(
@@ -31,6 +31,7 @@ export interface ChatTurnRuntime {
     sessionId: string,
     turnId: string,
     overrides?: Partial<ChatSendMessageRequest>,
+    options?: OperatorChatTurnRequestOptions,
   ): Promise<ChatSendMessageResponse>;
   retryChatTurnStream(
     sessionId: string,
@@ -38,7 +39,12 @@ export interface ChatTurnRuntime {
     overrides?: Partial<ChatSendMessageRequest>,
     options?: ChatTurnStreamRequestOptions,
   ): AsyncGenerator<ChatStreamChunk>;
-  editChatTurn(sessionId: string, turnId: string, input: ChatSendMessageRequest): Promise<ChatSendMessageResponse>;
+  editChatTurn(
+    sessionId: string,
+    turnId: string,
+    input: ChatSendMessageRequest,
+    options?: OperatorChatTurnRequestOptions,
+  ): Promise<ChatSendMessageResponse>;
   editChatTurnStream(
     sessionId: string,
     turnId: string,
@@ -80,8 +86,11 @@ export class ChatTurnRuntimeService implements ChatTurnRuntime {
     sessionId: string,
     turnId: string,
     overrides: Partial<ChatSendMessageRequest> = {},
+    options?: OperatorChatTurnRequestOptions,
   ): Promise<ChatSendMessageResponse> {
-    return chatTurnEntryService.retryChatTurn(this.host, sessionId, turnId, overrides);
+    return options
+      ? chatTurnEntryService.retryChatTurn(this.host, sessionId, turnId, overrides, options)
+      : chatTurnEntryService.retryChatTurn(this.host, sessionId, turnId, overrides);
   }
 
   public retryChatTurnStream(
@@ -99,8 +108,11 @@ export class ChatTurnRuntimeService implements ChatTurnRuntime {
     sessionId: string,
     turnId: string,
     input: ChatSendMessageRequest,
+    options?: OperatorChatTurnRequestOptions,
   ): Promise<ChatSendMessageResponse> {
-    return chatTurnEntryService.editChatTurn(this.host, sessionId, turnId, input);
+    return options
+      ? chatTurnEntryService.editChatTurn(this.host, sessionId, turnId, input, options)
+      : chatTurnEntryService.editChatTurn(this.host, sessionId, turnId, input);
   }
 
   public editChatTurnStream(

@@ -62,11 +62,12 @@ vi.mock("./chat-generated-artifact-service.js", () => ({
 }));
 
 vi.mock("./chat-message-route-runtime.js", () => ({
-  answerChatUserInputPrompt: vi.fn((_host, sessionId, turnId, promptId, input) => ({
+  answerChatUserInputPrompt: vi.fn((_host, sessionId, turnId, promptId, input, responder) => ({
     sessionId,
     turnId,
     promptId,
     input,
+    responder,
   })),
   getChatThread: vi.fn((_host, sessionId) => ({ sessionId, turns: [] })),
   getTurnContextManifestForSession: vi.fn((_host, sessionId, turnId) => ({ sessionId, turnId })),
@@ -146,6 +147,7 @@ vi.mock("./chat-workbench-service.js", () => ({
 
 import { NotFoundError } from "@goatcitadel/contracts";
 import { composeChatRouteDependencies } from "./gateway-route-composition-chat.js";
+import { createAuthenticatedOperatorAdmissionContext } from "./session-control-service.js";
 
 function fn<TArgs extends unknown[] = unknown[], TResult = unknown>(impl: (...args: TArgs) => TResult) {
   return vi.fn(impl);
@@ -646,9 +648,16 @@ describe("composeChatRouteDependencies", () => {
       method: "sendStream",
     });
     expect(
-      deps.chatMessages.answerChatUserInputPrompt("session-1", "turn-1", "prompt-1", { value: "x" }),
+      deps.chatMessages.answerChatUserInputPrompt(
+        "session-1",
+        "turn-1",
+        "prompt-1",
+        { value: "x" },
+        { actorId: "operator-1", authActorSource: "token" },
+      ),
     ).toMatchObject({
       promptId: "prompt-1",
+      responder: { actorId: "operator-1", authActorSource: "token" },
     });
     expect(deps.chatMessages.cancelChatTurn("session-1", "turn-1", "operator")).toMatchObject({
       cancelledBy: "operator",
@@ -822,6 +831,77 @@ describe("composeChatRouteDependencies", () => {
       "turn-1",
       { content: "edit" },
       { abortSignal: controller.signal, mutationLifecycle },
+    );
+  });
+
+  it("forwards the route-authenticated operator context separately from Chat request bodies", () => {
+    const gateway = createGateway();
+    const deps = composeChatRouteDependencies(gateway as never) as any;
+    const authenticatedOperator = createAuthenticatedOperatorAdmissionContext({
+      actorId: "operator-1",
+      authActorSource: "loopback",
+    });
+
+    deps.chatMessages.agentSendChatMessage("session-1", { content: "send" }, authenticatedOperator);
+    deps.chatMessages.agentSendChatMessageStream(
+      "session-1",
+      { content: "send stream" },
+      undefined,
+      undefined,
+      authenticatedOperator,
+    );
+    deps.chatMessages.retryChatTurn("session-1", "turn-1", { content: "retry" }, authenticatedOperator);
+    deps.chatMessages.retryChatTurnStream(
+      "session-1",
+      "turn-1",
+      { content: "retry stream" },
+      undefined,
+      undefined,
+      authenticatedOperator,
+    );
+    deps.chatMessages.editChatTurn("session-1", "turn-1", { content: "edit" }, authenticatedOperator);
+    deps.chatMessages.editChatTurnStream(
+      "session-1",
+      "turn-1",
+      { content: "edit stream" },
+      undefined,
+      undefined,
+      authenticatedOperator,
+    );
+
+    expect(gateway.chatTurnRuntime.agentSendChatMessage).toHaveBeenLastCalledWith(
+      "session-1",
+      { content: "send" },
+      { authenticatedOperator },
+    );
+    expect(gateway.chatTurnRuntime.agentSendChatMessageStream).toHaveBeenLastCalledWith(
+      "session-1",
+      { content: "send stream" },
+      { abortSignal: undefined, authenticatedOperator },
+    );
+    expect(gateway.chatTurnRuntime.retryChatTurn).toHaveBeenLastCalledWith(
+      "session-1",
+      "turn-1",
+      { content: "retry" },
+      { authenticatedOperator },
+    );
+    expect(gateway.chatTurnRuntime.retryChatTurnStream).toHaveBeenLastCalledWith(
+      "session-1",
+      "turn-1",
+      { content: "retry stream" },
+      { abortSignal: undefined, authenticatedOperator },
+    );
+    expect(gateway.chatTurnRuntime.editChatTurn).toHaveBeenLastCalledWith(
+      "session-1",
+      "turn-1",
+      { content: "edit" },
+      { authenticatedOperator },
+    );
+    expect(gateway.chatTurnRuntime.editChatTurnStream).toHaveBeenLastCalledWith(
+      "session-1",
+      "turn-1",
+      { content: "edit stream" },
+      { abortSignal: undefined, authenticatedOperator },
     );
   });
 

@@ -3,9 +3,10 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, it } from "node:test";
 import { Worker } from "node:worker_threads";
-import { ConflictError } from "@goatcitadel/contracts";
+import { canonicalJsonString, ConflictError } from "@goatcitadel/contracts";
 import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
 import type { DatabaseClient } from "./db.js";
 import {
@@ -16,7 +17,7 @@ import {
   type HandoffSessionControlInput,
   type RevokeIdentityAmbiguityInput,
 } from "./session-control-repo.js";
-import { createDatabase } from "./sqlite.js";
+import { __sqliteInternals, createDatabase } from "./sqlite.js";
 
 const clients: DatabaseClient[] = [];
 const temporaryDirectories: string[] = [];
@@ -235,7 +236,7 @@ describe("SessionControlRepository SQLite foundation", () => {
       idempotencyKey: "init:workspace",
       correlationId: "correlation:init:workspace",
     });
-    assert.equal(initialized.disposition, "created");
+    assert.equal(initialized.disposition, "already_initialized");
     assert.equal(
       repo.initializeExistingSession({
         workspaceId: "default",
@@ -354,8 +355,10 @@ describe("SessionControlRepository SQLite foundation", () => {
       idempotencyKey: "auth-revoke:pending-and-current",
       correlationId: "correlation:auth-revoke:pending-and-current",
     } as const;
+    const clockProbe = observeDatabaseClockReads(repo);
     const revoked = repo.revokeByAuthBinding(input);
     assert.equal(revoked.disposition, "created");
+    assert.equal(clockProbe.readCount(), 1);
     assert.deepEqual(
       revoked.controls.map((control) => [control.sessionId, control.ownerKind, control.generation]),
       [
@@ -408,6 +411,9 @@ describe("SessionControlRepository SQLite foundation", () => {
         .get<{ count: number }>({ idempotencyKey: input.idempotencyKey })!.count,
       1,
     );
+    const persistedTimestamps = authRevokePersistedTimestamps(db, input, "session-auth-current");
+    assert.equal(persistedTimestamps.length, 12);
+    assert.deepEqual([...new Set(persistedTimestamps)], [revoked.occurredAt]);
     assert.throws(
       () =>
         repo.handoff(
@@ -424,6 +430,8 @@ describe("SessionControlRepository SQLite foundation", () => {
 
     const replay = repo.revokeByAuthBinding(input);
     assert.equal(replay.disposition, "replayed");
+    assert.equal(replay.occurredAt, revoked.occurredAt);
+    assert.equal(clockProbe.readCount(), 1);
     assert.deepEqual(
       replay.controls.map((control) => control.sessionId),
       ["session-auth-current", "session-auth-pending"],
@@ -432,6 +440,99 @@ describe("SessionControlRepository SQLite foundation", () => {
       () => repo.revokeByAuthBinding({ ...input, correlationId: "correlation:auth-revoke:changed" }),
       ConflictError,
     );
+    assert.equal(clockProbe.readCount(), 1);
+    clockProbe.restore();
+  });
+
+  it("settles more than 4,000 frozen targets after a deterministic stale-clock delay without opening ordinary writes", () => {
+    const seed = "auth-revoke-scale";
+    const { db, repo } = createHarness(seed);
+    const sessionId = `session-${seed}`;
+    const companionSessionId = `companion-${seed}`;
+    const deviceGrantId = `grant-${seed}`;
+    const targetCount = 4_001;
+    for (let index = 0; index < targetCount; index += 1) {
+      const requestSeed = `${seed}-${index}`;
+      repo.createExternalRequest(request(requestSeed, 1, ["send"], sessionId, companionSessionId, deviceGrantId));
+    }
+
+    seedSessionControlAuth(db, "companion-auth-revoke-scale-unrelated", "grant-auth-revoke-scale-unrelated");
+    const unrelated = repo.createExternalRequest(
+      request(
+        "auth-revoke-scale-unrelated",
+        1,
+        ["send"],
+        sessionId,
+        "companion-auth-revoke-scale-unrelated",
+        "grant-auth-revoke-scale-unrelated",
+      ),
+    );
+    const delay = delayFirstAuthRevokeEvent(repo, 1_300);
+    const input = authRevokeInput(seed);
+    const startedAt = performance.now();
+    const revoked = repo.revokeByAuthBinding(input);
+    const elapsedMs = performance.now() - startedAt;
+    delay.restore();
+
+    assert.equal(delay.didDelay(), true);
+    assert.equal(elapsedMs >= 1_250, true);
+    assert.equal(revoked.disposition, "created");
+    assert.equal(revoked.occurredAtBasis, "operation");
+    assert.equal(requestStatus(db, unrelated.request.requestId), "pending");
+    assert.deepEqual(
+      {
+        ...db
+          .prepare(
+            `SELECT operation.target_count, operation.session_count, COUNT(target.target_index) AS persisted_targets
+           FROM chat_session_control_auth_revoke_operations operation
+           JOIN chat_session_control_auth_revoke_operation_targets target
+             ON target.operation_idempotency_key = operation.idempotency_key
+           WHERE operation.idempotency_key = @idempotencyKey
+           GROUP BY operation.target_count, operation.session_count`,
+          )
+          .get<{ target_count: number; session_count: number; persisted_targets: number }>({
+            idempotencyKey: input.idempotencyKey,
+          }),
+      },
+      { target_count: targetCount, session_count: 1, persisted_targets: targetCount },
+    );
+    const timestamps = db
+      .prepare(
+        `SELECT occurred_at FROM chat_session_control_auth_revoke_operations
+         WHERE idempotency_key = @idempotencyKey
+         UNION ALL
+         SELECT created_at FROM chat_session_control_auth_revoke_receipts
+         WHERE idempotency_key = @idempotencyKey
+         UNION ALL
+         SELECT created_at FROM chat_session_control_events
+         WHERE correlation_id = @correlationId
+         UNION ALL
+         SELECT decided_at FROM chat_session_control_requests
+         WHERE companion_session_id = @bindingId AND status = 'cancelled'`,
+      )
+      .all<{ occurred_at: string }>({
+        bindingId: input.bindingId,
+        correlationId: input.correlationId,
+        idempotencyKey: input.idempotencyKey,
+      })
+      .map((row) => row.occurred_at);
+    assert.equal(timestamps.length, targetCount * 2 + 2);
+    assert.deepEqual([...new Set(timestamps)], [revoked.occurredAt]);
+    assert.equal(repo.revokeByAuthBinding(input).occurredAt, revoked.occurredAt);
+
+    assert.throws(
+      () =>
+        db
+          .prepare(
+            `UPDATE chat_session_control_requests
+             SET status = 'cancelled', decided_at = @decidedAt, decided_by_actor_id = 'auth-owner',
+                 decision_reason_code = 'request_cancelled'
+             WHERE request_id = @requestId`,
+          )
+          .run({ decidedAt: revoked.occurredAt, requestId: unrelated.request.requestId }),
+      /database-clock|transition invariant/iu,
+    );
+    assert.equal(requestStatus(db, unrelated.request.requestId), "pending");
   });
 
   it("persists exact zero-target auth revoke receipts and never acquires later candidates", () => {
@@ -445,14 +546,16 @@ describe("SessionControlRepository SQLite foundation", () => {
       idempotencyKey: "auth-revoke:noop",
       correlationId: "correlation:auth-revoke:noop",
     } as const;
+    const clockProbe = observeDatabaseClockReads(repo);
     const created = repo.revokeByAuthBinding(input);
     assert.equal(created.disposition, "created");
     assert.deepEqual(created.controls, []);
+    assert.equal(clockProbe.readCount(), 1);
     assert.deepEqual(
       {
         ...(db
           .prepare(
-            `SELECT binding_kind, binding_id, actor_id, correlation_id, target_count, session_count
+            `SELECT binding_kind, binding_id, actor_id, correlation_id, target_count, session_count, created_at
              FROM chat_session_control_auth_revoke_receipts
              WHERE idempotency_key = @idempotencyKey`,
           )
@@ -465,10 +568,15 @@ describe("SessionControlRepository SQLite foundation", () => {
         correlation_id: input.correlationId,
         target_count: 0,
         session_count: 0,
+        created_at: created.occurredAt,
       },
     );
-    assert.equal(repo.revokeByAuthBinding(input).disposition, "replayed");
+    const replay = repo.revokeByAuthBinding(input);
+    assert.equal(replay.disposition, "replayed");
+    assert.equal(replay.occurredAt, created.occurredAt);
     assert.throws(() => repo.revokeByAuthBinding({ ...input, actorId: "changed-auth-owner" }), ConflictError);
+    assert.equal(clockProbe.readCount(), 1);
+    clockProbe.restore();
 
     const meta = new ChatSessionMetaRepository(db);
     meta.ensure("session-auth-noop-later", new Date().toISOString(), "default");
@@ -491,7 +599,347 @@ describe("SessionControlRepository SQLite foundation", () => {
     };
     assert.equal(repo.revokeByAuthBinding(aliasInput).disposition, "created");
     assert.equal(requestStatus(db, later.request.requestId), "cancelled");
-    assert.deepEqual(repo.revokeByAuthBinding(input).controls, []);
+    const originalReplay = repo.revokeByAuthBinding(input);
+    assert.deepEqual(originalReplay.controls, []);
+    assert.equal(originalReplay.occurredAt, created.occurredAt);
+  });
+
+  it("rolls back every auth-bound mutation when the canonical receipt cannot persist", () => {
+    const { db, repo } = createHarness("auth-revoke-rollback");
+    const sessionId = "session-auth-revoke-rollback";
+    const companionSessionId = "companion-auth-revoke-rollback";
+    const deviceGrantId = "grant-auth-revoke-rollback";
+    const active = repo.createExternalRequest(
+      request("auth-revoke-rollback-active", 1, ["send"], sessionId, companionSessionId, deviceGrantId),
+    );
+    const pending = repo.createExternalRequest(
+      request("auth-revoke-rollback-pending", 1, ["send", "read"], sessionId, companionSessionId, deviceGrantId),
+    );
+    repo.handoff(handoff("auth-revoke-rollback-active", active.request.requestId, 1, ["send"], sessionId));
+    const input = authRevokeInput("auth-revoke-rollback");
+    db.exec(`
+      CREATE TRIGGER gc_test_fail_auth_revoke_receipt
+      BEFORE INSERT ON chat_session_control_auth_revoke_receipts
+      BEGIN
+        SELECT RAISE(ABORT, 'forced auth revoke receipt failure');
+      END;
+    `);
+    const clockProbe = observeDatabaseClockReads(repo);
+    assert.throws(() => repo.revokeByAuthBinding(input), /durable authority|forced auth revoke receipt failure/iu);
+    assert.equal(clockProbe.readCount(), 1);
+    assert.equal(requestStatus(db, pending.request.requestId), "pending");
+    assert.deepEqual(
+      [repo.getControl("default", sessionId).ownerKind, repo.getControl("default", sessionId).generation],
+      ["external_companion", 2],
+    );
+    assert.equal(
+      db
+        .prepare(
+          `SELECT COUNT(*) AS count FROM chat_session_control_events
+           WHERE correlation_id = @correlationId`,
+        )
+        .get<{ count: number }>({ correlationId: input.correlationId })!.count,
+      0,
+    );
+    assert.equal(
+      db
+        .prepare(
+          `SELECT COUNT(*) AS count FROM chat_session_control_auth_revoke_receipts
+           WHERE idempotency_key = @idempotencyKey`,
+        )
+        .get<{ count: number }>({ idempotencyKey: input.idempotencyKey })!.count,
+      0,
+    );
+
+    db.exec("DROP TRIGGER gc_test_fail_auth_revoke_receipt;");
+    const retry = repo.revokeByAuthBinding(input);
+    assert.equal(retry.disposition, "created");
+    assert.equal(clockProbe.readCount(), 2);
+    assert.equal(repo.revokeByAuthBinding(input).occurredAt, retry.occurredAt);
+    assert.equal(clockProbe.readCount(), 2);
+    clockProbe.restore();
+  });
+
+  it("rejects incomplete, premature, extra, and changed auth-revoke operation evidence", () => {
+    const fixture = createRawAuthRevokeFixture("auth-revoke-malformed");
+
+    assert.throws(
+      () => fixture.db.transaction("immediate", () => insertRawAuthRevokeOperation(fixture)),
+      /foreign key|constraint/iu,
+    );
+    assert.equal(rawAuthRevokeOperationCount(fixture), 0);
+
+    assert.throws(
+      () =>
+        fixture.db.transaction("immediate", () => {
+          insertRawAuthRevokeOperation(fixture);
+          insertRawAuthRevokeReceipt(fixture);
+        }),
+      /receipt invariant/iu,
+    );
+    assert.equal(rawAuthRevokeOperationCount(fixture), 0);
+
+    assert.throws(
+      () =>
+        fixture.db.transaction("immediate", () => {
+          insertRawAuthRevokeOperation(fixture);
+          insertRawAuthRevokeTarget(fixture, { generation: fixture.generation + 1 });
+        }),
+      /target invariant/iu,
+    );
+    assert.equal(rawAuthRevokeOperationCount(fixture), 0);
+
+    assert.throws(
+      () =>
+        fixture.db.transaction("immediate", () => {
+          insertRawAuthRevokeOperation(fixture);
+          insertRawAuthRevokeTarget(fixture);
+          insertRawAuthRevokeTarget(fixture, {
+            targetIndex: 1,
+            eventId: `${fixture.eventId}-extra`,
+            eventIdempotencyKey: `${fixture.eventIdempotencyKey}-extra`,
+            eventSequence: fixture.eventSequence + 1,
+          });
+        }),
+      /target invariant/iu,
+    );
+    assert.equal(rawAuthRevokeOperationCount(fixture), 0);
+
+    assert.throws(
+      () =>
+        fixture.db.transaction("immediate", () => {
+          insertRawAuthRevokeOperation(fixture);
+          insertRawAuthRevokeTarget(fixture);
+          settleRawAuthRevokeRequest(fixture);
+          insertRawAuthRevokeReceipt(fixture);
+        }),
+      /receipt invariant/iu,
+    );
+    assert.equal(requestStatus(fixture.db, fixture.requestId), "pending");
+
+    assert.throws(
+      () =>
+        fixture.db.transaction("immediate", () => {
+          insertRawAuthRevokeOperation(fixture);
+          insertRawAuthRevokeTarget(fixture);
+          settleRawAuthRevokeRequest(fixture);
+          insertRawAuthRevokeEvent(fixture, { actorId: "changed-actor" });
+        }),
+      /event request or auth operation invariant/iu,
+    );
+    assert.equal(requestStatus(fixture.db, fixture.requestId), "pending");
+
+    assert.throws(
+      () =>
+        fixture.db.transaction("immediate", () => {
+          insertRawAuthRevokeOperation(fixture);
+          insertRawAuthRevokeTarget(fixture);
+          settleRawAuthRevokeRequest(fixture);
+          insertRawAuthRevokeEvent(fixture);
+          insertRawAuthRevokeEvent(fixture, {
+            eventId: `${fixture.eventId}-extra`,
+            eventIdempotencyKey: `${fixture.eventIdempotencyKey}-extra`,
+            eventSequence: fixture.eventSequence + 1,
+          });
+        }),
+      /event request or auth operation invariant/iu,
+    );
+    assert.equal(rawAuthRevokeOperationCount(fixture), 0);
+    assert.equal(requestStatus(fixture.db, fixture.requestId), "pending");
+  });
+
+  it("closes settled auth-revoke context against mutation, deletion, extension, and identity reuse", () => {
+    const seed = "auth-revoke-settled";
+    const { db, repo } = createHarness(seed);
+    repo.createExternalRequest(
+      request(`${seed}-pending`, 1, ["send"], `session-${seed}`, `companion-${seed}`, `grant-${seed}`),
+    );
+    const input = authRevokeInput(seed);
+    const created = repo.revokeByAuthBinding(input);
+    const replayed = repo.revokeByAuthBinding(input);
+    assert.equal(created.disposition, "created");
+    assert.equal(replayed.disposition, "replayed");
+    assert.equal(
+      canonicalJsonString({ occurredAt: created.occurredAt, controls: created.controls }),
+      canonicalJsonString({ occurredAt: replayed.occurredAt, controls: replayed.controls }),
+    );
+
+    assert.throws(
+      () =>
+        db
+          .prepare(
+            `UPDATE chat_session_control_auth_revoke_operations SET actor_id = 'changed-actor'
+             WHERE idempotency_key = @idempotencyKey`,
+          )
+          .run({ idempotencyKey: input.idempotencyKey }),
+      /immutable/iu,
+    );
+    assert.throws(
+      () =>
+        db
+          .prepare("DELETE FROM chat_session_control_auth_revoke_operations WHERE idempotency_key = @idempotencyKey")
+          .run({ idempotencyKey: input.idempotencyKey }),
+      /immutable/iu,
+    );
+    assert.throws(
+      () =>
+        db
+          .prepare(
+            `UPDATE chat_session_control_auth_revoke_operation_targets SET event_sequence = event_sequence + 1
+             WHERE operation_idempotency_key = @idempotencyKey`,
+          )
+          .run({ idempotencyKey: input.idempotencyKey }),
+      /immutable/iu,
+    );
+    assert.throws(
+      () =>
+        db
+          .prepare(
+            "DELETE FROM chat_session_control_auth_revoke_operation_targets WHERE operation_idempotency_key = @idempotencyKey",
+          )
+          .run({ idempotencyKey: input.idempotencyKey }),
+      /immutable/iu,
+    );
+    const frozenTarget = db
+      .prepare(
+        `SELECT * FROM chat_session_control_auth_revoke_operation_targets
+         WHERE operation_idempotency_key = @idempotencyKey`,
+      )
+      .get<Record<string, string | number | null>>({ idempotencyKey: input.idempotencyKey })!;
+    assert.throws(
+      () =>
+        db
+          .prepare(
+            `INSERT INTO chat_session_control_auth_revoke_operation_targets (
+               operation_idempotency_key, target_index, target_kind, workspace_id, session_id,
+               request_id, generation, control_revision, owner_kind, lease_state,
+               event_id, event_sequence, event_idempotency_key, event_reason_code
+             ) VALUES (
+               @operationIdempotencyKey, 1, @targetKind, @workspaceId, @sessionId,
+               @requestId, @generation, @controlRevision, @ownerKind, @leaseState,
+               @eventId, @eventSequence, @eventIdempotencyKey, @eventReasonCode
+             )`,
+          )
+          .run({
+            operationIdempotencyKey: input.idempotencyKey,
+            targetKind: frozenTarget.target_kind,
+            workspaceId: frozenTarget.workspace_id,
+            sessionId: frozenTarget.session_id,
+            requestId: frozenTarget.request_id,
+            generation: frozenTarget.generation,
+            controlRevision: frozenTarget.control_revision,
+            ownerKind: frozenTarget.owner_kind,
+            leaseState: frozenTarget.lease_state,
+            eventId: `${String(frozenTarget.event_id)}-reuse`,
+            eventSequence: Number(frozenTarget.event_sequence) + 1,
+            eventIdempotencyKey: `${String(frozenTarget.event_idempotency_key)}-reuse`,
+            eventReasonCode: frozenTarget.event_reason_code,
+          }),
+      /target invariant/iu,
+    );
+    assert.equal(
+      db
+        .prepare(
+          `SELECT COUNT(*) AS count FROM chat_session_control_auth_revoke_operation_targets
+           WHERE operation_idempotency_key = @idempotencyKey`,
+        )
+        .get<{ count: number }>({ idempotencyKey: input.idempotencyKey })!.count,
+      1,
+    );
+  });
+
+  it("replays pre-173 receipts as legacy receipt-time evidence without opening the operation bypass", () => {
+    const directory = mkdtempSync(join(tmpdir(), "goatcitadel-hx411-legacy-receipt-"));
+    temporaryDirectories.push(directory);
+    const dbPath = join(directory, "legacy.sqlite");
+    const raw = new DatabaseSync(dbPath);
+    raw.exec(`
+      PRAGMA foreign_keys = ON;
+      CREATE TABLE schema_migrations (
+        version INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        applied_at TEXT NOT NULL
+      );
+    `);
+    const markApplied = raw.prepare("INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)");
+    for (let version = 1; version <= 172; version += 1) {
+      raw.exec("BEGIN IMMEDIATE");
+      try {
+        __sqliteInternals.applySchemaMigrationForTest(version, raw);
+        markApplied.run(version, `legacy-test-${version}`, new Date().toISOString());
+        raw.exec("COMMIT");
+      } catch (error) {
+        raw.exec("ROLLBACK");
+        raw.close();
+        throw error;
+      }
+    }
+    const input = authRevokeInput("legacy-receipt");
+    const requestSha256 = D(canonicalJsonString({ operation: "auth_revoke", value: input }));
+    const occurredAt = raw.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now') AS now").get() as { now: string };
+    raw
+      .prepare(
+        `INSERT INTO chat_session_control_auth_revoke_receipts (
+           idempotency_key, request_sha256, binding_kind, binding_id, actor_id,
+           correlation_id, target_count, session_count, event_set_sha256, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, ?)`,
+      )
+      .run(
+        input.idempotencyKey,
+        requestSha256,
+        input.bindingKind,
+        input.bindingId,
+        input.actorId,
+        input.correlationId,
+        D("[]"),
+        occurredAt.now,
+      );
+    raw.close();
+
+    const db = createDatabase({ dbPath });
+    clients.push(db);
+    const repo = new SessionControlRepository(db);
+    const replayed = repo.revokeByAuthBinding(input);
+    assert.deepEqual(
+      {
+        disposition: replayed.disposition,
+        occurredAt: replayed.occurredAt,
+        occurredAtBasis: replayed.occurredAtBasis,
+        controls: replayed.controls,
+      },
+      {
+        disposition: "replayed",
+        occurredAt: occurredAt.now,
+        occurredAtBasis: "legacy_receipt",
+        controls: [],
+      },
+    );
+    const freshNow = db.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now') AS now").get<{ now: string }>()!.now;
+    assert.throws(
+      () =>
+        db
+          .prepare(
+            `INSERT INTO chat_session_control_auth_revoke_operations (
+               idempotency_key, request_sha256, binding_kind, binding_id, actor_id,
+               correlation_id, target_count, session_count, event_set_sha256, occurred_at
+             ) VALUES (
+               @idempotencyKey, @requestSha256, @bindingKind, @bindingId, @actorId,
+               @correlationId, 0, 0, @eventSetSha256, @occurredAt
+             )`,
+          )
+          .run({
+            idempotencyKey: input.idempotencyKey,
+            requestSha256,
+            bindingKind: input.bindingKind,
+            bindingId: input.bindingId,
+            actorId: input.actorId,
+            correlationId: input.correlationId,
+            eventSetSha256: D("[]"),
+            occurredAt: freshNow,
+          }),
+      /operation invariant/iu,
+    );
+    assert.equal(repo.revokeByAuthBinding(input).occurredAtBasis, "legacy_receipt");
   });
 
   it("fails closed for missing or corrupt auth revoke receipts and event sets", () => {
@@ -526,10 +974,19 @@ describe("SessionControlRepository SQLite foundation", () => {
     const missingInput = authRevokeInput("receipt-missing");
     missing.repo.revokeByAuthBinding(missingInput);
     missing.db.exec("DROP TRIGGER trg_chat_session_control_auth_revoke_receipts_no_delete;");
+    assert.throws(
+      () =>
+        missing.db
+          .prepare("DELETE FROM chat_session_control_auth_revoke_receipts WHERE idempotency_key = @idempotencyKey")
+          .run({ idempotencyKey: missingInput.idempotencyKey }),
+      /foreign key|constraint/iu,
+    );
+    missing.db.exec("PRAGMA foreign_keys = OFF;");
     missing.db
       .prepare("DELETE FROM chat_session_control_auth_revoke_receipts WHERE idempotency_key = @idempotencyKey")
       .run({ idempotencyKey: missingInput.idempotencyKey });
-    assert.throws(() => missing.repo.revokeByAuthBinding(missingInput), /corrupt/iu);
+    missing.db.exec("PRAGMA foreign_keys = ON;");
+    assert.throws(() => missing.repo.revokeByAuthBinding(missingInput), /immutable receipt|corrupt/iu);
   });
 
   it("freezes exact auth parent linkage even across same-purpose rows", () => {
@@ -587,14 +1044,17 @@ describe("SessionControlRepository SQLite foundation", () => {
     assert.deepEqual(results.map((result) => result.disposition).sort(), ["created", "replayed"]);
     const verifyDb = createDatabase({ dbPath });
     clients.push(verifyDb);
-    assert.equal(
-      verifyDb
-        .prepare(
-          `SELECT COUNT(*) AS count FROM chat_session_control_auth_revoke_receipts
-           WHERE idempotency_key = @idempotencyKey`,
-        )
-        .get<{ count: number }>({ idempotencyKey: input.idempotencyKey })!.count,
-      1,
+    const receipt = verifyDb
+      .prepare(
+        `SELECT COUNT(*) AS count, MIN(created_at) AS created_at
+         FROM chat_session_control_auth_revoke_receipts
+         WHERE idempotency_key = @idempotencyKey`,
+      )
+      .get<{ count: number; created_at: string }>({ idempotencyKey: input.idempotencyKey })!;
+    assert.equal(receipt.count, 1);
+    assert.deepEqual(
+      results.map((result) => result.occurredAt),
+      [receipt.created_at, receipt.created_at],
     );
   });
 
@@ -985,7 +1445,10 @@ describe("SessionControlRepository SQLite foundation", () => {
       /database-clock/iu,
     );
 
-    db.prepare("DELETE FROM chat_session_meta WHERE session_id = 'session-sql'").run();
+    assert.throws(
+      () => db.prepare("DELETE FROM chat_session_meta WHERE session_id = 'session-sql'").run(),
+      /terminal lifecycle evidence/iu,
+    );
     assert.equal(
       db.prepare("SELECT COUNT(*) AS count FROM chat_session_control_grants WHERE session_id = 'session-sql'").get<{
         count: number;
@@ -1056,7 +1519,7 @@ function createHarness(seed: string): { db: DatabaseClient; repo: SessionControl
     idempotencyKey: `init:${seed}`,
     correlationId: `correlation:init:${seed}`,
   });
-  assert.equal(initialized.disposition, "created");
+  assert.equal(initialized.disposition, "already_initialized");
   seedSessionControlAuth(db, `companion-${seed}`, `grant-${seed}`);
   return { db, repo };
 }
@@ -1211,9 +1674,307 @@ function authRevokeInput(seed: string): AuthRevokeSessionControlsInput {
   };
 }
 
+interface RawAuthRevokeFixture {
+  db: DatabaseClient;
+  input: AuthRevokeSessionControlsInput;
+  requestId: string;
+  workspaceId: string;
+  sessionId: string;
+  companionSessionId: string;
+  deviceGrantId: string;
+  generation: number;
+  controlRevision: number;
+  eventId: string;
+  eventSequence: number;
+  eventIdempotencyKey: string;
+  eventSetSha256: string;
+  requestSha256: string;
+  occurredAt: string;
+}
+
+function createRawAuthRevokeFixture(seed: string): RawAuthRevokeFixture {
+  const { db, repo } = createHarness(seed);
+  const workspaceId = "default";
+  const sessionId = `session-${seed}`;
+  const companionSessionId = `companion-${seed}`;
+  const deviceGrantId = `grant-${seed}`;
+  const pending = repo.createExternalRequest(
+    request(`${seed}-pending`, 1, ["send"], sessionId, companionSessionId, deviceGrantId),
+  );
+  const control = db
+    .prepare(
+      `SELECT generation, control_revision FROM chat_session_control_grants
+       WHERE session_id = @sessionId AND is_current = 1`,
+    )
+    .get<{ generation: number; control_revision: number }>({ sessionId })!;
+  const eventSequence =
+    db
+      .prepare(
+        "SELECT COALESCE(MAX(event_sequence), 0) AS sequence FROM chat_session_control_events WHERE session_id = @sessionId",
+      )
+      .get<{ sequence: number }>({ sessionId })!.sequence + 1;
+  const input = authRevokeInput(seed);
+  return {
+    db,
+    input,
+    requestId: pending.request.requestId,
+    workspaceId,
+    sessionId,
+    companionSessionId,
+    deviceGrantId,
+    generation: control.generation,
+    controlRevision: control.control_revision,
+    eventId: `raw-auth-revoke-event-${seed}`,
+    eventSequence,
+    eventIdempotencyKey: input.idempotencyKey,
+    eventSetSha256: D(`raw-auth-revoke-event-set:${seed}`),
+    requestSha256: D(canonicalJsonString({ operation: "auth_revoke", value: input })),
+    occurredAt: db.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now') AS now").get<{ now: string }>()!.now,
+  };
+}
+
+function insertRawAuthRevokeOperation(fixture: RawAuthRevokeFixture): void {
+  fixture.db
+    .prepare(
+      `INSERT INTO chat_session_control_auth_revoke_operations (
+         idempotency_key, request_sha256, binding_kind, binding_id, actor_id,
+         correlation_id, target_count, session_count, event_set_sha256, occurred_at
+       ) VALUES (
+         @idempotencyKey, @requestSha256, @bindingKind, @bindingId, @actorId,
+         @correlationId, 1, 1, @eventSetSha256, @occurredAt
+       )`,
+    )
+    .run({
+      idempotencyKey: fixture.input.idempotencyKey,
+      requestSha256: fixture.requestSha256,
+      bindingKind: fixture.input.bindingKind,
+      bindingId: fixture.input.bindingId,
+      actorId: fixture.input.actorId,
+      correlationId: fixture.input.correlationId,
+      eventSetSha256: fixture.eventSetSha256,
+      occurredAt: fixture.occurredAt,
+    });
+}
+
+function insertRawAuthRevokeTarget(
+  fixture: RawAuthRevokeFixture,
+  overrides: Partial<{
+    targetIndex: number;
+    generation: number;
+    eventId: string;
+    eventSequence: number;
+    eventIdempotencyKey: string;
+  }> = {},
+): void {
+  fixture.db
+    .prepare(
+      `INSERT INTO chat_session_control_auth_revoke_operation_targets (
+         operation_idempotency_key, target_index, target_kind, workspace_id, session_id,
+         request_id, generation, control_revision, owner_kind, lease_state,
+         event_id, event_sequence, event_idempotency_key, event_reason_code
+       ) VALUES (
+         @operationIdempotencyKey, @targetIndex, 'pending_request', @workspaceId, @sessionId,
+         @requestId, @generation, @controlRevision, 'operator', 'operator_active',
+         @eventId, @eventSequence, @eventIdempotencyKey, 'mutation_denied'
+       )`,
+    )
+    .run({
+      operationIdempotencyKey: fixture.input.idempotencyKey,
+      targetIndex: overrides.targetIndex ?? 0,
+      workspaceId: fixture.workspaceId,
+      sessionId: fixture.sessionId,
+      requestId: fixture.requestId,
+      generation: overrides.generation ?? fixture.generation,
+      controlRevision: fixture.controlRevision,
+      eventId: overrides.eventId ?? fixture.eventId,
+      eventSequence: overrides.eventSequence ?? fixture.eventSequence,
+      eventIdempotencyKey: overrides.eventIdempotencyKey ?? fixture.eventIdempotencyKey,
+    });
+}
+
+function settleRawAuthRevokeRequest(fixture: RawAuthRevokeFixture): void {
+  fixture.db
+    .prepare(
+      `UPDATE chat_session_control_requests
+       SET status = 'cancelled', decided_at = @occurredAt, decided_by_actor_id = @actorId,
+           decision_reason_code = 'request_cancelled'
+       WHERE request_id = @requestId`,
+    )
+    .run({
+      occurredAt: fixture.occurredAt,
+      actorId: fixture.input.actorId,
+      requestId: fixture.requestId,
+    });
+}
+
+function insertRawAuthRevokeEvent(
+  fixture: RawAuthRevokeFixture,
+  overrides: Partial<{
+    actorId: string;
+    eventId: string;
+    eventSequence: number;
+    eventIdempotencyKey: string;
+  }> = {},
+): void {
+  fixture.db
+    .prepare(
+      `INSERT INTO chat_session_control_events (
+         event_id, workspace_id, session_id, event_sequence, request_id, previous_generation, next_generation,
+         previous_owner_kind, next_owner_kind, previous_lease_state, next_lease_state,
+         reason_code, actor_kind, actor_id, companion_session_id, device_grant_id,
+         idempotency_key, request_sha256, correlation_id, created_at
+       ) VALUES (
+         @eventId, @workspaceId, @sessionId, @eventSequence, @requestId, @generation, @generation,
+         'operator', 'operator', 'operator_active', 'operator_active',
+         'mutation_denied', 'system', @actorId, @companionSessionId, @deviceGrantId,
+         @eventIdempotencyKey, @requestSha256, @correlationId, @occurredAt
+       )`,
+    )
+    .run({
+      eventId: overrides.eventId ?? fixture.eventId,
+      workspaceId: fixture.workspaceId,
+      sessionId: fixture.sessionId,
+      eventSequence: overrides.eventSequence ?? fixture.eventSequence,
+      requestId: fixture.requestId,
+      generation: fixture.generation,
+      actorId: overrides.actorId ?? fixture.input.actorId,
+      companionSessionId: fixture.companionSessionId,
+      deviceGrantId: fixture.deviceGrantId,
+      eventIdempotencyKey: overrides.eventIdempotencyKey ?? fixture.eventIdempotencyKey,
+      requestSha256: fixture.requestSha256,
+      correlationId: fixture.input.correlationId,
+      occurredAt: fixture.occurredAt,
+    });
+}
+
+function insertRawAuthRevokeReceipt(fixture: RawAuthRevokeFixture): void {
+  fixture.db
+    .prepare(
+      `INSERT INTO chat_session_control_auth_revoke_receipts (
+         idempotency_key, request_sha256, binding_kind, binding_id, actor_id,
+         correlation_id, target_count, session_count, event_set_sha256, created_at
+       ) VALUES (
+         @idempotencyKey, @requestSha256, @bindingKind, @bindingId, @actorId,
+         @correlationId, 1, 1, @eventSetSha256, @occurredAt
+       )`,
+    )
+    .run({
+      idempotencyKey: fixture.input.idempotencyKey,
+      requestSha256: fixture.requestSha256,
+      bindingKind: fixture.input.bindingKind,
+      bindingId: fixture.input.bindingId,
+      actorId: fixture.input.actorId,
+      correlationId: fixture.input.correlationId,
+      eventSetSha256: fixture.eventSetSha256,
+      occurredAt: fixture.occurredAt,
+    });
+}
+
+function rawAuthRevokeOperationCount(fixture: RawAuthRevokeFixture): number {
+  return fixture.db
+    .prepare(
+      `SELECT COUNT(*) AS count FROM chat_session_control_auth_revoke_operations
+       WHERE idempotency_key = @idempotencyKey`,
+    )
+    .get<{ count: number }>({ idempotencyKey: fixture.input.idempotencyKey })!.count;
+}
+
+interface DatabaseClockSnapshot {
+  now: string;
+  token_expires_at: string;
+  lease_expires_at: string;
+  reconnect_expires_at: string;
+}
+
+function observeDatabaseClockReads(repo: SessionControlRepository): {
+  readCount(): number;
+  restore(): void;
+} {
+  const target = repo as unknown as { readDatabaseClock(): DatabaseClockSnapshot };
+  const original = target.readDatabaseClock.bind(repo);
+  let reads = 0;
+  target.readDatabaseClock = () => {
+    reads += 1;
+    return original();
+  };
+  return {
+    readCount: () => reads,
+    restore: () => {
+      target.readDatabaseClock = original;
+    },
+  };
+}
+
+function delayFirstAuthRevokeEvent(
+  repo: SessionControlRepository,
+  delayMs: number,
+): { didDelay(): boolean; restore(): void } {
+  const target = repo as unknown as { insertEvent(...args: unknown[]): unknown };
+  const original = target.insertEvent.bind(repo);
+  let delayed = false;
+  target.insertEvent = (...args: unknown[]) => {
+    if (!delayed) {
+      delayed = true;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+    }
+    return original(...args);
+  };
+  return {
+    didDelay: () => delayed,
+    restore: () => {
+      target.insertEvent = original;
+    },
+  };
+}
+
+function authRevokePersistedTimestamps(
+  db: DatabaseClient,
+  input: AuthRevokeSessionControlsInput,
+  activeSessionId: string,
+): string[] {
+  return db
+    .prepare(
+      `SELECT decided_at AS occurred_at
+       FROM chat_session_control_requests
+       WHERE companion_session_id = @bindingId AND status IN ('cancelled', 'expired')
+       UNION ALL
+       SELECT created_at AS occurred_at
+       FROM chat_session_control_events
+       WHERE correlation_id = @correlationId
+       UNION ALL
+       SELECT created_at AS occurred_at
+       FROM chat_session_control_auth_revoke_receipts
+       WHERE idempotency_key = @idempotencyKey
+       UNION ALL
+       SELECT updated_at AS occurred_at
+       FROM chat_session_control_grants
+       WHERE session_id = @activeSessionId AND generation = 2
+       UNION ALL
+       SELECT terminal_at AS occurred_at
+       FROM chat_session_control_grants
+       WHERE session_id = @activeSessionId AND generation = 2
+       UNION ALL
+       SELECT created_at AS occurred_at
+       FROM chat_session_control_grants
+       WHERE session_id = @activeSessionId AND generation = 3
+       UNION ALL
+       SELECT updated_at AS occurred_at
+       FROM chat_session_control_grants
+       WHERE session_id = @activeSessionId AND generation = 3`,
+    )
+    .all<{ occurred_at: string }>({
+      activeSessionId,
+      bindingId: input.bindingId,
+      correlationId: input.correlationId,
+      idempotencyKey: input.idempotencyKey,
+    })
+    .map((row) => row.occurred_at);
+}
+
 interface WorkerResult {
   ok: boolean;
   disposition?: "created" | "replayed";
+  occurredAt?: string;
   error?: string;
 }
 
@@ -1303,7 +2064,7 @@ const SQLITE_REPOSITORY_WORKER_SOURCE = String.raw`
       const value = new SessionControlRepository(db)[workerData.method](workerData.input);
       parentPort.postMessage({
         kind: "result",
-        result: { ok: true, disposition: value.disposition },
+        result: { ok: true, disposition: value.disposition, occurredAt: value.occurredAt },
       });
     } catch (error) {
       parentPort.postMessage({
