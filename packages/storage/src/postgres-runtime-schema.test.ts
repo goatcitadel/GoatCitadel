@@ -52,6 +52,157 @@ describe("Postgres runtime schema generation", () => {
     assert.doesNotMatch(sql, /sqlite_autoindex_/);
   });
 
+  it("creates referenced unique indexes before dependent tables", () => {
+    const column = (name: string, primaryKeyPosition = 0) => ({
+      name,
+      type: "TEXT",
+      notNull: true,
+      defaultValue: null,
+      primaryKeyPosition,
+      autoIncrement: false,
+    });
+    const sql = buildPostgresRuntimeSchemaSqlFromBlueprint({
+      tables: [
+        table({
+          name: "parent",
+          columns: [column("snapshot_id", 1), column("workspace_id"), column("snapshot_sha256")],
+          indexes: [
+            {
+              name: "idx_parent_workspace_snapshot_hash",
+              unique: true,
+              origin: "c",
+              columns: ["workspace_id", "snapshot_id", "snapshot_sha256"],
+              where: null,
+            },
+          ],
+        }),
+        table({
+          name: "child",
+          columns: [column("child_id", 1), column("workspace_id"), column("snapshot_id"), column("snapshot_sha256")],
+          foreignKeys: [
+            {
+              id: 0,
+              seq: 0,
+              from: "workspace_id",
+              to: "workspace_id",
+              referencedTable: "parent",
+              onUpdate: "NO ACTION",
+              onDelete: "RESTRICT",
+            },
+            {
+              id: 0,
+              seq: 1,
+              from: "snapshot_id",
+              to: "snapshot_id",
+              referencedTable: "parent",
+              onUpdate: "NO ACTION",
+              onDelete: "RESTRICT",
+            },
+            {
+              id: 0,
+              seq: 2,
+              from: "snapshot_sha256",
+              to: "snapshot_sha256",
+              referencedTable: "parent",
+              onUpdate: "NO ACTION",
+              onDelete: "RESTRICT",
+            },
+          ],
+        }),
+      ],
+    });
+
+    const parentTable = sql.indexOf("CREATE TABLE IF NOT EXISTS parent");
+    const parentUnique = sql.indexOf("CREATE UNIQUE INDEX IF NOT EXISTS idx_parent_workspace_snapshot_hash");
+    const childTable = sql.indexOf("CREATE TABLE IF NOT EXISTS child");
+    assert.match(
+      sql,
+      /CONSTRAINT idx_parent_workspace_snapshot_hash UNIQUE \(workspace_id, snapshot_id, snapshot_sha256\)/,
+    );
+    assert.ok(parentTable >= 0 && parentTable < parentUnique && parentUnique < childTable);
+  });
+
+  it("hash-suffixes long generated index names before PostgreSQL can truncate them", () => {
+    const column = (name: string, primaryKeyPosition = 0) => ({
+      name,
+      type: "TEXT",
+      notNull: true,
+      defaultValue: null,
+      primaryKeyPosition,
+      autoIncrement: false,
+    });
+    const sql = buildPostgresRuntimeSchemaSqlFromBlueprint({
+      tables: [
+        table({
+          name: "parent",
+          columns: [column("id", 1), column("source_id"), column("scan_id")],
+          indexes: [
+            {
+              name: "idx_external_source_import_intents_workspace_id_import_id_source_id_unique",
+              unique: true,
+              origin: "c",
+              columns: ["id", "source_id"],
+              where: null,
+            },
+            {
+              name: "idx_external_source_import_intents_workspace_id_import_id_source_id_scan_id_unique",
+              unique: true,
+              origin: "c",
+              columns: ["id", "source_id", "scan_id"],
+              where: null,
+            },
+          ],
+        }),
+      ],
+    });
+
+    const names = [...sql.matchAll(/CONSTRAINT ([a-z0-9_]+) UNIQUE/gu)].map((match) => match[1]!);
+    assert.equal(names.length, 2);
+    assert.notEqual(names[0], names[1]);
+    assert.ok(names.every((name) => Buffer.byteLength(name, "utf8") <= 63 && /_[0-9a-f]{12}$/u.test(name)));
+  });
+
+  it("preserves distinct hash suffixes when multibyte index names exceed PostgreSQL's byte limit", () => {
+    const column = (name: string, primaryKeyPosition = 0) => ({
+      name,
+      type: "TEXT",
+      notNull: true,
+      defaultValue: null,
+      primaryKeyPosition,
+      autoIncrement: false,
+    });
+    const sharedPrefix = `idx_${"界".repeat(24)}`;
+    const sql = buildPostgresRuntimeSchemaSqlFromBlueprint({
+      tables: [
+        table({
+          name: "parent",
+          columns: [column("id", 1), column("source_id"), column("scan_id")],
+          indexes: [
+            {
+              name: `${sharedPrefix}_source`,
+              unique: true,
+              origin: "c",
+              columns: ["id", "source_id"],
+              where: null,
+            },
+            {
+              name: `${sharedPrefix}_scan`,
+              unique: true,
+              origin: "c",
+              columns: ["id", "scan_id"],
+              where: null,
+            },
+          ],
+        }),
+      ],
+    });
+
+    const names = [...sql.matchAll(/CONSTRAINT ([^\s]+) UNIQUE/gu)].map((match) => match[1]!);
+    assert.equal(names.length, 2);
+    assert.notEqual(names[0], names[1]);
+    assert.ok(names.every((name) => Buffer.byteLength(name, "utf8") <= 63 && /_[0-9a-f]{12}$/u.test(name)));
+  });
+
   it("keeps incremental Postgres migrations aligned with recent SQLite runtime tables", () => {
     const autonomyMigration = POSTGRES_MIGRATIONS.find((migration) => migration.name === "autonomy_audit_schema");
     const delegationParentMigration = POSTGRES_MIGRATIONS.find(
