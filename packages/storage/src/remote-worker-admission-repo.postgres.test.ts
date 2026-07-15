@@ -8,6 +8,7 @@ import {
   canonicalJsonString,
   type CreateRemoteWorkerBootstrapCommand,
   type FinalizeRemoteWorkerBootstrapAdmissionCommand,
+  type RotateRemoteWorkerRuntimeCredentialCommand,
 } from "@goatcitadel/contracts";
 import { Pool } from "pg";
 import { PostgresDatabaseClient } from "./postgres/client.js";
@@ -86,7 +87,107 @@ describe("RemoteWorkerAdmissionRepository live PostgreSQL concurrency", () => {
         if (changed.ok) assert.fail("changed exchange unexpectedly succeeded");
         assert.doesNotMatch(changed.error, /(?:23505|23514|SQLSTATE|bootstrap_secret|token_sha256)/iu);
 
-        const rotation = rotationInput(bootstrap.workerId, "pg-a");
+        const wrongBinding = await runRepositoryWorker(
+          scopedUrl.toString(),
+          database,
+          `hx501-wrong-binding-${suffix}`,
+          {
+            operation: "finalize",
+            input: { ...exchange, expectedBootstrapId: "wrong-bootstrap" },
+          },
+        );
+        assert.equal(wrongBinding.ok, false);
+        if (wrongBinding.ok) assert.fail("wrong bootstrap binding unexpectedly succeeded");
+        assert.match(wrongBinding.error, /durable admission authority/u);
+
+        const contendedBootstrap = setupRepo.createBootstrap(
+          bootstrapInput("pg-contended", { expiresInSeconds: 600 }),
+        ).record;
+        const contendedExchangeA = finalizeInput(contendedBootstrap, "pg-contended", {
+          exchangeIdempotencyKey: "exchange:pg-contended:a",
+        });
+        const contendedExchangeB = finalizeInput(contendedBootstrap, "pg-contended", {
+          verifiedTransportReceiptSha256: D("pg-contended:b:transport"),
+          verifiedProofOfPossessionReceiptSha256: D("pg-contended:b:pop"),
+          credentialIssuanceProofSha256: D("pg-contended:b:issuance"),
+          credentialTokenSha256: D("pg-contended:b:token"),
+          exchangeIdempotencyKey: "exchange:pg-contended:b",
+        });
+        const contendedResults = await Promise.all([
+          runRepositoryWorker(scopedUrl.toString(), database, `hx501-contended-a-${suffix}`, {
+            operation: "finalize",
+            input: contendedExchangeA,
+          }),
+          runRepositoryWorker(scopedUrl.toString(), database, `hx501-contended-b-${suffix}`, {
+            operation: "finalize",
+            input: contendedExchangeB,
+          }),
+        ]);
+        assert.equal(contendedResults.filter((result) => result.ok).length, 1);
+        for (const result of contendedResults) {
+          if (!result.ok) assert.match(result.error, /durable admission authority/u);
+        }
+        assert.equal(
+          setupRepo.findCurrentGeneration("default", contendedBootstrap.workerId)?.workerGeneration,
+          contendedBootstrap.targetWorkerGeneration,
+        );
+
+        const rotationBootstrap = setupRepo.createBootstrap(
+          bootstrapInput("pg-rotation", { expiresInSeconds: 600 }),
+        ).record;
+        const rotationAdmission = setupRepo.finalizeBootstrapAdmission(finalizeInput(rotationBootstrap, "pg-rotation"));
+        const rotationA = rotationInput(
+          rotationBootstrap.workerId,
+          "pg-rotation-a",
+          rotationAdmission.credential.credentialId,
+          rotationAdmission.credential.credentialGeneration,
+        );
+        const rotationB = rotationInput(
+          rotationBootstrap.workerId,
+          "pg-rotation-b",
+          rotationAdmission.credential.credentialId,
+          rotationAdmission.credential.credentialGeneration,
+        );
+        const rotationResults = await Promise.all([
+          runRepositoryWorker(scopedUrl.toString(), database, `hx501-rotation-a-${suffix}`, {
+            operation: "rotate",
+            input: rotationA,
+          }),
+          runRepositoryWorker(scopedUrl.toString(), database, `hx501-rotation-b-${suffix}`, {
+            operation: "rotate",
+            input: rotationB,
+          }),
+        ]);
+        assert.equal(rotationResults.filter((result) => result.ok).length, 1);
+        for (const result of rotationResults) {
+          if (!result.ok) assert.match(result.error, /durable admission authority/u);
+        }
+        const rotationWinner = rotationResults.find((result) => result.ok);
+        if (!rotationWinner?.ok) assert.fail("credential N rotation race had no winner");
+        assert.equal(rotationWinner.value.disposition, "created");
+        assert.equal(rotationWinner.value.credential.credentialGeneration, 2);
+        assert.equal("credentialTokenSha256" in rotationWinner.value, false);
+        const winningRotation = rotationResults[0].ok ? rotationA : rotationB;
+        const losingRotation = rotationResults[0].ok ? rotationB : rotationA;
+        assert.equal(
+          setupRepo.resolveRuntimeCredentialByHash(winningRotation.credentialTokenSha256)?.credential
+            .credentialGeneration,
+          2,
+        );
+        assert.equal(setupRepo.resolveRuntimeCredentialByHash(losingRotation.credentialTokenSha256), undefined);
+        assert.equal(
+          setupRepo.resolveRuntimeCredentialByHash(
+            finalizeInput(rotationBootstrap, "pg-rotation").credentialTokenSha256,
+          ),
+          undefined,
+        );
+
+        const rotation = rotationInput(
+          bootstrap.workerId,
+          "pg-a",
+          String(left.value.credential.credentialId),
+          Number(left.value.credential.credentialGeneration),
+        );
         const quarantine = controlInput(bootstrap.workerId, "pg-a", "quarantine");
         const [rotationRace, quarantineRace] = await Promise.all([
           runRepositoryWorker(scopedUrl.toString(), database, `hx501-rotate-${suffix}`, {
@@ -185,6 +286,9 @@ function finalizeInput(
   overrides: Partial<FinalizeRemoteWorkerBootstrapAdmissionCommand> = {},
 ): FinalizeRemoteWorkerBootstrapAdmissionCommand {
   return {
+    expectedRegistryWorkspaceId: bootstrap.registryWorkspaceId,
+    expectedBootstrapId: bootstrap.bootstrapId,
+    expectedTargetWorkerGeneration: bootstrap.targetWorkerGeneration,
     bootstrapSecretSha256: D(`${seed}:bootstrap-secret`),
     verifiedPublicKeySpkiSha256: D(`${seed}:spki`),
     verifiedClientCertificateSha256: D(`${seed}:certificate`),
@@ -206,11 +310,18 @@ function finalizeInput(
   };
 }
 
-function rotationInput(workerId: string, seed: string) {
+function rotationInput(
+  workerId: string,
+  seed: string,
+  expectedCredentialId: string,
+  expectedCredentialGeneration: number,
+): RotateRemoteWorkerRuntimeCredentialCommand {
   return {
     registryWorkspaceId: "default",
     workerId,
     workerGeneration: 1,
+    expectedCredentialId,
+    expectedCredentialGeneration,
     verifiedTransportReceiptSha256: D(`${seed}:rotation-transport`),
     verifiedProofOfPossessionReceiptSha256: D(`${seed}:rotation-pop`),
     credentialIssuanceProofSha256: D(`${seed}:rotation-issuance`),

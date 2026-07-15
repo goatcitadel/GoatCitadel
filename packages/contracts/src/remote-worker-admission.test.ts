@@ -86,6 +86,9 @@ function finalizeCommand(
   overrides: Partial<FinalizeRemoteWorkerBootstrapAdmissionCommand> = {},
 ): FinalizeRemoteWorkerBootstrapAdmissionCommand {
   return {
+    expectedRegistryWorkspaceId: "default",
+    expectedBootstrapId: "bootstrap-a",
+    expectedTargetWorkerGeneration: 1,
     bootstrapSecretSha256: D("bootstrap-secret"),
     verifiedPublicKeySpkiSha256: D("spki"),
     verifiedClientCertificateSha256: D("certificate"),
@@ -114,6 +117,8 @@ function rotationCommand(
     registryWorkspaceId: "default",
     workerId: "worker-a",
     workerGeneration: 1,
+    expectedCredentialId: "credential-1",
+    expectedCredentialGeneration: 1,
     verifiedTransportReceiptSha256: D("transport-2"),
     verifiedProofOfPossessionReceiptSha256: D("pop-2"),
     credentialIssuanceProofSha256: D("issuance-2"),
@@ -244,6 +249,12 @@ describe("remote worker admission contracts", () => {
       } as never),
     ).toThrow(/unknown fields/u);
     expect(() =>
+      normalizeFinalizeRemoteWorkerBootstrapAdmissionCommand({
+        ...finalizeCommand(),
+        expectedTargetWorkerGeneration: 0,
+      }),
+    ).toThrow(/positive/u);
+    expect(() =>
       normalizeRotateRemoteWorkerRuntimeCredentialCommand({
         ...rotationCommand(),
         credentialClaimsSha256: D("caller-claim"),
@@ -252,6 +263,9 @@ describe("remote worker admission contracts", () => {
     expect(() =>
       normalizeRotateRemoteWorkerRuntimeCredentialCommand({ ...rotationCommand(), expiresInSeconds: 0 }),
     ).toThrow(/positive/u);
+    expect(() =>
+      normalizeRotateRemoteWorkerRuntimeCredentialCommand({ ...rotationCommand(), expectedCredentialId: "" }),
+    ).toThrow(/canonical identifier/u);
   });
 
   it("builds semantic replay material that excludes generated secret and token hashes", () => {
@@ -271,12 +285,31 @@ describe("remote worker admission contracts", () => {
       claims,
     );
     expect(exchangeA).toEqual(exchangeB);
+    expect(exchangeA).toMatchObject({
+      expectedRegistryWorkspaceId: "default",
+      expectedBootstrapId: "bootstrap-a",
+      expectedTargetWorkerGeneration: 1,
+    });
+    expect(
+      remoteWorkerBootstrapAdmissionReplayMaterial(
+        finalizeCommand({ expectedBootstrapId: "bootstrap-b" }),
+        "bootstrap-a",
+        claims,
+      ),
+    ).not.toEqual(exchangeA);
     const rotationA = remoteWorkerRuntimeCredentialRotationReplayMaterial(rotationCommand(), claims);
     const rotationB = remoteWorkerRuntimeCredentialRotationReplayMaterial(
       rotationCommand({ credentialTokenSha256: D("different-token") }),
       claims,
     );
     expect(rotationA).toEqual(rotationB);
+    expect(rotationA).toMatchObject({
+      expectedCredentialId: "credential-1",
+      expectedCredentialGeneration: 1,
+    });
+    expect(
+      remoteWorkerRuntimeCredentialRotationReplayMaterial(rotationCommand({ expectedCredentialGeneration: 2 }), claims),
+    ).not.toEqual(rotationA);
     expect(JSON.stringify({ bootstrapA, exchangeA, rotationA })).not.toMatch(
       /bootstrapSecretSha256|credentialTokenSha256/u,
     );

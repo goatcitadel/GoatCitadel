@@ -72,6 +72,9 @@ function finalizeInput(
   overrides: Partial<FinalizeRemoteWorkerBootstrapAdmissionCommand> = {},
 ) {
   return {
+    expectedRegistryWorkspaceId: bootstrap.registryWorkspaceId,
+    expectedBootstrapId: bootstrap.bootstrapId,
+    expectedTargetWorkerGeneration: bootstrap.targetWorkerGeneration,
     bootstrapSecretSha256: D(`${seed}:bootstrap-secret`),
     verifiedPublicKeySpkiSha256: D(`${seed}:spki`),
     verifiedClientCertificateSha256: D(`${seed}:certificate`),
@@ -385,6 +388,9 @@ describe("RemoteWorkerAdmissionRepository", () => {
     const { db, repo } = harness();
     const bootstrap = repo.createBootstrap(bootstrapInput()).record;
     const mismatches: Array<Partial<FinalizeRemoteWorkerBootstrapAdmissionCommand>> = [
+      { expectedRegistryWorkspaceId: "other" },
+      { expectedBootstrapId: "other-bootstrap" },
+      { expectedTargetWorkerGeneration: bootstrap.targetWorkerGeneration + 1 },
       { verifiedRuntimeManifestSha256: D("wrong-manifest") },
       { verifiedWorkspaceCeilingSha256: D("wrong-workspace-ceiling") },
       { verifiedCapabilityCeilingSha256: D("wrong-capability-ceiling") },
@@ -431,6 +437,8 @@ describe("RemoteWorkerAdmissionRepository", () => {
     assert.equal(replay.disposition, "replayed_without_credential_secret");
     assert.deepEqual(replay.generation, first.generation);
     assert.deepEqual(replay.credential, first.credential);
+    assert.equal("credentialTokenSha256" in replay, false);
+    assert.equal("bootstrapSecretSha256" in replay, false);
     assert.throws(
       () =>
         repo.finalizeBootstrapAdmission({
@@ -441,6 +449,10 @@ describe("RemoteWorkerAdmissionRepository", () => {
     );
     assert.throws(
       () => repo.finalizeBootstrapAdmission({ ...input, exchangeIdempotencyKey: "exchange:second-consumer" }),
+      ConflictError,
+    );
+    assert.throws(
+      () => repo.finalizeBootstrapAdmission({ ...input, expectedBootstrapId: "other-bootstrap" }),
       ConflictError,
     );
     assert.throws(
@@ -511,6 +523,8 @@ describe("RemoteWorkerAdmissionRepository", () => {
       registryWorkspaceId: "default",
       workerId: bootstrap.workerId,
       workerGeneration: 1,
+      expectedCredentialId: admitted.credential.credentialId,
+      expectedCredentialGeneration: admitted.credential.credentialGeneration,
       verifiedTransportReceiptSha256: D("rotate:transport"),
       verifiedProofOfPossessionReceiptSha256: D("rotate:pop"),
       credentialIssuanceProofSha256: D("rotate:issuance"),
@@ -518,6 +532,24 @@ describe("RemoteWorkerAdmissionRepository", () => {
       credentialTokenSha256: D("credential-token-2"),
       idempotencyKey: "rotate:2",
     };
+    assert.throws(
+      () =>
+        repo.rotateRuntimeCredential({
+          ...rotation,
+          expectedCredentialId: "wrong-credential",
+          idempotencyKey: "rotate:wrong-credential",
+        }),
+      ConflictError,
+    );
+    assert.throws(
+      () =>
+        repo.rotateRuntimeCredential({
+          ...rotation,
+          expectedCredentialGeneration: admitted.credential.credentialGeneration + 1,
+          idempotencyKey: "rotate:wrong-generation",
+        }),
+      ConflictError,
+    );
     assert.throws(
       () =>
         repo.rotateRuntimeCredential({
@@ -545,6 +577,29 @@ describe("RemoteWorkerAdmissionRepository", () => {
       repo.rotateRuntimeCredential({ ...rotation, credentialTokenSha256: D("changed-generated-token") }).disposition,
       "replayed_without_credential_secret",
     );
+    assert.equal(
+      "credentialTokenSha256" in
+        repo.rotateRuntimeCredential({ ...rotation, credentialTokenSha256: D("another-generated-token") }),
+      false,
+    );
+    assert.throws(
+      () =>
+        repo.rotateRuntimeCredential({
+          ...rotation,
+          expectedCredentialGeneration: admitted.credential.credentialGeneration + 1,
+        }),
+      ConflictError,
+    );
+    const staleSecondRotation = {
+      ...rotation,
+      verifiedTransportReceiptSha256: D("rotate:stale-second-transport"),
+      verifiedProofOfPossessionReceiptSha256: D("rotate:stale-second-pop"),
+      credentialIssuanceProofSha256: D("rotate:stale-second-issuance"),
+      credentialTokenSha256: D("rotate:stale-second-token"),
+      idempotencyKey: "rotate:stale-second",
+    };
+    assert.throws(() => repo.rotateRuntimeCredential(staleSecondRotation), ConflictError);
+    assert.equal(repo.resolveRuntimeCredentialByHash(staleSecondRotation.credentialTokenSha256), undefined);
     assert.throws(() => repo.rotateRuntimeCredential({ ...rotation, expiresInSeconds: 601 }), ConflictError);
     assert.deepEqual(rotated.credential.claims, admitted.credential.claims);
     assert.throws(
@@ -560,11 +615,13 @@ describe("RemoteWorkerAdmissionRepository", () => {
   it("rejects rotation after credential expiry, generation control, or N+1 admission", () => {
     const { db, repo } = harness();
     const firstBootstrap = repo.createBootstrap(bootstrapInput("rotate-fences")).record;
-    repo.finalizeBootstrapAdmission(finalizeInput(firstBootstrap, "rotate-fences"));
+    const admitted = repo.finalizeBootstrapAdmission(finalizeInput(firstBootstrap, "rotate-fences"));
     const rotation = {
       registryWorkspaceId: "default",
       workerId: firstBootstrap.workerId,
       workerGeneration: 1,
+      expectedCredentialId: admitted.credential.credentialId,
+      expectedCredentialGeneration: admitted.credential.credentialGeneration,
       verifiedTransportReceiptSha256: D("rotate-fences:rotation-transport"),
       verifiedProofOfPossessionReceiptSha256: D("rotate-fences:rotation-pop"),
       credentialIssuanceProofSha256: D("rotate-fences:rotation-issuance"),

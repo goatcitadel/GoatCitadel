@@ -280,6 +280,7 @@ export class RemoteWorkerAdmissionRepository {
       if (!bootstrapRow || bootstrapRow.bootstrap_id !== hint.bootstrap_id)
         throw unavailable("remote worker bootstrap");
       const bootstrap = this.mapBootstrap(bootstrapRow);
+      this.assertExpectedBootstrapBinding(bootstrap, normalized);
       const claims = buildRemoteWorkerRuntimeCredentialClaims({
         registryWorkspaceId: bootstrap.registryWorkspaceId,
         workerId: bootstrap.workerId,
@@ -448,6 +449,20 @@ export class RemoteWorkerAdmissionRepository {
       );
       if (replay) {
         assertExactReplay(replay.request_sha256, requestSha256, "remote worker credential rotation");
+        const expectedCredential = this.findCredentialByIdentity(
+          normalized.registryWorkspaceId,
+          normalized.workerId,
+          normalized.workerGeneration,
+          normalized.expectedCredentialId,
+          normalized.expectedCredentialGeneration,
+        );
+        if (
+          !expectedCredential ||
+          asPositiveInteger(replay.credential_generation) - 1 !== normalized.expectedCredentialGeneration
+        ) {
+          throw invariantConflict("remote worker credential rotation");
+        }
+        this.mapAuthoritativeCredential(expectedCredential, generation, bootstrap);
         const credential = this.mapAuthoritativeCredential(replay, generation, bootstrap);
         return { disposition: "replayed_without_credential_secret", credential };
       }
@@ -458,6 +473,12 @@ export class RemoteWorkerAdmissionRepository {
         generation.workerGeneration,
       );
       if (!current) throw invariantConflict("remote worker credential rotation");
+      if (
+        current.credential_id !== normalized.expectedCredentialId ||
+        asPositiveInteger(current.credential_generation) !== normalized.expectedCredentialGeneration
+      ) {
+        throw invariantConflict("remote worker credential rotation");
+      }
       const latestGeneration = this.findCurrentGenerationRow(normalized.registryWorkspaceId, normalized.workerId);
       const control = this.findLatestControlRow(
         normalized.registryWorkspaceId,
@@ -737,6 +758,19 @@ export class RemoteWorkerAdmissionRepository {
     if (!matches) throw invariantConflict("remote worker admission exchange");
   }
 
+  private assertExpectedBootstrapBinding(
+    bootstrap: RemoteWorkerBootstrapRecord,
+    input: ReturnType<typeof normalizeFinalizeRemoteWorkerBootstrapAdmissionCommand>,
+  ): void {
+    if (
+      bootstrap.registryWorkspaceId !== input.expectedRegistryWorkspaceId ||
+      bootstrap.bootstrapId !== input.expectedBootstrapId ||
+      bootstrap.targetWorkerGeneration !== input.expectedTargetWorkerGeneration
+    ) {
+      throw invariantConflict("remote worker admission exchange");
+    }
+  }
+
   private assertReadmissionEvidenceRotated(
     bootstrap: RemoteWorkerBootstrapRecord,
     input: ReturnType<typeof normalizeFinalizeRemoteWorkerBootstrapAdmissionCommand>,
@@ -1000,6 +1034,25 @@ export class RemoteWorkerAdmissionRepository {
     return this.db
       .prepare("SELECT * FROM remote_worker_runtime_credentials WHERE token_sha256 = @tokenSha256")
       .get({ tokenSha256 }) as CredentialRow | undefined;
+  }
+
+  private findCredentialByIdentity(
+    registryWorkspaceId: string,
+    workerId: string,
+    workerGeneration: number,
+    credentialId: string,
+    credentialGeneration: number,
+  ): CredentialRow | undefined {
+    return this.db
+      .prepare(
+        `SELECT * FROM remote_worker_runtime_credentials
+         WHERE registry_workspace_id = @registryWorkspaceId AND worker_id = @workerId
+           AND worker_generation = @workerGeneration AND credential_id = @credentialId
+           AND credential_generation = @credentialGeneration`,
+      )
+      .get({ registryWorkspaceId, workerId, workerGeneration, credentialId, credentialGeneration }) as
+      | CredentialRow
+      | undefined;
   }
 
   private findLatestCredentialRow(

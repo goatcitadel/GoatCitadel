@@ -159,6 +159,9 @@ export interface CreateRemoteWorkerBootstrapCommand extends CreateRemoteWorkerBo
 }
 
 export interface FinalizeRemoteWorkerBootstrapAdmissionCommand {
+  readonly expectedRegistryWorkspaceId: string;
+  readonly expectedBootstrapId: string;
+  readonly expectedTargetWorkerGeneration: number;
   readonly bootstrapSecretSha256: string;
   readonly verifiedPublicKeySpkiSha256: string;
   readonly verifiedClientCertificateSha256: string;
@@ -182,6 +185,8 @@ export interface RotateRemoteWorkerRuntimeCredentialCommand {
   readonly registryWorkspaceId: string;
   readonly workerId: string;
   readonly workerGeneration: number;
+  readonly expectedCredentialId: string;
+  readonly expectedCredentialGeneration: number;
   readonly verifiedTransportReceiptSha256: string;
   readonly verifiedProofOfPossessionReceiptSha256: string;
   readonly credentialIssuanceProofSha256: string;
@@ -410,6 +415,9 @@ export function normalizeFinalizeRemoteWorkerBootstrapAdmissionCommand(
   assertExactKeys(
     command,
     [
+      "expectedRegistryWorkspaceId",
+      "expectedBootstrapId",
+      "expectedTargetWorkerGeneration",
       "bootstrapSecretSha256",
       "verifiedPublicKeySpkiSha256",
       "verifiedClientCertificateSha256",
@@ -460,6 +468,16 @@ export function normalizeFinalizeRemoteWorkerBootstrapAdmissionCommand(
   );
   return Object.freeze({
     ...command,
+    expectedRegistryWorkspaceId: assertIdentifier(
+      command.expectedRegistryWorkspaceId,
+      "expectedRegistryWorkspaceId",
+      256,
+    ),
+    expectedBootstrapId: assertIdentifier(command.expectedBootstrapId, "expectedBootstrapId", 256),
+    expectedTargetWorkerGeneration: assertPositiveInteger(
+      command.expectedTargetWorkerGeneration,
+      "expectedTargetWorkerGeneration",
+    ),
     credentialExpiresInSeconds,
     exchangeIdempotencyKey: assertIdentifier(command.exchangeIdempotencyKey, "exchangeIdempotencyKey", 512),
   });
@@ -475,6 +493,8 @@ export function normalizeRotateRemoteWorkerRuntimeCredentialCommand(
       "registryWorkspaceId",
       "workerId",
       "workerGeneration",
+      "expectedCredentialId",
+      "expectedCredentialGeneration",
       "verifiedTransportReceiptSha256",
       "verifiedProofOfPossessionReceiptSha256",
       "credentialIssuanceProofSha256",
@@ -497,6 +517,11 @@ export function normalizeRotateRemoteWorkerRuntimeCredentialCommand(
     registryWorkspaceId: assertIdentifier(command.registryWorkspaceId, "registryWorkspaceId", 256),
     workerId: assertIdentifier(command.workerId, "workerId", 256),
     workerGeneration: assertPositiveInteger(command.workerGeneration, "workerGeneration"),
+    expectedCredentialId: assertIdentifier(command.expectedCredentialId, "expectedCredentialId", 256),
+    expectedCredentialGeneration: assertPositiveInteger(
+      command.expectedCredentialGeneration,
+      "expectedCredentialGeneration",
+    ),
     expiresInSeconds: assertPositiveInteger(
       command.expiresInSeconds,
       "expiresInSeconds",
@@ -532,6 +557,9 @@ export function remoteWorkerBootstrapAdmissionReplayMaterial(
   assertRemoteWorkerRuntimeCredentialClaims(claims);
   return Object.freeze({
     bootstrapId: assertIdentifier(bootstrapId, "bootstrapId", 256),
+    expectedRegistryWorkspaceId: normalized.expectedRegistryWorkspaceId,
+    expectedBootstrapId: normalized.expectedBootstrapId,
+    expectedTargetWorkerGeneration: normalized.expectedTargetWorkerGeneration,
     verifiedPublicKeySpkiSha256: normalized.verifiedPublicKeySpkiSha256,
     verifiedClientCertificateSha256: normalized.verifiedClientCertificateSha256,
     verifiedRuntimeManifestSha256: normalized.verifiedRuntimeManifestSha256,
@@ -561,6 +589,8 @@ export function remoteWorkerRuntimeCredentialRotationReplayMaterial(
     registryWorkspaceId: normalized.registryWorkspaceId,
     workerId: normalized.workerId,
     workerGeneration: normalized.workerGeneration,
+    expectedCredentialId: normalized.expectedCredentialId,
+    expectedCredentialGeneration: normalized.expectedCredentialGeneration,
     verifiedTransportReceiptSha256: normalized.verifiedTransportReceiptSha256,
     verifiedProofOfPossessionReceiptSha256: normalized.verifiedProofOfPossessionReceiptSha256,
     claims: freezeRemoteWorkerRuntimeCredentialClaims(claims),
