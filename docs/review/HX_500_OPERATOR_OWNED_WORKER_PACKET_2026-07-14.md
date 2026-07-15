@@ -1,13 +1,13 @@
 # HX-500 Operator-Owned Worker Program Packet
 
 Date: 2026-07-14
-Status: architecture contract for HX-501 through HX-507
+Status: architecture contract for HX-501 through HX-507; committed production-dark HX-501 contracts/storage foundation
 
 ## Current implementation truth
 
-GoatCitadel has mesh node metadata, one-time-style join-token plumbing, node/lease/session-owner records, durable local execution, a transcript outbox, hash-addressed artifacts, model-usage attribution, trusted Ops runtime truth, and shared-host drain tracking. It does not have a remote worker identity class, bootstrap exchange, purpose-bound worker credential, runtime/vendor attestation, worker registry, remote assignment lease, worker inference proxy, ordered worker event commit, worker resource cell, generation-fenced artifact/effect settlement, or a native Gateway mTLS worker listener.
+GoatCitadel has mesh node metadata, one-time-style join-token plumbing, node/lease/session-owner records, durable local execution, a transcript outbox, hash-addressed artifacts, model-usage attribution, trusted Ops runtime truth, shared-host drain tracking, and a production-dark remote-worker admission contract/storage foundation. The foundation owns exact manifests and credential claims, hash-only bootstrap-secret and credential-token material, immutable workspace/capability ceilings, worker generations, credential rotation, quarantine/revoke, and N+1 readmission authority. It does not yet have live Gateway worker auth/routes, server-issued secret delivery, cryptographic proof verification, runtime/vendor attestation execution, worker registry projection, remote assignment lease, worker inference proxy, ordered worker event commit, worker resource cell, generation-fenced artifact/effect settlement, or a native Gateway mTLS worker listener.
 
-Mesh join is not worker admission. Shared-host lifecycle admission tracks work inside the Gateway process and is not a remote-worker protocol. Generic companion, device, A2A, MCP, or session-control credentials cannot be reused as worker credentials. A caller-supplied certificate fingerprint is metadata, not proof of mTLS; remote worker admission remains blocked until Gateway either terminates mutually authenticated TLS itself or receives a cryptographically authenticated client identity from a pinned, trusted TLS terminator.
+Mesh join is not worker admission. Shared-host lifecycle admission tracks work inside the Gateway process and is not a remote-worker protocol. Generic companion, device, A2A, MCP, or session-control credentials cannot be reused as worker credentials. The production-dark `verified*` command boundary records trusted inputs but does not itself perform cryptographic verification. A caller-supplied certificate fingerprint is metadata, not proof of mTLS; live remote worker admission remains blocked until Gateway either terminates mutually authenticated TLS itself or receives a cryptographically authenticated client identity from a pinned, trusted TLS terminator.
 
 ## Product boundary
 
@@ -26,7 +26,7 @@ Gateway remains the authority for durable scheduling, policy, approvals, provide
 
 ## HX-501: admission and identity
 
-SQLite 170 / PostgreSQL 112 are reserved for the worker-admission foundation. They cannot land until HX-408 owns and lands SQLite 169 / PostgreSQL 111, so the physical migration heads and both dialects remain linear.
+SQLite 170 / PostgreSQL 112 landed for the worker-admission foundation in commit `aa68ba9d9b13671c5e6587b9bead37568d034a31`, after HX-408 landed SQLite 169 / PostgreSQL 111, so the physical migration heads and both dialects remain linear.
 
 An operator creates a bounded bootstrap request containing worker label, platform, architecture, allowed workspace IDs, requested capability classes, and an exact signed runtime manifest. Gateway returns a short-lived one-time bootstrap secret once; storage retains only its hash, expiry, request hash, and state.
 
@@ -48,7 +48,7 @@ The worker initiates outbound transport to Gateway. No default worker listener, 
 
 ## HX-502: durable assignment and lease
 
-SQLite 171 / PostgreSQL 113 are proposed for assignment, ordered event, and settlement foundations, but are not allocated or reserved. The storage owner must allocate them only after HX-501 lands and the live migration heads are re-read.
+SQLite 171 / PostgreSQL 113 are exclusively reserved for the paired HX-502/HX-504 assignment, ordered-event, and settlement foundation after the committed HX-501 heads were re-read.
 
 The durable scheduler creates an immutable assignment bound to:
 
@@ -82,7 +82,7 @@ Transcript content materializes exactly once into the assignment-owned session/t
 
 ## HX-505: worker cell controls
 
-SQLite 172 / PostgreSQL 114 are proposed for worker-cell resource and backup state, but are not allocated or reserved. The storage owner may allocate them only when the resource/backup contract is frozen and the live migration heads are re-read.
+SQLite 173 / PostgreSQL 115 are an unallocated candidate for worker-cell resource and backup state. The storage owner may allocate them only when the resource/backup contract is frozen and the live migration heads are re-read; SQLite 172 / PostgreSQL 114 remain an unallocated HX-411 candidate after its contract gate.
 
 Every assignment executes under a worker cell with:
 
@@ -124,11 +124,11 @@ The existing one-Chat background rail may show assignment/worker/generation, pro
 
 ## Implementation order and subagent lanes
 
-1. Architect/QA freeze auth class, route matrix, admission schema, native-mTLS or trusted-terminator identity contract, and two-connection replay/revoke tests.
-2. Land HX-408 admitted-node authority at SQLite 169 / PostgreSQL 111, then re-read both live migration heads.
-3. Contracts/storage subagent implements HX-501 at its reserved SQLite 170 / PostgreSQL 112 foundation and parity proof.
+1. Architect/QA freeze auth class, route matrix, admission schema, native-mTLS or trusted-terminator identity contract, and two-connection replay/revoke tests — complete for architecture.
+2. Land HX-408 admitted-node authority at SQLite 169 / PostgreSQL 111, then re-read both live migration heads — complete.
+3. Contracts/storage subagent implements HX-501 at SQLite 170 / PostgreSQL 112 with parity proof — complete at `aa68ba9d9b13671c5e6587b9bead37568d034a31`.
 4. Auth/runtime subagent implements outbound bootstrap exchange, short-lived credential rotation, attestation, and revoke.
-5. Durable/storage subagent implements HX-502/HX-504 assignment, lease, event, watermark, cancellation, and exactly-once settlement after receiving fresh migration allocations.
+5. Durable/storage subagent implements HX-502/HX-504 assignment, lease, event, watermark, cancellation, and exactly-once settlement at the reserved SQLite 171 / PostgreSQL 113 pair after a final head/reservation scan.
 6. LLM subagent implements HX-503 assignment-bound inference proxy and HX-306 reconciliation.
 7. Worker-runtime/security subagent implements HX-505 cell, egress/disk/process enforcement, backup/restore, and cleanup after receiving a fresh migration allocation if storage is still required.
 8. Artifact/effects subagent implements HX-506 staged CAS, verification, and manual-reconciliation protocol.
@@ -153,4 +153,4 @@ Each lane receives an exact file allowlist and migration reservation. No lane ma
 
 ## Release gate
 
-HX-501 through HX-507 remain non-shipped until HX-408 has landed, a real mTLS/trusted-terminator identity boundary exists, their individual owners pass, and `pnpm verify:remote-workers` passes. Existing mesh joins, caller-supplied fingerprints, local drain workers, generic Ops projections, or local durable execution are useful dependencies but do not independently satisfy remote worker parity.
+HX-501 through HX-507 remain non-shipped until a real mTLS/trusted-terminator identity boundary exists, their individual owners pass, and `pnpm verify:remote-workers` passes. HX-408 admitted-node authority and the HX-501 contracts/storage foundation are satisfied dependencies, not live worker-runtime proof. Existing mesh joins, caller-supplied fingerprints, local drain workers, generic Ops projections, or local durable execution do not independently satisfy remote worker parity.
