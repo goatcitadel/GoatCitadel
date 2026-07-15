@@ -7,7 +7,14 @@ export type GovernanceJourneyActorType = "operator" | "system" | "approval_effec
 export type GovernanceJourneyPoisoningStatus = "clean" | "blocked" | "quarantined" | "conflicting";
 
 export interface GovernanceJourneyEvidenceRef {
-  owner: "artifact" | "approval" | "candidate" | "evaluation" | "memory_history" | "upstream_snapshot";
+  owner:
+    | "artifact"
+    | "approval"
+    | "candidate"
+    | "evaluation"
+    | "external_source"
+    | "memory_history"
+    | "upstream_snapshot";
   refId: string;
 }
 
@@ -349,9 +356,15 @@ function normalizeEvidenceRefs(input: readonly GovernanceJourneyEvidenceRef[]): 
   for (const item of input) {
     if (
       !item ||
-      !new Set(["artifact", "approval", "candidate", "evaluation", "memory_history", "upstream_snapshot"]).has(
-        item.owner,
-      )
+      !new Set([
+        "artifact",
+        "approval",
+        "candidate",
+        "evaluation",
+        "external_source",
+        "memory_history",
+        "upstream_snapshot",
+      ]).has(item.owner)
     ) {
       throw new TypeError("Journey evidence reference has an unsupported owner.");
     }

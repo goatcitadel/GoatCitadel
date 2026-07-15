@@ -228,6 +228,7 @@ export function buildExternalSourceImportFixture(catalog: ExternalSourceCatalogF
     planSha256: plan.planSha256,
     selectedItemSetSha256: plan.selectedItemSetSha256,
     adapterVersions: plan.adapterVersions,
+    requestedByActorId: "operator-1",
     admittedAt: "2026-07-14T08:04:00.000Z",
   });
   const settlement = sealExternalSourceImportSettlement(

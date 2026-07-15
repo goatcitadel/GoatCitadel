@@ -187,6 +187,38 @@ describe("JourneyTimelineService HX-402", () => {
     });
   });
 
+  it("recognizes content-free external-source import references as source evidence", async () => {
+    const { storage, service } = await createHarness();
+    storage.governanceJourneyEvents.create(
+      event({
+        eventId: "event-external-import",
+        idempotencyKey: "journey:external-import",
+        eventType: "external_session_import",
+        subjectKind: "external_source_import",
+        subjectId: "import-1",
+        action: "imported_read_only",
+        sourceKind: "external_source",
+        sourceId: "source-1",
+        trustDisposition: "read_only_external",
+        evidenceRefs: [{ owner: "external_source", refId: "import-1" }],
+        provenance: {
+          sourceRequired: true,
+          approvalRequired: false,
+          sourceWorkspaceId: "workspace-1",
+        },
+      }),
+    );
+
+    const item = service.listTimeline({ workspaceId: "workspace-1" }).items[0];
+    expect(item?.category).toBe("provenance");
+    expect(item?.evidence).toMatchObject({
+      sourceLinked: true,
+      approvalLinked: false,
+      health: "complete",
+      trustContribution: "evidence_only",
+    });
+  });
+
   it("marks recurrence scans incomplete when more than 500 canonical observations exist", async () => {
     const { storage, service } = await createHarness();
     for (let index = 0; index < 501; index += 1) {

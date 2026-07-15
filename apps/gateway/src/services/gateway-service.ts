@@ -460,6 +460,7 @@ import { createJourneyTimelineRouteService } from "./journey-timeline-route-serv
 import { JourneyTimelineService } from "./journey-timeline-service.js";
 import { OpsSavedBoardService } from "./ops-saved-board-service.js";
 import { createExternalSourceRouteService } from "./external-source-route-service.js";
+import { ExternalSourceImportServiceError } from "./external-source-import-service.js";
 import {
   buildIntegrationActionHostForGateway,
   composeGatewayRouteServices,
@@ -2344,7 +2345,11 @@ export class GatewayService {
   private buildRouteServices(): GatewayRouteServices {
     return {
       ...composeGatewayRouteServices(this.getRouteCompositionPort()),
-      externalSources: createExternalSourceRouteService(this.storage, this.workspacePathBridgeRuntime.service),
+      externalSources: createExternalSourceRouteService(
+        this.storage,
+        this.workspacePathBridgeRuntime.service,
+        path.resolve(this.config.rootDir, this.config.assistant.dataDir ?? "data", "external-sources"),
+      ),
       workspacePathBridge: this.workspacePathBridgeRuntime.service,
       opsSavedBoards: new OpsSavedBoardService(this.storage, {
         realtimeEpoch: this.opsSavedBoardRealtimeEpoch,
@@ -2597,6 +2602,30 @@ export class GatewayService {
     this.meshService.init();
     await Promise.all([this.npuSidecar.init(), this.llamaCppRuntime.init()]);
     await this.configGenerationService.completeRuntimeOwnerReconciliation();
+    const externalSources = this.routeServices?.externalSources;
+    if (
+      externalSources &&
+      process.env.NODE_ENV !== "production" &&
+      process.env.GOATCITADEL_INTERNAL_HX407_EXTERNAL_SOURCES_PROOF_ENABLED === "1"
+    ) {
+      try {
+        const recovery = await externalSources.recoverImports(signal ?? new AbortController().signal);
+        if (recovery.examined > 0 || recovery.cleanedExpiredLeases > 0) {
+          log.info("external source import recovery completed", { ...recovery });
+        }
+        if (recovery.retryableFailures > 0) {
+          log.warn("external source import recovery retained retryable intents", { ...recovery });
+        }
+      } catch (error) {
+        if (!signal?.aborted) {
+          log.warn("external source import recovery failed; durable intents remain retryable", {
+            disposition: "retryable",
+            errorClass: error instanceof ExternalSourceImportServiceError ? "external_source_import" : "unexpected",
+            errorCode: error instanceof ExternalSourceImportServiceError ? error.code : "unexpected_failure",
+          });
+        }
+      }
+    }
     const closedLeaseCount = this.storage.realtimeStreamLeases.closeOpenForNode({
       gatewayNodeId: this.config.assistant.mesh.nodeId,
       closeReason: "process_restart",

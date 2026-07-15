@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- This established immutable import owner now includes replay/recovery invariants; decomposition belongs in a behavior-preserving tranche. */
 import { createHash } from "node:crypto";
 import {
   ConflictError,
@@ -14,8 +15,11 @@ import {
   type ExternalSourceImportSettlement,
 } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
-import { ExternalSourceConfigRepository } from "./external-source-config-repo.js";
 import { ExternalSourceScanRepository } from "./external-source-scan-repo.js";
+import {
+  GovernanceJourneyEventRepository,
+  type GovernanceJourneyEventRecord,
+} from "./governance-journey-event-repo.js";
 import { safeJsonParse } from "./safe-json.js";
 
 export type ExternalSourceImportPlanDraft = Omit<ExternalSourceImportPlan, "planSha256">;
@@ -102,18 +106,48 @@ interface ExternalSourceImportSettlementRow {
   settled_at: string;
 }
 
+interface ExternalSourceAdmissionWorkspaceRow {
+  lifecycle_status: string;
+}
+
+interface ExternalSourceAdmissionConfigRow {
+  status: string;
+  revision: number | bigint | string;
+  config_sha256: string;
+}
+
+interface ExternalSourceAdmissionAuthority {
+  workspace: ExternalSourceAdmissionWorkspaceRow | undefined;
+  config: ExternalSourceAdmissionConfigRow | undefined;
+}
+
 export class ExternalSourceImportRepository {
   private readonly insertPlanStmt;
+  private readonly admissionWorkspaceStmt;
+  private readonly admissionConfigStmt;
   private readonly getPlanStmt;
   private readonly insertIntentStmt;
   private readonly getIntentStmt;
   private readonly getIntentByKeyStmt;
+  private readonly listUnsettledIntentsStmt;
   private readonly insertItemStmt;
   private readonly listItemsStmt;
   private readonly insertSettlementStmt;
   private readonly getSettlementStmt;
 
   public constructor(private readonly db: DatabaseClient) {
+    this.admissionWorkspaceStmt = db.prepare(`
+      SELECT lifecycle_status
+      FROM workspaces
+      WHERE workspace_id = @workspaceId
+      ${db.dialect === "postgres" ? "FOR UPDATE" : ""}
+    `);
+    this.admissionConfigStmt = db.prepare(`
+      SELECT status, revision, config_sha256
+      FROM external_source_configs
+      WHERE workspace_id = @workspaceId AND source_id = @sourceId
+      ${db.dialect === "postgres" ? "FOR UPDATE" : ""}
+    `);
     this.insertPlanStmt = db.prepare(`
       INSERT INTO external_source_import_plans (
         workspace_id, plan_id, source_id, scan_id, schema_version, config_revision, config_sha256,
@@ -150,6 +184,16 @@ export class ExternalSourceImportRepository {
       SELECT * FROM external_source_import_intents
       WHERE workspace_id = @workspaceId AND idempotency_key = @idempotencyKey
     `);
+    this.listUnsettledIntentsStmt = db.prepare(`
+      SELECT intent.*
+      FROM external_source_import_intents AS intent
+      LEFT JOIN external_source_import_settlements AS settlement
+        ON settlement.workspace_id = intent.workspace_id
+        AND settlement.import_id = intent.import_id
+      WHERE settlement.import_id IS NULL
+      ORDER BY intent.admitted_at ASC, intent.import_id ASC
+      LIMIT @limit
+    `);
     this.insertItemStmt = db.prepare(`
       INSERT INTO external_source_import_items (
         workspace_id, import_id, scan_id, item_id, schema_version, ordinal, adapter_id,
@@ -182,6 +226,11 @@ export class ExternalSourceImportRepository {
   }
 
   public createPlan(input: ExternalSourceImportPlan): ExternalSourceImportPlan {
+    verifyExternalSourceImportPlan(input);
+    return this.db.transaction("immediate", () => this.createPlanInTransaction(input));
+  }
+
+  private createPlanInTransaction(input: ExternalSourceImportPlan): ExternalSourceImportPlan {
     verifyExternalSourceImportPlan(input);
     const { scan, selectedItems } = this.assertPlanBinding(input);
     if (Date.parse(input.stagingExpiresAt) <= Date.parse(input.createdAt)) {
@@ -224,38 +273,43 @@ export class ExternalSourceImportRepository {
     return stored;
   }
 
+  public createPlanWithJourney(
+    input: ExternalSourceImportPlan,
+    journeyEvent: GovernanceJourneyEventRecord,
+  ): { plan: ExternalSourceImportPlan; journeyEvent: GovernanceJourneyEventRecord } {
+    assertJourneyWorkspaceBinding(journeyEvent, input.workspaceId, input.planId);
+    return this.db.transaction("immediate", () => {
+      const plan = this.createPlanInTransaction(input);
+      const event = new GovernanceJourneyEventRepository(this.db).create(journeyEvent);
+      return { plan, journeyEvent: event };
+    });
+  }
+
   public claimIntent(input: ExternalSourceImportIntent): ExternalSourceImportIntent {
     verifyExternalSourceImportIntent(input);
-    const plan = this.getPlan(input.workspaceId, input.planId);
-    assertIntentPlanBinding(input, plan);
-    if (plan.blockerCodes.length > 0) {
-      throw new ConflictError({
-        code: "STATE_CONFLICT",
-        message: `External source import plan ${plan.planId} is blocked.`,
-      });
-    }
-    if (Date.parse(input.admittedAt) > Date.parse(plan.stagingExpiresAt)) {
-      throw new ConflictError({
-        code: "STATE_CONFLICT",
-        message: `External source import plan ${plan.planId} staging lease expired before admission.`,
-      });
-    }
-    const config = new ExternalSourceConfigRepository(this.db).get(input.workspaceId, input.sourceId);
-    if (
-      config.status !== "active" ||
-      config.revision !== input.configRevision ||
-      config.configSha256 !== input.configSha256
-    ) {
-      throw new ConflictError({
-        code: "STATE_CONFLICT",
-        message: `External source import ${input.importId} does not match the current active configuration.`,
-      });
-    }
-    const expectedKey = deriveExternalSourceImportIdempotencyKey(plan);
-    if (input.idempotencyKey !== expectedKey) {
-      throw new Error(`External source import ${input.importId} has a non-canonical idempotency key.`);
-    }
     return this.db.transaction("immediate", () => {
+      const plan = this.getPlan(input.workspaceId, input.planId);
+      assertIntentPlanBinding(input, plan);
+      const expectedKey = deriveExternalSourceImportIdempotencyKey(plan);
+      if (input.idempotencyKey !== expectedKey) {
+        throw new Error(`External source import ${input.importId} has a non-canonical idempotency key.`);
+      }
+      const authority = this.lockAdmissionAuthority(input.workspaceId, input.sourceId);
+      const existing = this.findIntentByIdempotencyKey(input.workspaceId, input.idempotencyKey);
+      if (existing) return this.assertIntentRequestReplay(existing, input);
+      if (plan.blockerCodes.length > 0) {
+        throw new ConflictError({
+          code: "STATE_CONFLICT",
+          message: `External source import plan ${plan.planId} is blocked.`,
+        });
+      }
+      if (Date.parse(input.admittedAt) > Date.parse(plan.stagingExpiresAt)) {
+        throw new ConflictError({
+          code: "STATE_CONFLICT",
+          message: `External source import plan ${plan.planId} staging lease expired before admission.`,
+        });
+      }
+      this.assertActiveAdmissionAuthority(authority, input.workspaceId, input.configRevision, input.configSha256);
       this.insertIntentStmt.run(toIntentBindings(input));
       const stored = this.findIntentByIdempotencyKey(input.workspaceId, input.idempotencyKey);
       if (!stored) {
@@ -267,13 +321,7 @@ export class ExternalSourceImportRepository {
             : `External source import ${input.importId} could not claim its idempotency key.`,
         });
       }
-      if (stored.requestSha256 !== input.requestSha256) {
-        throw new ConflictError({
-          code: "STATE_CONFLICT",
-          message: `External source import idempotency key was reused with different immutable material.`,
-        });
-      }
-      return stored;
+      return this.assertIntentRequestReplay(stored, input);
     });
   }
 
@@ -292,6 +340,37 @@ export class ExternalSourceImportRepository {
       this.insertSettlementStmt.run(toSettlementBindings(settlement));
       const stored = this.getSettlement(settlement.workspaceId, settlement.importId);
       return this.assertSettlementReplay(stored, settlement, items);
+    });
+  }
+
+  public settleWithJourney(
+    settlement: ExternalSourceImportSettlement,
+    items: readonly ExternalSourceImportItem[],
+    journeyEvent: GovernanceJourneyEventRecord,
+  ): { settlement: ExternalSourceImportSettlement; journeyEvent: GovernanceJourneyEventRecord } {
+    verifyExternalSourceImportSettlement(settlement, items);
+    const intent = this.getIntent(settlement.workspaceId, settlement.importId);
+    const plan = this.getPlan(settlement.workspaceId, intent.planId);
+    this.assertSettlementBinding(settlement, items, intent, plan);
+    if (settlement.journeyEventId !== journeyEvent.eventId) {
+      throw new Error("External source settlement does not bind its Journey event.");
+    }
+    assertJourneyWorkspaceBinding(journeyEvent, settlement.workspaceId, settlement.importId);
+    return this.db.transaction("immediate", () => {
+      const journeys = new GovernanceJourneyEventRepository(this.db);
+      const existing = this.findSettlement(settlement.workspaceId, settlement.importId);
+      if (existing) {
+        this.assertSettlementOutcomeReplay(existing, settlement, items);
+        if (!existing.journeyEventId) {
+          throw new Error(`External source settlement ${existing.settlementId} lost its Journey binding.`);
+        }
+        const event = journeys.get(existing.journeyEventId);
+        assertJourneyWorkspaceBinding(event, existing.workspaceId, existing.importId);
+        return { settlement: existing, journeyEvent: event };
+      }
+      const event = journeys.create(journeyEvent);
+      const stored = this.settle(settlement, items);
+      return { settlement: stored, journeyEvent: event };
     });
   }
 
@@ -335,6 +414,13 @@ export class ExternalSourceImportRepository {
     return row ? mapAndVerifyIntentRow(row) : undefined;
   }
 
+  public listUnsettledIntents(limit = 100): ExternalSourceImportIntent[] {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_000) {
+      throw new TypeError("External source unsettled import limit must be an integer from 1 through 1000.");
+    }
+    return (this.listUnsettledIntentsStmt.all({ limit }) as ExternalSourceImportIntentRow[]).map(mapAndVerifyIntentRow);
+  }
+
   public listItems(workspaceId: string, importId: string): ExternalSourceImportItem[] {
     assertIdentifier(workspaceId, "workspaceId");
     assertIdentifier(importId, "importId");
@@ -367,6 +453,7 @@ export class ExternalSourceImportRepository {
     scan: ReturnType<ExternalSourceScanRepository["get"]>;
     selectedItems: ExternalSourceCatalogItem[];
   } {
+    this.assertAdmissionAuthority(input.workspaceId, input.sourceId, input.configRevision, input.configSha256);
     const scans = new ExternalSourceScanRepository(this.db);
     const scan = scans.get(input.workspaceId, input.scanId);
     if (
@@ -380,19 +467,68 @@ export class ExternalSourceImportRepository {
         message: `External source import plan ${input.planId} does not match its sealed scan.`,
       });
     }
-    const config = new ExternalSourceConfigRepository(this.db).get(input.workspaceId, input.sourceId);
+    const selectedItems = input.selectedItemIds.map((itemId) => scans.getItem(input.workspaceId, input.scanId, itemId));
+    return { scan, selectedItems };
+  }
+
+  private assertAdmissionAuthority(
+    workspaceId: string,
+    sourceId: string,
+    expectedRevision: number,
+    expectedConfigSha256: string,
+  ): void {
+    const authority = this.lockAdmissionAuthority(workspaceId, sourceId);
+    this.assertActiveAdmissionAuthority(authority, workspaceId, expectedRevision, expectedConfigSha256);
+  }
+
+  private lockAdmissionAuthority(workspaceId: string, sourceId: string): ExternalSourceAdmissionAuthority {
+    const workspace = this.admissionWorkspaceStmt.get({ workspaceId }) as
+      | ExternalSourceAdmissionWorkspaceRow
+      | undefined;
+    const config = this.admissionConfigStmt.get({ workspaceId, sourceId }) as
+      | ExternalSourceAdmissionConfigRow
+      | undefined;
+    return { workspace, config };
+  }
+
+  private assertActiveAdmissionAuthority(
+    authority: ExternalSourceAdmissionAuthority,
+    workspaceId: string,
+    expectedRevision: number,
+    expectedConfigSha256: string,
+  ): void {
+    const { workspace, config } = authority;
+    if (!workspace) throw new NotFoundError({ entity: "workspace", id: workspaceId });
+    if (workspace.lifecycle_status !== "active") {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: `External source admission is blocked outside an active workspace.`,
+      });
+    }
     if (
+      !config ||
       config.status !== "active" ||
-      config.revision !== input.configRevision ||
-      config.configSha256 !== input.configSha256
+      Number(config.revision) !== expectedRevision ||
+      config.config_sha256 !== expectedConfigSha256
     ) {
       throw new ConflictError({
         code: "STATE_CONFLICT",
-        message: `External source import plan ${input.planId} does not match the current active source configuration.`,
+        message: `External source admission does not match the current active configuration.`,
       });
     }
-    const selectedItems = input.selectedItemIds.map((itemId) => scans.getItem(input.workspaceId, input.scanId, itemId));
-    return { scan, selectedItems };
+  }
+
+  private assertIntentRequestReplay(
+    stored: ExternalSourceImportIntent,
+    requested: ExternalSourceImportIntent,
+  ): ExternalSourceImportIntent {
+    if (stored.requestSha256 !== requested.requestSha256) {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: `External source import idempotency key was reused with different immutable material.`,
+      });
+    }
+    return stored;
   }
 
   private assertSettlementBinding(
@@ -480,6 +616,52 @@ export class ExternalSourceImportRepository {
     }
     verifyExternalSourceImportSettlement(stored, storedItems);
     return stored;
+  }
+
+  private assertSettlementOutcomeReplay(
+    stored: ExternalSourceImportSettlement,
+    requested: ExternalSourceImportSettlement,
+    items: readonly ExternalSourceImportItem[],
+  ): void {
+    const outcome = (settlement: ExternalSourceImportSettlement) => ({
+      schemaVersion: settlement.schemaVersion,
+      settlementId: settlement.settlementId,
+      workspaceId: settlement.workspaceId,
+      importId: settlement.importId,
+      disposition: settlement.disposition,
+      artifactSetSha256: settlement.artifactSetSha256,
+      blockerCodes: settlement.blockerCodes,
+    });
+    if (canonicalJsonString(outcome(stored)) !== canonicalJsonString(outcome(requested))) {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: `External source import ${requested.importId} already has a different terminal outcome.`,
+      });
+    }
+    const storedItems = this.listItems(requested.workspaceId, requested.importId);
+    if (canonicalJsonString(storedItems) !== canonicalJsonString(orderedImportItems(items))) {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: `External source import ${requested.importId} terminal replay changed artifact evidence.`,
+      });
+    }
+    verifyExternalSourceImportSettlement(stored, storedItems);
+  }
+}
+
+function assertJourneyWorkspaceBinding(
+  event: GovernanceJourneyEventRecord,
+  workspaceId: string,
+  subjectId: string,
+): void {
+  if (
+    event.scopeKind !== "workspace" ||
+    event.workspaceId !== workspaceId ||
+    event.eventType !== "external_session_import" ||
+    event.subjectId !== subjectId ||
+    event.sourceKind !== "external_source"
+  ) {
+    throw new Error("External source Journey event is not bound to its immutable import record.");
   }
 }
 
@@ -617,6 +799,13 @@ export function computeExternalSourceSettlementResultSha256(
 function importRequestMaterial(
   input: ExternalSourceImportIntent | ExternalSourceImportIntentDraft | ExternalSourceImportPlan,
 ): Record<string, unknown> {
+  const binding = importPlanBindingMaterial(input);
+  return "requestedByActorId" in input ? { ...binding, requestedByActorId: input.requestedByActorId } : binding;
+}
+
+function importPlanBindingMaterial(
+  input: ExternalSourceImportIntent | ExternalSourceImportIntentDraft | ExternalSourceImportPlan,
+): Record<string, unknown> {
   return {
     schemaVersion: input.schemaVersion,
     workspaceId: input.workspaceId,
@@ -633,8 +822,8 @@ function importRequestMaterial(
 }
 
 function assertIntentPlanBinding(input: ExternalSourceImportIntent, plan: ExternalSourceImportPlan): void {
-  const expected = importRequestMaterial(plan);
-  const actual = importRequestMaterial(input);
+  const expected = importPlanBindingMaterial(plan);
+  const actual = importPlanBindingMaterial(input);
   if (canonicalJsonString(actual) !== canonicalJsonString(expected)) {
     throw new ConflictError({
       code: "STATE_CONFLICT",

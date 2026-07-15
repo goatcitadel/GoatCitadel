@@ -1,7 +1,13 @@
+import path from "node:path";
 import type {
   ExternalSourceCatalogListInput,
   ExternalSourceCreateInput,
   ExternalSourceDetailResponse,
+  ExternalSourceImportApplyInput,
+  ExternalSourceImportApplyResponse,
+  ExternalSourceImportDetailResponse,
+  ExternalSourceImportPlanInput,
+  ExternalSourceImportPlanResponse,
   ExternalSourceListResponse,
   ExternalSourcePage,
   ExternalSourceScanInput,
@@ -9,6 +15,12 @@ import type {
   ExternalSourceUpdateInput,
 } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
+import { ExternalSourceArtifactStore } from "./external-source-artifact-store.js";
+import {
+  ExternalSourceImportService,
+  type ExternalSourceImportRecoverySummary,
+} from "./external-source-import-service.js";
+import { ExternalSourcePlanStagingStore } from "./external-source-plan-staging-store.js";
 import { ExternalSourceReader } from "./external-source-reader.js";
 import { ExternalSourceScanService } from "./external-source-scan-service.js";
 import {
@@ -42,10 +54,29 @@ export interface ExternalSourceRoutePort {
     input: ExternalSourceCatalogListInput,
     actor: ExternalSourceRequestActor,
   ): ExternalSourcePage;
+  createImportPlan(
+    input: ExternalSourceImportPlanInput,
+    actor: ExternalSourceRequestActor,
+    signal: AbortSignal,
+  ): Promise<ExternalSourceImportPlanResponse>;
+  applyImport(
+    input: ExternalSourceImportApplyInput,
+    actor: ExternalSourceRequestActor,
+    signal: AbortSignal,
+  ): Promise<ExternalSourceImportApplyResponse>;
+  getImport(
+    workspaceId: string,
+    importId: string,
+    actor: ExternalSourceRequestActor,
+  ): ExternalSourceImportDetailResponse;
+  recoverImports(signal: AbortSignal, limit?: number): Promise<ExternalSourceImportRecoverySummary>;
 }
 
 export class ExternalSourceRouteService implements ExternalSourceRoutePort {
-  public constructor(private readonly service: ExternalSourceService) {}
+  public constructor(
+    private readonly service: ExternalSourceService,
+    private readonly imports?: ExternalSourceImportService,
+  ) {}
 
   public create(
     input: ExternalSourceCreateInput,
@@ -87,16 +118,54 @@ export class ExternalSourceRouteService implements ExternalSourceRoutePort {
   ): ExternalSourcePage {
     return this.service.listCatalog(sourceId, input, actor);
   }
+
+  public createImportPlan(
+    input: ExternalSourceImportPlanInput,
+    actor: ExternalSourceRequestActor,
+    signal: AbortSignal,
+  ): Promise<ExternalSourceImportPlanResponse> {
+    return this.requireImports().createPlan(input, actor, signal);
+  }
+
+  public applyImport(
+    input: ExternalSourceImportApplyInput,
+    actor: ExternalSourceRequestActor,
+    signal: AbortSignal,
+  ): Promise<ExternalSourceImportApplyResponse> {
+    return this.requireImports().apply(input, actor, signal);
+  }
+
+  public getImport(
+    workspaceId: string,
+    importId: string,
+    actor: ExternalSourceRequestActor,
+  ): ExternalSourceImportDetailResponse {
+    return this.requireImports().get(workspaceId, importId, actor);
+  }
+
+  public recoverImports(signal: AbortSignal, limit?: number): Promise<ExternalSourceImportRecoverySummary> {
+    return this.requireImports().recover(signal, limit);
+  }
+
+  private requireImports(): ExternalSourceImportService {
+    if (!this.imports) throw new Error("External source import service is not composed.");
+    return this.imports;
+  }
 }
 
 type ExternalSourceRouteStorage = Pick<
   Storage,
-  "externalSourceConfigs" | "externalSourceScans" | "workspacePathBridgeSnapshots" | "workspaces"
+  | "externalSourceConfigs"
+  | "externalSourceImports"
+  | "externalSourceScans"
+  | "workspacePathBridgeSnapshots"
+  | "workspaces"
 >;
 
 export function createExternalSourceRouteService(
   storage: ExternalSourceRouteStorage,
   pathVerifier: ExternalSourcePathVerifierPort,
+  managedRootDir?: string,
 ): ExternalSourceRouteService {
   const identityResolver = new StorageExternalSourceIdentityResolver({
     configs: storage.externalSourceConfigs,
@@ -109,14 +178,25 @@ export function createExternalSourceRouteService(
     scans: storage.externalSourceScans,
     reader,
   });
+  const sourceService = new ExternalSourceService({
+    configs: storage.externalSourceConfigs,
+    scans: storage.externalSourceScans,
+    pathSnapshots: storage.workspacePathBridgeSnapshots,
+    pathVerifier,
+    workspaces: storage.workspaces,
+    scanner,
+  });
+  if (!managedRootDir || !storage.externalSourceImports) return new ExternalSourceRouteService(sourceService);
   return new ExternalSourceRouteService(
-    new ExternalSourceService({
+    sourceService,
+    new ExternalSourceImportService({
       configs: storage.externalSourceConfigs,
       scans: storage.externalSourceScans,
-      pathSnapshots: storage.workspacePathBridgeSnapshots,
-      pathVerifier,
+      imports: storage.externalSourceImports,
       workspaces: storage.workspaces,
-      scanner,
+      reader,
+      staging: new ExternalSourcePlanStagingStore(path.join(managedRootDir, "staging")),
+      artifacts: new ExternalSourceArtifactStore(path.join(managedRootDir, "artifacts")),
     }),
   );
 }

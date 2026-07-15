@@ -244,6 +244,7 @@ function evidenceHealth(
 
 function categorizeEvent(event: GovernanceJourneyEventRecord): JourneyTimelineCategory {
   const material = `${event.eventType}\u0000${event.subjectKind}\u0000${event.action}`.toLowerCase();
+  if (event.eventType === "external_session_import" || event.sourceKind === "external_source") return "provenance";
   if (material.includes("memory")) return "memory";
   if (material.includes("approval")) return "approval";
   if (material.includes("import") || material.includes("upstream_snapshot")) return "skill_import";
@@ -255,7 +256,12 @@ function categorizeEvent(event: GovernanceJourneyEventRecord): JourneyTimelineCa
 }
 
 function isSourceEvidenceRef(ref: GovernanceJourneyEventRecord["evidenceRefs"][number]): boolean {
-  return ref.owner === "artifact" || ref.owner === "memory_history" || ref.owner === "upstream_snapshot";
+  return (
+    ref.owner === "artifact" ||
+    ref.owner === "external_source" ||
+    ref.owner === "memory_history" ||
+    ref.owner === "upstream_snapshot"
+  );
 }
 
 function isBlockedEvidence(event: StoredJourneyEvent, requestedWorkspaceId: string): boolean {

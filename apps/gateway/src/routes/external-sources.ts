@@ -4,10 +4,13 @@ import {
   EXTERNAL_SOURCE_LIMITS,
   normalizeExternalSourceCatalogListInput,
   normalizeExternalSourceCreateInput,
+  normalizeExternalSourceImportApplyInput,
+  normalizeExternalSourceImportPlanInput,
   normalizeExternalSourceScanInput,
   normalizeExternalSourceUpdateInput,
 } from "@goatcitadel/contracts";
 import type { ExternalSourceRoutePort } from "../services/external-source-route-service.js";
+import { ExternalSourceImportServiceError } from "../services/external-source-import-service.js";
 import { ExternalSourceServiceError, type ExternalSourceRequestActor } from "../services/external-source-service.js";
 import { withRouteAccess } from "./route-access.js";
 
@@ -75,6 +78,24 @@ const catalogQuerySchema = z
     limit: z.coerce.number().int().min(1).max(EXTERNAL_SOURCE_LIMITS.maxPageSize).optional(),
   })
   .strict();
+const importPlanBodySchema = z
+  .object({
+    workspaceId: identifier,
+    sourceId: identifier,
+    scanId: identifier,
+    selectedItemIds: z.array(identifier).min(1).max(EXTERNAL_SOURCE_LIMITS.selectedItemsPerImport),
+    expectedRevision: z.number().int().positive().safe(),
+  })
+  .strict();
+const importApplyBodySchema = z
+  .object({
+    workspaceId: identifier,
+    planId: identifier,
+    expectedPlanSha256: sha256,
+    idempotencyKey: canonicalText(512),
+  })
+  .strict();
+const importParamsSchema = z.object({ importId: identifier }).strict();
 
 export interface ExternalSourceRoutesOptions {
   service: ExternalSourceRoutePort;
@@ -217,6 +238,70 @@ export const externalSourceRoutes: FastifyPluginAsync<ExternalSourceRoutesOption
       return sendExternalSourceError(error, request, reply);
     }
   });
+
+  fastify.post("/api/v1/library/external-source-import-plans", operatorMutation, async (request, reply) => {
+    const actor = resolveSpecificOperator(request, reply);
+    if (!actor) return;
+    const parsed = importPlanBodySchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Invalid external source import plan request." });
+    let input;
+    try {
+      input = normalizeExternalSourceImportPlanInput(parsed.data);
+    } catch {
+      return reply.code(400).send({ error: "Invalid external source import plan request." });
+    }
+    const abort = bindRequestAbort(request.raw);
+    reply.header("x-goatcitadel-execution-authority", "none");
+    try {
+      const result = await options.service.createImportPlan(input, actor, abort.signal);
+      return reply.code(201).send(result);
+    } catch (error) {
+      return sendExternalSourceError(error, request, reply);
+    } finally {
+      abort.dispose();
+    }
+  });
+
+  fastify.post("/api/v1/library/external-source-imports", operatorMutation, async (request, reply) => {
+    const actor = resolveSpecificOperator(request, reply);
+    if (!actor) return;
+    const parsed = importApplyBodySchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Invalid external source import request." });
+    let input;
+    try {
+      input = normalizeExternalSourceImportApplyInput(parsed.data);
+    } catch {
+      return reply.code(400).send({ error: "Invalid external source import request." });
+    }
+    const abort = bindRequestAbort(request.raw);
+    try {
+      const result = await options.service.applyImport(input, actor, abort.signal);
+      reply.header(
+        "Location",
+        `/api/v1/library/external-source-imports/${encodeURIComponent(result.intent.importId)}?workspaceId=${encodeURIComponent(result.intent.workspaceId)}`,
+      );
+      return reply.code(result.applyDisposition === "created" ? 201 : 200).send(result);
+    } catch (error) {
+      return sendExternalSourceError(error, request, reply);
+    } finally {
+      abort.dispose();
+    }
+  });
+
+  fastify.get("/api/v1/library/external-source-imports/:importId", operatorRead, async (request, reply) => {
+    const actor = resolveSpecificOperator(request, reply);
+    if (!actor) return;
+    const params = importParamsSchema.safeParse(request.params);
+    const query = workspaceQuerySchema.safeParse(request.query);
+    if (!params.success || !query.success) {
+      return reply.code(400).send({ error: "Invalid external source import detail query." });
+    }
+    try {
+      return reply.send(options.service.getImport(query.data.workspaceId, params.data.importId, actor));
+    } catch (error) {
+      return sendExternalSourceError(error, request, reply);
+    }
+  });
 };
 
 function resolveSpecificOperator(request: FastifyRequest, reply: FastifyReply): ExternalSourceRequestActor | undefined {
@@ -242,6 +327,20 @@ function resolveSpecificOperator(request: FastifyRequest, reply: FastifyReply): 
 }
 
 function sendExternalSourceError(error: unknown, request: FastifyRequest, reply: FastifyReply) {
+  if (error instanceof ExternalSourceImportServiceError) {
+    const status = {
+      artifact_failure: 500,
+      cancelled: 408,
+      conflict: 409,
+      limit_exceeded: 413,
+      not_found: 404,
+      repository_failure: 500,
+      source_not_active: 409,
+      staging_unavailable: 409,
+      unsupported_item: 422,
+    }[error.code];
+    return reply.code(status).send({ error: error.message, code: error.code });
+  }
   if (error instanceof ExternalSourceServiceError) {
     const status = {
       cancelled: 408,

@@ -9,7 +9,14 @@ export type GovernanceJourneyActorType = "operator" | "system" | "approval_effec
 export type GovernanceJourneyPoisoningStatus = "clean" | "blocked" | "quarantined" | "conflicting";
 
 export interface GovernanceJourneyEvidenceRef {
-  owner: "artifact" | "approval" | "candidate" | "evaluation" | "memory_history" | "upstream_snapshot";
+  owner:
+    | "artifact"
+    | "approval"
+    | "candidate"
+    | "evaluation"
+    | "external_source"
+    | "memory_history"
+    | "upstream_snapshot";
   refId: string;
 }
 
@@ -220,6 +227,7 @@ function isEvidenceRef(value: unknown): value is GovernanceJourneyEvidenceRef {
       value.owner === "approval" ||
       value.owner === "candidate" ||
       value.owner === "evaluation" ||
+      value.owner === "external_source" ||
       value.owner === "memory_history" ||
       value.owner === "upstream_snapshot") &&
     isBoundedText(value.refId, 256)

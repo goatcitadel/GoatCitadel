@@ -13,6 +13,8 @@ import {
   isExternalSourceCursorV1,
   normalizeExternalSourceCatalogListInput,
   normalizeExternalSourceCreateInput,
+  normalizeExternalSourceImportApplyInput,
+  normalizeExternalSourceImportPlanInput,
   normalizeExternalSourceScanInput,
   normalizeExternalSourceUpdateInput,
   projectExternalSourceSummary,
@@ -180,6 +182,46 @@ describe("external source contracts", () => {
         dispositions: ["supported", "unknown"],
       }),
     ).toThrow(/dispositions/u);
+  });
+
+  it("normalizes exact dry-run and retry-safe apply inputs without identity smuggling", () => {
+    expect(
+      normalizeExternalSourceImportPlanInput({
+        workspaceId: "workspace-1",
+        sourceId: "source-1",
+        scanId: "scan-1",
+        selectedItemIds: ["item-2", "item-1"],
+        expectedRevision: 3,
+      }),
+    ).toEqual({
+      workspaceId: "workspace-1",
+      sourceId: "source-1",
+      scanId: "scan-1",
+      selectedItemIds: ["item-2", "item-1"],
+      expectedRevision: 3,
+    });
+    expect(() =>
+      normalizeExternalSourceImportPlanInput({
+        workspaceId: "workspace-1",
+        sourceId: "source-1",
+        scanId: "scan-1",
+        selectedItemIds: ["item-1", "item-1"],
+        expectedRevision: 3,
+      }),
+    ).toThrow(/selection/u);
+    expect(
+      normalizeExternalSourceImportApplyInput({
+        workspaceId: "workspace-1",
+        planId: "plan-1",
+        expectedPlanSha256: hash("a"),
+        idempotencyKey: "external-source-import:v1:fixture",
+      }),
+    ).toEqual({
+      workspaceId: "workspace-1",
+      planId: "plan-1",
+      expectedPlanSha256: hash("a"),
+      idempotencyKey: "external-source-import:v1:fixture",
+    });
   });
 
   it("projects content-free list summaries while reserving the exact root for detail", () => {

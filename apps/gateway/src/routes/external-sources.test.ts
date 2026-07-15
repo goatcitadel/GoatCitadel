@@ -3,11 +3,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   EXTERNAL_SOURCE_SCHEMA_VERSION,
   type ExternalSourceDetailResponse,
+  type ExternalSourceImportApplyResponse,
+  type ExternalSourceImportDetailResponse,
+  type ExternalSourceImportPlanResponse,
   type ExternalSourcePage,
   type ExternalSourceRecord,
   type ExternalSourceScanRecord,
 } from "@goatcitadel/contracts";
 import type { ExternalSourceRoutePort } from "../services/external-source-route-service.js";
+import { ExternalSourceImportServiceError } from "../services/external-source-import-service.js";
 import { ExternalSourceServiceError } from "../services/external-source-service.js";
 import { externalSourceRoutes } from "./external-sources.js";
 
@@ -44,6 +48,20 @@ describe("HX-407 external source routes", () => {
       {
         method: "GET" as const,
         url: "/api/v1/library/external-sources/source-1/items?workspaceId=workspace-1&scanId=scan-1",
+      },
+      {
+        method: "POST" as const,
+        url: "/api/v1/library/external-source-import-plans",
+        payload: validImportPlanRequest(),
+      },
+      {
+        method: "POST" as const,
+        url: "/api/v1/library/external-source-imports",
+        payload: validImportApplyRequest(),
+      },
+      {
+        method: "GET" as const,
+        url: "/api/v1/library/external-source-imports/import-1?workspaceId=workspace-1",
       },
     ];
     for (const request of requests) {
@@ -204,6 +222,94 @@ describe("HX-407 external source routes", () => {
     });
   });
 
+  it("routes dry-run planning, retry-safe apply, and content-free import detail with exact actor scope", async () => {
+    const service = createService();
+    const next = await buildApp(service);
+
+    const planned = await next.inject({
+      method: "POST",
+      url: "/api/v1/library/external-source-import-plans",
+      headers: operatorHeaders,
+      payload: validImportPlanRequest(),
+    });
+    expect(planned.statusCode).toBe(201);
+    expect(planned.headers.location).toBeUndefined();
+    expect(planned.headers["x-goatcitadel-execution-authority"]).toBe("none");
+    expect(service.createImportPlan).toHaveBeenCalledWith(
+      validImportPlanRequest(),
+      { actorId: "operator:request", source: "token" },
+      expect.any(AbortSignal),
+    );
+
+    const applied = await next.inject({
+      method: "POST",
+      url: "/api/v1/library/external-source-imports",
+      headers: operatorHeaders,
+      payload: validImportApplyRequest(),
+    });
+    expect(applied.statusCode).toBe(201);
+    expect(applied.headers.location).toBe("/api/v1/library/external-source-imports/import-1?workspaceId=workspace-1");
+    expect(service.applyImport).toHaveBeenCalledWith(
+      validImportApplyRequest(),
+      { actorId: "operator:request", source: "token" },
+      expect.any(AbortSignal),
+    );
+
+    vi.mocked(service.applyImport).mockResolvedValue({
+      ...importApplyResponse(),
+      applyDisposition: "replayed",
+    });
+    const replayed = await next.inject({
+      method: "POST",
+      url: "/api/v1/library/external-source-imports",
+      headers: operatorHeaders,
+      payload: validImportApplyRequest(),
+    });
+    expect(replayed.statusCode).toBe(200);
+    expect(replayed.json()).toMatchObject({ applyDisposition: "replayed" });
+
+    const detailResult = await next.inject({
+      method: "GET",
+      url: "/api/v1/library/external-source-imports/import-1?workspaceId=workspace-1",
+      headers: operatorHeaders,
+    });
+    expect(detailResult.statusCode).toBe(200);
+    expect(detailResult.headers["x-goatcitadel-execution-authority"]).toBe("none");
+    expect(service.getImport).toHaveBeenCalledWith("workspace-1", "import-1", {
+      actorId: "operator:request",
+      source: "token",
+    });
+  });
+
+  it("rejects malformed import contracts and maps immutable import conflicts without identifier disclosure", async () => {
+    const service = createService();
+    vi.mocked(service.createImportPlan).mockRejectedValue(new ExternalSourceImportServiceError("conflict"));
+    const next = await buildApp(service);
+
+    const malformed = await next.inject({
+      method: "POST",
+      url: "/api/v1/library/external-source-imports",
+      headers: operatorHeaders,
+      payload: { ...validImportApplyRequest(), requestedByActorId: "forged" },
+    });
+    expect(malformed.statusCode).toBe(400);
+    expect(service.applyImport).not.toHaveBeenCalled();
+
+    const conflict = await next.inject({
+      method: "POST",
+      url: "/api/v1/library/external-source-import-plans",
+      headers: operatorHeaders,
+      payload: validImportPlanRequest(),
+    });
+    expect(conflict.statusCode).toBe(409);
+    expect(conflict.json()).toEqual({
+      error: "External source import conflicts with immutable evidence.",
+      code: "conflict",
+    });
+    expect(conflict.body).not.toContain("source-1");
+    expect(conflict.body).not.toContain("workspace-1");
+  });
+
   async function buildApp(service: ExternalSourceRoutePort): Promise<FastifyInstance> {
     const next = Fastify();
     next.decorateRequest("authActorId", "anonymous");
@@ -252,6 +358,16 @@ function createService(): ExternalSourceRoutePort {
     update: vi.fn(async () => detail()),
     scan: vi.fn(async () => scanRecord()),
     listCatalog: vi.fn(() => page()),
+    createImportPlan: vi.fn(async () => importPlanResponse()),
+    applyImport: vi.fn(async () => importApplyResponse()),
+    getImport: vi.fn(() => importDetailResponse()),
+    recoverImports: vi.fn(async () => ({
+      examined: 0,
+      applied: 0,
+      terminalBlocked: 0,
+      retryableFailures: 0,
+      cleanedExpiredLeases: 0,
+    })),
   };
 }
 
@@ -344,6 +460,86 @@ function validCreate() {
     requireGitIdentity: false,
     acceptedProducerVersions: ["synthetic-codex.v1"],
   };
+}
+
+function validImportPlanRequest() {
+  return {
+    workspaceId: "workspace-1",
+    sourceId: "source-1",
+    scanId: "scan-1",
+    selectedItemIds: ["item-1"],
+    expectedRevision: 1,
+  };
+}
+
+function validImportApplyRequest() {
+  return {
+    workspaceId: "workspace-1",
+    planId: "plan-1",
+    expectedPlanSha256: "a".repeat(64),
+    idempotencyKey: `external-source-import:v1:${"b".repeat(64)}`,
+  };
+}
+
+function importPlanResponse(): ExternalSourceImportPlanResponse {
+  return {
+    schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
+    idempotencyKey: validImportApplyRequest().idempotencyKey,
+    plan: {
+      schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
+      planId: "plan-1",
+      workspaceId: "workspace-1",
+      sourceId: "source-1",
+      scanId: "scan-1",
+      configRevision: 1,
+      configSha256: "1".repeat(64),
+      manifestSha256: "2".repeat(64),
+      adapterVersions: ["1.0.0"],
+      selectedItemIds: ["item-1"],
+      selectedItemSetSha256: "3".repeat(64),
+      rawSetSha256: "4".repeat(64),
+      rawByteCount: 32,
+      normalizedSetSha256: "5".repeat(64),
+      normalizedByteCount: 24,
+      messageCount: 1,
+      blockerCodes: [],
+      stagingLeaseId: "stage-1",
+      stagingExpiresAt: "2026-07-14T10:30:00.000Z",
+      planSha256: validImportApplyRequest().expectedPlanSha256,
+      createdAt: "2026-07-14T10:00:00.000Z",
+    },
+  };
+}
+
+function importDetailResponse(): ExternalSourceImportDetailResponse {
+  const plan = importPlanResponse().plan;
+  return {
+    schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
+    plan,
+    intent: {
+      schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
+      importId: "import-1",
+      idempotencyKey: validImportApplyRequest().idempotencyKey,
+      workspaceId: plan.workspaceId,
+      sourceId: plan.sourceId,
+      scanId: plan.scanId,
+      planId: plan.planId,
+      configRevision: plan.configRevision,
+      configSha256: plan.configSha256,
+      manifestSha256: plan.manifestSha256,
+      planSha256: plan.planSha256,
+      selectedItemSetSha256: plan.selectedItemSetSha256,
+      adapterVersions: plan.adapterVersions,
+      requestedByActorId: "operator:request",
+      requestSha256: "6".repeat(64),
+      admittedAt: "2026-07-14T10:01:00.000Z",
+    },
+    items: [],
+  };
+}
+
+function importApplyResponse(): ExternalSourceImportApplyResponse {
+  return { ...importDetailResponse(), applyDisposition: "created" };
 }
 
 function readHeader(request: FastifyRequest, name: string): string | undefined {

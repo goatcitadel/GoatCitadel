@@ -23,6 +23,7 @@ export const EXTERNAL_SOURCE_LIMITS = Object.freeze({
   selectedItemsPerImport: 100,
   rawBytesPerPlan: 25 * 1024 * 1024,
   normalizedBytesPerImport: 25 * 1024 * 1024,
+  stagingLeaseMs: 30 * 60 * 1000,
   lineageNodes: 10_000,
   lineageDepth: 64,
   defaultPageSize: 50,
@@ -200,6 +201,7 @@ export interface ExternalSourceImportIntent {
   planSha256: string;
   selectedItemSetSha256: string;
   adapterVersions: string[];
+  requestedByActorId: string;
   requestSha256: string;
   admittedAt: string;
 }
@@ -309,6 +311,23 @@ export interface ExternalSourceCatalogListInput {
   limit?: number;
 }
 
+/** Exact dry-run selection. Source identity remains server-owned. */
+export interface ExternalSourceImportPlanInput {
+  workspaceId: string;
+  sourceId: string;
+  scanId: string;
+  selectedItemIds: string[];
+  expectedRevision: number;
+}
+
+/** Retry-safe apply request over one immutable dry-run plan. */
+export interface ExternalSourceImportApplyInput {
+  workspaceId: string;
+  planId: string;
+  expectedPlanSha256: string;
+  idempotencyKey: string;
+}
+
 export interface ExternalSourceScanSummary {
   scanId: string;
   status: ExternalSourceScanRecord["status"];
@@ -347,6 +366,24 @@ export interface ExternalSourceDetailResponse {
   schemaVersion: typeof EXTERNAL_SOURCE_SCHEMA_VERSION;
   source: ExternalSourceRecord;
   latestScan?: ExternalSourceScanSummary;
+}
+
+export interface ExternalSourceImportPlanResponse {
+  schemaVersion: typeof EXTERNAL_SOURCE_SCHEMA_VERSION;
+  plan: ExternalSourceImportPlan;
+  idempotencyKey: string;
+}
+
+export interface ExternalSourceImportDetailResponse {
+  schemaVersion: typeof EXTERNAL_SOURCE_SCHEMA_VERSION;
+  plan: ExternalSourceImportPlan;
+  intent: ExternalSourceImportIntent;
+  items: ExternalSourceImportItem[];
+  settlement?: ExternalSourceImportSettlement;
+}
+
+export interface ExternalSourceImportApplyResponse extends ExternalSourceImportDetailResponse {
+  applyDisposition: "created" | "replayed";
 }
 
 export function normalizeExternalSourceCreateInput(value: unknown): ExternalSourceCreateInput {
@@ -483,6 +520,38 @@ export function normalizeExternalSourceCatalogListInput(value: unknown): Externa
     ...(dispositions ? { dispositions } : {}),
     ...(cursor ? { cursor } : {}),
     ...(limit ? { limit } : {}),
+  };
+}
+
+export function normalizeExternalSourceImportPlanInput(value: unknown): ExternalSourceImportPlanInput {
+  assertRecord(value, "import plan input");
+  assertExactKeys(value, ["workspaceId", "sourceId", "scanId", "selectedItemIds", "expectedRevision"], new Set());
+  if (!Array.isArray(value.selectedItemIds)) throw new Error("External source import selection is invalid.");
+  const selectedItemIds = value.selectedItemIds.map((itemId) => normalizeInputText(itemId, "selectedItemId", 256));
+  if (
+    selectedItemIds.length < 1 ||
+    selectedItemIds.length > EXTERNAL_SOURCE_LIMITS.selectedItemsPerImport ||
+    new Set(selectedItemIds).size !== selectedItemIds.length
+  ) {
+    throw new Error("External source import selection is invalid.");
+  }
+  return {
+    workspaceId: normalizeInputText(value.workspaceId, "workspaceId", 256),
+    sourceId: normalizeInputText(value.sourceId, "sourceId", 256),
+    scanId: normalizeInputText(value.scanId, "scanId", 256),
+    selectedItemIds,
+    expectedRevision: normalizePositiveInteger(value.expectedRevision, "expectedRevision"),
+  };
+}
+
+export function normalizeExternalSourceImportApplyInput(value: unknown): ExternalSourceImportApplyInput {
+  assertRecord(value, "import apply input");
+  assertExactKeys(value, ["workspaceId", "planId", "expectedPlanSha256", "idempotencyKey"], new Set());
+  return {
+    workspaceId: normalizeInputText(value.workspaceId, "workspaceId", 256),
+    planId: normalizeInputText(value.planId, "planId", 256),
+    expectedPlanSha256: normalizeSha256(value.expectedPlanSha256),
+    idempotencyKey: normalizeInputText(value.idempotencyKey, "idempotencyKey", 512),
   };
 }
 
@@ -887,6 +956,7 @@ export function assertExternalSourceImportIntent(value: ExternalSourceImportInte
       "planSha256",
       "selectedItemSetSha256",
       "adapterVersions",
+      "requestedByActorId",
       "requestSha256",
       "admittedAt",
     ],
@@ -900,6 +970,7 @@ export function assertExternalSourceImportIntent(value: ExternalSourceImportInte
     ["sourceId", value.sourceId, 256],
     ["scanId", value.scanId, 256],
     ["planId", value.planId, 256],
+    ["requestedByActorId", value.requestedByActorId, 256],
   ] as const)
     assertText(input, name, max);
   assertPositiveInteger(value.configRevision, "configRevision");
