@@ -102,6 +102,7 @@ export class McpRequesterResolutionError extends Error {
 const profileDiscoveryAuthorityBrand: unique symbol = Symbol("goatcitadel.mcp.profile-discovery-authority");
 const toolCallAuthorityBrand: unique symbol = Symbol("goatcitadel.mcp.tool-call-authority");
 const sealedToolCallProfileBrand: unique symbol = Symbol("goatcitadel.mcp.sealed-tool-call-profile");
+const authorityConstructionToken: unique symbol = Symbol("goatcitadel.mcp.private-authority-construction");
 const profileDiscoveryAuthorities = new WeakSet<object>();
 const toolCallAuthorities = new WeakSet<object>();
 const sealedToolCallProfiles = new WeakSet<object>();
@@ -114,7 +115,11 @@ export interface McpProfileDiscoveryAuthority extends Readonly<McpProfileDiscove
 }
 
 class McpProfileDiscoveryAuthorityValue {
-  public constructor(material: ReturnType<typeof mcpProfileDiscoveryAuthorityHashMaterial>) {
+  public constructor(
+    token: typeof authorityConstructionToken,
+    material: ReturnType<typeof mcpProfileDiscoveryAuthorityHashMaterial>,
+  ) {
+    if (token !== authorityConstructionToken) throw new McpRequesterResolutionError("requester_context_ambiguous");
     Object.assign(this, material, { authoritySha256: digest(material) });
     profileDiscoveryAuthorities.add(this);
     Object.freeze(this);
@@ -160,7 +165,10 @@ function createMcpProfileDiscoveryAuthority(
     const material = mcpProfileDiscoveryAuthorityHashMaterial(
       snapshot as unknown as McpProfileDiscoveryAuthorityHashInput,
     );
-    return new McpProfileDiscoveryAuthorityValue(material) as unknown as McpProfileDiscoveryAuthority;
+    return new McpProfileDiscoveryAuthorityValue(
+      authorityConstructionToken,
+      material,
+    ) as unknown as McpProfileDiscoveryAuthority;
   } catch (error) {
     if (error instanceof McpRequesterResolutionError) throw error;
     throw new McpRequesterResolutionError("requester_context_ambiguous");
@@ -196,7 +204,8 @@ interface McpSealedToolCallProfile extends Readonly<McpSealedToolCallProfileInpu
 }
 
 class McpSealedToolCallProfileValue {
-  public constructor(value: Readonly<McpSealedToolCallProfileInput>) {
+  public constructor(token: typeof authorityConstructionToken, value: Readonly<McpSealedToolCallProfileInput>) {
+    if (token !== authorityConstructionToken) throw new McpRequesterResolutionError("capability_profile_invalid");
     Object.assign(this, value);
     sealedToolCallProfiles.add(this);
     Object.freeze(this);
@@ -270,7 +279,7 @@ function createMcpSealedToolCallProfile(input: McpSealedToolCallProfileInput): M
   } catch {
     throw new McpRequesterResolutionError("capability_profile_invalid");
   }
-  return new McpSealedToolCallProfileValue(value) as unknown as McpSealedToolCallProfile;
+  return new McpSealedToolCallProfileValue(authorityConstructionToken, value) as unknown as McpSealedToolCallProfile;
 }
 
 function assertMcpSealedToolCallProfile(input: unknown): asserts input is McpSealedToolCallProfile {
@@ -304,7 +313,11 @@ export interface McpToolCallAuthority extends Readonly<McpToolCallAuthorityHashI
 }
 
 class McpToolCallAuthorityValue {
-  public constructor(material: ReturnType<typeof mcpToolCallAuthorityHashMaterial>) {
+  public constructor(
+    token: typeof authorityConstructionToken,
+    material: ReturnType<typeof mcpToolCallAuthorityHashMaterial>,
+  ) {
+    if (token !== authorityConstructionToken) throw new McpRequesterResolutionError("requester_context_ambiguous");
     Object.assign(this, material, { authoritySha256: digest(material) });
     toolCallAuthorities.add(this);
     Object.freeze(this);
@@ -389,7 +402,7 @@ function createMcpToolCallAuthority(input: McpToolCallAuthorityInput): McpToolCa
       normalizedToolDefinitionSha256: profile.normalizedToolDefinitionSha256,
       bindingSha256: profile.bindingSha256,
     } as McpToolCallAuthorityHashInput);
-    return new McpToolCallAuthorityValue(material) as unknown as McpToolCallAuthority;
+    return new McpToolCallAuthorityValue(authorityConstructionToken, material) as unknown as McpToolCallAuthority;
   } catch (error) {
     if (error instanceof McpRequesterResolutionError) throw error;
     throw new McpRequesterResolutionError("requester_context_ambiguous");
@@ -563,9 +576,19 @@ export function createMcpEphemeralResolvedConnectionCandidate(
   }
 }
 
-Object.freeze(McpProfileDiscoveryAuthorityValue.prototype);
-Object.freeze(McpToolCallAuthorityValue.prototype);
-Object.freeze(McpSealedToolCallProfileValue.prototype);
+for (const prototype of [
+  McpProfileDiscoveryAuthorityValue.prototype,
+  McpToolCallAuthorityValue.prototype,
+  McpSealedToolCallProfileValue.prototype,
+]) {
+  Object.defineProperty(prototype, "constructor", {
+    value: undefined,
+    writable: false,
+    configurable: false,
+    enumerable: false,
+  });
+  Object.freeze(prototype);
+}
 Object.freeze(McpEphemeralResolvedConnectionCandidateValue.prototype);
 
 export function readMcpEphemeralResolvedConnectionCandidate(input: unknown): McpEphemeralResolvedConnectionInput {
