@@ -11,7 +11,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
 const SCAN_ROOT = path.join(repoRoot, "apps", "mission-control-next", "src");
-const NUMERIC_UTILITY_RE = /\b(?:h|w)-\d+(?:\.\d+)?\b/g;
+// Match standalone `h-<n>` / `w-<n>` sizing utilities only. The leading
+// `(?<![\w-])` guard skips compound utilities such as `min-h-0` or `max-w-64`,
+// which are container-layout classes rather than icon sizing and would
+// otherwise be flagged with misleading "use a Lucide size prop" guidance.
+const NUMERIC_UTILITY_RE = /(?<![\w-])(?:h|w)-\d+(?:\.\d+)?\b/g;
 
 export function findIconSizingViolations(filePath, contents) {
   const violations = [];

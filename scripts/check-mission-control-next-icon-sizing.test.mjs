@@ -21,6 +21,24 @@ test("icon sizing guard rejects numeric utility classes and accepts explicit siz
   assert.deepEqual(violations[0].tokens, ["h-4", "w-4"]);
 });
 
+test("icon sizing guard ignores compound layout utilities", () => {
+  const fixture = [
+    '<div className="min-h-0 max-w-64 min-w-4 max-h-96" />',
+    '<Panel className="max-h-4 min-h-2" />',
+  ].join("\n");
+
+  const violations = findIconSizingViolations("fixture.tsx", fixture);
+  assert.deepEqual(violations, []);
+});
+
+test("icon sizing guard still flags standalone sizing utilities on class lists", () => {
+  const fixture = '<RefreshCw className="mr-2 h-4 w-4 shrink-0" />';
+
+  const violations = findIconSizingViolations("fixture.tsx", fixture);
+  assert.deepEqual(violations.map((violation) => violation.line), [1]);
+  assert.deepEqual(violations[0].tokens, ["h-4", "w-4"]);
+});
+
 test("icon sizing guard scans nested TSX sources", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "gc-icon-sizing-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));

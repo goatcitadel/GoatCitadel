@@ -318,6 +318,10 @@ export function MissionControlNextApp() {
         pushNotification("warning", "Open a Work session before exporting a trust report.", "trust-report");
         return;
       }
+      if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
+        pushNotification("warning", "Clipboard is unavailable in this browser.", "trust-report");
+        return;
+      }
       try {
         const bundle = await fetchRuntimeLifecycleExport({
           sessionId,
