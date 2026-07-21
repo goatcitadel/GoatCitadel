@@ -24,6 +24,10 @@ vi.mock("./chat-turn-dispatch-service.js", () => ({
 
 import { executePreparedAgentChatTurnBackground } from "./chat-turn-dispatch-service.js";
 import { executeDurableChatTurnRun, parseDurableChatTurnPayload } from "./durable-execution-service.js";
+import {
+  computeEffectiveChatTurnRequestMaterialSha256,
+  computeFrozenChatTurnAdmissionMaterialSha256,
+} from "./session-control-service.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -162,7 +166,7 @@ describe("durable Chat routed-context binding", () => {
 
   it("loads the same frozen snapshot on continuation and injects its exact system block once", async () => {
     const fixture = admitRoutedTurn();
-    const run = { ...fixture.run, attemptCount: 1, leaseOwnerId: "worker-1" };
+    const run = { ...fixture.run, status: "running" as const, attemptCount: 1, leaseOwnerId: "worker-1" };
     const preparedTurns: PreparedAgentChatTurn[] = [];
     const prepareAgentChatTurn = vi.fn(async (_sessionId: string, request: ChatSendMessageRequest) => {
       expect((request as ChatSendMessageRequest & { contextRefs?: unknown }).contextRefs).toBeUndefined();
@@ -281,6 +285,23 @@ describe("durable Chat routed-context binding", () => {
 
 function admitRoutedTurn() {
   const prepared = buildPrepared();
+  // HX-411: a capability-profile-bearing prepared turn now carries an immutable
+  // turn-write admission; beginDurableChatRun binds the profile to it.
+  prepared.turnAdmission = {
+    identity: {
+      admissionId: "admission-turn-1",
+      sessionIncarnationId: "incarnation-session-1",
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      aggregateRevision: 1,
+      controllerGeneration: 1,
+      materialSha256: "a".repeat(64),
+    },
+    admittedRequest: routedRequest(),
+    requestActor: { actorKind: "operator", actorId: "operator" },
+    requestClaim: { runtimeOwnerId: "runtime-turn-1", leaseRevision: 1 },
+  } as never;
   const provisionalProfileHash = prepared.capabilityProfile!.hashes.profileHash;
   const provisionalSnapshot = (
     prepared as PreparedAgentChatTurn & {
@@ -321,22 +342,47 @@ function admitRoutedTurn() {
       },
     },
     skillLifecycle: { list: () => [] },
+    sessionMutationAdmissions: {
+      bindCapabilityProfile: ((binding: unknown) => ({ disposition: "created", binding })) as never,
+    },
+    assertTurnAdmissionWrite: () => undefined,
+    bindTurnAdmissionToDurableRun: () => undefined,
     createDurableRun: (input) => {
       events.push("durable-run");
       return runFromCreate(input);
     },
-    buildDurablePayloadRecord: (preparedTurn, input, threadEventType) => ({
-      version: "chat.turn.execute.v1",
-      sessionId: preparedTurn.session.sessionId,
-      turnId: preparedTurn.turnId,
-      userMessageId: preparedTurn.userEventId,
-      assistantMessageId: preparedTurn.assistantMessageId,
-      capabilityProfileId: preparedTurn.capabilityProfile?.profileId,
-      capabilityProfileHash: preparedTurn.capabilityProfile?.hashes.profileHash,
-      branchKind: preparedTurn.branchKind,
-      threadEventType,
-      request: { ...input },
-    }),
+    buildDurablePayloadRecord: (preparedTurn, input, threadEventType, runId) => {
+      // buildDurableRoutedContextPayload strips contextRefs from the request, so
+      // the admission material hashes must be computed from the same stripped
+      // request the parser will reconstruct (content + policyRunId only).
+      const { contextRefs: _contextRefs, ...requestWithoutRefs } = input as Record<string, unknown>;
+      const request = { ...requestWithoutRefs, policyRunId: runId ?? "run-routed-1" };
+      const admission = preparedTurn.turnAdmission!;
+      const admissionMaterialSha256 = computeFrozenChatTurnAdmissionMaterialSha256(request as never);
+      return {
+        version: "chat.turn.execute.v2",
+        admissionId: admission.identity.admissionId,
+        sessionIncarnationId: admission.identity.sessionIncarnationId,
+        admissionMaterialSha256,
+        workspaceId: admission.identity.workspaceId,
+        admissionAggregateRevision: admission.identity.aggregateRevision,
+        admissionControllerGeneration: admission.identity.controllerGeneration,
+        effectiveRequestMaterialSha256: computeEffectiveChatTurnRequestMaterialSha256(
+          admissionMaterialSha256,
+          request as never,
+        ),
+        requestActor: { actorKind: "operator", actorId: "operator" },
+        sessionId: preparedTurn.session.sessionId,
+        turnId: preparedTurn.turnId,
+        userMessageId: preparedTurn.userEventId,
+        assistantMessageId: preparedTurn.assistantMessageId,
+        capabilityProfileId: preparedTurn.capabilityProfile?.profileId,
+        capabilityProfileHash: preparedTurn.capabilityProfile?.hashes.profileHash,
+        branchKind: preparedTurn.branchKind,
+        threadEventType,
+        request,
+      };
+    },
     chatTurnTraces: {
       get: () => {
         throw new NotFoundError({ entity: "chat turn trace", id: prepared.turnId });
@@ -557,6 +603,26 @@ function replayHost(
       chatTurnCapabilityProfiles: { get: vi.fn(() => profile), findByTurn: vi.fn() },
     },
     prepareAgentChatTurn,
+    // HX-411: durable execution reconstructs the immutable turn admission from the
+    // payload and takes a durable claim before dispatch.
+    sessionControlRuntimeOwner: {
+      withDurableClaim: vi.fn(
+        (
+          identity: Record<string, unknown>,
+          admittedRequest: Record<string, unknown>,
+          requestActor: Record<string, unknown>,
+          durableClaim: Record<string, unknown>,
+          systemHeartbeatOccurrence?: Record<string, unknown>,
+        ) => ({
+          identity,
+          admittedRequest,
+          requestActor,
+          durableClaim,
+          ...(systemHeartbeatOccurrence ? { systemHeartbeatOccurrence } : {}),
+        }),
+      ),
+      assertActiveTurnWrite: vi.fn(),
+    },
     registerActiveChatTurnStream: vi.fn(() => ({
       registrationId: `stream-${run.runId}`,
       sessionId: "session-1",

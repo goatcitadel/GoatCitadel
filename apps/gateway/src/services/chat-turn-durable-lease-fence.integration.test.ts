@@ -45,8 +45,26 @@ describe("durable Chat canonical write lease fence", () => {
     });
     const lockFreshActiveLeaseForUpdate = vi.spyOn(storage.durableRuns, "lockFreshActiveLeaseForUpdate");
     const fence = buildDurableChatCanonicalWriteFence(
-      { storage } as ChatTurnDispatchHost,
-      { turnId: "turn-expire-during-write" } as never,
+      // HX-411: the fence asserts the turn's immutable admission is still active
+      // before/after the fenced work. The admission stays active here; only the
+      // durable database lease expires, which is what this test exercises.
+      { storage, sessionControlRuntimeOwner: { assertActiveTurnWrite: vi.fn() } } as unknown as ChatTurnDispatchHost,
+      {
+        turnId: "turn-expire-during-write",
+        turnAdmission: {
+          identity: {
+            admissionId: "admission-expire-during-write",
+            sessionIncarnationId: "incarnation-expire-during-write",
+            workspaceId: "default",
+            sessionId: "session-expired-write",
+            turnId: "turn-expire-during-write",
+            aggregateRevision: 1,
+            controllerGeneration: 1,
+            materialSha256: "a".repeat(64),
+          },
+          requestActor: { actorKind: "operator", actorId: "operator" },
+        },
+      } as never,
       runId,
       {
         streamRegistration: { requireActive: vi.fn() } as never,
@@ -220,6 +238,10 @@ describe("durable Chat canonical write lease fence", () => {
       commsSend: vi.fn(),
       ensureSessionInternalToolGrant: vi.fn(),
       requireExecutedToolResult: vi.fn(),
+      // HX-411: the canonical-write fence asserts the immutable turn admission is
+      // still active. It remains active through the takeover; the durable lease is
+      // what is superseded here.
+      sessionControlRuntimeOwner: { assertActiveTurnWrite: vi.fn() },
     } as unknown as ChatTurnDispatchHost;
     const prepared = {
       session: { sessionId },
@@ -245,6 +267,19 @@ describe("durable Chat canonical write lease fence", () => {
       resolvedGuidance: { globalFilesUsed: [], workspaceFilesUsed: [], truncated: false },
       modelRouterDecision: {},
       userMessage: { messageId: "user-lease-fence" },
+      turnAdmission: {
+        identity: {
+          admissionId: "admission-lease-fence",
+          sessionIncarnationId: "incarnation-lease-fence",
+          workspaceId: "default",
+          sessionId,
+          turnId,
+          aggregateRevision: 1,
+          controllerGeneration: 1,
+          materialSha256: "a".repeat(64),
+        },
+        requestActor: { actorKind: "operator", actorId: "operator" },
+      },
     } as never;
 
     await expect(
