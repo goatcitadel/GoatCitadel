@@ -424,6 +424,33 @@ describe("chat-turn-entry-service loop 20 coverage", () => {
       turnTrace: approvalTrace,
     });
     host.collectCapabilityUpgradeSuggestions = vi.fn(async () => [capabilitySuggestion]) as never;
+    // assertWaitingResponseHasDurableOwner (chat-turn-entry-service.ts:567) fails
+    // closed whenever a waiting response is returned by an admission that still
+    // holds a live requestClaim -- capability-suggestion persistence on an
+    // approval wait is only reachable in production once that claim has been
+    // transferred to a durable run via bindDurableRun (session-control-service.ts:673-678,
+    // invoked from beginDurableChatRun). The durable-owned equivalent of this
+    // exact side-effect sequence (collectCapabilityUpgradeSuggestions +
+    // chatTurnTraces.patch(capabilityUpgradeSuggestions) + recordCapabilityGapFromTrace)
+    // still runs today in chat-turn-stream-service.ts:2472-2507's `approvalRequired`
+    // branch, reached via executePreparedAgentChatTurnBackground once a durable
+    // run owns the turn. Model that durable-owned admission shape here (no
+    // requestClaim) so the guard passes while this test keeps exercising the
+    // response-shaping/persistence logic it was written for.
+    host.sessionControlRuntimeOwner.admitOperatorChatTurn = vi.fn((input) => ({
+      identity: {
+        admissionId: `admission-${input.turnId}`,
+        sessionIncarnationId: "incarnation-1",
+        workspaceId: "default",
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        aggregateRevision: 1,
+        controllerGeneration: 1,
+        materialSha256: computeChatTurnAdmissionMaterialSha256(input.request),
+      },
+      admittedRequest: input.request,
+      requestActor: { actorKind: "operator", actorId: input.actorId },
+    })) as never;
 
     const result = await agentSendChatMessage(host, "session-1", { content: "read the file", mode: "code" });
 
