@@ -252,6 +252,34 @@ describe("SessionControlRuntimeOwner", () => {
       limit: 100,
     });
   });
+
+  it("delegates every controller-protocol operation to the sole control-domain owner unchanged", () => {
+    const methods = [
+      "createExternalRequest",
+      "cancelExternalRequest",
+      "handoff",
+      "heartbeat",
+      "reconnect",
+      "release",
+      "revoke",
+      "getControl",
+      "getDetail",
+      "listControls",
+      "listEvents",
+    ] as const;
+    const service = Object.fromEntries(
+      methods.map((method) => [method, vi.fn(() => `result:${method}`)]),
+    ) as unknown as SessionControlService;
+    const owner = new SessionControlRuntimeOwner(service);
+
+    for (const method of methods) {
+      const command = { marker: method };
+      const result = (owner[method] as (input: unknown) => unknown)(command);
+      expect(result).toBe(`result:${method}`);
+      expect(service[method] as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(command);
+      expect(service[method] as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(1);
+    }
+  });
 });
 
 function authenticatedOperatorInput() {

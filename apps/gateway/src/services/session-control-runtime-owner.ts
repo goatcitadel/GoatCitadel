@@ -204,6 +204,77 @@ export class SessionControlRuntimeOwner {
   ): string[] {
     return this.service.cancelExpiredUnboundTurnAdmissions(input);
   }
+
+  // ---------------------------------------------------------------------------
+  // Controller-protocol business ownership (HX-411). These are stateless thin
+  // pass-throughs to the sole control-domain owner, surfaced on the same runtime
+  // seam the entry/route layers already use for turn admission. They hold no
+  // process-local authority; the service resolves every stored binding.
+  // ---------------------------------------------------------------------------
+
+  public createExternalRequest(
+    command: Parameters<SessionControlService["createExternalRequest"]>[0],
+  ): ReturnType<SessionControlService["createExternalRequest"]> {
+    return this.service.createExternalRequest(command);
+  }
+
+  public cancelExternalRequest(
+    command: Parameters<SessionControlService["cancelExternalRequest"]>[0],
+  ): ReturnType<SessionControlService["cancelExternalRequest"]> {
+    return this.service.cancelExternalRequest(command);
+  }
+
+  public handoff(
+    command: Parameters<SessionControlService["handoff"]>[0],
+  ): ReturnType<SessionControlService["handoff"]> {
+    return this.service.handoff(command);
+  }
+
+  public heartbeat(
+    command: Parameters<SessionControlService["heartbeat"]>[0],
+  ): ReturnType<SessionControlService["heartbeat"]> {
+    return this.service.heartbeat(command);
+  }
+
+  public reconnect(
+    command: Parameters<SessionControlService["reconnect"]>[0],
+  ): ReturnType<SessionControlService["reconnect"]> {
+    return this.service.reconnect(command);
+  }
+
+  public release(
+    command: Parameters<SessionControlService["release"]>[0],
+  ): ReturnType<SessionControlService["release"]> {
+    return this.service.release(command);
+  }
+
+  public revoke(command: Parameters<SessionControlService["revoke"]>[0]): ReturnType<SessionControlService["revoke"]> {
+    return this.service.revoke(command);
+  }
+
+  public getControl(
+    query: Parameters<SessionControlService["getControl"]>[0],
+  ): ReturnType<SessionControlService["getControl"]> {
+    return this.service.getControl(query);
+  }
+
+  public getDetail(
+    query: Parameters<SessionControlService["getDetail"]>[0],
+  ): ReturnType<SessionControlService["getDetail"]> {
+    return this.service.getDetail(query);
+  }
+
+  public listControls(
+    query: Parameters<SessionControlService["listControls"]>[0],
+  ): ReturnType<SessionControlService["listControls"]> {
+    return this.service.listControls(query);
+  }
+
+  public listEvents(
+    query: Parameters<SessionControlService["listEvents"]>[0],
+  ): ReturnType<SessionControlService["listEvents"]> {
+    return this.service.listEvents(query);
+  }
 }
 
 const runtimeOwners = new WeakMap<object, SessionControlRuntimeOwner>();

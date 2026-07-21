@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- HX-411 keeps turn-admission and controller-protocol authority in one audited control-domain owner; routes must not reach storage directly. */
 import { createHash } from "node:crypto";
 import {
   canonicalJsonString,
@@ -5,8 +6,36 @@ import {
   HEARTBEAT_PERMISSION_PROFILE_ID,
   HEARTBEAT_RESTRICTED_PROFILE,
   NotFoundError,
+  ValidationError,
+  normalizeExternalSessionControlCapabilities,
+  normalizeSessionControlTokenHashSha256,
+  parseSessionControlDetailResponse,
+  parseSessionControlHandoffResponse,
+  parseSessionControlHeartbeatResponse,
+  parseSessionControlReconnectResponse,
+  parseSessionControlReleaseResponse,
+  parseSessionControlRequestResponse,
+  parseSessionControlRevokeResponse,
   type ExternalSessionControlCapability,
   type ChatSendMessageRequest,
+  type SessionControlConflictCode,
+  type SessionControlDetailResponse,
+  type SessionControlEventRecord,
+  type SessionControlHandoffInput,
+  type SessionControlHandoffResponse,
+  type SessionControlHeartbeatInput,
+  type SessionControlHeartbeatResponse,
+  type SessionControlListResponse,
+  type SessionControlReconnectInput,
+  type SessionControlReconnectResponse,
+  type SessionControlRecord,
+  type SessionControlReleaseInput,
+  type SessionControlReleaseResponse,
+  type SessionControlRequestInput,
+  type SessionControlRequestRecord,
+  type SessionControlRequestResponse,
+  type SessionControlRevokeInput,
+  type SessionControlRevokeResponse,
 } from "@goatcitadel/contracts";
 import type {
   HeartbeatOccurrenceAdmissionRequest,
@@ -166,6 +195,99 @@ export type RecoverSystemHeartbeatOccurrenceOutcome =
   | { disposition: "reclaimed"; admission: ActiveTurnAdmission };
 
 type SessionControlStorage = Pick<Storage, "chatSessionMeta" | "sessionControls" | "sessionMutationAdmissions">;
+
+/**
+ * The authenticated local operator resolved by the control-plane route. The
+ * service never derives operator authority from a Chat request body.
+ */
+export interface SessionControlOperatorActor {
+  readonly actorKind: "operator";
+  readonly actorId: string;
+}
+
+/**
+ * The authenticated `session_control_client` companion resolved by the route.
+ * `clientInstanceId` is a client-chosen instance identifier the route presents
+ * from the signed request; every other field is an authenticated stored binding.
+ * No secret material is carried here: the presented control-token hash arrives
+ * as an explicit per-command argument, and a request's client-generated hash
+ * arrives in its bounded input body.
+ */
+export interface SessionControlExternalCompanionActor {
+  readonly actorKind: "external_companion";
+  readonly companionSessionId: string;
+  readonly deviceGrantId: string;
+  readonly clientInstanceId: string;
+  readonly principalPurpose: "session_control_client";
+}
+
+export type SessionControlProtocolActor = SessionControlOperatorActor | SessionControlExternalCompanionActor;
+
+export interface CreateExternalSessionControlCommand {
+  actor: SessionControlExternalCompanionActor;
+  sessionId: string;
+  correlationId: string;
+  input: SessionControlRequestInput;
+}
+
+export interface HandoffSessionControlCommand {
+  actor: SessionControlOperatorActor;
+  sessionId: string;
+  correlationId: string;
+  input: SessionControlHandoffInput;
+}
+
+interface ExternalControllerProtocolCommand {
+  actor: SessionControlExternalCompanionActor;
+  sessionId: string;
+  correlationId: string;
+  /** Lowercase SHA-256 of the plaintext control secret presented in the dedicated header. */
+  presentedTokenHashSha256: string;
+}
+
+export interface HeartbeatSessionControlCommand extends ExternalControllerProtocolCommand {
+  input: SessionControlHeartbeatInput;
+}
+
+export interface ReconnectSessionControlCommand extends ExternalControllerProtocolCommand {
+  input: SessionControlReconnectInput;
+}
+
+export interface ReleaseSessionControlCommand extends ExternalControllerProtocolCommand {
+  input: SessionControlReleaseInput;
+}
+
+export interface RevokeSessionControlCommand {
+  actor: SessionControlOperatorActor;
+  sessionId: string;
+  correlationId: string;
+  input: SessionControlRevokeInput;
+}
+
+export interface CancelExternalSessionControlRequestCommand {
+  actor: SessionControlOperatorActor;
+  sessionId: string;
+  correlationId: string;
+  requestId: string;
+  idempotencyKey: string;
+}
+
+export interface ReadSessionControlQuery {
+  actor: SessionControlProtocolActor;
+  sessionId: string;
+}
+
+export interface ListSessionControlsQuery {
+  actor: SessionControlOperatorActor;
+  workspaceId: string;
+  limit?: number;
+}
+
+export interface ListSessionControlEventsQuery {
+  actor: SessionControlProtocolActor;
+  sessionId: string;
+  limit?: number;
+}
 
 /**
  * Stateless Gateway domain boundary over the durable session-control stores.
@@ -511,6 +633,321 @@ export class SessionControlService {
   }): string[] {
     return this.storage.sessionMutationAdmissions.cancelExpiredUnboundTurnAdmissions(input).cancelledAdmissionIds;
   }
+
+  // ---------------------------------------------------------------------------
+  // Controller-protocol business ownership (HX-411).
+  //
+  // These methods are the sole control-domain authorization API. Each resolves
+  // the immutable stored workspace binding from session metadata (never a body),
+  // gates the authenticated actor kind and principal purpose before any storage
+  // mutation, validates capability material at the boundary, and maps the durable
+  // CAS outcome into a content-free contract response. The storage layer owns
+  // every generation/token/binding/lease CAS check and serializes each op through
+  // one aggregate-revision lock; no database transaction is held here across
+  // provider, tool, command, filesystem, or stream work. Controller-protocol ops
+  // carry no message content, so there is no structured-input digest to compute:
+  // the canonical send digest remains owned by the turn-admission path above and
+  // is reused unchanged when external send is later wired.
+  // ---------------------------------------------------------------------------
+
+  public createExternalRequest(command: CreateExternalSessionControlCommand): SessionControlRequestResponse {
+    const actor = requireExternalCompanionActor(command.actor);
+    const capabilities = normalizeCapabilitySet(command.input.capabilities);
+    if (command.input.clientInstanceId !== actor.clientInstanceId) {
+      throw sessionControlConflict(
+        "SESSION_CONTROL_PRINCIPAL_PURPOSE_DENIED",
+        "The request client instance does not match the authenticated companion.",
+      );
+    }
+    const { workspaceId } = this.resolveSessionWorkspace(command.sessionId);
+    const outcome = this.storage.sessionControls.createExternalRequest({
+      workspaceId,
+      sessionId: command.sessionId,
+      companionSessionId: actor.companionSessionId,
+      deviceGrantId: actor.deviceGrantId,
+      clientInstanceId: actor.clientInstanceId,
+      principalPurpose: "session_control_client",
+      expectedGeneration: command.input.expectedGeneration,
+      tokenHashSha256: command.input.tokenHashSha256,
+      capabilities,
+      idempotencyKey: command.input.idempotencyKey,
+      correlationId: command.correlationId,
+    });
+    return parseSessionControlRequestResponse({ request: outcome.request });
+  }
+
+  public handoff(command: HandoffSessionControlCommand): SessionControlHandoffResponse {
+    const actor = requireOperatorControlActor(command.actor);
+    const effectiveCapabilities = normalizeCapabilitySet(command.input.effectiveCapabilities);
+    const { workspaceId } = this.resolveSessionWorkspace(command.sessionId);
+    const outcome = this.storage.sessionControls.handoff({
+      workspaceId,
+      sessionId: command.sessionId,
+      requestId: command.input.requestId,
+      expectedGeneration: command.input.expectedGeneration,
+      effectiveCapabilities,
+      operatorActorId: actor.actorId,
+      idempotencyKey: command.input.idempotencyKey,
+      correlationId: command.correlationId,
+    });
+    return parseSessionControlHandoffResponse({ request: outcome.request, control: outcome.control });
+  }
+
+  public heartbeat(command: HeartbeatSessionControlCommand): SessionControlHeartbeatResponse {
+    const actor = requireExternalCompanionActor(command.actor);
+    const tokenHashSha256 = normalizePresentedControlToken(command.presentedTokenHashSha256);
+    const { workspaceId } = this.resolveSessionWorkspace(command.sessionId);
+    const outcome = this.storage.sessionControls.heartbeat({
+      workspaceId,
+      sessionId: command.sessionId,
+      companionSessionId: actor.companionSessionId,
+      deviceGrantId: actor.deviceGrantId,
+      clientInstanceId: actor.clientInstanceId,
+      principalPurpose: "session_control_client",
+      expectedGeneration: command.input.expectedGeneration,
+      tokenHashSha256,
+      idempotencyKey: command.input.idempotencyKey,
+      correlationId: command.correlationId,
+    });
+    return parseSessionControlHeartbeatResponse({ generation: outcome.control.generation, control: outcome.control });
+  }
+
+  public reconnect(command: ReconnectSessionControlCommand): SessionControlReconnectResponse {
+    const actor = requireExternalCompanionActor(command.actor);
+    const tokenHashSha256 = normalizePresentedControlToken(command.presentedTokenHashSha256);
+    const { workspaceId } = this.resolveSessionWorkspace(command.sessionId);
+    const outcome = this.storage.sessionControls.reconnect({
+      workspaceId,
+      sessionId: command.sessionId,
+      companionSessionId: actor.companionSessionId,
+      deviceGrantId: actor.deviceGrantId,
+      clientInstanceId: actor.clientInstanceId,
+      principalPurpose: "session_control_client",
+      expectedGeneration: command.input.expectedGeneration,
+      tokenHashSha256,
+      newTokenHashSha256: command.input.newTokenHashSha256,
+      idempotencyKey: command.input.idempotencyKey,
+      correlationId: command.correlationId,
+    });
+    return parseSessionControlReconnectResponse({
+      supersededGeneration: command.input.expectedGeneration,
+      control: outcome.control,
+    });
+  }
+
+  public release(command: ReleaseSessionControlCommand): SessionControlReleaseResponse {
+    const actor = requireExternalCompanionActor(command.actor);
+    const tokenHashSha256 = normalizePresentedControlToken(command.presentedTokenHashSha256);
+    const { workspaceId } = this.resolveSessionWorkspace(command.sessionId);
+    const outcome = this.storage.sessionControls.release({
+      workspaceId,
+      sessionId: command.sessionId,
+      companionSessionId: actor.companionSessionId,
+      deviceGrantId: actor.deviceGrantId,
+      clientInstanceId: actor.clientInstanceId,
+      principalPurpose: "session_control_client",
+      expectedGeneration: command.input.expectedGeneration,
+      tokenHashSha256,
+      idempotencyKey: command.input.idempotencyKey,
+      correlationId: command.correlationId,
+    });
+    return parseSessionControlReleaseResponse({
+      releasedGeneration: command.input.expectedGeneration,
+      control: outcome.control,
+    });
+  }
+
+  public revoke(command: RevokeSessionControlCommand): SessionControlRevokeResponse {
+    const actor = requireOperatorControlActor(command.actor);
+    const { workspaceId } = this.resolveSessionWorkspace(command.sessionId);
+    if (command.input.target === "request") {
+      const outcome = this.storage.sessionControls.cancelExternalRequest({
+        workspaceId,
+        sessionId: command.sessionId,
+        requestId: command.input.requestId,
+        operatorActorId: actor.actorId,
+        idempotencyKey: command.input.idempotencyKey,
+        correlationId: command.correlationId,
+      });
+      return parseSessionControlRevokeResponse({ target: "request", request: outcome.request });
+    }
+    const outcome = this.storage.sessionControls.revoke({
+      workspaceId,
+      sessionId: command.sessionId,
+      expectedGeneration: command.input.expectedGeneration,
+      mode: command.input.mode,
+      operatorActorId: actor.actorId,
+      idempotencyKey: command.input.idempotencyKey,
+      correlationId: command.correlationId,
+    });
+    return parseSessionControlRevokeResponse({
+      target: "current_controller",
+      revokedGeneration: command.input.expectedGeneration,
+      mode: command.input.mode,
+      control: outcome.control,
+    });
+  }
+
+  public cancelExternalRequest(command: CancelExternalSessionControlRequestCommand): SessionControlRequestRecord {
+    const actor = requireOperatorControlActor(command.actor);
+    const { workspaceId } = this.resolveSessionWorkspace(command.sessionId);
+    const outcome = this.storage.sessionControls.cancelExternalRequest({
+      workspaceId,
+      sessionId: command.sessionId,
+      requestId: command.requestId,
+      operatorActorId: actor.actorId,
+      idempotencyKey: command.idempotencyKey,
+      correlationId: command.correlationId,
+    });
+    return outcome.request;
+  }
+
+  public getControl(query: ReadSessionControlQuery): SessionControlRecord {
+    const { workspaceId } = this.resolveSessionWorkspace(query.sessionId);
+    const control = this.storage.sessionControls.getControl(workspaceId, query.sessionId);
+    if (query.actor.actorKind === "operator") return control;
+    const actor = requireExternalCompanionActor(query.actor);
+    if (!isCompanionBoundController(control, actor)) {
+      this.requireCompanionPendingRequest(workspaceId, query.sessionId, actor);
+    }
+    return control;
+  }
+
+  public getDetail(query: ReadSessionControlQuery): SessionControlDetailResponse {
+    const { workspaceId } = this.resolveSessionWorkspace(query.sessionId);
+    const detail = this.storage.sessionControls.getDetail(workspaceId, query.sessionId);
+    if (query.actor.actorKind === "operator") return detail;
+    const actor = requireExternalCompanionActor(query.actor);
+    if (isCompanionBoundController(detail.control, actor)) return detail;
+    const ownPending =
+      detail.control.ownerKind === "operator"
+        ? detail.pendingRequests.filter(
+            (request) =>
+              request.companionSessionId === actor.companionSessionId &&
+              request.clientInstanceId === actor.clientInstanceId,
+          )
+        : [];
+    if (ownPending.length === 0) {
+      throw sessionControlConflict("SESSION_CONTROL_CAPABILITY_DENIED", "Session control read is denied.");
+    }
+    return parseSessionControlDetailResponse({ control: detail.control, pendingRequests: ownPending });
+  }
+
+  public listControls(query: ListSessionControlsQuery): SessionControlListResponse {
+    requireOperatorControlActor(query.actor);
+    return this.storage.sessionControls.listControls(query.workspaceId, query.limit);
+  }
+
+  public listEvents(query: ListSessionControlEventsQuery): SessionControlEventRecord[] {
+    const { workspaceId } = this.resolveSessionWorkspace(query.sessionId);
+    if (query.actor.actorKind !== "operator") {
+      const actor = requireExternalCompanionActor(query.actor);
+      const control = this.storage.sessionControls.getControl(workspaceId, query.sessionId);
+      const hasReadCapability =
+        control.ownerKind === "external_companion" && control.capabilities.some((capability) => capability === "read");
+      if (!isCompanionBoundController(control, actor) || !hasReadCapability) {
+        throw sessionControlConflict("SESSION_CONTROL_CAPABILITY_DENIED", "Session control event read is denied.");
+      }
+    }
+    return this.storage.sessionControls.listEvents(
+      workspaceId,
+      query.sessionId,
+      query.limit === undefined ? {} : { limit: query.limit },
+    );
+  }
+
+  private resolveSessionWorkspace(sessionId: string): { workspaceId: string } {
+    const meta = this.storage.chatSessionMeta.get(sessionId);
+    if (!meta) {
+      throw new NotFoundError({ entity: "Chat session", id: sessionId });
+    }
+    return { workspaceId: meta.workspaceId };
+  }
+
+  private requireCompanionPendingRequest(
+    workspaceId: string,
+    sessionId: string,
+    actor: SessionControlExternalCompanionActor,
+  ): void {
+    const detail = this.storage.sessionControls.getDetail(workspaceId, sessionId);
+    const hasPending =
+      detail.control.ownerKind === "operator" &&
+      detail.pendingRequests.some(
+        (request) =>
+          request.companionSessionId === actor.companionSessionId &&
+          request.clientInstanceId === actor.clientInstanceId,
+      );
+    if (!hasPending) {
+      throw sessionControlConflict("SESSION_CONTROL_CAPABILITY_DENIED", "Session control read is denied.");
+    }
+  }
+}
+
+function sessionControlConflict(code: SessionControlConflictCode, message: string): ConflictError {
+  return new ConflictError({ code: "STATE_CONFLICT", message, details: { sessionControlCode: code } });
+}
+
+function requireOperatorControlActor(actor: SessionControlProtocolActor): SessionControlOperatorActor {
+  if (actor.actorKind !== "operator") {
+    throw sessionControlConflict(
+      "SESSION_CONTROL_PRINCIPAL_PURPOSE_DENIED",
+      "Session control operator authority is required for this operation.",
+    );
+  }
+  const actorId = actor.actorId.trim();
+  if (!actorId) {
+    throw new ValidationError({ field: "actorId", message: "Session control operator identity is required." });
+  }
+  return { actorKind: "operator", actorId };
+}
+
+function requireExternalCompanionActor(actor: SessionControlProtocolActor): SessionControlExternalCompanionActor {
+  if (actor.actorKind !== "external_companion" || actor.principalPurpose !== "session_control_client") {
+    throw sessionControlConflict(
+      "SESSION_CONTROL_PRINCIPAL_PURPOSE_DENIED",
+      "Session control principal purpose is denied.",
+    );
+  }
+  const companionSessionId = actor.companionSessionId.trim();
+  const deviceGrantId = actor.deviceGrantId.trim();
+  const clientInstanceId = actor.clientInstanceId.trim();
+  if (!companionSessionId || !deviceGrantId || !clientInstanceId) {
+    throw new ValidationError({ message: "Session control companion identity is incomplete." });
+  }
+  return {
+    actorKind: "external_companion",
+    companionSessionId,
+    deviceGrantId,
+    clientInstanceId,
+    principalPurpose: "session_control_client",
+  };
+}
+
+function normalizeCapabilitySet(input: unknown): ExternalSessionControlCapability[] {
+  try {
+    return [...normalizeExternalSessionControlCapabilities(input)];
+  } catch {
+    throw new ValidationError({ field: "capabilities", message: "Session control capability set is invalid." });
+  }
+}
+
+function normalizePresentedControlToken(presented: string): string {
+  try {
+    return normalizeSessionControlTokenHashSha256(presented);
+  } catch {
+    throw sessionControlConflict("SESSION_CONTROL_TOKEN_INVALID", "Session control token is invalid.");
+  }
+}
+
+function isCompanionBoundController(
+  control: SessionControlRecord,
+  actor: SessionControlExternalCompanionActor,
+): boolean {
+  return (
+    control.ownerKind === "external_companion" &&
+    control.boundExternalController.companionSessionId === actor.companionSessionId &&
+    control.boundExternalController.clientInstanceId === actor.clientInstanceId
+  );
 }
 
 function assertCanonicalSystemHeartbeatRequest(
