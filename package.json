@@ -132,6 +132,7 @@
   "pnpm": {
     "overrides": {
       "@webgpu/types": "link:vendor/webgpu-types-stub",
+      "body-parser@^2.0.0": "2.3.0",
       "brace-expansion@^2.0.2": "2.1.2",
       "brace-expansion@^5.0.0": "5.0.7",
       "dompurify": "3.4.11",
@@ -148,7 +149,7 @@
       "ws@^8.0.0": "8.21.0",
       "@babel/core@^7.0.0": "7.29.6",
       "js-yaml@^4.0.0": "4.3.0",
-      "protobufjs@^7.0.0": "7.6.3",
+      "protobufjs@^7.0.0": "7.6.5",
       "vite@^6.0.0": "6.4.3"
     }
   },
