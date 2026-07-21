@@ -1,6 +1,6 @@
 # GoatCitadel 1.0 Release Surface Scope
 
-Last updated: 2026-06-01
+Last updated: 2026-07-14
 
 This table freezes the visible Mission Control Next `1.0` route surface after the final release-readiness promotion. The canonical route list is [apps/mission-control-next/src/app/route-model.ts](../apps/mission-control-next/src/app/route-model.ts); surface and visual verification consume [scripts/verification/lib/release-surface-manifest.mjs](../scripts/verification/lib/release-surface-manifest.mjs).
 
@@ -19,6 +19,7 @@ Status meanings:
 | `/library/skills` | `ship` | Review skill activation posture and lifecycle evidence. |
 | `/library/capabilities` | `ship` | Inspect capability availability, degraded posture, and callable/inspectable truth. |
 | `/library/memory` | `ship` | Route memory lifecycle through `MemoryLifecycleService` with operator provenance. |
+| `/library/journey` | `experimental` | Inspect the currently captured read-only skill-learning and candidate-governance timeline; incomplete producer coverage is labeled and no mutation or promotion is available. |
 | `/library/knowledge` | `ship` | Inspect knowledge sources with source visibility and provenance links. |
 | `/library/notes` | `ship` | Capture workspace-scoped notes, checklists, reminders, and follow-up state outside learned-memory promotion. |
 | `/library/communications` | `ship` | Inspect mail, agenda, contacts, and approval-gated drafts without storing raw credentials or sending without approval. |
@@ -32,6 +33,7 @@ Status meanings:
 | `/library/citadel-council` | `ship` | Inspect the agents seated in the Citadel by reference to the agents catalog. |
 | `/library/citadel-blueprint` | `ship` | Export the active Citadel as a secret-free Blueprint, or validate and import one. |
 | `/library/citadel-vault` | `ship` | Store, reveal, and delete Citadel secrets sealed at rest under a per-Citadel keychain key. |
+| `/ops/boards` | `ship` | Create, select, edit, archive, and restore trusted layouts composed from five compiled Ops summaries; each widget reloads its canonical source and the saved layout is never runtime authority. |
 | `/ops/activity` | `ship` | Inspect retained events and Ops attention signals. |
 | `/ops/sessions` | `ship` | Inspect session timelines, summaries, and operator evidence. |
 | `/ops/schedules` | `ship` | Review scheduler posture and primary governed-work actions. |

@@ -31,6 +31,7 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
     writeMissionControlNextManualProofChecklist,
   } = deps;
   const verificationTarget = resolveVerificationTargetContext();
+  const visualOperatorToken = "verification-visual-regression-operator-token";
   const updateBaselines = maybeParseBool(options.updateBaselines, false);
   const scenarioLane = updateBaselines ? "visual-rebaseline" : "visual-regression";
   const scenarioTitleSuffix = updateBaselines ? "baseline refresh" : "baseline renders";
@@ -52,6 +53,9 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
     gatewayMode: "built",
     uiMode: "preview",
     gatewayEnv: {
+      GOATCITADEL_AUTH_MODE: "token",
+      GOATCITADEL_AUTH_TOKEN: visualOperatorToken,
+      GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS: "true",
       GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
       GOATCITADEL_CODE_MODE_SANDBOX_REQUIRED: "false",
       GOATCITADEL_MESH_NODE_ID: "build-main",
@@ -98,9 +102,12 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
                 const trace = await startBrowserTrace(context, { page, slug: artifactSlug });
                 let artifacts;
                 try {
-                  await page.goto(buildVerificationUiUrl(stack.uiUrl, resolveVisualRouteHref(route, variant, fixture)), {
-                    waitUntil: "domcontentloaded",
-                  });
+                  await page.goto(
+                    buildVerificationUiUrl(stack.uiUrl, resolveVisualRouteHref(route, variant, fixture)),
+                    {
+                      waitUntil: "domcontentloaded",
+                    },
+                  );
                   try {
                     await waitForVerificationRouteReady(
                       page,
@@ -220,7 +227,6 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
   } finally {
     await stopVerificationStack(stack);
   }
-
 }
 
 function formatBrowserFailure(error) {

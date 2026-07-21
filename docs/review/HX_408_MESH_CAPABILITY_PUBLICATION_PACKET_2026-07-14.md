@@ -1,11 +1,11 @@
 # HX-408 Governed Mesh Capability Publication Packet
 
 Date: 2026-07-14
-Status: frozen architecture contract; SQLite 168 / PostgreSQL 110 reserved
+Status: durable contracts/storage committed at SQLite 168 / PostgreSQL 110, with workspace-scoped node admission committed at SQLite 169 / PostgreSQL 111; runtime HOLD
 
 ## Current implementation truth
 
-Mesh join currently stores a bounded node record with an arbitrary `capabilities: string[]` metadata field. The local node advertises `gateway`, `scheduler`, and `orchestration`. Mesh owns join tokens, node heartbeat/status, leases, session ownership, and replication, but it does not own a versioned dynamic capability manifest, inspection/activation lifecycle, callable-catalog projection, remote invocation protocol, or disconnect revocation. The existing string list is descriptive metadata only and must not be treated as callable publication.
+Legacy mesh join still exposes a descriptive `capabilities: string[]`, but current HEAD also contains strict v1 manifest contracts, immutable publication/activation/invocation storage, callable revalidation, and durable node admission. These foundations are production-dark: no authenticated publication owner, exact detached-linkage approval factory, catalog/profile projection, generation-fenced dispatch, HX-306 linkage, publication-specific Ops surface, two-node proof, or named verification lane consumes them. The existing string list remains descriptive metadata only and must not be treated as callable publication.
 
 ## Boundary
 

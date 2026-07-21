@@ -71,3 +71,5 @@ Each owner must prove:
 ## Ship decision
 
 HX-402 remains **PARTIAL / HOLD**. The current slice is safe as an experimental, read-only evidence projection. Approval resolution and effect settlement are now canonical and transactionally coupled, but the timeline is not yet release-bearing because memory, skill state, legacy imports, direct capability lifecycle, improvement rollback/revoke, and HX-413 upstream admission do not all emit canonical events with explicit source/approval requirements.
+
+The live 2026-07-14 producer re-audit and ordered P0-P5 closure plan supersede the remaining-producer inventory in this packet; see `HX_402_REMAINING_PRODUCER_AUDIT_2026-07-14.md`. The important correction is that the approved memory-item producer is implemented but production-dark until canonical routes create a `memory.lifecycle` approval and only its recovered effect invokes the producer.

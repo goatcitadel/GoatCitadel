@@ -1,6 +1,6 @@
 # OpenClaw and Hermes Upstream Delta Refresh - 2026-07-14
 
-Status: source-backed decision packet; no runtime change, migration allocation, staging, or commit
+Status: source-backed decision packet with final upstream closing refresh; no upstream code copied
 
 ## Scope and verified snapshot
 
@@ -22,12 +22,25 @@ Verified on 2026-07-14:
 - Hermes Agent range:
   [`b663d50a6a0101d5214112b24ffe20924af32beb...444b5e96fa2829c29cfd7ecdc84d89f83a1441da`](https://github.com/NousResearch/hermes-agent/compare/b663d50a6a0101d5214112b24ffe20924af32beb...444b5e96fa2829c29cfd7ecdc84d89f83a1441da),
   52 commits.
+- Final OpenClaw closing range:
+  [`c3f08eba177d5b3b1dc0dc3d7c3856ae959ce09e...ed496733075ebad627de0404713cbdf131e14a2c`](https://github.com/openclaw/openclaw/compare/c3f08eba177d5b3b1dc0dc3d7c3856ae959ce09e...ed496733075ebad627de0404713cbdf131e14a2c),
+  347 commits. Latest stable release remained `v2026.7.1`.
+- Final Hermes Agent closing range:
+  [`444b5e96fa2829c29cfd7ecdc84d89f83a1441da...9baa7d4673ce89f09378daa3660530f8bf142708`](https://github.com/NousResearch/hermes-agent/compare/444b5e96fa2829c29cfd7ecdc84d89f83a1441da...9baa7d4673ce89f09378daa3660530f8bf142708),
+  91 commits. Latest stable release remained `v2026.7.7.2`.
+- Post-closing OpenClaw range:
+  [`ed496733075ebad627de0404713cbdf131e14a2c...bb3fae834810cf466be70668b1bce2bd16e31227`](https://github.com/openclaw/openclaw/compare/ed496733075ebad627de0404713cbdf131e14a2c...bb3fae834810cf466be70668b1bce2bd16e31227),
+  110 commits. Latest stable release remained `v2026.7.1`.
+- Post-closing Hermes Agent range:
+  [`9baa7d4673ce89f09378daa3660530f8bf142708...569b912d7d0931c7256e9f5fb326609e9deda377`](https://github.com/NousResearch/hermes-agent/compare/9baa7d4673ce89f09378daa3660530f8bf142708...569b912d7d0931c7256e9f5fb326609e9deda377),
+  18 commits. Latest stable release remained `v2026.7.7.2`.
 - Upstream repositories were inspected read-only at the exact head objects. No checkout, merge, vendor copy, fetch-driven
   repin, or upstream mutation was performed.
-- The latest coordination checkpoint supplied to this review says SQLite `165` / PostgreSQL `107` are live and `166` /
-  `108` are exclusively reserved for `HX-407`. This packet allocates no migration. Later reservations shown in an
-  uncommitted program draft must be reconciled by the program coordinator against the first committed integration SHA
-  before another owner branches or writes.
+- At the post-closing refresh, the committed migration heads are SQLite `172` / PostgreSQL `114`: `165/107` belongs to
+  `HX-413`, `166/108` to `HX-407`, `167/109` to `HX-410`, `168/110` and `169/111` to `HX-408`, `170/112` to HX-501
+  admission, `171/113` to the paired HX-502/HX-504 foundation, and `172/114` to the HX-411 control-generation/auth-coupling
+  foundation. SQLite `173` / PostgreSQL `115` are exclusively reserved for the active combined HX-411 lifecycle and
+  durable mutation-admission tranche, but are not committed. This review allocates no migration.
 
 ## Executive decision
 
@@ -51,6 +64,37 @@ Everything else belongs in an existing owner:
 
 No delta justifies another primary conversation surface, a second backend, direct node shell ownership, direct MCP
 transport from a publisher, or model-authored canonical board state.
+
+The final closing ranges do not justify another standalone parity row. The strongest OpenClaw changes tighten existing
+owners: cloud-worker admission, recovery, target handoff, teardown, provider-route pinning, stream bounds, and error
+sanitization extend `HX-501` through `HX-507`; provider-body deadlines extend `HX-306`/`HX-503`; transcript byte-aware
+compaction and TokenJuice integration extend `HX-302`/`HX-414`; canonical no-proxy, transition-range, oversized-fetch,
+and workspace-export defenses extend `HX-108`, `HX-406`, and `HX-505`; untrusted-plugin rejection extends `HX-413`.
+The strongest Hermes changes likewise extend existing owners: fail-closed cheap-model fallback and zero-chunk/provider
+stream truth extend `HX-306`/`HX-308`/`HX-503`; MCP parameter schemas, null-argument rejection, and resource
+materialization extend `HX-305`/`HX-415`; bounded foreground terminal capture extends `HX-505`; and restored delegation
+completion bound to exact session identity extends `HX-207`/`HX-411`.
+
+## Post-closing refresh decision
+
+The additional 110 OpenClaw commits and 18 Hermes Agent commits do not justify another standalone parity row. They do
+produce one bounded `HX-403` correction and several regression/audit additions to existing owners:
+
+| Upstream signal | GoatCitadel decision |
+|---|---|
+| OpenClaw deferred installed-plugin payload validation ([`6ec5a2e5aa8d`](https://github.com/openclaw/openclaw/commit/6ec5a2e5aa8d02135c47a3e49108c502cea99baf)) | Keep `HX-413`'s immutable inactive candidate, exact-byte staging, and activation-time byte/audit recheck. |
+| OpenClaw explicit active-turn steer/queue preservation ([`5afb1fb381e4`](https://github.com/openclaw/openclaw/commit/5afb1fb381e494d0e99a9a2d52f04b1fcca17c85), [`f3e604211940`](https://github.com/openclaw/openclaw/commit/f3e604211940e0400ce2e6b99a5fa39e76214859)) | Already covered: ordinary active-turn input steers, while explicit `/queue` and `/steer` remain operator-controlled. No second conversation surface or setting owner is added. |
+| OpenClaw cross-key parent handoff and stale rescue-approval fencing ([`80e1509fe839`](https://github.com/openclaw/openclaw/commit/80e1509fe8393010c37f510b6d1e4146628a590e), [`75db23f3fc1d`](https://github.com/openclaw/openclaw/commit/75db23f3fc1d63adb7835ee5ff3e6bc7e0c9dd3d)) | Extend the active `HX-411` lifecycle/admission and late-callback regression matrix; do not create a second session owner. |
+| OpenClaw literal-union/schema and structured tool-result hardening ([`bda52883657b`](https://github.com/openclaw/openclaw/commit/bda52883657bd3d842d5ac416794abe7ad8dd39d), [`2afa9de43853`](https://github.com/openclaw/openclaw/commit/2afa9de4385388a9805db9aad580b713485006cd)) | Existing provider adapters fail closed on malformed/non-object tool arguments and preserve raw literal unions. Audit semantic normalization/quarantine at dynamic MCP/tool-schema ingress under `HX-305`/`HX-415`; no new row or permissive repair is authorized. |
+| OpenClaw attachment MIME conflict, one-shot prepared-memory recall, bounded device-pair notifications, and UTF-8 tail handling | Existing GoatCitadel owners are intentionally stricter or already bounded: mismatched attachment bytes fail closed, turn context is frozen once, approval/device generations fence overlap, and external byte decoders are fatal. Add regressions only where an ingress owner demonstrates a real gap. |
+| OpenClaw cron trigger-script/tool-cap and system-agent/config-write clusters | GoatCitadel has no trigger-script surface and does not add one for parity. Chat delegation, approval authority, Gateway-owned configuration, and human-only persistent writes remain the owners. |
+| Hermes council aggregator reasoning inheritance ([`0a940972f4d8`](https://github.com/NousResearch/hermes-agent/commit/0a940972f4d8d66cb9a9c49543a86232e1937c05)) | Amend `HX-403`: only the canonical C3 synthesis request inherits the acting Chat profile's normalized reasoning effort; C1 advisors do not inherit a global high setting or multiply fanout cost. |
+| Hermes malformed/non-string tool arguments, long-request watchdog, reasoning-only completion, and honest wait status | Existing parsing/rejection, per-attempt stream idle watchdog, one bounded empty/reasoning-only answer recovery, and shared stream status cover the behavior. Keep focused regressions; do not add a second retry or status authority. |
+| Hermes bare-provider/cache-only defaults | GoatCitadel requires operator-visible configured provider/model selection and does not silently fetch a remote catalog to resolve a bare-provider command. |
+
+Hermes commits whose purpose is Grok/xAI support, including [`05d1ca549be0`](https://github.com/NousResearch/hermes-agent/commit/05d1ca549be07af9edbf3dd9998a9c73d0180410)
+and its dependent follow-up [`2fc0e3d1aa63`](https://github.com/NousResearch/hermes-agent/commit/2fc0e3d1aa63f892fce8dc3e31423f4110383e4c), are explicitly excluded. GoatCitadel
+will not add or retain Elon Musk, X, xAI, or Grok provider/integration surfaces. SpaceX remains outside that exclusion.
 
 ## Decision matrix
 

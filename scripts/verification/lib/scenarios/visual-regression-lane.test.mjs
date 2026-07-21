@@ -5,6 +5,7 @@ import { runVisualRegressionLane } from "./visual-regression-lane.mjs";
 
 test("visual regression returns failure evidence when a browser assertion throws", async () => {
   const results = [];
+  let stackOptions;
   const trace = {
     async retain() {
       return "playwright/visual-regression-chat-desktop-dark-trace.zip";
@@ -82,7 +83,10 @@ test("visual regression returns failure evidence when a browser assertion throws
       async setBrowserCorrelation() {},
       async stabilizeVisualRegressionSnapshot() {},
       startBrowserTrace: async () => trace,
-      startVerificationStack: async () => ({ gatewayUrl: "http://gateway", uiUrl: "http://ui" }),
+      startVerificationStack: async (_context, options) => {
+        stackOptions = options;
+        return { gatewayUrl: "http://gateway", uiUrl: "http://ui" };
+      },
       async stopVerificationStack() {},
       async waitForVerificationRouteReady() {},
       async writeMissionControlNextManualProofChecklist() {},
@@ -90,6 +94,10 @@ test("visual regression returns failure evidence when a browser assertion throws
   );
 
   assert.equal(results.length, 1);
+  assert.equal(stackOptions.gatewayEnv.GOATCITADEL_AUTH_MODE, "token");
+  assert.equal(stackOptions.gatewayEnv.GOATCITADEL_AUTH_TOKEN, "verification-visual-regression-operator-token");
+  assert.equal(stackOptions.gatewayEnv.GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS, "true");
+  assert.notEqual(stackOptions.gatewayEnv.GOATCITADEL_AUTH_MODE, "none");
   assert.equal(results[0].status, "failed");
   assert.match(results[0].error, /page errors: render crashed/);
   assert.deepEqual(results[0].artifacts.screenshots, ["screenshots/visual-regression-chat-desktop-dark-failure.png"]);

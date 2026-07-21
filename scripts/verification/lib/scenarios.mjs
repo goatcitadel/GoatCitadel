@@ -63,6 +63,14 @@ import {
   snapshotRestContract,
 } from "./scenarios/api-compatibility-helpers.mjs";
 import { runDurableRecoveryLane as runDurableRecoveryLaneImpl } from "./scenarios/durable-recovery-lane.mjs";
+import { runUsageReconciliationLane as runUsageReconciliationLaneImpl } from "./scenarios/usage-reconciliation-lane.mjs";
+import { runRoutedContextSnapshotsLane as runRoutedContextSnapshotsLaneImpl } from "./scenarios/routed-context-snapshots-lane.mjs";
+import { runModelCouncilLane as runModelCouncilLaneImpl } from "./scenarios/model-council-lane.mjs";
+import { runSkillLearningLane as runSkillLearningLaneImpl } from "./scenarios/skill-learning-lane.mjs";
+import {
+  runReasoningProfilesLane as runReasoningProfilesLaneImpl,
+  runVertexFireworksProvidersLane as runVertexFireworksProvidersLaneImpl,
+} from "./scenarios/provider-reasoning-lanes.mjs";
 import { runSurfaceRegressionLane as runSurfaceRegressionLaneImpl } from "./scenarios/surface-regression-lane.mjs";
 import {
   auditPageAccessibility,
@@ -258,15 +266,11 @@ export async function runOrchestrationPerformanceLane(context) {
     },
     async () => {
       const reportPath = path.join(context.artifactRoot, "perf", "orchestration-performance.json");
-      const result = await runCommand(
-        pnpmCommand(),
-        ["verify:orchestration:perf:raw", "--output", reportPath],
-        {
-          cwd: repoRoot,
-          artifactRoot: path.join(context.artifactRoot, "diagnostics"),
-          logName: "orchestration.performance.runtime-benchmark",
-        },
-      );
+      const result = await runCommand(pnpmCommand(), ["verify:orchestration:perf:raw", "--output", reportPath], {
+        cwd: repoRoot,
+        artifactRoot: path.join(context.artifactRoot, "diagnostics"),
+        logName: "orchestration.performance.runtime-benchmark",
+      });
       return await buildOrchestrationPerformanceScenarioResult(context, result, reportPath);
     },
   );
@@ -2140,6 +2144,30 @@ export async function runDurableRecoveryLane(context, options = {}) {
   return await runDurableRecoveryLaneImpl(context, options, verificationLaneDeps());
 }
 
+export async function runUsageReconciliationLane(context, options = {}) {
+  return await runUsageReconciliationLaneImpl(context, options, verificationLaneDeps());
+}
+
+export async function runRoutedContextSnapshotsLane(context, options = {}) {
+  return await runRoutedContextSnapshotsLaneImpl(context, options, verificationLaneDeps());
+}
+
+export async function runModelCouncilLane(context, options = {}) {
+  return await runModelCouncilLaneImpl(context, options, verificationLaneDeps());
+}
+
+export async function runSkillLearningLane(context, options = {}) {
+  return await runSkillLearningLaneImpl(context, options, verificationLaneDeps());
+}
+
+export async function runVertexFireworksProvidersLane(context, options = {}) {
+  return await runVertexFireworksProvidersLaneImpl(context, options, verificationLaneDeps());
+}
+
+export async function runReasoningProfilesLane(context, options = {}) {
+  return await runReasoningProfilesLaneImpl(context, options, verificationLaneDeps());
+}
+
 export async function runSurfaceRegressionLane(context, options = {}) {
   return await runSurfaceRegressionLaneImpl(context, options, verificationLaneDeps());
 }
@@ -2223,7 +2251,10 @@ export async function runBackupRoundtripLane(context, _options = {}) {
         )}\n`;
 
         await fs.writeFile(configSentinelPath, configSentinelRaw, "utf8");
-        const configFileNames = (await fs.readdir(configDir))
+        // Config generations are part of the minimum recoverable set. Walk the
+        // tree rather than only the split-file root so the proof mutates,
+        // restores, and compares canonical generation receipts byte-for-byte.
+        const configFileNames = (await fs.readdir(configDir, { recursive: true }))
           .filter((entry) => entry.toLowerCase().endsWith(".json"))
           .sort((left, right) => left.localeCompare(right));
         const configSnapshots = await Promise.all(
@@ -3084,16 +3115,12 @@ export async function runUiParityLane(context, _options = {}) {
     assertOk(memoryItems, "read ui-parity memory items");
     const memoryNeedle = "Mission Control Next shell posture";
     if (
-      !memoryItems.body?.items?.some(
-        (item) => item.title === memoryNeedle && item.workspaceId === fixture.workspaceId,
-      )
+      !memoryItems.body?.items?.some((item) => item.title === memoryNeedle && item.workspaceId === fixture.workspaceId)
     ) {
       throw new Error("ui-parity selected-workspace memory read omitted its canonical item");
     }
     if (
-      memoryItems.body?.items?.some(
-        (item) => item.itemId === foreignMemoryItemId || item.title === foreignMemoryNeedle,
-      )
+      memoryItems.body?.items?.some((item) => item.itemId === foreignMemoryItemId || item.title === foreignMemoryNeedle)
     ) {
       throw new Error("ui-parity selected-workspace memory read exposed the foreign item");
     }
@@ -3353,11 +3380,7 @@ export async function runMemoryTruthLane(context, _options = {}) {
         if (item.workspaceId !== memoryWorkspaceId) {
           throw new Error(`memory-truth listed ${item.itemId} without canonical workspace ownership`);
         }
-        if (
-          listedAll.body?.items?.some(
-            (entry) => entry.itemId === foreignItemId || entry.title === foreignTitle,
-          )
-        ) {
+        if (listedAll.body?.items?.some((entry) => entry.itemId === foreignItemId || entry.title === foreignTitle)) {
           throw new Error(`memory-truth exposed foreign workspace item ${foreignTitle}`);
         }
 
@@ -4005,9 +4028,7 @@ export function deriveProviderStatus(payload, { providerConfigured = false } = {
   const error = String(payload?.error ?? "").toLowerCase();
   // Genuinely absent: no credential is present at all. Reporting these as
   // not_configured is correct (keyless CI has nothing to exercise).
-  if (
-    /provider is not configured|missing .*api key|no longer available to new users/.test(error)
-  ) {
+  if (/provider is not configured|missing .*api key|no longer available to new users/.test(error)) {
     return providerConfigured ? "failed" : "not_configured";
   }
   // Configured but rejected: a credential WAS supplied and the provider refused it
@@ -4021,9 +4042,7 @@ export function deriveProviderStatus(payload, { providerConfigured = false } = {
     return "failed";
   }
   if (
-    /json_schema|tool_choice|tools are not available|response_format|protocol|invalid request|bad request/.test(
-      error,
-    )
+    /json_schema|tool_choice|tools are not available|response_format|protocol|invalid request|bad request/.test(error)
   ) {
     return "failed";
   }
@@ -4138,9 +4157,16 @@ async function waitForApprovedDeviceAccessRequest(gatewayUrl, requestId, request
 }
 
 async function pinVisualRegressionProvider(gatewayUrl) {
+  const state = await requestJson(gatewayUrl, "/api/v1/onboarding/state");
+  assertOk(state, "read visual regression settings revision");
+  const expectedRevision = state.body?.settings?.revision;
+  if (!Number.isInteger(expectedRevision) || expectedRevision <= 0) {
+    throw new Error("visual regression settings revision is missing or invalid");
+  }
   const response = await requestJson(gatewayUrl, "/api/v1/onboarding/bootstrap", {
     method: "POST",
     body: {
+      expectedRevision,
       llm: {
         activeProviderId: "openai",
       },
@@ -4989,6 +5015,15 @@ async function runMissionControlNextMobileShellProof(context, input) {
           );
           await setBrowserCorrelation(page, correlationId, input.sessionId);
           await assertNoHorizontalOverflow(page, "mobile chat shell");
+          const buildIdentityChip = page.locator('[data-shell-identity-anchor="pinned"] .mc-next-status-pill').first();
+          await assertLocatorFullyVisible(page, buildIdentityChip, "pinned mobile build identity");
+          const identityScreenshotPath = path.join(
+            context.artifactRoot,
+            "screenshots",
+            `${artifactSlug}-build-identity.png`,
+          );
+          await fs.mkdir(path.dirname(identityScreenshotPath), { recursive: true });
+          await page.screenshot({ path: identityScreenshotPath, fullPage: false });
           const menuButton = page.locator(".mc-next-nav-toggle").first();
           await assertLocatorFullyVisible(page, menuButton, "mobile menu toggle");
           await menuButton.click();
@@ -5014,7 +5049,11 @@ async function runMissionControlNextMobileShellProof(context, input) {
             correlationId,
             logCursor: browserLogCursor,
           });
-          artifacts.screenshots = [relativeToRun(context, drawerScreenshotPath), ...(artifacts.screenshots ?? [])];
+          artifacts.screenshots = [
+            relativeToRun(context, identityScreenshotPath),
+            relativeToRun(context, drawerScreenshotPath),
+            ...(artifacts.screenshots ?? []),
+          ];
           return {
             status: "passed",
             metrics: {

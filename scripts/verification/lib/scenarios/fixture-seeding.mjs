@@ -8,12 +8,7 @@
  * @throws {Error} when required seed or thread identifiers are missing
  */
 export async function seedMissionControlNextFixture(gatewayUrl, options = {}, deps) {
-  const {
-    assertOk,
-    randomUUID,
-    requestJson,
-    stabilizeMissionControlNextFileFixtureMtime,
-  } = deps;
+  const { assertOk, randomUUID, requestJson, stabilizeMissionControlNextFileFixtureMtime } = deps;
   const seedResponse = await requestJson(gatewayUrl, "/api/v1/dev/verification/seed", {
     method: "POST",
     body: {
@@ -252,23 +247,111 @@ export async function seedMissionControlNextFixture(gatewayUrl, options = {}, de
     );
   }
 
-  assertOk(
-    await requestJson(gatewayUrl, "/api/v1/dev/verification/memory-item-seed", {
-      method: "POST",
-      body: {
-        workspaceId,
-        namespace: "mission-control-next",
-        title: "Mission Control Next shell posture",
-        content: "Chat owns conversation, structured agentic work, and governed code-capability context.",
-        metadata: {
-          tags: ["verification", "ui"],
-          source: "verification",
-          sessionId,
+  const opsBoardResponse = await requestJson(gatewayUrl, "/api/v1/ops/boards", {
+    method: "POST",
+    body: {
+      workspaceId,
+      name: "Verification command board",
+      description: "Five compiled operational summaries over canonical verification sources.",
+      placements: [
+        {
+          widgetId: "verification-runtime-truth",
+          kind: "runtime_truth_summary",
+          x: 0,
+          y: 0,
+          width: 4,
+          height: 4,
         },
+        {
+          widgetId: "verification-approval-queue",
+          kind: "approval_queue_summary",
+          x: 4,
+          y: 0,
+          width: 4,
+          height: 4,
+        },
+        {
+          widgetId: "verification-usage-cost",
+          kind: "usage_cost_summary",
+          x: 8,
+          y: 0,
+          width: 4,
+          height: 4,
+        },
+        {
+          widgetId: "verification-agentic-runs",
+          kind: "agentic_run_kanban",
+          x: 0,
+          y: 4,
+          width: 6,
+          height: 4,
+        },
+        {
+          widgetId: "verification-task-status",
+          kind: "task_status_summary",
+          x: 6,
+          y: 4,
+          width: 6,
+          height: 4,
+        },
+      ],
+      idempotencyKey: "mission-control-next-visual-ops-board-v1",
+    },
+  });
+  assertOk(opsBoardResponse, "create mission-control-next verification Ops board");
+  const opsBoardId = opsBoardResponse.body?.boardId;
+  if (!opsBoardId) {
+    throw new Error("mission-control-next verification Ops board did not return boardId");
+  }
+
+  const settingsResponse = await requestJson(gatewayUrl, "/api/v1/settings");
+  assertOk(settingsResponse, "read mission-control-next verification settings");
+  const settingsRevision = settingsResponse.body?.revision;
+  if (!Number.isSafeInteger(settingsRevision) || settingsRevision < 1) {
+    throw new Error("mission-control-next verification settings did not return a valid revision");
+  }
+  const updatedSettingsResponse = await requestJson(gatewayUrl, "/api/v1/settings", {
+    method: "PATCH",
+    body: {
+      expectedRevision: settingsRevision,
+      features: { memoryLifecycleAdminV1Enabled: true },
+    },
+  });
+  assertOk(updatedSettingsResponse, "enable mission-control-next verification memory admin");
+  if (updatedSettingsResponse.body?.features?.memoryLifecycleAdminV1Enabled !== true) {
+    throw new Error("mission-control-next verification memory admin did not become enabled");
+  }
+
+  const memorySeedResponse = await requestJson(gatewayUrl, "/api/v1/dev/verification/memory-item-seed", {
+    method: "POST",
+    body: {
+      workspaceId,
+      namespace: "mission-control-next",
+      title: "Mission Control Next shell posture",
+      content: "Chat owns conversation, structured agentic work, and governed code-capability context.",
+      metadata: {
+        tags: ["verification", "ui"],
+        source: "verification",
+        sessionId,
       },
-    }),
-    "seed mission-control-next memory item",
+    },
+  });
+  assertOk(memorySeedResponse, "seed mission-control-next memory item");
+  const memoryItemId = memorySeedResponse.body?.itemId;
+  if (!memoryItemId) {
+    throw new Error("mission-control-next verification memory seed did not return itemId");
+  }
+  const visibleMemoryResponse = await requestJson(
+    gatewayUrl,
+    `/api/v1/memory/items?workspaceId=${encodeURIComponent(workspaceId)}&status=all&limit=200`,
   );
+  assertOk(visibleMemoryResponse, "read mission-control-next verification memory items");
+  const seededMemoryVisible = visibleMemoryResponse.body?.items?.some(
+    (item) => item?.itemId === memoryItemId && item?.title === "Mission Control Next shell posture",
+  );
+  if (!seededMemoryVisible) {
+    throw new Error("mission-control-next verification memory item was not visible through the operator API");
+  }
 
   const uploadResponse = await requestJson(gatewayUrl, "/api/v1/files/upload", {
     method: "POST",
@@ -309,6 +392,7 @@ export async function seedMissionControlNextFixture(gatewayUrl, options = {}, de
     },
     agentIds: createdAgents.map((agent) => agent?.agentId).filter(Boolean),
     taskIds: tasks.map((task) => task?.taskId).filter(Boolean),
+    opsBoardId,
+    memoryItemId,
   };
-
 }
