@@ -245,6 +245,10 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       const result = await authAdmin.revokeCompanionSession(params.data.sessionId, request.authActorId, {
         correlationId: readHeaderValue(request.headers["x-goatcitadel-correlation-id"]),
       });
+      // Runs AFTER the service's post-commit publishRealtime: if that publish
+      // throws, this is skipped and the Idempotency-Key is revived, so a retry
+      // re-runs the revoke — safe only because revoke is idempotent (COALESCE
+      // guards make re-revoking an already-revoked session a no-op).
       markMutationCommitted(request);
       return reply.send(result);
     } catch (error) {
@@ -292,6 +296,10 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       const grant = await authAdmin.revokeDeviceAccessGrant(params.data.grantId, request.authActorId, {
         correlationId: readHeaderValue(request.headers["x-goatcitadel-correlation-id"]),
       });
+      // Runs AFTER the service's post-commit publishRealtime: if that publish
+      // throws, this is skipped and the Idempotency-Key is revived, so a retry
+      // re-runs the revoke — safe only because revoke is idempotent (COALESCE
+      // guards make re-revoking an already-revoked grant a no-op).
       markMutationCommitted(request);
       return reply.send({ grant });
     } catch (error) {
