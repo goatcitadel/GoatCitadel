@@ -19,4 +19,5 @@ export type SessionControlRouteService = Pick<
   | "revoke"
   | "authorizeExternalSessionRead"
   | "getDetail"
+  | "pageControlEventStream"
 >;

@@ -2,7 +2,12 @@ import { readdirSync, readFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
-import { ConflictError, NotFoundError, type ChatSendMessageRequest } from "@goatcitadel/contracts";
+import {
+  ConflictError,
+  NotFoundError,
+  SESSION_CONTROL_MAX_LIST_ITEMS,
+  type ChatSendMessageRequest,
+} from "@goatcitadel/contracts";
 import type {
   HeartbeatOccurrenceAdmissionRequest,
   HeartbeatOccurrenceRecord,
@@ -785,6 +790,127 @@ describe("SessionControlService", () => {
       NotFoundError,
     );
     expect(unknownGetControl).not.toHaveBeenCalled();
+  });
+});
+
+describe("SessionControlService.pageControlEventStream", () => {
+  const companion = {
+    actorKind: "external_companion" as const,
+    companionSessionId: "companion-session-1",
+    deviceGrantId: "device-grant-1",
+    clientInstanceId: "client-instance-1",
+    principalPurpose: "session_control_client" as const,
+  };
+  const controlEvent = (overrides: Record<string, unknown> = {}) => ({
+    eventId: "sce-1",
+    workspaceId: "workspace-1",
+    sessionId: "session-1",
+    nextGeneration: 2,
+    nextLeaseState: "external_live",
+    reasonCode: "handoff",
+    actorKind: "operator",
+    actorId: "operator:1",
+    correlationId: "corr-1",
+    createdAt: "2026-07-14T10:00:00.000Z",
+    ...overrides,
+  });
+  const boundControl = (capabilities: string[], overrides: Record<string, unknown> = {}) => ({
+    ownerKind: "external_companion",
+    leaseState: "external_live",
+    generation: 4,
+    capabilities,
+    boundExternalController: { companionSessionId: "companion-session-1", clientInstanceId: "client-instance-1" },
+    ...overrides,
+  });
+  const buildService = (options: { control: () => unknown; events?: unknown[] }) => {
+    const listEvents = vi.fn(() => options.events ?? []);
+    const getControl = vi.fn(options.control);
+    const service = new SessionControlService({
+      chatSessionMeta: { get: vi.fn(() => ({ workspaceId: "workspace-1" })) },
+      sessionControls: { getControl, listEvents },
+    } as unknown as Storage);
+    return { service, listEvents, getControl };
+  };
+
+  it("assigns monotonic ordinal cursors, honest watermarks, and the current generation to a bound reader with read", () => {
+    const { service, listEvents } = buildService({
+      control: () => boundControl(["send", "read"], { generation: 5 }),
+      events: [
+        controlEvent({ eventId: "sce-1", reasonCode: "session_initialized", nextGeneration: 1 }),
+        controlEvent({ eventId: "sce-2", reasonCode: "handoff", nextGeneration: 2 }),
+        controlEvent({ eventId: "sce-3", reasonCode: "heartbeat", nextGeneration: 2 }),
+      ],
+    });
+    const page = service.pageControlEventStream({ actor: companion, sessionId: "session-1" });
+    expect(page.events.map((envelope) => envelope.cursor)).toEqual([1, 2, 3]);
+    expect(page.events.map((envelope) => envelope.event.eventId)).toEqual(["sce-1", "sce-2", "sce-3"]);
+    expect(page.lowWatermark).toBe(1);
+    expect(page.highWatermark).toBe(3);
+    expect(page.truncated).toBe(false);
+    expect(page.generation).toBe(5);
+    expect(page.ownerKind).toBe("external_companion");
+    expect(page.leaseState).toBe("external_live");
+    expect(listEvents).toHaveBeenCalledWith("workspace-1", "session-1", { limit: SESSION_CONTROL_MAX_LIST_ITEMS });
+  });
+
+  it("returns only events after the client cursor and honors the page limit", () => {
+    const { service } = buildService({
+      control: () => boundControl(["send", "read"]),
+      events: [
+        controlEvent({ eventId: "sce-1" }),
+        controlEvent({ eventId: "sce-2" }),
+        controlEvent({ eventId: "sce-3" }),
+        controlEvent({ eventId: "sce-4" }),
+      ],
+    });
+    const page = service.pageControlEventStream({ actor: companion, sessionId: "session-1", afterCursor: 2, limit: 1 });
+    expect(page.events.map((envelope) => envelope.cursor)).toEqual([3]);
+    expect(page.highWatermark).toBe(4);
+  });
+
+  it("marks the page truncated when the retained window fills the read cap", () => {
+    const events = Array.from({ length: SESSION_CONTROL_MAX_LIST_ITEMS }, (_, index) =>
+      controlEvent({ eventId: `sce-${index + 1}` }),
+    );
+    const { service } = buildService({ control: () => boundControl(["send", "read"]), events });
+    const page = service.pageControlEventStream({
+      actor: companion,
+      sessionId: "session-1",
+      afterCursor: SESSION_CONTROL_MAX_LIST_ITEMS,
+    });
+    expect(page.truncated).toBe(true);
+    expect(page.highWatermark).toBe(SESSION_CONTROL_MAX_LIST_ITEMS);
+    expect(page.events).toEqual([]);
+  });
+
+  it("fails closed for a send-only controller before any event is read (revoked/unbound readers cannot page)", () => {
+    const { service, listEvents } = buildService({ control: () => boundControl(["send"]), events: [controlEvent()] });
+    let code: string | undefined;
+    try {
+      service.pageControlEventStream({ actor: companion, sessionId: "session-1" });
+    } catch (error) {
+      code = (error as ConflictError & { details?: { sessionControlCode?: string } }).details?.sessionControlCode;
+    }
+    expect(code).toBe("SESSION_CONTROL_CAPABILITY_DENIED");
+    expect(listEvents).not.toHaveBeenCalled();
+  });
+
+  it("admits an operator without a control-binding check and surfaces the current owner/generation, content-free", () => {
+    const { service } = buildService({
+      control: () => ({ ownerKind: "operator", leaseState: "operator_active", generation: 7 }),
+      events: [
+        controlEvent({ reasonCode: "operator_revoke", nextOwnerKind: "operator", nextLeaseState: "operator_active" }),
+      ],
+    });
+    const page = service.pageControlEventStream({
+      actor: { actorKind: "operator", actorId: "op-1" },
+      sessionId: "session-1",
+    });
+    expect(page.ownerKind).toBe("operator");
+    expect(page.generation).toBe(7);
+    expect(page.events).toHaveLength(1);
+    // Content-free: no approval action token or message text can ride the stream.
+    expect(JSON.stringify(page)).not.toMatch(/grat_|"token"|approvalActionToken/);
   });
 });
 

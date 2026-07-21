@@ -281,6 +281,12 @@ export class SessionControlRuntimeOwner {
   ): ReturnType<SessionControlService["listEvents"]> {
     return this.service.listEvents(query);
   }
+
+  public pageControlEventStream(
+    query: Parameters<SessionControlService["pageControlEventStream"]>[0],
+  ): ReturnType<SessionControlService["pageControlEventStream"]> {
+    return this.service.pageControlEventStream(query);
+  }
 }
 
 const runtimeOwners = new WeakMap<object, SessionControlRuntimeOwner>();

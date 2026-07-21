@@ -16,13 +16,14 @@ import type {
   SessionControlRequestInput,
   SessionControlRevokeInput,
 } from "@goatcitadel/contracts";
-import type { SessionControlOperatorActor } from "../services/session-control-service.js";
+import type { SessionControlOperatorActor, SessionControlProtocolActor } from "../services/session-control-service.js";
 import { sendRouteError } from "./_error-handler.js";
 import { sessionParamsSchema } from "./chat.shared.js";
 import {
   readPresentedControlTokenHashSha256,
   resolveSessionControlCompanionActor,
 } from "./session-control-request-context.js";
+import { streamSessionControlEvents } from "./session-control-event-stream.js";
 import { withRouteAccess } from "./route-access.js";
 
 /**
@@ -32,9 +33,10 @@ import { withRouteAccess } from "./route-access.js";
  * header, and shape the command. All authorization (principal purpose, delegated
  * capability vs intrinsic protocol op, token hash, companion binding, liveness,
  * and generation CAS) is owned by `SessionControlService` behind
- * `fastify.services.sessionControl`. The session-scoped realtime event stream
- * (`GET .../control/events/stream`) is intentionally not registered here; it is
- * a later slice.
+ * `fastify.services.sessionControl`. The session-scoped realtime control-event
+ * stream (`GET .../control/events/stream`) shares the same access class and the
+ * same single external-read gate; its SSE mechanics live in
+ * `./session-control-event-stream.js`.
  */
 export function registerSessionControlRoutes(fastify: FastifyInstance): void {
   const companionRoute = withRouteAccess(fastify, "session-control-companion");
@@ -86,6 +88,30 @@ export function registerSessionControlRoutes(fastify: FastifyInstance): void {
       return sendRouteError(reply, error, request.log);
     }
   });
+
+  // GET .../control/events/stream — operator-or-session-control-companion; the
+  // external branch additionally requires delegated `read`. Session/workspace-
+  // filtered, ordered, retained SSE projection of the content-free control-event
+  // log with cursor/replay-gap, bounded unsent buffers, explicit low/high
+  // watermarks, and truthful sent/acknowledged/pending diagnostics. No approval
+  // action token can appear, and the control secret is never read from the URL.
+  fastify.get(
+    "/api/v1/chat/sessions/:sessionId/control/events/stream",
+    operatorOrCompanionRoute,
+    async (request, reply) => {
+      const sessionId = parseSessionId(reply, request);
+      if (sessionId === undefined) {
+        return;
+      }
+      let actor: SessionControlProtocolActor;
+      try {
+        actor = resolveControlReadActor(request);
+      } catch (error) {
+        return sendRouteError(reply, error, request.log);
+      }
+      return streamSessionControlEvents(fastify, request, reply, { sessionId, actor });
+    },
+  );
 
   // POST .../control/handoff — operator only. CASes the exact operator generation
   // plus pending request into one external generation.
