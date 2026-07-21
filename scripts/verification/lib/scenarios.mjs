@@ -67,6 +67,7 @@ import { runUsageReconciliationLane as runUsageReconciliationLaneImpl } from "./
 import { runRoutedContextSnapshotsLane as runRoutedContextSnapshotsLaneImpl } from "./scenarios/routed-context-snapshots-lane.mjs";
 import { runModelCouncilLane as runModelCouncilLaneImpl } from "./scenarios/model-council-lane.mjs";
 import { runSkillLearningLane as runSkillLearningLaneImpl } from "./scenarios/skill-learning-lane.mjs";
+import { runSessionControlLane as runSessionControlLaneImpl } from "./scenarios/session-control-lane.mjs";
 import {
   runReasoningProfilesLane as runReasoningProfilesLaneImpl,
   runVertexFireworksProvidersLane as runVertexFireworksProvidersLaneImpl,
@@ -2158,6 +2159,10 @@ export async function runModelCouncilLane(context, options = {}) {
 
 export async function runSkillLearningLane(context, options = {}) {
   return await runSkillLearningLaneImpl(context, options, verificationLaneDeps());
+}
+
+export async function runSessionControlLane(context, options = {}) {
+  return await runSessionControlLaneImpl(context, options, verificationLaneDeps());
 }
 
 export async function runVertexFireworksProvidersLane(context, options = {}) {

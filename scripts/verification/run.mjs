@@ -28,6 +28,7 @@ import {
   runRoutedContextSnapshotsLane,
   runModelCouncilLane,
   runSkillLearningLane,
+  runSessionControlLane,
   runReasoningProfilesLane,
   runVertexFireworksProvidersLane,
   runFastLane,
@@ -74,6 +75,7 @@ const VALID_LANES = new Set([
   "routed-context-snapshots",
   "model-council",
   "skill-learning",
+  "session-control",
   "providers-vertex-fireworks",
   "reasoning-profiles",
   "accessibility-smoke",
@@ -123,6 +125,7 @@ const REVIEW_LANES = new Set([
   "routed-context-snapshots",
   "model-council",
   "skill-learning",
+  "session-control",
   "providers-vertex-fireworks",
   "reasoning-profiles",
   "accessibility-smoke",
@@ -229,6 +232,8 @@ async function main() {
       await runModelCouncilLane(context, { profile });
     } else if (lane === "skill-learning") {
       await runSkillLearningLane(context, { profile });
+    } else if (lane === "session-control") {
+      await runSessionControlLane(context, { profile });
     } else if (lane === "providers-vertex-fireworks") {
       await runVertexFireworksProvidersLane(context, { profile });
     } else if (lane === "reasoning-profiles") {

@@ -85,6 +85,7 @@
     "verify:routed-context:snapshots": "node scripts/verification/run.mjs routed-context-snapshots",
     "verify:model-council": "node scripts/verification/run.mjs model-council",
     "verify:skill-learning": "node scripts/verification/run.mjs skill-learning",
+    "verify:session-control": "node scripts/verification/run.mjs session-control",
     "verify:providers:vertex-fireworks": "node scripts/verification/run.mjs providers-vertex-fireworks",
     "verify:reasoning:profiles": "node scripts/verification/run.mjs reasoning-profiles",
     "verify:runtime:truth": "node scripts/verification/run.mjs runtime-truth",
