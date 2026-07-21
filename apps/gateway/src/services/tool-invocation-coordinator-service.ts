@@ -1817,6 +1817,33 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
 
   private resolveMcpRuntimeTarget(input: McpInvokeRequest): McpServerRecord | McpInvokeResponse {
     const server = this.host.requireMcpServer(input.serverId);
+    if (resolveMcpServerConnectionMode(server) === "requester_scoped") {
+      // HX-415 precondition routing: a requester-scoped server never joins global
+      // connect/discovery/status/tool state (connectMcpServer fails closed before
+      // any status patch; requester-scoped discovery never writes the global tool
+      // cache). The static-oriented preconditions below — `status === "connected"`,
+      // static OAuth/token readiness, and the global-tool-enabled lookup — are
+      // therefore inapplicable and must NOT gate it, or the app-private requester
+      // branch in executeMcpRuntime is unreachable in production. Authorization
+      // instead converges on that requester branch (which fails closed with
+      // `requester_context_missing` until a server-built dispatch is composed) plus
+      // the capability-scope gate and deny-wins policy already evaluated on the
+      // invoke path. Static safety gates that still apply are kept: a disabled or
+      // quarantined server is blocked. The static path below is left unchanged.
+      if (!server.enabled) {
+        return {
+          ok: false,
+          error: "MCP server is not enabled.",
+        };
+      }
+      if (server.trustTier === "quarantined") {
+        return {
+          ok: false,
+          error: `MCP server ${server.label} is quarantined and cannot execute tools.`,
+        };
+      }
+      return server;
+    }
     if (!server.enabled || server.status !== "connected") {
       return {
         ok: false,

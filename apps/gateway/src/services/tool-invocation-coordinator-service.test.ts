@@ -3590,3 +3590,147 @@ describe("ToolInvocationCoordinatorService requester-scoped MCP seam (HX-415)", 
     expect(invoke).not.toHaveBeenCalled();
   });
 });
+
+describe("requester-scoped MCP target-resolution precondition routing (HX-415)", () => {
+  // Production posture: a requester-scoped server is NEVER connected or
+  // discovered globally (connectMcpServer throws before any status patch, and
+  // requester-scoped discovery never writes the global tool cache). It therefore
+  // stays `status: "disconnected"` with no global tool. The static-oriented
+  // preconditions in resolveMcpRuntimeTarget (connected + global-tool-enabled +
+  // static OAuth readiness) must NOT gate it; the invocation must reach the
+  // app-private requester branch in executeMcpRuntime. (The existing HX-415 seam
+  // fixtures pass only because the shared helper defaults status to "connected"
+  // and registers a global tool — that papers over the reviewer-flagged gate.)
+  function neverConnectedRequesterScopedServer(overrides: Partial<McpServerRecord> = {}): McpServerRecord {
+    return createMcpServer({
+      serverId: "srv-1",
+      transport: "http",
+      connectionMode: "requester_scoped",
+      configurationRevision: 1,
+      status: "disconnected",
+      ...overrides,
+    } as Partial<McpServerRecord>);
+  }
+
+  it("reaches the requester branch for a never-connected server with no global tool (fails closed requester_context_missing, no port)", async () => {
+    const invokeMcpRuntimeTool = vi.fn();
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        requireMcpServer: vi.fn(() => neverConnectedRequesterScopedServer()),
+        // Requester-scoped tools live only in the immutable profile, never the
+        // global catalog.
+        listMcpTools: vi.fn(() => []),
+        invokeMcpRuntimeTool,
+      }),
+    );
+
+    const response = await coordinator.invokeMcpTool({
+      serverId: "srv-1",
+      toolName: "tool.echo",
+      agentId: "operator",
+      sessionId: "session-1",
+      arguments: { value: "hello" },
+    });
+
+    expect(response.ok).toBe(false);
+    // NOT the static "MCP server is not connected." / "tool is not enabled."
+    // precondition rejection — it must converge on the requester fail-closed code.
+    expect(response.reasonCodes).toContain("requester_context_missing");
+    expect(invokeMcpRuntimeTool).not.toHaveBeenCalled();
+  });
+
+  it("routes a never-connected server with no global tool through a composed dispatch (approval-replay path)", async () => {
+    const invokeMcpRuntimeTool = vi.fn();
+    const invoke = vi.fn(async () => ({ ok: true, output: { payload: "scoped" } }));
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        requireMcpServer: vi.fn(() => neverConnectedRequesterScopedServer()),
+        listMcpTools: vi.fn(() => []),
+        invokeMcpRuntimeTool,
+        requesterScopedMcpDispatch: { invoke },
+      }),
+    );
+
+    const response = await coordinator.invokeApprovedMcpRuntime({
+      serverId: "srv-1",
+      toolName: "tool.echo",
+      agentId: "operator",
+      sessionId: "session-1",
+      arguments: { value: "hello" },
+    });
+
+    expect(response).toMatchObject({ ok: true, output: { payload: "scoped" } });
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invokeMcpRuntimeTool).not.toHaveBeenCalled();
+  });
+
+  it("keeps static servers gated on connected: a disconnected static server is blocked and never routed to requester dispatch", async () => {
+    const invokeMcpRuntimeTool = vi.fn();
+    const invoke = vi.fn();
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        // Static server (no connectionMode) that is not connected.
+        requireMcpServer: vi.fn(() => createMcpServer({ status: "disconnected" })),
+        invokeMcpRuntimeTool,
+        requesterScopedMcpDispatch: { invoke },
+      }),
+    );
+
+    const response = await coordinator.invokeMcpTool({
+      serverId: "srv-1",
+      toolName: "tool.echo",
+      agentId: "operator",
+      sessionId: "session-1",
+      arguments: { value: "hello" },
+    });
+
+    expect(response).toMatchObject({ ok: false, error: "MCP server is not connected." });
+    expect(invoke).not.toHaveBeenCalled();
+    expect(invokeMcpRuntimeTool).not.toHaveBeenCalled();
+  });
+
+  it("still blocks a disabled requester-scoped server and never routes it", async () => {
+    const invoke = vi.fn();
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        requireMcpServer: vi.fn(() => neverConnectedRequesterScopedServer({ enabled: false })),
+        listMcpTools: vi.fn(() => []),
+        requesterScopedMcpDispatch: { invoke },
+      }),
+    );
+
+    const response = await coordinator.invokeMcpTool({
+      serverId: "srv-1",
+      toolName: "tool.echo",
+      agentId: "operator",
+      sessionId: "session-1",
+    });
+
+    expect(response.ok).toBe(false);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("still blocks a quarantined requester-scoped server and never routes it", async () => {
+    const invoke = vi.fn();
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        requireMcpServer: vi.fn(() =>
+          neverConnectedRequesterScopedServer({ status: "connected", trustTier: "quarantined" }),
+        ),
+        listMcpTools: vi.fn(() => []),
+        requesterScopedMcpDispatch: { invoke },
+      }),
+    );
+
+    const response = await coordinator.invokeMcpTool({
+      serverId: "srv-1",
+      toolName: "tool.echo",
+      agentId: "operator",
+      sessionId: "session-1",
+    });
+
+    expect(response.ok).toBe(false);
+    expect(response.error).toContain("quarantined");
+    expect(invoke).not.toHaveBeenCalled();
+  });
+});
