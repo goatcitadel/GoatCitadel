@@ -1,3 +1,6 @@
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
@@ -6,9 +9,10 @@ import type {
   SessionControlDetailResponse,
 } from "@goatcitadel/mission-control-shared/api/session-control";
 
-import { runSessionControlCli, type SessionControlCliDeps } from "./session-control-cli.js";
+import { runSessionControlCli, secretDirLocationWarning, type SessionControlCliDeps } from "./session-control-cli.js";
 import {
   controlTokenFingerprint,
+  createFileSessionControlSecretStore,
   hashControlSecretSha256,
   type SessionControlSecretRef,
   type SessionControlSecretStore,
@@ -342,5 +346,42 @@ describe("session-control CLI: ownership guard + errors", () => {
     const missing = makeHarness({ control: operatorControl("sess-1") });
     expect(await runSessionControlCli(["status"], missing.deps)).toBe(2);
     expect(missing.err.join("\n")).toContain("--session");
+  });
+});
+
+describe("session-control CLI: at-rest secret protection", () => {
+  it("invokes the injected owner-only protector with the written secret file path", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "sc-secret-store-"));
+    try {
+      const protectedPaths: string[] = [];
+      const store = createFileSessionControlSecretStore(dir, (filePath) => protectedPaths.push(filePath));
+      const ref: SessionControlSecretRef = { sessionId: "sess-x", clientInstanceId: "cli-x" };
+
+      store.save(ref, "at-rest-secret-value");
+
+      // The injectable ACL/permission step ran against the actual secret file…
+      expect(protectedPaths).toHaveLength(1);
+      const protectedPath = protectedPaths[0] as string;
+      expect(protectedPath.startsWith(dir)).toBe(true);
+      // …after the plaintext was written, and the store round-trips it.
+      expect(readFileSync(protectedPath, "utf8")).toBe("at-rest-secret-value");
+      expect(store.load(ref)).toBe("at-rest-secret-value");
+      store.clear(ref);
+      expect(store.load(ref)).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("warns only when the secret-dir override is outside the home directory", () => {
+    const home = process.platform === "win32" ? "C:\\Users\\sc-test-home" : "/home/sc-test-home";
+    const inside = path.join(home, ".goatcitadel", "session-control-secrets");
+    const outside = process.platform === "win32" ? "C:\\Windows\\Temp\\sc-shared" : "/tmp/sc-shared";
+
+    expect(secretDirLocationWarning(inside, home)).toBeUndefined();
+    const warning = secretDirLocationWarning(outside, home);
+    expect(warning).toBeDefined();
+    expect(warning).toContain("outside your home directory");
+    expect(warning).toContain("may not be owner-protected");
   });
 });

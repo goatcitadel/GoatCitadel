@@ -27,8 +27,8 @@ import {
  * HX-411 governed external session-control CLI. A deliberately thin command
  * layer over the shared, typed, no-store control client. It owns the operator UX:
  * generate a 256-bit control secret locally, submit only its SHA-256 in a signed
- * request, hold the secret in an OS-protected store between invocations, and
- * attach/heartbeat/reconnect/release while showing truthful controller/generation/
+ * request, hold the secret in an owner-restricted local file between invocations,
+ * and attach/heartbeat/reconnect/release while showing truthful controller/generation/
  * lease/reconnect state from the content-free control-status route.
  *
  * The control secret is NEVER accepted as a command argument, printed, logged, or
@@ -329,8 +329,9 @@ Commands:
   release --session <id>           Return control to a new operator generation.
   help                             Show this message.
 
-The control secret is generated locally, held in an OS-protected store, and is
-never accepted as an argument, printed, or logged.`);
+The control secret is generated locally and held in an owner-restricted local file
+(POSIX mode 0600, or a Windows owner-only ACL) under your home directory by default.
+It is never accepted as an argument, printed, or logged.`);
 }
 
 // ---------------------------------------------------------------------------
@@ -410,10 +411,41 @@ function loadCompanionControlCredentialFromEnv(): CompanionControlCredential {
   };
 }
 
-function resolveSecretDir(): string {
+function resolveSecretDir(warn: (line: string) => void = emitStderrLine): string {
   const override = process.env.GOATCITADEL_SESSION_CONTROL_SECRET_DIR?.trim();
-  if (override) return override;
+  if (override) {
+    const warning = secretDirLocationWarning(override, os.homedir());
+    if (warning) warn(warning);
+    return override;
+  }
   return path.join(os.homedir(), ".goatcitadel", "session-control-secrets");
+}
+
+function emitStderrLine(line: string): void {
+  process.stderr.write(`${line}\n`);
+}
+
+/**
+ * Warn (by returning a message) when a secret-directory override sits outside the
+ * user's home directory, where the plaintext secret may not be owner-protected.
+ * Pure and platform-aware (case-insensitive containment on Windows) so it is
+ * deterministically testable. Returns `undefined` when the override is safely
+ * inside the home directory.
+ */
+export function secretDirLocationWarning(dir: string, homeDir: string): string | undefined {
+  if (isWithinDir(dir, homeDir)) return undefined;
+  return (
+    `[session-control] warning: GOATCITADEL_SESSION_CONTROL_SECRET_DIR (${path.resolve(dir)}) is outside your ` +
+    `home directory (${path.resolve(homeDir)}); the stored control secret may not be owner-protected there. ` +
+    `Prefer a path under your home directory.`
+  );
+}
+
+function isWithinDir(candidate: string, parent: string): boolean {
+  const normalize = (value: string): string =>
+    process.platform === "win32" ? path.resolve(value).toLowerCase() : path.resolve(value);
+  const relative = path.relative(normalize(parent), normalize(candidate));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 const invokedAsScript = typeof process.argv[1] === "string" && import.meta.url === pathToFileURL(process.argv[1]).href;
