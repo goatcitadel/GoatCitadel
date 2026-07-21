@@ -1,4 +1,4 @@
-import type { DatabaseCutoverRequest, LlmRuntimeConfig } from "@goatcitadel/contracts";
+import type { CompanionPrincipalPurpose, DatabaseCutoverRequest, LlmRuntimeConfig } from "@goatcitadel/contracts";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { GatewayRouteServices } from "./gateway-route-services.js";
 import { GatewayService } from "./gateway-service.js";
@@ -34,10 +34,18 @@ export interface GatewayRuntimePort {
 
 export interface GatewayAuthValidationPort {
   getOnboardingStartupState(): { completed?: boolean };
-  validateDeviceAccessToken(token: string): { actorId: string; deviceId: string; grantId: string } | undefined;
-  validateCompanionAccessToken(
+  validateDeviceAccessToken(
     token: string,
-  ): { actorId: string; deviceId: string; grantId: string; sessionId: string } | undefined;
+  ): { actorId: string; deviceId: string; grantId: string; principalPurpose: CompanionPrincipalPurpose } | undefined;
+  validateCompanionAccessToken(token: string):
+    | {
+        actorId: string;
+        deviceId: string;
+        grantId: string;
+        sessionId: string;
+        principalPurpose: CompanionPrincipalPurpose;
+      }
+    | undefined;
   verifyCompanionRequestSignature(input: unknown): unknown;
 }
 

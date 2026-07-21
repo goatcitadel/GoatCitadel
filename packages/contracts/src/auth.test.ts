@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   COMPANION_PRINCIPAL_PURPOSES,
+  type CompanionPrincipalPurpose,
   CompanionPrincipalPurposeSchema,
   DEFAULT_COMPANION_PRINCIPAL_PURPOSE,
   DefaultedCompanionPrincipalPurposeSchema,
+  normalizeCompanionPrincipalPurpose,
   type DeviceAccessGrantListResponse,
   type DeviceAccessGrantRecord,
   type DeviceAccessGrantRevokeResponse,
@@ -75,6 +77,7 @@ const AUTH_SHAPE_FREEZE: readonly true[] = [
       | "lastUsedAt"
       | "revokedAt"
       | "metadata"
+      | "principalPurpose"
     >
   >(),
   exactKeys<ExactKeys<CompanionSessionExchangeInput, "signingPublicKeyPem" | "clientName" | "appVersion">>(),
@@ -101,10 +104,14 @@ const AUTH_SHAPE_FREEZE: readonly true[] = [
       | "deviceLabel"
       | "deviceType"
       | "platform"
+      | "principalPurpose"
     >
   >(),
   exactKeys<
-    ExactKeys<CompanionSessionRefreshResponse, keyof CompanionSessionTokenBundle | "contractId" | "grantId" | "actorId">
+    ExactKeys<
+      CompanionSessionRefreshResponse,
+      keyof CompanionSessionTokenBundle | "contractId" | "grantId" | "actorId" | "principalPurpose"
+    >
   >(),
   exactKeys<
     ExactKeys<
@@ -122,6 +129,7 @@ const AUTH_SHAPE_FREEZE: readonly true[] = [
       | "refreshTokenExpiresAt"
       | "signatureAlgorithm"
       | "metadata"
+      | "principalPurpose"
     >
   >(),
   exactKeys<
@@ -179,6 +187,7 @@ type ExpectedCompanionInfo = {
   refreshTokenExpiresAt: string;
   signatureAlgorithm: CompanionSignatureAlgorithm;
   metadata: Record<string, unknown>;
+  principalPurpose: CompanionPrincipalPurpose;
 };
 
 const AUTH_TYPE_FREEZE: readonly true[] = [
@@ -239,6 +248,7 @@ const AUTH_TYPE_FREEZE: readonly true[] = [
         lastUsedAt?: string;
         revokedAt?: string;
         metadata: Record<string, unknown>;
+        principalPurpose: CompanionPrincipalPurpose;
       }
     >
   >(),
@@ -259,13 +269,19 @@ const AUTH_TYPE_FREEZE: readonly true[] = [
         deviceLabel: string;
         deviceType: DeviceAccessRequestDeviceType;
         platform?: string;
+        principalPurpose: CompanionPrincipalPurpose;
       }
     >
   >(),
   exactType<
     ExactType<
       CompanionSessionRefreshResponse,
-      ExpectedCompanionTokenBundle & { contractId: CompanionContractId; grantId: string; actorId: string }
+      ExpectedCompanionTokenBundle & {
+        contractId: CompanionContractId;
+        grantId: string;
+        actorId: string;
+        principalPurpose: CompanionPrincipalPurpose;
+      }
     >
   >(),
   exactType<ExactType<CompanionSessionInfoResponse, ExpectedCompanionInfo>>(),
@@ -322,7 +338,23 @@ describe("companion principal purpose contract", () => {
     if (!result.success) expect(result.error.message).not.toContain(secretPurpose);
   });
 
-  it("keeps every existing auth and companion projection purpose-free", () => {
+  it("normalizes any stored purpose value to one of the two frozen purposes", () => {
+    expect(normalizeCompanionPrincipalPurpose("session_control_client")).toBe("session_control_client");
+    expect(normalizeCompanionPrincipalPurpose("general_companion")).toBe("general_companion");
+    // Anything that is not the exact confined purpose fails safe to the generic
+    // (non-confined) purpose, so a corrupt row can never widen into control.
+    for (const raw of ["", "GENERAL_COMPANION", " session_control_client", "admin", null, undefined, 42, {}, []]) {
+      expect(normalizeCompanionPrincipalPurpose(raw)).toBe("general_companion");
+    }
+    const normalized: CompanionPrincipalPurpose = normalizeCompanionPrincipalPurpose("session_control_client");
+    expect(COMPANION_PRINCIPAL_PURPOSES).toContain(normalized);
+  });
+
+  it("carries the stored purpose on grant/session/exchange/refresh projections while keeping inputs purpose-free", () => {
+    // The freeze arrays are compile-time assertions: every projection that the
+    // HX-411 auth flow carries purpose through now includes `principalPurpose`,
+    // while the create/exchange/refresh INPUTS stay purpose-free so no request
+    // can select or broaden the stored, server-owned purpose.
     expect(AUTH_SHAPE_FREEZE.every(Boolean)).toBe(true);
     expect(AUTH_TYPE_FREEZE.every(Boolean)).toBe(true);
 

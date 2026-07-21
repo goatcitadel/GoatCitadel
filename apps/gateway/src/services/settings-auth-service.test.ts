@@ -1520,6 +1520,7 @@ describe("settings-auth-service device access lifecycle", () => {
       actorId: `device:${grantId}`,
       deviceId: grantId,
       grantId,
+      principalPurpose: "general_companion",
     });
 
     const grant = listDeviceAccessGrants(harness.deps)[0];
@@ -2307,6 +2308,20 @@ describe("settings-auth-service device token is never at rest", () => {
 });
 
 describe("settings-auth-service companion session lifecycle", () => {
+  it("projects the confined session_control_client purpose onto the grant and companion session", async () => {
+    const harness = buildAuthHarness();
+    const fixture = await createActiveCompanionControlFixture(harness, "purpose-projection");
+
+    const grant = listDeviceAccessGrants(harness.deps).find((item) => item.grantId === fixture.grantId);
+    expect(grant?.principalPurpose).toBe("session_control_client");
+    expect(getCompanionSessionRecord(harness.deps, fixture.companionSessionId).principalPurpose).toBe(
+      "session_control_client",
+    );
+    expect(getCompanionSessionInfo(harness.deps, fixture.companionSessionId).principalPurpose).toBe(
+      "session_control_client",
+    );
+  });
+
   it("exchanges, rotates, lists, validates, and revokes companion sessions", async () => {
     const harness = buildAuthHarness();
     const grant = await createApprovedDeviceGrant(harness);
@@ -2325,12 +2340,15 @@ describe("settings-auth-service companion session lifecycle", () => {
       deviceType: "tablet",
       platform: "Android",
       signatureAlgorithm: "ed25519",
+      // A generic (non-control) grant projects the generic purpose onto its session.
+      principalPurpose: "general_companion",
     });
     expect(validateCompanionAccessToken(harness.deps, exchanged.accessToken)).toEqual({
       actorId: `companion:${exchanged.sessionId}`,
       deviceId: grant.grantId,
       grantId: grant.grantId,
       sessionId: exchanged.sessionId,
+      principalPurpose: "general_companion",
     });
 
     const rotated = await rotateCompanionSession(harness.deps, {
@@ -2339,12 +2357,15 @@ describe("settings-auth-service companion session lifecycle", () => {
     expect(rotated.sessionId).toBe(exchanged.sessionId);
     expect(rotated.accessToken).not.toBe(exchanged.accessToken);
     expect(rotated.refreshToken).not.toBe(exchanged.refreshToken);
+    // Refresh carries the same immutable purpose; it can never broaden it.
+    expect(rotated.principalPurpose).toBe("general_companion");
     expect(validateCompanionAccessToken(harness.deps, exchanged.accessToken)).toBeUndefined();
     expect(validateCompanionAccessToken(harness.deps, rotated.accessToken)).toEqual({
       actorId: `companion:${exchanged.sessionId}`,
       deviceId: grant.grantId,
       grantId: grant.grantId,
       sessionId: exchanged.sessionId,
+      principalPurpose: "general_companion",
     });
     await expect(rotateCompanionSession(harness.deps, { refreshToken: "   " })).rejects.toThrow(
       "Refresh token is required.",

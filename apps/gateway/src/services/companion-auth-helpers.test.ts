@@ -17,6 +17,21 @@ import {
 } from "./companion-auth-helpers.js";
 
 describe("companion auth helpers", () => {
+  it("carries the stored principal purpose through the session record and projections", () => {
+    const controlSession = mapCompanionSessionRow({
+      session_id: "session-1",
+      grant_id: "grant-1",
+      principal_purpose: "session_control_client",
+    });
+    expect(controlSession.principalPurpose).toBe("session_control_client");
+    expect(toCompanionSessionInfoResponse(controlSession).principalPurpose).toBe("session_control_client");
+    expect(toCompanionSessionAdminRecord(controlSession).principalPurpose).toBe("session_control_client");
+
+    // A missing or corrupt persisted purpose fails safe to the generic purpose.
+    expect(mapCompanionSessionRow({ session_id: "s" }).principalPurpose).toBe("general_companion");
+    expect(mapCompanionSessionRow({ principal_purpose: "root" }).principalPurpose).toBe("general_companion");
+  });
+
   it("maps database rows with safe defaults and response projections", () => {
     const session = mapCompanionSessionRow({
       session_id: "session-1",

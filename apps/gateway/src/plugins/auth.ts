@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
-import type { SseTokenIssueResponse } from "@goatcitadel/contracts";
+import { normalizeCompanionPrincipalPurpose } from "@goatcitadel/contracts";
+import type { CompanionPrincipalPurpose, SseTokenIssueResponse } from "@goatcitadel/contracts";
 import { enterRequestAttribution } from "@goatcitadel/storage";
 import { timingSafeStringEqual } from "../services/crypto-equals.js";
 import { isGenericChannelInboundPath } from "../services/generic-channel-webhook.js";
@@ -27,6 +28,13 @@ declare module "fastify" {
     authDeviceId?: string;
     authGrantId?: string;
     authCompanionSessionId?: string;
+    /**
+     * Immutable, server-owned purpose projected from an authenticated device
+     * grant or companion session. `undefined` for every non-device/companion
+     * source (operator token, basic, loopback, sse, a2a, anonymous), which the
+     * purpose guard treats as "not purpose-bound".
+     */
+    authPrincipalPurpose?: CompanionPrincipalPurpose;
     a2aPeerId?: string;
   }
 }
@@ -57,6 +65,7 @@ export const authPlugin = fp(async (fastify) => {
   fastify.decorateRequest("authDeviceId", undefined);
   fastify.decorateRequest("authGrantId", undefined);
   fastify.decorateRequest("authCompanionSessionId", undefined);
+  fastify.decorateRequest("authPrincipalPurpose", undefined);
   fastify.decorateRequest("a2aPeerId", undefined);
 
   fastify.decorate(
@@ -93,6 +102,7 @@ export const authPlugin = fp(async (fastify) => {
     request.authDeviceId = undefined;
     request.authGrantId = undefined;
     request.authCompanionSessionId = undefined;
+    request.authPrincipalPurpose = undefined;
     request.a2aPeerId = undefined;
     if (request.method === "OPTIONS") {
       return;
@@ -230,6 +240,7 @@ export const authPlugin = fp(async (fastify) => {
         setAuthActor(request, deviceGrant.actorId, "device");
         request.authDeviceId = deviceGrant.deviceId;
         request.authGrantId = deviceGrant.grantId;
+        request.authPrincipalPurpose = normalizeCompanionPrincipalPurpose(deviceGrant.principalPurpose);
         enterRequestAttribution({
           actorId: deviceGrant.actorId,
           deviceId: deviceGrant.deviceId,
@@ -244,6 +255,7 @@ export const authPlugin = fp(async (fastify) => {
         request.authDeviceId = companionSession.deviceId;
         request.authGrantId = companionSession.grantId;
         request.authCompanionSessionId = companionSession.sessionId;
+        request.authPrincipalPurpose = normalizeCompanionPrincipalPurpose(companionSession.principalPurpose);
         enterRequestAttribution({
           actorId: companionSession.actorId,
           deviceId: companionSession.deviceId,

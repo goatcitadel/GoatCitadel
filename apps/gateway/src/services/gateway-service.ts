@@ -8281,7 +8281,7 @@ export class GatewayService {
     return onboardingStateService.getOnboardingStartupState(this);
   }
 
-  public validateDeviceAccessToken(token: string): { actorId: string; deviceId: string; grantId: string } | undefined {
+  public validateDeviceAccessToken(token: string): ReturnType<typeof settingsAuthService.validateDeviceAccessToken> {
     return settingsAuthService.validateDeviceAccessToken(
       createSettingsAuthRuntimeDependenciesForGateway(this.getRouteCompositionPort()),
       token,

@@ -25,6 +25,21 @@ describe("companion auth contracts", () => {
     expectTypeOf<CompanionSessionInfoResponse>().toHaveProperty("signatureAlgorithm").toEqualTypeOf<"ed25519">();
   });
 
+  it("carries the stored immutable principal purpose on exchange, refresh, and session projections", () => {
+    expectTypeOf<CompanionSessionExchangeResponse>()
+      .toHaveProperty("principalPurpose")
+      .toEqualTypeOf<"general_companion" | "session_control_client">();
+    expectTypeOf<CompanionSessionRefreshResponse>()
+      .toHaveProperty("principalPurpose")
+      .toEqualTypeOf<"general_companion" | "session_control_client">();
+    expectTypeOf<CompanionSessionInfoResponse>()
+      .toHaveProperty("principalPurpose")
+      .toEqualTypeOf<"general_companion" | "session_control_client">();
+    expectTypeOf<CompanionSessionAdminRecord>()
+      .toHaveProperty("principalPurpose")
+      .toEqualTypeOf<"general_companion" | "session_control_client">();
+  });
+
   it("exposes admin-facing companion session records", () => {
     expectTypeOf<CompanionSessionAdminRecord>().toHaveProperty("lastRotatedAt").toBeString();
     expectTypeOf<CompanionSessionListResponse["items"]>().toMatchTypeOf<CompanionSessionAdminRecord[]>();

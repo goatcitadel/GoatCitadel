@@ -17,7 +17,14 @@ export type RouteAccessClass =
   | "companion"
   | "a2a-peer"
   | "sse-read"
-  | "webhook";
+  | "webhook"
+  // Purpose-aware session-control classes. No route registers the two companion
+  // control classes in this tranche; they exist so the central purpose guard and
+  // the access-class switch can isolate purpose-bound authority ahead of the
+  // (still HOLD) external control surface.
+  | "device-session-exchange"
+  | "session-control-companion"
+  | "operator-or-session-control-companion";
 
 type RoutePreHandler =
   | preHandlerHookHandler
@@ -165,6 +172,9 @@ function resolveAccessPreHandler(fastify: FastifyInstance, accessClass: RouteAcc
     case "companion":
     case "a2a-peer":
     case "sse-read":
+    case "device-session-exchange":
+    case "session-control-companion":
+    case "operator-or-session-control-companion":
       return enforce;
     case "public":
     case "webhook":
@@ -179,6 +189,13 @@ async function enforceRouteAccessClass(
   reply: FastifyReply,
   accessClass: RouteAccessClass,
 ): Promise<void | ReturnType<FastifyReply["send"]>> {
+  // The central purpose guard runs before the access-class switch so that
+  // purpose-bound (session_control_client) authority is confined ahead of any
+  // per-class source verification.
+  const purposeDenied = enforcePrincipalPurposeIsolation(request, reply, accessClass);
+  if (purposeDenied !== undefined) {
+    return purposeDenied;
+  }
   switch (accessClass) {
     case "authenticated-read":
       return requireAuthenticatedAccess(fastify, request, reply, accessClass);
@@ -195,6 +212,22 @@ async function enforceRouteAccessClass(
       return requireAuthActorSource(request, reply, "device", accessClass);
     case "companion":
       return requireAuthActorSource(request, reply, "companion", accessClass);
+    case "device-session-exchange":
+      // Both generic and purpose-bound devices exchange here; the guard has
+      // already confined purpose-bound devices to exactly this class.
+      return requireAuthActorSource(request, reply, "device", accessClass);
+    case "session-control-companion":
+      return requireSessionControlCompanion(request, reply, accessClass);
+    case "operator-or-session-control-companion":
+      if (isSessionControlCompanion(request)) {
+        return;
+      }
+      if (!hasOperatorAuthHandler(fastify)) {
+        return reply.code(500).send({
+          error: "Operator authentication is not installed for this route.",
+        });
+      }
+      return fastify.requireOperatorAuth(request, reply);
     case "a2a-peer":
       return requireA2APeerAccess(fastify, request, reply);
     case "sse-read": {
@@ -218,6 +251,66 @@ async function enforceRouteAccessClass(
     default:
       return;
   }
+}
+
+/**
+ * Central purpose guard. A principal whose stored, immutable purpose is
+ * `session_control_client` is confined to exactly its matching class: a device
+ * to `device-session-exchange`, a companion to the two control classes. Every
+ * other class — generic device/companion, authenticated-read, sse-read,
+ * operator (default), any unrelated class, and unscoped routes (undefined) —
+ * rejects it. Public routes ignore attached bearer authority entirely. Generic
+ * (`general_companion`) principals, operator tokens, and every non-device/
+ * companion source are not purpose-bound and are deferred to the access-class
+ * switch unchanged.
+ */
+export function enforcePrincipalPurposeIsolation(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  accessClass: RouteAccessClass | undefined,
+): void | ReturnType<FastifyReply["send"]> {
+  if (accessClass === "public") {
+    return;
+  }
+  const source = request.authActorSource;
+  const purposeBound =
+    (source === "device" || source === "companion") && request.authPrincipalPurpose === "session_control_client";
+  if (!purposeBound) {
+    return;
+  }
+  if (source === "device" && accessClass === "device-session-exchange") {
+    return;
+  }
+  if (
+    source === "companion" &&
+    (accessClass === "session-control-companion" || accessClass === "operator-or-session-control-companion")
+  ) {
+    return;
+  }
+  return reply.code(403).send({
+    error: "Purpose-bound session-control authority cannot access this route.",
+  });
+}
+
+function isSessionControlCompanion(request: FastifyRequest): boolean {
+  return (
+    request.authActorSource === "companion" &&
+    request.authPrincipalPurpose === "session_control_client" &&
+    Boolean(request.authCompanionSessionId)
+  );
+}
+
+function requireSessionControlCompanion(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  accessClass: RouteAccessClass,
+): void | ReturnType<FastifyReply["send"]> {
+  if (isSessionControlCompanion(request)) {
+    return;
+  }
+  return reply.code(403).send({
+    error: `Session-control companion authentication is required for ${accessClass} routes.`,
+  });
 }
 
 function requireA2APeerAccess(
@@ -331,7 +424,9 @@ export function installRouteAccessTracking(fastify: FastifyInstance): void {
   fastify.addHook("preHandler", async (request, reply) => {
     const accessClass = resolveRouteAccessClass(request.routeOptions.config?.goatcitadelRouteAccessClass, request);
     if (!accessClass) {
-      return;
+      // Unscoped routes carry no access class, but purpose-bound authority must
+      // still be centrally rejected there rather than silently allowed.
+      return enforcePrincipalPurposeIsolation(request, reply, undefined);
     }
     return enforceRouteAccessClass(fastify, request, reply, accessClass);
   });

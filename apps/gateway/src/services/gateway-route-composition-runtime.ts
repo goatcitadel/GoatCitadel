@@ -103,10 +103,10 @@ export function composeRuntimeAdminRouteDependencies(
       listDeviceAccessGrants: () => settingsAuthService.listDeviceAccessGrants(settingsAuthDeps),
       pruneRetention: (input) => gateway.backupRetentionService.pruneRetention(input),
       resolveGatewayInstallToken: (input) => gateway.resolveGatewayInstallToken(input),
-      revokeCompanionSession: (sessionId, actorId) =>
-        settingsAuthService.revokeCompanionSession(settingsAuthDeps, sessionId, actorId),
-      revokeDeviceAccessGrant: (grantId, actorId) =>
-        settingsAuthService.revokeDeviceAccessGrant(settingsAuthDeps, grantId, actorId),
+      revokeCompanionSession: (sessionId, actorId, options) =>
+        settingsAuthService.revokeCompanionSession(settingsAuthDeps, sessionId, actorId, options),
+      revokeDeviceAccessGrant: (grantId, actorId, options) =>
+        settingsAuthService.revokeDeviceAccessGrant(settingsAuthDeps, grantId, actorId, options),
       rotateCompanionSession: (input) => settingsAuthService.rotateCompanionSession(settingsAuthDeps, input),
       runDatabaseCutover: (input) => gateway.runDatabaseCutover(input),
       updateRetentionPolicy: (patch) => gateway.backupRetentionService.updateRetentionPolicy(patch),

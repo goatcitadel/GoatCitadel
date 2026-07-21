@@ -49,6 +49,15 @@ async function buildApp(authPatch: Partial<AuthConfig>): Promise<FastifyInstance
           actorId: "device:test-grant",
           deviceId: "test-grant",
           grantId: "test-grant",
+          principalPurpose: "general_companion",
+        };
+      }
+      if (token === "device-control-bearer") {
+        return {
+          actorId: "device:control-grant",
+          deviceId: "control-grant",
+          grantId: "control-grant",
+          principalPurpose: "session_control_client",
         };
       }
       return undefined;
@@ -60,6 +69,16 @@ async function buildApp(authPatch: Partial<AuthConfig>): Promise<FastifyInstance
           deviceId: "test-grant",
           grantId: "test-grant",
           sessionId: "test-session",
+          principalPurpose: "general_companion",
+        };
+      }
+      if (token === "companion-control-bearer") {
+        return {
+          actorId: "companion:control-session",
+          deviceId: "control-grant",
+          grantId: "control-grant",
+          sessionId: "control-session",
+          principalPurpose: "session_control_client",
         };
       }
       return undefined;
@@ -178,6 +197,7 @@ async function buildApp(authPatch: Partial<AuthConfig>): Promise<FastifyInstance
     ok: true,
     actorId: request.authActorId,
     actorSource: request.authActorSource,
+    principalPurpose: request.authPrincipalPurpose ?? null,
   }));
 
   app.get("/api/v1/onboarding/startup", async (request) => ({
@@ -611,6 +631,55 @@ describe("auth plugin", () => {
       actorSource: "device",
       actorId: "device:test-grant",
     });
+  });
+
+  it("projects the immutable principal purpose from device and companion bearers", async () => {
+    app = await buildApp({
+      mode: "token",
+      token: { value: "alpha-token", queryParam: "access_token" },
+    });
+
+    const genericDevice = await app.inject({
+      method: "GET",
+      url: "/protected",
+      headers: { Authorization: "Bearer device-bearer" },
+    });
+    expect(genericDevice.json()).toMatchObject({ actorSource: "device", principalPurpose: "general_companion" });
+
+    const controlDevice = await app.inject({
+      method: "GET",
+      url: "/protected",
+      headers: { Authorization: "Bearer device-control-bearer" },
+    });
+    expect(controlDevice.json()).toMatchObject({ actorSource: "device", principalPurpose: "session_control_client" });
+
+    const genericCompanion = await app.inject({
+      method: "GET",
+      url: "/protected",
+      headers: { Authorization: "Bearer companion-bearer" },
+    });
+    expect(genericCompanion.json()).toMatchObject({
+      actorSource: "companion",
+      principalPurpose: "general_companion",
+    });
+
+    const controlCompanion = await app.inject({
+      method: "GET",
+      url: "/protected",
+      headers: { Authorization: "Bearer companion-control-bearer" },
+    });
+    expect(controlCompanion.json()).toMatchObject({
+      actorSource: "companion",
+      principalPurpose: "session_control_client",
+    });
+
+    // Operator tokens carry no purpose projection at all.
+    const operator = await app.inject({
+      method: "GET",
+      url: "/protected",
+      headers: { Authorization: "Bearer alpha-token" },
+    });
+    expect(operator.json()).toMatchObject({ actorSource: "token", principalPurpose: null });
   });
 
   it("accepts companion bearer tokens for read requests", async () => {

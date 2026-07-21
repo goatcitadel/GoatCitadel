@@ -15,6 +15,18 @@ export const DefaultedCompanionPrincipalPurposeSchema = CompanionPrincipalPurpos
   DEFAULT_COMPANION_PRINCIPAL_PURPOSE,
 );
 
+/**
+ * Coerces any stored/persisted purpose value to one of the two frozen purposes.
+ * Only the exact confined purpose (`session_control_client`) is preserved; every
+ * other value — legacy nulls, corrupt rows, or unexpected strings — fails safe to
+ * the generic `general_companion`, so a broken value can never widen a principal
+ * into session-control authority. Approval/exchange/refresh inputs never supply
+ * this; the value is always server-owned and immutable in storage.
+ */
+export function normalizeCompanionPrincipalPurpose(value: unknown): CompanionPrincipalPurpose {
+  return value === "session_control_client" ? "session_control_client" : DEFAULT_COMPANION_PRINCIPAL_PURPOSE;
+}
+
 export interface SseTokenIssueResponse {
   token: string;
   expiresAt: string;
@@ -64,6 +76,8 @@ export interface DeviceAccessGrantRecord {
   lastUsedAt?: string;
   revokedAt?: string;
   metadata: Record<string, unknown>;
+  /** Server-owned, immutable purpose carried from the approved device request. */
+  principalPurpose: CompanionPrincipalPurpose;
 }
 
 export interface DeviceAccessGrantListResponse {

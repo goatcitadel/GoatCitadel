@@ -31,6 +31,7 @@ import {
   type AuthRuntimeSettings,
   type AuthSettingsUpdateInput,
   type CompanionAuditEventRecord,
+  type CompanionPrincipalPurpose,
   type CompanionSessionAdminRecord,
   type CompanionSessionExchangeInput,
   type CompanionSessionExchangeResponse,
@@ -1726,6 +1727,7 @@ export async function revokeDeviceAccessGrant(
   deps: SettingsAuthRuntimeDependencies,
   grantId: string,
   revokedBy: string,
+  options: { correlationId?: string } = {},
 ): Promise<DeviceAccessGrantContractRecord> {
   const normalizedGrantId = requireAuthRevokeIdentifier(grantId, "grantId");
   const normalizedRevokedBy = requireAuthRevokeIdentifier(revokedBy, "revokedBy");
@@ -1773,16 +1775,21 @@ export async function revokeDeviceAccessGrant(
     revokedAt: result.revokedAt,
   });
 
-  deps.publishRealtime("auth_device_grant_revoked", "auth", {
-    grantId: result.grantId,
-    requestId: result.requestId,
-    actorId: result.actorId,
-    deviceLabel: result.deviceLabel,
-    deviceType: result.deviceType,
-    platform: result.platform,
-    revokedAt: result.revokedAt,
-    revokedBy,
-  });
+  deps.publishRealtime(
+    "auth_device_grant_revoked",
+    "auth",
+    {
+      grantId: result.grantId,
+      requestId: result.requestId,
+      actorId: result.actorId,
+      deviceLabel: result.deviceLabel,
+      deviceType: result.deviceType,
+      platform: result.platform,
+      revokedAt: result.revokedAt,
+      revokedBy,
+    },
+    options.correlationId ? { correlationId: options.correlationId } : undefined,
+  );
 
   return result;
 }
@@ -1823,7 +1830,7 @@ export function getActiveAuthDeviceGrantById(
 export function validateDeviceAccessToken(
   deps: SettingsAuthRuntimeDependencies,
   token: string,
-): { actorId: string; deviceId: string; grantId: string } | undefined {
+): { actorId: string; deviceId: string; grantId: string; principalPurpose: CompanionPrincipalPurpose } | undefined {
   const tokenHash = hashSensitiveToken(token);
   const clock = getAuthDatabaseClockSql(deps);
   let grant: AuthDeviceGrantRecord | undefined;
@@ -1880,6 +1887,7 @@ export function validateDeviceAccessToken(
     actorId: `device:${grant.grantId}`,
     deviceId: grant.grantId,
     grantId: grant.grantId,
+    principalPurpose: grant.principalPurpose,
   };
 }
 
@@ -1923,8 +1931,9 @@ export async function exchangeCompanionSessionFromDeviceGrant(
       throw new NotFoundError("Device access grant not found.");
     }
     grant = mapAuthDeviceGrantRow(grantRow);
-    const principalPurpose =
-      grantRow.principal_purpose === "session_control_client" ? "session_control_client" : "general_companion";
+    // The purpose is carried immutably from the device grant (a storage trigger
+    // asserts grant.purpose === request.purpose); the exchange can never widen it.
+    const principalPurpose = grant.principalPurpose;
     ({ issuedAt, accessTokenExpiresAt, refreshTokenExpiresAt } = createCompanionCredentialWindow(deps));
     metadata = {
       ...grant.metadata,
@@ -2044,6 +2053,7 @@ export async function exchangeCompanionSessionFromDeviceGrant(
     refreshTokenExpiresAt,
     issuedAt,
     signatureAlgorithm: COMPANION_SIGNATURE_ALGORITHM,
+    principalPurpose: grant.principalPurpose,
   };
 }
 
@@ -2212,6 +2222,7 @@ export async function rotateCompanionSession(
     refreshTokenExpiresAt,
     issuedAt,
     signatureAlgorithm: session.signatureAlgorithm,
+    principalPurpose: session.principalPurpose,
   };
 }
 
@@ -2427,6 +2438,7 @@ export async function revokeCompanionSession(
   deps: SettingsAuthRuntimeDependencies,
   sessionId: string,
   revokedBy: string,
+  options: { correlationId?: string } = {},
 ): Promise<CompanionSessionRevokeResponse> {
   const normalizedSessionId = requireAuthRevokeIdentifier(sessionId, "sessionId");
   const normalizedRevokedBy = requireAuthRevokeIdentifier(revokedBy, "revokedBy");
@@ -2466,16 +2478,21 @@ export async function revokeCompanionSession(
     platform: record.platform,
   });
 
-  deps.publishRealtime("auth_companion_session_revoked", "auth", {
-    sessionId: record.sessionId,
-    grantId: record.grantId,
-    actorId: record.actorId,
-    deviceLabel: record.deviceLabel,
-    deviceType: record.deviceType,
-    platform: record.platform,
-    revokedAt: record.revokedAt,
-    revokedBy,
-  });
+  deps.publishRealtime(
+    "auth_companion_session_revoked",
+    "auth",
+    {
+      sessionId: record.sessionId,
+      grantId: record.grantId,
+      actorId: record.actorId,
+      deviceLabel: record.deviceLabel,
+      deviceType: record.deviceType,
+      platform: record.platform,
+      revokedAt: record.revokedAt,
+      revokedBy,
+    },
+    options.correlationId ? { correlationId: options.correlationId } : undefined,
+  );
 
   return { session: record };
 }
@@ -2684,6 +2701,7 @@ export function validateCompanionAccessToken(
     deviceId: session.grantId,
     grantId: session.grantId,
     sessionId: session.sessionId,
+    principalPurpose: session.principalPurpose,
   };
 }
 
