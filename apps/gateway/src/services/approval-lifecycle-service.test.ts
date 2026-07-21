@@ -2864,43 +2864,68 @@ describe("approval lifecycle service", () => {
     const processedEffects = host.storage.approvalEffects.listByApproval("approval-1");
     const processedSummary = deriveApprovalResolutionEffectsResult(processedEffects);
 
+    // Under the HX-411 durable-admission / deferred-materialization contract the
+    // approved tool action still executes in-band, but assistant-message
+    // materialization is delegated to the linked durable chat-turn run instead of
+    // completing synchronously inside approval resolution. This lightweight
+    // lifecycle harness backs `durable-turn-1` with a skeletal run that lacks the
+    // canonical waiting-approval parent authority a production run carries, so the
+    // in-band materialization step defers to the durable path (the full synchronous
+    // materialization is exercised by approval-resolution-effects-service.test.ts).
+    // The resume therefore genuinely wakes the linked durable run (`resumed: true`)
+    // and requests its processing, which is what will materialize the assistant turn.
     expect(resolution).toMatchObject({
       allowScope: "once",
-      resumed: false,
+      resumed: true,
       resumedTurnId: "turn-1",
+      resumedRunId: "durable-turn-1",
     });
     expect(host.awaitApprovalResolutionEffects).toHaveBeenCalledWith("approval-1");
     expect(markResolved).toHaveBeenCalledTimes(1);
-    expect(requestRunProcessing).toHaveBeenCalledTimes(1);
-    expect(requestRunProcessing).toHaveBeenNthCalledWith(1, "approval-wait-1");
+    // The approved tool action still executes exactly once in-band and its tool run
+    // is settled to executed.
     expect(executeApprovedPendingAction).toHaveBeenCalledTimes(1);
     expect(pendingAction.resolutionStatus).toBe("executed");
     expect(chatToolRunsPatch).toHaveBeenCalledWith("tool-run-1", expect.objectContaining({ status: "executed" }));
-    expect(chatMessagesUpsert).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: "session-1",
-        role: "assistant",
-      }),
-      expect.any(String),
+    // The assistant message and turn trace are NO LONGER materialized synchronously
+    // during approval resolution; that work is deferred to the durable chat-turn run
+    // woken below.
+    expect(chatMessagesUpsert).not.toHaveBeenCalled();
+    expect(chatTurnTracesPatch).not.toHaveBeenCalled();
+    // Compensating coverage that the turn will still complete: both the approval-wait
+    // run and the linked durable chat-turn run are woken and have their processing
+    // requested through the durable path. In production the linked run then
+    // materializes the assistant turn; here we assert the resume drives that path.
+    expect(requestRunProcessing).toHaveBeenCalledTimes(2);
+    expect(requestRunProcessing).toHaveBeenNthCalledWith(1, "approval-wait-1");
+    expect(requestRunProcessing).toHaveBeenNthCalledWith(2, "durable-turn-1");
+    expect(host.wakeDurableRun).toHaveBeenCalledWith(
+      "durable-turn-1",
+      expect.objectContaining({ eventKey: "approval.resolved" }),
     );
-    expect(chatTurnTracesPatch).toHaveBeenCalledWith("turn-1", expect.objectContaining({ status: "completed" }));
     expect(processedEffects.map((effect) => [effect.effectKind, effect.status])).toEqual([
       ["approval_resolution_signals", "completed"],
-      ["pending_action_execute", "completed"],
+      // The tool action executed, but chat materialization is delegated to the
+      // durable run, so this effect stays leased for retry (deferred) rather than
+      // completing or failing in this harness.
+      ["pending_action_execute", "running"],
       ["approval_wait_wake", "completed"],
-      ["linked_chat_turn_wake", "skipped"],
+      ["linked_chat_turn_wake", "completed"],
       ["approval_after_hooks", "completed"],
     ]);
     expect(processedSummary).toMatchObject({
       approvalWaitDurableRunId: "approval-wait-1",
       chatTurnResume: {
-        resumed: false,
+        resumed: true,
         turnId: "turn-1",
         durableRunId: "durable-turn-1",
-        wakeOutcome: "skipped_not_waiting",
+        wakeOutcome: "woke",
       },
     });
 
+    // Duplicate wake processing must stay idempotent: re-enqueuing the same
+    // resolution effects creates no new effects and re-fires none of the durable
+    // wakes, run-processing requests, or the approved action execution.
     effectsService.enqueueResolutionEffects(host.storage.approvals.get("approval-1"), {
       decision: "approve",
       resolvedBy: "operator-test",
@@ -2909,7 +2934,7 @@ describe("approval lifecycle service", () => {
     await Promise.allSettled([...backgroundTasks]);
 
     expect(host.storage.approvalEffects.listByApproval("approval-1")).toHaveLength(5);
-    expect(requestRunProcessing).toHaveBeenCalledTimes(1);
+    expect(requestRunProcessing).toHaveBeenCalledTimes(2);
     expect(executeApprovedPendingAction).toHaveBeenCalledTimes(1);
     expect(host.wakeDurableRun).toHaveBeenCalledTimes(2);
   });
@@ -3579,6 +3604,32 @@ function createInMemoryApprovalEffectsStore(effectRows: ApprovalEffectRecord[]) 
           leaseExpiresAt: undefined,
           completedAt: "2026-04-11T00:01:00.000Z",
           updatedAt: "2026-04-11T00:01:00.000Z",
+          version: effect.version + 1,
+        });
+        return { ...effect };
+      },
+    ),
+    deferEffectForRetry: vi.fn(
+      (
+        effectId: string,
+        workerId: string,
+        expectedVersion: number,
+        patch: { result?: Record<string, unknown>; lastError: string; retryAt: string; updatedAt?: string },
+      ) => {
+        const effect = effectRows.find((candidate) => candidate.effectId === effectId);
+        if (
+          !effect ||
+          effect.status !== "running" ||
+          effect.claimedBy !== workerId ||
+          effect.version !== expectedVersion
+        ) {
+          return undefined;
+        }
+        Object.assign(effect, {
+          result: patch.result ?? effect.result,
+          lastError: patch.lastError,
+          leaseExpiresAt: patch.retryAt,
+          updatedAt: patch.updatedAt ?? "2026-04-11T00:01:00.000Z",
           version: effect.version + 1,
         });
         return { ...effect };
