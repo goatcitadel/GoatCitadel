@@ -260,6 +260,7 @@ describe("chat message routes", () => {
     expect(agentSendChatMessage).toHaveBeenCalledWith(
       "sess-1",
       expect.objectContaining({ modelCouncil: { enabled: true } }),
+      undefined,
     );
     expect(agentSendChatMessage).toHaveBeenCalledTimes(1);
     expect(agentSendChatMessageStream).not.toHaveBeenCalled();
@@ -334,6 +335,7 @@ describe("chat message routes", () => {
           capabilityCompactionDimensionHash: "a".repeat(64),
         }),
       }),
+      undefined,
     );
   });
 
@@ -376,7 +378,11 @@ describe("chat message routes", () => {
         },
       });
       expect(response.statusCode).toBe(200);
-      expect(agentSendChatMessage).toHaveBeenLastCalledWith("sess-1", expect.objectContaining({ thinkingLevel }));
+      expect(agentSendChatMessage).toHaveBeenLastCalledWith(
+        "sess-1",
+        expect.objectContaining({ thinkingLevel }),
+        undefined,
+      );
     }
 
     expect(agentSendChatMessage).toHaveBeenCalledTimes(2);
@@ -433,6 +439,7 @@ describe("chat message routes", () => {
     expect(agentSendChatMessage).toHaveBeenCalledWith(
       "sess-1",
       expect.objectContaining({ contextRefs: [{ kind: "memory_item", ref: "memory-1" }] }),
+      undefined,
     );
 
     const rejected = await app.inject({

@@ -212,7 +212,11 @@ describe("streamed Chat route commit truth", () => {
       let attempts = 0;
       const mutation = vi.fn((...args: unknown[]) => {
         attempts += 1;
-        const lifecycle = args.at(-1) as { markCommitted?: () => void } | undefined;
+        // The mutation gained a trailing options arg after the commit lifecycle,
+        // so locate the lifecycle by shape rather than positionally.
+        const lifecycle = args.find(
+          (arg) => typeof (arg as { markCommitted?: unknown } | null | undefined)?.markCommitted === "function",
+        ) as { markCommitted?: () => void } | undefined;
         return (async function* () {
           if (attempts === 1) {
             throw new Error("source failed before canonical mutation");
@@ -252,7 +256,11 @@ describe("streamed Chat route commit truth", () => {
     async (scenario) => {
       let receivedLifecycle: { markCommitted?: () => void } | undefined;
       const mutation = vi.fn((...args: unknown[]) => {
-        receivedLifecycle = args.at(-1) as { markCommitted?: () => void } | undefined;
+        // The mutation gained a trailing options arg after the commit lifecycle,
+        // so locate the lifecycle by shape rather than positionally.
+        receivedLifecycle = args.find(
+          (arg) => typeof (arg as { markCommitted?: unknown } | null | undefined)?.markCommitted === "function",
+        ) as { markCommitted?: () => void } | undefined;
         return (async function* () {
           receivedLifecycle?.markCommitted?.();
           yield* [];
