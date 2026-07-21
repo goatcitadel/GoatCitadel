@@ -8,6 +8,10 @@ import {
 import { GatewayService } from "./gateway-service.js";
 import { ChatTurnExecutionRegistry, ChatTurnStreamRegistrationMismatchError } from "./chat-turn-execution-registry.js";
 import { SharedHostLifecycleService } from "./shared-host-lifecycle-service.js";
+import {
+  computeEffectiveChatTurnRequestMaterialSha256,
+  computeFrozenChatTurnAdmissionMaterialSha256,
+} from "./session-control-service.js";
 
 vi.mock("node:sqlite", () => ({
   DatabaseSync: class DatabaseSync {},
@@ -684,6 +688,21 @@ describe("GatewayService retained stream facade behavior", () => {
   });
 
   it("marks active durable streams cancelled even when the trace row is not visible yet", () => {
+    // The stream-cancellation recovery path rebuilds a running trace from the
+    // durable run payload via parseDurableChatTurnPayload, which now requires a
+    // fully-admitted chat.turn.execute.v2 record (session incarnation + matching
+    // admission/effective material hashes). Mirror the canonical admitted-v2
+    // fixture shape from durable-execution-service.test.ts.
+    const durableRunId = "run-1";
+    const durableRequest = {
+      content: "hello",
+      mode: "chat",
+      webMode: "auto",
+      memoryMode: "auto",
+      thinkingLevel: "standard",
+      policyRunId: durableRunId,
+    };
+    const durableAdmissionMaterialSha256 = computeFrozenChatTurnAdmissionMaterialSha256(durableRequest as never);
     let createdTrace: ChatTurnTraceRecord | undefined;
     const create = vi.fn((input: Partial<ChatTurnTraceRecord>) => {
       createdTrace = createTrace({
@@ -735,27 +754,32 @@ describe("GatewayService retained stream facade behavior", () => {
         },
         durableRuns: {
           getRun: vi.fn(() => ({
-            runId: "run-1",
+            runId: durableRunId,
             workflowKey: "chat.turn.execute",
             status: "cancelled",
             version: 2,
             createdAt: "2026-05-14T00:00:00.000Z",
             updatedAt: "2026-05-14T00:00:01.000Z",
             payload: {
-              version: "chat.turn.execute.v1",
+              version: "chat.turn.execute.v2",
+              admissionId: "admission:turn-1",
+              sessionIncarnationId: "incarnation:session-1",
+              admissionMaterialSha256: durableAdmissionMaterialSha256,
+              workspaceId: "default",
+              admissionAggregateRevision: 1,
+              admissionControllerGeneration: 1,
+              effectiveRequestMaterialSha256: computeEffectiveChatTurnRequestMaterialSha256(
+                durableAdmissionMaterialSha256,
+                durableRequest as never,
+              ),
+              requestActor: { actorKind: "operator", actorId: "operator:test" },
               sessionId: "session-1",
               turnId: "turn-1",
               userMessageId: "user-message-1",
               assistantMessageId: "assistant-reserved-1",
               branchKind: "append",
               threadEventType: "chat_thread_turn_appended",
-              request: {
-                content: "hello",
-                mode: "chat",
-                webMode: "auto",
-                memoryMode: "auto",
-                thinkingLevel: "standard",
-              },
+              request: durableRequest,
             },
             metadata: {},
           })),

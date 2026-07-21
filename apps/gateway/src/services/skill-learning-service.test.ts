@@ -7,6 +7,7 @@ import {
   canonicalJsonString,
   type CapabilityCatalogSnapshotRecord,
   type ChatMessageRecord,
+  type ChatSendMessageRequest,
   type ChatSessionPrefsRecord,
   type ChatTurnCapabilityProfileRecord,
   type GatewayEventInput,
@@ -16,6 +17,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { persistInitialChatTurnTrace, persistPreparedChatCapabilityAdmission } from "./chat-durable-run-service.js";
 import { prepareAgentChatTurn, type ChatTurnPrepHost, type PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
+import { SessionControlRuntimeOwner } from "./session-control-runtime-owner.js";
+import { SessionControlService } from "./session-control-service.js";
+import type { ActiveTurnAdmission } from "./chat-turn-types.js";
 import { SkillLearningService, type SkillLearningActor } from "./skill-learning-service.js";
 
 const ACTOR: SkillLearningActor = { actorId: "operator-hx401", authActorSource: "loopback" };
@@ -1408,6 +1412,42 @@ function seedAuthenticatedHistoryPair(storage: Storage, sessionId: string, actor
   seedCorrectionAuthentication(storage, sessionId, "correction-history", CLEAN_CORRECTION, actor, 2);
 }
 
+/**
+ * Establish a frozen session incarnation for a turn: the
+ * chat_turn_capability_profiles / capability-profile-binding incarnation
+ * triggers require an active turn_write mutation admission plus its
+ * session-incarnation binding to exist before a capability profile row can be
+ * inserted or bound. Mirror the runtime: seed session-control authority, then
+ * admit an operator turn and return the immutable admission.
+ */
+function seedFrozenTurnAdmission(
+  storage: Storage,
+  input: { sessionId: string; turnId: string; content: string; actor: SkillLearningActor; ordinal: number },
+): ActiveTurnAdmission {
+  storage.chatSessionMeta.ensure(input.sessionId, iso(input.ordinal), "default");
+  // ensureActive is idempotent: chatSessionMeta.ensure already activates the
+  // session lifecycle, so this returns the existing control authority instead of
+  // conflicting the way a second initialize() would.
+  storage.chatSessionLifecycles.ensureActive({
+    workspaceId: "default",
+    sessionId: input.sessionId,
+    actorId: input.actor.actorId ?? "operator:test",
+  });
+  const owner = new SessionControlRuntimeOwner(new SessionControlService(storage));
+  return owner.admitOperatorChatTurn({
+    sessionId: input.sessionId,
+    turnId: input.turnId,
+    request: {
+      content: input.content,
+      ...(input.actor.actorId ? { authActorId: input.actor.actorId } : {}),
+      ...(input.actor.authActorSource ? { authActorSource: input.actor.authActorSource } : {}),
+    } as ChatSendMessageRequest,
+    actorId: input.actor.actorId ?? "operator:test",
+    idempotencyKey: `admit:${input.turnId}`,
+    correlationId: `admit:${input.turnId}`,
+  });
+}
+
 function seedCorrectionAuthentication(
   storage: Storage,
   sessionId: string,
@@ -1423,8 +1463,21 @@ function seedCorrectionAuthentication(
     actor,
     ordinal,
   });
-  storage.capabilityCatalogSnapshots.create(snapshot);
-  storage.chatTurnCapabilityProfiles.create(profile);
+  const admission = seedFrozenTurnAdmission(storage, {
+    sessionId,
+    turnId: profile.identity.turnId,
+    content,
+    actor,
+    ordinal,
+  });
+  storage.runImmediateTransaction(() => {
+    persistPreparedChatCapabilityAdmission(storage, {
+      turnId: profile.identity.turnId,
+      capabilityProfile: profile,
+      capabilityCatalogSnapshot: snapshot,
+      turnAdmission: admission,
+    } as unknown as PreparedAgentChatTurn);
+  });
   storage.chatTurnTraces.create({
     turnId: profile.identity.turnId,
     sessionId,
@@ -1563,6 +1616,7 @@ async function persistProductionCorrectionTurn(input: {
   const host = {
     storage: {
       chatSessionMeta: {
+        get: vi.fn(() => input.storage.chatSessionMeta.ensure(input.sessionId, iso(input.ordinal), "default")),
         ensure: vi.fn(() => input.storage.chatSessionMeta.ensure(input.sessionId, iso(input.ordinal), "default")),
       },
       chatAttachments: { listByIds: vi.fn(() => []) },
@@ -1663,6 +1717,15 @@ async function persistProductionCorrectionTurn(input: {
   prepared.capabilityProfile = profile;
   prepared.capabilityProfileContent = input.content;
   prepared.capabilityCatalogSnapshot = snapshot;
+  // Bind the capability profile to a frozen session incarnation, exactly as the
+  // runtime does before persisting a prepared turn's admission bundle.
+  prepared.turnAdmission = seedFrozenTurnAdmission(input.storage, {
+    sessionId: input.sessionId,
+    turnId: prepared.turnId,
+    content: input.content,
+    actor: input.actor,
+    ordinal: input.ordinal,
+  });
   input.storage.runImmediateTransaction(() => {
     persistPreparedChatCapabilityAdmission(input.storage, prepared);
     persistInitialChatTurnTrace({ chatTurnTraces: input.storage.chatTurnTraces }, prepared, request);
