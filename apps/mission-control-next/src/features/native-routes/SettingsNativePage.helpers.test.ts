@@ -458,6 +458,7 @@ describe("SettingsNativePage helpers", () => {
           grantedBy: "operator",
           createdAt: "2026-05-02T18:00:00.000Z",
           metadata: {},
+          principalPurpose: "general_companion",
         },
       ],
       daemon: {

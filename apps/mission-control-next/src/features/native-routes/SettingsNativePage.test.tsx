@@ -3101,6 +3101,7 @@ describe("SettingsNativePage providers", () => {
           grantedBy: "operator",
           createdAt: "2026-05-02T18:00:00.000Z",
           metadata: {},
+          principalPurpose: "general_companion",
         },
         {
           grantId: "grant-android-2",
@@ -3112,6 +3113,7 @@ describe("SettingsNativePage providers", () => {
           grantedBy: "operator",
           createdAt: "2026-05-02T18:05:00.000Z",
           metadata: {},
+          principalPurpose: "general_companion",
         },
       ],
     });
@@ -4072,6 +4074,7 @@ describe("SettingsNativePage access", () => {
           grantedBy: "operator",
           createdAt: "2026-05-02T18:00:00.000Z",
           metadata: { origin: "LAN" },
+          principalPurpose: "general_companion",
         },
       ],
     });
