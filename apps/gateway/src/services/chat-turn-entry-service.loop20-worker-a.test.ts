@@ -35,6 +35,7 @@ const dispatchMocks = vi.hoisted(() => ({
 vi.mock("./chat-turn-dispatch-service.js", () => dispatchMocks);
 
 import { agentSendChatMessage, agentSendChatMessageStream, type ChatTurnEntryHost } from "./chat-turn-entry-service.js";
+import { computeChatTurnAdmissionMaterialSha256 } from "./session-control-service.js";
 
 function createTrace(patch: Partial<ChatTurnTraceRecord> = {}): ChatTurnTraceRecord {
   return {
@@ -109,6 +110,7 @@ function createPreparedTurn(overrides: Record<string, unknown> = {}) {
 
 function createHost(turnRuntimeResult: Record<string, unknown> = {}) {
   let trace = createTrace();
+  let binding: Record<string, unknown> | undefined;
   const patchedTraces: Array<Partial<ChatTurnTraceRecord>> = [];
   const controller = new AbortController();
 
@@ -123,6 +125,7 @@ function createHost(turnRuntimeResult: Record<string, unknown> = {}) {
       },
     },
     storage: {
+      runImmediateTransaction: vi.fn((work) => work()),
       chatSessionPrefs: {
         ensure: vi.fn(() => ({
           sessionId: "session-1",
@@ -136,8 +139,17 @@ function createHost(turnRuntimeResult: Record<string, unknown> = {}) {
         })),
       },
       chatSessionBindings: {
-        get: vi.fn(() => undefined),
-        upsert: vi.fn((input) => ({ ...input, transport: input.transport ?? "llm", writable: true })),
+        get: vi.fn(() => binding),
+        upsert: vi.fn((input) => {
+          binding = {
+            sessionId: input.sessionId,
+            transport: input.transport ?? "llm",
+            writable: input.writable ?? true,
+            createdAt: "2026-05-14T00:00:00.000Z",
+            updatedAt: "2026-05-14T00:00:00.000Z",
+          };
+          return binding;
+        }),
       },
       chatReflectionAttempts: {
         create: vi.fn(),
@@ -156,6 +168,46 @@ function createHost(turnRuntimeResult: Record<string, unknown> = {}) {
       durableRuns: {
         createRun: vi.fn(),
       },
+    },
+    sessionControlRuntimeOwner: {
+      admitOperatorChatTurn: vi.fn((input) => ({
+        identity: {
+          admissionId: `admission-${input.turnId}`,
+          sessionIncarnationId: "incarnation-1",
+          workspaceId: "default",
+          sessionId: input.sessionId,
+          turnId: input.turnId,
+          aggregateRevision: 1,
+          controllerGeneration: 1,
+          materialSha256: computeChatTurnAdmissionMaterialSha256(input.request),
+        },
+        admittedRequest: input.request,
+        requestActor: { actorKind: "operator", actorId: input.actorId },
+        requestClaim: { runtimeOwnerId: `runtime-${input.turnId}`, leaseRevision: 1 },
+      })),
+      admitChatTurn: vi.fn((input) => ({
+        identity: {
+          admissionId: `admission-${input.turnId}`,
+          sessionIncarnationId: "incarnation-1",
+          workspaceId: "default",
+          sessionId: input.sessionId,
+          turnId: input.turnId,
+          aggregateRevision: 1,
+          controllerGeneration: input.actor?.actorKind === "external_companion" ? input.actor.expectedGeneration : 1,
+          materialSha256: computeChatTurnAdmissionMaterialSha256(input.request),
+        },
+        admittedRequest: input.request,
+        requestActor: { actorKind: input.actor.actorKind, actorId: input.actor.actorId },
+        requestClaim: { runtimeOwnerId: `runtime-${input.turnId}`, leaseRevision: 1 },
+      })),
+      startRequestLeaseHeartbeat: vi.fn(() => ({ stop: vi.fn(), assertHealthy: vi.fn() })),
+      renewRequestLease: vi.fn(),
+      bindDurableRun: vi.fn((admission) => {
+        admission.requestClaim = undefined;
+      }),
+      withDurableClaim: vi.fn(),
+      assertActiveTurnWrite: vi.fn(),
+      closeTurnWrite: vi.fn(),
     },
     llmService: {
       getRuntimeConfig: vi.fn(() => ({
