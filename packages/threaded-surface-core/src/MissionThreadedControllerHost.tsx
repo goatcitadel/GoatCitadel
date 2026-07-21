@@ -68,6 +68,8 @@ import { deriveCoworkRunViewModel, type CoworkAgenticControlItem } from "./cowor
 import { useEventStreamStatus } from "@goatcitadel/mission-control-shared/hooks/useEventStreamStatus";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import { useProviderModelCatalog } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
+import { useSessionControlStatus } from "@goatcitadel/mission-control-shared/hooks/useSessionControlStatus";
+import { revokeSessionControl } from "@goatcitadel/mission-control-shared/api/session-control-operator";
 import { pageCopy } from "@goatcitadel/mission-control-shared/content/copy";
 import {
   setDevDiagnosticsActiveChatSession,
@@ -128,6 +130,10 @@ import {
   shouldExecuteLocalChatCommand,
 } from "./chat/chat-page-pure-helpers";
 import { resolveOutboundSurfaceMode } from "./pure-helpers";
+import {
+  deriveSessionControlBannerViewModel,
+  type SessionControlBannerActionPending,
+} from "./chat/session-control-banner";
 import { useChatApprovalController } from "./chat/useChatApprovalController";
 import { useChatContextActions } from "./chat/useChatContextActions";
 import { useChatComposerInteractions } from "./chat/useChatComposerInteractions";
@@ -862,6 +868,10 @@ export function MissionThreadedControllerHost({
     (sessionId: string, options?: { background?: boolean; includeThread?: boolean }) => Promise<void>
   >(async () => undefined);
   const activeStreamRef = useRef<ActiveChatStreamState | null>(null);
+  // HX-411: mirrors server truth so operator Chat send fails closed while an
+  // external session_control_client owns the current session. Read synchronously
+  // by the keyboard/composer send path; never optimistically cleared on SSE drop.
+  const sessionControlSendLockedRef = useRef(false);
   const routeSearch = typeof window === "undefined" ? "" : window.location.search;
   const deferredSearch = useDeferredValue(search.trim());
   // Keep controller ownership aligned with ThreadedSurfacePage and its CSS:
@@ -1107,6 +1117,64 @@ export function MissionThreadedControllerHost({
     [historyView, loadSessionCoreState, loadSessionSecondaryState, loadSidebar],
   );
 
+  // HX-411 governed external session control (operator visibility half). The
+  // banner + Ops panel read this content-free projection; the derived send lock
+  // fails ordinary operator Chat send closed while an external client owns the
+  // generation. Operator reads, approvals, revoke, and emergency takeover stay
+  // available; the control secret is never fetched or surfaced here.
+  const sessionControlStatus = useSessionControlStatus(selectedSessionId);
+  const reloadSessionControl = sessionControlStatus.reload;
+  const sessionControlBannerModel = useMemo(
+    () => deriveSessionControlBannerViewModel(sessionControlStatus.data),
+    [sessionControlStatus.data],
+  );
+  const sessionControlSendLocked = sessionControlBannerModel.sendLocked;
+  useEffect(() => {
+    sessionControlSendLockedRef.current = sessionControlSendLocked;
+  }, [sessionControlSendLocked]);
+  const [sessionControlActionPending, setSessionControlActionPending] =
+    useState<SessionControlBannerActionPending | null>(null);
+  const [sessionControlActionError, setSessionControlActionError] = useState<string | null>(null);
+  const runSessionControlRevoke = useCallback(
+    (mode: SessionControlBannerActionPending) => {
+      if (!selectedSessionId || !sessionControlBannerModel.externalControlActive) {
+        return;
+      }
+      const targetSessionId = selectedSessionId;
+      setSessionControlActionPending(mode);
+      setSessionControlActionError(null);
+      void revokeSessionControl(targetSessionId, {
+        target: "current_controller",
+        expectedGeneration: sessionControlBannerModel.generation,
+        mode,
+      })
+        .then(async () => {
+          await reloadSessionControl();
+          await refreshChatSessionAggregate(targetSessionId);
+        })
+        .catch(() => {
+          setSessionControlActionError(
+            "The control action was rejected. The session state may have changed — reload and retry.",
+          );
+        })
+        .finally(() => {
+          setSessionControlActionPending(null);
+        });
+    },
+    [
+      refreshChatSessionAggregate,
+      reloadSessionControl,
+      selectedSessionId,
+      sessionControlBannerModel.externalControlActive,
+      sessionControlBannerModel.generation,
+    ],
+  );
+  const handleSessionControlRevoke = useCallback(() => runSessionControlRevoke("revoke"), [runSessionControlRevoke]);
+  const handleSessionControlEmergencyTakeover = useCallback(
+    () => runSessionControlRevoke("emergency_takeover"),
+    [runSessionControlRevoke],
+  );
+
   const handleSessionMetadataConflictDraftChange = useCallback((draft: SessionMetadataConflictDraft | null) => {
     sessionMetadataConflictDraftRef.current = draft;
   }, []);
@@ -1267,7 +1335,18 @@ export function MissionThreadedControllerHost({
     abortActiveChatStream,
   });
   const composerSendHandlerRef = useRef<() => Promise<void>>(handleSend);
-  const handleComposerSend = useCallback(() => composerSendHandlerRef.current(), []);
+  const handleComposerSend = useCallback(() => {
+    // Fail closed: an external controller owns this session's mutation authority.
+    // The server also rejects this send; the UI must never present a send that 403s.
+    if (sessionControlSendLockedRef.current) {
+      pushLocalNoticeRef.current(
+        "This session is controlled by an external client. Revoke or take over before sending.",
+        "warning",
+      );
+      return Promise.resolve();
+    }
+    return composerSendHandlerRef.current();
+  }, []);
 
   useEffect(() => {
     queuedOutboundSetterRef.current = setQueuedOutbound;
@@ -2233,6 +2312,8 @@ export function MissionThreadedControllerHost({
     !routePreflightPending &&
     !routePreflightUnavailable &&
     !historicalModeActive &&
+    // HX-411: external control owns the mutation generation → operator send fails closed.
+    !sessionControlSendLocked &&
     (!routeBoundaryAckRequired || currentRouteBoundaryAcknowledged);
   const blockHistoricalMutation = useCallback(() => {
     if (!historicalModeActive) return false;
@@ -3595,6 +3676,16 @@ export function MissionThreadedControllerHost({
         routeBoundaryAcknowledged: currentRouteBoundaryAcknowledged,
         sending,
         canSend,
+        sessionControlBanner: sessionControlBannerModel.externalControlActive
+          ? {
+              model: sessionControlBannerModel,
+              onRevoke: handleSessionControlRevoke,
+              onEmergencyTakeover: handleSessionControlEmergencyTakeover,
+              actionPending: sessionControlActionPending,
+              actionError: sessionControlActionError,
+              statusError: sessionControlStatus.error,
+            }
+          : null,
         hasActiveStream: Boolean(activeStreamRef.current),
         activeStreamTurnAssigned: Boolean(activeStreamRef.current?.turnId),
         composerRef,

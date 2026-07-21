@@ -38,6 +38,13 @@ export {
   type ChatCapabilityProfileInspection,
   type ChatCapabilityProfileInspectionStatus,
 } from "./chat/useChatCapabilityProfileInspection";
+export {
+  deriveSessionControlBannerViewModel,
+  type MissionThreadedSessionControlBannerProps,
+  type SessionControlBannerActionPending,
+  type SessionControlBannerTone,
+  type SessionControlBannerViewModel,
+} from "./chat/session-control-banner";
 
 export type {
   MissionThreadedActiveSessionSurfaceProps,

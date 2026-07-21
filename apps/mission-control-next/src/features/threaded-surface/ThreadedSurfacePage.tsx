@@ -51,6 +51,7 @@ import {
 } from "@goatcitadel/mission-control-shared/components/ui";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import { ThreadedComposer, computeUsageTotals, formatCostLabel, formatTokenLabel } from "./ThreadedComposer";
+import { SessionControlBanner } from "./SessionControlBanner";
 import { ThreadedBtwSideChatPanel } from "./ThreadedBtwSideChatPanel";
 import { ThreadedContextDrawer } from "./ThreadedContextDrawer";
 import { ThreadedModeControl } from "./ThreadedModeControl";
@@ -71,6 +72,7 @@ import "./styles/generated-artifact.css";
 import "./styles/conversation-workspace.css";
 import "./styles/capability-profile.css";
 import "./styles/background-task-rail.css";
+import "./styles/session-control-banner.css";
 
 const LazyThreadedWorkflowPanel = lazy(async () => {
   const module = await import("./ThreadedWorkflowPanel");
@@ -978,6 +980,7 @@ function ThreadConversationSurface({
             </button>
           </section>
         ) : null}
+        {props.sessionControlBanner ? <SessionControlBanner {...props.sessionControlBanner} /> : null}
         <div className="mc-next-threaded-thread-card">
           {props.historicalWindow || props.historicalWindowLoading || props.historicalWindowError ? (
             <HistoricalConversationView props={props} />

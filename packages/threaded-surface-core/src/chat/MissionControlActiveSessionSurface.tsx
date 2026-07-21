@@ -30,6 +30,7 @@ import type { ChatErrorSource } from "./chat-error-copy";
 import type { MidTurnDisposition } from "./chat-page-pure-helpers";
 import type { OutboundContextBlock } from "./useChatSurfaceOrchestration";
 import type { ChatCapabilityProfileInspection } from "./useChatCapabilityProfileInspection";
+import type { MissionThreadedSessionControlBannerProps } from "./session-control-banner";
 
 export interface ThreadedContextSelectionState {
   label: string;
@@ -81,6 +82,12 @@ export interface MissionControlActiveSessionSurfaceProps {
   delegationRun: ActiveChatDelegationRun | null;
   delegationSuggestion: ChatDelegationSuggestionRecord | null;
   notices: ChatThreadNotice[];
+  /**
+   * HX-411 controller banner data + operator actions, present only while an
+   * external session_control_client owns this session. Content-free (no secret);
+   * the surface renders it above the conversation with mutation controls disabled.
+   */
+  sessionControlBanner?: MissionThreadedSessionControlBannerProps | null;
   followOutput: boolean;
   streamStatus: ChatStreamStatus;
   visualStreamMode: ChatVisualStreamMode;
