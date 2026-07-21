@@ -36,7 +36,13 @@ export function useSessionControlStatus(sessionId: string | null): SessionContro
       }
     } catch {
       if (loadSequenceRef.current === loadId) {
-        setData(null);
+        // H1 fail-closed: RETAIN the last successful projection on a transient
+        // re-poll failure and surface a non-fatal caveat instead of nulling it.
+        // Nulling here would drop a known external-control lock — the deriver maps
+        // null → operator/unlocked — and re-enable operator send while an external
+        // client still owns the session. Only the never-loaded initial state stays
+        // null (data was never set), which is the correct unlocked fallback; a later
+        // successful reload clears this error and replaces the retained data.
         setError("The session control status is unavailable.");
       }
     } finally {

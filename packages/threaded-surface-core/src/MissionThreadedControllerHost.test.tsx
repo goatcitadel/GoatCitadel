@@ -86,6 +86,16 @@ let mockSurfacePreview:
   | { mode: ChatMode; confidence: number; source?: string; rationale?: string; alternatives?: unknown[] }
   | undefined;
 const handleSendMock = vi.fn(async () => undefined);
+// HX-411: mutable session-control status the mocked hook returns. Defaults to
+// operator/absent (unlocked) in setupMocks so the other suites are unaffected.
+const sessionControlHookState = vi.hoisted(() => ({
+  value: {
+    data: null as unknown,
+    loading: false,
+    error: null as string | null,
+    reload: vi.fn(async () => undefined),
+  },
+}));
 let latestSurfaceInput: MissionThreadedRenderSurfaceInput | null = null;
 let confirmModalProps: any[] = [];
 let mockSelectedTurn: any = null;
@@ -311,6 +321,14 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog", () 
   }),
 }));
 
+vi.mock("@goatcitadel/mission-control-shared/hooks/useSessionControlStatus", () => ({
+  useSessionControlStatus: () => sessionControlHookState.value,
+}));
+vi.mock("@goatcitadel/mission-control-shared/api/session-control-operator", () => ({
+  revokeSessionControl: vi.fn(async () => ({})),
+  handoffSessionControl: vi.fn(async () => ({})),
+  fetchSessionControlDetail: vi.fn(async () => sessionControlHookState.value.data),
+}));
 vi.mock("@goatcitadel/mission-control-shared/state/dev-diagnostics-store", () => ({
   setDevDiagnosticsActiveChatSession: (...args: unknown[]) => setDevDiagnosticsActiveChatSessionMock(...args),
   setDevDiagnosticsLatestTraceSummary: (...args: unknown[]) => setDevDiagnosticsLatestTraceSummaryMock(...args),
@@ -576,6 +594,8 @@ function setupMocks() {
   });
   parseChatCommandMock.mockResolvedValue({ ok: true, command: "/plan", prefs: { ...prefs, planningMode: "advisory" } });
   createCodeModeRunMock.mockResolvedValue({ runId: "code-run-1" });
+  // HX-411: default to operator/absent control (unlocked) unless a test opts in.
+  sessionControlHookState.value = { data: null, loading: false, error: null, reload: vi.fn(async () => undefined) };
 
   useChatSessionDataMock.mockReturnValue({
     projects: { items: [selectedProject] },
@@ -4097,6 +4117,84 @@ describe("MissionThreadedControllerHost", () => {
         await flushEffects(6);
       });
 
+      expect(handleSendMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("HX-411 external session control (operator visibility)", () => {
+    function externalControlDetail() {
+      return {
+        control: {
+          workspaceId: "workspace-1",
+          sessionId: "session-1",
+          generation: 4,
+          lastEventId: "evt-2",
+          lastEventReasonCode: "handoff",
+          updatedAt: "2026-07-14T12:00:00.000Z",
+          ownerKind: "external_companion",
+          leaseState: "external_live",
+          capabilities: ["send"],
+          boundExternalController: {
+            companionSessionId: "companion-77",
+            clientInstanceId: "cli-instance-01",
+            principalPurpose: "session_control_client",
+            tokenFingerprint: "0a1b2c3d",
+          },
+          lastHeartbeatAt: "2026-07-14T12:00:00.000Z",
+          leaseExpiresAt: "2026-07-14T12:01:00.000Z",
+          reconnectExpiresAt: "2026-07-14T12:05:00.000Z",
+        },
+        pendingRequests: [],
+      };
+    }
+
+    it("fails operator send closed and surfaces the banner while an external client owns the session", async () => {
+      sessionControlHookState.value = {
+        data: externalControlDetail(),
+        loading: false,
+        error: null,
+        reload: vi.fn(async () => undefined),
+      };
+      await renderHost();
+
+      const surface = latestSurfaceInput?.activeSessionSurfaceProps;
+      expect(surface?.canSend).toBe(false);
+      expect(surface?.sessionControlBanner?.model.externalControlActive).toBe(true);
+      expect(surface?.sessionControlBanner?.model.sendLocked).toBe(true);
+
+      await act(async () => {
+        surface?.onSend();
+        await flushEffects(6);
+      });
+
+      // The underlying send must never fire under external control (the Gateway also
+      // 403s it); instead a truthful warning notice explains why send is disabled.
+      expect(handleSendMock).not.toHaveBeenCalled();
+      const notices = latestSurfaceInput?.activeSessionSurfaceProps?.notices ?? [];
+      expect(notices.some((notice) => /external client/i.test(notice.content))).toBe(true);
+    });
+
+    it("re-enables operator send once control returns to the operator", async () => {
+      sessionControlHookState.value = {
+        data: null,
+        loading: false,
+        error: null,
+        reload: vi.fn(async () => undefined),
+      };
+      await renderHost();
+
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.sessionControlBanner ?? null).toBeNull();
+
+      await act(async () => {
+        latestSurfaceInput?.activeSessionSurfaceProps?.onDraftChange("Ready to send");
+        await flushEffects(4);
+      });
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.canSend).toBe(true);
+
+      await act(async () => {
+        latestSurfaceInput?.activeSessionSurfaceProps?.onSend();
+        await flushEffects(6);
+      });
       expect(handleSendMock).toHaveBeenCalledTimes(1);
     });
   });
