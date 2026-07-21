@@ -822,69 +822,96 @@ describe("SessionControlService.pageControlEventStream", () => {
     boundExternalController: { companionSessionId: "companion-session-1", clientInstanceId: "client-instance-1" },
     ...overrides,
   });
-  const buildService = (options: { control: () => unknown; events?: unknown[] }) => {
-    const listEvents = vi.fn(() => options.events ?? []);
+  const streamRow = (sequence: number, overrides: Record<string, unknown> = {}) => ({
+    sequence,
+    event: controlEvent({ eventId: `sce-${sequence}`, ...overrides }),
+  });
+  const buildService = (options: {
+    control: () => unknown;
+    rows?: Array<{ sequence: number; event: unknown }>;
+    bounds?: { oldestSequence: number; newestSequence: number };
+  }) => {
+    const rows = options.rows ?? [];
+    const listEventsAfterSequence = vi.fn((_ws: string, _sid: string, after: number, limit: number) =>
+      rows.filter((row) => row.sequence > after).slice(0, limit),
+    );
+    const getEventSequenceBounds = vi.fn(
+      () =>
+        options.bounds ?? {
+          oldestSequence: rows.length > 0 ? rows[0]!.sequence : 0,
+          newestSequence: rows.length > 0 ? rows[rows.length - 1]!.sequence : 0,
+        },
+    );
     const getControl = vi.fn(options.control);
     const service = new SessionControlService({
       chatSessionMeta: { get: vi.fn(() => ({ workspaceId: "workspace-1" })) },
-      sessionControls: { getControl, listEvents },
+      sessionControls: { getControl, getEventSequenceBounds, listEventsAfterSequence },
     } as unknown as Storage);
-    return { service, listEvents, getControl };
+    return { service, listEventsAfterSequence, getEventSequenceBounds, getControl };
   };
 
-  it("assigns monotonic ordinal cursors, honest watermarks, and the current generation to a bound reader with read", () => {
-    const { service, listEvents } = buildService({
+  it("uses event_sequence as the cursor, exposes honest bounds, and carries the current generation for a bound reader with read", () => {
+    const { service, listEventsAfterSequence } = buildService({
       control: () => boundControl(["send", "read"], { generation: 5 }),
-      events: [
-        controlEvent({ eventId: "sce-1", reasonCode: "session_initialized", nextGeneration: 1 }),
-        controlEvent({ eventId: "sce-2", reasonCode: "handoff", nextGeneration: 2 }),
-        controlEvent({ eventId: "sce-3", reasonCode: "heartbeat", nextGeneration: 2 }),
+      rows: [
+        streamRow(1, { reasonCode: "session_initialized", nextGeneration: 1 }),
+        streamRow(2, { reasonCode: "handoff", nextGeneration: 2 }),
+        streamRow(3, { reasonCode: "heartbeat", nextGeneration: 2 }),
       ],
+      bounds: { oldestSequence: 1, newestSequence: 3 },
     });
     const page = service.pageControlEventStream({ actor: companion, sessionId: "session-1" });
     expect(page.events.map((envelope) => envelope.cursor)).toEqual([1, 2, 3]);
     expect(page.events.map((envelope) => envelope.event.eventId)).toEqual(["sce-1", "sce-2", "sce-3"]);
-    expect(page.lowWatermark).toBe(1);
-    expect(page.highWatermark).toBe(3);
+    expect(page.oldestSequence).toBe(1);
+    expect(page.newestSequence).toBe(3);
     expect(page.truncated).toBe(false);
     expect(page.generation).toBe(5);
     expect(page.ownerKind).toBe("external_companion");
     expect(page.leaseState).toBe("external_live");
-    expect(listEvents).toHaveBeenCalledWith("workspace-1", "session-1", { limit: SESSION_CONTROL_MAX_LIST_ITEMS });
+    expect(listEventsAfterSequence).toHaveBeenCalledWith("workspace-1", "session-1", 0, SESSION_CONTROL_MAX_LIST_ITEMS);
   });
 
-  it("returns only events after the client cursor and honors the page limit", () => {
+  it("pages FORWARD past 200 from the client cursor and sets truncated when more remain (H1)", () => {
     const { service } = buildService({
       control: () => boundControl(["send", "read"]),
-      events: [
-        controlEvent({ eventId: "sce-1" }),
-        controlEvent({ eventId: "sce-2" }),
-        controlEvent({ eventId: "sce-3" }),
-        controlEvent({ eventId: "sce-4" }),
-      ],
+      rows: [streamRow(199), streamRow(200), streamRow(201), streamRow(202)],
+      bounds: { oldestSequence: 1, newestSequence: 260 },
     });
-    const page = service.pageControlEventStream({ actor: companion, sessionId: "session-1", afterCursor: 2, limit: 1 });
-    expect(page.events.map((envelope) => envelope.cursor)).toEqual([3]);
-    expect(page.highWatermark).toBe(4);
-  });
-
-  it("marks the page truncated when the retained window fills the read cap", () => {
-    const events = Array.from({ length: SESSION_CONTROL_MAX_LIST_ITEMS }, (_, index) =>
-      controlEvent({ eventId: `sce-${index + 1}` }),
-    );
-    const { service } = buildService({ control: () => boundControl(["send", "read"]), events });
     const page = service.pageControlEventStream({
       actor: companion,
       sessionId: "session-1",
-      afterCursor: SESSION_CONTROL_MAX_LIST_ITEMS,
+      afterCursor: 200,
+      limit: 2,
     });
+    // Events beyond 200 ARE returned — they are not permanently unreachable.
+    expect(page.events.map((envelope) => envelope.cursor)).toEqual([201, 202]);
+    expect(page.newestSequence).toBe(260);
+    // limit filled AND last (202) < newest (260) ⇒ keep paging forward.
     expect(page.truncated).toBe(true);
-    expect(page.highWatermark).toBe(SESSION_CONTROL_MAX_LIST_ITEMS);
-    expect(page.events).toEqual([]);
+  });
+
+  it("clears truncated once the page reaches the newest sequence even at the limit", () => {
+    const { service } = buildService({
+      control: () => boundControl(["send", "read"]),
+      rows: [streamRow(259), streamRow(260)],
+      bounds: { oldestSequence: 1, newestSequence: 260 },
+    });
+    const page = service.pageControlEventStream({
+      actor: companion,
+      sessionId: "session-1",
+      afterCursor: 258,
+      limit: 2,
+    });
+    expect(page.events.map((envelope) => envelope.cursor)).toEqual([259, 260]);
+    expect(page.truncated).toBe(false);
   });
 
   it("fails closed for a send-only controller before any event is read (revoked/unbound readers cannot page)", () => {
-    const { service, listEvents } = buildService({ control: () => boundControl(["send"]), events: [controlEvent()] });
+    const { service, listEventsAfterSequence, getEventSequenceBounds } = buildService({
+      control: () => boundControl(["send"]),
+      rows: [streamRow(1)],
+    });
     let code: string | undefined;
     try {
       service.pageControlEventStream({ actor: companion, sessionId: "session-1" });
@@ -892,15 +919,17 @@ describe("SessionControlService.pageControlEventStream", () => {
       code = (error as ConflictError & { details?: { sessionControlCode?: string } }).details?.sessionControlCode;
     }
     expect(code).toBe("SESSION_CONTROL_CAPABILITY_DENIED");
-    expect(listEvents).not.toHaveBeenCalled();
+    expect(listEventsAfterSequence).not.toHaveBeenCalled();
+    expect(getEventSequenceBounds).not.toHaveBeenCalled();
   });
 
   it("admits an operator without a control-binding check and surfaces the current owner/generation, content-free", () => {
     const { service } = buildService({
       control: () => ({ ownerKind: "operator", leaseState: "operator_active", generation: 7 }),
-      events: [
-        controlEvent({ reasonCode: "operator_revoke", nextOwnerKind: "operator", nextLeaseState: "operator_active" }),
+      rows: [
+        streamRow(5, { reasonCode: "operator_revoke", nextOwnerKind: "operator", nextLeaseState: "operator_active" }),
       ],
+      bounds: { oldestSequence: 1, newestSequence: 5 },
     });
     const page = service.pageControlEventStream({
       actor: { actorKind: "operator", actorId: "op-1" },

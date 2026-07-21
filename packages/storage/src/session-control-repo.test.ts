@@ -1508,6 +1508,99 @@ describe("SessionControlRepository SQLite foundation", () => {
   });
 });
 
+describe("SessionControlRepository event-sequence stream paging (HX-411)", () => {
+  it("forward-pages control events by event_sequence PAST the list cap and reports honest bounds", () => {
+    const { repo } = createHarness("stream-paging");
+    const requested = repo.createExternalRequest(request("stream-paging", 1, ["send", "read"]));
+    repo.handoff(handoff("stream-paging", requested.request.requestId, 1, ["send", "read"]));
+    const external = identity("stream-paging", 2, D("token:stream-paging"));
+    // One control event per heartbeat (not collapsed) — routinely crosses the 200 list cap.
+    for (let beat = 1; beat <= 205; beat += 1) {
+      repo.heartbeat({
+        ...external,
+        idempotencyKey: `hb:stream-paging:${beat}`,
+        correlationId: `correlation:hb:stream-paging:${beat}`,
+      });
+    }
+    // A late, distinctive "recent" event well past sequence 200.
+    repo.revoke({
+      workspaceId: "default",
+      sessionId: "session-stream-paging",
+      expectedGeneration: 2,
+      mode: "emergency_takeover",
+      operatorActorId: "operator-a",
+      idempotencyKey: "revoke:stream-paging",
+      correlationId: "correlation:revoke:stream-paging",
+    });
+
+    // 1 init + 1 request + 1 handoff + 205 heartbeats + 1 revoke = 209.
+    const bounds = repo.getEventSequenceBounds("default", "session-stream-paging");
+    assert.equal(bounds.oldestSequence, 1);
+    assert.equal(bounds.newestSequence, 209);
+
+    // The old oldest-200 cap would leave 201+ permanently unreachable; the
+    // after-sequence path reaches them, including the recent emergency takeover.
+    const recent = repo.listEventsAfterSequence("default", "session-stream-paging", 200, 200);
+    assert.deepEqual(
+      recent.map((row) => row.sequence),
+      [201, 202, 203, 204, 205, 206, 207, 208, 209],
+    );
+    assert.equal(recent.at(-1)?.sequence, 209);
+    assert.equal(recent.at(-1)?.event.reasonCode, "emergency_takeover");
+
+    // Forward paging with a small limit walks the log in ascending sequence order.
+    const firstPage = repo.listEventsAfterSequence("default", "session-stream-paging", 0, 3);
+    assert.deepEqual(
+      firstPage.map((row) => row.sequence),
+      [1, 2, 3],
+    );
+    assert.deepEqual(
+      firstPage.map((row) => row.event.reasonCode),
+      ["session_initialized", "request_created", "handoff"],
+    );
+    const secondPage = repo.listEventsAfterSequence("default", "session-stream-paging", 3, 3);
+    assert.deepEqual(
+      secondPage.map((row) => row.sequence),
+      [4, 5, 6],
+    );
+    // Past the newest retained sequence: empty (a caught-up tail, not a gap).
+    assert.deepEqual(repo.listEventsAfterSequence("default", "session-stream-paging", 209, 10), []);
+
+    // Wrong workspace fails closed with no cross-workspace disclosure.
+    assert.throws(() => repo.listEventsAfterSequence("other-workspace", "session-stream-paging", 0, 10), /not found/iu);
+    assert.throws(() => repo.getEventSequenceBounds("other-workspace", "session-stream-paging"), /not found/iu);
+  });
+
+  it("scopes event-sequence paging to the exact session (per-session monotonic sequences)", () => {
+    const { db, repo } = createHarness("stream-x");
+    new ChatSessionMetaRepository(db).ensure("session-stream-y", new Date().toISOString(), "default");
+    seedSessionControlAuth(db, "companion-stream-y", "grant-stream-y");
+    const yRequest = repo.createExternalRequest(
+      request("stream-y", 1, ["send"], "session-stream-y", "companion-stream-y", "grant-stream-y"),
+    );
+    repo.handoff(handoff("stream-y", yRequest.request.requestId, 1, ["send"], "session-stream-y"));
+
+    // X has only its own initialization event; Y's activity does not bleed in.
+    const xEvents = repo.listEventsAfterSequence("default", "session-stream-x", 0, 50);
+    assert.equal(xEvents.length, 1);
+    assert.equal(xEvents[0]?.sequence, 1);
+    assert.equal(xEvents[0]?.event.sessionId, "session-stream-x");
+    assert.equal(repo.getEventSequenceBounds("default", "session-stream-x").newestSequence, 1);
+
+    // Y keeps its own sequence namespace starting at 1.
+    const yEvents = repo.listEventsAfterSequence("default", "session-stream-y", 0, 50);
+    assert.deepEqual(
+      yEvents.map((row) => row.sequence),
+      [1, 2, 3],
+    );
+    assert.equal(
+      yEvents.every((row) => row.event.sessionId === "session-stream-y"),
+      true,
+    );
+    assert.equal(repo.getEventSequenceBounds("default", "session-stream-y").newestSequence, 3);
+  });
+});
+
 function createHarness(seed: string): { db: DatabaseClient; repo: SessionControlRepository } {
   const db = createDatabase({ dbPath: ":memory:" });
   clients.push(db);

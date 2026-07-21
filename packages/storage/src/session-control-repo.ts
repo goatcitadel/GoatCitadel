@@ -183,6 +183,17 @@ export interface ListSessionControlEventsOptions {
   limit?: number;
 }
 
+/**
+ * One content-free control-event paired with its durable `event_sequence`. The
+ * sequence travels out-of-band (the contract `SessionControlEventRecord` stays
+ * content-free and omits it) so the realtime stream can use it as a monotonic,
+ * replay-stable, per-session forward cursor.
+ */
+export interface SessionControlEventStreamRow {
+  readonly sequence: number;
+  readonly event: SessionControlEventRecord;
+}
+
 interface SessionMetaRow {
   session_id: string;
   workspace_id: string;
@@ -1409,6 +1420,63 @@ export class SessionControlRepository {
       )
       .all<EventRow>({ workspaceId, sessionId, limit })
       .map((row) => this.mapEvent(row));
+  }
+
+  /**
+   * Forward-page the append-only, content-free control-event log by true
+   * `event_sequence` (monotonic per session, never reset). Returns events with
+   * `event_sequence > afterSequence`, ascending, bounded by `limit`, each paired
+   * with its out-of-band sequence. Same workspace+session scoping and tombstone
+   * guard as {@link listEvents}. This is the cursor path the session-scoped
+   * realtime stream tails so delivery continues past the list cap instead of
+   * being pinned to the oldest rows.
+   */
+  public listEventsAfterSequence(
+    workspaceIdInput: string,
+    sessionIdInput: string,
+    afterSequence: number,
+    limitInput: number = SESSION_CONTROL_MAX_LIST_ITEMS,
+  ): SessionControlEventStreamRow[] {
+    const workspaceId = identifier(workspaceIdInput, "workspaceId");
+    const sessionId = identifier(sessionIdInput, "sessionId");
+    const after = Number.isSafeInteger(afterSequence) && afterSequence > 0 ? afterSequence : 0;
+    const limit = boundedLimit(limitInput);
+    this.requireSessionWorkspaceOrTombstone(workspaceId, sessionId);
+    return this.db
+      .prepare(
+        `SELECT * FROM chat_session_control_events
+         WHERE workspace_id = @workspaceId AND session_id = @sessionId AND event_sequence > @afterSequence
+         ORDER BY event_sequence ASC LIMIT @limit`,
+      )
+      .all<EventRow>({ workspaceId, sessionId, afterSequence: after, limit })
+      .map((row) => ({ sequence: asPositiveInteger(row.event_sequence), event: this.mapEvent(row) }));
+  }
+
+  /**
+   * Cheap min/max `event_sequence` bounds for a session's control-event log
+   * (0/0 when empty). The stream uses `newestSequence` as the honest high
+   * watermark — so `truncated` means "keep paging forward", never a silent dead
+   * end — and `oldestSequence` to detect a genuinely unreachable cursor. Same
+   * scoping and tombstone guard as {@link listEvents}.
+   */
+  public getEventSequenceBounds(
+    workspaceIdInput: string,
+    sessionIdInput: string,
+  ): { oldestSequence: number; newestSequence: number } {
+    const workspaceId = identifier(workspaceIdInput, "workspaceId");
+    const sessionId = identifier(sessionIdInput, "sessionId");
+    this.requireSessionWorkspaceOrTombstone(workspaceId, sessionId);
+    const row = this.db
+      .prepare(
+        `SELECT COALESCE(MIN(event_sequence), 0) AS oldest, COALESCE(MAX(event_sequence), 0) AS newest
+         FROM chat_session_control_events
+         WHERE workspace_id = @workspaceId AND session_id = @sessionId`,
+      )
+      .get<{ oldest: number | bigint | string; newest: number | bigint | string }>({ workspaceId, sessionId });
+    return {
+      oldestSequence: asNonNegativeInteger(row?.oldest ?? 0),
+      newestSequence: asNonNegativeInteger(row?.newest ?? 0),
+    };
   }
 
   private runExternalSameGenerationTransition(

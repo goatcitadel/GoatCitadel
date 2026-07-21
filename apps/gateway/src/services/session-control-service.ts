@@ -388,8 +388,9 @@ export interface ControlEventStreamPageQuery {
 
 export interface ControlEventStreamEnvelope {
   /**
-   * Append-only ordinal position of this event in the retained control-event
-   * window. Monotonic and replay-stable because control events are never pruned.
+   * The event's durable `event_sequence` — monotonic per session and never
+   * reset — used as the stream's forward cursor. Stable across reconnects and
+   * unaffected by the list cap, so the tail continues past 200 lifetime events.
    */
   readonly cursor: number;
   readonly event: SessionControlEventRecord;
@@ -397,14 +398,14 @@ export interface ControlEventStreamEnvelope {
 
 export interface ControlEventStreamPage {
   readonly events: ControlEventStreamEnvelope[];
-  /** Oldest returnable ordinal cursor (1 when any events are retained, else 0). */
-  readonly lowWatermark: number;
-  /** Newest ordinal cursor within the retained window. */
-  readonly highWatermark: number;
+  /** Oldest retained `event_sequence` for the session (0 when empty). */
+  readonly oldestSequence: number;
+  /** Newest retained `event_sequence` for the session (0 when empty). */
+  readonly newestSequence: number;
   /**
-   * True when the retained window filled the read cap, so events newer than
-   * `highWatermark` may exist but are unreachable through this page. The stream
-   * surfaces this as an honest replay-gap rather than silently dropping them.
+   * True when this page filled `limit` AND events past its last cursor still
+   * remain (`lastCursor < newestSequence`). It means "keep paging forward", not
+   * a silent dead end — the caller re-pages from the last cursor until caught up.
    */
   readonly truncated: boolean;
   /** Current controller generation at the moment this page was read. */
@@ -1005,51 +1006,38 @@ export class SessionControlService {
 
   /**
    * Page the session-scoped, content-free control-event log for the realtime
-   * stream. Authorization is delegated to the single external-read gate
-   * (`authorizeExternalSessionRead`): operators read directly; an external
-   * companion must be the exact bound controller holding delegated `read`; a
-   * send-only, wrong-bound, non-controller, or (post-revoke/superseded-away)
-   * companion fails closed BEFORE any event is read, so a revoked reader's page
-   * throws and its stream can no longer surface new events. The cursor is the
-   * append-only ordinal position in the retained control-event window; records
-   * are never pruned, so it is monotonic and replay-stable. The returned records
-   * are the same content-free `SessionControlEventRecord` projection as
-   * `listEvents` (IDs, generations, owner/lease states, reason codes, actor
-   * attribution, timestamps) — no approval action token, message text, prompt, or
-   * token material can appear because the control-event table stores none.
+   * stream by durable `event_sequence`. Authorization is delegated to the single
+   * external-read gate (`authorizeExternalSessionRead`): operators read directly;
+   * an external companion must be the exact bound controller holding delegated
+   * `read`; a send-only, wrong-bound, non-controller, or (post-revoke/
+   * superseded-away) companion fails closed BEFORE any event is read, so a
+   * revoked reader's page throws and its stream can no longer surface new events.
+   * The cursor is the event's true `event_sequence` (monotonic per session, never
+   * reset, unaffected by the list cap), so forward paging genuinely continues
+   * past 200 lifetime events instead of being pinned to the oldest rows. The
+   * returned records are the same content-free `SessionControlEventRecord`
+   * projection as `listEvents` — no approval action token, message text, prompt,
+   * or token material can appear because the control-event table stores none.
    */
   public pageControlEventStream(query: ControlEventStreamPageQuery): ControlEventStreamPage {
     this.authorizeExternalSessionRead({ actor: query.actor, sessionId: query.sessionId });
     const { workspaceId } = this.resolveSessionWorkspace(query.sessionId);
     const control = this.storage.sessionControls.getControl(workspaceId, query.sessionId);
-    const retained = this.storage.sessionControls.listEvents(workspaceId, query.sessionId, {
-      limit: SESSION_CONTROL_MAX_LIST_ITEMS,
-    });
+    const bounds = this.storage.sessionControls.getEventSequenceBounds(workspaceId, query.sessionId);
     const afterCursor = Number.isFinite(query.afterCursor) ? Math.max(0, Math.trunc(query.afterCursor as number)) : 0;
     const requestedLimit = Number.isFinite(query.limit)
       ? Math.trunc(query.limit as number)
       : SESSION_CONTROL_MAX_LIST_ITEMS;
     const limit = Math.min(SESSION_CONTROL_MAX_LIST_ITEMS, Math.max(1, requestedLimit));
-    const events: ControlEventStreamEnvelope[] = [];
-    for (let index = 0; index < retained.length; index += 1) {
-      const cursor = index + 1;
-      if (cursor <= afterCursor) {
-        continue;
-      }
-      const event = retained[index];
-      if (event === undefined) {
-        continue;
-      }
-      events.push({ cursor, event });
-      if (events.length >= limit) {
-        break;
-      }
-    }
+    const rows = this.storage.sessionControls.listEventsAfterSequence(workspaceId, query.sessionId, afterCursor, limit);
+    const events: ControlEventStreamEnvelope[] = rows.map((row) => ({ cursor: row.sequence, event: row.event }));
+    const lastCursor = events.length > 0 ? events[events.length - 1]!.cursor : afterCursor;
     return {
       events,
-      lowWatermark: retained.length > 0 ? 1 : 0,
-      highWatermark: retained.length,
-      truncated: retained.length >= SESSION_CONTROL_MAX_LIST_ITEMS,
+      oldestSequence: bounds.oldestSequence,
+      newestSequence: bounds.newestSequence,
+      // "More remain past this page" → keep paging forward; never a silent dead end.
+      truncated: events.length >= limit && lastCursor < bounds.newestSequence,
       generation: control.generation,
       ownerKind: control.ownerKind,
       leaseState: control.leaseState,

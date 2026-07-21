@@ -45,8 +45,8 @@ export interface SessionControlEventStreamContext {
 }
 
 interface StreamSnapshot {
-  lowWatermark: number;
-  highWatermark: number;
+  oldestSequence: number;
+  newestSequence: number;
   truncated: boolean;
   generation: number;
 }
@@ -55,9 +55,11 @@ interface StreamSnapshot {
  * Drive the session-control event SSE stream. The first (replay) page is read
  * BEFORE any SSE header is written so an unauthorized reader receives a normal
  * typed HTTP error (never a hijacked stream). After headers are written the
- * stream tails the retained log by re-paging after the last sent ordinal cursor;
- * the control secret is read only from the frozen header on mutation routes and
- * is NEVER consulted here — a token in the URL/query cannot authorize this read.
+ * stream pages FORWARD by true `event_sequence` — replaying (and catching up
+ * through every truncated page) then tailing from the last sent sequence — so a
+ * session with >200 lifetime control events is fully reachable. The control
+ * secret is read only from the frozen header on mutation routes and is NEVER
+ * consulted here — a token in the URL/query cannot authorize this read.
  */
 export async function streamSessionControlEvents(
   fastify: FastifyInstance,
@@ -76,6 +78,7 @@ export async function streamSessionControlEvents(
   // never from a successful TCP write. Within one connection it stays at the
   // cursor the client presented at connect; a reconnect presents a higher one.
   const acknowledgedThrough = clientCursor ?? 0;
+  const replayLimit = parsed.data.replay > 0 ? parsed.data.replay : SESSION_CONTROL_MAX_LIST_ITEMS;
 
   // Authorize + read the replay page before writing SSE headers. A send-only,
   // wrong-bound, non-controller, unknown-session, or revoked reader throws here
@@ -86,7 +89,7 @@ export async function streamSessionControlEvents(
       actor: context.actor,
       sessionId: context.sessionId,
       afterCursor: clientCursor,
-      limit: parsed.data.replay,
+      limit: replayLimit,
     });
   } catch (error) {
     return sendRouteError(reply, error, request.log);
@@ -114,8 +117,8 @@ export async function streamSessionControlEvents(
 
   const clientId = parsed.data.clientId?.trim() || randomUUID();
   const snapshot: StreamSnapshot = {
-    lowWatermark: initialPage.lowWatermark,
-    highWatermark: initialPage.highWatermark,
+    oldestSequence: initialPage.oldestSequence,
+    newestSequence: initialPage.newestSequence,
     truncated: initialPage.truncated,
     generation: initialPage.generation,
   };
@@ -127,8 +130,9 @@ export async function streamSessionControlEvents(
   // Two distinct, explicitly named bounds so neither is overclaimed:
   //  - `bufferLow/HighWatermark`: the frozen bounded unsent-envelope buffer
   //    limits (crossing high closes with a named `backpressure` reason);
-  //  - `oldest/newestRetainedCursor`: the retained ordinal-cursor window bounds
-  //    (a client cursor below/ahead of it drives `replay-gap`).
+  //  - `oldest/newestRetainedCursor`: the retained event_sequence window bounds
+  //    (a client cursor before the oldest drives `replay-gap`; `truncated` means
+  //    "keep paging forward", never a dead end).
   // `sentThrough` is what was handed to the socket write path; `acknowledgedThrough`
   // advances ONLY from a client-supplied cursor; `pending` is the queued-unsent count.
   const diagnostics = () => ({
@@ -137,8 +141,8 @@ export async function streamSessionControlEvents(
     pending: pending.length,
     bufferLowWatermark: STREAM_LOW_WATERMARK,
     bufferHighWatermark: STREAM_HIGH_WATERMARK,
-    oldestRetainedCursor: snapshot.lowWatermark,
-    newestRetainedCursor: snapshot.highWatermark,
+    oldestRetainedCursor: snapshot.oldestSequence,
+    newestRetainedCursor: snapshot.newestSequence,
     truncated: snapshot.truncated,
     generation: snapshot.generation,
   });
@@ -181,33 +185,73 @@ export async function streamSessionControlEvents(
 
   await writeSseChunk(raw, ": connected\n\n", signal);
 
-  // A client cursor ahead of the newest retained ordinal cannot be served from
-  // the retained window: emit an honest replay-gap and close so the client does
-  // a bounded canonical re-read instead of us fabricating events.
-  if (clientCursor !== undefined && clientCursor > initialPage.highWatermark) {
+  // Control events are never pruned, so the normal case is "keep paging
+  // forward", NOT a gap. Emit replay-gap ONLY when the client's next-needed
+  // sequence is genuinely older than the oldest retained event (unreachable),
+  // then close so the client does a bounded canonical re-read instead of us
+  // fabricating events. A cursor ahead of the newest is not a gap — the tail
+  // simply has nothing new yet.
+  if (clientCursor !== undefined && initialPage.oldestSequence > 0 && clientCursor + 1 < initialPage.oldestSequence) {
     await sendNamed("replay-gap", {
-      reason: "cursor_beyond_retained",
+      reason: "cursor_before_retained",
       requestedCursor: clientCursor,
-      oldestRetainedCursor: snapshot.lowWatermark,
-      newestRetainedCursor: snapshot.highWatermark,
+      oldestRetainedCursor: snapshot.oldestSequence,
+      newestRetainedCursor: snapshot.newestSequence,
     });
     cleanup("replay_gap");
     reply.hijack();
     return;
   }
 
-  for (const envelope of initialPage.events) {
-    if (closed) {
+  const applySnapshot = (page: ControlEventStreamPage) => {
+    snapshot.oldestSequence = page.oldestSequence;
+    snapshot.newestSequence = page.newestSequence;
+    snapshot.truncated = page.truncated;
+    snapshot.generation = page.generation;
+  };
+
+  // Deliver the replay page(s) and page FORWARD until caught up. Because the
+  // cursor is the true `event_sequence`, a session with >200 lifetime events is
+  // fully reachable: each truncated page is followed from its last cursor, so
+  // the recent handoff/reconnect/revoke state arrives rather than only ancient
+  // rows. Writes are awaited (socket back-pressure); a mid-replay authority loss
+  // (revoke/takeover/auth-revoke) closes with a terminal `control-revoked`.
+  let replayPage = initialPage;
+  for (;;) {
+    let interrupted = false;
+    for (const envelope of replayPage.events) {
+      if (closed) {
+        interrupted = true;
+        break;
+      }
+      const wrote = await sendControlEvent(envelope);
+      if (!wrote) {
+        cleanup("stream_write_error");
+        reply.hijack();
+        return;
+      }
+      sentThrough = envelope.cursor;
+    }
+    if (interrupted || closed || !replayPage.truncated) {
       break;
     }
-    const wrote = await sendControlEvent(envelope);
-    if (!wrote) {
-      cleanup("stream_write_error");
+    let next: ControlEventStreamPage;
+    try {
+      next = service.pageControlEventStream({
+        actor: context.actor,
+        sessionId: context.sessionId,
+        afterCursor: sentThrough,
+        limit: replayLimit,
+      });
+    } catch (error) {
+      await closeStream("control-revoked", closeReasonForReadDenial(error));
       reply.hijack();
       return;
     }
-    sentThrough = envelope.cursor;
+    applySnapshot(next);
+    replayPage = next;
   }
+  applySnapshot(replayPage);
 
   if (!closed) {
     await sendNamed("stream-ready", { clientId, ...diagnostics() });
@@ -234,18 +278,7 @@ export async function streamSessionControlEvents(
       await closeStream("control-revoked", closeReasonForReadDenial(error));
       return;
     }
-    snapshot.lowWatermark = page.lowWatermark;
-    snapshot.highWatermark = page.highWatermark;
-    snapshot.truncated = page.truncated;
-    snapshot.generation = page.generation;
-
-    if (page.events.length === 0) {
-      const wrote = await writeSseChunk(raw, ": keep-alive\n\n", signal);
-      if (!wrote) {
-        cleanup("keepalive_write_error");
-      }
-      return;
-    }
+    applySnapshot(page);
 
     for (const envelope of page.events) {
       pending.push(envelope);
@@ -267,6 +300,16 @@ export async function streamSessionControlEvents(
         return;
       }
       sentThrough = envelope.cursor;
+    }
+    if (closed) {
+      return;
+    }
+    // Re-surface the truthful counters/watermarks on the tail every poll (this
+    // frame also serves as keep-alive). `truncated` here means "more remain, the
+    // next poll continues"; `pending` is the queued-unsent depth.
+    const wrote = await sendNamed("control-diagnostics", diagnostics());
+    if (!wrote) {
+      cleanup("diagnostics_write_error");
     }
   };
 
