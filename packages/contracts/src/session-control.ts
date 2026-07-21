@@ -61,6 +61,7 @@ export const SESSION_CONTROL_RECONNECT_WINDOW_SECONDS = 300;
 export const SESSION_CONTROL_MAX_LIST_ITEMS = 200;
 export const SESSION_CONTROL_TOKEN_HEADER = "X-GoatCitadel-Session-Control-Token" as const;
 export const SESSION_CONTROL_GENERATION_HEADER = "X-GoatCitadel-Control-Generation" as const;
+export const SESSION_CONTROL_CLIENT_INSTANCE_HEADER = "X-GoatCitadel-Control-Client-Instance" as const;
 
 export type SessionControlOperation = (typeof SESSION_CONTROL_OPERATIONS)[number];
 export type ExternalSessionControlCapability = (typeof EXTERNAL_SESSION_CONTROL_CAPABILITIES)[number];

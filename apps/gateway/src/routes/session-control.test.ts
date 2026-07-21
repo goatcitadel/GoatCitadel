@@ -1,13 +1,17 @@
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
-import { SESSION_CONTROL_GENERATION_HEADER, SESSION_CONTROL_TOKEN_HEADER } from "@goatcitadel/contracts";
-import { ConflictError, NotFoundError } from "@goatcitadel/contracts";
+import {
+  ConflictError,
+  NotFoundError,
+  SESSION_CONTROL_CLIENT_INSTANCE_HEADER,
+  SESSION_CONTROL_GENERATION_HEADER,
+  SESSION_CONTROL_TOKEN_HEADER,
+} from "@goatcitadel/contracts";
 import { installRouteAccessTracking } from "./route-access.js";
 import { idempotencyHeaderPlugin } from "../plugins/idempotency.js";
 import { registerSessionControlRoutes } from "./session-control.js";
 import { registerChatMessageRoutes } from "./chat.messages.js";
-import { SESSION_CONTROL_CLIENT_INSTANCE_HEADER } from "./session-control-request-context.js";
 
 const TOKEN_HEADER_KEY = SESSION_CONTROL_TOKEN_HEADER.toLowerCase();
 const GENERATION_HEADER_KEY = SESSION_CONTROL_GENERATION_HEADER.toLowerCase();
@@ -68,7 +72,7 @@ function buildServices(overrides: Partial<MockServices> = {}): MockServices {
       reconnect: vi.fn(() => ({ supersededGeneration: 2, control: { generation: 3 } })),
       release: vi.fn(() => ({ releasedGeneration: 2, control: { generation: 3 } })),
       revoke: vi.fn(() => ({ target: "current_controller", revokedGeneration: 2 })),
-      getControl: vi.fn(),
+      authorizeExternalSessionRead: vi.fn(),
       getDetail: vi.fn(() => ({ control: { ownerKind: "operator", generation: 1 }, pendingRequests: [] })),
       ...overrides.sessionControl,
     },
@@ -229,6 +233,45 @@ describe("session-control routes: access-class matrix", () => {
     });
     expect(denied.statusCode).toBe(403);
   });
+
+  it.each([
+    {
+      route: "reconnect",
+      body: { expectedGeneration: 2, newTokenHashSha256: "b".repeat(64), idempotencyKey: "idem-rc-1" },
+      service: "reconnect" as const,
+    },
+    {
+      route: "release",
+      body: { expectedGeneration: 2, idempotencyKey: "idem-rl-1" },
+      service: "release" as const,
+    },
+  ])(
+    "restricts control/$route to session-control companions (denies operator and generic companion)",
+    async ({ route, body, service }) => {
+      const operatorServices = buildServices();
+      app = await buildApp(operatorServices, "operator");
+      const operatorDenied = await app.inject({
+        method: "POST",
+        url: `/api/v1/chat/sessions/session-1/control/${route}`,
+        headers: { "idempotency-key": `idem-http-op-${route}`, [TOKEN_HEADER_KEY]: "plain-secret" },
+        payload: body,
+      });
+      expect(operatorDenied.statusCode).toBe(403);
+      expect(operatorServices.sessionControl[service]).not.toHaveBeenCalled();
+      await app.close();
+
+      const genericServices = buildServices();
+      app = await buildApp(genericServices, "generic-companion");
+      const genericDenied = await app.inject({
+        method: "POST",
+        url: `/api/v1/chat/sessions/session-1/control/${route}`,
+        headers: companionHeaders({ "idempotency-key": `idem-http-gc-${route}`, [TOKEN_HEADER_KEY]: "plain-secret" }),
+        payload: body,
+      });
+      expect(genericDenied.statusCode).toBe(403);
+      expect(genericServices.sessionControl[service]).not.toHaveBeenCalled();
+    },
+  );
 
   it("shares GET control between operators and bound companions but denies generic companions", async () => {
     app = await buildApp(buildServices(), "operator");
@@ -476,19 +519,8 @@ describe("external companion transcript read wiring", () => {
     app = null;
   });
 
-  function boundControl(capabilities: string[]) {
-    return {
-      ownerKind: "external_companion",
-      generation: 2,
-      boundExternalController: { companionSessionId: COMPANION_SESSION_ID, clientInstanceId: CLIENT_INSTANCE_ID },
-      capabilities,
-    };
-  }
-
-  it("allows a bound controller with read to read messages", async () => {
-    const services = buildServices({
-      sessionControl: { getControl: vi.fn(() => boundControl(["send", "read"])) } as never,
-    });
+  it("reads messages for a companion the single authorize gate admits, projecting its actor", async () => {
+    const services = buildServices(); // default authorizeExternalSessionRead is a no-op (admits)
     app = await buildApp(services, "scc");
     const reply = await app.inject({
       method: "GET",
@@ -496,12 +528,33 @@ describe("external companion transcript read wiring", () => {
       headers: { [SESSION_CONTROL_CLIENT_INSTANCE_HEADER]: CLIENT_INSTANCE_ID },
     });
     expect(reply.statusCode).toBe(200);
+    expect(reply.headers["cache-control"]).toBe("private, no-store");
+    expect(reply.headers["pragma"]).toBe("no-cache");
     expect(services.chatMessages.listChatMessages).toHaveBeenCalledTimes(1);
+    // The route delegates authz to the single service gate with the projected actor + sessionId.
+    expect(services.sessionControl.authorizeExternalSessionRead).toHaveBeenCalledWith({
+      actor: {
+        actorKind: "external_companion",
+        companionSessionId: COMPANION_SESSION_ID,
+        deviceGrantId: DEVICE_GRANT_ID,
+        clientInstanceId: CLIENT_INSTANCE_ID,
+        principalPurpose: "session_control_client",
+      },
+      sessionId: "session-1",
+    });
   });
 
-  it("denies a send-only bound controller from reading messages", async () => {
+  it("denies the read (no content) when the authorize gate throws capability-denied", async () => {
     const services = buildServices({
-      sessionControl: { getControl: vi.fn(() => boundControl(["send"])) } as never,
+      sessionControl: {
+        authorizeExternalSessionRead: vi.fn(() => {
+          throw new ConflictError({
+            code: "STATE_CONFLICT",
+            message: "denied",
+            details: { sessionControlCode: "SESSION_CONTROL_CAPABILITY_DENIED" },
+          });
+        }),
+      } as never,
     });
     app = await buildApp(services, "scc");
     const reply = await app.inject({
@@ -514,12 +567,12 @@ describe("external companion transcript read wiring", () => {
     expect(services.chatMessages.listChatMessages).not.toHaveBeenCalled();
   });
 
-  it("leaves the operator read path unchanged without consulting session control", async () => {
+  it("leaves the operator read path unchanged without consulting the authorize gate", async () => {
     const services = buildServices();
     app = await buildApp(services, "operator");
     const reply = await app.inject({ method: "GET", url: "/api/v1/chat/sessions/session-1/messages" });
     expect(reply.statusCode).toBe(200);
-    expect(services.sessionControl.getControl).not.toHaveBeenCalled();
+    expect(services.sessionControl.authorizeExternalSessionRead).not.toHaveBeenCalled();
     expect(services.chatMessages.listChatMessages).toHaveBeenCalledTimes(1);
   });
 });

@@ -252,6 +252,12 @@ export class SessionControlRuntimeOwner {
     return this.service.revoke(command);
   }
 
+  public authorizeExternalSessionRead(
+    query: Parameters<SessionControlService["authorizeExternalSessionRead"]>[0],
+  ): ReturnType<SessionControlService["authorizeExternalSessionRead"]> {
+    return this.service.authorizeExternalSessionRead(query);
+  }
+
   public getControl(
     query: Parameters<SessionControlService["getControl"]>[0],
   ): ReturnType<SessionControlService["getControl"]> {

@@ -11,5 +11,12 @@ import type { SessionControlRuntimeOwner } from "./session-control-runtime-owner
  */
 export type SessionControlRouteService = Pick<
   SessionControlRuntimeOwner,
-  "createExternalRequest" | "handoff" | "heartbeat" | "reconnect" | "release" | "revoke" | "getControl" | "getDetail"
+  | "createExternalRequest"
+  | "handoff"
+  | "heartbeat"
+  | "reconnect"
+  | "release"
+  | "revoke"
+  | "authorizeExternalSessionRead"
+  | "getDetail"
 >;

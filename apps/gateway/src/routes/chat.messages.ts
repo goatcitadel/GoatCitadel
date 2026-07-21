@@ -387,6 +387,8 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
   const operatorOrCompanionRoute = withRouteAccess(fastify, "operator-or-session-control-companion");
 
   fastify.get("/api/v1/chat/sessions/:sessionId/messages", operatorOrCompanionRoute, async (request, reply) => {
+    reply.header("cache-control", "private, no-store");
+    reply.header("pragma", "no-cache");
     const params = sessionParamsSchema.safeParse(request.params);
     const query = listMessagesSchema.safeParse(request.query);
     if (!params.success || !query.success) {
@@ -477,6 +479,8 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
   });
 
   fastify.get("/api/v1/chat/sessions/:sessionId/thread", operatorOrCompanionRoute, async (request, reply) => {
+    reply.header("cache-control", "private, no-store");
+    reply.header("pragma", "no-cache");
     const params = sessionParamsSchema.safeParse(request.params);
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });

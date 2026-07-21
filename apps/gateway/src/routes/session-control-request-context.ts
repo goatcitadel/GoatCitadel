@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   ConflictError,
+  SESSION_CONTROL_CLIENT_INSTANCE_HEADER,
   SESSION_CONTROL_GENERATION_HEADER,
   SESSION_CONTROL_TOKEN_HEADER,
   ValidationError,
@@ -17,19 +18,15 @@ import {
 } from "../services/session-control-service.js";
 import { sendRouteError } from "./_error-handler.js";
 
-/**
- * Non-secret binding hint that names the bound external client instance. The
- * plaintext control secret is NEVER carried here; only the frozen
- * `X-GoatCitadel-Session-Control-Token` header carries the secret, and this
- * route hashes it before it reaches the service. The client-instance value is
- * public (it appears in content-free control projections), so it needs no
- * redaction — the durable CAS in storage is the real authority that matches it
- * against the bound grant.
- */
-export const SESSION_CONTROL_CLIENT_INSTANCE_HEADER = "x-goatcitadel-control-client-instance";
-
+// The plaintext control secret is NEVER carried in the client-instance header;
+// only the frozen `X-GoatCitadel-Session-Control-Token` header carries the
+// secret, and this route hashes it before it reaches the service. The
+// client-instance value is public (it appears in content-free control
+// projections), so it needs no redaction — the durable CAS in storage is the
+// real authority that matches it against the bound grant.
 const SESSION_CONTROL_TOKEN_HEADER_KEY = SESSION_CONTROL_TOKEN_HEADER.toLowerCase();
 const SESSION_CONTROL_GENERATION_HEADER_KEY = SESSION_CONTROL_GENERATION_HEADER.toLowerCase();
+const SESSION_CONTROL_CLIENT_INSTANCE_HEADER_KEY = SESSION_CONTROL_CLIENT_INSTANCE_HEADER.toLowerCase();
 
 export function sessionControlConflict(code: SessionControlConflictCode, message: string): ConflictError {
   return new ConflictError({ code: "STATE_CONFLICT", message, details: { sessionControlCode: code } });
@@ -95,7 +92,7 @@ export function resolveSessionControlCompanionActor(request: FastifyRequest): Se
       "Session control principal purpose is denied.",
     );
   }
-  const clientInstanceId = readSingleHeader(request, SESSION_CONTROL_CLIENT_INSTANCE_HEADER);
+  const clientInstanceId = readSingleHeader(request, SESSION_CONTROL_CLIENT_INSTANCE_HEADER_KEY);
   if (!clientInstanceId) {
     throw new ValidationError({
       field: SESSION_CONTROL_CLIENT_INSTANCE_HEADER,
@@ -138,9 +135,11 @@ export function resolveExternalCompanionAdmissionContext(
 }
 
 /**
- * The branded authenticated-operator admission context for a local operator send.
- * Returns `undefined` for any non-operator source so external/companion sends do
- * not masquerade as operator authority.
+ * Mint the branded authenticated-operator admission context. `chat.messages.ts`
+ * sits at its module-size ceiling, so the security-sensitive operator context is
+ * minted in this dedicated route-layer helper — reachable only from the
+ * authenticated Chat routes, never from a service an unauthenticated path could
+ * call. Returns `undefined` for any non-operator source.
  */
 export function resolveAuthenticatedOperatorAdmissionContext(
   request: FastifyRequest,
@@ -171,13 +170,12 @@ export function resolveSendAdmissionArgs(
 
 /**
  * HX-411 external transcript-read gate. Operators keep normal reads and pass
- * through untouched. A purpose-bound `session_control_client` companion may read
- * a session's transcript only when it is that session's currently bound external
- * controller AND holds the delegated `read` capability. Session/workspace binding
- * is enforced by the authoritative `getControl` call (which throws for a session
- * the companion neither controls nor has a pending request on); the `read`
- * capability is read from the authoritative record the service already validated
- * at handoff. Returns `true` (and sends the mapped error) when the read is denied.
+ * through untouched. A purpose-bound `session_control_client` companion is
+ * projected to its stored-identity actor and delegated to the single
+ * authoritative service gate `authorizeExternalSessionRead`, which owns the
+ * session-binding and delegated-`read` checks shared with control events and the
+ * future session-scoped stream. Returns `true` (and sends the mapped error) when
+ * the read is denied; the route handler then returns without reading content.
  */
 export function rejectExternalTranscriptRead(
   fastify: FastifyInstance,
@@ -190,21 +188,7 @@ export function rejectExternalTranscriptRead(
   }
   try {
     const actor = resolveSessionControlCompanionActor(request);
-    const control = fastify.services.sessionControl.getControl({ actor, sessionId });
-    const bound =
-      control.ownerKind === "external_companion" &&
-      control.boundExternalController.companionSessionId === actor.companionSessionId &&
-      control.boundExternalController.clientInstanceId === actor.clientInstanceId;
-    const hasRead =
-      control.ownerKind === "external_companion" && control.capabilities.some((capability) => capability === "read");
-    if (!bound || !hasRead) {
-      sendRouteError(
-        reply,
-        sessionControlConflict("SESSION_CONTROL_CAPABILITY_DENIED", "Session control transcript read is denied."),
-        request.log,
-      );
-      return true;
-    }
+    fastify.services.sessionControl.authorizeExternalSessionRead({ actor, sessionId });
     return false;
   } catch (error) {
     sendRouteError(reply, error, request.log);

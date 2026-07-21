@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
-import { ConflictError, type ChatSendMessageRequest } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError, type ChatSendMessageRequest } from "@goatcitadel/contracts";
 import type {
   HeartbeatOccurrenceAdmissionRequest,
   HeartbeatOccurrenceRecord,
@@ -41,25 +41,36 @@ const BASE_REQUEST = {
 } as unknown as ChatSendMessageRequest;
 
 describe("SessionControlService", () => {
-  it("keeps the authenticated-operator context factory scoped to the authenticated Chat HTTP route", () => {
+  it("keeps the authenticated-operator context factory scoped to a single route-layer mint site", () => {
     const sourceRoot = fileURLToPath(new URL("../", import.meta.url));
     const productionSources = listProductionTypeScriptSources(sourceRoot);
     const factoryIdentifier = "createAuthenticatedOperatorAdmissionContext";
+    const callToken = "createAuthenticatedOperatorAdmissionContext(";
+    // The security-sensitive operator context is minted only in the route-layer
+    // helper reachable from the authenticated Chat routes (chat.messages.ts sits
+    // at its module-size ceiling); the service file only *defines* the factory.
+    const mintSite = "routes/session-control-request-context.ts";
+    const definitionSite = "services/session-control-service.ts";
+
     const inventory = productionSources
       .filter((filePath) => readFileSync(filePath, "utf8").includes(factoryIdentifier))
       .map((filePath) => relative(sourceRoot, filePath).replaceAll("\\", "/"))
       .sort();
+    expect(inventory).toEqual([mintSite, definitionSite]);
 
-    expect(inventory).toEqual(["routes/chat.messages.ts", "services/session-control-service.ts"]);
+    // Exactly one construction call, and it lives at the single route-layer mint site.
+    const mintSource = readFileSync(resolve(sourceRoot, mintSite), "utf8");
+    expect(mintSource.match(/createAuthenticatedOperatorAdmissionContext\s*\(/gu)).toHaveLength(1);
 
-    const authenticatedChatRoute = readFileSync(resolve(sourceRoot, "routes/chat.messages.ts"), "utf8");
-    expect(authenticatedChatRoute.match(/createBrandedAuthenticatedOperatorAdmissionContext\s*\(/gu)).toHaveLength(1);
+    // No production file other than the mint site (its one call) and the service
+    // (its definition) references the factory constructor.
     expect(
       productionSources
-        .filter((filePath) => !filePath.replaceAll("\\", "/").endsWith("routes/chat.messages.ts"))
-        .some((filePath) =>
-          readFileSync(filePath, "utf8").includes("createBrandedAuthenticatedOperatorAdmissionContext"),
-        ),
+        .filter((filePath) => {
+          const relativePath = relative(sourceRoot, filePath).replaceAll("\\", "/");
+          return relativePath !== mintSite && relativePath !== definitionSite;
+        })
+        .some((filePath) => readFileSync(filePath, "utf8").includes(callToken)),
     ).toBe(false);
   });
 
@@ -672,6 +683,108 @@ describe("SessionControlService", () => {
 
     const withRead = buildService(["send", "read"]);
     expect(withRead.listEvents({ actor: companion, sessionId: "session-1" })).toEqual([]);
+  });
+
+  it("authorizeExternalSessionRead is the single gate: admits bound+read, bypasses operators, and fails closed", () => {
+    const companion = {
+      actorKind: "external_companion" as const,
+      companionSessionId: "companion-session-1",
+      deviceGrantId: "device-grant-1",
+      clientInstanceId: "client-instance-1",
+      principalPurpose: "session_control_client" as const,
+    };
+    const buildService = (
+      controlFactory: () => unknown,
+    ): { service: SessionControlService; getControl: ReturnType<typeof vi.fn> } => {
+      const getControl = vi.fn(controlFactory);
+      const service = new SessionControlService({
+        chatSessionMeta: { get: vi.fn(() => ({ workspaceId: "workspace-1" })) },
+        sessionControls: { getControl },
+      } as unknown as Storage);
+      return { service, getControl };
+    };
+    const boundControl = (capabilities: string[], overrides: Record<string, unknown> = {}) => ({
+      ownerKind: "external_companion",
+      generation: 4,
+      capabilities,
+      boundExternalController: { companionSessionId: "companion-session-1", clientInstanceId: "client-instance-1" },
+      ...overrides,
+    });
+    const deniedCode = (fn: () => void): string | undefined => {
+      try {
+        fn();
+      } catch (error) {
+        return (error as ConflictError & { details?: { sessionControlCode?: string } }).details?.sessionControlCode;
+      }
+      return undefined;
+    };
+
+    // ALLOW: bound controller with delegated read.
+    const allow = buildService(() => boundControl(["send", "read"]));
+    expect(() =>
+      allow.service.authorizeExternalSessionRead({ actor: companion, sessionId: "session-1" }),
+    ).not.toThrow();
+
+    // OPERATOR bypass: no storage read, no throw.
+    const operator = buildService(() => boundControl(["send", "read"]));
+    operator.service.authorizeExternalSessionRead({
+      actor: { actorKind: "operator", actorId: "op-1" },
+      sessionId: "s",
+    });
+    expect(operator.getControl).not.toHaveBeenCalled();
+
+    // DENY 1 — send-only capability.
+    expect(
+      deniedCode(() =>
+        buildService(() => boundControl(["send"])).service.authorizeExternalSessionRead({
+          actor: companion,
+          sessionId: "session-1",
+        }),
+      ),
+    ).toBe("SESSION_CONTROL_CAPABILITY_DENIED");
+
+    // DENY 2 — non-controller (operator owns the session).
+    expect(
+      deniedCode(() =>
+        buildService(() => ({ ownerKind: "operator", generation: 1 })).service.authorizeExternalSessionRead({
+          actor: companion,
+          sessionId: "session-1",
+        }),
+      ),
+    ).toBe("SESSION_CONTROL_CAPABILITY_DENIED");
+
+    // DENY 3 — wrong companion session bound.
+    expect(
+      deniedCode(() =>
+        buildService(() =>
+          boundControl(["send", "read"], {
+            boundExternalController: { companionSessionId: "other-companion", clientInstanceId: "client-instance-1" },
+          }),
+        ).service.authorizeExternalSessionRead({ actor: companion, sessionId: "session-1" }),
+      ),
+    ).toBe("SESSION_CONTROL_CAPABILITY_DENIED");
+
+    // DENY 4 — cross-session / different bound client instance.
+    expect(
+      deniedCode(() =>
+        buildService(() =>
+          boundControl(["send", "read"], {
+            boundExternalController: { companionSessionId: "companion-session-1", clientInstanceId: "other-instance" },
+          }),
+        ).service.authorizeExternalSessionRead({ actor: companion, sessionId: "session-1" }),
+      ),
+    ).toBe("SESSION_CONTROL_CAPABILITY_DENIED");
+
+    // DENY 5 — unknown session fails closed (NotFound before any control read).
+    const unknownGetControl = vi.fn(() => boundControl(["send", "read"]));
+    const unknownService = new SessionControlService({
+      chatSessionMeta: { get: vi.fn(() => undefined) },
+      sessionControls: { getControl: unknownGetControl },
+    } as unknown as Storage);
+    expect(() => unknownService.authorizeExternalSessionRead({ actor: companion, sessionId: "missing" })).toThrow(
+      NotFoundError,
+    );
+    expect(unknownGetControl).not.toHaveBeenCalled();
   });
 });
 

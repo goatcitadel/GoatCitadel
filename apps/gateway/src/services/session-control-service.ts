@@ -932,18 +932,34 @@ export class SessionControlService {
     return this.storage.sessionControls.listControls(query.workspaceId, query.limit);
   }
 
-  public listEvents(query: ListSessionControlEventsQuery): SessionControlEventRecord[] {
+  /**
+   * The single authoritative gate for external session reads: bounded transcript
+   * reads (`/messages`, `/history`, `/thread`, turn stream), control events, and
+   * the future session-scoped event stream all delegate here so binding and
+   * `read`-capability authority live in one place. Operators read directly. An
+   * external companion must be the exact bound controller (matching companion
+   * session AND client instance) and hold the delegated `read` capability. The
+   * workspace is resolved from stored `chat_session_meta` and fails closed with
+   * `NotFound` for an unknown session. Every other denial — cross-session,
+   * wrong-companion binding, send-only capability, and non-external-controller
+   * ownership — fails closed with `SESSION_CONTROL_CAPABILITY_DENIED`.
+   */
+  public authorizeExternalSessionRead(query: ReadSessionControlQuery): void {
     // Purpose gate first (see getControl): reject before resolving session state.
-    const companion = query.actor.actorKind === "operator" ? undefined : requireExternalCompanionActor(query.actor);
+    if (query.actor.actorKind === "operator") return;
+    const companion = requireExternalCompanionActor(query.actor);
     const { workspaceId } = this.resolveSessionWorkspace(query.sessionId);
-    if (companion) {
-      const control = this.storage.sessionControls.getControl(workspaceId, query.sessionId);
-      const hasReadCapability =
-        control.ownerKind === "external_companion" && control.capabilities.some((capability) => capability === "read");
-      if (!isCompanionBoundController(control, companion) || !hasReadCapability) {
-        throw sessionControlConflict("SESSION_CONTROL_CAPABILITY_DENIED", "Session control event read is denied.");
-      }
+    const control = this.storage.sessionControls.getControl(workspaceId, query.sessionId);
+    const hasReadCapability =
+      control.ownerKind === "external_companion" && control.capabilities.some((capability) => capability === "read");
+    if (!isCompanionBoundController(control, companion) || !hasReadCapability) {
+      throw sessionControlConflict("SESSION_CONTROL_CAPABILITY_DENIED", "Session control read is denied.");
     }
+  }
+
+  public listEvents(query: ListSessionControlEventsQuery): SessionControlEventRecord[] {
+    this.authorizeExternalSessionRead({ actor: query.actor, sessionId: query.sessionId });
+    const { workspaceId } = this.resolveSessionWorkspace(query.sessionId);
     return this.storage.sessionControls.listEvents(
       workspaceId,
       query.sessionId,
