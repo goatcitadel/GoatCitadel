@@ -14,7 +14,7 @@
  *   log.error("tick failed", error);
  */
 
-import { redactSecretText } from "@goatcitadel/contracts";
+import { redactSecretText, SESSION_CONTROL_TOKEN_HEADER } from "@goatcitadel/contracts";
 
 export interface LogContext {
   readonly [key: string]: unknown;
@@ -33,6 +33,16 @@ const REDACTED_LOG_VALUE = "[redacted]";
 export function redactSecretsInString(value: string): string {
   return redactSecretText(value, { marker: REDACTED_LOG_VALUE }).value;
 }
+
+/**
+ * Complete header/field keys whose entire value is a raw secret. These are
+ * redacted by an exact, case-insensitive key match, independent of (and ahead
+ * of) the segment heuristic below. The session-control token header carries the
+ * plaintext external control secret; pinning it here guarantees redaction across
+ * every structured/Fastify/error sink and prevents any regression if the
+ * token-usage heuristics are ever retuned.
+ */
+const EXPLICIT_SENSITIVE_LOG_KEYS: ReadonlySet<string> = new Set([SESSION_CONTROL_TOKEN_HEADER.toLowerCase()]);
 
 /**
  * Segments that mark a key as credential-bearing wherever they appear. These
@@ -105,6 +115,9 @@ function hasCredentialTokenSegment(segments: readonly string[]): boolean {
  * such as `prompt_tokens`, `maxTokens`, `tokenCount`, and `tokenizer` do not.
  */
 export function isSensitiveLogKey(key: string): boolean {
+  if (EXPLICIT_SENSITIVE_LOG_KEYS.has(key.toLowerCase())) {
+    return true;
+  }
   const segments = splitKeySegments(key);
   if (segments.some((segment) => SECRET_KEY_SEGMENTS.has(segment))) {
     return true;
