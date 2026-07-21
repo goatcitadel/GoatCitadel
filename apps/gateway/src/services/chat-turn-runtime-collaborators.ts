@@ -52,6 +52,7 @@ export interface ChatTurnAdmissionControl {
     SessionControlRuntimeOwner,
     | "admitOperatorChatTurn"
     | "admitAuthenticatedOperatorChatTurnWithHeartbeatRecovery"
+    | "admitChatTurn"
     | "startRequestLeaseHeartbeat"
     | "renewRequestLease"
     | "bindDurableRun"

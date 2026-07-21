@@ -138,6 +138,92 @@ export function createAuthenticatedOperatorAdmissionContext(input: {
   return Object.freeze(context);
 }
 
+const EXTERNAL_COMPANION_ADMISSION_CONTEXT = Symbol("goatcitadel.external-companion-admission");
+
+/**
+ * Server-authored proof that a Chat send originates from an authenticated,
+ * currently bound `session_control_client` controller. Like the authenticated
+ * operator context it is branded so a Chat request body can never masquerade as
+ * one: every field is derived from the authenticated companion binding, the
+ * dedicated non-loggable control-token header, and the presented control
+ * generation. No delegated capability is stored here — the send site always
+ * requires `send`, which the durable authority checks against the controller's
+ * stored effective capability set.
+ */
+export interface ExternalCompanionAdmissionContext {
+  readonly kind: "session_control_companion_send";
+  readonly companionSessionId: string;
+  readonly deviceGrantId: string;
+  readonly clientInstanceId: string;
+  readonly principalPurpose: "session_control_client";
+  /** Lowercase SHA-256 of the plaintext control secret presented in the dedicated header. */
+  readonly tokenHashSha256: string;
+  /** Controller generation the client presented; the durable CAS rejects any mismatch. */
+  readonly expectedGeneration: number;
+  readonly [EXTERNAL_COMPANION_ADMISSION_CONTEXT]: true;
+}
+
+export function createExternalCompanionAdmissionContext(input: {
+  companionSessionId: string;
+  deviceGrantId: string;
+  clientInstanceId: string;
+  tokenHashSha256: string;
+  expectedGeneration: number;
+}): ExternalCompanionAdmissionContext {
+  const companionSessionId = input.companionSessionId.trim();
+  const deviceGrantId = input.deviceGrantId.trim();
+  const clientInstanceId = input.clientInstanceId.trim();
+  if (!companionSessionId || !deviceGrantId || !clientInstanceId) {
+    throw new ConflictError({
+      message: "External session-control admission requires the exact bound companion, device, and client identity.",
+    });
+  }
+  const tokenHashSha256 = normalizePresentedControlToken(input.tokenHashSha256);
+  if (!Number.isInteger(input.expectedGeneration) || input.expectedGeneration < 1) {
+    throw sessionControlConflict(
+      "SESSION_CONTROL_GENERATION_STALE",
+      "External session-control admission requires a positive expected controller generation.",
+    );
+  }
+  const context = {
+    kind: "session_control_companion_send" as const,
+    companionSessionId,
+    deviceGrantId,
+    clientInstanceId,
+    principalPurpose: "session_control_client" as const,
+    tokenHashSha256,
+    expectedGeneration: input.expectedGeneration,
+  } as ExternalCompanionAdmissionContext;
+  Object.defineProperty(context, EXTERNAL_COMPANION_ADMISSION_CONTEXT, {
+    configurable: false,
+    enumerable: false,
+    writable: false,
+    value: true,
+  });
+  return Object.freeze(context);
+}
+
+/**
+ * Re-validate the server brand before a send enters canonical admission. A
+ * body-derived object cannot carry the non-enumerable brand, so it fails closed
+ * with a purpose denial rather than reaching the durable authority.
+ */
+export function assertExternalCompanionAdmissionContext(
+  context: ExternalCompanionAdmissionContext,
+): ExternalCompanionAdmissionContext {
+  if (
+    context.kind !== "session_control_companion_send" ||
+    context[EXTERNAL_COMPANION_ADMISSION_CONTEXT] !== true ||
+    context.principalPurpose !== "session_control_client"
+  ) {
+    throw sessionControlConflict(
+      "SESSION_CONTROL_PRINCIPAL_PURPOSE_DENIED",
+      "External session-control admission context is not route-authored.",
+    );
+  }
+  return context;
+}
+
 export type ChatTurnAdmissionActor =
   | {
       actorKind: "operator" | "system";
@@ -153,6 +239,8 @@ export type ChatTurnAdmissionActor =
       principalPurpose: "session_control_client";
       tokenHashSha256: string;
       requiredCapability: ExternalSessionControlCapability;
+      /** Controller generation the caller presented; admission CASes it against the current grant. */
+      expectedGeneration: number;
     };
 
 export interface AdmitChatTurnInput {
@@ -380,7 +468,9 @@ export class SessionControlService {
             actorKind: "external_companion",
             workspaceId: meta.workspaceId,
             sessionId: input.sessionId,
-            expectedGeneration: observedControl.generation,
+            // CAS the caller-presented generation, not merely the observed one, so a
+            // stale/superseded controller is rejected before canonical admission.
+            expectedGeneration: actor.expectedGeneration,
             companionSessionId: actor.companionSessionId,
             deviceGrantId: actor.deviceGrantId,
             clientInstanceId: actor.clientInstanceId,
@@ -1179,6 +1269,12 @@ function normalizeChatTurnAdmissionActor(actor: ChatTurnAdmissionActor): ChatTur
       throw new ConflictError({
         message: "External Chat turn admission requires the raw authenticated companion session id.",
       });
+    }
+    if (!Number.isInteger(actor.expectedGeneration) || actor.expectedGeneration < 1) {
+      throw sessionControlConflict(
+        "SESSION_CONTROL_GENERATION_STALE",
+        "External Chat turn admission requires a positive expected controller generation.",
+      );
     }
     return { ...actor, actorId, companionSessionId };
   }

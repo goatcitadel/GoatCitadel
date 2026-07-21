@@ -25,7 +25,7 @@ import type {
   GatewayEventInput,
   ProactiveRunRecord,
 } from "@goatcitadel/contracts";
-import { isChatTurnActiveStatus, isChatTurnTerminalStatus, NotFoundError } from "@goatcitadel/contracts";
+import { ConflictError, isChatTurnActiveStatus, isChatTurnTerminalStatus, NotFoundError } from "@goatcitadel/contracts";
 import type { SessionAutonomyPrefsRecord, Storage } from "@goatcitadel/storage";
 import { looksLowConfidenceResponse } from "./learned-memory-utils.js";
 import {
@@ -56,10 +56,13 @@ import type { SurfaceClassification } from "./surface-router-heuristics.js";
 import type { SurfaceRouteRequest } from "./surface-router-service.js";
 import type { SurfaceRouteOverrideSignalInput } from "./improvement-service.js";
 import {
+  assertExternalCompanionAdmissionContext,
   computeChatTurnAdmissionMaterialSha256,
   resolveChatTurnAdmissionActorId,
   type AuthenticatedOperatorAdmissionContext,
+  type ChatTurnAdmissionActor,
   type DecisionCommittedHeartbeatRecoveryIdentity,
+  type ExternalCompanionAdmissionContext,
 } from "./session-control-service.js";
 import type { ActiveTurnAdmission, ChatStreamMutationLifecycle } from "./chat-turn-types.js";
 import { persistInitialChatTurnTrace, persistPreparedChatCapabilityAdmission } from "./chat-durable-run-service.js";
@@ -103,6 +106,11 @@ export interface AgentChatTurnRequestOptions {
   assertDispatchOwnership?: () => void;
   /** Present only on authenticated operator HTTP route calls. */
   authenticatedOperator?: AuthenticatedOperatorAdmissionContext;
+  /**
+   * Present only when a bound external `session_control_client` controller sends
+   * through the canonical route. Mutually exclusive with `authenticatedOperator`.
+   */
+  externalCompanion?: ExternalCompanionAdmissionContext;
 }
 
 export interface OperatorChatTurnRequestOptions {
@@ -112,6 +120,11 @@ export interface OperatorChatTurnRequestOptions {
 export interface OperatorChatTurnStreamRequestOptions extends OperatorChatTurnRequestOptions {
   abortSignal?: AbortSignal;
   mutationLifecycle?: ChatStreamMutationLifecycle;
+  /**
+   * Present only when a bound external `session_control_client` controller sends
+   * through the canonical streaming route. Mutually exclusive with `authenticatedOperator`.
+   */
+  externalCompanion?: ExternalCompanionAdmissionContext;
 }
 
 export interface ChatTurnEntryHost
@@ -212,6 +225,11 @@ interface EntryOperatorAdmissionInput {
   correlationId: string;
 }
 
+interface EntrySendAdmissionContext {
+  authenticatedOperator?: AuthenticatedOperatorAdmissionContext;
+  externalCompanion?: ExternalCompanionAdmissionContext;
+}
+
 async function admitEntryOperatorChatTurn(
   host: ChatTurnEntryHost,
   input: EntryOperatorAdmissionInput,
@@ -224,6 +242,54 @@ async function admitEntryOperatorChatTurn(
     { ...input, authenticatedOperator },
     (identity) => host.recoverDecisionCommittedHeartbeat(identity),
   );
+}
+
+/**
+ * Send-only admission dispatcher. An external `session_control_client` controller
+ * enters the *same* canonical admission — carrying its bound companion/device/
+ * client identity, presented control-token hash, `send` capability, and control
+ * generation — so the durable authority CASes generation, binding, token,
+ * liveness, and capability before any side effect and the resulting admission is
+ * fenced identically to an operator turn at every late recheck. Operator sends
+ * keep their exact prior path unchanged. Retry/edit deliberately never reach
+ * this dispatcher; external v1 has no retry/edit/undo/steer capability.
+ */
+async function admitEntrySendChatTurn(
+  host: ChatTurnEntryHost,
+  input: EntryOperatorAdmissionInput,
+  context: EntrySendAdmissionContext,
+): Promise<ActiveTurnAdmission> {
+  if (!context.externalCompanion) {
+    return admitEntryOperatorChatTurn(host, input, context.authenticatedOperator);
+  }
+  if (context.authenticatedOperator) {
+    throw new ConflictError({
+      message: "A Chat send cannot be attributed to both an authenticated operator and an external controller.",
+    });
+  }
+  const companion = assertExternalCompanionAdmissionContext(context.externalCompanion);
+  // Drop the operator-derived actorId; external admission carries the raw
+  // authenticated companion binding as its actor instead.
+  const { actorId: _operatorActorId, ...actorlessInput } = input;
+  const actor: ChatTurnAdmissionActor = {
+    actorKind: "external_companion",
+    actorId: companion.companionSessionId,
+    companionSessionId: companion.companionSessionId,
+    deviceGrantId: companion.deviceGrantId,
+    clientInstanceId: companion.clientInstanceId,
+    principalPurpose: "session_control_client",
+    tokenHashSha256: companion.tokenHashSha256,
+    requiredCapability: "send",
+    expectedGeneration: companion.expectedGeneration,
+  };
+  return host.sessionControlRuntimeOwner.admitChatTurn({ ...actorlessInput, actor });
+}
+
+function resolveEntrySendAdmissionActorId(
+  input: ChatSendMessageRequest,
+  externalCompanion: ExternalCompanionAdmissionContext | undefined,
+): string {
+  return externalCompanion ? externalCompanion.companionSessionId : resolveTurnAdmissionActorId(input);
 }
 
 export async function agentSendChatMessage(
@@ -246,10 +312,10 @@ export async function agentSendChatMessage(
         userMessageId: randomUUID(),
         assistantMessageId: `assistant-${randomUUID()}`,
       } satisfies AgentChatTurnIdentity);
-    const admissionActorId = resolveTurnAdmissionActorId(input);
+    const admissionActorId = resolveEntrySendAdmissionActorId(input, options?.externalCompanion);
     const turnAdmission =
       options?.turnAdmission ??
-      (await admitEntryOperatorChatTurn(
+      (await admitEntrySendChatTurn(
         host,
         {
           sessionId,
@@ -259,7 +325,10 @@ export async function agentSendChatMessage(
           idempotencyKey: `chat-turn-admit:${turnIdentity.turnId}`,
           correlationId: turnIdentity.turnId,
         },
-        options?.authenticatedOperator,
+        {
+          authenticatedOperator: options?.authenticatedOperator,
+          externalCompanion: options?.externalCompanion,
+        },
       ));
     assertEntryTurnAdmission(turnAdmission, sessionId, turnIdentity.turnId, input);
     const admissionHeartbeat = host.sessionControlRuntimeOwner.startRequestLeaseHeartbeat(turnAdmission);
@@ -1207,8 +1276,8 @@ export async function* agentSendChatMessageStream(
   yield* host.withChatTurnWriteLeaseStream(sessionId, "agent-send/stream", () => {
     return (async function* (): AsyncGenerator<ChatStreamChunk> {
       const turnIdentity = createEntryTurnIdentity();
-      const admissionActorId = resolveTurnAdmissionActorId(input);
-      const turnAdmission = await admitEntryOperatorChatTurn(
+      const admissionActorId = resolveEntrySendAdmissionActorId(input, options?.externalCompanion);
+      const turnAdmission = await admitEntrySendChatTurn(
         host,
         {
           sessionId,
@@ -1218,7 +1287,10 @@ export async function* agentSendChatMessageStream(
           idempotencyKey: `chat-turn-admit:${turnIdentity.turnId}`,
           correlationId: turnIdentity.turnId,
         },
-        options?.authenticatedOperator,
+        {
+          authenticatedOperator: options?.authenticatedOperator,
+          externalCompanion: options?.externalCompanion,
+        },
       );
       assertEntryTurnAdmission(turnAdmission, sessionId, turnIdentity.turnId, input);
       const heartbeat = host.sessionControlRuntimeOwner.startRequestLeaseHeartbeat(turnAdmission);

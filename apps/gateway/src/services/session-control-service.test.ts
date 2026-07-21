@@ -425,6 +425,7 @@ describe("SessionControlService", () => {
       principalPurpose: "session_control_client" as const,
       tokenHashSha256: "a".repeat(64),
       requiredCapability: "send_message" as const,
+      expectedGeneration: 3,
     };
 
     const active = service.admitChatTurn({
@@ -635,6 +636,42 @@ describe("SessionControlService", () => {
         evaluatedPolicySha256: plan.evaluatedPolicySha256,
       }),
     );
+  });
+
+  it("denies the session event read to a send-only external controller but allows it once read is delegated", () => {
+    const companion = {
+      actorKind: "external_companion" as const,
+      companionSessionId: "companion-session-1",
+      deviceGrantId: "device-grant-1",
+      clientInstanceId: "client-instance-1",
+      principalPurpose: "session_control_client" as const,
+    };
+    const control = (capabilities: string[]) => ({
+      ownerKind: "external_companion",
+      generation: 4,
+      capabilities,
+      boundExternalController: { companionSessionId: "companion-session-1", clientInstanceId: "client-instance-1" },
+    });
+    const buildService = (capabilities: string[]) =>
+      new SessionControlService({
+        chatSessionMeta: { get: vi.fn(() => ({ workspaceId: "workspace-1" })) },
+        sessionControls: {
+          getControl: vi.fn(() => control(capabilities)),
+          listEvents: vi.fn(() => []),
+        },
+      } as unknown as Storage);
+
+    const sendOnly = buildService(["send"]);
+    let denied: unknown;
+    try {
+      sendOnly.listEvents({ actor: companion, sessionId: "session-1" });
+    } catch (error) {
+      denied = (error as ConflictError & { details?: { sessionControlCode?: string } }).details?.sessionControlCode;
+    }
+    expect(denied).toBe("SESSION_CONTROL_CAPABILITY_DENIED");
+
+    const withRead = buildService(["send", "read"]);
+    expect(withRead.listEvents({ actor: companion, sessionId: "session-1" })).toEqual([]);
   });
 });
 

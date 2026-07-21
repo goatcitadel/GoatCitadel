@@ -260,11 +260,16 @@ export function composeChatRouteDependencies(
       gateway.approvalRuntime.resolveChatToolApproval(sessionId, approvalId, decision, options),
   };
   const chatMessages: GatewayRouteServiceDependencies["chatMessages"] = {
-    agentSendChatMessage: (sessionId, input, authenticatedOperator) =>
+    agentSendChatMessage: (sessionId, input, authenticatedOperator, externalCompanion) =>
       gateway.chatTurnRuntime.agentSendChatMessage(
         sessionId,
         input,
-        authenticatedOperator ? { authenticatedOperator } : undefined,
+        authenticatedOperator || externalCompanion
+          ? {
+              ...(authenticatedOperator ? { authenticatedOperator } : {}),
+              ...(externalCompanion ? { externalCompanion } : {}),
+            }
+          : undefined,
       ),
     agentSendChatMessageStream: (
       sessionId,
@@ -272,11 +277,13 @@ export function composeChatRouteDependencies(
       signal?: AbortSignal,
       mutationLifecycle?: ChatStreamMutationLifecycle,
       authenticatedOperator?,
+      externalCompanion?,
     ) =>
       gateway.chatTurnRuntime.agentSendChatMessageStream(sessionId, input, {
         abortSignal: signal,
         ...(mutationLifecycle ? { mutationLifecycle } : {}),
         ...(authenticatedOperator ? { authenticatedOperator } : {}),
+        ...(externalCompanion ? { externalCompanion } : {}),
       }),
     answerChatUserInputPrompt: (sessionId, turnId, promptId, input, responder) =>
       chatMessageRouteRuntime.answerChatUserInputPrompt(

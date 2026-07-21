@@ -147,7 +147,10 @@ vi.mock("./chat-workbench-service.js", () => ({
 
 import { NotFoundError } from "@goatcitadel/contracts";
 import { composeChatRouteDependencies } from "./gateway-route-composition-chat.js";
-import { createAuthenticatedOperatorAdmissionContext } from "./session-control-service.js";
+import {
+  createAuthenticatedOperatorAdmissionContext,
+  createExternalCompanionAdmissionContext,
+} from "./session-control-service.js";
 
 function fn<TArgs extends unknown[] = unknown[], TResult = unknown>(impl: (...args: TArgs) => TResult) {
   return vi.fn(impl);
@@ -902,6 +905,39 @@ describe("composeChatRouteDependencies", () => {
       "turn-1",
       { content: "edit stream" },
       { abortSignal: undefined, authenticatedOperator },
+    );
+  });
+
+  it("threads the bound external-controller context into the canonical send facade without a new route", () => {
+    const gateway = createGateway();
+    const deps = composeChatRouteDependencies(gateway as never) as any;
+    const externalCompanion = createExternalCompanionAdmissionContext({
+      companionSessionId: "companion-session-1",
+      deviceGrantId: "device-grant-1",
+      clientInstanceId: "client-instance-1",
+      tokenHashSha256: "a".repeat(64),
+      expectedGeneration: 4,
+    });
+
+    deps.chatMessages.agentSendChatMessage("session-1", { content: "send" }, undefined, externalCompanion);
+    deps.chatMessages.agentSendChatMessageStream(
+      "session-1",
+      { content: "send stream" },
+      undefined,
+      undefined,
+      undefined,
+      externalCompanion,
+    );
+
+    expect(gateway.chatTurnRuntime.agentSendChatMessage).toHaveBeenLastCalledWith(
+      "session-1",
+      { content: "send" },
+      { externalCompanion },
+    );
+    expect(gateway.chatTurnRuntime.agentSendChatMessageStream).toHaveBeenLastCalledWith(
+      "session-1",
+      { content: "send stream" },
+      { abortSignal: undefined, externalCompanion },
     );
   });
 

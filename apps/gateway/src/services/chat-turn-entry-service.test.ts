@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatMessageRecord, ChatTurnTraceRecord } from "@goatcitadel/contracts";
-import { NotFoundError, SCHEDULED_TURN_PERMISSION_PROFILE_ID } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError, SCHEDULED_TURN_PERMISSION_PROFILE_ID } from "@goatcitadel/contracts";
 
 const dispatchMocks = vi.hoisted(() => ({
   consumePreparedAgentChatTurn: vi.fn(async (_host, sessionId, _request, prepared, eventType) => ({
@@ -59,7 +59,10 @@ import {
 } from "./chat-turn-entry-service.js";
 import { ChatTurnStreamRegistrationMismatchError } from "./chat-turn-execution-registry.js";
 import { routeWithModelRouter } from "./model-router-decision-service.js";
-import { computeChatTurnAdmissionMaterialSha256 } from "./session-control-service.js";
+import {
+  computeChatTurnAdmissionMaterialSha256,
+  createExternalCompanionAdmissionContext,
+} from "./session-control-service.js";
 
 function createPreparedTurn(overrides: Record<string, unknown> = {}) {
   const userMessage: ChatMessageRecord = {
@@ -230,6 +233,21 @@ function createHost(turnRuntimeResult: Record<string, unknown>) {
         },
         admittedRequest: input.request,
         requestActor: { actorKind: "operator", actorId: input.actorId },
+        requestClaim: { runtimeOwnerId: `runtime-${input.turnId}`, leaseRevision: 1 },
+      })),
+      admitChatTurn: vi.fn((input) => ({
+        identity: {
+          admissionId: `admission-${input.turnId}`,
+          sessionIncarnationId: "incarnation-1",
+          workspaceId: "default",
+          sessionId: input.sessionId,
+          turnId: input.turnId,
+          aggregateRevision: 1,
+          controllerGeneration: input.actor?.actorKind === "external_companion" ? input.actor.expectedGeneration : 1,
+          materialSha256: computeChatTurnAdmissionMaterialSha256(input.request),
+        },
+        admittedRequest: input.request,
+        requestActor: { actorKind: input.actor.actorKind, actorId: input.actor.actorId },
         requestClaim: { runtimeOwnerId: `runtime-${input.turnId}`, leaseRevision: 1 },
       })),
       startRequestLeaseHeartbeat: vi.fn(() => ({ stop: vi.fn(), assertHealthy: vi.fn() })),
@@ -1626,6 +1644,91 @@ describe("agentSendChatMessage", () => {
       }),
     );
     expect(result.decision.fingerprint).toEqual(expect.any(String));
+  });
+});
+
+describe("agentSendChatMessage external companion pipeline (HX-411)", () => {
+  const externalCompanion = createExternalCompanionAdmissionContext({
+    companionSessionId: "companion-session-1",
+    deviceGrantId: "device-grant-1",
+    clientInstanceId: "client-instance-1",
+    tokenHashSha256: "b".repeat(64),
+    expectedGeneration: 5,
+  });
+
+  it("runs a bound external send through the canonical LLM pipeline to one answer, fenced by the external admission", async () => {
+    const host = createHost({
+      assistantContent: "External controller answer.",
+      assistantModel: "primary-model",
+      turnTrace: createTrace({ status: "completed" }),
+    });
+
+    const response = await agentSendChatMessage(
+      host,
+      "session-1",
+      { content: "hello", mode: "chat" },
+      { externalCompanion },
+    );
+
+    // Canonical answer produced through the same pipeline as an operator turn.
+    expect(response.assistantMessage?.content).toBe("External controller answer.");
+    expect(host.ingestEvent).toHaveBeenCalledTimes(1);
+    // Admitted as an external companion carrying its presented generation.
+    const admitChatTurn = host.sessionControlRuntimeOwner.admitChatTurn as ReturnType<typeof vi.fn>;
+    expect(admitChatTurn).toHaveBeenCalledTimes(1);
+    expect(admitChatTurn.mock.calls[0][0].actor).toMatchObject({
+      actorKind: "external_companion",
+      companionSessionId: "companion-session-1",
+      requiredCapability: "send",
+      expectedGeneration: 5,
+    });
+    expect(host.sessionControlRuntimeOwner.admitOperatorChatTurn).not.toHaveBeenCalled();
+    // The same late fence used for operator turns rechecks the external admission.
+    const assertActiveTurnWrite = host.sessionControlRuntimeOwner.assertActiveTurnWrite as ReturnType<typeof vi.fn>;
+    expect(assertActiveTurnWrite).toHaveBeenCalled();
+    expect(assertActiveTurnWrite.mock.calls[0][0].requestActor.actorKind).toBe("external_companion");
+    // Terminal closure is content-free and completed for a clean turn.
+    expect(host.sessionControlRuntimeOwner.closeTurnWrite).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "completed", actorId: "companion-session-1" }),
+    );
+  });
+
+  it("blocks the external assistant result and never ingests content when the generation advances after preparation", async () => {
+    const host = createHost({
+      assistantContent: "Should never be committed.",
+      assistantModel: "primary-model",
+      turnTrace: createTrace({ status: "completed" }),
+    });
+    const authorityChanged = new ConflictError({
+      message: "Mutation admission no longer matches the current session controller authority.",
+    });
+    let prepared = false;
+    const prepareMock = host.prepareAgentChatTurn as ReturnType<typeof vi.fn>;
+    const originalPrepareImpl = prepareMock.getMockImplementation();
+    prepareMock.mockImplementation(async (...args: unknown[]) => {
+      prepared = true;
+      return originalPrepareImpl?.(...args);
+    });
+    // The controller generation advances during preparation: the next authority
+    // recheck fences the turn before any authority-bearing result is written.
+    (host.sessionControlRuntimeOwner.assertActiveTurnWrite as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      if (prepared) {
+        throw authorityChanged;
+      }
+    });
+
+    await expect(
+      agentSendChatMessage(host, "session-1", { content: "hello", mode: "chat" }, { externalCompanion }),
+    ).rejects.toBe(authorityChanged);
+
+    // HX-305/HX-306 truth is preserved by the durable/agent-runner evidence sources
+    // (proven at the storage layer); the fence only blocks the authority-bearing
+    // assistant result and terminalizes the admission content-free.
+    expect(host.ingestEvent).not.toHaveBeenCalled();
+    expect(host.updateActiveLeafOrThrow).not.toHaveBeenCalled();
+    expect(host.sessionControlRuntimeOwner.closeTurnWrite).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "cancelled", actorId: "companion-session-1" }),
+    );
   });
 });
 
