@@ -26,10 +26,13 @@ import {
 } from "./chat.shared.js";
 import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
 import { projectAndCapChatHistoryWindow, projectChatHistoryContinuation } from "../services/chat-history-service.js";
+import { withRouteAccess } from "./route-access.js";
 import {
-  createAuthenticatedOperatorAdmissionContext as createBrandedAuthenticatedOperatorAdmissionContext,
-  type AuthenticatedOperatorAdmissionContext,
-} from "../services/session-control-service.js";
+  rejectExternalTranscriptRead,
+  resolveAuthenticatedOperatorAdmissionContext,
+  resolveExternalCompanionAdmissionContext,
+  resolveSendAdmissionArgs,
+} from "./session-control-request-context.js";
 
 const listMessagesSchema = z.object({
   limit: z.coerce.number().int().positive().max(1000).default(200),
@@ -337,18 +340,6 @@ function stampChatOperatorContext<TInput extends Partial<ChatSendMessageRequest>
   } as TInput;
 }
 
-function resolveAuthenticatedOperatorAdmissionContext(
-  request: FastifyRequest,
-): AuthenticatedOperatorAdmissionContext | undefined {
-  if (!request.authActorId?.trim() || !["none", "token", "basic", "loopback"].includes(request.authActorSource)) {
-    return undefined;
-  }
-  return createBrandedAuthenticatedOperatorAdmissionContext({
-    actorId: request.authActorId,
-    authActorSource: request.authActorSource,
-  });
-}
-
 const routePreflightSchema = z.object({
   action: z.enum(["send", "retry", "edit"]),
   turnId: z.string().optional(),
@@ -387,7 +378,15 @@ const answerUserInputPromptSchema = z.object({
 });
 
 export function registerChatMessageRoutes(fastify: FastifyInstance): void {
-  fastify.get("/api/v1/chat/sessions/:sessionId/messages", async (request, reply) => {
+  // HX-411: the reviewed bounded transcript reads and the canonical send routes
+  // are the only Chat surface an external `session_control_client` companion may
+  // reach. The operator branch is unchanged; the external branch is gated on
+  // exact purpose (central guard), session binding, and — for transcript reads —
+  // delegated `read`, or — for sends — a signed request, control token, `send`,
+  // generation, and live lease enforced during canonical admission.
+  const operatorOrCompanionRoute = withRouteAccess(fastify, "operator-or-session-control-companion");
+
+  fastify.get("/api/v1/chat/sessions/:sessionId/messages", operatorOrCompanionRoute, async (request, reply) => {
     const params = sessionParamsSchema.safeParse(request.params);
     const query = listMessagesSchema.safeParse(request.query);
     if (!params.success || !query.success) {
@@ -397,6 +396,9 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
           query: query.success ? undefined : query.error.flatten(),
         },
       });
+    }
+    if (rejectExternalTranscriptRead(fastify, request, reply, params.data.sessionId)) {
+      return;
     }
     try {
       const items = await fastify.services.chatMessages.listChatMessages(
@@ -410,7 +412,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
     }
   });
 
-  fastify.get("/api/v1/chat/sessions/:sessionId/history", async (request, reply) => {
+  fastify.get("/api/v1/chat/sessions/:sessionId/history", operatorOrCompanionRoute, async (request, reply) => {
     reply.header("cache-control", "private, no-store");
     reply.header("pragma", "no-cache");
     const params = sessionParamsSchema.safeParse(request.params);
@@ -422,6 +424,9 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
           query: query.success ? undefined : query.error.flatten(),
         },
       });
+    }
+    if (rejectExternalTranscriptRead(fastify, request, reply, params.data.sessionId)) {
+      return;
     }
     try {
       if (
@@ -471,7 +476,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
     }
   });
 
-  fastify.get("/api/v1/chat/sessions/:sessionId/thread", async (request, reply) => {
+  fastify.get("/api/v1/chat/sessions/:sessionId/thread", operatorOrCompanionRoute, async (request, reply) => {
     const params = sessionParamsSchema.safeParse(request.params);
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });
@@ -479,6 +484,9 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
     const query = chatThreadQuerySchema.safeParse(request.query ?? {});
     if (!query.success) {
       return reply.code(400).send({ error: query.error.flatten() });
+    }
+    if (rejectExternalTranscriptRead(fastify, request, reply, params.data.sessionId)) {
+      return;
     }
     try {
       return reply.send(
@@ -507,7 +515,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
     });
   });
 
-  fastify.post("/api/v1/chat/sessions/:sessionId/agent-send", async (request, reply) => {
+  fastify.post("/api/v1/chat/sessions/:sessionId/agent-send", operatorOrCompanionRoute, async (request, reply) => {
     const params = sessionParamsSchema.safeParse(request.params);
     const body = sendMessageSchema.safeParse(request.body);
     if (!params.success || !body.success) {
@@ -519,19 +527,26 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
-      const decisionRejected = await requireFreshRouteDecision(reply, fastify.services.chatMessages, {
-        sessionId: params.data.sessionId,
-        action: "send",
-        body: body.data,
-        actor: request,
-      });
-      if (decisionRejected) {
-        return;
+      // Resolve the external controller binding first: it fails closed with a
+      // typed control error when the token/generation/client-instance headers
+      // are absent for a purpose-bound companion, and returns undefined for
+      // operators (who keep the unchanged send path).
+      const externalCompanion = resolveExternalCompanionAdmissionContext(request);
+      if (!externalCompanion) {
+        const decisionRejected = await requireFreshRouteDecision(reply, fastify.services.chatMessages, {
+          sessionId: params.data.sessionId,
+          action: "send",
+          body: body.data,
+          actor: request,
+        });
+        if (decisionRejected) {
+          return;
+        }
       }
       const sent = await fastify.services.chatMessages.agentSendChatMessage(
         params.data.sessionId,
         stampChatOperatorContext(request, body.data),
-        resolveAuthenticatedOperatorAdmissionContext(request),
+        ...resolveSendAdmissionArgs(request, externalCompanion),
       );
       markMutationCommitted(request);
       return reply.send(sent);
@@ -581,70 +596,85 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
     });
   });
 
-  fastify.post("/api/v1/chat/sessions/:sessionId/agent-send/stream", async (request, reply) => {
-    const params = sessionParamsSchema.safeParse(request.params);
-    const body = sendMessageSchema.safeParse(request.body);
-    if (!params.success || !body.success) {
-      return reply.code(400).send({
-        error: {
-          params: params.success ? undefined : params.error.flatten(),
-          body: body.success ? undefined : body.error.flatten(),
-        },
-      });
-    }
-    try {
-      const decisionRejected = await requireFreshRouteDecision(reply, fastify.services.chatMessages, {
-        sessionId: params.data.sessionId,
-        action: "send",
-        body: body.data,
-        actor: request,
-      });
-      if (decisionRejected) {
+  fastify.post(
+    "/api/v1/chat/sessions/:sessionId/agent-send/stream",
+    operatorOrCompanionRoute,
+    async (request, reply) => {
+      const params = sessionParamsSchema.safeParse(request.params);
+      const body = sendMessageSchema.safeParse(request.body);
+      if (!params.success || !body.success) {
+        return reply.code(400).send({
+          error: {
+            params: params.success ? undefined : params.error.flatten(),
+            body: body.success ? undefined : body.error.flatten(),
+          },
+        });
+      }
+      let externalCompanion: ReturnType<typeof resolveExternalCompanionAdmissionContext>;
+      try {
+        externalCompanion = resolveExternalCompanionAdmissionContext(request);
+        if (!externalCompanion) {
+          const decisionRejected = await requireFreshRouteDecision(reply, fastify.services.chatMessages, {
+            sessionId: params.data.sessionId,
+            action: "send",
+            body: body.data,
+            actor: request,
+          });
+          if (decisionRejected) {
+            return;
+          }
+        }
+      } catch (error) {
+        return sendChatWriteError(reply, error);
+      }
+
+      return streamSseReply(
+        reply,
+        request,
+        params.data.sessionId,
+        (signal, lifecycle) =>
+          fastify.services.chatMessages.agentSendChatMessageStream(
+            params.data.sessionId,
+            stampChatOperatorContext(request, body.data),
+            signal,
+            lifecycle,
+            ...resolveSendAdmissionArgs(request, externalCompanion),
+          ),
+        { trackMutation: true },
+      );
+    },
+  );
+
+  fastify.get(
+    "/api/v1/chat/sessions/:sessionId/turns/:turnId/stream",
+    operatorOrCompanionRoute,
+    async (request, reply) => {
+      const params = turnParamsSchema.safeParse(request.params);
+      const query = streamResumeQuerySchema.safeParse(request.query ?? {});
+      if (!params.success || !query.success) {
+        return reply.code(400).send({
+          error: {
+            params: params.success ? undefined : params.error.flatten(),
+            query: query.success ? undefined : query.error.flatten(),
+          },
+        });
+      }
+      if (rejectExternalTranscriptRead(fastify, request, reply, params.data.sessionId)) {
         return;
       }
-    } catch (error) {
-      return sendChatWriteError(reply, error);
-    }
-
-    return streamSseReply(
-      reply,
-      request,
-      params.data.sessionId,
-      (signal, lifecycle) =>
-        fastify.services.chatMessages.agentSendChatMessageStream(
+      const headerEventId =
+        typeof request.headers["last-event-id"] === "string" ? request.headers["last-event-id"] : undefined;
+      const sinceEventId = query.data.sinceEventId ?? headerEventId;
+      return streamSseReply(reply, request, params.data.sessionId, (signal) =>
+        fastify.services.chatMessages.resumeAgentChatTurnStream(
           params.data.sessionId,
-          stampChatOperatorContext(request, body.data),
+          params.data.turnId,
+          sinceEventId,
           signal,
-          lifecycle,
-          resolveAuthenticatedOperatorAdmissionContext(request),
         ),
-      { trackMutation: true },
-    );
-  });
-
-  fastify.get("/api/v1/chat/sessions/:sessionId/turns/:turnId/stream", async (request, reply) => {
-    const params = turnParamsSchema.safeParse(request.params);
-    const query = streamResumeQuerySchema.safeParse(request.query ?? {});
-    if (!params.success || !query.success) {
-      return reply.code(400).send({
-        error: {
-          params: params.success ? undefined : params.error.flatten(),
-          query: query.success ? undefined : query.error.flatten(),
-        },
-      });
-    }
-    const headerEventId =
-      typeof request.headers["last-event-id"] === "string" ? request.headers["last-event-id"] : undefined;
-    const sinceEventId = query.data.sinceEventId ?? headerEventId;
-    return streamSseReply(reply, request, params.data.sessionId, (signal) =>
-      fastify.services.chatMessages.resumeAgentChatTurnStream(
-        params.data.sessionId,
-        params.data.turnId,
-        sinceEventId,
-        signal,
-      ),
-    );
-  });
+      );
+    },
+  );
 
   fastify.get("/api/v1/chat/sessions/:sessionId/turns/:turnId/context-manifest", async (request, reply) => {
     const params = turnParamsSchema.safeParse(request.params);

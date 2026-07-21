@@ -278,6 +278,7 @@ describe("chat message route-decision tails", () => {
 
 function buildApp(chatMessages: Record<string, unknown>): FastifyInstance {
   const next = Fastify();
+  next.decorate("requireOperatorAuth", async () => undefined);
   next.decorate("services", { chatMessages } as never);
   void next.register(chatRoutes);
   return next;

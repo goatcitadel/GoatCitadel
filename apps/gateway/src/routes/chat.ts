@@ -3,6 +3,7 @@ import { registerChatProjectRoutes } from "./chat.projects.js";
 import { registerChatSessionRoutes } from "./chat.sessions.js";
 import { registerChatAttachmentRoutes } from "./chat.attachments.js";
 import { registerChatMessageRoutes } from "./chat.messages.js";
+import { registerSessionControlRoutes } from "./session-control.js";
 import { registerChatDelegateRoutes } from "./chat.delegate.js";
 import { registerChatToolRoutes } from "./chat.tools.js";
 import { registerChatMiscRoutes } from "./chat.misc.js";
@@ -12,6 +13,7 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
   registerChatProjectRoutes(fastify);
   registerChatSessionRoutes(fastify);
   registerChatMessageRoutes(fastify);
+  registerSessionControlRoutes(fastify);
   registerChatDelegateRoutes(fastify);
   registerChatMiscRoutes(fastify);
   await registerChatCompactionBreakerActionRoutes(fastify);

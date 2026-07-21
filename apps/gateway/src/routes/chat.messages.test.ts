@@ -37,6 +37,7 @@ describe("chat message routes", () => {
     ] as const;
     const listChatMessages = vi.fn(async () => rawMessages);
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatMessages: { listChatMessages } } as never);
     await app.register(chatRoutes);
 
@@ -69,6 +70,7 @@ describe("chat message routes", () => {
       turns: [],
     }));
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatMessages: { getChatThread } } as never);
     await app.register(chatRoutes);
 
@@ -87,6 +89,7 @@ describe("chat message routes", () => {
       .mockResolvedValueOnce({ state: "available", profile: { profileId: "profile-1" } })
       .mockRejectedValueOnce(new NotFoundError({ entity: "chat turn capability profile", id: "turn-1" }));
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.addHook("onRequest", async (request) => {
       (request as typeof request & { authActorId?: string }).authActorId = "operator-1";
     });
@@ -114,6 +117,7 @@ describe("chat message routes", () => {
   it("rejects invalid decision trace include flags without loading the thread", async () => {
     const getChatThread = vi.fn();
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatMessages: { getChatThread } } as never);
     await app.register(chatRoutes);
 
@@ -130,6 +134,7 @@ describe("chat message routes", () => {
   it("returns migration guidance for the removed POST /messages write path", async () => {
     const sendChatMessage = vi.fn();
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatMessages: { sendChatMessage } } as never);
     await app.register(chatRoutes);
 
@@ -150,6 +155,7 @@ describe("chat message routes", () => {
   it("returns validation error for missing content", async () => {
     const sendChatMessage = vi.fn();
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatMessages: { sendChatMessage } } as never);
     await app.register(chatRoutes);
 
@@ -166,6 +172,7 @@ describe("chat message routes", () => {
     const agentSendChatMessage = vi.fn();
     const agentSendChatMessageStream = vi.fn();
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatMessages: { agentSendChatMessage, agentSendChatMessageStream } } as never);
     await app.register(chatRoutes);
 
@@ -221,6 +228,7 @@ describe("chat message routes", () => {
     }));
     const agentSendChatMessageStream = vi.fn();
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", {
       chatMessages: { routePreflight, agentSendChatMessage, agentSendChatMessageStream },
     } as never);
@@ -290,6 +298,7 @@ describe("chat message routes", () => {
       assistantMessage: { messageId: "assistant-1", content: "ok" },
     }));
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatMessages: { routePreflight, agentSendChatMessage } } as never);
     await app.register(chatRoutes);
 
@@ -362,6 +371,7 @@ describe("chat message routes", () => {
       assistantMessage: { messageId: "assistant-1", content: "ok" },
     }));
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatMessages: { routePreflight, agentSendChatMessage } } as never);
     await app.register(chatRoutes);
 
@@ -421,6 +431,7 @@ describe("chat message routes", () => {
       assistantMessage: { messageId: "assistant-1", content: "ok" },
     }));
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatMessages: { routePreflight, agentSendChatMessage } } as never);
     await app.register(chatRoutes);
 
@@ -478,6 +489,7 @@ describe("chat message routes", () => {
       .mockResolvedValueOnce({ decision: baseDecision, blockedReason: "No model configured" });
     const agentSendChatMessage = vi.fn();
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatMessages: { routePreflight, agentSendChatMessage } } as never);
     await app.register(chatRoutes);
 

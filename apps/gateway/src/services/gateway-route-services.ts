@@ -151,6 +151,7 @@ import {
 } from "./obsidian-route-service.js";
 import { OrchestrationRouteService, type OrchestrationRoutePort } from "./orchestration-route-service.js";
 import { PromptPacksRouteService, type PromptPacksRoutePort } from "./prompt-packs-route-service.js";
+import type { SessionControlRouteService } from "./session-control-route-service.js";
 import {
   createRealtimeEventsRouteService,
   type RealtimeEventsRoutePort,
@@ -257,6 +258,7 @@ export interface GatewayRouteServices {
   remoteWorkers: RemoteWorkersRouteService;
   runtimeLifecycle: RuntimeLifecycleRouteService;
   secrets: SecretsRouteService;
+  sessionControl: SessionControlRouteService;
   settings: SettingsRouteService;
   sessionsList: SessionsListRouteService;
   skills: SkillsRouteService;
@@ -333,6 +335,7 @@ export interface GatewayRouteServiceDependencies {
   remoteWorkers: RemoteWorkerRegistryStore;
   runtimeLifecycle: RuntimeLifecycleRoutePort;
   secrets: SecretsRoutePort;
+  sessionControl: SessionControlRouteService;
   settings: SettingsRoutePort;
   sessionsList: SessionsListRoutePort;
   skills: SkillsRoutePort;
@@ -407,6 +410,7 @@ export function createGatewayRouteServices(deps: GatewayRouteServiceDependencies
     remoteWorkers: new RemoteWorkersRouteService(deps.remoteWorkers),
     runtimeLifecycle: new RuntimeLifecycleRouteService(deps.runtimeLifecycle),
     secrets: createSecretsRouteService(deps.secrets),
+    sessionControl: deps.sessionControl,
     settings: createSettingsRouteService(deps.settings),
     sessionsList: createSessionsListRouteService(deps.sessionsList),
     skills: new SkillsRouteService(deps.skills),

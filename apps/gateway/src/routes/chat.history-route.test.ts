@@ -8,8 +8,10 @@ function captureHistoryHandler(services: Record<string, unknown>) {
   const getHandlers = new Map<string, (request: any, reply: any) => Promise<unknown>>();
   const fastify = {
     services,
-    get: vi.fn((path: string, handler: (request: any, reply: any) => Promise<unknown>) => {
-      getHandlers.set(path, handler);
+    // Routes may register with an access-class options object before the
+    // handler (`fastify.get(url, options, handler)`); capture the last argument.
+    get: vi.fn((path: string, ...rest: Array<(request: any, reply: any) => Promise<unknown>>) => {
+      getHandlers.set(path, rest[rest.length - 1]);
     }),
     post: vi.fn(),
   };

@@ -62,6 +62,7 @@ describe("chat routes additional coverage", () => {
       title: "Fresh chat",
     }));
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatSessions: { listChatSessions, createChatSession } } as never);
     await app.register(chatRoutes);
 
@@ -116,6 +117,7 @@ describe("chat routes additional coverage", () => {
       imported: true,
     }));
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatProjects: { importChatProject } } as never);
     await app.register(chatRoutes);
 
@@ -155,6 +157,7 @@ describe("chat routes additional coverage", () => {
       failures: [],
     }));
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatSessions: { archiveChatSessionsBulk } } as never);
     await app.register(chatRoutes);
 
@@ -452,6 +455,7 @@ describe("chat routes additional coverage", () => {
     }));
 
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", {
       chatSessions: {
         applyChatSessionWorkbenchPatch,
@@ -640,6 +644,7 @@ describe("chat routes additional coverage", () => {
       sessionId: "sess-1",
     }));
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatSessions: { deleteChatSession } } as never);
     await app.register(chatRoutes);
 
@@ -663,6 +668,7 @@ describe("chat routes additional coverage", () => {
     });
     const routePreflight = vi.fn(async () => matchingRoutePreflight());
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     decorateAuthenticatedOperator(app);
     app.decorate("services", { chatMessages: { agentSendChatMessageStream, routePreflight } } as never);
     await app.register(chatRoutes);
@@ -711,6 +717,7 @@ describe("chat routes additional coverage", () => {
       matchingRoutePreflight({ action: input.action }),
     );
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     decorateAuthenticatedOperator(app);
     app.decorate("services", {
       chatMessages: {
@@ -819,6 +826,7 @@ describe("chat routes additional coverage", () => {
       degradedReason: "Fallback may move this run from local to cloud if the primary route fails.",
     }));
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatMessages: { routePreflight } } as never);
     await app.register(chatRoutes);
 
@@ -855,6 +863,7 @@ describe("chat routes additional coverage", () => {
     const agentSendChatMessage = vi.fn();
     const routePreflight = vi.fn(async () => matchingRoutePreflight());
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatMessages: { agentSendChatMessage, routePreflight } } as never);
     await app.register(chatRoutes);
 
@@ -885,6 +894,7 @@ describe("chat routes additional coverage", () => {
     const agentSendChatMessage = vi.fn();
     const routePreflight = vi.fn(async () => matchingRoutePreflight({ fingerprint: "current-fingerprint" }));
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatMessages: { agentSendChatMessage, routePreflight } } as never);
     await app.register(chatRoutes);
 
@@ -917,6 +927,7 @@ describe("chat routes additional coverage", () => {
     });
     const routePreflight = vi.fn(async () => matchingRoutePreflight(decision));
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     decorateAuthenticatedOperator(app);
     app.decorate("services", { chatMessages: { agentSendChatMessage, routePreflight } } as never);
     await app.register(chatRoutes);
@@ -967,6 +978,7 @@ describe("chat routes additional coverage", () => {
     });
     const routePreflight = vi.fn(async () => matchingRoutePreflight(decision));
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     decorateAuthenticatedOperator(app);
     app.decorate("services", { chatMessages: { agentSendChatMessage, routePreflight } } as never);
     await app.register(chatRoutes);
@@ -1018,6 +1030,7 @@ describe("chat routes additional coverage", () => {
     const agentSendChatMessage = vi.fn();
     const routePreflight = vi.fn(async () => matchingRoutePreflight());
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatMessages: { agentSendChatMessage, routePreflight } } as never);
     await app.register(chatRoutes);
 
@@ -1045,6 +1058,7 @@ describe("chat routes additional coverage", () => {
     });
     const routePreflight = vi.fn(async () => matchingRoutePreflight());
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatMessages: { agentSendChatMessageStream, routePreflight } } as never);
     await app.register(chatRoutes);
 
@@ -1146,6 +1160,7 @@ describe("chat routes additional coverage", () => {
       };
     });
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatDelegate: { runChatDelegationStream } } as never);
     await app.register(chatRoutes);
 
@@ -1244,6 +1259,7 @@ describe("chat routes additional coverage", () => {
       citations: [],
     }));
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatDelegate: { runChatDelegation } } as never);
     await app.register(chatRoutes);
 
@@ -1336,6 +1352,7 @@ describe("chat routes additional coverage", () => {
       ],
     }));
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatDelegate: { getChatDelegationRun } } as never);
     await app.register(chatRoutes);
 
@@ -1357,6 +1374,7 @@ describe("chat routes additional coverage", () => {
       throw new NotFoundError({ entity: "Delegation run", id: "run-missing" });
     });
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatDelegate: { getChatDelegationRun } } as never);
     await app.register(chatRoutes);
 
@@ -1377,6 +1395,7 @@ describe("chat routes additional coverage", () => {
       throw new NotFoundError("Delegation run run-1 not found for session sess-2");
     });
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatDelegate: { getChatDelegationRun } } as never);
     await app.register(chatRoutes);
 
@@ -1398,6 +1417,7 @@ describe("chat routes additional coverage", () => {
       throw new Error("delegate exploded");
     });
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatDelegate: { runChatDelegationStream } } as never);
     await app.register(chatRoutes);
 
@@ -1420,6 +1440,7 @@ describe("chat routes additional coverage", () => {
 
   it("rejects removed legacy chat write routes", async () => {
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", {} as never);
     await app.register(chatRoutes);
 
@@ -1473,6 +1494,7 @@ describe("chat routes additional coverage", () => {
       updatedAt: "2026-03-07T00:00:00.000Z",
     }));
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", {
       chatMessages: {
         getChatThread,
@@ -1523,6 +1545,7 @@ describe("chat routes additional coverage", () => {
     const largeBase64 = "a".repeat(1_500_000);
 
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatAttachments: { uploadChatAttachment } } as never);
     await app.register(chatRoutes);
 
@@ -1559,6 +1582,7 @@ describe("chat routes additional coverage", () => {
       resumed: false,
     }));
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorateRequest("authActorId", actorId);
     app.decorateRequest("authActorSource", authActorSource);
     app.decorate("services", { chatMessages: { answerChatUserInputPrompt } } as never);
@@ -1595,6 +1619,7 @@ describe("chat routes additional coverage", () => {
   it("rejects oversized user-input prompt identifiers and answers without mutation", async () => {
     const answerChatUserInputPrompt = vi.fn();
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorateRequest("authActorId", "anonymous");
     app.decorateRequest("authActorSource", "none");
     app.decorate("services", { chatMessages: { answerChatUserInputPrompt } } as never);
@@ -1678,6 +1703,7 @@ describe("chat routes additional coverage", () => {
       activatedAt: "2026-03-12T00:05:00.000Z",
     }));
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", {
       chatSupport: {
         listChatSessionSpecialistCandidates,
@@ -1761,6 +1787,7 @@ describe("chat routes additional coverage", () => {
       },
     }));
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatMessages: { cancelChatTurn } } as never);
     await app.register(chatRoutes);
 
@@ -1825,6 +1852,7 @@ describe("chat routes additional coverage", () => {
     };
     const getTurnContextManifestForSession = vi.fn(() => rawDetail);
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatMessages: { getTurnContextManifestForSession } } as never);
     await app.register(chatRoutes);
 
@@ -1878,6 +1906,7 @@ describe("chat routes additional coverage", () => {
     });
     const routePreflight = vi.fn(async () => matchingRoutePreflight());
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatMessages: { agentSendChatMessage, routePreflight } } as never);
     await app.register(chatRoutes);
 
@@ -1901,6 +1930,7 @@ describe("chat routes additional coverage", () => {
     });
     const routePreflight = vi.fn(async () => matchingRoutePreflight());
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatMessages: { agentSendChatMessage, routePreflight } } as never);
     await app.register(chatRoutes);
 

@@ -101,6 +101,7 @@ describe("non-stream Chat route commit truth", () => {
     const mutation = vi.fn(async () => ({ turnId: "turn-1", status: "completed" }));
     const app = Fastify();
     apps.push(app);
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", {
       chatMessages: {
         routePreflight: vi.fn(async () => ({ decision: { fingerprint: "route-fingerprint-1" } })),
@@ -168,6 +169,7 @@ describe("non-stream Chat route commit truth", () => {
     });
     const app = Fastify();
     apps.push(app);
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", {
       chatMessages: {
         routePreflight: vi.fn(async () => ({ decision: { fingerprint: "route-fingerprint-1" } })),
@@ -314,6 +316,7 @@ async function createStreamCommitTruthApp(
 ): Promise<FastifyInstance> {
   const app = Fastify();
   apps.push(app);
+  app.decorate("requireOperatorAuth", async () => undefined);
   app.decorate("services", {
     chatMessages: {
       routePreflight: vi.fn(async () => ({ decision: { fingerprint: "route-fingerprint-1" } })),
