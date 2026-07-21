@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ConflictError } from "@goatcitadel/contracts";
+import { ConflictError, ValidationError } from "@goatcitadel/contracts";
 import type {
   SessionControlDetailResponse,
   SessionControlEventRecord,
@@ -383,6 +383,57 @@ describe("SessionControlService controller protocol", () => {
       expectSessionControlCode(observed, "SESSION_CONTROL_PRINCIPAL_PURPOSE_DENIED");
       expect(sessionControls.handoff).not.toHaveBeenCalled();
     });
+
+    it("rejects a read-only effective capability set with a validation error before storage", () => {
+      const { service, sessionControls } = buildService();
+      let observed: unknown;
+      try {
+        service.handoff({
+          actor: operatorActor,
+          sessionId: SESSION,
+          correlationId: CORRELATION,
+          input: {
+            requestId: "request-1",
+            expectedGeneration: 1,
+            effectiveCapabilities: ["read"] as never,
+            idempotencyKey: "handoff-idem-1",
+          },
+        });
+      } catch (error) {
+        observed = error;
+      }
+      expect(observed).toBeInstanceOf(ValidationError);
+      expect(sessionControls.handoff).not.toHaveBeenCalled();
+    });
+
+    it("rejects an operator-action or unknown effective capability member with a validation error", () => {
+      const { service, sessionControls } = buildService();
+      const invalidSets = [
+        ["send", "handoff"],
+        ["send", "revoke"],
+        ["send", "bogus"],
+      ] as unknown[] as never[];
+      for (const effectiveCapabilities of invalidSets) {
+        let observed: unknown;
+        try {
+          service.handoff({
+            actor: operatorActor,
+            sessionId: SESSION,
+            correlationId: CORRELATION,
+            input: {
+              requestId: "request-1",
+              expectedGeneration: 1,
+              effectiveCapabilities,
+              idempotencyKey: "handoff-idem-1",
+            },
+          });
+        } catch (error) {
+          observed = error;
+        }
+        expect(observed).toBeInstanceOf(ValidationError);
+      }
+      expect(sessionControls.handoff).not.toHaveBeenCalled();
+    });
   });
 
   describe("heartbeat", () => {
@@ -488,6 +539,42 @@ describe("SessionControlService controller protocol", () => {
       expect(response.supersededGeneration).toBe(2);
       expect(response.control.generation).toBe(3);
     });
+
+    it("rejects an operator actor for the intrinsic reconnect protocol before storage", () => {
+      const { service, sessionControls } = buildService();
+      let observed: unknown;
+      try {
+        service.reconnect({
+          actor: operatorActor as unknown as SessionControlExternalCompanionActor,
+          sessionId: SESSION,
+          correlationId: CORRELATION,
+          presentedTokenHashSha256: TOKEN_HASH,
+          input: { expectedGeneration: 2, newTokenHashSha256: NEW_TOKEN_HASH, idempotencyKey: "reconnect-idem-1" },
+        });
+      } catch (error) {
+        observed = error;
+      }
+      expectSessionControlCode(observed, "SESSION_CONTROL_PRINCIPAL_PURPOSE_DENIED");
+      expect(sessionControls.reconnect).not.toHaveBeenCalled();
+    });
+
+    it("rejects a malformed presented control-token hash before storage", () => {
+      const { service, sessionControls } = buildService();
+      let observed: unknown;
+      try {
+        service.reconnect({
+          actor: externalActor,
+          sessionId: SESSION,
+          correlationId: CORRELATION,
+          presentedTokenHashSha256: "not-a-hash",
+          input: { expectedGeneration: 2, newTokenHashSha256: NEW_TOKEN_HASH, idempotencyKey: "reconnect-idem-1" },
+        });
+      } catch (error) {
+        observed = error;
+      }
+      expectSessionControlCode(observed, "SESSION_CONTROL_TOKEN_INVALID");
+      expect(sessionControls.reconnect).not.toHaveBeenCalled();
+    });
   });
 
   describe("release", () => {
@@ -521,6 +608,42 @@ describe("SessionControlService controller protocol", () => {
       });
       expect(response.releasedGeneration).toBe(2);
       expect(response.control.ownerKind).toBe("operator");
+    });
+
+    it("rejects an operator actor for the intrinsic release protocol before storage", () => {
+      const { service, sessionControls } = buildService();
+      let observed: unknown;
+      try {
+        service.release({
+          actor: operatorActor as unknown as SessionControlExternalCompanionActor,
+          sessionId: SESSION,
+          correlationId: CORRELATION,
+          presentedTokenHashSha256: TOKEN_HASH,
+          input: { expectedGeneration: 2, idempotencyKey: "release-idem-1" },
+        });
+      } catch (error) {
+        observed = error;
+      }
+      expectSessionControlCode(observed, "SESSION_CONTROL_PRINCIPAL_PURPOSE_DENIED");
+      expect(sessionControls.release).not.toHaveBeenCalled();
+    });
+
+    it("rejects a malformed presented control-token hash before storage", () => {
+      const { service, sessionControls } = buildService();
+      let observed: unknown;
+      try {
+        service.release({
+          actor: externalActor,
+          sessionId: SESSION,
+          correlationId: CORRELATION,
+          presentedTokenHashSha256: "not-a-hash",
+          input: { expectedGeneration: 2, idempotencyKey: "release-idem-1" },
+        });
+      } catch (error) {
+        observed = error;
+      }
+      expectSessionControlCode(observed, "SESSION_CONTROL_TOKEN_INVALID");
+      expect(sessionControls.release).not.toHaveBeenCalled();
     });
   });
 
@@ -818,6 +941,61 @@ describe("SessionControlService controller protocol", () => {
         observed = error;
       }
       expectSessionControlCode(observed, "SESSION_CONTROL_CAPABILITY_DENIED");
+    });
+  });
+
+  describe("read purpose-gate ordering (existence oracle)", () => {
+    const wrongPurposeCompanion = {
+      ...externalActor,
+      principalPurpose: "general_companion",
+    } as unknown as SessionControlExternalCompanionActor;
+
+    it("rejects a wrong-purpose companion on every read before any session-existence read", () => {
+      const reads: Array<(service: SessionControlService) => unknown> = [
+        (service) => service.getControl({ actor: wrongPurposeCompanion, sessionId: SESSION }),
+        (service) => service.getDetail({ actor: wrongPurposeCompanion, sessionId: SESSION }),
+        (service) => service.listEvents({ actor: wrongPurposeCompanion, sessionId: SESSION }),
+      ];
+      for (const read of reads) {
+        for (const meta of [{ workspaceId: WORKSPACE, sessionId: SESSION }, null]) {
+          const { service, sessionControls, metaGet } = buildService({}, meta);
+          let observed: unknown;
+          try {
+            read(service);
+          } catch (error) {
+            observed = error;
+          }
+          expectSessionControlCode(observed, "SESSION_CONTROL_PRINCIPAL_PURPOSE_DENIED");
+          expect(metaGet).not.toHaveBeenCalled();
+          expect(sessionControls.getControl).not.toHaveBeenCalled();
+          expect(sessionControls.getDetail).not.toHaveBeenCalled();
+        }
+      }
+    });
+
+    it("gives a wrong-purpose companion an identical getControl rejection whether or not the session exists", () => {
+      const existing = buildService();
+      let existingError: unknown;
+      try {
+        existing.service.getControl({ actor: wrongPurposeCompanion, sessionId: SESSION });
+      } catch (error) {
+        existingError = error;
+      }
+
+      const missing = buildService({}, null);
+      let missingError: unknown;
+      try {
+        missing.service.getControl({ actor: wrongPurposeCompanion, sessionId: "nonexistent-session" });
+      } catch (error) {
+        missingError = error;
+      }
+
+      expectSessionControlCode(existingError, "SESSION_CONTROL_PRINCIPAL_PURPOSE_DENIED");
+      expectSessionControlCode(missingError, "SESSION_CONTROL_PRINCIPAL_PURPOSE_DENIED");
+      expect(existing.metaGet).not.toHaveBeenCalled();
+      expect(missing.metaGet).not.toHaveBeenCalled();
+      expect(existing.sessionControls.getControl).not.toHaveBeenCalled();
+      expect(missing.sessionControls.getControl).not.toHaveBeenCalled();
     });
   });
 });

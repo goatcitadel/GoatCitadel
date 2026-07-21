@@ -803,28 +803,32 @@ export class SessionControlService {
   }
 
   public getControl(query: ReadSessionControlQuery): SessionControlRecord {
+    // Purpose gate first: an unauthorized/wrong-purpose companion must be
+    // rejected before any session-existence-revealing read so it cannot use a
+    // guessed global sessionId as an existence oracle. Operators bypass the gate.
+    const companion = query.actor.actorKind === "operator" ? undefined : requireExternalCompanionActor(query.actor);
     const { workspaceId } = this.resolveSessionWorkspace(query.sessionId);
     const control = this.storage.sessionControls.getControl(workspaceId, query.sessionId);
-    if (query.actor.actorKind === "operator") return control;
-    const actor = requireExternalCompanionActor(query.actor);
-    if (!isCompanionBoundController(control, actor)) {
-      this.requireCompanionPendingRequest(workspaceId, query.sessionId, actor);
+    if (!companion) return control;
+    if (!isCompanionBoundController(control, companion)) {
+      this.requireCompanionPendingRequest(workspaceId, query.sessionId, companion);
     }
     return control;
   }
 
   public getDetail(query: ReadSessionControlQuery): SessionControlDetailResponse {
+    // Purpose gate first (see getControl): reject before resolving session state.
+    const companion = query.actor.actorKind === "operator" ? undefined : requireExternalCompanionActor(query.actor);
     const { workspaceId } = this.resolveSessionWorkspace(query.sessionId);
     const detail = this.storage.sessionControls.getDetail(workspaceId, query.sessionId);
-    if (query.actor.actorKind === "operator") return detail;
-    const actor = requireExternalCompanionActor(query.actor);
-    if (isCompanionBoundController(detail.control, actor)) return detail;
+    if (!companion) return detail;
+    if (isCompanionBoundController(detail.control, companion)) return detail;
     const ownPending =
       detail.control.ownerKind === "operator"
         ? detail.pendingRequests.filter(
             (request) =>
-              request.companionSessionId === actor.companionSessionId &&
-              request.clientInstanceId === actor.clientInstanceId,
+              request.companionSessionId === companion.companionSessionId &&
+              request.clientInstanceId === companion.clientInstanceId,
           )
         : [];
     if (ownPending.length === 0) {
@@ -839,13 +843,14 @@ export class SessionControlService {
   }
 
   public listEvents(query: ListSessionControlEventsQuery): SessionControlEventRecord[] {
+    // Purpose gate first (see getControl): reject before resolving session state.
+    const companion = query.actor.actorKind === "operator" ? undefined : requireExternalCompanionActor(query.actor);
     const { workspaceId } = this.resolveSessionWorkspace(query.sessionId);
-    if (query.actor.actorKind !== "operator") {
-      const actor = requireExternalCompanionActor(query.actor);
+    if (companion) {
       const control = this.storage.sessionControls.getControl(workspaceId, query.sessionId);
       const hasReadCapability =
         control.ownerKind === "external_companion" && control.capabilities.some((capability) => capability === "read");
-      if (!isCompanionBoundController(control, actor) || !hasReadCapability) {
+      if (!isCompanionBoundController(control, companion) || !hasReadCapability) {
         throw sessionControlConflict("SESSION_CONTROL_CAPABILITY_DENIED", "Session control event read is denied.");
       }
     }
