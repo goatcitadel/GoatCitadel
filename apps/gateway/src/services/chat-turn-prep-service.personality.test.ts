@@ -58,6 +58,13 @@ function createHost(
           workspaceId: "default",
           lifecycleStatus: "active",
         })),
+        // The side-chat (/btw) path resolves child + parent meta via ensure
+        // (chat-turn-side-chat.ts). Default to an active default-workspace record.
+        ensure: vi.fn(() => ({
+          sessionId: "session-1",
+          workspaceId: "default",
+          lifecycleStatus: "active",
+        })),
         incrementGoalTurnsUsed: vi.fn(() => 1),
         patch: vi.fn(),
       },
@@ -454,7 +461,7 @@ describe("prepareAgentChatTurn frozen route admission", () => {
 
   it("does not resolve or consume a force action before late goal preflight succeeds", async () => {
     const harness = createHost("chat");
-    vi.mocked(harness.host.storage.chatSessionMeta.ensure).mockReturnValue({
+    vi.mocked(harness.host.storage.chatSessionMeta.get).mockReturnValue({
       sessionId: "session-1",
       workspaceId: "default",
       lifecycleStatus: "active",
@@ -712,7 +719,7 @@ describe("prepareAgentChatTurn personality overlay", () => {
 
   it("keeps the stable base prompt block first and appends goal/runtime guidance as volatile blocks", async () => {
     const harness = createHost("cowork");
-    vi.mocked(harness.host.storage.chatSessionMeta.ensure).mockReturnValue({
+    vi.mocked(harness.host.storage.chatSessionMeta.get).mockReturnValue({
       sessionId: "session-1",
       workspaceId: "default",
       lifecycleStatus: "active",
@@ -907,7 +914,7 @@ describe("prepareAgentChatTurn personality overlay", () => {
           ],
         }),
       }),
-      undefined,
+      expect.objectContaining({ onCommit: expect.any(Function), afterCommit: expect.any(Function) }),
     );
   });
 
@@ -967,7 +974,7 @@ describe("prepareAgentChatTurn personality overlay", () => {
     expect(harness.host.ingestEvent).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({ eventId: "user-deterministic" }),
-      undefined,
+      expect.objectContaining({ onCommit: expect.any(Function), afterCommit: expect.any(Function) }),
     );
   });
 
