@@ -30,7 +30,7 @@
     "fastify-plugin": "5.1.0",
     "ora": "9.3.0",
     "pg": "8.20.0",
-    "shell-quote": "1.8.4",
+    "shell-quote": "1.9.0",
     "typescript": "npm:@typescript/typescript6@6.0.2",
     "undici": "6.27.0",
     "zod": "3.25.76"
