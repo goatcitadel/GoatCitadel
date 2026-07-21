@@ -159,6 +159,14 @@ export interface FetchAllowlistedOptions {
   trustedCrossOriginHeaders?: string[];
   init?: RequestInit;
   dnsLookup?: DnsLookupFunction;
+  /**
+   * Explicit per-attempt guarded dispatcher. When set, the request uses it
+   * directly and NEVER consults the shared guarded-dispatcher cache. The caller
+   * owns its lifecycle (create with `createIsolatedGuardedDispatcher`, destroy
+   * after the attempt). HX-415 requester-scoped MCP uses this so no per-requester
+   * connection, Agent, or keep-alive pool is shared across requesters/attempts.
+   */
+  dispatcher?: Dispatcher;
 }
 
 export interface FetchBodyReadLimits {
@@ -222,6 +230,7 @@ export async function fetchAllowlisted(url: string, options: FetchAllowlistedOpt
           redirect: "manual",
           signal: controller.signal,
           dnsLookup: options.dnsLookup,
+          dispatcher: options.dispatcher,
         },
         resolveFetchBodyReadLimits(options),
       );
@@ -279,6 +288,7 @@ export async function fetchAllowlistedOnce(url: string, options: FetchAllowliste
       ...options.init,
       redirect: "manual",
       dnsLookup: options.dnsLookup,
+      dispatcher: options.dispatcher,
     },
     resolveFetchBodyReadLimits(options),
   );
@@ -483,10 +493,10 @@ function isPrivateOrReservedHost(hostname: string): boolean {
 async function fetchGuardedOnce(
   url: string,
   allowlist: string[],
-  init: RequestInit & { dnsLookup?: DnsLookupFunction },
+  init: RequestInit & { dnsLookup?: DnsLookupFunction; dispatcher?: Dispatcher },
   bodyLimits: FetchBodyReadLimits,
 ): Promise<Response> {
-  const { dnsLookup, ...fetchInit } = init;
+  const { dnsLookup, dispatcher: explicitDispatcher, ...fetchInit } = init;
   // PERF (POLICY-003): The guarded dispatcher is reused across requests that
   // share the same DNS-lookup function, target host:port, and allowlist
   // signature instead of being constructed per request. Each `Agent` carries
@@ -500,7 +510,11 @@ async function fetchGuardedOnce(
   // response body immediately (`res.text()/json()/arrayBuffer()`), so reuse is
   // safe; if streaming is added later, the body must be fully consumed before
   // the shared Agent is destroyed.
-  const dispatcher = getGuardedDispatcher(url, allowlist, dnsLookup);
+  //
+  // HX-415: an explicit caller-owned dispatcher (requester-scoped MCP) bypasses
+  // the shared cache entirely so its per-attempt Agent/connection is never
+  // reused across requesters or attempts.
+  const dispatcher = explicitDispatcher ?? getGuardedDispatcher(url, allowlist, dnsLookup);
   const fetchImpl = (globalThis.fetch === DEFAULT_GLOBAL_FETCH
     ? undiciFetch
     : globalThis.fetch) as unknown as FetchWithDispatcher;
@@ -705,6 +719,19 @@ function createGuardedDispatcher(url: string, allowlist: string[], dnsLookup?: D
     keepAliveTimeout: 1,
     keepAliveMaxTimeout: 1,
   });
+}
+
+// HX-415: a fresh, isolated guarded dispatcher for one requester-scoped MCP
+// attempt. It retains the same guarded DNS lookup (DNS-rebinding + private/
+// reserved-address defense) and allowlist behavior as the shared path, but is
+// never stored in `guardedDispatcherCache`. The caller MUST destroy it when the
+// attempt completes so no connection or keep-alive pool survives the attempt.
+export function createIsolatedGuardedDispatcher(
+  url: string,
+  allowlist: string[],
+  dnsLookup?: DnsLookupFunction,
+): Dispatcher {
+  return createGuardedDispatcher(url, allowlist, dnsLookup);
 }
 
 export function createGuardedDnsLookup(

@@ -606,6 +606,49 @@ describe("mcp runtime", () => {
     ]);
   });
 
+  it("excludes requester-scoped servers from the global browser fallback (HX-415)", () => {
+    const now = new Date().toISOString();
+    const base = createTestServer("");
+    const servers: McpServerRecord[] = [
+      {
+        ...base,
+        serverId: "scoped-playwright",
+        label: "Requester-scoped Playwright",
+        transport: "http",
+        connectionMode: "requester_scoped",
+        configurationRevision: 1,
+        command: undefined,
+        args: undefined,
+        url: undefined,
+        authType: "none",
+        category: "automation",
+        createdAt: now,
+        updatedAt: now,
+      },
+    ];
+    const tools = [
+      {
+        serverId: "scoped-playwright",
+        toolName: "browser.navigate",
+        description: "Navigate",
+        enabled: true,
+        updatedAt: now,
+      },
+      {
+        serverId: "scoped-playwright",
+        toolName: "browser.snapshot",
+        description: "Snapshot",
+        enabled: true,
+        updatedAt: now,
+      },
+    ];
+
+    // Even though this server would otherwise qualify as a Playwright target, a
+    // requester-scoped server is never enumerated for the GLOBAL browser fallback.
+    const targets = collectMcpBrowserFallbackTargets(servers, tools, () => true);
+    expect(targets).toEqual([]);
+  });
+
   it("discovers tools from a stdio MCP server", async () => {
     const server = createTestServer(MCP_TEST_SCRIPT);
 

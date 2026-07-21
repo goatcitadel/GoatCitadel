@@ -4,6 +4,7 @@ import type { ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import {
   redactSecretText,
+  resolveMcpServerConnectionMode,
   type McpInvokeRequest,
   type McpNormalizedContentItem,
   type McpServerRecord,
@@ -11,8 +12,15 @@ import {
   type ToolPolicyActorContext,
 } from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
-import { fetchAllowlisted, normalizeSafeEnvKeyNames } from "@goatcitadel/policy-engine";
+import {
+  createIsolatedGuardedDispatcher,
+  fetchAllowlisted,
+  fetchAllowlistedOnce,
+  normalizeSafeEnvKeyNames,
+} from "@goatcitadel/policy-engine";
 import { readBoundedResponseText } from "./bounded-response-reader.js";
+import { McpRequesterResolutionError } from "./mcp-requester-resolution.js";
+import type { McpToolCallResolutionAttempt } from "./mcp-requester-resolution-service.js";
 import { terminateProcessTree } from "./process-tree-killer.js";
 
 const log = logger.child("mcp-runtime");
@@ -238,6 +246,261 @@ export async function invokeMcpRuntimeTool(
   }
 }
 
+/**
+ * Subset of the shipped, independently-reviewed `McpToolCallResolutionAttempt`
+ * lease that the runtime seam consumes. It is kept structural on purpose: the
+ * runtime NEVER reconstructs requester authority (those constructors are
+ * module-private). A separately reviewed server-owned auth/profile integration
+ * builds the concrete lease and hands it in. The `connection` and permit values
+ * are process-local, non-serializable, and must never reach a repository,
+ * logger, event/audit/approval payload, or Chat-history projection.
+ */
+export type McpRequesterScopedToolCallAttempt = Pick<
+  McpToolCallResolutionAttempt,
+  | "connection"
+  | "signal"
+  | "assertCurrent"
+  | "authorizeToolsCall"
+  | "consumeToolsCallPermit"
+  | "scrubText"
+  | "scrubDiagnostic"
+  | "dispose"
+>;
+
+export interface McpRequesterScopedToolCallRuntimeInput {
+  attempt: McpRequesterScopedToolCallAttempt;
+  /** Gateway alias for diagnostics only; the remote tool name comes from the authorized permit. */
+  toolName: string;
+  arguments?: Record<string, unknown>;
+  /**
+   * HX-305 Chat execution fence + external-effect marker. Fired exactly once,
+   * inside the runtime, immediately before the effect-bearing `tools/call` bytes
+   * are written. It is never fired for a resolver/validation/initialize failure.
+   */
+  effectDispatch: () => void;
+  networkAllowlist: string[];
+  now?: () => number;
+}
+
+/**
+ * App-private capability a requester-scoped MCP server converges on. Static MCP
+ * servers never build this; it carries the frozen binding + attempt lease +
+ * effect-dispatch callback and never any `McpInvokeRequest`-derived authority.
+ */
+export interface McpRequesterScopedRuntimeDispatch {
+  invoke(input: McpRequesterScopedToolCallRuntimeInput): Promise<McpRuntimeInvocationResult>;
+}
+
+/** One aggregate deadline across initialize, initialized, tools/call, and body reads. */
+const MCP_REQUESTER_SCOPED_TOOL_CALL_DEADLINE_MS = 25_000;
+
+/**
+ * HX-415 runtime seam: dispatch a requester-scoped `tools/call` over a fresh,
+ * per-attempt isolated guarded dispatcher (never the shared cache), following
+ * zero redirects, using the resolved URL + headers as the sole auth material,
+ * firing the HX-305 effect callback exactly once at the write. Timeout, abort,
+ * expiry, and revoke leave no live attempt (the lease is disposed and the
+ * dispatcher destroyed without any authenticated cleanup). No resolved-output or
+ * lease value ever reaches the returned result, a logger, or a persisted surface.
+ */
+export async function invokeRequesterScopedMcpToolCall(
+  input: McpRequesterScopedToolCallRuntimeInput,
+): Promise<McpRuntimeInvocationResult> {
+  const attempt = input.attempt;
+  const now = input.now ?? Date.now;
+  const deadlineAt = now() + MCP_REQUESTER_SCOPED_TOOL_CALL_DEADLINE_MS;
+  const remaining = (): number => {
+    const left = deadlineAt - now();
+    if (left <= 0) {
+      throw new McpRequesterResolutionError("transport_pre_dispatch_failed");
+    }
+    return left;
+  };
+  let dispatcher: ReturnType<typeof createIsolatedGuardedDispatcher> | undefined;
+  let dispatched = false;
+  try {
+    attempt.assertCurrent();
+    const url = attempt.connection.url;
+    const resolvedHeaders = attempt.connection.headers;
+    dispatcher = createIsolatedGuardedDispatcher(url, input.networkAllowlist);
+    let sessionId: string | undefined;
+    let protocolVersion = MCP_STREAMABLE_HTTP_PROTOCOL_VERSION;
+
+    const post = async (envelope: JsonRpcEnvelope, opts: { effect: boolean }): Promise<JsonRpcEnvelope | undefined> => {
+      // Re-assert current generation/expiry after every await and before each write.
+      attempt.assertCurrent();
+      const headers: Record<string, string> = {
+        Accept: "application/json, text/event-stream",
+        "Content-Type": "application/json",
+      };
+      // The resolved headers are the SOLE auth material; no static token/OAuth is merged.
+      for (const header of resolvedHeaders) {
+        headers[header.name] = header.value;
+      }
+      if (sessionId) {
+        headers["Mcp-Session-Id"] = sessionId;
+        headers["MCP-Protocol-Version"] = protocolVersion;
+      }
+      if (opts.effect) {
+        // HX-305: fire the Chat/external-effect callbacks exactly once, right
+        // before the effect-bearing bytes leave the process.
+        input.effectDispatch();
+        dispatched = true;
+      }
+      const response = await fetchAllowlistedOnce(url, {
+        allowlist: input.networkAllowlist,
+        timeoutMs: remaining(),
+        bodyReadTimeoutMs: remaining(),
+        maxResponseBytes: MCP_HTTP_RESPONSE_BODY_MAX_BYTES,
+        dispatcher,
+        init: {
+          method: "POST",
+          headers,
+          body: JSON.stringify(envelope),
+          signal: attempt.signal,
+        },
+      });
+      // Requester-scoped v1 follows ZERO redirects; a 3xx is a denied hop and
+      // its credentials/body are never replayed to the next origin.
+      if (response.status >= 300 && response.status < 400) {
+        throw new McpRequesterResolutionError("resolved_destination_denied");
+      }
+      const responseSessionId = response.headers.get("mcp-session-id")?.trim();
+      if (responseSessionId) {
+        sessionId = responseSessionId;
+      }
+      if (!response.ok) {
+        throw new Error(`Requester-scoped MCP server returned HTTP ${response.status}.`);
+      }
+      if (response.status === 202) {
+        return undefined;
+      }
+      return readHttpJsonRpcEnvelope(response, typeof envelope.id === "number" ? envelope.id : undefined, remaining());
+    };
+
+    const initialized = await post(
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion,
+          capabilities: {},
+          clientInfo: { name: "goatcitadel-gateway", version: "1.0.0" },
+        },
+      },
+      { effect: false },
+    );
+    const negotiated = readString(initialized?.result?.protocolVersion);
+    if (negotiated) {
+      protocolVersion = negotiated;
+    }
+    await post({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }, { effect: false });
+
+    // Effect boundary: authorize + consume the tool-call permit at the write,
+    // using the authorized raw remote tool name (never the caller-supplied alias).
+    attempt.assertCurrent();
+    const permit = attempt.consumeToolsCallPermit(attempt.authorizeToolsCall());
+    const callEnvelope = await post(
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: permit.rawRemoteToolName, arguments: input.arguments ?? {} },
+      },
+      { effect: true },
+    );
+    attempt.assertCurrent();
+    return buildRequesterScopedToolCallResult(input.toolName, callEnvelope, attempt);
+  } catch (error) {
+    return buildRequesterScopedFailure(input.toolName, error, dispatched);
+  } finally {
+    // Destroy the per-attempt dispatcher; no authenticated DELETE cleanup is sent
+    // for a requester-scoped attempt (revoke/expiry/abort safe).
+    if (dispatcher) {
+      void (dispatcher as { destroy?: () => Promise<void> }).destroy?.().catch(() => undefined);
+    }
+    attempt.dispose();
+  }
+}
+
+function buildRequesterScopedToolCallResult(
+  toolName: string,
+  envelope: JsonRpcEnvelope | undefined,
+  attempt: McpRequesterScopedToolCallAttempt,
+): McpRuntimeInvocationResult {
+  if (!envelope) {
+    return {
+      ok: false,
+      error: `Requester-scoped MCP tool ${toolName} outcome is unknown after dispatch; manual reconciliation is required.`,
+      externalOutcome: "unknown_after_send",
+      manualReconciliationRequired: true,
+      failurePhase: "post_dispatch",
+    };
+  }
+  if (envelope.error) {
+    const message = attempt.scrubText(
+      sanitizeMcpRuntimeError(`MCP tool ${toolName} failed: ${envelope.error.message ?? "unknown error"}`),
+    );
+    return { ok: false, error: message, contentItems: [{ type: "error", text: message }] };
+  }
+  const result = envelope.result ?? {};
+  const content = Array.isArray(result.content) ? result.content : [];
+  const contentItems = normalizeMcpContentItems(content, result);
+  const contentText = extractMcpContentTextFromItems(contentItems);
+  const rawOutput: Record<string, unknown> = {
+    ...result,
+    content: contentItems.length > 0 ? contentItems : undefined,
+    contentText: contentText || undefined,
+  };
+  // Scrub the tool-provided output/content so an echoed resolved URL/header
+  // canary is removed before it can reach a response, evidence, event, audit,
+  // artifact, or Chat-history projection.
+  const output = attempt.scrubDiagnostic(rawOutput) as Record<string, unknown>;
+  const scrubbedItems = attempt.scrubDiagnostic(contentItems) as McpNormalizedContentItem[];
+  if (result.isError === true) {
+    const error = attempt.scrubText(sanitizeMcpRuntimeError(contentText || `MCP tool ${toolName} reported an error.`));
+    return {
+      ok: false,
+      output,
+      contentItems: scrubbedItems.length > 0 ? scrubbedItems : [{ type: "error", text: error }],
+      error,
+    };
+  }
+  return { ok: true, output, contentItems: scrubbedItems };
+}
+
+function buildRequesterScopedFailure(
+  toolName: string,
+  error: unknown,
+  dispatched: boolean,
+): McpRuntimeInvocationResult {
+  // Content-free, secret-free classification. The raw resolver/transport error
+  // is never traversed, stringified, logged, or persisted; only the fixed reason
+  // code from the shipped taxonomy (when present) is surfaced.
+  const reasonCode = error instanceof McpRequesterResolutionError ? error.code : undefined;
+  if (dispatched) {
+    const message = `Requester-scoped MCP tool ${toolName} outcome is unknown after dispatch; manual reconciliation is required.`;
+    return {
+      ok: false,
+      error: message,
+      contentItems: [{ type: "error", text: message }],
+      ...(reasonCode ? { output: { requesterScoped: true, reasonCode } } : {}),
+      externalOutcome: "unknown_after_send",
+      manualReconciliationRequired: true,
+      failurePhase: "post_dispatch",
+    };
+  }
+  const message = `Requester-scoped MCP tool ${toolName} failed before dispatch.`;
+  return {
+    ok: false,
+    error: message,
+    contentItems: [{ type: "error", text: message }],
+    ...(reasonCode ? { output: { requesterScoped: true, reasonCode } } : {}),
+    failurePhase: "pre_dispatch",
+  };
+}
+
 function normalizeDiscoveredTools(server: McpServerRecord, response: JsonRpcEnvelope): McpToolRecord[] {
   const tools = Array.isArray(response.result?.tools) ? (response.result?.tools as Array<Record<string, unknown>>) : [];
   const updatedAt = new Date().toISOString();
@@ -460,6 +723,13 @@ export function collectMcpBrowserFallbackTargets(
 
   const targets: McpBrowserFallbackTarget[] = [];
   for (const server of servers) {
+    // HX-415: requester-scoped servers are never eligible for the GLOBAL browser
+    // fallback. They carry no static destination and resolve per authenticated
+    // requester; a scoped fallback is only reachable through the exact frozen
+    // profile that already binds that server/tool/resolver + private authority.
+    if (resolveMcpServerConnectionMode(server) === "requester_scoped") {
+      continue;
+    }
     if (!server.enabled || server.status !== "connected" || server.trustTier === "quarantined" || server.lastError) {
       continue;
     }

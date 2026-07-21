@@ -11,6 +11,7 @@ import {
   type AutonomousActivationGrantEvaluationResult,
   type AutonomousActivationRiskLevel,
   type AutonomousActivationRuntimeEvidence,
+  resolveMcpServerConnectionMode,
   type McpInvokeRequest,
   type McpInvokeResponse,
   type McpNormalizedContentItem,
@@ -535,6 +536,27 @@ function withWorkspacePathBridgeEvidence(result: ToolInvokeResult, snapshotIds: 
   return result;
 }
 
+export interface RequesterScopedMcpDispatchInput {
+  server: McpServerRecord;
+  toolName: string;
+  arguments?: Record<string, unknown>;
+  signal?: AbortSignal;
+}
+
+/**
+ * HX-415 app-private port. The provider derives requester authority from
+ * server-owned request context, resolves a per-attempt ephemeral connection,
+ * and drives the isolated requester-scoped runtime, firing `effectDispatch`
+ * exactly once at the effect-bearing `tools/call` write. It is never given, and
+ * must never trust, `McpInvokeRequest` authority/scope fields.
+ */
+export interface RequesterScopedMcpDispatchPort {
+  invoke(
+    input: RequesterScopedMcpDispatchInput,
+    options: { effectDispatch: () => void },
+  ): Promise<McpRuntimeInvocationResult>;
+}
+
 export interface ToolInvocationCoordinatorHost {
   readonly approvalInbox: Pick<
     ApprovalInboxRepository,
@@ -601,6 +623,14 @@ export interface ToolInvocationCoordinatorHost {
     server: McpServerRecord,
     input: Pick<McpInvokeRequest, "toolName" | "arguments" | "signal">,
   ): Promise<McpRuntimeInvocationResult>;
+  /**
+   * HX-415 app-private requester-scoped MCP dispatch. Undefined until a
+   * separately reviewed auth/profile integration composes server-built
+   * requester authority + attempt lease. It receives ONLY the tool
+   * name/arguments/signal plus the effect-dispatch callback and derives
+   * authority from server-owned request context — never from `McpInvokeRequest`.
+   */
+  readonly requesterScopedMcpDispatch?: RequesterScopedMcpDispatchPort;
   resolveApprovalWithRemoteTokenId(input: {
     tokenId: string;
     connectorId: string;
@@ -1860,22 +1890,51 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     if (scopeFailure) {
       return scopeFailure;
     }
-    executionFence?.();
-    markExternalCallStarted?.();
-    const runtime = isInternalMcpApprovalInboxServer(server)
-      ? await handleInternalMcpApprovalInboxInvoke(server, input, {
-          approvalInbox: this.host.approvalInbox,
-          resolveApprovalWithRemoteTokenId: (request) => this.host.resolveApprovalWithRemoteTokenId(request),
-          respondToMcpElicitation: (request) => this.host.respondToMcpElicitation(request),
-          listMcpElicitations: (filter) => this.host.listMcpElicitations(filter),
-        })
-      : isInternalMcpDurableTasksServer(server)
-        ? await handleInternalMcpDurableTasksInvoke(server, input, this.host.durableTasks)
-        : await this.host.invokeMcpRuntimeTool(server, {
-            toolName: input.toolName,
-            arguments: input.arguments,
-            signal: input.signal,
-          });
+    let runtime: McpRuntimeInvocationResult;
+    if (resolveMcpServerConnectionMode(server) === "requester_scoped") {
+      // HX-415: requester-scoped servers converge on the app-private dispatch
+      // port. The direct route and approval replay cannot manufacture a
+      // requester profile from `McpInvokeRequest`; without a server-built
+      // dispatch provider this server is not callable, and the HX-305 execution
+      // fence / external-effect marker stay untouched (a pre-dispatch failure).
+      // When composed, the provider fires them once, inside the runtime, at the
+      // effect-bearing `tools/call` write.
+      const dispatch = this.host.requesterScopedMcpDispatch;
+      if (!dispatch) {
+        return {
+          ok: false,
+          error:
+            "This MCP server resolves its connection per authenticated requester and cannot be invoked without a server-built requester context.",
+          reasonCodes: ["requester_context_missing"],
+        };
+      }
+      runtime = await dispatch.invoke(
+        { server, toolName: input.toolName, arguments: input.arguments, signal: input.signal },
+        {
+          effectDispatch: () => {
+            executionFence?.();
+            markExternalCallStarted?.();
+          },
+        },
+      );
+    } else {
+      executionFence?.();
+      markExternalCallStarted?.();
+      runtime = isInternalMcpApprovalInboxServer(server)
+        ? await handleInternalMcpApprovalInboxInvoke(server, input, {
+            approvalInbox: this.host.approvalInbox,
+            resolveApprovalWithRemoteTokenId: (request) => this.host.resolveApprovalWithRemoteTokenId(request),
+            respondToMcpElicitation: (request) => this.host.respondToMcpElicitation(request),
+            listMcpElicitations: (filter) => this.host.listMcpElicitations(filter),
+          })
+        : isInternalMcpDurableTasksServer(server)
+          ? await handleInternalMcpDurableTasksInvoke(server, input, this.host.durableTasks)
+          : await this.host.invokeMcpRuntimeTool(server, {
+              toolName: input.toolName,
+              arguments: input.arguments,
+              signal: input.signal,
+            });
+    }
     const runtimeRetryCount = "retryCount" in runtime ? runtime.retryCount : undefined;
     const runtimeDegraded = "degraded" in runtime ? runtime.degraded : undefined;
     const runtimeExternalOutcome = "externalOutcome" in runtime ? runtime.externalOutcome : undefined;

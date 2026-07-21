@@ -649,6 +649,33 @@ describe("mcp routes", () => {
     expect(service.invokeMcpTool).not.toHaveBeenCalled();
   });
 
+  it("fails a requester-scoped target closed on the direct /invoke route without touching invokeMcpTool (HX-415)", async () => {
+    const service = await registerMcpService({
+      listMcpServers: vi.fn(() => [
+        {
+          serverId: "srv-scoped",
+          label: "Requester-scoped MCP",
+          transport: "http",
+          connectionMode: "requester_scoped",
+          configurationRevision: 1,
+          authType: "none",
+        },
+      ]),
+    });
+
+    const response = await app!.inject({
+      method: "POST",
+      url: "/api/v1/mcp/invoke",
+      payload: { serverId: "srv-scoped", toolName: "remote.read", agentId: "operator", workspaceId: "forged" },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      error: expect.stringContaining("authenticated requester context"),
+    });
+    expect(service.invokeMcpTool).not.toHaveBeenCalled();
+  });
+
   it("fails closed when the target MCP server's OAuth token is expired", async () => {
     const service = await registerMcpService({
       listMcpServers: vi.fn(() => [

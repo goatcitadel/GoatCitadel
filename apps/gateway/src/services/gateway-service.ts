@@ -1789,6 +1789,12 @@ export class GatewayService {
           networkAllowlist: this.config.toolPolicy.sandbox.networkAllowlist,
           oauthAccessTokenResolver: (mcpServer) => this.mcpOAuth.resolveAccessToken(mcpServer),
         }),
+      // HX-415: the requester-scoped dispatch port is intentionally NOT composed
+      // here yet. A requester-scoped server therefore fails closed
+      // (`requester_context_missing`) at the coordinator until a separately
+      // reviewed server-owned auth/profile integration builds requester authority
+      // + an attempt lease and wires `requesterScopedMcpDispatch`. The static host
+      // port above still forwards only tool name, arguments, and signal.
       evaluateAutonomousActivationGrant: (input) =>
         this.capabilitySystemService.evaluateAutonomousActivationGrant(input),
       recordAutonomousActivationGrantUse: (grantId, estimatedCostUsd) =>

@@ -3446,3 +3446,147 @@ describe("capability-scope choke point (executeMcpRuntime)", () => {
     expect(invokeMcpRuntimeTool).not.toHaveBeenCalled();
   });
 });
+
+describe("ToolInvocationCoordinatorService requester-scoped MCP seam (HX-415)", () => {
+  function requesterScopedServer(): McpServerRecord {
+    return createMcpServer({
+      serverId: "srv-1",
+      transport: "http",
+      connectionMode: "requester_scoped",
+      configurationRevision: 1,
+    });
+  }
+
+  it("fails closed with requester_context_missing when no server-built dispatch is composed (direct route)", async () => {
+    const invokeMcpRuntimeTool = vi.fn();
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        requireMcpServer: vi.fn(() => requesterScopedServer()),
+        invokeMcpRuntimeTool,
+      }),
+    );
+
+    const response = await coordinator.invokeMcpTool({
+      serverId: "srv-1",
+      toolName: "tool.echo",
+      agentId: "attacker-supplied",
+      sessionId: "session-1",
+      workspaceId: "workspace-forged",
+      arguments: { value: "hello" },
+    });
+
+    expect(response.ok).toBe(false);
+    expect(response.reasonCodes).toContain("requester_context_missing");
+    // The static runtime is never reached; a body agentId/workspace cannot
+    // manufacture a requester profile.
+    expect(invokeMcpRuntimeTool).not.toHaveBeenCalled();
+  });
+
+  it("fails closed on the approval-replay path too (no McpInvokeRequest-manufactured authority)", async () => {
+    const invokeMcpRuntimeTool = vi.fn();
+    const markExternalCallStarted = vi.fn();
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        requireMcpServer: vi.fn(() => requesterScopedServer()),
+        invokeMcpRuntimeTool,
+      }),
+    );
+
+    const response = await coordinator.invokeApprovedMcpRuntime(
+      { serverId: "srv-1", toolName: "tool.echo", agentId: "operator", sessionId: "session-1" },
+      markExternalCallStarted,
+    );
+
+    expect(response.ok).toBe(false);
+    expect(response.reasonCodes).toContain("requester_context_missing");
+    expect(invokeMcpRuntimeTool).not.toHaveBeenCalled();
+    // The HX-305 external-effect marker must remain untouched on a pre-dispatch fail.
+    expect(markExternalCallStarted).not.toHaveBeenCalled();
+  });
+
+  it("routes a requester-scoped server through the composed dispatch, never the static runtime", async () => {
+    const invokeMcpRuntimeTool = vi.fn();
+    const invoke = vi.fn(async () => ({ ok: true, output: { payload: "scoped" } }));
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        requireMcpServer: vi.fn(() => requesterScopedServer()),
+        invokeMcpRuntimeTool,
+        requesterScopedMcpDispatch: { invoke },
+      }),
+    );
+
+    const response = await coordinator.invokeMcpTool({
+      serverId: "srv-1",
+      toolName: "tool.echo",
+      agentId: "operator",
+      sessionId: "session-1",
+      arguments: { value: "hello" },
+    });
+
+    expect(response).toMatchObject({ ok: true, output: { payload: "scoped" } });
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invokeMcpRuntimeTool).not.toHaveBeenCalled();
+    // The dispatch port receives only tool name/arguments/signal + effect dispatch.
+    const [dispatchInput, dispatchOptions] = invoke.mock.calls[0] as [
+      Record<string, unknown>,
+      { effectDispatch: () => void },
+    ];
+    expect(dispatchInput.toolName).toBe("tool.echo");
+    expect(dispatchInput.arguments).toEqual({ value: "hello" });
+    expect(Object.keys(dispatchInput)).toEqual(expect.arrayContaining(["toolName", "arguments"]));
+    expect(dispatchInput).not.toHaveProperty("workspaceId");
+    expect(dispatchInput).not.toHaveProperty("agentId");
+    expect(dispatchInput).not.toHaveProperty("policyContext");
+    expect(typeof dispatchOptions.effectDispatch).toBe("function");
+  });
+
+  it("defers HX-305 effect markers into the runtime effect-dispatch callback", async () => {
+    const markExternalCallStarted = vi.fn();
+    let capturedEffectDispatch: (() => void) | undefined;
+    const invoke = vi.fn(async (_input, options: { effectDispatch: () => void }) => {
+      capturedEffectDispatch = options.effectDispatch;
+      return { ok: true, output: {} };
+    });
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        requireMcpServer: vi.fn(() => requesterScopedServer()),
+        requesterScopedMcpDispatch: { invoke },
+      }),
+    );
+
+    await coordinator.invokeApprovedMcpRuntime(
+      { serverId: "srv-1", toolName: "tool.echo", agentId: "operator", sessionId: "session-1" },
+      markExternalCallStarted,
+    );
+
+    // The coordinator never fires the marker early; it fires only when the
+    // runtime invokes the effect-dispatch callback at the tools/call write.
+    expect(markExternalCallStarted).not.toHaveBeenCalled();
+    capturedEffectDispatch?.();
+    expect(markExternalCallStarted).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the static MCP path unchanged and never consults the requester-scoped dispatch", async () => {
+    const invokeMcpRuntimeTool = vi.fn(async () => ({ ok: true, output: { payload: "static" } }));
+    const invoke = vi.fn();
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        requireMcpServer: vi.fn(() => createMcpServer()),
+        invokeMcpRuntimeTool,
+        requesterScopedMcpDispatch: { invoke },
+      }),
+    );
+
+    const response = await coordinator.invokeMcpTool({
+      serverId: "srv-1",
+      toolName: "tool.echo",
+      agentId: "operator",
+      sessionId: "session-1",
+      arguments: { value: "hello" },
+    });
+
+    expect(response).toMatchObject({ ok: true, output: { payload: "static" } });
+    expect(invokeMcpRuntimeTool).toHaveBeenCalledTimes(1);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+});
