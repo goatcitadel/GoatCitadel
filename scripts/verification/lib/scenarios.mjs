@@ -4780,6 +4780,11 @@ function selectRepresentativeManifestRoute(manifestItems, accessClass) {
     device: [{ method: "POST", url: "/api/v1/auth/companion/session/exchange" }],
     companion: [{ method: "GET", url: "/api/v1/auth/companion/session" }],
     "sse-read": [{ method: "GET", url: "/api/v1/events/stream" }],
+    "device-session-exchange": [{ method: "POST", url: "/api/v1/auth/companion/session/exchange" }],
+    "session-control-companion": [{ method: "POST", url: "/api/v1/chat/sessions/:sessionId/control/requests" }],
+    // Pinned to the plain JSON read; this class also carries an SSE route
+    // (.../control/events/stream) that the generic JSON probe cannot exercise.
+    "operator-or-session-control-companion": [{ method: "GET", url: "/api/v1/chat/sessions/:sessionId/messages" }],
     webhook: [],
     loopback: [],
   };
@@ -4860,6 +4865,34 @@ function buildAuthMatrixExpectations(accessClass) {
         badToken: false,
         operator: false,
       };
+    case "device-session-exchange":
+      return {
+        unauthenticated: false,
+        badToken: false,
+        operator: false,
+        device: true,
+        companion: false,
+      };
+    case "session-control-companion":
+      // Requires a purpose-bound (session_control_client) companion with a bound
+      // session, which none of the standard callers is — the matrix proves the
+      // class is closed to generic authority; the allow side is proven by
+      // verify:session-control with signed companion requests.
+      return {
+        unauthenticated: false,
+        badToken: false,
+        operator: false,
+        device: false,
+        companion: false,
+      };
+    case "operator-or-session-control-companion":
+      return {
+        unauthenticated: false,
+        badToken: false,
+        operator: true,
+        device: false,
+        companion: false,
+      };
     default:
       return {
         unauthenticated: false,
@@ -4874,6 +4907,9 @@ async function probeAuthMatrixRoute(gatewayUrl, representative, credentials) {
   let headers = {};
   let body;
   let url = representative.url;
+  if (url.includes(":sessionId") && credentials.seededSessionId) {
+    url = url.replace(":sessionId", encodeURIComponent(credentials.seededSessionId));
+  }
 
   switch (credentials.caller) {
     case "operator":
