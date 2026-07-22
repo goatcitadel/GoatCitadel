@@ -11,6 +11,7 @@ import {
   TOOL_EFFECT_CLASSIFICATION_VERSION,
   type CapabilityCatalogSnapshotRecord,
   type ChatTurnCapabilityProfileDraft,
+  type ChatTurnCapabilityProfileRecord,
   type McpRequesterResolutionBindingMaterial,
   type ToolEffectPotentialRecord,
 } from "@goatcitadel/contracts";
@@ -21,6 +22,8 @@ import {
   verifyChatTurnCapabilityCatalogBinding,
   verifyChatTurnCapabilitySkillBindings,
 } from "./index.js";
+import { ChatSessionLifecycleRepository } from "./chat-session-lifecycle-repo.js";
+import { SessionMutationAdmissionRepository } from "./session-mutation-admission-repo.js";
 import { POSTGRES_MIGRATIONS } from "./postgres/migrations.js";
 import { createDatabase } from "./sqlite.js";
 
@@ -215,12 +218,71 @@ function refreshRequesterBindingHash(draft: ChatTurnCapabilityProfileDraft): voi
   binding.bindingSha256 = createHash("sha256").update(canonicalJsonString(material)).digest("hex");
 }
 
+type TestDatabase = ReturnType<typeof createDatabase>;
+
+function seedFrozenSessionIncarnation(db: TestDatabase, profile: ChatTurnCapabilityProfileRecord) {
+  const { workspaceId, sessionId, turnId } = profile.identity;
+  new ChatSessionLifecycleRepository(db).initialize({
+    workspaceId,
+    sessionId,
+    actorId: "operator-1",
+    idempotencyKey: `lifecycle:init:${sessionId}`,
+    correlationId: `correlation:init:${sessionId}`,
+  });
+  const admissions = new SessionMutationAdmissionRepository(db);
+  const admitted = admissions.admit({
+    workspaceId,
+    sessionId,
+    turnId,
+    runtimeOwnerId: `runtime-${turnId}`,
+    admissionKind: "turn_write",
+    aggregateRevision: 1,
+    controllerGeneration: 1,
+    actorKind: "system",
+    actorId: "system:test",
+    operation: "chat.turn.execute",
+    materialSha256: createHash("sha256").update(`material:${turnId}`).digest("hex"),
+    idempotencyKey: `admission:${turnId}`,
+    correlationId: `correlation:${turnId}`,
+  }).admission;
+  return { admissions, admitted };
+}
+
+// The profile-binding FK to chat_turn_capability_profiles is DEFERRABLE INITIALLY
+// DEFERRED, so the incarnation binding and the profile row must commit in the same
+// immediate transaction, mirroring how production seals a turn_write admission
+// around every profile insert.
+function createWithFrozenIncarnation(
+  db: TestDatabase,
+  repo: ChatTurnCapabilityProfileRepository,
+  profile: ChatTurnCapabilityProfileRecord,
+): ChatTurnCapabilityProfileRecord {
+  const { admissions, admitted } = seedFrozenSessionIncarnation(db, profile);
+  return db.transaction("immediate", () => {
+    admissions.bindCapabilityProfile({
+      admissionId: admitted.admissionId,
+      workspaceId: admitted.workspaceId,
+      sessionId: admitted.sessionId,
+      sessionIncarnationId: admitted.sessionIncarnationId,
+      turnId: admitted.turnId!,
+      profileId: profile.profileId,
+      profileHash: profile.hashes.profileHash,
+      createdAt: profile.createdAt,
+      requestRuntimeClaim: {
+        runtimeOwnerId: admitted.runtimeOwnerId!,
+        leaseRevision: admitted.runtimeLeaseRevision!,
+      },
+    });
+    return repo.create(profile);
+  });
+}
+
 describe("ChatTurnCapabilityProfileRepository", () => {
   it("round-trips a sealed profile and exposes explicit legacy absence", () => {
     const { db, repo } = createStore();
     const profile = sealChatTurnCapabilityProfile(buildDraft());
 
-    assert.deepEqual(repo.create(profile), profile);
+    assert.deepEqual(createWithFrozenIncarnation(db, repo, profile), profile);
     assert.deepEqual(repo.get(profile.profileId), profile);
     assert.deepEqual(repo.findByTurn(profile.identity.turnId), profile);
     assert.deepEqual(repo.findByRun(profile.identity.durableRunId as string), profile);
@@ -254,7 +316,7 @@ describe("ChatTurnCapabilityProfileRepository", () => {
     addRequesterMcpBinding(draft);
     const profile = sealChatTurnCapabilityProfile(draft);
 
-    assert.deepEqual(repo.create(profile), profile);
+    assert.deepEqual(createWithFrozenIncarnation(db, repo, profile), profile);
     assert.doesNotMatch(canonicalJsonString(repo.get(profile.profileId)), /https?:|authorization|never-store-this/u);
 
     const smuggledDraft = structuredClone(draft);
@@ -320,7 +382,7 @@ describe("ChatTurnCapabilityProfileRepository", () => {
   it("rejects updates, deletes, conflicting re-inserts, and detects storage tampering", () => {
     const { db, repo } = createStore();
     const profile = sealChatTurnCapabilityProfile(buildDraft());
-    repo.create(profile);
+    createWithFrozenIncarnation(db, repo, profile);
 
     assert.throws(
       () =>
@@ -334,6 +396,11 @@ describe("ChatTurnCapabilityProfileRepository", () => {
       /immutable/,
     );
 
+    // A conflicting re-insert no longer reaches the repo's upsert: the incarnation
+    // insert guard aborts first because the sealed binding hash no longer matches.
+    // Peel that outer layer, as the tampering step below does, to prove the repo's
+    // own immutable-record backstop still holds.
+    db.exec("DROP TRIGGER trg_chat_turn_capability_profiles_incarnation_insert_guard");
     const conflicting = sealChatTurnCapabilityProfile({
       ...buildDraft(),
       source: { channel: "chat", account: "other" },
@@ -378,7 +445,7 @@ describe("ChatTurnCapabilityProfileRepository", () => {
 
     const hashCorrupt = sealChatTurnCapabilityProfile(buildDraft());
     hashCorrupt.hashes.profileHash = "0".repeat(64);
-    assert.throws(() => repo.create(hashCorrupt), /profileHash verification/);
+    assert.throws(() => createWithFrozenIncarnation(db, repo, hashCorrupt), /profileHash verification/);
     db.close();
   });
 
@@ -390,7 +457,7 @@ describe("ChatTurnCapabilityProfileRepository", () => {
       minLength: 1,
     });
     const safe = sealChatTurnCapabilityProfile(buildDraftWithProviderDefinition(safeDefinition, "safe-api-key-schema"));
-    assert.equal(repo.create(safe).profileId, safe.profileId);
+    assert.equal(createWithFrozenIncarnation(db, repo, safe).profileId, safe.profileId);
 
     const credentialValues: Array<[string, unknown]> = [
       ["short-default", { type: "string", default: "hunter2" }],
