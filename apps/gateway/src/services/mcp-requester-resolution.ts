@@ -189,7 +189,7 @@ export interface McpRequesterProviderAliasInput {
   bindingSha256: string;
 }
 
-interface McpSealedToolCallProfileInput extends McpRequesterProviderAliasInput {
+export interface McpSealedToolCallProfileInput extends McpRequesterProviderAliasInput {
   finalProfileId: string;
   finalProfileSha256: string;
   baseCallableCatalogSha256: string;
@@ -409,12 +409,93 @@ function createMcpToolCallAuthority(input: McpToolCallAuthorityInput): McpToolCa
   }
 }
 
-// Deliberately production-dark: these constructors are retained only inside
-// this lexical owner. A separately reviewed auth/profile integration must call
-// them from server-owned state before requester-scoped MCP can become live.
+// The raw constructors stay retained inside this lexical owner. Production code
+// mints authorities ONLY through the validated issuance entry points below; a
+// focused source-scan guard test pins their production call sites to the
+// resolution service and the gateway-service composition seam.
 Object.freeze(createMcpProfileDiscoveryAuthority);
 Object.freeze(createMcpSealedToolCallProfile);
 Object.freeze(createMcpToolCallAuthority);
+
+/**
+ * HX-415 controlled issuance: mint a branded profile-discovery authority
+ * through the full private validation path (exact own-data snapshot, canonical
+ * identifiers, lowercase sha256 material). The returned value stays brand-gated,
+ * frozen, and non-serializable. Production call sites are pinned by the
+ * "issuance call sites" source-scan guard test beside this module.
+ */
+export function issueMcpProfileDiscoveryAuthority(
+  input: McpProfileDiscoveryAuthorityHashInput,
+): McpProfileDiscoveryAuthority {
+  return createMcpProfileDiscoveryAuthority(input);
+}
+
+export interface McpToolCallAuthorityIssueInput extends Omit<
+  McpToolCallAuthorityHashInput,
+  | "finalProfileId"
+  | "finalProfileSha256"
+  | "baseCallableCatalogSha256"
+  | "finalCallableCatalogSha256"
+  | "serverId"
+  | "rawRemoteToolName"
+  | "canonicalToolName"
+  | "providerAlias"
+  | "normalizedDiscoveryCatalogSha256"
+  | "normalizedToolDefinitionSha256"
+  | "bindingSha256"
+> {
+  sealedProfile: McpSealedToolCallProfileInput;
+}
+
+/**
+ * HX-415 controlled issuance: seal the raw profile record (exact snapshot,
+ * canonical identifiers, alias recomputation match) and mint the branded
+ * tool-call authority from it. Issuance is mint-through-full-validation only;
+ * forged raw input never produces a brand.
+ */
+export function issueMcpToolCallAuthority(input: McpToolCallAuthorityIssueInput): McpToolCallAuthority {
+  try {
+    const snapshot = snapshotExactOwnDataRecord(
+      input,
+      [
+        "actorId",
+        "actorSource",
+        "authConnectionGeneration",
+        "finalEffectAttemptGeneration",
+        "finalEffectAttemptId",
+        "globalNetworkPolicyGeneration",
+        "meshActivationGeneration",
+        "meshPublisherGeneration",
+        "preparationGeneration",
+        "profileDiscoveryAttemptGeneration",
+        "profileDiscoveryAttemptId",
+        "resolverConfigGeneration",
+        "resolverId",
+        "resolverVersion",
+        "revalidationAttemptGeneration",
+        "revalidationAttemptId",
+        "sealedProfile",
+        "serverConfigRevision",
+        "serverConfigSha256",
+        "sessionId",
+        "transportPolicySha256",
+        "turnGeneration",
+        "turnId",
+        "workspaceId",
+      ],
+      ["meshActivationGeneration", "meshPublisherGeneration"],
+    );
+    const { sealedProfile: rawProfile, ...identity } = snapshot;
+    const sealedProfile = createMcpSealedToolCallProfile(rawProfile as McpSealedToolCallProfileInput);
+    return createMcpToolCallAuthority({ ...identity, sealedProfile } as unknown as McpToolCallAuthorityInput);
+  } catch (error) {
+    if (error instanceof McpRequesterResolutionError) throw error;
+    throw new McpRequesterResolutionError("requester_context_ambiguous");
+  }
+}
+
+Object.freeze(issueMcpProfileDiscoveryAuthority);
+Object.freeze(issueMcpToolCallAuthority);
 
 export function assertMcpToolCallAuthority(input: unknown): asserts input is McpToolCallAuthority {
   if (typeof input !== "object" || input === null || !toolCallAuthorities.has(input)) {
@@ -968,6 +1049,61 @@ export function assertNormalizedMcpRequesterDiscoveryCatalog(
   input: unknown,
 ): asserts input is McpNormalizedRequesterDiscoveryCatalog {
   if (typeof input !== "object" || input === null || !normalizedDiscoveryCatalogs.has(input)) {
+    throw new McpRequesterResolutionError("discovery_output_invalid");
+  }
+}
+
+/**
+ * Map one RAW MCP `tools/list` result onto the structural discovery-output
+ * input consumed by {@link normalizeMcpRequesterDiscoveryOutput}. The mapping is
+ * deterministic (freeze-time discovery and tools/call revalidation must produce
+ * byte-identical catalogs from identical remote output): names are trimmed,
+ * descriptions are NFKC-normalized/trimmed and dropped when empty, missing
+ * schemas become `{}`, and the canonical name is the repository-wide
+ * `mcp.<serverId>.<rawRemoteToolName>` convention. All content validation
+ * (bounds, control characters, duplicates, secret scan) stays in the normalizer.
+ */
+export function extractMcpRequesterDiscoveryOutputInput(
+  serverId: string,
+  rawToolsListResult: unknown,
+): McpRequesterDiscoveryOutputInput {
+  try {
+    assertCanonicalIdentifier(serverId, 256);
+    if (
+      typeof rawToolsListResult !== "object" ||
+      rawToolsListResult === null ||
+      Array.isArray(rawToolsListResult) ||
+      nodeTypes.isProxy(rawToolsListResult)
+    ) {
+      throw new TypeError();
+    }
+    const rawTools = (rawToolsListResult as { tools?: unknown }).tools;
+    if (!Array.isArray(rawTools)) throw new TypeError();
+    if (rawTools.length > MCP_REQUESTER_DISCOVERY_LIMITS.maxTools) {
+      throw new McpRequesterResolutionError("discovery_output_too_large");
+    }
+    const tools = rawTools.map((entry) => {
+      if (typeof entry !== "object" || entry === null || Array.isArray(entry)) throw new TypeError();
+      const record = entry as { name?: unknown; description?: unknown; inputSchema?: unknown };
+      if (typeof record.name !== "string") throw new TypeError();
+      const rawRemoteToolName = record.name.trim();
+      if (!rawRemoteToolName) throw new TypeError();
+      const description =
+        typeof record.description === "string" ? record.description.normalize("NFKC").trim() : undefined;
+      const inputSchema =
+        typeof record.inputSchema === "object" && record.inputSchema !== null && !Array.isArray(record.inputSchema)
+          ? (record.inputSchema as Record<string, unknown>)
+          : {};
+      return {
+        rawRemoteToolName,
+        canonicalToolName: `mcp.${serverId}.${rawRemoteToolName}`,
+        ...(description ? { description } : {}),
+        inputSchema,
+      };
+    });
+    return { tools };
+  } catch (error) {
+    if (error instanceof McpRequesterResolutionError) throw error;
     throw new McpRequesterResolutionError("discovery_output_invalid");
   }
 }

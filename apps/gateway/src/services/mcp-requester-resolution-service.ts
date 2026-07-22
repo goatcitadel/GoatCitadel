@@ -2,10 +2,15 @@
 import { createHash } from "node:crypto";
 import { types as nodeTypes } from "node:util";
 import {
+  MCP_REQUESTER_RESOLUTION_BINDING_VERSION,
   canonicalJsonString,
   mcpRequesterScopeHashMaterial,
   type McpNormalizedRequesterDiscoveryCatalog,
+  type McpNormalizedContentItem,
   type McpRequesterResolutionBinding,
+  type McpRequesterResolutionMeshBinding,
+  type McpRequesterScopeAuthActorSource,
+  type ToolPolicyActorContext,
 } from "@goatcitadel/contracts";
 import {
   MCP_REQUESTER_RESOLUTION_TIMEOUT_MS,
@@ -14,8 +19,13 @@ import {
   assertMcpRequesterResolutionBindingIntegrity,
   assertMcpToolCallAuthority,
   assertNormalizedMcpRequesterDiscoveryCatalog,
+  createMcpRequesterProviderAlias,
+  extractMcpRequesterDiscoveryOutputInput,
+  issueMcpProfileDiscoveryAuthority,
+  issueMcpToolCallAuthority,
   mcpRequesterScopedServerConfigHash,
   mcpRequesterTransportPolicyHash,
+  normalizeMcpRequesterDiscoveryOutput,
   readMcpEphemeralResolvedConnectionCandidate,
   snapshotMcpRequesterScopedServerSnapshot,
   validateMcpEphemeralResolvedConnection,
@@ -23,6 +33,7 @@ import {
   type McpEphemeralResolvedHeaderInput,
   type McpProfileDiscoveryAuthority,
   type McpProfileDiscoveryCurrentState,
+  type McpRequesterDiscoverySecretScanner,
   type McpRequesterResolutionReasonCode,
   type McpRequesterResolverRegistry,
   type McpRequesterScopedServerSnapshot,
@@ -31,6 +42,14 @@ import {
   type ValidatedMcpEphemeralResolvedConnection,
 } from "./mcp-requester-resolution.js";
 import { createMcpResolutionSecretGuard, type McpResolutionSecretGuard } from "./mcp-resolution-secret-guard.js";
+// Type-only runtime seam imports: the VALUE drivers are dependency-injected by
+// the composition layer, so no runtime import cycle exists with mcp-runtime.ts.
+import type {
+  McpRequesterScopedDiscoveryResult,
+  McpRequesterScopedDiscoveryRuntimeInput,
+  McpRequesterScopedToolCallRuntimeInput,
+  McpRuntimeInvocationResult,
+} from "./mcp-runtime.js";
 
 interface ResolutionSignals {
   signal?: AbortSignal;
@@ -1339,4 +1358,780 @@ function digest(input: unknown): string {
 
 function compareExact(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+/**
+ * Maximum retained freeze-time discovery outcomes. The registry is process-
+ * local by design (the packet's restart rule: restarting the gateway drops all
+ * in-memory attempts and forces fresh resolution), contains ONLY non-secret
+ * ids/hashes/names from an already-secret-scanned catalog, and evicts oldest-
+ * first at this cap so it can never become an unbounded cache.
+ */
+export const MCP_PROFILE_DISCOVERY_OUTCOME_REGISTRY_LIMIT = 512;
+
+export interface McpProfileDiscoveryOutcomeKey {
+  profileId: string;
+  serverId: string;
+  canonicalToolName: string;
+}
+
+export interface McpProfileDiscoveryOutcomeRecord extends McpProfileDiscoveryOutcomeKey {
+  discoveryAttemptId: string;
+  discoveryAttemptGeneration: number;
+  rawRemoteToolName: string;
+  providerAlias: string;
+  normalizedDiscoveryCatalogSha256: string;
+  normalizedToolDefinitionSha256: string;
+  bindingSha256: string;
+  requesterScopeSha256: string;
+  recordedAtMs: number;
+}
+
+const OUTCOME_RECORD_KEYS = [
+  "bindingSha256",
+  "canonicalToolName",
+  "discoveryAttemptGeneration",
+  "discoveryAttemptId",
+  "normalizedDiscoveryCatalogSha256",
+  "normalizedToolDefinitionSha256",
+  "profileId",
+  "providerAlias",
+  "rawRemoteToolName",
+  "recordedAtMs",
+  "requesterScopeSha256",
+  "serverId",
+] as const;
+
+/**
+ * Process-local home for freeze-time requester discovery outcomes
+ * (HX-415 slice 7c). The persisted `McpRequesterResolutionBinding` cannot carry
+ * the in-memory discovery attempt artifacts the tool-call authority hash needs
+ * (`profileDiscoveryAttemptId/Generation`, raw remote tool name, provider
+ * alias, normalized catalog/tool hashes); they live here between profile freeze
+ * and dispatch. Values are frozen copies in and out — no live reference
+ * escapes — and a load miss simply returns `undefined` so callers fail closed
+ * (`requester_context_missing` after a restart or for a never-discovered tool).
+ */
+export class McpProfileDiscoveryOutcomeRegistry {
+  readonly #outcomes = new Map<string, Readonly<McpProfileDiscoveryOutcomeRecord>>();
+
+  public recordProfileDiscoveryOutcome(outcome: McpProfileDiscoveryOutcomeRecord): void {
+    const stored = snapshotOutcomeRecord(outcome);
+    const key = outcomeMapKey(stored);
+    this.#outcomes.delete(key);
+    if (this.#outcomes.size >= MCP_PROFILE_DISCOVERY_OUTCOME_REGISTRY_LIMIT) {
+      const oldest = this.#outcomes.keys().next();
+      if (!oldest.done) this.#outcomes.delete(oldest.value);
+    }
+    this.#outcomes.set(key, stored);
+  }
+
+  public loadProfileDiscoveryOutcome(
+    key: McpProfileDiscoveryOutcomeKey,
+  ): Readonly<McpProfileDiscoveryOutcomeRecord> | undefined {
+    let mapKey: string;
+    try {
+      const value = snapshotExactDataRecord(key, ["canonicalToolName", "profileId", "serverId"]);
+      mapKey = outcomeMapKey(value as unknown as McpProfileDiscoveryOutcomeKey);
+    } catch {
+      return undefined;
+    }
+    const stored = this.#outcomes.get(mapKey);
+    return stored ? Object.freeze({ ...stored }) : undefined;
+  }
+}
+
+function outcomeMapKey(key: McpProfileDiscoveryOutcomeKey): string {
+  // NUL cannot appear in a canonical identifier, so the separator keeps the
+  // profile/server/tool boundary unambiguous.
+  const separator = String.fromCharCode(0);
+  return `${key.profileId}${separator}${key.serverId}${separator}${key.canonicalToolName}`;
+}
+
+function snapshotOutcomeRecord(input: unknown): Readonly<McpProfileDiscoveryOutcomeRecord> {
+  try {
+    const value = snapshotExactDataRecord(input, OUTCOME_RECORD_KEYS);
+    for (const field of [
+      "profileId",
+      "serverId",
+      "canonicalToolName",
+      "discoveryAttemptId",
+      "rawRemoteToolName",
+    ] as const) {
+      assertOutcomeCanonicalIdentifier(value[field]);
+    }
+    if (typeof value.providerAlias !== "string" || !/^mcp__[a-f0-9]{64}$/u.test(value.providerAlias)) {
+      throw new TypeError();
+    }
+    for (const field of [
+      "normalizedDiscoveryCatalogSha256",
+      "normalizedToolDefinitionSha256",
+      "bindingSha256",
+      "requesterScopeSha256",
+    ] as const) {
+      if (typeof value[field] !== "string" || !/^[a-f0-9]{64}$/u.test(value[field] as string)) throw new TypeError();
+    }
+    if (
+      typeof value.discoveryAttemptGeneration !== "number" ||
+      !Number.isSafeInteger(value.discoveryAttemptGeneration) ||
+      value.discoveryAttemptGeneration < 1 ||
+      typeof value.recordedAtMs !== "number" ||
+      !Number.isSafeInteger(value.recordedAtMs) ||
+      value.recordedAtMs < 0
+    ) {
+      throw new TypeError();
+    }
+    return value as unknown as Readonly<McpProfileDiscoveryOutcomeRecord>;
+  } catch {
+    throw new McpRequesterResolutionError("capability_profile_invalid");
+  }
+}
+
+function assertOutcomeCanonicalIdentifier(input: unknown): asserts input is string {
+  if (
+    typeof input !== "string" ||
+    input.length < 1 ||
+    input.length > 256 ||
+    input !== input.normalize("NFKC").trim() ||
+    /[\s\\]/u.test(input) ||
+    containsOutcomeControlCharacter(input)
+  ) {
+    throw new TypeError();
+  }
+}
+
+function containsOutcomeControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0);
+    if (codePoint !== undefined && (codePoint <= 0x1f || codePoint === 0x7f)) return true;
+  }
+  return false;
+}
+
+function isMcpRequesterScopeActorSource(
+  value: ToolPolicyActorContext["authActorSource"],
+): value is McpRequesterScopeAuthActorSource {
+  return value === "token" || value === "basic" || value === "loopback" || value === "device" || value === "companion";
+}
+
+/**
+ * Mirror of the profile-service `resolveMcpRequesterResolutionBinding` hook
+ * input (chat-turn-capability-profile-service.ts). The freeze orchestrator is
+ * that hook's future implementation; slice 7d only wires it.
+ */
+export interface McpRequesterScopedProfileFreezeHookInput {
+  profileId: string;
+  turnId: string;
+  sessionId: string;
+  workspaceId: string;
+  authActorId?: string;
+  authActorSource?: ToolPolicyActorContext["authActorSource"];
+  catalogSnapshotId: string;
+  callableCatalogSha256: string;
+  requesterScopeSha256?: string;
+  canonicalToolName: string;
+  modelToolName: string;
+}
+
+/**
+ * Live server-owned state for one requester-scoped freeze attempt. The
+ * composition reads it fresh on every call (drift/revocation detection); the
+ * orchestrator owns only the attempt id/generation/open fields it mints itself.
+ * `undefined` means "not a requester-scoped server" (static mode or missing
+ * resolver configuration) — that server is simply unavailable for requester
+ * resolution while static behavior stays untouched.
+ */
+export interface McpRequesterScopedFreezeCurrentState {
+  revoked: boolean;
+  actorId: string;
+  actorSource: McpRequesterScopeAuthActorSource;
+  workspaceId: string;
+  sessionId: string;
+  turnId: string;
+  futureProfileId: string;
+  baseCallableCatalogSha256: string;
+  server: McpRequesterScopedServerSnapshot;
+  globalNetworkPolicyGeneration: number;
+  authConnectionGeneration: number;
+  turnGeneration: number;
+  preparationGeneration: number;
+  meshActivation?: McpRequesterResolutionMeshBinding;
+  connectionGenerationCurrent: boolean;
+  rotationGenerationCurrent: boolean;
+}
+
+export interface McpRequesterScopedProfileFreezeInput {
+  hook: McpRequesterScopedProfileFreezeHookInput;
+  service: Pick<McpRequesterResolutionService, "resolveForProfileDiscovery">;
+  outcomes: Pick<McpProfileDiscoveryOutcomeRegistry, "recordProfileDiscoveryOutcome">;
+  scanner: McpRequesterDiscoverySecretScanner;
+  networkAllowlist: readonly string[];
+  readCurrentState(check: McpProfileDiscoveryCurrentStateCheck): McpRequesterScopedFreezeCurrentState | undefined;
+  /** Deliverable-4A transport driver (`discoverRequesterScopedMcpTools`), injected so this seam owns no transport. */
+  discoverTools(input: McpRequesterScopedDiscoveryRuntimeInput): Promise<McpRequesterScopedDiscoveryResult>;
+  /** Crypto-random attempt-id source (composition-owned). */
+  createAttemptId(): string;
+  /** Content-free taxonomy diagnostics; never receives resolved values or raw causes. */
+  onDiagnostic(reasonCode: McpRequesterResolutionReasonCode): void;
+  now?(): number;
+  signal?: AbortSignal;
+  shutdownSignal?: AbortSignal;
+  revocationSignal?: AbortSignal;
+}
+
+const FREEZE_CURRENT_STATE_KEYS = [
+  "actorId",
+  "actorSource",
+  "authConnectionGeneration",
+  "baseCallableCatalogSha256",
+  "connectionGenerationCurrent",
+  "futureProfileId",
+  "globalNetworkPolicyGeneration",
+  "meshActivation",
+  "preparationGeneration",
+  "revoked",
+  "rotationGenerationCurrent",
+  "server",
+  "sessionId",
+  "turnGeneration",
+  "turnId",
+  "workspaceId",
+] as const;
+
+interface SnapshotFreezeCurrentState extends Omit<McpRequesterScopedFreezeCurrentState, "server"> {
+  server: McpRequesterScopedServerSnapshot;
+}
+
+function snapshotFreezeCurrentState(input: unknown): SnapshotFreezeCurrentState | undefined {
+  if (input === undefined) return undefined;
+  const value = snapshotExactDataRecord(input, FREEZE_CURRENT_STATE_KEYS, ["meshActivation"]);
+  const server = snapshotMcpRequesterScopedServerSnapshot(value.server);
+  const meshActivation = value.meshActivation === undefined ? undefined : snapshotMeshActivation(value.meshActivation);
+  return {
+    ...(value as unknown as Omit<SnapshotFreezeCurrentState, "server" | "meshActivation">),
+    server,
+    ...(meshActivation === undefined ? {} : { meshActivation }),
+  };
+}
+
+function snapshotMeshActivation(input: unknown): McpRequesterResolutionMeshBinding {
+  const value = snapshotExactDataRecord(input, [
+    "activationId",
+    "activationRevision",
+    "descriptorSha256",
+    "entrySha256",
+    "healthGeneration",
+    "manifestSha256",
+    "publicationLeaseFencingToken",
+    "publisherGeneration",
+  ]);
+  return Object.freeze({ ...value }) as unknown as McpRequesterResolutionMeshBinding;
+}
+
+function meshAuthorityGenerations(meshActivation: McpRequesterResolutionMeshBinding | undefined): {
+  meshPublisherGeneration?: number;
+  meshActivationGeneration?: number;
+} {
+  return meshActivation === undefined
+    ? {}
+    : {
+        meshPublisherGeneration: meshActivation.publisherGeneration,
+        meshActivationGeneration: meshActivation.activationRevision,
+      };
+}
+
+function serverBindingFields(server: McpRequesterScopedServerSnapshot): {
+  serverId: string;
+  serverConfigRevision: number;
+  serverConfigSha256: string;
+  resolverId: string;
+  resolverVersion: string;
+  resolverConfigGeneration: number;
+  transportPolicySha256: string;
+} {
+  return {
+    serverId: server.serverId,
+    serverConfigRevision: server.configurationRevision,
+    serverConfigSha256: mcpRequesterScopedServerConfigHash(server),
+    resolverId: server.requesterResolution.resolverId,
+    resolverVersion: server.requesterResolution.resolverVersion,
+    resolverConfigGeneration: server.requesterResolution.configGeneration,
+    transportPolicySha256: mcpRequesterTransportPolicyHash(server.requesterResolution.transportPolicy),
+  };
+}
+
+/**
+ * Freeze-side orchestrator (HX-415 slice 7c): the future implementation of the
+ * profile-service `resolveMcpRequesterResolutionBinding` hook. It derives the
+ * private discovery authority strictly from the authenticated hook identity and
+ * live server-owned state, resolves + discovers over the injected driver,
+ * normalizes and secret-scans the catalog, records the process-local discovery
+ * outcome, and returns the non-secret immutable binding. `authActorSource:
+ * none`/missing actor NEVER resolves; static servers return `undefined`
+ * untouched. EVERY failure disposes the attempt, reports one content-free
+ * taxonomy code through `onDiagnostic`, and returns `undefined` — no resolved
+ * value, lease, or raw cause ever escapes this function.
+ */
+export async function resolveRequesterScopedBindingForProfileFreeze(
+  input: McpRequesterScopedProfileFreezeInput,
+): Promise<McpRequesterResolutionBinding | undefined> {
+  const hook = input.hook;
+  if (!hook.authActorId || !isMcpRequesterScopeActorSource(hook.authActorSource)) {
+    reportDiagnostic(input.onDiagnostic, "requester_context_missing");
+    return undefined;
+  }
+  const actorId = hook.authActorId;
+  const actorSource = hook.authActorSource;
+  let attempt: McpProfileDiscoveryResolutionAttempt | undefined;
+  let attemptOpen = true;
+  try {
+    const initial = snapshotFreezeCurrentState(input.readCurrentState({}));
+    if (!initial) {
+      // Static-mode server or missing resolver configuration: not a failure —
+      // the hook simply yields no requester binding and static behavior wins.
+      return undefined;
+    }
+    const server = initial.server;
+    const discoveryAttemptId = input.createAttemptId();
+    const authority = issueMcpProfileDiscoveryAuthority({
+      actorId,
+      actorSource,
+      workspaceId: hook.workspaceId,
+      sessionId: hook.sessionId,
+      turnId: hook.turnId,
+      futureProfileId: hook.profileId,
+      baseCallableCatalogSha256: initial.baseCallableCatalogSha256,
+      ...serverBindingFields(server),
+      globalNetworkPolicyGeneration: initial.globalNetworkPolicyGeneration,
+      authConnectionGeneration: initial.authConnectionGeneration,
+      turnGeneration: initial.turnGeneration,
+      preparationGeneration: initial.preparationGeneration,
+      ...meshAuthorityGenerations(initial.meshActivation),
+      discoveryAttemptId,
+      discoveryAttemptGeneration: 1,
+    });
+    const readCurrentState = (check: McpProfileDiscoveryCurrentStateCheck): McpProfileDiscoveryCurrentState => {
+      const live = snapshotFreezeCurrentState(input.readCurrentState(check));
+      if (!live) throw new McpRequesterResolutionError("server_not_callable");
+      return {
+        revoked: live.revoked,
+        actorId: live.actorId,
+        actorSource: live.actorSource,
+        workspaceId: live.workspaceId,
+        sessionId: live.sessionId,
+        turnId: live.turnId,
+        futureProfileId: live.futureProfileId,
+        baseCallableCatalogSha256: live.baseCallableCatalogSha256,
+        ...serverBindingFields(live.server),
+        globalNetworkPolicyGeneration: live.globalNetworkPolicyGeneration,
+        authConnectionGeneration: live.authConnectionGeneration,
+        turnGeneration: live.turnGeneration,
+        preparationGeneration: live.preparationGeneration,
+        ...meshAuthorityGenerations(live.meshActivation),
+        discoveryAttemptId,
+        discoveryAttemptGeneration: 1,
+        discoveryAttemptOpen: attemptOpen,
+        connectionGenerationCurrent: live.connectionGenerationCurrent,
+        rotationGenerationCurrent: live.rotationGenerationCurrent,
+      };
+    };
+    attempt = await input.service.resolveForProfileDiscovery({
+      requester: authority,
+      server,
+      readCurrentState,
+      ...(input.signal === undefined ? {} : { signal: input.signal }),
+      ...(input.shutdownSignal === undefined ? {} : { shutdownSignal: input.shutdownSignal }),
+      ...(input.revocationSignal === undefined ? {} : { revocationSignal: input.revocationSignal }),
+    });
+    const discovered = await input.discoverTools({
+      attempt,
+      networkAllowlist: [...input.networkAllowlist],
+      ...(input.now === undefined ? {} : { now: input.now }),
+    });
+    if (!discovered.ok) {
+      reportDiagnostic(input.onDiagnostic, discovered.reasonCode);
+      return undefined;
+    }
+    const catalog = normalizeMcpRequesterDiscoveryOutput(
+      server.serverId,
+      extractMcpRequesterDiscoveryOutputInput(server.serverId, discovered.rawToolsListResult),
+      input.scanner,
+    );
+    const tool = catalog.tools.find((candidate) => candidate.canonicalToolName === hook.canonicalToolName);
+    if (!tool) throw new McpRequesterResolutionError("server_not_callable");
+    const requesterScopeSha256 = digest(
+      mcpRequesterScopeHashMaterial({
+        profileId: hook.profileId,
+        turnId: hook.turnId,
+        sessionId: hook.sessionId,
+        workspaceId: hook.workspaceId,
+        authActorId: actorId,
+        authActorSource: actorSource,
+      }),
+    );
+    if (hook.requesterScopeSha256 !== undefined && hook.requesterScopeSha256 !== requesterScopeSha256) {
+      throw new McpRequesterResolutionError("requester_scope_mismatch");
+    }
+    const material = {
+      schemaVersion: MCP_REQUESTER_RESOLUTION_BINDING_VERSION,
+      mode: "requester_scoped" as const,
+      serverId: server.serverId,
+      toolName: hook.canonicalToolName,
+      resolverId: server.requesterResolution.resolverId,
+      resolverVersion: server.requesterResolution.resolverVersion,
+      resolverConfigGeneration: server.requesterResolution.configGeneration,
+      requesterScopeSha256,
+      serverConfigRevision: server.configurationRevision,
+      serverConfigSha256: mcpRequesterScopedServerConfigHash(server),
+      transportPolicySha256: mcpRequesterTransportPolicyHash(server.requesterResolution.transportPolicy),
+      callableCatalogSnapshotId: hook.catalogSnapshotId,
+      callableCatalogSha256: hook.callableCatalogSha256,
+      ...(initial.meshActivation === undefined ? {} : { meshActivation: initial.meshActivation }),
+    };
+    const binding = Object.freeze({ ...material, bindingSha256: digest(material) }) as McpRequesterResolutionBinding;
+    assertMcpRequesterResolutionBindingIntegrity(binding);
+    input.outcomes.recordProfileDiscoveryOutcome({
+      profileId: hook.profileId,
+      serverId: server.serverId,
+      canonicalToolName: hook.canonicalToolName,
+      discoveryAttemptId,
+      discoveryAttemptGeneration: 1,
+      rawRemoteToolName: tool.rawRemoteToolName,
+      providerAlias: createMcpRequesterProviderAlias({
+        serverId: server.serverId,
+        rawRemoteToolName: tool.rawRemoteToolName,
+        canonicalToolName: tool.canonicalToolName,
+        normalizedToolDefinitionSha256: tool.toolDefinitionSha256,
+        bindingSha256: binding.bindingSha256,
+      }),
+      normalizedDiscoveryCatalogSha256: catalog.catalogSha256,
+      normalizedToolDefinitionSha256: tool.toolDefinitionSha256,
+      bindingSha256: binding.bindingSha256,
+      requesterScopeSha256,
+      recordedAtMs: (input.now ?? Date.now)(),
+    });
+    return binding;
+  } catch (error) {
+    reportDiagnostic(input.onDiagnostic, error instanceof McpRequesterResolutionError ? error.code : "resolver_failed");
+    return undefined;
+  } finally {
+    attemptOpen = false;
+    attempt?.dispose();
+  }
+}
+
+/**
+ * Live server-owned state for one requester-scoped dispatch. Same contract as
+ * {@link McpRequesterScopedFreezeCurrentState}: read fresh on every call,
+ * `undefined` when the server is not requester-scoped anymore.
+ */
+export interface McpRequesterScopedToolCallCurrentState {
+  revoked: boolean;
+  actorId: string;
+  actorSource: McpRequesterScopeAuthActorSource;
+  workspaceId: string;
+  sessionId: string;
+  turnId: string;
+  finalProfileId: string;
+  finalProfileSha256: string;
+  baseCallableCatalogSha256: string;
+  finalCallableCatalogSha256: string;
+  server: McpRequesterScopedServerSnapshot;
+  globalNetworkPolicyGeneration: number;
+  authConnectionGeneration: number;
+  turnGeneration: number;
+  preparationGeneration: number;
+  meshActivation?: McpRequesterResolutionMeshBinding;
+  connectionGenerationCurrent: boolean;
+  rotationGenerationCurrent: boolean;
+}
+
+const TOOL_CALL_LIVE_STATE_KEYS = [
+  "actorId",
+  "actorSource",
+  "authConnectionGeneration",
+  "baseCallableCatalogSha256",
+  "connectionGenerationCurrent",
+  "finalCallableCatalogSha256",
+  "finalProfileId",
+  "finalProfileSha256",
+  "globalNetworkPolicyGeneration",
+  "meshActivation",
+  "preparationGeneration",
+  "revoked",
+  "rotationGenerationCurrent",
+  "server",
+  "sessionId",
+  "turnGeneration",
+  "turnId",
+  "workspaceId",
+] as const;
+
+interface SnapshotToolCallCurrentState extends Omit<McpRequesterScopedToolCallCurrentState, "server"> {
+  server: McpRequesterScopedServerSnapshot;
+}
+
+function snapshotToolCallCurrentState(input: unknown): SnapshotToolCallCurrentState | undefined {
+  if (input === undefined) return undefined;
+  const value = snapshotExactDataRecord(input, TOOL_CALL_LIVE_STATE_KEYS, ["meshActivation"]);
+  const server = snapshotMcpRequesterScopedServerSnapshot(value.server);
+  const meshActivation = value.meshActivation === undefined ? undefined : snapshotMeshActivation(value.meshActivation);
+  return {
+    ...(value as unknown as Omit<SnapshotToolCallCurrentState, "server" | "meshActivation">),
+    server,
+    ...(meshActivation === undefined ? {} : { meshActivation }),
+  };
+}
+
+/**
+ * Server-built turn context for one requester-scoped dispatch. Slice 7d fills
+ * it from server-owned request/turn/profile state — NEVER from
+ * `McpInvokeRequest` body fields.
+ */
+export interface McpRequesterScopedToolCallTurnContext {
+  profileId: string;
+  finalProfileSha256: string;
+  turnId: string;
+  sessionId: string;
+  workspaceId: string;
+  actorId: string;
+  actorSource: McpRequesterScopeAuthActorSource;
+  baseCallableCatalogSha256: string;
+  finalCallableCatalogSha256: string;
+  callableCatalogSnapshotId: string;
+  globalNetworkPolicyGeneration: number;
+  authConnectionGeneration: number;
+  turnGeneration: number;
+  preparationGeneration: number;
+}
+
+export interface McpRequesterScopedToolCallDispatchInput {
+  context: McpRequesterScopedToolCallTurnContext;
+  serverId: string;
+  canonicalToolName: string;
+  /** Gateway alias for diagnostics only; the remote name comes from the recorded outcome. */
+  toolName: string;
+  arguments?: Record<string, unknown>;
+  signal?: AbortSignal;
+  shutdownSignal?: AbortSignal;
+  revocationSignal?: AbortSignal;
+  /** HX-305 effect fence; fired ONLY by the runtime at the tools/call write. */
+  effectDispatch(): void;
+  service: Pick<McpRequesterResolutionService, "resolveForToolCall">;
+  outcomes: Pick<McpProfileDiscoveryOutcomeRegistry, "loadProfileDiscoveryOutcome">;
+  scanner: McpRequesterDiscoverySecretScanner;
+  networkAllowlist: readonly string[];
+  /** Deliverable-4B runtime driver (`invokeRequesterScopedMcpToolCall`), injected so this seam owns no transport. */
+  invokeToolCall(input: McpRequesterScopedToolCallRuntimeInput): Promise<McpRuntimeInvocationResult>;
+  readCurrentState(check: McpToolCallCurrentStateCheck): McpRequesterScopedToolCallCurrentState | undefined;
+  createAttemptId(): string;
+  now?(): number;
+}
+
+/**
+ * Invoke-side orchestrator (HX-415 slice 7c): the future
+ * `requesterScopedMcpDispatch.invoke` body. Loads the frozen discovery outcome
+ * (miss ⇒ fail closed `requester_context_missing`: restart or never
+ * discovered), mints fresh revalidation/effect attempt identity, issues the
+ * private tool-call authority, resolves through the exact resolver, and drives
+ * the extended runtime with a composition-owned revalidate (normalize + secret
+ * scan) callback. Every failure maps onto the packet taxonomy in the same
+ * result shape `invokeRequesterScopedMcpToolCall` returns; `effectDispatch`
+ * stays un-fired on every pre-dispatch failure.
+ */
+export async function dispatchRequesterScopedToolCall(
+  input: McpRequesterScopedToolCallDispatchInput,
+): Promise<McpRuntimeInvocationResult> {
+  let attempt: McpToolCallResolutionAttempt | undefined;
+  try {
+    const outcomeKey: McpProfileDiscoveryOutcomeKey = {
+      profileId: input.context.profileId,
+      serverId: input.serverId,
+      canonicalToolName: input.canonicalToolName,
+    };
+    const outcome = input.outcomes.loadProfileDiscoveryOutcome(outcomeKey);
+    if (!outcome) {
+      return buildRequesterScopedPreDispatchFailure(input.toolName, "requester_context_missing");
+    }
+    const live = snapshotToolCallCurrentState(input.readCurrentState({}));
+    if (!live) {
+      return buildRequesterScopedPreDispatchFailure(input.toolName, "server_not_callable");
+    }
+    const context = input.context;
+    const revalidationAttemptId = input.createAttemptId();
+    const finalEffectAttemptId = input.createAttemptId();
+    const bindingMaterial = {
+      schemaVersion: MCP_REQUESTER_RESOLUTION_BINDING_VERSION,
+      mode: "requester_scoped" as const,
+      serverId: live.server.serverId,
+      toolName: input.canonicalToolName,
+      resolverId: live.server.requesterResolution.resolverId,
+      resolverVersion: live.server.requesterResolution.resolverVersion,
+      resolverConfigGeneration: live.server.requesterResolution.configGeneration,
+      requesterScopeSha256: outcome.requesterScopeSha256,
+      serverConfigRevision: live.server.configurationRevision,
+      serverConfigSha256: mcpRequesterScopedServerConfigHash(live.server),
+      transportPolicySha256: mcpRequesterTransportPolicyHash(live.server.requesterResolution.transportPolicy),
+      callableCatalogSnapshotId: context.callableCatalogSnapshotId,
+      callableCatalogSha256: context.finalCallableCatalogSha256,
+      ...(live.meshActivation === undefined ? {} : { meshActivation: live.meshActivation }),
+    };
+    // The binding is REBUILT from server-owned inputs and pinned to the freeze-
+    // time hash from the recorded outcome: any drifted component makes the
+    // integrity check fail closed before the resolver is touched.
+    const binding = Object.freeze({
+      ...bindingMaterial,
+      bindingSha256: outcome.bindingSha256,
+    }) as McpRequesterResolutionBinding;
+    assertMcpRequesterResolutionBindingIntegrity(binding);
+    const authority = issueMcpToolCallAuthority({
+      actorId: context.actorId,
+      actorSource: context.actorSource,
+      workspaceId: context.workspaceId,
+      sessionId: context.sessionId,
+      turnId: context.turnId,
+      serverConfigRevision: live.server.configurationRevision,
+      serverConfigSha256: mcpRequesterScopedServerConfigHash(live.server),
+      resolverId: live.server.requesterResolution.resolverId,
+      resolverVersion: live.server.requesterResolution.resolverVersion,
+      resolverConfigGeneration: live.server.requesterResolution.configGeneration,
+      transportPolicySha256: mcpRequesterTransportPolicyHash(live.server.requesterResolution.transportPolicy),
+      globalNetworkPolicyGeneration: context.globalNetworkPolicyGeneration,
+      authConnectionGeneration: context.authConnectionGeneration,
+      turnGeneration: context.turnGeneration,
+      preparationGeneration: context.preparationGeneration,
+      ...meshAuthorityGenerations(live.meshActivation),
+      profileDiscoveryAttemptId: outcome.discoveryAttemptId,
+      profileDiscoveryAttemptGeneration: outcome.discoveryAttemptGeneration,
+      revalidationAttemptId,
+      revalidationAttemptGeneration: 1,
+      finalEffectAttemptId,
+      finalEffectAttemptGeneration: 1,
+      sealedProfile: {
+        finalProfileId: context.profileId,
+        finalProfileSha256: context.finalProfileSha256,
+        baseCallableCatalogSha256: context.baseCallableCatalogSha256,
+        finalCallableCatalogSha256: context.finalCallableCatalogSha256,
+        serverId: live.server.serverId,
+        rawRemoteToolName: outcome.rawRemoteToolName,
+        canonicalToolName: input.canonicalToolName,
+        providerAlias: outcome.providerAlias,
+        normalizedDiscoveryCatalogSha256: outcome.normalizedDiscoveryCatalogSha256,
+        normalizedToolDefinitionSha256: outcome.normalizedToolDefinitionSha256,
+        bindingSha256: outcome.bindingSha256,
+      },
+    });
+    let effectAttemptOpen = true;
+    const readCurrentState = (check: McpToolCallCurrentStateCheck): McpToolCallCurrentState => {
+      const current = snapshotToolCallCurrentState(input.readCurrentState(check));
+      if (!current) throw new McpRequesterResolutionError("server_not_callable");
+      // The outcome registry IS the process-local current state for the frozen
+      // discovery artifacts: re-load on every check so eviction or overwrite by
+      // a newer discovery reads as drift, never as silent reuse.
+      const currentOutcome = input.outcomes.loadProfileDiscoveryOutcome(outcomeKey);
+      if (!currentOutcome) throw new McpRequesterResolutionError("requester_context_missing");
+      return {
+        revoked: current.revoked,
+        actorId: current.actorId,
+        actorSource: current.actorSource,
+        workspaceId: current.workspaceId,
+        sessionId: current.sessionId,
+        turnId: current.turnId,
+        finalProfileId: current.finalProfileId,
+        finalProfileSha256: current.finalProfileSha256,
+        baseCallableCatalogSha256: current.baseCallableCatalogSha256,
+        finalCallableCatalogSha256: current.finalCallableCatalogSha256,
+        ...serverBindingFields(current.server),
+        globalNetworkPolicyGeneration: current.globalNetworkPolicyGeneration,
+        authConnectionGeneration: current.authConnectionGeneration,
+        turnGeneration: current.turnGeneration,
+        preparationGeneration: current.preparationGeneration,
+        ...meshAuthorityGenerations(current.meshActivation),
+        profileDiscoveryAttemptId: currentOutcome.discoveryAttemptId,
+        profileDiscoveryAttemptGeneration: currentOutcome.discoveryAttemptGeneration,
+        revalidationAttemptId,
+        revalidationAttemptGeneration: 1,
+        finalEffectAttemptId,
+        finalEffectAttemptGeneration: 1,
+        finalEffectAttemptOpen: effectAttemptOpen,
+        rawRemoteToolName: currentOutcome.rawRemoteToolName,
+        canonicalToolName: input.canonicalToolName,
+        providerAlias: currentOutcome.providerAlias,
+        normalizedDiscoveryCatalogSha256: currentOutcome.normalizedDiscoveryCatalogSha256,
+        normalizedToolDefinitionSha256: currentOutcome.normalizedToolDefinitionSha256,
+        bindingSha256: currentOutcome.bindingSha256,
+        connectionGenerationCurrent: current.connectionGenerationCurrent,
+        rotationGenerationCurrent: current.rotationGenerationCurrent,
+      };
+    };
+    attempt = await input.service.resolveForToolCall({
+      requester: authority,
+      server: live.server,
+      binding,
+      readCurrentState,
+      ...(input.signal === undefined ? {} : { signal: input.signal }),
+      ...(input.shutdownSignal === undefined ? {} : { shutdownSignal: input.shutdownSignal }),
+      ...(input.revocationSignal === undefined ? {} : { revocationSignal: input.revocationSignal }),
+    });
+    const resolvedAttempt = attempt;
+    try {
+      return await input.invokeToolCall({
+        attempt: resolvedAttempt,
+        toolName: input.toolName,
+        ...(input.arguments === undefined ? {} : { arguments: input.arguments }),
+        effectDispatch: input.effectDispatch,
+        revalidate: (rawToolsListResult) => {
+          const catalog = normalizeMcpRequesterDiscoveryOutput(
+            input.serverId,
+            extractMcpRequesterDiscoveryOutputInput(input.serverId, rawToolsListResult),
+            input.scanner,
+          );
+          return { revalidationAttemptId, revalidationAttemptGeneration: 1, catalog };
+        },
+        networkAllowlist: [...input.networkAllowlist],
+        ...(input.now === undefined ? {} : { now: input.now }),
+      });
+    } finally {
+      effectAttemptOpen = false;
+    }
+  } catch (error) {
+    attempt?.dispose();
+    return buildRequesterScopedPreDispatchFailure(
+      input.toolName,
+      error instanceof McpRequesterResolutionError ? error.code : "transport_pre_dispatch_failed",
+    );
+  }
+}
+
+function reportDiagnostic(
+  onDiagnostic: (reasonCode: McpRequesterResolutionReasonCode) => void,
+  reasonCode: McpRequesterResolutionReasonCode,
+): void {
+  try {
+    onDiagnostic(reasonCode);
+  } catch {
+    // Diagnostics are best-effort and must never mask the fail-closed result.
+  }
+}
+
+/**
+ * Pre-dispatch failure in exactly the shape the runtime's own
+ * `buildRequesterScopedFailure` produces, so the coordinator's requester branch
+ * consumes one consistent result: fixed content-free message, the taxonomy code
+ * under `output.requesterScoped`, and `failurePhase: "pre_dispatch"` proving
+ * the HX-305 effect fence stayed untouched.
+ */
+function buildRequesterScopedPreDispatchFailure(
+  toolName: string,
+  reasonCode: McpRequesterResolutionReasonCode,
+): McpRuntimeInvocationResult {
+  const message = `Requester-scoped MCP tool ${toolName} failed before dispatch.`;
+  const contentItems: McpNormalizedContentItem[] = [{ type: "error", text: message }];
+  return {
+    ok: false,
+    error: message,
+    contentItems,
+    output: { requesterScoped: true, reasonCode },
+    failurePhase: "pre_dispatch",
+  };
 }

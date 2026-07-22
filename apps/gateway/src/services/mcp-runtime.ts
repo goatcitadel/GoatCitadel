@@ -19,8 +19,12 @@ import {
   normalizeSafeEnvKeyNames,
 } from "@goatcitadel/policy-engine";
 import { readBoundedResponseText } from "./bounded-response-reader.js";
-import { McpRequesterResolutionError } from "./mcp-requester-resolution.js";
-import type { McpToolCallResolutionAttempt } from "./mcp-requester-resolution-service.js";
+import { McpRequesterResolutionError, type McpRequesterResolutionReasonCode } from "./mcp-requester-resolution.js";
+import type {
+  McpFreshToolsListRevalidationInput,
+  McpProfileDiscoveryResolutionAttempt,
+  McpToolCallResolutionAttempt,
+} from "./mcp-requester-resolution-service.js";
 import { terminateProcessTree } from "./process-tree-killer.js";
 
 const log = logger.child("mcp-runtime");
@@ -260,6 +264,9 @@ export type McpRequesterScopedToolCallAttempt = Pick<
   | "connection"
   | "signal"
   | "assertCurrent"
+  | "authorizeToolsListRevalidation"
+  | "consumeToolsListRevalidationPermit"
+  | "acceptFreshToolsListRevalidation"
   | "authorizeToolsCall"
   | "consumeToolsCallPermit"
   | "scrubText"
@@ -275,9 +282,18 @@ export interface McpRequesterScopedToolCallRuntimeInput {
   /**
    * HX-305 Chat execution fence + external-effect marker. Fired exactly once,
    * inside the runtime, immediately before the effect-bearing `tools/call` bytes
-   * are written. It is never fired for a resolver/validation/initialize failure.
+   * are written. It is never fired for a resolver/validation/initialize/
+   * revalidation failure.
    */
   effectDispatch: () => void;
+  /**
+   * Composition-owned normalize+secret-scan of the fresh tools/list result the
+   * runtime fetched under the REVALIDATION permit. The runtime never normalizes
+   * or scans remote output itself; it hands the raw result out, takes back the
+   * branded fresh-catalog input, and lets the attempt lease enforce the exact
+   * SHA match. A throw here is a pre-dispatch failure.
+   */
+  revalidate: (rawToolsListResult: unknown) => McpFreshToolsListRevalidationInput;
   networkAllowlist: string[];
   now?: () => number;
 }
@@ -291,14 +307,127 @@ export interface McpRequesterScopedRuntimeDispatch {
   invoke(input: McpRequesterScopedToolCallRuntimeInput): Promise<McpRuntimeInvocationResult>;
 }
 
-/** One aggregate deadline across initialize, initialized, tools/call, and body reads. */
-const MCP_REQUESTER_SCOPED_TOOL_CALL_DEADLINE_MS = 25_000;
+/** One aggregate deadline across initialize, initialized, tools/list, tools/call, and body reads. */
+const MCP_REQUESTER_SCOPED_ATTEMPT_DEADLINE_MS = 25_000;
+
+interface RequesterScopedTransport {
+  post(envelope: JsonRpcEnvelope, opts: { effect: boolean }): Promise<JsonRpcEnvelope | undefined>;
+  dispatcher: ReturnType<typeof createIsolatedGuardedDispatcher>;
+}
+
+/**
+ * One isolated requester-scoped HTTP bridge shared by the discovery and
+ * tool-call drivers: fresh per-attempt guarded dispatcher (never the shared
+ * cache), resolved URL + headers as the SOLE auth material, zero followed
+ * redirects, `assertCurrent` before every write, and one remaining-time budget
+ * from the aggregate 25-second deadline applied to every request and body read.
+ */
+function createRequesterScopedTransport(input: {
+  attempt: Pick<McpRequesterScopedToolCallAttempt, "assertCurrent" | "connection" | "signal">;
+  networkAllowlist: string[];
+  remaining: () => number;
+  effectDispatch?: () => void;
+  onEffectDispatched?: () => void;
+}): RequesterScopedTransport {
+  const attempt = input.attempt;
+  const url = attempt.connection.url;
+  const resolvedHeaders = attempt.connection.headers;
+  const dispatcher = createIsolatedGuardedDispatcher(url, input.networkAllowlist);
+  let sessionId: string | undefined;
+  let protocolVersion = MCP_STREAMABLE_HTTP_PROTOCOL_VERSION;
+
+  const post = async (envelope: JsonRpcEnvelope, opts: { effect: boolean }): Promise<JsonRpcEnvelope | undefined> => {
+    // Re-assert current generation/expiry after every await and before each write.
+    attempt.assertCurrent();
+    const headers: Record<string, string> = {
+      Accept: "application/json, text/event-stream",
+      "Content-Type": "application/json",
+    };
+    // The resolved headers are the SOLE auth material; no static token/OAuth is merged.
+    for (const header of resolvedHeaders) {
+      headers[header.name] = header.value;
+    }
+    if (sessionId) {
+      headers["Mcp-Session-Id"] = sessionId;
+      headers["MCP-Protocol-Version"] = protocolVersion;
+    }
+    if (opts.effect) {
+      // HX-305: fire the Chat/external-effect callbacks exactly once, right
+      // before the effect-bearing bytes leave the process.
+      input.effectDispatch?.();
+      input.onEffectDispatched?.();
+    }
+    const response = await fetchAllowlistedOnce(url, {
+      allowlist: input.networkAllowlist,
+      timeoutMs: input.remaining(),
+      bodyReadTimeoutMs: input.remaining(),
+      maxResponseBytes: MCP_HTTP_RESPONSE_BODY_MAX_BYTES,
+      dispatcher,
+      init: {
+        method: "POST",
+        headers,
+        body: JSON.stringify(envelope),
+        signal: attempt.signal,
+      },
+    });
+    // Requester-scoped v1 follows ZERO redirects; a 3xx is a denied hop and
+    // its credentials/body are never replayed to the next origin.
+    if (response.status >= 300 && response.status < 400) {
+      throw new McpRequesterResolutionError("resolved_destination_denied");
+    }
+    const responseSessionId = response.headers.get("mcp-session-id")?.trim();
+    if (responseSessionId) {
+      sessionId = responseSessionId;
+    }
+    if (!response.ok) {
+      throw new Error(`Requester-scoped MCP server returned HTTP ${response.status}.`);
+    }
+    if (response.status === 202) {
+      return undefined;
+    }
+    const envelopeResult = await readHttpJsonRpcEnvelope(
+      response,
+      typeof envelope.id === "number" ? envelope.id : undefined,
+      input.remaining(),
+    );
+    const negotiated =
+      envelope.method === "initialize" ? readString(envelopeResult?.result?.protocolVersion) : undefined;
+    if (negotiated) {
+      protocolVersion = negotiated;
+    }
+    return envelopeResult;
+  };
+
+  return { post, dispatcher };
+}
+
+function buildRequesterScopedDeadline(now: () => number): () => number {
+  const deadlineAt = now() + MCP_REQUESTER_SCOPED_ATTEMPT_DEADLINE_MS;
+  return (): number => {
+    const left = deadlineAt - now();
+    if (left <= 0) {
+      throw new McpRequesterResolutionError("transport_pre_dispatch_failed");
+    }
+    return left;
+  };
+}
+
+function destroyIsolatedDispatcher(dispatcher: ReturnType<typeof createIsolatedGuardedDispatcher> | undefined): void {
+  if (dispatcher) {
+    void (dispatcher as { destroy?: () => Promise<void> }).destroy?.().catch(() => undefined);
+  }
+}
 
 /**
  * HX-415 runtime seam: dispatch a requester-scoped `tools/call` over a fresh,
  * per-attempt isolated guarded dispatcher (never the shared cache), following
- * zero redirects, using the resolved URL + headers as the sole auth material,
- * firing the HX-305 effect callback exactly once at the write. Timeout, abort,
+ * zero redirects, using the resolved URL + headers as the sole auth material.
+ * The flow is initialize → initialized → fresh `tools/list` under the
+ * REVALIDATION permit → composition-owned `revalidate` (normalize+scan) →
+ * `acceptFreshToolsListRevalidation` (exact SHA fence) → `tools/call`, with the
+ * HX-305 effect callback fired exactly once immediately before the effect-
+ * bearing write. A revalidation mismatch or `revalidate` throw is a
+ * pre-dispatch failure and never fires the effect callback. Timeout, abort,
  * expiry, and revoke leave no live attempt (the lease is disposed and the
  * dispatcher destroyed without any authenticated cleanup). No resolved-output or
  * lease value ever reaches the returned result, a logger, or a persisted surface.
@@ -307,104 +436,65 @@ export async function invokeRequesterScopedMcpToolCall(
   input: McpRequesterScopedToolCallRuntimeInput,
 ): Promise<McpRuntimeInvocationResult> {
   const attempt = input.attempt;
-  const now = input.now ?? Date.now;
-  const deadlineAt = now() + MCP_REQUESTER_SCOPED_TOOL_CALL_DEADLINE_MS;
-  const remaining = (): number => {
-    const left = deadlineAt - now();
-    if (left <= 0) {
-      throw new McpRequesterResolutionError("transport_pre_dispatch_failed");
-    }
-    return left;
-  };
+  const remaining = buildRequesterScopedDeadline(input.now ?? Date.now);
   let dispatcher: ReturnType<typeof createIsolatedGuardedDispatcher> | undefined;
   let dispatched = false;
   try {
     attempt.assertCurrent();
-    const url = attempt.connection.url;
-    const resolvedHeaders = attempt.connection.headers;
-    dispatcher = createIsolatedGuardedDispatcher(url, input.networkAllowlist);
-    let sessionId: string | undefined;
-    let protocolVersion = MCP_STREAMABLE_HTTP_PROTOCOL_VERSION;
-
-    const post = async (envelope: JsonRpcEnvelope, opts: { effect: boolean }): Promise<JsonRpcEnvelope | undefined> => {
-      // Re-assert current generation/expiry after every await and before each write.
-      attempt.assertCurrent();
-      const headers: Record<string, string> = {
-        Accept: "application/json, text/event-stream",
-        "Content-Type": "application/json",
-      };
-      // The resolved headers are the SOLE auth material; no static token/OAuth is merged.
-      for (const header of resolvedHeaders) {
-        headers[header.name] = header.value;
-      }
-      if (sessionId) {
-        headers["Mcp-Session-Id"] = sessionId;
-        headers["MCP-Protocol-Version"] = protocolVersion;
-      }
-      if (opts.effect) {
-        // HX-305: fire the Chat/external-effect callbacks exactly once, right
-        // before the effect-bearing bytes leave the process.
-        input.effectDispatch();
+    const transport = createRequesterScopedTransport({
+      attempt,
+      networkAllowlist: input.networkAllowlist,
+      remaining,
+      effectDispatch: input.effectDispatch,
+      onEffectDispatched: () => {
         dispatched = true;
-      }
-      const response = await fetchAllowlistedOnce(url, {
-        allowlist: input.networkAllowlist,
-        timeoutMs: remaining(),
-        bodyReadTimeoutMs: remaining(),
-        maxResponseBytes: MCP_HTTP_RESPONSE_BODY_MAX_BYTES,
-        dispatcher,
-        init: {
-          method: "POST",
-          headers,
-          body: JSON.stringify(envelope),
-          signal: attempt.signal,
-        },
-      });
-      // Requester-scoped v1 follows ZERO redirects; a 3xx is a denied hop and
-      // its credentials/body are never replayed to the next origin.
-      if (response.status >= 300 && response.status < 400) {
-        throw new McpRequesterResolutionError("resolved_destination_denied");
-      }
-      const responseSessionId = response.headers.get("mcp-session-id")?.trim();
-      if (responseSessionId) {
-        sessionId = responseSessionId;
-      }
-      if (!response.ok) {
-        throw new Error(`Requester-scoped MCP server returned HTTP ${response.status}.`);
-      }
-      if (response.status === 202) {
-        return undefined;
-      }
-      return readHttpJsonRpcEnvelope(response, typeof envelope.id === "number" ? envelope.id : undefined, remaining());
-    };
+      },
+    });
+    dispatcher = transport.dispatcher;
 
-    const initialized = await post(
+    await transport.post(
       {
         jsonrpc: "2.0",
         id: 1,
         method: "initialize",
         params: {
-          protocolVersion,
+          protocolVersion: MCP_STREAMABLE_HTTP_PROTOCOL_VERSION,
           capabilities: {},
           clientInfo: { name: "goatcitadel-gateway", version: "1.0.0" },
         },
       },
       { effect: false },
     );
-    const negotiated = readString(initialized?.result?.protocolVersion);
-    if (negotiated) {
-      protocolVersion = negotiated;
+    await transport.post({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }, { effect: false });
+
+    // Fresh schema revalidation: authorize + consume the tools/list REVALIDATION
+    // permit strictly before its write, hand the RAW result to the composition-
+    // owned normalize+scan, then let the lease enforce the exact catalog/tool
+    // SHA fence. Any failure here is pre-dispatch by construction.
+    attempt.assertCurrent();
+    attempt.consumeToolsListRevalidationPermit(attempt.authorizeToolsListRevalidation());
+    const revalidationEnvelope = await transport.post(
+      { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
+      { effect: false },
+    );
+    attempt.assertCurrent();
+    if (!revalidationEnvelope || revalidationEnvelope.error || !isRecord(revalidationEnvelope.result)) {
+      throw new McpRequesterResolutionError("transport_pre_dispatch_failed");
     }
-    await post({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }, { effect: false });
+    const fresh = input.revalidate(revalidationEnvelope.result);
+    // A revoke/abort that landed while the composition normalized the fresh
+    // catalog discards the late revalidate result before it can be accepted.
+    attempt.assertCurrent();
+    attempt.acceptFreshToolsListRevalidation(fresh);
 
     // Effect boundary: authorize + consume the tool-call permit at the write,
     // using the authorized raw remote tool name (never the caller-supplied alias).
     attempt.assertCurrent();
     const permit = attempt.consumeToolsCallPermit(attempt.authorizeToolsCall());
-    const callEnvelope = await post(
+    const callEnvelope = await transport.post(
       {
         jsonrpc: "2.0",
-        id: 2,
+        id: 3,
         method: "tools/call",
         params: { name: permit.rawRemoteToolName, arguments: input.arguments ?? {} },
       },
@@ -417,9 +507,108 @@ export async function invokeRequesterScopedMcpToolCall(
   } finally {
     // Destroy the per-attempt dispatcher; no authenticated DELETE cleanup is sent
     // for a requester-scoped attempt (revoke/expiry/abort safe).
-    if (dispatcher) {
-      void (dispatcher as { destroy?: () => Promise<void> }).destroy?.().catch(() => undefined);
+    destroyIsolatedDispatcher(dispatcher);
+    attempt.dispose();
+  }
+}
+
+/**
+ * Subset of the shipped `McpProfileDiscoveryResolutionAttempt` lease the
+ * discovery driver consumes. Kept structural for the same reason as the
+ * tool-call seam: the runtime never reconstructs requester authority; a
+ * separately reviewed composition builds the concrete lease and hands it in.
+ */
+export type McpRequesterScopedDiscoveryAttempt = Pick<
+  McpProfileDiscoveryResolutionAttempt,
+  | "connection"
+  | "signal"
+  | "assertCurrent"
+  | "authorizeInitialize"
+  | "authorizeInitializedNotification"
+  | "authorizeToolsList"
+  | "consumeOperationPermit"
+  | "scrubText"
+  | "scrubDiagnostic"
+  | "dispose"
+>;
+
+export interface McpRequesterScopedDiscoveryRuntimeInput {
+  attempt: McpRequesterScopedDiscoveryAttempt;
+  networkAllowlist: string[];
+  now?: () => number;
+}
+
+export type McpRequesterScopedDiscoveryResult =
+  | { ok: true; rawToolsListResult: Record<string, unknown> }
+  | { ok: false; error: string; reasonCode: McpRequesterResolutionReasonCode };
+
+/**
+ * HX-415 discovery driver: drive initialize → notifications/initialized →
+ * tools/list for one requester-scoped profile-discovery attempt with the exact
+ * discipline of {@link invokeRequesterScopedMcpToolCall} — isolated per-attempt
+ * guarded dispatcher (never the shared cache), zero followed redirects, ONE
+ * aggregate 25-second deadline including body reads, `assertCurrent` after
+ * every await and before every write, and a stage permit authorized + consumed
+ * strictly before each write. It returns the RAW tools/list result —
+ * normalization and secret-scanning are composition-owned — and NEVER fires an
+ * effect dispatch: discovery is pre-dispatch by definition. Every failure is a
+ * fixed content-free message plus a taxonomy reason code; the attempt is always
+ * disposed and the dispatcher destroyed without authenticated cleanup.
+ */
+export async function discoverRequesterScopedMcpTools(
+  input: McpRequesterScopedDiscoveryRuntimeInput,
+): Promise<McpRequesterScopedDiscoveryResult> {
+  const attempt = input.attempt;
+  const remaining = buildRequesterScopedDeadline(input.now ?? Date.now);
+  let dispatcher: ReturnType<typeof createIsolatedGuardedDispatcher> | undefined;
+  try {
+    attempt.assertCurrent();
+    const transport = createRequesterScopedTransport({
+      attempt,
+      networkAllowlist: input.networkAllowlist,
+      remaining,
+    });
+    dispatcher = transport.dispatcher;
+
+    attempt.consumeOperationPermit(attempt.authorizeInitialize());
+    await transport.post(
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: MCP_STREAMABLE_HTTP_PROTOCOL_VERSION,
+          capabilities: {},
+          clientInfo: { name: "goatcitadel-gateway", version: "1.0.0" },
+        },
+      },
+      { effect: false },
+    );
+    attempt.assertCurrent();
+    attempt.consumeOperationPermit(attempt.authorizeInitializedNotification());
+    await transport.post({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }, { effect: false });
+    attempt.assertCurrent();
+    attempt.consumeOperationPermit(attempt.authorizeToolsList());
+    const envelope = await transport.post(
+      { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
+      { effect: false },
+    );
+    attempt.assertCurrent();
+    if (!envelope || envelope.error || !isRecord(envelope.result)) {
+      throw new McpRequesterResolutionError("transport_pre_dispatch_failed");
     }
+    return { ok: true, rawToolsListResult: envelope.result };
+  } catch (error) {
+    // Content-free, secret-free classification: the raw transport error is never
+    // traversed, stringified, logged, or persisted; only the fixed taxonomy code
+    // (when present) is surfaced alongside a fixed message.
+    return {
+      ok: false,
+      error: "Requester-scoped MCP discovery failed before dispatch.",
+      reasonCode: error instanceof McpRequesterResolutionError ? error.code : "transport_pre_dispatch_failed",
+    };
+  } finally {
+    destroyIsolatedDispatcher(dispatcher);
     attempt.dispose();
   }
 }

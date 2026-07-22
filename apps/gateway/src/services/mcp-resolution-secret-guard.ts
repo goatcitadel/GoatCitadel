@@ -1,5 +1,13 @@
 import { Buffer } from "node:buffer";
-import { McpRequesterResolutionError, type McpEphemeralResolvedHeaderInput } from "./mcp-requester-resolution.js";
+import { createHash } from "node:crypto";
+import { canonicalJsonString, redactSecretText } from "@goatcitadel/contracts";
+import {
+  McpRequesterResolutionError,
+  type McpEphemeralResolvedHeaderInput,
+  type McpRequesterDiscoverySecretScanner,
+  type McpRequesterDiscoverySecretScannerInput,
+  type McpRequesterDiscoverySecretScannerResult,
+} from "./mcp-requester-resolution.js";
 
 export const MCP_RESOLUTION_SECRET_GUARD_ENTRY_LIMIT = 512;
 export const MCP_RESOLUTION_SECRET_GUARD_BYTE_LIMIT = 512 * 1_024;
@@ -135,6 +143,60 @@ export function createMcpResolutionSecretGuard(input: McpResolutionSecretGuardIn
 }
 
 Object.freeze(McpResolutionSecretGuardValue.prototype);
+
+export const MCP_REQUESTER_DISCOVERY_SECRET_SCANNER_ID = "goatcitadel.mcp-discovery-secret-scan";
+export const MCP_REQUESTER_DISCOVERY_SECRET_SCANNER_VERSION = "1.0.0";
+export const MCP_REQUESTER_DISCOVERY_SECRET_SCANNER_GENERATION = 1;
+
+/**
+ * Gateway-owned concrete {@link McpRequesterDiscoverySecretScanner}. It scans
+ * the canonical serialized discovery catalog (names, descriptions, schemas)
+ * with the repository secret-pattern machinery (`redactSecretText`): ANY
+ * pattern hit fails the scan with the content-free
+ * `discovery_secret_detected` reason — a finding can never come back "clean"
+ * and the matched value never appears in any error. Clean payloads yield
+ * deterministic non-secret evidence (a hash over scanner identity + payload
+ * hash), never the payload itself.
+ */
+export function createMcpRequesterDiscoverySecretScanner(): McpRequesterDiscoverySecretScanner {
+  return Object.freeze({
+    scannerId: MCP_REQUESTER_DISCOVERY_SECRET_SCANNER_ID,
+    scannerVersion: MCP_REQUESTER_DISCOVERY_SECRET_SCANNER_VERSION,
+    scannerGeneration: MCP_REQUESTER_DISCOVERY_SECRET_SCANNER_GENERATION,
+    scan(input: Readonly<McpRequesterDiscoverySecretScannerInput>): McpRequesterDiscoverySecretScannerResult {
+      if (
+        typeof input !== "object" ||
+        input === null ||
+        typeof input.serverId !== "string" ||
+        typeof input.canonicalPayload !== "string" ||
+        typeof input.payloadSha256 !== "string" ||
+        !/^[a-f0-9]{64}$/u.test(input.payloadSha256)
+      ) {
+        throw new McpRequesterResolutionError("secret_guard_failed");
+      }
+      const detection = redactSecretText(input.canonicalPayload);
+      if (detection.redactionCount > 0) {
+        // Content-free by construction: the fixed reason message never carries
+        // the matched value, the payload, or a derived preview of either.
+        throw new McpRequesterResolutionError("discovery_secret_detected");
+      }
+      return {
+        verdict: "clean",
+        evidenceSha256: createHash("sha256")
+          .update(
+            canonicalJsonString({
+              scannerId: MCP_REQUESTER_DISCOVERY_SECRET_SCANNER_ID,
+              scannerVersion: MCP_REQUESTER_DISCOVERY_SECRET_SCANNER_VERSION,
+              scannerGeneration: MCP_REQUESTER_DISCOVERY_SECRET_SCANNER_GENERATION,
+              scannedSha256: input.payloadSha256,
+              verdict: "clean",
+            }),
+          )
+          .digest("hex"),
+      };
+    },
+  });
+}
 
 function collectSeeds(input: McpResolutionSecretGuardInput): string[] {
   const parsed = new URL(input.url);

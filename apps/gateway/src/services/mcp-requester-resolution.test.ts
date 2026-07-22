@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import { readFileSync, readdirSync } from "node:fs";
+import { relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import * as requesterResolutionModule from "./mcp-requester-resolution.js";
 import {
@@ -15,6 +18,9 @@ import {
   assertNormalizedMcpRequesterDiscoveryCatalog,
   createMcpEphemeralResolvedConnectionCandidate,
   createMcpRequesterProviderAlias,
+  extractMcpRequesterDiscoveryOutputInput,
+  issueMcpProfileDiscoveryAuthority,
+  issueMcpToolCallAuthority,
   mcpRequesterScopedServerConfigHash,
   mcpRequesterTransportPolicyHash,
   normalizeMcpRequesterDiscoveryOutput,
@@ -24,6 +30,7 @@ import {
   type McpEphemeralResolvedConnectionInput,
   type McpRequesterDiscoverySecretScanner,
   type McpRequesterScopedServerSnapshot,
+  type McpToolCallAuthorityIssueInput,
 } from "./mcp-requester-resolution.js";
 
 const NOW = Date.parse("2026-07-14T12:00:00.000Z");
@@ -458,5 +465,203 @@ describe("MCP two-stage requester resolution primitives", () => {
 
   it("keeps reason messages opaque", () => {
     expect(new McpRequesterResolutionError("resolver_failed").message).not.toContain("tenant-mcp");
+  });
+});
+
+function toolCallIssueInput(actorId = "operator-a"): McpToolCallAuthorityIssueInput {
+  const {
+    finalProfileId,
+    finalProfileSha256,
+    baseCallableCatalogSha256,
+    finalCallableCatalogSha256,
+    serverId,
+    rawRemoteToolName,
+    canonicalToolName,
+    providerAlias,
+    normalizedDiscoveryCatalogSha256,
+    normalizedToolDefinitionSha256,
+    bindingSha256,
+    ...rest
+  } = toolCallAuthorityInput(actorId);
+  return {
+    ...rest,
+    sealedProfile: {
+      finalProfileId,
+      finalProfileSha256,
+      baseCallableCatalogSha256,
+      finalCallableCatalogSha256,
+      serverId,
+      rawRemoteToolName,
+      canonicalToolName,
+      providerAlias,
+      normalizedDiscoveryCatalogSha256,
+      normalizedToolDefinitionSha256,
+      bindingSha256,
+    },
+  };
+}
+
+describe("controlled requester-authority issuance (HX-415 slice 7c)", () => {
+  it("mints branded discovery authorities through full validation only", () => {
+    const authority = issueMcpProfileDiscoveryAuthority(discoveryAuthorityInput());
+    expect(() => assertMcpProfileDiscoveryAuthority(authority)).not.toThrow();
+    expect(authority.stage).toBe("profile_discovery");
+    expect(authority.authoritySha256).toMatch(/^[a-f0-9]{64}$/u);
+    expect(() => JSON.stringify(authority)).toThrowError(
+      expect.objectContaining({ code: "requester_context_ambiguous" }),
+    );
+  });
+
+  it("mints branded tool-call authorities by sealing the raw profile record first", () => {
+    const authority = issueMcpToolCallAuthority(toolCallIssueInput());
+    expect(() => assertMcpToolCallAuthority(authority)).not.toThrow();
+    expect(authority.stage).toBe("tool_call");
+    expect(authority.rawRemoteToolName).toBe("search");
+    expect(authority.canonicalToolName).toBe("mcp.tenant-mcp.search");
+    expect(() => JSON.stringify(authority)).toThrowError(
+      expect.objectContaining({ code: "requester_context_ambiguous" }),
+    );
+  });
+
+  it("rejects forged issuance input before any brand is created", () => {
+    const badSha = toolCallIssueInput();
+    badSha.sealedProfile.finalProfileSha256 = "NOT-A-SHA";
+    expect(() => issueMcpToolCallAuthority(badSha)).toThrowError(
+      expect.objectContaining({ code: "capability_profile_invalid" }),
+    );
+
+    const aliasMismatch = toolCallIssueInput();
+    aliasMismatch.sealedProfile.providerAlias = `mcp__${"a".repeat(64)}`;
+    expect(() => issueMcpToolCallAuthority(aliasMismatch)).toThrowError(
+      expect.objectContaining({ code: "capability_profile_invalid" }),
+    );
+
+    const nonCanonical = toolCallIssueInput();
+    nonCanonical.sealedProfile.serverId = "tenant mcp";
+    expect(() => issueMcpToolCallAuthority(nonCanonical)).toThrowError(
+      expect.objectContaining({ code: "capability_profile_invalid" }),
+    );
+
+    const extraKey = { ...toolCallIssueInput(), forged: true } as unknown as McpToolCallAuthorityIssueInput;
+    expect(() => issueMcpToolCallAuthority(extraKey)).toThrowError(
+      expect.objectContaining({ code: "requester_context_ambiguous" }),
+    );
+
+    const badDiscovery = { ...discoveryAuthorityInput(), actorSource: "none" };
+    expect(() => issueMcpProfileDiscoveryAuthority(badDiscovery as never)).toThrowError(
+      expect.objectContaining({ code: "requester_context_ambiguous" }),
+    );
+  });
+
+  it("never accepts a re-issued raw profile record in place of the sealed brand", () => {
+    const issued = issueMcpToolCallAuthority(toolCallIssueInput());
+    expect(() => assertMcpToolCallAuthority({ ...issued })).toThrowError(
+      expect.objectContaining({ code: "requester_context_ambiguous" }),
+    );
+  });
+
+  it("keeps issuance call sites scoped to the resolution service and gateway composition", () => {
+    const sourceRoot = fileURLToPath(new URL("../", import.meta.url));
+    const inventory = listProductionTypeScriptSources(sourceRoot).map((filePath) => ({
+      relativePath: relative(sourceRoot, filePath).replaceAll("\\", "/"),
+      content: readFileSync(filePath, "utf8"),
+    }));
+    expect(inventory.length).toBeGreaterThan(0);
+    expect(() => assertIssuanceCallSitesScoped(inventory)).not.toThrow();
+    // The guard itself must fail when a disallowed production file gains a call.
+    expect(() =>
+      assertIssuanceCallSitesScoped([
+        ...inventory,
+        {
+          relativePath: "routes/mcp.ts",
+          content: "issueMcpToolCallAuthority({} as never);",
+        },
+      ]),
+    ).toThrow(/routes\/mcp\.ts/u);
+    expect(() =>
+      assertIssuanceCallSitesScoped([
+        ...inventory,
+        {
+          relativePath: "services/gateway-service.ts",
+          content: "issueMcpProfileDiscoveryAuthority(input);",
+        },
+      ]),
+    ).not.toThrow();
+  });
+});
+
+const ISSUANCE_DEFINITION_SITE = "services/mcp-requester-resolution.ts";
+const ISSUANCE_ALLOWED_CALL_SITES = new Set([
+  "services/gateway-service.ts",
+  "services/mcp-requester-resolution-service.ts",
+]);
+
+function assertIssuanceCallSitesScoped(inventory: ReadonlyArray<{ relativePath: string; content: string }>): void {
+  for (const callToken of ["issueMcpProfileDiscoveryAuthority(", "issueMcpToolCallAuthority("]) {
+    for (const file of inventory) {
+      if (file.relativePath === ISSUANCE_DEFINITION_SITE) continue;
+      if (!file.content.includes(callToken)) continue;
+      if (!ISSUANCE_ALLOWED_CALL_SITES.has(file.relativePath)) {
+        throw new Error(`Requester-authority issuance leaked into ${file.relativePath} via ${callToken})`);
+      }
+    }
+  }
+}
+
+function listProductionTypeScriptSources(root: string): string[] {
+  return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
+    const fullPath = resolve(root, entry.name);
+    if (entry.isDirectory()) {
+      return listProductionTypeScriptSources(fullPath);
+    }
+    if (
+      !entry.isFile() ||
+      !entry.name.endsWith(".ts") ||
+      entry.name.endsWith(".test.ts") ||
+      entry.name.endsWith(".vitest.ts") ||
+      entry.name.endsWith(".d.ts")
+    ) {
+      return [];
+    }
+    return [fullPath];
+  });
+}
+
+describe("extractMcpRequesterDiscoveryOutputInput", () => {
+  it("maps a raw tools/list result onto the canonical discovery input shape", () => {
+    const extracted = extractMcpRequesterDiscoveryOutputInput("tenant-mcp", {
+      tools: [
+        {
+          name: " search ",
+          description: "  Search safely  ",
+          inputSchema: { type: "object", properties: { query: { type: "string" } } },
+        },
+        { name: "plain" },
+      ],
+    });
+    expect(extracted.tools).toEqual([
+      {
+        rawRemoteToolName: "search",
+        canonicalToolName: "mcp.tenant-mcp.search",
+        description: "Search safely",
+        inputSchema: { type: "object", properties: { query: { type: "string" } } },
+      },
+      { rawRemoteToolName: "plain", canonicalToolName: "mcp.tenant-mcp.plain", inputSchema: {} },
+    ]);
+    const normalized = normalizeMcpRequesterDiscoveryOutput("tenant-mcp", extracted, scanner());
+    expect(normalized.tools).toHaveLength(2);
+  });
+
+  it("fails closed on malformed raw results", () => {
+    for (const raw of [undefined, null, "tools", { tools: "nope" }, { tools: [{ name: 42 }] }, { tools: [{}] }]) {
+      expect(() => extractMcpRequesterDiscoveryOutputInput("tenant-mcp", raw)).toThrowError(
+        expect.objectContaining({ code: "discovery_output_invalid" }),
+      );
+    }
+    expect(() =>
+      extractMcpRequesterDiscoveryOutputInput("tenant-mcp", {
+        tools: Array.from({ length: 65 }, (_, index) => ({ name: `tool-${index}` })),
+      }),
+    ).toThrowError(expect.objectContaining({ code: "discovery_output_too_large" }));
   });
 });
