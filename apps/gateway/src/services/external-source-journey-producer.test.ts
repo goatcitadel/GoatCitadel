@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { EXTERNAL_SOURCE_SCHEMA_VERSION, isGovernanceJourneyEventRecord } from "@goatcitadel/contracts";
+import {
+  EXTERNAL_SOURCE_SCHEMA_VERSION,
+  isGovernanceJourneyEventRecord,
+  type ExternalSessionAttachmentRecord,
+} from "@goatcitadel/contracts";
 import {
   computeExternalSourceArtifactSetSha256,
   computeExternalSourceNormalizedSetSha256,
@@ -12,6 +16,7 @@ import {
   sealExternalSourceImportSettlement,
 } from "@goatcitadel/storage";
 import {
+  buildExternalSourceAttachmentJourneyEvent,
   buildExternalSourceDryRunJourneyEvent,
   buildExternalSourceSettlementJourneyEvent,
 } from "./external-source-journey-producer.js";
@@ -119,6 +124,82 @@ describe("external source Journey producer", () => {
     expect(laterImported.fingerprint).toBe(imported.fingerprint);
     expect(laterImported.idempotencyKey).toBe(imported.idempotencyKey);
     expect(laterImported.eventId).not.toBe(imported.eventId);
+  });
+
+  it("produces deterministic content-free attachment lifecycle evidence for attach and detach", () => {
+    const attachment: ExternalSessionAttachmentRecord = {
+      schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
+      attachmentId: "external-attachment-1",
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+      sourceId: "source-1",
+      importId: "import-1",
+      itemId: "item-1",
+      normalizedArtifactSha256: "e".repeat(64),
+      mode: "read_only_external",
+      status: "attached",
+      revision: 1,
+      attachedByActorId: "operator-1",
+      attachedAt: "2026-07-14T08:06:00.000Z",
+    };
+    const sessionIncarnationId = "lifecycle-intent-1";
+    const attached = buildExternalSourceAttachmentJourneyEvent({ attachment, sessionIncarnationId });
+    expect(isGovernanceJourneyEventRecord(attached)).toBe(true);
+    expect(attached).toMatchObject({
+      eventType: "external_session_import",
+      subjectKind: "external_session_attachment",
+      subjectId: attachment.attachmentId,
+      action: "attached_read_only",
+      actorId: "operator-1",
+      sessionId: "session-1",
+      sourceKind: "external_source",
+      sourceId: "source-1",
+      trustDisposition: "read_only_external",
+      poisoningStatus: "clean",
+      provenance: expect.objectContaining({
+        sourceRequired: true,
+        approvalRequired: false,
+        sessionIncarnationId,
+      }),
+      occurredAt: attachment.attachedAt,
+      recordedAt: attachment.attachedAt,
+    });
+    expect(buildExternalSourceAttachmentJourneyEvent({ attachment, sessionIncarnationId })).toEqual(attached);
+    expect(JSON.stringify(attached)).not.toContain("transcript");
+
+    const detachedRecord: ExternalSessionAttachmentRecord = {
+      ...attachment,
+      status: "detached",
+      revision: 2,
+      detachedByActorId: "operator-2",
+      detachedAt: "2026-07-14T08:07:00.000Z",
+    };
+    const detached = buildExternalSourceAttachmentJourneyEvent({
+      attachment: detachedRecord,
+      sessionIncarnationId,
+    });
+    expect(isGovernanceJourneyEventRecord(detached)).toBe(true);
+    expect(detached).toMatchObject({
+      action: "detached",
+      actorId: "operator-2",
+      occurredAt: detachedRecord.detachedAt,
+    });
+    expect(detached.eventId).not.toBe(attached.eventId);
+    expect(detached.idempotencyKey).not.toBe(attached.idempotencyKey);
+    expect(detached.fingerprint).not.toBe(attached.fingerprint);
+
+    const otherIncarnation = buildExternalSourceAttachmentJourneyEvent({
+      attachment,
+      sessionIncarnationId: "lifecycle-intent-2",
+    });
+    expect(otherIncarnation.fingerprint).not.toBe(attached.fingerprint);
+
+    expect(() =>
+      buildExternalSourceAttachmentJourneyEvent({
+        attachment: { ...detachedRecord, detachedAt: undefined, detachedByActorId: undefined },
+        sessionIncarnationId,
+      }),
+    ).toThrow(/lacks lifecycle evidence/u);
   });
 });
 

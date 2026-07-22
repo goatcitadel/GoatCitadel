@@ -13,10 +13,12 @@ import {
   canonicalJsonString,
   type ChatAttachmentRecord,
   type ChatCompletionRequest,
+  type ChatRoutedContextExternalProvenance,
   type ChatRoutedContextRef,
   type ChatRoutedContextSnapshotEntry,
   type ChatRoutedContextSnapshotRecord,
   type ChatTurnCapabilityProfileRecord,
+  type ExternalSessionAttachmentRecord,
   type MemoryItemRecord,
 } from "@goatcitadel/contracts";
 import { estimateTokensFromText } from "@goatcitadel/memory-core";
@@ -52,6 +54,8 @@ export interface ResolvedChatRoutedContextSource {
   sourceWorkspaceId?: string;
   sourceVersion: string;
   sourceHash: string;
+  /** Present exactly when `kind` is `external_attachment`. */
+  externalProvenance?: ChatRoutedContextExternalProvenance;
   originalBytes: number;
   text: string;
   alreadyAttached: boolean;
@@ -60,6 +64,13 @@ export interface ResolvedChatRoutedContextSource {
 export interface ResolvedChatRoutedContextSources {
   sourceRequestHash: string;
   sources: ResolvedChatRoutedContextSource[];
+}
+
+/** Exact managed-artifact bytes plus provenance for one live external attachment. */
+export interface ChatRoutedContextExternalAttachmentContent {
+  attachment: ExternalSessionAttachmentRecord;
+  bytes: Buffer;
+  provenance: ChatRoutedContextExternalProvenance;
 }
 
 export interface ChatRoutedContextSourceDeps {
@@ -73,6 +84,15 @@ export interface ChatRoutedContextSourceDeps {
     workspaceId: string,
     options: { allowGlobal: boolean },
   ): MemoryItemRecord | undefined;
+  /**
+   * Governed exact-byte read for one live `read_only_external` attachment.
+   * Absent in compositions that have not enabled the external-source runtime:
+   * external refs then fail closed before any provider use.
+   */
+  readExternalAttachmentContent?(
+    attachmentId: string,
+    scope: { sessionId: string; workspaceId: string },
+  ): Promise<ChatRoutedContextExternalAttachmentContent>;
 }
 
 export interface ResolveChatRoutedContextSourcesInput {
@@ -113,6 +133,9 @@ export async function resolveChatRoutedContextSources(
       assertAttachmentRecord(record, ref.ref, input.sessionId, input.workspaceId);
       return { type: "attachment" as const, ref, record, alreadyAttached: ordinaryAttachments.has(ref.ref) };
     }
+    if (ref.kind === "external_attachment") {
+      return { type: "external" as const, ref };
+    }
     const item = deps.getActiveMemoryItem(ref.ref, input.workspaceId, {
       allowGlobal: input.allowGlobalMemory,
     });
@@ -125,8 +148,30 @@ export async function resolveChatRoutedContextSources(
     assertSourceSize(ref.ref, bytes);
     return { type: "memory" as const, ref, item, provenance, bytes };
   });
+  // External bytes exist only in the governed managed artifact, so their exact
+  // size is knowable solely from a verified read; load them (fail closed when
+  // the runtime is not composed) before the aggregate budget check.
+  const externalByIndex = new Map<number, ChatRoutedContextExternalAttachmentContent>();
+  for (const item of prepared) {
+    if (item.type !== "external") continue;
+    const readExternal = deps.readExternalAttachmentContent;
+    if (!readExternal) {
+      throw new ConflictError({
+        message: `Routed external attachment ${item.ref.ref} is unavailable in this runtime.`,
+      });
+    }
+    const loaded = await readExternal(item.ref.ref, { sessionId: input.sessionId, workspaceId: input.workspaceId });
+    assertExternalAttachmentContent(loaded, item.ref.ref, input.sessionId, input.workspaceId);
+    externalByIndex.set(item.ref.index, loaded);
+  }
   const declaredBytes = prepared.reduce(
-    (sum, item) => sum + (item.type === "attachment" ? item.record.sizeBytes : item.bytes),
+    (sum, item) =>
+      sum +
+      (item.type === "attachment"
+        ? item.record.sizeBytes
+        : item.type === "external"
+          ? externalByIndex.get(item.ref.index)!.bytes.length
+          : item.bytes),
     0,
   );
   if (declaredBytes > CHAT_ROUTED_CONTEXT_MAX_AGGREGATE_SOURCE_BYTES) {
@@ -135,6 +180,21 @@ export async function resolveChatRoutedContextSources(
 
   const sources = await Promise.all(
     prepared.map(async (item): Promise<ResolvedChatRoutedContextSource> => {
+      if (item.type === "external") {
+        const loaded = externalByIndex.get(item.ref.index)!;
+        const text = decodeExactUtf8(loaded.bytes, `external attachment ${item.ref.ref}`);
+        return {
+          ...item.ref,
+          sourceScope: "workspace",
+          sourceWorkspaceId: input.workspaceId,
+          sourceVersion: `external:rev:${loaded.attachment.revision}:sha256:${loaded.provenance.normalizedArtifactSha256}`,
+          sourceHash: loaded.provenance.normalizedArtifactSha256,
+          externalProvenance: loaded.provenance,
+          originalBytes: loaded.bytes.length,
+          text,
+          alreadyAttached: false,
+        };
+      }
       if (item.type === "memory") {
         const sourceHash = digestText(item.item.content);
         const updatedAt = canonicalIso(item.item.updatedAt, `memory item ${item.ref.ref} updatedAt`);
@@ -244,6 +304,12 @@ export function buildChatRoutedContextSnapshot(
       entries.push(buildEntry(source, originalTokens, "already_attached", "", 0));
       continue;
     }
+    if (source.kind === "external_attachment") {
+      // HX-407 freezes exact external bytes: an external source is admitted in
+      // full within the governed budget or omitted whole, never truncated.
+      entries.push(fitExternalSourceExactly(entries, source, originalTokens, effectiveBudgetTokens, model));
+      continue;
+    }
     const admitted = fitSourceToRenderedBudget(entries, source, originalTokens, effectiveBudgetTokens, model);
     entries.push(admitted);
   }
@@ -286,6 +352,21 @@ export function buildChatRoutedContextSnapshot(
   });
   verifyChatRoutedContextSnapshot(snapshot);
   return snapshot;
+}
+
+function fitExternalSourceExactly(
+  prior: ChatRoutedContextSnapshotEntry[],
+  source: ResolvedChatRoutedContextSource,
+  originalTokens: number,
+  budget: number,
+  model: string,
+): ChatRoutedContextSnapshotEntry {
+  if (!source.text || originalTokens <= 0 || budget <= 0 || originalTokens > CHAT_ROUTED_CONTEXT_PER_SOURCE_TOKENS) {
+    return buildEntry(source, originalTokens, "omitted", "", 0);
+  }
+  const included = buildEntry(source, originalTokens, "included", source.text, originalTokens);
+  const renderedTokens = estimateTokensFromText(renderChatRoutedContextEntries([...prior, included]), { model });
+  return renderedTokens <= budget ? included : buildEntry(source, originalTokens, "omitted", "", 0);
 }
 
 function fitSourceToRenderedBudget(
@@ -344,6 +425,7 @@ function buildEntry(
     ...(source.sourceWorkspaceId ? { sourceWorkspaceId: source.sourceWorkspaceId } : {}),
     sourceVersion: source.sourceVersion,
     sourceHash: source.sourceHash,
+    ...(source.externalProvenance ? { externalProvenance: source.externalProvenance } : {}),
     originalBytes: source.originalBytes,
     originalTokens,
     admittedBytes: Buffer.byteLength(admittedText, "utf8"),
@@ -365,7 +447,7 @@ function normalizeRefs(value: unknown): NormalizedRef[] {
       throw new ValidationError({ message: `contextRefs[${index}] has an unsupported shape.` });
     }
     const ref = raw as Record<string, unknown>;
-    if (ref.kind !== "attachment" && ref.kind !== "memory_item") {
+    if (ref.kind !== "attachment" && ref.kind !== "memory_item" && ref.kind !== "external_attachment") {
       throw new ValidationError({ message: `contextRefs[${index}].kind is unsupported.` });
     }
     if (
@@ -401,9 +483,64 @@ function normalizeRefs(value: unknown): NormalizedRef[] {
           ? callerLabel
           : ref.kind === "attachment"
             ? `Attachment ${index + 1}`
-            : `Memory item ${index + 1}`,
+            : ref.kind === "external_attachment"
+              ? `External source ${index + 1}`
+              : `Memory item ${index + 1}`,
     };
   });
+}
+
+/**
+ * The external read port must return one live read-only attachment whose
+ * verified bytes hash-bind to the provenance chain; anything else fails closed
+ * before the bytes can reach a snapshot.
+ */
+function assertExternalAttachmentContent(
+  loaded: ChatRoutedContextExternalAttachmentContent,
+  ref: string,
+  sessionId: string,
+  workspaceId: string,
+): void {
+  const attachment = loaded?.attachment;
+  const provenance = loaded?.provenance;
+  if (
+    !attachment ||
+    !provenance ||
+    !(loaded.bytes instanceof Buffer) ||
+    attachment.attachmentId !== ref ||
+    attachment.sessionId !== sessionId ||
+    attachment.workspaceId !== workspaceId ||
+    attachment.mode !== "read_only_external" ||
+    attachment.status !== "attached" ||
+    provenance.attachmentId !== ref ||
+    provenance.sourceId !== attachment.sourceId ||
+    provenance.importId !== attachment.importId ||
+    provenance.itemId !== attachment.itemId ||
+    provenance.attachmentRevision !== attachment.revision ||
+    provenance.normalizedArtifactSha256 !== attachment.normalizedArtifactSha256
+  ) {
+    throw new ConflictError({ message: `Routed external attachment ${ref} is not live in the effective session.` });
+  }
+  assertSourceSize(ref, loaded.bytes.length);
+  const actualHash = createHash("sha256").update(loaded.bytes).digest("hex");
+  if (actualHash !== provenance.normalizedArtifactSha256) {
+    throw new ConflictError({
+      message: `Routed external attachment ${ref} bytes do not match their immutable artifact hash.`,
+    });
+  }
+}
+
+function decodeExactUtf8(bytes: Buffer, label: string): string {
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+  } catch {
+    throw new ValidationError({ message: `Routed ${label} is not valid UTF-8 text.` });
+  }
+  if (!Buffer.from(text, "utf8").equals(bytes)) {
+    throw new ValidationError({ message: `Routed ${label} is not canonical UTF-8 text.` });
+  }
+  return text;
 }
 
 function assertAttachmentRecord(

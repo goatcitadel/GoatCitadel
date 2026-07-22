@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   GOVERNANCE_JOURNEY_EVENT_VERSION,
   canonicalJsonString,
+  type ExternalSessionAttachmentRecord,
   type ExternalSourceImportIntent,
   type ExternalSourceImportItem,
   type ExternalSourceImportPlan,
@@ -135,6 +136,82 @@ export function buildExternalSourceSettlementJourneyEvent(input: {
     },
     occurredAt: settlement.settledAt,
     recordedAt: settlement.settledAt,
+  };
+}
+
+/**
+ * Content-free evidence for one read-only external attachment lifecycle
+ * transition. Every field is an identifier, hash, count, or frozen enum; the
+ * event never carries normalized artifact bytes or any transcript text. All
+ * material derives from the immutable attachment record so exact replays
+ * rebuild the identical event and never append recurrence.
+ */
+export function buildExternalSourceAttachmentJourneyEvent(input: {
+  attachment: ExternalSessionAttachmentRecord;
+  sessionIncarnationId: string;
+}): GovernanceJourneyEventRecord {
+  const { attachment } = input;
+  const action = attachment.status === "attached" ? "attached_read_only" : "detached";
+  const occurredAt = attachment.status === "attached" ? attachment.attachedAt : attachment.detachedAt;
+  const actorId =
+    attachment.status === "attached" ? attachment.attachedByActorId : (attachment.detachedByActorId ?? "");
+  if (!occurredAt || !actorId) {
+    throw new Error(`External attachment ${attachment.attachmentId} lacks lifecycle evidence for Journey emission.`);
+  }
+  const fingerprint = digest({
+    action,
+    workspaceId: attachment.workspaceId,
+    sessionId: attachment.sessionId,
+    sessionIncarnationId: input.sessionIncarnationId,
+    sourceId: attachment.sourceId,
+    importId: attachment.importId,
+    itemId: attachment.itemId,
+    normalizedArtifactSha256: attachment.normalizedArtifactSha256,
+    mode: attachment.mode,
+    disposition: "read_only_external",
+  });
+  return {
+    schemaVersion: GOVERNANCE_JOURNEY_EVENT_VERSION,
+    eventId: eventId(action, attachment.workspaceId, attachment.attachmentId, fingerprint),
+    idempotencyKey: operationIdempotencyKey(action, attachment.workspaceId, attachment.attachmentId, fingerprint),
+    scopeKind: "workspace",
+    workspaceId: attachment.workspaceId,
+    eventType: "external_session_import",
+    subjectKind: "external_session_attachment",
+    subjectId: attachment.attachmentId,
+    action,
+    actorId,
+    actorType: "operator",
+    sessionId: attachment.sessionId,
+    fingerprint,
+    sourceKind: "external_source",
+    sourceId: attachment.sourceId,
+    trustDisposition: "read_only_external",
+    poisoningStatus: "clean",
+    evidenceRefs: [{ owner: "external_source", refId: attachment.attachmentId }],
+    provenance: {
+      sourceRequired: true,
+      approvalRequired: false,
+      sourceWorkspaceId: attachment.workspaceId,
+      schemaVersion: attachment.schemaVersion,
+      sessionIncarnationId: input.sessionIncarnationId,
+      importId: attachment.importId,
+      itemId: attachment.itemId,
+      normalizedArtifactSha256: attachment.normalizedArtifactSha256,
+    },
+    summary: {
+      attachmentId: attachment.attachmentId,
+      sessionId: attachment.sessionId,
+      sourceId: attachment.sourceId,
+      importId: attachment.importId,
+      itemId: attachment.itemId,
+      normalizedArtifactSha256: attachment.normalizedArtifactSha256,
+      mode: attachment.mode,
+      status: attachment.status,
+      revision: attachment.revision,
+    },
+    occurredAt,
+    recordedAt: occurredAt,
   };
 }
 

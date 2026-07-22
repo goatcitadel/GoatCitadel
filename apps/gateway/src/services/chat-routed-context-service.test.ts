@@ -53,6 +53,35 @@ function memory(id: string, content: string, patch: Partial<MemoryItemRecord> = 
   };
 }
 
+function externalAttachmentRecord(attachmentId: string, artifactSha: string) {
+  return {
+    schemaVersion: "goatcitadel.external-source.v1" as const,
+    attachmentId,
+    workspaceId: "workspace-1",
+    sessionId: "session-1",
+    sourceId: "source-1",
+    importId: "import-1",
+    itemId: "item-1",
+    normalizedArtifactSha256: artifactSha,
+    mode: "read_only_external" as const,
+    status: "attached" as const,
+    revision: 1,
+    attachedByActorId: "operator-1",
+    attachedAt: "2026-07-14T08:06:00.000Z",
+  };
+}
+
+function externalProvenance(attachmentId: string, artifactSha: string) {
+  return {
+    sourceId: "source-1",
+    importId: "import-1",
+    itemId: "item-1",
+    attachmentId,
+    attachmentRevision: 1,
+    normalizedArtifactSha256: artifactSha,
+  };
+}
+
 function profile(): ChatTurnCapabilityProfileRecord {
   return {
     profileId: "chat-capability-profile-turn-1",
@@ -512,6 +541,154 @@ describe("chat routed context service", () => {
         baseHistoryMessages: [],
       }),
     ).toThrow(/lacks trusted context-window metadata/u);
+  });
+
+  it("resolves live external attachments byte-exact with provenance and freezes them unmodified", async () => {
+    const text = "external canary bytes: lobster-matrix-7f3a";
+    const bytes = Buffer.from(text, "utf8");
+    const artifactSha = hash(bytes);
+    const record = externalAttachmentRecord("ext-1", artifactSha);
+    const provenance = externalProvenance("ext-1", artifactSha);
+    const readExternalAttachmentContent = vi.fn(async () => ({ attachment: record, bytes, provenance }));
+    const host = { ...deps(), readExternalAttachmentContent };
+
+    const resolved = await resolveChatRoutedContextSources(host, {
+      refs: [{ kind: "external_attachment", ref: "ext-1", label: "Codex session" }],
+      sessionId: "session-1",
+      workspaceId: "workspace-1",
+      memoryMode: "off",
+      allowGlobalMemory: false,
+    });
+    expect(readExternalAttachmentContent).toHaveBeenCalledWith("ext-1", {
+      sessionId: "session-1",
+      workspaceId: "workspace-1",
+    });
+    expect(resolved.sources[0]).toMatchObject({
+      kind: "external_attachment",
+      ref: "ext-1",
+      sourceScope: "workspace",
+      sourceWorkspaceId: "workspace-1",
+      sourceHash: artifactSha,
+      externalProvenance: provenance,
+      originalBytes: bytes.length,
+      text,
+      alreadyAttached: false,
+    });
+
+    const snapshot = buildChatRoutedContextSnapshot({
+      resolved,
+      turnId: "turn-1",
+      sessionId: "session-1",
+      workspaceId: "workspace-1",
+      capabilityProfile: profile(),
+      routeContextWindowTokens: 32_768,
+      baseHistoryMessages: [],
+    });
+    expect(snapshot.entries[0]).toMatchObject({
+      kind: "external_attachment",
+      disposition: "included",
+      admittedText: text,
+      admittedBytes: bytes.length,
+      externalProvenance: provenance,
+      truncated: false,
+    });
+    expect(snapshot.contextText).toContain(text);
+  });
+
+  it("fails closed when the external runtime is absent, bytes drift, or the attachment is not live", async () => {
+    const text = "exact external bytes";
+    const bytes = Buffer.from(text, "utf8");
+    const artifactSha = hash(bytes);
+    const baseInput = {
+      refs: [{ kind: "external_attachment" as const, ref: "ext-1" }],
+      sessionId: "session-1",
+      workspaceId: "workspace-1",
+      memoryMode: "auto" as const,
+      allowGlobalMemory: false,
+    };
+    await expect(resolveChatRoutedContextSources(deps(), baseInput)).rejects.toThrow(/unavailable in this runtime/u);
+
+    const tampered = {
+      ...deps(),
+      readExternalAttachmentContent: vi.fn(async () => ({
+        attachment: externalAttachmentRecord("ext-1", artifactSha),
+        bytes: Buffer.from("different bytes than the immutable artifact", "utf8"),
+        provenance: externalProvenance("ext-1", artifactSha),
+      })),
+    };
+    await expect(resolveChatRoutedContextSources(tampered, baseInput)).rejects.toThrow(
+      /do not match their immutable artifact hash/u,
+    );
+
+    const detached = {
+      ...deps(),
+      readExternalAttachmentContent: vi.fn(async () => ({
+        attachment: { ...externalAttachmentRecord("ext-1", artifactSha), status: "detached" as const, revision: 2 },
+        bytes,
+        provenance: externalProvenance("ext-1", artifactSha),
+      })),
+    };
+    await expect(resolveChatRoutedContextSources(detached, baseInput)).rejects.toThrow(/is not live/u);
+
+    const foreignSession = {
+      ...deps(),
+      readExternalAttachmentContent: vi.fn(async () => ({
+        attachment: { ...externalAttachmentRecord("ext-1", artifactSha), sessionId: "session-2" },
+        bytes,
+        provenance: externalProvenance("ext-1", artifactSha),
+      })),
+    };
+    await expect(resolveChatRoutedContextSources(foreignSession, baseInput)).rejects.toThrow(/is not live/u);
+  });
+
+  it("omits an external source whole instead of truncating when it cannot fit the budget", () => {
+    const bigText = "external transcript line that repeats. ".repeat(400);
+    const bigHash = hash(bigText);
+    const smallText = "small external body";
+    const smallHash = hash(smallText);
+    const sources = [
+      {
+        index: 0,
+        kind: "external_attachment" as const,
+        ref: "ext-big",
+        label: "External source 1",
+        sourceScope: "workspace" as const,
+        sourceWorkspaceId: "workspace-1",
+        sourceVersion: `external:rev:1:sha256:${bigHash}`,
+        sourceHash: bigHash,
+        externalProvenance: externalProvenance("ext-big", bigHash),
+        originalBytes: Buffer.byteLength(bigText, "utf8"),
+        text: bigText,
+        alreadyAttached: false,
+      },
+      {
+        index: 1,
+        kind: "external_attachment" as const,
+        ref: "ext-small",
+        label: "External source 2",
+        sourceScope: "workspace" as const,
+        sourceWorkspaceId: "workspace-1",
+        sourceVersion: `external:rev:1:sha256:${smallHash}`,
+        sourceHash: smallHash,
+        externalProvenance: externalProvenance("ext-small", smallHash),
+        originalBytes: Buffer.byteLength(smallText, "utf8"),
+        text: smallText,
+        alreadyAttached: false,
+      },
+    ];
+    const snapshot = buildChatRoutedContextSnapshot({
+      resolved: { sourceRequestHash: requestHash(sources), sources },
+      turnId: "turn-1",
+      sessionId: "session-1",
+      workspaceId: "workspace-1",
+      capabilityProfile: profile(),
+      routeContextWindowTokens: 32_768,
+      baseHistoryMessages: [],
+    });
+    expect(snapshot.entries[0]).toMatchObject({ disposition: "omitted", admittedText: "", admittedBytes: 0 });
+    expect(snapshot.entries[1]).toMatchObject({ disposition: "included", admittedText: smallText });
+    expect(snapshot.contextText).not.toContain("external transcript line");
+    expect(snapshot.entries.every((entry) => entry.disposition !== "truncated")).toBe(true);
   });
 
   it("binds the ordered source request and final memory profile scope before sealing", () => {

@@ -157,6 +157,39 @@ function routedSources(text = ROUTED_TEXT): ResolvedChatRoutedContextSources {
   };
 }
 
+const EXTERNAL_TEXT = "external codex transcript canary: lobster-matrix-7f3a stays byte-exact";
+
+function externalRoutedSources(text = EXTERNAL_TEXT): ResolvedChatRoutedContextSources {
+  const sourceHash = createHash("sha256").update(text, "utf8").digest("hex");
+  const provenance = {
+    sourceId: "source-1",
+    importId: "import-1",
+    itemId: "item-1",
+    attachmentId: "external-attachment-1",
+    attachmentRevision: 1,
+    normalizedArtifactSha256: sourceHash,
+  };
+  return {
+    sourceRequestHash: digest([{ kind: "external_attachment", ref: "external-attachment-1" }]),
+    sources: [
+      {
+        index: 0,
+        kind: "external_attachment",
+        ref: "external-attachment-1",
+        label: "External source 1",
+        sourceScope: "workspace",
+        sourceWorkspaceId: WORKSPACE_ID,
+        sourceVersion: `external:rev:1:sha256:${sourceHash}`,
+        sourceHash,
+        externalProvenance: provenance,
+        originalBytes: Buffer.byteLength(text, "utf8"),
+        text,
+        alreadyAttached: false,
+      },
+    ],
+  };
+}
+
 function routeDecision(overrides: Partial<RoutingDecisionSnapshot> = {}): RoutingDecisionSnapshot {
   return {
     action: "send",
@@ -318,6 +351,54 @@ describe("prepareAgentChatTurn routed context", () => {
           message.content.startsWith("Routed context snapshot (immutable)."),
       ),
     ).toEqual([{ role: "system", content: prepared.routedContextSnapshot?.contextText }]);
+  });
+
+  it("freezes exact external-attachment bytes and provenance into the snapshot before provider use", async () => {
+    const harness = createHarness({ withPriorTurn: true });
+    harness.resolveSources.mockResolvedValue(externalRoutedSources());
+
+    const prepared = await prepareAgentChatTurn(
+      harness.host,
+      SESSION_ID,
+      {
+        content: "Use the external routed context.",
+        contextRefs: [{ kind: "external_attachment" as const, ref: "external-attachment-1" }],
+      },
+      { turnId: "turn-external" },
+    );
+
+    const snapshot = prepared.routedContextSnapshot;
+    expect(snapshot).toBeDefined();
+    expect(snapshot?.entries[0]).toEqual(
+      expect.objectContaining({
+        kind: "external_attachment",
+        ref: "external-attachment-1",
+        disposition: "included",
+        admittedText: EXTERNAL_TEXT,
+        admittedBytes: Buffer.byteLength(EXTERNAL_TEXT, "utf8"),
+        truncated: false,
+        externalProvenance: {
+          sourceId: "source-1",
+          importId: "import-1",
+          itemId: "item-1",
+          attachmentId: "external-attachment-1",
+          attachmentRevision: 1,
+          normalizedArtifactSha256: createHash("sha256").update(EXTERNAL_TEXT, "utf8").digest("hex"),
+        },
+      }),
+    );
+    expect(
+      prepared.history.filter(
+        (message) =>
+          message.role === "system" &&
+          typeof message.content === "string" &&
+          message.content.startsWith("Routed context snapshot (immutable)."),
+      ),
+    ).toEqual([{ role: "system", content: snapshot?.contextText }]);
+    expect(snapshot?.contextText).toContain(EXTERNAL_TEXT);
+    for (const call of harness.resolveCapability.mock.calls) {
+      expect(JSON.stringify(call[0].historyMessages)).not.toContain("lobster-matrix-7f3a");
+    }
   });
 
   it.each(["ask_when_useful", "auto_when_useful"] as const)(
