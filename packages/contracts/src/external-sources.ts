@@ -5,6 +5,19 @@ import type { WorkspacePathFlavor } from "./workspace-path-bridge.js";
 export const EXTERNAL_SOURCE_SCHEMA_VERSION = "goatcitadel.external-source.v1" as const;
 export const EXTERNAL_SOURCE_CURSOR_VERSION = "goatcitadel.external-source-cursor.v1" as const;
 
+/**
+ * The dedicated approval kind for copying one imported external item into a
+ * GoatCitadel knowledge snapshot. C1 owns only the request contract; the
+ * approval-effect execution is a separate governed tranche.
+ */
+export const EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_APPROVAL_KIND = "external_source.knowledge_snapshot" as const;
+/** The sole approval-effect kind the knowledge-snapshot approval may enqueue. */
+export const EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_KIND = "external_source_knowledge_snapshot_apply" as const;
+/** The sole approval-effect target kind for the knowledge-snapshot effect. */
+export const EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_TARGET_KIND = "external_source_import_item" as const;
+/** Session incarnation identifiers follow the chat lifecycle column bound. */
+export const EXTERNAL_SOURCE_SESSION_INCARNATION_MAX_LENGTH = 320;
+
 export const EXTERNAL_SOURCE_LIMITS = Object.freeze({
   rootPathBytes: 2_048,
   activeRootsPerWorkspace: 16,
@@ -328,6 +341,106 @@ export interface ExternalSourceImportApplyInput {
   idempotencyKey: string;
 }
 
+/**
+ * Attach one applied import item to a chat session read-only. The actor and
+ * every hash are server-derived; a request can never smuggle either.
+ */
+export interface ExternalSessionAttachInput {
+  workspaceId: string;
+  sessionId: string;
+  expectedSessionIncarnationId: string;
+  sourceId: string;
+  importId: string;
+  itemId: string;
+}
+
+export interface ExternalSessionAttachmentListInput {
+  workspaceId: string;
+  sessionId: string;
+  limit?: number;
+}
+
+/** Exact CAS detach of one read-only external attachment. */
+export interface ExternalSessionDetachInput {
+  workspaceId: string;
+  sessionId: string;
+  attachmentId: string;
+  expectedRevision: number;
+  expectedSessionIncarnationId: string;
+}
+
+/**
+ * Request material for the dedicated knowledge-snapshot approval. It carries
+ * identifiers and the expected attachment revision only; the server derives
+ * every artifact hash. Client-supplied hash material fails the exact-key gate.
+ */
+export interface ExternalSourceKnowledgeSnapshotRequestInput {
+  workspaceId: string;
+  sessionId: string;
+  expectedSessionIncarnationId: string;
+  attachmentId: string;
+  importId: string;
+  itemId: string;
+  expectedAttachmentRevision: number;
+}
+
+/** Server-derived deterministic approval payload for one knowledge snapshot. */
+export interface ExternalSourceKnowledgeSnapshotApprovalPayload {
+  workspaceId: string;
+  sourceId: string;
+  importId: string;
+  itemId: string;
+  normalizedArtifactSha256: string;
+  rawSha256: string;
+  sessionId: string;
+  sessionIncarnationId: string;
+  attachmentId: string;
+  attachmentRevision: number;
+}
+
+/** Content-free operator preview for the knowledge-snapshot approval inbox. */
+export interface ExternalSourceKnowledgeSnapshotApprovalPreview {
+  sourceId: string;
+  importId: string;
+  itemId: string;
+  attachmentId: string;
+  normalizedArtifactSha256: string;
+  normalizedByteCount: number;
+}
+
+/**
+ * The full deterministic approval-request material. C1 builds and validates it;
+ * approval creation and the recovered effect remain a later governed tranche.
+ */
+export interface ExternalSourceKnowledgeSnapshotRequestMaterial {
+  schemaVersion: typeof EXTERNAL_SOURCE_SCHEMA_VERSION;
+  approvalKind: typeof EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_APPROVAL_KIND;
+  effectKind: typeof EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_KIND;
+  effectTargetKind: typeof EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_TARGET_KIND;
+  payload: ExternalSourceKnowledgeSnapshotApprovalPayload;
+  preview: ExternalSourceKnowledgeSnapshotApprovalPreview;
+}
+
+export interface ExternalSessionAttachmentResponse {
+  schemaVersion: typeof EXTERNAL_SOURCE_SCHEMA_VERSION;
+  attachment: ExternalSessionAttachmentRecord;
+  disposition: "created" | "replayed";
+}
+
+/** Durable content-free attachment truth for one workspace-bound session. */
+export interface ExternalSessionAttachmentListResponse {
+  schemaVersion: typeof EXTERNAL_SOURCE_SCHEMA_VERSION;
+  workspaceId: string;
+  sessionId: string;
+  items: ExternalSessionAttachmentRecord[];
+}
+
+export interface ExternalSessionDetachResponse {
+  schemaVersion: typeof EXTERNAL_SOURCE_SCHEMA_VERSION;
+  attachment: ExternalSessionAttachmentRecord;
+  disposition: "detached" | "replayed";
+}
+
 export interface ExternalSourceScanSummary {
   scanId: string;
   status: ExternalSourceScanRecord["status"];
@@ -553,6 +666,132 @@ export function normalizeExternalSourceImportApplyInput(value: unknown): Externa
     expectedPlanSha256: normalizeSha256(value.expectedPlanSha256),
     idempotencyKey: normalizeInputText(value.idempotencyKey, "idempotencyKey", 512),
   };
+}
+
+export function normalizeExternalSessionAttachInput(value: unknown): ExternalSessionAttachInput {
+  assertRecord(value, "attach input");
+  assertExactKeys(
+    value,
+    ["workspaceId", "sessionId", "expectedSessionIncarnationId", "sourceId", "importId", "itemId"],
+    new Set(),
+  );
+  return {
+    workspaceId: normalizeInputText(value.workspaceId, "workspaceId", 256),
+    sessionId: normalizeInputText(value.sessionId, "sessionId", 256),
+    expectedSessionIncarnationId: normalizeInputText(
+      value.expectedSessionIncarnationId,
+      "expectedSessionIncarnationId",
+      EXTERNAL_SOURCE_SESSION_INCARNATION_MAX_LENGTH,
+    ),
+    sourceId: normalizeInputText(value.sourceId, "sourceId", 256),
+    importId: normalizeInputText(value.importId, "importId", 256),
+    itemId: normalizeInputText(value.itemId, "itemId", 256),
+  };
+}
+
+export function normalizeExternalSessionAttachmentListInput(value: unknown): ExternalSessionAttachmentListInput {
+  assertRecord(value, "attachment list input");
+  assertExactKeys(value, ["workspaceId", "sessionId", "limit"], new Set(["limit"]));
+  const limit =
+    value.limit === undefined
+      ? undefined
+      : normalizeIntegerRange(value.limit, "limit", 1, EXTERNAL_SOURCE_LIMITS.maxPageSize);
+  return {
+    workspaceId: normalizeInputText(value.workspaceId, "workspaceId", 256),
+    sessionId: normalizeInputText(value.sessionId, "sessionId", 256),
+    ...(limit ? { limit } : {}),
+  };
+}
+
+export function normalizeExternalSessionDetachInput(value: unknown): ExternalSessionDetachInput {
+  assertRecord(value, "detach input");
+  assertExactKeys(
+    value,
+    ["workspaceId", "sessionId", "attachmentId", "expectedRevision", "expectedSessionIncarnationId"],
+    new Set(),
+  );
+  return {
+    workspaceId: normalizeInputText(value.workspaceId, "workspaceId", 256),
+    sessionId: normalizeInputText(value.sessionId, "sessionId", 256),
+    attachmentId: normalizeInputText(value.attachmentId, "attachmentId", 256),
+    expectedRevision: normalizePositiveInteger(value.expectedRevision, "expectedRevision"),
+    expectedSessionIncarnationId: normalizeInputText(
+      value.expectedSessionIncarnationId,
+      "expectedSessionIncarnationId",
+      EXTERNAL_SOURCE_SESSION_INCARNATION_MAX_LENGTH,
+    ),
+  };
+}
+
+export function normalizeExternalSourceKnowledgeSnapshotRequestInput(
+  value: unknown,
+): ExternalSourceKnowledgeSnapshotRequestInput {
+  assertRecord(value, "knowledge snapshot request input");
+  assertExactKeys(
+    value,
+    [
+      "workspaceId",
+      "sessionId",
+      "expectedSessionIncarnationId",
+      "attachmentId",
+      "importId",
+      "itemId",
+      "expectedAttachmentRevision",
+    ],
+    new Set(),
+  );
+  return {
+    workspaceId: normalizeInputText(value.workspaceId, "workspaceId", 256),
+    sessionId: normalizeInputText(value.sessionId, "sessionId", 256),
+    expectedSessionIncarnationId: normalizeInputText(
+      value.expectedSessionIncarnationId,
+      "expectedSessionIncarnationId",
+      EXTERNAL_SOURCE_SESSION_INCARNATION_MAX_LENGTH,
+    ),
+    attachmentId: normalizeInputText(value.attachmentId, "attachmentId", 256),
+    importId: normalizeInputText(value.importId, "importId", 256),
+    itemId: normalizeInputText(value.itemId, "itemId", 256),
+    expectedAttachmentRevision: normalizePositiveInteger(
+      value.expectedAttachmentRevision,
+      "expectedAttachmentRevision",
+    ),
+  };
+}
+
+export function assertExternalSourceKnowledgeSnapshotApprovalPayload(
+  value: ExternalSourceKnowledgeSnapshotApprovalPayload,
+): void {
+  assertRecord(value, "knowledge snapshot payload");
+  assertExactKeys(
+    value,
+    [
+      "workspaceId",
+      "sourceId",
+      "importId",
+      "itemId",
+      "normalizedArtifactSha256",
+      "rawSha256",
+      "sessionId",
+      "sessionIncarnationId",
+      "attachmentId",
+      "attachmentRevision",
+    ],
+    new Set(),
+  );
+  for (const [name, input, max] of [
+    ["workspaceId", value.workspaceId, 256],
+    ["sourceId", value.sourceId, 256],
+    ["importId", value.importId, 256],
+    ["itemId", value.itemId, 256],
+    ["sessionId", value.sessionId, 256],
+    ["sessionIncarnationId", value.sessionIncarnationId, EXTERNAL_SOURCE_SESSION_INCARNATION_MAX_LENGTH],
+    ["attachmentId", value.attachmentId, 256],
+  ] as const)
+    assertText(input, name, max);
+  assertSha256(value.normalizedArtifactSha256);
+  assertSha256(value.rawSha256);
+  assertPositiveInteger(value.attachmentRevision, "attachmentRevision");
+  assertCanonicalJsonBytes(value, 16 * 1024);
 }
 
 export function projectExternalSourceSummary(

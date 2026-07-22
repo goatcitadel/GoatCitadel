@@ -9,7 +9,7 @@ export const CHAT_ROUTED_CONTEXT_REF_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u;
 const CHAT_ROUTED_CONTEXT_CONTROL_SOURCE = `[${String.fromCharCode(0)}-${String.fromCharCode(0x1f)}${String.fromCharCode(0x7f)}]`;
 export const CHAT_ROUTED_CONTEXT_CONTROL_PATTERN = new RegExp(CHAT_ROUTED_CONTEXT_CONTROL_SOURCE, "u");
 
-export type ChatRoutedContextKind = "attachment" | "memory_item";
+export type ChatRoutedContextKind = "attachment" | "memory_item" | "external_attachment";
 export type ChatRoutedContextSourceScope = "workspace" | "global";
 export type ChatRoutedContextDisposition = "included" | "truncated" | "omitted" | "already_attached";
 
@@ -19,6 +19,20 @@ export interface ChatRoutedContextRef {
   ref: string;
   /** Display-only operator label. It never participates in source lookup. */
   label?: string;
+}
+
+/**
+ * Immutable provenance frozen with every admitted `external_attachment` entry.
+ * External bytes enter provider context only byte-exact from the managed
+ * normalized artifact this identity chain names; hashes are server-derived.
+ */
+export interface ChatRoutedContextExternalProvenance {
+  sourceId: string;
+  importId: string;
+  itemId: string;
+  attachmentId: string;
+  attachmentRevision: number;
+  normalizedArtifactSha256: string;
 }
 
 export interface ChatRoutedContextBudgetReceipt {
@@ -45,6 +59,8 @@ export interface ChatRoutedContextSnapshotEntry {
   sourceWorkspaceId?: string;
   sourceVersion: string;
   sourceHash: string;
+  /** Required exactly when `kind` is `external_attachment`; forbidden otherwise. */
+  externalProvenance?: ChatRoutedContextExternalProvenance;
   originalBytes: number;
   originalTokens: number;
   admittedBytes: number;
@@ -82,6 +98,8 @@ export interface ChatRoutedContextInspectionEntry {
   sourceWorkspaceId?: string;
   sourceVersion: string;
   sourceHash: string;
+  /** Content-free external identity chain mirrored from the immutable snapshot entry. */
+  externalProvenance?: ChatRoutedContextExternalProvenance;
   originalBytes: number;
   admittedBytes: number;
   admittedTokens: number;

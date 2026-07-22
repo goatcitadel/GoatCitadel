@@ -1,20 +1,26 @@
 import { describe, expect, it } from "vitest";
 import {
   EXTERNAL_SOURCE_CURSOR_VERSION,
+  EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_APPROVAL_KIND,
   EXTERNAL_SOURCE_LIMITS,
   EXTERNAL_SOURCE_SCHEMA_VERSION,
   assertExternalSessionAttachment,
   assertExternalSourceCatalogItem,
   assertExternalSourceImportPlan,
   assertExternalSourceImportSettlement,
+  assertExternalSourceKnowledgeSnapshotApprovalPayload,
   assertExternalSourceRecord,
   assertExternalSourceSummary,
   canonicalExternalSourceFilterMaterial,
   isExternalSourceCursorV1,
+  normalizeExternalSessionAttachInput,
+  normalizeExternalSessionAttachmentListInput,
+  normalizeExternalSessionDetachInput,
   normalizeExternalSourceCatalogListInput,
   normalizeExternalSourceCreateInput,
   normalizeExternalSourceImportApplyInput,
   normalizeExternalSourceImportPlanInput,
+  normalizeExternalSourceKnowledgeSnapshotRequestInput,
   normalizeExternalSourceScanInput,
   normalizeExternalSourceUpdateInput,
   projectExternalSourceSummary,
@@ -22,6 +28,7 @@ import {
   type ExternalSourceCatalogItem,
   type ExternalSourceImportPlan,
   type ExternalSourceImportSettlement,
+  type ExternalSourceKnowledgeSnapshotApprovalPayload,
   type ExternalSourceRecord,
 } from "./external-sources.js";
 
@@ -222,6 +229,91 @@ describe("external source contracts", () => {
       expectedPlanSha256: hash("a"),
       idempotencyKey: "external-source-import:v1:fixture",
     });
+  });
+
+  it("normalizes strict attach/list/detach inputs without actor, hash, or field smuggling", () => {
+    const attach = normalizeExternalSessionAttachInput({
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+      expectedSessionIncarnationId: "legacy-session-incarnation:session-1",
+      sourceId: "source-1",
+      importId: "import-1",
+      itemId: "item-1",
+    });
+    expect(attach.expectedSessionIncarnationId).toBe("legacy-session-incarnation:session-1");
+    expect(() => normalizeExternalSessionAttachInput({ ...attach, attachedByActorId: "forged" })).toThrow(
+      /unsupported or missing/u,
+    );
+    expect(() => normalizeExternalSessionAttachInput({ ...attach, normalizedArtifactSha256: hash("a") })).toThrow(
+      /unsupported or missing/u,
+    );
+    const { expectedSessionIncarnationId: _incarnation, ...withoutIncarnation } = attach;
+    expect(() => normalizeExternalSessionAttachInput(withoutIncarnation)).toThrow(/unsupported or missing/u);
+
+    expect(
+      normalizeExternalSessionAttachmentListInput({ workspaceId: "workspace-1", sessionId: "session-1", limit: 10 }),
+    ).toEqual({ workspaceId: "workspace-1", sessionId: "session-1", limit: 10 });
+    expect(() =>
+      normalizeExternalSessionAttachmentListInput({ workspaceId: "workspace-1", sessionId: "session-1", limit: 101 }),
+    ).toThrow(/limit/u);
+
+    const detach = normalizeExternalSessionDetachInput({
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+      attachmentId: "external-attachment-1",
+      expectedRevision: 1,
+      expectedSessionIncarnationId: "legacy-session-incarnation:session-1",
+    });
+    expect(detach.expectedRevision).toBe(1);
+    expect(() => normalizeExternalSessionDetachInput({ ...detach, expectedRevision: 0 })).toThrow(/expectedRevision/u);
+    expect(() => normalizeExternalSessionDetachInput({ ...detach, detachedByActorId: "forged" })).toThrow(
+      /unsupported or missing/u,
+    );
+  });
+
+  it("normalizes the knowledge-snapshot request and rejects every client-supplied hash", () => {
+    const request = normalizeExternalSourceKnowledgeSnapshotRequestInput({
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+      expectedSessionIncarnationId: "legacy-session-incarnation:session-1",
+      attachmentId: "external-attachment-1",
+      importId: "import-1",
+      itemId: "item-1",
+      expectedAttachmentRevision: 1,
+    });
+    expect(request.expectedAttachmentRevision).toBe(1);
+    for (const smuggled of [
+      { normalizedArtifactSha256: hash("a") },
+      { rawSha256: hash("b") },
+      { artifactSetSha256: hash("c") },
+      { expectedPlanSha256: hash("d") },
+      { knowledgeDocumentId: "forged-document" },
+    ]) {
+      expect(() => normalizeExternalSourceKnowledgeSnapshotRequestInput({ ...request, ...smuggled })).toThrow(
+        /unsupported or missing/u,
+      );
+    }
+
+    const payload: ExternalSourceKnowledgeSnapshotApprovalPayload = {
+      workspaceId: "workspace-1",
+      sourceId: "source-1",
+      importId: "import-1",
+      itemId: "item-1",
+      normalizedArtifactSha256: hash("1"),
+      rawSha256: hash("2"),
+      sessionId: "session-1",
+      sessionIncarnationId: "legacy-session-incarnation:session-1",
+      attachmentId: "external-attachment-1",
+      attachmentRevision: 1,
+    };
+    expect(() => assertExternalSourceKnowledgeSnapshotApprovalPayload(payload)).not.toThrow();
+    expect(() =>
+      assertExternalSourceKnowledgeSnapshotApprovalPayload({ ...payload, normalizedArtifactSha256: "short" }),
+    ).toThrow(/SHA-256/u);
+    expect(() =>
+      assertExternalSourceKnowledgeSnapshotApprovalPayload({ ...payload, knowledgeDocumentId: "inline" } as never),
+    ).toThrow(/unsupported or missing/u);
+    expect(EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_APPROVAL_KIND).toBe("external_source.knowledge_snapshot");
   });
 
   it("projects content-free list summaries while reserving the exact root for detail", () => {

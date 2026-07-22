@@ -1,11 +1,18 @@
-import { describe, expectTypeOf, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import type {
+  ApprovalEffectKind,
+  ApprovalEffectTargetKind,
   ApprovalRequest,
   ShellCommandExplanation,
   ShellExplanationDetail,
   ShellRiskFinding,
   ShellRiskLevel,
 } from "./approvals.js";
+import {
+  EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_APPROVAL_KIND,
+  EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_KIND,
+  EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_TARGET_KIND,
+} from "./external-sources.js";
 
 describe("ApprovalRequest shellExplanations field", () => {
   it("is an optional readonly array of ShellCommandExplanation", () => {
@@ -27,6 +34,21 @@ describe("ShellCommandExplanation", () => {
 
   it("highestRisk is a ShellRiskLevel union", () => {
     expectTypeOf<ShellCommandExplanation["highestRisk"]>().toEqualTypeOf<ShellRiskLevel>();
+  });
+});
+
+describe("external-source knowledge-snapshot effect vocabulary", () => {
+  it("admits the dedicated knowledge-snapshot effect kind and import-item target kind", () => {
+    expectTypeOf<"external_source_knowledge_snapshot_apply">().toExtend<ApprovalEffectKind>();
+    expectTypeOf<"external_source_import_item">().toExtend<ApprovalEffectTargetKind>();
+  });
+
+  it("pins the exact frozen effect/target vocabulary constants", () => {
+    expect(EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_APPROVAL_KIND).toBe("external_source.knowledge_snapshot");
+    const effectKind: ApprovalEffectKind = EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_KIND;
+    const targetKind: ApprovalEffectTargetKind = EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_TARGET_KIND;
+    expect(effectKind).toBe("external_source_knowledge_snapshot_apply");
+    expect(targetKind).toBe("external_source_import_item");
   });
 });
 
