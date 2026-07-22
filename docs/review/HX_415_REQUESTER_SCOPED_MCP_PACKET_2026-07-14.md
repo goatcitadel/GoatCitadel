@@ -272,6 +272,8 @@ Stable content-free reason codes:
 
 Unknown errors map to `resolver_failed` or `transport_pre_dispatch_failed`; raw causes are scrubbed in memory and never cross an operator boundary.
 
+> **2026-07-22 implementation addendum (recorded at integration, after independent QA).** The shipped reason-code union additionally includes `operation_denied`, `discovery_output_invalid`, `discovery_output_too_large`, `discovery_secret_detected`, `schema_revalidation_required`, and `schema_revalidation_drift` — content-free codes introduced by the security-reviewed permit gating and discovery/revalidation pipeline. They obey the same secrecy rules as the enumerated codes; the unknown-error mapping above is unchanged.
+
 ## Exact owner map
 
 ### Contracts and profile tranche
