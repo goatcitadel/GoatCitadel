@@ -77,6 +77,16 @@ export function abortActiveChatStream(stream: ActiveChatStreamState | null): voi
   stream.controller.abort();
 }
 
+/**
+ * HX-407 C3 seam: the queue-frozen external-source selection rides each send
+ * item as `externalContextRefs`; this callback fires exactly once per item that
+ * completed WITHOUT throwing, so the owning selection state clears only after a
+ * successful send (failed and aborted sends retain the selection).
+ */
+export interface UseChatOutboundExternalContext {
+  onExternalContextSent?: (item: OutboundQueueItem) => void;
+}
+
 type OutboundExecutionPrefsSource = Pick<
   ChatSessionPrefsRecord,
   "memoryMode" | "webMode" | "thinkingLevel" | "speedMode" | "subagentPolicy"
@@ -114,8 +124,14 @@ export function captureOutboundRequestPrefsSnapshot(input: {
   });
 }
 
-export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
+export function useChatOutboundExecution(
+  input: UseChatOutboundExecutionInput & { externalContext?: UseChatOutboundExternalContext },
+) {
   const { sessionConfig, streamConfig, stateConfig, stateSetters, operations, refs, routing } = input;
+  // Synced ref: the callback stays render-current without widening the
+  // executeOutboundItem dependency list (the standard pattern in this hook).
+  const onExternalContextSentRef = useRef(input.externalContext?.onExternalContextSent);
+  onExternalContextSentRef.current = input.externalContext?.onExternalContextSent;
   const { surfaceMode, selectedSessionId, selectedSession, prefs, fullWebAccess, selectedProviderId, selectedModel } =
     sessionConfig;
   const { streamEnabled, visualStreamMode = "smooth", activeStreamRef } = streamConfig;
@@ -404,6 +420,13 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
       const trimmedContent = item.content.trim();
       const attachmentsSnapshot = item.attachments;
       const attachmentIds = attachmentsSnapshot.map((entry) => entry.attachmentId);
+      // Queue-frozen external-source selection: sends carry exactly the refs
+      // captured at enqueue time (never re-read from live selection state).
+      const externalContextRefs =
+        item.action === "send" && item.externalContextRefs && item.externalContextRefs.length > 0
+          ? item.externalContextRefs.map((ref) => ({ ...ref }))
+          : undefined;
+      const externalContextOptIn = externalContextRefs ? { contextRefs: externalContextRefs } : {};
       const currentPrefs = prefsRef.current;
       const requestPrefs =
         item.requestPrefs ??
@@ -848,6 +871,7 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
                   {
                     content: trimmedContent,
                     attachments: attachmentIds,
+                    ...externalContextOptIn,
                     ...outboundPrefs,
                     mode: shouldAutoRoute ? undefined : effectiveMode,
                     ...(shouldAutoRoute ? { autoRoute: true as const } : {}),
@@ -929,6 +953,7 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
                     {
                       content: trimmedContent,
                       attachments: attachmentIds,
+                      ...externalContextOptIn,
                       ...outboundPrefs,
                       mode: shouldAutoRoute ? undefined : effectiveMode,
                       ...(shouldAutoRoute ? { autoRoute: true as const } : {}),
@@ -950,6 +975,12 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
           });
         }
         setEditingTurnId(null);
+        // Successful (non-thrown) completion is the ONLY point that consumes
+        // the frozen external-source selection; the catch/abort paths below
+        // return without reaching here, so failed sends retain it.
+        if (externalContextRefs) {
+          onExternalContextSentRef.current?.(item);
+        }
         const completedSessionId = session.sessionId;
         void loadSidebar(undefined, { bypassCache: true, preferredSessionId: completedSessionId }).catch(
           (sidebarError: unknown) => {

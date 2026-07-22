@@ -1,6 +1,7 @@
 import type {
   ChatAttachmentRecord,
   ChatModelCouncilRequest,
+  ChatRoutedContextRef,
   ChatSessionPrefsRecord,
   ChatThreadResponse,
 } from "@goatcitadel/contracts";
@@ -49,6 +50,12 @@ export interface OutboundQueueItem {
   modelCouncil?: ChatModelCouncilRequest;
   /** Bounded request prefs captured once so queue drain cannot reroute the item. */
   requestPrefs?: OutboundRequestPrefsSnapshot;
+  /**
+   * HX-407 C3: explicit per-turn external-source selection frozen at enqueue
+   * time as routed-context refs, so queue drain can never re-derive or widen
+   * the selection. Selection state itself clears only after a successful send.
+   */
+  externalContextRefs?: readonly ChatRoutedContextRef[];
 }
 
 export interface OutboundRequestPrefsSnapshot {
@@ -108,6 +115,11 @@ export function useChatSurfaceOrchestration(input: {
   onOutboundContextConsumed?: () => void;
   consumeModelCouncilArming?: () => ChatModelCouncilRequest | undefined;
   captureOutboundRequestPrefs: () => OutboundRequestPrefsSnapshot;
+  /**
+   * HX-407 C3: freezes the current explicit external-source selection into the
+   * queue item on send. Absent (pre-C4 or degraded surface) means no refs.
+   */
+  captureOutboundExternalContextRefs?: () => readonly ChatRoutedContextRef[];
   loadSessionCoreStateRef: RefObject<
     (sessionId: string, options?: { background?: boolean; includeThread?: boolean }) => Promise<void>
   >;
@@ -157,6 +169,9 @@ export function useChatSurfaceOrchestration(input: {
       action === "send" ? resolveOutboundContentWithContext(draftContent, input.outboundContext) : draftContent;
     const modelCouncil = input.consumeModelCouncilArming?.();
     const requestPrefs = input.captureOutboundRequestPrefs();
+    // Freeze the explicit external-source selection with the item (send only):
+    // the selection itself is cleared later by the execution success path.
+    const externalContextRefs = action === "send" ? (input.captureOutboundExternalContextRefs?.() ?? []) : [];
     const nextItem: OutboundQueueItem = {
       id: createQueueItemId(),
       action,
@@ -167,6 +182,7 @@ export function useChatSurfaceOrchestration(input: {
       createdAt: new Date().toISOString(),
       requestPrefs,
       ...(modelCouncil ? { modelCouncil } : {}),
+      ...(externalContextRefs.length > 0 ? { externalContextRefs } : {}),
     };
     input.setDraft("");
     input.setPendingAttachments([]);

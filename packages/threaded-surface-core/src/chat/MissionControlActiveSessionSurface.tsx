@@ -9,6 +9,7 @@ import type {
   ChatThinkingLevel,
   ChatThreadResponse,
   ChatWebMode,
+  ExternalSessionAttachmentRecord,
   RoutingPreflightResult,
   SurfaceClassifyResponse,
   ThreadKnowledgeAttachmentRecord,
@@ -44,6 +45,28 @@ export interface ThreadedPersonalityPresence {
   scope: "citadel_default" | "thread_override";
   avatarLabel?: string;
   animation?: "ambient" | "still" | "none";
+}
+
+/**
+ * HX-407 C3 composer controls for read-only external-source attachments.
+ * `null`/absent means the capability is not composed (pre-C4) and the surface
+ * renders nothing for it; `canMutate: false` keeps attach/detach/knowledge
+ * actions disabled while chips and per-turn selection stay live.
+ */
+export interface ThreadedExternalSourceControls {
+  /** Live read-only attachments (content-free records; no transcript bytes). */
+  attachments: readonly ExternalSessionAttachmentRecord[];
+  /** Explicit per-turn selection (attachment ids) frozen into the next send. */
+  selectedAttachmentIds: readonly string[];
+  busyAttachmentId: string | null;
+  /** True once the runtime exposes the session incarnation (C4); gates mutations only. */
+  canMutate: boolean;
+  error: string | null;
+  onToggleSelect: (attachmentId: string) => void;
+  onClearSelection: () => void;
+  onAttach: (seed: { sourceId: string; importId: string; itemId: string }) => void;
+  onDetach: (attachmentId: string) => void;
+  onRequestKnowledgeSnapshot: (attachmentId: string) => void;
 }
 
 export interface MissionControlActiveSessionSurfaceProps {
@@ -144,6 +167,8 @@ export interface MissionControlActiveSessionSurfaceProps {
   pendingAttachments: Array<Pick<ChatAttachmentRecord, "attachmentId" | "fileName" | "mimeType" | "sizeBytes">>;
   pendingAttachmentModes?: Record<string, "message" | ThreadKnowledgeRetrievalMode>;
   threadKnowledgeAttachments?: ThreadKnowledgeAttachmentRecord[];
+  /** HX-407 C3: absent/null until C4 composes the Chat attachment routes. */
+  externalSourceControls?: ThreadedExternalSourceControls | null;
   presetOptions?: Array<{
     value: string;
     label: string;

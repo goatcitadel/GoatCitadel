@@ -160,6 +160,7 @@ import {
   type OutboundQueueItem,
   type OutboundRequestPrefsSnapshot,
 } from "./chat/useChatSurfaceOrchestration";
+import { useExternalSourceAttachments } from "./chat/useExternalSourceAttachments";
 import { useChatThreadController } from "./chat/useChatThreadController";
 import { detectImageGenerationIntent } from "./chat/chat-image-intent";
 import { useChatMultimodalControls } from "./chat/useChatMultimodalControls";
@@ -402,6 +403,51 @@ function parseHydratedRequestPrefs(value: unknown): OutboundRequestPrefsSnapshot
   return Object.freeze({ ...value }) as unknown as OutboundRequestPrefsSnapshot;
 }
 
+const MAX_HYDRATED_EXTERNAL_CONTEXT_REFS = 16;
+
+/**
+ * Fail-closed parser for HX-407 queue-frozen external context refs. Only send
+ * items may carry them, every ref is a safe `external_attachment` identifier,
+ * and any drift rejects the whole persisted queue (matching the envelope's
+ * all-or-nothing hydration posture).
+ */
+function parseHydratedExternalContextRefs(
+  value: unknown,
+  action: unknown,
+): OutboundQueueItem["externalContextRefs"] | null {
+  if (
+    action !== "send" ||
+    !Array.isArray(value) ||
+    value.length < 1 ||
+    value.length > MAX_HYDRATED_EXTERNAL_CONTEXT_REFS
+  ) {
+    return null;
+  }
+  const refs: Array<{ kind: "external_attachment"; ref: string; label?: string }> = [];
+  const seen = new Set<string>();
+  for (const candidate of value) {
+    if (
+      !isPlainRecord(candidate) ||
+      !hasOnlyKeys(candidate, ["kind", "ref", "label"]) ||
+      candidate.kind !== "external_attachment" ||
+      !isSafeIdentifier(candidate.ref) ||
+      seen.has(candidate.ref) ||
+      (hasOwn(candidate, "label") && !isBoundedString(candidate.label, 160))
+    ) {
+      return null;
+    }
+    seen.add(candidate.ref);
+    refs.push(
+      Object.freeze({
+        kind: "external_attachment",
+        ref: candidate.ref,
+        ...(typeof candidate.label === "string" ? { label: candidate.label } : {}),
+      }),
+    );
+  }
+  return Object.freeze(refs);
+}
+
 /** Fail-closed parser for browser-persisted attachment references. */
 export function parseHydratedChatAttachments(
   raw: string | null,
@@ -449,6 +495,7 @@ export function parseHydratedOutboundQueue(
           "paused",
           "modelCouncil",
           "requestPrefs",
+          "externalContextRefs",
         ]) ||
         !isSafeIdentifier(candidate.id) ||
         queueIds.has(candidate.id) ||
@@ -486,6 +533,12 @@ export function parseHydratedOutboundQueue(
       if (!attachments || !requestPrefs) {
         return [];
       }
+      const externalContextRefs = hasOwn(candidate, "externalContextRefs")
+        ? parseHydratedExternalContextRefs(candidate.externalContextRefs, candidate.action)
+        : undefined;
+      if (hasOwn(candidate, "externalContextRefs") && !externalContextRefs) {
+        return [];
+      }
       queueIds.add(candidate.id);
       parsed.push(
         Object.freeze({
@@ -499,6 +552,7 @@ export function parseHydratedOutboundQueue(
           paused: true,
           ...(hasOwn(candidate, "modelCouncil") ? { modelCouncil: Object.freeze({ enabled: true as const }) } : {}),
           requestPrefs,
+          ...(externalContextRefs ? { externalContextRefs } : {}),
         }) as OutboundQueueItem,
       );
     }
@@ -1301,6 +1355,17 @@ export function MissionThreadedControllerHost({
     setPendingThreadContext((current) => (current?.sessionId === selectedSessionId ? null : current));
   }, [selectedSessionId]);
 
+  // HX-407 C3: durable read-only external-source attachments + explicit
+  // per-turn selection. Inert until C4 composes the Gateway routes (the list
+  // read 404s → supported=false → the composer renders nothing). C4 additionally
+  // wires `sessionIncarnationId` once the runtime exposes it; until then the
+  // attach/detach/knowledge mutations stay disabled fail-closed.
+  const externalSourceAttachments = useExternalSourceAttachments({
+    workspaceId: selectedSession?.workspaceId ?? workspaceId,
+    sessionId: selectedSessionId,
+    pushLocalNotice,
+  });
+
   const {
     queuedOutbound,
     setQueuedOutbound,
@@ -1331,6 +1396,7 @@ export function MissionThreadedControllerHost({
     onOutboundContextConsumed: handleOutboundContextConsumed,
     consumeModelCouncilArming,
     captureOutboundRequestPrefs: () => outboundRequestPrefsSnapshotRef.current,
+    captureOutboundExternalContextRefs: externalSourceAttachments.captureOutboundExternalContextRefs,
     loadSessionCoreStateRef,
     abortActiveChatStream,
   });
@@ -1665,6 +1731,9 @@ export function MissionThreadedControllerHost({
     routing: {
       ensureFreshRoutePreflight: (next) => routePreflight.ensureFreshPreflight(next),
       isRoutePreflightAcknowledged: (hash) => Boolean(acknowledgedRoutePreflightHashes[hash]),
+    },
+    externalContext: {
+      onExternalContextSent: externalSourceAttachments.handleOutboundExternalContextSent,
     },
   });
   const {
@@ -3655,6 +3724,27 @@ export function MissionThreadedControllerHost({
         pendingAttachments,
         pendingAttachmentModes,
         threadKnowledgeAttachments: threadKnowledgeAttachments?.items ?? [],
+        externalSourceControls:
+          externalSourceAttachments.supported === true
+            ? {
+                attachments: externalSourceAttachments.attachments,
+                selectedAttachmentIds: externalSourceAttachments.selectedAttachmentIds,
+                busyAttachmentId: externalSourceAttachments.busyAttachmentId,
+                canMutate: externalSourceAttachments.canMutate && !historicalModeActive,
+                error: externalSourceAttachments.error,
+                onToggleSelect: externalSourceAttachments.toggleSelection,
+                onClearSelection: externalSourceAttachments.clearSelection,
+                onAttach: (seed) => {
+                  if (!blockHistoricalMutation()) void externalSourceAttachments.attach(seed);
+                },
+                onDetach: (attachmentId) => {
+                  if (!blockHistoricalMutation()) void externalSourceAttachments.detach(attachmentId);
+                },
+                onRequestKnowledgeSnapshot: (attachmentId) => {
+                  if (!blockHistoricalMutation()) void externalSourceAttachments.requestKnowledgeSnapshot(attachmentId);
+                },
+              }
+            : null,
         presetOptions,
         selectedPresetId,
         presetApplyWarning,

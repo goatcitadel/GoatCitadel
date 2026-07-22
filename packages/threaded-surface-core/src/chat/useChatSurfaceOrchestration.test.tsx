@@ -81,6 +81,7 @@ function Harness(props: {
   activeStream?: { sessionId: string; streamToken: string; turnId?: string; controller: AbortController } | null;
   initialCouncilArmed?: boolean;
   initialRequestPrefs?: OutboundRequestPrefsSnapshot;
+  captureOutboundExternalContextRefs?: () => NonNullable<OutboundQueueItem["externalContextRefs"]>;
 }) {
   const [draft, setDraft] = useState(props.initialDraft ?? "");
   const [pendingAttachments, setPendingAttachments] = useState<unknown[]>(props.initialAttachments ?? []);
@@ -127,6 +128,7 @@ function Harness(props: {
       return { enabled: true };
     },
     captureOutboundRequestPrefs: () => requestPrefs,
+    captureOutboundExternalContextRefs: props.captureOutboundExternalContextRefs,
     loadSessionCoreStateRef: loadSessionCoreState,
     abortActiveChatStream: abortActiveChatStream.current,
   });
@@ -534,5 +536,59 @@ describe("useChatSurfaceOrchestration", () => {
       }),
     );
     expect(latest!.snapshot().queuedOutbound).toEqual([]);
+  });
+
+  it("freezes the external-source selection into the send item without clearing it at enqueue", async () => {
+    const externalRefs = [
+      { kind: "external_attachment" as const, ref: "attachment-1", label: "External item-1" },
+      { kind: "external_attachment" as const, ref: "attachment-2", label: "External item-2" },
+    ];
+    const captureOutboundExternalContextRefs = vi.fn(() => externalRefs);
+    mountHarness({ initialDraft: "Use the imported context", captureOutboundExternalContextRefs });
+
+    await act(async () => {
+      await latest!.controller.handleSend();
+    });
+
+    const item = latest!.executeOutbound.mock.calls[0]?.[0] as OutboundQueueItem;
+    expect(item.externalContextRefs).toEqual(externalRefs);
+    // Enqueue must NOT consume the selection: only a successful send (in the
+    // execution hook) does, so a failed/aborted send retains it.
+    expect(captureOutboundExternalContextRefs).toHaveBeenCalledTimes(1);
+  });
+
+  it("queues the frozen external refs so a later drain cannot re-derive the selection", async () => {
+    const captureOutboundExternalContextRefs = vi
+      .fn()
+      .mockReturnValueOnce([{ kind: "external_attachment" as const, ref: "attachment-1" }])
+      .mockReturnValue([{ kind: "external_attachment" as const, ref: "attachment-late" }]);
+    mountHarness({ initialDraft: "Queued external send", canBegin: false, captureOutboundExternalContextRefs });
+
+    await act(async () => {
+      await latest!.controller.handleSend();
+    });
+
+    expect(latest!.executeOutbound).not.toHaveBeenCalled();
+    expect(latest!.snapshot().queuedOutbound[0]?.externalContextRefs).toEqual([
+      { kind: "external_attachment", ref: "attachment-1" },
+    ]);
+  });
+
+  it("does not attach external refs to edit actions", async () => {
+    const captureOutboundExternalContextRefs = vi.fn(() => [
+      { kind: "external_attachment" as const, ref: "attachment-1" },
+    ]);
+    mountHarness({ captureOutboundExternalContextRefs });
+    act(() => {
+      latest!.controller.handleBeginEditTurn("turn-1");
+    });
+    await act(async () => {
+      await latest!.controller.handleSend();
+    });
+
+    const item = latest!.executeOutbound.mock.calls[0]?.[0] as OutboundQueueItem;
+    expect(item.action).toBe("edit");
+    expect(item.externalContextRefs).toBeUndefined();
+    expect(captureOutboundExternalContextRefs).not.toHaveBeenCalled();
   });
 });

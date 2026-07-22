@@ -78,6 +78,7 @@ const useChatDockWorkbenchControllerMock = vi.fn();
 const useChatComposerInteractionsMock = vi.fn();
 const useChatMultimodalControlsMock = vi.fn();
 const useRouteGeneratedArtifactRevealMock = vi.fn();
+const useExternalSourceAttachmentsMock = vi.fn();
 const useMediaQueryMock = vi.fn();
 
 let mockSurfaceMode: ChatMode = "chat";
@@ -403,6 +404,10 @@ vi.mock("./chat/useChatMultimodalControls", () => ({
 
 vi.mock("./chat/useRouteGeneratedArtifactReveal", () => ({
   useRouteGeneratedArtifactReveal: (...args: unknown[]) => useRouteGeneratedArtifactRevealMock(...args),
+}));
+
+vi.mock("./chat/useExternalSourceAttachments", () => ({
+  useExternalSourceAttachments: (...args: unknown[]) => useExternalSourceAttachmentsMock(...args),
 }));
 
 vi.mock("./chat/useSurfaceClassifyPreview", () => ({ useSurfaceClassifyPreview: () => mockSurfacePreview }));
@@ -891,6 +896,30 @@ function setupMocks() {
     handleGenerateImage: vi.fn(async () => generatedArtifact),
     handleEditImage: vi.fn(async () => generatedArtifact),
   });
+  // HX-407 C3 default: capability absent (pre-C4 posture) so every other suite
+  // sees the degraded surface (externalSourceControls: null).
+  useExternalSourceAttachmentsMock.mockReturnValue(buildExternalSourceAttachmentsState());
+}
+
+function buildExternalSourceAttachmentsState(overrides: Record<string, unknown> = {}) {
+  return {
+    supported: false,
+    loading: false,
+    error: null,
+    attachments: [],
+    selectedAttachmentIds: [],
+    busyAttachmentId: null,
+    canMutate: false,
+    reload: vi.fn(async () => undefined),
+    toggleSelection: vi.fn(),
+    clearSelection: vi.fn(),
+    attach: vi.fn(async () => true),
+    detach: vi.fn(async () => true),
+    requestKnowledgeSnapshot: vi.fn(async () => true),
+    captureOutboundExternalContextRefs: vi.fn(() => []),
+    handleOutboundExternalContextSent: vi.fn(),
+    ...overrides,
+  };
 }
 
 async function flushEffects(times = 4) {
@@ -1051,6 +1080,125 @@ describe("MissionThreadedControllerHost", () => {
         sessionId: "session-1",
       }),
     ).toEqual([]);
+  });
+
+  it("hydrates queue-frozen external context refs on send items and rejects malformed refs", () => {
+    const baseItem = {
+      id: "queue-external",
+      action: "send",
+      sessionId: "session-1",
+      content: "Use the imported context",
+      attachments: [createStoredAttachment()],
+      createdAt: "2026-05-01T00:00:00.000Z",
+      requestPrefs: outboundRequestPrefs,
+    };
+    const validRefs = [
+      { kind: "external_attachment", ref: "attachment-1", label: "External item-1" },
+      { kind: "external_attachment", ref: "attachment-2" },
+    ];
+    const parsed = parseHydratedOutboundQueue(JSON.stringify([{ ...baseItem, externalContextRefs: validRefs }]), {
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+    });
+    expect(parsed[0]?.externalContextRefs).toEqual(validRefs);
+    expect(Object.isFrozen(parsed[0]?.externalContextRefs)).toBe(true);
+
+    const maliciousRefSets = [
+      [],
+      [{ kind: "attachment", ref: "attachment-1" }],
+      [{ kind: "external_attachment", ref: " attachment-with-space" }],
+      [{ kind: "external_attachment", ref: "attachment-1", content: "smuggled transcript" }],
+      [{ kind: "external_attachment", ref: "attachment-1", label: "" }],
+      [
+        { kind: "external_attachment", ref: "attachment-1" },
+        { kind: "external_attachment", ref: "attachment-1" },
+      ],
+      Array.from({ length: 17 }, (_, index) => ({ kind: "external_attachment", ref: `attachment-${index}` })),
+      "not-an-array",
+    ];
+    for (const externalContextRefs of maliciousRefSets) {
+      expect(
+        parseHydratedOutboundQueue(JSON.stringify([{ ...baseItem, externalContextRefs }]), {
+          workspaceId: "workspace-1",
+          sessionId: "session-1",
+        }),
+      ).toEqual([]);
+    }
+
+    // Non-send actions can never carry frozen refs.
+    expect(
+      parseHydratedOutboundQueue(
+        JSON.stringify([
+          {
+            ...baseItem,
+            action: "edit",
+            targetTurnId: "turn-1",
+            externalContextRefs: validRefs,
+          },
+        ]),
+        { workspaceId: "workspace-1", sessionId: "session-1" },
+      ),
+    ).toEqual([]);
+  });
+
+  it("wires the external-source hook into orchestration, outbound execution, and the composer surface", async () => {
+    const degradedState = buildExternalSourceAttachmentsState();
+    useExternalSourceAttachmentsMock.mockReturnValue(degradedState);
+    await renderHost();
+    await selectDefaultSession();
+
+    // Degraded (pre-C4): the surface receives no external controls at all.
+    expect(latestSurfaceInput?.activeSessionSurfaceProps?.externalSourceControls).toBeNull();
+    const orchestrationInput = useChatSurfaceOrchestrationMock.mock.calls.at(-1)?.[0] as any;
+    expect(orchestrationInput?.captureOutboundExternalContextRefs).toBe(
+      degradedState.captureOutboundExternalContextRefs,
+    );
+    const outboundInput = useChatOutboundExecutionMock.mock.calls.at(-1)?.[0] as any;
+    expect(outboundInput?.externalContext?.onExternalContextSent).toBe(degradedState.handleOutboundExternalContextSent);
+
+    await cleanupRenderedHosts();
+    setupMocks();
+    const liveState = buildExternalSourceAttachmentsState({
+      supported: true,
+      canMutate: true,
+      attachments: [
+        {
+          attachmentId: "attachment-1",
+          workspaceId: "workspace-1",
+          sessionId: "session-1",
+          sourceId: "source-1",
+          importId: "import-1",
+          itemId: "item-1",
+          mode: "read_only_external",
+          status: "attached",
+          revision: 1,
+        },
+      ],
+      selectedAttachmentIds: ["attachment-1"],
+    });
+    useExternalSourceAttachmentsMock.mockReturnValue(liveState);
+    await renderHost();
+    await selectDefaultSession();
+
+    const controls = latestSurfaceInput?.activeSessionSurfaceProps?.externalSourceControls;
+    expect(controls?.attachments).toHaveLength(1);
+    expect(controls?.selectedAttachmentIds).toEqual(["attachment-1"]);
+    expect(controls?.canMutate).toBe(true);
+    controls?.onToggleSelect("attachment-1");
+    expect(liveState.toggleSelection).toHaveBeenCalledWith("attachment-1");
+    controls?.onClearSelection();
+    expect(liveState.clearSelection).toHaveBeenCalled();
+    controls?.onDetach("attachment-1");
+    expect(liveState.detach).toHaveBeenCalledWith("attachment-1");
+    controls?.onRequestKnowledgeSnapshot("attachment-1");
+    expect(liveState.requestKnowledgeSnapshot).toHaveBeenCalledWith("attachment-1");
+    controls?.onAttach({ sourceId: "source-1", importId: "import-1", itemId: "item-9" });
+    expect(liveState.attach).toHaveBeenCalledWith({ sourceId: "source-1", importId: "import-1", itemId: "item-9" });
+    // The hook itself is scoped to the selected session's workspace.
+    expect(useExternalSourceAttachmentsMock.mock.calls.at(-1)?.[0]).toMatchObject({
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+    });
   });
 
   it("rejects malformed, foreign, traversing, duplicate, and oversized hydrated attachment references", () => {
