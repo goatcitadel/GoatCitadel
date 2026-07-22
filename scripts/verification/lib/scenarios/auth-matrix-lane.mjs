@@ -67,7 +67,9 @@ export async function runAuthMatrixLane(context, _options = {}, deps) {
         assertOk(seeded, "seed auth-matrix session fixture");
         const seededSessionId = seeded.body?.sessionId;
         if (!seededSessionId) {
-          throw new Error(`auth-matrix seed response missing sessionId: ${clampString(JSON.stringify(seeded.body), 400)}`);
+          throw new Error(
+            `auth-matrix seed response missing sessionId: ${clampString(JSON.stringify(seeded.body), 400)}`,
+          );
         }
         const manifestItems = Array.isArray(manifestResponse.body?.items) ? manifestResponse.body.items : [];
         const missingTracked = Array.isArray(manifestResponse.body?.missingTracked)
@@ -154,5 +156,4 @@ export async function runAuthMatrixLane(context, _options = {}, deps) {
   } finally {
     await stopVerificationStack(stack);
   }
-
 }
