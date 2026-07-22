@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { afterEach, describe, it } from "node:test";
-import { canonicalJsonString } from "@goatcitadel/contracts";
+import {
+  GOVERNANCE_JOURNEY_EVENT_VERSION,
+  canonicalJsonString,
+  type ExternalSessionAttachmentRecord,
+  type GovernanceJourneyEventRecord,
+} from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
 import { ExternalSourceConfigRepository } from "./external-source-config-repo.js";
 import {
@@ -36,6 +42,59 @@ function createStore(): DatabaseClient {
   const db = createDatabase({ dbPath: ":memory:" });
   databases.push(db);
   return db;
+}
+
+/**
+ * Test-local mirror of the Gateway attachment Journey producer: every field is
+ * derived from the immutable attachment record so replays rebuild identically.
+ */
+function attachmentJourneyEvent(attachment: ExternalSessionAttachmentRecord): GovernanceJourneyEventRecord {
+  const action = attachment.status === "attached" ? "attached_read_only" : "detached";
+  const occurredAt = attachment.status === "attached" ? attachment.attachedAt : attachment.detachedAt!;
+  const fingerprint = sha256(
+    canonicalJsonString({
+      action,
+      workspaceId: attachment.workspaceId,
+      sessionId: attachment.sessionId,
+      attachmentId: attachment.attachmentId,
+      normalizedArtifactSha256: attachment.normalizedArtifactSha256,
+    }),
+  );
+  return {
+    schemaVersion: GOVERNANCE_JOURNEY_EVENT_VERSION,
+    eventId: `journey-external-source-${action}-${fingerprint.slice(0, 40)}`,
+    idempotencyKey: `external-session-import:v1:${action}:${fingerprint}`,
+    scopeKind: "workspace",
+    workspaceId: attachment.workspaceId,
+    eventType: "external_session_import",
+    subjectKind: "external_session_attachment",
+    subjectId: attachment.attachmentId,
+    action,
+    actorId: attachment.attachedByActorId,
+    actorType: "operator",
+    sessionId: attachment.sessionId,
+    fingerprint,
+    sourceKind: "external_source",
+    sourceId: attachment.sourceId,
+    trustDisposition: "read_only_external",
+    poisoningStatus: "clean",
+    evidenceRefs: [{ owner: "external_source", refId: attachment.attachmentId }],
+    provenance: { sourceRequired: true, approvalRequired: false },
+    summary: {
+      attachmentId: attachment.attachmentId,
+      importId: attachment.importId,
+      itemId: attachment.itemId,
+      normalizedArtifactSha256: attachment.normalizedArtifactSha256,
+      status: attachment.status,
+      revision: attachment.revision,
+    },
+    occurredAt,
+    recordedAt: occurredAt,
+  };
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 function seedImport(db: DatabaseClient) {
@@ -185,6 +244,100 @@ describe("HX-407 external source import, attachment, and knowledge-link reposito
     );
   });
 
+  it("commits attach and detach with content-free Journey evidence in one transaction and replays exactly", () => {
+    const db = createStore();
+    const { fixture, imports } = seedImport(db);
+    imports.settle(fixture.settlement, fixture.importItems);
+    insertSyntheticChatSession(db);
+    const attachments = new ExternalSessionAttachmentRepository(db);
+    const build = (attachment: ExternalSessionAttachmentRecord) => attachmentJourneyEvent(attachment);
+
+    const created = attachments.attachWithJourney(fixture.attachment, build);
+    assert.equal(created.disposition, "created");
+    assert.deepEqual(created.attachment, fixture.attachment);
+    assert.equal(created.journeyEvent.action, "attached_read_only");
+    assert.deepEqual(created.journeyEvent.provenance.sourceRequired, true);
+    assert.deepEqual(created.journeyEvent.provenance.approvalRequired, false);
+
+    const replayed = attachments.attachWithJourney(
+      { ...fixture.attachment, attachedAt: "2026-07-14T08:06:30.000Z", attachedByActorId: "operator-2" },
+      build,
+    );
+    assert.equal(replayed.disposition, "replayed");
+    assert.deepEqual(replayed.attachment, fixture.attachment);
+    assert.equal(replayed.journeyEvent.eventId, created.journeyEvent.eventId);
+    const attachEventCount = db
+      .prepare("SELECT COUNT(*) AS count FROM governance_journey_events WHERE subject_id = ?")
+      .get(fixture.attachment.attachmentId) as { count: number };
+    assert.equal(Number(attachEventCount.count), 1);
+
+    const detached = {
+      ...fixture.attachment,
+      status: "detached" as const,
+      revision: 2,
+      detachedByActorId: "operator-1",
+      detachedAt: "2026-07-14T08:07:00.000Z",
+    };
+    const firstDetach = attachments.detachCasWithJourney(detached, 1, build);
+    assert.equal(firstDetach.disposition, "detached");
+    assert.equal(firstDetach.journeyEvent.action, "detached");
+    const secondDetach = attachments.detachCasWithJourney(
+      { ...detached, detachedAt: "2026-07-14T08:07:05.000Z", detachedByActorId: "operator-9" },
+      1,
+      build,
+    );
+    assert.equal(secondDetach.disposition, "replayed");
+    assert.deepEqual(secondDetach.attachment, firstDetach.attachment);
+    assert.equal(secondDetach.journeyEvent.eventId, firstDetach.journeyEvent.eventId);
+    const totalEvents = db
+      .prepare("SELECT COUNT(*) AS count FROM governance_journey_events WHERE subject_id = ?")
+      .get(fixture.attachment.attachmentId) as { count: number };
+    assert.equal(Number(totalEvents.count), 2);
+
+    assert.throws(() => attachments.attachWithJourney(fixture.attachment, build), /cannot re-attach/u);
+  });
+
+  it("rolls the attach back when its Journey evidence cannot commit", () => {
+    const db = createStore();
+    const { fixture, imports } = seedImport(db);
+    imports.settle(fixture.settlement, fixture.importItems);
+    insertSyntheticChatSession(db);
+    const attachments = new ExternalSessionAttachmentRepository(db);
+    const canonical = attachmentJourneyEvent(fixture.attachment);
+    db.prepare(
+      `
+      INSERT INTO governance_journey_events (
+        schema_version, event_id, idempotency_key, scope_kind, workspace_id, event_type,
+        subject_kind, subject_id, action, actor_id, actor_type, session_id, fingerprint,
+        source_kind, source_id, trust_disposition, poisoning_status, evidence_refs_json,
+        provenance_json, summary_json, occurred_at, recorded_at
+      ) VALUES (
+        @schemaVersion, 'journey-occupied-event', @idempotencyKey, 'workspace', @workspaceId,
+        'external_session_import', 'external_session_attachment', @subjectId, 'attached_read_only',
+        'operator-1', 'operator', @sessionId, @fingerprint, 'external_source', @sourceId,
+        'read_only_external', 'clean', '[]', '{"sourceRequired":true,"approvalRequired":false}',
+        '{"conflicting":"material"}', @occurredAt, @occurredAt
+      )
+    `,
+    ).run({
+      schemaVersion: canonical.schemaVersion,
+      idempotencyKey: canonical.idempotencyKey,
+      workspaceId: canonical.workspaceId,
+      subjectId: canonical.subjectId,
+      sessionId: fixture.attachment.sessionId,
+      fingerprint: canonical.fingerprint,
+      sourceId: fixture.attachment.sourceId,
+      occurredAt: canonical.occurredAt,
+    });
+
+    assert.throws(() => attachments.attachWithJourney(fixture.attachment, attachmentJourneyEvent));
+    assert.equal(
+      attachments.find(fixture.attachment.workspaceId, fixture.attachment.attachmentId),
+      undefined,
+      "a failed Journey commit must roll the attachment back",
+    );
+  });
+
   it("links knowledge only after an exact approved effect and never creates knowledge inline", () => {
     const db = createStore();
     const { fixture, imports } = seedImport(db);
@@ -267,6 +420,31 @@ describe("HX-407 external source import, attachment, and knowledge-link reposito
           .run(link.linkId),
       /immutable/u,
     );
+  });
+
+  it("rejects Journey events that are not bound to the exact attachment record", () => {
+    const db = createStore();
+    const { fixture, imports } = seedImport(db);
+    imports.settle(fixture.settlement, fixture.importItems);
+    insertSyntheticChatSession(db);
+    const attachments = new ExternalSessionAttachmentRepository(db);
+    assert.throws(
+      () =>
+        attachments.attachWithJourney(fixture.attachment, (attachment) => ({
+          ...attachmentJourneyEvent(attachment),
+          sourceId: "foreign-source",
+        })),
+      /not bound to its immutable attachment record/u,
+    );
+    assert.throws(
+      () =>
+        attachments.attachWithJourney(fixture.attachment, (attachment) => ({
+          ...attachmentJourneyEvent(attachment),
+          action: "detached",
+        })),
+      /not bound to its immutable attachment record/u,
+    );
+    assert.equal(attachments.find(fixture.attachment.workspaceId, fixture.attachment.attachmentId), undefined);
   });
 
   it("rejects unrelated and cross-workspace knowledge documents before linking", () => {

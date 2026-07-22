@@ -55,12 +55,21 @@ const ENTRY_KEYS = [
   "sourceWorkspaceId",
   "sourceVersion",
   "sourceHash",
+  "externalProvenance",
   "originalBytes",
   "originalTokens",
   "admittedBytes",
   "admittedTokens",
   "truncated",
   "admittedText",
+] as const;
+const EXTERNAL_PROVENANCE_KEYS = [
+  "sourceId",
+  "importId",
+  "itemId",
+  "attachmentId",
+  "attachmentRevision",
+  "normalizedArtifactSha256",
 ] as const;
 
 interface RoutedContextSnapshotRow {
@@ -272,7 +281,7 @@ export function verifyChatRoutedContextSnapshot(input: ChatRoutedContextSnapshot
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
       throw new Error(`Routed context snapshot ${input.snapshotId} has a malformed entry.`);
     }
-    assertExactKeys(entry, ENTRY_KEYS, `entry ${index}`, new Set(["sourceWorkspaceId"]));
+    assertExactKeys(entry, ENTRY_KEYS, `entry ${index}`, new Set(["sourceWorkspaceId", "externalProvenance"]));
     if (entry.index !== index) {
       throw new Error(`Routed context snapshot ${input.snapshotId} has unstable reference ordering.`);
     }
@@ -286,9 +295,10 @@ export function verifyChatRoutedContextSnapshot(input: ChatRoutedContextSnapshot
       throw new Error(`Routed context snapshot ${input.snapshotId} has malformed entry fields.`);
     }
     assertBoundedIdentifier(entry.ref, `entries[${index}].ref`, CHAT_ROUTED_CONTEXT_MAX_REF_LENGTH);
-    if (entry.kind !== "attachment" && entry.kind !== "memory_item") {
+    if (entry.kind !== "attachment" && entry.kind !== "memory_item" && entry.kind !== "external_attachment") {
       throw new Error(`Routed context snapshot ${input.snapshotId} has an invalid entry kind.`);
     }
+    assertEntryExternalProvenance(input.snapshotId, entry);
     if (
       entry.disposition !== "included" &&
       entry.disposition !== "truncated" &&
@@ -478,6 +488,49 @@ function snakeCounts(counts: ReturnType<typeof countDispositions>) {
 function assertBoundedIdentifier(value: string, field: string, max: number): void {
   if (typeof value !== "string" || !value.trim() || value !== value.trim() || value.length > max) {
     throw new Error(`Routed context ${field} is invalid.`);
+  }
+}
+
+/**
+ * External entries freeze exact managed-artifact bytes: provenance is required,
+ * hash-bound to the admitted bytes, and truncation is never a legal state.
+ */
+function assertEntryExternalProvenance(
+  snapshotId: string,
+  entry: ChatRoutedContextSnapshotRecord["entries"][number],
+): void {
+  if (entry.kind !== "external_attachment") {
+    if (entry.externalProvenance !== undefined) {
+      throw new Error(`Routed context snapshot ${snapshotId} carries external provenance on an internal entry.`);
+    }
+    return;
+  }
+  const provenance = entry.externalProvenance;
+  if (!provenance || typeof provenance !== "object" || Array.isArray(provenance)) {
+    throw new Error(`Routed context snapshot ${snapshotId} is missing external provenance.`);
+  }
+  assertExactKeys(provenance, EXTERNAL_PROVENANCE_KEYS, `entry ${entry.index} external provenance`);
+  assertBoundedIdentifier(provenance.sourceId, `entries[${entry.index}].externalProvenance.sourceId`, 256);
+  assertBoundedIdentifier(provenance.importId, `entries[${entry.index}].externalProvenance.importId`, 256);
+  assertBoundedIdentifier(provenance.itemId, `entries[${entry.index}].externalProvenance.itemId`, 256);
+  assertBoundedIdentifier(provenance.attachmentId, `entries[${entry.index}].externalProvenance.attachmentId`, 256);
+  if (!Number.isSafeInteger(provenance.attachmentRevision) || provenance.attachmentRevision < 1) {
+    throw new Error(`Routed context snapshot ${snapshotId} has an invalid external attachment revision.`);
+  }
+  if (!SHA256.test(provenance.normalizedArtifactSha256)) {
+    throw new Error(`Routed context snapshot ${snapshotId} has an invalid external artifact hash.`);
+  }
+  if (provenance.attachmentId !== entry.ref) {
+    throw new Error(`Routed context snapshot ${snapshotId} external provenance does not bind its reference.`);
+  }
+  if (provenance.normalizedArtifactSha256 !== entry.sourceHash) {
+    throw new Error(`Routed context snapshot ${snapshotId} external provenance does not bind its source hash.`);
+  }
+  if (entry.sourceScope !== "workspace") {
+    throw new Error(`Routed context snapshot ${snapshotId} external entry must carry workspace provenance.`);
+  }
+  if (entry.disposition === "truncated" || entry.disposition === "already_attached") {
+    throw new Error(`Routed context snapshot ${snapshotId} external entry admits non-exact external bytes.`);
   }
 }
 

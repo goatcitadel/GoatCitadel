@@ -7,9 +7,11 @@ import {
   canonicalJsonString,
   type ExternalSessionAttachmentRecord,
   type ExternalSourceKnowledgeLinkRecord,
+  type GovernanceJourneyEventRecord,
 } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
 import { ExternalSourceImportRepository, verifyExternalSourceImportSettlement } from "./external-source-import-repo.js";
+import { GovernanceJourneyEventRepository } from "./governance-journey-event-repo.js";
 import { safeJsonParse } from "./safe-json.js";
 
 export type ExternalSourceKnowledgeLinkDraft = Omit<ExternalSourceKnowledgeLinkRecord, "provenanceSha256">;
@@ -100,6 +102,7 @@ export class ExternalSessionAttachmentRepository {
   private readonly listStmt;
   private readonly updateStmt;
   private readonly sessionStmt;
+  private readonly bindingStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.insertStmt = db.prepare(`
@@ -138,6 +141,11 @@ export class ExternalSessionAttachmentRepository {
     this.sessionStmt = db.prepare(`
       SELECT session_id FROM chat_session_meta
       WHERE workspace_id = @workspaceId AND session_id = @sessionId
+    `);
+    this.bindingStmt = db.prepare(`
+      SELECT * FROM chat_external_source_attachments
+      WHERE workspace_id = @workspaceId AND session_id = @sessionId
+        AND import_id = @importId AND item_id = @itemId
     `);
   }
 
@@ -196,6 +204,92 @@ export class ExternalSessionAttachmentRepository {
     });
   }
 
+  /**
+   * Attach exactly once per (session, import, item) binding and commit the
+   * content-free Journey evidence in the same immediate transaction. Exact
+   * replays converge on the stored record and its original Journey event; a
+   * detached binding is terminal and can never be re-attached.
+   */
+  public attachWithJourney(
+    input: ExternalSessionAttachmentRecord,
+    buildJourneyEvent: (attachment: ExternalSessionAttachmentRecord) => GovernanceJourneyEventRecord,
+  ): {
+    attachment: ExternalSessionAttachmentRecord;
+    journeyEvent: GovernanceJourneyEventRecord;
+    disposition: "created" | "replayed";
+  } {
+    assertExternalSessionAttachment(input);
+    if (input.status !== "attached" || input.revision !== 1) {
+      throw new ConflictError({
+        code: "WRITE_CONFLICT",
+        message: `External attachment ${input.attachmentId} must begin attached at revision 1.`,
+      });
+    }
+    return this.db.transaction("immediate", () => {
+      const journeys = new GovernanceJourneyEventRepository(this.db);
+      const existing = this.findBySessionBinding(input.workspaceId, input.sessionId, input.importId, input.itemId);
+      if (existing) {
+        if (existing.status !== "attached") {
+          throw new ConflictError({
+            code: "STATE_CONFLICT",
+            message: `External attachment ${existing.attachmentId} is detached immutable evidence and cannot re-attach.`,
+          });
+        }
+        assertAttachmentIdentityFields(existing, input);
+        const journeyEvent = this.createBoundJourneyEvent(journeys, existing, buildJourneyEvent);
+        return { attachment: existing, journeyEvent, disposition: "replayed" as const };
+      }
+      const attachment = this.attach(input);
+      const journeyEvent = this.createBoundJourneyEvent(journeys, attachment, buildJourneyEvent);
+      return { attachment, journeyEvent, disposition: "created" as const };
+    });
+  }
+
+  /**
+   * Detach through the exact revision CAS and commit the Journey evidence in
+   * the same immediate transaction. Detach of an already-detached identical
+   * binding replays the stored terminal record without appending recurrence.
+   */
+  public detachCasWithJourney(
+    input: ExternalSessionAttachmentRecord,
+    expectedRevision: number,
+    buildJourneyEvent: (attachment: ExternalSessionAttachmentRecord) => GovernanceJourneyEventRecord,
+  ): {
+    attachment: ExternalSessionAttachmentRecord;
+    journeyEvent: GovernanceJourneyEventRecord;
+    disposition: "detached" | "replayed";
+  } {
+    assertExternalSessionAttachment(input);
+    return this.db.transaction("immediate", () => {
+      const journeys = new GovernanceJourneyEventRepository(this.db);
+      const current = this.get(input.workspaceId, input.attachmentId);
+      if (current.status === "detached") {
+        assertAttachmentIdentityFields(current, input);
+        const journeyEvent = this.createBoundJourneyEvent(journeys, current, buildJourneyEvent);
+        return { attachment: current, journeyEvent, disposition: "replayed" as const };
+      }
+      const attachment = this.detachCas(input, expectedRevision);
+      const journeyEvent = this.createBoundJourneyEvent(journeys, attachment, buildJourneyEvent);
+      return { attachment, journeyEvent, disposition: "detached" as const };
+    });
+  }
+
+  public findBySessionBinding(
+    workspaceId: string,
+    sessionId: string,
+    importId: string,
+    itemId: string,
+  ): ExternalSessionAttachmentRecord | undefined {
+    assertIdentifier(workspaceId, "workspaceId");
+    assertIdentifier(sessionId, "sessionId");
+    assertIdentifier(importId, "importId");
+    assertIdentifier(itemId, "itemId");
+    const row = this.bindingStmt.get({ workspaceId, sessionId, importId, itemId }) as
+      | ExternalSessionAttachmentRow
+      | undefined;
+    return row ? mapAndVerifyAttachmentRow(row) : undefined;
+  }
+
   public get(workspaceId: string, attachmentId: string): ExternalSessionAttachmentRecord {
     const record = this.find(workspaceId, attachmentId);
     if (!record) throw new NotFoundError({ entity: "external source attachment", id: attachmentId });
@@ -218,6 +312,16 @@ export class ExternalSessionAttachmentRepository {
     return (this.listStmt.all({ workspaceId, sessionId, limit }) as ExternalSessionAttachmentRow[]).map(
       mapAndVerifyAttachmentRow,
     );
+  }
+
+  private createBoundJourneyEvent(
+    journeys: GovernanceJourneyEventRepository,
+    attachment: ExternalSessionAttachmentRecord,
+    buildJourneyEvent: (attachment: ExternalSessionAttachmentRecord) => GovernanceJourneyEventRecord,
+  ): GovernanceJourneyEventRecord {
+    const event = buildJourneyEvent(attachment);
+    assertAttachmentJourneyBinding(event, attachment);
+    return journeys.create(event);
   }
 
   private assertImportAndSessionBinding(input: ExternalSessionAttachmentRecord): void {
@@ -540,6 +644,52 @@ function assertIndexedColumns(row: object, expected: Record<string, unknown>, la
     const raw = (row as Record<string, unknown>)[key];
     const actual = typeof value === "number" ? Number(raw) : raw;
     if (actual !== value) throw new Error(`${label} failed indexed-column verification at ${key}.`);
+  }
+}
+
+function assertAttachmentJourneyBinding(
+  event: GovernanceJourneyEventRecord,
+  attachment: ExternalSessionAttachmentRecord,
+): void {
+  if (
+    event.scopeKind !== "workspace" ||
+    event.workspaceId !== attachment.workspaceId ||
+    event.eventType !== "external_session_import" ||
+    event.subjectId !== attachment.attachmentId ||
+    event.sessionId !== attachment.sessionId ||
+    event.sourceKind !== "external_source" ||
+    event.sourceId !== attachment.sourceId ||
+    event.provenance.sourceRequired !== true ||
+    event.provenance.approvalRequired !== false ||
+    (attachment.status === "attached" && event.action !== "attached_read_only") ||
+    (attachment.status === "detached" && event.action !== "detached")
+  ) {
+    throw new Error("External attachment Journey event is not bound to its immutable attachment record.");
+  }
+}
+
+/**
+ * The mutable lifecycle tail (status, revision, detach evidence, actor clocks)
+ * may differ between a retry and the stored row; the immutable binding may not.
+ */
+function assertAttachmentIdentityFields(
+  current: ExternalSessionAttachmentRecord,
+  next: ExternalSessionAttachmentRecord,
+): void {
+  if (
+    current.attachmentId !== next.attachmentId ||
+    current.workspaceId !== next.workspaceId ||
+    current.sessionId !== next.sessionId ||
+    current.sourceId !== next.sourceId ||
+    current.importId !== next.importId ||
+    current.itemId !== next.itemId ||
+    current.normalizedArtifactSha256 !== next.normalizedArtifactSha256 ||
+    current.mode !== next.mode
+  ) {
+    throw new ConflictError({
+      code: "STATE_CONFLICT",
+      message: `External attachment ${current.attachmentId} immutable identity conflicts with the stored binding.`,
+    });
   }
 }
 
