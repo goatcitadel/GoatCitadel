@@ -81,6 +81,14 @@ describe("classifyMcpRequesterScopeLastOutcome (HX-415 operator diagnostics)", (
       profileDrift: false,
     });
     expect(
+      classifyMcpRequesterScopeLastOutcome({ serverId: "s", outcomeClass: "operation_denied", atMs: 5 }),
+    ).toMatchObject({
+      connectionGenerationClass: "absent",
+      expiryClass: "absent",
+      networkPolicyDecision: "not_evaluated",
+      profileDrift: false,
+    });
+    expect(
       classifyMcpRequesterScopeLastOutcome({ serverId: "s", outcomeClass: "resolved_destination_denied", atMs: 5 }),
     ).toMatchObject({
       connectionGenerationClass: "present",

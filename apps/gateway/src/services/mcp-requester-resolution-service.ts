@@ -1600,12 +1600,11 @@ const MCP_REQUESTER_SCOPE_OUTCOME_CLASSIFICATION: Readonly<
   discovery_secret_detected: OUTCOME_TRANSPORT_REACHED,
   schema_revalidation_required: OUTCOME_TRANSPORT_REACHED,
   schema_revalidation_drift: Object.freeze({ ...OUTCOME_TRANSPORT_REACHED, profileDrift: true }),
-  operation_denied: Object.freeze({
-    connectionGenerationClass: "present",
-    expiryClass: "within_bounds",
-    networkPolicyDecision: "not_evaluated",
-    profileDrift: false,
-  }),
+  // operation_denied can fire before any connection exists (deny-wins recheck,
+  // permit misuse pre-resolution), so the coarse class must not overstate that a
+  // connection was present; post-resolution denials understate, which is the
+  // safe direction for diagnostics.
+  operation_denied: OUTCOME_NO_CONNECTION,
   resolved_connection_invalid: OUTCOME_NO_CONNECTION,
   resolved_destination_denied: Object.freeze({
     connectionGenerationClass: "present",

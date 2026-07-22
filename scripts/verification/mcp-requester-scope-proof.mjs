@@ -510,7 +510,7 @@ const SPEC_SCENARIOS = [
     suites: [
       "packages/policy-engine/src/network-guard.test.ts (allowlist + guarded DNS)",
       "packages/policy-engine/src/sandbox/network-guard.security.test.ts (private/reserved/metadata hosts, isolated requester dispatcher)",
-      "packages/policy-engine/src/sandbox/network-guard.agent-reuse.test.ts (no shared Agent cache entry)",
+      "packages/policy-engine/src/sandbox/network-guard.agent-reuse.test.ts (shared-cache reuse baseline the isolated path must bypass)",
       "apps/gateway/src/services/mcp-runtime.requester-scope.test.ts (discovery/invoke 3xx denied, zero next hop)",
     ],
   },
