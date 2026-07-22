@@ -73,6 +73,7 @@
     "verify:extensions:package:raw": "pnpm --filter @goatcitadel/extensions-sdk build && node scripts/verify-extension-package-artifacts.mjs",
     "verify:extensions:package:from-build": "node scripts/verify-extension-package-artifacts.mjs",
     "verify:mcp:conformance": "node --test scripts/mcp-conformance.test.mjs scripts/mcp-server-stdio-runner.test.mjs",
+    "verify:mcp:requester-scope": "node scripts/verification/mcp-requester-scope-proof.mjs",
     "verify:fast": "node scripts/verification/run.mjs fast",
     "verify:a2a:full": "node scripts/verification/run.mjs a2a-full",
     "verify:deep:core": "node scripts/verification/run.mjs deep-core",

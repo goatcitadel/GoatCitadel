@@ -20,6 +20,7 @@ import {
   type McpRequesterScopedTurnContextHandle,
 } from "./mcp-requester-resolution-service.js";
 import type { ChatTurnCapabilityProfileResolveDeps } from "./chat-turn-capability-profile-service.js";
+import * as mcpDiagnosticsService from "./mcp-diagnostics-service.js";
 import {
   composeMcpRequesterScopedRuntime,
   GatewayService,
@@ -642,6 +643,132 @@ describe("composeMcpRequesterScopedRuntime (HX-415 slice 7d composed E2E)", () =
     const serializedDiagnostics = JSON.stringify(harness.diagnostics);
     expect(serializedDiagnostics).not.toContain("canary-secret");
     expect(serializedDiagnostics).not.toContain("leak.example.test");
+  });
+
+  it("records secret-free last outcomes through the composed runtime for freeze and dispatch", async () => {
+    const harness = buildHarness();
+    const profile = profileRecordFor("operator-a");
+    harness.profiles.set(profile.profileId, profile);
+
+    // Before any attempt: no recorded outcome, registration posture readable.
+    expect(harness.runtime.requesterScopeDiagnostics.loadLastOutcome("tenant-mcp")).toBeUndefined();
+    expect(
+      harness.runtime.requesterScopeDiagnostics.resolveRegistrationPosture({
+        resolverId: "gateway.tenant",
+        resolverVersion: "1.2.3",
+        configGeneration: 4,
+      }),
+    ).toBe("registered");
+    expect(
+      harness.runtime.requesterScopeDiagnostics.resolveRegistrationPosture({
+        resolverId: "gateway.tenant",
+        resolverVersion: "9.9.9",
+        configGeneration: 4,
+      }),
+    ).toBe("resolver_binding_drift");
+    expect(
+      harness.runtime.requesterScopeDiagnostics.resolveRegistrationPosture({
+        resolverId: "gateway.other",
+        resolverVersion: "1.2.3",
+        configGeneration: 4,
+      }),
+    ).toBe("resolver_missing");
+
+    // Freeze failure records the exact taxonomy class for the exact server.
+    harness.discoveryResolver.mockImplementationOnce(async () => {
+      throw new Error("resolver exploded with https://leak.example.test/?token=canary-secret");
+    });
+    await expect(harness.runtime.resolveMcpRequesterResolutionBinding(freezeHookFor(profile))).resolves.toBeUndefined();
+    expect(harness.runtime.requesterScopeDiagnostics.loadLastOutcome("tenant-mcp")).toEqual({
+      serverId: "tenant-mcp",
+      outcomeClass: "resolver_failed",
+      atMs: START,
+      connectionGenerationClass: "absent",
+      expiryClass: "absent",
+      networkPolicyDecision: "not_evaluated",
+      profileDrift: false,
+    });
+
+    // Successful freeze + dispatch replaces it with resolved_ok.
+    expect(await harness.runtime.resolveMcpRequesterResolutionBinding(freezeHookFor(profile))).toBeDefined();
+    expect(harness.runtime.requesterScopeDiagnostics.loadLastOutcome("tenant-mcp")).toMatchObject({
+      outcomeClass: "resolved_ok",
+      connectionGenerationClass: "present",
+      expiryClass: "within_bounds",
+      networkPolicyDecision: "allowed",
+      profileDrift: false,
+    });
+    const result = await harness.runtime.requesterScopedMcpDispatch.invoke(
+      {
+        server: harness.servers[0] as McpServerRecord,
+        toolName: "search",
+        arguments: { query: "hello" },
+        mcpRequesterTurnContext: harness.contextFor(profile),
+      },
+      { effectDispatch: vi.fn() },
+    );
+    expect(result.ok).toBe(true);
+    expect(harness.runtime.requesterScopeDiagnostics.loadLastOutcome("tenant-mcp")).toMatchObject({
+      outcomeClass: "resolved_ok",
+    });
+
+    // A dispatch without a server-built context records the fail-closed class.
+    const missing = await harness.runtime.requesterScopedMcpDispatch.invoke(
+      { server: harness.servers[0] as McpServerRecord, toolName: "search" },
+      { effectDispatch: vi.fn() },
+    );
+    expect(missing.ok).toBe(false);
+    expect(harness.runtime.requesterScopeDiagnostics.loadLastOutcome("tenant-mcp")).toMatchObject({
+      outcomeClass: "requester_context_missing",
+      connectionGenerationClass: "absent",
+    });
+  });
+
+  it("projects a secret-free posture even while the recorder holds a canary-failure outcome", async () => {
+    const harness = buildHarness();
+    const profile = profileRecordFor("operator-a");
+    harness.profiles.set(profile.profileId, profile);
+    harness.discoveryResolver.mockImplementationOnce(async () => {
+      throw new Error("resolver exploded with https://leak.example.test/?token=canary-secret");
+    });
+    await expect(harness.runtime.resolveMcpRequesterResolutionBinding(freezeHookFor(profile))).resolves.toBeUndefined();
+
+    const postures = mcpDiagnosticsService.listMcpRequesterScopePostures({
+      listMcpServers: () => harness.servers.map((server) => ({ ...server })),
+      requesterScopeDiagnostics: harness.runtime.requesterScopeDiagnostics,
+    });
+    expect(postures).toHaveLength(1);
+    expect(postures[0]).toEqual({
+      serverId: "tenant-mcp",
+      connectionMode: "requester_scoped",
+      requesterContextRequired: true,
+      enabled: true,
+      resolverId: "gateway.tenant",
+      resolverVersion: "1.2.3",
+      resolverConfigGeneration: 4,
+      resolverRegistration: "registered",
+      lastOutcome: {
+        outcomeClass: "resolver_failed",
+        atMs: START,
+        connectionGenerationClass: "absent",
+        expiryClass: "absent",
+        networkPolicyDecision: "not_evaluated",
+        profileDrift: false,
+      },
+    });
+    const serialized = JSON.stringify(postures);
+    expect(serialized).not.toContain("canary-secret");
+    expect(serialized).not.toContain("leak.example.test");
+    expect(serialized).not.toContain("a.example.test");
+    expect(serialized).not.toMatch(/url|command|header|authorization|token|secret/iu);
+
+    // Stock deployment (no injected resolvers): resolver_missing posture.
+    const stock = buildHarness({ resolvers: false });
+    const stockPostures = mcpDiagnosticsService.listMcpRequesterScopePostures({
+      listMcpServers: () => stock.servers.map((server) => ({ ...server })),
+      requesterScopeDiagnostics: stock.runtime.requesterScopeDiagnostics,
+    });
+    expect(stockPostures[0]?.resolverRegistration).toBe("resolver_missing");
   });
 });
 

@@ -375,10 +375,13 @@ import {
   MCP_REQUESTER_COMPOSITION_STATIC_GENERATIONS,
   McpProfileDiscoveryOutcomeRegistry,
   McpRequesterResolutionService,
+  McpRequesterScopeLastOutcomeRecorder,
   buildRequesterScopedPreDispatchFailure,
+  deriveMcpRequesterScopeOutcomeClassFromInvocationResult,
   dispatchRequesterScopedToolCall,
   readMcpRequesterScopedTurnContext,
   resolveRequesterScopedBindingForProfileFreeze,
+  type McpRequesterScopeLastOutcomeClass,
   type McpRequesterScopedFreezeCurrentState,
   type McpRequesterScopedProfileFreezeHookInput,
   type McpRequesterScopedToolCallCurrentState,
@@ -524,6 +527,11 @@ import {
 } from "./provider-secret-persistence.js";
 import * as onboardingStateService from "./onboarding-state-service.js";
 import * as mcpDiagnosticsService from "./mcp-diagnostics-service.js";
+import type {
+  McpRequesterScopeDiagnosticsReadPort,
+  McpRequesterScopePosture,
+  McpRequesterScopeResolverRegistrationRef,
+} from "./mcp-diagnostics-service.js";
 import * as mcpServerAdminService from "./mcp-server-admin-service.js";
 import { McpOAuthTokenService } from "./mcp-oauth-token-service.js";
 import { McpElicitationService } from "./mcp-elicitation-service.js";
@@ -893,6 +901,12 @@ export interface McpRequesterScopedComposedRuntime {
   ): Promise<McpRequesterResolutionBinding | undefined>;
   /** App-private coordinator port for `ToolInvocationCoordinatorHost.requesterScopedMcpDispatch`. */
   requesterScopedMcpDispatch: RequesterScopedMcpDispatchPort;
+  /**
+   * Secret-free operator-diagnostics read port (HX-415 operator-diagnostics
+   * tranche): exact-resolver registration posture plus the process-local
+   * last-outcome recorder. Read-only; restart drops every recorded outcome.
+   */
+  requesterScopeDiagnostics: McpRequesterScopeDiagnosticsReadPort;
 }
 
 function isMcpRequesterScopeActorSourceValue(value: unknown): value is McpRequesterScopeAuthActorSource {
@@ -1010,10 +1024,53 @@ function matchRequesterScopedServerByCanonicalToolName(
 export function composeMcpRequesterScopedRuntime(
   host: McpRequesterScopedCompositionHost,
 ): McpRequesterScopedComposedRuntime {
-  const registry = new McpRequesterResolverRegistry(host.resolvers ?? { profileDiscovery: [], toolCall: [] });
+  const resolverInput = host.resolvers ?? { profileDiscovery: [], toolCall: [] };
+  const registry = new McpRequesterResolverRegistry(resolverInput);
   const service = new McpRequesterResolutionService(registry, host.now ? { now: host.now } : undefined);
   const scanner = createMcpRequesterDiscoverySecretScanner();
   const outcomes = new McpProfileDiscoveryOutcomeRegistry();
+  // HX-415 operator diagnostics: non-secret resolver identity keys derived
+  // from the SAME input the fixed registry validated (construction above threw
+  // on any malformed entry), plus the bounded process-local last-outcome
+  // recorder. Both feed the read-only diagnostics port; neither can resolve.
+  // NUL-separated registration key: the registry has already asserted canonical
+  // resolver identifiers and semver versions (no whitespace or control
+  // characters), so the separator keeps the boundary unambiguous — the same
+  // convention as the discovery-outcome registry map key.
+  const resolverRegistrationKey = (ref: McpRequesterScopeResolverRegistrationRef): string => {
+    const separator = String.fromCharCode(0);
+    return `${ref.resolverId}${separator}${ref.resolverVersion}${separator}${ref.configGeneration}`;
+  };
+  const registeredResolverIds = (resolvers: ReadonlyArray<{ resolverId: string }>): ReadonlySet<string> =>
+    new Set(resolvers.map((resolver) => resolver.resolverId));
+  const registeredResolverKeys = (
+    resolvers: ReadonlyArray<{ resolverId: string; resolverVersion: string; configGeneration: number }>,
+  ): ReadonlySet<string> => new Set(resolvers.map((resolver) => resolverRegistrationKey(resolver)));
+  const profileDiscoveryResolverIds = registeredResolverIds(resolverInput.profileDiscovery);
+  const toolCallResolverIds = registeredResolverIds(resolverInput.toolCall);
+  const profileDiscoveryResolverKeys = registeredResolverKeys(resolverInput.profileDiscovery);
+  const toolCallResolverKeys = registeredResolverKeys(resolverInput.toolCall);
+  const lastOutcomes = new McpRequesterScopeLastOutcomeRecorder();
+  const recordLastOutcome = (serverId: string, outcomeClass: McpRequesterScopeLastOutcomeClass): void => {
+    try {
+      lastOutcomes.recordLastOutcome({ serverId, outcomeClass, atMs: host.now ? host.now() : Date.now() });
+    } catch {
+      // The recorder is best-effort operator diagnostics and never masks the
+      // fail-closed resolution result.
+    }
+  };
+  const requesterScopeDiagnostics: McpRequesterScopeDiagnosticsReadPort = {
+    resolveRegistrationPosture: (ref: McpRequesterScopeResolverRegistrationRef) => {
+      if (!profileDiscoveryResolverIds.has(ref.resolverId) || !toolCallResolverIds.has(ref.resolverId)) {
+        return "resolver_missing";
+      }
+      const key = resolverRegistrationKey(ref);
+      return profileDiscoveryResolverKeys.has(key) && toolCallResolverKeys.has(key)
+        ? "registered"
+        : "resolver_binding_drift";
+    },
+    loadLastOutcome: (serverId: string) => lastOutcomes.loadLastOutcome(serverId),
+  };
   const reportDiagnostic = (event: string, reasonCode: string): void => {
     try {
       host.recordDevDiagnostic({
@@ -1070,7 +1127,7 @@ export function composeMcpRequesterScopedRuntime(
         rotationGenerationCurrent: true,
       };
     };
-    return resolveRequesterScopedBindingForProfileFreeze({
+    const binding = await resolveRequesterScopedBindingForProfileFreeze({
       hook,
       service,
       outcomes,
@@ -1079,9 +1136,16 @@ export function composeMcpRequesterScopedRuntime(
       readCurrentState,
       discoverTools: discoverRequesterScopedMcpTools,
       createAttemptId: () => randomUUID(),
-      onDiagnostic: (reasonCode) => reportDiagnostic("mcp.requester_resolution.freeze_failed", reasonCode),
+      onDiagnostic: (reasonCode) => {
+        reportDiagnostic("mcp.requester_resolution.freeze_failed", reasonCode);
+        // Operator diagnostics: the taxonomy code is the ONLY failure content
+        // that leaves the orchestrator; record it per exact server.
+        recordLastOutcome(serverId, reasonCode);
+      },
       ...(host.now ? { now: host.now } : {}),
     });
+    if (binding) recordLastOutcome(serverId, "resolved_ok");
+    return binding;
   };
 
   const requesterScopedMcpDispatch: RequesterScopedMcpDispatchPort = {
@@ -1093,6 +1157,7 @@ export function composeMcpRequesterScopedRuntime(
       const context = readMcpRequesterScopedTurnContext(input.mcpRequesterTurnContext);
       if (!context) {
         reportDiagnostic("mcp.requester_resolution.dispatch_failed", "requester_context_missing");
+        recordLastOutcome(input.server.serverId, "requester_context_missing");
         return buildRequesterScopedPreDispatchFailure(input.toolName, "requester_context_missing");
       }
       const serverId = input.server.serverId;
@@ -1133,7 +1198,7 @@ export function composeMcpRequesterScopedRuntime(
           rotationGenerationCurrent: true,
         };
       };
-      return dispatchRequesterScopedToolCall({
+      const result = await dispatchRequesterScopedToolCall({
         context,
         serverId,
         // Canonical name convention pinned by extractMcpRequesterDiscoveryOutputInput.
@@ -1151,10 +1216,15 @@ export function composeMcpRequesterScopedRuntime(
         createAttemptId: () => randomUUID(),
         ...(host.now ? { now: host.now } : {}),
       });
+      // Operator diagnostics: derive the last-outcome class from the result's
+      // fixed taxonomy code and ok/failurePhase booleans only — the result is
+      // already content-free by the orchestrator/runtime contract.
+      recordLastOutcome(serverId, deriveMcpRequesterScopeOutcomeClassFromInvocationResult(result));
+      return result;
     },
   };
 
-  return { resolveMcpRequesterResolutionBinding, requesterScopedMcpDispatch };
+  return { resolveMcpRequesterResolutionBinding, requesterScopedMcpDispatch, requesterScopeDiagnostics };
 }
 
 export class GatewayService {
@@ -8825,6 +8895,20 @@ export class GatewayService {
 
   public listMcpServers(): McpServerRecord[] {
     return this.readMcpServers();
+  }
+
+  /**
+   * HX-415 operator diagnostics read port: secret-free per-server
+   * requester-scope posture (resolver identity/registration posture plus the
+   * process-local last-outcome classes). Reason codes and coarse classes only —
+   * never an endpoint, header, URL component, actor/channel identifier,
+   * resolver cause text, or secret-derived hash.
+   */
+  public listMcpRequesterScopePostures(): McpRequesterScopePosture[] {
+    return mcpDiagnosticsService.listMcpRequesterScopePostures({
+      listMcpServers: () => this.readMcpServers(),
+      requesterScopeDiagnostics: this.mcpRequesterScopedRuntime.requesterScopeDiagnostics,
+    });
   }
 
   public listMcpTemplates(): Array<McpServerTemplateRecord & { installed: boolean }> {

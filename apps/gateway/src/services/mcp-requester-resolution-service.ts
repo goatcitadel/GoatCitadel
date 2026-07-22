@@ -1509,6 +1509,232 @@ function containsOutcomeControlCharacter(value: string): boolean {
   return false;
 }
 
+export const MCP_REQUESTER_SCOPE_LAST_OUTCOME_REGISTRY_LIMIT = 512;
+
+export type McpRequesterScopeLastOutcomeClass = McpRequesterResolutionReasonCode | "resolved_ok";
+
+export type McpRequesterScopeConnectionGenerationClass = "present" | "absent";
+export type McpRequesterScopeExpiryClass = "within_bounds" | "expired" | "absent";
+export type McpRequesterScopeNetworkPolicyDecision = "allowed" | "denied" | "not_evaluated";
+
+/**
+ * Secret-free operator-diagnostic last outcome for one requester-scoped MCP
+ * server (HX-415 operator-diagnostics tranche). Every field is either the
+ * fixed taxonomy reason code the orchestrators already emit, a coarse class
+ * derived purely from that code, or a wall-clock stamp. It NEVER carries an
+ * endpoint, URL component, header, latency-precise duration, actor/channel
+ * identifier, resolver cause text, or any hash derived from secret material.
+ */
+export interface McpRequesterScopeLastOutcome {
+  serverId: string;
+  outcomeClass: McpRequesterScopeLastOutcomeClass;
+  atMs: number;
+  connectionGenerationClass: McpRequesterScopeConnectionGenerationClass;
+  expiryClass: McpRequesterScopeExpiryClass;
+  networkPolicyDecision: McpRequesterScopeNetworkPolicyDecision;
+  profileDrift: boolean;
+}
+
+type McpRequesterScopeOutcomeDerivedClasses = Pick<
+  McpRequesterScopeLastOutcome,
+  "connectionGenerationClass" | "expiryClass" | "networkPolicyDecision" | "profileDrift"
+>;
+
+const OUTCOME_NO_CONNECTION: McpRequesterScopeOutcomeDerivedClasses = Object.freeze({
+  connectionGenerationClass: "absent",
+  expiryClass: "absent",
+  networkPolicyDecision: "not_evaluated",
+  profileDrift: false,
+});
+const OUTCOME_NO_CONNECTION_DRIFT: McpRequesterScopeOutcomeDerivedClasses = Object.freeze({
+  ...OUTCOME_NO_CONNECTION,
+  profileDrift: true,
+});
+const OUTCOME_TRANSPORT_REACHED: McpRequesterScopeOutcomeDerivedClasses = Object.freeze({
+  connectionGenerationClass: "present",
+  expiryClass: "within_bounds",
+  networkPolicyDecision: "allowed",
+  profileDrift: false,
+});
+
+/**
+ * Fixed derivation of the packet's operator-diagnostic classes from the
+ * taxonomy reason code ALONE (no attempt/connection value is ever consulted —
+ * by the time an outcome is recorded, the ephemeral material is disposed).
+ * Groups, with rationale per row where it deviates:
+ *
+ * - No validated connection existed (identity/profile/registry/resolution and
+ *   output-validation failures, including `resolved_connection_invalid` and
+ *   `resolved_header_denied`, which reject the resolver output before a
+ *   validated connection comes to exist): generation/expiry `absent`, network
+ *   policy `not_evaluated`.
+ * - `resolved_destination_denied`: the validated connection existed and the
+ *   network guard's decision is definitionally `denied`.
+ * - Validated connection existed but the guard verdict cannot be inferred from
+ *   the code alone (`resolved_connection_expired`, `connection_generation_revoked`,
+ *   `operation_denied` — each can fire before or after the network preflight):
+ *   `not_evaluated`, with `expired` only for the expiry code.
+ * - Transport was reached past the guard (`transport_*`, discovery/revalidation
+ *   output codes, `resolved_ok`): generation `present`, expiry `within_bounds`,
+ *   network policy `allowed`.
+ * - `profileDrift` is true exactly for the codes that mean the frozen
+ *   profile/binding/scope no longer matches current server-owned state.
+ */
+const MCP_REQUESTER_SCOPE_OUTCOME_CLASSIFICATION: Readonly<
+  Record<McpRequesterScopeLastOutcomeClass, McpRequesterScopeOutcomeDerivedClasses>
+> = Object.freeze({
+  requester_context_missing: OUTCOME_NO_CONNECTION,
+  requester_context_ambiguous: OUTCOME_NO_CONNECTION,
+  requester_scope_mismatch: OUTCOME_NO_CONNECTION_DRIFT,
+  capability_profile_missing: OUTCOME_NO_CONNECTION,
+  capability_profile_invalid: OUTCOME_NO_CONNECTION_DRIFT,
+  capability_profile_drift: OUTCOME_NO_CONNECTION_DRIFT,
+  server_not_callable: OUTCOME_NO_CONNECTION,
+  resolver_missing: OUTCOME_NO_CONNECTION,
+  resolver_binding_drift: OUTCOME_NO_CONNECTION_DRIFT,
+  resolver_timeout: OUTCOME_NO_CONNECTION,
+  resolver_cancelled: OUTCOME_NO_CONNECTION,
+  resolver_failed: OUTCOME_NO_CONNECTION,
+  discovery_output_invalid: OUTCOME_TRANSPORT_REACHED,
+  discovery_output_too_large: OUTCOME_TRANSPORT_REACHED,
+  discovery_secret_detected: OUTCOME_TRANSPORT_REACHED,
+  schema_revalidation_required: OUTCOME_TRANSPORT_REACHED,
+  schema_revalidation_drift: Object.freeze({ ...OUTCOME_TRANSPORT_REACHED, profileDrift: true }),
+  operation_denied: Object.freeze({
+    connectionGenerationClass: "present",
+    expiryClass: "within_bounds",
+    networkPolicyDecision: "not_evaluated",
+    profileDrift: false,
+  }),
+  resolved_connection_invalid: OUTCOME_NO_CONNECTION,
+  resolved_destination_denied: Object.freeze({
+    connectionGenerationClass: "present",
+    expiryClass: "within_bounds",
+    networkPolicyDecision: "denied",
+    profileDrift: false,
+  }),
+  resolved_header_denied: OUTCOME_NO_CONNECTION,
+  resolved_connection_expired: Object.freeze({
+    connectionGenerationClass: "present",
+    expiryClass: "expired",
+    networkPolicyDecision: "not_evaluated",
+    profileDrift: false,
+  }),
+  connection_generation_revoked: Object.freeze({
+    connectionGenerationClass: "present",
+    expiryClass: "within_bounds",
+    networkPolicyDecision: "not_evaluated",
+    profileDrift: false,
+  }),
+  secret_guard_failed: OUTCOME_NO_CONNECTION,
+  transport_pre_dispatch_failed: OUTCOME_TRANSPORT_REACHED,
+  transport_outcome_unknown: OUTCOME_TRANSPORT_REACHED,
+  resolved_ok: OUTCOME_TRANSPORT_REACHED,
+});
+
+export function isMcpRequesterScopeLastOutcomeClass(value: unknown): value is McpRequesterScopeLastOutcomeClass {
+  return typeof value === "string" && Object.hasOwn(MCP_REQUESTER_SCOPE_OUTCOME_CLASSIFICATION, value);
+}
+
+/**
+ * Build one frozen secret-free last-outcome record from a serverId, a taxonomy
+ * outcome class, and a wall-clock stamp. All diagnostic classes are derived
+ * from the fixed classification table above; nothing else can enter the
+ * record (exact three-key input snapshot, canonical serverId, known class,
+ * non-negative safe-integer stamp).
+ */
+export function classifyMcpRequesterScopeLastOutcome(input: {
+  serverId: string;
+  outcomeClass: McpRequesterScopeLastOutcomeClass;
+  atMs: number;
+}): McpRequesterScopeLastOutcome {
+  let value: Readonly<Record<string, unknown>>;
+  try {
+    value = snapshotExactDataRecord(input, ["atMs", "outcomeClass", "serverId"]);
+    assertOutcomeCanonicalIdentifier(value.serverId);
+  } catch {
+    throw new McpRequesterResolutionError("requester_context_ambiguous");
+  }
+  if (!isMcpRequesterScopeLastOutcomeClass(value.outcomeClass)) {
+    throw new McpRequesterResolutionError("requester_context_ambiguous");
+  }
+  if (typeof value.atMs !== "number" || !Number.isSafeInteger(value.atMs) || value.atMs < 0) {
+    throw new McpRequesterResolutionError("requester_context_ambiguous");
+  }
+  const derived = MCP_REQUESTER_SCOPE_OUTCOME_CLASSIFICATION[value.outcomeClass];
+  return Object.freeze({
+    serverId: value.serverId,
+    outcomeClass: value.outcomeClass,
+    atMs: value.atMs,
+    connectionGenerationClass: derived.connectionGenerationClass,
+    expiryClass: derived.expiryClass,
+    networkPolicyDecision: derived.networkPolicyDecision,
+    profileDrift: derived.profileDrift,
+  });
+}
+
+/**
+ * Derive the recorder's outcome class from a requester-scoped invocation
+ * result, using ONLY the fixed taxonomy code the runtime/orchestrator placed
+ * under `output.requesterScoped` plus the `ok`/`failurePhase` booleans. A
+ * failure that carries no recognizable code maps onto the taxonomy's two
+ * catch-all codes exactly like the runtime itself maps unknown errors.
+ */
+export function deriveMcpRequesterScopeOutcomeClassFromInvocationResult(
+  result: Pick<McpRuntimeInvocationResult, "ok" | "output" | "failurePhase">,
+): McpRequesterScopeLastOutcomeClass {
+  if (result.ok === true) return "resolved_ok";
+  const output = result.output;
+  if (
+    output &&
+    typeof output === "object" &&
+    !Array.isArray(output) &&
+    (output as Record<string, unknown>).requesterScoped === true
+  ) {
+    const reasonCode = (output as Record<string, unknown>).reasonCode;
+    if (isMcpRequesterScopeLastOutcomeClass(reasonCode) && reasonCode !== "resolved_ok") {
+      return reasonCode;
+    }
+  }
+  return result.failurePhase === "post_dispatch" ? "transport_outcome_unknown" : "transport_pre_dispatch_failed";
+}
+
+/**
+ * Process-local, bounded, secret-free last-outcome recorder for operator
+ * diagnostics (HX-415 packet "API and operator surface"). One record per
+ * requester-scoped serverId, oldest-first eviction at the documented cap,
+ * frozen copies in and out, no persistence and no repository port — a Gateway
+ * restart drops every record by design. A load miss returns `undefined` so
+ * projections simply report "no recorded outcome".
+ */
+export class McpRequesterScopeLastOutcomeRecorder {
+  readonly #outcomes = new Map<string, McpRequesterScopeLastOutcome>();
+
+  public recordLastOutcome(input: {
+    serverId: string;
+    outcomeClass: McpRequesterScopeLastOutcomeClass;
+    atMs: number;
+  }): void {
+    const stored = classifyMcpRequesterScopeLastOutcome(input);
+    this.#outcomes.delete(stored.serverId);
+    if (this.#outcomes.size >= MCP_REQUESTER_SCOPE_LAST_OUTCOME_REGISTRY_LIMIT) {
+      const oldest = this.#outcomes.keys().next();
+      if (!oldest.done) this.#outcomes.delete(oldest.value);
+    }
+    this.#outcomes.set(stored.serverId, stored);
+  }
+
+  public loadLastOutcome(serverId: string): McpRequesterScopeLastOutcome | undefined {
+    try {
+      assertOutcomeCanonicalIdentifier(serverId);
+    } catch {
+      return undefined;
+    }
+    const stored = this.#outcomes.get(serverId);
+    return stored ? Object.freeze({ ...stored }) : undefined;
+  }
+}
+
 function isMcpRequesterScopeActorSource(
   value: ToolPolicyActorContext["authActorSource"],
 ): value is McpRequesterScopeAuthActorSource {
