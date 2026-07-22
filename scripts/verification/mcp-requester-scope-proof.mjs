@@ -312,6 +312,20 @@ const CHECKS = [
     count: "vitest",
   },
   {
+    id: "requester-scope.storage-profile",
+    title:
+      "Storage capability-profile repo: secret-free exact requester binding round-trips under the session-incarnation insert guards (scenario 14)",
+    args: [
+      "--filter",
+      "@goatcitadel/storage",
+      "exec",
+      "tsx",
+      "--test",
+      "src/chat-turn-capability-profile-repo.test.ts",
+    ],
+    count: "node-test",
+  },
+  {
     id: "requester-scope.network-guard",
     title:
       "Policy-engine network guard: private/reserved hosts, guarded DNS, redirect denial, isolated dispatcher never enters the shared cache (scenario 7)",
@@ -579,18 +593,24 @@ const SPEC_SCENARIOS = [
     scenario: 14,
     title:
       "Static scans prove no resolved-output or attempt-lease type reaches a repository/serializer/durable/approval/audit/logger surface, and no HX-415 migration/schema diff exists",
-    checks: ["requester-scope.static-scans", "requester-scope.contracts", "requester-scope.chat-freeze-fallback"],
+    checks: [
+      "requester-scope.static-scans",
+      "requester-scope.contracts",
+      "requester-scope.chat-freeze-fallback",
+      "requester-scope.storage-profile",
+    ],
     suites: [
       "lane static scan A (forbidden private types absent from durable/audit/logger surfaces)",
       "lane static scan B (no requester-scope marker in migration/schema owners; heads recorded)",
       "packages/contracts/src/mcp-requester-resolution.test.ts (exact secret-free binding shape is the only serializable form)",
       "apps/gateway/src/services/chat-turn-capability-profile-service.test.ts (frozen profile carries only the secret-free binding; tamper detected)",
+      "packages/storage/src/chat-turn-capability-profile-repo.test.ts (secret-free exact requester binding round-trips at the storage layer; smuggled URL/secret fields rejected)",
     ],
     note:
-      "The storage-level binding round-trip suite (packages/storage/src/chat-turn-capability-profile-repo.test.ts) is NOT cited here because it is " +
-      "currently red branch-wide for a reason unrelated to HX-415: pre-freeze commit 555355af5 added the chat_turn_capability_profiles session-" +
-      "incarnation insert-guard trigger without updating that suite's bare create() fixtures, so every profile insert in it aborts. The scenario's " +
-      "packet requirement (static scans + no migration diff) executes fully above; the inherited storage-test fix is tracked separately.",
+      "The storage-level binding round-trip suite is cited again: its branch-wide red was inherited from pre-freeze commit 555355af5, which added " +
+      "the chat_turn_capability_profiles session-incarnation insert-guard trigger while the suite still used bare create() fixtures. The suite now " +
+      "seeds a turn_write admission and incarnation bindings around each successful create, so every profile insert executes under the production " +
+      "guard chain and the suite's HX-415 secret-free binding evidence runs here.",
   },
   {
     scenario: 15,
