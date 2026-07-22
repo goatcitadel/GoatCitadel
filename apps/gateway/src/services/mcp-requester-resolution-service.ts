@@ -5,6 +5,7 @@ import {
   MCP_REQUESTER_RESOLUTION_BINDING_VERSION,
   canonicalJsonString,
   mcpRequesterScopeHashMaterial,
+  type ChatTurnCapabilityProfileRecord,
   type McpNormalizedRequesterDiscoveryCatalog,
   type McpNormalizedContentItem,
   type McpRequesterResolutionBinding,
@@ -1905,6 +1906,184 @@ export interface McpRequesterScopedToolCallTurnContext {
   preparationGeneration: number;
 }
 
+/**
+ * Documented v1 composition constants (HX-415 slice 7d) for the generation
+ * fields whose values have no live per-value owner anywhere in this repository:
+ *
+ * - `globalNetworkPolicyGeneration`: the network allowlist is
+ *   `config.toolPolicy.sandbox.networkAllowlist`, static per process with no
+ *   revision counter. A process constant is honest because the packet's restart
+ *   rule already invalidates every in-memory attempt/outcome on restart.
+ * - `authConnectionGeneration`: token/basic/loopback operators have no
+ *   connection-generation owner; device/companion grants
+ *   (`auth_device_grants`) carry revocation (`revoked_at`) but no rotation
+ *   counter. Revocation is therefore surfaced through the live `revoked`
+ *   boolean read from the real grant owner, not a generation bump.
+ * - `turnGeneration` / `preparationGeneration`: each Chat turn freezes exactly
+ *   one capability profile (`chat-capability-profile-<turnId>`); there is no
+ *   re-preparation counter owner. Profile drift is carried by the profile
+ *   id/hash comparison against the durable record instead.
+ *
+ * The freeze-side reader, the invoke-side reader, and the runner-built turn
+ * context MUST all use these exact values or the 7c exact-field state
+ * comparison fails closed (`resolver_binding_drift`) — which is the intended
+ * behavior for any component that drifts from the composition constants.
+ */
+export const MCP_REQUESTER_COMPOSITION_STATIC_GENERATIONS = Object.freeze({
+  globalNetworkPolicyGeneration: 1,
+  authConnectionGeneration: 1,
+  turnGeneration: 1,
+  preparationGeneration: 1,
+} as const);
+
+const requesterScopedTurnContextBrand: unique symbol = Symbol("goatcitadel.mcp.requester-scoped-turn-context");
+const readRequesterScopedTurnContextSymbol: unique symbol = Symbol(
+  "goatcitadel.mcp.read-requester-scoped-turn-context",
+);
+const requesterScopedTurnContexts = new WeakSet<object>();
+
+/**
+ * App-private branded handle around a server-built
+ * {@link McpRequesterScopedToolCallTurnContext} (HX-411 branded-context
+ * precedent). Only `createMcpRequesterScopedTurnContext` /
+ * `buildMcpRequesterScopedTurnContextFromCapabilityProfile` can mint one, the
+ * value is frozen and non-serializable (`toJSON(): never`), and consumption
+ * goes through `readMcpRequesterScopedTurnContext`, whose WeakSet brand check
+ * defeats forged plain objects copied from any request DTO or body field.
+ */
+export interface McpRequesterScopedTurnContextHandle {
+  readonly [requesterScopedTurnContextBrand]: true;
+  toJSON(): never;
+}
+
+class McpRequesterScopedTurnContextValue implements McpRequesterScopedTurnContextHandle {
+  declare public readonly [requesterScopedTurnContextBrand]: true;
+  readonly #context: Readonly<McpRequesterScopedToolCallTurnContext>;
+
+  public constructor(context: Readonly<McpRequesterScopedToolCallTurnContext>) {
+    this.#context = context;
+    requesterScopedTurnContexts.add(this);
+    Object.freeze(this);
+  }
+
+  public [readRequesterScopedTurnContextSymbol](): McpRequesterScopedToolCallTurnContext {
+    return { ...this.#context };
+  }
+
+  public toJSON(): never {
+    throw new McpRequesterResolutionError("requester_context_ambiguous");
+  }
+}
+
+Object.freeze(McpRequesterScopedTurnContextValue.prototype);
+
+const TURN_CONTEXT_KEYS = [
+  "actorId",
+  "actorSource",
+  "authConnectionGeneration",
+  "baseCallableCatalogSha256",
+  "callableCatalogSnapshotId",
+  "finalCallableCatalogSha256",
+  "finalProfileSha256",
+  "globalNetworkPolicyGeneration",
+  "preparationGeneration",
+  "profileId",
+  "sessionId",
+  "turnGeneration",
+  "turnId",
+  "workspaceId",
+] as const;
+
+/**
+ * Mint a branded requester-scoped turn context after full field validation.
+ * Server-owned call sites only (chat-turn runner / gateway composition); the
+ * source-scan guard test beside this module pins production call sites.
+ */
+export function createMcpRequesterScopedTurnContext(
+  input: McpRequesterScopedToolCallTurnContext,
+): McpRequesterScopedTurnContextHandle {
+  try {
+    const value = snapshotExactDataRecord(input, TURN_CONTEXT_KEYS);
+    for (const field of [
+      "profileId",
+      "turnId",
+      "sessionId",
+      "workspaceId",
+      "actorId",
+      "callableCatalogSnapshotId",
+    ] as const) {
+      assertOutcomeCanonicalIdentifier(value[field]);
+    }
+    for (const field of ["finalProfileSha256", "baseCallableCatalogSha256", "finalCallableCatalogSha256"] as const) {
+      if (typeof value[field] !== "string" || !/^[a-f0-9]{64}$/u.test(value[field] as string)) throw new TypeError();
+    }
+    if (!isMcpRequesterScopeActorSource(value.actorSource as ToolPolicyActorContext["authActorSource"])) {
+      throw new TypeError();
+    }
+    for (const field of [
+      "globalNetworkPolicyGeneration",
+      "authConnectionGeneration",
+      "turnGeneration",
+      "preparationGeneration",
+    ] as const) {
+      const generation = value[field];
+      if (typeof generation !== "number" || !Number.isSafeInteger(generation) || generation < 1) throw new TypeError();
+    }
+    return new McpRequesterScopedTurnContextValue(value as unknown as McpRequesterScopedToolCallTurnContext);
+  } catch {
+    throw new McpRequesterResolutionError("requester_context_ambiguous");
+  }
+}
+
+/**
+ * Build the branded turn context FROM the frozen capability-profile record —
+ * the server-owned source the chat-turn runner already holds (and the durable
+ * record replay would reload). Returns `undefined` (no context ⇒ downstream
+ * fail-closed `requester_context_missing`) when the profile has no
+ * authenticated actor in the requester-scope source union or is malformed.
+ * NEVER accepts `McpInvokeRequest`/body fields.
+ */
+export function buildMcpRequesterScopedTurnContextFromCapabilityProfile(
+  profile: Pick<ChatTurnCapabilityProfileRecord, "profileId" | "identity" | "catalog" | "hashes">,
+): McpRequesterScopedTurnContextHandle | undefined {
+  const actorId = profile.identity.authActorId;
+  const actorSource = profile.identity.authActorSource;
+  if (!actorId || !isMcpRequesterScopeActorSource(actorSource as ToolPolicyActorContext["authActorSource"])) {
+    return undefined;
+  }
+  try {
+    return createMcpRequesterScopedTurnContext({
+      profileId: profile.profileId,
+      finalProfileSha256: profile.hashes.profileHash,
+      turnId: profile.identity.turnId,
+      sessionId: profile.identity.sessionId,
+      workspaceId: profile.identity.workspaceId,
+      actorId,
+      actorSource: actorSource as McpRequesterScopeAuthActorSource,
+      // The profile freezes ONE callable catalog; base and final are the same
+      // owner value in v1 (no post-freeze catalog mutation path exists).
+      baseCallableCatalogSha256: profile.catalog.callableHash,
+      finalCallableCatalogSha256: profile.catalog.callableHash,
+      callableCatalogSnapshotId: profile.catalog.snapshotId,
+      ...MCP_REQUESTER_COMPOSITION_STATIC_GENERATIONS,
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Brand-checked unwrap. `undefined` for anything that is not a live handle —
+ * including forged plain objects with identical fields — so every consumer
+ * fails closed (`requester_context_missing`) instead of trusting shape.
+ */
+export function readMcpRequesterScopedTurnContext(input: unknown): McpRequesterScopedToolCallTurnContext | undefined {
+  if (typeof input !== "object" || input === null || !requesterScopedTurnContexts.has(input)) {
+    return undefined;
+  }
+  return (input as McpRequesterScopedTurnContextValue)[readRequesterScopedTurnContextSymbol]();
+}
+
 export interface McpRequesterScopedToolCallDispatchInput {
   context: McpRequesterScopedToolCallTurnContext;
   serverId: string;
@@ -2119,9 +2298,11 @@ function reportDiagnostic(
  * `buildRequesterScopedFailure` produces, so the coordinator's requester branch
  * consumes one consistent result: fixed content-free message, the taxonomy code
  * under `output.requesterScoped`, and `failurePhase: "pre_dispatch"` proving
- * the HX-305 effect fence stayed untouched.
+ * the HX-305 effect fence stayed untouched. Exported (slice 7d) so the
+ * gateway dispatch provider fails a missing/forged turn context closed in the
+ * same byte-consistent shape BEFORE this orchestrator can be entered.
  */
-function buildRequesterScopedPreDispatchFailure(
+export function buildRequesterScopedPreDispatchFailure(
   toolName: string,
   reasonCode: McpRequesterResolutionReasonCode,
 ): McpRuntimeInvocationResult {

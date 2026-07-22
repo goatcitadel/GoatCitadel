@@ -47,6 +47,7 @@ import {
   isMcpAuthReadinessInvokeBlocked,
   resolveMcpInvokeAuthReadiness,
 } from "./mcp-oauth-token-service.js";
+import type { McpRequesterScopedTurnContextHandle } from "./mcp-requester-resolution-service.js";
 import type { McpRuntimeInvocationResult } from "./mcp-runtime.js";
 import type {
   PluginToolExecutionContext,
@@ -541,6 +542,14 @@ export interface RequesterScopedMcpDispatchInput {
   toolName: string;
   arguments?: Record<string, unknown>;
   signal?: AbortSignal;
+  /**
+   * HX-415 app-private, server-built turn context. Present ONLY when the
+   * chat-turn runner (which holds the frozen capability profile) threaded a
+   * branded handle through the invocation options — never derived from
+   * `McpInvokeRequest`. The dispatch provider brand-asserts it; a missing or
+   * forged (plain-object) value fails closed `requester_context_missing`.
+   */
+  mcpRequesterTurnContext?: McpRequesterScopedTurnContextHandle;
 }
 
 /**
@@ -670,6 +679,14 @@ export interface ToolInvocationCoordinatorHost {
 export interface ToolInvocationRuntimeOptions {
   /** Process-local cancellation signal for fresh workspace-path verification. */
   workspacePathBridgeSignal?: AbortSignal;
+  /**
+   * HX-415 app-private branded turn context for requester-scoped MCP dispatch.
+   * Originated ONLY by the chat-turn runner from the frozen capability-profile
+   * record; the direct route and approval replay never populate it, so those
+   * paths keep failing closed (`requester_context_missing`) one level deeper.
+   * Never serialized; brand-checked at the dispatch provider.
+   */
+  mcpRequesterTurnContext?: McpRequesterScopedTurnContextHandle;
   /** Process-local durable fence immediately before the main tool executor. */
   executionFence?: () => void;
   /**
@@ -1751,6 +1768,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       runtimeEvaluation.decision.wardEffect,
       undefined,
       options.executionFence,
+      options.mcpRequesterTurnContext,
     );
   }
 
@@ -1908,6 +1926,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     wardEffect?: WardEffect,
     markExternalCallStarted?: () => void,
     executionFence?: () => void,
+    mcpRequesterTurnContext?: McpRequesterScopedTurnContextHandle,
   ): Promise<McpInvokeResponse> {
     // Capability-scope choke point: every MCP invocation path converges here (model
     // approval-replay via invokeApprovedMcpRuntime, plus REST/durable/connector via
@@ -1936,7 +1955,17 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         };
       }
       runtime = await dispatch.invoke(
-        { server, toolName: input.toolName, arguments: input.arguments, signal: input.signal },
+        {
+          server,
+          toolName: input.toolName,
+          arguments: input.arguments,
+          signal: input.signal,
+          // Server-built turn context threads ONLY from the app-private runtime
+          // options (chat-turn runner origin). `McpInvokeRequest` fields can
+          // never populate it; replay/direct callers pass no options context and
+          // therefore fail closed inside the provider.
+          ...(mcpRequesterTurnContext ? { mcpRequesterTurnContext } : {}),
+        },
         {
           effectDispatch: () => {
             executionFence?.();

@@ -18,6 +18,7 @@ import {
   type ToolInvocationCoordinatorHost,
 } from "./tool-invocation-coordinator-service.js";
 import { applyMcpRedaction } from "./mcp-server-policy.js";
+import { createMcpRequesterScopedTurnContext } from "./mcp-requester-resolution-service.js";
 import { MCP_APPROVAL_INBOX_LIST_TOOL_NAME, MCP_APPROVAL_INBOX_URL } from "./mcp-approval-inbox.js";
 import { PluginToolOverrideService } from "./plugin-tool-override-service.js";
 import {
@@ -3538,6 +3539,102 @@ describe("ToolInvocationCoordinatorService requester-scoped MCP seam (HX-415)", 
     expect(dispatchInput).not.toHaveProperty("agentId");
     expect(dispatchInput).not.toHaveProperty("policyContext");
     expect(typeof dispatchOptions.effectDispatch).toBe("function");
+  });
+
+  it("threads the app-private branded turn context from runtime options into the dispatch input", async () => {
+    const invoke = vi.fn(async () => ({ ok: true, output: { payload: "scoped" } }));
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        requireMcpServer: vi.fn(() => requesterScopedServer()),
+        requesterScopedMcpDispatch: { invoke },
+      }),
+    );
+    const mcpRequesterTurnContext = createMcpRequesterScopedTurnContext({
+      profileId: "chat-capability-profile-turn-1",
+      finalProfileSha256: "a".repeat(64),
+      turnId: "turn-1",
+      sessionId: "session-1",
+      workspaceId: "workspace-1",
+      actorId: "operator-1",
+      actorSource: "token",
+      baseCallableCatalogSha256: "b".repeat(64),
+      finalCallableCatalogSha256: "c".repeat(64),
+      callableCatalogSnapshotId: "chat-cap-snap-1",
+      globalNetworkPolicyGeneration: 1,
+      authConnectionGeneration: 1,
+      turnGeneration: 1,
+      preparationGeneration: 1,
+    });
+
+    const response = await coordinator.invokeMcpTool(
+      {
+        serverId: "srv-1",
+        toolName: "tool.echo",
+        agentId: "operator",
+        sessionId: "session-1",
+        arguments: { value: "hello" },
+      },
+      { mcpRequesterTurnContext },
+    );
+
+    expect(response).toMatchObject({ ok: true });
+    expect(invoke).toHaveBeenCalledTimes(1);
+    const [dispatchInput] = invoke.mock.calls[0] as [Record<string, unknown>];
+    // The exact branded handle instance is forwarded — never a copy a body
+    // could substitute — and it comes from options only, not from the request.
+    expect(dispatchInput.mcpRequesterTurnContext).toBe(mcpRequesterTurnContext);
+  });
+
+  it("never forwards a turn context on the approval-replay entry point", async () => {
+    const invoke = vi.fn(async () => ({ ok: true, output: { payload: "scoped" } }));
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        requireMcpServer: vi.fn(() => requesterScopedServer()),
+        requesterScopedMcpDispatch: { invoke },
+      }),
+    );
+
+    await coordinator.invokeApprovedMcpRuntime({
+      serverId: "srv-1",
+      toolName: "tool.echo",
+      agentId: "operator",
+      sessionId: "session-1",
+      arguments: { value: "hello" },
+    });
+
+    expect(invoke).toHaveBeenCalledTimes(1);
+    const [dispatchInput] = invoke.mock.calls[0] as [Record<string, unknown>];
+    // v1 replay floor: the replay path has no runner state and the pending
+    // approval payload carries no turn/profile linkage, so the provider input
+    // carries NO context and the composed provider fails closed
+    // (`requester_context_missing`) — pinned at the composed level too.
+    expect("mcpRequesterTurnContext" in dispatchInput).toBe(false);
+  });
+
+  it("cannot receive requester context from McpInvokeRequest body fields", async () => {
+    const invoke = vi.fn(async () => ({ ok: true, output: {} }));
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        requireMcpServer: vi.fn(() => requesterScopedServer()),
+        requesterScopedMcpDispatch: { invoke },
+      }),
+    );
+
+    await coordinator.invokeMcpTool({
+      serverId: "srv-1",
+      toolName: "tool.echo",
+      agentId: "forged-actor",
+      sessionId: "session-1",
+      workspaceId: "workspace-forged",
+      // Forged body payload attempting to smuggle a context-shaped object.
+      arguments: {
+        mcpRequesterTurnContext: { profileId: "chat-capability-profile-turn-1", actorId: "victim" },
+      },
+    } as never);
+
+    expect(invoke).toHaveBeenCalledTimes(1);
+    const [dispatchInput] = invoke.mock.calls[0] as [Record<string, unknown>];
+    expect("mcpRequesterTurnContext" in dispatchInput).toBe(false);
   });
 
   it("defers HX-305 effect markers into the runtime effect-dispatch callback", async () => {

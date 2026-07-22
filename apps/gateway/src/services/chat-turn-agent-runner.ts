@@ -73,6 +73,10 @@ import type { SystemHeartbeatTurnPrepPosture } from "./chat-turn-prep-service.js
 import { EXPLICIT_WEB_PHRASES, hasLiveDataIntent, hasResearchListIntent } from "../orchestration/live-data-detect.js";
 import type { McpBrowserFallbackTarget } from "./mcp-runtime.js";
 import {
+  buildMcpRequesterScopedTurnContextFromCapabilityProfile,
+  type McpRequesterScopedTurnContextHandle,
+} from "./mcp-requester-resolution-service.js";
+import {
   looksLikePromptLabPromptPackMarkdownImportPrompt,
   looksLikePromptLabPromptPackOperatorSurfacePrompt,
 } from "./prompt-pack-prompt-lab-detectors.js";
@@ -767,7 +771,19 @@ export interface ChatTurnAgentRunnerDeps {
       onEffectReceipt: (receipt: ToolEffectReceiptEnvelope) => void;
     },
   ) => Promise<ToolInvokeResult>;
-  invokeMcpTool?: (request: McpInvokeRequest, options?: { executionFence?: () => void }) => Promise<McpInvokeResponse>;
+  invokeMcpTool?: (
+    request: McpInvokeRequest,
+    options?: {
+      executionFence?: () => void;
+      /**
+       * HX-415 app-private branded turn context. The runner originates it from
+       * the frozen capability-profile record it already holds for the turn;
+       * hosts thread it (never any `McpInvokeRequest` field) to the
+       * requester-scoped dispatch provider, which brand-asserts it.
+       */
+      mcpRequesterTurnContext?: McpRequesterScopedTurnContextHandle;
+    },
+  ) => Promise<McpInvokeResponse>;
   listMcpBrowserFallbackTargets?: () => McpBrowserFallbackTarget[];
   /** Canonical operator decision projection for ordinary Chat tool runs. */
   recordRuntimeDecision?: (input: RuntimeDecisionTraceAppendInput) => void;
@@ -1094,6 +1110,20 @@ export class ChatTurnAgentRunner {
       this.runCanonicalWrite(turnInput, () => undefined);
     };
     return this.deps.invokeTool(request, { executionFence });
+  }
+
+  /**
+   * HX-415: build the branded requester-scoped turn context from the frozen
+   * capability-profile record admitted for this turn. Server-owned state only —
+   * never request/body fields. `undefined` when the turn has no profile or the
+   * profile's actor is outside the requester-scope source union; downstream
+   * requester-scoped dispatch then fails closed (`requester_context_missing`).
+   */
+  private buildTurnMcpRequesterContext(
+    turnInput: Pick<ChatTurnAgentRunnerInput, "capabilityProfile">,
+  ): McpRequesterScopedTurnContextHandle | undefined {
+    const profile = turnInput.capabilityProfile;
+    return profile ? buildMcpRequesterScopedTurnContextFromCapabilityProfile(profile) : undefined;
   }
 
   private patchTurnTrace(
@@ -5476,7 +5506,15 @@ export class ChatTurnAgentRunner {
       if (!this.deps.invokeMcpTool) {
         return Promise.resolve({ ok: false, error: "MCP browser fallback is unavailable." });
       }
-      return this.deps.invokeMcpTool(request, { executionFence: markMainExecutorDispatchStarted });
+      // HX-415: originate the branded requester turn context from the frozen
+      // capability-profile record this turn already holds — the ONLY chat-turn
+      // source of requester authority. Absent/none-actor profiles produce no
+      // context, so a requester-scoped server stays fail-closed downstream.
+      const mcpRequesterTurnContext = this.buildTurnMcpRequesterContext(input.input);
+      return this.deps.invokeMcpTool(request, {
+        executionFence: markMainExecutorDispatchStarted,
+        ...(mcpRequesterTurnContext ? { mcpRequesterTurnContext } : {}),
+      });
     };
 
     try {

@@ -45,6 +45,7 @@ import {
   PolicyViolationError,
   providerAllowsForeignModelIds,
   providerRecognizesModelId,
+  resolveMcpServerConnectionMode,
   ValidationError,
 } from "@goatcitadel/contracts";
 import { buildUnifiedConfigPayload } from "../config-sync-lib.js";
@@ -342,6 +343,11 @@ import type {
   RemoteActionTokenRecord,
 } from "@goatcitadel/contracts";
 import type { ConnectorRecord, ConnectorType } from "@goatcitadel/contracts";
+import type {
+  ChatTurnCapabilityProfileRecord,
+  McpRequesterResolutionBinding,
+  McpRequesterScopeAuthActorSource,
+} from "@goatcitadel/contracts";
 import { AgentSubagentDefaultsSchema, BUILTIN_AGENT_PROFILES } from "@goatcitadel/contracts";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { OrchestrationCheckpoint } from "@goatcitadel/storage";
@@ -353,7 +359,31 @@ import { ApprovalExplainerService } from "./approval-explainer-service.js";
 import { ApprovalWaitRunService } from "./approval-wait-run-service.js";
 import { scoutCapabilityUpgradeSuggestions } from "./chat-capability-scout.js";
 import { classifyCapabilityGapFromTrace } from "./capability-gap-classifier.js";
-import { collectMcpBrowserFallbackTargets, invokeMcpRuntimeTool } from "./mcp-runtime.js";
+import {
+  collectMcpBrowserFallbackTargets,
+  discoverRequesterScopedMcpTools,
+  invokeMcpRuntimeTool,
+  invokeRequesterScopedMcpToolCall,
+} from "./mcp-runtime.js";
+import {
+  McpRequesterResolverRegistry,
+  snapshotMcpRequesterScopedServerSnapshot,
+  type McpRequesterResolverRegistryInput,
+  type McpRequesterScopedServerSnapshot,
+} from "./mcp-requester-resolution.js";
+import {
+  MCP_REQUESTER_COMPOSITION_STATIC_GENERATIONS,
+  McpProfileDiscoveryOutcomeRegistry,
+  McpRequesterResolutionService,
+  buildRequesterScopedPreDispatchFailure,
+  dispatchRequesterScopedToolCall,
+  readMcpRequesterScopedTurnContext,
+  resolveRequesterScopedBindingForProfileFreeze,
+  type McpRequesterScopedFreezeCurrentState,
+  type McpRequesterScopedProfileFreezeHookInput,
+  type McpRequesterScopedToolCallCurrentState,
+} from "./mcp-requester-resolution-service.js";
+import { createMcpRequesterDiscoverySecretScanner } from "./mcp-resolution-secret-guard.js";
 import * as chatMessageHistoryService from "./chat-message-history-service.js";
 import { buildSelectedPathTurnIds } from "./chat-thread-utils.js";
 import * as chatAttachmentService from "./chat-attachment-service.js";
@@ -555,6 +585,8 @@ import { createChatCompactionBreakerActionServiceForGateway } from "./chat-compa
 import type { ChatCompactionBreakerActionService } from "./chat-compaction-breaker-action-service.js";
 import {
   ToolInvocationCoordinatorService,
+  type RequesterScopedMcpDispatchInput,
+  type RequesterScopedMcpDispatchPort,
   type ToolInvocationRuntimeOptions,
 } from "./tool-invocation-coordinator-service.js";
 import { WorkspacePathBridgeRuntime } from "./workspace-path-bridge-runtime.js";
@@ -818,6 +850,313 @@ async function transitionLlamaCppRuntimeConfig(
   await runtime.restoreLifecycleSnapshot(lifecycle);
 }
 
+/**
+ * HX-415 slice 7d composition host. Every port reads LIVE server-owned state on
+ * each call (drift/revocation detection); none of them ever receives
+ * `McpInvokeRequest`/body-derived authority.
+ */
+export interface McpRequesterScopedCompositionHost {
+  /**
+   * Fixed Gateway-owned resolver registry input. Default EMPTY: a stock
+   * deployment has no resolvers, so every requester-scoped server fails closed
+   * (`resolver_missing` at freeze, `requester_context_missing` at invoke).
+   * The packet authorizes no built-in resolver family in v1 and forbids
+   * per-requester credential storage without a new security review; tests and
+   * the proof lane inject resolvers through the Gateway-owned constructor
+   * boundary, which plugins/skills/bodies/Mission Control cannot reach.
+   */
+  resolvers?: McpRequesterResolverRegistryInput;
+  /** Live MCP server records (config owner); re-read on every state check. */
+  listMcpServers(): McpServerRecord[];
+  /** Durable frozen capability-profile record (server-owned storage read); undefined when missing. */
+  getChatTurnCapabilityProfile(profileId: string): ChatTurnCapabilityProfileRecord | undefined;
+  /** Live auth-owner read for the authenticated actor (device/companion grant revocation). */
+  readAuthConnectionState(actor: { actorId: string; actorSource: McpRequesterScopeAuthActorSource }): {
+    revoked: boolean;
+  };
+  getNetworkAllowlist(): readonly string[];
+  /** Content-free diagnostics; receives ONLY fixed taxonomy reason codes, never endpoint/header/cause text. */
+  recordDevDiagnostic(input: {
+    level: "warn";
+    category: "mcp";
+    event: string;
+    message: string;
+    context?: Record<string, unknown>;
+  }): void;
+  now?(): number;
+}
+
+export interface McpRequesterScopedComposedRuntime {
+  /** Profile-freeze hook body for `ChatTurnCapabilityProfileResolveDeps.resolveMcpRequesterResolutionBinding`. */
+  resolveMcpRequesterResolutionBinding(
+    input: McpRequesterScopedProfileFreezeHookInput,
+  ): Promise<McpRequesterResolutionBinding | undefined>;
+  /** App-private coordinator port for `ToolInvocationCoordinatorHost.requesterScopedMcpDispatch`. */
+  requesterScopedMcpDispatch: RequesterScopedMcpDispatchPort;
+}
+
+function isMcpRequesterScopeActorSourceValue(value: unknown): value is McpRequesterScopeAuthActorSource {
+  return value === "token" || value === "basic" || value === "loopback" || value === "device" || value === "companion";
+}
+
+/**
+ * Read the LIVE requester-scoped snapshot for one server id. Returns
+ * `undefined` — which every 7c reader treats as fail-closed
+ * (`server_not_callable`) or "static behavior wins" at the freeze entry — when
+ * the server is missing, disabled, quarantined, not `requester_scoped`, or has
+ * incomplete resolver configuration. A server flipped to static/disabled
+ * mid-flight therefore reads as drift on the next `assertCurrent`.
+ */
+function readLiveRequesterScopedServerSnapshot(
+  host: Pick<McpRequesterScopedCompositionHost, "listMcpServers">,
+  serverId: string,
+): McpRequesterScopedServerSnapshot | undefined {
+  let record: McpServerRecord | undefined;
+  try {
+    record = host.listMcpServers().find((candidate) => candidate.serverId === serverId);
+  } catch {
+    return undefined;
+  }
+  if (!record || !record.enabled || record.trustTier === "quarantined") {
+    return undefined;
+  }
+  try {
+    if (resolveMcpServerConnectionMode(record) !== "requester_scoped") {
+      return undefined;
+    }
+    if (
+      (record.transport !== "http" && record.transport !== "sse") ||
+      typeof record.configurationRevision !== "number" ||
+      !record.requesterResolution
+    ) {
+      return undefined;
+    }
+    return snapshotMcpRequesterScopedServerSnapshot({
+      serverId: record.serverId,
+      transport: record.transport,
+      connectionMode: "requester_scoped",
+      configurationRevision: record.configurationRevision,
+      requesterResolution: {
+        resolverId: record.requesterResolution.resolverId,
+        resolverVersion: record.requesterResolution.resolverVersion,
+        configGeneration: record.requesterResolution.configGeneration,
+        transportPolicy: {
+          allowedSchemes: [...record.requesterResolution.transportPolicy.allowedSchemes],
+          allowedHosts: [...record.requesterResolution.transportPolicy.allowedHosts],
+          allowedPorts: [...record.requesterResolution.transportPolicy.allowedPorts],
+          allowedHeaderNames: [...record.requesterResolution.transportPolicy.allowedHeaderNames],
+        },
+      },
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+type RequesterScopedServerMatch = { kind: "none" } | { kind: "ambiguous" } | { kind: "match"; serverId: string };
+
+/**
+ * Derive the owning requester-scoped server for one canonical
+ * `mcp.<serverId>.<toolName>` name by matching against ACTUAL live server ids
+ * (never by string parsing alone, which would be ambiguous for ids containing
+ * dots). No requester-scoped match ⇒ static behavior wins silently — static
+ * MCP canonical names flow through the same hook. More than one match is
+ * unresolvable and fails closed.
+ */
+function matchRequesterScopedServerByCanonicalToolName(
+  host: Pick<McpRequesterScopedCompositionHost, "listMcpServers">,
+  canonicalToolName: string,
+): RequesterScopedServerMatch {
+  if (!canonicalToolName.startsWith("mcp.")) {
+    return { kind: "none" };
+  }
+  let matches: McpServerRecord[];
+  try {
+    matches = host.listMcpServers().filter((record) => {
+      try {
+        const prefix = `mcp.${record.serverId}.`;
+        return (
+          resolveMcpServerConnectionMode(record) === "requester_scoped" &&
+          canonicalToolName.startsWith(prefix) &&
+          canonicalToolName.length > prefix.length
+        );
+      } catch {
+        return false;
+      }
+    });
+  } catch {
+    return { kind: "none" };
+  }
+  if (matches.length === 0) {
+    return { kind: "none" };
+  }
+  const first = matches[0];
+  if (matches.length > 1 || !first) {
+    return { kind: "ambiguous" };
+  }
+  return { kind: "match", serverId: first.serverId };
+}
+
+/**
+ * HX-415 slice 7d composition root: build the ONE process-wide requester-scoped
+ * MCP runtime — fixed resolver registry (default EMPTY), resolution service,
+ * discovery secret scanner, process-local discovery-outcome registry — and wire
+ * the 7c freeze/invoke orchestrators with the runtime transport drivers
+ * injected as port values. `GatewayService` instantiates this exactly once and
+ * supplies the returned hook to the capability-profile deps and the returned
+ * dispatch port to the tool-invocation coordinator host. Exported so the
+ * composed E2E suite can drive the REAL composition against narrow fake hosts.
+ */
+export function composeMcpRequesterScopedRuntime(
+  host: McpRequesterScopedCompositionHost,
+): McpRequesterScopedComposedRuntime {
+  const registry = new McpRequesterResolverRegistry(host.resolvers ?? { profileDiscovery: [], toolCall: [] });
+  const service = new McpRequesterResolutionService(registry, host.now ? { now: host.now } : undefined);
+  const scanner = createMcpRequesterDiscoverySecretScanner();
+  const outcomes = new McpProfileDiscoveryOutcomeRegistry();
+  const reportDiagnostic = (event: string, reasonCode: string): void => {
+    try {
+      host.recordDevDiagnostic({
+        level: "warn",
+        category: "mcp",
+        event,
+        message: "Requester-scoped MCP resolution failed closed.",
+        context: { reasonCode },
+      });
+    } catch {
+      // Diagnostics are best-effort and never mask the fail-closed result.
+    }
+  };
+
+  const resolveMcpRequesterResolutionBinding = async (
+    hook: McpRequesterScopedProfileFreezeHookInput,
+  ): Promise<McpRequesterResolutionBinding | undefined> => {
+    const match = matchRequesterScopedServerByCanonicalToolName(host, hook.canonicalToolName);
+    if (match.kind === "none") {
+      // Static server (or no requester-scoped owner): the hook yields no
+      // binding and static behavior stays byte-identical. No diagnostic.
+      return undefined;
+    }
+    if (match.kind === "ambiguous") {
+      reportDiagnostic("mcp.requester_resolution.freeze_failed", "requester_context_ambiguous");
+      return undefined;
+    }
+    const serverId = match.serverId;
+    const readCurrentState = (): McpRequesterScopedFreezeCurrentState | undefined => {
+      const server = readLiveRequesterScopedServerSnapshot(host, serverId);
+      if (!server) {
+        return undefined;
+      }
+      // The freeze orchestrator's identity gate runs before any state read, so
+      // these narrows only defend against malformed hook input.
+      if (!hook.authActorId || !isMcpRequesterScopeActorSourceValue(hook.authActorSource)) {
+        return undefined;
+      }
+      const auth = host.readAuthConnectionState({ actorId: hook.authActorId, actorSource: hook.authActorSource });
+      return {
+        revoked: auth.revoked,
+        actorId: hook.authActorId,
+        actorSource: hook.authActorSource,
+        workspaceId: hook.workspaceId,
+        sessionId: hook.sessionId,
+        turnId: hook.turnId,
+        futureProfileId: hook.profileId,
+        // The profile freezes exactly one callable catalog; the pre-discovery
+        // base and the frozen linkage are the same owner value in v1.
+        baseCallableCatalogSha256: hook.callableCatalogSha256,
+        server,
+        ...MCP_REQUESTER_COMPOSITION_STATIC_GENERATIONS,
+        connectionGenerationCurrent: true,
+        rotationGenerationCurrent: true,
+      };
+    };
+    return resolveRequesterScopedBindingForProfileFreeze({
+      hook,
+      service,
+      outcomes,
+      scanner,
+      networkAllowlist: [...host.getNetworkAllowlist()],
+      readCurrentState,
+      discoverTools: discoverRequesterScopedMcpTools,
+      createAttemptId: () => randomUUID(),
+      onDiagnostic: (reasonCode) => reportDiagnostic("mcp.requester_resolution.freeze_failed", reasonCode),
+      ...(host.now ? { now: host.now } : {}),
+    });
+  };
+
+  const requesterScopedMcpDispatch: RequesterScopedMcpDispatchPort = {
+    invoke: async (input: RequesterScopedMcpDispatchInput, options: { effectDispatch: () => void }) => {
+      // Brand-assert the server-built turn context. A missing value (direct
+      // route, approval replay, durable/connector callers) or a forged plain
+      // object copied from any request DTO fails closed BEFORE any registry,
+      // profile, or resolver read — and before the effect fence can be touched.
+      const context = readMcpRequesterScopedTurnContext(input.mcpRequesterTurnContext);
+      if (!context) {
+        reportDiagnostic("mcp.requester_resolution.dispatch_failed", "requester_context_missing");
+        return buildRequesterScopedPreDispatchFailure(input.toolName, "requester_context_missing");
+      }
+      const serverId = input.server.serverId;
+      const readCurrentState = (): McpRequesterScopedToolCallCurrentState | undefined => {
+        const server = readLiveRequesterScopedServerSnapshot(host, serverId);
+        if (!server) {
+          return undefined;
+        }
+        // The DURABLE frozen profile record is the live owner for turn
+        // identity and profile hashes: re-read it from server-owned storage on
+        // every check so a deleted or replaced profile reads as drift.
+        const profile = host.getChatTurnCapabilityProfile(context.profileId);
+        if (!profile) {
+          return undefined;
+        }
+        const identity = profile.identity;
+        if (!identity.authActorId || !isMcpRequesterScopeActorSourceValue(identity.authActorSource)) {
+          return undefined;
+        }
+        const auth = host.readAuthConnectionState({
+          actorId: identity.authActorId,
+          actorSource: identity.authActorSource,
+        });
+        return {
+          revoked: auth.revoked,
+          actorId: identity.authActorId,
+          actorSource: identity.authActorSource,
+          workspaceId: identity.workspaceId,
+          sessionId: identity.sessionId,
+          turnId: identity.turnId,
+          finalProfileId: profile.profileId,
+          finalProfileSha256: profile.hashes.profileHash,
+          baseCallableCatalogSha256: profile.catalog.callableHash,
+          finalCallableCatalogSha256: profile.catalog.callableHash,
+          server,
+          ...MCP_REQUESTER_COMPOSITION_STATIC_GENERATIONS,
+          connectionGenerationCurrent: true,
+          rotationGenerationCurrent: true,
+        };
+      };
+      return dispatchRequesterScopedToolCall({
+        context,
+        serverId,
+        // Canonical name convention pinned by extractMcpRequesterDiscoveryOutputInput.
+        canonicalToolName: `mcp.${serverId}.${input.toolName}`,
+        toolName: input.toolName,
+        ...(input.arguments === undefined ? {} : { arguments: input.arguments }),
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
+        effectDispatch: options.effectDispatch,
+        service,
+        outcomes,
+        scanner,
+        networkAllowlist: [...host.getNetworkAllowlist()],
+        invokeToolCall: invokeRequesterScopedMcpToolCall,
+        readCurrentState,
+        createAttemptId: () => randomUUID(),
+        ...(host.now ? { now: host.now } : {}),
+      });
+    },
+  };
+
+  return { resolveMcpRequesterResolutionBinding, requesterScopedMcpDispatch };
+}
+
 export class GatewayService {
   public config: GatewayRuntimeConfig;
   public readonly storage: Storage;
@@ -878,6 +1217,12 @@ export class GatewayService {
   private readonly chatDelegationService: ChatDelegationService;
   public readonly steerService: ChatSteerService;
   public readonly pluginToolOverrideService: PluginToolOverrideService;
+  /**
+   * HX-415 composed requester-scoped MCP runtime (one per process). Public and
+   * readonly so tests can drive the REAL composed hook/dispatch; the runtime
+   * itself never exposes resolved values, leases, or registry internals.
+   */
+  public readonly mcpRequesterScopedRuntime: McpRequesterScopedComposedRuntime;
   private readonly toolInvocationCoordinator: ToolInvocationCoordinatorService;
   private readonly workspacePathBridgeRuntime: WorkspacePathBridgeRuntime;
   private readonly runtimeLifecycleReadService: RuntimeLifecycleReadService;
@@ -962,7 +1307,17 @@ export class GatewayService {
 
   constructor(
     inputConfig: GatewayRuntimeConfig,
-    options: { sharedHostLifecycle?: SharedHostLifecycleAdmissionPort } = {},
+    options: {
+      sharedHostLifecycle?: SharedHostLifecycleAdmissionPort;
+      /**
+       * HX-415 fixed resolver registry input. Default EMPTY: stock deployments
+       * have no resolvers, so requester-scoped servers fail closed
+       * (`resolver_missing` at freeze / `requester_context_missing` at invoke).
+       * This Gateway-owned constructor boundary is the ONLY registration path —
+       * plugins, skills, request bodies, and Mission Control cannot reach it.
+       */
+      mcpRequesterResolvers?: McpRequesterResolverRegistryInput;
+    } = {},
   ) {
     this.sharedHostLifecycle = options.sharedHostLifecycle ?? new SharedHostLifecycleService({ enabled: false });
     this.config = applyDurableExecutionBaselineToConfig(inputConfig);
@@ -1708,6 +2063,23 @@ export class GatewayService {
         maxDepth: subagentDefaults.maxDepth,
       },
     });
+    // HX-415 slice 7d composition root: build the requester-scoped MCP runtime
+    // exactly once, from server-owned ports only. Resolvers come exclusively
+    // from the Gateway-owned constructor option (default EMPTY = fail closed).
+    this.mcpRequesterScopedRuntime = composeMcpRequesterScopedRuntime({
+      ...(options.mcpRequesterResolvers ? { resolvers: options.mcpRequesterResolvers } : {}),
+      listMcpServers: () => this.readMcpServers(),
+      getChatTurnCapabilityProfile: (profileId) => {
+        try {
+          return this.storage.chatTurnCapabilityProfiles.get(profileId);
+        } catch {
+          return undefined;
+        }
+      },
+      readAuthConnectionState: (actor) => this.readMcpRequesterAuthConnectionState(actor),
+      getNetworkAllowlist: () => this.config.toolPolicy.sandbox.networkAllowlist,
+      recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
+    });
     this.toolInvocationCoordinator = new ToolInvocationCoordinatorService({
       approvalInbox: this.storage.approvalInbox,
       assertMcpServerInScope: (request) => this.assertMcpServerInCapabilityScope(request),
@@ -1789,12 +2161,15 @@ export class GatewayService {
           networkAllowlist: this.config.toolPolicy.sandbox.networkAllowlist,
           oauthAccessTokenResolver: (mcpServer) => this.mcpOAuth.resolveAccessToken(mcpServer),
         }),
-      // HX-415: the requester-scoped dispatch port is intentionally NOT composed
-      // here yet. A requester-scoped server therefore fails closed
-      // (`requester_context_missing`) at the coordinator until a separately
-      // reviewed server-owned auth/profile integration builds requester authority
-      // + an attempt lease and wires `requesterScopedMcpDispatch`. The static host
+      // HX-415 (slice 7d): the requester-scoped dispatch port is composed from
+      // the gateway-owned resolution runtime above. It derives requester
+      // authority ONLY from the branded server-built turn context threaded
+      // through the app-private invocation options (chat-turn runner origin);
+      // callers without that context — the direct route, approval replay,
+      // durable/connector paths — still fail closed `requester_context_missing`
+      // inside the provider, one level deeper than before. The static host
       // port above still forwards only tool name, arguments, and signal.
+      requesterScopedMcpDispatch: this.mcpRequesterScopedRuntime.requesterScopedMcpDispatch,
       evaluateAutonomousActivationGrant: (input) =>
         this.capabilitySystemService.evaluateAutonomousActivationGrant(input),
       recordAutonomousActivationGrantUse: (grantId, estimatedCostUsd) =>
@@ -4955,6 +5330,12 @@ export class GatewayService {
         resolveToolPolicyContext: (policyInput) => this.resolveToolPolicyContext(policyInput),
         resolveToolRuntimeOwnerBinding: (toolName) =>
           this.pluginToolOverrideService.resolveRuntimeOwnerBinding(toolName),
+        // HX-415 (slice 7d): supply the composed freeze hook. The profile
+        // service stays untouched; a requester-scoped binding resolves only
+        // through this server-owned composition (never body fields), and any
+        // failure yields `undefined` so that server is simply not callable.
+        resolveMcpRequesterResolutionBinding: (hookInput) =>
+          this.mcpRequesterScopedRuntime.resolveMcpRequesterResolutionBinding(hookInput),
         getProviderReadiness: (providerId) => {
           const provider = runtime.providers.find((candidate) => candidate.providerId === providerId);
           if (!provider) {
@@ -8299,6 +8680,38 @@ export class GatewayService {
       createSettingsAuthRuntimeDependenciesForGateway(this.getRouteCompositionPort()),
       token,
     );
+  }
+
+  /**
+   * HX-415 live auth-owner read for requester-scoped MCP state checks.
+   * Device/companion actors are checked against their REAL auth owner — the
+   * `auth_device_grants` records (`actorId` = `device:<grantId>`): a revoked or
+   * expired grant reads as `revoked: true`, so every in-flight requester
+   * attempt fails closed on its next `assertCurrent`. Token/basic/loopback
+   * operators have no per-connection auth owner in this repository; their
+   * generation is the documented composition constant and revocation is not
+   * modeled here (route auth already gates each request). An unreadable auth
+   * owner fails closed as revoked.
+   */
+  private readMcpRequesterAuthConnectionState(actor: {
+    actorId: string;
+    actorSource: McpRequesterScopeAuthActorSource;
+  }): { revoked: boolean } {
+    if (actor.actorSource !== "device" && actor.actorSource !== "companion") {
+      return { revoked: false };
+    }
+    try {
+      const grants = settingsAuthService.listDeviceAccessGrants(
+        createSettingsAuthRuntimeDependenciesForGateway(this.getRouteCompositionPort()),
+      );
+      const grant = grants.find((candidate) => candidate.actorId === actor.actorId);
+      const active = Boolean(
+        grant && !grant.revokedAt && (!grant.expiresAt || Date.parse(grant.expiresAt) > Date.now()),
+      );
+      return { revoked: !active };
+    } catch {
+      return { revoked: true };
+    }
   }
 
   public verifyCompanionRequestSignature(input: {
