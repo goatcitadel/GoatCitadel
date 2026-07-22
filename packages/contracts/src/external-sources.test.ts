@@ -20,6 +20,7 @@ import {
   normalizeExternalSourceCreateInput,
   normalizeExternalSourceImportApplyInput,
   normalizeExternalSourceImportPlanInput,
+  normalizeExternalSourceKnowledgeSnapshotApplyInput,
   normalizeExternalSourceKnowledgeSnapshotRequestInput,
   normalizeExternalSourceScanInput,
   normalizeExternalSourceUpdateInput,
@@ -314,6 +315,39 @@ describe("external source contracts", () => {
       assertExternalSourceKnowledgeSnapshotApprovalPayload({ ...payload, knowledgeDocumentId: "inline" } as never),
     ).toThrow(/unsupported or missing/u);
     expect(EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_APPROVAL_KIND).toBe("external_source.knowledge_snapshot");
+  });
+
+  it("normalizes the strict knowledge-snapshot apply input without hash or identity smuggling", () => {
+    const applyInput = normalizeExternalSourceKnowledgeSnapshotApplyInput({
+      workspaceId: "workspace-1",
+      approvalId: "external-knowledge-snapshot-approval-1",
+    });
+    expect(applyInput).toEqual({
+      workspaceId: "workspace-1",
+      approvalId: "external-knowledge-snapshot-approval-1",
+    });
+    expect(
+      normalizeExternalSourceKnowledgeSnapshotApplyInput({
+        workspaceId: "workspace-1",
+        approvalId: "external-knowledge-snapshot-approval-1",
+        includeThreadAttachment: true,
+      }).includeThreadAttachment,
+    ).toBe(true);
+    for (const smuggled of [
+      { normalizedArtifactSha256: hash("a") },
+      { rawSha256: hash("b") },
+      { knowledgeDocumentId: "forged-document" },
+      { linkId: "forged-link" },
+      { actorId: "forged-actor" },
+      { includeThreadAttachment: "yes" },
+    ]) {
+      expect(() => normalizeExternalSourceKnowledgeSnapshotApplyInput({ ...applyInput, ...smuggled })).toThrow(
+        /unsupported or missing/u,
+      );
+    }
+    expect(() => normalizeExternalSourceKnowledgeSnapshotApplyInput({ workspaceId: "workspace-1" })).toThrow(
+      /unsupported or missing/u,
+    );
   });
 
   it("projects content-free list summaries while reserving the exact root for detail", () => {

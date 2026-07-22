@@ -1,15 +1,23 @@
+/* eslint-disable max-lines -- The HX-407 closure packet pins the C2 owner list, so the attachment, knowledge-link, and approved-snapshot materialization owners remain colocated through the parity schema freeze. */
 import { createHash } from "node:crypto";
 import {
   ConflictError,
+  EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_APPROVAL_KIND,
+  EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_KIND,
+  EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_TARGET_KIND,
   NotFoundError,
   assertExternalSessionAttachment,
   assertExternalSourceKnowledgeLink,
+  assertExternalSourceKnowledgeSnapshotApprovalPayload,
   canonicalJsonString,
   type ExternalSessionAttachmentRecord,
   type ExternalSourceKnowledgeLinkRecord,
+  type ExternalSourceKnowledgeSnapshotApprovalPayload,
   type GovernanceJourneyEventRecord,
+  type ThreadKnowledgeAttachmentRecord,
 } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
+import { ChatThreadKnowledgeAttachmentRepository } from "./chat-thread-knowledge-attachment-repo.js";
 import { ExternalSourceImportRepository, verifyExternalSourceImportSettlement } from "./external-source-import-repo.js";
 import { GovernanceJourneyEventRepository } from "./governance-journey-event-repo.js";
 import { safeJsonParse } from "./safe-json.js";
@@ -38,6 +46,63 @@ export interface ExternalSourceKnowledgeDocumentBinding {
     bindingSha256: string;
   };
   metadataJson: string;
+}
+
+export type ExternalSourceKnowledgeSnapshotMaterializationReason =
+  | "approval_not_executable"
+  | "approval_expired"
+  | "attachment_conflict"
+  | "policy_denied";
+
+/** Typed fail-closed outcome of the approved-snapshot materialization transaction. */
+export class ExternalSourceKnowledgeSnapshotMaterializationError extends Error {
+  public constructor(
+    public readonly reason: ExternalSourceKnowledgeSnapshotMaterializationReason,
+    message: string,
+    public readonly reasonCode?: string,
+  ) {
+    super(message);
+    this.name = "ExternalSourceKnowledgeSnapshotMaterializationError";
+  }
+}
+
+export type ExternalSourceKnowledgeSnapshotPolicyDecision =
+  | { decision: "allow" }
+  | { decision: "deny"; reasonCode: string };
+
+export interface ExternalSourceKnowledgeSnapshotChunkDraft {
+  chunkId: string;
+  seq: number;
+  content: string;
+  tokenEstimate: number;
+}
+
+export interface ExternalSourceKnowledgeSnapshotEffectDraft {
+  effectId: string;
+  targetId: string;
+  idempotencyKey: string;
+  payload: Record<string, unknown>;
+  result: Record<string, unknown>;
+}
+
+export interface ExternalSourceKnowledgeSnapshotMaterializationInput {
+  link: ExternalSourceKnowledgeLinkRecord;
+  documentTitle: string;
+  chunks: readonly ExternalSourceKnowledgeSnapshotChunkDraft[];
+  threadAttachment?: ThreadKnowledgeAttachmentRecord;
+  effect: ExternalSourceKnowledgeSnapshotEffectDraft;
+  /** Database rows whose `expires_at` is at or before this instant fail closed. */
+  approvalExpiryCutoffIso: string;
+  createdAt: string;
+  evaluatePolicy: () => ExternalSourceKnowledgeSnapshotPolicyDecision;
+  buildJourneyEvents: (link: ExternalSourceKnowledgeLinkRecord, chunkCount: number) => GovernanceJourneyEventRecord[];
+}
+
+export interface ExternalSourceKnowledgeSnapshotMaterializationResult {
+  link: ExternalSourceKnowledgeLinkRecord;
+  disposition: "created" | "replayed";
+  chunkCount: number;
+  journeyEvents: GovernanceJourneyEventRecord[];
 }
 
 interface ExternalSessionAttachmentRow {
@@ -354,6 +419,13 @@ export class ExternalSourceKnowledgeLinkRepository {
   private readonly approvalStmt;
   private readonly knowledgeDocumentStmt;
   private readonly threadAttachmentStmt;
+  private readonly approvalMaterializationStmt;
+  private readonly attachmentStateStmt;
+  private readonly insertKnowledgeDocumentStmt;
+  private readonly insertKnowledgeChunkStmt;
+  private readonly countKnowledgeChunksStmt;
+  private readonly insertEffectStmt;
+  private readonly effectByIdempotencyKeyStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.insertStmt = db.prepare(`
@@ -392,6 +464,46 @@ export class ExternalSourceKnowledgeLinkRepository {
       LEFT JOIN chat_session_meta m ON m.session_id = a.session_id
       WHERE a.attachment_id = @attachmentId
     `);
+    this.approvalMaterializationStmt = db.prepare(`
+      SELECT approval_id, kind, status, payload_json, expires_at FROM approvals
+      WHERE approval_id = @approvalId
+    `);
+    this.attachmentStateStmt = db.prepare(`
+      SELECT * FROM chat_external_source_attachments
+      WHERE workspace_id = @workspaceId AND attachment_id = @attachmentId
+    `);
+    this.insertKnowledgeDocumentStmt = db.prepare(`
+      INSERT INTO knowledge_documents (
+        doc_id, namespace, source_type, source_ref, title, metadata_json, created_at
+      ) VALUES (
+        @docId, @namespace, @sourceType, @sourceRef, @title, @metadataJson, @createdAt
+      )
+    `);
+    this.insertKnowledgeChunkStmt = db.prepare(`
+      INSERT INTO knowledge_chunks (
+        chunk_id, doc_id, seq, content, embedding_json, embedding_metadata_json, token_estimate, created_at
+      ) VALUES (
+        @chunkId, @docId, @seq, @content, NULL, NULL, @tokenEstimate, @createdAt
+      )
+    `);
+    this.countKnowledgeChunksStmt = db.prepare(`
+      SELECT COUNT(*) AS count FROM knowledge_chunks WHERE doc_id = @docId
+    `);
+    this.insertEffectStmt = db.prepare(`
+      INSERT INTO approval_effects (
+        effect_id, approval_id, effect_kind, target_kind, target_id, idempotency_key, status,
+        attempt_count, payload_json, result_json, version, created_at, updated_at, completed_at
+      ) VALUES (
+        @effectId, @approvalId, @effectKind, @targetKind, @targetId, @idempotencyKey, 'completed',
+        1, @payloadJson, @resultJson, 1, @createdAt, @createdAt, @createdAt
+      )
+      ON CONFLICT(idempotency_key) DO NOTHING
+    `);
+    this.effectByIdempotencyKeyStmt = db.prepare(`
+      SELECT effect_id, approval_id, effect_kind, target_kind, target_id, idempotency_key, status, payload_json
+      FROM approval_effects
+      WHERE idempotency_key = @idempotencyKey
+    `);
   }
 
   public create(input: ExternalSourceKnowledgeLinkRecord): ExternalSourceKnowledgeLinkRecord {
@@ -401,6 +513,220 @@ export class ExternalSourceKnowledgeLinkRepository {
     const stored = this.get(input.workspaceId, input.linkId);
     assertExactReplay(stored, input, `External source knowledge link ${input.linkId}`);
     return stored;
+  }
+
+  /**
+   * HX-407 C2: materialize one approved knowledge snapshot atomically. Under a
+   * single immediate transaction it revalidates the exact approval row (kind,
+   * approved status, canonical payload, database expiry), the live attachment
+   * state the approval froze (status, revision, immutable identity chain),
+   * re-evaluates the injected deny-wins policy, then writes the deterministic
+   * knowledge document, its chunks, the optional ordinary thread knowledge
+   * attachment, the immutable approval-effect knowledge link, the terminal
+   * `external_source_knowledge_snapshot_apply` effect row, and the bound
+   * content-free Journey evidence. Any failure rolls the whole transaction
+   * back; partial state is impossible. An exact replay of the same approval
+   * converges on the stored link and its original Journey events and
+   * materializes nothing new. This is the only sanctioned writer for the
+   * approved external-source knowledge copy; it never calls the public ingest
+   * path.
+   */
+  public materializeApprovedSnapshotWithJourney(
+    input: ExternalSourceKnowledgeSnapshotMaterializationInput,
+  ): ExternalSourceKnowledgeSnapshotMaterializationResult {
+    verifyExternalSourceKnowledgeLink(input.link);
+    assertMaterializationShape(input);
+    return this.db.transaction("immediate", () => {
+      const journeys = new GovernanceJourneyEventRepository(this.db);
+      const existing = this.find(input.link.workspaceId, input.link.linkId);
+      if (existing) {
+        assertKnowledgeLinkImmutableIdentity(existing, input.link);
+        this.assertMaterializedEffectRow(existing, input.effect, { requireExisting: true });
+        const chunkCount = this.countChunks(existing.knowledgeDocumentId);
+        const journeyEvents = this.createBoundKnowledgeJourneyEvents(journeys, existing, chunkCount, input);
+        return { link: existing, disposition: "replayed" as const, chunkCount, journeyEvents };
+      }
+
+      const payload = this.requireExecutableApproval(input.link, input.approvalExpiryCutoffIso);
+      this.requireApprovedAttachmentState(input.link, payload);
+      const decision = input.evaluatePolicy();
+      if (decision.decision !== "allow") {
+        throw new ExternalSourceKnowledgeSnapshotMaterializationError(
+          "policy_denied",
+          `External source knowledge snapshot ${input.link.linkId} was denied by current policy.`,
+          decision.reasonCode,
+        );
+      }
+
+      const binding = buildExternalSourceKnowledgeDocumentBinding(input.link);
+      this.insertKnowledgeDocumentStmt.run({
+        docId: input.link.knowledgeDocumentId,
+        namespace: binding.namespace,
+        sourceType: binding.sourceType,
+        sourceRef: binding.sourceRef,
+        title: input.documentTitle,
+        metadataJson: binding.metadataJson,
+        createdAt: input.createdAt,
+      });
+      for (const chunk of input.chunks) {
+        this.insertKnowledgeChunkStmt.run({
+          chunkId: chunk.chunkId,
+          docId: input.link.knowledgeDocumentId,
+          seq: chunk.seq,
+          content: chunk.content,
+          tokenEstimate: chunk.tokenEstimate,
+          createdAt: input.createdAt,
+        });
+      }
+      if (input.threadAttachment) {
+        new ChatThreadKnowledgeAttachmentRepository(this.db).create(input.threadAttachment);
+      }
+      const stored = this.create(input.link);
+      this.insertEffectStmt.run({
+        effectId: input.effect.effectId,
+        approvalId: input.link.approvalId,
+        effectKind: EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_KIND,
+        targetKind: EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_TARGET_KIND,
+        targetId: input.effect.targetId,
+        idempotencyKey: input.effect.idempotencyKey,
+        payloadJson: canonicalJsonString(input.effect.payload),
+        resultJson: canonicalJsonString(input.effect.result),
+        createdAt: input.createdAt,
+      });
+      this.assertMaterializedEffectRow(stored, input.effect, { requireExisting: true });
+      const journeyEvents = this.createBoundKnowledgeJourneyEvents(journeys, stored, input.chunks.length, input);
+      return { link: stored, disposition: "created" as const, chunkCount: input.chunks.length, journeyEvents };
+    });
+  }
+
+  /**
+   * The C1-review precondition, re-verified at the insert site: the frozen
+   * `external_source_knowledge_snapshot_apply` / `external_source_import_item`
+   * vocabulary must land verbatim in `approval_effects`. A schema gate (CHECK
+   * constraint, trigger, or coercion) would surface here as an exact mismatch.
+   */
+  private assertMaterializedEffectRow(
+    link: ExternalSourceKnowledgeLinkRecord,
+    effect: ExternalSourceKnowledgeSnapshotEffectDraft,
+    options: { requireExisting: boolean },
+  ): void {
+    const row = this.effectByIdempotencyKeyStmt.get({ idempotencyKey: effect.idempotencyKey }) as
+      | {
+          effect_id: string;
+          approval_id: string;
+          effect_kind: string;
+          target_kind: string;
+          target_id: string;
+          status: string;
+          payload_json: string;
+        }
+      | undefined;
+    if (!row) {
+      if (!options.requireExisting) return;
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: `External source knowledge snapshot ${link.linkId} lacks its terminal effect row.`,
+      });
+    }
+    if (
+      row.approval_id !== link.approvalId ||
+      row.effect_kind !== EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_KIND ||
+      row.target_kind !== EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_TARGET_KIND ||
+      row.target_id !== effect.targetId ||
+      row.payload_json !== canonicalJsonString(effect.payload)
+    ) {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: `External source knowledge snapshot ${link.linkId} effect row does not carry the frozen effect vocabulary and payload.`,
+      });
+    }
+  }
+
+  private requireExecutableApproval(
+    link: ExternalSourceKnowledgeLinkRecord,
+    approvalExpiryCutoffIso: string,
+  ): ExternalSourceKnowledgeSnapshotApprovalPayload {
+    const row = this.approvalMaterializationStmt.get({ approvalId: link.approvalId }) as
+      | { approval_id: string; kind: string; status: string; payload_json: string; expires_at: string | null }
+      | undefined;
+    if (!row) throw new NotFoundError({ entity: "approval", id: link.approvalId });
+    const payload = safeJsonParse<Record<string, unknown> | undefined>(row.payload_json, undefined);
+    if (row.kind !== EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_APPROVAL_KIND || row.status !== "approved" || !payload) {
+      throw new ExternalSourceKnowledgeSnapshotMaterializationError(
+        "approval_not_executable",
+        `External source knowledge snapshot approval ${link.approvalId} is not an executable approved request.`,
+      );
+    }
+    if (row.expires_at !== null && row.expires_at <= approvalExpiryCutoffIso) {
+      throw new ExternalSourceKnowledgeSnapshotMaterializationError(
+        "approval_expired",
+        `External source knowledge snapshot approval ${link.approvalId} has expired.`,
+      );
+    }
+    const approvalPayload = payload as unknown as ExternalSourceKnowledgeSnapshotApprovalPayload;
+    try {
+      assertExternalSourceKnowledgeSnapshotApprovalPayload(approvalPayload);
+    } catch {
+      throw new ExternalSourceKnowledgeSnapshotMaterializationError(
+        "approval_not_executable",
+        `External source knowledge snapshot approval ${link.approvalId} carries a non-canonical payload.`,
+      );
+    }
+    if (
+      approvalPayload.workspaceId !== link.workspaceId ||
+      approvalPayload.sourceId !== link.sourceId ||
+      approvalPayload.importId !== link.importId ||
+      approvalPayload.itemId !== link.itemId ||
+      approvalPayload.normalizedArtifactSha256 !== link.normalizedArtifactSha256
+    ) {
+      throw new ExternalSourceKnowledgeSnapshotMaterializationError(
+        "approval_not_executable",
+        `External source knowledge snapshot approval ${link.approvalId} does not bind this immutable import item.`,
+      );
+    }
+    return approvalPayload;
+  }
+
+  private requireApprovedAttachmentState(
+    link: ExternalSourceKnowledgeLinkRecord,
+    payload: ExternalSourceKnowledgeSnapshotApprovalPayload,
+  ): void {
+    const row = this.attachmentStateStmt.get({
+      workspaceId: link.workspaceId,
+      attachmentId: payload.attachmentId,
+    }) as ExternalSessionAttachmentRow | undefined;
+    const attachment = row ? mapAndVerifyAttachmentRow(row) : undefined;
+    if (
+      !attachment ||
+      attachment.sessionId !== payload.sessionId ||
+      attachment.status !== "attached" ||
+      attachment.revision !== payload.attachmentRevision ||
+      attachment.sourceId !== link.sourceId ||
+      attachment.importId !== link.importId ||
+      attachment.itemId !== link.itemId ||
+      attachment.normalizedArtifactSha256 !== link.normalizedArtifactSha256
+    ) {
+      throw new ExternalSourceKnowledgeSnapshotMaterializationError(
+        "attachment_conflict",
+        `External source knowledge snapshot approval ${link.approvalId} no longer matches its live attachment state.`,
+      );
+    }
+  }
+
+  private createBoundKnowledgeJourneyEvents(
+    journeys: GovernanceJourneyEventRepository,
+    link: ExternalSourceKnowledgeLinkRecord,
+    chunkCount: number,
+    input: ExternalSourceKnowledgeSnapshotMaterializationInput,
+  ): GovernanceJourneyEventRecord[] {
+    const events = input.buildJourneyEvents(link, chunkCount);
+    assertKnowledgeSnapshotJourneyBinding(events, link);
+    return events.map((event) => journeys.create(event));
+  }
+
+  private countChunks(docId: string): number {
+    const row = this.countKnowledgeChunksStmt.get({ docId }) as { count: number | bigint } | undefined;
+    return Number(row?.count ?? 0);
   }
 
   public get(workspaceId: string, linkId: string): ExternalSourceKnowledgeLinkRecord {
@@ -644,6 +970,105 @@ function assertIndexedColumns(row: object, expected: Record<string, unknown>, la
     const raw = (row as Record<string, unknown>)[key];
     const actual = typeof value === "number" ? Number(raw) : raw;
     if (actual !== value) throw new Error(`${label} failed indexed-column verification at ${key}.`);
+  }
+}
+
+function assertMaterializationShape(input: ExternalSourceKnowledgeSnapshotMaterializationInput): void {
+  if (typeof input.documentTitle !== "string" || !input.documentTitle.trim() || input.documentTitle.length > 256) {
+    throw new TypeError("External source knowledge snapshot document title is invalid.");
+  }
+  assertIdentifier(input.createdAt, "createdAt");
+  assertIdentifier(input.approvalExpiryCutoffIso, "approvalExpiryCutoffIso");
+  assertIdentifier(input.effect.effectId, "effectId");
+  assertIdentifier(input.effect.targetId, "targetId");
+  assertIdentifier(input.effect.idempotencyKey, "idempotencyKey");
+  if (!Array.isArray(input.chunks)) throw new TypeError("External source knowledge snapshot chunks are invalid.");
+  input.chunks.forEach((chunk, index) => {
+    if (
+      chunk.seq !== index ||
+      typeof chunk.content !== "string" ||
+      !Number.isSafeInteger(chunk.tokenEstimate) ||
+      chunk.tokenEstimate < 0
+    ) {
+      throw new TypeError("External source knowledge snapshot chunk drafts are invalid.");
+    }
+    assertIdentifier(chunk.chunkId, "chunkId");
+  });
+  if (input.threadAttachment) {
+    if (input.link.threadKnowledgeAttachmentId !== input.threadAttachment.attachmentId) {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: `External source knowledge snapshot ${input.link.linkId} thread attachment identity is unbound.`,
+      });
+    }
+    if (
+      input.threadAttachment.documentId !== input.link.knowledgeDocumentId ||
+      input.threadAttachment.ingestStatus !== "ready"
+    ) {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: `External source knowledge snapshot ${input.link.linkId} thread attachment binding is invalid.`,
+      });
+    }
+  } else if (input.link.threadKnowledgeAttachmentId !== undefined) {
+    throw new ConflictError({
+      code: "STATE_CONFLICT",
+      message: `External source knowledge snapshot ${input.link.linkId} names a thread attachment it does not materialize.`,
+    });
+  }
+}
+
+/**
+ * Replay convergence compares only the approval-bound immutable identity; the
+ * stored materialization (including its thread-attachment disposition and
+ * clocks) is the deterministic truth a replay converges on.
+ */
+function assertKnowledgeLinkImmutableIdentity(
+  current: ExternalSourceKnowledgeLinkRecord,
+  next: ExternalSourceKnowledgeLinkRecord,
+): void {
+  if (
+    current.schemaVersion !== next.schemaVersion ||
+    current.linkId !== next.linkId ||
+    current.workspaceId !== next.workspaceId ||
+    current.sourceId !== next.sourceId ||
+    current.importId !== next.importId ||
+    current.itemId !== next.itemId ||
+    current.normalizedArtifactSha256 !== next.normalizedArtifactSha256 ||
+    current.approvalId !== next.approvalId ||
+    current.knowledgeDocumentId !== next.knowledgeDocumentId
+  ) {
+    throw new ConflictError({
+      code: "STATE_CONFLICT",
+      message: `External source knowledge link ${current.linkId} immutable identity conflicts with the stored materialization.`,
+    });
+  }
+}
+
+function assertKnowledgeSnapshotJourneyBinding(
+  events: readonly GovernanceJourneyEventRecord[],
+  link: ExternalSourceKnowledgeLinkRecord,
+): void {
+  const actions = events.map((event) => event.action);
+  const bound = events.every(
+    (event) =>
+      event.scopeKind === "workspace" &&
+      event.workspaceId === link.workspaceId &&
+      event.eventType === "knowledge_snapshot_lifecycle" &&
+      event.subjectId === link.linkId &&
+      event.approvalId === link.approvalId &&
+      event.sourceKind === "external_source" &&
+      event.sourceId === link.sourceId &&
+      event.provenance.sourceRequired === true &&
+      event.provenance.approvalRequired === true &&
+      (event.action === "snapshot_created" || event.action === "attached"),
+  );
+  if (
+    !bound ||
+    actions.filter((action) => action === "snapshot_created").length !== 1 ||
+    actions.includes("attached") !== Boolean(link.threadKnowledgeAttachmentId)
+  ) {
+    throw new Error("External source knowledge snapshot Journey evidence is not bound to its immutable link record.");
   }
 }
 

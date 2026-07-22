@@ -3,6 +3,7 @@ import {
   EXTERNAL_SOURCE_SCHEMA_VERSION,
   isGovernanceJourneyEventRecord,
   type ExternalSessionAttachmentRecord,
+  type ExternalSourceKnowledgeSnapshotApprovalPayload,
 } from "@goatcitadel/contracts";
 import {
   computeExternalSourceArtifactSetSha256,
@@ -18,6 +19,7 @@ import {
 import {
   buildExternalSourceAttachmentJourneyEvent,
   buildExternalSourceDryRunJourneyEvent,
+  buildExternalSourceKnowledgeSnapshotJourneyEvent,
   buildExternalSourceSettlementJourneyEvent,
 } from "./external-source-journey-producer.js";
 
@@ -200,6 +202,115 @@ describe("external source Journey producer", () => {
         sessionIncarnationId,
       }),
     ).toThrow(/lacks lifecycle evidence/u);
+  });
+
+  it("produces deterministic content-free knowledge-snapshot lifecycle evidence with exact approval binding", () => {
+    const payload: ExternalSourceKnowledgeSnapshotApprovalPayload = {
+      workspaceId: "workspace-1",
+      sourceId: "source-1",
+      importId: "import-1",
+      itemId: "item-1",
+      normalizedArtifactSha256: "e".repeat(64),
+      rawSha256: "d".repeat(64),
+      sessionId: "session-1",
+      sessionIncarnationId: "lifecycle-intent-1",
+      attachmentId: "external-attachment-1",
+      attachmentRevision: 1,
+    };
+    const approvalId = "external-knowledge-snapshot-1";
+    const requested = buildExternalSourceKnowledgeSnapshotJourneyEvent({
+      action: "approval_requested",
+      payload,
+      approvalId,
+      actorId: "operator-1",
+      occurredAt: "2026-07-14T08:08:00.000Z",
+    });
+    expect(isGovernanceJourneyEventRecord(requested)).toBe(true);
+    expect(requested).toMatchObject({
+      eventType: "knowledge_snapshot_lifecycle",
+      subjectKind: "external_source_knowledge_snapshot",
+      subjectId: approvalId,
+      action: "approval_requested",
+      approvalId,
+      sourceKind: "external_source",
+      sourceId: "source-1",
+      provenance: expect.objectContaining({ sourceRequired: true, approvalRequired: false }),
+    });
+    expect(
+      buildExternalSourceKnowledgeSnapshotJourneyEvent({
+        action: "approval_requested",
+        payload,
+        approvalId,
+        actorId: "operator-1",
+        occurredAt: "2026-07-14T08:08:00.000Z",
+      }),
+    ).toEqual(requested);
+
+    const materialized = {
+      linkId: "external-knowledge-link-1",
+      knowledgeDocumentId: "external-knowledge-doc-1",
+      chunkCount: 3,
+      threadKnowledgeAttachmentId: "external-knowledge-thread-1",
+    };
+    const created = buildExternalSourceKnowledgeSnapshotJourneyEvent({
+      action: "snapshot_created",
+      payload,
+      approvalId,
+      actorId: "operator-1",
+      occurredAt: "2026-07-14T08:09:00.000Z",
+      materialized,
+    });
+    const attached = buildExternalSourceKnowledgeSnapshotJourneyEvent({
+      action: "attached",
+      payload,
+      approvalId,
+      actorId: "operator-1",
+      occurredAt: "2026-07-14T08:09:00.000Z",
+      materialized,
+    });
+    for (const event of [created, attached]) {
+      expect(isGovernanceJourneyEventRecord(event)).toBe(true);
+      expect(event.subjectId).toBe(materialized.linkId);
+      expect(event.approvalId).toBe(approvalId);
+      expect(event.provenance).toMatchObject({ sourceRequired: true, approvalRequired: true });
+      expect(event.evidenceRefs).toEqual([
+        { owner: "approval", refId: approvalId },
+        { owner: "external_source", refId: payload.importId },
+      ]);
+    }
+    expect(created.fingerprint).not.toBe(attached.fingerprint);
+    expect(created.eventId).not.toBe(attached.eventId);
+    expect(JSON.stringify({ requested, created, attached })).not.toContain("transcript");
+
+    expect(() =>
+      buildExternalSourceKnowledgeSnapshotJourneyEvent({
+        action: "snapshot_created",
+        payload,
+        approvalId,
+        actorId: "operator-1",
+        occurredAt: "2026-07-14T08:09:00.000Z",
+      }),
+    ).toThrow(/requires the materialized identities/u);
+    expect(() =>
+      buildExternalSourceKnowledgeSnapshotJourneyEvent({
+        action: "attached",
+        payload,
+        approvalId,
+        actorId: "operator-1",
+        occurredAt: "2026-07-14T08:09:00.000Z",
+        materialized: { ...materialized, threadKnowledgeAttachmentId: undefined },
+      }),
+    ).toThrow(/requires the thread attachment identity/u);
+    expect(() =>
+      buildExternalSourceKnowledgeSnapshotJourneyEvent({
+        action: "approval_requested",
+        payload,
+        approvalId,
+        actorId: "operator-1",
+        occurredAt: "2026-07-14T08:08:00.000Z",
+        materialized,
+      }),
+    ).toThrow(/carry no materialized identities/u);
   });
 });
 

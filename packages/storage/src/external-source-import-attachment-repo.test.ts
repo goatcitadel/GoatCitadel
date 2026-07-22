@@ -19,8 +19,10 @@ import { ExternalSourceScanRepository } from "./external-source-scan-repo.js";
 import {
   ExternalSessionAttachmentRepository,
   ExternalSourceKnowledgeLinkRepository,
+  ExternalSourceKnowledgeSnapshotMaterializationError,
   buildExternalSourceKnowledgeDocumentBinding,
   sealExternalSourceKnowledgeLink,
+  type ExternalSourceKnowledgeSnapshotMaterializationInput,
 } from "./external-session-attachment-repo.js";
 import {
   buildExternalSourceImportFixture,
@@ -95,6 +97,144 @@ function attachmentJourneyEvent(attachment: ExternalSessionAttachmentRecord): Go
 
 function sha256(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+/**
+ * Test-local mirror of the Gateway knowledge-snapshot Journey producer: every
+ * field derives from the immutable link record so replays rebuild identically.
+ */
+function knowledgeSnapshotJourneyEvent(
+  link: ReturnType<typeof sealExternalSourceKnowledgeLink>,
+  chunkCount: number,
+): GovernanceJourneyEventRecord {
+  const fingerprint = sha256(
+    canonicalJsonString({
+      action: "snapshot_created",
+      approvalId: link.approvalId,
+      linkId: link.linkId,
+      knowledgeDocumentId: link.knowledgeDocumentId,
+      normalizedArtifactSha256: link.normalizedArtifactSha256,
+      chunkCount,
+    }),
+  );
+  return {
+    schemaVersion: GOVERNANCE_JOURNEY_EVENT_VERSION,
+    eventId: `journey-external-source-snapshot-created-${fingerprint.slice(0, 40)}`,
+    idempotencyKey: `knowledge-snapshot-lifecycle:v1:snapshot_created:${fingerprint}`,
+    scopeKind: "workspace",
+    workspaceId: link.workspaceId,
+    eventType: "knowledge_snapshot_lifecycle",
+    subjectKind: "external_source_knowledge_snapshot",
+    subjectId: link.linkId,
+    action: "snapshot_created",
+    actorId: "operator-1",
+    actorType: "operator",
+    approvalId: link.approvalId,
+    fingerprint,
+    sourceKind: "external_source",
+    sourceId: link.sourceId,
+    trustDisposition: "approved_snapshot",
+    poisoningStatus: "clean",
+    evidenceRefs: [
+      { owner: "approval", refId: link.approvalId },
+      { owner: "external_source", refId: link.importId },
+    ],
+    provenance: { sourceRequired: true, approvalRequired: true },
+    summary: {
+      approvalId: link.approvalId,
+      linkId: link.linkId,
+      knowledgeDocumentId: link.knowledgeDocumentId,
+      chunkCount,
+    },
+    occurredAt: link.createdAt,
+    recordedAt: link.createdAt,
+  };
+}
+
+const SNAPSHOT_ROW_COUNT_TABLES = [
+  "knowledge_documents",
+  "knowledge_chunks",
+  "external_source_knowledge_links",
+  "chat_thread_knowledge_attachments",
+  "approval_effects",
+  "governance_journey_events",
+  "learned_memory_items",
+  "candidate_skill_versions",
+] as const;
+
+function snapshotRowCounter(db: DatabaseClient): () => Record<string, number> {
+  return () =>
+    Object.fromEntries(
+      SNAPSHOT_ROW_COUNT_TABLES.map((table) => [
+        table,
+        Number((db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count),
+      ]),
+    );
+}
+
+function seedApprovedSnapshotContext(db: DatabaseClient, approvalId: string) {
+  const { fixture, imports } = seedImport(db);
+  imports.settle(fixture.settlement, fixture.importItems);
+  insertSyntheticChatSession(db);
+  const attachment = new ExternalSessionAttachmentRepository(db).attach(fixture.attachment);
+  const importItem = fixture.importItems[0]!;
+  const payload = {
+    workspaceId: fixture.config.workspaceId,
+    sourceId: fixture.config.sourceId,
+    importId: fixture.intent.importId,
+    itemId: importItem.itemId,
+    normalizedArtifactSha256: importItem.normalizedArtifactSha256,
+    rawSha256: importItem.rawSha256,
+    sessionId: attachment.sessionId,
+    sessionIncarnationId: `legacy-session-incarnation:${attachment.sessionId}`,
+    attachmentId: attachment.attachmentId,
+    attachmentRevision: attachment.revision,
+  };
+  db.prepare(
+    `
+    INSERT INTO approvals (
+      approval_id, kind, risk_level, status, payload_json, preview_json, explanation_status,
+      created_at, expires_at, resolved_at, resolved_by
+    ) VALUES (
+      @approvalId, 'external_source.knowledge_snapshot', 'danger', 'approved', @payloadJson, '{}',
+      'not_requested', '2026-07-14T08:07:00.000Z', '2026-07-15T08:07:00.000Z',
+      '2026-07-14T08:08:00.000Z', 'operator-1'
+    )
+  `,
+  ).run({ approvalId, payloadJson: canonicalJsonString(payload) });
+
+  const link = sealExternalSourceKnowledgeLink({
+    schemaVersion: fixture.config.schemaVersion,
+    linkId: `knowledge-link-${approvalId}`,
+    workspaceId: fixture.config.workspaceId,
+    sourceId: fixture.config.sourceId,
+    importId: fixture.intent.importId,
+    itemId: importItem.itemId,
+    normalizedArtifactSha256: importItem.normalizedArtifactSha256,
+    approvalId,
+    knowledgeDocumentId: `knowledge-doc-${approvalId}`,
+    createdAt: "2026-07-14T08:09:00.000Z",
+  });
+  const input: ExternalSourceKnowledgeSnapshotMaterializationInput = {
+    link,
+    documentTitle: `External source snapshot ${importItem.itemId}`,
+    chunks: [
+      { chunkId: `chunk-${approvalId}-0`, seq: 0, content: "first deterministic chunk\n", tokenEstimate: 7 },
+      { chunkId: `chunk-${approvalId}-1`, seq: 1, content: "second deterministic chunk", tokenEstimate: 7 },
+    ],
+    effect: {
+      effectId: `effect-${approvalId}`,
+      targetId: `${fixture.intent.importId}:${importItem.itemId}`,
+      idempotencyKey: `${approvalId}:external_source_knowledge_snapshot_apply:external_source_import_item:${fixture.intent.importId}:${importItem.itemId}`,
+      payload: { ...payload, linkId: link.linkId, knowledgeDocumentId: link.knowledgeDocumentId },
+      result: { linkId: link.linkId, knowledgeDocumentId: link.knowledgeDocumentId, chunkCount: 2 },
+    },
+    approvalExpiryCutoffIso: "2026-07-14T09:00:00.000Z",
+    createdAt: "2026-07-14T08:09:00.000Z",
+    evaluatePolicy: () => ({ decision: "allow" }),
+    buildJourneyEvents: (storedLink, chunkCount) => [knowledgeSnapshotJourneyEvent(storedLink, chunkCount)],
+  };
+  return { fixture, attachment, approvalId, payload, input };
 }
 
 function seedImport(db: DatabaseClient) {
@@ -445,6 +585,145 @@ describe("HX-407 external source import, attachment, and knowledge-link reposito
       /not bound to its immutable attachment record/u,
     );
     assert.equal(attachments.find(fixture.attachment.workspaceId, fixture.attachment.attachmentId), undefined);
+  });
+
+  it("materializes one approved knowledge snapshot atomically with frozen effect vocabulary and exact replay", () => {
+    const db = createStore();
+    const context = seedApprovedSnapshotContext(db, "approval-materialize-1");
+    const links = new ExternalSourceKnowledgeLinkRepository(db);
+    const countRows = snapshotRowCounter(db);
+
+    const before = countRows();
+    const created = links.materializeApprovedSnapshotWithJourney(context.input);
+    assert.equal(created.disposition, "created");
+    assert.equal(created.chunkCount, 2);
+    assert.deepEqual(created.link, context.input.link);
+    assert.equal(created.journeyEvents.length, 1);
+    assert.equal(created.journeyEvents[0]!.action, "snapshot_created");
+
+    // C1-review precondition, proven at the live insert site: the frozen
+    // effect/target vocabulary landed verbatim with no schema gate in the way.
+    const effectRow = db
+      .prepare("SELECT approval_id, effect_kind, target_kind, target_id, status FROM approval_effects")
+      .get() as Record<string, unknown>;
+    assert.deepEqual(
+      { ...effectRow },
+      {
+        approval_id: context.approvalId,
+        effect_kind: "external_source_knowledge_snapshot_apply",
+        target_kind: "external_source_import_item",
+        target_id: context.input.effect.targetId,
+        status: "completed",
+      },
+    );
+    const documentRow = db
+      .prepare("SELECT namespace, source_type, source_ref, metadata_json FROM knowledge_documents WHERE doc_id = ?")
+      .get(context.input.link.knowledgeDocumentId) as Record<string, unknown>;
+    const binding = buildExternalSourceKnowledgeDocumentBinding(context.input.link);
+    assert.deepEqual(
+      { ...documentRow },
+      {
+        namespace: binding.namespace,
+        source_type: binding.sourceType,
+        source_ref: binding.sourceRef,
+        metadata_json: binding.metadataJson,
+      },
+    );
+    const chunkContents = db
+      .prepare("SELECT content FROM knowledge_chunks WHERE doc_id = ? ORDER BY seq ASC")
+      .all(context.input.link.knowledgeDocumentId) as Array<{ content: string }>;
+    assert.deepEqual(
+      chunkContents.map((row) => row.content),
+      context.input.chunks.map((chunk) => chunk.content),
+    );
+
+    const replay = links.materializeApprovedSnapshotWithJourney(context.input);
+    assert.equal(replay.disposition, "replayed");
+    assert.equal(replay.chunkCount, 2);
+    assert.deepEqual(replay.link, created.link);
+    const after = countRows();
+    assert.deepEqual(after, {
+      ...before,
+      knowledge_documents: before.knowledge_documents + 1,
+      knowledge_chunks: before.knowledge_chunks + 2,
+      external_source_knowledge_links: before.external_source_knowledge_links + 1,
+      approval_effects: before.approval_effects + 1,
+      governance_journey_events: before.governance_journey_events + 1,
+    });
+  });
+
+  it("fails the whole materialization transaction closed with a zero row delta", () => {
+    const db = createStore();
+    const context = seedApprovedSnapshotContext(db, "approval-materialize-2");
+    const links = new ExternalSourceKnowledgeLinkRepository(db);
+    const countRows = snapshotRowCounter(db);
+    const before = countRows();
+
+    // Fault injection at the last write inside the transaction: the document,
+    // chunks, link, and effect rows are already written when the Journey
+    // builder throws, and every one of them must roll back.
+    assert.throws(
+      () =>
+        links.materializeApprovedSnapshotWithJourney({
+          ...context.input,
+          buildJourneyEvents: () => {
+            const partial = db.prepare("SELECT COUNT(*) AS count FROM knowledge_documents").get() as {
+              count: number;
+            };
+            assert.equal(Number(partial.count), 1, "fault must fire after the document write");
+            throw new Error("injected crash before Journey commit");
+          },
+        }),
+      /injected crash before Journey commit/u,
+    );
+    assert.deepEqual(countRows(), before, "a Journey failure must roll the whole materialization back");
+
+    assert.throws(
+      () =>
+        links.materializeApprovedSnapshotWithJourney({
+          ...context.input,
+          evaluatePolicy: () => ({ decision: "deny", reasonCode: "workspace_policy_flip" }),
+        }),
+      (error: unknown) =>
+        error instanceof ExternalSourceKnowledgeSnapshotMaterializationError &&
+        error.reason === "policy_denied" &&
+        error.reasonCode === "workspace_policy_flip",
+    );
+    assert.throws(
+      () =>
+        links.materializeApprovedSnapshotWithJourney({
+          ...context.input,
+          approvalExpiryCutoffIso: "2026-07-16T00:00:00.000Z",
+        }),
+      (error: unknown) =>
+        error instanceof ExternalSourceKnowledgeSnapshotMaterializationError && error.reason === "approval_expired",
+    );
+
+    db.prepare("UPDATE approvals SET status = 'rejected' WHERE approval_id = ?").run(context.approvalId);
+    assert.throws(
+      () => links.materializeApprovedSnapshotWithJourney(context.input),
+      (error: unknown) =>
+        error instanceof ExternalSourceKnowledgeSnapshotMaterializationError &&
+        error.reason === "approval_not_executable",
+    );
+    db.prepare("UPDATE approvals SET status = 'approved' WHERE approval_id = ?").run(context.approvalId);
+
+    new ExternalSessionAttachmentRepository(db).detachCas(
+      {
+        ...context.attachment,
+        status: "detached",
+        revision: 2,
+        detachedByActorId: "operator-1",
+        detachedAt: "2026-07-14T08:30:00.000Z",
+      },
+      1,
+    );
+    assert.throws(
+      () => links.materializeApprovedSnapshotWithJourney(context.input),
+      (error: unknown) =>
+        error instanceof ExternalSourceKnowledgeSnapshotMaterializationError && error.reason === "attachment_conflict",
+    );
+    assert.deepEqual(countRows(), before, "every fail-closed path must leave a zero row delta");
   });
 
   it("rejects unrelated and cross-workspace knowledge documents before linking", () => {

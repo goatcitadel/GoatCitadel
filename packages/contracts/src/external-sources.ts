@@ -15,6 +15,17 @@ export const EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_APPROVAL_KIND = "external_source
 export const EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_KIND = "external_source_knowledge_snapshot_apply" as const;
 /** The sole approval-effect target kind for the knowledge-snapshot effect. */
 export const EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_TARGET_KIND = "external_source_import_item" as const;
+/**
+ * Bounded lifetime of one deterministic knowledge-snapshot approval. The apply
+ * effect fails closed once this window elapses; a fresh request is required.
+ */
+export const EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_APPROVAL_TTL_MS = 24 * 60 * 60_000;
+/**
+ * Deterministic chunking bound for approved knowledge-snapshot materialization.
+ * Chunk boundaries derive only from the immutable normalized artifact text, so
+ * one approved request always yields byte-identical chunk content.
+ */
+export const EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_CHUNK_MAX_CHARS = 4_000;
 /** Session incarnation identifiers follow the chat lifecycle column bound. */
 export const EXTERNAL_SOURCE_SESSION_INCARNATION_MAX_LENGTH = 320;
 
@@ -421,6 +432,17 @@ export interface ExternalSourceKnowledgeSnapshotRequestMaterial {
   preview: ExternalSourceKnowledgeSnapshotApprovalPreview;
 }
 
+/**
+ * Apply request for one approved knowledge-snapshot effect. It carries the
+ * approval identity only; every hash, artifact byte, and materialized identity
+ * is server-derived from the immutable approval payload and import evidence.
+ */
+export interface ExternalSourceKnowledgeSnapshotApplyInput {
+  workspaceId: string;
+  approvalId: string;
+  includeThreadAttachment?: boolean;
+}
+
 export interface ExternalSessionAttachmentResponse {
   schemaVersion: typeof EXTERNAL_SOURCE_SCHEMA_VERSION;
   attachment: ExternalSessionAttachmentRecord;
@@ -755,6 +777,24 @@ export function normalizeExternalSourceKnowledgeSnapshotRequestInput(
       value.expectedAttachmentRevision,
       "expectedAttachmentRevision",
     ),
+  };
+}
+
+export function normalizeExternalSourceKnowledgeSnapshotApplyInput(
+  value: unknown,
+): ExternalSourceKnowledgeSnapshotApplyInput {
+  assertRecord(value, "knowledge snapshot apply input");
+  assertExactKeys(
+    value,
+    ["workspaceId", "approvalId", "includeThreadAttachment"],
+    new Set(["includeThreadAttachment"]),
+  );
+  if (value.includeThreadAttachment !== undefined && typeof value.includeThreadAttachment !== "boolean")
+    throw new Error("External source record contains unsupported or missing fields.");
+  return {
+    workspaceId: normalizeInputText(value.workspaceId, "workspaceId", 256),
+    approvalId: normalizeInputText(value.approvalId, "approvalId", 256),
+    ...(value.includeThreadAttachment === undefined ? {} : { includeThreadAttachment: value.includeThreadAttachment }),
   };
 }
 

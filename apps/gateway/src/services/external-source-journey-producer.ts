@@ -7,6 +7,7 @@ import {
   type ExternalSourceImportItem,
   type ExternalSourceImportPlan,
   type ExternalSourceImportSettlement,
+  type ExternalSourceKnowledgeSnapshotApprovalPayload,
   type GovernanceJourneyEventRecord,
 } from "@goatcitadel/contracts";
 
@@ -212,6 +213,128 @@ export function buildExternalSourceAttachmentJourneyEvent(input: {
     },
     occurredAt,
     recordedAt: occurredAt,
+  };
+}
+
+export type ExternalSourceKnowledgeSnapshotJourneyAction = "approval_requested" | "snapshot_created" | "attached";
+
+/**
+ * Content-free evidence for the governed knowledge-snapshot lifecycle. The
+ * request action shares the approval transaction; creation and attach share
+ * the recovered approval-effect transaction. Every field derives from the
+ * immutable approval payload plus server-derived materialized identities, so
+ * exact replays rebuild the identical event and never append recurrence. The
+ * `snapshot_created` and `attached` actions require the real approval and are
+ * the only external-source events with `approvalRequired: true`.
+ */
+export function buildExternalSourceKnowledgeSnapshotJourneyEvent(input: {
+  action: ExternalSourceKnowledgeSnapshotJourneyAction;
+  payload: ExternalSourceKnowledgeSnapshotApprovalPayload;
+  approvalId: string;
+  actorId: string;
+  occurredAt: string;
+  materialized?: {
+    linkId: string;
+    knowledgeDocumentId: string;
+    chunkCount: number;
+    threadKnowledgeAttachmentId?: string;
+  };
+}): GovernanceJourneyEventRecord {
+  const { action, payload } = input;
+  if (action === "approval_requested" && input.materialized) {
+    throw new Error("Knowledge-snapshot approval requests carry no materialized identities.");
+  }
+  if (action !== "approval_requested" && !input.materialized) {
+    throw new Error(`Knowledge-snapshot ${action} evidence requires the materialized identities.`);
+  }
+  if (action === "attached" && !input.materialized?.threadKnowledgeAttachmentId) {
+    throw new Error("Knowledge-snapshot attached evidence requires the thread attachment identity.");
+  }
+  const approvalRequired = action !== "approval_requested";
+  const fingerprint = digest({
+    action,
+    approvalId: input.approvalId,
+    workspaceId: payload.workspaceId,
+    sourceId: payload.sourceId,
+    importId: payload.importId,
+    itemId: payload.itemId,
+    normalizedArtifactSha256: payload.normalizedArtifactSha256,
+    rawSha256: payload.rawSha256,
+    sessionId: payload.sessionId,
+    sessionIncarnationId: payload.sessionIncarnationId,
+    attachmentId: payload.attachmentId,
+    attachmentRevision: payload.attachmentRevision,
+    ...(input.materialized
+      ? {
+          linkId: input.materialized.linkId,
+          knowledgeDocumentId: input.materialized.knowledgeDocumentId,
+          chunkCount: input.materialized.chunkCount,
+          ...(input.materialized.threadKnowledgeAttachmentId
+            ? { threadKnowledgeAttachmentId: input.materialized.threadKnowledgeAttachmentId }
+            : {}),
+        }
+      : {}),
+  });
+  const subjectId = input.materialized ? input.materialized.linkId : input.approvalId;
+  return {
+    schemaVersion: GOVERNANCE_JOURNEY_EVENT_VERSION,
+    eventId: eventId(action, payload.workspaceId, subjectId, fingerprint),
+    idempotencyKey: `knowledge-snapshot-lifecycle:v1:${action}:${digest({
+      workspaceId: payload.workspaceId,
+      subjectId,
+      fingerprint,
+    })}`,
+    scopeKind: "workspace",
+    workspaceId: payload.workspaceId,
+    eventType: "knowledge_snapshot_lifecycle",
+    subjectKind: "external_source_knowledge_snapshot",
+    subjectId,
+    action,
+    actorId: input.actorId,
+    actorType: "operator",
+    sessionId: payload.sessionId,
+    approvalId: input.approvalId,
+    fingerprint,
+    sourceKind: "external_source",
+    sourceId: payload.sourceId,
+    trustDisposition: approvalRequired ? "approved_snapshot" : "evidence_only",
+    poisoningStatus: "clean",
+    evidenceRefs: [
+      { owner: "approval", refId: input.approvalId },
+      { owner: "external_source", refId: payload.importId },
+    ],
+    provenance: {
+      sourceRequired: true,
+      approvalRequired,
+      sourceWorkspaceId: payload.workspaceId,
+      sessionIncarnationId: payload.sessionIncarnationId,
+      importId: payload.importId,
+      itemId: payload.itemId,
+      attachmentId: payload.attachmentId,
+      attachmentRevision: payload.attachmentRevision,
+      normalizedArtifactSha256: payload.normalizedArtifactSha256,
+      rawSha256: payload.rawSha256,
+    },
+    summary: {
+      approvalId: input.approvalId,
+      sourceId: payload.sourceId,
+      importId: payload.importId,
+      itemId: payload.itemId,
+      attachmentId: payload.attachmentId,
+      normalizedArtifactSha256: payload.normalizedArtifactSha256,
+      ...(input.materialized
+        ? {
+            linkId: input.materialized.linkId,
+            knowledgeDocumentId: input.materialized.knowledgeDocumentId,
+            chunkCount: input.materialized.chunkCount,
+            ...(input.materialized.threadKnowledgeAttachmentId
+              ? { threadKnowledgeAttachmentId: input.materialized.threadKnowledgeAttachmentId }
+              : {}),
+          }
+        : {}),
+    },
+    occurredAt: input.occurredAt,
+    recordedAt: input.occurredAt,
   };
 }
 
