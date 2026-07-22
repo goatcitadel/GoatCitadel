@@ -162,14 +162,16 @@ const SNAPSHOT_ROW_COUNT_TABLES = [
   "candidate_skill_versions",
 ] as const;
 
-function snapshotRowCounter(db: DatabaseClient): () => Record<string, number> {
+type SnapshotRowCounts = Record<(typeof SNAPSHOT_ROW_COUNT_TABLES)[number], number>;
+
+function snapshotRowCounter(db: DatabaseClient): () => SnapshotRowCounts {
   return () =>
     Object.fromEntries(
       SNAPSHOT_ROW_COUNT_TABLES.map((table) => [
         table,
         Number((db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count),
       ]),
-    );
+    ) as SnapshotRowCounts;
 }
 
 function seedApprovedSnapshotContext(db: DatabaseClient, approvalId: string) {

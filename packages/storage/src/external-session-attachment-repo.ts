@@ -650,8 +650,12 @@ export class ExternalSourceKnowledgeLinkRepository {
       | { approval_id: string; kind: string; status: string; payload_json: string; expires_at: string | null }
       | undefined;
     if (!row) throw new NotFoundError({ entity: "approval", id: link.approvalId });
-    const payload = safeJsonParse<Record<string, unknown> | undefined>(row.payload_json, undefined);
-    if (row.kind !== EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_APPROVAL_KIND || row.status !== "approved" || !payload) {
+    const rawPayload = safeJsonParse<Record<string, unknown> | undefined>(row.payload_json, undefined);
+    // Approval resolution re-embeds its linkage into payload_json under this
+    // well-known key (see approval-repo.ts); the canonical request payload is
+    // everything else, so strip it before the exact-key canonical assert.
+    const { __gcApprovalLinkage: _linkage, ...payload } = rawPayload ?? {};
+    if (row.kind !== EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_APPROVAL_KIND || row.status !== "approved" || !rawPayload) {
       throw new ExternalSourceKnowledgeSnapshotMaterializationError(
         "approval_not_executable",
         `External source knowledge snapshot approval ${link.approvalId} is not an executable approved request.`,
