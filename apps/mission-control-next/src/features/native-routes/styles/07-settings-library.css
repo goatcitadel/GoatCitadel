@@ -1440,3 +1440,136 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* HX-407 C3: Library external-sources section (register / scan / catalog /
+   dry-run / apply / provenance). Inert while the runtime keeps the routes
+   dark; classes follow the settings-library grammar above. */
+.mc-next-ext-source-list {
+  display: grid;
+  gap: 0.42rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mc-next-ext-source-row {
+  display: grid;
+  gap: 0.24rem;
+  width: 100%;
+  padding: 0.54rem 0.62rem;
+  text-align: left;
+  border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
+  border-radius: var(--r-md);
+  background: color-mix(in oklab, var(--card) 94%, transparent);
+  color: inherit;
+  cursor: pointer;
+}
+
+.mc-next-ext-source-row:hover {
+  border-color: color-mix(in oklab, var(--accent) 34%, var(--border));
+}
+
+.mc-next-ext-source-row.is-selected {
+  border-color: color-mix(in oklab, var(--accent) 52%, var(--border));
+  background: color-mix(in oklab, var(--accent) 8%, var(--card));
+}
+
+.mc-next-ext-source-row strong {
+  font-size: var(--text-md);
+}
+
+.mc-next-ext-source-row > span {
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+}
+
+.mc-next-ext-source-row-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.mc-next-ext-source-register {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0 0 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid color-mix(in oklab, var(--accent) 30%, var(--border));
+  border-radius: var(--r-md);
+}
+
+.mc-next-ext-source-register legend {
+  padding: 0 0.3rem;
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  font-weight: 750;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.mc-next-ext-source-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  cursor: pointer;
+}
+
+.mc-next-ext-source-catalog {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.mc-next-ext-source-catalog h4 {
+  margin: 0;
+  font-size: var(--text-2xs);
+  font-weight: 750;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.mc-next-ext-source-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.42rem 0.55rem;
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--card) 92%, transparent);
+}
+
+.mc-next-ext-source-item-path {
+  font-family: var(--mc-font-mono);
+  font-size: var(--text-2xs);
+  overflow-wrap: anywhere;
+}
+
+.mc-next-ext-source-item-meta {
+  flex: 1;
+  min-width: 10rem;
+  color: var(--text-muted);
+  font-family: var(--mc-font-mono);
+  font-size: var(--text-2xs);
+  overflow-wrap: anywhere;
+}
+
+.mc-next-ext-source-provenance {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.mc-next-ext-source-footnote {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+}
+
+@media (max-width: 720px) {
+  .mc-next-ext-source-item {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

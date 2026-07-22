@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- The C3 closure-packet owner list pins the composer to this single file; the HX-407 external-source strip pushes it past the soft cap and the packet forbids splitting it. */
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { ChatAttachmentActions } from "@goatcitadel/mission-control-shared/components/chat/ChatAttachmentActions";
 import { ChatComposerPlusMenu } from "@goatcitadel/mission-control-shared/components/ChatComposerPlusMenu";
@@ -384,6 +385,174 @@ function ComposerCoworkStop({ props }: { props: MissionThreadedActiveSessionSurf
   );
 }
 
+type ThreadedExternalSourceControls = NonNullable<MissionThreadedActiveSessionSurfaceProps["externalSourceControls"]>;
+
+/**
+ * HX-407 C3 read-only external-source strip: content-free chips, explicit
+ * per-turn selection, exact-CAS detach, and the governed knowledge-copy
+ * request. Rendered only when the runtime composes the capability (the host
+ * passes `null` while the Chat attachment routes are absent), so the strip is
+ * inert until C4. Chips never render transcript content or raw JSON, and no
+ * affordance edits the immutable imported evidence.
+ */
+function ExternalSourceStrip({ controls, disabled }: { controls: ThreadedExternalSourceControls; disabled: boolean }) {
+  const stripInstanceId = useId();
+  const [attachFormOpen, setAttachFormOpen] = useState(false);
+  const [attachSourceId, setAttachSourceId] = useState("");
+  const [attachImportId, setAttachImportId] = useState("");
+  const [attachItemId, setAttachItemId] = useState("");
+  const selectedCount = controls.selectedAttachmentIds.length;
+  const attachReady =
+    controls.canMutate && attachSourceId.trim() !== "" && attachImportId.trim() !== "" && attachItemId.trim() !== "";
+  const mutationHint = controls.canMutate
+    ? null
+    : "Attach, detach, and knowledge-copy actions stay disabled until the external-source runtime is fully composed.";
+
+  return (
+    <section className="mc-next-composer-external-strip" aria-label="Read-only external source attachments">
+      <div className="mc-next-composer-external-head">
+        <strong>External sources</strong>
+        <span aria-live="polite">
+          {selectedCount > 0
+            ? `${selectedCount} selected for the next turn`
+            : "Select attachments to include in the next turn."}
+        </span>
+        {selectedCount > 0 ? (
+          <button
+            type="button"
+            className="mc-next-composer-inline-button"
+            onClick={controls.onClearSelection}
+            aria-label="Clear the external source selection"
+          >
+            Clear selection
+          </button>
+        ) : null}
+        <button
+          type="button"
+          className="mc-next-composer-inline-button"
+          aria-expanded={attachFormOpen}
+          onClick={() => setAttachFormOpen((current) => !current)}
+        >
+          {attachFormOpen ? "Close attach form" : "Attach imported item"}
+        </button>
+      </div>
+      {controls.error ? (
+        <p className="mc-next-composer-external-error" role="alert">
+          {controls.error}
+        </p>
+      ) : null}
+      {mutationHint ? <p className="mc-next-composer-external-hint">{mutationHint}</p> : null}
+      {attachFormOpen ? (
+        <div className="mc-next-composer-external-attach-form">
+          <label htmlFor={`${stripInstanceId}-source`}>
+            <span>Source id</span>
+            <input
+              id={`${stripInstanceId}-source`}
+              value={attachSourceId}
+              disabled={disabled || !controls.canMutate}
+              onChange={(event) => setAttachSourceId(event.target.value)}
+            />
+          </label>
+          <label htmlFor={`${stripInstanceId}-import`}>
+            <span>Import id</span>
+            <input
+              id={`${stripInstanceId}-import`}
+              value={attachImportId}
+              disabled={disabled || !controls.canMutate}
+              onChange={(event) => setAttachImportId(event.target.value)}
+            />
+          </label>
+          <label htmlFor={`${stripInstanceId}-item`}>
+            <span>Item id</span>
+            <input
+              id={`${stripInstanceId}-item`}
+              value={attachItemId}
+              disabled={disabled || !controls.canMutate}
+              onChange={(event) => setAttachItemId(event.target.value)}
+            />
+          </label>
+          <button
+            type="button"
+            className="mc-next-composer-inline-button"
+            disabled={disabled || !attachReady}
+            onClick={() => {
+              controls.onAttach({
+                sourceId: attachSourceId.trim(),
+                importId: attachImportId.trim(),
+                itemId: attachItemId.trim(),
+              });
+              setAttachFormOpen(false);
+              setAttachSourceId("");
+              setAttachImportId("");
+              setAttachItemId("");
+            }}
+          >
+            Attach read-only
+          </button>
+        </div>
+      ) : null}
+      {controls.attachments.length === 0 ? (
+        <p className="mc-next-composer-external-hint">
+          No external sources are attached to this session. Import them in the Library first.
+        </p>
+      ) : (
+        <ul role="list" className="mc-next-composer-external-list">
+          {controls.attachments.map((attachment) => {
+            const busy = controls.busyAttachmentId !== null;
+            const selected = controls.selectedAttachmentIds.includes(attachment.attachmentId);
+            const checkboxId = `${stripInstanceId}-select-${attachment.attachmentId}`;
+            return (
+              <li key={attachment.attachmentId} className="mc-next-composer-external-chip">
+                <div className="mc-next-composer-external-chip-body">
+                  <label className="mc-next-composer-external-select" htmlFor={checkboxId}>
+                    <input
+                      id={checkboxId}
+                      type="checkbox"
+                      checked={selected}
+                      disabled={disabled}
+                      onChange={() => controls.onToggleSelect(attachment.attachmentId)}
+                      aria-label={`Include external source ${attachment.itemId} in the next turn`}
+                    />
+                    <strong>{attachment.itemId}</strong>
+                  </label>
+                  <p
+                    className="mc-next-composer-external-meta"
+                    title={`Source ${attachment.sourceId} · Import ${attachment.importId} · Item ${attachment.itemId}`}
+                  >
+                    Read-only external · rev {attachment.revision} · sha{" "}
+                    {attachment.normalizedArtifactSha256.slice(0, 12)}…
+                  </p>
+                </div>
+                <div className="mc-next-composer-external-chip-actions">
+                  <StatusChip tone="muted">Read-only</StatusChip>
+                  <button
+                    type="button"
+                    className="mc-next-composer-inline-button"
+                    disabled={disabled || busy || !controls.canMutate}
+                    onClick={() => controls.onRequestKnowledgeSnapshot(attachment.attachmentId)}
+                    aria-label={`Request a governed knowledge copy of ${attachment.itemId}`}
+                  >
+                    Request knowledge copy
+                  </button>
+                  <button
+                    type="button"
+                    className="mc-next-composer-inline-button"
+                    disabled={disabled || busy || !controls.canMutate}
+                    onClick={() => controls.onDetach(attachment.attachmentId)}
+                    aria-label={`Detach external source ${attachment.itemId}`}
+                  >
+                    Detach
+                  </button>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessionSurfaceProps }) {
   const threadKnowledgeAttachments = props.threadKnowledgeAttachments ?? [];
   const presetOptions = props.presetOptions ?? [];
@@ -448,7 +617,8 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
     props.contextSelection ||
     props.outboundContext ||
     props.pendingAttachments.length > 0 ||
-    threadKnowledgeAttachments.length > 0,
+    threadKnowledgeAttachments.length > 0 ||
+    (props.externalSourceControls?.selectedAttachmentIds.length ?? 0) > 0,
   );
   const personality = getComposerPersonality(props);
   const plusActions = [
@@ -929,6 +1099,10 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
             </div>
           ))}
         </div>
+      ) : null}
+
+      {props.externalSourceControls ? (
+        <ExternalSourceStrip controls={props.externalSourceControls} disabled={composerActionDisabled} />
       ) : null}
 
       <div className="mc-next-composer-controls">
