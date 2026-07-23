@@ -61,6 +61,8 @@ const routeMocks = vi.hoisted(() => {
   };
 });
 
+const journeyMocks = vi.hoisted(() => ({ fetchJourneyTimeline: vi.fn() }));
+
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   activateImprovementCandidate: routeMocks.activateImprovementCandidate,
   addTaskDeliverable: routeMocks.addTaskDeliverable,
@@ -107,6 +109,10 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   updateSkillState: routeMocks.updateSkillState,
   updateTask: routeMocks.updateTask,
   validateImprovementCandidate: routeMocks.validateImprovementCandidate,
+}));
+
+vi.mock("@goatcitadel/mission-control-shared/api/journey", () => ({
+  fetchJourneyTimeline: journeyMocks.fetchJourneyTimeline,
 }));
 
 vi.mock("./SettingsNativePage", () => ({
@@ -481,6 +487,59 @@ function setupResponses() {
       },
     ],
   });
+  journeyMocks.fetchJourneyTimeline.mockResolvedValue({
+    schemaVersion: "goatcitadel.journey-timeline-page.v1",
+    readOnly: true,
+    mutationSemantics: "none",
+    workspaceId: "default",
+    includeGlobal: false,
+    items: [
+      {
+        eventId: "event-snapshot-created",
+        eventFingerprint: "fingerprint-1",
+        category: "provenance",
+        scopeKind: "workspace",
+        workspaceId: "default",
+        eventType: "knowledge_snapshot_lifecycle",
+        subjectKind: "external_source_knowledge_snapshot",
+        subjectId: "link-1",
+        action: "snapshot_created",
+        actorId: "operator-1",
+        actorType: "operator",
+        approvalId: "approval-1",
+        sourceKind: "external_source",
+        sourceId: "source-1",
+        trustDisposition: "approved_snapshot",
+        poisoningStatus: "clean",
+        evidenceRefs: [],
+        evidence: {
+          health: "complete",
+          sourceLinked: true,
+          approvalLinked: true,
+          requiresSource: true,
+          requiresApproval: true,
+          requirementsDeclared: true,
+          trustContribution: "evidence_only",
+          blockerCodes: [],
+        },
+        provenance: {},
+        summary: {
+          approvalId: "approval-1",
+          sourceId: "source-1",
+          importId: "import-1",
+          itemId: "item-1",
+          attachmentId: "attachment-1",
+          normalizedArtifactSha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          linkId: "link-1",
+          knowledgeDocumentId: "knowledge-doc-1",
+          chunkCount: 3,
+        },
+        occurredAt: "2026-05-01T00:00:00.000Z",
+        recordedAt: "2026-05-01T00:00:00.000Z",
+      },
+    ],
+    generatedAt: "2026-05-01T00:00:00.000Z",
+  });
   routeMocks.fetchFilesList.mockResolvedValue({
     items: [{ relativePath: "docs/brief.md", size: 1024, modifiedAt: "2026-05-01T00:00:00.000Z" }],
   });
@@ -744,6 +803,13 @@ describe("NativeRoutePages library coverage", () => {
     expect(collectText(knowledge.root)).toContain("Distilled context.");
     expect(collectText(knowledge.root)).toContain("Ingestion health");
     expect(collectText(knowledge.root)).toContain("Retrieval test");
+    expect(journeyMocks.fetchJourneyTimeline).toHaveBeenCalledWith({
+      workspaceId: "default",
+      eventTypes: ["knowledge_snapshot_lifecycle"],
+      limit: 8,
+    });
+    expect(collectText(knowledge.root)).toContain("Recovered external snapshots");
+    expect(collectText(knowledge.root)).toContain("Snapshot created");
     expect(routeMocks.downloadFile).toHaveBeenCalledWith("memory/workspace.md");
     await change(knowledge.root.findByProps({ placeholder: "Search the knowledge file list" }), "workspace");
     expect(collectText(knowledge.root)).toContain("memory/workspace.md");

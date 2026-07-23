@@ -9,6 +9,7 @@ import {
   fetchEngineeringLearnings,
   requestEngineeringLearningAction,
 } from "@goatcitadel/mission-control-shared/api/client";
+import { fetchJourneyTimeline } from "@goatcitadel/mission-control-shared/api/journey";
 import type { EngineeringLearningStatus } from "@goatcitadel/contracts";
 import { NativeCard } from "../NativeRoutePageLayout";
 import type { NativeRoutePagesProps } from "../types";
@@ -36,15 +37,75 @@ import {
 import { LibraryExternalSourcesSection } from "./LibraryExternalSourcesSection";
 
 /**
- * HX-407 provenance cross-link: knowledge documents recovered from governed
- * external-source snapshots materialize under this namespace segment, so the
- * knowledge browser can tag them and point at the External sources panel that
- * owns their full content-free provenance chain.
+ * HX-407 provenance cross-link: knowledge recovered from governed external
+ * sources materializes as knowledge_documents rows under the
+ * workspace/<id>/external-source-snapshots namespace — never as files under
+ * the memory directory — so this browser projects the Journey
+ * knowledge_snapshot_lifecycle evidence instead of tagging memory file paths.
+ * The External sources panel below owns the full content-free provenance
+ * chain; per the HX-407 rules this projection stays read-only and content-free
+ * (identifiers and truncated hashes only, no transcript bytes).
  */
-const EXTERNAL_SNAPSHOT_PATH_SEGMENT = "external-source-snapshots";
+const KNOWLEDGE_SNAPSHOT_LIFECYCLE_EVENT_TYPE = "knowledge_snapshot_lifecycle";
+const RECOVERED_SNAPSHOT_EVENT_LIMIT = 8;
+const RECOVERED_SNAPSHOT_HASH_PREVIEW_CHARS = 12;
 
-export function isRecoveredExternalKnowledgePath(relativePath: string): boolean {
-  return relativePath.includes(EXTERNAL_SNAPSHOT_PATH_SEGMENT);
+const RECOVERED_SNAPSHOT_ACTION_LABELS: Record<string, string> = {
+  approval_requested: "Approval requested",
+  snapshot_created: "Snapshot created",
+  attached: "Attached to thread",
+};
+
+type RecoveredSnapshotEvent = Awaited<ReturnType<typeof fetchJourneyTimeline>>["items"][number];
+
+function readSummaryString(summary: Record<string, unknown>, key: string): string | null {
+  const value = summary[key];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function readSummaryCount(summary: Record<string, unknown>, key: string): number | null {
+  const value = summary[key];
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+function formatRecoveredSnapshotHash(value: string | null): string {
+  if (!value) {
+    return "hash unavailable";
+  }
+  if (value.length <= RECOVERED_SNAPSHOT_HASH_PREVIEW_CHARS) {
+    return value;
+  }
+  return `${value.slice(0, RECOVERED_SNAPSHOT_HASH_PREVIEW_CHARS)}…`;
+}
+
+function formatRecoveredSnapshotItem(event: RecoveredSnapshotEvent): {
+  id: string;
+  label: string;
+  description: string;
+  meta: string;
+} {
+  const documentId = readSummaryString(event.summary, "knowledgeDocumentId");
+  const chunkCount = readSummaryCount(event.summary, "chunkCount");
+  const importId = readSummaryString(event.summary, "importId");
+  const description = documentId
+    ? [
+        `Knowledge document ${documentId}`,
+        chunkCount === null ? null : `${chunkCount} chunks`,
+        importId ? `import ${importId}` : null,
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : "Knowledge-copy request recorded — no document is materialized by this event.";
+  const artifactHash = formatRecoveredSnapshotHash(readSummaryString(event.summary, "normalizedArtifactSha256"));
+  const approvalId = event.approvalId ?? readSummaryString(event.summary, "approvalId");
+  return {
+    id: event.eventId,
+    label: RECOVERED_SNAPSHOT_ACTION_LABELS[event.action] ?? event.action,
+    description,
+    meta: [`artifact ${artifactHash}`, approvalId ? `approval ${approvalId}` : null, formatDateTime(event.occurredAt)]
+      .filter(Boolean)
+      .join(" · "),
+  };
 }
 
 export function LibraryKnowledgeSection(props: NativeRoutePagesProps) {
@@ -62,7 +123,7 @@ export function LibraryKnowledgeSection(props: NativeRoutePagesProps) {
   const { loading, error, data, reload } = useAsyncLoad(async () => {
     const settings = await nativeLoad("Runtime settings", fetchSettings(), null);
     const learningsEnabled = settings.data?.features?.engineeringLearningsV1Enabled === true;
-    const [files, qmd, learnings] = await Promise.all([
+    const [files, qmd, learnings, recovered] = await Promise.all([
       nativeLoad("Memory files", fetchMemoryFiles("memory"), { items: [] }),
       nativeLoad("QMD stats", fetchMemoryQmdStats(undefined, undefined, 8), null),
       learningsEnabled
@@ -72,13 +133,23 @@ export function LibraryKnowledgeSection(props: NativeRoutePagesProps) {
             { items: [] },
           )
         : Promise.resolve({ data: { items: [] }, issue: null }),
+      nativeLoad(
+        "Recovered external snapshots",
+        fetchJourneyTimeline({
+          workspaceId: activeWorkspaceId,
+          eventTypes: [KNOWLEDGE_SNAPSHOT_LIFECYCLE_EVENT_TYPE],
+          limit: RECOVERED_SNAPSHOT_EVENT_LIMIT,
+        }),
+        null,
+      ),
     ]);
     return {
-      issues: nativeLoadIssues([settings, files, qmd, learnings]),
+      issues: nativeLoadIssues([settings, files, qmd, learnings, recovered]),
       files: files.data.items,
       qmd: qmd.data,
       learnings: learnings.data.items,
       learningsEnabled,
+      recoveredSnapshots: recovered.data?.items ?? [],
     };
   }, [activeWorkspaceId]);
 
@@ -94,6 +165,10 @@ export function LibraryKnowledgeSection(props: NativeRoutePagesProps) {
   );
   const selectedLearning =
     visibleLearnings.find((item) => item.learningId === selectedLearningId) ?? visibleLearnings[0] ?? null;
+  const recoveredSnapshots = data?.recoveredSnapshots ?? [];
+  const recoveredCreatedCount = recoveredSnapshots.filter((event) => event.action === "snapshot_created").length;
+  const recoveredAttachedCount = recoveredSnapshots.filter((event) => event.action === "attached").length;
+  const recoveredRequestedCount = recoveredSnapshots.filter((event) => event.action === "approval_requested").length;
 
   useEffect(() => {
     if (!visibleFiles.length) {
@@ -179,9 +254,7 @@ export function LibraryKnowledgeSection(props: NativeRoutePagesProps) {
             items={visibleFiles.map((item) => ({
               id: item.relativePath,
               title: item.relativePath,
-              meta: isRecoveredExternalKnowledgePath(item.relativePath)
-                ? `${formatBytes(item.size)} · Recovered external snapshot`
-                : formatBytes(item.size),
+              meta: formatBytes(item.size),
               body: formatDateTime(item.modifiedAt),
             }))}
             selectedId={selectedFilePath}
@@ -261,16 +334,8 @@ export function LibraryKnowledgeSection(props: NativeRoutePagesProps) {
               items={[
                 {
                   label: "Selected source",
-                  value: selectedFilePath
-                    ? isRecoveredExternalKnowledgePath(selectedFilePath)
-                      ? "recovered external snapshot"
-                      : "file"
-                    : "none",
-                  meta: selectedFilePath
-                    ? isRecoveredExternalKnowledgePath(selectedFilePath)
-                      ? "Approved external-source copy. The External sources panel below owns its exact import provenance."
-                      : selectedFilePath
-                    : "Choose a source to inspect provenance.",
+                  value: selectedFilePath ? "file" : "none",
+                  meta: selectedFilePath || "Choose a source to inspect provenance.",
                 },
                 {
                   label: "Preview",
@@ -298,6 +363,35 @@ export function LibraryKnowledgeSection(props: NativeRoutePagesProps) {
                   .map((citation, index) => formatKnowledgeCitationAction(citation, item.contextId, index)),
               )}
               emptyLabel="No context-pack citations are available yet."
+              maxHeight="min(32vh, 18rem)"
+            />
+          </NativeCard>
+          <NativeCard
+            title="Recovered external snapshots"
+            subtitle="Journey knowledge_snapshot_lifecycle evidence for approved external-source copies. These live as governed knowledge documents, not memory files; the External sources panel below owns the full import provenance chain."
+          >
+            <LibraryMetricGrid
+              items={[
+                {
+                  label: "Snapshots created",
+                  value: String(recoveredCreatedCount),
+                  meta: "Materialized knowledge documents",
+                },
+                {
+                  label: "Thread attachments",
+                  value: String(recoveredAttachedCount),
+                  meta: "Recovered copies attached to chat threads",
+                },
+                {
+                  label: "Approval requests",
+                  value: String(recoveredRequestedCount),
+                  meta: "Observed in this evidence window",
+                },
+              ]}
+            />
+            <LibraryActionList
+              items={recoveredSnapshots.map((event) => formatRecoveredSnapshotItem(event))}
+              emptyLabel="No recovered external snapshots yet. Approved knowledge-copy requests appear here."
               maxHeight="min(32vh, 18rem)"
             />
           </NativeCard>
