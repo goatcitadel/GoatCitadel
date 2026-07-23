@@ -454,6 +454,13 @@ export interface ExternalSessionAttachmentListResponse {
   schemaVersion: typeof EXTERNAL_SOURCE_SCHEMA_VERSION;
   workspaceId: string;
   sessionId: string;
+  /**
+   * Current server-owned session incarnation id (C4 composition). Attach,
+   * detach, and knowledge requests require the exact expected incarnation, so
+   * the durable reload surface is the one sanctioned place clients learn it.
+   * Optional because pre-C4 producers and typed fixtures omit it.
+   */
+  sessionIncarnationId?: string;
   items: ExternalSessionAttachmentRecord[];
 }
 

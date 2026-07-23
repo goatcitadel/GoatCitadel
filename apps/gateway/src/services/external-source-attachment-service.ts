@@ -194,12 +194,15 @@ export class ExternalSourceAttachmentService {
   public list(rawInput: unknown, actor: ExternalSourceRequestActor): ExternalSessionAttachmentListResponse {
     assertActor(actor);
     const input = normalizeExternalSessionAttachmentListInput(rawInput);
-    this.requireSessionInWorkspace(input.workspaceId, input.sessionId);
+    const meta = this.requireSessionInWorkspace(input.workspaceId, input.sessionId);
     try {
       return {
         schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
         workspaceId: input.workspaceId,
         sessionId: input.sessionId,
+        // The durable reload surface is where clients learn the exact
+        // incarnation the mutation contracts demand (C4 composition).
+        sessionIncarnationId: meta.lifecycleIntentId ?? `legacy-session-incarnation:${input.sessionId}`,
         items: this.dependencies.attachments.listBySession(input.workspaceId, input.sessionId, input.limit ?? 100),
       };
     } catch (error) {

@@ -136,12 +136,27 @@ export interface ExternalSourceKnowledgeSnapshotMaterializedIdentities {
 const APPROVAL_RISK_LEVEL = "danger" as const;
 const DEFAULT_CLOCK: ExternalSourceKnowledgeEffectServiceClock = { nowMs: () => Date.now() };
 
-/** Deterministic server-owned approval identity for one exact request payload. */
+/**
+ * Deterministic server-owned approval identity for one exact request payload.
+ * C4 composition constraint: the shipped approvals surface resolves approvals
+ * through `POST /api/v1/approvals/:approvalId/resolve`, whose route contract
+ * pins a UUID-shaped id — so the deterministic identity is the canonical
+ * payload digest formatted as a UUID (128 bits of the SHA-256), which stays
+ * exactly replayable while remaining resolvable by the existing operator
+ * surface. The approval `kind` column carries the domain identity.
+ */
 export function deriveExternalSourceKnowledgeSnapshotApprovalId(
   payload: ExternalSourceKnowledgeSnapshotApprovalPayload,
 ): string {
   assertExternalSourceKnowledgeSnapshotApprovalPayload(payload);
-  return `external-knowledge-snapshot-${digest(payload).slice(0, 48)}`;
+  const material = digest(payload).slice(0, 32);
+  return [
+    material.slice(0, 8),
+    material.slice(8, 12),
+    material.slice(12, 16),
+    material.slice(16, 20),
+    material.slice(20, 32),
+  ].join("-");
 }
 
 /**
