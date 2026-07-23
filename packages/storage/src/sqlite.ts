@@ -6637,6 +6637,27 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
           createRemoteWorkerInferenceSchema(db);
         },
       },
+      {
+        version: 178,
+        name: "remote_worker_cell_execution_owner",
+        up: (db) => {
+          // HX-505 remote-worker execution-cell owner (paired with PostgreSQL
+          // 120). Additive only: two new tables bound by a complete composite
+          // foreign key to the committed assignment-generation authority (whose
+          // PRIMARY KEY already satisfies the reference, so no frozen table is
+          // altered). The immutable server-owned profile, capacity reservation,
+          // three state machines with monotonic revision CAS, high-water and
+          // retained-byte truth, and an append-only hash-chained evidence log
+          // hold; no transcript, artifact payload, raw terminal output, or
+          // credential ever has a column. Repair-only sparse databases without
+          // the remote-worker assignment (171) predecessors skip instead of
+          // inventing parents.
+          if (!tableExists(db, "remote_worker_assignment_generations")) {
+            return;
+          }
+          createRemoteWorkerCellSchema(db);
+        },
+      },
     ],
   },
 ];
@@ -7049,6 +7070,283 @@ function createRemoteWorkerInferenceSchema(db: DatabaseSync): void {
     FOR EACH ROW
     BEGIN
       SELECT RAISE(ABORT, 'remote worker inference outbox frames are append-only (no delete)');
+    END;
+  `);
+}
+
+function createRemoteWorkerCellSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE remote_worker_cells (
+      registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+      assignment_id TEXT NOT NULL CHECK(length(assignment_id) BETWEEN 1 AND 256),
+      assignment_generation INTEGER NOT NULL CHECK(typeof(assignment_generation) = 'integer' AND assignment_generation > 0),
+      cell_id TEXT NOT NULL CHECK(length(cell_id) BETWEEN 1 AND 256),
+      worker_id TEXT NOT NULL CHECK(length(worker_id) BETWEEN 1 AND 256),
+      worker_generation INTEGER NOT NULL CHECK(typeof(worker_generation) = 'integer' AND worker_generation > 0),
+      backend TEXT NOT NULL CHECK(backend = 'container'),
+      idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+      profile_sha256 TEXT NOT NULL CHECK(length(profile_sha256) = 64 AND profile_sha256 NOT GLOB '*[^0-9a-f]*'),
+      request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+      logical_root_sha256 TEXT NOT NULL CHECK(length(logical_root_sha256) = 64 AND logical_root_sha256 NOT GLOB '*[^0-9a-f]*'),
+      assignment_manifest_sha256 TEXT NOT NULL CHECK(length(assignment_manifest_sha256) = 64 AND assignment_manifest_sha256 NOT GLOB '*[^0-9a-f]*'),
+      path_jail_sha256 TEXT NOT NULL CHECK(length(path_jail_sha256) = 64 AND path_jail_sha256 NOT GLOB '*[^0-9a-f]*'),
+      capability_profile_sha256 TEXT NOT NULL CHECK(length(capability_profile_sha256) = 64 AND capability_profile_sha256 NOT GLOB '*[^0-9a-f]*'),
+      context_snapshot_sha256 TEXT NOT NULL CHECK(length(context_snapshot_sha256) = 64 AND context_snapshot_sha256 NOT GLOB '*[^0-9a-f]*'),
+      tool_effect_posture_sha256 TEXT NOT NULL CHECK(length(tool_effect_posture_sha256) = 64 AND tool_effect_posture_sha256 NOT GLOB '*[^0-9a-f]*'),
+      runtime_attestation_sha256 TEXT NOT NULL CHECK(length(runtime_attestation_sha256) = 64 AND runtime_attestation_sha256 NOT GLOB '*[^0-9a-f]*'),
+      launcher_attestation_sha256 TEXT NOT NULL CHECK(length(launcher_attestation_sha256) = 64 AND launcher_attestation_sha256 NOT GLOB '*[^0-9a-f]*'),
+      logical_disk_bytes INTEGER NOT NULL CHECK(typeof(logical_disk_bytes) = 'integer' AND logical_disk_bytes BETWEEN 1 AND 1099511627776),
+      allocated_disk_bytes INTEGER NOT NULL CHECK(typeof(allocated_disk_bytes) = 'integer' AND allocated_disk_bytes BETWEEN 1 AND 1099511627776),
+      file_limit INTEGER NOT NULL CHECK(typeof(file_limit) = 'integer' AND file_limit BETWEEN 1 AND 100000000),
+      inode_limit INTEGER NOT NULL CHECK(typeof(inode_limit) = 'integer' AND inode_limit BETWEEN 1 AND 100000000),
+      process_limit INTEGER NOT NULL CHECK(typeof(process_limit) = 'integer' AND process_limit BETWEEN 1 AND 100000),
+      cpu_limit_milli INTEGER NOT NULL CHECK(typeof(cpu_limit_milli) = 'integer' AND cpu_limit_milli BETWEEN 1 AND 1024000),
+      wall_limit_ms INTEGER NOT NULL CHECK(typeof(wall_limit_ms) = 'integer' AND wall_limit_ms BETWEEN 1 AND 604800000),
+      memory_limit_bytes INTEGER NOT NULL CHECK(typeof(memory_limit_bytes) = 'integer' AND memory_limit_bytes BETWEEN 1 AND 1099511627776),
+      raw_output_limit_bytes INTEGER NOT NULL CHECK(typeof(raw_output_limit_bytes) = 'integer' AND raw_output_limit_bytes BETWEEN 1 AND 1099511627776),
+      diagnostic_limit_bytes INTEGER NOT NULL CHECK(typeof(diagnostic_limit_bytes) = 'integer' AND diagnostic_limit_bytes BETWEEN 1 AND 1099511627776),
+      artifact_ceiling_bytes INTEGER NOT NULL CHECK(typeof(artifact_ceiling_bytes) = 'integer' AND artifact_ceiling_bytes BETWEEN 1 AND 1099511627776),
+      backup_staging_bytes INTEGER NOT NULL CHECK(typeof(backup_staging_bytes) = 'integer' AND backup_staging_bytes BETWEEN 1 AND 1099511627776),
+      backup_publication_bytes INTEGER NOT NULL CHECK(typeof(backup_publication_bytes) = 'integer' AND backup_publication_bytes BETWEEN 1 AND 1099511627776),
+      egress_posture TEXT NOT NULL CHECK(egress_posture IN ('deny_all', 'allowlisted')),
+      egress_policy_sha256 TEXT NOT NULL CHECK(length(egress_policy_sha256) = 64 AND egress_policy_sha256 NOT GLOB '*[^0-9a-f]*'),
+      egress_dns_revision INTEGER NOT NULL CHECK(typeof(egress_dns_revision) = 'integer' AND egress_dns_revision > 0),
+      env_allowlist_sha256 TEXT NOT NULL CHECK(length(env_allowlist_sha256) = 64 AND env_allowlist_sha256 NOT GLOB '*[^0-9a-f]*'),
+      execution_state TEXT NOT NULL CHECK(execution_state IN (
+        'profiled', 'provisioning', 'ready', 'starting', 'running',
+        'exited', 'cancelled', 'limit_exceeded', 'failed', 'liveness_unknown'
+      )),
+      execution_revision INTEGER NOT NULL CHECK(typeof(execution_revision) = 'integer' AND execution_revision > 0),
+      cleanup_state TEXT NOT NULL CHECK(cleanup_state IN (
+        'not_started', 'pending', 'stopping', 'verifying_zero',
+        'verified_clean', 'failed_cleanup', 'manual_reconciliation', 'quarantined'
+      )),
+      cleanup_revision INTEGER NOT NULL CHECK(typeof(cleanup_revision) = 'integer' AND cleanup_revision > 0),
+      backup_state TEXT NOT NULL CHECK(backup_state IN (
+        'disabled', 'pending', 'staged', 'verified', 'corrupt',
+        'manual_reconciliation', 'restore_pending', 'restored', 'drifted'
+      )),
+      backup_revision INTEGER NOT NULL CHECK(typeof(backup_revision) = 'integer' AND backup_revision > 0),
+      provisioning_owner TEXT CHECK(provisioning_owner IS NULL OR length(provisioning_owner) BETWEEN 1 AND 256),
+      provisioning_lease_expires_at TEXT CHECK(provisioning_lease_expires_at IS NULL OR (
+        strftime('%Y-%m-%dT%H:%M:%fZ', provisioning_lease_expires_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', provisioning_lease_expires_at, '+0 days') = provisioning_lease_expires_at
+      )),
+      platform_identity_sha256 TEXT CHECK(platform_identity_sha256 IS NULL OR (length(platform_identity_sha256) = 64 AND platform_identity_sha256 NOT GLOB '*[^0-9a-f]*')),
+      container_name TEXT CHECK(container_name IS NULL OR length(container_name) BETWEEN 1 AND 256),
+      image_digest TEXT CHECK(image_digest IS NULL OR (image_digest GLOB 'sha256:*' AND length(image_digest) = 71 AND substr(image_digest, 8) NOT GLOB '*[^0-9a-f]*')),
+      network_name TEXT CHECK(network_name IS NULL OR length(network_name) BETWEEN 1 AND 256),
+      peak_disk_bytes INTEGER NOT NULL DEFAULT 0 CHECK(typeof(peak_disk_bytes) = 'integer' AND peak_disk_bytes BETWEEN 0 AND 1099511627776),
+      peak_memory_bytes INTEGER NOT NULL DEFAULT 0 CHECK(typeof(peak_memory_bytes) = 'integer' AND peak_memory_bytes BETWEEN 0 AND 1099511627776),
+      peak_file_count INTEGER NOT NULL DEFAULT 0 CHECK(typeof(peak_file_count) = 'integer' AND peak_file_count BETWEEN 0 AND 100000000),
+      peak_process_count INTEGER NOT NULL DEFAULT 0 CHECK(typeof(peak_process_count) = 'integer' AND peak_process_count BETWEEN 0 AND 100000),
+      raw_output_bytes INTEGER NOT NULL DEFAULT 0 CHECK(typeof(raw_output_bytes) = 'integer' AND raw_output_bytes BETWEEN 0 AND 1099511627776),
+      retained_diagnostic_bytes INTEGER NOT NULL DEFAULT 0 CHECK(typeof(retained_diagnostic_bytes) = 'integer' AND retained_diagnostic_bytes BETWEEN 0 AND 1099511627776),
+      failed_cleanup_retained_bytes INTEGER NOT NULL DEFAULT 0 CHECK(typeof(failed_cleanup_retained_bytes) = 'integer' AND failed_cleanup_retained_bytes BETWEEN 0 AND 1099511627776),
+      quarantine_retained_bytes INTEGER NOT NULL DEFAULT 0 CHECK(typeof(quarantine_retained_bytes) = 'integer' AND quarantine_retained_bytes BETWEEN 0 AND 1099511627776),
+      capacity_revision INTEGER NOT NULL DEFAULT 0 CHECK(typeof(capacity_revision) = 'integer' AND capacity_revision BETWEEN 0 AND 100000),
+      last_footprint_sha256 TEXT CHECK(last_footprint_sha256 IS NULL OR (length(last_footprint_sha256) = 64 AND last_footprint_sha256 NOT GLOB '*[^0-9a-f]*')),
+      exit_code INTEGER CHECK(exit_code IS NULL OR (typeof(exit_code) = 'integer' AND exit_code BETWEEN -1 AND 255)),
+      terminated_by_signal TEXT CHECK(terminated_by_signal IS NULL OR length(terminated_by_signal) BETWEEN 1 AND 32),
+      diagnostic_capture_sha256 TEXT CHECK(diagnostic_capture_sha256 IS NULL OR (length(diagnostic_capture_sha256) = 64 AND diagnostic_capture_sha256 NOT GLOB '*[^0-9a-f]*')),
+      created_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') = created_at
+      ),
+      updated_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0 days') = updated_at
+      ),
+      PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation),
+      UNIQUE(registry_workspace_id, cell_id),
+      UNIQUE(registry_workspace_id, idempotency_key),
+      FOREIGN KEY(registry_workspace_id, assignment_id, assignment_generation)
+        REFERENCES remote_worker_assignment_generations(registry_workspace_id, assignment_id, assignment_generation) ON DELETE RESTRICT,
+      CHECK(allocated_disk_bytes >= logical_disk_bytes),
+      CHECK((provisioning_owner IS NULL) = (provisioning_lease_expires_at IS NULL)),
+      CHECK((platform_identity_sha256 IS NULL) = (container_name IS NULL)),
+      CHECK((platform_identity_sha256 IS NULL) = (image_digest IS NULL)),
+      CHECK((platform_identity_sha256 IS NULL) = (network_name IS NULL)),
+      CHECK(execution_state IN ('profiled', 'provisioning') OR platform_identity_sha256 IS NOT NULL),
+      CHECK((exit_code IS NULL) OR execution_state IN ('exited', 'limit_exceeded', 'failed', 'cancelled'))
+    );
+
+    CREATE TABLE remote_worker_cell_evidence (
+      registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+      assignment_id TEXT NOT NULL CHECK(length(assignment_id) BETWEEN 1 AND 256),
+      assignment_generation INTEGER NOT NULL CHECK(typeof(assignment_generation) = 'integer' AND assignment_generation > 0),
+      cell_id TEXT NOT NULL CHECK(length(cell_id) BETWEEN 1 AND 256),
+      evidence_sequence INTEGER NOT NULL CHECK(typeof(evidence_sequence) = 'integer' AND evidence_sequence BETWEEN 1 AND 100000),
+      domain TEXT NOT NULL CHECK(domain IN ('execution', 'cleanup', 'backup', 'capacity')),
+      payload_json TEXT NOT NULL CHECK(json_valid(payload_json) AND length(CAST(payload_json AS BLOB)) <= 8192),
+      payload_sha256 TEXT NOT NULL CHECK(length(payload_sha256) = 64 AND payload_sha256 NOT GLOB '*[^0-9a-f]*'),
+      previous_evidence_sha256 TEXT NOT NULL CHECK(length(previous_evidence_sha256) = 64 AND previous_evidence_sha256 NOT GLOB '*[^0-9a-f]*'),
+      evidence_sha256 TEXT NOT NULL CHECK(length(evidence_sha256) = 64 AND evidence_sha256 NOT GLOB '*[^0-9a-f]*'),
+      recorded_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', recorded_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', recorded_at, '+0 days') = recorded_at
+      ),
+      PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation, evidence_sequence),
+      UNIQUE(registry_workspace_id, evidence_sha256),
+      FOREIGN KEY(registry_workspace_id, assignment_id, assignment_generation)
+        REFERENCES remote_worker_cells(registry_workspace_id, assignment_id, assignment_generation) ON DELETE RESTRICT,
+      CHECK(json_extract(payload_json, '$.schemaVersion') = 'goatcitadel.remote-worker-cell-evidence.v1'),
+      CHECK(json_extract(payload_json, '$.domain') = domain)
+    );
+
+    CREATE INDEX idx_remote_worker_cells_provisioning_lease
+      ON remote_worker_cells(execution_state, provisioning_lease_expires_at)
+      WHERE execution_state = 'provisioning';
+    CREATE INDEX idx_remote_worker_cell_evidence_chain
+      ON remote_worker_cell_evidence(
+        registry_workspace_id, assignment_id, assignment_generation, evidence_sequence
+      );
+
+    -- The server-owned immutable profile can never change: identity, every
+    -- profile hash binding, the capacity reservation, the egress posture, and
+    -- the environment-name allowlist are frozen at insert.
+    CREATE TRIGGER trg_remote_worker_cells_profile_immutable
+    BEFORE UPDATE ON remote_worker_cells
+    FOR EACH ROW
+    WHEN
+      NEW.registry_workspace_id <> OLD.registry_workspace_id
+      OR NEW.assignment_id <> OLD.assignment_id
+      OR NEW.assignment_generation <> OLD.assignment_generation
+      OR NEW.cell_id <> OLD.cell_id
+      OR NEW.worker_id <> OLD.worker_id
+      OR NEW.worker_generation <> OLD.worker_generation
+      OR NEW.backend <> OLD.backend
+      OR NEW.idempotency_key <> OLD.idempotency_key
+      OR NEW.profile_sha256 <> OLD.profile_sha256
+      OR NEW.request_sha256 <> OLD.request_sha256
+      OR NEW.logical_root_sha256 <> OLD.logical_root_sha256
+      OR NEW.assignment_manifest_sha256 <> OLD.assignment_manifest_sha256
+      OR NEW.path_jail_sha256 <> OLD.path_jail_sha256
+      OR NEW.capability_profile_sha256 <> OLD.capability_profile_sha256
+      OR NEW.context_snapshot_sha256 <> OLD.context_snapshot_sha256
+      OR NEW.tool_effect_posture_sha256 <> OLD.tool_effect_posture_sha256
+      OR NEW.runtime_attestation_sha256 <> OLD.runtime_attestation_sha256
+      OR NEW.launcher_attestation_sha256 <> OLD.launcher_attestation_sha256
+      OR NEW.logical_disk_bytes <> OLD.logical_disk_bytes
+      OR NEW.allocated_disk_bytes <> OLD.allocated_disk_bytes
+      OR NEW.file_limit <> OLD.file_limit
+      OR NEW.inode_limit <> OLD.inode_limit
+      OR NEW.process_limit <> OLD.process_limit
+      OR NEW.cpu_limit_milli <> OLD.cpu_limit_milli
+      OR NEW.wall_limit_ms <> OLD.wall_limit_ms
+      OR NEW.memory_limit_bytes <> OLD.memory_limit_bytes
+      OR NEW.raw_output_limit_bytes <> OLD.raw_output_limit_bytes
+      OR NEW.diagnostic_limit_bytes <> OLD.diagnostic_limit_bytes
+      OR NEW.artifact_ceiling_bytes <> OLD.artifact_ceiling_bytes
+      OR NEW.backup_staging_bytes <> OLD.backup_staging_bytes
+      OR NEW.backup_publication_bytes <> OLD.backup_publication_bytes
+      OR NEW.egress_posture <> OLD.egress_posture
+      OR NEW.egress_policy_sha256 <> OLD.egress_policy_sha256
+      OR NEW.egress_dns_revision <> OLD.egress_dns_revision
+      OR NEW.env_allowlist_sha256 <> OLD.env_allowlist_sha256
+      OR NEW.created_at <> OLD.created_at
+      OR (OLD.platform_identity_sha256 IS NOT NULL AND NEW.platform_identity_sha256 IS NOT OLD.platform_identity_sha256)
+      OR (OLD.container_name IS NOT NULL AND NEW.container_name IS NOT OLD.container_name)
+      OR (OLD.image_digest IS NOT NULL AND NEW.image_digest IS NOT OLD.image_digest)
+      OR (OLD.network_name IS NOT NULL AND NEW.network_name IS NOT OLD.network_name)
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker cell immutable profile bindings cannot change');
+    END;
+
+    -- Monotonic revision CAS: each state machine's revision advances by exactly
+    -- one on a state change, holds otherwise, and never regresses. A clean or
+    -- unknown-liveness terminal execution state can never leave.
+    CREATE TRIGGER trg_remote_worker_cells_revision_cas
+    BEFORE UPDATE ON remote_worker_cells
+    FOR EACH ROW
+    WHEN
+      NEW.execution_revision < OLD.execution_revision
+      OR NEW.cleanup_revision < OLD.cleanup_revision
+      OR NEW.backup_revision < OLD.backup_revision
+      OR (NEW.execution_state <> OLD.execution_state AND NEW.execution_revision <> OLD.execution_revision + 1)
+      OR (NEW.execution_state = OLD.execution_state AND NEW.execution_revision <> OLD.execution_revision)
+      OR (NEW.cleanup_state <> OLD.cleanup_state AND NEW.cleanup_revision <> OLD.cleanup_revision + 1)
+      OR (NEW.cleanup_state = OLD.cleanup_state AND NEW.cleanup_revision <> OLD.cleanup_revision)
+      OR (NEW.backup_state <> OLD.backup_state AND NEW.backup_revision <> OLD.backup_revision + 1)
+      OR (NEW.backup_state = OLD.backup_state AND NEW.backup_revision <> OLD.backup_revision)
+      OR (OLD.execution_state IN ('exited', 'cancelled', 'limit_exceeded', 'failed', 'liveness_unknown') AND NEW.execution_state <> OLD.execution_state)
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker cell state revision must advance monotonically by one on transition');
+    END;
+
+    -- High-water and retained-byte truth never regress: peaks only climb and
+    -- failed-cleanup/quarantine retained bytes remain counted forever.
+    CREATE TRIGGER trg_remote_worker_cells_high_water_monotonic
+    BEFORE UPDATE ON remote_worker_cells
+    FOR EACH ROW
+    WHEN
+      NEW.peak_disk_bytes < OLD.peak_disk_bytes
+      OR NEW.peak_memory_bytes < OLD.peak_memory_bytes
+      OR NEW.peak_file_count < OLD.peak_file_count
+      OR NEW.peak_process_count < OLD.peak_process_count
+      OR NEW.raw_output_bytes < OLD.raw_output_bytes
+      OR NEW.retained_diagnostic_bytes < OLD.retained_diagnostic_bytes
+      OR NEW.failed_cleanup_retained_bytes < OLD.failed_cleanup_retained_bytes
+      OR NEW.quarantine_retained_bytes < OLD.quarantine_retained_bytes
+      OR NEW.capacity_revision < OLD.capacity_revision
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker cell high-water and retained-byte accounting cannot regress');
+    END;
+
+    -- Removal only with verified zero liveness: a live, unknown, or unverified
+    -- cell can never be deleted to improve a metric.
+    CREATE TRIGGER trg_remote_worker_cells_no_delete_unless_clean
+    BEFORE DELETE ON remote_worker_cells
+    FOR EACH ROW
+    WHEN NOT (
+      OLD.execution_state IN ('exited', 'cancelled', 'limit_exceeded', 'failed')
+      AND OLD.cleanup_state = 'verified_clean'
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker cell removal requires verified zero liveness');
+    END;
+
+    -- Evidence is append-only and contiguously hash-chained per cell; the cell
+    -- identity must match the parent cell exactly.
+    CREATE TRIGGER trg_remote_worker_cell_evidence_chain_guard
+    BEFORE INSERT ON remote_worker_cell_evidence
+    FOR EACH ROW
+    WHEN
+      NEW.cell_id <> COALESCE((
+        SELECT c.cell_id FROM remote_worker_cells c
+        WHERE c.registry_workspace_id = NEW.registry_workspace_id
+          AND c.assignment_id = NEW.assignment_id
+          AND c.assignment_generation = NEW.assignment_generation
+      ), '')
+      OR NEW.evidence_sequence <> 1 + COALESCE((
+        SELECT MAX(e.evidence_sequence) FROM remote_worker_cell_evidence e
+        WHERE e.registry_workspace_id = NEW.registry_workspace_id
+          AND e.assignment_id = NEW.assignment_id
+          AND e.assignment_generation = NEW.assignment_generation
+      ), 0)
+      OR NEW.previous_evidence_sha256 <> COALESCE((
+        SELECT e.evidence_sha256 FROM remote_worker_cell_evidence e
+        WHERE e.registry_workspace_id = NEW.registry_workspace_id
+          AND e.assignment_id = NEW.assignment_id
+          AND e.assignment_generation = NEW.assignment_generation
+        ORDER BY e.evidence_sequence DESC LIMIT 1
+      ), '${"0".repeat(64)}')
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker cell evidence chain is out of order or misbound');
+    END;
+
+    CREATE TRIGGER trg_remote_worker_cell_evidence_no_update
+    BEFORE UPDATE ON remote_worker_cell_evidence
+    FOR EACH ROW
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker cell evidence is append-only (no update)');
+    END;
+
+    CREATE TRIGGER trg_remote_worker_cell_evidence_no_delete
+    BEFORE DELETE ON remote_worker_cell_evidence
+    FOR EACH ROW
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker cell evidence is append-only (no delete)');
     END;
   `);
 }

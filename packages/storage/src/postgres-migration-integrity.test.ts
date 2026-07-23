@@ -722,4 +722,58 @@ describe("protected Postgres migration integrity", () => {
     );
     assert.doesNotMatch(sql, /gateway_route|readiness|\blistener\b|scheduler|\bcell\b/iu);
   });
+
+  it("keeps HX-505 migration 120 additive, immutable-profile, CAS-fenced, evidence-chained, and production-dark", () => {
+    const migration = POSTGRES_MIGRATIONS.find((candidate) => candidate.version === 120);
+    assert.equal(migration?.name, "remote_worker_cell_execution_owner");
+    assert.equal(migration?.batchedStatements, undefined);
+    const sql = migration?.sql ?? "";
+    for (const table of ["remote_worker_cells", "remote_worker_cell_evidence"]) {
+      assert.match(sql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`, "u"));
+    }
+    assert.equal(sql.match(/CREATE TABLE IF NOT EXISTS remote_worker_cell/gu)?.length, 2);
+    // Purely additive: no frozen table is altered; the assignment-generation
+    // PRIMARY KEY already satisfies the composite foreign key.
+    assert.equal(sql.match(/ALTER TABLE/gu) ?? null, null);
+    assert.match(
+      sql,
+      /FOREIGN KEY\(registry_workspace_id, assignment_id, assignment_generation\)\s+REFERENCES remote_worker_assignment_generations/u,
+    );
+    assert.match(
+      sql,
+      /FOREIGN KEY\(registry_workspace_id, assignment_id, assignment_generation\)\s+REFERENCES remote_worker_cells/u,
+    );
+    // Secret-free: no transcript, artifact payload, raw terminal, or credential column.
+    assert.doesNotMatch(
+      sql,
+      /transcript|artifact_payload|raw_terminal|terminal_output|lease_token|credential|provider_credential|api_key|authorization/iu,
+    );
+    // Immutable profile + monotonic CAS + high-water + verified-clean deletion + append-only evidence guards.
+    for (const trigger of [
+      "trg_remote_worker_cells_profile_immutable",
+      "trg_remote_worker_cells_revision_cas",
+      "trg_remote_worker_cells_high_water_monotonic",
+      "trg_remote_worker_cells_no_delete_unless_clean",
+      "trg_remote_worker_cell_evidence_chain_guard",
+      "trg_remote_worker_cell_evidence_no_update",
+      "trg_remote_worker_cell_evidence_no_delete",
+    ]) {
+      assert.match(sql, new RegExp(trigger, "u"));
+    }
+    // Worst-case reservation, digest-pinned image, and pressure-never-deletes truth.
+    assert.match(sql, /allocated_disk_bytes >= logical_disk_bytes/u);
+    assert.match(sql, /image_digest ~ '\^sha256:\[0-9a-f\]\{64\}\$'/u);
+    assert.match(sql, /remote worker cell removal requires verified zero liveness/u);
+    assert.match(sql, /remote worker cell state revision must advance monotonically by one on transition/u);
+    assert.match(sql, /remote worker cell high-water and retained-byte accounting cannot regress/u);
+    assert.match(sql, /remote worker cell evidence is append-only/u);
+    // Evidence chain serialization under the HX-505 advisory tag.
+    assert.match(sql, /pg_advisory_xact_lock\(hashtextextended\([\s\S]*?,\s*505\s*\)\)/u);
+    // No DML rows and no route/listener/scheduler runtime claim.
+    assert.doesNotMatch(
+      sql,
+      /\b(?:INSERT\s+INTO|DELETE\s+FROM|UPDATE\s+remote_worker|DROP\s+TABLE|TRUNCATE\s+TABLE)\b/iu,
+    );
+    assert.doesNotMatch(sql, /gateway_route|readiness|\blistener\b|scheduler/iu);
+  });
 });

@@ -42,10 +42,75 @@ describe("sqlite schema migrations", () => {
     assert.deepEqual(
       { ...rows.at(-1) },
       {
-        version: 177,
-        name: "remote_worker_inference_request_owner",
+        version: 178,
+        name: "remote_worker_cell_execution_owner",
       },
     );
+    db.close();
+  });
+
+  it("keeps migration 178 additive, immutable-profile, CAS-fenced, high-water-monotonic, and evidence append-only", () => {
+    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-hx505-178-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const db = createDatabase({ dbPath });
+
+    for (const table of ["remote_worker_cells", "remote_worker_cell_evidence"]) {
+      const tableSql = (
+        db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) as
+          | { sql: string }
+          | undefined
+      )?.sql;
+      assert.ok(tableSql, `expected migration 178 table ${table}`);
+      const columns = (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(
+        (column) => column.name,
+      );
+      // Secret-free: never a transcript, artifact payload, raw terminal, or credential column.
+      for (const forbidden of [
+        "transcript",
+        "artifact_payload",
+        "raw_terminal",
+        "terminal_output",
+        "credential",
+        "lease_token",
+        "secret",
+        "token",
+      ]) {
+        assert.equal(
+          columns.some((column) => column.toLowerCase().includes(forbidden)),
+          false,
+          `${table} must stay secret-free (found ${forbidden})`,
+        );
+      }
+    }
+
+    // The cell binds the assignment-generation authority and the evidence binds the cell.
+    const cellSql = (
+      db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'remote_worker_cells'").get() as {
+        sql: string;
+      }
+    ).sql;
+    assert.match(
+      cellSql,
+      /FOREIGN KEY\(registry_workspace_id, assignment_id, assignment_generation\)[\s\S]*REFERENCES remote_worker_assignment_generations/u,
+    );
+    assert.doesNotMatch(cellSql, /ALTER TABLE/u);
+
+    const triggers = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name LIKE 'remote_worker_cell%'")
+      .all() as Array<{ name: string }>;
+    const triggerNames = triggers.map((trigger) => trigger.name);
+    for (const trigger of [
+      "trg_remote_worker_cells_profile_immutable",
+      "trg_remote_worker_cells_revision_cas",
+      "trg_remote_worker_cells_high_water_monotonic",
+      "trg_remote_worker_cells_no_delete_unless_clean",
+      "trg_remote_worker_cell_evidence_chain_guard",
+      "trg_remote_worker_cell_evidence_no_update",
+      "trg_remote_worker_cell_evidence_no_delete",
+    ]) {
+      assert.ok(triggerNames.includes(trigger), `migration 178 needs trigger ${trigger}`);
+    }
+
     db.close();
   });
 

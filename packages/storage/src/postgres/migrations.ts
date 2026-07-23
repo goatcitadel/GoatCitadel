@@ -12851,4 +12851,321 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         FOR EACH ROW EXECUTE FUNCTION gc_reject_remote_worker_inference_outbox_mutation();
     `,
   },
+  {
+    version: 120,
+    name: "remote_worker_cell_execution_owner",
+    // HX-505 remote-worker execution-cell owner (paired with SQLite 178).
+    // Additive only: two new tables bound by a complete composite foreign key to
+    // the committed assignment-generation authority, whose PRIMARY KEY already
+    // satisfies the reference, so no frozen table is altered and no row is
+    // written. The immutable server-owned profile, capacity reservation, three
+    // state machines with monotonic revision CAS, high-water and retained-byte
+    // truth, and an append-only hash-chained evidence log hold. No transcript,
+    // artifact payload, raw terminal output, or credential ever has a column.
+    // Production-dark: no route, listener, startup, scheduler, or accounting
+    // owner.
+    sql: `
+      CREATE TABLE IF NOT EXISTS remote_worker_cells (
+        registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+        assignment_id TEXT NOT NULL CHECK(length(assignment_id) BETWEEN 1 AND 256),
+        assignment_generation BIGINT NOT NULL CHECK(assignment_generation > 0),
+        cell_id TEXT NOT NULL CHECK(length(cell_id) BETWEEN 1 AND 256),
+        worker_id TEXT NOT NULL CHECK(length(worker_id) BETWEEN 1 AND 256),
+        worker_generation BIGINT NOT NULL CHECK(worker_generation > 0),
+        backend TEXT NOT NULL CHECK(backend = 'container'),
+        idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+        profile_sha256 TEXT NOT NULL CHECK(profile_sha256 ~ '^[0-9a-f]{64}$'),
+        request_sha256 TEXT NOT NULL CHECK(request_sha256 ~ '^[0-9a-f]{64}$'),
+        logical_root_sha256 TEXT NOT NULL CHECK(logical_root_sha256 ~ '^[0-9a-f]{64}$'),
+        assignment_manifest_sha256 TEXT NOT NULL CHECK(assignment_manifest_sha256 ~ '^[0-9a-f]{64}$'),
+        path_jail_sha256 TEXT NOT NULL CHECK(path_jail_sha256 ~ '^[0-9a-f]{64}$'),
+        capability_profile_sha256 TEXT NOT NULL CHECK(capability_profile_sha256 ~ '^[0-9a-f]{64}$'),
+        context_snapshot_sha256 TEXT NOT NULL CHECK(context_snapshot_sha256 ~ '^[0-9a-f]{64}$'),
+        tool_effect_posture_sha256 TEXT NOT NULL CHECK(tool_effect_posture_sha256 ~ '^[0-9a-f]{64}$'),
+        runtime_attestation_sha256 TEXT NOT NULL CHECK(runtime_attestation_sha256 ~ '^[0-9a-f]{64}$'),
+        launcher_attestation_sha256 TEXT NOT NULL CHECK(launcher_attestation_sha256 ~ '^[0-9a-f]{64}$'),
+        logical_disk_bytes BIGINT NOT NULL CHECK(logical_disk_bytes BETWEEN 1 AND 1099511627776),
+        allocated_disk_bytes BIGINT NOT NULL CHECK(allocated_disk_bytes BETWEEN 1 AND 1099511627776),
+        file_limit BIGINT NOT NULL CHECK(file_limit BETWEEN 1 AND 100000000),
+        inode_limit BIGINT NOT NULL CHECK(inode_limit BETWEEN 1 AND 100000000),
+        process_limit BIGINT NOT NULL CHECK(process_limit BETWEEN 1 AND 100000),
+        cpu_limit_milli BIGINT NOT NULL CHECK(cpu_limit_milli BETWEEN 1 AND 1024000),
+        wall_limit_ms BIGINT NOT NULL CHECK(wall_limit_ms BETWEEN 1 AND 604800000),
+        memory_limit_bytes BIGINT NOT NULL CHECK(memory_limit_bytes BETWEEN 1 AND 1099511627776),
+        raw_output_limit_bytes BIGINT NOT NULL CHECK(raw_output_limit_bytes BETWEEN 1 AND 1099511627776),
+        diagnostic_limit_bytes BIGINT NOT NULL CHECK(diagnostic_limit_bytes BETWEEN 1 AND 1099511627776),
+        artifact_ceiling_bytes BIGINT NOT NULL CHECK(artifact_ceiling_bytes BETWEEN 1 AND 1099511627776),
+        backup_staging_bytes BIGINT NOT NULL CHECK(backup_staging_bytes BETWEEN 1 AND 1099511627776),
+        backup_publication_bytes BIGINT NOT NULL CHECK(backup_publication_bytes BETWEEN 1 AND 1099511627776),
+        egress_posture TEXT NOT NULL CHECK(egress_posture IN ('deny_all', 'allowlisted')),
+        egress_policy_sha256 TEXT NOT NULL CHECK(egress_policy_sha256 ~ '^[0-9a-f]{64}$'),
+        egress_dns_revision BIGINT NOT NULL CHECK(egress_dns_revision > 0),
+        env_allowlist_sha256 TEXT NOT NULL CHECK(env_allowlist_sha256 ~ '^[0-9a-f]{64}$'),
+        execution_state TEXT NOT NULL CHECK(execution_state IN (
+          'profiled', 'provisioning', 'ready', 'starting', 'running',
+          'exited', 'cancelled', 'limit_exceeded', 'failed', 'liveness_unknown'
+        )),
+        execution_revision BIGINT NOT NULL CHECK(execution_revision > 0),
+        cleanup_state TEXT NOT NULL CHECK(cleanup_state IN (
+          'not_started', 'pending', 'stopping', 'verifying_zero',
+          'verified_clean', 'failed_cleanup', 'manual_reconciliation', 'quarantined'
+        )),
+        cleanup_revision BIGINT NOT NULL CHECK(cleanup_revision > 0),
+        backup_state TEXT NOT NULL CHECK(backup_state IN (
+          'disabled', 'pending', 'staged', 'verified', 'corrupt',
+          'manual_reconciliation', 'restore_pending', 'restored', 'drifted'
+        )),
+        backup_revision BIGINT NOT NULL CHECK(backup_revision > 0),
+        provisioning_owner TEXT CHECK(provisioning_owner IS NULL OR length(provisioning_owner) BETWEEN 1 AND 256),
+        provisioning_lease_expires_at TEXT CHECK(provisioning_lease_expires_at IS NULL OR (
+          gc_try_parse_timestamptz(provisioning_lease_expires_at) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(provisioning_lease_expires_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = provisioning_lease_expires_at
+        )),
+        platform_identity_sha256 TEXT CHECK(platform_identity_sha256 IS NULL OR platform_identity_sha256 ~ '^[0-9a-f]{64}$'),
+        container_name TEXT CHECK(container_name IS NULL OR length(container_name) BETWEEN 1 AND 256),
+        image_digest TEXT CHECK(image_digest IS NULL OR image_digest ~ '^sha256:[0-9a-f]{64}$'),
+        network_name TEXT CHECK(network_name IS NULL OR length(network_name) BETWEEN 1 AND 256),
+        peak_disk_bytes BIGINT NOT NULL DEFAULT 0 CHECK(peak_disk_bytes BETWEEN 0 AND 1099511627776),
+        peak_memory_bytes BIGINT NOT NULL DEFAULT 0 CHECK(peak_memory_bytes BETWEEN 0 AND 1099511627776),
+        peak_file_count BIGINT NOT NULL DEFAULT 0 CHECK(peak_file_count BETWEEN 0 AND 100000000),
+        peak_process_count BIGINT NOT NULL DEFAULT 0 CHECK(peak_process_count BETWEEN 0 AND 100000),
+        raw_output_bytes BIGINT NOT NULL DEFAULT 0 CHECK(raw_output_bytes BETWEEN 0 AND 1099511627776),
+        retained_diagnostic_bytes BIGINT NOT NULL DEFAULT 0 CHECK(retained_diagnostic_bytes BETWEEN 0 AND 1099511627776),
+        failed_cleanup_retained_bytes BIGINT NOT NULL DEFAULT 0 CHECK(failed_cleanup_retained_bytes BETWEEN 0 AND 1099511627776),
+        quarantine_retained_bytes BIGINT NOT NULL DEFAULT 0 CHECK(quarantine_retained_bytes BETWEEN 0 AND 1099511627776),
+        capacity_revision BIGINT NOT NULL DEFAULT 0 CHECK(capacity_revision BETWEEN 0 AND 100000),
+        last_footprint_sha256 TEXT CHECK(last_footprint_sha256 IS NULL OR last_footprint_sha256 ~ '^[0-9a-f]{64}$'),
+        exit_code BIGINT CHECK(exit_code IS NULL OR exit_code BETWEEN -1 AND 255),
+        terminated_by_signal TEXT CHECK(terminated_by_signal IS NULL OR length(terminated_by_signal) BETWEEN 1 AND 32),
+        diagnostic_capture_sha256 TEXT CHECK(diagnostic_capture_sha256 IS NULL OR diagnostic_capture_sha256 ~ '^[0-9a-f]{64}$'),
+        created_at TEXT NOT NULL CHECK(
+          gc_try_parse_timestamptz(created_at) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = created_at
+        ),
+        updated_at TEXT NOT NULL CHECK(
+          gc_try_parse_timestamptz(updated_at) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(updated_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = updated_at
+        ),
+        PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation),
+        UNIQUE(registry_workspace_id, cell_id),
+        UNIQUE(registry_workspace_id, idempotency_key),
+        FOREIGN KEY(registry_workspace_id, assignment_id, assignment_generation)
+          REFERENCES remote_worker_assignment_generations(registry_workspace_id, assignment_id, assignment_generation) ON DELETE RESTRICT,
+        CHECK(allocated_disk_bytes >= logical_disk_bytes),
+        CHECK((provisioning_owner IS NULL) = (provisioning_lease_expires_at IS NULL)),
+        CHECK((platform_identity_sha256 IS NULL) = (container_name IS NULL)),
+        CHECK((platform_identity_sha256 IS NULL) = (image_digest IS NULL)),
+        CHECK((platform_identity_sha256 IS NULL) = (network_name IS NULL)),
+        CHECK(execution_state IN ('profiled', 'provisioning') OR platform_identity_sha256 IS NOT NULL),
+        CHECK((exit_code IS NULL) OR execution_state IN ('exited', 'limit_exceeded', 'failed', 'cancelled'))
+      );
+
+      CREATE TABLE IF NOT EXISTS remote_worker_cell_evidence (
+        registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+        assignment_id TEXT NOT NULL CHECK(length(assignment_id) BETWEEN 1 AND 256),
+        assignment_generation BIGINT NOT NULL CHECK(assignment_generation > 0),
+        cell_id TEXT NOT NULL CHECK(length(cell_id) BETWEEN 1 AND 256),
+        evidence_sequence BIGINT NOT NULL CHECK(evidence_sequence BETWEEN 1 AND 100000),
+        domain TEXT NOT NULL CHECK(domain IN ('execution', 'cleanup', 'backup', 'capacity')),
+        payload_json TEXT NOT NULL CHECK(
+          jsonb_typeof(payload_json::jsonb) = 'object' AND octet_length(payload_json) <= 8192
+        ),
+        payload_sha256 TEXT NOT NULL CHECK(payload_sha256 ~ '^[0-9a-f]{64}$'),
+        previous_evidence_sha256 TEXT NOT NULL CHECK(previous_evidence_sha256 ~ '^[0-9a-f]{64}$'),
+        evidence_sha256 TEXT NOT NULL CHECK(evidence_sha256 ~ '^[0-9a-f]{64}$'),
+        recorded_at TEXT NOT NULL CHECK(
+          gc_try_parse_timestamptz(recorded_at) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(recorded_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = recorded_at
+        ),
+        PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation, evidence_sequence),
+        UNIQUE(registry_workspace_id, evidence_sha256),
+        FOREIGN KEY(registry_workspace_id, assignment_id, assignment_generation)
+          REFERENCES remote_worker_cells(registry_workspace_id, assignment_id, assignment_generation) ON DELETE RESTRICT,
+        CHECK(payload_json::jsonb ->> 'schemaVersion' = 'goatcitadel.remote-worker-cell-evidence.v1'),
+        CHECK(payload_json::jsonb ->> 'domain' = domain)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_remote_worker_cells_provisioning_lease
+        ON remote_worker_cells(execution_state, provisioning_lease_expires_at)
+        WHERE execution_state = 'provisioning';
+      CREATE INDEX IF NOT EXISTS idx_remote_worker_cell_evidence_chain
+        ON remote_worker_cell_evidence(
+          registry_workspace_id, assignment_id, assignment_generation, evidence_sequence
+        );
+
+      CREATE OR REPLACE FUNCTION gc_remote_worker_cell_profile_immutable_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF NEW.registry_workspace_id IS DISTINCT FROM OLD.registry_workspace_id
+          OR NEW.assignment_id IS DISTINCT FROM OLD.assignment_id
+          OR NEW.assignment_generation IS DISTINCT FROM OLD.assignment_generation
+          OR NEW.cell_id IS DISTINCT FROM OLD.cell_id
+          OR NEW.worker_id IS DISTINCT FROM OLD.worker_id
+          OR NEW.worker_generation IS DISTINCT FROM OLD.worker_generation
+          OR NEW.backend IS DISTINCT FROM OLD.backend
+          OR NEW.idempotency_key IS DISTINCT FROM OLD.idempotency_key
+          OR NEW.profile_sha256 IS DISTINCT FROM OLD.profile_sha256
+          OR NEW.request_sha256 IS DISTINCT FROM OLD.request_sha256
+          OR NEW.logical_root_sha256 IS DISTINCT FROM OLD.logical_root_sha256
+          OR NEW.assignment_manifest_sha256 IS DISTINCT FROM OLD.assignment_manifest_sha256
+          OR NEW.path_jail_sha256 IS DISTINCT FROM OLD.path_jail_sha256
+          OR NEW.capability_profile_sha256 IS DISTINCT FROM OLD.capability_profile_sha256
+          OR NEW.context_snapshot_sha256 IS DISTINCT FROM OLD.context_snapshot_sha256
+          OR NEW.tool_effect_posture_sha256 IS DISTINCT FROM OLD.tool_effect_posture_sha256
+          OR NEW.runtime_attestation_sha256 IS DISTINCT FROM OLD.runtime_attestation_sha256
+          OR NEW.launcher_attestation_sha256 IS DISTINCT FROM OLD.launcher_attestation_sha256
+          OR NEW.logical_disk_bytes IS DISTINCT FROM OLD.logical_disk_bytes
+          OR NEW.allocated_disk_bytes IS DISTINCT FROM OLD.allocated_disk_bytes
+          OR NEW.file_limit IS DISTINCT FROM OLD.file_limit
+          OR NEW.inode_limit IS DISTINCT FROM OLD.inode_limit
+          OR NEW.process_limit IS DISTINCT FROM OLD.process_limit
+          OR NEW.cpu_limit_milli IS DISTINCT FROM OLD.cpu_limit_milli
+          OR NEW.wall_limit_ms IS DISTINCT FROM OLD.wall_limit_ms
+          OR NEW.memory_limit_bytes IS DISTINCT FROM OLD.memory_limit_bytes
+          OR NEW.raw_output_limit_bytes IS DISTINCT FROM OLD.raw_output_limit_bytes
+          OR NEW.diagnostic_limit_bytes IS DISTINCT FROM OLD.diagnostic_limit_bytes
+          OR NEW.artifact_ceiling_bytes IS DISTINCT FROM OLD.artifact_ceiling_bytes
+          OR NEW.backup_staging_bytes IS DISTINCT FROM OLD.backup_staging_bytes
+          OR NEW.backup_publication_bytes IS DISTINCT FROM OLD.backup_publication_bytes
+          OR NEW.egress_posture IS DISTINCT FROM OLD.egress_posture
+          OR NEW.egress_policy_sha256 IS DISTINCT FROM OLD.egress_policy_sha256
+          OR NEW.egress_dns_revision IS DISTINCT FROM OLD.egress_dns_revision
+          OR NEW.env_allowlist_sha256 IS DISTINCT FROM OLD.env_allowlist_sha256
+          OR NEW.created_at IS DISTINCT FROM OLD.created_at
+          OR (OLD.platform_identity_sha256 IS NOT NULL AND NEW.platform_identity_sha256 IS DISTINCT FROM OLD.platform_identity_sha256)
+          OR (OLD.container_name IS NOT NULL AND NEW.container_name IS DISTINCT FROM OLD.container_name)
+          OR (OLD.image_digest IS NOT NULL AND NEW.image_digest IS DISTINCT FROM OLD.image_digest)
+          OR (OLD.network_name IS NOT NULL AND NEW.network_name IS DISTINCT FROM OLD.network_name) THEN
+          RAISE EXCEPTION 'remote worker cell immutable profile bindings cannot change' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE OR REPLACE FUNCTION gc_remote_worker_cell_revision_cas_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF NEW.execution_revision < OLD.execution_revision
+          OR NEW.cleanup_revision < OLD.cleanup_revision
+          OR NEW.backup_revision < OLD.backup_revision
+          OR (NEW.execution_state IS DISTINCT FROM OLD.execution_state AND NEW.execution_revision <> OLD.execution_revision + 1)
+          OR (NEW.execution_state = OLD.execution_state AND NEW.execution_revision <> OLD.execution_revision)
+          OR (NEW.cleanup_state IS DISTINCT FROM OLD.cleanup_state AND NEW.cleanup_revision <> OLD.cleanup_revision + 1)
+          OR (NEW.cleanup_state = OLD.cleanup_state AND NEW.cleanup_revision <> OLD.cleanup_revision)
+          OR (NEW.backup_state IS DISTINCT FROM OLD.backup_state AND NEW.backup_revision <> OLD.backup_revision + 1)
+          OR (NEW.backup_state = OLD.backup_state AND NEW.backup_revision <> OLD.backup_revision)
+          OR (OLD.execution_state IN ('exited', 'cancelled', 'limit_exceeded', 'failed', 'liveness_unknown')
+              AND NEW.execution_state IS DISTINCT FROM OLD.execution_state) THEN
+          RAISE EXCEPTION 'remote worker cell state revision must advance monotonically by one on transition' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE OR REPLACE FUNCTION gc_remote_worker_cell_high_water_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF NEW.peak_disk_bytes < OLD.peak_disk_bytes
+          OR NEW.peak_memory_bytes < OLD.peak_memory_bytes
+          OR NEW.peak_file_count < OLD.peak_file_count
+          OR NEW.peak_process_count < OLD.peak_process_count
+          OR NEW.raw_output_bytes < OLD.raw_output_bytes
+          OR NEW.retained_diagnostic_bytes < OLD.retained_diagnostic_bytes
+          OR NEW.failed_cleanup_retained_bytes < OLD.failed_cleanup_retained_bytes
+          OR NEW.quarantine_retained_bytes < OLD.quarantine_retained_bytes
+          OR NEW.capacity_revision < OLD.capacity_revision THEN
+          RAISE EXCEPTION 'remote worker cell high-water and retained-byte accounting cannot regress' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE OR REPLACE FUNCTION gc_remote_worker_cell_no_delete_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF NOT (
+          OLD.execution_state IN ('exited', 'cancelled', 'limit_exceeded', 'failed')
+          AND OLD.cleanup_state = 'verified_clean'
+        ) THEN
+          RAISE EXCEPTION 'remote worker cell removal requires verified zero liveness' USING ERRCODE = '23514';
+        END IF;
+        RETURN OLD;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE OR REPLACE FUNCTION gc_remote_worker_cell_evidence_chain_guard()
+      RETURNS trigger AS $$
+      DECLARE
+        parent_cell_id TEXT;
+        expected_sequence BIGINT;
+        expected_previous TEXT;
+      BEGIN
+        PERFORM pg_advisory_xact_lock(hashtextextended(
+          NEW.registry_workspace_id || ':' || NEW.assignment_id || ':' || NEW.assignment_generation::text, 505
+        ));
+        SELECT c.cell_id INTO parent_cell_id
+          FROM remote_worker_cells c
+          WHERE c.registry_workspace_id = NEW.registry_workspace_id
+            AND c.assignment_id = NEW.assignment_id
+            AND c.assignment_generation = NEW.assignment_generation;
+        SELECT 1 + COALESCE(MAX(f.evidence_sequence), 0),
+               COALESCE((
+                 SELECT g.evidence_sha256 FROM remote_worker_cell_evidence g
+                 WHERE g.registry_workspace_id = NEW.registry_workspace_id
+                   AND g.assignment_id = NEW.assignment_id
+                   AND g.assignment_generation = NEW.assignment_generation
+                 ORDER BY g.evidence_sequence DESC LIMIT 1
+               ), '${"0".repeat(64)}')
+          INTO expected_sequence, expected_previous
+          FROM remote_worker_cell_evidence f
+          WHERE f.registry_workspace_id = NEW.registry_workspace_id
+            AND f.assignment_id = NEW.assignment_id
+            AND f.assignment_generation = NEW.assignment_generation;
+        IF NEW.cell_id IS DISTINCT FROM parent_cell_id
+          OR NEW.evidence_sequence <> expected_sequence
+          OR NEW.previous_evidence_sha256 <> expected_previous THEN
+          RAISE EXCEPTION 'remote worker cell evidence chain is out of order or misbound' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE OR REPLACE FUNCTION gc_reject_remote_worker_cell_evidence_mutation()
+      RETURNS trigger AS $$
+      BEGIN
+        RAISE EXCEPTION 'remote worker cell evidence is append-only' USING ERRCODE = '23514';
+      END;
+      $$ LANGUAGE plpgsql;
+
+      DROP TRIGGER IF EXISTS trg_remote_worker_cells_profile_immutable ON remote_worker_cells;
+      CREATE TRIGGER trg_remote_worker_cells_profile_immutable
+        BEFORE UPDATE ON remote_worker_cells
+        FOR EACH ROW EXECUTE FUNCTION gc_remote_worker_cell_profile_immutable_guard();
+      DROP TRIGGER IF EXISTS trg_remote_worker_cells_revision_cas ON remote_worker_cells;
+      CREATE TRIGGER trg_remote_worker_cells_revision_cas
+        BEFORE UPDATE ON remote_worker_cells
+        FOR EACH ROW EXECUTE FUNCTION gc_remote_worker_cell_revision_cas_guard();
+      DROP TRIGGER IF EXISTS trg_remote_worker_cells_high_water_monotonic ON remote_worker_cells;
+      CREATE TRIGGER trg_remote_worker_cells_high_water_monotonic
+        BEFORE UPDATE ON remote_worker_cells
+        FOR EACH ROW EXECUTE FUNCTION gc_remote_worker_cell_high_water_guard();
+      DROP TRIGGER IF EXISTS trg_remote_worker_cells_no_delete_unless_clean ON remote_worker_cells;
+      CREATE TRIGGER trg_remote_worker_cells_no_delete_unless_clean
+        BEFORE DELETE ON remote_worker_cells
+        FOR EACH ROW EXECUTE FUNCTION gc_remote_worker_cell_no_delete_guard();
+
+      DROP TRIGGER IF EXISTS trg_remote_worker_cell_evidence_chain_guard ON remote_worker_cell_evidence;
+      CREATE TRIGGER trg_remote_worker_cell_evidence_chain_guard
+        BEFORE INSERT ON remote_worker_cell_evidence
+        FOR EACH ROW EXECUTE FUNCTION gc_remote_worker_cell_evidence_chain_guard();
+      DROP TRIGGER IF EXISTS trg_remote_worker_cell_evidence_no_update ON remote_worker_cell_evidence;
+      CREATE TRIGGER trg_remote_worker_cell_evidence_no_update
+        BEFORE UPDATE ON remote_worker_cell_evidence
+        FOR EACH ROW EXECUTE FUNCTION gc_reject_remote_worker_cell_evidence_mutation();
+      DROP TRIGGER IF EXISTS trg_remote_worker_cell_evidence_no_delete ON remote_worker_cell_evidence;
+      CREATE TRIGGER trg_remote_worker_cell_evidence_no_delete
+        BEFORE DELETE ON remote_worker_cell_evidence
+        FOR EACH ROW EXECUTE FUNCTION gc_reject_remote_worker_cell_evidence_mutation();
+    `,
+  },
 ];
