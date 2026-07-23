@@ -13,13 +13,15 @@
 //
 // Live PostgreSQL is EXECUTED, never skipped: the lane honors a provided
 // GOATCITADEL_TEST_POSTGRES_URL, otherwise it provisions a hermetic cluster
-// (initdb/pg_ctl/psql; PGDATA under the artifact scratch, detached start,
-// readiness-polled, fast-stopped on teardown). If neither a URL nor local
-// PostgreSQL binaries exist, the live-PG check FAILS — the closure packet
-// calls an unset URL "an explicit C4 HOLD, not an accepted skip".
+// (initdb/pg_ctl/psql; PGDATA in the OS temp directory, random identity-checked
+// port, detached start, readiness-polled, fast-stopped and removed on
+// teardown). If neither a URL nor local PostgreSQL binaries exist, the live-PG
+// check FAILS — the closure packet calls an unset URL "an explicit C4 HOLD,
+// not an accepted skip".
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import {
   buildExternalSourcesLaneChecks,
@@ -159,7 +161,12 @@ function resolvePostgresBinDir() {
 function provisionHermeticPostgres() {
   const binDir = resolvePostgresBinDir();
   if (!binDir) return { error: "No PostgreSQL binaries found (set GOATCITADEL_PG_BIN_DIR or install PostgreSQL 16)." };
-  const dataDir = path.join(artifactRoot, "pg");
+  // PGDATA lives in the OS temp directory, NOT under the repository: on this
+  // Windows host, clusters under the repo tree intermittently lost backends
+  // mid-migration (connection resets — the classic antivirus-scanning failure
+  // signature PostgreSQL-on-Windows documents), while temp-dir clusters run
+  // the identical suite reliably.
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "gc-hx407-lane-pg-"));
   // Random port: sequential lane runs must never share a port — a lingering
   // postmaster from a previous run would otherwise answer the readiness probe
   // for a cluster whose files are already gone.
@@ -245,7 +252,7 @@ function runSpawnCheck(check, envOverride = {}) {
   writeCheckLogs(check.id, result.stdout, result.stderr);
   if (result.error) {
     recordResult(check, { status: "failed", error: String(result.error), durationMs: Date.now() - checkStartedAt });
-    return;
+    return { status: "failed", combined: "" };
   }
   const combined = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
   const counts =
@@ -274,6 +281,7 @@ function runSpawnCheck(check, envOverride = {}) {
       .join("\n");
     process.stdout.write(`${tail.replace(/^/gm, "     | ")}\n`);
   }
+  return { status: derived.status, combined };
 }
 
 let hermeticStop;
@@ -294,55 +302,73 @@ for (const [index, check] of checks.entries()) {
   }
   if (check.kind === "live-postgres") {
     const providedUrl = process.env.GOATCITADEL_TEST_POSTGRES_URL?.trim();
-    let url = providedUrl;
-    if (url) {
-      livePostgresMode = "provided_env_url";
-      process.stdout.write("  using provided GOATCITADEL_TEST_POSTGRES_URL\n");
-    } else {
-      process.stdout.write("  provisioning hermetic PostgreSQL cluster...\n");
-      const provisioned = provisionHermeticPostgres();
-      if (provisioned.error) {
-        recordResult(check, {
-          status: "failed",
-          failureNote:
-            `${provisioned.error} The closure packet treats an unexecuted live-PostgreSQL proof as an explicit ` +
-            "C4 HOLD, not an accepted skip: provide GOATCITADEL_TEST_POSTGRES_URL or local PostgreSQL binaries.",
-        });
-        process.stdout.write(`  -> FAIL (${provisioned.error})\n`);
-        continue;
-      }
-      url = provisioned.url;
-      hermeticStop = provisioned.stop;
-      livePostgresMode = "hermetic_cluster";
-      process.stdout.write(`  hermetic cluster ready at ${url}\n`);
-    }
-    try {
-      runSpawnCheck(
-        {
-          ...check,
-          args: [
-            "--filter",
-            "@goatcitadel/storage",
-            "exec",
-            "tsx",
-            "--test",
-            "src/external-source-closure-repo.postgres.test.ts",
-          ],
-        },
-        { GOATCITADEL_TEST_POSTGRES_URL: url },
-      );
-    } finally {
-      if (hermeticStop) {
-        try {
-          hermeticStop();
-        } catch (error) {
-          process.stdout.write(`  (hermetic PostgreSQL teardown warning: ${String(error)})\n`);
+    const storageTestArgs = [
+      "--filter",
+      "@goatcitadel/storage",
+      "exec",
+      "tsx",
+      "--test",
+      "src/external-source-closure-repo.postgres.test.ts",
+    ];
+    // Connection-reset signatures get ONE fresh-cluster re-attempt: on this
+    // host a hermetic postmaster can sporadically lose backends to external
+    // interference (AV-style file scanning), which is environmental, not a
+    // proof failure. Genuine assertion failures never match and never retry.
+    const connectionResetPattern =
+      /ECONNRESET|Connection terminated|server closed the connection|terminated unexpectedly/iu;
+    const maxAttempts = providedUrl ? 1 : 2;
+    let attempt = 0;
+    let outcome;
+    while (attempt < maxAttempts) {
+      attempt += 1;
+      let url = providedUrl;
+      if (url) {
+        livePostgresMode = "provided_env_url";
+        process.stdout.write("  using provided GOATCITADEL_TEST_POSTGRES_URL\n");
+      } else {
+        process.stdout.write(`  provisioning hermetic PostgreSQL cluster (attempt ${attempt}/${maxAttempts})...\n`);
+        const provisioned = provisionHermeticPostgres();
+        if (provisioned.error) {
+          recordResult(check, {
+            status: "failed",
+            failureNote:
+              `${provisioned.error} The closure packet treats an unexecuted live-PostgreSQL proof as an explicit ` +
+              "C4 HOLD, not an accepted skip: provide GOATCITADEL_TEST_POSTGRES_URL or local PostgreSQL binaries.",
+          });
+          process.stdout.write(`  -> FAIL (${provisioned.error})\n`);
+          outcome = { status: "failed", combined: "" };
+          break;
         }
-        hermeticStop = undefined;
+        url = provisioned.url;
+        hermeticStop = provisioned.stop;
+        livePostgresMode = "hermetic_cluster";
+        process.stdout.write(`  hermetic cluster ready at ${url}\n`);
       }
+      try {
+        outcome = runSpawnCheck({ ...check, args: storageTestArgs }, { GOATCITADEL_TEST_POSTGRES_URL: url });
+      } finally {
+        if (hermeticStop) {
+          try {
+            hermeticStop();
+          } catch (error) {
+            process.stdout.write(`  (hermetic PostgreSQL teardown warning: ${String(error)})\n`);
+          }
+          hermeticStop = undefined;
+        }
+      }
+      if (outcome.status === "passed" || attempt >= maxAttempts) break;
+      if (!connectionResetPattern.test(outcome.combined)) break;
+      process.stdout.write(
+        "  connection-reset signature detected (environmental interference); retrying once on a fresh cluster...\n",
+      );
     }
     const settled = checkResults.get(check.id);
-    process.stdout.write(settled.status === "passed" ? "  -> PASS (live PostgreSQL executed)\n" : "  -> FAIL\n");
+    if (settled) {
+      checkResults.set(check.id, { ...settled, livePostgresAttempts: attempt });
+    }
+    process.stdout.write(
+      settled?.status === "passed" ? `  -> PASS (live PostgreSQL executed; attempts ${attempt})\n` : "  -> FAIL\n",
+    );
     continue;
   }
   runSpawnCheck(check);
