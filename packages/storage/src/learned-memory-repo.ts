@@ -92,6 +92,24 @@ function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
+/**
+ * HX-402 P1: session learned memory is EVIDENCE, never authority. The storage
+ * boundary pins the bounded evidence-only status vocabulary so no caller can
+ * mint an authority-looking state (e.g. "trusted"/"promoted") through this
+ * repository — promotion into durable memory happens only through the
+ * approval-governed lifecycle owners.
+ */
+const EVIDENCE_ONLY_LEARNED_MEMORY_STATUSES = new Set(["active", "conflict", "disabled", "dropped", "superseded"]);
+
+function assertEvidenceOnlyLearnedMemoryStatus(status: string): void {
+  if (!EVIDENCE_ONLY_LEARNED_MEMORY_STATUSES.has(status)) {
+    throw new TypeError(
+      `Learned memory status "${status}" is outside the evidence-only vocabulary; ` +
+        "session learned memory can never carry authority state.",
+    );
+  }
+}
+
 // ── repository ───────────────────────────────────────────────────────
 
 export class LearnedMemoryRepository {
@@ -210,6 +228,7 @@ export class LearnedMemoryRepository {
   // ── mutations ──────────────────────────────────────────────────────
 
   insertItem(input: InsertLearnedMemoryItemInput): LearnedMemoryItemRecord {
+    assertEvidenceOnlyLearnedMemoryStatus(input.status);
     const now = new Date().toISOString();
     const itemId = randomUUID();
     const confidence = clamp01(input.confidence);
@@ -246,6 +265,13 @@ export class LearnedMemoryRepository {
   }
 
   updateItemFields(itemId: string, fields: { status: string; content: string; confidence: number }): void {
+    assertEvidenceOnlyLearnedMemoryStatus(fields.status);
+    // Redacted evidence stays redacted: a field update can never restore or
+    // replace content that the redaction policy already dropped.
+    const current = this.getItem(itemId);
+    if (current?.redacted && fields.content !== current.content) {
+      throw new TypeError("Learned memory content is redacted; redacted evidence never accepts new content.");
+    }
     this.updateItemFieldsStmt.run({
       itemId,
       status: fields.status,
@@ -300,5 +326,3 @@ export class LearnedMemoryRepository {
     this.deleteItemsBySessionStmt.run(sessionId);
   }
 }
-
-
