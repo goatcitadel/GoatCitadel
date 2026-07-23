@@ -29,6 +29,7 @@ import {
   deriveCheckStatus,
   deriveLaneStatus,
   deriveRowCompletionStatuses,
+  parseBrowserFlowCounts,
   parseNodeTestCounts,
   parseVitestCounts,
   scanForProductionProofGate,
@@ -266,6 +267,7 @@ function runSpawnCheck(check, envOverride = {}) {
     countKind: check.count,
     counts,
     requireAllExecuted: check.requireAllExecuted === true,
+    requiredPassed: check.requiredPassed,
   });
   recordResult(check, {
     ...derived,
@@ -297,6 +299,62 @@ for (const [index, check] of checks.entries()) {
       passed
         ? `  -> PASS (0 production gate references across ${detail.checkedFiles} files; heads sqlite ${detail.currentDependencyMigrationHeads.sqlite} / postgres ${detail.currentDependencyMigrationHeads.postgres})\n`
         : "  -> FAIL (production proof-gate references remain; see logs)\n",
+    );
+    continue;
+  }
+  if (check.kind === "browser-flow") {
+    // C4b: the real-browser Library→Chat→approval-recovery flow. Runs
+    // in-process (playwright + the verification stack helpers); its printed
+    // combo summary is parsed with the all-combos + >0-steps honesty guard,
+    // so a flow that crashes before printing, drops a combo, or executes
+    // nothing can never pass. NOTE: no check declares this kind yet — the
+    // lane table's C4b BLOCKED NOTE documents the frozen-gateway contextRefs
+    // gap; this branch is pre-wired so the unblock is one table row.
+    const checkStartedAt = Date.now();
+    let combined = "";
+    let exitCode = 0;
+    const capture = (line) => {
+      combined += `${line}\n`;
+      process.stdout.write(`  ${line}\n`);
+    };
+    try {
+      const { runExternalSourcesBrowserFlow } = await import("./lib/scenarios/external-sources-browser-flow.mjs");
+      const flowResult = await runExternalSourcesBrowserFlow({ artifactRoot, log: capture });
+      exitCode = flowResult.combosFailed === 0 && flowResult.combosPassed === flowResult.combosPlanned ? 0 : 1;
+    } catch (error) {
+      exitCode = 1;
+      const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
+      combined += `${detail}\n`;
+      process.stdout.write(`  browser flow crashed: ${stripAnsi(detail).split("\n")[0]}\n`);
+    }
+    writeCheckLogs(check.id, combined, "");
+    const counts = parseBrowserFlowCounts(combined);
+    const derived = deriveCheckStatus({
+      exitCode,
+      countKind: check.count,
+      counts,
+      requiredPassed: check.requiredPassed,
+    });
+    recordResult(check, {
+      ...derived,
+      exitCode,
+      ...(counts
+        ? {
+            combosPlanned: counts.planned,
+            combosExecuted: counts.executed,
+            combosPassed: counts.passed,
+            combosFailed: counts.failed,
+            flowSteps: counts.steps,
+          }
+        : {}),
+      durationMs: Date.now() - checkStartedAt,
+    });
+    const settledBrowser = checkResults.get(check.id);
+    const browserSeconds = ((settledBrowser.durationMs ?? 0) / 1000).toFixed(1);
+    process.stdout.write(
+      settledBrowser.status === "passed"
+        ? `  -> PASS (${counts.passed}/${counts.planned} combos, ${counts.steps} steps) in ${browserSeconds}s\n`
+        : `  -> FAIL (exit ${exitCode}${settledBrowser.failureNote ? `; ${settledBrowser.failureNote}` : ""}) in ${browserSeconds}s\n`,
     );
     continue;
   }
@@ -395,7 +453,8 @@ for (const row of rowStatuses) {
           ? "FAIL"
           : "SKIP";
   process.stdout.write(`  Row ${row.row}: ${label} — ${row.title}\n`);
-  if (row.skipReason) process.stdout.write(`      declared C4b scope: ${row.skipReason}\n`);
+  if (row.note) process.stdout.write(`      note: ${row.note}\n`);
+  if (row.skipReason) process.stdout.write(`      declared skip: ${row.skipReason}\n`);
   if (row.failedChecks) process.stdout.write(`      failed checks: ${row.failedChecks.join(", ")}\n`);
 }
 

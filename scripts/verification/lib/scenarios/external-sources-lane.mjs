@@ -14,11 +14,29 @@
 //   * every vitest/node-test check parses the runner's reported counts and
 //     FAILS when zero tests executed, even on exit code 0;
 //   * no scenario is faked: each row-completion row is executed by real
-//     checks or carries an explicit skipReason (the two C4b-owned rows);
+//     checks or carries an explicit skipReason (currently the two browser
+//     rows, BLOCKED as described below);
+//   * the browser-flow counter machinery (summary parser + all-combos +
+//     >0-steps guard) ships here ready for the browser-flow check; that check
+//     enters the table when the blocking gateway gap is fixed;
 //   * the live-PostgreSQL check must EXECUTE (provisioned hermetically or via
 //     GOATCITADEL_TEST_POSTGRES_URL). An unset URL with no local cluster is a
 //     lane FAILURE — the closure packet calls it "an explicit C4 HOLD, not an
 //     accepted skip".
+//
+// C4b BLOCKED NOTE (2026-07-22): C4b activated the C3 UI and built the full
+// real-browser Library→Chat→approval-recovery flow spec
+// (`external-sources-browser-flow.mjs`, standalone-runnable). Executing it end
+// to end is BLOCKED on a discovered gateway composition gap OUTSIDE the C4b
+// allowlist: `apps/gateway/src/routes/chat.messages.ts` line ~195 pins
+// `contextRefs[].kind` to `z.enum(["attachment", "memory_item"])`, so the
+// C1-frozen `external_attachment` refs the C3 composer sends are rejected 400
+// at the route BEFORE the C4a-composed resolver can freeze them. The flow
+// proves every step through attach/select live in all four viewport/scheme
+// combos and fails honestly at the send. When the C4a owner widens the enum
+// (+ route test), flip rows 2/3 to the executed browser-flow check (kind
+// "browser-flow", count "browser-flow", requiredPassed 4) wired in
+// `external-sources-proof.mjs`.
 
 const ESC = String.fromCharCode(27);
 const ANSI_PATTERN = new RegExp(`${ESC}\\[[0-9;]*m`, "g");
@@ -33,6 +51,23 @@ export function parseVitestCounts(text) {
   const match = clean.match(/Tests\s+(?:([0-9]+) failed \| )?([0-9]+) passed/);
   if (!match) return undefined;
   return { failed: match[1] ? Number(match[1]) : 0, passed: Number(match[2]) };
+}
+
+// Browser-flow summary printed by external-sources-browser-flow.mjs:
+// "External-sources browser flow summary: combos 4 planned / 4 executed / 4 passed / 0 failed; steps 44".
+export function parseBrowserFlowCounts(text) {
+  const clean = stripAnsi(text);
+  const match = clean.match(
+    /External-sources browser flow summary: combos ([0-9]+) planned \/ ([0-9]+) executed \/ ([0-9]+) passed \/ ([0-9]+) failed; steps ([0-9]+)/u,
+  );
+  if (!match) return undefined;
+  return {
+    planned: Number(match[1]),
+    executed: Number(match[2]),
+    passed: Number(match[3]),
+    failed: Number(match[4]),
+    steps: Number(match[5]),
+  };
 }
 
 // node:test / tsx --test counters ("# pass 24" / spec-reporter glyph lines).
@@ -60,8 +95,11 @@ export function parseNodeTestCounts(text) {
  * is a FAIL, never a pass. `requireAllExecuted` additionally fails a
  * node-test check whose tests self-skipped (used by the live-PG check, whose
  * conditional skip is a C4 HOLD when it fires inside the lane).
+ * `requiredPassed` demands an exact minimum pass count (the browser-flow
+ * check uses it to require ALL declared viewport/scheme combos), and browser
+ * counts carrying `steps` must have executed at least one step.
  */
-export function deriveCheckStatus({ exitCode, countKind, counts, requireAllExecuted = false }) {
+export function deriveCheckStatus({ exitCode, countKind, counts, requireAllExecuted = false, requiredPassed }) {
   if (exitCode !== 0) {
     return { status: "failed", failureNote: `runner exited ${exitCode}` };
   }
@@ -74,6 +112,18 @@ export function deriveCheckStatus({ exitCode, countKind, counts, requireAllExecu
   }
   if (counts.failed > 0 || counts.passed < 1) {
     return { status: "failed", failureNote: `runner reported ${counts.passed} passed / ${counts.failed} failed` };
+  }
+  if (requiredPassed !== undefined && counts.passed < requiredPassed) {
+    return {
+      status: "failed",
+      failureNote: `runner reported ${counts.passed} passed but this check requires all ${requiredPassed}`,
+    };
+  }
+  if (counts.steps !== undefined && counts.steps < 1) {
+    return {
+      status: "failed",
+      failureNote: "runner reported zero executed steps; cannot prove the browser flow ran",
+    };
   }
   if (requireAllExecuted && (counts.skipped ?? 0) > 0) {
     return {
@@ -204,6 +254,11 @@ export function buildExternalSourcesLaneChecks() {
       args: gatewayVitest(["external-sources.integration.test.ts", "external-sources-closure.integration.test.ts"]),
       count: "vitest",
     },
+    // The browser-flow check (kind "browser-flow", count "browser-flow",
+    // requiredPassed 4 — running external-sources-browser-flow.mjs headlessly)
+    // is built and entrypoint-wired but NOT declared yet: see the C4b BLOCKED
+    // NOTE above. Adding this row is the one-table-line flip once
+    // chat.messages.ts accepts external_attachment contextRefs.
     {
       id: "external-sources.static-gate-scan",
       title:
@@ -222,9 +277,12 @@ export function buildExternalSourcesLaneChecks() {
 }
 
 /**
- * Closure-packet C4 row-completion matrix mapped to lane checks. The two
- * browser/visual rows are C4b-owned and carry explicit skip reasons; the lane
- * gains them when C4b lands. No row is silently dropped or faked.
+ * Closure-packet C4 row-completion matrix mapped to lane checks. Rows 2 and 3
+ * carry explicit skip reasons for their BROWSER half: C4b built and proved the
+ * flow up to the send, where a frozen-gateway contextRefs enum gap (see the
+ * C4b BLOCKED NOTE) rejects the C1 external_attachment refs — the rows flip to
+ * the executed browser-flow check when that gap is fixed. No row is silently
+ * dropped or faked.
  */
 export function buildRowCompletionMatrix() {
   return [
@@ -246,17 +304,30 @@ export function buildRowCompletionMatrix() {
       checks: ["external-sources.integration"],
       suites: [
         "apps/gateway/src/external-sources-closure.integration.test.ts (API-level Library→Chat→approval→recovery closure)",
+        "scripts/verification/lib/scenarios/external-sources-browser-flow.mjs (built C4b real-browser flow, standalone-runnable)",
       ],
+      note:
+        "C4b activated the C3 UI (list-carried sessionIncarnationId) and the browser flow proves register→scan→plan→apply→attach→select " +
+        "live in a real browser; the send leg is BLOCKED by the frozen-gateway contextRefs enum gap (C4b BLOCKED NOTE).",
       skipReason:
-        "The BROWSER half (driving the shipped C3 Library/Chat UI through a real browser) is C4b-owned: C4b activates the inert C3 surfaces and adds the browser proof to this lane. The full API-level path executes here via the closure integration suite.",
+        "BROWSER half BLOCKED outside the C4b allowlist: apps/gateway/src/routes/chat.messages.ts pins contextRefs[].kind to " +
+        '["attachment","memory_item"], 400-rejecting the C1 external_attachment refs the C3 composer sends before the C4a-composed ' +
+        "resolver runs. The full API-level path executes here via the closure integration suite; flip this row to the browser-flow " +
+        "check once the C4a owner widens the enum (+ route test).",
     },
     {
       row: 3,
       title: "Light/dark desktop and mobile coverage",
       checks: [],
-      suites: [],
+      suites: [
+        "scripts/verification/lib/scenarios/external-sources-browser-flow.mjs (viewport/scheme parametrization: 1440x1024 + 390x844 × light + dark)",
+      ],
+      note:
+        "The built flow parametrizes the full path across all four viewport/scheme combos (no pixel baselines on this host; pixel VR " +
+        "stays CI-gated via visual-rebaseline.yml) and executed through attach/select in every combo before the blocked send.",
       skipReason:
-        "C4b-owned: visual coverage follows UI activation (C4b); Linux visual baselines are captured via visual-rebaseline.yml. Declared, never faked.",
+        "BLOCKED on the same send leg as row 2 (chat.messages.ts contextRefs enum). Declared, never faked; flips to the executed " +
+        "browser-flow check (requiredPassed 4) with the row-2 unblock.",
     },
     {
       row: 4,
@@ -279,9 +350,10 @@ export function buildRowCompletionMatrix() {
 /**
  * Fold executed check results into the row-completion matrix.
  *   * any failing check fails the row;
- *   * a row with a declared C4b skipReason NEVER reports plain "executed":
- *     with passing checks it reports "executed_with_declared_c4b_skip", with
- *     none it reports "skipped" — both visibly honest;
+ *   * a row with a declared skipReason (currently the two BLOCKED browser
+ *     rows) NEVER reports plain "executed": with passing checks it reports
+ *     "executed_with_declared_c4b_skip", with none it reports "skipped" —
+ *     both visibly honest;
  *   * a row with neither passing checks nor a skipReason is a table bug and
  *     fails.
  */

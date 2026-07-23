@@ -10,6 +10,7 @@ import {
   deriveCheckStatus,
   deriveLaneStatus,
   deriveRowCompletionStatuses,
+  parseBrowserFlowCounts,
   parseNodeTestCounts,
   parseVitestCounts,
   scanForProductionProofGate,
@@ -26,6 +27,9 @@ const EXPECTED_CHECK_IDS = [
   "external-sources.gateway-services",
   "external-sources.routes-and-effects",
   "external-sources.integration",
+  // NOTE: "external-sources.browser-flow" (built by C4b) enters this list
+  // when the chat.messages.ts contextRefs enum gap is fixed — see the lane's
+  // C4b BLOCKED NOTE.
   "external-sources.static-gate-scan",
   "external-sources.live-postgres",
 ];
@@ -59,7 +63,10 @@ test("the lane check table is complete, uniquely named, and cites only test file
       assert.ok(fs.existsSync(filePath), `${check.id} cites an existing suite: ${packageDir}/${arg}`);
     }
     if (check.count) {
-      assert.ok(["vitest", "node-test"].includes(check.count), `${check.id} declares a known counter kind`);
+      assert.ok(
+        ["vitest", "node-test", "browser-flow"].includes(check.count),
+        `${check.id} declares a known counter kind`,
+      );
     }
   }
   const livePostgres = checks.find((check) => check.id === "external-sources.live-postgres");
@@ -69,9 +76,15 @@ test("the lane check table is complete, uniquely named, and cites only test file
     fs.existsSync(path.join(repoRoot, "packages/storage/src/external-source-closure-repo.postgres.test.ts")),
     "the live-PG suite exists",
   );
+  // The built (blocked) browser flow spec must exist: the matrix cites it and
+  // the unblock flips it into this table.
+  assert.ok(
+    fs.existsSync(path.join(repoRoot, "scripts/verification/lib/scenarios/external-sources-browser-flow.mjs")),
+    "the browser flow spec exists",
+  );
 });
 
-test("the row-completion matrix covers the packet's four rows with exactly the two declared C4b skips", () => {
+test("the row-completion matrix covers the packet's four rows with exactly the two BLOCKED browser skips", () => {
   const matrix = buildRowCompletionMatrix();
   assert.deepEqual(
     matrix.map((row) => row.row),
@@ -87,10 +100,16 @@ test("the row-completion matrix covers the packet's four rows with exactly the t
   assert.deepEqual(
     skipRows.map((row) => row.row),
     [2, 3],
-    "only the browser path (C4b) and visual coverage (C4b) rows carry skip reasons",
+    "only the browser path and viewport/scheme rows carry skip reasons",
   );
   for (const row of skipRows) {
-    assert.match(row.skipReason, /C4b/u, `row ${row.row} names the owning tranche`);
+    // The skip must name the EXACT blocking gap so the lane output is
+    // actionable, never a vague deferral.
+    assert.match(row.skipReason, /BLOCKED/u, `row ${row.row} states it is blocked`);
+    assert.match(row.skipReason, /chat\.messages\.ts/u, `row ${row.row} names the blocking file`);
+  }
+  for (const row of matrix.slice(0, 3)) {
+    assert.ok(typeof row.note === "string" && row.note.length > 0, `row ${row.row} carries an explanatory note`);
   }
   const laneRow = matrix.find((row) => row.row === 4);
   assert.deepEqual([...laneRow.checks].sort(), [...EXPECTED_CHECK_IDS].sort(), "row 4 requires every lane check");
@@ -107,6 +126,57 @@ test("runner count parsers read vitest and node:test summaries", () => {
     skipped: 1,
   });
   assert.equal(parseNodeTestCounts("nothing"), undefined);
+});
+
+test("the browser-flow parser reads the printed combo summary and its guard demands all combos plus real steps", () => {
+  assert.deepEqual(
+    parseBrowserFlowCounts(
+      "noise\nExternal-sources browser flow summary: combos 4 planned / 4 executed / 4 passed / 0 failed; steps 44\n",
+    ),
+    { planned: 4, executed: 4, passed: 4, failed: 0, steps: 44 },
+  );
+  assert.equal(parseBrowserFlowCounts("the flow crashed before printing"), undefined);
+
+  const allPassed = deriveCheckStatus({
+    exitCode: 0,
+    countKind: "browser-flow",
+    counts: { planned: 4, executed: 4, passed: 4, failed: 0, steps: 44 },
+    requiredPassed: 4,
+  });
+  assert.equal(allPassed.status, "passed");
+  // A crash before the summary printed can never pass.
+  assert.equal(
+    deriveCheckStatus({ exitCode: 0, countKind: "browser-flow", counts: undefined, requiredPassed: 4 }).status,
+    "failed",
+  );
+  // A dropped combo (3/4) fails even with zero reported failures.
+  const dropped = deriveCheckStatus({
+    exitCode: 0,
+    countKind: "browser-flow",
+    counts: { planned: 4, executed: 3, passed: 3, failed: 0, steps: 30 },
+    requiredPassed: 4,
+  });
+  assert.equal(dropped.status, "failed");
+  assert.match(dropped.failureNote, /requires all 4/u);
+  // A failed combo fails.
+  assert.equal(
+    deriveCheckStatus({
+      exitCode: 0,
+      countKind: "browser-flow",
+      counts: { planned: 4, executed: 4, passed: 3, failed: 1, steps: 40 },
+      requiredPassed: 4,
+    }).status,
+    "failed",
+  );
+  // Zero executed steps can never pass (the browser >0 honesty guard).
+  const zeroSteps = deriveCheckStatus({
+    exitCode: 0,
+    countKind: "browser-flow",
+    counts: { planned: 4, executed: 4, passed: 4, failed: 0, steps: 0 },
+    requiredPassed: 4,
+  });
+  assert.equal(zeroSteps.status, "failed");
+  assert.match(zeroSteps.failureNote, /zero executed steps/u);
 });
 
 test("the zero-test honesty guard fails exit-0 runs that executed nothing and self-skipped live-PG runs", () => {
@@ -166,6 +236,7 @@ test("row statuses fold check results honestly and the lane status is fail-close
       [3, "skipped"],
       [4, "executed"],
     ],
+    "the two BLOCKED browser rows report their declared skips honestly, never plain executed",
   );
   assert.equal(deriveLaneStatus(allPassed, rows), "passed");
 
