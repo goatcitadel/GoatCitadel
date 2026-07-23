@@ -63,6 +63,7 @@ import { recordRouteAction } from "../route-diagnostics";
 import { useIsMounted } from "@next/hooks/use-is-mounted";
 import { RuntimeSpendChart, type SpendDay } from "./RuntimeSpendChart";
 import { RuntimeAuthorityPanel } from "./RuntimeAuthorityPanel";
+import { MeshCapabilityPanel } from "./MeshCapabilityPanel";
 import { SessionControlPanel } from "./SessionControlPanel";
 import type { NativeRoutePagesProps } from "../types";
 import "../native-routes.css";
@@ -912,6 +913,7 @@ export function RuntimeRoutePage({
           <NativeGrid>
             <RuntimeAuthorityPanel workspaceId={activeWorkspaceId} theme={route.theme} navigate={navigate} />
             <SessionControlPanel sessionId={route.sessionId} />
+            <MeshCapabilityPanel workspaceId={activeWorkspaceId} />
             <NativeCard
               title="Runtime posture"
               subtitle="Daemon state, service-manager controls, and backup truth in one runtime view."

@@ -453,6 +453,21 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useRuntimeAuthorityProjection
   }),
 }));
 
+vi.mock("@goatcitadel/mission-control-shared/hooks/useMeshCapabilityOps", () => ({
+  useMeshCapabilityOps: () => ({
+    inspection: {
+      workspaceId: "default",
+      generatedAt: "2026-07-13T20:00:00.000Z",
+      manifests: [],
+    },
+    invocationActivity: [],
+    loading: false,
+    error: null,
+    activityError: null,
+    reload: vi.fn(),
+  }),
+}));
+
 function collectText(node: ReactTestInstance | unknown): string {
   if (typeof node === "string" || typeof node === "number") {
     return String(node);
@@ -537,6 +552,8 @@ describe("RuntimeRoutePage", () => {
 
     expect(markup).toContain("Runtime posture");
     expect(markup).toContain("Runtime authority map");
+    expect(markup).toContain("Mesh capability publications");
+    expect(markup).toContain("No mesh capability manifests");
     expect(markup).toContain("Daemon running");
     expect(markup).toContain("Start daemon");
     expect(markup).toContain("Restart daemon");
