@@ -6,6 +6,12 @@ Status: **PARTIAL / HOLD**
 
 Scope: Producer design only. This packet does not authorize edits to the runtime owners named below.
 
+## P5 shared-wiring and release-proof update (2026-07-23)
+
+The `docs/review/HX_402_REMAINING_PRODUCER_AUDIT_2026-07-14.md` P5 tranche is delivered. Shared-wiring verification confirmed that every governed effect kind — `memory_lifecycle_apply`, `skill_lifecycle_apply`, `capability_lifecycle_apply`, `improvement_lifecycle_apply`, and the HX-407 `external_source_knowledge_snapshot_apply` — is already fully wired end to end: enqueued on approve in `ApprovalResolutionEffectsService.enqueueResolutionEffects`, dispatched by the worker in `executeClaimedEffect` with the mesh-M2 terminal/defer split, handled fail-closed when an executor is absent, and executor-supplied by the gateway composition seam (`gateway-service.ts` deps, backed by the composed route services). The typed `ApprovalEffectKind`/`ApprovalEffectTargetKind` contract and the approval-effect repository carry every kind. No admitted-but-unwired effect gap remained; P5 fills none because none exist.
+
+The named `verify:journey:producers` release lane (`scripts/verification/journey-producers-proof.mjs` + `lib/scenarios/journey-producers-lane.mjs`, unit-proven by its sibling test) executes the full audit-P5 matrix: both-dialect immutability/replay/conflict of the governed-lifecycle and improvement owners with a hermetic live-PostgreSQL proof (SQLite 175 <-> PostgreSQL 117 schema parity for both owners plus the live memory-lifecycle governed-owner behavioural proof), the complete approval-first + recovered-effect producer matrix (memory/skill/capability/improvement + HX-407), approval denial/expiry/replay/requester-recovery, the durable improvement five-boundary crash matrix, `verify:skill-learning` and `verify:skill-hub:lifecycle`, and producer-spanning typecheck/docs/format/diff hygiene. The lane is chained into `verify:runtime:truth`. This note records the P5 mechanism and proof; the program register verdict remains the controller's decision.
+
 ## Current truth
 
 The Journey read model, immutable event repository, Gateway route, shared API client, and read-only Library page exist. The page is intentionally labeled experimental because the canonical producer matrix is not complete.
