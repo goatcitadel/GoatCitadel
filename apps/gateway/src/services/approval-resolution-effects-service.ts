@@ -28,6 +28,9 @@ import {
   EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_APPROVAL_KIND,
   EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_KIND,
   EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_TARGET_KIND,
+  IMPROVEMENT_LIFECYCLE_APPROVAL_KIND,
+  IMPROVEMENT_LIFECYCLE_EFFECT_KIND,
+  IMPROVEMENT_LIFECYCLE_EFFECT_TARGET_KIND,
   MEMORY_LIFECYCLE_APPROVAL_KIND,
   MEMORY_LIFECYCLE_EFFECT_KIND,
   MEMORY_LIFECYCLE_EFFECT_TARGET_KIND,
@@ -60,6 +63,11 @@ import {
 import { MemoryLifecycleApplyError } from "./memory-domain-journey-producer.js";
 import { parseMemoryLifecycleApprovalBinding } from "./memory-journey-producer.js";
 import type { MemoryLifecycleApplyResult } from "./memory-lifecycle-service.js";
+import {
+  ImprovementLifecycleApplyError,
+  parseImprovementLifecycleApprovalBinding,
+} from "./improvement-lifecycle-journey-producer.js";
+import type { ImprovementLifecycleApplyResult } from "./improvement-service.js";
 import {
   CapabilityLifecycleApplyError,
   parseCapabilityLifecycleApprovalBinding,
@@ -387,6 +395,21 @@ export interface ApprovalEffectsServiceDeps {
    * ladder.
    */
   executeApprovedCapabilityLifecycleMutation?(input: { approvalId: string }): CandidateLifecycleActionResult;
+  /**
+   * HX-402 P3: executes one approved `improvement.lifecycle` mutation through
+   * the improvement owner. The executor revalidates the exact approval (kind,
+   * deterministic identity, status, expiry), recovers the requester from the
+   * immutable request Journey evidence, byte-verifies the approved
+   * requestSha256, creates the durable P0 intent, claims it one-winner with
+   * database-clock lease fencing, executes the external callback, re-inspects
+   * exact external state, and commits state + settlement + signal + Journey
+   * in one immediate transaction. The external callback is never described as
+   * database-atomic; the intent state machine is the crash-recovery truth.
+   */
+  executeApprovedImprovementLifecycleMutation?(input: {
+    workspaceId: string;
+    approvalId: string;
+  }): ImprovementLifecycleApplyResult;
   enqueueAfterHooks(input: {
     workspaceId: string;
     trigger: "approval.resolve.after" | "approval.response.after";
@@ -687,6 +710,9 @@ export class ApprovalEffectsService {
     }
     if (approval.kind === CAPABILITY_LIFECYCLE_APPROVAL_KIND && input.decision === "approve") {
       enqueued.push(this.enqueueCapabilityLifecycleApply(approval));
+    }
+    if (approval.kind === IMPROVEMENT_LIFECYCLE_APPROVAL_KIND && input.decision === "approve") {
+      enqueued.push(this.enqueueImprovementLifecycleApply(approval));
     }
     enqueued.push(
       this.ctx.storage.approvalEffects.upsert({
@@ -1022,6 +1048,45 @@ export class ApprovalEffectsService {
     });
   }
 
+  /**
+   * HX-402 P3: enqueue the recovered `improvement.lifecycle` mutation effect
+   * on one deterministic effect identity per approval, with a server-derived
+   * content-free payload verified against the immutable approval binding. The
+   * executor recreates the durable intent and revalidates everything again, so
+   * a replayed resolution converges on the immutable settlement instead of
+   * double-executing the external callback.
+   */
+  private enqueueImprovementLifecycleApply(approval: ApprovalRequest): ApprovalEffectRecord {
+    const binding = parseImprovementLifecycleApprovalBinding(
+      (approval.payload as Record<string, unknown> | undefined)?.improvementLifecycle,
+    );
+    if (!binding || approval.linkage?.workspaceId !== binding.workspaceId) {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: `Approval ${approval.approvalId} does not carry a canonical improvement.lifecycle binding.`,
+      });
+    }
+    return this.ctx.storage.approvalEffects.upsert({
+      approvalId: approval.approvalId,
+      effectKind: IMPROVEMENT_LIFECYCLE_EFFECT_KIND,
+      targetKind: IMPROVEMENT_LIFECYCLE_EFFECT_TARGET_KIND,
+      targetId: approval.approvalId,
+      idempotencyKey: buildApprovalEffectIdempotencyKey({
+        approvalId: approval.approvalId,
+        effectKind: IMPROVEMENT_LIFECYCLE_EFFECT_KIND,
+        targetKind: IMPROVEMENT_LIFECYCLE_EFFECT_TARGET_KIND,
+        targetId: approval.approvalId,
+      }),
+      payload: {
+        workspaceId: binding.workspaceId,
+        operationKind: binding.operationKind,
+        targetKind: binding.targetKind,
+        targetId: binding.targetId,
+        requestSha256: binding.requestSha256,
+      },
+    });
+  }
+
   public enqueueApprovalWaitMaterialization(approval: ApprovalRequest): ApprovalEffectRecord | undefined {
     const runId = asOptionalString(approval.linkage?.durableRunId);
     if (!runId) {
@@ -1270,6 +1335,9 @@ export class ApprovalEffectsService {
         return;
       case CAPABILITY_LIFECYCLE_EFFECT_KIND:
         this.handleCapabilityLifecycleApply(effect);
+        return;
+      case IMPROVEMENT_LIFECYCLE_EFFECT_KIND:
+        this.handleImprovementLifecycleApply(effect);
         return;
       case "approval_inbox_follow_up":
         await this.handleApprovalInboxFollowUp(effect);
@@ -1636,6 +1704,66 @@ export class ApprovalEffectsService {
     } catch (error) {
       if (!this.isEffectStillClaimed(effect.effectId)) return;
       if (error instanceof CapabilityLifecycleApplyError) {
+        this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+          lastError: error.message,
+          result: { errorCode: error.code },
+        });
+        return;
+      }
+      this.deferClaimedEffectForRetry(effect, this.workerId, error, {
+        deliveryState: "retry_scheduled",
+        approvalId: effect.approvalId,
+      });
+    }
+  }
+
+  /**
+   * HX-402 P3: execute one approved improvement lifecycle mutation. Terminal
+   * governance denials (missing/foreign/expired approval, missing request
+   * evidence, request/state drift, tampered binding) fail the effect closed
+   * with their content-free code. A live competing claim and unexpected
+   * infrastructure crashes defer for bounded retry; recovery resumes from the
+   * durable intent and converges on the immutable settlement — including the
+   * truthful `failed`/`aborted` dispositions, which complete the effect with
+   * the settlement they honestly recorded.
+   */
+  private handleImprovementLifecycleApply(effect: ApprovalEffectRecord): void {
+    const execute = this.deps.executeApprovedImprovementLifecycleMutation;
+    const workspaceId = asOptionalString(effect.payload.workspaceId);
+    if (!execute || !workspaceId) {
+      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+        lastError: "Improvement lifecycle effect is missing its executor or workspace binding.",
+        result: { workspaceId, configured: Boolean(execute) },
+      });
+      return;
+    }
+    try {
+      const applied = execute({ workspaceId, approvalId: effect.approvalId });
+      if (!this.isEffectStillClaimed(effect.effectId)) return;
+      const completed = this.ctx.storage.approvalEffects.completeEffect(
+        effect.effectId,
+        this.workerId,
+        effect.version,
+        {
+          result: {
+            disposition: applied.disposition,
+            operationId: applied.operationId,
+            settlementId: applied.settlementId,
+            operationKind: applied.operationKind,
+            targetKind: applied.targetKind,
+            targetId: applied.targetId,
+            ...(applied.activationId === undefined ? {} : { activationId: applied.activationId }),
+            resultSha256: applied.resultSha256,
+            replayed: applied.replayed,
+          },
+        },
+      );
+      if (!completed) {
+        throw new Error(`Improvement lifecycle effect ${effect.effectId} lost its completion lease.`);
+      }
+    } catch (error) {
+      if (!this.isEffectStillClaimed(effect.effectId)) return;
+      if (error instanceof ImprovementLifecycleApplyError) {
         this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
           lastError: error.message,
           result: { errorCode: error.code },

@@ -2,10 +2,19 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   clampInt,
+  computeImprovementLifecycleRequestSha256,
+  computeImprovementLifecycleResultSha256,
+  ConflictError,
+  IMPROVEMENT_LIFECYCLE_APPROVAL_KIND,
   type ApprovalCreateInput,
   type ApprovalRequest,
   type AgenticDiagnosticSignal,
   type DurableRunRecord,
+  type ImprovementLifecycleOperationKind,
+  type ImprovementLifecycleOperationRecord,
+  type ImprovementLifecycleSettlementDisposition,
+  type ImprovementLifecycleSettlementRecord,
+  type ImprovementLifecycleTargetKind,
   type RealtimeEvent,
   type TaskRecord,
 } from "@goatcitadel/contracts";
@@ -131,6 +140,31 @@ import {
   toWeekKeyForTimezone,
 } from "./improvement-replay.js";
 import { resolveActiveUpdateTarget } from "./improvement-service-active-update.js";
+import {
+  buildImprovementLifecycleApprovalBinding,
+  buildImprovementLifecycleApprovalPayload,
+  buildImprovementLifecycleRequestJourneyEvent,
+  buildImprovementLifecycleRequestSha256,
+  buildImprovementLifecycleSettlementJourneyEvent,
+  buildImprovementLifecycleStateSha256,
+  computeImprovementLifecycleObservedStateSha256,
+  createImprovementLifecycleOperationRepository,
+  deriveImprovementLifecycleActivationId,
+  deriveImprovementLifecycleApprovalId,
+  deriveImprovementLifecycleInspectionId,
+  deriveImprovementLifecycleOperationId,
+  deriveImprovementLifecycleSettlementId,
+  ImprovementLifecycleApplyError,
+  improvementLifecycleOperationIdempotencyKey,
+  improvementLifecycleRequestJourneyIdempotencyKey,
+  parseImprovementActivateMutation,
+  parseImprovementLifecycleApprovalBinding,
+  parseImprovementLifecycleRequestEnvelope,
+  parseImprovementPauseRollbackMutation,
+  type ImprovementExternalStateMaterial,
+  type ImprovementLifecycleApprovalBindingV1,
+  type ImprovementPauseRollbackMutationV1,
+} from "./improvement-lifecycle-journey-producer.js";
 import { IDEMPOTENT_REALTIME_ENVELOPE_KEY } from "./realtime-event-service.js";
 import { createUtilityModelUsageAttribution } from "./utility-model-usage-attribution.js";
 
@@ -175,7 +209,10 @@ const IMPROVEMENT_SIGNAL_METADATA_MAX_BYTES = 4 * 1024;
 const IMPROVEMENT_SIGNAL_EVIDENCE_REF_LIMIT = 8;
 
 export interface ImprovementServiceContext {
-  readonly storage: Pick<Storage, "approvals" | "chatTurnTraces" | "cronJobs" | "systemSettings">;
+  readonly storage: Pick<
+    Storage,
+    "approvals" | "approvalEvents" | "chatTurnTraces" | "cronJobs" | "governanceJourneyEvents" | "systemSettings"
+  >;
   readonly cronSpecOwner?: Pick<CronSpecMutationOwner, "reconcileSpec">;
   readonly gatewaySql: Storage["gatewaySql"];
   isFeatureEnabled(flag: keyof RuntimeSettings["features"]): boolean;
@@ -412,6 +449,72 @@ export interface ImprovementServiceCallbacks {
   ): Promise<ChatSendMessageResponse>;
   readonly backgroundTasks: Set<Promise<void>>;
   closing: boolean;
+  /**
+   * HX-402 P3 (test-only): lease duration for one governed improvement
+   * lifecycle claim. Production uses the default; crash-recovery tests shorten
+   * it so an expired lease admits the next claim generation against the REAL
+   * database clock (the stale-lease fence lives in the storage trigger).
+   */
+  improvementLifecycleClaimLeaseMs?: number;
+  /**
+   * HX-402 P3 (test-only): crash-injection seam for the governed worker. The
+   * proof suites throw from each boundary to show recovery resumes from the
+   * durable intent, never re-executes a non-idempotent callback blindly, and
+   * that settlement/state/signal/Journey commit or roll back as one unit.
+   */
+  improvementLifecycleCrashSeam?: (boundary: ImprovementLifecycleCrashBoundary) => void;
+}
+
+/** HX-402 P3 crash-injection boundaries (audit-verbatim: callback, inspection, settlement, signal, Journey). */
+export type ImprovementLifecycleCrashBoundary =
+  | "improvement_lifecycle_before_callback"
+  | "improvement_lifecycle_after_callback"
+  | "improvement_lifecycle_after_inspection"
+  | "improvement_lifecycle_before_signal"
+  | "improvement_lifecycle_before_journey";
+
+/** Route-facing authority input for one approval-first improvement lifecycle request. */
+export interface ImprovementLifecycleAuthorityInput {
+  requesterId?: string;
+}
+
+export interface ImprovementLifecyclePendingApproval {
+  approvalId: string;
+  status: ApprovalRequest["status"];
+  kind: typeof IMPROVEMENT_LIFECYCLE_APPROVAL_KIND;
+  operationKind: ImprovementLifecycleOperationKind;
+  targetKind: ImprovementLifecycleTargetKind;
+  targetId: string;
+  workspaceId: string;
+  requestSha256: string;
+  expectedStateSha256: string;
+  expiresAt?: string;
+  createdAt: string;
+  replayed: boolean;
+}
+
+export interface ImprovementLifecyclePendingOutcome {
+  pendingApproval: ImprovementLifecyclePendingApproval;
+}
+
+export interface ImprovementLifecycleNoOpOutcome {
+  pendingApproval: null;
+  noMutationRequired: true;
+  activation: ImprovementActivationRecord;
+}
+
+export type ImprovementLifecycleRequestOutcome = ImprovementLifecyclePendingOutcome | ImprovementLifecycleNoOpOutcome;
+
+export interface ImprovementLifecycleApplyResult {
+  disposition: ImprovementLifecycleSettlementDisposition;
+  operationId: string;
+  settlementId: string;
+  operationKind: ImprovementLifecycleOperationKind;
+  targetKind: ImprovementLifecycleTargetKind;
+  targetId: string;
+  activationId?: string;
+  resultSha256: string;
+  replayed: boolean;
 }
 
 // ── shared utility helpers ───────────────────────────────────────────
@@ -420,8 +523,13 @@ export interface ImprovementServiceCallbacks {
  * Encapsulates all self-improvement, decision replay, auto-tune, and weekly
  * report logic previously inlined in GatewayService.
  */
+const IMPROVEMENT_LIFECYCLE_APPROVAL_TTL_MS = 15 * 60_000;
+const IMPROVEMENT_LIFECYCLE_CLAIM_LEASE_MS = 60_000;
+
 export class ImprovementService {
   private scheduler?: ReturnType<typeof setInterval>;
+  /** HX-402 P3: lazy adapter over the P0 durable intent/claim/inspection/settlement owner. */
+  private improvementLifecycleRepository?: ReturnType<typeof createImprovementLifecycleOperationRepository>;
   // Cache of prepared statements keyed by the built SQL string. The hot read
   // paths (listImprovementSignals / listImprovementCandidates) recompiled their
   // statement on every call during improvement passes; each query has at most a
@@ -997,14 +1105,16 @@ export class ImprovementService {
         "Skill revision candidates promote through capability proposals; no direct mutation was applied.",
       );
     }
-    const activation = await this.requestImprovementActivation(candidateId, actorId);
+    // HX-402 P3: the operator surface is approval-first through the governed
+    // `improvement.lifecycle` rail — the request never mutates, and only the
+    // recovered approval effect may later create the durable intent and apply.
+    const { pendingApproval } = this.requestImprovementActivationApproval(candidateId, { requesterId: actorId });
     const review = this.getCuratorReviewItem(candidateId);
     return {
       action: "activate",
       status: "approval_pending",
       review,
-      activation,
-      approvalId: activation.approvalId,
+      approvalId: pendingApproval.approvalId,
       mutationApplied: review.mutationApplied,
     };
   }
@@ -1773,6 +1883,1038 @@ export class ImprovementService {
     const restored = this.restoreActivationSnapshot(activation, "rolled_back", actorId, "operator");
     this.applyCandidateSuppression(restored.candidateId);
     return restored;
+  }
+
+  // ── HX-402 P3: approval-first governed improvement lifecycle ─────────
+  //
+  // The route surface never mutates: each activate/pause/rollback request
+  // commits one canonical deterministic `improvement.lifecycle` approval plus
+  // immutable requester Journey evidence. The recovered approval effect
+  // creates the durable P0 intent (never executing the callback inline), then
+  // the worker claims it one-winner, revalidates the exact reviewed state,
+  // executes the external callback, re-inspects exact external state, and
+  // commits activation/candidate state + immutable settlement + canonical
+  // signal + Journey in ONE immediate transaction. The external callback is
+  // never database-atomic: the intent/inspection/settlement state machine is
+  // the crash-recovery truth, and recovery re-INSPECTS instead of re-executing
+  // a non-idempotent callback blindly.
+
+  private getImprovementLifecycleRepository(): ReturnType<typeof createImprovementLifecycleOperationRepository> {
+    this.improvementLifecycleRepository ??= createImprovementLifecycleOperationRepository(this.ctx.gatewaySql);
+    return this.improvementLifecycleRepository;
+  }
+
+  /**
+   * Request one approved improvement activation. Never mutates: validates the
+   * exact candidate/revision/evaluation coherence, binds the reviewed database
+   * state and the exact external pre/target policy state into the approval,
+   * and returns the pending `improvement.lifecycle` approval envelope.
+   */
+  requestImprovementActivationApproval(
+    candidateId: string,
+    authority: ImprovementLifecycleAuthorityInput = {},
+  ): ImprovementLifecyclePendingOutcome {
+    this.ctx.requireFeatureEnabled("improvementActivationV1Enabled");
+    this.ensureImprovementLedgerTables();
+    const candidate = this.readImprovementCandidate(candidateId);
+    if (candidate.kind === "skill_revision") {
+      throw new Error("Skill revision candidates activate through capability proposals, not direct ledger activation.");
+    }
+    const revision = this.readCurrentRevision(candidateId);
+    const evaluation = this.readLatestEvaluation(candidateId);
+    if (!revision || !evaluation) {
+      throw new Error(`Candidate ${candidateId} is missing a current revision or evaluation.`);
+    }
+    if (candidate.status !== "ready_for_approval" && candidate.status !== "approved") {
+      throw new Error(`Candidate ${candidateId} is not ready for activation approval.`);
+    }
+    if (candidate.currentRevisionId !== evaluation.revisionId || revision.changeHash !== evaluation.changeHash) {
+      throw new Error(`Candidate ${candidateId} drifted since evaluation and must be re-evaluated.`);
+    }
+    this.assertCandidateHasNoAppliedActivation(candidateId);
+    const kind: "repair_policy" | "routing_policy" =
+      candidate.kind === "repair_policy" ? "repair_policy" : "routing_policy";
+    const preState = this.captureImprovementExternalState(kind, candidate.targetKey);
+    const targetState: ImprovementExternalStateMaterial = {
+      hadValue: true,
+      value: deriveActivationTargetValue(revision.candidateRef),
+    };
+    const mutation = {
+      candidateId,
+      revisionId: revision.revisionId,
+      changeHash: revision.changeHash,
+      kind,
+      targetKey: candidate.targetKey,
+      preState,
+      targetState,
+    };
+    const binding = buildImprovementLifecycleApprovalBinding({
+      workspaceId: this.ctx.normalizeWorkspaceId(candidate.workspaceId),
+      operationKind: "activate",
+      targetKind: "improvement_candidate",
+      targetId: candidateId,
+      mutation,
+      expectedState: this.buildActivateReviewedStateMaterial(candidate, revision, evaluation),
+    });
+    const pendingApproval = this.commitImprovementLifecycleApproval({
+      binding,
+      riskLevel: candidate.kind === "routing_policy" ? "caution" : "safe",
+      requesterId: normalizeImprovementRequesterId(authority.requesterId),
+      mutation,
+      preview: {
+        title: "Approve improvement activation",
+        operationKind: "activate",
+        candidateId,
+        revisionId: revision.revisionId,
+        summary: candidate.summary,
+        targetKey: candidate.targetKey,
+        kind: candidate.kind,
+      },
+    });
+    return { pendingApproval };
+  }
+
+  /** Request one approved pause; an already-paused activation is a pure no-op. */
+  requestImprovementPauseApproval(
+    activationId: string,
+    authority: ImprovementLifecycleAuthorityInput = {},
+  ): ImprovementLifecycleRequestOutcome {
+    return this.requestImprovementRestoreApproval(activationId, "pause", authority);
+  }
+
+  /** Request one approved rollback; an already-rolled-back activation is a pure no-op. */
+  requestImprovementRollbackApproval(
+    activationId: string,
+    authority: ImprovementLifecycleAuthorityInput = {},
+  ): ImprovementLifecycleRequestOutcome {
+    return this.requestImprovementRestoreApproval(activationId, "rollback", authority);
+  }
+
+  /**
+   * Pause and rollback require FRESH approval (audit P3): a later mutation can
+   * never ride the activation approval. The request binds the exact activation
+   * row state plus the exact external pre/target policy state; the recovered
+   * effect refuses anything else.
+   */
+  private requestImprovementRestoreApproval(
+    activationId: string,
+    operationKind: "pause" | "rollback",
+    authority: ImprovementLifecycleAuthorityInput,
+  ): ImprovementLifecycleRequestOutcome {
+    this.ctx.requireFeatureEnabled("improvementActivationV1Enabled");
+    this.ensureImprovementLedgerTables();
+    const activation = this.maybeAdvanceActivation(this.readImprovementActivation(activationId));
+    if (operationKind === "pause") {
+      if (activation.status === "paused") {
+        return { pendingApproval: null, noMutationRequired: true, activation };
+      }
+      if (activation.status !== "active" || !activation.watchStartedAt) {
+        throw new Error(`Activation ${activationId} must be active before it can be paused.`);
+      }
+    } else {
+      if (activation.status === "rolled_back") {
+        return { pendingApproval: null, noMutationRequired: true, activation };
+      }
+      if (
+        !activation.watchStartedAt ||
+        (activation.status !== "active" && activation.status !== "paused" && activation.status !== "failed")
+      ) {
+        throw new Error(`Activation ${activationId} must have been applied before it can be rolled back.`);
+      }
+    }
+    const candidate = this.readImprovementCandidate(activation.candidateId);
+    if (candidate.kind === "skill_revision" || activation.preActivationSnapshot.refType === "skill_revision_snapshot") {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message:
+          "Skill revision activations pause and roll back through capability proposals, not the governed policy rail.",
+      });
+    }
+    const kind: "repair_policy" | "routing_policy" =
+      candidate.kind === "repair_policy" ? "repair_policy" : "routing_policy";
+    const preState = this.captureImprovementExternalState(kind, candidate.targetKey);
+    const targetState = snapshotRefToExternalState(activation.preActivationSnapshot);
+    const mutation: ImprovementPauseRollbackMutationV1 = { activationId, preState, targetState };
+    const binding = buildImprovementLifecycleApprovalBinding({
+      workspaceId: this.ctx.normalizeWorkspaceId(candidate.workspaceId),
+      operationKind,
+      targetKind: "improvement_activation",
+      targetId: activationId,
+      mutation,
+      expectedState: buildRestoreReviewedStateMaterial(activation),
+    });
+    const pendingApproval = this.commitImprovementLifecycleApproval({
+      binding,
+      riskLevel: "caution",
+      requesterId: normalizeImprovementRequesterId(authority.requesterId),
+      mutation,
+      preview: {
+        title: operationKind === "pause" ? "Approve improvement pause" : "Approve improvement rollback",
+        operationKind,
+        activationId,
+        candidateId: candidate.candidateId,
+        targetKey: candidate.targetKey,
+        currentStatus: activation.status,
+      },
+    });
+    return { pendingApproval };
+  }
+
+  private commitImprovementLifecycleApproval(input: {
+    binding: ImprovementLifecycleApprovalBindingV1;
+    riskLevel: "safe" | "caution" | "danger";
+    requesterId: string;
+    mutation: unknown;
+    preview: Record<string, unknown>;
+  }): ImprovementLifecyclePendingApproval {
+    const approvalId = deriveImprovementLifecycleApprovalId(input.binding);
+    const payload = buildImprovementLifecycleApprovalPayload({
+      binding: input.binding,
+      requesterId: input.requesterId,
+      mutation: input.mutation,
+    });
+    const committed = this.ctx.gatewaySql.runImmediateTransaction(() => {
+      const stored = this.ctx.storage.approvals.createDeterministicDetachedWithTtlDuration(
+        {
+          approvalId,
+          kind: IMPROVEMENT_LIFECYCLE_APPROVAL_KIND,
+          riskLevel: input.riskLevel,
+          payload,
+          preview: { ...input.preview },
+          linkage: { workspaceId: input.binding.workspaceId, actionType: "improvement_lifecycle" },
+        },
+        IMPROVEMENT_LIFECYCLE_APPROVAL_TTL_MS,
+      );
+      if (stored.created) {
+        this.ctx.storage.approvalEvents.append({
+          approvalId,
+          eventType: "created",
+          actorId: "system",
+          timestamp: stored.approval.createdAt,
+          payload: {
+            kind: stored.approval.kind,
+            riskLevel: stored.approval.riskLevel,
+            status: stored.approval.status,
+          },
+        });
+        this.ctx.storage.governanceJourneyEvents.create(
+          buildImprovementLifecycleRequestJourneyEvent({
+            approval: stored.approval,
+            binding: input.binding,
+            requesterId: input.requesterId,
+          }),
+        );
+      } else {
+        // The original requester remains the immutable evidence. A byte-exact
+        // replay from the SAME requester converges; a different requester's
+        // identical mutation conflicts in the approvals owner because the
+        // requester is payload material. A missing evidence row self-heals so
+        // the recovered effect can never execute without requester evidence.
+        const evidence = this.ctx.storage.governanceJourneyEvents.findByIdempotencyKey(
+          improvementLifecycleRequestJourneyIdempotencyKey(approvalId),
+        );
+        if (!evidence) {
+          this.ctx.storage.governanceJourneyEvents.create(
+            buildImprovementLifecycleRequestJourneyEvent({
+              approval: stored.approval,
+              binding: input.binding,
+              requesterId: input.requesterId,
+            }),
+          );
+        }
+      }
+      return stored;
+    });
+    if (committed.created) {
+      this.ctx.publishRealtime("improvement_mutation_approval_requested", "improvement", {
+        approvalId,
+        operationKind: input.binding.operationKind,
+        targetKind: input.binding.targetKind,
+        targetId: input.binding.targetId,
+        workspaceId: input.binding.workspaceId,
+      });
+    }
+    return {
+      approvalId,
+      status: committed.approval.status,
+      kind: IMPROVEMENT_LIFECYCLE_APPROVAL_KIND,
+      operationKind: input.binding.operationKind,
+      targetKind: input.binding.targetKind,
+      targetId: input.binding.targetId,
+      workspaceId: input.binding.workspaceId,
+      requestSha256: input.binding.requestSha256,
+      expectedStateSha256: input.binding.expectedStateSha256,
+      ...(committed.approval.expiresAt ? { expiresAt: committed.approval.expiresAt } : {}),
+      createdAt: committed.approval.createdAt,
+      replayed: !committed.created,
+    };
+  }
+
+  /**
+   * Execute one approved `improvement.lifecycle` mutation as the recovered
+   * approval effect. Revalidates the exact approval (kind, deterministic
+   * identity, status, expiry), recovers the requester from the immutable
+   * request Journey evidence, byte-verifies the request hash, creates the
+   * durable P0 intent, claims it one-winner with database-clock lease fencing,
+   * and settles through exact external re-inspection. Governance violations
+   * throw the terminal {@link ImprovementLifecycleApplyError}; competing
+   * live claims and infrastructure crashes propagate raw so the approval
+   * effect worker defers for bounded retry and recovery resumes from the
+   * durable intent.
+   */
+  executeApprovedImprovementLifecycleMutation(input: {
+    workspaceId: string;
+    approvalId: string;
+  }): ImprovementLifecycleApplyResult {
+    if (!this.ctx.isFeatureEnabled("improvementActivationV1Enabled")) {
+      throw new ImprovementLifecycleApplyError("improvement_lifecycle_approval_not_executable");
+    }
+    this.ensureImprovementLedgerTables();
+    let approval: ApprovalRequest;
+    try {
+      approval = this.ctx.storage.approvals.get(input.approvalId);
+    } catch (error) {
+      if (isNotFoundLikeError(error)) {
+        throw new ImprovementLifecycleApplyError("improvement_lifecycle_approval_not_executable");
+      }
+      throw error;
+    }
+    if (approval.kind !== IMPROVEMENT_LIFECYCLE_APPROVAL_KIND) {
+      throw new ImprovementLifecycleApplyError("improvement_lifecycle_approval_not_executable");
+    }
+    const payload = approval.payload as Record<string, unknown> | undefined;
+    const binding = parseImprovementLifecycleApprovalBinding(payload?.improvementLifecycle);
+    const envelope = parseImprovementLifecycleRequestEnvelope(payload);
+    if (
+      !binding ||
+      !envelope ||
+      deriveImprovementLifecycleApprovalId(binding) !== approval.approvalId ||
+      binding.workspaceId !== this.ctx.normalizeWorkspaceId(input.workspaceId)
+    ) {
+      throw new ImprovementLifecycleApplyError("improvement_lifecycle_approval_not_executable");
+    }
+    if (approval.status !== "approved" || !approval.resolvedBy) {
+      throw new ImprovementLifecycleApplyError("improvement_lifecycle_approval_not_executable");
+    }
+    if (approval.expiresAt && Date.parse(approval.expiresAt) <= Date.now()) {
+      throw new ImprovementLifecycleApplyError("improvement_lifecycle_approval_expired");
+    }
+    const evidence = this.ctx.storage.governanceJourneyEvents.findByIdempotencyKey(
+      improvementLifecycleRequestJourneyIdempotencyKey(approval.approvalId),
+    );
+    if (!evidence || evidence.approvalId !== approval.approvalId || evidence.actorId !== envelope.requesterId) {
+      throw new ImprovementLifecycleApplyError("improvement_lifecycle_request_evidence_missing");
+    }
+    if (
+      buildImprovementLifecycleRequestSha256({
+        workspaceId: binding.workspaceId,
+        operationKind: binding.operationKind,
+        targetKind: binding.targetKind,
+        targetId: binding.targetId,
+        mutation: envelope.mutation,
+      }) !== binding.requestSha256
+    ) {
+      throw new ImprovementLifecycleApplyError("improvement_lifecycle_request_drift");
+    }
+
+    // The recovered effect creates the durable INTENT — the callback is never
+    // executed inline with approval resolution, and crash recovery resumes
+    // from this row, never from an attempted callback.
+    const repository = this.getImprovementLifecycleRepository();
+    const operationId = deriveImprovementLifecycleOperationId(approval.approvalId);
+    const intentBase = {
+      operationId,
+      idempotencyKey: improvementLifecycleOperationIdempotencyKey(approval.approvalId),
+      workspaceId: binding.workspaceId,
+      operationKind: binding.operationKind,
+      targetKind: binding.targetKind,
+      targetId: binding.targetId,
+      actorId: envelope.requesterId,
+      createdAt: new Date(approval.resolvedAt ?? approval.createdAt).toISOString(),
+    };
+    const intent: ImprovementLifecycleOperationRecord = {
+      ...intentBase,
+      approvalId: approval.approvalId,
+      requestSha256: computeImprovementLifecycleRequestSha256(intentBase),
+    };
+    try {
+      repository.createIntent(intent);
+    } catch (error) {
+      if (error instanceof ConflictError) {
+        throw new ImprovementLifecycleApplyError("improvement_lifecycle_apply_conflict");
+      }
+      throw error;
+    }
+    const settled = repository.findSettlementByOperationId(operationId);
+    if (settled) {
+      return mapSettlementToApplyResult(settled, binding, true);
+    }
+    // One-winner claim with database-clock stale-lease fencing. A live
+    // competing claim throws ConflictError, which propagates RAW: the effect
+    // defers for bounded retry and later converges on the winner's settlement.
+    const claimedAtMs = Date.now();
+    const leaseMs = Math.max(
+      5,
+      this.callbacks.improvementLifecycleClaimLeaseMs ?? IMPROVEMENT_LIFECYCLE_CLAIM_LEASE_MS,
+    );
+    const claim = repository.claim({
+      operationId,
+      workerId: `improvement-lifecycle-worker:${randomUUID()}`,
+      claimedAt: new Date(claimedAtMs).toISOString(),
+      leaseExpiresAt: new Date(claimedAtMs + leaseMs).toISOString(),
+    });
+    if (binding.operationKind === "activate") {
+      const mutation = parseImprovementActivateMutation(envelope.mutation);
+      if (!mutation || mutation.candidateId !== binding.targetId) {
+        throw new ImprovementLifecycleApplyError("improvement_lifecycle_approval_not_executable");
+      }
+      return this.runGovernedActivate({
+        approval,
+        binding,
+        mutation,
+        intent,
+        claimGeneration: claim.claimGeneration,
+        requesterId: envelope.requesterId,
+      });
+    }
+    const mutation = parseImprovementPauseRollbackMutation(envelope.mutation);
+    if (!mutation || mutation.activationId !== binding.targetId) {
+      throw new ImprovementLifecycleApplyError("improvement_lifecycle_approval_not_executable");
+    }
+    return this.runGovernedRestore({
+      approval,
+      binding,
+      mutation,
+      intent,
+      claimGeneration: claim.claimGeneration,
+      requesterId: envelope.requesterId,
+    });
+  }
+
+  /** Governed activate worker: claim held; revalidate, callback, re-inspect, settle. */
+  private runGovernedActivate(input: {
+    approval: ApprovalRequest;
+    binding: ImprovementLifecycleApprovalBindingV1;
+    mutation: NonNullable<ReturnType<typeof parseImprovementActivateMutation>>;
+    intent: ImprovementLifecycleOperationRecord;
+    claimGeneration: number;
+    requesterId: string;
+  }): ImprovementLifecycleApplyResult {
+    const { approval, binding, mutation, intent, claimGeneration, requesterId } = input;
+    const resolvedBy = approval.resolvedBy ?? "approval";
+    let candidate: ImprovementCandidateRecord | undefined;
+    try {
+      candidate = this.readImprovementCandidate(mutation.candidateId);
+    } catch {
+      candidate = undefined;
+    }
+    const revision = candidate ? this.readCurrentRevision(candidate.candidateId) : undefined;
+    const evaluation = candidate ? this.readLatestEvaluation(candidate.candidateId) : undefined;
+    const stateOk =
+      buildImprovementLifecycleStateSha256(this.buildActivateReviewedStateMaterial(candidate, revision, evaluation)) ===
+      binding.expectedStateSha256;
+    const observedPre = this.captureImprovementExternalState(mutation.kind, mutation.targetKey);
+    const observedPreHash = computeImprovementLifecycleObservedStateSha256(observedPre);
+    const approvedPreHash = computeImprovementLifecycleObservedStateSha256(mutation.preState);
+    const targetHash = computeImprovementLifecycleObservedStateSha256(mutation.targetState);
+    const signalBase = {
+      candidateId: mutation.candidateId,
+      revisionId: mutation.revisionId,
+      approvalId: approval.approvalId,
+      workspaceId: binding.workspaceId,
+      fingerprint: candidate?.fingerprint,
+      targetKey: mutation.targetKey,
+      changeHash: mutation.changeHash,
+      actorId: resolvedBy,
+      actorType: "approval" as const,
+    };
+    const activationId = deriveImprovementLifecycleActivationId(intent.operationId);
+
+    // Crash recovery convergence: the external target state is ALREADY exact
+    // (an earlier claim executed the callback and crashed before settling).
+    // Do NOT re-execute the non-idempotent callback; settle `applied` from the
+    // durable matches_intent observation and commit the database half now.
+    if (stateOk && observedPreHash === targetHash) {
+      const inspection = this.recordGovernedInspection(
+        intent,
+        claimGeneration,
+        "pre",
+        observedPreHash,
+        "matches_intent",
+      );
+      return this.settleGovernedImprovementOperation({
+        binding,
+        intent,
+        claimGeneration,
+        requesterId,
+        resolvedBy,
+        inspection,
+        disposition: "applied",
+        activationId,
+        applyStateChange: () =>
+          this.applyGovernedActivationRows({
+            approval,
+            binding,
+            mutation,
+            candidate: candidate!,
+            revision: revision!,
+            activationId,
+            requesterId,
+            status: "active",
+          }),
+        signalKind: "activation_applied",
+        signalInput: { ...signalBase, activationId, status: "active", watchStatus: "watching" },
+      });
+    }
+
+    if (!stateOk || observedPreHash !== approvedPreHash) {
+      // The reviewed database state or the external pre-state drifted from
+      // what the approval bound: refuse WITHOUT executing the callback and
+      // settle the truthful abort.
+      const inspection = this.recordGovernedInspection(
+        intent,
+        claimGeneration,
+        "pre",
+        observedPreHash,
+        observedPreHash === targetHash ? "matches_intent" : "diverged",
+      );
+      return this.settleGovernedImprovementOperation({
+        binding,
+        intent,
+        claimGeneration,
+        requesterId,
+        resolvedBy,
+        inspection,
+        disposition: "aborted",
+        reasonCode: stateOk ? "external_state_drift" : "state_drift",
+        signalKind: "activation_failed",
+        signalInput: {
+          ...signalBase,
+          activationId,
+          failureReason: stateOk ? "external_state_drift" : "state_drift",
+          status: "failed",
+          watchStatus: "failed",
+        },
+      });
+    }
+
+    // Exact pre-state confirmed: record the durable attempt marker, execute
+    // the external callback once, then conclude ONLY from re-inspection.
+    this.recordGovernedInspection(intent, claimGeneration, "pre", observedPreHash, "diverged");
+    this.callbacks.improvementLifecycleCrashSeam?.("improvement_lifecycle_before_callback");
+    let callbackError: unknown;
+    try {
+      if (mutation.kind === "repair_policy") {
+        this.callbacks.applyRepairPolicyCandidate(mutation.targetKey, revision!.candidateRef);
+      } else {
+        this.callbacks.applyRoutingPolicyCandidate(mutation.targetKey, revision!.candidateRef);
+      }
+    } catch (error) {
+      callbackError = error;
+    }
+    this.callbacks.improvementLifecycleCrashSeam?.("improvement_lifecycle_after_callback");
+    const observedPost = this.captureImprovementExternalState(mutation.kind, mutation.targetKey);
+    const observedPostHash = computeImprovementLifecycleObservedStateSha256(observedPost);
+    const matches = observedPostHash === targetHash;
+    this.callbacks.improvementLifecycleCrashSeam?.("improvement_lifecycle_after_inspection");
+    if (matches) {
+      return this.settleGovernedImprovementOperation({
+        binding,
+        intent,
+        claimGeneration,
+        requesterId,
+        resolvedBy,
+        inspection: {
+          inspectionId: deriveImprovementLifecycleInspectionId(intent.operationId, claimGeneration, "post"),
+          observedStateSha256: observedPostHash,
+          disposition: "matches_intent",
+          recorded: false,
+        },
+        disposition: "applied",
+        activationId,
+        applyStateChange: () =>
+          this.applyGovernedActivationRows({
+            approval,
+            binding,
+            mutation,
+            candidate: candidate!,
+            revision: revision!,
+            activationId,
+            requesterId,
+            status: "active",
+          }),
+        signalKind: "activation_applied",
+        signalInput: { ...signalBase, activationId, status: "active", watchStatus: "watching" },
+      });
+    }
+    // The callback ran (or threw) and exact re-inspection does NOT show the
+    // intended state: record the truthful mismatch. No false `applied` claim.
+    const reasonCode = callbackError ? "activation_callback_failed" : "external_state_diverged";
+    return this.settleGovernedImprovementOperation({
+      binding,
+      intent,
+      claimGeneration,
+      requesterId,
+      resolvedBy,
+      inspection: {
+        inspectionId: deriveImprovementLifecycleInspectionId(intent.operationId, claimGeneration, "post"),
+        observedStateSha256: observedPostHash,
+        disposition: "diverged",
+        recorded: false,
+      },
+      disposition: "failed",
+      reasonCode,
+      activationId,
+      applyStateChange: () =>
+        this.applyGovernedActivationRows({
+          approval,
+          binding,
+          mutation,
+          candidate: candidate!,
+          revision: revision!,
+          activationId,
+          requesterId,
+          status: "failed",
+          failureReason: reasonCode,
+        }),
+      signalKind: "activation_failed",
+      signalInput: {
+        ...signalBase,
+        activationId,
+        failureReason: reasonCode,
+        status: "failed",
+        watchStatus: "failed",
+      },
+    });
+  }
+
+  /** Governed pause/rollback worker: restore the pre-activation snapshot under fresh approval. */
+  private runGovernedRestore(input: {
+    approval: ApprovalRequest;
+    binding: ImprovementLifecycleApprovalBindingV1;
+    mutation: ImprovementPauseRollbackMutationV1;
+    intent: ImprovementLifecycleOperationRecord;
+    claimGeneration: number;
+    requesterId: string;
+  }): ImprovementLifecycleApplyResult {
+    const { approval, binding, mutation, intent, claimGeneration, requesterId } = input;
+    const resolvedBy = approval.resolvedBy ?? "approval";
+    let activation: ImprovementActivationRecord;
+    try {
+      activation = this.readImprovementActivation(mutation.activationId);
+    } catch {
+      throw new ImprovementLifecycleApplyError("improvement_lifecycle_apply_conflict");
+    }
+    const candidate = this.readImprovementCandidate(activation.candidateId);
+    const kind: "repair_policy" | "routing_policy" =
+      candidate.kind === "repair_policy" ? "repair_policy" : "routing_policy";
+    if (candidate.kind === "skill_revision" || activation.preActivationSnapshot.refType === "skill_revision_snapshot") {
+      throw new ImprovementLifecycleApplyError("improvement_lifecycle_apply_conflict");
+    }
+    // The immutable pre-activation snapshot on the row must still be the exact
+    // restore target the approval reviewed; anything else is tampering.
+    const rowTargetHash = computeImprovementLifecycleObservedStateSha256(
+      snapshotRefToExternalState(activation.preActivationSnapshot),
+    );
+    const targetHash = computeImprovementLifecycleObservedStateSha256(mutation.targetState);
+    if (rowTargetHash !== targetHash) {
+      throw new ImprovementLifecycleApplyError("improvement_lifecycle_apply_conflict");
+    }
+    const stateOk =
+      buildImprovementLifecycleStateSha256(buildRestoreReviewedStateMaterial(activation)) ===
+      binding.expectedStateSha256;
+    const observedPre = this.captureImprovementExternalState(kind, candidate.targetKey);
+    const observedPreHash = computeImprovementLifecycleObservedStateSha256(observedPre);
+    const approvedPreHash = computeImprovementLifecycleObservedStateSha256(mutation.preState);
+    const restoredStatus = binding.operationKind === "pause" ? ("paused" as const) : ("rolled_back" as const);
+    const signalKindApplied = binding.operationKind === "pause" ? "activation_paused" : "activation_rolled_back";
+    const signalBase = {
+      candidateId: activation.candidateId,
+      revisionId: activation.revisionId,
+      activationId: activation.activationId,
+      approvalId: approval.approvalId,
+      workspaceId: binding.workspaceId,
+      fingerprint: candidate.fingerprint,
+      targetKey: candidate.targetKey,
+      actorId: resolvedBy,
+      actorType: "approval" as const,
+    };
+
+    if (stateOk && observedPreHash === targetHash) {
+      // Crash recovery convergence: the snapshot restore already reached the
+      // external system; commit the database half without a second restore.
+      const inspection = this.recordGovernedInspection(
+        intent,
+        claimGeneration,
+        "pre",
+        observedPreHash,
+        "matches_intent",
+      );
+      return this.settleGovernedImprovementOperation({
+        binding,
+        intent,
+        claimGeneration,
+        requesterId,
+        resolvedBy,
+        inspection,
+        disposition: "applied",
+        activationId: activation.activationId,
+        applyStateChange: () => this.applyGovernedRestoreRows(activation, restoredStatus, resolvedBy),
+        signalKind: signalKindApplied,
+        signalInput: {
+          ...signalBase,
+          status: restoredStatus,
+          watchStatus: binding.operationKind === "pause" ? "paused" : "failed",
+        },
+      });
+    }
+
+    if (!stateOk || observedPreHash !== approvedPreHash) {
+      const inspection = this.recordGovernedInspection(
+        intent,
+        claimGeneration,
+        "pre",
+        observedPreHash,
+        observedPreHash === targetHash ? "matches_intent" : "diverged",
+      );
+      return this.settleGovernedImprovementOperation({
+        binding,
+        intent,
+        claimGeneration,
+        requesterId,
+        resolvedBy,
+        inspection,
+        disposition: "aborted",
+        reasonCode: stateOk ? "external_state_drift" : "state_drift",
+        activationId: activation.activationId,
+        signalKind: "activation_failed",
+        signalInput: {
+          ...signalBase,
+          failureReason: stateOk ? "external_state_drift" : "state_drift",
+          status: activation.status,
+          watchStatus: activation.watchStatus,
+        },
+      });
+    }
+
+    this.recordGovernedInspection(intent, claimGeneration, "pre", observedPreHash, "diverged");
+    this.callbacks.improvementLifecycleCrashSeam?.("improvement_lifecycle_before_callback");
+    let callbackError: unknown;
+    try {
+      if (kind === "repair_policy") {
+        this.callbacks.restoreRepairPolicySnapshot(activation.preActivationSnapshot);
+      } else {
+        this.callbacks.restoreRoutingPolicySnapshot(activation.preActivationSnapshot);
+      }
+    } catch (error) {
+      callbackError = error;
+    }
+    this.callbacks.improvementLifecycleCrashSeam?.("improvement_lifecycle_after_callback");
+    const observedPost = this.captureImprovementExternalState(kind, candidate.targetKey);
+    const observedPostHash = computeImprovementLifecycleObservedStateSha256(observedPost);
+    const matches = observedPostHash === targetHash;
+    this.callbacks.improvementLifecycleCrashSeam?.("improvement_lifecycle_after_inspection");
+    if (matches) {
+      return this.settleGovernedImprovementOperation({
+        binding,
+        intent,
+        claimGeneration,
+        requesterId,
+        resolvedBy,
+        inspection: {
+          inspectionId: deriveImprovementLifecycleInspectionId(intent.operationId, claimGeneration, "post"),
+          observedStateSha256: observedPostHash,
+          disposition: "matches_intent",
+          recorded: false,
+        },
+        disposition: "applied",
+        activationId: activation.activationId,
+        applyStateChange: () => this.applyGovernedRestoreRows(activation, restoredStatus, resolvedBy),
+        signalKind: signalKindApplied,
+        signalInput: {
+          ...signalBase,
+          status: restoredStatus,
+          watchStatus: binding.operationKind === "pause" ? "paused" : "failed",
+        },
+      });
+    }
+    // The restore ran (or threw) and re-inspection does NOT show the snapshot
+    // state: the rollback/pause can NEVER claim success without its own
+    // matches_intent inspection. Record the truthful failed settlement and
+    // leave the activation row un-flipped.
+    const reasonCode = callbackError ? "restore_callback_failed" : "external_state_diverged";
+    return this.settleGovernedImprovementOperation({
+      binding,
+      intent,
+      claimGeneration,
+      requesterId,
+      resolvedBy,
+      inspection: {
+        inspectionId: deriveImprovementLifecycleInspectionId(intent.operationId, claimGeneration, "post"),
+        observedStateSha256: observedPostHash,
+        disposition: "diverged",
+        recorded: false,
+      },
+      disposition: "failed",
+      reasonCode,
+      activationId: activation.activationId,
+      signalKind: "activation_failed",
+      signalInput: {
+        ...signalBase,
+        failureReason: reasonCode,
+        status: activation.status,
+        watchStatus: activation.watchStatus,
+      },
+    });
+  }
+
+  /** Record one durable observation for the CURRENT claim (the attempt marker / abort citation). */
+  private recordGovernedInspection(
+    intent: ImprovementLifecycleOperationRecord,
+    claimGeneration: number,
+    phase: "pre" | "post",
+    observedStateSha256: string,
+    disposition: "matches_intent" | "diverged",
+  ): { inspectionId: string; observedStateSha256: string; disposition: "matches_intent" | "diverged"; recorded: true } {
+    const inspectionId = deriveImprovementLifecycleInspectionId(intent.operationId, claimGeneration, phase);
+    this.getImprovementLifecycleRepository().recordInspection({
+      inspectionId,
+      operationId: intent.operationId,
+      claimGeneration,
+      observedStateSha256,
+      disposition,
+      observedAt: new Date().toISOString(),
+    });
+    return { inspectionId, observedStateSha256, disposition, recorded: true };
+  }
+
+  /**
+   * Commit the database half as ONE immediate transaction: the (still
+   * unrecorded post-callback) inspection, the activation/candidate state, the
+   * immutable settlement, the canonical improvement signal, and the Journey
+   * evidence. Any member failing rolls back every member, so recovery resumes
+   * from the durable intent with zero partial state.
+   */
+  private settleGovernedImprovementOperation(input: {
+    binding: ImprovementLifecycleApprovalBindingV1;
+    intent: ImprovementLifecycleOperationRecord;
+    claimGeneration: number;
+    requesterId: string;
+    resolvedBy: string;
+    inspection: {
+      inspectionId: string;
+      observedStateSha256: string;
+      disposition: "matches_intent" | "diverged";
+      recorded: boolean;
+    };
+    disposition: ImprovementLifecycleSettlementDisposition;
+    reasonCode?: string;
+    activationId?: string;
+    applyStateChange?: () => void;
+    signalKind: "activation_applied" | "activation_paused" | "activation_rolled_back" | "activation_failed";
+    signalInput: Parameters<ImprovementService["emitLifecycleAuditSignal"]>[1];
+  }): ImprovementLifecycleApplyResult {
+    const { binding, intent, claimGeneration, inspection } = input;
+    const repository = this.getImprovementLifecycleRepository();
+    const settlementId = deriveImprovementLifecycleSettlementId(intent.operationId);
+    const result: Record<string, unknown> = {
+      operationKind: binding.operationKind,
+      targetKind: binding.targetKind,
+      targetId: binding.targetId,
+      disposition: input.disposition,
+      observedStateSha256: inspection.observedStateSha256,
+      ...(input.activationId === undefined ? {} : { activationId: input.activationId }),
+      ...(input.reasonCode === undefined ? {} : { reasonCode: input.reasonCode }),
+    };
+    const resultSha256 = computeImprovementLifecycleResultSha256(result);
+    const settledAt = new Date().toISOString();
+    const settlement: ImprovementLifecycleSettlementRecord = {
+      settlementId,
+      operationId: intent.operationId,
+      claimGeneration,
+      inspectionId: inspection.inspectionId,
+      disposition: input.disposition,
+      observedStateSha256: inspection.observedStateSha256,
+      result,
+      resultSha256,
+      settledAt,
+    };
+    this.ctx.gatewaySql.runImmediateTransaction(() => {
+      if (!inspection.recorded) {
+        repository.recordInspection({
+          inspectionId: inspection.inspectionId,
+          operationId: intent.operationId,
+          claimGeneration,
+          observedStateSha256: inspection.observedStateSha256,
+          disposition: inspection.disposition,
+          observedAt: settledAt,
+        });
+      }
+      input.applyStateChange?.();
+      repository.settle(settlement);
+      this.callbacks.improvementLifecycleCrashSeam?.("improvement_lifecycle_before_signal");
+      this.emitLifecycleAuditSignal(input.signalKind, input.signalInput);
+      this.callbacks.improvementLifecycleCrashSeam?.("improvement_lifecycle_before_journey");
+      this.ctx.storage.governanceJourneyEvents.create(
+        buildImprovementLifecycleSettlementJourneyEvent({
+          binding,
+          approvalId: intent.approvalId,
+          operationId: intent.operationId,
+          settlementId,
+          inspectionId: inspection.inspectionId,
+          claimGeneration,
+          disposition: input.disposition,
+          observedStateSha256: inspection.observedStateSha256,
+          actorId: input.resolvedBy,
+          requesterId: input.requesterId,
+          occurredAt: settledAt,
+          ...(input.activationId === undefined ? {} : { activationId: input.activationId }),
+          ...(input.reasonCode === undefined ? {} : { reasonCode: input.reasonCode }),
+        }),
+      );
+    });
+    return {
+      disposition: input.disposition,
+      operationId: intent.operationId,
+      settlementId,
+      operationKind: binding.operationKind,
+      targetKind: binding.targetKind,
+      targetId: binding.targetId,
+      ...(input.activationId === undefined ? {} : { activationId: input.activationId }),
+      resultSha256,
+      replayed: false,
+    };
+  }
+
+  /** Governed activate DB half: the activation row plus the candidate transition. */
+  private applyGovernedActivationRows(input: {
+    approval: ApprovalRequest;
+    binding: ImprovementLifecycleApprovalBindingV1;
+    mutation: NonNullable<ReturnType<typeof parseImprovementActivateMutation>>;
+    candidate: ImprovementCandidateRecord;
+    revision: ImprovementCandidateRevisionRecord;
+    activationId: string;
+    requesterId: string;
+    status: "active" | "failed";
+    failureReason?: string;
+  }): void {
+    const now = new Date().toISOString();
+    const activationTarget = this.buildActivationTargetRef(input.candidate, input.revision);
+    const inserted = this.ctx.gatewaySql
+      .prepare(
+        `
+        INSERT INTO improvement_activations (
+          activation_id, candidate_id, revision_id, approval_id, status, scope,
+          activation_target_json, pre_activation_snapshot_json, applied_change_hash,
+          watch_status, watch_started_at, watch_ends_at, watch_signal_target,
+          watch_signal_count, regression_count, failure_reason,
+          created_at, updated_at, requested_by_actor_id, requested_by_actor_type,
+          approved_by_actor_id, approved_by_actor_type
+        ) VALUES (
+          @activationId, @candidateId, @revisionId, @approvalId, @status, 'workspace',
+          @activationTargetJson, @preActivationSnapshotJson, @appliedChangeHash,
+          @watchStatus, @watchStartedAt, @watchEndsAt, @watchSignalTarget,
+          0, 0, @failureReason,
+          @createdAt, @updatedAt, @requestedByActorId, 'operator',
+          @approvedByActorId, 'approval'
+        )
+      `,
+      )
+      .run({
+        activationId: input.activationId,
+        candidateId: input.candidate.candidateId,
+        revisionId: input.revision.revisionId,
+        approvalId: input.approval.approvalId,
+        status: input.status,
+        activationTargetJson: JSON.stringify(activationTarget),
+        preActivationSnapshotJson: JSON.stringify(
+          buildGovernedPolicySnapshotRef(input.mutation.kind, input.mutation.targetKey, input.mutation.preState),
+        ),
+        appliedChangeHash: input.revision.changeHash,
+        watchStatus: input.status === "active" ? "watching" : "failed",
+        watchStartedAt: input.status === "active" ? now : null,
+        watchEndsAt:
+          input.status === "active" ? new Date(Date.now() + IMPROVEMENT_WATCH_WINDOW_MS).toISOString() : null,
+        watchSignalTarget: IMPROVEMENT_WATCH_SIGNAL_TARGET,
+        failureReason: input.failureReason ?? null,
+        createdAt: now,
+        updatedAt: now,
+        requestedByActorId: input.requesterId,
+        approvedByActorId: input.approval.resolvedBy ?? "approval",
+      });
+    if ((inserted.changes ?? 0) !== 1) {
+      throw new Error(`Governed activation ${input.activationId} could not persist its canonical row.`);
+    }
+    if (input.status === "active") {
+      this.updateCandidateStatus(
+        input.candidate.candidateId,
+        "approved",
+        input.approval.resolvedBy ?? "approval",
+        "approval",
+      );
+    }
+  }
+
+  /** Governed pause/rollback DB half: flip the activation row under its verified prior status. */
+  private applyGovernedRestoreRows(
+    activation: ImprovementActivationRecord,
+    status: "paused" | "rolled_back",
+    actorId: string,
+  ): void {
+    const now = new Date().toISOString();
+    const flipped = this.ctx.gatewaySql
+      .prepare(
+        `
+        UPDATE improvement_activations
+        SET status = @status,
+            watch_status = @watchStatus,
+            paused_by_actor_id = CASE WHEN @status = 'paused' THEN @actorId ELSE paused_by_actor_id END,
+            paused_by_actor_type = CASE WHEN @status = 'paused' THEN 'approval' ELSE paused_by_actor_type END,
+            rolled_back_by_actor_id = CASE WHEN @status = 'rolled_back' THEN @actorId ELSE rolled_back_by_actor_id END,
+            rolled_back_by_actor_type = CASE WHEN @status = 'rolled_back' THEN 'approval' ELSE rolled_back_by_actor_type END,
+            paused_at = CASE WHEN @status = 'paused' THEN @timestamp ELSE paused_at END,
+            rolled_back_at = CASE WHEN @status = 'rolled_back' THEN @timestamp ELSE rolled_back_at END,
+            updated_at = @updatedAt
+        WHERE activation_id = @activationId
+          AND status = @expectedStatus
+      `,
+      )
+      .run({
+        activationId: activation.activationId,
+        status,
+        watchStatus: status === "paused" ? "paused" : "failed",
+        actorId,
+        timestamp: now,
+        updatedAt: now,
+        expectedStatus: activation.status,
+      });
+    if ((flipped.changes ?? 0) !== 1) {
+      throw new Error(`Governed activation ${activation.activationId} lost its ${activation.status}-state claim.`);
+    }
+    if (status === "rolled_back") {
+      this.applyCandidateSuppression(activation.candidateId);
+    }
+  }
+
+  /** The exact reviewed DATABASE state for one governed activate request/apply. */
+  private buildActivateReviewedStateMaterial(
+    candidate: ImprovementCandidateRecord | undefined,
+    revision: ImprovementCandidateRevisionRecord | undefined,
+    evaluation: ImprovementEvaluationRecord | undefined,
+  ): Record<string, unknown> {
+    const latestActivation = candidate ? this.readLatestActivation(candidate.candidateId) : undefined;
+    return buildImprovementActivateReviewedStateMaterial(candidate, revision, evaluation, latestActivation);
+  }
+
+  private captureImprovementExternalState(
+    kind: "repair_policy" | "routing_policy",
+    targetKey: string,
+  ): ImprovementExternalStateMaterial {
+    const ref =
+      kind === "repair_policy"
+        ? this.callbacks.captureRepairPolicySnapshot(targetKey)
+        : this.callbacks.captureRoutingPolicySnapshot(targetKey);
+    return snapshotRefToExternalState(ref);
   }
 
   private recordImprovementSignal(input: ImprovementSignalInput): ImprovementSignalRecord | undefined {
@@ -6174,6 +7316,126 @@ function isImprovementActivationRow(value: unknown): value is ImprovementActivat
     typeof value.requested_by_actor_id === "string" &&
     typeof value.requested_by_actor_type === "string"
   );
+}
+
+// ── HX-402 P3 governed-lifecycle module helpers ──────────────────────
+
+/**
+ * The exact reviewed DATABASE state one governed activate approval binds.
+ * Exported for the postgres-dialect harness, which must seed the canonical
+ * approval row directly because the approvals repository's TTL-window SQL is
+ * genuinely postgres-flavored (P1 precedent).
+ */
+export function buildImprovementActivateReviewedStateMaterial(
+  candidate: ImprovementCandidateRecord | undefined,
+  revision: ImprovementCandidateRevisionRecord | undefined,
+  evaluation: ImprovementEvaluationRecord | undefined,
+  latestActivation: ImprovementActivationRecord | undefined,
+): Record<string, unknown> {
+  return {
+    candidate: candidate
+      ? {
+          candidateId: candidate.candidateId,
+          status: candidate.status,
+          currentRevisionId: candidate.currentRevisionId ?? null,
+          suppressionUntil: candidate.suppressionUntil ?? null,
+        }
+      : null,
+    revision: revision ? { revisionId: revision.revisionId, changeHash: revision.changeHash } : null,
+    evaluation: evaluation
+      ? { evaluationId: evaluation.evaluationId, revisionId: evaluation.revisionId, changeHash: evaluation.changeHash }
+      : null,
+    latestActivation: latestActivation
+      ? {
+          activationId: latestActivation.activationId,
+          status: latestActivation.status,
+          watchStartedAt: latestActivation.watchStartedAt ?? null,
+        }
+      : null,
+  };
+}
+
+/** The exact reviewed DATABASE state for one governed pause/rollback request/apply (exported: P1 precedent). */
+export function buildImprovementRestoreReviewedStateMaterial(
+  activation: ImprovementActivationRecord,
+): Record<string, unknown> {
+  return buildRestoreReviewedStateMaterial(activation);
+}
+
+/** The exact reviewed DATABASE state for one governed pause/rollback request/apply. */
+function buildRestoreReviewedStateMaterial(activation: ImprovementActivationRecord): Record<string, unknown> {
+  return {
+    activation: {
+      activationId: activation.activationId,
+      candidateId: activation.candidateId,
+      revisionId: activation.revisionId,
+      status: activation.status,
+      watchStatus: activation.watchStatus,
+      appliedChangeHash: activation.appliedChangeHash,
+    },
+  };
+}
+
+/** Extract the canonical {hadValue, value} observation from a policy snapshot/capture ref. */
+function snapshotRefToExternalState(ref: ImprovementRef): ImprovementExternalStateMaterial {
+  const metadata = isRecord(ref.metadata) ? ref.metadata : {};
+  const hadValue = metadata.hadValue === true;
+  return { hadValue, value: hadValue ? (metadata.previousValue ?? null) : null };
+}
+
+/** Build the value-carrying pre-activation snapshot ref the governed activate row persists. */
+function buildGovernedPolicySnapshotRef(
+  kind: "repair_policy" | "routing_policy",
+  targetKey: string,
+  state: ImprovementExternalStateMaterial,
+): ImprovementRef {
+  return {
+    refType: kind === "repair_policy" ? "repair_policy_snapshot" : "routing_policy_snapshot",
+    refId: targetKey,
+    hash: createHash("sha1")
+      .update(JSON.stringify({ hadValue: state.hadValue, previousValue: state.value }))
+      .digest("hex"),
+    metadata: {
+      targetKey,
+      hadValue: state.hadValue,
+      previousValue: state.value,
+    },
+  };
+}
+
+/** The exact value applyRepairPolicyCandidate/applyRoutingPolicyCandidate will write for a revision. */
+function deriveActivationTargetValue(candidateRef: ImprovementRef): unknown {
+  const proposedChange = isRecord(candidateRef.metadata) ? candidateRef.metadata.proposedChange : undefined;
+  return proposedChange ?? candidateRef.metadata ?? {};
+}
+
+function normalizeImprovementRequesterId(requesterId: string | undefined): string {
+  const normalized = requesterId?.trim();
+  return normalized && normalized.length <= 256 ? normalized : "operator";
+}
+
+function isNotFoundLikeError(error: unknown): boolean {
+  return error instanceof Error && (error.name === "NotFoundError" || /not found/iu.test(error.message));
+}
+
+function mapSettlementToApplyResult(
+  settlement: ImprovementLifecycleSettlementRecord,
+  binding: ImprovementLifecycleApprovalBindingV1,
+  replayed: boolean,
+): ImprovementLifecycleApplyResult {
+  return {
+    disposition: settlement.disposition,
+    operationId: settlement.operationId,
+    settlementId: settlement.settlementId,
+    operationKind: binding.operationKind,
+    targetKind: binding.targetKind,
+    targetId: binding.targetId,
+    ...(asOptionalString(settlement.result.activationId) === undefined
+      ? {}
+      : { activationId: asOptionalString(settlement.result.activationId) }),
+    resultSha256: settlement.resultSha256,
+    replayed,
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

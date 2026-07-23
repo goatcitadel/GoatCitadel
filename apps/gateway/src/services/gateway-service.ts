@@ -2086,6 +2086,12 @@ export class GatewayService {
         this.skillStateService.executeApprovedSkillLifecycleMutation(input),
       executeApprovedCapabilityLifecycleMutation: (input) =>
         this.capabilitySystemService.executeApprovedCapabilityLifecycleMutation(input),
+      // HX-402 P3: lazy closure — improvementService is assigned later in this
+      // constructor, before any approval effect can execute. The recovered
+      // effect creates the durable intent and the worker settles it through
+      // claim -> external callback -> exact re-inspection.
+      executeApprovedImprovementLifecycleMutation: (input) =>
+        this.improvementService.executeApprovedImprovementLifecycleMutation(input),
       enqueueAfterHooks: (input) => this.hooksService.enqueueAfterHooks(input),
       resolveApprovalHookWorkspaceId: (payload) => this.resolveApprovalHookWorkspaceId(payload),
       resolvePostCommitEligibility: (sessionId) => this.resolvePostCommitEligibility(sessionId),

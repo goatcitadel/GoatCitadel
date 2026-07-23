@@ -53,6 +53,14 @@ const activationParamsSchema = z.object({
   activationId: z.string().min(1),
 });
 
+// HX-402 P3: the activation lifecycle surface is approval-first — these
+// requests commit one canonical `improvement.lifecycle` approval and never
+// mutate; the optional actor identifies the requester in the immutable
+// Journey evidence.
+const activationLifecycleBodySchema = z.object({
+  actorId: z.string().trim().min(1).max(200).optional(),
+});
+
 const repairCandidateValidationBodySchema = z.object({
   status: z.enum(["not_started", "queued", "running", "needs_review", "passed", "failed"]),
   summary: z.string().trim().min(1).max(2000).optional(),
@@ -244,11 +252,21 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.post("/api/v1/improvement/candidates/:candidateId/activation-request", async (request, reply) => {
     const params = candidateParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return reply.code(400).send({ error: params.error.flatten() });
+    const body = activationLifecycleBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
     }
     try {
-      return reply.send(await improvement.requestImprovementActivation(params.data.candidateId));
+      return reply.send(
+        await Promise.resolve(
+          improvement.requestImprovementActivation(params.data.candidateId, { requesterId: body.data.actorId }),
+        ),
+      );
     } catch (error) {
       return replyWithImprovementMutationError(reply, error);
     }
@@ -268,11 +286,19 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.post("/api/v1/improvement/activations/:activationId/pause", async (request, reply) => {
     const params = activationParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return reply.code(400).send({ error: params.error.flatten() });
+    const body = activationLifecycleBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
     }
     try {
-      return reply.send(improvement.pauseImprovementActivation(params.data.activationId));
+      return reply.send(
+        improvement.pauseImprovementActivation(params.data.activationId, { requesterId: body.data.actorId }),
+      );
     } catch (error) {
       return replyWithImprovementMutationError(reply, error);
     }
@@ -280,11 +306,19 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.post("/api/v1/improvement/activations/:activationId/rollback", async (request, reply) => {
     const params = activationParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return reply.code(400).send({ error: params.error.flatten() });
+    const body = activationLifecycleBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
     }
     try {
-      return reply.send(improvement.rollbackImprovementActivation(params.data.activationId));
+      return reply.send(
+        improvement.rollbackImprovementActivation(params.data.activationId, { requesterId: body.data.actorId }),
+      );
     } catch (error) {
       return replyWithImprovementMutationError(reply, error);
     }
