@@ -6598,11 +6598,211 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
           createGovernedLifecycleSchema(db);
         },
       },
+      {
+        version: 176,
+        name: "remote_worker_request_nonce_authority",
+        up: (db) => {
+          // HX-501B1 durable request-nonce consumption owner (paired with
+          // PostgreSQL 118). Additive only: two new authority-specific,
+          // hash-only tables plus the two minimal parent UNIQUE indexes their
+          // complete composite foreign keys require. No frozen table is
+          // altered. Repair-only sparse databases without the remote-worker
+          // admission (170) predecessors skip instead of inventing parents.
+          if (
+            !tableExists(db, "remote_worker_bootstrap_requests") ||
+            !tableExists(db, "remote_worker_runtime_credentials") ||
+            !tableExists(db, "remote_worker_generations") ||
+            !tableExists(db, "remote_worker_generation_controls")
+          ) {
+            return;
+          }
+          createRemoteWorkerRequestNonceSchema(db);
+        },
+      },
     ],
   },
 ];
 
 const SCHEMA_MIGRATIONS = createSqliteMigrationRegistry(SCHEMA_MIGRATION_GROUPS);
+
+function createRemoteWorkerRequestNonceSchema(db: DatabaseSync): void {
+  db.exec(`
+    -- Minimal parent UNIQUE keys the complete composite foreign keys require.
+    -- Additive indexes on the frozen admission tables; the tables are unaltered.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_remote_worker_bootstrap_requests_nonce_authority
+      ON remote_worker_bootstrap_requests(registry_workspace_id, bootstrap_id, worker_id, target_worker_generation);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_remote_worker_runtime_credentials_nonce_authority
+      ON remote_worker_runtime_credentials(
+        registry_workspace_id, worker_id, worker_generation, credential_generation, credential_id
+      );
+
+    CREATE TABLE remote_worker_bootstrap_request_nonces (
+      registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+      worker_id TEXT NOT NULL CHECK(length(worker_id) BETWEEN 1 AND 256),
+      target_worker_generation INTEGER NOT NULL CHECK(
+        typeof(target_worker_generation) = 'integer' AND target_worker_generation > 0
+      ),
+      bootstrap_id TEXT NOT NULL CHECK(length(bootstrap_id) BETWEEN 1 AND 256),
+      nonce_sha256 TEXT NOT NULL CHECK(length(nonce_sha256) = 64 AND nonce_sha256 NOT GLOB '*[^0-9a-f]*'),
+      request_timestamp TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', request_timestamp, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', request_timestamp, '+0 days') = request_timestamp
+      ),
+      consumed_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', consumed_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', consumed_at, '+0 days') = consumed_at
+      ),
+      expires_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', expires_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', expires_at, '+0 days') = expires_at
+      ),
+      PRIMARY KEY(registry_workspace_id, worker_id, target_worker_generation, bootstrap_id, nonce_sha256),
+      FOREIGN KEY(registry_workspace_id, bootstrap_id, worker_id, target_worker_generation)
+        REFERENCES remote_worker_bootstrap_requests(
+          registry_workspace_id, bootstrap_id, worker_id, target_worker_generation
+        ) ON DELETE RESTRICT,
+      CHECK((
+        (CAST(strftime('%s', expires_at) AS INTEGER) - CAST(strftime('%s', request_timestamp) AS INTEGER)) * 1000
+        + CAST(substr(expires_at, 21, 3) AS INTEGER)
+        - CAST(substr(request_timestamp, 21, 3) AS INTEGER)
+      ) = 60000)
+    );
+
+    CREATE TABLE remote_worker_credential_request_nonces (
+      registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+      worker_id TEXT NOT NULL CHECK(length(worker_id) BETWEEN 1 AND 256),
+      worker_generation INTEGER NOT NULL CHECK(typeof(worker_generation) = 'integer' AND worker_generation > 0),
+      credential_generation INTEGER NOT NULL CHECK(
+        typeof(credential_generation) = 'integer' AND credential_generation > 0
+      ),
+      credential_id TEXT NOT NULL CHECK(length(credential_id) BETWEEN 1 AND 256),
+      nonce_sha256 TEXT NOT NULL CHECK(length(nonce_sha256) = 64 AND nonce_sha256 NOT GLOB '*[^0-9a-f]*'),
+      request_timestamp TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', request_timestamp, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', request_timestamp, '+0 days') = request_timestamp
+      ),
+      consumed_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', consumed_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', consumed_at, '+0 days') = consumed_at
+      ),
+      expires_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', expires_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', expires_at, '+0 days') = expires_at
+      ),
+      PRIMARY KEY(registry_workspace_id, worker_id, worker_generation, credential_generation, credential_id, nonce_sha256),
+      FOREIGN KEY(registry_workspace_id, worker_id, worker_generation, credential_generation, credential_id)
+        REFERENCES remote_worker_runtime_credentials(
+          registry_workspace_id, worker_id, worker_generation, credential_generation, credential_id
+        ) ON DELETE RESTRICT,
+      CHECK((
+        (CAST(strftime('%s', expires_at) AS INTEGER) - CAST(strftime('%s', request_timestamp) AS INTEGER)) * 1000
+        + CAST(substr(expires_at, 21, 3) AS INTEGER)
+        - CAST(substr(request_timestamp, 21, 3) AS INTEGER)
+      ) = 60000)
+    );
+
+    -- Bounded-pruning stable ordering by expiry then identity.
+    CREATE INDEX IF NOT EXISTS idx_remote_worker_bootstrap_request_nonces_expiry
+      ON remote_worker_bootstrap_request_nonces(
+        expires_at, registry_workspace_id, worker_id, target_worker_generation, bootstrap_id, nonce_sha256
+      );
+    CREATE INDEX IF NOT EXISTS idx_remote_worker_credential_request_nonces_expiry
+      ON remote_worker_credential_request_nonces(
+        expires_at, registry_workspace_id, worker_id, worker_generation, credential_generation, credential_id, nonce_sha256
+      );
+
+    -- Bootstrap nonce admission: pending (unconsumed), unexpired, still-current
+    -- target, and inside the database-clock request window. A consumed bootstrap
+    -- (a generation cites it) or a superseded target (N+1 admission) is stale.
+    CREATE TRIGGER trg_remote_worker_bootstrap_request_nonces_insert_guard
+    BEFORE INSERT ON remote_worker_bootstrap_request_nonces
+    WHEN
+      abs(julianday(NEW.request_timestamp) - julianday('now')) * 86400.0 > 60.0
+      OR NEW.expires_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      OR NOT EXISTS (
+        SELECT 1 FROM remote_worker_bootstrap_requests bootstrap
+        WHERE bootstrap.registry_workspace_id = NEW.registry_workspace_id
+          AND bootstrap.bootstrap_id = NEW.bootstrap_id
+          AND bootstrap.worker_id = NEW.worker_id
+          AND bootstrap.target_worker_generation = NEW.target_worker_generation
+          AND bootstrap.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      )
+      OR EXISTS (
+        SELECT 1 FROM remote_worker_generations generation
+        WHERE generation.registry_workspace_id = NEW.registry_workspace_id
+          AND generation.bootstrap_id = NEW.bootstrap_id
+      )
+      OR NEW.target_worker_generation <> (
+        SELECT COALESCE(MAX(generation.worker_generation), 0) + 1
+        FROM remote_worker_generations generation
+        WHERE generation.registry_workspace_id = NEW.registry_workspace_id
+          AND generation.worker_id = NEW.worker_id
+      )
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker bootstrap nonce authority is stale, expired, or outside the request window');
+    END;
+
+    -- Credential nonce admission: the exact latest-fresh credential of the
+    -- latest worker generation, unexpired, with no quarantine/revoke control,
+    -- inside the database-clock request window. Rotation (newer credential
+    -- generation), N+1 admission (newer worker generation), expiry, or any
+    -- control immediately blocks the stale authority.
+    CREATE TRIGGER trg_remote_worker_credential_request_nonces_insert_guard
+    BEFORE INSERT ON remote_worker_credential_request_nonces
+    WHEN
+      abs(julianday(NEW.request_timestamp) - julianday('now')) * 86400.0 > 60.0
+      OR NEW.expires_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      OR NEW.worker_generation <> (
+        SELECT MAX(generation.worker_generation)
+        FROM remote_worker_generations generation
+        WHERE generation.registry_workspace_id = NEW.registry_workspace_id
+          AND generation.worker_id = NEW.worker_id
+      )
+      OR NEW.credential_generation <> (
+        SELECT MAX(credential.credential_generation)
+        FROM remote_worker_runtime_credentials credential
+        WHERE credential.registry_workspace_id = NEW.registry_workspace_id
+          AND credential.worker_id = NEW.worker_id
+          AND credential.worker_generation = NEW.worker_generation
+      )
+      OR NOT EXISTS (
+        SELECT 1 FROM remote_worker_runtime_credentials credential
+        WHERE credential.registry_workspace_id = NEW.registry_workspace_id
+          AND credential.worker_id = NEW.worker_id
+          AND credential.worker_generation = NEW.worker_generation
+          AND credential.credential_generation = NEW.credential_generation
+          AND credential.credential_id = NEW.credential_id
+          AND credential.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      )
+      OR EXISTS (
+        SELECT 1 FROM remote_worker_generation_controls control
+        WHERE control.registry_workspace_id = NEW.registry_workspace_id
+          AND control.worker_id = NEW.worker_id
+          AND control.worker_generation = NEW.worker_generation
+      )
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker credential nonce authority is stale, expired, revoked, or outside the request window');
+    END;
+
+    -- Consumed nonces are immutable; live rows are undeletable and only the
+    -- database clock releases an expired row for bounded pruning.
+    CREATE TRIGGER trg_remote_worker_bootstrap_request_nonces_no_update
+    BEFORE UPDATE ON remote_worker_bootstrap_request_nonces
+    BEGIN SELECT RAISE(ABORT, 'remote worker request nonces are immutable'); END;
+    CREATE TRIGGER trg_remote_worker_bootstrap_request_nonces_no_delete
+    BEFORE DELETE ON remote_worker_bootstrap_request_nonces
+    WHEN OLD.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    BEGIN SELECT RAISE(ABORT, 'live remote worker request nonces are undeletable'); END;
+
+    CREATE TRIGGER trg_remote_worker_credential_request_nonces_no_update
+    BEFORE UPDATE ON remote_worker_credential_request_nonces
+    BEGIN SELECT RAISE(ABORT, 'remote worker request nonces are immutable'); END;
+    CREATE TRIGGER trg_remote_worker_credential_request_nonces_no_delete
+    BEFORE DELETE ON remote_worker_credential_request_nonces
+    WHEN OLD.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    BEGIN SELECT RAISE(ABORT, 'live remote worker request nonces are undeletable'); END;
+  `);
+}
 
 function createDurableHeartbeatOccurrenceSchema(db: DatabaseSync): void {
   upgradeSessionControlEventsForHeartbeatPreemption(db);

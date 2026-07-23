@@ -287,13 +287,15 @@ describe("HX-402 live PostgreSQL foundation proof (skips without GOATCITADEL_TES
       try {
         await adminPool.query(`CREATE SCHEMA ${schemaName}`);
         liveDb.exec(`SET search_path TO ${schemaName}`);
-        // Fresh chain: migrate an EMPTY schema through the physical head so
-        // 117 runs exactly as released.
+        // Fresh chain: migrate an EMPTY schema through the physical head so the
+        // HX-402 governed-lifecycle migration 117 runs exactly as released. The
+        // head advances with later additive migrations (e.g. HX-501B1's 118), so
+        // this proof requires the chain to have reached AT LEAST 117.
         await runPostgresMigrations(migrations, POSTGRES_MIGRATIONS);
         const head = liveDb
           .prepare("SELECT MAX(version) AS version FROM schema_migrations")
           .get<{ version: number | string }>();
-        assert.equal(Number(head?.version), 117);
+        assert.ok(Number(head?.version) >= 117);
 
         const events = new GovernedLifecycleEventRepository(liveDb);
         const countRows = (table: string) =>

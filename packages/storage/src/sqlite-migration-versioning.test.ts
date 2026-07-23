@@ -42,10 +42,106 @@ describe("sqlite schema migrations", () => {
     assert.deepEqual(
       { ...rows.at(-1) },
       {
-        version: 175,
-        name: "governed_lifecycle_foundation",
+        version: 176,
+        name: "remote_worker_request_nonce_authority",
       },
     );
+    db.close();
+  });
+
+  it("keeps migration 176 additive, hash-only, currency-fenced, immutable, and delete-after-expiry", () => {
+    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-hx501b1-176-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const db = createDatabase({ dbPath });
+
+    const tables = ["remote_worker_bootstrap_request_nonces", "remote_worker_credential_request_nonces"];
+    for (const table of tables) {
+      const tableSql = (
+        db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) as
+          | { sql: string }
+          | undefined
+      )?.sql;
+      assert.ok(tableSql, `expected migration 176 table ${table}`);
+      const columns = (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(
+        (column) => column.name,
+      );
+      // Hash-only: never a raw nonce or any authorization/secret material column
+      // (credential_generation / credential_id are non-secret parent identity).
+      for (const forbidden of [
+        "nonce_value",
+        "nonce_raw",
+        "token",
+        "secret",
+        "proof",
+        "body",
+        "authorization",
+        "certificate",
+        "public_key",
+        "tls_exporter",
+      ]) {
+        assert.equal(
+          columns.some((column) => column.toLowerCase().includes(forbidden)),
+          false,
+          `${table} must stay hash-only (found ${forbidden})`,
+        );
+      }
+      assert.ok(columns.includes("nonce_sha256"), `${table} stores only the nonce digest`);
+      assert.ok(
+        columns.includes("request_timestamp") && columns.includes("expires_at") && columns.includes("consumed_at"),
+      );
+      // Exact 60-second expiry relationship.
+      assert.match(tableSql!, /\) = 60000\)/u);
+      const triggers = db
+        .prepare("SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND tbl_name = ?")
+        .all(table) as Array<{
+        name: string;
+        sql: string;
+      }>;
+      const triggerNames = triggers.map((trigger) => trigger.name);
+      assert.ok(triggerNames.includes(`trg_${table}_insert_guard`), `${table} needs an insert guard`);
+      assert.ok(triggerNames.includes(`trg_${table}_no_update`), `${table} needs a no-update trigger`);
+      assert.ok(triggerNames.includes(`trg_${table}_no_delete`), `${table} needs a delete-after-expiry trigger`);
+      const deleteGuard = triggers.find((trigger) => trigger.name === `trg_${table}_no_delete`)?.sql ?? "";
+      assert.match(deleteGuard, /OLD\.expires_at > strftime\('%Y-%m-%dT%H:%M:%fZ', 'now'\)/u);
+    }
+
+    const bootstrapGuard = (
+      db
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'trg_remote_worker_bootstrap_request_nonces_insert_guard'",
+        )
+        .get() as { sql: string }
+    ).sql;
+    assert.match(
+      bootstrapGuard,
+      /abs\(julianday\(NEW\.request_timestamp\) - julianday\('now'\)\) \* 86400\.0 > 60\.0/u,
+    );
+    assert.match(bootstrapGuard, /COALESCE\(MAX\(generation\.worker_generation\), 0\) \+ 1/u);
+    assert.match(
+      bootstrapGuard,
+      /remote_worker_generations generation[\s\S]*generation\.bootstrap_id = NEW\.bootstrap_id/u,
+    );
+
+    const credentialGuard = (
+      db
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'trg_remote_worker_credential_request_nonces_insert_guard'",
+        )
+        .get() as { sql: string }
+    ).sql;
+    assert.match(credentialGuard, /MAX\(generation\.worker_generation\)/u);
+    assert.match(credentialGuard, /MAX\(credential\.credential_generation\)/u);
+    assert.match(credentialGuard, /remote_worker_generation_controls control/u);
+
+    // The minimal parent UNIQUE keys the complete composite foreign keys require.
+    const indexes = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE '%nonce_authority'")
+      .all() as Array<{ name: string }>;
+    assert.deepEqual(indexes.map((index) => index.name).sort(), [
+      "idx_remote_worker_bootstrap_requests_nonce_authority",
+      "idx_remote_worker_runtime_credentials_nonce_authority",
+    ]);
+
     db.close();
   });
 

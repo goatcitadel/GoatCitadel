@@ -12361,4 +12361,223 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         FOR EACH ROW EXECUTE FUNCTION gc_reject_governed_lifecycle_mutation();
     `,
   },
+  {
+    version: 118,
+    name: "remote_worker_request_nonce_authority",
+    // HX-501B1 durable request-nonce consumption owner (paired with SQLite 176).
+    // Additive only: two new authority-specific, hash-only tables and the two
+    // minimal parent UNIQUE keys their complete composite foreign keys require.
+    // The only frozen-table change is ADD CONSTRAINT ... UNIQUE on the admission
+    // parents (PostgreSQL foreign keys require a unique CONSTRAINT, not a bare
+    // index); no column is altered and no row is written. The raw nonce never
+    // has a column; only the nonce digest, request timestamp, database
+    // consumption timestamp, and expiry are stored. Production-dark: no route,
+    // listener, startup, assignment, inference, cell, or UI owner.
+    sql: `
+      ALTER TABLE remote_worker_bootstrap_requests
+        ADD CONSTRAINT uq_remote_worker_bootstrap_requests_nonce_authority
+        UNIQUE (registry_workspace_id, bootstrap_id, worker_id, target_worker_generation);
+      ALTER TABLE remote_worker_runtime_credentials
+        ADD CONSTRAINT uq_remote_worker_runtime_credentials_nonce_authority
+        UNIQUE (registry_workspace_id, worker_id, worker_generation, credential_generation, credential_id);
+
+      CREATE TABLE IF NOT EXISTS remote_worker_bootstrap_request_nonces (
+        registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+        worker_id TEXT NOT NULL CHECK(length(worker_id) BETWEEN 1 AND 256),
+        target_worker_generation BIGINT NOT NULL CHECK(target_worker_generation > 0),
+        bootstrap_id TEXT NOT NULL CHECK(length(bootstrap_id) BETWEEN 1 AND 256),
+        nonce_sha256 TEXT NOT NULL CHECK(nonce_sha256 ~ '^[0-9a-f]{64}$'),
+        request_timestamp TEXT NOT NULL CHECK(
+          gc_try_parse_timestamptz(request_timestamp) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(request_timestamp) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = request_timestamp
+        ),
+        consumed_at TEXT NOT NULL CHECK(
+          gc_try_parse_timestamptz(consumed_at) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(consumed_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = consumed_at
+        ),
+        expires_at TEXT NOT NULL CHECK(
+          gc_try_parse_timestamptz(expires_at) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(expires_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = expires_at
+        ),
+        PRIMARY KEY(registry_workspace_id, worker_id, target_worker_generation, bootstrap_id, nonce_sha256),
+        FOREIGN KEY(registry_workspace_id, bootstrap_id, worker_id, target_worker_generation)
+          REFERENCES remote_worker_bootstrap_requests(
+            registry_workspace_id, bootstrap_id, worker_id, target_worker_generation
+          ) ON DELETE RESTRICT,
+        CHECK(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(expires_at) - gc_try_parse_timestamptz(request_timestamp))) = 60)
+      );
+
+      CREATE TABLE IF NOT EXISTS remote_worker_credential_request_nonces (
+        registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+        worker_id TEXT NOT NULL CHECK(length(worker_id) BETWEEN 1 AND 256),
+        worker_generation BIGINT NOT NULL CHECK(worker_generation > 0),
+        credential_generation BIGINT NOT NULL CHECK(credential_generation > 0),
+        credential_id TEXT NOT NULL CHECK(length(credential_id) BETWEEN 1 AND 256),
+        nonce_sha256 TEXT NOT NULL CHECK(nonce_sha256 ~ '^[0-9a-f]{64}$'),
+        request_timestamp TEXT NOT NULL CHECK(
+          gc_try_parse_timestamptz(request_timestamp) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(request_timestamp) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = request_timestamp
+        ),
+        consumed_at TEXT NOT NULL CHECK(
+          gc_try_parse_timestamptz(consumed_at) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(consumed_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = consumed_at
+        ),
+        expires_at TEXT NOT NULL CHECK(
+          gc_try_parse_timestamptz(expires_at) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(expires_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = expires_at
+        ),
+        PRIMARY KEY(registry_workspace_id, worker_id, worker_generation, credential_generation, credential_id, nonce_sha256),
+        FOREIGN KEY(registry_workspace_id, worker_id, worker_generation, credential_generation, credential_id)
+          REFERENCES remote_worker_runtime_credentials(
+            registry_workspace_id, worker_id, worker_generation, credential_generation, credential_id
+          ) ON DELETE RESTRICT,
+        CHECK(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(expires_at) - gc_try_parse_timestamptz(request_timestamp))) = 60)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_remote_worker_bootstrap_request_nonces_expiry
+        ON remote_worker_bootstrap_request_nonces(
+          expires_at, registry_workspace_id, worker_id, target_worker_generation, bootstrap_id, nonce_sha256
+        );
+      CREATE INDEX IF NOT EXISTS idx_remote_worker_credential_request_nonces_expiry
+        ON remote_worker_credential_request_nonces(
+          expires_at, registry_workspace_id, worker_id, worker_generation, credential_generation, credential_id, nonce_sha256
+        );
+
+      CREATE OR REPLACE FUNCTION gc_remote_worker_bootstrap_request_nonce_guard()
+      RETURNS trigger AS $$
+      DECLARE database_now TIMESTAMPTZ := clock_timestamp();
+      BEGIN
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.registry_workspace_id, 501));
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.registry_workspace_id || ':' || NEW.worker_id, 502));
+        IF gc_try_parse_timestamptz(NEW.request_timestamp) IS NULL
+          OR to_char(gc_try_parse_timestamptz(NEW.request_timestamp) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') <> NEW.request_timestamp
+          OR abs(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(NEW.request_timestamp) - database_now))) > 60
+          OR gc_try_parse_timestamptz(NEW.expires_at) <= database_now THEN
+          RAISE EXCEPTION 'remote worker bootstrap nonce authority is outside the request window' USING ERRCODE = '23514';
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM remote_worker_bootstrap_requests bootstrap
+          WHERE bootstrap.registry_workspace_id = NEW.registry_workspace_id
+            AND bootstrap.bootstrap_id = NEW.bootstrap_id
+            AND bootstrap.worker_id = NEW.worker_id
+            AND bootstrap.target_worker_generation = NEW.target_worker_generation
+            AND gc_try_parse_timestamptz(bootstrap.expires_at) > database_now
+        ) THEN
+          RAISE EXCEPTION 'remote worker bootstrap nonce authority is expired or unknown' USING ERRCODE = '23514';
+        END IF;
+        IF EXISTS (
+          SELECT 1 FROM remote_worker_generations generation
+          WHERE generation.registry_workspace_id = NEW.registry_workspace_id
+            AND generation.bootstrap_id = NEW.bootstrap_id
+        ) THEN
+          RAISE EXCEPTION 'remote worker bootstrap nonce authority is already consumed' USING ERRCODE = '23514';
+        END IF;
+        IF NEW.target_worker_generation <> (
+          SELECT COALESCE(MAX(generation.worker_generation), 0) + 1
+          FROM remote_worker_generations generation
+          WHERE generation.registry_workspace_id = NEW.registry_workspace_id
+            AND generation.worker_id = NEW.worker_id
+        ) THEN
+          RAISE EXCEPTION 'remote worker bootstrap nonce target generation is not current' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE OR REPLACE FUNCTION gc_remote_worker_credential_request_nonce_guard()
+      RETURNS trigger AS $$
+      DECLARE database_now TIMESTAMPTZ := clock_timestamp();
+      BEGIN
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.registry_workspace_id, 501));
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.registry_workspace_id || ':' || NEW.worker_id, 502));
+        IF gc_try_parse_timestamptz(NEW.request_timestamp) IS NULL
+          OR to_char(gc_try_parse_timestamptz(NEW.request_timestamp) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') <> NEW.request_timestamp
+          OR abs(EXTRACT(EPOCH FROM (gc_try_parse_timestamptz(NEW.request_timestamp) - database_now))) > 60
+          OR gc_try_parse_timestamptz(NEW.expires_at) <= database_now THEN
+          RAISE EXCEPTION 'remote worker credential nonce authority is outside the request window' USING ERRCODE = '23514';
+        END IF;
+        IF NEW.worker_generation <> (
+          SELECT MAX(generation.worker_generation)
+          FROM remote_worker_generations generation
+          WHERE generation.registry_workspace_id = NEW.registry_workspace_id
+            AND generation.worker_id = NEW.worker_id
+        ) THEN
+          RAISE EXCEPTION 'remote worker credential nonce worker generation is not latest' USING ERRCODE = '23514';
+        END IF;
+        IF NEW.credential_generation <> (
+          SELECT MAX(credential.credential_generation)
+          FROM remote_worker_runtime_credentials credential
+          WHERE credential.registry_workspace_id = NEW.registry_workspace_id
+            AND credential.worker_id = NEW.worker_id
+            AND credential.worker_generation = NEW.worker_generation
+        ) THEN
+          RAISE EXCEPTION 'remote worker credential nonce credential generation is not latest' USING ERRCODE = '23514';
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM remote_worker_runtime_credentials credential
+          WHERE credential.registry_workspace_id = NEW.registry_workspace_id
+            AND credential.worker_id = NEW.worker_id
+            AND credential.worker_generation = NEW.worker_generation
+            AND credential.credential_generation = NEW.credential_generation
+            AND credential.credential_id = NEW.credential_id
+            AND gc_try_parse_timestamptz(credential.expires_at) > database_now
+        ) THEN
+          RAISE EXCEPTION 'remote worker credential nonce authority is expired or unknown' USING ERRCODE = '23514';
+        END IF;
+        IF EXISTS (
+          SELECT 1 FROM remote_worker_generation_controls control
+          WHERE control.registry_workspace_id = NEW.registry_workspace_id
+            AND control.worker_id = NEW.worker_id
+            AND control.worker_generation = NEW.worker_generation
+        ) THEN
+          RAISE EXCEPTION 'remote worker credential nonce authority is quarantined or revoked' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE OR REPLACE FUNCTION gc_reject_remote_worker_request_nonce_mutation()
+      RETURNS trigger AS $$
+      BEGIN
+        RAISE EXCEPTION 'remote worker request nonces are immutable (no update)' USING ERRCODE = '23514';
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE OR REPLACE FUNCTION gc_remote_worker_request_nonce_delete_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF gc_try_parse_timestamptz(OLD.expires_at) > clock_timestamp() THEN
+          RAISE EXCEPTION 'live remote worker request nonces are undeletable' USING ERRCODE = '23514';
+        END IF;
+        RETURN OLD;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      DROP TRIGGER IF EXISTS trg_remote_worker_bootstrap_request_nonces_insert_guard ON remote_worker_bootstrap_request_nonces;
+      CREATE TRIGGER trg_remote_worker_bootstrap_request_nonces_insert_guard
+        BEFORE INSERT ON remote_worker_bootstrap_request_nonces
+        FOR EACH ROW EXECUTE FUNCTION gc_remote_worker_bootstrap_request_nonce_guard();
+      DROP TRIGGER IF EXISTS trg_remote_worker_bootstrap_request_nonces_no_update ON remote_worker_bootstrap_request_nonces;
+      CREATE TRIGGER trg_remote_worker_bootstrap_request_nonces_no_update
+        BEFORE UPDATE ON remote_worker_bootstrap_request_nonces
+        FOR EACH ROW EXECUTE FUNCTION gc_reject_remote_worker_request_nonce_mutation();
+      DROP TRIGGER IF EXISTS trg_remote_worker_bootstrap_request_nonces_no_delete ON remote_worker_bootstrap_request_nonces;
+      CREATE TRIGGER trg_remote_worker_bootstrap_request_nonces_no_delete
+        BEFORE DELETE ON remote_worker_bootstrap_request_nonces
+        FOR EACH ROW EXECUTE FUNCTION gc_remote_worker_request_nonce_delete_guard();
+
+      DROP TRIGGER IF EXISTS trg_remote_worker_credential_request_nonces_insert_guard ON remote_worker_credential_request_nonces;
+      CREATE TRIGGER trg_remote_worker_credential_request_nonces_insert_guard
+        BEFORE INSERT ON remote_worker_credential_request_nonces
+        FOR EACH ROW EXECUTE FUNCTION gc_remote_worker_credential_request_nonce_guard();
+      DROP TRIGGER IF EXISTS trg_remote_worker_credential_request_nonces_no_update ON remote_worker_credential_request_nonces;
+      CREATE TRIGGER trg_remote_worker_credential_request_nonces_no_update
+        BEFORE UPDATE ON remote_worker_credential_request_nonces
+        FOR EACH ROW EXECUTE FUNCTION gc_reject_remote_worker_request_nonce_mutation();
+      DROP TRIGGER IF EXISTS trg_remote_worker_credential_request_nonces_no_delete ON remote_worker_credential_request_nonces;
+      CREATE TRIGGER trg_remote_worker_credential_request_nonces_no_delete
+        BEFORE DELETE ON remote_worker_credential_request_nonces
+        FOR EACH ROW EXECUTE FUNCTION gc_remote_worker_request_nonce_delete_guard();
+    `,
+  },
 ];

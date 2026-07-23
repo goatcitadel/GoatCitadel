@@ -597,4 +597,76 @@ describe("protected Postgres migration integrity", () => {
       /chat_messages|model_usage_events|gateway_route|listener|message_body|prompt_body|response_body|tool_result|provider_payload|payload_json/iu,
     );
   });
+
+  it("keeps HX-501B1 migration 118 additive, hash-only, currency-fenced, immutable, and production-dark", () => {
+    const migration = POSTGRES_MIGRATIONS.find((candidate) => candidate.version === 118);
+    assert.equal(migration?.name, "remote_worker_request_nonce_authority");
+    assert.equal(migration?.batchedStatements, undefined);
+    const sql = migration?.sql ?? "";
+    for (const table of ["remote_worker_bootstrap_request_nonces", "remote_worker_credential_request_nonces"]) {
+      assert.match(sql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`, "u"));
+      assert.match(sql, new RegExp(`trg_${table}_insert_guard`, "u"));
+      assert.match(sql, new RegExp(`trg_${table}_no_update`, "u"));
+      assert.match(sql, new RegExp(`trg_${table}_no_delete`, "u"));
+    }
+    assert.equal(sql.match(/CREATE TABLE IF NOT EXISTS remote_worker_/gu)?.length, 2);
+    // Hash-only: the nonce digest column exists; no raw nonce/credential/secret column.
+    assert.equal(sql.match(/nonce_sha256 TEXT NOT NULL CHECK/gu)?.length, 2);
+    assert.doesNotMatch(sql, /nonce_value|nonce_raw|(?:credential|token|secret|proof|body)\s+(?:TEXT|BYTEA)/iu);
+    // Exact 60-second expiry and database-clock request window.
+    assert.equal(
+      sql.match(/EXTRACT\(EPOCH FROM \(gc_try_parse_timestamptz\(expires_at\)[\s\S]*?\) = 60\)/gu)?.length,
+      2,
+    );
+    assert.match(
+      sql,
+      /abs\(EXTRACT\(EPOCH FROM \(gc_try_parse_timestamptz\(NEW\.request_timestamp\) - database_now\)\)\) > 60/u,
+    );
+    assert.match(sql, /gc_try_parse_timestamptz\(NEW\.expires_at\) <= database_now/u);
+    // The only frozen-table change is the minimal parent UNIQUE keys the FKs require.
+    assert.match(
+      sql,
+      /ALTER TABLE remote_worker_bootstrap_requests\s+ADD CONSTRAINT uq_remote_worker_bootstrap_requests_nonce_authority\s+UNIQUE \(registry_workspace_id, bootstrap_id, worker_id, target_worker_generation\)/u,
+    );
+    assert.match(
+      sql,
+      /ALTER TABLE remote_worker_runtime_credentials\s+ADD CONSTRAINT uq_remote_worker_runtime_credentials_nonce_authority\s+UNIQUE \(registry_workspace_id, worker_id, worker_generation, credential_generation, credential_id\)/u,
+    );
+    assert.equal(sql.match(/ALTER TABLE /gu)?.length, 2);
+    assert.doesNotMatch(sql, /ALTER TABLE[^;]*(?:ADD COLUMN|DROP|ALTER COLUMN|RENAME)/iu);
+    // Complete composite foreign keys binding the exact authority.
+    assert.match(
+      sql,
+      /FOREIGN KEY\(registry_workspace_id, bootstrap_id, worker_id, target_worker_generation\)\s+REFERENCES remote_worker_bootstrap_requests/u,
+    );
+    assert.match(
+      sql,
+      /FOREIGN KEY\(registry_workspace_id, worker_id, worker_generation, credential_generation, credential_id\)\s+REFERENCES remote_worker_runtime_credentials/u,
+    );
+    // Authority currency: bootstrap pending/current, credential latest-fresh with no control.
+    assert.match(sql, /COALESCE\(MAX\(generation\.worker_generation\), 0\) \+ 1/u);
+    assert.match(sql, /already consumed/u);
+    assert.match(sql, /remote_worker_generation_controls control/u);
+    assert.match(sql, /quarantined or revoked/u);
+    // Advisory serialization on the same workspace-then-worker locks as admission.
+    assert.equal(
+      sql.match(/pg_advisory_xact_lock\(hashtextextended\(NEW\.registry_workspace_id, 501\)\)/gu)?.length,
+      2,
+    );
+    assert.equal(
+      sql.match(
+        /pg_advisory_xact_lock\(hashtextextended\(NEW\.registry_workspace_id \|\| ':' \|\| NEW\.worker_id, 502\)\)/gu,
+      )?.length,
+      2,
+    );
+    assert.equal(sql.match(/database_now TIMESTAMPTZ := clock_timestamp\(\)/gu)?.length, 2);
+    assert.match(sql, /live remote worker request nonces are undeletable/u);
+    assert.match(sql, /remote worker request nonces are immutable/u);
+    // No DML rows and no route/listener/runtime claim.
+    assert.doesNotMatch(
+      sql,
+      /\b(?:INSERT\s+INTO|DELETE\s+FROM|UPDATE\s+remote_worker|DROP\s+TABLE|TRUNCATE\s+TABLE)\b/iu,
+    );
+    assert.doesNotMatch(sql, /gateway_route|readiness|listener|scheduler|assignment|inference/iu);
+  });
 });
