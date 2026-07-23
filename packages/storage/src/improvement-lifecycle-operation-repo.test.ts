@@ -119,6 +119,35 @@ describe("ImprovementLifecycleOperationRepository (fresh-chain SQLite through mi
     );
   });
 
+  it("self-verifies the request digest on intent creation so a mis-computed digest never persists", () => {
+    const { repo } = createStore();
+    // HX-402 P3 fold-in: validateOperation recomputes requestSha256 exactly like
+    // validateSettlement recomputes resultSha256. A drifted digest is rejected
+    // BEFORE any insert, so nothing immutable can carry a wrong request hash.
+    assert.throws(
+      () => repo.createIntent(intent({ requestSha256: "a".repeat(64) })),
+      /request digest does not match canonical JSON/u,
+    );
+    assert.equal(repo.findIntent("improvement-op-1"), undefined);
+    // Well-formed but non-matching material is equally rejected pre-insert.
+    const drifted = intent();
+    assert.throws(
+      () => repo.createIntent({ ...drifted, targetId: "activation-tampered" }),
+      /request digest does not match canonical JSON/u,
+    );
+    assert.equal(repo.findIntent("improvement-op-1"), undefined);
+    // The exact digest still persists and replays byte-identically.
+    const stored = repo.createIntent(intent());
+    assert.deepEqual(repo.createIntent(intent()), stored);
+    // Replay conflict detection still precedes digest verification for rows
+    // that already exist, so same-ID/different-material keeps its immutable
+    // WRITE_CONFLICT contract (the stored row's digest was verified at insert).
+    assert.throws(
+      () => repo.createIntent({ ...stored, targetId: "activation-2" }),
+      /conflicts with an immutable record/u,
+    );
+  });
+
   it("keeps intents immutable at the database layer", () => {
     const { db, repo } = createStore();
     repo.createIntent(intent());

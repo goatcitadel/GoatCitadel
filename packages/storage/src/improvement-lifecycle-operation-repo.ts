@@ -2,6 +2,7 @@ import {
   ConflictError,
   NotFoundError,
   canonicalJsonString,
+  computeImprovementLifecycleRequestSha256,
   computeImprovementLifecycleResultSha256,
   isImprovementLifecycleInspectionDisposition,
   isImprovementLifecycleOperationKind,
@@ -159,6 +160,12 @@ export class ImprovementLifecycleOperationRepository {
       this.findIntentByIdempotencyKey(input.idempotencyKey) ??
       this.findIntentByApprovalId(input.approvalId);
     if (existing) return assertOperationReplay(existing, input);
+    // HX-402 P3 fold-in: self-verify the request digest before any fresh
+    // insert (symmetric with validateSettlement's resultSha256 recompute) so a
+    // mis-computed digest can never persist immutably. Ordered after the
+    // replay lookup: an existing row keeps its immutable-conflict contract and
+    // was itself digest-verified when it persisted.
+    assertOperationRequestDigest(input);
     try {
       this.insertOperationStmt.run({
         operationId: input.operationId,
@@ -443,6 +450,13 @@ function validateInspection(input: ImprovementLifecycleInspectionRecord): void {
     throw new TypeError("Invalid improvement lifecycle inspection disposition.");
   }
   assertCanonicalTimestamp(input.observedAt, "observed-at");
+}
+
+function assertOperationRequestDigest(input: ImprovementLifecycleOperationRecord): void {
+  const { requestSha256: _requestSha256, approvalId: _approvalId, ...request } = input;
+  if (computeImprovementLifecycleRequestSha256(request) !== input.requestSha256) {
+    throw new TypeError("Improvement lifecycle request digest does not match canonical JSON.");
+  }
 }
 
 function validateSettlement(input: ImprovementLifecycleSettlementRecord): void {
