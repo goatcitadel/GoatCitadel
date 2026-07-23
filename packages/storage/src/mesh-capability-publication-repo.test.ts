@@ -739,6 +739,74 @@ describe("MeshCapabilityPublicationRepository", () => {
     );
   });
 
+  it("exposes non-throwing invocation intent/settlement reads and the expired-unsettled projection", () => {
+    const { db, repo } = createHarness();
+    const published = repo.publishManifest(manifest());
+    const tool = published.entries.find((candidate) => candidate.kind === "tool")!;
+    const activationInput = activationFor(published, tool, "read-surface-tool");
+    approve(db, activationInput);
+    const activation = repo.activate(activationInput);
+
+    assert.equal(repo.findInvocationIntent("default", "missing-invocation"), undefined);
+    assert.equal(repo.findInvocationSettlement("default", "missing-invocation"), undefined);
+    assert.deepEqual(repo.listUnsettledExpiredInvocationIntents("default"), []);
+
+    const intent = repo.createInvocationIntent({
+      workspaceId: "default",
+      invocationId: "read-surface-invocation",
+      activationId: activation.activationId,
+      activationRevision: activation.activationRevision,
+      capabilityId: activation.capabilityId,
+      nodeId: activation.nodeId,
+      publisherGeneration: activation.publisherGeneration,
+      healthGeneration: activation.healthGeneration,
+      publicationLeaseFencingToken: activation.publicationLeaseFencingToken,
+      manifestSha256: activation.manifestSha256,
+      entrySha256: activation.entrySha256,
+      descriptorSha256: activation.descriptorSha256,
+      permissionEnvelopeSha256: activation.permissionEnvelopeSha256,
+      executionProfileSha256: "1".repeat(64),
+      inputSha256: "2".repeat(64),
+      sessionId: "session-a",
+      turnId: "turn-read-surface",
+      deadlineAt: boundedDeadline(1_100),
+      idempotencyKey: "read-surface-invoke",
+    });
+    assert.deepEqual(repo.findInvocationIntent("default", intent.invocationId), intent);
+    // Cross-workspace reads stay isolated even when the invocation ID matches.
+    assert.equal(repo.findInvocationIntent("other-workspace", intent.invocationId), undefined);
+    assert.equal(repo.findInvocationSettlement("default", intent.invocationId), undefined);
+
+    // Not listed while the deadline is still in the future.
+    assert.deepEqual(repo.listUnsettledExpiredInvocationIntents("default"), []);
+    const start = Date.now();
+    while (Date.now() - start < 1_300) {
+      // Busy-wait past the database-clock deadline; the intent guard requires a
+      // future deadline at insert time, so a short real wait is unavoidable.
+    }
+    assert.deepEqual(
+      repo.listUnsettledExpiredInvocationIntents("default").map((row) => row.invocationId),
+      [intent.invocationId],
+    );
+    assert.deepEqual(repo.listUnsettledExpiredInvocationIntents("other-workspace"), []);
+    assert.throws(() => repo.listUnsettledExpiredInvocationIntents("default", 0), /limit/);
+
+    const settlement = repo.settleInvocation({
+      workspaceId: "default",
+      invocationId: intent.invocationId,
+      disposition: "unknown",
+      errorCode: "mesh_capability_dispatch_deadline_expired",
+      settlementSha256: "3".repeat(64),
+      publisherGeneration: intent.publisherGeneration,
+      publicationLeaseFencingToken: intent.publicationLeaseFencingToken,
+      idempotencyKey: "read-surface-settle",
+    });
+    assert.deepEqual(repo.findInvocationSettlement("default", intent.invocationId), settlement);
+    assert.equal(repo.findInvocationSettlement("other-workspace", intent.invocationId), undefined);
+    // Settled intents leave the expired-unsettled projection.
+    assert.deepEqual(repo.listUnsettledExpiredInvocationIntents("default"), []);
+  });
+
   it("removes callability on health generation drift and requires explicit reactivation", () => {
     const { db, mesh, repo, publisher } = createHarness();
     const published = repo.publishManifest(manifest());

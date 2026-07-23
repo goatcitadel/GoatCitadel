@@ -781,6 +781,62 @@ export class MeshCapabilityPublicationRepository {
     return mapIntent(row);
   }
 
+  /** Non-throwing read of one immutable invocation intent. */
+  public findInvocationIntent(
+    workspaceId: string,
+    invocationId: string,
+  ): MeshCapabilityInvocationIntentRecord | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT * FROM mesh_capability_invocation_intents WHERE workspace_id = @workspaceId AND invocation_id = @invocationId`,
+      )
+      .get({
+        workspaceId: identifier(workspaceId, "workspaceId"),
+        invocationId: identifier(invocationId, "invocationId"),
+      }) as IntentRow | undefined;
+    return row ? mapIntent(row) : undefined;
+  }
+
+  /** Non-throwing read of the ONE immutable terminal settlement, when present. */
+  public findInvocationSettlement(
+    workspaceId: string,
+    invocationId: string,
+  ): MeshCapabilityInvocationSettlementRecord | undefined {
+    return this.findSettlement(identifier(workspaceId, "workspaceId"), identifier(invocationId, "invocationId"));
+  }
+
+  /**
+   * Invocation intents whose bounded deadline has passed on the database
+   * clock without any terminal settlement. This is the storage-truth recovery
+   * projection: a restarted Gateway (or the next dispatch) settles these to a
+   * bounded terminal state instead of leaving them open forever.
+   */
+  public listUnsettledExpiredInvocationIntents(
+    workspaceId: string,
+    limit?: number,
+  ): MeshCapabilityInvocationIntentRecord[] {
+    const rows = this.db
+      .prepare(
+        `
+      SELECT intent.* FROM mesh_capability_invocation_intents intent
+      WHERE intent.workspace_id = @workspaceId
+        AND intent.deadline_at <= @now
+        AND NOT EXISTS (
+          SELECT 1 FROM mesh_capability_invocation_settlements settlement
+          WHERE settlement.workspace_id = intent.workspace_id AND settlement.invocation_id = intent.invocation_id
+        )
+      ORDER BY intent.deadline_at ASC, intent.invocation_id ASC
+      LIMIT @limit
+    `,
+      )
+      .all({
+        workspaceId: identifier(workspaceId, "workspaceId"),
+        now: this.databaseNow(),
+        limit: boundedLimit(limit, 64, 256),
+      }) as IntentRow[];
+    return rows.map(mapIntent);
+  }
+
   public settleInvocation(input: SettleMeshCapabilityInvocationInput): MeshCapabilityInvocationSettlementRecord {
     const normalized = normalizeSettlementInput(input);
     const requestSha256 = sha256(normalized);
