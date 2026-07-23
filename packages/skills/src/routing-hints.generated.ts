@@ -69,14 +69,6 @@ export const GENERATED_SKILL_ROUTING_HINTS: Record<string, SkillRoutingHints> = 
     whenNotToUse: ["Do not use to make product claims that are not implementation-backed."],
     confidenceBoost: 0.08,
   },
-  "goatcitadel native safe improvement": {
-    phrases: ["log this routing gap", "post-task reflection", "self-improvement log"],
-    keywords: ["routing gap", "correction", "workflow friction", "reflection"],
-    surfaces: ["cowork", "library"],
-    whenToUse: ["Capture governed improvement observations as proposals or reviewable notes."],
-    whenNotToUse: ["Do not silently mutate durable memory or runtime policy."],
-    confidenceBoost: 0.12,
-  },
   "goatcitadel-native-safe-self-improvement": {
     phrases: ["log this routing gap", "post-task reflection", "self-improvement log"],
     keywords: ["routing gap", "correction", "workflow friction", "reflection"],

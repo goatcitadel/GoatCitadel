@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { validateSkillContent } from "./skill-content-validation.js";
 
-function buildSkillMarkdown(body: string, name = "Self Authored Helper"): string {
+function buildSkillMarkdown(body: string, name = "self-authored-helper"): string {
   return [
     "---",
     `name: ${name}`,
@@ -69,5 +69,16 @@ describe("validateSkillContent", () => {
     expect(result.valid).toBe(false);
     expect(result.checks.frontmatterValid).toBe(false);
     expect(result.errors.some((message) => /SKILL\.md/i.test(message))).toBe(true);
+  });
+
+  it("rejects skill names that would break capability-profile sealing", () => {
+    const result = validateSkillContent({
+      skillMarkdown: buildSkillMarkdown(
+        "# Helper\n\nSummarize the provided notes into bullet points.",
+        "GoatCitadel Native Safe Improvement",
+      ),
+    });
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((message) => /whitespace/i.test(message))).toBe(true);
   });
 });

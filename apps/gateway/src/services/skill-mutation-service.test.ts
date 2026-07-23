@@ -52,7 +52,7 @@ function createMemoryLifecycleStore(): SkillMutationLifecycleStore & { rows: Map
   };
 }
 
-function buildSkillMarkdown(body: string, name = "Self Authored Helper"): string {
+function buildSkillMarkdown(body: string, name = "self-authored-helper"): string {
   return [
     "---",
     `name: ${name}`,
@@ -348,7 +348,7 @@ describe("SkillMutationService", () => {
       skillId: "background-review-plan",
       evaluationRunId: "effect-plan-1",
       sourceTurnId: "turn-plan-1",
-      skillMarkdown: buildSkillMarkdown("Persisted exact plan.", "Background Review Plan"),
+      skillMarkdown: buildSkillMarkdown("Persisted exact plan.", "background-review-plan"),
     });
 
     harness.service.applyPreparedSkillMutationFilesSync(prepared);
@@ -363,7 +363,7 @@ describe("SkillMutationService", () => {
       evaluationRunId: "effect-plan-1",
     });
 
-    fsSync.writeFileSync(skillFilePath, buildSkillMarkdown("Operator edit.", "Background Review Plan"), "utf8");
+    fsSync.writeFileSync(skillFilePath, buildSkillMarkdown("Operator edit.", "background-review-plan"), "utf8");
     expect(() => harness.service.applyPreparedSkillMutationFilesSync(prepared)).toThrow(/conflict/i);
     expect(fsSync.readFileSync(skillFilePath, "utf8")).toContain("Operator edit.");
     expect(harness.storage.skillLifecycle.find(prepared.skillId)).toBeUndefined();
@@ -388,7 +388,7 @@ describe("SkillMutationService", () => {
     const prepared = harness.service.prepareDurableSkillMutation({
       skillId: "background-review-partial",
       evaluationRunId: "effect-plan-partial",
-      skillMarkdown: buildSkillMarkdown("Complete planned bytes.", "Background Review Partial"),
+      skillMarkdown: buildSkillMarkdown("Complete planned bytes.", "background-review-partial"),
     });
     const writeFileSync = fsSync.writeFileSync.bind(fsSync);
     let injected = false;
@@ -415,7 +415,7 @@ describe("SkillMutationService", () => {
     const prepared = harness.service.prepareDurableSkillMutation({
       skillId: "background-review-temp-cleanup",
       evaluationRunId: "effect-temp-cleanup",
-      skillMarkdown: buildSkillMarkdown("Published before cleanup.", "Background Review Temp Cleanup"),
+      skillMarkdown: buildSkillMarkdown("Published before cleanup.", "background-review-temp-cleanup"),
     });
     const rmSync = fsSync.rmSync.bind(fsSync);
     let injected = false;

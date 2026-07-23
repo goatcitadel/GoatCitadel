@@ -555,6 +555,67 @@ describe("ChatTurnCapabilityProfileRepository", () => {
     db.close();
   });
 
+  it("rejects whitespace-bearing skill capability ids and seals identifier-safe bundled skill ids", () => {
+    const { db, repo } = createStore();
+
+    // Regression: the bundled self-improvement skill once shipped the spaced
+    // frontmatter name "GoatCitadel Native Safe Improvement", which reached
+    // this repository inside `skill:<skillId>` and failed every routed-context
+    // send at seal time. The skills loader now rejects such names at load
+    // time; this pins the storage contract both ways.
+    const spaced = buildDraft();
+    spaced.profileId = "chat-capability-profile-spaced-skill";
+    spaced.identity.turnId = "turn-spaced-skill";
+    spaced.catalog.inspectableCount = 1;
+    spaced.catalog.callableCount = 1;
+    spaced.selection.trustedSkills = [
+      {
+        capabilityId: "skill:bundled:GoatCitadel Native Safe Improvement",
+        skillId: "bundled:GoatCitadel Native Safe Improvement",
+        category: "built_in",
+        lifecycleState: "trusted",
+        trustLabel: "Built-in",
+        source: "bundled",
+      },
+    ];
+    assert.throws(
+      () => repo.create(sealChatTurnCapabilityProfile(spaced)),
+      /trustedSkills\.capabilityId contains invalid identifier characters/,
+    );
+
+    const sealed = buildDraft();
+    sealed.profileId = "chat-capability-profile-slug-skill";
+    sealed.identity.turnId = "turn-slug-skill";
+    sealed.catalog.inspectableCount = 1;
+    sealed.catalog.callableCount = 1;
+    sealed.selection.trustedSkills = [
+      {
+        capabilityId: "skill:bundled:goatcitadel-native-safe-self-improvement",
+        skillId: "bundled:goatcitadel-native-safe-self-improvement",
+        category: "built_in",
+        lifecycleState: "trusted",
+        trustLabel: "Built-in",
+        source: "bundled",
+        contentIntegrityManifestVersion: "goatcitadel.skill-tree.v1",
+        treeSha256: "f".repeat(64),
+        contentFileCount: 1,
+        contentBytes: 2_048,
+      },
+    ];
+    sealed.governance.authReadiness.push({
+      kind: "skill",
+      ref: "bundled:goatcitadel-native-safe-self-improvement",
+      status: "ready",
+      reasonCodes: ["verified_content_integrity"],
+    });
+    const created = createWithFrozenIncarnation(db, repo, sealChatTurnCapabilityProfile(sealed));
+    assert.equal(
+      created.selection.trustedSkills[0]?.capabilityId,
+      "skill:bundled:goatcitadel-native-safe-self-improvement",
+    );
+    db.close();
+  });
+
   it("binds tool-effect potential into immutable selection and catalog hashes", () => {
     const providerDefinition = credentialToolDefinition({ type: "string" });
     const noEffect: ToolEffectPotentialRecord = {

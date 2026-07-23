@@ -4624,12 +4624,12 @@ function normalizeGeneratedSkillName(title: string): string {
     .slice(0, 6)
     .join(" ");
   if (!cleaned) {
-    return "Generated Capability Candidate";
+    return "generated-capability-candidate";
   }
-  return cleaned
-    .split(" ")
-    .map((part) => `${part[0]!.toUpperCase()}${part.slice(1).toLowerCase()}`)
-    .join(" ");
+  // Generated names feed `skill:<source>:<name>` capability ids once promoted;
+  // whitespace-bearing names are rejected by the loader and would break
+  // capability-profile sealing, so emit a hyphenated identifier.
+  return cleaned.toLowerCase().split(" ").join("-");
 }
 
 function sanitizeSkillContentText(value: string): string {

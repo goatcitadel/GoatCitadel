@@ -39,6 +39,18 @@ for (const skillFile of skillFiles) {
     findings.push(finding("error", "duplicate_skill", `Duplicate skill id ${skillId}.`, skillId, skillFile));
   }
   seen.add(skillId);
+  const nameViolation = skillNameViolation(name);
+  if (nameViolation) {
+    findings.push(
+      finding(
+        "error",
+        "invalid_skill_name",
+        `Skill name ${JSON.stringify(name)} ${nameViolation}; use a hyphenated identifier (the gateway loader skips this skill and spaced names break capability-profile sealing).`,
+        skillId,
+        skillFile,
+      ),
+    );
+  }
   if (!entries.some((entry) => entry.skillId === skillId)) {
     findings.push(finding("error", "missing_coverage", `Missing catalog coverage entry for ${skillId}.`, skillId, skillFile));
   }
@@ -147,6 +159,26 @@ function parseSimpleFrontmatter(raw) {
 function sourceForSkillFile(file) {
   const rel = path.relative(skillsRoot, file).split(path.sep);
   return rel[0] === "bundled" ? "bundled" : "extra";
+}
+
+// Mirrors resolveSkillNameViolation in packages/skills/src/frontmatter.ts (and
+// the storage assertSafeId contract): whitespace, ASCII control characters, or
+// over-long names would make the derived `skill:<source>:<name>` capability id
+// unsealable.
+function skillNameViolation(name) {
+  if (name.length > 200) {
+    return "exceeds 200 characters";
+  }
+  if (/\s/u.test(name)) {
+    return "contains whitespace";
+  }
+  for (let index = 0; index < name.length; index += 1) {
+    const code = name.charCodeAt(index);
+    if (code <= 31 || code === 127) {
+      return "contains control characters";
+    }
+  }
+  return undefined;
 }
 
 function finding(severity, code, message, skillId, file) {

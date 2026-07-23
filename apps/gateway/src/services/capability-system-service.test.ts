@@ -4777,7 +4777,7 @@ describe("CapabilitySystemService", () => {
     });
     const skillMarkdown = [
       "---",
-      'name: "Lesson Worksheet Helper"',
+      'name: "lesson-worksheet-helper"',
       'description: "Creates reusable worksheet workflows from lesson notes."',
       "---",
       "",
@@ -4848,7 +4848,7 @@ describe("CapabilitySystemService", () => {
       createdByActorId: "system:code-mode",
       skillContentValidation: {
         valid: true,
-        inferredSkillName: "Lesson Worksheet Helper",
+        inferredSkillName: "lesson-worksheet-helper",
       },
     });
   });

@@ -1,4 +1,4 @@
-import { parseSkillMarkdown } from "@goatcitadel/skills";
+import { parseSkillMarkdown, resolveSkillNameViolation } from "@goatcitadel/skills";
 import { normalizeSkillId } from "./skill-import-service.js";
 
 /**
@@ -77,6 +77,14 @@ export function validateSkillContent(input: ValidateSkillContentInput): SkillCon
       inferredSkillId = normalizeSkillId(parsed.frontmatter.name);
     } catch (error) {
       errors.push(`Invalid skill name: ${(error as Error).message}`);
+    }
+    // The raw frontmatter name (not the normalized id) becomes the loader's
+    // skill id and then a sealed capability id. Reject unsafe names here so a
+    // draft that the loader would skip — and that would otherwise fail
+    // capability-profile sealing — cannot be authored or staged.
+    const nameViolation = resolveSkillNameViolation(parsed.frontmatter.name);
+    if (nameViolation) {
+      errors.push(`Invalid skill name: ${JSON.stringify(parsed.frontmatter.name)} ${nameViolation}.`);
     }
     const description = parsed.frontmatter.description.trim();
     descriptionQuality = description.length >= 24 && description.split(/\s+/).length >= 4;
