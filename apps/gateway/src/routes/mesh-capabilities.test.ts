@@ -1,10 +1,15 @@
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
-import { MESH_CAPABILITY_PERMISSION_SCHEMA_VERSION, type MeshCapabilityDescriptor } from "@goatcitadel/contracts";
+import {
+  MESH_CAPABILITY_PERMISSION_SCHEMA_VERSION,
+  canonicalJsonString,
+  type MeshCapabilityDescriptor,
+} from "@goatcitadel/contracts";
 import { Storage, computeMeshCapabilityDescriptorSha256 } from "@goatcitadel/storage";
 import { authPlugin } from "../plugins/auth.js";
 import { MeshCapabilityActivationService } from "../services/mesh-capability-activation-service.js";
+import { MeshCapabilityInvocationService } from "../services/mesh-capability-invocation-service.js";
 import {
   MESH_NODE_TLS_FINGERPRINT_HEADER,
   MeshCapabilityPublicationService,
@@ -63,11 +68,20 @@ async function buildHarness(authMode: "token" | "none" = "token"): Promise<{
   storage: Storage;
   service: MeshCapabilityPublicationService;
   activation: MeshCapabilityActivationService;
+  invocation: MeshCapabilityInvocationService;
 }> {
   const storage = createStorage();
   admitNode(storage, "node-a", NODE_TOKEN);
   const service = new MeshCapabilityPublicationService({ storage });
   const activation = new MeshCapabilityActivationService({ storage, publication: service });
+  const invocation = new MeshCapabilityInvocationService({
+    storage,
+    transport: {
+      localNodeId: () => "gateway-node",
+      appendEvent: (input) => storage.mesh.appendReplicationEvent(input),
+    },
+    settlementPollIntervalMs: 15,
+  });
   const app = Fastify();
   apps.push(app);
   app.decorate("gatewayConfig", {
@@ -86,10 +100,14 @@ async function buildHarness(authMode: "token" | "none" = "token"): Promise<{
     validateCompanionAccessToken: () => undefined,
     verifyCompanionRequestSignature: () => undefined,
   } as never);
-  app.decorate("services", { meshCapabilityPublication: service, meshCapabilityActivation: activation } as never);
+  app.decorate("services", {
+    meshCapabilityPublication: service,
+    meshCapabilityActivation: activation,
+    meshCapabilityInvocation: invocation,
+  } as never);
   await app.register(authPlugin);
   await app.register(meshCapabilityRoutes);
-  return { app, storage, service, activation };
+  return { app, storage, service, activation, invocation };
 }
 
 function descriptor(): MeshCapabilityDescriptor {
@@ -558,5 +576,265 @@ describe("mesh capability publication routes", () => {
     });
     expect(response.statusCode).toBe(500);
     expect((response.json() as { error: string }).error).toMatch(/not installed/);
+  });
+});
+
+describe("mesh capability invocation routes (M3)", () => {
+  async function dispatchInvocation(harness: Awaited<ReturnType<typeof buildHarness>>): Promise<{
+    invocationId: string;
+    args: Record<string, unknown>;
+    generation: { publisherGeneration: number; publicationLeaseFencingToken: number };
+    dispatchPromise: Promise<unknown>;
+  }> {
+    const published = await harness.app.inject({
+      method: "POST",
+      url: "/api/v1/mesh/capabilities/manifests",
+      headers: nodeHeaders(),
+      payload: publishPayload(),
+    });
+    expect(published.statusCode).toBe(201);
+    const manifest = (
+      published.json() as {
+        manifest: { manifestSha256: string; entries: Array<{ capabilityId: string; entrySha256: string }> };
+      }
+    ).manifest;
+    const entry = manifest.entries[0]!;
+    const requested = harness.activation.requestActivation({
+      workspaceId: "default",
+      capabilityId: entry.capabilityId,
+      manifestSha256: manifest.manifestSha256,
+      entrySha256: entry.entrySha256,
+      actorId: "operator-a",
+    });
+    harness.storage.approvals.resolve(requested.approval.approvalId, {
+      decision: "approve",
+      resolvedBy: "operator-approver",
+    });
+    const applied = harness.activation.executeApprovedActivation({
+      workspaceId: "default",
+      approvalId: requested.approval.approvalId,
+    });
+    const activation = applied.activation;
+    const args = { query: "release notes" };
+    const dispatchPromise = harness.invocation.dispatch(
+      {
+        workspaceId: "default",
+        binding: {
+          nodeId: activation.nodeId,
+          publisherGeneration: activation.publisherGeneration,
+          manifestSha256: activation.manifestSha256,
+          entrySha256: activation.entrySha256,
+          activationId: activation.activationId,
+          activationRevision: activation.activationRevision,
+          publicationLeaseFencingToken: activation.publicationLeaseFencingToken,
+          permissionEnvelopeSha256: activation.permissionEnvelopeSha256,
+          effectPosture: activation.effectPosture,
+          healthGeneration: activation.healthGeneration,
+        },
+        capabilityId: activation.capabilityId,
+        args,
+        toolRunId: "tool-run-route-1",
+        sessionId: "session-a",
+        turnId: "turn-a",
+        executionProfileSha256: "9".repeat(64),
+      },
+      {},
+    );
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const invocationId = harness.storage.mesh
+      .listReplicationEvents(50)
+      .find((event) => event.eventType === "mesh_capability_invocation_dispatch")!.payload.invocationId as string;
+    return {
+      invocationId,
+      args,
+      generation: {
+        publisherGeneration: activation.publisherGeneration,
+        publicationLeaseFencingToken: activation.publicationLeaseFencingToken,
+      },
+      dispatchPromise,
+    };
+  }
+
+  function settlementPayload(
+    invocationId: string,
+    generation: { publisherGeneration: number; publicationLeaseFencingToken: number },
+    output: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const outputSha256 = createHash("sha256").update(canonicalJsonString(output), "utf8").digest("hex");
+    return {
+      disposition: "succeeded",
+      settlementSha256: createHash("sha256")
+        .update(canonicalJsonString({ invocationId, outputSha256 }), "utf8")
+        .digest("hex"),
+      outputSha256,
+      output,
+      ...generation,
+    };
+  }
+
+  it("serves input, accepts bounded progress, and settles exactly once for the dispatched node", async () => {
+    const harness = await buildHarness();
+    const { invocationId, args, generation, dispatchPromise } = await dispatchInvocation(harness);
+
+    const input = await harness.app.inject({
+      method: "GET",
+      url: `/api/v1/mesh/capabilities/invocations/${invocationId}/input`,
+      headers: nodeHeaders(),
+    });
+    expect(input.statusCode).toBe(200);
+    expect(input.headers["cache-control"]).toBe("no-store");
+    expect(input.json()).toMatchObject({ invocationId, input: args });
+
+    const progress = await harness.app.inject({
+      method: "POST",
+      url: `/api/v1/mesh/capabilities/invocations/${invocationId}/progress`,
+      headers: nodeHeaders(),
+      payload: { sequence: 1, stage: "executing", ...generation },
+    });
+    expect(progress.statusCode).toBe(202);
+    expect(progress.json()).toEqual({ accepted: true, sequence: 1 });
+    const staleProgress = await harness.app.inject({
+      method: "POST",
+      url: `/api/v1/mesh/capabilities/invocations/${invocationId}/progress`,
+      headers: nodeHeaders(),
+      payload: {
+        sequence: 2,
+        stage: "executing",
+        ...generation,
+        publisherGeneration: generation.publisherGeneration + 1,
+      },
+    });
+    expect(staleProgress.statusCode).toBe(409);
+    expect(staleProgress.json()).toMatchObject({ reason: "mesh_capability_settlement_stale_generation" });
+
+    const output = { status: "ok" };
+    const settled = await harness.app.inject({
+      method: "POST",
+      url: `/api/v1/mesh/capabilities/invocations/${invocationId}/settlement`,
+      headers: nodeHeaders(),
+      payload: settlementPayload(invocationId, generation, output),
+    });
+    expect(settled.statusCode).toBe(201);
+    expect(settled.json()).toMatchObject({
+      replayed: false,
+      settlement: { invocationId, disposition: "succeeded" },
+    });
+    await expect(dispatchPromise).resolves.toMatchObject({ disposition: "succeeded", output });
+
+    // Duplicate identical settlement replays idempotently (200).
+    const replay = await harness.app.inject({
+      method: "POST",
+      url: `/api/v1/mesh/capabilities/invocations/${invocationId}/settlement`,
+      headers: nodeHeaders(),
+      payload: settlementPayload(invocationId, generation, output),
+    });
+    expect(replay.statusCode).toBe(200);
+    expect((replay.json() as { replayed: boolean }).replayed).toBe(true);
+
+    // Changed settlement bytes conflict against the ONE immutable settlement.
+    const changed = await harness.app.inject({
+      method: "POST",
+      url: `/api/v1/mesh/capabilities/invocations/${invocationId}/settlement`,
+      headers: nodeHeaders(),
+      payload: { ...settlementPayload(invocationId, generation, output), disposition: "failed" },
+    });
+    expect(changed.statusCode).toBe(409);
+    expect(changed.json()).toMatchObject({ reason: "mesh_capability_settlement_conflict" });
+
+    // The transient input is no longer served after the terminal settlement.
+    const inputAfter = await harness.app.inject({
+      method: "GET",
+      url: `/api/v1/mesh/capabilities/invocations/${invocationId}/input`,
+      headers: nodeHeaders(),
+    });
+    expect(inputAfter.statusCode).toBe(404);
+  });
+
+  it("rejects operator credentials, foreign nodes, anonymous callers, and malformed bodies", async () => {
+    const harness = await buildHarness();
+    admitNode(harness.storage, "node-b", "join-node-b");
+    const { invocationId, generation, dispatchPromise } = await dispatchInvocation(harness);
+    const payload = settlementPayload(invocationId, generation, { status: "ok" });
+
+    // Operator tokens never satisfy the admitted-node class.
+    const asOperator = await harness.app.inject({
+      method: "POST",
+      url: `/api/v1/mesh/capabilities/invocations/${invocationId}/settlement`,
+      headers: { authorization: `Bearer ${OPERATOR_TOKEN}` },
+      payload,
+    });
+    expect(asOperator.statusCode).toBe(403);
+    expect(asOperator.json()).toMatchObject({ reason: "mesh_node_unknown_or_revoked" });
+
+    // Anonymous callers are rejected before any service work.
+    const anonymous = await harness.app.inject({
+      method: "POST",
+      url: `/api/v1/mesh/capabilities/invocations/${invocationId}/settlement`,
+      payload,
+    });
+    expect(anonymous.statusCode).toBe(401);
+    expect(anonymous.json()).toMatchObject({ reason: "mesh_node_token_required" });
+
+    // A different admitted node cannot settle the dispatched invocation.
+    const foreign = await harness.app.inject({
+      method: "POST",
+      url: `/api/v1/mesh/capabilities/invocations/${invocationId}/settlement`,
+      headers: {
+        authorization: "Bearer join-node-b",
+        [MESH_NODE_TLS_FINGERPRINT_HEADER]: "sha256:node-b",
+      },
+      payload,
+    });
+    expect(foreign.statusCode).toBe(403);
+    expect(foreign.json()).toMatchObject({ reason: "mesh_capability_settlement_node_mismatch" });
+
+    // Unknown invocations and malformed bodies fail content-free.
+    const unknown = await harness.app.inject({
+      method: "POST",
+      url: "/api/v1/mesh/capabilities/invocations/mesh-invocation-unknown/settlement",
+      headers: nodeHeaders(),
+      payload,
+    });
+    expect(unknown.statusCode).toBe(404);
+    expect(unknown.json()).toMatchObject({ reason: "mesh_capability_invocation_not_found" });
+    const malformed = await harness.app.inject({
+      method: "POST",
+      url: `/api/v1/mesh/capabilities/invocations/${invocationId}/settlement`,
+      headers: nodeHeaders(),
+      payload: { disposition: "succeeded", extra: true },
+    });
+    expect(malformed.statusCode).toBe(400);
+
+    // The invocation remains unsettled for the dispatched node afterwards.
+    const settled = await harness.app.inject({
+      method: "POST",
+      url: `/api/v1/mesh/capabilities/invocations/${invocationId}/settlement`,
+      headers: nodeHeaders(),
+      payload,
+    });
+    expect(settled.statusCode).toBe(201);
+    await dispatchPromise;
+  });
+
+  it("still requires the admitted-node credential on invocation routes when gateway auth mode is none", async () => {
+    const harness = await buildHarness("none");
+    const { invocationId, generation, dispatchPromise } = await dispatchInvocation(harness);
+    const payload = settlementPayload(invocationId, generation, { status: "ok" });
+
+    const anonymous = await harness.app.inject({
+      method: "POST",
+      url: `/api/v1/mesh/capabilities/invocations/${invocationId}/settlement`,
+      payload,
+    });
+    expect(anonymous.statusCode).toBe(401);
+
+    const withNodeToken = await harness.app.inject({
+      method: "POST",
+      url: `/api/v1/mesh/capabilities/invocations/${invocationId}/settlement`,
+      headers: nodeHeaders(),
+      payload,
+    });
+    expect(withNodeToken.statusCode).toBe(201);
+    await dispatchPromise;
   });
 });

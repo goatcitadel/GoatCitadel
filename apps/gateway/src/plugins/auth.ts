@@ -4,6 +4,7 @@ import type { CompanionPrincipalPurpose, SseTokenIssueResponse } from "@goatcita
 import { enterRequestAttribution } from "@goatcitadel/storage";
 import { timingSafeStringEqual } from "../services/crypto-equals.js";
 import { isGenericChannelInboundPath } from "../services/generic-channel-webhook.js";
+import { isMeshCapabilityNodeInvocationPath } from "../services/mesh-capability-invocation-service.js";
 import { isMeshCapabilityNodePublicationPath } from "../services/mesh-capability-publication-service.js";
 import type { MeshCapabilityAuthenticatedNodeIdentity } from "../services/mesh-capability-publication-service.js";
 import { isLineWebhookPath } from "../services/line-webhook.js";
@@ -148,11 +149,12 @@ export const authPlugin = fp(async (fastify) => {
     ) {
       return;
     }
-    // HX-408: admitted-node publication routes carry the node's durable
-    // join-token credential, not operator authority. Leave them
-    // unauthenticated here (in every auth mode); the mesh-node route access
-    // class fails closed unless the admission owner verifies the credential.
-    if (isMeshCapabilityNodePublicationPath(request.url)) {
+    // HX-408: admitted-node publication and invocation routes carry the
+    // node's durable join-token credential, not operator authority. Leave
+    // them unauthenticated here (in every auth mode); the mesh-node route
+    // access class fails closed unless the admission owner verifies the
+    // credential.
+    if (isMeshCapabilityNodePublicationPath(request.url) || isMeshCapabilityNodeInvocationPath(request.url)) {
       return;
     }
 

@@ -1,9 +1,10 @@
 /**
- * HX-408 M1/M2 route surface for governed mesh capability publication.
+ * HX-408 M1/M2/M3 route surface for governed mesh capability publication.
  *
- * - Publication routes (`/manifests`, `/manifests/self`) require the
- *   admitted-node credential (`mesh-node` access class); ordinary operator or
- *   companion authority is rejected by the class enforcement.
+ * - Publication routes (`/manifests`, `/manifests/self`) and the M3
+ *   invocation routes (`/invocations/:invocationId/input|progress|settlement`)
+ *   require the admitted-node credential (`mesh-node` access class); ordinary
+ *   operator or companion authority is rejected by the class enforcement.
  * - Inspection (`/publications`) and governed activation
  *   (`/activations`, `/activations/:activationId/revoke`) are operator-only
  *   and no-store; admitted-node credentials never satisfy them.
@@ -15,6 +16,10 @@ import {
   MeshCapabilityActivationServiceError,
   type MeshCapabilityActivationService,
 } from "../services/mesh-capability-activation-service.js";
+import {
+  MeshCapabilityInvocationServiceError,
+  type MeshCapabilityInvocationService,
+} from "../services/mesh-capability-invocation-service.js";
 import {
   toMeshCapabilityPublicationHttpError,
   type MeshCapabilityAuthenticatedNodeIdentity,
@@ -84,6 +89,38 @@ const activationRevokeBodySchema = z
   .object({
     workspaceId: canonicalText(256).optional(),
     reason: canonicalText(2_000),
+  })
+  .strict();
+const invocationParamsSchema = z
+  .object({
+    invocationId: z
+      .string()
+      .min(1)
+      .max(256)
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u),
+  })
+  .strict();
+const invocationProgressBodySchema = z
+  .object({
+    sequence: z.number().int().min(1).max(1_000_000),
+    stage: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/u),
+    publisherGeneration: z.number().int().positive(),
+    publicationLeaseFencingToken: z.number().int().positive(),
+  })
+  .strict();
+const invocationSettlementBodySchema = z
+  .object({
+    disposition: z.enum(["succeeded", "failed", "cancelled", "timed_out", "unknown"]),
+    settlementSha256: sha256,
+    outputSha256: sha256.optional(),
+    output: z.record(z.unknown()).optional(),
+    errorCode: z
+      .string()
+      .regex(/^[a-z0-9][a-z0-9._:-]{0,127}$/u)
+      .optional(),
+    effectiveCostAttributionSha256: sha256.optional(),
+    publisherGeneration: z.number().int().positive(),
+    publicationLeaseFencingToken: z.number().int().positive(),
   })
   .strict();
 
@@ -215,6 +252,95 @@ export const meshCapabilityRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
+  // HX-408 M3: node-facing invocation surface. The node identity is
+  // admission-bound by the mesh-node access class; every response is
+  // content-free (typed reason codes only) and no-store.
+  fastify.get("/api/v1/mesh/capabilities/invocations/:invocationId/input", nodeAccess, async (request, reply) => {
+    const invocation = resolveInvocationService(fastify);
+    if (!invocation) return serviceUnavailable(reply);
+    const identity = resolveIdentity(request);
+    if (!identity) return missingIdentity(reply);
+    const params = invocationParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: "Mesh capability invocation request is invalid." });
+    }
+    try {
+      return reply.send(invocation.readInvocationInput(identity, params.data.invocationId));
+    } catch (error) {
+      const mapped = toMeshCapabilityInvocationHttpError(error);
+      if (mapped) return reply.code(mapped.statusCode).send(mapped.body);
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/mesh/capabilities/invocations/:invocationId/progress", nodeAccess, async (request, reply) => {
+    const invocation = resolveInvocationService(fastify);
+    if (!invocation) return serviceUnavailable(reply);
+    const identity = resolveIdentity(request);
+    if (!identity) return missingIdentity(reply);
+    const params = invocationParamsSchema.safeParse(request.params);
+    const parsed = invocationProgressBodySchema.safeParse(request.body);
+    if (!params.success || !parsed.success) {
+      return reply.code(400).send({ error: "Mesh capability invocation progress is invalid." });
+    }
+    try {
+      const accepted = invocation.recordProgress(identity, {
+        invocationId: params.data.invocationId,
+        sequence: parsed.data.sequence,
+        stage: parsed.data.stage,
+        publisherGeneration: parsed.data.publisherGeneration,
+        publicationLeaseFencingToken: parsed.data.publicationLeaseFencingToken,
+      });
+      return reply.code(202).send(accepted);
+    } catch (error) {
+      const mapped = toMeshCapabilityInvocationHttpError(error);
+      if (mapped) return reply.code(mapped.statusCode).send(mapped.body);
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/mesh/capabilities/invocations/:invocationId/settlement", nodeAccess, async (request, reply) => {
+    const invocation = resolveInvocationService(fastify);
+    if (!invocation) return serviceUnavailable(reply);
+    const identity = resolveIdentity(request);
+    if (!identity) return missingIdentity(reply);
+    const params = invocationParamsSchema.safeParse(request.params);
+    const parsed = invocationSettlementBodySchema.safeParse(request.body);
+    if (!params.success || !parsed.success) {
+      return reply.code(400).send({ error: "Mesh capability invocation settlement is invalid." });
+    }
+    try {
+      const result = invocation.settleFromNode(identity, {
+        invocationId: params.data.invocationId,
+        disposition: parsed.data.disposition,
+        settlementSha256: parsed.data.settlementSha256,
+        ...(parsed.data.outputSha256 === undefined ? {} : { outputSha256: parsed.data.outputSha256 }),
+        ...(parsed.data.output === undefined ? {} : { output: parsed.data.output }),
+        ...(parsed.data.errorCode === undefined ? {} : { errorCode: parsed.data.errorCode }),
+        ...(parsed.data.effectiveCostAttributionSha256 === undefined
+          ? {}
+          : { effectiveCostAttributionSha256: parsed.data.effectiveCostAttributionSha256 }),
+        publisherGeneration: parsed.data.publisherGeneration,
+        publicationLeaseFencingToken: parsed.data.publicationLeaseFencingToken,
+      });
+      return reply.code(result.replayed ? 200 : 201).send({
+        replayed: result.replayed,
+        settlement: {
+          invocationId: result.settlement.invocationId,
+          disposition: result.settlement.disposition,
+          settlementSha256: result.settlement.settlementSha256,
+          ...(result.settlement.outputSha256 === undefined ? {} : { outputSha256: result.settlement.outputSha256 }),
+          ...(result.settlement.errorCode === undefined ? {} : { errorCode: result.settlement.errorCode }),
+          settledAt: result.settlement.settledAt,
+        },
+      });
+    } catch (error) {
+      const mapped = toMeshCapabilityInvocationHttpError(error);
+      if (mapped) return reply.code(mapped.statusCode).send(mapped.body);
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
   fastify.post("/api/v1/mesh/capabilities/activations/:activationId/revoke", operatorAccess, async (request, reply) => {
     const activation = resolveActivationService(fastify);
     if (!activation) return serviceUnavailable(reply);
@@ -248,6 +374,15 @@ function toMeshCapabilityActivationHttpError(
   return undefined;
 }
 
+function toMeshCapabilityInvocationHttpError(
+  error: unknown,
+): { statusCode: number; body: { error: string; reason: string } } | undefined {
+  if (error instanceof MeshCapabilityInvocationServiceError) {
+    return { statusCode: error.statusCode, body: { error: error.message, reason: error.code } };
+  }
+  return undefined;
+}
+
 function resolveService(fastify: unknown): MeshCapabilityPublicationService | undefined {
   return (fastify as { services?: { meshCapabilityPublication?: MeshCapabilityPublicationService } }).services
     ?.meshCapabilityPublication;
@@ -256,6 +391,11 @@ function resolveService(fastify: unknown): MeshCapabilityPublicationService | un
 function resolveActivationService(fastify: unknown): MeshCapabilityActivationService | undefined {
   return (fastify as { services?: { meshCapabilityActivation?: MeshCapabilityActivationService } }).services
     ?.meshCapabilityActivation;
+}
+
+function resolveInvocationService(fastify: unknown): MeshCapabilityInvocationService | undefined {
+  return (fastify as { services?: { meshCapabilityInvocation?: MeshCapabilityInvocationService } }).services
+    ?.meshCapabilityInvocation;
 }
 
 function resolveIdentity(request: FastifyRequest): MeshCapabilityAuthenticatedNodeIdentity | undefined {
