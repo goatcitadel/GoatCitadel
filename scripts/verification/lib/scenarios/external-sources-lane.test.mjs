@@ -27,9 +27,9 @@ const EXPECTED_CHECK_IDS = [
   "external-sources.gateway-services",
   "external-sources.routes-and-effects",
   "external-sources.integration",
-  // NOTE: "external-sources.browser-flow" (built by C4b) enters this list
-  // when the chat.messages.ts contextRefs enum gap is fixed — see the lane's
-  // C4b BLOCKED NOTE.
+  // C4c: the real-browser closure flow executes end to end (the C4b send-leg
+  // block is resolved — chat.messages admits the full C1 contextRefs kinds).
+  "external-sources.browser-flow",
   "external-sources.static-gate-scan",
   "external-sources.live-postgres",
 ];
@@ -76,15 +76,19 @@ test("the lane check table is complete, uniquely named, and cites only test file
     fs.existsSync(path.join(repoRoot, "packages/storage/src/external-source-closure-repo.postgres.test.ts")),
     "the live-PG suite exists",
   );
-  // The built (blocked) browser flow spec must exist: the matrix cites it and
-  // the unblock flips it into this table.
+  // The browser-flow check demands ALL four viewport/scheme combos and runs
+  // the flow spec, which must exist.
+  const browserFlow = checks.find((check) => check.id === "external-sources.browser-flow");
+  assert.equal(browserFlow.kind, "browser-flow");
+  assert.equal(browserFlow.count, "browser-flow");
+  assert.equal(browserFlow.requiredPassed, 4, "all four viewport/scheme combos are required");
   assert.ok(
     fs.existsSync(path.join(repoRoot, "scripts/verification/lib/scenarios/external-sources-browser-flow.mjs")),
     "the browser flow spec exists",
   );
 });
 
-test("the row-completion matrix covers the packet's four rows with exactly the two BLOCKED browser skips", () => {
+test("the row-completion matrix covers the packet's four rows with every row executed and no declared skips", () => {
   const matrix = buildRowCompletionMatrix();
   assert.deepEqual(
     matrix.map((row) => row.row),
@@ -95,19 +99,20 @@ test("the row-completion matrix covers the packet's four rows with exactly the t
     for (const check of row.checks) {
       assert.ok(knownChecks.has(check), `row ${row.row} cites known check ${check}`);
     }
+    // C4c: no row is blocked — every row executes real checks.
+    assert.equal(row.skipReason, undefined, `row ${row.row} carries no skip reason`);
+    assert.ok(row.checks.length > 0, `row ${row.row} executes at least one real check`);
   }
-  const skipRows = matrix.filter((row) => typeof row.skipReason === "string" && row.skipReason.length > 0);
-  assert.deepEqual(
-    skipRows.map((row) => row.row),
-    [2, 3],
-    "only the browser path and viewport/scheme rows carry skip reasons",
+  // The browser rows execute the browser-flow check (packet rows 2 and 3).
+  assert.ok(
+    matrix.find((row) => row.row === 2).checks.includes("external-sources.browser-flow"),
+    "row 2 executes the browser flow",
   );
-  for (const row of skipRows) {
-    // The skip must name the EXACT blocking gap so the lane output is
-    // actionable, never a vague deferral.
-    assert.match(row.skipReason, /BLOCKED/u, `row ${row.row} states it is blocked`);
-    assert.match(row.skipReason, /chat\.messages\.ts/u, `row ${row.row} names the blocking file`);
-  }
+  assert.deepEqual(
+    matrix.find((row) => row.row === 3).checks,
+    ["external-sources.browser-flow"],
+    "row 3 is proven by the viewport/scheme-parametrized browser flow",
+  );
   for (const row of matrix.slice(0, 3)) {
     assert.ok(typeof row.note === "string" && row.note.length > 0, `row ${row.row} carries an explanatory note`);
   }
@@ -232,11 +237,11 @@ test("row statuses fold check results honestly and the lane status is fail-close
     rows.map((row) => [row.row, row.status]),
     [
       [1, "executed"],
-      [2, "executed_with_declared_c4b_skip"],
-      [3, "skipped"],
+      [2, "executed"],
+      [3, "executed"],
       [4, "executed"],
     ],
-    "the two BLOCKED browser rows report their declared skips honestly, never plain executed",
+    "every packet row executes for real — no declared skips remain after C4c",
   );
   assert.equal(deriveLaneStatus(allPassed, rows), "passed");
 
@@ -246,4 +251,24 @@ test("row statuses fold check results honestly and the lane status is fail-close
   assert.equal(failedRows.find((row) => row.row === 1).status, "failed");
   assert.deepEqual(failedRows.find((row) => row.row === 1).failedChecks, ["external-sources.live-postgres"]);
   assert.equal(deriveLaneStatus(withFailure, failedRows), "failed");
+
+  // A failing browser combo fails BOTH packet browser rows (2 and 3).
+  const withBrowserFailure = new Map(allPassed);
+  withBrowserFailure.set("external-sources.browser-flow", { id: "external-sources.browser-flow", status: "failed" });
+  const browserFailedRows = deriveRowCompletionStatuses(matrix, withBrowserFailure);
+  assert.equal(browserFailedRows.find((row) => row.row === 2).status, "failed");
+  assert.equal(browserFailedRows.find((row) => row.row === 3).status, "failed");
+  assert.equal(deriveLaneStatus(withBrowserFailure, browserFailedRows), "failed");
+
+  // The declared-skip machinery stays honest for any FUTURE blocked row: a
+  // skipReason row never reports plain "executed", with or without checks.
+  const syntheticMatrix = [
+    { row: 9, title: "future blocked row", checks: ["external-sources.integration"], skipReason: "declared" },
+    { row: 10, title: "future blocked row without checks", checks: [], skipReason: "declared" },
+  ];
+  const syntheticRows = deriveRowCompletionStatuses(syntheticMatrix, allPassed);
+  assert.deepEqual(
+    syntheticRows.map((row) => row.status),
+    ["executed_with_declared_c4b_skip", "skipped"],
+  );
 });

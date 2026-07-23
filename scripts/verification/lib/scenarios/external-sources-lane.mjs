@@ -14,29 +14,25 @@
 //   * every vitest/node-test check parses the runner's reported counts and
 //     FAILS when zero tests executed, even on exit code 0;
 //   * no scenario is faked: each row-completion row is executed by real
-//     checks or carries an explicit skipReason (currently the two browser
-//     rows, BLOCKED as described below);
-//   * the browser-flow counter machinery (summary parser + all-combos +
-//     >0-steps guard) ships here ready for the browser-flow check; that check
-//     enters the table when the blocking gateway gap is fixed;
+//     checks (a declared-skipReason row shape remains lane machinery for any
+//     future blocked row, but NO row carries one today);
+//   * the browser-flow check parses the flow's printed combo summary with the
+//     all-combos (requiredPassed 4) + >0-steps honesty guard, so a flow that
+//     crashes before printing, drops a combo, or executes nothing can never
+//     pass;
 //   * the live-PostgreSQL check must EXECUTE (provisioned hermetically or via
 //     GOATCITADEL_TEST_POSTGRES_URL). An unset URL with no local cluster is a
 //     lane FAILURE — the closure packet calls it "an explicit C4 HOLD, not an
 //     accepted skip".
 //
-// C4b BLOCKED NOTE (2026-07-22): C4b activated the C3 UI and built the full
-// real-browser Library→Chat→approval-recovery flow spec
-// (`external-sources-browser-flow.mjs`, standalone-runnable). Executing it end
-// to end is BLOCKED on a discovered gateway composition gap OUTSIDE the C4b
-// allowlist: `apps/gateway/src/routes/chat.messages.ts` line ~195 pins
-// `contextRefs[].kind` to `z.enum(["attachment", "memory_item"])`, so the
-// C1-frozen `external_attachment` refs the C3 composer sends are rejected 400
-// at the route BEFORE the C4a-composed resolver can freeze them. The flow
-// proves every step through attach/select live in all four viewport/scheme
-// combos and fails honestly at the send. When the C4a owner widens the enum
-// (+ route test), flip rows 2/3 to the executed browser-flow check (kind
-// "browser-flow", count "browser-flow", requiredPassed 4) wired in
-// `external-sources-proof.mjs`.
+// C4c NOTE (2026-07-22): the C4b BLOCKED state is resolved. C4c widened the
+// chat.messages.ts contextRefs kind gate to the full C1 contract
+// (`external_attachment` included, identifiers-only unchanged), repaired the
+// routed-context durable-admission identity seam it exposed, and the browser
+// flow now executes ALL steps — register→scan→plan→apply→attach→select→SEND
+// (frozen refs consumed; stub reply lands)→knowledge-request→approve→
+// recovered-snapshot provenance — in all four viewport/scheme combos. Rows
+// 2/3 execute the browser-flow check below.
 
 const ESC = String.fromCharCode(27);
 const ANSI_PATTERN = new RegExp(`${ESC}\\[[0-9;]*m`, "g");
@@ -254,11 +250,14 @@ export function buildExternalSourcesLaneChecks() {
       args: gatewayVitest(["external-sources.integration.test.ts", "external-sources-closure.integration.test.ts"]),
       count: "vitest",
     },
-    // The browser-flow check (kind "browser-flow", count "browser-flow",
-    // requiredPassed 4 — running external-sources-browser-flow.mjs headlessly)
-    // is built and entrypoint-wired but NOT declared yet: see the C4b BLOCKED
-    // NOTE above. Adding this row is the one-table-line flip once
-    // chat.messages.ts accepts external_attachment contextRefs.
+    {
+      id: "external-sources.browser-flow",
+      title:
+        "Real-browser closure flow: Library register→scan→plan→apply → Chat attach→select→send (frozen external refs) → knowledge approval → recovered snapshot with provenance, at desktop+mobile × light+dark (4 combos)",
+      kind: "browser-flow",
+      count: "browser-flow",
+      requiredPassed: 4,
+    },
     {
       id: "external-sources.static-gate-scan",
       title:
@@ -277,12 +276,10 @@ export function buildExternalSourcesLaneChecks() {
 }
 
 /**
- * Closure-packet C4 row-completion matrix mapped to lane checks. Rows 2 and 3
- * carry explicit skip reasons for their BROWSER half: C4b built and proved the
- * flow up to the send, where a frozen-gateway contextRefs enum gap (see the
- * C4b BLOCKED NOTE) rejects the C1 external_attachment refs — the rows flip to
- * the executed browser-flow check when that gap is fixed. No row is silently
- * dropped or faked.
+ * Closure-packet C4 row-completion matrix mapped to lane checks. Every row is
+ * executed by real checks; no row carries a skipReason (the declared-skip row
+ * shape stays supported as lane machinery for any future blocked row). No row
+ * is silently dropped or faked.
  */
 export function buildRowCompletionMatrix() {
   return [
@@ -301,33 +298,26 @@ export function buildRowCompletionMatrix() {
     {
       row: 2,
       title: "Complete Library-to-Chat selection/send/approval-recovery browser path",
-      checks: ["external-sources.integration"],
+      checks: ["external-sources.integration", "external-sources.browser-flow"],
       suites: [
-        "apps/gateway/src/external-sources-closure.integration.test.ts (API-level Library→Chat→approval→recovery closure)",
-        "scripts/verification/lib/scenarios/external-sources-browser-flow.mjs (built C4b real-browser flow, standalone-runnable)",
+        "apps/gateway/src/external-sources-closure.integration.test.ts (API-level Library→Chat→send→approval→recovery closure incl. the HX-307 snapshot external entry)",
+        "scripts/verification/lib/scenarios/external-sources-browser-flow.mjs (real-browser flow, standalone-runnable)",
       ],
       note:
-        "C4b activated the C3 UI (list-carried sessionIncarnationId) and the browser flow proves register→scan→plan→apply→attach→select " +
-        "live in a real browser; the send leg is BLOCKED by the frozen-gateway contextRefs enum gap (C4b BLOCKED NOTE).",
-      skipReason:
-        "BROWSER half BLOCKED outside the C4b allowlist: apps/gateway/src/routes/chat.messages.ts pins contextRefs[].kind to " +
-        '["attachment","memory_item"], 400-rejecting the C1 external_attachment refs the C3 composer sends before the C4a-composed ' +
-        "resolver runs. The full API-level path executes here via the closure integration suite; flip this row to the browser-flow " +
-        "check once the C4a owner widens the enum (+ route test).",
+        "C4c completed the C4b flow: the chat.messages contextRefs gate now admits the full C1 kind contract (identifiers only), and " +
+        "the browser flow executes register→scan→plan→apply→attach→select→send (frozen refs consumed, stub reply lands)→" +
+        "knowledge-request→approve→recovered-snapshot provenance end to end.",
     },
     {
       row: 3,
       title: "Light/dark desktop and mobile coverage",
-      checks: [],
+      checks: ["external-sources.browser-flow"],
       suites: [
         "scripts/verification/lib/scenarios/external-sources-browser-flow.mjs (viewport/scheme parametrization: 1440x1024 + 390x844 × light + dark)",
       ],
       note:
-        "The built flow parametrizes the full path across all four viewport/scheme combos (no pixel baselines on this host; pixel VR " +
-        "stays CI-gated via visual-rebaseline.yml) and executed through attach/select in every combo before the blocked send.",
-      skipReason:
-        "BLOCKED on the same send leg as row 2 (chat.messages.ts contextRefs enum). Declared, never faked; flips to the executed " +
-        "browser-flow check (requiredPassed 4) with the row-2 unblock.",
+        "The flow executes the FULL path across all four viewport/scheme combos (no pixel baselines on this host; pixel VR stays " +
+        "CI-gated via visual-rebaseline.yml); the check requires all 4 combos to pass with >0 steps.",
     },
     {
       row: 4,
@@ -338,6 +328,7 @@ export function buildRowCompletionMatrix() {
         "external-sources.gateway-services",
         "external-sources.routes-and-effects",
         "external-sources.integration",
+        "external-sources.browser-flow",
         "external-sources.static-gate-scan",
         "external-sources.typecheck",
         "external-sources.live-postgres",
@@ -350,10 +341,10 @@ export function buildRowCompletionMatrix() {
 /**
  * Fold executed check results into the row-completion matrix.
  *   * any failing check fails the row;
- *   * a row with a declared skipReason (currently the two BLOCKED browser
- *     rows) NEVER reports plain "executed": with passing checks it reports
- *     "executed_with_declared_c4b_skip", with none it reports "skipped" —
- *     both visibly honest;
+ *   * a row with a declared skipReason (none today; the shape stays supported
+ *     for any future blocked row) NEVER reports plain "executed": with
+ *     passing checks it reports "executed_with_declared_c4b_skip", with none
+ *     it reports "skipped" — both visibly honest;
  *   * a row with neither passing checks nor a skipReason is a table bug and
  *     fails.
  */

@@ -80,6 +80,15 @@ export async function runExternalSourcesBrowserFlow({
     });
 
     runtimeRoot = await prepareVerificationRuntime(runId);
+    // Run with NO runtime skills: the repo ships a bundled skill whose
+    // frontmatter name (with spaces, `skills/bundled/
+    // goatcitadel-native-safe-self-improvement/SKILL.md`) becomes its skillId,
+    // and the sealed capability profile rejects `skill:<id with spaces>`
+    // capability ids — every routed-context send REQUIRES the sealed profile,
+    // so the send leg fails closed with that skill loaded. This flow proves
+    // the external-sources closure, not the skill hub; the underlying skill
+    // data/loader gap is reported separately by the C4c report.
+    await fs.rm(path.join(runtimeRoot, "skills"), { recursive: true, force: true });
     await writeStubProviderConfig(runtimeRoot, stub.baseUrl);
     log(`[browser-flow] stub LLM provider listening at ${stub.baseUrl}`);
 
@@ -241,9 +250,41 @@ export async function runExternalSourcesBrowserFlow({
           throw new Error(`chat session create failed (${session.status}): ${JSON.stringify(session.body)}`);
         }
         comboState.sessionId = session.body.sessionId;
+
+        // The routed-context send gate requires subagent policy OFF (the
+        // frozen provider/model budget cannot be delegated); an operator sets
+        // Subagents = "No subagents" in the context drawer. Session seeding is
+        // API-driven in this flow, so apply the same real pref through the
+        // exact prefs endpoint the drawer patches, before the UI loads it.
+        const prefs = await requestJson(
+          activeStack.gatewayUrl,
+          `/api/v1/chat/sessions/${encodeURIComponent(comboState.sessionId)}/prefs`,
+        );
+        if (!prefs.ok || typeof prefs.body?.revision !== "number") {
+          throw new Error(`chat session prefs read failed (${prefs.status}): ${JSON.stringify(prefs.body)}`);
+        }
+        const prefsPatch = await requestJson(
+          activeStack.gatewayUrl,
+          `/api/v1/chat/sessions/${encodeURIComponent(comboState.sessionId)}/prefs`,
+          {
+            method: "PATCH",
+            body: { expectedRevision: prefs.body.revision, subagentPolicy: "off" },
+          },
+        );
+        if (!prefsPatch.ok) {
+          throw new Error(`chat session prefs patch failed (${prefsPatch.status}): ${JSON.stringify(prefsPatch.body)}`);
+        }
       });
 
       await step("library-register-source", async () => {
+        // The register form's "Expected workspace revision" is operator-typed
+        // CAS input against the LIVE workspace aggregate (which chat-turn
+        // execution in an earlier combo legitimately bumps). Read the same
+        // server truth an operator would and type it into the form.
+        const workspace = await requestJson(activeStack.gatewayUrl, "/api/v1/workspaces/default");
+        if (!workspace.ok || typeof workspace.body?.revision !== "number") {
+          throw new Error(`workspace revision read failed (${workspace.status}): ${JSON.stringify(workspace.body)}`);
+        }
         await gotoRoute(page, activeStack.uiUrl, `/library/knowledge?theme=${combo.theme}`);
         await page.getByRole("button", { name: "Register source", exact: true }).click();
         comboState.sourceLabel = `Browser combo ${combo.id}`;
@@ -252,8 +293,33 @@ export async function runExternalSourcesBrowserFlow({
         await page.getByLabel("Path-bridge snapshot id").fill(comboState.snapshot.snapshotId);
         await page.getByLabel("Path-bridge snapshot sha256").fill(comboState.snapshot.snapshotSha256);
         await page.getByLabel("Accepted producer versions").fill(fx.SYNTHETIC_CODEX_PRODUCER_VERSION);
+        await page.getByLabel("Expected workspace revision").fill(String(workspace.body.revision));
         await page.getByRole("button", { name: "Register the source" }).click();
-        await page.getByText(`Registered ${comboState.sourceLabel}`, { exact: false }).waitFor();
+        // Registration truth: the transient notice OR the registered source's
+        // own scan control (the deterministic post-registration UI the next
+        // step drives). Waiting on either de-flakes the notice race observed
+        // once on mobile-light under load — a real wait condition, no sleeps.
+        try {
+          await page
+            .getByText(`Registered ${comboState.sourceLabel}`, { exact: false })
+            .or(page.getByRole("button", { name: `Run a sealed catalog scan of ${comboState.sourceLabel}` }))
+            .first()
+            .waitFor({ timeout: 60_000 });
+        } catch (error) {
+          // Post-mortem: read the server list to learn whether registration
+          // actually landed (UI render gap) or never happened (request gap).
+          const listed = await requestJson(
+            activeStack.gatewayUrl,
+            "/api/v1/library/external-sources?workspaceId=default",
+          ).catch((listError) => ({ ok: false, status: String(listError) }));
+          const labels =
+            listed.ok && Array.isArray(listed.body?.items) ? listed.body.items.map((sourceRow) => sourceRow.label) : [];
+          const firstLine = error instanceof Error ? error.message.split("\n")[0] : String(error);
+          throw new Error(
+            `${firstLine} — server external-sources list (status ${listed.status ?? "?"}) labels: ${JSON.stringify(labels).slice(0, 300)}`,
+            { cause: error },
+          );
+        }
       });
 
       await step("library-scan-seals-catalog", async () => {
@@ -352,10 +418,18 @@ export async function runExternalSourcesBrowserFlow({
         // The stub provider completes the real turn end-to-end. Scope the
         // reply wait to a thread turn so a stub-derived session TITLE can
         // never satisfy it.
-        await page
-          .locator(".mc-next-thread-turn-surface", { hasText: STUB_REPLY_TEXT })
-          .first()
-          .waitFor({ timeout: 120_000 });
+        try {
+          await page
+            .locator(".mc-next-thread-turn-surface", { hasText: STUB_REPLY_TEXT })
+            .first()
+            .waitFor({ timeout: 120_000 });
+        } catch (error) {
+          // Post-mortem: the SERVER-side turn record is the diagnosis truth
+          // (the UI banner is generic). Content-free: status + failure class.
+          const diagnosis = await describeLatestTurn(activeStack.gatewayUrl, comboState.sessionId);
+          const firstLine = error instanceof Error ? error.message.split("\n")[0] : String(error);
+          throw new Error(`${firstLine} — server turn state: ${diagnosis}`, { cause: error });
+        }
         // Selection clears ONLY after the successful send consumed the frozen refs.
         const strip = page.locator('section[aria-label="Read-only external source attachments"]');
         await strip.getByText("Select attachments to include in the next turn.", { exact: false }).waitFor({
@@ -409,7 +483,12 @@ export async function runExternalSourcesBrowserFlow({
         await snapshotRow.click();
         // The evidence panel renders the approval linkage and content-free
         // provenance (evidence refs + summary carry the full approval id).
-        await page.getByText(comboState.approvalId, { exact: false }).first().waitFor({ timeout: 60_000 });
+        // Scope the wait to the DETAIL stack: the timeline list's own row body
+        // also contains "approval · <id>" in a collapsed (hidden) preview and
+        // a page-wide `.first()` would pin that hidden node forever.
+        const evidencePanel = page.locator(".mc-next-settings-stack");
+        await evidencePanel.getByText("Snapshot created", { exact: true }).first().waitFor({ timeout: 60_000 });
+        await evidencePanel.getByText(comboState.approvalId, { exact: false }).first().waitFor({ timeout: 60_000 });
         const pageText = await page.locator("body").innerText();
         if (pageText.includes(fx.SYNTHETIC_CODEX_VISIBLE_USER_TEXT)) {
           throw new Error("transcript content leaked into the Journey provenance surface");
@@ -459,6 +538,32 @@ export async function runExternalSourcesBrowserFlow({
         )
         .catch(() => undefined);
     }
+  }
+}
+
+/**
+ * Content-free server-side post-mortem for a failed send wait: the latest
+ * thread turn's status + failure record is the diagnosis truth (the UI banner
+ * is generic).
+ */
+async function describeLatestTurn(gatewayUrl, sessionId) {
+  try {
+    const thread = await requestJson(gatewayUrl, `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/thread`);
+    if (!thread.ok) {
+      return `thread read failed (${thread.status})`;
+    }
+    const turns = Array.isArray(thread.body?.turns) ? thread.body.turns : [];
+    const latest = turns.at(-1);
+    if (!latest) {
+      return "no thread turns exist — the send never created a turn";
+    }
+    const trace = latest.trace ?? {};
+    return (
+      `turn ${latest.turnId ?? "?"} status=${trace.status ?? "?"} ` +
+      `failure=${JSON.stringify(trace.failure ?? null)?.slice(0, 400)}`
+    );
+  } catch (error) {
+    return `diagnosis failed: ${String(error)}`;
   }
 }
 
@@ -572,6 +677,18 @@ async function writeStubProviderConfig(runtimeRoot, baseUrl) {
     `${JSON.stringify(llmConfig, null, 2)}\n`,
     "utf8",
   );
+  // Routed context (C4c send leg) freezes a token budget from TRUSTED model
+  // metadata and validates the dispatched reasoning effort against the model's
+  // declared capability — without this entry the send 409s with "lacks trusted
+  // context-window metadata" before the resolver runs.
+  const metadataPath = path.join(runtimeRoot, "config", "llm-model-metadata.json");
+  const metadata = JSON.parse(await fs.readFile(metadataPath, "utf8"));
+  metadata.entries[`${STUB_PROVIDER_ID}/${STUB_MODEL}`] = {
+    contextWindow: 128000,
+    outputTokenLimit: 16000,
+    reasoning: { supportedEfforts: ["low", "medium", "high"] },
+  };
+  await fs.writeFile(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
 }
 
 async function ensureOnboardingComplete(gatewayUrl) {
