@@ -12580,4 +12580,275 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         FOR EACH ROW EXECUTE FUNCTION gc_remote_worker_request_nonce_delete_guard();
     `,
   },
+  {
+    version: 119,
+    name: "remote_worker_inference_request_owner",
+    // HX-503 assignment-bound inference request owner (paired with SQLite 177).
+    // Additive only: two new tables bound by complete composite foreign keys to
+    // the committed assignment-generation authority, whose PRIMARY KEY already
+    // satisfies the reference, so no frozen table is altered and no row is
+    // written. The raw assignment lease and every provider credential never has
+    // a column; output frames are secret-free and append-only. Production-dark:
+    // no route, listener, startup, scheduler, or accounting owner.
+    sql: `
+      CREATE TABLE IF NOT EXISTS remote_worker_inference_requests (
+        registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+        assignment_id TEXT NOT NULL CHECK(length(assignment_id) BETWEEN 1 AND 256),
+        assignment_generation BIGINT NOT NULL CHECK(assignment_generation > 0),
+        inference_request_id TEXT NOT NULL CHECK(length(inference_request_id) BETWEEN 1 AND 256),
+        attempt BIGINT NOT NULL CHECK(attempt > 0),
+        worker_id TEXT NOT NULL CHECK(length(worker_id) BETWEEN 1 AND 256),
+        worker_generation BIGINT NOT NULL CHECK(worker_generation > 0),
+        session_id TEXT NOT NULL CHECK(length(session_id) BETWEEN 1 AND 256),
+        turn_id TEXT NOT NULL CHECK(length(turn_id) BETWEEN 1 AND 256),
+        idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+        request_body_json TEXT NOT NULL CHECK(
+          jsonb_typeof(request_body_json::jsonb) = 'object' AND octet_length(request_body_json) <= 1179648
+        ),
+        request_sha256 TEXT NOT NULL CHECK(request_sha256 ~ '^[0-9a-f]{64}$'),
+        input_sha256 TEXT NOT NULL CHECK(input_sha256 ~ '^[0-9a-f]{64}$'),
+        context_sha256 TEXT NOT NULL CHECK(context_sha256 ~ '^[0-9a-f]{64}$'),
+        model_intent_sha256 TEXT NOT NULL CHECK(model_intent_sha256 ~ '^[0-9a-f]{64}$'),
+        capability_profile_sha256 TEXT NOT NULL CHECK(capability_profile_sha256 ~ '^[0-9a-f]{64}$'),
+        routed_context_sha256 TEXT NOT NULL CHECK(routed_context_sha256 ~ '^[0-9a-f]{64}$'),
+        output_token_ceiling BIGINT NOT NULL CHECK(output_token_ceiling BETWEEN 1 AND 1000000),
+        reasoning_token_ceiling BIGINT NOT NULL CHECK(reasoning_token_ceiling BETWEEN 0 AND 1000000),
+        temperature_milli BIGINT NOT NULL CHECK(temperature_milli BETWEEN 0 AND 2000),
+        operation_id TEXT NOT NULL CHECK(length(operation_id) BETWEEN 1 AND 256),
+        dispatch_generation TEXT NOT NULL CHECK(length(dispatch_generation) BETWEEN 1 AND 256),
+        state TEXT NOT NULL CHECK(state IN (
+          'admitted', 'waiting_approval', 'blocked', 'dispatch_claimed',
+          'streaming', 'completed', 'failed', 'cancelled', 'dispatch_unknown'
+        )),
+        governance_decision TEXT NOT NULL CHECK(governance_decision IN ('allowed', 'approval_required', 'denied')),
+        effective_route_sha256 TEXT NOT NULL CHECK(effective_route_sha256 ~ '^[0-9a-f]{64}$'),
+        policy_revision BIGINT NOT NULL CHECK(policy_revision > 0),
+        policy_sha256 TEXT NOT NULL CHECK(policy_sha256 ~ '^[0-9a-f]{64}$'),
+        approval_receipt_sha256 TEXT CHECK(approval_receipt_sha256 IS NULL OR approval_receipt_sha256 ~ '^[0-9a-f]{64}$'),
+        governance_output_token_ceiling BIGINT NOT NULL CHECK(governance_output_token_ceiling BETWEEN 1 AND 1000000),
+        governance_reasoning_token_ceiling BIGINT NOT NULL CHECK(governance_reasoning_token_ceiling BETWEEN 0 AND 1000000),
+        governance_expires_at TEXT NOT NULL CHECK(
+          gc_try_parse_timestamptz(governance_expires_at) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(governance_expires_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = governance_expires_at
+        ),
+        budget_reservation_id TEXT NOT NULL CHECK(length(budget_reservation_id) BETWEEN 1 AND 256),
+        effective_provider_id TEXT CHECK(effective_provider_id IS NULL OR length(effective_provider_id) BETWEEN 1 AND 256),
+        effective_model_id TEXT CHECK(effective_model_id IS NULL OR length(effective_model_id) BETWEEN 1 AND 256),
+        dispatch_claim_owner TEXT CHECK(dispatch_claim_owner IS NULL OR length(dispatch_claim_owner) BETWEEN 1 AND 256),
+        dispatch_claimed_at TEXT CHECK(dispatch_claimed_at IS NULL OR (
+          gc_try_parse_timestamptz(dispatch_claimed_at) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(dispatch_claimed_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = dispatch_claimed_at
+        )),
+        dispatch_lease_expires_at TEXT CHECK(dispatch_lease_expires_at IS NULL OR (
+          gc_try_parse_timestamptz(dispatch_lease_expires_at) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(dispatch_lease_expires_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = dispatch_lease_expires_at
+        )),
+        usage_intent_event_id TEXT CHECK(usage_intent_event_id IS NULL OR length(usage_intent_event_id) BETWEEN 1 AND 256),
+        usage_terminal_event_id TEXT CHECK(usage_terminal_event_id IS NULL OR length(usage_terminal_event_id) BETWEEN 1 AND 256),
+        output_frame_count BIGINT NOT NULL DEFAULT 0 CHECK(output_frame_count BETWEEN 0 AND 100000),
+        output_char_count BIGINT NOT NULL DEFAULT 0 CHECK(output_char_count BETWEEN 0 AND 8388608),
+        worker_acknowledged_through BIGINT NOT NULL DEFAULT 0 CHECK(worker_acknowledged_through BETWEEN 0 AND 100000),
+        terminal_frame_sequence BIGINT CHECK(terminal_frame_sequence IS NULL OR terminal_frame_sequence BETWEEN 1 AND 100000),
+        terminal_sha256 TEXT CHECK(terminal_sha256 IS NULL OR terminal_sha256 ~ '^[0-9a-f]{64}$'),
+        accounting_disposition TEXT CHECK(accounting_disposition IS NULL OR accounting_disposition IN ('delegated', 'settled', 'unknown')),
+        admitted_at TEXT NOT NULL CHECK(
+          gc_try_parse_timestamptz(admitted_at) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(admitted_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = admitted_at
+        ),
+        updated_at TEXT NOT NULL CHECK(
+          gc_try_parse_timestamptz(updated_at) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(updated_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = updated_at
+        ),
+        PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation, inference_request_id, attempt),
+        UNIQUE(registry_workspace_id, idempotency_key),
+        FOREIGN KEY(registry_workspace_id, assignment_id, assignment_generation)
+          REFERENCES remote_worker_assignment_generations(registry_workspace_id, assignment_id, assignment_generation) ON DELETE RESTRICT,
+        CHECK(request_body_json::jsonb ->> 'schemaVersion' = 'goatcitadel.remote-worker-inference-request.v1'),
+        CHECK((governance_decision = 'approval_required') = (approval_receipt_sha256 IS NOT NULL)),
+        CHECK(governance_decision <> 'denied' OR state = 'blocked'),
+        CHECK((dispatch_claim_owner IS NULL) = (state IN ('admitted', 'waiting_approval', 'blocked'))),
+        CHECK((dispatch_claim_owner IS NULL) = (dispatch_claimed_at IS NULL)),
+        CHECK((dispatch_claim_owner IS NULL) = (dispatch_lease_expires_at IS NULL)),
+        CHECK((state IN ('completed', 'failed', 'cancelled')) = (terminal_frame_sequence IS NOT NULL AND terminal_sha256 IS NOT NULL)),
+        CHECK(worker_acknowledged_through <= output_frame_count)
+      );
+
+      CREATE TABLE IF NOT EXISTS remote_worker_inference_outbox (
+        registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+        assignment_id TEXT NOT NULL CHECK(length(assignment_id) BETWEEN 1 AND 256),
+        assignment_generation BIGINT NOT NULL CHECK(assignment_generation > 0),
+        inference_request_id TEXT NOT NULL CHECK(length(inference_request_id) BETWEEN 1 AND 256),
+        attempt BIGINT NOT NULL CHECK(attempt > 0),
+        frame_sequence BIGINT NOT NULL CHECK(frame_sequence BETWEEN 1 AND 100000),
+        frame_kind TEXT NOT NULL CHECK(frame_kind IN ('output_text', 'terminal')),
+        payload_json TEXT NOT NULL CHECK(
+          jsonb_typeof(payload_json::jsonb) = 'object' AND octet_length(payload_json) <= 262144
+        ),
+        payload_sha256 TEXT NOT NULL CHECK(payload_sha256 ~ '^[0-9a-f]{64}$'),
+        previous_frame_sha256 TEXT NOT NULL CHECK(previous_frame_sha256 ~ '^[0-9a-f]{64}$'),
+        frame_sha256 TEXT NOT NULL CHECK(frame_sha256 ~ '^[0-9a-f]{64}$'),
+        effective_route_sha256 TEXT NOT NULL CHECK(effective_route_sha256 ~ '^[0-9a-f]{64}$'),
+        usage_event_id TEXT CHECK(usage_event_id IS NULL OR length(usage_event_id) BETWEEN 1 AND 256),
+        frame_char_count BIGINT NOT NULL CHECK(frame_char_count BETWEEN 0 AND 131072),
+        created_at TEXT NOT NULL CHECK(
+          gc_try_parse_timestamptz(created_at) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = created_at
+        ),
+        PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation, inference_request_id, attempt, frame_sequence),
+        UNIQUE(registry_workspace_id, frame_sha256),
+        FOREIGN KEY(registry_workspace_id, assignment_id, assignment_generation, inference_request_id, attempt)
+          REFERENCES remote_worker_inference_requests(
+            registry_workspace_id, assignment_id, assignment_generation, inference_request_id, attempt
+          ) ON DELETE RESTRICT,
+        CHECK(payload_json::jsonb ->> 'schemaVersion' = 'goatcitadel.remote-worker-inference-frame.v1'),
+        CHECK(payload_json::jsonb ->> 'kind' = frame_kind),
+        CHECK(frame_kind = 'terminal' OR usage_event_id IS NULL)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_remote_worker_inference_requests_dispatch_lease
+        ON remote_worker_inference_requests(state, dispatch_lease_expires_at)
+        WHERE state IN ('dispatch_claimed', 'streaming');
+      CREATE INDEX IF NOT EXISTS idx_remote_worker_inference_outbox_delivery
+        ON remote_worker_inference_outbox(
+          registry_workspace_id, assignment_id, assignment_generation, inference_request_id, attempt, frame_sequence
+        );
+
+      CREATE OR REPLACE FUNCTION gc_remote_worker_inference_request_immutable_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF NEW.registry_workspace_id IS DISTINCT FROM OLD.registry_workspace_id
+          OR NEW.assignment_id IS DISTINCT FROM OLD.assignment_id
+          OR NEW.assignment_generation IS DISTINCT FROM OLD.assignment_generation
+          OR NEW.inference_request_id IS DISTINCT FROM OLD.inference_request_id
+          OR NEW.attempt IS DISTINCT FROM OLD.attempt
+          OR NEW.worker_id IS DISTINCT FROM OLD.worker_id
+          OR NEW.worker_generation IS DISTINCT FROM OLD.worker_generation
+          OR NEW.session_id IS DISTINCT FROM OLD.session_id
+          OR NEW.turn_id IS DISTINCT FROM OLD.turn_id
+          OR NEW.idempotency_key IS DISTINCT FROM OLD.idempotency_key
+          OR NEW.request_body_json IS DISTINCT FROM OLD.request_body_json
+          OR NEW.request_sha256 IS DISTINCT FROM OLD.request_sha256
+          OR NEW.input_sha256 IS DISTINCT FROM OLD.input_sha256
+          OR NEW.context_sha256 IS DISTINCT FROM OLD.context_sha256
+          OR NEW.model_intent_sha256 IS DISTINCT FROM OLD.model_intent_sha256
+          OR NEW.capability_profile_sha256 IS DISTINCT FROM OLD.capability_profile_sha256
+          OR NEW.routed_context_sha256 IS DISTINCT FROM OLD.routed_context_sha256
+          OR NEW.output_token_ceiling IS DISTINCT FROM OLD.output_token_ceiling
+          OR NEW.reasoning_token_ceiling IS DISTINCT FROM OLD.reasoning_token_ceiling
+          OR NEW.temperature_milli IS DISTINCT FROM OLD.temperature_milli
+          OR NEW.operation_id IS DISTINCT FROM OLD.operation_id
+          OR NEW.dispatch_generation IS DISTINCT FROM OLD.dispatch_generation
+          OR NEW.policy_revision IS DISTINCT FROM OLD.policy_revision
+          OR NEW.policy_sha256 IS DISTINCT FROM OLD.policy_sha256
+          OR NEW.effective_route_sha256 IS DISTINCT FROM OLD.effective_route_sha256
+          OR NEW.admitted_at IS DISTINCT FROM OLD.admitted_at
+          OR (OLD.terminal_frame_sequence IS NOT NULL AND NEW.terminal_frame_sequence IS DISTINCT FROM OLD.terminal_frame_sequence)
+          OR (OLD.terminal_sha256 IS NOT NULL AND NEW.terminal_sha256 IS DISTINCT FROM OLD.terminal_sha256) THEN
+          RAISE EXCEPTION 'remote worker inference request immutable bindings cannot change' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE OR REPLACE FUNCTION gc_remote_worker_inference_request_terminal_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF OLD.state IN ('completed', 'failed', 'cancelled', 'dispatch_unknown', 'blocked')
+          AND (
+            NEW.state IS DISTINCT FROM OLD.state
+            OR NEW.dispatch_claim_owner IS DISTINCT FROM OLD.dispatch_claim_owner
+            OR NEW.dispatch_lease_expires_at IS DISTINCT FROM OLD.dispatch_lease_expires_at
+            OR NEW.effective_provider_id IS DISTINCT FROM OLD.effective_provider_id
+            OR NEW.effective_model_id IS DISTINCT FROM OLD.effective_model_id
+            OR NEW.usage_terminal_event_id IS DISTINCT FROM OLD.usage_terminal_event_id
+            OR NEW.accounting_disposition IS DISTINCT FROM OLD.accounting_disposition
+            OR NEW.output_frame_count IS DISTINCT FROM OLD.output_frame_count
+            OR NEW.output_char_count IS DISTINCT FROM OLD.output_char_count
+            OR NEW.worker_acknowledged_through < OLD.worker_acknowledged_through
+          ) THEN
+          RAISE EXCEPTION 'remote worker inference terminal state is immutable except monotonic acknowledgement' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE OR REPLACE FUNCTION gc_remote_worker_inference_request_ack_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF NEW.worker_acknowledged_through < OLD.worker_acknowledged_through THEN
+          RAISE EXCEPTION 'remote worker inference acknowledgement watermark cannot regress' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE OR REPLACE FUNCTION gc_remote_worker_inference_outbox_chain_guard()
+      RETURNS trigger AS $$
+      DECLARE
+        expected_sequence BIGINT;
+        expected_previous TEXT;
+      BEGIN
+        PERFORM pg_advisory_xact_lock(hashtextextended(
+          NEW.registry_workspace_id || ':' || NEW.assignment_id || ':' || NEW.assignment_generation::text
+            || ':' || NEW.inference_request_id || ':' || NEW.attempt::text,
+          503
+        ));
+        SELECT 1 + COALESCE(MAX(f.frame_sequence), 0),
+               COALESCE((
+                 SELECT g.frame_sha256 FROM remote_worker_inference_outbox g
+                 WHERE g.registry_workspace_id = NEW.registry_workspace_id
+                   AND g.assignment_id = NEW.assignment_id
+                   AND g.assignment_generation = NEW.assignment_generation
+                   AND g.inference_request_id = NEW.inference_request_id
+                   AND g.attempt = NEW.attempt
+                 ORDER BY g.frame_sequence DESC LIMIT 1
+               ), '${"0".repeat(64)}')
+          INTO expected_sequence, expected_previous
+          FROM remote_worker_inference_outbox f
+          WHERE f.registry_workspace_id = NEW.registry_workspace_id
+            AND f.assignment_id = NEW.assignment_id
+            AND f.assignment_generation = NEW.assignment_generation
+            AND f.inference_request_id = NEW.inference_request_id
+            AND f.attempt = NEW.attempt;
+        IF NEW.frame_sequence <> expected_sequence OR NEW.previous_frame_sha256 <> expected_previous THEN
+          RAISE EXCEPTION 'remote worker inference outbox frame chain is out of order' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE OR REPLACE FUNCTION gc_reject_remote_worker_inference_outbox_mutation()
+      RETURNS trigger AS $$
+      BEGIN
+        RAISE EXCEPTION 'remote worker inference outbox frames are append-only' USING ERRCODE = '23514';
+      END;
+      $$ LANGUAGE plpgsql;
+
+      DROP TRIGGER IF EXISTS trg_remote_worker_inference_requests_immutable ON remote_worker_inference_requests;
+      CREATE TRIGGER trg_remote_worker_inference_requests_immutable
+        BEFORE UPDATE ON remote_worker_inference_requests
+        FOR EACH ROW EXECUTE FUNCTION gc_remote_worker_inference_request_immutable_guard();
+      DROP TRIGGER IF EXISTS trg_remote_worker_inference_requests_terminal_guard ON remote_worker_inference_requests;
+      CREATE TRIGGER trg_remote_worker_inference_requests_terminal_guard
+        BEFORE UPDATE ON remote_worker_inference_requests
+        FOR EACH ROW EXECUTE FUNCTION gc_remote_worker_inference_request_terminal_guard();
+      DROP TRIGGER IF EXISTS trg_remote_worker_inference_requests_ack_monotonic ON remote_worker_inference_requests;
+      CREATE TRIGGER trg_remote_worker_inference_requests_ack_monotonic
+        BEFORE UPDATE ON remote_worker_inference_requests
+        FOR EACH ROW EXECUTE FUNCTION gc_remote_worker_inference_request_ack_guard();
+
+      DROP TRIGGER IF EXISTS trg_remote_worker_inference_outbox_chain_guard ON remote_worker_inference_outbox;
+      CREATE TRIGGER trg_remote_worker_inference_outbox_chain_guard
+        BEFORE INSERT ON remote_worker_inference_outbox
+        FOR EACH ROW EXECUTE FUNCTION gc_remote_worker_inference_outbox_chain_guard();
+      DROP TRIGGER IF EXISTS trg_remote_worker_inference_outbox_no_update ON remote_worker_inference_outbox;
+      CREATE TRIGGER trg_remote_worker_inference_outbox_no_update
+        BEFORE UPDATE ON remote_worker_inference_outbox
+        FOR EACH ROW EXECUTE FUNCTION gc_reject_remote_worker_inference_outbox_mutation();
+      DROP TRIGGER IF EXISTS trg_remote_worker_inference_outbox_no_delete ON remote_worker_inference_outbox;
+      CREATE TRIGGER trg_remote_worker_inference_outbox_no_delete
+        BEFORE DELETE ON remote_worker_inference_outbox
+        FOR EACH ROW EXECUTE FUNCTION gc_reject_remote_worker_inference_outbox_mutation();
+    `,
+  },
 ];

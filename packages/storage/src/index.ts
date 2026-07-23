@@ -879,6 +879,7 @@ export * from "./mesh-capability-node-admission-repo.js";
 export * from "./mesh-capability-publication-repo.js";
 export * from "./remote-worker-admission-repo.js";
 export * from "./remote-worker-assignment-repo.js";
+export * from "./remote-worker-inference-repo.js";
 export * from "./remote-worker-nonce-repo.js";
 export * from "./session-control-repo.js";
 export * from "./session-mutation-admission-repo.js";

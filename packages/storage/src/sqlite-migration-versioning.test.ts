@@ -42,8 +42,8 @@ describe("sqlite schema migrations", () => {
     assert.deepEqual(
       { ...rows.at(-1) },
       {
-        version: 176,
-        name: "remote_worker_request_nonce_authority",
+        version: 177,
+        name: "remote_worker_inference_request_owner",
       },
     );
     db.close();

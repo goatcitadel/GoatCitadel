@@ -669,4 +669,57 @@ describe("protected Postgres migration integrity", () => {
     );
     assert.doesNotMatch(sql, /gateway_route|readiness|listener|scheduler|assignment|inference/iu);
   });
+
+  it("keeps HX-503 migration 119 additive, secret-free, one-winner, append-only, and production-dark", () => {
+    const migration = POSTGRES_MIGRATIONS.find((candidate) => candidate.version === 119);
+    assert.equal(migration?.name, "remote_worker_inference_request_owner");
+    assert.equal(migration?.batchedStatements, undefined);
+    const sql = migration?.sql ?? "";
+    for (const table of ["remote_worker_inference_requests", "remote_worker_inference_outbox"]) {
+      assert.match(sql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`, "u"));
+    }
+    assert.equal(sql.match(/CREATE TABLE IF NOT EXISTS remote_worker_inference_/gu)?.length, 2);
+    // Purely additive: no frozen table is altered, and the assignment-generation
+    // PRIMARY KEY already satisfies the composite foreign key.
+    assert.equal(sql.match(/ALTER TABLE/gu) ?? null, null);
+    assert.match(
+      sql,
+      /FOREIGN KEY\(registry_workspace_id, assignment_id, assignment_generation\)\s+REFERENCES remote_worker_assignment_generations/u,
+    );
+    assert.match(
+      sql,
+      /FOREIGN KEY\(registry_workspace_id, assignment_id, assignment_generation, inference_request_id, attempt\)\s+REFERENCES remote_worker_inference_requests/u,
+    );
+    // Secret-free: no raw lease or provider credential column.
+    assert.doesNotMatch(
+      sql,
+      /lease_token|lease_secret|raw_lease|provider_credential|credential_ref|api_key|authorization/iu,
+    );
+    // One-winner claim + immutable terminal + append-only outbox triggers.
+    for (const trigger of [
+      "trg_remote_worker_inference_requests_immutable",
+      "trg_remote_worker_inference_requests_terminal_guard",
+      "trg_remote_worker_inference_requests_ack_monotonic",
+      "trg_remote_worker_inference_outbox_chain_guard",
+      "trg_remote_worker_inference_outbox_no_update",
+      "trg_remote_worker_inference_outbox_no_delete",
+    ]) {
+      assert.match(sql, new RegExp(trigger, "u"));
+    }
+    // Terminal receipt and claim invariants.
+    assert.match(
+      sql,
+      /\(state IN \('completed', 'failed', 'cancelled'\)\) = \(terminal_frame_sequence IS NOT NULL AND terminal_sha256 IS NOT NULL\)/u,
+    );
+    // Append serialization on the request identity under the HX-503 advisory tag.
+    assert.match(sql, /pg_advisory_xact_lock\(hashtextextended\([\s\S]*?,\s*503\s*\)\)/u);
+    assert.match(sql, /remote worker inference outbox frames are append-only/u);
+    assert.match(sql, /remote worker inference terminal state is immutable except monotonic acknowledgement/u);
+    // No DML rows and no route/listener/scheduler runtime claim.
+    assert.doesNotMatch(
+      sql,
+      /\b(?:INSERT\s+INTO|DELETE\s+FROM|UPDATE\s+remote_worker|DROP\s+TABLE|TRUNCATE\s+TABLE)\b/iu,
+    );
+    assert.doesNotMatch(sql, /gateway_route|readiness|\blistener\b|scheduler|\bcell\b/iu);
+  });
 });

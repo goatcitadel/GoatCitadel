@@ -6619,6 +6619,24 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
           createRemoteWorkerRequestNonceSchema(db);
         },
       },
+      {
+        version: 177,
+        name: "remote_worker_inference_request_owner",
+        up: (db) => {
+          // HX-503 assignment-bound inference request owner (paired with
+          // PostgreSQL 119). Additive only: two new tables bound by complete
+          // composite foreign keys to the committed assignment-generation
+          // authority (whose PRIMARY KEY already satisfies the reference, so no
+          // frozen table is altered). No raw assignment lease and no provider
+          // credential ever has a column. Repair-only sparse databases without
+          // the remote-worker assignment (171) predecessors skip instead of
+          // inventing parents.
+          if (!tableExists(db, "remote_worker_assignment_generations")) {
+            return;
+          }
+          createRemoteWorkerInferenceSchema(db);
+        },
+      },
     ],
   },
 ];
@@ -6801,6 +6819,237 @@ function createRemoteWorkerRequestNonceSchema(db: DatabaseSync): void {
     BEFORE DELETE ON remote_worker_credential_request_nonces
     WHEN OLD.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     BEGIN SELECT RAISE(ABORT, 'live remote worker request nonces are undeletable'); END;
+  `);
+}
+
+function createRemoteWorkerInferenceSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE remote_worker_inference_requests (
+      registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+      assignment_id TEXT NOT NULL CHECK(length(assignment_id) BETWEEN 1 AND 256),
+      assignment_generation INTEGER NOT NULL CHECK(typeof(assignment_generation) = 'integer' AND assignment_generation > 0),
+      inference_request_id TEXT NOT NULL CHECK(length(inference_request_id) BETWEEN 1 AND 256),
+      attempt INTEGER NOT NULL CHECK(typeof(attempt) = 'integer' AND attempt > 0),
+      worker_id TEXT NOT NULL CHECK(length(worker_id) BETWEEN 1 AND 256),
+      worker_generation INTEGER NOT NULL CHECK(typeof(worker_generation) = 'integer' AND worker_generation > 0),
+      session_id TEXT NOT NULL CHECK(length(session_id) BETWEEN 1 AND 256),
+      turn_id TEXT NOT NULL CHECK(length(turn_id) BETWEEN 1 AND 256),
+      idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+      request_body_json TEXT NOT NULL CHECK(json_valid(request_body_json) AND length(CAST(request_body_json AS BLOB)) <= 1179648),
+      request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+      input_sha256 TEXT NOT NULL CHECK(length(input_sha256) = 64 AND input_sha256 NOT GLOB '*[^0-9a-f]*'),
+      context_sha256 TEXT NOT NULL CHECK(length(context_sha256) = 64 AND context_sha256 NOT GLOB '*[^0-9a-f]*'),
+      model_intent_sha256 TEXT NOT NULL CHECK(length(model_intent_sha256) = 64 AND model_intent_sha256 NOT GLOB '*[^0-9a-f]*'),
+      capability_profile_sha256 TEXT NOT NULL CHECK(length(capability_profile_sha256) = 64 AND capability_profile_sha256 NOT GLOB '*[^0-9a-f]*'),
+      routed_context_sha256 TEXT NOT NULL CHECK(length(routed_context_sha256) = 64 AND routed_context_sha256 NOT GLOB '*[^0-9a-f]*'),
+      output_token_ceiling INTEGER NOT NULL CHECK(typeof(output_token_ceiling) = 'integer' AND output_token_ceiling BETWEEN 1 AND 1000000),
+      reasoning_token_ceiling INTEGER NOT NULL CHECK(typeof(reasoning_token_ceiling) = 'integer' AND reasoning_token_ceiling BETWEEN 0 AND 1000000),
+      temperature_milli INTEGER NOT NULL CHECK(typeof(temperature_milli) = 'integer' AND temperature_milli BETWEEN 0 AND 2000),
+      operation_id TEXT NOT NULL CHECK(length(operation_id) BETWEEN 1 AND 256),
+      dispatch_generation TEXT NOT NULL CHECK(length(dispatch_generation) BETWEEN 1 AND 256),
+      state TEXT NOT NULL CHECK(state IN (
+        'admitted', 'waiting_approval', 'blocked', 'dispatch_claimed',
+        'streaming', 'completed', 'failed', 'cancelled', 'dispatch_unknown'
+      )),
+      governance_decision TEXT NOT NULL CHECK(governance_decision IN ('allowed', 'approval_required', 'denied')),
+      effective_route_sha256 TEXT NOT NULL CHECK(length(effective_route_sha256) = 64 AND effective_route_sha256 NOT GLOB '*[^0-9a-f]*'),
+      policy_revision INTEGER NOT NULL CHECK(typeof(policy_revision) = 'integer' AND policy_revision > 0),
+      policy_sha256 TEXT NOT NULL CHECK(length(policy_sha256) = 64 AND policy_sha256 NOT GLOB '*[^0-9a-f]*'),
+      approval_receipt_sha256 TEXT CHECK(approval_receipt_sha256 IS NULL OR (length(approval_receipt_sha256) = 64 AND approval_receipt_sha256 NOT GLOB '*[^0-9a-f]*')),
+      governance_output_token_ceiling INTEGER NOT NULL CHECK(typeof(governance_output_token_ceiling) = 'integer' AND governance_output_token_ceiling BETWEEN 1 AND 1000000),
+      governance_reasoning_token_ceiling INTEGER NOT NULL CHECK(typeof(governance_reasoning_token_ceiling) = 'integer' AND governance_reasoning_token_ceiling BETWEEN 0 AND 1000000),
+      governance_expires_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', governance_expires_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', governance_expires_at, '+0 days') = governance_expires_at
+      ),
+      budget_reservation_id TEXT NOT NULL CHECK(length(budget_reservation_id) BETWEEN 1 AND 256),
+      effective_provider_id TEXT CHECK(effective_provider_id IS NULL OR length(effective_provider_id) BETWEEN 1 AND 256),
+      effective_model_id TEXT CHECK(effective_model_id IS NULL OR length(effective_model_id) BETWEEN 1 AND 256),
+      dispatch_claim_owner TEXT CHECK(dispatch_claim_owner IS NULL OR length(dispatch_claim_owner) BETWEEN 1 AND 256),
+      dispatch_claimed_at TEXT CHECK(dispatch_claimed_at IS NULL OR (
+        strftime('%Y-%m-%dT%H:%M:%fZ', dispatch_claimed_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', dispatch_claimed_at, '+0 days') = dispatch_claimed_at
+      )),
+      dispatch_lease_expires_at TEXT CHECK(dispatch_lease_expires_at IS NULL OR (
+        strftime('%Y-%m-%dT%H:%M:%fZ', dispatch_lease_expires_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', dispatch_lease_expires_at, '+0 days') = dispatch_lease_expires_at
+      )),
+      usage_intent_event_id TEXT CHECK(usage_intent_event_id IS NULL OR length(usage_intent_event_id) BETWEEN 1 AND 256),
+      usage_terminal_event_id TEXT CHECK(usage_terminal_event_id IS NULL OR length(usage_terminal_event_id) BETWEEN 1 AND 256),
+      output_frame_count INTEGER NOT NULL DEFAULT 0 CHECK(typeof(output_frame_count) = 'integer' AND output_frame_count BETWEEN 0 AND 100000),
+      output_char_count INTEGER NOT NULL DEFAULT 0 CHECK(typeof(output_char_count) = 'integer' AND output_char_count BETWEEN 0 AND 8388608),
+      worker_acknowledged_through INTEGER NOT NULL DEFAULT 0 CHECK(typeof(worker_acknowledged_through) = 'integer' AND worker_acknowledged_through BETWEEN 0 AND 100000),
+      terminal_frame_sequence INTEGER CHECK(terminal_frame_sequence IS NULL OR (typeof(terminal_frame_sequence) = 'integer' AND terminal_frame_sequence BETWEEN 1 AND 100000)),
+      terminal_sha256 TEXT CHECK(terminal_sha256 IS NULL OR (length(terminal_sha256) = 64 AND terminal_sha256 NOT GLOB '*[^0-9a-f]*')),
+      accounting_disposition TEXT CHECK(accounting_disposition IS NULL OR accounting_disposition IN ('delegated', 'settled', 'unknown')),
+      admitted_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', admitted_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', admitted_at, '+0 days') = admitted_at
+      ),
+      updated_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0 days') = updated_at
+      ),
+      PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation, inference_request_id, attempt),
+      UNIQUE(registry_workspace_id, idempotency_key),
+      FOREIGN KEY(registry_workspace_id, assignment_id, assignment_generation)
+        REFERENCES remote_worker_assignment_generations(registry_workspace_id, assignment_id, assignment_generation) ON DELETE RESTRICT,
+      CHECK(json_extract(request_body_json, '$.schemaVersion') = 'goatcitadel.remote-worker-inference-request.v1'),
+      CHECK((governance_decision = 'approval_required') = (approval_receipt_sha256 IS NOT NULL)),
+      CHECK(governance_decision <> 'denied' OR state = 'blocked'),
+      CHECK((dispatch_claim_owner IS NULL) = (state IN ('admitted', 'waiting_approval', 'blocked'))),
+      CHECK((dispatch_claim_owner IS NULL) = (dispatch_claimed_at IS NULL)),
+      CHECK((dispatch_claim_owner IS NULL) = (dispatch_lease_expires_at IS NULL)),
+      CHECK((state IN ('completed', 'failed', 'cancelled')) = (terminal_frame_sequence IS NOT NULL AND terminal_sha256 IS NOT NULL)),
+      CHECK(worker_acknowledged_through <= output_frame_count)
+    );
+
+    CREATE TABLE remote_worker_inference_outbox (
+      registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+      assignment_id TEXT NOT NULL CHECK(length(assignment_id) BETWEEN 1 AND 256),
+      assignment_generation INTEGER NOT NULL CHECK(typeof(assignment_generation) = 'integer' AND assignment_generation > 0),
+      inference_request_id TEXT NOT NULL CHECK(length(inference_request_id) BETWEEN 1 AND 256),
+      attempt INTEGER NOT NULL CHECK(typeof(attempt) = 'integer' AND attempt > 0),
+      frame_sequence INTEGER NOT NULL CHECK(typeof(frame_sequence) = 'integer' AND frame_sequence BETWEEN 1 AND 100000),
+      frame_kind TEXT NOT NULL CHECK(frame_kind IN ('output_text', 'terminal')),
+      payload_json TEXT NOT NULL CHECK(json_valid(payload_json) AND length(CAST(payload_json AS BLOB)) <= 262144),
+      payload_sha256 TEXT NOT NULL CHECK(length(payload_sha256) = 64 AND payload_sha256 NOT GLOB '*[^0-9a-f]*'),
+      previous_frame_sha256 TEXT NOT NULL CHECK(length(previous_frame_sha256) = 64 AND previous_frame_sha256 NOT GLOB '*[^0-9a-f]*'),
+      frame_sha256 TEXT NOT NULL CHECK(length(frame_sha256) = 64 AND frame_sha256 NOT GLOB '*[^0-9a-f]*'),
+      effective_route_sha256 TEXT NOT NULL CHECK(length(effective_route_sha256) = 64 AND effective_route_sha256 NOT GLOB '*[^0-9a-f]*'),
+      usage_event_id TEXT CHECK(usage_event_id IS NULL OR length(usage_event_id) BETWEEN 1 AND 256),
+      frame_char_count INTEGER NOT NULL CHECK(typeof(frame_char_count) = 'integer' AND frame_char_count BETWEEN 0 AND 131072),
+      created_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') = created_at
+      ),
+      PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation, inference_request_id, attempt, frame_sequence),
+      UNIQUE(registry_workspace_id, frame_sha256),
+      FOREIGN KEY(registry_workspace_id, assignment_id, assignment_generation, inference_request_id, attempt)
+        REFERENCES remote_worker_inference_requests(
+          registry_workspace_id, assignment_id, assignment_generation, inference_request_id, attempt
+        ) ON DELETE RESTRICT,
+      CHECK(json_extract(payload_json, '$.schemaVersion') = 'goatcitadel.remote-worker-inference-frame.v1'),
+      CHECK(json_extract(payload_json, '$.kind') = frame_kind),
+      CHECK(frame_kind = 'terminal' OR usage_event_id IS NULL)
+    );
+
+    CREATE INDEX idx_remote_worker_inference_requests_dispatch_lease
+      ON remote_worker_inference_requests(state, dispatch_lease_expires_at)
+      WHERE state IN ('dispatch_claimed', 'streaming');
+    CREATE INDEX idx_remote_worker_inference_outbox_delivery
+      ON remote_worker_inference_outbox(
+        registry_workspace_id, assignment_id, assignment_generation, inference_request_id, attempt, frame_sequence
+      );
+
+    -- Immutable bindings: the assignment/worker/generation/request/hash/body
+    -- identity and the committed terminal receipt can never change.
+    CREATE TRIGGER trg_remote_worker_inference_requests_immutable
+    BEFORE UPDATE ON remote_worker_inference_requests
+    FOR EACH ROW
+    WHEN
+      NEW.registry_workspace_id <> OLD.registry_workspace_id
+      OR NEW.assignment_id <> OLD.assignment_id
+      OR NEW.assignment_generation <> OLD.assignment_generation
+      OR NEW.inference_request_id <> OLD.inference_request_id
+      OR NEW.attempt <> OLD.attempt
+      OR NEW.worker_id <> OLD.worker_id
+      OR NEW.worker_generation <> OLD.worker_generation
+      OR NEW.session_id <> OLD.session_id
+      OR NEW.turn_id <> OLD.turn_id
+      OR NEW.idempotency_key <> OLD.idempotency_key
+      OR NEW.request_body_json <> OLD.request_body_json
+      OR NEW.request_sha256 <> OLD.request_sha256
+      OR NEW.input_sha256 <> OLD.input_sha256
+      OR NEW.context_sha256 <> OLD.context_sha256
+      OR NEW.model_intent_sha256 <> OLD.model_intent_sha256
+      OR NEW.capability_profile_sha256 <> OLD.capability_profile_sha256
+      OR NEW.routed_context_sha256 <> OLD.routed_context_sha256
+      OR NEW.output_token_ceiling <> OLD.output_token_ceiling
+      OR NEW.reasoning_token_ceiling <> OLD.reasoning_token_ceiling
+      OR NEW.temperature_milli <> OLD.temperature_milli
+      OR NEW.operation_id <> OLD.operation_id
+      OR NEW.dispatch_generation <> OLD.dispatch_generation
+      OR NEW.policy_revision <> OLD.policy_revision
+      OR NEW.policy_sha256 <> OLD.policy_sha256
+      OR NEW.effective_route_sha256 <> OLD.effective_route_sha256
+      OR NEW.admitted_at <> OLD.admitted_at
+      OR (OLD.terminal_frame_sequence IS NOT NULL AND NEW.terminal_frame_sequence IS NOT OLD.terminal_frame_sequence)
+      OR (OLD.terminal_sha256 IS NOT NULL AND NEW.terminal_sha256 IS NOT OLD.terminal_sha256)
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker inference request immutable bindings cannot change');
+    END;
+
+    -- Terminal immutability: once terminal, only the monotonic acknowledgement
+    -- watermark may advance; every other column is frozen.
+    CREATE TRIGGER trg_remote_worker_inference_requests_terminal_guard
+    BEFORE UPDATE ON remote_worker_inference_requests
+    FOR EACH ROW
+    WHEN OLD.state IN ('completed', 'failed', 'cancelled', 'dispatch_unknown', 'blocked')
+      AND (
+        NEW.state <> OLD.state
+        OR NEW.dispatch_claim_owner IS NOT OLD.dispatch_claim_owner
+        OR NEW.dispatch_lease_expires_at IS NOT OLD.dispatch_lease_expires_at
+        OR NEW.effective_provider_id IS NOT OLD.effective_provider_id
+        OR NEW.effective_model_id IS NOT OLD.effective_model_id
+        OR NEW.usage_terminal_event_id IS NOT OLD.usage_terminal_event_id
+        OR NEW.accounting_disposition IS NOT OLD.accounting_disposition
+        OR NEW.output_frame_count <> OLD.output_frame_count
+        OR NEW.output_char_count <> OLD.output_char_count
+        OR NEW.worker_acknowledged_through < OLD.worker_acknowledged_through
+      )
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker inference terminal state is immutable except monotonic acknowledgement');
+    END;
+
+    -- Acknowledgement is monotonic in every state.
+    CREATE TRIGGER trg_remote_worker_inference_requests_ack_monotonic
+    BEFORE UPDATE ON remote_worker_inference_requests
+    FOR EACH ROW
+    WHEN NEW.worker_acknowledged_through < OLD.worker_acknowledged_through
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker inference acknowledgement watermark cannot regress');
+    END;
+
+    -- Outbox frames are append-only and contiguously hash-chained.
+    CREATE TRIGGER trg_remote_worker_inference_outbox_chain_guard
+    BEFORE INSERT ON remote_worker_inference_outbox
+    FOR EACH ROW
+    WHEN
+      NEW.frame_sequence <> 1 + COALESCE((
+        SELECT MAX(f.frame_sequence) FROM remote_worker_inference_outbox f
+        WHERE f.registry_workspace_id = NEW.registry_workspace_id
+          AND f.assignment_id = NEW.assignment_id
+          AND f.assignment_generation = NEW.assignment_generation
+          AND f.inference_request_id = NEW.inference_request_id
+          AND f.attempt = NEW.attempt
+      ), 0)
+      OR NEW.previous_frame_sha256 <> COALESCE((
+        SELECT f.frame_sha256 FROM remote_worker_inference_outbox f
+        WHERE f.registry_workspace_id = NEW.registry_workspace_id
+          AND f.assignment_id = NEW.assignment_id
+          AND f.assignment_generation = NEW.assignment_generation
+          AND f.inference_request_id = NEW.inference_request_id
+          AND f.attempt = NEW.attempt
+        ORDER BY f.frame_sequence DESC LIMIT 1
+      ), '${"0".repeat(64)}')
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker inference outbox frame chain is out of order');
+    END;
+
+    CREATE TRIGGER trg_remote_worker_inference_outbox_no_update
+    BEFORE UPDATE ON remote_worker_inference_outbox
+    FOR EACH ROW
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker inference outbox frames are append-only (no update)');
+    END;
+
+    CREATE TRIGGER trg_remote_worker_inference_outbox_no_delete
+    BEFORE DELETE ON remote_worker_inference_outbox
+    FOR EACH ROW
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker inference outbox frames are append-only (no delete)');
+    END;
   `);
 }
 
