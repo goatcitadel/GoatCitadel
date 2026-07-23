@@ -52,6 +52,22 @@ describe("external-source knowledge-snapshot effect vocabulary", () => {
   });
 });
 
+describe("governed lifecycle effect vocabulary (HX-402 P0)", () => {
+  it("admits the four governed lifecycle effect kinds", () => {
+    expectTypeOf<"memory_lifecycle_apply">().toExtend<ApprovalEffectKind>();
+    expectTypeOf<"skill_lifecycle_apply">().toExtend<ApprovalEffectKind>();
+    expectTypeOf<"capability_lifecycle_apply">().toExtend<ApprovalEffectKind>();
+    expectTypeOf<"improvement_lifecycle_apply">().toExtend<ApprovalEffectKind>();
+  });
+
+  it("admits the four governed lifecycle effect target kinds", () => {
+    expectTypeOf<"memory_record">().toExtend<ApprovalEffectTargetKind>();
+    expectTypeOf<"skill_state">().toExtend<ApprovalEffectTargetKind>();
+    expectTypeOf<"capability_candidate">().toExtend<ApprovalEffectTargetKind>();
+    expectTypeOf<"improvement_operation">().toExtend<ApprovalEffectTargetKind>();
+  });
+});
+
 describe("ShellRiskFinding + ShellExplanationDetail", () => {
   it("ShellRiskFinding has level + label + explanation", () => {
     expectTypeOf<ShellRiskFinding>().toHaveProperty("level");

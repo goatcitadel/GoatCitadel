@@ -16,7 +16,9 @@ export interface GovernanceJourneyEvidenceRef {
     | "evaluation"
     | "external_source"
     | "memory_history"
-    | "upstream_snapshot";
+    | "upstream_snapshot"
+    | "governed_lifecycle"
+    | "improvement_operation";
   refId: string;
 }
 
@@ -229,7 +231,9 @@ function isEvidenceRef(value: unknown): value is GovernanceJourneyEvidenceRef {
       value.owner === "evaluation" ||
       value.owner === "external_source" ||
       value.owner === "memory_history" ||
-      value.owner === "upstream_snapshot") &&
+      value.owner === "upstream_snapshot" ||
+      value.owner === "governed_lifecycle" ||
+      value.owner === "improvement_operation") &&
     isBoundedText(value.refId, 256)
   );
 }

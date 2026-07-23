@@ -130,6 +130,10 @@ export type ApprovalEffectKind =
   | "skill_hub_lifecycle_apply"
   | "external_source_knowledge_snapshot_apply"
   | "mesh_capability_activation_apply"
+  | "memory_lifecycle_apply"
+  | "skill_lifecycle_apply"
+  | "capability_lifecycle_apply"
+  | "improvement_lifecycle_apply"
   | "approval_observability";
 
 export type ApprovalObservabilityAuditStream = "tool_invocations" | "policy_blocks" | "approvals" | "hooks";
@@ -187,7 +191,11 @@ export type ApprovalEffectTargetKind =
   | "approval"
   | "skill_hub_operation"
   | "external_source_import_item"
-  | "mesh_capability_activation";
+  | "mesh_capability_activation"
+  | "memory_record"
+  | "skill_state"
+  | "capability_candidate"
+  | "improvement_operation";
 
 export interface ApprovalEffectRecord {
   effectId: string;
