@@ -536,8 +536,10 @@ export class SkillStateService {
         );
       } else {
         // The original requester remains the immutable evidence. A byte-exact
-        // replay from any operator converges; a missing row self-heals so the
-        // recovered effect can never execute without requester evidence.
+        // replay from the SAME requester converges; a different requester's
+        // identical mutation conflicts in the approvals owner because the
+        // requester is payload material. A missing evidence row self-heals so
+        // the recovered effect can never execute without requester evidence.
         const evidence = authority.governanceJourneyEvents.findByIdempotencyKey(
           skillLifecycleRequestJourneyIdempotencyKey(approvalId),
         );
@@ -695,17 +697,22 @@ export class SkillStateService {
     const repository = this.getGovernedLifecycleRepository();
     const normalizedNote = note ?? undefined;
     return this.ctx.gatewaySql.runImmediateTransaction(() => {
-      // Exact-replay convergence: when every governed event for this approval
-      // already exists, the mutation is committed evidence — return it.
+      // Exact-replay convergence: every governed event for one approval
+      // commits in a single transaction, so ANY existing event proves the
+      // mutation committed — partial existence is impossible. Bulk approvals
+      // may bind no-op members that never mint events, so requiring `every`
+      // would falsely read a committed mixed bulk as state drift on effect
+      // re-execution; the honest changedCount is the committed event count.
       const governedEventIds = skillIds.map((skillId) => `skill-lifecycle:${applyAuthority.approvalId}:${skillId}`);
-      if (governedEventIds.every((eventId) => repository.find(eventId) !== undefined)) {
+      const committedEventIds = governedEventIds.filter((eventId) => repository.find(eventId) !== undefined);
+      if (committedEventIds.length > 0) {
         return {
           disposition: "applied" as const,
           action: binding.action,
           subjectKind: binding.subjectKind,
           ...(binding.subjectId === undefined ? {} : { subjectId: binding.subjectId }),
           skillIds: [...skillIds],
-          changedCount: skillIds.length,
+          changedCount: committedEventIds.length,
         };
       }
       const currentStates = this.readPersistedSkillStates();
@@ -1276,12 +1283,10 @@ function buildSkillStatesStateMaterial(
   currentStates: Map<string, PersistedSkillState>,
   revisions: Map<string, number>,
 ): Record<string, unknown> {
-  const canonical = [...skillIds]
-    .sort(compareCodeUnits)
-    .map((skillId) => ({
-      skillId,
-      ...buildSkillStateStateMaterial(currentStates.get(skillId), revisions.get(skillId)!),
-    }));
+  const canonical = [...skillIds].sort(compareCodeUnits).map((skillId) => ({
+    skillId,
+    ...buildSkillStateStateMaterial(currentStates.get(skillId), revisions.get(skillId)!),
+  }));
   return {
     skillCount: canonical.length,
     skillsSha256: sha256Text(canonicalJsonString(canonical)),

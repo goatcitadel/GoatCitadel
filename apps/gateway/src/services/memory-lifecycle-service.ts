@@ -577,8 +577,10 @@ export class MemoryLifecycleService {
         );
       } else {
         // The original requester remains the immutable evidence. A byte-exact
-        // replay from any operator converges; a missing row self-heals so the
-        // recovered effect can never execute without requester evidence.
+        // replay from the SAME requester converges; a different requester's
+        // identical mutation conflicts in the approvals owner because the
+        // requester is payload material. A missing evidence row self-heals so
+        // the recovered effect can never execute without requester evidence.
         const evidence = authority.governanceJourneyEvents.findByIdempotencyKey(
           memoryLifecycleRequestJourneyIdempotencyKey(approvalId),
         );

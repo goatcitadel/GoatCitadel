@@ -700,7 +700,6 @@ export interface ApprovedCapabilityCandidateEvidenceInput {
   action: CapabilityLifecycleApprovalAction;
   selectedVersionId: string;
   changedVersionIds: readonly string[];
-  proposalEventId: string;
 }
 
 const CAPABILITY_ACTION_OPERATIONS: Record<CapabilityLifecycleApprovalAction, CapabilityStateGovernedOperation> = {

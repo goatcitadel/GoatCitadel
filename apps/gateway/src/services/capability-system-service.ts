@@ -1035,7 +1035,6 @@ export class CapabilitySystemService {
               action: binding.action,
               selectedVersionId: plan.selectedVersionId,
               changedVersionIds,
-              proposalEventId: "not_applicable",
             });
             return {
               value: {

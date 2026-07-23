@@ -339,6 +339,63 @@ describe("approval-first skill state mutations", () => {
     ).toMatchObject({ operation: "disabled" });
   });
 
+  it("converges effect replays of a mixed bulk whose no-op members never mint governed events", () => {
+    const harness = createHarness();
+    harness.service.ensureSkillStates(["skill-alpha", "skill-beta"]);
+    // skill-beta is ALREADY at the exact target state+note, so the bulk
+    // approval binds it as a no-op member that will never mint a governed
+    // event; skill-alpha is the only changing member.
+    harness.service.systemDisableSkill("skill-beta", "Bulk pause");
+    const revisions = {
+      "skill-alpha": harness.storage.skillAggregateRevisions.ensure("runtime_skill", "skill-alpha").revision,
+      "skill-beta": harness.storage.skillAggregateRevisions.ensure("runtime_skill", "skill-beta").revision,
+    };
+    const outcome = harness.service.requestSkillStateBulkApproval(
+      ["skill-alpha", "skill-beta"],
+      "disabled",
+      "Bulk pause",
+      { expectedRevisionsBySkillId: revisions, requesterId: harness.requesterId },
+    );
+    if (!outcome.pendingApproval) throw new Error("expected pending mixed bulk approval");
+    expect(outcome.pendingApproval.skillIds).toEqual(["skill-alpha", "skill-beta"]);
+
+    harness.storage.approvals.resolve(outcome.pendingApproval.approvalId, {
+      decision: "approve",
+      resolvedBy: harness.resolverId,
+    });
+    const applied = harness.service.executeApprovedSkillLifecycleMutation({
+      approvalId: outcome.pendingApproval.approvalId,
+    });
+    expect(applied).toMatchObject({ disposition: "applied", changedCount: 1 });
+    expect(readSkillRow(harness, "skill-alpha")).toMatchObject({ state: "disabled", note: "Bulk pause" });
+    // Only the changed member minted a governed event under this approval.
+    expect(
+      readGovernedEvent(harness, `skill-lifecycle:${outcome.pendingApproval.approvalId}:skill-alpha`),
+    ).toMatchObject({ operation: "disabled" });
+    expect(
+      readGovernedEvent(harness, `skill-lifecycle:${outcome.pendingApproval.approvalId}:skill-beta`),
+    ).toBeUndefined();
+
+    // Crash-recovery replay (lost completion lease, deferral after commit):
+    // the effect re-executes and MUST converge on the committed evidence —
+    // never terminally fail as false state drift — with an honest count.
+    const replay = harness.service.executeApprovedSkillLifecycleMutation({
+      approvalId: outcome.pendingApproval.approvalId,
+    });
+    expect(replay).toMatchObject({ disposition: "applied", changedCount: 1 });
+    // Zero re-mutation: revisions and the governed-event set are unchanged.
+    expect(harness.storage.skillAggregateRevisions.ensure("runtime_skill", "skill-alpha").revision).toBe(
+      revisions["skill-alpha"] + 1,
+    );
+    expect(harness.storage.skillAggregateRevisions.ensure("runtime_skill", "skill-beta").revision).toBe(
+      revisions["skill-beta"],
+    );
+    const approvalScoped = harness.storage.gatewaySql
+      .prepare(`SELECT COUNT(*) AS count FROM governed_lifecycle_events WHERE approval_id = @approvalId`)
+      .get({ approvalId: outcome.pendingApproval.approvalId }) as { count: number };
+    expect(Number(approvalScoped.count)).toBe(1);
+  });
+
   it("validates bulk revision maps exactly", () => {
     const harness = createHarness();
     harness.service.ensureSkillStates(["skill-alpha", "skill-beta"]);

@@ -202,7 +202,6 @@ describe("governed skill/capability evidence writes", () => {
       action: "candidate_promoted",
       selectedVersionId: "version-1",
       changedVersionIds: ["version-1", "version-0"],
-      proposalEventId: "unused",
     });
     expect(stored.event.operation).toBe("candidate_promoted");
     expect(stored.event.targetKind).toBe("capability_candidate");
