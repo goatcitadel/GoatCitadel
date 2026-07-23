@@ -1355,11 +1355,13 @@ export function MissionThreadedControllerHost({
     setPendingThreadContext((current) => (current?.sessionId === selectedSessionId ? null : current));
   }, [selectedSessionId]);
 
-  // HX-407 C3: durable read-only external-source attachments + explicit
-  // per-turn selection. Inert until C4 composes the Gateway routes (the list
-  // read 404s → supported=false → the composer renders nothing). C4 additionally
-  // wires `sessionIncarnationId` once the runtime exposes it; until then the
-  // attach/detach/knowledge mutations stay disabled fail-closed.
+  // HX-407 C3/C4b: durable read-only external-source attachments + explicit
+  // per-turn selection. When the runtime does not compose the Gateway routes
+  // the list read 404s → supported=false → the composer renders nothing. The
+  // hook learns `sessionIncarnationId` from its own durable reload (the C4
+  // list response carries it), so attach/detach/knowledge-request activate
+  // exactly when the server supplies the value and stay disabled fail-closed
+  // when it is genuinely absent — the host passes no incarnation of its own.
   const externalSourceAttachments = useExternalSourceAttachments({
     workspaceId: selectedSession?.workspaceId ?? workspaceId,
     sessionId: selectedSessionId,

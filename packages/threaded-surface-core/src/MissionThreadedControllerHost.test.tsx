@@ -910,6 +910,7 @@ function buildExternalSourceAttachmentsState(overrides: Record<string, unknown> 
     selectedAttachmentIds: [],
     busyAttachmentId: null,
     canMutate: false,
+    sessionIncarnationId: null,
     reload: vi.fn(async () => undefined),
     toggleSelection: vi.fn(),
     clearSelection: vi.fn(),
@@ -1194,11 +1195,16 @@ describe("MissionThreadedControllerHost", () => {
     expect(liveState.requestKnowledgeSnapshot).toHaveBeenCalledWith("attachment-1");
     controls?.onAttach({ sourceId: "source-1", importId: "import-1", itemId: "item-9" });
     expect(liveState.attach).toHaveBeenCalledWith({ sourceId: "source-1", importId: "import-1", itemId: "item-9" });
-    // The hook itself is scoped to the selected session's workspace.
-    expect(useExternalSourceAttachmentsMock.mock.calls.at(-1)?.[0]).toMatchObject({
+    // The hook itself is scoped to the selected session's workspace, and the
+    // host supplies NO incarnation of its own: since C4b the hook learns the
+    // exact-CAS incarnation from its durable reload (list-carried), so the
+    // host seam stays unused here by design.
+    const hookInput = useExternalSourceAttachmentsMock.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(hookInput).toMatchObject({
       workspaceId: "workspace-1",
       sessionId: "session-1",
     });
+    expect("sessionIncarnationId" in hookInput).toBe(false);
   });
 
   it("rejects malformed, foreign, traversing, duplicate, and oversized hydrated attachment references", () => {

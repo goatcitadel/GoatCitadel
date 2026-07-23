@@ -388,12 +388,14 @@ function ComposerCoworkStop({ props }: { props: MissionThreadedActiveSessionSurf
 type ThreadedExternalSourceControls = NonNullable<MissionThreadedActiveSessionSurfaceProps["externalSourceControls"]>;
 
 /**
- * HX-407 C3 read-only external-source strip: content-free chips, explicit
+ * HX-407 C3/C4b read-only external-source strip: content-free chips, explicit
  * per-turn selection, exact-CAS detach, and the governed knowledge-copy
  * request. Rendered only when the runtime composes the capability (the host
- * passes `null` while the Chat attachment routes are absent), so the strip is
- * inert until C4. Chips never render transcript content or raw JSON, and no
- * affordance edits the immutable imported evidence.
+ * passes `null` while the Chat attachment routes are absent). Mutations are
+ * live exactly when the durable reload carried the session incarnation
+ * (`canMutate`); without it they stay disabled with an honest hint. Chips
+ * never render transcript content or raw JSON, and no affordance edits the
+ * immutable imported evidence.
  */
 function ExternalSourceStrip({ controls, disabled }: { controls: ThreadedExternalSourceControls; disabled: boolean }) {
   const stripInstanceId = useId();
@@ -406,7 +408,7 @@ function ExternalSourceStrip({ controls, disabled }: { controls: ThreadedExterna
     controls.canMutate && attachSourceId.trim() !== "" && attachImportId.trim() !== "" && attachItemId.trim() !== "";
   const mutationHint = controls.canMutate
     ? null
-    : "Attach, detach, and knowledge-copy actions stay disabled until the external-source runtime is fully composed.";
+    : "Attach, detach, and knowledge-copy actions stay disabled until the server provides the live session incarnation.";
 
   return (
     <section className="mc-next-composer-external-strip" aria-label="Read-only external source attachments">

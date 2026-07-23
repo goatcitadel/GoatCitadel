@@ -16,6 +16,7 @@
  * trusts an unvalidated or content-bearing payload.
  */
 import {
+  EXTERNAL_SOURCE_SESSION_INCARNATION_MAX_LENGTH,
   assertExternalSessionAttachment,
   assertExternalSourceImportIntent,
   assertExternalSourceImportItem,
@@ -127,6 +128,20 @@ function parseImportDetail(payload: unknown): ExternalSourceImportDetailResponse
 
 function parseAttachmentListResponse(payload: unknown): ExternalSessionAttachmentListResponse {
   if (!isRecord(payload) || !Array.isArray((payload as { items?: unknown }).items)) {
+    throw new Error("External attachment list response is malformed.");
+  }
+  // C4 durable-reload truth: the list optionally carries the current
+  // server-owned session incarnation (the sanctioned place clients learn the
+  // exact-CAS mutation precondition). When present it must be a bounded
+  // non-empty string; anything else is a malformed response, never a value the
+  // Chat hook may hand to attach/detach/knowledge-request.
+  const sessionIncarnationId = (payload as { sessionIncarnationId?: unknown }).sessionIncarnationId;
+  if (
+    sessionIncarnationId !== undefined &&
+    (typeof sessionIncarnationId !== "string" ||
+      sessionIncarnationId.trim() === "" ||
+      sessionIncarnationId.length > EXTERNAL_SOURCE_SESSION_INCARNATION_MAX_LENGTH)
+  ) {
     throw new Error("External attachment list response is malformed.");
   }
   const list = payload as unknown as ExternalSessionAttachmentListResponse;

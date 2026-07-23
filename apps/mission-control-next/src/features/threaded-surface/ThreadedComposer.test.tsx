@@ -1402,7 +1402,7 @@ describe("ThreadedComposer external source strip (HX-407 C3)", () => {
     renderer.unmount();
   });
 
-  it("keeps detach and knowledge-copy disabled while mutations are not composed, with an honest hint", async () => {
+  it("keeps detach and knowledge-copy disabled while the incarnation is missing, with an honest hint", async () => {
     const controls = externalControls({ canMutate: false });
     const renderer = await renderComposer({ externalSourceControls: controls });
 
@@ -1411,7 +1411,10 @@ describe("ThreadedComposer external source strip (HX-407 C3)", () => {
     expect(detach.props.disabled).toBe(true);
     expect(knowledge.props.disabled).toBe(true);
     const markup = buildMarkup({ externalSourceControls: externalControls({ canMutate: false }) });
-    expect(markup).toContain("stay disabled until the external-source runtime is fully composed");
+    expect(markup).toContain("stay disabled until the server provides the live session incarnation");
+    // The live posture (C4b activation) renders no disabled-mutation hint at all.
+    const liveMarkup = buildMarkup({ externalSourceControls: externalControls({ canMutate: true }) });
+    expect(liveMarkup).not.toContain("stay disabled until");
     renderer.unmount();
   });
 

@@ -40,11 +40,12 @@ function attachment(
   };
 }
 
-function listResponse(items: ExternalSessionAttachmentRecord[]) {
+function listResponse(items: ExternalSessionAttachmentRecord[], sessionIncarnationId?: string) {
   return {
     schemaVersion: "goatcitadel.external-source.v1",
     workspaceId: "workspace-1",
     sessionId: "session-1",
+    ...(sessionIncarnationId !== undefined ? { sessionIncarnationId } : {}),
     items,
   };
 }
@@ -185,11 +186,12 @@ describe("useExternalSourceAttachments", () => {
     renderer.unmount();
   });
 
-  it("keeps mutations fail-closed until the session incarnation is known", async () => {
+  it("keeps mutations fail-closed while neither the list response nor the host supplies an incarnation", async () => {
     apiMocks.fetchExternalSessionAttachments.mockResolvedValue(listResponse([attachment("attachment-1")]));
     const renderer = await renderHarness();
 
     expect(latest!.canMutate).toBe(false);
+    expect(latest!.sessionIncarnationId).toBeNull();
     const attached = await latest!.attach({ sourceId: "source-1", importId: "import-1", itemId: "item-9" });
     const detached = await latest!.detach("attachment-1");
     const requested = await latest!.requestKnowledgeSnapshot("attachment-1");
@@ -199,6 +201,60 @@ describe("useExternalSourceAttachments", () => {
     expect(apiMocks.attachExternalSourceToSession).not.toHaveBeenCalled();
     expect(apiMocks.detachExternalSourceAttachment).not.toHaveBeenCalled();
     expect(apiMocks.requestExternalSourceKnowledgeSnapshot).not.toHaveBeenCalled();
+    renderer.unmount();
+  });
+
+  it("activates mutations from the C4 list-carried incarnation and sends the exact fetched value", async () => {
+    apiMocks.fetchExternalSessionAttachments.mockResolvedValue(
+      listResponse([attachment("attachment-1")], "incarnation-from-list-1"),
+    );
+    apiMocks.attachExternalSourceToSession.mockResolvedValue({ disposition: "created" });
+    apiMocks.detachExternalSourceAttachment.mockResolvedValue({ disposition: "detached" });
+    const renderer = await renderHarness();
+
+    // No host seam at all — the durable reload alone activates mutations.
+    expect(latest!.canMutate).toBe(true);
+    expect(latest!.sessionIncarnationId).toBe("incarnation-from-list-1");
+
+    await act(async () => {
+      await latest!.attach({ sourceId: "source-1", importId: "import-1", itemId: "item-9" });
+    });
+    expect(apiMocks.attachExternalSourceToSession).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedSessionIncarnationId: "incarnation-from-list-1" }),
+    );
+    await act(async () => {
+      await latest!.detach("attachment-1");
+    });
+    expect(apiMocks.detachExternalSourceAttachment).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedSessionIncarnationId: "incarnation-from-list-1" }),
+    );
+    renderer.unmount();
+  });
+
+  it("tracks the freshest list-carried incarnation and prefers it over the host seam", async () => {
+    apiMocks.fetchExternalSessionAttachments.mockResolvedValueOnce(
+      listResponse([attachment("attachment-1")], "incarnation-server-1"),
+    );
+    apiMocks.attachExternalSourceToSession.mockResolvedValue({ disposition: "created" });
+    // The host seam supplies a stale value; the server-carried one must win.
+    const renderer = await renderHarness({ sessionIncarnationId: "incarnation-host-stale" });
+    expect(latest!.sessionIncarnationId).toBe("incarnation-server-1");
+
+    // A reload observing a NEW incarnation (e.g. session reactivation) updates
+    // the CAS value for every later mutation.
+    apiMocks.fetchExternalSessionAttachments.mockResolvedValue(
+      listResponse([attachment("attachment-1")], "incarnation-server-2"),
+    );
+    await act(async () => {
+      await latest!.reload();
+    });
+    expect(latest!.sessionIncarnationId).toBe("incarnation-server-2");
+    await act(async () => {
+      await latest!.attach({ sourceId: "source-1", importId: "import-1", itemId: "item-9" });
+    });
+    expect(apiMocks.attachExternalSourceToSession).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedSessionIncarnationId: "incarnation-server-2" }),
+    );
     renderer.unmount();
   });
 

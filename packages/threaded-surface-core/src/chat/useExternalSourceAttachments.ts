@@ -9,19 +9,22 @@ import {
 } from "@goatcitadel/mission-control-shared/api/external-sources";
 
 /**
- * HX-407 C3 Chat-side external-source attachment state.
+ * HX-407 C3/C4b Chat-side external-source attachment state.
  *
  * Owns the durable content-free attachment list for the selected session, the
  * EXPLICIT per-turn selection, and the attach / detach / knowledge-request
- * actions over the typed client. Everything here is inert until C4 composes the
- * Gateway routes: the list read 404s, which this hook treats as "capability
- * absent" (`supported: false`, controls hidden, no error spam) — the same
- * degradation shape as `useChatCapabilityProfileInspection`'s 404 branch.
+ * actions over the typed client. When the Gateway does not compose the routes
+ * the list read 404s, which this hook treats as "capability absent"
+ * (`supported: false`, controls hidden, no error spam) — the same degradation
+ * shape as `useChatCapabilityProfileInspection`'s 404 branch.
  *
- * Mutations additionally require the current session incarnation (a C1 CAS
- * precondition the Gateway does not yet expose to clients); until C4 surfaces
- * it through `sessionIncarnationId`, attach/detach/knowledge-request stay
- * disabled while list/chips/selection remain fully live.
+ * Mutations require the current session incarnation (the C1 exact-CAS
+ * precondition). Since C4 the durable reload response carries it as
+ * `sessionIncarnationId`, so the hook activates attach/detach/knowledge-request
+ * exactly when the server supplies the value — the freshest list-carried
+ * incarnation always wins over the optional host-supplied seam, and a response
+ * without one keeps the mutations disabled fail-closed while list / chips /
+ * selection remain fully live.
  *
  * Selection freezing: `captureOutboundExternalContextRefs` snapshots the
  * selection as frozen `external_attachment` routed-context refs for one queue
@@ -31,7 +34,11 @@ import {
 export interface UseExternalSourceAttachmentsInput {
   workspaceId: string;
   sessionId: string | null;
-  /** Current session incarnation once C4 exposes it; null keeps mutations disabled (fail closed). */
+  /**
+   * Optional host-supplied session incarnation, used only while the durable
+   * reload has not yet carried one (the list-carried value is fresher and wins).
+   * Absent both, mutations stay disabled (fail closed).
+   */
   sessionIncarnationId?: string | null;
   pushLocalNotice?: (content: string, tone?: "neutral" | "success" | "warning") => void;
 }
@@ -56,6 +63,8 @@ export interface ExternalSourceAttachmentsState {
   busyAttachmentId: string | null;
   /** True when attach/detach/knowledge-request may run (capability live + incarnation known). */
   canMutate: boolean;
+  /** Effective session incarnation (freshest list-carried value, else the host seam); null until known. */
+  sessionIncarnationId: string | null;
   reload: () => Promise<void>;
   toggleSelection: (attachmentId: string) => void;
   clearSelection: () => void;
@@ -72,13 +81,18 @@ function describeAttachmentLabel(attachment: ExternalSessionAttachmentRecord): s
 
 export function useExternalSourceAttachments(input: UseExternalSourceAttachmentsInput): ExternalSourceAttachmentsState {
   const { workspaceId, sessionId, pushLocalNotice } = input;
-  const sessionIncarnationId = input.sessionIncarnationId ?? null;
+  const hostSessionIncarnationId = input.sessionIncarnationId ?? null;
   const [supported, setSupported] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<readonly ExternalSessionAttachmentRecord[]>([]);
   const [selectedAttachmentIds, setSelectedAttachmentIds] = useState<readonly string[]>([]);
   const [busyAttachmentId, setBusyAttachmentId] = useState<string | null>(null);
+  // C4 activation seam: the durable reload response is the sanctioned place
+  // clients learn the current server-owned incarnation. Only a successful load
+  // updates it; a session switch or capability absence resets it to null so a
+  // stale value can never authorize a mutation on the wrong session.
+  const [listSessionIncarnationId, setListSessionIncarnationId] = useState<string | null>(null);
   const loadSequenceRef = useRef(0);
 
   const reload = useCallback(async () => {
@@ -97,6 +111,7 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
       setSupported(true);
       setError(null);
       setAttachments(live);
+      setListSessionIncarnationId(list.sessionIncarnationId ?? null);
       const liveIds = new Set(live.map((item) => item.attachmentId));
       setSelectedAttachmentIds((current) => {
         const next = current.filter((id) => liveIds.has(id));
@@ -107,10 +122,11 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
         return;
       }
       if (isExternalSourceCapabilityAbsent(loadError)) {
-        // Pre-C4 steady state: hide the controls, never spam an error.
+        // Capability-absent steady state: hide the controls, never spam an error.
         setSupported(false);
         setError(null);
         setAttachments([]);
+        setListSessionIncarnationId(null);
         setSelectedAttachmentIds((current) => (current.length === 0 ? current : []));
       } else {
         setError("External source attachments are unavailable right now.");
@@ -129,6 +145,7 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
     setAttachments([]);
     setSelectedAttachmentIds([]);
     setBusyAttachmentId(null);
+    setListSessionIncarnationId(null);
     if (!sessionId) {
       setLoading(false);
       return;
@@ -155,6 +172,11 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
     setSelectedAttachmentIds((current) => (current.length === 0 ? current : []));
   }, []);
 
+  // Freshest truth wins: the list-carried incarnation reflects the durable
+  // reload that just completed (and refreshes after every mutation), so it
+  // takes precedence over the host seam; the seam remains a fallback for
+  // runtimes whose list response does not carry the field yet.
+  const sessionIncarnationId = listSessionIncarnationId ?? hostSessionIncarnationId;
   const canMutate = supported === true && Boolean(sessionId) && Boolean(sessionIncarnationId);
 
   const runMutation = useCallback(
@@ -309,6 +331,7 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
       selectedAttachmentIds,
       busyAttachmentId,
       canMutate,
+      sessionIncarnationId,
       reload,
       toggleSelection,
       clearSelection,
@@ -326,6 +349,7 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
       selectedAttachmentIds,
       busyAttachmentId,
       canMutate,
+      sessionIncarnationId,
       reload,
       toggleSelection,
       clearSelection,

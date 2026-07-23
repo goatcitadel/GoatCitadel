@@ -372,6 +372,43 @@ describe("external-sources Chat client", () => {
     expect(init?.method ?? "GET").toBe("GET");
   });
 
+  it("surfaces the C4 list-carried session incarnation and rejects a malformed one", async () => {
+    apiMocks.request.mockResolvedValue({
+      schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+      sessionIncarnationId: "incarnation-live-1",
+      items: [externalAttachment()],
+    });
+    const list = await externalSources.fetchExternalSessionAttachments("session-1", "workspace-1");
+    expect(list.sessionIncarnationId).toBe("incarnation-live-1");
+
+    // Pre-C4 producers omit the field entirely; that stays valid.
+    apiMocks.request.mockResolvedValue({
+      schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+      items: [],
+    });
+    const legacy = await externalSources.fetchExternalSessionAttachments("session-1", "workspace-1");
+    expect(legacy.sessionIncarnationId).toBeUndefined();
+
+    // A present-but-invalid incarnation is a malformed response the Chat hook
+    // must never receive as a CAS precondition.
+    for (const malformed of [42, "", "   ", "x".repeat(321), null]) {
+      apiMocks.request.mockResolvedValue({
+        schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
+        workspaceId: "workspace-1",
+        sessionId: "session-1",
+        sessionIncarnationId: malformed,
+        items: [],
+      });
+      await expect(externalSources.fetchExternalSessionAttachments("session-1", "workspace-1")).rejects.toThrow(
+        "malformed",
+      );
+    }
+  });
+
   it("attaches with the exact C1 identifier-only body and refuses smuggled hashes", async () => {
     apiMocks.request.mockResolvedValue({
       schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
