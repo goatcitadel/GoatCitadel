@@ -327,10 +327,14 @@ export class MeshCapabilityInvocationService {
       throw new MeshCapabilityInvocationServiceError("mesh_capability_invocation_conflict");
     }
 
+    // Vault storage is a purely in-process staging write with no external
+    // exposure, so it runs BEFORE the fence: vault-capacity exhaustion then
+    // rejects as a clean pre-dispatch block (M4 fold of the M3 review Minor)
+    // instead of a post-fence dispatch failure.
+    this.storeVaultInput(normalized.workspaceId, invocationId, inputCanonicalJson, inputSha256, intent.deadlineAt);
     // The envelope append is the external-exposure write: the durable
     // execution fence must land immediately before it (HX-415 discipline).
     options.executionFence?.();
-    this.storeVaultInput(normalized.workspaceId, invocationId, inputCanonicalJson, inputSha256, intent.deadlineAt);
     const envelope = buildDispatchEnvelope(intent);
     try {
       this.transport.appendEvent({

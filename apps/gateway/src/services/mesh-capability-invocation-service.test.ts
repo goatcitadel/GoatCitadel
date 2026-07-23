@@ -34,6 +34,13 @@ afterEach(() => {
 const EXECUTION_PROFILE_SHA256 = "9".repeat(64);
 const LOCAL_GATEWAY_NODE_ID = "gateway-node";
 
+/** Shape of the service's private in-memory input-vault entries (capacity regression). */
+interface InputVaultTestEntry {
+  inputCanonicalJson: string;
+  inputSha256: string;
+  expiresAtMs: number;
+}
+
 interface Harness {
   storage: Storage;
   publication: MeshCapabilityPublicationService;
@@ -547,6 +554,43 @@ describe("MeshCapabilityInvocationService dispatch + settlement", () => {
     expect(fence).not.toHaveBeenCalled();
     expect(listDispatchEvents(harness.storage)).toHaveLength(0);
     expect(harness.storage.mesh.listReplicationEvents(100)).toHaveLength(0);
+  });
+
+  it("settles vault-capacity exhaustion as a clean pre-dispatch block before the fence and any envelope", async () => {
+    // M4 fold of the M3 review Minor: `storeVaultInput` runs BEFORE the
+    // execution fence, so an exhausted in-memory input vault rejects with no
+    // fence mark and no external exposure — the runner maps the thrown
+    // pre-fence rejection to `pre_dispatch_blocked`, never `dispatch_failed`.
+    const harness = createHarness();
+    const { activation } = activateTool(harness);
+    const service = harness.createService();
+    const vault = (service as unknown as { inputVault: Map<string, InputVaultTestEntry> }).inputVault;
+    const farFuture = harness.clock.value + 3_600_000;
+    for (let index = 0; index < 256; index += 1) {
+      vault.set(`default::occupied-${index}`, {
+        inputCanonicalJson: "{}",
+        inputSha256: "0".repeat(64),
+        expiresAtMs: farFuture,
+      });
+    }
+    const fence = vi.fn();
+    await expect(service.dispatch(dispatchInputFor(activation), { executionFence: fence })).rejects.toMatchObject({
+      code: "mesh_capability_invocation_capacity_exhausted",
+    });
+    expect(fence).not.toHaveBeenCalled();
+    expect(listDispatchEvents(harness.storage)).toHaveLength(0);
+    expect(harness.storage.mesh.listReplicationEvents(100)).toHaveLength(0);
+
+    // Once capacity frees up, the SAME attempt converges on its already-created
+    // intent and dispatches normally with exactly one fence mark.
+    vault.clear();
+    const dispatchPromise = service.dispatch(dispatchInputFor(activation), { executionFence: fence });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const invocationId = listDispatchEvents(harness.storage)[0]!.payload.invocationId as string;
+    service.settleFromNode(harness.identity, nodeSettlement(invocationId, activation, { status: "ok" }));
+    const outcome = await dispatchPromise;
+    expect(outcome.disposition).toBe("succeeded");
+    expect(fence).toHaveBeenCalledTimes(1);
   });
 
   it("converges restart recovery on the same intent and envelope without a duplicate dispatch", async () => {
