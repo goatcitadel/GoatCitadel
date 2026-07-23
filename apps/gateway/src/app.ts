@@ -39,6 +39,7 @@ import { llamaCppRoutes } from "./routes/llamacpp.js";
 import { integrationsRoutes } from "./routes/integrations.js";
 import { integrationWebhookRoutes } from "./routes/integration-webhooks.js";
 import { meshRoutes } from "./routes/mesh.js";
+import { meshCapabilityRoutes } from "./routes/mesh-capabilities.js";
 import { mobileRoutes } from "./routes/mobile.js";
 import { onboardingRoutes } from "./routes/onboarding.js";
 import { demoRoutes } from "./routes/demo.js";
@@ -386,6 +387,13 @@ export async function buildApp() {
     await app.register(integrationsRoutes);
     await app.register(integrationWebhookRoutes);
     await app.register(meshRoutes);
+    // HX-408 M1: authenticated mesh capability publication surface. The
+    // mesh-node access class fails closed without the composed owner, so the
+    // guard keeps a miswired build from booting a dead surface.
+    if (!app.services.meshCapabilityPublication) {
+      throw new Error("Mesh capability publication service is not composed.");
+    }
+    await app.register(meshCapabilityRoutes);
     await app.register(mobileRoutes);
     await app.register(onboardingRoutes);
     await app.register(demoRoutes);

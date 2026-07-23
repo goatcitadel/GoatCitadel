@@ -135,6 +135,14 @@ export interface CapabilitySystemServiceOptions {
   storage: Storage;
   readFeatureFlags: () => Pick<FeatureFlagsConfig, "codeModeV1Enabled"> & Record<string, boolean>;
   listToolCatalog: () => ToolCatalogEntry[];
+  /**
+   * HX-408: server-built mesh publication projection. Entries arrive with
+   * their explicit status/callable truth already resolved against the durable
+   * publication, admission, health, and lease owners; this service only
+   * appends them to the inspectable catalog (callable filtering stays the
+   * shared `entry.callable` rule).
+   */
+  listMeshCapabilityCatalogEntries?: () => CapabilityCatalogEntry[];
   listLoadedSkills: () => LoadedSkill[];
   readSkillStates: () => Map<string, SkillStateRecord>;
   invokeTool: (request: ToolInvokeRequest) => Promise<ToolInvokeResult>;
@@ -3025,6 +3033,14 @@ export class CapabilitySystemService {
         proposalId: proposal.proposalId,
         reviewWarning: "Inspectable only until governance activation.",
       });
+    }
+
+    // HX-408: governed mesh publications project as their own kinds with
+    // server-resolved statuses. With no activation grants (M2), every entry
+    // arrives callable=false, so the callable catalog stays empty for mesh
+    // capabilities by construction.
+    for (const entry of this.options.listMeshCapabilityCatalogEntries?.() ?? []) {
+      entries.push(entry);
     }
     return entries;
   }

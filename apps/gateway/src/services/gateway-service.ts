@@ -695,6 +695,7 @@ import { MemoryMaintenanceService } from "./memory-maintenance-service.js";
 import { MemoryLifecycleService } from "./memory-lifecycle-service.js";
 import { RuntimeLifecycleReadService } from "./runtime-lifecycle-read-service.js";
 import { CapabilitySystemService } from "./capability-system-service.js";
+import { MeshCapabilityPublicationService } from "./mesh-capability-publication-service.js";
 import type { BaseAgentPromptSkill, BaseAgentPromptToolset } from "./base-agent-system-prompt.js";
 import { TaskLifecycleService } from "./task-lifecycle-service.js";
 import { BrowserSessionRuntimeService } from "./browser-session-runtime-service.js";
@@ -1312,6 +1313,8 @@ export class GatewayService {
   private readonly operatorProfileService: OperatorProfileService;
   private readonly autonomyControlService: AutonomyControlService;
   private readonly capabilitySystemService: CapabilitySystemService;
+  /** HX-408 M1: authenticated mesh capability publication owner. */
+  private readonly meshCapabilityPublicationService: MeshCapabilityPublicationService;
   private readonly skillHubLifecycleService: SkillHubLifecycleService;
   private readonly skillHubReviewService: SkillHubReviewService;
   private readonly skillLearningService: SkillLearningService;
@@ -1582,12 +1585,22 @@ export class GatewayService {
       listAllIntegrationIds: () => this.storage.integrationConnections.list(undefined, 1000).map((c) => c.connectionId),
       listAllMcpServerIds: () => this.listMcpServers().map((server) => server.serverId),
     });
+    // HX-408 M1: the publication owner reads/writes only the durable mesh
+    // capability storage, so it composes ahead of the capability system that
+    // projects its catalog entries.
+    this.meshCapabilityPublicationService = new MeshCapabilityPublicationService({
+      storage: this.storage,
+      publishRealtime: (eventType, source, payload) => {
+        this.publishRealtime(eventType, source, payload);
+      },
+    });
     this.capabilitySystemService = new CapabilitySystemService({
       rootDir: config.rootDir,
       runtimeConfig: config.assistant.capabilities,
       storage: this.storage,
       readFeatureFlags: () => this.readFeatureFlags(),
       listToolCatalog: () => this.listToolCatalog(),
+      listMeshCapabilityCatalogEntries: () => this.meshCapabilityPublicationService.listCatalogEntries(),
       listLoadedSkills: () => this.skillsService.list(),
       readSkillStates: () => this.skillStateService.readSkillStates(),
       invokeTool: (request) => this.invokeTool(request),
@@ -2882,6 +2895,7 @@ export class GatewayService {
   private buildRouteServices(): GatewayRouteServices {
     return {
       ...composeGatewayRouteServices(this.getRouteCompositionPort()),
+      meshCapabilityPublication: this.meshCapabilityPublicationService,
       externalSources: createExternalSourceRouteService(
         this.storage,
         this.workspacePathBridgeRuntime.service,

@@ -193,6 +193,7 @@ import {
 } from "./workspaces-route-service.js";
 import type { WorkspacePathBridgeRouteService } from "../routes/workspace-path-bridge.js";
 import type { ExternalSourceRouteService } from "./external-source-route-service.js";
+import type { MeshCapabilityPublicationService } from "./mesh-capability-publication-service.js";
 export interface GatewayRouteServices {
   a2a: A2ARouteService;
   addons: AddonsRouteService;
@@ -245,6 +246,12 @@ export interface GatewayRouteServices {
   modelComparisons: ModelComparisonService;
   media: MediaRouteService;
   mesh: MeshRouteService;
+  /**
+   * HX-408: the authenticated mesh capability publication owner. Composed
+   * directly from storage by the gateway service (like `externalSources`),
+   * so the base composition port does not carry it.
+   */
+  meshCapabilityPublication?: MeshCapabilityPublicationService;
   mobile: MobileRouteService;
   npu: NpuRouteService;
   personalOps: PersonalOpsRouteService;

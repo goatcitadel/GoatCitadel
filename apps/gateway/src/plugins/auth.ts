@@ -4,6 +4,8 @@ import type { CompanionPrincipalPurpose, SseTokenIssueResponse } from "@goatcita
 import { enterRequestAttribution } from "@goatcitadel/storage";
 import { timingSafeStringEqual } from "../services/crypto-equals.js";
 import { isGenericChannelInboundPath } from "../services/generic-channel-webhook.js";
+import { isMeshCapabilityNodePublicationPath } from "../services/mesh-capability-publication-service.js";
+import type { MeshCapabilityAuthenticatedNodeIdentity } from "../services/mesh-capability-publication-service.js";
 import { isLineWebhookPath } from "../services/line-webhook.js";
 import { isNextcloudTalkWebhookPath } from "../services/nextcloud-talk-webhook.js";
 import { isSlackWebhookPath } from "../services/slack-webhook.js";
@@ -24,7 +26,16 @@ declare module "fastify" {
 
   interface FastifyRequest {
     authActorId: string;
-    authActorSource: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion" | "a2a_peer";
+    authActorSource:
+      | "none"
+      | "token"
+      | "basic"
+      | "loopback"
+      | "sse"
+      | "device"
+      | "companion"
+      | "a2a_peer"
+      | "mesh_node";
     authDeviceId?: string;
     authGrantId?: string;
     authCompanionSessionId?: string;
@@ -36,6 +47,12 @@ declare module "fastify" {
      */
     authPrincipalPurpose?: CompanionPrincipalPurpose;
     a2aPeerId?: string;
+    /**
+     * HX-408: server-resolved admitted mesh-node identity, set only by the
+     * mesh-node route access class after the durable admission credential
+     * verifies. Never derived from request bodies.
+     */
+    meshNodeIdentity?: MeshCapabilityAuthenticatedNodeIdentity;
   }
 }
 
@@ -67,6 +84,7 @@ export const authPlugin = fp(async (fastify) => {
   fastify.decorateRequest("authCompanionSessionId", undefined);
   fastify.decorateRequest("authPrincipalPurpose", undefined);
   fastify.decorateRequest("a2aPeerId", undefined);
+  fastify.decorateRequest("meshNodeIdentity", undefined);
 
   fastify.decorate(
     "issueSseToken",
@@ -104,6 +122,7 @@ export const authPlugin = fp(async (fastify) => {
     request.authCompanionSessionId = undefined;
     request.authPrincipalPurpose = undefined;
     request.a2aPeerId = undefined;
+    request.meshNodeIdentity = undefined;
     if (request.method === "OPTIONS") {
       return;
     }
@@ -127,6 +146,13 @@ export const authPlugin = fp(async (fastify) => {
       isTelegramWebhookPath(request.url) ||
       isWhatsAppWebhookPath(request.url)
     ) {
+      return;
+    }
+    // HX-408: admitted-node publication routes carry the node's durable
+    // join-token credential, not operator authority. Leave them
+    // unauthenticated here (in every auth mode); the mesh-node route access
+    // class fails closed unless the admission owner verifies the credential.
+    if (isMeshCapabilityNodePublicationPath(request.url)) {
       return;
     }
 
@@ -598,10 +624,19 @@ function findOldestSseTokenKey(store: Map<string, SseTokenRecord>, actorId: stri
 function setAuthActor(
   request: {
     authActorId?: string;
-    authActorSource?: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion" | "a2a_peer";
+    authActorSource?:
+      | "none"
+      | "token"
+      | "basic"
+      | "loopback"
+      | "sse"
+      | "device"
+      | "companion"
+      | "a2a_peer"
+      | "mesh_node";
   },
   actorId: string,
-  source: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion" | "a2a_peer",
+  source: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion" | "a2a_peer" | "mesh_node",
 ): void {
   request.authActorId = actorId;
   request.authActorSource = source;

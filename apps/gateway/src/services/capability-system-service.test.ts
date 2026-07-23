@@ -10,6 +10,7 @@ import type {
   ApprovalRequest,
   ApprovalResolveInput,
   CapabilityArtifactRecord,
+  CapabilityCatalogEntry,
   CapabilityCatalogSnapshotRecord,
   CapabilityProposalEventRecord,
   CapabilityProposalRecord,
@@ -2290,6 +2291,79 @@ describe("CapabilitySystemService", () => {
     });
     expect(proposalDetail.events).toHaveLength(1);
     expect(proposalDetail.events[0]?.eventType).toBe("created");
+  });
+
+  it("projects mesh publication entries into the inspectable catalog with callable truth preserved", async () => {
+    const meshProjection = {
+      nodeId: "node-a",
+      admissionGeneration: 1,
+      publisherGeneration: 1,
+      manifestSha256: "a".repeat(64),
+      entrySha256: "b".repeat(64),
+      localId: "project.status",
+      capabilityKind: "tool" as const,
+      status: "review_required" as const,
+      reasons: ["operator_review_required"],
+      effectPosture: "read_only" as const,
+    };
+    const meshEntries: CapabilityCatalogEntry[] = [
+      {
+        capabilityId: "mesh:node-a:tool:project.status",
+        kind: "mesh_tool",
+        category: "mesh_published",
+        title: "Project status",
+        summary: "Mesh tool published by node node-a.",
+        callable: false,
+        mesh: meshProjection,
+      },
+      {
+        capabilityId: "mesh:node-a:skill:project.guide",
+        kind: "mesh_skill",
+        category: "mesh_published",
+        title: "Project guide",
+        summary: "Mesh skill published by node node-a.",
+        callable: false,
+        mesh: { ...meshProjection, localId: "project.guide", capabilityKind: "skill" },
+      },
+      {
+        capabilityId: "mesh:node-a:tool:project.active",
+        kind: "mesh_tool",
+        category: "mesh_published",
+        title: "Project active",
+        summary: "Mesh tool with a live activation.",
+        callable: true,
+        mesh: { ...meshProjection, localId: "project.active", status: "active", reasons: ["activation_live"] },
+      },
+    ];
+    const harness = await createHarness({ meshCatalogEntries: meshEntries });
+
+    const inspectable = harness.service.listCatalog("inspectable");
+    const meshInspectable = inspectable.filter((entry) => entry.category === "mesh_published");
+    expect(meshInspectable.map((entry) => entry.capabilityId)).toEqual([
+      "mesh:node-a:tool:project.status",
+      "mesh:node-a:skill:project.guide",
+      "mesh:node-a:tool:project.active",
+    ]);
+    expect(meshInspectable[0]?.mesh?.status).toBe("review_required");
+
+    const callable = harness.service.listCatalog("callable");
+    expect(callable.filter((entry) => entry.kind === "mesh_skill")).toEqual([]);
+    expect(callable.filter((entry) => entry.category === "mesh_published").map((entry) => entry.capabilityId)).toEqual([
+      "mesh:node-a:tool:project.active",
+    ]);
+    // Mesh entries never satisfy the local-tool filters that feed tool schema
+    // resolution and code-mode wrappers.
+    const snapshot = harness.service.freezeCatalogSnapshot();
+    expect(
+      snapshot.callableEntries.some((entry) => entry.kind === "tool" && entry.capabilityId.startsWith("mesh:")),
+    ).toBe(false);
+    const directory = harness.service.getCompactToolDirectorySnapshot();
+    expect(directory.tools.some((tool) => tool.capabilityId.startsWith("mesh:"))).toBe(false);
+  });
+
+  it("keeps the catalog unchanged when no mesh projection producer is composed", async () => {
+    const harness = await createHarness();
+    expect(harness.service.listCatalog("inspectable").some((entry) => entry.category === "mesh_published")).toBe(false);
   });
 
   it("lists catalog snapshots, runs, proposals, and inline approval queue items", async () => {
@@ -4962,6 +5036,7 @@ async function createHarness(input?: {
   reserveApprovalWaitRun?: boolean;
   spawnCodeModeChild?: ConstructorParameters<typeof CapabilitySystemService>[0]["spawnCodeModeChild"];
   loadedSkills?: LoadedSkill[];
+  meshCatalogEntries?: CapabilityCatalogEntry[];
 }) {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-capability-system-"));
   tempRoots.push(rootDir);
@@ -5043,6 +5118,9 @@ async function createHarness(input?: {
       codeModeV1Enabled: true,
     }),
     listToolCatalog: () => input?.toolCatalog ?? [createTool("tool.safe_read")],
+    ...(input?.meshCatalogEntries === undefined
+      ? {}
+      : { listMeshCapabilityCatalogEntries: () => input.meshCatalogEntries as CapabilityCatalogEntry[] }),
     listLoadedSkills: () => input?.loadedSkills ?? [],
     readSkillStates: () => new Map(),
     invokeTool,

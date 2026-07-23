@@ -16,6 +16,11 @@ export type RouteAccessClass =
   | "device"
   | "companion"
   | "a2a-peer"
+  // HX-408: admitted mesh-node publication routes. Authentication is the
+  // node's durable admission credential (join-token digest plus mTLS
+  // binding), verified by the mesh capability publication owner; ordinary
+  // operator/companion authority never satisfies it.
+  | "mesh-node"
   | "sse-read"
   | "webhook"
   // Purpose-aware session-control classes. No route registers the two companion
@@ -171,6 +176,7 @@ function resolveAccessPreHandler(fastify: FastifyInstance, accessClass: RouteAcc
     case "device":
     case "companion":
     case "a2a-peer":
+    case "mesh-node":
     case "sse-read":
     case "device-session-exchange":
     case "session-control-companion":
@@ -230,6 +236,8 @@ async function enforceRouteAccessClass(
       return fastify.requireOperatorAuth(request, reply);
     case "a2a-peer":
       return requireA2APeerAccess(fastify, request, reply);
+    case "mesh-node":
+      return requireMeshNodeAccess(fastify, request, reply);
     case "sse-read": {
       const authMode = resolveConfiguredAuthMode(fastify);
       if (!authMode || authMode === "none") {
@@ -336,6 +344,51 @@ function requireA2APeerAccess(
   request.authActorId = `a2a:${result.peerId}`;
   request.authActorSource = "a2a_peer";
   request.a2aPeerId = result.peerId;
+}
+
+/**
+ * HX-408: verifies the admitted mesh-node credential through the mesh
+ * capability publication owner. Identity comes exclusively from the durable
+ * node-admission authority the service reads; on success the request carries
+ * the resolved identity tuple for the route handler. Operator, device, and
+ * companion credentials always fail this check, keeping the publication
+ * surface isolated from ordinary console authority.
+ */
+function requireMeshNodeAccess(
+  fastify: FastifyInstance,
+  request: FastifyRequest,
+  reply: FastifyReply,
+): void | ReturnType<FastifyReply["send"]> {
+  const service = (
+    fastify as unknown as {
+      services?: { meshCapabilityPublication?: { authenticateNodeRequest?: unknown } };
+    }
+  ).services?.meshCapabilityPublication;
+  if (typeof service?.authenticateNodeRequest !== "function") {
+    return reply.code(500).send({
+      error: "Admitted mesh-node authentication is not installed for this route.",
+    });
+  }
+  const result = service.authenticateNodeRequest(request) as
+    | {
+        identity: {
+          workspaceId: string;
+          nodeId: string;
+          admissionGeneration: number;
+          mtlsRequired: boolean;
+          tlsFingerprint?: string;
+        };
+      }
+    | { statusCode: number; reason: string; message: string };
+  if ("statusCode" in result) {
+    return reply.code(result.statusCode).send({
+      error: result.message,
+      reason: result.reason,
+    });
+  }
+  request.authActorId = `mesh-node:${result.identity.nodeId}`;
+  request.authActorSource = "mesh_node";
+  request.meshNodeIdentity = result.identity;
 }
 
 function requireAuthenticatedAccess(
