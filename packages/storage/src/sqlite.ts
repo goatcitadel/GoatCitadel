@@ -266,7 +266,19 @@ export function createDatabase(options: SqliteOptions): DatabaseClient {
   if (options.tuning?.journalSizeLimitBytes !== undefined) {
     db.exec(`PRAGMA journal_size_limit = ${clampInt(options.tuning.journalSizeLimitBytes, -1, -1, 268435456)};`);
   }
-  migrate(db);
+  try {
+    migrate(db);
+  } catch (error) {
+    // Close the handle so a failed migration does not keep the database file locked;
+    // on Windows a leaked handle turns later cleanup into EPERM noise that masks the
+    // migration error itself.
+    try {
+      db.close();
+    } catch {
+      // Surface the migration failure, not the close failure.
+    }
+    throw error;
+  }
   return new SqliteDatabaseClient(db);
 }
 

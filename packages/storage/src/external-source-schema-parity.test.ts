@@ -7,7 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, it } from "node:test";
 import type { DatabaseClient } from "./db.js";
 import { POSTGRES_MIGRATIONS } from "./postgres/migrations.js";
-import { createDatabase } from "./sqlite.js";
+import { __sqliteInternals, createDatabase } from "./sqlite.js";
 
 const TABLES = [
   "external_source_configs",
@@ -150,6 +150,14 @@ describe("HX-407 paired external-source schema parity", () => {
         VALUES (?, ?, '2026-07-14T08:00:00.000Z')
       `);
       for (let version = 1; version <= 165; version += 1) mark.run(version, `legacy-${version}`);
+      // The session-control migrations (172-174) fail closed unless the database carries the
+      // real session/auth predecessor tables, so apply just their creators: chat workspace (10),
+      // agentic chat (13), agentic depth (17), device auth (27), companion sessions (45), and
+      // chat turn capability profiles (154). Every external-source table stays absent, which is
+      // the sparse premise under test.
+      for (const version of [10, 13, 17, 27, 45, 154]) {
+        __sqliteInternals.applySchemaMigrationForTest(version, sparse);
+      }
       sparse.close();
 
       const migrated = createDatabase({ dbPath });

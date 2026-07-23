@@ -5,7 +5,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { createDatabase } from "./sqlite.js";
+import { __sqliteInternals, createDatabase } from "./sqlite.js";
 import { OrchestrationRepository } from "./orchestration-repo.js";
 import type { OrchestrationPlan, OrchestrationRun } from "@goatcitadel/contracts";
 
@@ -328,6 +328,18 @@ describe("OrchestrationRepository", () => {
         name TEXT NOT NULL,
         applied_at TEXT NOT NULL
       );
+    `);
+    // Migrations 172+ fail closed on databases that claim applied history without the real
+    // predecessor tables, so build the genuine v92 schema before installing the legacy
+    // orchestration shapes that predate workspace scoping.
+    for (let version = 1; version < 93; version += 1) {
+      __sqliteInternals.applySchemaMigrationForTest(version, legacy);
+    }
+    legacy.exec(`
+      DROP TABLE IF EXISTS orchestration_events;
+      DROP TABLE IF EXISTS orchestration_checkpoints;
+      DROP TABLE IF EXISTS orchestration_runs;
+      DROP TABLE IF EXISTS orchestration_plans;
       CREATE TABLE orchestration_plans (
         plan_id TEXT PRIMARY KEY,
         plan_json TEXT NOT NULL,
