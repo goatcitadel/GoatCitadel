@@ -18,14 +18,17 @@ import {
   normalizeCreateRemoteWorkerBootstrapRequest,
   normalizeFinalizeRemoteWorkerBootstrapAdmissionCommand,
   normalizeRemoteWorkerGenerationControlInput,
+  normalizeRemoteWorkerNonceAuthority,
   normalizeRotateRemoteWorkerRuntimeCredentialCommand,
   remoteWorkerBootstrapAdmissionReplayMaterial,
   remoteWorkerBootstrapReplayMaterial,
+  remoteWorkerNonceAuthorityProtocolBinding,
   remoteWorkerRuntimeCredentialClaimsSha256,
   remoteWorkerRuntimeCredentialRotationReplayMaterial,
   type CreateRemoteWorkerBootstrapCommand,
   type CreateRemoteWorkerBootstrapRequest,
   type FinalizeRemoteWorkerBootstrapAdmissionCommand,
+  type RemoteWorkerNonceAuthority,
   type RemoteWorkerRuntimeCredentialClaims,
   type RemoteWorkerRuntimeManifest,
   type RotateRemoteWorkerRuntimeCredentialCommand,
@@ -479,5 +482,131 @@ describe("remote worker admission contracts", () => {
       }),
     ).toThrow(/runtime target does not match/u);
     expect(JSON.stringify(record)).not.toMatch(/bootstrapSecret|credentialToken|expectedPublicKey|expectedClient/u);
+  });
+});
+
+describe("RemoteWorkerNonceAuthority (HX-501B1)", () => {
+  const bootstrapAuthority: RemoteWorkerNonceAuthority = {
+    kind: "bootstrap",
+    registryWorkspaceId: "default",
+    workerId: "worker-a",
+    targetWorkerGeneration: 3,
+    bootstrapId: "bootstrap-a",
+  };
+  const credentialAuthority: RemoteWorkerNonceAuthority = {
+    kind: "credential",
+    registryWorkspaceId: "default",
+    workerId: "worker-a",
+    workerGeneration: 2,
+    credentialGeneration: 5,
+    credentialId: "credential-a",
+  };
+
+  it("normalizes and freezes an exact bootstrap authority", () => {
+    const normalized = normalizeRemoteWorkerNonceAuthority({ ...bootstrapAuthority });
+    expect(normalized).toStrictEqual(bootstrapAuthority);
+    expect(Object.isFrozen(normalized)).toBe(true);
+  });
+
+  it("normalizes and freezes an exact credential authority", () => {
+    const normalized = normalizeRemoteWorkerNonceAuthority({ ...credentialAuthority });
+    expect(normalized).toStrictEqual(credentialAuthority);
+    expect(Object.isFrozen(normalized)).toBe(true);
+  });
+
+  it("maps the protocol binding exactly per discriminant", () => {
+    expect(remoteWorkerNonceAuthorityProtocolBinding(bootstrapAuthority)).toStrictEqual({
+      authorityId: "bootstrap-a",
+      authorityGeneration: 3,
+    });
+    expect(remoteWorkerNonceAuthorityProtocolBinding(credentialAuthority)).toStrictEqual({
+      authorityId: "credential-a",
+      authorityGeneration: 5,
+    });
+  });
+
+  it("rejects unknown keys on either variant", () => {
+    expect(() => normalizeRemoteWorkerNonceAuthority({ ...bootstrapAuthority, extra: 1 })).toThrow(/unknown fields/u);
+    expect(() =>
+      normalizeRemoteWorkerNonceAuthority({ ...credentialAuthority, credentialId: "x", extra: "y" }),
+    ).toThrow(/unknown fields/u);
+  });
+
+  it("rejects a missing required field", () => {
+    const { bootstrapId: _omit, ...partial } = bootstrapAuthority;
+    expect(() => normalizeRemoteWorkerNonceAuthority(partial)).toThrow(/missing required field/u);
+  });
+
+  it("rejects an unsupported or absent discriminant", () => {
+    expect(() => normalizeRemoteWorkerNonceAuthority({ ...bootstrapAuthority, kind: "operator" })).toThrow(
+      /kind is unsupported/u,
+    );
+    expect(() => normalizeRemoteWorkerNonceAuthority({ registryWorkspaceId: "default" })).toThrow(
+      /kind is unsupported/u,
+    );
+  });
+
+  it("rejects prototype-poisoned records", () => {
+    const poisoned = Object.assign(Object.create({ injected: true }), bootstrapAuthority);
+    expect(() => normalizeRemoteWorkerNonceAuthority(poisoned)).toThrow(/plain object/u);
+  });
+
+  it("rejects accessor (getter) fields", () => {
+    const withAccessor = {
+      kind: "bootstrap",
+      registryWorkspaceId: "default",
+      workerId: "worker-a",
+      targetWorkerGeneration: 3,
+      get bootstrapId() {
+        return "bootstrap-a";
+      },
+    };
+    expect(() => normalizeRemoteWorkerNonceAuthority(withAccessor)).toThrow(/plain data fields/u);
+  });
+
+  it("rejects symbol keys", () => {
+    const withSymbol: Record<string | symbol, unknown> = { ...bootstrapAuthority };
+    withSymbol[Symbol("injected")] = true;
+    expect(() => normalizeRemoteWorkerNonceAuthority(withSymbol)).toThrow(/symbol keys/u);
+  });
+
+  it("rejects a proxy that diverges between reads and any non-primitive field", () => {
+    let reads = 0;
+    const proxy = new Proxy(
+      { ...bootstrapAuthority },
+      {
+        get(target, key, receiver) {
+          if (key === "bootstrapId") {
+            reads += 1;
+            return `bootstrap-${reads}`;
+          }
+          return Reflect.get(target, key, receiver);
+        },
+      },
+    );
+    // The rebuilt value reads each field exactly once; a later divergent read
+    // cannot alter the frozen binding.
+    const normalized = normalizeRemoteWorkerNonceAuthority(proxy);
+    expect(normalized.kind === "bootstrap" && normalized.bootstrapId).toBe("bootstrap-1");
+    expect(() =>
+      normalizeRemoteWorkerNonceAuthority({
+        ...bootstrapAuthority,
+        bootstrapId: { nested: "obj" } as unknown as string,
+      }),
+    ).toThrow(/not a canonical identifier/u);
+  });
+
+  it("rejects arrays and null", () => {
+    expect(() => normalizeRemoteWorkerNonceAuthority([bootstrapAuthority])).toThrow(/must be an object/u);
+    expect(() => normalizeRemoteWorkerNonceAuthority(null)).toThrow(/must be an object/u);
+  });
+
+  it("rejects non-positive or non-integer generations", () => {
+    expect(() => normalizeRemoteWorkerNonceAuthority({ ...bootstrapAuthority, targetWorkerGeneration: 0 })).toThrow(
+      /positive safe integer/u,
+    );
+    expect(() => normalizeRemoteWorkerNonceAuthority({ ...credentialAuthority, credentialGeneration: 1.5 })).toThrow(
+      /positive safe integer/u,
+    );
   });
 });

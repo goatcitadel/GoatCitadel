@@ -239,6 +239,40 @@ export interface RemoteWorkerGenerationControlInput {
   idempotencyKey: string;
 }
 
+/**
+ * HX-501B1 durable request-nonce authority. This is the ONLY authority shape the
+ * nonce-consumption storage port accepts: a strict discriminated binding to the
+ * exact bootstrap or credential parent, carrying no secret material. The raw
+ * nonce, authorization credential, TLS exporter, certificate, public key,
+ * request body, and proof never appear here — only the nonce digest, canonical
+ * request timestamp, and expiry accompany this authority across the port.
+ *
+ * Protocol identity mapping is exact:
+ *   - bootstrap  `authorityId = bootstrapId`,  `authorityGeneration = targetWorkerGeneration`;
+ *   - credential `authorityId = credentialId`, `authorityGeneration = credentialGeneration`.
+ */
+export type RemoteWorkerNonceAuthority =
+  | {
+      readonly kind: "bootstrap";
+      readonly registryWorkspaceId: string;
+      readonly workerId: string;
+      readonly targetWorkerGeneration: number;
+      readonly bootstrapId: string;
+    }
+  | {
+      readonly kind: "credential";
+      readonly registryWorkspaceId: string;
+      readonly workerId: string;
+      readonly workerGeneration: number;
+      readonly credentialGeneration: number;
+      readonly credentialId: string;
+    };
+
+export interface RemoteWorkerNonceAuthorityProtocolBinding {
+  readonly authorityId: string;
+  readonly authorityGeneration: number;
+}
+
 export function assertRemoteWorkerRuntimeManifest(manifest: unknown): asserts manifest is RemoteWorkerRuntimeManifest {
   assertRecord(manifest, "runtimeManifest");
   assertExactKeys(
@@ -946,6 +980,64 @@ export function assertRemoteWorkerGenerationControlRecord(
   assertIsoTimestamp(record.createdAt, "createdAt");
 }
 
+/**
+ * Strict plain-data normalization of a durable nonce authority. Rejects unknown
+ * keys, prototype-poisoned records, accessor properties, symbol keys, and any
+ * non-primitive (proxy/cycle-bearing) field, then rebuilds a frozen plain
+ * object read exactly once so a hostile proxy cannot observe or diverge between
+ * the validation and the persisted binding. Only the discriminated primitive
+ * identity survives.
+ */
+export function normalizeRemoteWorkerNonceAuthority(input: unknown): RemoteWorkerNonceAuthority {
+  assertStrictPlainRecord(input, "nonce authority");
+  if (input.kind === "bootstrap") {
+    assertExactKeys(
+      input,
+      ["kind", "registryWorkspaceId", "workerId", "targetWorkerGeneration", "bootstrapId"],
+      "bootstrap nonce authority",
+    );
+    return Object.freeze({
+      kind: "bootstrap" as const,
+      registryWorkspaceId: assertIdentifier(input.registryWorkspaceId, "registryWorkspaceId", 256),
+      workerId: assertIdentifier(input.workerId, "workerId", 256),
+      targetWorkerGeneration: assertPositiveInteger(input.targetWorkerGeneration, "targetWorkerGeneration"),
+      bootstrapId: assertIdentifier(input.bootstrapId, "bootstrapId", 256),
+    });
+  }
+  if (input.kind === "credential") {
+    assertExactKeys(
+      input,
+      ["kind", "registryWorkspaceId", "workerId", "workerGeneration", "credentialGeneration", "credentialId"],
+      "credential nonce authority",
+    );
+    return Object.freeze({
+      kind: "credential" as const,
+      registryWorkspaceId: assertIdentifier(input.registryWorkspaceId, "registryWorkspaceId", 256),
+      workerId: assertIdentifier(input.workerId, "workerId", 256),
+      workerGeneration: assertPositiveInteger(input.workerGeneration, "workerGeneration"),
+      credentialGeneration: assertPositiveInteger(input.credentialGeneration, "credentialGeneration"),
+      credentialId: assertIdentifier(input.credentialId, "credentialId", 256),
+    });
+  }
+  throw new TypeError("Remote worker nonce authority kind is unsupported.");
+}
+
+/**
+ * The exact top-level protocol identity a nonce authority binds to. Bootstrap
+ * authorities surface the bootstrap id and target generation; credential
+ * authorities surface the credential id and credential generation.
+ */
+export function remoteWorkerNonceAuthorityProtocolBinding(
+  authority: RemoteWorkerNonceAuthority,
+): RemoteWorkerNonceAuthorityProtocolBinding {
+  const normalized = normalizeRemoteWorkerNonceAuthority(authority);
+  return Object.freeze(
+    normalized.kind === "bootstrap"
+      ? { authorityId: normalized.bootstrapId, authorityGeneration: normalized.targetWorkerGeneration }
+      : { authorityId: normalized.credentialId, authorityGeneration: normalized.credentialGeneration },
+  );
+}
+
 function normalizeCapabilityClasses(value: readonly RemoteWorkerCapabilityClass[]): RemoteWorkerCapabilityClass[] {
   if (!Array.isArray(value) || value.length < 1 || value.length > REMOTE_WORKER_MAX_CAPABILITY_CLASSES) {
     throw new TypeError("Remote worker capabilityClasses must contain between 1 and 9 values.");
@@ -1101,6 +1193,22 @@ function assertEnum<T extends string>(value: unknown, values: readonly T[], fiel
 function assertRecord(value: unknown, field: string): asserts value is Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new TypeError(`Remote worker ${field} must be an object.`);
+  }
+}
+
+function assertStrictPlainRecord(value: unknown, field: string): asserts value is Record<string, unknown> {
+  assertRecord(value, field);
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError(`Remote worker ${field} must be a plain object.`);
+  }
+  if (Object.getOwnPropertySymbols(value).length > 0) {
+    throw new TypeError(`Remote worker ${field} must not carry symbol keys.`);
+  }
+  for (const descriptor of Object.values(Object.getOwnPropertyDescriptors(value))) {
+    if (typeof descriptor.get === "function" || typeof descriptor.set === "function") {
+      throw new TypeError(`Remote worker ${field} must contain only plain data fields.`);
+    }
   }
 }
 
