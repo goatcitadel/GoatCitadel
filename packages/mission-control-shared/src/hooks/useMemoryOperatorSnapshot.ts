@@ -44,7 +44,8 @@ type Notice = {
 type MemoryAdminState = "enabled" | "disabled" | "unknown";
 
 type MemoryBatchMutationOperations = Parameters<typeof batchMutateMemoryItems>[0]["operations"];
-type MemoryBatchMutationResponse = Awaited<ReturnType<typeof batchMutateMemoryItems>>;
+type MemoryMutationApprovalEnvelope = Awaited<ReturnType<typeof batchMutateMemoryItems>>;
+type MemoryPendingMutationApproval = MemoryMutationApprovalEnvelope["pendingApproval"];
 
 type MemoryOperatorSectionErrors = {
   settings: string | null;
@@ -98,6 +99,10 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
   const [notice, setNotice] = useState<Notice | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [data, setData] = useState<MemoryOperatorSnapshot | null>(null);
+  // HX-402 P1: mutation verbs request `memory.lifecycle` approvals instead of
+  // mutating directly. Pending approvals are surfaced honestly so the page can
+  // show that nothing changed yet and where to resolve the request.
+  const [pendingMutationApprovals, setPendingMutationApprovals] = useState<MemoryPendingMutationApproval[]>([]);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [policyDraft, setPolicyDraft] = useState<MemoryMaintenancePolicyDraft | null>(null);
@@ -401,6 +406,17 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
     [data?.maintenanceRuns, selectedRunId],
   );
 
+  const trackPendingMutationApproval = useCallback((pendingApproval: MemoryPendingMutationApproval) => {
+    setPendingMutationApprovals((current) => [
+      pendingApproval,
+      ...current.filter((existing) => existing.approvalId !== pendingApproval.approvalId),
+    ]);
+  }, []);
+
+  const dismissPendingMutationApproval = useCallback((approvalId: string) => {
+    setPendingMutationApprovals((current) => current.filter((existing) => existing.approvalId !== approvalId));
+  }, []);
+
   const saveItemPatch = useCallback(
     async (
       itemId: string,
@@ -435,23 +451,19 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
       setBusyKey(`item:${itemId}`);
       setNotice(null);
       try {
-        const updated = await patchMemoryItem(itemId, patch);
-        setData((current) =>
-          current
-            ? {
-                ...current,
-                memoryItems: current.memoryItems.map((item) => (item.itemId === itemId ? updated : item)),
-              }
-            : current,
-        );
-        setNotice({ tone: "success", message: "Memory item updated." });
+        const outcome = await patchMemoryItem(itemId, patch);
+        trackPendingMutationApproval(outcome.pendingApproval);
+        setNotice({
+          tone: "info",
+          message: `Memory item update requires approval ${outcome.pendingApproval.approvalId}. Nothing changed yet — resolve it from Approvals to apply.`,
+        });
       } catch (patchError) {
         setNotice({ tone: "error", message: getErrorMessage(patchError) });
       } finally {
         setBusyKey(null);
       }
     },
-    [data?.memoryAdminState],
+    [data?.memoryAdminState, trackPendingMutationApproval],
   );
 
   const forgetSelectedItem = useCallback(async () => {
@@ -468,33 +480,35 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
     setBusyKey(`forget:${selectedItem.itemId}`);
     setNotice(null);
     try {
-      const updated = await forgetMemoryItem(selectedItem.itemId);
-      setData((current) =>
-        current
-          ? {
-              ...current,
-              memoryItems: current.memoryItems.map((item) => (item.itemId === updated.itemId ? updated : item)),
-            }
-          : current,
-      );
-      setNotice({ tone: "success", message: "Memory item forgotten." });
+      const outcome = await forgetMemoryItem(selectedItem.itemId);
+      if (outcome.pendingApproval) {
+        trackPendingMutationApproval(outcome.pendingApproval);
+        setNotice({
+          tone: "info",
+          message: `Memory forget requires approval ${outcome.pendingApproval.approvalId}. Nothing changed yet — resolve it from Approvals to apply.`,
+        });
+      } else {
+        setNotice({ tone: "info", message: "Memory item is already forgotten; no approval is needed." });
+      }
     } catch (forgetError) {
       setNotice({ tone: "error", message: getErrorMessage(forgetError) });
     } finally {
       setBusyKey(null);
     }
-  }, [data?.memoryAdminState, selectedItem]);
+  }, [data?.memoryAdminState, selectedItem, trackPendingMutationApproval]);
 
-  // Shared workhorse for atomic multi-item mutations (forget / pin). Mirrors saveItemPatch's
-  // admin-gate + busyKey + notice conventions, but never chunks oversized batches -- the
-  // >100 guard mirrors the server's 1..100 schema so an oversized batch fails fast client-side
-  // instead of silently splitting into multiple non-atomic requests.
+  // Shared workhorse for atomic multi-item mutations (forget / pin). HX-402
+  // P1: the batch verb routes through the approval flow — one
+  // `memory.lifecycle` approval governs the whole batch and nothing mutates
+  // until it resolves. The >100 guard mirrors the server's 1..100 schema so an
+  // oversized batch fails fast client-side instead of silently splitting into
+  // multiple non-atomic requests.
   const runBatchMutation = useCallback(
     async (
       busyKey: string,
       operations: MemoryBatchMutationOperations,
-      successMessage: (appliedCount: number) => string,
-    ): Promise<MemoryBatchMutationResponse | undefined> => {
+      requestLabel: string,
+    ): Promise<MemoryMutationApprovalEnvelope | undefined> => {
       if (data?.memoryAdminState !== "enabled") {
         setNotice({
           tone: "warning",
@@ -515,29 +529,24 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
       setBusyKey(busyKey);
       setNotice(null);
       try {
-        const response = await batchMutateMemoryItems({ source: "mission-control:library", operations });
-        const updatedById = new Map(response.results.map((result) => [result.itemId, result.item]));
-        setData((current) =>
-          current
-            ? {
-                ...current,
-                memoryItems: current.memoryItems.map((item) => updatedById.get(item.itemId) ?? item),
-              }
-            : current,
-        );
-        setNotice({ tone: "success", message: successMessage(response.appliedCount) });
-        return response;
+        const envelope = await batchMutateMemoryItems({ source: "mission-control:library", operations });
+        trackPendingMutationApproval(envelope.pendingApproval);
+        setNotice({
+          tone: "info",
+          message: `${requestLabel} requires approval ${envelope.pendingApproval.approvalId}. Nothing changed yet — resolve it from Approvals to apply atomically.`,
+        });
+        return envelope;
       } catch (batchError) {
         setNotice({
           tone: "error",
-          message: `Batch failed — no changes were applied. ${getErrorMessage(batchError)}`,
+          message: `Batch request failed — no changes were applied. ${getErrorMessage(batchError)}`,
         });
         return undefined;
       } finally {
         setBusyKey(null);
       }
     },
-    [data?.memoryAdminState],
+    [data?.memoryAdminState, trackPendingMutationApproval],
   );
 
   const batchForgetItems = useCallback(
@@ -545,7 +554,7 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
       runBatchMutation(
         "memory-batch:forget",
         itemIds.map((itemId) => ({ kind: "forget_item" as const, itemId })),
-        (appliedCount) => `Forgot ${appliedCount} memory item(s).`,
+        `Forgetting ${itemIds.length} memory item(s)`,
       ),
     [runBatchMutation],
   );
@@ -555,7 +564,7 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
       runBatchMutation(
         `memory-batch:pin:${pinned}`,
         itemIds.map((itemId) => ({ kind: "patch_item" as const, itemId, patch: { pinned } })),
-        (appliedCount) => `${pinned ? "Pinned" : "Unpinned"} ${appliedCount} memory item(s).`,
+        `${pinned ? "Pinning" : "Unpinning"} ${itemIds.length} memory item(s)`,
       ),
     [runBatchMutation],
   );
@@ -738,6 +747,8 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
     notice,
     busyKey,
     data,
+    pendingMutationApprovals,
+    dismissPendingMutationApproval,
     selectedItem,
     selectedItemId,
     setSelectedItemId,

@@ -61,9 +61,9 @@ export function MemoryBatchToolbar({
       </div>
       <ConfirmModal
         open={pendingForget}
-        title={`Forget ${count} memory item(s)?`}
-        message="This action is applied atomically — either all are forgotten or none are."
-        confirmLabel="Forget"
+        title={`Request approval to forget ${count} memory item(s)?`}
+        message="Nothing is forgotten yet: this creates one memory.lifecycle approval, and after it is approved the batch applies atomically — either all are forgotten or none are."
+        confirmLabel="Request approval"
         danger
         pending={forgetBusy}
         disableDismiss={forgetBusy}

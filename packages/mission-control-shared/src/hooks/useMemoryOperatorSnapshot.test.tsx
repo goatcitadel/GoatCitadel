@@ -100,6 +100,30 @@ async function mountHook(onValue: (value: HookValue) => void) {
   return mounted;
 }
 
+/** HX-402 P1: canonical pending memory.lifecycle approval envelope fixture. */
+function buildPendingApprovalEnvelope(
+  approvalId: string,
+  action: "item_updated" | "items_forgotten" | "batch_mutated",
+  itemIds: string[],
+) {
+  return {
+    pendingApproval: {
+      approvalId,
+      status: "pending",
+      kind: "memory.lifecycle" as const,
+      action,
+      subjectKind: itemIds.length === 1 ? ("memory_item" as const) : ("memory_item_batch" as const),
+      subjectId: itemIds.length === 1 ? itemIds[0] : undefined,
+      workspaceId: "default",
+      requestSha256: "a".repeat(64),
+      expectedStateSha256: "b".repeat(64),
+      createdAt: "2026-04-22T00:05:00.000Z",
+      replayed: false,
+      itemIds,
+    },
+  };
+}
+
 describe("useMemoryOperatorSnapshot", () => {
   let renderer: ReactTestRenderer | null = null;
   let latest: HookValue | null = null;
@@ -360,30 +384,17 @@ describe("useMemoryOperatorSnapshot", () => {
     });
     apiMocks.fetchDurableRun.mockResolvedValue({ runId: "durable-1", status: "completed" });
     apiMocks.fetchDurableRunTimeline.mockResolvedValue({ items: [] });
-    apiMocks.patchMemoryItem.mockImplementation(async (_itemId, patch) => ({
-      itemId: "mem-1",
-      namespace: "workspace.alpha",
-      title: patch.title ?? "Deployment note",
-      content: patch.content ?? "Ship after verification.",
-      pinned: patch.pinned ?? true,
-      status: "active",
-      lifecycleState: "active",
-      updatedAt: "2026-04-22T00:05:00.000Z",
-      ttlOverrideSeconds: patch.ttlOverrideSeconds ?? 3600,
-      expiresAt: "2026-04-23T00:05:00.000Z",
-    }));
-    apiMocks.forgetMemoryItem.mockResolvedValue({
-      itemId: "mem-1",
-      namespace: "workspace.alpha",
-      title: "Deployment note",
-      content: "Ship after verification.",
-      pinned: false,
-      status: "forgotten",
-      lifecycleState: "forgotten",
-      updatedAt: "2026-04-22T00:06:00.000Z",
-      ttlOverrideSeconds: null,
-      expiresAt: null,
-    });
+    // HX-402 P1: mutation verbs answer with pending memory.lifecycle
+    // approval envelopes — never with an executed mutation.
+    apiMocks.patchMemoryItem.mockResolvedValue(
+      buildPendingApprovalEnvelope("approval-patch-1", "item_updated", ["mem-1"]),
+    );
+    apiMocks.forgetMemoryItem.mockResolvedValue(
+      buildPendingApprovalEnvelope("approval-forget-1", "items_forgotten", ["mem-1"]),
+    );
+    apiMocks.batchMutateMemoryItems.mockResolvedValue(
+      buildPendingApprovalEnvelope("approval-batch-1", "batch_mutated", ["mem-1", "mem-2"]),
+    );
     apiMocks.runMemoryMaintenanceNow.mockResolvedValue({ queued: true, runId: "run-queued" });
     apiMocks.runMemoryQualityScan.mockResolvedValue({
       generatedAt: "2026-04-22T00:00:00.000Z",
@@ -506,7 +517,7 @@ describe("useMemoryOperatorSnapshot", () => {
     });
   });
 
-  it("updates and forgets the selected item without losing lifecycle truth", async () => {
+  it("requests item mutation approvals honestly without pretending anything changed", async () => {
     renderer = await mountHook((value) => {
       latest = value;
     });
@@ -523,8 +534,12 @@ describe("useMemoryOperatorSnapshot", () => {
       title: "Updated note",
       ttlOverrideSeconds: 120,
     });
-    expect(latest?.selectedItem?.title).toBe("Updated note");
-    expect(latest?.notice).toEqual({ tone: "success", message: "Memory item updated." });
+    // HX-402 P1: the verb only REQUESTS an approval. The snapshot keeps the
+    // original truth and the pending approval is tracked explicitly.
+    expect(latest?.selectedItem?.title).toBe("Deployment note");
+    expect(latest?.notice?.tone).toBe("info");
+    expect(latest?.notice?.message).toContain("requires approval approval-patch-1");
+    expect(latest?.pendingMutationApprovals.map((pending) => pending.approvalId)).toContain("approval-patch-1");
 
     await act(async () => {
       await latest?.forgetSelectedItem();
@@ -532,8 +547,16 @@ describe("useMemoryOperatorSnapshot", () => {
     await flush();
 
     expect(apiMocks.forgetMemoryItem).toHaveBeenCalledWith("mem-1");
-    expect(latest?.selectedItem?.lifecycleState).toBe("forgotten");
-    expect(latest?.notice).toEqual({ tone: "success", message: "Memory item forgotten." });
+    expect(latest?.selectedItem?.lifecycleState).toBe("active");
+    expect(latest?.notice?.tone).toBe("info");
+    expect(latest?.notice?.message).toContain("requires approval approval-forget-1");
+    expect(latest?.pendingMutationApprovals.map((pending) => pending.approvalId)).toContain("approval-forget-1");
+
+    // Pending approvals are dismissible.
+    await act(async () => {
+      latest?.dismissPendingMutationApproval("approval-forget-1");
+    });
+    expect(latest?.pendingMutationApprovals.map((pending) => pending.approvalId)).not.toContain("approval-forget-1");
 
     await act(async () => {
       await latest?.runMaintenance();
@@ -590,7 +613,7 @@ describe("useMemoryOperatorSnapshot", () => {
     expect(latest?.notice).toEqual({ tone: "success", message: "Memory maintenance policy saved." });
   });
 
-  it("submits an atomic batch forget and applies returned items", async () => {
+  it("routes an atomic batch forget through one pending batch approval", async () => {
     apiMocks.fetchMemoryItems.mockResolvedValueOnce({
       items: [
         {
@@ -615,61 +638,9 @@ describe("useMemoryOperatorSnapshot", () => {
         },
       ],
     });
-    apiMocks.batchMutateMemoryItems.mockResolvedValueOnce({
-      actionId: "action-1",
-      status: "applied",
-      appliedCount: 2,
-      targetItemIds: ["mem-1", "mem-2"],
-      results: [
-        {
-          operationIndex: 0,
-          kind: "forget_item",
-          itemId: "mem-1",
-          status: "applied",
-          item: {
-            itemId: "mem-1",
-            namespace: "workspace.alpha",
-            title: "Deployment note",
-            content: "Ship after verification.",
-            pinned: false,
-            status: "forgotten",
-            lifecycleState: "forgotten",
-            updatedAt: "2026-04-22T00:05:00.000Z",
-            forgottenAt: "2026-04-22T00:05:00.000Z",
-          },
-        },
-        {
-          operationIndex: 1,
-          kind: "forget_item",
-          itemId: "mem-2",
-          status: "applied",
-          item: {
-            itemId: "mem-2",
-            namespace: "workspace.alpha",
-            title: "Rollback plan",
-            content: "Roll back if errors spike.",
-            pinned: false,
-            status: "forgotten",
-            lifecycleState: "forgotten",
-            updatedAt: "2026-04-22T00:05:00.000Z",
-            forgottenAt: "2026-04-22T00:05:00.000Z",
-          },
-        },
-      ],
-      ledger: {
-        actionId: "action-1",
-        ownerId: "operator",
-        source: "mission-control:library",
-        timestamp: "2026-04-22T00:05:00.000Z",
-        status: "applied",
-        targetItemIds: ["mem-1", "mem-2"],
-        operationKind: "forget_item",
-        operationCount: 2,
-        reversal: { feasible: true, note: "Items can be restored from lifecycle history." },
-        reapply: { feasible: true, note: "Forget can be reapplied." },
-        evidence: { storesRawContent: false, redactionNote: "No raw content stored in ledger." },
-      },
-    });
+    apiMocks.batchMutateMemoryItems.mockResolvedValueOnce(
+      buildPendingApprovalEnvelope("approval-batch-forget", "batch_mutated", ["mem-1", "mem-2"]),
+    );
 
     renderer = await mountHook((value) => {
       latest = value;
@@ -689,13 +660,17 @@ describe("useMemoryOperatorSnapshot", () => {
         { kind: "forget_item", itemId: "mem-2" },
       ],
     });
-    expect(response?.appliedCount).toBe(2);
-    expect(latest?.data?.memoryItems.find((item) => item.itemId === "mem-1")?.lifecycleState).toBe("forgotten");
-    expect(latest?.data?.memoryItems.find((item) => item.itemId === "mem-2")?.lifecycleState).toBe("forgotten");
-    expect(latest?.notice).toEqual({ tone: "success", message: "Forgot 2 memory item(s)." });
+    // The envelope resolves truthy so the page clears its selection, while the
+    // items themselves stay untouched until the approval executes.
+    expect(response?.pendingApproval.approvalId).toBe("approval-batch-forget");
+    expect(latest?.data?.memoryItems.find((item) => item.itemId === "mem-1")?.lifecycleState).toBe("active");
+    expect(latest?.data?.memoryItems.find((item) => item.itemId === "mem-2")?.lifecycleState).toBe("active");
+    expect(latest?.notice?.tone).toBe("info");
+    expect(latest?.notice?.message).toContain("requires approval approval-batch-forget");
+    expect(latest?.pendingMutationApprovals.map((pending) => pending.approvalId)).toContain("approval-batch-forget");
   });
 
-  it("reports rollback truthfully when the batch fails", async () => {
+  it("reports the request failure truthfully when the batch approval request fails", async () => {
     apiMocks.batchMutateMemoryItems.mockRejectedValueOnce(new Error("network blip"));
 
     renderer = await mountHook((value) => {
@@ -713,9 +688,10 @@ describe("useMemoryOperatorSnapshot", () => {
     expect(response).toBeUndefined();
     expect(latest?.notice).toEqual({
       tone: "error",
-      message: "Batch failed — no changes were applied. network blip",
+      message: "Batch request failed — no changes were applied. network blip",
     });
     expect(latest?.data?.memoryItems).toEqual(beforeItems);
+    expect(latest?.pendingMutationApprovals).toEqual([]);
   });
 
   it("surfaces the transactional-storage conflict message", async () => {
@@ -733,7 +709,7 @@ describe("useMemoryOperatorSnapshot", () => {
 
     expect(latest?.notice).toEqual({
       tone: "error",
-      message: `Batch failed — no changes were applied. ${conflictMessage}`,
+      message: `Batch request failed — no changes were applied. ${conflictMessage}`,
     });
   });
 
@@ -790,88 +766,15 @@ describe("useMemoryOperatorSnapshot", () => {
     });
   });
 
-  it("submits patch_item pin operations", async () => {
-    apiMocks.fetchMemoryItems.mockResolvedValueOnce({
-      items: [
-        {
-          itemId: "mem-1",
-          namespace: "workspace.alpha",
-          title: "Deployment note",
-          content: "Ship after verification.",
-          pinned: false,
-          status: "active",
-          lifecycleState: "active",
-          updatedAt: "2026-04-22T00:00:00.000Z",
-        },
-        {
-          itemId: "mem-2",
-          namespace: "workspace.alpha",
-          title: "Rollback plan",
-          content: "Roll back if errors spike.",
-          pinned: false,
-          status: "active",
-          lifecycleState: "active",
-          updatedAt: "2026-04-22T00:00:00.000Z",
-        },
-      ],
-    });
-    apiMocks.batchMutateMemoryItems.mockResolvedValueOnce({
-      actionId: "action-2",
-      status: "applied",
-      appliedCount: 2,
-      targetItemIds: ["mem-1", "mem-2"],
-      results: [
-        {
-          operationIndex: 0,
-          kind: "patch_item",
-          itemId: "mem-1",
-          status: "applied",
-          item: {
-            itemId: "mem-1",
-            namespace: "workspace.alpha",
-            title: "Deployment note",
-            content: "Ship after verification.",
-            pinned: true,
-            status: "active",
-            lifecycleState: "active",
-            updatedAt: "2026-04-22T00:05:00.000Z",
-          },
-        },
-        {
-          operationIndex: 1,
-          kind: "patch_item",
-          itemId: "mem-2",
-          status: "applied",
-          item: {
-            itemId: "mem-2",
-            namespace: "workspace.alpha",
-            title: "Rollback plan",
-            content: "Roll back if errors spike.",
-            pinned: true,
-            status: "active",
-            lifecycleState: "active",
-            updatedAt: "2026-04-22T00:05:00.000Z",
-          },
-        },
-      ],
-      ledger: {
-        actionId: "action-2",
-        ownerId: "operator",
-        source: "mission-control:library",
-        timestamp: "2026-04-22T00:05:00.000Z",
-        status: "applied",
-        targetItemIds: ["mem-1", "mem-2"],
-        operationKind: "patch_item",
-        operationCount: 2,
-        reversal: { feasible: true, note: "Pin state can be reverted." },
-        reapply: { feasible: true, note: "Pin can be reapplied." },
-        evidence: { storesRawContent: false, redactionNote: "No raw content stored in ledger." },
-      },
-    });
+  it("routes patch_item pin operations through one pending batch approval", async () => {
+    apiMocks.batchMutateMemoryItems.mockResolvedValueOnce(
+      buildPendingApprovalEnvelope("approval-batch-pin", "batch_mutated", ["mem-1", "mem-2"]),
+    );
 
     renderer = await mountHook((value) => {
       latest = value;
     });
+    const beforeItems = latest?.data?.memoryItems;
 
     let response: Awaited<ReturnType<HookValue["batchSetItemsPinned"]>> | undefined;
     await act(async () => {
@@ -886,9 +789,11 @@ describe("useMemoryOperatorSnapshot", () => {
         { kind: "patch_item", itemId: "mem-2", patch: { pinned: true } },
       ],
     });
-    expect(response?.appliedCount).toBe(2);
-    expect(latest?.data?.memoryItems.every((item) => item.pinned)).toBe(true);
-    expect(latest?.notice).toEqual({ tone: "success", message: "Pinned 2 memory item(s)." });
+    expect(response?.pendingApproval.approvalId).toBe("approval-batch-pin");
+    // Nothing changes until the approval executes.
+    expect(latest?.data?.memoryItems).toEqual(beforeItems);
+    expect(latest?.notice?.tone).toBe("info");
+    expect(latest?.notice?.message).toContain("requires approval approval-batch-pin");
   });
 
   it("records decision retrospectives through the memory lifecycle API", async () => {
