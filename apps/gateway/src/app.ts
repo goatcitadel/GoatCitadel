@@ -415,15 +415,12 @@ export async function buildApp() {
     await app.register(remoteWorkersRoutes);
     await app.register(updateScoutRoutes);
     await app.register(workspacesRoutes);
-    if (
-      process.env.NODE_ENV !== "production" &&
-      process.env.GOATCITADEL_INTERNAL_HX407_EXTERNAL_SOURCES_PROOF_ENABLED === "1"
-    ) {
-      if (!app.services.externalSources) {
-        throw new Error("External source route service is not composed.");
-      }
-      await app.register(externalSourceRoutes, { service: app.services.externalSources });
+    // HX-407 C4: the external-source domain is part of the production route
+    // surface (the proof-only environment gate is removed).
+    if (!app.services.externalSources) {
+      throw new Error("External source route service is not composed.");
     }
+    await app.register(externalSourceRoutes, { service: app.services.externalSources });
     if (!app.services.workspacePathBridge) {
       throw new Error("Workspace path bridge route service is not composed.");
     }

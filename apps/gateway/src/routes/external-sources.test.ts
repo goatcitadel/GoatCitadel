@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   EXTERNAL_SOURCE_SCHEMA_VERSION,
+  type ExternalSessionAttachmentRecord,
   type ExternalSourceDetailResponse,
   type ExternalSourceImportApplyResponse,
   type ExternalSourceImportDetailResponse,
@@ -11,7 +12,9 @@ import {
   type ExternalSourceScanRecord,
 } from "@goatcitadel/contracts";
 import type { ExternalSourceRoutePort } from "../services/external-source-route-service.js";
+import { ExternalSourceAttachmentServiceError } from "../services/external-source-attachment-service.js";
 import { ExternalSourceImportServiceError } from "../services/external-source-import-service.js";
+import { ExternalSourceKnowledgeEffectServiceError } from "../services/external-source-knowledge-effect-service.js";
 import { ExternalSourceServiceError } from "../services/external-source-service.js";
 import { externalSourceRoutes } from "./external-sources.js";
 
@@ -62,6 +65,25 @@ describe("HX-407 external source routes", () => {
       {
         method: "GET" as const,
         url: "/api/v1/library/external-source-imports/import-1?workspaceId=workspace-1",
+      },
+      {
+        method: "GET" as const,
+        url: "/api/v1/chat/sessions/session-1/external-source-attachments?workspaceId=workspace-1",
+      },
+      {
+        method: "POST" as const,
+        url: "/api/v1/chat/sessions/session-1/external-source-attachments",
+        payload: validAttachBody(),
+      },
+      {
+        method: "DELETE" as const,
+        url: "/api/v1/chat/sessions/session-1/external-source-attachments/external-attachment-1",
+        payload: validDetachBody(),
+      },
+      {
+        method: "POST" as const,
+        url: "/api/v1/library/external-source-imports/import-1/knowledge-snapshot-requests",
+        payload: validKnowledgeRequestBody(),
       },
     ];
     for (const request of requests) {
@@ -310,6 +332,187 @@ describe("HX-407 external source routes", () => {
     expect(conflict.body).not.toContain("workspace-1");
   });
 
+  it("serves the durable chat attachment reload, attach, and CAS detach with the exact C3 client paths and bodies", async () => {
+    const service = createService();
+    const next = await buildApp(service);
+
+    const list = await next.inject({
+      method: "GET",
+      url: "/api/v1/chat/sessions/session-1/external-source-attachments?workspaceId=workspace-1&limit=25",
+      headers: operatorHeaders,
+    });
+    expect(list.statusCode).toBe(200);
+    expect(list.headers["cache-control"]).toBe("no-store");
+    expect(list.headers["x-goatcitadel-execution-authority"]).toBe("none");
+    expect(service.listSessionAttachments).toHaveBeenCalledWith(
+      { workspaceId: "workspace-1", sessionId: "session-1", limit: 25 },
+      { actorId: "operator:request", source: "token" },
+    );
+    expect(list.json()).toMatchObject({ sessionIncarnationId: "incarnation-1" });
+
+    const attach = await next.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/session-1/external-source-attachments",
+      headers: operatorHeaders,
+      payload: validAttachBody(),
+    });
+    expect(attach.statusCode).toBe(201);
+    expect(attach.headers["cache-control"]).toBe("no-store");
+    expect(service.attachToSession).toHaveBeenCalledWith(
+      validAttachBody(),
+      { actorId: "operator:request", source: "token" },
+      expect.any(AbortSignal),
+    );
+
+    vi.mocked(service.attachToSession).mockResolvedValue({
+      schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
+      attachment: attachmentRecord(),
+      disposition: "replayed",
+    });
+    const replayed = await next.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/session-1/external-source-attachments",
+      headers: operatorHeaders,
+      payload: validAttachBody(),
+    });
+    expect(replayed.statusCode).toBe(200);
+    expect(replayed.json()).toMatchObject({ disposition: "replayed" });
+
+    const detach = await next.inject({
+      method: "DELETE",
+      url: "/api/v1/chat/sessions/session-1/external-source-attachments/external-attachment-1",
+      headers: operatorHeaders,
+      payload: validDetachBody(),
+    });
+    expect(detach.statusCode).toBe(200);
+    expect(service.detachFromSession).toHaveBeenCalledWith(
+      validDetachBody(),
+      { actorId: "operator:request", source: "token" },
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("rejects path/body identity mismatches and smuggled hashes before any chat service call", async () => {
+    const service = createService();
+    const next = await buildApp(service);
+
+    const sessionMismatch = await next.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/session-other/external-source-attachments",
+      headers: operatorHeaders,
+      payload: validAttachBody(),
+    });
+    expect(sessionMismatch.statusCode).toBe(400);
+
+    const smuggledHash = await next.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/session-1/external-source-attachments",
+      headers: operatorHeaders,
+      payload: { ...validAttachBody(), normalizedArtifactSha256: "9".repeat(64) },
+    });
+    expect(smuggledHash.statusCode).toBe(400);
+
+    const attachmentMismatch = await next.inject({
+      method: "DELETE",
+      url: "/api/v1/chat/sessions/session-1/external-source-attachments/external-attachment-other",
+      headers: operatorHeaders,
+      payload: validDetachBody(),
+    });
+    expect(attachmentMismatch.statusCode).toBe(400);
+
+    const importMismatch = await next.inject({
+      method: "POST",
+      url: "/api/v1/library/external-source-imports/import-other/knowledge-snapshot-requests",
+      headers: operatorHeaders,
+      payload: validKnowledgeRequestBody(),
+    });
+    expect(importMismatch.statusCode).toBe(400);
+
+    const smuggledKnowledgeHash = await next.inject({
+      method: "POST",
+      url: "/api/v1/library/external-source-imports/import-1/knowledge-snapshot-requests",
+      headers: operatorHeaders,
+      payload: { ...validKnowledgeRequestBody(), rawSha256: "9".repeat(64) },
+    });
+    expect(smuggledKnowledgeHash.statusCode).toBe(400);
+
+    expect(service.attachToSession).not.toHaveBeenCalled();
+    expect(service.detachFromSession).not.toHaveBeenCalled();
+    expect(service.createKnowledgeSnapshotRequest).not.toHaveBeenCalled();
+  });
+
+  it("returns the content-free knowledge-snapshot receipt and maps attachment/effect failures to exact statuses", async () => {
+    const service = createService();
+    const next = await buildApp(service);
+
+    const created = await next.inject({
+      method: "POST",
+      url: "/api/v1/library/external-source-imports/import-1/knowledge-snapshot-requests",
+      headers: operatorHeaders,
+      payload: validKnowledgeRequestBody(),
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({
+      approvalId: "external-knowledge-snapshot-approval-1",
+      disposition: "created",
+      status: "pending",
+    });
+    expect(service.createKnowledgeSnapshotRequest).toHaveBeenCalledWith(
+      validKnowledgeRequestBody(),
+      { actorId: "operator:request", source: "token" },
+      expect.any(AbortSignal),
+    );
+
+    vi.mocked(service.createKnowledgeSnapshotRequest).mockResolvedValue({
+      schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
+      approvalId: "external-knowledge-snapshot-approval-1",
+      disposition: "replayed",
+      status: "pending",
+      preview: {},
+    });
+    const replayed = await next.inject({
+      method: "POST",
+      url: "/api/v1/library/external-source-imports/import-1/knowledge-snapshot-requests",
+      headers: operatorHeaders,
+      payload: validKnowledgeRequestBody(),
+    });
+    expect(replayed.statusCode).toBe(200);
+
+    const failureMatrix: Array<{ error: Error; status: number; code: string }> = [
+      {
+        error: new ExternalSourceAttachmentServiceError("session_incarnation_stale"),
+        status: 409,
+        code: "session_incarnation_stale",
+      },
+      { error: new ExternalSourceAttachmentServiceError("not_found"), status: 404, code: "not_found" },
+      { error: new ExternalSourceAttachmentServiceError("identity_drift"), status: 409, code: "identity_drift" },
+      { error: new ExternalSourceAttachmentServiceError("source_not_active"), status: 409, code: "source_not_active" },
+      {
+        error: new ExternalSourceKnowledgeEffectServiceError("approval_conflict"),
+        status: 409,
+        code: "approval_conflict",
+      },
+      {
+        error: new ExternalSourceKnowledgeEffectServiceError("policy_denied", "ward_deny"),
+        status: 403,
+        code: "policy_denied",
+      },
+    ];
+    for (const entry of failureMatrix) {
+      vi.mocked(service.attachToSession).mockRejectedValueOnce(entry.error);
+      const failed = await next.inject({
+        method: "POST",
+        url: "/api/v1/chat/sessions/session-1/external-source-attachments",
+        headers: operatorHeaders,
+        payload: validAttachBody(),
+      });
+      expect(failed.statusCode).toBe(entry.status);
+      expect(failed.json()).toMatchObject({ code: entry.code });
+      expect(failed.body).not.toContain("session-1");
+      expect(failed.body).not.toContain("workspace-1");
+    }
+  });
+
   async function buildApp(service: ExternalSourceRoutePort): Promise<FastifyInstance> {
     const next = Fastify();
     next.decorateRequest("authActorId", "anonymous");
@@ -368,6 +571,82 @@ function createService(): ExternalSourceRoutePort {
       retryableFailures: 0,
       cleanedExpiredLeases: 0,
     })),
+    listSessionAttachments: vi.fn(() => ({
+      schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+      sessionIncarnationId: "incarnation-1",
+      items: [attachmentRecord()],
+    })),
+    attachToSession: vi.fn(async () => ({
+      schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
+      attachment: attachmentRecord(),
+      disposition: "created" as const,
+    })),
+    detachFromSession: vi.fn(async () => ({
+      schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
+      attachment: { ...attachmentRecord(), status: "detached" as const, revision: 2 },
+      disposition: "detached" as const,
+    })),
+    createKnowledgeSnapshotRequest: vi.fn(async () => ({
+      schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
+      approvalId: "external-knowledge-snapshot-approval-1",
+      disposition: "created" as const,
+      status: "pending",
+      expiresAt: "2026-07-15T10:00:00.000Z",
+      preview: { importId: "import-1", itemId: "item-1" },
+    })),
+  };
+}
+
+function attachmentRecord(): ExternalSessionAttachmentRecord {
+  return {
+    schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
+    attachmentId: "external-attachment-1",
+    workspaceId: "workspace-1",
+    sessionId: "session-1",
+    sourceId: "source-1",
+    importId: "import-1",
+    itemId: "item-1",
+    normalizedArtifactSha256: "7".repeat(64),
+    mode: "read_only_external",
+    status: "attached",
+    revision: 1,
+    attachedByActorId: "operator:request",
+    attachedAt: "2026-07-14T10:02:00.000Z",
+  };
+}
+
+function validAttachBody() {
+  return {
+    workspaceId: "workspace-1",
+    sessionId: "session-1",
+    expectedSessionIncarnationId: "incarnation-1",
+    sourceId: "source-1",
+    importId: "import-1",
+    itemId: "item-1",
+  };
+}
+
+function validDetachBody() {
+  return {
+    workspaceId: "workspace-1",
+    sessionId: "session-1",
+    attachmentId: "external-attachment-1",
+    expectedRevision: 1,
+    expectedSessionIncarnationId: "incarnation-1",
+  };
+}
+
+function validKnowledgeRequestBody() {
+  return {
+    workspaceId: "workspace-1",
+    sessionId: "session-1",
+    expectedSessionIncarnationId: "incarnation-1",
+    attachmentId: "external-attachment-1",
+    importId: "import-1",
+    itemId: "item-1",
+    expectedAttachmentRevision: 1,
   };
 }
 

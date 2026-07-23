@@ -22,11 +22,16 @@ import type {
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
 import {
+  EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_APPROVAL_KIND,
+  EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_KIND,
+  EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_TARGET_KIND,
+  assertExternalSourceKnowledgeSnapshotApprovalPayload,
   buildToolEffectEvidence,
   canonicalJsonString,
   ConflictError,
   isChatTurnTerminalStatus,
   NotFoundError,
+  type ExternalSourceKnowledgeSnapshotApprovalPayload,
 } from "@goatcitadel/contracts";
 import {
   getRequestAttribution,
@@ -35,6 +40,12 @@ import {
   type Storage,
 } from "@goatcitadel/storage";
 import { APPROVAL_OBSERVABILITY_REALTIME_ENVELOPE_KEY } from "./realtime-event-service.js";
+import {
+  ExternalSourceKnowledgeEffectServiceError,
+  deriveExternalSourceKnowledgeSnapshotMaterializedIdentities,
+  type ExternalSourceKnowledgeSnapshotApplyResult,
+} from "./external-source-knowledge-effect-service.js";
+import type { ExternalSourceRequestActor } from "./external-source-service.js";
 import { materializeApprovedSkillHubIntent, type SkillHubLifecycleApplyResult } from "./skill-hub-lifecycle-service.js";
 import type { ApprovalRemoteTokenSecretService } from "./approval-remote-token-secret.js";
 import {
@@ -293,6 +304,18 @@ export interface ApprovalEffectsServiceDeps {
     requestSha256: string,
     signal?: AbortSignal,
   ): Promise<SkillHubLifecycleApplyResult>;
+  /**
+   * HX-407 C4: executes one approved `external_source.knowledge_snapshot`
+   * recovery through the composed C2 effect service. The executor revalidates
+   * the approval, the full C1 identity chain, current deny-wins policy, and
+   * the managed artifact, and converges on the deterministic terminal effect
+   * row this worker claimed.
+   */
+  executeApprovedExternalSourceKnowledgeSnapshot?(
+    input: { workspaceId: string; approvalId: string },
+    actor: ExternalSourceRequestActor,
+    signal?: AbortSignal,
+  ): Promise<ExternalSourceKnowledgeSnapshotApplyResult>;
   enqueueAfterHooks(input: {
     workspaceId: string;
     trigger: "approval.resolve.after" | "approval.response.after";
@@ -579,6 +602,9 @@ export class ApprovalEffectsService {
         }),
       );
     }
+    if (approval.kind === EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_APPROVAL_KIND && input.decision === "approve") {
+      enqueued.push(this.enqueueExternalSourceKnowledgeSnapshotApply(approval));
+    }
     enqueued.push(
       this.ctx.storage.approvalEffects.upsert({
         approvalId: approval.approvalId,
@@ -733,6 +759,46 @@ export class ApprovalEffectsService {
       this.requestEffectProcessing();
     }
     return enqueued;
+  }
+
+  /**
+   * HX-407 C4: enqueue the approved knowledge-snapshot recovery on the SAME
+   * deterministic effect identity the C2 materialization writes terminally
+   * (`buildApprovalEffectIdempotencyKey` over approval/effect/target), with the
+   * byte-identical canonical payload, so the pending row this resolution
+   * creates and the terminal row the apply asserts are one row: a replayed
+   * resolution converges on the completed effect instead of double-executing,
+   * and the in-flight worker row satisfies the materialization's exact
+   * payload assert. The payload is server-derived approval material; a
+   * non-canonical payload fails the resolution loudly (fail closed).
+   */
+  private enqueueExternalSourceKnowledgeSnapshotApply(approval: ApprovalRequest): ApprovalEffectRecord {
+    const payload = approval.payload as unknown as ExternalSourceKnowledgeSnapshotApprovalPayload;
+    assertExternalSourceKnowledgeSnapshotApprovalPayload(payload);
+    const identities = deriveExternalSourceKnowledgeSnapshotMaterializedIdentities(payload);
+    if (identities.approvalId !== approval.approvalId) {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: `Approval ${approval.approvalId} payload does not derive its own knowledge-snapshot identity.`,
+      });
+    }
+    // Canonical key order end-to-end: the stored payload_json must equal
+    // canonicalJsonString(payload) byte-for-byte for the C2 insert-site assert.
+    const effectPayload = JSON.parse(
+      canonicalJsonString({
+        ...payload,
+        linkId: identities.linkId,
+        knowledgeDocumentId: identities.knowledgeDocumentId,
+      }),
+    ) as Record<string, unknown>;
+    return this.ctx.storage.approvalEffects.upsert({
+      approvalId: approval.approvalId,
+      effectKind: EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_KIND,
+      targetKind: EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_TARGET_KIND,
+      targetId: identities.targetId,
+      idempotencyKey: identities.effectIdempotencyKey,
+      payload: effectPayload,
+    });
   }
 
   public enqueueApprovalWaitMaterialization(approval: ApprovalRequest): ApprovalEffectRecord | undefined {
@@ -969,6 +1035,9 @@ export class ApprovalEffectsService {
       case "skill_hub_lifecycle_apply":
         await this.handleSkillHubLifecycleApply(effect, signal);
         return;
+      case EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_KIND:
+        await this.handleExternalSourceKnowledgeSnapshotApply(effect, signal);
+        return;
       case "approval_inbox_follow_up":
         await this.handleApprovalInboxFollowUp(effect);
         return;
@@ -1031,6 +1100,105 @@ export class ApprovalEffectsService {
         deliveryState: "retry_scheduled",
         operationId,
         approvalId,
+      });
+    }
+  }
+
+  /**
+   * HX-407 C4: execute one approved knowledge-snapshot recovery. The actor is
+   * reconstructed from the approval's own linkage (the authenticated operator
+   * whose request created the approval); the C2 apply then re-runs ownership,
+   * incarnation, drift, revision, artifact, and deny-wins policy checks
+   * against live state. Terminal governance denials (policy flip, expiry,
+   * revoke, drift, conflict) fail the effect closed instead of retrying
+   * forever; only cancellation/lease interruptions defer for retry.
+   */
+  private async handleExternalSourceKnowledgeSnapshotApply(
+    effect: ApprovalEffectRecord,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const execute = this.deps.executeApprovedExternalSourceKnowledgeSnapshot;
+    const workspaceId = asOptionalString(effect.payload.workspaceId);
+    if (!execute || !workspaceId) {
+      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+        lastError: "External source knowledge-snapshot effect is missing its executor or workspace binding.",
+        result: { workspaceId, configured: Boolean(execute) },
+      });
+      return;
+    }
+    let actor: ExternalSourceRequestActor | undefined;
+    try {
+      const approval = this.ctx.storage.approvals.get(effect.approvalId);
+      const linkageActorId = asOptionalString(approval.linkage?.authActorId);
+      const linkageActorSource = asOptionalString(approval.linkage?.authActorSource);
+      if (
+        linkageActorId &&
+        (linkageActorSource === "token" || linkageActorSource === "basic" || linkageActorSource === "loopback")
+      ) {
+        actor = { actorId: linkageActorId, source: linkageActorSource };
+      }
+    } catch {
+      actor = undefined;
+    }
+    if (!actor) {
+      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+        lastError: "External source knowledge-snapshot approval carries no authenticated operator linkage.",
+        result: { approvalId: effect.approvalId },
+      });
+      return;
+    }
+    try {
+      const applied = await execute({ workspaceId, approvalId: effect.approvalId }, actor, signal);
+      if (!this.isEffectStillClaimed(effect.effectId)) return;
+      const completed = this.ctx.storage.approvalEffects.completeEffect(
+        effect.effectId,
+        this.workerId,
+        effect.version,
+        {
+          result: {
+            disposition: "applied",
+            applyDisposition: applied.disposition,
+            linkId: applied.link.linkId,
+            knowledgeDocumentId: applied.knowledgeDocumentId,
+            chunkCount: applied.chunkCount,
+            normalizedArtifactSha256: applied.link.normalizedArtifactSha256,
+            ...(applied.threadKnowledgeAttachmentId
+              ? { threadKnowledgeAttachmentId: applied.threadKnowledgeAttachmentId }
+              : {}),
+          },
+        },
+      );
+      if (!completed) {
+        throw new Error(`External source knowledge-snapshot effect ${effect.effectId} lost its completion lease.`);
+      }
+    } catch (error) {
+      if (!this.isEffectStillClaimed(effect.effectId)) return;
+      // A deny-wins policy denial is the one governance outcome the C2 design
+      // explicitly allows to heal (deny now, re-allow later ⇒ apply succeeds),
+      // so it defers for bounded retry: the approval's own expiry converts a
+      // standing denial into a terminal `approval_expired` failure. Every
+      // other governance denial (expiry, revoke, drift, detach, conflict,
+      // tamper) fails the effect closed immediately.
+      if (
+        error instanceof ExternalSourceKnowledgeEffectServiceError &&
+        error.code !== "cancelled" &&
+        error.code !== "policy_denied"
+      ) {
+        this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+          lastError: error.message,
+          result: {
+            errorCode: error.code,
+            ...(error.reasonCode ? { reasonCode: error.reasonCode } : {}),
+          },
+        });
+        return;
+      }
+      this.deferClaimedEffectForRetry(effect, this.workerId, error, {
+        deliveryState: "retry_scheduled",
+        approvalId: effect.approvalId,
+        ...(error instanceof ExternalSourceKnowledgeEffectServiceError
+          ? { errorCode: error.code, ...(error.reasonCode ? { reasonCode: error.reasonCode } : {}) }
+          : {}),
       });
     }
   }

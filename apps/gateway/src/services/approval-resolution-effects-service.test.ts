@@ -7,13 +7,18 @@ import type {
   DurableWakeResult,
   PendingApprovalAction,
 } from "@goatcitadel/contracts";
-import { ConflictError } from "@goatcitadel/contracts";
+import { ConflictError, canonicalJsonString } from "@goatcitadel/contracts";
 import { getRequestAttribution, runWithRequestAttribution, Storage } from "@goatcitadel/storage";
 import { describe, expect, it, vi } from "vitest";
 import {
   ApprovalEffectsService,
   deriveApprovalResolutionEffectsResult,
 } from "./approval-resolution-effects-service.js";
+import {
+  ExternalSourceKnowledgeEffectServiceError,
+  deriveExternalSourceKnowledgeSnapshotApprovalId,
+  deriveExternalSourceKnowledgeSnapshotMaterializedIdentities,
+} from "./external-source-knowledge-effect-service.js";
 import { APPROVAL_OBSERVABILITY_REALTIME_ENVELOPE_KEY } from "./realtime-event-service.js";
 import type { ServiceContext } from "./service-context.js";
 import {
@@ -5995,7 +6000,242 @@ describe("approval-resolution-effects-service", () => {
       }),
     );
   });
+
+  it("enqueues and executes the approved external knowledge-snapshot recovery on the C2-deterministic effect identity", async () => {
+    const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
+    try {
+      const { approval, payload } = createApprovedExternalKnowledgeSnapshotApproval(storage);
+      const identities = deriveExternalSourceKnowledgeSnapshotMaterializedIdentities(payload);
+      const executor = vi.fn(async () => buildExternalKnowledgeApplyResult(payload, identities));
+      const backgroundTasks = new Set<Promise<void>>();
+      const service = new ApprovalEffectsService({ storage, publishRealtime: vi.fn() } as unknown as ServiceContext, {
+        ...createApprovalEffectDeps(),
+        backgroundTasks,
+        executeApprovedExternalSourceKnowledgeSnapshot: executor,
+      });
+
+      const enqueued = service.enqueueResolutionEffects(approval, {
+        decision: "approve",
+        resolvedBy: "operator-1",
+      });
+      const applyEffect = enqueued.find((effect) => effect.effectKind === "external_source_knowledge_snapshot_apply");
+      expect(applyEffect).toMatchObject({
+        approvalId: approval.approvalId,
+        effectKind: "external_source_knowledge_snapshot_apply",
+        targetKind: "external_source_import_item",
+        targetId: identities.targetId,
+        idempotencyKey: identities.effectIdempotencyKey,
+        status: "pending",
+      });
+      // The stored payload bytes must equal canonicalJsonString of the C2
+      // effect draft so the materialization's insert-site assert converges on
+      // this exact row instead of conflicting.
+      const storedPayloadJson = (
+        storage.db
+          .prepare("SELECT payload_json FROM approval_effects WHERE idempotency_key = ?")
+          .get(identities.effectIdempotencyKey) as { payload_json: string }
+      ).payload_json;
+      expect(storedPayloadJson).toBe(
+        canonicalJsonString({
+          ...payload,
+          linkId: identities.linkId,
+          knowledgeDocumentId: identities.knowledgeDocumentId,
+        }),
+      );
+
+      service.startWorker();
+      await vi.waitFor(() => expect(executor).toHaveBeenCalledOnce());
+      await Promise.all([...backgroundTasks]);
+      service.stopWorker();
+      expect(executor).toHaveBeenCalledWith(
+        { workspaceId: payload.workspaceId, approvalId: approval.approvalId },
+        { actorId: "operator-1", source: "token" },
+        expect.any(AbortSignal),
+      );
+      const settled = storage.approvalEffects.get(applyEffect!.effectId);
+      expect(settled.status).toBe("completed");
+      expect(settled.result).toMatchObject({
+        disposition: "applied",
+        linkId: identities.linkId,
+        knowledgeDocumentId: identities.knowledgeDocumentId,
+        chunkCount: 1,
+        normalizedArtifactSha256: payload.normalizedArtifactSha256,
+      });
+
+      // A replayed resolution converges on the completed row: same effect id,
+      // still completed, no second row, no re-execution.
+      const replayed = service.enqueueResolutionEffects(approval, { decision: "approve", resolvedBy: "operator-1" });
+      const replayedApply = replayed.find((effect) => effect.effectKind === "external_source_knowledge_snapshot_apply");
+      expect(replayedApply).toMatchObject({ effectId: applyEffect!.effectId, status: "completed" });
+      const rowCount = storage.db
+        .prepare("SELECT COUNT(*) AS count FROM approval_effects WHERE effect_kind = ?")
+        .get("external_source_knowledge_snapshot_apply") as { count: number };
+      expect(Number(rowCount.count)).toBe(1);
+      service.startWorker();
+      await Promise.all([...backgroundTasks]);
+      service.stopWorker();
+      expect(executor).toHaveBeenCalledOnce();
+    } finally {
+      storage.close();
+    }
+  });
+
+  it("fails terminal governance denials closed and defers a live policy denial for bounded retry", async () => {
+    const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
+    try {
+      const { approval } = createApprovedExternalKnowledgeSnapshotApproval(storage);
+      // Expiry (and every other governance denial except policy) is terminal.
+      const executor = vi.fn(async () => {
+        throw new ExternalSourceKnowledgeEffectServiceError("approval_expired");
+      });
+      const backgroundTasks = new Set<Promise<void>>();
+      const service = new ApprovalEffectsService({ storage, publishRealtime: vi.fn() } as unknown as ServiceContext, {
+        ...createApprovalEffectDeps(),
+        backgroundTasks,
+        executeApprovedExternalSourceKnowledgeSnapshot: executor,
+      });
+      const enqueued = service.enqueueResolutionEffects(approval, { decision: "approve", resolvedBy: "operator-1" });
+      const applyEffect = enqueued.find((effect) => effect.effectKind === "external_source_knowledge_snapshot_apply");
+      service.startWorker();
+      await vi.waitFor(() => expect(executor).toHaveBeenCalledOnce());
+      await Promise.all([...backgroundTasks]);
+      service.stopWorker();
+      const settled = storage.approvalEffects.get(applyEffect!.effectId);
+      expect(settled.status).toBe("failed");
+      expect(settled.result).toMatchObject({ errorCode: "approval_expired" });
+    } finally {
+      storage.close();
+    }
+  });
+
+  it("defers the external knowledge-snapshot effect for retry while deny-wins policy denies it", async () => {
+    const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
+    try {
+      const { approval } = createApprovedExternalKnowledgeSnapshotApproval(storage);
+      // The C2 design explicitly supports deny-now/re-allow-later, so a policy
+      // denial keeps the effect retryable; the approval's own expiry bounds
+      // the retry window with a terminal approval_expired failure.
+      const executor = vi.fn(async () => {
+        throw new ExternalSourceKnowledgeEffectServiceError("policy_denied", "ward_deny");
+      });
+      const backgroundTasks = new Set<Promise<void>>();
+      const service = new ApprovalEffectsService({ storage, publishRealtime: vi.fn() } as unknown as ServiceContext, {
+        ...createApprovalEffectDeps(),
+        backgroundTasks,
+        executeApprovedExternalSourceKnowledgeSnapshot: executor,
+      });
+      const enqueued = service.enqueueResolutionEffects(approval, { decision: "approve", resolvedBy: "operator-1" });
+      const applyEffect = enqueued.find((effect) => effect.effectKind === "external_source_knowledge_snapshot_apply");
+      service.startWorker();
+      await vi.waitFor(() => expect(executor).toHaveBeenCalledOnce());
+      await Promise.all([...backgroundTasks]);
+      service.stopWorker();
+      const settled = storage.approvalEffects.get(applyEffect!.effectId);
+      // Deferred-for-retry: the row keeps its lease until the retry instant
+      // and is re-claimable afterwards — it is neither completed nor failed.
+      expect(settled.status).toBe("running");
+      expect(settled.completedAt).toBeUndefined();
+      expect(settled.leaseExpiresAt).toBeTruthy();
+      expect(settled.result).toMatchObject({
+        deliveryState: "retry_scheduled",
+        errorCode: "policy_denied",
+        reasonCode: "ward_deny",
+        delivered: false,
+      });
+    } finally {
+      storage.close();
+    }
+  });
+
+  it("enqueues no external knowledge-snapshot effect for a rejected approval", () => {
+    const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
+    try {
+      const { approvalId } = createExternalKnowledgeSnapshotApprovalRow(storage);
+      const rejected = storage.approvals.resolve(approvalId, { decision: "reject", resolvedBy: "operator-1" });
+      const service = new ApprovalEffectsService(
+        { storage, publishRealtime: vi.fn() } as unknown as ServiceContext,
+        createApprovalEffectDeps(),
+      );
+      const enqueued = service.enqueueResolutionEffects(rejected, { decision: "reject", resolvedBy: "operator-1" });
+      expect(enqueued.some((effect) => effect.effectKind === "external_source_knowledge_snapshot_apply")).toBe(false);
+      const rowCount = storage.db
+        .prepare("SELECT COUNT(*) AS count FROM approval_effects WHERE effect_kind = ?")
+        .get("external_source_knowledge_snapshot_apply") as { count: number };
+      expect(Number(rowCount.count)).toBe(0);
+    } finally {
+      storage.close();
+    }
+  });
 });
+
+function buildExternalKnowledgeSnapshotPayload() {
+  return {
+    workspaceId: "default",
+    sourceId: "source-1",
+    importId: "import-1",
+    itemId: "item-1",
+    normalizedArtifactSha256: "a".repeat(64),
+    rawSha256: "b".repeat(64),
+    sessionId: "session-1",
+    sessionIncarnationId: "legacy-session-incarnation:session-1",
+    attachmentId: "external-attachment-1",
+    attachmentRevision: 1,
+  };
+}
+
+function createExternalKnowledgeSnapshotApprovalRow(storage: Storage) {
+  const payload = buildExternalKnowledgeSnapshotPayload();
+  const approvalId = deriveExternalSourceKnowledgeSnapshotApprovalId(payload);
+  storage.approvals.createDeterministicDetachedWithTtlDuration(
+    {
+      approvalId,
+      kind: "external_source.knowledge_snapshot",
+      riskLevel: "danger",
+      payload: { ...payload },
+      preview: { importId: payload.importId, itemId: payload.itemId },
+      linkage: {
+        workspaceId: payload.workspaceId,
+        sessionId: payload.sessionId,
+        operatorId: "operator-1",
+        authActorId: "operator-1",
+        authActorSource: "token",
+      },
+    },
+    24 * 60 * 60 * 1000,
+  );
+  return { approvalId, payload };
+}
+
+function createApprovedExternalKnowledgeSnapshotApproval(storage: Storage) {
+  const { approvalId, payload } = createExternalKnowledgeSnapshotApprovalRow(storage);
+  const approval = storage.approvals.resolve(approvalId, { decision: "approve", resolvedBy: "operator-1" });
+  return { approval, payload };
+}
+
+function buildExternalKnowledgeApplyResult(
+  payload: ReturnType<typeof buildExternalKnowledgeSnapshotPayload>,
+  identities: ReturnType<typeof deriveExternalSourceKnowledgeSnapshotMaterializedIdentities>,
+) {
+  return {
+    schemaVersion: "goatcitadel.external-source.v1" as const,
+    disposition: "created" as const,
+    link: {
+      schemaVersion: "goatcitadel.external-source.v1" as const,
+      linkId: identities.linkId,
+      workspaceId: payload.workspaceId,
+      sourceId: payload.sourceId,
+      importId: payload.importId,
+      itemId: payload.itemId,
+      normalizedArtifactSha256: payload.normalizedArtifactSha256,
+      approvalId: identities.approvalId,
+      knowledgeDocumentId: identities.knowledgeDocumentId,
+      provenanceSha256: "c".repeat(64),
+      createdAt: "2026-07-14T08:09:00.000Z",
+    },
+    knowledgeDocumentId: identities.knowledgeDocumentId,
+    chunkCount: 1,
+  };
+}
 
 function createEffect(overrides: Partial<ApprovalEffectRecord>): ApprovalEffectRecord {
   return {

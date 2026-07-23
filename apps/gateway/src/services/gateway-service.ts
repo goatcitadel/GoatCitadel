@@ -2010,6 +2010,13 @@ export class GatewayService {
           requestSha256,
           signal,
         }),
+      executeApprovedExternalSourceKnowledgeSnapshot: (input, actor, signal) => {
+        const externalSources = this.routeServices?.externalSources;
+        if (!externalSources?.supportsChatAttachments()) {
+          throw new Error("External source knowledge-snapshot composition is not available.");
+        }
+        return externalSources.applyApprovedKnowledgeSnapshot(input, actor, signal ?? new AbortController().signal);
+      },
       enqueueAfterHooks: (input) => this.hooksService.enqueueAfterHooks(input),
       resolveApprovalHookWorkspaceId: (payload) => this.resolveApprovalHookWorkspaceId(payload),
       resolvePostCommitEligibility: (sessionId) => this.resolvePostCommitEligibility(sessionId),
@@ -3134,12 +3141,10 @@ export class GatewayService {
     this.meshService.init();
     await Promise.all([this.npuSidecar.init(), this.llamaCppRuntime.init()]);
     await this.configGenerationService.completeRuntimeOwnerReconciliation();
+    // HX-407 C4: import recovery is part of the production composition (the
+    // proof-only environment gate is removed; durable intents replay on boot).
     const externalSources = this.routeServices?.externalSources;
-    if (
-      externalSources &&
-      process.env.NODE_ENV !== "production" &&
-      process.env.GOATCITADEL_INTERNAL_HX407_EXTERNAL_SOURCES_PROOF_ENABLED === "1"
-    ) {
+    if (externalSources) {
       try {
         const recovery = await externalSources.recoverImports(signal ?? new AbortController().signal);
         if (recovery.examined > 0 || recovery.cleanedExpiredLeases > 0) {
@@ -5463,6 +5468,7 @@ export class GatewayService {
   public resolveChatRoutedContextSources(
     input: Parameters<chatTurnPrepService.ChatTurnPrepHost["resolveChatRoutedContextSources"]>[0],
   ) {
+    const externalSources = this.routeServices?.externalSources;
     return chatRoutedContextService.resolveChatRoutedContextSources(
       {
         getAttachment: (attachmentId) =>
@@ -5477,6 +5483,21 @@ export class GatewayService {
         },
         getActiveMemoryItem: (itemId, workspaceId, options) =>
           this.memoryLifecycleService.getActiveMemoryItemForRoutedContext(itemId, workspaceId, options),
+        // HX-407 C4: the governed exact-byte read for live read_only_external
+        // attachments. Absent when the external-source chat composition is not
+        // live, in which case external refs fail closed in the resolver.
+        ...(externalSources?.supportsChatAttachments()
+          ? {
+              readExternalAttachmentContent: (
+                attachmentId: string,
+                scope: { sessionId: string; workspaceId: string },
+              ) =>
+                externalSources.readAttachedExternalContext(
+                  { workspaceId: scope.workspaceId, sessionId: scope.sessionId, attachmentId },
+                  new AbortController().signal,
+                ),
+            }
+          : {}),
       },
       input,
     );

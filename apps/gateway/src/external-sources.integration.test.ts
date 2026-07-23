@@ -28,7 +28,6 @@ const ENV_KEYS = [
   "GOATCITADEL_AUTH_MODE",
   "GOATCITADEL_AUTH_TOKEN",
   "GOATCITADEL_DATABASE_DRIVER",
-  "GOATCITADEL_INTERNAL_HX407_EXTERNAL_SOURCES_PROOF_ENABLED",
   "GOATCITADEL_RATE_LIMIT_ENABLED",
   "GOATCITADEL_ROOT_DIR",
 ] as const;
@@ -50,27 +49,27 @@ describe("HX-407 external source production composition", { timeout: 90_000 }, (
   it("registers a verified root, seals a bounded scan, and pages immutable content-free catalog evidence", async () => {
     const configRoot = configureGateway();
     const sourceRoot = createSyntheticCodexRoot(configRoot);
-    const gatedApp = await buildApp();
-    try {
-      const unavailable = await gatedApp.inject({
-        method: "GET",
-        url: "/api/v1/library/external-sources?workspaceId=default",
-        headers: operatorHeaders(),
-      });
-      expect(unavailable.statusCode).toBe(404);
-    } finally {
-      await gatedApp.close();
-    }
-    process.env.GOATCITADEL_INTERNAL_HX407_EXTERNAL_SOURCES_PROOF_ENABLED = "1";
+    // HX-407 C4: the proof-only environment gate is removed. The production
+    // composition (NODE_ENV=production, no internal flag anywhere) serves the
+    // external-source domain; only authentication gates access.
     process.env.NODE_ENV = "production";
     const productionApp = await buildApp();
     try {
-      const productionUnavailable = await productionApp.inject({
+      const productionAvailable = await productionApp.inject({
         method: "GET",
         url: "/api/v1/library/external-sources?workspaceId=default",
         headers: operatorHeaders(),
       });
-      expect(productionUnavailable.statusCode).toBe(404);
+      expect(productionAvailable.statusCode).toBe(200);
+      expect((productionAvailable.json() as ExternalSourceListResponse).items).toEqual([]);
+      const productionChatList = await productionApp.inject({
+        method: "GET",
+        url: "/api/v1/chat/sessions/session-anything/external-source-attachments?workspaceId=default",
+        headers: operatorHeaders(),
+      });
+      // The route surface exists in production; an unknown session masks as 404.
+      expect(productionChatList.statusCode).toBe(404);
+      expect(productionChatList.json()).toMatchObject({ code: "not_found" });
     } finally {
       await productionApp.close();
     }

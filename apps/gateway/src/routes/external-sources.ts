@@ -2,15 +2,22 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import {
   EXTERNAL_SOURCE_LIMITS,
+  EXTERNAL_SOURCE_SESSION_INCARNATION_MAX_LENGTH,
+  normalizeExternalSessionAttachInput,
+  normalizeExternalSessionAttachmentListInput,
+  normalizeExternalSessionDetachInput,
   normalizeExternalSourceCatalogListInput,
   normalizeExternalSourceCreateInput,
   normalizeExternalSourceImportApplyInput,
   normalizeExternalSourceImportPlanInput,
+  normalizeExternalSourceKnowledgeSnapshotRequestInput,
   normalizeExternalSourceScanInput,
   normalizeExternalSourceUpdateInput,
 } from "@goatcitadel/contracts";
 import type { ExternalSourceRoutePort } from "../services/external-source-route-service.js";
+import { ExternalSourceAttachmentServiceError } from "../services/external-source-attachment-service.js";
 import { ExternalSourceImportServiceError } from "../services/external-source-import-service.js";
+import { ExternalSourceKnowledgeEffectServiceError } from "../services/external-source-knowledge-effect-service.js";
 import { ExternalSourceServiceError, type ExternalSourceRequestActor } from "../services/external-source-service.js";
 import { withRouteAccess } from "./route-access.js";
 
@@ -96,6 +103,45 @@ const importApplyBodySchema = z
   })
   .strict();
 const importParamsSchema = z.object({ importId: identifier }).strict();
+const sessionIncarnation = canonicalText(EXTERNAL_SOURCE_SESSION_INCARNATION_MAX_LENGTH);
+const sessionParamsSchema = z.object({ sessionId: identifier }).strict();
+const sessionAttachmentParamsSchema = z.object({ sessionId: identifier, attachmentId: identifier }).strict();
+const attachmentListQuerySchema = z
+  .object({
+    workspaceId: identifier,
+    limit: z.coerce.number().int().min(1).max(EXTERNAL_SOURCE_LIMITS.maxPageSize).optional(),
+  })
+  .strict();
+const attachBodySchema = z
+  .object({
+    workspaceId: identifier,
+    sessionId: identifier,
+    expectedSessionIncarnationId: sessionIncarnation,
+    sourceId: identifier,
+    importId: identifier,
+    itemId: identifier,
+  })
+  .strict();
+const detachBodySchema = z
+  .object({
+    workspaceId: identifier,
+    sessionId: identifier,
+    attachmentId: identifier,
+    expectedRevision: z.number().int().positive().safe(),
+    expectedSessionIncarnationId: sessionIncarnation,
+  })
+  .strict();
+const knowledgeSnapshotRequestBodySchema = z
+  .object({
+    workspaceId: identifier,
+    sessionId: identifier,
+    expectedSessionIncarnationId: sessionIncarnation,
+    attachmentId: identifier,
+    importId: identifier,
+    itemId: identifier,
+    expectedAttachmentRevision: z.number().int().positive().safe(),
+  })
+  .strict();
 
 export interface ExternalSourceRoutesOptions {
   service: ExternalSourceRoutePort;
@@ -302,6 +348,129 @@ export const externalSourceRoutes: FastifyPluginAsync<ExternalSourceRoutesOption
       return sendExternalSourceError(error, request, reply);
     }
   });
+
+  // ---------------------------------------------------------------------------
+  // HX-407 C4 Chat-side attachment routes. Paths and bodies are frozen against
+  // the C3 shared client; request bodies carry identifiers plus expected
+  // revisions/incarnation ONLY — the frozen contract normalizers reject every
+  // smuggled hash or actor field, and the server derives every hash.
+  // ---------------------------------------------------------------------------
+
+  fastify.get("/api/v1/chat/sessions/:sessionId/external-source-attachments", operatorRead, async (request, reply) => {
+    const actor = resolveSpecificOperator(request, reply);
+    if (!actor) return;
+    const params = sessionParamsSchema.safeParse(request.params);
+    const query = attachmentListQuerySchema.safeParse(request.query);
+    if (!params.success || !query.success) {
+      return reply.code(400).send({ error: "Invalid external attachment list query." });
+    }
+    let input;
+    try {
+      input = normalizeExternalSessionAttachmentListInput({
+        workspaceId: query.data.workspaceId,
+        sessionId: params.data.sessionId,
+        ...(query.data.limit === undefined ? {} : { limit: query.data.limit }),
+      });
+    } catch {
+      return reply.code(400).send({ error: "Invalid external attachment list query." });
+    }
+    try {
+      return reply.send(options.service.listSessionAttachments(input, actor));
+    } catch (error) {
+      return sendExternalSourceError(error, request, reply);
+    }
+  });
+
+  fastify.post(
+    "/api/v1/chat/sessions/:sessionId/external-source-attachments",
+    operatorMutation,
+    async (request, reply) => {
+      const actor = resolveSpecificOperator(request, reply);
+      if (!actor) return;
+      const params = sessionParamsSchema.safeParse(request.params);
+      const parsed = attachBodySchema.safeParse(request.body);
+      if (!params.success || !parsed.success || parsed.data.sessionId !== params.data.sessionId) {
+        return reply.code(400).send({ error: "Invalid external attachment request." });
+      }
+      let input;
+      try {
+        input = normalizeExternalSessionAttachInput(parsed.data);
+      } catch {
+        return reply.code(400).send({ error: "Invalid external attachment request." });
+      }
+      const abort = bindRequestAbort(request.raw);
+      try {
+        const result = await options.service.attachToSession(input, actor, abort.signal);
+        return reply.code(result.disposition === "created" ? 201 : 200).send(result);
+      } catch (error) {
+        return sendExternalSourceError(error, request, reply);
+      } finally {
+        abort.dispose();
+      }
+    },
+  );
+
+  fastify.delete(
+    "/api/v1/chat/sessions/:sessionId/external-source-attachments/:attachmentId",
+    operatorMutation,
+    async (request, reply) => {
+      const actor = resolveSpecificOperator(request, reply);
+      if (!actor) return;
+      const params = sessionAttachmentParamsSchema.safeParse(request.params);
+      const parsed = detachBodySchema.safeParse(request.body);
+      if (
+        !params.success ||
+        !parsed.success ||
+        parsed.data.sessionId !== params.data.sessionId ||
+        parsed.data.attachmentId !== params.data.attachmentId
+      ) {
+        return reply.code(400).send({ error: "Invalid external attachment detach request." });
+      }
+      let input;
+      try {
+        input = normalizeExternalSessionDetachInput(parsed.data);
+      } catch {
+        return reply.code(400).send({ error: "Invalid external attachment detach request." });
+      }
+      const abort = bindRequestAbort(request.raw);
+      try {
+        return reply.send(await options.service.detachFromSession(input, actor, abort.signal));
+      } catch (error) {
+        return sendExternalSourceError(error, request, reply);
+      } finally {
+        abort.dispose();
+      }
+    },
+  );
+
+  fastify.post(
+    "/api/v1/library/external-source-imports/:importId/knowledge-snapshot-requests",
+    operatorMutation,
+    async (request, reply) => {
+      const actor = resolveSpecificOperator(request, reply);
+      if (!actor) return;
+      const params = importParamsSchema.safeParse(request.params);
+      const parsed = knowledgeSnapshotRequestBodySchema.safeParse(request.body);
+      if (!params.success || !parsed.success || parsed.data.importId !== params.data.importId) {
+        return reply.code(400).send({ error: "Invalid knowledge snapshot request." });
+      }
+      let input;
+      try {
+        input = normalizeExternalSourceKnowledgeSnapshotRequestInput(parsed.data);
+      } catch {
+        return reply.code(400).send({ error: "Invalid knowledge snapshot request." });
+      }
+      const abort = bindRequestAbort(request.raw);
+      try {
+        const receipt = await options.service.createKnowledgeSnapshotRequest(input, actor, abort.signal);
+        return reply.code(receipt.disposition === "created" ? 201 : 200).send(receipt);
+      } catch (error) {
+        return sendExternalSourceError(error, request, reply);
+      } finally {
+        abort.dispose();
+      }
+    },
+  );
 };
 
 function resolveSpecificOperator(request: FastifyRequest, reply: FastifyReply): ExternalSourceRequestActor | undefined {
@@ -327,6 +496,34 @@ function resolveSpecificOperator(request: FastifyRequest, reply: FastifyReply): 
 }
 
 function sendExternalSourceError(error: unknown, request: FastifyRequest, reply: FastifyReply) {
+  if (error instanceof ExternalSourceAttachmentServiceError) {
+    const status = {
+      artifact_failure: 500,
+      cancelled: 408,
+      conflict: 409,
+      identity_drift: 409,
+      not_found: 404,
+      session_incarnation_stale: 409,
+      source_not_active: 409,
+    }[error.code];
+    return reply.code(status).send({ error: error.message, code: error.code });
+  }
+  if (error instanceof ExternalSourceKnowledgeEffectServiceError) {
+    const status = {
+      approval_conflict: 409,
+      approval_expired: 409,
+      approval_not_approved: 409,
+      artifact_failure: 500,
+      cancelled: 408,
+      conflict: 409,
+      identity_drift: 409,
+      not_found: 404,
+      policy_denied: 403,
+      session_incarnation_stale: 409,
+      source_not_active: 409,
+    }[error.code];
+    return reply.code(status).send({ error: error.message, code: error.code });
+  }
   if (error instanceof ExternalSourceImportServiceError) {
     const status = {
       artifact_failure: 500,
