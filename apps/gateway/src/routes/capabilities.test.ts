@@ -88,23 +88,34 @@ describe("capabilities routes", () => {
         proposalId,
         status: "proposal",
       })),
-      promoteCapabilityCandidate: vi.fn((candidateId: string, expectedRevision: number, versionId?: string) => ({
-        action: "promote",
-        candidateId,
-        revision: expectedRevision + 1,
-        selectedVersionId: versionId,
+      // HX-402 P2: candidate lifecycle verbs answer pending capability.lifecycle
+      // approval envelopes; the recovered approval effect is the only executor.
+      promoteCapabilityCandidate: vi.fn((candidateId: string) => ({
+        pendingApproval: {
+          kind: "capability.lifecycle",
+          action: "candidate_promoted",
+          candidateId,
+          status: "pending",
+          approvalId: "promote-approval",
+        },
       })),
-      revokeCapabilityCandidate: vi.fn((candidateId: string, expectedRevision: number, versionId?: string) => ({
-        action: "revoke",
-        candidateId,
-        revision: expectedRevision + 1,
-        selectedVersionId: versionId,
+      revokeCapabilityCandidate: vi.fn((candidateId: string) => ({
+        pendingApproval: {
+          kind: "capability.lifecycle",
+          action: "candidate_revoked",
+          candidateId,
+          status: "pending",
+          approvalId: "revoke-approval",
+        },
       })),
-      rollbackCapabilityCandidate: vi.fn((candidateId: string, targetVersionId: string, expectedRevision: number) => ({
-        action: "rollback",
-        candidateId,
-        revision: expectedRevision + 1,
-        targetVersionId,
+      rollbackCapabilityCandidate: vi.fn((candidateId: string) => ({
+        pendingApproval: {
+          kind: "capability.lifecycle",
+          action: "candidate_rolled_back",
+          candidateId,
+          status: "pending",
+          approvalId: "rollback-approval",
+        },
       })),
       createCapabilityProposal: vi.fn((payload: Record<string, unknown>) => ({
         proposalId: "proposal-created",
@@ -442,14 +453,17 @@ describe("capabilities routes", () => {
     });
 
     expect(response.statusCode).toBe(201);
-    expect(createCapabilityProposal).toHaveBeenCalledWith({
-      proposalKind: "skill",
-      title: "Summarizer Upgrade",
-      summary: "Promote a better summarizer candidate",
-      payload: {
-        candidateId: "candidate-1",
+    expect(createCapabilityProposal).toHaveBeenCalledWith(
+      {
+        proposalKind: "skill",
+        title: "Summarizer Upgrade",
+        summary: "Promote a better summarizer candidate",
+        payload: {
+          candidateId: "candidate-1",
+        },
       },
-    });
+      "operator-test",
+    );
     expect(response.json()).toMatchObject({
       proposalId: "proposal-1",
       proposalKind: "skill",
@@ -710,20 +724,19 @@ describe("capabilities routes", () => {
   });
 
   it("promotes a candidate through the capability route service", async () => {
-    const promoteCapabilityCandidate = vi.fn((candidateId: string, expectedRevision: number, versionId?: string) => ({
-      action: "promote",
-      candidateId,
-      revision: expectedRevision + 1,
-      selectedVersionId: versionId,
-      changedVersionIds: [versionId],
-      occurredAt: "2026-04-10T01:00:00.000Z",
-      detail: {
+    // HX-402 P2: the promote verb answers with a pending capability.lifecycle
+    // approval envelope; the recovered approval effect is the only executor.
+    const promoteCapabilityCandidate = vi.fn((candidateId: string) => ({
+      pendingApproval: {
+        approvalId: "22222222-3333-4444-5555-666677778888",
+        status: "pending",
+        kind: "capability.lifecycle",
+        action: "candidate_promoted",
         candidateId,
-        revision: expectedRevision + 1,
-        versions: [],
-        relatedProposals: [],
-        activationBlocked: false,
-        activationBlockers: [],
+        requestSha256: "a".repeat(64),
+        expectedStateSha256: "b".repeat(64),
+        createdAt: "2026-04-10T01:00:00.000Z",
+        replayed: false,
       },
     }));
 
@@ -757,12 +770,12 @@ describe("capabilities routes", () => {
       },
     });
 
-    expect(response.statusCode).toBe(200);
-    expect(promoteCapabilityCandidate).toHaveBeenCalledWith("candidate-1", 3, "version-2");
-    expect(response.json()).toMatchObject({
-      action: "promote",
+    expect(response.statusCode).toBe(202);
+    expect(promoteCapabilityCandidate).toHaveBeenCalledWith("candidate-1", 3, "version-2", "ip:127.0.0.1");
+    expect(response.json().pendingApproval).toMatchObject({
+      kind: "capability.lifecycle",
+      action: "candidate_promoted",
       candidateId: "candidate-1",
-      selectedVersionId: "version-2",
     });
   });
 
@@ -1464,17 +1477,17 @@ describe("capabilities routes", () => {
       },
     });
 
-    expect(revokeResponse.statusCode).toBe(200);
-    expect(rollbackResponse.statusCode).toBe(200);
-    expect(service.revokeCapabilityCandidate).toHaveBeenCalledWith("candidate-1", 4, "version-2");
-    expect(service.rollbackCapabilityCandidate).toHaveBeenCalledWith("candidate-1", "version-1", 4);
-    expect(revokeResponse.json()).toMatchObject({
-      action: "revoke",
-      selectedVersionId: "version-2",
+    expect(revokeResponse.statusCode).toBe(202);
+    expect(rollbackResponse.statusCode).toBe(202);
+    expect(service.revokeCapabilityCandidate).toHaveBeenCalledWith("candidate-1", 4, "version-2", "operator-test");
+    expect(service.rollbackCapabilityCandidate).toHaveBeenCalledWith("candidate-1", "version-1", 4, "operator-test");
+    expect(revokeResponse.json().pendingApproval).toMatchObject({
+      action: "candidate_revoked",
+      candidateId: "candidate-1",
     });
-    expect(rollbackResponse.json()).toMatchObject({
-      action: "rollback",
-      targetVersionId: "version-1",
+    expect(rollbackResponse.json().pendingApproval).toMatchObject({
+      action: "candidate_rolled_back",
+      candidateId: "candidate-1",
     });
   });
 

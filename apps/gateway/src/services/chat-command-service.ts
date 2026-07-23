@@ -109,7 +109,21 @@ export interface ChatCommandDependencies {
     content: string,
     source: { role: "user" | "assistant"; sourceRef: string },
   ): void;
-  installSkillImport(input: { sourceRef: string; confirmHighRisk?: boolean }): Promise<{ installedSkillId?: string }>;
+  /**
+   * HX-402 P2: the legacy executable install is retired; this resolves to a
+   * structured redirect into the governed Skill Hub review surface and never
+   * publishes bytes.
+   */
+  installSkillImport(input: { sourceRef: string; confirmHighRisk?: boolean }): Promise<{
+    disposition: "redirected_to_skill_hub";
+    redirect: {
+      reviewRoute: string;
+      sourceRef: string;
+      sourceType?: string;
+      eligible: boolean;
+      ineligibleReason?: string;
+    };
+  }>;
   listChatSessionLearnedMemory(
     sessionId: string,
     limit?: number,
@@ -228,11 +242,17 @@ export interface ChatCommandDependencies {
     usabilityScore: 0 | 1 | 2;
     notes?: string;
   }): Promise<{ overrideVerdict?: string }>;
+  /**
+   * HX-402 P2: approval-first — requests one canonical `skill.lifecycle`
+   * approval (or reports a pure no-op) and never mutates directly.
+   */
   setSkillState(
     skillId: string,
     state: "enabled" | "sleep" | "disabled",
     reason: string,
-  ): { skillId: string; state: string };
+  ):
+    | { pendingApproval: { approvalId: string; status: string } }
+    | { pendingApproval: null; noMutationRequired: true; skillState: { skillId: string; state: string } };
   setDefaultPersonality(id: string): PersonalityCatalogResponse;
   updateChatSessionPrefs(sessionId: string, patch: Record<string, unknown>): ChatSessionPrefsRecord;
   updateChatSessionProactivePolicy(sessionId: string, patch: Record<string, unknown>): { mode: ChatProactiveMode };
@@ -392,7 +412,7 @@ export function listChatCommandCatalog(): ChatCommandCatalogItem[] {
     {
       command: "/skill",
       usage: "/skill enable|sleep|disable <skillId>",
-      description: "Change an installed skill's runtime state.",
+      description: "Request an approval to change an installed skill's runtime state.",
     },
     { command: "/skill", usage: "/skill search <query>", description: "Search skill import sources." },
     {
@@ -403,7 +423,7 @@ export function listChatCommandCatalog(): ChatCommandCatalogItem[] {
     {
       command: "/skill",
       usage: "/skill install <sourceRef> [--confirm-high-risk]",
-      description: "Validate and install a skill, disabled by default.",
+      description: "Validate a skill and redirect installation into the governed Skill Hub review.",
     },
     {
       command: "/skill-bundle",
@@ -1026,12 +1046,23 @@ export async function parseChatCommand(
         return { ok: false, command, args, message: `Usage: /skill ${action} <skillId>` };
       }
       const state = action === "enable" ? "enabled" : action === "sleep" ? "sleep" : "disabled";
-      const updated = deps.setSkillState(skillId, state, `Updated from chat command ${commandText.trim()}`);
+      // HX-402 P2: skill state changes are approval-first — the command
+      // requests one canonical skill.lifecycle approval and never mutates.
+      const outcome = deps.setSkillState(skillId, state, `Requested from chat command ${commandText.trim()}`);
+      if (!outcome.pendingApproval) {
+        const skillState = "skillState" in outcome ? outcome.skillState : undefined;
+        return {
+          ok: true,
+          command,
+          args,
+          message: `Skill ${skillState?.skillId ?? skillId} is already ${skillState?.state ?? state}; nothing to approve.`,
+        };
+      }
       return {
         ok: true,
         command,
         args,
-        message: `Skill ${updated.skillId} is now ${updated.state}.`,
+        message: `Approval required: resolve approval ${outcome.pendingApproval.approvalId} to set ${skillId} to ${state}. No change has been applied yet.`,
       };
     }
     if (action === "search") {
@@ -1118,12 +1149,26 @@ export async function parseChatCommand(
           message: "High-risk skill import requires --confirm-high-risk.",
         };
       }
-      const installed = await deps.installSkillImport({ sourceRef, confirmHighRisk });
+      // HX-402 P2: executable install is retired — validation stays advisory
+      // and the governed Skill Hub review/approval flow is the only install
+      // authority. Nothing is published from this command.
+      const redirected = await deps.installSkillImport({ sourceRef, confirmHighRisk });
+      const name = validation.inferredSkillName ?? sourceRef;
+      if (!redirected.redirect.eligible) {
+        return {
+          ok: false,
+          command,
+          args,
+          message: `Validated ${name}, but no executable install happened: ${
+            redirected.redirect.ineligibleReason ?? "the source is not eligible for the governed Skill Hub review."
+          }`,
+        };
+      }
       return {
         ok: true,
         command,
         args,
-        message: `Installed ${installed.installedSkillId ?? validation.inferredSkillName ?? sourceRef}. Skill starts disabled by default.`,
+        message: `Validated ${name}. Executable installs are governed by the Skill Hub: submit ${redirected.redirect.sourceRef} through ${redirected.redirect.reviewRoute} (source type ${redirected.redirect.sourceType ?? "git_url"}) and resolve its approval. Nothing was installed by this command.`,
       };
     }
     return {

@@ -184,9 +184,15 @@ describe("route service facades", () => {
     });
     expect(service.listCapabilityProposals()).toEqual({ method: "listProposals", args: [100] });
     expect(service.listCapabilityProposals(5)).toEqual({ method: "listProposals", args: [5] });
+    // HX-402 P2: proposal creation forwards the acting operator (undefined
+    // when the route has none so the service default applies).
     expect(service.createCapabilityProposal({ title: "Add API" } as never)).toEqual({
       method: "createProposal",
-      args: [{ title: "Add API" }],
+      args: [{ title: "Add API" }, undefined],
+    });
+    expect(service.createCapabilityProposal({ title: "Add API" } as never, "operator-1")).toEqual({
+      method: "createProposal",
+      args: [{ title: "Add API" }, "operator-1"],
     });
     expect(service.getCapabilityProposalDetail("proposal-1")).toEqual({
       method: "getProposalDetail",
@@ -196,17 +202,18 @@ describe("route service facades", () => {
       method: "getCandidateDetail",
       args: ["candidate-1"],
     });
-    expect(service.promoteCapabilityCandidate("candidate-1", 7, "version-2")).toEqual({
+    // HX-402 P2: approval-first candidate verbs forward the requesting actor.
+    expect(service.promoteCapabilityCandidate("candidate-1", 7, "version-2", "operator-1")).toEqual({
       method: "promoteCandidate",
-      args: ["candidate-1", 7, "version-2"],
+      args: ["candidate-1", 7, "version-2", "operator-1"],
     });
     expect(service.revokeCapabilityCandidate("candidate-1", 8)).toEqual({
       method: "revokeCandidate",
-      args: ["candidate-1", 8, undefined],
+      args: ["candidate-1", 8, undefined, undefined],
     });
-    expect(service.rollbackCapabilityCandidate("candidate-1", "version-1", 9)).toEqual({
+    expect(service.rollbackCapabilityCandidate("candidate-1", "version-1", 9, "operator-2")).toEqual({
       method: "rollbackCandidate",
-      args: ["candidate-1", "version-1", 9],
+      args: ["candidate-1", "version-1", 9, "operator-2"],
     });
     expect(service.listCodeModeRuns()).toEqual({ method: "listCodeModeRuns", args: [100] });
     expect(service.getCodeModeRun("run-1")).toEqual({ method: "getCodeModeRun", args: ["run-1"] });

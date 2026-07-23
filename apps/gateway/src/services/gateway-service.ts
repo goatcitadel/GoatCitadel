@@ -410,9 +410,17 @@ import { ApprovalRemoteTokenSecretService } from "./approval-remote-token-secret
 import { GatewayTurnRuntime } from "./chat-turn-runtime.js";
 import { ResearchService } from "./research-service.js";
 import { ObsidianVaultService } from "./obsidian-vault-service.js";
-import { SkillImportService } from "./skill-import-service.js";
+import { SkillImportService, type SkillImportRedirectResult } from "./skill-import-service.js";
 import { SkillLearningService } from "./skill-learning-service.js";
-import { SkillStateService } from "./skill-state-service.js";
+import {
+  SkillStateService,
+  type ActivationPolicyMutationAuthorityInput,
+  type ActivationPolicyMutationOutcome,
+  type SkillStateBulkMutationAuthorityInput,
+  type SkillStateBulkMutationOutcome,
+  type SkillStateMutationAuthorityInput,
+  type SkillStateMutationOutcome,
+} from "./skill-state-service.js";
 import { GATEWAY_OWNED_MCP_SERVER_IDS, McpServerStore } from "./mcp-server-store.js";
 import { SkillMutationService, type SkillMutationSnapshot } from "./skill-mutation-service.js";
 import { AddonsService } from "./addons-service.js";
@@ -2072,6 +2080,12 @@ export class GatewayService {
       // this constructor, before any approval effect can execute.
       executeApprovedMemoryLifecycleMutation: (input) =>
         this.memoryLifecycleService.executeApprovedMemoryLifecycleMutation(input),
+      // HX-402 P2: lazy closures — both services are assigned later in this
+      // constructor, before any approval effect can execute.
+      executeApprovedSkillLifecycleMutation: (input) =>
+        this.skillStateService.executeApprovedSkillLifecycleMutation(input),
+      executeApprovedCapabilityLifecycleMutation: (input) =>
+        this.capabilitySystemService.executeApprovedCapabilityLifecycleMutation(input),
       enqueueAfterHooks: (input) => this.hooksService.enqueueAfterHooks(input),
       resolveApprovalHookWorkspaceId: (payload) => this.resolveApprovalHookWorkspaceId(payload),
       resolvePostCommitEligibility: (sessionId) => this.resolvePostCommitEligibility(sessionId),
@@ -2395,16 +2409,17 @@ export class GatewayService {
     this.curatorService = new CuratorService({
       listSkills: () => this.listSkills(),
       archiveSkill: (skillId, reason) => {
-        const expectedRevision = this.storage.skillAggregateRevisions.ensure("runtime_skill", skillId).revision;
-        this.setSkillState(skillId, "disabled", reason, expectedRevision);
+        // HX-402 P2: curator archive is the fail-safe internal disable — it
+        // runs under the module-private branded system authority and writes
+        // the governed `system_disabled` event plus Journey evidence.
+        this.skillStateService.systemDisableSkill(skillId, reason);
         const updated = this.listSkills().find((s) => s.skillId === skillId);
         if (!updated) throw new Error(`Skill ${skillId} not found after archiving`);
         return updated;
       },
       pruneSkill: (skillId) => {
         // v1: mark with prune note. Actual file removal is a follow-up task.
-        const expectedRevision = this.storage.skillAggregateRevisions.ensure("runtime_skill", skillId).revision;
-        this.setSkillState(skillId, "disabled", "curator:pruned", expectedRevision);
+        this.skillStateService.systemDisableSkill(skillId, "curator:pruned");
         return { filesRemoved: [] };
       },
       now: () => new Date(),
@@ -2589,11 +2604,19 @@ export class GatewayService {
         gatewaySql: this.storage.gatewaySql,
         systemSettings: this.storage.systemSettings,
         skillAggregateRevisions: this.storage.skillAggregateRevisions,
+        // HX-402 P2: canonical approval-authority collaborators for the
+        // approval-first skill mutation surface and its recovered effect.
+        approvalAuthority: {
+          approvals: this.storage.approvals,
+          approvalEvents: this.storage.approvalEvents,
+          governanceJourneyEvents: this.storage.governanceJourneyEvents,
+        },
       },
       {
         listSkills: () => this.skillsService.list(),
         recordAutonomousMutation: (input) => this.autonomyControlService.recordAutonomousMutation(input),
         recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
+        publishRealtime: (eventType, source, payload) => this.publishRealtime(eventType, source, payload),
       },
     );
     this.mcpServerStore = new McpServerStore({ systemSettings: this.storage.systemSettings });
@@ -8245,30 +8268,36 @@ export class GatewayService {
     return this.skillStateService.getActivationPolicy();
   }
 
+  // HX-402 P2: the operator skill mutation surface is approval-first. These
+  // gateway members keep their composition-pinned names and arities but now
+  // request one canonical `skill.lifecycle` approval and never mutate; the
+  // recovered `skill_lifecycle_apply` effect is the sole executor.
   public updateSkillActivationPolicy(
     input: Partial<Omit<SkillActivationPolicy, "revision">>,
-    expectedRevision: number,
-  ): SkillActivationPolicy {
-    return this.skillStateService.updateActivationPolicy(input, expectedRevision);
+    authority: ActivationPolicyMutationAuthorityInput,
+  ): ActivationPolicyMutationOutcome {
+    return this.skillStateService.requestActivationPolicyApproval(input, authority);
   }
 
   public setSkillState(
     skillId: string,
     state: SkillRuntimeState,
     note?: string,
-    expectedRevision?: number,
-  ): SkillStateRecord {
-    const revision = expectedRevision ?? this.storage.skillAggregateRevisions.ensure("runtime_skill", skillId).revision;
-    return this.skillStateService.setSkillState(skillId, state, note, revision);
+    authority?: SkillStateMutationAuthorityInput,
+  ): SkillStateMutationOutcome {
+    const resolved = authority ?? {
+      expectedRevision: this.storage.skillAggregateRevisions.ensure("runtime_skill", skillId).revision,
+    };
+    return this.skillStateService.requestSkillStateApproval(skillId, state, note, resolved);
   }
 
   public bulkSetSkillState(
     skillIds: string[],
     state: SkillRuntimeState,
     note: string | undefined,
-    expectedRevisionsBySkillId: Record<string, number>,
-  ): SkillStateRecord[] {
-    return this.skillStateService.bulkSetSkillState(skillIds, state, note, expectedRevisionsBySkillId);
+    authority: SkillStateBulkMutationAuthorityInput,
+  ): SkillStateBulkMutationOutcome {
+    return this.skillStateService.requestSkillStateBulkApproval(skillIds, state, note, authority);
   }
 
   /**
@@ -8939,49 +8968,30 @@ export class GatewayService {
     return this.skillHubReviewService.prepareRollbackReview(input);
   }
 
+  /**
+   * HX-402 P2: legacy executable install is retired. Validation stays
+   * advisory, but the response is a structured redirect into the HX-413 Skill
+   * Hub owner — no bytes are published, no skill state row is written, and no
+   * lifecycle claim is minted from this surface.
+   */
   public async installSkillImport(input: {
     sourceRef: string;
     sourceType?: SkillImportValidationResult["candidate"]["sourceType"];
     sourceProvider?: SkillSourceProvider;
     force?: boolean;
     confirmHighRisk?: boolean;
-  }): Promise<{
-    validation: SkillImportValidationResult;
-    installedPath: string;
-    sourceManifestPath: string;
-    installedSkillId?: string;
-  }> {
-    const installed = await this.skillImportService.installImport(input);
-    const skills = await this.reloadSkills();
-    const installedSkill = skills.find(
-      (skill) => skill.source === "extra" && path.resolve(skill.dir) === path.resolve(installed.installedPath),
-    );
-    if (installedSkill) {
-      const expectedRevision = this.storage.skillAggregateRevisions.ensure(
-        "runtime_skill",
-        installedSkill.skillId,
-      ).revision;
-      this.setSkillState(
-        installedSkill.skillId,
-        "disabled",
-        "Imported skill starts disabled by default.",
-        expectedRevision,
-      );
-    }
-    this.skillStateService.recordSkillImportEvent(installed.validation, "import_installed");
+  }): Promise<SkillImportRedirectResult> {
+    const redirected = await this.skillImportService.installImport(input);
+    this.skillStateService.recordSkillImportEvent(redirected.validation, "import_redirected");
     this.publishRealtime("system", "skills", {
-      type: "skill_import_installed",
-      sourceProvider: installed.validation.candidate.sourceProvider,
-      sourceRef: installed.validation.candidate.sourceRef,
-      riskLevel: installed.validation.riskLevel,
-      skillName: installed.validation.inferredSkillName,
-      skillId: installedSkill?.skillId,
-      installedPath: path.relative(this.config.rootDir, installed.installedPath).replaceAll("\\", "/"),
+      type: "skill_import_redirected",
+      sourceProvider: redirected.validation.candidate.sourceProvider,
+      sourceRef: redirected.validation.candidate.sourceRef,
+      riskLevel: redirected.validation.riskLevel,
+      skillName: redirected.validation.inferredSkillName,
+      redirectEligible: redirected.redirect.eligible,
     });
-    return {
-      ...installed,
-      installedSkillId: installedSkill?.skillId,
-    };
+    return redirected;
   }
 
   public listMcpServers(): McpServerRecord[] {

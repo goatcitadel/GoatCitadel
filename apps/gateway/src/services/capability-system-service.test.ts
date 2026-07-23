@@ -12,8 +12,6 @@ import type {
   CapabilityArtifactRecord,
   CapabilityCatalogEntry,
   CapabilityCatalogSnapshotRecord,
-  CapabilityProposalEventRecord,
-  CapabilityProposalRecord,
   CandidateSkillVersionRecord,
   ChatMessageRecord,
   CodeModeSandboxMetadata,
@@ -32,14 +30,17 @@ import type {
   TranscriptEvent,
 } from "@goatcitadel/contracts";
 import { ConflictError } from "@goatcitadel/contracts";
+import { Storage } from "@goatcitadel/storage";
 import { CapabilitySystemService, __internal } from "./capability-system-service.js";
 import type { CapabilityRuntimeConfig } from "../config.js";
 
 const tempRoots: string[] = [];
+const storageCleanups: Array<() => void> = [];
 const digestPinnedRunnerImage =
   "ghcr.io/goatcitadel/code-mode-runner@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 afterEach(async () => {
+  for (const cleanup of storageCleanups.splice(0).reverse()) cleanup();
   await Promise.all(
     tempRoots.splice(0).map(async (root) => {
       await fs.rm(root, { recursive: true, force: true });
@@ -2256,7 +2257,31 @@ describe("CapabilitySystemService", () => {
       originatingRun: expect.objectContaining({ runId: "code-run-existing" }),
     });
 
-    const promoted = harness.service.promoteCandidate("candidate-demo", initialDetail.revision, "version-b");
+    // HX-402 P2 (coverage-preserving remodel): promote/rollback/revoke are
+    // approval-first — each verb requests one canonical capability.lifecycle
+    // approval and only the recovered effect executes the transition.
+    const executeApproved = (pending: { approvalId: string }) => {
+      harness.storage.approvals.resolve(pending.approvalId, {
+        decision: "approve",
+        resolvedBy: "operator-resolver",
+      });
+      return harness.service.executeApprovedCapabilityLifecycleMutation({ approvalId: pending.approvalId });
+    };
+
+    const promoteRequest = harness.service.promoteCandidate("candidate-demo", initialDetail.revision, "version-b");
+    if (!promoteRequest.pendingApproval) throw new Error("expected pending promote approval");
+    expect(promoteRequest.pendingApproval).toMatchObject({
+      kind: "capability.lifecycle",
+      action: "candidate_promoted",
+      candidateId: "candidate-demo",
+      status: "pending",
+    });
+    // No mutation before approval: the reviewed detail is unchanged.
+    expect(harness.service.getCandidateDetail("candidate-demo")).toMatchObject({
+      revision: 1,
+      activationBlocked: true,
+    });
+    const promoted = executeApproved(promoteRequest.pendingApproval);
     expect(promoted.revision).toBe(2);
     expect(promoted.detail.activeVersion?.versionId).toBe("version-b");
     expect(promoted.detail.activationBlocked).toBe(false);
@@ -2273,16 +2298,38 @@ describe("CapabilitySystemService", () => {
       details: { expectedRevision: 1, currentRevision: 2 },
     });
 
+    // Byte-identical target state is a pure no-op: no approval row is minted.
     const noOp = harness.service.promoteCandidate("candidate-demo", promoted.revision, "version-b");
-    expect(noOp).toMatchObject({ revision: promoted.revision, changedVersionIds: [] });
+    expect(noOp.pendingApproval).toBeNull();
+    expect(noOp).toMatchObject({
+      noMutationRequired: true,
+      detail: expect.objectContaining({ revision: promoted.revision }),
+    });
 
-    const rolledBack = harness.service.rollbackCandidate("candidate-demo", "version-a", noOp.revision);
+    const rollbackRequest = harness.service.rollbackCandidate("candidate-demo", "version-a", promoted.revision);
+    if (!rollbackRequest.pendingApproval) throw new Error("expected pending rollback approval");
+    expect(rollbackRequest.pendingApproval.action).toBe("candidate_rolled_back");
+    const rolledBack = executeApproved(rollbackRequest.pendingApproval);
     expect(rolledBack.revision).toBe(3);
     expect(rolledBack.detail.activeVersion?.versionId).toBe("version-a");
 
-    const revoked = harness.service.revokeCandidate("candidate-demo", rolledBack.revision, "version-a");
+    const revokeRequest = harness.service.revokeCandidate("candidate-demo", rolledBack.revision, "version-a");
+    if (!revokeRequest.pendingApproval) throw new Error("expected pending revoke approval");
+    expect(revokeRequest.pendingApproval.action).toBe("candidate_revoked");
+    const revoked = executeApproved(revokeRequest.pendingApproval);
     expect(revoked.revision).toBe(4);
     expect(revoked.detail.activationBlocked).toBe(true);
+
+    // Every approved transition wrote its governed lifecycle evidence.
+    const governedRows = harness.storage.gatewaySql
+      .prepare(`SELECT operation FROM governed_lifecycle_events WHERE domain = 'capability_state' ORDER BY operation`)
+      .all() as Array<{ operation: string }>;
+    expect(governedRows.map((row) => row.operation)).toEqual([
+      "candidate_promoted",
+      "candidate_revoked",
+      "candidate_rolled_back",
+      "proposal_created",
+    ]);
 
     const proposalDetail = harness.service.getProposalDetail(proposal.proposalId);
     expect(proposalDetail).toMatchObject({
@@ -5013,6 +5060,185 @@ describe("CapabilitySystemService", () => {
   });
 });
 
+// HX-402 P2: governed capability lifecycle — the recovered effect ladder,
+// the one-transaction review-only proposal, and the branded fail-safe revoke.
+describe("CapabilitySystemService governed lifecycle (HX-402 P2)", () => {
+  async function seedCandidate(harness: Awaited<ReturnType<typeof createHarness>>): Promise<void> {
+    harness.storage.candidateSkillVersions.upsert(
+      await createCandidateVersion(harness.rootDir, {
+        candidateId: "candidate-gov",
+        versionId: "version-a",
+        lifecycleState: "candidate",
+        originatingRunId: undefined,
+        updatedAt: "2026-04-10T00:01:00.000Z",
+      }),
+    );
+    harness.storage.candidateSkillVersions.upsert(
+      await createCandidateVersion(harness.rootDir, {
+        candidateId: "candidate-gov",
+        versionId: "version-b",
+        lifecycleState: "candidate",
+        originatingRunId: undefined,
+        updatedAt: "2026-04-10T00:02:00.000Z",
+      }),
+    );
+  }
+
+  function countGoverned(harness: Awaited<ReturnType<typeof createHarness>>): number {
+    const row = harness.storage.gatewaySql
+      .prepare(`SELECT COUNT(*) AS count FROM governed_lifecycle_events WHERE domain = 'capability_state'`)
+      .get() as { count: number };
+    return Number(row.count);
+  }
+
+  it("denial and expiry are zero-delta; unknown and foreign approvals are terminal", async () => {
+    const harness = await createHarness();
+    await seedCandidate(harness);
+    const detail = harness.service.getCandidateDetail("candidate-gov");
+    const request = harness.service.promoteCandidate("candidate-gov", detail.revision, "version-b");
+    if (!request.pendingApproval) throw new Error("expected pending approval");
+
+    // Pending approvals never execute.
+    expect(() =>
+      harness.service.executeApprovedCapabilityLifecycleMutation({ approvalId: request.pendingApproval!.approvalId }),
+    ).toThrow(/missing, foreign, malformed, or not approved/);
+
+    harness.storage.approvals.resolve(request.pendingApproval.approvalId, {
+      decision: "reject",
+      resolvedBy: "operator-resolver",
+    });
+    expect(() =>
+      harness.service.executeApprovedCapabilityLifecycleMutation({ approvalId: request.pendingApproval!.approvalId }),
+    ).toThrow(/missing, foreign, malformed, or not approved/);
+    // Zero delta: no lifecycle state changed, no governed claim was minted.
+    expect(harness.service.getCandidateDetail("candidate-gov").revision).toBe(detail.revision);
+    expect(countGoverned(harness)).toBe(0);
+    expect(() =>
+      harness.service.executeApprovedCapabilityLifecycleMutation({ approvalId: "capability-missing" }),
+    ).toThrow(/missing, foreign, malformed, or not approved/);
+  });
+
+  it("replays the original approval identity for byte-exact requests and converges effect replays", async () => {
+    const harness = await createHarness();
+    await seedCandidate(harness);
+    const detail = harness.service.getCandidateDetail("candidate-gov");
+    const first = harness.service.promoteCandidate("candidate-gov", detail.revision, "version-b");
+    const replayed = harness.service.promoteCandidate("candidate-gov", detail.revision, "version-b");
+    if (!first.pendingApproval || !replayed.pendingApproval) throw new Error("expected pending approvals");
+    expect(replayed.pendingApproval.approvalId).toBe(first.pendingApproval.approvalId);
+    expect(replayed.pendingApproval.replayed).toBe(true);
+
+    harness.storage.approvals.resolve(first.pendingApproval.approvalId, {
+      decision: "approve",
+      resolvedBy: "operator-resolver",
+    });
+    const applied = harness.service.executeApprovedCapabilityLifecycleMutation({
+      approvalId: first.pendingApproval.approvalId,
+    });
+    expect(applied.changedVersionIds).toEqual(["version-b"]);
+    // Exact effect replay converges on committed evidence without re-mutating.
+    const replayApply = harness.service.executeApprovedCapabilityLifecycleMutation({
+      approvalId: first.pendingApproval.approvalId,
+    });
+    expect(replayApply.candidateId).toBe("candidate-gov");
+    expect(countGoverned(harness)).toBe(1);
+    expect(harness.service.getCandidateDetail("candidate-gov").revision).toBe(applied.revision);
+  });
+
+  it("conflicts terminally when the candidate version set drifts from the reviewed material", async () => {
+    const harness = await createHarness();
+    await seedCandidate(harness);
+    const detail = harness.service.getCandidateDetail("candidate-gov");
+    const request = harness.service.promoteCandidate("candidate-gov", detail.revision, "version-b");
+    if (!request.pendingApproval) throw new Error("expected pending approval");
+    harness.storage.approvals.resolve(request.pendingApproval.approvalId, {
+      decision: "approve",
+      resolvedBy: "operator-resolver",
+    });
+    // Drift the reviewed version set through the branded fail-safe revoke.
+    harness.service.systemRevokeCandidate("candidate-gov", "integrity_quarantine");
+    expect(() =>
+      harness.service.executeApprovedCapabilityLifecycleMutation({ approvalId: request.pendingApproval!.approvalId }),
+    ).toThrow(/drifted from the exact reviewed material/);
+  });
+
+  it("commits review-only proposals with source and Journey in one transaction and keeps them non-callable", async () => {
+    const harness = await createHarness();
+    const proposal = harness.service.createProposal(
+      {
+        proposalKind: "skill",
+        title: "Review-only proposal",
+        summary: "Stays non-callable",
+        payload: {},
+      },
+      "operator-one",
+    );
+    const governed = harness.storage.gatewaySql
+      .prepare(
+        `SELECT operation, source_required AS sourceRequired, approval_required AS approvalRequired, approval_id AS approvalId
+         FROM governed_lifecycle_events WHERE target_id = @proposalId`,
+      )
+      .get({ proposalId: proposal.proposalId }) as
+      | { operation: string; sourceRequired: number; approvalRequired: number; approvalId: string | null }
+      | undefined;
+    expect(governed).toMatchObject({ operation: "proposal_created", approvalId: null });
+    expect(Number(governed!.sourceRequired)).toBe(1);
+    expect(Number(governed!.approvalRequired)).toBe(0);
+    // Non-callable pin: proposals never reach the callable catalog.
+    expect(
+      harness.service
+        .listCatalog("callable")
+        .some((entry) => entry.skillId === proposal.proposalId || entry.toolName === proposal.proposalId),
+    ).toBe(false);
+    const journeyRow = harness.storage.gatewaySql
+      .prepare(
+        `SELECT COUNT(*) AS count FROM governance_journey_events WHERE subject_id = @proposalId AND action = 'proposal_created'`,
+      )
+      .get({ proposalId: proposal.proposalId }) as { count: number };
+    expect(Number(journeyRow.count)).toBe(1);
+  });
+
+  it("rolls the proposal row back when a later coupled write fails (one transaction)", async () => {
+    const harness = await createHarness();
+    const before = harness.storage.capabilityProposals.list(10).length;
+    // Poison the source-history write that runs AFTER the proposal upsert and
+    // BEFORE the governed evidence: the shared immediate transaction must
+    // roll the already-written proposal row back.
+    const spy = vi.spyOn(harness.storage.capabilityProposalEvents, "append").mockImplementationOnce(() => {
+      throw new Error("simulated proposal-source outage");
+    });
+    expect(() =>
+      harness.service.createProposal(
+        { proposalKind: "skill", title: "Atomic proposal", summary: "Must roll back", payload: {} },
+        "operator-one",
+      ),
+    ).toThrow(/simulated proposal-source outage/);
+    spy.mockRestore();
+    expect(harness.storage.capabilityProposals.list(10).length).toBe(before);
+    expect(countGoverned(harness)).toBe(0);
+  });
+
+  it("fail-safe system revoke writes canonical state, governed system event, and Journey without approval", async () => {
+    const harness = await createHarness();
+    await seedCandidate(harness);
+    const revoked = harness.service.systemRevokeCandidate("candidate-gov", "integrity_quarantine");
+    expect(revoked.changedVersionIds).toEqual(["version-a", "version-b"]);
+    expect(harness.service.getCandidateDetail("candidate-gov").activationBlocked).toBe(true);
+    const governed = harness.storage.gatewaySql
+      .prepare(
+        `SELECT operation, actor_type AS actorType, approval_id AS approvalId FROM governed_lifecycle_events WHERE domain = 'capability_state'`,
+      )
+      .all() as Array<{ operation: string; actorType: string; approvalId: string | null }>;
+    expect(governed).toEqual([
+      expect.objectContaining({ operation: "system_revoked", actorType: "system", approvalId: null }),
+    ]);
+    // Idempotent repeat is a no-op with no second governed claim.
+    const repeat = harness.service.systemRevokeCandidate("candidate-gov", "integrity_quarantine");
+    expect(repeat.changedVersionIds).toEqual([]);
+    expect(countGoverned(harness)).toBe(1);
+  });
+});
+
 async function createHarness(input?: {
   toolCatalog?: ToolCatalogEntry[];
   sandboxConfig?: {
@@ -5210,9 +5436,13 @@ function fakeCodeModeDispatchChild(input: {
 }
 
 function createFakeStorage(approvalsById = new Map<string, ApprovalRequest>()) {
+  // HX-402 P2: the governed lifecycle owner, approvals, and Journey are REAL
+  // storage — the approval-first candidate lifecycle and one-transaction
+  // proposal evidence run against the trigger-protected schema, while
+  // unrelated collaborators stay lightweight fakes.
+  const realStorage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
+  storageCleanups.push(() => realStorage.close());
   const snapshots = new Map<string, CapabilityCatalogSnapshotRecord>();
-  const proposals = new Map<string, CapabilityProposalRecord>();
-  const proposalEvents = new Map<string, CapabilityProposalEventRecord[]>();
   const codeModeRuns = new Map<string, CodeModeRunRecord>();
   const runtimeDecisionRecords: RuntimeDecisionTraceRecord[] = [];
   const candidateVersions = new Map<string, CandidateSkillVersionRecord>();
@@ -5367,45 +5597,29 @@ function createFakeStorage(approvalsById = new Map<string, ApprovalRequest>()) {
         return { ...result, revision: 1, updatedAt: now };
       },
     },
-    capabilityProposals: {
-      upsert(record: CapabilityProposalRecord) {
-        proposals.set(record.proposalId, record);
-        return record;
-      },
-      list(limit = 100) {
-        return [...proposals.values()].slice(0, limit);
-      },
-      get(proposalId: string) {
-        const proposal = proposals.get(proposalId);
-        if (!proposal) {
-          throw new Error(`Missing proposal ${proposalId}`);
-        }
-        return proposal;
-      },
-    },
-    capabilityProposalEvents: {
-      append(record: CapabilityProposalEventRecord) {
-        const items = proposalEvents.get(record.proposalId) ?? [];
-        items.push(record);
-        proposalEvents.set(record.proposalId, items);
-        return record;
-      },
-      listByProposalId(proposalId: string) {
-        return proposalEvents.get(proposalId) ?? [];
-      },
-    },
+    // HX-402 P2: proposal rows and their event history are REAL storage so
+    // the one-transaction proposal/source/Journey coupling is provable.
+    capabilityProposals: realStorage.capabilityProposals,
+    capabilityProposalEvents: realStorage.capabilityProposalEvents,
     approvals: {
+      // HX-402 P2: deterministic detached lifecycle approvals live in REAL
+      // storage; pre-seeded fake approvals (code mode fixtures) stay in the
+      // map and win on lookup.
+      createDeterministicDetachedWithTtlDuration: (
+        input: Parameters<Storage["approvals"]["createDeterministicDetachedWithTtlDuration"]>[0],
+        ttlMs: number,
+      ) => realStorage.approvals.createDeterministicDetachedWithTtlDuration(input, ttlMs),
       get: vi.fn((approvalId: string) => {
         const approval = approvalsById.get(approvalId);
-        if (!approval) {
-          throw new Error(`Missing approval ${approvalId}`);
+        if (approval) {
+          return approval;
         }
-        return approval;
+        return realStorage.approvals.get(approvalId);
       }),
       resolve: vi.fn((approvalId: string, input: { decision: "approve" | "reject" | "edit"; resolvedBy: string }) => {
         const approval = approvalsById.get(approvalId);
         if (!approval) {
-          throw new Error(`Missing approval ${approvalId}`);
+          return realStorage.approvals.resolve(approvalId, input as never);
         }
         const status = input.decision === "approve" ? "approved" : input.decision === "reject" ? "rejected" : "edited";
         const next = {
@@ -5418,6 +5632,10 @@ function createFakeStorage(approvalsById = new Map<string, ApprovalRequest>()) {
         return next;
       }),
     },
+    approvalEvents: realStorage.approvalEvents,
+    governanceJourneyEvents: realStorage.governanceJourneyEvents,
+    gatewaySql: realStorage.gatewaySql,
+    runImmediateTransaction: <T>(callback: () => T): T => realStorage.runImmediateTransaction(callback),
     codeModeRuns: {
       upsert(record: CodeModeRunRecord) {
         codeModeRuns.set(record.runId, record);
@@ -5934,9 +6152,6 @@ function createFakeStorage(approvalsById = new Map<string, ApprovalRequest>()) {
       listBySession: vi.fn((sessionId: string) =>
         [...turnTraces.values()].filter((trace) => trace.sessionId === sessionId),
       ),
-    },
-    runImmediateTransaction<T>(callback: () => T): T {
-      return callback();
     },
   };
 }

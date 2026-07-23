@@ -60,13 +60,35 @@ import type {
   TranscriptEvent,
 } from "@goatcitadel/contracts";
 import {
+  CAPABILITY_LIFECYCLE_APPROVAL_KIND,
+  canonicalJsonString,
   classifyToolEffectPotential,
   ConflictError,
   NotFoundError,
   redactStructuredSecrets,
   ValidationError,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { GovernedLifecycleEventRepository, Storage } from "@goatcitadel/storage";
+import {
+  buildCapabilityLifecycleApprovalBinding,
+  buildCapabilityLifecycleApprovalPayload,
+  buildCapabilityLifecycleRequestJourneyEvent,
+  buildCapabilityLifecycleRequestSha256,
+  buildCapabilityLifecycleStateSha256,
+  CapabilityLifecycleApplyError,
+  capabilityLifecycleRequestJourneyIdempotencyKey,
+  createSkillGovernedLifecycleRepository,
+  deriveCapabilityLifecycleApprovalId,
+  mintSkillGovernanceSystemAuthority,
+  parseCapabilityLifecycleApprovalBinding,
+  parseCapabilityLifecycleRequestEnvelope,
+  persistApprovedCapabilityCandidateEvidence,
+  persistCapabilityProposalCreatedEvidence,
+  persistCapabilitySystemRevokeEvidence,
+  type CapabilityLifecycleApprovalAction,
+  type CapabilityLifecycleApprovalBindingV1,
+  type SkillGovernanceSystemAuthority,
+} from "./skill-governance-journey-producer.js";
 import type { CapabilityRuntimeConfig, CodeModeDockerBackendConfig, FeatureFlagsConfig } from "../config.js";
 import { CODE_MODE_CHILD_SOURCE } from "./code-mode-child-source.js";
 import {
@@ -240,6 +262,115 @@ class CodeModeExecutionPreDispatchFailure extends Error {
   }
 }
 
+// ── HX-402 P2: approval-first candidate lifecycle envelopes ───────────
+
+const CAPABILITY_LIFECYCLE_APPROVAL_TTL_MS = 15 * 60_000;
+
+export interface CapabilityLifecyclePendingApproval {
+  approvalId: string;
+  status: ApprovalRequest["status"];
+  kind: typeof CAPABILITY_LIFECYCLE_APPROVAL_KIND;
+  action: CapabilityLifecycleApprovalAction;
+  candidateId: string;
+  requestSha256: string;
+  expectedStateSha256: string;
+  expiresAt?: string;
+  createdAt: string;
+  replayed: boolean;
+}
+
+export interface CapabilityCandidateMutationPendingOutcome {
+  pendingApproval: CapabilityLifecyclePendingApproval;
+}
+
+export interface CapabilityCandidateMutationNoOpOutcome {
+  pendingApproval: null;
+  noMutationRequired: true;
+  detail: CandidateSkillDetailRecord;
+}
+
+export type CapabilityCandidateMutationOutcome =
+  | CapabilityCandidateMutationPendingOutcome
+  | CapabilityCandidateMutationNoOpOutcome;
+
+interface ApprovedCapabilityMutationPlan {
+  kind: "promote" | "revoke" | "rollback";
+  resultAction: CandidateLifecycleActionResult["action"];
+  selectedVersionId: string;
+  targetVersionIds: string[];
+  verifyArtifactsVersionId?: string;
+}
+
+/** Canonical reviewed-state material for one candidate's exact version set. */
+function buildCandidateVersionsStateMaterial(
+  candidateId: string,
+  versions: readonly CandidateSkillVersionRecord[],
+  revision: number,
+): Record<string, unknown> {
+  const canonical = [...versions]
+    .sort((left, right) => compareCodeUnits(left.versionId, right.versionId))
+    .map((version) => ({
+      versionId: version.versionId,
+      lifecycleState: version.lifecycleState,
+      updatedAt: version.updatedAt,
+    }));
+  return {
+    candidateId,
+    revision,
+    versionCount: canonical.length,
+    versionsSha256: createHash("sha256").update(canonicalJsonString(canonical), "utf8").digest("hex"),
+  };
+}
+
+function parseApprovedCapabilityMutation(
+  action: CapabilityLifecycleApprovalAction,
+  mutation: unknown,
+  candidateId: string,
+): ApprovedCapabilityMutationPlan | undefined {
+  if (typeof mutation !== "object" || mutation === null || Array.isArray(mutation)) return undefined;
+  const value = mutation as Record<string, unknown>;
+  if (value.candidateId !== candidateId) return undefined;
+  if (action === "candidate_promoted") {
+    if (typeof value.versionId !== "string" || !value.versionId) return undefined;
+    return {
+      kind: "promote",
+      resultAction: "promote",
+      selectedVersionId: value.versionId,
+      targetVersionIds: [value.versionId],
+      verifyArtifactsVersionId: value.versionId,
+    };
+  }
+  if (action === "candidate_revoked") {
+    if (
+      typeof value.selectedVersionId !== "string" ||
+      !Array.isArray(value.targetVersionIds) ||
+      value.targetVersionIds.length === 0 ||
+      value.targetVersionIds.some((versionId) => typeof versionId !== "string" || !versionId)
+    ) {
+      return undefined;
+    }
+    return {
+      kind: "revoke",
+      resultAction: "revoke",
+      selectedVersionId: value.selectedVersionId,
+      targetVersionIds: value.targetVersionIds as string[],
+    };
+  }
+  if (typeof value.targetVersionId !== "string" || !value.targetVersionId) return undefined;
+  return {
+    kind: "rollback",
+    resultAction: "rollback",
+    selectedVersionId: value.targetVersionId,
+    targetVersionIds: [value.targetVersionId],
+    verifyArtifactsVersionId: value.targetVersionId,
+  };
+}
+
+function normalizeCapabilityRequesterId(requesterId: string | undefined): string {
+  const normalized = requesterId?.trim();
+  return normalized && normalized.length <= 256 ? normalized : "operator";
+}
+
 export class CapabilitySystemService {
   private readonly candidateRoot: string;
   private readonly artifactRoot: string;
@@ -249,6 +380,10 @@ export class CapabilitySystemService {
   ) => CodeModeSandboxMetadata;
   private readonly autonomousActivationGrants: AutonomousActivationGrantService;
   private readonly codeModeVerification?: CodeModeVerificationService;
+  /** HX-402 P2: lazily created write-through to the immutable P0 governed lifecycle owner. */
+  private governedLifecycleRepository?: GovernedLifecycleEventRepository;
+  /** HX-402 P2: module-private branded authority for the fail-safe internal revoke path. */
+  private governanceSystemAuthority?: SkillGovernanceSystemAuthority;
 
   public constructor(private readonly options: CapabilitySystemServiceOptions) {
     this.candidateRoot = resolveManagedRoot(options.rootDir, options.runtimeConfig.candidateRoot);
@@ -508,14 +643,24 @@ export class CapabilitySystemService {
     };
   }
 
-  public createProposal(input: {
-    proposalKind: CapabilityProposalKind;
-    title: string;
-    summary: string;
-    payload: Record<string, unknown>;
-    candidateId?: string;
-    activationTargetId?: string;
-  }): CapabilityProposalRecord {
+  /**
+   * HX-402 P2: review-only proposal creation stays approval-free ONLY because
+   * the proposal row, its `created` proposal event (the source history), the
+   * governed `proposal_created` lifecycle event, and Journey commit in ONE
+   * immediate transaction — and the proposal remains non-callable (nothing
+   * here touches the callable catalog or candidate lifecycle states).
+   */
+  public createProposal(
+    input: {
+      proposalKind: CapabilityProposalKind;
+      title: string;
+      summary: string;
+      payload: Record<string, unknown>;
+      candidateId?: string;
+      activationTargetId?: string;
+    },
+    actorId = "operator",
+  ): CapabilityProposalRecord {
     const now = new Date().toISOString();
     const proposal: CapabilityProposalRecord = {
       proposalId: `proposal-${randomUUID()}`,
@@ -529,17 +674,29 @@ export class CapabilitySystemService {
       createdAt: now,
       updatedAt: now,
     };
-    const stored = this.options.storage.capabilityProposals.upsert(proposal);
-    this.options.storage.capabilityProposalEvents.append({
-      eventId: randomUUID(),
-      proposalId: stored.proposalId,
-      eventType: "created",
-      actorId: "operator",
-      payload: {
-        proposalKind: stored.proposalKind,
-        status: stored.status,
-      },
-      createdAt: now,
+    const repository = this.getGovernedLifecycleRepository();
+    const stored = this.options.storage.runImmediateTransaction(() => {
+      const upserted = this.options.storage.capabilityProposals.upsert(proposal);
+      const proposalEventId = randomUUID();
+      this.options.storage.capabilityProposalEvents.append({
+        eventId: proposalEventId,
+        proposalId: upserted.proposalId,
+        eventType: "created",
+        actorId,
+        payload: {
+          proposalKind: upserted.proposalKind,
+          status: upserted.status,
+        },
+        createdAt: now,
+      });
+      persistCapabilityProposalCreatedEvidence(repository, {
+        proposalId: upserted.proposalId,
+        proposalKind: upserted.proposalKind,
+        proposalEventId,
+        actorId,
+        occurredAt: now,
+      });
+      return upserted;
     });
     this.options.publishRealtime("capability_proposal_created", "capabilities", {
       proposalId: stored.proposalId,
@@ -549,194 +706,537 @@ export class CapabilitySystemService {
     return stored;
   }
 
+  private getGovernedLifecycleRepository(): GovernedLifecycleEventRepository {
+    this.governedLifecycleRepository ??= createSkillGovernedLifecycleRepository(this.options.storage.gatewaySql);
+    return this.governedLifecycleRepository;
+  }
+
+  private getGovernanceSystemAuthority(): SkillGovernanceSystemAuthority {
+    this.governanceSystemAuthority ??= mintSkillGovernanceSystemAuthority();
+    return this.governanceSystemAuthority;
+  }
+
+  // ── HX-402 P2: approval-first direct candidate lifecycle ─────────────
+  //
+  // The route-facing promote/revoke/rollback verbs never mutate: each commits
+  // one canonical `capability.lifecycle` approval (deterministic payload-hash
+  // UUID identity over the exact request AND the exact reviewed version set)
+  // plus immutable requester Journey evidence. Only the recovered
+  // `capability_lifecycle_apply` effect executes the transition.
+
   public promoteCandidate(
     candidateId: string,
     expectedRevision: number,
     versionId?: string,
-  ): CandidateLifecycleActionResult {
+    requesterId?: string,
+  ): CapabilityCandidateMutationOutcome {
     const versions = this.requireCandidateVersions(candidateId);
     const selected = versionId ? this.requireCandidateVersion(candidateId, versionId) : versions[0]!;
     this.verifyCandidateVersionArtifacts(selected);
-    const occurredAt = new Date().toISOString();
-    const mutation = this.options.storage.skillAggregateRevisions.runWithRevision(
-      "candidate_skill",
-      candidateId,
-      expectedRevision,
-      () => {
-        const currentVersions = this.requireCandidateVersions(candidateId);
-        this.requireCandidateVersion(candidateId, selected.versionId);
-        const changedVersionIds: string[] = [];
-        for (const version of currentVersions) {
-          if (version.versionId === selected.versionId) {
-            if (version.lifecycleState !== "approved" && version.lifecycleState !== "trusted") {
-              this.options.storage.candidateSkillVersions.updateLifecycleState(
-                version.versionId,
-                "approved",
-                occurredAt,
-              );
-              changedVersionIds.push(version.versionId);
-            }
-            continue;
-          }
-          if (version.lifecycleState === "approved" || version.lifecycleState === "trusted") {
-            this.options.storage.candidateSkillVersions.updateLifecycleState(
-              version.versionId,
-              "deprecated",
-              occurredAt,
-            );
-            changedVersionIds.push(version.versionId);
-          }
-        }
-        return {
-          value: {
-            changedVersionIds: changedVersionIds.sort(compareCodeUnits),
-            detail: this.buildCandidateDetail(candidateId, expectedRevision),
-          },
-          changed: changedVersionIds.length > 0,
-        };
-      },
-      occurredAt,
+    const currentRevision = this.assertCandidateRevisionCurrent(candidateId, expectedRevision);
+    const wouldChange = versions.some((version) =>
+      version.versionId === selected.versionId
+        ? version.lifecycleState !== "approved" && version.lifecycleState !== "trusted"
+        : version.lifecycleState === "approved" || version.lifecycleState === "trusted",
     );
-    const detail = { ...mutation.value.detail, revision: mutation.revision };
-    if (mutation.changed) {
-      this.options.publishRealtime("candidate_skill_promoted", "capabilities", {
+    if (!wouldChange) {
+      return this.candidateMutationNoOp(candidateId, currentRevision);
+    }
+    return this.commitCapabilityLifecycleApproval({
+      candidateId,
+      action: "candidate_promoted",
+      mutation: { candidateId, versionId: selected.versionId },
+      versions,
+      currentRevision,
+      requesterId,
+      preview: {
+        title: "Approve capability candidate promotion",
         candidateId,
         versionId: selected.versionId,
-        revision: mutation.revision,
-      });
-    }
-    return {
-      action: "promote",
-      candidateId,
-      revision: mutation.revision,
-      selectedVersionId: selected.versionId,
-      changedVersionIds: mutation.value.changedVersionIds,
-      occurredAt,
-      detail,
-    };
+        versionCount: versions.length,
+      },
+    });
   }
 
   public revokeCandidate(
     candidateId: string,
     expectedRevision: number,
     versionId?: string,
-  ): CandidateLifecycleActionResult {
+    requesterId?: string,
+  ): CapabilityCandidateMutationOutcome {
     const versions = this.requireCandidateVersions(candidateId);
     const selected = versionId ? this.requireCandidateVersion(candidateId, versionId) : versions[0]!;
-    const occurredAt = new Date().toISOString();
-    const mutation = this.options.storage.skillAggregateRevisions.runWithRevision(
-      "candidate_skill",
+    const currentRevision = this.assertCandidateRevisionCurrent(candidateId, expectedRevision);
+    // Criteria resolve to exact version IDs at request time so scope can never
+    // widen between review and execution (P1 forget precedent).
+    const targetVersionIds = (versionId ? [selected] : versions)
+      .filter((version) => version.lifecycleState !== "revoked")
+      .map((version) => version.versionId)
+      .sort(compareCodeUnits);
+    if (targetVersionIds.length === 0) {
+      return this.candidateMutationNoOp(candidateId, currentRevision);
+    }
+    return this.commitCapabilityLifecycleApproval({
       candidateId,
-      expectedRevision,
-      () => {
-        const currentVersions = this.requireCandidateVersions(candidateId);
-        this.requireCandidateVersion(candidateId, selected.versionId);
-        const targets = versionId
-          ? currentVersions.filter((version) => version.versionId === selected.versionId)
-          : currentVersions;
-        const changedVersionIds: string[] = [];
-        for (const version of targets) {
-          if (version.lifecycleState === "revoked") {
-            continue;
-          }
-          this.options.storage.candidateSkillVersions.updateLifecycleState(version.versionId, "revoked", occurredAt);
-          changedVersionIds.push(version.versionId);
-        }
-        return {
-          value: {
-            changedVersionIds: changedVersionIds.sort(compareCodeUnits),
-            detail: this.buildCandidateDetail(candidateId, expectedRevision),
-          },
-          changed: changedVersionIds.length > 0,
-        };
-      },
-      occurredAt,
-    );
-    const detail = { ...mutation.value.detail, revision: mutation.revision };
-    if (mutation.changed) {
-      this.options.publishRealtime("candidate_skill_revoked", "capabilities", {
+      action: "candidate_revoked",
+      mutation: { candidateId, selectedVersionId: selected.versionId, targetVersionIds },
+      versions,
+      currentRevision,
+      requesterId,
+      preview: {
+        title: "Approve capability candidate revocation",
         candidateId,
         versionId: selected.versionId,
-        revokedVersionIds: mutation.value.changedVersionIds,
-        revision: mutation.revision,
-      });
-    }
-    return {
-      action: "revoke",
-      candidateId,
-      revision: mutation.revision,
-      selectedVersionId: selected.versionId,
-      changedVersionIds: mutation.value.changedVersionIds,
-      occurredAt,
-      detail,
-    };
+        targetCount: targetVersionIds.length,
+      },
+    });
   }
 
   public rollbackCandidate(
     candidateId: string,
     targetVersionId: string,
     expectedRevision: number,
-  ): CandidateLifecycleActionResult {
-    this.requireCandidateVersions(candidateId);
+    requesterId?: string,
+  ): CapabilityCandidateMutationOutcome {
+    const versions = this.requireCandidateVersions(candidateId);
     const target = this.requireCandidateVersion(candidateId, targetVersionId);
     this.verifyCandidateVersionArtifacts(target);
-    const occurredAt = new Date().toISOString();
-    const mutation = this.options.storage.skillAggregateRevisions.runWithRevision(
+    const currentRevision = this.assertCandidateRevisionCurrent(candidateId, expectedRevision);
+    const wouldChange = versions.some((version) =>
+      version.versionId === target.versionId
+        ? version.lifecycleState !== "approved" && version.lifecycleState !== "trusted"
+        : version.lifecycleState !== "revoked" && version.lifecycleState !== "deprecated",
+    );
+    if (!wouldChange) {
+      return this.candidateMutationNoOp(candidateId, currentRevision);
+    }
+    return this.commitCapabilityLifecycleApproval({
+      candidateId,
+      action: "candidate_rolled_back",
+      mutation: { candidateId, targetVersionId: target.versionId },
+      versions,
+      currentRevision,
+      requesterId,
+      preview: {
+        title: "Approve capability candidate rollback",
+        candidateId,
+        targetVersionId: target.versionId,
+        versionCount: versions.length,
+      },
+    });
+  }
+
+  private assertCandidateRevisionCurrent(candidateId: string, expectedRevision: number): number {
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) {
+      throw new ValidationError({ code: "FIELD_INVALID", field: "expectedRevision" });
+    }
+    const currentRevision = this.options.storage.skillAggregateRevisions.ensure(
       "candidate_skill",
       candidateId,
-      expectedRevision,
-      () => {
-        const currentVersions = this.requireCandidateVersions(candidateId);
-        this.requireCandidateVersion(candidateId, targetVersionId);
-        const changedVersionIds: string[] = [];
-        for (const version of currentVersions) {
-          if (version.versionId === target.versionId) {
-            if (version.lifecycleState !== "approved" && version.lifecycleState !== "trusted") {
-              this.options.storage.candidateSkillVersions.updateLifecycleState(
-                version.versionId,
-                "approved",
-                occurredAt,
-              );
-              changedVersionIds.push(version.versionId);
-            }
-            continue;
-          }
-          if (version.lifecycleState !== "revoked" && version.lifecycleState !== "deprecated") {
-            this.options.storage.candidateSkillVersions.updateLifecycleState(
-              version.versionId,
-              "deprecated",
-              occurredAt,
-            );
-            changedVersionIds.push(version.versionId);
-          }
-        }
-        return {
-          value: {
-            changedVersionIds: changedVersionIds.sort(compareCodeUnits),
-            detail: this.buildCandidateDetail(candidateId, expectedRevision),
+    ).revision;
+    if (expectedRevision !== currentRevision) {
+      throw new ConflictError({
+        code: "WRITE_CONFLICT",
+        message: `candidate_skill ${candidateId} changed since revision ${expectedRevision}`,
+        details: { resourceKind: "candidate_skill", resourceId: candidateId, expectedRevision, currentRevision },
+      });
+    }
+    return currentRevision;
+  }
+
+  private candidateMutationNoOp(candidateId: string, revision: number): CapabilityCandidateMutationNoOpOutcome {
+    return {
+      pendingApproval: null,
+      noMutationRequired: true,
+      detail: { ...this.buildCandidateDetail(candidateId, revision), revision },
+    };
+  }
+
+  private commitCapabilityLifecycleApproval(input: {
+    candidateId: string;
+    action: CapabilityLifecycleApprovalAction;
+    mutation: Record<string, unknown>;
+    versions: CandidateSkillVersionRecord[];
+    currentRevision: number;
+    requesterId?: string;
+    preview: Record<string, unknown>;
+  }): CapabilityCandidateMutationPendingOutcome {
+    const requesterId = normalizeCapabilityRequesterId(input.requesterId);
+    const binding = buildCapabilityLifecycleApprovalBinding({
+      subjectId: input.candidateId,
+      action: input.action,
+      mutation: input.mutation,
+      expectedState: buildCandidateVersionsStateMaterial(input.candidateId, input.versions, input.currentRevision),
+    });
+    const approvalId = deriveCapabilityLifecycleApprovalId(binding);
+    const payload = buildCapabilityLifecycleApprovalPayload({ binding, requesterId, mutation: input.mutation });
+    const committed = this.options.storage.runImmediateTransaction(() => {
+      const stored = this.options.storage.approvals.createDeterministicDetachedWithTtlDuration(
+        {
+          approvalId,
+          kind: CAPABILITY_LIFECYCLE_APPROVAL_KIND,
+          riskLevel: "danger",
+          payload,
+          preview: { ...input.preview },
+        },
+        CAPABILITY_LIFECYCLE_APPROVAL_TTL_MS,
+      );
+      if (stored.created) {
+        this.options.storage.approvalEvents.append({
+          approvalId,
+          eventType: "created",
+          actorId: "system",
+          timestamp: stored.approval.createdAt,
+          payload: {
+            kind: stored.approval.kind,
+            riskLevel: stored.approval.riskLevel,
+            status: stored.approval.status,
           },
-          changed: changedVersionIds.length > 0,
-        };
-      },
-      occurredAt,
-    );
-    const detail = { ...mutation.value.detail, revision: mutation.revision };
-    if (mutation.changed) {
-      this.options.publishRealtime("candidate_skill_rolled_back", "capabilities", {
-        candidateId,
-        targetVersionId,
-        revision: mutation.revision,
+        });
+        this.options.storage.governanceJourneyEvents.create(
+          buildCapabilityLifecycleRequestJourneyEvent({ approval: stored.approval, binding, requesterId }),
+        );
+      } else {
+        const evidence = this.options.storage.governanceJourneyEvents.findByIdempotencyKey(
+          capabilityLifecycleRequestJourneyIdempotencyKey(approvalId),
+        );
+        if (!evidence) {
+          this.options.storage.governanceJourneyEvents.create(
+            buildCapabilityLifecycleRequestJourneyEvent({ approval: stored.approval, binding, requesterId }),
+          );
+        }
+      }
+      return stored;
+    });
+    if (committed.created) {
+      this.options.publishRealtime("capability_mutation_approval_requested", "capabilities", {
+        approvalId,
+        action: binding.action,
+        candidateId: input.candidateId,
       });
     }
     return {
-      action: "rollback",
-      candidateId,
-      revision: mutation.revision,
-      selectedVersionId: target.versionId,
-      changedVersionIds: mutation.value.changedVersionIds,
-      occurredAt,
-      detail,
+      pendingApproval: {
+        approvalId,
+        status: committed.approval.status,
+        kind: CAPABILITY_LIFECYCLE_APPROVAL_KIND,
+        action: binding.action,
+        candidateId: input.candidateId,
+        requestSha256: binding.requestSha256,
+        expectedStateSha256: binding.expectedStateSha256,
+        ...(committed.approval.expiresAt ? { expiresAt: committed.approval.expiresAt } : {}),
+        createdAt: committed.approval.createdAt,
+        replayed: !committed.created,
+      },
     };
+  }
+
+  /**
+   * Execute one approved `capability.lifecycle` mutation as the recovered
+   * approval effect. Revalidates the exact approval (kind, deterministic
+   * identity, status, expiry), recovers the requester from the immutable
+   * request Journey evidence, byte-verifies the request hash, re-verifies the
+   * exact reviewed version-set material against current state, and applies the
+   * transition inside one immediate transaction that also writes the governed
+   * lifecycle event and Journey through the P0 owner. Governance violations
+   * throw the terminal {@link CapabilityLifecycleApplyError}; infrastructure
+   * errors propagate raw so the worker defers the effect for bounded retry.
+   */
+  public executeApprovedCapabilityLifecycleMutation(input: { approvalId: string }): CandidateLifecycleActionResult {
+    let approval: ApprovalRequest;
+    try {
+      approval = this.options.storage.approvals.get(input.approvalId);
+    } catch (error) {
+      if (error instanceof NotFoundError) {
+        throw new CapabilityLifecycleApplyError("capability_lifecycle_approval_not_executable");
+      }
+      throw error;
+    }
+    if (approval.kind !== CAPABILITY_LIFECYCLE_APPROVAL_KIND) {
+      throw new CapabilityLifecycleApplyError("capability_lifecycle_approval_not_executable");
+    }
+    const payload = approval.payload as Record<string, unknown> | undefined;
+    const binding = parseCapabilityLifecycleApprovalBinding(payload?.capabilityLifecycle);
+    const envelope = parseCapabilityLifecycleRequestEnvelope(payload);
+    if (!binding || !envelope || deriveCapabilityLifecycleApprovalId(binding) !== approval.approvalId) {
+      throw new CapabilityLifecycleApplyError("capability_lifecycle_approval_not_executable");
+    }
+    if (approval.status !== "approved" || !approval.resolvedBy) {
+      throw new CapabilityLifecycleApplyError("capability_lifecycle_approval_not_executable");
+    }
+    if (approval.expiresAt && Date.parse(approval.expiresAt) <= Date.now()) {
+      throw new CapabilityLifecycleApplyError("capability_lifecycle_approval_expired");
+    }
+    const evidence = this.options.storage.governanceJourneyEvents.findByIdempotencyKey(
+      capabilityLifecycleRequestJourneyIdempotencyKey(approval.approvalId),
+    );
+    if (!evidence || evidence.approvalId !== approval.approvalId || evidence.actorId !== envelope.requesterId) {
+      throw new CapabilityLifecycleApplyError("capability_lifecycle_request_evidence_missing");
+    }
+    if (
+      buildCapabilityLifecycleRequestSha256({
+        subjectId: binding.subjectId,
+        action: binding.action,
+        mutation: envelope.mutation,
+      }) !== binding.requestSha256
+    ) {
+      throw new CapabilityLifecycleApplyError("capability_lifecycle_request_drift");
+    }
+    const plan = parseApprovedCapabilityMutation(binding.action, envelope.mutation, binding.subjectId);
+    if (!plan) {
+      throw new CapabilityLifecycleApplyError("capability_lifecycle_approval_not_executable");
+    }
+    const applyAuthority = {
+      approvalId: approval.approvalId,
+      actorId: approval.resolvedBy,
+      requesterId: envelope.requesterId,
+      occurredAt: new Date().toISOString(),
+      requestSha256: binding.requestSha256,
+      expectedStateSha256: binding.expectedStateSha256,
+    };
+    const repository = this.getGovernedLifecycleRepository();
+    try {
+      return this.options.storage.runImmediateTransaction(() => {
+        // Exact-replay convergence: committed evidence is the truth.
+        const replayed = this.readApprovedCapabilityReplay(binding, plan, applyAuthority.approvalId);
+        if (replayed) return replayed;
+        const candidateId = binding.subjectId;
+        const currentVersions = this.requireCandidateVersions(candidateId);
+        const currentRevision = this.options.storage.skillAggregateRevisions.ensure(
+          "candidate_skill",
+          candidateId,
+        ).revision;
+        if (
+          buildCapabilityLifecycleStateSha256(
+            buildCandidateVersionsStateMaterial(candidateId, currentVersions, currentRevision),
+          ) !== binding.expectedStateSha256
+        ) {
+          throw new CapabilityLifecycleApplyError("capability_lifecycle_state_drift");
+        }
+        if (plan.verifyArtifactsVersionId) {
+          this.verifyCandidateVersionArtifacts(
+            this.requireCandidateVersion(candidateId, plan.verifyArtifactsVersionId),
+          );
+        }
+        const mutation = this.options.storage.skillAggregateRevisions.runWithRevision(
+          "candidate_skill",
+          candidateId,
+          currentRevision,
+          () => {
+            const changedVersionIds = this.applyCandidateTransition(
+              candidateId,
+              plan,
+              currentVersions,
+              applyAuthority.occurredAt,
+            );
+            persistApprovedCapabilityCandidateEvidence(repository, {
+              authority: applyAuthority,
+              candidateId,
+              action: binding.action,
+              selectedVersionId: plan.selectedVersionId,
+              changedVersionIds,
+              proposalEventId: "not_applicable",
+            });
+            return {
+              value: {
+                changedVersionIds,
+                detail: this.buildCandidateDetail(candidateId, currentRevision),
+              },
+              changed: changedVersionIds.length > 0,
+            };
+          },
+          applyAuthority.occurredAt,
+        );
+        const detail = { ...mutation.value.detail, revision: mutation.revision };
+        this.publishCapabilityLifecycleApplied(
+          binding.action,
+          candidateId,
+          plan,
+          mutation.value.changedVersionIds,
+          mutation.revision,
+        );
+        return {
+          action: plan.resultAction,
+          candidateId,
+          revision: mutation.revision,
+          selectedVersionId: plan.selectedVersionId,
+          changedVersionIds: mutation.value.changedVersionIds,
+          occurredAt: applyAuthority.occurredAt,
+          detail,
+        };
+      });
+    } catch (error) {
+      if (error instanceof CapabilityLifecycleApplyError) throw error;
+      if (error instanceof ConflictError || error instanceof NotFoundError || error instanceof ValidationError) {
+        throw new CapabilityLifecycleApplyError("capability_lifecycle_apply_conflict");
+      }
+      throw error;
+    }
+  }
+
+  private readApprovedCapabilityReplay(
+    binding: CapabilityLifecycleApprovalBindingV1,
+    plan: ApprovedCapabilityMutationPlan,
+    approvalId: string,
+  ): CandidateLifecycleActionResult | undefined {
+    const existing = this.options.storage.gatewaySql
+      .prepare(
+        `SELECT event_id AS eventId, occurred_at AS occurredAt FROM governed_lifecycle_events WHERE event_id = @eventId`,
+      )
+      .get({ eventId: `capability-lifecycle:${approvalId}` }) as { eventId: string; occurredAt: string } | undefined;
+    if (!existing) return undefined;
+    const candidateId = binding.subjectId;
+    const revision = this.options.storage.skillAggregateRevisions.ensure("candidate_skill", candidateId).revision;
+    return {
+      action: plan.resultAction,
+      candidateId,
+      revision,
+      selectedVersionId: plan.selectedVersionId,
+      changedVersionIds: [],
+      occurredAt: existing.occurredAt,
+      detail: { ...this.buildCandidateDetail(candidateId, revision), revision },
+    };
+  }
+
+  private applyCandidateTransition(
+    candidateId: string,
+    plan: ApprovedCapabilityMutationPlan,
+    currentVersions: CandidateSkillVersionRecord[],
+    occurredAt: string,
+  ): string[] {
+    const changedVersionIds: string[] = [];
+    if (plan.kind === "revoke") {
+      const targetIds = new Set(plan.targetVersionIds);
+      for (const version of currentVersions) {
+        if (!targetIds.has(version.versionId) || version.lifecycleState === "revoked") continue;
+        this.options.storage.candidateSkillVersions.updateLifecycleState(version.versionId, "revoked", occurredAt);
+        changedVersionIds.push(version.versionId);
+      }
+      return changedVersionIds.sort(compareCodeUnits);
+    }
+    for (const version of currentVersions) {
+      if (version.versionId === plan.selectedVersionId) {
+        if (version.lifecycleState !== "approved" && version.lifecycleState !== "trusted") {
+          this.options.storage.candidateSkillVersions.updateLifecycleState(version.versionId, "approved", occurredAt);
+          changedVersionIds.push(version.versionId);
+        }
+        continue;
+      }
+      const demote =
+        plan.kind === "promote"
+          ? version.lifecycleState === "approved" || version.lifecycleState === "trusted"
+          : version.lifecycleState !== "revoked" && version.lifecycleState !== "deprecated";
+      if (demote) {
+        this.options.storage.candidateSkillVersions.updateLifecycleState(version.versionId, "deprecated", occurredAt);
+        changedVersionIds.push(version.versionId);
+      }
+    }
+    return changedVersionIds.sort(compareCodeUnits);
+  }
+
+  private publishCapabilityLifecycleApplied(
+    action: CapabilityLifecycleApprovalAction,
+    candidateId: string,
+    plan: ApprovedCapabilityMutationPlan,
+    changedVersionIds: string[],
+    revision: number,
+  ): void {
+    if (changedVersionIds.length === 0) return;
+    if (action === "candidate_promoted") {
+      this.options.publishRealtime("candidate_skill_promoted", "capabilities", {
+        candidateId,
+        versionId: plan.selectedVersionId,
+        revision,
+      });
+      return;
+    }
+    if (action === "candidate_revoked") {
+      this.options.publishRealtime("candidate_skill_revoked", "capabilities", {
+        candidateId,
+        versionId: plan.selectedVersionId,
+        revokedVersionIds: changedVersionIds,
+        revision,
+      });
+      return;
+    }
+    this.options.publishRealtime("candidate_skill_rolled_back", "capabilities", {
+      candidateId,
+      targetVersionId: plan.selectedVersionId,
+      revision,
+    });
+  }
+
+  /**
+   * HX-402 P2: fail-safe internal revoke under the module-private branded
+   * system authority. Bypasses approval by design, but still writes the
+   * canonical lifecycle-state mutations, the system-actor-only governed
+   * `system_revoked` event, and Journey — in one immediate transaction. Route
+   * inputs can never mint the authority object the producer verifies.
+   */
+  public systemRevokeCandidate(candidateId: string, reasonCode: string): CandidateLifecycleActionResult {
+    const authority = this.getGovernanceSystemAuthority();
+    const repository = this.getGovernedLifecycleRepository();
+    const occurredAt = new Date().toISOString();
+    return this.options.storage.runImmediateTransaction(() => {
+      const currentVersions = this.requireCandidateVersions(candidateId);
+      const currentRevision = this.options.storage.skillAggregateRevisions.ensure(
+        "candidate_skill",
+        candidateId,
+      ).revision;
+      const targets = currentVersions.filter((version) => version.lifecycleState !== "revoked");
+      if (targets.length === 0) {
+        return {
+          action: "revoke" as const,
+          candidateId,
+          revision: currentRevision,
+          selectedVersionId: currentVersions[0]!.versionId,
+          changedVersionIds: [],
+          occurredAt,
+          detail: { ...this.buildCandidateDetail(candidateId, currentRevision), revision: currentRevision },
+        };
+      }
+      const mutation = this.options.storage.skillAggregateRevisions.runWithRevision(
+        "candidate_skill",
+        candidateId,
+        currentRevision,
+        () => {
+          const changedVersionIds: string[] = [];
+          for (const version of targets) {
+            this.options.storage.candidateSkillVersions.updateLifecycleState(version.versionId, "revoked", occurredAt);
+            changedVersionIds.push(version.versionId);
+          }
+          const sorted = changedVersionIds.sort(compareCodeUnits);
+          persistCapabilitySystemRevokeEvidence(repository, {
+            authority,
+            candidateId,
+            revokedVersionIds: sorted,
+            reasonCode: reasonCode.slice(0, 128),
+            occurredAt,
+          });
+          return {
+            value: { changedVersionIds: sorted, detail: this.buildCandidateDetail(candidateId, currentRevision) },
+            changed: true,
+          };
+        },
+        occurredAt,
+      );
+      this.options.publishRealtime("candidate_skill_revoked", "capabilities", {
+        candidateId,
+        versionId: mutation.value.changedVersionIds[0],
+        revokedVersionIds: mutation.value.changedVersionIds,
+        revision: mutation.revision,
+        systemAuthority: "skill_governance",
+      });
+      return {
+        action: "revoke" as const,
+        candidateId,
+        revision: mutation.revision,
+        selectedVersionId: mutation.value.changedVersionIds[0]!,
+        changedVersionIds: mutation.value.changedVersionIds,
+        occurredAt,
+        detail: { ...mutation.value.detail, revision: mutation.revision },
+      };
+    });
   }
 
   public listCodeModeRuns(options: number | CodeModeRunListOptions = 100): CodeModeRunRecord[] {

@@ -22,6 +22,9 @@ import type {
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
 import {
+  CAPABILITY_LIFECYCLE_APPROVAL_KIND,
+  CAPABILITY_LIFECYCLE_EFFECT_KIND,
+  CAPABILITY_LIFECYCLE_EFFECT_TARGET_KIND,
   EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_APPROVAL_KIND,
   EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_KIND,
   EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_TARGET_KIND,
@@ -29,6 +32,9 @@ import {
   MEMORY_LIFECYCLE_EFFECT_KIND,
   MEMORY_LIFECYCLE_EFFECT_TARGET_KIND,
   MESH_CAPABILITY_ACTIVATION_APPROVAL_KIND,
+  SKILL_LIFECYCLE_APPROVAL_KIND,
+  SKILL_LIFECYCLE_EFFECT_KIND,
+  SKILL_LIFECYCLE_EFFECT_TARGET_KIND,
   assertExternalSourceKnowledgeSnapshotApprovalPayload,
   assertMeshCapabilityActivationApprovalPayload,
   buildToolEffectEvidence,
@@ -36,6 +42,7 @@ import {
   ConflictError,
   isChatTurnTerminalStatus,
   NotFoundError,
+  type CandidateLifecycleActionResult,
   type ExternalSourceKnowledgeSnapshotApprovalPayload,
   type MeshCapabilityActivationApprovalPayload,
 } from "@goatcitadel/contracts";
@@ -53,6 +60,13 @@ import {
 import { MemoryLifecycleApplyError } from "./memory-domain-journey-producer.js";
 import { parseMemoryLifecycleApprovalBinding } from "./memory-journey-producer.js";
 import type { MemoryLifecycleApplyResult } from "./memory-lifecycle-service.js";
+import {
+  CapabilityLifecycleApplyError,
+  parseCapabilityLifecycleApprovalBinding,
+  parseSkillLifecycleApprovalBinding,
+  SkillLifecycleApplyError,
+} from "./skill-governance-journey-producer.js";
+import type { SkillLifecycleApplyResult } from "./skill-state-service.js";
 import { APPROVAL_OBSERVABILITY_REALTIME_ENVELOPE_KEY } from "./realtime-event-service.js";
 import {
   ExternalSourceKnowledgeEffectServiceError,
@@ -357,6 +371,22 @@ export interface ApprovalEffectsServiceDeps {
     workspaceId: string;
     approvalId: string;
   }): MemoryLifecycleApplyResult;
+  /**
+   * HX-402 P2: executes one approved `skill.lifecycle` mutation through the
+   * skill-state owner. The executor revalidates the exact approval (kind,
+   * deterministic identity, status, expiry), recovers the requester from the
+   * immutable request Journey evidence, byte-verifies the approved
+   * requestSha256, re-verifies the exact reviewed state material, re-checks
+   * the pinned policy, and writes the governed evidence pair inside the
+   * canonical transaction.
+   */
+  executeApprovedSkillLifecycleMutation?(input: { approvalId: string }): SkillLifecycleApplyResult;
+  /**
+   * HX-402 P2: executes one approved `capability.lifecycle` candidate
+   * transition through the capability owner under the same revalidation
+   * ladder.
+   */
+  executeApprovedCapabilityLifecycleMutation?(input: { approvalId: string }): CandidateLifecycleActionResult;
   enqueueAfterHooks(input: {
     workspaceId: string;
     trigger: "approval.resolve.after" | "approval.response.after";
@@ -652,6 +682,12 @@ export class ApprovalEffectsService {
     if (approval.kind === MEMORY_LIFECYCLE_APPROVAL_KIND && input.decision === "approve") {
       enqueued.push(this.enqueueMemoryLifecycleApply(approval));
     }
+    if (approval.kind === SKILL_LIFECYCLE_APPROVAL_KIND && input.decision === "approve") {
+      enqueued.push(this.enqueueSkillLifecycleApply(approval));
+    }
+    if (approval.kind === CAPABILITY_LIFECYCLE_APPROVAL_KIND && input.decision === "approve") {
+      enqueued.push(this.enqueueCapabilityLifecycleApply(approval));
+    }
     enqueued.push(
       this.ctx.storage.approvalEffects.upsert({
         approvalId: approval.approvalId,
@@ -917,6 +953,75 @@ export class ApprovalEffectsService {
     });
   }
 
+  /**
+   * HX-402 P2: enqueue the recovered `skill.lifecycle` mutation effect on one
+   * deterministic effect identity per approval, with a server-derived
+   * content-free payload verified against the immutable approval binding. The
+   * executor revalidates everything again, so a replayed resolution converges
+   * instead of double-mutating.
+   */
+  private enqueueSkillLifecycleApply(approval: ApprovalRequest): ApprovalEffectRecord {
+    const binding = parseSkillLifecycleApprovalBinding(
+      (approval.payload as Record<string, unknown> | undefined)?.skillLifecycle,
+    );
+    if (!binding) {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: `Approval ${approval.approvalId} does not carry a canonical skill.lifecycle binding.`,
+      });
+    }
+    return this.ctx.storage.approvalEffects.upsert({
+      approvalId: approval.approvalId,
+      effectKind: SKILL_LIFECYCLE_EFFECT_KIND,
+      targetKind: SKILL_LIFECYCLE_EFFECT_TARGET_KIND,
+      targetId: approval.approvalId,
+      idempotencyKey: buildApprovalEffectIdempotencyKey({
+        approvalId: approval.approvalId,
+        effectKind: SKILL_LIFECYCLE_EFFECT_KIND,
+        targetKind: SKILL_LIFECYCLE_EFFECT_TARGET_KIND,
+        targetId: approval.approvalId,
+      }),
+      payload: {
+        scope: "global",
+        action: binding.action,
+        subjectKind: binding.subjectKind,
+        ...(binding.subjectId === undefined ? {} : { subjectId: binding.subjectId }),
+        requestSha256: binding.requestSha256,
+      },
+    });
+  }
+
+  /** HX-402 P2: enqueue the recovered `capability.lifecycle` candidate effect (same discipline). */
+  private enqueueCapabilityLifecycleApply(approval: ApprovalRequest): ApprovalEffectRecord {
+    const binding = parseCapabilityLifecycleApprovalBinding(
+      (approval.payload as Record<string, unknown> | undefined)?.capabilityLifecycle,
+    );
+    if (!binding) {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: `Approval ${approval.approvalId} does not carry a canonical capability.lifecycle binding.`,
+      });
+    }
+    return this.ctx.storage.approvalEffects.upsert({
+      approvalId: approval.approvalId,
+      effectKind: CAPABILITY_LIFECYCLE_EFFECT_KIND,
+      targetKind: CAPABILITY_LIFECYCLE_EFFECT_TARGET_KIND,
+      targetId: binding.subjectId,
+      idempotencyKey: buildApprovalEffectIdempotencyKey({
+        approvalId: approval.approvalId,
+        effectKind: CAPABILITY_LIFECYCLE_EFFECT_KIND,
+        targetKind: CAPABILITY_LIFECYCLE_EFFECT_TARGET_KIND,
+        targetId: binding.subjectId,
+      }),
+      payload: {
+        scope: "global",
+        action: binding.action,
+        candidateId: binding.subjectId,
+        requestSha256: binding.requestSha256,
+      },
+    });
+  }
+
   public enqueueApprovalWaitMaterialization(approval: ApprovalRequest): ApprovalEffectRecord | undefined {
     const runId = asOptionalString(approval.linkage?.durableRunId);
     if (!runId) {
@@ -1159,6 +1264,12 @@ export class ApprovalEffectsService {
         return;
       case MEMORY_LIFECYCLE_EFFECT_KIND:
         this.handleMemoryLifecycleApply(effect);
+        return;
+      case SKILL_LIFECYCLE_EFFECT_KIND:
+        this.handleSkillLifecycleApply(effect);
+        return;
+      case CAPABILITY_LIFECYCLE_EFFECT_KIND:
+        this.handleCapabilityLifecycleApply(effect);
         return;
       case "approval_inbox_follow_up":
         await this.handleApprovalInboxFollowUp(effect);
@@ -1422,6 +1533,109 @@ export class ApprovalEffectsService {
     } catch (error) {
       if (!this.isEffectStillClaimed(effect.effectId)) return;
       if (error instanceof MemoryLifecycleApplyError) {
+        this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+          lastError: error.message,
+          result: { errorCode: error.code },
+        });
+        return;
+      }
+      this.deferClaimedEffectForRetry(effect, this.workerId, error, {
+        deliveryState: "retry_scheduled",
+        approvalId: effect.approvalId,
+      });
+    }
+  }
+
+  /**
+   * HX-402 P2: execute one approved skill lifecycle mutation. Governance
+   * denials (missing/foreign/expired approval, missing request evidence,
+   * request/state drift, policy flip, producer state conflict) are terminal
+   * and fail the effect closed with their content-free code; only unexpected
+   * infrastructure errors defer for bounded retry. Replays converge on the
+   * immutable governed-event/Journey evidence (mesh-M2 worker split).
+   */
+  private handleSkillLifecycleApply(effect: ApprovalEffectRecord): void {
+    const execute = this.deps.executeApprovedSkillLifecycleMutation;
+    if (!execute) {
+      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+        lastError: "Skill lifecycle effect is missing its executor.",
+        result: { configured: false },
+      });
+      return;
+    }
+    try {
+      const applied = execute({ approvalId: effect.approvalId });
+      if (!this.isEffectStillClaimed(effect.effectId)) return;
+      const completed = this.ctx.storage.approvalEffects.completeEffect(
+        effect.effectId,
+        this.workerId,
+        effect.version,
+        {
+          result: {
+            disposition: applied.disposition,
+            action: applied.action,
+            subjectKind: applied.subjectKind,
+            ...(applied.subjectId === undefined ? {} : { subjectId: applied.subjectId }),
+            skillIds: applied.skillIds,
+            changedCount: applied.changedCount,
+          },
+        },
+      );
+      if (!completed) {
+        throw new Error(`Skill lifecycle effect ${effect.effectId} lost its completion lease.`);
+      }
+    } catch (error) {
+      if (!this.isEffectStillClaimed(effect.effectId)) return;
+      if (error instanceof SkillLifecycleApplyError) {
+        this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+          lastError: error.message,
+          result: { errorCode: error.code },
+        });
+        return;
+      }
+      this.deferClaimedEffectForRetry(effect, this.workerId, error, {
+        deliveryState: "retry_scheduled",
+        approvalId: effect.approvalId,
+      });
+    }
+  }
+
+  /**
+   * HX-402 P2: execute one approved capability candidate transition under the
+   * same terminal-vs-defer split.
+   */
+  private handleCapabilityLifecycleApply(effect: ApprovalEffectRecord): void {
+    const execute = this.deps.executeApprovedCapabilityLifecycleMutation;
+    if (!execute) {
+      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+        lastError: "Capability lifecycle effect is missing its executor.",
+        result: { configured: false },
+      });
+      return;
+    }
+    try {
+      const applied = execute({ approvalId: effect.approvalId });
+      if (!this.isEffectStillClaimed(effect.effectId)) return;
+      const completed = this.ctx.storage.approvalEffects.completeEffect(
+        effect.effectId,
+        this.workerId,
+        effect.version,
+        {
+          result: {
+            action: applied.action,
+            candidateId: applied.candidateId,
+            selectedVersionId: applied.selectedVersionId,
+            changedVersionIds: applied.changedVersionIds,
+            revision: applied.revision,
+          },
+        },
+      );
+      if (!completed) {
+        throw new Error(`Capability lifecycle effect ${effect.effectId} lost its completion lease.`);
+      }
+    } catch (error) {
+      if (!this.isEffectStillClaimed(effect.effectId)) return;
+      if (error instanceof CapabilityLifecycleApplyError) {
         this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
           lastError: error.message,
           result: { errorCode: error.code },

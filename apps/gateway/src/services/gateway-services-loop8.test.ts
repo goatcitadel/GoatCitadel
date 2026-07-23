@@ -401,28 +401,38 @@ describe("Loop 8 gateway service coverage", () => {
     const firstSkill = createSkillFixture(rootDir, "Cloudflare API", "Inspect and manage Cloudflare DNS records.");
     const secondSkill = createSkillFixture(rootDir, "Cloudflare Manager", "Manage Cloudflare DNS zones safely.");
 
+    // HX-402 P2: the retired executable install redirects into the governed
+    // Skill Hub and never publishes a manifest; validation provenance travels
+    // on the redirect result instead.
     const installed = await service.installImport({
       sourceRef: firstSkill,
       sourceType: "local_path",
       sourceProvider: "local",
     });
-    const manifest = JSON.parse(fs.readFileSync(installed.sourceManifestPath, "utf8")) as {
-      candidate?: Record<string, unknown>;
-      duplicateFamily?: string;
-      reviewDisposition?: string;
-    };
-
-    expect(manifest).toMatchObject({
-      manifestVersion: 3,
-      duplicateFamily: "cloudflare_dns",
-      reviewDisposition: "allow",
-      candidate: expect.objectContaining({
-        sourceProvider: "local",
-        sourceType: "local_path",
-        sourceRef: firstSkill,
-        canonicalKey: expect.stringContaining("local_path"),
-      }),
+    expect(installed.disposition).toBe("redirected_to_skill_hub");
+    expect(installed.validation.candidate).toMatchObject({
+      sourceProvider: "local",
+      sourceType: "local_path",
+      sourceRef: firstSkill,
+      canonicalKey: expect.stringContaining("local_path"),
     });
+    expect(installed.redirect.eligible).toBe(false);
+    expect(fs.existsSync(path.join(rootDir, "skills", "extra"))).toBe(false);
+
+    // Duplicate-family validation still reads historically installed skills
+    // (pre-retirement installs remain on disk), so seed one directly.
+    const historicalInstallDir = path.join(rootDir, "skills", "extra", "cloudflare-api");
+    fs.mkdirSync(historicalInstallDir, { recursive: true });
+    fs.writeFileSync(path.join(historicalInstallDir, "SKILL.md"), "# Cloudflare API\n", "utf8");
+    fs.writeFileSync(
+      path.join(historicalInstallDir, "source.json"),
+      JSON.stringify({
+        manifestVersion: 3,
+        duplicateFamily: "cloudflare_dns",
+        candidate: { canonicalKey: "local:local_path:cloudflare-api", sourceRef: firstSkill },
+      }),
+      "utf8",
+    );
 
     const duplicate = await service.validateImport({
       sourceRef: secondSkill,
@@ -465,6 +475,7 @@ describe("Loop 8 gateway service coverage", () => {
         action: "install",
         outcome: "accepted",
         skillName: "Cloudflare API",
+        details: expect.objectContaining({ disposition: "redirected_to_skill_hub" }),
       }),
     ]);
   });

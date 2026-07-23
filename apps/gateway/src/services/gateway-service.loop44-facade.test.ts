@@ -39,10 +39,18 @@ describe("GatewayService loop44 facade behavior", () => {
         lookupSources: vi.fn(async (queryOrUrl: string, limit: number) => ({ queryOrUrl, limit, matches: ["match"] })),
         listHistory: vi.fn((limit: number) => [{ limit, sourceRef: "local:skill" }]),
         validateImport: vi.fn(async () => validation),
+        // HX-402 P2: the retired executable install resolves to a governed
+        // Skill Hub redirect and never publishes.
         installImport: vi.fn(async () => ({
+          disposition: "redirected_to_skill_hub",
           validation,
-          installedPath: "F:/repo/skills/extra/fs-reviewer",
-          sourceManifestPath: "F:/repo/skills/extra/fs-reviewer/goat-skill.json",
+          redirect: {
+            owner: "skill_hub",
+            reviewRoute: "/api/v1/skills/hub/reviews",
+            sourceRef: "local:skill",
+            eligible: false,
+            ineligibleReason: "Local sources cannot be installed.",
+          },
         })),
       },
       skillStateService: { recordSkillImportEvent: vi.fn() },
@@ -94,32 +102,28 @@ describe("GatewayService loop44 facade behavior", () => {
       skillName: "Filesystem Reviewer",
     });
 
+    // HX-402 P2: the legacy install facade validates, records the redirect,
+    // and NEVER publishes bytes, reloads skills, or writes skill state.
     await expect(
       GatewayService.prototype.installSkillImport.call(gateway, {
         sourceRef: "local:skill",
         force: true,
       }),
     ).resolves.toMatchObject({
+      disposition: "redirected_to_skill_hub",
       validation,
-      installedSkillId: "skill-fs-reviewer",
+      redirect: expect.objectContaining({ owner: "skill_hub", eligible: false }),
     });
-    expect(gateway.reloadSkills).toHaveBeenCalledTimes(1);
-    expect(gateway.storage.skillAggregateRevisions.ensure).toHaveBeenCalledWith("runtime_skill", "skill-fs-reviewer");
-    expect(gateway.setSkillState).toHaveBeenCalledWith(
-      "skill-fs-reviewer",
-      "disabled",
-      "Imported skill starts disabled by default.",
-      7,
-    );
-    expect(gateway.skillStateService.recordSkillImportEvent).toHaveBeenCalledWith(validation, "import_installed");
+    expect(gateway.reloadSkills).not.toHaveBeenCalled();
+    expect(gateway.setSkillState).not.toHaveBeenCalled();
+    expect(gateway.skillStateService.recordSkillImportEvent).toHaveBeenCalledWith(validation, "import_redirected");
     expect(gateway.publishRealtime).toHaveBeenCalledWith("system", "skills", {
-      type: "skill_import_installed",
+      type: "skill_import_redirected",
       sourceProvider: "local",
       sourceRef: "local:skill",
       riskLevel: "medium",
       skillName: "Filesystem Reviewer",
-      skillId: "skill-fs-reviewer",
-      installedPath: "skills/extra/fs-reviewer",
+      redirectEligible: false,
     });
   });
 

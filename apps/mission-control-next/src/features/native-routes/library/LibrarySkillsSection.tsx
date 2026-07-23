@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- LibrarySkillsSection coordinates the skill list, detail, evaluation workbench, and the HX-402 P2 approval-first state surface in one orchestrator (MemoryRoutePage precedent) until the Library surface is split. */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FileText, Plus, RefreshCw, Save, Sparkles, Workflow } from "lucide-react";
 import type { CapabilityProposalDetailRecord, SkillEvaluationRunRecord, SkillListItem } from "@goatcitadel/contracts";
@@ -124,8 +125,11 @@ export function LibrarySkillsSection({ route, navigate, activeWorkspaceId }: Nat
     }
     setPendingSkillState(null);
     try {
-      await updateSkillState(selectedSkill.skillId, { expectedRevision: selectedSkill.revision, state });
-      setNotice({ tone: "success", message: `${selectedSkill.name} set to ${state}.` });
+      const outcome = await updateSkillState(selectedSkill.skillId, {
+        expectedRevision: selectedSkill.revision,
+        state,
+      });
+      setNotice({ tone: "success", message: describeSkillStateOutcome(outcome, selectedSkill.name, state) });
       await reload();
     } catch (stateError) {
       if (isWriteConflict(stateError)) {
@@ -391,6 +395,15 @@ export function LibrarySkillsSection({ route, navigate, activeWorkspaceId }: Nat
 }
 
 export type SkillPostureFilter = "all" | "callable" | "review" | SkillListItem["state"];
+
+/** HX-402 P2: honest approval-first copy — pending names the approval and states nothing changed; otherwise it is a pure no-op. */
+export function describeSkillStateOutcome(outcome: unknown, skillName: string, state: string): string {
+  const pending = (outcome as { pendingApproval?: { approvalId?: unknown } | null } | undefined)?.pendingApproval;
+  const approvalId = typeof pending?.approvalId === "string" ? pending.approvalId : undefined;
+  return approvalId
+    ? `Approval requested to set ${skillName} to ${state}. Resolve approval ${approvalId} in Ops → Approvals; no change is applied until then.`
+    : `${skillName} is already ${state}; nothing to approve.`;
+}
 
 function isPositiveRevision(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;

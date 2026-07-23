@@ -943,10 +943,14 @@ describe("GatewayService Loop 13 settings, skills, MCP, and model facades", () =
           guardedAutoThreshold: 0.72,
           requireFirstUseConfirmation: true,
         })),
-        updateActivationPolicy: vi.fn(() => ({
-          revision: 4,
-          guardedAutoThreshold: 1,
-          requireFirstUseConfirmation: false,
+        // HX-402 P2: the facade forwards to the approval-first request verb.
+        requestActivationPolicyApproval: vi.fn(() => ({
+          pendingApproval: {
+            approvalId: "policy-approval-1",
+            status: "pending",
+            kind: "skill.lifecycle",
+            action: "activation_policy_updated",
+          },
         })),
       },
       guidanceService: { resolveRuntimeGuidance: vi.fn(async (workspaceId: string) => ({ workspaceId })) },
@@ -1032,6 +1036,8 @@ describe("GatewayService Loop 13 settings, skills, MCP, and model facades", () =
       guardedAutoThreshold: 0.72,
       requireFirstUseConfirmation: true,
     });
+    // HX-402 P2: the policy facade now requests one canonical skill.lifecycle
+    // approval and never mutates directly.
     expect(
       GatewayService.prototype.updateSkillActivationPolicy.call(
         gateway,
@@ -1039,15 +1045,17 @@ describe("GatewayService Loop 13 settings, skills, MCP, and model facades", () =
           guardedAutoThreshold: 2,
           requireFirstUseConfirmation: false,
         },
-        3,
+        { expectedRevision: 3, requesterId: "operator-1" },
       ),
-    ).toEqual({ revision: 4, guardedAutoThreshold: 1, requireFirstUseConfirmation: false });
-    expect(gateway.skillStateService.updateActivationPolicy).toHaveBeenCalledWith(
+    ).toEqual({
+      pendingApproval: expect.objectContaining({ kind: "skill.lifecycle", action: "activation_policy_updated" }),
+    });
+    expect(gateway.skillStateService.requestActivationPolicyApproval).toHaveBeenCalledWith(
       {
         guardedAutoThreshold: 2,
         requireFirstUseConfirmation: false,
       },
-      3,
+      { expectedRevision: 3, requesterId: "operator-1" },
     );
     await expect(GatewayService.prototype.resolveRuntimeGuidance.call(gateway, "workspace-a")).resolves.toEqual({
       workspaceId: "workspace-a",

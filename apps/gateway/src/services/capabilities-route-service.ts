@@ -56,8 +56,8 @@ export class CapabilitiesRouteService {
     return this.capabilities.listProposals(limit);
   }
 
-  public createCapabilityProposal(input: Parameters<CapabilitiesRoutePort["createProposal"]>[0]) {
-    return this.capabilities.createProposal(input);
+  public createCapabilityProposal(input: Parameters<CapabilitiesRoutePort["createProposal"]>[0], actorId?: string) {
+    return this.capabilities.createProposal(input, actorId);
   }
 
   public listAutonomousActivationGrants(includeExpired = false) {
@@ -91,16 +91,36 @@ export class CapabilitiesRouteService {
     return this.capabilities.getCandidateDetail(candidateId);
   }
 
-  public promoteCapabilityCandidate(candidateId: string, expectedRevision: number, versionId?: string) {
-    return this.capabilities.promoteCandidate(candidateId, expectedRevision, versionId);
+  /**
+   * HX-402 P2: direct candidate lifecycle verbs are approval-first. Each verb
+   * commits one canonical `capability.lifecycle` approval and never mutates;
+   * the recovered approval effect is the sole executor.
+   */
+  public promoteCapabilityCandidate(
+    candidateId: string,
+    expectedRevision: number,
+    versionId?: string,
+    requesterId?: string,
+  ) {
+    return this.capabilities.promoteCandidate(candidateId, expectedRevision, versionId, requesterId);
   }
 
-  public revokeCapabilityCandidate(candidateId: string, expectedRevision: number, versionId?: string) {
-    return this.capabilities.revokeCandidate(candidateId, expectedRevision, versionId);
+  public revokeCapabilityCandidate(
+    candidateId: string,
+    expectedRevision: number,
+    versionId?: string,
+    requesterId?: string,
+  ) {
+    return this.capabilities.revokeCandidate(candidateId, expectedRevision, versionId, requesterId);
   }
 
-  public rollbackCapabilityCandidate(candidateId: string, targetVersionId: string, expectedRevision: number) {
-    return this.capabilities.rollbackCandidate(candidateId, targetVersionId, expectedRevision);
+  public rollbackCapabilityCandidate(
+    candidateId: string,
+    targetVersionId: string,
+    expectedRevision: number,
+    requesterId?: string,
+  ) {
+    return this.capabilities.rollbackCandidate(candidateId, targetVersionId, expectedRevision, requesterId);
   }
 
   public listCodeModeRuns(input: Parameters<CapabilitiesRoutePort["listCodeModeRuns"]>[0] = 100) {

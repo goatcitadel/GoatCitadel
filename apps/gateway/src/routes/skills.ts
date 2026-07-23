@@ -57,6 +57,8 @@ const skillHubRollbackReviewSchema = z
 export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
   const skills = fastify.services.skills;
   const operatorOnly = withRouteAccess(fastify, "operator");
+  const resolveActorId = (request: { authActorId?: string; ip?: string }) =>
+    request.authActorId?.trim() || `ip:${request.ip ?? "unknown"}`;
 
   const skillParamsSchema = z.object({
     skillId: z.string().min(1),
@@ -305,15 +307,16 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
+  // HX-402 P2: the legacy executable install is retired. Validation stays
+  // advisory; the response is a structured redirect into the governed Skill
+  // Hub review surface and never publishes bytes or alters callability.
   fastify.post("/api/v1/skills/import/install", async (request, reply) => {
     const parsed = installImportSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply
-        .code(201)
-        .send(projectImportProvenanceReferencesForPublic(await skills.installSkillImport(parsed.data)));
+      return reply.send(projectImportProvenanceReferencesForPublic(await skills.installSkillImport(parsed.data)));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -393,19 +396,21 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
+  // HX-402 P2: operator skill-state verbs are approval-first. Each verb
+  // commits one canonical `skill.lifecycle` approval (202 + pending-approval
+  // envelope); the recovered approval effect is the only executor. A
+  // byte-identical current state answers 200 with a no-op envelope.
   fastify.patch("/api/v1/skills/by-id/state", async (request, reply) => {
     const body = updateStateByIdSchema.safeParse(request.body);
     if (!body.success) {
       return reply.code(400).send({ error: body.error.flatten() });
     }
     try {
-      const updated = skills.setSkillState(
-        body.data.skillId,
-        body.data.state,
-        body.data.note,
-        body.data.expectedRevision,
-      );
-      return reply.send(updated);
+      const outcome = skills.setSkillState(body.data.skillId, body.data.state, body.data.note, {
+        expectedRevision: body.data.expectedRevision,
+        requesterId: resolveActorId(request),
+      });
+      return reply.code(outcome.pendingApproval ? 202 : 200).send(outcome);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -486,13 +491,11 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      const updated = skills.setSkillState(
-        params.data.skillId,
-        body.data.state,
-        body.data.note,
-        body.data.expectedRevision,
-      );
-      return reply.send(updated);
+      const outcome = skills.setSkillState(params.data.skillId, body.data.state, body.data.note, {
+        expectedRevision: body.data.expectedRevision,
+        requesterId: resolveActorId(request),
+      });
+      return reply.code(outcome.pendingApproval ? 202 : 200).send(outcome);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -504,13 +507,11 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const items = skills.bulkSetSkillState(
-        parsed.data.skillIds,
-        parsed.data.state,
-        parsed.data.note,
-        parsed.data.expectedRevisionsBySkillId,
-      );
-      return reply.send({ items });
+      const outcome = skills.bulkSetSkillState(parsed.data.skillIds, parsed.data.state, parsed.data.note, {
+        expectedRevisionsBySkillId: parsed.data.expectedRevisionsBySkillId,
+        requesterId: resolveActorId(request),
+      });
+      return reply.code(outcome.pendingApproval ? 202 : 200).send(outcome);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -527,7 +528,11 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
     }
     const { expectedRevision, ...input } = parsed.data;
     try {
-      return reply.send(skills.updateSkillActivationPolicy(input, expectedRevision));
+      const outcome = skills.updateSkillActivationPolicy(input, {
+        expectedRevision,
+        requesterId: resolveActorId(request),
+      });
+      return reply.code(outcome.pendingApproval ? 202 : 200).send(outcome);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }

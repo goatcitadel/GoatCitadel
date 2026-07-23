@@ -34,78 +34,62 @@ describe("SkillImportService loop41 zip install behavior", () => {
     fs.rmSync(rootDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
-  it("installs local zip bundles, rejects duplicate targets, and force-reinstalls cleanly", async () => {
+  // HX-402 P2 (coverage-preserving remodel): local zip bundles validate
+  // byte-exactly but can never publish — with or without force — and the
+  // redirect marks them ineligible for the governed hub (local sources).
+  it("validates local zip bundles and redirects without ever publishing bytes", async () => {
     const firstZip = createSkillZip(rootDir, "zip-runtime-tool-a.zip");
     const secondZip = createSkillZip(rootDir, "zip-runtime-tool-b.zip");
     const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
 
-    const firstInstall = await service.installImport({
+    const firstAttempt = await service.installImport({
       sourceRef: firstZip,
       sourceType: "local_zip",
       sourceProvider: "local",
     });
-    const staleFile = path.join(firstInstall.installedPath, "STALE.txt");
-    fs.writeFileSync(staleFile, "old install residue", "utf8");
-
-    await expect(
-      service.installImport({
-        sourceRef: secondZip,
-        sourceType: "local_zip",
-        sourceProvider: "local",
-      }),
-    ).rejects.toThrow(/Skill install target already exists/);
-
-    const forcedInstall = await service.installImport({
+    expect(firstAttempt.validation.valid).toBe(true);
+    expect(firstAttempt.validation.riskLevel).toBe("low");
+    expect(firstAttempt.validation.candidate).toMatchObject({
+      sourceProvider: "local",
+      sourceType: "local_zip",
+      sourceRef: firstZip,
+    });
+    expect(firstAttempt.redirect).toMatchObject({
+      owner: "skill_hub",
+      eligible: false,
+      ineligibleReason: expect.stringContaining("governed Skill Hub"),
+    });
+    // ADVERSARIAL: repeated and forced attempts still publish nothing.
+    const forcedAttempt = await service.installImport({
       sourceRef: secondZip,
       sourceType: "local_zip",
       sourceProvider: "local",
       force: true,
+      confirmHighRisk: true,
     });
-    const manifest = JSON.parse(fs.readFileSync(forcedInstall.sourceManifestPath, "utf8")) as Record<string, unknown>;
+    expect(forcedAttempt.disposition).toBe("redirected_to_skill_hub");
+    expect(fs.existsSync(path.join(rootDir, "skills", "extra"))).toBe(false);
     const lookup = await service.lookupSources(secondZip, 5);
-
-    expect(forcedInstall.installedPath).toBe(firstInstall.installedPath);
-    expect(fs.existsSync(staleFile)).toBe(false);
-    expect(fs.existsSync(path.join(forcedInstall.installedPath, "SKILL.md"))).toBe(true);
-    expect(manifest).toMatchObject({
-      manifestVersion: 3,
-      riskLevel: "low",
-      candidate: expect.objectContaining({
-        sourceProvider: "local",
-        sourceType: "local_zip",
-        sourceRef: secondZip,
-      }),
-      resolvedUpstream: {
-        url: secondZip,
-      },
-    });
     expect(lookup.bestMatch).toMatchObject({
       sourceProvider: "local",
-      installability: "direct",
+      alreadyInstalled: false,
     });
     expect(service.listHistory(3)).toEqual([
       expect.objectContaining({
         action: "install",
         outcome: "accepted",
         sourceRef: secondZip,
-        details: expect.objectContaining({ installedPath: "skills/extra/zip-runtime-tool" }),
-      }),
-      expect.objectContaining({
-        action: "install",
-        outcome: "failed",
-        sourceRef: secondZip,
-        details: expect.objectContaining({
-          error: expect.stringContaining("Skill install target already exists"),
-        }),
+        details: expect.objectContaining({ disposition: "redirected_to_skill_hub" }),
       }),
       expect.objectContaining({
         action: "install",
         outcome: "accepted",
         sourceRef: firstZip,
+        details: expect.objectContaining({ disposition: "redirected_to_skill_hub" }),
       }),
     ]);
-    // Real zip pack/unpack + force-reinstall over the filesystem is genuinely slow;
-    // under v8 coverage instrumentation in a loaded parallel run it can exceed the
+    // Real zip pack/unpack over the filesystem is genuinely slow; under v8
+    // coverage instrumentation in a loaded parallel run it can exceed the
     // default 15s budget, so give this I/O-heavy case explicit headroom.
   }, 30_000);
 

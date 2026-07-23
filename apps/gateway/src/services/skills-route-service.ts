@@ -20,30 +20,37 @@ import type {
   SkillSourceListResponse,
   SkillSourceLookupResponse,
   SkillSourceProvider,
-  SkillStateRecord,
 } from "@goatcitadel/contracts";
 import type { EffectiveCapabilitySet } from "./capability-scope-resolver.js";
+import type { SkillImportRedirectResult } from "./skill-import-service.js";
 import type { CreateSkillHubOperatorApprovalInput, SkillHubOperatorService } from "./skill-hub-operator-service.js";
 import type {
   SkillHubReviewService,
   SkillHubRollbackReviewInput,
   SkillHubSourceReviewInput,
 } from "./skill-hub-review-service.js";
+import type {
+  ActivationPolicyMutationAuthorityInput,
+  ActivationPolicyMutationOutcome,
+  SkillStateBulkMutationAuthorityInput,
+  SkillStateBulkMutationOutcome,
+  SkillStateMutationAuthorityInput,
+  SkillStateMutationOutcome,
+} from "./skill-state-service.js";
 
-export interface SkillImportInstallResult {
-  validation: SkillImportValidationResult;
-  installedPath: string;
-  sourceManifestPath: string;
-  installedSkillId?: string;
-}
+/**
+ * HX-402 P2: the legacy executable install result. Validation stays advisory;
+ * execution redirects into the HX-413 Skill Hub owner and never publishes.
+ */
+export type SkillImportInstallResult = SkillImportRedirectResult;
 
 export interface SkillsRoutePort {
   bulkSetSkillState(
     skillIds: string[],
     state: SkillRuntimeState,
     note: string | undefined,
-    expectedRevisionsBySkillId: Record<string, number>,
-  ): SkillStateRecord[];
+    authority: SkillStateBulkMutationAuthorityInput,
+  ): SkillStateBulkMutationOutcome;
   getSkillActivationPolicy(): SkillActivationPolicy;
   installSkillImport(input: {
     sourceRef: string;
@@ -78,12 +85,12 @@ export interface SkillsRoutePort {
     skillId: string,
     state: SkillRuntimeState,
     note: string | undefined,
-    expectedRevision: number,
-  ): SkillStateRecord;
+    authority: SkillStateMutationAuthorityInput,
+  ): SkillStateMutationOutcome;
   updateSkillActivationPolicy(
     input: Partial<Omit<SkillActivationPolicy, "revision">>,
-    expectedRevision: number,
-  ): SkillActivationPolicy;
+    authority: ActivationPolicyMutationAuthorityInput,
+  ): ActivationPolicyMutationOutcome;
   validateSkillImport(input: {
     sourceRef: string;
     sourceType?: SkillImportValidationResult["candidate"]["sourceType"];
@@ -176,17 +183,27 @@ export class SkillsRouteService {
     return this.skills.resolveSkillActivation(input);
   }
 
-  public setSkillState(skillId: string, state: SkillRuntimeState, note: string | undefined, expectedRevision: number) {
-    return this.skills.setSkillState(skillId, state, note, expectedRevision);
+  /**
+   * HX-402 P2: approval-first pass-throughs. The port members request one
+   * canonical `skill.lifecycle` approval and never mutate; the recovered
+   * approval effect is the sole executor.
+   */
+  public setSkillState(
+    skillId: string,
+    state: SkillRuntimeState,
+    note: string | undefined,
+    authority: SkillStateMutationAuthorityInput,
+  ) {
+    return this.skills.setSkillState(skillId, state, note, authority);
   }
 
   public bulkSetSkillState(
     skillIds: string[],
     state: SkillRuntimeState,
     note: string | undefined,
-    expectedRevisionsBySkillId: Record<string, number>,
+    authority: SkillStateBulkMutationAuthorityInput,
   ) {
-    return this.skills.bulkSetSkillState(skillIds, state, note, expectedRevisionsBySkillId);
+    return this.skills.bulkSetSkillState(skillIds, state, note, authority);
   }
 
   public getSkillActivationPolicy() {
@@ -195,8 +212,8 @@ export class SkillsRouteService {
 
   public updateSkillActivationPolicy(
     input: Partial<Omit<SkillActivationPolicy, "revision">>,
-    expectedRevision: number,
+    authority: ActivationPolicyMutationAuthorityInput,
   ) {
-    return this.skills.updateSkillActivationPolicy(input, expectedRevision);
+    return this.skills.updateSkillActivationPolicy(input, authority);
   }
 }

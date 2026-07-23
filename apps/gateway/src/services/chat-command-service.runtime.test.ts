@@ -114,7 +114,14 @@ function createDeps(): ChatCommandDependencies {
     listSkills: vi.fn(() => [{ skillId: "skill-a", state: "enabled", note: "ready" }]),
     listChatSessions: vi.fn(() => []),
     listMemoryItems: vi.fn(() => []),
-    setSkillState: vi.fn((skillId: string, state: string) => ({ skillId, state })),
+    // HX-402 P2: approval-first — the command surface receives a pending
+    // skill.lifecycle approval envelope, never a mutated record.
+    setSkillState: vi.fn((skillId: string, state: string) => ({
+      pendingApproval: {
+        approvalId: `approval-${skillId}-${state}`,
+        status: "pending",
+      },
+    })),
     listSkillSources: vi.fn(async () => ({
       items: [
         {
@@ -138,7 +145,17 @@ function createDeps(): ChatCommandDependencies {
       items: [],
     })),
     validateSkillImport: vi.fn(async () => ({ valid: true, errors: [], inferredSkillName: "research-skill" })),
-    installSkillImport: vi.fn(async () => ({ installedSkillId: "research-skill" })),
+    // HX-402 P2: the retired executable install resolves to a governed
+    // Skill Hub redirect and never publishes.
+    installSkillImport: vi.fn(async () => ({
+      disposition: "redirected_to_skill_hub",
+      redirect: {
+        reviewRoute: "/api/v1/skills/hub/reviews",
+        sourceRef: "https://example.com/skill",
+        sourceType: "remote_bundle",
+        eligible: true,
+      },
+    })),
     listMcpServers: vi.fn(() => [{ serverId: "mcp-1", label: "Browser", status: "disconnected", enabled: true }]),
     listMcpTemplates: vi.fn(() => [
       {
@@ -281,6 +298,21 @@ describe("chat command runtime dispatch", () => {
     expect(deps.resolveChatToolApproval).toHaveBeenCalledWith("session-1", "approval-2", "reject", {
       resolvedBy: "chat-command",
     });
+
+    // HX-402 P2: the skill state command surfaces the pending approval and
+    // the install command surfaces the governed Skill Hub redirect — neither
+    // reports a mutation.
+    expect(deps.setSkillState).toHaveBeenCalledWith(
+      "skill-a",
+      "sleep",
+      expect.stringContaining("Requested from chat command"),
+    );
+    const stateResult = await parseChatCommand(deps, "session-1", "/skill sleep skill-a");
+    expect(stateResult.message).toContain("Approval required: resolve approval approval-skill-a-sleep");
+    expect(stateResult.message).toContain("No change has been applied yet");
+    const installResult = await parseChatCommand(deps, "session-1", "/skill install https://example.com/skill");
+    expect(installResult.message).toContain("governed by the Skill Hub");
+    expect(installResult.message).toContain("Nothing was installed by this command");
   });
 
   it("preserves exact /learn correction bytes and passes only the authenticated request actor", async () => {

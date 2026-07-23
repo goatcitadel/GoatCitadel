@@ -147,12 +147,21 @@ describe("skills routes", () => {
       run: { runId: "skill-eval-2", skillId: "bundled:agentic-skill-architect", status: "completed" },
     }));
     const listSkillEvaluationRuns = vi.fn(() => ({ items: [] }));
+    // HX-402 P2: state verbs answer with a pending skill.lifecycle approval.
     const setSkillState = vi.fn(() => ({
-      skillId: "bundled:agentic-skill-architect",
-      revision: 8,
-      state: "sleep",
-      note: "review",
-      updatedAt: "2026-05-04T00:00:00.000Z",
+      pendingApproval: {
+        approvalId: "11111111-2222-3333-4444-555555555555",
+        status: "pending",
+        kind: "skill.lifecycle",
+        action: "skill_state_set",
+        subjectKind: "skill",
+        subjectId: "bundled:agentic-skill-architect",
+        requestSha256: "a".repeat(64),
+        expectedStateSha256: "b".repeat(64),
+        createdAt: "2026-05-04T00:00:00.000Z",
+        replayed: false,
+        skillIds: ["bundled:agentic-skill-architect"],
+      },
     }));
 
     app = Fastify();
@@ -190,11 +199,16 @@ describe("skills routes", () => {
     expect(preview.statusCode).toBe(200);
     expect(run.statusCode).toBe(201);
     expect(list.statusCode).toBe(200);
-    expect(state.statusCode).toBe(200);
+    // Approval-first: the state verb answers 202 with the pending envelope.
+    expect(state.statusCode).toBe(202);
+    expect(state.json().pendingApproval).toMatchObject({ kind: "skill.lifecycle", action: "skill_state_set" });
     expect(previewSkillEvaluation).toHaveBeenCalledWith(skillId, {});
     expect(runSkillEvaluation).toHaveBeenCalledWith(skillId, {});
     expect(listSkillEvaluationRuns).toHaveBeenCalledWith(skillId);
-    expect(setSkillState).toHaveBeenCalledWith(skillId, "sleep", "review", 7);
+    expect(setSkillState).toHaveBeenCalledWith(skillId, "sleep", "review", {
+      expectedRevision: 7,
+      requesterId: "ip:127.0.0.1",
+    });
   });
 
   it("requires and forwards skill aggregate revisions and projects stale writes as 409 conflicts", async () => {
@@ -210,11 +224,15 @@ describe("skills routes", () => {
         },
       });
     });
-    const bulkSetSkillState = vi.fn(() => []);
+    const bulkSetSkillState = vi.fn(() => ({
+      pendingApproval: null,
+      noMutationRequired: true,
+      skillStates: [],
+    }));
     const updateSkillActivationPolicy = vi.fn(() => ({
-      revision: 5,
-      guardedAutoThreshold: 0.8,
-      requireFirstUseConfirmation: true,
+      pendingApproval: null,
+      noMutationRequired: true,
+      policy: { revision: 5, guardedAutoThreshold: 0.8, requireFirstUseConfirmation: true },
     }));
     app = Fastify();
     app.decorate("services", {
@@ -261,11 +279,14 @@ describe("skills routes", () => {
     });
     expect(bulk.statusCode).toBe(200);
     expect(bulkSetSkillState).toHaveBeenCalledWith(["skill-b", "skill-a"], "disabled", undefined, {
-      "skill-a": 4,
-      "skill-b": 9,
+      expectedRevisionsBySkillId: { "skill-a": 4, "skill-b": 9 },
+      requesterId: "ip:127.0.0.1",
     });
     expect(policy.statusCode).toBe(200);
-    expect(updateSkillActivationPolicy).toHaveBeenCalledWith({ guardedAutoThreshold: 0.8 }, 4);
+    expect(updateSkillActivationPolicy).toHaveBeenCalledWith(
+      { guardedAutoThreshold: 0.8 },
+      { expectedRevision: 4, requesterId: "ip:127.0.0.1" },
+    );
   });
 
   it("creates skill evaluation proposals from accepted runs", async () => {
@@ -394,9 +415,15 @@ describe("skills routes", () => {
       instructionPreview: skillMarkdown,
     };
     const installResult = {
+      disposition: "redirected_to_skill_hub",
       validation: validationResult,
-      installedPath: "skills/extra/private-skill",
-      sourceManifestPath: "skills/extra/private-skill/source.json",
+      redirect: {
+        owner: "skill_hub",
+        reviewRoute: "/api/v1/skills/hub/reviews",
+        sourceRef: rawSourceUrl,
+        sourceType: "git_url",
+        eligible: true,
+      },
     };
     const historyRecord = {
       importId: "history-private",
@@ -460,7 +487,7 @@ describe("skills routes", () => {
       validateResponse.statusCode,
       installResponse.statusCode,
       historyResponse.statusCode,
-    ]).toEqual([200, 200, 200, 201, 200]);
+    ]).toEqual([200, 200, 200, 200, 200]);
     const publicBodies = [
       sourcesResponse.json(),
       lookupResponse.json(),

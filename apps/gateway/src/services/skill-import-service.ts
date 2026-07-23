@@ -22,7 +22,6 @@ import {
 import {
   SKILL_CONTENT_INTEGRITY_LIMITS,
   SkillContentIntegrityLimitError,
-  assertSkillSourceManifestSize,
   captureSkillContentIntegrity,
   preflightSkillContentTree,
   readBoundedSkillTextFile,
@@ -103,6 +102,28 @@ export interface MaterializedSkillReviewContext {
 interface SkillInstallInput extends SkillImportInput {
   force?: boolean;
   confirmHighRisk?: boolean;
+}
+
+/**
+ * HX-402 P2: the legacy executable install is retired. Validation stays
+ * advisory, but executable installation redirects into the HX-413 Skill Hub
+ * owner (immutable snapshots, byte/audit/permission checks, approval linkage).
+ * `confirmHighRisk` is NOT approval and filesystem publication is NOT
+ * recoverable immutable authority, so this surface can no longer publish
+ * bytes, alter callability, or write a competing lifecycle claim.
+ */
+export interface SkillImportRedirectResult {
+  disposition: "redirected_to_skill_hub";
+  validation: SkillImportValidationResult;
+  redirect: {
+    owner: "skill_hub";
+    reviewRoute: "/api/v1/skills/hub/reviews";
+    sourceRef: string;
+    /** Present when the source maps onto a governed hub review source type. */
+    sourceType?: "git_url" | "remote_bundle";
+    eligible: boolean;
+    ineligibleReason?: string;
+  };
 }
 
 interface InstalledSkillSourceManifest {
@@ -1005,11 +1026,16 @@ export class SkillImportService {
     }
   }
 
-  public async installImport(input: SkillInstallInput): Promise<{
-    validation: SkillImportValidationResult;
-    installedPath: string;
-    sourceManifestPath: string;
-  }> {
+  /**
+   * HX-402 P2: retired executable install. The legacy validation ladder stays
+   * advisory and byte-exact (staging copy + exact-tree validation + the
+   * high-risk confirmation refusal), but nothing is ever published: no bytes
+   * reach `skills/extra`, no skill state row is written, no lifecycle claim is
+   * minted. Valid sources receive a structured redirect into the HX-413 Skill
+   * Hub owner, whose review/install/activate path is the only executable
+   * authority.
+   */
+  public async installImport(input: SkillInstallInput): Promise<SkillImportRedirectResult> {
     const importId = randomUUID();
     let materialized: MaterializedSkillSource | undefined;
     let stagingPath: string | undefined;
@@ -1017,7 +1043,6 @@ export class SkillImportService {
       materialized = await this.materializeSkillSource(input);
       const sourceSkillDir = materialized.skillDir;
       const skillsRoot = path.resolve(this.rootDir, "skills");
-      const skillsExtraRoot = path.resolve(skillsRoot, "extra");
       const stagingRoot = path.resolve(skillsRoot, ".import-staging");
       stagingPath = path.resolve(stagingRoot, importId);
       assertWritePathInJail(stagingPath, [stagingRoot]);
@@ -1086,76 +1111,7 @@ export class SkillImportService {
         throw new Error("High-risk skill import requires explicit confirmation.");
       }
 
-      const inferredId = validation.inferredSkillId || `import-${Date.now()}`;
-      const installedPath = path.resolve(skillsExtraRoot, inferredId);
-      assertWritePathInJail(installedPath, [skillsExtraRoot]);
-      const targetExists = fsSync.existsSync(installedPath);
-      if (targetExists && !input.force) {
-        throw new Error(`Skill install target already exists: ${installedPath}`);
-      }
-      const expectedIntegrity = validation.provenance?.contentIntegrity;
-      if (!expectedIntegrity) {
-        throw new Error("Skill import validation did not produce exact-byte payload provenance.");
-      }
-      await fs.mkdir(skillsExtraRoot, { recursive: true });
-
-      const stagedSourceManifestPath = path.join(stagingPath, "source.json");
-      const sourceManifestPath = path.join(installedPath, "source.json");
-      const installedAt = new Date().toISOString();
-      const duplicateFamily = deriveReviewPolicy({
-        inferredSkillName: validation.inferredSkillName,
-        sourceRef: validation.candidate.sourceRef,
-      })?.duplicateFamily;
-      const reviewDisposition = deriveReviewPolicy({
-        inferredSkillName: validation.inferredSkillName,
-        sourceRef: validation.candidate.sourceRef,
-      })?.reviewDisposition;
-      const curatedEntry = findCuratedSourceByUrl(validation.candidate.sourceRef);
-      const resolvedUpstreamVersion =
-        validation.candidate.sourceType === "git_url"
-          ? await resolveGitHeadRevision(materialized.sourceDir).catch(() => undefined)
-          : undefined;
-      const sourceManifestJson = JSON.stringify(
-        {
-          manifestVersion: 3,
-          installedAt,
-          lastReviewedAt: installedAt,
-          lastCheckedAt: installedAt,
-          duplicateFamily,
-          reviewDisposition,
-          marketplaceListingUrl:
-            curatedEntry?.sourceProvider === "clawhub" ||
-            curatedEntry?.sourceProvider === "skillsmp" ||
-            curatedEntry?.sourceProvider === "agentskill"
-              ? curatedEntry.sourceUrl
-              : undefined,
-          resolvedUpstream: {
-            url: validation.candidate.repositoryUrl ?? validation.candidate.sourceUrl ?? validation.candidate.sourceRef,
-            ref: validation.candidate.sourceType === "git_url" ? "HEAD" : undefined,
-            version: resolvedUpstreamVersion,
-          },
-          candidate: validation.candidate,
-          riskLevel: validation.riskLevel,
-          warnings: validation.warnings,
-          checks: validation.checks,
-          provenance: validation.provenance,
-          externalToolMappings: validation.externalToolMappings,
-          scriptDisposition: validation.scriptDisposition,
-          bundleManifest: validation.bundleManifest,
-          compatibility: validation.compatibility,
-        },
-        null,
-        2,
-      );
-      assertSkillSourceManifestSize(sourceManifestJson);
-      await fs.writeFile(stagedSourceManifestPath, sourceManifestJson, "utf8");
-      await assertSkillSourceIntegrity(stagingPath, expectedIntegrity, "Staged skill payload changed after validation");
-      const publication = await publishStagedSkill(stagingPath, installedPath, Boolean(input.force), importId);
-      stagingPath = undefined;
-      if (publication.replacementCleanupWarning) {
-        validation.warnings.push(publication.replacementCleanupWarning);
-      }
-
+      const redirect = buildSkillHubRedirect(validation);
       this.appendHistory({
         importId,
         action: "install",
@@ -1168,21 +1124,21 @@ export class SkillImportService {
         skillId: validation.inferredSkillId,
         riskLevel: validation.riskLevel,
         details: {
-          installedPath: path.relative(this.rootDir, installedPath).replaceAll("\\", "/"),
+          disposition: "redirected_to_skill_hub",
+          redirect,
           provenance: validation.provenance,
           externalToolMappings: validation.externalToolMappings,
           scriptDisposition: validation.scriptDisposition,
           bundleManifest: validation.bundleManifest,
           compatibility: validation.compatibility,
-          replacementCleanupWarning: publication.replacementCleanupWarning,
         },
         createdAt: new Date().toISOString(),
       });
 
       return {
+        disposition: "redirected_to_skill_hub",
         validation,
-        installedPath,
-        sourceManifestPath,
+        redirect,
       };
     } catch (error) {
       const sourceType = inferSourceType(input.sourceRef, input.sourceType);
@@ -1746,55 +1702,31 @@ export class SkillImportService {
   }
 }
 
-async function assertSkillSourceIntegrity(
-  skillDir: string,
-  expected: SkillContentIntegrityManifest,
-  message: string,
-): Promise<void> {
-  const actual = await captureSkillContentIntegrity(skillDir);
-  if (!skillContentIntegrityMatches(expected, actual)) {
-    throw new Error(`${message}: expected ${expected.treeSha256}, observed ${actual.treeSha256}.`);
-  }
-}
-
-async function publishStagedSkill(
-  stagingPath: string,
-  installedPath: string,
-  force: boolean,
-  importId: string,
-): Promise<{ replacementCleanupWarning?: string }> {
-  if (!fsSync.existsSync(installedPath)) {
-    await fs.rename(stagingPath, installedPath);
-    return {};
-  }
-  if (!force) {
-    throw new Error(`Skill install target already exists: ${installedPath}`);
-  }
-
-  const backupPath = path.join(path.dirname(stagingPath), `replaced-${importId}`);
-  await fs.rename(installedPath, backupPath);
-  try {
-    await fs.rename(stagingPath, installedPath);
-  } catch (error) {
-    try {
-      await fs.rename(backupPath, installedPath);
-    } catch (restoreError) {
-      throw new Error(
-        `Failed to publish verified skill payload and restore the previous install: ${(restoreError as Error).message}`,
-        { cause: restoreError },
-      );
-    }
-    throw error;
-  }
-  try {
-    await fs.rm(backupPath, TEMP_CLEANUP_OPTIONS);
-    return {};
-  } catch (error) {
-    const relativeBackupPath = path.relative(path.dirname(path.dirname(stagingPath)), backupPath).replaceAll("\\", "/");
+/**
+ * HX-402 P2: map a validated legacy install request onto the governed HX-413
+ * Skill Hub review surface. Only hosted sources the hub can independently
+ * re-materialize are eligible; local paths and local archives cannot become
+ * executable through any legacy path.
+ */
+function buildSkillHubRedirect(validation: SkillImportValidationResult): SkillImportRedirectResult["redirect"] {
+  const sourceType = validation.candidate.sourceType;
+  if (sourceType === "git_url" || sourceType === "remote_bundle") {
     return {
-      replacementCleanupWarning: `Previous install cleanup was incomplete; a non-loadable quarantined backup may remain at ${relativeBackupPath}: ${(error as Error).message}`,
+      owner: "skill_hub",
+      reviewRoute: "/api/v1/skills/hub/reviews",
+      sourceRef: validation.candidate.sourceRef,
+      sourceType,
+      eligible: true,
     };
   }
+  return {
+    owner: "skill_hub",
+    reviewRoute: "/api/v1/skills/hub/reviews",
+    sourceRef: validation.candidate.sourceRef,
+    eligible: false,
+    ineligibleReason:
+      "Local sources cannot be installed: publish the skill to a hosted git repository or HTTPS bundle and review it through the governed Skill Hub.",
+  };
 }
 
 function buildSkillImportCompatibility(

@@ -1,5 +1,4 @@
 import type {
-  CandidateLifecycleActionResult,
   CandidateSkillDetailRecord,
   CapabilityCatalogEntry,
   CapabilityCatalogScope,
@@ -94,11 +93,34 @@ export async function fetchCapabilityCandidate(candidateId: string): Promise<Can
   return request(`/api/v1/capabilities/candidates/${encodeURIComponent(candidateId)}`);
 }
 
+/**
+ * HX-402 P2: direct candidate lifecycle verbs are approval-first. The gateway
+ * answers 202 with one canonical pending `capability.lifecycle` approval (the
+ * recovered approval effect is the only executor) or 200 with a no-op
+ * envelope when the reviewed state already matches.
+ */
+export interface CapabilityLifecyclePendingApproval {
+  approvalId: string;
+  status: string;
+  kind: "capability.lifecycle";
+  action: "candidate_promoted" | "candidate_revoked" | "candidate_rolled_back";
+  candidateId: string;
+  requestSha256: string;
+  expectedStateSha256: string;
+  expiresAt?: string;
+  createdAt: string;
+  replayed: boolean;
+}
+
+export type CapabilityCandidateMutationOutcome =
+  | { pendingApproval: CapabilityLifecyclePendingApproval }
+  | { pendingApproval: null; noMutationRequired: true; detail: CandidateSkillDetailRecord };
+
 export async function promoteCapabilityCandidate(
   candidateId: string,
   expectedRevision: number,
   versionId?: string,
-): Promise<CandidateLifecycleActionResult> {
+): Promise<CapabilityCandidateMutationOutcome> {
   return request(`/api/v1/capabilities/candidates/${encodeURIComponent(candidateId)}/promote`, {
     method: "POST",
     body: JSON.stringify({ expectedRevision, ...(versionId ? { versionId } : {}) }),
@@ -109,7 +131,7 @@ export async function revokeCapabilityCandidate(
   candidateId: string,
   expectedRevision: number,
   versionId?: string,
-): Promise<CandidateLifecycleActionResult> {
+): Promise<CapabilityCandidateMutationOutcome> {
   return request(`/api/v1/capabilities/candidates/${encodeURIComponent(candidateId)}/revoke`, {
     method: "POST",
     body: JSON.stringify({ expectedRevision, ...(versionId ? { versionId } : {}) }),
@@ -120,7 +142,7 @@ export async function rollbackCapabilityCandidate(
   candidateId: string,
   targetVersionId: string,
   expectedRevision: number,
-): Promise<CandidateLifecycleActionResult> {
+): Promise<CapabilityCandidateMutationOutcome> {
   return request(`/api/v1/capabilities/candidates/${encodeURIComponent(candidateId)}/rollback`, {
     method: "POST",
     body: JSON.stringify({ expectedRevision, targetVersionId }),

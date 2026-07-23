@@ -10,6 +10,8 @@ import { sendRouteError } from "./_error-handler.js";
 const DEFAULT_WORKSPACE_ID = "default";
 
 export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
+  const resolveActorId = (request: { authActorId?: string; ip?: string }) =>
+    request.authActorId?.trim() || `ip:${request.ip ?? "unknown"}`;
   const catalogQuerySchema = z.object({
     scope: z.enum(["inspectable", "callable"]).optional(),
     workspaceId: z.string().trim().min(1).optional(),
@@ -232,7 +234,11 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply
         .code(201)
-        .send(projectCapabilityPublicValue(fastify.services.capabilities.createCapabilityProposal(parsed.data)));
+        .send(
+          projectCapabilityPublicValue(
+            fastify.services.capabilities.createCapabilityProposal(parsed.data, resolveActorId(request)),
+          ),
+        );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -326,6 +332,10 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
+  // HX-402 P2: direct candidate lifecycle verbs are approval-first. Each verb
+  // commits one canonical `capability.lifecycle` approval (202 +
+  // pending-approval envelope); the recovered approval effect is the only
+  // executor. A no-op transition answers 200 with the unchanged detail.
   fastify.post("/api/v1/capabilities/candidates/:candidateId/promote", async (request, reply) => {
     const params = candidateParamsSchema.safeParse(request.params);
     const body = candidateActionBodySchema.safeParse(request.body ?? {});
@@ -338,15 +348,13 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(
-        projectCapabilityPublicValue(
-          fastify.services.capabilities.promoteCapabilityCandidate(
-            params.data.candidateId,
-            body.data.expectedRevision,
-            body.data.versionId,
-          ),
-        ),
+      const outcome = fastify.services.capabilities.promoteCapabilityCandidate(
+        params.data.candidateId,
+        body.data.expectedRevision,
+        body.data.versionId,
+        resolveActorId(request),
       );
+      return reply.code(outcome.pendingApproval ? 202 : 200).send(projectCapabilityPublicValue(outcome));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -364,15 +372,13 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(
-        projectCapabilityPublicValue(
-          fastify.services.capabilities.revokeCapabilityCandidate(
-            params.data.candidateId,
-            body.data.expectedRevision,
-            body.data.versionId,
-          ),
-        ),
+      const outcome = fastify.services.capabilities.revokeCapabilityCandidate(
+        params.data.candidateId,
+        body.data.expectedRevision,
+        body.data.versionId,
+        resolveActorId(request),
       );
+      return reply.code(outcome.pendingApproval ? 202 : 200).send(projectCapabilityPublicValue(outcome));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -390,15 +396,13 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(
-        projectCapabilityPublicValue(
-          fastify.services.capabilities.rollbackCapabilityCandidate(
-            params.data.candidateId,
-            body.data.targetVersionId,
-            body.data.expectedRevision,
-          ),
-        ),
+      const outcome = fastify.services.capabilities.rollbackCapabilityCandidate(
+        params.data.candidateId,
+        body.data.targetVersionId,
+        body.data.expectedRevision,
+        resolveActorId(request),
       );
+      return reply.code(outcome.pendingApproval ? 202 : 200).send(projectCapabilityPublicValue(outcome));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }

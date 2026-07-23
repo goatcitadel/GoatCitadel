@@ -55,25 +55,35 @@ describe("SkillsRouteService", () => {
         () => service.resolveSkillActivation({ skillId: "skill-4" } as never),
         [{ skillId: "skill-4" }],
       ],
+      // HX-402 P2: approval-first authority objects (expectedRevision + requester).
       [
         "setSkillState",
-        () => service.setSkillState("skill-5", "enabled", "ready", 4),
-        ["skill-5", "enabled", "ready", 4],
+        () => service.setSkillState("skill-5", "enabled", "ready", { expectedRevision: 4, requesterId: "operator-1" }),
+        ["skill-5", "enabled", "ready", { expectedRevision: 4, requesterId: "operator-1" }],
       ],
       [
         "bulkSetSkillState",
         () =>
           service.bulkSetSkillState(["skill-6", "skill-7"], "sleep", "quiet", {
-            "skill-6": 5,
-            "skill-7": 8,
+            expectedRevisionsBySkillId: { "skill-6": 5, "skill-7": 8 },
+            requesterId: "operator-1",
           }),
-        [["skill-6", "skill-7"], "sleep", "quiet", { "skill-6": 5, "skill-7": 8 }],
+        [
+          ["skill-6", "skill-7"],
+          "sleep",
+          "quiet",
+          { expectedRevisionsBySkillId: { "skill-6": 5, "skill-7": 8 }, requesterId: "operator-1" },
+        ],
       ],
       ["getSkillActivationPolicy", () => service.getSkillActivationPolicy(), []],
       [
         "updateSkillActivationPolicy",
-        () => service.updateSkillActivationPolicy({ guardedAutoThreshold: 0.8 }, 6),
-        [{ guardedAutoThreshold: 0.8 }, 6],
+        () =>
+          service.updateSkillActivationPolicy(
+            { guardedAutoThreshold: 0.8 },
+            { expectedRevision: 6, requesterId: "operator-1" },
+          ),
+        [{ guardedAutoThreshold: 0.8 }, { expectedRevision: 6, requesterId: "operator-1" }],
       ],
     ];
 

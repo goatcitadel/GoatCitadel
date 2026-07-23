@@ -874,11 +874,14 @@ describe("SkillImportService validation", () => {
     });
   });
 
-  it("blocks overlapping Cloudflare-family installs into skills/extra", async () => {
-    const firstSkillDir = path.join(rootDir, "cloudflare-api");
-    fs.mkdirSync(firstSkillDir, { recursive: true });
+  it("blocks overlapping Cloudflare-family validations against historically installed skills/extra", async () => {
+    // HX-402 P2: the legacy install can no longer publish, so the historical
+    // installed skill is seeded directly (pre-retirement installs remain on
+    // disk); advisory duplicate-family validation still blocks the overlap.
+    const historicalInstallDir = path.join(rootDir, "skills", "extra", "cloudflare-api");
+    fs.mkdirSync(historicalInstallDir, { recursive: true });
     fs.writeFileSync(
-      path.join(firstSkillDir, "SKILL.md"),
+      path.join(historicalInstallDir, "SKILL.md"),
       [
         "---",
         "name: Cloudflare API",
@@ -889,7 +892,19 @@ describe("SkillImportService validation", () => {
         "",
       ].join("\n"),
     );
-    fs.writeFileSync(path.join(firstSkillDir, "LICENSE"), "MIT\n");
+    fs.writeFileSync(path.join(historicalInstallDir, "LICENSE"), "MIT\n");
+    fs.writeFileSync(
+      path.join(historicalInstallDir, "source.json"),
+      JSON.stringify({
+        manifestVersion: 3,
+        duplicateFamily: "cloudflare_dns",
+        candidate: {
+          canonicalKey: "local:local_path:cloudflare-api",
+          sourceRef: path.join(rootDir, "cloudflare-api"),
+        },
+      }),
+      "utf8",
+    );
 
     const secondSkillDir = path.join(rootDir, "cloudflare-manager");
     fs.mkdirSync(secondSkillDir, { recursive: true });
@@ -908,12 +923,6 @@ describe("SkillImportService validation", () => {
     fs.writeFileSync(path.join(secondSkillDir, "LICENSE"), "MIT\n");
 
     const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
-    await service.installImport({
-      sourceRef: firstSkillDir,
-      sourceType: "local_path",
-      sourceProvider: "local",
-    });
-
     const validation = await service.validateImport({
       sourceRef: secondSkillDir,
       sourceType: "local_path",
@@ -929,7 +938,7 @@ describe("SkillImportService validation", () => {
     );
   });
 
-  it("writes enriched source metadata for repo-managed installs", async () => {
+  it("returns enriched validation provenance on the redirect instead of a published manifest", async () => {
     const skillDir = path.join(rootDir, "cloudflare-api");
     fs.mkdirSync(skillDir, { recursive: true });
     fs.writeFileSync(
@@ -947,23 +956,19 @@ describe("SkillImportService validation", () => {
     fs.writeFileSync(path.join(skillDir, "LICENSE"), "MIT\n");
 
     const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
-    const installed = await service.installImport({
+    const redirected = await service.installImport({
       sourceRef: skillDir,
       sourceType: "local_path",
       sourceProvider: "local",
     });
-    const manifest = JSON.parse(fs.readFileSync(installed.sourceManifestPath, "utf8")) as Record<string, unknown>;
 
-    expect(manifest.manifestVersion).toBe(3);
-    expect(manifest.duplicateFamily).toBe("cloudflare_dns");
-    expect(manifest.reviewDisposition).toBe("allow");
-    expect(typeof manifest.installedAt).toBe("string");
-    expect(typeof manifest.lastReviewedAt).toBe("string");
-    expect(typeof manifest.lastCheckedAt).toBe("string");
-    expect(manifest).toHaveProperty("resolvedUpstream");
-    expect(manifest).toMatchObject({
-      provenance: {
-        contentIntegrity: {
+    // HX-402 P2: the enriched metadata is the advisory validation result and
+    // the immutable history detail — never a published source manifest.
+    expect(redirected.disposition).toBe("redirected_to_skill_hub");
+    expect(redirected.validation).toMatchObject({
+      valid: true,
+      provenance: expect.objectContaining({
+        contentIntegrity: expect.objectContaining({
           manifestVersion: "goatcitadel.skill-tree.v1",
           algorithm: "sha256",
           treeSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
@@ -973,12 +978,18 @@ describe("SkillImportService validation", () => {
             expect.objectContaining({ path: "LICENSE" }),
             expect.objectContaining({ path: "SKILL.md" }),
           ]),
-        },
-      },
+        }),
+      }),
     });
+    expect(service.listHistory(1)[0]).toMatchObject({
+      action: "install",
+      outcome: "accepted",
+      details: expect.objectContaining({ disposition: "redirected_to_skill_hub" }),
+    });
+    expect(fs.existsSync(path.join(rootDir, "skills", "extra"))).toBe(false);
   });
 
-  it("refuses to publish when the managed staging payload mutates after validation", async () => {
+  it("never moves or copies any payload into skills/extra even for valid confirmed installs", async () => {
     const skillDir = path.join(rootDir, "staging-race-skill");
     fs.mkdirSync(skillDir, { recursive: true });
     fs.writeFileSync(
@@ -986,7 +997,7 @@ describe("SkillImportService validation", () => {
       [
         "---",
         "name: Staging Race Skill",
-        "description: Valid fixture for exact-byte import race detection.",
+        "description: Valid fixture for exact-byte import retirement proof.",
         "---",
         "",
         "Use the validated instructions only.",
@@ -995,31 +1006,36 @@ describe("SkillImportService validation", () => {
     );
     fs.writeFileSync(path.join(skillDir, "LICENSE"), "MIT\n");
 
-    const originalWriteFile = fsPromises.writeFile.bind(fsPromises);
-    vi.spyOn(fsPromises, "writeFile").mockImplementation(async (file, data, options) => {
-      await originalWriteFile(file, data, options);
-      const filePath = String(file);
-      if (path.basename(filePath) === "source.json" && filePath.includes(`${path.sep}.import-staging${path.sep}`)) {
-        await originalWriteFile(path.join(path.dirname(filePath), "SKILL.md"), "mutated after validation\n", "utf8");
-      }
+    // ADVERSARIAL: observe every rename/copy the install performs and prove
+    // none of them can target the runtime skills/extra root.
+    const extraRoot = path.join(rootDir, "skills", "extra");
+    const observedTargets: string[] = [];
+    const originalRename = fsPromises.rename.bind(fsPromises);
+    vi.spyOn(fsPromises, "rename").mockImplementation(async (oldPath, newPath) => {
+      observedTargets.push(String(newPath));
+      return originalRename(oldPath, newPath);
+    });
+    const originalCp = fsPromises.cp.bind(fsPromises);
+    vi.spyOn(fsPromises, "cp").mockImplementation(async (source, destination, options) => {
+      observedTargets.push(String(destination));
+      return originalCp(source, destination, options as never);
     });
 
     const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
-    await expect(
-      service.installImport({
-        sourceRef: skillDir,
-        sourceType: "local_path",
-        sourceProvider: "local",
-      }),
-    ).rejects.toThrow(/Staged skill payload changed after validation/);
-
-    expect(fs.existsSync(path.join(rootDir, "skills", "extra", "staging-race-skill"))).toBe(false);
-    expect(fs.readFileSync(path.join(skillDir, "SKILL.md"), "utf8")).toContain("validated instructions");
-    expect(service.listHistory(1)[0]).toMatchObject({
-      action: "install",
-      outcome: "failed",
-      details: { error: expect.stringContaining("Staged skill payload changed after validation") },
+    const redirected = await service.installImport({
+      sourceRef: skillDir,
+      sourceType: "local_path",
+      sourceProvider: "local",
+      force: true,
+      confirmHighRisk: true,
     });
+
+    expect(redirected.disposition).toBe("redirected_to_skill_hub");
+    expect(observedTargets.length).toBeGreaterThan(0);
+    expect(observedTargets.some((target) => path.resolve(target).startsWith(path.resolve(extraRoot)))).toBe(false);
+    expect(fs.existsSync(extraRoot)).toBe(false);
+    // The advisory source tree is untouched.
+    expect(fs.readFileSync(path.join(skillDir, "SKILL.md"), "utf8")).toContain("validated instructions");
   });
 
   it("rejects an oversized local tree before copying it into managed staging", async () => {

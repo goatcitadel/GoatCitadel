@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SkillListItem } from "@goatcitadel/contracts";
-import { buildSkillDoctorSignals, filterSkillList } from "./LibrarySkillsSection";
+import { buildSkillDoctorSignals, describeSkillStateOutcome, filterSkillList } from "./LibrarySkillsSection";
 
 function skill(overrides: Partial<SkillListItem>): SkillListItem {
   return {
@@ -44,6 +44,37 @@ describe("filterSkillList", () => {
     expect(filterSkillList(skills, { query: "fs.write", posture: "all" }).map((item) => item.skillId)).toEqual([
       "review",
     ]);
+  });
+});
+
+// HX-402 P2: skill state changes are approval-first; the notice copy must
+// never claim a mutation happened while the skill.lifecycle approval is
+// pending, and must name the approval the operator has to resolve.
+describe("describeSkillStateOutcome", () => {
+  it("names the pending approval and states that nothing changed yet", () => {
+    const message = describeSkillStateOutcome(
+      { pendingApproval: { approvalId: "11111111-2222-3333-4444-555555555555", status: "pending" } },
+      "Research Helper",
+      "disabled",
+    );
+    expect(message).toContain("Approval requested to set Research Helper to disabled");
+    expect(message).toContain("11111111-2222-3333-4444-555555555555");
+    expect(message).toContain("no change is applied until then");
+    expect(message).not.toContain("set to disabled.");
+  });
+
+  it("reports a pure no-op when the reviewed state already matches", () => {
+    expect(
+      describeSkillStateOutcome(
+        { pendingApproval: null, noMutationRequired: true, skillState: { skillId: "skill-a", state: "enabled" } },
+        "Research Helper",
+        "enabled",
+      ),
+    ).toBe("Research Helper is already enabled; nothing to approve.");
+  });
+
+  it("treats malformed responses as no mutation rather than claiming success", () => {
+    expect(describeSkillStateOutcome({ updated: true }, "Research Helper", "sleep")).toContain("nothing to approve");
   });
 });
 
