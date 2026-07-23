@@ -35,6 +35,21 @@ describe("HX-505 cell terminal capture", () => {
     expect(diagnostics.totalRedactionCount).toBe(diagnostics.stdout.redactionCount + diagnostics.stderr.redactionCount);
   });
 
+  it("leaves no partial secret at the prefix truncation boundary", () => {
+    // A canary secret starts inside the retained prefix bound and extends past
+    // it; its body marker "LEAKME" straddles the 24-byte cut. Without the
+    // redaction overhang, "sk-LEAKM" would survive in the first 24 raw bytes.
+    const secret = "sk-LEAKMELEAKMELEAKMELEAKME0123456789abcd";
+    const capture = new WorkerCellTerminalCapture({ maxPrefixBytes: 24, maxTailBytes: 8 });
+    capture.ingest("stdout", Buffer.from(`PREFIXFILLER0123${secret} trailing filler`, "utf8"));
+    const diagnostics = capture.finalize({ exitCode: 0, terminatedBySignal: null });
+    // No fragment of the secret body survives in the retained prefix.
+    expect(diagnostics.stdout.prefixText).not.toContain("LEAKM");
+    expect(diagnostics.stdout.prefixText.length).toBeLessThanOrEqual(24);
+    expect(diagnostics.stdout.redactionCount).toBeGreaterThan(0);
+    expect(diagnostics.stdout.rawByteLength).toBe(16 + secret.length + " trailing filler".length);
+  });
+
   it("bounds retained output far below a large raw stream", () => {
     const capture = new WorkerCellTerminalCapture({ maxPrefixBytes: 1_024, maxTailBytes: 1_024 });
     capture.ingest("stdout", Buffer.alloc(5_000_000, 0x41));
