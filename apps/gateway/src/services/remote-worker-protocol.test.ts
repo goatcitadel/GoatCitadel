@@ -6,8 +6,11 @@ import {
   REMOTE_WORKER_POP_SCHEMA_VERSION,
   REMOTE_WORKER_PROTOCOL_HEADERS,
   buildRemoteWorkerPopMaterial,
+  consumeRemoteWorkerDurableNonce,
   remoteWorkerProtocolBodySha256,
+  snapshotRemoteWorkerDurableNonceConsumption,
   verifyRemoteWorkerProofOfPossession,
+  type RemoteWorkerDurableNonceConsumePort,
   type RemoteWorkerProtocolBody,
   type RemoteWorkerResolvedAuthority,
 } from "./remote-worker-protocol.js";
@@ -395,5 +398,130 @@ describe("remote worker proof-of-possession protocol", () => {
     expect(rendered).not.toContain("private-material");
     expect(rendered).not.toContain(rawProof);
     expect(rendered.length).toBeLessThan(512);
+  });
+});
+
+describe("snapshotRemoteWorkerDurableNonceConsumption (HX-501B1)", () => {
+  const rawNonce = createHash("sha256").update("durable-nonce-seed").digest("base64url");
+  const timestamp = "2026-07-14T20:00:00.000Z";
+  const expectedDigest = createHash("sha256").update(rawNonce, "utf8").digest("hex");
+  const bootstrapAuthority = {
+    kind: "bootstrap" as const,
+    registryWorkspaceId: "default",
+    workerId: "worker-a",
+    targetWorkerGeneration: 3,
+    bootstrapId: "bootstrap-a",
+  };
+  const credentialAuthority = {
+    kind: "credential" as const,
+    registryWorkspaceId: "default",
+    workerId: "worker-a",
+    workerGeneration: 2,
+    credentialGeneration: 5,
+    credentialId: "credential-a",
+  };
+
+  it("snapshots the complete bootstrap authority and derives the exact protocol binding", () => {
+    const snapshot = snapshotRemoteWorkerDurableNonceConsumption({
+      authority: { ...bootstrapAuthority },
+      nonce: rawNonce,
+      timestamp,
+      authorityId: "bootstrap-a",
+      authorityGeneration: 3,
+    });
+    expect(snapshot.authority).toStrictEqual(bootstrapAuthority);
+    expect(snapshot.authorityId).toBe("bootstrap-a");
+    expect(snapshot.authorityGeneration).toBe(3);
+    expect(snapshot.nonceSha256).toBe(expectedDigest);
+    expect(snapshot.timestamp).toBe(timestamp);
+    expect(snapshot.expiresAt).toBe("2026-07-14T20:01:00.000Z");
+    expect(Object.isFrozen(snapshot)).toBe(true);
+    expect(Object.isFrozen(snapshot.authority)).toBe(true);
+  });
+
+  it("snapshots the complete credential authority binding", () => {
+    const snapshot = snapshotRemoteWorkerDurableNonceConsumption({
+      authority: { ...credentialAuthority },
+      nonce: rawNonce,
+      timestamp,
+      authorityId: "credential-a",
+      authorityGeneration: 5,
+    });
+    expect(snapshot.authority).toStrictEqual(credentialAuthority);
+    expect(snapshot.authorityId).toBe("credential-a");
+    expect(snapshot.authorityGeneration).toBe(5);
+  });
+
+  it("rejects a top-level authority id/generation that disagrees with the binding", () => {
+    expect(() =>
+      snapshotRemoteWorkerDurableNonceConsumption({
+        authority: { ...bootstrapAuthority },
+        nonce: rawNonce,
+        timestamp,
+        authorityId: "bootstrap-a",
+        authorityGeneration: 4,
+      }),
+    ).toThrow(/disagrees with the protocol authority/u);
+    expect(() =>
+      snapshotRemoteWorkerDurableNonceConsumption({
+        authority: { ...credentialAuthority },
+        nonce: rawNonce,
+        timestamp,
+        authorityId: "wrong-id",
+        authorityGeneration: 5,
+      }),
+    ).toThrow(/disagrees with the protocol authority/u);
+  });
+
+  it("materializes the authority before consumption and passes only the nonce digest to storage", async () => {
+    const mutable = { ...bootstrapAuthority };
+    const snapshot = snapshotRemoteWorkerDurableNonceConsumption({
+      authority: mutable,
+      nonce: rawNonce,
+      timestamp,
+      authorityId: "bootstrap-a",
+      authorityGeneration: 3,
+    });
+    // Mutating the source after the synchronous snapshot cannot alter it.
+    mutable.bootstrapId = "tampered";
+    mutable.targetWorkerGeneration = 99;
+    expect(snapshot.authority).toStrictEqual(bootstrapAuthority);
+
+    let captured: Record<string, unknown> | undefined;
+    const port: RemoteWorkerDurableNonceConsumePort = {
+      consume(input) {
+        captured = { ...input };
+        return Promise.resolve(true);
+      },
+    };
+    const consumed = await consumeRemoteWorkerDurableNonce(port, snapshot);
+    expect(consumed).toBe(true);
+    expect(Object.keys(captured ?? {}).sort()).toStrictEqual(["authority", "expiresAt", "nonceSha256", "timestamp"]);
+    expect(captured?.nonceSha256).toBe(expectedDigest);
+    expect("nonce" in (captured ?? {})).toBe(false);
+    // The raw nonce and any authorization material never reach the port.
+    expect(JSON.stringify(captured)).not.toContain(rawNonce);
+    expect(JSON.stringify(captured)).toContain(expectedDigest);
+  });
+
+  it("rejects a malformed nonce and a non-plain-data authority", () => {
+    expect(() =>
+      snapshotRemoteWorkerDurableNonceConsumption({
+        authority: { ...bootstrapAuthority },
+        nonce: "not-a-valid-nonce",
+        timestamp,
+        authorityId: "bootstrap-a",
+        authorityGeneration: 3,
+      }),
+    ).toThrow();
+    expect(() =>
+      snapshotRemoteWorkerDurableNonceConsumption({
+        authority: { ...bootstrapAuthority, injected: true },
+        nonce: rawNonce,
+        timestamp,
+        authorityId: "bootstrap-a",
+        authorityGeneration: 3,
+      }),
+    ).toThrow(/unknown fields/u);
   });
 });

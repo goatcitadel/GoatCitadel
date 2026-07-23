@@ -1,5 +1,10 @@
 import { createHash, createPublicKey, timingSafeEqual, verify, type KeyObject } from "node:crypto";
-import { canonicalJsonString } from "@goatcitadel/contracts";
+import {
+  canonicalJsonString,
+  normalizeRemoteWorkerNonceAuthority,
+  remoteWorkerNonceAuthorityProtocolBinding,
+  type RemoteWorkerNonceAuthority,
+} from "@goatcitadel/contracts";
 import type { RemoteWorkerRequestHeaders, RemoteWorkerTransportIdentity } from "./remote-worker-transport-identity.js";
 
 export const REMOTE_WORKER_POP_SCHEMA_VERSION = "goatcitadel.remote-worker-pop.v1" as const;
@@ -109,6 +114,81 @@ export class BoundedRemoteWorkerNonceConsumer implements RemoteWorkerNonceConsum
     this.#entries.set(key, expiresAtMs);
     return true;
   }
+}
+
+/**
+ * HX-501B1 durable replay-protection boundary. The durable store consumes a
+ * nonce under a strict discriminated authority; only the nonce digest, canonical
+ * request timestamp, and expiry cross alongside it. The raw nonce and every
+ * authorization/transport secret stay on this side of the port.
+ */
+export interface RemoteWorkerDurableNonceConsumePort {
+  consume(input: {
+    readonly authority: RemoteWorkerNonceAuthority;
+    readonly nonceSha256: string;
+    readonly timestamp: string;
+    readonly expiresAt: string;
+  }): boolean | Promise<boolean>;
+}
+
+/** A frozen, fully-materialized durable nonce consumption request. */
+export interface RemoteWorkerDurableNonceConsumption {
+  readonly authority: RemoteWorkerNonceAuthority;
+  readonly authorityId: string;
+  readonly authorityGeneration: number;
+  readonly nonceSha256: string;
+  readonly timestamp: string;
+  readonly expiresAt: string;
+}
+
+/**
+ * Snapshot a durable nonce consumption request. The complete discriminated
+ * authority is normalized and frozen synchronously — before any consumption is
+ * awaited — and the top-level protocol authority ID/generation must agree
+ * exactly with the discriminated binding (bootstrap: bootstrapId/target
+ * generation; credential: credentialId/credential generation). The raw nonce is
+ * hashed here so only its digest crosses the storage port.
+ */
+export function snapshotRemoteWorkerDurableNonceConsumption(input: {
+  readonly authority: unknown;
+  readonly nonce: string;
+  readonly timestamp: string;
+  readonly authorityId: string;
+  readonly authorityGeneration: number;
+}): RemoteWorkerDurableNonceConsumption {
+  const authority = normalizeRemoteWorkerNonceAuthority(input.authority);
+  const binding = remoteWorkerNonceAuthorityProtocolBinding(authority);
+  if (input.authorityId !== binding.authorityId || input.authorityGeneration !== binding.authorityGeneration) {
+    throw invalid("Remote worker durable nonce authority binding disagrees with the protocol authority.");
+  }
+  const nonce = normalizeNonce(input.nonce);
+  const timestamp = normalizeTimestamp(input.timestamp);
+  const expiresAt = new Date(Date.parse(timestamp) + REMOTE_WORKER_PROTOCOL_TIMESTAMP_SKEW_MS).toISOString();
+  return Object.freeze({
+    authority,
+    authorityId: binding.authorityId,
+    authorityGeneration: binding.authorityGeneration,
+    nonceSha256: sha256Utf8(nonce),
+    timestamp,
+    expiresAt,
+  });
+}
+
+/**
+ * Await durable consumption of an already-materialized snapshot. Only the
+ * digest, timestamp, expiry, and identity-only authority reach the port; the
+ * raw nonce never does.
+ */
+export async function consumeRemoteWorkerDurableNonce(
+  port: RemoteWorkerDurableNonceConsumePort,
+  snapshot: RemoteWorkerDurableNonceConsumption,
+): Promise<boolean> {
+  return await port.consume({
+    authority: snapshot.authority,
+    nonceSha256: snapshot.nonceSha256,
+    timestamp: snapshot.timestamp,
+    expiresAt: snapshot.expiresAt,
+  });
 }
 
 export interface RemoteWorkerPopMaterial {
