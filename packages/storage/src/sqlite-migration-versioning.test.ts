@@ -42,10 +42,101 @@ describe("sqlite schema migrations", () => {
     assert.deepEqual(
       { ...rows.at(-1) },
       {
-        version: 174,
-        name: "durable_heartbeat_occurrence_authority",
+        version: 175,
+        name: "governed_lifecycle_foundation",
       },
     );
+    db.close();
+  });
+
+  it("keeps migration 175 additive, content-free, registry-guarded, and immutable", () => {
+    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-hx402-175-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const db = createDatabase({ dbPath });
+
+    const tables = [
+      "governed_lifecycle_events",
+      "improvement_lifecycle_operations",
+      "improvement_lifecycle_operation_claims",
+      "improvement_lifecycle_operation_inspections",
+      "improvement_lifecycle_operation_settlements",
+    ];
+    for (const table of tables) {
+      const tableSql = (
+        db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) as
+          | { sql: string }
+          | undefined
+      )?.sql;
+      assert.ok(tableSql, `expected migration 175 table ${table}`);
+      const columns = (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(
+        (column) => column.name,
+      );
+      for (const forbidden of [
+        "prompt",
+        "response",
+        "content",
+        "message_body",
+        "tool_result",
+        "provider_payload",
+        "payload_json",
+        "raw",
+      ]) {
+        assert.equal(
+          columns.some((column) => column.toLowerCase().includes(forbidden)),
+          false,
+          `${table} must stay content-free (found ${forbidden})`,
+        );
+      }
+      const triggers = (
+        db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = ?").all(table) as Array<{
+          name: string;
+        }>
+      ).map((trigger) => trigger.name);
+      assert.ok(triggers.includes(`trg_${table}_no_update`), `${table} needs a no-update trigger`);
+      assert.ok(triggers.includes(`trg_${table}_no_delete`), `${table} needs a no-delete trigger`);
+    }
+
+    const kindGuardSql = (
+      db
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'trg_governed_lifecycle_events_kind_guard'",
+        )
+        .get() as { sql: string }
+    ).sql;
+    assert.equal((kindGuardSql.match(/UNION ALL SELECT/gu) ?? []).length, 31);
+    assert.match(kindGuardSql, /system_actor_only = 0 OR NEW\.actor_type = 'system'/u);
+    assert.match(kindGuardSql, /not in the frozen registry/u);
+
+    const eventsSql = (
+      db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'governed_lifecycle_events'").get() as {
+        sql: string;
+      }
+    ).sql;
+    assert.match(eventsSql, /approval_required = 1 AND approval_id IS NOT NULL/u);
+    assert.match(eventsSql, /source_required = 0 OR \(source_kind IS NOT NULL AND source_id IS NOT NULL\)/u);
+    assert.match(eventsSql, /scope_kind = 'global' AND workspace_id IS NULL/u);
+
+    const claimGuardSql = (
+      db
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'trg_improvement_lifecycle_operation_claims_insert_guard'",
+        )
+        .get() as { sql: string }
+    ).sql;
+    assert.match(claimGuardSql, /COALESCE\(MAX\(prior\.claim_generation\), 0\) \+ 1/u);
+    assert.match(claimGuardSql, /lease_expires_at > strftime\('%Y-%m-%dT%H:%M:%fZ', 'now'\)/u);
+
+    const settlementGuardSql = (
+      db
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'trg_improvement_lifecycle_operation_settlements_insert_guard'",
+        )
+        .get() as { sql: string }
+    ).sql;
+    assert.match(settlementGuardSql, /MAX\(claim\.claim_generation\)/u);
+    assert.match(settlementGuardSql, /observed_state_sha256 = NEW\.observed_state_sha256/u);
+    assert.match(settlementGuardSql, /disposition = 'matches_intent'/u);
+
     db.close();
   });
 

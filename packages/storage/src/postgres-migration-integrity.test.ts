@@ -536,4 +536,65 @@ describe("protected Postgres migration integrity", () => {
       /model_usage_events|gateway_route|listener|message_body|prompt_body|response_body|tool_result|provider_payload|request_json|response_json/iu,
     );
   });
+
+  it("keeps HX-402 migration 117 additive, registry-guarded, fenced, and immutable", () => {
+    const migration = POSTGRES_MIGRATIONS.find((candidate) => candidate.version === 117);
+    assert.equal(migration?.name, "governed_lifecycle_foundation");
+    assert.equal(migration?.batchedStatements, undefined);
+    const sql = migration?.sql ?? "";
+    for (const table of [
+      "governed_lifecycle_events",
+      "improvement_lifecycle_operations",
+      "improvement_lifecycle_operation_claims",
+      "improvement_lifecycle_operation_inspections",
+      "improvement_lifecycle_operation_settlements",
+    ]) {
+      assert.match(sql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`, "u"));
+      assert.match(sql, new RegExp(`trg_${table}_no_update`, "u"));
+      assert.match(sql, new RegExp(`trg_${table}_no_delete`, "u"));
+    }
+    // Frozen kind registry: 32 literal rows, requirement pairs matched exactly,
+    // system-only kinds restricted to the system actor.
+    assert.equal(sql.match(/^\s*\('(?:memory|skill_state|capability_state|improvement)', '/gmu)?.length, 32);
+    assert.match(sql, /kind_registry\.source_required = NEW\.source_required/u);
+    assert.match(sql, /kind_registry\.approval_required = NEW\.approval_required/u);
+    assert.match(sql, /kind_registry\.system_actor_only = 0 OR NEW\.actor_type = 'system'/u);
+    assert.match(sql, /not in the frozen registry/u);
+    // Explicit requirement/linkage constraints and never-inferred scope.
+    assert.match(sql, /approval_required = 1 AND approval_id IS NOT NULL/u);
+    assert.match(sql, /source_required = 0 OR \(source_kind IS NOT NULL AND source_id IS NOT NULL\)/u);
+    assert.match(sql, /scope_kind = 'global' AND workspace_id IS NULL/u);
+    // Database-clock claim fencing, advisory serialization, and settlement exactness.
+    assert.match(sql, /database_now TIMESTAMPTZ := clock_timestamp\(\)/u);
+    assert.equal(sql.match(/pg_advisory_xact_lock\(hashtextextended\(NEW\.operation_id, 402\)\)/gu)?.length, 3);
+    assert.match(sql, /COALESCE\(MAX\(prior\.claim_generation\), 0\) \+ 1/u);
+    assert.match(sql, /gc_try_parse_timestamptz\(prior_lease\) > database_now/u);
+    assert.match(sql, /inspection\.observed_state_sha256 = NEW\.observed_state_sha256/u);
+    assert.match(sql, /false applied claim/u);
+    assert.match(sql, /disposition = 'matches_intent'/u);
+    // Canonical timestamp round-trips on every stored timestamp column.
+    for (const timestamp of [
+      "occurred_at",
+      "recorded_at",
+      "created_at",
+      "claimed_at",
+      "lease_expires_at",
+      "observed_at",
+      "settled_at",
+    ]) {
+      assert.match(
+        sql,
+        new RegExp(
+          `to_char\\(gc_try_parse_timestamptz\\(${timestamp}\\) AT TIME ZONE 'UTC',[\\s\\S]*?= ${timestamp}`,
+          "u",
+        ),
+      );
+    }
+    // Additive-only and content-free.
+    assert.doesNotMatch(sql, /\b(?:INSERT\s+INTO|DELETE\s+FROM|DROP\s+TABLE|TRUNCATE\s+TABLE|ALTER\s+TABLE)\b/iu);
+    assert.doesNotMatch(
+      sql,
+      /chat_messages|model_usage_events|gateway_route|listener|message_body|prompt_body|response_body|tool_result|provider_payload|payload_json/iu,
+    );
+  });
 });

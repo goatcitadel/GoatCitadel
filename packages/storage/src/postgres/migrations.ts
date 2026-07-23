@@ -12025,4 +12025,340 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
       $heartbeat_profile_fk_repair$;
     `,
   },
+  {
+    version: 117,
+    name: "governed_lifecycle_foundation",
+    // HX-402 P0 shared immutable lifecycle foundation (paired with SQLite 175).
+    // Additive only: five new append-only tables, the frozen governed-mutation
+    // kind registry guard, claim/inspection/settlement fencing, and
+    // no-update/no-delete triggers. The kind rows are a FROZEN literal copy of
+    // GOVERNED_MUTATION_KINDS in @goatcitadel/contracts; the
+    // journey-producer-schema-parity suite proves the copy stays aligned with
+    // the contract and the SQLite twin. Extending the registry requires a NEW
+    // migration pair.
+    sql: `
+      CREATE TABLE IF NOT EXISTS governed_lifecycle_events (
+        schema_version TEXT NOT NULL CHECK(schema_version = 'goatcitadel.governed-lifecycle-event.v1'),
+        event_id TEXT PRIMARY KEY CHECK(length(TRIM(event_id)) BETWEEN 1 AND 256),
+        idempotency_key TEXT NOT NULL UNIQUE CHECK(length(TRIM(idempotency_key)) BETWEEN 1 AND 512),
+        domain TEXT NOT NULL CHECK(domain IN ('memory', 'skill_state', 'capability_state', 'improvement')),
+        operation TEXT NOT NULL CHECK(length(TRIM(operation)) BETWEEN 1 AND 128),
+        target_kind TEXT NOT NULL CHECK(length(TRIM(target_kind)) BETWEEN 1 AND 128),
+        target_id TEXT NOT NULL CHECK(length(TRIM(target_id)) BETWEEN 1 AND 256),
+        material_sha256 TEXT NOT NULL CHECK(material_sha256 ~ '^[0-9a-f]{64}$'),
+        scope_kind TEXT NOT NULL CHECK(scope_kind IN ('workspace', 'global')),
+        workspace_id TEXT,
+        actor_id TEXT NOT NULL CHECK(length(TRIM(actor_id)) BETWEEN 1 AND 256),
+        actor_type TEXT NOT NULL CHECK(actor_type IN ('operator', 'system', 'approval_effect')),
+        session_id TEXT CHECK(session_id IS NULL OR length(TRIM(session_id)) BETWEEN 1 AND 256),
+        turn_id TEXT CHECK(turn_id IS NULL OR length(TRIM(turn_id)) BETWEEN 1 AND 256),
+        source_required BIGINT NOT NULL CHECK(source_required IN (0, 1)),
+        approval_required BIGINT NOT NULL CHECK(approval_required IN (0, 1)),
+        source_kind TEXT CHECK(source_kind IS NULL OR length(TRIM(source_kind)) BETWEEN 1 AND 128),
+        source_id TEXT CHECK(source_id IS NULL OR length(TRIM(source_id)) BETWEEN 1 AND 256),
+        approval_id TEXT CHECK(approval_id IS NULL OR length(TRIM(approval_id)) BETWEEN 1 AND 256),
+        occurred_at TEXT NOT NULL CHECK(
+          gc_try_parse_timestamptz(occurred_at) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(occurred_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = occurred_at
+        ),
+        recorded_at TEXT NOT NULL CHECK(
+          gc_try_parse_timestamptz(recorded_at) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(recorded_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = recorded_at
+        ),
+        CHECK(
+          (scope_kind = 'workspace' AND workspace_id IS NOT NULL AND length(TRIM(workspace_id)) BETWEEN 1 AND 256)
+          OR (scope_kind = 'global' AND workspace_id IS NULL)
+        ),
+        CHECK(turn_id IS NULL OR session_id IS NOT NULL),
+        CHECK(
+          (approval_required = 1 AND approval_id IS NOT NULL)
+          OR (approval_required = 0 AND approval_id IS NULL)
+        ),
+        CHECK(source_required = 0 OR (source_kind IS NOT NULL AND source_id IS NOT NULL)),
+        CHECK(
+          (source_kind IS NULL AND source_id IS NULL)
+          OR (source_kind IS NOT NULL AND source_id IS NOT NULL)
+        )
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_governed_lifecycle_events_scope_recorded
+        ON governed_lifecycle_events(workspace_id, recorded_at DESC, event_id DESC);
+      CREATE INDEX IF NOT EXISTS idx_governed_lifecycle_events_target
+        ON governed_lifecycle_events(domain, target_kind, target_id, recorded_at DESC, event_id DESC);
+      CREATE INDEX IF NOT EXISTS idx_governed_lifecycle_events_approval
+        ON governed_lifecycle_events(approval_id);
+
+      CREATE OR REPLACE FUNCTION gc_governed_lifecycle_event_kind_guard() RETURNS TRIGGER AS $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM (VALUES
+            ('memory', 'item_updated', 'memory_item', 1, 1, 0),
+            ('memory', 'pin_changed', 'memory_item', 1, 1, 0),
+            ('memory', 'ttl_changed', 'memory_item', 1, 1, 0),
+            ('memory', 'item_forgotten', 'memory_item', 1, 1, 0),
+            ('memory', 'batch_mutated', 'memory_batch', 1, 1, 0),
+            ('memory', 'maintenance_expired', 'memory_item', 1, 0, 1),
+            ('memory', 'entity_created', 'memory_entity', 1, 1, 0),
+            ('memory', 'entity_forgotten', 'memory_entity', 1, 1, 0),
+            ('memory', 'relation_created', 'memory_relation', 1, 1, 0),
+            ('memory', 'decision_created', 'memory_decision', 1, 1, 0),
+            ('memory', 'decision_retrospective_added', 'memory_decision', 1, 1, 0),
+            ('memory', 'decision_forgotten', 'memory_decision', 1, 1, 0),
+            ('memory', 'learning_created', 'memory_learning', 1, 1, 0),
+            ('memory', 'learning_superseded', 'memory_learning', 1, 1, 0),
+            ('memory', 'learning_forgotten', 'memory_learning', 1, 1, 0),
+            ('memory', 'trace_candidate_promoted', 'memory_learning', 1, 1, 0),
+            ('memory', 'session_learned_updated', 'session_learned_memory', 1, 1, 0),
+            ('skill_state', 'enabled', 'skill', 1, 1, 0),
+            ('skill_state', 'disabled', 'skill', 1, 1, 0),
+            ('skill_state', 'slept', 'skill', 1, 1, 0),
+            ('skill_state', 'auto_set', 'skill', 1, 1, 0),
+            ('skill_state', 'activation_policy_updated', 'skill_activation_policy', 1, 1, 0),
+            ('skill_state', 'system_disabled', 'skill', 1, 0, 1),
+            ('capability_state', 'proposal_created', 'capability_proposal', 1, 0, 0),
+            ('capability_state', 'candidate_promoted', 'capability_candidate', 1, 1, 0),
+            ('capability_state', 'candidate_revoked', 'capability_candidate', 1, 1, 0),
+            ('capability_state', 'candidate_rolled_back', 'capability_candidate', 1, 1, 0),
+            ('capability_state', 'system_revoked', 'capability_candidate', 1, 0, 1),
+            ('improvement', 'activation_applied', 'improvement_activation', 1, 1, 0),
+            ('improvement', 'activation_paused', 'improvement_activation', 1, 1, 0),
+            ('improvement', 'activation_rolled_back', 'improvement_activation', 1, 1, 0),
+            ('improvement', 'activation_failed', 'improvement_activation', 1, 1, 0)
+          ) AS kind_registry(domain, operation, target_kind, source_required, approval_required, system_actor_only)
+          WHERE kind_registry.domain = NEW.domain
+            AND kind_registry.operation = NEW.operation
+            AND kind_registry.target_kind = NEW.target_kind
+            AND kind_registry.source_required = NEW.source_required
+            AND kind_registry.approval_required = NEW.approval_required
+            AND (kind_registry.system_actor_only = 0 OR NEW.actor_type = 'system')
+        ) THEN
+          RAISE EXCEPTION 'governed lifecycle event kind is not in the frozen registry' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE OR REPLACE FUNCTION gc_reject_governed_lifecycle_mutation() RETURNS TRIGGER AS $$
+      BEGIN
+        RAISE EXCEPTION 'governed lifecycle records are immutable (no update, no delete)' USING ERRCODE = '23514';
+      END;
+      $$ LANGUAGE plpgsql;
+
+      DROP TRIGGER IF EXISTS trg_governed_lifecycle_events_kind_guard ON governed_lifecycle_events;
+      CREATE TRIGGER trg_governed_lifecycle_events_kind_guard
+        BEFORE INSERT ON governed_lifecycle_events
+        FOR EACH ROW EXECUTE FUNCTION gc_governed_lifecycle_event_kind_guard();
+      DROP TRIGGER IF EXISTS trg_governed_lifecycle_events_no_update ON governed_lifecycle_events;
+      CREATE TRIGGER trg_governed_lifecycle_events_no_update
+        BEFORE UPDATE ON governed_lifecycle_events
+        FOR EACH ROW EXECUTE FUNCTION gc_reject_governed_lifecycle_mutation();
+      DROP TRIGGER IF EXISTS trg_governed_lifecycle_events_no_delete ON governed_lifecycle_events;
+      CREATE TRIGGER trg_governed_lifecycle_events_no_delete
+        BEFORE DELETE ON governed_lifecycle_events
+        FOR EACH ROW EXECUTE FUNCTION gc_reject_governed_lifecycle_mutation();
+
+      CREATE TABLE IF NOT EXISTS improvement_lifecycle_operations (
+        operation_id TEXT PRIMARY KEY CHECK(length(TRIM(operation_id)) BETWEEN 1 AND 256),
+        idempotency_key TEXT NOT NULL UNIQUE CHECK(length(TRIM(idempotency_key)) BETWEEN 1 AND 512),
+        workspace_id TEXT NOT NULL CHECK(length(TRIM(workspace_id)) BETWEEN 1 AND 256),
+        operation_kind TEXT NOT NULL CHECK(operation_kind IN ('activate', 'pause', 'rollback')),
+        target_kind TEXT NOT NULL CHECK(target_kind IN ('improvement_activation', 'improvement_candidate')),
+        target_id TEXT NOT NULL CHECK(length(TRIM(target_id)) BETWEEN 1 AND 256),
+        approval_id TEXT NOT NULL UNIQUE CHECK(length(TRIM(approval_id)) BETWEEN 1 AND 256),
+        request_sha256 TEXT NOT NULL CHECK(request_sha256 ~ '^[0-9a-f]{64}$'),
+        actor_id TEXT NOT NULL CHECK(length(TRIM(actor_id)) BETWEEN 1 AND 256),
+        session_id TEXT CHECK(session_id IS NULL OR length(TRIM(session_id)) BETWEEN 1 AND 256),
+        turn_id TEXT CHECK(turn_id IS NULL OR length(TRIM(turn_id)) BETWEEN 1 AND 256),
+        created_at TEXT NOT NULL CHECK(
+          gc_try_parse_timestamptz(created_at) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = created_at
+        ),
+        CHECK(turn_id IS NULL OR session_id IS NOT NULL)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_improvement_lifecycle_operations_workspace_created
+        ON improvement_lifecycle_operations(workspace_id, created_at DESC, operation_id DESC);
+      CREATE INDEX IF NOT EXISTS idx_improvement_lifecycle_operations_target
+        ON improvement_lifecycle_operations(target_kind, target_id, created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS improvement_lifecycle_operation_claims (
+        operation_id TEXT NOT NULL REFERENCES improvement_lifecycle_operations(operation_id) ON DELETE RESTRICT,
+        claim_generation BIGINT NOT NULL CHECK(claim_generation > 0),
+        worker_id TEXT NOT NULL CHECK(length(TRIM(worker_id)) BETWEEN 1 AND 256),
+        claimed_at TEXT NOT NULL CHECK(
+          gc_try_parse_timestamptz(claimed_at) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(claimed_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = claimed_at
+        ),
+        lease_expires_at TEXT NOT NULL CHECK(
+          gc_try_parse_timestamptz(lease_expires_at) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(lease_expires_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = lease_expires_at
+        ),
+        PRIMARY KEY(operation_id, claim_generation),
+        CHECK(lease_expires_at > claimed_at)
+      );
+
+      CREATE TABLE IF NOT EXISTS improvement_lifecycle_operation_inspections (
+        inspection_id TEXT PRIMARY KEY CHECK(length(TRIM(inspection_id)) BETWEEN 1 AND 256),
+        operation_id TEXT NOT NULL,
+        claim_generation BIGINT NOT NULL CHECK(claim_generation > 0),
+        observed_state_sha256 TEXT NOT NULL CHECK(observed_state_sha256 ~ '^[0-9a-f]{64}$'),
+        disposition TEXT NOT NULL CHECK(disposition IN ('matches_intent', 'diverged', 'unreachable')),
+        observed_at TEXT NOT NULL CHECK(
+          gc_try_parse_timestamptz(observed_at) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(observed_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = observed_at
+        ),
+        FOREIGN KEY(operation_id, claim_generation)
+          REFERENCES improvement_lifecycle_operation_claims(operation_id, claim_generation) ON DELETE RESTRICT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_improvement_lifecycle_operation_inspections_operation
+        ON improvement_lifecycle_operation_inspections(operation_id, claim_generation, observed_at DESC);
+
+      CREATE TABLE IF NOT EXISTS improvement_lifecycle_operation_settlements (
+        settlement_id TEXT PRIMARY KEY CHECK(length(TRIM(settlement_id)) BETWEEN 1 AND 256),
+        operation_id TEXT NOT NULL UNIQUE REFERENCES improvement_lifecycle_operations(operation_id) ON DELETE RESTRICT,
+        claim_generation BIGINT NOT NULL CHECK(claim_generation > 0),
+        inspection_id TEXT NOT NULL UNIQUE
+          REFERENCES improvement_lifecycle_operation_inspections(inspection_id) ON DELETE RESTRICT,
+        disposition TEXT NOT NULL CHECK(disposition IN ('applied', 'failed', 'aborted')),
+        observed_state_sha256 TEXT NOT NULL CHECK(observed_state_sha256 ~ '^[0-9a-f]{64}$'),
+        result_json TEXT NOT NULL CHECK(octet_length(result_json) <= 16384),
+        result_sha256 TEXT NOT NULL CHECK(result_sha256 ~ '^[0-9a-f]{64}$'),
+        settled_at TEXT NOT NULL CHECK(
+          gc_try_parse_timestamptz(settled_at) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(settled_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = settled_at
+        ),
+        FOREIGN KEY(operation_id, claim_generation)
+          REFERENCES improvement_lifecycle_operation_claims(operation_id, claim_generation) ON DELETE RESTRICT
+      );
+
+      CREATE OR REPLACE FUNCTION gc_improvement_lifecycle_claim_guard() RETURNS TRIGGER AS $$
+      DECLARE
+        database_now TIMESTAMPTZ := clock_timestamp();
+        expected_generation BIGINT;
+        prior_lease TEXT;
+      BEGIN
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.operation_id, 402));
+        IF EXISTS (
+          SELECT 1 FROM improvement_lifecycle_operation_settlements settlement
+          WHERE settlement.operation_id = NEW.operation_id
+        ) THEN
+          RAISE EXCEPTION 'improvement lifecycle claim admission violated: operation already settled' USING ERRCODE = '23514';
+        END IF;
+        SELECT COALESCE(MAX(prior.claim_generation), 0) + 1 INTO expected_generation
+        FROM improvement_lifecycle_operation_claims prior
+        WHERE prior.operation_id = NEW.operation_id;
+        IF NEW.claim_generation <> expected_generation THEN
+          RAISE EXCEPTION 'improvement lifecycle claim admission violated: non-sequential claim generation' USING ERRCODE = '23514';
+        END IF;
+        SELECT prior.lease_expires_at INTO prior_lease
+        FROM improvement_lifecycle_operation_claims prior
+        WHERE prior.operation_id = NEW.operation_id
+          AND prior.claim_generation = NEW.claim_generation - 1;
+        IF prior_lease IS NOT NULL AND gc_try_parse_timestamptz(prior_lease) > database_now THEN
+          RAISE EXCEPTION 'improvement lifecycle claim admission violated: prior claim lease is still live' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE OR REPLACE FUNCTION gc_improvement_lifecycle_inspection_guard() RETURNS TRIGGER AS $$
+      BEGIN
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.operation_id, 402));
+        IF EXISTS (
+          SELECT 1 FROM improvement_lifecycle_operation_settlements settlement
+          WHERE settlement.operation_id = NEW.operation_id
+        ) THEN
+          RAISE EXCEPTION 'improvement lifecycle inspection admission violated: operation already settled' USING ERRCODE = '23514';
+        END IF;
+        IF NEW.claim_generation IS DISTINCT FROM (
+          SELECT MAX(claim.claim_generation)
+          FROM improvement_lifecycle_operation_claims claim
+          WHERE claim.operation_id = NEW.operation_id
+        ) THEN
+          RAISE EXCEPTION 'improvement lifecycle inspection admission violated: fenced stale claim' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE OR REPLACE FUNCTION gc_improvement_lifecycle_settlement_guard() RETURNS TRIGGER AS $$
+      BEGIN
+        PERFORM pg_advisory_xact_lock(hashtextextended(NEW.operation_id, 402));
+        IF NEW.claim_generation IS DISTINCT FROM (
+          SELECT MAX(claim.claim_generation)
+          FROM improvement_lifecycle_operation_claims claim
+          WHERE claim.operation_id = NEW.operation_id
+        ) THEN
+          RAISE EXCEPTION 'improvement lifecycle settlement admission violated: fenced stale claim' USING ERRCODE = '23514';
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM improvement_lifecycle_operation_inspections inspection
+          WHERE inspection.inspection_id = NEW.inspection_id
+            AND inspection.operation_id = NEW.operation_id
+            AND inspection.claim_generation = NEW.claim_generation
+            AND inspection.observed_state_sha256 = NEW.observed_state_sha256
+        ) THEN
+          RAISE EXCEPTION 'improvement lifecycle settlement admission violated: missing exact same-claim re-inspection' USING ERRCODE = '23514';
+        END IF;
+        IF NEW.disposition = 'applied' AND NOT EXISTS (
+          SELECT 1 FROM improvement_lifecycle_operation_inspections inspection
+          WHERE inspection.inspection_id = NEW.inspection_id
+            AND inspection.disposition = 'matches_intent'
+        ) THEN
+          RAISE EXCEPTION 'improvement lifecycle settlement admission violated: false applied claim' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      DROP TRIGGER IF EXISTS trg_improvement_lifecycle_operations_no_update ON improvement_lifecycle_operations;
+      CREATE TRIGGER trg_improvement_lifecycle_operations_no_update
+        BEFORE UPDATE ON improvement_lifecycle_operations
+        FOR EACH ROW EXECUTE FUNCTION gc_reject_governed_lifecycle_mutation();
+      DROP TRIGGER IF EXISTS trg_improvement_lifecycle_operations_no_delete ON improvement_lifecycle_operations;
+      CREATE TRIGGER trg_improvement_lifecycle_operations_no_delete
+        BEFORE DELETE ON improvement_lifecycle_operations
+        FOR EACH ROW EXECUTE FUNCTION gc_reject_governed_lifecycle_mutation();
+
+      DROP TRIGGER IF EXISTS trg_improvement_lifecycle_operation_claims_insert_guard ON improvement_lifecycle_operation_claims;
+      CREATE TRIGGER trg_improvement_lifecycle_operation_claims_insert_guard
+        BEFORE INSERT ON improvement_lifecycle_operation_claims
+        FOR EACH ROW EXECUTE FUNCTION gc_improvement_lifecycle_claim_guard();
+      DROP TRIGGER IF EXISTS trg_improvement_lifecycle_operation_claims_no_update ON improvement_lifecycle_operation_claims;
+      CREATE TRIGGER trg_improvement_lifecycle_operation_claims_no_update
+        BEFORE UPDATE ON improvement_lifecycle_operation_claims
+        FOR EACH ROW EXECUTE FUNCTION gc_reject_governed_lifecycle_mutation();
+      DROP TRIGGER IF EXISTS trg_improvement_lifecycle_operation_claims_no_delete ON improvement_lifecycle_operation_claims;
+      CREATE TRIGGER trg_improvement_lifecycle_operation_claims_no_delete
+        BEFORE DELETE ON improvement_lifecycle_operation_claims
+        FOR EACH ROW EXECUTE FUNCTION gc_reject_governed_lifecycle_mutation();
+
+      DROP TRIGGER IF EXISTS trg_improvement_lifecycle_operation_inspections_insert_guard ON improvement_lifecycle_operation_inspections;
+      CREATE TRIGGER trg_improvement_lifecycle_operation_inspections_insert_guard
+        BEFORE INSERT ON improvement_lifecycle_operation_inspections
+        FOR EACH ROW EXECUTE FUNCTION gc_improvement_lifecycle_inspection_guard();
+      DROP TRIGGER IF EXISTS trg_improvement_lifecycle_operation_inspections_no_update ON improvement_lifecycle_operation_inspections;
+      CREATE TRIGGER trg_improvement_lifecycle_operation_inspections_no_update
+        BEFORE UPDATE ON improvement_lifecycle_operation_inspections
+        FOR EACH ROW EXECUTE FUNCTION gc_reject_governed_lifecycle_mutation();
+      DROP TRIGGER IF EXISTS trg_improvement_lifecycle_operation_inspections_no_delete ON improvement_lifecycle_operation_inspections;
+      CREATE TRIGGER trg_improvement_lifecycle_operation_inspections_no_delete
+        BEFORE DELETE ON improvement_lifecycle_operation_inspections
+        FOR EACH ROW EXECUTE FUNCTION gc_reject_governed_lifecycle_mutation();
+
+      DROP TRIGGER IF EXISTS trg_improvement_lifecycle_operation_settlements_insert_guard ON improvement_lifecycle_operation_settlements;
+      CREATE TRIGGER trg_improvement_lifecycle_operation_settlements_insert_guard
+        BEFORE INSERT ON improvement_lifecycle_operation_settlements
+        FOR EACH ROW EXECUTE FUNCTION gc_improvement_lifecycle_settlement_guard();
+      DROP TRIGGER IF EXISTS trg_improvement_lifecycle_operation_settlements_no_update ON improvement_lifecycle_operation_settlements;
+      CREATE TRIGGER trg_improvement_lifecycle_operation_settlements_no_update
+        BEFORE UPDATE ON improvement_lifecycle_operation_settlements
+        FOR EACH ROW EXECUTE FUNCTION gc_reject_governed_lifecycle_mutation();
+      DROP TRIGGER IF EXISTS trg_improvement_lifecycle_operation_settlements_no_delete ON improvement_lifecycle_operation_settlements;
+      CREATE TRIGGER trg_improvement_lifecycle_operation_settlements_no_delete
+        BEFORE DELETE ON improvement_lifecycle_operation_settlements
+        FOR EACH ROW EXECUTE FUNCTION gc_reject_governed_lifecycle_mutation();
+    `,
+  },
 ];

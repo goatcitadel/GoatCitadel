@@ -49,6 +49,7 @@ import {
 } from "./sqlite/runtime-observability-schema.js";
 import { createSkillEvaluationRunsSchema } from "./sqlite/skill-evaluation-schema.js";
 import { createChannelCronDurabilitySchema } from "./sqlite/channel-cron-durability-schema.js";
+import { createGovernedLifecycleSchema } from "./sqlite/governed-lifecycle-schema.js";
 
 const SQLITE_BUSY_TIMEOUT_MS = 5_000;
 const LEGACY_REMOTE_APPROVAL_BEARER_PATTERN = /grat_[A-Za-z0-9_-]{43}/;
@@ -6581,6 +6582,20 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
             );
           }
           createDurableHeartbeatOccurrenceSchema(db);
+        },
+      },
+      {
+        version: 175,
+        name: "governed_lifecycle_foundation",
+        up: (db) => {
+          // Repair-only sparse databases (see the HX-407 sparse parity proof)
+          // skip additive foundations whose logical parents are absent instead
+          // of inventing them; fresh chains always carry the migration-161
+          // Journey/approval predecessors before 175 runs.
+          if (!tableExists(db, "governance_journey_events") || !tableExists(db, "approvals")) {
+            return;
+          }
+          createGovernedLifecycleSchema(db);
         },
       },
     ],
