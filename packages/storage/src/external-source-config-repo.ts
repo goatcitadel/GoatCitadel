@@ -201,7 +201,7 @@ export class ExternalSourceConfigRepository {
     }
     this.assertPathBridgeBinding(input);
     try {
-      this.insertStmt.run(toBindings(this.db, input));
+      this.insertStmt.run(toBindings(input));
     } catch (error) {
       throw normalizeConfigWriteError(error, input.sourceId);
     }
@@ -385,7 +385,7 @@ export function verifyExternalSourceRecord(input: ExternalSourceRecord): void {
   }
 }
 
-function toBindings(db: DatabaseClient, input: ExternalSourceRecord): Record<string, unknown> {
+function toBindings(input: ExternalSourceRecord): Record<string, unknown> {
   return {
     workspaceId: input.workspaceId,
     sourceId: input.sourceId,
@@ -403,7 +403,10 @@ function toBindings(db: DatabaseClient, input: ExternalSourceRecord): Record<str
     inputFlavor: input.inputFlavor,
     targetFlavor: input.targetFlavor,
     distro: input.distro ?? null,
-    requireGitIdentity: db.dialect === "sqlite" ? (input.requireGitIdentity ? 1 : 0) : input.requireGitIdentity,
+    // 0/1, never a raw boolean: fresh-PostgreSQL databases type boolean-ish
+    // columns BIGINT (blueprint migration 2), older databases BOOLEAN
+    // (migration 108) — 0/1 binds satisfy both.
+    requireGitIdentity: input.requireGitIdentity ? 1 : 0,
     gitIdentitySha256: input.gitIdentitySha256 ?? null,
     rootGrantApprovalId: input.rootGrantApprovalId ?? null,
     ownershipAttestationSha256: input.ownershipAttestationSha256,

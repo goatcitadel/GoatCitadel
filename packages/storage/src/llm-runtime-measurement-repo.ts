@@ -71,7 +71,10 @@ export class LlmRuntimeMeasurementRepository {
       engineKind: record.engineKind,
       source: record.source,
       status: record.status,
-      stream: this.db.dialect === "postgres" ? record.stream : record.stream ? 1 : 0,
+      // 0/1, never a raw boolean: fresh-PostgreSQL databases type boolean-ish
+      // columns BIGINT (blueprint migration 2), older databases BOOLEAN
+      // (migration 54) — 0/1 binds satisfy both.
+      stream: record.stream ? 1 : 0,
       sessionId: record.sessionId ?? null,
       taskId: record.taskId ?? null,
       runId: record.runId ?? null,

@@ -5,7 +5,6 @@ import { Worker } from "node:worker_threads";
 import { GOVERNANCE_JOURNEY_EVENT_VERSION, canonicalJsonString } from "@goatcitadel/contracts";
 import type { GovernanceJourneyEventRecord } from "@goatcitadel/contracts";
 import { Pool } from "pg";
-import type { DatabaseClient } from "./db.js";
 import { PostgresDatabaseClient } from "./postgres/client.js";
 import { runPostgresMigrations } from "./postgres/migrator.js";
 import { POSTGRES_MIGRATIONS } from "./postgres/migrations.js";
@@ -72,20 +71,14 @@ describe("HX-407 external-source closure live PostgreSQL authority (skips withou
         await runPostgresMigrations(migrations, POSTGRES_MIGRATIONS);
 
         // --- Seed the immutable C1 evidence chain through the real repos ---
-        // Seeding-only workaround for a discovered PRE-C4 gap: on a FRESH
-        // PostgreSQL database the canonical runtime schema (migration 2, the
-        // generated SQLite blueprint) types boolean-ish columns as BIGINT,
-        // while the HX-406/HX-407 config and path-bridge repositories bind raw
-        // JS booleans on the postgres dialect — those binds fail with
-        // "invalid input syntax for type bigint". The facade coerces boolean
-        // parameters to 0/1 (the exact sqlite-branch values, valid for both
-        // BIGINT and BOOLEAN columns) so the seeding repos work; the C4-owned
-        // repositories under proof (attachment/link/materialization) bind no
-        // booleans and run on the RAW client below.
-        const seedDb = withPostgresBooleanCoercion(db);
-        const catalog: ExternalSourceCatalogFixture = seedExternalSourceCatalog(seedDb);
-        new ExternalSourceConfigRepository(seedDb).create(catalog.config);
-        new ExternalSourceScanRepository(seedDb).seal(catalog.scan, catalog.items);
+        // Seeding runs the raw repositories on the raw client, so this suite
+        // also proves the config/path-bridge boolean binds (0/1, valid for
+        // both the fresh-database blueprint's BIGINT columns and the
+        // migration-104/108 BOOLEAN columns) against a fresh blueprint-typed
+        // database.
+        const catalog: ExternalSourceCatalogFixture = seedExternalSourceCatalog(db);
+        new ExternalSourceConfigRepository(db).create(catalog.config);
+        new ExternalSourceScanRepository(db).seal(catalog.scan, catalog.items);
         const fixture = buildExternalSourceImportFixture(catalog);
         const imports = new ExternalSourceImportRepository(db);
         imports.createPlan(fixture.plan);
@@ -333,42 +326,6 @@ describe("HX-407 external-source closure live PostgreSQL authority (skips withou
     },
   );
 });
-
-/**
- * Seeding-only facade coercing boolean statement parameters to 0/1 so the
- * pre-C4 config/path-bridge repositories (which bind raw booleans on the
- * postgres dialect) can seed a fresh blueprint-typed database whose
- * boolean-ish columns are BIGINT. 0/1 is valid for both BIGINT and BOOLEAN
- * columns, so this cannot mask a genuine type error in the repos under proof
- * — none of which bind booleans and all of which run on the raw client.
- */
-function withPostgresBooleanCoercion(db: DatabaseClient): DatabaseClient {
-  const coerceValue = (value: unknown): unknown => (typeof value === "boolean" ? (value ? 1 : 0) : value);
-  const coerceParams = (params: unknown[]): unknown[] =>
-    params.map((param) =>
-      param && typeof param === "object" && !Array.isArray(param)
-        ? Object.fromEntries(
-            Object.entries(param as Record<string, unknown>).map(([key, value]) => [key, coerceValue(value)]),
-          )
-        : coerceValue(param),
-    );
-  return new Proxy(db, {
-    get(target, property, receiver) {
-      if (property === "prepare") {
-        return (sql: string) => {
-          const statement = target.prepare(sql);
-          return {
-            run: (...params: unknown[]) => statement.run(...coerceParams(params)),
-            get: (...params: unknown[]) => statement.get(...coerceParams(params)),
-            all: (...params: unknown[]) => statement.all(...coerceParams(params)),
-          };
-        };
-      }
-      const value = Reflect.get(target, property, receiver);
-      return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
-    },
-  }) as DatabaseClient;
-}
 
 /**
  * Test-local mirror of the Gateway knowledge-snapshot Journey producer: every

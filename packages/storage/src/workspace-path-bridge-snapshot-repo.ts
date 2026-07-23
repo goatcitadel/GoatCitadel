@@ -76,8 +76,10 @@ export class WorkspacePathBridgeSnapshotRepository {
       workspaceId: input.workspaceId,
       inputFlavor: input.inputFlavor,
       targetFlavor: input.targetFlavor,
-      gitIdentityRequired:
-        this.db.dialect === "sqlite" ? (input.gitIdentityRequired ? 1 : 0) : input.gitIdentityRequired,
+      // 0/1, never a raw boolean: fresh-PostgreSQL databases type boolean-ish
+      // columns BIGINT (blueprint migration 2), older databases BOOLEAN
+      // (migration 104) — 0/1 binds satisfy both.
+      gitIdentityRequired: input.gitIdentityRequired ? 1 : 0,
       inputPathHash: input.inputPathHash,
       allowedRootsHash: input.allowedRootsHash,
       canonicalHostPath: input.canonicalHostPath ?? null,
@@ -87,7 +89,7 @@ export class WorkspacePathBridgeSnapshotRepository {
       gitIdentityJson: canonicalJsonString(input.gitIdentity),
       status: input.status,
       reasonCode: input.reasonCode ?? null,
-      callable: this.db.dialect === "sqlite" ? (input.callable ? 1 : 0) : input.callable,
+      callable: input.callable ? 1 : 0,
       snapshotJson,
       snapshotSha256: input.snapshotSha256,
       createdAt: input.createdAt,
