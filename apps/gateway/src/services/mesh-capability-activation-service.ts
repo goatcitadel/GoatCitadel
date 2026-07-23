@@ -20,6 +20,7 @@
  */
 import { createHash } from "node:crypto";
 import {
+  ConflictError,
   GOVERNANCE_JOURNEY_EVENT_VERSION,
   MESH_CAPABILITY_ACTIVATION_APPROVAL_KIND,
   NotFoundError,
@@ -274,7 +275,16 @@ export class MeshCapabilityActivationService {
       activation = this.storage.meshCapabilityPublications.activate(rebuilt);
     } catch (error) {
       if (error instanceof MeshCapabilityActivationServiceError) throw error;
-      throw new MeshCapabilityActivationServiceError("mesh_capability_activation_conflict");
+      // Deterministic guard/constraint violations (the storage activation
+      // trigger, CAS failures, replay byte drift, input validation) are
+      // terminal governance conflicts. Genuine infrastructure errors
+      // (SQLITE_BUSY, PostgreSQL serialization) propagate raw so the
+      // approval-effect worker defers the effect for bounded retry instead
+      // of failing an approved activation closed on a transient fault.
+      if (error instanceof ConflictError || error instanceof NotFoundError || error instanceof TypeError) {
+        throw new MeshCapabilityActivationServiceError("mesh_capability_activation_conflict");
+      }
+      throw error;
     }
     this.publishRealtime?.("mesh_capability_activation_applied", "mesh", {
       workspaceId: activation.workspaceId,

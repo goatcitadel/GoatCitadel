@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  ConflictError,
   MESH_CAPABILITY_ACTIVATION_APPROVAL_KIND,
   MESH_CAPABILITY_PERMISSION_SCHEMA_VERSION,
   type MeshCapabilityEffectPosture,
@@ -302,6 +303,48 @@ describe("MeshCapabilityActivationService request + approve + activate", () => {
       publisherGeneration: manifest.publisherGeneration,
     });
     expect(binding?.effectPosture).toBe("unknown");
+  });
+
+  it("defers genuine storage infrastructure errors for retry while keeping guard conflicts terminal", () => {
+    const harness = createHarness();
+    const manifest = publish(harness);
+    const tool = entryOf(manifest, "tool");
+    const requested = harness.service.requestActivation(requestFor(manifest, tool));
+    approve(harness.storage, requested.approval.approvalId);
+
+    // Genuine infrastructure failure (SQLITE_BUSY / serialization): the raw
+    // error must propagate so the approval-effect worker defers the effect
+    // for bounded retry instead of failing it terminally.
+    const busy = Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
+    const activateSpy = vi.spyOn(harness.storage.meshCapabilityPublications, "activate").mockImplementation(() => {
+      throw busy;
+    });
+    expect(() =>
+      harness.service.executeApprovedActivation({ workspaceId: "default", approvalId: requested.approval.approvalId }),
+    ).toThrow(busy);
+    expect(() =>
+      harness.service.executeApprovedActivation({ workspaceId: "default", approvalId: requested.approval.approvalId }),
+    ).not.toThrow(MeshCapabilityActivationServiceError);
+
+    // Storage guard/constraint violations stay terminal governance conflicts.
+    activateSpy.mockImplementation(() => {
+      throw new ConflictError("Mesh capability activation conflicts with a storage invariant.");
+    });
+    try {
+      harness.service.executeApprovedActivation({ workspaceId: "default", approvalId: requested.approval.approvalId });
+      expect.unreachable("guard conflicts must fail closed");
+    } catch (error) {
+      expect(error).toBeInstanceOf(MeshCapabilityActivationServiceError);
+      expect((error as MeshCapabilityActivationServiceError).code).toBe("mesh_capability_activation_conflict");
+    }
+
+    // After the transient failure clears, the retry converges normally.
+    activateSpy.mockRestore();
+    const applied = harness.service.executeApprovedActivation({
+      workspaceId: "default",
+      approvalId: requested.approval.approvalId,
+    });
+    expect(applied.activation.capabilityId).toBe(tool.capabilityId);
   });
 
   it("fails skill activation closed as deferred staging without writing any approval", () => {
