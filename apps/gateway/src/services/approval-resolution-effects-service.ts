@@ -25,20 +25,28 @@ import {
   EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_APPROVAL_KIND,
   EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_KIND,
   EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_TARGET_KIND,
+  MESH_CAPABILITY_ACTIVATION_APPROVAL_KIND,
   assertExternalSourceKnowledgeSnapshotApprovalPayload,
+  assertMeshCapabilityActivationApprovalPayload,
   buildToolEffectEvidence,
   canonicalJsonString,
   ConflictError,
   isChatTurnTerminalStatus,
   NotFoundError,
   type ExternalSourceKnowledgeSnapshotApprovalPayload,
+  type MeshCapabilityActivationApprovalPayload,
 } from "@goatcitadel/contracts";
 import {
+  buildApprovalEffectIdempotencyKey,
   getRequestAttribution,
   runWithIsolatedRequestAttribution,
   type PostCommitEligibility,
   type Storage,
 } from "@goatcitadel/storage";
+import {
+  MeshCapabilityActivationServiceError,
+  type MeshCapabilityActivationApplyResult,
+} from "./mesh-capability-activation-service.js";
 import { APPROVAL_OBSERVABILITY_REALTIME_ENVELOPE_KEY } from "./realtime-event-service.js";
 import {
   ExternalSourceKnowledgeEffectServiceError,
@@ -100,6 +108,8 @@ const APPROVAL_WAIT_MATERIALIZE_RETRY_MS = 1_000;
 const APPROVAL_EXPIRY_SWEEP_INTERVAL_MS = 1_000;
 const APPROVAL_EFFECT_RESPONSE_SETTLE_MS = 500;
 const APPROVAL_MATERIALIZED_POST_COMMIT_METADATA_KEY = "approvalMaterializedPostCommit";
+export const MESH_CAPABILITY_ACTIVATION_EFFECT_KIND = "mesh_capability_activation_apply" as const;
+export const MESH_CAPABILITY_ACTIVATION_EFFECT_TARGET_KIND = "mesh_capability_activation" as const;
 
 interface ApprovalMaterializationPostCommitInput {
   approvalId: string;
@@ -316,6 +326,18 @@ export interface ApprovalEffectsServiceDeps {
     actor: ExternalSourceRequestActor,
     signal?: AbortSignal,
   ): Promise<ExternalSourceKnowledgeSnapshotApplyResult>;
+  /**
+   * HX-408 M2: executes one approved `mesh.capability.activate` through the
+   * composed activation owner. The executor revalidates the approval, rebuilds
+   * the exact activation input from live durable state (recovering the
+   * requester from the request Journey evidence), verifies the approved
+   * requestSha256 byte-exactly, and lets the storage activation guard
+   * re-verify binding, health, lease, and caps inside its transaction.
+   */
+  executeApprovedMeshCapabilityActivation?(input: {
+    workspaceId: string;
+    approvalId: string;
+  }): MeshCapabilityActivationApplyResult;
   enqueueAfterHooks(input: {
     workspaceId: string;
     trigger: "approval.resolve.after" | "approval.response.after";
@@ -605,6 +627,9 @@ export class ApprovalEffectsService {
     if (approval.kind === EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_APPROVAL_KIND && input.decision === "approve") {
       enqueued.push(this.enqueueExternalSourceKnowledgeSnapshotApply(approval));
     }
+    if (approval.kind === MESH_CAPABILITY_ACTIVATION_APPROVAL_KIND && input.decision === "approve") {
+      enqueued.push(this.enqueueMeshCapabilityActivationApply(approval));
+    }
     enqueued.push(
       this.ctx.storage.approvalEffects.upsert({
         approvalId: approval.approvalId,
@@ -798,6 +823,37 @@ export class ApprovalEffectsService {
       targetId: identities.targetId,
       idempotencyKey: identities.effectIdempotencyKey,
       payload: effectPayload,
+    });
+  }
+
+  /**
+   * HX-408 M2: enqueue the approved mesh capability activation on one
+   * deterministic effect identity per activation, with a server-derived
+   * payload copied from the immutable approval payload. The executor rebuilds
+   * the exact activation input from live durable state and the storage
+   * activation guard re-verifies everything inside its own transaction, so a
+   * replayed resolution converges instead of double-activating.
+   */
+  private enqueueMeshCapabilityActivationApply(approval: ApprovalRequest): ApprovalEffectRecord {
+    const payload = approval.payload as unknown as MeshCapabilityActivationApprovalPayload;
+    assertMeshCapabilityActivationApprovalPayload(payload);
+    return this.ctx.storage.approvalEffects.upsert({
+      approvalId: approval.approvalId,
+      effectKind: MESH_CAPABILITY_ACTIVATION_EFFECT_KIND,
+      targetKind: MESH_CAPABILITY_ACTIVATION_EFFECT_TARGET_KIND,
+      targetId: payload.activationId,
+      idempotencyKey: buildApprovalEffectIdempotencyKey({
+        approvalId: approval.approvalId,
+        effectKind: MESH_CAPABILITY_ACTIVATION_EFFECT_KIND,
+        targetKind: MESH_CAPABILITY_ACTIVATION_EFFECT_TARGET_KIND,
+        targetId: payload.activationId,
+      }),
+      payload: {
+        workspaceId: payload.workspaceId,
+        activationId: payload.activationId,
+        activationRevision: payload.activationRevision,
+        requestSha256: payload.requestSha256,
+      },
     });
   }
 
@@ -1038,6 +1094,9 @@ export class ApprovalEffectsService {
       case EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_KIND:
         await this.handleExternalSourceKnowledgeSnapshotApply(effect, signal);
         return;
+      case MESH_CAPABILITY_ACTIVATION_EFFECT_KIND:
+        this.handleMeshCapabilityActivationApply(effect);
+        return;
       case "approval_inbox_follow_up":
         await this.handleApprovalInboxFollowUp(effect);
         return;
@@ -1199,6 +1258,60 @@ export class ApprovalEffectsService {
         ...(error instanceof ExternalSourceKnowledgeEffectServiceError
           ? { errorCode: error.code, ...(error.reasonCode ? { reasonCode: error.reasonCode } : {}) }
           : {}),
+      });
+    }
+  }
+
+  /**
+   * HX-408 M2: execute one approved mesh capability activation. Every
+   * governance denial (state drift, expiry, foreign approval, missing request
+   * evidence, storage-guard conflict) is terminal and fails the effect closed
+   * with its content-free code; only unexpected infrastructure errors defer
+   * for bounded retry. Replays converge on the immutable activation row.
+   */
+  private handleMeshCapabilityActivationApply(effect: ApprovalEffectRecord): void {
+    const execute = this.deps.executeApprovedMeshCapabilityActivation;
+    const workspaceId = asOptionalString(effect.payload.workspaceId);
+    if (!execute || !workspaceId) {
+      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+        lastError: "Mesh capability activation effect is missing its executor or workspace binding.",
+        result: { workspaceId, configured: Boolean(execute) },
+      });
+      return;
+    }
+    try {
+      const applied = execute({ workspaceId, approvalId: effect.approvalId });
+      if (!this.isEffectStillClaimed(effect.effectId)) return;
+      const completed = this.ctx.storage.approvalEffects.completeEffect(
+        effect.effectId,
+        this.workerId,
+        effect.version,
+        {
+          result: {
+            disposition: "activated",
+            activationId: applied.activation.activationId,
+            activationRevision: applied.activation.activationRevision,
+            capabilityId: applied.activation.capabilityId,
+            requestSha256: applied.activation.requestSha256,
+            replayed: applied.replayed,
+          },
+        },
+      );
+      if (!completed) {
+        throw new Error(`Mesh capability activation effect ${effect.effectId} lost its completion lease.`);
+      }
+    } catch (error) {
+      if (!this.isEffectStillClaimed(effect.effectId)) return;
+      if (error instanceof MeshCapabilityActivationServiceError) {
+        this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+          lastError: error.message,
+          result: { errorCode: error.code },
+        });
+        return;
+      }
+      this.deferClaimedEffectForRetry(effect, this.workerId, error, {
+        deliveryState: "retry_scheduled",
+        approvalId: effect.approvalId,
       });
     }
   }

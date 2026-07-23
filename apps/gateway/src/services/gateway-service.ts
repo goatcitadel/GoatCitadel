@@ -695,6 +695,7 @@ import { MemoryMaintenanceService } from "./memory-maintenance-service.js";
 import { MemoryLifecycleService } from "./memory-lifecycle-service.js";
 import { RuntimeLifecycleReadService } from "./runtime-lifecycle-read-service.js";
 import { CapabilitySystemService } from "./capability-system-service.js";
+import { MeshCapabilityActivationService } from "./mesh-capability-activation-service.js";
 import { MeshCapabilityPublicationService } from "./mesh-capability-publication-service.js";
 import type { BaseAgentPromptSkill, BaseAgentPromptToolset } from "./base-agent-system-prompt.js";
 import { TaskLifecycleService } from "./task-lifecycle-service.js";
@@ -1315,6 +1316,7 @@ export class GatewayService {
   private readonly capabilitySystemService: CapabilitySystemService;
   /** HX-408 M1: authenticated mesh capability publication owner. */
   private readonly meshCapabilityPublicationService: MeshCapabilityPublicationService;
+  private readonly meshCapabilityActivationService: MeshCapabilityActivationService;
   private readonly skillHubLifecycleService: SkillHubLifecycleService;
   private readonly skillHubReviewService: SkillHubReviewService;
   private readonly skillLearningService: SkillLearningService;
@@ -1590,6 +1592,15 @@ export class GatewayService {
     // projects its catalog entries.
     this.meshCapabilityPublicationService = new MeshCapabilityPublicationService({
       storage: this.storage,
+      publishRealtime: (eventType, source, payload) => {
+        this.publishRealtime(eventType, source, payload);
+      },
+    });
+    // HX-408 M2: the governed activation owner composes over the publication
+    // owner (healthy-at-request projection) and the durable storage guard.
+    this.meshCapabilityActivationService = new MeshCapabilityActivationService({
+      storage: this.storage,
+      publication: this.meshCapabilityPublicationService,
       publishRealtime: (eventType, source, payload) => {
         this.publishRealtime(eventType, source, payload);
       },
@@ -2030,6 +2041,10 @@ export class GatewayService {
         }
         return externalSources.applyApprovedKnowledgeSnapshot(input, actor, signal ?? new AbortController().signal);
       },
+      // HX-408 M2: approved mesh capability activations execute through the
+      // composed activation owner and the storage activation guard.
+      executeApprovedMeshCapabilityActivation: (input) =>
+        this.meshCapabilityActivationService.executeApprovedActivation(input),
       enqueueAfterHooks: (input) => this.hooksService.enqueueAfterHooks(input),
       resolveApprovalHookWorkspaceId: (payload) => this.resolveApprovalHookWorkspaceId(payload),
       resolvePostCommitEligibility: (sessionId) => this.resolvePostCommitEligibility(sessionId),
@@ -2896,6 +2911,7 @@ export class GatewayService {
     return {
       ...composeGatewayRouteServices(this.getRouteCompositionPort()),
       meshCapabilityPublication: this.meshCapabilityPublicationService,
+      meshCapabilityActivation: this.meshCapabilityActivationService,
       externalSources: createExternalSourceRouteService(
         this.storage,
         this.workspacePathBridgeRuntime.service,

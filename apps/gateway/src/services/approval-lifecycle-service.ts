@@ -854,6 +854,12 @@ function commitStandardApprovalResolution(
       message: "Code Mode approvals are immutable; reject this run and create a new one with edited input.",
     });
   }
+  if (current.kind === MESH_CAPABILITY_ACTIVATION_APPROVAL_KIND && input.decision === "edit") {
+    throw new ValidationError({
+      message:
+        "Mesh capability activation approvals bind one exact immutable request; reject and request a new activation instead of editing.",
+    });
+  }
 
   const pendingAction = storage.pendingApprovalActions.find(approvalId);
   const approval = storage.approvals.resolve(

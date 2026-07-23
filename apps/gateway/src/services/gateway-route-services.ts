@@ -193,6 +193,7 @@ import {
 } from "./workspaces-route-service.js";
 import type { WorkspacePathBridgeRouteService } from "../routes/workspace-path-bridge.js";
 import type { ExternalSourceRouteService } from "./external-source-route-service.js";
+import type { MeshCapabilityActivationService } from "./mesh-capability-activation-service.js";
 import type { MeshCapabilityPublicationService } from "./mesh-capability-publication-service.js";
 export interface GatewayRouteServices {
   a2a: A2ARouteService;
@@ -252,6 +253,11 @@ export interface GatewayRouteServices {
    * so the base composition port does not carry it.
    */
   meshCapabilityPublication?: MeshCapabilityPublicationService;
+  /**
+   * HX-408 M2: the governed mesh capability activation owner (operator
+   * request/revoke routes). Composed directly by the gateway service.
+   */
+  meshCapabilityActivation?: MeshCapabilityActivationService;
   mobile: MobileRouteService;
   npu: NpuRouteService;
   personalOps: PersonalOpsRouteService;

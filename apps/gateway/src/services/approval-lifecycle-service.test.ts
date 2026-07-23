@@ -1433,6 +1433,20 @@ describe("approval lifecycle service", () => {
     expect(host.storage.chatInlineApprovals.upsert).not.toHaveBeenCalled();
   });
 
+  it("rejects edit decisions for exact-payload mesh capability activation approvals", async () => {
+    const host = createApprovalHarness({ approvalKind: "mesh.capability.activate" });
+
+    await expect(
+      resolveApproval(host, "approval-1", {
+        decision: "edit",
+        resolvedBy: "operator",
+        editedPayload: { permissionEnvelopeSha256: "0".repeat(64) },
+      }),
+    ).rejects.toThrow(/bind one exact immutable request/);
+
+    expect(host.storage.approvals.resolve).not.toHaveBeenCalled();
+  });
+
   it("marks linked Code Mode runs expired when approval expires", async () => {
     const host = createApprovalHarness({
       approvalKind: "code_mode.run",

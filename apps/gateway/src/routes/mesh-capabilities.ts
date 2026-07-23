@@ -1,20 +1,27 @@
 /**
- * HX-408 M1 route surface for governed mesh capability publication.
+ * HX-408 M1/M2 route surface for governed mesh capability publication.
  *
  * - Publication routes (`/manifests`, `/manifests/self`) require the
  *   admitted-node credential (`mesh-node` access class); ordinary operator or
  *   companion authority is rejected by the class enforcement.
- * - The inspection route (`/publications`) is operator-only and no-store.
+ * - Inspection (`/publications`) and governed activation
+ *   (`/activations`, `/activations/:activationId/revoke`) are operator-only
+ *   and no-store; admitted-node credentials never satisfy them.
  */
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { MESH_CAPABILITY_MAX_ENTRIES_PER_MANIFEST, type MeshCapabilityKind } from "@goatcitadel/contracts";
+import {
+  MeshCapabilityActivationServiceError,
+  type MeshCapabilityActivationService,
+} from "../services/mesh-capability-activation-service.js";
 import {
   toMeshCapabilityPublicationHttpError,
   type MeshCapabilityAuthenticatedNodeIdentity,
   type MeshCapabilityPublicationService,
 } from "../services/mesh-capability-publication-service.js";
 import { sendRouteError } from "./_error-handler.js";
+import { resolveApprovalActorId } from "./approvals.js";
 import { withRouteAccess } from "./route-access.js";
 
 function hasAsciiControlCharacter(value: string): boolean {
@@ -58,6 +65,27 @@ const inspectionQuerySchema = z
   })
   .strict();
 const emptyQuerySchema = z.object({}).strict();
+const activationRequestBodySchema = z
+  .object({
+    workspaceId: canonicalText(256).optional(),
+    capabilityId: canonicalText(512),
+    manifestSha256: sha256,
+    entrySha256: sha256,
+    sessionId: canonicalText(256).optional(),
+    turnId: canonicalText(256).optional(),
+  })
+  .strict();
+const activationRevokeParamsSchema = z
+  .object({
+    activationId: z.string().regex(/^mesh-activation-[a-f0-9]{48}$/u),
+  })
+  .strict();
+const activationRevokeBodySchema = z
+  .object({
+    workspaceId: canonicalText(256).optional(),
+    reason: canonicalText(2_000),
+  })
+  .strict();
 
 const RATE_LIMIT_MAX = 120;
 const resolveRateLimitKey = (request: { authActorId?: string; ip?: string }): string =>
@@ -154,11 +182,80 @@ export const meshCapabilityRoutes: FastifyPluginAsync = async (fastify) => {
       return sendRouteError(reply, error, request.log);
     }
   });
+
+  fastify.post("/api/v1/mesh/capabilities/activations", operatorAccess, async (request, reply) => {
+    const activation = resolveActivationService(fastify);
+    if (!activation) return serviceUnavailable(reply);
+    const parsed = activationRequestBodySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "Mesh capability activation request is invalid." });
+    }
+    try {
+      const result = activation.requestActivation({
+        workspaceId: parsed.data.workspaceId ?? "default",
+        capabilityId: parsed.data.capabilityId,
+        manifestSha256: parsed.data.manifestSha256,
+        entrySha256: parsed.data.entrySha256,
+        actorId: resolveApprovalActorId(request),
+        ...(parsed.data.sessionId === undefined ? {} : { sessionId: parsed.data.sessionId }),
+        ...(parsed.data.turnId === undefined ? {} : { turnId: parsed.data.turnId }),
+      });
+      return reply.code(result.replayed ? 200 : 201).send({
+        approval: result.approval,
+        replayed: result.replayed,
+        activationId: result.activationId,
+        activationRevision: result.activationRevision,
+        permissionDiff: result.permissionDiff,
+        effectDiff: result.effectDiff,
+      });
+    } catch (error) {
+      const mapped = toMeshCapabilityActivationHttpError(error);
+      if (mapped) return reply.code(mapped.statusCode).send(mapped.body);
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/mesh/capabilities/activations/:activationId/revoke", operatorAccess, async (request, reply) => {
+    const activation = resolveActivationService(fastify);
+    if (!activation) return serviceUnavailable(reply);
+    const params = activationRevokeParamsSchema.safeParse(request.params);
+    const parsed = activationRevokeBodySchema.safeParse(request.body);
+    if (!params.success || !parsed.success) {
+      return reply.code(400).send({ error: "Mesh capability activation revoke request is invalid." });
+    }
+    try {
+      const result = activation.revokeActivation({
+        workspaceId: parsed.data.workspaceId ?? "default",
+        activationId: params.data.activationId,
+        reason: parsed.data.reason,
+        actorId: resolveApprovalActorId(request),
+      });
+      return reply.code(200).send({ revocation: result.revocation, replayed: result.replayed });
+    } catch (error) {
+      const mapped = toMeshCapabilityActivationHttpError(error);
+      if (mapped) return reply.code(mapped.statusCode).send(mapped.body);
+      return sendRouteError(reply, error, request.log);
+    }
+  });
 };
+
+function toMeshCapabilityActivationHttpError(
+  error: unknown,
+): { statusCode: number; body: { error: string; reason: string } } | undefined {
+  if (error instanceof MeshCapabilityActivationServiceError) {
+    return { statusCode: error.statusCode, body: { error: error.message, reason: error.code } };
+  }
+  return undefined;
+}
 
 function resolveService(fastify: unknown): MeshCapabilityPublicationService | undefined {
   return (fastify as { services?: { meshCapabilityPublication?: MeshCapabilityPublicationService } }).services
     ?.meshCapabilityPublication;
+}
+
+function resolveActivationService(fastify: unknown): MeshCapabilityActivationService | undefined {
+  return (fastify as { services?: { meshCapabilityActivation?: MeshCapabilityActivationService } }).services
+    ?.meshCapabilityActivation;
 }
 
 function resolveIdentity(request: FastifyRequest): MeshCapabilityAuthenticatedNodeIdentity | undefined {

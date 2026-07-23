@@ -36,6 +36,7 @@ import {
   deriveMeshCapabilityId,
   type CapabilityCatalogEntry,
   type MeshCapabilityActivationRecord,
+  type MeshCapabilityCatalogEntryActivationProjection,
   type MeshCapabilityCatalogEntryProjection,
   type MeshCapabilityCatalogEntryStatus,
   type MeshCapabilityDescriptor,
@@ -144,6 +145,12 @@ interface NodeProjectionFacts {
   node?: MeshNodeRecord;
   lease?: MeshLeaseRecord;
   revokedAdmissionGenerations: Map<number, boolean>;
+}
+
+/** Per-projection cache of latest-activation facts, keyed by capability ID. */
+interface ActivationProjectionFacts {
+  latestByCapabilityId: Map<string, MeshCapabilityActivationRecord | undefined>;
+  revokedByActivationId: Map<string, boolean>;
 }
 
 /**
@@ -362,6 +369,7 @@ export class MeshCapabilityPublicationService {
     });
     const callableIndex = this.buildCallableIndex(workspaceId);
     const facts = new Map<string, NodeProjectionFacts>();
+    const activationFacts = emptyActivationFacts();
     return records.map((record) => ({
       publicationKey: record.manifest.publicationKey,
       manifestSha256: record.manifest.manifestSha256,
@@ -381,6 +389,7 @@ export class MeshCapabilityPublicationService {
           entry,
           this.resolveNodeFacts(facts, workspaceId, record.manifest.nodeId),
           callableIndex,
+          activationFacts,
         ),
       ),
     }));
@@ -392,6 +401,7 @@ export class MeshCapabilityPublicationService {
       .find((candidate) => candidate.manifest.manifestSha256 === manifest.manifestSha256);
     const facts = new Map<string, NodeProjectionFacts>();
     const callableIndex = this.buildCallableIndex(manifest.workspaceId);
+    const activationFacts = emptyActivationFacts();
     return manifest.entries.map((entry) =>
       this.projectEntry(
         manifest,
@@ -399,6 +409,7 @@ export class MeshCapabilityPublicationService {
         entry,
         this.resolveNodeFacts(facts, manifest.workspaceId, manifest.nodeId),
         callableIndex,
+        activationFacts,
       ),
     );
   }
@@ -409,13 +420,16 @@ export class MeshCapabilityPublicationService {
     entry: MeshCapabilityManifestEntry,
     facts: NodeProjectionFacts,
     callableIndex: Map<string, MeshCapabilityActivationRecord>,
+    activationFacts: ActivationProjectionFacts,
   ): MeshCapabilityCatalogEntryProjection {
+    const activation = this.resolveEntryActivationProjection(manifest, entry, activationFacts);
     const { status, reasons } = this.resolveEntryStatus(
       manifest,
       supersededByManifestSha256,
       entry,
       facts,
       callableIndex,
+      activation,
     );
     return {
       nodeId: manifest.nodeId,
@@ -428,6 +442,48 @@ export class MeshCapabilityPublicationService {
       status,
       reasons,
       effectPosture: entry.descriptor.effectPosture,
+      ...(activation === undefined ? {} : { activation }),
+    };
+  }
+
+  /**
+   * HX-408 M2: latest governed-activation facts for this exact entry. The
+   * annotation appears only when the workspace's latest activation for the
+   * derived capability ID binds exactly this manifest/entry/generation; it is
+   * evidence for the operator inspection surface, never callability truth.
+   */
+  private resolveEntryActivationProjection(
+    manifest: MeshCapabilityManifest,
+    entry: MeshCapabilityManifestEntry,
+    activationFacts: ActivationProjectionFacts,
+  ): MeshCapabilityCatalogEntryActivationProjection | undefined {
+    if (!activationFacts.latestByCapabilityId.has(entry.capabilityId)) {
+      activationFacts.latestByCapabilityId.set(
+        entry.capabilityId,
+        this.storage.meshCapabilityPublications.findLatestActivation(manifest.workspaceId, entry.capabilityId),
+      );
+    }
+    const latest = activationFacts.latestByCapabilityId.get(entry.capabilityId);
+    if (
+      !latest ||
+      latest.manifestSha256 !== manifest.manifestSha256 ||
+      latest.entrySha256 !== entry.entrySha256 ||
+      latest.publisherGeneration !== manifest.publisherGeneration
+    ) {
+      return undefined;
+    }
+    if (!activationFacts.revokedByActivationId.has(latest.activationId)) {
+      activationFacts.revokedByActivationId.set(
+        latest.activationId,
+        this.storage.meshCapabilityPublications.findActivationRevocation(manifest.workspaceId, latest.activationId) !==
+          undefined,
+      );
+    }
+    return {
+      activationId: latest.activationId,
+      activationRevision: latest.activationRevision,
+      approvalId: latest.approvalId,
+      revoked: activationFacts.revokedByActivationId.get(latest.activationId) === true,
     };
   }
 
@@ -437,6 +493,7 @@ export class MeshCapabilityPublicationService {
     entry: MeshCapabilityManifestEntry,
     facts: NodeProjectionFacts,
     callableIndex: Map<string, MeshCapabilityActivationRecord>,
+    activationProjection?: MeshCapabilityCatalogEntryActivationProjection,
   ): { status: MeshCapabilityCatalogEntryStatus; reasons: string[] } {
     if (
       !facts.currentAdmission ||
@@ -490,6 +547,9 @@ export class MeshCapabilityPublicationService {
       return { status: "active", reasons: ["activation_live"] };
     }
     const reasons = ["operator_review_required"];
+    if (activationProjection?.revoked === true) {
+      reasons.push("activation_revoked");
+    }
     if (entry.kind === "skill") {
       reasons.push("skill_descriptor_never_callable");
     }
@@ -828,6 +888,10 @@ function catalogKindOf(kind: MeshCapabilityKind): CapabilityCatalogEntry["kind"]
 
 function capabilityIdOf(projection: MeshCapabilityCatalogEntryProjection): string {
   return deriveMeshCapabilityId(projection.nodeId, projection.capabilityKind, projection.localId);
+}
+
+function emptyActivationFacts(): ActivationProjectionFacts {
+  return { latestByCapabilityId: new Map(), revokedByActivationId: new Map() };
 }
 
 // NUL separator: capability IDs may contain arbitrary canonical-identifier
