@@ -953,6 +953,8 @@ export * from "./skill-hub-operation-repo.js";
 export * from "./skill-aggregate-revision-repo.js";
 export * from "./skill-learning-evidence-repo.js";
 export * from "./governance-journey-event-repo.js";
+export * from "./governed-lifecycle-event-repo.js";
+export * from "./improvement-lifecycle-operation-repo.js";
 export * from "./workspace-path-bridge-snapshot-repo.js";
 export * from "./ops-saved-board-repo.js";
 export { loadAndSanitize } from "./load-and-sanitize.js";

@@ -14,7 +14,9 @@ export interface GovernanceJourneyEvidenceRef {
     | "evaluation"
     | "external_source"
     | "memory_history"
-    | "upstream_snapshot";
+    | "upstream_snapshot"
+    | "governed_lifecycle"
+    | "improvement_operation";
   refId: string;
 }
 
@@ -364,6 +366,8 @@ function normalizeEvidenceRefs(input: readonly GovernanceJourneyEvidenceRef[]): 
         "external_source",
         "memory_history",
         "upstream_snapshot",
+        "governed_lifecycle",
+        "improvement_operation",
       ]).has(item.owner)
     ) {
       throw new TypeError("Journey evidence reference has an unsupported owner.");

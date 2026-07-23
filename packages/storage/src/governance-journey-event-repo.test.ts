@@ -205,6 +205,35 @@ describe("GovernanceJourneyEventRepository", () => {
     assert.equal(repo.findScoped("global-1", "workspace-1", true)?.eventId, "global-1");
   });
 
+  it("admits the HX-402 governed lifecycle and improvement operation evidence owners", () => {
+    const { repo } = createStore();
+    const stored = repo.create(
+      event({
+        evidenceRefs: [
+          { owner: "governed_lifecycle", refId: "governed-event-1" },
+          { owner: "improvement_operation", refId: "improvement-op-1" },
+          { owner: "candidate", refId: "version-1" },
+        ],
+      }),
+    );
+    assert.deepEqual(stored.evidenceRefs, [
+      { owner: "candidate", refId: "version-1" },
+      { owner: "governed_lifecycle", refId: "governed-event-1" },
+      { owner: "improvement_operation", refId: "improvement-op-1" },
+    ]);
+    assert.throws(
+      () =>
+        repo.create(
+          event({
+            eventId: "event-2",
+            idempotencyKey: "candidate:version-2:staged",
+            evidenceRefs: [{ owner: "governed_mutation" as never, refId: "governed-event-1" }],
+          }),
+        ),
+      /unsupported owner/,
+    );
+  });
+
   it("rejects payload-sink metadata and evidence references", () => {
     const { repo } = createStore();
     assert.throws(() => repo.create(event({ summary: { content: "raw correction" } })), /forbidden/);
