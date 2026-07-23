@@ -73,10 +73,16 @@ test("the lane check table is complete, uniquely named, and cites only test file
     assert.ok(pkg.scripts[check.script], `${check.id} invokes an existing script: ${check.script}`);
   }
 
-  // The docs check invokes a real governance-doc validator script.
+  // The docs check runs the full docs:check composite (all 10 gates, including
+  // check-memory-ownership over the HX-402 producers) as a real named script.
   const docs = checks.find((check) => check.id === "journey-producers.docs");
-  assert.equal(docs.kind, "docs");
-  assert.ok(fs.existsSync(path.join(repoRoot, docs.nodeScript)), "the governance-doc validator exists");
+  assert.equal(docs.kind, "named-lane");
+  assert.equal(docs.script, "docs:check");
+  const rootManifest = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
+  assert.ok(
+    typeof rootManifest.scripts?.["docs:check"] === "string",
+    "the docs:check composite script exists in package.json",
+  );
 
   // The live-PostgreSQL check may never self-skip, and its live suites exist.
   const livePostgres = checks.find((check) => check.id === "journey-producers.live-postgres");

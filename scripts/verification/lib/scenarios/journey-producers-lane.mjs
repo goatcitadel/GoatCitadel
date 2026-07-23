@@ -170,9 +170,10 @@ export function buildJourneyProducersLaneChecks() {
     },
     {
       id: "journey-producers.docs",
-      title: "Governance-doc validator (validate-governance-docs.mjs, the docs:check governance gate)",
-      kind: "docs",
-      nodeScript: "scripts/validate-governance-docs.mjs",
+      title:
+        "Documentation gates (pnpm docs:check — the full 10-check composite, including check-memory-ownership over the HX-402 memory producers)",
+      kind: "named-lane",
+      script: "docs:check",
     },
     {
       id: "journey-producers.format",
@@ -290,10 +291,10 @@ export function buildJourneyProducersProofMatrix() {
       ],
       suites: [
         "pnpm --filter contracts/storage/gateway/mission-control-shared typecheck",
-        "node scripts/validate-governance-docs.mjs (governance-doc consistency, part of docs:check)",
+        "pnpm docs:check (full 10-check composite, including check-memory-ownership over the HX-402 memory producers)",
         "prettier --check over the lane's own new artifacts; git diff --check",
       ],
-      note: "The lane invokes the real named tools scoped to the P5 change surface. The composite whole-repo `pnpm docs:check` and `pnpm format:check` stay the controller's close-out gates; see the lane's report for two pre-existing base-red conditions outside this fence.",
+      note: "The docs row runs the whole-repo `pnpm docs:check` composite so a memory/skill/capability ownership regression in an HX-402 producer fails the lane. The format row stays scoped to the lane's own artifacts because whole-repo `format:check` carries pre-existing base-red in unrelated `.design-sync` files; that composite remains the controller's close-out gate.",
     },
     {
       row: 8,
