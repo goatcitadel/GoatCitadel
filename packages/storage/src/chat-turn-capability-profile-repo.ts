@@ -9,6 +9,7 @@ import {
   mcpRequesterResolutionBindingHashMaterial,
   mcpRequesterScopeHashMaterial,
   NotFoundError,
+  type CapabilityCategory,
   type ChatTurnCapabilityProfileDraft,
   type ChatTurnCapabilityProfileEnvelope,
   type ChatTurnCapabilityProfileHashes,
@@ -19,6 +20,20 @@ import {
 } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
 import { safeJsonParse } from "./safe-json.js";
+
+/**
+ * Frozen-profile trusted skills must come from a LOCAL skill category. This is
+ * a deliberate allowlist: HX-408 mesh-published descriptors (category
+ * `mesh_published`) are review-only and must keep failing closed here even
+ * though the contracts union now carries the new category.
+ */
+const PROFILE_TRUSTED_SKILL_CATEGORIES: readonly CapabilityCategory[] = [
+  "built_in",
+  "optional",
+  "project_local",
+  "self_generated",
+  "community_imported",
+];
 
 const MAX_PROFILE_BYTES = 512 * 1024;
 const MAX_TOOLS = 32;
@@ -414,7 +429,7 @@ function assertValidProfile(input: ChatTurnCapabilityProfileRecord): void {
   }
   if (
     input.identity.authActorSource !== undefined &&
-    !(["none", "token", "basic", "loopback", "sse", "device", "companion", "a2a_peer"] as const).includes(
+    !(["none", "token", "basic", "loopback", "sse", "device", "companion", "a2a_peer", "mesh_node"] as const).includes(
       input.identity.authActorSource,
     )
   ) {
@@ -643,11 +658,7 @@ function assertValidProfile(input: ChatTurnCapabilityProfileRecord): void {
     }
     skillCapabilityIds.add(skill.capabilityId);
     skillIds.add(skill.skillId);
-    if (
-      !(["built_in", "optional", "project_local", "self_generated", "community_imported"] as const).includes(
-        skill.category,
-      )
-    ) {
+    if (!PROFILE_TRUSTED_SKILL_CATEGORIES.includes(skill.category)) {
       throw new Error(`Capability profile skill ${skill.skillId} category is invalid.`);
     }
     if (!(["approved", "trusted"] as const).includes(skill.lifecycleState)) {

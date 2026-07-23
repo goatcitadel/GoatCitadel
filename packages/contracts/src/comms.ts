@@ -16,7 +16,7 @@ export interface ChannelGovernanceInput {
   runId?: string;
   operatorId?: string;
   authActorId?: string;
-  authActorSource?: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion" | "a2a_peer";
+  authActorSource?: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion" | "a2a_peer" | "mesh_node";
   permissionProfileId?: string;
   localOperatorOverrideId?: string;
   surface?: PermissionSurface;

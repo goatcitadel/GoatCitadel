@@ -1625,7 +1625,7 @@ export interface ChatDelegateRequest {
   steps?: ChatDelegateStepRequest[];
   operatorId?: string;
   authActorId?: string;
-  authActorSource?: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion" | "a2a_peer";
+  authActorSource?: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion" | "a2a_peer" | "mesh_node";
   permissionProfileId?: string;
   localOperatorOverrideId?: string;
   policyRunId?: string;
@@ -1786,7 +1786,7 @@ export interface ChatDelegateAcceptRequest {
   steps?: ChatDelegateStepRequest[];
   operatorId?: string;
   authActorId?: string;
-  authActorSource?: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion" | "a2a_peer";
+  authActorSource?: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion" | "a2a_peer" | "mesh_node";
   permissionProfileId?: string;
   localOperatorOverrideId?: string;
   policyRunId?: string;
@@ -1828,7 +1828,7 @@ export interface ChatSendMessageRequest {
   prefsOverride?: ChatSessionPrefsPatch;
   operatorId?: string;
   authActorId?: string;
-  authActorSource?: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion" | "a2a_peer";
+  authActorSource?: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion" | "a2a_peer" | "mesh_node";
   permissionProfileId?: string;
   localOperatorOverrideId?: string;
   policyRunId?: string;
@@ -1877,7 +1877,7 @@ export interface RoutingPreflightRequest {
   /** Server-stamped actor context; client schemas must not accept these fields. */
   operatorId?: string;
   authActorId?: string;
-  authActorSource?: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion" | "a2a_peer";
+  authActorSource?: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion" | "a2a_peer" | "mesh_node";
 }
 
 export interface RoutingDecisionSnapshot {

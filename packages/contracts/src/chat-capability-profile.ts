@@ -24,7 +24,7 @@ export interface ChatTurnCapabilityProfileIdentity {
   durableRunId?: string;
   operatorId?: string;
   authActorId?: string;
-  authActorSource?: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion" | "a2a_peer";
+  authActorSource?: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion" | "a2a_peer" | "mesh_node";
 }
 
 export interface ChatTurnCapabilityProfileSourceScope {
