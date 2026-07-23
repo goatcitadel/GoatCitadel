@@ -479,7 +479,9 @@ const MATERIALIZATION_WORKER_SOURCE = String.raw`
       if (db) {
         try {
           db.close();
-        } catch {}
+        } catch {
+          /* best-effort cleanup on worker exit */
+        }
       }
     }
   })();

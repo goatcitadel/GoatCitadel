@@ -12,6 +12,10 @@ const contentFreeProvenanceConstants = new Map([
     "apps/gateway/src/services/memory-journey-producer.ts",
     new Set(['const MEMORY_HISTORY_PROVENANCE_OWNER = "memory_change_history" as const;']),
   ],
+  [
+    "apps/gateway/src/services/memory-domain-journey-producer.ts",
+    new Set(['const MEMORY_HISTORY_SOURCE_KIND = "memory_change_history" as const;']),
+  ],
 ]);
 
 const files = await collectFiles(servicesRoot);

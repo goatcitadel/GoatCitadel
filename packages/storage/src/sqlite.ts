@@ -276,7 +276,7 @@ export function createDatabase(options: SqliteOptions): DatabaseClient {
     try {
       db.close();
     } catch {
-      // Surface the migration failure, not the close failure.
+      // Best-effort cleanup: surface the migration failure, not the close failure.
     }
     throw error;
   }

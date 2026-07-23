@@ -5158,7 +5158,7 @@ function parseJsonObject(value: string): Record<string, unknown> {
       return parsed as Record<string, unknown>;
     }
   } catch {
-    // Normalized below as corrupt durable authority evidence.
+    // Fall through: normalized below as corrupt durable authority evidence.
   }
   throw admissionConflict(
     "SESSION_MUTATION_DURABLE_EVIDENCE_CORRUPT",
