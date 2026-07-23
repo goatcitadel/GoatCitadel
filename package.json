@@ -87,6 +87,7 @@
     "verify:model-council": "node scripts/verification/run.mjs model-council",
     "verify:skill-learning": "node scripts/verification/run.mjs skill-learning",
     "verify:session-control": "node scripts/verification/run.mjs session-control",
+    "verify:external-sources": "node --test scripts/verification/lib/scenarios/external-sources-lane.test.mjs && node scripts/verification/external-sources-proof.mjs",
     "verify:providers:vertex-fireworks": "node scripts/verification/run.mjs providers-vertex-fireworks",
     "verify:reasoning:profiles": "node scripts/verification/run.mjs reasoning-profiles",
     "verify:runtime:truth": "node scripts/verification/run.mjs runtime-truth && node scripts/verification/mcp-requester-scope-proof.mjs",
