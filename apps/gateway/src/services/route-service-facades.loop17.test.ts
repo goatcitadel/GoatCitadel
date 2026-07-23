@@ -40,8 +40,10 @@ describe("route service facades", () => {
       "listMemoryItems",
       "listRecentContexts",
       "patchMaintenancePolicy",
-      "patchMemoryItem",
       "rejectMaintenanceRecommendation",
+      "requestMemoryBatchMutationApproval",
+      "requestMemoryForgetApproval",
+      "requestMemoryItemPatchApproval",
       "runMaintenanceNow",
     ]);
     const service = new MemoryRouteService(port as never);
@@ -118,30 +120,31 @@ describe("route service facades", () => {
       method: "listMemoryItems",
       args: [{ workspaceId: "workspace-1" }],
     });
-    expect(service.patchItem("item-1", { state: "kept" } as never, "operator")).toEqual({
-      method: "patchMemoryItem",
-      args: ["item-1", { state: "kept" }, "operator"],
-    });
-    expect(service.forgetItem("item-1", "operator")).toEqual({
-      method: "forgetMemoryItem",
-      args: ["item-1", "operator", undefined],
+    // HX-402 P1: mutation verbs delegate to the approval-request surface.
+    expect(service.requestItemPatchApproval("item-1", { state: "kept" } as never, "operator")).toEqual({
+      method: "requestMemoryItemPatchApproval",
+      args: ["item-1", { state: "kept" }, "operator", undefined],
     });
     const forgetHooks = { onCommit: vi.fn(), afterCommit: vi.fn() };
-    expect(service.forgetItem("item-1", "operator", forgetHooks)).toEqual({
-      method: "forgetMemoryItem",
-      args: ["item-1", "operator", forgetHooks],
+    expect(service.requestItemPatchApproval("item-1", { state: "kept" } as never, "operator", forgetHooks)).toEqual({
+      method: "requestMemoryItemPatchApproval",
+      args: ["item-1", { state: "kept" }, "operator", forgetHooks],
     });
     expect(service.listItemHistory("item-1", 5)).toEqual({
       method: "listMemoryItemHistory",
       args: ["item-1", 5],
     });
-    expect(service.forget({ workspaceId: "workspace-1", query: "old" } as never)).toEqual({
-      method: "forgetMemory",
+    expect(service.requestForgetApproval({ workspaceId: "workspace-1", query: "old" } as never)).toEqual({
+      method: "requestMemoryForgetApproval",
       args: [{ workspaceId: "workspace-1", query: "old" }, undefined],
     });
-    expect(service.forget({ workspaceId: "workspace-1", query: "old" } as never, forgetHooks)).toEqual({
-      method: "forgetMemory",
+    expect(service.requestForgetApproval({ workspaceId: "workspace-1", query: "old" } as never, forgetHooks)).toEqual({
+      method: "requestMemoryForgetApproval",
       args: [{ workspaceId: "workspace-1", query: "old" }, forgetHooks],
+    });
+    expect(service.requestBatchMutationApproval({ actionId: "batch-1", operations: [] } as never, "operator")).toEqual({
+      method: "requestMemoryBatchMutationApproval",
+      args: [{ actionId: "batch-1", operations: [] }, "operator", undefined],
     });
   });
 

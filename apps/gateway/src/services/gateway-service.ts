@@ -2068,6 +2068,10 @@ export class GatewayService {
       // composed activation owner and the storage activation guard.
       executeApprovedMeshCapabilityActivation: (input) =>
         this.meshCapabilityActivationService.executeApprovedActivation(input),
+      // HX-402 P1: lazy closure — memoryLifecycleService is assigned later in
+      // this constructor, before any approval effect can execute.
+      executeApprovedMemoryLifecycleMutation: (input) =>
+        this.memoryLifecycleService.executeApprovedMemoryLifecycleMutation(input),
       enqueueAfterHooks: (input) => this.hooksService.enqueueAfterHooks(input),
       resolveApprovalHookWorkspaceId: (payload) => this.resolveApprovalHookWorkspaceId(payload),
       resolvePostCommitEligibility: (sessionId) => this.resolvePostCommitEligibility(sessionId),
@@ -2513,6 +2517,13 @@ export class GatewayService {
         publishRealtime: (channel, topic, payload) => {
           this.publishRealtime(channel, topic, payload);
         },
+      },
+      // HX-402 P1: canonical approval-authority collaborators for the
+      // approval-first memory mutation surface and its recovered effect.
+      approvalAuthority: {
+        approvals: this.storage.approvals,
+        approvalEvents: this.storage.approvalEvents,
+        governanceJourneyEvents: this.storage.governanceJourneyEvents,
       },
       files: {
         rootDir: config.rootDir,

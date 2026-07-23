@@ -65,33 +65,6 @@ interface ApprovalRow {
   resolved_by: string | null;
 }
 
-interface JourneyRow {
-  schema_version: string;
-  event_id: string;
-  idempotency_key: string;
-  scope_kind: "workspace" | "global";
-  workspace_id: string | null;
-  event_type: string;
-  subject_kind: string;
-  subject_id: string;
-  action: string;
-  actor_id: string;
-  actor_type: "operator" | "system" | "approval_effect";
-  session_id: string | null;
-  turn_id: string | null;
-  approval_id: string | null;
-  fingerprint: string | null;
-  source_kind: string | null;
-  source_id: string | null;
-  trust_disposition: string | null;
-  poisoning_status: "clean" | "blocked" | "quarantined" | "conflicting" | null;
-  evidence_refs_json: string;
-  provenance_json: string;
-  summary_json: string;
-  occurred_at: string;
-  recorded_at: string;
-}
-
 export function buildMemoryLifecycleRequestSha256(input: {
   workspaceId: string;
   subjectKind: MemoryJourneySubjectKind;
@@ -267,18 +240,30 @@ export function deriveApprovedMemoryHistoryId(input: {
   )}`;
 }
 
-export function persistApprovedMemoryJourney(
-  sql: MemoryJourneySql,
-  input: {
-    authority: ApprovedMemoryMutationAuthority;
-    change: MemoryChangeEvent;
-    subjectId: string;
-    action: MemoryJourneyEventAction;
-    lifecycleState: string;
-    fieldCodes?: string[];
-    batchOperationIndex?: number;
-  },
-): GovernanceJourneyEventRecord {
+export interface ApprovedMemoryJourneyEventInput {
+  authority: ApprovedMemoryMutationAuthority;
+  change: MemoryChangeEvent;
+  subjectId: string;
+  action: MemoryJourneyEventAction;
+  lifecycleState: string;
+  fieldCodes?: string[];
+  batchOperationIndex?: number;
+  /**
+   * Exact evidence linkage into the immutable P0 governed lifecycle owner
+   * (`{ owner: "governed_lifecycle", refId: eventId }`). The write-through
+   * producer supplies it so the Journey event and the governed event commit
+   * with mutual linkage inside one `createWithJourney` transaction.
+   */
+  governedLifecycleEventId?: string;
+}
+
+/**
+ * Pure builder for the approved-mutation Journey event. The write itself goes
+ * through the P0 governed lifecycle owner's `createWithJourney` (HX-402 P1),
+ * so this builder never touches the database; it only derives and validates
+ * the canonical record from the resolved authority and the stored history row.
+ */
+export function buildApprovedMemoryJourneyEvent(input: ApprovedMemoryJourneyEventInput): GovernanceJourneyEventRecord {
   const subjectId = requireCanonicalId(input.subjectId, "subject ID");
   if (
     input.change.itemId !== subjectId ||
@@ -315,6 +300,14 @@ export function persistApprovedMemoryJourney(
     evidenceRefs: [
       { owner: "approval", refId: input.authority.approvalId },
       { owner: "memory_history", refId: input.change.changeId },
+      ...(input.governedLifecycleEventId
+        ? [
+            {
+              owner: "governed_lifecycle" as const,
+              refId: requireCanonicalId(input.governedLifecycleEventId, "event ID"),
+            },
+          ]
+        : []),
     ],
     provenance: {
       sourceRequired: true,
@@ -341,72 +334,12 @@ export function persistApprovedMemoryJourney(
   if (!isGovernanceJourneyEventRecord(event)) {
     throw new TypeError("Approved memory Journey event failed its canonical contract.");
   }
-  const evidenceRefsJson = canonicalJsonString(event.evidenceRefs);
-  const provenanceJson = canonicalJsonString(event.provenance);
-  const summaryJson = canonicalJsonString(event.summary);
+  return event;
+}
 
-  sql
-    .prepare(
-      `INSERT INTO governance_journey_events (
-         schema_version, event_id, idempotency_key, scope_kind, workspace_id, event_type,
-         subject_kind, subject_id, action, actor_id, actor_type, session_id, turn_id,
-         approval_id, fingerprint, source_kind, source_id, trust_disposition, poisoning_status,
-         evidence_refs_json, provenance_json, summary_json, occurred_at, recorded_at
-       ) VALUES (
-         @schemaVersion, @eventId, @idempotencyKey, @scopeKind, @workspaceId, @eventType,
-         @subjectKind, @subjectId, @action, @actorId, @actorType, @sessionId, @turnId,
-         @approvalId, @fingerprint, @sourceKind, @sourceId, @trustDisposition, @poisoningStatus,
-         @evidenceRefsJson, @provenanceJson, @summaryJson, @occurredAt, @recordedAt
-       ) ON CONFLICT DO NOTHING`,
-    )
-    .run({
-      schemaVersion: event.schemaVersion,
-      eventId: event.eventId,
-      idempotencyKey: event.idempotencyKey,
-      scopeKind: event.scopeKind,
-      workspaceId: event.workspaceId ?? null,
-      eventType: event.eventType,
-      subjectKind: event.subjectKind,
-      subjectId: event.subjectId,
-      action: event.action,
-      actorId: event.actorId,
-      actorType: event.actorType,
-      sessionId: event.sessionId ?? null,
-      turnId: event.turnId ?? null,
-      approvalId: event.approvalId ?? null,
-      fingerprint: event.fingerprint ?? null,
-      sourceKind: event.sourceKind ?? null,
-      sourceId: event.sourceId ?? null,
-      trustDisposition: event.trustDisposition ?? null,
-      poisoningStatus: event.poisoningStatus ?? null,
-      evidenceRefsJson,
-      provenanceJson,
-      summaryJson,
-      occurredAt: event.occurredAt,
-      recordedAt: event.recordedAt,
-    });
-  const storedRow = sql
-    .prepare(
-      `SELECT * FROM governance_journey_events
-       WHERE event_id = @eventId OR idempotency_key = @idempotencyKey
-       ORDER BY CASE WHEN event_id = @eventId THEN 0 ELSE 1 END
-       LIMIT 1`,
-    )
-    .get({ eventId: event.eventId, idempotencyKey: event.idempotencyKey }) as JourneyRow | undefined;
-  const stored = storedRow ? mapJourneyRow(storedRow) : undefined;
-  if (
-    !stored ||
-    storedRow?.evidence_refs_json !== evidenceRefsJson ||
-    storedRow.provenance_json !== provenanceJson ||
-    storedRow.summary_json !== summaryJson ||
-    canonicalJsonString(stored) !== canonicalJsonString(event)
-  ) {
-    throw new ConflictError({
-      code: "WRITE_CONFLICT",
-      message: `Approved memory Journey event ${event.eventId} conflicts with immutable evidence.`,
-    });
-  }
-  return stored;
+/** Fail-closed parse of the immutable `memoryLifecycle` approval binding from an approval payload. */
+export function parseMemoryLifecycleApprovalBinding(value: unknown): MemoryLifecycleApprovalBindingV1 | undefined {
+  return parseBinding(value);
 }
 
 function parseBinding(value: unknown): MemoryLifecycleApprovalBindingV1 | undefined {
@@ -439,39 +372,6 @@ function parseBinding(value: unknown): MemoryLifecycleApprovalBindingV1 | undefi
     return undefined;
   }
   return value as unknown as MemoryLifecycleApprovalBindingV1;
-}
-
-function mapJourneyRow(row: JourneyRow): GovernanceJourneyEventRecord {
-  const event: GovernanceJourneyEventRecord = {
-    schemaVersion: row.schema_version as GovernanceJourneyEventRecord["schemaVersion"],
-    eventId: row.event_id,
-    idempotencyKey: row.idempotency_key,
-    scopeKind: row.scope_kind,
-    workspaceId: row.workspace_id ?? undefined,
-    eventType: row.event_type,
-    subjectKind: row.subject_kind,
-    subjectId: row.subject_id,
-    action: row.action,
-    actorId: row.actor_id,
-    actorType: row.actor_type,
-    sessionId: row.session_id ?? undefined,
-    turnId: row.turn_id ?? undefined,
-    approvalId: row.approval_id ?? undefined,
-    fingerprint: row.fingerprint ?? undefined,
-    sourceKind: row.source_kind ?? undefined,
-    sourceId: row.source_id ?? undefined,
-    trustDisposition: row.trust_disposition ?? undefined,
-    poisoningStatus: row.poisoning_status ?? undefined,
-    evidenceRefs: parseJson(row.evidence_refs_json) as GovernanceJourneyEventRecord["evidenceRefs"],
-    provenance: parseJson(row.provenance_json) as Record<string, unknown>,
-    summary: parseJson(row.summary_json) as Record<string, unknown>,
-    occurredAt: row.occurred_at,
-    recordedAt: row.recorded_at,
-  };
-  if (!isGovernanceJourneyEventRecord(event)) {
-    throw new Error("Stored approved memory Journey event is malformed.");
-  }
-  return event;
 }
 
 function parseRecord(raw: string | null): Record<string, unknown> | undefined {

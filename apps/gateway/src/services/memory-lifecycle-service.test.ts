@@ -1,11 +1,29 @@
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConflictError } from "@goatcitadel/contracts";
 import { createUntrustedContentEnvelope } from "@goatcitadel/policy-engine";
+import { Storage } from "@goatcitadel/storage";
+import { ApprovalEffectsService } from "./approval-resolution-effects-service.js";
+import type { ServiceContext } from "./service-context.js";
+import {
+  buildMemoryItemApprovalStateMaterial,
+  buildMemoryLifecycleApprovalBinding,
+} from "./memory-journey-producer.js";
+import {
+  buildMemoryLifecycleApprovalPayload,
+  deriveMemoryLifecycleApprovalId,
+} from "./memory-domain-journey-producer.js";
 import { MemoryLifecycleService } from "./memory-lifecycle-service.js";
+
+const approvalFirstCleanups: Array<() => void> = [];
+
+afterEach(() => {
+  for (const cleanup of approvalFirstCleanups.splice(0).reverse()) cleanup();
+});
 
 describe("MemoryLifecycleService", () => {
   it("routes context, learned-memory, and maintenance entry points through one owner", async () => {
@@ -218,257 +236,502 @@ describe("MemoryLifecycleService", () => {
     expect(maintenance.syncFromDurableRun).toHaveBeenCalledWith({ runId: "durable-3" });
   });
 
-  it("owns memory item admin list, update, forget, and history flows", () => {
-    const publishRealtime = vi.fn();
-    const requireFeatureEnabled = vi.fn();
-    const row: {
-      item_id: string;
-      namespace: string;
-      title: string;
-      content: string;
-      metadata_json: string;
-      pinned: number;
-      ttl_override_seconds: number | null;
-      expires_at: string | null;
-      status: "active" | "forgotten";
-      created_at: string;
-      updated_at: string;
-      forgotten_at: string | null;
-      workspace_id: string | null;
-    } = {
-      item_id: "item-1",
-      namespace: "workspace.default",
-      title: "Original title",
-      content: "Original content",
-      metadata_json: JSON.stringify({ source: "test" }),
-      pinned: 0,
-      ttl_override_seconds: null,
-      expires_at: null,
-      status: "active",
-      created_at: "2026-04-10T00:00:00.000Z",
-      updated_at: "2026-04-10T00:00:00.000Z",
-      forgotten_at: null,
-      workspace_id: "workspace-default",
-    };
-    const historyRows: Array<{
-      change_id: string;
-      item_id: string;
-      change_type: string;
-      actor_id: string | null;
-      payload_json: string;
-      created_at: string;
-    }> = [];
-    const gatewaySql = {
-      prepare: vi.fn((sql: string) => {
-        if (sql.includes("FROM memory_items") && sql.includes("WHERE item_id = ?")) {
-          return {
-            get: vi.fn(() => ({ ...row })),
-            all: vi.fn(() => []),
-            run: vi.fn(),
-          };
-        }
-        if (sql.includes("FROM memory_items") && sql.includes("WHERE 1 = 1")) {
-          return {
-            get: vi.fn(),
-            all: vi.fn((params: Record<string, unknown>) => {
-              const status = params.status ? String(params.status) : null;
-              const now = params.now ? String(params.now) : null;
-              if (status && row.status !== status) {
-                return [];
-              }
-              if (status === "active" && now && row.expires_at && String(row.expires_at) <= now) {
-                return [];
-              }
-              return [{ ...row }];
-            }),
-            run: vi.fn(),
-          };
-        }
-        if (sql.includes("SELECT COUNT(*) AS count") && sql.includes("FROM memory_items")) {
-          return {
-            get: vi.fn((params: Record<string, unknown>) => ({
-              count: row.status === "active" && row.expires_at && String(row.expires_at) <= String(params.now) ? 1 : 0,
-            })),
-            all: vi.fn(() => []),
-            run: vi.fn(),
-          };
-        }
-        if (sql.includes("retainedPinnedCount") && sql.includes("FROM memory_items")) {
-          return {
-            get: vi.fn((params: Record<string, unknown>) => {
-              const expired = row.status === "active" && row.expires_at && String(row.expires_at) <= String(params.now);
-              return {
-                totalCount: expired ? 1 : 0,
-                retainedPinnedCount: expired && row.pinned === 1 ? 1 : 0,
-              };
-            }),
-            all: vi.fn(() => []),
-            run: vi.fn(),
-          };
-        }
-        if (sql.includes("FROM memory_items") && sql.includes("expires_at <= @now")) {
-          return {
-            get: vi.fn(),
-            all: vi.fn((params: Record<string, unknown>) =>
-              row.status === "active" &&
-              (!sql.includes("AND pinned = 0") || row.pinned === 0) &&
-              row.expires_at &&
-              String(row.expires_at) <= String(params.now)
-                ? [{ ...row }]
-                : [],
-            ),
-            run: vi.fn(),
-          };
-        }
-        if (sql.includes("UPDATE memory_items")) {
-          return {
-            get: vi.fn(),
-            all: vi.fn((params: Record<string, unknown>) => {
-              if (!sql.includes("RETURNING")) {
-                return [];
-              }
-              row.status = "forgotten";
-              row.forgotten_at = String(params.forgottenAt);
-              row.updated_at = String(params.updatedAt ?? row.updated_at);
-              return [{ ...row }];
-            }),
-            run: vi.fn((params: Record<string, unknown>) => {
-              if (params.title !== undefined) {
-                row.title = String(params.title);
-                row.content = String(params.content);
-                row.metadata_json = String(params.metadataJson);
-                row.pinned = Number(params.pinned ?? 0);
-                row.ttl_override_seconds = (params.ttlOverrideSeconds as number | null | undefined) ?? null;
-                row.expires_at = (params.expiresAt as string | null | undefined) ?? null;
-              }
-              if (params.forgottenAt !== undefined) {
-                row.status = "forgotten";
-                row.forgotten_at = String(params.forgottenAt);
-              }
-              row.updated_at = String(params.updatedAt ?? row.updated_at);
-            }),
-          };
-        }
-        if (sql.includes("INSERT INTO memory_change_history")) {
-          return {
-            get: vi.fn(),
-            all: vi.fn(() => []),
-            run: vi.fn((params: Record<string, unknown>) => {
-              historyRows.unshift({
-                change_id: String(params.changeId),
-                item_id: String(params.itemId),
-                change_type: String(params.changeType),
-                actor_id: params.actorId ? String(params.actorId) : null,
-                payload_json: String(params.payloadJson ?? "{}"),
-                created_at: String(params.createdAt),
-              });
-            }),
-          };
-        }
-        if (sql.includes("FROM memory_change_history")) {
-          return {
-            get: vi.fn(),
-            all: vi.fn(() => [...historyRows]),
-            run: vi.fn(),
-          };
-        }
-        throw new Error(`Unexpected SQL in test harness: ${sql}`);
+  // HX-402 P1: every operator memory-item mutation is approval-first. These
+  // tests model the NEW contract (coverage-preserving rewrite of the retired
+  // direct-mutation flows): request -> approve -> recovered effect -> approved
+  // producer, with the P0 governed lifecycle owner as the immutable backstop.
+  it("retires every unapproved item mutation branch behind the approval contract", () => {
+    const harness = createApprovalFirstMemoryHarness("retired-branches");
+    insertApprovalFirstMemoryItem(harness, { itemId: "retired-1" });
+
+    expect(() => harness.service.patchMemoryItem("retired-1", { title: "Direct" }, "operator-1")).toThrow(
+      /retired; request a memory.lifecycle approval/i,
+    );
+    expect(() => harness.service.forgetMemoryItem("retired-1", "operator-1")).toThrow(
+      /retired; request a memory.lifecycle approval/i,
+    );
+    expect(() =>
+      harness.service.forgetMemory({ itemIds: ["retired-1"], workspaceId: harness.workspaceId, actorId: "operator-1" }),
+    ).toThrow(/retired; request a memory.lifecycle approval/i);
+    expect(() =>
+      harness.service.batchMutateMemoryItems(
+        { actionId: "direct-batch", operations: [{ kind: "forget_item", itemId: "retired-1" }] },
+        "operator-1",
+      ),
+    ).toThrow(/retired; request a memory.lifecycle approval/i);
+    expect(countApprovalFirstRows(harness, "memory_change_history")).toBe(0);
+    expect(countApprovalFirstRows(harness, "governed_lifecycle_events")).toBe(0);
+    expect(readApprovalFirstItem(harness, "retired-1")).toMatchObject({ status: "active", title: "Original title" });
+  });
+
+  it("requests, approves, and executes an item patch through the recovered effect with zero pre-approval mutation", () => {
+    const harness = createApprovalFirstMemoryHarness("patch-flow");
+    insertApprovalFirstMemoryItem(harness, { itemId: "patch-1" });
+
+    const envelope = harness.service.requestMemoryItemPatchApproval(
+      "patch-1",
+      { title: "Approved via effect", pinned: true },
+      harness.requesterId,
+    );
+    expect(envelope.pendingApproval).toMatchObject({
+      kind: "memory.lifecycle",
+      action: "item_updated",
+      subjectKind: "memory_item",
+      subjectId: "patch-1",
+      workspaceId: harness.workspaceId,
+      status: "pending",
+      replayed: false,
+      itemIds: ["patch-1"],
+    });
+    // Deterministic payload-hash UUID identity (C4a/M2 discipline).
+    expect(envelope.pendingApproval.approvalId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+    const replay = harness.service.requestMemoryItemPatchApproval(
+      "patch-1",
+      { title: "Approved via effect", pinned: true },
+      harness.requesterId,
+    );
+    expect(replay.pendingApproval.approvalId).toBe(envelope.pendingApproval.approvalId);
+    expect(replay.pendingApproval.replayed).toBe(true);
+
+    // No durable mutation before approval: the item and its history are untouched.
+    expect(readApprovalFirstItem(harness, "patch-1")).toMatchObject({ status: "active", title: "Original title" });
+    expect(countApprovalFirstRows(harness, "memory_change_history")).toBe(0);
+    expect(countApprovalFirstRows(harness, "governed_lifecycle_events")).toBe(0);
+    // The requester Journey evidence commits atomically with the approval.
+    const requestEvidence = harness.storage.governanceJourneyEvents.findByIdempotencyKey(
+      `memory:lifecycle:request:${envelope.pendingApproval.approvalId}`,
+    );
+    expect(requestEvidence).toMatchObject({
+      actorId: harness.requesterId,
+      approvalId: envelope.pendingApproval.approvalId,
+      action: "mutation_requested",
+    });
+
+    // The executor refuses to run before the approval resolves.
+    expect(() =>
+      harness.service.executeApprovedMemoryLifecycleMutation({
+        workspaceId: harness.workspaceId,
+        approvalId: envelope.pendingApproval.approvalId,
       }),
-      runImmediateTransaction: <T>(callback: () => T): T => callback(),
-    };
-    const service = new MemoryLifecycleService({
-      context: {} as never,
-      learned: {} as never,
-      maintenance: {} as never,
-      admin: {
-        gatewaySql,
-        tryParseJson: (raw, fallback) => {
-          try {
-            return raw ? JSON.parse(raw) : fallback;
-          } catch {
-            return fallback;
-          }
-        },
-        requireFeatureEnabled,
-        publishRealtime,
+    ).toThrow(/not approved|missing, foreign/i);
+
+    harness.storage.approvals.resolve(envelope.pendingApproval.approvalId, {
+      decision: "approve",
+      resolvedBy: harness.resolverId,
+    });
+    const applied = harness.service.executeApprovedMemoryLifecycleMutation({
+      workspaceId: harness.workspaceId,
+      approvalId: envelope.pendingApproval.approvalId,
+    });
+    expect(applied).toMatchObject({
+      disposition: "applied",
+      action: "item_updated",
+      subjectId: "patch-1",
+      workspaceId: harness.workspaceId,
+      itemIds: ["patch-1"],
+      changedCount: 1,
+    });
+    expect(readApprovalFirstItem(harness, "patch-1")).toMatchObject({
+      title: "Approved via effect",
+      pinned: 1,
+    });
+    const history = harness.service.listMemoryItemHistory("patch-1");
+    expect(history.map((change) => change.changeType)).toEqual(["updated"]);
+    expect(history[0]?.payload.fieldCodes).toEqual(["pinned", "title"]);
+    expect(history.every((change) => change.actorId === harness.resolverId)).toBe(true);
+    // The governed lifecycle owner carries one immutable twin per history change.
+    expect(countApprovalFirstRows(harness, "governed_lifecycle_events")).toBe(history.length);
+
+    // Replayed execution converges without new evidence.
+    const replayApply = harness.service.executeApprovedMemoryLifecycleMutation({
+      workspaceId: harness.workspaceId,
+      approvalId: envelope.pendingApproval.approvalId,
+    });
+    expect(replayApply.disposition).toBe("no_op");
+    expect(harness.service.listMemoryItemHistory("patch-1")).toHaveLength(history.length);
+  });
+
+  it("treats denial and expiry as zero mutation and fails closed on policy flips and evidence gaps", () => {
+    const harness = createApprovalFirstMemoryHarness("denial-expiry");
+    insertApprovalFirstMemoryItem(harness, { itemId: "deny-1" });
+    const denied = harness.service.requestMemoryItemPatchApproval("deny-1", { title: "Denied" }, harness.requesterId);
+    harness.storage.approvals.resolve(denied.pendingApproval.approvalId, {
+      decision: "reject",
+      resolvedBy: harness.resolverId,
+    });
+    expect(() =>
+      harness.service.executeApprovedMemoryLifecycleMutation({
+        workspaceId: harness.workspaceId,
+        approvalId: denied.pendingApproval.approvalId,
+      }),
+    ).toThrow(/missing, foreign, malformed, or not approved/i);
+    // Denial is a zero mutation: 0-delta storage counts.
+    expect(countApprovalFirstRows(harness, "memory_change_history")).toBe(0);
+    expect(countApprovalFirstRows(harness, "governed_lifecycle_events")).toBe(0);
+    expect(readApprovalFirstItem(harness, "deny-1")).toMatchObject({ status: "active", title: "Original title" });
+
+    // Expired approval cannot execute even after an approve decision.
+    insertApprovalFirstMemoryItem(harness, { itemId: "expire-1" });
+    const expiring = harness.service.requestMemoryItemPatchApproval(
+      "expire-1",
+      { title: "Expiring" },
+      harness.requesterId,
+    );
+    harness.storage.approvals.resolve(expiring.pendingApproval.approvalId, {
+      decision: "approve",
+      resolvedBy: harness.resolverId,
+    });
+    harness.storage.gatewaySql
+      .prepare("UPDATE approvals SET expires_at = @expiresAt WHERE approval_id = @approvalId")
+      .run({ expiresAt: "2020-01-01T00:00:00.000Z", approvalId: expiring.pendingApproval.approvalId });
+    expect(() =>
+      harness.service.executeApprovedMemoryLifecycleMutation({
+        workspaceId: harness.workspaceId,
+        approvalId: expiring.pendingApproval.approvalId,
+      }),
+    ).toThrow(/expired/i);
+    expect(readApprovalFirstItem(harness, "expire-1")).toMatchObject({ title: "Original title" });
+
+    // Policy flip between approve and execute fails closed.
+    insertApprovalFirstMemoryItem(harness, { itemId: "policy-1" });
+    const gated = harness.service.requestMemoryItemPatchApproval("policy-1", { title: "Gated" }, harness.requesterId);
+    harness.storage.approvals.resolve(gated.pendingApproval.approvalId, {
+      decision: "approve",
+      resolvedBy: harness.resolverId,
+    });
+    harness.requireFeatureEnabled.mockImplementationOnce(() => {
+      throw new Error("memoryLifecycleAdminV1Enabled is disabled");
+    });
+    expect(() =>
+      harness.service.executeApprovedMemoryLifecycleMutation({
+        workspaceId: harness.workspaceId,
+        approvalId: gated.pendingApproval.approvalId,
+      }),
+    ).toThrow(/policy blocks/i);
+    expect(readApprovalFirstItem(harness, "policy-1")).toMatchObject({ title: "Original title" });
+
+    // Missing requester Journey evidence fails closed (M2 recovery pattern):
+    // Journey rows are trigger-immutable, so the only way to reach an
+    // evidence-free approval is a foreign writer that never committed request
+    // evidence. Model exactly that.
+    insertApprovalFirstMemoryItem(harness, { itemId: "evidence-1" });
+    const evidenceItem = readApprovalFirstItem(harness, "evidence-1");
+    const evidenceBinding = buildMemoryLifecycleApprovalBinding({
+      workspaceId: harness.workspaceId,
+      subjectKind: "memory_item",
+      subjectId: "evidence-1",
+      action: "item_updated",
+      mutation: { title: "Evidence" },
+      expectedState: buildMemoryItemApprovalStateMaterial({
+        itemId: "evidence-1",
+        namespace: String(evidenceItem.namespace),
+        title: String(evidenceItem.title),
+        content: String(evidenceItem.content),
+        metadata: {},
+        pinned: false,
+        status: "active",
+        lifecycleState: "active",
+        workspaceId: harness.workspaceId,
+        createdAt: String(evidenceItem.created_at),
+        updatedAt: String(evidenceItem.updated_at),
+      }),
+    });
+    const forgedApprovalId = deriveMemoryLifecycleApprovalId(evidenceBinding);
+    harness.storage.approvals.createDeterministicDetachedWithTtlDuration(
+      {
+        approvalId: forgedApprovalId,
+        kind: "memory.lifecycle",
+        riskLevel: "danger",
+        payload: buildMemoryLifecycleApprovalPayload({
+          binding: evidenceBinding,
+          requesterId: harness.requesterId,
+          mutation: { title: "Evidence" },
+        }),
+        preview: { title: "Evidence-free approval" },
+        linkage: { workspaceId: harness.workspaceId },
       },
-      resolveLearnedMemoryPolicy: vi.fn(() => ({ allowWrite: true, reason: "allowed" })),
-      readTranscriptOrEmpty: vi.fn(async () => []),
+      15 * 60_000,
+    );
+    harness.storage.approvals.resolve(forgedApprovalId, {
+      decision: "approve",
+      resolvedBy: harness.resolverId,
     });
+    expect(() =>
+      harness.service.executeApprovedMemoryLifecycleMutation({
+        workspaceId: harness.workspaceId,
+        approvalId: forgedApprovalId,
+      }),
+    ).toThrow(/request Journey evidence/i);
+    expect(readApprovalFirstItem(harness, "evidence-1")).toMatchObject({ title: "Original title" });
+  });
 
-    expect(service.listMemoryItems()).toHaveLength(1);
-    const updated = service.patchMemoryItem("item-1", { title: "Updated title", pinned: true }, "operator-1");
-    expect(updated).toMatchObject({
-      itemId: "item-1",
-      title: "Updated title",
+  it("resolves forget criteria at request time, executes atomically, and settles empty matches as pure no-ops", () => {
+    const harness = createApprovalFirstMemoryHarness("forget-flow");
+    insertApprovalFirstMemoryItem(harness, { itemId: "forget-1", namespace: "ns.alpha" });
+    insertApprovalFirstMemoryItem(harness, { itemId: "forget-2", namespace: "ns.alpha" });
+    insertApprovalFirstMemoryItem(harness, { itemId: "keep-1", namespace: "ns.beta" });
+
+    // Zero-match criteria emit nothing: no approval, no evidence, no mutation.
+    const noOp = harness.service.requestMemoryForgetApproval({
+      namespace: "ns.missing",
+      workspaceId: harness.workspaceId,
+      requesterId: harness.requesterId,
+    });
+    expect(noOp).toMatchObject({ pendingApproval: null, noMutationRequired: true, matchedCount: 0 });
+    expect(countApprovalFirstRows(harness, "approvals")).toBe(0);
+
+    const envelope = harness.service.requestMemoryForgetApproval({
+      namespace: "ns.alpha",
+      workspaceId: harness.workspaceId,
+      requesterId: harness.requesterId,
+    });
+    if (!envelope.pendingApproval) throw new Error("expected a pending forget approval");
+    expect(envelope.pendingApproval).toMatchObject({
+      action: "items_forgotten",
+      subjectKind: "memory_item_batch",
+      itemIds: ["forget-1", "forget-2"],
+    });
+    expect(readApprovalFirstItem(harness, "forget-1").status).toBe("active");
+
+    harness.storage.approvals.resolve(envelope.pendingApproval.approvalId, {
+      decision: "approve",
+      resolvedBy: harness.resolverId,
+    });
+    const applied = harness.service.executeApprovedMemoryLifecycleMutation({
+      workspaceId: harness.workspaceId,
+      approvalId: envelope.pendingApproval.approvalId,
+    });
+    expect(applied).toMatchObject({ disposition: "applied", action: "items_forgotten", changedCount: 2 });
+    expect(readApprovalFirstItem(harness, "forget-1").status).toBe("forgotten");
+    expect(readApprovalFirstItem(harness, "forget-2").status).toBe("forgotten");
+    expect(readApprovalFirstItem(harness, "keep-1").status).toBe("active");
+  });
+
+  it("conflicts on material drift between approval review and execution", () => {
+    const harness = createApprovalFirstMemoryHarness("drift");
+    insertApprovalFirstMemoryItem(harness, { itemId: "drift-1" });
+    const envelope = harness.service.requestMemoryItemPatchApproval(
+      "drift-1",
+      { title: "Reviewed title" },
+      harness.requesterId,
+    );
+    harness.storage.approvals.resolve(envelope.pendingApproval.approvalId, {
+      decision: "approve",
+      resolvedBy: harness.resolverId,
+    });
+    // The reviewed state drifts before the effect executes.
+    harness.storage.gatewaySql
+      .prepare("UPDATE memory_items SET content = @content, updated_at = @updatedAt WHERE item_id = @itemId")
+      .run({ content: "drifted content", updatedAt: "2026-07-15T00:00:00.000Z", itemId: "drift-1" });
+    expect(() =>
+      harness.service.executeApprovedMemoryLifecycleMutation({
+        workspaceId: harness.workspaceId,
+        approvalId: envelope.pendingApproval.approvalId,
+      }),
+    ).toThrow(/conflicts with canonical state/i);
+    expect(readApprovalFirstItem(harness, "drift-1")).toMatchObject({ title: "Original title" });
+    expect(countApprovalFirstRows(harness, "memory_change_history")).toBe(0);
+
+    // Requesting again over the drifted state derives a DIFFERENT approval id
+    // (the expected-state hash is identity material).
+    const redo = harness.service.requestMemoryItemPatchApproval(
+      "drift-1",
+      { title: "Reviewed title" },
+      harness.requesterId,
+    );
+    expect(redo.pendingApproval.approvalId).not.toBe(envelope.pendingApproval.approvalId);
+  });
+
+  it("applies approved batches atomically with sanitized ledger evidence and enforces batch preconditions", () => {
+    const harness = createApprovalFirstMemoryHarness("batch-flow");
+    insertApprovalFirstMemoryItem(harness, { itemId: "batch-1" });
+    insertApprovalFirstMemoryItem(harness, { itemId: "batch-2" });
+
+    // The service-boundary operation limit still holds at request time.
+    expect(() =>
+      harness.service.requestMemoryBatchMutationApproval(
+        {
+          operations: Array.from({ length: 101 }, (_, index) => ({
+            kind: "forget_item" as const,
+            itemId: `batch-overflow-${index}`,
+          })),
+        },
+        harness.requesterId,
+      ),
+    ).toThrow(/operations/i);
+    // Duplicate targets are rejected before any approval exists.
+    expect(() =>
+      harness.service.requestMemoryBatchMutationApproval(
+        {
+          operations: [
+            { kind: "forget_item", itemId: "batch-1" },
+            { kind: "forget_item", itemId: "batch-1" },
+          ],
+        },
+        harness.requesterId,
+      ),
+    ).toThrow(/distinct items/i);
+
+    const envelope = harness.service.requestMemoryBatchMutationApproval(
+      {
+        actionId: "batch-approved-1",
+        source: "operator-ui",
+        operations: [
+          {
+            kind: "patch_item",
+            itemId: "batch-1",
+            patch: {
+              title: "Updated batch title",
+              metadata: { token: "sk-should-not-enter-ledger" },
+              pinned: true,
+            },
+          },
+          { kind: "forget_item", itemId: "batch-2" },
+        ],
+      },
+      harness.requesterId,
+    );
+    expect(envelope.pendingApproval).toMatchObject({
+      action: "batch_mutated",
+      subjectKind: "memory_item_batch",
+      itemIds: ["batch-1", "batch-2"],
+    });
+    expect(readApprovalFirstItem(harness, "batch-1")).toMatchObject({ title: "Original title" });
+
+    harness.storage.approvals.resolve(envelope.pendingApproval.approvalId, {
+      decision: "approve",
+      resolvedBy: harness.resolverId,
+    });
+    const response = harness.service.batchMutateMemoryItems(
+      {
+        actionId: "batch-approved-1",
+        source: "operator-ui",
+        operations: [
+          {
+            kind: "patch_item",
+            itemId: "batch-1",
+            patch: {
+              title: "Updated batch title",
+              metadata: { token: "sk-should-not-enter-ledger" },
+              pinned: true,
+            },
+          },
+          { kind: "forget_item", itemId: "batch-2" },
+        ],
+      },
+      harness.resolverId,
+      { approvalId: envelope.pendingApproval.approvalId },
+    );
+    expect(response).toMatchObject({
+      actionId: "batch-approved-1",
+      status: "applied",
+      appliedCount: 2,
+      targetItemIds: ["batch-1", "batch-2"],
+      ledger: {
+        actionId: "batch-approved-1",
+        ownerId: harness.resolverId,
+        operationKind: "mixed",
+        operationCount: 2,
+        evidence: { storesRawContent: false },
+      },
+    });
+    expect(readApprovalFirstItem(harness, "batch-1")).toMatchObject({ title: "Updated batch title", pinned: 1 });
+    expect(readApprovalFirstItem(harness, "batch-2")).toMatchObject({ status: "forgotten" });
+    expect(JSON.stringify(response.ledger)).not.toContain("Updated batch title");
+    expect(JSON.stringify(response.ledger)).not.toContain("sk-should-not-enter-ledger");
+    const historyPayloads = harness.service.listMemoryItemHistory("batch-1").map((change) => change.payload);
+    expect(JSON.stringify(historyPayloads)).not.toContain("Updated batch title");
+    expect(JSON.stringify(historyPayloads)).not.toContain("sk-should-not-enter-ledger");
+    expect(harness.publishRealtime).toHaveBeenCalledWith(
+      "system",
+      "memory",
+      expect.objectContaining({ type: "memory_batch_mutation_applied", actionId: "batch-approved-1", appliedCount: 2 }),
+    );
+    // Batch governed events land under one batch target in the P0 owner.
+    const batchEvents = harness.storage.gatewaySql
+      .prepare("SELECT COUNT(*) AS count FROM governed_lifecycle_events WHERE target_kind = 'memory_batch'")
+      .get() as { count?: number };
+    expect(Number(batchEvents.count)).toBe(2);
+  });
+
+  it("rolls the whole approved batch back to zero deltas when any target drifted after review", () => {
+    const harness = createApprovalFirstMemoryHarness("batch-drift");
+    insertApprovalFirstMemoryItem(harness, { itemId: "batch-a" });
+    insertApprovalFirstMemoryItem(harness, { itemId: "batch-b" });
+    const envelope = harness.service.requestMemoryBatchMutationApproval(
+      {
+        actionId: "batch-drift-1",
+        operations: [
+          { kind: "patch_item", itemId: "batch-a", patch: { title: "New A" } },
+          { kind: "forget_item", itemId: "batch-b" },
+        ],
+      },
+      harness.requesterId,
+    );
+    harness.storage.approvals.resolve(envelope.pendingApproval.approvalId, {
+      decision: "approve",
+      resolvedBy: harness.resolverId,
+    });
+    harness.storage.gatewaySql
+      .prepare("UPDATE memory_items SET content = @content, updated_at = @updatedAt WHERE item_id = @itemId")
+      .run({ content: "post-review drift", updatedAt: "2026-07-15T00:00:00.000Z", itemId: "batch-b" });
+
+    expect(() =>
+      harness.service.executeApprovedMemoryLifecycleMutation({
+        workspaceId: harness.workspaceId,
+        approvalId: envelope.pendingApproval.approvalId,
+      }),
+    ).toThrow(/conflicts with canonical state/i);
+    // All-or-nothing: neither target mutated, no history, no governed events.
+    expect(readApprovalFirstItem(harness, "batch-a")).toMatchObject({ title: "Original title" });
+    expect(readApprovalFirstItem(harness, "batch-b")).toMatchObject({ status: "active" });
+    expect(countApprovalFirstRows(harness, "memory_change_history")).toBe(0);
+    expect(countApprovalFirstRows(harness, "governed_lifecycle_events")).toBe(0);
+  });
+
+  it("runs the expiry flush under the unforgeable system authority with governed maintenance evidence", () => {
+    const harness = createApprovalFirstMemoryHarness("system-expiry");
+    insertApprovalFirstMemoryItem(harness, {
+      itemId: "expired-unpinned",
+      expiresAt: "2026-01-01T00:00:00.000Z",
+    });
+    insertApprovalFirstMemoryItem(harness, {
+      itemId: "expired-pinned",
+      expiresAt: "2026-01-01T00:00:00.000Z",
       pinned: true,
-      lifecycleState: "active",
     });
 
-    const ttlUpdated = service.patchMemoryItem("item-1", { ttlOverrideSeconds: 3600 }, "operator-1");
-    expect(ttlUpdated.ttlOverrideSeconds).toBe(3600);
-    expect(ttlUpdated.expiresAt).toBeTruthy();
-    expect(ttlUpdated.lifecycleState).toBe("active");
+    const flushed = harness.service.forgetExpiredActiveMemoryItems({ nowIso: "2026-02-01T00:00:00.000Z" });
+    expect(flushed.forgottenItems.map((item) => item.itemId)).toEqual(["expired-unpinned"]);
+    expect(flushed.retainedPinnedCount).toBe(1);
+    expect(readApprovalFirstItem(harness, "expired-pinned").status).toBe("active");
 
-    row.expires_at = "2026-04-09T23:00:00.000Z";
-    expect(service.listMemoryItems({ status: "all" })).toHaveLength(1);
-    expect(service.listMemoryItems({ status: "active" })).toHaveLength(0);
-    const expiredSnapshot = service.inspectExpiredActiveMemoryItems({
-      nowIso: "2026-04-10T01:00:00.000Z",
-      limit: 10,
+    const history = harness.service.listMemoryItemHistory("expired-unpinned");
+    expect(history).toHaveLength(1);
+    expect(history[0]).toMatchObject({
+      changeType: "forgotten",
+      actorId: "system:memory-maintenance",
+      payload: expect.objectContaining({ systemAuthority: "memory_maintenance" }),
     });
-    expect(expiredSnapshot.totalCount).toBe(1);
-    expect(expiredSnapshot.items[0]).toMatchObject({
-      itemId: "item-1",
-      lifecycleState: "expired",
+    const governed = harness.storage.gatewaySql
+      .prepare("SELECT * FROM governed_lifecycle_events WHERE operation = 'maintenance_expired'")
+      .all() as Array<Record<string, unknown>>;
+    expect(governed).toHaveLength(1);
+    expect(governed[0]).toMatchObject({
+      domain: "memory",
+      target_id: "expired-unpinned",
+      actor_type: "system",
+      actor_id: "system:memory-maintenance",
+      approval_id: null,
     });
-
-    const pinnedFlush = service.forgetExpiredActiveMemoryItems({
-      nowIso: "2026-04-10T01:00:00.000Z",
-      limit: 10,
-    });
-    expect(pinnedFlush).toMatchObject({
-      totalCount: 1,
-      retainedPinnedCount: 1,
-      forgottenItems: [],
-    });
-
-    row.pinned = 0;
-    const autoForgotten = service.forgetExpiredActiveMemoryItems({
-      nowIso: "2026-04-10T01:00:00.000Z",
-      limit: 10,
-      actorId: "memory-flush-test",
-    });
-    expect(autoForgotten.forgottenItems[0]).toMatchObject({
-      itemId: "item-1",
-      status: "forgotten",
-      lifecycleState: "forgotten",
-    });
-
-    row.status = "active";
-    row.forgotten_at = null;
-    const forgotten = service.forgetMemoryItem("item-1", "operator-1");
-    expect(forgotten).toMatchObject({
-      itemId: "item-1",
-      status: "forgotten",
-      lifecycleState: "forgotten",
-    });
-
-    const history = service.listMemoryItemHistory("item-1");
-    expect(history.map((item) => item.changeType)).toEqual(
-      expect.arrayContaining(["pin_changed", "updated", "forgotten"]),
-    );
-    expect(requireFeatureEnabled).toHaveBeenCalledWith("memoryLifecycleAdminV1Enabled");
-    expect(publishRealtime).toHaveBeenCalledWith(
-      "system",
-      "memory",
-      expect.objectContaining({ type: "memory_item_updated", itemId: "item-1", lifecycleState: "active" }),
-    );
-    expect(publishRealtime).toHaveBeenCalledWith(
-      "system",
-      "memory",
-      expect.objectContaining({ type: "memory_item_forgotten", itemId: "item-1" }),
-    );
+    // The governed owner is trigger-immutable in this dialect (P0 backstop).
+    expect(() =>
+      harness.storage.gatewaySql
+        .prepare("UPDATE governed_lifecycle_events SET actor_id = 'forged' WHERE operation = 'maintenance_expired'")
+        .run(),
+    ).toThrow(/immutable|not allowed|update/i);
   });
 
   it("scopes item listing and quality scans before the result limit", () => {
@@ -657,13 +920,8 @@ describe("MemoryLifecycleService", () => {
       expect(expiredLedger.retainedPinnedItems).toEqual([
         expect.objectContaining({ itemId: "expired-pinned-a", workspaceId: "workspace-a" }),
       ]);
-      const forgotten = service.forgetExpiredActiveMemoryItems({
-        nowIso: "2026-04-01T00:00:00.000Z",
-        actorId: "workspace-scope-test",
-      });
-      expect(forgotten.forgottenItems).toEqual([
-        expect.objectContaining({ itemId: "expired-unpinned-a", workspaceId: "workspace-a", status: "forgotten" }),
-      ]);
+      // HX-402 P1: the expiry flush itself now writes governed system evidence
+      // and is covered by the approval-first suite's system-authority test.
     } finally {
       db.close();
     }
@@ -790,160 +1048,9 @@ describe("MemoryLifecycleService", () => {
     },
   );
 
-  it("applies batch memory item mutations with sanitized reversible ledger evidence", () => {
-    const harness = createMemoryItemBatchHarness();
-
-    const response = harness.service.batchMutateMemoryItems(
-      {
-        actionId: "batch-1",
-        source: "operator-ui",
-        operations: [
-          {
-            kind: "patch_item",
-            itemId: "item-1",
-            patch: {
-              title: "Updated batch title",
-              metadata: { token: "sk-should-not-enter-ledger" },
-              pinned: true,
-            },
-          },
-          {
-            kind: "forget_item",
-            itemId: "item-2",
-          },
-        ],
-      },
-      "operator-1",
-    );
-
-    expect(response).toMatchObject({
-      actionId: "batch-1",
-      status: "applied",
-      appliedCount: 2,
-      targetItemIds: ["item-1", "item-2"],
-      ledger: {
-        actionId: "batch-1",
-        ownerId: "operator-1",
-        source: "operator-ui",
-        status: "applied",
-        operationKind: "mixed",
-        operationCount: 2,
-        evidence: {
-          storesRawContent: false,
-          changedFields: {
-            "item-1": ["metadata", "pinned", "title"],
-          },
-        },
-      },
-    });
-    expect(harness.rows.get("item-1")).toMatchObject({
-      title: "Updated batch title",
-      pinned: 1,
-    });
-    expect(harness.rows.get("item-2")).toMatchObject({
-      status: "forgotten",
-    });
-    expect(JSON.stringify(response.ledger)).not.toContain("Updated batch title");
-    expect(JSON.stringify(response.ledger)).not.toContain("sk-should-not-enter-ledger");
-
-    const itemHistory = harness.service.listMemoryItemHistory("item-1");
-    expect(itemHistory[0]).toMatchObject({
-      itemId: "item-1",
-      changeType: "updated",
-      actorId: "operator-1",
-      payload: {
-        actionId: "batch-1",
-        ownerId: "operator-1",
-        source: "operator-ui",
-        status: "applied",
-        operationKind: "patch_item",
-        changedFields: ["metadata", "pinned", "title"],
-        storesRawContent: false,
-      },
-    });
-    expect(JSON.stringify(itemHistory[0]?.payload)).not.toContain("Updated batch title");
-    expect(JSON.stringify(itemHistory[0]?.payload)).not.toContain("sk-should-not-enter-ledger");
-    expect(harness.publishRealtime).toHaveBeenCalledWith(
-      "system",
-      "memory",
-      expect.objectContaining({
-        type: "memory_batch_mutation_applied",
-        actionId: "batch-1",
-        appliedCount: 2,
-      }),
-    );
-  });
-
-  it("rolls back every batch memory mutation when a transactional write fails", () => {
-    const harness = createMemoryItemBatchHarness({ throwOnUpdateNumber: 2 });
-
-    expect(() =>
-      harness.service.batchMutateMemoryItems(
-        {
-          actionId: "batch-rollback",
-          operations: [
-            { kind: "patch_item", itemId: "item-1", patch: { title: "Should roll back" } },
-            { kind: "patch_item", itemId: "item-2", patch: { title: "Throws on second update" } },
-          ],
-        },
-        "operator-1",
-      ),
-    ).toThrow("Simulated transactional update failure");
-
-    expect(harness.rows.get("item-1")).toMatchObject({
-      title: "Original item 1",
-      pinned: 0,
-    });
-    expect(harness.rows.get("item-2")).toMatchObject({
-      title: "Original item 2",
-      pinned: 0,
-      status: "active",
-    });
-    expect(harness.historyRows).toHaveLength(0);
-    expect(harness.publishRealtime).not.toHaveBeenCalled();
-  });
-
-  it("fails closed instead of applying a batch when transactional storage is unavailable", () => {
-    const harness = createMemoryItemBatchHarness({ includeTransaction: false });
-
-    expect(() =>
-      harness.service.batchMutateMemoryItems(
-        {
-          actionId: "batch-no-transaction",
-          operations: [{ kind: "patch_item", itemId: "item-1", patch: { title: "Should not apply" } }],
-        },
-        "operator-1",
-      ),
-    ).toThrow("Atomic memory batch mutations require transactional gateway storage.");
-
-    expect(harness.rows.get("item-1")).toMatchObject({
-      title: "Original item 1",
-      pinned: 0,
-    });
-    expect(harness.historyRows).toHaveLength(0);
-    expect(harness.publishRealtime).not.toHaveBeenCalled();
-  });
-
-  it("enforces the memory batch operation limit at the service boundary", () => {
-    const harness = createMemoryItemBatchHarness();
-
-    expect(() =>
-      harness.service.batchMutateMemoryItems(
-        {
-          operations: Array.from({ length: 101 }, () => ({
-            kind: "forget_item" as const,
-            itemId: "item-1",
-          })),
-        },
-        "operator-1",
-      ),
-    ).toThrow(/operations/i);
-
-    expect(harness.rows.get("item-1")).toMatchObject({
-      status: "active",
-    });
-    expect(harness.historyRows).toHaveLength(0);
-  });
+  // HX-402 P1: the retired direct-batch flows are covered by the approval-first
+  // suite above (approved batch apply, batch drift rollback, request-time
+  // operation limit, and the no-transaction fail-closed guard).
 
   it("owns operator-facing memory file listing", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "gc-memory-lifecycle-"));
@@ -1587,7 +1694,7 @@ describe("MemoryLifecycleService", () => {
       learned: {} as never,
       maintenance: {} as never,
       admin: {
-        gatewaySql: database as never,
+        gatewaySql: wrapDatabaseSyncAsGatewaySql(database) as never,
         tryParseJson: vi.fn((raw, fallback) => {
           try {
             return raw ? JSON.parse(String(raw)) : fallback;
@@ -1725,7 +1832,7 @@ describe("MemoryLifecycleService", () => {
       learned: {} as never,
       maintenance: {} as never,
       admin: {
-        gatewaySql: database as never,
+        gatewaySql: wrapDatabaseSyncAsGatewaySql(database) as never,
         tryParseJson: vi.fn((raw, fallback) => {
           try {
             return raw ? JSON.parse(String(raw)) : fallback;
@@ -1861,6 +1968,30 @@ describe("MemoryLifecycleService", () => {
     }
   });
 });
+
+/**
+ * HX-402 P1: structured/learning mutations run inside one immediate
+ * transaction. DatabaseSync-backed harnesses get a real BEGIN/COMMIT wrapper
+ * so atomic supersede/promote paths exercise genuine rollback semantics.
+ */
+function wrapDatabaseSyncAsGatewaySql(database: DatabaseSync) {
+  return {
+    dialect: "sqlite" as const,
+    prepare: (sql: string) => database.prepare(sql),
+    exec: (sql: string) => database.exec(sql),
+    runImmediateTransaction<T>(callback: () => T): T {
+      database.exec("BEGIN IMMEDIATE");
+      try {
+        const result = callback();
+        database.exec("COMMIT");
+        return result;
+      } catch (error) {
+        database.exec("ROLLBACK");
+        throw error;
+      }
+    },
+  };
+}
 
 function createStructuredMemorySqlHarness() {
   const entities = new Map<string, Record<string, unknown>>();
@@ -2020,187 +2151,12 @@ function createStructuredMemorySqlHarness() {
         },
       };
     },
-  };
-}
-
-type MemoryItemBatchTestRow = {
-  item_id: string;
-  namespace: string;
-  title: string;
-  content: string;
-  metadata_json: string;
-  pinned: number;
-  ttl_override_seconds: number | null;
-  expires_at: string | null;
-  status: "active" | "forgotten";
-  created_at: string;
-  updated_at: string;
-  forgotten_at: string | null;
-};
-
-type MemoryItemBatchHistoryRow = {
-  change_id: string;
-  item_id: string;
-  change_type: string;
-  actor_id: string | null;
-  payload_json: string;
-  created_at: string;
-};
-
-function createMemoryItemBatchHarness(options: { throwOnUpdateNumber?: number; includeTransaction?: boolean } = {}) {
-  const rows = new Map<string, MemoryItemBatchTestRow>(
-    [
-      {
-        item_id: "item-1",
-        namespace: "workspace.default",
-        title: "Original item 1",
-        content: "Original content 1",
-        metadata_json: JSON.stringify({ source: "test-1" }),
-        pinned: 0,
-        ttl_override_seconds: null,
-        expires_at: null,
-        status: "active",
-        created_at: "2026-04-10T00:00:00.000Z",
-        updated_at: "2026-04-10T00:00:00.000Z",
-        forgotten_at: null,
-      },
-      {
-        item_id: "item-2",
-        namespace: "workspace.default",
-        title: "Original item 2",
-        content: "Original content 2",
-        metadata_json: JSON.stringify({ source: "test-2" }),
-        pinned: 0,
-        ttl_override_seconds: null,
-        expires_at: null,
-        status: "active",
-        created_at: "2026-04-10T00:00:00.000Z",
-        updated_at: "2026-04-10T00:00:00.000Z",
-        forgotten_at: null,
-      },
-    ].map((row) => [row.item_id, row]),
-  );
-  const historyRows: MemoryItemBatchHistoryRow[] = [];
-  const publishRealtime = vi.fn();
-  const requireFeatureEnabled = vi.fn();
-  let updateRunCount = 0;
-
-  const gatewaySql: {
-    prepare: ReturnType<typeof vi.fn>;
-    runImmediateTransaction?: <T>(callback: () => T) => T;
-  } = {
-    prepare: vi.fn((sql: string) => {
-      if (sql.includes("FROM memory_items") && sql.includes("WHERE item_id = ?")) {
-        return {
-          get: vi.fn((itemId: string) => {
-            const row = rows.get(itemId);
-            return row ? { ...row } : undefined;
-          }),
-          all: vi.fn(() => []),
-          run: vi.fn(),
-        };
-      }
-      if (sql.includes("UPDATE memory_items")) {
-        return {
-          get: vi.fn(),
-          all: vi.fn(() => []),
-          run: vi.fn((params: Record<string, unknown>) => {
-            updateRunCount += 1;
-            if (options.throwOnUpdateNumber === updateRunCount) {
-              throw new Error("Simulated transactional update failure");
-            }
-            const row = rows.get(String(params.itemId));
-            if (!row) {
-              return;
-            }
-            if (params.title !== undefined) {
-              row.title = String(params.title);
-              row.content = String(params.content);
-              row.metadata_json = String(params.metadataJson);
-              row.pinned = Number(params.pinned ?? 0);
-              row.ttl_override_seconds = (params.ttlOverrideSeconds as number | null | undefined) ?? null;
-              row.expires_at = (params.expiresAt as string | null | undefined) ?? null;
-            }
-            if (params.forgottenAt !== undefined) {
-              row.status = "forgotten";
-              row.forgotten_at = String(params.forgottenAt);
-            }
-            row.updated_at = String(params.updatedAt ?? row.updated_at);
-          }),
-        };
-      }
-      if (sql.includes("INSERT INTO memory_change_history")) {
-        return {
-          get: vi.fn(),
-          all: vi.fn(() => []),
-          run: vi.fn((params: Record<string, unknown>) => {
-            historyRows.unshift({
-              change_id: String(params.changeId),
-              item_id: String(params.itemId),
-              change_type: String(params.changeType),
-              actor_id: params.actorId ? String(params.actorId) : null,
-              payload_json: String(params.payloadJson ?? "{}"),
-              created_at: String(params.createdAt),
-            });
-          }),
-        };
-      }
-      if (sql.includes("FROM memory_change_history")) {
-        return {
-          get: vi.fn(),
-          all: vi.fn((itemId: string, limit: number) =>
-            historyRows.filter((row) => row.item_id === itemId).slice(0, limit),
-          ),
-          run: vi.fn(),
-        };
-      }
-      throw new Error(`Unexpected SQL in batch test harness: ${sql}`);
-    }),
-  };
-
-  if (options.includeTransaction !== false) {
-    gatewaySql.runImmediateTransaction = vi.fn(<T>(callback: () => T): T => {
-      const rowSnapshot = new Map(Array.from(rows.entries()).map(([key, row]) => [key, { ...row }]));
-      const historySnapshot = historyRows.map((row) => ({ ...row }));
-      try {
-        return callback();
-      } catch (error) {
-        rows.clear();
-        for (const [key, row] of rowSnapshot.entries()) {
-          rows.set(key, row);
-        }
-        historyRows.splice(0, historyRows.length, ...historySnapshot);
-        throw error;
-      }
-    });
-  }
-
-  const service = new MemoryLifecycleService({
-    context: {} as never,
-    learned: {} as never,
-    maintenance: {} as never,
-    admin: {
-      gatewaySql: gatewaySql as never,
-      tryParseJson: (raw, fallback) => {
-        try {
-          return raw ? JSON.parse(raw) : fallback;
-        } catch {
-          return fallback;
-        }
-      },
-      requireFeatureEnabled,
-      publishRealtime,
+    // HX-402 P1: structured writes commit record + history in one transaction.
+    // The map-backed harness has no real transaction; atomicity itself is
+    // proven by the Storage-backed lifecycle tests.
+    runImmediateTransaction<T>(callback: () => T): T {
+      return callback();
     },
-    resolveLearnedMemoryPolicy: vi.fn(() => ({ allowWrite: true, reason: "allowed" })),
-    readTranscriptOrEmpty: vi.fn(async () => []),
-  });
-
-  return {
-    service,
-    rows,
-    historyRows,
-    publishRealtime,
-    requireFeatureEnabled,
   };
 }
 
@@ -2219,3 +2175,242 @@ function filterStructuredRows(
     return predicate(row);
   });
 }
+
+interface ApprovalFirstMemoryHarness {
+  storage: Storage;
+  service: MemoryLifecycleService;
+  workspaceId: string;
+  requesterId: string;
+  resolverId: string;
+  publishRealtime: ReturnType<typeof vi.fn>;
+  requireFeatureEnabled: ReturnType<typeof vi.fn>;
+}
+
+/**
+ * HX-402 P1 approval-first harness: real Storage (approvals, Journey, the P0
+ * governed lifecycle owner with immutability triggers) behind the service's
+ * canonical dependency shape.
+ */
+function createApprovalFirstMemoryHarness(label: string): ApprovalFirstMemoryHarness {
+  const root = fsSync.mkdtempSync(path.join(os.tmpdir(), `goatcitadel-memory-approval-${label}-`));
+  const storage = new Storage({
+    dbPath: ":memory:",
+    transcriptsDir: path.join(root, "transcripts"),
+    auditDir: path.join(root, "audit"),
+  });
+  approvalFirstCleanups.push(() => {
+    storage.close();
+    fsSync.rmSync(root, { recursive: true, force: true });
+  });
+  const publishRealtime = vi.fn();
+  const requireFeatureEnabled = vi.fn();
+  const service = new MemoryLifecycleService({
+    context: {} as never,
+    learned: {} as never,
+    maintenance: {} as never,
+    admin: {
+      gatewaySql: storage.gatewaySql,
+      tryParseJson: <T>(raw: string | null | undefined, fallback: T): T => {
+        try {
+          return raw ? (JSON.parse(raw) as T) : fallback;
+        } catch {
+          return fallback;
+        }
+      },
+      memoryQualityIssues: storage.memoryQualityIssues,
+      requireFeatureEnabled,
+      publishRealtime,
+    },
+    approvalAuthority: {
+      approvals: storage.approvals,
+      approvalEvents: storage.approvalEvents,
+      governanceJourneyEvents: storage.governanceJourneyEvents,
+    },
+    resolveLearnedMemoryPolicy: vi.fn(() => ({ allowWrite: true, reason: "allowed" })),
+    readTranscriptOrEmpty: vi.fn(async () => []),
+  });
+  return {
+    storage,
+    service,
+    workspaceId: "workspace-approval-first",
+    requesterId: "operator-requester",
+    resolverId: "operator-resolver",
+    publishRealtime,
+    requireFeatureEnabled,
+  };
+}
+
+function insertApprovalFirstMemoryItem(
+  harness: ApprovalFirstMemoryHarness,
+  input: { itemId: string; namespace?: string; expiresAt?: string; pinned?: boolean },
+): void {
+  harness.storage.gatewaySql
+    .prepare(
+      `INSERT INTO memory_items (
+         item_id, namespace, title, content, metadata_json, pinned, ttl_override_seconds,
+         expires_at, status, created_at, updated_at, forgotten_at, workspace_id
+       ) VALUES (
+         @itemId, @namespace, 'Original title', 'Original content', '{}', @pinned, NULL,
+         @expiresAt, 'active', '2026-07-13T00:00:00.000Z', '2026-07-13T00:00:00.000Z', NULL, @workspaceId
+       )`,
+    )
+    .run({
+      itemId: input.itemId,
+      namespace: input.namespace ?? "workspace.preferences",
+      pinned: input.pinned ? 1 : 0,
+      expiresAt: input.expiresAt ?? null,
+      workspaceId: harness.workspaceId,
+    });
+}
+
+function readApprovalFirstItem(harness: ApprovalFirstMemoryHarness, itemId: string): Record<string, unknown> {
+  const row = harness.storage.gatewaySql.prepare("SELECT * FROM memory_items WHERE item_id = ?").get(itemId) as
+    | Record<string, unknown>
+    | undefined;
+  if (!row) throw new Error(`Missing approval-first test item ${itemId}.`);
+  return row;
+}
+
+function countApprovalFirstRows(harness: ApprovalFirstMemoryHarness, table: string): number {
+  const row = harness.storage.gatewaySql.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as
+    | { count?: number }
+    | undefined;
+  return Number(row?.count ?? 0);
+}
+
+describe("memory lifecycle approval resolution effect", () => {
+  function createEffectsService(harness: ApprovalFirstMemoryHarness) {
+    const backgroundTasks = new Set<Promise<void>>();
+    const effectsService = new ApprovalEffectsService(
+      { storage: harness.storage, publishRealtime: vi.fn() } as unknown as ServiceContext,
+      {
+        backgroundTasks,
+        wakeDurableRun: vi.fn(() => ({ outcome: "not_found" }) as never),
+        requestRunProcessing: vi.fn(),
+        findProactiveDurableRunIdsForApproval: vi.fn(() => []),
+        executeCodeModePendingApproval: vi.fn(),
+        executeApprovedPendingAction: vi.fn(),
+        enqueueAfterHooks: vi.fn(),
+        resolveApprovalHookWorkspaceId: vi.fn(() => harness.workspaceId),
+        executeApprovedMemoryLifecycleMutation: (input) =>
+          harness.service.executeApprovedMemoryLifecycleMutation(input),
+      },
+    );
+    return { backgroundTasks, effectsService };
+  }
+
+  it("enqueues one deterministic memory apply effect on approve and executes it through the recovered effect", async () => {
+    const harness = createApprovalFirstMemoryHarness("effect-apply");
+    insertApprovalFirstMemoryItem(harness, { itemId: "effect-1" });
+    const envelope = harness.service.requestMemoryItemPatchApproval(
+      "effect-1",
+      { title: "Applied by the worker" },
+      harness.requesterId,
+    );
+    harness.storage.approvals.resolve(envelope.pendingApproval.approvalId, {
+      decision: "approve",
+      resolvedBy: harness.resolverId,
+    });
+    const approvedApproval = harness.storage.approvals.get(envelope.pendingApproval.approvalId);
+    const { backgroundTasks, effectsService } = createEffectsService(harness);
+
+    const enqueued = effectsService.enqueueResolutionEffects(approvedApproval, {
+      decision: "approve",
+      resolvedBy: harness.resolverId,
+    });
+    const memoryEffect = enqueued.find((effect) => effect.effectKind === "memory_lifecycle_apply");
+    expect(memoryEffect).toMatchObject({
+      targetKind: "memory_record",
+      targetId: envelope.pendingApproval.approvalId,
+      payload: {
+        workspaceId: harness.workspaceId,
+        action: "item_updated",
+        subjectKind: "memory_item",
+        subjectId: "effect-1",
+        requestSha256: envelope.pendingApproval.requestSha256,
+      },
+    });
+
+    effectsService.requestEffectProcessing();
+    await Promise.all([...backgroundTasks]);
+    effectsService.stopWorker();
+
+    const settled = harness.storage.approvalEffects.get(memoryEffect!.effectId);
+    expect(settled.status).toBe("completed");
+    expect(settled.result).toMatchObject({
+      disposition: "applied",
+      action: "item_updated",
+      itemIds: ["effect-1"],
+      changedCount: 1,
+    });
+    expect(readApprovalFirstItem(harness, "effect-1")).toMatchObject({ title: "Applied by the worker" });
+
+    // Re-enqueueing the same resolution converges on the same effect row.
+    const replayed = effectsService.enqueueResolutionEffects(approvedApproval, {
+      decision: "approve",
+      resolvedBy: harness.resolverId,
+    });
+    const replayedEffect = replayed.find((effect) => effect.effectKind === "memory_lifecycle_apply");
+    expect(replayedEffect?.effectId).toBe(memoryEffect!.effectId);
+  });
+
+  it("fails the effect closed with the content-free code when state drifted after approval", async () => {
+    const harness = createApprovalFirstMemoryHarness("effect-drift");
+    insertApprovalFirstMemoryItem(harness, { itemId: "effect-drift-1" });
+    const envelope = harness.service.requestMemoryItemPatchApproval(
+      "effect-drift-1",
+      { title: "Never applies" },
+      harness.requesterId,
+    );
+    harness.storage.approvals.resolve(envelope.pendingApproval.approvalId, {
+      decision: "approve",
+      resolvedBy: harness.resolverId,
+    });
+    const approvedApproval = harness.storage.approvals.get(envelope.pendingApproval.approvalId);
+    harness.storage.gatewaySql
+      .prepare(
+        "UPDATE memory_items SET content = 'drifted', updated_at = '2026-07-16T00:00:00.000Z' WHERE item_id = 'effect-drift-1'",
+      )
+      .run();
+    const { backgroundTasks, effectsService } = createEffectsService(harness);
+
+    const enqueued = effectsService.enqueueResolutionEffects(approvedApproval, {
+      decision: "approve",
+      resolvedBy: harness.resolverId,
+    });
+    const memoryEffect = enqueued.find((effect) => effect.effectKind === "memory_lifecycle_apply");
+
+    effectsService.requestEffectProcessing();
+    await Promise.all([...backgroundTasks]);
+    effectsService.stopWorker();
+
+    const settled = harness.storage.approvalEffects.get(memoryEffect!.effectId);
+    expect(settled.status).toBe("failed");
+    expect(settled.result).toMatchObject({ errorCode: "memory_lifecycle_apply_conflict" });
+    expect(readApprovalFirstItem(harness, "effect-drift-1")).toMatchObject({ title: "Original title" });
+  });
+
+  it("never enqueues the memory apply effect on rejection", () => {
+    const harness = createApprovalFirstMemoryHarness("effect-reject");
+    insertApprovalFirstMemoryItem(harness, { itemId: "effect-reject-1" });
+    const envelope = harness.service.requestMemoryItemPatchApproval(
+      "effect-reject-1",
+      { title: "Rejected" },
+      harness.requesterId,
+    );
+    harness.storage.approvals.resolve(envelope.pendingApproval.approvalId, {
+      decision: "reject",
+      resolvedBy: harness.resolverId,
+    });
+    const rejectedApproval = harness.storage.approvals.get(envelope.pendingApproval.approvalId);
+    const { effectsService } = createEffectsService(harness);
+
+    const enqueued = effectsService.enqueueResolutionEffects(rejectedApproval, {
+      decision: "reject",
+      resolvedBy: harness.resolverId,
+    });
+    expect(enqueued.find((effect) => effect.effectKind === "memory_lifecycle_apply")).toBeUndefined();
+    effectsService.stopWorker();
+    expect(readApprovalFirstItem(harness, "effect-reject-1")).toMatchObject({ title: "Original title" });
+  });
+});

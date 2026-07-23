@@ -979,9 +979,14 @@ describe("tui main loop28 entry coverage", () => {
 
   it("drives alternate write and control actions across ops menu surfaces", async () => {
     vi.spyOn(console, "clear").mockImplementation(() => undefined);
-    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     vi.spyOn(console, "table").mockImplementation(() => undefined);
     vi.spyOn(console, "error").mockImplementation(() => undefined);
+    // HX-402 P1: the forget verb answers with a pending memory.lifecycle
+    // approval envelope; the TUI must surface it honestly.
+    state.client.forgetMemoryItem.mockResolvedValueOnce({
+      pendingApproval: { approvalId: "approval-tui-1", status: "pending" },
+    });
     state.selectQueue = [
       "memory",
       "forgotten",
@@ -1057,6 +1062,16 @@ describe("tui main loop28 entry coverage", () => {
     await waitFor(() => state.liveStop.mock.calls.length === 1);
 
     expect(state.client.forgetMemoryItem).toHaveBeenCalledWith("memory-1");
+    // The pending-approval envelope prints explicit no-mutation guidance.
+    expect(
+      logSpy.mock.calls.some(
+        ([line]) =>
+          typeof line === "string" &&
+          line.includes("requires approval") &&
+          line.includes("approval-tui-1") &&
+          line.includes("No memory changed yet"),
+      ),
+    ).toBe(true);
     expect(state.client.uploadFile).toHaveBeenCalledWith("notes/ops.txt", "ops note");
     expect(state.client.getCronRunDiff).toHaveBeenCalledWith("run-1");
     expect(state.client.toolsEvaluateAccess).toHaveBeenCalledWith({

@@ -119,10 +119,27 @@ describe("approved memory lifecycle Journey producer", () => {
         directPromotion: false,
       },
     });
+    // HX-402 P1: the Journey event carries exact linkage into the immutable P0
+    // governed lifecycle owner alongside the approval and history evidence.
     expect(journey.evidenceRefs).toEqual([
       { owner: "approval", refId: approval.approvalId },
+      { owner: "governed_lifecycle", refId: `memory-lifecycle:${change.change_id}` },
       { owner: "memory_history", refId: change.change_id },
     ]);
+    const governedEvent = harness.storage.gatewaySql
+      .prepare("SELECT * FROM governed_lifecycle_events WHERE event_id = ?")
+      .get(`memory-lifecycle:${change.change_id}`) as Record<string, unknown> | undefined;
+    expect(governedEvent).toMatchObject({
+      domain: "memory",
+      operation: "item_updated",
+      target_kind: "memory_item",
+      target_id: current.itemId,
+      actor_id: harness.actorId,
+      actor_type: "operator",
+      source_kind: "memory_change_history",
+      source_id: change.change_id,
+      approval_id: approval.approvalId,
+    });
     const projectedEvidence = JSON.stringify({ history: change, journey });
     for (const forbidden of [
       "original-content-do-not-project",

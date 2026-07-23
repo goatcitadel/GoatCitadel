@@ -25,6 +25,9 @@ import {
   EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_APPROVAL_KIND,
   EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_KIND,
   EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_TARGET_KIND,
+  MEMORY_LIFECYCLE_APPROVAL_KIND,
+  MEMORY_LIFECYCLE_EFFECT_KIND,
+  MEMORY_LIFECYCLE_EFFECT_TARGET_KIND,
   MESH_CAPABILITY_ACTIVATION_APPROVAL_KIND,
   assertExternalSourceKnowledgeSnapshotApprovalPayload,
   assertMeshCapabilityActivationApprovalPayload,
@@ -47,6 +50,9 @@ import {
   MeshCapabilityActivationServiceError,
   type MeshCapabilityActivationApplyResult,
 } from "./mesh-capability-activation-service.js";
+import { MemoryLifecycleApplyError } from "./memory-domain-journey-producer.js";
+import { parseMemoryLifecycleApprovalBinding } from "./memory-journey-producer.js";
+import type { MemoryLifecycleApplyResult } from "./memory-lifecycle-service.js";
 import { APPROVAL_OBSERVABILITY_REALTIME_ENVELOPE_KEY } from "./realtime-event-service.js";
 import {
   ExternalSourceKnowledgeEffectServiceError,
@@ -338,6 +344,19 @@ export interface ApprovalEffectsServiceDeps {
     workspaceId: string;
     approvalId: string;
   }): MeshCapabilityActivationApplyResult;
+  /**
+   * HX-402 P1: executes one approved `memory.lifecycle` mutation through the
+   * memory lifecycle owner. The executor revalidates the exact approval
+   * (kind, deterministic identity, workspace linkage, status, expiry),
+   * recovers the requester from the immutable request Journey evidence,
+   * byte-verifies the approved requestSha256 against the rebuilt mutation,
+   * re-checks current policy, and executes only through the approved producer
+   * (which revalidates everything again inside its own transaction).
+   */
+  executeApprovedMemoryLifecycleMutation?(input: {
+    workspaceId: string;
+    approvalId: string;
+  }): MemoryLifecycleApplyResult;
   enqueueAfterHooks(input: {
     workspaceId: string;
     trigger: "approval.resolve.after" | "approval.response.after";
@@ -630,6 +649,9 @@ export class ApprovalEffectsService {
     if (approval.kind === MESH_CAPABILITY_ACTIVATION_APPROVAL_KIND && input.decision === "approve") {
       enqueued.push(this.enqueueMeshCapabilityActivationApply(approval));
     }
+    if (approval.kind === MEMORY_LIFECYCLE_APPROVAL_KIND && input.decision === "approve") {
+      enqueued.push(this.enqueueMemoryLifecycleApply(approval));
+    }
     enqueued.push(
       this.ctx.storage.approvalEffects.upsert({
         approvalId: approval.approvalId,
@@ -853,6 +875,44 @@ export class ApprovalEffectsService {
         activationId: payload.activationId,
         activationRevision: payload.activationRevision,
         requestSha256: payload.requestSha256,
+      },
+    });
+  }
+
+  /**
+   * HX-402 P1: enqueue the recovered `memory.lifecycle` mutation effect on one
+   * deterministic effect identity per approval, with a server-derived
+   * content-free payload verified against the immutable approval binding. The
+   * executor and the approved producer revalidate everything again, so a
+   * replayed resolution converges instead of double-mutating.
+   */
+  private enqueueMemoryLifecycleApply(approval: ApprovalRequest): ApprovalEffectRecord {
+    const binding = parseMemoryLifecycleApprovalBinding(
+      (approval.payload as Record<string, unknown> | undefined)?.memoryLifecycle,
+    );
+    if (!binding || approval.linkage?.workspaceId !== binding.workspaceId) {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: `Approval ${approval.approvalId} does not carry a canonical memory.lifecycle binding.`,
+      });
+    }
+    return this.ctx.storage.approvalEffects.upsert({
+      approvalId: approval.approvalId,
+      effectKind: MEMORY_LIFECYCLE_EFFECT_KIND,
+      targetKind: MEMORY_LIFECYCLE_EFFECT_TARGET_KIND,
+      targetId: approval.approvalId,
+      idempotencyKey: buildApprovalEffectIdempotencyKey({
+        approvalId: approval.approvalId,
+        effectKind: MEMORY_LIFECYCLE_EFFECT_KIND,
+        targetKind: MEMORY_LIFECYCLE_EFFECT_TARGET_KIND,
+        targetId: approval.approvalId,
+      }),
+      payload: {
+        workspaceId: binding.workspaceId,
+        action: binding.action,
+        subjectKind: binding.subjectKind,
+        ...(binding.subjectId === undefined ? {} : { subjectId: binding.subjectId }),
+        requestSha256: binding.requestSha256,
       },
     });
   }
@@ -1097,6 +1157,9 @@ export class ApprovalEffectsService {
       case MESH_CAPABILITY_ACTIVATION_EFFECT_KIND:
         this.handleMeshCapabilityActivationApply(effect);
         return;
+      case MEMORY_LIFECYCLE_EFFECT_KIND:
+        this.handleMemoryLifecycleApply(effect);
+        return;
       case "approval_inbox_follow_up":
         await this.handleApprovalInboxFollowUp(effect);
         return;
@@ -1303,6 +1366,62 @@ export class ApprovalEffectsService {
     } catch (error) {
       if (!this.isEffectStillClaimed(effect.effectId)) return;
       if (error instanceof MeshCapabilityActivationServiceError) {
+        this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+          lastError: error.message,
+          result: { errorCode: error.code },
+        });
+        return;
+      }
+      this.deferClaimedEffectForRetry(effect, this.workerId, error, {
+        deliveryState: "retry_scheduled",
+        approvalId: effect.approvalId,
+      });
+    }
+  }
+
+  /**
+   * HX-402 P1: execute one approved memory lifecycle mutation. Governance
+   * denials (missing/foreign/expired approval, missing request evidence,
+   * request drift, policy flip, producer state conflict) are terminal and fail
+   * the effect closed with their content-free code; only unexpected
+   * infrastructure errors defer for bounded retry. Replays converge on the
+   * immutable history/Journey/governed-event evidence.
+   */
+  private handleMemoryLifecycleApply(effect: ApprovalEffectRecord): void {
+    const execute = this.deps.executeApprovedMemoryLifecycleMutation;
+    const workspaceId = asOptionalString(effect.payload.workspaceId);
+    if (!execute || !workspaceId) {
+      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+        lastError: "Memory lifecycle effect is missing its executor or workspace binding.",
+        result: { workspaceId, configured: Boolean(execute) },
+      });
+      return;
+    }
+    try {
+      const applied = execute({ workspaceId, approvalId: effect.approvalId });
+      if (!this.isEffectStillClaimed(effect.effectId)) return;
+      const completed = this.ctx.storage.approvalEffects.completeEffect(
+        effect.effectId,
+        this.workerId,
+        effect.version,
+        {
+          result: {
+            disposition: applied.disposition,
+            action: applied.action,
+            subjectKind: applied.subjectKind,
+            ...(applied.subjectId === undefined ? {} : { subjectId: applied.subjectId }),
+            workspaceId: applied.workspaceId,
+            itemIds: applied.itemIds,
+            changedCount: applied.changedCount,
+          },
+        },
+      );
+      if (!completed) {
+        throw new Error(`Memory lifecycle effect ${effect.effectId} lost its completion lease.`);
+      }
+    } catch (error) {
+      if (!this.isEffectStillClaimed(effect.effectId)) return;
+      if (error instanceof MemoryLifecycleApplyError) {
         this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
           lastError: error.message,
           result: { errorCode: error.code },

@@ -1003,6 +1003,7 @@ async function viewMemoryLifecycle(client: TuiApiClient): Promise<void> {
     }
     const updated = await client.patchMemoryItem(itemId, patch);
     console.log(JSON.stringify(updated, null, 2));
+    printMemoryApprovalOutcome(updated);
     await pause();
     return;
   }
@@ -1018,6 +1019,7 @@ async function viewMemoryLifecycle(client: TuiApiClient): Promise<void> {
     }
     const result = await client.forgetMemoryItem(itemId);
     console.log(JSON.stringify(result, null, 2));
+    printMemoryApprovalOutcome(result);
     await pause();
     return;
   }
@@ -1066,6 +1068,7 @@ async function viewMemoryLifecycle(client: TuiApiClient): Promise<void> {
       source: "tui",
     });
     console.log(JSON.stringify(result, null, 2));
+    printMemoryApprovalOutcome(result);
     await pause();
     return;
   }
@@ -2576,6 +2579,29 @@ function isCodeSessionLike(session: Record<string, unknown>): boolean {
 
 function errorToText(error: unknown): string {
   return error instanceof Error ? error.message : toText(error) || "Request failed";
+}
+
+/**
+ * HX-402 P1: memory mutation verbs are approval-first. When the gateway
+ * answers with a pending `memory.lifecycle` approval envelope, tell the
+ * operator explicitly that nothing mutated yet and where to resolve it.
+ */
+function printMemoryApprovalOutcome(result: unknown): void {
+  const pendingApproval =
+    result && typeof result === "object" && !Array.isArray(result)
+      ? (result as { pendingApproval?: unknown }).pendingApproval
+      : undefined;
+  if (!pendingApproval || typeof pendingApproval !== "object") {
+    return;
+  }
+  const approvalId = toText((pendingApproval as { approvalId?: unknown }).approvalId);
+  const status = toText((pendingApproval as { status?: unknown }).status);
+  console.log(
+    chalk.yellow(
+      `Memory mutation requires approval. No memory changed yet — resolve approval ${approvalId || "(unknown)"}` +
+        `${status ? ` (status: ${status})` : ""} from the Approvals surface to apply it.`,
+    ),
+  );
 }
 
 async function pause(): Promise<void> {

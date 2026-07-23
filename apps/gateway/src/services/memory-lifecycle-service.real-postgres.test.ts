@@ -11,15 +11,10 @@ import {
   Storage,
   runPostgresMigrations,
 } from "@goatcitadel/storage";
-import type { MemoryForgetRequest, MemoryForgetResponse } from "@goatcitadel/contracts";
-import { MemoryLifecycleService } from "./memory-lifecycle-service.js";
+import type { MemoryForgetRequest } from "@goatcitadel/contracts";
+import { MemoryLifecycleService, type MemoryForgetApprovalOutcome } from "./memory-lifecycle-service.js";
 
 const realPostgresUrl = process.env.GOATCITADEL_TEST_POSTGRES_URL?.trim();
-
-interface ForgetMemoryHooks {
-  onCommit?: () => void;
-  afterCommit?: () => void;
-}
 
 interface Harness {
   adminPool: Pool;
@@ -28,7 +23,9 @@ interface Harness {
   rootDir: string;
   storage: Storage;
   service: MemoryLifecycleService;
-  forgetMemory(input: MemoryForgetRequest, hooks?: ForgetMemoryHooks): MemoryForgetResponse;
+  requestForget(input: MemoryForgetRequest): MemoryForgetApprovalOutcome;
+  approve(approvalId: string): void;
+  execute(approvalId: string): ReturnType<MemoryLifecycleService["executeApprovedMemoryLifecycleMutation"]>;
   close(): Promise<void>;
 }
 
@@ -40,58 +37,61 @@ afterEach(async () => {
   }
 });
 
+/**
+ * HX-402 P1 (coverage-preserving rewrite): the retired unapproved bulk-forget
+ * ran directly; the approval-first flow is request (criteria resolve to exact
+ * IDs) -> approve -> recovered-effect execution through the approved
+ * producer. Live PostgreSQL proves the dialect-sensitive pieces: FOR UPDATE
+ * row/approval locking, lock_timeout bounds, atomic history + governed
+ * lifecycle + Journey commit, and the P0 owner's trigger immutability.
+ */
 describe.skipIf(!realPostgresUrl)("MemoryLifecycleService real PostgreSQL bulk forget", { timeout: 120_000 }, () => {
-  it("forgets every matching scoped item beyond the list cap and commits history atomically", async () => {
+  it("binds canonical-workspace criteria beyond the list cap and commits history plus governed evidence atomically", async () => {
     const harness = await createHarness();
     await seedScopedCompletenessFixture(harness.scopedPool);
 
-    const rollbackAfterCommit = vi.fn();
+    // The purge-marker scope resolves legacy rows (NULL workspace_id, only a
+    // metadata workspace claim) alongside canonical rows. The approval binding
+    // fails closed on both the include-global scope AND the default scope:
+    // canonical workspace ownership is never inferred from metadata, and a
+    // refused request leaves zero deltas.
     expect(() =>
-      harness.forgetMemory(
-        {
-          workspaceId: "workspace-a",
-          namespace: "workspace.shared",
-          query: "fr108-purge-marker",
-          actionId: "fr108-real-pg-rollback",
-          source: "verification.real-postgres",
-          actorId: "operator:postgres-proof",
-        },
-        {
-          onCommit: () => {
-            throw new Error("forced pre-commit failure");
-          },
-          afterCommit: rollbackAfterCommit,
-        },
-      ),
-    ).toThrow("forced pre-commit failure");
-    expect(rollbackAfterCommit).not.toHaveBeenCalled();
-    await expect(countRows(harness.scopedPool, "memory_items", "status = 'forgotten'")).resolves.toBe(1);
-    await expect(countRows(harness.scopedPool, "memory_change_history", "change_type = 'forgotten'")).resolves.toBe(0);
-
-    const afterCommit = vi.fn();
-    const response = harness.forgetMemory(
-      {
+      harness.requestForget({
         workspaceId: "workspace-a",
         namespace: "workspace.shared",
         query: "fr108-purge-marker",
-        actionId: "fr108-real-pg-complete",
-        source: "verification.real-postgres",
-        actorId: "operator:postgres-proof",
-      },
-      { afterCommit },
-    );
+        includeGlobal: true,
+        actionId: "fr108-real-pg-legacy-refusal",
+      }),
+    ).toThrow(/workspace-owned/i);
+    expect(() =>
+      harness.requestForget({
+        workspaceId: "workspace-a",
+        namespace: "workspace.shared",
+        query: "fr108-purge-marker",
+        actionId: "fr108-real-pg-legacy-default-refusal",
+      }),
+    ).toThrow(/workspace-owned/i);
+    await expect(countRows(harness.scopedPool, "memory_change_history", "change_type = 'forgotten'")).resolves.toBe(0);
+    await expect(countRows(harness.scopedPool, "memory_items", "status = 'forgotten'")).resolves.toBe(1);
 
-    expect(response).toMatchObject({
+    // The canonical-only marker binds all 525 active canonically-owned rows —
+    // beyond the 500-row update chunk — in one deterministic approval.
+    const outcome = harness.requestForget({
+      workspaceId: "workspace-a",
+      namespace: "workspace.shared",
+      query: "fr108-canonical-scope",
       actionId: "fr108-real-pg-complete",
-      matchedCount: 532,
-      alreadyForgottenCount: 0,
-      forgottenCount: 532,
     });
-    expect(response.itemIds).toHaveLength(532);
-    expect(new Set(response.itemIds).size).toBe(532);
-    expect(response.items).toHaveLength(532);
-    expect(response.items.every((item) => item.status === "forgotten")).toBe(true);
-    expect(afterCommit).toHaveBeenCalledTimes(1);
+    if (!outcome.pendingApproval) throw new Error("Expected a pending forget approval.");
+    expect(outcome.pendingApproval.itemIds).toHaveLength(525);
+    // No durable mutation before approval.
+    await expect(countRows(harness.scopedPool, "memory_items", "status = 'forgotten'")).resolves.toBe(1);
+    await expect(countRows(harness.scopedPool, "memory_change_history", "change_type = 'forgotten'")).resolves.toBe(0);
+
+    harness.approve(outcome.pendingApproval.approvalId);
+    const applied = harness.execute(outcome.pendingApproval.approvalId);
+    expect(applied).toMatchObject({ disposition: "applied", action: "items_forgotten", changedCount: 525 });
 
     const scopedCounts = await harness.scopedPool.query<{
       workspace_id: string;
@@ -107,27 +107,50 @@ describe.skipIf(!realPostgresUrl)("MemoryLifecycleService real PostgreSQL bulk f
       expect.arrayContaining([
         { workspace_id: "workspace-a", status: "forgotten", count: "526" },
         { workspace_id: "workspace-b", status: "active", count: "4" },
-        { workspace_id: "<legacy-or-global>", status: "forgotten", count: "7" },
-        { workspace_id: "<legacy-or-global>", status: "active", count: "3" },
+        { workspace_id: "<legacy-or-global>", status: "active", count: "10" },
       ]),
     );
 
     const history = await harness.scopedPool.query<{
       count: string;
-      action_count: string;
-      source_count: string;
-    }>(`
+      approval_count: string;
+      operation_count: string;
+    }>(
+      `
       SELECT
         COUNT(*)::text AS count,
-        COUNT(*) FILTER (WHERE payload_json::jsonb ->> 'actionId' = 'fr108-real-pg-complete')::text AS action_count,
-        COUNT(*) FILTER (WHERE payload_json::jsonb ->> 'source' = 'verification.real-postgres')::text AS source_count
+        COUNT(*) FILTER (WHERE payload_json::jsonb ->> 'approvalId' = $1)::text AS approval_count,
+        COUNT(*) FILTER (WHERE payload_json::jsonb ->> 'operationKind' = 'approved_forget')::text AS operation_count
       FROM memory_change_history
       WHERE change_type = 'forgotten'
-    `);
-    expect(history.rows[0]).toEqual({ count: "532", action_count: "532", source_count: "532" });
+    `,
+      [outcome.pendingApproval.approvalId],
+    );
+    expect(history.rows[0]).toEqual({ count: "525", approval_count: "525", operation_count: "525" });
+
+    // Every history change has its immutable governed twin plus Journey.
+    const governed = await harness.scopedPool.query<{ count: string }>(
+      "SELECT COUNT(*)::text AS count FROM governed_lifecycle_events WHERE operation = 'item_forgotten'",
+    );
+    expect(governed.rows[0]?.count).toBe("525");
+    await expect(
+      harness.scopedPool.query(
+        "UPDATE governed_lifecycle_events SET actor_id = 'forged' WHERE operation = 'item_forgotten'",
+      ),
+    ).rejects.toThrow(/immutable|append-only/i);
+    await expect(
+      harness.scopedPool.query("DELETE FROM governed_lifecycle_events WHERE operation = 'item_forgotten'"),
+    ).rejects.toThrow(/immutable|append-only/i);
+
+    // Replayed execution converges without new writes.
+    const replay = harness.execute(outcome.pendingApproval.approvalId);
+    expect(replay.changedCount).toBe(525);
+    await expect(countRows(harness.scopedPool, "memory_change_history", "change_type = 'forgotten'")).resolves.toBe(
+      525,
+    );
   });
 
-  it("waits for a concurrent duplicate and records exactly one active-to-forgotten transition", async () => {
+  it("waits on the concurrent row owner and conflicts on the post-review drift with zero new writes", async () => {
     const harness = await createHarness();
     const itemId = "fr108-concurrent-item";
     await seedMemoryItem(harness.scopedPool, {
@@ -135,6 +158,14 @@ describe.skipIf(!realPostgresUrl)("MemoryLifecycleService real PostgreSQL bulk f
       workspaceId: "workspace-a",
       metadata: { workspaceId: "workspace-b" },
     });
+
+    const outcome = harness.requestForget({
+      workspaceId: "workspace-a",
+      itemIds: [itemId],
+      actionId: "fr108-concurrent-duplicate",
+    });
+    if (!outcome.pendingApproval) throw new Error("Expected a pending forget approval.");
+    harness.approve(outcome.pendingApproval.approvalId);
 
     let blocker: PoolClient | undefined;
     try {
@@ -158,7 +189,7 @@ describe.skipIf(!realPostgresUrl)("MemoryLifecycleService real PostgreSQL bulk f
         `,
         [itemId, now, randomUUID(), firstHistoryPayload],
       );
-      // forgetMemory blocks this thread with Atomics.wait. Send one static
+      // The executor blocks this thread with Atomics.wait. Send one static
       // server-side batch so PostgreSQL receives COMMIT before that wait begins;
       // the dynamic fixture values were bound above through transaction-local settings.
       const releaseConcurrentOwner = blocker.query(`
@@ -183,27 +214,22 @@ describe.skipIf(!realPostgresUrl)("MemoryLifecycleService real PostgreSQL bulk f
       `);
 
       const startedAt = Date.now();
-      const response = harness.forgetMemory({
-        workspaceId: "workspace-a",
-        itemIds: [itemId],
-        actionId: "fr108-concurrent-duplicate",
-        source: "verification.concurrent-duplicate",
-        actorId: "operator:duplicate",
-      });
+      let failure: unknown;
+      try {
+        harness.execute(outcome.pendingApproval.approvalId);
+      } catch (error) {
+        failure = error;
+      }
       const waitedMs = Date.now() - startedAt;
       await releaseConcurrentOwner;
       blocker.release();
       blocker = undefined;
 
+      // The executor waited on the row lock, then observed state that drifted
+      // after approval review — a terminal conflict, never a silent overwrite.
       expect(waitedMs).toBeGreaterThanOrEqual(650);
-      expect(response).toMatchObject({
-        actionId: "fr108-concurrent-duplicate",
-        matchedCount: 1,
-        alreadyForgottenCount: 1,
-        forgottenCount: 0,
-        itemIds: [],
-        items: [],
-      });
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).message).toMatch(/conflicts with canonical state/i);
       await expect(countRows(harness.scopedPool, "memory_change_history", "change_type = 'forgotten'")).resolves.toBe(
         1,
       );
@@ -212,6 +238,15 @@ describe.skipIf(!realPostgresUrl)("MemoryLifecycleService real PostgreSQL bulk f
         [itemId],
       );
       expect(row.rows[0]).toEqual({ status: "forgotten", forgotten_at: now });
+
+      // A fresh request over the drifted (already forgotten) state settles as
+      // a pure no-op without any approval.
+      const noOp = harness.requestForget({
+        workspaceId: "workspace-a",
+        itemIds: [itemId],
+        actionId: "fr108-concurrent-follow-up",
+      });
+      expect(noOp).toMatchObject({ pendingApproval: null, noMutationRequired: true, alreadyForgottenCount: 1 });
     } finally {
       if (blocker) {
         await blocker.query("ROLLBACK").catch(() => undefined);
@@ -225,6 +260,14 @@ describe.skipIf(!realPostgresUrl)("MemoryLifecycleService real PostgreSQL bulk f
     const itemId = "fr108-lock-timeout-item";
     await seedMemoryItem(harness.scopedPool, { itemId, workspaceId: "workspace-a" });
 
+    const outcome = harness.requestForget({
+      workspaceId: "workspace-a",
+      itemIds: [itemId],
+      actionId: "fr108-lock-timeout",
+    });
+    if (!outcome.pendingApproval) throw new Error("Expected a pending forget approval.");
+    harness.approve(outcome.pendingApproval.approvalId);
+
     let blocker: PoolClient | undefined;
     try {
       blocker = await harness.scopedPool.connect();
@@ -235,12 +278,7 @@ describe.skipIf(!realPostgresUrl)("MemoryLifecycleService real PostgreSQL bulk f
       const startedAt = Date.now();
       let failure: unknown;
       try {
-        harness.forgetMemory({
-          workspaceId: "workspace-a",
-          itemIds: [itemId],
-          actionId: "fr108-lock-timeout",
-          source: "verification.lock-timeout",
-        });
+        harness.execute(outcome.pendingApproval.approvalId);
       } catch (error) {
         failure = error;
       }
@@ -258,13 +296,10 @@ describe.skipIf(!realPostgresUrl)("MemoryLifecycleService real PostgreSQL bulk f
         0,
       );
 
-      const retry = harness.forgetMemory({
-        workspaceId: "workspace-a",
-        itemIds: [itemId],
-        actionId: "fr108-lock-timeout-retry",
-        source: "verification.lock-timeout-retry",
-      });
-      expect(retry).toMatchObject({ matchedCount: 1, alreadyForgottenCount: 0, forgottenCount: 1 });
+      // The SAME approval retries cleanly once the lock clears: the approved
+      // state is unchanged, so the recovered effect converges.
+      const retry = harness.execute(outcome.pendingApproval.approvalId);
+      expect(retry).toMatchObject({ disposition: "applied", changedCount: 1 });
       await expect(countRows(harness.scopedPool, "memory_change_history", "change_type = 'forgotten'")).resolves.toBe(
         1,
       );
@@ -335,10 +370,22 @@ async function createHarness(): Promise<Harness> {
         requireFeatureEnabled: () => undefined,
         publishRealtime: vi.fn(),
       } as never,
+      approvalAuthority: {
+        approvals: storage.approvals,
+        approvalEvents: storage.approvalEvents,
+        governanceJourneyEvents: storage.governanceJourneyEvents,
+      },
       resolveLearnedMemoryPolicy: vi.fn(() => ({ allowWrite: true, reason: "allowed" as const })),
       readTranscriptOrEmpty: vi.fn(async () => []),
     });
-    const forgetMemory = service.forgetMemory.bind(service) as unknown as Harness["forgetMemory"];
+    const storageRef = storage;
+    const requestForget = (input: MemoryForgetRequest) =>
+      service.requestMemoryForgetApproval({ ...input, requesterId: "operator:postgres-proof" });
+    const approve = (approvalId: string) => {
+      storageRef.approvals.resolve(approvalId, { decision: "approve", resolvedBy: "operator:postgres-proof" });
+    };
+    const execute = (approvalId: string) =>
+      service.executeApprovedMemoryLifecycleMutation({ workspaceId: "workspace-a", approvalId });
 
     let closed = false;
     const harness: Harness = {
@@ -348,7 +395,9 @@ async function createHarness(): Promise<Harness> {
       rootDir,
       storage,
       service,
-      forgetMemory,
+      requestForget,
+      approve,
+      execute,
       close: async () => {
         if (closed) {
           return;
@@ -388,6 +437,7 @@ async function seedScopedCompletenessFixture(pool: Pool): Promise<void> {
     workspaceId: string | null;
     legacyWorkspaceId?: string;
     status?: "active" | "forgotten";
+    contentMarker?: string;
   }) => {
     await pool.query(
       `
@@ -399,7 +449,7 @@ async function seedScopedCompletenessFixture(pool: Pool): Promise<void> {
           $1 || series::text,
           'workspace.shared',
           'FR-108 fixture ' || series::text,
-          'fr108-purge-marker ' || series::text,
+          $6 || ' ' || series::text,
           $2,
           0,
           NULL,
@@ -417,11 +467,21 @@ async function seedScopedCompletenessFixture(pool: Pool): Promise<void> {
         input.status ?? "active",
         input.workspaceId,
         input.count,
+        input.contentMarker ?? "fr108-purge-marker",
       ],
     );
   };
 
-  await seedGroup({ prefix: "canonical-a-", count: 525, workspaceId: "workspace-a", legacyWorkspaceId: "workspace-b" });
+  await seedGroup({
+    prefix: "canonical-a-",
+    count: 525,
+    workspaceId: "workspace-a",
+    legacyWorkspaceId: "workspace-b",
+    // The canonical rows carry BOTH markers: the broad marker (to prove the
+    // mixed-scope refusal) and the canonical-only marker (to bind the >500-row
+    // approval scope without the legacy rows).
+    contentMarker: "fr108-purge-marker fr108-canonical-scope",
+  });
   await seedGroup({ prefix: "legacy-a-", count: 7, workspaceId: null, legacyWorkspaceId: "workspace-a" });
   await seedGroup({ prefix: "canonical-b-", count: 4, workspaceId: "workspace-b", legacyWorkspaceId: "workspace-a" });
   await seedGroup({ prefix: "global-", count: 3, workspaceId: null });

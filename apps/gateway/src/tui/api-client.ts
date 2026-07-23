@@ -911,7 +911,12 @@ export class TuiApiClient {
     });
   }
 
-  public async forgetMemory(input: MemoryForgetRequest): Promise<MemoryForgetResponse> {
+  /**
+   * HX-402 P1: the forget verb is approval-first. The gateway responds with a
+   * pending `memory.lifecycle` approval envelope (202) or a zero-mutation
+   * summary (200) — never with an executed forget.
+   */
+  public async forgetMemory(input: MemoryForgetRequest): Promise<MemoryForgetResponse | Record<string, unknown>> {
     validateMemoryForgetRequest(input);
     return this.request(
       "/api/v1/memory/forget",
