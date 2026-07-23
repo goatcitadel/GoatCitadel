@@ -16,6 +16,7 @@ import {
   type ChatThinkingLevel,
   type ChatTurnCapabilityProfilePreview,
   type ChatTurnCapabilityProfileRecord,
+  type ChatTurnCapabilityToolMeshPublicationBinding,
   type ChatTurnCapabilityToolRuntimeOwnerBinding,
   type ChatWebMode,
   type McpRequesterResolutionBinding,
@@ -148,6 +149,21 @@ export interface ChatTurnCapabilityProfileResolveDeps {
     canonicalToolName: string;
     modelToolName: string;
   }): McpRequesterResolutionBinding | undefined | Promise<McpRequesterResolutionBinding | undefined>;
+  /**
+   * HX-408 M2 profile-freeze drift gate for mesh-published callables. The
+   * gateway composition re-verifies the exact activation through the
+   * storage-owned revalidation query at freeze time and returns the
+   * packet-mandated snapshot; `undefined` means the entry no longer
+   * revalidates and the profile freeze MUST fail closed (any freeze-time
+   * drift blocks the turn).
+   */
+  resolveMeshPublicationBinding?(input: {
+    workspaceId: string;
+    capabilityId: string;
+    entrySha256: string;
+    manifestSha256: string;
+    publisherGeneration: number;
+  }): ChatTurnCapabilityToolMeshPublicationBinding | undefined;
 }
 
 export interface ChatTurnCapabilityProfileResolution {
@@ -240,6 +256,18 @@ export async function resolveChatTurnCapabilityProfile(
       .filter((entry) => entry.kind === "tool" && entry.callable && Boolean(entry.toolName))
       .map((entry) => [entry.toolName as string, entry]),
   );
+  // HX-408 M2: mesh-published callables are addressed by their server-derived
+  // capability ID and must carry a freeze-verified activation snapshot.
+  const meshCallableByCapabilityId = new Map(
+    callableEntries
+      .filter(
+        (entry) =>
+          (entry.kind === "mesh_tool" || entry.kind === "mesh_mcp_server") &&
+          entry.callable &&
+          entry.mesh !== undefined,
+      )
+      .map((entry) => [entry.capabilityId, entry]),
+  );
   const tools = await Promise.all(
     toolSchema.tools.map(async (providerDefinition) => {
       const modelName = readProviderToolName(providerDefinition);
@@ -247,10 +275,16 @@ export async function resolveChatTurnCapabilityProfile(
       if (!canonicalName) {
         throw new Error(`Resolved provider tool ${modelName} is outside the server-owned allow-map.`);
       }
-      const catalogEntry = callableToolsByName.get(canonicalName);
+      const meshCatalogEntry = callableToolsByName.has(canonicalName)
+        ? undefined
+        : meshCallableByCapabilityId.get(canonicalName);
+      const catalogEntry = callableToolsByName.get(canonicalName) ?? meshCatalogEntry;
       if (!catalogEntry) {
         throw new Error(`Resolved provider tool ${canonicalName} is outside the canonical callable catalog.`);
       }
+      const meshPublication = meshCatalogEntry
+        ? resolveFrozenMeshPublicationBinding(deps, input.workspaceId, canonicalName, meshCatalogEntry)
+        : undefined;
       const runtimeOwner =
         deps.resolveToolRuntimeOwnerBinding?.(canonicalName) ?? buildToolRuntimeOwnerBinding("builtin");
       const resolvedMcpRequesterResolution = canonicalName.startsWith("mcp.")
@@ -278,8 +312,16 @@ export async function resolveChatTurnCapabilityProfile(
         providerDefinition,
         runtimeOwner,
         ...(mcpRequesterResolution ? { mcpRequesterResolution } : {}),
-        effectPotential:
-          toolCallBeforeInterposition.count > 0 || runtimeOwner.kind === "plugin"
+        ...(meshPublication ? { meshPublication } : {}),
+        effectPotential: meshPublication
+          ? // A mesh-published callable executes on a remote node: its recovery
+            // upper bound is always the conservative remote classification.
+            classifyToolEffectPotential({
+              toolName: canonicalName,
+              trustedBuiltin: false,
+              sourceKind: "remote",
+            })
+          : toolCallBeforeInterposition.count > 0 || runtimeOwner.kind === "plugin"
             ? classifyToolEffectPotential({
                 toolName: canonicalName,
                 trustedBuiltin: false,
@@ -625,6 +667,46 @@ function copyAndFreezeMcpRequesterResolutionBinding(
 ): McpRequesterResolutionBinding {
   const copied = structuredClone(input);
   if (copied.meshActivation) Object.freeze(copied.meshActivation);
+  return Object.freeze(copied);
+}
+
+/**
+ * HX-408 M2 freeze gate: a mesh-published callable may enter the profile only
+ * with a server-verified activation snapshot whose immutable identity matches
+ * the exact catalog entry being selected. A missing seam, a failed
+ * revalidation, or any identity divergence blocks the turn fail-closed with a
+ * content-free reason.
+ */
+function resolveFrozenMeshPublicationBinding(
+  deps: ChatTurnCapabilityProfileResolveDeps,
+  workspaceId: string,
+  canonicalName: string,
+  catalogEntry: CapabilityCatalogEntry,
+): ChatTurnCapabilityToolMeshPublicationBinding {
+  const projection = catalogEntry.mesh;
+  const blocked = () =>
+    new Error(`Mesh-published tool ${canonicalName} is blocked because mesh_capability_freeze_drift.`);
+  if (!projection || !deps.resolveMeshPublicationBinding) {
+    throw blocked();
+  }
+  const binding = deps.resolveMeshPublicationBinding({
+    workspaceId,
+    capabilityId: catalogEntry.capabilityId,
+    entrySha256: projection.entrySha256,
+    manifestSha256: projection.manifestSha256,
+    publisherGeneration: projection.publisherGeneration,
+  });
+  if (
+    !binding ||
+    binding.nodeId !== projection.nodeId ||
+    binding.publisherGeneration !== projection.publisherGeneration ||
+    binding.manifestSha256 !== projection.manifestSha256 ||
+    binding.entrySha256 !== projection.entrySha256 ||
+    binding.effectPosture !== projection.effectPosture
+  ) {
+    throw blocked();
+  }
+  const copied = structuredClone(binding);
   return Object.freeze(copied);
 }
 

@@ -379,6 +379,67 @@ describe("ChatTurnCapabilityProfileRepository", () => {
     db.close();
   });
 
+  it("round-trips the exact mesh publication snapshot and rejects malformed or plugin-owned bindings", () => {
+    const { db, repo } = createStore();
+    const base = buildDraftWithProviderDefinition(
+      {
+        type: "function",
+        function: {
+          name: "credential_probe",
+          description: "Invoke one mesh-published tool.",
+          parameters: { type: "object", properties: {}, additionalProperties: false },
+        },
+      },
+      "mesh-publication",
+    );
+    const tool = base.selection.tools[0]!;
+    tool.runtimeOwner = { kind: "builtin", bindingHash: "1".repeat(64) };
+    tool.meshPublication = {
+      nodeId: "node-a",
+      publisherGeneration: 3,
+      manifestSha256: "d".repeat(64),
+      entrySha256: "e".repeat(64),
+      activationId: `mesh-activation-${"f".repeat(48)}`,
+      activationRevision: 2,
+      publicationLeaseFencingToken: 5,
+      permissionEnvelopeSha256: "a".repeat(64),
+      effectPosture: "read_only",
+      healthGeneration: 4,
+    };
+    const profile = sealChatTurnCapabilityProfile(base);
+    assert.deepEqual(createWithFrozenIncarnation(db, repo, profile), profile);
+    assert.deepEqual(repo.get(profile.profileId).selection.tools[0]!.meshPublication, tool.meshPublication);
+
+    const badDigest = structuredClone(base);
+    badDigest.selection.tools[0]!.meshPublication!.manifestSha256 = "not-a-digest";
+    assert.throws(
+      () => repo.create(sealChatTurnCapabilityProfile(badDigest)),
+      /meshPublication\.manifestSha256 must be a lowercase sha256 digest/,
+    );
+
+    const badRevision = structuredClone(base);
+    badRevision.selection.tools[0]!.meshPublication!.activationRevision = 0;
+    assert.throws(
+      () => repo.create(sealChatTurnCapabilityProfile(badRevision)),
+      /meshPublication\.activationRevision must be a positive integer/,
+    );
+
+    const badPosture = structuredClone(base);
+    (badPosture.selection.tools[0]!.meshPublication as { effectPosture: string }).effectPosture = "harmless";
+    assert.throws(
+      () => repo.create(sealChatTurnCapabilityProfile(badPosture)),
+      /meshPublication effect posture is invalid/,
+    );
+
+    const pluginOwned = structuredClone(base);
+    pluginOwned.selection.tools[0]!.runtimeOwner = { kind: "plugin", bindingHash: "1".repeat(64) };
+    assert.throws(
+      () => repo.create(sealChatTurnCapabilityProfile(pluginOwned)),
+      /mesh publication is not Gateway-owned/,
+    );
+    db.close();
+  });
+
   it("rejects updates, deletes, conflicting re-inserts, and detects storage tampering", () => {
     const { db, repo } = createStore();
     const profile = sealChatTurnCapabilityProfile(buildDraft());

@@ -630,6 +630,45 @@ function assertValidProfile(input: ChatTurnCapabilityProfileRecord): void {
         );
       }
     }
+    if (tool.meshPublication !== undefined) {
+      // HX-408 M2: the packet-mandated snapshot for one mesh-published
+      // callable. Shape truth only — live revalidation stays with the freeze
+      // and pre-dispatch gates against the storage revalidation query.
+      const mesh = tool.meshPublication;
+      assertSafeId(mesh.nodeId, `selection.tools.${tool.canonicalName}.meshPublication.nodeId`);
+      assertSafeId(mesh.activationId, `selection.tools.${tool.canonicalName}.meshPublication.activationId`);
+      assertHash(mesh.manifestSha256, `selection.tools.${tool.canonicalName}.meshPublication.manifestSha256`);
+      assertHash(mesh.entrySha256, `selection.tools.${tool.canonicalName}.meshPublication.entrySha256`);
+      assertHash(
+        mesh.permissionEnvelopeSha256,
+        `selection.tools.${tool.canonicalName}.meshPublication.permissionEnvelopeSha256`,
+      );
+      for (const [field, value] of [
+        ["publisherGeneration", mesh.publisherGeneration],
+        ["activationRevision", mesh.activationRevision],
+        ["publicationLeaseFencingToken", mesh.publicationLeaseFencingToken],
+        ["healthGeneration", mesh.healthGeneration],
+      ] as const) {
+        if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
+          throw new Error(
+            `Capability profile tool ${tool.canonicalName} meshPublication.${field} must be a positive integer.`,
+          );
+        }
+      }
+      if (
+        !(["none", "read_only", "write_local", "external_side_effect", "unknown"] as const).includes(mesh.effectPosture)
+      ) {
+        throw new Error(`Capability profile tool ${tool.canonicalName} meshPublication effect posture is invalid.`);
+      }
+      if (tool.runtimeOwner?.kind !== "builtin") {
+        throw new Error(`Capability profile tool ${tool.canonicalName} mesh publication is not Gateway-owned.`);
+      }
+      if (tool.mcpRequesterResolution !== undefined) {
+        throw new Error(
+          `Capability profile tool ${tool.canonicalName} cannot bind both mesh publication and requester-scoped MCP.`,
+        );
+      }
+    }
     if (toolBindings.has(tool.modelName) || canonicalNames.has(tool.canonicalName)) {
       throw new Error("Capability profile contains duplicate tool-name bindings.");
     }

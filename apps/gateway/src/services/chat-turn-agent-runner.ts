@@ -22,6 +22,7 @@ import type {
   ChatTurnRepairSource,
   ChatTurnTraceRecord,
   ChatTurnCapabilityProfileRecord,
+  ChatTurnCapabilityToolMeshPublicationBinding,
   ChatTurnCapabilityToolRuntimeOwnerBinding,
   ChatUserInputPromptRecord,
   ImageGenerationRequest,
@@ -821,6 +822,20 @@ export interface ChatTurnAgentRunnerDeps {
     reasonCodes: string[];
     matchedGrantId?: string;
   };
+  /**
+   * HX-408 M2 pre-dispatch drift gate for mesh-published callables. The
+   * gateway composition re-verifies the frozen `meshPublication` snapshot
+   * against the storage-owned revalidation query immediately before dispatch
+   * and returns a content-free block reason: `mesh_capability_binding_drift`
+   * when live state diverged, otherwise the M3-pending
+   * `mesh_capability_dispatch_unready` (no mesh dispatch runtime is composed
+   * yet). Absent composition keeps the tool fail-closed with the M3-pending
+   * reason. M3 slots the real dispatch behind the still-valid branch.
+   */
+  resolveMeshCapabilityPreDispatchBlock?: (input: {
+    workspaceId: string;
+    binding: ChatTurnCapabilityToolMeshPublicationBinding;
+  }) => "mesh_capability_binding_drift" | "mesh_capability_dispatch_unready";
   toolLoopDetection?: ToolLoopDetectionConfig;
   safeWriteFallbackDir?: string;
   /**
@@ -5071,6 +5086,23 @@ export class ChatTurnAgentRunner {
     }
     if (frozen.requiresApproval && !current.requiresApproval) {
       return `Current policy would broaden ${tool.toolName} beyond the profile's frozen approval posture.`;
+    }
+    // HX-408 M2: a mesh-published callable re-verifies its frozen activation
+    // snapshot immediately before dispatch and stays fail-closed BEFORE any
+    // remote path — drift blocks with a content-free reason, and a still-valid
+    // binding terminates on the M3-pending rejection until the mesh dispatch
+    // runtime is composed.
+    const meshPublication = input.capabilityProfile.selection.tools.find(
+      (candidate) => candidate.canonicalName === tool.toolName,
+    )?.meshPublication;
+    if (meshPublication) {
+      const block = this.deps.resolveMeshCapabilityPreDispatchBlock
+        ? this.deps.resolveMeshCapabilityPreDispatchBlock({
+            workspaceId: input.capabilityProfile.identity.workspaceId,
+            binding: meshPublication,
+          })
+        : "mesh_capability_dispatch_unready";
+      return `Mesh-published tool ${tool.toolName} is blocked because ${block}.`;
     }
     return undefined;
   }

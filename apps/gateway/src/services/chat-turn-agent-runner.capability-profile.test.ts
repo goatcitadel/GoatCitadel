@@ -15,6 +15,20 @@ import {
   createToolCatalog,
   namedToolCallCompletion,
 } from "./chat-turn-agent-runner-test-fixtures.js";
+import { buildToolRuntimeOwnerBinding } from "./tool-runtime-interposition.js";
+
+const MESH_PUBLICATION_BINDING = {
+  nodeId: "node-a",
+  publisherGeneration: 3,
+  manifestSha256: "d".repeat(64),
+  entrySha256: "e".repeat(64),
+  activationId: `mesh-activation-${"f".repeat(48)}`,
+  activationRevision: 2,
+  publicationLeaseFencingToken: 5,
+  permissionEnvelopeSha256: "a".repeat(64),
+  effectPosture: "read_only" as const,
+  healthGeneration: 4,
+};
 
 const TOOL_DEFINITION = {
   type: "function",
@@ -107,7 +121,7 @@ function buildCatalogSnapshot(includeTrustedSkill = false): CapabilityCatalogSna
 }
 
 function buildProfile(
-  options: { requiresApproval?: boolean; trustedSkill?: boolean; heartbeat?: boolean } = {},
+  options: { requiresApproval?: boolean; trustedSkill?: boolean; heartbeat?: boolean; meshTool?: boolean } = {},
 ): ChatTurnCapabilityProfileRecord {
   const requiresApproval = options.requiresApproval ?? false;
   const heartbeat = options.heartbeat ?? false;
@@ -158,6 +172,12 @@ function buildProfile(
           modelName: "browser_search",
           definitionHash: digest(TOOL_DEFINITION),
           providerDefinition: TOOL_DEFINITION,
+          ...(options.meshTool
+            ? {
+                runtimeOwner: buildToolRuntimeOwnerBinding("builtin"),
+                meshPublication: MESH_PUBLICATION_BINDING,
+              }
+            : {}),
         },
       ],
       modelNameAllowMap: [{ modelName: "browser_search", canonicalName: "browser.search" }],
@@ -372,6 +392,94 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
       status: "blocked",
       error: expect.stringContaining("broaden"),
     });
+  });
+
+  it("terminates a still-valid mesh-published callable on the M3-pending rejection before any dispatch", async () => {
+    const createChatCompletion = vi
+      .fn()
+      .mockResolvedValueOnce(namedToolCallCompletion("browser.search", { query: "release notes" }))
+      .mockResolvedValueOnce({
+        model: "model-a",
+        choices: [{ index: 0, message: { role: "assistant", content: "The mesh tool is blocked." } }],
+      });
+    const invokeTool = vi.fn();
+    const resolveMeshCapabilityPreDispatchBlock = vi.fn(() => "mesh_capability_dispatch_unready" as const);
+    const profile = buildProfile({ meshTool: true });
+    const runner = new ChatTurnAgentRunner({
+      storage: createProfileStorage(profile) as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      listCapabilityCatalog: () => liveCallableCatalog(profile),
+      createChatCompletion,
+      invokeTool,
+      evaluateToolAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
+      resolveMeshCapabilityPreDispatchBlock,
+    });
+
+    const result = await runner.run(buildInput(profile));
+
+    // The gate re-verified against the frozen snapshot with the profile's workspace.
+    expect(resolveMeshCapabilityPreDispatchBlock).toHaveBeenCalledWith({
+      workspaceId: "workspace-frozen",
+      binding: MESH_PUBLICATION_BINDING,
+    });
+    // Fail-closed BEFORE any remote path: no executor dispatch of any kind.
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(result.turnTrace.toolRuns).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          toolName: "browser.search",
+          status: "blocked",
+          error: expect.stringContaining("mesh_capability_dispatch_unready"),
+        }),
+      ]),
+    );
+  });
+
+  it("blocks a drifted mesh binding with the content-free drift reason and fails closed without the gate", async () => {
+    const invokeTool = vi.fn();
+    const profile = buildProfile({ meshTool: true });
+    const buildRunner = (
+      resolveMeshCapabilityPreDispatchBlock?: () =>
+        | "mesh_capability_binding_drift"
+        | "mesh_capability_dispatch_unready",
+    ) =>
+      new ChatTurnAgentRunner({
+        storage: createProfileStorage(profile) as never,
+        listToolCatalog: () => createToolCatalog(["browser.search"]),
+        listCapabilityCatalog: () => liveCallableCatalog(profile),
+        createChatCompletion: vi
+          .fn()
+          .mockResolvedValueOnce(namedToolCallCompletion("browser.search", { query: "release notes" }))
+          .mockResolvedValueOnce({
+            model: "model-a",
+            choices: [{ index: 0, message: { role: "assistant", content: "Blocked." } }],
+          }),
+        invokeTool,
+        evaluateToolAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
+        ...(resolveMeshCapabilityPreDispatchBlock ? { resolveMeshCapabilityPreDispatchBlock } : {}),
+      });
+
+    const drifted = await buildRunner(() => "mesh_capability_binding_drift").run(buildInput(profile));
+    expect(drifted.turnTrace.toolRuns).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          status: "blocked",
+          error: expect.stringContaining("mesh_capability_binding_drift"),
+        }),
+      ]),
+    );
+
+    // Absent composition keeps the mesh callable fail-closed (M3-pending).
+    const unwired = await buildRunner(undefined).run(buildInput(profile));
+    expect(unwired.turnTrace.toolRuns).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          status: "blocked",
+          error: expect.stringContaining("mesh_capability_dispatch_unready"),
+        }),
+      ]),
+    );
+    expect(invokeTool).not.toHaveBeenCalled();
   });
 
   it("terminally blocks exact system-heartbeat approval drift before invocation or tool-row creation", async () => {

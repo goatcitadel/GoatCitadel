@@ -1775,6 +1775,10 @@ export class GatewayService {
       invokeToolWithEffectTruth: (request, options) => this.invokeTool(request, options),
       persistToolArtifact: (input) => chatToolArtifactService.persistChatToolArtifact(this, input),
       evaluateToolAccess: (request) => this.evaluateToolAccess(request),
+      // HX-408 M2: the pre-dispatch drift gate re-verifies the frozen mesh
+      // activation snapshot through the activation owner right before dispatch.
+      resolveMeshCapabilityPreDispatchBlock: ({ workspaceId, binding }) =>
+        this.meshCapabilityActivationService.resolvePreDispatchBlock(workspaceId, binding),
       invokeMcpTool: (request, options) => this.invokeMcpTool(request, options),
       listMcpBrowserFallbackTargets: () => this.listMcpBrowserFallbackTargets(),
       recordRuntimeDecision: (input) => this.recordRuntimeDecision(input),
@@ -5441,6 +5445,11 @@ export class GatewayService {
         // failure yields `undefined` so that server is simply not callable.
         resolveMcpRequesterResolutionBinding: (hookInput) =>
           this.mcpRequesterScopedRuntime.resolveMcpRequesterResolutionBinding(hookInput),
+        // HX-408 M2: the profile-freeze drift gate re-verifies a mesh-published
+        // callable's activation through the storage revalidation query;
+        // `undefined` makes the profile freeze fail closed.
+        resolveMeshPublicationBinding: (hookInput) =>
+          this.meshCapabilityActivationService.resolveProfileBinding(hookInput),
         getProviderReadiness: (providerId) => {
           const provider = runtime.providers.find((candidate) => candidate.providerId === providerId);
           if (!provider) {

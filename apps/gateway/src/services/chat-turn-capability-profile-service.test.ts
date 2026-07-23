@@ -619,3 +619,142 @@ describe("resolveChatTurnCapabilityProfile", () => {
     verifyChatTurnCapabilityProfile(resolution.profile);
   });
 });
+
+const MESH_CAPABILITY_ID = "mesh:node-a:tool:project.status";
+
+const MESH_PROJECTION = {
+  nodeId: "node-a",
+  admissionGeneration: 1,
+  publisherGeneration: 3,
+  manifestSha256: "d".repeat(64),
+  entrySha256: "e".repeat(64),
+  localId: "project.status",
+  capabilityKind: "tool" as const,
+  status: "active" as const,
+  reasons: ["activation_live"],
+  effectPosture: "read_only" as const,
+};
+
+const MESH_TOOL_ENTRY: CapabilityCatalogEntry = {
+  capabilityId: MESH_CAPABILITY_ID,
+  kind: "mesh_tool",
+  category: "mesh_published",
+  title: "Project status",
+  summary: "Mesh tool published by node node-a.",
+  callable: true,
+  trustLabel: "Mesh activated",
+  mesh: MESH_PROJECTION,
+};
+
+const MESH_BINDING = {
+  nodeId: "node-a",
+  publisherGeneration: 3,
+  manifestSha256: "d".repeat(64),
+  entrySha256: "e".repeat(64),
+  activationId: `mesh-activation-${"f".repeat(48)}`,
+  activationRevision: 2,
+  publicationLeaseFencingToken: 5,
+  permissionEnvelopeSha256: "a".repeat(64),
+  effectPosture: "read_only" as const,
+  healthGeneration: 4,
+};
+
+function configureMeshTool(deps: ChatTurnCapabilityProfileResolveDeps) {
+  deps.listCapabilityCatalog = vi.fn(() => [MESH_TOOL_ENTRY]);
+  deps.resolveToolSchema = vi.fn(async () => ({
+    tools: [
+      {
+        ...PROVIDER_TOOL,
+        function: { ...PROVIDER_TOOL.function, name: "mesh_node_a_project_status" },
+      },
+    ],
+    modelToCanonical: new Map([["mesh_node_a_project_status", MESH_CAPABILITY_ID]]),
+    canonicalToModel: new Map([[MESH_CAPABILITY_ID, "mesh_node_a_project_status"]]),
+    policyDecisions: [
+      {
+        toolName: MESH_CAPABILITY_ID,
+        allowed: true,
+        requiresApproval: true,
+        reasonCodes: ["permission_profile_requires_approval"],
+      },
+    ],
+  }));
+  const resolver = vi.fn(() => ({ ...MESH_BINDING }));
+  deps.resolveMeshPublicationBinding = resolver;
+  return resolver;
+}
+
+describe("resolveChatTurnCapabilityProfile mesh publication binding", () => {
+  it("freezes the packet's exact activation snapshot for a mesh-published callable", async () => {
+    const { deps } = buildDeps();
+    const resolver = configureMeshTool(deps);
+
+    const resolution = await resolveChatTurnCapabilityProfile(deps, buildInput());
+
+    expect(resolver).toHaveBeenCalledWith({
+      workspaceId: "workspace-1",
+      capabilityId: MESH_CAPABILITY_ID,
+      entrySha256: MESH_PROJECTION.entrySha256,
+      manifestSha256: MESH_PROJECTION.manifestSha256,
+      publisherGeneration: MESH_PROJECTION.publisherGeneration,
+    });
+    const tool = resolution.profile.selection.tools[0]!;
+    expect(tool.canonicalName).toBe(MESH_CAPABILITY_ID);
+    expect(tool.meshPublication).toEqual(MESH_BINDING);
+    expect(Object.isFrozen(tool.meshPublication)).toBe(true);
+    expect(tool.runtimeOwner?.kind).toBe("builtin");
+    // Remote execution keeps the conservative recovery upper bound.
+    expect(tool.effectPotential).toMatchObject({ potential: "unknown", sourceKind: "remote" });
+    verifyChatTurnCapabilityProfile(resolution.profile);
+  });
+
+  it("fails the profile freeze closed when the activation no longer revalidates", async () => {
+    const { deps } = buildDeps();
+    const resolver = configureMeshTool(deps);
+    resolver.mockImplementation(() => undefined as never);
+
+    await expect(resolveChatTurnCapabilityProfile(deps, buildInput())).rejects.toThrow(/mesh_capability_freeze_drift/u);
+  });
+
+  it("fails the profile freeze closed when the freeze seam is not composed", async () => {
+    const { deps } = buildDeps();
+    configureMeshTool(deps);
+    deps.resolveMeshPublicationBinding = undefined;
+
+    await expect(resolveChatTurnCapabilityProfile(deps, buildInput())).rejects.toThrow(/mesh_capability_freeze_drift/u);
+  });
+
+  it("fails the profile freeze closed when the verified binding diverges from the exact catalog entry", async () => {
+    const { deps } = buildDeps();
+    const resolver = configureMeshTool(deps);
+    resolver.mockImplementation(() => ({ ...MESH_BINDING, entrySha256: "9".repeat(64) }));
+
+    await expect(resolveChatTurnCapabilityProfile(deps, buildInput())).rejects.toThrow(/mesh_capability_freeze_drift/u);
+  });
+
+  it("never treats a mesh skill descriptor as a trusted skill or callable tool", async () => {
+    const { deps } = buildDeps();
+    const meshSkillEntry: CapabilityCatalogEntry = {
+      capabilityId: "mesh:node-a:skill:project.guide",
+      kind: "mesh_skill",
+      category: "mesh_published",
+      title: "Project guide",
+      summary: "Published skill descriptor.",
+      callable: false,
+      reviewWarning: "Inspectable only.",
+      mesh: { ...MESH_PROJECTION, capabilityKind: "skill", status: "review_required", reasons: [] },
+    };
+    deps.listCapabilityCatalog = vi.fn((scope: "inspectable" | "callable") =>
+      scope === "inspectable" ? [MESH_TOOL_ENTRY, meshSkillEntry] : [MESH_TOOL_ENTRY],
+    );
+    configureMeshTool(deps).mockImplementation(() => ({ ...MESH_BINDING }));
+    deps.listCapabilityCatalog = vi.fn((scope: "inspectable" | "callable") =>
+      scope === "inspectable" ? [MESH_TOOL_ENTRY, meshSkillEntry] : [MESH_TOOL_ENTRY],
+    );
+
+    const resolution = await resolveChatTurnCapabilityProfile(deps, buildInput());
+    expect(resolution.profile.selection.trustedSkills).toEqual([]);
+    expect(resolution.profile.selection.tools).toHaveLength(1);
+    verifyChatTurnCapabilityProfile(resolution.profile);
+  });
+});
