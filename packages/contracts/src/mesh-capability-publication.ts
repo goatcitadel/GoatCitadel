@@ -290,6 +290,19 @@ export interface MeshCapabilityCatalogEntryProjection {
   status: MeshCapabilityCatalogEntryStatus;
   reasons: string[];
   effectPosture: MeshCapabilityEffectPosture;
+  /**
+   * HX-408 M2: latest governed activation facts for this exact entry, when one
+   * exists. Server-built annotation only — callability truth stays with the
+   * storage revalidation query, never with this projection field.
+   */
+  activation?: MeshCapabilityCatalogEntryActivationProjection;
+}
+
+export interface MeshCapabilityCatalogEntryActivationProjection {
+  activationId: string;
+  activationRevision: number;
+  approvalId: string;
+  revoked: boolean;
 }
 
 export function deriveMeshCapabilityId(nodeId: string, kind: MeshCapabilityKind, localId: string): string {

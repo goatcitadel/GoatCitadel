@@ -16,6 +16,7 @@ import { MeshCapabilityNodeAdmissionRepository } from "./mesh-capability-node-ad
 import {
   MeshCapabilityPublicationRepository,
   buildMeshCapabilityActivationApprovalPayload,
+  buildMeshCapabilityActivationDiffs,
   computeMeshCapabilityActivationRequestSha256,
   computeMeshCapabilityDescriptorSha256,
   computeMeshCapabilityEntrySha256,
@@ -941,6 +942,59 @@ describe("MeshCapabilityPublicationRepository", () => {
       idempotencyKey: "revoke-revision-two",
     });
     assert.equal(repo.listCallableActivations("default").length, 0, "revocation must not revive an older revision");
+  });
+
+  it("reads latest activation, revocation evidence, and the exact storage-owned diff pair", () => {
+    const { db, repo } = createHarness();
+    const published = repo.publishManifest(manifest());
+    const tool = published.entries.find((candidate) => candidate.kind === "tool")!;
+
+    assert.equal(repo.findLatestActivation("default", tool.capabilityId), undefined);
+    assert.equal(repo.findActivationRevocation("default", "missing-activation"), undefined);
+
+    const initialDiffs = buildMeshCapabilityActivationDiffs({ currentEntry: tool });
+    const firstInput = activationFor(published, tool, "diff-revision-one");
+    assert.deepEqual(initialDiffs.permissionDiff, firstInput.permissionDiff);
+    assert.deepEqual(initialDiffs.effectDiff, firstInput.effectDiff);
+    approve(db, firstInput);
+    const first = repo.activate(firstInput);
+
+    const nextDiffs = buildMeshCapabilityActivationDiffs({
+      currentEntry: tool,
+      prior: { activation: first, entry: tool },
+    });
+    const secondInput = {
+      ...activationFor(published, tool, "diff-revision-two"),
+      activationRevision: 2,
+      permissionDiff: nextDiffs.permissionDiff,
+      effectDiff: nextDiffs.effectDiff,
+    };
+    approve(db, secondInput);
+    const second = repo.activate(secondInput);
+    assert.equal(second.activationRevision, 2);
+    assert.equal(nextDiffs.permissionDiff.disposition, "unchanged");
+    assert.equal(nextDiffs.effectDiff.disposition, "unchanged");
+
+    const latest = repo.findLatestActivation("default", tool.capabilityId);
+    assert.equal(latest?.activationId, second.activationId);
+    assert.equal(latest?.activationRevision, 2);
+    // Cross-workspace reads stay isolated even for the identical capability ID.
+    assert.equal(repo.findLatestActivation("workspace-b", tool.capabilityId), undefined);
+
+    assert.equal(repo.findActivationRevocation("default", second.activationId), undefined);
+    repo.revoke({
+      workspaceId: "default",
+      activationId: second.activationId,
+      reason: "Revoke for the latest-read proof.",
+      actorId: "operator-a",
+      idempotencyKey: "revoke-diff-revision-two",
+    });
+    const revocation = repo.findActivationRevocation("default", second.activationId);
+    assert.equal(revocation?.activationId, second.activationId);
+    assert.equal(repo.findActivationRevocation("workspace-b", second.activationId), undefined);
+    // The latest-read still reports the revoked revision; callability is gone.
+    assert.equal(repo.findLatestActivation("default", tool.capabilityId)?.activationId, second.activationId);
+    assert.equal(repo.listCallableActivations("default").length, 0);
   });
 
   it("enforces admitted-publisher and active-manifest caps from canonical storage state", () => {

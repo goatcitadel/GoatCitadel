@@ -8,8 +8,35 @@ import {
 import { Storage, computeMeshCapabilityActivationRequestSha256 } from "@goatcitadel/storage";
 import {
   createMeshCapabilityActivationApproval,
+  deriveMeshCapabilityActivationApprovalId,
   type CreateMeshCapabilityActivationApprovalInput,
 } from "./mesh-capability-activation-approval-service.js";
+
+function expectedDeterministicApprovalId(input: {
+  workspaceId: string;
+  activationId: string;
+  activationRevision: number;
+}): string {
+  const digest = createHash("sha256")
+    .update(
+      canonicalJsonString({
+        schemaVersion: "goatcitadel.mesh-capability-activation-approval-id.v1",
+        workspaceId: input.workspaceId,
+        activationId: input.activationId,
+        activationRevision: input.activationRevision,
+      }),
+      "utf8",
+    )
+    .digest("hex");
+  const material = digest.slice(0, 32);
+  return [
+    material.slice(0, 8),
+    material.slice(8, 12),
+    material.slice(12, 16),
+    material.slice(16, 20),
+    material.slice(20, 32),
+  ].join("-");
+}
 
 const openStorage: Storage[] = [];
 
@@ -72,19 +99,13 @@ describe("mesh capability activation approval service", () => {
     vi.setSystemTime(new Date("2099-01-01T00:00:00.000Z"));
 
     const first = createMeshCapabilityActivationApproval(host, input);
-    const expectedApprovalId = `mesh-capability-activation:${createHash("sha256")
-      .update(
-        canonicalJsonString({
-          schemaVersion: "goatcitadel.mesh-capability-activation-approval-id.v1",
-          workspaceId: input.workspaceId,
-          activationId: input.activationId,
-          activationRevision: input.activationRevision,
-        }),
-        "utf8",
-      )
-      .digest("hex")}`;
+    const expectedApprovalId = expectedDeterministicApprovalId(input);
 
     expect(first.replayed).toBe(false);
+    // The shipped operator resolve route (`POST /api/v1/approvals/:approvalId/resolve`)
+    // pins a UUID-shaped id, so the deterministic identity must stay resolvable there.
+    expect(expectedApprovalId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u);
+    expect(deriveMeshCapabilityActivationApprovalId(input)).toBe(expectedApprovalId);
     expect(first.activationInput).toEqual({ ...input, approvalId: expectedApprovalId });
     expect(first.approval).toMatchObject({
       approvalId: expectedApprovalId,
@@ -198,16 +219,7 @@ describe("mesh capability activation approval service", () => {
   it("fails closed on foreign pre-existing bytes for the derived approval identity", () => {
     const host = createHost();
     const input = activationApprovalInput();
-    const approvalId = `mesh-capability-activation:${createHash("sha256")
-      .update(
-        canonicalJsonString({
-          schemaVersion: "goatcitadel.mesh-capability-activation-approval-id.v1",
-          workspaceId: input.workspaceId,
-          activationId: input.activationId,
-          activationRevision: input.activationRevision,
-        }),
-      )
-      .digest("hex")}`;
+    const approvalId = expectedDeterministicApprovalId(input);
     host.storage.approvals.createDeterministicDetachedWithTtlDuration(
       {
         approvalId,

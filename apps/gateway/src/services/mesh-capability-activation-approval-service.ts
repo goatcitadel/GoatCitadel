@@ -106,7 +106,17 @@ export function createMeshCapabilityActivationApproval(
   };
 }
 
-function deriveMeshCapabilityActivationApprovalId(
+/**
+ * Deterministic server-owned approval identity for one exact activation
+ * request. Composition constraint (same as HX-407 C2): the shipped approvals
+ * surface resolves approvals through `POST /api/v1/approvals/:approvalId/resolve`,
+ * whose route contract pins a UUID-shaped id — so the deterministic identity is
+ * the canonical material digest formatted as a UUID (first 128 bits of the
+ * SHA-256), which stays exactly replayable while remaining resolvable by the
+ * existing operator surface. The approval `kind` column carries the domain
+ * identity.
+ */
+export function deriveMeshCapabilityActivationApprovalId(
   input: Pick<ActivateMeshCapabilityInput, "workspaceId" | "activationId" | "activationRevision">,
 ): string {
   assertCanonicalIdentifier(input.workspaceId, "workspaceId", 256);
@@ -123,7 +133,14 @@ function deriveMeshCapabilityActivationApprovalId(
       "utf8",
     )
     .digest("hex");
-  return `mesh-capability-activation:${digest}`;
+  const material = digest.slice(0, 32);
+  return [
+    material.slice(0, 8),
+    material.slice(8, 12),
+    material.slice(12, 16),
+    material.slice(16, 20),
+    material.slice(20, 32),
+  ].join("-");
 }
 
 function clonePermissionDiff(input: MeshCapabilityPermissionDiff): MeshCapabilityPermissionDiff {

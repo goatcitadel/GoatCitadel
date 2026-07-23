@@ -68,6 +68,33 @@ export interface ChatTurnCapabilityToolDefinition {
    * non-MCP tools omit this field; legacy omission can never imply scoped mode.
    */
   mcpRequesterResolution?: McpRequesterResolutionBinding;
+  /**
+   * HX-408 M2: immutable snapshot of the governed mesh activation this tool
+   * binds. Present exactly when the tool is a mesh-published callable; the
+   * freeze and pre-dispatch drift gates re-verify every field against live
+   * publisher state and block the turn/call fail-closed on any drift.
+   */
+  meshPublication?: ChatTurnCapabilityToolMeshPublicationBinding;
+}
+
+/**
+ * The packet-mandated capability-profile snapshot for one mesh-published
+ * callable: publisher node, generation, manifest digest, entry digest,
+ * activation revision, lease fencing token, permission/effect posture, and
+ * health generation. Any live-state divergence from these exact values blocks
+ * the turn before remote delivery.
+ */
+export interface ChatTurnCapabilityToolMeshPublicationBinding {
+  nodeId: string;
+  publisherGeneration: number;
+  manifestSha256: string;
+  entrySha256: string;
+  activationId: string;
+  activationRevision: number;
+  publicationLeaseFencingToken: number;
+  permissionEnvelopeSha256: string;
+  effectPosture: import("./mesh-capability-publication.js").MeshCapabilityEffectPosture;
+  healthGeneration: number;
 }
 
 export interface ChatTurnCapabilityToolRuntimeOwnerBinding {

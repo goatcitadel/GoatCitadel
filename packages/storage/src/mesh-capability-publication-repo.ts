@@ -677,6 +677,32 @@ export class MeshCapabilityPublicationRepository {
     return mapActivation(row);
   }
 
+  /** Highest-revision activation for one derived capability ID, revoked or not. */
+  public findLatestActivation(workspaceId: string, capabilityId: string): MeshCapabilityActivationRecord | undefined {
+    const row = this.db
+      .prepare(
+        `
+      SELECT * FROM mesh_capability_activations
+      WHERE workspace_id = @workspaceId AND capability_id = @capabilityId
+      ORDER BY activation_revision DESC
+      LIMIT 1
+    `,
+      )
+      .get({
+        workspaceId: identifier(workspaceId, "workspaceId"),
+        capabilityId: identifier(capabilityId, "capabilityId", 512),
+      }) as ActivationRow | undefined;
+    return row ? mapActivation(row) : undefined;
+  }
+
+  /** Immutable revocation evidence for one activation, if any. */
+  public findActivationRevocation(
+    workspaceId: string,
+    activationId: string,
+  ): MeshCapabilityActivationRevocationRecord | undefined {
+    return this.findRevocation(identifier(workspaceId, "workspaceId"), identifier(activationId, "activationId"));
+  }
+
   public revoke(input: RevokeMeshCapabilityActivationInput): MeshCapabilityActivationRevocationRecord {
     const normalized = {
       workspaceId: identifier(input.workspaceId, "workspaceId"),
@@ -948,6 +974,30 @@ export function computeMeshCapabilityEntrySha256(entry: Omit<MeshCapabilityManif
 
 export function computeMeshCapabilityActivationRequestSha256(input: ActivateMeshCapabilityInput): string {
   return sha256(normalizeActivationInput(input));
+}
+
+/**
+ * Builds the ONE exact permission/effect diff pair the storage activation
+ * guard will accept for `currentEntry` against its optional prior activation.
+ * This is the same computation `activate()` re-verifies inside its
+ * transaction (`assertExactActivationDiffs`), exported so governed request
+ * owners surface — never re-implement — the storage-owned diff truth.
+ */
+export function buildMeshCapabilityActivationDiffs(input: {
+  currentEntry: MeshCapabilityManifestEntry;
+  prior?: { activation: MeshCapabilityActivationRecord; entry: MeshCapabilityManifestEntry };
+}): { permissionDiff: MeshCapabilityPermissionDiff; effectDiff: MeshCapabilityEffectDiff } {
+  const permissionDiff = exactPermissionDiff(
+    input.prior?.entry.descriptor.permissions,
+    input.currentEntry.descriptor.permissions,
+    input.prior?.activation,
+  );
+  const effectDiff = exactEffectDiff(
+    input.prior?.entry.descriptor.effectPosture,
+    input.currentEntry.descriptor.effectPosture,
+    input.prior?.activation,
+  );
+  return { permissionDiff, effectDiff };
 }
 
 export function buildMeshCapabilityActivationApprovalPayload(
