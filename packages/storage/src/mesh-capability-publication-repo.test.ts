@@ -350,6 +350,56 @@ describe("MeshCapabilityPublicationRepository", () => {
     assert.throws(() => repo.getManifest("other", "node-a", 1, published.manifestSha256), /not found/);
   });
 
+  it("exposes read-only current-publisher, publication-key, and manifest-list projections", () => {
+    const { repo, publisher } = createHarness();
+    assert.deepEqual(repo.findCurrentPublisher("default", "node-a"), publisher);
+    assert.equal(repo.findCurrentPublisher("default", "node-unknown"), undefined);
+    assert.equal(repo.getManifestByPublicationKey("default", "publication-unused"), undefined);
+
+    const first = repo.publishManifest(manifest());
+    assert.deepEqual(repo.getManifestByPublicationKey("default", "publication-1"), first);
+    const second = repo.publishManifest(manifest("publication-2", first.entries, first.manifestSha256));
+
+    const records = repo.listManifestRecords("default", { nodeId: "node-a" });
+    assert.deepEqual(
+      records.map((record) => ({
+        manifestSha256: record.manifest.manifestSha256,
+        supersededBy: record.supersededByManifestSha256,
+      })),
+      [
+        { manifestSha256: second.manifestSha256, supersededBy: undefined },
+        { manifestSha256: first.manifestSha256, supersededBy: second.manifestSha256 },
+      ],
+    );
+    assert.deepEqual(repo.listManifestRecords("default"), records);
+    assert.deepEqual(repo.listManifestRecords("default", { nodeId: "node-unknown" }), []);
+    assert.deepEqual(repo.listManifestRecords("other-workspace"), []);
+    assert.equal(repo.listManifestRecords("default", { limit: 1 }).length, 1);
+    assert.throws(() => repo.listManifestRecords("default", { limit: 0 }), /limit/);
+
+    const nextGeneration = repo.registerPublisher({
+      workspaceId: "default",
+      nodeId: "node-a",
+      admissionGeneration: 1,
+      publisherGeneration: 2,
+      mtlsRequired: true,
+      tlsFingerprint: "sha256:node-a",
+      publicationLeaseKey: publisher.publicationLeaseKey,
+      publicationLeaseFencingToken: publisher.publicationLeaseFencingToken,
+      publicationLeaseExpiresAt: publisher.publicationLeaseExpiresAt,
+      idempotencyKey: "publisher-2",
+    });
+    assert.deepEqual(repo.findCurrentPublisher("default", "node-a"), nextGeneration);
+    // Generation supersession is a publisher-generation fact, not a manifest
+    // child link: the prior-generation head stays un-superseded in this list.
+    const afterGeneration = repo.listManifestRecords("default", { nodeId: "node-a" });
+    assert.equal(
+      afterGeneration.find((record) => record.manifest.manifestSha256 === second.manifestSha256)
+        ?.supersededByManifestSha256,
+      undefined,
+    );
+  });
+
   it("allows exact tool activation and one settlement while skill activation stays impossible", () => {
     const { db, mesh, repo, lease } = createHarness();
     const published = repo.publishManifest(manifest());

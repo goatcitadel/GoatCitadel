@@ -325,6 +325,33 @@ export class MeshCapabilityPublicationRepository {
     return mapPublisher(row);
   }
 
+  /**
+   * Resolves the highest committed publisher generation for one admitted node,
+   * or undefined when the node has never registered a publisher generation in
+   * this workspace. Storage keeps generations strictly monotonic, so MAX is the
+   * current generation by construction.
+   */
+  public findCurrentPublisher(
+    workspaceId: string,
+    nodeId: string,
+  ): MeshCapabilityPublisherGenerationRecord | undefined {
+    const row = this.db
+      .prepare(
+        `
+      SELECT * FROM mesh_capability_publishers
+      WHERE workspace_id = @workspaceId AND node_id = @nodeId
+        AND publisher_generation = (
+          SELECT MAX(current.publisher_generation) FROM mesh_capability_publishers current
+          WHERE current.workspace_id = @workspaceId AND current.node_id = @nodeId
+        )
+    `,
+      )
+      .get({ workspaceId: identifier(workspaceId, "workspaceId"), nodeId: identifier(nodeId, "nodeId") }) as
+      | PublisherRow
+      | undefined;
+    return row ? mapPublisher(row) : undefined;
+  }
+
   public getPublisherHealth(
     workspaceId: string,
     nodeId: string,
@@ -507,6 +534,62 @@ export class MeshCapabilityPublicationRepository {
         manifest.manifestSha256,
       );
     });
+  }
+
+  /**
+   * Resolves the immutable manifest bound to one workspace-scoped publication
+   * key, or undefined when the key has never been used. The stored canonical
+   * bytes and digests are re-verified on read exactly like `getManifest`.
+   */
+  public getManifestByPublicationKey(workspaceId: string, publicationKey: string): MeshCapabilityManifest | undefined {
+    return this.findManifestByPublicationKey(
+      identifier(workspaceId, "workspaceId"),
+      identifier(publicationKey, "publicationKey", 512),
+    )?.manifest;
+  }
+
+  /**
+   * Lists immutable manifests for one workspace (optionally one node), newest
+   * first, annotating each with the digest of the manifest that supersedes it
+   * within the same publisher generation when one exists. Read-only projection
+   * input; every canonical byte and digest is re-verified on read.
+   */
+  public listManifestRecords(
+    workspaceId: string,
+    options: { nodeId?: string; limit?: number } = {},
+  ): Array<{ manifest: MeshCapabilityManifest; supersededByManifestSha256?: string }> {
+    const normalized = {
+      workspaceId: identifier(workspaceId, "workspaceId"),
+      nodeId: options.nodeId === undefined ? undefined : identifier(options.nodeId, "nodeId"),
+      limit: boundedLimit(options.limit),
+    };
+    const rows = this.db
+      .prepare(
+        `
+      SELECT manifest.*, (
+        SELECT child.manifest_sha256 FROM mesh_capability_manifests child
+        WHERE child.workspace_id = manifest.workspace_id AND child.node_id = manifest.node_id
+          AND child.publisher_generation = manifest.publisher_generation
+          AND child.supersedes_manifest_sha256 = manifest.manifest_sha256
+      ) AS superseded_by_manifest_sha256
+      FROM mesh_capability_manifests manifest
+      WHERE manifest.workspace_id = @workspaceId
+        AND (@nodeId IS NULL OR manifest.node_id = @nodeId)
+      ORDER BY manifest.created_at DESC, manifest.manifest_sha256 DESC
+      LIMIT @limit
+    `,
+      )
+      .all({
+        workspaceId: normalized.workspaceId,
+        nodeId: normalized.nodeId ?? null,
+        limit: normalized.limit,
+      }) as Array<ManifestRow & { superseded_by_manifest_sha256: string | null }>;
+    return rows.map((row) => ({
+      manifest: parseManifest(row),
+      ...(row.superseded_by_manifest_sha256 === null
+        ? {}
+        : { supersededByManifestSha256: row.superseded_by_manifest_sha256 }),
+    }));
   }
 
   public getManifest(
@@ -1164,6 +1247,11 @@ function positiveInteger(value: number, field: string): number {
   if (!Number.isSafeInteger(value) || value < 1)
     throw new TypeError(`Mesh capability ${field} must be a positive safe integer.`);
   return value;
+}
+function boundedLimit(value: number | undefined, fallback = 512, max = 2_000): number {
+  if (value === undefined) return fallback;
+  positiveInteger(value, "limit");
+  return Math.min(value, max);
 }
 function digest(value: string, field: string): string {
   if (!/^[0-9a-f]{64}$/u.test(value))

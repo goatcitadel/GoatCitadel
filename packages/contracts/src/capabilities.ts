@@ -1,6 +1,24 @@
-export type CapabilityKind = "tool" | "skill" | "code_mode" | "proposal" | "candidate_skill";
+export type CapabilityKind =
+  | "tool"
+  | "skill"
+  | "code_mode"
+  | "proposal"
+  | "candidate_skill"
+  // HX-408: governed mesh capability publication projects admitted-node
+  // descriptors as their own kinds so no existing kind-filtered consumer
+  // (tool schema resolution, skill activation, wrapper manifests) can treat
+  // a remote descriptor as a local capability.
+  | "mesh_tool"
+  | "mesh_mcp_server"
+  | "mesh_skill";
 
-export type CapabilityCategory = "built_in" | "optional" | "project_local" | "self_generated" | "community_imported";
+export type CapabilityCategory =
+  | "built_in"
+  | "optional"
+  | "project_local"
+  | "self_generated"
+  | "community_imported"
+  | "mesh_published";
 
 export type SkillLifecycleState = "draft" | "candidate" | "approved" | "trusted" | "deprecated" | "revoked";
 
@@ -103,6 +121,12 @@ export interface CapabilityCatalogEntry {
   };
   /** Server-authored tool recovery upper bound included in catalog hashes. */
   effectPotential?: import("./tool-effect-truth.js").ToolEffectPotentialRecord;
+  /**
+   * HX-408: server-owned projection facts for a governed mesh publication
+   * entry (publisher identity, immutable digests, and the explicit
+   * review_required/active/revoked/offline/superseded/blocked status).
+   */
+  mesh?: import("./mesh-capability-publication.js").MeshCapabilityCatalogEntryProjection;
 }
 
 export interface CapabilityCatalogSnapshotRecord {

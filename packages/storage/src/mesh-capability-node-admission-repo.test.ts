@@ -176,6 +176,36 @@ describe("MeshCapabilityNodeAdmissionRepository", () => {
     assert.throws(() => repo.admit(wrongFingerprint));
   });
 
+  it("resolves the exact admission row for a presented join-token digest without weakening currency checks", () => {
+    const { mesh, repo } = createHarness();
+    const firstInput = prepareAdmission(mesh, "node-a", "join-node-a-1");
+    const first = repo.admit(firstInput);
+
+    assert.deepEqual(repo.findByJoinTokenSha256(first.joinTokenSha256), first);
+    assert.equal(repo.findByJoinTokenSha256("f".repeat(64)), undefined);
+    assert.throws(() => repo.findByJoinTokenSha256("not-a-digest"), /joinTokenSha256/);
+
+    repo.revoke({
+      workspaceId: "default",
+      nodeId: "node-a",
+      admissionGeneration: 1,
+      reason: "Rotate the node admission identity.",
+      revokedByActorId: "operator-a",
+      idempotencyKey: "revoke:node-a:1",
+    });
+    const secondInput = prepareAdmission(mesh, "node-a", "join-node-a-2", {
+      expectedAdmissionGeneration: 1,
+      idempotencyKey: "admit:node-a:2",
+    });
+    const second = repo.admit(secondInput);
+
+    // The immutable stale-generation row stays resolvable by its own digest;
+    // callers must separately compare against findCurrent for currency.
+    assert.deepEqual(repo.findByJoinTokenSha256(first.joinTokenSha256), first);
+    assert.deepEqual(repo.findByJoinTokenSha256(second.joinTokenSha256), second);
+    assert.deepEqual(repo.findCurrent("default", "node-a"), second);
+  });
+
   it("requires current-generation revocation before a server-derived N+1 replacement", () => {
     const { db, mesh, repo } = createHarness();
     const firstInput = prepareAdmission(mesh, "node-a", "join-node-a-1");

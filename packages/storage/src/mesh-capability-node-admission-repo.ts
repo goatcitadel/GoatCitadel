@@ -121,6 +121,26 @@ export class MeshCapabilityNodeAdmissionRepository {
     return mapAdmission(row);
   }
 
+  /**
+   * Resolves the immutable admission row bound to one exact join-token digest.
+   * The digest column is globally unique, so this is the durable lookup an
+   * authenticated node-credential check uses to map a presented token onto its
+   * admitted workspace/node identity. Read-only; revocation and currency are
+   * separate checks the caller must make against `findCurrent`.
+   */
+  public findByJoinTokenSha256(joinTokenSha256: string): MeshCapabilityNodeAdmissionRecord | undefined {
+    const normalized = digest(joinTokenSha256, "joinTokenSha256");
+    const row = this.db
+      .prepare(
+        `
+        SELECT * FROM mesh_capability_node_admissions
+        WHERE join_token_sha256 = @joinTokenSha256
+      `,
+      )
+      .get({ joinTokenSha256: normalized }) as AdmissionRow | undefined;
+    return row ? mapAdmission(row) : undefined;
+  }
+
   public findCurrent(workspaceId: string, nodeId: string): MeshCapabilityNodeAdmissionRecord | undefined {
     const normalized = {
       workspaceId: identifier(workspaceId, "workspaceId"),

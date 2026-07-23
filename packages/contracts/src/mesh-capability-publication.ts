@@ -264,6 +264,34 @@ export interface MeshCapabilityInvocationSettlementRecord {
   settledAt: string;
 }
 
+/**
+ * Server-built projection status for one immutable mesh manifest entry inside
+ * the inspectable capability catalog. `active` is reserved for entries whose
+ * exact activation currently revalidates; every other state names why the
+ * entry is not callable.
+ */
+export type MeshCapabilityCatalogEntryStatus =
+  | "review_required"
+  | "active"
+  | "revoked"
+  | "offline"
+  | "superseded"
+  | "blocked";
+
+/** Server-owned mesh facts attached to a projected capability-catalog entry. */
+export interface MeshCapabilityCatalogEntryProjection {
+  nodeId: string;
+  admissionGeneration: number;
+  publisherGeneration: number;
+  manifestSha256: string;
+  entrySha256: string;
+  localId: string;
+  capabilityKind: MeshCapabilityKind;
+  status: MeshCapabilityCatalogEntryStatus;
+  reasons: string[];
+  effectPosture: MeshCapabilityEffectPosture;
+}
+
 export function deriveMeshCapabilityId(nodeId: string, kind: MeshCapabilityKind, localId: string): string {
   assertCanonicalIdentifier(nodeId, "nodeId", 128);
   assertMeshCapabilityLocalId(localId);
