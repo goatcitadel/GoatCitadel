@@ -1,0 +1,326 @@
+import { createHash } from "node:crypto";
+import { describe, expect, it } from "vitest";
+import { canonicalJsonString } from "./canonical-json.js";
+import {
+  REMOTE_WORKER_INFERENCE_BUDGET_SCHEMA_VERSION,
+  REMOTE_WORKER_INFERENCE_FRAME_GENESIS_SHA256,
+  REMOTE_WORKER_INFERENCE_FRAME_SCHEMA_VERSION,
+  REMOTE_WORKER_INFERENCE_GOVERNANCE_SCHEMA_VERSION,
+  REMOTE_WORKER_INFERENCE_MAX_MESSAGES,
+  REMOTE_WORKER_INFERENCE_MAX_MESSAGE_CHARS,
+  REMOTE_WORKER_INFERENCE_MAX_TEMPERATURE_MILLI,
+  REMOTE_WORKER_INFERENCE_REQUEST_SCHEMA_VERSION,
+  isRemoteWorkerInferenceTerminalState,
+  normalizeRemoteWorkerInferenceBudgetReservation,
+  normalizeRemoteWorkerInferenceFramePayload,
+  normalizeRemoteWorkerInferenceGovernanceReceipt,
+  normalizeRemoteWorkerInferenceRequestSubmission,
+  remoteWorkerInferenceCanonicalRequestBody,
+  remoteWorkerInferenceCanonicalRequestBodySha256,
+  remoteWorkerInferenceCanonicalSha256,
+  remoteWorkerInferenceFrameSha256,
+  remoteWorkerInferenceLeaseTokenSha256,
+  remoteWorkerInferenceRequestReplayMaterial,
+  remoteWorkerInferenceRequestSha256,
+  remoteWorkerInferenceStateCanTransition,
+  type RemoteWorkerInferenceRequestSubmission,
+} from "./remote-worker-inference.js";
+
+const D = (value: string): string => createHash("sha256").update(value, "utf8").digest("hex");
+
+function submission(
+  overrides: Partial<RemoteWorkerInferenceRequestSubmission> = {},
+): RemoteWorkerInferenceRequestSubmission {
+  return {
+    registryWorkspaceId: "default",
+    assignmentId: "assignment-1",
+    assignmentGeneration: 3,
+    inferenceRequestId: "inference-1",
+    attempt: 1,
+    idempotencyKey: "idem-1",
+    leaseToken: "raw-lease-secret-abc",
+    messages: [
+      { role: "system", text: "You are bounded." },
+      { role: "user", text: "Hello." },
+    ],
+    inputSha256: D("input"),
+    contextSha256: D("context"),
+    modelIntentSha256: D("intent"),
+    outputTokenCeiling: 4096,
+    reasoningTokenCeiling: 1024,
+    temperatureMilli: 700,
+    ...overrides,
+  };
+}
+
+describe("HX-503 remote worker inference submission", () => {
+  it("normalizes and freezes the exact bounded submission", () => {
+    const normalized = normalizeRemoteWorkerInferenceRequestSubmission(submission());
+    expect(Object.isFrozen(normalized)).toBe(true);
+    expect(Object.isFrozen(normalized.messages)).toBe(true);
+    expect(normalized.messages).toHaveLength(2);
+    expect(normalized.leaseToken).toBe("raw-lease-secret-abc");
+  });
+
+  it("uses browser-safe canonical SHA-256 parity", () => {
+    const value = { b: 2, a: [1, { z: "9" }] };
+    expect(remoteWorkerInferenceCanonicalSha256(value)).toBe(D(canonicalJsonString(value)));
+  });
+
+  it("keeps the raw lease out of the canonical request material and body", () => {
+    const material = remoteWorkerInferenceRequestReplayMaterial(submission());
+    const body = remoteWorkerInferenceCanonicalRequestBody(submission());
+    expect(canonicalJsonString(material)).not.toContain("raw-lease-secret");
+    expect(canonicalJsonString(body)).not.toContain("raw-lease-secret");
+    expect(canonicalJsonString(material)).not.toContain("leaseToken");
+  });
+
+  it("hashes the raw lease token deterministically and independently of the request hash", () => {
+    expect(remoteWorkerInferenceLeaseTokenSha256("raw-lease-secret-abc")).toBe(D("raw-lease-secret-abc"));
+    expect(remoteWorkerInferenceLeaseTokenSha256("raw-lease-secret-abc")).not.toBe(
+      remoteWorkerInferenceRequestSha256(submission()),
+    );
+  });
+
+  it("holds the request hash stable across lease rotation but changes on body drift", () => {
+    const base = remoteWorkerInferenceRequestSha256(submission());
+    expect(remoteWorkerInferenceRequestSha256(submission({ leaseToken: "rotated-lease-token" }))).toBe(base);
+    expect(remoteWorkerInferenceRequestSha256(submission({ temperatureMilli: 701 }))).not.toBe(base);
+    expect(remoteWorkerInferenceRequestSha256(submission({ messages: [{ role: "user", text: "Hi." }] }))).not.toBe(
+      base,
+    );
+    expect(remoteWorkerInferenceCanonicalRequestBodySha256(submission())).toBe(
+      remoteWorkerInferenceCanonicalRequestBodySha256(submission({ leaseToken: "rotated", idempotencyKey: "other" })),
+    );
+  });
+
+  it("pins the canonical request body schema version", () => {
+    const body = remoteWorkerInferenceCanonicalRequestBody(submission()) as { schemaVersion: string };
+    expect(body.schemaVersion).toBe(REMOTE_WORKER_INFERENCE_REQUEST_SCHEMA_VERSION);
+  });
+
+  it("rejects every forbidden provider/credential/tool/metadata field", () => {
+    for (const forbidden of [
+      "provider",
+      "providerId",
+      "model",
+      "modelId",
+      "apiStyle",
+      "providerUrl",
+      "credentialRef",
+      "apiKey",
+      "headers",
+      "tools",
+      "memory",
+      "metadata",
+      "serviceTier",
+      "fallback",
+      "fallbackList",
+      "multimodal",
+      "images",
+      "attachments",
+    ]) {
+      expect(() =>
+        normalizeRemoteWorkerInferenceRequestSubmission({
+          ...submission(),
+          [forbidden]: "x",
+        } as unknown as RemoteWorkerInferenceRequestSubmission),
+      ).toThrow(/unknown fields/u);
+    }
+  });
+
+  it("enforces message count, per-message size, and total request size bounds", () => {
+    expect(() => normalizeRemoteWorkerInferenceRequestSubmission(submission({ messages: [] }))).toThrow(/bounded/u);
+    const tooMany = Array.from({ length: REMOTE_WORKER_INFERENCE_MAX_MESSAGES + 1 }, () => ({
+      role: "user" as const,
+      text: "x",
+    }));
+    expect(() => normalizeRemoteWorkerInferenceRequestSubmission(submission({ messages: tooMany }))).toThrow(
+      /bounded/u,
+    );
+    expect(() =>
+      normalizeRemoteWorkerInferenceRequestSubmission(
+        submission({ messages: [{ role: "user", text: "x".repeat(REMOTE_WORKER_INFERENCE_MAX_MESSAGE_CHARS + 1) }] }),
+      ),
+    ).toThrow(/invalid/u);
+  });
+
+  it("rejects unsupported roles, non-hex hashes, and out-of-range ceilings", () => {
+    expect(() =>
+      normalizeRemoteWorkerInferenceRequestSubmission(submission({ messages: [{ role: "tool" as never, text: "x" }] })),
+    ).toThrow(/unsupported/u);
+    expect(() => normalizeRemoteWorkerInferenceRequestSubmission(submission({ inputSha256: "NOTHEX" }))).toThrow(
+      /digest/u,
+    );
+    expect(() => normalizeRemoteWorkerInferenceRequestSubmission(submission({ outputTokenCeiling: 0 }))).toThrow(
+      /positive integer/u,
+    );
+    expect(() =>
+      normalizeRemoteWorkerInferenceRequestSubmission(
+        submission({ temperatureMilli: REMOTE_WORKER_INFERENCE_MAX_TEMPERATURE_MILLI + 1 }),
+      ),
+    ).toThrow(/non-negative/u);
+    expect(() => normalizeRemoteWorkerInferenceRequestSubmission(submission({ reasoningTokenCeiling: -1 }))).toThrow(
+      /non-negative/u,
+    );
+  });
+
+  it("rejects prototype-pollution and cyclic message payloads", () => {
+    const cyclic: Record<string, unknown> = { role: "user", text: "x" };
+    cyclic.text = cyclic;
+    expect(() =>
+      normalizeRemoteWorkerInferenceRequestSubmission(submission({ messages: [cyclic as never] })),
+    ).toThrow();
+    expect(() =>
+      normalizeRemoteWorkerInferenceRequestSubmission(
+        JSON.parse('{"__proto__":{"polluted":true}}') as RemoteWorkerInferenceRequestSubmission,
+      ),
+    ).toThrow();
+  });
+});
+
+describe("HX-503 remote worker inference output frames", () => {
+  it("normalizes an allowlisted output_text frame and rejects unknown fields", () => {
+    const payload = normalizeRemoteWorkerInferenceFramePayload({
+      schemaVersion: REMOTE_WORKER_INFERENCE_FRAME_SCHEMA_VERSION,
+      kind: "output_text",
+      text: "hello",
+    });
+    expect(Object.isFrozen(payload)).toBe(true);
+    expect(() =>
+      normalizeRemoteWorkerInferenceFramePayload({
+        schemaVersion: REMOTE_WORKER_INFERENCE_FRAME_SCHEMA_VERSION,
+        kind: "output_text",
+        text: "hi",
+        reasoning: "secret chain of thought",
+      } as never),
+    ).toThrow(/unknown fields/u);
+  });
+
+  it("normalizes a terminal frame and binds the optional HX-306 usage event", () => {
+    const payload = normalizeRemoteWorkerInferenceFramePayload({
+      schemaVersion: REMOTE_WORKER_INFERENCE_FRAME_SCHEMA_VERSION,
+      kind: "terminal",
+      terminalState: "completed",
+      usageEventId: "usage-1",
+    });
+    expect(payload).toMatchObject({ kind: "terminal", terminalState: "completed", usageEventId: "usage-1" });
+  });
+
+  it("chains frame hashes over sequence, payload, previous hash, and effective route", () => {
+    const first = remoteWorkerInferenceFrameSha256({
+      registryWorkspaceId: "default",
+      assignmentId: "assignment-1",
+      assignmentGeneration: 3,
+      inferenceRequestId: "inference-1",
+      attempt: 1,
+      frameSequence: 1,
+      frameKind: "output_text",
+      payloadSha256: D("payload-1"),
+      previousFrameSha256: REMOTE_WORKER_INFERENCE_FRAME_GENESIS_SHA256,
+      effectiveRouteSha256: D("route"),
+    });
+    const second = remoteWorkerInferenceFrameSha256({
+      registryWorkspaceId: "default",
+      assignmentId: "assignment-1",
+      assignmentGeneration: 3,
+      inferenceRequestId: "inference-1",
+      attempt: 1,
+      frameSequence: 2,
+      frameKind: "output_text",
+      payloadSha256: D("payload-2"),
+      previousFrameSha256: first,
+      effectiveRouteSha256: D("route"),
+    });
+    expect(first).toMatch(/^[0-9a-f]{64}$/u);
+    expect(second).not.toBe(first);
+  });
+
+  it("identifies terminal states", () => {
+    expect(isRemoteWorkerInferenceTerminalState("completed")).toBe(true);
+    expect(isRemoteWorkerInferenceTerminalState("streaming")).toBe(false);
+  });
+});
+
+describe("HX-503 remote worker inference governance and budget receipts", () => {
+  it("normalizes an allowed governance receipt and rejects credential leakage", () => {
+    const receipt = normalizeRemoteWorkerInferenceGovernanceReceipt({
+      schemaVersion: REMOTE_WORKER_INFERENCE_GOVERNANCE_SCHEMA_VERSION,
+      decision: "allowed",
+      effectiveRouteSha256: D("route"),
+      policyRevision: 4,
+      policySha256: D("policy"),
+      outputTokenCeiling: 4096,
+      reasoningTokenCeiling: 1024,
+      expiresAt: "2026-07-14T00:00:00.000Z",
+    });
+    expect(receipt.decision).toBe("allowed");
+    expect(() =>
+      normalizeRemoteWorkerInferenceGovernanceReceipt({
+        schemaVersion: REMOTE_WORKER_INFERENCE_GOVERNANCE_SCHEMA_VERSION,
+        decision: "allowed",
+        effectiveRouteSha256: D("route"),
+        policyRevision: 4,
+        policySha256: D("policy"),
+        outputTokenCeiling: 4096,
+        reasoningTokenCeiling: 1024,
+        expiresAt: "2026-07-14T00:00:00.000Z",
+        apiKey: "sk-leak",
+      } as never),
+    ).toThrow(/unknown fields/u);
+  });
+
+  it("requires an approval receipt exactly for approval_required", () => {
+    expect(() =>
+      normalizeRemoteWorkerInferenceGovernanceReceipt({
+        schemaVersion: REMOTE_WORKER_INFERENCE_GOVERNANCE_SCHEMA_VERSION,
+        decision: "approval_required",
+        effectiveRouteSha256: D("route"),
+        policyRevision: 4,
+        policySha256: D("policy"),
+        outputTokenCeiling: 4096,
+        reasoningTokenCeiling: 1024,
+        expiresAt: "2026-07-14T00:00:00.000Z",
+      }),
+    ).toThrow(/approval receipt/u);
+    const receipt = normalizeRemoteWorkerInferenceGovernanceReceipt({
+      schemaVersion: REMOTE_WORKER_INFERENCE_GOVERNANCE_SCHEMA_VERSION,
+      decision: "approval_required",
+      effectiveRouteSha256: D("route"),
+      policyRevision: 4,
+      policySha256: D("policy"),
+      approvalReceiptSha256: D("approval"),
+      outputTokenCeiling: 4096,
+      reasoningTokenCeiling: 1024,
+      expiresAt: "2026-07-14T00:00:00.000Z",
+    });
+    expect(receipt.approvalReceiptSha256).toBe(D("approval"));
+  });
+
+  it("normalizes a budget reservation", () => {
+    const reservation = normalizeRemoteWorkerInferenceBudgetReservation({
+      schemaVersion: REMOTE_WORKER_INFERENCE_BUDGET_SCHEMA_VERSION,
+      reservationId: "reservation-1",
+      reservedOutputTokens: 4096,
+      expiresAt: "2026-07-14T00:00:00.000Z",
+    });
+    expect(reservation.reservedOutputTokens).toBe(4096);
+  });
+});
+
+describe("HX-503 remote worker inference state machine", () => {
+  it("permits the documented transitions and rejects illegal ones", () => {
+    expect(remoteWorkerInferenceStateCanTransition("admitted", "dispatch_claimed")).toBe(true);
+    expect(remoteWorkerInferenceStateCanTransition("admitted", "waiting_approval")).toBe(true);
+    expect(remoteWorkerInferenceStateCanTransition("waiting_approval", "admitted")).toBe(true);
+    expect(remoteWorkerInferenceStateCanTransition("dispatch_claimed", "streaming")).toBe(true);
+    expect(remoteWorkerInferenceStateCanTransition("dispatch_claimed", "dispatch_unknown")).toBe(true);
+    expect(remoteWorkerInferenceStateCanTransition("streaming", "completed")).toBe(true);
+    // Illegal / terminal-out transitions.
+    expect(remoteWorkerInferenceStateCanTransition("completed", "streaming")).toBe(false);
+    expect(remoteWorkerInferenceStateCanTransition("blocked", "dispatch_claimed")).toBe(false);
+    expect(remoteWorkerInferenceStateCanTransition("admitted", "streaming")).toBe(false);
+    expect(remoteWorkerInferenceStateCanTransition("admitted", "admitted")).toBe(false);
+    expect(remoteWorkerInferenceStateCanTransition("dispatch_unknown", "completed")).toBe(false);
+  });
+});
