@@ -160,7 +160,10 @@ function provisionHermeticPostgres() {
   const binDir = resolvePostgresBinDir();
   if (!binDir) return { error: "No PostgreSQL binaries found (set GOATCITADEL_PG_BIN_DIR or install PostgreSQL 16)." };
   const dataDir = path.join(artifactRoot, "pg");
-  const port = 54_320 + (process.pid % 400);
+  // Random port: sequential lane runs must never share a port — a lingering
+  // postmaster from a previous run would otherwise answer the readiness probe
+  // for a cluster whose files are already gone.
+  const port = 54_000 + (randomBytes(2).readUInt16BE(0) % 8_000);
   const tool = (name) => path.join(binDir, isWindows ? `${name}.exe` : name);
   const initdb = spawnSync(tool("initdb"), ["-D", dataDir, "-U", "gcproof", "-A", "trust", "-E", "UTF8"], {
     encoding: "utf8",
@@ -178,17 +181,38 @@ function provisionHermeticPostgres() {
     { detached: true, stdio: "ignore", windowsHide: true },
   );
   started.unref();
+  const psqlArgs = (sql) => [
+    "-h",
+    "127.0.0.1",
+    "-p",
+    String(port),
+    "-U",
+    "gcproof",
+    "-d",
+    "postgres",
+    "-tA",
+    "-c",
+    sql,
+  ];
   const deadline = Date.now() + 60_000;
   let ready = false;
   while (Date.now() < deadline) {
-    const probe = spawnSync(
-      tool("psql"),
-      ["-h", "127.0.0.1", "-p", String(port), "-U", "gcproof", "-d", "postgres", "-c", "SELECT 1"],
-      { encoding: "utf8", windowsHide: true },
-    );
+    // Identity-checked readiness: the responding server must be OUR cluster
+    // (data_directory equals the just-initialized PGDATA), not a stale
+    // postmaster that happens to hold the same port.
+    const probe = spawnSync(tool("psql"), psqlArgs("SHOW data_directory"), { encoding: "utf8", windowsHide: true });
     if (probe.status === 0) {
-      ready = true;
-      break;
+      const reported = String(probe.stdout ?? "")
+        .trim()
+        .replaceAll("\\", "/")
+        .toLowerCase();
+      if (reported === dataDir.replaceAll("\\", "/").toLowerCase()) {
+        ready = true;
+        break;
+      }
+      return {
+        error: `port 127.0.0.1:${port} is answered by a foreign PostgreSQL (data_directory ${reported}); refusing to run the proof against it.`,
+      };
     }
     spawnSync(process.execPath, ["-e", "setTimeout(() => process.exit(0), 1000)"], { windowsHide: true });
   }
