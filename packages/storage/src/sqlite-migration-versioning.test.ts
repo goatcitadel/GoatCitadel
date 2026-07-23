@@ -42,8 +42,8 @@ describe("sqlite schema migrations", () => {
     assert.deepEqual(
       { ...rows.at(-1) },
       {
-        version: 178,
-        name: "remote_worker_cell_execution_owner",
+        version: 179,
+        name: "remote_worker_settlement_owner",
       },
     );
     db.close();
@@ -109,6 +109,98 @@ describe("sqlite schema migrations", () => {
       "trg_remote_worker_cell_evidence_no_delete",
     ]) {
       assert.ok(triggerNames.includes(trigger), `migration 178 needs trigger ${trigger}`);
+    }
+
+    db.close();
+  });
+
+  it("keeps migration 179 additive across nine settlement tables, insert-only and full-identity fenced", () => {
+    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-hx506-179-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const db = createDatabase({ dbPath });
+
+    const settlementTables = [
+      "remote_worker_artifact_uploads",
+      "remote_worker_artifact_parts",
+      "remote_worker_artifact_blobs",
+      "remote_worker_artifact_manifests",
+      "remote_worker_artifact_manifest_entries",
+      "remote_worker_artifact_verifications",
+      "remote_worker_effect_intents",
+      "remote_worker_effect_transitions",
+      "remote_worker_effect_receipts",
+    ];
+    for (const table of settlementTables) {
+      const tableSql = (
+        db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) as
+          | { sql: string }
+          | undefined
+      )?.sql;
+      assert.ok(tableSql, `expected migration 179 table ${table}`);
+      const columns = (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(
+        (column) => column.name,
+      );
+      // Secret-free and payload-free: never a transcript, raw terminal, usage/cost, or credential column.
+      for (const forbidden of [
+        "transcript",
+        "raw_terminal",
+        "terminal_output",
+        "credential",
+        "lease_token",
+        "secret",
+        "provider_cost",
+        "usage_cost",
+        "token",
+      ]) {
+        assert.equal(
+          columns.some((column) => column.toLowerCase().includes(forbidden)),
+          false,
+          `${table} must stay secret-free (found ${forbidden})`,
+        );
+      }
+      // Every table binds the full identity.
+      for (const identityColumn of [
+        "registry_workspace_id",
+        "execution_workspace_id",
+        "assignment_id",
+        "assignment_generation",
+        "worker_id",
+        "worker_generation",
+        "runtime_manifest_sha256",
+        "workspace_ceiling_sha256",
+        "capability_ceiling_sha256",
+        "assignment_manifest_sha256",
+      ]) {
+        assert.ok(columns.includes(identityColumn), `${table} must bind ${identityColumn}`);
+      }
+    }
+
+    const fullIdentityIndex = db
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?")
+      .get("idx_remote_worker_assignment_generations_full_identity") as { sql?: string } | undefined;
+    assert.ok(fullIdentityIndex?.sql, "migration 179 needs the assignment full-identity unique index");
+
+    const triggerNames = (
+      db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger'").all() as Array<{ name: string }>
+    ).map((trigger) => trigger.name);
+    for (const insertOnly of [
+      "remote_worker_artifact_parts",
+      "remote_worker_artifact_blobs",
+      "remote_worker_artifact_manifests",
+      "remote_worker_artifact_manifest_entries",
+      "remote_worker_effect_intents",
+      "remote_worker_effect_transitions",
+    ]) {
+      assert.ok(triggerNames.includes(`trg_${insertOnly}_no_update`), `${insertOnly} needs a no-update trigger`);
+      assert.ok(triggerNames.includes(`trg_${insertOnly}_no_delete`), `${insertOnly} needs a no-delete trigger`);
+    }
+    for (const trigger of [
+      "trg_remote_worker_artifact_uploads_revision_cas",
+      "trg_remote_worker_artifact_verifications_revision_cas",
+      "trg_remote_worker_effect_receipts_revision_cas",
+      "trg_remote_worker_effect_transitions_chain_guard",
+    ]) {
+      assert.ok(triggerNames.includes(trigger), `migration 179 needs trigger ${trigger}`);
     }
 
     db.close();

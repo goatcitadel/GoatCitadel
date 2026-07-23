@@ -235,6 +235,26 @@ describe("HX-502/HX-504 remote worker assignment schema parity", () => {
     assert.match(postgresSql, /WHERE source_kind = 'settlement'/u);
   });
 
+  it("carries the additive HX-506 full-identity unique key the composite child foreign keys need", () => {
+    const index = db
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?")
+      .get("idx_remote_worker_assignment_generations_full_identity") as { sql?: string } | undefined;
+    assert.ok(index?.sql, "the assignment generation full-identity unique index must exist");
+    for (const column of [
+      "registry_workspace_id",
+      "assignment_id",
+      "assignment_generation",
+      "execution_workspace_id",
+      "worker_id",
+      "worker_generation",
+      "runtime_manifest_sha256",
+      "workspace_ceiling_sha256",
+      "capability_ceiling_sha256",
+    ]) {
+      assert.match(index?.sql ?? "", new RegExp(`\\b${column}\\b`, "u"));
+    }
+  });
+
   it("keeps the migration additive, production-dark, and validly byte-bounded", () => {
     assert.doesNotMatch(postgresSql, /length\(octet_length/u);
     assert.match(postgresSql, /octet_length\(manifest_json\) <= 32768/u);

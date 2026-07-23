@@ -59,6 +59,7 @@ export * from "./remote-worker-assignment.js";
 export * from "./remote-worker-cell.js";
 export * from "./remote-worker-inference.js";
 export * from "./remote-worker-ops.js";
+export * from "./remote-worker-settlement.js";
 export * from "./onboarding.js";
 export * from "./memory.js";
 export * from "./llama-cpp.js";

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { afterEach, describe, it } from "node:test";
 import {
   ConflictError,
+  REMOTE_WORKER_ARTIFACT_MANIFEST_SCHEMA_VERSION,
   REMOTE_WORKER_ASSIGNMENT_EVENT_GENESIS_SHA256,
   REMOTE_WORKER_ASSIGNMENT_EVENT_SCHEMA_VERSION,
   REMOTE_WORKER_ASSIGNMENT_MANIFEST_SCHEMA_VERSION,
@@ -10,6 +11,8 @@ import {
   REMOTE_WORKER_RUNTIME_MANIFEST_SCHEMA_VERSION,
   buildRemoteWorkerAssignmentParentContext,
   canonicalJsonString,
+  remoteWorkerArtifactBlobRelPath,
+  remoteWorkerArtifactWorkspaceShard,
   remoteWorkerAssignmentParentContextSha256,
   type CreateRemoteWorkerBootstrapCommand,
   type FinalizeRemoteWorkerBootstrapAdmissionCommand,
@@ -25,6 +28,7 @@ import { DurableRunRepository } from "./durable-run-repo.js";
 import { MeshCapabilityNodeAdmissionRepository } from "./mesh-capability-node-admission-repo.js";
 import { MeshRepository } from "./mesh-repo.js";
 import { RemoteWorkerAdmissionRepository } from "./remote-worker-admission-repo.js";
+import { RemoteWorkerArtifactRepository } from "./remote-worker-artifact-repo.js";
 import { RemoteWorkerAssignmentRepository } from "./remote-worker-assignment-repo.js";
 import { createDatabase } from "./sqlite.js";
 import { TaskRepository } from "./task-repo.js";
@@ -279,6 +283,74 @@ function createHarness(seed: string, leaseTtlSeconds = 60, maxOutputBytes = 65_5
   };
 }
 
+// HX-506 settlement seam: commit a real assignment-generation manifest so the
+// assignment settlement gate can prove the output manifest names it. Requires the
+// generation to be started first.
+function commitOutputManifest(h: ReturnType<typeof createHarness>): string {
+  const artifacts = new RemoteWorkerArtifactRepository(h.db);
+  const key = { registryWorkspaceId: "default", assignmentId: h.assignment.assignmentId, assignmentGeneration: 1 };
+  const logicalPath = "out/result.bin";
+  const blobSha256 = D("hx506:blob");
+  const opened = artifacts.openUpload({
+    ...key,
+    uploadAttempt: 1,
+    declaredFileCount: 1,
+    declaredTotalBytes: 10,
+    stagingRootSha256: D("hx506:staging"),
+    expiresAt: "2099-01-01T00:00:00.000Z",
+    idempotencyKey: "hx506:open",
+  });
+  artifacts.appendPart({
+    ...key,
+    uploadId: opened.uploadId,
+    part: {
+      globalSequence: 1,
+      logicalPathSha256: D(canonicalJsonString({ logicalPath })),
+      filePartIndex: 0,
+      isFinalPart: true,
+      partBytes: 10,
+      partSha256: blobSha256,
+    },
+    idempotencyKey: "hx506:part",
+  });
+  artifacts.commitArtifact({
+    ...key,
+    uploadId: opened.uploadId,
+    manifest: {
+      schemaVersion: REMOTE_WORKER_ARTIFACT_MANIFEST_SCHEMA_VERSION,
+      identity: opened.identity,
+      pathJailSha256: D("hx506:jail"),
+      workerClaimIds: [],
+      workerClaimSha256: D("hx506:claims"),
+      requiredVerifierProfileSha256: null,
+      fileCount: 1,
+      totalBytes: 10,
+      entries: [
+        {
+          entryIndex: 0,
+          logicalPath,
+          logicalPathSha256: D(canonicalJsonString({ logicalPath })),
+          blobSha256,
+          byteCount: 10,
+          mimeType: "application/octet-stream",
+        },
+      ],
+    },
+    blobs: [
+      {
+        blobSha256,
+        byteCount: 10,
+        physicalRelPath: remoteWorkerArtifactBlobRelPath(
+          remoteWorkerArtifactWorkspaceShard(opened.identity.executionWorkspaceId),
+          blobSha256,
+        ),
+      },
+    ],
+    idempotencyKey: "hx506:commit",
+  });
+  return artifacts.getManifestSha256(key.registryWorkspaceId, key.assignmentId, key.assignmentGeneration)!;
+}
+
 function assertDirectEventRejected(
   h: ReturnType<typeof createHarness>,
   seed: string,
@@ -487,9 +559,15 @@ describe("RemoteWorkerAssignmentRepository", () => {
       finalEventSequence: 1,
       finalEventSha256: appended.events[0]!.eventSha256,
       resultSha256: D("terminal-replay:result"),
-      outputManifestSha256: D("terminal-replay:output"),
+      outputManifestSha256: commitOutputManifest(h),
       idempotencyKey: "terminal-replay:settle",
     };
+    // A completed settlement is refused unless its output manifest names a committed
+    // HX-506 manifest for the same generation.
+    assert.throws(
+      () => h.assignments.settleAssignment({ ...settleInput, outputManifestSha256: D("unbacked-manifest") }),
+      ConflictError,
+    );
     assert.equal(h.assignments.settleAssignment(settleInput).disposition, "settled");
     assert.ok(
       h.durableRuns.renewLeaseWithDatabaseClock({
@@ -655,7 +733,7 @@ describe("RemoteWorkerAssignmentRepository", () => {
       finalEventSequence: 1,
       finalEventSha256: appended.events[0]!.eventSha256,
       resultSha256: D("materialization:result"),
-      outputManifestSha256: D("materialization:output"),
+      outputManifestSha256: commitOutputManifest(h),
       idempotencyKey: "materialization:settle",
     });
     const settlementInput = {

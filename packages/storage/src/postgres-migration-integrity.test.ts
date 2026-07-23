@@ -776,4 +776,81 @@ describe("protected Postgres migration integrity", () => {
     );
     assert.doesNotMatch(sql, /gateway_route|readiness|\blistener\b|scheduler/iu);
   });
+
+  it("keeps HX-506 migration 121 additive, insert-only, full-identity fenced, and production-dark", () => {
+    const migration = POSTGRES_MIGRATIONS.find((candidate) => candidate.version === 121);
+    assert.equal(migration?.name, "remote_worker_settlement_owner");
+    assert.equal(migration?.batchedStatements, undefined);
+    const sql = migration?.sql ?? "";
+    const settlementTables = [
+      "remote_worker_artifact_uploads",
+      "remote_worker_artifact_parts",
+      "remote_worker_artifact_blobs",
+      "remote_worker_artifact_manifests",
+      "remote_worker_artifact_manifest_entries",
+      "remote_worker_artifact_verifications",
+      "remote_worker_effect_intents",
+      "remote_worker_effect_transitions",
+      "remote_worker_effect_receipts",
+    ];
+    for (const table of settlementTables) {
+      assert.match(sql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`, "u"));
+    }
+    assert.equal(sql.match(/CREATE TABLE IF NOT EXISTS remote_worker_/gu)?.length, 9);
+    // Purely additive: the only frozen-table change is the additive full-identity
+    // unique index; no ALTER TABLE and no assignment DDL.
+    assert.equal(sql.match(/ALTER TABLE/gu) ?? null, null);
+    assert.match(sql, /CREATE UNIQUE INDEX IF NOT EXISTS idx_remote_worker_assignment_generations_full_identity/u);
+    // Every child binds the full-identity composite foreign key to the generation.
+    assert.equal(
+      sql.match(
+        /REFERENCES remote_worker_assignment_generations\(\s*registry_workspace_id, assignment_id, assignment_generation, execution_workspace_id, worker_id/gu,
+      )?.length,
+      9,
+    );
+    // Insert-only tables reject update and delete in the database.
+    for (const table of [
+      "remote_worker_artifact_parts",
+      "remote_worker_artifact_blobs",
+      "remote_worker_artifact_manifests",
+      "remote_worker_artifact_manifest_entries",
+      "remote_worker_effect_intents",
+      "remote_worker_effect_transitions",
+    ]) {
+      assert.match(sql, new RegExp(`trg_${table}_no_update`, "u"));
+      assert.match(sql, new RegExp(`trg_${table}_no_delete`, "u"));
+    }
+    // Revision-CAS mutation guards on upload/verifier/receipt owners.
+    for (const guard of [
+      "gc_remote_worker_artifact_uploads_guard",
+      "gc_remote_worker_artifact_verifications_guard",
+      "gc_remote_worker_effect_receipts_guard",
+      "gc_remote_worker_effect_transitions_chain_guard",
+      "gc_remote_worker_artifact_parts_sequence_guard",
+    ]) {
+      assert.match(sql, new RegExp(guard, "u"));
+    }
+    // Forward-only abort guard: an unprovable completed settlement aborts.
+    assert.match(sql, /cannot prove an existing completed remote-worker settlement/u);
+    // Byte-bounded JSON, no payload/usage/cost/credential columns.
+    assert.match(sql, /octet_length\(manifest_json\) <= 65536/u);
+    assert.match(sql, /octet_length\(canonical_args_json\) <= 65536/u);
+    assert.doesNotMatch(
+      sql,
+      /transcript|raw_terminal|terminal_output|lease_token|credential|api_key|provider_cost|usage_cost|(?:token|secret)\s+(?:TEXT|BYTEA)/iu,
+    );
+    // completed_with_effect never rests on a result body; it requires an HX-305 outcome.
+    assert.match(sql, /transition_state <> 'completed_with_effect' OR hx305_outcome_sha256 IS NOT NULL/u);
+    // Effect correlation never mutates external_side_effect_runs or HX-306 rows.
+    assert.doesNotMatch(sql, /external_side_effect_runs|model_usage_events|cost_ledger/iu);
+    // No route/listener/scheduler runtime claim and no data rows.
+    assert.doesNotMatch(
+      sql,
+      /\b(?:INSERT\s+INTO|DELETE\s+FROM|UPDATE\s+remote_worker|DROP\s+TABLE|TRUNCATE\s+TABLE)\b/iu,
+    );
+    assert.doesNotMatch(sql, /gateway_route|readiness|\blistener\b|scheduler/iu);
+    // Advisory tags 506/507 serialize part and transition chains.
+    assert.match(sql, /pg_advisory_xact_lock\(hashtextextended\([\s\S]*?,\s*506\s*\)\)/u);
+    assert.match(sql, /pg_advisory_xact_lock\(hashtextextended\([\s\S]*?,\s*507\s*\)\)/u);
+  });
 });

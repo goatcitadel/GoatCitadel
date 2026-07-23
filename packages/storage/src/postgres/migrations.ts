@@ -13168,4 +13168,483 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         FOR EACH ROW EXECUTE FUNCTION gc_reject_remote_worker_cell_evidence_mutation();
     `,
   },
+  {
+    version: 121,
+    name: "remote_worker_settlement_owner",
+    // HX-506 remote-worker settlement owner (paired with SQLite 179). Additive
+    // only: nine new tables bound by complete composite foreign keys to a
+    // full-identity unique key on the committed assignment generation (added here
+    // as an additive index; the frozen 113 table is never altered). Parts, blobs,
+    // manifests, entries, intents, and transitions are insert-only; upload/
+    // verifier/cleanup/receipt mutations are revision-CAS fenced. No transcript,
+    // artifact payload, raw terminal output, provider usage/cost, or credential
+    // ever has a column. Forward-only with no content backfill: the migration
+    // ABORTS if an existing completed remote assignment settlement cannot be
+    // proven against a canonical HX-506 manifest. Production-dark: no route,
+    // listener, startup, scheduler, or accounting owner.
+    sql: buildRemoteWorkerSettlementPostgresSql(),
+  },
 ];
+
+function buildRemoteWorkerSettlementPostgresSql(): string {
+  const identity = `
+        registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+        execution_workspace_id TEXT NOT NULL CHECK(length(execution_workspace_id) BETWEEN 1 AND 256),
+        assignment_id TEXT NOT NULL CHECK(length(assignment_id) BETWEEN 1 AND 256),
+        assignment_generation BIGINT NOT NULL CHECK(assignment_generation > 0),
+        worker_id TEXT NOT NULL CHECK(length(worker_id) BETWEEN 1 AND 256),
+        worker_generation BIGINT NOT NULL CHECK(worker_generation > 0),
+        runtime_manifest_sha256 TEXT NOT NULL CHECK(runtime_manifest_sha256 ~ '^[0-9a-f]{64}$'),
+        workspace_ceiling_sha256 TEXT NOT NULL CHECK(workspace_ceiling_sha256 ~ '^[0-9a-f]{64}$'),
+        capability_ceiling_sha256 TEXT NOT NULL CHECK(capability_ceiling_sha256 ~ '^[0-9a-f]{64}$'),
+        assignment_manifest_sha256 TEXT NOT NULL CHECK(assignment_manifest_sha256 ~ '^[0-9a-f]{64}$')`;
+  const fullIdentityFk = `
+        FOREIGN KEY(
+          registry_workspace_id, assignment_id, assignment_generation, execution_workspace_id, worker_id,
+          worker_generation, runtime_manifest_sha256, workspace_ceiling_sha256, capability_ceiling_sha256
+        ) REFERENCES remote_worker_assignment_generations(
+          registry_workspace_id, assignment_id, assignment_generation, execution_workspace_id, worker_id,
+          worker_generation, runtime_manifest_sha256, workspace_ceiling_sha256, capability_ceiling_sha256
+        ) ON DELETE RESTRICT`;
+  const timestamp = (column: string): string => `
+        ${column} TEXT NOT NULL CHECK(
+          gc_try_parse_timestamptz(${column}) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(${column}) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = ${column}
+        )`;
+  const nullableTimestamp = (column: string): string => `
+        ${column} TEXT CHECK(${column} IS NULL OR (
+          gc_try_parse_timestamptz(${column}) IS NOT NULL
+          AND to_char(gc_try_parse_timestamptz(${column}) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') = ${column}
+        ))`;
+  const insertOnly = (table: string, label: string): string => `
+      CREATE OR REPLACE FUNCTION gc_reject_${table}_mutation()
+      RETURNS trigger AS $$
+      BEGIN
+        RAISE EXCEPTION '${label} is insert-only' USING ERRCODE = '23514';
+      END;
+      $$ LANGUAGE plpgsql;
+      DROP TRIGGER IF EXISTS trg_${table}_no_update ON ${table};
+      CREATE TRIGGER trg_${table}_no_update BEFORE UPDATE ON ${table}
+        FOR EACH ROW EXECUTE FUNCTION gc_reject_${table}_mutation();
+      DROP TRIGGER IF EXISTS trg_${table}_no_delete ON ${table};
+      CREATE TRIGGER trg_${table}_no_delete BEFORE DELETE ON ${table}
+        FOR EACH ROW EXECUTE FUNCTION gc_reject_${table}_mutation();`;
+  const bindAssignmentManifest = (table: string): string => `
+      CREATE OR REPLACE FUNCTION gc_${table}_assignment_manifest_guard()
+      RETURNS trigger AS $$
+      DECLARE parent_manifest TEXT;
+      BEGIN
+        SELECT a.manifest_sha256 INTO parent_manifest FROM remote_worker_assignments a
+          WHERE a.registry_workspace_id = NEW.registry_workspace_id AND a.assignment_id = NEW.assignment_id;
+        IF NEW.assignment_manifest_sha256 IS DISTINCT FROM parent_manifest THEN
+          RAISE EXCEPTION '${table} assignment manifest hash must bind the parent assignment' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      DROP TRIGGER IF EXISTS trg_${table}_assignment_manifest_bound ON ${table};
+      CREATE TRIGGER trg_${table}_assignment_manifest_bound BEFORE INSERT ON ${table}
+        FOR EACH ROW EXECUTE FUNCTION gc_${table}_assignment_manifest_guard();`;
+  const zero = "0".repeat(64);
+
+  return `
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM remote_worker_assignment_settlements
+          WHERE outcome = 'completed' AND output_manifest_sha256 IS NOT NULL
+        ) THEN
+          RAISE EXCEPTION 'PostgreSQL migration 121 cannot prove an existing completed remote-worker settlement against a canonical HX-506 manifest' USING ERRCODE = '23514';
+        END IF;
+      END $$;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_remote_worker_assignment_generations_full_identity
+        ON remote_worker_assignment_generations(
+          registry_workspace_id, assignment_id, assignment_generation, execution_workspace_id, worker_id,
+          worker_generation, runtime_manifest_sha256, workspace_ceiling_sha256, capability_ceiling_sha256
+        );
+
+      CREATE TABLE IF NOT EXISTS remote_worker_artifact_uploads (${identity},
+        upload_id TEXT NOT NULL CHECK(length(upload_id) BETWEEN 1 AND 256),
+        upload_attempt BIGINT NOT NULL CHECK(upload_attempt BETWEEN 1 AND 4),
+        upload_state TEXT NOT NULL CHECK(upload_state IN ('open', 'assembling', 'committed', 'abandoned', 'quarantined')),
+        upload_revision BIGINT NOT NULL CHECK(upload_revision > 0),
+        declared_file_count BIGINT NOT NULL CHECK(declared_file_count BETWEEN 0 AND 64),
+        declared_total_bytes BIGINT NOT NULL CHECK(declared_total_bytes BETWEEN 0 AND 67108864),
+        max_artifact_bytes BIGINT NOT NULL CHECK(max_artifact_bytes BETWEEN 1 AND 67108864),
+        staging_root_sha256 TEXT NOT NULL CHECK(staging_root_sha256 ~ '^[0-9a-f]{64}$'),
+        committed_manifest_sha256 TEXT CHECK(committed_manifest_sha256 IS NULL OR committed_manifest_sha256 ~ '^[0-9a-f]{64}$'),
+        verification_gate_state TEXT CHECK(verification_gate_state IS NULL OR verification_gate_state IN ('not_required', 'pending', 'satisfied')),
+        verification_gate_revision BIGINT NOT NULL DEFAULT 0 CHECK(verification_gate_revision BETWEEN 0 AND 100000),
+        cleanup_state TEXT NOT NULL CHECK(cleanup_state IN ('not_due', 'pending', 'cleaned', 'manual_reconciliation')),
+        cleanup_revision BIGINT NOT NULL CHECK(cleanup_revision > 0),
+        cleanup_claim_owner TEXT CHECK(cleanup_claim_owner IS NULL OR length(cleanup_claim_owner) BETWEEN 1 AND 256),${nullableTimestamp("cleanup_claim_expires_at")},${timestamp("expires_at")},
+        idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+        request_sha256 TEXT NOT NULL CHECK(request_sha256 ~ '^[0-9a-f]{64}$'),${timestamp("created_at")},${timestamp("updated_at")},
+        PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation, upload_id),
+        UNIQUE(registry_workspace_id, idempotency_key),
+        UNIQUE(registry_workspace_id, assignment_id, assignment_generation, upload_attempt),
+        UNIQUE(registry_workspace_id, assignment_id, assignment_generation, upload_id, assignment_manifest_sha256),
+        ${fullIdentityFk},
+        CHECK(declared_total_bytes <= max_artifact_bytes),
+        CHECK((cleanup_claim_owner IS NULL) = (cleanup_claim_expires_at IS NULL)),
+        CHECK(upload_state = 'committed' OR (committed_manifest_sha256 IS NULL AND verification_gate_state IS NULL)),
+        CHECK(upload_state <> 'committed' OR (committed_manifest_sha256 IS NOT NULL AND verification_gate_state IS NOT NULL))
+      );
+
+      CREATE TABLE IF NOT EXISTS remote_worker_artifact_parts (${identity},
+        upload_id TEXT NOT NULL CHECK(length(upload_id) BETWEEN 1 AND 256),
+        global_sequence BIGINT NOT NULL CHECK(global_sequence BETWEEN 1 AND 320),
+        logical_path_sha256 TEXT NOT NULL CHECK(logical_path_sha256 ~ '^[0-9a-f]{64}$'),
+        file_part_index BIGINT NOT NULL CHECK(file_part_index BETWEEN 0 AND 319),
+        is_final_part BIGINT NOT NULL CHECK(is_final_part IN (0, 1)),
+        part_bytes BIGINT NOT NULL CHECK(part_bytes BETWEEN 1 AND 262144),
+        part_sha256 TEXT NOT NULL CHECK(part_sha256 ~ '^[0-9a-f]{64}$'),
+        idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+        request_sha256 TEXT NOT NULL CHECK(request_sha256 ~ '^[0-9a-f]{64}$'),${timestamp("received_at")},
+        PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation, upload_id, global_sequence),
+        UNIQUE(registry_workspace_id, idempotency_key),
+        FOREIGN KEY(registry_workspace_id, assignment_id, assignment_generation, upload_id, assignment_manifest_sha256)
+          REFERENCES remote_worker_artifact_uploads(registry_workspace_id, assignment_id, assignment_generation, upload_id, assignment_manifest_sha256) ON DELETE RESTRICT,
+        ${fullIdentityFk},
+        CHECK(is_final_part = 1 OR part_bytes = 262144)
+      );
+
+      CREATE TABLE IF NOT EXISTS remote_worker_artifact_blobs (${identity},
+        upload_id TEXT NOT NULL CHECK(length(upload_id) BETWEEN 1 AND 256),
+        blob_sha256 TEXT NOT NULL CHECK(blob_sha256 ~ '^[0-9a-f]{64}$'),
+        byte_count BIGINT NOT NULL CHECK(byte_count BETWEEN 0 AND 67108864),
+        physical_rel_path TEXT NOT NULL CHECK(length(physical_rel_path) BETWEEN 1 AND 512 AND physical_rel_path LIKE 'remote-workers/artifacts/%'),${timestamp("installed_at")},
+        PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation, blob_sha256),
+        UNIQUE(registry_workspace_id, assignment_id, assignment_generation, blob_sha256, assignment_manifest_sha256),
+        FOREIGN KEY(registry_workspace_id, assignment_id, assignment_generation, upload_id, assignment_manifest_sha256)
+          REFERENCES remote_worker_artifact_uploads(registry_workspace_id, assignment_id, assignment_generation, upload_id, assignment_manifest_sha256) ON DELETE RESTRICT,
+        ${fullIdentityFk}
+      );
+
+      CREATE TABLE IF NOT EXISTS remote_worker_artifact_manifests (${identity},
+        upload_id TEXT NOT NULL CHECK(length(upload_id) BETWEEN 1 AND 256),
+        manifest_id TEXT NOT NULL CHECK(length(manifest_id) BETWEEN 1 AND 256),
+        manifest_sha256 TEXT NOT NULL CHECK(manifest_sha256 ~ '^[0-9a-f]{64}$'),
+        manifest_json TEXT NOT NULL CHECK(jsonb_typeof(manifest_json::jsonb) = 'object' AND octet_length(manifest_json) <= 65536),
+        file_count BIGINT NOT NULL CHECK(file_count BETWEEN 0 AND 64),
+        total_bytes BIGINT NOT NULL CHECK(total_bytes BETWEEN 0 AND 67108864),
+        path_jail_sha256 TEXT NOT NULL CHECK(path_jail_sha256 ~ '^[0-9a-f]{64}$'),
+        worker_claim_sha256 TEXT NOT NULL CHECK(worker_claim_sha256 ~ '^[0-9a-f]{64}$'),
+        required_verifier_profile_sha256 TEXT CHECK(required_verifier_profile_sha256 IS NULL OR required_verifier_profile_sha256 ~ '^[0-9a-f]{64}$'),
+        idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+        request_sha256 TEXT NOT NULL CHECK(request_sha256 ~ '^[0-9a-f]{64}$'),${timestamp("committed_at")},
+        PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation, manifest_id),
+        UNIQUE(registry_workspace_id, assignment_id, assignment_generation),
+        UNIQUE(registry_workspace_id, manifest_sha256),
+        UNIQUE(registry_workspace_id, idempotency_key),
+        UNIQUE(registry_workspace_id, assignment_id, assignment_generation, manifest_id, assignment_manifest_sha256),
+        FOREIGN KEY(registry_workspace_id, assignment_id, assignment_generation, upload_id, assignment_manifest_sha256)
+          REFERENCES remote_worker_artifact_uploads(registry_workspace_id, assignment_id, assignment_generation, upload_id, assignment_manifest_sha256) ON DELETE RESTRICT,
+        ${fullIdentityFk},
+        CHECK(manifest_json::jsonb ->> 'schemaVersion' = 'goatcitadel.remote-worker-artifact-manifest.v1')
+      );
+
+      CREATE TABLE IF NOT EXISTS remote_worker_artifact_manifest_entries (${identity},
+        manifest_id TEXT NOT NULL CHECK(length(manifest_id) BETWEEN 1 AND 256),
+        entry_index BIGINT NOT NULL CHECK(entry_index BETWEEN 0 AND 63),
+        logical_path TEXT NOT NULL CHECK(octet_length(logical_path) BETWEEN 1 AND 512),
+        logical_path_sha256 TEXT NOT NULL CHECK(logical_path_sha256 ~ '^[0-9a-f]{64}$'),
+        blob_sha256 TEXT NOT NULL CHECK(blob_sha256 ~ '^[0-9a-f]{64}$'),
+        byte_count BIGINT NOT NULL CHECK(byte_count BETWEEN 0 AND 67108864),
+        mime_type TEXT NOT NULL CHECK(length(mime_type) BETWEEN 1 AND 128),
+        PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation, manifest_id, entry_index),
+        UNIQUE(registry_workspace_id, assignment_id, assignment_generation, manifest_id, logical_path_sha256),
+        FOREIGN KEY(registry_workspace_id, assignment_id, assignment_generation, manifest_id, assignment_manifest_sha256)
+          REFERENCES remote_worker_artifact_manifests(registry_workspace_id, assignment_id, assignment_generation, manifest_id, assignment_manifest_sha256) ON DELETE RESTRICT,
+        FOREIGN KEY(registry_workspace_id, assignment_id, assignment_generation, blob_sha256, assignment_manifest_sha256)
+          REFERENCES remote_worker_artifact_blobs(registry_workspace_id, assignment_id, assignment_generation, blob_sha256, assignment_manifest_sha256) ON DELETE RESTRICT,
+        ${fullIdentityFk}
+      );
+
+      CREATE TABLE IF NOT EXISTS remote_worker_artifact_verifications (${identity},
+        manifest_id TEXT NOT NULL CHECK(length(manifest_id) BETWEEN 1 AND 256),
+        verification_id TEXT NOT NULL CHECK(length(verification_id) BETWEEN 1 AND 256),
+        kind TEXT NOT NULL CHECK(kind IN ('worker_claim', 'gateway_attempt')),
+        attempt_index BIGINT NOT NULL CHECK(attempt_index BETWEEN 1 AND 16),
+        attempt_state TEXT NOT NULL CHECK(attempt_state IN ('worker_reported', 'queued', 'running', 'passed', 'failed', 'indeterminate', 'blocked')),
+        attempt_revision BIGINT NOT NULL CHECK(attempt_revision > 0),
+        verifier_profile_sha256 TEXT CHECK(verifier_profile_sha256 IS NULL OR verifier_profile_sha256 ~ '^[0-9a-f]{64}$'),
+        evidence_json TEXT NOT NULL CHECK(jsonb_typeof(evidence_json::jsonb) = 'object' AND octet_length(evidence_json) <= 16384),
+        evidence_sha256 TEXT NOT NULL CHECK(evidence_sha256 ~ '^[0-9a-f]{64}$'),
+        claim_owner TEXT CHECK(claim_owner IS NULL OR length(claim_owner) BETWEEN 1 AND 256),${nullableTimestamp("claim_expires_at")},${nullableTimestamp("wall_deadline_at")},
+        idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+        request_sha256 TEXT NOT NULL CHECK(request_sha256 ~ '^[0-9a-f]{64}$'),${timestamp("created_at")},${timestamp("updated_at")},
+        PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation, manifest_id, verification_id),
+        UNIQUE(registry_workspace_id, idempotency_key),
+        UNIQUE(registry_workspace_id, assignment_id, assignment_generation, manifest_id, kind, attempt_index),
+        FOREIGN KEY(registry_workspace_id, assignment_id, assignment_generation, manifest_id, assignment_manifest_sha256)
+          REFERENCES remote_worker_artifact_manifests(registry_workspace_id, assignment_id, assignment_generation, manifest_id, assignment_manifest_sha256) ON DELETE RESTRICT,
+        ${fullIdentityFk},
+        CHECK(
+          (kind = 'worker_claim' AND attempt_state = 'worker_reported' AND verifier_profile_sha256 IS NULL)
+          OR (kind = 'gateway_attempt' AND attempt_state <> 'worker_reported' AND verifier_profile_sha256 IS NOT NULL)
+        ),
+        CHECK((claim_owner IS NULL) = (claim_expires_at IS NULL))
+      );
+
+      CREATE TABLE IF NOT EXISTS remote_worker_effect_intents (${identity},
+        intent_id TEXT NOT NULL CHECK(length(intent_id) BETWEEN 1 AND 256),
+        intent_index BIGINT NOT NULL CHECK(intent_index BETWEEN 0 AND 63),
+        effect_selector TEXT NOT NULL CHECK(octet_length(effect_selector) BETWEEN 1 AND 256),
+        canonical_args_json TEXT NOT NULL CHECK(jsonb_typeof(canonical_args_json::jsonb) IS NOT NULL AND octet_length(canonical_args_json) <= 65536),
+        canonical_args_sha256 TEXT NOT NULL CHECK(canonical_args_sha256 ~ '^[0-9a-f]{64}$'),
+        intent_sha256 TEXT NOT NULL CHECK(intent_sha256 ~ '^[0-9a-f]{64}$'),
+        worker_idempotency_key TEXT NOT NULL CHECK(length(worker_idempotency_key) BETWEEN 1 AND 512),
+        idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+        request_sha256 TEXT NOT NULL CHECK(request_sha256 ~ '^[0-9a-f]{64}$'),${timestamp("recorded_at")},
+        PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation, intent_id),
+        UNIQUE(registry_workspace_id, idempotency_key),
+        UNIQUE(registry_workspace_id, intent_sha256),
+        UNIQUE(registry_workspace_id, assignment_id, assignment_generation, intent_index),
+        UNIQUE(registry_workspace_id, assignment_id, assignment_generation, intent_id, assignment_manifest_sha256),
+        ${fullIdentityFk}
+      );
+
+      CREATE TABLE IF NOT EXISTS remote_worker_effect_transitions (${identity},
+        intent_id TEXT NOT NULL CHECK(length(intent_id) BETWEEN 1 AND 256),
+        transition_sequence BIGINT NOT NULL CHECK(transition_sequence BETWEEN 1 AND 16),
+        transition_state TEXT NOT NULL CHECK(transition_state IN (
+          'recorded', 'approval_wait', 'dispatch_claimed', 'external_boundary_started',
+          'blocked_before_dispatch', 'failed_before_boundary', 'completed_no_effect',
+          'completed_with_effect', 'manual_reconciliation', 'manual_reconciliation_resolved'
+        )),
+        correlation_json TEXT NOT NULL CHECK(jsonb_typeof(correlation_json::jsonb) = 'object' AND octet_length(correlation_json) <= 16384),
+        correlation_sha256 TEXT NOT NULL CHECK(correlation_sha256 ~ '^[0-9a-f]{64}$'),
+        external_side_effect_run_id TEXT CHECK(external_side_effect_run_id IS NULL OR length(external_side_effect_run_id) BETWEEN 1 AND 256),
+        hx305_outcome_sha256 TEXT CHECK(hx305_outcome_sha256 IS NULL OR hx305_outcome_sha256 ~ '^[0-9a-f]{64}$'),
+        previous_transition_sha256 TEXT NOT NULL CHECK(previous_transition_sha256 ~ '^[0-9a-f]{64}$'),
+        transition_sha256 TEXT NOT NULL CHECK(transition_sha256 ~ '^[0-9a-f]{64}$'),
+        idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+        request_sha256 TEXT NOT NULL CHECK(request_sha256 ~ '^[0-9a-f]{64}$'),${timestamp("recorded_at")},
+        PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation, intent_id, transition_sequence),
+        UNIQUE(registry_workspace_id, idempotency_key),
+        UNIQUE(registry_workspace_id, transition_sha256),
+        FOREIGN KEY(registry_workspace_id, assignment_id, assignment_generation, intent_id, assignment_manifest_sha256)
+          REFERENCES remote_worker_effect_intents(registry_workspace_id, assignment_id, assignment_generation, intent_id, assignment_manifest_sha256) ON DELETE RESTRICT,
+        ${fullIdentityFk},
+        CHECK(correlation_json::jsonb ->> 'transitionState' = transition_state),
+        CHECK(transition_state <> 'completed_with_effect' OR hx305_outcome_sha256 IS NOT NULL)
+      );
+
+      CREATE TABLE IF NOT EXISTS remote_worker_effect_receipts (${identity},
+        intent_id TEXT NOT NULL CHECK(length(intent_id) BETWEEN 1 AND 256),
+        receipt_state TEXT NOT NULL CHECK(receipt_state IN (
+          'blocked_before_dispatch', 'failed_before_boundary', 'completed_no_effect',
+          'completed_with_effect', 'manual_reconciliation'
+        )),
+        receipt_revision BIGINT NOT NULL CHECK(receipt_revision > 0),
+        final_transition_sequence BIGINT NOT NULL CHECK(final_transition_sequence BETWEEN 1 AND 16),
+        final_transition_sha256 TEXT NOT NULL CHECK(final_transition_sha256 ~ '^[0-9a-f]{64}$'),
+        hx305_outcome_sha256 TEXT CHECK(hx305_outcome_sha256 IS NULL OR hx305_outcome_sha256 ~ '^[0-9a-f]{64}$'),
+        reconciliation_record_sha256 TEXT CHECK(reconciliation_record_sha256 IS NULL OR reconciliation_record_sha256 ~ '^[0-9a-f]{64}$'),
+        idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+        request_sha256 TEXT NOT NULL CHECK(request_sha256 ~ '^[0-9a-f]{64}$'),${timestamp("created_at")},${timestamp("updated_at")},
+        PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation, intent_id),
+        UNIQUE(registry_workspace_id, idempotency_key),
+        FOREIGN KEY(registry_workspace_id, assignment_id, assignment_generation, intent_id, assignment_manifest_sha256)
+          REFERENCES remote_worker_effect_intents(registry_workspace_id, assignment_id, assignment_generation, intent_id, assignment_manifest_sha256) ON DELETE RESTRICT,
+        ${fullIdentityFk},
+        CHECK(receipt_state <> 'completed_with_effect' OR hx305_outcome_sha256 IS NOT NULL)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_remote_worker_artifact_parts_chain
+        ON remote_worker_artifact_parts(registry_workspace_id, assignment_id, assignment_generation, upload_id, global_sequence);
+      CREATE INDEX IF NOT EXISTS idx_remote_worker_effect_transitions_chain
+        ON remote_worker_effect_transitions(registry_workspace_id, assignment_id, assignment_generation, intent_id, transition_sequence);
+
+      ${bindAssignmentManifest("remote_worker_artifact_uploads")}
+      ${bindAssignmentManifest("remote_worker_effect_intents")}
+
+      ${insertOnly("remote_worker_artifact_parts", "remote worker artifact part")}
+      ${insertOnly("remote_worker_artifact_blobs", "remote worker artifact blob")}
+      ${insertOnly("remote_worker_artifact_manifests", "remote worker artifact manifest")}
+      ${insertOnly("remote_worker_artifact_manifest_entries", "remote worker artifact manifest entry")}
+      ${insertOnly("remote_worker_effect_intents", "remote worker effect intent")}
+      ${insertOnly("remote_worker_effect_transitions", "remote worker effect transition")}
+
+      CREATE OR REPLACE FUNCTION gc_remote_worker_artifact_parts_sequence_guard()
+      RETURNS trigger AS $$
+      DECLARE expected_sequence BIGINT; parent_state TEXT;
+      BEGIN
+        PERFORM pg_advisory_xact_lock(hashtextextended(
+          NEW.registry_workspace_id || ':' || NEW.assignment_id || ':' || NEW.assignment_generation::text || ':' || NEW.upload_id, 506
+        ));
+        SELECT 1 + COALESCE(MAX(p.global_sequence), 0) INTO expected_sequence
+          FROM remote_worker_artifact_parts p
+          WHERE p.registry_workspace_id = NEW.registry_workspace_id AND p.assignment_id = NEW.assignment_id
+            AND p.assignment_generation = NEW.assignment_generation AND p.upload_id = NEW.upload_id;
+        SELECT u.upload_state INTO parent_state FROM remote_worker_artifact_uploads u
+          WHERE u.registry_workspace_id = NEW.registry_workspace_id AND u.assignment_id = NEW.assignment_id
+            AND u.assignment_generation = NEW.assignment_generation AND u.upload_id = NEW.upload_id;
+        IF NEW.global_sequence <> expected_sequence THEN
+          RAISE EXCEPTION 'remote worker artifact part sequence must be globally contiguous' USING ERRCODE = '23514';
+        END IF;
+        IF parent_state IS DISTINCT FROM 'open' AND parent_state IS DISTINCT FROM 'assembling' THEN
+          RAISE EXCEPTION 'remote worker artifact part requires an open or assembling upload' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      DROP TRIGGER IF EXISTS trg_remote_worker_artifact_parts_sequence_guard ON remote_worker_artifact_parts;
+      CREATE TRIGGER trg_remote_worker_artifact_parts_sequence_guard BEFORE INSERT ON remote_worker_artifact_parts
+        FOR EACH ROW EXECUTE FUNCTION gc_remote_worker_artifact_parts_sequence_guard();
+
+      CREATE OR REPLACE FUNCTION gc_remote_worker_effect_transitions_chain_guard()
+      RETURNS trigger AS $$
+      DECLARE expected_sequence BIGINT; expected_previous TEXT;
+      BEGIN
+        PERFORM pg_advisory_xact_lock(hashtextextended(
+          NEW.registry_workspace_id || ':' || NEW.assignment_id || ':' || NEW.assignment_generation::text || ':' || NEW.intent_id, 507
+        ));
+        SELECT 1 + COALESCE(MAX(t.transition_sequence), 0),
+               COALESCE((
+                 SELECT g.transition_sha256 FROM remote_worker_effect_transitions g
+                 WHERE g.registry_workspace_id = NEW.registry_workspace_id AND g.assignment_id = NEW.assignment_id
+                   AND g.assignment_generation = NEW.assignment_generation AND g.intent_id = NEW.intent_id
+                 ORDER BY g.transition_sequence DESC LIMIT 1
+               ), '${zero}')
+          INTO expected_sequence, expected_previous
+          FROM remote_worker_effect_transitions t
+          WHERE t.registry_workspace_id = NEW.registry_workspace_id AND t.assignment_id = NEW.assignment_id
+            AND t.assignment_generation = NEW.assignment_generation AND t.intent_id = NEW.intent_id;
+        IF NEW.transition_sequence <> expected_sequence OR NEW.previous_transition_sha256 <> expected_previous THEN
+          RAISE EXCEPTION 'remote worker effect transition chain is out of order or misbound' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      DROP TRIGGER IF EXISTS trg_remote_worker_effect_transitions_chain_guard ON remote_worker_effect_transitions;
+      CREATE TRIGGER trg_remote_worker_effect_transitions_chain_guard BEFORE INSERT ON remote_worker_effect_transitions
+        FOR EACH ROW EXECUTE FUNCTION gc_remote_worker_effect_transitions_chain_guard();
+
+      CREATE OR REPLACE FUNCTION gc_remote_worker_artifact_uploads_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF NEW.registry_workspace_id IS DISTINCT FROM OLD.registry_workspace_id
+          OR NEW.execution_workspace_id IS DISTINCT FROM OLD.execution_workspace_id
+          OR NEW.assignment_id IS DISTINCT FROM OLD.assignment_id
+          OR NEW.assignment_generation IS DISTINCT FROM OLD.assignment_generation
+          OR NEW.worker_id IS DISTINCT FROM OLD.worker_id
+          OR NEW.worker_generation IS DISTINCT FROM OLD.worker_generation
+          OR NEW.runtime_manifest_sha256 IS DISTINCT FROM OLD.runtime_manifest_sha256
+          OR NEW.workspace_ceiling_sha256 IS DISTINCT FROM OLD.workspace_ceiling_sha256
+          OR NEW.capability_ceiling_sha256 IS DISTINCT FROM OLD.capability_ceiling_sha256
+          OR NEW.assignment_manifest_sha256 IS DISTINCT FROM OLD.assignment_manifest_sha256
+          OR NEW.upload_id IS DISTINCT FROM OLD.upload_id
+          OR NEW.upload_attempt IS DISTINCT FROM OLD.upload_attempt
+          OR NEW.max_artifact_bytes IS DISTINCT FROM OLD.max_artifact_bytes
+          OR NEW.staging_root_sha256 IS DISTINCT FROM OLD.staging_root_sha256
+          OR NEW.idempotency_key IS DISTINCT FROM OLD.idempotency_key
+          OR NEW.request_sha256 IS DISTINCT FROM OLD.request_sha256
+          OR NEW.created_at IS DISTINCT FROM OLD.created_at
+          OR (OLD.committed_manifest_sha256 IS NOT NULL AND NEW.committed_manifest_sha256 IS DISTINCT FROM OLD.committed_manifest_sha256) THEN
+          RAISE EXCEPTION 'remote worker artifact upload immutable bindings cannot change' USING ERRCODE = '23514';
+        END IF;
+        IF NEW.upload_revision < OLD.upload_revision
+          OR NEW.verification_gate_revision < OLD.verification_gate_revision
+          OR NEW.cleanup_revision < OLD.cleanup_revision
+          OR (NEW.upload_state IS DISTINCT FROM OLD.upload_state AND NEW.upload_revision <> OLD.upload_revision + 1)
+          OR (NEW.upload_state = OLD.upload_state AND NEW.upload_revision <> OLD.upload_revision)
+          OR (NEW.cleanup_state IS DISTINCT FROM OLD.cleanup_state AND NEW.cleanup_revision <> OLD.cleanup_revision + 1)
+          OR (NEW.cleanup_state = OLD.cleanup_state AND NEW.cleanup_revision <> OLD.cleanup_revision)
+          OR (COALESCE(NEW.verification_gate_state, '') <> COALESCE(OLD.verification_gate_state, '')
+              AND OLD.verification_gate_state IS NOT NULL AND NEW.verification_gate_revision <> OLD.verification_gate_revision + 1)
+          OR (OLD.upload_state IN ('committed', 'abandoned', 'quarantined') AND NEW.upload_state IS DISTINCT FROM OLD.upload_state) THEN
+          RAISE EXCEPTION 'remote worker artifact upload revision must advance monotonically by one on transition' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      DROP TRIGGER IF EXISTS trg_remote_worker_artifact_uploads_guard ON remote_worker_artifact_uploads;
+      CREATE TRIGGER trg_remote_worker_artifact_uploads_guard BEFORE UPDATE ON remote_worker_artifact_uploads
+        FOR EACH ROW EXECUTE FUNCTION gc_remote_worker_artifact_uploads_guard();
+
+      CREATE OR REPLACE FUNCTION gc_reject_remote_worker_artifact_uploads_delete()
+      RETURNS trigger AS $$
+      BEGIN
+        RAISE EXCEPTION 'remote worker artifact upload cannot be deleted' USING ERRCODE = '23514';
+      END;
+      $$ LANGUAGE plpgsql;
+      DROP TRIGGER IF EXISTS trg_remote_worker_artifact_uploads_no_delete ON remote_worker_artifact_uploads;
+      CREATE TRIGGER trg_remote_worker_artifact_uploads_no_delete BEFORE DELETE ON remote_worker_artifact_uploads
+        FOR EACH ROW EXECUTE FUNCTION gc_reject_remote_worker_artifact_uploads_delete();
+
+      CREATE OR REPLACE FUNCTION gc_remote_worker_artifact_verifications_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF NEW.registry_workspace_id IS DISTINCT FROM OLD.registry_workspace_id
+          OR NEW.assignment_id IS DISTINCT FROM OLD.assignment_id
+          OR NEW.assignment_generation IS DISTINCT FROM OLD.assignment_generation
+          OR NEW.manifest_id IS DISTINCT FROM OLD.manifest_id
+          OR NEW.verification_id IS DISTINCT FROM OLD.verification_id
+          OR NEW.kind IS DISTINCT FROM OLD.kind
+          OR NEW.attempt_index IS DISTINCT FROM OLD.attempt_index
+          OR NEW.assignment_manifest_sha256 IS DISTINCT FROM OLD.assignment_manifest_sha256
+          OR NEW.idempotency_key IS DISTINCT FROM OLD.idempotency_key
+          OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+          RAISE EXCEPTION 'remote worker verification immutable bindings cannot change' USING ERRCODE = '23514';
+        END IF;
+        IF NEW.attempt_revision < OLD.attempt_revision
+          OR (NEW.attempt_state IS DISTINCT FROM OLD.attempt_state AND NEW.attempt_revision <> OLD.attempt_revision + 1)
+          OR (NEW.attempt_state = OLD.attempt_state AND NEW.attempt_revision <> OLD.attempt_revision)
+          OR (OLD.attempt_state IN ('worker_reported', 'passed', 'failed', 'indeterminate', 'blocked') AND NEW.attempt_state IS DISTINCT FROM OLD.attempt_state) THEN
+          RAISE EXCEPTION 'remote worker verification attempt revision must advance monotonically by one on transition' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      DROP TRIGGER IF EXISTS trg_remote_worker_artifact_verifications_guard ON remote_worker_artifact_verifications;
+      CREATE TRIGGER trg_remote_worker_artifact_verifications_guard BEFORE UPDATE ON remote_worker_artifact_verifications
+        FOR EACH ROW EXECUTE FUNCTION gc_remote_worker_artifact_verifications_guard();
+
+      CREATE OR REPLACE FUNCTION gc_reject_remote_worker_artifact_verifications_delete()
+      RETURNS trigger AS $$
+      BEGIN
+        RAISE EXCEPTION 'remote worker verification attempt cannot be deleted' USING ERRCODE = '23514';
+      END;
+      $$ LANGUAGE plpgsql;
+      DROP TRIGGER IF EXISTS trg_remote_worker_artifact_verifications_no_delete ON remote_worker_artifact_verifications;
+      CREATE TRIGGER trg_remote_worker_artifact_verifications_no_delete BEFORE DELETE ON remote_worker_artifact_verifications
+        FOR EACH ROW EXECUTE FUNCTION gc_reject_remote_worker_artifact_verifications_delete();
+
+      CREATE OR REPLACE FUNCTION gc_remote_worker_effect_receipts_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF NEW.registry_workspace_id IS DISTINCT FROM OLD.registry_workspace_id
+          OR NEW.assignment_id IS DISTINCT FROM OLD.assignment_id
+          OR NEW.assignment_generation IS DISTINCT FROM OLD.assignment_generation
+          OR NEW.intent_id IS DISTINCT FROM OLD.intent_id
+          OR NEW.assignment_manifest_sha256 IS DISTINCT FROM OLD.assignment_manifest_sha256
+          OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+          RAISE EXCEPTION 'remote worker effect receipt immutable bindings cannot change' USING ERRCODE = '23514';
+        END IF;
+        IF NEW.receipt_revision <> OLD.receipt_revision + 1
+          OR OLD.receipt_state <> 'manual_reconciliation'
+          OR NEW.receipt_state = 'manual_reconciliation'
+          OR NEW.reconciliation_record_sha256 IS NULL THEN
+          RAISE EXCEPTION 'remote worker effect receipt may only advance from manual reconciliation with an operator record' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      DROP TRIGGER IF EXISTS trg_remote_worker_effect_receipts_guard ON remote_worker_effect_receipts;
+      CREATE TRIGGER trg_remote_worker_effect_receipts_guard BEFORE UPDATE ON remote_worker_effect_receipts
+        FOR EACH ROW EXECUTE FUNCTION gc_remote_worker_effect_receipts_guard();
+
+      CREATE OR REPLACE FUNCTION gc_reject_remote_worker_effect_receipts_delete()
+      RETURNS trigger AS $$
+      BEGIN
+        RAISE EXCEPTION 'remote worker effect receipt cannot be deleted' USING ERRCODE = '23514';
+      END;
+      $$ LANGUAGE plpgsql;
+      DROP TRIGGER IF EXISTS trg_remote_worker_effect_receipts_no_delete ON remote_worker_effect_receipts;
+      CREATE TRIGGER trg_remote_worker_effect_receipts_no_delete BEFORE DELETE ON remote_worker_effect_receipts
+        FOR EACH ROW EXECUTE FUNCTION gc_reject_remote_worker_effect_receipts_delete();
+  `;
+}

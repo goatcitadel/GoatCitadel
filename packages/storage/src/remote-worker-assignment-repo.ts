@@ -808,6 +808,14 @@ export class RemoteWorkerAssignmentRepository {
       if ((command.outcome === "cancelled") !== Boolean(cancel)) {
         throw conflict("remote worker assignment cancellation settlement");
       }
+      if (command.outputManifestSha256) {
+        this.assertOutputManifestSettleable(
+          command.registryWorkspaceId,
+          command.assignmentId,
+          command.expectedAssignmentGeneration,
+          command.outputManifestSha256,
+        );
+      }
       const now = this.databaseNow();
       try {
         this.db
@@ -2247,6 +2255,71 @@ export class RemoteWorkerAssignmentRepository {
       throw conflict("remote worker assignment lease has no live parent-authorized interval");
     }
     return { now: clock.now, expiresAt };
+  }
+
+  /**
+   * HX-506 settlement gate. An output-manifest settlement is only durable once
+   * the exact assignment-generation manifest exists and is committed, the
+   * verification gate is not_required or satisfied, every recorded effect intent
+   * has a current receipt, and no receipt remains in manual reconciliation. This
+   * is the one HX-506-facing extension the assignment owner may carry; it reads
+   * the settlement owner's tables and never recreates its authority.
+   */
+  private assertOutputManifestSettleable(
+    registryWorkspaceId: string,
+    assignmentId: string,
+    assignmentGeneration: number,
+    outputManifestSha256: string,
+  ): void {
+    const manifest = this.db
+      .prepare(
+        `SELECT manifest_sha256, upload_id FROM remote_worker_artifact_manifests
+         WHERE registry_workspace_id = @registryWorkspaceId AND assignment_id = @assignmentId
+           AND assignment_generation = @assignmentGeneration`,
+      )
+      .get({ registryWorkspaceId, assignmentId, assignmentGeneration }) as
+      | { manifest_sha256?: unknown; upload_id?: unknown }
+      | undefined;
+    if (typeof manifest?.manifest_sha256 !== "string" || manifest.manifest_sha256 !== outputManifestSha256) {
+      throw conflict("remote worker assignment output manifest");
+    }
+    const upload = this.db
+      .prepare(
+        `SELECT upload_state, verification_gate_state FROM remote_worker_artifact_uploads
+         WHERE registry_workspace_id = @registryWorkspaceId AND assignment_id = @assignmentId
+           AND assignment_generation = @assignmentGeneration AND upload_id = @uploadId`,
+      )
+      .get({ registryWorkspaceId, assignmentId, assignmentGeneration, uploadId: manifest.upload_id }) as
+      | { upload_state?: unknown; verification_gate_state?: unknown }
+      | undefined;
+    if (upload?.upload_state !== "committed") {
+      throw conflict("remote worker assignment output manifest upload");
+    }
+    if (upload.verification_gate_state !== "not_required" && upload.verification_gate_state !== "satisfied") {
+      throw conflict("remote worker assignment output manifest verification");
+    }
+    const effects = this.db
+      .prepare(
+        `SELECT
+           (SELECT COUNT(*) FROM remote_worker_effect_intents i
+              WHERE i.registry_workspace_id = @registryWorkspaceId AND i.assignment_id = @assignmentId
+                AND i.assignment_generation = @assignmentGeneration) AS intents,
+           (SELECT COUNT(*) FROM remote_worker_effect_receipts r
+              WHERE r.registry_workspace_id = @registryWorkspaceId AND r.assignment_id = @assignmentId
+                AND r.assignment_generation = @assignmentGeneration) AS receipts,
+           (SELECT COUNT(*) FROM remote_worker_effect_receipts r
+              WHERE r.registry_workspace_id = @registryWorkspaceId AND r.assignment_id = @assignmentId
+                AND r.assignment_generation = @assignmentGeneration AND r.receipt_state = 'manual_reconciliation') AS manual`,
+      )
+      .get({ registryWorkspaceId, assignmentId, assignmentGeneration }) as
+      | { intents?: unknown; receipts?: unknown; manual?: unknown }
+      | undefined;
+    if (Number(effects?.intents ?? 0) !== Number(effects?.receipts ?? 0)) {
+      throw conflict("remote worker assignment effect receipts");
+    }
+    if (Number(effects?.manual ?? 0) > 0) {
+      throw conflict("remote worker assignment effect reconciliation");
+    }
   }
 
   private databaseNow(): string {
