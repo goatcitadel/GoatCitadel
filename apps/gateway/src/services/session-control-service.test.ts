@@ -19,6 +19,7 @@ import {
   SessionControlService,
   computeChatTurnAdmissionMaterialSha256,
   createAuthenticatedOperatorAdmissionContext,
+  freezeChatTurnRequestActor,
   type AuthenticatedOperatorAdmissionContext,
 } from "./session-control-service.js";
 import { buildHeartbeatOccurrencePlan } from "./heartbeat-occurrence-service.js";
@@ -46,6 +47,37 @@ const BASE_REQUEST = {
 } as unknown as ChatSendMessageRequest;
 
 describe("SessionControlService", () => {
+  // HX-408 M1-review mandate: `freezeChatTurnRequestActor` treats any
+  // non-`none` authActorSource as authenticated operator authority. An
+  // admitted mesh node is machine identity, never operator authority — pin
+  // that a `mesh_node` source can never reach Chat turn admission with trust.
+  it("rejects a mesh_node actor source at the trusted Chat request-actor freeze", () => {
+    expect(() =>
+      freezeChatTurnRequestActor({
+        content: "publish something",
+        operatorId: "node-1",
+        authActorId: "node-1",
+        authActorSource: "mesh_node",
+      }),
+    ).toThrow(/mesh node identity/iu);
+    // The operator admission context factory keeps rejecting it as well.
+    expect(() =>
+      createAuthenticatedOperatorAdmissionContext({
+        actorId: "node-1",
+        authActorSource: "mesh_node",
+      }),
+    ).toThrow(/operator control-plane authority/u);
+    // Operator sources keep working exactly as before.
+    expect(
+      freezeChatTurnRequestActor({
+        content: "hello",
+        operatorId: "operator-1",
+        authActorId: "operator-1",
+        authActorSource: "token",
+      }),
+    ).toMatchObject({ actorKind: "operator", actorId: "operator-1" });
+  });
+
   it("keeps the authenticated-operator context factory scoped to a single route-layer mint site", () => {
     const sourceRoot = fileURLToPath(new URL("../", import.meta.url));
     const productionSources = listProductionTypeScriptSources(sourceRoot);

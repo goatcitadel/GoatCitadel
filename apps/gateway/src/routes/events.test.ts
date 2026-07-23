@@ -34,9 +34,13 @@ describe("events stream route", () => {
     for (const source of ["token", "basic", "loopback", "sse"]) {
       expect(canReceiveApprovalActionTokens(request(source))).toBe(true);
     }
-    for (const source of ["companion", "device", "a2a_peer"]) {
+    // HX-408 M1-review mandate: an admitted mesh node is machine identity —
+    // it must never receive live approval action tokens on realtime streams.
+    for (const source of ["companion", "device", "a2a_peer", "mesh_node"]) {
       expect(canReceiveApprovalActionTokens(request(source))).toBe(false);
     }
+    // Even a loopback-origin stream carrying the mesh_node source stays denied.
+    expect(canReceiveApprovalActionTokens(request("mesh_node", "127.0.0.1"))).toBe(false);
     expect(canReceiveApprovalActionTokens(request("none", "127.0.0.1"))).toBe(true);
     expect(canReceiveApprovalActionTokens(request("none", "::1"))).toBe(true);
     expect(canReceiveApprovalActionTokens(request("none"))).toBe(false);

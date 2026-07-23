@@ -1205,6 +1205,16 @@ export function freezeChatTurnRequestActor(
   request: ChatSendMessageRequest,
   explicitActor?: Pick<ChatTurnAdmissionActor, "actorKind" | "actorId">,
 ): FrozenChatTurnRequestActor {
+  // HX-408 M1-review mandate: this freeze treats every non-`none` auth source
+  // as authenticated operator authority. An admitted mesh node is machine
+  // identity scoped to the publication surface — it must never be admitted as
+  // a trusted Chat request actor, so the source is rejected loudly instead of
+  // silently downgraded.
+  if (request.authActorSource === "mesh_node") {
+    throw new ConflictError({
+      message: "A mesh node identity can never act as a trusted Chat request actor.",
+    });
+  }
   const operatorId = request.operatorId?.trim();
   const authActorId = request.authActorId?.trim();
   const trustedAuthActor = Boolean(authActorId && request.authActorSource && request.authActorSource !== "none");

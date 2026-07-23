@@ -130,6 +130,31 @@ describe("prepareAgentChatTurn system-heartbeat posture", () => {
     expect(harness.ensureChatSessionRuntimeGrants).not.toHaveBeenCalled();
   });
 
+  // HX-408 M1-review mandate: the heartbeat posture gate treats non-`none`
+  // sources as authenticated. Pin that an admitted mesh node's machine
+  // identity can never satisfy the server-only heartbeat admission posture.
+  it("rejects a mesh_node actor source at the server-only heartbeat posture gate", async () => {
+    const harness = buildHeartbeatPrepHarness();
+    const meshRequest = {
+      ...harness.request,
+      authActorId: "node-1",
+      authActorSource: "mesh_node" as const,
+    };
+
+    await expect(
+      prepareAgentChatTurn(harness.host, SESSION_ID, meshRequest, {
+        ingestUserMessage: false,
+        userMessageId: INTERNAL_MESSAGE_ID,
+        turnId: TURN_ID,
+        assistantMessageId: ASSISTANT_MESSAGE_ID,
+        turnAdmission: harness.admission,
+        serverOnlyPosture: HEARTBEAT_POSTURE,
+      }),
+    ).rejects.toThrow(/exact server-only admission posture/u);
+    expect(harness.ensureChatSessionRuntimeGrants).not.toHaveBeenCalled();
+    expect(harness.ingestEvent).not.toHaveBeenCalled();
+  });
+
   it("rejects a generic system-heartbeat actor admission without the exact occurrence discriminator", async () => {
     const harness = buildHeartbeatPrepHarness();
     const genericSystemAdmission = { ...harness.admission, systemHeartbeatOccurrence: undefined };
