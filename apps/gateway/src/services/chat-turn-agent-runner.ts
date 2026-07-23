@@ -1131,7 +1131,12 @@ export class ChatTurnAgentRunner {
     turnId: string,
     patch: Parameters<Storage["chatTurnTraces"]["patch"]>[1],
   ): ChatTurnTraceRecord {
-    return this.runCanonicalWrite(input, () => this.deps.storage.chatTurnTraces.patch(turnId, patch));
+    return this.runCanonicalWrite(input, () =>
+      this.deps.storage.chatTurnTraces.patch(
+        turnId,
+        preserveRoutedContextTraceBinding(this.deps.storage, turnId, patch),
+      ),
+    );
   }
 
   private createToolRun(
@@ -13784,6 +13789,36 @@ function buildToolFailureFallbackMessage(userPrompt: string, toolRuns: ChatToolR
   return lines.join("\n\n");
 }
 
+/**
+ * HX-407 C1: the routed-context binding receipt inside `trace.routing` is
+ * immutable turn evidence written at durable admission — the operator-facing
+ * snapshot inspection fails closed without it. Runner routing updates replace
+ * the `routing` object wholesale, so every replacement must carry an existing
+ * receipt forward unless the patch itself provides one.
+ */
+function preserveRoutedContextTraceBinding(
+  storage: Pick<Storage, "chatTurnTraces">,
+  turnId: string,
+  patch: Parameters<Storage["chatTurnTraces"]["patch"]>[1],
+): Parameters<Storage["chatTurnTraces"]["patch"]>[1] {
+  if (!patch.routing || patch.routing.routedContext) {
+    return patch;
+  }
+  let existingReceipt: ChatTurnTraceRecord["routing"]["routedContext"];
+  try {
+    existingReceipt = storage.chatTurnTraces.get(turnId).routing.routedContext;
+  } catch (error) {
+    if (error instanceof NotFoundError) {
+      return patch;
+    }
+    throw error;
+  }
+  if (!existingReceipt) {
+    return patch;
+  }
+  return { ...patch, routing: { ...patch.routing, routedContext: existingReceipt } };
+}
+
 function createOrRefreshAgentStreamTrace(
   storage: Storage,
   input: Parameters<Storage["chatTurnTraces"]["create"]>[0],
@@ -13793,6 +13828,7 @@ function createOrRefreshAgentStreamTrace(
     if (existing.status === "cancelled") {
       throw createAbortError("Chat turn cancelled.");
     }
+    const existingReceipt = existing.routing.routedContext;
     return storage.chatTurnTraces.patch(input.turnId, {
       parentTurnId: input.parentTurnId,
       branchKind: input.branchKind,
@@ -13801,7 +13837,10 @@ function createOrRefreshAgentStreamTrace(
       status: "running",
       model: input.model,
       effectiveToolAutonomy: input.effectiveToolAutonomy,
-      routing: input.routing,
+      routing:
+        existingReceipt && input.routing && !input.routing.routedContext
+          ? { ...input.routing, routedContext: existingReceipt }
+          : input.routing,
       loopGuard: input.loopGuard,
     });
   } catch (error) {

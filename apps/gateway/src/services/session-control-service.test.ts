@@ -115,6 +115,10 @@ describe("SessionControlService", () => {
         materialSha256,
       }),
     );
+    // The frozen admitted request excludes routed-context refs: raw refs never
+    // enter durable-executable identity (they freeze into the routed-context
+    // snapshot chain instead).
+    const { contextRefs: _contextRefs, ...frozenBaseRequest } = BASE_REQUEST;
     expect(active).toEqual({
       identity: {
         admissionId: "admission-1",
@@ -126,7 +130,7 @@ describe("SessionControlService", () => {
         controllerGeneration: 3,
         materialSha256,
       },
-      admittedRequest: BASE_REQUEST,
+      admittedRequest: frozenBaseRequest,
       requestActor: { actorKind: "operator", actorId: "operator-1" },
       requestClaim: { runtimeOwnerId: "runtime-1", leaseRevision: 1 },
     });
@@ -483,13 +487,12 @@ describe("SessionControlService", () => {
     ).toThrow("raw authenticated companion session id");
   });
 
-  it("changes the digest for every execution-relevant field while excluding transport signal and actor projection", () => {
+  it("changes the digest for every execution-relevant field while excluding transport signal, actor projection, and routed-context refs", () => {
     const baseline = computeChatTurnAdmissionMaterialSha256(BASE_REQUEST);
     const variants: ChatSendMessageRequest[] = [
       { ...BASE_REQUEST, content: "different" },
       { ...BASE_REQUEST, parts: [{ type: "text", text: "different" }] },
       { ...BASE_REQUEST, attachments: ["attachment-2"] },
-      { ...BASE_REQUEST, contextRefs: [] },
       { ...BASE_REQUEST, providerId: "anthropic" },
       { ...BASE_REQUEST, model: "claude-opus" },
       { ...BASE_REQUEST, routeDecision: { action: "send", issuedAt: "2026-07-15T00:00:00.000Z" } as never },
@@ -523,6 +526,18 @@ describe("SessionControlService", () => {
         operatorId: "operator-other",
         authActorId: "auth-other",
         authActorSource: "token",
+      }),
+    ).toBe(baseline);
+    // Routed-context refs are excluded BY DESIGN: the C1 durable ward strips
+    // raw refs from every durable payload (their identity freezes into the
+    // routed-context snapshot chain: sourceRequestHash + snapshotHash +
+    // capability-profile/trace bindings), so the admission material must hash
+    // the refs-less request the durable identity re-verifications reconstruct.
+    expect(computeChatTurnAdmissionMaterialSha256({ ...BASE_REQUEST, contextRefs: [] })).toBe(baseline);
+    expect(
+      computeChatTurnAdmissionMaterialSha256({
+        ...BASE_REQUEST,
+        contextRefs: [{ kind: "external_attachment", ref: "esa_att-1" }] as never,
       }),
     ).toBe(baseline);
   });

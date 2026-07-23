@@ -58,9 +58,19 @@ export interface TurnAdmissionDurableClaim {
   attemptCount: number;
 }
 
+/**
+ * The immutable executable request identity a Chat turn admission freezes.
+ * Transport signal and actor projection are excluded (they are admission
+ * ACTOR material), and so are routed-context refs: the C1 routed-context
+ * ward strips raw refs from every durable payload — their identity freezes
+ * into the routed-context snapshot chain instead (sourceRequestHash,
+ * snapshotHash, capability-profile and trace bindings) — so the admission
+ * material must hash the same refs-less request every durable
+ * re-verification reconstructs.
+ */
 export type FrozenChatTurnExecutionRequest = Omit<
   ChatSendMessageRequest,
-  "signal" | "operatorId" | "authActorId" | "authActorSource"
+  "signal" | "operatorId" | "authActorId" | "authActorSource" | "contextRefs"
 >;
 
 export interface FrozenChatTurnRequestActor {

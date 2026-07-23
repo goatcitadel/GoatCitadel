@@ -1185,6 +1185,13 @@ export function freezeChatTurnExecutionRequest(request: ChatSendMessageRequest):
     operatorId: _operatorId,
     authActorId: _authActorId,
     authActorSource: _authActorSource,
+    // Routed-context refs are request transport, never durable-executable
+    // identity: the C1 ward strips them from every durable payload and the
+    // resolver freezes their exact identity into the routed-context snapshot
+    // (sourceRequestHash + snapshotHash + capability-profile/trace bindings).
+    // Excluding them here keeps the admission material equal to the refs-less
+    // request every durable identity re-verification reconstructs.
+    contextRefs: _contextRefs,
     ...serializableExecutionRequest
   } = request;
   const normalized = {

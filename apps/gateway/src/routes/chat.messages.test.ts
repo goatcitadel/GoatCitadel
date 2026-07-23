@@ -189,6 +189,18 @@ describe("chat message routes", () => {
         { kind: "memory_item", ref: "memory-1" },
       ],
       Array.from({ length: 17 }, (_, index) => ({ kind: "attachment", ref: `attachment-${index}` })),
+      // HX-407 C1: external refs obey the exact same identifier-only gate.
+      [{ kind: "external_attachment", ref: " esa_att-1" }],
+      [{ kind: "external_attachment", ref: "esa_att/../escape" }],
+      [{ kind: "external_attachment", ref: "esa_att\nsmuggle" }],
+      [{ kind: "external_attachment", ref: "esa_att-1", label: "control\u0000label" }],
+      [{ kind: "external_attachment", ref: "esa_att-1", content: "smuggled transcript bytes" }],
+      [{ kind: "external_attachment", ref: "esa_att-1", admittedText: "smuggled bytes" }],
+      [{ kind: "external_attachment", ref: "esa_att-1", externalProvenance: { itemId: "item-1" } }],
+      [
+        { kind: "external_attachment", ref: "esa_att-1" },
+        { kind: "external_attachment", ref: "esa_att-1" },
+      ],
     ];
     for (const url of ["/api/v1/chat/sessions/sess-1/agent-send", "/api/v1/chat/sessions/sess-1/agent-send/stream"]) {
       for (const contextRefs of invalidContextRefs) {
@@ -467,6 +479,79 @@ describe("chat message routes", () => {
     expect(rejected.statusCode).toBe(409);
     expect(rejected.json().error.reason).toBe("route_fingerprint_mismatch");
     expect(agentSendChatMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("admits the C1 external_attachment routed-context kind on both send paths as identifiers only", async () => {
+    // HX-407 C4c: the route boundary accepts exactly the three reviewed kinds
+    // and forwards refs untouched; the server-side resolver (composed in C4a)
+    // owns every content lookup. The two pre-existing kinds must flow
+    // byte-identical next to the external ref.
+    const routeDecision = {
+      action: "send" as const,
+      issuedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      requestedProviderId: "openai",
+      requestedModel: "gpt-5.4",
+      effectiveProviderId: "openai",
+      effectiveModel: "gpt-5.4",
+      selectionSource: "manual" as const,
+      fallbackPolicy: "off" as const,
+      fallbackResult: "not_applicable" as const,
+      runtimeReachability: "not_checked" as const,
+      runtimeClass: "cloud" as const,
+      fingerprint: "external-context-route",
+    };
+    const routePreflight = vi.fn(async () => ({ decision: routeDecision }));
+    const agentSendChatMessage = vi.fn(async () => ({
+      sessionId: "sess-1",
+      turnId: "turn-1",
+      assistantMessage: { messageId: "assistant-1", content: "ok" },
+    }));
+    const agentSendChatMessageStream = vi.fn(async function* () {
+      yield { type: "message", message: { messageId: "assistant-2", content: "ok" } };
+    });
+    app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
+    app.decorate("services", {
+      chatMessages: { routePreflight, agentSendChatMessage, agentSendChatMessageStream },
+    } as never);
+    await app.register(chatRoutes);
+
+    const contextRefs = [
+      { kind: "attachment", ref: "attachment-1" },
+      { kind: "memory_item", ref: "memory-1" },
+      { kind: "external_attachment", ref: "esa_0123456789abcdef", label: "Codex rollout transcript" },
+    ];
+
+    const sent = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/agent-send",
+      payload: {
+        content: "use the imported rollout",
+        providerId: "openai",
+        model: "gpt-5.4",
+        contextRefs,
+        routeDecision,
+      },
+    });
+    expect(sent.statusCode).toBe(200);
+    expect(agentSendChatMessage).toHaveBeenCalledWith("sess-1", expect.objectContaining({ contextRefs }), undefined);
+
+    const streamed = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/agent-send/stream",
+      payload: {
+        content: "use the imported rollout",
+        providerId: "openai",
+        model: "gpt-5.4",
+        contextRefs,
+        routeDecision,
+      },
+    });
+    expect(streamed.statusCode).toBe(200);
+    expect(agentSendChatMessageStream).toHaveBeenCalledTimes(1);
+    expect(agentSendChatMessageStream.mock.calls[0]?.[0]).toBe("sess-1");
+    expect(agentSendChatMessageStream.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ contextRefs }));
   });
 
   it("rejects stale, mismatched, blocked, and changed route decisions", async () => {

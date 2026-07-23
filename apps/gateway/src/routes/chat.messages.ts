@@ -1,10 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
-  CHAT_ROUTED_CONTEXT_MAX_LABEL_LENGTH,
-  CHAT_ROUTED_CONTEXT_MAX_REF_LENGTH,
-  CHAT_ROUTED_CONTEXT_MAX_REFS,
-  CHAT_ROUTED_CONTEXT_CONTROL_PATTERN,
-  CHAT_ROUTED_CONTEXT_REF_PATTERN,
   MOBILE_NATIVE_CAPABILITY_IDS,
   NotFoundError,
   type ChatSendMessageRequest,
@@ -12,6 +7,7 @@ import {
   type RoutingPreflightResult,
 } from "@goatcitadel/contracts";
 import { z } from "zod";
+import { routedContextRefsSchema } from "./chat.routed-context-schema.js";
 import {
   projectChatContextManifestForPublic,
   projectChatHistoryMessageForPublic,
@@ -189,44 +185,6 @@ const mobileContextSchema = z.object({
     })
     .optional(),
 });
-
-const routedContextRefSchema = z
-  .object({
-    kind: z.enum(["attachment", "memory_item"]),
-    ref: z
-      .string()
-      .min(1)
-      .max(CHAT_ROUTED_CONTEXT_MAX_REF_LENGTH)
-      .regex(CHAT_ROUTED_CONTEXT_REF_PATTERN, "ref contains unsupported characters")
-      .refine((value) => value === value.trim(), "ref must not contain surrounding whitespace"),
-    label: z
-      .string()
-      .min(1)
-      .max(CHAT_ROUTED_CONTEXT_MAX_LABEL_LENGTH)
-      .refine((value) => value === value.trim(), "label must not contain surrounding whitespace")
-      .refine((value) => !CHAT_ROUTED_CONTEXT_CONTROL_PATTERN.test(value), "label contains control characters")
-      .optional(),
-  })
-  .strict();
-
-const routedContextRefsSchema = z
-  .array(routedContextRefSchema)
-  .min(1)
-  .max(CHAT_ROUTED_CONTEXT_MAX_REFS)
-  .superRefine((refs, context) => {
-    const seen = new Set<string>();
-    refs.forEach((entry, index) => {
-      const key = `${entry.kind}\u0000${entry.ref}`;
-      if (seen.has(key)) {
-        context.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "contextRefs must not contain duplicate sources",
-          path: [index],
-        });
-      }
-      seen.add(key);
-    });
-  });
 
 const sendMessageSchema = z.object({
   content: z.string().min(1),
