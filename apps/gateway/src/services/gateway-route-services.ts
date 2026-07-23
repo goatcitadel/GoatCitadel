@@ -194,6 +194,7 @@ import {
 import type { WorkspacePathBridgeRouteService } from "../routes/workspace-path-bridge.js";
 import type { ExternalSourceRouteService } from "./external-source-route-service.js";
 import type { MeshCapabilityActivationService } from "./mesh-capability-activation-service.js";
+import type { MeshCapabilityInvocationService } from "./mesh-capability-invocation-service.js";
 import type { MeshCapabilityPublicationService } from "./mesh-capability-publication-service.js";
 export interface GatewayRouteServices {
   a2a: A2ARouteService;
@@ -258,6 +259,12 @@ export interface GatewayRouteServices {
    * request/revoke routes). Composed directly by the gateway service.
    */
   meshCapabilityActivation?: MeshCapabilityActivationService;
+  /**
+   * HX-408 M3: the generation-fenced mesh invocation owner (node-facing
+   * input/progress/settlement routes). Composed directly by the gateway
+   * service over the existing mesh replication transport.
+   */
+  meshCapabilityInvocation?: MeshCapabilityInvocationService;
   mobile: MobileRouteService;
   npu: NpuRouteService;
   personalOps: PersonalOpsRouteService;

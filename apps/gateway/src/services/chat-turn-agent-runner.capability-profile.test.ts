@@ -30,6 +30,18 @@ const MESH_PUBLICATION_BINDING = {
   healthGeneration: 4,
 };
 
+const MESH_DISPATCH_RECEIPT = {
+  invocationId: `mesh-invocation-${"a".repeat(48)}`,
+  capabilityId: "browser.search",
+  nodeId: "node-a",
+  activationId: MESH_PUBLICATION_BINDING.activationId,
+  activationRevision: MESH_PUBLICATION_BINDING.activationRevision,
+  publisherGeneration: MESH_PUBLICATION_BINDING.publisherGeneration,
+  publicationLeaseFencingToken: MESH_PUBLICATION_BINDING.publicationLeaseFencingToken,
+  inputSha256: "b".repeat(64),
+  deadlineAt: "2026-07-23T00:00:00.000Z",
+};
+
 const TOOL_DEFINITION = {
   type: "function",
   function: {
@@ -479,6 +491,226 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
         }),
       ]),
     );
+    expect(invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("dispatches an admitted mesh-published callable through the generation-fenced runtime (M3)", async () => {
+    const createChatCompletion = vi
+      .fn()
+      .mockResolvedValueOnce(namedToolCallCompletion("browser.search", { query: "release notes" }))
+      .mockResolvedValueOnce({
+        model: "model-a",
+        choices: [{ index: 0, message: { role: "assistant", content: "The mesh tool ran." } }],
+      });
+    const invokeTool = vi.fn();
+    const dispatchMeshCapabilityInvocation = vi.fn(async (_input: unknown, options: { executionFence: () => void }) => {
+      // The invocation owner fires the durable fence exactly once at the
+      // envelope append; the mock mirrors that discipline.
+      options.executionFence();
+      return {
+        invocationId: `mesh-invocation-${"a".repeat(48)}`,
+        disposition: "succeeded" as const,
+        settled: true,
+        deliveryUncertain: false,
+        manualReconciliationRequired: false,
+        output: { status: "ok" },
+        receipt: MESH_DISPATCH_RECEIPT,
+      };
+    });
+    const profile = buildProfile({ meshTool: true });
+    const runner = new ChatTurnAgentRunner({
+      storage: createProfileStorage(profile) as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      listCapabilityCatalog: () => liveCallableCatalog(profile),
+      createChatCompletion,
+      invokeTool,
+      evaluateToolAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
+      resolveMeshCapabilityPreDispatchBlock: vi.fn(() => "mesh_capability_dispatch_unready" as const),
+      dispatchMeshCapabilityInvocation,
+    });
+
+    const result = await runner.run(buildInput(profile));
+
+    // The admitted invocation executed ONLY through the mesh runtime.
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(dispatchMeshCapabilityInvocation).toHaveBeenCalledTimes(1);
+    expect(dispatchMeshCapabilityInvocation).toHaveBeenCalledWith(
+      {
+        workspaceId: "workspace-frozen",
+        binding: MESH_PUBLICATION_BINDING,
+        capabilityId: "browser.search",
+        args: { query: "release notes" },
+        toolRunId: expect.any(String),
+        sessionId: "session-frozen",
+        turnId: "turn-frozen",
+        executionProfileSha256: "f".repeat(64),
+      },
+      { executionFence: expect.any(Function), signal: expect.any(AbortSignal) },
+    );
+    expect(result.turnTrace.toolRuns).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          toolName: "browser.search",
+          status: "executed",
+          result: expect.objectContaining({
+            status: "ok",
+            meshInvocation: expect.objectContaining({
+              invocationId: `mesh-invocation-${"a".repeat(48)}`,
+              disposition: "succeeded",
+              settled: true,
+            }),
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it("still blocks a drifted mesh binding first even when the dispatch runtime is composed", async () => {
+    const createChatCompletion = vi
+      .fn()
+      .mockResolvedValueOnce(namedToolCallCompletion("browser.search", { query: "release notes" }))
+      .mockResolvedValueOnce({
+        model: "model-a",
+        choices: [{ index: 0, message: { role: "assistant", content: "Blocked." } }],
+      });
+    const invokeTool = vi.fn();
+    const dispatchMeshCapabilityInvocation = vi.fn();
+    const profile = buildProfile({ meshTool: true });
+    const runner = new ChatTurnAgentRunner({
+      storage: createProfileStorage(profile) as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      listCapabilityCatalog: () => liveCallableCatalog(profile),
+      createChatCompletion,
+      invokeTool,
+      evaluateToolAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
+      resolveMeshCapabilityPreDispatchBlock: vi.fn(() => "mesh_capability_binding_drift" as const),
+      dispatchMeshCapabilityInvocation,
+    });
+
+    const result = await runner.run(buildInput(profile));
+
+    expect(dispatchMeshCapabilityInvocation).not.toHaveBeenCalled();
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(result.turnTrace.toolRuns).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          status: "blocked",
+          error: expect.stringContaining("mesh_capability_binding_drift"),
+        }),
+      ]),
+    );
+  });
+
+  it("keeps an approval-gated mesh callable fail-closed instead of bypassing the approval", async () => {
+    const createChatCompletion = vi
+      .fn()
+      .mockResolvedValueOnce(namedToolCallCompletion("browser.search", { query: "release notes" }))
+      .mockResolvedValueOnce({
+        model: "model-a",
+        choices: [{ index: 0, message: { role: "assistant", content: "Deferred." } }],
+      });
+    const invokeTool = vi.fn();
+    const dispatchMeshCapabilityInvocation = vi.fn();
+    const profile = buildProfile({ meshTool: true, requiresApproval: true });
+    const runner = new ChatTurnAgentRunner({
+      storage: createProfileStorage(profile) as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      listCapabilityCatalog: () => liveCallableCatalog(profile),
+      createChatCompletion,
+      invokeTool,
+      evaluateToolAccess: vi.fn(() => ({ allowed: true, requiresApproval: true, reasonCodes: [] })),
+      resolveMeshCapabilityPreDispatchBlock: vi.fn(() => "mesh_capability_dispatch_unready" as const),
+      dispatchMeshCapabilityInvocation,
+    });
+
+    const result = await runner.run(buildInput(profile));
+
+    expect(dispatchMeshCapabilityInvocation).not.toHaveBeenCalled();
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(result.turnTrace.toolRuns).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          status: "blocked",
+          error: expect.stringContaining("mesh_capability_approval_dispatch_deferred"),
+        }),
+      ]),
+    );
+  });
+
+  it("settles unknown mesh delivery as failed with manual reconciliation and no automatic replay", async () => {
+    const createChatCompletion = vi
+      .fn()
+      .mockResolvedValueOnce(namedToolCallCompletion("browser.search", { query: "release notes" }))
+      .mockResolvedValueOnce({
+        model: "model-a",
+        choices: [{ index: 0, message: { role: "assistant", content: "The delivery is unknown." } }],
+      });
+    const invokeTool = vi.fn();
+    const dispatchMeshCapabilityInvocation = vi.fn(async (_input: unknown, options: { executionFence: () => void }) => {
+      options.executionFence();
+      return {
+        invocationId: `mesh-invocation-${"b".repeat(48)}`,
+        disposition: "unknown" as const,
+        settled: true,
+        deliveryUncertain: true,
+        manualReconciliationRequired: true,
+        errorCode: "mesh_capability_dispatch_deadline_expired",
+        receipt: MESH_DISPATCH_RECEIPT,
+      };
+    });
+    const profile = buildProfile({ meshTool: true });
+    const runner = new ChatTurnAgentRunner({
+      storage: createProfileStorage(profile) as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      listCapabilityCatalog: () => liveCallableCatalog(profile),
+      createChatCompletion,
+      invokeTool,
+      evaluateToolAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
+      resolveMeshCapabilityPreDispatchBlock: vi.fn(() => "mesh_capability_dispatch_unready" as const),
+      dispatchMeshCapabilityInvocation,
+    });
+
+    const result = await runner.run(buildInput(profile));
+
+    // Exactly ONE dispatch: an unknown delivery is never auto-replayed.
+    expect(dispatchMeshCapabilityInvocation).toHaveBeenCalledTimes(1);
+    expect(result.turnTrace.toolRuns).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          toolName: "browser.search",
+          status: "failed",
+          error: expect.stringContaining("mesh_capability_dispatch_deadline_expired"),
+          failureGuidance: expect.stringContaining("reconcile"),
+          effectDisposition: "unknown",
+          effectOutcomeKind: "uncertain",
+        }),
+      ]),
+    );
+  });
+
+  it("forbids mesh dispatch under the exact system-heartbeat posture even when composed", async () => {
+    const createChatCompletion = vi
+      .fn()
+      .mockResolvedValueOnce(namedToolCallCompletion("browser.search", { query: "heartbeat status" }));
+    const invokeTool = vi.fn();
+    const dispatchMeshCapabilityInvocation = vi.fn();
+    const profile = buildProfile({ meshTool: true, heartbeat: true });
+    const storage = createProfileStorage(profile);
+    const runner = new ChatTurnAgentRunner({
+      storage: storage as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      listCapabilityCatalog: () => liveCallableCatalog(profile),
+      createChatCompletion,
+      invokeTool,
+      evaluateToolAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
+      resolveMeshCapabilityPreDispatchBlock: vi.fn(() => "mesh_capability_dispatch_unready" as const),
+      dispatchMeshCapabilityInvocation,
+    });
+
+    await expect(runner.run(buildHeartbeatInput(profile))).rejects.toMatchObject({
+      name: "SystemHeartbeatToolInvocationBlockedError",
+    });
+    expect(dispatchMeshCapabilityInvocation).not.toHaveBeenCalled();
     expect(invokeTool).not.toHaveBeenCalled();
   });
 

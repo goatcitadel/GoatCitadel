@@ -696,6 +696,7 @@ import { MemoryLifecycleService } from "./memory-lifecycle-service.js";
 import { RuntimeLifecycleReadService } from "./runtime-lifecycle-read-service.js";
 import { CapabilitySystemService } from "./capability-system-service.js";
 import { MeshCapabilityActivationService } from "./mesh-capability-activation-service.js";
+import { MeshCapabilityInvocationService } from "./mesh-capability-invocation-service.js";
 import { MeshCapabilityPublicationService } from "./mesh-capability-publication-service.js";
 import type { BaseAgentPromptSkill, BaseAgentPromptToolset } from "./base-agent-system-prompt.js";
 import { TaskLifecycleService } from "./task-lifecycle-service.js";
@@ -1317,6 +1318,7 @@ export class GatewayService {
   /** HX-408 M1: authenticated mesh capability publication owner. */
   private readonly meshCapabilityPublicationService: MeshCapabilityPublicationService;
   private readonly meshCapabilityActivationService: MeshCapabilityActivationService;
+  private readonly meshCapabilityInvocationService: MeshCapabilityInvocationService;
   private readonly skillHubLifecycleService: SkillHubLifecycleService;
   private readonly skillHubReviewService: SkillHubReviewService;
   private readonly skillLearningService: SkillLearningService;
@@ -1736,6 +1738,19 @@ export class GatewayService {
       joinToken: process.env[config.assistant.mesh.security.joinTokenEnv],
       defaultLeaseTtlSeconds: config.assistant.mesh.leases.ttlSeconds,
     });
+    // HX-408 M3: the generation-fenced invocation owner rides the EXISTING
+    // mesh replication transport (no new network listener) and surfaces the
+    // committed 168/110 intent/settlement invariants.
+    this.meshCapabilityInvocationService = new MeshCapabilityInvocationService({
+      storage: this.storage,
+      transport: {
+        localNodeId: () => this.meshService.getOptionsSnapshot().localNodeId,
+        appendEvent: (input) => this.meshService.ingestReplicationEvent(input),
+      },
+      publishRealtime: (eventType, source, payload) => {
+        this.publishRealtime(eventType, source, payload);
+      },
+    });
     this.npuSidecar = new NpuSidecarService({
       rootDir: config.rootDir,
       config: config.assistant.npu,
@@ -1779,6 +1794,10 @@ export class GatewayService {
       // activation snapshot through the activation owner right before dispatch.
       resolveMeshCapabilityPreDispatchBlock: ({ workspaceId, binding }) =>
         this.meshCapabilityActivationService.resolvePreDispatchBlock(workspaceId, binding),
+      // HX-408 M3: the still-valid branch of that exact gate executes through
+      // the generation-fenced mesh invocation owner.
+      dispatchMeshCapabilityInvocation: (input, options) =>
+        this.meshCapabilityInvocationService.dispatch(input, options),
       invokeMcpTool: (request, options) => this.invokeMcpTool(request, options),
       listMcpBrowserFallbackTargets: () => this.listMcpBrowserFallbackTargets(),
       recordRuntimeDecision: (input) => this.recordRuntimeDecision(input),
@@ -2916,6 +2935,7 @@ export class GatewayService {
       ...composeGatewayRouteServices(this.getRouteCompositionPort()),
       meshCapabilityPublication: this.meshCapabilityPublicationService,
       meshCapabilityActivation: this.meshCapabilityActivationService,
+      meshCapabilityInvocation: this.meshCapabilityInvocationService,
       externalSources: createExternalSourceRouteService(
         this.storage,
         this.workspacePathBridgeRuntime.service,

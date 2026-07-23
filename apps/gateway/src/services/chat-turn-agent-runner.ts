@@ -71,6 +71,7 @@ import {
   type Storage,
 } from "@goatcitadel/storage";
 import type { SystemHeartbeatTurnPrepPosture } from "./chat-turn-prep-service.js";
+import type { MeshCapabilityInvocationDispatchOutcome } from "./mesh-capability-invocation-service.js";
 import { EXPLICIT_WEB_PHRASES, hasLiveDataIntent, hasResearchListIntent } from "../orchestration/live-data-detect.js";
 import type { McpBrowserFallbackTarget } from "./mcp-runtime.js";
 import {
@@ -836,6 +837,28 @@ export interface ChatTurnAgentRunnerDeps {
     workspaceId: string;
     binding: ChatTurnCapabilityToolMeshPublicationBinding;
   }) => "mesh_capability_binding_drift" | "mesh_capability_dispatch_unready";
+  /**
+   * HX-408 M3: the generation-fenced mesh dispatch runtime. Composed by the
+   * gateway to `MeshCapabilityInvocationService.dispatch`. The runner routes
+   * a mesh-published callable here ONLY after the M2 pre-dispatch gate
+   * returned its still-valid verdict; drift always blocks first, and an
+   * absent composition keeps the M2 `mesh_capability_dispatch_unready`
+   * fail-closed terminal byte-identically.
+   */
+  dispatchMeshCapabilityInvocation?: (
+    input: {
+      workspaceId: string;
+      binding: ChatTurnCapabilityToolMeshPublicationBinding;
+      capabilityId: string;
+      args: Record<string, unknown>;
+      toolRunId: string;
+      sessionId: string;
+      turnId: string;
+      runId?: string;
+      executionProfileSha256: string;
+    },
+    options: { executionFence: () => void; signal?: AbortSignal },
+  ) => Promise<MeshCapabilityInvocationDispatchOutcome>;
   toolLoopDetection?: ToolLoopDetectionConfig;
   safeWriteFallbackDir?: string;
   /**
@@ -5087,24 +5110,183 @@ export class ChatTurnAgentRunner {
     if (frozen.requiresApproval && !current.requiresApproval) {
       return `Current policy would broaden ${tool.toolName} beyond the profile's frozen approval posture.`;
     }
-    // HX-408 M2: a mesh-published callable re-verifies its frozen activation
-    // snapshot immediately before dispatch and stays fail-closed BEFORE any
-    // remote path — drift blocks with a content-free reason, and a still-valid
-    // binding terminates on the M3-pending rejection until the mesh dispatch
-    // runtime is composed.
+    // HX-408 M2/M3: a mesh-published callable re-verifies its frozen
+    // activation snapshot immediately before dispatch and stays fail-closed
+    // BEFORE any remote path — drift always blocks first with its
+    // content-free reason. On the still-valid verdict, M3 admits the real
+    // generation-fenced dispatch ONLY when the mesh dispatch runtime is
+    // composed AND no interactive approval gates the current posture AND the
+    // turn is not a server-only heartbeat; every other case keeps the exact
+    // M2 fail-closed terminal.
     const meshPublication = input.capabilityProfile.selection.tools.find(
       (candidate) => candidate.canonicalName === tool.toolName,
     )?.meshPublication;
     if (meshPublication) {
-      const block = this.deps.resolveMeshCapabilityPreDispatchBlock
-        ? this.deps.resolveMeshCapabilityPreDispatchBlock({
+      const preDispatchGate = this.deps.resolveMeshCapabilityPreDispatchBlock;
+      const block = preDispatchGate
+        ? preDispatchGate({
             workspaceId: input.capabilityProfile.identity.workspaceId,
             binding: meshPublication,
           })
         : "mesh_capability_dispatch_unready";
-      return `Mesh-published tool ${tool.toolName} is blocked because ${block}.`;
+      if (
+        block === "mesh_capability_binding_drift" ||
+        !preDispatchGate ||
+        !this.deps.dispatchMeshCapabilityInvocation
+      ) {
+        return `Mesh-published tool ${tool.toolName} is blocked because ${block}.`;
+      }
+      if (isExactSystemHeartbeatRunnerPosture(input)) {
+        return `Mesh-published tool ${tool.toolName} is blocked because mesh_capability_heartbeat_dispatch_forbidden.`;
+      }
+      if (current.requiresApproval) {
+        // The packet requires the approvals check to PASS before an intent is
+        // created; no mesh approval-replay surface exists in M3, so an
+        // approval-gated posture stays fail-closed instead of bypassing it.
+        return `Mesh-published tool ${tool.toolName} is blocked because mesh_capability_approval_dispatch_deferred.`;
+      }
+      return undefined;
     }
     return undefined;
+  }
+
+  /**
+   * HX-408 M3: the frozen mesh binding for a tool this turn's
+   * `resolveCapabilityProfileInvocationBlock` gate already admitted for real
+   * dispatch (still-valid verdict, composed runtime, no approval gate,
+   * non-heartbeat posture). The caller runs the gate FIRST; this helper only
+   * routes the admitted invocation. Gate-to-write drift stays fail-closed in
+   * the invocation owner and the committed storage intent guard.
+   */
+  private resolveAdmittedMeshDispatchBinding(
+    input: ChatTurnAgentRunnerInput,
+    toolName: string,
+  ): { workspaceId: string; binding: ChatTurnCapabilityToolMeshPublicationBinding } | undefined {
+    if (!input.capabilityProfile || !this.deps.dispatchMeshCapabilityInvocation) {
+      return undefined;
+    }
+    const meshPublication = input.capabilityProfile.selection.tools.find(
+      (candidate) => candidate.canonicalName === toolName,
+    )?.meshPublication;
+    if (!meshPublication) {
+      return undefined;
+    }
+    return { workspaceId: input.capabilityProfile.identity.workspaceId, binding: meshPublication };
+  }
+
+  /**
+   * HX-408 M3: settle one admitted mesh dispatch into the canonical tool-run
+   * truth. The invocation owner fires the durable execution fence exactly
+   * once immediately before the envelope append; outcomes map to the
+   * existing HX-305 effect-truth conventions — succeeded completes,
+   * node-reported failures/timeouts/cancellations settle as failed with
+   * uncertain remote effect, and unknown delivery settles as failed with the
+   * manual-reconciliation guidance and NO automatic replay.
+   */
+  private async settleMeshCapabilityDispatch(input: {
+    turnInput: ChatTurnAgentRunnerInput;
+    turnId: string;
+    toolRunId: string;
+    toolName: string;
+    args: Record<string, unknown>;
+    workspaceId: string;
+    binding: ChatTurnCapabilityToolMeshPublicationBinding;
+    getEffectPotential: () => ToolEffectPotentialRecord;
+    hasExecutorDispatchStarted: () => boolean;
+    executionFence: () => void;
+    priorToolRuns?: ChatToolRunRecord[];
+  }): Promise<{ record: ChatToolRunRecord; chunk?: ChatStreamChunkDraft }> {
+    const dispatch = this.deps.dispatchMeshCapabilityInvocation;
+    if (!dispatch) {
+      throw new Error(`Mesh dispatch runtime is not composed for ${input.toolName}.`);
+    }
+    const outcome = await dispatch(
+      {
+        workspaceId: input.workspaceId,
+        binding: input.binding,
+        capabilityId: input.toolName,
+        args: input.args,
+        toolRunId: input.toolRunId,
+        sessionId: input.turnInput.sessionId,
+        turnId: input.turnId,
+        ...(input.turnInput.policyRunId ? { runId: input.turnInput.policyRunId } : {}),
+        executionProfileSha256: input.turnInput.capabilityProfile?.preflightFingerprint ?? "",
+      },
+      {
+        executionFence: input.executionFence,
+        ...(input.turnInput.signal ? { signal: input.turnInput.signal } : {}),
+      },
+    );
+    const receipt = {
+      meshInvocation: {
+        invocationId: outcome.invocationId,
+        disposition: outcome.disposition,
+        settled: outcome.settled,
+        deliveryUncertain: outcome.deliveryUncertain,
+        manualReconciliationRequired: outcome.manualReconciliationRequired,
+        ...(outcome.errorCode === undefined ? {} : { errorCode: outcome.errorCode }),
+        receipt: outcome.receipt,
+      },
+    };
+    if (outcome.disposition === "succeeded") {
+      const persisted = await this.persistToolArtifactsIfNeeded({
+        turnInput: input.turnInput,
+        sessionId: input.turnInput.sessionId,
+        turnId: input.turnId,
+        toolRunId: input.toolRunId,
+        toolName: input.toolName,
+        result: { ...(outcome.output ?? {}), ...receipt },
+        normalizationProfile: input.turnInput.normalizationProfile,
+        priorToolRuns: input.priorToolRuns,
+      });
+      const updated = this.patchToolRun(input.turnInput, input.toolRunId, {
+        status: "executed",
+        ...this.buildToolEffectPatch({ potential: input.getEffectPotential(), phase: "completed" }),
+        result: persisted,
+        finishedAt: new Date().toISOString(),
+      });
+      return {
+        record: updated,
+        chunk: {
+          type: "tool_result",
+          sessionId: input.turnInput.sessionId,
+          turnId: input.turnId,
+          toolRun: updated,
+        },
+      };
+    }
+    const errorCode = outcome.errorCode ?? `mesh_capability_invocation_${outcome.disposition}`;
+    const error = `Mesh-published tool ${input.toolName} settled ${outcome.disposition} (${errorCode}).`;
+    const dispatched = input.hasExecutorDispatchStarted();
+    const updated = this.patchToolRun(input.turnInput, input.toolRunId, {
+      status: "failed",
+      ...this.buildToolEffectPatch({
+        potential: input.getEffectPotential(),
+        phase: dispatched ? "dispatch_failed" : "pre_dispatch_blocked",
+      }),
+      result: receipt,
+      error,
+      failureGuidance: outcome.manualReconciliationRequired
+        ? "The remote delivery truth is unknown. An operator must reconcile the invocation manually; automatic replay is suppressed."
+        : outcome.deliveryUncertain
+          ? "The remote node may already have executed this invocation. Inspect remote state before retry; automatic replay is suppressed."
+          : buildToolFailureGuidance({
+              toolName: input.toolName,
+              status: "failed",
+              args: input.args,
+              error,
+            }),
+      finishedAt: new Date().toISOString(),
+    });
+    return {
+      record: updated,
+      chunk: {
+        type: "tool_result",
+        sessionId: input.turnInput.sessionId,
+        turnId: input.turnId,
+        toolRun: updated,
+      },
+    };
   }
 
   private assertSystemHeartbeatToolInvocationAllowed(
@@ -5562,6 +5744,27 @@ export class ChatTurnAgentRunner {
         toolName: preflight.toolName,
         args: preflight.args,
       });
+      // HX-408 M3: a mesh-published callable the pre-dispatch gate admitted
+      // executes ONLY through the generation-fenced mesh dispatch runtime.
+      // The invocation owner re-verifies callability and the committed
+      // storage intent guard re-verifies the full binding inside its own
+      // transaction, so gate-to-write drift still fails closed pre-fence.
+      const admittedMeshDispatch = this.resolveAdmittedMeshDispatchBinding(input.input, preflight.toolName);
+      if (admittedMeshDispatch) {
+        return await this.settleMeshCapabilityDispatch({
+          turnInput: input.input,
+          turnId: input.turnId,
+          toolRunId: created.toolRunId,
+          toolName: preflight.toolName,
+          args: preflight.args,
+          workspaceId: admittedMeshDispatch.workspaceId,
+          binding: admittedMeshDispatch.binding,
+          getEffectPotential: () => effectPotential,
+          hasExecutorDispatchStarted: () => executorDispatchStarted,
+          executionFence: markMainExecutorDispatchStarted,
+          priorToolRuns: input.priorToolRuns,
+        });
+      }
       const result = await this.invokeTurnTool(
         input.input,
         {
