@@ -129,6 +129,7 @@ export type ApprovalEffectKind =
   | "approval_resolution_signals"
   | "skill_hub_lifecycle_apply"
   | "external_source_knowledge_snapshot_apply"
+  | "mesh_capability_activation_apply"
   | "approval_observability";
 
 export type ApprovalObservabilityAuditStream = "tool_invocations" | "policy_blocks" | "approvals" | "hooks";
@@ -185,7 +186,8 @@ export type ApprovalEffectTargetKind =
   | "remote_token"
   | "approval"
   | "skill_hub_operation"
-  | "external_source_import_item";
+  | "external_source_import_item"
+  | "mesh_capability_activation";
 
 export interface ApprovalEffectRecord {
   effectId: string;

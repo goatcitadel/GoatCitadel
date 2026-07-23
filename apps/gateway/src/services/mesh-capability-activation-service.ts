@@ -44,6 +44,7 @@ import {
 import {
   createMeshCapabilityActivationApproval,
   deriveMeshCapabilityActivationApprovalId,
+  type CreateMeshCapabilityActivationApprovalInput,
 } from "./mesh-capability-activation-approval-service.js";
 import type { MeshCapabilityPublicationService } from "./mesh-capability-publication-service.js";
 
@@ -184,7 +185,7 @@ export class MeshCapabilityActivationService {
       sessionId: input.sessionId,
       turnId: input.turnId,
     });
-    const activationInput: ActivateMeshCapabilityInput = {
+    const activationInput: CreateMeshCapabilityActivationApprovalInput = {
       workspaceId: input.workspaceId,
       activationId,
       activationRevision,
