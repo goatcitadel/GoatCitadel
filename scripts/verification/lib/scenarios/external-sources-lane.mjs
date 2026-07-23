@@ -137,6 +137,24 @@ export function buildExternalSourcesLaneChecks() {
       count: "vitest",
     },
     {
+      id: "external-sources.typecheck",
+      // Runs FIRST after contracts: tsc -b also EMITS the workspace dist/
+      // outputs the tsx-based storage checks resolve, so a fresh clone (or a
+      // fresh worktree) self-bootstraps instead of failing on missing builds.
+      title: "Contracts, storage, gateway, and shared-client boundary typechecks",
+      args: [
+        "--filter",
+        "@goatcitadel/contracts",
+        "--filter",
+        "@goatcitadel/storage",
+        "--filter",
+        "@goatcitadel/gateway",
+        "--filter",
+        "@goatcitadel/mission-control-shared",
+        "typecheck",
+      ],
+    },
+    {
       id: "external-sources.storage-core",
       title:
         "Storage owners: import/attachment/knowledge-link repositories with Journey coupling, atomic materialization, external snapshot-entry verification",
@@ -191,21 +209,6 @@ export function buildExternalSourcesLaneChecks() {
       title:
         "Static scan: GOATCITADEL_INTERNAL_HX407_EXTERNAL_SOURCES_PROOF_ENABLED absent from production code; migration heads recorded (no C4 migration)",
       kind: "static-gate-scan",
-    },
-    {
-      id: "external-sources.typecheck",
-      title: "Contracts, storage, gateway, and shared-client boundary typechecks",
-      args: [
-        "--filter",
-        "@goatcitadel/contracts",
-        "--filter",
-        "@goatcitadel/storage",
-        "--filter",
-        "@goatcitadel/gateway",
-        "--filter",
-        "@goatcitadel/mission-control-shared",
-        "typecheck",
-      ],
     },
     {
       id: "external-sources.live-postgres",

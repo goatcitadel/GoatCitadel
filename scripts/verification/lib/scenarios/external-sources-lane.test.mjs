@@ -19,12 +19,14 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 
 const EXPECTED_CHECK_IDS = [
   "external-sources.contracts",
+  // typecheck runs early on purpose: tsc -b also emits the workspace dist/
+  // outputs the tsx-based storage checks resolve (fresh-clone bootstrap).
+  "external-sources.typecheck",
   "external-sources.storage-core",
   "external-sources.gateway-services",
   "external-sources.routes-and-effects",
   "external-sources.integration",
   "external-sources.static-gate-scan",
-  "external-sources.typecheck",
   "external-sources.live-postgres",
 ];
 
