@@ -1097,7 +1097,16 @@ function snapshotStats(stat: BigIntStats): PosixStatSnapshot {
 }
 
 function assertSafePosixDirectory(stat: PosixStatSnapshot, operatorUid: number): void {
-  if (stat.kind !== "directory" || (stat.uid !== operatorUid && stat.uid !== 0) || (stat.mode & 0o022) !== 0) {
+  // A root-owned directory carrying the sticky bit (e.g. /tmp or /var/tmp at mode
+  // 1777) is a safe shared-temp ancestor even though it is world-writable: the
+  // sticky bit forbids non-owners from renaming or removing entries they do not
+  // own, so an operator-owned scan root beneath it cannot be swapped out. The scan
+  // additionally pins every ancestor through a retained O_NOFOLLOW descriptor, so
+  // this only governs the pre-open posture. Every other directory must still carry
+  // no group or other write bits.
+  const stickyRootSharedTemp = (stat.mode & 0o1000) !== 0 && stat.uid === 0;
+  const hasForbiddenWriteBits = (stat.mode & 0o022) !== 0 && !stickyRootSharedTemp;
+  if (stat.kind !== "directory" || (stat.uid !== operatorUid && stat.uid !== 0) || hasForbiddenWriteBits) {
     throw invalid("Remote worker POSIX directory ancestry is not safely owned.");
   }
 }
