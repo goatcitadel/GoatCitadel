@@ -60,7 +60,7 @@ function pnpmCommandName() {
   return isWindows ? "pnpm.cmd" : "pnpm";
 }
 
-function spawnChecked(command, args, envOverride = {}) {
+function spawnChecked(command, args, envOverride = {}, timeoutMs) {
   const spawnCommand = isWindows && /\.(cmd|bat)$/i.test(command) ? windowsCmdPath : command;
   const spawnArgs = isWindows && /\.(cmd|bat)$/i.test(command) ? ["/d", "/s", "/c", command, ...args] : args;
   return spawnSync(spawnCommand, spawnArgs, {
@@ -69,6 +69,7 @@ function spawnChecked(command, args, envOverride = {}) {
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
     windowsHide: true,
+    ...(timeoutMs ? { timeout: timeoutMs, killSignal: "SIGKILL" } : {}),
   });
 }
 
@@ -290,13 +291,24 @@ function printTailOnFailure(combined) {
 // it for the connection-reset retry signature. `command` lets the diff row
 // drive `git` instead of pnpm; `count` is undefined for non-test rows so the
 // zero-test guard applies only where a runner reports counts.
-function runProcessCheck(check, { command = pnpmCommandName(), args, env = {}, logId } = {}) {
+function runProcessCheck(check, { command = pnpmCommandName(), args, env = {}, logId, timeoutMs } = {}) {
   const checkStartedAt = Date.now();
-  const result = spawnChecked(command, args ?? check.args, env);
+  const result = spawnChecked(command, args ?? check.args, env, timeoutMs);
   writeCheckLogs(logId ?? check.id, result.stdout, result.stderr);
   if (result.error) {
-    recordResult(check, { status: "failed", error: String(result.error), durationMs: Date.now() - checkStartedAt });
-    return { status: "failed", combined: "" };
+    // A hung child (spawnSync `timeout`) surfaces here. The live-PostgreSQL row
+    // treats it as a retryable environmental stall rather than an indefinite
+    // block, so the lane always reaches an honest verdict.
+    const timedOut = String(result.error).includes("ETIMEDOUT") || result.signal === "SIGKILL";
+    recordResult(check, {
+      status: "failed",
+      error: String(result.error),
+      ...(timedOut
+        ? { failureNote: `runner exceeded its ${Math.round((timeoutMs ?? 0) / 1000)}s budget and was killed` }
+        : {}),
+      durationMs: Date.now() - checkStartedAt,
+    });
+    return { status: "failed", combined: timedOut ? "runner timeout" : "", timedOut };
   }
   const combined = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
   const counts =
@@ -389,6 +401,13 @@ for (const [index, check] of checks.entries()) {
     // proof failure. Genuine assertion failures never match and never retry.
     const connectionResetPattern =
       /ECONNRESET|Connection terminated|server closed the connection|terminated unexpectedly/iu;
+    // The same interference can leave a postmaster ACCEPTING but never
+    // answering, which would block spawnSync forever. The suites complete in
+    // well under a minute against a healthy cluster, so a stalled run is
+    // killed at this budget and retried once on a fresh cluster instead of
+    // hanging the lane past any caller's timeout. Two stalled attempts plus the
+    // ~40s of earlier checks still land inside a 10-minute budget.
+    const livePostgresTimeoutMs = 240_000;
     const maxAttempts = providedUrl ? 1 : 2;
     let attempt = 0;
     let hermeticStop;
@@ -426,6 +445,7 @@ for (const [index, check] of checks.entries()) {
           args: livePostgresArgs,
           env: { GOATCITADEL_TEST_POSTGRES_URL: url },
           logId: "remote-workers.live-postgres",
+          timeoutMs: livePostgresTimeoutMs,
         });
       } finally {
         if (hermeticStop) {
@@ -438,9 +458,11 @@ for (const [index, check] of checks.entries()) {
         }
       }
       if (outcome.status === "passed" || attempt >= maxAttempts) break;
-      if (!connectionResetPattern.test(outcome.combined)) break;
+      if (!outcome.timedOut && !connectionResetPattern.test(outcome.combined)) break;
       process.stdout.write(
-        "  connection-reset signature detected (environmental interference); retrying once on a fresh cluster...\n",
+        outcome.timedOut
+          ? `  cluster stalled past ${livePostgresTimeoutMs / 1000}s (environmental interference); retrying once on a fresh cluster...\n`
+          : "  connection-reset signature detected (environmental interference); retrying once on a fresh cluster...\n",
       );
     }
     const settled = checkResults.get(check.id);
