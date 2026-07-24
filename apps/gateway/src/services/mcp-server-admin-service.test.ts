@@ -6,6 +6,7 @@ import {
   createMcpServer,
   deleteMcpServer,
   disconnectMcpServer,
+  resolveConnectedMcpTools,
   startMcpOAuth,
   updateMcpServer,
   updateMcpServerPolicy,
@@ -239,6 +240,50 @@ describe("mcp-server-admin-service", () => {
     expect(host.patchMcpServerState).not.toHaveBeenCalled();
     expect(host.resolveConnectedMcpTools).not.toHaveBeenCalled();
     expect(host.writeMcpTools).not.toHaveBeenCalled();
+  });
+
+  it("refuses to connect a requester-scoped server and never mutates shared state (HX-415)", async () => {
+    const scoped = createServer({
+      serverId: "scoped-1",
+      transport: "http",
+      command: undefined,
+      args: undefined,
+      url: undefined,
+      authType: "none",
+      connectionMode: "requester_scoped",
+      configurationRevision: 1,
+      status: "disconnected",
+    });
+    const host = createHost({ servers: [scoped] });
+
+    await expect(connectMcpServer(host, "scoped-1")).rejects.toThrow(/authenticated requester context/i);
+
+    // No shared server status/tool/error state is written for a requester-scoped server.
+    expect(host.patchMcpServerState).not.toHaveBeenCalled();
+    expect(host.resolveConnectedMcpTools).not.toHaveBeenCalled();
+    expect(host.writeMcpTools).not.toHaveBeenCalled();
+  });
+
+  it("never discovers or infers tools for a requester-scoped server (HX-415)", async () => {
+    const scoped = createServer({
+      serverId: "scoped-2",
+      transport: "http",
+      command: undefined,
+      args: undefined,
+      url: undefined,
+      authType: "none",
+      connectionMode: "requester_scoped",
+      configurationRevision: 1,
+    });
+
+    const tools = await resolveConnectedMcpTools(
+      { networkAllowlist: [], resolveOAuthAccessToken: async () => undefined },
+      scoped,
+      [createTool("scoped-2", "prior.tool")],
+    );
+
+    // No inferred/static tool fallback for a requester-scoped server.
+    expect(tools).toEqual([]);
   });
 
   it("persists connection errors before rethrowing", async () => {

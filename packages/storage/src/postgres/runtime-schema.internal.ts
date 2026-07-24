@@ -1,4 +1,7 @@
+import { createHash } from "node:crypto";
 import type { SqliteSchemaBlueprint, SqliteSchemaTableBlueprint } from "../sqlite.js";
+
+const POSTGRES_IDENTIFIER_MAX_BYTES = 63;
 
 export function buildPostgresRuntimeSchemaSqlFromBlueprint(blueprint: SqliteSchemaBlueprint): string {
   const tables = blueprint.tables.filter((table) => table.name !== "schema_migrations");
@@ -7,16 +10,13 @@ export function buildPostgresRuntimeSchemaSqlFromBlueprint(blueprint: SqliteSche
 
   for (const table of orderedTables) {
     statements.push(renderCreateTable(table));
-  }
-
-  for (const table of orderedTables) {
     for (const index of table.indexes) {
       if (index.columns.length === 0 || index.origin === "pk") {
         continue;
       }
       const partialClause = index.where ? ` WHERE ${index.where}` : "";
       statements.push(
-        `CREATE ${index.unique ? "UNIQUE " : ""}INDEX IF NOT EXISTS ${index.name} ON ${table.name}(${index.columns.join(", ")})${partialClause};`,
+        `CREATE ${index.unique ? "UNIQUE " : ""}INDEX IF NOT EXISTS ${postgresIdentifier(index.name)} ON ${table.name}(${index.columns.join(", ")})${partialClause};`,
       );
     }
   }
@@ -47,6 +47,11 @@ export function renderCreateTable(table: SqliteSchemaTableBlueprint): string {
   const tableConstraints: string[] = [];
   if (primaryKeys.length > 1) {
     tableConstraints.push(`PRIMARY KEY (${primaryKeys.join(", ")})`);
+  }
+  for (const index of table.indexes) {
+    if (index.unique && !index.where && index.origin !== "pk" && index.columns.length > 0) {
+      tableConstraints.push(`CONSTRAINT ${postgresIdentifier(index.name)} UNIQUE (${index.columns.join(", ")})`);
+    }
   }
   tableConstraints.push(...foreignKeyDefs);
   const allDefs = [...columnDefs, ...tableConstraints];
@@ -139,6 +144,27 @@ function serializeLiteral(value: unknown): string {
     return Number.isFinite(value) ? String(value) : "NULL";
   }
   return `'${String(value).replaceAll("'", "''")}'`;
+}
+
+function postgresIdentifier(input: string): string {
+  if (Buffer.byteLength(input, "utf8") <= POSTGRES_IDENTIFIER_MAX_BYTES) {
+    return input;
+  }
+  const suffix = createHash("sha256").update(input, "utf8").digest("hex").slice(0, 12);
+  const prefix = truncateUtf8ToByteLength(input, POSTGRES_IDENTIFIER_MAX_BYTES - suffix.length - 1);
+  return `${prefix}_${suffix}`;
+}
+
+function truncateUtf8ToByteLength(input: string, maxBytes: number): string {
+  let byteLength = 0;
+  let output = "";
+  for (const character of input) {
+    const characterBytes = Buffer.byteLength(character, "utf8");
+    if (byteLength + characterBytes > maxBytes) break;
+    output += character;
+    byteLength += characterBytes;
+  }
+  return output;
 }
 
 function topologicallySortTables(tables: SqliteSchemaBlueprint["tables"]): SqliteSchemaBlueprint["tables"] {

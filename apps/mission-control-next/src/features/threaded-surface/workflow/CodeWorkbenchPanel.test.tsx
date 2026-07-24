@@ -25,10 +25,19 @@ vi.mock("@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactVi
 vi.mock("@goatcitadel/mission-control-shared/api/capabilities", () => ({
   compareCodeModeRuns: vi.fn(async () => null),
   fetchCapabilityCatalogSnapshot: vi.fn(async () => null),
-  fetchCodeModeExecutionBackends: vi.fn(async () => ({ backends: [] })),
+  fetchCodeModeExecutionBackends: vi.fn(async () => ({
+    generatedAt: "2026-07-13T00:00:00.000Z",
+    readOnly: true,
+    mutationSemantics: "none",
+    defaultBackendId: "trusted_code",
+    activeBackendId: "trusted_code",
+    items: [],
+  })),
   fetchCodeModeRun: vi.fn(async () => null),
   fetchCodeModeRunArtifact: vi.fn(async () => null),
+  fetchCodeModeRunVerificationEvidence: vi.fn(async () => ({ items: [] })),
   fetchCodeModeRuns: vi.fn(async () => ({ items: [] })),
+  verifyCodeModeRun: vi.fn(async () => null),
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/agentic", () => ({
@@ -37,6 +46,13 @@ vi.mock("@goatcitadel/mission-control-shared/api/agentic", () => ({
 }));
 
 import { NextCodeWorkbenchPanel, summarizeCapabilitySnapshotProfile } from "./CodeWorkbenchPanel";
+import {
+  fetchCodeModeRun,
+  fetchCodeModeRunVerificationEvidence,
+  fetchCodeModeRuns,
+  verifyCodeModeRun,
+} from "@goatcitadel/mission-control-shared/api/capabilities";
+import type { CodeModeRunRecord, CodeModeVerificationEvidenceRecord } from "@goatcitadel/contracts";
 
 function buildCodePanel(overrides: Record<string, unknown> = {}) {
   const noop = vi.fn();
@@ -238,3 +254,216 @@ describe("summarizeCapabilitySnapshotProfile", () => {
     });
   });
 });
+
+describe("NextCodeWorkbenchPanel Code Mode verification truth", () => {
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", {
+      getItem: () => null,
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    });
+    vi.mocked(fetchCodeModeRuns).mockReset();
+    vi.mocked(fetchCodeModeRun).mockReset();
+    vi.mocked(fetchCodeModeRunVerificationEvidence).mockReset();
+    vi.mocked(verifyCodeModeRun).mockReset();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps execution, artifact integrity, and named semantic proof distinct", async () => {
+    const unverifiedRun = buildCompletedCodeModeRun();
+    const verifiedEvidence = buildVerifiedEvidence();
+    const verifiedRun: CodeModeRunRecord = {
+      ...unverifiedRun,
+      verification: {
+        status: "verified",
+        evidenceId: verifiedEvidence.evidenceId,
+        subjectHash: verifiedEvidence.subject.subjectHash,
+        updatedAt: verifiedEvidence.createdAt,
+      },
+    };
+    vi.mocked(fetchCodeModeRuns).mockResolvedValue({ items: [unverifiedRun] });
+    vi.mocked(fetchCodeModeRun).mockResolvedValue(unverifiedRun);
+    vi.mocked(fetchCodeModeRunVerificationEvidence).mockResolvedValue({ items: [] });
+    vi.mocked(verifyCodeModeRun).mockResolvedValue({ run: verifiedRun, evidence: verifiedEvidence });
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(
+        <NextCodeWorkbenchPanel
+          panel={buildCodePanel({
+            workbenchState: {
+              sessionId: "session-a",
+              worktreeStatus: "ready",
+              validationStatus: "idle",
+              createdAt: "2026-07-13T00:00:00.000Z",
+              updatedAt: "2026-07-13T00:00:00.000Z",
+            },
+          })}
+        />,
+      );
+      await flushPromises();
+    });
+    await act(async () => {
+      renderer!.root
+        .findAllByProps({ role: "tab" })
+        .find((tab) => renderedText(tab) === "Run log")!
+        .props.onClick();
+      await flushPromises();
+    });
+
+    expect(renderedText(renderer!.root)).toContain("Execution: completed");
+    expect(renderedText(renderer!.root)).toContain("Verification: completed_unverified");
+    expect(renderedText(renderer!.root)).toContain("Artifact integrity: hashes matched");
+    expect(renderedText(renderer!.root)).toContain("no fresh durable named semantic proof");
+
+    await act(async () => {
+      renderer!.root.findByProps({ "aria-label": "Guarded Code Mode verification command" }).props.onChange({
+        target: { value: "typecheck" },
+      });
+      await flushPromises();
+    });
+    const proofButton = renderer!.root
+      .findAllByType("button")
+      .find((button) => renderedText(button) === "Run named proof");
+    expect(proofButton).toBeDefined();
+
+    await act(async () => {
+      proofButton!.props.onClick();
+      await flushPromises();
+    });
+
+    expect(verifyCodeModeRun).toHaveBeenCalledWith(
+      "run-a",
+      { commandName: "typecheck" },
+      { sessionId: "session-a", turnId: "turn-a", workspaceId: "default" },
+    );
+    expect(renderedText(renderer!.root)).toContain("Verification: verified");
+    expect(renderedText(renderer!.root)).toContain("Fresh named proof passed: pnpm run typecheck (targeted scope)");
+    expect(renderedText(renderer!.root)).toContain("does not establish hostile-code sandboxing");
+  });
+});
+
+function buildCompletedCodeModeRun(): CodeModeRunRecord {
+  const sourceArtifact = {
+    artifactId: "source-a",
+    relPath: ".assistant/code-mode-artifacts/run-a/source.ts",
+    sha256: "a".repeat(64),
+    bytes: 10,
+    mimeType: "text/typescript",
+    createdAt: "2026-07-13T00:00:00.000Z",
+  };
+  const wrapperArtifact = {
+    ...sourceArtifact,
+    artifactId: "wrapper-a",
+    relPath: ".assistant/code-mode-artifacts/run-a/wrapper.json",
+    sha256: "b".repeat(64),
+    mimeType: "application/json",
+  };
+  const policyArtifact = {
+    ...sourceArtifact,
+    artifactId: "policy-a",
+    relPath: ".assistant/code-mode-artifacts/run-a/policy.json",
+    sha256: "c".repeat(64),
+    mimeType: "application/json",
+  };
+  return {
+    runId: "run-a",
+    status: "completed",
+    language: "typescript",
+    workspaceId: "default",
+    sessionId: "session-a",
+    turnId: "turn-a",
+    saveCandidateOnSuccess: false,
+    capabilitySnapshotId: "snapshot-a",
+    codeModeInputHash: "input-a",
+    wrapperManifestHash: "wrapper-a",
+    policySnapshotHash: "policy-a",
+    codeHash: sourceArtifact.sha256,
+    executionRecovery: {
+      generation: 1,
+      phase: "terminal",
+      disposition: "terminal",
+      finalTranscriptEventId: "code-mode-final:run-a",
+    },
+    codeArtifact: sourceArtifact,
+    wrapperManifestArtifact: wrapperArtifact,
+    policySnapshotArtifact: policyArtifact,
+    stdoutTruncated: false,
+    stderrTruncated: false,
+    trustedCodeWriteVerification: {
+      mode: "trusted_code_artifact_hash_check",
+      claimBoundary: "trusted_code_artifact_integrity_not_hostile_sandbox",
+      verifiedAt: "2026-07-13T00:00:02.000Z",
+      artifacts: [
+        {
+          artifactKind: "source",
+          artifactId: sourceArtifact.artifactId,
+          relPath: sourceArtifact.relPath,
+          expectedSha256: sourceArtifact.sha256,
+          actualSha256: sourceArtifact.sha256,
+          verified: true,
+        },
+      ],
+      notes: ["Artifact integrity is distinct from semantic verification."],
+    },
+    verification: {
+      status: "completed_unverified",
+      updatedAt: "2026-07-13T00:00:02.000Z",
+    },
+    createdAt: "2026-07-13T00:00:00.000Z",
+    startedAt: "2026-07-13T00:00:01.000Z",
+    finishedAt: "2026-07-13T00:00:02.000Z",
+  };
+}
+
+function buildVerifiedEvidence(): CodeModeVerificationEvidenceRecord {
+  return {
+    evidenceId: "proof-a",
+    runId: "run-a",
+    status: "verified",
+    workspaceId: "default",
+    sessionId: "session-a",
+    turnId: "turn-a",
+    commandName: "typecheck",
+    commandLabel: "pnpm run typecheck",
+    command: "pnpm",
+    args: ["run", "typecheck"],
+    scope: "targeted",
+    commandRunId: "command-a",
+    commandStatus: "passed",
+    exitCode: 0,
+    startedAt: "2026-07-13T00:00:02.000Z",
+    finishedAt: "2026-07-13T00:00:03.000Z",
+    stdoutTruncated: false,
+    stderrTruncated: false,
+    outputArtifactRefs: ["workbench-output:command-a"],
+    subject: {
+      subjectHash: "d".repeat(64),
+      codeModeInputHash: "input-a",
+      codeHash: "a".repeat(64),
+      wrapperManifestHash: "wrapper-a",
+      policySnapshotHash: "policy-a",
+      worktreeIdentityHash: "e".repeat(64),
+      worktreeStateHash: "f".repeat(64),
+      changedFiles: [],
+      changedFilesTruncated: false,
+      artifacts: [],
+    },
+    createdAt: "2026-07-13T00:00:03.000Z",
+  };
+}
+
+function renderedText(node: ReactTestInstance): string {
+  return node.children
+    .map((child) => (typeof child === "string" || typeof child === "number" ? String(child) : renderedText(child)))
+    .join("");
+}
+
+async function flushPromises(): Promise<void> {
+  for (let index = 0; index < 10; index += 1) {
+    await Promise.resolve();
+  }
+}

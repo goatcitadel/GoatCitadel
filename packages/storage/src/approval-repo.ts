@@ -7,9 +7,17 @@ import type {
   ApprovalResolveInput,
   ShellCommandExplanation,
 } from "@goatcitadel/contracts";
-import { APPROVAL_EXPIRY_ACTOR_ID, ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
+import {
+  APPROVAL_EXPIRY_ACTOR_ID,
+  ConflictError,
+  MESH_CAPABILITY_ACTIVATION_APPROVAL_KIND,
+  NotFoundError,
+  ValidationError,
+  canonicalJsonString,
+} from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
 import { randomUUID } from "node:crypto";
+import { isProxy } from "node:util/types";
 import { safeJsonParse } from "./safe-json.js";
 
 const APPROVAL_LINKAGE_KEY = "__gcApprovalLinkage";
@@ -39,8 +47,21 @@ interface ApprovalPageCursor {
   approvalId: string;
 }
 
+export interface DeterministicDetachedApprovalCreateInput extends Omit<
+  ApprovalCreateInput,
+  "expiresAt" | "rollbackNote"
+> {
+  approvalId: string;
+}
+
+export interface DeterministicDetachedApprovalCreateResult {
+  approval: ApprovalRequest;
+  created: boolean;
+}
+
 export class ApprovalRepository {
   private readonly createStmt;
+  private readonly createDeterministicDetachedStmt;
   private readonly databaseTtlWindowStmt;
   private readonly listStmt;
   private readonly listByStatusStmt;
@@ -78,6 +99,16 @@ export class ApprovalRepository {
         @approvalId, @kind, @riskLevel, @status, @linkageJson, @payloadJson, @previewJson,
         @explanationStatus, @createdAt, @expiresAt
       )
+    `);
+    this.createDeterministicDetachedStmt = db.prepare(`
+      INSERT INTO approvals (
+        approval_id, kind, risk_level, status, linkage_json, payload_json, preview_json,
+        explanation_status, created_at, expires_at
+      ) VALUES (
+        @approvalId, @kind, @riskLevel, 'pending', @linkageJson, @payloadJson, @previewJson,
+        'not_requested', @createdAt, @expiresAt
+      )
+      ON CONFLICT (approval_id) DO NOTHING
     `);
     const databaseExpiryText =
       db.dialect === "postgres"
@@ -238,23 +269,67 @@ export class ApprovalRepository {
   }
 
   public createWithTtlDuration(input: Omit<ApprovalCreateInput, "expiresAt">, ttlMs: number): ApprovalRequest {
-    const normalizedTtlMs = Math.floor(ttlMs);
-    if (!Number.isFinite(normalizedTtlMs) || normalizedTtlMs <= 0) {
-      throw new ValidationError({
-        code: "FIELD_INVALID",
-        field: "ttlMs",
-        message: "ttlMs must be a positive duration.",
-      });
-    }
+    const normalizedTtlMs = normalizeApprovalTtlMs(ttlMs);
     return this.db.transaction("immediate", () => {
-      const window = this.databaseTtlWindowStmt.get({ ttlMs: normalizedTtlMs }) as
-        | { created_at: string; expires_at: string }
-        | undefined;
-      if (!window?.created_at || !window.expires_at) {
-        throw new Error("Database did not return an approval TTL window.");
-      }
+      const window = this.readDatabaseTtlWindow(normalizedTtlMs);
       return this.createAt({ ...input, expiresAt: window.expires_at }, window.created_at);
     });
+  }
+
+  /**
+   * Creates one exact-ID approval without embedding linkage into payload bytes.
+   * This intentionally bypasses the random-ID generic create path so a
+   * higher-level owner can make exact request replay collide on one stable ID.
+   */
+  public createDeterministicDetachedWithTtlDuration(
+    input: DeterministicDetachedApprovalCreateInput,
+    ttlMs: number,
+  ): DeterministicDetachedApprovalCreateResult {
+    assertDeterministicDetachedApprovalInput(input);
+    const normalizedTtlMs = normalizeApprovalTtlMs(ttlMs);
+    const serialized = {
+      linkageJson: input.linkage === undefined ? null : canonicalJsonString(input.linkage),
+      payloadJson: canonicalJsonString(input.payload),
+      previewJson: canonicalJsonString(input.preview),
+    };
+
+    return this.db.transaction("immediate", () => {
+      const existing = toApprovalRow(this.getForUpdateStmt.get(input.approvalId));
+      if (existing) {
+        return {
+          approval: mapExactDetachedReplay(existing, input, serialized),
+          created: false,
+        };
+      }
+
+      const window = this.readDatabaseTtlWindow(normalizedTtlMs);
+      const inserted = this.createDeterministicDetachedStmt.run({
+        approvalId: input.approvalId,
+        kind: input.kind,
+        riskLevel: input.riskLevel,
+        linkageJson: serialized.linkageJson,
+        payloadJson: serialized.payloadJson,
+        previewJson: serialized.previewJson,
+        createdAt: window.created_at,
+        expiresAt: window.expires_at,
+      });
+      const stored = toApprovalRow(this.getForUpdateStmt.get(input.approvalId));
+      if (!stored) {
+        throw new Error(`Approval ${input.approvalId} was not readable after deterministic creation.`);
+      }
+      return {
+        approval: mapExactDetachedReplay(stored, input, serialized),
+        created: inserted.changes > 0,
+      };
+    });
+  }
+
+  private readDatabaseTtlWindow(ttlMs: number): { created_at: string; expires_at: string } {
+    const window = this.databaseTtlWindowStmt.get({ ttlMs }) as { created_at: string; expires_at: string } | undefined;
+    if (!window?.created_at || !window.expires_at) {
+      throw new Error("Database did not return an approval TTL window.");
+    }
+    return window;
   }
 
   private createAt(input: ApprovalCreateInput, now: string): ApprovalRequest {
@@ -266,10 +341,12 @@ export class ApprovalRepository {
       status: "pending",
       linkageJson: serializeApprovalLinkage(input.linkage),
       payloadJson: JSON.stringify(
-        embedApprovalLinkage(
-          input.rollbackNote ? { ...input.payload, rollbackNote: input.rollbackNote } : input.payload,
-          input.linkage,
-        ),
+        input.kind === "skill_hub.lifecycle"
+          ? stripApprovalLinkage(input.payload)
+          : embedApprovalLinkage(
+              input.rollbackNote ? { ...input.payload, rollbackNote: input.rollbackNote } : input.payload,
+              input.linkage,
+            ),
       ),
       previewJson: JSON.stringify(input.preview),
       explanationStatus: "not_requested",
@@ -445,10 +522,20 @@ export class ApprovalRepository {
       });
     }
     return this.db.transaction("immediate", () => {
-      const current = this.getForUpdate(approvalId);
+      const currentRow = this.getForUpdateRow(approvalId);
+      const current = mapRow(currentRow);
       // Retain the option in the public shape for compatibility. Canonical
       // resolution time and expiry comparison are both owned by the database.
       void options?.resolvedAt;
+
+      const exactDetachedActivation = current.kind === MESH_CAPABILITY_ACTIVATION_APPROVAL_KIND;
+      if (exactDetachedActivation && (input.decision === "edit" || input.editedPayload !== undefined)) {
+        throw new ValidationError({
+          code: "FIELD_INVALID",
+          field: "editedPayload",
+          message: "Mesh capability activation approvals are immutable; reject and create a new activation request.",
+        });
+      }
 
       const status: ApprovalRequest["status"] =
         input.decision === "approve" ? "approved" : input.decision === "reject" ? "rejected" : "edited";
@@ -456,8 +543,14 @@ export class ApprovalRepository {
       const changed = this.resolveStmt.run({
         approvalId,
         status,
-        linkageJson: serializeApprovalLinkage(current.linkage),
-        payloadJson: JSON.stringify(embedApprovalLinkage(input.editedPayload ?? current.payload, current.linkage)),
+        linkageJson: exactDetachedActivation ? currentRow.linkage_json : serializeApprovalLinkage(current.linkage),
+        payloadJson: exactDetachedActivation
+          ? currentRow.payload_json
+          : JSON.stringify(
+              current.kind === "skill_hub.lifecycle"
+                ? stripApprovalLinkage(input.editedPayload ?? current.payload)
+                : embedApprovalLinkage(input.editedPayload ?? current.payload, current.linkage),
+            ),
         resolvedBy: input.resolvedBy,
         resolutionNote: input.resolutionNote ?? null,
         allowExpired: options?.allowExpired ? 1 : 0,
@@ -482,6 +575,13 @@ export class ApprovalRepository {
   public mergeLinkage(approvalId: string, linkagePatch: NonNullable<ApprovalRequest["linkage"]>): ApprovalRequest {
     return this.db.transaction("immediate", () => {
       const row = this.getForUpdateRow(approvalId);
+      if (row.kind === MESH_CAPABILITY_ACTIVATION_APPROVAL_KIND) {
+        throw new ValidationError({
+          code: "FIELD_INVALID",
+          field: "linkage",
+          message: "Mesh capability activation approval linkage is immutable.",
+        });
+      }
       const payload = safeJsonParse<Record<string, unknown>>(row.payload_json, {});
       const currentLinkage = deserializeApprovalLinkage(row.linkage_json) ?? readApprovalLinkage(payload) ?? {};
       const nextLinkage = {
@@ -493,7 +593,11 @@ export class ApprovalRepository {
       this.updatePayloadStmt.run({
         approvalId,
         linkageJson: serializeApprovalLinkage(nextLinkage),
-        payloadJson: JSON.stringify(embedApprovalLinkage(payload, nextLinkage)),
+        payloadJson: JSON.stringify(
+          row.kind === "skill_hub.lifecycle"
+            ? stripApprovalLinkage(payload)
+            : embedApprovalLinkage(payload, nextLinkage),
+        ),
       });
       return this.get(approvalId);
     });
@@ -537,6 +641,130 @@ export class ApprovalRepository {
     });
     return this.get(approvalId);
   }
+}
+
+function normalizeApprovalTtlMs(ttlMs: number): number {
+  const normalizedTtlMs = Math.floor(ttlMs);
+  if (!Number.isFinite(normalizedTtlMs) || normalizedTtlMs <= 0) {
+    throw new ValidationError({
+      code: "FIELD_INVALID",
+      field: "ttlMs",
+      message: "ttlMs must be a positive duration.",
+    });
+  }
+  return normalizedTtlMs;
+}
+
+function assertDeterministicDetachedApprovalInput(input: DeterministicDetachedApprovalCreateInput): void {
+  assertSafePlainApprovalRecord(input, "approval");
+  const allowedKeys = new Set(["approvalId", "kind", "riskLevel", "payload", "preview", "linkage"]);
+  const keys = Object.getOwnPropertyNames(input);
+  if (
+    keys.some((key) => !allowedKeys.has(key)) ||
+    ["approvalId", "kind", "riskLevel", "payload", "preview"].some((key) => !keys.includes(key))
+  ) {
+    throw new ValidationError({
+      code: "FIELD_INVALID",
+      field: "approval",
+      message: "Deterministic detached approval input has an invalid key set.",
+    });
+  }
+  assertCanonicalApprovalIdentifier(input.approvalId, "approvalId");
+  assertCanonicalApprovalIdentifier(input.kind, "kind");
+  if (!(["safe", "caution", "danger", "nuclear"] as const).includes(input.riskLevel)) {
+    throw new ValidationError({ code: "FIELD_INVALID", field: "riskLevel" });
+  }
+  assertSafePlainApprovalRecord(input.payload, "payload");
+  assertSafePlainApprovalRecord(input.preview, "preview");
+  if (input.linkage !== undefined) assertSafePlainApprovalRecord(input.linkage, "linkage");
+}
+
+function assertCanonicalApprovalIdentifier(value: unknown, field: string): asserts value is string {
+  if (
+    typeof value !== "string" ||
+    value !== value.normalize("NFKC").trim() ||
+    value.length < 1 ||
+    value.length > 256 ||
+    /\p{Cc}/u.test(value)
+  ) {
+    throw new ValidationError({ code: "FIELD_INVALID", field });
+  }
+}
+
+function assertSafePlainApprovalRecord(value: unknown, field: string): asserts value is Record<string, unknown> {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    isProxy(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype
+  ) {
+    throw new ValidationError({ code: "FIELD_INVALID", field });
+  }
+  assertSafeApprovalJsonValue(value, field, new Set<object>());
+}
+
+function assertSafeApprovalJsonValue(value: unknown, field: string, seen: Set<object>): void {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return;
+  if (typeof value === "number") {
+    if (Number.isFinite(value)) return;
+    throw new ValidationError({ code: "FIELD_INVALID", field });
+  }
+  if (typeof value !== "object" || isProxy(value)) {
+    throw new ValidationError({ code: "FIELD_INVALID", field });
+  }
+  const isArray = Array.isArray(value);
+  if (Object.getPrototypeOf(value) !== (isArray ? Array.prototype : Object.prototype) || seen.has(value)) {
+    throw new ValidationError({ code: "FIELD_INVALID", field });
+  }
+  seen.add(value);
+  try {
+    if (Object.getOwnPropertySymbols(value).length > 0) {
+      throw new ValidationError({ code: "FIELD_INVALID", field });
+    }
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    if (isArray) {
+      const length = descriptors.length?.value;
+      const elementKeys = Object.keys(descriptors).filter((key) => key !== "length");
+      if (
+        !Number.isSafeInteger(length) ||
+        length < 0 ||
+        elementKeys.length !== length ||
+        elementKeys.some((key, index) => key !== String(index))
+      ) {
+        throw new ValidationError({ code: "FIELD_INVALID", field });
+      }
+    }
+    for (const [key, descriptor] of Object.entries(descriptors)) {
+      if (isArray && key === "length") continue;
+      if (!("value" in descriptor) || !descriptor.enumerable) {
+        throw new ValidationError({ code: "FIELD_INVALID", field });
+      }
+      assertSafeApprovalJsonValue(descriptor.value, field, seen);
+    }
+  } finally {
+    seen.delete(value);
+  }
+}
+
+function mapExactDetachedReplay(
+  row: ApprovalRow,
+  input: DeterministicDetachedApprovalCreateInput,
+  serialized: { linkageJson: string | null; payloadJson: string; previewJson: string },
+): ApprovalRequest {
+  if (
+    row.kind !== input.kind ||
+    row.risk_level !== input.riskLevel ||
+    row.linkage_json !== serialized.linkageJson ||
+    row.payload_json !== serialized.payloadJson ||
+    row.preview_json !== serialized.previewJson
+  ) {
+    throw new ConflictError({
+      code: "STATE_CONFLICT",
+      message: `Approval ${input.approvalId} already exists with different immutable request bytes.`,
+    });
+  }
+  return mapRow(row);
 }
 
 function encodeApprovalListCursor(approval: Pick<ApprovalRequest, "approvalId" | "createdAt">): string {

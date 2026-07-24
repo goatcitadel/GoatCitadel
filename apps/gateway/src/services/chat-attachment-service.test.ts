@@ -38,6 +38,14 @@ async function createHost(
     account: "operator",
     timestamp: now.toISOString(),
   });
+  storage.chatSessionLifecycles.initialize({
+    workspaceId,
+    sessionId: "sess-1",
+    actorId: "test-fixture",
+    idempotencyKey: "test:lifecycle:init:sess-1",
+    correlationId: "test:correlation:lifecycle:init:sess-1",
+    metadataTimestamp: now.toISOString(),
+  });
   storage.chatSessionMeta.patch(
     "sess-1",
     {
@@ -285,5 +293,52 @@ describe("chat-attachment-service", () => {
     );
 
     await expect(readChatAttachmentContent(host, record.attachmentId)).rejects.toThrow(/outside read allowlist/i);
+  });
+
+  it("rejects an oversized stored record before attempting a filesystem read", async () => {
+    const { host, rootDir, storage } = await createHost();
+    roots.push(rootDir);
+    storages.push(storage);
+    const record = storage.chatAttachments.create(
+      {
+        attachmentId: "attachment-too-large",
+        sessionId: "sess-1",
+        workspaceId: "workspace-a",
+        fileName: "missing.txt",
+        mimeType: "text/plain",
+        mediaType: "text",
+        sizeBytes: 10_000,
+        sha256: "a".repeat(64),
+        storageRelPath: "missing.txt",
+        extractStatus: "ready",
+        extractPreview: "",
+        analysisStatus: "ready",
+      },
+      now.toISOString(),
+    );
+    const readSpy = vi.spyOn(fs, "readFile");
+
+    await expect(readChatAttachmentContent(host, record.attachmentId, { maxBytes: 1_024 })).rejects.toThrow(
+      /server read limit/u,
+    );
+    expect(readSpy).not.toHaveBeenCalled();
+  });
+
+  it("bounds a drifted on-disk file before allocating or returning its replacement bytes", async () => {
+    const { host, rootDir, storage } = await createHost();
+    roots.push(rootDir);
+    storages.push(storage);
+    const uploaded = await uploadChatAttachment(host, {
+      sessionId: "sess-1",
+      fileName: "drift.txt",
+      mimeType: "text/plain",
+      bytesBase64: Buffer.from("small").toString("base64"),
+    });
+    const fullPath = path.resolve(host.config.rootDir, host.config.assistant.workspaceDir, uploaded.storageRelPath);
+    await fs.writeFile(fullPath, Buffer.alloc(4_096, 0x61));
+
+    await expect(readChatAttachmentContent(host, uploaded.attachmentId, { maxBytes: 1_024 })).rejects.toThrow(
+      /server read limit/u,
+    );
   });
 });

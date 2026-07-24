@@ -40,6 +40,9 @@ const routeMocks = vi.hoisted(() => {
     fetchSkills: fn(),
     fetchTaskDeliverables: fn(),
     fetchTasksByView: vi.fn(),
+    isApiRequestError: vi.fn((error: unknown) =>
+      Boolean(error && typeof error === "object" && "status" in error && "body" in error),
+    ),
     previewSkillEvaluation: fn(),
     promoteImprovementCandidate: fn(),
     rejectImprovementCandidate: fn(),
@@ -85,6 +88,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchSkills: routeMocks.fetchSkills,
   fetchTaskDeliverables: routeMocks.fetchTaskDeliverables,
   fetchTasksByView: routeMocks.fetchTasksByView,
+  isApiRequestError: routeMocks.isApiRequestError,
   previewSkillEvaluation: routeMocks.previewSkillEvaluation,
   promoteImprovementCandidate: routeMocks.promoteImprovementCandidate,
   rejectImprovementCandidate: routeMocks.rejectImprovementCandidate,
@@ -139,6 +143,7 @@ const agent = {
 
 const skill = {
   skillId: "skill-1",
+  revision: 4,
   name: "Safe improvement",
   state: "enabled",
   callable: true,
@@ -697,9 +702,9 @@ describe("NativeRoutePages library coverage", () => {
     await click(exactButton(skills.root, "Sleep"));
     await click(exactButton(skills.root, "Disable"));
     expect(routeMocks.reloadSkills).toHaveBeenCalledTimes(1);
-    expect(routeMocks.updateSkillState).toHaveBeenCalledWith("skill-1", { state: "enabled" });
-    expect(routeMocks.updateSkillState).toHaveBeenCalledWith("skill-1", { state: "sleep" });
-    expect(routeMocks.updateSkillState).toHaveBeenCalledWith("skill-1", { state: "disabled" });
+    expect(routeMocks.updateSkillState).toHaveBeenCalledWith("skill-1", { expectedRevision: 4, state: "enabled" });
+    expect(routeMocks.updateSkillState).toHaveBeenCalledWith("skill-1", { expectedRevision: 4, state: "sleep" });
+    expect(routeMocks.updateSkillState).toHaveBeenCalledWith("skill-1", { expectedRevision: 4, state: "disabled" });
 
     const capabilities = await mount("library", "capabilities");
     expect(collectText(capabilities.root)).toContain("Capability browser");
@@ -754,6 +759,46 @@ describe("NativeRoutePages library coverage", () => {
       workspaceId: "default",
       limit: 80,
     });
+  });
+
+  it("refreshes canonical skill state after a structured conflict and requires an explicit retry", async () => {
+    routeMocks.fetchSkills
+      .mockResolvedValueOnce({ items: [skill] })
+      .mockResolvedValue({ items: [{ ...skill, revision: 5, state: "sleep" }] });
+    routeMocks.updateSkillState.mockRejectedValueOnce({
+      status: 409,
+      body: { code: "WRITE_CONFLICT", details: { expectedRevision: 4, currentRevision: 5 } },
+    });
+
+    const skills = await mount("library", "skills");
+    await click(exactButton(skills.root, "Enable"));
+
+    expect(routeMocks.updateSkillState).toHaveBeenCalledTimes(1);
+    expect(routeMocks.updateSkillState).toHaveBeenLastCalledWith("skill-1", {
+      expectedRevision: 4,
+      state: "enabled",
+    });
+    expect(routeMocks.fetchSkills).toHaveBeenCalledTimes(2);
+    expect(collectText(skills.root)).toContain("changed elsewhere");
+    expect(collectText(skills.root)).toContain("Retry enabled");
+
+    await click(exactButton(skills.root, "Retry enabled"));
+
+    expect(routeMocks.updateSkillState).toHaveBeenCalledTimes(2);
+    expect(routeMocks.updateSkillState).toHaveBeenLastCalledWith("skill-1", {
+      expectedRevision: 5,
+      state: "enabled",
+    });
+  });
+
+  it("fails closed when a skill list row has no positive canonical revision", async () => {
+    routeMocks.fetchSkills.mockResolvedValue({ items: [{ ...skill, revision: undefined }] });
+    const skills = await mount("library", "skills");
+
+    await click(exactButton(skills.root, "Enable"));
+
+    expect(routeMocks.updateSkillState).not.toHaveBeenCalled();
+    expect(collectText(skills.root)).toContain("missing a canonical revision");
   });
 
   it("covers Cowork task creation, editing, deliverables, trash restore, and board lanes", async () => {
@@ -845,6 +890,7 @@ describe("NativeRoutePages library coverage", () => {
           ? [
               {
                 taskId: "task-deleted",
+                revision: 7,
                 title: "Deleted task",
                 description: "Restore me",
                 status: "blocked",
@@ -856,7 +902,7 @@ describe("NativeRoutePages library coverage", () => {
     }));
     const trashOnly = await mount("cowork");
     await click(exactButton(trashOnly.root, "Restore"));
-    expect(routeMocks.restoreTask).toHaveBeenCalledWith("task-deleted", "default", "company");
+    expect(routeMocks.restoreTask).toHaveBeenCalledWith("task-deleted", 7, "default", "company");
 
     setupResponses();
     const board = await mount("cowork", "board");

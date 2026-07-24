@@ -93,6 +93,23 @@ describe("buildLlmProviderAdvice", () => {
           hasApiKey: false,
           apiKeySource: "none",
         },
+        {
+          providerId: "adc-unproven",
+          label: "ADC unproven",
+          baseUrl:
+            "https://us-central1-aiplatform.googleapis.com/v1/projects/project/locations/us-central1/endpoints/openapi",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "google/gemini-2.5-flash",
+          authMode: "google-adc",
+          authReadiness: {
+            status: "unknown",
+            source: "metadata",
+            liveVerified: false,
+            reasonCode: "metadata_not_probed",
+          },
+          hasApiKey: false,
+          apiKeySource: "none",
+        },
       ],
     );
 

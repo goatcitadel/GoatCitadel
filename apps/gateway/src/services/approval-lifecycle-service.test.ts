@@ -6,6 +6,7 @@ import type {
   ToolGrantCreateInput,
 } from "@goatcitadel/contracts";
 import {
+  commitMeshCapabilityActivationApproval,
   createApproval,
   createToolGrant,
   expirePendingApprovals,
@@ -15,6 +16,7 @@ import {
   resolveApproval,
   resolveApprovalsBulk,
   resolveChatToolApproval,
+  MESH_CAPABILITY_ACTIVATION_APPROVAL_TTL_MS,
   type ApprovalLifecycleHost,
 } from "./approval-lifecycle-service.js";
 import {
@@ -319,6 +321,191 @@ describe("approval lifecycle service", () => {
       nextCursor: "opaque-next-cursor",
     });
     expect(host.storage.approvals.resolve).not.toHaveBeenCalled();
+  });
+
+  it("commits an exact detached mesh activation approval and one canonical created event", () => {
+    const host = createApprovalHarness();
+    const payload = createMeshActivationApprovalPayload();
+    const result = commitMeshCapabilityActivationApproval(host, {
+      approvalId: "mesh-capability-activation:" + "a".repeat(64),
+      payload,
+      preview: {
+        activationId: payload.activationId,
+        activationRevision: payload.activationRevision,
+        capabilityId: payload.capabilityId,
+        effectPosture: payload.effectPosture,
+      },
+      linkage: { workspaceId: payload.workspaceId, sessionId: "session-1", turnId: "turn-1" },
+    });
+
+    expect(result.replayed).toBe(false);
+    expect(host.storage.approvals.createDeterministicDetachedWithTtlDuration).toHaveBeenCalledWith(
+      {
+        approvalId: "mesh-capability-activation:" + "a".repeat(64),
+        kind: "mesh.capability.activate",
+        riskLevel: "danger",
+        payload,
+        preview: {
+          activationId: payload.activationId,
+          activationRevision: payload.activationRevision,
+          capabilityId: payload.capabilityId,
+          effectPosture: payload.effectPosture,
+        },
+        linkage: { workspaceId: payload.workspaceId, sessionId: "session-1", turnId: "turn-1" },
+      },
+      MESH_CAPABILITY_ACTIVATION_APPROVAL_TTL_MS,
+    );
+    expect(host.storage.approvalEvents.append).toHaveBeenCalledOnce();
+    expect(host.storage.approvalEvents.append).toHaveBeenCalledWith({
+      approvalId: "mesh-capability-activation:" + "a".repeat(64),
+      eventType: "created",
+      actorId: "system",
+      timestamp: "2026-04-11T00:00:00.000Z",
+      payload: {
+        kind: "mesh.capability.activate",
+        riskLevel: "danger",
+        status: "pending",
+      },
+    });
+    expect(host.hooksService.runInlineHooks).not.toHaveBeenCalled();
+    expect(host.approvalWaitRunService.reserveApprovalWaitRun).not.toHaveBeenCalled();
+    expect(host.enqueueApprovalWaitMaterialization).not.toHaveBeenCalled();
+  });
+
+  it("returns exact mesh approval replay without emitting another created event", () => {
+    const host = createApprovalHarness();
+    const payload = createMeshActivationApprovalPayload();
+    const approval = {
+      ...host.storage.approvals.get("approval-1"),
+      approvalId: "mesh-capability-activation:" + "a".repeat(64),
+      kind: "mesh.capability.activate",
+      riskLevel: "danger" as const,
+      status: "approved" as const,
+      payload,
+      linkage: { workspaceId: payload.workspaceId },
+    };
+    host.storage.approvals.createDeterministicDetachedWithTtlDuration.mockReturnValue({
+      approval,
+      created: false,
+    });
+    host.storage.approvalEvents.listByApprovalId.mockReturnValue([
+      {
+        eventId: "created-1",
+        approvalId: approval.approvalId,
+        eventType: "created",
+        actorId: "system",
+        timestamp: approval.createdAt,
+        payload: { kind: "mesh.capability.activate", riskLevel: "danger", status: "pending" },
+      },
+      {
+        eventId: "resolved-1",
+        approvalId: approval.approvalId,
+        eventType: "resolved",
+        actorId: "operator-1",
+        timestamp: "2026-04-11T00:01:00.000Z",
+        payload: { decision: "approve", status: "approved" },
+      },
+    ]);
+
+    expect(
+      commitMeshCapabilityActivationApproval(host, {
+        approvalId: approval.approvalId,
+        payload,
+        preview: {
+          activationId: payload.activationId,
+          activationRevision: payload.activationRevision,
+          capabilityId: payload.capabilityId,
+          effectPosture: payload.effectPosture,
+        },
+        linkage: { workspaceId: payload.workspaceId },
+      }),
+    ).toEqual({ approval, replayed: true });
+    expect(host.storage.approvalEvents.append).not.toHaveBeenCalled();
+  });
+
+  it("fails exact mesh replay closed when canonical creation evidence is missing, duplicated, or mismatched", () => {
+    const payload = createMeshActivationApprovalPayload();
+    const approvalId = "mesh-capability-activation:" + "a".repeat(64);
+    const canonicalCreated = {
+      eventId: "created-1",
+      approvalId,
+      eventType: "created" as const,
+      actorId: "system",
+      timestamp: "2026-04-11T00:00:00.000Z",
+      payload: { kind: "mesh.capability.activate", riskLevel: "danger", status: "pending" },
+    };
+
+    for (const events of [
+      [],
+      [canonicalCreated, { ...canonicalCreated, eventId: "created-2" }],
+      [{ ...canonicalCreated, actorId: "foreign-actor" }],
+      [{ ...canonicalCreated, timestamp: "2026-04-11T00:00:01.000Z" }],
+      [{ ...canonicalCreated, payload: { ...canonicalCreated.payload, status: "approved" } }],
+    ]) {
+      const host = createApprovalHarness();
+      const approval = {
+        ...host.storage.approvals.get("approval-1"),
+        approvalId,
+        kind: "mesh.capability.activate",
+        riskLevel: "danger" as const,
+        payload,
+        linkage: { workspaceId: payload.workspaceId },
+        createdAt: canonicalCreated.timestamp,
+      };
+      host.storage.approvals.createDeterministicDetachedWithTtlDuration.mockReturnValue({
+        approval,
+        created: false,
+      });
+      host.storage.approvalEvents.listByApprovalId.mockReturnValue(events);
+
+      expect(() =>
+        commitMeshCapabilityActivationApproval(host, {
+          approvalId,
+          payload,
+          preview: {
+            activationId: payload.activationId,
+            activationRevision: payload.activationRevision,
+            capabilityId: payload.capabilityId,
+            effectPosture: payload.effectPosture,
+          },
+          linkage: { workspaceId: payload.workspaceId },
+        }),
+      ).toThrow(/inconsistent creation evidence/i);
+      expect(host.storage.approvalEvents.append).not.toHaveBeenCalled();
+    }
+  });
+
+  it("fails mesh activation approval creation before storage for changed preview or foreign linkage", () => {
+    const host = createApprovalHarness();
+    const payload = createMeshActivationApprovalPayload();
+    expect(() =>
+      commitMeshCapabilityActivationApproval(host, {
+        approvalId: "mesh-capability-activation:" + "a".repeat(64),
+        payload,
+        preview: {
+          activationId: "changed-activation",
+          activationRevision: payload.activationRevision,
+          capabilityId: payload.capabilityId,
+          effectPosture: payload.effectPosture,
+        },
+        linkage: { workspaceId: payload.workspaceId },
+      }),
+    ).toThrow(/preview does not match/i);
+    expect(() =>
+      commitMeshCapabilityActivationApproval(host, {
+        approvalId: "mesh-capability-activation:" + "a".repeat(64),
+        payload,
+        preview: {
+          activationId: payload.activationId,
+          activationRevision: payload.activationRevision,
+          capabilityId: payload.capabilityId,
+          effectPosture: payload.effectPosture,
+        },
+        linkage: { workspaceId: "foreign-workspace" },
+      }),
+    ).toThrow(/linkage is not exact/i);
+    expect(host.storage.approvals.createDeterministicDetachedWithTtlDuration).not.toHaveBeenCalled();
+    expect(host.storage.approvalEvents.append).not.toHaveBeenCalled();
   });
 
   it("creates approvals with explicit wait-run linkage and retained-stream metadata", async () => {
@@ -729,6 +916,95 @@ describe("approval lifecycle service", () => {
     expect(host.enqueueApprovalResolutionEffects).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ["approve", "approved", "resolved_approved"],
+    ["reject", "rejected", "resolved_rejected"],
+    ["edit", "edited", "resolved_edited"],
+  ] as const)(
+    "records a content-free, source-linked Journey event for %s resolution",
+    async (decision, status, action) => {
+      const host = createApprovalHarness({
+        approvalLinkage: {
+          workspaceId: "workspace-1",
+          sessionId: "session-1",
+          turnId: "turn-1",
+          taskId: "task-1",
+          durableRunId: "durable-1",
+        },
+      });
+
+      await resolveApproval(host, "approval-1", {
+        decision,
+        resolvedBy: "operator-1",
+        ...(decision === "edit" ? { editedPayload: { secret: "must-not-project" } } : {}),
+      });
+
+      expect(host.storage.governanceJourneyEvents.create).toHaveBeenCalledOnce();
+      const journey = host.storage.governanceJourneyEvents.create.mock.calls[0]?.[0];
+      expect(journey).toMatchObject({
+        schemaVersion: "goatcitadel.journey-event.v1",
+        eventId: "approval:journey:approval-event-1",
+        idempotencyKey: "approval:lifecycle:approval-event-1",
+        scopeKind: "workspace",
+        workspaceId: "workspace-1",
+        eventType: "approval_lifecycle",
+        subjectKind: "approval",
+        subjectId: "approval-1",
+        action,
+        actorId: "operator-1",
+        actorType: "operator",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        approvalId: "approval-1",
+        sourceKind: "approval_event",
+        sourceId: "approval-event-1",
+        trustDisposition: status,
+        poisoningStatus: "clean",
+        evidenceRefs: [{ owner: "approval", refId: "approval-1" }],
+        provenance: {
+          sourceRequired: true,
+          approvalRequired: false,
+          taskId: "task-1",
+          durableRunId: "durable-1",
+        },
+        summary: { decision, status, expired: false },
+        occurredAt: "2026-04-11T00:01:00.000Z",
+        recordedAt: "2026-04-11T00:01:00.000Z",
+      });
+      expect(journey?.fingerprint).toMatch(/^[a-f0-9]{64}$/u);
+      expect(JSON.stringify(journey)).not.toContain("must-not-project");
+    },
+  );
+
+  it("does not invent a Journey scope when approval workspace linkage is missing", async () => {
+    const host = createApprovalHarness({ approvalLinkage: { sessionId: "session-1" } });
+
+    await resolveApproval(host, "approval-1", {
+      decision: "approve",
+      resolvedBy: "operator-1",
+    });
+
+    expect(host.storage.approvals.get("approval-1").status).toBe("approved");
+    expect(host.storage.governanceJourneyEvents.create).not.toHaveBeenCalled();
+  });
+
+  it("rolls resolution back when its Journey record cannot commit", async () => {
+    const host = createApprovalHarness();
+    host.storage.governanceJourneyEvents.create.mockImplementationOnce(() => {
+      throw new Error("journey store unavailable");
+    });
+
+    await expect(
+      resolveApproval(host, "approval-1", {
+        decision: "approve",
+        resolvedBy: "operator-1",
+      }),
+    ).rejects.toThrow("journey store unavailable");
+
+    expect(host.storage.approvals.get("approval-1").status).toBe("pending");
+    expect(host.enqueueApprovalResolutionEffects).not.toHaveBeenCalled();
+  });
+
   it("expires every remaining remote token before enqueueing effects for a terminal resolution", async () => {
     const host = createApprovalHarness();
     host.storage.remoteActionTokens.expirePendingByApprovalId = vi.fn(() => 2);
@@ -808,6 +1084,16 @@ describe("approval lifecycle service", () => {
       expect.arrayContaining([expect.objectContaining({ operationId: "approval.resolve.audit" })]),
     );
     expect(host.storage.remoteActionTokens.expirePendingByApprovalId).toHaveBeenCalledWith("approval-1");
+    expect(host.storage.governanceJourneyEvents.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "expired",
+        actorId: "system:approval-expiry",
+        actorType: "system",
+        sourceKind: "approval_event",
+        approvalId: "approval-1",
+        summary: { decision: "expired", status: "rejected", expired: true },
+      }),
+    );
   });
 
   it("allows only one expiry winner and leaves duplicate resolvers on terminal truth", async () => {
@@ -1145,6 +1431,20 @@ describe("approval lifecycle service", () => {
     expect(host.storage.approvals.resolve).not.toHaveBeenCalled();
     expect(host.storage.codeModeRuns.upsert).not.toHaveBeenCalled();
     expect(host.storage.chatInlineApprovals.upsert).not.toHaveBeenCalled();
+  });
+
+  it("rejects edit decisions for exact-payload mesh capability activation approvals", async () => {
+    const host = createApprovalHarness({ approvalKind: "mesh.capability.activate" });
+
+    await expect(
+      resolveApproval(host, "approval-1", {
+        decision: "edit",
+        resolvedBy: "operator",
+        editedPayload: { permissionEnvelopeSha256: "0".repeat(64) },
+      }),
+    ).rejects.toThrow(/bind one exact immutable request/);
+
+    expect(host.storage.approvals.resolve).not.toHaveBeenCalled();
   });
 
   it("marks linked Code Mode runs expired when approval expires", async () => {
@@ -2578,43 +2878,68 @@ describe("approval lifecycle service", () => {
     const processedEffects = host.storage.approvalEffects.listByApproval("approval-1");
     const processedSummary = deriveApprovalResolutionEffectsResult(processedEffects);
 
+    // Under the HX-411 durable-admission / deferred-materialization contract the
+    // approved tool action still executes in-band, but assistant-message
+    // materialization is delegated to the linked durable chat-turn run instead of
+    // completing synchronously inside approval resolution. This lightweight
+    // lifecycle harness backs `durable-turn-1` with a skeletal run that lacks the
+    // canonical waiting-approval parent authority a production run carries, so the
+    // in-band materialization step defers to the durable path (the full synchronous
+    // materialization is exercised by approval-resolution-effects-service.test.ts).
+    // The resume therefore genuinely wakes the linked durable run (`resumed: true`)
+    // and requests its processing, which is what will materialize the assistant turn.
     expect(resolution).toMatchObject({
       allowScope: "once",
-      resumed: false,
+      resumed: true,
       resumedTurnId: "turn-1",
+      resumedRunId: "durable-turn-1",
     });
     expect(host.awaitApprovalResolutionEffects).toHaveBeenCalledWith("approval-1");
     expect(markResolved).toHaveBeenCalledTimes(1);
-    expect(requestRunProcessing).toHaveBeenCalledTimes(1);
-    expect(requestRunProcessing).toHaveBeenNthCalledWith(1, "approval-wait-1");
+    // The approved tool action still executes exactly once in-band and its tool run
+    // is settled to executed.
     expect(executeApprovedPendingAction).toHaveBeenCalledTimes(1);
     expect(pendingAction.resolutionStatus).toBe("executed");
     expect(chatToolRunsPatch).toHaveBeenCalledWith("tool-run-1", expect.objectContaining({ status: "executed" }));
-    expect(chatMessagesUpsert).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: "session-1",
-        role: "assistant",
-      }),
-      expect.any(String),
+    // The assistant message and turn trace are NO LONGER materialized synchronously
+    // during approval resolution; that work is deferred to the durable chat-turn run
+    // woken below.
+    expect(chatMessagesUpsert).not.toHaveBeenCalled();
+    expect(chatTurnTracesPatch).not.toHaveBeenCalled();
+    // Compensating coverage that the turn will still complete: both the approval-wait
+    // run and the linked durable chat-turn run are woken and have their processing
+    // requested through the durable path. In production the linked run then
+    // materializes the assistant turn; here we assert the resume drives that path.
+    expect(requestRunProcessing).toHaveBeenCalledTimes(2);
+    expect(requestRunProcessing).toHaveBeenNthCalledWith(1, "approval-wait-1");
+    expect(requestRunProcessing).toHaveBeenNthCalledWith(2, "durable-turn-1");
+    expect(host.wakeDurableRun).toHaveBeenCalledWith(
+      "durable-turn-1",
+      expect.objectContaining({ eventKey: "approval.resolved" }),
     );
-    expect(chatTurnTracesPatch).toHaveBeenCalledWith("turn-1", expect.objectContaining({ status: "completed" }));
     expect(processedEffects.map((effect) => [effect.effectKind, effect.status])).toEqual([
       ["approval_resolution_signals", "completed"],
-      ["pending_action_execute", "completed"],
+      // The tool action executed, but chat materialization is delegated to the
+      // durable run, so this effect stays leased for retry (deferred) rather than
+      // completing or failing in this harness.
+      ["pending_action_execute", "running"],
       ["approval_wait_wake", "completed"],
-      ["linked_chat_turn_wake", "skipped"],
+      ["linked_chat_turn_wake", "completed"],
       ["approval_after_hooks", "completed"],
     ]);
     expect(processedSummary).toMatchObject({
       approvalWaitDurableRunId: "approval-wait-1",
       chatTurnResume: {
-        resumed: false,
+        resumed: true,
         turnId: "turn-1",
         durableRunId: "durable-turn-1",
-        wakeOutcome: "skipped_not_waiting",
+        wakeOutcome: "woke",
       },
     });
 
+    // Duplicate wake processing must stay idempotent: re-enqueuing the same
+    // resolution effects creates no new effects and re-fires none of the durable
+    // wakes, run-processing requests, or the approved action execution.
     effectsService.enqueueResolutionEffects(host.storage.approvals.get("approval-1"), {
       decision: "approve",
       resolvedBy: "operator-test",
@@ -2623,11 +2948,156 @@ describe("approval lifecycle service", () => {
     await Promise.allSettled([...backgroundTasks]);
 
     expect(host.storage.approvalEffects.listByApproval("approval-1")).toHaveLength(5);
-    expect(requestRunProcessing).toHaveBeenCalledTimes(1);
+    expect(requestRunProcessing).toHaveBeenCalledTimes(2);
     expect(executeApprovedPendingAction).toHaveBeenCalledTimes(1);
     expect(host.wakeDurableRun).toHaveBeenCalledTimes(2);
   });
+
+  it("does not create an official-search grant for approve-once replay", async () => {
+    const host = createOfficialSearchApprovalHarness({ providers: ["brave"] });
+    const result = await resolveChatToolApproval(host, "session-1", "approval-1", "approve", {
+      allowScope: "once",
+      resolvedBy: "operator-test",
+    });
+    expect(result.allowScope).toBe("once");
+    expect(host.policyEngine.createGrant).not.toHaveBeenCalled();
+  });
+
+  it("creates an exact host-constrained session grant from immutable official-search args", async () => {
+    const host = createOfficialSearchApprovalHarness({ providers: ["brave"], engine: "parallel" });
+    await resolveChatToolApproval(host, "session-1", "approval-1", "approve", {
+      allowScope: "session",
+      resolvedBy: "operator-test",
+    });
+    expect(host.policyEngine.createGrant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolPattern: "browser.search",
+        scope: "session",
+        scopeRef: "session-1",
+        constraints: { allowedHosts: ["api.search.brave.com"] },
+      }),
+    );
+  });
+
+  it.each([
+    ["uppercase backend", { backend: "OFFICIAL" }, ["api.search.brave.com"]],
+    ["singular engine", { backend: undefined, engine: "parallel" }, ["api.parallel.ai"]],
+    ["providers-only", { backend: undefined, providers: ["brave"] }, ["api.search.brave.com"]],
+  ] as const)("creates exact official-search grant hosts for %s selection", async (_label, selection, allowedHosts) => {
+    const host = createOfficialSearchApprovalHarness(selection as Record<string, unknown>);
+    await resolveChatToolApproval(host, "session-1", "approval-1", "approve", {
+      allowScope: "session",
+      resolvedBy: "operator-test",
+    });
+    expect(host.policyEngine.createGrant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolPattern: "browser.search",
+        constraints: { allowedHosts: [...allowedHosts] },
+      }),
+    );
+  });
+
+  it("does not misclassify an unrelated persistent approval with a providers array", async () => {
+    const host = createApprovalHarness({
+      approvalKind: "http.get",
+      approvalPayload: { sessionId: "session-1", url: "https://example.com", providers: ["brave"] },
+      chatToolName: "http.get",
+    });
+    const approval = host.storage.approvals.get("approval-1");
+    host.resolveApproval.mockResolvedValue({
+      approval: { ...approval, status: "approved", resolvedBy: "operator-test" },
+      resolutionEffects: { proactiveRunIds: [], chatTurnResume: { resumed: false } },
+    } as never);
+    await resolveChatToolApproval(host, "session-1", "approval-1", "approve", {
+      allowScope: "session",
+      resolvedBy: "operator-test",
+    });
+    const grantInput = host.policyEngine.createGrant.mock.calls[0]?.[0];
+    expect(grantInput).toMatchObject({ toolPattern: "http.get", scope: "session" });
+    expect(grantInput).not.toHaveProperty("constraints");
+  });
+
+  it("creates one combined exact-host workspace grant for research mode defaults", async () => {
+    const host = createOfficialSearchApprovalHarness({ mode: "research" });
+    await resolveChatToolApproval(host, "session-1", "approval-1", "approve", {
+      allowScope: "workspace",
+      resolvedBy: "operator-test",
+    });
+    expect(host.policyEngine.createGrant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolPattern: "browser.search",
+        scope: "workspace",
+        scopeRef: "workspace-1",
+        constraints: { allowedHosts: ["api.parallel.ai", "api.search.brave.com"] },
+      }),
+    );
+  });
+
+  it("reuses only an active grant with the exact official-search host set", async () => {
+    const host = createOfficialSearchApprovalHarness({ mode: "research" });
+    const existing = {
+      grantId: "grant-existing",
+      toolPattern: "browser.search",
+      decision: "allow" as const,
+      scope: "workspace" as const,
+      scopeRef: "workspace-1",
+      grantType: "persistent" as const,
+      constraints: { allowedHosts: ["api.search.brave.com", "api.parallel.ai"] },
+      createdBy: "operator-test",
+      createdAt: "2026-07-14T00:00:00.000Z",
+    };
+    host.policyEngine.listActiveGrants.mockReturnValue([existing] as never);
+    const result = await resolveChatToolApproval(host, "session-1", "approval-1", "approve", {
+      allowScope: "workspace",
+      resolvedBy: "operator-test",
+    });
+    expect(result.grant?.grantId).toBe("grant-existing");
+    expect(host.policyEngine.createGrant).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["unconstrained", undefined],
+    ["partial", { allowedHosts: ["api.search.brave.com"] }],
+    ["extra", { allowedHosts: ["api.search.brave.com", "api.parallel.ai", "example.com"] }],
+  ] as const)("does not reuse an %s persistent grant for official-search consent", async (_label, constraints) => {
+    const host = createOfficialSearchApprovalHarness({ mode: "research" });
+    host.policyEngine.listActiveGrants.mockReturnValue([
+      {
+        grantId: "grant-wrong",
+        toolPattern: "browser.search",
+        decision: "allow",
+        scope: "workspace",
+        scopeRef: "workspace-1",
+        grantType: "persistent",
+        constraints,
+        createdBy: "operator-test",
+        createdAt: "2026-07-14T00:00:00.000Z",
+      },
+    ] as never);
+    await resolveChatToolApproval(host, "session-1", "approval-1", "approve", {
+      allowScope: "workspace",
+      resolvedBy: "operator-test",
+    });
+    expect(host.policyEngine.createGrant).toHaveBeenCalledWith(
+      expect.objectContaining({ constraints: { allowedHosts: ["api.parallel.ai", "api.search.brave.com"] } }),
+    );
+  });
 });
+
+function createMeshActivationApprovalPayload() {
+  return {
+    workspaceId: "workspace-1",
+    activationId: "activation-1",
+    activationRevision: 1,
+    requestSha256: "1".repeat(64),
+    capabilityId: "mesh:node-1:tool:status",
+    manifestSha256: "2".repeat(64),
+    entrySha256: "3".repeat(64),
+    descriptorSha256: "4".repeat(64),
+    permissionEnvelopeSha256: "5".repeat(64),
+    effectPosture: "read_only" as const,
+  };
+}
 
 function createApprovalHarness(input?: {
   pendingAction?: {
@@ -2644,7 +3114,10 @@ function createApprovalHarness(input?: {
   resolvedAt?: string;
   codeModeRun?: CodeModeRunRecord;
   codeModeRuns?: CodeModeRunRecord[];
+  approvalLinkage?: ApprovalRequest["linkage"];
   shellExplainerPolicy?: ApprovalLifecycleHost["shellExplainerPolicy"];
+  approvalPayload?: Record<string, unknown>;
+  chatToolName?: string;
 }) {
   const pendingAction = input?.pendingAction;
   const codeModeRuns = input?.codeModeRuns ?? (input?.codeModeRun ? [input.codeModeRun] : []);
@@ -2656,16 +3129,19 @@ function createApprovalHarness(input?: {
     kind: input?.approvalKind ?? "shell.exec",
     riskLevel: "danger" as const,
     status: input?.approvalStatus ?? ("pending" as const),
-    payload: {
+    payload: input?.approvalPayload ?? {
       sessionId: "session-1",
       ...(linkedCodeModeRunId ? { runId: linkedCodeModeRunId } : {}),
     },
     preview: {},
-    linkage: {
-      sessionId: "session-1",
-      workspaceId: "workspace-1",
-      ...(linkedCodeModeRunId ? { runId: linkedCodeModeRunId } : {}),
-    },
+    linkage:
+      input && Object.prototype.hasOwnProperty.call(input, "approvalLinkage")
+        ? input.approvalLinkage
+        : {
+            sessionId: "session-1",
+            workspaceId: "workspace-1",
+            ...(linkedCodeModeRunId ? { runId: linkedCodeModeRunId } : {}),
+          },
     createdAt: "2026-04-11T00:00:00.000Z",
     resolvedAt: input?.resolvedAt,
     expiresAt: input?.expiresAt,
@@ -2689,6 +3165,23 @@ function createApprovalHarness(input?: {
       };
       return approval;
     }),
+    createDeterministicDetachedWithTtlDuration: vi.fn(
+      (request: Record<string, unknown> & { approvalId: string }, ttlMs: number) => {
+        approval = {
+          ...approval,
+          approvalId: request.approvalId,
+          kind: String(request.kind),
+          riskLevel: request.riskLevel as typeof approval.riskLevel,
+          payload: request.payload as typeof approval.payload,
+          preview: request.preview as typeof approval.preview,
+          linkage: request.linkage as typeof approval.linkage,
+          status: "pending",
+          createdAt: "2026-04-11T00:00:00.000Z",
+          expiresAt: new Date(Date.parse("2026-04-11T00:00:00.000Z") + ttlMs).toISOString(),
+        };
+        return { approval, created: true };
+      },
+    ),
     get: vi.fn(() => approval),
     lockPendingForUpdate: vi.fn(() => {
       if (approval.status !== "pending") {
@@ -2761,13 +3254,27 @@ function createApprovalHarness(input?: {
     listByApprovalId: vi.fn(() => []),
     expirePendingByApprovalId: vi.fn(() => 0),
   };
+  let approvalEventCounter = 0;
 
   const host = {
     storage: {
       approvals,
       approvalEvents: {
-        append: vi.fn(),
+        append: vi.fn((event: Record<string, unknown>) => {
+          approvalEventCounter += 1;
+          return {
+            eventId: `approval-event-${approvalEventCounter}`,
+            approvalId: String(event.approvalId),
+            eventType: event.eventType,
+            actorId: String(event.actorId),
+            timestamp: "2026-04-11T00:01:00.000Z",
+            payload: event.payload,
+          };
+        }),
         listByApprovalId: vi.fn(() => []),
+      },
+      governanceJourneyEvents: {
+        create: vi.fn((event: Record<string, unknown>) => event),
       },
       pendingApprovalActions: {
         find: vi.fn(() => pendingAction),
@@ -2802,7 +3309,11 @@ function createApprovalHarness(input?: {
         })),
       },
       chatToolRuns: {
-        listBySession: vi.fn(() => []),
+        listBySession: vi.fn(() =>
+          input?.chatToolName
+            ? ([{ approvalId: "approval-1", turnId: "turn-1", toolName: input.chatToolName }] as never)
+            : [],
+        ),
       },
       codeModeRuns: {
         find: vi.fn((runId: string) => codeModeRuns.find((run) => run.runId === runId)),
@@ -2878,6 +3389,29 @@ function createApprovalHarness(input?: {
   };
 
   return host as typeof host & ApprovalLifecycleHost & ApprovalRemoteActionContext;
+}
+
+function createOfficialSearchApprovalHarness(searchArgs: Record<string, unknown>) {
+  const host = createApprovalHarness({
+    approvalKind: "browser.search",
+    approvalPayload: { sessionId: "session-1", query: "current evidence", backend: "official", ...searchArgs },
+    chatToolName: "browser.search",
+  });
+  const approval = host.storage.approvals.get("approval-1");
+  host.resolveApproval.mockResolvedValue({
+    approval: { ...approval, status: "approved", resolvedBy: "operator-test" },
+    resolutionEffects: { proactiveRunIds: [], chatTurnResume: { resumed: false } },
+  } as never);
+  host.policyEngine.createGrant.mockImplementation(
+    (input: ToolGrantCreateInput) =>
+      ({
+        grantId: `grant-${input.scope}-${input.scopeRef}`,
+        ...input,
+        grantType: input.grantType ?? "persistent",
+        createdAt: "2026-07-14T00:00:00.000Z",
+      }) as never,
+  );
+  return host;
 }
 
 function createRemoteActionTokenRecord(tokenId: string) {
@@ -3084,6 +3618,32 @@ function createInMemoryApprovalEffectsStore(effectRows: ApprovalEffectRecord[]) 
           leaseExpiresAt: undefined,
           completedAt: "2026-04-11T00:01:00.000Z",
           updatedAt: "2026-04-11T00:01:00.000Z",
+          version: effect.version + 1,
+        });
+        return { ...effect };
+      },
+    ),
+    deferEffectForRetry: vi.fn(
+      (
+        effectId: string,
+        workerId: string,
+        expectedVersion: number,
+        patch: { result?: Record<string, unknown>; lastError: string; retryAt: string; updatedAt?: string },
+      ) => {
+        const effect = effectRows.find((candidate) => candidate.effectId === effectId);
+        if (
+          !effect ||
+          effect.status !== "running" ||
+          effect.claimedBy !== workerId ||
+          effect.version !== expectedVersion
+        ) {
+          return undefined;
+        }
+        Object.assign(effect, {
+          result: patch.result ?? effect.result,
+          lastError: patch.lastError,
+          leaseExpiresAt: patch.retryAt,
+          updatedAt: patch.updatedAt ?? "2026-04-11T00:01:00.000Z",
           version: effect.version + 1,
         });
         return { ...effect };

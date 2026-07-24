@@ -1,4 +1,10 @@
-import type { CronAgentTurnConfig, CronJobRecord } from "@goatcitadel/contracts";
+import type {
+  CronAgentTurnConfig,
+  CronJobRecord,
+  CronRunExecutionToken,
+  CronRunLinkage,
+  CronRunRecord,
+} from "@goatcitadel/contracts";
 
 /**
  * Outcome returned by the gateway-provided agent-turn run handler. The handler
@@ -15,6 +21,10 @@ export interface AgentTurnCronRunOutcome {
   sessionId?: string;
   /** Turn id of the scheduled turn (agent_turn mode). */
   turnId?: string;
+  /** Persisted user-message id of the scheduled turn (agent_turn mode). */
+  userMessageId?: string;
+  /** Reserved assistant-message id of the scheduled turn (agent_turn mode). */
+  assistantMessageId?: string;
   /** Effective scheduled profile posture used for this run. */
   profilePosture?:
     | "scheduled_restricted"
@@ -33,6 +43,7 @@ export type AgentTurnCronRunHandler = (input: {
   job: CronJobRecord;
   runId: string;
   config: CronAgentTurnConfig;
+  cronRun: CronRunExecutionToken;
 }) => Promise<AgentTurnCronRunOutcome>;
 
 /**
@@ -119,21 +130,32 @@ function normalizeAgentTurnCreatedBy(value: unknown): NonNullable<CronAgentTurnC
 }
 
 /**
- * Run a scheduled `agent_turn` cron job: dispatch the gateway handler (which
- * wakes the model or files the inert inbox fallback), then record the cron run
- * success / next-run window and emit the realtime event — mirroring
- * `runNoAgentCronJob`. Immutable: never mutates the input job.
+ * Admit a scheduled `agent_turn` child under the canonical cron execution
+ * token. Enqueue/attachment is deliberately non-terminal: the automation
+ * owner settles the cron occurrence only after observing the durable child.
+ * Immutable: never mutates the input job.
  */
 export async function runAgentTurnCronJob(input: {
   job: CronJobRecord;
   normalizedJobId: string;
   runId: string;
+  cronRun: CronRunExecutionToken;
   runHandler: AgentTurnCronRunHandler;
-  upsertCronJob: (job: CronJobRecord, updatedAt: string) => CronJobRecord;
-  persistCronJobsConfig: () => void;
+  attachDeterministicChild: (
+    token: CronRunExecutionToken,
+    linkage: CronRunLinkage,
+    attachedAt: string,
+  ) => CronRunRecord | undefined;
   publishRealtime: (eventType: string, source: string, payload?: Record<string, unknown>) => void;
-  computeNextCronRunAt: (schedule: string, from: Date, endAt?: string) => string | undefined;
 }): Promise<Record<string, unknown>> {
+  if (
+    input.cronRun.runId !== input.runId ||
+    input.cronRun.jobId !== input.job.jobId ||
+    !Number.isSafeInteger(input.cronRun.executionGeneration) ||
+    input.cronRun.executionGeneration < 1
+  ) {
+    throw new Error(`Canonical cron execution token does not own ${input.job.jobId}/${input.runId}.`);
+  }
   const agentTurnConfig = input.job.actionConfig?.agentTurn;
   if (!agentTurnConfig?.prompt?.trim()) {
     throw new Error(`agent_turn cron job missing prompt: ${input.normalizedJobId}`);
@@ -142,40 +164,41 @@ export async function runAgentTurnCronJob(input: {
     job: input.job,
     runId: input.runId,
     config: agentTurnConfig,
+    cronRun: input.cronRun,
   });
-  const finishedAt = new Date().toISOString();
+  const attachedAt = new Date().toISOString();
+  let attached: CronRunRecord | undefined;
+  if (outcome.mode === "agent_turn") {
+    const linkage = requireDeterministicAgentTurnLinkage(input.cronRun, outcome);
+    attached = input.attachDeterministicChild(input.cronRun, linkage, attachedAt);
+    if (!attached) {
+      throw new Error(
+        `Cron run ${input.cronRun.runId} lost execution ownership before deterministic child attachment.`,
+      );
+    }
+  }
   const summary = {
     action: input.job.action,
     runId: input.runId,
     mode: outcome.mode,
+    status: outcome.mode === "agent_turn" ? "admitted" : "inbox_created",
     ...(outcome.durableRunId ? { durableRunId: outcome.durableRunId, childDurableRunId: outcome.durableRunId } : {}),
     ...(outcome.sessionId ? { sessionId: outcome.sessionId } : {}),
+    ...(outcome.userMessageId ? { userMessageId: outcome.userMessageId, childMessageId: outcome.userMessageId } : {}),
     ...(outcome.turnId ? { turnId: outcome.turnId, childTurnId: outcome.turnId } : {}),
+    ...(outcome.assistantMessageId
+      ? { assistantMessageId: outcome.assistantMessageId, childAssistantMessageId: outcome.assistantMessageId }
+      : {}),
     ...(outcome.taskId ? { taskId: outcome.taskId } : {}),
     ...(outcome.profilePosture ? { profilePosture: outcome.profilePosture } : {}),
     ...(outcome.profileWarning ? { profileWarning: outcome.profileWarning, cronReviewWarning: true } : {}),
   };
-  const saved = input.upsertCronJob(
-    {
-      ...input.job,
-      lastRunAt: finishedAt,
-      lastRunId: input.runId,
-      lastRunStatus: "ok",
-      lastRunOutput: JSON.stringify(summary),
-      lastFailureAt: undefined,
-      lastFailure: undefined,
-      failureCount: 0,
-      backoffUntil: undefined,
-      nextRunAt: input.computeNextCronRunAt(input.job.schedule, new Date(finishedAt), input.job.endAt),
-    },
-    finishedAt,
-  );
-  input.persistCronJobsConfig();
   input.publishRealtime("cron_job_run", "cron", {
-    type: outcome.mode === "agent_turn" ? "cron_agent_turn_enqueued" : "scheduled_task_created",
-    jobId: saved.jobId,
-    name: saved.name,
+    type: outcome.mode === "agent_turn" ? "cron_agent_turn_admitted" : "scheduled_task_created",
+    jobId: input.job.jobId,
+    name: input.job.name,
     runId: input.runId,
+    executionGeneration: input.cronRun.executionGeneration,
     ...(outcome.durableRunId ? { durableRunId: outcome.durableRunId, childDurableRunId: outcome.durableRunId } : {}),
     ...(outcome.sessionId ? { sessionId: outcome.sessionId } : {}),
     ...(outcome.turnId ? { turnId: outcome.turnId, childTurnId: outcome.turnId } : {}),
@@ -184,8 +207,36 @@ export async function runAgentTurnCronJob(input: {
     ...(outcome.profileWarning ? { profileWarning: outcome.profileWarning } : {}),
     ...(agentTurnConfig.deliveryChannel ? { deliveryChannel: agentTurnConfig.deliveryChannel } : {}),
   });
+  return summary;
+}
+
+function requireDeterministicAgentTurnLinkage(
+  token: CronRunExecutionToken,
+  outcome: AgentTurnCronRunOutcome,
+): Required<
+  Pick<
+    CronRunLinkage,
+    "childSessionId" | "childMessageId" | "childTurnId" | "childAssistantMessageId" | "childDurableRunId"
+  >
+> {
+  const linkage = {
+    childSessionId: outcome.sessionId?.trim(),
+    childMessageId: outcome.userMessageId?.trim(),
+    childTurnId: outcome.turnId?.trim(),
+    childAssistantMessageId: outcome.assistantMessageId?.trim(),
+    childDurableRunId: outcome.durableRunId?.trim(),
+  };
+  const missing = Object.entries(linkage)
+    .filter(([, value]) => !value)
+    .map(([key]) => key);
+  if (missing.length > 0) {
+    throw new Error(`Deterministic cron child ${token.runId} is missing required linkage: ${missing.join(", ")}.`);
+  }
   return {
-    ...summary,
-    nextRunAt: saved.nextRunAt,
+    childSessionId: linkage.childSessionId!,
+    childMessageId: linkage.childMessageId!,
+    childTurnId: linkage.childTurnId!,
+    childAssistantMessageId: linkage.childAssistantMessageId!,
+    childDurableRunId: linkage.childDurableRunId!,
   };
 }

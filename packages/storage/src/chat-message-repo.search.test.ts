@@ -6,6 +6,8 @@ import test from "node:test";
 import { randomUUID } from "node:crypto";
 import type { ChatMessageRecord, ChatMessageRole } from "@goatcitadel/contracts";
 import { ChatMessageRepository, buildSafeFtsMatchQuery, buildSafePostgresSearchQuery } from "./chat-message-repo.js";
+import type { SearchMessagesOptions } from "./chat-message-repo.js";
+import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
 import { createDatabase } from "./sqlite.js";
 import type { DatabaseClient, DbStatement } from "./db.js";
 
@@ -46,6 +48,17 @@ function withDatabase(run: (db: DatabaseClient) => void): void {
       }
     }
   }
+}
+
+function ensureSearchSessions(db: DatabaseClient, ...sessionIds: string[]): void {
+  const meta = new ChatSessionMetaRepository(db);
+  for (const sessionId of sessionIds) {
+    meta.ensure(sessionId, "2026-06-01T00:00:00.000Z", "workspace-1");
+  }
+}
+
+function search(repo: ChatMessageRepository, query: string, options: Omit<SearchMessagesOptions, "workspaceId"> = {}) {
+  return repo.searchMessages(query, { workspaceId: "workspace-1", ...options });
 }
 
 function expectSqlUsesPostgresSearch(preparedSql: string[]): void {
@@ -92,6 +105,8 @@ test("searchMessages uses Postgres search vectors and coerces numeric rows", () 
             return [
               {
                 seq: "7",
+                workspace_id: "workspace-1",
+                include_in_history: 1,
                 message_id: "msg-pg-hit",
                 session_id: "sess-pg",
                 role: "assistant",
@@ -101,17 +116,7 @@ test("searchMessages uses Postgres search vectors and coerces numeric rows", () 
               },
             ] as unknown as T[];
           }
-          if (sql.includes("seq >= ?") && sql.includes("seq <= ?")) {
-            return [
-              {
-                seq: "7",
-                message_id: "msg-pg-hit",
-                role: "assistant",
-                content: "Gateway deploy rollout",
-                timestamp: "2026-06-01T00:00:07.000Z",
-              },
-            ] as unknown as T[];
-          }
+          if (sql.includes("m.seq < ?") || sql.includes("m.seq > ?")) return [];
           return [];
         },
       };
@@ -122,14 +127,14 @@ test("searchMessages uses Postgres search vectors and coerces numeric rows", () 
   };
 
   const repo = new ChatMessageRepository(db);
-  const hits = repo.searchMessages('gateway AND (deploy OR "rollout")', {
+  const hits = search(repo, 'gateway AND (deploy OR "rollout")', {
     sessionId: "sess-pg",
     limit: 3,
     contextRadius: 1,
   });
 
   expectSqlUsesPostgresSearch(preparedSql);
-  assert.deepEqual(searchCalls[0], ["gateway AND deploy OR rollout", "sess-pg", 3]);
+  assert.deepEqual(searchCalls[0], ["gateway AND deploy OR rollout", "workspace-1", 0, "sess-pg", 3]);
   assert.equal(hits.length, 1);
   assert.equal(hits[0]?.score, -0.42);
   assert.equal(hits[0]?.context[0]?.isHit, true);
@@ -138,11 +143,12 @@ test("searchMessages uses Postgres search vectors and coerces numeric rows", () 
 test("searchMessages returns ranked hits and never throws on punctuation/operator input", () => {
   withDatabase((db) => {
     const repo = new ChatMessageRepository(db);
+    ensureSearchSessions(db, "sess-a");
     repo.upsert(makeMessage("sess-a", "user", "We should deploy the gateway tomorrow"));
     repo.upsert(makeMessage("sess-a", "assistant", "Deploy is scheduled; the gateway rollout looks ready"));
     repo.upsert(makeMessage("sess-a", "user", "Unrelated note about lunch"));
 
-    const hits = repo.searchMessages("gateway deploy");
+    const hits = search(repo, "gateway deploy");
     assert.equal(hits.length, 2);
     for (const hit of hits) {
       assert.match(hit.content.toLowerCase(), /gateway|deploy/);
@@ -152,38 +158,65 @@ test("searchMessages returns ranked hits and never throws on punctuation/operato
 
     // Arbitrary operator-laden text must not raise an FTS syntax error. Operators
     // are sanitized into literal terms, so this is a plain (possibly empty) result.
-    assert.doesNotThrow(() => repo.searchMessages('gateway AND (deploy OR "rollout") NEAR -note*'));
-    assert.ok(Array.isArray(repo.searchMessages('gateway AND (deploy OR "rollout")')));
+    assert.doesNotThrow(() => search(repo, 'gateway AND (deploy OR "rollout") NEAR -note*'));
+    assert.ok(Array.isArray(search(repo, 'gateway AND (deploy OR "rollout")')));
     // Quotes/parens around a real term still match that term as a literal.
-    assert.ok(repo.searchMessages('"gateway"').length >= 1);
+    assert.ok(search(repo, '"gateway"').length >= 1);
   });
 });
 
 test("searchMessages scopes hits to a single session when sessionId is provided", () => {
   withDatabase((db) => {
     const repo = new ChatMessageRepository(db);
+    ensureSearchSessions(db, "sess-a", "sess-b");
     repo.upsert(makeMessage("sess-a", "user", "migration plan for the durable runtime"));
     repo.upsert(makeMessage("sess-b", "user", "migration plan for the billing service"));
 
-    const scoped = repo.searchMessages("migration plan", { sessionId: "sess-a" });
+    const scoped = search(repo, "migration plan", { sessionId: "sess-a" });
     assert.equal(scoped.length, 1);
     assert.equal(scoped[0]?.sessionId, "sess-a");
 
-    const unscoped = repo.searchMessages("migration plan");
+    const unscoped = search(repo, "migration plan");
     assert.equal(unscoped.length, 2);
+  });
+});
+
+test("searchMessages never crosses workspace boundaries and excludes hidden sessions by default", () => {
+  withDatabase((db) => {
+    const repo = new ChatMessageRepository(db);
+    const meta = new ChatSessionMetaRepository(db);
+    meta.ensure("visible-a", "2026-06-01T00:00:00.000Z", "workspace-1");
+    meta.ensure("hidden-a", "2026-06-01T00:00:00.000Z", "workspace-1");
+    meta.patch("hidden-a", { includeInHistory: false }, "2026-06-01T00:00:01.000Z");
+    meta.ensure("visible-b", "2026-06-01T00:00:00.000Z", "workspace-2");
+    repo.upsert(makeMessage("visible-a", "user", "workspace marker"));
+    repo.upsert(makeMessage("hidden-a", "user", "workspace marker"));
+    repo.upsert(makeMessage("visible-b", "user", "workspace marker"));
+
+    const visible = search(repo, "workspace marker");
+    assert.deepEqual(
+      visible.map((hit) => hit.sessionId),
+      ["visible-a"],
+    );
+    assert.equal(visible[0]?.workspaceId, "workspace-1");
+    assert.ok(Number.isSafeInteger(visible[0]?.sequence));
+
+    const withHidden = search(repo, "workspace marker", { includeHidden: true });
+    assert.deepEqual(withHidden.map((hit) => hit.sessionId).sort(), ["hidden-a", "visible-a"]);
   });
 });
 
 test("searchMessages attaches a chronological context window around each hit", () => {
   withDatabase((db) => {
     const repo = new ChatMessageRepository(db);
+    ensureSearchSessions(db, "sess-c");
     repo.upsert(makeMessage("sess-c", "user", "first message before"));
     repo.upsert(makeMessage("sess-c", "assistant", "second message before"));
     repo.upsert(makeMessage("sess-c", "user", "the UNIQUEMARKER hit message"));
     repo.upsert(makeMessage("sess-c", "assistant", "first message after"));
     repo.upsert(makeMessage("sess-c", "user", "second message after"));
 
-    const hits = repo.searchMessages("UNIQUEMARKER", { contextRadius: 1 });
+    const hits = search(repo, "UNIQUEMARKER", { contextRadius: 1 });
     assert.equal(hits.length, 1);
     const context = hits[0]?.context ?? [];
     assert.equal(context.length, 3, "context should be hit ± 1 neighbour");
@@ -193,7 +226,7 @@ test("searchMessages attaches a chronological context window around each hit", (
     assert.equal(context.filter((entry) => entry.isHit).length, 1);
 
     // contextRadius 0 returns only the hit itself.
-    const noContext = repo.searchMessages("UNIQUEMARKER", { contextRadius: 0 });
+    const noContext = search(repo, "UNIQUEMARKER", { contextRadius: 0 });
     assert.equal(noContext[0]?.context.length, 1);
     assert.equal(noContext[0]?.context[0]?.isHit, true);
   });
@@ -202,33 +235,35 @@ test("searchMessages attaches a chronological context window around each hit", (
 test("FTS index stays in sync with chat_messages on insert, update, and delete", () => {
   withDatabase((db) => {
     const repo = new ChatMessageRepository(db);
+    ensureSearchSessions(db, "sess-d");
     const message = makeMessage("sess-d", "user", "original syncword content", { messageId: "msg-sync-1" });
     repo.upsert(message);
 
     // INSERT trigger indexed it.
-    assert.equal(repo.searchMessages("syncword").length, 1);
+    assert.equal(search(repo, "syncword").length, 1);
 
     // UPDATE trigger retracts old terms and indexes new ones (same message_id via upsert).
     repo.upsert({ ...message, content: "replaced freshword content" });
-    assert.equal(repo.searchMessages("syncword").length, 0, "old terms removed by update trigger");
-    assert.equal(repo.searchMessages("freshword").length, 1, "new terms indexed by update trigger");
+    assert.equal(search(repo, "syncword").length, 0, "old terms removed by update trigger");
+    assert.equal(search(repo, "freshword").length, 1, "new terms indexed by update trigger");
 
     // DELETE trigger removes it from the index.
     const deleted = repo.deleteByMessageIds("sess-d", ["msg-sync-1"]);
     assert.equal(deleted, 1);
-    assert.equal(repo.searchMessages("freshword").length, 0, "delete trigger retracted the row");
+    assert.equal(search(repo, "freshword").length, 0, "delete trigger retracted the row");
   });
 });
 
 test("searchMessages returns empty for empty queries and no matches", () => {
   withDatabase((db) => {
     const repo = new ChatMessageRepository(db);
+    ensureSearchSessions(db, "sess-e");
     repo.upsert(makeMessage("sess-e", "user", "some indexed content"));
 
-    assert.deepEqual(repo.searchMessages(""), []);
-    assert.deepEqual(repo.searchMessages("   "), []);
-    assert.deepEqual(repo.searchMessages("***"), []);
-    assert.deepEqual(repo.searchMessages("nonexistentterm"), []);
+    assert.deepEqual(search(repo, ""), []);
+    assert.deepEqual(search(repo, "   "), []);
+    assert.deepEqual(search(repo, "***"), []);
+    assert.deepEqual(search(repo, "nonexistentterm"), []);
   });
 });
 
@@ -238,12 +273,13 @@ test("searchMessages backfill rebuilds the index for pre-existing rows", () => {
     // (re)built after the fact: drop the index, re-insert raw rows bypassing triggers,
     // then rebuild via the same command the migration uses.
     const repo = new ChatMessageRepository(db);
+    ensureSearchSessions(db, "sess-f");
     repo.upsert(makeMessage("sess-f", "user", "backfillword present in history", { messageId: "msg-bf-1" }));
 
     db.exec("DELETE FROM chat_messages_fts;");
-    assert.equal(repo.searchMessages("backfillword").length, 0, "index emptied");
+    assert.equal(search(repo, "backfillword").length, 0, "index emptied");
 
     db.exec("INSERT INTO chat_messages_fts(chat_messages_fts) VALUES ('rebuild');");
-    assert.equal(repo.searchMessages("backfillword").length, 1, "rebuild restored the index");
+    assert.equal(search(repo, "backfillword").length, 1, "rebuild restored the index");
   });
 });

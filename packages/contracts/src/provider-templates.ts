@@ -1,4 +1,10 @@
-import type { LlmApiStyle, ProviderProfile } from "./llm.js";
+import type {
+  LlmApiStyle,
+  LlmProviderAuthMode,
+  LlmProviderCapabilities,
+  LlmProviderGoogleCloudConfig,
+  ProviderProfile,
+} from "./llm.js";
 
 export interface ProviderTemplateDefinition {
   providerId: string;
@@ -6,6 +12,9 @@ export interface ProviderTemplateDefinition {
   baseUrl: string;
   defaultModel: string;
   apiStyle?: LlmApiStyle;
+  authMode?: LlmProviderAuthMode;
+  googleCloud?: LlmProviderGoogleCloudConfig;
+  capabilities?: Partial<LlmProviderCapabilities>;
   knownModels?: string[];
 }
 
@@ -67,6 +76,26 @@ export const providerTemplates: readonly ProviderTemplateDefinition[] = [
       "gemini-3-pro-image-preview",
       "gemini-2.5-flash-image",
     ],
+  },
+  {
+    providerId: "vertex",
+    label: "Google Vertex AI",
+    baseUrl:
+      "https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/us-central1/endpoints/openapi",
+    defaultModel: "google/gemini-2.5-flash",
+    apiStyle: "openai-chat-completions",
+    authMode: "google-adc",
+    googleCloud: { location: "us-central1", endpointId: "openapi" },
+    capabilities: { reasoning: true, reasoningEfforts: ["low", "medium", "high"] },
+    knownModels: ["google/gemini-2.5-flash", "google/gemini-2.5-pro"],
+  },
+  {
+    providerId: "fireworks",
+    label: "Fireworks AI",
+    baseUrl: "https://api.fireworks.ai/inference/v1",
+    defaultModel: "accounts/fireworks/models/kimi-k2p6",
+    apiStyle: "openai-chat-completions",
+    knownModels: ["accounts/fireworks/models/kimi-k2p6"],
   },
   {
     providerId: "minimax",
@@ -200,6 +229,9 @@ export const builtinProviderProfiles: readonly ProviderProfile[] = providerTempl
   baseUrl: template.baseUrl,
   apiStyle: template.apiStyle ?? "openai-chat-completions",
   defaultModel: template.defaultModel,
+  authMode: template.authMode,
+  googleCloud: template.googleCloud,
+  capabilities: template.capabilities,
   knownModels: template.knownModels,
   modelDiscovery: resolveBuiltinModelDiscovery(template.providerId),
 }));
@@ -213,6 +245,7 @@ const FOREIGN_MODEL_PROVIDER_IDS = new Set([
   "llamacpp",
   "localai",
   "genie-ir20",
+  "fireworks",
 ]);
 
 // Cloud aggregators/routers that forward requests to third-party model hosts.
@@ -256,6 +289,9 @@ export function providerRecognizesModelId(providerId: string, modelId: string): 
 
   const providerPrefix = normalizedModelId.split("/", 1)[0]?.trim().toLowerCase();
   if (normalizedModelId.includes("/") && providerPrefix && MODEL_PREFIX_PROVIDER_IDS[providerPrefix]) {
+    if (normalizedProviderId === "vertex" && providerPrefix === "google") {
+      return true;
+    }
     return MODEL_PREFIX_PROVIDER_IDS[providerPrefix] === normalizedProviderId;
   }
 

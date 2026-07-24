@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ConflictError } from "@goatcitadel/contracts";
+import type { GatewayRuntimeConfig } from "../config.js";
 import { DatabaseCutoverService } from "./database-cutover-service.js";
 
 const postgresMocks = vi.hoisted(() => ({
@@ -91,6 +93,7 @@ describe("DatabaseCutoverService verify", () => {
         },
       } as never,
       createBackup: vi.fn(),
+      readSettingsRevision: () => 1,
     });
 
     const report = await service.verify({ source: root });
@@ -133,6 +136,7 @@ describe("DatabaseCutoverService verify", () => {
         },
       } as never,
       createBackup: vi.fn(),
+      readSettingsRevision: () => 1,
     });
 
     await service.verify({ source: root, target: "postgres://operator-target" });
@@ -149,13 +153,15 @@ describe("DatabaseCutoverService verify", () => {
 
   it("runs a dry-run cutover through backup, migration, verification, and recording without flipping config", async () => {
     const backupRoot = await makeBackupSnapshot();
+    const commitDatabaseDriver = vi.fn();
     const service = new DatabaseCutoverService({
       config: buildConfig(path.join(backupRoot, "payload", "data", "index.db"), "sqlite"),
       createBackup: vi.fn(async () => ({
         backupId: "backup-dry-run",
         outputPath: backupRoot,
       })),
-      persistAssistantConfig: vi.fn(),
+      readSettingsRevision: () => 7,
+      commitDatabaseDriver,
     });
 
     const result = await service.runCutover({ profile: "local", execute: false });
@@ -164,6 +170,10 @@ describe("DatabaseCutoverService verify", () => {
       profile: "local",
       mode: "dry_run",
       status: "ready",
+      revision: 7,
+      configuredDriver: "sqlite",
+      activeStorageDriver: "sqlite",
+      restartRequired: false,
       runtimeFlipReady: true,
       summary: {
         sourceSessionCount: 1,
@@ -187,6 +197,7 @@ describe("DatabaseCutoverService verify", () => {
     );
     expect(postgresMocks.stopBundled).not.toHaveBeenCalled();
     expect(postgresMocks.close).toHaveBeenCalledTimes(1);
+    expect(commitDatabaseDriver).not.toHaveBeenCalled();
   });
 
   it("blocks execute cutover after successful import when config persistence is unavailable", async () => {
@@ -198,15 +209,25 @@ describe("DatabaseCutoverService verify", () => {
         backupId: "backup-execute",
         outputPath: backupRoot,
       })),
+      readSettingsRevision: () => 1,
     });
 
-    const result = await service.runCutover({ profile: "local", execute: true, confirm: true });
+    const result = await service.runCutover({
+      profile: "local",
+      execute: true,
+      confirm: true,
+      expectedRevision: 1,
+    });
 
     expect(result).toMatchObject({
       mode: "execute",
       status: "blocked",
       runtimeFlipReady: true,
-      runtimeFlipBlockedReason: "Gateway service cannot persist assistant.config.json after cutover.",
+      runtimeFlipBlockedReason: "Gateway config-generation commit is unavailable after cutover.",
+      revision: 1,
+      configuredDriver: "sqlite",
+      activeStorageDriver: "sqlite",
+      restartRequired: false,
       steps: expect.arrayContaining([
         expect.objectContaining({ id: "import", status: "completed" }),
         expect.objectContaining({ id: "flip", status: "blocked" }),
@@ -218,10 +239,102 @@ describe("DatabaseCutoverService verify", () => {
     expect(postgresMocks.close).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects an already-stale execute revision before backup, migration, or import", async () => {
+    const createBackup = vi.fn();
+    const commitDatabaseDriver = vi.fn();
+    const service = new DatabaseCutoverService({
+      config: buildConfig("unused.db", "sqlite"),
+      createBackup,
+      readSettingsRevision: () => 4,
+      commitDatabaseDriver,
+    });
+
+    await expect(
+      service.runCutover({ profile: "local", execute: true, confirm: true, expectedRevision: 3 }),
+    ).rejects.toMatchObject({
+      name: "ConflictError",
+      details: { expectedRevision: 3, currentRevision: 4 },
+    });
+
+    expect(createBackup).not.toHaveBeenCalled();
+    expect(postgresMocks.runPostgresMigrations).not.toHaveBeenCalled();
+    expect(postgresMocks.transaction).not.toHaveBeenCalled();
+    expect(commitDatabaseDriver).not.toHaveBeenCalled();
+  });
+
+  it("blocks the final flip when settings change during a long import", async () => {
+    const backupRoot = await makeBackupSnapshot();
+    const config = buildConfig(path.join(backupRoot, "payload", "data", "index.db"), "sqlite");
+    const commitDatabaseDriver = vi.fn(async () => {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: "Settings changed during cutover.",
+        details: { expectedRevision: 1, currentRevision: 2 },
+      });
+    });
+    const service = new DatabaseCutoverService({
+      config,
+      createBackup: vi.fn(async () => ({ backupId: "backup-race", outputPath: backupRoot })),
+      readSettingsRevision: () => 1,
+      commitDatabaseDriver,
+    });
+
+    await expect(
+      service.runCutover({ profile: "local", execute: true, confirm: true, expectedRevision: 1 }),
+    ).rejects.toMatchObject({
+      name: "ConflictError",
+      details: { expectedRevision: 1, currentRevision: 2 },
+    });
+
+    expect(postgresMocks.transaction).toHaveBeenCalled();
+    expect(commitDatabaseDriver).toHaveBeenCalledWith({ driver: "postgres", expectedRevision: 1 });
+    expect(config.assistant.database.driver).toBe("sqlite");
+  });
+
+  it("reports persisted next-start Postgres separately from the active SQLite Storage instance", async () => {
+    const backupRoot = await makeBackupSnapshot();
+    const config = buildConfig(path.join(backupRoot, "payload", "data", "index.db"), "sqlite");
+    const commitDatabaseDriver = vi.fn(async () => {
+      config.assistant.database.driver = "postgres";
+      return { revision: 2 };
+    });
+    const service = new DatabaseCutoverService({
+      config,
+      createBackup: vi.fn(async () => ({ backupId: "backup-success", outputPath: backupRoot })),
+      readSettingsRevision: () => 1,
+      commitDatabaseDriver,
+    });
+
+    const result = await service.runCutover({
+      profile: "local",
+      execute: true,
+      confirm: true,
+      expectedRevision: 1,
+    });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      revision: 2,
+      configuredDriver: "postgres",
+      activeStorageDriver: "sqlite",
+      restartRequired: true,
+      steps: expect.arrayContaining([
+        expect.objectContaining({
+          id: "flip",
+          status: "completed",
+          detail: expect.stringContaining("active Storage instance remains unchanged until restart"),
+        }),
+      ]),
+    });
+    expect(commitDatabaseDriver).toHaveBeenCalledWith({ driver: "postgres", expectedRevision: 1 });
+    await expect(service.getHealthSnapshot()).resolves.toMatchObject({ driver: "sqlite", reachable: true });
+  });
+
   it("reports Postgres health snapshots and closes the probe client", async () => {
     const service = new DatabaseCutoverService({
       config: buildConfig(path.join(await fs.mkdtemp(path.join(os.tmpdir(), "gc-db-health-")), "index.db"), "postgres"),
       createBackup: vi.fn(),
+      readSettingsRevision: () => 1,
     });
 
     await expect(service.getHealthSnapshot()).resolves.toEqual({
@@ -248,7 +361,7 @@ function buildConfig(dbPath: string, driver: "sqlite" | "postgres") {
         },
       },
     },
-  } as never;
+  } as unknown as GatewayRuntimeConfig;
 }
 
 async function makeBackupSnapshot(): Promise<string> {

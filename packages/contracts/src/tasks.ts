@@ -17,6 +17,7 @@ export interface TaskProactiveContext {
 
 export interface TaskRecord {
   taskId: string;
+  revision: number;
   workspaceId?: string;
   title: string;
   description?: string;

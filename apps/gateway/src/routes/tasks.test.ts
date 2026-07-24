@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
-import { ValidationError, type A2ATaskExportPreviewRequest } from "@goatcitadel/contracts";
+import { ConflictError, ValidationError, type A2ATaskExportPreviewRequest } from "@goatcitadel/contracts";
 import { buildA2ABridgeStatus, buildA2ATaskExportPreview } from "../services/a2a-bridge-service.js";
 import { tasksRoutes } from "./tasks.js";
 
@@ -20,6 +20,7 @@ describe("tasks routes", () => {
     const listTasks = vi.fn(() => [
       {
         taskId: "task-1",
+        revision: 7,
         title: "Plan slice",
         status: "in_progress",
         priority: "normal",
@@ -39,28 +40,28 @@ describe("tasks routes", () => {
     expect(response.statusCode).toBe(200);
     expect(listTasks).toHaveBeenCalledWith(1, "in_progress", undefined, "active", "default");
     expect(response.json()).toMatchObject({
-      items: [{ taskId: "task-1" }],
+      items: [{ taskId: "task-1", revision: 7 }],
       nextCursor: "2026-04-24T01:00:00.000Z|task-1",
       view: "active",
     });
   });
 
   it("requires a confirmation token for hard delete", async () => {
-    const hardDeleteTask = vi.fn(() => true);
-    const softDeleteTask = vi.fn(() => true);
+    const hardDeleteTaskWithRevision = vi.fn(() => true);
+    const softDeleteTaskWithRevision = vi.fn(() => true);
 
-    app = buildApp({ hardDeleteTask, softDeleteTask });
+    app = buildApp({ hardDeleteTaskWithRevision, softDeleteTaskWithRevision });
     await app.register(tasksRoutes);
 
     const response = await app.inject({
       method: "DELETE",
       url: "/api/v1/tasks/task-1?mode=hard",
-      payload: {},
+      payload: { expectedRevision: 1 },
     });
 
     expect(response.statusCode).toBe(400);
-    expect(hardDeleteTask).not.toHaveBeenCalled();
-    expect(softDeleteTask).not.toHaveBeenCalled();
+    expect(hardDeleteTaskWithRevision).not.toHaveBeenCalled();
+    expect(softDeleteTaskWithRevision).not.toHaveBeenCalled();
     expect(response.json()).toMatchObject({
       error: "Hard delete requires confirmToken=PERMANENT_DELETE",
     });
@@ -642,12 +643,22 @@ describe("tasks routes", () => {
 
   it("creates, updates, soft-deletes, restores, and hard-deletes tasks through the service contract", async () => {
     const createTask = vi.fn((input: Record<string, unknown>) => ({ taskId: "task-1", ...input }));
-    const updateTask = vi.fn((taskId: string, input: Record<string, unknown>) => ({ taskId, ...input }));
-    const softDeleteTask = vi.fn(() => true);
-    const restoreTask = vi.fn(() => true);
-    const hardDeleteTask = vi.fn(() => true);
+    const updateTaskWithRevision = vi.fn((taskId: string, input: Record<string, unknown>, revision: number) => ({
+      taskId,
+      revision,
+      ...input,
+    }));
+    const softDeleteTaskWithRevision = vi.fn(() => true);
+    const restoreTaskWithRevision = vi.fn(() => true);
+    const hardDeleteTaskWithRevision = vi.fn(() => true);
 
-    app = buildApp({ createTask, updateTask, softDeleteTask, restoreTask, hardDeleteTask });
+    app = buildApp({
+      createTask,
+      updateTaskWithRevision,
+      softDeleteTaskWithRevision,
+      restoreTaskWithRevision,
+      hardDeleteTaskWithRevision,
+    });
     await app.register(tasksRoutes);
 
     const created = await app.inject({
@@ -664,6 +675,7 @@ describe("tasks routes", () => {
       method: "PATCH",
       url: "/api/v1/tasks/task-1",
       payload: {
+        expectedRevision: 1,
         title: "Runtime validation updated",
         assignedAgentId: null,
       },
@@ -672,6 +684,7 @@ describe("tasks routes", () => {
       method: "DELETE",
       url: "/api/v1/tasks/task-1",
       payload: {
+        expectedRevision: 2,
         deletedBy: "operator",
         deleteReason: "cleanup",
       },
@@ -679,45 +692,91 @@ describe("tasks routes", () => {
     const restored = await app.inject({
       method: "POST",
       url: "/api/v1/tasks/task-1/restore",
+      payload: { expectedRevision: 3 },
     });
     const hardDeleted = await app.inject({
       method: "DELETE",
       url: "/api/v1/tasks/task-1?mode=hard",
       payload: {
+        expectedRevision: 4,
         confirmToken: "PERMANENT_DELETE",
       },
     });
 
     expect(created.statusCode).toBe(201);
     expect(created.json()).toMatchObject({ taskId: "task-1", title: "Runtime validation" });
-    expect(updateTask).toHaveBeenCalledWith(
+    expect(updateTaskWithRevision).toHaveBeenCalledWith(
       "task-1",
       {
         title: "Runtime validation updated",
         assignedAgentId: null,
       },
+      1,
       { workspaceId: undefined },
     );
     expect(updated.json()).toMatchObject({ taskId: "task-1", title: "Runtime validation updated" });
     expect(softDeleted.json()).toEqual({ deleted: true, taskId: "task-1", mode: "soft" });
-    expect(softDeleteTask).toHaveBeenCalledWith("task-1", "operator", "cleanup", { workspaceId: undefined });
+    expect(softDeleteTaskWithRevision).toHaveBeenCalledWith("task-1", 2, "operator", "cleanup", {
+      workspaceId: undefined,
+    });
     expect(restored.json()).toEqual({ restored: true, taskId: "task-1" });
     expect(hardDeleted.json()).toEqual({ deleted: true, taskId: "task-1", mode: "hard" });
   });
 
   it("returns not-found responses for task delete and restore misses", async () => {
     app = buildApp({
-      softDeleteTask: vi.fn(() => false),
-      restoreTask: vi.fn(() => false),
+      softDeleteTaskWithRevision: vi.fn(() => false),
+      restoreTaskWithRevision: vi.fn(() => false),
     });
     await app.register(tasksRoutes);
 
-    await expect(app.inject({ method: "DELETE", url: "/api/v1/tasks/missing", payload: {} })).resolves.toMatchObject({
-      statusCode: 404,
+    await expect(
+      app.inject({ method: "DELETE", url: "/api/v1/tasks/missing", payload: { expectedRevision: 1 } }),
+    ).resolves.toMatchObject({ statusCode: 404 });
+    await expect(
+      app.inject({ method: "POST", url: "/api/v1/tasks/missing/restore", payload: { expectedRevision: 1 } }),
+    ).resolves.toMatchObject({ statusCode: 404 });
+  });
+
+  it("requires a positive revision and returns a structured 409 for stale task patches", async () => {
+    const updateTaskWithRevision = vi.fn(() => {
+      throw new ConflictError({
+        code: "WRITE_CONFLICT",
+        message: "Task task-1 changed since revision 2.",
+        details: {
+          resourceKind: "task",
+          resourceId: "task-1",
+          expectedRevision: 2,
+          currentRevision: 3,
+        },
+      });
     });
-    await expect(app.inject({ method: "POST", url: "/api/v1/tasks/missing/restore" })).resolves.toMatchObject({
-      statusCode: 404,
+    app = buildApp({ updateTaskWithRevision });
+    await app.register(tasksRoutes);
+
+    const missingRevision = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/tasks/task-1",
+      payload: { title: "Unsafe overwrite" },
     });
+    const stale = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/tasks/task-1",
+      payload: { expectedRevision: 2, title: "Stale overwrite" },
+    });
+
+    expect(missingRevision.statusCode).toBe(400);
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json()).toMatchObject({
+      code: "WRITE_CONFLICT",
+      details: {
+        resourceKind: "task",
+        resourceId: "task-1",
+        expectedRevision: 2,
+        currentRevision: 3,
+      },
+    });
+    expect(updateTaskWithRevision).toHaveBeenCalledTimes(1);
   });
 
   it("dispatches deliverables, subagent updates, agentic runs, controls, and diagnostics", async () => {
@@ -777,6 +836,7 @@ describe("tasks routes", () => {
       url: "/api/v1/agentic/runs/run-1/control?workspaceId=default",
       payload: {
         action: "steer",
+        expectedRevision: 5,
         instruction: "stay scoped",
         actorId: "spoofed-client",
       },
@@ -870,18 +930,19 @@ describe("tasks routes", () => {
   });
 
   it("emits a distress signal through the task route service", async () => {
-    const emitDistressSignal = vi.fn((_taskId: string, input: Record<string, unknown>) => ({
+    const emitDistressSignalWithRevision = vi.fn((_taskId: string, input: Record<string, unknown>) => ({
       taskId: "task-1",
       distressSignals: [{ signalId: "signal-1", code: input.code, severity: input.severity }],
     }));
 
-    app = buildApp({ emitDistressSignal });
+    app = buildApp({ emitDistressSignalWithRevision });
     await app.register(tasksRoutes);
 
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/tasks/task-1/distress",
       payload: {
+        expectedRevision: 3,
         code: "worker_crash",
         severity: "critical",
         title: "Worker crashed unexpectedly",
@@ -891,9 +952,10 @@ describe("tasks routes", () => {
     });
 
     expect(response.statusCode).toBe(201);
-    expect(emitDistressSignal).toHaveBeenCalledWith(
+    expect(emitDistressSignalWithRevision).toHaveBeenCalledWith(
       "task-1",
       expect.objectContaining({ code: "worker_crash", severity: "critical" }),
+      3,
       { workspaceId: undefined },
     );
     expect(response.json()).toMatchObject({
@@ -915,22 +977,23 @@ describe("tasks routes", () => {
   });
 
   it("resolves a distress signal through the task route service", async () => {
-    const resolveDistressSignal = vi.fn(() => ({ taskId: "task-1", distressSignals: [] }));
+    const resolveDistressSignalWithRevision = vi.fn(() => ({ taskId: "task-1", distressSignals: [] }));
 
-    app = buildApp({ resolveDistressSignal });
+    app = buildApp({ resolveDistressSignalWithRevision });
     await app.register(tasksRoutes);
 
     const response = await app.inject({
       method: "DELETE",
       url: "/api/v1/tasks/task-1/distress/signal-1",
-      payload: { resolvedBy: "spoofed-client" },
+      payload: { expectedRevision: 4, resolvedBy: "spoofed-client" },
     });
 
     expect(response.statusCode).toBe(200);
-    expect(resolveDistressSignal).toHaveBeenCalledWith(
+    expect(resolveDistressSignalWithRevision).toHaveBeenCalledWith(
       "task-1",
       "signal-1",
       { resolvedBy: "operator-test" },
+      4,
       {
         workspaceId: undefined,
       },
@@ -939,52 +1002,58 @@ describe("tasks routes", () => {
   });
 
   it("sets the retry budget through the task route service", async () => {
-    const setRetryBudget = vi.fn((_taskId: string, maxRetries: number) => ({
+    const setRetryBudgetWithRevision = vi.fn((_taskId: string, maxRetries: number) => ({
       taskId: "task-1",
       retryBudget: { maxRetries, retryCount: 0 },
     }));
 
-    app = buildApp({ setRetryBudget });
+    app = buildApp({ setRetryBudgetWithRevision });
     await app.register(tasksRoutes);
 
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/tasks/task-1/retry-budget",
-      payload: { maxRetries: 3 },
+      payload: { expectedRevision: 5, maxRetries: 3 },
     });
 
     expect(response.statusCode).toBe(200);
-    expect(setRetryBudget).toHaveBeenCalledWith("task-1", 3, { workspaceId: undefined });
+    expect(setRetryBudgetWithRevision).toHaveBeenCalledWith("task-1", 3, 5, { workspaceId: undefined });
     expect(response.json()).toMatchObject({ retryBudget: { maxRetries: 3 } });
   });
 
   it("verifies task artifacts through the task route service", async () => {
-    const verifyTaskArtifacts = vi.fn(() => Promise.resolve({ taskId: "task-1", artifactVerification: "ok" }));
+    const verifyTaskArtifactsWithRevision = vi.fn(() =>
+      Promise.resolve({ taskId: "task-1", artifactVerification: "ok" }),
+    );
 
-    app = buildApp({ verifyTaskArtifacts });
+    app = buildApp({ verifyTaskArtifactsWithRevision });
     await app.register(tasksRoutes);
 
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/tasks/task-1/verify-artifacts",
       payload: {
+        expectedRevision: 6,
         claims: [{ kind: "file", value: "dist/output.js", label: "build output" }],
       },
     });
 
     expect(response.statusCode).toBe(200);
-    expect(verifyTaskArtifacts).toHaveBeenCalledWith(
+    expect(verifyTaskArtifactsWithRevision).toHaveBeenCalledWith(
       "task-1",
       [expect.objectContaining({ kind: "file", value: "dist/output.js" })],
+      6,
       { workspaceId: undefined },
     );
   });
 
   it("passes workspace expectations to direct task routes and caps artifact batches", async () => {
     const getTask = vi.fn(() => ({ taskId: "task-1", workspaceId: "workspace-a" }));
-    const verifyTaskArtifacts = vi.fn(() => Promise.resolve({ taskId: "task-1", workspaceId: "workspace-a" }));
+    const verifyTaskArtifactsWithRevision = vi.fn(() =>
+      Promise.resolve({ taskId: "task-1", workspaceId: "workspace-a" }),
+    );
 
-    app = buildApp({ getTask, verifyTaskArtifacts });
+    app = buildApp({ getTask, verifyTaskArtifactsWithRevision });
     await app.register(tasksRoutes);
 
     const task = await app.inject({
@@ -995,6 +1064,7 @@ describe("tasks routes", () => {
       method: "POST",
       url: "/api/v1/tasks/task-1/verify-artifacts?workspaceId=workspace-a",
       payload: {
+        expectedRevision: 7,
         claims: [{ kind: "file", value: "dist/output.js" }],
       },
     });
@@ -1002,6 +1072,7 @@ describe("tasks routes", () => {
       method: "POST",
       url: "/api/v1/tasks/task-1/verify-artifacts?workspaceId=workspace-a",
       payload: {
+        expectedRevision: 7,
         claims: Array.from({ length: 26 }, (_value, index) => ({
           kind: "file",
           value: `dist/output-${index}.js`,
@@ -1013,12 +1084,13 @@ describe("tasks routes", () => {
     expect(verified.statusCode).toBe(200);
     expect(tooManyClaims.statusCode).toBe(400);
     expect(getTask).toHaveBeenCalledWith("task-1", { workspaceId: "workspace-a" });
-    expect(verifyTaskArtifacts).toHaveBeenCalledWith(
+    expect(verifyTaskArtifactsWithRevision).toHaveBeenCalledWith(
       "task-1",
       [expect.objectContaining({ kind: "file", value: "dist/output.js" })],
+      7,
       { workspaceId: "workspace-a" },
     );
-    expect(verifyTaskArtifacts).toHaveBeenCalledTimes(1);
+    expect(verifyTaskArtifactsWithRevision).toHaveBeenCalledTimes(1);
   });
 
   it("bulk updates tasks via reassign action", async () => {
@@ -1037,9 +1109,9 @@ describe("tasks routes", () => {
         action: "reassign",
         taskIds: ["task-1", "task-2"],
         assignedAgentId: "agent-2",
-        expectedUpdatedAtByTaskId: {
-          "task-1": "2026-06-06T16:00:00.000Z",
-          "task-2": "2026-06-06T16:00:01.000Z",
+        expectedRevisionsByTaskId: {
+          "task-1": 8,
+          "task-2": 11,
         },
       },
     });
@@ -1050,9 +1122,9 @@ describe("tasks routes", () => {
         action: "reassign",
         taskIds: ["task-1", "task-2"],
         assignedAgentId: "agent-2",
-        expectedUpdatedAtByTaskId: {
-          "task-1": "2026-06-06T16:00:00.000Z",
-          "task-2": "2026-06-06T16:00:01.000Z",
+        expectedRevisionsByTaskId: {
+          "task-1": 8,
+          "task-2": 11,
         },
       },
       { workspaceId: undefined },
@@ -1113,6 +1185,7 @@ function buildApp(
       createTask: vi.fn(),
       getTask: vi.fn(),
       hardDeleteTask: vi.fn(),
+      hardDeleteTaskWithRevision: vi.fn(),
       listTaskActivities: vi.fn(() => []),
       listTaskDeliverables: vi.fn(() => []),
       listTasks: vi.fn(() => []),
@@ -1123,10 +1196,17 @@ function buildApp(
       appendTaskDiagnostic: vi.fn(),
       registerTaskSubagent: vi.fn(),
       restoreTask: vi.fn(),
+      restoreTaskWithRevision: vi.fn(),
       softDeleteTask: vi.fn(),
+      softDeleteTaskWithRevision: vi.fn(),
       updateTask: vi.fn(),
+      updateTaskWithRevision: vi.fn(),
       updateTaskSubagent: vi.fn(),
       emitDistressSignal: vi.fn((_taskId: string, input: Record<string, unknown>) => ({
+        taskId: "task-1",
+        distressSignals: [{ signalId: "signal-1", ...input }],
+      })),
+      emitDistressSignalWithRevision: vi.fn((_taskId: string, input: Record<string, unknown>) => ({
         taskId: "task-1",
         distressSignals: [{ signalId: "signal-1", ...input }],
       })),
@@ -1134,11 +1214,20 @@ function buildApp(
         taskId: "task-1",
         distressSignals: [],
       })),
+      resolveDistressSignalWithRevision: vi.fn((_taskId: string, _signalId: string) => ({
+        taskId: "task-1",
+        distressSignals: [],
+      })),
       setRetryBudget: vi.fn((_taskId: string, maxRetries: number) => ({
         taskId: "task-1",
         retryBudget: { maxRetries, retryCount: 0 },
       })),
+      setRetryBudgetWithRevision: vi.fn((_taskId: string, maxRetries: number) => ({
+        taskId: "task-1",
+        retryBudget: { maxRetries, retryCount: 0 },
+      })),
       verifyTaskArtifacts: vi.fn((_taskId: string) => Promise.resolve({ taskId: "task-1" })),
+      verifyTaskArtifactsWithRevision: vi.fn((_taskId: string) => Promise.resolve({ taskId: "task-1" })),
       bulkUpdateTasks: vi.fn((input: { taskIds: string[] }) => input.taskIds.map((taskId) => ({ taskId }))),
       ...taskOverrides,
     },

@@ -4,7 +4,6 @@ import type {
   EmbeddingIndexInput,
   EmbeddingQueryInput,
   MemoryBatchMutationRequest,
-  MemoryBatchMutationResponse,
   MemoryChangeEvent,
   MemoryContextPack,
   MemoryDecisionInput,
@@ -18,7 +17,6 @@ import type {
   MemoryFeedbackStatus,
   MemoryFeedbackTargetKind,
   MemoryForgetRequest,
-  MemoryForgetResponse,
   MemoryItemRecord,
   MemoryLearningRecord,
   MemoryLifecyclePatch,
@@ -56,6 +54,60 @@ type LegacyMemoryForgetClientRequest = MemoryForgetRequest & {
   /** @deprecated Gateway HTTP routes derive actor authority from authenticated request context. */
   actorId?: string;
 };
+
+/**
+ * HX-402 P1: operator memory mutation verbs are approval-first. The gateway
+ * answers with a pending `memory.lifecycle` approval envelope (202); the
+ * mutation itself only executes through the recovered approval effect after
+ * the approval resolves.
+ */
+export interface MemoryLifecyclePendingApproval {
+  approvalId: string;
+  status: string;
+  kind: "memory.lifecycle";
+  action: "item_updated" | "items_forgotten" | "batch_mutated";
+  subjectKind: "memory_item" | "memory_item_batch";
+  subjectId?: string;
+  workspaceId: string;
+  requestSha256: string;
+  expectedStateSha256: string;
+  expiresAt?: string;
+  createdAt: string;
+  replayed: boolean;
+  itemIds: string[];
+}
+
+export interface MemoryMutationApprovalEnvelope {
+  pendingApproval: MemoryLifecyclePendingApproval;
+}
+
+/** Forget requests that match zero active items are pure no-ops: no approval, no mutation. */
+export interface MemoryForgetNoMutationOutcome {
+  pendingApproval: null;
+  noMutationRequired: true;
+  matchedCount: number;
+  alreadyForgottenCount: number;
+}
+
+export type MemoryForgetApprovalOutcome = MemoryMutationApprovalEnvelope | MemoryForgetNoMutationOutcome;
+
+export function isMemoryMutationApprovalEnvelope(value: unknown): value is MemoryMutationApprovalEnvelope {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const pendingApproval = (value as { pendingApproval?: unknown }).pendingApproval;
+  if (!pendingApproval || typeof pendingApproval !== "object" || Array.isArray(pendingApproval)) return false;
+  const candidate = pendingApproval as Partial<MemoryLifecyclePendingApproval>;
+  return (
+    typeof candidate.approvalId === "string" &&
+    candidate.approvalId.length > 0 &&
+    candidate.kind === "memory.lifecycle" &&
+    (candidate.action === "item_updated" ||
+      candidate.action === "items_forgotten" ||
+      candidate.action === "batch_mutated") &&
+    typeof candidate.workspaceId === "string" &&
+    typeof candidate.requestSha256 === "string" &&
+    Array.isArray(candidate.itemIds)
+  );
+}
 
 export async function knowledgeMemoryWrite(
   input: MemoryWriteInput,
@@ -265,22 +317,24 @@ export async function fetchMemoryItems(input?: {
 export async function patchMemoryItem(
   itemId: string,
   patch: MemoryLifecyclePatch & { actorId?: string },
-): Promise<MemoryItemRecord> {
-  return request<MemoryItemRecord>(`/api/v1/memory/items/${encodeURIComponent(itemId)}`, {
+): Promise<MemoryMutationApprovalEnvelope> {
+  return request<MemoryMutationApprovalEnvelope>(`/api/v1/memory/items/${encodeURIComponent(itemId)}`, {
     method: "PATCH",
     body: JSON.stringify(patch),
   });
 }
 
-export async function forgetMemoryItem(itemId: string, actorId?: string): Promise<MemoryItemRecord> {
-  return request<MemoryItemRecord>(`/api/v1/memory/items/${encodeURIComponent(itemId)}/forget`, {
+export async function forgetMemoryItem(itemId: string, actorId?: string): Promise<MemoryForgetApprovalOutcome> {
+  return request<MemoryForgetApprovalOutcome>(`/api/v1/memory/items/${encodeURIComponent(itemId)}/forget`, {
     method: "POST",
     body: JSON.stringify({ actorId }),
   });
 }
 
-export async function batchMutateMemoryItems(input: MemoryBatchMutationRequest): Promise<MemoryBatchMutationResponse> {
-  return request<MemoryBatchMutationResponse>("/api/v1/memory/items/batch-mutate", {
+export async function batchMutateMemoryItems(
+  input: MemoryBatchMutationRequest,
+): Promise<MemoryMutationApprovalEnvelope> {
+  return request<MemoryMutationApprovalEnvelope>("/api/v1/memory/items/batch-mutate", {
     method: "POST",
     body: JSON.stringify(input),
   });
@@ -372,9 +426,9 @@ export async function rejectMemoryMaintenanceRecommendation(
   );
 }
 
-export async function forgetMemory(input: LegacyMemoryForgetClientRequest): Promise<MemoryForgetResponse> {
+export async function forgetMemory(input: LegacyMemoryForgetClientRequest): Promise<MemoryForgetApprovalOutcome> {
   validateMemoryForgetRequest(input);
-  return request<MemoryForgetResponse>("/api/v1/memory/forget", {
+  return request<MemoryForgetApprovalOutcome>("/api/v1/memory/forget", {
     method: "POST",
     body: JSON.stringify(input),
   });

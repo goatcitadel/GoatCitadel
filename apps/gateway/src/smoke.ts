@@ -948,6 +948,7 @@ async function smokeOnboarding(app: Awaited<ReturnType<typeof buildApp>>): Promi
   const initialBody = JSON.parse(initial.body) as {
     completed: boolean;
     checklist: Array<{ id: string; status: string }>;
+    settings: { revision: number };
   };
   assert.equal(Array.isArray(initialBody.checklist), true);
 
@@ -955,6 +956,7 @@ async function smokeOnboarding(app: Awaited<ReturnType<typeof buildApp>>): Promi
     app,
     "/api/v1/onboarding/bootstrap",
     {
+      expectedRevision: initialBody.settings.revision,
       budgetMode: "balanced",
       defaultToolProfile: "minimal",
       networkAllowlist: ["127.0.0.1", "localhost"],
@@ -963,9 +965,7 @@ async function smokeOnboarding(app: Awaited<ReturnType<typeof buildApp>>): Promi
         activeModel: "gpt-5",
         upsertProvider: {
           providerId: "openai",
-          apiKey: "sk-smoke-value",
           apiKeyEnv: "OPENAI_API_KEY",
-          persistSecretToSecureStore: false,
         },
       },
       markComplete: true,

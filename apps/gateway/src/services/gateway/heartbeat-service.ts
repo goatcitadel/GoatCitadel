@@ -15,7 +15,8 @@ import {
  * output signals `{notify:true}`. The model may THINK every interval but can only
  * ACT by producing a governed notify message.
  *
- * Multi-gate rate limiting (every gate must pass before a turn fires):
+ * Advisory multi-gate prefilter (the database claim rechecks every authoritative
+ * gate under the session lock before a turn can fire):
  *  1. master autonomy switch on (the whole sweep is a no-op otherwise),
  *  2. per-session heartbeat enabled,
  *  3. session is heartbeat-eligible (human, non-eval, non-scratch — the gateway
@@ -26,8 +27,9 @@ import {
  *  7. per-session proactive cooldown elapsed,
  *  8. the heartbeat interval has elapsed since the last self-wake.
  *
- * Pure orchestration: all state access + the actual enqueue/delivery are injected
- * as callbacks; nothing here mutates its inputs.
+ * Pure orchestration: all state access + the claim/enqueue are injected as
+ * callbacks. A wall-clock pass never grants authority; database not-due/busy
+ * outcomes are expected race skips and are counted separately from failures.
  */
 
 const DEFAULT_SESSION_LIMIT = 300;
@@ -62,13 +64,24 @@ export interface HeartbeatTickDeps {
    * autonomous run under the `heartbeat-restricted` profile, seeded with the
    * heartbeat prompt and `deliverMode:"on_notify"`. Resolves truthy when enqueued.
    */
-  enqueueHeartbeatTurn(input: { sessionId: string; prompt: string }): Promise<boolean> | boolean;
+  enqueueHeartbeatTurn(input: {
+    sessionId: string;
+    prompt: string;
+  }): Promise<boolean | HeartbeatDatabaseAdmissionOutcome> | boolean | HeartbeatDatabaseAdmissionOutcome;
   /** Idle floor override (seconds); defaults to {@link DEFAULT_HEARTBEAT_IDLE_FLOOR_SECONDS}. */
   idleFloorSeconds?: number;
   /** Max sessions to scan per tick. */
   sessionLimit?: number;
   now?: () => Date;
 }
+
+export type HeartbeatDatabaseAdmissionOutcome =
+  | { disposition: "enqueued" }
+  | { disposition: "database_not_due"; reason: string }
+  | { disposition: "database_parked"; reason: "execution_disabled" }
+  | { disposition: "database_busy" }
+  | { disposition: "database_recovered"; outcome: "resumed" | "terminal" | "closed" }
+  | { disposition: "failed" };
 
 export interface HeartbeatTickResult {
   scanned: number;
@@ -80,6 +93,10 @@ export interface HeartbeatTickResult {
   skippedRunningTurn: number;
   skippedCooldown: number;
   skippedInterval: number;
+  skippedDatabaseNotDue: number;
+  skippedDatabaseParked: number;
+  skippedDatabaseBusy: number;
+  recoveredDatabaseOccurrence: number;
   failed: number;
 }
 
@@ -94,6 +111,10 @@ function emptyResult(): HeartbeatTickResult {
     skippedRunningTurn: 0,
     skippedCooldown: 0,
     skippedInterval: 0,
+    skippedDatabaseNotDue: 0,
+    skippedDatabaseParked: 0,
+    skippedDatabaseBusy: 0,
+    recoveredDatabaseOccurrence: 0,
     failed: 0,
   };
 }
@@ -144,12 +165,20 @@ export async function runHeartbeatTick(deps: HeartbeatTickDeps): Promise<Heartbe
       continue;
     }
     try {
-      const fired = await deps.enqueueHeartbeatTurn({
+      const admission = await deps.enqueueHeartbeatTurn({
         sessionId: session.sessionId,
         prompt: HEARTBEAT_SYSTEM_PROMPT,
       });
-      if (fired) {
+      if (admission === true || (typeof admission === "object" && admission.disposition === "enqueued")) {
         result.fired += 1;
+      } else if (typeof admission === "object" && admission.disposition === "database_not_due") {
+        result.skippedDatabaseNotDue += 1;
+      } else if (typeof admission === "object" && admission.disposition === "database_parked") {
+        result.skippedDatabaseParked += 1;
+      } else if (typeof admission === "object" && admission.disposition === "database_busy") {
+        result.skippedDatabaseBusy += 1;
+      } else if (typeof admission === "object" && admission.disposition === "database_recovered") {
+        result.recoveredDatabaseOccurrence += 1;
       } else {
         result.failed += 1;
       }
@@ -195,7 +224,8 @@ export const HEARTBEAT_SYSTEM_PROMPT =
   "This is a silent, periodic self-check — the user did not message you. " +
   "Review the recent conversation and any pending commitments, then decide whether " +
   "anything genuinely needs the user's attention right now. " +
-  "Respond with a JSON object: {notify: boolean, message?: string}. " +
-  'Set notify:true ONLY if you must reach out (include a brief "message"); otherwise respond ' +
-  "with {notify: false}. Default to {notify: false} and stay silent — do not message the user for " +
-  "routine or low-value reasons. You have read-only tools only; do not attempt to take actions.";
+  'Return exactly one of these two valid top-level JSON objects: {"notify":false} or ' +
+  '{"notify":true,"message":"..."}. Emit pure JSON only: no prose, code fence, or extra keys. ' +
+  "For notify true, message must be nonempty after ECMAScript trim and at most 4000 Unicode scalar values. " +
+  'Set "notify" to true only if you must reach out; otherwise return {"notify":false}. ' +
+  "Default to silence for routine or low-value reasons. You have read-only tools only; do not attempt actions.";

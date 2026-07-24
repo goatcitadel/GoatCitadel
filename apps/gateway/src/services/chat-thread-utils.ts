@@ -2,6 +2,7 @@ import type {
   ChatGeneratedArtifactReference,
   ChatMessageRecord,
   ChatThreadResponse,
+  ChatThreadSystemNoticeRecord,
   ChatThreadTurnRecord,
   ChatTurnTraceRecord,
 } from "@goatcitadel/contracts";
@@ -19,11 +20,24 @@ interface ThreadNode extends ThreadTurnInput {
   startedAtMs: number;
 }
 
+export const CHAT_THREAD_SYSTEM_NOTICE_LIMIT = 60;
+
 export function buildChatThreadResponse(input: {
   sessionId: string;
   activeLeafTurnId?: string;
   turns: ThreadTurnInput[];
+  systemNotices?: ChatThreadSystemNoticeRecord[];
+  systemNoticeHiddenCount?: number;
 }): ChatThreadResponse {
+  const orderedSystemNotices = [...(input.systemNotices ?? [])].sort((left, right) => {
+    const timestampOrder = toTimestampMs(left.message.timestamp) - toTimestampMs(right.message.timestamp);
+    return timestampOrder || left.noticeId.localeCompare(right.noticeId);
+  });
+  const locallyHiddenSystemNoticeCount = Math.max(0, orderedSystemNotices.length - CHAT_THREAD_SYSTEM_NOTICE_LIMIT);
+  const systemNotices = locallyHiddenSystemNoticeCount
+    ? orderedSystemNotices.slice(locallyHiddenSystemNoticeCount)
+    : orderedSystemNotices;
+  const systemNoticeHiddenCount = Math.max(0, input.systemNoticeHiddenCount ?? 0) + locallyHiddenSystemNoticeCount;
   const nodes = input.turns
     .filter((item): item is ThreadNode => Boolean(item.userMessage))
     .map((item) => ({
@@ -44,6 +58,8 @@ export function buildChatThreadResponse(input: {
       activeLeafTurnId: undefined,
       selectedTurnId: undefined,
       turns: [],
+      systemNotices,
+      systemNoticeHiddenCount,
     };
   }
 
@@ -59,6 +75,8 @@ export function buildChatThreadResponse(input: {
       activeLeafTurnId: undefined,
       selectedTurnId: undefined,
       turns: [],
+      systemNotices,
+      systemNoticeHiddenCount,
     };
   }
 
@@ -121,7 +139,14 @@ export function buildChatThreadResponse(input: {
     activeLeafTurnId: validActiveLeafTurnId,
     selectedTurnId: validActiveLeafTurnId,
     turns,
+    systemNotices,
+    systemNoticeHiddenCount,
   };
+}
+
+function toTimestampMs(value: string): number {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 export function buildSelectedPathTurnIds(

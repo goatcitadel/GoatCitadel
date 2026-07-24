@@ -1,6 +1,7 @@
 import type { ChatTurnPreflightHost, ChatTurnResumeHost } from "./chat-turn-entry-service.js";
 import type {
   ChatTurnActiveExecutionControl,
+  ChatTurnAdmissionControl,
   ChatTurnDurableRunOwner,
   ChatTurnIntegrationDispatch,
   ChatTurnLeaseControl,
@@ -17,6 +18,7 @@ export function createChatTurnRuntimeHost(source: ChatTurnRuntimeHost): ChatTurn
   const runtimeHost = mergeCollaborators(
     composeRuntimeBase(source),
     composeSessionPreparation(source),
+    composeTurnAdmission(source),
     composeActiveExecution(source),
     composeStreamLifecycle(source),
     composeDurableOwnership(source),
@@ -29,6 +31,14 @@ export function createChatTurnRuntimeHost(source: ChatTurnRuntimeHost): ChatTurn
     composeEntryExtras(source),
   );
   return assertCompleteChatTurnRuntimeHost(runtimeHost);
+}
+
+function composeTurnAdmission(source: ChatTurnRuntimeHost): ChatTurnAdmissionControl {
+  return {
+    get sessionControlRuntimeOwner() {
+      return source.sessionControlRuntimeOwner;
+    },
+  };
 }
 
 function composeRuntimeBase(
@@ -58,6 +68,7 @@ function composeSessionPreparation(
 ): Pick<
   ChatTurnRuntimeHost,
   | "buildDefaultChatPersonalityOverlay"
+  | "assertTurnAdmissionWrite"
   | "buildLlmMessagesFromBranchPath"
   | "composeFrozenOperatorProfileDigest"
   | "ensureChatSessionModelDefaults"
@@ -72,6 +83,7 @@ function composeSessionPreparation(
   | "prepareAgentChatTurn"
   | "recordRuntimeDecision"
   | "resolveBasePromptCapabilityCatalog"
+  | "resolveChatRoutedContextSources"
   | "resolveRuntimeGuidance"
   | "resolveThreadKnowledgeContext"
   | "routeFromSession"
@@ -81,6 +93,9 @@ function composeSessionPreparation(
       return source.llmService;
     },
     buildDefaultChatPersonalityOverlay: () => source.buildDefaultChatPersonalityOverlay(),
+    assertTurnAdmissionWrite: source.assertTurnAdmissionWrite
+      ? (admission) => source.assertTurnAdmissionWrite?.(admission)
+      : undefined,
     buildLlmMessagesFromBranchPath: (sessionId, pathTurnIds, currentUserMessage, options, state) =>
       source.buildLlmMessagesFromBranchPath(sessionId, pathTurnIds, currentUserMessage, options, state),
     composeFrozenOperatorProfileDigest: source.composeFrozenOperatorProfileDigest
@@ -99,6 +114,7 @@ function composeSessionPreparation(
     resolveBasePromptCapabilityCatalog: source.resolveBasePromptCapabilityCatalog
       ? () => source.resolveBasePromptCapabilityCatalog?.() ?? { toolNames: [] }
       : undefined,
+    resolveChatRoutedContextSources: (input) => source.resolveChatRoutedContextSources(input),
     resolveRuntimeGuidance: (workspaceId) => source.resolveRuntimeGuidance(workspaceId),
     resolveThreadKnowledgeContext: (sessionId, query) => source.resolveThreadKnowledgeContext(sessionId, query),
     routeFromSession: (session) => source.routeFromSession(session),
@@ -204,6 +220,7 @@ function composeRoutingAndPlanning(
   | "collectCapabilityUpgradeSuggestions"
   | "collectSpecialistCandidateSuggestions"
   | "createChatCompletion"
+  | "executeChatModelCouncil"
   | "listLlmModels"
   | "recordDevDiagnostic"
   | "resolveFallbackTargets"
@@ -214,7 +231,13 @@ function composeRoutingAndPlanning(
     buildChatOrchestrationSummary: (input) => source.buildChatOrchestrationSummary(input),
     collectCapabilityUpgradeSuggestions: (input) => source.collectCapabilityUpgradeSuggestions(input),
     collectSpecialistCandidateSuggestions: (input) => source.collectSpecialistCandidateSuggestions(input),
-    createChatCompletion: (request) => source.createChatCompletion(request),
+    createChatCompletion: (request, attribution) => source.createChatCompletion(request, attribution),
+    executeChatModelCouncil: source.executeChatModelCouncil
+      ? (prepared, signal) =>
+          source.executeChatModelCouncil?.(prepared, signal) as ReturnType<
+            NonNullable<ChatTurnRuntimeHost["executeChatModelCouncil"]>
+          >
+      : undefined,
     listLlmModels: source.listLlmModels
       ? (providerId) => source.listLlmModels?.(providerId) ?? Promise.resolve([])
       : undefined,
@@ -245,6 +268,7 @@ function composeEntryExtras(
   | "readChatSessionMode"
   | "persistChatSessionMode"
   | "recordSurfaceRouteOverrideSignal"
+  | "recoverDecisionCommittedHeartbeat"
   | "subagentFanout"
 > {
   return {
@@ -264,6 +288,7 @@ function composeEntryExtras(
     readChatSessionMode: source.readChatSessionMode,
     persistChatSessionMode: source.persistChatSessionMode,
     recordSurfaceRouteOverrideSignal: source.recordSurfaceRouteOverrideSignal,
+    recoverDecisionCommittedHeartbeat: (identity) => source.recoverDecisionCommittedHeartbeat(identity),
     // R3-8: the turn services register turn-scoped agent.fanout executors on
     // this registry; dropping it here silently kills the tool in production
     // (the member is optional, so the compiler cannot catch the omission).

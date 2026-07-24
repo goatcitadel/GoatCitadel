@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { AUTONOMY_AUDIT_KINDS } from "@goatcitadel/contracts";
+import { sendRouteError } from "./_error-handler.js";
 import { withRouteAccess } from "./route-access.js";
 
 /**
@@ -30,6 +31,7 @@ const revertSchema = z.object({
 
 const killSwitchSchema = z.object({
   disabled: z.boolean(),
+  expectedRevision: z.number().int().positive(),
 });
 
 export const autonomyControlRoutes: FastifyPluginAsync = async (fastify) => {
@@ -46,7 +48,11 @@ export const autonomyControlRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(autonomyControl.getStatus(parsed.data.recentLimit));
+    try {
+      return reply.send(autonomyControl.getStatus(parsed.data.recentLimit));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
   });
 
   fastify.post("/api/v1/admin/autonomy/revert", operatorMutationRoute, async (request, reply) => {
@@ -75,10 +81,10 @@ export const autonomyControlRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const status = autonomyControl.setKillSwitch(parsed.data.disabled);
+      const status = await autonomyControl.setKillSwitch(parsed.data.disabled, parsed.data.expectedRevision);
       return reply.send(status);
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 };

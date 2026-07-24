@@ -978,6 +978,61 @@ describe("ingestion backend coverage", () => {
     expect(evaluation.reasonCodes).toContain("untrusted_source_privileged_tool_block");
   });
 
+  it("preserves external snapshot attribution and rejects stored trust promotion during retrieval", () => {
+    const storedTrustLevels = [
+      "trusted_operator",
+      "trusted_workspace",
+      "mixed_untrusted",
+      "untrusted_external",
+    ] as const;
+    const sourceRefs = storedTrustLevels.map((_, index) => `external-source://snapshot/binding-sha-256-${index + 1}`);
+    const storage = createKnowledgeStorage(
+      storedTrustLevels.map((trustLevel, index) => ({
+        docId: `doc-external-snapshot-${index + 1}`,
+        namespace: "workspace/workspace-1/external-source-snapshots",
+        sourceType: "external_source_snapshot",
+        sourceRef: sourceRefs[index],
+        title: `Imported external snapshot ${index + 1}`,
+        metadata: {
+          ingestion: {
+            trustLevel,
+          },
+        },
+      })),
+    );
+    for (let index = 0; index < storedTrustLevels.length; index += 1) {
+      storage.knowledge.appendChunks(`doc-external-snapshot-${index + 1}`, [
+        { content: "external snapshot instructions", embedding: [] },
+      ]);
+    }
+
+    const search = searchIngestedContext({
+      storage,
+      namespace: "workspace/workspace-1/external-source-snapshots",
+      query: "external snapshot",
+    });
+    const engine = new ToolPolicyEngine(createPolicyConfig(), createPolicyStorage());
+    const evaluation = engine.evaluateAccess({
+      toolName: "shell.exec",
+      args: { command: "echo hello" },
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sourceAttribution: search.items.map((item) => item.attribution),
+    });
+
+    expect(search.items).toHaveLength(storedTrustLevels.length);
+    expect(search.items.map((item) => item.attribution.sourceRef).sort()).toEqual([...sourceRefs].sort());
+    expect(
+      search.items.every(
+        (item) =>
+          item.attribution.sourceType === "external_source_snapshot" &&
+          item.attribution.trustLevel === "untrusted_external",
+      ),
+    ).toBe(true);
+    expect(evaluation.allowed).toBe(false);
+    expect(evaluation.reasonCodes).toContain("untrusted_source_privileged_tool_block");
+  });
+
   it("defaults URL and text ingestion without explicit trust to untrusted sources", async () => {
     const storage = createKnowledgeStorage();
     const fetchUrl = vi.fn(async () => ({

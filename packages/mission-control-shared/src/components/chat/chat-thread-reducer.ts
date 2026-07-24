@@ -75,6 +75,7 @@ export function updateThreadFromStreamChunk(
         },
       };
       return {
+        ...current,
         sessionId,
         activeLeafTurnId: chunk.turnId,
         selectedTurnId: chunk.turnId,
@@ -152,6 +153,8 @@ export function updateThreadFromStreamChunk(
       activeLeafTurnId: chunk.turnId,
       selectedTurnId: chunk.turnId,
       turns: [...baseTurns, optimisticTurn],
+      systemNotices: current?.systemNotices ?? [],
+      systemNoticeHiddenCount: current?.systemNoticeHiddenCount ?? 0,
     };
   }
 

@@ -31,10 +31,8 @@ export function createCronJob(
     actionConfig?: unknown;
     workdir?: string;
     contextFrom?: string;
-    lastRunOutput?: string;
-    lastRunId?: string;
   },
-): CronJobRecord {
+): Promise<CronJobRecord> {
   return host.cronAutomationService.createCronJob(input);
 }
 
@@ -51,25 +49,33 @@ export function updateCronJob(
     actionConfig?: unknown;
     workdir?: string | null;
     contextFrom?: string | null;
-    lastRunOutput?: string | null;
-    lastRunId?: string | null;
   },
-): CronJobRecord {
-  return host.cronAutomationService.updateCronJob(jobId, input);
+  expectedRevision: number,
+): Promise<CronJobRecord> {
+  return host.cronAutomationService.updateCronJob(jobId, input, expectedRevision);
 }
 
-export function setCronJobEnabled(host: CronSchedulerHost, jobId: string, enabled: boolean): CronJobRecord {
-  return host.cronAutomationService.setCronJobEnabled(jobId, enabled);
+export function setCronJobEnabled(
+  host: CronSchedulerHost,
+  jobId: string,
+  enabled: boolean,
+  expectedRevision: number,
+): Promise<CronJobRecord> {
+  return host.cronAutomationService.setCronJobEnabled(jobId, enabled, expectedRevision);
 }
 
-export function deleteCronJob(host: CronSchedulerHost, jobId: string): { deleted: boolean; jobId: string } {
-  return host.cronAutomationService.deleteCronJob(jobId);
+export function deleteCronJob(
+  host: CronSchedulerHost,
+  jobId: string,
+  expectedRevision: number,
+): Promise<{ deleted: boolean; jobId: string }> {
+  return host.cronAutomationService.deleteCronJob(jobId, expectedRevision);
 }
 
 export async function runCronJobNow(
   host: CronSchedulerHost,
   jobId: string,
-): Promise<{ jobId: string; runId: string; status: "ok" }> {
+): Promise<{ jobId: string; runId: string; status: "ok" | "pending" }> {
   return host.cronAutomationService.runCronJobNow(jobId);
 }
 

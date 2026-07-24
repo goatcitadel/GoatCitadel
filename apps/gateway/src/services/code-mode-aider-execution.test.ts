@@ -14,6 +14,128 @@ afterEach(async () => {
 });
 
 describe("code-mode-aider-execution", () => {
+  it("runs the durable dispatch hook immediately before spawning Aider", async () => {
+    const runTempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goat-aider-boundary-order-"));
+    tempRoots.push(runTempRoot);
+    const order: string[] = [];
+    const beforeDispatch = vi.fn(async () => {
+      await expect(fs.readFile(path.join(runTempRoot, "aider-live", "aider", "request.md"), "utf8")).resolves.toBe(
+        "Prove dispatch ordering.",
+      );
+      order.push("beforeDispatch");
+    });
+    const onDispatchFailed = vi.fn(async () => {
+      order.push("onDispatchFailed");
+    });
+    const spawnCommand = vi.fn(() => {
+      order.push("spawn");
+      return fakeChild({ stdout: "done\n", exitCode: 0 });
+    });
+
+    await executeCodeModeAiderAdapter({
+      runId: "code-run-aider-boundary-order",
+      runTempRoot,
+      language: "typescript",
+      source: "return { ok: true };",
+      requestMarkdown: "Prove dispatch ordering.",
+      aiderAdapter: { enabled: true, image: "ghcr.io/goatcitadel/aider-adapter:preview" },
+      dockerBackend: { enabled: true, image: "ghcr.io/goatcitadel/code-mode-runner:preview" },
+      persister: fakePersister([]),
+      beforeDispatch,
+      onDispatchFailed,
+      spawnCommand: spawnCommand as never,
+    });
+
+    expect(order).toEqual(["beforeDispatch", "spawn"]);
+    expect(beforeDispatch).toHaveBeenCalledOnce();
+    expect(onDispatchFailed).not.toHaveBeenCalled();
+  });
+
+  it("resets the tentative Aider boundary when spawn throws synchronously", async () => {
+    const runTempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goat-aider-sync-spawn-failure-"));
+    tempRoots.push(runTempRoot);
+    const order: string[] = [];
+    const beforeDispatch = vi.fn(async () => {
+      order.push("beforeDispatch");
+    });
+    const onDispatchFailed = vi.fn(async () => {
+      order.push("onDispatchFailed");
+    });
+    const spawnCommand = vi.fn(() => {
+      order.push("spawn");
+      throw new Error("synchronous spawn refusal");
+    });
+
+    await expect(
+      executeCodeModeAiderAdapter({
+        runId: "code-run-aider-sync-spawn-failure",
+        runTempRoot,
+        language: "typescript",
+        source: "return { ok: true };",
+        requestMarkdown: "Do not dispatch.",
+        aiderAdapter: { enabled: true, image: "ghcr.io/goatcitadel/aider-adapter:preview" },
+        dockerBackend: { enabled: true, image: "ghcr.io/goatcitadel/code-mode-runner:preview" },
+        persister: fakePersister([]),
+        beforeDispatch,
+        onDispatchFailed,
+        spawnCommand: spawnCommand as never,
+      }),
+    ).rejects.toThrow("synchronous spawn refusal");
+    expect(order).toEqual(["beforeDispatch", "spawn", "onDispatchFailed"]);
+  });
+
+  it("never spawns Aider when pre-dispatch admission aborts or rejects", async () => {
+    const abortedRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goat-aider-pre-aborted-"));
+    const rejectedRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goat-aider-pre-hook-rejected-"));
+    tempRoots.push(abortedRoot, rejectedRoot);
+    const controller = new AbortController();
+    controller.abort(new Error("lease moved before adapter dispatch"));
+    const abortedSpawn = vi.fn();
+    const abortedHook = vi.fn();
+
+    await expect(
+      executeCodeModeAiderAdapter({
+        runId: "code-run-aider-pre-aborted",
+        runTempRoot: abortedRoot,
+        language: "javascript",
+        source: "return { ok: true };",
+        requestMarkdown: "Do not dispatch.",
+        aiderAdapter: { enabled: true, image: "ghcr.io/goatcitadel/aider-adapter:preview" },
+        dockerBackend: { enabled: true, image: "ghcr.io/goatcitadel/code-mode-runner:preview" },
+        persister: fakePersister([]),
+        signal: controller.signal,
+        beforeDispatch: abortedHook,
+        spawnCommand: abortedSpawn as never,
+      }),
+    ).rejects.toThrow("aborted before dispatch");
+    expect(abortedHook).not.toHaveBeenCalled();
+    expect(abortedSpawn).not.toHaveBeenCalled();
+
+    const rejectedSpawn = vi.fn();
+    const onDispatchFailed = vi.fn(async () => undefined);
+    const rejectedHook = vi.fn(async () => {
+      throw new Error("durable claim moved before dispatch");
+    });
+    await expect(
+      executeCodeModeAiderAdapter({
+        runId: "code-run-aider-pre-hook-rejected",
+        runTempRoot: rejectedRoot,
+        language: "javascript",
+        source: "return { ok: true };",
+        requestMarkdown: "Do not dispatch.",
+        aiderAdapter: { enabled: true, image: "ghcr.io/goatcitadel/aider-adapter:preview" },
+        dockerBackend: { enabled: true, image: "ghcr.io/goatcitadel/code-mode-runner:preview" },
+        persister: fakePersister([]),
+        beforeDispatch: rejectedHook,
+        onDispatchFailed,
+        spawnCommand: rejectedSpawn as never,
+      }),
+    ).rejects.toThrow("durable claim moved before dispatch");
+    expect(rejectedHook).toHaveBeenCalledOnce();
+    expect(onDispatchFailed).toHaveBeenCalledOnce();
+    expect(rejectedSpawn).not.toHaveBeenCalled();
+  });
+
   it("runs Aider only in run-temp space and persists an audit-only result bundle", async () => {
     const runTempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goat-aider-exec-"));
     tempRoots.push(runTempRoot);

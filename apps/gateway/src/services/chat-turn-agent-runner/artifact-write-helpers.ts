@@ -4,8 +4,10 @@ import type {
   ChatUserInputPromptRecord,
   ImageGenerationRequest,
   ImageGenerationResponse,
+  ModelUsageAttributionContext,
 } from "@goatcitadel/contracts";
 import { extractPrimaryUserTaskContent } from "../chat-agent-prompt-lab-contract.js";
+import { isAuthoritativeModelUsageAccountingError } from "../llm-completion-helpers.js";
 
 const SAFE_WRITE_FALLBACK_DIR = "./workspace/goatcitadel_out";
 const WRITE_DESTINATION_PROMPT_TITLE = "Choose artifact destination";
@@ -15,7 +17,10 @@ interface ArtifactIntentInput {
   sessionId: string;
 }
 
-type GenerateImage = (request: ImageGenerationRequest) => Promise<ImageGenerationResponse>;
+type GenerateImage = (
+  request: ImageGenerationRequest,
+  attribution?: ModelUsageAttributionContext,
+) => Promise<ImageGenerationResponse>;
 
 export function detectPresentationArtifactIntent(content: string): boolean {
   const normalized = content.toLowerCase();
@@ -70,6 +75,7 @@ export async function attachGeneratedPresentationVisual(
   args: Record<string, unknown>,
   input: Pick<ArtifactIntentInput, "content">,
   generateImage?: GenerateImage,
+  attribution?: ModelUsageAttributionContext,
 ): Promise<{ args: Record<string, unknown>; providerCalls: number }> {
   if (!generateImage) {
     return { args, providerCalls: 0 };
@@ -78,15 +84,18 @@ export async function attachGeneratedPresentationVisual(
   try {
     const prompt = buildPresentationVisualPrompt(input.content, String(args.title ?? "Presentation"), args.slides);
     providerCalls += 1;
-    const response = await generateImage({
-      providerId: "openai",
-      model: "gpt-image-2",
-      prompt,
-      n: 1,
-      outputFormat: "png",
-      responseFormat: "b64_json",
-      timeoutMs: 45000,
-    });
+    const response = await generateImage(
+      {
+        providerId: "openai",
+        model: "gpt-image-2",
+        prompt,
+        n: 1,
+        outputFormat: "png",
+        responseFormat: "b64_json",
+        timeoutMs: 45000,
+      },
+      attribution,
+    );
     const image = response.data.find((item) => item.b64Json);
     if (!image?.b64Json) {
       return { args, providerCalls };
@@ -105,7 +114,11 @@ export async function attachGeneratedPresentationVisual(
       },
       providerCalls,
     };
-  } catch {
+  } catch (error) {
+    const normalized = error instanceof Error ? error : new Error(String(error));
+    if (isAuthoritativeModelUsageAccountingError(normalized)) {
+      throw normalized;
+    }
     return { args, providerCalls };
   }
 }

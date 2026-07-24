@@ -6,6 +6,7 @@ import { assertWritePathInJail } from "@goatcitadel/policy-engine";
 import type { SkillLifecycleRecord } from "@goatcitadel/contracts";
 import { normalizeSkillId } from "./skill-import-service.js";
 import { validateSkillContent, type SkillContentValidationResult } from "./skill-content-validation.js";
+import { assertSkillSourceManifestSize, readBoundedSkillSourceManifestTextSync } from "./skill-content-integrity.js";
 
 /**
  * S2 — Skill self-authoring (full autonomy + rollback).
@@ -426,12 +427,14 @@ export class SkillMutationService {
       createdAt: prepared.preparedAt,
       updatedAt: prepared.preparedAt,
     };
+    const sourceJson = `${JSON.stringify(provenance, null, 2)}\n`;
+    assertSkillSourceManifestSize(sourceJson);
     return {
       plan: prepared,
       skillDir,
       skillFilePath,
       sourceJsonPath,
-      sourceJson: `${JSON.stringify(provenance, null, 2)}\n`,
+      sourceJson,
       lifecycle,
       validation,
       snapshot: {
@@ -543,12 +546,14 @@ export class SkillMutationService {
       createdAt: snapshot.priorLifecycle?.createdAt ?? authoredAt,
       updatedAt: authoredAt,
     };
+    const sourceJson = `${JSON.stringify(provenance, null, 2)}\n`;
+    assertSkillSourceManifestSize(sourceJson);
     return {
       skillId,
       skillDir,
       skillFilePath,
       sourceJsonPath,
-      sourceJson: `${JSON.stringify(provenance, null, 2)}\n`,
+      sourceJson,
       lifecycle,
       result: {
         skillId,
@@ -683,7 +688,9 @@ export class SkillMutationService {
       skillFilePath,
       existed,
       priorSkillMarkdown: existed ? fsSync.readFileSync(skillFilePath, "utf8") : undefined,
-      priorSourceJson: fsSync.existsSync(sourceJsonPath) ? fsSync.readFileSync(sourceJsonPath, "utf8") : undefined,
+      priorSourceJson: fsSync.existsSync(sourceJsonPath)
+        ? readBoundedSkillSourceManifestTextSync(sourceJsonPath)
+        : undefined,
       priorLifecycle: this.skillLifecycle.find(skillId),
       capturedAt: this.now().toISOString(),
     };
@@ -783,7 +790,10 @@ function createOrVerifyExactFileSync(filePath: string, expected: string): boolea
 function assertExactPreparedArtifact(filePath: string, expected: string, planId: string): void {
   let actual: string;
   try {
-    actual = fsSync.readFileSync(filePath, "utf8");
+    actual =
+      path.basename(filePath) === "source.json"
+        ? readBoundedSkillSourceManifestTextSync(filePath)
+        : fsSync.readFileSync(filePath, "utf8");
   } catch (error) {
     throw new Error(`Durable skill plan ${planId} is missing required artifact ${path.basename(filePath)}.`, {
       cause: error,

@@ -1,4 +1,5 @@
 import type { CronJobRecord } from "@goatcitadel/contracts";
+import type { CronJobRuntimeTelemetryPatch } from "@goatcitadel/storage";
 
 export const EXPERIMENTAL_NO_AGENT_CRON_ENV = "GOATCITADEL_EXPERIMENTAL_NO_AGENT_CRON";
 
@@ -99,8 +100,11 @@ export async function runNoAgentCronJob(input: {
   normalizedJobId: string;
   runId: string;
   runHandler: NoAgentRunHandler;
-  upsertCronJob: (job: CronJobRecord, updatedAt: string) => CronJobRecord;
-  persistCronJobsConfig: () => void;
+  mergeCronJobRuntimeTelemetry: (
+    jobId: string,
+    patch: CronJobRuntimeTelemetryPatch,
+    updatedAt: string,
+  ) => CronJobRecord;
   publishRealtime: (eventType: string, source: string, payload?: Record<string, unknown>) => void;
   computeNextCronRunAt: (schedule: string, from: Date, endAt?: string) => string | undefined;
 }): Promise<Record<string, unknown>> {
@@ -118,22 +122,21 @@ export async function runNoAgentCronJob(input: {
   const finishedAt = new Date().toISOString();
   const stdoutTrimmed = runResult.stdout.replace(/\r?\n$/, "");
   const hasOutput = stdoutTrimmed.length > 0;
-  const saved = input.upsertCronJob(
+  const saved = input.mergeCronJobRuntimeTelemetry(
+    input.job.jobId,
     {
-      ...input.job,
       lastRunAt: finishedAt,
-      lastRunOutput: hasOutput ? stdoutTrimmed : undefined,
+      lastRunOutput: hasOutput ? stdoutTrimmed : null,
       lastRunId: input.runId,
       lastRunStatus: "ok",
-      lastFailureAt: undefined,
-      lastFailure: undefined,
+      lastFailureAt: null,
+      lastFailure: null,
       failureCount: 0,
-      backoffUntil: undefined,
-      nextRunAt: input.computeNextCronRunAt(input.job.schedule, new Date(finishedAt), input.job.endAt),
+      backoffUntil: null,
+      nextRunAt: input.computeNextCronRunAt(input.job.schedule, new Date(finishedAt), input.job.endAt) ?? null,
     },
     finishedAt,
   );
-  input.persistCronJobsConfig();
   if (hasOutput) {
     input.publishRealtime("cron_job_run", "cron", {
       type: "cron_no_agent_output",

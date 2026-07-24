@@ -8,6 +8,7 @@ export type TasksRoutePort = Pick<
   | "getTask"
   | "getAgenticRunTree"
   | "hardDeleteTask"
+  | "hardDeleteTaskWithRevision"
   | "invokeAgenticControl"
   | "appendTaskDiagnostic"
   | "listTaskActivities"
@@ -17,14 +18,21 @@ export type TasksRoutePort = Pick<
   | "listTaskSubagents"
   | "registerTaskSubagent"
   | "restoreTask"
+  | "restoreTaskWithRevision"
   | "softDeleteTask"
+  | "softDeleteTaskWithRevision"
   | "updateTask"
+  | "updateTaskWithRevision"
   | "updateTaskSubagent"
   | "emitDistressSignal"
+  | "emitDistressSignalWithRevision"
   | "resolveDistressSignal"
+  | "resolveDistressSignalWithRevision"
   | "setRetryBudget"
+  | "setRetryBudgetWithRevision"
   | "recordRetryAttempt"
   | "verifyTaskArtifacts"
+  | "verifyTaskArtifactsWithRevision"
   | "autoBlockOnIncompleteExit"
   | "bulkUpdateTasks"
 >;
@@ -91,6 +99,17 @@ export class TasksRouteService {
     return this.tasks.updateTask(taskId, input, options);
   }
 
+  public updateTaskWithRevision(
+    taskId: string,
+    input: Parameters<TasksRoutePort["updateTaskWithRevision"]>[1],
+    expectedRevision: number,
+    options?: TaskWorkspaceAccessOptions,
+  ) {
+    return options === undefined
+      ? this.tasks.updateTaskWithRevision(taskId, input, expectedRevision)
+      : this.tasks.updateTaskWithRevision(taskId, input, expectedRevision, options);
+  }
+
   public softDeleteTask(
     taskId: string,
     deletedBy?: string,
@@ -103,6 +122,18 @@ export class TasksRouteService {
     return this.tasks.softDeleteTask(taskId, deletedBy, deleteReason, options);
   }
 
+  public softDeleteTaskWithRevision(
+    taskId: string,
+    expectedRevision: number,
+    deletedBy?: string,
+    deleteReason?: string,
+    options?: TaskWorkspaceAccessOptions,
+  ) {
+    return options === undefined
+      ? this.tasks.softDeleteTaskWithRevision(taskId, expectedRevision, deletedBy, deleteReason)
+      : this.tasks.softDeleteTaskWithRevision(taskId, expectedRevision, deletedBy, deleteReason, options);
+  }
+
   public hardDeleteTask(taskId: string, options?: TaskWorkspaceAccessOptions) {
     if (options === undefined) {
       return this.tasks.hardDeleteTask(taskId);
@@ -110,11 +141,23 @@ export class TasksRouteService {
     return this.tasks.hardDeleteTask(taskId, options);
   }
 
+  public hardDeleteTaskWithRevision(taskId: string, expectedRevision: number, options?: TaskWorkspaceAccessOptions) {
+    return options === undefined
+      ? this.tasks.hardDeleteTaskWithRevision(taskId, expectedRevision)
+      : this.tasks.hardDeleteTaskWithRevision(taskId, expectedRevision, options);
+  }
+
   public restoreTask(taskId: string, options?: TaskWorkspaceAccessOptions) {
     if (options === undefined) {
       return this.tasks.restoreTask(taskId);
     }
     return this.tasks.restoreTask(taskId, options);
+  }
+
+  public restoreTaskWithRevision(taskId: string, expectedRevision: number, options?: TaskWorkspaceAccessOptions) {
+    return options === undefined
+      ? this.tasks.restoreTaskWithRevision(taskId, expectedRevision)
+      : this.tasks.restoreTaskWithRevision(taskId, expectedRevision, options);
   }
 
   public listTaskActivities(taskId: string, limit?: number, options?: TaskWorkspaceAccessOptions) {
@@ -195,6 +238,17 @@ export class TasksRouteService {
     return this.tasks.emitDistressSignal(taskId, input, options);
   }
 
+  public emitDistressSignalWithRevision(
+    taskId: string,
+    input: Parameters<TasksRoutePort["emitDistressSignalWithRevision"]>[1],
+    expectedRevision: number,
+    options?: TaskWorkspaceAccessOptions,
+  ) {
+    return options === undefined
+      ? this.tasks.emitDistressSignalWithRevision(taskId, input, expectedRevision)
+      : this.tasks.emitDistressSignalWithRevision(taskId, input, expectedRevision, options);
+  }
+
   public resolveDistressSignal(
     taskId: string,
     signalId: string,
@@ -209,11 +263,34 @@ export class TasksRouteService {
     return this.tasks.resolveDistressSignal(taskId, signalId, input, options);
   }
 
+  public resolveDistressSignalWithRevision(
+    taskId: string,
+    signalId: string,
+    input: Parameters<TasksRoutePort["resolveDistressSignalWithRevision"]>[2],
+    expectedRevision: number,
+    options?: TaskWorkspaceAccessOptions,
+  ) {
+    return options === undefined
+      ? this.tasks.resolveDistressSignalWithRevision(taskId, signalId, input, expectedRevision)
+      : this.tasks.resolveDistressSignalWithRevision(taskId, signalId, input, expectedRevision, options);
+  }
+
   public setRetryBudget(taskId: string, maxRetries: number, options?: TaskWorkspaceAccessOptions) {
     if (options === undefined) {
       return this.tasks.setRetryBudget(taskId, maxRetries);
     }
     return this.tasks.setRetryBudget(taskId, maxRetries, options);
+  }
+
+  public setRetryBudgetWithRevision(
+    taskId: string,
+    maxRetries: number,
+    expectedRevision: number,
+    options?: TaskWorkspaceAccessOptions,
+  ) {
+    return options === undefined
+      ? this.tasks.setRetryBudgetWithRevision(taskId, maxRetries, expectedRevision)
+      : this.tasks.setRetryBudgetWithRevision(taskId, maxRetries, expectedRevision, options);
   }
 
   public verifyTaskArtifacts(
@@ -225,6 +302,17 @@ export class TasksRouteService {
       return this.tasks.verifyTaskArtifacts(taskId, claims);
     }
     return this.tasks.verifyTaskArtifacts(taskId, claims, options);
+  }
+
+  public verifyTaskArtifactsWithRevision(
+    taskId: string,
+    claims: Parameters<TasksRoutePort["verifyTaskArtifactsWithRevision"]>[1],
+    expectedRevision: number,
+    options?: TaskWorkspaceAccessOptions,
+  ) {
+    return options === undefined
+      ? this.tasks.verifyTaskArtifactsWithRevision(taskId, claims, expectedRevision)
+      : this.tasks.verifyTaskArtifactsWithRevision(taskId, claims, expectedRevision, options);
   }
 
   public bulkUpdateTasks(

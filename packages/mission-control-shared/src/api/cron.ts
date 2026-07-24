@@ -7,7 +7,7 @@ type CronJobAction = CronJobRecordResponse["action"];
 export interface CronRunNowResponse {
   jobId: string;
   runId: string;
-  status: "ok";
+  status: "ok" | "pending";
   force?: boolean;
   childDurableRunId?: string;
   childDurableStatus?: string;
@@ -34,8 +34,6 @@ export async function createCronJob(input: {
   endAt?: string;
   workdir?: string;
   contextFrom?: string;
-  lastRunOutput?: string;
-  lastRunId?: string;
 }): Promise<CronJobRecordResponse> {
   return request<CronJobRecordResponse>("/api/v1/cron/jobs", {
     method: "POST",
@@ -46,6 +44,7 @@ export async function createCronJob(input: {
 export async function updateCronJob(
   jobId: string,
   input: {
+    expectedRevision: number;
     name?: string;
     action?: CronJobAction;
     actionConfig?: Record<string, unknown> | null;
@@ -55,8 +54,6 @@ export async function updateCronJob(
     endAt?: string | null;
     workdir?: string | null;
     contextFrom?: string | null;
-    lastRunOutput?: string | null;
-    lastRunId?: string | null;
   },
 ): Promise<CronJobRecordResponse> {
   return request<CronJobRecordResponse>(`/api/v1/cron/jobs/${encodeURIComponent(jobId)}`, {
@@ -65,17 +62,17 @@ export async function updateCronJob(
   });
 }
 
-export async function startCronJob(jobId: string): Promise<CronJobRecordResponse> {
+export async function startCronJob(jobId: string, expectedRevision: number): Promise<CronJobRecordResponse> {
   return request<CronJobRecordResponse>(`/api/v1/cron/jobs/${encodeURIComponent(jobId)}/start`, {
     method: "POST",
-    body: JSON.stringify({}),
+    body: JSON.stringify({ expectedRevision }),
   });
 }
 
-export async function pauseCronJob(jobId: string): Promise<CronJobRecordResponse> {
+export async function pauseCronJob(jobId: string, expectedRevision: number): Promise<CronJobRecordResponse> {
   return request<CronJobRecordResponse>(`/api/v1/cron/jobs/${encodeURIComponent(jobId)}/pause`, {
     method: "POST",
-    body: JSON.stringify({}),
+    body: JSON.stringify({ expectedRevision }),
   });
 }
 
@@ -101,8 +98,12 @@ export async function fetchCronRunDiff(runId: string): Promise<CronRunDiff> {
   return request<CronRunDiff>(`/api/v1/cron/runs/${encodeURIComponent(runId)}/diff`);
 }
 
-export async function deleteCronJob(jobId: string): Promise<{ deleted: boolean; jobId: string }> {
-  return request<{ deleted: boolean; jobId: string }>(`/api/v1/cron/jobs/${encodeURIComponent(jobId)}`, {
-    method: "DELETE",
-  });
+export async function deleteCronJob(
+  jobId: string,
+  expectedRevision: number,
+): Promise<{ deleted: boolean; jobId: string }> {
+  return request<{ deleted: boolean; jobId: string }>(
+    `/api/v1/cron/jobs/${encodeURIComponent(jobId)}?expectedRevision=${encodeURIComponent(String(expectedRevision))}`,
+    { method: "DELETE" },
+  );
 }

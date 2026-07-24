@@ -1,9 +1,29 @@
+import { createHash } from "node:crypto";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { LlmProviderCapabilitiesSchema, LlmProviderGoogleCloudConfigSchema } from "@goatcitadel/contracts";
 import {
   projectLlmConfigPublicValue,
+  projectLlmProviderSummariesPublicValue,
   projectProviderRuntimePublicValue,
 } from "../services/provider-settings-public-projection.js";
+import { sendRouteError } from "./_error-handler.js";
+
+const DEFAULT_WORKSPACE_ID = "default";
+
+function buildDirectLlmUsageIdentity(
+  request: { id: string; idempotencyKey?: string },
+  routeKind: "chat" | "image",
+): { operationId: string; dispatchGeneration: string; taskId: string } {
+  const replayKey = request.idempotencyKey?.trim() || request.id;
+  const identityHash = createHash("sha256").update(`llm-route:${routeKind}\0${replayKey}`).digest("hex");
+  const operationId = `http:llm:${routeKind}:${identityHash}`;
+  return {
+    operationId,
+    dispatchGeneration: `http-idempotency:${identityHash}`,
+    taskId: operationId,
+  };
+}
 
 const llmApiStyleSchema = z.enum([
   "openai-chat-completions",
@@ -90,6 +110,7 @@ const providerRequestSchema = z.object({
 });
 
 const updateConfigSchema = z.object({
+  expectedRevision: z.number().int().positive(),
   activeProviderId: z.string().optional(),
   activeModel: z.string().optional(),
   utilityProviderId: z.string().optional(),
@@ -100,12 +121,16 @@ const updateConfigSchema = z.object({
       label: z.string().min(1).optional(),
       baseUrl: z.string().url().optional(),
       apiStyle: llmApiStyleSchema.optional(),
-      authMode: z.enum(["api-key", "codex-oauth", "claude-code-oauth"]).optional(),
+      authMode: z
+        .enum(["api-key", "codex-oauth", "claude-code-oauth", "google-service-account", "google-adc"])
+        .optional(),
       defaultModel: z.string().min(1).optional(),
       apiKey: z.string().min(1).optional(),
       apiKeyEnv: z.string().min(1).optional(),
+      googleCloud: LlmProviderGoogleCloudConfigSchema.optional(),
       request: providerRequestSchema.optional(),
       headers: z.record(z.string()).optional(),
+      capabilities: LlmProviderCapabilitiesSchema.partial().optional(),
     })
     .optional(),
 });
@@ -214,7 +239,7 @@ const chatCompletionSchema = z.object({
   max_tokens: z.number().int().positive().optional(),
   reasoning: z
     .object({
-      effort: z.enum(["none", "low", "medium", "high", "xhigh"]),
+      effort: z.enum(["none", "low", "medium", "high", "xhigh", "max", "ultra"]),
     })
     .optional(),
   verbosity: z.enum(["low", "medium", "high"]).optional(),
@@ -231,7 +256,7 @@ const chatCompletionSchema = z.object({
 
 export const llmRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/llm/providers", async (_request, reply) => {
-    return reply.send(projectProviderRuntimePublicValue({ items: fastify.services.llm.listLlmProviders() }));
+    return reply.send(projectLlmProviderSummariesPublicValue({ items: fastify.services.llm.listLlmProviders() }));
   });
 
   fastify.get("/api/v1/llm/providers/openai-codex/oauth/status", async (_request, reply) => {
@@ -310,9 +335,9 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(projectProviderRuntimePublicValue(fastify.services.llm.updateLlmConfig(parsed.data)));
+      return reply.send(projectLlmConfigPublicValue(await fastify.services.llm.updateLlmConfig(parsed.data)));
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -425,9 +450,18 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      return reply.send(projectProviderRuntimePublicValue(await fastify.services.llm.generateImage(parsed.data)));
+      const usageIdentity = buildDirectLlmUsageIdentity(request, "image");
+      return reply.send(
+        projectProviderRuntimePublicValue(
+          await fastify.services.llm.generateImage(parsed.data, {
+            ...usageIdentity,
+            callKind: "image_generation",
+            workspaceId: DEFAULT_WORKSPACE_ID,
+          }),
+        ),
+      );
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -438,10 +472,15 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      const result = await fastify.services.llm.createChatCompletion(parsed.data);
+      const usageIdentity = buildDirectLlmUsageIdentity(request, "chat");
+      const result = await fastify.services.llm.createChatCompletion(parsed.data, {
+        ...usageIdentity,
+        callKind: "chat_initial",
+        workspaceId: DEFAULT_WORKSPACE_ID,
+      });
       return reply.send(projectProviderRuntimePublicValue(result));
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 };

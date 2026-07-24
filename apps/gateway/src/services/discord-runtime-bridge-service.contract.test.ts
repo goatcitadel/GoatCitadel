@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatSendMessageResponse, ChatSessionRecord } from "@goatcitadel/contracts";
 import {
+  acceptDiscordRuntimeSlashCommand,
+  awaitDiscordRuntimeSlashCommandResult,
   ensureDiscordChatSession,
+  executeDiscordRuntimeInboundCommand,
   handleDiscordRuntimeSlashCommand,
   handleDiscordRuntimeInbound,
   resolveDiscordInboundRoute,
@@ -27,6 +30,8 @@ function createHost(): DiscordRuntimeBridgeHost & {
   diagnostics: ReturnType<typeof vi.fn>;
   updateSessionMock: ReturnType<typeof vi.fn>;
   respondMock: ReturnType<typeof vi.fn>;
+  acceptMock: ReturnType<typeof vi.fn>;
+  awaitCommandMock: ReturnType<typeof vi.fn>;
   sessionsById: Map<string, ChatSessionRecord>;
 } {
   const systemSettings = createSystemSettingsStore();
@@ -54,11 +59,27 @@ function createHost(): DiscordRuntimeBridgeHost & {
       turnId: "turn-1",
     }),
   );
+  const acceptMock = vi.fn(async (input: Parameters<DiscordRuntimeBridgeHost["acceptInboundChannelEvent"]>[0]) => ({
+    accepted: true as const,
+    durableAccepted: true as const,
+    deduped: false,
+    replied: false as const,
+    queued: true,
+    eventType: input.eventType,
+    inboundEventId: `inbound-${input.message.eventId}`,
+  }));
+  const awaitCommandMock = vi.fn(async () => ({
+    status: "completed" as const,
+    resultText: "Persisted command result.",
+  }));
   const isChatTurnWriteConflict = ((error: unknown): error is never =>
     (error as Error).message === "conflict") as DiscordRuntimeBridgeHost["isChatTurnWriteConflict"];
 
   return {
     storage: {
+      runImmediateTransaction<T>(callback: () => T): T {
+        return callback();
+      },
       systemSettings: systemSettings as DiscordRuntimeBridgeHost["storage"]["systemSettings"],
       sessions: {
         upsert(record: { sessionId: string; displayName?: string }) {
@@ -82,6 +103,7 @@ function createHost(): DiscordRuntimeBridgeHost & {
       } as DiscordRuntimeBridgeHost["storage"]["sessions"],
       chatSessionMeta: {
         ensure: vi.fn(),
+        get: vi.fn(() => undefined),
       } as unknown as DiscordRuntimeBridgeHost["storage"]["chatSessionMeta"],
       chatSessionPrefs: {
         ensure: vi.fn(),
@@ -158,6 +180,36 @@ function createHost(): DiscordRuntimeBridgeHost & {
         effects: [],
       },
     })) as DiscordRuntimeBridgeHost["resolveApprovalWithRemoteToken"],
+    resolveApprovalWithRemoteTokenId: vi.fn(async () => ({
+      approval: {
+        approvalId: "approval-1",
+        kind: "tool_call",
+        status: "approved",
+        riskLevel: "caution",
+        payload: {},
+        preview: {},
+        explanationStatus: "not_requested",
+        createdAt: "2026-04-08T00:00:00.000Z",
+      },
+      effects: [],
+      replay: {
+        approval: {
+          approvalId: "approval-1",
+          kind: "tool_call",
+          status: "approved",
+          riskLevel: "caution",
+          payload: {},
+          preview: {},
+          explanationStatus: "not_requested",
+          createdAt: "2026-04-08T00:00:00.000Z",
+        },
+        events: [],
+        effects: [],
+      },
+    })) as DiscordRuntimeBridgeHost["resolveApprovalWithRemoteTokenId"],
+    acceptInboundChannelEvent: acceptMock,
+    awaitInboundChannelCommandResult: awaitCommandMock,
+    findRemoteActionTokenId: vi.fn(() => "opaque-action-1"),
     ingestChannelMessage: vi.fn(async () => ({
       accepted: true,
       deduped: false,
@@ -190,6 +242,8 @@ function createHost(): DiscordRuntimeBridgeHost & {
     diagnostics,
     updateSessionMock,
     respondMock,
+    acceptMock,
+    awaitCommandMock,
     sessionsById,
   };
 }
@@ -281,6 +335,22 @@ describe("discord-runtime-bridge-service contract behavior", () => {
         peer: "user-1",
       }),
     ).toEqual({ peer: "user-1", room: "other-channel", threadId: undefined });
+  });
+
+  it("rejects a cross-workspace stable Discord identity before any session mutation", () => {
+    const host = createHost();
+    vi.mocked(host.storage.chatSessionMeta.get).mockReturnValue({ workspaceId: "other-workspace" });
+
+    expect(() =>
+      ensureDiscordChatSession(host, {
+        connectionId: "discord-1",
+        target: "channel-1",
+        displayName: "Ops Channel",
+      }),
+    ).toThrow("stable Discord session key already belongs to another workspace");
+    expect(host.sessionsById.size).toBe(0);
+    expect(host.storage.chatSessionMeta.ensure).not.toHaveBeenCalled();
+    expect(host.storage.chatSessionBindings.upsert).not.toHaveBeenCalled();
   });
 
   it("resolves Discord approval commands with remote action token semantics", async () => {
@@ -420,56 +490,233 @@ describe("discord-runtime-bridge-service contract behavior", () => {
     expect(host.parseChatCommand).not.toHaveBeenCalled();
   });
 
-  it("records a conflict diagnostic after exhausting reply retries for an inbound discord message", async () => {
+  it("durably accepts Discord gateway messages without running the legacy synchronous reply path", async () => {
     const host = createHost();
-    host.respondMock.mockRejectedValue(new Error("conflict"));
-
-    const promise = handleDiscordRuntimeInbound(host, {
+    await handleDiscordRuntimeInbound(host, {
       connectionId: "discord-1",
       target: "dm_1",
       actorId: "user-1",
       content: "hello",
       sourceMessageId: "msg-1",
+      peer: "user-1",
+      room: "dm_1",
+      metadata: { runtimeMode: "gateway" },
     });
 
-    await vi.runAllTimersAsync();
-    await promise;
-
-    expect(host.respondMock).toHaveBeenCalledTimes(3);
-    expect(host.diagnostics).toHaveBeenCalledWith(
+    expect(host.acceptMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        event: "discord.gateway.reply_conflict",
-        level: "warn",
-        context: expect.objectContaining({
-          connectionId: "discord-1",
-          sourceMessageId: "msg-1",
-          attempt: 3,
+        channel: "discord",
+        connectionId: "discord-1",
+        idempotencyKey: "discord:discord-1:msg-1",
+        eventType: "discord-gateway-message",
+        bindingTarget: "dm_1",
+        dispatchKind: "agent_turn",
+        message: expect.objectContaining({
+          eventId: "msg-1",
+          actorId: "user-1",
+          actorType: "user",
+          content: "hello",
+        }),
+      }),
+    );
+    expect(host.ingestChannelMessage).not.toHaveBeenCalled();
+    expect(host.respondMock).not.toHaveBeenCalled();
+  });
+
+  it("propagates Discord durable acceptance failures before any legacy dispatch", async () => {
+    const host = createHost();
+    host.acceptMock.mockRejectedValueOnce(new Error("storage unavailable"));
+
+    await expect(
+      handleDiscordRuntimeInbound(host, {
+        connectionId: "discord-1",
+        target: "dm_1",
+        actorId: "user-1",
+        content: "hello while storage is unavailable",
+        sourceMessageId: "msg-failed",
+      }),
+    ).rejects.toThrow("storage unavailable");
+
+    expect(host.ingestChannelMessage).not.toHaveBeenCalled();
+    expect(host.respondMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts Discord slash commands for durable execution before provider acknowledgement", async () => {
+    const host = createHost();
+    await acceptDiscordRuntimeSlashCommand(host, {
+      connectionId: "discord-1",
+      target: "channel-1",
+      actorId: "user-1",
+      commandText: "/status",
+      sourceCommandId: "interaction-1",
+      room: "channel-1",
+      metadata: { interaction: true },
+    });
+
+    expect(host.acceptMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        idempotencyKey: "discord:discord-1:interaction:interaction-1",
+        eventType: "discord-gateway-slash-command",
+        dispatchKind: "command",
+        message: expect.objectContaining({
+          eventId: "interaction-1",
+          content: "/status",
+          actorType: "user",
         }),
       }),
     );
   });
 
-  it("records active-run guard diagnostics for deduped-safe Discord inbound messages", async () => {
+  it("replaces raw approval bearer values with an opaque action id before durable acceptance", async () => {
     const host = createHost();
-    host.hasRunningTurn = vi.fn(() => true);
-
-    await handleDiscordRuntimeInbound(host, {
+    await acceptDiscordRuntimeSlashCommand(host, {
       connectionId: "discord-1",
-      target: "dm_1",
+      target: "channel-1",
       actorId: "user-1",
-      content: "hello while running",
-      sourceMessageId: "msg-active",
+      commandText: "/approve grat_super_secret",
+      sourceCommandId: "interaction-approval-1",
+      room: "channel-1",
+      metadata: { interaction: true },
     });
 
-    expect(host.respondMock).not.toHaveBeenCalled();
-    expect(host.diagnostics).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: "discord.gateway.active_run_guard",
-        context: expect.objectContaining({
-          connectionId: "discord-1",
-          sourceMessageId: "msg-active",
-        }),
+    const acceptedInput = host.acceptMock.mock.calls[0]?.[0];
+    expect(acceptedInput).toBeDefined();
+    expect(JSON.stringify(acceptedInput)).not.toContain("grat_super_secret");
+    expect(acceptedInput.message.content).toBe("/approve");
+    expect(acceptedInput.message.metadata).toMatchObject({
+      discordApprovalVersion: 1,
+      discordApprovalDecision: "approve",
+      discordApprovalLookupStatus: "resolved",
+      discordApprovalActionId: "opaque-action-1",
+    });
+
+    await expect(
+      executeDiscordRuntimeInboundCommand(host, {
+        eventType: acceptedInput.eventType,
+        inboundEventId: "inbound-interaction-approval-1",
+        operationKey: acceptedInput.idempotencyKey,
+        idempotencyKey: acceptedInput.idempotencyKey,
+        channel: acceptedInput.channel,
+        connectionId: acceptedInput.connectionId,
+        bindingTarget: acceptedInput.bindingTarget,
+        message: acceptedInput.message,
       }),
+    ).resolves.toEqual({
+      resultText: "Approved approval-1. GoatCitadel will resume any waiting work it can safely resume.",
+    });
+    expect(host.resolveApprovalWithRemoteTokenId).toHaveBeenCalledWith({
+      tokenId: "opaque-action-1",
+      connectorId: "integration:discord-1",
+      decision: "approve",
+      resolvedBy: "discord:user-1",
+    });
+    expect(host.resolveApprovalWithRemoteToken).not.toHaveBeenCalled();
+  });
+
+  it("persists only a not-found marker when an approval bearer value is unknown", async () => {
+    const host = createHost();
+    host.findRemoteActionTokenId = vi.fn(() => undefined);
+    await acceptDiscordRuntimeSlashCommand(host, {
+      connectionId: "discord-1",
+      target: "channel-1",
+      actorId: "user-1",
+      commandText: "/deny grat_unknown_secret",
+      sourceCommandId: "interaction-deny-unknown",
+    });
+
+    const acceptedInput = host.acceptMock.mock.calls[0]?.[0];
+    expect(JSON.stringify(acceptedInput)).not.toContain("grat_unknown_secret");
+    expect(acceptedInput.message.metadata).toMatchObject({
+      discordApprovalVersion: 1,
+      discordApprovalDecision: "reject",
+      discordApprovalLookupStatus: "not_found",
+    });
+    expect(acceptedInput.message.metadata).not.toHaveProperty("discordApprovalActionId");
+
+    await expect(
+      executeDiscordRuntimeInboundCommand(host, {
+        eventType: acceptedInput.eventType,
+        inboundEventId: "inbound-deny-unknown",
+        operationKey: acceptedInput.idempotencyKey,
+        idempotencyKey: acceptedInput.idempotencyKey,
+        channel: acceptedInput.channel,
+        connectionId: acceptedInput.connectionId,
+        bindingTarget: acceptedInput.bindingTarget,
+        message: acceptedInput.message,
+      }),
+    ).resolves.toEqual({
+      resultText: "The approval action token was not recognized. Request a fresh approval message.",
+    });
+    expect(host.resolveApprovalWithRemoteTokenId).not.toHaveBeenCalled();
+    expect(host.resolveApprovalWithRemoteToken).not.toHaveBeenCalled();
+  });
+
+  it("reconstructs only the allowlisted Discord command envelope for the durable executor", async () => {
+    const host = createHost();
+    host.parseChatCommand = vi.fn(async () => ({ message: "Mode set to gpt-5.4." }));
+
+    const result = await executeDiscordRuntimeInboundCommand(host, {
+      eventType: "discord-gateway-slash-command",
+      inboundEventId: "inbound-interaction-1",
+      operationKey: "discord:discord-1:interaction:interaction-1",
+      idempotencyKey: "discord:discord-1:interaction:interaction-1",
+      channel: "discord",
+      connectionId: "discord-1",
+      bindingTarget: "channel-1",
+      message: {
+        eventId: "interaction-1",
+        account: "discord-1",
+        room: "channel-1",
+        actorId: "user-1",
+        actorType: "user",
+        content: "/model gpt-5.4",
+        metadata: { interaction: true },
+      },
+    });
+
+    expect(result).toEqual({ resultText: "Mode set to gpt-5.4." });
+    expect(host.parseChatCommand).toHaveBeenCalledWith(
+      expect.any(String),
+      "/model gpt-5.4",
+      expect.objectContaining({ resolvedBy: "discord:user-1", source: "channel" }),
+    );
+  });
+
+  it("fails closed before execution when a durable command identity is not Discord slash", async () => {
+    const host = createHost();
+    await expect(
+      executeDiscordRuntimeInboundCommand(host, {
+        eventType: "generic-channel",
+        inboundEventId: "inbound-generic-1",
+        operationKey: "generic-1",
+        idempotencyKey: "generic-1",
+        channel: "generic-channel",
+        connectionId: "generic-1",
+        bindingTarget: "room-1",
+        message: {
+          eventId: "event-1",
+          account: "generic-1",
+          actorId: "user-1",
+          actorType: "user",
+          content: "/stop",
+        },
+      }),
+    ).rejects.toThrow("Unsupported durable inbound command event");
+    expect(host.parseChatCommand).not.toHaveBeenCalled();
+  });
+
+  it("replays the persisted result and uses provider-safe copy for manual reconciliation", async () => {
+    const host = createHost();
+    await expect(awaitDiscordRuntimeSlashCommandResult(host, "inbound-interaction-1")).resolves.toBe(
+      "Persisted command result.",
+    );
+
+    host.awaitCommandMock.mockResolvedValueOnce({
+      status: "manual_reconciliation_required",
+      message: "internal detail must stay operator-only",
+    });
+    await expect(awaitDiscordRuntimeSlashCommandResult(host, "inbound-ambiguous-1")).resolves.toBe(
+      "Command was durably accepted but needs operator reconciliation before it can be retried. Event inbound-ambiguous-1.",
     );
   });
 });

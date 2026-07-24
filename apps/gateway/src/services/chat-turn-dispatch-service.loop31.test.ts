@@ -369,11 +369,273 @@ describe("chat turn dispatch loop 31 execution coverage", () => {
     },
   );
 
+  it.each(["ModelUsageDispatchUncertainError", "ModelUsageSettlementError", "ModelUsageDispatchPersistenceError"])(
+    "persists no-redispatch durable truth and rethrows %s from background execution",
+    async (errorName) => {
+      vi.useFakeTimers();
+      const accountingError = Object.assign(new Error(`canonical accounting failure: ${errorName}`), {
+        name: errorName,
+      });
+      streamPreparedAgentChatTurn.mockImplementation(async function* () {
+        yield* [];
+        throw accountingError;
+      });
+      const trace = {
+        turnId: "turn-1",
+        sessionId: "session-1",
+        status: "running",
+        routing: {},
+        durable: { runId: "run-1", status: "running", checkpointKind: "run_started" },
+      } as ChatTurnTraceRecord;
+      const host = createHost({ traceState: trace });
+      const registration = host.registerActiveChatTurnStream("session-1", "turn-1", "run-1");
+
+      try {
+        await expect(
+          dispatchService.executePreparedAgentChatTurnBackground(
+            host,
+            "session-1",
+            { content: "hello" },
+            createPrepared(),
+            "chat_thread_turn_appended",
+            "run-1",
+            undefined,
+            { streamRegistration: registration, durableLeaseOwnerId: "worker-a" },
+          ),
+        ).rejects.toBe(accountingError);
+
+        expect(host.storage.chatTurnTraces.patch).toHaveBeenCalledWith(
+          "turn-1",
+          expect.objectContaining({
+            status: "failed",
+            failure: expect.objectContaining({
+              retryable: false,
+              message: expect.stringContaining("Same-generation retry is blocked"),
+              provider: expect.objectContaining({ type: "model_usage_accounting_authoritative" }),
+            }),
+            completion: expect.objectContaining({ status: "interrupted" }),
+          }),
+        );
+        expect(host.recordDevDiagnostic).toHaveBeenCalledWith(
+          expect.objectContaining({
+            event: "chat.dispatch.accounting_persistence_failed",
+            runtimeError: expect.objectContaining({ name: errorName, retryable: false }),
+            context: expect.objectContaining({
+              sameGenerationRetryBlocked: true,
+              reconciliationRequired: true,
+            }),
+          }),
+        );
+        expect(host.persistChatStreamChunk).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: "error",
+            error: expect.stringContaining("reconcile canonical model usage state"),
+          }),
+          "run-1",
+          registration,
+        );
+        expect(host.finalizeDurableChatRun).toHaveBeenCalledWith(
+          "run-1",
+          expect.objectContaining({ turnId: "turn-1" }),
+          expect.objectContaining({
+            status: "failed",
+            failure: expect.objectContaining({ retryable: false }),
+            completion: expect.objectContaining({ status: "interrupted" }),
+          }),
+          "worker-a",
+        );
+      } finally {
+        vi.clearAllTimers();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("preserves the exact accounting fault when trace projection and durable finalization also fail", async () => {
+    vi.useFakeTimers();
+    const accountingError = Object.assign(new Error("canonical settlement failed"), {
+      name: "ModelUsageSettlementError",
+    });
+    const projectionError = new Error("trace repository unavailable");
+    const finalizationError = new Error("durable finalization unavailable");
+    streamPreparedAgentChatTurn.mockImplementation(async function* () {
+      yield* [];
+      throw accountingError;
+    });
+    const trace = {
+      turnId: "turn-1",
+      sessionId: "session-1",
+      status: "running",
+      routing: {},
+      durable: { runId: "run-1", status: "running", checkpointKind: "run_started" },
+    } as ChatTurnTraceRecord;
+    const host = createHost({ traceState: trace });
+    vi.mocked(host.storage.chatTurnTraces.patch).mockImplementation(() => {
+      throw projectionError;
+    });
+    host.finalizeDurableChatRun.mockImplementation(() => {
+      throw finalizationError;
+    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const registration = host.registerActiveChatTurnStream("session-1", "turn-1", "run-1");
+
+    try {
+      await expect(
+        dispatchService.executePreparedAgentChatTurnBackground(
+          host,
+          "session-1",
+          { content: "hello" },
+          createPrepared(),
+          "chat_thread_turn_appended",
+          "run-1",
+          undefined,
+          { streamRegistration: registration, durableLeaseOwnerId: "worker-a" },
+        ),
+      ).rejects.toBe(accountingError);
+
+      expect(host.storage.chatTurnTraces.patch).toHaveBeenCalled();
+      expect(host.finalizeDurableChatRun).toHaveBeenCalled();
+      expect(registration.completed).toBe(true);
+      expect(consoleError).toHaveBeenCalledWith(
+        "Failed to project authoritative model-usage accounting fault",
+        projectionError,
+      );
+      expect(consoleError).toHaveBeenCalledWith(
+        "Failed to finalize chat stream after authoritative model-usage accounting fault",
+        finalizationError,
+      );
+    } finally {
+      consoleError.mockRestore();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("finalizes durable accounting faults from an in-memory failed trace when trace persistence is unavailable", async () => {
+    vi.useFakeTimers();
+    const accountingError = Object.assign(new Error("canonical settlement failed"), {
+      name: "ModelUsageSettlementError",
+    });
+    const projectionError = new Error("trace repository unavailable");
+    streamPreparedAgentChatTurn.mockImplementation(async function* () {
+      yield* [];
+      throw accountingError;
+    });
+    const trace = {
+      turnId: "turn-1",
+      sessionId: "session-1",
+      status: "running",
+      routing: {},
+      durable: { runId: "run-1", status: "running", checkpointKind: "run_started" },
+    } as ChatTurnTraceRecord;
+    const host = createHost({ traceState: trace });
+    vi.mocked(host.storage.chatTurnTraces.patch).mockImplementation(() => {
+      throw projectionError;
+    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const registration = host.registerActiveChatTurnStream("session-1", "turn-1", "run-1");
+
+    try {
+      await expect(
+        dispatchService.executePreparedAgentChatTurnBackground(
+          host,
+          "session-1",
+          { content: "hello" },
+          createPrepared(),
+          "chat_thread_turn_appended",
+          "run-1",
+          undefined,
+          { streamRegistration: registration, durableLeaseOwnerId: "worker-a" },
+        ),
+      ).rejects.toBe(accountingError);
+
+      expect(host.finalizeDurableChatRun).toHaveBeenCalledWith(
+        "run-1",
+        expect.objectContaining({ turnId: "turn-1" }),
+        expect.objectContaining({
+          status: "failed",
+          failure: expect.objectContaining({ retryable: false }),
+          completion: expect.objectContaining({ status: "interrupted" }),
+        }),
+        "worker-a",
+      );
+      expect(registration.completed).toBe(true);
+    } finally {
+      consoleError.mockRestore();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("never finalizes a stale running trace when the first accounting trace lookup fails", async () => {
+    vi.useFakeTimers();
+    const accountingError = Object.assign(new Error("canonical settlement failed"), {
+      name: "ModelUsageSettlementError",
+    });
+    const lookupError = new Error("trace lookup temporarily unavailable");
+    streamPreparedAgentChatTurn.mockImplementation(async function* () {
+      yield* [];
+      throw accountingError;
+    });
+    const trace = {
+      turnId: "turn-1",
+      sessionId: "session-1",
+      status: "running",
+      routing: {},
+      durable: { runId: "run-1", status: "running", checkpointKind: "run_started" },
+    } as ChatTurnTraceRecord;
+    const host = createHost({ traceState: trace });
+    vi.mocked(host.storage.chatTurnTraces.get).mockImplementationOnce(() => {
+      throw lookupError;
+    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const registration = host.registerActiveChatTurnStream("session-1", "turn-1", "run-1");
+
+    try {
+      await expect(
+        dispatchService.executePreparedAgentChatTurnBackground(
+          host,
+          "session-1",
+          { content: "hello" },
+          createPrepared(),
+          "chat_thread_turn_appended",
+          "run-1",
+          undefined,
+          { streamRegistration: registration, durableLeaseOwnerId: "worker-a" },
+        ),
+      ).rejects.toBe(accountingError);
+
+      expect(host.finalizeDurableChatRun).toHaveBeenCalledWith(
+        "run-1",
+        expect.objectContaining({ turnId: "turn-1" }),
+        expect.objectContaining({
+          status: "failed",
+          failure: expect.objectContaining({ retryable: false }),
+          completion: expect.objectContaining({ status: "interrupted" }),
+        }),
+        "worker-a",
+      );
+      expect(host.finalizeDurableChatRun).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ status: "running" }),
+        expect.anything(),
+      );
+      expect(registration.completed).toBe(true);
+    } finally {
+      consoleError.mockRestore();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it("records durable cancellation as cancellation instead of a retryable chat failure", async () => {
     vi.useFakeTimers();
     const cancellation = Object.assign(new Error("operator cancelled durable run"), {
       name: "DurableRunCancelledError",
     });
+    const abortController = new AbortController();
+    abortController.abort(cancellation);
     streamPreparedAgentChatTurn.mockImplementation(async function* () {
       yield* [];
       throw cancellation;
@@ -398,7 +660,11 @@ describe("chat turn dispatch loop 31 execution coverage", () => {
           "chat_thread_turn_appended",
           "run-1",
           undefined,
-          { streamRegistration: registration, durableLeaseOwnerId: "worker-a" },
+          {
+            streamRegistration: registration,
+            durableLeaseOwnerId: "worker-a",
+            abortSignal: abortController.signal,
+          },
         ),
       ).rejects.toBe(cancellation);
 
@@ -425,6 +691,62 @@ describe("chat turn dispatch loop 31 execution coverage", () => {
       );
       expect(host.recordDevDiagnostic).not.toHaveBeenCalled();
       expect(host.finalizeDurableChatRun).not.toHaveBeenCalled();
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("treats an untrusted provider cancellation-name spoof as an ordinary failed turn", async () => {
+    vi.useFakeTimers();
+    const spoofedCancellation = Object.assign(new Error("provider supplied this error name"), {
+      name: "DurableRunCancelledError",
+    });
+    streamPreparedAgentChatTurn.mockImplementation(async function* () {
+      yield* [];
+      throw spoofedCancellation;
+    });
+    const trace = {
+      turnId: "turn-1",
+      sessionId: "session-1",
+      status: "running",
+      routing: {},
+      durable: { runId: "run-1", status: "running", checkpointKind: "run_started" },
+    } as ChatTurnTraceRecord;
+    const host = createHost({ traceState: trace });
+    const registration = host.registerActiveChatTurnStream("session-1", "turn-1", "run-1");
+
+    try {
+      await dispatchService.executePreparedAgentChatTurnBackground(
+        host,
+        "session-1",
+        { content: "hello" },
+        createPrepared(),
+        "chat_thread_turn_appended",
+        "run-1",
+        undefined,
+        { streamRegistration: registration, durableLeaseOwnerId: "worker-a" },
+      );
+
+      expect(host.storage.chatTurnTraces.patch).toHaveBeenCalledWith(
+        "turn-1",
+        expect.objectContaining({
+          status: "failed",
+          failure: expect.objectContaining({ message: spoofedCancellation.message, retryable: true }),
+          completion: expect.objectContaining({ status: "interrupted" }),
+        }),
+      );
+      expect(host.storage.chatTurnTraces.patch).not.toHaveBeenCalledWith(
+        "turn-1",
+        expect.objectContaining({ status: "cancelled" }),
+      );
+      expect(host.finalizeDurableChatRun).toHaveBeenCalledWith(
+        "run-1",
+        expect.objectContaining({ turnId: "turn-1" }),
+        expect.anything(),
+        "worker-a",
+      );
+      expect(registration.completed).toBe(true);
     } finally {
       vi.clearAllTimers();
       vi.useRealTimers();
@@ -539,14 +861,23 @@ function createHost(
       },
     },
     storage: {
+      runImmediateTransaction: vi.fn((work: () => unknown) => work()),
       durableRuns: {
         getRun: vi.fn(() => ({ status: "running" })),
+        lockFreshActiveLeaseForUpdate: vi.fn(() => ({
+          runId: "run-1",
+          status: "running",
+          leaseOwnerId: "worker-a",
+        })),
       },
       chatTurnTraces: {
         get: vi.fn(() => traceState),
         patch: vi.fn((_turnId: string, patch: Partial<ChatTurnTraceRecord>) => ({ ...traceState, ...patch })),
       },
     } as never,
+    sessionControlRuntimeOwner: {
+      assertActiveTurnWrite: vi.fn(),
+    },
     backgroundTasks: new Set(),
     isFeatureEnabled: vi.fn((flag: string) => flag === "durableKernelV1Enabled"),
     beginDurableChatRun: options.beginDurableChatRun ?? vi.fn(() => undefined),
@@ -591,6 +922,20 @@ function createPrepared() {
       timestamp: "2026-04-11T00:00:00.000Z",
     },
     content: "hello",
+    turnAdmission: {
+      identity: {
+        admissionId: "admission:turn-1",
+        sessionIncarnationId: "incarnation:session-1",
+        workspaceId: "default",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        aggregateRevision: 1,
+        controllerGeneration: 1,
+        materialSha256: "a".repeat(64),
+      },
+      admittedRequest: { content: "hello" },
+      requestActor: { actorKind: "operator", actorId: "operator" },
+    },
     normalized: {
       mode: "chat",
     },

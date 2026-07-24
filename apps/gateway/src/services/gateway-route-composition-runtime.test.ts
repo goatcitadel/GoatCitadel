@@ -157,7 +157,7 @@ vi.mock("./gateway-route-composition-shared.js", () => ({
 vi.mock("./security-utils.js", () => ({ serializePathWithinRoot: mocks.serializePathWithinRoot }));
 
 describe("composeRuntimeAdminRouteDependencies", () => {
-  it("wires runtime/admin route domains to the gateway facade and extracted route ports", () => {
+  it("wires runtime/admin route domains to the gateway facade and extracted route ports", async () => {
     const gateway = createGateway();
     const deps = composeRuntimeAdminRouteDependencies(gateway as never) as any;
 
@@ -184,7 +184,9 @@ describe("composeRuntimeAdminRouteDependencies", () => {
     expect(deps.authAdmin.revokeCompanionSession("session-1", "operator")).toMatchObject({ actorId: "operator" });
     expect(deps.authAdmin.revokeDeviceAccessGrant("grant-1", "operator")).toMatchObject({ grantId: "grant-1" });
     expect(deps.authAdmin.rotateCompanionSession({ sessionId: "session-1" })).toMatchObject({ rotated: true });
-    expect(deps.authAdmin.runDatabaseCutover({ mode: "sqlite" })).toEqual({ cutover: true });
+    const cutoverInput = { profile: "local", execute: true, confirm: true, expectedRevision: 6 };
+    expect(deps.authAdmin.runDatabaseCutover(cutoverInput)).toEqual({ cutover: true });
+    expect(gateway.runDatabaseCutover).toHaveBeenCalledWith(cutoverInput);
     expect(deps.authAdmin.updateRetentionPolicy({ keepDays: 3 })).toEqual({ keepDays: 3 });
     expect(deps.authAdmin.createBackup({ reason: "manual" })).toEqual({ backupId: "created-backup" });
     expect(deps.authAdmin.verifyBackup({ backupId: "backup-1" })).toEqual({ verified: true });
@@ -213,6 +215,20 @@ describe("composeRuntimeAdminRouteDependencies", () => {
     expect(deps.devVerification.createChatCompletionStream({ messages: [] })).toEqual(["delta"]);
     expect(deps.devVerification.createChatSession({ title: "Chat" })).toMatchObject({ sessionId: "session-1" });
     expect(deps.devVerification.publishRealtime("event", "tests", { ok: true })).toEqual({ eventId: "event-1" });
+    const embeddingSignal = new AbortController().signal;
+    const embeddingLease = await deps.devVerification.acquireLocalEmbeddingLease({
+      providerId: "llamacpp",
+      url: "http://127.0.0.1:8080/embedding",
+      purpose: "memory_write",
+      signal: embeddingSignal,
+    });
+    expect(embeddingLease).toBeDefined();
+    expect(gateway.readSettingsRevision).toHaveBeenCalledTimes(1);
+    expect(gateway.llamaCppRuntime.acquireLease).toHaveBeenCalledWith(
+      { purpose: "memory_write" },
+      { signal: embeddingSignal },
+    );
+    await embeddingLease?.release();
 
     expect(deps.durable).toBe(gateway.durableOperatorService);
     expect(deps.files.rootDir).toBe("F:/code/personal-ai");
@@ -276,13 +292,36 @@ describe("composeRuntimeAdminRouteDependencies", () => {
     expect(deps.sessionsList.summary("session-1")).toEqual({ sessionId: "session-1" });
     expect(deps.sessionsList.timeline("session-1")).toEqual([{ timelineId: "timeline-1" }]);
   });
+
+  it.each(["ModelUsageSettlementError", "ModelUsageDispatchPersistenceError", "ModelUsageDispatchUncertainError"])(
+    "does not hide Mason %s failures behind its best-effort fallback",
+    async (faultName) => {
+      const gateway = createGateway();
+      const accountingFault = Object.assign(new Error("canonical accounting failed"), { name: faultName });
+      gateway.llmService.chatCompletions.mockRejectedValueOnce(accountingFault);
+      const deps = composeRuntimeAdminRouteDependencies(gateway as never) as any;
+
+      await expect(deps.masonInterpret("extract answers", {})).rejects.toBe(accountingFault);
+    },
+  );
+
+  it("keeps Mason's empty fallback for ordinary provider failures", async () => {
+    const gateway = createGateway();
+    gateway.llmService.chatCompletions.mockRejectedValueOnce(new Error("provider unavailable"));
+    const deps = composeRuntimeAdminRouteDependencies(gateway as never) as any;
+
+    await expect(deps.masonInterpret("extract answers", {})).resolves.toBe("");
+  });
 });
 
 function createGateway() {
   return {
     config: {
       rootDir: "F:/code/personal-ai",
-      assistant: { workspaceDir: "workspace" },
+      assistant: {
+        workspaceDir: "workspace",
+        llamaCpp: { server: { baseUrl: "http://127.0.0.1:8080/v1" } },
+      },
       toolPolicy: {
         sandbox: {
           readOnlyRoots: ["F:/code/personal-ai"],
@@ -307,7 +346,13 @@ function createGateway() {
     },
     durableOperatorService: { durable: true },
     hooksService: { hooks: true },
-    llamaCppRuntime: { status: () => "llama-ready" },
+    llamaCppRuntime: {
+      status: () => "llama-ready",
+      acquireLease: vi.fn(async () => ({ release: vi.fn() })),
+    },
+    llmService: {
+      chatCompletions: vi.fn(async () => ({ choices: [{ message: { content: "{}" } }] })),
+    },
     memoryLifecycleService: { listRunContexts: vi.fn(() => [{ contextId: "ctx-1" }]) },
     meshService: { status: () => ({ mesh: "online" }) },
     npuSidecar: { status: () => "npu-ready" },
@@ -344,6 +389,7 @@ function createGateway() {
     listSkills: vi.fn(() => [{ skillId: "skill-1" }]),
     normalizeWorkspaceId: vi.fn((workspaceId?: string) => `workspace:${workspaceId?.trim() ?? "default"}`),
     publishRealtime: vi.fn(() => ({ eventId: "event-1" })),
+    readSettingsRevision: vi.fn(() => 12),
     recordDevDiagnostic: vi.fn(),
     resolveGatewayInstallToken: vi.fn((input: unknown) => ({ ...(input as object), resolved: true })),
     runDatabaseCutover: vi.fn(() => ({ cutover: true })),

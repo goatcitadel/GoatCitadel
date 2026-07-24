@@ -33,6 +33,7 @@ export const boundedByConstructionFiles = new Set([
   "packages/policy-engine/src/tool-executor/knowledge-executor.ts",
   "packages/policy-engine/src/browser-tools.ts",
   "packages/policy-engine/src/ingestion-backends.ts",
+  "packages/policy-engine/src/research-search-official-providers.ts",
 ]);
 const BOUNDED_BY_CONSTRUCTION_METHODS = new Set(["text", "json", "arrayBuffer"]);
 // Matches `fetch(` / `globalThis.fetch(`; does NOT match `fetchAllowlisted(`

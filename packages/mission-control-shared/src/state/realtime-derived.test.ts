@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { RealtimeEvent } from "../api/types";
-import { deriveRealtimeEventTone, deriveRealtimeNotification, deriveRealtimeRefresh } from "./realtime-derived";
+import {
+  deriveRealtimeEventTone,
+  deriveRealtimeNotification,
+  deriveRealtimeRefresh,
+  isRemoteWorkerInvalidationEvent,
+} from "./realtime-derived";
 
 function event(overrides: Partial<RealtimeEvent> = {}): RealtimeEvent {
   return {
@@ -296,5 +301,15 @@ describe("realtime-derived", () => {
     expect(deriveRealtimeEventTone(event({ eventClass: "domain_fact" }))).toBe("live");
     expect(deriveRealtimeEventTone(event({ eventType: "tool_completed" }))).toBe("live");
     expect(deriveRealtimeEventTone(event({ eventType: "heartbeat" }))).toBe("muted");
+  });
+
+  it("treats remote-worker invalidations as content-free (no toast notification)", () => {
+    const workerEvent = event({ eventType: "remote_worker_changed", source: "remote_workers" });
+    const assignmentEvent = event({ eventType: "remote_worker_assignment_changed", source: "remote_workers" });
+    expect(isRemoteWorkerInvalidationEvent(workerEvent)).toBe(true);
+    expect(isRemoteWorkerInvalidationEvent(assignmentEvent)).toBe(true);
+    expect(isRemoteWorkerInvalidationEvent(event({ eventType: "task_updated" }))).toBe(false);
+    expect(deriveRealtimeNotification(workerEvent)).toBeUndefined();
+    expect(deriveRealtimeNotification(assignmentEvent)).toBeUndefined();
   });
 });

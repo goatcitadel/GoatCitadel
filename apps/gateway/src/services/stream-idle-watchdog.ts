@@ -1,3 +1,6 @@
+import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
+import { observePromptSettlement, type PromptSettlement } from "./prompt-settlement.js";
+
 /**
  * Per-chunk provider-stream idle watchdog (round-3 R3-3, kill switch
  * `streamIdleWatchdogV1Disabled`).
@@ -42,28 +45,69 @@ export async function* withStreamIdleWatchdog<T>(
   options: StreamIdleWatchdogOptions,
 ): AsyncGenerator<T> {
   const iterator = source[Symbol.asyncIterator]();
+  let idleTimedOut = false;
   try {
     while (true) {
       let timer: NodeJS.Timeout | undefined;
       const idleGuard = new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
+          idleTimedOut = true;
           try {
             options.abort?.();
-            options.onTrip?.(options.idleTimeoutMs);
-          } catch {
-            // Intentionally ignore host-callback errors (non-fatal): this runs
-            // inside a Node timer, so a throwing abort/onTrip would otherwise
-            // become an uncaught exception; the idle timeout still surfaces
-            // through the finally below.
-          } finally {
-            reject(new StreamIdleTimeoutError(options.idleTimeoutMs));
+          } catch (abortError) {
+            // A throwing abort callback is treated as an unacknowledged
+            // dispatch below. The watchdog must remain bounded either way.
+            void abortError;
           }
+          try {
+            options.onTrip?.(options.idleTimeoutMs);
+          } catch (diagnosticError) {
+            // Diagnostics must not replace the canonical timeout/accounting
+            // result from the provider iterator.
+            void diagnosticError;
+          }
+          reject(new StreamIdleTimeoutError(options.idleTimeoutMs));
         }, options.idleTimeoutMs);
         timer.unref?.();
       });
       let next: IteratorResult<T>;
+      const pendingNext = iterator.next();
       try {
-        next = await Promise.race([iterator.next(), idleGuard]);
+        next = await Promise.race([pendingNext, idleGuard]);
+      } catch (error) {
+        if (error instanceof StreamIdleTimeoutError) {
+          // Abort-aware provider iterators reject promptly, after their usage
+          // attempt has been settled. Observe that result before allowing the
+          // timeout to escape. An adapter that ignores AbortSignal must never
+          // pin the watchdog indefinitely: its still-pending attempt is
+          // classified as dispatch-uncertain so callers cannot retry/fallback
+          // the same generation while recovery owns the accepted row.
+          const readOutcome = await observePromptSettlement(pendingNext);
+          let cleanup: Promise<IteratorResult<T>> | undefined;
+          let cleanupOutcome: PromptSettlement<IteratorResult<T>> | undefined;
+          try {
+            cleanup = iterator.return?.();
+            cleanupOutcome = cleanup ? await observePromptSettlement(cleanup) : undefined;
+          } catch (cleanupError) {
+            cleanupOutcome = { status: "rejected", error: cleanupError };
+          }
+
+          const accountingFailure =
+            readOutcome.status === "rejected" && isAuthoritativeModelUsageAccountingError(readOutcome.error)
+              ? readOutcome.error
+              : cleanupOutcome?.status === "rejected" && isAuthoritativeModelUsageAccountingError(cleanupOutcome.error)
+                ? cleanupOutcome.error
+                : undefined;
+          if (accountingFailure !== undefined) throw accountingFailure;
+
+          if (readOutcome.status === "pending" || cleanupOutcome?.status === "pending") {
+            void pendingNext.catch(() => undefined);
+            void cleanup?.catch(() => undefined);
+            error.name = "ModelUsageDispatchUncertainError";
+            error.message = `${error.message}; provider abort was not acknowledged`;
+          }
+        }
+        throw error;
       } finally {
         clearTimeout(timer);
       }
@@ -73,13 +117,21 @@ export async function* withStreamIdleWatchdog<T>(
       yield next.value;
     }
   } finally {
-    // Release the underlying stream WITHOUT awaiting: a generator suspended on
-    // a hung provider read cannot service return() until that read settles, so
-    // awaiting here would re-introduce the very hang the watchdog removes. The
-    // abort() callback is what actually unblocks the underlying request.
-    void iterator.return?.().then(
-      () => undefined,
-      () => undefined,
-    );
+    // The idle path already initiated bounded cleanup in the catch above.
+    // Normal completion/consumer cancellation still waits for canonical
+    // provider cleanup so accounting settlement errors remain authoritative.
+    if (!idleTimedOut) {
+      try {
+        await iterator.return?.();
+      } catch (error) {
+        if (isAuthoritativeModelUsageAccountingError(error)) {
+          // Canonical accounting settlement intentionally supersedes a normal or cancelled completion.
+          // eslint-disable-next-line no-unsafe-finally -- Accounting authority must remain visible to callers.
+          throw error;
+        }
+        // Ordinary source cleanup errors do not replace the provider/timeout
+        // result. Accounting authority errors above are the sole exception.
+      }
+    }
   }
 }

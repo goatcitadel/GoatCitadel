@@ -2,11 +2,14 @@ import type {
   ChatAttachmentRecord,
   ChatDelegationSuggestionRecord,
   ChatGeneratedArtifactRecord,
+  ChatHistoryWindowResponse,
   ChatMode,
   ChatOrchestrationReviewDepth,
   ChatSessionRecord,
+  ChatThinkingLevel,
   ChatThreadResponse,
   ChatWebMode,
+  ExternalSessionAttachmentRecord,
   RoutingPreflightResult,
   SurfaceClassifyResponse,
   ThreadKnowledgeAttachmentRecord,
@@ -27,6 +30,8 @@ import type { WorkTrustDescriptor } from "./work-trust";
 import type { ChatErrorSource } from "./chat-error-copy";
 import type { MidTurnDisposition } from "./chat-page-pure-helpers";
 import type { OutboundContextBlock } from "./useChatSurfaceOrchestration";
+import type { ChatCapabilityProfileInspection } from "./useChatCapabilityProfileInspection";
+import type { MissionThreadedSessionControlBannerProps } from "./session-control-banner";
 
 export interface ThreadedContextSelectionState {
   label: string;
@@ -40,6 +45,28 @@ export interface ThreadedPersonalityPresence {
   scope: "citadel_default" | "thread_override";
   avatarLabel?: string;
   animation?: "ambient" | "still" | "none";
+}
+
+/**
+ * HX-407 C3 composer controls for read-only external-source attachments.
+ * `null`/absent means the capability is not composed (pre-C4) and the surface
+ * renders nothing for it; `canMutate: false` keeps attach/detach/knowledge
+ * actions disabled while chips and per-turn selection stay live.
+ */
+export interface ThreadedExternalSourceControls {
+  /** Live read-only attachments (content-free records; no transcript bytes). */
+  attachments: readonly ExternalSessionAttachmentRecord[];
+  /** Explicit per-turn selection (attachment ids) frozen into the next send. */
+  selectedAttachmentIds: readonly string[];
+  busyAttachmentId: string | null;
+  /** True once the runtime exposes the session incarnation (C4); gates mutations only. */
+  canMutate: boolean;
+  error: string | null;
+  onToggleSelect: (attachmentId: string) => void;
+  onClearSelection: () => void;
+  onAttach: (seed: { sourceId: string; importId: string; itemId: string }) => void;
+  onDetach: (attachmentId: string) => void;
+  onRequestKnowledgeSnapshot: (attachmentId: string) => void;
 }
 
 export interface MissionControlActiveSessionSurfaceProps {
@@ -62,6 +89,14 @@ export interface MissionControlActiveSessionSurfaceProps {
   onRequestProviderChange: (providerId: string) => void;
   onRequestModelChange: (model: string) => void;
   loading: boolean;
+  historicalWindow: ChatHistoryWindowResponse | null;
+  historicalWindowLoading: boolean;
+  historicalWindowError: string | null;
+  onReturnToLatest: () => void;
+  historicalContinuationLoading: "older" | "newer" | null;
+  historicalContinuationError: string | null;
+  onLoadHistoricalContinuation: (direction: "older" | "newer") => void;
+  historicalReadOnly: boolean;
   thread: ChatThreadResponse | null;
   selectedTurnId: string | null;
   selectedContextTurnIds: string[];
@@ -70,6 +105,12 @@ export interface MissionControlActiveSessionSurfaceProps {
   delegationRun: ActiveChatDelegationRun | null;
   delegationSuggestion: ChatDelegationSuggestionRecord | null;
   notices: ChatThreadNotice[];
+  /**
+   * HX-411 controller banner data + operator actions, present only while an
+   * external session_control_client owns this session. Content-free (no secret);
+   * the surface renders it above the conversation with mutation controls disabled.
+   */
+  sessionControlBanner?: MissionThreadedSessionControlBannerProps | null;
   followOutput: boolean;
   streamStatus: ChatStreamStatus;
   visualStreamMode: ChatVisualStreamMode;
@@ -126,6 +167,8 @@ export interface MissionControlActiveSessionSurfaceProps {
   pendingAttachments: Array<Pick<ChatAttachmentRecord, "attachmentId" | "fileName" | "mimeType" | "sizeBytes">>;
   pendingAttachmentModes?: Record<string, "message" | ThreadKnowledgeRetrievalMode>;
   threadKnowledgeAttachments?: ThreadKnowledgeAttachmentRecord[];
+  /** HX-407 C3: absent/null until C4 composes the Chat attachment routes. */
+  externalSourceControls?: ThreadedExternalSourceControls | null;
   presetOptions?: Array<{
     value: string;
     label: string;
@@ -141,11 +184,13 @@ export interface MissionControlActiveSessionSurfaceProps {
     summary: string;
   } | null;
   selectedTurn: ChatThreadResponse["turns"][number] | null;
+  capabilityProfileInspection: ChatCapabilityProfileInspection;
   selectedSessionId: string | null;
   currentWebMode: ChatWebMode;
   currentReviewDepth: ChatOrchestrationReviewDepth;
+  modelCouncilEnabled?: boolean;
   fullWebAccess: boolean;
-  currentThinkingLevel: "off" | "minimal" | "standard" | "extended" | "deep";
+  currentThinkingLevel: ChatThinkingLevel;
   currentSpeedMode: "standard" | "fast";
   currentSubagentPolicy: "off" | "ask_when_useful" | "auto_when_useful";
   routePreflight: RoutingPreflightResult | null;
@@ -172,9 +217,10 @@ export interface MissionControlActiveSessionSurfaceProps {
   onTogglePlanningMode: () => void;
   onToggleResearchMode: () => void;
   onToggleReviewMode: () => void;
+  onToggleModelCouncil?: () => void;
   onSetDeepMode: () => void;
   onFullWebAccessChange: (value: boolean) => void;
-  onSetThinkingLevel: (level: "off" | "minimal" | "standard" | "extended" | "deep") => void;
+  onSetThinkingLevel: (level: ChatThinkingLevel) => void;
   onSetSpeedMode: (mode: "standard" | "fast") => void;
   onSetSubagentPolicy: (policy: "off" | "ask_when_useful" | "auto_when_useful") => void;
   onReviewRunDetails: () => void;

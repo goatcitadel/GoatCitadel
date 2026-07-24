@@ -1,5 +1,6 @@
 import type { ChatMode, ChatSessionLifecycleStatus, ChatSessionScope } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
+import { buildSafeFtsMatchQuery, buildSafePostgresSearchQuery } from "./chat-message-repo.js";
 
 export interface ChatSessionListCandidate {
   sessionId: string;
@@ -87,7 +88,17 @@ export class ChatSessionListRepository {
       params.push(folderId);
     }
 
-    void input.mode;
+    if (input.mode) {
+      // Cowork/Code are compatibility values only; every known conversation
+      // mode resolves to the one canonical Chat surface before LIMIT applies.
+      clauses.push(`
+        CASE
+          WHEN COALESCE(p.mode, 'chat') IN ('chat', 'cowork', 'code') THEN 'chat'
+          ELSE COALESCE(p.mode, 'chat')
+        END = ?
+      `);
+      params.push(normalizeConversationMode(input.mode));
+    }
 
     const tag = input.tag?.trim().toLowerCase();
     if (tag) {
@@ -98,24 +109,51 @@ export class ChatSessionListRepository {
     const search = input.q?.trim().toLowerCase();
     if (search) {
       const like = `%${escapeLike(search)}%`;
+      const fullTextQuery =
+        this.db.dialect === "postgres" ? buildSafePostgresSearchQuery(search) : buildSafeFtsMatchQuery(search);
+      const contentClause = fullTextQuery
+        ? this.db.dialect === "postgres"
+          ? `
+            OR EXISTS (
+              SELECT 1
+              FROM chat_messages AS search_message
+              WHERE search_message.session_id = s.session_id
+                AND search_message.content_search_vector @@ plainto_tsquery('simple', ?)
+            )
+          `
+          : `
+            OR EXISTS (
+              SELECT 1
+              FROM chat_messages_fts
+              INNER JOIN chat_messages AS search_message
+                ON search_message.seq = chat_messages_fts.rowid
+              WHERE search_message.session_id = s.session_id
+                AND chat_messages_fts MATCH ?
+            )
+          `
+        : "";
       clauses.push(`
         (
           LOWER(COALESCE(m.title, '')) LIKE ? ESCAPE '\\'
           OR LOWER(s.session_key) LIKE ? ESCAPE '\\'
           OR LOWER(s.channel) LIKE ? ESCAPE '\\'
           OR LOWER(s.account) LIKE ? ESCAPE '\\'
+          OR LOWER(COALESCE(cp.name, '')) LIKE ? ESCAPE '\\'
           OR LOWER(COALESCE(m.folder_name, '')) LIKE ? ESCAPE '\\'
           OR LOWER(COALESCE(m.tags_json, '[]')) LIKE ? ESCAPE '\\'
-          OR EXISTS (
-            SELECT 1
-            FROM chat_messages AS cm
-            WHERE cm.session_id = s.session_id
-              AND LOWER(cm.content) LIKE ? ESCAPE '\\'
-            LIMIT 1
-          )
+          OR LOWER(
+            CASE
+              WHEN COALESCE(p.mode, 'chat') IN ('chat', 'cowork', 'code') THEN 'chat'
+              ELSE COALESCE(p.mode, 'chat')
+            END
+          ) LIKE ? ESCAPE '\\'
+          ${contentClause}
         )
       `);
-      params.push(like, like, like, like, like, like, like);
+      params.push(like, like, like, like, like, like, like, like);
+      if (fullTextQuery) {
+        params.push(fullTextQuery);
+      }
     }
 
     const parsedCursor = parseCompositeCursor(input.cursor);
@@ -159,6 +197,9 @@ export class ChatSessionListRepository {
         ON p.session_id = s.session_id
       LEFT JOIN chat_session_projects AS sp
         ON sp.session_id = s.session_id
+      LEFT JOIN chat_projects AS cp
+        ON cp.project_id = sp.project_id
+       AND cp.workspace_id = m.workspace_id
       WHERE ${clauses.join("\n        AND ")}
       ORDER BY COALESCE(m.pinned, 0) DESC, s.updated_at DESC, s.session_id DESC
       LIMIT ?
@@ -213,6 +254,10 @@ function parseCompositeCursor(cursor?: string): CompositeCursor | undefined {
 
 function escapeLike(value: string): string {
   return value.replace(/[\\%_]/g, (match) => `\\${match}`);
+}
+
+function normalizeConversationMode(_mode: ChatMode): "chat" {
+  return "chat";
 }
 
 function toCandidateRows(rows: unknown): ChatSessionListCandidateRow[] {

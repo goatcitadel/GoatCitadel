@@ -1,6 +1,6 @@
 // Extracted verbatim from `../../SettingsNativePage.tsx` as part of the
 // per-section settings decomposition.
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Plus, Save } from "lucide-react";
 import type { ToolApprovalMode } from "@goatcitadel/contracts";
 import {
@@ -8,6 +8,7 @@ import {
   fetchSettings,
   fetchToolCatalog,
   fetchToolGrants,
+  isApiRequestError,
   patchSettings,
   revokeToolGrant,
 } from "@goatcitadel/mission-control-shared/api/client";
@@ -64,6 +65,7 @@ export function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
   const [search, setSearch] = useState("");
   const [selectedToolName, setSelectedToolName] = useState("");
   const [approvalModeDraft, setApprovalModeDraft] = useState<ToolApprovalMode>("approve_risky");
+  const preserveApprovalModeDraftRef = useRef(false);
   const [grantForm, setGrantForm] = useState({
     toolPattern: "",
     decision: "allow",
@@ -103,9 +105,13 @@ export function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
 
   useEffect(() => {
     if (data?.settings?.toolApprovalMode) {
+      if (preserveApprovalModeDraftRef.current) {
+        preserveApprovalModeDraftRef.current = false;
+        return;
+      }
       setApprovalModeDraft(normalizeToolApprovalMode(data.settings.toolApprovalMode));
     }
-  }, [data?.settings?.toolApprovalMode]);
+  }, [data?.settings?.revision, data?.settings?.toolApprovalMode]);
 
   useEffect(() => {
     if (!selectedTool) {
@@ -164,11 +170,28 @@ export function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
       setNotice({ tone: "warning", message: approvalBypassRestriction });
       return;
     }
+    if (!data?.settings) {
+      setNotice({ tone: "warning", message: "Reload settings before saving the tool approval mode." });
+      return;
+    }
     try {
-      await patchSettings({ toolApprovalMode: approvalModeDraft });
+      await patchSettings({
+        expectedRevision: data.settings.revision,
+        toolApprovalMode: approvalModeDraft,
+      });
       setNotice({ tone: "success", message: "Tool approval mode saved." });
       await reload();
     } catch (saveError) {
+      if (isApiRequestError(saveError) && saveError.status === 409) {
+        preserveApprovalModeDraftRef.current = true;
+        await reload();
+        setNotice({
+          tone: "warning",
+          message:
+            "Tool settings changed elsewhere. Your approval-mode draft is preserved; review the current settings, then save again to retry.",
+        });
+        return;
+      }
       setNotice({ tone: "error", message: getErrorMessage(saveError) });
     }
   };

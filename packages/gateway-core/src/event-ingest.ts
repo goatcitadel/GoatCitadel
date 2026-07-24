@@ -8,7 +8,7 @@ import type {
   SessionMeta,
   TranscriptEvent,
 } from "@goatcitadel/contracts";
-import { NotFoundError } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { resolveSessionRoute, type SessionRouteResolution } from "./session-key.js";
 import { TokenCostLedger } from "./token-cost-ledger.js";
@@ -101,6 +101,12 @@ export class EventIngestService {
         }
       }
 
+      // Validate canonical provider-attempt references under the same database
+      // transaction as the message commit. This prevents a mixed/foreign/stale
+      // reference set from suppressing legacy projection and closes the TOCTOU
+      // window with retention or privacy deletion.
+      const canonicalUsageValidated = validateCanonicalUsageReferences(this.storage, options.payload, route);
+
       this.storage.sessions.upsert({
         sessionId: route.sessionId,
         sessionKey: route.sessionKey,
@@ -113,39 +119,41 @@ export class EventIngestService {
       this.storage.chatMessages.upsert(toChatMessageRecord(transcriptEvent));
       options.onCommit?.();
 
-      this.storage.sessions.applyUsage({
-        sessionId: route.sessionId,
-        tokenInput: options.payload.usage?.inputTokens ?? 0,
-        tokenOutput: options.payload.usage?.outputTokens ?? 0,
-        tokenCachedInput: options.payload.usage?.cachedInputTokens ?? 0,
-        costUsd: options.payload.usage?.costUsd ?? 0,
-        timestamp: now,
-      });
+      if (!canonicalUsageValidated) {
+        this.storage.sessions.applyUsage({
+          sessionId: route.sessionId,
+          tokenInput: options.payload.usage?.inputTokens ?? 0,
+          tokenOutput: options.payload.usage?.outputTokens ?? 0,
+          tokenCachedInput: options.payload.usage?.cachedInputTokens ?? 0,
+          costUsd: options.payload.usage?.costUsd ?? 0,
+          timestamp: now,
+        });
 
-      const credentialDims = deriveCredentialDims(options.payload.usage);
-      if (credentialDims.usagePool === "subscription" && !this.subscriptionUsageWarned) {
-        this.subscriptionUsageWarned = true;
-        // eslint-disable-next-line no-console -- operator billing diagnostic; mirrors the outbox-failure warning below.
-        console.warn(
-          "[billing] subscription/OAuth credentials draw from the separate Anthropic Agent-SDK " +
-            "credit pool (since 2026-06-15) and can hard-fail when exhausted; prefer a Platform API " +
-            "key for programmatic usage.",
-        );
+        const credentialDims = deriveCredentialDims(options.payload.usage);
+        if (credentialDims.usagePool === "subscription" && !this.subscriptionUsageWarned) {
+          this.subscriptionUsageWarned = true;
+          // eslint-disable-next-line no-console -- operator billing diagnostic; mirrors the outbox-failure warning below.
+          console.warn(
+            "[billing] subscription/OAuth credentials draw from the separate Anthropic Agent-SDK " +
+              "credit pool (since 2026-06-15) and can hard-fail when exhausted; prefer a Platform API " +
+              "key for programmatic usage.",
+          );
+        }
+        this.tokenCostLedger.record({
+          sessionId: route.sessionId,
+          agentId: options.payload.actor.type === "agent" ? options.payload.actor.id : undefined,
+          taskId: options.payload.taskId,
+          providerId: options.payload.usage?.providerId,
+          modelId: options.payload.usage?.model,
+          credentialType: credentialDims.credentialType,
+          usagePool: credentialDims.usagePool,
+          tokenInput: options.payload.usage?.inputTokens,
+          tokenOutput: options.payload.usage?.outputTokens,
+          tokenCachedInput: options.payload.usage?.cachedInputTokens,
+          costUsd: options.payload.usage?.costUsd,
+          timestamp: now,
+        });
       }
-      this.tokenCostLedger.record({
-        sessionId: route.sessionId,
-        agentId: options.payload.actor.type === "agent" ? options.payload.actor.id : undefined,
-        taskId: options.payload.taskId,
-        providerId: options.payload.usage?.providerId,
-        modelId: options.payload.usage?.model,
-        credentialType: credentialDims.credentialType,
-        usagePool: credentialDims.usagePool,
-        tokenInput: options.payload.usage?.inputTokens,
-        tokenOutput: options.payload.usage?.outputTokens,
-        tokenCachedInput: options.payload.usage?.cachedInputTokens,
-        costUsd: options.payload.usage?.costUsd,
-        timestamp: now,
-      });
       this.storage.transcriptOutbox.enqueue(transcriptEvent, now);
 
       this.storage.idempotency.markProcessed(options.endpoint, options.idempotencyKey, "accepted", now);
@@ -253,6 +261,122 @@ export class EventIngestService {
     }
     return deliveredCount;
   }
+}
+
+const MAX_CANONICAL_USAGE_EVENT_IDS = 128;
+const MAX_CANONICAL_USAGE_ID_LENGTH = 512;
+const MAX_CANONICAL_USAGE_OWNER_LENGTH = 512;
+
+/**
+ * Return true only when every supplied canonical usage reference is a terminal,
+ * accepted provider attempt owned by this exact ingest. Any malformed or mixed
+ * set fails the whole ingest transaction; it never falls back to legacy sums.
+ */
+function validateCanonicalUsageReferences(
+  storage: Storage,
+  payload: GatewayEventInput,
+  route: SessionRouteResolution,
+): boolean {
+  const ids = payload.usage?.canonicalUsageEventIds;
+  const owner = payload.usage?.canonicalUsageOwner;
+  if (ids === undefined) {
+    if (owner !== undefined) {
+      throw new ValidationError({
+        field: "usage.canonicalUsageEventIds",
+        message: "canonical usage owner requires canonical usage event ids",
+      });
+    }
+    return false;
+  }
+  if (!owner) {
+    throw new ValidationError({
+      code: "FIELD_REQUIRED",
+      field: "usage.canonicalUsageOwner",
+    });
+  }
+  if (ids.length === 0 || ids.length > MAX_CANONICAL_USAGE_EVENT_IDS) {
+    throw new ValidationError({
+      field: "usage.canonicalUsageEventIds",
+      message: `canonical usage event ids must contain 1-${MAX_CANONICAL_USAGE_EVENT_IDS} entries`,
+    });
+  }
+
+  const workspaceId = requireCanonicalUsageText(
+    owner.workspaceId,
+    "usage.canonicalUsageOwner.workspaceId",
+    MAX_CANONICAL_USAGE_OWNER_LENGTH,
+  );
+  const sessionId = requireCanonicalUsageText(
+    owner.sessionId,
+    "usage.canonicalUsageOwner.sessionId",
+    MAX_CANONICAL_USAGE_OWNER_LENGTH,
+  );
+  const turnId = requireCanonicalUsageText(
+    owner.turnId,
+    "usage.canonicalUsageOwner.turnId",
+    MAX_CANONICAL_USAGE_OWNER_LENGTH,
+  );
+  if (sessionId !== route.sessionId) {
+    throw new ConflictError({
+      message: "canonical usage owner does not match the ingest session",
+    });
+  }
+  const authoritativeSession = storage.chatSessionMeta.getForUpdate(sessionId);
+  if (!authoritativeSession || authoritativeSession.workspaceId !== workspaceId) {
+    throw new ConflictError({
+      message: "canonical usage workspace does not match the authoritative session owner",
+    });
+  }
+  try {
+    const authoritativeTurn = storage.chatTurnTraces.getForUpdate(turnId);
+    if (authoritativeTurn.sessionId !== sessionId) {
+      throw new ConflictError({
+        message: "canonical usage turn does not match the authoritative session owner",
+      });
+    }
+  } catch (error) {
+    if (error instanceof ConflictError) throw error;
+    if (error instanceof NotFoundError) {
+      throw new ConflictError({ message: "canonical usage turn is unavailable" });
+    }
+    throw error;
+  }
+
+  const unique = new Set<string>();
+  for (const candidate of ids) {
+    const eventId = requireCanonicalUsageText(candidate, "usage.canonicalUsageEventIds", MAX_CANONICAL_USAGE_ID_LENGTH);
+    if (unique.has(eventId)) {
+      throw new ValidationError({
+        field: "usage.canonicalUsageEventIds",
+        message: "canonical usage event ids must be unique",
+      });
+    }
+    unique.add(eventId);
+
+    const record = storage.modelUsageEvents.findByEventIdForUpdate(eventId);
+    if (!record) {
+      throw new ConflictError({ message: "canonical usage event is unavailable" });
+    }
+    if (
+      record.workspaceId !== workspaceId ||
+      record.sessionId !== sessionId ||
+      record.turnId !== turnId ||
+      record.taskId !== payload.taskId
+    ) {
+      throw new ConflictError({ message: "canonical usage event owner does not match the ingest owner" });
+    }
+    if (record.transportStatus !== "accepted" || record.terminalOutcome === "in_flight") {
+      throw new ConflictError({ message: "canonical usage event is not terminal and accepted" });
+    }
+  }
+  return true;
+}
+
+function requireCanonicalUsageText(value: unknown, field: string, maxLength: number): string {
+  if (typeof value !== "string" || value.length === 0 || value.length > maxLength || value !== value.trim()) {
+    throw new ValidationError({ field, message: `${field} is invalid` });
+  }
+  return value;
 }
 
 function hashPayload(payload: GatewayEventInput): string {

@@ -9,7 +9,9 @@
 
 import { createHash, createPublicKey, timingSafeEqual } from "node:crypto";
 import {
+  normalizeCompanionPrincipalPurpose,
   ValidationError,
+  type CompanionPrincipalPurpose,
   type CompanionSignatureAlgorithm,
   type DeviceAccessGrantRecord as DeviceAccessGrantContractRecord,
   type DeviceAccessRequestStatus,
@@ -62,6 +64,8 @@ export interface AuthDeviceRequestRecord {
   approvedTokenPlaintext?: string;
   approvedTokenExpiresAt?: string;
   deliveredAt?: string;
+  /** Server-owned, immutable purpose stored with the request; never client-set. */
+  principalPurpose: CompanionPrincipalPurpose;
 }
 
 export interface AuthDeviceGrantRecord {
@@ -77,6 +81,8 @@ export interface AuthDeviceGrantRecord {
   lastUsedAt?: string;
   revokedAt?: string;
   metadata: Record<string, unknown>;
+  /** Server-owned, immutable purpose carried from the request; never client-set. */
+  principalPurpose: CompanionPrincipalPurpose;
 }
 
 // ---------------------------------------------------------------------------
@@ -237,6 +243,7 @@ export function mapAuthDeviceRequestRow(row: Record<string, unknown>): AuthDevic
     approvedTokenExpiresAt:
       typeof row.approved_token_expires_at === "string" ? row.approved_token_expires_at : undefined,
     deliveredAt: typeof row.delivered_at === "string" ? row.delivered_at : undefined,
+    principalPurpose: normalizeCompanionPrincipalPurpose(row.principal_purpose),
   };
 }
 
@@ -254,6 +261,7 @@ export function mapAuthDeviceGrantRow(row: Record<string, unknown>): AuthDeviceG
     lastUsedAt: typeof row.last_used_at === "string" ? row.last_used_at : undefined,
     revokedAt: typeof row.revoked_at === "string" ? row.revoked_at : undefined,
     metadata: safeJsonParseRecord(typeof row.metadata_json === "string" ? row.metadata_json : "{}", {}),
+    principalPurpose: normalizeCompanionPrincipalPurpose(row.principal_purpose),
   };
 }
 
@@ -271,6 +279,7 @@ export function toDeviceAccessGrantRecord(grant: AuthDeviceGrantRecord): DeviceA
     lastUsedAt: grant.lastUsedAt,
     revokedAt: grant.revokedAt,
     metadata: grant.metadata,
+    principalPurpose: grant.principalPurpose,
   };
 }
 

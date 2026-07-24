@@ -1,4 +1,4 @@
-import Fastify, { type FastifyRequest } from "fastify";
+import Fastify from "fastify";
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import cors from "@fastify/cors";
@@ -7,9 +7,11 @@ import { enterRequestAttribution } from "@goatcitadel/storage";
 import { loadLocalEnvFile } from "./env-file.js";
 import { gatewayPlugin } from "./plugins/storage.js";
 import { routeServicesPlugin } from "./plugins/route-services.js";
+import { createAppSharedHostLifecycle, sharedHostLifecyclePlugin } from "./plugins/shared-host-lifecycle.js";
 import { authPlugin } from "./plugins/auth.js";
 import { idempotencyHeaderPlugin } from "./plugins/idempotency.js";
 import { healthRoute } from "./routes/health.js";
+import { sharedHostLifecycleRoutes } from "./routes/shared-host-lifecycle.js";
 import { livezRoute } from "./routes/livez.js";
 import { gatewayEventsRoute } from "./routes/gateway-events.js";
 import { sessionsListRoute } from "./routes/sessions-list.js";
@@ -21,6 +23,7 @@ import { complianceRoutes } from "./routes/compliance.js";
 import { costsRoutes } from "./routes/costs.js";
 import { browserSessionsRoutes } from "./routes/browser-sessions.js";
 import { reviewReadinessRoutes } from "./routes/review-readiness.js";
+import { runtimeAuthorityRoutes } from "./routes/runtime-authority.js";
 import { skillsRoutes } from "./routes/skills.js";
 import { orchestrationRoutes } from "./routes/orchestration.js";
 import { assemblyRoutes } from "./routes/assembly.js";
@@ -36,10 +39,12 @@ import { llamaCppRoutes } from "./routes/llamacpp.js";
 import { integrationsRoutes } from "./routes/integrations.js";
 import { integrationWebhookRoutes } from "./routes/integration-webhooks.js";
 import { meshRoutes } from "./routes/mesh.js";
+import { meshCapabilityRoutes } from "./routes/mesh-capabilities.js";
 import { mobileRoutes } from "./routes/mobile.js";
 import { onboardingRoutes } from "./routes/onboarding.js";
 import { demoRoutes } from "./routes/demo.js";
 import { memoryRoutes } from "./routes/memory.js";
+import { journeyRoutes } from "./routes/journey.js";
 import { npuRoutes } from "./routes/npu.js";
 import { uiChangeRiskRoutes } from "./routes/ui-change-risk.js";
 import { agentsRoutes } from "./routes/agents.js";
@@ -47,6 +52,7 @@ import { toolsRoutes } from "./routes/tools.js";
 import { commsRoutes } from "./routes/comms.js";
 import { communicationsRoutes } from "./routes/communications.js";
 import { personalOpsRoutes } from "./routes/personal-ops.js";
+import { opsSavedBoardRoutes } from "./routes/ops-boards.js";
 import { knowledgeRoutes } from "./routes/knowledge.js";
 import { authRoutes } from "./routes/auth.js";
 import { secretsRoutes } from "./routes/secrets.js";
@@ -69,8 +75,11 @@ import { daemonRoutes } from "./routes/daemon.js";
 import { curatorRoutes } from "./routes/curator.js";
 import { improvementRoutes } from "./routes/improvement.js";
 import { researchSearchRoutes } from "./routes/research-search.js";
+import { remoteWorkersRoutes } from "./routes/remote-workers.js";
 import { updateScoutRoutes } from "./routes/update-scout.js";
 import { workspacesRoutes } from "./routes/workspaces.js";
+import { workspacePathBridgeRoutes } from "./routes/workspace-path-bridge.js";
+import { externalSourceRoutes } from "./routes/external-sources.js";
 import { hooksRoutes } from "./routes/hooks.js";
 import { durableRoutes } from "./routes/durable.js";
 import { connectorsRoutes } from "./routes/connectors.js";
@@ -85,6 +94,7 @@ import { isSuspiciousEncodedPath } from "./path-guard.js";
 import { installEmptyBodyTolerantJsonParser } from "./empty-json-body-parser.js";
 import { enterDevDiagnosticsContext } from "./dev-diagnostics/service.js";
 import { installRouteAccessTracking } from "./routes/route-access.js";
+import { isLoopbackRateLimitAllowlisted, resolveWebhookRateLimitConfig } from "./services/webhook-rate-limit.js";
 
 loadLocalEnvFile();
 
@@ -124,285 +134,334 @@ export async function buildApp() {
     // aborting the storage plugin before recovery finishes.
     pluginTimeout: resolveFastifyPluginTimeoutMs(),
   });
-  installEmptyBodyTolerantJsonParser(app);
-  const allowedOrigins = resolveAllowedOrigins();
-  const allowTailnetDevOrigins = resolveAllowTailnetDevOrigins();
-  const tailnetShortHostAllowlist = resolveTailnetShortHostAllowlist();
-  const rateLimitConfig = resolveRateLimitConfig();
-
-  installRouteAccessTracking(app);
-
-  /**
-   * CORS origin validation — three-tier allowlist:
-   *
-   * 1. **Explicit origins** (`GOATCITADEL_ALLOWED_ORIGINS` env var or defaults):
-   *    Always accepted. Defaults include localhost:5173 (dev), localhost:4173 (preview),
-   *    and 127.0.0.1:8787 (gateway self-reference).
-   *
-   * 2. **Loopback dev origins** (non-production only):
-   *    Any origin resolving to 127.0.0.1/::1 on any port is accepted in
-   *    non-production environments, enabling local dev tooling on arbitrary ports.
-   *
-   * 3. **Tailnet/private dev origins** (opt-in via `GOATCITADEL_ALLOW_TAILNET_DEV_ORIGINS`):
-   *    Origins matching Tailscale `.ts.net` patterns are accepted when enabled,
-   *    allowing access from other devices on the same tailnet or private network.
-   *
-   * Requests with no `Origin` header (e.g., server-to-server, curl) are always accepted.
-   */
-  await app.register(cors, {
-    origin: (origin, cb) => {
-      if (!origin) {
-        cb(null, true);
-        return;
-      }
-      if (allowedOrigins.has(origin)) {
-        cb(null, true);
-        return;
-      }
-      if (process.env.NODE_ENV !== "production" && isLoopbackDevOrigin(origin)) {
-        cb(null, true);
-        return;
-      }
-      if (allowTailnetDevOrigins && isTailnetDevOrigin(origin, tailnetShortHostAllowlist)) {
-        cb(null, true);
-        return;
-      }
-      cb(new Error("Origin not allowed by CORS policy"), false);
-    },
-  });
-
-  const isNonLoopbackBind = !["127.0.0.1", "::1", "localhost"].includes(process.env.GATEWAY_HOST ?? "127.0.0.1");
-
-  app.addHook("preSerialization", async (_request, reply, payload) => {
-    return reply.statusCode >= 400 ? projectPublicErrorValue(payload) : payload;
-  });
-
-  app.addHook("onSend", async (_request, reply) => {
-    applyBaselineSecurityHeaders(reply, { isNonLoopbackBind });
-  });
-
-  app.addHook("onRequest", async (request, reply) => {
-    const requestState = request as typeof request & GatewayRequestState;
-    const correlationId = readRequestHeader(request.headers["x-goatcitadel-correlation-id"]) ?? randomUUID();
-    const traceId = readTraceId(request.headers.traceparent, correlationId);
-    const originSurface = readRequestHeader(request.headers["x-goatcitadel-origin-surface"]);
-    const sessionId = readRequestHeader(request.headers["x-goatcitadel-session-id"]);
-    const browserOrigin = readRequestHeader(request.headers.origin);
-    const browserIntent = readRequestHeader(request.headers[BROWSER_MUTATION_INTENT_HEADER]);
-    requestState.correlationId = correlationId;
-    requestState.traceId = traceId;
-    requestState.originSurface = originSurface;
-    requestState.requestSessionId = sessionId;
-    requestState.requestStartedAtMs = performance.now();
-    reply.header("x-goatcitadel-correlation-id", correlationId);
-    const diagnosticRequestUrl = stripDiagnosticUrlQuery(request.url);
-    const diagnosticRoute = request.routeOptions.url || diagnosticRequestUrl;
-    enterRequestAttribution({
-      correlationId,
-      traceId,
-      originSurface,
+  const sharedHostLifecycle = createAppSharedHostLifecycle(app);
+  try {
+    // Lifecycle ownership exists before any runtime/plugin can schedule work.
+    // Admission remains closed in `starting` until every route/runtime owner is
+    // wired and accepting evidence has persisted below.
+    await app.register(sharedHostLifecyclePlugin, {
+      lifecycle: sharedHostLifecycle,
+      activateImmediately: false,
     });
-    enterDevDiagnosticsContext({
-      correlationId,
-      route: diagnosticRoute,
-      sessionId,
+    installEmptyBodyTolerantJsonParser(app);
+    const allowedOrigins = resolveAllowedOrigins();
+    const allowTailnetDevOrigins = resolveAllowTailnetDevOrigins();
+    const tailnetShortHostAllowlist = resolveTailnetShortHostAllowlist();
+    const rateLimitConfig = resolveRateLimitConfig();
+
+    installRouteAccessTracking(app);
+
+    /**
+     * CORS origin validation — three-tier allowlist:
+     *
+     * 1. **Explicit origins** (`GOATCITADEL_ALLOWED_ORIGINS` env var or defaults):
+     *    Always accepted. Defaults include localhost:5173 (dev), localhost:4173 (preview),
+     *    and 127.0.0.1:8787 (gateway self-reference).
+     *
+     * 2. **Loopback dev origins** (non-production only):
+     *    Any origin resolving to 127.0.0.1/::1 on any port is accepted in
+     *    non-production environments, enabling local dev tooling on arbitrary ports.
+     *
+     * 3. **Tailnet/private dev origins** (opt-in via `GOATCITADEL_ALLOW_TAILNET_DEV_ORIGINS`):
+     *    Origins matching Tailscale `.ts.net` patterns are accepted when enabled,
+     *    allowing access from other devices on the same tailnet or private network.
+     *
+     * Requests with no `Origin` header (e.g., server-to-server, curl) are always accepted.
+     */
+    await app.register(cors, {
+      origin: (origin, cb) => {
+        if (!origin) {
+          cb(null, true);
+          return;
+        }
+        if (allowedOrigins.has(origin)) {
+          cb(null, true);
+          return;
+        }
+        if (process.env.NODE_ENV !== "production" && isLoopbackDevOrigin(origin)) {
+          cb(null, true);
+          return;
+        }
+        if (allowTailnetDevOrigins && isTailnetDevOrigin(origin, tailnetShortHostAllowlist)) {
+          cb(null, true);
+          return;
+        }
+        cb(new Error("Origin not allowed by CORS policy"), false);
+      },
     });
-    app.gatewayRuntime?.recordDevDiagnostic({
-      level: "debug",
-      category: "api",
-      event: "request.start",
-      message: `${request.method} ${diagnosticRoute}`,
-      route: diagnosticRoute,
-      correlationId,
-      sessionId,
-      context: {
-        method: request.method,
-        url: diagnosticRequestUrl,
+
+    const isNonLoopbackBind = !["127.0.0.1", "::1", "localhost"].includes(process.env.GATEWAY_HOST ?? "127.0.0.1");
+
+    app.addHook("preSerialization", async (_request, reply, payload) => {
+      return reply.statusCode >= 400 ? projectPublicErrorValue(payload) : payload;
+    });
+
+    app.addHook("onSend", async (_request, reply) => {
+      applyBaselineSecurityHeaders(reply, { isNonLoopbackBind });
+    });
+
+    app.addHook("onRequest", async (request, reply) => {
+      const requestState = request as typeof request & GatewayRequestState;
+      const correlationId = readRequestHeader(request.headers["x-goatcitadel-correlation-id"]) ?? randomUUID();
+      const traceId = readTraceId(request.headers.traceparent, correlationId);
+      const originSurface = readRequestHeader(request.headers["x-goatcitadel-origin-surface"]);
+      const sessionId = readRequestHeader(request.headers["x-goatcitadel-session-id"]);
+      const browserOrigin = readRequestHeader(request.headers.origin);
+      const browserIntent = readRequestHeader(request.headers[BROWSER_MUTATION_INTENT_HEADER]);
+      requestState.correlationId = correlationId;
+      requestState.traceId = traceId;
+      requestState.originSurface = originSurface;
+      requestState.requestSessionId = sessionId;
+      requestState.requestStartedAtMs = performance.now();
+      reply.header("x-goatcitadel-correlation-id", correlationId);
+      const diagnosticRequestUrl = stripDiagnosticUrlQuery(request.url);
+      const diagnosticRoute = request.routeOptions.url || diagnosticRequestUrl;
+      enterRequestAttribution({
+        correlationId,
+        traceId,
         originSurface,
-      },
-    });
-    const rawUrl = request.raw.url ?? request.url;
-    if (isSuspiciousEncodedPath(rawUrl)) {
-      return reply.code(400).send({
-        error: "Rejected request path due to suspicious encoded path segments.",
       });
-    }
-    if (
-      MUTATING_HTTP_METHODS.has(request.method.toUpperCase()) &&
-      browserOrigin &&
-      browserIntent !== BROWSER_MUTATION_INTENT_VALUE
-    ) {
-      return reply.code(400).send({
-        error: `Missing ${BROWSER_MUTATION_INTENT_HEADER}: ${BROWSER_MUTATION_INTENT_VALUE} for browser-origin mutating request.`,
+      enterDevDiagnosticsContext({
+        correlationId,
+        route: diagnosticRoute,
+        sessionId,
       });
-    }
-  });
-
-  app.addHook("onResponse", async (request, reply) => {
-    const requestState = request as typeof request & GatewayRequestState;
-    const durationMs = calculateRequestDurationMs(requestState);
-    const diagnosticRoute = stripDiagnosticUrlQuery(request.routeOptions.url || request.url);
-    app.gatewayRuntime?.recordDevDiagnostic({
-      level: reply.statusCode >= 500 ? "error" : reply.statusCode >= 400 ? "warn" : "debug",
-      category: "api",
-      event: "request.finish",
-      message: `${request.method} ${diagnosticRoute} -> ${reply.statusCode}`,
-      route: diagnosticRoute,
-      correlationId: requestState.correlationId,
-      sessionId: requestState.requestSessionId,
-      durationMs,
-      context: {
-        statusCode: reply.statusCode,
-        method: request.method,
-        durationMs,
-      },
-    });
-  });
-
-  app.addHook("onError", async (request, reply, error) => {
-    const requestState = request as typeof request & GatewayRequestState;
-    const durationMs = calculateRequestDurationMs(requestState);
-    const diagnosticRoute = stripDiagnosticUrlQuery(request.routeOptions.url || request.url);
-    app.gatewayRuntime?.recordDevDiagnostic({
-      level: "error",
-      category: "api",
-      event: "request.error",
-      message: `${request.method} ${diagnosticRoute} failed`,
-      route: diagnosticRoute,
-      correlationId: requestState.correlationId,
-      sessionId: requestState.requestSessionId,
-      durationMs,
-      context: {
-        statusCode: reply.statusCode,
-        error: error.message,
-        durationMs,
-      },
-    });
-  });
-
-  if (rateLimitConfig.enabled) {
-    app.addHook("onRoute", (routeOptions) => {
-      const bucket = classifyRateLimitBucket(routeOptions.url, routeOptions.method);
-      const max =
-        bucket === "auth"
-          ? rateLimitConfig.maxAuth
-          : bucket === "mutation"
-            ? rateLimitConfig.maxMutation
-            : bucket === "sse"
-              ? rateLimitConfig.maxSseConnect
-              : rateLimitConfig.maxGeneral;
-      const currentConfig = (routeOptions.config ?? {}) as Record<string, unknown>;
-      const currentRateLimit = isRecord(currentConfig.rateLimit) ? currentConfig.rateLimit : {};
-      const existingMax = typeof currentRateLimit.max === "number" ? currentRateLimit.max : undefined;
-      routeOptions.config = {
-        ...currentConfig,
-        rateLimit: {
-          ...currentRateLimit,
-          max: existingMax === undefined ? max : Math.min(existingMax, max),
+      app.gatewayRuntime?.recordDevDiagnostic({
+        level: "debug",
+        category: "api",
+        event: "request.start",
+        message: `${request.method} ${diagnosticRoute}`,
+        route: diagnosticRoute,
+        correlationId,
+        sessionId,
+        context: {
+          method: request.method,
+          url: diagnosticRequestUrl,
+          originSurface,
         },
-      };
+      });
+      const rawUrl = request.raw.url ?? request.url;
+      if (isSuspiciousEncodedPath(rawUrl)) {
+        return reply.code(400).send({
+          error: "Rejected request path due to suspicious encoded path segments.",
+        });
+      }
+      if (
+        MUTATING_HTTP_METHODS.has(request.method.toUpperCase()) &&
+        browserOrigin &&
+        browserIntent !== BROWSER_MUTATION_INTENT_VALUE
+      ) {
+        return reply.code(400).send({
+          error: `Missing ${BROWSER_MUTATION_INTENT_HEADER}: ${BROWSER_MUTATION_INTENT_VALUE} for browser-origin mutating request.`,
+        });
+      }
     });
 
-    await app.register(rateLimit, {
-      global: false,
-      timeWindow: "1 minute",
-      keyGenerator: (request) => request.ip,
-      allowList: (request, key) => isLoopbackRateLimitAllowlisted(String(key), request),
-      max: rateLimitConfig.maxGeneral,
-      skipOnError: true,
-      addHeaders: {
-        "x-ratelimit-limit": true,
-        "x-ratelimit-remaining": true,
-        "x-ratelimit-reset": true,
-      },
+    app.addHook("onResponse", async (request, reply) => {
+      const requestState = request as typeof request & GatewayRequestState;
+      const durationMs = calculateRequestDurationMs(requestState);
+      const diagnosticRoute = stripDiagnosticUrlQuery(request.routeOptions.url || request.url);
+      app.gatewayRuntime?.recordDevDiagnostic({
+        level: reply.statusCode >= 500 ? "error" : reply.statusCode >= 400 ? "warn" : "debug",
+        category: "api",
+        event: "request.finish",
+        message: `${request.method} ${diagnosticRoute} -> ${reply.statusCode}`,
+        route: diagnosticRoute,
+        correlationId: requestState.correlationId,
+        sessionId: requestState.requestSessionId,
+        durationMs,
+        context: {
+          statusCode: reply.statusCode,
+          method: request.method,
+          durationMs,
+        },
+      });
     });
+
+    app.addHook("onError", async (request, reply, error) => {
+      const requestState = request as typeof request & GatewayRequestState;
+      const durationMs = calculateRequestDurationMs(requestState);
+      const diagnosticRoute = stripDiagnosticUrlQuery(request.routeOptions.url || request.url);
+      app.gatewayRuntime?.recordDevDiagnostic({
+        level: "error",
+        category: "api",
+        event: "request.error",
+        message: `${request.method} ${diagnosticRoute} failed`,
+        route: diagnosticRoute,
+        correlationId: requestState.correlationId,
+        sessionId: requestState.requestSessionId,
+        durationMs,
+        context: {
+          statusCode: reply.statusCode,
+          error: error.message,
+          durationMs,
+        },
+      });
+    });
+
+    if (rateLimitConfig.enabled) {
+      app.addHook("onRoute", (routeOptions) => {
+        const bucket = classifyRateLimitBucket(routeOptions.url, routeOptions.method);
+        const max =
+          bucket === "auth"
+            ? rateLimitConfig.maxAuth
+            : bucket === "mutation"
+              ? rateLimitConfig.maxMutation
+              : bucket === "webhook_ingress"
+                ? rateLimitConfig.maxWebhookIngress
+                : bucket === "sse"
+                  ? rateLimitConfig.maxSseConnect
+                  : rateLimitConfig.maxGeneral;
+        const currentConfig = (routeOptions.config ?? {}) as Record<string, unknown>;
+        const currentRateLimit = isRecord(currentConfig.rateLimit) ? currentConfig.rateLimit : {};
+        const existingMax = typeof currentRateLimit.max === "number" ? currentRateLimit.max : undefined;
+        routeOptions.config = {
+          ...currentConfig,
+          rateLimit: {
+            ...currentRateLimit,
+            max: existingMax === undefined ? max : Math.min(existingMax, max),
+          },
+        };
+      });
+
+      await app.register(rateLimit, {
+        global: false,
+        timeWindow: "1 minute",
+        keyGenerator: (request) => request.ip,
+        allowList: (request) => isLoopbackRateLimitAllowlisted(request.ip, request),
+        max: rateLimitConfig.maxGeneral,
+        skipOnError: true,
+        addHeaders: {
+          "x-ratelimit-limit": true,
+          "x-ratelimit-remaining": true,
+          "x-ratelimit-reset": true,
+        },
+      });
+    }
+
+    await app.register(gatewayPlugin);
+    await app.register(routeServicesPlugin);
+    assertDeploymentProfileStartupSafety(app.gatewayConfig, allowedOrigins, {
+      bindHost: process.env.GATEWAY_HOST ?? "127.0.0.1",
+      tailnetDevOriginsEnabled: allowTailnetDevOrigins,
+    });
+    // SECURITY (codex finding #1): Refuse to boot in token mode with the
+    // shipped placeholder token. Must run after the deployment profile
+    // guard so deploys that legitimately use auth.mode=none (local_dev)
+    // are not blocked.
+    assertAuthTokenIsNotPlaceholder(app.gatewayConfig.assistant.auth);
+    await app.register(authPlugin);
+    await app.register(idempotencyHeaderPlugin, {
+      mutationStore: app.gatewayRuntime.mutationIdempotencyStore,
+    });
+
+    await app.register(healthRoute);
+    await app.register(sharedHostLifecycleRoutes);
+    await app.register(livezRoute);
+    await app.register(authRoutes);
+    await app.register(secretsRoutes);
+    await app.register(gatewayEventsRoute);
+    await app.register(sessionsListRoute);
+    await app.register(toolsInvokeRoute);
+    await app.register(approvalsRoutes);
+    await app.register(capabilityScopeRoutes);
+    await app.register(citadelsRoutes);
+    await app.register(complianceRoutes);
+    await app.register(costsRoutes);
+    await app.register(browserSessionsRoutes);
+    await app.register(reviewReadinessRoutes);
+    await app.register(runtimeAuthorityRoutes);
+    await app.register(skillsRoutes);
+    await app.register(curatorRoutes);
+    await app.register(orchestrationRoutes);
+    await app.register(assemblyRoutes);
+    await app.register(tasksRoutes);
+    await app.register(eventsRoutes);
+    await app.register(dashboardRoutes);
+    await app.register(capabilitiesRoutes);
+    await app.register(filesRoutes);
+    await app.register(llmRoutes);
+    await app.register(turnsRoutes);
+    await app.register(localAiRoutes);
+    await app.register(llamaCppRoutes);
+    await app.register(integrationsRoutes);
+    await app.register(integrationWebhookRoutes);
+    await app.register(meshRoutes);
+    // HX-408 M1: authenticated mesh capability publication surface. The
+    // mesh-node access class fails closed without the composed owner, so the
+    // guard keeps a miswired build from booting a dead surface.
+    if (!app.services.meshCapabilityPublication) {
+      throw new Error("Mesh capability publication service is not composed.");
+    }
+    await app.register(meshCapabilityRoutes);
+    await app.register(mobileRoutes);
+    await app.register(onboardingRoutes);
+    await app.register(demoRoutes);
+    await app.register(memoryRoutes);
+    await app.register(journeyRoutes);
+    await app.register(npuRoutes);
+    await app.register(uiChangeRiskRoutes);
+    await app.register(agentsRoutes);
+    await app.register(toolsRoutes);
+    await app.register(commsRoutes);
+    await app.register(communicationsRoutes);
+    await app.register(personalOpsRoutes);
+    if (!app.services.opsSavedBoards) {
+      throw new Error("Ops saved board route service is not composed.");
+    }
+    await app.register(opsSavedBoardRoutes, { service: app.services.opsSavedBoards });
+    await app.register(knowledgeRoutes);
+    await app.register(chatRoutes);
+    await app.register(promptPackRoutes);
+    await app.register(modelComparisonRoutes);
+    await app.register(mcpRoutes);
+    await app.register(voiceRoutes);
+    await app.register(mediaRoutes);
+    await app.register(daemonRoutes);
+    await app.register(improvementRoutes);
+    await app.register(researchSearchRoutes);
+    await app.register(remoteWorkersRoutes);
+    await app.register(updateScoutRoutes);
+    await app.register(workspacesRoutes);
+    // HX-407 C4: the external-source domain is part of the production route
+    // surface (the proof-only environment gate is removed).
+    if (!app.services.externalSources) {
+      throw new Error("External source route service is not composed.");
+    }
+    await app.register(externalSourceRoutes, { service: app.services.externalSources });
+    if (!app.services.workspacePathBridge) {
+      throw new Error("Workspace path bridge route service is not composed.");
+    }
+    await app.register(workspacePathBridgeRoutes, { service: app.services.workspacePathBridge });
+    await app.register(hooksRoutes);
+    await app.register(durableRoutes);
+    await app.register(connectorsRoutes);
+    await app.register(trustRoutes);
+    await app.register(surfaceRoutes);
+    await app.register(addonsRoutes);
+    await app.register(capabilityPacksRoutes);
+    await app.register(evidenceRoutes);
+    await app.register(evidenceReceiptsRoutes);
+    await app.register(adminRoutes);
+    await app.register(autonomyControlRoutes);
+    await app.register(docsRoutes);
+    await app.register(devDiagnosticsRoutes);
+    await app.register(devVerificationRoutes);
+
+    sharedHostLifecycle.markAccepting();
+    await sharedHostLifecycle.flushSignals();
+    return app;
+  } catch (error) {
+    // Fastify does not return a partially built app to the caller. Close it
+    // here so lifecycle ownership and any critical-init storage handles are
+    // released on every build failure.
+    try {
+      await app.close();
+    } catch (cleanupError) {
+      app.log.warn(cleanupError, "gateway build-failure cleanup failed");
+    }
+    throw error;
   }
-
-  await app.register(gatewayPlugin);
-  await app.register(routeServicesPlugin);
-  assertDeploymentProfileStartupSafety(app.gatewayConfig, allowedOrigins, {
-    bindHost: process.env.GATEWAY_HOST ?? "127.0.0.1",
-    tailnetDevOriginsEnabled: allowTailnetDevOrigins,
-  });
-  // SECURITY (codex finding #1): Refuse to boot in token mode with the
-  // shipped placeholder token. Must run after the deployment profile
-  // guard so deploys that legitimately use auth.mode=none (local_dev)
-  // are not blocked.
-  assertAuthTokenIsNotPlaceholder(app.gatewayConfig.assistant.auth);
-  await app.register(authPlugin);
-  await app.register(idempotencyHeaderPlugin, {
-    mutationStore: app.gatewayRuntime.mutationIdempotencyStore,
-  });
-
-  await app.register(healthRoute);
-  await app.register(livezRoute);
-  await app.register(authRoutes);
-  await app.register(secretsRoutes);
-  await app.register(gatewayEventsRoute);
-  await app.register(sessionsListRoute);
-  await app.register(toolsInvokeRoute);
-  await app.register(approvalsRoutes);
-  await app.register(capabilityScopeRoutes);
-  await app.register(citadelsRoutes);
-  await app.register(complianceRoutes);
-  await app.register(costsRoutes);
-  await app.register(browserSessionsRoutes);
-  await app.register(reviewReadinessRoutes);
-  await app.register(skillsRoutes);
-  await app.register(curatorRoutes);
-  await app.register(orchestrationRoutes);
-  await app.register(assemblyRoutes);
-  await app.register(tasksRoutes);
-  await app.register(eventsRoutes);
-  await app.register(dashboardRoutes);
-  await app.register(capabilitiesRoutes);
-  await app.register(filesRoutes);
-  await app.register(llmRoutes);
-  await app.register(turnsRoutes);
-  await app.register(localAiRoutes);
-  await app.register(llamaCppRoutes);
-  await app.register(integrationsRoutes);
-  await app.register(integrationWebhookRoutes);
-  await app.register(meshRoutes);
-  await app.register(mobileRoutes);
-  await app.register(onboardingRoutes);
-  await app.register(demoRoutes);
-  await app.register(memoryRoutes);
-  await app.register(npuRoutes);
-  await app.register(uiChangeRiskRoutes);
-  await app.register(agentsRoutes);
-  await app.register(toolsRoutes);
-  await app.register(commsRoutes);
-  await app.register(communicationsRoutes);
-  await app.register(personalOpsRoutes);
-  await app.register(knowledgeRoutes);
-  await app.register(chatRoutes);
-  await app.register(promptPackRoutes);
-  await app.register(modelComparisonRoutes);
-  await app.register(mcpRoutes);
-  await app.register(voiceRoutes);
-  await app.register(mediaRoutes);
-  await app.register(daemonRoutes);
-  await app.register(improvementRoutes);
-  await app.register(researchSearchRoutes);
-  await app.register(updateScoutRoutes);
-  await app.register(workspacesRoutes);
-  await app.register(hooksRoutes);
-  await app.register(durableRoutes);
-  await app.register(connectorsRoutes);
-  await app.register(trustRoutes);
-  await app.register(surfaceRoutes);
-  await app.register(addonsRoutes);
-  await app.register(capabilityPacksRoutes);
-  await app.register(evidenceRoutes);
-  await app.register(evidenceReceiptsRoutes);
-  await app.register(adminRoutes);
-  await app.register(autonomyControlRoutes);
-  await app.register(docsRoutes);
-  await app.register(devDiagnosticsRoutes);
-  await app.register(devVerificationRoutes);
-
-  return app;
 }
 
 /**
@@ -527,61 +586,31 @@ function normalizeConfiguredOrigin(rawOrigin: string, envName: string): string {
   }
 }
 
-function isLoopbackRateLimitAllowlisted(ip: string, request?: Pick<FastifyRequest, "headers" | "ips">): boolean {
-  if (hasProxyProvenance(request)) {
-    return false;
-  }
-  const normalized = ip.trim().toLowerCase().replace(/%.+$/, "");
-  return (
-    normalized === "::1" ||
-    normalized === "::ffff:7f00:1" ||
-    normalized === "::ffff:127.0.0.1" ||
-    normalized.startsWith("127.") ||
-    normalized.startsWith("::ffff:127.")
-  );
-}
-
-function hasProxyProvenance(request: Pick<FastifyRequest, "headers" | "ips"> | undefined): boolean {
-  if (!request) {
-    return false;
-  }
-  const forwarded = request.headers.forwarded;
-  const forwardedFor = request.headers["x-forwarded-for"];
-  const realIp = request.headers["x-real-ip"];
-  return (
-    hasNonEmptyHeaderValue(forwarded) ||
-    hasNonEmptyHeaderValue(forwardedFor) ||
-    hasNonEmptyHeaderValue(realIp) ||
-    (Array.isArray(request.ips) && request.ips.length > 1)
-  );
-}
-
-function hasNonEmptyHeaderValue(value: string | string[] | undefined): boolean {
-  if (Array.isArray(value)) {
-    return value.some((entry) => entry.trim().length > 0);
-  }
-  return typeof value === "string" && value.trim().length > 0;
-}
-
 function resolveRateLimitConfig(): {
   enabled: boolean;
   maxGeneral: number;
   maxMutation: number;
   maxAuth: number;
   maxSseConnect: number;
+  maxWebhookIngress: number;
 } {
   const enabledRaw = process.env.GOATCITADEL_RATE_LIMIT_ENABLED?.trim().toLowerCase();
   const enabled = enabledRaw === undefined ? true : enabledRaw === "1" || enabledRaw === "true";
+  const webhookRateLimit = resolveWebhookRateLimitConfig();
   return {
     enabled,
     maxGeneral: parsePositiveInt(process.env.GOATCITADEL_RATE_LIMIT_MAX_GENERAL, 500),
     maxMutation: parsePositiveInt(process.env.GOATCITADEL_RATE_LIMIT_MAX_MUTATION, 180),
     maxAuth: parsePositiveInt(process.env.GOATCITADEL_RATE_LIMIT_MAX_AUTH, 60),
     maxSseConnect: parsePositiveInt(process.env.GOATCITADEL_RATE_LIMIT_MAX_SSE_CONNECT, 45),
+    maxWebhookIngress: webhookRateLimit.maxIngress,
   };
 }
 
-function classifyRateLimitBucket(url: string, method: string | string[]): "general" | "mutation" | "auth" | "sse" {
+function classifyRateLimitBucket(
+  url: string,
+  method: string | string[],
+): "general" | "mutation" | "auth" | "sse" | "webhook_ingress" {
   const normalizedUrl = url.toLowerCase();
   const normalizedMethod = Array.isArray(method) ? (method[0]?.toUpperCase() ?? "GET") : method.toUpperCase();
   if (normalizedUrl.includes("/events/stream") || normalizedUrl.includes("/dev/diagnostics/stream")) {
@@ -590,10 +619,19 @@ function classifyRateLimitBucket(url: string, method: string | string[]): "gener
   if (normalizedUrl.startsWith("/api/v1/auth") || normalizedUrl.startsWith("/api/v1/secrets")) {
     return "auth";
   }
+  if (normalizedMethod === "POST" && isSignedInboundWebhookRoute(normalizedUrl)) {
+    return "webhook_ingress";
+  }
   if (normalizedMethod === "GET" || normalizedMethod === "HEAD" || normalizedMethod === "OPTIONS") {
     return "general";
   }
   return "mutation";
+}
+
+function isSignedInboundWebhookRoute(normalizedUrl: string): boolean {
+  return /^\/api\/v1\/integrations\/connections\/[^/]+\/(?:[^/]+\/inbound|(?:slack|telegram|whatsapp|line|nextcloud-talk)\/webhook)$/u.test(
+    normalizedUrl,
+  );
 }
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {

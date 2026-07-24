@@ -7,6 +7,7 @@ import type {
   McpServerTemplateRecord,
   McpToolRecord,
 } from "@goatcitadel/contracts";
+import { resolveMcpServerConnectionMode } from "@goatcitadel/contracts";
 import { z } from "zod";
 import {
   areExperimentalRemoteMcpTransportsEnabled,
@@ -528,6 +529,13 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     if (authBlock) {
       return sendMcpPublicError(reply, 401, authBlock);
     }
+    // HX-415: fail a requester-scoped target closed before building any
+    // body-derived policy context; the direct route cannot supply requester
+    // authority.
+    const requesterContextBlock = evaluateMcpRequesterContextGate(fastify.services.mcp, target.serverId);
+    if (requesterContextBlock) {
+      return sendMcpPublicError(reply, 400, requesterContextBlock);
+    }
     try {
       const actorId = request.authActorId?.trim() || parsed.data.agentId?.trim() || "operator";
       const policyContext = fastify.services.tools?.resolveToolPolicyContext?.({
@@ -706,6 +714,25 @@ export function evaluateMcpInvokeAuthGate(mcp: McpInvokeGatePort, serverId: stri
     return buildMcpStaleAuthInvokeError(server, readiness);
   }
   return undefined;
+}
+
+/**
+ * HX-415: a requester-scoped MCP server resolves its connection per
+ * authenticated requester. The direct `/invoke` route cannot manufacture that
+ * context from `McpInvokeRequest` — body `agentId`/`workspaceId`/`sessionId` are
+ * selectors, not authority — so it fails closed here, before building any
+ * body-derived policy context. Returns a content-free reason, or `undefined`
+ * when the target is static (or cannot be resolved here; the coordinator still
+ * fails such a server closed downstream).
+ */
+export function evaluateMcpRequesterContextGate(mcp: McpInvokeGatePort, serverId: string): string | undefined {
+  const server = safeListMcpServers(mcp).find((candidate) => candidate.serverId === serverId);
+  if (!server) {
+    return undefined;
+  }
+  return resolveMcpServerConnectionMode(server) === "requester_scoped"
+    ? "This MCP server requires an authenticated requester context and cannot be invoked through the direct route."
+    : undefined;
 }
 
 function safeListMcpServers(mcp: McpInvokeGatePort): McpServerRecord[] {

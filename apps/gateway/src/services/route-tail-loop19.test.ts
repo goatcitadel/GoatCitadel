@@ -148,9 +148,17 @@ describe("Loop 19 route service delegate tails", () => {
       listCronJobs: vi.fn(() => [{ jobId: "job-1" }]),
       getCronJob: vi.fn((jobId: string) => ({ jobId })),
       createCronJob: vi.fn((input: unknown) => ({ created: input })),
-      updateCronJob: vi.fn((jobId: string, input: unknown) => ({ jobId, updated: input })),
-      setCronJobEnabled: vi.fn((jobId: string, enabled: boolean) => ({ jobId, enabled })),
-      deleteCronJob: vi.fn((jobId: string) => ({ deleted: true, jobId })),
+      updateCronJob: vi.fn((jobId: string, input: unknown, expectedRevision: number) => ({
+        jobId,
+        updated: input,
+        expectedRevision,
+      })),
+      setCronJobEnabled: vi.fn((jobId: string, enabled: boolean, expectedRevision: number) => ({
+        jobId,
+        enabled,
+        expectedRevision,
+      })),
+      deleteCronJob: vi.fn((jobId: string, expectedRevision: number) => ({ deleted: true, jobId, expectedRevision })),
       runCronJobNow: vi.fn(async (jobId: string) => ({ jobId, status: "ok" as const })),
       listCronReviewQueue: vi.fn((limit: number) => [{ itemId: "review-1", limit }]),
       retryCronReviewQueueItem: vi.fn((itemId: string) => ({ itemId, retried: true })),
@@ -163,12 +171,13 @@ describe("Loop 19 route service delegate tails", () => {
     expect(createCronJob(host, { jobId: "job-2", name: "Job", schedule: "0 * * * *" })).toEqual({
       created: { jobId: "job-2", name: "Job", schedule: "0 * * * *" },
     });
-    expect(updateCronJob(host, "job-2", { enabled: false, endAt: null })).toEqual({
+    expect(updateCronJob(host, "job-2", { enabled: false, endAt: null }, 4)).toEqual({
       jobId: "job-2",
       updated: { enabled: false, endAt: null },
+      expectedRevision: 4,
     });
-    expect(setCronJobEnabled(host, "job-2", true)).toEqual({ jobId: "job-2", enabled: true });
-    expect(deleteCronJob(host, "job-2")).toEqual({ deleted: true, jobId: "job-2" });
+    expect(setCronJobEnabled(host, "job-2", true, 5)).toEqual({ jobId: "job-2", enabled: true, expectedRevision: 5 });
+    expect(deleteCronJob(host, "job-2", 6)).toEqual({ deleted: true, jobId: "job-2", expectedRevision: 6 });
     await expect(runCronJobNow(host, "job-2")).resolves.toEqual({ jobId: "job-2", status: "ok" });
     expect(listCronReviewQueue(host)).toEqual([{ itemId: "review-1", limit: 200 }]);
     expect(listCronReviewQueue(host, 5)).toEqual([{ itemId: "review-1", limit: 5 }]);

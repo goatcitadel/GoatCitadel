@@ -5,6 +5,7 @@ import type {
   MemoryContextPlacement,
 } from "@goatcitadel/contracts";
 import { coerceDurationMs } from "@goatcitadel/contracts";
+import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
 import { absorbCompletionStreamChunk, createCompletionStreamAggregate } from "./chat-agent-completion-adapters.js";
 import { isChatTurnCancelledError } from "./chat-turn-helpers.js";
 import { parseTransformLlmOutputHookPatch } from "./hook-patch-helpers.js";
@@ -12,6 +13,7 @@ import { StreamIdleTimeoutError } from "./stream-idle-watchdog.js";
 import type { HooksService } from "./hooks-service.js";
 
 export const CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT = 3;
+export { isAuthoritativeModelUsageAccountingError };
 const MAX_CHAT_COMPLETION_TIMEOUT_MS = 30 * 60_000;
 
 export function extractPromptFromMessages(messages: ChatCompletionRequest["messages"]): string {
@@ -103,6 +105,7 @@ function countLeadingSystemMessages(messages: ChatCompletionRequest["messages"])
 }
 
 export function shouldRetryToolProtocolError(error: Error): boolean {
+  if (isAuthoritativeModelUsageAccountingError(error)) return false;
   const message = error.message.toLowerCase();
   return (
     message.includes("invalid_request_error") ||
@@ -114,6 +117,7 @@ export function shouldRetryToolProtocolError(error: Error): boolean {
 }
 
 export function shouldRetryTransientProviderError(error: Error): boolean {
+  if (isAuthoritativeModelUsageAccountingError(error)) return false;
   const message = error.message.toLowerCase();
   const statusMatch = error.message.match(/\((\d{3})(?:\s|[)])?/);
   const status = statusMatch ? Number(statusMatch[1]) : undefined;
@@ -149,9 +153,17 @@ export type ProviderFailureClass =
   | "rate_limited"
   | "transient"
   | "cancelled"
+  | "dispatch_uncertain"
+  | "settlement_failed"
   | "unknown";
 
 export function classifyProviderFailure(error: Error): ProviderFailureClass {
+  if (isModelUsageDispatchUncertainError(error)) {
+    return "dispatch_uncertain";
+  }
+  if (isModelUsageAccountingPersistenceError(error)) {
+    return "settlement_failed";
+  }
   if (isChatTurnCancelledError(error)) {
     return "cancelled";
   }
@@ -177,6 +189,18 @@ export function classifyProviderFailure(error: Error): ProviderFailureClass {
     return "transient";
   }
   return "unknown";
+}
+
+export function isModelUsageDispatchUncertainError(error: Error): boolean {
+  return error.name === "ModelUsageDispatchUncertainError";
+}
+
+export function isModelUsageSettlementError(error: Error): boolean {
+  return error.name === "ModelUsageSettlementError";
+}
+
+export function isModelUsageAccountingPersistenceError(error: Error): boolean {
+  return isModelUsageSettlementError(error) || error.name === "ModelUsageDispatchPersistenceError";
 }
 
 export function shouldAttemptCrossProviderFallback(error: Error): boolean {
@@ -328,7 +352,7 @@ export function getRemainingChatCompletionTimeoutMs(
 
 export function normalizeChatCompletionAttemptError(error: unknown, timeoutMs: number | undefined): Error {
   const normalized = error instanceof Error ? error : new Error(String(error));
-  if (isChatTurnCancelledError(normalized)) {
+  if (isChatTurnCancelledError(normalized) || isAuthoritativeModelUsageAccountingError(normalized)) {
     return normalized;
   }
   if (normalized instanceof StreamIdleTimeoutError) {

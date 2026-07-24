@@ -2185,6 +2185,9 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
     const benchmarkUpdates: Array<Record<string, unknown>> = [];
     const backgroundTasks = new Set<Promise<void>>();
     const publishRealtime = vi.fn();
+    const runBackgroundWork = vi.fn(async (_label: string, work: (signal: AbortSignal) => Promise<unknown>) =>
+      work(new AbortController().signal),
+    );
     const service = new PromptPackService(
       {
         storage: {
@@ -2302,6 +2305,7 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
         getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
         getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
         backgroundTasks,
+        runBackgroundWork,
       },
     );
     const resumedRun: PromptPackRunRecord = {
@@ -2325,6 +2329,10 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
     expect(service.resumeInterruptedBenchmarkRuns()).toBe(1);
     await Promise.all([...backgroundTasks]);
 
+    expect(runBackgroundWork).toHaveBeenCalledWith(
+      `prompt-pack-benchmark:${benchmarkRun.benchmark_run_id}`,
+      expect.any(Function),
+    );
     expect(runPromptPackTest).toHaveBeenCalledTimes(1);
     expect(runPromptPackTest).toHaveBeenCalledWith(
       "pack-1",

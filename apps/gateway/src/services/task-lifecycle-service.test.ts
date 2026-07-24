@@ -934,7 +934,7 @@ describe("TaskLifecycleService agentic runtime", () => {
     expect(updated.agenticContext?.status).toBe("cancelled");
   });
 
-  it("keeps cancellation authoritative when a different worker mirrors an earlier pause after cancel", () => {
+  it("keeps cancellation authoritative and conflicts the stale pause after a concurrent cancel", () => {
     let nestedCancelResponse: ReturnType<TaskLifecycleService["invokeAgenticControl"]> | undefined;
     const cancelDurableRun = vi.fn((durableRunId: string) => {
       const current = storageRef.durableRuns.getRun(durableRunId);
@@ -979,11 +979,14 @@ describe("TaskLifecycleService agentic runtime", () => {
       },
     });
 
-    const pauseResponse = serviceRef.invokeAgenticControl("agentic-run-pause-cancel-race", {
-      action: "pause",
-      controlId: "pause-loses-race",
-      actorId: "worker-a",
-    });
+    expect(() =>
+      serviceRef.invokeAgenticControl("agentic-run-pause-cancel-race", {
+        action: "pause",
+        controlId: "pause-loses-race",
+        actorId: "worker-a",
+        expectedRevision: task.revision,
+      }),
+    ).toThrow(ConflictError);
 
     expect(nestedCancelResponse).toMatchObject({ status: "applied", runtimeEffect: "runtime_cancel" });
     expect(storageRef.durableRuns.getRun("durable-run-pause-cancel-race").status).toBe("cancelled");
@@ -991,35 +994,7 @@ describe("TaskLifecycleService agentic runtime", () => {
       status: "blocked",
       agenticContext: expect.objectContaining({ status: "cancelled" }),
     });
-    expect(pauseResponse).toMatchObject({
-      action: "pause",
-      status: "applied",
-      runtimeEffect: "runtime_cancel",
-      message: expect.stringMatching(/pause was superseded by cancellation/i),
-    });
-    expect(storageRef.taskActivities.findControlByTaskAndControlId(task.taskId, "pause-loses-race")).toEqual(
-      expect.objectContaining({
-        metadata: expect.objectContaining({
-          action: "pause",
-          canonicalDurableStatus: "cancelled",
-          resultStatus: "applied",
-          runtimeEffect: "runtime_cancel",
-          superseded: true,
-          responseMessage: expect.stringMatching(/pause was superseded by cancellation/i),
-        }),
-      }),
-    );
-    expect(
-      serviceRef.invokeAgenticControl("agentic-run-pause-cancel-race", {
-        action: "pause",
-        controlId: "pause-loses-race",
-        actorId: "worker-a",
-      }),
-    ).toMatchObject({
-      idempotentReplay: true,
-      runtimeEffect: "runtime_cancel",
-      message: expect.stringMatching(/pause was superseded by cancellation/i),
-    });
+    expect(storageRef.taskActivities.findControlByTaskAndControlId(task.taskId, "pause-loses-race")).toBeUndefined();
     expect(pauseDurableRun).toHaveBeenCalledTimes(1);
     expect(cancelDurableRun).toHaveBeenCalledTimes(1);
   });
@@ -1632,6 +1607,28 @@ describe("TaskLifecycleService — distress signals", () => {
       /No unresolved distress signal/,
     );
   });
+
+  it("rejects a stale distress append without losing the winning signal", () => {
+    const { service } = createService();
+    const task = service.createTask({ title: "t" });
+    const winner = service.emitDistressSignalWithRevision(
+      task.taskId,
+      { code: "needs_user", severity: "warn", title: "Winner", summary: "Keep this signal" },
+      task.revision,
+    );
+
+    expect(() =>
+      service.emitDistressSignalWithRevision(
+        task.taskId,
+        { code: "tool_error", severity: "critical", title: "Stale", summary: "Must not overwrite" },
+        task.revision,
+      ),
+    ).toThrow(ConflictError);
+    expect(service.getTask(task.taskId)).toMatchObject({
+      revision: winner.revision,
+      distressSignals: [expect.objectContaining({ title: "Winner" })],
+    });
+  });
 });
 
 describe("TaskLifecycleService — retry budget", () => {
@@ -1773,6 +1770,44 @@ describe("TaskLifecycleService.verifyTaskArtifacts", () => {
     ).rejects.toThrow(/Task .* not found/);
     expect(statExists).not.toHaveBeenCalled();
   });
+
+  it("does not overwrite distress written while artifact probing is in flight", async () => {
+    const serviceRef: { current?: TaskLifecycleService } = {};
+    let taskId = "";
+    const { service } = createService({
+      probers: {
+        fs: {
+          statExists: async () => {
+            const current = serviceRef.current!.getTask(taskId);
+            serviceRef.current!.emitDistressSignalWithRevision(
+              taskId,
+              {
+                code: "needs_user",
+                severity: "warn",
+                title: "Concurrent operator signal",
+                summary: "Preserve this during artifact verification",
+              },
+              current.revision,
+            );
+            return true;
+          },
+        },
+        http: { headOk: async () => true },
+        git: { hasCommit: async () => true },
+      },
+    });
+    serviceRef.current = service;
+    const task = service.createTask({ title: "t", status: "in_progress" });
+    taskId = task.taskId;
+
+    await expect(
+      service.verifyTaskArtifactsWithRevision(task.taskId, [{ kind: "file", value: "artifact.txt" }], task.revision),
+    ).rejects.toThrow(ConflictError);
+    const persisted = service.getTask(task.taskId);
+    expect(persisted.distressSignals).toEqual([expect.objectContaining({ title: "Concurrent operator signal" })]);
+    expect(persisted.artifactVerification).toBeUndefined();
+    expect(persisted.revision).toBe(task.revision + 1);
+  });
 });
 
 describe("TaskLifecycleService.autoBlockOnIncompleteExit", () => {
@@ -1846,7 +1881,12 @@ describe("TaskLifecycleService.bulkUpdateTasks", () => {
     service.setRetryBudget(a.taskId, 1);
     service.recordRetryAttempt(a.taskId, "fail-1");
     service.recordRetryAttempt(a.taskId, "fail-2"); // exhausted → already blocked
-    const results = service.bulkUpdateTasks({ action: "unblock", taskIds: [a.taskId] });
+    const current = service.getTask(a.taskId);
+    const results = service.bulkUpdateTasks({
+      action: "unblock",
+      taskIds: [a.taskId],
+      expectedRevisionsByTaskId: { [a.taskId]: current.revision },
+    });
     expect(results.length).toBe(1);
     expect(results[0].status).toBe("assigned");
     expect(results[0].retryBudget?.retryCount).toBe(0);
@@ -1857,7 +1897,13 @@ describe("TaskLifecycleService.bulkUpdateTasks", () => {
     const { service } = createService();
     const a = service.createTask({ title: "a", status: "in_progress" });
     service.setRetryBudget(a.taskId, 3);
-    const results = service.bulkUpdateTasks({ action: "retry", taskIds: [a.taskId], reason: "operator" });
+    const current = service.getTask(a.taskId);
+    const results = service.bulkUpdateTasks({
+      action: "retry",
+      taskIds: [a.taskId],
+      reason: "operator",
+      expectedRevisionsByTaskId: { [a.taskId]: current.revision },
+    });
     expect(results[0].retryBudget?.retryCount).toBe(1);
     expect(results[0].status).toBe("in_progress");
   });
@@ -1870,6 +1916,7 @@ describe("TaskLifecycleService.bulkUpdateTasks", () => {
       action: "reassign",
       taskIds: [a.taskId, b.taskId],
       assignedAgentId: "agent-9",
+      expectedRevisionsByTaskId: { [a.taskId]: a.revision, [b.taskId]: b.revision },
     });
     expect(results[0].assignedAgentId).toBe("agent-9");
     expect(results[1].assignedAgentId).toBe("agent-9");
@@ -1885,8 +1932,8 @@ describe("TaskLifecycleService.bulkUpdateTasks", () => {
       action: "reassign",
       taskIds: [a.taskId],
       assignedAgentId: "agent-current",
-      expectedUpdatedAtByTaskId: {
-        [a.taskId]: a.updatedAt,
+      expectedRevisionsByTaskId: {
+        [a.taskId]: a.revision,
       },
     });
 
@@ -1908,12 +1955,12 @@ describe("TaskLifecycleService.bulkUpdateTasks", () => {
         action: "reassign",
         taskIds: [a.taskId, b.taskId],
         assignedAgentId: "agent-stale",
-        expectedUpdatedAtByTaskId: {
-          [a.taskId]: a.updatedAt,
-          [b.taskId]: b.updatedAt,
+        expectedRevisionsByTaskId: {
+          [a.taskId]: a.revision,
+          [b.taskId]: b.revision,
         },
       }),
-    ).toThrow(/changed after this bulk update was prepared/i);
+    ).toThrow(ConflictError);
     expect(service.getTask(a.taskId).assignedAgentId).toBeUndefined();
     vi.useRealTimers();
   });
@@ -1921,7 +1968,11 @@ describe("TaskLifecycleService.bulkUpdateTasks", () => {
   it("unblock action publishes task_updated so subscribers see the transition", () => {
     const { service, publishRealtime } = createService();
     const a = service.createTask({ title: "a", status: "blocked" });
-    service.bulkUpdateTasks({ action: "unblock", taskIds: [a.taskId] });
+    service.bulkUpdateTasks({
+      action: "unblock",
+      taskIds: [a.taskId],
+      expectedRevisionsByTaskId: { [a.taskId]: a.revision },
+    });
     const updateCalls = publishRealtime.mock.calls.filter((c) => c[0] === "task_updated");
     expect(updateCalls.length).toBeGreaterThanOrEqual(1);
   });
@@ -1930,16 +1981,24 @@ describe("TaskLifecycleService.bulkUpdateTasks", () => {
     const { service, storage } = createService();
     const a = service.createTask({ title: "a" });
     storage.taskDeliverables.append(a.taskId, { deliverableType: "artifact", title: "out" });
-    const results = service.bulkUpdateTasks({ action: "close", taskIds: [a.taskId] });
+    const results = service.bulkUpdateTasks({
+      action: "close",
+      taskIds: [a.taskId],
+      expectedRevisionsByTaskId: { [a.taskId]: a.revision },
+    });
     expect(results[0].status).toBe("done");
   });
 
   it("close action throws ValidationError when a task has no deliverable", () => {
     const { service } = createService();
     const a = service.createTask({ title: "a" });
-    expect(() => service.bulkUpdateTasks({ action: "close", taskIds: [a.taskId] })).toThrow(
-      /at least one deliverable/i,
-    );
+    expect(() =>
+      service.bulkUpdateTasks({
+        action: "close",
+        taskIds: [a.taskId],
+        expectedRevisionsByTaskId: { [a.taskId]: a.revision },
+      }),
+    ).toThrow(/at least one deliverable/i);
   });
 });
 
@@ -1963,10 +2022,24 @@ describe("TaskLifecycleService workspace access", () => {
     const task = service.createTask({ workspaceId: "workspace-a", title: "Blocked task", status: "blocked" });
 
     expect(() =>
-      service.bulkUpdateTasks({ action: "unblock", taskIds: [task.taskId] }, { workspaceId: "workspace-b" }),
+      service.bulkUpdateTasks(
+        {
+          action: "unblock",
+          taskIds: [task.taskId],
+          expectedRevisionsByTaskId: { [task.taskId]: task.revision },
+        },
+        { workspaceId: "workspace-b" },
+      ),
     ).toThrow(/Task .* not found/);
     expect(
-      service.bulkUpdateTasks({ action: "unblock", taskIds: [task.taskId] }, { workspaceId: "workspace-a" })[0],
+      service.bulkUpdateTasks(
+        {
+          action: "unblock",
+          taskIds: [task.taskId],
+          expectedRevisionsByTaskId: { [task.taskId]: task.revision },
+        },
+        { workspaceId: "workspace-a" },
+      )[0],
     ).toMatchObject({ taskId: task.taskId, status: "assigned" });
   });
 

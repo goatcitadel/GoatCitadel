@@ -188,7 +188,8 @@ function createService(connections: Array<ReturnType<typeof createConnection>> =
     },
     touchPairing: () => undefined,
     onInboundMessage: vi.fn(),
-    onSlashCommand: vi.fn(async () => "ok"),
+    acceptSlashCommand: vi.fn(async () => ({ inboundEventId: "inbound-command-1" })),
+    awaitSlashCommandResult: vi.fn(async () => "ok"),
     listModelSuggestions: vi.fn(async () => []),
     publishDiagnostic,
   });

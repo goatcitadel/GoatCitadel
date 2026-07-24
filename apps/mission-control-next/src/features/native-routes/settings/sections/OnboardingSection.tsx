@@ -1,6 +1,6 @@
 // Extracted verbatim from `../../SettingsNativePage.tsx` as part of the
 // per-section settings decomposition.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { CheckCircle2, Play, RefreshCw, Save } from "lucide-react";
 import type {
   DemoBootstrapStateResponse,
@@ -17,6 +17,7 @@ import {
   fetchEvidenceEnvelopes,
   fetchOnboardingState,
   fetchSettings,
+  isApiRequestError,
 } from "@goatcitadel/mission-control-shared/api/client";
 import type { AppRoute } from "@next/app/route-model";
 import {
@@ -95,9 +96,14 @@ export function OnboardingSection({ route, navigate, setActiveWorkspaceId }: Set
     budgetMode: "balanced",
     networkAllowlist: "",
   });
+  const preserveDefaultsDraftRef = useRef(false);
 
   useEffect(() => {
     if (!data) {
+      return;
+    }
+    if (preserveDefaultsDraftRef.current) {
+      preserveDefaultsDraftRef.current = false;
       return;
     }
     setDefaultsDraft({
@@ -115,6 +121,10 @@ export function OnboardingSection({ route, navigate, setActiveWorkspaceId }: Set
       : null;
 
   const applyDefaults = async () => {
+    if (!data?.runtimeSettings) {
+      setNotice({ tone: "warning", message: "Reload settings before applying first-run defaults." });
+      return;
+    }
     if (
       onboardingPromptSkippingRestriction &&
       (defaultsDraft.defaultToolProfile === "danger" || defaultsDraft.toolApprovalMode === "bypass")
@@ -124,6 +134,7 @@ export function OnboardingSection({ route, navigate, setActiveWorkspaceId }: Set
     }
     try {
       await bootstrapOnboarding({
+        expectedRevision: data.runtimeSettings.revision,
         defaultToolProfile: defaultsDraft.defaultToolProfile,
         toolApprovalMode: defaultsDraft.toolApprovalMode,
         budgetMode: defaultsDraft.budgetMode,
@@ -135,6 +146,16 @@ export function OnboardingSection({ route, navigate, setActiveWorkspaceId }: Set
       setNotice({ tone: "success", message: "First-run defaults applied." });
       await reload();
     } catch (defaultsError) {
+      if (isApiRequestError(defaultsError) && defaultsError.status === 409) {
+        preserveDefaultsDraftRef.current = true;
+        await reload();
+        setNotice({
+          tone: "warning",
+          message:
+            "Onboarding settings changed elsewhere. Your defaults draft is preserved; review the current settings, then apply again to retry.",
+        });
+        return;
+      }
       setNotice({ tone: "error", message: getErrorMessage(defaultsError) });
     }
   };

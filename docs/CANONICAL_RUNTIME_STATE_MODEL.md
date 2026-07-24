@@ -1,6 +1,6 @@
 # Canonical Runtime State Model
 
-Last updated: 2026-06-02
+Last updated: 2026-07-13
 
 This document defines the repo-native authority model for the core runtime nouns that appear across Gateway, Mission Control, storage, and replay.
 
@@ -44,6 +44,31 @@ Notes:
 - Turns are scoped to a session.
 - A turn may create or resume one or more runs.
 
+### Routed Chat Context Snapshot
+
+Definition:
+An immutable, insert-only record of the exact structured context admitted for one Chat turn.
+
+Authority:
+- Request contract: `packages/contracts/src/routed-context.ts` and `ChatSendMessageRequest.contextRefs`
+- Resolution, attestation, and budget owner: `apps/gateway/src/services/chat-routed-context-service.ts`
+- Persistence and content-free inspection projection: `packages/storage/src/routed-context-snapshot-repo.ts`
+- Durable replay verification: `apps/gateway/src/services/durable-execution-service.ts`
+
+Canonical bindings:
+- Snapshot identity is bound to `turnId`, `sessionId`, `workspaceId`, `capabilityProfileId`, and `capabilityProfileHash`.
+- The ordinary turn trace carries only `snapshotId`, `snapshotHash`, `sourceRequestHash`, and `contentHash`. Rich source receipts require a scoped capability-profile inspection read, and that projection excludes admitted source text.
+- Model-usage attribution carries only `contextSnapshotId`, `contextIntentHash`, and `contextResolutionHash`; raw references, labels, paths, and admitted content do not cross that boundary.
+
+Notes:
+- `contextRefs` is Chat-only, accepts 1-16 unique entries when present, and supports only `attachment` and `memory_item`. It does not accept raw filesystem paths, URLs, session or task references, or Assembly context.
+- The Gateway resolves references to owned records, attests source identity and bytes, and preserves request order. Each snapshot records the exact admitted UTF-8 text and byte/token accounting plus source, rendered-content, request, and snapshot digests.
+- The effective capability profile, provider/model context window, and routed-context budget are frozen by the server. Caller-supplied context references cannot select or widen those bindings.
+- Routed-context v1 is a single-provider boundary. Admission requires the final frozen profile to set `subagentPolicy` to `off`; `ask_when_useful` and `auto_when_useful` fail before source resolution rather than silently mutating the operator's frozen profile. For an admitted turn, both initial execution and durable replay bypass model-orchestration planning before any planner or delegated provider call.
+- Routed `memory_item` reads are workspace-only in v1. Global memory fails closed until a future explicit server-owned capability-profile policy field admits it; caller input, generic grants, and ordinary memory mode do not provide that authority.
+- Durable execution strips raw `contextRefs` from its payload, verifies the stored snapshot against the bound profile, run, turn trace, and hashes, then reuses the frozen admitted text without live source re-resolution. Missing, corrupt, or mismatched bindings fail closed.
+- A retry or edit creates a new turn-bound snapshot. Existing snapshots are never updated in place.
+
 ### Durable Run
 
 Definition:
@@ -70,6 +95,10 @@ Notes:
 - Legacy traces without durable linkage may still require compatibility reads or resume fallbacks for historical rows, but new mission-session LLM sends do not bypass durable ownership.
 - Runs may be linked to sessions, turns, tasks, and approvals.
 - The `durableKernelV1Enabled` feature flag gates durable-run APIs. The `replayOverridesV1Enabled` flag (default: off) gates replay-with-overrides.
+
+### Chat Tool Effect Truth
+
+Chat planning freezes a server-authored `effectPotential` of `none` or `unknown`, one secret-safe binding for every enabled `tool.call.before`, `tool.call.after`, `tool.call.error`, and `after_tool_call` hook, and the exact built-in/plugin runtime-owner generation into the immutable capability profile. `chat_tool_runs` owns recovery `effectDisposition` plus operator-facing `effectOutcomeKind`/`effectEvidence`; the runner durably crosses an auxiliary-effect fence immediately before hook delivery/materialization and a separate main-executor fence immediately before the admitted built-in, plugin, MCP, or browser-fallback owner. This separation preserves a legitimate approval reached after a hook as `approval_wait_after_auxiliary_dispatch` while suppressing an approval reported only after the main executor crossed its boundary. Only a proven pre-dispatch block, approval wait, skip, reuse, or trusted built-in safe read may settle `none`; opaque legacy invokers, hook or owner drift, browser/shell/MCP/plugin/remote/mutating paths, interruption after either effect boundary, approval-resume execution, and post-dispatch output rejection remain `unknown`/`uncertain`, carry inspect-before-retry guidance, and are never automatically replayed. A `concrete` outcome requires a typed out-of-band receipt whose Chat tool-run, tool, scope, and idempotency correlation exactly match a completed canonical owner; result payload IDs are never evidence. Chat tool cards, expanded trace detail, ordinary decision traces, and trusted Ops Run Detail project the same fields but withhold raw receipt IDs until a dedicated server-verified owner projection exists; expert raw JSON is explicitly diagnostic and non-canonical. These internal classifications are stripped at the shared complete/stream provider-send boundary.
 
 ### A2A Task Binding
 
@@ -248,6 +277,47 @@ The following are explicitly derived projections, not canonical truth:
 - UI freshness smoothing indicators
 
 Derived views should prefer explicit `links`, `eventClass`, and `eventAuthority` over payload scraping or keyword heuristics.
+
+## Trusted Ops Authority Envelope
+
+Trusted Ops views consume the Gateway-owned `RuntimeAuthorityProjectionResponse` from
+`GET /api/v1/ops/runtime-authority`. The endpoint is an additive read model over existing
+owners; it is not a new write authority and Mission Control must not recreate its
+classifications from browser-side joins.
+
+Every item uses one explicit authority class:
+
+- `canonical_record`: a durable record from the domain owner, such as a durable run,
+  approval/effect settlement, backup manifest, release certificate, config generation,
+  or unresolved external side-effect ledger row.
+- `derived_projection`: a server-side calculation over canonical fields, such as
+  lease/heartbeat freshness, runtime-owner reconciliation, or UI materialization posture.
+- `retained_signal`: a retained realtime event used for operator awareness. A contradicting
+  signal is labeled `contradictory`; the canonical repository still wins.
+- `inferred`: a read-time observation such as current process/build/filesystem identity.
+  Inference never upgrades release or backup evidence.
+- `unavailable`: the canonical owner, valid row, or required evidence could not be read.
+  Unavailable items do not receive an invented canonical reference.
+
+The envelope is server-authored and bounded. Clients may select a workspace only; they
+cannot submit authority, owner, source, basis, freshness, or deep-link metadata. Workspace
+records fail closed to the selected scope, while Citadel-wide process, mesh, backup,
+release, and config observations are labeled with Citadel scope. References are semantic
+route kinds rather than arbitrary URLs, so Mission Control can link only to existing run,
+approval, release-evidence, and reconciliation views.
+
+Important failure modes and tradeoffs:
+
+- malformed legacy rows are omitted from trusted state and produce an `unavailable`
+  posture instead of being guessed into a valid record;
+- stale or expired worker leases are derived health projections, not execution-state
+  rewrites;
+- approval decisions and follow-on effect settlement remain distinct from their Mission
+  Control materialization;
+- backup trust is verified against an isolated staged copy so semantic verification cannot
+  mutate the published artifact, and filesystem presence alone is never labeled verified;
+- the response is a bounded recent operational window, not a replacement for repository
+  retention, audit export, or full historical detail APIs.
 
 ## Migration Guidance
 

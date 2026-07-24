@@ -287,6 +287,215 @@ describe("browser tools coverage sweep", () => {
     expect(abortedUrls).toEqual(["http://127.0.0.1/private"]);
   });
 
+  it("fails an interaction when a click triggers navigation to a private host", async () => {
+    const config = createConfig(tempRoot);
+    config.sandbox.networkAllowlist = [EXAMPLE_HOST];
+    const abortedUrls: string[] = [];
+    const continuedUrls: string[] = [];
+    let currentUrl = "https://example.com/start";
+    let routeHandler:
+      | ((route: {
+          request: () => { url: () => string };
+          continue: () => Promise<void>;
+          abort: (errorCode?: string) => Promise<void>;
+        }) => Promise<void> | void)
+      | undefined;
+    const routeFor = (url: string) => ({
+      request: () => ({ url: () => url }),
+      continue: async () => {
+        continuedUrls.push(url);
+      },
+      abort: async () => {
+        abortedUrls.push(url);
+      },
+    });
+    const page = {
+      route: async (_pattern: string, handler: NonNullable<typeof routeHandler>) => {
+        routeHandler = handler;
+      },
+      goto: async (url: string) => {
+        currentUrl = url;
+        await routeHandler?.(routeFor(url));
+        return { status: () => 200 };
+      },
+      waitForLoadState: async () => undefined,
+      waitForSelector: async () => undefined,
+      waitForTimeout: async () => undefined,
+      title: async () => "interaction",
+      url: () => currentUrl,
+      evaluate: async () => "",
+      locator: () => ({
+        first: () => ({
+          innerText: async () => "interaction",
+          click: async () => {
+            currentUrl = "http://169.254.169.254/latest/meta-data";
+            await routeHandler?.(routeFor(currentUrl));
+          },
+        }),
+      }),
+      screenshot: async () => undefined,
+      keyboard: { press: async () => undefined },
+    };
+    mocked.launch.mockResolvedValueOnce({
+      newContext: async () => ({
+        newPage: async () => page,
+      }),
+      close: async () => undefined,
+    } as never);
+
+    await expect(
+      executeBrowserTool(
+        "browser.interact",
+        { url: "https://example.com/start", steps: [{ action: "click", selector: "#private-link" }] },
+        config,
+      ),
+    ).rejects.toThrow(/Private|metadata|reserved/i);
+    expect(continuedUrls).toEqual(["https://example.com/start"]);
+    expect(abortedUrls).toEqual(["http://169.254.169.254/latest/meta-data"]);
+  });
+
+  it("blocks a popup's first private-host request and does not persist the failed interaction", async () => {
+    const config = createConfig(tempRoot);
+    config.sandbox.networkAllowlist = [EXAMPLE_HOST];
+    const abortedUrls: string[] = [];
+    const continuedUrls: string[] = [];
+    const seenContextOptions: Array<Record<string, unknown> | undefined> = [];
+    const storageState = vi.fn(async () => ({ cookies: [], origins: [] }));
+    let routeHandler:
+      | ((route: {
+          request: () => { url: () => string };
+          continue: () => Promise<void>;
+          abort: (errorCode?: string) => Promise<void>;
+        }) => Promise<void> | void)
+      | undefined;
+    const routeFor = (url: string) => ({
+      request: () => ({ url: () => url }),
+      continue: async () => {
+        continuedUrls.push(url);
+      },
+      abort: async () => {
+        abortedUrls.push(url);
+      },
+    });
+    const page = {
+      goto: async (url: string) => {
+        await routeHandler?.(routeFor(url));
+        return { status: () => 200 };
+      },
+      waitForLoadState: async () => undefined,
+      waitForSelector: async () => undefined,
+      waitForTimeout: async () => undefined,
+      title: async () => "popup interaction",
+      url: () => "https://example.com/start",
+      evaluate: async () => "",
+      locator: () => ({
+        first: () => ({
+          innerText: async () => "popup interaction",
+          click: async () => {
+            await routeHandler?.(routeFor("http://169.254.169.254/latest/meta-data"));
+          },
+        }),
+      }),
+      screenshot: async () => undefined,
+      keyboard: { press: async () => undefined },
+    };
+    mocked.launch.mockResolvedValueOnce({
+      newContext: async (options?: Record<string, unknown>) => {
+        seenContextOptions.push(options);
+        return {
+          route: async (_pattern: string, handler: NonNullable<typeof routeHandler>) => {
+            routeHandler = handler;
+          },
+          newPage: async () => page,
+          storageState,
+        };
+      },
+      close: async () => undefined,
+    } as never);
+
+    await expect(
+      executeBrowserTool(
+        "browser.interact",
+        { url: "https://example.com/start", steps: [{ action: "click", selector: "#private-popup" }] },
+        config,
+        { sessionId: "sess-browser-private-popup" },
+      ),
+    ).rejects.toThrow(/Private|metadata|reserved/i);
+    expect(seenContextOptions).toEqual([
+      expect.objectContaining({
+        serviceWorkers: "block",
+        proxy: {
+          server: expect.stringMatching(/^socks5:\/\/127\.0\.0\.1:\d+$/),
+          bypass: "<-loopback>",
+        },
+      }),
+    ]);
+    expect(continuedUrls).toEqual(["https://example.com/start"]);
+    expect(abortedUrls).toEqual(["http://169.254.169.254/latest/meta-data"]);
+    expect(storageState).not.toHaveBeenCalled();
+  });
+
+  it("blocks an interaction-triggered WebSocket to a private host", async () => {
+    const config = createConfig(tempRoot);
+    config.sandbox.networkAllowlist = [EXAMPLE_HOST];
+    const closeSocket = vi.fn(async () => undefined);
+    const connectToServer = vi.fn();
+    let webSocketHandler:
+      | ((route: {
+          url: () => string;
+          close: typeof closeSocket;
+          connectToServer: typeof connectToServer;
+        }) => Promise<void> | void)
+      | undefined;
+    const page = {
+      goto: async () => ({ status: () => 200 }),
+      waitForLoadState: async () => undefined,
+      waitForSelector: async () => undefined,
+      waitForTimeout: async () => undefined,
+      title: async () => "WebSocket interaction",
+      url: () => "https://example.com/start",
+      evaluate: async () => "",
+      locator: () => ({
+        first: () => ({
+          innerText: async () => "WebSocket interaction",
+          click: async () => {
+            await webSocketHandler?.({
+              url: () => "wss://example.com/events",
+              close: closeSocket,
+              connectToServer,
+            });
+            await webSocketHandler?.({
+              url: () => "ws://169.254.169.254/latest/meta-data",
+              close: closeSocket,
+              connectToServer,
+            });
+          },
+        }),
+      }),
+      screenshot: async () => undefined,
+      keyboard: { press: async () => undefined },
+    };
+    mocked.launch.mockResolvedValueOnce({
+      newContext: async () => ({
+        routeWebSocket: async (_pattern: string, handler: NonNullable<typeof webSocketHandler>) => {
+          webSocketHandler = handler;
+        },
+        newPage: async () => page,
+      }),
+      close: async () => undefined,
+    } as never);
+
+    await expect(
+      executeBrowserTool(
+        "browser.interact",
+        { url: "https://example.com/start", steps: [{ action: "click", selector: "#private-socket" }] },
+        config,
+      ),
+    ).rejects.toThrow(/Private|metadata|reserved/i);
+    expect(closeSocket).toHaveBeenCalledWith({ code: 1008, reason: "Blocked by GoatCitadel network policy" });
+    expect(connectToServer).toHaveBeenCalledTimes(1);
+  });
+
   it("blocks native HTML fetch redirects to private hosts", async () => {
     const config = createConfig(tempRoot);
     config.sandbox.networkAllowlist = [EXAMPLE_HOST];
@@ -1519,6 +1728,18 @@ describe("browser tools coverage sweep", () => {
 
     expect(response.fallbackUsed).toBe(false);
     expect(mocked.launch).toHaveBeenCalledTimes(2);
+    expect(mocked.launch).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        args: ["--force-webrtc-ip-handling-policy=disable_non_proxied_udp"],
+      }),
+    );
+    expect(mocked.launch).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        args: ["--force-webrtc-ip-handling-policy=disable_non_proxied_udp"],
+      }),
+    );
     expect(mocked.spawnSync).toHaveBeenCalledWith(
       expect.stringMatching(/pnpm(\.cmd|\.exe)?$/i),
       ["--filter", "@goatcitadel/policy-engine", "exec", "playwright", "install", "chromium"],

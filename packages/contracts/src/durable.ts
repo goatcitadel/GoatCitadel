@@ -242,6 +242,8 @@ export interface DurableDiagnosticsResponse {
 export interface DurableRunTimelineEvent {
   eventId: string;
   runId: string;
+  /** Monotonic, gap-tolerant ordering scoped to this run. */
+  sequence: number;
   eventType:
     | "run_created"
     | "run_started"
@@ -260,8 +262,82 @@ export interface DurableRunTimelineEvent {
     | "run_incomplete_worker_exit"
     | "run_retry_budget_exhausted"
     | "worker_event_loop_lag"
-    | "dead_letter_recovered";
+    | "dead_letter_recovered"
+    | "child_state_changed";
   stepKey?: string;
   payload?: Record<string, unknown>;
   createdAt: string;
+}
+
+export type DurableChildWatcherState = "attached" | "detached" | "closed";
+
+/**
+ * Durable cursor from a parent run to one child run. Watchers are observational:
+ * advancing one never wakes, resumes, retries, or otherwise mutates either run.
+ */
+export interface DurableChildWatcherRecord {
+  watcherId: string;
+  /** Monotonic persisted generation for cross-process compare-and-swap controls. */
+  revision: number;
+  parentRunId: string;
+  childRunId: string;
+  state: DurableChildWatcherState;
+  /** First child sequence that has not yet been consumed. */
+  nextSequence: number;
+  /** Highest child sequence consumed, including non-projectable operational events. */
+  lastConsumedSequence: number;
+  projectedNoticeCount: number;
+  source?: string;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  detachedAt?: string;
+  reattachedAt?: string;
+  closedAt?: string;
+}
+
+export interface DurableChildWatcherCreateRequest {
+  parentRunId: string;
+  childRunId: string;
+  watcherId?: string;
+  source?: string;
+  metadata?: Record<string, unknown>;
+}
+
+/** Payload stored on a parent's deterministic `child_state_changed` notice. */
+export interface DurableChildStateChangedPayload {
+  watcherId: string;
+  parentRunId: string;
+  childRunId: string;
+  childEventId: string;
+  childSequence: number;
+  childEventType: Exclude<DurableRunTimelineEvent["eventType"], "child_state_changed">;
+  childStepKey?: string;
+  /** Present only when the source payload fits the fixed projection boundary. */
+  childPayload?: Record<string, unknown>;
+  /** Exact-byte evidence and bounded projection posture for the source payload. */
+  childPayloadEvidence: {
+    hashAlgorithm: "sha256";
+    originalSha256: string;
+    originalByteCount: number;
+    disposition: "included_redacted" | "omitted";
+    omissionReason?: "byte_limit" | "depth_limit" | "item_limit" | "invalid_json" | "invalid_shape";
+    redactionCount?: number;
+    preview?: {
+      topLevelType: "object" | "array" | "primitive" | "unknown";
+      topLevelKeyCount?: number;
+      topLevelKeys?: string[];
+      summary: string;
+    };
+  };
+  childCreatedAt: string;
+  observedAt: string;
+}
+
+export interface DurableChildWatcherCatchUpResult {
+  watcher: DurableChildWatcherRecord;
+  consumedCount: number;
+  projectedCount: number;
+  hasMore: boolean;
+  notices: DurableRunTimelineEvent[];
 }

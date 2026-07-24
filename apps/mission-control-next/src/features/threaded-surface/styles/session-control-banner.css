@@ -1,0 +1,94 @@
+/* HX-411 Chat controller banner — content-free external-control notice shown
+   above the timeline/composer while an external session_control_client owns the
+   session. Bespoke design-system CSS (no Tailwind); tokens adapt per theme. */
+
+.mc-next-session-control-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--gc-risk-caution, var(--border));
+  border-left-width: 4px;
+  border-radius: var(--r-md, 10px);
+  background: var(--mc-surface-2, var(--card));
+  color: var(--foreground);
+}
+
+.mc-next-session-control-banner[data-tone="external-stale"] {
+  border-color: var(--gc-risk-danger, var(--warning));
+}
+
+.mc-next-session-control-banner-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mc-next-session-control-banner-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.mc-next-session-control-banner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.mc-next-session-control-banner-reason {
+  margin: 0;
+  font-size: var(--text-sm, 0.85rem);
+  line-height: 1.45;
+  color: var(--foreground);
+}
+
+.mc-next-session-control-banner-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px 16px;
+  margin: 0;
+}
+
+.mc-next-session-control-banner-meta > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.mc-next-session-control-banner-meta dt {
+  font-size: var(--text-2xs, 0.68rem);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary, var(--text-muted));
+}
+
+.mc-next-session-control-banner-meta dd {
+  margin: 0;
+  font-size: var(--text-xs, 0.75rem);
+  color: var(--foreground);
+  overflow-wrap: anywhere;
+}
+
+.mc-next-session-control-banner-note {
+  margin: 0;
+  font-size: var(--text-xs, 0.75rem);
+  color: var(--text-secondary, var(--text-muted));
+}
+
+.mc-next-session-control-banner-caveat {
+  margin: 0;
+  font-size: var(--text-xs, 0.75rem);
+  color: var(--text-secondary, var(--text-muted));
+}
+
+.mc-next-session-control-banner-error {
+  margin: 0;
+  font-size: var(--text-xs, 0.75rem);
+  color: var(--gc-risk-danger, var(--warning));
+}

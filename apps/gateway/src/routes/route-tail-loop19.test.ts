@@ -328,15 +328,35 @@ describe("Loop 19 llama.cpp and dashboard route tails", () => {
       statusCode: 400,
     });
     await expect(
-      app.inject({ method: "PATCH", url: "/api/v1/cron/jobs/job-1", payload: { name: "New" } }),
+      app.inject({
+        method: "PATCH",
+        url: "/api/v1/cron/jobs/job-1",
+        payload: { expectedRevision: 1, name: "New" },
+      }),
     ).resolves.toMatchObject({ statusCode: 404 });
     await expect(
-      app.inject({ method: "PATCH", url: "/api/v1/cron/jobs/job-1", payload: { name: "New" } }),
+      app.inject({
+        method: "PATCH",
+        url: "/api/v1/cron/jobs/job-1",
+        payload: { expectedRevision: 1, name: "New" },
+      }),
     ).resolves.toMatchObject({ statusCode: 400 });
-    await expect(app.inject({ method: "POST", url: "/api/v1/cron/jobs/job-1/start" })).resolves.toMatchObject({
+    await expect(
+      app.inject({
+        method: "POST",
+        url: "/api/v1/cron/jobs/job-1/start",
+        payload: { expectedRevision: 1 },
+      }),
+    ).resolves.toMatchObject({
       statusCode: 404,
     });
-    await expect(app.inject({ method: "POST", url: "/api/v1/cron/jobs/job-1/pause" })).resolves.toMatchObject({
+    await expect(
+      app.inject({
+        method: "POST",
+        url: "/api/v1/cron/jobs/job-1/pause",
+        payload: { expectedRevision: 1 },
+      }),
+    ).resolves.toMatchObject({
       statusCode: 400,
     });
     await expect(app.inject({ method: "POST", url: "/api/v1/cron/jobs/job-1/run" })).resolves.toMatchObject({
@@ -348,13 +368,19 @@ describe("Loop 19 llama.cpp and dashboard route tails", () => {
     await expect(app.inject({ method: "POST", url: "/api/v1/cron/jobs/job-1/run" })).resolves.toMatchObject({
       statusCode: 400,
     });
-    await expect(app.inject({ method: "DELETE", url: "/api/v1/cron/jobs/missing" })).resolves.toMatchObject({
+    await expect(
+      app.inject({ method: "DELETE", url: "/api/v1/cron/jobs/missing?expectedRevision=1" }),
+    ).resolves.toMatchObject({
       statusCode: 404,
     });
-    await expect(app.inject({ method: "DELETE", url: "/api/v1/cron/jobs/job-1" })).resolves.toMatchObject({
+    await expect(
+      app.inject({ method: "DELETE", url: "/api/v1/cron/jobs/job-1?expectedRevision=1" }),
+    ).resolves.toMatchObject({
       statusCode: 409,
     });
-    await expect(app.inject({ method: "DELETE", url: "/api/v1/cron/jobs/job-1" })).resolves.toMatchObject({
+    await expect(
+      app.inject({ method: "DELETE", url: "/api/v1/cron/jobs/job-1?expectedRevision=1" }),
+    ).resolves.toMatchObject({
       statusCode: 404,
     });
     await expect(app.inject({ method: "GET", url: "/api/v1/cron/review-queue?limit=0" })).resolves.toMatchObject({

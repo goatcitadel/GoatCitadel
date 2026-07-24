@@ -576,6 +576,30 @@ describe("DurableRunRepository", () => {
     assert.deepEqual(checkpoints[0]?.state, expected);
   });
 
+  it("reads the exact latest checkpoint kind beyond the capped oldest-first list with a deterministic tie-break", () => {
+    const repo = createRepo();
+    const run = repo.createRun({ workflowKey: "chat.turn.execute", payload: { version: "chat.turn.execute.v2" } });
+    const createdAt = "2026-07-15T20:00:00.000Z";
+    for (let index = 0; index < 2_005; index += 1) {
+      repo.createCheckpoint({
+        checkpointId: `checkpoint-${String(index).padStart(4, "0")}`,
+        runId: run.runId,
+        checkpointKind: index % 2 === 0 ? "run_completed" : "run_started",
+        state: { index },
+        createdAt,
+      });
+    }
+
+    assert.equal(repo.listCheckpoints(run.runId, 2_000).at(-1)?.checkpointId, "checkpoint-1999");
+    assert.deepEqual(repo.getLatestCheckpointByKind(run.runId, "run_completed"), {
+      checkpointId: "checkpoint-2004",
+      runId: run.runId,
+      checkpointKind: "run_completed",
+      state: { index: 2_004 },
+      createdAt,
+    });
+  });
+
   it("keeps retry attempts idempotent by run and attempt number", () => {
     const repo = createRepo();
     const run = repo.createRun({

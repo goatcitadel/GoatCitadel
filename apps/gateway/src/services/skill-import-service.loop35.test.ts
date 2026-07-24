@@ -27,7 +27,7 @@ describe("SkillImportService loop 35 import behavior", () => {
       "curl https://example.test/install.sh\nrm -rf /tmp/goatcitadel-loop35\n",
       "utf8",
     );
-    for (let index = 0; index < 225; index += 1) {
+    for (let index = 0; index < 85; index += 1) {
       fs.writeFileSync(path.join(sourceDir, `filler-${String(index).padStart(3, "0")}.txt`), "x", "utf8");
     }
 
@@ -190,7 +190,10 @@ describe("SkillImportService loop 35 import behavior", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("installs hosted bundles, writes source metadata, and marks the direct source installed", async () => {
+  // HX-402 P2 (coverage-preserving remodel): hosted-bundle installs validate
+  // byte-exactly but redirect into the governed Skill Hub instead of ever
+  // publishing bytes or claiming the source as installed.
+  it("redirects hosted bundles into the Skill Hub with exact-byte validation and no publication", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: string | URL | Request) => {
@@ -220,38 +223,44 @@ describe("SkillImportService loop 35 import behavior", () => {
     );
 
     const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
-    const installed = await service.installImport({
+    const redirected = await service.installImport({
       sourceRef: "https://example.test/skill.md",
     });
-    const manifest = JSON.parse(fs.readFileSync(installed.sourceManifestPath, "utf8")) as Record<string, unknown>;
     const directLookup = await service.lookupSources("https://example.test/skill.md", 5);
 
-    expect(fs.existsSync(path.join(installed.installedPath, "HEARTBEAT.md"))).toBe(true);
-    expect(fs.existsSync(path.join(installed.installedPath, "RULES.md"))).toBe(false);
-    expect(manifest).toMatchObject({
-      manifestVersion: 2,
-      riskLevel: "low",
-      candidate: expect.objectContaining({
-        sourceProvider: "external",
-        sourceType: "remote_bundle",
-        sourceRef: "https://example.test/skill.md",
-        sourceUrl: "https://example.test/skill.md",
-      }),
-      resolvedUpstream: {
-        url: "https://example.test/skill.md",
-      },
+    // Advisory validation with exact-byte provenance still returned in full.
+    expect(redirected.validation.valid).toBe(true);
+    expect(redirected.validation.riskLevel).toBe("low");
+    expect(redirected.validation.candidate).toMatchObject({
+      sourceProvider: "external",
+      sourceType: "remote_bundle",
+      sourceRef: "https://example.test/skill.md",
+      sourceUrl: "https://example.test/skill.md",
     });
+    expect(redirected.validation.provenance?.contentIntegrity).toMatchObject({
+      manifestVersion: "goatcitadel.skill-tree.v1",
+      treeSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    // Hosted sources map onto the governed hub review surface.
+    expect(redirected.redirect).toEqual({
+      owner: "skill_hub",
+      reviewRoute: "/api/v1/skills/hub/reviews",
+      sourceRef: "https://example.test/skill.md",
+      sourceType: "remote_bundle",
+      eligible: true,
+    });
+    // ADVERSARIAL: nothing was published and nothing claims installed truth.
+    expect(fs.existsSync(path.join(rootDir, "skills", "extra"))).toBe(false);
     expect(directLookup.bestMatch).toMatchObject({
       sourceUrl: "https://example.test/skill.md",
-      alreadyInstalled: true,
-      installability: "direct",
+      alreadyInstalled: false,
     });
     expect(service.listHistory(1)).toEqual([
       expect.objectContaining({
         action: "install",
         outcome: "accepted",
         skillId: "hosted-bundle",
-        details: expect.objectContaining({ installedPath: "skills/extra/hosted-bundle" }),
+        details: expect.objectContaining({ disposition: "redirected_to_skill_hub" }),
       }),
     ]);
   });

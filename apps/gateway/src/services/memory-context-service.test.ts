@@ -2,13 +2,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  ChatCompletionResponse,
-  MemoryContextPack,
-  MemoryItemRecord,
-  TranscriptEvent,
+import {
+  ConflictError,
+  type ChatCompletionResponse,
+  type MemoryContextPack,
+  type MemoryItemRecord,
+  type TranscriptEvent,
 } from "@goatcitadel/contracts";
-import { generateEmbedding } from "@goatcitadel/policy-engine";
+import { EmbeddingUsageSettlementError, generateEmbedding } from "@goatcitadel/policy-engine";
 import { MemoryContextService } from "./memory-context-service.js";
 import { matchesMemoryWorkspaceScope } from "./memory-lifecycle-policy.js";
 
@@ -61,6 +62,8 @@ afterEach(async () => {
   for (const root of tempRoots.splice(0)) {
     await fs.rm(root, { recursive: true, force: true });
   }
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
 });
 
 describe("MemoryContextService", () => {
@@ -252,6 +255,11 @@ describe("MemoryContextService", () => {
         providerId: "openai",
         model: "gpt-test",
         response_format: { type: "json_object" },
+      }),
+      expect.objectContaining({
+        callKind: "utility",
+        utilityKind: "memory_context_distillation",
+        sessionId: "session-parent",
       }),
     );
     expect(generated).toMatchObject({
@@ -768,6 +776,11 @@ describe("MemoryContextService", () => {
           }),
         ]),
       }),
+      expect.objectContaining({
+        callKind: "utility",
+        utilityKind: "memory_context_distillation",
+        workspaceId: "workspace-a",
+      }),
     );
     expect(JSON.stringify(llmService.chatCompletions.mock.calls[0]?.[0])).not.toContain("FOREIGN_WORKSPACE_SENTINEL");
   });
@@ -852,6 +865,126 @@ describe("MemoryContextService", () => {
       candidate: storedEmbedding.length,
     });
     expect(memoryCitation?.provenance?.retrievalStrategy).toBe("hybrid_rank");
+  });
+
+  it("holds a query lease across generated llama.cpp retrieval embeddings", async () => {
+    embeddingMock.provider = "llamacpp";
+    vi.stubEnv("GOATCITADEL_EMBEDDINGS_PROVIDER", "llamacpp");
+    vi.stubEnv("GOATCITADEL_EMBEDDINGS_DIMENSIONS", "8");
+    vi.stubEnv("GOATCITADEL_EMBEDDINGS_URL", "http://127.0.0.1:8080/embedding");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ embedding: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+    const release = vi.fn();
+    const acquireLocalEmbeddingLease = vi.fn(async () => ({ release }));
+    const service = new MemoryContextService(
+      createStorage() as never,
+      createLlmService() as never,
+      createConfig(await createWorkspaceRoot()) as never,
+      vi.fn(),
+      acquireLocalEmbeddingLease,
+    );
+
+    await service.compose({
+      scope: "chat",
+      prompt: "How should local embedding runtime ownership be reported?",
+      forceRefresh: true,
+    });
+
+    expect(acquireLocalEmbeddingLease).toHaveBeenCalledWith({
+      providerId: "llamacpp",
+      url: "http://127.0.0.1:8080/embedding",
+      purpose: "embedding_query",
+    });
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not hide a config-generation lease conflict as a pseudo retrieval fallback", async () => {
+    embeddingMock.provider = "llamacpp";
+    vi.stubEnv("GOATCITADEL_EMBEDDINGS_PROVIDER", "llamacpp");
+    vi.stubEnv("GOATCITADEL_EMBEDDINGS_DIMENSIONS", "8");
+    vi.stubEnv("GOATCITADEL_EMBEDDINGS_URL", "http://127.0.0.1:8080/embedding");
+    const conflict = new ConflictError({ message: "runtime owners are reconciling" });
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    const service = new MemoryContextService(
+      createStorage() as never,
+      createLlmService() as never,
+      createConfig(await createWorkspaceRoot()) as never,
+      vi.fn(),
+      async () => Promise.reject(conflict),
+    );
+
+    await expect(
+      service.compose({
+        scope: "chat",
+        prompt: "How should mixed-generation embedding reads be prevented?",
+        forceRefresh: true,
+      }),
+    ).rejects.toBe(conflict);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not hide a canonical usage settlement failure as lexical-only retrieval", async () => {
+    embeddingMock.provider = "remote";
+    vi.stubEnv("GOATCITADEL_EMBEDDINGS_PROVIDER", "remote");
+    vi.stubEnv("GOATCITADEL_EMBEDDINGS_DIMENSIONS", "8");
+    vi.stubEnv("GOATCITADEL_EMBEDDINGS_URL", "https://api.example.com/v1/embeddings");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ data: [{ embedding: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8] }] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+    const persistenceError = new Error("query embedding terminal write failed");
+    const service = new MemoryContextService(
+      createStorage() as never,
+      createLlmService() as never,
+      createConfig(await createWorkspaceRoot()) as never,
+      vi.fn(),
+      undefined,
+      () => ({
+        eventId: "usage-query-unsettled-1",
+        accept: () => ({
+          eventId: "usage-query-unsettled-1",
+          observe: vi.fn(),
+          observeNormalized: vi.fn(),
+          succeed: () => {
+            throw persistenceError;
+          },
+          fail: vi.fn(() => ({ eventId: "usage-query-unsettled-1" })),
+          cancel: vi.fn(() => ({ eventId: "usage-query-unsettled-1" })),
+        }),
+        abandon: vi.fn(),
+        markDispatchUnknown: vi.fn(),
+      }),
+    );
+
+    await expect(
+      service.compose({
+        scope: "chat",
+        workspaceId: "workspace-1",
+        sessionId: "session-1",
+        runId: "run-1",
+        taskId: "task-1",
+        prompt: "Why must retrieval accounting settlement fail closed?",
+        forceRefresh: true,
+      }),
+    ).rejects.toMatchObject<Partial<EmbeddingUsageSettlementError>>({
+      name: "EmbeddingUsageSettlementError",
+      cause: persistenceError,
+    });
   });
 
   it("does not count generated pseudo fallback vectors when a real embedding provider is configured", async () => {
@@ -1106,7 +1239,9 @@ describe("MemoryContextService", () => {
     const llmService = createLlmService({
       chatCompletions: vi.fn((request) => {
         providerSignal = (request as { signal?: AbortSignal }).signal;
-        return new Promise<ChatCompletionResponse>(() => undefined);
+        return new Promise<ChatCompletionResponse>((_resolve, reject) => {
+          providerSignal?.addEventListener("abort", () => reject(providerSignal?.reason), { once: true });
+        });
       }),
     });
     const service = new MemoryContextService(

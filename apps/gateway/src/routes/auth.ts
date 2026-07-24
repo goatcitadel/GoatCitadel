@@ -102,7 +102,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       },
     },
   });
-  const deviceAuthRoute = withRouteAccess(fastify, "device", {
+  const deviceSessionExchangeRoute = withRouteAccess(fastify, "device-session-exchange", {
     config: {
       rateLimit: {
         max: RATE_LIMIT_AUTH_MAX,
@@ -167,7 +167,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     },
   );
 
-  fastify.post("/api/v1/auth/companion/session/exchange", deviceAuthRoute, async (request, reply) => {
+  fastify.post("/api/v1/auth/companion/session/exchange", deviceSessionExchangeRoute, async (request, reply) => {
     if (request.authActorSource !== "device" || !request.authGrantId) {
       return reply.code(403).send({
         error: "Companion session exchange requires an approved device grant.",
@@ -239,7 +239,18 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(await authAdmin.revokeCompanionSession(params.data.sessionId, request.authActorId));
+      // C0/C run inside the auth-revoke transaction (revokeByAuthBinding). The
+      // HTTP mutation is only marked complete once that canonical commit returns,
+      // so a later transport failure cannot revive the Idempotency-Key.
+      const result = await authAdmin.revokeCompanionSession(params.data.sessionId, request.authActorId, {
+        correlationId: readHeaderValue(request.headers["x-goatcitadel-correlation-id"]),
+      });
+      // Runs AFTER the service's post-commit publishRealtime: if that publish
+      // throws, this is skipped and the Idempotency-Key is revived, so a retry
+      // re-runs the revoke — safe only because revoke is idempotent (COALESCE
+      // guards make re-revoking an already-revoked session a no-op).
+      markMutationCommitted(request);
+      return reply.send(result);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -280,7 +291,16 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      const grant = await authAdmin.revokeDeviceAccessGrant(params.data.grantId, request.authActorId);
+      // C0/C run inside the auth-revoke transaction (revokeByAuthBinding). Only
+      // once that canonical commit returns is the HTTP mutation marked complete.
+      const grant = await authAdmin.revokeDeviceAccessGrant(params.data.grantId, request.authActorId, {
+        correlationId: readHeaderValue(request.headers["x-goatcitadel-correlation-id"]),
+      });
+      // Runs AFTER the service's post-commit publishRealtime: if that publish
+      // throws, this is skipped and the Idempotency-Key is revived, so a retry
+      // re-runs the revoke — safe only because revoke is idempotent (COALESCE
+      // guards make re-revoking an already-revoked grant a no-op).
+      markMutationCommitted(request);
       return reply.send({ grant });
     } catch (error) {
       const message = (error as Error).message;

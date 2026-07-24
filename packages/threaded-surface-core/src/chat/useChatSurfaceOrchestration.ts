@@ -1,7 +1,13 @@
-import type { ChatAttachmentRecord, ChatThreadResponse } from "@goatcitadel/contracts";
+import type {
+  ChatAttachmentRecord,
+  ChatModelCouncilRequest,
+  ChatRoutedContextRef,
+  ChatSessionPrefsRecord,
+  ChatThreadResponse,
+} from "@goatcitadel/contracts";
 import { cancelChatTurn } from "@goatcitadel/mission-control-shared/api/client";
 import { recordClientDiagnostic } from "@goatcitadel/mission-control-shared/state/dev-diagnostics-store";
-import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from "react";
 import type { ChatThreadNotice } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadView";
 
 const ATTACHMENT_ONLY_SEND_PLACEHOLDER = "Please review the attached files and continue.";
@@ -40,6 +46,28 @@ export interface OutboundQueueItem {
   attachments: ChatAttachmentRecord[];
   createdAt: string;
   paused?: boolean;
+  /** Immutable one-shot Council decision captured when this item is enqueued. */
+  modelCouncil?: ChatModelCouncilRequest;
+  /** Bounded request prefs captured once so queue drain cannot reroute the item. */
+  requestPrefs?: OutboundRequestPrefsSnapshot;
+  /**
+   * HX-407 C3: explicit per-turn external-source selection frozen at enqueue
+   * time as routed-context refs, so queue drain can never re-derive or widen
+   * the selection. Selection state itself clears only after a successful send.
+   */
+  externalContextRefs?: readonly ChatRoutedContextRef[];
+}
+
+export interface OutboundRequestPrefsSnapshot {
+  readonly mode: "chat";
+  readonly providerId?: string;
+  readonly model?: string;
+  readonly webMode: ChatSessionPrefsRecord["webMode"];
+  readonly memoryMode: ChatSessionPrefsRecord["memoryMode"];
+  readonly thinkingLevel: ChatSessionPrefsRecord["thinkingLevel"];
+  readonly speedMode: NonNullable<ChatSessionPrefsRecord["speedMode"]>;
+  readonly subagentPolicy: NonNullable<ChatSessionPrefsRecord["subagentPolicy"]>;
+  readonly fullWebAccess: boolean;
 }
 
 export interface OutboundContextBlock {
@@ -85,6 +113,13 @@ export function useChatSurfaceOrchestration(input: {
   setPendingApproval: (value: null) => void;
   setError: (value: string | null) => void;
   onOutboundContextConsumed?: () => void;
+  consumeModelCouncilArming?: () => ChatModelCouncilRequest | undefined;
+  captureOutboundRequestPrefs: () => OutboundRequestPrefsSnapshot;
+  /**
+   * HX-407 C3: freezes the current explicit external-source selection into the
+   * queue item on send. Absent (pre-C4 or degraded surface) means no refs.
+   */
+  captureOutboundExternalContextRefs?: () => readonly ChatRoutedContextRef[];
   loadSessionCoreStateRef: RefObject<
     (sessionId: string, options?: { background?: boolean; includeThread?: boolean }) => Promise<void>
   >;
@@ -97,10 +132,32 @@ export function useChatSurfaceOrchestration(input: {
     } | null,
   ) => void;
 }) {
-  const [queuedOutbound, setQueuedOutbound] = useState<OutboundQueueItem[]>([]);
+  const [queuedOutbound, setQueuedOutboundState] = useState<OutboundQueueItem[]>([]);
   const [editingTurnId, setEditingTurnId] = useState<string | null>(null);
   const [queueDrainSignal, setQueueDrainSignal] = useState(0);
   const drainingQueueItemIdRef = useRef<string | null>(null);
+
+  // The controller intentionally supplies this as a render-current callback.
+  // Keep the callback in a ref so the public queue setter remains stable for
+  // localStorage hydration effects while still reading the newest prefs when
+  // a legacy/external queue item first enters the owned queue.
+  const captureOutboundRequestPrefsRef = useRef(input.captureOutboundRequestPrefs);
+  captureOutboundRequestPrefsRef.current = input.captureOutboundRequestPrefs;
+
+  const bindRequestPrefs = useCallback(
+    (item: OutboundQueueItem): OutboundQueueItem =>
+      item.requestPrefs ? item : { ...item, requestPrefs: captureOutboundRequestPrefsRef.current() },
+    [],
+  );
+  const setQueuedOutbound = useCallback<Dispatch<SetStateAction<OutboundQueueItem[]>>>(
+    (value) => {
+      setQueuedOutboundState((current) => {
+        const next = typeof value === "function" ? value(current) : value;
+        return next.map(bindRequestPrefs);
+      });
+    },
+    [bindRequestPrefs],
+  );
 
   const handleSend = useCallback(async () => {
     const action: OutboundQueueItem["action"] = editingTurnId ? "edit" : "send";
@@ -110,6 +167,11 @@ export function useChatSurfaceOrchestration(input: {
     }
     const content =
       action === "send" ? resolveOutboundContentWithContext(draftContent, input.outboundContext) : draftContent;
+    const modelCouncil = input.consumeModelCouncilArming?.();
+    const requestPrefs = input.captureOutboundRequestPrefs();
+    // Freeze the explicit external-source selection with the item (send only):
+    // the selection itself is cleared later by the execution success path.
+    const externalContextRefs = action === "send" ? (input.captureOutboundExternalContextRefs?.() ?? []) : [];
     const nextItem: OutboundQueueItem = {
       id: createQueueItemId(),
       action,
@@ -118,6 +180,9 @@ export function useChatSurfaceOrchestration(input: {
       content,
       attachments: input.pendingAttachments,
       createdAt: new Date().toISOString(),
+      requestPrefs,
+      ...(modelCouncil ? { modelCouncil } : {}),
+      ...(externalContextRefs.length > 0 ? { externalContextRefs } : {}),
     };
     input.setDraft("");
     input.setPendingAttachments([]);
@@ -137,6 +202,8 @@ export function useChatSurfaceOrchestration(input: {
 
   const handleRetryTurn = useCallback(
     async (turnId: string) => {
+      const modelCouncil = input.consumeModelCouncilArming?.();
+      const requestPrefs = input.captureOutboundRequestPrefs();
       const nextItem: OutboundQueueItem = {
         id: createQueueItemId(),
         action: "retry",
@@ -145,6 +212,8 @@ export function useChatSurfaceOrchestration(input: {
         content: "",
         attachments: [],
         createdAt: new Date().toISOString(),
+        requestPrefs,
+        ...(modelCouncil ? { modelCouncil } : {}),
       };
       if (!input.tryBeginOutboundExecutionRef.current?.()) {
         setQueuedOutbound((current) => [...current, nextItem]);

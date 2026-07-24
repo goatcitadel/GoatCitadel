@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+import { ConflictError } from "@goatcitadel/contracts";
 import { skillsRoutes } from "./skills.js";
 
 describe("skills routes", () => {
@@ -146,11 +147,21 @@ describe("skills routes", () => {
       run: { runId: "skill-eval-2", skillId: "bundled:agentic-skill-architect", status: "completed" },
     }));
     const listSkillEvaluationRuns = vi.fn(() => ({ items: [] }));
+    // HX-402 P2: state verbs answer with a pending skill.lifecycle approval.
     const setSkillState = vi.fn(() => ({
-      skillId: "bundled:agentic-skill-architect",
-      state: "sleep",
-      note: "review",
-      updatedAt: "2026-05-04T00:00:00.000Z",
+      pendingApproval: {
+        approvalId: "11111111-2222-3333-4444-555555555555",
+        status: "pending",
+        kind: "skill.lifecycle",
+        action: "skill_state_set",
+        subjectKind: "skill",
+        subjectId: "bundled:agentic-skill-architect",
+        requestSha256: "a".repeat(64),
+        expectedStateSha256: "b".repeat(64),
+        createdAt: "2026-05-04T00:00:00.000Z",
+        replayed: false,
+        skillIds: ["bundled:agentic-skill-architect"],
+      },
     }));
 
     app = Fastify();
@@ -182,17 +193,100 @@ describe("skills routes", () => {
     const state = await app.inject({
       method: "PATCH",
       url: "/api/v1/skills/by-id/state",
-      payload: { skillId, state: "sleep", note: "review" },
+      payload: { skillId, state: "sleep", note: "review", expectedRevision: 7 },
     });
 
     expect(preview.statusCode).toBe(200);
     expect(run.statusCode).toBe(201);
     expect(list.statusCode).toBe(200);
-    expect(state.statusCode).toBe(200);
+    // Approval-first: the state verb answers 202 with the pending envelope.
+    expect(state.statusCode).toBe(202);
+    expect(state.json().pendingApproval).toMatchObject({ kind: "skill.lifecycle", action: "skill_state_set" });
     expect(previewSkillEvaluation).toHaveBeenCalledWith(skillId, {});
     expect(runSkillEvaluation).toHaveBeenCalledWith(skillId, {});
     expect(listSkillEvaluationRuns).toHaveBeenCalledWith(skillId);
-    expect(setSkillState).toHaveBeenCalledWith(skillId, "sleep", "review");
+    expect(setSkillState).toHaveBeenCalledWith(skillId, "sleep", "review", {
+      expectedRevision: 7,
+      requesterId: "ip:127.0.0.1",
+    });
+  });
+
+  it("requires and forwards skill aggregate revisions and projects stale writes as 409 conflicts", async () => {
+    const setSkillState = vi.fn(() => {
+      throw new ConflictError({
+        code: "WRITE_CONFLICT",
+        message: "runtime_skill skill-a changed since revision 2",
+        details: {
+          resourceKind: "runtime_skill",
+          resourceId: "skill-a",
+          expectedRevision: 2,
+          currentRevision: 3,
+        },
+      });
+    });
+    const bulkSetSkillState = vi.fn(() => ({
+      pendingApproval: null,
+      noMutationRequired: true,
+      skillStates: [],
+    }));
+    const updateSkillActivationPolicy = vi.fn(() => ({
+      pendingApproval: null,
+      noMutationRequired: true,
+      policy: { revision: 5, guardedAutoThreshold: 0.8, requireFirstUseConfirmation: true },
+    }));
+    app = Fastify();
+    app.decorate("services", {
+      skills: { setSkillState, bulkSetSkillState, updateSkillActivationPolicy },
+    } as never);
+    await app.register(skillsRoutes);
+
+    const missingRevision = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/skills/by-id/state",
+      payload: { skillId: "skill-a", state: "sleep" },
+    });
+    const stale = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/skills/by-id/state",
+      payload: { skillId: "skill-a", state: "sleep", expectedRevision: 2 },
+    });
+    const bulk = await app.inject({
+      method: "POST",
+      url: "/api/v1/skills/bulk-state",
+      payload: {
+        skillIds: ["skill-b", "skill-a"],
+        state: "disabled",
+        expectedRevisionsBySkillId: { "skill-a": 4, "skill-b": 9 },
+      },
+    });
+    const policy = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/skills/activation-policies",
+      payload: { expectedRevision: 4, guardedAutoThreshold: 0.8 },
+    });
+
+    expect(missingRevision.statusCode).toBe(400);
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json()).toEqual({
+      error: "runtime_skill skill-a changed since revision 2",
+      code: "WRITE_CONFLICT",
+      details: {
+        resourceKind: "runtime_skill",
+        resourceId: "skill-a",
+        expectedRevision: 2,
+        currentRevision: 3,
+      },
+    });
+    expect(bulk.statusCode).toBe(200);
+    expect(bulkSetSkillState).toHaveBeenCalledWith(["skill-b", "skill-a"], "disabled", undefined, {
+      expectedRevisionsBySkillId: { "skill-a": 4, "skill-b": 9 },
+      requesterId: "ip:127.0.0.1",
+    });
+    expect(policy.statusCode).toBe(200);
+    expect(updateSkillActivationPolicy).toHaveBeenCalledWith(
+      { guardedAutoThreshold: 0.8 },
+      { expectedRevision: 4, requesterId: "ip:127.0.0.1" },
+    );
   });
 
   it("creates skill evaluation proposals from accepted runs", async () => {
@@ -321,9 +415,15 @@ describe("skills routes", () => {
       instructionPreview: skillMarkdown,
     };
     const installResult = {
+      disposition: "redirected_to_skill_hub",
       validation: validationResult,
-      installedPath: "skills/extra/private-skill",
-      sourceManifestPath: "skills/extra/private-skill/source.json",
+      redirect: {
+        owner: "skill_hub",
+        reviewRoute: "/api/v1/skills/hub/reviews",
+        sourceRef: rawSourceUrl,
+        sourceType: "git_url",
+        eligible: true,
+      },
     };
     const historyRecord = {
       importId: "history-private",
@@ -387,7 +487,7 @@ describe("skills routes", () => {
       validateResponse.statusCode,
       installResponse.statusCode,
       historyResponse.statusCode,
-    ]).toEqual([200, 200, 200, 201, 200]);
+    ]).toEqual([200, 200, 200, 200, 200]);
     const publicBodies = [
       sourcesResponse.json(),
       lookupResponse.json(),
@@ -489,5 +589,226 @@ describe("skills routes", () => {
     expect(resB.statusCode).toBe(200);
     expect(resA.json().items[0].skillId).toBe("skill-a");
     expect(resB.json().items[0].skillId).toBe("skill-b");
+  });
+
+  it("keeps Skill Hub provenance and lifecycle mutations operator-only with request-derived actors", async () => {
+    const listSkillHub = vi.fn(() => ({
+      schemaVersion: "goatcitadel.skill-hub-operator.v1",
+      workspaceId: "workspace-1",
+      items: [],
+    }));
+    const createSkillHubApproval = vi.fn(async () => ({
+      schemaVersion: "goatcitadel.skill-hub-operator.v1",
+      reused: false,
+      operatorMessage: "Approval created.",
+      approval: {
+        approvalId: "approval-1",
+        operationId: "operation-1",
+        operationKind: "install_inactive",
+        status: "pending",
+        createdAt: "2026-07-14T01:00:00.000Z",
+      },
+    }));
+    const reviewSkillHubSource = vi.fn(async () => ({
+      schemaVersion: "goatcitadel.skill-hub-review.v1",
+      replayed: false,
+      snapshot: { snapshotId: "snapshot-reviewed" },
+      artifact: { artifactId: "artifact-reviewed" },
+      journeyEvent: { eventId: "journey-reviewed" },
+    }));
+    const prepareSkillHubRollbackReview = vi.fn(async () => ({
+      schemaVersion: "goatcitadel.skill-hub-review.v1",
+      replayed: true,
+      snapshot: { snapshotId: "snapshot-rollback" },
+      artifact: { artifactId: "artifact-rollback" },
+      journeyEvent: { eventId: "journey-rollback" },
+    }));
+    app = Fastify();
+    app.decorateRequest("authActorId", "anonymous");
+    app.decorateRequest("authActorSource", "none");
+    app.addHook("onRequest", async (request) => {
+      const rawSource = request.headers["x-test-auth-source"];
+      const source = Array.isArray(rawSource) ? rawSource[0] : rawSource;
+      if (source === "token" || source === "device" || source === "companion") {
+        request.authActorSource = source;
+      } else {
+        request.authActorSource = "none";
+      }
+      const rawActor = request.headers["x-test-auth-actor"];
+      const actor = Array.isArray(rawActor) ? rawActor[0] : rawActor;
+      request.authActorId = typeof actor === "string" && actor.trim() ? actor.trim() : "anonymous";
+    });
+    app.decorate(
+      "requireOperatorAuth",
+      vi.fn(async (request: FastifyRequest, reply: FastifyReply) => {
+        if (["token", "basic", "loopback"].includes(request.authActorSource)) return;
+        return reply.code(403).send({ error: "Operator authentication is required." });
+      }) as never,
+    );
+    app.decorate("services", {
+      skills: {
+        listSkillHub,
+        createSkillHubApproval,
+        reviewSkillHubSource,
+        prepareSkillHubRollbackReview,
+      },
+    } as never);
+    await app.register(skillsRoutes);
+
+    for (const source of [undefined, "device", "companion"]) {
+      const headers = source ? { "x-test-auth-source": source } : {};
+      const listResponse = await app.inject({
+        method: "GET",
+        url: "/api/v1/skills/hub?workspaceId=workspace-1",
+        headers,
+      });
+      const createResponse = await app.inject({
+        method: "POST",
+        url: "/api/v1/skills/hub/operations",
+        headers,
+        payload: {
+          workspaceId: "workspace-1",
+          snapshotId: "snapshot-1",
+          operationKind: "install_inactive",
+        },
+      });
+      const reviewResponse = await app.inject({
+        method: "POST",
+        url: "/api/v1/skills/hub/reviews",
+        headers,
+        payload: {
+          workspaceId: "workspace-1",
+          sourceRef: "https://github.com/example/review-skill.git",
+          sourceType: "git_url",
+          idempotencyKey: "review-1",
+        },
+      });
+      const rollbackResponse = await app.inject({
+        method: "POST",
+        url: "/api/v1/skills/hub/rollback-reviews",
+        headers,
+        payload: {
+          workspaceId: "workspace-1",
+          snapshotId: "snapshot-1",
+          idempotencyKey: "rollback-1",
+        },
+      });
+      expect([
+        listResponse.statusCode,
+        createResponse.statusCode,
+        reviewResponse.statusCode,
+        rollbackResponse.statusCode,
+      ]).toEqual([403, 403, 403, 403]);
+    }
+    expect(listSkillHub).not.toHaveBeenCalled();
+    expect(createSkillHubApproval).not.toHaveBeenCalled();
+    expect(reviewSkillHubSource).not.toHaveBeenCalled();
+    expect(prepareSkillHubRollbackReview).not.toHaveBeenCalled();
+
+    const operatorHeaders = {
+      "x-test-auth-source": "token",
+      "x-test-auth-actor": "operator:request-derived",
+    };
+    const listResponse = await app.inject({
+      method: "GET",
+      url: "/api/v1/skills/hub?workspaceId=workspace-1",
+      headers: operatorHeaders,
+    });
+    const createResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/skills/hub/operations",
+      headers: operatorHeaders,
+      payload: {
+        workspaceId: "workspace-1",
+        snapshotId: "snapshot-1",
+        operationKind: "install_inactive",
+        actorId: "operator:body-forgery",
+      },
+    });
+    const reviewResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/skills/hub/reviews",
+      headers: operatorHeaders,
+      payload: {
+        workspaceId: "workspace-1",
+        sourceRef: "https://github.com/example/review-skill.git",
+        sourceType: "git_url",
+        idempotencyKey: "review-1",
+      },
+    });
+    const rollbackResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/skills/hub/rollback-reviews",
+      headers: operatorHeaders,
+      payload: {
+        workspaceId: "workspace-1",
+        snapshotId: "snapshot-1",
+        idempotencyKey: "rollback-1",
+      },
+    });
+
+    expect([
+      listResponse.statusCode,
+      createResponse.statusCode,
+      reviewResponse.statusCode,
+      rollbackResponse.statusCode,
+    ]).toEqual([200, 201, 201, 200]);
+    expect(listResponse.headers["cache-control"]).toBe("no-store");
+    expect(createResponse.headers["cache-control"]).toBe("no-store");
+    expect(reviewResponse.headers["cache-control"]).toBe("no-store");
+    expect(rollbackResponse.headers["cache-control"]).toBe("no-store");
+    expect(listSkillHub).toHaveBeenCalledWith({ workspaceId: "workspace-1" });
+    expect(createSkillHubApproval).toHaveBeenCalledWith({
+      workspaceId: "workspace-1",
+      snapshotId: "snapshot-1",
+      operationKind: "install_inactive",
+      actorId: "operator:request-derived",
+    });
+    expect(reviewSkillHubSource).toHaveBeenCalledWith({
+      workspaceId: "workspace-1",
+      sourceRef: "https://github.com/example/review-skill.git",
+      sourceType: "git_url",
+      idempotencyKey: "review-1",
+      actorId: "operator:request-derived",
+    });
+    expect(prepareSkillHubRollbackReview).toHaveBeenCalledWith({
+      workspaceId: "workspace-1",
+      snapshotId: "snapshot-1",
+      idempotencyKey: "rollback-1",
+      actorId: "operator:request-derived",
+    });
+
+    const forgedReviewResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/skills/hub/reviews",
+      headers: operatorHeaders,
+      payload: {
+        workspaceId: "workspace-1",
+        sourceRef: "https://github.com/example/review-skill.git",
+        sourceType: "git_url",
+        idempotencyKey: "review-forged",
+        actorId: "operator:body-forgery",
+        trustDisposition: "candidate",
+      },
+    });
+    expect(forgedReviewResponse.statusCode).toBe(400);
+    expect(reviewSkillHubSource).toHaveBeenCalledTimes(1);
+
+    const orphanedTurnResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/skills/hub/operations",
+      headers: operatorHeaders,
+      payload: {
+        workspaceId: "workspace-1",
+        snapshotId: "snapshot-1",
+        operationKind: "install_inactive",
+        turnId: "turn-orphaned",
+      },
+    });
+    expect(orphanedTurnResponse.statusCode).toBe(400);
+    expect(orphanedTurnResponse.json()).toMatchObject({
+      error: { fieldErrors: { turnId: ["Skill Hub turn lineage requires a session ID."] } },
+    });
+    expect(createSkillHubApproval).toHaveBeenCalledTimes(1);
   });
 });

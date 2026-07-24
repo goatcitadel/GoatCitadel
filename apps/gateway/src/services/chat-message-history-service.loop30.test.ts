@@ -27,7 +27,7 @@ describe("chat-message-history-service loop30 coverage", () => {
     expect(deps.storage.chatConversationSummaries.listByBranch).not.toHaveBeenCalled();
   });
 
-  it("compacts transcript multimodal content with primitive nested values", async () => {
+  it("keeps stateless transcript multimodal content verbatim", async () => {
     const transcript = Array.from({ length: 32 }, (_, index) =>
       createTranscriptEvent(`primitive-${index}`, index % 2 === 0 ? "message.user" : "message.assistant", {
         content: `${index % 2 === 0 ? "User" : "Assistant"} ${index} ${"detail ".repeat(280)}`,
@@ -47,17 +47,18 @@ describe("chat-message-history-service loop30 coverage", () => {
 
     expect(messages[0]).toEqual(
       expect.objectContaining({
-        role: "system",
-        content: expect.stringContaining("Compacted conversation context"),
+        role: "user",
+        content: expect.arrayContaining([false, 0, null]),
       }),
     );
+    expect(messages.some((message) => message.role === "system")).toBe(false);
     expect(messages.at(-1)).toEqual(
       expect.objectContaining({
         role: "assistant",
         content: expect.stringContaining("Assistant 31"),
       }),
     );
-    expect(messages.length).toBeLessThan(transcript.length);
+    expect(messages).toHaveLength(transcript.length);
   });
 });
 

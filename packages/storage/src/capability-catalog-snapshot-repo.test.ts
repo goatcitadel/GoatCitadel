@@ -50,7 +50,7 @@ function setRawField(db: DatabaseClient, snapshotId: string, field: string, valu
 }
 
 describe("CapabilityCatalogSnapshotRepository", () => {
-  it("creates, finds, gets, and keeps the first snapshot for duplicate ids", () => {
+  it("creates, finds, gets, and accepts only byte-equivalent catalogs for duplicate ids", () => {
     const { repo } = createStore();
     const created = repo.create({
       snapshotId: "snapshot-a",
@@ -68,8 +68,8 @@ describe("CapabilityCatalogSnapshotRepository", () => {
 
     const duplicate = repo.create({
       snapshotId: "snapshot-a",
-      inspectableEntries: [sampleEntry("skill-b")],
-      callableEntries: [],
+      inspectableEntries: [sampleEntry("skill-a")],
+      callableEntries: [sampleEntry("skill-a")],
       createdAt: "2026-03-26T00:00:02.000Z",
     });
     assert.equal(duplicate.createdAt, "2026-03-26T00:00:01.000Z");
@@ -78,11 +78,32 @@ describe("CapabilityCatalogSnapshotRepository", () => {
       ["skill-a"],
     );
 
+    assert.throws(
+      () =>
+        repo.create({
+          snapshotId: "snapshot-a",
+          inspectableEntries: [sampleEntry("skill-b")],
+          callableEntries: [],
+          createdAt: "2026-03-26T00:00:03.000Z",
+        }),
+      /conflicts with an existing immutable record/,
+    );
+    assert.throws(
+      () =>
+        repo.create({
+          snapshotId: "snapshot-a",
+          inspectableEntries: [sampleEntry("skill-a")],
+          callableEntries: [],
+          createdAt: "2026-03-26T00:00:04.000Z",
+        }),
+      /conflicts with an existing immutable record/,
+    );
+
     assert.equal(repo.find("missing-snapshot"), undefined);
     assert.throws(() => repo.get("missing-snapshot"), /capability catalog snapshot missing-snapshot not found/);
   });
 
-  it("filters malformed rows and falls back for malformed entry JSON", () => {
+  it("filters malformed rows and fails closed for corrupt entry JSON", () => {
     const { db, repo } = createStore();
     repo.create({
       snapshotId: "snapshot-a",
@@ -93,9 +114,17 @@ describe("CapabilityCatalogSnapshotRepository", () => {
 
     setRawField(db, "snapshot-a", "inspectable_json", "{}");
     setRawField(db, "snapshot-a", "callable_json", "{bad json");
-    const malformedEntries = repo.get("snapshot-a");
-    assert.deepEqual(malformedEntries.inspectableEntries, []);
-    assert.deepEqual(malformedEntries.callableEntries, []);
+    assert.throws(() => repo.get("snapshot-a"), /malformed entry JSON/);
+    assert.throws(
+      () =>
+        repo.create({
+          snapshotId: "snapshot-a",
+          inspectableEntries: [sampleEntry("skill-a")],
+          callableEntries: [sampleEntry("skill-a")],
+          createdAt: "2026-03-26T00:00:02.000Z",
+        }),
+      /malformed entry JSON/,
+    );
 
     setRawField(db, "snapshot-a", "created_at", new Uint8Array([1]));
     assert.equal(repo.find("snapshot-a"), undefined);

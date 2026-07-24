@@ -100,23 +100,40 @@ describe("shared API wrapper tail coverage", () => {
     await expectCall(skills.createSkillEvaluationProposal("run/1"), "/api/v1/skills/evaluations/run%2F1/proposal", {
       method: "POST",
     });
-    await expectCall(skills.updateSkillState("skill/1", { state: "enabled" as never }), "/api/v1/skills/by-id/state", {
-      method: "PATCH",
-    });
     await expectCall(
-      skills.bulkUpdateSkillState({ skillIds: ["a"], state: "disabled" as never }),
+      skills.updateSkillState("skill/1", { expectedRevision: 4, state: "enabled" as never }),
+      "/api/v1/skills/by-id/state",
+      {
+        method: "PATCH",
+      },
+    );
+    expect(apiMocks.request.mock.calls.at(-1)?.[1]?.body).toBe(
+      JSON.stringify({ expectedRevision: 4, state: "enabled", skillId: "skill/1" }),
+    );
+    await expectCall(
+      skills.bulkUpdateSkillState({
+        skillIds: ["a"],
+        expectedRevisionsBySkillId: { a: 3 },
+        state: "disabled" as never,
+      }),
       "/api/v1/skills/bulk-state",
       {
         method: "POST",
       },
     );
+    expect(apiMocks.request.mock.calls.at(-1)?.[1]?.body).toBe(
+      JSON.stringify({ skillIds: ["a"], expectedRevisionsBySkillId: { a: 3 }, state: "disabled" }),
+    );
     await expectCall(skills.fetchSkillActivationPolicies(), "/api/v1/skills/activation-policies");
     await expectCall(
-      skills.patchSkillActivationPolicies({ defaultMode: "auto" } as never),
+      skills.patchSkillActivationPolicies({ expectedRevision: 7, guardedAutoThreshold: 0.8 }),
       "/api/v1/skills/activation-policies",
       {
         method: "PATCH",
       },
+    );
+    expect(apiMocks.request.mock.calls.at(-1)?.[1]?.body).toBe(
+      JSON.stringify({ expectedRevision: 7, guardedAutoThreshold: 0.8 }),
     );
 
     await expectCall(approvals.fetchApprovals("pending"), "/api/v1/approvals?status=pending");
@@ -318,7 +335,10 @@ describe("shared API wrapper tail coverage", () => {
     );
     await expectCall(settings.completeOnboarding(), "/api/v1/onboarding/complete", { method: "POST" });
     await expectCall(settings.resolveGatewayInstallToken(), "/api/v1/auth/install-token", { method: "POST" });
-    await expectCall(settings.patchSettings({ budgetMode: "saver" }), "/api/v1/settings", { method: "PATCH" });
+    await expectCall(settings.patchSettings({ expectedRevision: 17, budgetMode: "saver" }), "/api/v1/settings", {
+      method: "PATCH",
+      body: JSON.stringify({ expectedRevision: 17, budgetMode: "saver" }),
+    });
     await expectCall(settings.fetchPersonalities(), "/api/v1/personalities");
     await expectCall(settings.createPersonality({ label: "Calm" } as never), "/api/v1/personalities", {
       method: "POST",

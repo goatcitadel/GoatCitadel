@@ -1,5 +1,6 @@
 import { KnowledgeFacadeService } from "./memory-facade-service.js";
 import { SkillEvaluationService } from "./skill-evaluation-service.js";
+import { SkillHubOperatorService } from "./skill-hub-operator-service.js";
 import { KeychainEvidenceReceiptSigningKeyProvider } from "./evidence-receipt-signing-key.js";
 import type { EvidenceReceiptDataPort } from "./evidence-receipt-service.js";
 import type { ComplianceExportDataPort } from "./compliance-export-service.js";
@@ -24,8 +25,7 @@ export function composeMemoryKnowledgeRouteDependencies(
     getDurableRun: (runId) => gateway.storage.durableRuns.getRun(runId),
     findCodeModeRun: (runId) => gateway.storage.codeModeRuns.find(runId),
     listApprovalEffects: (approvalId) => gateway.storage.approvalEffects.listByApproval(approvalId),
-    listSideEffectsForWorkspace: (workspaceId) =>
-      gateway.storage.externalSideEffectRuns.listByWorkspace(workspaceId),
+    listSideEffectsForWorkspace: (workspaceId) => gateway.storage.externalSideEffectRuns.listByWorkspace(workspaceId),
   };
   // Signing key lives in the OS keychain (same store the Vault master key uses). Generated lazily
   // on first receipt; the public key is derived and embedded in each receipt for offline verify.
@@ -47,6 +47,11 @@ export function composeMemoryKnowledgeRouteDependencies(
     listSkills: () => gateway.listSkills(),
     createCapabilityProposal: (input) => gateway.capabilitySystemService.createProposal(input),
     recordSkillEvaluationSignal: (input) => gateway.improvementService.recordSkillEvaluationSignal(input),
+  });
+  const skillHubOperator = new SkillHubOperatorService({
+    storage: gateway.storage,
+    createApproval: (input) => gateway.createApproval(input),
+    listInspectableCatalog: () => gateway.capabilitySystemService.listCatalog("inspectable"),
   });
 
   return {
@@ -93,9 +98,14 @@ export function composeMemoryKnowledgeRouteDependencies(
     knowledge: knowledgeFacade,
     memory: gateway.memoryLifecycleService,
     skills: {
-      bulkSetSkillState: (skillIds, state, note) => gateway.bulkSetSkillState(skillIds, state, note),
+      bulkSetSkillState: (skillIds, state, note, expectedRevisionsBySkillId) =>
+        gateway.bulkSetSkillState(skillIds, state, note, expectedRevisionsBySkillId),
       getSkillActivationPolicy: () => gateway.getSkillActivationPolicy(),
       installSkillImport: (input) => gateway.installSkillImport(input),
+      createSkillHubApproval: (input) => skillHubOperator.createApproval(input),
+      listSkillHub: (input) => skillHubOperator.list(input),
+      prepareSkillHubRollbackReview: (input) => gateway.prepareSkillHubRollbackReview(input),
+      reviewSkillHubSource: (input) => gateway.reviewSkillHubSource(input),
       listSkillEvaluationRuns: (skillId) => ({ items: skillEvaluation.listSkillEvaluationRuns(skillId) }),
       listSkillImportHistory: (limit) => gateway.listSkillImportHistory(limit),
       listSkillSources: (query, limit) => gateway.listSkillSources(query, limit),
@@ -110,8 +120,10 @@ export function composeMemoryKnowledgeRouteDependencies(
       createSkillEvaluationProposal: (runId) => skillEvaluation.createSkillEvaluationProposal(runId),
       reloadSkills: () => gateway.reloadSkills(),
       resolveSkillActivation: (input) => gateway.resolveSkillActivation(input),
-      setSkillState: (skillId, state, note) => gateway.setSkillState(skillId, state, note),
-      updateSkillActivationPolicy: (input) => gateway.updateSkillActivationPolicy(input),
+      setSkillState: (skillId, state, note, expectedRevision) =>
+        gateway.setSkillState(skillId, state, note, expectedRevision),
+      updateSkillActivationPolicy: (input, expectedRevision) =>
+        gateway.updateSkillActivationPolicy(input, expectedRevision),
       validateSkillImport: (input) => gateway.validateSkillImport(input),
     },
   };

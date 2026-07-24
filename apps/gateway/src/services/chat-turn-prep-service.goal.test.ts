@@ -43,6 +43,142 @@ describe("advanceGoalForTurn", () => {
 });
 
 describe("prepareAgentChatTurn stream mutation commit truth", () => {
+  it("blocks a synchronous prep mutation when admission changes at its transaction boundary", async () => {
+    let inTransaction = false;
+    const ensureChatSessionRuntimeGrants = vi.fn();
+    const host = {
+      storage: {
+        runImmediateTransaction: vi.fn((work) => {
+          inTransaction = true;
+          try {
+            return work();
+          } finally {
+            inTransaction = false;
+          }
+        }),
+      },
+      assertTurnAdmissionWrite: vi.fn(() => {
+        if (inTransaction) throw new Error("generation changed at write");
+      }),
+      getSession: vi.fn(() => ({ sessionId: "session-1" })),
+      ensureChatSessionRuntimeGrants,
+    } as never;
+    const turnAdmission = {
+      identity: {
+        admissionId: "admission-1",
+        sessionIncarnationId: "incarnation-1",
+        workspaceId: "default",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        aggregateRevision: 1,
+        controllerGeneration: 1,
+        materialSha256: "a".repeat(64),
+      },
+      admittedRequest: { content: "hello" },
+      requestActor: { actorKind: "operator", actorId: "operator:test" },
+      requestClaim: { runtimeOwnerId: "runtime-1", leaseRevision: 1 },
+    };
+
+    await expect(
+      prepareAgentChatTurn(host, "session-1", { content: "hello" }, { turnId: "turn-1", turnAdmission }),
+    ).rejects.toThrow("generation changed at write");
+    expect(ensureChatSessionRuntimeGrants).not.toHaveBeenCalled();
+  });
+
+  it("checks the exact admission inside user ingest and again before append-only mobile provenance", async () => {
+    let insideIngestCommit = false;
+    let ingestReturned = false;
+    let checkedInsideIngest = false;
+    let checkedAfterIngest = false;
+    const assertTurnAdmissionWrite = vi.fn(() => {
+      if (insideIngestCommit) checkedInsideIngest = true;
+      if (ingestReturned) checkedAfterIngest = true;
+    });
+    const auditAppend = vi.fn(async () => {
+      expect(checkedInsideIngest).toBe(true);
+      expect(checkedAfterIngest).toBe(true);
+      throw new Error("stop after provenance");
+    });
+    const host = {
+      storage: {
+        runImmediateTransaction: vi.fn((work) => work()),
+        chatSessionMeta: {
+          get: vi.fn(() => ({ lifecycleStatus: "active", workspaceId: "default" })),
+        },
+        workspaces: { find: vi.fn(() => ({ workspaceId: "default", citadelId: "personal" })) },
+        chatAttachments: { listByIds: vi.fn(() => []) },
+        audit: { append: auditAppend },
+      },
+      assertTurnAdmissionWrite,
+      getSession: vi.fn(() => ({
+        sessionId: "session-1",
+        sessionKey: "mission:operator",
+        kind: "mission",
+        channel: "mission",
+        account: "operator",
+      })),
+      ensureChatSessionRuntimeGrants: vi.fn(),
+      normalizeWorkspaceId: vi.fn(() => "default"),
+      maybeAutoTitleChatSession: vi.fn(),
+      routeFromSession: vi.fn(() => ({ channel: "mission", account: "operator" })),
+      loadChatTurnSessionState: vi.fn(async () => ({
+        traces: [],
+        tracesById: new Map(),
+        messages: [],
+        messagesById: new Map(),
+        childrenByTurnId: new Map(),
+        turnLineageById: new Map(),
+      })),
+      ingestEvent: vi.fn(async (_key, _payload, options?: { onCommit?: () => void; afterCommit?: () => void }) => {
+        insideIngestCommit = true;
+        options?.onCommit?.();
+        insideIngestCommit = false;
+        options?.afterCommit?.();
+        ingestReturned = true;
+      }),
+    } as never;
+    const turnAdmission = {
+      identity: {
+        admissionId: "admission-1",
+        sessionIncarnationId: "incarnation-1",
+        workspaceId: "default",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        aggregateRevision: 1,
+        controllerGeneration: 1,
+        materialSha256: "a".repeat(64),
+      },
+      admittedRequest: { content: "hello", mobileContext: [] },
+      requestActor: { actorKind: "operator", actorId: "operator:test" },
+      requestClaim: { runtimeOwnerId: "runtime-1", leaseRevision: 1 },
+    };
+
+    await expect(
+      prepareAgentChatTurn(
+        host,
+        "session-1",
+        {
+          content: "hello",
+          mobileContext: [
+            {
+              contextId: "mobile-context-1",
+              capabilityId: "location",
+              userVisibleReason: "Nearby context",
+              summary: "Near Seattle",
+              capturedAt: "2026-07-15T00:00:00.000Z",
+              sensitivity: "coarse",
+              structuredFields: {},
+            },
+          ],
+        },
+        { turnId: "turn-1", turnAdmission },
+      ),
+    ).rejects.toThrow("stop after provenance");
+
+    expect(assertTurnAdmissionWrite).toHaveBeenCalledWith(turnAdmission);
+    expect(auditAppend).toHaveBeenCalledTimes(1);
+  });
+
   it("signals commit only after user-event ingestion commits before a post-commit projection failure escapes", async () => {
     const markCommitted = vi.fn();
     const commitAlongsideCanonicalWrite = vi.fn();
@@ -54,7 +190,7 @@ describe("prepareAgentChatTurn stream mutation commit truth", () => {
     const host = {
       storage: {
         chatSessionMeta: {
-          ensure: vi.fn(() => ({ lifecycleStatus: "active", workspaceId: "default" })),
+          get: vi.fn(() => ({ lifecycleStatus: "active", workspaceId: "default" })),
         },
         workspaces: {
           find: vi.fn(() => ({ workspaceId: "default", citadelId: "personal" })),
@@ -114,7 +250,7 @@ describe("prepareAgentChatTurn stream mutation commit truth", () => {
     const host = {
       storage: {
         chatSessionMeta: {
-          ensure: vi.fn(() => ({ lifecycleStatus: "active", workspaceId: "default" })),
+          get: vi.fn(() => ({ lifecycleStatus: "active", workspaceId: "default" })),
         },
         workspaces: {
           find: vi.fn(() => ({ workspaceId: "default", citadelId: "personal" })),

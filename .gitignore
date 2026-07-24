@@ -30,6 +30,8 @@ data/capability-candidates/
 data/code-mode-artifacts/
 data/code-mode-temp/
 data/npu-runtime-state.json
+data/secrets/
+config/.generations/
 workspace/chat/
 .goatcitadel/self-improvement/
 .assistant/

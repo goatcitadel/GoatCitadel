@@ -4,9 +4,11 @@ import { registerWhatsAppWebhookRoutes } from "../routes/integration-webhooks-wh
 import { CHANNEL_INBOUND_MAX_BYTES } from "../routes/webhook-handler-factory.js";
 import {
   buildWhatsAppWebhookSignature,
+  deriveWhatsAppWebhookEventIdempotencyKey,
   deriveWhatsAppWebhookIdempotencyKey,
   isWhatsAppWebhookPath,
   normalizeWhatsAppWebhookPayload,
+  normalizeWhatsAppWebhookPayloads,
   verifyWhatsAppWebhookSignature,
 } from "./whatsapp-webhook.js";
 
@@ -260,6 +262,57 @@ describe("whatsapp webhook helpers", () => {
       /^whatsapp:conn-whatsapp:[a-f0-9]{64}$/,
     );
   });
+
+  it("normalizes every message across WhatsApp entries and changes", () => {
+    const normalized = normalizeWhatsAppWebhookPayloads({
+      connectionId: "conn-whatsapp",
+      payload: {
+        object: "whatsapp_business_account",
+        entry: [
+          {
+            changes: [
+              {
+                value: {
+                  statuses: [{ id: "status-1", status: "delivered" }],
+                  contacts: [
+                    { wa_id: "sender-2", profile: { name: "Second" } },
+                    { wa_id: "sender-1", profile: { name: "First" } },
+                  ],
+                  messages: [
+                    { from: "sender-1", id: "wamid.batch.1", type: "text", text: { body: "first" } },
+                    { from: "sender-2", id: "wamid.batch.2", type: "text", text: { body: "second" } },
+                  ],
+                },
+              },
+            ],
+          },
+          {
+            changes: [
+              {
+                value: {
+                  contacts: [{ wa_id: "sender-3", profile: { name: "Third" } }],
+                  messages: [{ from: "sender-3", id: "wamid.batch.3", type: "image", image: { caption: "third" } }],
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(normalized.map((event) => event.kind)).toEqual(["ignore", "message", "message", "message"]);
+    const messages = normalized.filter((event) => event.kind === "message");
+    expect(messages.map((event) => [event.eventId, event.displayName, event.content])).toEqual([
+      ["wamid.batch.1", "First", "first"],
+      ["wamid.batch.2", "Second", "second"],
+      ["wamid.batch.3", "Third", "third"],
+    ]);
+    expect(messages.map((event) => deriveWhatsAppWebhookEventIdempotencyKey("conn-whatsapp", event))).toEqual([
+      "whatsapp:conn-whatsapp:wamid.batch.1",
+      "whatsapp:conn-whatsapp:wamid.batch.2",
+      "whatsapp:conn-whatsapp:wamid.batch.3",
+    ]);
+  });
 });
 
 describe("whatsapp inbound voice media (channelVoiceInboundV1Enabled)", () => {
@@ -427,24 +480,99 @@ describe("whatsapp webhook route negative paths", () => {
     const second = await signedInboundRequest(buildInboundMessagePayload("wamid.replayed"));
 
     expect(first.statusCode).toBe(200);
-    expect(first.json()).toMatchObject({ accepted: true, deduped: false, replied: true });
+    expect(first.json()).toMatchObject({
+      accepted: true,
+      durableAccepted: true,
+      deduped: false,
+      replied: false,
+      queued: true,
+    });
     expect(second.statusCode).toBe(200);
-    expect(second.json()).toMatchObject({ accepted: true, deduped: true, replied: false });
-    expect(services.ingestChannelMessage).toHaveBeenCalledTimes(2);
-    expect(services.ingestChannelMessage).toHaveBeenNthCalledWith(
+    expect(second.json()).toMatchObject({
+      accepted: true,
+      durableAccepted: true,
+      deduped: true,
+      replied: false,
+      queued: false,
+    });
+    expect(services.acceptInboundChannelEvent).toHaveBeenCalledTimes(2);
+    expect(services.acceptInboundChannelEvent).toHaveBeenNthCalledWith(
       1,
-      "whatsapp",
-      `whatsapp:${connectionId}:wamid.replayed`,
-      expect.objectContaining({ eventId: "wamid.replayed" }),
+      expect.objectContaining({
+        idempotencyKey: `whatsapp:${connectionId}:wamid.replayed`,
+        dispatchKind: "agent_turn",
+        message: expect.objectContaining({ eventId: "wamid.replayed" }),
+      }),
     );
-    expect(services.ingestChannelMessage).toHaveBeenNthCalledWith(
+    expect(services.acceptInboundChannelEvent).toHaveBeenNthCalledWith(
       2,
-      "whatsapp",
-      `whatsapp:${connectionId}:wamid.replayed`,
-      expect.objectContaining({ eventId: "wamid.replayed" }),
+      expect.objectContaining({ idempotencyKey: `whatsapp:${connectionId}:wamid.replayed` }),
     );
-    // Only the first delivery may drive a reply turn; the replay must be inert.
-    expect(services.respondToExistingChatMessage).toHaveBeenCalledTimes(1);
+    expect(services.ingestChannelMessage).not.toHaveBeenCalled();
+    expect(services.respondToExistingChatMessage).not.toHaveBeenCalled();
+  });
+
+  it("atomically accepts every message in a WhatsApp batch and makes replays inert", async () => {
+    const services = createIntegrationWebhooksMock();
+    app = await buildApp(services);
+    const payload = buildInboundMessageBatchPayload();
+
+    const first = await signedInboundRequest(payload);
+    const replay = await signedInboundRequest(payload);
+
+    expect(first.statusCode).toBe(200);
+    expect(first.json()).toMatchObject({
+      accepted: true,
+      durableAccepted: true,
+      batch: true,
+      eventCount: 2,
+      acceptedCount: 2,
+      dedupedCount: 0,
+    });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json()).toMatchObject({
+      accepted: true,
+      batch: true,
+      eventCount: 2,
+      acceptedCount: 2,
+      dedupedCount: 2,
+    });
+    expect(services.acceptInboundChannelEvents).toHaveBeenCalledTimes(2);
+    const firstBatch = services.acceptInboundChannelEvents.mock.calls[0]?.[0];
+    expect(firstBatch).toEqual([
+      expect.objectContaining({
+        idempotencyKey: `whatsapp:${connectionId}:wamid.batch.text`,
+        dispatchKind: "agent_turn",
+        message: expect.objectContaining({ eventId: "wamid.batch.text", content: "first" }),
+      }),
+      expect.objectContaining({
+        idempotencyKey: `whatsapp:${connectionId}:wamid.batch.audio`,
+        dispatchKind: "voice_agent_turn",
+        message: expect.objectContaining({ eventId: "wamid.batch.audio", content: "[whatsapp audio]" }),
+        voiceRequest: {
+          channel: "whatsapp",
+          connectionConfig: {},
+          mediaId: "media-batch-audio",
+          mimeType: "audio/ogg",
+        },
+      }),
+    ]);
+    expect(JSON.stringify(firstBatch)).not.toContain(appSecret);
+    expect(JSON.stringify(firstBatch)).not.toContain("verify-token");
+    expect(services.ingestChannelMessage).not.toHaveBeenCalled();
+    expect(services.respondToExistingChatMessage).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when a replay reuses a batch identity with different content", async () => {
+    const services = createIntegrationWebhooksMock();
+    app = await buildApp(services);
+
+    const first = await signedInboundRequest(buildInboundMessageBatchPayload("first"));
+    const mismatchedReplay = await signedInboundRequest(buildInboundMessageBatchPayload("changed"));
+
+    expect(first.statusCode).toBe(200);
+    expect(mismatchedReplay.statusCode).toBe(500);
+    expect(services.acceptInboundChannelEvents).toHaveBeenCalledTimes(2);
   });
 
   it("drops a non-allowlisted sender before ingest", async () => {
@@ -564,8 +692,47 @@ describe("whatsapp webhook route negative paths", () => {
     };
   }
 
+  function buildInboundMessageBatchPayload(firstBody = "first") {
+    return {
+      object: "whatsapp_business_account",
+      entry: [
+        {
+          changes: [
+            {
+              field: "messages",
+              value: {
+                metadata: {
+                  phone_number_id: "123456789012345",
+                  display_phone_number: "+15551234567",
+                },
+                contacts: [{ wa_id: "15558675309", profile: { name: "Ada Lovelace" } }],
+                messages: [
+                  {
+                    from: "15558675309",
+                    id: "wamid.batch.text",
+                    timestamp: "1712182068",
+                    type: "text",
+                    text: { body: firstBody },
+                  },
+                  {
+                    from: "15558675309",
+                    id: "wamid.batch.audio",
+                    timestamp: "1712182069",
+                    type: "audio",
+                    audio: { id: "media-batch-audio", mime_type: "audio/ogg", voice: true },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    };
+  }
+
   function createIntegrationWebhooksMock(overrides: { config?: Record<string, unknown> } = {}) {
     const seenIdempotencyKeys = new Set<string>();
+    const durablePayloadsByIdempotencyKey = new Map<string, string>();
     const connection = {
       connectionId,
       key: "whatsapp",
@@ -578,6 +745,25 @@ describe("whatsapp webhook route negative paths", () => {
         allowedSenders: ["15558675309"],
       },
     };
+    const acceptDurableInput = async (input: Record<string, unknown>) => {
+      const idempotencyKey = String(input.idempotencyKey);
+      const payload = JSON.stringify(input);
+      const existingPayload = durablePayloadsByIdempotencyKey.get(idempotencyKey);
+      if (existingPayload !== undefined && existingPayload !== payload) {
+        throw new Error(`Inbound channel event payload mismatch for ${idempotencyKey}.`);
+      }
+      const deduped = existingPayload !== undefined;
+      durablePayloadsByIdempotencyKey.set(idempotencyKey, payload);
+      return {
+        accepted: true as const,
+        durableAccepted: true as const,
+        deduped,
+        replied: false as const,
+        queued: !deduped,
+        eventType: String(input.eventType),
+        inboundEventId: `inbound:${idempotencyKey}`,
+      };
+    };
     return {
       getIntegrationConnection: vi.fn(() => connection),
       ingestChannelMessage: vi.fn(async (_channel: string, idempotencyKey: string) => {
@@ -589,6 +775,11 @@ describe("whatsapp webhook route negative paths", () => {
       respondToExistingChatMessage: vi.fn(async () => ({ turnId: "turn-1", trace: { status: "completed" } })),
       emitChannelActivity: vi.fn(async () => ({ delivered: true })),
       recordDevDiagnostic: vi.fn(),
+      isVoiceInboundEnabled: vi.fn(() => true),
+      acceptInboundChannelEvent: vi.fn(acceptDurableInput),
+      acceptInboundChannelEvents: vi.fn(async (inputs: Array<Record<string, unknown>>) =>
+        Promise.all(inputs.map((input) => acceptDurableInput(input))),
+      ),
     };
   }
 

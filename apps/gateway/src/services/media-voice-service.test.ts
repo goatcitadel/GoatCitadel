@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { VoiceTalkSessionRecord } from "@goatcitadel/contracts";
-import { MediaVoiceService, __mediaVoiceServiceInternals } from "./media-voice-service.js";
+import { MediaVoiceService, __mediaVoiceServiceInternals, type MediaVoiceDeps } from "./media-voice-service.js";
 
 describe("MediaVoiceService", () => {
   it("normalizes media helper inputs and maps durable media job rows", async () => {
@@ -234,6 +234,77 @@ describe("MediaVoiceService", () => {
     });
     expect(run).toHaveBeenCalledWith(expect.objectContaining({ status: "queued" }));
     expect(run).toHaveBeenCalledWith(expect.objectContaining({ outputJson: expect.stringContaining("No attachment") }));
+  });
+
+  it("keeps admission-denied media work queued and resumes it after restart", async () => {
+    const jobs = new Map<string, Record<string, unknown>>();
+    const run = vi.fn((params: Record<string, unknown>) => {
+      if ("jobType" in params) {
+        jobs.set(String(params.jobId), {
+          job_id: params.jobId,
+          session_id: params.sessionId,
+          attachment_id: params.attachmentId,
+          job_type: params.jobType,
+          status: params.status,
+          input_json: params.inputJson,
+          output_json: null,
+          error: null,
+          created_at: params.createdAt,
+          updated_at: params.updatedAt,
+          completed_at: null,
+        });
+        return;
+      }
+      const row = jobs.get(String(params.jobId));
+      if (!row) return;
+      if (String(params.outputJson ?? "").includes("No attachment supplied")) {
+        row.status = "ready";
+        row.output_json = params.outputJson;
+        row.updated_at = params.updatedAt;
+        row.completed_at = params.completedAt;
+      } else if ("updatedAt" in params) {
+        row.status = "running";
+        row.updated_at = params.updatedAt;
+      }
+    });
+    const gatewaySql = {
+      prepare: vi.fn((sql: string) => ({
+        get: (jobId: string) => jobs.get(jobId),
+        all: () =>
+          sql.includes("SELECT job_id")
+            ? [...jobs.values()].filter((row) => row.status === "queued" || row.status === "running")
+            : [],
+        run,
+      })),
+    } as never;
+    const deniedTasks = new Set<Promise<unknown>>();
+    const deniedRunner = vi.fn(async () => undefined);
+    const first = new MediaVoiceService(
+      createDeps({
+        gatewaySql,
+        backgroundTasks: deniedTasks,
+        runBackgroundWork: deniedRunner,
+      }),
+    );
+
+    const created = first.createMediaJob({ type: "ocr" });
+    await Promise.allSettled([...deniedTasks]);
+    expect(first.getMediaJob(created.jobId).status).toBe("queued");
+
+    const resumedTasks = new Set<Promise<unknown>>();
+    const second = new MediaVoiceService(
+      createDeps({
+        gatewaySql,
+        backgroundTasks: resumedTasks,
+        runBackgroundWork: async (_label, work) => work(new AbortController().signal),
+      }),
+    );
+    expect(second.resumeInterruptedMediaJobs()).toBe(1);
+    await Promise.allSettled([...resumedTasks]);
+    expect(second.getMediaJob(created.jobId)).toMatchObject({
+      status: "ready",
+      outputJson: { message: "No attachment supplied." },
+    });
   });
 
   it("starts and stops voice talk and wake sessions when the managed runtime is ready", async () => {
@@ -620,6 +691,7 @@ function createDeps(
     backgroundTasks?: Set<Promise<unknown>>;
     gatewaySql?: never;
     isClosing?: () => boolean;
+    runBackgroundWork?: MediaVoiceDeps["runBackgroundWork"];
   } = {},
 ) {
   return {
@@ -632,6 +704,7 @@ function createDeps(
     },
     backgroundTasks: overrides.backgroundTasks ?? new Set(),
     isClosing: overrides.isClosing ?? (() => false),
+    ...(overrides.runBackgroundWork ? { runBackgroundWork: overrides.runBackgroundWork } : {}),
     publishRealtime: overrides.publishRealtime ?? vi.fn(),
     recordDevDiagnostic: overrides.recordDevDiagnostic ?? vi.fn(),
     readChatAttachmentContent: vi.fn(),

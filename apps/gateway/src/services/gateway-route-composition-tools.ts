@@ -5,7 +5,6 @@ import type {
   McpServerUpdateInput,
 } from "@goatcitadel/contracts";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
-import { deleteProviderApiKeyWithFallback, persistProviderApiKeyWithFallback } from "./provider-secret-persistence.js";
 import * as connectorDiagnosticsHelpers from "./connector-diagnostics-helpers.js";
 import { buildLlmProviderAdvice } from "./llm-provider-advice-service.js";
 import { inferRuntimeEngineKind, LlmRuntimeTruthService } from "./llm-runtime-truth-service.js";
@@ -49,10 +48,11 @@ export function composeToolsMcpRouteDependencies(
 
   return {
     llm: {
-      createChatCompletion: (request) => gateway.createChatCompletion(request),
-      generateImage: (input) => gateway.llmService.generateImage(input),
+      createChatCompletion: (request, attribution) => gateway.createChatCompletion(request, attribution),
+      generateImage: (input, attribution) => gateway.llmService.generateImage(input, attribution),
       getOpenAICodexOAuthStatus: () => gateway.llmService.getOpenAICodexOAuthStatus(),
       getLlmConfigWithDetails: () => ({
+        revision: gateway.readSettingsRevision(),
         ...getLlmConfigForGateway(gateway),
         providerConfigs: gateway.llmService.exportConfigFile().providers,
       }),
@@ -72,10 +72,10 @@ export function composeToolsMcpRouteDependencies(
       runLlmEvalProof: (input) => llmRuntimeTruth.runEvalProof(input),
       startOpenAICodexOAuthDeviceFlow: () => gateway.llmService.startOpenAICodexOAuthDeviceFlow(),
       deleteOpenAICodexOAuthCredential: () => gateway.llmService.deleteOpenAICodexOAuthCredential(),
-      updateLlmConfig: (input) => {
-        const updated = gateway.llmService.updateRuntimeConfig(input);
-        gateway.persistLlmConfig();
-        return updated;
+      updateLlmConfig: async (input) => {
+        const { expectedRevision, ...llm } = input;
+        const updated = await gateway.updateSettings({ expectedRevision, llm });
+        return { revision: updated.revision, ...updated.llm };
       },
     },
     mcp: {
@@ -103,12 +103,8 @@ export function composeToolsMcpRouteDependencies(
         mcpServerAdminService.updateMcpServerPolicy(mcpAdminDeps, serverId, policy),
     },
     secrets: {
-      deleteProviderSecret: (providerId) =>
-        deleteProviderApiKeyWithFallback({
-          providerId,
-          rootDir: gateway.config.rootDir,
-          llmService: gateway.llmService,
-        }),
+      deleteProviderSecret: (providerId, expectedRevision, storage) =>
+        gateway.deleteProviderSecret({ providerId, expectedRevision, storage }),
       getProviderSecretStatus: (providerId) => {
         const status = gateway.llmService.getProviderSecretStatus(providerId);
         return {
@@ -117,17 +113,8 @@ export function composeToolsMcpRouteDependencies(
           source: status.apiKeySource,
         };
       },
-      saveProviderSecret: (providerId, apiKey) => {
-        const status = persistProviderApiKeyWithFallback({
-          providerId,
-          apiKey,
-          rootDir: gateway.config.rootDir,
-          llmService: gateway.llmService,
-        });
-        gateway.llmService.clearInlineProviderApiKey(providerId);
-        gateway.persistLlmConfig();
-        return status;
-      },
+      saveProviderSecret: (providerId, apiKey, expectedRevision, storage, envVar) =>
+        gateway.saveProviderSecret({ providerId, apiKey, expectedRevision, storage, envVar }),
     },
     tools: {
       activatePermissionProfile: (input) => gateway.activatePermissionProfile(input),

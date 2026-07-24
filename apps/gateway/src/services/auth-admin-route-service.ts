@@ -3,6 +3,8 @@ import type {
   BackupManifestRecord,
   CompanionSessionExchangeInput,
   CompanionSessionRefreshInput,
+  DatabaseCutoverRequest,
+  DatabaseCutoverResponse,
   DeviceAccessGrantRecord as DeviceAccessGrantContractRecord,
   DeviceAccessRequestCreateInput,
   RetentionPolicy,
@@ -45,10 +47,14 @@ export interface AuthAdminRoutePort {
   listDeviceAccessGrants(): DeviceAccessGrantContractRecord[];
   pruneRetention(input: { dryRun?: boolean }): Promise<RetentionPruneResult>;
   resolveGatewayInstallToken(input: unknown): unknown;
-  revokeCompanionSession(sessionId: string, actorId: string): unknown;
-  revokeDeviceAccessGrant(grantId: string, actorId: string): Promise<DeviceAccessGrantContractRecord>;
+  revokeCompanionSession(sessionId: string, actorId: string, options?: { correlationId?: string }): unknown;
+  revokeDeviceAccessGrant(
+    grantId: string,
+    actorId: string,
+    options?: { correlationId?: string },
+  ): Promise<DeviceAccessGrantContractRecord>;
   rotateCompanionSession(input: CompanionSessionRefreshInput): unknown;
-  runDatabaseCutover(input: unknown): unknown;
+  runDatabaseCutover(input: DatabaseCutoverRequest): Promise<DatabaseCutoverResponse>;
   updateRetentionPolicy(patch: Partial<RetentionPolicy>): RetentionPolicy;
   verifyBackup(input: unknown): unknown;
   verifyDatabaseCutover(input: unknown): unknown;
@@ -85,8 +91,8 @@ export class AuthAdminRouteService {
     return this.gateway.getCompanionSessionRecord(sessionId);
   }
 
-  public revokeCompanionSession(sessionId: string, actorId?: string) {
-    return this.gateway.revokeCompanionSession(sessionId, actorId?.trim() || "operator");
+  public revokeCompanionSession(sessionId: string, actorId?: string, options?: { correlationId?: string }) {
+    return this.gateway.revokeCompanionSession(sessionId, actorId?.trim() || "operator", options);
   }
 
   public listCompanionAuditEvents(input?: CompanionAuditListOptions) {
@@ -97,8 +103,8 @@ export class AuthAdminRouteService {
     return this.gateway.listDeviceAccessGrants();
   }
 
-  public revokeDeviceAccessGrant(grantId: string, actorId?: string) {
-    return this.gateway.revokeDeviceAccessGrant(grantId, actorId?.trim() || "operator");
+  public revokeDeviceAccessGrant(grantId: string, actorId?: string, options?: { correlationId?: string }) {
+    return this.gateway.revokeDeviceAccessGrant(grantId, actorId?.trim() || "operator", options);
   }
 
   public resolveGatewayInstallToken(input: unknown) {
@@ -133,7 +139,7 @@ export class AuthAdminRouteService {
     return this.gateway.verifyBackup(input);
   }
 
-  public runDatabaseCutover(input: unknown) {
+  public runDatabaseCutover(input: DatabaseCutoverRequest) {
     return this.gateway.runDatabaseCutover(input);
   }
 

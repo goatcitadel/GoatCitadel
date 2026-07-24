@@ -606,3 +606,16 @@
   border-radius: var(--r-sm);
   background: var(--mc-surface-3);
 }
+
+@media (max-width: 720px) {
+  .mc-next-threaded-history-banner {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .mc-next-threaded-history-banner button,
+  .mc-next-threaded-history-message {
+    width: 100%;
+    max-width: 100%;
+  }
+}

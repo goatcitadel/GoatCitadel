@@ -64,6 +64,9 @@ function baseProps(overrides: Record<string, unknown> = {}) {
     onStreamEnabledChange: vi.fn(),
     onVisualStreamModeChange: vi.fn(),
     onPrefPatch: vi.fn(),
+    preferenceConflictDraft: null,
+    onRetryPreferenceConflictDraft: vi.fn(),
+    onDiscardPreferenceConflictDraft: vi.fn(),
     activeGeneratedArtifact: null,
     onCloseGeneratedArtifact: vi.fn(),
     selectedTurn: null,
@@ -108,6 +111,34 @@ function baseProps(overrides: Record<string, unknown> = {}) {
 }
 
 describe("ThreadedContextDrawer", () => {
+  it("shows canonical preference truth separately from a retryable conflict draft", async () => {
+    const onRetryPreferenceConflictDraft = vi.fn(async () => undefined);
+    const onDiscardPreferenceConflictDraft = vi.fn();
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = create(
+        <ThreadedContextDrawer
+          surface="chat"
+          props={baseProps({
+            preferenceConflictDraft: { thinkingLevel: "deep", webMode: "quick" },
+            onRetryPreferenceConflictDraft,
+            onDiscardPreferenceConflictDraft,
+          })}
+        />,
+      );
+    });
+
+    expect(collectText(renderer!.root)).toContain("latest server state remains canonical");
+    expect(collectText(renderer!.root)).toContain("thinking level, web mode");
+    await act(async () => {
+      findButton(renderer!.root, "Retry preference changes").props.onClick();
+      findButton(renderer!.root, "Discard preference draft").props.onClick();
+    });
+    expect(onRetryPreferenceConflictDraft).toHaveBeenCalledTimes(1);
+    expect(onDiscardPreferenceConflictDraft).toHaveBeenCalledTimes(1);
+  });
+
   it("copies the selected Chat trust report from Working Context", async () => {
     const onCopyTrustReport = vi.fn();
     let renderer: ReactTestRenderer | null = null;

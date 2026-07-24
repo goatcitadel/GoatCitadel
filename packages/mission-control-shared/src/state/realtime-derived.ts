@@ -30,6 +30,18 @@ export interface DerivedRealtimeNotification {
   soundCue?: OperatorAttentionSoundCue;
 }
 
+/**
+ * HX-507B content-free remote-worker invalidation signals. They carry no
+ * labels, diagnostics, cost, or state body — only IDs/generations/watermarks —
+ * so they must NEVER become an operator toast (no heartbeat live-region noise).
+ * The dedicated Ops workers projection consumes them to invalidate-and-refetch.
+ */
+const REMOTE_WORKER_INVALIDATION_EVENT_TYPES = new Set(["remote_worker_changed", "remote_worker_assignment_changed"]);
+
+export function isRemoteWorkerInvalidationEvent(event: RealtimeEvent): boolean {
+  return REMOTE_WORKER_INVALIDATION_EVENT_TYPES.has(String(event.eventType));
+}
+
 const TOPIC_RULES: Array<{ topic: RefreshTopic; keywords: string[] }> = [
   {
     topic: "surface",
@@ -143,6 +155,12 @@ export function deriveRealtimeRefresh(
 
 export function deriveRealtimeNotification(event: RealtimeEvent): DerivedRealtimeNotification | undefined {
   if (event.eventAuthority === "durable_history") {
+    return undefined;
+  }
+
+  // Remote-worker invalidations only refetch the visible Ops/Chat slice; they
+  // are never surfaced as toasts.
+  if (isRemoteWorkerInvalidationEvent(event)) {
     return undefined;
   }
 

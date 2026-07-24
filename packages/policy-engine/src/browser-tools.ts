@@ -9,11 +9,17 @@ import type {
   ToolPolicyConfig,
 } from "@goatcitadel/contracts";
 import { clampInt } from "@goatcitadel/contracts";
+import { startBrowserEgressProxy, type BrowserEgressProxy } from "./browser-egress-proxy.js";
 import { createUntrustedContentEnvelope } from "./browser-content-guard.js";
 import { stripHtmlNoiseTags, stripHtmlTags } from "./html-noise.js";
 import { assertHostAllowed, assertNotPrivateOrReservedHost, fetchAllowlisted } from "./sandbox/network-guard.js";
 import { assertWritePathInJail } from "./sandbox/path-jail.js";
 import { normalizeFirecrawlApiKeyEnvName } from "./safe-env-name.js";
+import {
+  executeOfficialResearchSearch,
+  isOfficialResearchSearchInvocation,
+  resolveOfficialSearchProviders,
+} from "./research-search-official-providers.js";
 
 type BrowserToolName =
   | "browser.search"
@@ -133,6 +139,12 @@ type BrowserPageStateMode = "stateless" | "session";
 let playwrightChromiumInstallPromise: Promise<void> | null = null;
 const browserSessionStates = new Map<string, { state: BrowserSessionState; lastAccess: number }>();
 const MAX_BROWSER_SESSION_STATES = 128;
+const BROWSER_CHROMIUM_SECURITY_ARGS = [
+  // Browser-context proxies do not cover WebRTC's direct UDP candidates.
+  // Refuse non-proxied UDP so hostile pages cannot use STUN/ICE to reach
+  // loopback, LAN, or metadata endpoints outside the guarded SOCKS proxy.
+  "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+];
 
 export function describeBrowserSessionState(sessionId: string): BrowserSessionStateSummary {
   const entry = browserSessionStates.get(sessionId);
@@ -224,8 +236,34 @@ async function executeBrowserSearch(
   executionContext?: BrowserExecutionContext,
 ): Promise<Record<string, unknown>> {
   const query = asNonEmptyString(args.query, "query");
-  const requestedEngine = normalizeSearchEngine(asString(args.engine)) ?? "auto";
+  const rawEngine = asString(args.engine)?.toLowerCase();
   const requestedBackend = normalizeSearchBackend(asString(args.backend));
+  if (isOfficialResearchSearchInvocation(args)) {
+    const providers = resolveOfficialSearchProviders(args);
+    assertOfficialSearchProviderHostsAllowed(providers, config, executionContext);
+    const response = await executeOfficialResearchSearch(
+      {
+        query,
+        mode: args.mode === "research" ? "research" : "quick",
+        providers,
+        maxResults: clampInt(args.limit ?? args.maxResults, args.mode === "research" ? 10 : 5, 1, 20),
+        freshness: normalizeResearchFreshness(args.freshness),
+      },
+      {
+        signal: executionContext?.signal,
+        additionalAllowlists: [resolveNetworkAllowlist(config, executionContext)],
+      },
+    );
+    return {
+      ...response,
+      action: "search",
+      backend: "official",
+      backendUsed: response.routing?.successfulProviders.length ? true : false,
+      attemptedEngines: response.routing?.attemptedProviders ?? [],
+      fallbackUsed: response.routing?.fallbackUsed ?? false,
+    };
+  }
+  const requestedEngine = normalizeSearchEngine(rawEngine) ?? "auto";
   const requestedReadBackend = requestedBackend === "firecrawl" ? "firecrawl" : "native";
   const limit = clampInt(args.limit ?? args.maxResults, 5, 1, 25);
   if (requestedReadBackend === "firecrawl") {
@@ -1598,15 +1636,25 @@ function buildPlaywrightStorageState(state: BrowserSessionState | undefined): Pl
 function buildPlaywrightContextOptions(
   args: Record<string, unknown>,
   state: BrowserSessionState | undefined,
+  proxyServer: string,
 ): PlaywrightContextOptions {
   const storageState = buildPlaywrightStorageState(state);
   return {
+    serviceWorkers: "block",
     locale: state?.locale,
     timezoneId: state?.timezoneId,
     geolocation: state?.geolocation,
     extraHTTPHeaders: state?.extraHTTPHeaders,
     httpCredentials: state?.httpCredentials,
     storageState,
+    proxy: {
+      server: proxyServer,
+      // Chromium implicitly bypasses proxies for loopback/link-local targets.
+      // Subtract that implicit bypass so explicit loopback grants still pass
+      // through the guarded SOCKS resolver and every other private target is
+      // rejected at connection time.
+      bypass: "<-loopback>",
+    },
   };
 }
 
@@ -1635,10 +1683,12 @@ async function withBrowserPage(
     ? cloneBrowserSessionState(getBrowserSessionState(browserSessionId))
     : undefined;
   const browser = await launchPlaywrightChromium(playwright, headless);
+  let egressProxy: BrowserEgressProxy | undefined;
   const abortSignal = executionContext?.signal;
   const abortHandler = abortSignal
     ? () => {
         void browser.close().catch(() => undefined);
+        void egressProxy?.close().catch(() => undefined);
       }
     : undefined;
 
@@ -1647,7 +1697,16 @@ async function withBrowserPage(
       abortSignal.addEventListener("abort", abortHandler, { once: true });
       throwIfBrowserExecutionAborted(abortSignal);
     }
-    const context = await browser.newContext(buildPlaywrightContextOptions(args, previousSessionState));
+    const grantAllowlist = getGrantHostAllowlist(executionContext);
+    egressProxy = await startBrowserEgressProxy({
+      allowlist: resolveNetworkAllowlist(config, executionContext),
+      additionalAllowlists: grantAllowlist.length > 0 ? [grantAllowlist] : undefined,
+      signal: abortSignal,
+      connectTimeoutMs: timeout,
+    });
+    const context = await browser.newContext(
+      buildPlaywrightContextOptions(args, previousSessionState, egressProxy.serverUrl),
+    );
     if (previousSessionState?.geolocation) {
       await context.grantPermissions?.(["geolocation"], { origin: new URL(url).origin });
     }
@@ -1663,21 +1722,39 @@ async function withBrowserPage(
         }
       }, previousSessionState.sessionStorage);
     }
-    const page = await context.newPage();
     let navigationGuardError: Error | undefined;
-    if (page.route) {
-      await page.route("**/*", async (route) => {
+    const guardBrowserRequest = async (route: PlaywrightRoute): Promise<void> => {
+      try {
+        const requestUrl = route.request().url();
+        assertAllowedHttpUrl(requestUrl);
+        assertHostAllowedForConfig(requestUrl, config, executionContext);
+      } catch (error) {
+        navigationGuardError = error instanceof Error ? error : new Error(String(error));
+        await route.abort("blockedbyclient").catch(() => undefined);
+        return;
+      }
+      await route.continue();
+    };
+    if (context.route) {
+      await context.route("**/*", guardBrowserRequest);
+    }
+    if (context.routeWebSocket) {
+      await context.routeWebSocket("**/*", async (webSocket) => {
         try {
-          const requestUrl = route.request().url();
-          assertAllowedHttpUrl(requestUrl);
-          assertHostAllowedForConfig(requestUrl, config, executionContext);
+          const socketUrl = webSocket.url();
+          assertAllowedWebSocketUrl(socketUrl);
+          assertHostAllowedForConfig(socketUrl, config, executionContext);
         } catch (error) {
           navigationGuardError = error instanceof Error ? error : new Error(String(error));
-          await route.abort("blockedbyclient").catch(() => undefined);
+          await webSocket.close({ code: 1008, reason: "Blocked by GoatCitadel network policy" }).catch(() => undefined);
           return;
         }
-        await route.continue();
+        webSocket.connectToServer();
       });
+    }
+    const page = await context.newPage();
+    if (!context.route && page.route) {
+      await page.route("**/*", guardBrowserRequest);
     }
     const response = await page
       .goto(url, {
@@ -1694,11 +1771,17 @@ async function withBrowserPage(
       throw navigationGuardError;
     }
 
-    const finalUrl = page.url();
-    assertAllowedHttpUrl(finalUrl);
-    assertHostAllowedForConfig(finalUrl, config, executionContext);
+    const initialFinalUrl = page.url();
+    assertAllowedHttpUrl(initialFinalUrl);
+    assertHostAllowedForConfig(initialFinalUrl, config, executionContext);
 
-    const result = await run(page, response?.status(), finalUrl);
+    const result = await run(page, response?.status(), initialFinalUrl);
+    if (navigationGuardError) {
+      throw navigationGuardError;
+    }
+    const settledFinalUrl = page.url();
+    assertAllowedHttpUrl(settledFinalUrl);
+    assertHostAllowedForConfig(settledFinalUrl, config, executionContext);
     if (browserSessionId) {
       const storageState = await context.storageState?.();
       const nextState: BrowserSessionState = {
@@ -1711,7 +1794,7 @@ async function withBrowserPage(
               ]),
             )
           : cloneBrowserStorageBucket(previousSessionState?.localStorage ?? {}),
-        sessionStorage: await snapshotBrowserSessionStorage(page, finalUrl, previousSessionState),
+        sessionStorage: await snapshotBrowserSessionStorage(page, settledFinalUrl, previousSessionState),
         locale: previousSessionState?.locale,
         timezoneId: previousSessionState?.timezoneId,
         geolocation: previousSessionState?.geolocation ? { ...previousSessionState.geolocation } : undefined,
@@ -1727,15 +1810,16 @@ async function withBrowserPage(
     }
     return {
       url,
-      finalUrl,
-      browserSessionId,
       ...result,
+      finalUrl: settledFinalUrl,
+      browserSessionId,
     };
   } finally {
     if (abortSignal && abortHandler) {
       abortSignal.removeEventListener("abort", abortHandler);
     }
     await browser.close().catch(() => undefined);
+    await egressProxy?.close().catch(() => undefined);
   }
 }
 
@@ -1756,14 +1840,15 @@ async function loadPlaywright(): Promise<PlaywrightModule> {
 }
 
 async function launchPlaywrightChromium(playwright: PlaywrightModule, headless: boolean): Promise<PlaywrightBrowser> {
+  const launchOptions = { headless, args: [...BROWSER_CHROMIUM_SECURITY_ARGS] };
   try {
-    return await playwright.chromium.launch({ headless });
+    return await playwright.chromium.launch(launchOptions);
   } catch (error) {
     if (!isMissingPlaywrightBrowserError(error)) {
       throw error;
     }
     await ensurePlaywrightChromiumInstalled();
-    return playwright.chromium.launch({ headless });
+    return playwright.chromium.launch(launchOptions);
   }
 }
 
@@ -2093,15 +2178,39 @@ function normalizeSearchEngine(engine: string | undefined): "auto" | "duckduckgo
   return undefined;
 }
 
-function normalizeSearchBackend(backend: string | undefined): "native" | "firecrawl" | "ollama" | undefined {
+function normalizeSearchBackend(
+  backend: string | undefined,
+): "native" | "firecrawl" | "ollama" | "official" | undefined {
   if (!backend) {
     return undefined;
   }
   const normalized = backend.toLowerCase();
-  if (normalized === "native" || normalized === "firecrawl" || normalized === "ollama") {
+  if (normalized === "native" || normalized === "firecrawl" || normalized === "ollama" || normalized === "official") {
     return normalized;
   }
   return undefined;
+}
+
+function assertOfficialSearchProviderHostsAllowed(
+  providers: Array<"brave" | "parallel">,
+  config: ToolPolicyConfig,
+  executionContext?: BrowserExecutionContext,
+): void {
+  const targets = {
+    brave: "https://api.search.brave.com/res/v1/web/search",
+    parallel: "https://api.parallel.ai/v1/search",
+  } as const;
+  for (const provider of providers) {
+    const target = targets[provider];
+    assertHostAllowedForConfig(target, config, executionContext);
+    if (executionContext?.matchedGrantAllowedHosts !== undefined) {
+      assertHostAllowed(target, getGrantHostAllowlist(executionContext));
+    }
+  }
+}
+
+function normalizeResearchFreshness(value: unknown): "any" | "day" | "week" | "month" | undefined {
+  return value === "any" || value === "day" || value === "week" || value === "month" ? value : undefined;
 }
 
 function normalizeBrowserReadBackend(backend: string | undefined): "native" | "firecrawl" {
@@ -2185,6 +2294,18 @@ function assertAllowedHttpUrl(url: string): void {
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new Error(`Unsupported URL protocol for browser tool: ${parsed.protocol}`);
+  }
+}
+
+function assertAllowedWebSocketUrl(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`Invalid WebSocket URL: ${url}`);
+  }
+  if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+    throw new Error(`Unsupported WebSocket URL protocol for browser tool: ${parsed.protocol}`);
   }
 }
 
@@ -2967,11 +3088,12 @@ function decodeHtmlEntities(input: string): string {
 
 type PlaywrightModule = {
   chromium: {
-    launch: (options: { headless: boolean }) => Promise<PlaywrightBrowser>;
+    launch: (options: { headless: boolean; args?: string[] }) => Promise<PlaywrightBrowser>;
   };
 };
 
 type PlaywrightContextOptions = {
+  serviceWorkers?: "block" | "allow";
   locale?: string;
   timezoneId?: string;
   geolocation?: {
@@ -2985,6 +3107,10 @@ type PlaywrightContextOptions = {
     password: string;
   };
   storageState?: PlaywrightStorageState;
+  proxy?: {
+    server: string;
+    bypass?: string;
+  };
 };
 
 type PlaywrightStorageState = {
@@ -3001,6 +3127,11 @@ type PlaywrightBrowser = {
 };
 
 type PlaywrightContext = {
+  route?: (url: string | RegExp, handler: (route: PlaywrightRoute) => Promise<void> | void) => Promise<void>;
+  routeWebSocket?: (
+    url: string | RegExp,
+    handler: (route: PlaywrightWebSocketRoute) => Promise<void> | void,
+  ) => Promise<void>;
   newPage: () => Promise<PlaywrightPage>;
   storageState?: () => Promise<PlaywrightStorageState>;
   addInitScript?: (
@@ -3008,6 +3139,12 @@ type PlaywrightContext = {
     arg: BrowserStorageBucket,
   ) => Promise<void>;
   grantPermissions?: (permissions: string[], options?: { origin?: string }) => Promise<void>;
+};
+
+type PlaywrightWebSocketRoute = {
+  url: () => string;
+  close: (options?: { code?: number; reason?: string }) => Promise<void>;
+  connectToServer: () => PlaywrightWebSocketRoute;
 };
 
 type PlaywrightPage = {

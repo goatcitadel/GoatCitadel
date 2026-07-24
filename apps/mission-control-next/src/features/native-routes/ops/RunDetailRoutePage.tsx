@@ -391,8 +391,12 @@ export function RunDetailRoutePage({ route, activeWorkspaceId, activeWorkspaceNa
       <details className="mc-next-approvals-details">
         <summary>
           <FileText size={16} />
-          Expert raw trace
+          Expert raw trace (diagnostic)
         </summary>
+        <p className="mc-next-approvals-summary">
+          This raw JSON is diagnostic and non-canonical. Raw IDs and refs are not trusted effect evidence; the semantic
+          panels and signed canonical owner receipts are authoritative.
+        </p>
         <LibraryCodeBlock label="Trace JSON">{JSON.stringify(detail.raw, null, 2)}</LibraryCodeBlock>
       </details>
     </NativePageFrame>
@@ -838,17 +842,51 @@ function getToolItems(record: RunTracePayload, trace?: RunTracePayload): NativeL
   return tools.map((item, index) => {
     const tool = asRecord(item) ?? {};
     const approvalId = readString(tool.approvalId);
+    const effectTruth = getToolEffectTruthProjection(tool);
+    const operationalBody =
+      readString(tool.error) ??
+      readString(tool.failureGuidance) ??
+      (readBoolean(tool.reused) ? `Reused from ${readString(tool.reusedFromToolRunId) ?? "previous run"}` : undefined);
     return {
       title: readString(tool.toolName) ?? readString(tool.toolRunId) ?? `Tool ${index + 1}`,
-      meta: [readString(tool.status), approvalId ? `approval ${approvalId}` : undefined].filter(Boolean).join(" · "),
+      meta: [readString(tool.status), approvalId ? `approval ${approvalId}` : undefined, effectTruth?.facts]
+        .filter(Boolean)
+        .join(" · "),
       body:
-        readString(tool.error) ??
-        readString(tool.failureGuidance) ??
-        (readBoolean(tool.reused)
-          ? `Reused from ${readString(tool.reusedFromToolRunId) ?? "previous run"}`
-          : undefined),
+        [effectTruth?.guidance, operationalBody, effectTruth?.concreteNote].filter(Boolean).join(" · ") || undefined,
     };
   });
+}
+
+function getToolEffectTruthProjection(
+  tool: RunTracePayload,
+): { facts: string; guidance?: string; concreteNote?: string } | undefined {
+  const potentialValue = readString(tool.effectPotential);
+  const dispositionValue = readString(tool.effectDisposition);
+  const outcomeValue = readString(tool.effectOutcomeKind);
+  const evidence = readRecord(tool, "effectEvidence");
+  const reason = readString(evidence?.reason);
+  if (!potentialValue && !dispositionValue && !outcomeValue && !reason) {
+    return undefined;
+  }
+  const potential = potentialValue === "none" || potentialValue === "unknown" ? potentialValue : "not recorded";
+  const disposition = dispositionValue === "none" || dispositionValue === "unknown" ? dispositionValue : "not recorded";
+  const outcome =
+    outcomeValue === "none" || outcomeValue === "uncertain" || outcomeValue === "concrete" ? outcomeValue : "uncertain";
+  const evidenceReason = reason ?? "not recorded";
+  const facts = `effect potential ${potential} · disposition ${disposition} · outcome ${outcome} · evidence ${evidenceReason}`;
+  const guidance =
+    outcome === "uncertain"
+      ? "Inspect external or runtime state before retry. Automatic replay is suppressed."
+      : undefined;
+  return {
+    facts,
+    guidance,
+    concreteNote:
+      outcome === "concrete"
+        ? "A concrete receipt is reported; verify it against the signed canonical owner receipt before relying on any raw ID."
+        : undefined,
+  };
 }
 
 function getApprovalItems(record: RunTracePayload, trace?: RunTracePayload): NativeListItem[] {

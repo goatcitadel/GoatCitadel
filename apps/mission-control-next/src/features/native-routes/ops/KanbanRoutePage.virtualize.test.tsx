@@ -8,7 +8,8 @@ import { toKanbanCard, type KanbanCardModel } from "./kanban-card-model";
 const fetchAgenticRuns = vi.fn();
 const bulkTaskAction = vi.fn();
 
-vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
+vi.mock("@goatcitadel/mission-control-shared/api/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/client")>()),
   fetchAgenticRuns: (...args: unknown[]) => fetchAgenticRuns(...args),
   bulkTaskAction: (...args: unknown[]) => bulkTaskAction(...args),
 }));
@@ -68,6 +69,7 @@ const baseProps = {
 function buildQueuedRuns(count: number): AgenticRunListItem[] {
   return Array.from({ length: count }, (_unused, index) => ({
     taskId: `t-${index}`,
+    taskRevision: index + 1,
     runId: `run-${index}`,
     title: `Queued run ${index}`,
     taskStatus: "assigned",
@@ -146,7 +148,12 @@ describe("KanbanRoutePage virtualization", () => {
     await act(async () => {
       await unblock.props.onClick();
     });
-    expect(bulkTaskAction).toHaveBeenCalledWith({ action: "unblock", taskIds: ["t-5"], workspaceId: "default" });
+    expect(bulkTaskAction).toHaveBeenCalledWith({
+      action: "unblock",
+      taskIds: ["t-5"],
+      expectedRevisionsByTaskId: { "t-5": 6 },
+      workspaceId: "default",
+    });
     act(() => renderer.unmount());
   });
 

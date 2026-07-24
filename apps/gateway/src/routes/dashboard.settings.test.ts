@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import { ConflictError, ValidationError } from "@goatcitadel/contracts";
 import { dashboardRoutes } from "./dashboard.js";
 
 describe("dashboard settings routes", () => {
@@ -24,6 +25,7 @@ describe("dashboard settings routes", () => {
       method: "PATCH",
       url: "/api/v1/settings",
       payload: {
+        expectedRevision: 7,
         llamaCpp: {
           modelsRootPath: "C:\\Models\\",
           modelPath: "C:\\Models\\Gemma\\model.gguf",
@@ -33,6 +35,7 @@ describe("dashboard settings routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(updateSettings).toHaveBeenCalledWith({
+      expectedRevision: 7,
       llamaCpp: {
         modelsRootPath: "C:\\Models\\",
         modelPath: "C:\\Models\\Gemma\\model.gguf",
@@ -51,6 +54,7 @@ describe("dashboard settings routes", () => {
       method: "PATCH",
       url: "/api/v1/settings",
       payload: {
+        expectedRevision: 7,
         llm: {
           upsertProvider: {
             providerId: "openai-compatible",
@@ -70,6 +74,7 @@ describe("dashboard settings routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(updateSettings).toHaveBeenCalledWith({
+      expectedRevision: 7,
       llm: {
         upsertProvider: {
           providerId: "openai-compatible",
@@ -98,6 +103,7 @@ describe("dashboard settings routes", () => {
       method: "PATCH",
       url: "/api/v1/settings",
       payload: {
+        expectedRevision: 7,
         features: {
           coworkRuntimeQualityV1Disabled: true,
           orchestrationFinalStreamingV1Disabled: true,
@@ -108,6 +114,7 @@ describe("dashboard settings routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(updateSettings).toHaveBeenCalledWith({
+      expectedRevision: 7,
       features: {
         coworkRuntimeQualityV1Disabled: true,
         orchestrationFinalStreamingV1Disabled: true,
@@ -118,7 +125,7 @@ describe("dashboard settings routes", () => {
 
   it("returns settings hardening errors for remote hardened approval bypass", async () => {
     const updateSettings = vi.fn(() => {
-      throw new Error("remote_hardened disables approval bypass.");
+      throw new ValidationError({ message: "remote_hardened disables approval bypass." });
     });
 
     app = Fastify();
@@ -129,17 +136,50 @@ describe("dashboard settings routes", () => {
       method: "PATCH",
       url: "/api/v1/settings",
       payload: {
+        expectedRevision: 7,
         deploymentProfile: "remote_hardened",
         toolApprovalMode: "bypass",
       },
     });
 
     expect(response.statusCode).toBe(400);
-    expect(response.json()).toEqual({ error: "remote_hardened disables approval bypass." });
+    expect(response.json()).toMatchObject({
+      error: "remote_hardened disables approval bypass.",
+      code: "FIELD_INVALID",
+    });
     expect(updateSettings).toHaveBeenCalledWith({
+      expectedRevision: 7,
       deploymentProfile: "remote_hardened",
       toolApprovalMode: "bypass",
     });
+  });
+
+  it("returns a revision conflict without retrying a stale settings mutation", async () => {
+    const updateSettings = vi.fn(() => {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: "Settings changed after this client loaded them.",
+        details: { expectedRevision: 4, currentRevision: 5 },
+      });
+    });
+
+    app = Fastify();
+    app.decorate("services", { settings: { updateSettings } } as never);
+    await app.register(dashboardRoutes);
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/settings",
+      payload: { expectedRevision: 4, budgetMode: "saver" },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({
+      error: "Settings changed after this client loaded them.",
+      code: "STATE_CONFLICT",
+      details: { expectedRevision: 4, currentRevision: 5 },
+    });
+    expect(updateSettings).toHaveBeenCalledOnce();
   });
 
   it("rejects dangerous settings payload keys before runtime mutation", async () => {
@@ -182,6 +222,7 @@ describe("dashboard settings routes", () => {
 
   it("projects executable settings and runtime diagnostics while preserving auth readiness metadata", async () => {
     const rawSettings = {
+      revision: 11,
       deploymentProfile: "trusted_local",
       auth: {
         mode: "token",
@@ -286,6 +327,7 @@ describe("dashboard settings routes", () => {
 
   it("accepts a GET-projected settings payload for the editable secret-bearing runtime fields", async () => {
     const rawSettings = {
+      revision: 17,
       web: {
         firecrawl: {
           baseUrl: "https://firecrawl.example.test/token/firecrawl-secret?token=firecrawl-query",
@@ -313,6 +355,7 @@ describe("dashboard settings routes", () => {
     const getResponse = await app.inject({ method: "GET", url: "/api/v1/settings" });
     const displayed = getResponse.json();
     const patch = {
+      expectedRevision: displayed.revision,
       web: { firecrawl: { baseUrl: displayed.web.firecrawl.baseUrl, timeoutMs: 21_000 } },
       mesh: { staticPeers: displayed.mesh.staticPeers, mdns: false },
       npu: { sidecarUrl: displayed.npu.sidecarUrl, autoStart: true },

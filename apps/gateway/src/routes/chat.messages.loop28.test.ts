@@ -66,6 +66,7 @@ describe("chat message route-decision tails", () => {
         providerId: "anthropic",
         model: "claude-sonnet-4-6",
       }),
+      undefined,
     );
   });
 
@@ -101,19 +102,28 @@ describe("chat message route-decision tails", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(routePreflight).toHaveBeenCalledWith("sess-1", {
-      action: "edit",
-      turnId: "turn-2",
-      providerId: "openai",
-      model: "gpt-5.4",
-      mode: "chat",
-      webMode: "off",
-      thinkingLevel: "minimal",
-      speedMode: "fast",
-      subagentPolicy: "off",
-      prefsOverride: undefined,
-    });
-    expect(editChatTurn).toHaveBeenCalledWith("sess-1", "turn-2", expect.objectContaining({ content: "edited" }));
+    expect(routePreflight).toHaveBeenCalledWith(
+      "sess-1",
+      expect.objectContaining({
+        action: "edit",
+        turnId: "turn-2",
+        content: "edited",
+        providerId: "openai",
+        model: "gpt-5.4",
+        mode: "chat",
+        webMode: "off",
+        thinkingLevel: "minimal",
+        speedMode: "fast",
+        subagentPolicy: "off",
+        prefsOverride: undefined,
+      }),
+    );
+    expect(editChatTurn).toHaveBeenCalledWith(
+      "sess-1",
+      "turn-2",
+      expect.objectContaining({ content: "edited" }),
+      undefined,
+    );
   });
 
   it("preserves permission profile, override, and policy linkage through turn entry routes", async () => {
@@ -200,15 +210,16 @@ describe("chat message route-decision tails", () => {
     });
     expect(edit.statusCode).toBe(200);
 
-    expect(agentSendChatMessage).toHaveBeenCalledWith("sess-1", expect.objectContaining(governance));
+    expect(agentSendChatMessage).toHaveBeenCalledWith("sess-1", expect.objectContaining(governance), undefined);
     expect(agentSendChatMessageStream).toHaveBeenCalledWith(
       "sess-1",
       expect.objectContaining(governance),
       expect.anything(),
       expect.objectContaining({ markCommitted: expect.any(Function) }),
+      undefined,
     );
-    expect(retryChatTurn).toHaveBeenCalledWith("sess-1", "turn-1", expect.objectContaining(governance));
-    expect(editChatTurn).toHaveBeenCalledWith("sess-1", "turn-2", expect.objectContaining(governance));
+    expect(retryChatTurn).toHaveBeenCalledWith("sess-1", "turn-1", expect.objectContaining(governance), undefined);
+    expect(editChatTurn).toHaveBeenCalledWith("sess-1", "turn-2", expect.objectContaining(governance), undefined);
   });
 
   it("rejects action, turn, invalid expiry, and route-preflight failures before mutating", async () => {
@@ -267,6 +278,7 @@ describe("chat message route-decision tails", () => {
 
 function buildApp(chatMessages: Record<string, unknown>): FastifyInstance {
   const next = Fastify();
+  next.decorate("requireOperatorAuth", async () => undefined);
   next.decorate("services", { chatMessages } as never);
   void next.register(chatRoutes);
   return next;

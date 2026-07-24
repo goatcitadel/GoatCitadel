@@ -2,14 +2,13 @@ import { Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import {
   CHANNEL_INBOUND_MAX_BYTES,
-  VOICE_TRANSCRIPT_CONTENT_PREFIX,
   createWebhookHandler,
   createWebhookPreParsing,
+  dispatchInboundWebhookCommand,
   dispatchInboundVoiceWebhookMessage,
   dispatchInboundWebhookMessage,
   type WebhookRawBodyRequest,
 } from "./webhook-handler-factory.js";
-import { ChannelBotLoopGuard } from "../services/channel-bot-loop-guard.js";
 
 function createReply() {
   const reply = {
@@ -249,68 +248,53 @@ describe("webhook-handler-factory contract behavior", () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
-  it("caps a runaway self-reply loop via the bot-loop guard and records a diagnostic", async () => {
-    let now = 1_000_000;
-    const guard = new ChannelBotLoopGuard(
-      { maxEventsPerWindow: 3, windowSeconds: 60, cooldownSeconds: 60, enabled: true },
-      () => now,
-    );
-    const recordDevDiagnostic = vi.fn();
+  it("delegates every allowed message to durable acceptance without inline side effects", async () => {
+    const acceptInboundChannelEvent = vi.fn(async (input: { eventType: string; message: { eventId: string } }) => ({
+      accepted: true as const,
+      durableAccepted: true as const,
+      deduped: false,
+      replied: false as const,
+      queued: true,
+      eventType: input.eventType,
+      inboundEventId: `inbound:${input.message.eventId}`,
+    }));
     const gateway = {
-      ingestChannelMessage: vi.fn(async () => ({
-        deduped: false,
-        session: { sessionId: "session-loop" },
-      })),
+      acceptInboundChannelEvent,
+      ingestChannelMessage: vi.fn(),
       setChatSessionBinding: vi.fn(),
-      respondToExistingChatMessage: vi.fn(async () => ({ turnId: "turn-loop" })),
-      emitChannelActivity: vi.fn(async () => ({ effects: [] })),
-      recordDevDiagnostic,
+      respondToExistingChatMessage: vi.fn(),
+      emitChannelActivity: vi.fn(),
+      recordDevDiagnostic: vi.fn(),
     };
 
     const dispatchOnce = (eventId: string) =>
-      dispatchInboundWebhookMessage(
-        gateway as any,
-        {
-          channel: "slack",
-          connectionId: "11111111-1111-1111-1111-111111111111",
-          idempotencyKey: `slack:${eventId}`,
-          eventType: "message",
-          bindingTarget: "C1",
-          message: {
-            eventId,
-            account: "11111111-1111-1111-1111-111111111111",
-            room: "C1",
-            actorId: "U-BOT",
-            content: "loop",
-          },
+      dispatchInboundWebhookMessage(gateway as any, {
+        channel: "slack",
+        connectionId: "11111111-1111-1111-1111-111111111111",
+        idempotencyKey: `slack:${eventId}`,
+        eventType: "message",
+        bindingTarget: "C1",
+        message: {
+          eventId,
+          account: "11111111-1111-1111-1111-111111111111",
+          room: "C1",
+          actorId: "U-BOT",
+          content: "loop",
         },
-        guard,
-      );
+      });
 
-    for (let i = 0; i < 3; i++) {
-      now += 100;
+    for (let i = 0; i < 4; i++) {
       const result = await dispatchOnce(`event-${i}`);
-      expect(result.replied).toBe(true);
+      expect(result).toEqual(
+        expect.objectContaining({ durableAccepted: true, replied: false, inboundEventId: `inbound:event-${i}` }),
+      );
     }
 
-    now += 100;
-    const suppressed = await dispatchOnce("event-overflow");
-    expect(suppressed).toEqual(
-      expect.objectContaining({
-        accepted: true,
-        replied: false,
-        suppressed: true,
-        suppressedReason: "rate-cap",
-        sessionId: "session-loop",
-      }),
-    );
-
-    // The over-cap event is still ingested but never produces a reply turn.
-    expect(gateway.ingestChannelMessage).toHaveBeenCalledTimes(4);
-    expect(gateway.respondToExistingChatMessage).toHaveBeenCalledTimes(3);
-    expect(recordDevDiagnostic).toHaveBeenCalledWith(
-      expect.objectContaining({ event: "channel.bot_loop_suppressed", category: "channels" }),
-    );
+    expect(acceptInboundChannelEvent).toHaveBeenCalledTimes(4);
+    expect(gateway.ingestChannelMessage).not.toHaveBeenCalled();
+    expect(gateway.setChatSessionBinding).not.toHaveBeenCalled();
+    expect(gateway.respondToExistingChatMessage).not.toHaveBeenCalled();
+    expect(gateway.emitChannelActivity).not.toHaveBeenCalled();
   });
 
   it("drops an inbound message from a sender that is not on a non-empty allowlist", async () => {
@@ -448,14 +432,21 @@ describe("webhook-handler-factory contract behavior", () => {
   });
 
   it("allows a listed sender through the allowlist using a case-insensitive trimmed match", async () => {
+    const acceptInboundChannelEvent = vi.fn(async () => ({
+      accepted: true as const,
+      durableAccepted: true as const,
+      deduped: false,
+      replied: false as const,
+      queued: true,
+      eventType: "message",
+      inboundEventId: "inbound:event-allow",
+    }));
     const gateway = {
-      ingestChannelMessage: vi.fn(async () => ({
-        deduped: false,
-        session: { sessionId: "session-allow" },
-      })),
+      acceptInboundChannelEvent,
+      ingestChannelMessage: vi.fn(),
       setChatSessionBinding: vi.fn(),
-      respondToExistingChatMessage: vi.fn(async () => ({ turnId: "turn-allow" })),
-      emitChannelActivity: vi.fn(async () => ({ effects: [] })),
+      respondToExistingChatMessage: vi.fn(),
+      emitChannelActivity: vi.fn(),
       recordDevDiagnostic: vi.fn(),
     };
 
@@ -475,20 +466,28 @@ describe("webhook-handler-factory contract behavior", () => {
       },
     });
 
-    expect(result.replied).toBe(true);
-    expect(gateway.ingestChannelMessage).toHaveBeenCalledTimes(1);
-    expect(gateway.respondToExistingChatMessage).toHaveBeenCalledTimes(1);
+    expect(result).toEqual(expect.objectContaining({ durableAccepted: true, replied: false, queued: true }));
+    expect(acceptInboundChannelEvent).toHaveBeenCalledTimes(1);
+    expect(gateway.ingestChannelMessage).not.toHaveBeenCalled();
+    expect(gateway.respondToExistingChatMessage).not.toHaveBeenCalled();
   });
 
   it("treats an empty/unset allowlist as legacy-open for old connections and records migration evidence", async () => {
+    const acceptInboundChannelEvent = vi.fn(async () => ({
+      accepted: true as const,
+      durableAccepted: true as const,
+      deduped: false,
+      replied: false as const,
+      queued: true,
+      eventType: "message",
+      inboundEventId: "inbound:event-open",
+    }));
     const gateway = {
-      ingestChannelMessage: vi.fn(async () => ({
-        deduped: false,
-        session: { sessionId: "session-open" },
-      })),
+      acceptInboundChannelEvent,
+      ingestChannelMessage: vi.fn(),
       setChatSessionBinding: vi.fn(),
-      respondToExistingChatMessage: vi.fn(async () => ({ turnId: "turn-open" })),
-      emitChannelActivity: vi.fn(async () => ({ effects: [] })),
+      respondToExistingChatMessage: vi.fn(),
+      emitChannelActivity: vi.fn(),
       recordDevDiagnostic: vi.fn(),
     };
 
@@ -508,30 +507,30 @@ describe("webhook-handler-factory contract behavior", () => {
       },
     });
 
-    expect(result.replied).toBe(true);
-    expect(gateway.ingestChannelMessage).toHaveBeenCalledTimes(1);
+    expect(result).toEqual(expect.objectContaining({ durableAccepted: true, replied: false, queued: true }));
+    expect(acceptInboundChannelEvent).toHaveBeenCalledTimes(1);
+    expect(gateway.ingestChannelMessage).not.toHaveBeenCalled();
     expect(gateway.recordDevDiagnostic).toHaveBeenCalledWith(
       expect.objectContaining({ event: "channel.inbound_access_legacy_open", category: "channels" }),
     );
   });
 
-  it("binds the chat session and replies only when the inbound webhook event is new", async () => {
+  it("durably accepts a new inbound event without inline session mutation", async () => {
+    const acceptInboundChannelEvent = vi.fn(async () => ({
+      accepted: true as const,
+      durableAccepted: true as const,
+      deduped: false,
+      replied: false as const,
+      queued: true,
+      eventType: "message.created",
+      inboundEventId: "inbound:event-1",
+    }));
     const gateway = {
-      ingestChannelMessage: vi.fn(async () => ({
-        deduped: false,
-        session: { sessionId: "session-1" },
-      })),
+      acceptInboundChannelEvent,
+      ingestChannelMessage: vi.fn(),
       setChatSessionBinding: vi.fn(),
-      respondToExistingChatMessage: vi.fn(async () => ({ turnId: "turn-1" })),
-      emitChannelActivity: vi.fn(async () => ({
-        channelKey: "telegram",
-        connectionId: "11111111-1111-1111-1111-111111111111",
-        target: "room-1",
-        messageId: "event-1",
-        phase: "thinking",
-        status: "sent",
-        effects: [],
-      })),
+      respondToExistingChatMessage: vi.fn(),
+      emitChannelActivity: vi.fn(),
     };
 
     const result = await dispatchInboundWebhookMessage(gateway as any, {
@@ -550,34 +549,105 @@ describe("webhook-handler-factory contract behavior", () => {
 
     expect(result).toEqual({
       accepted: true,
+      durableAccepted: true,
       deduped: false,
-      replied: true,
-      sessionId: "session-1",
-      turnId: "turn-1",
+      replied: false,
+      queued: true,
       eventType: "message.created",
+      inboundEventId: "inbound:event-1",
     });
-    expect(gateway.setChatSessionBinding).toHaveBeenCalledWith({
-      sessionId: "session-1",
-      transport: "integration",
-      connectionId: "11111111-1111-1111-1111-111111111111",
-      target: "room-1",
-      writable: true,
-    });
-    expect(gateway.respondToExistingChatMessage).toHaveBeenCalledWith("session-1", "event-1");
-    expect(gateway.emitChannelActivity).toHaveBeenCalledWith(
-      expect.objectContaining({ phase: "seen", messageId: "event-1", target: "room-1" }),
+    expect(acceptInboundChannelEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ bindingTarget: "room-1", dispatchKind: "agent_turn" }),
     );
-    expect(gateway.emitChannelActivity).toHaveBeenCalledWith(
-      expect.objectContaining({ phase: "thinking", messageId: "event-1", target: "room-1" }),
+    expect(gateway.ingestChannelMessage).not.toHaveBeenCalled();
+    expect(gateway.setChatSessionBinding).not.toHaveBeenCalled();
+    expect(gateway.respondToExistingChatMessage).not.toHaveBeenCalled();
+    expect(gateway.emitChannelActivity).not.toHaveBeenCalled();
+  });
+});
+
+describe("dispatchInboundWebhookCommand", () => {
+  const input = {
+    channel: "telegram",
+    connectionId: "11111111-1111-1111-1111-111111111111",
+    idempotencyKey: "telegram:command-1",
+    eventType: "telegram-channel-command",
+    bindingTarget: "chat-1",
+    inboundAccessConfig: { botToken: "must-not-persist", inboundAccessMode: "allowlist" },
+    allowedSenders: ["user-1"],
+    message: {
+      eventId: "command-1",
+      account: "11111111-1111-1111-1111-111111111111",
+      actorId: "user-1",
+      content: "/status",
+    },
+  };
+
+  it("commits a secret-free command before waiting for its durable result", async () => {
+    const order: string[] = [];
+    const gateway = {
+      acceptInboundChannelEvent: vi.fn(async () => {
+        order.push("accepted");
+        return {
+          accepted: true as const,
+          durableAccepted: true as const,
+          deduped: false,
+          replied: false as const,
+          queued: true,
+          eventType: input.eventType,
+          inboundEventId: "inbound-command-1",
+        };
+      }),
+      awaitInboundChannelCommandResult: vi.fn(async () => {
+        order.push("settled");
+        return { status: "completed" as const, resultText: "Status ready." };
+      }),
+    };
+
+    const result = await dispatchInboundWebhookCommand(gateway as any, input);
+
+    expect(order).toEqual(["accepted", "settled"]);
+    expect(result.result).toEqual({ status: "completed", resultText: "Status ready." });
+    expect(gateway.acceptInboundChannelEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ dispatchKind: "command" }),
     );
-    expect(gateway.emitChannelActivity).toHaveBeenCalledWith(
-      expect.objectContaining({ phase: "clear", messageId: "event-1", target: "room-1", turnId: "turn-1" }),
+    const accepted = gateway.acceptInboundChannelEvent.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(accepted).not.toHaveProperty("inboundAccessConfig");
+    expect(accepted).not.toHaveProperty("allowedSenders");
+    expect(JSON.stringify(accepted)).not.toContain("must-not-persist");
+  });
+
+  it("replays a terminal duplicate result without waiting or executing again", async () => {
+    const gateway = {
+      acceptInboundChannelEvent: vi.fn(async () => ({
+        accepted: true as const,
+        durableAccepted: true as const,
+        deduped: true,
+        replied: false as const,
+        queued: false,
+        eventType: input.eventType,
+        inboundEventId: "inbound-command-1",
+        commandResultText: "Stored result.",
+      })),
+      awaitInboundChannelCommandResult: vi.fn(),
+    };
+
+    const result = await dispatchInboundWebhookCommand(gateway as any, input);
+
+    expect(result.result).toEqual({ status: "completed", resultText: "Stored result." });
+    expect(gateway.awaitInboundChannelCommandResult).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the durable command owner is unavailable", async () => {
+    await expect(dispatchInboundWebhookCommand({} as any, input)).rejects.toThrow(
+      "Durable inbound command acceptance is unavailable",
     );
   });
 });
 
 describe("dispatchInboundVoiceWebhookMessage (channelVoiceInboundV1Enabled)", () => {
   function createVoiceGateway() {
+    const acceptedPayloads = new Map<string, string>();
     return {
       ingestChannelMessage: vi.fn(async () => ({
         deduped: false,
@@ -589,6 +659,23 @@ describe("dispatchInboundVoiceWebhookMessage (channelVoiceInboundV1Enabled)", ()
       recordDevDiagnostic: vi.fn(),
       parseChatCommand: vi.fn(),
       resolveApprovalWithRemoteToken: vi.fn(),
+      acceptInboundChannelEvent: vi.fn(async (input: { idempotencyKey: string; eventType: string }) => {
+        const payload = JSON.stringify(input);
+        const existing = acceptedPayloads.get(input.idempotencyKey);
+        if (existing !== undefined && existing !== payload) {
+          throw new Error("durable payload mismatch");
+        }
+        acceptedPayloads.set(input.idempotencyKey, payload);
+        return {
+          accepted: true as const,
+          durableAccepted: true as const,
+          deduped: existing !== undefined,
+          replied: false as const,
+          queued: true,
+          eventType: input.eventType,
+          inboundEventId: `inbound:${input.idempotencyKey}`,
+        };
+      }),
     };
   }
 
@@ -614,7 +701,10 @@ describe("dispatchInboundVoiceWebhookMessage (channelVoiceInboundV1Enabled)", ()
     const result = await dispatchInboundVoiceWebhookMessage(gateway as any, {
       ...baseOptions,
       allowedSenders: ["someone-else"],
-      voice: { transcribe, fallbackContent: baseOptions.message.content },
+      voice: {
+        request: { channel: "telegram", connectionConfig: {}, fileId: "voice-file-1", mimeType: "audio/ogg" },
+        fallbackContent: baseOptions.message.content,
+      },
     });
 
     expect(result).toEqual(
@@ -632,184 +722,99 @@ describe("dispatchInboundVoiceWebhookMessage (channelVoiceInboundV1Enabled)", ()
     expect(gateway.setChatSessionBinding).not.toHaveBeenCalled();
   });
 
-  it("acks fast, then ingests the framed transcript asynchronously through the normal policy path", async () => {
+  it("acknowledges only after the secret-free voice reference is durably accepted", async () => {
     const gateway = createVoiceGateway();
-    let resolveTranscription!: (value: { ok: true; transcript: string }) => void;
-    const transcribe = vi.fn(
-      () =>
-        new Promise<{ ok: true; transcript: string }>((resolve) => {
-          resolveTranscription = resolve;
-        }),
-    );
 
-    const ack = await dispatchInboundVoiceWebhookMessage(gateway as any, {
+    const result = await dispatchInboundVoiceWebhookMessage(gateway as any, {
       ...baseOptions,
       allowedSenders: ["u-owner"],
-      voice: { transcribe, fallbackContent: baseOptions.message.content },
+      voice: {
+        request: { channel: "telegram", connectionConfig: {}, fileId: "voice-file-1", mimeType: "audio/ogg" },
+        fallbackContent: baseOptions.message.content,
+      },
     });
 
-    // The webhook reply does not wait for transcription.
-    expect(ack).toEqual({
+    expect(result).toEqual({
       accepted: true,
+      durableAccepted: true,
+      deduped: false,
       replied: false,
       queued: true,
-      transcription: "pending",
       eventType: "message",
+      inboundEventId: "inbound:telegram:voice-1",
     });
-    expect(gateway.ingestChannelMessage).not.toHaveBeenCalled();
-
-    resolveTranscription({ ok: true, transcript: "buy milk tomorrow" });
-    await vi.waitFor(() => {
-      expect(gateway.ingestChannelMessage).toHaveBeenCalledTimes(1);
-    });
-    expect(gateway.ingestChannelMessage).toHaveBeenCalledWith(
-      "telegram",
-      "telegram:voice-1",
+    expect(gateway.acceptInboundChannelEvent).toHaveBeenCalledWith(
       expect.objectContaining({
-        content: `${VOICE_TRANSCRIPT_CONTENT_PREFIX} buy milk tomorrow`,
+        dispatchKind: "voice_agent_turn",
+        voiceRequest: {
+          channel: "telegram",
+          connectionConfig: {},
+          fileId: "voice-file-1",
+          mimeType: "audio/ogg",
+        },
+        voiceFallbackContent: "[telegram voice message]",
       }),
     );
-    await vi.waitFor(() => {
-      expect(gateway.respondToExistingChatMessage).toHaveBeenCalledWith("session-voice", "voice-1");
-    });
+    expect(gateway.ingestChannelMessage).not.toHaveBeenCalled();
+    expect(gateway.respondToExistingChatMessage).not.toHaveBeenCalled();
   });
 
-  it("dedupes concurrent voice retries before repeating download or transcription", async () => {
+  it("delegates duplicate voice callbacks to the persistent acceptance owner", async () => {
     const gateway = createVoiceGateway();
-    let resolveTranscription!: (value: { ok: true; transcript: string }) => void;
-    const transcribe = vi.fn(
-      () =>
-        new Promise<{ ok: true; transcript: string }>((resolve) => {
-          resolveTranscription = resolve;
-        }),
-    );
     const options = {
       ...baseOptions,
       allowedSenders: ["u-owner"],
-      voice: { transcribe, fallbackContent: baseOptions.message.content },
+      voice: {
+        request: {
+          channel: "telegram" as const,
+          connectionConfig: {},
+          fileId: "voice-file-1",
+          mimeType: "audio/ogg",
+        },
+        fallbackContent: baseOptions.message.content,
+      },
     };
 
-    const firstAck = await dispatchInboundVoiceWebhookMessage(gateway as any, options);
-    const retryAck = await dispatchInboundVoiceWebhookMessage(gateway as any, options);
+    const first = await dispatchInboundVoiceWebhookMessage(gateway as any, options);
+    const duplicate = await dispatchInboundVoiceWebhookMessage(gateway as any, options);
 
-    expect(firstAck).toEqual(expect.objectContaining({ queued: true, transcription: "pending" }));
-    expect(retryAck).toEqual(
-      expect.objectContaining({
-        accepted: true,
-        replied: false,
-        deduped: true,
-        queued: false,
-        transcription: "deduped",
+    expect(first).toMatchObject({ durableAccepted: true, deduped: false });
+    expect(duplicate).toMatchObject({ durableAccepted: true, deduped: true });
+    expect(gateway.acceptInboundChannelEvent).toHaveBeenCalledTimes(2);
+    expect(gateway.ingestChannelMessage).not.toHaveBeenCalled();
+  });
+
+  it("fails closed instead of acknowledging through process-local fallback state", async () => {
+    const gateway = createVoiceGateway();
+    Reflect.deleteProperty(gateway, "acceptInboundChannelEvent");
+
+    await expect(
+      dispatchInboundVoiceWebhookMessage(gateway as any, {
+        ...baseOptions,
+        allowedSenders: ["u-owner"],
+        voice: {
+          request: { channel: "telegram", connectionConfig: {}, fileId: "voice-file-1" },
+          fallbackContent: baseOptions.message.content,
+        },
       }),
-    );
-    expect(transcribe).toHaveBeenCalledTimes(1);
-
-    resolveTranscription({ ok: true, transcript: "buy milk tomorrow" });
-    await vi.waitFor(() => {
-      expect(gateway.ingestChannelMessage).toHaveBeenCalledTimes(1);
-    });
+    ).rejects.toThrow("Durable inbound channel acceptance is unavailable for voice events");
+    expect(gateway.ingestChannelMessage).not.toHaveBeenCalled();
   });
 
-  it("EXCLUDES transcripts from command parsing and approval-token resolution (voice is spoofable)", async () => {
+  it("propagates durable acceptance failure so the provider can retry", async () => {
     const gateway = createVoiceGateway();
-    const transcribe = vi.fn(async () => ({
-      ok: true as const,
-      // A transcript that would be a channel command / approval token if typed.
-      transcript: "/stop gca:approval-token-123:a",
-    }));
+    gateway.acceptInboundChannelEvent.mockRejectedValueOnce(new Error("storage unavailable"));
 
-    await dispatchInboundVoiceWebhookMessage(gateway as any, {
-      ...baseOptions,
-      allowedSenders: ["u-owner"],
-      voice: { transcribe, fallbackContent: baseOptions.message.content },
-    });
-
-    await vi.waitFor(() => {
-      expect(gateway.ingestChannelMessage).toHaveBeenCalledTimes(1);
-    });
-    // The command-looking transcript is ingested as inert framed text only.
-    expect(gateway.ingestChannelMessage).toHaveBeenCalledWith(
-      "telegram",
-      "telegram:voice-1",
-      expect.objectContaining({
-        content: `${VOICE_TRANSCRIPT_CONTENT_PREFIX} /stop gca:approval-token-123:a`,
+    await expect(
+      dispatchInboundVoiceWebhookMessage(gateway as any, {
+        ...baseOptions,
+        allowedSenders: ["u-owner"],
+        voice: {
+          request: { channel: "telegram", connectionConfig: {}, fileId: "voice-file-1" },
+          fallbackContent: baseOptions.message.content,
+        },
       }),
-    );
-    expect(gateway.parseChatCommand).not.toHaveBeenCalled();
-    expect(gateway.resolveApprovalWithRemoteToken).not.toHaveBeenCalled();
-  });
-
-  it("falls back to ingesting the placeholder content when transcription fails (never silently dropped)", async () => {
-    const gateway = createVoiceGateway();
-    const transcribe = vi.fn(async () => ({
-      ok: false as const,
-      reason: "download_failed" as const,
-      detail: "boom",
-    }));
-
-    const ack = await dispatchInboundVoiceWebhookMessage(gateway as any, {
-      ...baseOptions,
-      allowedSenders: ["u-owner"],
-      voice: { transcribe, fallbackContent: "[telegram voice message]" },
-    });
-
-    expect(ack).toEqual(expect.objectContaining({ accepted: true, transcription: "pending" }));
-    await vi.waitFor(() => {
-      expect(gateway.ingestChannelMessage).toHaveBeenCalledTimes(1);
-    });
-    expect(gateway.ingestChannelMessage).toHaveBeenCalledWith(
-      "telegram",
-      "telegram:voice-1",
-      expect.objectContaining({ content: "[telegram voice message]" }),
-    );
-    expect(gateway.recordDevDiagnostic).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: "channel.voice_transcription_failed",
-        category: "channels",
-        context: expect.objectContaining({ reason: "download_failed" }),
-      }),
-    );
-  });
-
-  it("falls back to the placeholder when the transcriber throws", async () => {
-    const gateway = createVoiceGateway();
-    const transcribe = vi.fn(async () => {
-      throw new Error("subprocess exploded");
-    });
-
-    await dispatchInboundVoiceWebhookMessage(gateway as any, {
-      ...baseOptions,
-      allowedSenders: ["u-owner"],
-      voice: { transcribe, fallbackContent: "[telegram voice message]" },
-    });
-
-    await vi.waitFor(() => {
-      expect(gateway.ingestChannelMessage).toHaveBeenCalledWith(
-        "telegram",
-        "telegram:voice-1",
-        expect.objectContaining({ content: "[telegram voice message]" }),
-      );
-    });
-    expect(gateway.recordDevDiagnostic).toHaveBeenCalledWith(
-      expect.objectContaining({ event: "channel.voice_transcription_failed" }),
-    );
-  });
-
-  it("records a diagnostic instead of crashing when the post-ack ingest fails", async () => {
-    const gateway = createVoiceGateway();
-    gateway.ingestChannelMessage.mockRejectedValueOnce(new Error("db is on fire"));
-    const transcribe = vi.fn(async () => ({ ok: true as const, transcript: "hello" }));
-
-    await dispatchInboundVoiceWebhookMessage(gateway as any, {
-      ...baseOptions,
-      allowedSenders: ["u-owner"],
-      voice: { transcribe, fallbackContent: baseOptions.message.content },
-    });
-
-    await vi.waitFor(() => {
-      expect(gateway.recordDevDiagnostic).toHaveBeenCalledWith(
-        expect.objectContaining({ event: "channel.voice_inbound_dispatch_failed", level: "error" }),
-      );
-    });
+    ).rejects.toThrow("storage unavailable");
+    expect(gateway.ingestChannelMessage).not.toHaveBeenCalled();
   });
 });

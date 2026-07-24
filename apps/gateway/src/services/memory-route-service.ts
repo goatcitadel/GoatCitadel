@@ -4,9 +4,9 @@ type MemoryRoutePort = Pick<
   MemoryLifecycleService,
   | "acceptMaintenanceRecommendation"
   | "composeContext"
-  | "batchMutateMemoryItems"
-  | "forgetMemory"
-  | "forgetMemoryItem"
+  | "requestMemoryItemPatchApproval"
+  | "requestMemoryForgetApproval"
+  | "requestMemoryBatchMutationApproval"
   | "forgetMemoryDecision"
   | "forgetMemoryEntity"
   | "listMemoryDecisions"
@@ -43,7 +43,6 @@ type MemoryRoutePort = Pick<
   | "checkMemoryLearningStaleness"
   | "listRecentContexts"
   | "patchMaintenancePolicy"
-  | "patchMemoryItem"
   | "rejectMaintenanceRecommendation"
   | "runMaintenanceNow"
   | "runMemoryQualityScan"
@@ -160,27 +159,37 @@ export class MemoryRouteService {
     return this.memory.listMemoryItems(input);
   }
 
-  public batchMutateItems(input: Parameters<MemoryRoutePort["batchMutateMemoryItems"]>[0], actorId: string) {
-    return this.memory.batchMutateMemoryItems(input, actorId);
+  /**
+   * HX-402 P1: the mutation surface is approval-first. Route verbs request a
+   * canonical `memory.lifecycle` approval; only the recovered approval effect
+   * executes the mutation through the approved producer.
+   */
+  public requestBatchMutationApproval(
+    input: Parameters<MemoryRoutePort["requestMemoryBatchMutationApproval"]>[0],
+    requesterId: string,
+    hooks?: Parameters<MemoryRoutePort["requestMemoryBatchMutationApproval"]>[2],
+  ) {
+    return this.memory.requestMemoryBatchMutationApproval(input, requesterId, hooks);
   }
 
-  public patchItem(itemId: string, patch: Parameters<MemoryRoutePort["patchMemoryItem"]>[1], actorId: string) {
-    return this.memory.patchMemoryItem(itemId, patch, actorId);
+  public requestItemPatchApproval(
+    itemId: string,
+    patch: Parameters<MemoryRoutePort["requestMemoryItemPatchApproval"]>[1],
+    requesterId: string,
+    hooks?: Parameters<MemoryRoutePort["requestMemoryItemPatchApproval"]>[3],
+  ) {
+    return this.memory.requestMemoryItemPatchApproval(itemId, patch, requesterId, hooks);
   }
 
-  public forgetItem(itemId: string, actorId: string, hooks?: Parameters<MemoryRoutePort["forgetMemoryItem"]>[2]) {
-    return this.memory.forgetMemoryItem(itemId, actorId, hooks);
+  public requestForgetApproval(
+    input: Parameters<MemoryRoutePort["requestMemoryForgetApproval"]>[0],
+    hooks?: Parameters<MemoryRoutePort["requestMemoryForgetApproval"]>[1],
+  ) {
+    return this.memory.requestMemoryForgetApproval(input, hooks);
   }
 
   public listItemHistory(itemId: string, limit: number) {
     return this.memory.listMemoryItemHistory(itemId, limit);
-  }
-
-  public forget(
-    input: Parameters<MemoryRoutePort["forgetMemory"]>[0],
-    hooks?: Parameters<MemoryRoutePort["forgetMemory"]>[1],
-  ) {
-    return this.memory.forgetMemory(input, hooks);
   }
 
   public listLearnings(input: Parameters<MemoryRoutePort["listMemoryLearnings"]>[0]) {

@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-import type { ChatCompletionRequest, ChatCompletionResponse, ToolInvokeResult } from "@goatcitadel/contracts";
-import { ChatTurnAgentRunner } from "./chat-turn-agent-runner.js";
+import type {
+  ChatCompletionRequest,
+  ChatCompletionResponse,
+  ChatStreamChunkDraft,
+  ToolInvokeResult,
+} from "@goatcitadel/contracts";
+import { ChatTurnAgentRunner, type ChatTurnAgentRunnerDeps } from "./chat-turn-agent-runner.js";
 import {
   createMockStorage,
   createToolCatalog,
@@ -10,6 +15,52 @@ import {
 } from "./chat-turn-agent-runner-test-fixtures.js";
 
 describe("ChatTurnAgentRunner stream and tool-loop behavior", () => {
+  it("preserves the canonical usage event id union through stream chunks and the final result", async () => {
+    async function* createChatCompletionStream() {
+      yield {
+        model_usage_event_id: "usage-stream-first",
+        choices: [{ index: 0, delta: { content: "Tracked " } }],
+      };
+      yield {
+        modelUsageEventIds: ["usage-stream-second", "usage-stream-first"],
+        choices: [{ index: 0, delta: { content: "answer." }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 12, completion_tokens: 3 },
+      };
+    }
+    const createRunner = () =>
+      new ChatTurnAgentRunner({
+        storage: createMockStorage() as never,
+        listToolCatalog: () => [],
+        createChatCompletion: vi.fn(),
+        createChatCompletionStream,
+        invokeTool: vi.fn(),
+      });
+    const input = {
+      sessionId: "sess-stream-usage-ids",
+      turnId: randomUUID(),
+      userMessageId: "msg-stream-usage-ids",
+      content: "Answer directly.",
+      mode: "chat" as const,
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off" as const,
+      memoryMode: "off" as const,
+      thinkingLevel: "standard" as const,
+      toolAutonomy: "safe_auto" as const,
+      historyMessages: [{ role: "user" as const, content: "Answer directly." }],
+    };
+
+    const chunks: ChatStreamChunkDraft[] = [];
+    for await (const chunk of createRunner().runStream(input)) chunks.push(chunk);
+    expect(chunks.find((chunk) => chunk.type === "usage")).toMatchObject({
+      type: "usage",
+      modelUsageEventIds: ["usage-stream-first", "usage-stream-second"],
+    });
+
+    const result = await createRunner().run({ ...input, turnId: randomUUID() });
+    expect(result.modelUsageEventIds).toEqual(["usage-stream-first", "usage-stream-second"]);
+  });
+
   it("falls back to non-streaming completion when the stream fails before visible output", async () => {
     const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
       model: "glm-5",
@@ -381,6 +432,334 @@ describe("ChatTurnAgentRunner stream and tool-loop behavior", () => {
     expect(invokeTool.mock.calls.length).toBeGreaterThanOrEqual(1);
   });
 
+  it("announces a long-running tool immediately and emits honest liveness heartbeats until settlement", async () => {
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(namedToolCallCompletion("session.status", {}))
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "The session is healthy.",
+            },
+          },
+        ],
+      });
+    let settleTool!: (result: ToolInvokeResult) => void;
+    const pendingTool = new Promise<ToolInvokeResult>((resolve) => {
+      settleTool = resolve;
+    });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockReturnValue(pendingTool);
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["session.status"]),
+      createChatCompletion,
+      invokeTool,
+      toolActivityHeartbeatMs: 10,
+    });
+    const chunks: ChatStreamChunkDraft[] = [];
+    const streamCompleted = (async () => {
+      for await (const chunk of orchestrator.runStream({
+        sessionId: "sess-tool-activity",
+        turnId: randomUUID(),
+        userMessageId: "msg-tool-activity",
+        content: "Use session.status, then summarize it.",
+        mode: "chat",
+        providerId: "glm",
+        model: "glm-5",
+        webMode: "off",
+        memoryMode: "off",
+        thinkingLevel: "standard",
+        toolAutonomy: "safe_auto",
+        historyMessages: [{ role: "user", content: "Use session.status, then summarize it." }],
+      })) {
+        chunks.push(chunk);
+      }
+    })();
+
+    await vi.waitFor(() => expect(chunks.some((chunk) => chunk.type === "tool_start")).toBe(true));
+    await vi.waitFor(() => expect(chunks.some((chunk) => chunk.type === "tool_activity")).toBe(true));
+    expect(chunks.some((chunk) => chunk.type === "tool_result")).toBe(false);
+    const toolStartIndex = chunks.findIndex((chunk) => chunk.type === "tool_start");
+    const toolActivityIndex = chunks.findIndex((chunk) => chunk.type === "tool_activity");
+    expect(toolStartIndex).toBeGreaterThanOrEqual(0);
+    expect(toolActivityIndex).toBeGreaterThan(toolStartIndex);
+
+    settleTool({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-tool-activity",
+      result: { healthy: true },
+    });
+    await streamCompleted;
+
+    const toolResultIndex = chunks.findIndex((chunk) => chunk.type === "tool_result");
+    expect(toolResultIndex).toBeGreaterThan(toolActivityIndex);
+    const heartbeatCountAtSettlement = chunks.filter((chunk) => chunk.type === "tool_activity").length;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(chunks.filter((chunk) => chunk.type === "tool_activity")).toHaveLength(heartbeatCountAtSettlement);
+  });
+
+  it("closes the heartbeat wrapper promptly even when the active tool ignores cancellation", async () => {
+    let settleTool!: (result: ToolInvokeResult) => void;
+    const pendingTool = new Promise<ToolInvokeResult>((resolve) => {
+      settleTool = resolve;
+    });
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["session.status"]),
+      createChatCompletion: vi
+        .fn<() => Promise<ChatCompletionResponse>>()
+        .mockResolvedValue(namedToolCallCompletion("session.status", {})),
+      invokeTool: vi.fn<() => Promise<ToolInvokeResult>>().mockReturnValue(pendingTool),
+      toolActivityHeartbeatMs: 10,
+    });
+    const iterator = orchestrator.runStream({
+      sessionId: "sess-tool-close",
+      turnId: randomUUID(),
+      userMessageId: "msg-tool-close",
+      content: "Use session.status.",
+      mode: "chat",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: "Use session.status." }],
+    });
+
+    let step = await iterator.next();
+    while (!step.done && step.value.type !== "tool_start") {
+      step = await iterator.next();
+    }
+    expect(step.done).toBe(false);
+
+    const closeOutcome = await Promise.race([
+      iterator.return(undefined).then(() => "closed" as const),
+      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 75)),
+    ]);
+    expect(closeOutcome).toBe("closed");
+
+    settleTool({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-tool-close",
+      result: { healthy: true },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  it("surfaces dispatch uncertainty when pending inner work has no active tool owner", async () => {
+    let settleTool!: (result: ToolInvokeResult) => void;
+    const pendingTool = new Promise<ToolInvokeResult>((resolve) => {
+      settleTool = resolve;
+    });
+    const storage = createMockStorage() as {
+      chatToolRuns: {
+        listByTurn(turnId: string): Array<{ toolRunId: string; status: string }>;
+        patch(toolRunId: string, patch: Record<string, unknown>): unknown;
+      };
+    };
+    const turnId = randomUUID();
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: storage as never,
+      listToolCatalog: () => createToolCatalog(["session.status"]),
+      createChatCompletion: vi
+        .fn<() => Promise<ChatCompletionResponse>>()
+        .mockResolvedValue(namedToolCallCompletion("session.status", {})),
+      invokeTool: vi.fn<() => Promise<ToolInvokeResult>>().mockReturnValue(pendingTool),
+      toolActivityHeartbeatMs: 10,
+    });
+    const iterator = orchestrator.runStream({
+      sessionId: "sess-unowned-pending",
+      turnId,
+      userMessageId: "msg-unowned-pending",
+      content: "Use session.status.",
+      mode: "chat",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: "Use session.status." }],
+    });
+
+    let step = await iterator.next();
+    while (!step.done && step.value.type !== "tool_start") {
+      step = await iterator.next();
+    }
+    expect(step.done).toBe(false);
+    const activeToolRun = storage.chatToolRuns.listByTurn(turnId).find((toolRun) => toolRun.status === "started");
+    expect(activeToolRun).toBeDefined();
+    storage.chatToolRuns.patch(activeToolRun!.toolRunId, {
+      status: "failed",
+      finishedAt: new Date().toISOString(),
+      error: "tool ownership was lost before cancellation",
+    });
+
+    await expect(iterator.return(undefined)).rejects.toMatchObject({
+      name: "ModelUsageDispatchUncertainError",
+      message: expect.stringContaining("same-generation retry is blocked"),
+    });
+
+    settleTool({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-unowned-pending",
+      result: { healthy: true },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  it("surfaces authoritative usage settlement faults raised by provider-stream cleanup", async () => {
+    const settlementError = new Error("canonical stream usage settlement failed");
+    settlementError.name = "ModelUsageSettlementError";
+    async function* createChatCompletionStream() {
+      try {
+        yield {
+          id: "stream-settlement-return",
+          choices: [{ index: 0, delta: { content: "Visible answer" } }],
+        };
+      } finally {
+        await Promise.reject(settlementError);
+      }
+    }
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => [],
+      createChatCompletion: vi.fn(),
+      createChatCompletionStream,
+      invokeTool: vi.fn(),
+    });
+    const iterator = orchestrator.runStream({
+      sessionId: "sess-stream-settlement-return",
+      turnId: randomUUID(),
+      userMessageId: "msg-stream-settlement-return",
+      content: "Answer directly.",
+      mode: "chat",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: "Answer directly." }],
+    });
+
+    let step = await iterator.next();
+    while (!step.done && step.value.type !== "delta") {
+      step = await iterator.next();
+    }
+    expect(step.done).toBe(false);
+    await expect(iterator.return(undefined)).rejects.toBe(settlementError);
+  });
+
+  it("stops heartbeats promptly when an active tool ignores the aborted turn signal", async () => {
+    let settleTool!: (result: ToolInvokeResult) => void;
+    const pendingTool = new Promise<ToolInvokeResult>((resolve) => {
+      settleTool = resolve;
+    });
+    const controller = new AbortController();
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["session.status"]),
+      createChatCompletion: vi
+        .fn<() => Promise<ChatCompletionResponse>>()
+        .mockResolvedValue(namedToolCallCompletion("session.status", {})),
+      invokeTool: vi.fn<() => Promise<ToolInvokeResult>>().mockReturnValue(pendingTool),
+      toolActivityHeartbeatMs: 1_000,
+    });
+    const iterator = orchestrator.runStream({
+      sessionId: "sess-tool-abort",
+      turnId: randomUUID(),
+      userMessageId: "msg-tool-abort",
+      content: "Use session.status.",
+      mode: "chat",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: "Use session.status." }],
+      signal: controller.signal,
+    });
+
+    let step = await iterator.next();
+    while (!step.done && step.value.type !== "tool_start") {
+      step = await iterator.next();
+    }
+    expect(step.done).toBe(false);
+
+    const pendingNext = iterator.next();
+    controller.abort();
+    await expect(pendingNext).rejects.toMatchObject({ name: "AbortError" });
+
+    settleTool({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-tool-abort",
+      result: { healthy: true },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  it("does not claim liveness for a started tool record left behind before this execution", async () => {
+    const storage = createMockStorage();
+    const turnId = randomUUID();
+    storage.chatToolRuns.create({
+      toolRunId: "stale-tool-run",
+      turnId,
+      sessionId: "sess-stale-tool-activity",
+      toolName: "session.status",
+      status: "started",
+      startedAt: "2026-07-13T07:00:00.000Z",
+    });
+    let settleCompletion!: (response: ChatCompletionResponse) => void;
+    const pendingCompletion = new Promise<ChatCompletionResponse>((resolve) => {
+      settleCompletion = resolve;
+    });
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: storage as never,
+      listToolCatalog: () => createToolCatalog(["session.status"]),
+      createChatCompletion: vi.fn<() => Promise<ChatCompletionResponse>>().mockReturnValue(pendingCompletion),
+      invokeTool: vi.fn(),
+      toolActivityHeartbeatMs: 10,
+    });
+    const chunks: ChatStreamChunkDraft[] = [];
+    const streamCompleted = (async () => {
+      for await (const chunk of orchestrator.runStream({
+        sessionId: "sess-stale-tool-activity",
+        turnId,
+        userMessageId: "msg-stale-tool-activity",
+        content: "Answer directly.",
+        mode: "chat",
+        providerId: "glm",
+        model: "glm-5",
+        webMode: "off",
+        memoryMode: "off",
+        thinkingLevel: "standard",
+        toolAutonomy: "safe_auto",
+        historyMessages: [{ role: "user", content: "Answer directly." }],
+      })) {
+        chunks.push(chunk);
+      }
+    })();
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(chunks.some((chunk) => chunk.type === "tool_start" || chunk.type === "tool_activity")).toBe(false);
+    settleCompletion({
+      model: "glm-5",
+      choices: [{ index: 0, message: { role: "assistant", content: "Direct answer." } }],
+    });
+    await streamCompleted;
+  });
+
   it("infers missing local search and find arguments from the user prompt", async () => {
     const createChatCompletion = vi
       .fn<() => Promise<ChatCompletionResponse>>()
@@ -512,7 +891,7 @@ describe("ChatTurnAgentRunner stream and tool-loop behavior", () => {
     );
   });
 
-  it("reroutes write-jail blocked writes to the safe workspace fallback path", async () => {
+  it("reroutes a pre-dispatch write-jail block to the safe workspace fallback path", async () => {
     const createChatCompletion = vi
       .fn<() => Promise<ChatCompletionResponse>>()
       .mockResolvedValueOnce(namedToolCallCompletion("fs.write", { path: "Draft Notes.md", content: "hello" }))
@@ -529,18 +908,21 @@ describe("ChatTurnAgentRunner stream and tool-loop behavior", () => {
         ],
       });
     const invokeTool = vi
-      .fn<() => Promise<ToolInvokeResult>>()
+      .fn<NonNullable<ChatTurnAgentRunnerDeps["invokeToolWithEffectTruth"]>>()
       .mockResolvedValueOnce({
         outcome: "blocked",
         policyReason: "outside write jail",
         auditEventId: "audit-write-blocked",
         result: { blocked: true },
       })
-      .mockResolvedValueOnce({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: "audit-write-fallback",
-        result: { bytesWritten: 5 },
+      .mockImplementationOnce(async (_request, options) => {
+        options.executionFence();
+        return {
+          outcome: "executed",
+          policyReason: "allowed",
+          auditEventId: "audit-write-fallback",
+          result: { bytesWritten: 5 },
+        };
       });
     const orchestrator = new ChatTurnAgentRunner({
       storage: createMockStorage() as never,
@@ -566,7 +948,10 @@ describe("ChatTurnAgentRunner stream and tool-loop behavior", () => {
         },
       ],
       createChatCompletion,
-      invokeTool,
+      invokeTool: vi.fn(async () => {
+        throw new Error("legacy invocation seam must not run when effect truth is supported");
+      }),
+      invokeToolWithEffectTruth: invokeTool,
     });
 
     const result = await orchestrator.run({

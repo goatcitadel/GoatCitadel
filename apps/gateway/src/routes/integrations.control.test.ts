@@ -3,6 +3,7 @@ import path from "node:path";
 import type { IntegrationConnection, IntegrationPluginRecord } from "@goatcitadel/contracts";
 import { buildInstalledIntegrationPluginRecord } from "../services/integration-plugin-author-contract.js";
 import { buildGenericChannelInboundSignature } from "../services/generic-channel-webhook.js";
+import type { DurableInboundChannelAcceptInput } from "../services/channel-inbound-dispatch.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import {
@@ -220,10 +221,19 @@ describe("integrations control routes", () => {
     expect(ingestChannelMessage).not.toHaveBeenCalled();
   });
 
-  it("accepts bounded inbound payloads and forwards to gateway ingest", async () => {
+  it("accepts bounded inbound payloads through the durable record-only boundary", async () => {
     const ingestChannelMessage = vi.fn(async () => ({
       accepted: true,
       sessionId: "sess-1",
+    }));
+    const acceptInboundChannelEvent = vi.fn(async (input: DurableInboundChannelAcceptInput) => ({
+      accepted: true as const,
+      durableAccepted: true as const,
+      deduped: false,
+      replied: false as const,
+      queued: true,
+      eventType: input.eventType,
+      inboundEventId: `inbound-${input.message.eventId}`,
     }));
     app = Fastify();
     decorateIntegrationServices(app, {
@@ -236,6 +246,7 @@ describe("integrations control routes", () => {
           inboundSecret: "generic-secret",
         },
       })),
+      acceptInboundChannelEvent,
       ingestChannelMessage,
     });
     await app.register(integrationsRoutes);
@@ -263,16 +274,21 @@ describe("integrations control routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(ingestChannelMessage).toHaveBeenCalledWith(
-      "discord",
-      `generic-channel:${connectionId}:discord:evt-1`,
+    expect(acceptInboundChannelEvent).toHaveBeenCalledWith(
       expect.objectContaining({
-        account: connectionId,
-        eventId: "evt-1",
-        actorId: "user-1",
-        content: "hello from inbound",
+        channel: "discord",
+        connectionId,
+        idempotencyKey: `generic-channel:${connectionId}:discord:evt-1`,
+        dispatchKind: "record_only",
+        message: expect.objectContaining({
+          account: connectionId,
+          eventId: "evt-1",
+          actorId: "user-1",
+          content: "hello from inbound",
+        }),
       }),
     );
+    expect(ingestChannelMessage).not.toHaveBeenCalled();
   });
 
   it("runs connector diagnostics through the integration diagnostics route", async () => {

@@ -21,6 +21,12 @@ import type { Storage } from "@goatcitadel/storage";
 import { readBoundedResponseText } from "./bounded-response-reader.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import { preserveHookSecretsForPublicUpdate } from "./hooks-public-projection.js";
+import {
+  buildToolCallBeforeHookInterpositionBinding,
+  TOOL_CALL_BEFORE_HOOK_BINDING_LIMIT,
+  TOOL_EFFECT_INTERPOSITION_TRIGGERS,
+  type ToolCallBeforeHookInterpositionBinding,
+} from "./tool-runtime-interposition.js";
 
 const DEFAULT_HOOK_DELIVERY_RETRY_POLICY = {
   maxAttempts: 3,
@@ -144,6 +150,15 @@ export class HooksService {
     return hooks.some((hook) => hook.enabled && hook.mode === "mutate");
   }
 
+  public getToolCallBeforeInterposition(workspaceId: string): ToolCallBeforeHookInterpositionBinding {
+    const normalized = this.ctx.normalizeWorkspaceId(workspaceId);
+    return buildToolCallBeforeHookInterpositionBinding(
+      TOOL_EFFECT_INTERPOSITION_TRIGGERS.flatMap((trigger) =>
+        this.ctx.storage.workspaceHooks.listByTrigger(normalized, trigger, TOOL_CALL_BEFORE_HOOK_BINDING_LIMIT),
+      ),
+    );
+  }
+
   public listWorkspaceHookRuns(workspaceId: string, limit = 200): HookRunRecord[] {
     return this.ctx.storage.hookRuns.listByWorkspace(this.ctx.normalizeWorkspaceId(workspaceId), limit);
   }
@@ -241,12 +256,32 @@ export class HooksService {
     allowDecisionBlock?: boolean;
     parsePatch?: (value: Record<string, unknown>) => TPatch | undefined;
     mergePatch?: (current: TPatch | undefined, next: TPatch) => TPatch;
+    /** Frozen binding checked against the exact list fetched for this dispatch. */
+    expectedInterposition?: ToolCallBeforeHookInterpositionBinding;
+    /** Process-local fence immediately before the first configured webhook dispatch. */
+    beforeExternalDispatch?: () => void;
   }): Promise<HookInlineDispatchResult<TPatch>> {
     const workspaceId = this.ctx.normalizeWorkspaceId(input.workspaceId);
     const hooks = this.ctx.storage.workspaceHooks.listByTrigger(workspaceId, input.trigger, 200);
+    if (input.trigger === "tool.call.before" && input.expectedInterposition) {
+      const current = buildToolCallBeforeHookInterpositionBinding([
+        ...hooks,
+        ...TOOL_EFFECT_INTERPOSITION_TRIGGERS.filter((trigger) => trigger !== input.trigger).flatMap((trigger) =>
+          this.ctx.storage.workspaceHooks.listByTrigger(workspaceId, trigger, TOOL_CALL_BEFORE_HOOK_BINDING_LIMIT),
+        ),
+      ]);
+      if (current.hash !== input.expectedInterposition.hash || current.count !== input.expectedInterposition.count) {
+        throw new Error("Immutable Chat tool-hook interposition binding drifted before dispatch.");
+      }
+    }
     if (hooks.length === 0) {
       return { runs: [] };
     }
+
+    // Inline hooks are HTTPS webhook calls. Cross the caller-owned boundary
+    // once, before the first delivery, so a blocking/mutating hook cannot be
+    // mistaken for a pre-dispatch no-effect decision.
+    input.beforeExternalDispatch?.();
 
     let mergedPatch: TPatch | undefined;
     const appliedRuns: HookRunRecord[] = [];
@@ -299,12 +334,29 @@ export class HooksService {
     entityId: string;
     idempotencyDiscriminator?: string;
     payload: Record<string, unknown>;
+    expectedInterposition?: ToolCallBeforeHookInterpositionBinding;
+    beforeExternalDispatch?: () => void;
   }): HookRunRecord[] {
     const workspaceId = this.ctx.normalizeWorkspaceId(input.workspaceId);
     const hooks = this.ctx.storage.workspaceHooks.listByTrigger(workspaceId, input.trigger, 200);
+    if (
+      input.expectedInterposition &&
+      (TOOL_EFFECT_INTERPOSITION_TRIGGERS as readonly HookTrigger[]).includes(input.trigger)
+    ) {
+      const current = buildToolCallBeforeHookInterpositionBinding([
+        ...hooks,
+        ...TOOL_EFFECT_INTERPOSITION_TRIGGERS.filter((trigger) => trigger !== input.trigger).flatMap((trigger) =>
+          this.ctx.storage.workspaceHooks.listByTrigger(workspaceId, trigger, TOOL_CALL_BEFORE_HOOK_BINDING_LIMIT),
+        ),
+      ]);
+      if (current.hash !== input.expectedInterposition.hash || current.count !== input.expectedInterposition.count) {
+        throw new Error("Immutable Chat tool-hook interposition binding drifted before enqueue.");
+      }
+    }
     if (hooks.length === 0) {
       return [];
     }
+    input.beforeExternalDispatch?.();
     return hooks.map((hook) => {
       const idempotencyKey = buildAfterHookDeliveryIdempotencyKey(
         input.trigger,

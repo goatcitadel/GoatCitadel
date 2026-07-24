@@ -20,7 +20,7 @@ import type {
   ToolPolicyConfig,
   ToolRiskLevel,
 } from "@goatcitadel/contracts";
-import { evaluateWards } from "@goatcitadel/contracts";
+import { evaluateWards, HEARTBEAT_PERMISSION_PROFILE_ID, HEARTBEAT_RESTRICTED_PROFILE } from "@goatcitadel/contracts";
 import type { CitadelWardRecord, WardEffect } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { randomUUID } from "node:crypto";
@@ -35,6 +35,10 @@ import {
   type IngestionSourceType,
 } from "./ingestion-source-type.js";
 import { resolveEffectivePolicy } from "./policy-resolver.js";
+import {
+  isOfficialResearchSearchInvocation,
+  resolveOfficialSearchProviders,
+} from "./research-search-official-providers.js";
 import { createDefaultToolRegistry, type ToolDefinition, type ToolRegistry } from "./tool-registry.js";
 import { matchesAnyToolPattern, matchesToolPattern } from "./tool-patterns.js";
 import { assertWritePathInJail, resolveReadPathAccess } from "./sandbox/path-jail.js";
@@ -47,7 +51,13 @@ import {
 import { classifyShellRisk } from "./sandbox/shell-risk-gate.js";
 import { classifyArgumentRisk } from "./sandbox/argument-risk-gate.js";
 import { HttpMutationOutcomeUnknownError } from "./sandbox/http-request-policy.js";
-import { executeTool, resolveFixedOutboundHostsForTool, type ToolExecutorRuntimeHooks } from "./tool-executor.js";
+import {
+  executeTool,
+  resolveFixedOutboundHostsForTool,
+  ToolBeforeProcessSpawnError,
+  type ToolExecutorRuntimeHooks,
+  type ToolProcessSpawnBoundary,
+} from "./tool-executor.js";
 import {
   buildInternalToolCall,
   buildInternalToolResult,
@@ -98,6 +108,14 @@ function hasFullWebAccess(request: Pick<ToolAccessEvaluateRequest, "toolName" | 
   return isFullWebAccessEligibleTool(request.toolName) && request.policyContext?.fullWebAccess !== false;
 }
 
+function isExactBuiltInHeartbeatProfile(request: Pick<ToolAccessEvaluateRequest, "policyContext">): boolean {
+  const context = request.policyContext;
+  return (
+    context?.permissionProfileId === HEARTBEAT_PERMISSION_PROFILE_ID &&
+    isDeepStrictEqual(context.permissionProfile, HEARTBEAT_RESTRICTED_PROFILE)
+  );
+}
+
 function assertHostAllowedForRequest(
   hostOrUrl: string,
   request: ToolAccessEvaluateRequest,
@@ -145,6 +163,10 @@ const BROWSER_SEARCH_ENGINE_URLS = {
   bing: "https://www.bing.com/search",
   google: "https://www.google.com/search",
 } as const;
+const OFFICIAL_SEARCH_PROVIDER_URLS = {
+  brave: "https://api.search.brave.com/res/v1/web/search",
+  parallel: "https://api.parallel.ai/v1/search",
+} as const;
 
 type BrowserSearchEngine = keyof typeof BROWSER_SEARCH_ENGINE_URLS;
 
@@ -163,10 +185,24 @@ function resolveBrowserSearchEngineCandidates(engineValue: unknown): BrowserSear
 }
 
 function validateBrowserSearchHosts(request: ToolAccessEvaluateRequest, config: ToolPolicyConfig): void {
+  const backend = typeof request.args?.backend === "string" ? request.args.backend.toLowerCase() : undefined;
+  if (isOfficialResearchSearchInvocation(request.args ?? {})) {
+    const providers = resolveOfficialSearchProviders(request.args ?? {});
+    if (providers.length === 0) {
+      throw new Error("browser.search official backend requires at least one supported provider (brave or parallel).");
+    }
+    if (hasFullWebAccess(request)) {
+      return;
+    }
+    for (const provider of providers) {
+      const target = OFFICIAL_SEARCH_PROVIDER_URLS[provider];
+      assertHostAllowedForConfig(target, config);
+    }
+    return;
+  }
   if (hasFullWebAccess(request)) {
     return;
   }
-  const backend = typeof request.args?.backend === "string" ? request.args.backend.toLowerCase() : undefined;
   if (backend === "firecrawl" && request.args?.firecrawlFallbackToNative === false) {
     return;
   }
@@ -187,12 +223,19 @@ function validateBrowserSearchHosts(request: ToolAccessEvaluateRequest, config: 
   );
 }
 
+function isOfficialSearchRequest(request: Pick<ToolAccessEvaluateRequest, "toolName" | "args">): boolean {
+  return request.toolName === "browser.search" && isOfficialResearchSearchInvocation(request.args ?? {});
+}
+
 interface GrantDecision {
   decision: "allow" | "deny";
   grant: ToolGrantRecord;
   allowGrants?: ToolGrantRecord[];
   constraintsError?: string;
 }
+
+const HOST_CONSTRAINED_BROWSER_SEARCH_GRANT_INAPPLICABLE =
+  "host-constrained browser.search grant requires an official or explicit outbound target";
 
 export interface ToolPolicyEngineRuntimeHooks extends ToolExecutorRuntimeHooks {
   /**
@@ -215,11 +258,22 @@ export interface ToolPolicyEngineRuntimeHooks extends ToolExecutorRuntimeHooks {
  * wire API.
  */
 export interface ToolPolicyInvokeOptions {
-  beforeExecute?: () => void;
+  beforeExecute?: (boundary?: ToolProcessSpawnBoundary) => void | Promise<void>;
   externalSideEffect?: {
     markStarted(): void;
     markNotRequired(): void;
   };
+}
+
+/** Explicit fail-closed result from a process-local execution precondition. */
+export class ToolExecutionPreconditionError extends Error {
+  public constructor(
+    message: string,
+    public readonly result?: Record<string, unknown>,
+  ) {
+    super(message);
+    this.name = "ToolExecutionPreconditionError";
+  }
 }
 
 const DEFAULT_APPROVAL_TTL_MS = 15 * 60_000;
@@ -630,7 +684,7 @@ export class ToolPolicyEngine {
     options?: {
       deferResolution?: boolean;
       externalRuntimeReplay?: boolean;
-      beforeExecute?: () => void;
+      beforeExecute?: ToolPolicyInvokeOptions["beforeExecute"];
       externalSideEffect?: ToolPolicyInvokeOptions["externalSideEffect"];
     },
   ): Promise<ToolInvokeResult | undefined> {
@@ -836,6 +890,22 @@ export class ToolPolicyEngine {
       return withPolicy(deny(riskLevel, "unknown_tool", `unknown tool ${request.toolName}`));
     }
 
+    // An active permission profile is a capability ceiling, not another
+    // additive allow source. Global/agent/profile allows, scoped grants, and a
+    // local operator override may change posture only for tools already inside
+    // this surface; none may widen it. Global deny remains the earlier,
+    // absolute deny-wins gate and no-profile requests keep legacy semantics.
+    const activePermissionProfile =
+      request.policyContext?.permissionProfile?.status === "active"
+        ? request.policyContext.permissionProfile
+        : undefined;
+    if (
+      activePermissionProfile &&
+      !matchesAnyToolPattern(new Set(activePermissionProfile.toolPatterns), request.toolName)
+    ) {
+      return withPolicy(deny(riskLevel, "permission_profile_upper_bound", "tool not available in resolved policy"));
+    }
+
     // Effective Citadel scope. Gateway runtime paths resolve the parent Citadel
     // from the workspace and pass it on the request, so Wards always enforce on
     // the correct scope. Requests without a citadelId are unscoped (global) and
@@ -879,8 +949,11 @@ export class ToolPolicyEngine {
       });
     }
 
+    const officialSearchRequest = isOfficialSearchRequest(request);
     const allowGrants =
-      grantDecision?.decision === "allow" ? (grantDecision.allowGrants ?? [grantDecision.grant]) : undefined;
+      grantDecision?.decision === "allow" && (!officialSearchRequest || !grantDecision.constraintsError)
+        ? (grantDecision.allowGrants ?? [grantDecision.grant])
+        : undefined;
 
     const structuralError = this.validateStructuralSafety(request, policy, allowGrants);
     if (structuralError) {
@@ -899,7 +972,7 @@ export class ToolPolicyEngine {
       );
     }
 
-    if (grantDecision?.decision === "allow" && grantDecision.constraintsError) {
+    if (grantDecision?.decision === "allow" && grantDecision.constraintsError && !officialSearchRequest) {
       return withWard({
         allowed: false,
         reasonCodes: ["grant_constraints_block"],
@@ -914,7 +987,7 @@ export class ToolPolicyEngine {
     }
 
     const inProfile = matchesAnyToolPattern(policy.effectiveTools, request.toolName);
-    const hasAllowGrant = grantDecision?.decision === "allow";
+    const hasAllowGrant = grantDecision?.decision === "allow" && !grantDecision.constraintsError;
     if (!inProfile && !hasAllowGrant) {
       return withWard(withPolicy(deny(riskLevel, "policy_disallow", "tool not available in resolved policy")));
     }
@@ -978,7 +1051,15 @@ export class ToolPolicyEngine {
       requiresApproval = false;
     }
 
-    const { reasonCodes, policyReason } = this.buildAccessReason({
+    const officialSearchConsentGrant = officialSearchRequest
+      ? this.resolveOfficialSearchConsentGrant(request, allowGrants)
+      : undefined;
+    const officialSearchConsentRequired = officialSearchRequest && !officialSearchConsentGrant;
+    if (officialSearchConsentRequired) {
+      requiresApproval = true;
+    }
+
+    const accessReason = this.buildAccessReason({
       policy,
       localOperatorOverrideAuditId,
       codeModeRunPreapproved,
@@ -991,19 +1072,44 @@ export class ToolPolicyEngine {
       argumentRisk,
       outsideRootsReadRequiresApproval,
     });
-    const effectiveAllowGrant =
-      grantDecision?.decision === "allow"
+    if (officialSearchConsentRequired) {
+      accessReason.reasonCodes.push("official_search_provider_consent_required");
+      accessReason.policyReason = "official search provider consent is required";
+    }
+
+    // A silent heartbeat has no operator waiting on an approval lifecycle. If
+    // policy drift (for example a new Ward), argument classification, risk, or
+    // filesystem posture would ordinarily escalate one of its exact read-only
+    // tools, fail closed instead of creating an approval that can park forever.
+    // Match the complete built-in record as well as its resolved id so a custom
+    // profile that merely reuses the id cannot inherit this special posture.
+    if (requiresApproval && isExactBuiltInHeartbeatProfile(request)) {
+      return withWard({
+        allowed: false,
+        reasonCodes: [...new Set([...accessReason.reasonCodes, "heartbeat_interactive_approval_forbidden"])],
+        requiresApproval: false,
+        riskLevel,
+        policyReason: "silent heartbeat tool escalation is blocked because interactive approval is unavailable",
+        permissionProfileId: policy.permissionProfileId,
+        localOperatorOverrideId: localOperatorOverrideAuditId,
+        approvalMode: policy.approvalMode,
+      });
+    }
+
+    const effectiveAllowGrant = officialSearchRequest
+      ? officialSearchConsentGrant
+      : grantDecision?.decision === "allow"
         ? (this.resolveEffectiveAllowGrant(request, policy, grantDecision.grant, allowGrants) ?? grantDecision.grant)
         : undefined;
 
     return withWard({
       allowed: true,
-      reasonCodes,
+      reasonCodes: accessReason.reasonCodes,
       requiresApproval,
       matchedGrantId: effectiveAllowGrant?.grantId,
       matchedGrantAllowedHosts: effectiveAllowGrant ? getAllowedGrantHosts(effectiveAllowGrant.constraints) : undefined,
       riskLevel,
-      policyReason,
+      policyReason: accessReason.policyReason,
       grantToConsume: effectiveAllowGrant?.grantId,
       permissionProfileId: policy.permissionProfileId,
       localOperatorOverrideId: localOperatorOverrideAuditId,
@@ -1197,6 +1303,9 @@ export class ToolPolicyEngine {
         allowedGrants.push(grant);
         continue;
       }
+      if (constraintsError === HOST_CONSTRAINED_BROWSER_SEARCH_GRANT_INAPPLICABLE) {
+        continue;
+      }
       firstConstrainedAllow ??= { grant, constraintsError };
     }
 
@@ -1267,6 +1376,9 @@ export class ToolPolicyEngine {
         return "grant host constraints require a URL docs.ingest source";
       }
       const candidates = extractGrantHostCandidates(request, this.storage);
+      if (candidates.length === 0 && request.toolName === "browser.search") {
+        return HOST_CONSTRAINED_BROWSER_SEARCH_GRANT_INAPPLICABLE;
+      }
       if (candidates.length === 0 && request.toolName === "docs.ingest") {
         return "grant host constraints require a URL docs.ingest source";
       }
@@ -1483,6 +1595,31 @@ export class ToolPolicyEngine {
     return this.resolveGrantForOutsideRootsRead(request, policy, allowGrants) ?? fallback;
   }
 
+  private resolveOfficialSearchConsentGrant(
+    request: ToolAccessEvaluateRequest,
+    allowGrants: ToolGrantRecord[] | undefined,
+  ): ToolGrantRecord | undefined {
+    const requiredHosts = [
+      ...new Set(
+        resolveOfficialSearchProviders(request.args ?? {}).map((provider) =>
+          new URL(OFFICIAL_SEARCH_PROVIDER_URLS[provider]).hostname.toLowerCase(),
+        ),
+      ),
+    ].sort();
+    if (requiredHosts.length === 0) {
+      return undefined;
+    }
+    return allowGrants?.find((grant) => {
+      if (grant.decision !== "allow" || grant.toolPattern !== "browser.search") {
+        return false;
+      }
+      const allowedHosts = new Set(
+        (grant.constraints?.allowedHosts ?? []).map((host) => host.trim().toLowerCase()).filter(Boolean),
+      );
+      return allowedHosts.size === requiredHosts.length && requiredHosts.every((host) => allowedHosts.has(host));
+    });
+  }
+
   private resolveGrantForOutsideRootsRead(
     request: ToolAccessEvaluateRequest,
     policy: EffectiveToolPolicy,
@@ -1636,11 +1773,13 @@ export class ToolPolicyEngine {
         }),
       };
     }
-    // This is the last process-local authority check before the concrete tool
-    // executor starts. Keep it outside the execution catch so lease loss
-    // interrupts the stale worker instead of being normalized into an ordinary
-    // tool failure that could let the turn continue.
-    options.beforeExecute?.();
+    const hasDeepProcessBoundary = isDeepProcessBoundaryTool(executionRequest.toolName);
+    if (!hasDeepProcessBoundary) {
+      // Non-process tools retain the historical boundary and propagation
+      // semantics. Process tools invoke the same callback inside the executor,
+      // after cwd/command resolution and immediately before spawn.
+      await options.beforeExecute?.();
+    }
     let externalSideEffectStarted = false;
     const markExternalSideEffectStarted = () => {
       if (externalSideEffectStarted) {
@@ -1649,7 +1788,7 @@ export class ToolPolicyEngine {
       options.externalSideEffect?.markStarted();
       externalSideEffectStarted = true;
     };
-    const executorRuntimeHooks = options.externalSideEffect
+    let executorRuntimeHooks: ToolExecutorRuntimeHooks = options.externalSideEffect
       ? {
           ...this.runtimeHooks,
           beforeExternalSideEffect: () => {
@@ -1658,6 +1797,16 @@ export class ToolPolicyEngine {
           },
         }
       : this.runtimeHooks;
+    if (hasDeepProcessBoundary && options.beforeExecute) {
+      const baseRuntimeHooks = executorRuntimeHooks;
+      executorRuntimeHooks = {
+        ...baseRuntimeHooks,
+        beforeProcessSpawn: async (boundary) => {
+          await baseRuntimeHooks.beforeProcessSpawn?.(boundary);
+          await options.beforeExecute?.(boundary);
+        },
+      };
+    }
     if (
       options.externalSideEffect &&
       isMutationTool(this.registry.get(executionRequest.toolName)) &&
@@ -1703,9 +1852,22 @@ export class ToolPolicyEngine {
           approvalMode: evaluation?.approvalMode,
         }),
       };
-    } catch (error) {
+    } catch (caughtError) {
       if (options.externalSideEffect && !externalSideEffectStarted) {
         options.externalSideEffect.markNotRequired();
+      }
+      let error: unknown = caughtError;
+      if (error instanceof ToolBeforeProcessSpawnError) {
+        if (error.cancelled) {
+          error = new ToolExecutionPreconditionError("tool invocation was cancelled before process spawn");
+        } else if (error.boundaryCause instanceof ToolExecutionPreconditionError) {
+          error = error.boundaryCause;
+        } else {
+          // Preserve the old beforeExecute contract: lease/fence failures
+          // interrupt the caller and are never normalized into an ordinary tool
+          // result merely because this tool has a deeper spawn boundary.
+          throw error.boundaryCause;
+        }
       }
       if (error instanceof HttpMutationOutcomeUnknownError) {
         const reason = `execution outcome unknown: ${error.message}`;
@@ -1748,7 +1910,10 @@ export class ToolPolicyEngine {
           }),
         };
       }
-      const reason = `execution error: ${(error as Error).message}`;
+      const preconditionError = error instanceof ToolExecutionPreconditionError ? error : undefined;
+      const reason = preconditionError
+        ? `blocked: ${preconditionError.message}`
+        : `execution error: ${(error as Error).message}`;
       await this.recordBlocked(auditEventId, request, reason, {
         error: (error as Error).message,
         matchedGrantId,
@@ -1762,11 +1927,12 @@ export class ToolPolicyEngine {
         outcome: "blocked",
         policyReason: reason,
         auditEventId,
+        ...(preconditionError?.result ? { result: preconditionError.result } : {}),
         internalCall,
         internalResult: buildInternalToolResult({
           toolName: request.toolName,
           outcome: "blocked",
-          errorKind: "execution_error",
+          errorKind: preconditionError ? "policy_block" : "execution_error",
           completedAt,
         }),
         audit: buildToolAuditRecord({
@@ -1782,7 +1948,7 @@ export class ToolPolicyEngine {
           permissionProfileId: evaluation?.permissionProfileId,
           localOperatorOverrideId: evaluation?.localOperatorOverrideId,
           approvalMode: evaluation?.approvalMode,
-          errorKind: "execution_error",
+          errorKind: preconditionError ? "policy_block" : "execution_error",
         }),
       };
     }
@@ -2027,6 +2193,16 @@ export class ToolPolicyEngine {
   }
 }
 
+function isDeepProcessBoundaryTool(toolName: string): boolean {
+  return (
+    toolName === "shell.exec" ||
+    toolName === "shell.exec_background" ||
+    toolName === "tests.run" ||
+    toolName === "lint.run" ||
+    toolName === "build.run"
+  );
+}
+
 type ScopeCandidate = {
   scope: "task" | "agent" | "session" | "chamber" | "citadel" | "workspace" | "global";
   scopeRef: string;
@@ -2105,7 +2281,8 @@ function stripUndefined<T extends Record<string, unknown>>(input: T): T {
 
 function withExecutionGrantContext(request: ToolInvokeRequest, evaluation?: AccessEvaluation): ToolInvokeRequest {
   const allowedHosts = evaluation?.matchedGrantAllowedHosts?.filter((entry) => entry.trim().length > 0);
-  if (!evaluation?.matchedGrantId && (!allowedHosts || allowedHosts.length === 0)) {
+  const hasEvaluatedHostConstraint = evaluation?.matchedGrantAllowedHosts !== undefined;
+  if (!evaluation?.matchedGrantId && !hasEvaluatedHostConstraint) {
     return request;
   }
   return {
@@ -2113,8 +2290,9 @@ function withExecutionGrantContext(request: ToolInvokeRequest, evaluation?: Acce
     policyContext: {
       ...(request.policyContext ?? {}),
       matchedGrantId: evaluation?.matchedGrantId ?? request.policyContext?.matchedGrantId,
-      matchedGrantAllowedHosts:
-        allowedHosts && allowedHosts.length > 0 ? allowedHosts : request.policyContext?.matchedGrantAllowedHosts,
+      matchedGrantAllowedHosts: hasEvaluatedHostConstraint
+        ? (allowedHosts ?? [])
+        : request.policyContext?.matchedGrantAllowedHosts,
     },
   };
 }
@@ -2132,6 +2310,13 @@ function extractOutboundHostCandidates(request: Pick<ToolAccessEvaluateRequest, 
   }
   if (request.toolName.startsWith("browser.")) {
     const targets = stringTargets(request.args?.url);
+    if (request.toolName === "browser.search" && isOfficialResearchSearchInvocation(request.args ?? {})) {
+      targets.push(
+        ...resolveOfficialSearchProviders(request.args ?? {}).map(
+          (provider) => OFFICIAL_SEARCH_PROVIDER_URLS[provider],
+        ),
+      );
+    }
     if (request.args?.backend === "firecrawl") {
       targets.push(readFirecrawlBaseUrl(request.args));
     }
@@ -2251,6 +2436,11 @@ function extractGrantHostCandidates(
 ): string[] {
   const candidates = extractHostCandidates(request.args);
   const args = request.args;
+  if (request.toolName === "browser.search") {
+    candidates.push(
+      ...extractOutboundHostCandidates(request).flatMap((target) => extractHostCandidates({ url: target })),
+    );
+  }
   if (readDocsIngestSourceTypeIfValid(request) === "url" && typeof args?.source === "string") {
     candidates.push(...extractHostCandidates({ url: args.source }));
   }

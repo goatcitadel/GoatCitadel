@@ -3,14 +3,17 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Storage } from "@goatcitadel/storage";
-import type { RealtimeEvent } from "@goatcitadel/contracts";
+import type { ImprovementRef, RealtimeEvent } from "@goatcitadel/contracts";
 import {
   ImprovementService,
+  type ImprovementLifecycleCrashBoundary,
+  type ImprovementLifecyclePendingApproval,
   type ImprovementServiceCallbacks,
   type ImprovementServiceContext,
   type SurfaceRouteOverrideSignalInput,
   type SurfaceRouteOverrideExemplar,
 } from "./improvement-service.js";
+import { ImprovementLifecycleApplyError } from "./improvement-lifecycle-journey-producer.js";
 
 interface Harness {
   rootDir: string;
@@ -226,6 +229,598 @@ describe("ImprovementService surface_route_override synthesizes routing_policy c
     expect(routingCandidate!.kind).toBe("routing_policy");
   });
 });
+
+// ── HX-402 P3: the recoverable governed improvement lifecycle ────────────
+//
+// Proof matrix (audit-verbatim): crash injection before/after callback and at
+// the inspection, settlement-adjacent signal, and Journey boundaries; stale /
+// original approval reuse rejected; exact replay; competing workers with one
+// winner; failed compensation recorded truthfully; zero false applied /
+// rolled_back claims against injected external-state fakes.
+
+interface GovernedHarness extends Harness {
+  policies: Record<string, unknown>;
+  applyCalls: number;
+  restoreCalls: number;
+  callbacks: ImprovementServiceCallbacks & {
+    improvementLifecycleCrashSeam?: (boundary: ImprovementLifecycleCrashBoundary) => void;
+  };
+  /** Overridable external-callback behavior for the zero-false-claims matrix. */
+  behavior: {
+    applyMode: "target" | "wrong" | "throw" | "throw_after_write";
+    restoreMode: "snapshot" | "wrong" | "throw";
+    crashAt?: ImprovementLifecycleCrashBoundary;
+  };
+}
+
+function createGovernedHarness(): GovernedHarness {
+  const rootDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "gc-improvement-governed-"));
+  const transcriptsDir = path.join(rootDir, "transcripts");
+  const auditDir = path.join(rootDir, "audit");
+  fsSync.mkdirSync(transcriptsDir, { recursive: true });
+  fsSync.mkdirSync(auditDir, { recursive: true });
+  const storage = new Storage({
+    dbPath: path.join(rootDir, "gateway.sqlite"),
+    transcriptsDir,
+    auditDir,
+  });
+  const published: Harness["published"] = [];
+  const policies: Record<string, unknown> = {};
+  const harness = {
+    rootDir,
+    storage,
+    service: undefined as unknown as ImprovementService,
+    published,
+    policies,
+    applyCalls: 0,
+    restoreCalls: 0,
+    callbacks: undefined as unknown as GovernedHarness["callbacks"],
+    behavior: { applyMode: "target", restoreMode: "snapshot" } as GovernedHarness["behavior"],
+  };
+  const ctx: ImprovementServiceContext = {
+    storage,
+    gatewaySql: storage.gatewaySql,
+    publishRealtime: (channel, topic, payload, realtimeOptions) => {
+      published.push({ channel, topic, payload, options: realtimeOptions });
+    },
+    requireFeatureEnabled: () => undefined,
+    isFeatureEnabled: () => true,
+    normalizeWorkspaceId: (workspaceId?: string) => workspaceId?.trim() || "default",
+  };
+  const captureSnapshot = (refType: ImprovementRef["refType"], targetKey: string): ImprovementRef => {
+    const hadValue = Object.prototype.hasOwnProperty.call(policies, targetKey);
+    return {
+      refType,
+      refId: targetKey,
+      metadata: { targetKey, hadValue, previousValue: hadValue ? policies[targetKey] : null },
+    };
+  };
+  const applyCandidate = (targetKey: string, revisionRef: ImprovementRef): ImprovementRef => {
+    harness.applyCalls += 1;
+    const metadata = revisionRef.metadata as Record<string, unknown> | undefined;
+    const proposedChange = metadata && "proposedChange" in metadata ? metadata.proposedChange : metadata;
+    const targetValue = proposedChange ?? metadata ?? {};
+    if (harness.behavior.applyMode === "throw") {
+      throw new Error("external apply endpoint unavailable");
+    }
+    if (harness.behavior.applyMode === "wrong") {
+      policies[targetKey] = { corrupted: true };
+    } else {
+      policies[targetKey] = targetValue;
+    }
+    if (harness.behavior.applyMode === "throw_after_write") {
+      throw new Error("external apply acknowledged late");
+    }
+    return { refType: "routing_policy_config", refId: targetKey, metadata: { targetKey } };
+  };
+  const restoreSnapshot = (snapshotRef: ImprovementRef): void => {
+    harness.restoreCalls += 1;
+    if (harness.behavior.restoreMode === "throw") {
+      throw new Error("external restore endpoint unavailable");
+    }
+    const metadata = snapshotRef.metadata as
+      | { targetKey?: string; hadValue?: boolean; previousValue?: unknown }
+      | undefined;
+    const targetKey = metadata?.targetKey ?? snapshotRef.refId;
+    if (harness.behavior.restoreMode === "wrong") {
+      policies[targetKey] = { corruptedRestore: true };
+      return;
+    }
+    if (metadata?.hadValue) {
+      policies[targetKey] = metadata.previousValue;
+      return;
+    }
+    delete policies[targetKey];
+  };
+  const callbacks = {
+    createApproval: vi.fn((input) => storage.approvals.create(input)),
+    captureRepairPolicySnapshot: vi.fn((targetKey: string) => captureSnapshot("repair_policy_snapshot", targetKey)),
+    applyRepairPolicyCandidate: vi.fn(applyCandidate),
+    restoreRepairPolicySnapshot: vi.fn(restoreSnapshot),
+    captureRoutingPolicySnapshot: vi.fn((targetKey: string) => captureSnapshot("routing_policy_snapshot", targetKey)),
+    applyRoutingPolicyCandidate: vi.fn(applyCandidate),
+    restoreRoutingPolicySnapshot: vi.fn(restoreSnapshot),
+    createChatCompletion: vi.fn(),
+    getPromptRunnerModelDefaults: () => ({ providerId: "mock", model: "mock-model" }),
+    readTranscriptOrEmpty: vi.fn(async () => []),
+    retryChatTurn: vi.fn(),
+    backgroundTasks: new Set<Promise<void>>(),
+    closing: false,
+    improvementLifecycleClaimLeaseMs: 250,
+    improvementLifecycleCrashSeam: (boundary: ImprovementLifecycleCrashBoundary) => {
+      if (harness.behavior.crashAt === boundary) {
+        harness.behavior.crashAt = undefined;
+        throw new Error(`injected crash at ${boundary}`);
+      }
+    },
+  } as unknown as GovernedHarness["callbacks"];
+
+  harness.callbacks = callbacks;
+  harness.service = new ImprovementService(ctx, callbacks);
+  harnesses.push(harness);
+  return harness;
+}
+
+function createReadyRoutingCandidate(harness: GovernedHarness, suffix = "1") {
+  harness.service.recordPromptLabRegressionCompletionSignal({
+    regressionRunId: `regression-governed-${suffix}`,
+    packId: "pack-routing",
+    capability: suffix === "1" ? "provider-balance" : `provider-balance-${suffix}`,
+    scoreDelta: -0.6,
+    passDelta: -0.2,
+    latencyDeltaMs: 35,
+  });
+  const candidate = harness.service
+    .listImprovementCandidates(50, "prompt-lab")
+    .find((item) => item.kind === "routing_policy" && item.status === "ready_for_approval");
+  expect(candidate).toBeDefined();
+  return candidate!;
+}
+
+function approve(harness: GovernedHarness, approvalId: string, resolvedBy = "resolver-1") {
+  return harness.storage.approvals.resolve(approvalId, {
+    decision: "approve",
+    resolvedBy,
+    resolutionNote: "governed lifecycle proof",
+  });
+}
+
+function requestActivation(harness: GovernedHarness, candidateId: string): ImprovementLifecyclePendingApproval {
+  const outcome = harness.service.requestImprovementActivationApproval(candidateId, { requesterId: "operator-7" });
+  return outcome.pendingApproval;
+}
+
+function executeApproved(harness: GovernedHarness, approvalId: string) {
+  return harness.service.executeApprovedImprovementLifecycleMutation({ workspaceId: "prompt-lab", approvalId });
+}
+
+async function waitForLeaseExpiry(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 450));
+}
+
+function activateApplied(harness: GovernedHarness, candidateId: string) {
+  const pending = requestActivation(harness, candidateId);
+  approve(harness, pending.approvalId);
+  const applied = executeApproved(harness, pending.approvalId);
+  expect(applied.disposition).toBe("applied");
+  expect(applied.activationId).toBeDefined();
+  return { pending, applied };
+}
+
+function countRows(harness: GovernedHarness, table: string, where = "1=1", params: unknown[] = []): number {
+  const row = harness.storage.gatewaySql
+    .prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${where}`)
+    .get(...params) as { n: number };
+  return Number(row.n);
+}
+
+describe("HX-402 P3 governed improvement activation", () => {
+  it("activation request is approval-first: it never mutates and byte-exact replays converge on one approval", () => {
+    const harness = createGovernedHarness();
+    const candidate = createReadyRoutingCandidate(harness);
+
+    const first = requestActivation(harness, candidate.candidateId);
+    expect(first.kind).toBe("improvement.lifecycle");
+    expect(first.operationKind).toBe("activate");
+    expect(first.replayed).toBe(false);
+    // Nothing mutated: no external policy write, no activation row, no candidate transition.
+    expect(harness.policies).toEqual({});
+    expect(countRows(harness, "improvement_activations")).toBe(0);
+    expect(harness.service.listImprovementCandidates(50, "prompt-lab")[0]?.status).toBe("ready_for_approval");
+    // Requester Journey evidence committed with the approval.
+    const evidence = harness.storage.governanceJourneyEvents.findByIdempotencyKey(
+      `improvement:lifecycle:request:${first.approvalId}`,
+    );
+    expect(evidence).toMatchObject({ actorId: "operator-7", approvalId: first.approvalId });
+
+    const replay = requestActivation(harness, candidate.candidateId);
+    expect(replay.approvalId).toBe(first.approvalId);
+    expect(replay.replayed).toBe(true);
+    expect(
+      countRows(harness, "governance_journey_events", "idempotency_key = ?", [
+        `improvement:lifecycle:request:${first.approvalId}`,
+      ]),
+    ).toBe(1);
+  });
+
+  it("the recovered effect creates the durable intent and settles activation state, settlement, signal, and Journey together", () => {
+    const harness = createGovernedHarness();
+    const candidate = createReadyRoutingCandidate(harness);
+    const pending = requestActivation(harness, candidate.candidateId);
+    approve(harness, pending.approvalId);
+
+    const applied = executeApproved(harness, pending.approvalId);
+
+    expect(applied).toMatchObject({ disposition: "applied", operationKind: "activate", replayed: false });
+    expect(harness.applyCalls).toBe(1);
+    expect(harness.policies[candidate.targetKey]).toMatchObject({ strategy: "route_rebalance" });
+    // Durable intent row exists and is settled.
+    expect(countRows(harness, "improvement_lifecycle_operations", "approval_id = ?", [pending.approvalId])).toBe(1);
+    expect(
+      countRows(harness, "improvement_lifecycle_operation_settlements", "operation_id = ?", [applied.operationId]),
+    ).toBe(1);
+    // Canonical activation row + candidate transition committed.
+    const activation = harness.service.getImprovementActivation(applied.activationId!);
+    expect(activation).toMatchObject({ status: "active", watchStatus: "watching", approvalId: pending.approvalId });
+    expect(harness.service.listImprovementCandidates(50, "prompt-lab")[0]?.status).toBe("approved");
+    // Canonical signal + Journey settlement evidence.
+    expect(countRows(harness, "improvement_signals", "signal_kind = 'activation_applied'")).toBe(1);
+    expect(
+      harness.storage.governanceJourneyEvents.findByIdempotencyKey(
+        `improvement:lifecycle:settled:${applied.operationId}`,
+      ),
+    ).toMatchObject({ action: "activate_applied", actorType: "approval_effect" });
+
+    // Exact replay converges with zero re-mutation and zero duplicate callbacks.
+    const replay = executeApproved(harness, pending.approvalId);
+    expect(replay).toMatchObject({ disposition: "applied", replayed: true, settlementId: applied.settlementId });
+    expect(harness.applyCalls).toBe(1);
+  });
+
+  it("refuses stale/original approval reuse: pause and rollback demand their own fresh approvals", () => {
+    const harness = createGovernedHarness();
+    const candidate = createReadyRoutingCandidate(harness);
+    const { pending, applied } = activateApplied(harness, candidate.candidateId);
+
+    // A pause request NEVER rides the activation approval: it commits a fresh
+    // deterministic approval with its own identity.
+    const pauseOutcome = harness.service.requestImprovementPauseApproval(applied.activationId!, {
+      requesterId: "operator-7",
+    });
+    expect(pauseOutcome.pendingApproval).not.toBeNull();
+    const pausePending = pauseOutcome.pendingApproval!;
+    expect(pausePending.approvalId).not.toBe(pending.approvalId);
+    expect(pausePending.operationKind).toBe("pause");
+    // The activation is untouched until the fresh approval's effect runs.
+    expect(harness.service.getImprovementActivation(applied.activationId!).status).toBe("active");
+
+    // Re-executing the ORIGINAL activation approval converges on the original
+    // settlement — it can never morph into the later mutation.
+    const replay = executeApproved(harness, pending.approvalId);
+    expect(replay).toMatchObject({ operationKind: "activate", replayed: true });
+    expect(harness.service.getImprovementActivation(applied.activationId!).status).toBe("active");
+
+    // A LEGACY improvement_activation approval (the stale pre-P3 kind) is not
+    // executable by the governed effect at all.
+    const legacy = harness.storage.approvals.create({
+      kind: "improvement_activation",
+      riskLevel: "safe",
+      payload: { candidateId: candidate.candidateId },
+      preview: {},
+    });
+    approve(harness, legacy.approvalId);
+    expect(() => executeApproved(harness, legacy.approvalId)).toThrowError(ImprovementLifecycleApplyError);
+    try {
+      executeApproved(harness, legacy.approvalId);
+    } catch (error) {
+      expect((error as ImprovementLifecycleApplyError).code).toBe("improvement_lifecycle_approval_not_executable");
+    }
+
+    // The fresh pause approval executes through the full ladder.
+    approve(harness, pausePending.approvalId);
+    const paused = executeApproved(harness, pausePending.approvalId);
+    expect(paused).toMatchObject({ disposition: "applied", operationKind: "pause" });
+    expect(harness.service.getImprovementActivation(applied.activationId!).status).toBe("paused");
+    expect(harness.policies[candidate.targetKey]).toBeUndefined();
+    expect(harness.restoreCalls).toBe(1);
+  });
+
+  it("rejects an unresolved, expired, or evidence-less approval fail-closed", () => {
+    const harness = createGovernedHarness();
+    const candidate = createReadyRoutingCandidate(harness);
+    const pending = requestActivation(harness, candidate.candidateId);
+
+    // Pending (unresolved) approval is not executable.
+    expect(() => executeApproved(harness, pending.approvalId)).toThrowError(
+      new ImprovementLifecycleApplyError("improvement_lifecycle_approval_not_executable"),
+    );
+
+    // Expired approval is refused terminally.
+    approve(harness, pending.approvalId);
+    harness.storage.gatewaySql
+      .prepare("UPDATE approvals SET expires_at = '2000-01-01T00:00:00.000Z' WHERE approval_id = ?")
+      .run(pending.approvalId);
+    try {
+      executeApproved(harness, pending.approvalId);
+      expect.unreachable("expired approval must be refused");
+    } catch (error) {
+      expect((error as ImprovementLifecycleApplyError).code).toBe("improvement_lifecycle_approval_expired");
+    }
+    expect(harness.applyCalls).toBe(0);
+    expect(harness.policies).toEqual({});
+  });
+
+  it("aborts truthfully on reviewed-state drift without executing the external callback", () => {
+    const harness = createGovernedHarness();
+    const candidate = createReadyRoutingCandidate(harness);
+    const pending = requestActivation(harness, candidate.candidateId);
+    approve(harness, pending.approvalId);
+    // The reviewed candidate drifts AFTER approval.
+    harness.storage.gatewaySql
+      .prepare("UPDATE improvement_candidates SET status = 'rejected' WHERE candidate_id = ?")
+      .run(candidate.candidateId);
+
+    const aborted = executeApproved(harness, pending.approvalId);
+
+    expect(aborted.disposition).toBe("aborted");
+    expect(harness.applyCalls).toBe(0);
+    expect(harness.policies).toEqual({});
+    expect(countRows(harness, "improvement_activations")).toBe(0);
+    const settlement = harness.storage.gatewaySql
+      .prepare(
+        "SELECT disposition, result_json FROM improvement_lifecycle_operation_settlements WHERE operation_id = ?",
+      )
+      .get(aborted.operationId) as { disposition: string; result_json: string };
+    expect(settlement.disposition).toBe("aborted");
+    expect(JSON.parse(settlement.result_json)).toMatchObject({ reasonCode: "state_drift" });
+    // The abort is immutable truth: re-execution replays it byte-identically.
+    expect(executeApproved(harness, pending.approvalId)).toMatchObject({ disposition: "aborted", replayed: true });
+  });
+
+  it("aborts truthfully on external pre-state drift without executing the callback", () => {
+    const harness = createGovernedHarness();
+    const candidate = createReadyRoutingCandidate(harness);
+    const pending = requestActivation(harness, candidate.candidateId);
+    approve(harness, pending.approvalId);
+    // A foreign writer changed the external policy after review.
+    harness.policies[candidate.targetKey] = { foreign: true };
+
+    const aborted = executeApproved(harness, pending.approvalId);
+
+    expect(aborted.disposition).toBe("aborted");
+    expect(harness.applyCalls).toBe(0);
+    const settlement = harness.storage.gatewaySql
+      .prepare("SELECT result_json FROM improvement_lifecycle_operation_settlements WHERE operation_id = ?")
+      .get(aborted.operationId) as { result_json: string };
+    expect(JSON.parse(settlement.result_json)).toMatchObject({ reasonCode: "external_state_drift" });
+  });
+});
+
+describe("HX-402 P3 crash recovery resumes from the durable intent", () => {
+  const boundaries: Array<{
+    boundary: ImprovementLifecycleCrashBoundary;
+    callbackRunsBeforeCrash: number;
+  }> = [
+    { boundary: "improvement_lifecycle_before_callback", callbackRunsBeforeCrash: 0 },
+    { boundary: "improvement_lifecycle_after_callback", callbackRunsBeforeCrash: 1 },
+    { boundary: "improvement_lifecycle_after_inspection", callbackRunsBeforeCrash: 1 },
+    { boundary: "improvement_lifecycle_before_signal", callbackRunsBeforeCrash: 1 },
+    { boundary: "improvement_lifecycle_before_journey", callbackRunsBeforeCrash: 1 },
+  ];
+
+  for (const { boundary, callbackRunsBeforeCrash } of boundaries) {
+    it(`crash at ${boundary}: no partial state persists and recovery converges without duplicate callbacks`, async () => {
+      const harness = createGovernedHarness();
+      const candidate = createReadyRoutingCandidate(harness);
+      const pending = requestActivation(harness, candidate.candidateId);
+      approve(harness, pending.approvalId);
+
+      harness.behavior.crashAt = boundary;
+      expect(() => executeApproved(harness, pending.approvalId)).toThrow(/injected crash/u);
+      expect(harness.applyCalls).toBe(callbackRunsBeforeCrash);
+
+      // The durable intent survives; NOTHING else settled or partially applied:
+      // settlement/state/signal/Journey commit as one transaction or not at all.
+      expect(countRows(harness, "improvement_lifecycle_operations")).toBe(1);
+      expect(countRows(harness, "improvement_lifecycle_operation_settlements")).toBe(0);
+      expect(countRows(harness, "improvement_activations")).toBe(0);
+      expect(countRows(harness, "improvement_signals", "signal_kind = 'activation_applied'")).toBe(0);
+      expect(
+        harness.storage.governanceJourneyEvents.findByIdempotencyKey(
+          `improvement:lifecycle:settled:${deriveOperationIdForApproval(harness, pending.approvalId)}`,
+        ),
+      ).toBeUndefined();
+
+      await waitForLeaseExpiry();
+      const recovered = executeApproved(harness, pending.approvalId);
+      expect(recovered.disposition).toBe("applied");
+      // The non-idempotent callback ran EXACTLY once across crash + recovery.
+      expect(harness.applyCalls).toBe(1);
+      expect(harness.policies[candidate.targetKey]).toMatchObject({ strategy: "route_rebalance" });
+      expect(harness.service.getImprovementActivation(recovered.activationId!).status).toBe("active");
+      expect(countRows(harness, "improvement_lifecycle_operation_settlements")).toBe(1);
+      expect(countRows(harness, "improvement_signals", "signal_kind = 'activation_applied'")).toBe(1);
+    });
+  }
+
+  it("recovers a pause crash after its restore callback without re-restoring", async () => {
+    const harness = createGovernedHarness();
+    const candidate = createReadyRoutingCandidate(harness);
+    const { applied } = activateApplied(harness, candidate.candidateId);
+    const pausePending = harness.service.requestImprovementPauseApproval(applied.activationId!, {
+      requesterId: "operator-7",
+    }).pendingApproval!;
+    approve(harness, pausePending.approvalId);
+
+    harness.behavior.crashAt = "improvement_lifecycle_before_journey";
+    expect(() => executeApproved(harness, pausePending.approvalId)).toThrow(/injected crash/u);
+    expect(harness.restoreCalls).toBe(1);
+    // Rollback of the settlement transaction left the row active (no partial flip).
+    expect(harness.service.getImprovementActivation(applied.activationId!).status).toBe("active");
+
+    await waitForLeaseExpiry();
+    const recovered = executeApproved(harness, pausePending.approvalId);
+    expect(recovered).toMatchObject({ disposition: "applied", operationKind: "pause" });
+    // Recovery re-INSPECTED instead of re-executing the restore callback.
+    expect(harness.restoreCalls).toBe(1);
+    expect(harness.service.getImprovementActivation(applied.activationId!).status).toBe("paused");
+  });
+
+  it("two competing workers resolve to exactly one claim winner", async () => {
+    const harness = createGovernedHarness();
+    const candidate = createReadyRoutingCandidate(harness);
+    const pending = requestActivation(harness, candidate.candidateId);
+    approve(harness, pending.approvalId);
+
+    // Worker A crashes mid-flight holding a live lease.
+    harness.behavior.crashAt = "improvement_lifecycle_after_callback";
+    expect(() => executeApproved(harness, pending.approvalId)).toThrow(/injected crash/u);
+    // Worker B races in while the lease is live and loses the claim.
+    expect(() => executeApproved(harness, pending.approvalId)).toThrow(/fenced|one-winner/u);
+    expect(harness.applyCalls).toBe(1);
+    // After the database-clock lease expires, the next claimant wins generation 2 and converges.
+    await waitForLeaseExpiry();
+    const recovered = executeApproved(harness, pending.approvalId);
+    expect(recovered.disposition).toBe("applied");
+    expect(harness.applyCalls).toBe(1);
+    const claims = harness.storage.gatewaySql
+      .prepare(
+        "SELECT claim_generation FROM improvement_lifecycle_operation_claims WHERE operation_id = ? ORDER BY claim_generation",
+      )
+      .all(recovered.operationId) as Array<{ claim_generation: number }>;
+    expect(claims.map((row) => Number(row.claim_generation))).toEqual([1, 2]);
+  });
+});
+
+describe("HX-402 P3 zero false applied/rolled_back claims", () => {
+  it("callback wrote the wrong external state: settlement records the truthful mismatch, never applied", () => {
+    const harness = createGovernedHarness();
+    const candidate = createReadyRoutingCandidate(harness);
+    const pending = requestActivation(harness, candidate.candidateId);
+    approve(harness, pending.approvalId);
+    harness.behavior.applyMode = "wrong";
+
+    const failed = executeApproved(harness, pending.approvalId);
+
+    expect(failed.disposition).toBe("failed");
+    expect(harness.applyCalls).toBe(1);
+    // The canonical activation row records the failure; the candidate is NOT approved.
+    expect(harness.service.getImprovementActivation(failed.activationId!)).toMatchObject({
+      status: "failed",
+      failureReason: "external_state_diverged",
+    });
+    expect(harness.service.listImprovementCandidates(50, "prompt-lab")[0]?.status).toBe("ready_for_approval");
+    const settlement = harness.storage.gatewaySql
+      .prepare("SELECT disposition FROM improvement_lifecycle_operation_settlements WHERE operation_id = ?")
+      .get(failed.operationId) as { disposition: string };
+    expect(settlement.disposition).toBe("failed");
+  });
+
+  it("callback threw without mutating: settlement is failed with the observed pre-state, never applied", () => {
+    const harness = createGovernedHarness();
+    const candidate = createReadyRoutingCandidate(harness);
+    const pending = requestActivation(harness, candidate.candidateId);
+    approve(harness, pending.approvalId);
+    harness.behavior.applyMode = "throw";
+
+    const failed = executeApproved(harness, pending.approvalId);
+
+    expect(failed.disposition).toBe("failed");
+    expect(harness.policies).toEqual({});
+    const settlement = harness.storage.gatewaySql
+      .prepare("SELECT result_json FROM improvement_lifecycle_operation_settlements WHERE operation_id = ?")
+      .get(failed.operationId) as { result_json: string };
+    expect(JSON.parse(settlement.result_json)).toMatchObject({ reasonCode: "activation_callback_failed" });
+  });
+
+  it("callback threw AFTER mutating to the exact target: re-inspection honestly settles applied", () => {
+    const harness = createGovernedHarness();
+    const candidate = createReadyRoutingCandidate(harness);
+    const pending = requestActivation(harness, candidate.candidateId);
+    approve(harness, pending.approvalId);
+    harness.behavior.applyMode = "throw_after_write";
+
+    const applied = executeApproved(harness, pending.approvalId);
+
+    expect(applied.disposition).toBe("applied");
+    expect(harness.policies[candidate.targetKey]).toMatchObject({ strategy: "route_rebalance" });
+    expect(harness.service.getImprovementActivation(applied.activationId!).status).toBe("active");
+  });
+
+  it("failed compensation: rollback whose restore diverges records failed and never claims rolled_back", () => {
+    const harness = createGovernedHarness();
+    const candidate = createReadyRoutingCandidate(harness);
+    const { applied } = activateApplied(harness, candidate.candidateId);
+    const rollbackPending = harness.service.requestImprovementRollbackApproval(applied.activationId!, {
+      requesterId: "operator-7",
+    }).pendingApproval!;
+    approve(harness, rollbackPending.approvalId);
+    harness.behavior.restoreMode = "wrong";
+
+    const failed = executeApproved(harness, rollbackPending.approvalId);
+
+    expect(failed).toMatchObject({ disposition: "failed", operationKind: "rollback" });
+    expect(harness.restoreCalls).toBe(1);
+    // No rolled_back claim anywhere: not on the row, not in the settlement.
+    expect(harness.service.getImprovementActivation(applied.activationId!).status).toBe("active");
+    const settlement = harness.storage.gatewaySql
+      .prepare(
+        "SELECT disposition, result_json FROM improvement_lifecycle_operation_settlements WHERE operation_id = ?",
+      )
+      .get(failed.operationId) as { disposition: string; result_json: string };
+    expect(settlement.disposition).toBe("failed");
+    expect(JSON.parse(settlement.result_json)).toMatchObject({ reasonCode: "external_state_diverged" });
+    expect(countRows(harness, "improvement_signals", "signal_kind = 'activation_rolled_back'")).toBe(0);
+  });
+
+  it("rollback restore that threw without restoring settles failed; a truthful retry cannot exist for the settled operation", () => {
+    const harness = createGovernedHarness();
+    const candidate = createReadyRoutingCandidate(harness);
+    const { applied } = activateApplied(harness, candidate.candidateId);
+    const rollbackPending = harness.service.requestImprovementRollbackApproval(applied.activationId!, {
+      requesterId: "operator-7",
+    }).pendingApproval!;
+    approve(harness, rollbackPending.approvalId);
+    harness.behavior.restoreMode = "throw";
+
+    const failed = executeApproved(harness, rollbackPending.approvalId);
+    expect(failed).toMatchObject({ disposition: "failed", operationKind: "rollback" });
+    expect(harness.service.getImprovementActivation(applied.activationId!).status).toBe("active");
+    // The immutable settlement is the recovery truth: replays converge on failed.
+    expect(executeApproved(harness, rollbackPending.approvalId)).toMatchObject({
+      disposition: "failed",
+      replayed: true,
+    });
+    expect(harness.restoreCalls).toBe(1);
+  });
+
+  it("pause of an already-paused activation is a pure no-op envelope", () => {
+    const harness = createGovernedHarness();
+    const candidate = createReadyRoutingCandidate(harness);
+    const { applied } = activateApplied(harness, candidate.candidateId);
+    const pausePending = harness.service.requestImprovementPauseApproval(applied.activationId!, {
+      requesterId: "operator-7",
+    }).pendingApproval!;
+    approve(harness, pausePending.approvalId);
+    executeApproved(harness, pausePending.approvalId);
+
+    const outcome = harness.service.requestImprovementPauseApproval(applied.activationId!, {
+      requesterId: "operator-7",
+    });
+    expect(outcome.pendingApproval).toBeNull();
+    if (outcome.pendingApproval === null) {
+      expect(outcome.noMutationRequired).toBe(true);
+      expect(outcome.activation.status).toBe("paused");
+    }
+  });
+});
+
+function deriveOperationIdForApproval(harness: GovernedHarness, approvalId: string): string {
+  const row = harness.storage.gatewaySql
+    .prepare("SELECT operation_id FROM improvement_lifecycle_operations WHERE approval_id = ?")
+    .get(approvalId) as { operation_id: string } | undefined;
+  return row?.operation_id ?? "missing-operation";
+}
 
 function createHarness(): Harness {
   const rootDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "gc-improvement-surface-router-"));

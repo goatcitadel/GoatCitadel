@@ -5,11 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import {
-  nodeArchiveName,
-  PACKAGING_TARGETS,
-  requirePackagingTarget,
-} from "./lib/packaging-targets.mjs";
+import { nodeArchiveName, PACKAGING_TARGETS, requirePackagingTarget } from "./lib/packaging-targets.mjs";
 import {
   buildReleaseManifest,
   renderMacTauriConfig,
@@ -19,6 +15,12 @@ import {
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../..");
+const TEST_COMMIT = "a".repeat(40);
+const TEST_DIGEST = "b".repeat(64);
+
+function payloadFile(filePath, sizeBytes = 1) {
+  return { path: filePath, sha256: TEST_DIGEST, sizeBytes };
+}
 
 test("macos-arm64 target maps to Apple Silicon, Darwin, and the macOS Tauri triple", () => {
   const target = requirePackagingTarget("macos-arm64");
@@ -52,7 +54,7 @@ test("Windows target metadata remains signed-installer compatible", () => {
     targetInfo: target,
     version: "1.0.0",
     nodeVersion: "v22.1.0",
-    checksums: { "bin/goatcitadel.cmd": "abc123" },
+    payloadFiles: [payloadFile("bin/goatcitadel.cmd")],
     uiTarget: {
       packageName: "@goatcitadel/mission-control-next",
       packageDirName: "mission-control-next",
@@ -60,10 +62,20 @@ test("Windows target metadata remains signed-installer compatible", () => {
     },
     includeDesktopHost: true,
     desktopArtifactName: target.desktopArtifactName,
+    sourceCommit: TEST_COMMIT,
+    sourceModified: false,
   });
   assert.equal(Object.hasOwn(manifest, "experimental"), false);
   assert.equal(manifest.launcher.windows, "bin/goatcitadel.cmd");
   assert.equal(manifest.launcher.desktop, "app/desktop/GoatCitadel-Mission-Control-Windows.exe");
+  assert.equal(manifest.schemaVersion, 2);
+  assert.equal(manifest.product, "GoatCitadel");
+  assert.equal(manifest.sourceCommit, TEST_COMMIT);
+  assert.equal(manifest.sourceModified, false);
+  assert.deepEqual(manifest.payload.roots, ["app", "bin"]);
+  assert.deepEqual(manifest.payload.detachedMetadataFiles, ["app/release-manifest.json"]);
+  assert.deepEqual(manifest.payload.detachedMetadataTrees, ["app/release-evidence"]);
+  assert.deepEqual(manifest.payload.files, [payloadFile("bin/goatcitadel.cmd")]);
   const desktopHost = manifest.components.find((item) => item.id === "mission-control-windows-host");
   assert.equal(desktopHost?.kind, "winui3-windows-app-sdk");
   assert.equal(desktopHost?.path, "app/desktop/GoatCitadel-Mission-Control-Windows.exe");
@@ -75,9 +87,7 @@ test("Windows release manifest can carry the signed sparse identity package", ()
     targetInfo: target,
     version: "1.0.0",
     nodeVersion: "v22.1.0",
-    checksums: {
-      "app/identity/GoatCitadel-Mission-Control-Windows-Identity.msix": "abc123",
-    },
+    payloadFiles: [payloadFile("app/identity/GoatCitadel-Mission-Control-Windows-Identity.msix")],
     uiTarget: {
       packageName: "@goatcitadel/mission-control-next",
       packageDirName: "mission-control-next",
@@ -92,6 +102,8 @@ test("Windows release manifest can carry the signed sparse identity package", ()
       protocol: "goatcitadel",
       signed: true,
     },
+    sourceCommit: TEST_COMMIT,
+    sourceModified: false,
   });
 
   const identityPackage = manifest.components.find((item) => item.id === "mission-control-windows-identity-package");
@@ -118,7 +130,10 @@ test("Windows host manifests declare matching external-location package identity
     "utf8",
   );
   const hostBuilder = fs.readFileSync(path.join(repoRoot, "scripts", "packaging", "build-windows-host.mjs"), "utf8");
-  const releaseWorkflow = fs.readFileSync(path.join(repoRoot, ".github", "workflows", "release-installers.yml"), "utf8");
+  const releaseWorkflow = fs.readFileSync(
+    path.join(repoRoot, ".github", "workflows", "release-installers.yml"),
+    "utf8",
+  );
 
   assert.match(appManifest, /packageName="GoatCitadel\.MissionControl\.Windows"/);
   assert.match(appManifest, /applicationId="App"/);
@@ -167,7 +182,7 @@ test("macOS release manifest is experimental and does not claim bundled desktop 
     targetInfo: PACKAGING_TARGETS["macos-arm64"],
     version: "1.0.0",
     nodeVersion: "v22.1.0",
-    checksums: { "bin/goatcitadel": "abc123" },
+    payloadFiles: [payloadFile("bin/goatcitadel")],
     uiTarget: {
       packageName: "@goatcitadel/mission-control-next",
       packageDirName: "mission-control-next",
@@ -175,6 +190,8 @@ test("macOS release manifest is experimental and does not claim bundled desktop 
     },
     includeDesktopHost: false,
     desktopArtifactName: "GoatCitadel Mission Control.app",
+    sourceCommit: TEST_COMMIT,
+    sourceModified: false,
   });
 
   assert.equal(manifest.platform, "darwin");
@@ -183,7 +200,10 @@ test("macOS release manifest is experimental and does not claim bundled desktop 
   assert.equal(manifest.launcher.posix, "bin/goatcitadel");
   assert.equal(manifest.launcher.desktop, "macos-app-bundle");
   assert.equal(manifest.components.find((item) => item.id === "embedded-node")?.path, "app/runtime/node/node");
-  assert.equal(manifest.components.some((item) => item.id === "mission-control-desktop"), false);
+  assert.equal(
+    manifest.components.some((item) => item.id === "mission-control-desktop"),
+    false,
+  );
 });
 
 test("linux-x64 bundle target emits a POSIX browser launcher without release-proof claims", () => {
@@ -200,7 +220,7 @@ test("linux-x64 bundle target emits a POSIX browser launcher without release-pro
     targetInfo: target,
     version: "1.0.0",
     nodeVersion: "v22.1.0",
-    checksums: { "bin/goatcitadel": "abc123" },
+    payloadFiles: [payloadFile("bin/goatcitadel")],
     uiTarget: {
       packageName: "@goatcitadel/mission-control-next",
       packageDirName: "mission-control-next",
@@ -208,6 +228,8 @@ test("linux-x64 bundle target emits a POSIX browser launcher without release-pro
     },
     includeDesktopHost: false,
     desktopArtifactName: target.desktopArtifactName,
+    sourceCommit: TEST_COMMIT,
+    sourceModified: false,
   });
 
   assert.equal(manifest.platform, "linux");
@@ -215,7 +237,10 @@ test("linux-x64 bundle target emits a POSIX browser launcher without release-pro
   assert.equal(manifest.experimental, true);
   assert.equal(manifest.launcher.posix, "bin/goatcitadel");
   assert.equal(manifest.launcher.desktop, "browser-launcher");
-  assert.equal(manifest.components.some((item) => item.id === "mission-control-desktop"), false);
+  assert.equal(
+    manifest.components.some((item) => item.id === "mission-control-desktop"),
+    false,
+  );
 });
 
 test("macOS Tauri overlay embeds the runtime bundle and uses ad-hoc signing", () => {
@@ -245,9 +270,15 @@ test("macOS Tauri overlay can use a Developer ID identity for notarized CI DMGs"
 });
 
 test("macOS native installer reports missing rustup and caches DMG stat lookups", () => {
-  const source = fs.readFileSync(path.join(repoRoot, "scripts", "packaging", "build-macos-native-installer.mjs"), "utf8");
+  const source = fs.readFileSync(
+    path.join(repoRoot, "scripts", "packaging", "build-macos-native-installer.mjs"),
+    "utf8",
+  );
 
-  assert.match(source, /console\.warn\(`\[packaging\] rustup not found; skipping Rust target installation for \$\{triple\}\.`\)/);
+  assert.match(
+    source,
+    /console\.warn\(`\[packaging\] rustup not found; skipping Rust target installation for \$\{triple\}\.`\)/,
+  );
   assert.match(source, /const matchesWithStats = matches\.map/);
   assert.match(source, /matchesWithStats\.sort\(\(left, right\) => right\.mtimeMs - left\.mtimeMs\)/);
   assert.doesNotMatch(source, /matches\.sort\(\(left, right\) => fs\.statSync\(right\)\.mtimeMs/);
@@ -269,19 +300,23 @@ test("Windows native installer script escapes PowerShell script blocks for Inno"
   try {
     fs.mkdirSync(bundleDir, { recursive: true });
 
-    const result = spawnSync(process.execPath, [
-      path.join(repoRoot, "scripts", "packaging", "build-windows-native-installer.mjs"),
-      "--target",
-      "windows-x64",
-      "--bundle-dir",
-      bundleDir,
-      "--out-dir",
-      outDir,
-      "--emit-only",
-    ], {
-      cwd: repoRoot,
-      encoding: "utf8",
-    });
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.join(repoRoot, "scripts", "packaging", "build-windows-native-installer.mjs"),
+        "--target",
+        "windows-x64",
+        "--bundle-dir",
+        bundleDir,
+        "--out-dir",
+        outDir,
+        "--emit-only",
+      ],
+      {
+        cwd: repoRoot,
+        encoding: "utf8",
+      },
+    );
 
     assert.equal(result.status, 0, result.stderr || result.stdout);
     const iss = fs.readFileSync(path.join(outDir, "GoatCitadel-windows-x64.iss"), "utf8");
@@ -291,8 +326,14 @@ test("Windows native installer script escapes PowerShell script blocks for Inno"
     assert.match(iss, /InstallChromiumRuntime/);
     assert.match(iss, /InstallVoiceRuntime/);
     assert.doesNotMatch(iss, /Filename: "\{app\}\\app\\runtime\\node\\node\.exe"; Parameters:/);
-    assert.match(iss, /Get-AppxPackage \{#MyIdentityPackageName\} \| Remove-AppxPackage -ErrorAction SilentlyContinue; \$package = Join-Path/);
-    assert.match(iss, /if \(Test-Path -LiteralPath \$package\) \{\{ Add-AppxPackage -Path \$package -ExternalLocation ''\{app\}''/);
+    assert.match(
+      iss,
+      /Get-AppxPackage \{#MyIdentityPackageName\} \| Remove-AppxPackage -ErrorAction SilentlyContinue; \$package = Join-Path/,
+    );
+    assert.match(
+      iss,
+      /if \(Test-Path -LiteralPath \$package\) \{\{ Add-AppxPackage -Path \$package -ExternalLocation ''\{app\}''/,
+    );
     assert.match(iss, /Add-AppxPackage -Path \$package -ExternalLocation ''\{app\}'' \}\}"/);
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -308,7 +349,12 @@ test("launcher source documents the macOS Application Support default", () => {
 test("release workflow carries experimental macOS and Linux packaging promotion lanes", () => {
   const workflow = fs.readFileSync(path.join(repoRoot, ".github", "workflows", "release-installers.yml"), "utf8");
   assert.match(workflow, /name:\s*Release Installers and Bundles/);
-  assert.match(workflow, /pnpm package:macos --target macos-arm64 --notarize/);
+  assert.match(workflow, /pnpm package:macos --target macos-arm64/);
+  assert.match(workflow, /macos-sign-notarize:[\s\S]*xcrun notarytool submit/);
+  assert.doesNotMatch(
+    workflow.match(/\n  macos-build-inputs:\n([\s\S]*?)(?=\n  macos-sign-notarize:\n)/)?.[1] ?? "",
+    /\$\{\{ secrets\./,
+  );
   assert.match(workflow, /macos-arm64-experimental-release-assets/);
   assert.match(workflow, /pnpm package:bundle --target linux-x64 --skip-desktop/);
   assert.match(workflow, /linux-x64-experimental-release-assets/);

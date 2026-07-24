@@ -1,5 +1,11 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
+import {
+  assertDurableChildWatcherCreateRequestBounds,
+  assertDurableChildWatcherIdBounds,
+  assertDurableChildWatcherRunIdBounds,
+  DURABLE_CHILD_WATCHER_LIMITS,
+} from "@goatcitadel/contracts";
 import { resolveApprovalActorId } from "./approvals.js";
 import { withRouteAccess } from "./route-access.js";
 import { projectDurableRouteResponse } from "../services/durable-public-projection.js";
@@ -9,9 +15,94 @@ const listQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(500).default(50),
 });
 
-const runParamsSchema = z.object({
-  runId: z.string().min(1),
+const durableRunIdSchema = z
+  .string()
+  .min(1)
+  .max(DURABLE_CHILD_WATCHER_LIMITS.runIdBytes)
+  .superRefine((value, context) => {
+    try {
+      assertDurableChildWatcherRunIdBounds(value);
+    } catch (error) {
+      context.addIssue({ code: "custom", message: (error as Error).message });
+    }
+  });
+const durableWatcherIdSchema = z
+  .string()
+  .min(1)
+  .max(DURABLE_CHILD_WATCHER_LIMITS.watcherIdBytes)
+  .superRefine((value, context) => {
+    try {
+      assertDurableChildWatcherIdBounds(value);
+    } catch (error) {
+      context.addIssue({ code: "custom", message: (error as Error).message });
+    }
+  });
+
+const runParamsSchema = z.object({ runId: durableRunIdSchema });
+
+const childRunParamsSchema = z.object({
+  runId: durableRunIdSchema,
+  childRunId: durableRunIdSchema,
 });
+
+const watcherParamsSchema = z.object({
+  watcherId: durableWatcherIdSchema,
+});
+
+const backgroundTaskParamsSchema = z.object({
+  runId: durableRunIdSchema,
+  watcherId: durableWatcherIdSchema,
+});
+
+const backgroundTaskScopeSchema = z
+  .object({
+    workspaceId: z.string().trim().min(1).max(200).refine(isBoundedScopeId, "Invalid workspace scope"),
+    sessionId: z.string().trim().min(1).max(200).refine(isBoundedScopeId, "Invalid session scope"),
+  })
+  .strict();
+
+const backgroundTaskControlBodySchema = backgroundTaskScopeSchema
+  .extend({
+    action: z.enum(["detach", "reattach", "cancel"]),
+    expectedWatcherRevision: z.number().int().positive(),
+    expectedChildVersion: z.number().int().nonnegative().optional(),
+    reason: z.string().trim().min(1).max(240).optional(),
+  })
+  .superRefine((value, context) => {
+    if (value.action === "cancel" && value.expectedChildVersion === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["expectedChildVersion"],
+        message: "expectedChildVersion is required when action is cancel",
+      });
+    }
+    if (value.action !== "cancel" && (value.expectedChildVersion !== undefined || value.reason !== undefined)) {
+      context.addIssue({
+        code: "custom",
+        message: "expectedChildVersion and reason are only valid when action is cancel",
+      });
+    }
+  });
+
+function hasAsciiControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const codePoint = character.charCodeAt(0);
+    if (codePoint <= 0x1f || codePoint === 0x7f) return true;
+  }
+  return false;
+}
+
+function isBoundedScopeId(value: string): boolean {
+  return Buffer.byteLength(value, "utf8") <= 200 && !hasAsciiControlCharacter(value);
+}
+
+const watchChildBodySchema = z
+  .object({
+    watcherId: z.string().trim().min(1).max(DURABLE_CHILD_WATCHER_LIMITS.watcherIdBytes).optional(),
+    source: z.string().trim().min(1).max(DURABLE_CHILD_WATCHER_LIMITS.sourceBytes).optional(),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict();
 
 const deadLetterParamsSchema = z.object({
   entryId: z.string().min(1),
@@ -190,6 +281,191 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("not found");
       return reply.code(notFound ? 404 : 409).send(projectDurableRouteResponse({ error: message }));
+    }
+  });
+
+  fastify.get("/api/v1/durable/runs/:runId/child-watchers", operatorOnly, async (request, reply) => {
+    const params = runParamsSchema.safeParse(request.params);
+    const query = listQuerySchema.safeParse(request.query);
+    if (!params.success || !query.success) {
+      return reply.code(400).send(
+        projectDurableRouteResponse({
+          error: {
+            params: params.success ? undefined : params.error.flatten(),
+            query: query.success ? undefined : query.error.flatten(),
+          },
+        }),
+      );
+    }
+    try {
+      return reply.send(
+        projectDurableRouteResponse({ items: durable.listChildWatchers(params.data.runId, query.data.limit) }),
+      );
+    } catch (error) {
+      const message = (error as Error).message;
+      const notFound = message.toLowerCase().includes("not found");
+      return reply.code(notFound ? 404 : 409).send(projectDurableRouteResponse({ error: message }));
+    }
+  });
+
+  fastify.get("/api/v1/durable/runs/:runId/background-tasks", operatorOnly, async (request, reply) => {
+    const params = runParamsSchema.safeParse(request.params);
+    const query = backgroundTaskScopeSchema.safeParse(request.query);
+    if (!params.success || !query.success) {
+      return reply.code(400).send(
+        projectDurableRouteResponse({
+          error: {
+            params: params.success ? undefined : params.error.flatten(),
+            query: query.success ? undefined : query.error.flatten(),
+          },
+        }),
+      );
+    }
+    try {
+      return reply
+        .header("Cache-Control", "private, no-store")
+        .send(projectDurableRouteResponse(durable.getBackgroundTaskRail(params.data.runId, query.data)));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Background-task rail failed";
+      const notFound = message.toLowerCase().includes("not found");
+      return reply.code(notFound ? 404 : 409).send(projectDurableRouteResponse({ error: message }));
+    }
+  });
+
+  fastify.post(
+    "/api/v1/durable/runs/:runId/background-tasks/:watcherId/control",
+    operatorOnly,
+    async (request, reply) => {
+      const params = backgroundTaskParamsSchema.safeParse(request.params);
+      const body = backgroundTaskControlBodySchema.safeParse(request.body ?? {});
+      if (!params.success || !body.success) {
+        return reply.code(400).send(
+          projectDurableRouteResponse({
+            error: {
+              params: params.success ? undefined : params.error.flatten(),
+              body: body.success ? undefined : body.error.flatten(),
+            },
+          }),
+        );
+      }
+      try {
+        const result = durable.controlBackgroundTask(
+          params.data.runId,
+          params.data.watcherId,
+          body.data,
+          resolveActorId(request),
+        );
+        markMutationCommitted(request);
+        return reply.header("Cache-Control", "private, no-store").send(projectDurableRouteResponse(result));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Background-task control failed";
+        return sendDurableMutationError(reply, request, error, message.toLowerCase().includes("not found") ? 404 : 409);
+      }
+    },
+  );
+
+  fastify.post("/api/v1/durable/runs/:runId/children/:childRunId/watch", operatorOnly, async (request, reply) => {
+    const params = childRunParamsSchema.safeParse(request.params);
+    const body = watchChildBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.code(400).send(
+        projectDurableRouteResponse({
+          error: {
+            params: params.success ? undefined : params.error.flatten(),
+            body: body.success ? undefined : body.error.flatten(),
+          },
+        }),
+      );
+    }
+    try {
+      assertDurableChildWatcherCreateRequestBounds({
+        parentRunId: params.data.runId,
+        childRunId: params.data.childRunId,
+        ...body.data,
+      });
+    } catch (error) {
+      return reply.code(400).send(
+        projectDurableRouteResponse({
+          error: error instanceof Error ? error.message : "Invalid durable child watcher input",
+        }),
+      );
+    }
+    try {
+      const watcher = durable.watchChildRun({
+        parentRunId: params.data.runId,
+        childRunId: params.data.childRunId,
+        ...body.data,
+      });
+      markMutationCommitted(request);
+      return reply.code(201).send(projectDurableRouteResponse(watcher));
+    } catch (error) {
+      return sendDurableMutationError(reply, request, error, 409);
+    }
+  });
+
+  fastify.post("/api/v1/durable/child-watchers/:watcherId/detach", operatorOnly, async (request, reply) => {
+    const params = watcherParamsSchema.safeParse(request.params);
+    const body = actorBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.code(400).send(
+        projectDurableRouteResponse({
+          error: {
+            params: params.success ? undefined : params.error.flatten(),
+            body: body.success ? undefined : body.error.flatten(),
+          },
+        }),
+      );
+    }
+    try {
+      const watcher = durable.detachChildWatcher(params.data.watcherId);
+      markMutationCommitted(request);
+      return reply.send(projectDurableRouteResponse(watcher));
+    } catch (error) {
+      return sendDurableMutationError(reply, request, error, 409);
+    }
+  });
+
+  fastify.post("/api/v1/durable/child-watchers/:watcherId/reattach", operatorOnly, async (request, reply) => {
+    const params = watcherParamsSchema.safeParse(request.params);
+    const body = actorBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.code(400).send(
+        projectDurableRouteResponse({
+          error: {
+            params: params.success ? undefined : params.error.flatten(),
+            body: body.success ? undefined : body.error.flatten(),
+          },
+        }),
+      );
+    }
+    try {
+      const result = durable.reattachChildWatcher(params.data.watcherId);
+      markMutationCommitted(request);
+      return reply.send(projectDurableRouteResponse(result));
+    } catch (error) {
+      return sendDurableMutationError(reply, request, error, 409);
+    }
+  });
+
+  fastify.post("/api/v1/durable/child-watchers/:watcherId/close", operatorOnly, async (request, reply) => {
+    const params = watcherParamsSchema.safeParse(request.params);
+    const body = actorBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.code(400).send(
+        projectDurableRouteResponse({
+          error: {
+            params: params.success ? undefined : params.error.flatten(),
+            body: body.success ? undefined : body.error.flatten(),
+          },
+        }),
+      );
+    }
+    try {
+      const watcher = durable.closeChildWatcher(params.data.watcherId);
+      markMutationCommitted(request);
+      return reply.send(projectDurableRouteResponse(watcher));
+    } catch (error) {
+      return sendDurableMutationError(reply, request, error, 409);
     }
   });
 

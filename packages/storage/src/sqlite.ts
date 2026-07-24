@@ -1,11 +1,13 @@
 /* eslint-disable max-lines */
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { clampInt } from "@goatcitadel/contracts";
+import { createHash } from "node:crypto";
+import { backup, DatabaseSync } from "node:sqlite";
+import { canonicalJsonString, clampInt } from "@goatcitadel/contracts";
 import {
   assertSynchronousTransactionResult,
   type DatabaseClient,
+  type DatabaseOnlineBackupOptions,
   type DbStatement,
   type DbTransactionMode,
 } from "./db.js";
@@ -46,6 +48,8 @@ import {
   createRuntimeEvidenceEnvelopeSchema,
 } from "./sqlite/runtime-observability-schema.js";
 import { createSkillEvaluationRunsSchema } from "./sqlite/skill-evaluation-schema.js";
+import { createChannelCronDurabilitySchema } from "./sqlite/channel-cron-durability-schema.js";
+import { createGovernedLifecycleSchema } from "./sqlite/governed-lifecycle-schema.js";
 
 const SQLITE_BUSY_TIMEOUT_MS = 5_000;
 const LEGACY_REMOTE_APPROVAL_BEARER_PATTERN = /grat_[A-Za-z0-9_-]{43}/;
@@ -122,6 +126,44 @@ class SqliteDatabaseClient implements DatabaseClient {
     }
   }
 
+  public async backupTo(destinationPath: string, options: DatabaseOnlineBackupOptions = {}): Promise<void> {
+    const normalizedDestination = destinationPath.trim();
+    if (!normalizedDestination) {
+      throw new TypeError("SQLite backup destination path is required");
+    }
+    const resolvedDestination = path.resolve(normalizedDestination);
+    const sourceLocation = this.db.location("main");
+    if (sourceLocation && pathsReferToSameFile(path.resolve(sourceLocation), resolvedDestination)) {
+      throw new Error("SQLite backup destination must differ from the live database path");
+    }
+    if (fs.existsSync(resolvedDestination)) {
+      throw new Error(`SQLite backup destination already exists: ${resolvedDestination}`);
+    }
+    const pagesPerBatch = options.pagesPerBatch ?? 100;
+    if (!Number.isSafeInteger(pagesPerBatch) || pagesPerBatch <= 0) {
+      throw new TypeError("SQLite backup pagesPerBatch must be a positive safe integer");
+    }
+
+    ensureParentDir(resolvedDestination);
+    try {
+      await backup(this.db, resolvedDestination, {
+        rate: pagesPerBatch,
+        progress: options.onProgress,
+      });
+      makeSqliteSnapshotSelfContained(resolvedDestination);
+    } catch (error) {
+      for (const candidate of [resolvedDestination, `${resolvedDestination}-wal`, `${resolvedDestination}-shm`]) {
+        try {
+          fs.rmSync(candidate, { force: true });
+        } catch {
+          // Preserve the original backup failure; best-effort cleanup is retried
+          // by the caller's private staging-directory cleanup.
+        }
+      }
+      throw error;
+    }
+  }
+
   public transaction<T>(mode: DbTransactionMode, callback: () => T): T {
     if (this.transactionDepth > 0) {
       const savepointName = `gc_nested_${(this.savepointCounter += 1)}`;
@@ -158,10 +200,48 @@ class SqliteDatabaseClient implements DatabaseClient {
   }
 }
 
+function pathsReferToSameFile(left: string, right: string): boolean {
+  return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
+}
+
+function makeSqliteSnapshotSelfContained(snapshotPath: string): void {
+  const snapshot = new DatabaseSync(snapshotPath);
+  try {
+    const result = snapshot.prepare("PRAGMA journal_mode = DELETE").get() as { journal_mode?: unknown } | undefined;
+    if (String(result?.journal_mode ?? "").toLowerCase() !== "delete") {
+      throw new Error("SQLite online snapshot could not be finalized as a self-contained database");
+    }
+  } finally {
+    snapshot.close();
+  }
+}
+
 export function createDatabase(options: SqliteOptions): DatabaseClient {
   ensureParentDir(options.dbPath);
   const db = new DatabaseSync(options.dbPath, {
     timeout: SQLITE_BUSY_TIMEOUT_MS,
+  });
+  db.function("gc_sha256", { deterministic: true }, (value) =>
+    value === null ? null : createHash("sha256").update(String(value), "utf8").digest("hex"),
+  );
+  db.function("gc_canonical_json", { deterministic: true }, (value) => {
+    if (value === null) return null;
+    try {
+      return canonicalJsonString(JSON.parse(String(value)));
+    } catch {
+      return null;
+    }
+  });
+  db.function("gc_js_trim", { deterministic: true }, (value) => (value === null ? null : String(value).trim()));
+  db.function("gc_unicode_scalar_length", { deterministic: true }, (value) => {
+    if (value === null) return null;
+    let count = 0;
+    for (const scalar of String(value)) {
+      const codePoint = scalar.codePointAt(0)!;
+      if (codePoint >= 0xd800 && codePoint <= 0xdfff) return null;
+      count += 1;
+    }
+    return count;
   });
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA foreign_keys = ON;");
@@ -187,7 +267,19 @@ export function createDatabase(options: SqliteOptions): DatabaseClient {
   if (options.tuning?.journalSizeLimitBytes !== undefined) {
     db.exec(`PRAGMA journal_size_limit = ${clampInt(options.tuning.journalSizeLimitBytes, -1, -1, 268435456)};`);
   }
-  migrate(db);
+  try {
+    migrate(db);
+  } catch (error) {
+    // Close the handle so a failed migration does not keep the database file locked;
+    // on Windows a leaked handle turns later cleanup into EPERM noise that masks the
+    // migration error itself.
+    try {
+      db.close();
+    } catch {
+      // Best-effort cleanup: surface the migration failure, not the close failure.
+    }
+    throw error;
+  }
   return new SqliteDatabaseClient(db);
 }
 
@@ -1748,11 +1840,9815 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
           ]);
         },
       },
+      {
+        version: 144,
+        name: "orchestration_worktree_generation_leases",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "orchestration_runs", "worktree_lease_owner_id", "TEXT");
+          addColumnIfMissingIfTableExists(db, "orchestration_runs", "worktree_lease_generation", "INTEGER");
+          addColumnIfMissingIfTableExists(db, "orchestration_runs", "worktree_lease_expires_at", "TEXT");
+          db.exec(`
+            CREATE TABLE IF NOT EXISTS orchestration_worktree_leases (
+              worktree_path TEXT PRIMARY KEY,
+              run_id TEXT NOT NULL,
+              owner_id TEXT NOT NULL,
+              generation INTEGER NOT NULL DEFAULT 1,
+              lease_expires_at TEXT NOT NULL,
+              released_at TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_orchestration_worktree_leases_run
+              ON orchestration_worktree_leases(run_id, generation DESC);
+            CREATE INDEX IF NOT EXISTS idx_orchestration_worktree_leases_expiry
+              ON orchestration_worktree_leases(released_at, lease_expires_at);
+          `);
+        },
+      },
+      {
+        version: 145,
+        name: "operator_resource_revision_cas_foundation",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "workspaces", "revision", "INTEGER NOT NULL DEFAULT 1");
+          addColumnIfMissingIfTableExists(db, "chat_projects", "revision", "INTEGER NOT NULL DEFAULT 1");
+        },
+      },
+      {
+        version: 146,
+        name: "chat_session_aggregate_revision_cas",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "chat_session_meta", "revision", "INTEGER NOT NULL DEFAULT 1");
+        },
+      },
+      {
+        version: 147,
+        name: "cron_job_spec_revision_cas",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "cron_jobs", "revision", "INTEGER NOT NULL DEFAULT 1");
+        },
+      },
+      {
+        version: 148,
+        name: "task_resource_revision_cas",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "tasks", "revision", "INTEGER NOT NULL DEFAULT 1");
+        },
+      },
+      {
+        version: 149,
+        name: "channel_acceptance_and_cron_run_durability",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "cron_jobs", "execution_generation", "INTEGER NOT NULL DEFAULT 0");
+          addColumnIfMissingIfTableExists(db, "cron_jobs", "active_run_id", "TEXT");
+          createChannelCronDurabilitySchema(db);
+          if (tableExists(db, "cron_jobs")) {
+            db.exec(`
+              CREATE INDEX IF NOT EXISTS idx_cron_jobs_active_run
+                ON cron_jobs(active_run_id, execution_generation);
+            `);
+          }
+        },
+      },
+      {
+        version: 150,
+        name: "inbound_channel_admission_settlement",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "inbound_channel_events", "bot_loop_decision", "TEXT");
+          addColumnIfMissingIfTableExists(db, "inbound_channel_events", "bot_loop_reason", "TEXT");
+          addColumnIfMissingIfTableExists(db, "inbound_channel_events", "command_operation_key", "TEXT");
+          addColumnIfMissingIfTableExists(db, "inbound_channel_events", "command_result_text", "TEXT");
+        },
+      },
+      {
+        version: 151,
+        name: "code_mode_verification_ledger",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "code_mode_runs", "trusted_code_write_verification_json", "TEXT");
+          addColumnIfMissingIfTableExists(
+            db,
+            "code_mode_runs",
+            "verification_status",
+            "TEXT NOT NULL DEFAULT 'not_applicable'",
+          );
+          addColumnIfMissingIfTableExists(db, "code_mode_runs", "verification_evidence_id", "TEXT");
+          addColumnIfMissingIfTableExists(db, "code_mode_runs", "verification_subject_hash", "TEXT");
+          addColumnIfMissingIfTableExists(db, "code_mode_runs", "verification_reason", "TEXT");
+          addColumnIfMissingIfTableExists(db, "code_mode_runs", "verification_updated_at", "TEXT");
+          if (tableExists(db, "code_mode_runs")) {
+            db.exec(`
+              UPDATE code_mode_runs
+              SET verification_status = CASE
+                    WHEN status = 'completed' THEN 'completed_unverified'
+                    ELSE 'not_applicable'
+                  END,
+                  verification_updated_at = COALESCE(finished_at, started_at, created_at)
+              WHERE verification_evidence_id IS NULL;
+            `);
+          }
+          db.exec(`
+            CREATE TABLE IF NOT EXISTS code_mode_verification_evidence (
+              sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+              evidence_id TEXT NOT NULL UNIQUE,
+              run_id TEXT NOT NULL,
+              status TEXT NOT NULL,
+              subject_hash TEXT NOT NULL,
+              command_name TEXT NOT NULL,
+              command_label TEXT NOT NULL,
+              scope TEXT NOT NULL,
+              evidence_json TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              FOREIGN KEY(run_id) REFERENCES code_mode_runs(run_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_code_mode_verification_evidence_run
+              ON code_mode_verification_evidence(run_id, sequence DESC);
+            CREATE TRIGGER IF NOT EXISTS reject_code_mode_verification_evidence_update
+              BEFORE UPDATE ON code_mode_verification_evidence
+              BEGIN
+                SELECT RAISE(ABORT, 'code_mode_verification_evidence is append-only');
+              END;
+            CREATE TRIGGER IF NOT EXISTS reject_code_mode_verification_evidence_delete
+              BEFORE DELETE ON code_mode_verification_evidence
+              BEGIN
+                SELECT RAISE(ABORT, 'code_mode_verification_evidence is append-only');
+              END;
+          `);
+        },
+      },
+      {
+        version: 152,
+        name: "durable_child_watchers",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "durable_run_events", "sequence", "INTEGER");
+          if (tableExists(db, "durable_run_events") && tableExists(db, "durable_runs")) {
+            db.exec(`
+            WITH ranked AS (
+              SELECT
+                event_id,
+                ROW_NUMBER() OVER (PARTITION BY run_id ORDER BY created_at ASC, event_id ASC) AS run_sequence
+              FROM durable_run_events
+            )
+            UPDATE durable_run_events
+            SET sequence = (
+              SELECT ranked.run_sequence
+              FROM ranked
+              WHERE ranked.event_id = durable_run_events.event_id
+            )
+            WHERE sequence IS NULL;
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_durable_run_events_run_sequence
+              ON durable_run_events(run_id, sequence);
+            CREATE INDEX IF NOT EXISTS idx_durable_run_events_run_sequence_scan
+              ON durable_run_events(run_id, sequence ASC);
+            CREATE TRIGGER IF NOT EXISTS reject_durable_run_event_without_sequence
+              BEFORE INSERT ON durable_run_events
+              WHEN NEW.sequence IS NULL OR NEW.sequence < 1
+              BEGIN
+                SELECT RAISE(ABORT, 'durable_run_events.sequence must be a positive per-run sequence');
+              END;
+            CREATE TRIGGER IF NOT EXISTS reject_durable_run_event_sequence_clear
+              BEFORE UPDATE OF sequence ON durable_run_events
+              WHEN NEW.sequence IS NULL OR NEW.sequence < 1
+              BEGIN
+                SELECT RAISE(ABORT, 'durable_run_events.sequence must be a positive per-run sequence');
+              END;
+
+            CREATE TABLE IF NOT EXISTS durable_run_event_sequences (
+              run_id TEXT PRIMARY KEY,
+              last_sequence INTEGER NOT NULL,
+              FOREIGN KEY(run_id) REFERENCES durable_runs(run_id) ON DELETE CASCADE
+            );
+
+            INSERT INTO durable_run_event_sequences (run_id, last_sequence)
+            SELECT run_id, MAX(sequence)
+            FROM durable_run_events
+            GROUP BY run_id
+            ON CONFLICT(run_id) DO UPDATE SET
+              last_sequence = MAX(durable_run_event_sequences.last_sequence, excluded.last_sequence);
+
+            CREATE TABLE IF NOT EXISTS durable_child_watcher_scan_state (
+              scan_key TEXT PRIMARY KEY,
+              last_watcher_id TEXT NOT NULL DEFAULT '',
+              updated_at TEXT NOT NULL
+            );
+            INSERT OR IGNORE INTO durable_child_watcher_scan_state (
+              scan_key, last_watcher_id, updated_at
+            ) VALUES ('global', '', '1970-01-01T00:00:00.000Z');
+
+            CREATE TABLE IF NOT EXISTS durable_child_watchers (
+              watcher_id TEXT PRIMARY KEY,
+              parent_run_id TEXT NOT NULL,
+              child_run_id TEXT NOT NULL,
+              state TEXT NOT NULL DEFAULT 'attached'
+                CHECK(state IN ('attached', 'detached', 'closed')),
+              next_sequence INTEGER NOT NULL DEFAULT 1,
+              last_consumed_sequence INTEGER NOT NULL DEFAULT 0,
+              projected_notice_count INTEGER NOT NULL DEFAULT 0,
+              source TEXT,
+              metadata_json TEXT NOT NULL DEFAULT '{}',
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              detached_at TEXT,
+              reattached_at TEXT,
+              closed_at TEXT,
+              FOREIGN KEY(parent_run_id) REFERENCES durable_runs(run_id) ON DELETE CASCADE,
+              FOREIGN KEY(child_run_id) REFERENCES durable_runs(run_id) ON DELETE CASCADE,
+              UNIQUE(parent_run_id, child_run_id),
+              CHECK(parent_run_id <> child_run_id),
+              CHECK(next_sequence = last_consumed_sequence + 1)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_durable_child_watchers_parent
+              ON durable_child_watchers(parent_run_id, state, created_at, watcher_id);
+            CREATE INDEX IF NOT EXISTS idx_durable_child_watchers_child_attached
+              ON durable_child_watchers(child_run_id, state, watcher_id);
+            `);
+          }
+        },
+      },
+      {
+        version: 153,
+        name: "code_mode_interruption_recovery",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "code_mode_runs", "execution_generation", "INTEGER NOT NULL DEFAULT 0");
+          addColumnIfMissingIfTableExists(
+            db,
+            "code_mode_runs",
+            "execution_phase",
+            "TEXT NOT NULL DEFAULT 'legacy_unknown'",
+          );
+          addColumnIfMissingIfTableExists(db, "code_mode_runs", "recovery_disposition", "TEXT NOT NULL DEFAULT 'none'");
+          addColumnIfMissingIfTableExists(db, "code_mode_runs", "execution_boundary_crossed_at", "TEXT");
+          addColumnIfMissingIfTableExists(db, "code_mode_runs", "interrupted_at", "TEXT");
+          addColumnIfMissingIfTableExists(db, "code_mode_runs", "interruption_reason", "TEXT");
+          addColumnIfMissingIfTableExists(db, "code_mode_runs", "final_transcript_event_id", "TEXT");
+          addColumnIfMissingIfTableExists(db, "code_mode_runs", "final_transcript_enqueued_at", "TEXT");
+          if (tableExists(db, "code_mode_runs")) {
+            db.exec(`
+              UPDATE code_mode_runs
+              SET execution_phase = CASE
+                    WHEN status IN ('completed', 'failed', 'rejected', 'expired') THEN 'terminal'
+                    WHEN status IN ('approval_pending', 'queued') THEN 'not_started'
+                    ELSE 'legacy_unknown'
+                  END,
+                  recovery_disposition = CASE
+                    WHEN status IN ('completed', 'failed', 'rejected', 'expired') THEN 'terminal'
+                    WHEN status = 'running' THEN 'manual_reconciliation'
+                    ELSE 'none'
+                  END,
+                  final_transcript_event_id = CASE
+                    WHEN session_id IS NOT NULL AND TRIM(session_id) <> ''
+                    THEN 'code-mode-final:' || run_id
+                    ELSE final_transcript_event_id
+                  END;
+
+              CREATE INDEX IF NOT EXISTS idx_code_mode_runs_pending_final_transcript
+                ON code_mode_runs(finished_at, run_id)
+                WHERE session_id IS NOT NULL
+                  AND status IN ('completed', 'failed')
+                  AND final_transcript_enqueued_at IS NULL;
+            `);
+          }
+        },
+      },
+      {
+        version: 154,
+        name: "chat_turn_capability_profiles",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "chat_turn_traces", "capability_snapshot_id", "TEXT");
+          addColumnIfMissingIfTableExists(db, "chat_turn_traces", "capability_profile_id", "TEXT");
+          addColumnIfMissingIfTableExists(db, "chat_turn_traces", "capability_profile_hash", "TEXT");
+          db.exec(`
+            CREATE TABLE IF NOT EXISTS chat_turn_capability_profiles (
+              profile_id TEXT PRIMARY KEY,
+              turn_id TEXT NOT NULL UNIQUE,
+              session_id TEXT NOT NULL,
+              workspace_id TEXT NOT NULL,
+              durable_run_id TEXT UNIQUE,
+              operator_id TEXT,
+              auth_actor_id TEXT,
+              schema_version TEXT NOT NULL,
+              profile_hash TEXT NOT NULL,
+              catalog_snapshot_id TEXT NOT NULL,
+              inspectable_hash TEXT NOT NULL,
+              callable_hash TEXT NOT NULL,
+              selection_hash TEXT NOT NULL,
+              governance_hash TEXT NOT NULL,
+              preflight_fingerprint TEXT NOT NULL,
+              profile_json TEXT NOT NULL CHECK(length(profile_json) <= 524288),
+              created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_chat_turn_capability_profiles_session_created
+              ON chat_turn_capability_profiles(session_id, created_at, profile_id);
+            CREATE INDEX IF NOT EXISTS idx_chat_turn_capability_profiles_workspace_created
+              ON chat_turn_capability_profiles(workspace_id, created_at, profile_id);
+
+            CREATE TRIGGER IF NOT EXISTS trg_chat_turn_capability_profiles_no_update
+            BEFORE UPDATE ON chat_turn_capability_profiles
+            BEGIN
+              SELECT RAISE(ABORT, 'chat turn capability profiles are immutable');
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_chat_turn_capability_profiles_no_delete
+            BEFORE DELETE ON chat_turn_capability_profiles
+            BEGIN
+              SELECT RAISE(ABORT, 'chat turn capability profiles are immutable');
+            END;
+          `);
+        },
+      },
+      {
+        version: 155,
+        name: "chat_compaction_hysteresis_state",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "chat_conversation_summaries", "window_key", "TEXT");
+          if (tableExists(db, "chat_conversation_summaries")) {
+            db.exec(`
+              CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_conversation_summaries_window_key
+                ON chat_conversation_summaries(window_key)
+                WHERE window_key IS NOT NULL;
+            `);
+          }
+          db.exec(`
+            CREATE TABLE IF NOT EXISTS chat_compaction_states (
+              state_key TEXT PRIMARY KEY,
+              session_id TEXT NOT NULL,
+              dimension_hash TEXT NOT NULL,
+              provider_id TEXT,
+              model TEXT,
+              profile_fingerprint TEXT,
+              boundary_turn_ids_json TEXT NOT NULL CHECK(length(boundary_turn_ids_json) <= 131072),
+              boundary_source_hash TEXT NOT NULL,
+              baseline_input_tokens INTEGER NOT NULL,
+              last_observed_input_tokens INTEGER NOT NULL,
+              observed_turn_count INTEGER NOT NULL,
+              armed INTEGER NOT NULL CHECK(armed IN (0, 1)),
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_chat_compaction_states_session_dimension
+              ON chat_compaction_states(session_id, dimension_hash, observed_turn_count DESC, updated_at DESC);
+          `);
+        },
+      },
+      {
+        version: 156,
+        name: "durable_child_watcher_revision_cas",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(
+            db,
+            "durable_child_watchers",
+            "revision",
+            "INTEGER NOT NULL DEFAULT 1 CHECK(revision >= 1)",
+          );
+        },
+      },
+      {
+        version: 157,
+        name: "chat_tool_effect_truth",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "chat_tool_runs", "effect_potential", "TEXT");
+          addColumnIfMissingIfTableExists(db, "chat_tool_runs", "effect_disposition", "TEXT");
+          addColumnIfMissingIfTableExists(db, "chat_tool_runs", "effect_outcome_kind", "TEXT");
+          addColumnIfMissingIfTableExists(db, "chat_tool_runs", "effect_evidence_json", "TEXT");
+          // Existing rows intentionally remain NULL. The repository derives a
+          // conservative public projection from trusted legacy status instead
+          // of treating a migration-authored marker as runtime evidence.
+        },
+      },
+      {
+        version: 158,
+        name: "model_usage_events",
+        up: (db) => {
+          db.exec(`
+            CREATE TABLE IF NOT EXISTS model_usage_events (
+              event_id TEXT PRIMARY KEY,
+              idempotency_key TEXT NOT NULL UNIQUE,
+              source TEXT NOT NULL CHECK(source IN ('llm_service', 'embedding_runtime', 'manual_test')),
+              call_kind TEXT NOT NULL,
+              requested_provider_id TEXT,
+              requested_model_id TEXT,
+              requested_reasoning_level TEXT,
+              dispatched_reasoning_effort TEXT,
+              reasoning_disposition TEXT
+                CHECK(reasoning_disposition IS NULL OR reasoning_disposition IN (
+                  'honored', 'downgraded', 'unsupported_blocked', 'provider_default'
+                )),
+              reasoning_reason_code TEXT,
+              dispatched_model_id TEXT,
+              effective_provider_id TEXT,
+              effective_model_id TEXT,
+              effective_api_style TEXT,
+              route_decision_id TEXT,
+              context_snapshot_id TEXT,
+              context_intent_hash TEXT,
+              context_entry_ref_id TEXT,
+              context_resolution_hash TEXT,
+              operation_id TEXT NOT NULL,
+              parent_operation_id TEXT,
+              dispatch_generation TEXT NOT NULL,
+              attempt_index INTEGER NOT NULL DEFAULT 0 CHECK(attempt_index >= 0),
+              transport_attempt_index INTEGER NOT NULL DEFAULT 0 CHECK(transport_attempt_index >= 0),
+              transport_status TEXT NOT NULL DEFAULT 'intent'
+                CHECK(transport_status IN ('intent', 'accepted', 'dispatch_unknown')),
+              dispatch_owner_id TEXT NOT NULL,
+              dispatch_lease_expires_at TEXT NOT NULL,
+              dispatch_uncertain_at TEXT,
+              dispatch_uncertainty_reason TEXT,
+              dispatch_reconciled_at TEXT,
+              dispatch_reconciled_by TEXT,
+              dispatch_reconciliation TEXT
+                CHECK(dispatch_reconciliation IS NULL OR dispatch_reconciliation IN (
+                  'confirmed_not_dispatched',
+                  'confirmed_dispatched_usage_unknown',
+                  'superseded_by_new_generation'
+                )),
+              dispatch_reconciliation_evidence TEXT,
+              fallback_index INTEGER NOT NULL DEFAULT 0 CHECK(fallback_index >= 0),
+              repair_index INTEGER NOT NULL DEFAULT 0 CHECK(repair_index >= 0),
+              workspace_id TEXT,
+              session_id TEXT,
+              turn_id TEXT,
+              durable_run_id TEXT,
+              task_id TEXT,
+              agent_id TEXT,
+              assembly_run_id TEXT,
+              assembly_round_index INTEGER CHECK(assembly_round_index IS NULL OR assembly_round_index >= 0),
+              assembly_stage TEXT,
+              worker_id TEXT,
+              utility_kind TEXT,
+              credential_type TEXT NOT NULL DEFAULT 'unknown'
+                CHECK(credential_type IN ('api_key', 'oauth', 'service_account', 'adc', 'unknown')),
+              usage_pool TEXT NOT NULL DEFAULT 'unknown'
+                CHECK(usage_pool IN ('standard', 'subscription', 'local', 'unknown')),
+              credential_source TEXT NOT NULL DEFAULT 'unknown'
+                CHECK(credential_source IN ('inline', 'env', 'keychain', 'oauth', 'adc', 'none', 'unknown')),
+              credential_config_fingerprint TEXT,
+              pricing_source TEXT NOT NULL DEFAULT 'not_available'
+                CHECK(pricing_source IN ('provider_reported', 'gateway_estimate', 'not_available')),
+              cost_source TEXT NOT NULL DEFAULT 'not_available'
+                CHECK(cost_source IN ('provider_reported', 'gateway_estimate', 'not_available')),
+              pricing_catalog_version TEXT,
+              pricing_catalog_hash TEXT,
+              input_rate_usd_per_million REAL CHECK(input_rate_usd_per_million IS NULL OR input_rate_usd_per_million >= 0),
+              output_rate_usd_per_million REAL CHECK(output_rate_usd_per_million IS NULL OR output_rate_usd_per_million >= 0),
+              cached_input_rate_usd_per_million REAL CHECK(cached_input_rate_usd_per_million IS NULL OR cached_input_rate_usd_per_million >= 0),
+              input_tokens INTEGER CHECK(input_tokens IS NULL OR input_tokens >= 0),
+              output_tokens INTEGER CHECK(output_tokens IS NULL OR output_tokens >= 0),
+              cached_input_tokens INTEGER CHECK(cached_input_tokens IS NULL OR cached_input_tokens >= 0),
+              cost_usd REAL CHECK(cost_usd IS NULL OR cost_usd >= 0),
+              availability TEXT NOT NULL DEFAULT 'unknown'
+                CHECK(availability IN ('tracked', 'unknown')),
+              terminal_outcome TEXT NOT NULL DEFAULT 'in_flight'
+                CHECK(terminal_outcome IN (
+                  'in_flight', 'succeeded', 'failed_before_usage', 'failed_after_usage',
+                  'interrupted_after_dispatch', 'cancelled'
+                )),
+              error_code TEXT,
+              started_at TEXT NOT NULL,
+              finished_at TEXT,
+              duration_ms INTEGER CHECK(duration_ms IS NULL OR duration_ms >= 0),
+              compatibility_projected_at TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_model_usage_events_workspace_started
+              ON model_usage_events(workspace_id, started_at DESC, event_id DESC);
+            CREATE INDEX IF NOT EXISTS idx_model_usage_events_session_started
+              ON model_usage_events(session_id, started_at DESC, event_id DESC);
+            CREATE INDEX IF NOT EXISTS idx_model_usage_events_turn_started
+              ON model_usage_events(turn_id, started_at ASC, event_id ASC);
+            CREATE INDEX IF NOT EXISTS idx_model_usage_events_durable_started
+              ON model_usage_events(durable_run_id, started_at ASC, event_id ASC);
+            CREATE INDEX IF NOT EXISTS idx_model_usage_events_task_started
+              ON model_usage_events(task_id, started_at ASC, event_id ASC);
+            CREATE INDEX IF NOT EXISTS idx_model_usage_events_assembly_started
+              ON model_usage_events(assembly_run_id, assembly_round_index, started_at ASC, event_id ASC);
+            CREATE INDEX IF NOT EXISTS idx_model_usage_events_operation_attempt
+              ON model_usage_events(operation_id, dispatch_generation, fallback_index, repair_index, attempt_index, transport_attempt_index);
+            CREATE INDEX IF NOT EXISTS idx_model_usage_events_outcome_started
+              ON model_usage_events(transport_status, terminal_outcome, availability, started_at DESC);
+          `);
+
+          addColumnIfMissingIfTableExists(db, "cost_ledger", "canonical_usage_event_id", "TEXT");
+          addColumnIfMissingIfTableExists(db, "cost_ledger", "usage_known_mask", "TEXT");
+          if (tableExists(db, "cost_ledger")) {
+            db.exec(`
+              CREATE UNIQUE INDEX IF NOT EXISTS idx_cost_ledger_canonical_usage_event
+                ON cost_ledger(canonical_usage_event_id);
+            `);
+          }
+        },
+      },
+      {
+        version: 159,
+        name: "chat_routed_context_snapshots",
+        up: (db) => {
+          db.exec(`
+            CREATE TABLE IF NOT EXISTS chat_routed_context_snapshots (
+              snapshot_id TEXT PRIMARY KEY CHECK(length(TRIM(snapshot_id)) BETWEEN 1 AND 256),
+              schema_version TEXT NOT NULL CHECK(schema_version = 'chat.routed-context-snapshot.v1'),
+              turn_id TEXT NOT NULL UNIQUE CHECK(length(TRIM(turn_id)) BETWEEN 1 AND 256),
+              session_id TEXT NOT NULL CHECK(length(TRIM(session_id)) BETWEEN 1 AND 256),
+              workspace_id TEXT NOT NULL CHECK(length(TRIM(workspace_id)) BETWEEN 1 AND 80),
+              capability_profile_id TEXT NOT NULL UNIQUE CHECK(length(TRIM(capability_profile_id)) BETWEEN 1 AND 256),
+              capability_profile_hash TEXT NOT NULL CHECK(
+                length(capability_profile_hash) = 64 AND capability_profile_hash NOT GLOB '*[^0-9a-f]*'
+              ),
+              source_request_hash TEXT NOT NULL CHECK(
+                length(source_request_hash) = 64 AND source_request_hash NOT GLOB '*[^0-9a-f]*'
+              ),
+              content_hash TEXT NOT NULL CHECK(
+                length(content_hash) = 64 AND content_hash NOT GLOB '*[^0-9a-f]*'
+              ),
+              snapshot_hash TEXT NOT NULL UNIQUE CHECK(
+                length(snapshot_hash) = 64 AND snapshot_hash NOT GLOB '*[^0-9a-f]*'
+              ),
+              effective_provider_id TEXT NOT NULL CHECK(length(TRIM(effective_provider_id)) BETWEEN 1 AND 128),
+              effective_model TEXT NOT NULL CHECK(length(TRIM(effective_model)) BETWEEN 1 AND 256),
+              context_window_tokens INTEGER NOT NULL CHECK(context_window_tokens > 0),
+              prompt_reserved_tokens INTEGER NOT NULL CHECK(prompt_reserved_tokens >= 0),
+              output_reserved_tokens INTEGER NOT NULL CHECK(output_reserved_tokens > 0),
+              hard_cap_tokens INTEGER NOT NULL CHECK(hard_cap_tokens > 0),
+              effective_budget_tokens INTEGER NOT NULL CHECK(
+                effective_budget_tokens >= 0 AND effective_budget_tokens <= hard_cap_tokens
+              ),
+              used_tokens INTEGER NOT NULL CHECK(used_tokens >= 0 AND used_tokens <= effective_budget_tokens),
+              source_count INTEGER NOT NULL CHECK(source_count BETWEEN 0 AND 16),
+              included_count INTEGER NOT NULL CHECK(included_count >= 0),
+              truncated_count INTEGER NOT NULL CHECK(truncated_count >= 0),
+              omitted_count INTEGER NOT NULL CHECK(omitted_count >= 0),
+              already_attached_count INTEGER NOT NULL CHECK(already_attached_count >= 0),
+              estimator_version TEXT NOT NULL CHECK(estimator_version = 'gc-approx-tokens.v1'),
+              budget_policy_version TEXT NOT NULL CHECK(budget_policy_version = 'chat.routed-context-budget.v1'),
+              snapshot_json TEXT NOT NULL CHECK(length(CAST(snapshot_json AS BLOB)) <= 1048576),
+              created_at TEXT NOT NULL,
+              CHECK(prompt_reserved_tokens + output_reserved_tokens <= context_window_tokens),
+              CHECK(used_tokens + prompt_reserved_tokens + output_reserved_tokens <= context_window_tokens),
+              CHECK(included_count + truncated_count + omitted_count + already_attached_count = source_count)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_chat_routed_context_snapshots_session_created
+              ON chat_routed_context_snapshots(session_id, created_at, snapshot_id);
+            CREATE INDEX IF NOT EXISTS idx_chat_routed_context_snapshots_workspace_created
+              ON chat_routed_context_snapshots(workspace_id, created_at, snapshot_id);
+
+            CREATE TRIGGER IF NOT EXISTS trg_chat_routed_context_snapshots_no_update
+            BEFORE UPDATE ON chat_routed_context_snapshots
+            BEGIN
+              SELECT RAISE(ABORT, 'chat routed context snapshots are immutable');
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_chat_routed_context_snapshots_no_delete
+            BEFORE DELETE ON chat_routed_context_snapshots
+            BEGIN
+              SELECT RAISE(ABORT, 'chat routed context snapshots are immutable');
+            END;
+          `);
+        },
+      },
+      {
+        version: 160,
+        name: "assembly_model_council_recovery",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "assembly_runs", "source_turn_id", "TEXT");
+          addColumnIfMissingIfTableExists(
+            db,
+            "assembly_runs",
+            "run_kind",
+            "TEXT NOT NULL DEFAULT 'assembly' CHECK(run_kind IN ('assembly', 'chat_model_council'))",
+          );
+          addColumnIfMissingIfTableExists(
+            db,
+            "assembly_runs",
+            "generation",
+            "INTEGER NOT NULL DEFAULT 0 CHECK(generation >= 0)",
+          );
+          addColumnIfMissingIfTableExists(db, "assembly_runs", "lease_owner_id", "TEXT");
+          addColumnIfMissingIfTableExists(db, "assembly_runs", "lease_expires_at", "TEXT");
+          addColumnIfMissingIfTableExists(db, "assembly_runs", "council_resolution_json", "TEXT");
+          addColumnIfMissingIfTableExists(db, "assembly_runs", "council_evidence_json", "TEXT");
+          if (tableExists(db, "assembly_runs")) {
+            db.exec(`
+              CREATE UNIQUE INDEX IF NOT EXISTS idx_assembly_runs_council_source_turn
+                ON assembly_runs(run_kind, source_turn_id)
+                WHERE run_kind = 'chat_model_council' AND source_turn_id IS NOT NULL;
+              CREATE INDEX IF NOT EXISTS idx_assembly_runs_council_lease
+                ON assembly_runs(run_kind, status, lease_expires_at, updated_at DESC);
+            `);
+          }
+        },
+      },
+      {
+        version: 161,
+        name: "skill_governance_journey_foundation",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "candidate_skill_versions", "workspace_id", "TEXT");
+          addColumnIfMissingIfTableExists(db, "candidate_skill_versions", "source_fingerprint", "TEXT");
+          addColumnIfMissingIfTableExists(db, "candidate_skill_versions", "upstream_snapshot_id", "TEXT");
+          addColumnIfMissingIfTableExists(db, "candidate_skill_versions", "supersedes_version_id", "TEXT");
+          addColumnIfMissingIfTableExists(db, "candidate_skill_versions", "created_by_actor_id", "TEXT");
+
+          db.exec(`
+            CREATE TABLE IF NOT EXISTS skill_hub_version_claims (
+              workspace_id TEXT NOT NULL CHECK(length(TRIM(workspace_id)) BETWEEN 1 AND 256),
+              canonical_source_key TEXT NOT NULL CHECK(length(TRIM(canonical_source_key)) BETWEEN 1 AND 1024),
+              version_kind TEXT NOT NULL CHECK(version_kind IN ('declared', 'resolved')),
+              version_value TEXT NOT NULL CHECK(length(TRIM(version_value)) BETWEEN 1 AND 512),
+              first_tree_sha256 TEXT NOT NULL CHECK(
+                length(first_tree_sha256) = 64 AND first_tree_sha256 NOT GLOB '*[^0-9a-f]*'
+              ),
+              first_snapshot_id TEXT NOT NULL CHECK(length(TRIM(first_snapshot_id)) BETWEEN 1 AND 256),
+              created_at TEXT NOT NULL,
+              PRIMARY KEY (workspace_id, canonical_source_key, version_kind, version_value)
+            );
+
+            CREATE TABLE IF NOT EXISTS skill_hub_audit_floors (
+              workspace_id TEXT NOT NULL CHECK(length(TRIM(workspace_id)) BETWEEN 1 AND 256),
+              canonical_source_key TEXT NOT NULL CHECK(length(TRIM(canonical_source_key)) BETWEEN 1 AND 1024),
+              floor_json TEXT NOT NULL CHECK(
+                json_valid(floor_json) AND length(CAST(floor_json AS BLOB)) <= 16384
+              ),
+              floor_sha256 TEXT NOT NULL CHECK(
+                length(floor_sha256) = 64 AND floor_sha256 NOT GLOB '*[^0-9a-f]*'
+              ),
+              updated_by_snapshot_id TEXT NOT NULL CHECK(length(TRIM(updated_by_snapshot_id)) BETWEEN 1 AND 256),
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              PRIMARY KEY (workspace_id, canonical_source_key)
+            );
+
+            CREATE TABLE IF NOT EXISTS skill_hub_snapshots (
+              snapshot_id TEXT PRIMARY KEY CHECK(length(TRIM(snapshot_id)) BETWEEN 1 AND 256),
+              workspace_id TEXT NOT NULL CHECK(length(TRIM(workspace_id)) BETWEEN 1 AND 256),
+              operation TEXT NOT NULL CHECK(operation IN ('review', 'install', 'update_check', 'update_stage', 'rollback_check')),
+              source_provider TEXT NOT NULL CHECK(length(TRIM(source_provider)) BETWEEN 1 AND 128),
+              source_type TEXT NOT NULL CHECK(length(TRIM(source_type)) BETWEEN 1 AND 128),
+              source_ref TEXT NOT NULL CHECK(length(TRIM(source_ref)) BETWEEN 1 AND 2048),
+              canonical_source_key TEXT NOT NULL CHECK(length(TRIM(canonical_source_key)) BETWEEN 1 AND 1024),
+              declared_version TEXT CHECK(declared_version IS NULL OR length(TRIM(declared_version)) BETWEEN 1 AND 512),
+              resolved_version TEXT CHECK(resolved_version IS NULL OR length(TRIM(resolved_version)) BETWEEN 1 AND 512),
+              content_tree_sha256 TEXT NOT NULL CHECK(
+                length(content_tree_sha256) = 64 AND content_tree_sha256 NOT GLOB '*[^0-9a-f]*'
+              ),
+              provenance_json TEXT NOT NULL CHECK(length(CAST(provenance_json AS BLOB)) <= 16384),
+              audit_json TEXT NOT NULL CHECK(length(CAST(audit_json AS BLOB)) <= 16384),
+              audit_sha256 TEXT NOT NULL CHECK(
+                length(audit_sha256) = 64 AND audit_sha256 NOT GLOB '*[^0-9a-f]*'
+              ),
+              audit_floor_json TEXT NOT NULL CHECK(
+                json_valid(audit_floor_json) AND length(CAST(audit_floor_json AS BLOB)) <= 16384
+              ),
+              audit_floor_sha256 TEXT NOT NULL CHECK(
+                length(audit_floor_sha256) = 64 AND audit_floor_sha256 NOT GLOB '*[^0-9a-f]*'
+              ),
+              permission_envelope_json TEXT NOT NULL CHECK(length(CAST(permission_envelope_json AS BLOB)) <= 16384),
+              permission_envelope_sha256 TEXT NOT NULL CHECK(
+                length(permission_envelope_sha256) = 64 AND permission_envelope_sha256 NOT GLOB '*[^0-9a-f]*'
+              ),
+              permission_diff_json TEXT NOT NULL CHECK(length(CAST(permission_diff_json AS BLOB)) <= 16384),
+              compatibility_json TEXT NOT NULL CHECK(length(CAST(compatibility_json AS BLOB)) <= 16384),
+              risk_level TEXT NOT NULL CHECK(risk_level IN ('low', 'medium', 'high', 'unknown')),
+              trust_disposition TEXT NOT NULL CHECK(trust_disposition IN ('review_only', 'candidate', 'blocked', 'revoked')),
+              prior_snapshot_id TEXT CHECK(prior_snapshot_id IS NULL OR length(TRIM(prior_snapshot_id)) BETWEEN 1 AND 256),
+              blocker_codes_json TEXT NOT NULL CHECK(length(CAST(blocker_codes_json AS BLOB)) <= 8192),
+              created_at TEXT NOT NULL,
+              CHECK(declared_version IS NOT NULL OR resolved_version IS NOT NULL)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_skill_hub_snapshots_source_created
+              ON skill_hub_snapshots(workspace_id, canonical_source_key, created_at DESC, snapshot_id DESC);
+            CREATE INDEX IF NOT EXISTS idx_skill_hub_snapshots_declared_version
+              ON skill_hub_snapshots(workspace_id, canonical_source_key, declared_version)
+              WHERE declared_version IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_skill_hub_snapshots_resolved_version
+              ON skill_hub_snapshots(workspace_id, canonical_source_key, resolved_version)
+              WHERE resolved_version IS NOT NULL;
+
+            CREATE TABLE IF NOT EXISTS skill_learning_evidence (
+              evidence_id TEXT PRIMARY KEY CHECK(length(TRIM(evidence_id)) BETWEEN 1 AND 256),
+              idempotency_key TEXT NOT NULL UNIQUE CHECK(length(TRIM(idempotency_key)) BETWEEN 1 AND 512),
+              workspace_id TEXT NOT NULL CHECK(length(TRIM(workspace_id)) BETWEEN 1 AND 256),
+              target_key TEXT NOT NULL CHECK(length(TRIM(target_key)) BETWEEN 1 AND 256),
+              fingerprint TEXT NOT NULL CHECK(length(fingerprint) = 64 AND fingerprint NOT GLOB '*[^0-9a-f]*'),
+              source_kind TEXT NOT NULL CHECK(source_kind IN ('chat_turn', 'library_text')),
+              source_session_id TEXT,
+              source_turn_id TEXT,
+              source_message_id TEXT,
+              correction_action_id TEXT NOT NULL CHECK(length(TRIM(correction_action_id)) BETWEEN 1 AND 256),
+              actor_id TEXT NOT NULL CHECK(length(TRIM(actor_id)) BETWEEN 1 AND 256),
+              source_sha256 TEXT NOT NULL CHECK(length(source_sha256) = 64 AND source_sha256 NOT GLOB '*[^0-9a-f]*'),
+              correction_sha256 TEXT NOT NULL CHECK(length(correction_sha256) = 64 AND correction_sha256 NOT GLOB '*[^0-9a-f]*'),
+              source_artifact_json TEXT CHECK(source_artifact_json IS NULL OR length(CAST(source_artifact_json AS BLOB)) <= 2048),
+              correction_artifact_json TEXT CHECK(correction_artifact_json IS NULL OR length(CAST(correction_artifact_json AS BLOB)) <= 2048),
+              provenance_json TEXT NOT NULL CHECK(length(CAST(provenance_json AS BLOB)) <= 16384),
+              poisoning_status TEXT NOT NULL CHECK(poisoning_status IN ('clean', 'blocked', 'quarantined', 'conflicting')),
+              blocker_codes_json TEXT NOT NULL CHECK(length(CAST(blocker_codes_json AS BLOB)) <= 8192),
+              created_at TEXT NOT NULL,
+              CHECK(
+                (source_kind = 'chat_turn' AND source_session_id IS NOT NULL AND source_turn_id IS NOT NULL AND source_message_id IS NOT NULL)
+                OR (source_kind = 'library_text' AND source_session_id IS NULL AND source_turn_id IS NULL AND source_message_id IS NULL)
+              )
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_skill_learning_evidence_recurrence
+              ON skill_learning_evidence(workspace_id, target_key, fingerprint, poisoning_status, source_session_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_skill_learning_evidence_target_created
+              ON skill_learning_evidence(workspace_id, target_key, created_at DESC, evidence_id DESC);
+
+            CREATE TABLE IF NOT EXISTS governance_journey_events (
+              schema_version TEXT NOT NULL CHECK(schema_version = 'goatcitadel.journey-event.v1'),
+              event_id TEXT PRIMARY KEY CHECK(length(TRIM(event_id)) BETWEEN 1 AND 256),
+              idempotency_key TEXT NOT NULL UNIQUE CHECK(length(TRIM(idempotency_key)) BETWEEN 1 AND 512),
+              scope_kind TEXT NOT NULL CHECK(scope_kind IN ('workspace', 'global')),
+              workspace_id TEXT,
+              event_type TEXT NOT NULL CHECK(length(TRIM(event_type)) BETWEEN 1 AND 128),
+              subject_kind TEXT NOT NULL CHECK(length(TRIM(subject_kind)) BETWEEN 1 AND 128),
+              subject_id TEXT NOT NULL CHECK(length(TRIM(subject_id)) BETWEEN 1 AND 256),
+              action TEXT NOT NULL CHECK(length(TRIM(action)) BETWEEN 1 AND 128),
+              actor_id TEXT NOT NULL CHECK(length(TRIM(actor_id)) BETWEEN 1 AND 256),
+              actor_type TEXT NOT NULL CHECK(actor_type IN ('operator', 'system', 'approval_effect')),
+              session_id TEXT,
+              turn_id TEXT,
+              approval_id TEXT,
+              fingerprint TEXT CHECK(fingerprint IS NULL OR (length(fingerprint) = 64 AND fingerprint NOT GLOB '*[^0-9a-f]*')),
+              source_kind TEXT,
+              source_id TEXT,
+              trust_disposition TEXT,
+              poisoning_status TEXT CHECK(poisoning_status IS NULL OR poisoning_status IN ('clean', 'blocked', 'quarantined', 'conflicting')),
+              evidence_refs_json TEXT NOT NULL CHECK(length(CAST(evidence_refs_json AS BLOB)) <= 16384),
+              provenance_json TEXT NOT NULL CHECK(length(CAST(provenance_json AS BLOB)) <= 16384),
+              summary_json TEXT NOT NULL CHECK(length(CAST(summary_json AS BLOB)) <= 16384),
+              occurred_at TEXT NOT NULL,
+              recorded_at TEXT NOT NULL,
+              CHECK(
+                (scope_kind = 'workspace' AND workspace_id IS NOT NULL AND length(TRIM(workspace_id)) BETWEEN 1 AND 256)
+                OR (scope_kind = 'global' AND workspace_id IS NULL)
+              )
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_governance_journey_workspace_recorded
+              ON governance_journey_events(workspace_id, recorded_at DESC, event_id DESC);
+            CREATE INDEX IF NOT EXISTS idx_governance_journey_subject_recorded
+              ON governance_journey_events(subject_kind, subject_id, recorded_at DESC, event_id DESC);
+            CREATE INDEX IF NOT EXISTS idx_governance_journey_fingerprint_session
+              ON governance_journey_events(fingerprint, session_id, recorded_at DESC, event_id DESC);
+
+            CREATE TRIGGER IF NOT EXISTS trg_skill_hub_version_claims_no_update
+            BEFORE UPDATE ON skill_hub_version_claims BEGIN SELECT RAISE(ABORT, 'skill Hub version claims are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_skill_hub_version_claims_no_delete
+            BEFORE DELETE ON skill_hub_version_claims BEGIN SELECT RAISE(ABORT, 'skill Hub version claims are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_skill_hub_audit_floors_identity_guard
+            BEFORE UPDATE ON skill_hub_audit_floors
+            WHEN NEW.workspace_id IS NOT OLD.workspace_id
+              OR NEW.canonical_source_key IS NOT OLD.canonical_source_key
+              OR NEW.created_at IS NOT OLD.created_at
+            BEGIN
+              SELECT RAISE(ABORT, 'skill Hub audit floor identity is immutable');
+            END;
+            CREATE TRIGGER IF NOT EXISTS trg_skill_hub_audit_floors_monotonic_guard
+            BEFORE UPDATE ON skill_hub_audit_floors
+            WHEN json_extract(NEW.floor_json, '$.policyId') IS NOT json_extract(OLD.floor_json, '$.policyId')
+              OR CAST(json_extract(NEW.floor_json, '$.policyRevision') AS INTEGER)
+                < CAST(json_extract(OLD.floor_json, '$.policyRevision') AS INTEGER)
+              OR (
+                json_extract(NEW.floor_json, '$.policyVersion') IS NOT json_extract(OLD.floor_json, '$.policyVersion')
+                AND CAST(json_extract(NEW.floor_json, '$.policyRevision') AS INTEGER)
+                  <= CAST(json_extract(OLD.floor_json, '$.policyRevision') AS INTEGER)
+              )
+              OR EXISTS (
+                SELECT 1
+                FROM json_each(OLD.floor_json, '$.effectiveBlockerCodes') AS old_blocker
+                WHERE NOT EXISTS (
+                  SELECT 1
+                  FROM json_each(NEW.floor_json, '$.effectiveBlockerCodes') AS new_blocker
+                  WHERE new_blocker.value = old_blocker.value
+                )
+              )
+              OR EXISTS (
+                SELECT 1
+                FROM json_each(OLD.floor_json, '$.scanners') AS old_scanner
+                WHERE NOT EXISTS (
+                  SELECT 1
+                  FROM json_each(NEW.floor_json, '$.scanners') AS new_scanner
+                  WHERE json_extract(new_scanner.value, '$.scannerId') = json_extract(old_scanner.value, '$.scannerId')
+                    AND CAST(json_extract(new_scanner.value, '$.revision') AS INTEGER)
+                      >= CAST(json_extract(old_scanner.value, '$.revision') AS INTEGER)
+                    AND (
+                      json_extract(new_scanner.value, '$.scannerVersion') = json_extract(old_scanner.value, '$.scannerVersion')
+                      OR CAST(json_extract(new_scanner.value, '$.revision') AS INTEGER)
+                        > CAST(json_extract(old_scanner.value, '$.revision') AS INTEGER)
+                    )
+                    AND NOT EXISTS (
+                      SELECT 1
+                      FROM json_each(old_scanner.value, '$.coverageIds') AS old_coverage
+                      WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM json_each(new_scanner.value, '$.coverageIds') AS new_coverage
+                        WHERE new_coverage.value = old_coverage.value
+                      )
+                    )
+                )
+              )
+            BEGIN
+              SELECT RAISE(ABORT, 'skill Hub audit floors are monotonic');
+            END;
+            CREATE TRIGGER IF NOT EXISTS trg_skill_hub_audit_floors_no_delete
+            BEFORE DELETE ON skill_hub_audit_floors BEGIN SELECT RAISE(ABORT, 'skill Hub audit floors cannot be deleted'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_skill_hub_snapshots_no_update
+            BEFORE UPDATE ON skill_hub_snapshots BEGIN SELECT RAISE(ABORT, 'skill Hub snapshots are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_skill_hub_snapshots_no_delete
+            BEFORE DELETE ON skill_hub_snapshots BEGIN SELECT RAISE(ABORT, 'skill Hub snapshots are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_skill_learning_evidence_no_update
+            BEFORE UPDATE ON skill_learning_evidence BEGIN SELECT RAISE(ABORT, 'skill learning evidence is immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_skill_learning_evidence_no_delete
+            BEFORE DELETE ON skill_learning_evidence BEGIN SELECT RAISE(ABORT, 'skill learning evidence is immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_governance_journey_events_no_update
+            BEFORE UPDATE ON governance_journey_events BEGIN SELECT RAISE(ABORT, 'governance Journey events are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_governance_journey_events_no_delete
+            BEFORE DELETE ON governance_journey_events BEGIN SELECT RAISE(ABORT, 'governance Journey events are immutable'); END;
+          `);
+          if (tableExists(db, "candidate_skill_versions")) {
+            db.exec(`
+              CREATE TABLE IF NOT EXISTS candidate_skill_evidence_links (
+                version_id TEXT NOT NULL REFERENCES candidate_skill_versions(version_id) ON DELETE RESTRICT,
+                evidence_id TEXT NOT NULL REFERENCES skill_learning_evidence(evidence_id) ON DELETE RESTRICT,
+                linked_at TEXT NOT NULL,
+                PRIMARY KEY (version_id, evidence_id)
+              );
+
+              CREATE TRIGGER IF NOT EXISTS trg_candidate_skill_versions_inactive_insert
+              BEFORE INSERT ON candidate_skill_versions
+              WHEN NEW.lifecycle_state NOT IN ('draft', 'candidate')
+              BEGIN
+                SELECT RAISE(ABORT, 'candidate skill versions must be inserted inactive');
+              END;
+
+              CREATE TRIGGER IF NOT EXISTS trg_candidate_skill_versions_immutable_content
+              BEFORE UPDATE ON candidate_skill_versions
+              WHEN NEW.version_id IS NOT OLD.version_id
+                OR NEW.candidate_id IS NOT OLD.candidate_id
+                OR NEW.source_kind IS NOT OLD.source_kind
+                OR NEW.title IS NOT OLD.title
+                OR NEW.summary IS NOT OLD.summary
+                OR NEW.bundle_root IS NOT OLD.bundle_root
+                OR NEW.originating_run_id IS NOT OLD.originating_run_id
+                OR NEW.wrapper_manifest_hash IS NOT OLD.wrapper_manifest_hash
+                OR NEW.manifest_artifact_json IS NOT OLD.manifest_artifact_json
+                OR NEW.instruction_artifact_json IS NOT OLD.instruction_artifact_json
+                OR NEW.proof_artifact_json IS NOT OLD.proof_artifact_json
+                OR NEW.program_artifact_json IS NOT OLD.program_artifact_json
+                OR NEW.schema_artifact_json IS NOT OLD.schema_artifact_json
+                OR NEW.created_at IS NOT OLD.created_at
+                OR NEW.workspace_id IS NOT OLD.workspace_id
+                OR NEW.source_fingerprint IS NOT OLD.source_fingerprint
+                OR NEW.upstream_snapshot_id IS NOT OLD.upstream_snapshot_id
+                OR NEW.supersedes_version_id IS NOT OLD.supersedes_version_id
+                OR NEW.created_by_actor_id IS NOT OLD.created_by_actor_id
+              BEGIN
+                SELECT RAISE(ABORT, 'candidate skill version content and provenance are immutable');
+              END;
+
+              CREATE TRIGGER IF NOT EXISTS trg_candidate_skill_versions_no_delete
+              BEFORE DELETE ON candidate_skill_versions
+              BEGIN
+                SELECT RAISE(ABORT, 'candidate skill versions are immutable');
+              END;
+
+              CREATE TRIGGER IF NOT EXISTS trg_candidate_skill_evidence_links_no_update
+              BEFORE UPDATE ON candidate_skill_evidence_links BEGIN SELECT RAISE(ABORT, 'candidate skill evidence links are immutable'); END;
+              CREATE TRIGGER IF NOT EXISTS trg_candidate_skill_evidence_links_no_delete
+              BEFORE DELETE ON candidate_skill_evidence_links BEGIN SELECT RAISE(ABORT, 'candidate skill evidence links are immutable'); END;
+            `);
+          }
+        },
+      },
+      {
+        version: 162,
+        name: "workspace_path_bridge_snapshots",
+        up: (db) => {
+          db.exec(`
+            CREATE TABLE IF NOT EXISTS workspace_path_bridge_snapshots (
+              snapshot_id TEXT PRIMARY KEY CHECK(length(TRIM(snapshot_id)) BETWEEN 1 AND 256),
+              schema_version TEXT NOT NULL CHECK(schema_version = 'goatcitadel.workspace-path-bridge-snapshot.v1'),
+              request_hash TEXT NOT NULL CHECK(length(request_hash) = 64 AND request_hash NOT GLOB '*[^0-9a-f]*'),
+              workspace_id TEXT NOT NULL CHECK(length(TRIM(workspace_id)) BETWEEN 1 AND 256),
+              input_flavor TEXT NOT NULL CHECK(input_flavor IN ('windows_native', 'windows_forward', 'msys', 'wsl')),
+              target_flavor TEXT NOT NULL CHECK(target_flavor IN ('windows_native', 'windows_forward', 'msys', 'wsl')),
+              git_identity_required INTEGER NOT NULL CHECK(git_identity_required IN (0, 1)),
+              input_path_hash TEXT NOT NULL CHECK(length(input_path_hash) = 64 AND input_path_hash NOT GLOB '*[^0-9a-f]*'),
+              allowed_roots_hash TEXT NOT NULL CHECK(length(allowed_roots_hash) = 64 AND allowed_roots_hash NOT GLOB '*[^0-9a-f]*'),
+              canonical_host_path TEXT CHECK(
+                canonical_host_path IS NULL OR length(TRIM(canonical_host_path)) BETWEEN 1 AND 2048
+              ),
+              canonical_target_path TEXT CHECK(
+                canonical_target_path IS NULL OR length(TRIM(canonical_target_path)) BETWEEN 1 AND 2048
+              ),
+              distro TEXT CHECK(distro IS NULL OR length(TRIM(distro)) BETWEEN 1 AND 64),
+              round_trip_json TEXT NOT NULL CHECK(
+                json_valid(round_trip_json) AND length(CAST(round_trip_json AS BLOB)) <= 8192
+              ),
+              git_identity_json TEXT NOT NULL CHECK(
+                json_valid(git_identity_json) AND length(CAST(git_identity_json AS BLOB)) <= 16384
+              ),
+              status TEXT NOT NULL CHECK(status IN ('verified', 'blocked', 'unavailable')),
+              reason_code TEXT CHECK(reason_code IS NULL OR reason_code IN (
+                'invalid_path', 'outside_jail', 'canonicalization_failed', 'symlink_escape',
+                'round_trip_mismatch', 'wsl_unavailable', 'wsl_conversion_failed',
+                'git_not_repository', 'git_unavailable', 'git_verification_failed', 'git_identity_mismatch'
+              )),
+              callable INTEGER NOT NULL CHECK(callable IN (0, 1)),
+              snapshot_json TEXT NOT NULL CHECK(
+                json_valid(snapshot_json) AND length(CAST(snapshot_json AS BLOB)) <= 65536
+              ),
+              snapshot_sha256 TEXT NOT NULL CHECK(
+                length(snapshot_sha256) = 64 AND snapshot_sha256 NOT GLOB '*[^0-9a-f]*'
+              ),
+              created_at TEXT NOT NULL,
+              CHECK(
+                (status = 'verified' AND reason_code IS NULL AND callable = 1
+                  AND canonical_host_path IS NOT NULL AND canonical_target_path IS NOT NULL)
+                OR (status <> 'verified' AND reason_code IS NOT NULL AND callable = 0)
+              ),
+              CHECK(
+                ((input_flavor = 'wsl' OR target_flavor = 'wsl') AND distro IS NOT NULL)
+                OR (input_flavor <> 'wsl' AND target_flavor <> 'wsl' AND distro IS NULL)
+              )
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_workspace_path_bridge_workspace_created
+              ON workspace_path_bridge_snapshots(workspace_id, created_at DESC, snapshot_id DESC);
+            CREATE INDEX IF NOT EXISTS idx_workspace_path_bridge_workspace_request
+              ON workspace_path_bridge_snapshots(workspace_id, request_hash);
+
+            CREATE TRIGGER IF NOT EXISTS trg_workspace_path_bridge_snapshots_no_update
+            BEFORE UPDATE ON workspace_path_bridge_snapshots
+            BEGIN
+              SELECT RAISE(ABORT, 'workspace path bridge snapshots are immutable');
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_workspace_path_bridge_snapshots_no_delete
+            BEFORE DELETE ON workspace_path_bridge_snapshots
+            BEGIN
+              SELECT RAISE(ABORT, 'workspace path bridge snapshots are immutable');
+            END;
+          `);
+        },
+      },
+      {
+        version: 163,
+        name: "context_pressure_recovery_truth",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(
+            db,
+            "model_usage_events",
+            "requested_output_token_cap",
+            "INTEGER CHECK(requested_output_token_cap IS NULL OR requested_output_token_cap > 0)",
+          );
+          addColumnIfMissingIfTableExists(
+            db,
+            "model_usage_events",
+            "effective_output_token_cap",
+            "INTEGER CHECK(effective_output_token_cap IS NULL OR effective_output_token_cap > 0)",
+          );
+          addColumnIfMissingIfTableExists(
+            db,
+            "model_usage_events",
+            "output_cap_disposition",
+            "TEXT CHECK(output_cap_disposition IS NULL OR output_cap_disposition IN ('initial', 'preserved_retry', 'reduced_retry'))",
+          );
+          addColumnIfMissingIfTableExists(db, "model_usage_events", "output_cap_recovery_source_event_id", "TEXT");
+          addColumnIfMissingIfTableExists(
+            db,
+            "model_usage_events",
+            "output_cap_recovery_reason_code",
+            "TEXT CHECK(output_cap_recovery_reason_code IS NULL OR output_cap_recovery_reason_code = 'safe_lower_cap')",
+          );
+          addColumnIfMissingIfTableExists(
+            db,
+            "model_usage_events",
+            "output_cap_provider_available_tokens",
+            "INTEGER CHECK(output_cap_provider_available_tokens IS NULL OR output_cap_provider_available_tokens > 0)",
+          );
+          addColumnIfMissingIfTableExists(
+            db,
+            "model_usage_events",
+            "output_cap_provider_minimum_tokens",
+            "INTEGER CHECK(output_cap_provider_minimum_tokens IS NULL OR output_cap_provider_minimum_tokens > 0)",
+          );
+          addColumnIfMissingIfTableExists(
+            db,
+            "model_usage_events",
+            "output_cap_request_input_estimate",
+            "INTEGER CHECK(output_cap_request_input_estimate IS NULL OR output_cap_request_input_estimate > 0)",
+          );
+          addColumnIfMissingIfTableExists(
+            db,
+            "model_usage_events",
+            "output_cap_configured_context_window_tokens",
+            "INTEGER CHECK(output_cap_configured_context_window_tokens IS NULL OR output_cap_configured_context_window_tokens > 0)",
+          );
+          addColumnIfMissingIfTableExists(
+            db,
+            "model_usage_events",
+            "output_cap_safety_margin_tokens",
+            "INTEGER CHECK(output_cap_safety_margin_tokens IS NULL OR output_cap_safety_margin_tokens >= 0)",
+          );
+          addColumnIfMissingIfTableExists(
+            db,
+            "model_usage_events",
+            "output_cap_evidence_format",
+            "TEXT CHECK(output_cap_evidence_format IS NULL OR output_cap_evidence_format IN ('anthropic_equation', 'bounded_range', 'context_breakdown', 'character_prompt', 'vllm_context'))",
+          );
+          addColumnIfMissingIfTableExists(db, "model_usage_events", "transport_retry_parent_event_id", "TEXT");
+          addColumnIfMissingIfTableExists(
+            db,
+            "model_usage_events",
+            "transport_retry_reason",
+            "TEXT CHECK(transport_retry_reason IS NULL OR transport_retry_reason IN ('output_cap_recovery', 'metadata_compatibility'))",
+          );
+          db.exec(`
+            CREATE TABLE IF NOT EXISTS chat_compaction_breakers (
+              session_id TEXT NOT NULL,
+              dimension_hash TEXT NOT NULL,
+              provider_id TEXT,
+              model TEXT,
+              profile_fingerprint TEXT,
+              status TEXT NOT NULL DEFAULT 'closed'
+                CHECK(status IN ('closed', 'awaiting_evidence', 'tripped', 'blocked_corrupt')),
+              fallback_streak INTEGER NOT NULL DEFAULT 0 CHECK(fallback_streak BETWEEN 0 AND 2),
+              ineffective_streak INTEGER NOT NULL DEFAULT 0 CHECK(ineffective_streak BETWEEN 0 AND 2),
+              pending_attempt_id TEXT,
+              pending_state_key TEXT,
+              quarantined_state_key TEXT,
+              pending_branch_head_turn_id TEXT,
+              pending_observed_turn_count INTEGER CHECK(pending_observed_turn_count IS NULL OR pending_observed_turn_count >= 0),
+              pending_disposition TEXT CHECK(pending_disposition IS NULL OR pending_disposition IN ('structured', 'fallback', 'no_progress')),
+              pending_started_at TEXT,
+              last_attempt_id TEXT,
+              last_evidence_turn_id TEXT,
+              last_evidence_input_tokens INTEGER CHECK(last_evidence_input_tokens IS NULL OR last_evidence_input_tokens >= 0),
+              last_outcome TEXT NOT NULL DEFAULT 'unverified'
+                CHECK(last_outcome IN ('healthy', 'ineffective', 'fallback', 'no_progress', 'unverified')),
+              revision INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0),
+              last_repaired_at TEXT,
+              last_repair_reason TEXT,
+              last_repaired_actor_hash TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              PRIMARY KEY(session_id, dimension_hash),
+              FOREIGN KEY(pending_state_key) REFERENCES chat_compaction_states(state_key) ON DELETE RESTRICT,
+              CHECK (
+                (
+                  pending_attempt_id IS NULL AND pending_state_key IS NULL
+                  AND pending_branch_head_turn_id IS NULL AND pending_observed_turn_count IS NULL
+                  AND pending_disposition IS NULL AND pending_started_at IS NULL
+                  AND status <> 'awaiting_evidence'
+                ) OR (
+                  pending_attempt_id IS NOT NULL AND pending_state_key IS NOT NULL
+                  AND pending_branch_head_turn_id IS NOT NULL AND pending_observed_turn_count IS NOT NULL
+                  AND pending_disposition IS NOT NULL AND pending_started_at IS NOT NULL
+                  AND status = 'awaiting_evidence'
+                )
+              )
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_chat_compaction_breakers_pending_state
+              ON chat_compaction_breakers(pending_state_key)
+              WHERE pending_state_key IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_chat_compaction_breakers_session_status
+              ON chat_compaction_breakers(session_id, status, updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS chat_compaction_breaker_actions (
+              action_id TEXT PRIMARY KEY,
+              session_id TEXT NOT NULL,
+              dimension_hash TEXT NOT NULL,
+              action_kind TEXT NOT NULL CHECK(action_kind IN ('force', 'repair')),
+              expected_breaker_revision INTEGER NOT NULL CHECK(expected_breaker_revision >= 0),
+              actor_hash TEXT NOT NULL,
+              request_evidence_hash TEXT NOT NULL,
+              policy_decision_hash TEXT NOT NULL,
+              audit_evidence_hash TEXT NOT NULL,
+              approval_id TEXT,
+              reason TEXT NOT NULL,
+              status TEXT NOT NULL CHECK(status IN ('pending', 'consumed', 'expired', 'rejected')),
+              rejection_reason TEXT,
+              created_at TEXT NOT NULL,
+              expires_at TEXT NOT NULL,
+              consumed_at TEXT,
+              resulting_attempt_id TEXT,
+              resulting_breaker_revision INTEGER CHECK(resulting_breaker_revision IS NULL OR resulting_breaker_revision >= 0),
+              quarantined_state_key TEXT,
+              updated_at TEXT NOT NULL,
+              FOREIGN KEY(session_id, dimension_hash)
+                REFERENCES chat_compaction_breakers(session_id, dimension_hash) ON DELETE CASCADE,
+              CHECK (
+                (
+                  status = 'pending'
+                  AND rejection_reason IS NULL AND consumed_at IS NULL
+                  AND resulting_attempt_id IS NULL AND resulting_breaker_revision IS NULL
+                  AND quarantined_state_key IS NULL
+                ) OR (
+                  status = 'consumed'
+                  AND rejection_reason IS NULL AND consumed_at IS NOT NULL
+                  AND resulting_breaker_revision IS NOT NULL
+                  AND (
+                    (action_kind = 'force' AND resulting_attempt_id IS NOT NULL AND quarantined_state_key IS NULL)
+                    OR (action_kind = 'repair' AND resulting_attempt_id IS NULL)
+                  )
+                ) OR (
+                  status = 'expired'
+                  AND rejection_reason IS NULL AND consumed_at IS NULL
+                  AND resulting_attempt_id IS NULL AND resulting_breaker_revision IS NULL
+                  AND quarantined_state_key IS NULL
+                ) OR (
+                  status = 'rejected'
+                  AND rejection_reason IS NOT NULL AND consumed_at IS NULL
+                  AND resulting_attempt_id IS NULL AND resulting_breaker_revision IS NULL
+                  AND quarantined_state_key IS NULL
+                )
+              )
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_compaction_breaker_actions_pending
+              ON chat_compaction_breaker_actions(session_id, dimension_hash, action_kind)
+              WHERE status = 'pending';
+            CREATE INDEX IF NOT EXISTS idx_chat_compaction_breaker_actions_session_created
+              ON chat_compaction_breaker_actions(session_id, created_at DESC, action_id DESC);
+            CREATE INDEX IF NOT EXISTS idx_chat_compaction_breaker_actions_status_expiry
+              ON chat_compaction_breaker_actions(status, expires_at);
+
+            DROP TRIGGER IF EXISTS trg_chat_compaction_breaker_actions_immutable;
+            CREATE TRIGGER trg_chat_compaction_breaker_actions_immutable
+            BEFORE UPDATE ON chat_compaction_breaker_actions
+            WHEN OLD.action_id IS NOT NEW.action_id
+              OR OLD.session_id IS NOT NEW.session_id
+              OR OLD.dimension_hash IS NOT NEW.dimension_hash
+              OR OLD.action_kind IS NOT NEW.action_kind
+              OR OLD.expected_breaker_revision IS NOT NEW.expected_breaker_revision
+              OR OLD.actor_hash IS NOT NEW.actor_hash
+              OR OLD.request_evidence_hash IS NOT NEW.request_evidence_hash
+              OR OLD.policy_decision_hash IS NOT NEW.policy_decision_hash
+              OR OLD.audit_evidence_hash IS NOT NEW.audit_evidence_hash
+              OR OLD.approval_id IS NOT NEW.approval_id
+              OR OLD.reason IS NOT NEW.reason
+              OR OLD.created_at IS NOT NEW.created_at
+              OR OLD.expires_at IS NOT NEW.expires_at
+            BEGIN
+              SELECT RAISE(ABORT, 'chat compaction breaker action identity is immutable');
+            END;
+
+            DROP TRIGGER IF EXISTS trg_chat_compaction_breaker_actions_transition;
+            CREATE TRIGGER trg_chat_compaction_breaker_actions_transition
+            BEFORE UPDATE ON chat_compaction_breaker_actions
+            WHEN OLD.status IS NOT 'pending'
+              OR (
+                NEW.status IS NOT 'consumed'
+                AND NEW.status IS NOT 'expired'
+                AND NEW.status IS NOT 'rejected'
+              )
+            BEGIN
+              SELECT RAISE(ABORT, 'chat compaction breaker action lifecycle is immutable');
+            END;
+          `);
+          addColumnIfMissingIfTableExists(db, "chat_compaction_breakers", "quarantined_state_key", "TEXT");
+          if (tableExists(db, "model_usage_events")) {
+            db.exec(`
+              CREATE INDEX IF NOT EXISTS idx_model_usage_events_output_cap_source
+                ON model_usage_events(output_cap_recovery_source_event_id)
+                WHERE output_cap_recovery_source_event_id IS NOT NULL;
+              CREATE UNIQUE INDEX IF NOT EXISTS idx_model_usage_events_transport_retry_parent
+                ON model_usage_events(transport_retry_parent_event_id)
+                WHERE transport_retry_parent_event_id IS NOT NULL;
+
+              CREATE TRIGGER IF NOT EXISTS trg_model_usage_events_cap_lineage_insert
+              BEFORE INSERT ON model_usage_events
+              WHEN NOT (
+                (
+                  NEW.requested_output_token_cap IS NULL
+                  AND NEW.effective_output_token_cap IS NULL
+                  AND NEW.output_cap_disposition IS NULL
+                  AND NEW.output_cap_recovery_source_event_id IS NULL
+                  AND NEW.output_cap_recovery_reason_code IS NULL
+                  AND NEW.output_cap_provider_available_tokens IS NULL
+                  AND NEW.output_cap_provider_minimum_tokens IS NULL
+                  AND NEW.output_cap_request_input_estimate IS NULL
+                  AND NEW.output_cap_configured_context_window_tokens IS NULL
+                  AND NEW.output_cap_safety_margin_tokens IS NULL
+                  AND NEW.output_cap_evidence_format IS NULL
+                  AND (NEW.transport_retry_reason IS NULL OR NEW.transport_retry_reason = 'metadata_compatibility')
+                ) OR (
+                  NEW.requested_output_token_cap IS NOT NULL
+                  AND NEW.effective_output_token_cap = NEW.requested_output_token_cap
+                  AND NEW.output_cap_disposition = 'initial'
+                  AND NEW.output_cap_recovery_source_event_id IS NULL
+                  AND NEW.output_cap_recovery_reason_code IS NULL
+                  AND NEW.output_cap_provider_available_tokens IS NULL
+                  AND NEW.output_cap_provider_minimum_tokens IS NULL
+                  AND NEW.output_cap_request_input_estimate IS NULL
+                  AND NEW.output_cap_configured_context_window_tokens IS NULL
+                  AND NEW.output_cap_safety_margin_tokens IS NULL
+                  AND NEW.output_cap_evidence_format IS NULL
+                  AND NEW.transport_retry_parent_event_id IS NULL
+                  AND NEW.transport_retry_reason IS NULL
+                ) OR (
+                  NEW.requested_output_token_cap IS NOT NULL
+                  AND NEW.effective_output_token_cap IS NOT NULL
+                  AND NEW.effective_output_token_cap <= NEW.requested_output_token_cap
+                  AND NEW.output_cap_disposition = 'preserved_retry'
+                  AND NEW.output_cap_recovery_source_event_id IS NULL
+                  AND NEW.output_cap_recovery_reason_code IS NULL
+                  AND NEW.output_cap_provider_available_tokens IS NULL
+                  AND NEW.output_cap_provider_minimum_tokens IS NULL
+                  AND NEW.output_cap_request_input_estimate IS NULL
+                  AND NEW.output_cap_configured_context_window_tokens IS NULL
+                  AND NEW.output_cap_safety_margin_tokens IS NULL
+                  AND NEW.output_cap_evidence_format IS NULL
+                  AND NEW.transport_retry_parent_event_id IS NOT NULL
+                  AND NEW.transport_retry_reason = 'metadata_compatibility'
+                ) OR (
+                  NEW.requested_output_token_cap IS NOT NULL
+                  AND NEW.effective_output_token_cap IS NOT NULL
+                  AND NEW.effective_output_token_cap < NEW.requested_output_token_cap
+                  AND NEW.output_cap_disposition = 'reduced_retry'
+                  AND NEW.output_cap_recovery_source_event_id IS NOT NULL
+                  AND NEW.output_cap_recovery_reason_code = 'safe_lower_cap'
+                  AND NEW.output_cap_provider_available_tokens IS NOT NULL
+                  AND (NEW.output_cap_provider_minimum_tokens IS NULL OR NEW.effective_output_token_cap >= NEW.output_cap_provider_minimum_tokens)
+                  AND NEW.output_cap_request_input_estimate IS NOT NULL
+                  AND NEW.output_cap_configured_context_window_tokens IS NOT NULL
+                  AND NEW.output_cap_safety_margin_tokens IS NOT NULL
+                  AND NEW.effective_output_token_cap <= NEW.output_cap_provider_available_tokens - NEW.output_cap_safety_margin_tokens
+                  AND NEW.effective_output_token_cap <= NEW.output_cap_configured_context_window_tokens - NEW.output_cap_request_input_estimate - NEW.output_cap_safety_margin_tokens
+                  AND NEW.output_cap_evidence_format IS NOT NULL
+                  AND NEW.transport_retry_parent_event_id = NEW.output_cap_recovery_source_event_id
+                  AND NEW.transport_retry_reason = 'output_cap_recovery'
+                )
+              ) OR NOT (
+                (NEW.transport_retry_parent_event_id IS NULL AND NEW.transport_retry_reason IS NULL)
+                OR (
+                  NEW.transport_retry_parent_event_id IS NOT NULL
+                  AND NEW.transport_retry_reason IN ('output_cap_recovery', 'metadata_compatibility')
+                )
+              )
+              BEGIN
+                SELECT RAISE(ABORT, 'invalid model usage output-cap retry lineage');
+              END;
+
+              CREATE TRIGGER IF NOT EXISTS trg_model_usage_events_cap_lineage_update
+              BEFORE UPDATE OF
+                requested_output_token_cap, effective_output_token_cap, output_cap_disposition,
+                output_cap_recovery_source_event_id, output_cap_recovery_reason_code,
+                output_cap_provider_available_tokens, output_cap_provider_minimum_tokens,
+                output_cap_request_input_estimate, output_cap_configured_context_window_tokens,
+                output_cap_safety_margin_tokens, output_cap_evidence_format,
+                transport_retry_parent_event_id, transport_retry_reason
+              ON model_usage_events
+              WHEN NOT (
+                (
+                  NEW.requested_output_token_cap IS NULL
+                  AND NEW.effective_output_token_cap IS NULL
+                  AND NEW.output_cap_disposition IS NULL
+                  AND NEW.output_cap_recovery_source_event_id IS NULL
+                  AND NEW.output_cap_recovery_reason_code IS NULL
+                  AND NEW.output_cap_provider_available_tokens IS NULL
+                  AND NEW.output_cap_provider_minimum_tokens IS NULL
+                  AND NEW.output_cap_request_input_estimate IS NULL
+                  AND NEW.output_cap_configured_context_window_tokens IS NULL
+                  AND NEW.output_cap_safety_margin_tokens IS NULL
+                  AND NEW.output_cap_evidence_format IS NULL
+                  AND (NEW.transport_retry_reason IS NULL OR NEW.transport_retry_reason = 'metadata_compatibility')
+                ) OR (
+                  NEW.requested_output_token_cap IS NOT NULL
+                  AND NEW.effective_output_token_cap = NEW.requested_output_token_cap
+                  AND NEW.output_cap_disposition = 'initial'
+                  AND NEW.output_cap_recovery_source_event_id IS NULL
+                  AND NEW.output_cap_recovery_reason_code IS NULL
+                  AND NEW.output_cap_provider_available_tokens IS NULL
+                  AND NEW.output_cap_provider_minimum_tokens IS NULL
+                  AND NEW.output_cap_request_input_estimate IS NULL
+                  AND NEW.output_cap_configured_context_window_tokens IS NULL
+                  AND NEW.output_cap_safety_margin_tokens IS NULL
+                  AND NEW.output_cap_evidence_format IS NULL
+                  AND NEW.transport_retry_parent_event_id IS NULL
+                  AND NEW.transport_retry_reason IS NULL
+                ) OR (
+                  NEW.requested_output_token_cap IS NOT NULL
+                  AND NEW.effective_output_token_cap IS NOT NULL
+                  AND NEW.effective_output_token_cap <= NEW.requested_output_token_cap
+                  AND NEW.output_cap_disposition = 'preserved_retry'
+                  AND NEW.output_cap_recovery_source_event_id IS NULL
+                  AND NEW.output_cap_recovery_reason_code IS NULL
+                  AND NEW.output_cap_provider_available_tokens IS NULL
+                  AND NEW.output_cap_provider_minimum_tokens IS NULL
+                  AND NEW.output_cap_request_input_estimate IS NULL
+                  AND NEW.output_cap_configured_context_window_tokens IS NULL
+                  AND NEW.output_cap_safety_margin_tokens IS NULL
+                  AND NEW.output_cap_evidence_format IS NULL
+                  AND NEW.transport_retry_parent_event_id IS NOT NULL
+                  AND NEW.transport_retry_reason = 'metadata_compatibility'
+                ) OR (
+                  NEW.requested_output_token_cap IS NOT NULL
+                  AND NEW.effective_output_token_cap IS NOT NULL
+                  AND NEW.effective_output_token_cap < NEW.requested_output_token_cap
+                  AND NEW.output_cap_disposition = 'reduced_retry'
+                  AND NEW.output_cap_recovery_source_event_id IS NOT NULL
+                  AND NEW.output_cap_recovery_reason_code = 'safe_lower_cap'
+                  AND NEW.output_cap_provider_available_tokens IS NOT NULL
+                  AND (NEW.output_cap_provider_minimum_tokens IS NULL OR NEW.effective_output_token_cap >= NEW.output_cap_provider_minimum_tokens)
+                  AND NEW.output_cap_request_input_estimate IS NOT NULL
+                  AND NEW.output_cap_configured_context_window_tokens IS NOT NULL
+                  AND NEW.output_cap_safety_margin_tokens IS NOT NULL
+                  AND NEW.effective_output_token_cap <= NEW.output_cap_provider_available_tokens - NEW.output_cap_safety_margin_tokens
+                  AND NEW.effective_output_token_cap <= NEW.output_cap_configured_context_window_tokens - NEW.output_cap_request_input_estimate - NEW.output_cap_safety_margin_tokens
+                  AND NEW.output_cap_evidence_format IS NOT NULL
+                  AND NEW.transport_retry_parent_event_id = NEW.output_cap_recovery_source_event_id
+                  AND NEW.transport_retry_reason = 'output_cap_recovery'
+                )
+              ) OR NOT (
+                (NEW.transport_retry_parent_event_id IS NULL AND NEW.transport_retry_reason IS NULL)
+                OR (
+                  NEW.transport_retry_parent_event_id IS NOT NULL
+                  AND NEW.transport_retry_reason IN ('output_cap_recovery', 'metadata_compatibility')
+                )
+              )
+              BEGIN
+                SELECT RAISE(ABORT, 'invalid model usage output-cap retry lineage');
+              END;
+            `);
+          }
+        },
+      },
+      {
+        version: 164,
+        name: "skill_aggregate_revision_cas",
+        up: (db) => {
+          db.exec(`
+            CREATE TABLE IF NOT EXISTS skill_aggregate_revisions (
+              aggregate_kind TEXT NOT NULL CHECK(
+                aggregate_kind IN ('runtime_skill', 'candidate_skill', 'activation_policy')
+              ),
+              aggregate_id TEXT NOT NULL CHECK(
+                aggregate_id = TRIM(aggregate_id) AND length(aggregate_id) BETWEEN 1 AND 256
+              ),
+              revision INTEGER NOT NULL DEFAULT 1 CHECK(typeof(revision) = 'integer' AND revision > 0),
+              created_at TEXT NOT NULL CHECK(length(TRIM(created_at)) > 0),
+              updated_at TEXT NOT NULL CHECK(length(TRIM(updated_at)) > 0),
+              PRIMARY KEY (aggregate_kind, aggregate_id)
+            );
+          `);
+          backfillSkillAggregateRevisions(db);
+        },
+      },
+      {
+        version: 165,
+        name: "skill_hub_lifecycle_foundation",
+        up: (db) => {
+          if (tableExists(db, "skill_hub_snapshots")) {
+            db.exec(`
+              CREATE UNIQUE INDEX IF NOT EXISTS idx_skill_hub_snapshots_workspace_id_tree
+                ON skill_hub_snapshots(workspace_id, snapshot_id, content_tree_sha256);
+            `);
+          }
+          if (tableExists(db, "runtime_evidence_envelopes")) {
+            db.exec(`
+              CREATE UNIQUE INDEX IF NOT EXISTS idx_runtime_evidence_skill_hub_identity
+                ON runtime_evidence_envelopes(envelope_id, workspace_id, approval_id);
+            `);
+          }
+          if (tableExists(db, "governance_journey_events")) {
+            db.exec(`
+              CREATE UNIQUE INDEX IF NOT EXISTS idx_governance_journey_skill_hub_identity
+                ON governance_journey_events(event_id, workspace_id, approval_id);
+            `);
+          }
+          db.exec(`
+            CREATE TABLE IF NOT EXISTS skill_hub_snapshot_artifacts (
+              artifact_id TEXT PRIMARY KEY CHECK(length(TRIM(artifact_id)) BETWEEN 1 AND 256),
+              workspace_id TEXT NOT NULL CHECK(length(TRIM(workspace_id)) BETWEEN 1 AND 256),
+              snapshot_id TEXT NOT NULL CHECK(length(TRIM(snapshot_id)) BETWEEN 1 AND 256),
+              content_tree_sha256 TEXT NOT NULL CHECK(
+                length(content_tree_sha256) = 64 AND content_tree_sha256 NOT GLOB '*[^0-9a-f]*'
+              ),
+              bundle_rel_path TEXT NOT NULL CHECK(length(TRIM(bundle_rel_path)) BETWEEN 1 AND 1024),
+              manifest_version TEXT NOT NULL CHECK(manifest_version = 'goatcitadel.skill-tree.v1'),
+              manifest_json TEXT NOT NULL CHECK(
+                json_valid(manifest_json)
+                AND json_type(manifest_json) = 'object'
+                AND length(CAST(manifest_json AS BLOB)) <= 262144
+              ),
+              manifest_sha256 TEXT NOT NULL CHECK(
+                length(manifest_sha256) = 64 AND manifest_sha256 NOT GLOB '*[^0-9a-f]*'
+              ),
+              file_count INTEGER NOT NULL CHECK(
+                typeof(file_count) = 'integer' AND file_count BETWEEN 0 AND 96
+              ),
+              total_bytes INTEGER NOT NULL CHECK(
+                typeof(total_bytes) = 'integer' AND total_bytes BETWEEN 0 AND 4194304
+              ),
+              created_at TEXT NOT NULL CHECK(length(TRIM(created_at)) > 0),
+              UNIQUE(workspace_id, snapshot_id),
+              UNIQUE(workspace_id, snapshot_id, content_tree_sha256),
+              FOREIGN KEY(workspace_id, snapshot_id, content_tree_sha256)
+                REFERENCES skill_hub_snapshots(workspace_id, snapshot_id, content_tree_sha256) ON DELETE RESTRICT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_skill_hub_snapshot_artifacts_tree
+              ON skill_hub_snapshot_artifacts(workspace_id, content_tree_sha256, created_at DESC, artifact_id DESC);
+
+            CREATE TABLE IF NOT EXISTS skill_hub_operation_intents (
+              operation_id TEXT PRIMARY KEY CHECK(length(TRIM(operation_id)) BETWEEN 1 AND 256),
+              idempotency_key TEXT NOT NULL UNIQUE CHECK(length(TRIM(idempotency_key)) BETWEEN 1 AND 512),
+              workspace_id TEXT NOT NULL CHECK(length(TRIM(workspace_id)) BETWEEN 1 AND 256),
+              operation_kind TEXT NOT NULL CHECK(operation_kind IN (
+                'install_inactive', 'stage_update_candidate', 'stage_rollback_candidate', 'activate', 'revoke'
+              )),
+              approval_id TEXT NOT NULL UNIQUE CHECK(length(TRIM(approval_id)) BETWEEN 1 AND 256),
+              snapshot_id TEXT NOT NULL CHECK(length(TRIM(snapshot_id)) BETWEEN 1 AND 256),
+              content_tree_sha256 TEXT NOT NULL CHECK(
+                length(content_tree_sha256) = 64 AND content_tree_sha256 NOT GLOB '*[^0-9a-f]*'
+              ),
+              skill_id TEXT NOT NULL CHECK(length(TRIM(skill_id)) BETWEEN 1 AND 256),
+              target_candidate_id TEXT CHECK(
+                target_candidate_id IS NULL OR length(TRIM(target_candidate_id)) BETWEEN 1 AND 256
+              ),
+              target_version_id TEXT CHECK(
+                target_version_id IS NULL OR length(TRIM(target_version_id)) BETWEEN 1 AND 256
+              ),
+              supersedes_version_id TEXT CHECK(
+                supersedes_version_id IS NULL OR length(TRIM(supersedes_version_id)) BETWEEN 1 AND 256
+              ),
+              expected_candidate_revision INTEGER CHECK(
+                expected_candidate_revision IS NULL
+                OR (typeof(expected_candidate_revision) = 'integer' AND expected_candidate_revision > 0)
+              ),
+              expected_runtime_revision INTEGER CHECK(
+                expected_runtime_revision IS NULL
+                OR (typeof(expected_runtime_revision) = 'integer' AND expected_runtime_revision > 0)
+              ),
+              expected_candidate_absent INTEGER NOT NULL CHECK(expected_candidate_absent IN (0, 1)),
+              expected_runtime_absent INTEGER NOT NULL CHECK(expected_runtime_absent IN (0, 1)),
+              actor_id TEXT NOT NULL CHECK(length(TRIM(actor_id)) BETWEEN 1 AND 256),
+              session_id TEXT CHECK(session_id IS NULL OR length(TRIM(session_id)) BETWEEN 1 AND 256),
+              turn_id TEXT CHECK(turn_id IS NULL OR length(TRIM(turn_id)) BETWEEN 1 AND 256),
+              request_sha256 TEXT NOT NULL CHECK(
+                length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'
+              ),
+              created_at TEXT NOT NULL CHECK(length(TRIM(created_at)) > 0),
+              FOREIGN KEY(approval_id) REFERENCES approvals(approval_id) ON DELETE RESTRICT,
+              FOREIGN KEY(workspace_id, snapshot_id, content_tree_sha256)
+                REFERENCES skill_hub_snapshot_artifacts(workspace_id, snapshot_id, content_tree_sha256) ON DELETE RESTRICT,
+              CHECK(turn_id IS NULL OR session_id IS NOT NULL),
+              CHECK(
+                (expected_candidate_absent = 1 AND expected_candidate_revision IS NULL)
+                OR (expected_candidate_absent = 0 AND expected_candidate_revision IS NOT NULL)
+              ),
+              CHECK(
+                (expected_runtime_absent = 1 AND expected_runtime_revision IS NULL)
+                OR (expected_runtime_absent = 0 AND expected_runtime_revision IS NOT NULL)
+              ),
+              CHECK(target_candidate_id IS NOT NULL AND target_version_id IS NOT NULL),
+              CHECK(
+                (operation_kind = 'install_inactive'
+                  AND expected_candidate_absent = 1
+                  AND expected_runtime_absent = 1
+                  AND supersedes_version_id IS NULL)
+                OR (operation_kind IN ('stage_update_candidate', 'stage_rollback_candidate')
+                  AND expected_candidate_absent = 0
+                  AND expected_runtime_absent = 0
+                  AND supersedes_version_id IS NOT NULL)
+                OR (operation_kind = 'activate' AND expected_candidate_absent = 0)
+                OR (operation_kind = 'revoke'
+                  AND expected_candidate_absent = 0
+                  AND expected_runtime_absent = 0)
+              )
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_skill_hub_operation_intents_workspace_skill_created
+              ON skill_hub_operation_intents(workspace_id, skill_id, created_at DESC, operation_id DESC);
+            CREATE INDEX IF NOT EXISTS idx_skill_hub_operation_intents_snapshot
+              ON skill_hub_operation_intents(workspace_id, snapshot_id, created_at DESC, operation_id DESC);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_skill_hub_operation_intents_terminal_identity
+              ON skill_hub_operation_intents(operation_id, workspace_id, approval_id, content_tree_sha256);
+
+            CREATE TABLE IF NOT EXISTS skill_hub_operation_settlements (
+              settlement_id TEXT PRIMARY KEY CHECK(length(TRIM(settlement_id)) BETWEEN 1 AND 256),
+              operation_id TEXT NOT NULL UNIQUE CHECK(length(TRIM(operation_id)) BETWEEN 1 AND 256),
+              workspace_id TEXT NOT NULL CHECK(length(TRIM(workspace_id)) BETWEEN 1 AND 256),
+              approval_id TEXT NOT NULL CHECK(length(TRIM(approval_id)) BETWEEN 1 AND 256),
+              content_tree_sha256 TEXT NOT NULL CHECK(
+                length(content_tree_sha256) = 64 AND content_tree_sha256 NOT GLOB '*[^0-9a-f]*'
+              ),
+              disposition TEXT NOT NULL CHECK(disposition IN ('applied', 'blocked', 'manual_reconciliation')),
+              observed_tree_sha256 TEXT NOT NULL CHECK(
+                length(observed_tree_sha256) = 64 AND observed_tree_sha256 NOT GLOB '*[^0-9a-f]*'
+              ),
+              candidate_version_id TEXT REFERENCES candidate_skill_versions(version_id) ON DELETE RESTRICT,
+              runtime_skill_id TEXT CHECK(
+                runtime_skill_id IS NULL OR length(TRIM(runtime_skill_id)) BETWEEN 1 AND 256
+              ),
+              candidate_revision INTEGER CHECK(
+                candidate_revision IS NULL OR (typeof(candidate_revision) = 'integer' AND candidate_revision > 0)
+              ),
+              runtime_revision INTEGER CHECK(
+                runtime_revision IS NULL OR (typeof(runtime_revision) = 'integer' AND runtime_revision > 0)
+              ),
+              evidence_envelope_id TEXT NOT NULL,
+              journey_event_id TEXT NOT NULL,
+              result_json TEXT NOT NULL CHECK(
+                json_valid(result_json)
+                AND json_type(result_json) = 'object'
+                AND length(CAST(result_json AS BLOB)) <= 16384
+              ),
+              result_sha256 TEXT NOT NULL CHECK(
+                length(result_sha256) = 64 AND result_sha256 NOT GLOB '*[^0-9a-f]*'
+              ),
+              settled_at TEXT NOT NULL CHECK(length(TRIM(settled_at)) > 0),
+              FOREIGN KEY(operation_id, workspace_id, approval_id, content_tree_sha256)
+                REFERENCES skill_hub_operation_intents(
+                  operation_id, workspace_id, approval_id, content_tree_sha256
+                ) ON DELETE RESTRICT,
+              FOREIGN KEY(evidence_envelope_id, workspace_id, approval_id)
+                REFERENCES runtime_evidence_envelopes(envelope_id, workspace_id, approval_id) ON DELETE RESTRICT,
+              FOREIGN KEY(journey_event_id, workspace_id, approval_id)
+                REFERENCES governance_journey_events(event_id, workspace_id, approval_id) ON DELETE RESTRICT,
+              CHECK(disposition <> 'applied' OR observed_tree_sha256 = content_tree_sha256)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_skill_hub_operation_settlements_evidence
+              ON skill_hub_operation_settlements(evidence_envelope_id, settled_at DESC, settlement_id DESC);
+            CREATE INDEX IF NOT EXISTS idx_skill_hub_operation_settlements_journey
+              ON skill_hub_operation_settlements(journey_event_id, settled_at DESC, settlement_id DESC);
+
+            CREATE TRIGGER IF NOT EXISTS trg_skill_hub_operation_intents_approval_binding
+            BEFORE INSERT ON skill_hub_operation_intents
+            WHEN NOT EXISTS (
+              SELECT 1
+              FROM approvals AS approval
+              WHERE approval.approval_id = NEW.approval_id
+                AND approval.status = 'approved'
+                AND approval.kind = 'skill_hub.lifecycle'
+                AND json_valid(approval.payload_json)
+                AND json_type(approval.payload_json) = 'object'
+                AND json_extract(approval.payload_json, '$.operationId') IS NEW.operation_id
+                AND json_extract(approval.payload_json, '$.requestSha256') IS NEW.request_sha256
+                AND json_extract(approval.payload_json, '$.workspaceId') IS NEW.workspace_id
+                AND json_extract(approval.payload_json, '$.operationKind') IS NEW.operation_kind
+                AND json_extract(approval.payload_json, '$.skillId') IS NEW.skill_id
+                AND json_extract(approval.payload_json, '$.snapshotId') IS NEW.snapshot_id
+                AND json_extract(approval.payload_json, '$.contentTreeSha256') IS NEW.content_tree_sha256
+                AND (SELECT COUNT(*) FROM json_each(approval.payload_json)) = 7
+                AND NOT EXISTS (
+                  SELECT 1
+                  FROM json_each(approval.payload_json) AS payload_field
+                  WHERE payload_field.key NOT IN (
+                    'operationId', 'requestSha256', 'workspaceId', 'operationKind',
+                    'skillId', 'snapshotId', 'contentTreeSha256'
+                  )
+                )
+                AND approval.linkage_json IS NOT NULL
+                AND json_valid(approval.linkage_json)
+                AND json_type(approval.linkage_json) = 'object'
+                AND json_extract(approval.linkage_json, '$.workspaceId') IS NEW.workspace_id
+                AND (NEW.session_id IS NULL OR json_extract(approval.linkage_json, '$.sessionId') IS NEW.session_id)
+                AND (NEW.turn_id IS NULL OR json_extract(approval.linkage_json, '$.turnId') IS NEW.turn_id)
+                AND (SELECT COUNT(*) FROM json_each(approval.linkage_json)) =
+                  1
+                  + CASE WHEN NEW.session_id IS NULL THEN 0 ELSE 1 END
+                  + CASE WHEN NEW.turn_id IS NULL THEN 0 ELSE 1 END
+                AND NOT EXISTS (
+                  SELECT 1
+                  FROM json_each(approval.linkage_json) AS linkage_field
+                  WHERE linkage_field.key NOT IN ('workspaceId', 'sessionId', 'turnId')
+                )
+            )
+            BEGIN
+              SELECT RAISE(ABORT, 'skill Hub operation approval does not match the immutable intent');
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_skill_hub_operation_settlements_semantic_binding
+            BEFORE INSERT ON skill_hub_operation_settlements
+            WHEN NOT EXISTS (
+              SELECT 1
+              FROM skill_hub_operation_intents AS intent
+              JOIN skill_hub_snapshot_artifacts AS artifact
+                ON artifact.workspace_id = intent.workspace_id
+                AND artifact.snapshot_id = intent.snapshot_id
+                AND artifact.content_tree_sha256 = intent.content_tree_sha256
+              JOIN runtime_evidence_envelopes AS evidence
+                ON evidence.envelope_id = NEW.evidence_envelope_id
+                AND evidence.workspace_id = intent.workspace_id
+                AND evidence.approval_id = intent.approval_id
+              JOIN governance_journey_events AS journey
+                ON journey.event_id = NEW.journey_event_id
+                AND journey.workspace_id = intent.workspace_id
+                AND journey.approval_id = intent.approval_id
+              WHERE intent.operation_id = NEW.operation_id
+                AND intent.workspace_id = NEW.workspace_id
+                AND intent.approval_id = NEW.approval_id
+                AND intent.content_tree_sha256 = NEW.content_tree_sha256
+                AND (NEW.disposition <> 'applied' OR NEW.observed_tree_sha256 = intent.content_tree_sha256)
+                AND evidence.event_kind = 'approval_resolution'
+                AND evidence.payload_hash = NEW.result_sha256
+                AND json_valid(evidence.metadata_json)
+                AND json_type(evidence.metadata_json) = 'object'
+                AND json_extract(evidence.metadata_json, '$.operationId') IS intent.operation_id
+                AND json_extract(evidence.metadata_json, '$.action') IS intent.operation_kind
+                AND json_extract(evidence.metadata_json, '$.subjectKind') = 'skill'
+                AND json_extract(evidence.metadata_json, '$.subjectId') IS intent.skill_id
+                AND json_extract(evidence.metadata_json, '$.sourceKind') = 'upstream_snapshot'
+                AND json_extract(evidence.metadata_json, '$.sourceId') IS intent.snapshot_id
+                AND json_extract(evidence.metadata_json, '$.contentTreeSha256') IS intent.content_tree_sha256
+                AND json_extract(evidence.metadata_json, '$.requestSha256') IS intent.request_sha256
+                AND json_extract(evidence.metadata_json, '$.resultSha256') IS NEW.result_sha256
+                AND journey.scope_kind = 'workspace'
+                AND journey.event_type = 'skill_hub_lifecycle'
+                AND journey.subject_kind = 'skill'
+                AND journey.subject_id = intent.skill_id
+                AND journey.action = intent.operation_kind
+                AND journey.actor_type = 'approval_effect'
+                AND journey.fingerprint = intent.request_sha256
+                AND journey.source_kind = 'upstream_snapshot'
+                AND journey.source_id = intent.snapshot_id
+                AND json_valid(journey.evidence_refs_json)
+                AND json_type(journey.evidence_refs_json) = 'array'
+                AND EXISTS (
+                  SELECT 1 FROM json_each(journey.evidence_refs_json) AS ref
+                  WHERE json_extract(ref.value, '$.owner') = 'approval'
+                    AND json_extract(ref.value, '$.refId') = intent.approval_id
+                )
+                AND EXISTS (
+                  SELECT 1 FROM json_each(journey.evidence_refs_json) AS ref
+                  WHERE json_extract(ref.value, '$.owner') = 'upstream_snapshot'
+                    AND json_extract(ref.value, '$.refId') = intent.snapshot_id
+                )
+                AND EXISTS (
+                  SELECT 1 FROM json_each(journey.evidence_refs_json) AS ref
+                  WHERE json_extract(ref.value, '$.owner') = 'artifact'
+                    AND json_extract(ref.value, '$.refId') = artifact.artifact_id
+                )
+                AND json_valid(journey.provenance_json)
+                AND json_extract(journey.provenance_json, '$.approvalRequired') = 1
+                AND json_extract(journey.provenance_json, '$.sourceRequired') = 1
+                AND json_valid(journey.summary_json)
+                AND json_extract(journey.summary_json, '$.operationId') IS intent.operation_id
+                AND json_extract(journey.summary_json, '$.requestSha256') IS intent.request_sha256
+                AND json_extract(journey.summary_json, '$.contentTreeSha256') IS intent.content_tree_sha256
+                AND json_extract(journey.summary_json, '$.resultSha256') IS NEW.result_sha256
+            )
+            BEGIN
+              SELECT RAISE(ABORT, 'skill Hub settlement evidence or Journey binding does not match the operation');
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_skill_hub_snapshot_artifacts_no_update
+            BEFORE UPDATE ON skill_hub_snapshot_artifacts
+            BEGIN SELECT RAISE(ABORT, 'skill Hub snapshot artifacts are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_skill_hub_snapshot_artifacts_no_delete
+            BEFORE DELETE ON skill_hub_snapshot_artifacts
+            BEGIN SELECT RAISE(ABORT, 'skill Hub snapshot artifacts are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_skill_hub_operation_intents_no_update
+            BEFORE UPDATE ON skill_hub_operation_intents
+            BEGIN SELECT RAISE(ABORT, 'skill Hub operation intents are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_skill_hub_operation_intents_no_delete
+            BEFORE DELETE ON skill_hub_operation_intents
+            BEGIN SELECT RAISE(ABORT, 'skill Hub operation intents are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_skill_hub_operation_settlements_no_update
+            BEFORE UPDATE ON skill_hub_operation_settlements
+            BEGIN SELECT RAISE(ABORT, 'skill Hub operation settlements are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_skill_hub_operation_settlements_no_delete
+            BEFORE DELETE ON skill_hub_operation_settlements
+            BEGIN SELECT RAISE(ABORT, 'skill Hub operation settlements are immutable'); END;
+          `);
+        },
+      },
+      {
+        version: 166,
+        name: "governed_external_sources_foundation",
+        up: (db) => {
+          const requiredAuthorityTables = [
+            "workspaces",
+            "workspace_path_bridge_snapshots",
+            "chat_session_meta",
+            "approvals",
+            "knowledge_documents",
+            "chat_thread_knowledge_attachments",
+          ];
+          if (requiredAuthorityTables.some((tableName) => !tableExists(db, tableName))) {
+            // Synthetic and repair-oriented sparse databases may legitimately
+            // contain only one historic owner slice. Do not invent competing
+            // parent schemas or backfill them from this additive feature lane.
+            return;
+          }
+          db.exec(`
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_path_bridge_workspace_snapshot_hash
+              ON workspace_path_bridge_snapshots(workspace_id, snapshot_id, snapshot_sha256);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_session_meta_workspace_session
+              ON chat_session_meta(workspace_id, session_id);
+
+            CREATE TABLE IF NOT EXISTS external_source_configs (
+              workspace_id TEXT NOT NULL CHECK(length(TRIM(workspace_id)) BETWEEN 1 AND 256),
+              source_id TEXT NOT NULL CHECK(length(TRIM(source_id)) BETWEEN 1 AND 256),
+              schema_version TEXT NOT NULL CHECK(schema_version = 'goatcitadel.external-source.v1'),
+              kind TEXT NOT NULL CHECK(kind IN ('codex_sessions', 'codex_memory', 'claude_sessions', 'claude_memory')),
+              label TEXT NOT NULL CHECK(length(TRIM(label)) BETWEEN 1 AND 256),
+              owner_actor_id TEXT NOT NULL CHECK(length(TRIM(owner_actor_id)) BETWEEN 1 AND 256),
+              auth_actor_id TEXT NOT NULL CHECK(length(TRIM(auth_actor_id)) BETWEEN 1 AND 256),
+              auth_actor_source TEXT NOT NULL CHECK(auth_actor_source IN ('token', 'basic', 'loopback', 'device_grant', 'none')),
+              canonical_root_path TEXT NOT NULL CHECK(
+                length(TRIM(canonical_root_path)) > 1 AND length(CAST(canonical_root_path AS BLOB)) <= 2048
+              ),
+              root_identity_sha256 TEXT NOT NULL CHECK(length(root_identity_sha256) = 64 AND root_identity_sha256 NOT GLOB '*[^0-9a-f]*'),
+              path_bridge_snapshot_id TEXT NOT NULL CHECK(length(TRIM(path_bridge_snapshot_id)) BETWEEN 1 AND 256),
+              path_bridge_snapshot_sha256 TEXT NOT NULL CHECK(length(path_bridge_snapshot_sha256) = 64 AND path_bridge_snapshot_sha256 NOT GLOB '*[^0-9a-f]*'),
+              allowed_roots_sha256 TEXT NOT NULL CHECK(length(allowed_roots_sha256) = 64 AND allowed_roots_sha256 NOT GLOB '*[^0-9a-f]*'),
+              input_flavor TEXT NOT NULL CHECK(input_flavor IN ('windows_native', 'windows_forward', 'msys', 'wsl')),
+              target_flavor TEXT NOT NULL CHECK(target_flavor IN ('windows_native', 'windows_forward', 'msys', 'wsl')),
+              distro TEXT CHECK(distro IS NULL OR length(TRIM(distro)) BETWEEN 1 AND 64),
+              require_git_identity INTEGER NOT NULL CHECK(require_git_identity IN (0, 1)),
+              git_identity_sha256 TEXT CHECK(git_identity_sha256 IS NULL OR (length(git_identity_sha256) = 64 AND git_identity_sha256 NOT GLOB '*[^0-9a-f]*')),
+              root_grant_approval_id TEXT CHECK(root_grant_approval_id IS NULL OR length(TRIM(root_grant_approval_id)) BETWEEN 1 AND 256),
+              ownership_attestation_sha256 TEXT NOT NULL CHECK(length(ownership_attestation_sha256) = 64 AND ownership_attestation_sha256 NOT GLOB '*[^0-9a-f]*'),
+              adapter_id TEXT NOT NULL CHECK(adapter_id IN ('codex.rollout-jsonl.v1', 'codex.memory-markdown.v1', 'claude.project-jsonl.v1', 'claude.memory-markdown.v1')),
+              adapter_version TEXT NOT NULL CHECK(length(TRIM(adapter_version)) BETWEEN 1 AND 128),
+              adapter_policy_json TEXT NOT NULL CHECK(json_valid(adapter_policy_json) AND json_type(adapter_policy_json) = 'object' AND length(CAST(adapter_policy_json AS BLOB)) <= 16384),
+              revision INTEGER NOT NULL CHECK(typeof(revision) = 'integer' AND revision > 0),
+              config_sha256 TEXT NOT NULL CHECK(length(config_sha256) = 64 AND config_sha256 NOT GLOB '*[^0-9a-f]*'),
+              status TEXT NOT NULL CHECK(status IN ('active', 'disabled', 'revoked')),
+              record_json TEXT NOT NULL CHECK(json_valid(record_json) AND json_type(record_json) = 'object' AND length(CAST(record_json AS BLOB)) <= 65536),
+              created_at TEXT NOT NULL CHECK(length(TRIM(created_at)) > 0),
+              updated_at TEXT NOT NULL CHECK(length(TRIM(updated_at)) > 0),
+              PRIMARY KEY(workspace_id, source_id),
+              UNIQUE(workspace_id, source_id, revision, config_sha256),
+              FOREIGN KEY(workspace_id) REFERENCES workspaces(workspace_id) ON DELETE RESTRICT,
+              FOREIGN KEY(workspace_id, path_bridge_snapshot_id, path_bridge_snapshot_sha256)
+                REFERENCES workspace_path_bridge_snapshots(workspace_id, snapshot_id, snapshot_sha256) ON DELETE RESTRICT,
+              CHECK((require_git_identity = 1 AND git_identity_sha256 IS NOT NULL) OR (require_git_identity = 0 AND git_identity_sha256 IS NULL)),
+              CHECK(((input_flavor = 'wsl' OR target_flavor = 'wsl') AND distro IS NOT NULL) OR (input_flavor <> 'wsl' AND target_flavor <> 'wsl' AND distro IS NULL))
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_external_source_configs_active_identity
+              ON external_source_configs(workspace_id, kind, root_identity_sha256) WHERE status = 'active';
+            CREATE INDEX IF NOT EXISTS idx_external_source_configs_workspace_status
+              ON external_source_configs(workspace_id, status, updated_at DESC, source_id DESC);
+
+            CREATE TABLE IF NOT EXISTS external_source_scans (
+              workspace_id TEXT NOT NULL,
+              scan_id TEXT NOT NULL CHECK(length(TRIM(scan_id)) BETWEEN 1 AND 256),
+              source_id TEXT NOT NULL CHECK(length(TRIM(source_id)) BETWEEN 1 AND 256),
+              schema_version TEXT NOT NULL CHECK(schema_version = 'goatcitadel.external-source.v1'),
+              config_revision INTEGER NOT NULL CHECK(typeof(config_revision) = 'integer' AND config_revision > 0),
+              config_sha256 TEXT NOT NULL CHECK(length(config_sha256) = 64 AND config_sha256 NOT GLOB '*[^0-9a-f]*'),
+              root_identity_sha256 TEXT NOT NULL CHECK(length(root_identity_sha256) = 64 AND root_identity_sha256 NOT GLOB '*[^0-9a-f]*'),
+              path_bridge_snapshot_sha256 TEXT NOT NULL CHECK(length(path_bridge_snapshot_sha256) = 64 AND path_bridge_snapshot_sha256 NOT GLOB '*[^0-9a-f]*'),
+              adapter_id TEXT NOT NULL CHECK(adapter_id IN ('codex.rollout-jsonl.v1', 'codex.memory-markdown.v1', 'claude.project-jsonl.v1', 'claude.memory-markdown.v1')),
+              adapter_version TEXT NOT NULL CHECK(length(TRIM(adapter_version)) BETWEEN 1 AND 128),
+              manifest_sha256 TEXT NOT NULL CHECK(length(manifest_sha256) = 64 AND manifest_sha256 NOT GLOB '*[^0-9a-f]*'),
+              high_water_mtime_ns TEXT CHECK(high_water_mtime_ns IS NULL OR (length(high_water_mtime_ns) = 20 AND high_water_mtime_ns NOT GLOB '*[^0-9]*')),
+              high_water_item_id TEXT CHECK(high_water_item_id IS NULL OR length(TRIM(high_water_item_id)) BETWEEN 1 AND 256),
+              examined_entry_count INTEGER NOT NULL CHECK(typeof(examined_entry_count) = 'integer' AND examined_entry_count BETWEEN 0 AND 10000),
+              item_count INTEGER NOT NULL CHECK(typeof(item_count) = 'integer' AND item_count BETWEEN 0 AND 5000),
+              supported_item_count INTEGER NOT NULL CHECK(typeof(supported_item_count) = 'integer' AND supported_item_count BETWEEN 0 AND 5000),
+              quarantined_item_count INTEGER NOT NULL CHECK(typeof(quarantined_item_count) = 'integer' AND quarantined_item_count BETWEEN 0 AND 5000),
+              blocker_codes_json TEXT NOT NULL CHECK(json_valid(blocker_codes_json) AND json_type(blocker_codes_json) = 'array' AND length(CAST(blocker_codes_json AS BLOB)) <= 8192),
+              status TEXT NOT NULL CHECK(status IN ('sealed', 'blocked')),
+              record_json TEXT NOT NULL CHECK(json_valid(record_json) AND json_type(record_json) = 'object' AND length(CAST(record_json AS BLOB)) <= 65536),
+              started_at TEXT NOT NULL,
+              completed_at TEXT NOT NULL,
+              PRIMARY KEY(workspace_id, scan_id),
+              UNIQUE(workspace_id, scan_id, source_id),
+              FOREIGN KEY(workspace_id, source_id) REFERENCES external_source_configs(workspace_id, source_id) ON DELETE RESTRICT,
+              CHECK((item_count = 0 AND high_water_mtime_ns IS NULL AND high_water_item_id IS NULL) OR (item_count > 0 AND high_water_mtime_ns IS NOT NULL AND high_water_item_id IS NOT NULL)),
+              CHECK(supported_item_count + quarantined_item_count <= item_count)
+            );
+            CREATE INDEX IF NOT EXISTS idx_external_source_scans_source_completed
+              ON external_source_scans(workspace_id, source_id, completed_at DESC, scan_id DESC);
+
+            CREATE TABLE IF NOT EXISTS external_source_catalog_items (
+              workspace_id TEXT NOT NULL,
+              scan_id TEXT NOT NULL,
+              source_id TEXT NOT NULL,
+              item_id TEXT NOT NULL CHECK(length(TRIM(item_id)) BETWEEN 1 AND 256),
+              schema_version TEXT NOT NULL CHECK(schema_version = 'goatcitadel.external-source.v1'),
+              adapter_id TEXT NOT NULL CHECK(adapter_id IN ('codex.rollout-jsonl.v1', 'codex.memory-markdown.v1', 'claude.project-jsonl.v1', 'claude.memory-markdown.v1')),
+              adapter_version TEXT NOT NULL CHECK(length(TRIM(adapter_version)) BETWEEN 1 AND 128),
+              normalized_relative_path TEXT NOT NULL CHECK(length(TRIM(normalized_relative_path)) BETWEEN 1 AND 2048),
+              alias_paths_json TEXT NOT NULL CHECK(json_valid(alias_paths_json) AND json_type(alias_paths_json) = 'array' AND length(CAST(alias_paths_json AS BLOB)) <= 16384),
+              foreign_id_sha256 TEXT NOT NULL CHECK(length(foreign_id_sha256) = 64 AND foreign_id_sha256 NOT GLOB '*[^0-9a-f]*'),
+              producer_version TEXT CHECK(producer_version IS NULL OR length(TRIM(producer_version)) BETWEEN 1 AND 128),
+              observed_mtime_ns TEXT NOT NULL CHECK(length(observed_mtime_ns) = 20 AND observed_mtime_ns NOT GLOB '*[^0-9]*'),
+              file_identity_sha256 TEXT NOT NULL CHECK(length(file_identity_sha256) = 64 AND file_identity_sha256 NOT GLOB '*[^0-9a-f]*'),
+              stat_fingerprint_sha256 TEXT NOT NULL CHECK(length(stat_fingerprint_sha256) = 64 AND stat_fingerprint_sha256 NOT GLOB '*[^0-9a-f]*'),
+              raw_sha256 TEXT NOT NULL CHECK(length(raw_sha256) = 64 AND raw_sha256 NOT GLOB '*[^0-9a-f]*'),
+              raw_byte_count INTEGER NOT NULL CHECK(typeof(raw_byte_count) = 'integer' AND raw_byte_count BETWEEN 0 AND 16777216),
+              message_count INTEGER NOT NULL CHECK(typeof(message_count) = 'integer' AND message_count BETWEEN 0 AND 10000),
+              lineage_node_count INTEGER NOT NULL CHECK(typeof(lineage_node_count) = 'integer' AND lineage_node_count BETWEEN 0 AND 10000),
+              lineage_depth INTEGER NOT NULL CHECK(typeof(lineage_depth) = 'integer' AND lineage_depth BETWEEN 0 AND 64),
+              lineage_sha256 TEXT NOT NULL CHECK(length(lineage_sha256) = 64 AND lineage_sha256 NOT GLOB '*[^0-9a-f]*'),
+              disposition TEXT NOT NULL CHECK(disposition IN ('supported', 'unsupported_variant', 'quarantined', 'conflicting', 'blocked')),
+              reason_codes_json TEXT NOT NULL CHECK(json_valid(reason_codes_json) AND json_type(reason_codes_json) = 'array' AND length(CAST(reason_codes_json AS BLOB)) <= 8192),
+              catalog_item_sha256 TEXT NOT NULL CHECK(length(catalog_item_sha256) = 64 AND catalog_item_sha256 NOT GLOB '*[^0-9a-f]*'),
+              record_json TEXT NOT NULL CHECK(json_valid(record_json) AND json_type(record_json) = 'object' AND length(CAST(record_json AS BLOB)) <= 65536),
+              PRIMARY KEY(workspace_id, scan_id, item_id),
+              UNIQUE(workspace_id, scan_id, item_id, raw_sha256),
+              FOREIGN KEY(workspace_id, scan_id, source_id) REFERENCES external_source_scans(workspace_id, scan_id, source_id) ON DELETE RESTRICT,
+              CHECK(disposition <> 'supported' OR reason_codes_json = '[]')
+            );
+            CREATE INDEX IF NOT EXISTS idx_external_source_catalog_page
+              ON external_source_catalog_items(workspace_id, scan_id, observed_mtime_ns DESC, item_id DESC);
+            CREATE INDEX IF NOT EXISTS idx_external_source_catalog_foreign_identity
+              ON external_source_catalog_items(workspace_id, source_id, foreign_id_sha256, raw_sha256);
+
+            CREATE TABLE IF NOT EXISTS external_source_import_plans (
+              workspace_id TEXT NOT NULL,
+              plan_id TEXT NOT NULL CHECK(length(TRIM(plan_id)) BETWEEN 1 AND 256),
+              source_id TEXT NOT NULL,
+              scan_id TEXT NOT NULL,
+              schema_version TEXT NOT NULL CHECK(schema_version = 'goatcitadel.external-source.v1'),
+              config_revision INTEGER NOT NULL CHECK(typeof(config_revision) = 'integer' AND config_revision > 0),
+              config_sha256 TEXT NOT NULL CHECK(length(config_sha256) = 64 AND config_sha256 NOT GLOB '*[^0-9a-f]*'),
+              manifest_sha256 TEXT NOT NULL CHECK(length(manifest_sha256) = 64 AND manifest_sha256 NOT GLOB '*[^0-9a-f]*'),
+              adapter_versions_json TEXT NOT NULL CHECK(json_valid(adapter_versions_json) AND json_type(adapter_versions_json) = 'array' AND length(CAST(adapter_versions_json AS BLOB)) <= 8192),
+              selected_item_ids_json TEXT NOT NULL CHECK(json_valid(selected_item_ids_json) AND json_type(selected_item_ids_json) = 'array' AND json_array_length(selected_item_ids_json) BETWEEN 1 AND 100 AND length(CAST(selected_item_ids_json AS BLOB)) <= 32768),
+              selected_item_set_sha256 TEXT NOT NULL CHECK(length(selected_item_set_sha256) = 64 AND selected_item_set_sha256 NOT GLOB '*[^0-9a-f]*'),
+              raw_set_sha256 TEXT NOT NULL CHECK(length(raw_set_sha256) = 64 AND raw_set_sha256 NOT GLOB '*[^0-9a-f]*'),
+              raw_byte_count INTEGER NOT NULL CHECK(typeof(raw_byte_count) = 'integer' AND raw_byte_count BETWEEN 0 AND 26214400),
+              normalized_set_sha256 TEXT NOT NULL CHECK(length(normalized_set_sha256) = 64 AND normalized_set_sha256 NOT GLOB '*[^0-9a-f]*'),
+              normalized_byte_count INTEGER NOT NULL CHECK(typeof(normalized_byte_count) = 'integer' AND normalized_byte_count BETWEEN 0 AND 26214400),
+              message_count INTEGER NOT NULL CHECK(typeof(message_count) = 'integer' AND message_count BETWEEN 0 AND 50000),
+              blocker_codes_json TEXT NOT NULL CHECK(json_valid(blocker_codes_json) AND json_type(blocker_codes_json) = 'array' AND length(CAST(blocker_codes_json AS BLOB)) <= 8192),
+              staging_lease_id TEXT NOT NULL CHECK(length(TRIM(staging_lease_id)) BETWEEN 1 AND 256),
+              staging_expires_at TEXT NOT NULL,
+              plan_sha256 TEXT NOT NULL CHECK(length(plan_sha256) = 64 AND plan_sha256 NOT GLOB '*[^0-9a-f]*'),
+              record_json TEXT NOT NULL CHECK(json_valid(record_json) AND json_type(record_json) = 'object' AND length(CAST(record_json AS BLOB)) <= 65536),
+              created_at TEXT NOT NULL,
+              PRIMARY KEY(workspace_id, plan_id),
+              UNIQUE(workspace_id, plan_id, plan_sha256),
+              FOREIGN KEY(workspace_id, scan_id, source_id) REFERENCES external_source_scans(workspace_id, scan_id, source_id) ON DELETE RESTRICT
+            );
+            CREATE INDEX IF NOT EXISTS idx_external_source_import_plans_source_created
+              ON external_source_import_plans(workspace_id, source_id, created_at DESC, plan_id DESC);
+
+            CREATE TABLE IF NOT EXISTS external_source_import_intents (
+              workspace_id TEXT NOT NULL,
+              import_id TEXT NOT NULL CHECK(length(TRIM(import_id)) BETWEEN 1 AND 256),
+              idempotency_key TEXT NOT NULL CHECK(length(TRIM(idempotency_key)) BETWEEN 1 AND 512),
+              source_id TEXT NOT NULL,
+              scan_id TEXT NOT NULL,
+              plan_id TEXT NOT NULL,
+              schema_version TEXT NOT NULL CHECK(schema_version = 'goatcitadel.external-source.v1'),
+              config_revision INTEGER NOT NULL CHECK(typeof(config_revision) = 'integer' AND config_revision > 0),
+              config_sha256 TEXT NOT NULL CHECK(length(config_sha256) = 64 AND config_sha256 NOT GLOB '*[^0-9a-f]*'),
+              manifest_sha256 TEXT NOT NULL CHECK(length(manifest_sha256) = 64 AND manifest_sha256 NOT GLOB '*[^0-9a-f]*'),
+              plan_sha256 TEXT NOT NULL CHECK(length(plan_sha256) = 64 AND plan_sha256 NOT GLOB '*[^0-9a-f]*'),
+              selected_item_set_sha256 TEXT NOT NULL CHECK(length(selected_item_set_sha256) = 64 AND selected_item_set_sha256 NOT GLOB '*[^0-9a-f]*'),
+              adapter_versions_json TEXT NOT NULL CHECK(json_valid(adapter_versions_json) AND json_type(adapter_versions_json) = 'array' AND length(CAST(adapter_versions_json AS BLOB)) <= 8192),
+              request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+              record_json TEXT NOT NULL CHECK(json_valid(record_json) AND json_type(record_json) = 'object' AND length(CAST(record_json AS BLOB)) <= 65536),
+              admitted_at TEXT NOT NULL,
+              PRIMARY KEY(workspace_id, import_id),
+              UNIQUE(workspace_id, idempotency_key),
+              UNIQUE(workspace_id, import_id, source_id),
+              UNIQUE(workspace_id, import_id, scan_id),
+              UNIQUE(workspace_id, import_id, source_id, scan_id),
+              FOREIGN KEY(workspace_id, plan_id, plan_sha256) REFERENCES external_source_import_plans(workspace_id, plan_id, plan_sha256) ON DELETE RESTRICT
+            );
+            CREATE INDEX IF NOT EXISTS idx_external_source_import_intents_source_admitted
+              ON external_source_import_intents(workspace_id, source_id, admitted_at DESC, import_id DESC);
+
+            CREATE TABLE IF NOT EXISTS external_source_import_items (
+              workspace_id TEXT NOT NULL,
+              import_id TEXT NOT NULL,
+              scan_id TEXT NOT NULL,
+              item_id TEXT NOT NULL,
+              schema_version TEXT NOT NULL CHECK(schema_version = 'goatcitadel.external-source.v1'),
+              ordinal INTEGER NOT NULL CHECK(typeof(ordinal) = 'integer' AND ordinal BETWEEN 0 AND 99),
+              adapter_id TEXT NOT NULL CHECK(adapter_id IN ('codex.rollout-jsonl.v1', 'codex.memory-markdown.v1', 'claude.project-jsonl.v1', 'claude.memory-markdown.v1')),
+              adapter_version TEXT NOT NULL CHECK(length(TRIM(adapter_version)) BETWEEN 1 AND 128),
+              producer_version TEXT CHECK(producer_version IS NULL OR length(TRIM(producer_version)) BETWEEN 1 AND 128),
+              raw_sha256 TEXT NOT NULL CHECK(length(raw_sha256) = 64 AND raw_sha256 NOT GLOB '*[^0-9a-f]*'),
+              raw_byte_count INTEGER NOT NULL CHECK(typeof(raw_byte_count) = 'integer' AND raw_byte_count BETWEEN 0 AND 16777216),
+              normalized_artifact_sha256 TEXT NOT NULL CHECK(length(normalized_artifact_sha256) = 64 AND normalized_artifact_sha256 NOT GLOB '*[^0-9a-f]*'),
+              normalized_byte_count INTEGER NOT NULL CHECK(typeof(normalized_byte_count) = 'integer' AND normalized_byte_count BETWEEN 0 AND 8388608),
+              artifact_relative_key TEXT NOT NULL CHECK(length(TRIM(artifact_relative_key)) BETWEEN 1 AND 2048 AND artifact_relative_key LIKE 'external-sources/sha256/%'),
+              provenance_sha256 TEXT NOT NULL CHECK(length(provenance_sha256) = 64 AND provenance_sha256 NOT GLOB '*[^0-9a-f]*'),
+              record_json TEXT NOT NULL CHECK(json_valid(record_json) AND json_type(record_json) = 'object' AND length(CAST(record_json AS BLOB)) <= 65536),
+              created_at TEXT NOT NULL,
+              PRIMARY KEY(workspace_id, import_id, item_id),
+              UNIQUE(workspace_id, import_id, ordinal),
+              UNIQUE(workspace_id, import_id, item_id, normalized_artifact_sha256),
+              FOREIGN KEY(workspace_id, import_id) REFERENCES external_source_import_intents(workspace_id, import_id) ON DELETE RESTRICT,
+              FOREIGN KEY(workspace_id, scan_id, item_id, raw_sha256) REFERENCES external_source_catalog_items(workspace_id, scan_id, item_id, raw_sha256) ON DELETE RESTRICT
+            );
+            CREATE INDEX IF NOT EXISTS idx_external_source_import_items_artifact
+              ON external_source_import_items(workspace_id, normalized_artifact_sha256, import_id, ordinal);
+
+            CREATE TABLE IF NOT EXISTS external_source_import_settlements (
+              workspace_id TEXT NOT NULL,
+              settlement_id TEXT NOT NULL CHECK(length(TRIM(settlement_id)) BETWEEN 1 AND 256),
+              import_id TEXT NOT NULL,
+              schema_version TEXT NOT NULL CHECK(schema_version = 'goatcitadel.external-source.v1'),
+              disposition TEXT NOT NULL CHECK(disposition IN ('applied', 'blocked', 'manual_reconciliation')),
+              artifact_set_sha256 TEXT CHECK(artifact_set_sha256 IS NULL OR (length(artifact_set_sha256) = 64 AND artifact_set_sha256 NOT GLOB '*[^0-9a-f]*')),
+              artifacts_verified_at TEXT,
+              blocker_codes_json TEXT NOT NULL CHECK(json_valid(blocker_codes_json) AND json_type(blocker_codes_json) = 'array' AND length(CAST(blocker_codes_json AS BLOB)) <= 8192),
+              result_sha256 TEXT NOT NULL CHECK(length(result_sha256) = 64 AND result_sha256 NOT GLOB '*[^0-9a-f]*'),
+              journey_event_id TEXT CHECK(journey_event_id IS NULL OR length(TRIM(journey_event_id)) BETWEEN 1 AND 256),
+              record_json TEXT NOT NULL CHECK(json_valid(record_json) AND json_type(record_json) = 'object' AND length(CAST(record_json AS BLOB)) <= 65536),
+              settled_at TEXT NOT NULL,
+              PRIMARY KEY(workspace_id, settlement_id),
+              UNIQUE(workspace_id, import_id),
+              FOREIGN KEY(workspace_id, import_id) REFERENCES external_source_import_intents(workspace_id, import_id) ON DELETE RESTRICT,
+              CHECK((disposition = 'applied' AND artifact_set_sha256 IS NOT NULL AND artifacts_verified_at IS NOT NULL AND blocker_codes_json = '[]') OR (disposition <> 'applied' AND artifact_set_sha256 IS NULL AND artifacts_verified_at IS NULL AND blocker_codes_json <> '[]'))
+            );
+
+            CREATE TABLE IF NOT EXISTS chat_external_source_attachments (
+              workspace_id TEXT NOT NULL,
+              attachment_id TEXT NOT NULL CHECK(length(TRIM(attachment_id)) BETWEEN 1 AND 256),
+              session_id TEXT NOT NULL CHECK(length(TRIM(session_id)) BETWEEN 1 AND 256),
+              source_id TEXT NOT NULL CHECK(length(TRIM(source_id)) BETWEEN 1 AND 256),
+              import_id TEXT NOT NULL,
+              item_id TEXT NOT NULL,
+              normalized_artifact_sha256 TEXT NOT NULL CHECK(length(normalized_artifact_sha256) = 64 AND normalized_artifact_sha256 NOT GLOB '*[^0-9a-f]*'),
+              schema_version TEXT NOT NULL CHECK(schema_version = 'goatcitadel.external-source.v1'),
+              mode TEXT NOT NULL CHECK(mode = 'read_only_external'),
+              status TEXT NOT NULL CHECK(status IN ('attached', 'detached')),
+              revision INTEGER NOT NULL CHECK(typeof(revision) = 'integer' AND revision > 0),
+              attached_by_actor_id TEXT NOT NULL CHECK(length(TRIM(attached_by_actor_id)) BETWEEN 1 AND 256),
+              attached_at TEXT NOT NULL,
+              detached_by_actor_id TEXT,
+              detached_at TEXT,
+              record_json TEXT NOT NULL CHECK(json_valid(record_json) AND json_type(record_json) = 'object' AND length(CAST(record_json AS BLOB)) <= 65536),
+              PRIMARY KEY(workspace_id, attachment_id),
+              UNIQUE(workspace_id, session_id, import_id, item_id),
+              FOREIGN KEY(workspace_id, session_id) REFERENCES chat_session_meta(workspace_id, session_id) ON DELETE RESTRICT,
+              FOREIGN KEY(workspace_id, import_id, source_id) REFERENCES external_source_import_intents(workspace_id, import_id, source_id) ON DELETE RESTRICT,
+              FOREIGN KEY(workspace_id, import_id, item_id, normalized_artifact_sha256) REFERENCES external_source_import_items(workspace_id, import_id, item_id, normalized_artifact_sha256) ON DELETE RESTRICT,
+              CHECK((status = 'attached' AND detached_by_actor_id IS NULL AND detached_at IS NULL) OR (status = 'detached' AND detached_by_actor_id IS NOT NULL AND length(TRIM(detached_by_actor_id)) BETWEEN 1 AND 256 AND detached_at IS NOT NULL))
+            );
+            CREATE INDEX IF NOT EXISTS idx_chat_external_source_attachments_session_status
+              ON chat_external_source_attachments(workspace_id, session_id, status, attached_at DESC, attachment_id DESC);
+
+            CREATE TABLE IF NOT EXISTS external_source_knowledge_links (
+              workspace_id TEXT NOT NULL,
+              link_id TEXT NOT NULL CHECK(length(TRIM(link_id)) BETWEEN 1 AND 256),
+              source_id TEXT NOT NULL,
+              import_id TEXT NOT NULL,
+              item_id TEXT NOT NULL,
+              normalized_artifact_sha256 TEXT NOT NULL,
+              schema_version TEXT NOT NULL CHECK(schema_version = 'goatcitadel.external-source.v1'),
+              approval_id TEXT NOT NULL CHECK(length(TRIM(approval_id)) BETWEEN 1 AND 256),
+              knowledge_document_id TEXT NOT NULL CHECK(length(TRIM(knowledge_document_id)) BETWEEN 1 AND 256),
+              thread_knowledge_attachment_id TEXT CHECK(thread_knowledge_attachment_id IS NULL OR length(TRIM(thread_knowledge_attachment_id)) BETWEEN 1 AND 256),
+              provenance_sha256 TEXT NOT NULL CHECK(length(provenance_sha256) = 64 AND provenance_sha256 NOT GLOB '*[^0-9a-f]*'),
+              record_json TEXT NOT NULL CHECK(json_valid(record_json) AND json_type(record_json) = 'object' AND length(CAST(record_json AS BLOB)) <= 65536),
+              created_at TEXT NOT NULL,
+              PRIMARY KEY(workspace_id, link_id),
+              UNIQUE(workspace_id, approval_id, import_id, item_id),
+              UNIQUE(workspace_id, import_id, item_id, knowledge_document_id),
+              FOREIGN KEY(workspace_id, import_id, source_id) REFERENCES external_source_import_intents(workspace_id, import_id, source_id) ON DELETE RESTRICT,
+              FOREIGN KEY(workspace_id, import_id, item_id, normalized_artifact_sha256) REFERENCES external_source_import_items(workspace_id, import_id, item_id, normalized_artifact_sha256) ON DELETE RESTRICT,
+              FOREIGN KEY(approval_id) REFERENCES approvals(approval_id) ON DELETE RESTRICT,
+              FOREIGN KEY(knowledge_document_id) REFERENCES knowledge_documents(doc_id) ON DELETE RESTRICT,
+              FOREIGN KEY(thread_knowledge_attachment_id) REFERENCES chat_thread_knowledge_attachments(attachment_id) ON DELETE RESTRICT
+            );
+
+            CREATE TRIGGER IF NOT EXISTS trg_external_source_configs_active_cap_insert
+            BEFORE INSERT ON external_source_configs WHEN NEW.status = 'active'
+            AND NOT EXISTS (
+              SELECT 1 FROM external_source_configs
+              WHERE workspace_id = NEW.workspace_id AND source_id = NEW.source_id
+            ) AND (
+              SELECT COUNT(*) FROM external_source_configs WHERE workspace_id = NEW.workspace_id AND status = 'active'
+            ) >= 16 BEGIN SELECT RAISE(ABORT, 'external source active-root limit exceeded'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_external_source_configs_active_cap_update
+            BEFORE UPDATE ON external_source_configs WHEN OLD.status <> 'active' AND NEW.status = 'active' AND (
+              SELECT COUNT(*) FROM external_source_configs WHERE workspace_id = NEW.workspace_id AND status = 'active'
+            ) >= 16 BEGIN SELECT RAISE(ABORT, 'external source active-root limit exceeded'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_external_source_configs_cas
+            BEFORE UPDATE ON external_source_configs WHEN
+              NEW.workspace_id IS NOT OLD.workspace_id OR NEW.source_id IS NOT OLD.source_id OR NEW.kind IS NOT OLD.kind OR
+              NEW.owner_actor_id IS NOT OLD.owner_actor_id OR NEW.auth_actor_id IS NOT OLD.auth_actor_id OR
+              NEW.auth_actor_source IS NOT OLD.auth_actor_source OR NEW.canonical_root_path IS NOT OLD.canonical_root_path OR
+              NEW.root_identity_sha256 IS NOT OLD.root_identity_sha256 OR NEW.path_bridge_snapshot_id IS NOT OLD.path_bridge_snapshot_id OR
+              NEW.path_bridge_snapshot_sha256 IS NOT OLD.path_bridge_snapshot_sha256 OR NEW.allowed_roots_sha256 IS NOT OLD.allowed_roots_sha256 OR
+              NEW.input_flavor IS NOT OLD.input_flavor OR NEW.target_flavor IS NOT OLD.target_flavor OR NEW.distro IS NOT OLD.distro OR
+              NEW.require_git_identity IS NOT OLD.require_git_identity OR NEW.git_identity_sha256 IS NOT OLD.git_identity_sha256 OR
+              NEW.root_grant_approval_id IS NOT OLD.root_grant_approval_id OR NEW.ownership_attestation_sha256 IS NOT OLD.ownership_attestation_sha256 OR
+              NEW.adapter_id IS NOT OLD.adapter_id OR NEW.created_at IS NOT OLD.created_at OR NEW.revision <> OLD.revision + 1 OR OLD.status = 'revoked'
+            BEGIN SELECT RAISE(ABORT, 'external source config CAS or immutable identity violated'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_external_source_configs_no_delete BEFORE DELETE ON external_source_configs
+            BEGIN SELECT RAISE(ABORT, 'external source configs cannot be deleted'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_external_source_scans_no_update BEFORE UPDATE ON external_source_scans BEGIN SELECT RAISE(ABORT, 'external source scans are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_external_source_scans_no_delete BEFORE DELETE ON external_source_scans BEGIN SELECT RAISE(ABORT, 'external source scans are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_external_source_catalog_no_update BEFORE UPDATE ON external_source_catalog_items BEGIN SELECT RAISE(ABORT, 'external source catalog items are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_external_source_catalog_no_delete BEFORE DELETE ON external_source_catalog_items BEGIN SELECT RAISE(ABORT, 'external source catalog items are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_external_source_plans_no_update BEFORE UPDATE ON external_source_import_plans BEGIN SELECT RAISE(ABORT, 'external source import plans are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_external_source_plans_no_delete BEFORE DELETE ON external_source_import_plans BEGIN SELECT RAISE(ABORT, 'external source import plans are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_external_source_intents_no_update BEFORE UPDATE ON external_source_import_intents BEGIN SELECT RAISE(ABORT, 'external source import intents are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_external_source_intents_no_delete BEFORE DELETE ON external_source_import_intents BEGIN SELECT RAISE(ABORT, 'external source import intents are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_external_source_items_no_update BEFORE UPDATE ON external_source_import_items BEGIN SELECT RAISE(ABORT, 'external source import items are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_external_source_items_no_delete BEFORE DELETE ON external_source_import_items BEGIN SELECT RAISE(ABORT, 'external source import items are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_external_source_settlements_no_update BEFORE UPDATE ON external_source_import_settlements BEGIN SELECT RAISE(ABORT, 'external source import settlements are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_external_source_settlements_no_delete BEFORE DELETE ON external_source_import_settlements BEGIN SELECT RAISE(ABORT, 'external source import settlements are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_external_source_knowledge_links_no_update BEFORE UPDATE ON external_source_knowledge_links BEGIN SELECT RAISE(ABORT, 'external source knowledge links are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_external_source_knowledge_links_no_delete BEFORE DELETE ON external_source_knowledge_links BEGIN SELECT RAISE(ABORT, 'external source knowledge links are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_chat_external_source_attachments_cas
+            BEFORE UPDATE ON chat_external_source_attachments WHEN
+              OLD.status <> 'attached' OR NEW.status <> 'detached' OR NEW.revision <> OLD.revision + 1 OR
+              NEW.workspace_id IS NOT OLD.workspace_id OR NEW.attachment_id IS NOT OLD.attachment_id OR
+              NEW.session_id IS NOT OLD.session_id OR NEW.source_id IS NOT OLD.source_id OR NEW.import_id IS NOT OLD.import_id OR
+              NEW.item_id IS NOT OLD.item_id OR NEW.normalized_artifact_sha256 IS NOT OLD.normalized_artifact_sha256 OR
+              NEW.mode IS NOT OLD.mode OR NEW.attached_by_actor_id IS NOT OLD.attached_by_actor_id OR NEW.attached_at IS NOT OLD.attached_at
+            BEGIN SELECT RAISE(ABORT, 'external source attachment transition is invalid'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_chat_external_source_attachments_no_delete BEFORE DELETE ON chat_external_source_attachments
+            BEGIN SELECT RAISE(ABORT, 'external source attachments cannot be deleted'); END;
+          `);
+        },
+      },
+      {
+        version: 167,
+        name: "trusted_ops_saved_boards",
+        up: (db) => {
+          if (!tableExists(db, "workspaces")) {
+            return;
+          }
+          db.exec(`
+            CREATE TABLE IF NOT EXISTS ops_saved_boards (
+              workspace_id TEXT NOT NULL CHECK(
+                workspace_id = TRIM(workspace_id) AND length(workspace_id) BETWEEN 1 AND 256
+                AND instr(workspace_id, char(0)) = 0
+                AND workspace_id NOT GLOB ('*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*')
+              ),
+              board_id TEXT NOT NULL CHECK(
+                board_id = TRIM(board_id) AND length(board_id) BETWEEN 1 AND 256
+                AND instr(board_id, char(0)) = 0
+                AND board_id NOT GLOB ('*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*')
+              ),
+              schema_version TEXT NOT NULL CHECK(schema_version = 'goatcitadel.ops-board.v1'),
+              name TEXT NOT NULL CHECK(
+                name = TRIM(name) AND length(name) BETWEEN 1 AND 120
+                AND instr(name, char(0)) = 0
+                AND name NOT GLOB ('*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*')
+              ),
+              description TEXT CHECK(
+                description IS NULL OR (
+                  description = TRIM(description) AND length(description) BETWEEN 1 AND 500
+                  AND instr(description, char(0)) = 0
+                  AND description NOT GLOB ('*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*')
+                )
+              ),
+              layout_json TEXT NOT NULL CHECK(
+                json_valid(layout_json)
+                AND json_type(layout_json) = 'array'
+                AND json_array_length(layout_json) BETWEEN 1 AND 12
+                AND length(CAST(layout_json AS BLOB)) <= 16384
+              ),
+              status TEXT NOT NULL CHECK(status IN ('active', 'archived')),
+              revision INTEGER NOT NULL CHECK(typeof(revision) = 'integer' AND revision > 0),
+              created_by_actor_id TEXT NOT NULL CHECK(
+                created_by_actor_id = TRIM(created_by_actor_id) AND length(created_by_actor_id) BETWEEN 1 AND 256
+                AND instr(created_by_actor_id, char(0)) = 0
+                AND created_by_actor_id NOT GLOB ('*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*')
+              ),
+              created_at TEXT NOT NULL CHECK(length(TRIM(created_at)) > 0),
+              updated_by_actor_id TEXT NOT NULL CHECK(
+                updated_by_actor_id = TRIM(updated_by_actor_id) AND length(updated_by_actor_id) BETWEEN 1 AND 256
+                AND instr(updated_by_actor_id, char(0)) = 0
+                AND updated_by_actor_id NOT GLOB ('*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*')
+              ),
+              updated_at TEXT NOT NULL CHECK(length(TRIM(updated_at)) > 0),
+              archived_by_actor_id TEXT CHECK(
+                archived_by_actor_id IS NULL OR (
+                  archived_by_actor_id = TRIM(archived_by_actor_id)
+                  AND length(archived_by_actor_id) BETWEEN 1 AND 256
+                  AND instr(archived_by_actor_id, char(0)) = 0
+                  AND archived_by_actor_id NOT GLOB ('*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*')
+                )
+              ),
+              archived_at TEXT CHECK(archived_at IS NULL OR length(TRIM(archived_at)) > 0),
+              idempotency_key TEXT NOT NULL CHECK(
+                idempotency_key = TRIM(idempotency_key) AND length(idempotency_key) BETWEEN 1 AND 512
+                AND instr(idempotency_key, char(0)) = 0
+                AND idempotency_key NOT GLOB ('*[' || char(1) || '-' || char(31) || char(127) || '-' || char(159) || ']*')
+              ),
+              request_sha256 TEXT NOT NULL CHECK(
+                length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'
+              ),
+              PRIMARY KEY(workspace_id, board_id),
+              UNIQUE(workspace_id, idempotency_key),
+              FOREIGN KEY(workspace_id) REFERENCES workspaces(workspace_id) ON DELETE RESTRICT,
+              CHECK(
+                (status = 'active' AND archived_by_actor_id IS NULL AND archived_at IS NULL)
+                OR (status = 'archived' AND archived_by_actor_id IS NOT NULL AND archived_at IS NOT NULL)
+              )
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_ops_saved_boards_workspace_status_updated
+              ON ops_saved_boards(workspace_id, status, updated_at DESC, board_id DESC);
+
+            CREATE TRIGGER IF NOT EXISTS trg_ops_saved_boards_insert_invariant
+            BEFORE INSERT ON ops_saved_boards
+            WHEN
+              NEW.status <> 'active'
+              OR NEW.revision <> 1
+              OR NEW.created_by_actor_id IS NOT NEW.updated_by_actor_id
+              OR NEW.created_at IS NOT NEW.updated_at
+              OR NEW.archived_by_actor_id IS NOT NULL
+              OR NEW.archived_at IS NOT NULL
+            BEGIN
+              SELECT RAISE(ABORT, 'ops saved board insert invariant violated');
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_ops_saved_boards_cap_insert
+            BEFORE INSERT ON ops_saved_boards
+            WHEN NOT EXISTS (
+              SELECT 1 FROM ops_saved_boards
+              WHERE workspace_id = NEW.workspace_id AND idempotency_key = NEW.idempotency_key
+            ) AND (
+              SELECT COUNT(*) FROM ops_saved_boards WHERE workspace_id = NEW.workspace_id
+            ) >= 64
+            BEGIN
+              SELECT RAISE(ABORT, 'ops saved board workspace limit exceeded');
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_ops_saved_boards_cas_update
+            BEFORE UPDATE ON ops_saved_boards
+            WHEN
+              NEW.workspace_id IS NOT OLD.workspace_id
+              OR NEW.board_id IS NOT OLD.board_id
+              OR NEW.schema_version IS NOT OLD.schema_version
+              OR NEW.created_by_actor_id IS NOT OLD.created_by_actor_id
+              OR NEW.created_at IS NOT OLD.created_at
+              OR NEW.idempotency_key IS NOT OLD.idempotency_key
+              OR NEW.request_sha256 IS NOT OLD.request_sha256
+              OR NEW.revision <> OLD.revision + 1
+              OR NEW.updated_at < OLD.updated_at
+              OR NOT (
+                (
+                  OLD.status = 'active' AND NEW.status = 'active'
+                  AND NEW.archived_by_actor_id IS NULL AND NEW.archived_at IS NULL
+                ) OR (
+                  OLD.status = 'active' AND NEW.status = 'archived'
+                  AND NEW.name IS OLD.name AND NEW.description IS OLD.description AND NEW.layout_json IS OLD.layout_json
+                  AND NEW.archived_by_actor_id IS NEW.updated_by_actor_id
+                  AND NEW.archived_at IS NEW.updated_at
+                ) OR (
+                  OLD.status = 'archived' AND NEW.status = 'active'
+                  AND NEW.name IS OLD.name AND NEW.description IS OLD.description AND NEW.layout_json IS OLD.layout_json
+                  AND NEW.archived_by_actor_id IS NULL AND NEW.archived_at IS NULL
+                )
+              )
+            BEGIN
+              SELECT RAISE(ABORT, 'ops saved board CAS or transition invariant violated');
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_ops_saved_boards_no_delete
+            BEFORE DELETE ON ops_saved_boards
+            BEGIN
+              SELECT RAISE(ABORT, 'ops saved boards cannot be deleted');
+            END;
+          `);
+        },
+      },
+      {
+        version: 168,
+        name: "governed_mesh_capability_publication",
+        up: (db) => {
+          if (!tableExists(db, "workspaces") || !tableExists(db, "mesh_nodes") || !tableExists(db, "mesh_leases")) {
+            return;
+          }
+          db.exec(`
+            CREATE TABLE IF NOT EXISTS mesh_capability_publishers (
+              workspace_id TEXT NOT NULL,
+              node_id TEXT NOT NULL,
+              admission_generation INTEGER NOT NULL CHECK(typeof(admission_generation) = 'integer' AND admission_generation > 0),
+              publisher_generation INTEGER NOT NULL CHECK(typeof(publisher_generation) = 'integer' AND publisher_generation > 0),
+              mtls_required INTEGER NOT NULL CHECK(mtls_required IN (0, 1)),
+              tls_fingerprint TEXT,
+              publication_lease_key TEXT NOT NULL,
+              publication_lease_fencing_token INTEGER NOT NULL CHECK(typeof(publication_lease_fencing_token) = 'integer' AND publication_lease_fencing_token > 0),
+              publication_lease_expires_at TEXT NOT NULL,
+              idempotency_key TEXT NOT NULL,
+              request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+              created_at TEXT NOT NULL,
+              PRIMARY KEY(workspace_id, node_id, publisher_generation),
+              UNIQUE(workspace_id, idempotency_key),
+              FOREIGN KEY(workspace_id) REFERENCES workspaces(workspace_id) ON DELETE RESTRICT,
+              FOREIGN KEY(node_id) REFERENCES mesh_nodes(node_id) ON DELETE RESTRICT,
+              CHECK((mtls_required = 0) OR (tls_fingerprint IS NOT NULL AND length(TRIM(tls_fingerprint)) > 0))
+            );
+
+            CREATE TABLE IF NOT EXISTS mesh_capability_publisher_health (
+              workspace_id TEXT NOT NULL,
+              node_id TEXT NOT NULL,
+              publisher_generation INTEGER NOT NULL,
+              health_generation INTEGER NOT NULL CHECK(typeof(health_generation) = 'integer' AND health_generation > 0),
+              status TEXT NOT NULL CHECK(status IN ('online', 'suspect', 'offline', 'revoked')),
+              publication_lease_fencing_token INTEGER NOT NULL CHECK(typeof(publication_lease_fencing_token) = 'integer' AND publication_lease_fencing_token > 0),
+              publication_lease_expires_at TEXT NOT NULL,
+              tls_fingerprint TEXT,
+              updated_at TEXT NOT NULL,
+              PRIMARY KEY(workspace_id, node_id, publisher_generation),
+              FOREIGN KEY(workspace_id, node_id, publisher_generation)
+                REFERENCES mesh_capability_publishers(workspace_id, node_id, publisher_generation) ON DELETE RESTRICT
+            );
+
+            CREATE TABLE IF NOT EXISTS mesh_capability_manifests (
+              workspace_id TEXT NOT NULL,
+              node_id TEXT NOT NULL,
+              admission_generation INTEGER NOT NULL CHECK(typeof(admission_generation) = 'integer' AND admission_generation > 0),
+              publisher_generation INTEGER NOT NULL,
+              publication_key TEXT NOT NULL,
+              publication_lease_fencing_token INTEGER NOT NULL CHECK(typeof(publication_lease_fencing_token) = 'integer' AND publication_lease_fencing_token > 0),
+              manifest_sha256 TEXT NOT NULL CHECK(length(manifest_sha256) = 64 AND manifest_sha256 NOT GLOB '*[^0-9a-f]*'),
+              supersedes_manifest_sha256 TEXT,
+              schema_version TEXT NOT NULL CHECK(schema_version = 'goatcitadel.mesh-capability-manifest.v1'),
+              entry_count INTEGER NOT NULL CHECK(typeof(entry_count) = 'integer' AND entry_count BETWEEN 1 AND 128),
+              canonical_json TEXT NOT NULL CHECK(json_valid(canonical_json) AND json_type(canonical_json) = 'object' AND length(CAST(canonical_json AS BLOB)) <= 524288),
+              request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+              created_at TEXT NOT NULL,
+              PRIMARY KEY(workspace_id, node_id, publisher_generation, manifest_sha256),
+              UNIQUE(workspace_id, publication_key),
+              FOREIGN KEY(workspace_id, node_id, publisher_generation)
+                REFERENCES mesh_capability_publishers(workspace_id, node_id, publisher_generation) ON DELETE RESTRICT,
+              FOREIGN KEY(workspace_id, node_id, publisher_generation, supersedes_manifest_sha256)
+                REFERENCES mesh_capability_manifests(workspace_id, node_id, publisher_generation, manifest_sha256) ON DELETE RESTRICT,
+              CHECK(supersedes_manifest_sha256 IS NULL OR supersedes_manifest_sha256 <> manifest_sha256)
+            );
+
+            CREATE TABLE IF NOT EXISTS mesh_capability_manifest_entries (
+              workspace_id TEXT NOT NULL,
+              node_id TEXT NOT NULL,
+              publisher_generation INTEGER NOT NULL,
+              manifest_sha256 TEXT NOT NULL,
+              capability_id TEXT NOT NULL,
+              local_id TEXT NOT NULL,
+              kind TEXT NOT NULL CHECK(kind IN ('tool', 'mcp_server', 'skill')),
+              descriptor_sha256 TEXT NOT NULL CHECK(length(descriptor_sha256) = 64 AND descriptor_sha256 NOT GLOB '*[^0-9a-f]*'),
+              permission_envelope_sha256 TEXT NOT NULL CHECK(length(permission_envelope_sha256) = 64 AND permission_envelope_sha256 NOT GLOB '*[^0-9a-f]*'),
+              entry_sha256 TEXT NOT NULL CHECK(length(entry_sha256) = 64 AND entry_sha256 NOT GLOB '*[^0-9a-f]*'),
+              effect_posture TEXT NOT NULL CHECK(effect_posture IN ('none', 'read_only', 'write_local', 'external_side_effect', 'unknown')),
+              canonical_json TEXT NOT NULL CHECK(json_valid(canonical_json) AND json_type(canonical_json) = 'object' AND length(CAST(canonical_json AS BLOB)) <= 65536),
+              PRIMARY KEY(workspace_id, node_id, publisher_generation, manifest_sha256, capability_id),
+              UNIQUE(workspace_id, node_id, publisher_generation, manifest_sha256, kind, local_id),
+              FOREIGN KEY(workspace_id, node_id, publisher_generation, manifest_sha256)
+                REFERENCES mesh_capability_manifests(workspace_id, node_id, publisher_generation, manifest_sha256) ON DELETE RESTRICT,
+              CHECK(capability_id = 'mesh:' || node_id || ':' || kind || ':' || local_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS mesh_capability_activations (
+              workspace_id TEXT NOT NULL,
+              activation_id TEXT NOT NULL,
+              activation_revision INTEGER NOT NULL CHECK(typeof(activation_revision) = 'integer' AND activation_revision > 0),
+              capability_id TEXT NOT NULL,
+              node_id TEXT NOT NULL,
+              publisher_generation INTEGER NOT NULL,
+              health_generation INTEGER NOT NULL,
+              publication_lease_fencing_token INTEGER NOT NULL,
+              manifest_sha256 TEXT NOT NULL,
+              entry_sha256 TEXT NOT NULL CHECK(length(entry_sha256) = 64 AND entry_sha256 NOT GLOB '*[^0-9a-f]*'),
+              descriptor_sha256 TEXT NOT NULL,
+              permission_envelope_sha256 TEXT NOT NULL,
+              effect_posture TEXT NOT NULL,
+              permission_diff_json TEXT NOT NULL CHECK(json_valid(permission_diff_json) AND json_type(permission_diff_json) = 'object'),
+              effect_diff_json TEXT NOT NULL CHECK(json_valid(effect_diff_json) AND json_type(effect_diff_json) = 'object'),
+              approval_id TEXT NOT NULL,
+              actor_id TEXT NOT NULL,
+              session_id TEXT,
+              turn_id TEXT,
+              idempotency_key TEXT NOT NULL,
+              request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+              created_at TEXT NOT NULL,
+              PRIMARY KEY(workspace_id, activation_id),
+              UNIQUE(workspace_id, idempotency_key),
+              FOREIGN KEY(workspace_id, node_id, publisher_generation, manifest_sha256, capability_id)
+                REFERENCES mesh_capability_manifest_entries(workspace_id, node_id, publisher_generation, manifest_sha256, capability_id) ON DELETE RESTRICT,
+              FOREIGN KEY(approval_id) REFERENCES approvals(approval_id) ON DELETE RESTRICT
+            );
+
+            CREATE TABLE IF NOT EXISTS mesh_capability_activation_revocations (
+              workspace_id TEXT NOT NULL,
+              activation_id TEXT NOT NULL,
+              reason TEXT NOT NULL,
+              actor_id TEXT NOT NULL,
+              idempotency_key TEXT NOT NULL,
+              request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+              revoked_at TEXT NOT NULL,
+              PRIMARY KEY(workspace_id, activation_id),
+              UNIQUE(workspace_id, idempotency_key),
+              FOREIGN KEY(workspace_id, activation_id)
+                REFERENCES mesh_capability_activations(workspace_id, activation_id) ON DELETE RESTRICT
+            );
+
+            CREATE TABLE IF NOT EXISTS mesh_capability_invocation_intents (
+              workspace_id TEXT NOT NULL,
+              invocation_id TEXT NOT NULL,
+              activation_id TEXT NOT NULL,
+              activation_revision INTEGER NOT NULL CHECK(typeof(activation_revision) = 'integer' AND activation_revision > 0),
+              capability_id TEXT NOT NULL,
+              node_id TEXT NOT NULL,
+              publisher_generation INTEGER NOT NULL,
+              health_generation INTEGER NOT NULL,
+              publication_lease_fencing_token INTEGER NOT NULL,
+              manifest_sha256 TEXT NOT NULL,
+              entry_sha256 TEXT NOT NULL CHECK(length(entry_sha256) = 64 AND entry_sha256 NOT GLOB '*[^0-9a-f]*'),
+              descriptor_sha256 TEXT NOT NULL,
+              permission_envelope_sha256 TEXT NOT NULL,
+              execution_profile_sha256 TEXT NOT NULL CHECK(length(execution_profile_sha256) = 64 AND execution_profile_sha256 NOT GLOB '*[^0-9a-f]*'),
+              input_sha256 TEXT NOT NULL CHECK(length(input_sha256) = 64 AND input_sha256 NOT GLOB '*[^0-9a-f]*'),
+              session_id TEXT NOT NULL,
+              turn_id TEXT NOT NULL,
+              run_id TEXT,
+              approval_id TEXT,
+              deadline_at TEXT NOT NULL,
+              idempotency_key TEXT NOT NULL,
+              request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+              created_at TEXT NOT NULL,
+              PRIMARY KEY(workspace_id, invocation_id),
+              UNIQUE(workspace_id, idempotency_key),
+              FOREIGN KEY(workspace_id, activation_id)
+                REFERENCES mesh_capability_activations(workspace_id, activation_id) ON DELETE RESTRICT,
+              FOREIGN KEY(approval_id) REFERENCES approvals(approval_id) ON DELETE RESTRICT
+            );
+
+            CREATE TABLE IF NOT EXISTS mesh_capability_invocation_settlements (
+              workspace_id TEXT NOT NULL,
+              invocation_id TEXT NOT NULL,
+              disposition TEXT NOT NULL CHECK(disposition IN ('succeeded', 'failed', 'cancelled', 'timed_out', 'unknown')),
+              output_sha256 TEXT,
+              error_code TEXT,
+              settlement_sha256 TEXT NOT NULL CHECK(length(settlement_sha256) = 64 AND settlement_sha256 NOT GLOB '*[^0-9a-f]*'),
+              effective_cost_attribution_sha256 TEXT,
+              publisher_generation INTEGER NOT NULL,
+              publication_lease_fencing_token INTEGER NOT NULL,
+              idempotency_key TEXT NOT NULL,
+              request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+              settled_at TEXT NOT NULL,
+              PRIMARY KEY(workspace_id, invocation_id),
+              UNIQUE(workspace_id, idempotency_key),
+              FOREIGN KEY(workspace_id, invocation_id)
+                REFERENCES mesh_capability_invocation_intents(workspace_id, invocation_id) ON DELETE RESTRICT,
+              CHECK(output_sha256 IS NULL OR (length(output_sha256) = 64 AND output_sha256 NOT GLOB '*[^0-9a-f]*')),
+              CHECK(effective_cost_attribution_sha256 IS NULL OR (
+                length(effective_cost_attribution_sha256) = 64
+                AND effective_cost_attribution_sha256 NOT GLOB '*[^0-9a-f]*'
+              ))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_mesh_capability_manifests_publisher_created
+              ON mesh_capability_manifests(workspace_id, node_id, publisher_generation, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_mesh_capability_entries_capability
+              ON mesh_capability_manifest_entries(workspace_id, capability_id, manifest_sha256);
+            CREATE INDEX IF NOT EXISTS idx_mesh_capability_activations_capability_created
+              ON mesh_capability_activations(workspace_id, capability_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_mesh_capability_intents_activation_created
+              ON mesh_capability_invocation_intents(workspace_id, activation_id, created_at DESC);
+
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_publishers_insert_guard
+            BEFORE INSERT ON mesh_capability_publishers
+            WHEN
+              EXISTS (
+                SELECT 1 FROM mesh_capability_publishers
+                WHERE workspace_id = NEW.workspace_id AND node_id = NEW.node_id
+                  AND publisher_generation >= NEW.publisher_generation
+              )
+              OR EXISTS (
+                SELECT 1 FROM mesh_capability_publishers
+                WHERE workspace_id = NEW.workspace_id AND node_id = NEW.node_id
+                  AND admission_generation > NEW.admission_generation
+              )
+              OR (
+                NOT EXISTS (SELECT 1 FROM mesh_capability_publishers WHERE workspace_id = NEW.workspace_id AND node_id = NEW.node_id)
+                AND (SELECT COUNT(DISTINCT node_id) FROM mesh_capability_publishers WHERE workspace_id = NEW.workspace_id) >= 16
+              )
+              OR NOT EXISTS (
+                SELECT 1 FROM mesh_nodes node
+                JOIN mesh_leases lease ON lease.lease_key = NEW.publication_lease_key
+                WHERE node.node_id = NEW.node_id AND node.status = 'online'
+                  AND lease.holder_node_id = NEW.node_id
+                  AND lease.fencing_token = NEW.publication_lease_fencing_token
+                  AND lease.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                  AND lease.expires_at = NEW.publication_lease_expires_at
+                  AND (NEW.mtls_required = 0 OR node.tls_fingerprint = NEW.tls_fingerprint)
+              )
+            BEGIN SELECT RAISE(ABORT, 'mesh capability publisher generation or live database-clock lease invariant violated'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_health_insert_guard
+            BEFORE INSERT ON mesh_capability_publisher_health
+            WHEN NEW.health_generation <> 1 OR NEW.status <> 'online' OR NOT EXISTS (
+              SELECT 1 FROM mesh_capability_publishers publisher
+              WHERE publisher.workspace_id = NEW.workspace_id AND publisher.node_id = NEW.node_id
+                AND publisher.publisher_generation = NEW.publisher_generation
+                AND publisher.publication_lease_fencing_token = NEW.publication_lease_fencing_token
+                AND publisher.publication_lease_expires_at = NEW.publication_lease_expires_at
+                AND publisher.tls_fingerprint IS NEW.tls_fingerprint
+            )
+            BEGIN SELECT RAISE(ABORT, 'mesh capability publisher health insert invariant violated'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_health_cas
+            BEFORE UPDATE ON mesh_capability_publisher_health
+            WHEN NEW.workspace_id IS NOT OLD.workspace_id OR NEW.node_id IS NOT OLD.node_id
+              OR NEW.publisher_generation IS NOT OLD.publisher_generation
+              OR OLD.status IN ('offline', 'revoked')
+              OR NOT (
+                (
+                  NEW.health_generation = OLD.health_generation
+                  AND NEW.status = 'online' AND OLD.status = 'online'
+                  AND NEW.publication_lease_fencing_token = OLD.publication_lease_fencing_token
+                  AND NEW.publication_lease_expires_at > OLD.publication_lease_expires_at
+                  AND NEW.tls_fingerprint IS OLD.tls_fingerprint
+                  AND NEW.publication_lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                  AND EXISTS (
+                    SELECT 1 FROM mesh_capability_publishers publisher
+                    JOIN mesh_leases lease ON lease.lease_key = publisher.publication_lease_key
+                    WHERE publisher.workspace_id = NEW.workspace_id AND publisher.node_id = NEW.node_id
+                      AND publisher.publisher_generation = NEW.publisher_generation
+                      AND publisher.publication_lease_fencing_token = NEW.publication_lease_fencing_token
+                      AND publisher.tls_fingerprint IS NEW.tls_fingerprint
+                      AND lease.holder_node_id = NEW.node_id
+                      AND lease.fencing_token = NEW.publication_lease_fencing_token
+                      AND lease.expires_at = NEW.publication_lease_expires_at
+                      AND lease.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                  )
+                ) OR (
+                  NEW.health_generation = OLD.health_generation + 1
+                  AND NEW.publication_lease_fencing_token = OLD.publication_lease_fencing_token
+                  AND NEW.tls_fingerprint IS OLD.tls_fingerprint
+                  AND (
+                    NEW.status <> 'online' OR (
+                      NEW.publication_lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                      AND EXISTS (
+                        SELECT 1 FROM mesh_capability_publishers publisher
+                        JOIN mesh_leases lease ON lease.lease_key = publisher.publication_lease_key
+                        WHERE publisher.workspace_id = NEW.workspace_id AND publisher.node_id = NEW.node_id
+                          AND publisher.publisher_generation = NEW.publisher_generation
+                          AND publisher.publication_lease_fencing_token = NEW.publication_lease_fencing_token
+                          AND publisher.tls_fingerprint IS NEW.tls_fingerprint
+                          AND lease.holder_node_id = NEW.node_id
+                          AND lease.fencing_token = NEW.publication_lease_fencing_token
+                          AND lease.expires_at = NEW.publication_lease_expires_at
+                          AND lease.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                      )
+                    )
+                  )
+                )
+              )
+            BEGIN SELECT RAISE(ABORT, 'mesh capability publisher health CAS invariant violated'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_manifest_insert_guard
+            BEFORE INSERT ON mesh_capability_manifests
+            WHEN
+              NOT EXISTS (
+                SELECT 1 FROM mesh_capability_publishers publisher
+                JOIN mesh_capability_publisher_health health
+                  ON health.workspace_id = publisher.workspace_id AND health.node_id = publisher.node_id
+                 AND health.publisher_generation = publisher.publisher_generation
+                WHERE publisher.workspace_id = NEW.workspace_id AND publisher.node_id = NEW.node_id
+                  AND publisher.publisher_generation = NEW.publisher_generation
+                  AND publisher.admission_generation = NEW.admission_generation
+                  AND publisher.publication_lease_fencing_token = NEW.publication_lease_fencing_token
+                  AND health.publication_lease_fencing_token = NEW.publication_lease_fencing_token
+                  AND health.status = 'online'
+                  AND health.publication_lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                  AND json_extract(NEW.canonical_json, '$.workspaceId') = NEW.workspace_id
+                  AND json_extract(NEW.canonical_json, '$.nodeId') = NEW.node_id
+                  AND json_extract(NEW.canonical_json, '$.admissionGeneration') = NEW.admission_generation
+                  AND json_extract(NEW.canonical_json, '$.publisherGeneration') = NEW.publisher_generation
+                  AND json_extract(NEW.canonical_json, '$.publicationKey') = NEW.publication_key
+                  AND json_extract(NEW.canonical_json, '$.publicationLeaseFencingToken') = NEW.publication_lease_fencing_token
+                  AND json_extract(NEW.canonical_json, '$.manifestSha256') = NEW.manifest_sha256
+                  AND json_extract(NEW.canonical_json, '$.supersedesManifestSha256') IS NEW.supersedes_manifest_sha256
+                  AND json_extract(NEW.canonical_json, '$.schemaVersion') = NEW.schema_version
+                  AND json_extract(NEW.canonical_json, '$.createdAt') = NEW.created_at
+                  AND json_array_length(json_extract(NEW.canonical_json, '$.entries')) = NEW.entry_count
+              )
+              OR (
+                NEW.supersedes_manifest_sha256 IS NOT NULL AND (
+                  NOT EXISTS (
+                    SELECT 1 FROM mesh_capability_manifests prior
+                    WHERE prior.workspace_id = NEW.workspace_id AND prior.node_id = NEW.node_id
+                      AND prior.publisher_generation = NEW.publisher_generation
+                      AND prior.manifest_sha256 = NEW.supersedes_manifest_sha256
+                  )
+                  OR EXISTS (
+                    SELECT 1 FROM mesh_capability_manifests child
+                    WHERE child.workspace_id = NEW.workspace_id AND child.node_id = NEW.node_id
+                      AND child.publisher_generation = NEW.publisher_generation
+                      AND child.supersedes_manifest_sha256 = NEW.supersedes_manifest_sha256
+                  )
+                )
+              )
+              OR (
+                NEW.supersedes_manifest_sha256 IS NULL AND (
+                  SELECT COUNT(*) FROM mesh_capability_manifests head
+                  WHERE head.workspace_id = NEW.workspace_id AND head.node_id = NEW.node_id
+                    AND head.publisher_generation = NEW.publisher_generation
+                    AND NOT EXISTS (
+                      SELECT 1 FROM mesh_capability_manifests child
+                      WHERE child.workspace_id = head.workspace_id AND child.node_id = head.node_id
+                        AND child.publisher_generation = head.publisher_generation
+                        AND child.supersedes_manifest_sha256 = head.manifest_sha256
+                    )
+                ) >= 32
+              )
+            BEGIN SELECT RAISE(ABORT, 'mesh capability manifest generation, supersession, health, or cap invariant violated'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_entries_cap
+            BEFORE INSERT ON mesh_capability_manifest_entries
+            WHEN json_extract(NEW.canonical_json, '$.localId') IS NOT NEW.local_id
+              OR json_extract(NEW.canonical_json, '$.kind') IS NOT NEW.kind
+              OR json_extract(NEW.canonical_json, '$.capabilityId') IS NOT NEW.capability_id
+              OR json_extract(NEW.canonical_json, '$.descriptorSha256') IS NOT NEW.descriptor_sha256
+              OR json_extract(NEW.canonical_json, '$.permissionEnvelopeSha256') IS NOT NEW.permission_envelope_sha256
+              OR json_extract(NEW.canonical_json, '$.entrySha256') IS NOT NEW.entry_sha256
+              OR json_extract(NEW.canonical_json, '$.descriptor.effectPosture') IS NOT NEW.effect_posture
+              OR NOT EXISTS (
+                SELECT 1 FROM mesh_capability_manifests manifest,
+                  json_each(manifest.canonical_json, '$.entries') manifest_entry
+                WHERE manifest.workspace_id = NEW.workspace_id AND manifest.node_id = NEW.node_id
+                  AND manifest.publisher_generation = NEW.publisher_generation
+                  AND manifest.manifest_sha256 = NEW.manifest_sha256
+                  AND manifest_entry.value = NEW.canonical_json
+              )
+              OR (SELECT COUNT(*) FROM mesh_capability_manifest_entries entry
+                  WHERE entry.workspace_id = NEW.workspace_id AND entry.node_id = NEW.node_id
+                    AND entry.publisher_generation = NEW.publisher_generation AND entry.manifest_sha256 = NEW.manifest_sha256)
+                 >= (SELECT entry_count FROM mesh_capability_manifests manifest
+                     WHERE manifest.workspace_id = NEW.workspace_id AND manifest.node_id = NEW.node_id
+                       AND manifest.publisher_generation = NEW.publisher_generation AND manifest.manifest_sha256 = NEW.manifest_sha256)
+            BEGIN SELECT RAISE(ABORT, 'mesh capability manifest entry count exceeded'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_activation_guard
+            BEFORE INSERT ON mesh_capability_activations
+            WHEN
+              (SELECT COUNT(*) FROM mesh_capability_activations activation
+               JOIN mesh_capability_publishers cap_publisher
+                 ON cap_publisher.workspace_id = activation.workspace_id AND cap_publisher.node_id = activation.node_id
+                AND cap_publisher.publisher_generation = activation.publisher_generation
+               JOIN mesh_capability_publisher_health cap_health
+                 ON cap_health.workspace_id = activation.workspace_id AND cap_health.node_id = activation.node_id
+                AND cap_health.publisher_generation = activation.publisher_generation
+               JOIN mesh_nodes cap_node ON cap_node.node_id = activation.node_id
+               JOIN mesh_leases cap_lease ON cap_lease.lease_key = cap_publisher.publication_lease_key
+               WHERE activation.workspace_id = NEW.workspace_id
+                 AND activation.capability_id <> NEW.capability_id
+                 AND activation.activation_revision = (
+                   SELECT MAX(latest.activation_revision) FROM mesh_capability_activations latest
+                   WHERE latest.workspace_id = activation.workspace_id AND latest.capability_id = activation.capability_id
+                 )
+                 AND NOT EXISTS (
+                   SELECT 1 FROM mesh_capability_activation_revocations revoked
+                   WHERE revoked.workspace_id = activation.workspace_id AND revoked.activation_id = activation.activation_id
+                 )
+                 AND NOT EXISTS (
+                   SELECT 1 FROM mesh_capability_manifests child
+                   WHERE child.workspace_id = activation.workspace_id AND child.node_id = activation.node_id
+                     AND child.publisher_generation = activation.publisher_generation
+                     AND child.supersedes_manifest_sha256 = activation.manifest_sha256
+                 )
+                 AND cap_health.status = 'online' AND cap_health.health_generation = activation.health_generation
+                 AND cap_health.publication_lease_fencing_token = activation.publication_lease_fencing_token
+                 AND cap_publisher.publication_lease_fencing_token = activation.publication_lease_fencing_token
+                 AND cap_health.publication_lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                 AND activation.publisher_generation = (
+                   SELECT MAX(current.publisher_generation) FROM mesh_capability_publishers current
+                   WHERE current.workspace_id = activation.workspace_id AND current.node_id = activation.node_id
+                 )
+                 AND cap_node.status = 'online'
+                 AND (cap_publisher.mtls_required = 0 OR (
+                   cap_node.tls_fingerprint = cap_health.tls_fingerprint
+                   AND cap_publisher.tls_fingerprint = cap_health.tls_fingerprint
+                 ))
+                 AND cap_lease.holder_node_id = activation.node_id
+                 AND cap_lease.fencing_token = activation.publication_lease_fencing_token
+                 AND cap_lease.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) >= 256
+              OR NEW.activation_revision <> 1 + COALESCE((
+                SELECT MAX(prior.activation_revision) FROM mesh_capability_activations prior
+                WHERE prior.workspace_id = NEW.workspace_id AND prior.capability_id = NEW.capability_id
+              ), 0)
+              OR NOT EXISTS (
+                SELECT 1
+                FROM mesh_capability_manifest_entries entry
+                JOIN mesh_capability_publisher_health health
+                  ON health.workspace_id = entry.workspace_id AND health.node_id = entry.node_id
+                 AND health.publisher_generation = entry.publisher_generation
+                JOIN mesh_capability_publishers publisher
+                  ON publisher.workspace_id = entry.workspace_id AND publisher.node_id = entry.node_id
+                 AND publisher.publisher_generation = entry.publisher_generation
+                JOIN mesh_nodes node ON node.node_id = entry.node_id
+                JOIN mesh_leases lease ON lease.lease_key = publisher.publication_lease_key
+                JOIN approvals approval ON approval.approval_id = NEW.approval_id
+                WHERE entry.workspace_id = NEW.workspace_id AND entry.capability_id = NEW.capability_id
+                  AND entry.node_id = NEW.node_id AND entry.publisher_generation = NEW.publisher_generation
+                  AND entry.manifest_sha256 = NEW.manifest_sha256 AND entry.kind IN ('tool', 'mcp_server')
+                  AND entry.entry_sha256 = NEW.entry_sha256
+                  AND entry.descriptor_sha256 = NEW.descriptor_sha256
+                  AND entry.permission_envelope_sha256 = NEW.permission_envelope_sha256
+                  AND entry.effect_posture = NEW.effect_posture
+                  AND NOT EXISTS (
+                    SELECT 1 FROM mesh_capability_manifests child
+                    WHERE child.workspace_id = entry.workspace_id AND child.node_id = entry.node_id
+                      AND child.publisher_generation = entry.publisher_generation
+                      AND child.supersedes_manifest_sha256 = entry.manifest_sha256
+                  )
+                  AND health.health_generation = NEW.health_generation AND health.status = 'online'
+                  AND health.publication_lease_fencing_token = NEW.publication_lease_fencing_token
+                  AND publisher.publication_lease_fencing_token = NEW.publication_lease_fencing_token
+                  AND health.publication_lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                  AND publisher.publisher_generation = (
+                    SELECT MAX(current.publisher_generation) FROM mesh_capability_publishers current
+                    WHERE current.workspace_id = NEW.workspace_id AND current.node_id = NEW.node_id
+                  )
+                  AND node.status = 'online'
+                  AND (publisher.mtls_required = 0 OR (
+                    node.tls_fingerprint = health.tls_fingerprint
+                    AND publisher.tls_fingerprint = health.tls_fingerprint
+                  ))
+                  AND lease.holder_node_id = NEW.node_id
+                  AND lease.fencing_token = NEW.publication_lease_fencing_token
+                  AND lease.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                  AND approval.kind = 'mesh.capability.activate' AND approval.status = 'approved'
+                  AND approval.resolved_at IS NOT NULL
+                  AND (
+                    approval.expires_at IS NULL OR (
+                      julianday(approval.expires_at) IS NOT NULL
+                      AND julianday(approval.expires_at) > julianday('now')
+                    )
+                  )
+                  AND json_valid(approval.payload_json) AND json_type(approval.payload_json) = 'object'
+                  AND json_extract(approval.payload_json, '$.workspaceId') = NEW.workspace_id
+                  AND json_extract(approval.payload_json, '$.activationId') = NEW.activation_id
+                  AND json_extract(approval.payload_json, '$.activationRevision') = NEW.activation_revision
+                  AND json_extract(approval.payload_json, '$.requestSha256') = NEW.request_sha256
+                  AND json_extract(approval.payload_json, '$.capabilityId') = NEW.capability_id
+                  AND json_extract(approval.payload_json, '$.manifestSha256') = NEW.manifest_sha256
+                  AND json_extract(approval.payload_json, '$.entrySha256') = NEW.entry_sha256
+                  AND json_extract(approval.payload_json, '$.descriptorSha256') = NEW.descriptor_sha256
+                  AND json_extract(approval.payload_json, '$.permissionEnvelopeSha256') = NEW.permission_envelope_sha256
+                  AND json_extract(approval.payload_json, '$.effectPosture') = NEW.effect_posture
+                  AND (SELECT COUNT(*) FROM json_each(approval.payload_json)) = 10
+                  AND approval.linkage_json IS NOT NULL AND json_valid(approval.linkage_json)
+                  AND json_extract(approval.linkage_json, '$.workspaceId') = NEW.workspace_id
+                  AND (NEW.session_id IS NULL OR json_extract(approval.linkage_json, '$.sessionId') = NEW.session_id)
+                  AND (NEW.turn_id IS NULL OR json_extract(approval.linkage_json, '$.turnId') = NEW.turn_id)
+                  AND (SELECT COUNT(*) FROM json_each(approval.linkage_json)) =
+                    1 + CASE WHEN NEW.session_id IS NULL THEN 0 ELSE 1 END + CASE WHEN NEW.turn_id IS NULL THEN 0 ELSE 1 END
+                  AND NOT EXISTS (
+                    SELECT 1 FROM json_each(approval.linkage_json) linkage_field
+                    WHERE linkage_field.key NOT IN ('workspaceId', 'sessionId', 'turnId')
+                  )
+              )
+            BEGIN SELECT RAISE(ABORT, 'mesh capability activation binding, approval, health, lease, or cap invariant violated'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_intent_guard
+            BEFORE INSERT ON mesh_capability_invocation_intents
+            WHEN julianday(NEW.deadline_at) IS NULL
+              OR NEW.deadline_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now') OR NOT EXISTS (
+              SELECT 1 FROM mesh_capability_activations activation
+              JOIN mesh_capability_manifest_entries entry
+                ON entry.workspace_id = activation.workspace_id AND entry.node_id = activation.node_id
+               AND entry.publisher_generation = activation.publisher_generation
+               AND entry.manifest_sha256 = activation.manifest_sha256
+               AND entry.capability_id = activation.capability_id
+              JOIN mesh_capability_publisher_health health
+                ON health.workspace_id = activation.workspace_id AND health.node_id = activation.node_id
+               AND health.publisher_generation = activation.publisher_generation
+              JOIN mesh_capability_publishers publisher
+                ON publisher.workspace_id = activation.workspace_id AND publisher.node_id = activation.node_id
+               AND publisher.publisher_generation = activation.publisher_generation
+              JOIN mesh_nodes node ON node.node_id = activation.node_id
+              JOIN mesh_leases lease ON lease.lease_key = publisher.publication_lease_key
+              WHERE activation.workspace_id = NEW.workspace_id AND activation.activation_id = NEW.activation_id
+                AND activation.capability_id = NEW.capability_id AND activation.node_id = NEW.node_id
+                AND activation.activation_revision = (
+                  SELECT MAX(latest.activation_revision) FROM mesh_capability_activations latest
+                  WHERE latest.workspace_id = activation.workspace_id AND latest.capability_id = activation.capability_id
+                )
+                AND activation.publisher_generation = NEW.publisher_generation
+                AND activation.activation_revision = NEW.activation_revision
+                AND activation.health_generation = NEW.health_generation
+                AND activation.publication_lease_fencing_token = NEW.publication_lease_fencing_token
+                AND activation.manifest_sha256 = NEW.manifest_sha256
+                AND activation.entry_sha256 = NEW.entry_sha256
+                AND activation.descriptor_sha256 = NEW.descriptor_sha256
+                AND activation.permission_envelope_sha256 = NEW.permission_envelope_sha256
+                AND julianday(NEW.deadline_at) <= julianday('now')
+                  + CAST(json_extract(entry.canonical_json, '$.descriptor.resourceLimits.timeoutMs') AS REAL) / 86400000.0
+                AND NOT EXISTS (SELECT 1 FROM mesh_capability_activation_revocations revoked
+                                WHERE revoked.workspace_id = activation.workspace_id AND revoked.activation_id = activation.activation_id)
+                AND NOT EXISTS (SELECT 1 FROM mesh_capability_manifests child
+                                WHERE child.workspace_id = activation.workspace_id AND child.node_id = activation.node_id
+                                  AND child.publisher_generation = activation.publisher_generation
+                                  AND child.supersedes_manifest_sha256 = activation.manifest_sha256)
+                AND health.health_generation = activation.health_generation AND health.status = 'online'
+                AND health.publication_lease_fencing_token = activation.publication_lease_fencing_token
+                AND publisher.publication_lease_fencing_token = activation.publication_lease_fencing_token
+                AND health.publication_lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                AND activation.publisher_generation = (SELECT MAX(current.publisher_generation)
+                  FROM mesh_capability_publishers current
+                  WHERE current.workspace_id = activation.workspace_id AND current.node_id = activation.node_id)
+                AND node.status = 'online'
+                AND (publisher.mtls_required = 0 OR (
+                  node.tls_fingerprint = health.tls_fingerprint
+                  AND publisher.tls_fingerprint = health.tls_fingerprint
+                ))
+                AND lease.holder_node_id = activation.node_id
+                AND lease.fencing_token = activation.publication_lease_fencing_token
+                AND lease.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            )
+            BEGIN SELECT RAISE(ABORT, 'mesh capability invocation intent is not currently callable'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_settlement_guard
+            BEFORE INSERT ON mesh_capability_invocation_settlements
+            WHEN NOT EXISTS (
+              SELECT 1 FROM mesh_capability_invocation_intents intent
+              JOIN mesh_capability_publishers publisher
+                ON publisher.workspace_id = intent.workspace_id AND publisher.node_id = intent.node_id
+               AND publisher.publisher_generation = intent.publisher_generation
+              WHERE intent.workspace_id = NEW.workspace_id AND intent.invocation_id = NEW.invocation_id
+                AND intent.publisher_generation = NEW.publisher_generation
+                AND intent.publication_lease_fencing_token = NEW.publication_lease_fencing_token
+                AND publisher.publication_lease_fencing_token = NEW.publication_lease_fencing_token
+                AND intent.publisher_generation = (
+                  SELECT MAX(current.publisher_generation) FROM mesh_capability_publishers current
+                  WHERE current.workspace_id = intent.workspace_id AND current.node_id = intent.node_id
+                )
+            )
+            BEGIN SELECT RAISE(ABORT, 'mesh capability settlement generation binding violated'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_publishers_no_update BEFORE UPDATE ON mesh_capability_publishers BEGIN SELECT RAISE(ABORT, 'mesh capability publisher generations are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_publishers_no_delete BEFORE DELETE ON mesh_capability_publishers BEGIN SELECT RAISE(ABORT, 'mesh capability publisher generations are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_health_no_delete BEFORE DELETE ON mesh_capability_publisher_health BEGIN SELECT RAISE(ABORT, 'mesh capability health records cannot be deleted'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_manifests_no_update BEFORE UPDATE ON mesh_capability_manifests BEGIN SELECT RAISE(ABORT, 'mesh capability manifests are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_manifests_no_delete BEFORE DELETE ON mesh_capability_manifests BEGIN SELECT RAISE(ABORT, 'mesh capability manifests are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_entries_no_update BEFORE UPDATE ON mesh_capability_manifest_entries BEGIN SELECT RAISE(ABORT, 'mesh capability entries are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_entries_no_delete BEFORE DELETE ON mesh_capability_manifest_entries BEGIN SELECT RAISE(ABORT, 'mesh capability entries are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_activations_no_update BEFORE UPDATE ON mesh_capability_activations BEGIN SELECT RAISE(ABORT, 'mesh capability activations are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_activations_no_delete BEFORE DELETE ON mesh_capability_activations BEGIN SELECT RAISE(ABORT, 'mesh capability activations are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_revocations_no_update BEFORE UPDATE ON mesh_capability_activation_revocations BEGIN SELECT RAISE(ABORT, 'mesh capability revocations are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_revocations_no_delete BEFORE DELETE ON mesh_capability_activation_revocations BEGIN SELECT RAISE(ABORT, 'mesh capability revocations are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_intents_no_update BEFORE UPDATE ON mesh_capability_invocation_intents BEGIN SELECT RAISE(ABORT, 'mesh capability invocation intents are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_intents_no_delete BEFORE DELETE ON mesh_capability_invocation_intents BEGIN SELECT RAISE(ABORT, 'mesh capability invocation intents are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_settlements_no_update BEFORE UPDATE ON mesh_capability_invocation_settlements BEGIN SELECT RAISE(ABORT, 'mesh capability invocation settlements are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_settlements_no_delete BEFORE DELETE ON mesh_capability_invocation_settlements BEGIN SELECT RAISE(ABORT, 'mesh capability invocation settlements are immutable'); END;
+          `);
+        },
+      },
+      {
+        version: 169,
+        name: "mesh_capability_node_admission_authority",
+        up: (db) => {
+          if (
+            !tableExists(db, "workspaces") ||
+            !tableExists(db, "mesh_nodes") ||
+            !tableExists(db, "mesh_join_tokens") ||
+            !tableExists(db, "mesh_capability_publishers")
+          ) {
+            return;
+          }
+          db.exec(`
+            CREATE TABLE IF NOT EXISTS mesh_capability_node_admissions (
+              workspace_id TEXT NOT NULL,
+              node_id TEXT NOT NULL,
+              admission_generation INTEGER NOT NULL CHECK(typeof(admission_generation) = 'integer' AND admission_generation > 0),
+              join_token_sha256 TEXT NOT NULL UNIQUE CHECK(length(join_token_sha256) = 64 AND join_token_sha256 NOT GLOB '*[^0-9a-f]*'),
+              mtls_required INTEGER NOT NULL CHECK(mtls_required IN (0, 1)),
+              tls_fingerprint TEXT,
+              admitted_by_actor_id TEXT NOT NULL,
+              idempotency_key TEXT NOT NULL,
+              request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+              admitted_at TEXT NOT NULL,
+              PRIMARY KEY(workspace_id, node_id, admission_generation),
+              UNIQUE(workspace_id, idempotency_key),
+              FOREIGN KEY(workspace_id) REFERENCES workspaces(workspace_id) ON DELETE RESTRICT,
+              FOREIGN KEY(node_id) REFERENCES mesh_nodes(node_id) ON DELETE RESTRICT,
+              FOREIGN KEY(join_token_sha256) REFERENCES mesh_join_tokens(token_hash) ON DELETE RESTRICT,
+              CHECK(mtls_required = 0 OR (tls_fingerprint IS NOT NULL AND length(TRIM(tls_fingerprint)) > 0))
+            );
+
+            CREATE TABLE IF NOT EXISTS mesh_capability_node_admission_revocations (
+              workspace_id TEXT NOT NULL,
+              node_id TEXT NOT NULL,
+              admission_generation INTEGER NOT NULL CHECK(typeof(admission_generation) = 'integer' AND admission_generation > 0),
+              reason TEXT NOT NULL,
+              revoked_by_actor_id TEXT NOT NULL,
+              idempotency_key TEXT NOT NULL,
+              request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+              revoked_at TEXT NOT NULL,
+              PRIMARY KEY(workspace_id, node_id, admission_generation),
+              UNIQUE(workspace_id, idempotency_key),
+              FOREIGN KEY(workspace_id, node_id, admission_generation)
+                REFERENCES mesh_capability_node_admissions(workspace_id, node_id, admission_generation) ON DELETE RESTRICT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_mesh_capability_node_admissions_current
+              ON mesh_capability_node_admissions(workspace_id, node_id, admission_generation DESC);
+
+            DROP TRIGGER IF EXISTS trg_mesh_capability_publishers_insert_guard;
+            CREATE TRIGGER trg_mesh_capability_publishers_insert_guard
+            BEFORE INSERT ON mesh_capability_publishers
+            WHEN
+              EXISTS (
+                SELECT 1 FROM mesh_capability_publishers
+                WHERE workspace_id = NEW.workspace_id AND node_id = NEW.node_id
+                  AND publisher_generation >= NEW.publisher_generation
+              )
+              OR EXISTS (
+                SELECT 1 FROM mesh_capability_publishers
+                WHERE workspace_id = NEW.workspace_id AND node_id = NEW.node_id
+                  AND admission_generation > NEW.admission_generation
+              )
+              OR NOT EXISTS (
+                SELECT 1 FROM mesh_nodes node
+                JOIN mesh_leases lease ON lease.lease_key = NEW.publication_lease_key
+                WHERE node.node_id = NEW.node_id AND node.status = 'online'
+                  AND lease.holder_node_id = NEW.node_id
+                  AND lease.fencing_token = NEW.publication_lease_fencing_token
+                  AND lease.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                  AND lease.expires_at = NEW.publication_lease_expires_at
+                  AND (NEW.mtls_required = 0 OR node.tls_fingerprint = NEW.tls_fingerprint)
+              )
+            BEGIN SELECT RAISE(ABORT, 'mesh capability publisher generation or live database-clock lease invariant violated'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_node_admissions_insert_guard
+            BEFORE INSERT ON mesh_capability_node_admissions
+            WHEN
+              NEW.admission_generation <> 1 + COALESCE((
+                SELECT MAX(prior.admission_generation) FROM mesh_capability_node_admissions prior
+                WHERE prior.workspace_id = NEW.workspace_id AND prior.node_id = NEW.node_id
+              ), 0)
+              OR (
+                NEW.admission_generation > 1 AND NOT EXISTS (
+                  SELECT 1 FROM mesh_capability_node_admission_revocations revoked
+                  WHERE revoked.workspace_id = NEW.workspace_id AND revoked.node_id = NEW.node_id
+                    AND revoked.admission_generation = NEW.admission_generation - 1
+                )
+              )
+              OR NOT EXISTS (
+                SELECT 1 FROM mesh_join_tokens token
+                WHERE token.token_hash = NEW.join_token_sha256
+                  AND token.used_at IS NOT NULL AND token.used_by_node_id = NEW.node_id
+              )
+              OR NOT EXISTS (
+                SELECT 1 FROM mesh_nodes node
+                WHERE node.node_id = NEW.node_id AND node.status = 'online'
+                  AND node.tls_fingerprint IS NEW.tls_fingerprint
+              )
+              OR (
+                SELECT COUNT(*) FROM mesh_capability_node_admissions active
+                WHERE active.workspace_id = NEW.workspace_id
+                  AND active.admission_generation = (
+                    SELECT MAX(current.admission_generation) FROM mesh_capability_node_admissions current
+                    WHERE current.workspace_id = active.workspace_id AND current.node_id = active.node_id
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1 FROM mesh_capability_node_admission_revocations revoked
+                    WHERE revoked.workspace_id = active.workspace_id AND revoked.node_id = active.node_id
+                      AND revoked.admission_generation = active.admission_generation
+                  )
+              ) >= 16
+            BEGIN SELECT RAISE(ABORT, 'mesh capability node admission generation, token, identity, or workspace cap invariant violated'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_node_admission_revocations_insert_guard
+            BEFORE INSERT ON mesh_capability_node_admission_revocations
+            WHEN NOT EXISTS (
+              SELECT 1 FROM mesh_capability_node_admissions admission
+              WHERE admission.workspace_id = NEW.workspace_id AND admission.node_id = NEW.node_id
+                AND admission.admission_generation = NEW.admission_generation
+                AND admission.admission_generation = (
+                  SELECT MAX(current.admission_generation) FROM mesh_capability_node_admissions current
+                  WHERE current.workspace_id = admission.workspace_id AND current.node_id = admission.node_id
+                )
+            ) OR EXISTS (
+              SELECT 1 FROM mesh_capability_publishers publisher
+              LEFT JOIN mesh_capability_publisher_health health
+                ON health.workspace_id = publisher.workspace_id AND health.node_id = publisher.node_id
+               AND health.publisher_generation = publisher.publisher_generation
+              WHERE publisher.workspace_id = NEW.workspace_id AND publisher.node_id = NEW.node_id
+                AND publisher.admission_generation = NEW.admission_generation
+                AND (health.status IS NULL OR health.status NOT IN ('offline', 'revoked'))
+            )
+            BEGIN SELECT RAISE(ABORT, 'mesh capability node admission revocation requires the current generation and terminal publisher health'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_publishers_admission_authority
+            BEFORE INSERT ON mesh_capability_publishers
+            WHEN NOT EXISTS (
+              SELECT 1 FROM mesh_capability_node_admissions admission
+              WHERE admission.workspace_id = NEW.workspace_id AND admission.node_id = NEW.node_id
+                AND admission.admission_generation = NEW.admission_generation
+                AND admission.mtls_required = NEW.mtls_required
+                AND admission.tls_fingerprint IS NEW.tls_fingerprint
+                AND admission.admission_generation = (
+                  SELECT MAX(current.admission_generation) FROM mesh_capability_node_admissions current
+                  WHERE current.workspace_id = admission.workspace_id AND current.node_id = admission.node_id
+                )
+                AND NOT EXISTS (
+                  SELECT 1 FROM mesh_capability_node_admission_revocations revoked
+                  WHERE revoked.workspace_id = admission.workspace_id AND revoked.node_id = admission.node_id
+                    AND revoked.admission_generation = admission.admission_generation
+                )
+            )
+            BEGIN SELECT RAISE(ABORT, 'mesh capability publisher lacks current workspace-scoped node admission authority'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_manifests_admission_authority
+            BEFORE INSERT ON mesh_capability_manifests
+            WHEN NOT EXISTS (
+              SELECT 1 FROM mesh_capability_publishers publisher
+              JOIN mesh_capability_node_admissions admission
+                ON admission.workspace_id = publisher.workspace_id AND admission.node_id = publisher.node_id
+               AND admission.admission_generation = publisher.admission_generation
+              WHERE publisher.workspace_id = NEW.workspace_id AND publisher.node_id = NEW.node_id
+                AND publisher.publisher_generation = NEW.publisher_generation
+                AND publisher.admission_generation = NEW.admission_generation
+                AND admission.admission_generation = (
+                  SELECT MAX(current.admission_generation) FROM mesh_capability_node_admissions current
+                  WHERE current.workspace_id = admission.workspace_id AND current.node_id = admission.node_id
+                )
+                AND NOT EXISTS (
+                  SELECT 1 FROM mesh_capability_node_admission_revocations revoked
+                  WHERE revoked.workspace_id = admission.workspace_id AND revoked.node_id = admission.node_id
+                    AND revoked.admission_generation = admission.admission_generation
+                )
+            )
+            BEGIN SELECT RAISE(ABORT, 'mesh capability manifest lacks current workspace-scoped node admission authority'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_activations_admission_authority
+            BEFORE INSERT ON mesh_capability_activations
+            WHEN NOT EXISTS (
+              SELECT 1 FROM mesh_capability_publishers publisher
+              JOIN mesh_capability_node_admissions admission
+                ON admission.workspace_id = publisher.workspace_id AND admission.node_id = publisher.node_id
+               AND admission.admission_generation = publisher.admission_generation
+              WHERE publisher.workspace_id = NEW.workspace_id AND publisher.node_id = NEW.node_id
+                AND publisher.publisher_generation = NEW.publisher_generation
+                AND admission.admission_generation = (
+                  SELECT MAX(current.admission_generation) FROM mesh_capability_node_admissions current
+                  WHERE current.workspace_id = admission.workspace_id AND current.node_id = admission.node_id
+                )
+                AND NOT EXISTS (
+                  SELECT 1 FROM mesh_capability_node_admission_revocations revoked
+                  WHERE revoked.workspace_id = admission.workspace_id AND revoked.node_id = admission.node_id
+                    AND revoked.admission_generation = admission.admission_generation
+                )
+            )
+            BEGIN SELECT RAISE(ABORT, 'mesh capability activation lacks current workspace-scoped node admission authority'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_intents_admission_authority
+            BEFORE INSERT ON mesh_capability_invocation_intents
+            WHEN NOT EXISTS (
+              SELECT 1 FROM mesh_capability_publishers publisher
+              JOIN mesh_capability_node_admissions admission
+                ON admission.workspace_id = publisher.workspace_id AND admission.node_id = publisher.node_id
+               AND admission.admission_generation = publisher.admission_generation
+              WHERE publisher.workspace_id = NEW.workspace_id AND publisher.node_id = NEW.node_id
+                AND publisher.publisher_generation = NEW.publisher_generation
+                AND admission.admission_generation = (
+                  SELECT MAX(current.admission_generation) FROM mesh_capability_node_admissions current
+                  WHERE current.workspace_id = admission.workspace_id AND current.node_id = admission.node_id
+                )
+                AND NOT EXISTS (
+                  SELECT 1 FROM mesh_capability_node_admission_revocations revoked
+                  WHERE revoked.workspace_id = admission.workspace_id AND revoked.node_id = admission.node_id
+                    AND revoked.admission_generation = admission.admission_generation
+                )
+            )
+            BEGIN SELECT RAISE(ABORT, 'mesh capability invocation intent lacks current workspace-scoped node admission authority'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_node_admissions_no_update BEFORE UPDATE ON mesh_capability_node_admissions BEGIN SELECT RAISE(ABORT, 'mesh capability node admissions are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_node_admissions_no_delete BEFORE DELETE ON mesh_capability_node_admissions BEGIN SELECT RAISE(ABORT, 'mesh capability node admissions are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_node_admission_revocations_no_update BEFORE UPDATE ON mesh_capability_node_admission_revocations BEGIN SELECT RAISE(ABORT, 'mesh capability node admission revocations are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_mesh_capability_node_admission_revocations_no_delete BEFORE DELETE ON mesh_capability_node_admission_revocations BEGIN SELECT RAISE(ABORT, 'mesh capability node admission revocations are immutable'); END;
+          `);
+        },
+      },
+      {
+        version: 170,
+        name: "remote_worker_admission_foundation",
+        up: (db) => {
+          if (!tableExists(db, "workspaces")) return;
+          db.exec(`
+            CREATE TABLE IF NOT EXISTS remote_worker_bootstrap_requests (
+              registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+              bootstrap_id TEXT NOT NULL CHECK(length(bootstrap_id) BETWEEN 1 AND 256),
+              worker_id TEXT NOT NULL CHECK(length(worker_id) BETWEEN 1 AND 256),
+              node_id TEXT NOT NULL CHECK(length(node_id) BETWEEN 1 AND 256),
+              target_worker_generation INTEGER NOT NULL CHECK(typeof(target_worker_generation) = 'integer' AND target_worker_generation > 0),
+              worker_label TEXT NOT NULL CHECK(length(worker_label) BETWEEN 1 AND 160),
+              platform TEXT NOT NULL CHECK(platform IN ('windows', 'linux', 'darwin')),
+              architecture TEXT NOT NULL CHECK(architecture IN ('x64', 'arm64')),
+              runtime_manifest_json TEXT NOT NULL CHECK(json_valid(runtime_manifest_json) AND length(CAST(runtime_manifest_json AS BLOB)) <= 524288),
+              runtime_manifest_sha256 TEXT NOT NULL CHECK(length(runtime_manifest_sha256) = 64 AND runtime_manifest_sha256 NOT GLOB '*[^0-9a-f]*'),
+              allowed_workspace_count INTEGER NOT NULL CHECK(typeof(allowed_workspace_count) = 'integer' AND allowed_workspace_count BETWEEN 1 AND 16),
+              workspace_ceiling_sha256 TEXT NOT NULL CHECK(length(workspace_ceiling_sha256) = 64 AND workspace_ceiling_sha256 NOT GLOB '*[^0-9a-f]*'),
+              capability_class_count INTEGER NOT NULL CHECK(typeof(capability_class_count) = 'integer' AND capability_class_count BETWEEN 1 AND 9),
+              capability_ceiling_sha256 TEXT NOT NULL CHECK(length(capability_ceiling_sha256) = 64 AND capability_ceiling_sha256 NOT GLOB '*[^0-9a-f]*'),
+              bootstrap_secret_sha256 TEXT NOT NULL UNIQUE CHECK(length(bootstrap_secret_sha256) = 64 AND bootstrap_secret_sha256 NOT GLOB '*[^0-9a-f]*'),
+              expires_at TEXT NOT NULL CHECK(
+                strftime('%Y-%m-%dT%H:%M:%fZ', expires_at, '+0 days') IS NOT NULL
+                AND strftime('%Y-%m-%dT%H:%M:%fZ', expires_at, '+0 days') = expires_at
+              ),
+              created_by_actor_id TEXT NOT NULL CHECK(length(created_by_actor_id) BETWEEN 1 AND 256),
+              idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+              request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+              created_at TEXT NOT NULL CHECK(
+                strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') IS NOT NULL
+                AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') = created_at
+              ),
+              PRIMARY KEY(registry_workspace_id, bootstrap_id),
+              UNIQUE(registry_workspace_id, idempotency_key),
+              FOREIGN KEY(registry_workspace_id) REFERENCES workspaces(workspace_id) ON DELETE RESTRICT,
+              CHECK((
+                (CAST(strftime('%s', expires_at) AS INTEGER) - CAST(strftime('%s', created_at) AS INTEGER)) * 1000
+                + CAST(substr(expires_at, 21, 3) AS INTEGER)
+                - CAST(substr(created_at, 21, 3) AS INTEGER)
+              ) BETWEEN 1000 AND 600000),
+              CHECK(json_extract(runtime_manifest_json, '$.payload.schemaVersion') = 'goatcitadel.remote-worker-runtime-manifest.v1'),
+              CHECK(json_extract(runtime_manifest_json, '$.payload.protocolVersion') = 'goatcitadel.remote-worker.v1'),
+              CHECK(json_extract(runtime_manifest_json, '$.payload.platform') = platform),
+              CHECK(json_extract(runtime_manifest_json, '$.payload.architecture') = architecture),
+              CHECK(json_extract(runtime_manifest_json, '$.payload.installedTreeFileCount') BETWEEN 1 AND 10000),
+              CHECK(json_extract(runtime_manifest_json, '$.signatureAlgorithm') = 'ed25519')
+            );
+
+            CREATE TABLE IF NOT EXISTS remote_worker_bootstrap_allowed_workspaces (
+              registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+              bootstrap_id TEXT NOT NULL CHECK(length(bootstrap_id) BETWEEN 1 AND 256),
+              allowed_workspace_id TEXT NOT NULL CHECK(length(allowed_workspace_id) BETWEEN 1 AND 256),
+              PRIMARY KEY(registry_workspace_id, bootstrap_id, allowed_workspace_id),
+              FOREIGN KEY(registry_workspace_id, bootstrap_id)
+                REFERENCES remote_worker_bootstrap_requests(registry_workspace_id, bootstrap_id) ON DELETE RESTRICT,
+              FOREIGN KEY(allowed_workspace_id) REFERENCES workspaces(workspace_id) ON DELETE RESTRICT
+            );
+
+            CREATE TABLE IF NOT EXISTS remote_worker_bootstrap_capability_classes (
+              registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+              bootstrap_id TEXT NOT NULL CHECK(length(bootstrap_id) BETWEEN 1 AND 256),
+              capability_class TEXT NOT NULL CHECK(capability_class IN (
+                'durable_compute', 'gateway_inference', 'governed_tool', 'governed_code',
+                'artifact_stage', 'trusted_verification', 'device_camera', 'device_location',
+                'device_notification'
+              )),
+              PRIMARY KEY(registry_workspace_id, bootstrap_id, capability_class),
+              FOREIGN KEY(registry_workspace_id, bootstrap_id)
+                REFERENCES remote_worker_bootstrap_requests(registry_workspace_id, bootstrap_id) ON DELETE RESTRICT
+            );
+
+            CREATE TABLE IF NOT EXISTS remote_worker_generations (
+              registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+              worker_id TEXT NOT NULL CHECK(length(worker_id) BETWEEN 1 AND 256),
+              node_id TEXT NOT NULL CHECK(length(node_id) BETWEEN 1 AND 256),
+              worker_generation INTEGER NOT NULL CHECK(typeof(worker_generation) = 'integer' AND worker_generation > 0),
+              bootstrap_id TEXT NOT NULL CHECK(length(bootstrap_id) BETWEEN 1 AND 256),
+              public_key_spki_sha256 TEXT NOT NULL CHECK(length(public_key_spki_sha256) = 64 AND public_key_spki_sha256 NOT GLOB '*[^0-9a-f]*'),
+              client_certificate_sha256 TEXT NOT NULL CHECK(length(client_certificate_sha256) = 64 AND client_certificate_sha256 NOT GLOB '*[^0-9a-f]*'),
+              transport_identity_source TEXT NOT NULL CHECK(transport_identity_source IN ('native_mtls', 'trusted_terminator')),
+              transport_trust_anchor_sha256 TEXT NOT NULL CHECK(length(transport_trust_anchor_sha256) = 64 AND transport_trust_anchor_sha256 NOT GLOB '*[^0-9a-f]*'),
+              transport_verification_receipt_sha256 TEXT NOT NULL CHECK(length(transport_verification_receipt_sha256) = 64 AND transport_verification_receipt_sha256 NOT GLOB '*[^0-9a-f]*'),
+              proof_of_possession_receipt_sha256 TEXT NOT NULL CHECK(length(proof_of_possession_receipt_sha256) = 64 AND proof_of_possession_receipt_sha256 NOT GLOB '*[^0-9a-f]*'),
+              download_verification_receipt_sha256 TEXT NOT NULL CHECK(length(download_verification_receipt_sha256) = 64 AND download_verification_receipt_sha256 NOT GLOB '*[^0-9a-f]*'),
+              installed_tree_attestation_sha256 TEXT NOT NULL CHECK(length(installed_tree_attestation_sha256) = 64 AND installed_tree_attestation_sha256 NOT GLOB '*[^0-9a-f]*'),
+              installed_tree_verification_receipt_sha256 TEXT NOT NULL CHECK(length(installed_tree_verification_receipt_sha256) = 64 AND installed_tree_verification_receipt_sha256 NOT GLOB '*[^0-9a-f]*'),
+              runtime_manifest_sha256 TEXT NOT NULL CHECK(length(runtime_manifest_sha256) = 64 AND runtime_manifest_sha256 NOT GLOB '*[^0-9a-f]*'),
+              workspace_ceiling_sha256 TEXT NOT NULL CHECK(length(workspace_ceiling_sha256) = 64 AND workspace_ceiling_sha256 NOT GLOB '*[^0-9a-f]*'),
+              capability_ceiling_sha256 TEXT NOT NULL CHECK(length(capability_ceiling_sha256) = 64 AND capability_ceiling_sha256 NOT GLOB '*[^0-9a-f]*'),
+              exchange_idempotency_key TEXT NOT NULL CHECK(length(exchange_idempotency_key) BETWEEN 1 AND 512),
+              exchange_request_sha256 TEXT NOT NULL CHECK(length(exchange_request_sha256) = 64 AND exchange_request_sha256 NOT GLOB '*[^0-9a-f]*'),
+              admitted_at TEXT NOT NULL CHECK(
+                strftime('%Y-%m-%dT%H:%M:%fZ', admitted_at, '+0 days') IS NOT NULL
+                AND strftime('%Y-%m-%dT%H:%M:%fZ', admitted_at, '+0 days') = admitted_at
+              ),
+              PRIMARY KEY(registry_workspace_id, worker_id, worker_generation),
+              UNIQUE(registry_workspace_id, bootstrap_id),
+              UNIQUE(registry_workspace_id, exchange_idempotency_key),
+              FOREIGN KEY(registry_workspace_id, bootstrap_id)
+                REFERENCES remote_worker_bootstrap_requests(registry_workspace_id, bootstrap_id) ON DELETE RESTRICT
+            );
+
+            CREATE TABLE IF NOT EXISTS remote_worker_runtime_credentials (
+              registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+              worker_id TEXT NOT NULL CHECK(length(worker_id) BETWEEN 1 AND 256),
+              worker_generation INTEGER NOT NULL CHECK(typeof(worker_generation) = 'integer' AND worker_generation > 0),
+              credential_generation INTEGER NOT NULL CHECK(typeof(credential_generation) = 'integer' AND credential_generation > 0),
+              credential_id TEXT NOT NULL CHECK(length(credential_id) BETWEEN 1 AND 256),
+              purpose TEXT NOT NULL CHECK(purpose = 'worker_runtime'),
+              token_sha256 TEXT NOT NULL UNIQUE CHECK(length(token_sha256) = 64 AND token_sha256 NOT GLOB '*[^0-9a-f]*'),
+              transport_verification_receipt_sha256 TEXT NOT NULL CHECK(length(transport_verification_receipt_sha256) = 64 AND transport_verification_receipt_sha256 NOT GLOB '*[^0-9a-f]*'),
+              proof_of_possession_receipt_sha256 TEXT NOT NULL CHECK(length(proof_of_possession_receipt_sha256) = 64 AND proof_of_possession_receipt_sha256 NOT GLOB '*[^0-9a-f]*'),
+              claims_json TEXT NOT NULL CHECK(json_valid(claims_json) AND length(CAST(claims_json AS BLOB)) <= 16384),
+              claims_sha256 TEXT NOT NULL CHECK(length(claims_sha256) = 64 AND claims_sha256 NOT GLOB '*[^0-9a-f]*'),
+              issuance_proof_sha256 TEXT NOT NULL CHECK(length(issuance_proof_sha256) = 64 AND issuance_proof_sha256 NOT GLOB '*[^0-9a-f]*'),
+              idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+              request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+              issued_at TEXT NOT NULL CHECK(
+                strftime('%Y-%m-%dT%H:%M:%fZ', issued_at, '+0 days') IS NOT NULL
+                AND strftime('%Y-%m-%dT%H:%M:%fZ', issued_at, '+0 days') = issued_at
+              ),
+              expires_at TEXT NOT NULL CHECK(
+                strftime('%Y-%m-%dT%H:%M:%fZ', expires_at, '+0 days') IS NOT NULL
+                AND strftime('%Y-%m-%dT%H:%M:%fZ', expires_at, '+0 days') = expires_at
+              ),
+              PRIMARY KEY(registry_workspace_id, worker_id, worker_generation, credential_generation),
+              UNIQUE(registry_workspace_id, credential_id),
+              UNIQUE(registry_workspace_id, worker_id, worker_generation, idempotency_key),
+              FOREIGN KEY(registry_workspace_id, worker_id, worker_generation)
+                REFERENCES remote_worker_generations(registry_workspace_id, worker_id, worker_generation) ON DELETE RESTRICT,
+              CHECK((
+                (CAST(strftime('%s', expires_at) AS INTEGER) - CAST(strftime('%s', issued_at) AS INTEGER)) * 1000
+                + CAST(substr(expires_at, 21, 3) AS INTEGER)
+                - CAST(substr(issued_at, 21, 3) AS INTEGER)
+              ) BETWEEN 1000 AND 900000)
+            );
+
+            CREATE TABLE IF NOT EXISTS remote_worker_generation_controls (
+              registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+              worker_id TEXT NOT NULL CHECK(length(worker_id) BETWEEN 1 AND 256),
+              worker_generation INTEGER NOT NULL CHECK(typeof(worker_generation) = 'integer' AND worker_generation > 0),
+              control_revision INTEGER NOT NULL CHECK(typeof(control_revision) = 'integer' AND control_revision BETWEEN 1 AND 2),
+              action TEXT NOT NULL CHECK(action IN ('quarantine', 'revoke')),
+              reason_code TEXT NOT NULL CHECK(
+                length(reason_code) BETWEEN 1 AND 128
+                AND reason_code NOT GLOB '*[^a-z0-9._-]*'
+                AND substr(reason_code, 1, 1) GLOB '[a-z0-9]'
+                AND substr(reason_code, -1, 1) GLOB '[a-z0-9]'
+              ),
+              reason_sha256 TEXT NOT NULL CHECK(length(reason_sha256) = 64 AND reason_sha256 NOT GLOB '*[^0-9a-f]*'),
+              actor_id TEXT NOT NULL CHECK(length(actor_id) BETWEEN 1 AND 256),
+              idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+              request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+              created_at TEXT NOT NULL CHECK(
+                strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') IS NOT NULL
+                AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') = created_at
+              ),
+              PRIMARY KEY(registry_workspace_id, worker_id, worker_generation, control_revision),
+              UNIQUE(registry_workspace_id, idempotency_key),
+              FOREIGN KEY(registry_workspace_id, worker_id, worker_generation)
+                REFERENCES remote_worker_generations(registry_workspace_id, worker_id, worker_generation) ON DELETE RESTRICT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_remote_worker_bootstraps_worker_target
+              ON remote_worker_bootstrap_requests(registry_workspace_id, worker_id, target_worker_generation, expires_at);
+            CREATE INDEX IF NOT EXISTS idx_remote_worker_generations_current
+              ON remote_worker_generations(registry_workspace_id, worker_id, worker_generation DESC);
+            CREATE INDEX IF NOT EXISTS idx_remote_worker_credentials_current
+              ON remote_worker_runtime_credentials(registry_workspace_id, worker_id, worker_generation, credential_generation DESC);
+            CREATE INDEX IF NOT EXISTS idx_remote_worker_controls_current
+              ON remote_worker_generation_controls(registry_workspace_id, worker_id, worker_generation, control_revision DESC);
+
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_bootstrap_insert_guard
+            BEFORE INSERT ON remote_worker_bootstrap_requests
+            WHEN
+              json(NEW.runtime_manifest_json) <> NEW.runtime_manifest_json
+              OR COALESCE(json_type(NEW.runtime_manifest_json, '$'), '') <> 'object'
+              OR (SELECT COUNT(*) FROM json_each(NEW.runtime_manifest_json)) <> 5
+              OR (SELECT COUNT(DISTINCT root.key) FROM json_each(NEW.runtime_manifest_json) root) <> 5
+              OR EXISTS (
+                SELECT 1 FROM json_each(NEW.runtime_manifest_json) root
+                WHERE root.key NOT IN (
+                  'payload', 'payloadSha256', 'signatureAlgorithm', 'signerKeyId', 'signatureBase64Url'
+                )
+              )
+              OR COALESCE(json_type(NEW.runtime_manifest_json, '$.payload'), '') <> 'object'
+              OR (SELECT COUNT(*) FROM json_each(NEW.runtime_manifest_json, '$.payload')) <> 10
+              OR (
+                SELECT COUNT(DISTINCT payload.key) FROM json_each(NEW.runtime_manifest_json, '$.payload') payload
+              ) <> 10
+              OR EXISTS (
+                SELECT 1 FROM json_each(NEW.runtime_manifest_json, '$.payload') payload
+                WHERE payload.key NOT IN (
+                  'schemaVersion', 'protocolVersion', 'bundleSha256', 'dependencyLockSha256',
+                  'vendorTreeSha256', 'launcherSha256', 'installedTreeManifestSha256',
+                  'installedTreeFileCount', 'platform', 'architecture'
+                )
+              )
+              OR COALESCE(json_type(NEW.runtime_manifest_json, '$.payloadSha256'), '') <> 'text'
+              OR length(json_extract(NEW.runtime_manifest_json, '$.payloadSha256')) <> 64
+              OR json_extract(NEW.runtime_manifest_json, '$.payloadSha256') GLOB '*[^0-9a-f]*'
+              OR COALESCE(json_type(NEW.runtime_manifest_json, '$.signatureAlgorithm'), '') <> 'text'
+              OR json_extract(NEW.runtime_manifest_json, '$.signatureAlgorithm') <> 'ed25519'
+              OR COALESCE(json_type(NEW.runtime_manifest_json, '$.signerKeyId'), '') <> 'text'
+              OR length(json_extract(NEW.runtime_manifest_json, '$.signerKeyId')) NOT BETWEEN 1 AND 256
+              OR COALESCE(json_type(NEW.runtime_manifest_json, '$.signatureBase64Url'), '') <> 'text'
+              OR length(json_extract(NEW.runtime_manifest_json, '$.signatureBase64Url')) <> 86
+              OR json_extract(NEW.runtime_manifest_json, '$.signatureBase64Url') GLOB '*[^A-Za-z0-9_-]*'
+              OR substr(json_extract(NEW.runtime_manifest_json, '$.signatureBase64Url'), -1, 1) NOT IN ('A', 'Q', 'g', 'w')
+              OR COALESCE(json_type(NEW.runtime_manifest_json, '$.payload.installedTreeFileCount'), '') <> 'integer'
+              OR COALESCE(json_type(NEW.runtime_manifest_json, '$.payload.schemaVersion'), '') <> 'text'
+              OR COALESCE(json_type(NEW.runtime_manifest_json, '$.payload.protocolVersion'), '') <> 'text'
+              OR COALESCE(json_type(NEW.runtime_manifest_json, '$.payload.platform'), '') <> 'text'
+              OR COALESCE(json_type(NEW.runtime_manifest_json, '$.payload.architecture'), '') <> 'text'
+              OR EXISTS (
+                SELECT 1 FROM json_each(NEW.runtime_manifest_json, '$.payload') payload
+                WHERE payload.key IN (
+                  'bundleSha256', 'dependencyLockSha256', 'vendorTreeSha256',
+                  'launcherSha256', 'installedTreeManifestSha256'
+                ) AND (
+                  payload.type <> 'text' OR length(payload.value) <> 64 OR payload.value GLOB '*[^0-9a-f]*'
+                )
+              )
+              OR strftime('%Y-%m-%dT%H:%M:%fZ', NEW.created_at, '+0 days') IS NULL
+              OR strftime('%Y-%m-%dT%H:%M:%fZ', NEW.created_at, '+0 days') <> NEW.created_at
+              OR strftime('%Y-%m-%dT%H:%M:%fZ', NEW.expires_at, '+0 days') IS NULL
+              OR strftime('%Y-%m-%dT%H:%M:%fZ', NEW.expires_at, '+0 days') <> NEW.expires_at
+              OR ABS(
+                (CAST(strftime('%s', NEW.created_at) AS INTEGER) - CAST(strftime('%s', 'now') AS INTEGER)) * 1000
+                + CAST(substr(NEW.created_at, 21, 3) AS INTEGER)
+                - CAST(substr(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 21, 3) AS INTEGER)
+              ) > 1000
+              OR NEW.expires_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+              OR NEW.target_worker_generation <> 1 + COALESCE((
+                SELECT MAX(generation.worker_generation) FROM remote_worker_generations generation
+                WHERE generation.registry_workspace_id = NEW.registry_workspace_id
+                  AND generation.worker_id = NEW.worker_id
+              ), 0)
+              OR (
+                NEW.target_worker_generation > 1 AND NOT EXISTS (
+                  SELECT 1 FROM remote_worker_generation_controls control
+                  WHERE control.registry_workspace_id = NEW.registry_workspace_id
+                    AND control.worker_id = NEW.worker_id
+                    AND control.worker_generation = NEW.target_worker_generation - 1
+                    AND control.action = 'revoke'
+                )
+              )
+              OR EXISTS (
+                SELECT 1 FROM remote_worker_bootstrap_requests active
+                WHERE active.registry_workspace_id = NEW.registry_workspace_id
+                  AND active.worker_id = NEW.worker_id
+                  AND active.target_worker_generation = NEW.target_worker_generation
+                  AND active.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                  AND NOT EXISTS (
+                    SELECT 1 FROM remote_worker_generations consumed
+                    WHERE consumed.registry_workspace_id = active.registry_workspace_id
+                      AND consumed.bootstrap_id = active.bootstrap_id
+                  )
+              )
+              OR (
+                NEW.target_worker_generation > 1 AND EXISTS (
+                  SELECT 1 FROM remote_worker_generations prior
+                  WHERE prior.registry_workspace_id = NEW.registry_workspace_id
+                    AND prior.worker_id = NEW.worker_id
+                    AND prior.worker_generation = NEW.target_worker_generation - 1
+                    AND prior.node_id <> NEW.node_id
+                )
+              )
+            BEGIN SELECT RAISE(ABORT, 'remote worker bootstrap invariant violated'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_allowed_workspace_insert_guard
+            BEFORE INSERT ON remote_worker_bootstrap_allowed_workspaces
+            WHEN
+              NOT EXISTS (
+                SELECT 1 FROM remote_worker_bootstrap_requests bootstrap
+                WHERE bootstrap.registry_workspace_id = NEW.registry_workspace_id
+                  AND bootstrap.bootstrap_id = NEW.bootstrap_id
+              )
+              OR EXISTS (
+                SELECT 1 FROM remote_worker_generations generation
+                WHERE generation.registry_workspace_id = NEW.registry_workspace_id
+                  AND generation.bootstrap_id = NEW.bootstrap_id
+              )
+              OR (
+                SELECT COUNT(*) FROM remote_worker_bootstrap_allowed_workspaces current
+                WHERE current.registry_workspace_id = NEW.registry_workspace_id
+                  AND current.bootstrap_id = NEW.bootstrap_id
+              ) >= 16
+              OR (
+                NEW.allowed_workspace_id <> NEW.registry_workspace_id AND NOT EXISTS (
+                  SELECT 1 FROM remote_worker_bootstrap_allowed_workspaces registry_scope
+                  WHERE registry_scope.registry_workspace_id = NEW.registry_workspace_id
+                    AND registry_scope.bootstrap_id = NEW.bootstrap_id
+                    AND registry_scope.allowed_workspace_id = NEW.registry_workspace_id
+                )
+              )
+            BEGIN SELECT RAISE(ABORT, 'remote worker bootstrap workspace ceiling invariant violated'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_capability_class_insert_guard
+            BEFORE INSERT ON remote_worker_bootstrap_capability_classes
+            WHEN
+              NOT EXISTS (
+                SELECT 1 FROM remote_worker_bootstrap_requests bootstrap
+                WHERE bootstrap.registry_workspace_id = NEW.registry_workspace_id
+                  AND bootstrap.bootstrap_id = NEW.bootstrap_id
+              )
+              OR EXISTS (
+                SELECT 1 FROM remote_worker_generations generation
+                WHERE generation.registry_workspace_id = NEW.registry_workspace_id
+                  AND generation.bootstrap_id = NEW.bootstrap_id
+              )
+              OR (
+                SELECT COUNT(*) FROM remote_worker_bootstrap_capability_classes current
+                WHERE current.registry_workspace_id = NEW.registry_workspace_id
+                  AND current.bootstrap_id = NEW.bootstrap_id
+              ) >= 9
+            BEGIN SELECT RAISE(ABORT, 'remote worker bootstrap capability ceiling invariant violated'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_generation_insert_guard
+            BEFORE INSERT ON remote_worker_generations
+            WHEN
+              strftime('%Y-%m-%dT%H:%M:%fZ', NEW.admitted_at, '+0 days') IS NULL
+              OR strftime('%Y-%m-%dT%H:%M:%fZ', NEW.admitted_at, '+0 days') <> NEW.admitted_at
+              OR ABS(
+                (CAST(strftime('%s', NEW.admitted_at) AS INTEGER) - CAST(strftime('%s', 'now') AS INTEGER)) * 1000
+                + CAST(substr(NEW.admitted_at, 21, 3) AS INTEGER)
+                - CAST(substr(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 21, 3) AS INTEGER)
+              ) > 1000
+              OR NOT EXISTS (
+                SELECT 1 FROM remote_worker_bootstrap_requests bootstrap
+                WHERE bootstrap.registry_workspace_id = NEW.registry_workspace_id
+                  AND bootstrap.bootstrap_id = NEW.bootstrap_id
+                  AND bootstrap.worker_id = NEW.worker_id
+                  AND bootstrap.node_id = NEW.node_id
+                  AND bootstrap.target_worker_generation = NEW.worker_generation
+                  AND bootstrap.runtime_manifest_sha256 = NEW.runtime_manifest_sha256
+                  AND bootstrap.workspace_ceiling_sha256 = NEW.workspace_ceiling_sha256
+                  AND bootstrap.capability_ceiling_sha256 = NEW.capability_ceiling_sha256
+                  AND bootstrap.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                  AND bootstrap.allowed_workspace_count = (
+                    SELECT COUNT(*) FROM remote_worker_bootstrap_allowed_workspaces scope
+                    WHERE scope.registry_workspace_id = bootstrap.registry_workspace_id
+                      AND scope.bootstrap_id = bootstrap.bootstrap_id
+                  )
+                  AND EXISTS (
+                    SELECT 1 FROM remote_worker_bootstrap_allowed_workspaces registry_scope
+                    WHERE registry_scope.registry_workspace_id = bootstrap.registry_workspace_id
+                      AND registry_scope.bootstrap_id = bootstrap.bootstrap_id
+                      AND registry_scope.allowed_workspace_id = bootstrap.registry_workspace_id
+                  )
+                  AND bootstrap.capability_class_count = (
+                    SELECT COUNT(*) FROM remote_worker_bootstrap_capability_classes scope
+                    WHERE scope.registry_workspace_id = bootstrap.registry_workspace_id
+                      AND scope.bootstrap_id = bootstrap.bootstrap_id
+                  )
+              )
+              OR NEW.worker_generation <> 1 + COALESCE((
+                SELECT MAX(current.worker_generation) FROM remote_worker_generations current
+                WHERE current.registry_workspace_id = NEW.registry_workspace_id
+                  AND current.worker_id = NEW.worker_id
+              ), 0)
+              OR (
+                NEW.worker_generation > 1 AND NOT EXISTS (
+                  SELECT 1 FROM remote_worker_generation_controls control
+                  WHERE control.registry_workspace_id = NEW.registry_workspace_id
+                    AND control.worker_id = NEW.worker_id
+                    AND control.worker_generation = NEW.worker_generation - 1
+                    AND control.action = 'revoke'
+                )
+              )
+              OR (
+                NEW.worker_generation > 1 AND EXISTS (
+                  SELECT 1 FROM remote_worker_generations prior
+                  WHERE prior.registry_workspace_id = NEW.registry_workspace_id
+                    AND prior.worker_id = NEW.worker_id
+                    AND prior.worker_generation = NEW.worker_generation - 1
+                    AND (
+                      prior.public_key_spki_sha256 = NEW.public_key_spki_sha256
+                      OR prior.client_certificate_sha256 = NEW.client_certificate_sha256
+                      OR prior.installed_tree_attestation_sha256 = NEW.installed_tree_attestation_sha256
+                    )
+                )
+              )
+            BEGIN SELECT RAISE(ABORT, 'remote worker generation invariant violated'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_credential_insert_guard
+            BEFORE INSERT ON remote_worker_runtime_credentials
+            WHEN
+              strftime('%Y-%m-%dT%H:%M:%fZ', NEW.issued_at, '+0 days') IS NULL
+              OR strftime('%Y-%m-%dT%H:%M:%fZ', NEW.issued_at, '+0 days') <> NEW.issued_at
+              OR strftime('%Y-%m-%dT%H:%M:%fZ', NEW.expires_at, '+0 days') IS NULL
+              OR strftime('%Y-%m-%dT%H:%M:%fZ', NEW.expires_at, '+0 days') <> NEW.expires_at
+              OR ABS(
+                (CAST(strftime('%s', NEW.issued_at) AS INTEGER) - CAST(strftime('%s', 'now') AS INTEGER)) * 1000
+                + CAST(substr(NEW.issued_at, 21, 3) AS INTEGER)
+                - CAST(substr(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 21, 3) AS INTEGER)
+              ) > 1000
+              OR NEW.expires_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+              OR json(NEW.claims_json) <> NEW.claims_json
+              OR COALESCE(json_type(NEW.claims_json, '$'), '') <> 'object'
+              OR (SELECT COUNT(*) FROM json_each(NEW.claims_json)) <> 11
+              OR (SELECT COUNT(DISTINCT claim.key) FROM json_each(NEW.claims_json) claim) <> 11
+              OR EXISTS (
+                SELECT 1 FROM json_each(NEW.claims_json) claim
+                WHERE claim.key NOT IN (
+                  'schemaVersion', 'protocolVersion', 'purpose', 'routeAccessClass',
+                  'registryWorkspaceId', 'workerId', 'workerGeneration', 'allowedWorkspaceIds',
+                  'workspaceCeilingSha256', 'capabilityClasses', 'capabilityCeilingSha256'
+                )
+              )
+              OR json_type(NEW.claims_json, '$.schemaVersion') <> 'text'
+              OR json_extract(NEW.claims_json, '$.schemaVersion') <> 'goatcitadel.remote-worker-runtime-credential-claims.v1'
+              OR json_type(NEW.claims_json, '$.protocolVersion') <> 'text'
+              OR json_extract(NEW.claims_json, '$.protocolVersion') <> 'goatcitadel.remote-worker.v1'
+              OR json_type(NEW.claims_json, '$.purpose') <> 'text'
+              OR json_extract(NEW.claims_json, '$.purpose') <> 'worker_runtime'
+              OR json_type(NEW.claims_json, '$.routeAccessClass') <> 'text'
+              OR json_extract(NEW.claims_json, '$.routeAccessClass') <> 'remote-worker'
+              OR json_type(NEW.claims_json, '$.registryWorkspaceId') <> 'text'
+              OR json_extract(NEW.claims_json, '$.registryWorkspaceId') <> NEW.registry_workspace_id
+              OR json_type(NEW.claims_json, '$.workerId') <> 'text'
+              OR json_extract(NEW.claims_json, '$.workerId') <> NEW.worker_id
+              OR json_type(NEW.claims_json, '$.workerGeneration') <> 'integer'
+              OR json_extract(NEW.claims_json, '$.workerGeneration') <> NEW.worker_generation
+              OR json_type(NEW.claims_json, '$.allowedWorkspaceIds') <> 'array'
+              OR json_array_length(NEW.claims_json, '$.allowedWorkspaceIds') <> (
+                SELECT COUNT(DISTINCT value) FROM json_each(NEW.claims_json, '$.allowedWorkspaceIds')
+              )
+              OR json_type(NEW.claims_json, '$.workspaceCeilingSha256') <> 'text'
+              OR length(json_extract(NEW.claims_json, '$.workspaceCeilingSha256')) <> 64
+              OR json_extract(NEW.claims_json, '$.workspaceCeilingSha256') GLOB '*[^0-9a-f]*'
+              OR json_type(NEW.claims_json, '$.capabilityClasses') <> 'array'
+              OR json_array_length(NEW.claims_json, '$.capabilityClasses') <> (
+                SELECT COUNT(DISTINCT value) FROM json_each(NEW.claims_json, '$.capabilityClasses')
+              )
+              OR json_type(NEW.claims_json, '$.capabilityCeilingSha256') <> 'text'
+              OR length(json_extract(NEW.claims_json, '$.capabilityCeilingSha256')) <> 64
+              OR json_extract(NEW.claims_json, '$.capabilityCeilingSha256') GLOB '*[^0-9a-f]*'
+              OR NOT EXISTS (
+                SELECT 1 FROM remote_worker_generations generation
+                WHERE generation.registry_workspace_id = NEW.registry_workspace_id
+                  AND generation.worker_id = NEW.worker_id
+                  AND generation.worker_generation = NEW.worker_generation
+                  AND generation.workspace_ceiling_sha256 = json_extract(NEW.claims_json, '$.workspaceCeilingSha256')
+                  AND generation.capability_ceiling_sha256 = json_extract(NEW.claims_json, '$.capabilityCeilingSha256')
+                  AND generation.worker_generation = (
+                    SELECT MAX(current.worker_generation) FROM remote_worker_generations current
+                    WHERE current.registry_workspace_id = generation.registry_workspace_id
+                      AND current.worker_id = generation.worker_id
+                  )
+              )
+              OR NOT EXISTS (
+                SELECT 1 FROM remote_worker_generations generation
+                JOIN remote_worker_bootstrap_requests bootstrap
+                  ON bootstrap.registry_workspace_id = generation.registry_workspace_id
+                 AND bootstrap.bootstrap_id = generation.bootstrap_id
+                WHERE generation.registry_workspace_id = NEW.registry_workspace_id
+                  AND generation.worker_id = NEW.worker_id
+                  AND generation.worker_generation = NEW.worker_generation
+                  AND json_array_length(NEW.claims_json, '$.allowedWorkspaceIds') = bootstrap.allowed_workspace_count
+                  AND json_array_length(NEW.claims_json, '$.capabilityClasses') = bootstrap.capability_class_count
+                  AND NOT EXISTS (
+                    SELECT 1 FROM json_each(NEW.claims_json, '$.allowedWorkspaceIds') claim_workspace
+                    WHERE claim_workspace.type <> 'text' OR NOT EXISTS (
+                      SELECT 1 FROM remote_worker_bootstrap_allowed_workspaces scope
+                      WHERE scope.registry_workspace_id = bootstrap.registry_workspace_id
+                        AND scope.bootstrap_id = bootstrap.bootstrap_id
+                        AND scope.allowed_workspace_id = claim_workspace.value
+                    )
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1 FROM json_each(NEW.claims_json, '$.capabilityClasses') claim_capability
+                    WHERE claim_capability.type <> 'text' OR NOT EXISTS (
+                      SELECT 1 FROM remote_worker_bootstrap_capability_classes scope
+                      WHERE scope.registry_workspace_id = bootstrap.registry_workspace_id
+                        AND scope.bootstrap_id = bootstrap.bootstrap_id
+                        AND scope.capability_class = claim_capability.value
+                    )
+                  )
+              )
+              OR (
+                NEW.credential_generation = 1 AND NOT EXISTS (
+                  SELECT 1 FROM remote_worker_generations generation
+                  WHERE generation.registry_workspace_id = NEW.registry_workspace_id
+                    AND generation.worker_id = NEW.worker_id
+                    AND generation.worker_generation = NEW.worker_generation
+                    AND generation.exchange_idempotency_key = NEW.idempotency_key
+                    AND generation.exchange_request_sha256 = NEW.request_sha256
+                    AND generation.transport_verification_receipt_sha256 = NEW.transport_verification_receipt_sha256
+                    AND generation.proof_of_possession_receipt_sha256 = NEW.proof_of_possession_receipt_sha256
+                )
+              )
+              OR EXISTS (
+                SELECT 1 FROM remote_worker_generation_controls control
+                WHERE control.registry_workspace_id = NEW.registry_workspace_id
+                  AND control.worker_id = NEW.worker_id
+                  AND control.worker_generation = NEW.worker_generation
+              )
+              OR NEW.credential_generation <> 1 + COALESCE((
+                SELECT MAX(current.credential_generation) FROM remote_worker_runtime_credentials current
+                WHERE current.registry_workspace_id = NEW.registry_workspace_id
+                  AND current.worker_id = NEW.worker_id
+                  AND current.worker_generation = NEW.worker_generation
+              ), 0)
+              OR (
+                NEW.credential_generation > 1 AND NOT EXISTS (
+                  SELECT 1 FROM remote_worker_runtime_credentials prior
+                  WHERE prior.registry_workspace_id = NEW.registry_workspace_id
+                    AND prior.worker_id = NEW.worker_id
+                    AND prior.worker_generation = NEW.worker_generation
+                    AND prior.credential_generation = NEW.credential_generation - 1
+                    AND prior.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                    AND prior.claims_json = NEW.claims_json
+                    AND prior.claims_sha256 = NEW.claims_sha256
+                    AND prior.transport_verification_receipt_sha256 <> NEW.transport_verification_receipt_sha256
+                    AND prior.proof_of_possession_receipt_sha256 <> NEW.proof_of_possession_receipt_sha256
+                )
+              )
+            BEGIN SELECT RAISE(ABORT, 'remote worker runtime credential invariant violated'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_control_insert_guard
+            BEFORE INSERT ON remote_worker_generation_controls
+            WHEN
+              strftime('%Y-%m-%dT%H:%M:%fZ', NEW.created_at, '+0 days') IS NULL
+              OR strftime('%Y-%m-%dT%H:%M:%fZ', NEW.created_at, '+0 days') <> NEW.created_at
+              OR ABS(
+                (CAST(strftime('%s', NEW.created_at) AS INTEGER) - CAST(strftime('%s', 'now') AS INTEGER)) * 1000
+                + CAST(substr(NEW.created_at, 21, 3) AS INTEGER)
+                - CAST(substr(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 21, 3) AS INTEGER)
+              ) > 1000
+              OR NOT EXISTS (
+                SELECT 1 FROM remote_worker_generations generation
+                WHERE generation.registry_workspace_id = NEW.registry_workspace_id
+                  AND generation.worker_id = NEW.worker_id
+                  AND generation.worker_generation = NEW.worker_generation
+                  AND generation.worker_generation = (
+                    SELECT MAX(current.worker_generation) FROM remote_worker_generations current
+                    WHERE current.registry_workspace_id = generation.registry_workspace_id
+                      AND current.worker_id = generation.worker_id
+                  )
+              )
+              OR (
+                NEW.control_revision = 1 AND EXISTS (
+                  SELECT 1 FROM remote_worker_generation_controls prior
+                  WHERE prior.registry_workspace_id = NEW.registry_workspace_id
+                    AND prior.worker_id = NEW.worker_id
+                    AND prior.worker_generation = NEW.worker_generation
+                )
+              )
+              OR (
+                NEW.control_revision = 2 AND (
+                  NEW.action <> 'revoke'
+                  OR NOT EXISTS (
+                    SELECT 1 FROM remote_worker_generation_controls prior
+                    WHERE prior.registry_workspace_id = NEW.registry_workspace_id
+                      AND prior.worker_id = NEW.worker_id
+                      AND prior.worker_generation = NEW.worker_generation
+                      AND prior.control_revision = 1
+                      AND prior.action = 'quarantine'
+                  )
+                )
+              )
+              OR NEW.control_revision NOT IN (1, 2)
+            BEGIN SELECT RAISE(ABORT, 'remote worker generation control invariant violated'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_bootstraps_no_update BEFORE UPDATE ON remote_worker_bootstrap_requests BEGIN SELECT RAISE(ABORT, 'remote worker bootstraps are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_bootstraps_no_delete BEFORE DELETE ON remote_worker_bootstrap_requests BEGIN SELECT RAISE(ABORT, 'remote worker bootstraps are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_allowed_workspaces_no_update BEFORE UPDATE ON remote_worker_bootstrap_allowed_workspaces BEGIN SELECT RAISE(ABORT, 'remote worker workspace ceilings are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_allowed_workspaces_no_delete BEFORE DELETE ON remote_worker_bootstrap_allowed_workspaces BEGIN SELECT RAISE(ABORT, 'remote worker workspace ceilings are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_capability_classes_no_update BEFORE UPDATE ON remote_worker_bootstrap_capability_classes BEGIN SELECT RAISE(ABORT, 'remote worker capability ceilings are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_capability_classes_no_delete BEFORE DELETE ON remote_worker_bootstrap_capability_classes BEGIN SELECT RAISE(ABORT, 'remote worker capability ceilings are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_generations_no_update BEFORE UPDATE ON remote_worker_generations BEGIN SELECT RAISE(ABORT, 'remote worker generations are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_generations_no_delete BEFORE DELETE ON remote_worker_generations BEGIN SELECT RAISE(ABORT, 'remote worker generations are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_credentials_no_update BEFORE UPDATE ON remote_worker_runtime_credentials BEGIN SELECT RAISE(ABORT, 'remote worker credentials are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_credentials_no_delete BEFORE DELETE ON remote_worker_runtime_credentials BEGIN SELECT RAISE(ABORT, 'remote worker credentials are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_controls_no_update BEFORE UPDATE ON remote_worker_generation_controls BEGIN SELECT RAISE(ABORT, 'remote worker controls are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_controls_no_delete BEFORE DELETE ON remote_worker_generation_controls BEGIN SELECT RAISE(ABORT, 'remote worker controls are immutable'); END;
+          `);
+        },
+      },
+      {
+        version: 171,
+        name: "remote_worker_assignment_foundation",
+        up: (db) => {
+          if (
+            !tableExists(db, "workspaces") ||
+            !tableExists(db, "durable_runs") ||
+            !tableExists(db, "tasks") ||
+            !tableExists(db, "chat_session_meta") ||
+            !tableExists(db, "chat_turn_traces") ||
+            !tableExists(db, "remote_worker_generations") ||
+            !tableExists(db, "mesh_capability_node_admissions")
+          ) {
+            return;
+          }
+          db.exec(`
+            CREATE TABLE IF NOT EXISTS remote_worker_assignments (
+              registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+              assignment_id TEXT NOT NULL CHECK(length(assignment_id) BETWEEN 1 AND 256),
+              execution_workspace_id TEXT NOT NULL CHECK(length(execution_workspace_id) BETWEEN 1 AND 256),
+              durable_run_id TEXT NOT NULL CHECK(length(durable_run_id) BETWEEN 1 AND 256),
+              task_id TEXT NOT NULL CHECK(length(task_id) BETWEEN 1 AND 256),
+              session_id TEXT CHECK(session_id IS NULL OR length(session_id) BETWEEN 1 AND 256),
+              turn_id TEXT CHECK(turn_id IS NULL OR length(turn_id) BETWEEN 1 AND 256),
+              manifest_json TEXT NOT NULL CHECK(json_valid(manifest_json) AND length(CAST(manifest_json AS BLOB)) <= 32768),
+              manifest_sha256 TEXT NOT NULL CHECK(length(manifest_sha256) = 64 AND manifest_sha256 NOT GLOB '*[^0-9a-f]*'),
+              created_by_actor_id TEXT NOT NULL CHECK(length(created_by_actor_id) BETWEEN 1 AND 256),
+              idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+              request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+              created_at TEXT NOT NULL CHECK(
+                strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') IS NOT NULL
+                AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') = created_at
+              ),
+              PRIMARY KEY(registry_workspace_id, assignment_id),
+              UNIQUE(registry_workspace_id, idempotency_key),
+              FOREIGN KEY(registry_workspace_id) REFERENCES workspaces(workspace_id) ON DELETE RESTRICT,
+              FOREIGN KEY(execution_workspace_id) REFERENCES workspaces(workspace_id) ON DELETE RESTRICT,
+              FOREIGN KEY(durable_run_id) REFERENCES durable_runs(run_id) ON DELETE RESTRICT,
+              FOREIGN KEY(task_id) REFERENCES tasks(task_id) ON DELETE RESTRICT,
+              FOREIGN KEY(session_id) REFERENCES chat_session_meta(session_id) ON DELETE RESTRICT,
+              FOREIGN KEY(turn_id) REFERENCES chat_turn_traces(turn_id) ON DELETE RESTRICT,
+              CHECK((session_id IS NULL) = (turn_id IS NULL)),
+              CHECK(json_extract(manifest_json, '$.schemaVersion') = 'goatcitadel.remote-worker-assignment-manifest.v1'),
+              CHECK(json_extract(manifest_json, '$.protocolVersion') = 'goatcitadel.remote-worker.v1'),
+              CHECK(json_extract(manifest_json, '$.registryWorkspaceId') = registry_workspace_id),
+              CHECK(json_extract(manifest_json, '$.executionWorkspaceId') = execution_workspace_id),
+              CHECK(json_extract(manifest_json, '$.durableRunId') = durable_run_id),
+              CHECK(json_extract(manifest_json, '$.taskId') = task_id),
+              CHECK(json_extract(manifest_json, '$.sessionId') IS session_id),
+              CHECK(json_extract(manifest_json, '$.turnId') IS turn_id),
+              CHECK(json_extract(manifest_json, '$.leaseTtlSeconds') BETWEEN 1 AND 900),
+              CHECK(json_extract(manifest_json, '$.maxEventCount') BETWEEN 1 AND 10000),
+              CHECK(json_extract(manifest_json, '$.maxEventBytes') BETWEEN 1 AND 65536),
+              CHECK(json_extract(manifest_json, '$.eventLowWatermark') BETWEEN 0 AND 9999),
+              CHECK(json_extract(manifest_json, '$.eventHighWatermark') BETWEEN 1 AND 10000),
+              CHECK(json_extract(manifest_json, '$.eventLowWatermark') < json_extract(manifest_json, '$.eventHighWatermark')),
+              CHECK(json_extract(manifest_json, '$.eventHighWatermark') <= json_extract(manifest_json, '$.maxEventCount')),
+              CHECK(json_extract(manifest_json, '$.maxOutputBytes') BETWEEN 1 AND 8388608),
+              CHECK(json_extract(manifest_json, '$.maxArtifactBytes') BETWEEN 1 AND 67108864)
+            );
+
+            CREATE TABLE IF NOT EXISTS remote_worker_assignment_generations (
+              registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+              assignment_id TEXT NOT NULL CHECK(length(assignment_id) BETWEEN 1 AND 256),
+              assignment_generation INTEGER NOT NULL CHECK(typeof(assignment_generation) = 'integer' AND assignment_generation > 0),
+              execution_workspace_id TEXT NOT NULL CHECK(length(execution_workspace_id) BETWEEN 1 AND 256),
+              worker_id TEXT NOT NULL CHECK(length(worker_id) BETWEEN 1 AND 256),
+              worker_generation INTEGER NOT NULL CHECK(typeof(worker_generation) = 'integer' AND worker_generation > 0),
+              node_id TEXT NOT NULL CHECK(length(node_id) BETWEEN 1 AND 256),
+              node_admission_generation INTEGER NOT NULL CHECK(typeof(node_admission_generation) = 'integer' AND node_admission_generation > 0),
+              runtime_manifest_sha256 TEXT NOT NULL CHECK(length(runtime_manifest_sha256) = 64 AND runtime_manifest_sha256 NOT GLOB '*[^0-9a-f]*'),
+              workspace_ceiling_sha256 TEXT NOT NULL CHECK(length(workspace_ceiling_sha256) = 64 AND workspace_ceiling_sha256 NOT GLOB '*[^0-9a-f]*'),
+              capability_ceiling_sha256 TEXT NOT NULL CHECK(length(capability_ceiling_sha256) = 64 AND capability_ceiling_sha256 NOT GLOB '*[^0-9a-f]*'),
+              dispatch_owner_id TEXT NOT NULL CHECK(length(dispatch_owner_id) BETWEEN 1 AND 256),
+              durable_run_attempt INTEGER NOT NULL CHECK(typeof(durable_run_attempt) = 'integer' AND durable_run_attempt > 0),
+              dispatch_authority_json TEXT NOT NULL CHECK(json_valid(dispatch_authority_json) AND length(CAST(dispatch_authority_json AS BLOB)) <= 8192),
+              dispatch_authority_sha256 TEXT NOT NULL CHECK(length(dispatch_authority_sha256) = 64 AND dispatch_authority_sha256 NOT GLOB '*[^0-9a-f]*'),
+              idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+              request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+              started_at TEXT NOT NULL CHECK(
+                strftime('%Y-%m-%dT%H:%M:%fZ', started_at, '+0 days') IS NOT NULL
+                AND strftime('%Y-%m-%dT%H:%M:%fZ', started_at, '+0 days') = started_at
+              ),
+              PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation),
+              UNIQUE(registry_workspace_id, idempotency_key),
+              FOREIGN KEY(registry_workspace_id, assignment_id)
+                REFERENCES remote_worker_assignments(registry_workspace_id, assignment_id) ON DELETE RESTRICT,
+              FOREIGN KEY(registry_workspace_id, worker_id, worker_generation)
+                REFERENCES remote_worker_generations(registry_workspace_id, worker_id, worker_generation) ON DELETE RESTRICT,
+              FOREIGN KEY(execution_workspace_id, node_id, node_admission_generation)
+                REFERENCES mesh_capability_node_admissions(workspace_id, node_id, admission_generation) ON DELETE RESTRICT,
+              CHECK(json_extract(dispatch_authority_json, '$.schemaVersion') = 'goatcitadel.remote-worker-assignment-dispatch-authority.v1'),
+              CHECK(json_extract(dispatch_authority_json, '$.dispatchOwnerId') = dispatch_owner_id),
+              CHECK(json_extract(dispatch_authority_json, '$.durableRunAttempt') = durable_run_attempt)
+            );
+
+            CREATE TABLE IF NOT EXISTS remote_worker_assignment_leases (
+              registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+              assignment_id TEXT NOT NULL CHECK(length(assignment_id) BETWEEN 1 AND 256),
+              assignment_generation INTEGER NOT NULL CHECK(typeof(assignment_generation) = 'integer' AND assignment_generation > 0),
+              lease_revision INTEGER NOT NULL CHECK(typeof(lease_revision) = 'integer' AND lease_revision > 0),
+              lease_token_sha256 TEXT NOT NULL UNIQUE CHECK(length(lease_token_sha256) = 64 AND lease_token_sha256 NOT GLOB '*[^0-9a-f]*'),
+              worker_sent_through INTEGER NOT NULL CHECK(typeof(worker_sent_through) = 'integer' AND worker_sent_through BETWEEN 0 AND 10000),
+              server_acknowledged_through INTEGER NOT NULL CHECK(typeof(server_acknowledged_through) = 'integer' AND server_acknowledged_through BETWEEN 0 AND 10000),
+              parent_dispatch_authority_json TEXT NOT NULL CHECK(json_valid(parent_dispatch_authority_json) AND length(CAST(parent_dispatch_authority_json AS BLOB)) <= 8192),
+              parent_dispatch_authority_sha256 TEXT NOT NULL CHECK(length(parent_dispatch_authority_sha256) = 64 AND parent_dispatch_authority_sha256 NOT GLOB '*[^0-9a-f]*'),
+              heartbeat_at TEXT NOT NULL CHECK(
+                strftime('%Y-%m-%dT%H:%M:%fZ', heartbeat_at, '+0 days') IS NOT NULL
+                AND strftime('%Y-%m-%dT%H:%M:%fZ', heartbeat_at, '+0 days') = heartbeat_at
+              ),
+              expires_at TEXT NOT NULL CHECK(
+                strftime('%Y-%m-%dT%H:%M:%fZ', expires_at, '+0 days') IS NOT NULL
+                AND strftime('%Y-%m-%dT%H:%M:%fZ', expires_at, '+0 days') = expires_at
+              ),
+              idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+              request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+              PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation, lease_revision),
+              UNIQUE(registry_workspace_id, idempotency_key),
+              FOREIGN KEY(registry_workspace_id, assignment_id, assignment_generation)
+                REFERENCES remote_worker_assignment_generations(registry_workspace_id, assignment_id, assignment_generation) ON DELETE RESTRICT,
+              CHECK(server_acknowledged_through <= worker_sent_through),
+              CHECK(json_extract(parent_dispatch_authority_json, '$.schemaVersion') = 'goatcitadel.remote-worker-assignment-dispatch-authority.v1')
+            );
+
+            CREATE TABLE IF NOT EXISTS remote_worker_assignment_controls (
+              registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+              assignment_id TEXT NOT NULL CHECK(length(assignment_id) BETWEEN 1 AND 256),
+              assignment_generation INTEGER NOT NULL CHECK(typeof(assignment_generation) = 'integer' AND assignment_generation > 0),
+              control_revision INTEGER NOT NULL CHECK(typeof(control_revision) = 'integer' AND control_revision > 0),
+              action TEXT NOT NULL CHECK(action IN ('cancel_requested', 'generation_abandoned', 'recovery_exhausted')),
+              expected_lease_revision INTEGER NOT NULL CHECK(typeof(expected_lease_revision) = 'integer' AND expected_lease_revision > 0),
+              reason_code TEXT NOT NULL CHECK(
+                length(reason_code) BETWEEN 1 AND 128
+                AND reason_code NOT GLOB '*[^a-z0-9._-]*'
+                AND substr(reason_code, 1, 1) GLOB '[a-z0-9]'
+                AND substr(reason_code, -1, 1) GLOB '[a-z0-9]'
+              ),
+              reason_sha256 TEXT NOT NULL CHECK(length(reason_sha256) = 64 AND reason_sha256 NOT GLOB '*[^0-9a-f]*'),
+              actor_id TEXT NOT NULL CHECK(length(actor_id) BETWEEN 1 AND 256),
+              idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+              request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+              created_at TEXT NOT NULL CHECK(
+                strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') IS NOT NULL
+                AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') = created_at
+              ),
+              PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation, control_revision),
+              UNIQUE(registry_workspace_id, idempotency_key),
+              UNIQUE(registry_workspace_id, assignment_id, assignment_generation, action),
+              FOREIGN KEY(registry_workspace_id, assignment_id, assignment_generation)
+                REFERENCES remote_worker_assignment_generations(registry_workspace_id, assignment_id, assignment_generation) ON DELETE RESTRICT
+            );
+
+            CREATE TABLE IF NOT EXISTS remote_worker_assignment_events (
+              registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+              assignment_id TEXT NOT NULL CHECK(length(assignment_id) BETWEEN 1 AND 256),
+              assignment_generation INTEGER NOT NULL CHECK(typeof(assignment_generation) = 'integer' AND assignment_generation > 0),
+              sequence INTEGER NOT NULL CHECK(typeof(sequence) = 'integer' AND sequence BETWEEN 1 AND 10000),
+              event_id TEXT NOT NULL CHECK(length(event_id) BETWEEN 1 AND 256),
+              event_type TEXT NOT NULL CHECK(event_type IN (
+                'status', 'tool_progress', 'model_progress', 'approval_wait',
+                'diagnostic', 'transcript_delta', 'terminal_output'
+              )),
+              payload_json TEXT NOT NULL CHECK(json_valid(payload_json) AND length(CAST(payload_json AS BLOB)) <= 65536),
+              payload_sha256 TEXT NOT NULL CHECK(length(payload_sha256) = 64 AND payload_sha256 NOT GLOB '*[^0-9a-f]*'),
+              previous_event_sha256 TEXT NOT NULL CHECK(length(previous_event_sha256) = 64 AND previous_event_sha256 NOT GLOB '*[^0-9a-f]*'),
+              event_sha256 TEXT NOT NULL CHECK(length(event_sha256) = 64 AND event_sha256 NOT GLOB '*[^0-9a-f]*'),
+              worker_sent_through INTEGER NOT NULL CHECK(typeof(worker_sent_through) = 'integer' AND worker_sent_through BETWEEN sequence AND 10000),
+              received_at TEXT NOT NULL CHECK(
+                strftime('%Y-%m-%dT%H:%M:%fZ', received_at, '+0 days') IS NOT NULL
+                AND strftime('%Y-%m-%dT%H:%M:%fZ', received_at, '+0 days') = received_at
+              ),
+              PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation, sequence),
+              UNIQUE(registry_workspace_id, event_id),
+              UNIQUE(registry_workspace_id, event_sha256),
+              FOREIGN KEY(registry_workspace_id, assignment_id, assignment_generation)
+                REFERENCES remote_worker_assignment_generations(registry_workspace_id, assignment_id, assignment_generation) ON DELETE RESTRICT,
+              CHECK(json_extract(payload_json, '$.schemaVersion') = 'goatcitadel.remote-worker-assignment-event.v1')
+            );
+
+            CREATE TABLE IF NOT EXISTS remote_worker_assignment_settlements (
+              registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+              assignment_id TEXT NOT NULL CHECK(length(assignment_id) BETWEEN 1 AND 256),
+              assignment_generation INTEGER NOT NULL CHECK(typeof(assignment_generation) = 'integer' AND assignment_generation > 0),
+              schema_version TEXT NOT NULL CHECK(schema_version = 'goatcitadel.remote-worker-assignment-settlement.v1'),
+              outcome TEXT NOT NULL CHECK(outcome IN ('completed', 'failed', 'cancelled')),
+              origin TEXT NOT NULL CHECK(origin IN ('worker', 'gateway_recovery')),
+              gateway_actor_id TEXT CHECK(gateway_actor_id IS NULL OR length(gateway_actor_id) BETWEEN 1 AND 256),
+              recovery_evidence_sha256 TEXT CHECK(recovery_evidence_sha256 IS NULL OR (length(recovery_evidence_sha256) = 64 AND recovery_evidence_sha256 NOT GLOB '*[^0-9a-f]*')),
+              final_event_sequence INTEGER NOT NULL CHECK(typeof(final_event_sequence) = 'integer' AND final_event_sequence BETWEEN 0 AND 10000),
+              final_event_sha256 TEXT NOT NULL CHECK(length(final_event_sha256) = 64 AND final_event_sha256 NOT GLOB '*[^0-9a-f]*'),
+              result_sha256 TEXT CHECK(result_sha256 IS NULL OR (length(result_sha256) = 64 AND result_sha256 NOT GLOB '*[^0-9a-f]*')),
+              output_manifest_sha256 TEXT CHECK(output_manifest_sha256 IS NULL OR (length(output_manifest_sha256) = 64 AND output_manifest_sha256 NOT GLOB '*[^0-9a-f]*')),
+              failure_sha256 TEXT CHECK(failure_sha256 IS NULL OR (length(failure_sha256) = 64 AND failure_sha256 NOT GLOB '*[^0-9a-f]*')),
+              idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+              request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+              settled_at TEXT NOT NULL CHECK(
+                strftime('%Y-%m-%dT%H:%M:%fZ', settled_at, '+0 days') IS NOT NULL
+                AND strftime('%Y-%m-%dT%H:%M:%fZ', settled_at, '+0 days') = settled_at
+              ),
+              PRIMARY KEY(registry_workspace_id, assignment_id),
+              UNIQUE(registry_workspace_id, idempotency_key),
+              FOREIGN KEY(registry_workspace_id, assignment_id, assignment_generation)
+                REFERENCES remote_worker_assignment_generations(registry_workspace_id, assignment_id, assignment_generation) ON DELETE RESTRICT,
+              CHECK(
+                (outcome = 'completed' AND result_sha256 IS NOT NULL AND output_manifest_sha256 IS NOT NULL AND failure_sha256 IS NULL)
+                OR (outcome = 'failed' AND result_sha256 IS NULL AND output_manifest_sha256 IS NULL AND failure_sha256 IS NOT NULL)
+                OR (outcome = 'cancelled' AND result_sha256 IS NULL AND output_manifest_sha256 IS NULL AND failure_sha256 IS NULL)
+              ),
+              CHECK(
+                (origin = 'worker' AND gateway_actor_id IS NULL AND recovery_evidence_sha256 IS NULL)
+                OR (origin = 'gateway_recovery' AND gateway_actor_id IS NOT NULL AND recovery_evidence_sha256 IS NOT NULL)
+              )
+            );
+
+            CREATE TABLE IF NOT EXISTS remote_worker_assignment_materializations (
+              registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+              assignment_id TEXT NOT NULL CHECK(length(assignment_id) BETWEEN 1 AND 256),
+              materialization_id TEXT NOT NULL CHECK(length(materialization_id) BETWEEN 1 AND 256),
+              schema_version TEXT NOT NULL CHECK(schema_version = 'goatcitadel.remote-worker-assignment-materialization.v1'),
+              source_kind TEXT NOT NULL CHECK(source_kind IN ('event', 'settlement')),
+              source_generation INTEGER NOT NULL CHECK(typeof(source_generation) = 'integer' AND source_generation > 0),
+              source_sequence INTEGER CHECK(source_sequence IS NULL OR (typeof(source_sequence) = 'integer' AND source_sequence BETWEEN 1 AND 10000)),
+              source_sha256 TEXT NOT NULL CHECK(length(source_sha256) = 64 AND source_sha256 NOT GLOB '*[^0-9a-f]*'),
+              target_kind TEXT NOT NULL CHECK(target_kind IN ('chat_transcript', 'durable_run_result')),
+              target_id TEXT NOT NULL CHECK(length(target_id) BETWEEN 1 AND 256),
+              target_sha256 TEXT NOT NULL CHECK(length(target_sha256) = 64 AND target_sha256 NOT GLOB '*[^0-9a-f]*'),
+              target_owner_session_id TEXT CHECK(target_owner_session_id IS NULL OR length(target_owner_session_id) BETWEEN 1 AND 256),
+              target_owner_turn_id TEXT CHECK(target_owner_turn_id IS NULL OR length(target_owner_turn_id) BETWEEN 1 AND 256),
+              target_owner_durable_run_id TEXT CHECK(target_owner_durable_run_id IS NULL OR length(target_owner_durable_run_id) BETWEEN 1 AND 256),
+              receipt_sha256 TEXT NOT NULL CHECK(length(receipt_sha256) = 64 AND receipt_sha256 NOT GLOB '*[^0-9a-f]*'),
+              gateway_actor_id TEXT NOT NULL CHECK(length(gateway_actor_id) BETWEEN 1 AND 256),
+              idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+              request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+              materialized_at TEXT NOT NULL CHECK(
+                strftime('%Y-%m-%dT%H:%M:%fZ', materialized_at, '+0 days') IS NOT NULL
+                AND strftime('%Y-%m-%dT%H:%M:%fZ', materialized_at, '+0 days') = materialized_at
+              ),
+              PRIMARY KEY(registry_workspace_id, assignment_id, materialization_id),
+              UNIQUE(registry_workspace_id, idempotency_key),
+              UNIQUE(registry_workspace_id, assignment_id, source_kind, source_generation, source_sequence, target_kind),
+              FOREIGN KEY(registry_workspace_id, assignment_id)
+                REFERENCES remote_worker_assignments(registry_workspace_id, assignment_id) ON DELETE RESTRICT,
+              FOREIGN KEY(registry_workspace_id, assignment_id, source_generation)
+                REFERENCES remote_worker_assignment_generations(registry_workspace_id, assignment_id, assignment_generation) ON DELETE RESTRICT,
+              CHECK(
+                (source_kind = 'event' AND source_sequence IS NOT NULL AND target_kind = 'chat_transcript'
+                  AND target_owner_session_id IS NOT NULL AND target_owner_turn_id IS NOT NULL
+                  AND target_owner_durable_run_id IS NULL)
+                OR (source_kind = 'settlement' AND source_sequence IS NULL AND target_kind = 'durable_run_result'
+                  AND target_owner_session_id IS NULL AND target_owner_turn_id IS NULL
+                  AND target_owner_durable_run_id IS NOT NULL)
+              )
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_remote_worker_assignment_generations_current
+              ON remote_worker_assignment_generations(registry_workspace_id, assignment_id, assignment_generation DESC);
+            CREATE INDEX IF NOT EXISTS idx_remote_worker_assignment_leases_current
+              ON remote_worker_assignment_leases(registry_workspace_id, assignment_id, assignment_generation, lease_revision DESC);
+            CREATE INDEX IF NOT EXISTS idx_remote_worker_assignment_events_chain
+              ON remote_worker_assignment_events(registry_workspace_id, assignment_id, assignment_generation, sequence);
+            CREATE INDEX IF NOT EXISTS idx_remote_worker_assignment_materializations_source
+              ON remote_worker_assignment_materializations(registry_workspace_id, assignment_id, source_kind, source_generation, source_sequence);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_remote_worker_assignment_materializations_event_once
+              ON remote_worker_assignment_materializations(
+                registry_workspace_id, assignment_id, source_generation, source_sequence, target_kind
+              ) WHERE source_kind = 'event';
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_remote_worker_assignment_materializations_settlement_once
+              ON remote_worker_assignment_materializations(
+                registry_workspace_id, assignment_id, source_generation, target_kind
+              ) WHERE source_kind = 'settlement';
+
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignments_insert_guard
+            BEFORE INSERT ON remote_worker_assignments
+            WHEN
+              json(NEW.manifest_json) <> NEW.manifest_json
+              OR COALESCE(json_type(NEW.manifest_json, '$'), '') <> 'object'
+              OR (SELECT COUNT(*) FROM json_each(NEW.manifest_json)) <>
+                CASE WHEN NEW.session_id IS NULL THEN 20 ELSE 22 END
+              OR (SELECT COUNT(*) FROM json_each(NEW.manifest_json)) <>
+                (SELECT COUNT(DISTINCT field.key) FROM json_each(NEW.manifest_json) field)
+              OR EXISTS (
+                SELECT 1 FROM json_each(NEW.manifest_json) field
+                WHERE field.key NOT IN (
+                  'schemaVersion', 'protocolVersion', 'registryWorkspaceId', 'executionWorkspaceId',
+                  'durableRunId', 'taskId', 'sessionId', 'turnId', 'capabilityProfileSha256',
+                  'contextSnapshotSha256', 'toolEffectPostureSha256', 'pathJailSha256',
+                  'parentContextSha256', 'requiredCapabilityClasses', 'deadlineAt', 'leaseTtlSeconds',
+                  'maxEventCount', 'maxEventBytes', 'eventLowWatermark', 'eventHighWatermark',
+                  'maxOutputBytes', 'maxArtifactBytes'
+                )
+              )
+              OR (
+                NEW.session_id IS NULL
+                AND (json_type(NEW.manifest_json, '$.sessionId') IS NOT NULL
+                  OR json_type(NEW.manifest_json, '$.turnId') IS NOT NULL)
+              )
+              OR (
+                NEW.session_id IS NOT NULL
+                AND (COALESCE(json_type(NEW.manifest_json, '$.sessionId'), '') <> 'text'
+                  OR COALESCE(json_type(NEW.manifest_json, '$.turnId'), '') <> 'text')
+              )
+              OR EXISTS (
+                SELECT 1 FROM json_each(NEW.manifest_json) field
+                WHERE (
+                  field.key IN (
+                    'schemaVersion', 'protocolVersion', 'registryWorkspaceId', 'executionWorkspaceId',
+                    'durableRunId', 'taskId', 'sessionId', 'turnId', 'capabilityProfileSha256',
+                    'contextSnapshotSha256', 'toolEffectPostureSha256', 'pathJailSha256',
+                    'parentContextSha256', 'deadlineAt'
+                  )
+                  AND field.type <> 'text'
+                ) OR (
+                  field.key IN (
+                    'leaseTtlSeconds', 'maxEventCount', 'maxEventBytes', 'eventLowWatermark',
+                    'eventHighWatermark', 'maxOutputBytes', 'maxArtifactBytes'
+                  )
+                  AND field.type <> 'integer'
+                )
+              )
+              OR EXISTS (
+                SELECT 1 FROM json_each(NEW.manifest_json) field
+                WHERE field.key IN (
+                  'capabilityProfileSha256', 'contextSnapshotSha256', 'toolEffectPostureSha256',
+                  'pathJailSha256', 'parentContextSha256'
+                ) AND (
+                  length(field.value) <> 64 OR field.value GLOB '*[^0-9a-f]*'
+                )
+              )
+              OR COALESCE(json_type(NEW.manifest_json, '$.requiredCapabilityClasses'), '') <> 'array'
+              OR json_array_length(json_extract(NEW.manifest_json, '$.requiredCapabilityClasses')) NOT BETWEEN 1 AND 9
+              OR NOT EXISTS (
+                SELECT 1 FROM json_each(NEW.manifest_json, '$.requiredCapabilityClasses') capability
+                WHERE capability.value = 'durable_compute'
+              )
+              OR EXISTS (
+                SELECT 1 FROM json_each(NEW.manifest_json, '$.requiredCapabilityClasses') capability
+                WHERE capability.type <> 'text' OR capability.value NOT IN (
+                  'durable_compute', 'gateway_inference', 'governed_tool', 'governed_code',
+                  'artifact_stage', 'trusted_verification', 'device_camera', 'device_location', 'device_notification'
+                )
+              )
+              OR json_array_length(json_extract(NEW.manifest_json, '$.requiredCapabilityClasses')) <> (
+                SELECT COUNT(DISTINCT capability.value)
+                FROM json_each(NEW.manifest_json, '$.requiredCapabilityClasses') capability
+              )
+              OR strftime('%Y-%m-%dT%H:%M:%fZ', json_extract(NEW.manifest_json, '$.deadlineAt'), '+0 days') IS NULL
+              OR strftime('%Y-%m-%dT%H:%M:%fZ', json_extract(NEW.manifest_json, '$.deadlineAt'), '+0 days')
+                <> json_extract(NEW.manifest_json, '$.deadlineAt')
+              OR json_extract(NEW.manifest_json, '$.deadlineAt') <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+              OR COALESCE(json_type(NEW.manifest_json, '$.parentContextSha256'), '') <> 'text'
+              OR length(json_extract(NEW.manifest_json, '$.parentContextSha256')) <> 64
+              OR json_extract(NEW.manifest_json, '$.parentContextSha256') GLOB '*[^0-9a-f]*'
+              OR NOT EXISTS (
+                SELECT 1 FROM tasks task
+                WHERE task.task_id = NEW.task_id AND task.workspace_id = NEW.execution_workspace_id
+                  AND task.deleted_at IS NULL
+              )
+              OR (NEW.session_id IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM chat_session_meta session
+                JOIN chat_turn_traces turn ON turn.turn_id = NEW.turn_id AND turn.session_id = session.session_id
+                WHERE session.session_id = NEW.session_id AND session.workspace_id = NEW.execution_workspace_id
+              ))
+              OR NOT EXISTS (
+                SELECT 1 FROM durable_runs run
+                WHERE run.run_id = NEW.durable_run_id
+                  AND json_valid(run.metadata_json)
+                  AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContextSha256')
+                    = json_extract(NEW.manifest_json, '$.parentContextSha256')
+                  AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.schemaVersion')
+                    = 'goatcitadel.remote-worker-assignment-parent-context.v1'
+                  AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.executionWorkspaceId')
+                    = NEW.execution_workspace_id
+                  AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.durableRunId')
+                    = NEW.durable_run_id
+                  AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.taskId') = NEW.task_id
+                  AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.sessionId') IS NEW.session_id
+                  AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.turnId') IS NEW.turn_id
+              )
+              OR abs((julianday(NEW.created_at) - julianday('now')) * 86400.0) > 1.0
+            BEGIN SELECT RAISE(ABORT, 'remote worker assignment manifest or database-clock invariant violated'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_generation_insert_guard
+            BEFORE INSERT ON remote_worker_assignment_generations
+            WHEN
+              NEW.assignment_generation <> 1 + COALESCE((
+                SELECT MAX(prior.assignment_generation) FROM remote_worker_assignment_generations prior
+                WHERE prior.registry_workspace_id = NEW.registry_workspace_id AND prior.assignment_id = NEW.assignment_id
+              ), 0)
+              OR (NEW.assignment_generation > 1 AND NOT EXISTS (
+                SELECT 1 FROM remote_worker_assignment_controls control
+                WHERE control.registry_workspace_id = NEW.registry_workspace_id AND control.assignment_id = NEW.assignment_id
+                  AND control.assignment_generation = NEW.assignment_generation - 1
+                  AND control.action = 'generation_abandoned'
+              ))
+              OR (NEW.assignment_generation > 1 AND EXISTS (
+                SELECT 1 FROM remote_worker_assignment_controls cancelled
+                WHERE cancelled.registry_workspace_id = NEW.registry_workspace_id
+                  AND cancelled.assignment_id = NEW.assignment_id
+                  AND cancelled.assignment_generation = NEW.assignment_generation - 1
+                  AND cancelled.action = 'cancel_requested'
+              ))
+              OR EXISTS (
+                SELECT 1 FROM remote_worker_assignment_settlements settlement
+                WHERE settlement.registry_workspace_id = NEW.registry_workspace_id AND settlement.assignment_id = NEW.assignment_id
+              )
+              OR NOT EXISTS (
+                SELECT 1 FROM remote_worker_assignments assignment
+                JOIN durable_runs run ON run.run_id = assignment.durable_run_id
+                JOIN remote_worker_generations worker
+                  ON worker.registry_workspace_id = NEW.registry_workspace_id AND worker.worker_id = NEW.worker_id
+                 AND worker.worker_generation = NEW.worker_generation AND worker.node_id = NEW.node_id
+                JOIN remote_worker_bootstrap_requests bootstrap
+                  ON bootstrap.registry_workspace_id = worker.registry_workspace_id AND bootstrap.bootstrap_id = worker.bootstrap_id
+                JOIN remote_worker_bootstrap_allowed_workspaces scope
+                  ON scope.registry_workspace_id = bootstrap.registry_workspace_id AND scope.bootstrap_id = bootstrap.bootstrap_id
+                 AND scope.allowed_workspace_id = assignment.execution_workspace_id
+                JOIN mesh_capability_node_admissions admission
+                  ON admission.workspace_id = assignment.execution_workspace_id AND admission.node_id = NEW.node_id
+                 AND admission.admission_generation = NEW.node_admission_generation
+                WHERE assignment.registry_workspace_id = NEW.registry_workspace_id
+                  AND assignment.assignment_id = NEW.assignment_id
+                  AND assignment.execution_workspace_id = NEW.execution_workspace_id
+                  AND worker.runtime_manifest_sha256 = NEW.runtime_manifest_sha256
+                  AND worker.workspace_ceiling_sha256 = NEW.workspace_ceiling_sha256
+                  AND worker.capability_ceiling_sha256 = NEW.capability_ceiling_sha256
+                  AND worker.worker_generation = (
+                    SELECT MAX(current.worker_generation) FROM remote_worker_generations current
+                    WHERE current.registry_workspace_id = worker.registry_workspace_id AND current.worker_id = worker.worker_id
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1 FROM remote_worker_generation_controls worker_control
+                    WHERE worker_control.registry_workspace_id = worker.registry_workspace_id
+                      AND worker_control.worker_id = worker.worker_id
+                      AND worker_control.worker_generation = worker.worker_generation
+                  )
+                  AND admission.admission_generation = (
+                    SELECT MAX(current.admission_generation) FROM mesh_capability_node_admissions current
+                    WHERE current.workspace_id = admission.workspace_id AND current.node_id = admission.node_id
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1 FROM mesh_capability_node_admission_revocations revoked
+                    WHERE revoked.workspace_id = admission.workspace_id AND revoked.node_id = admission.node_id
+                      AND revoked.admission_generation = admission.admission_generation
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1 FROM json_each(assignment.manifest_json, '$.requiredCapabilityClasses') required
+                    WHERE NOT EXISTS (
+                      SELECT 1 FROM remote_worker_bootstrap_capability_classes granted
+                      WHERE granted.registry_workspace_id = bootstrap.registry_workspace_id
+                        AND granted.bootstrap_id = bootstrap.bootstrap_id AND granted.capability_class = required.value
+                    )
+                  )
+                  AND EXISTS (
+                    SELECT 1 FROM tasks task
+                    WHERE task.task_id = assignment.task_id
+                      AND task.workspace_id = assignment.execution_workspace_id
+                      AND task.deleted_at IS NULL
+                  )
+                  AND (
+                    (assignment.session_id IS NULL AND assignment.turn_id IS NULL)
+                    OR EXISTS (
+                      SELECT 1 FROM chat_session_meta session
+                      JOIN chat_turn_traces turn ON turn.session_id = session.session_id
+                      WHERE session.session_id = assignment.session_id
+                        AND session.workspace_id = assignment.execution_workspace_id
+                        AND turn.turn_id = assignment.turn_id
+                    )
+                  )
+                  AND json_valid(run.metadata_json)
+                  AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContextSha256')
+                    = json_extract(assignment.manifest_json, '$.parentContextSha256')
+                  AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.executionWorkspaceId')
+                    = assignment.execution_workspace_id
+                  AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.durableRunId')
+                    = assignment.durable_run_id
+                  AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.taskId') = assignment.task_id
+                  AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.sessionId') IS assignment.session_id
+                  AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.turnId') IS assignment.turn_id
+                  AND (SELECT COUNT(*) FROM json_each(run.metadata_json, '$.remoteWorkerAssignmentParentContext'))
+                    = CASE WHEN assignment.session_id IS NULL THEN 4 ELSE 6 END
+                  AND run.status = 'running' AND run.attempt_count = NEW.durable_run_attempt
+                  AND run.lease_owner_id = NEW.dispatch_owner_id
+                  AND run.lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                  AND json_extract(NEW.dispatch_authority_json, '$.durableRunId') = run.run_id
+                  AND json_extract(NEW.dispatch_authority_json, '$.durableRunVersion') = run.version
+                  AND json_extract(NEW.dispatch_authority_json, '$.durableRunLeaseExpiresAt') = run.lease_expires_at
+              )
+              OR json(NEW.dispatch_authority_json) <> NEW.dispatch_authority_json
+              OR abs((julianday(NEW.started_at) - julianday('now')) * 86400.0) > 1.0
+            BEGIN SELECT RAISE(ABORT, 'remote worker assignment generation lacks current dispatch, worker, or node authority'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_lease_insert_guard
+            BEFORE INSERT ON remote_worker_assignment_leases
+            WHEN
+              NEW.lease_revision <> 1 + COALESCE((
+                SELECT MAX(prior.lease_revision) FROM remote_worker_assignment_leases prior
+                WHERE prior.registry_workspace_id = NEW.registry_workspace_id AND prior.assignment_id = NEW.assignment_id
+                  AND prior.assignment_generation = NEW.assignment_generation
+              ), 0)
+              OR NEW.server_acknowledged_through <> COALESCE((
+                SELECT MAX(event.sequence) FROM remote_worker_assignment_events event
+                WHERE event.registry_workspace_id = NEW.registry_workspace_id AND event.assignment_id = NEW.assignment_id
+                  AND event.assignment_generation = NEW.assignment_generation
+              ), 0)
+              OR NEW.worker_sent_through < NEW.server_acknowledged_through
+              OR NEW.worker_sent_through < COALESCE((
+                SELECT MAX(committed.worker_sent_through) FROM (
+                  SELECT prior.worker_sent_through FROM remote_worker_assignment_leases prior
+                  WHERE prior.registry_workspace_id = NEW.registry_workspace_id
+                    AND prior.assignment_id = NEW.assignment_id
+                    AND prior.assignment_generation = NEW.assignment_generation
+                  UNION ALL
+                  SELECT event.worker_sent_through FROM remote_worker_assignment_events event
+                  WHERE event.registry_workspace_id = NEW.registry_workspace_id
+                    AND event.assignment_id = NEW.assignment_id
+                    AND event.assignment_generation = NEW.assignment_generation
+                ) committed
+              ), 0)
+              OR NOT EXISTS (
+                SELECT 1 FROM remote_worker_assignment_generations generation
+                JOIN remote_worker_assignments assignment
+                  ON assignment.registry_workspace_id = generation.registry_workspace_id
+                 AND assignment.assignment_id = generation.assignment_id
+                WHERE generation.registry_workspace_id = NEW.registry_workspace_id
+                  AND generation.assignment_id = NEW.assignment_id
+                  AND generation.assignment_generation = NEW.assignment_generation
+                  AND generation.assignment_generation = (
+                    SELECT MAX(current.assignment_generation) FROM remote_worker_assignment_generations current
+                    WHERE current.registry_workspace_id = generation.registry_workspace_id
+                      AND current.assignment_id = generation.assignment_id
+                  )
+                  AND NEW.worker_sent_through <= json_extract(assignment.manifest_json, '$.maxEventCount')
+                  AND NEW.expires_at <= json_extract(assignment.manifest_json, '$.deadlineAt')
+                  AND (julianday(NEW.expires_at) - julianday(NEW.heartbeat_at)) * 86400.0
+                    BETWEEN 0.999 AND json_extract(assignment.manifest_json, '$.leaseTtlSeconds') + 0.001
+              )
+              OR EXISTS (
+                SELECT 1 FROM remote_worker_assignment_settlements settlement
+                WHERE settlement.registry_workspace_id = NEW.registry_workspace_id AND settlement.assignment_id = NEW.assignment_id
+              )
+              OR EXISTS (
+                SELECT 1 FROM remote_worker_assignment_controls control
+                WHERE control.registry_workspace_id = NEW.registry_workspace_id AND control.assignment_id = NEW.assignment_id
+                  AND control.assignment_generation = NEW.assignment_generation
+                  AND control.action IN ('cancel_requested', 'generation_abandoned', 'recovery_exhausted')
+              )
+              OR NEW.expires_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+              OR abs((julianday(NEW.heartbeat_at) - julianday('now')) * 86400.0) > 1.0
+            BEGIN SELECT RAISE(ABORT, 'remote worker assignment lease revision or database-clock invariant violated'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_control_insert_guard
+            BEFORE INSERT ON remote_worker_assignment_controls
+            WHEN
+              NEW.control_revision <> 1 + COALESCE((
+                SELECT MAX(prior.control_revision) FROM remote_worker_assignment_controls prior
+                WHERE prior.registry_workspace_id = NEW.registry_workspace_id AND prior.assignment_id = NEW.assignment_id
+                  AND prior.assignment_generation = NEW.assignment_generation
+              ), 0)
+              OR NEW.control_revision <> 1
+              OR NEW.assignment_generation <> COALESCE((
+                SELECT MAX(generation.assignment_generation) FROM remote_worker_assignment_generations generation
+                WHERE generation.registry_workspace_id = NEW.registry_workspace_id
+                  AND generation.assignment_id = NEW.assignment_id
+              ), 0)
+              OR NEW.expected_lease_revision <> COALESCE((
+                SELECT MAX(lease.lease_revision) FROM remote_worker_assignment_leases lease
+                WHERE lease.registry_workspace_id = NEW.registry_workspace_id AND lease.assignment_id = NEW.assignment_id
+                  AND lease.assignment_generation = NEW.assignment_generation
+              ), 0)
+              OR (NEW.action IN ('generation_abandoned', 'recovery_exhausted') AND EXISTS (
+                SELECT 1 FROM remote_worker_assignment_leases lease
+                WHERE lease.registry_workspace_id = NEW.registry_workspace_id AND lease.assignment_id = NEW.assignment_id
+                  AND lease.assignment_generation = NEW.assignment_generation
+                  AND lease.lease_revision = NEW.expected_lease_revision
+                  AND lease.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+              ))
+              OR EXISTS (
+                SELECT 1 FROM remote_worker_assignment_settlements settlement
+                WHERE settlement.registry_workspace_id = NEW.registry_workspace_id AND settlement.assignment_id = NEW.assignment_id
+              )
+              OR abs((julianday(NEW.created_at) - julianday('now')) * 86400.0) > 1.0
+            BEGIN SELECT RAISE(ABORT, 'remote worker assignment control revision or recovery invariant violated'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_event_insert_guard
+            BEFORE INSERT ON remote_worker_assignment_events
+            WHEN
+              NEW.sequence <> 1 + COALESCE((
+                SELECT MAX(prior.sequence) FROM remote_worker_assignment_events prior
+                WHERE prior.registry_workspace_id = NEW.registry_workspace_id AND prior.assignment_id = NEW.assignment_id
+                  AND prior.assignment_generation = NEW.assignment_generation
+              ), 0)
+              OR NEW.previous_event_sha256 <> COALESCE((
+                SELECT prior.event_sha256 FROM remote_worker_assignment_events prior
+                WHERE prior.registry_workspace_id = NEW.registry_workspace_id AND prior.assignment_id = NEW.assignment_id
+                  AND prior.assignment_generation = NEW.assignment_generation AND prior.sequence = NEW.sequence - 1
+              ), '0000000000000000000000000000000000000000000000000000000000000000')
+              OR NEW.worker_sent_through < COALESCE((
+                SELECT MAX(committed.worker_sent_through) FROM (
+                  SELECT lease.worker_sent_through FROM remote_worker_assignment_leases lease
+                  WHERE lease.registry_workspace_id = NEW.registry_workspace_id
+                    AND lease.assignment_id = NEW.assignment_id
+                    AND lease.assignment_generation = NEW.assignment_generation
+                  UNION ALL
+                  SELECT prior.worker_sent_through FROM remote_worker_assignment_events prior
+                  WHERE prior.registry_workspace_id = NEW.registry_workspace_id
+                    AND prior.assignment_id = NEW.assignment_id
+                    AND prior.assignment_generation = NEW.assignment_generation
+                ) committed
+              ), 0)
+              OR json(NEW.payload_json) <> NEW.payload_json
+              OR COALESCE(json_type(NEW.payload_json, '$'), '') <> 'object'
+              OR (SELECT COUNT(*) FROM json_each(NEW.payload_json)) <>
+                (SELECT COUNT(DISTINCT field.key) FROM json_each(NEW.payload_json) field)
+              OR COALESCE(json_type(NEW.payload_json, '$.schemaVersion'), '') <> 'text'
+              OR json_extract(NEW.payload_json, '$.schemaVersion') <>
+                'goatcitadel.remote-worker-assignment-event.v1'
+              OR CASE NEW.event_type
+                WHEN 'status' THEN (
+                  (SELECT COUNT(*) FROM json_each(NEW.payload_json)) = 3
+                  AND COALESCE(json_type(NEW.payload_json, '$.phase'), '') = 'text'
+                  AND json_extract(NEW.payload_json, '$.phase') IN ('accepted', 'running', 'waiting', 'finishing')
+                  AND COALESCE(json_type(NEW.payload_json, '$.statusSha256'), '') = 'text'
+                  AND length(json_extract(NEW.payload_json, '$.statusSha256')) = 64
+                  AND json_extract(NEW.payload_json, '$.statusSha256') NOT GLOB '*[^0-9a-f]*'
+                )
+                WHEN 'tool_progress' THEN (
+                  (SELECT COUNT(*) FROM json_each(NEW.payload_json)) BETWEEN 4 AND 6
+                  AND NOT EXISTS (
+                    SELECT 1 FROM json_each(NEW.payload_json) field
+                    WHERE field.key NOT IN (
+                      'schemaVersion', 'toolRunId', 'phase', 'toolNameSha256', 'argsSha256', 'resultSha256'
+                    )
+                  )
+                  AND COALESCE(json_type(NEW.payload_json, '$.toolRunId'), '') = 'text'
+                  AND length(json_extract(NEW.payload_json, '$.toolRunId')) BETWEEN 1 AND 256
+                  AND COALESCE(json_type(NEW.payload_json, '$.phase'), '') = 'text'
+                  AND json_extract(NEW.payload_json, '$.phase') IN (
+                    'requested', 'running', 'waiting_approval', 'completed', 'failed'
+                  )
+                  AND COALESCE(json_type(NEW.payload_json, '$.toolNameSha256'), '') = 'text'
+                  AND length(json_extract(NEW.payload_json, '$.toolNameSha256')) = 64
+                  AND json_extract(NEW.payload_json, '$.toolNameSha256') NOT GLOB '*[^0-9a-f]*'
+                  AND (
+                    json_type(NEW.payload_json, '$.argsSha256') IS NULL
+                    OR (
+                      json_type(NEW.payload_json, '$.argsSha256') = 'text'
+                      AND length(json_extract(NEW.payload_json, '$.argsSha256')) = 64
+                      AND json_extract(NEW.payload_json, '$.argsSha256') NOT GLOB '*[^0-9a-f]*'
+                    )
+                  )
+                  AND (
+                    json_type(NEW.payload_json, '$.resultSha256') IS NULL
+                    OR (
+                      json_type(NEW.payload_json, '$.resultSha256') = 'text'
+                      AND length(json_extract(NEW.payload_json, '$.resultSha256')) = 64
+                      AND json_extract(NEW.payload_json, '$.resultSha256') NOT GLOB '*[^0-9a-f]*'
+                    )
+                  )
+                )
+                WHEN 'model_progress' THEN (
+                  (SELECT COUNT(*) FROM json_each(NEW.payload_json)) = 5
+                  AND COALESCE(json_type(NEW.payload_json, '$.inferenceRequestId'), '') = 'text'
+                  AND length(json_extract(NEW.payload_json, '$.inferenceRequestId')) BETWEEN 1 AND 256
+                  AND COALESCE(json_type(NEW.payload_json, '$.inferenceAttempt'), '') = 'integer'
+                  AND json_extract(NEW.payload_json, '$.inferenceAttempt') BETWEEN 1 AND 9007199254740991
+                  AND COALESCE(json_type(NEW.payload_json, '$.phase'), '') = 'text'
+                  AND json_extract(NEW.payload_json, '$.phase') IN ('requested', 'streaming', 'completed', 'failed')
+                  AND COALESCE(json_type(NEW.payload_json, '$.modelIntentSha256'), '') = 'text'
+                  AND length(json_extract(NEW.payload_json, '$.modelIntentSha256')) = 64
+                  AND json_extract(NEW.payload_json, '$.modelIntentSha256') NOT GLOB '*[^0-9a-f]*'
+                )
+                WHEN 'approval_wait' THEN (
+                  (SELECT COUNT(*) FROM json_each(NEW.payload_json)) = 4
+                  AND COALESCE(json_type(NEW.payload_json, '$.approvalId'), '') = 'text'
+                  AND length(json_extract(NEW.payload_json, '$.approvalId')) BETWEEN 1 AND 256
+                  AND COALESCE(json_type(NEW.payload_json, '$.approvalKind'), '') = 'text'
+                  AND length(json_extract(NEW.payload_json, '$.approvalKind')) BETWEEN 1 AND 128
+                  AND json_extract(NEW.payload_json, '$.approvalKind') NOT GLOB '*[^a-z0-9._-]*'
+                  AND substr(json_extract(NEW.payload_json, '$.approvalKind'), 1, 1) GLOB '[a-z0-9]'
+                  AND substr(json_extract(NEW.payload_json, '$.approvalKind'), -1, 1) GLOB '[a-z0-9]'
+                  AND COALESCE(json_type(NEW.payload_json, '$.riskLevelSha256'), '') = 'text'
+                  AND length(json_extract(NEW.payload_json, '$.riskLevelSha256')) = 64
+                  AND json_extract(NEW.payload_json, '$.riskLevelSha256') NOT GLOB '*[^0-9a-f]*'
+                )
+                WHEN 'diagnostic' THEN (
+                  (SELECT COUNT(*) FROM json_each(NEW.payload_json)) = 4
+                  AND COALESCE(json_type(NEW.payload_json, '$.severity'), '') = 'text'
+                  AND json_extract(NEW.payload_json, '$.severity') IN ('info', 'warning', 'error')
+                  AND COALESCE(json_type(NEW.payload_json, '$.code'), '') = 'text'
+                  AND length(json_extract(NEW.payload_json, '$.code')) BETWEEN 1 AND 128
+                  AND json_extract(NEW.payload_json, '$.code') NOT GLOB '*[^a-z0-9._-]*'
+                  AND substr(json_extract(NEW.payload_json, '$.code'), 1, 1) GLOB '[a-z0-9]'
+                  AND substr(json_extract(NEW.payload_json, '$.code'), -1, 1) GLOB '[a-z0-9]'
+                  AND COALESCE(json_type(NEW.payload_json, '$.detailSha256'), '') = 'text'
+                  AND length(json_extract(NEW.payload_json, '$.detailSha256')) = 64
+                  AND json_extract(NEW.payload_json, '$.detailSha256') NOT GLOB '*[^0-9a-f]*'
+                )
+                WHEN 'transcript_delta' THEN (
+                  (SELECT COUNT(*) FROM json_each(NEW.payload_json)) = 3
+                  AND COALESCE(json_type(NEW.payload_json, '$.role'), '') = 'text'
+                  AND json_extract(NEW.payload_json, '$.role') = 'assistant'
+                  AND COALESCE(json_type(NEW.payload_json, '$.text'), '') = 'text'
+                  AND length(json_extract(NEW.payload_json, '$.text')) BETWEEN 1 AND 16384
+                  AND length(CAST(json_extract(NEW.payload_json, '$.text') AS BLOB)) BETWEEN 1 AND 65536
+                )
+                WHEN 'terminal_output' THEN (
+                  (SELECT COUNT(*) FROM json_each(NEW.payload_json)) = 4
+                  AND COALESCE(json_type(NEW.payload_json, '$.stream'), '') = 'text'
+                  AND json_extract(NEW.payload_json, '$.stream') IN ('stdout', 'stderr')
+                  AND COALESCE(json_type(NEW.payload_json, '$.chunkSha256'), '') = 'text'
+                  AND length(json_extract(NEW.payload_json, '$.chunkSha256')) = 64
+                  AND json_extract(NEW.payload_json, '$.chunkSha256') NOT GLOB '*[^0-9a-f]*'
+                  AND COALESCE(json_type(NEW.payload_json, '$.byteLength'), '') = 'integer'
+                  AND json_extract(NEW.payload_json, '$.byteLength') BETWEEN 1 AND 65536
+                )
+                ELSE 0
+              END IS NOT 1
+              OR NOT EXISTS (
+                SELECT 1 FROM remote_worker_assignments assignment
+                JOIN remote_worker_assignment_generations generation
+                  ON generation.registry_workspace_id = assignment.registry_workspace_id
+                 AND generation.assignment_id = assignment.assignment_id
+                JOIN remote_worker_assignment_leases lease
+                  ON lease.registry_workspace_id = generation.registry_workspace_id
+                 AND lease.assignment_id = generation.assignment_id
+                 AND lease.assignment_generation = generation.assignment_generation
+                WHERE assignment.registry_workspace_id = NEW.registry_workspace_id
+                  AND assignment.assignment_id = NEW.assignment_id
+                  AND generation.assignment_generation = NEW.assignment_generation
+                  AND generation.assignment_generation = (
+                    SELECT MAX(current.assignment_generation) FROM remote_worker_assignment_generations current
+                    WHERE current.registry_workspace_id = generation.registry_workspace_id
+                      AND current.assignment_id = generation.assignment_id
+                  )
+                  AND lease.lease_revision = (
+                    SELECT MAX(current.lease_revision) FROM remote_worker_assignment_leases current
+                    WHERE current.registry_workspace_id = lease.registry_workspace_id
+                      AND current.assignment_id = lease.assignment_id
+                      AND current.assignment_generation = lease.assignment_generation
+                  )
+                  AND lease.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                  AND NEW.sequence <= json_extract(assignment.manifest_json, '$.maxEventCount')
+                  AND NEW.worker_sent_through <= json_extract(assignment.manifest_json, '$.maxEventCount')
+                  AND COALESCE((
+                    SELECT SUM(length(CAST(committed.payload_json AS BLOB)))
+                    FROM remote_worker_assignment_events committed
+                    WHERE committed.registry_workspace_id = NEW.registry_workspace_id
+                      AND committed.assignment_id = NEW.assignment_id
+                      AND committed.assignment_generation = NEW.assignment_generation
+                  ), 0) + length(CAST(NEW.payload_json AS BLOB))
+                    <= json_extract(assignment.manifest_json, '$.maxEventBytes')
+                  AND COALESCE((
+                    SELECT SUM(CASE
+                      WHEN committed.event_type = 'terminal_output'
+                        THEN CAST(json_extract(committed.payload_json, '$.byteLength') AS INTEGER)
+                      WHEN committed.event_type = 'transcript_delta'
+                        THEN length(CAST(json_extract(committed.payload_json, '$.text') AS BLOB))
+                      ELSE 0
+                    END)
+                    FROM remote_worker_assignment_events committed
+                    WHERE committed.registry_workspace_id = NEW.registry_workspace_id
+                      AND committed.assignment_id = NEW.assignment_id
+                      AND committed.assignment_generation = NEW.assignment_generation
+                  ), 0) + CASE
+                    WHEN NEW.event_type = 'terminal_output'
+                      THEN CAST(json_extract(NEW.payload_json, '$.byteLength') AS INTEGER)
+                    WHEN NEW.event_type = 'transcript_delta'
+                      THEN length(CAST(json_extract(NEW.payload_json, '$.text') AS BLOB))
+                    ELSE 0
+                  END <= json_extract(assignment.manifest_json, '$.maxOutputBytes')
+              )
+              OR EXISTS (
+                SELECT 1 FROM remote_worker_assignment_controls control
+                WHERE control.registry_workspace_id = NEW.registry_workspace_id AND control.assignment_id = NEW.assignment_id
+                  AND control.assignment_generation = NEW.assignment_generation
+                  AND control.action IN ('cancel_requested', 'generation_abandoned', 'recovery_exhausted')
+              )
+              OR EXISTS (
+                SELECT 1 FROM remote_worker_assignment_settlements settlement
+                WHERE settlement.registry_workspace_id = NEW.registry_workspace_id AND settlement.assignment_id = NEW.assignment_id
+              )
+              OR abs((julianday(NEW.received_at) - julianday('now')) * 86400.0) > 1.0
+            BEGIN SELECT RAISE(ABORT, 'remote worker assignment event chain, lease, or ceiling invariant violated'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_settlement_insert_guard
+            BEFORE INSERT ON remote_worker_assignment_settlements
+            WHEN
+              NEW.assignment_generation <> COALESCE((
+                SELECT MAX(generation.assignment_generation) FROM remote_worker_assignment_generations generation
+                WHERE generation.registry_workspace_id = NEW.registry_workspace_id AND generation.assignment_id = NEW.assignment_id
+              ), 0)
+              OR NEW.final_event_sequence <> COALESCE((
+                SELECT MAX(event.sequence) FROM remote_worker_assignment_events event
+                WHERE event.registry_workspace_id = NEW.registry_workspace_id AND event.assignment_id = NEW.assignment_id
+                  AND event.assignment_generation = NEW.assignment_generation
+              ), 0)
+              OR NEW.final_event_sha256 <> COALESCE((
+                SELECT event.event_sha256 FROM remote_worker_assignment_events event
+                WHERE event.registry_workspace_id = NEW.registry_workspace_id AND event.assignment_id = NEW.assignment_id
+                  AND event.assignment_generation = NEW.assignment_generation AND event.sequence = NEW.final_event_sequence
+              ), '0000000000000000000000000000000000000000000000000000000000000000')
+              OR (NEW.origin = 'worker' AND NOT EXISTS (
+                SELECT 1 FROM remote_worker_assignment_leases lease
+                WHERE lease.registry_workspace_id = NEW.registry_workspace_id AND lease.assignment_id = NEW.assignment_id
+                  AND lease.assignment_generation = NEW.assignment_generation
+                  AND lease.lease_revision = (
+                    SELECT MAX(current.lease_revision) FROM remote_worker_assignment_leases current
+                    WHERE current.registry_workspace_id = lease.registry_workspace_id
+                      AND current.assignment_id = lease.assignment_id
+                      AND current.assignment_generation = lease.assignment_generation
+                  )
+                  AND lease.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+              ))
+              OR (NEW.outcome = 'cancelled' AND NOT EXISTS (
+                SELECT 1 FROM remote_worker_assignment_controls control
+                WHERE control.registry_workspace_id = NEW.registry_workspace_id AND control.assignment_id = NEW.assignment_id
+                  AND control.assignment_generation = NEW.assignment_generation AND control.action = 'cancel_requested'
+              ))
+              OR (NEW.outcome IN ('completed', 'failed') AND EXISTS (
+                SELECT 1 FROM remote_worker_assignment_controls control
+                WHERE control.registry_workspace_id = NEW.registry_workspace_id AND control.assignment_id = NEW.assignment_id
+                  AND control.assignment_generation = NEW.assignment_generation AND control.action = 'cancel_requested'
+              ))
+              OR (NEW.origin = 'gateway_recovery' AND NOT EXISTS (
+                SELECT 1 FROM remote_worker_assignment_controls control
+                WHERE control.registry_workspace_id = NEW.registry_workspace_id AND control.assignment_id = NEW.assignment_id
+                  AND control.assignment_generation = NEW.assignment_generation
+                  AND control.request_sha256 = NEW.recovery_evidence_sha256
+                  AND (
+                    (NEW.outcome = 'cancelled' AND control.action = 'cancel_requested')
+                    OR (NEW.outcome IN ('completed', 'failed') AND control.action IN ('generation_abandoned', 'recovery_exhausted'))
+                  )
+              ))
+              OR abs((julianday(NEW.settled_at) - julianday('now')) * 86400.0) > 1.0
+            BEGIN SELECT RAISE(ABORT, 'remote worker assignment settlement winner, chain, or lease invariant violated'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_materialization_insert_guard
+            BEFORE INSERT ON remote_worker_assignment_materializations
+            WHEN
+              (NEW.source_kind = 'event' AND NOT EXISTS (
+                SELECT 1 FROM remote_worker_assignment_events event
+                WHERE event.registry_workspace_id = NEW.registry_workspace_id AND event.assignment_id = NEW.assignment_id
+                  AND event.assignment_generation = NEW.source_generation AND event.sequence = NEW.source_sequence
+                  AND event.event_sha256 = NEW.source_sha256 AND event.event_type = 'transcript_delta'
+              ))
+              OR (NEW.source_kind = 'settlement' AND NOT EXISTS (
+                SELECT 1 FROM remote_worker_assignment_settlements settlement
+                WHERE settlement.registry_workspace_id = NEW.registry_workspace_id AND settlement.assignment_id = NEW.assignment_id
+                  AND settlement.assignment_generation = NEW.source_generation AND settlement.request_sha256 = NEW.source_sha256
+              ))
+              OR NEW.source_generation <> COALESCE((
+                SELECT MAX(generation.assignment_generation) FROM remote_worker_assignment_generations generation
+                WHERE generation.registry_workspace_id = NEW.registry_workspace_id
+                  AND generation.assignment_id = NEW.assignment_id
+              ), 0)
+              OR EXISTS (
+                SELECT 1 FROM remote_worker_assignment_controls control
+                WHERE control.registry_workspace_id = NEW.registry_workspace_id
+                  AND control.assignment_id = NEW.assignment_id
+                  AND control.assignment_generation = NEW.source_generation
+                  AND control.action IN ('generation_abandoned', 'recovery_exhausted')
+              )
+              OR NOT EXISTS (
+                SELECT 1 FROM remote_worker_assignments assignment
+                WHERE assignment.registry_workspace_id = NEW.registry_workspace_id
+                  AND assignment.assignment_id = NEW.assignment_id
+                  AND (
+                    (NEW.source_kind = 'event'
+                      AND assignment.session_id = NEW.target_owner_session_id
+                      AND assignment.turn_id = NEW.target_owner_turn_id)
+                    OR (NEW.source_kind = 'settlement'
+                      AND assignment.durable_run_id = NEW.target_owner_durable_run_id)
+                  )
+              )
+              OR abs((julianday(NEW.materialized_at) - julianday('now')) * 86400.0) > 1.0
+            BEGIN SELECT RAISE(ABORT, 'remote worker assignment materialization source or database-clock invariant violated'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_leases_live_authority
+            BEFORE INSERT ON remote_worker_assignment_leases
+            WHEN NOT EXISTS (
+              SELECT 1 FROM remote_worker_assignment_generations generation
+              JOIN remote_worker_assignments assignment
+                ON assignment.registry_workspace_id = generation.registry_workspace_id
+               AND assignment.assignment_id = generation.assignment_id
+              JOIN remote_worker_generations worker
+                ON worker.registry_workspace_id = generation.registry_workspace_id
+               AND worker.worker_id = generation.worker_id
+               AND worker.worker_generation = generation.worker_generation
+              JOIN mesh_capability_node_admissions admission
+                ON admission.workspace_id = generation.execution_workspace_id
+               AND admission.node_id = generation.node_id
+               AND admission.admission_generation = generation.node_admission_generation
+              JOIN durable_runs run ON run.run_id = assignment.durable_run_id
+              WHERE generation.registry_workspace_id = NEW.registry_workspace_id
+                AND generation.assignment_id = NEW.assignment_id
+                AND generation.assignment_generation = NEW.assignment_generation
+                AND worker.worker_generation = (
+                  SELECT MAX(current.worker_generation) FROM remote_worker_generations current
+                  WHERE current.registry_workspace_id = worker.registry_workspace_id AND current.worker_id = worker.worker_id
+                )
+                AND NOT EXISTS (
+                  SELECT 1 FROM remote_worker_generation_controls controlled
+                  WHERE controlled.registry_workspace_id = worker.registry_workspace_id
+                    AND controlled.worker_id = worker.worker_id
+                    AND controlled.worker_generation = worker.worker_generation
+                )
+                AND admission.admission_generation = (
+                  SELECT MAX(current.admission_generation) FROM mesh_capability_node_admissions current
+                  WHERE current.workspace_id = admission.workspace_id AND current.node_id = admission.node_id
+                )
+                AND NOT EXISTS (
+                  SELECT 1 FROM mesh_capability_node_admission_revocations revoked
+                  WHERE revoked.workspace_id = admission.workspace_id AND revoked.node_id = admission.node_id
+                    AND revoked.admission_generation = admission.admission_generation
+                )
+                AND EXISTS (
+                  SELECT 1 FROM tasks task
+                  WHERE task.task_id = assignment.task_id
+                    AND task.workspace_id = assignment.execution_workspace_id
+                    AND task.deleted_at IS NULL
+                )
+                AND (
+                  (assignment.session_id IS NULL AND assignment.turn_id IS NULL)
+                  OR EXISTS (
+                    SELECT 1 FROM chat_session_meta session
+                    JOIN chat_turn_traces turn ON turn.session_id = session.session_id
+                    WHERE session.session_id = assignment.session_id
+                      AND session.workspace_id = assignment.execution_workspace_id
+                      AND turn.turn_id = assignment.turn_id
+                  )
+                )
+                AND json_valid(run.metadata_json)
+                AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContextSha256')
+                  = json_extract(assignment.manifest_json, '$.parentContextSha256')
+                AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.executionWorkspaceId')
+                  = assignment.execution_workspace_id
+                AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.durableRunId')
+                  = assignment.durable_run_id
+                AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.taskId') = assignment.task_id
+                AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.sessionId') IS assignment.session_id
+                AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.turnId') IS assignment.turn_id
+                AND (SELECT COUNT(*) FROM json_each(run.metadata_json, '$.remoteWorkerAssignmentParentContext'))
+                  = CASE WHEN assignment.session_id IS NULL THEN 4 ELSE 6 END
+                AND run.status = 'running'
+                AND run.attempt_count = generation.durable_run_attempt
+                AND run.lease_owner_id = generation.dispatch_owner_id
+                AND json_extract(NEW.parent_dispatch_authority_json, '$.durableRunId') = assignment.durable_run_id
+                AND json_extract(NEW.parent_dispatch_authority_json, '$.durableRunAttempt') = generation.durable_run_attempt
+                AND json_extract(NEW.parent_dispatch_authority_json, '$.dispatchOwnerId') = generation.dispatch_owner_id
+                AND run.version = json_extract(NEW.parent_dispatch_authority_json, '$.durableRunVersion')
+                AND run.lease_expires_at = json_extract(NEW.parent_dispatch_authority_json, '$.durableRunLeaseExpiresAt')
+                AND NEW.expires_at <= run.lease_expires_at
+                AND run.lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            )
+            BEGIN SELECT RAISE(ABORT, 'remote worker assignment lease lacks current worker, node, or parent dispatch authority'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_events_live_authority
+            BEFORE INSERT ON remote_worker_assignment_events
+            WHEN NOT EXISTS (
+              SELECT 1 FROM remote_worker_assignment_generations generation
+              JOIN remote_worker_assignments assignment
+                ON assignment.registry_workspace_id = generation.registry_workspace_id
+               AND assignment.assignment_id = generation.assignment_id
+              JOIN remote_worker_generations worker
+                ON worker.registry_workspace_id = generation.registry_workspace_id
+               AND worker.worker_id = generation.worker_id
+               AND worker.worker_generation = generation.worker_generation
+              JOIN mesh_capability_node_admissions admission
+                ON admission.workspace_id = generation.execution_workspace_id
+               AND admission.node_id = generation.node_id
+               AND admission.admission_generation = generation.node_admission_generation
+              JOIN remote_worker_assignment_leases lease
+                ON lease.registry_workspace_id = generation.registry_workspace_id
+               AND lease.assignment_id = generation.assignment_id
+               AND lease.assignment_generation = generation.assignment_generation
+              JOIN durable_runs run ON run.run_id = assignment.durable_run_id
+              WHERE generation.registry_workspace_id = NEW.registry_workspace_id
+                AND generation.assignment_id = NEW.assignment_id
+                AND generation.assignment_generation = NEW.assignment_generation
+                AND worker.worker_generation = (
+                  SELECT MAX(current.worker_generation) FROM remote_worker_generations current
+                  WHERE current.registry_workspace_id = worker.registry_workspace_id AND current.worker_id = worker.worker_id
+                )
+                AND NOT EXISTS (
+                  SELECT 1 FROM remote_worker_generation_controls controlled
+                  WHERE controlled.registry_workspace_id = worker.registry_workspace_id
+                    AND controlled.worker_id = worker.worker_id
+                    AND controlled.worker_generation = worker.worker_generation
+                )
+                AND admission.admission_generation = (
+                  SELECT MAX(current.admission_generation) FROM mesh_capability_node_admissions current
+                  WHERE current.workspace_id = admission.workspace_id AND current.node_id = admission.node_id
+                )
+                AND lease.lease_revision = (
+                  SELECT MAX(current.lease_revision) FROM remote_worker_assignment_leases current
+                  WHERE current.registry_workspace_id = lease.registry_workspace_id
+                    AND current.assignment_id = lease.assignment_id
+                    AND current.assignment_generation = lease.assignment_generation
+                )
+                AND NOT EXISTS (
+                  SELECT 1 FROM mesh_capability_node_admission_revocations revoked
+                  WHERE revoked.workspace_id = admission.workspace_id AND revoked.node_id = admission.node_id
+                    AND revoked.admission_generation = admission.admission_generation
+                )
+                AND EXISTS (
+                  SELECT 1 FROM tasks task
+                  WHERE task.task_id = assignment.task_id
+                    AND task.workspace_id = assignment.execution_workspace_id
+                    AND task.deleted_at IS NULL
+                )
+                AND (
+                  (assignment.session_id IS NULL AND assignment.turn_id IS NULL)
+                  OR EXISTS (
+                    SELECT 1 FROM chat_session_meta session
+                    JOIN chat_turn_traces turn ON turn.session_id = session.session_id
+                    WHERE session.session_id = assignment.session_id
+                      AND session.workspace_id = assignment.execution_workspace_id
+                      AND turn.turn_id = assignment.turn_id
+                  )
+                )
+                AND json_valid(run.metadata_json)
+                AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContextSha256')
+                  = json_extract(assignment.manifest_json, '$.parentContextSha256')
+                AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.executionWorkspaceId')
+                  = assignment.execution_workspace_id
+                AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.durableRunId')
+                  = assignment.durable_run_id
+                AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.taskId') = assignment.task_id
+                AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.sessionId') IS assignment.session_id
+                AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.turnId') IS assignment.turn_id
+                AND (SELECT COUNT(*) FROM json_each(run.metadata_json, '$.remoteWorkerAssignmentParentContext'))
+                  = CASE WHEN assignment.session_id IS NULL THEN 4 ELSE 6 END
+                AND run.status = 'running'
+                AND run.attempt_count = generation.durable_run_attempt
+                AND run.lease_owner_id = generation.dispatch_owner_id
+                AND run.version = json_extract(lease.parent_dispatch_authority_json, '$.durableRunVersion')
+                AND run.lease_expires_at = json_extract(lease.parent_dispatch_authority_json, '$.durableRunLeaseExpiresAt')
+                AND run.lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            )
+            BEGIN SELECT RAISE(ABORT, 'remote worker assignment event lacks current worker, node, or parent dispatch authority'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_settlements_live_authority
+            BEFORE INSERT ON remote_worker_assignment_settlements
+            WHEN NEW.origin = 'worker' AND NOT EXISTS (
+              SELECT 1 FROM remote_worker_assignment_generations generation
+              JOIN remote_worker_assignments assignment
+                ON assignment.registry_workspace_id = generation.registry_workspace_id
+               AND assignment.assignment_id = generation.assignment_id
+              JOIN remote_worker_generations worker
+                ON worker.registry_workspace_id = generation.registry_workspace_id
+               AND worker.worker_id = generation.worker_id
+               AND worker.worker_generation = generation.worker_generation
+              JOIN mesh_capability_node_admissions admission
+                ON admission.workspace_id = generation.execution_workspace_id
+               AND admission.node_id = generation.node_id
+               AND admission.admission_generation = generation.node_admission_generation
+              JOIN remote_worker_assignment_leases lease
+                ON lease.registry_workspace_id = generation.registry_workspace_id
+               AND lease.assignment_id = generation.assignment_id
+               AND lease.assignment_generation = generation.assignment_generation
+              JOIN durable_runs run ON run.run_id = assignment.durable_run_id
+              WHERE generation.registry_workspace_id = NEW.registry_workspace_id
+                AND generation.assignment_id = NEW.assignment_id
+                AND generation.assignment_generation = NEW.assignment_generation
+                AND worker.worker_generation = (
+                  SELECT MAX(current.worker_generation) FROM remote_worker_generations current
+                  WHERE current.registry_workspace_id = worker.registry_workspace_id AND current.worker_id = worker.worker_id
+                )
+                AND NOT EXISTS (
+                  SELECT 1 FROM remote_worker_generation_controls controlled
+                  WHERE controlled.registry_workspace_id = worker.registry_workspace_id
+                    AND controlled.worker_id = worker.worker_id
+                    AND controlled.worker_generation = worker.worker_generation
+                )
+                AND admission.admission_generation = (
+                  SELECT MAX(current.admission_generation) FROM mesh_capability_node_admissions current
+                  WHERE current.workspace_id = admission.workspace_id AND current.node_id = admission.node_id
+                )
+                AND lease.lease_revision = (
+                  SELECT MAX(current.lease_revision) FROM remote_worker_assignment_leases current
+                  WHERE current.registry_workspace_id = lease.registry_workspace_id
+                    AND current.assignment_id = lease.assignment_id
+                    AND current.assignment_generation = lease.assignment_generation
+                )
+                AND NOT EXISTS (
+                  SELECT 1 FROM mesh_capability_node_admission_revocations revoked
+                  WHERE revoked.workspace_id = admission.workspace_id AND revoked.node_id = admission.node_id
+                    AND revoked.admission_generation = admission.admission_generation
+                )
+                AND EXISTS (
+                  SELECT 1 FROM tasks task
+                  WHERE task.task_id = assignment.task_id
+                    AND task.workspace_id = assignment.execution_workspace_id
+                    AND task.deleted_at IS NULL
+                )
+                AND (
+                  (assignment.session_id IS NULL AND assignment.turn_id IS NULL)
+                  OR EXISTS (
+                    SELECT 1 FROM chat_session_meta session
+                    JOIN chat_turn_traces turn ON turn.session_id = session.session_id
+                    WHERE session.session_id = assignment.session_id
+                      AND session.workspace_id = assignment.execution_workspace_id
+                      AND turn.turn_id = assignment.turn_id
+                  )
+                )
+                AND json_valid(run.metadata_json)
+                AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContextSha256')
+                  = json_extract(assignment.manifest_json, '$.parentContextSha256')
+                AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.executionWorkspaceId')
+                  = assignment.execution_workspace_id
+                AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.durableRunId')
+                  = assignment.durable_run_id
+                AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.taskId') = assignment.task_id
+                AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.sessionId') IS assignment.session_id
+                AND json_extract(run.metadata_json, '$.remoteWorkerAssignmentParentContext.turnId') IS assignment.turn_id
+                AND (SELECT COUNT(*) FROM json_each(run.metadata_json, '$.remoteWorkerAssignmentParentContext'))
+                  = CASE WHEN assignment.session_id IS NULL THEN 4 ELSE 6 END
+                AND run.status = 'running'
+                AND run.attempt_count = generation.durable_run_attempt
+                AND run.lease_owner_id = generation.dispatch_owner_id
+                AND run.version = json_extract(lease.parent_dispatch_authority_json, '$.durableRunVersion')
+                AND run.lease_expires_at = json_extract(lease.parent_dispatch_authority_json, '$.durableRunLeaseExpiresAt')
+                AND run.lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            )
+            BEGIN SELECT RAISE(ABORT, 'remote worker assignment settlement lacks current worker, node, or parent dispatch authority'); END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignments_no_update BEFORE UPDATE ON remote_worker_assignments BEGIN SELECT RAISE(ABORT, 'remote worker assignments are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignments_no_delete BEFORE DELETE ON remote_worker_assignments BEGIN SELECT RAISE(ABORT, 'remote worker assignments are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_generations_no_update BEFORE UPDATE ON remote_worker_assignment_generations BEGIN SELECT RAISE(ABORT, 'remote worker assignment generations are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_generations_no_delete BEFORE DELETE ON remote_worker_assignment_generations BEGIN SELECT RAISE(ABORT, 'remote worker assignment generations are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_leases_no_update BEFORE UPDATE ON remote_worker_assignment_leases BEGIN SELECT RAISE(ABORT, 'remote worker assignment leases are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_leases_no_delete BEFORE DELETE ON remote_worker_assignment_leases BEGIN SELECT RAISE(ABORT, 'remote worker assignment leases are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_controls_no_update BEFORE UPDATE ON remote_worker_assignment_controls BEGIN SELECT RAISE(ABORT, 'remote worker assignment controls are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_controls_no_delete BEFORE DELETE ON remote_worker_assignment_controls BEGIN SELECT RAISE(ABORT, 'remote worker assignment controls are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_events_no_update BEFORE UPDATE ON remote_worker_assignment_events BEGIN SELECT RAISE(ABORT, 'remote worker assignment events are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_events_no_delete BEFORE DELETE ON remote_worker_assignment_events BEGIN SELECT RAISE(ABORT, 'remote worker assignment events are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_settlements_no_update BEFORE UPDATE ON remote_worker_assignment_settlements BEGIN SELECT RAISE(ABORT, 'remote worker assignment settlements are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_settlements_no_delete BEFORE DELETE ON remote_worker_assignment_settlements BEGIN SELECT RAISE(ABORT, 'remote worker assignment settlements are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_materializations_no_update BEFORE UPDATE ON remote_worker_assignment_materializations BEGIN SELECT RAISE(ABORT, 'remote worker assignment materializations are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS trg_remote_worker_assignment_materializations_no_delete BEFORE DELETE ON remote_worker_assignment_materializations BEGIN SELECT RAISE(ABORT, 'remote worker assignment materializations are immutable'); END;
+          `);
+        },
+      },
+      {
+        version: 172,
+        name: "session_control_foundation",
+        up: (db) => {
+          if (!tableExists(db, "chat_session_meta")) {
+            return;
+          }
+          createSessionControlFoundationSchema(db);
+        },
+      },
+      {
+        version: 173,
+        name: "session_control_lifecycle_and_mutation_admission",
+        up: (db) => {
+          if (!tableExists(db, "chat_session_meta") || !tableExists(db, "chat_session_control_grants")) {
+            throw new Error(
+              "SQLite migration 173 requires chat_session_meta and chat_session_control_grants predecessors",
+            );
+          }
+          createSessionControlLifecycleAndAdmissionSchema(db);
+        },
+      },
+      {
+        version: 174,
+        name: "durable_heartbeat_occurrence_authority",
+        up: (db) => {
+          if (
+            !tableExists(db, "chat_session_mutation_admissions") ||
+            !tableExists(db, "chat_turn_mutation_admission_durable_bindings") ||
+            !tableExists(db, "session_autonomy_prefs")
+          ) {
+            throw new Error(
+              "SQLite migration 174 requires mutation admission, durable binding, and autonomy preference predecessors",
+            );
+          }
+          createDurableHeartbeatOccurrenceSchema(db);
+        },
+      },
+      {
+        version: 175,
+        name: "governed_lifecycle_foundation",
+        up: (db) => {
+          // Repair-only sparse databases (see the HX-407 sparse parity proof)
+          // skip additive foundations whose logical parents are absent instead
+          // of inventing them; fresh chains always carry the migration-161
+          // Journey/approval predecessors before 175 runs.
+          if (!tableExists(db, "governance_journey_events") || !tableExists(db, "approvals")) {
+            return;
+          }
+          createGovernedLifecycleSchema(db);
+        },
+      },
+      {
+        version: 176,
+        name: "remote_worker_request_nonce_authority",
+        up: (db) => {
+          // HX-501B1 durable request-nonce consumption owner (paired with
+          // PostgreSQL 118). Additive only: two new authority-specific,
+          // hash-only tables plus the two minimal parent UNIQUE indexes their
+          // complete composite foreign keys require. No frozen table is
+          // altered. Repair-only sparse databases without the remote-worker
+          // admission (170) predecessors skip instead of inventing parents.
+          if (
+            !tableExists(db, "remote_worker_bootstrap_requests") ||
+            !tableExists(db, "remote_worker_runtime_credentials") ||
+            !tableExists(db, "remote_worker_generations") ||
+            !tableExists(db, "remote_worker_generation_controls")
+          ) {
+            return;
+          }
+          createRemoteWorkerRequestNonceSchema(db);
+        },
+      },
+      {
+        version: 177,
+        name: "remote_worker_inference_request_owner",
+        up: (db) => {
+          // HX-503 assignment-bound inference request owner (paired with
+          // PostgreSQL 119). Additive only: two new tables bound by complete
+          // composite foreign keys to the committed assignment-generation
+          // authority (whose PRIMARY KEY already satisfies the reference, so no
+          // frozen table is altered). No raw assignment lease and no provider
+          // credential ever has a column. Repair-only sparse databases without
+          // the remote-worker assignment (171) predecessors skip instead of
+          // inventing parents.
+          if (!tableExists(db, "remote_worker_assignment_generations")) {
+            return;
+          }
+          createRemoteWorkerInferenceSchema(db);
+        },
+      },
+      {
+        version: 178,
+        name: "remote_worker_cell_execution_owner",
+        up: (db) => {
+          // HX-505 remote-worker execution-cell owner (paired with PostgreSQL
+          // 120). Additive only: two new tables bound by a complete composite
+          // foreign key to the committed assignment-generation authority (whose
+          // PRIMARY KEY already satisfies the reference, so no frozen table is
+          // altered). The immutable server-owned profile, capacity reservation,
+          // three state machines with monotonic revision CAS, high-water and
+          // retained-byte truth, and an append-only hash-chained evidence log
+          // hold; no transcript, artifact payload, raw terminal output, or
+          // credential ever has a column. Repair-only sparse databases without
+          // the remote-worker assignment (171) predecessors skip instead of
+          // inventing parents.
+          if (!tableExists(db, "remote_worker_assignment_generations")) {
+            return;
+          }
+          createRemoteWorkerCellSchema(db);
+        },
+      },
+      {
+        version: 179,
+        name: "remote_worker_settlement_owner",
+        up: (db) => {
+          // HX-506 remote-worker settlement owner (paired with PostgreSQL 121).
+          // Additive only: nine new tables bound by complete composite foreign
+          // keys to a full-identity unique key on the committed assignment
+          // generation (added here as an additive index; the frozen 171 table is
+          // never altered). Parts, blobs, manifests, entries, intents, and
+          // transitions are insert-only in both dialects; upload/verifier/cleanup/
+          // receipt mutations are revision-CAS fenced. No transcript, artifact
+          // payload, raw terminal output, provider usage/cost, or credential ever
+          // has a column. Forward-only with no content backfill: the migration
+          // ABORTS if an existing completed remote assignment settlement cannot be
+          // proven against a canonical HX-506 manifest. Repair-only sparse
+          // databases without the remote-worker assignment (171) predecessors skip
+          // instead of inventing parents.
+          if (!tableExists(db, "remote_worker_assignment_generations")) {
+            return;
+          }
+          assertNoUnprovenRemoteWorkerSettlement(db);
+          createRemoteWorkerSettlementSchema(db);
+        },
+      },
     ],
   },
 ];
 
 const SCHEMA_MIGRATIONS = createSqliteMigrationRegistry(SCHEMA_MIGRATION_GROUPS);
+
+function createRemoteWorkerRequestNonceSchema(db: DatabaseSync): void {
+  db.exec(`
+    -- Minimal parent UNIQUE keys the complete composite foreign keys require.
+    -- Additive indexes on the frozen admission tables; the tables are unaltered.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_remote_worker_bootstrap_requests_nonce_authority
+      ON remote_worker_bootstrap_requests(registry_workspace_id, bootstrap_id, worker_id, target_worker_generation);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_remote_worker_runtime_credentials_nonce_authority
+      ON remote_worker_runtime_credentials(
+        registry_workspace_id, worker_id, worker_generation, credential_generation, credential_id
+      );
+
+    CREATE TABLE remote_worker_bootstrap_request_nonces (
+      registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+      worker_id TEXT NOT NULL CHECK(length(worker_id) BETWEEN 1 AND 256),
+      target_worker_generation INTEGER NOT NULL CHECK(
+        typeof(target_worker_generation) = 'integer' AND target_worker_generation > 0
+      ),
+      bootstrap_id TEXT NOT NULL CHECK(length(bootstrap_id) BETWEEN 1 AND 256),
+      nonce_sha256 TEXT NOT NULL CHECK(length(nonce_sha256) = 64 AND nonce_sha256 NOT GLOB '*[^0-9a-f]*'),
+      request_timestamp TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', request_timestamp, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', request_timestamp, '+0 days') = request_timestamp
+      ),
+      consumed_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', consumed_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', consumed_at, '+0 days') = consumed_at
+      ),
+      expires_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', expires_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', expires_at, '+0 days') = expires_at
+      ),
+      PRIMARY KEY(registry_workspace_id, worker_id, target_worker_generation, bootstrap_id, nonce_sha256),
+      FOREIGN KEY(registry_workspace_id, bootstrap_id, worker_id, target_worker_generation)
+        REFERENCES remote_worker_bootstrap_requests(
+          registry_workspace_id, bootstrap_id, worker_id, target_worker_generation
+        ) ON DELETE RESTRICT,
+      CHECK((
+        (CAST(strftime('%s', expires_at) AS INTEGER) - CAST(strftime('%s', request_timestamp) AS INTEGER)) * 1000
+        + CAST(substr(expires_at, 21, 3) AS INTEGER)
+        - CAST(substr(request_timestamp, 21, 3) AS INTEGER)
+      ) = 60000)
+    );
+
+    CREATE TABLE remote_worker_credential_request_nonces (
+      registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+      worker_id TEXT NOT NULL CHECK(length(worker_id) BETWEEN 1 AND 256),
+      worker_generation INTEGER NOT NULL CHECK(typeof(worker_generation) = 'integer' AND worker_generation > 0),
+      credential_generation INTEGER NOT NULL CHECK(
+        typeof(credential_generation) = 'integer' AND credential_generation > 0
+      ),
+      credential_id TEXT NOT NULL CHECK(length(credential_id) BETWEEN 1 AND 256),
+      nonce_sha256 TEXT NOT NULL CHECK(length(nonce_sha256) = 64 AND nonce_sha256 NOT GLOB '*[^0-9a-f]*'),
+      request_timestamp TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', request_timestamp, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', request_timestamp, '+0 days') = request_timestamp
+      ),
+      consumed_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', consumed_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', consumed_at, '+0 days') = consumed_at
+      ),
+      expires_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', expires_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', expires_at, '+0 days') = expires_at
+      ),
+      PRIMARY KEY(registry_workspace_id, worker_id, worker_generation, credential_generation, credential_id, nonce_sha256),
+      FOREIGN KEY(registry_workspace_id, worker_id, worker_generation, credential_generation, credential_id)
+        REFERENCES remote_worker_runtime_credentials(
+          registry_workspace_id, worker_id, worker_generation, credential_generation, credential_id
+        ) ON DELETE RESTRICT,
+      CHECK((
+        (CAST(strftime('%s', expires_at) AS INTEGER) - CAST(strftime('%s', request_timestamp) AS INTEGER)) * 1000
+        + CAST(substr(expires_at, 21, 3) AS INTEGER)
+        - CAST(substr(request_timestamp, 21, 3) AS INTEGER)
+      ) = 60000)
+    );
+
+    -- Bounded-pruning stable ordering by expiry then identity.
+    CREATE INDEX IF NOT EXISTS idx_remote_worker_bootstrap_request_nonces_expiry
+      ON remote_worker_bootstrap_request_nonces(
+        expires_at, registry_workspace_id, worker_id, target_worker_generation, bootstrap_id, nonce_sha256
+      );
+    CREATE INDEX IF NOT EXISTS idx_remote_worker_credential_request_nonces_expiry
+      ON remote_worker_credential_request_nonces(
+        expires_at, registry_workspace_id, worker_id, worker_generation, credential_generation, credential_id, nonce_sha256
+      );
+
+    -- Bootstrap nonce admission: pending (unconsumed), unexpired, still-current
+    -- target, and inside the database-clock request window. A consumed bootstrap
+    -- (a generation cites it) or a superseded target (N+1 admission) is stale.
+    CREATE TRIGGER trg_remote_worker_bootstrap_request_nonces_insert_guard
+    BEFORE INSERT ON remote_worker_bootstrap_request_nonces
+    WHEN
+      abs(julianday(NEW.request_timestamp) - julianday('now')) * 86400.0 > 60.0
+      OR NEW.expires_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      OR NOT EXISTS (
+        SELECT 1 FROM remote_worker_bootstrap_requests bootstrap
+        WHERE bootstrap.registry_workspace_id = NEW.registry_workspace_id
+          AND bootstrap.bootstrap_id = NEW.bootstrap_id
+          AND bootstrap.worker_id = NEW.worker_id
+          AND bootstrap.target_worker_generation = NEW.target_worker_generation
+          AND bootstrap.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      )
+      OR EXISTS (
+        SELECT 1 FROM remote_worker_generations generation
+        WHERE generation.registry_workspace_id = NEW.registry_workspace_id
+          AND generation.bootstrap_id = NEW.bootstrap_id
+      )
+      OR NEW.target_worker_generation <> (
+        SELECT COALESCE(MAX(generation.worker_generation), 0) + 1
+        FROM remote_worker_generations generation
+        WHERE generation.registry_workspace_id = NEW.registry_workspace_id
+          AND generation.worker_id = NEW.worker_id
+      )
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker bootstrap nonce authority is stale, expired, or outside the request window');
+    END;
+
+    -- Credential nonce admission: the exact latest-fresh credential of the
+    -- latest worker generation, unexpired, with no quarantine/revoke control,
+    -- inside the database-clock request window. Rotation (newer credential
+    -- generation), N+1 admission (newer worker generation), expiry, or any
+    -- control immediately blocks the stale authority.
+    CREATE TRIGGER trg_remote_worker_credential_request_nonces_insert_guard
+    BEFORE INSERT ON remote_worker_credential_request_nonces
+    WHEN
+      abs(julianday(NEW.request_timestamp) - julianday('now')) * 86400.0 > 60.0
+      OR NEW.expires_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      OR NEW.worker_generation <> (
+        SELECT MAX(generation.worker_generation)
+        FROM remote_worker_generations generation
+        WHERE generation.registry_workspace_id = NEW.registry_workspace_id
+          AND generation.worker_id = NEW.worker_id
+      )
+      OR NEW.credential_generation <> (
+        SELECT MAX(credential.credential_generation)
+        FROM remote_worker_runtime_credentials credential
+        WHERE credential.registry_workspace_id = NEW.registry_workspace_id
+          AND credential.worker_id = NEW.worker_id
+          AND credential.worker_generation = NEW.worker_generation
+      )
+      OR NOT EXISTS (
+        SELECT 1 FROM remote_worker_runtime_credentials credential
+        WHERE credential.registry_workspace_id = NEW.registry_workspace_id
+          AND credential.worker_id = NEW.worker_id
+          AND credential.worker_generation = NEW.worker_generation
+          AND credential.credential_generation = NEW.credential_generation
+          AND credential.credential_id = NEW.credential_id
+          AND credential.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      )
+      OR EXISTS (
+        SELECT 1 FROM remote_worker_generation_controls control
+        WHERE control.registry_workspace_id = NEW.registry_workspace_id
+          AND control.worker_id = NEW.worker_id
+          AND control.worker_generation = NEW.worker_generation
+      )
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker credential nonce authority is stale, expired, revoked, or outside the request window');
+    END;
+
+    -- Consumed nonces are immutable; live rows are undeletable and only the
+    -- database clock releases an expired row for bounded pruning.
+    CREATE TRIGGER trg_remote_worker_bootstrap_request_nonces_no_update
+    BEFORE UPDATE ON remote_worker_bootstrap_request_nonces
+    BEGIN SELECT RAISE(ABORT, 'remote worker request nonces are immutable'); END;
+    CREATE TRIGGER trg_remote_worker_bootstrap_request_nonces_no_delete
+    BEFORE DELETE ON remote_worker_bootstrap_request_nonces
+    WHEN OLD.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    BEGIN SELECT RAISE(ABORT, 'live remote worker request nonces are undeletable'); END;
+
+    CREATE TRIGGER trg_remote_worker_credential_request_nonces_no_update
+    BEFORE UPDATE ON remote_worker_credential_request_nonces
+    BEGIN SELECT RAISE(ABORT, 'remote worker request nonces are immutable'); END;
+    CREATE TRIGGER trg_remote_worker_credential_request_nonces_no_delete
+    BEFORE DELETE ON remote_worker_credential_request_nonces
+    WHEN OLD.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    BEGIN SELECT RAISE(ABORT, 'live remote worker request nonces are undeletable'); END;
+  `);
+}
+
+function createRemoteWorkerInferenceSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE remote_worker_inference_requests (
+      registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+      assignment_id TEXT NOT NULL CHECK(length(assignment_id) BETWEEN 1 AND 256),
+      assignment_generation INTEGER NOT NULL CHECK(typeof(assignment_generation) = 'integer' AND assignment_generation > 0),
+      inference_request_id TEXT NOT NULL CHECK(length(inference_request_id) BETWEEN 1 AND 256),
+      attempt INTEGER NOT NULL CHECK(typeof(attempt) = 'integer' AND attempt > 0),
+      worker_id TEXT NOT NULL CHECK(length(worker_id) BETWEEN 1 AND 256),
+      worker_generation INTEGER NOT NULL CHECK(typeof(worker_generation) = 'integer' AND worker_generation > 0),
+      session_id TEXT NOT NULL CHECK(length(session_id) BETWEEN 1 AND 256),
+      turn_id TEXT NOT NULL CHECK(length(turn_id) BETWEEN 1 AND 256),
+      idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+      request_body_json TEXT NOT NULL CHECK(json_valid(request_body_json) AND length(CAST(request_body_json AS BLOB)) <= 1179648),
+      request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+      input_sha256 TEXT NOT NULL CHECK(length(input_sha256) = 64 AND input_sha256 NOT GLOB '*[^0-9a-f]*'),
+      context_sha256 TEXT NOT NULL CHECK(length(context_sha256) = 64 AND context_sha256 NOT GLOB '*[^0-9a-f]*'),
+      model_intent_sha256 TEXT NOT NULL CHECK(length(model_intent_sha256) = 64 AND model_intent_sha256 NOT GLOB '*[^0-9a-f]*'),
+      capability_profile_sha256 TEXT NOT NULL CHECK(length(capability_profile_sha256) = 64 AND capability_profile_sha256 NOT GLOB '*[^0-9a-f]*'),
+      routed_context_sha256 TEXT NOT NULL CHECK(length(routed_context_sha256) = 64 AND routed_context_sha256 NOT GLOB '*[^0-9a-f]*'),
+      output_token_ceiling INTEGER NOT NULL CHECK(typeof(output_token_ceiling) = 'integer' AND output_token_ceiling BETWEEN 1 AND 1000000),
+      reasoning_token_ceiling INTEGER NOT NULL CHECK(typeof(reasoning_token_ceiling) = 'integer' AND reasoning_token_ceiling BETWEEN 0 AND 1000000),
+      temperature_milli INTEGER NOT NULL CHECK(typeof(temperature_milli) = 'integer' AND temperature_milli BETWEEN 0 AND 2000),
+      operation_id TEXT NOT NULL CHECK(length(operation_id) BETWEEN 1 AND 256),
+      dispatch_generation TEXT NOT NULL CHECK(length(dispatch_generation) BETWEEN 1 AND 256),
+      state TEXT NOT NULL CHECK(state IN (
+        'admitted', 'waiting_approval', 'blocked', 'dispatch_claimed',
+        'streaming', 'completed', 'failed', 'cancelled', 'dispatch_unknown'
+      )),
+      governance_decision TEXT NOT NULL CHECK(governance_decision IN ('allowed', 'approval_required', 'denied')),
+      effective_route_sha256 TEXT NOT NULL CHECK(length(effective_route_sha256) = 64 AND effective_route_sha256 NOT GLOB '*[^0-9a-f]*'),
+      policy_revision INTEGER NOT NULL CHECK(typeof(policy_revision) = 'integer' AND policy_revision > 0),
+      policy_sha256 TEXT NOT NULL CHECK(length(policy_sha256) = 64 AND policy_sha256 NOT GLOB '*[^0-9a-f]*'),
+      approval_receipt_sha256 TEXT CHECK(approval_receipt_sha256 IS NULL OR (length(approval_receipt_sha256) = 64 AND approval_receipt_sha256 NOT GLOB '*[^0-9a-f]*')),
+      governance_output_token_ceiling INTEGER NOT NULL CHECK(typeof(governance_output_token_ceiling) = 'integer' AND governance_output_token_ceiling BETWEEN 1 AND 1000000),
+      governance_reasoning_token_ceiling INTEGER NOT NULL CHECK(typeof(governance_reasoning_token_ceiling) = 'integer' AND governance_reasoning_token_ceiling BETWEEN 0 AND 1000000),
+      governance_expires_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', governance_expires_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', governance_expires_at, '+0 days') = governance_expires_at
+      ),
+      budget_reservation_id TEXT NOT NULL CHECK(length(budget_reservation_id) BETWEEN 1 AND 256),
+      effective_provider_id TEXT CHECK(effective_provider_id IS NULL OR length(effective_provider_id) BETWEEN 1 AND 256),
+      effective_model_id TEXT CHECK(effective_model_id IS NULL OR length(effective_model_id) BETWEEN 1 AND 256),
+      dispatch_claim_owner TEXT CHECK(dispatch_claim_owner IS NULL OR length(dispatch_claim_owner) BETWEEN 1 AND 256),
+      dispatch_claimed_at TEXT CHECK(dispatch_claimed_at IS NULL OR (
+        strftime('%Y-%m-%dT%H:%M:%fZ', dispatch_claimed_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', dispatch_claimed_at, '+0 days') = dispatch_claimed_at
+      )),
+      dispatch_lease_expires_at TEXT CHECK(dispatch_lease_expires_at IS NULL OR (
+        strftime('%Y-%m-%dT%H:%M:%fZ', dispatch_lease_expires_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', dispatch_lease_expires_at, '+0 days') = dispatch_lease_expires_at
+      )),
+      usage_intent_event_id TEXT CHECK(usage_intent_event_id IS NULL OR length(usage_intent_event_id) BETWEEN 1 AND 256),
+      usage_terminal_event_id TEXT CHECK(usage_terminal_event_id IS NULL OR length(usage_terminal_event_id) BETWEEN 1 AND 256),
+      output_frame_count INTEGER NOT NULL DEFAULT 0 CHECK(typeof(output_frame_count) = 'integer' AND output_frame_count BETWEEN 0 AND 100000),
+      output_char_count INTEGER NOT NULL DEFAULT 0 CHECK(typeof(output_char_count) = 'integer' AND output_char_count BETWEEN 0 AND 8388608),
+      worker_acknowledged_through INTEGER NOT NULL DEFAULT 0 CHECK(typeof(worker_acknowledged_through) = 'integer' AND worker_acknowledged_through BETWEEN 0 AND 100000),
+      terminal_frame_sequence INTEGER CHECK(terminal_frame_sequence IS NULL OR (typeof(terminal_frame_sequence) = 'integer' AND terminal_frame_sequence BETWEEN 1 AND 100000)),
+      terminal_sha256 TEXT CHECK(terminal_sha256 IS NULL OR (length(terminal_sha256) = 64 AND terminal_sha256 NOT GLOB '*[^0-9a-f]*')),
+      accounting_disposition TEXT CHECK(accounting_disposition IS NULL OR accounting_disposition IN ('delegated', 'settled', 'unknown')),
+      admitted_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', admitted_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', admitted_at, '+0 days') = admitted_at
+      ),
+      updated_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0 days') = updated_at
+      ),
+      PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation, inference_request_id, attempt),
+      UNIQUE(registry_workspace_id, idempotency_key),
+      FOREIGN KEY(registry_workspace_id, assignment_id, assignment_generation)
+        REFERENCES remote_worker_assignment_generations(registry_workspace_id, assignment_id, assignment_generation) ON DELETE RESTRICT,
+      CHECK(json_extract(request_body_json, '$.schemaVersion') = 'goatcitadel.remote-worker-inference-request.v1'),
+      CHECK((governance_decision = 'approval_required') = (approval_receipt_sha256 IS NOT NULL)),
+      CHECK(governance_decision <> 'denied' OR state = 'blocked'),
+      CHECK((dispatch_claim_owner IS NULL) = (state IN ('admitted', 'waiting_approval', 'blocked'))),
+      CHECK((dispatch_claim_owner IS NULL) = (dispatch_claimed_at IS NULL)),
+      CHECK((dispatch_claim_owner IS NULL) = (dispatch_lease_expires_at IS NULL)),
+      CHECK((state IN ('completed', 'failed', 'cancelled')) = (terminal_frame_sequence IS NOT NULL AND terminal_sha256 IS NOT NULL)),
+      CHECK(worker_acknowledged_through <= output_frame_count)
+    );
+
+    CREATE TABLE remote_worker_inference_outbox (
+      registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+      assignment_id TEXT NOT NULL CHECK(length(assignment_id) BETWEEN 1 AND 256),
+      assignment_generation INTEGER NOT NULL CHECK(typeof(assignment_generation) = 'integer' AND assignment_generation > 0),
+      inference_request_id TEXT NOT NULL CHECK(length(inference_request_id) BETWEEN 1 AND 256),
+      attempt INTEGER NOT NULL CHECK(typeof(attempt) = 'integer' AND attempt > 0),
+      frame_sequence INTEGER NOT NULL CHECK(typeof(frame_sequence) = 'integer' AND frame_sequence BETWEEN 1 AND 100000),
+      frame_kind TEXT NOT NULL CHECK(frame_kind IN ('output_text', 'terminal')),
+      payload_json TEXT NOT NULL CHECK(json_valid(payload_json) AND length(CAST(payload_json AS BLOB)) <= 262144),
+      payload_sha256 TEXT NOT NULL CHECK(length(payload_sha256) = 64 AND payload_sha256 NOT GLOB '*[^0-9a-f]*'),
+      previous_frame_sha256 TEXT NOT NULL CHECK(length(previous_frame_sha256) = 64 AND previous_frame_sha256 NOT GLOB '*[^0-9a-f]*'),
+      frame_sha256 TEXT NOT NULL CHECK(length(frame_sha256) = 64 AND frame_sha256 NOT GLOB '*[^0-9a-f]*'),
+      effective_route_sha256 TEXT NOT NULL CHECK(length(effective_route_sha256) = 64 AND effective_route_sha256 NOT GLOB '*[^0-9a-f]*'),
+      usage_event_id TEXT CHECK(usage_event_id IS NULL OR length(usage_event_id) BETWEEN 1 AND 256),
+      frame_char_count INTEGER NOT NULL CHECK(typeof(frame_char_count) = 'integer' AND frame_char_count BETWEEN 0 AND 131072),
+      created_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') = created_at
+      ),
+      PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation, inference_request_id, attempt, frame_sequence),
+      UNIQUE(registry_workspace_id, frame_sha256),
+      FOREIGN KEY(registry_workspace_id, assignment_id, assignment_generation, inference_request_id, attempt)
+        REFERENCES remote_worker_inference_requests(
+          registry_workspace_id, assignment_id, assignment_generation, inference_request_id, attempt
+        ) ON DELETE RESTRICT,
+      CHECK(json_extract(payload_json, '$.schemaVersion') = 'goatcitadel.remote-worker-inference-frame.v1'),
+      CHECK(json_extract(payload_json, '$.kind') = frame_kind),
+      CHECK(frame_kind = 'terminal' OR usage_event_id IS NULL)
+    );
+
+    CREATE INDEX idx_remote_worker_inference_requests_dispatch_lease
+      ON remote_worker_inference_requests(state, dispatch_lease_expires_at)
+      WHERE state IN ('dispatch_claimed', 'streaming');
+    CREATE INDEX idx_remote_worker_inference_outbox_delivery
+      ON remote_worker_inference_outbox(
+        registry_workspace_id, assignment_id, assignment_generation, inference_request_id, attempt, frame_sequence
+      );
+
+    -- Immutable bindings: the assignment/worker/generation/request/hash/body
+    -- identity and the committed terminal receipt can never change.
+    CREATE TRIGGER trg_remote_worker_inference_requests_immutable
+    BEFORE UPDATE ON remote_worker_inference_requests
+    FOR EACH ROW
+    WHEN
+      NEW.registry_workspace_id <> OLD.registry_workspace_id
+      OR NEW.assignment_id <> OLD.assignment_id
+      OR NEW.assignment_generation <> OLD.assignment_generation
+      OR NEW.inference_request_id <> OLD.inference_request_id
+      OR NEW.attempt <> OLD.attempt
+      OR NEW.worker_id <> OLD.worker_id
+      OR NEW.worker_generation <> OLD.worker_generation
+      OR NEW.session_id <> OLD.session_id
+      OR NEW.turn_id <> OLD.turn_id
+      OR NEW.idempotency_key <> OLD.idempotency_key
+      OR NEW.request_body_json <> OLD.request_body_json
+      OR NEW.request_sha256 <> OLD.request_sha256
+      OR NEW.input_sha256 <> OLD.input_sha256
+      OR NEW.context_sha256 <> OLD.context_sha256
+      OR NEW.model_intent_sha256 <> OLD.model_intent_sha256
+      OR NEW.capability_profile_sha256 <> OLD.capability_profile_sha256
+      OR NEW.routed_context_sha256 <> OLD.routed_context_sha256
+      OR NEW.output_token_ceiling <> OLD.output_token_ceiling
+      OR NEW.reasoning_token_ceiling <> OLD.reasoning_token_ceiling
+      OR NEW.temperature_milli <> OLD.temperature_milli
+      OR NEW.operation_id <> OLD.operation_id
+      OR NEW.dispatch_generation <> OLD.dispatch_generation
+      OR NEW.policy_revision <> OLD.policy_revision
+      OR NEW.policy_sha256 <> OLD.policy_sha256
+      OR NEW.effective_route_sha256 <> OLD.effective_route_sha256
+      OR NEW.admitted_at <> OLD.admitted_at
+      OR (OLD.terminal_frame_sequence IS NOT NULL AND NEW.terminal_frame_sequence IS NOT OLD.terminal_frame_sequence)
+      OR (OLD.terminal_sha256 IS NOT NULL AND NEW.terminal_sha256 IS NOT OLD.terminal_sha256)
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker inference request immutable bindings cannot change');
+    END;
+
+    -- Terminal immutability: once terminal, only the monotonic acknowledgement
+    -- watermark may advance; every other column is frozen.
+    CREATE TRIGGER trg_remote_worker_inference_requests_terminal_guard
+    BEFORE UPDATE ON remote_worker_inference_requests
+    FOR EACH ROW
+    WHEN OLD.state IN ('completed', 'failed', 'cancelled', 'dispatch_unknown', 'blocked')
+      AND (
+        NEW.state <> OLD.state
+        OR NEW.dispatch_claim_owner IS NOT OLD.dispatch_claim_owner
+        OR NEW.dispatch_lease_expires_at IS NOT OLD.dispatch_lease_expires_at
+        OR NEW.effective_provider_id IS NOT OLD.effective_provider_id
+        OR NEW.effective_model_id IS NOT OLD.effective_model_id
+        OR NEW.usage_terminal_event_id IS NOT OLD.usage_terminal_event_id
+        OR NEW.accounting_disposition IS NOT OLD.accounting_disposition
+        OR NEW.output_frame_count <> OLD.output_frame_count
+        OR NEW.output_char_count <> OLD.output_char_count
+        OR NEW.worker_acknowledged_through < OLD.worker_acknowledged_through
+      )
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker inference terminal state is immutable except monotonic acknowledgement');
+    END;
+
+    -- Acknowledgement is monotonic in every state.
+    CREATE TRIGGER trg_remote_worker_inference_requests_ack_monotonic
+    BEFORE UPDATE ON remote_worker_inference_requests
+    FOR EACH ROW
+    WHEN NEW.worker_acknowledged_through < OLD.worker_acknowledged_through
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker inference acknowledgement watermark cannot regress');
+    END;
+
+    -- Outbox frames are append-only and contiguously hash-chained.
+    CREATE TRIGGER trg_remote_worker_inference_outbox_chain_guard
+    BEFORE INSERT ON remote_worker_inference_outbox
+    FOR EACH ROW
+    WHEN
+      NEW.frame_sequence <> 1 + COALESCE((
+        SELECT MAX(f.frame_sequence) FROM remote_worker_inference_outbox f
+        WHERE f.registry_workspace_id = NEW.registry_workspace_id
+          AND f.assignment_id = NEW.assignment_id
+          AND f.assignment_generation = NEW.assignment_generation
+          AND f.inference_request_id = NEW.inference_request_id
+          AND f.attempt = NEW.attempt
+      ), 0)
+      OR NEW.previous_frame_sha256 <> COALESCE((
+        SELECT f.frame_sha256 FROM remote_worker_inference_outbox f
+        WHERE f.registry_workspace_id = NEW.registry_workspace_id
+          AND f.assignment_id = NEW.assignment_id
+          AND f.assignment_generation = NEW.assignment_generation
+          AND f.inference_request_id = NEW.inference_request_id
+          AND f.attempt = NEW.attempt
+        ORDER BY f.frame_sequence DESC LIMIT 1
+      ), '${"0".repeat(64)}')
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker inference outbox frame chain is out of order');
+    END;
+
+    CREATE TRIGGER trg_remote_worker_inference_outbox_no_update
+    BEFORE UPDATE ON remote_worker_inference_outbox
+    FOR EACH ROW
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker inference outbox frames are append-only (no update)');
+    END;
+
+    CREATE TRIGGER trg_remote_worker_inference_outbox_no_delete
+    BEFORE DELETE ON remote_worker_inference_outbox
+    FOR EACH ROW
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker inference outbox frames are append-only (no delete)');
+    END;
+  `);
+}
+
+function createRemoteWorkerCellSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE remote_worker_cells (
+      registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+      assignment_id TEXT NOT NULL CHECK(length(assignment_id) BETWEEN 1 AND 256),
+      assignment_generation INTEGER NOT NULL CHECK(typeof(assignment_generation) = 'integer' AND assignment_generation > 0),
+      cell_id TEXT NOT NULL CHECK(length(cell_id) BETWEEN 1 AND 256),
+      worker_id TEXT NOT NULL CHECK(length(worker_id) BETWEEN 1 AND 256),
+      worker_generation INTEGER NOT NULL CHECK(typeof(worker_generation) = 'integer' AND worker_generation > 0),
+      backend TEXT NOT NULL CHECK(backend = 'container'),
+      idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+      profile_sha256 TEXT NOT NULL CHECK(length(profile_sha256) = 64 AND profile_sha256 NOT GLOB '*[^0-9a-f]*'),
+      request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+      logical_root_sha256 TEXT NOT NULL CHECK(length(logical_root_sha256) = 64 AND logical_root_sha256 NOT GLOB '*[^0-9a-f]*'),
+      assignment_manifest_sha256 TEXT NOT NULL CHECK(length(assignment_manifest_sha256) = 64 AND assignment_manifest_sha256 NOT GLOB '*[^0-9a-f]*'),
+      path_jail_sha256 TEXT NOT NULL CHECK(length(path_jail_sha256) = 64 AND path_jail_sha256 NOT GLOB '*[^0-9a-f]*'),
+      capability_profile_sha256 TEXT NOT NULL CHECK(length(capability_profile_sha256) = 64 AND capability_profile_sha256 NOT GLOB '*[^0-9a-f]*'),
+      context_snapshot_sha256 TEXT NOT NULL CHECK(length(context_snapshot_sha256) = 64 AND context_snapshot_sha256 NOT GLOB '*[^0-9a-f]*'),
+      tool_effect_posture_sha256 TEXT NOT NULL CHECK(length(tool_effect_posture_sha256) = 64 AND tool_effect_posture_sha256 NOT GLOB '*[^0-9a-f]*'),
+      runtime_attestation_sha256 TEXT NOT NULL CHECK(length(runtime_attestation_sha256) = 64 AND runtime_attestation_sha256 NOT GLOB '*[^0-9a-f]*'),
+      launcher_attestation_sha256 TEXT NOT NULL CHECK(length(launcher_attestation_sha256) = 64 AND launcher_attestation_sha256 NOT GLOB '*[^0-9a-f]*'),
+      logical_disk_bytes INTEGER NOT NULL CHECK(typeof(logical_disk_bytes) = 'integer' AND logical_disk_bytes BETWEEN 1 AND 1099511627776),
+      allocated_disk_bytes INTEGER NOT NULL CHECK(typeof(allocated_disk_bytes) = 'integer' AND allocated_disk_bytes BETWEEN 1 AND 1099511627776),
+      file_limit INTEGER NOT NULL CHECK(typeof(file_limit) = 'integer' AND file_limit BETWEEN 1 AND 100000000),
+      inode_limit INTEGER NOT NULL CHECK(typeof(inode_limit) = 'integer' AND inode_limit BETWEEN 1 AND 100000000),
+      process_limit INTEGER NOT NULL CHECK(typeof(process_limit) = 'integer' AND process_limit BETWEEN 1 AND 100000),
+      cpu_limit_milli INTEGER NOT NULL CHECK(typeof(cpu_limit_milli) = 'integer' AND cpu_limit_milli BETWEEN 1 AND 1024000),
+      wall_limit_ms INTEGER NOT NULL CHECK(typeof(wall_limit_ms) = 'integer' AND wall_limit_ms BETWEEN 1 AND 604800000),
+      memory_limit_bytes INTEGER NOT NULL CHECK(typeof(memory_limit_bytes) = 'integer' AND memory_limit_bytes BETWEEN 1 AND 1099511627776),
+      raw_output_limit_bytes INTEGER NOT NULL CHECK(typeof(raw_output_limit_bytes) = 'integer' AND raw_output_limit_bytes BETWEEN 1 AND 1099511627776),
+      diagnostic_limit_bytes INTEGER NOT NULL CHECK(typeof(diagnostic_limit_bytes) = 'integer' AND diagnostic_limit_bytes BETWEEN 1 AND 1099511627776),
+      artifact_ceiling_bytes INTEGER NOT NULL CHECK(typeof(artifact_ceiling_bytes) = 'integer' AND artifact_ceiling_bytes BETWEEN 1 AND 1099511627776),
+      backup_staging_bytes INTEGER NOT NULL CHECK(typeof(backup_staging_bytes) = 'integer' AND backup_staging_bytes BETWEEN 1 AND 1099511627776),
+      backup_publication_bytes INTEGER NOT NULL CHECK(typeof(backup_publication_bytes) = 'integer' AND backup_publication_bytes BETWEEN 1 AND 1099511627776),
+      egress_posture TEXT NOT NULL CHECK(egress_posture IN ('deny_all', 'allowlisted')),
+      egress_policy_sha256 TEXT NOT NULL CHECK(length(egress_policy_sha256) = 64 AND egress_policy_sha256 NOT GLOB '*[^0-9a-f]*'),
+      egress_dns_revision INTEGER NOT NULL CHECK(typeof(egress_dns_revision) = 'integer' AND egress_dns_revision > 0),
+      env_allowlist_sha256 TEXT NOT NULL CHECK(length(env_allowlist_sha256) = 64 AND env_allowlist_sha256 NOT GLOB '*[^0-9a-f]*'),
+      execution_state TEXT NOT NULL CHECK(execution_state IN (
+        'profiled', 'provisioning', 'ready', 'starting', 'running',
+        'exited', 'cancelled', 'limit_exceeded', 'failed', 'liveness_unknown'
+      )),
+      execution_revision INTEGER NOT NULL CHECK(typeof(execution_revision) = 'integer' AND execution_revision > 0),
+      cleanup_state TEXT NOT NULL CHECK(cleanup_state IN (
+        'not_started', 'pending', 'stopping', 'verifying_zero',
+        'verified_clean', 'failed_cleanup', 'manual_reconciliation', 'quarantined'
+      )),
+      cleanup_revision INTEGER NOT NULL CHECK(typeof(cleanup_revision) = 'integer' AND cleanup_revision > 0),
+      backup_state TEXT NOT NULL CHECK(backup_state IN (
+        'disabled', 'pending', 'staged', 'verified', 'corrupt',
+        'manual_reconciliation', 'restore_pending', 'restored', 'drifted'
+      )),
+      backup_revision INTEGER NOT NULL CHECK(typeof(backup_revision) = 'integer' AND backup_revision > 0),
+      provisioning_owner TEXT CHECK(provisioning_owner IS NULL OR length(provisioning_owner) BETWEEN 1 AND 256),
+      provisioning_lease_expires_at TEXT CHECK(provisioning_lease_expires_at IS NULL OR (
+        strftime('%Y-%m-%dT%H:%M:%fZ', provisioning_lease_expires_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', provisioning_lease_expires_at, '+0 days') = provisioning_lease_expires_at
+      )),
+      platform_identity_sha256 TEXT CHECK(platform_identity_sha256 IS NULL OR (length(platform_identity_sha256) = 64 AND platform_identity_sha256 NOT GLOB '*[^0-9a-f]*')),
+      container_name TEXT CHECK(container_name IS NULL OR length(container_name) BETWEEN 1 AND 256),
+      image_digest TEXT CHECK(image_digest IS NULL OR (image_digest GLOB 'sha256:*' AND length(image_digest) = 71 AND substr(image_digest, 8) NOT GLOB '*[^0-9a-f]*')),
+      network_name TEXT CHECK(network_name IS NULL OR length(network_name) BETWEEN 1 AND 256),
+      peak_disk_bytes INTEGER NOT NULL DEFAULT 0 CHECK(typeof(peak_disk_bytes) = 'integer' AND peak_disk_bytes BETWEEN 0 AND 1099511627776),
+      peak_memory_bytes INTEGER NOT NULL DEFAULT 0 CHECK(typeof(peak_memory_bytes) = 'integer' AND peak_memory_bytes BETWEEN 0 AND 1099511627776),
+      peak_file_count INTEGER NOT NULL DEFAULT 0 CHECK(typeof(peak_file_count) = 'integer' AND peak_file_count BETWEEN 0 AND 100000000),
+      peak_process_count INTEGER NOT NULL DEFAULT 0 CHECK(typeof(peak_process_count) = 'integer' AND peak_process_count BETWEEN 0 AND 100000),
+      raw_output_bytes INTEGER NOT NULL DEFAULT 0 CHECK(typeof(raw_output_bytes) = 'integer' AND raw_output_bytes BETWEEN 0 AND 1099511627776),
+      retained_diagnostic_bytes INTEGER NOT NULL DEFAULT 0 CHECK(typeof(retained_diagnostic_bytes) = 'integer' AND retained_diagnostic_bytes BETWEEN 0 AND 1099511627776),
+      failed_cleanup_retained_bytes INTEGER NOT NULL DEFAULT 0 CHECK(typeof(failed_cleanup_retained_bytes) = 'integer' AND failed_cleanup_retained_bytes BETWEEN 0 AND 1099511627776),
+      quarantine_retained_bytes INTEGER NOT NULL DEFAULT 0 CHECK(typeof(quarantine_retained_bytes) = 'integer' AND quarantine_retained_bytes BETWEEN 0 AND 1099511627776),
+      capacity_revision INTEGER NOT NULL DEFAULT 0 CHECK(typeof(capacity_revision) = 'integer' AND capacity_revision BETWEEN 0 AND 100000),
+      last_footprint_sha256 TEXT CHECK(last_footprint_sha256 IS NULL OR (length(last_footprint_sha256) = 64 AND last_footprint_sha256 NOT GLOB '*[^0-9a-f]*')),
+      exit_code INTEGER CHECK(exit_code IS NULL OR (typeof(exit_code) = 'integer' AND exit_code BETWEEN -1 AND 255)),
+      terminated_by_signal TEXT CHECK(terminated_by_signal IS NULL OR length(terminated_by_signal) BETWEEN 1 AND 32),
+      diagnostic_capture_sha256 TEXT CHECK(diagnostic_capture_sha256 IS NULL OR (length(diagnostic_capture_sha256) = 64 AND diagnostic_capture_sha256 NOT GLOB '*[^0-9a-f]*')),
+      created_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') = created_at
+      ),
+      updated_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0 days') = updated_at
+      ),
+      PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation),
+      UNIQUE(registry_workspace_id, cell_id),
+      UNIQUE(registry_workspace_id, idempotency_key),
+      FOREIGN KEY(registry_workspace_id, assignment_id, assignment_generation)
+        REFERENCES remote_worker_assignment_generations(registry_workspace_id, assignment_id, assignment_generation) ON DELETE RESTRICT,
+      CHECK(allocated_disk_bytes >= logical_disk_bytes),
+      CHECK((provisioning_owner IS NULL) = (provisioning_lease_expires_at IS NULL)),
+      CHECK((platform_identity_sha256 IS NULL) = (container_name IS NULL)),
+      CHECK((platform_identity_sha256 IS NULL) = (image_digest IS NULL)),
+      CHECK((platform_identity_sha256 IS NULL) = (network_name IS NULL)),
+      CHECK(execution_state IN ('profiled', 'provisioning') OR platform_identity_sha256 IS NOT NULL),
+      CHECK((exit_code IS NULL) OR execution_state IN ('exited', 'limit_exceeded', 'failed', 'cancelled'))
+    );
+
+    CREATE TABLE remote_worker_cell_evidence (
+      registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+      assignment_id TEXT NOT NULL CHECK(length(assignment_id) BETWEEN 1 AND 256),
+      assignment_generation INTEGER NOT NULL CHECK(typeof(assignment_generation) = 'integer' AND assignment_generation > 0),
+      cell_id TEXT NOT NULL CHECK(length(cell_id) BETWEEN 1 AND 256),
+      evidence_sequence INTEGER NOT NULL CHECK(typeof(evidence_sequence) = 'integer' AND evidence_sequence BETWEEN 1 AND 100000),
+      domain TEXT NOT NULL CHECK(domain IN ('execution', 'cleanup', 'backup', 'capacity')),
+      payload_json TEXT NOT NULL CHECK(json_valid(payload_json) AND length(CAST(payload_json AS BLOB)) <= 8192),
+      payload_sha256 TEXT NOT NULL CHECK(length(payload_sha256) = 64 AND payload_sha256 NOT GLOB '*[^0-9a-f]*'),
+      previous_evidence_sha256 TEXT NOT NULL CHECK(length(previous_evidence_sha256) = 64 AND previous_evidence_sha256 NOT GLOB '*[^0-9a-f]*'),
+      evidence_sha256 TEXT NOT NULL CHECK(length(evidence_sha256) = 64 AND evidence_sha256 NOT GLOB '*[^0-9a-f]*'),
+      recorded_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', recorded_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', recorded_at, '+0 days') = recorded_at
+      ),
+      PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation, evidence_sequence),
+      UNIQUE(registry_workspace_id, evidence_sha256),
+      FOREIGN KEY(registry_workspace_id, assignment_id, assignment_generation)
+        REFERENCES remote_worker_cells(registry_workspace_id, assignment_id, assignment_generation) ON DELETE RESTRICT,
+      CHECK(json_extract(payload_json, '$.schemaVersion') = 'goatcitadel.remote-worker-cell-evidence.v1'),
+      CHECK(json_extract(payload_json, '$.domain') = domain)
+    );
+
+    CREATE INDEX idx_remote_worker_cells_provisioning_lease
+      ON remote_worker_cells(execution_state, provisioning_lease_expires_at)
+      WHERE execution_state = 'provisioning';
+    CREATE INDEX idx_remote_worker_cell_evidence_chain
+      ON remote_worker_cell_evidence(
+        registry_workspace_id, assignment_id, assignment_generation, evidence_sequence
+      );
+
+    -- The server-owned immutable profile can never change: identity, every
+    -- profile hash binding, the capacity reservation, the egress posture, and
+    -- the environment-name allowlist are frozen at insert.
+    CREATE TRIGGER trg_remote_worker_cells_profile_immutable
+    BEFORE UPDATE ON remote_worker_cells
+    FOR EACH ROW
+    WHEN
+      NEW.registry_workspace_id <> OLD.registry_workspace_id
+      OR NEW.assignment_id <> OLD.assignment_id
+      OR NEW.assignment_generation <> OLD.assignment_generation
+      OR NEW.cell_id <> OLD.cell_id
+      OR NEW.worker_id <> OLD.worker_id
+      OR NEW.worker_generation <> OLD.worker_generation
+      OR NEW.backend <> OLD.backend
+      OR NEW.idempotency_key <> OLD.idempotency_key
+      OR NEW.profile_sha256 <> OLD.profile_sha256
+      OR NEW.request_sha256 <> OLD.request_sha256
+      OR NEW.logical_root_sha256 <> OLD.logical_root_sha256
+      OR NEW.assignment_manifest_sha256 <> OLD.assignment_manifest_sha256
+      OR NEW.path_jail_sha256 <> OLD.path_jail_sha256
+      OR NEW.capability_profile_sha256 <> OLD.capability_profile_sha256
+      OR NEW.context_snapshot_sha256 <> OLD.context_snapshot_sha256
+      OR NEW.tool_effect_posture_sha256 <> OLD.tool_effect_posture_sha256
+      OR NEW.runtime_attestation_sha256 <> OLD.runtime_attestation_sha256
+      OR NEW.launcher_attestation_sha256 <> OLD.launcher_attestation_sha256
+      OR NEW.logical_disk_bytes <> OLD.logical_disk_bytes
+      OR NEW.allocated_disk_bytes <> OLD.allocated_disk_bytes
+      OR NEW.file_limit <> OLD.file_limit
+      OR NEW.inode_limit <> OLD.inode_limit
+      OR NEW.process_limit <> OLD.process_limit
+      OR NEW.cpu_limit_milli <> OLD.cpu_limit_milli
+      OR NEW.wall_limit_ms <> OLD.wall_limit_ms
+      OR NEW.memory_limit_bytes <> OLD.memory_limit_bytes
+      OR NEW.raw_output_limit_bytes <> OLD.raw_output_limit_bytes
+      OR NEW.diagnostic_limit_bytes <> OLD.diagnostic_limit_bytes
+      OR NEW.artifact_ceiling_bytes <> OLD.artifact_ceiling_bytes
+      OR NEW.backup_staging_bytes <> OLD.backup_staging_bytes
+      OR NEW.backup_publication_bytes <> OLD.backup_publication_bytes
+      OR NEW.egress_posture <> OLD.egress_posture
+      OR NEW.egress_policy_sha256 <> OLD.egress_policy_sha256
+      OR NEW.egress_dns_revision <> OLD.egress_dns_revision
+      OR NEW.env_allowlist_sha256 <> OLD.env_allowlist_sha256
+      OR NEW.created_at <> OLD.created_at
+      OR (OLD.platform_identity_sha256 IS NOT NULL AND NEW.platform_identity_sha256 IS NOT OLD.platform_identity_sha256)
+      OR (OLD.container_name IS NOT NULL AND NEW.container_name IS NOT OLD.container_name)
+      OR (OLD.image_digest IS NOT NULL AND NEW.image_digest IS NOT OLD.image_digest)
+      OR (OLD.network_name IS NOT NULL AND NEW.network_name IS NOT OLD.network_name)
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker cell immutable profile bindings cannot change');
+    END;
+
+    -- Monotonic revision CAS: each state machine's revision advances by exactly
+    -- one on a state change, holds otherwise, and never regresses. A clean or
+    -- unknown-liveness terminal execution state can never leave.
+    CREATE TRIGGER trg_remote_worker_cells_revision_cas
+    BEFORE UPDATE ON remote_worker_cells
+    FOR EACH ROW
+    WHEN
+      NEW.execution_revision < OLD.execution_revision
+      OR NEW.cleanup_revision < OLD.cleanup_revision
+      OR NEW.backup_revision < OLD.backup_revision
+      OR (NEW.execution_state <> OLD.execution_state AND NEW.execution_revision <> OLD.execution_revision + 1)
+      OR (NEW.execution_state = OLD.execution_state AND NEW.execution_revision <> OLD.execution_revision)
+      OR (NEW.cleanup_state <> OLD.cleanup_state AND NEW.cleanup_revision <> OLD.cleanup_revision + 1)
+      OR (NEW.cleanup_state = OLD.cleanup_state AND NEW.cleanup_revision <> OLD.cleanup_revision)
+      OR (NEW.backup_state <> OLD.backup_state AND NEW.backup_revision <> OLD.backup_revision + 1)
+      OR (NEW.backup_state = OLD.backup_state AND NEW.backup_revision <> OLD.backup_revision)
+      OR (OLD.execution_state IN ('exited', 'cancelled', 'limit_exceeded', 'failed', 'liveness_unknown') AND NEW.execution_state <> OLD.execution_state)
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker cell state revision must advance monotonically by one on transition');
+    END;
+
+    -- High-water and retained-byte truth never regress: peaks only climb and
+    -- failed-cleanup/quarantine retained bytes remain counted forever.
+    CREATE TRIGGER trg_remote_worker_cells_high_water_monotonic
+    BEFORE UPDATE ON remote_worker_cells
+    FOR EACH ROW
+    WHEN
+      NEW.peak_disk_bytes < OLD.peak_disk_bytes
+      OR NEW.peak_memory_bytes < OLD.peak_memory_bytes
+      OR NEW.peak_file_count < OLD.peak_file_count
+      OR NEW.peak_process_count < OLD.peak_process_count
+      OR NEW.raw_output_bytes < OLD.raw_output_bytes
+      OR NEW.retained_diagnostic_bytes < OLD.retained_diagnostic_bytes
+      OR NEW.failed_cleanup_retained_bytes < OLD.failed_cleanup_retained_bytes
+      OR NEW.quarantine_retained_bytes < OLD.quarantine_retained_bytes
+      OR NEW.capacity_revision < OLD.capacity_revision
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker cell high-water and retained-byte accounting cannot regress');
+    END;
+
+    -- Removal only with verified zero liveness: a live, unknown, or unverified
+    -- cell can never be deleted to improve a metric.
+    CREATE TRIGGER trg_remote_worker_cells_no_delete_unless_clean
+    BEFORE DELETE ON remote_worker_cells
+    FOR EACH ROW
+    WHEN NOT (
+      OLD.execution_state IN ('exited', 'cancelled', 'limit_exceeded', 'failed')
+      AND OLD.cleanup_state = 'verified_clean'
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker cell removal requires verified zero liveness');
+    END;
+
+    -- Evidence is append-only and contiguously hash-chained per cell; the cell
+    -- identity must match the parent cell exactly.
+    CREATE TRIGGER trg_remote_worker_cell_evidence_chain_guard
+    BEFORE INSERT ON remote_worker_cell_evidence
+    FOR EACH ROW
+    WHEN
+      NEW.cell_id <> COALESCE((
+        SELECT c.cell_id FROM remote_worker_cells c
+        WHERE c.registry_workspace_id = NEW.registry_workspace_id
+          AND c.assignment_id = NEW.assignment_id
+          AND c.assignment_generation = NEW.assignment_generation
+      ), '')
+      OR NEW.evidence_sequence <> 1 + COALESCE((
+        SELECT MAX(e.evidence_sequence) FROM remote_worker_cell_evidence e
+        WHERE e.registry_workspace_id = NEW.registry_workspace_id
+          AND e.assignment_id = NEW.assignment_id
+          AND e.assignment_generation = NEW.assignment_generation
+      ), 0)
+      OR NEW.previous_evidence_sha256 <> COALESCE((
+        SELECT e.evidence_sha256 FROM remote_worker_cell_evidence e
+        WHERE e.registry_workspace_id = NEW.registry_workspace_id
+          AND e.assignment_id = NEW.assignment_id
+          AND e.assignment_generation = NEW.assignment_generation
+        ORDER BY e.evidence_sequence DESC LIMIT 1
+      ), '${"0".repeat(64)}')
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker cell evidence chain is out of order or misbound');
+    END;
+
+    CREATE TRIGGER trg_remote_worker_cell_evidence_no_update
+    BEFORE UPDATE ON remote_worker_cell_evidence
+    FOR EACH ROW
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker cell evidence is append-only (no update)');
+    END;
+
+    CREATE TRIGGER trg_remote_worker_cell_evidence_no_delete
+    BEFORE DELETE ON remote_worker_cell_evidence
+    FOR EACH ROW
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker cell evidence is append-only (no delete)');
+    END;
+  `);
+}
+
+function assertNoUnprovenRemoteWorkerSettlement(db: DatabaseSync): void {
+  // Forward-only safety: an output-manifest settlement is only trustworthy once
+  // an HX-506 manifest can prove it. No manifest exists before this migration, so
+  // any pre-existing completed remote settlement is unprovable and aborts the
+  // migration rather than being silently adopted.
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS count FROM remote_worker_assignment_settlements
+       WHERE outcome = 'completed' AND output_manifest_sha256 IS NOT NULL`,
+    )
+    .get() as { count?: unknown } | undefined;
+  if (Number(row?.count ?? 0) > 0) {
+    throw new Error(
+      "SQLite migration 179 cannot prove an existing completed remote-worker settlement against a canonical HX-506 manifest",
+    );
+  }
+}
+
+function createRemoteWorkerSettlementSchema(db: DatabaseSync): void {
+  const identity = `
+      registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
+      execution_workspace_id TEXT NOT NULL CHECK(length(execution_workspace_id) BETWEEN 1 AND 256),
+      assignment_id TEXT NOT NULL CHECK(length(assignment_id) BETWEEN 1 AND 256),
+      assignment_generation INTEGER NOT NULL CHECK(typeof(assignment_generation) = 'integer' AND assignment_generation > 0),
+      worker_id TEXT NOT NULL CHECK(length(worker_id) BETWEEN 1 AND 256),
+      worker_generation INTEGER NOT NULL CHECK(typeof(worker_generation) = 'integer' AND worker_generation > 0),
+      runtime_manifest_sha256 TEXT NOT NULL CHECK(length(runtime_manifest_sha256) = 64 AND runtime_manifest_sha256 NOT GLOB '*[^0-9a-f]*'),
+      workspace_ceiling_sha256 TEXT NOT NULL CHECK(length(workspace_ceiling_sha256) = 64 AND workspace_ceiling_sha256 NOT GLOB '*[^0-9a-f]*'),
+      capability_ceiling_sha256 TEXT NOT NULL CHECK(length(capability_ceiling_sha256) = 64 AND capability_ceiling_sha256 NOT GLOB '*[^0-9a-f]*'),
+      assignment_manifest_sha256 TEXT NOT NULL CHECK(length(assignment_manifest_sha256) = 64 AND assignment_manifest_sha256 NOT GLOB '*[^0-9a-f]*')`;
+  const fullIdentityFk = `
+      FOREIGN KEY(
+        registry_workspace_id, assignment_id, assignment_generation, execution_workspace_id, worker_id,
+        worker_generation, runtime_manifest_sha256, workspace_ceiling_sha256, capability_ceiling_sha256
+      ) REFERENCES remote_worker_assignment_generations(
+        registry_workspace_id, assignment_id, assignment_generation, execution_workspace_id, worker_id,
+        worker_generation, runtime_manifest_sha256, workspace_ceiling_sha256, capability_ceiling_sha256
+      ) ON DELETE RESTRICT`;
+  db.exec(`
+    -- Additive full-identity unique key the composite child foreign keys need.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_remote_worker_assignment_generations_full_identity
+      ON remote_worker_assignment_generations(
+        registry_workspace_id, assignment_id, assignment_generation, execution_workspace_id, worker_id,
+        worker_generation, runtime_manifest_sha256, workspace_ceiling_sha256, capability_ceiling_sha256
+      );
+
+    CREATE TABLE remote_worker_artifact_uploads (${identity},
+      upload_id TEXT NOT NULL CHECK(length(upload_id) BETWEEN 1 AND 256),
+      upload_attempt INTEGER NOT NULL CHECK(typeof(upload_attempt) = 'integer' AND upload_attempt BETWEEN 1 AND 4),
+      upload_state TEXT NOT NULL CHECK(upload_state IN ('open', 'assembling', 'committed', 'abandoned', 'quarantined')),
+      upload_revision INTEGER NOT NULL CHECK(typeof(upload_revision) = 'integer' AND upload_revision > 0),
+      declared_file_count INTEGER NOT NULL CHECK(typeof(declared_file_count) = 'integer' AND declared_file_count BETWEEN 0 AND 64),
+      declared_total_bytes INTEGER NOT NULL CHECK(typeof(declared_total_bytes) = 'integer' AND declared_total_bytes BETWEEN 0 AND 67108864),
+      max_artifact_bytes INTEGER NOT NULL CHECK(typeof(max_artifact_bytes) = 'integer' AND max_artifact_bytes BETWEEN 1 AND 67108864),
+      staging_root_sha256 TEXT NOT NULL CHECK(length(staging_root_sha256) = 64 AND staging_root_sha256 NOT GLOB '*[^0-9a-f]*'),
+      committed_manifest_sha256 TEXT CHECK(committed_manifest_sha256 IS NULL OR (length(committed_manifest_sha256) = 64 AND committed_manifest_sha256 NOT GLOB '*[^0-9a-f]*')),
+      verification_gate_state TEXT CHECK(verification_gate_state IS NULL OR verification_gate_state IN ('not_required', 'pending', 'satisfied')),
+      verification_gate_revision INTEGER NOT NULL DEFAULT 0 CHECK(typeof(verification_gate_revision) = 'integer' AND verification_gate_revision BETWEEN 0 AND 100000),
+      cleanup_state TEXT NOT NULL CHECK(cleanup_state IN ('not_due', 'pending', 'cleaned', 'manual_reconciliation')),
+      cleanup_revision INTEGER NOT NULL CHECK(typeof(cleanup_revision) = 'integer' AND cleanup_revision > 0),
+      cleanup_claim_owner TEXT CHECK(cleanup_claim_owner IS NULL OR length(cleanup_claim_owner) BETWEEN 1 AND 256),
+      cleanup_claim_expires_at TEXT CHECK(cleanup_claim_expires_at IS NULL OR (
+        strftime('%Y-%m-%dT%H:%M:%fZ', cleanup_claim_expires_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', cleanup_claim_expires_at, '+0 days') = cleanup_claim_expires_at
+      )),
+      expires_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', expires_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', expires_at, '+0 days') = expires_at
+      ),
+      idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+      request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+      created_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') = created_at
+      ),
+      updated_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0 days') = updated_at
+      ),
+      PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation, upload_id),
+      UNIQUE(registry_workspace_id, idempotency_key),
+      UNIQUE(registry_workspace_id, assignment_id, assignment_generation, upload_attempt),
+      UNIQUE(registry_workspace_id, assignment_id, assignment_generation, upload_id, assignment_manifest_sha256),
+      ${fullIdentityFk},
+      CHECK(declared_total_bytes <= max_artifact_bytes),
+      CHECK((cleanup_claim_owner IS NULL) = (cleanup_claim_expires_at IS NULL)),
+      CHECK(upload_state = 'committed' OR (committed_manifest_sha256 IS NULL AND verification_gate_state IS NULL)),
+      CHECK(upload_state <> 'committed' OR (committed_manifest_sha256 IS NOT NULL AND verification_gate_state IS NOT NULL))
+    );
+
+    CREATE TABLE remote_worker_artifact_parts (${identity},
+      upload_id TEXT NOT NULL CHECK(length(upload_id) BETWEEN 1 AND 256),
+      global_sequence INTEGER NOT NULL CHECK(typeof(global_sequence) = 'integer' AND global_sequence BETWEEN 1 AND 320),
+      logical_path_sha256 TEXT NOT NULL CHECK(length(logical_path_sha256) = 64 AND logical_path_sha256 NOT GLOB '*[^0-9a-f]*'),
+      file_part_index INTEGER NOT NULL CHECK(typeof(file_part_index) = 'integer' AND file_part_index BETWEEN 0 AND 319),
+      is_final_part INTEGER NOT NULL CHECK(is_final_part IN (0, 1)),
+      part_bytes INTEGER NOT NULL CHECK(typeof(part_bytes) = 'integer' AND part_bytes BETWEEN 1 AND 262144),
+      part_sha256 TEXT NOT NULL CHECK(length(part_sha256) = 64 AND part_sha256 NOT GLOB '*[^0-9a-f]*'),
+      idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+      request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+      received_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', received_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', received_at, '+0 days') = received_at
+      ),
+      PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation, upload_id, global_sequence),
+      UNIQUE(registry_workspace_id, idempotency_key),
+      FOREIGN KEY(registry_workspace_id, assignment_id, assignment_generation, upload_id, assignment_manifest_sha256)
+        REFERENCES remote_worker_artifact_uploads(registry_workspace_id, assignment_id, assignment_generation, upload_id, assignment_manifest_sha256) ON DELETE RESTRICT,
+      ${fullIdentityFk},
+      CHECK(is_final_part = 1 OR part_bytes = 262144)
+    );
+
+    CREATE TABLE remote_worker_artifact_blobs (${identity},
+      upload_id TEXT NOT NULL CHECK(length(upload_id) BETWEEN 1 AND 256),
+      blob_sha256 TEXT NOT NULL CHECK(length(blob_sha256) = 64 AND blob_sha256 NOT GLOB '*[^0-9a-f]*'),
+      byte_count INTEGER NOT NULL CHECK(typeof(byte_count) = 'integer' AND byte_count BETWEEN 0 AND 67108864),
+      physical_rel_path TEXT NOT NULL CHECK(
+        length(physical_rel_path) BETWEEN 1 AND 512 AND physical_rel_path LIKE 'remote-workers/artifacts/%'
+      ),
+      installed_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', installed_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', installed_at, '+0 days') = installed_at
+      ),
+      PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation, blob_sha256),
+      UNIQUE(registry_workspace_id, assignment_id, assignment_generation, blob_sha256, assignment_manifest_sha256),
+      FOREIGN KEY(registry_workspace_id, assignment_id, assignment_generation, upload_id, assignment_manifest_sha256)
+        REFERENCES remote_worker_artifact_uploads(registry_workspace_id, assignment_id, assignment_generation, upload_id, assignment_manifest_sha256) ON DELETE RESTRICT,
+      ${fullIdentityFk}
+    );
+
+    CREATE TABLE remote_worker_artifact_manifests (${identity},
+      upload_id TEXT NOT NULL CHECK(length(upload_id) BETWEEN 1 AND 256),
+      manifest_id TEXT NOT NULL CHECK(length(manifest_id) BETWEEN 1 AND 256),
+      manifest_sha256 TEXT NOT NULL CHECK(length(manifest_sha256) = 64 AND manifest_sha256 NOT GLOB '*[^0-9a-f]*'),
+      manifest_json TEXT NOT NULL CHECK(json_valid(manifest_json) AND length(CAST(manifest_json AS BLOB)) <= 65536),
+      file_count INTEGER NOT NULL CHECK(typeof(file_count) = 'integer' AND file_count BETWEEN 0 AND 64),
+      total_bytes INTEGER NOT NULL CHECK(typeof(total_bytes) = 'integer' AND total_bytes BETWEEN 0 AND 67108864),
+      path_jail_sha256 TEXT NOT NULL CHECK(length(path_jail_sha256) = 64 AND path_jail_sha256 NOT GLOB '*[^0-9a-f]*'),
+      worker_claim_sha256 TEXT NOT NULL CHECK(length(worker_claim_sha256) = 64 AND worker_claim_sha256 NOT GLOB '*[^0-9a-f]*'),
+      required_verifier_profile_sha256 TEXT CHECK(required_verifier_profile_sha256 IS NULL OR (length(required_verifier_profile_sha256) = 64 AND required_verifier_profile_sha256 NOT GLOB '*[^0-9a-f]*')),
+      idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+      request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+      committed_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', committed_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', committed_at, '+0 days') = committed_at
+      ),
+      PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation, manifest_id),
+      UNIQUE(registry_workspace_id, assignment_id, assignment_generation),
+      UNIQUE(registry_workspace_id, manifest_sha256),
+      UNIQUE(registry_workspace_id, idempotency_key),
+      UNIQUE(registry_workspace_id, assignment_id, assignment_generation, manifest_id, assignment_manifest_sha256),
+      FOREIGN KEY(registry_workspace_id, assignment_id, assignment_generation, upload_id, assignment_manifest_sha256)
+        REFERENCES remote_worker_artifact_uploads(registry_workspace_id, assignment_id, assignment_generation, upload_id, assignment_manifest_sha256) ON DELETE RESTRICT,
+      ${fullIdentityFk},
+      CHECK(json_extract(manifest_json, '$.schemaVersion') = 'goatcitadel.remote-worker-artifact-manifest.v1')
+    );
+
+    CREATE TABLE remote_worker_artifact_manifest_entries (${identity},
+      manifest_id TEXT NOT NULL CHECK(length(manifest_id) BETWEEN 1 AND 256),
+      entry_index INTEGER NOT NULL CHECK(typeof(entry_index) = 'integer' AND entry_index BETWEEN 0 AND 63),
+      logical_path TEXT NOT NULL CHECK(length(CAST(logical_path AS BLOB)) BETWEEN 1 AND 512),
+      logical_path_sha256 TEXT NOT NULL CHECK(length(logical_path_sha256) = 64 AND logical_path_sha256 NOT GLOB '*[^0-9a-f]*'),
+      blob_sha256 TEXT NOT NULL CHECK(length(blob_sha256) = 64 AND blob_sha256 NOT GLOB '*[^0-9a-f]*'),
+      byte_count INTEGER NOT NULL CHECK(typeof(byte_count) = 'integer' AND byte_count BETWEEN 0 AND 67108864),
+      mime_type TEXT NOT NULL CHECK(length(mime_type) BETWEEN 1 AND 128),
+      PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation, manifest_id, entry_index),
+      UNIQUE(registry_workspace_id, assignment_id, assignment_generation, manifest_id, logical_path_sha256),
+      FOREIGN KEY(registry_workspace_id, assignment_id, assignment_generation, manifest_id, assignment_manifest_sha256)
+        REFERENCES remote_worker_artifact_manifests(registry_workspace_id, assignment_id, assignment_generation, manifest_id, assignment_manifest_sha256) ON DELETE RESTRICT,
+      FOREIGN KEY(registry_workspace_id, assignment_id, assignment_generation, blob_sha256, assignment_manifest_sha256)
+        REFERENCES remote_worker_artifact_blobs(registry_workspace_id, assignment_id, assignment_generation, blob_sha256, assignment_manifest_sha256) ON DELETE RESTRICT,
+      ${fullIdentityFk}
+    );
+
+    CREATE TABLE remote_worker_artifact_verifications (${identity},
+      manifest_id TEXT NOT NULL CHECK(length(manifest_id) BETWEEN 1 AND 256),
+      verification_id TEXT NOT NULL CHECK(length(verification_id) BETWEEN 1 AND 256),
+      kind TEXT NOT NULL CHECK(kind IN ('worker_claim', 'gateway_attempt')),
+      attempt_index INTEGER NOT NULL CHECK(typeof(attempt_index) = 'integer' AND attempt_index BETWEEN 1 AND 16),
+      attempt_state TEXT NOT NULL CHECK(attempt_state IN (
+        'worker_reported', 'queued', 'running', 'passed', 'failed', 'indeterminate', 'blocked'
+      )),
+      attempt_revision INTEGER NOT NULL CHECK(typeof(attempt_revision) = 'integer' AND attempt_revision > 0),
+      verifier_profile_sha256 TEXT CHECK(verifier_profile_sha256 IS NULL OR (length(verifier_profile_sha256) = 64 AND verifier_profile_sha256 NOT GLOB '*[^0-9a-f]*')),
+      evidence_json TEXT NOT NULL CHECK(json_valid(evidence_json) AND length(CAST(evidence_json AS BLOB)) <= 16384),
+      evidence_sha256 TEXT NOT NULL CHECK(length(evidence_sha256) = 64 AND evidence_sha256 NOT GLOB '*[^0-9a-f]*'),
+      claim_owner TEXT CHECK(claim_owner IS NULL OR length(claim_owner) BETWEEN 1 AND 256),
+      claim_expires_at TEXT CHECK(claim_expires_at IS NULL OR (
+        strftime('%Y-%m-%dT%H:%M:%fZ', claim_expires_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', claim_expires_at, '+0 days') = claim_expires_at
+      )),
+      wall_deadline_at TEXT CHECK(wall_deadline_at IS NULL OR (
+        strftime('%Y-%m-%dT%H:%M:%fZ', wall_deadline_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', wall_deadline_at, '+0 days') = wall_deadline_at
+      )),
+      idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+      request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+      created_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') = created_at
+      ),
+      updated_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0 days') = updated_at
+      ),
+      PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation, manifest_id, verification_id),
+      UNIQUE(registry_workspace_id, idempotency_key),
+      UNIQUE(registry_workspace_id, assignment_id, assignment_generation, manifest_id, kind, attempt_index),
+      FOREIGN KEY(registry_workspace_id, assignment_id, assignment_generation, manifest_id, assignment_manifest_sha256)
+        REFERENCES remote_worker_artifact_manifests(registry_workspace_id, assignment_id, assignment_generation, manifest_id, assignment_manifest_sha256) ON DELETE RESTRICT,
+      ${fullIdentityFk},
+      CHECK(
+        (kind = 'worker_claim' AND attempt_state = 'worker_reported' AND verifier_profile_sha256 IS NULL)
+        OR (kind = 'gateway_attempt' AND attempt_state <> 'worker_reported' AND verifier_profile_sha256 IS NOT NULL)
+      ),
+      CHECK((claim_owner IS NULL) = (claim_expires_at IS NULL))
+    );
+
+    CREATE TABLE remote_worker_effect_intents (${identity},
+      intent_id TEXT NOT NULL CHECK(length(intent_id) BETWEEN 1 AND 256),
+      intent_index INTEGER NOT NULL CHECK(typeof(intent_index) = 'integer' AND intent_index BETWEEN 0 AND 63),
+      effect_selector TEXT NOT NULL CHECK(length(CAST(effect_selector AS BLOB)) BETWEEN 1 AND 256),
+      canonical_args_json TEXT NOT NULL CHECK(json_valid(canonical_args_json) AND length(CAST(canonical_args_json AS BLOB)) <= 65536),
+      canonical_args_sha256 TEXT NOT NULL CHECK(length(canonical_args_sha256) = 64 AND canonical_args_sha256 NOT GLOB '*[^0-9a-f]*'),
+      intent_sha256 TEXT NOT NULL CHECK(length(intent_sha256) = 64 AND intent_sha256 NOT GLOB '*[^0-9a-f]*'),
+      worker_idempotency_key TEXT NOT NULL CHECK(length(worker_idempotency_key) BETWEEN 1 AND 512),
+      idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+      request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+      recorded_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', recorded_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', recorded_at, '+0 days') = recorded_at
+      ),
+      PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation, intent_id),
+      UNIQUE(registry_workspace_id, idempotency_key),
+      UNIQUE(registry_workspace_id, intent_sha256),
+      UNIQUE(registry_workspace_id, assignment_id, assignment_generation, intent_index),
+      UNIQUE(registry_workspace_id, assignment_id, assignment_generation, intent_id, assignment_manifest_sha256),
+      ${fullIdentityFk}
+    );
+
+    CREATE TABLE remote_worker_effect_transitions (${identity},
+      intent_id TEXT NOT NULL CHECK(length(intent_id) BETWEEN 1 AND 256),
+      transition_sequence INTEGER NOT NULL CHECK(typeof(transition_sequence) = 'integer' AND transition_sequence BETWEEN 1 AND 16),
+      transition_state TEXT NOT NULL CHECK(transition_state IN (
+        'recorded', 'approval_wait', 'dispatch_claimed', 'external_boundary_started',
+        'blocked_before_dispatch', 'failed_before_boundary', 'completed_no_effect',
+        'completed_with_effect', 'manual_reconciliation', 'manual_reconciliation_resolved'
+      )),
+      correlation_json TEXT NOT NULL CHECK(json_valid(correlation_json) AND length(CAST(correlation_json AS BLOB)) <= 16384),
+      correlation_sha256 TEXT NOT NULL CHECK(length(correlation_sha256) = 64 AND correlation_sha256 NOT GLOB '*[^0-9a-f]*'),
+      external_side_effect_run_id TEXT CHECK(external_side_effect_run_id IS NULL OR length(external_side_effect_run_id) BETWEEN 1 AND 256),
+      hx305_outcome_sha256 TEXT CHECK(hx305_outcome_sha256 IS NULL OR (length(hx305_outcome_sha256) = 64 AND hx305_outcome_sha256 NOT GLOB '*[^0-9a-f]*')),
+      previous_transition_sha256 TEXT NOT NULL CHECK(length(previous_transition_sha256) = 64 AND previous_transition_sha256 NOT GLOB '*[^0-9a-f]*'),
+      transition_sha256 TEXT NOT NULL CHECK(length(transition_sha256) = 64 AND transition_sha256 NOT GLOB '*[^0-9a-f]*'),
+      idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+      request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+      recorded_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', recorded_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', recorded_at, '+0 days') = recorded_at
+      ),
+      PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation, intent_id, transition_sequence),
+      UNIQUE(registry_workspace_id, idempotency_key),
+      UNIQUE(registry_workspace_id, transition_sha256),
+      FOREIGN KEY(registry_workspace_id, assignment_id, assignment_generation, intent_id, assignment_manifest_sha256)
+        REFERENCES remote_worker_effect_intents(registry_workspace_id, assignment_id, assignment_generation, intent_id, assignment_manifest_sha256) ON DELETE RESTRICT,
+      ${fullIdentityFk},
+      CHECK(json_extract(correlation_json, '$.transitionState') = transition_state),
+      CHECK(transition_state <> 'completed_with_effect' OR hx305_outcome_sha256 IS NOT NULL)
+    );
+
+    CREATE TABLE remote_worker_effect_receipts (${identity},
+      intent_id TEXT NOT NULL CHECK(length(intent_id) BETWEEN 1 AND 256),
+      receipt_state TEXT NOT NULL CHECK(receipt_state IN (
+        'blocked_before_dispatch', 'failed_before_boundary', 'completed_no_effect',
+        'completed_with_effect', 'manual_reconciliation'
+      )),
+      receipt_revision INTEGER NOT NULL CHECK(typeof(receipt_revision) = 'integer' AND receipt_revision > 0),
+      final_transition_sequence INTEGER NOT NULL CHECK(typeof(final_transition_sequence) = 'integer' AND final_transition_sequence BETWEEN 1 AND 16),
+      final_transition_sha256 TEXT NOT NULL CHECK(length(final_transition_sha256) = 64 AND final_transition_sha256 NOT GLOB '*[^0-9a-f]*'),
+      hx305_outcome_sha256 TEXT CHECK(hx305_outcome_sha256 IS NULL OR (length(hx305_outcome_sha256) = 64 AND hx305_outcome_sha256 NOT GLOB '*[^0-9a-f]*')),
+      reconciliation_record_sha256 TEXT CHECK(reconciliation_record_sha256 IS NULL OR (length(reconciliation_record_sha256) = 64 AND reconciliation_record_sha256 NOT GLOB '*[^0-9a-f]*')),
+      idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+      request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+      created_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') = created_at
+      ),
+      updated_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0 days') = updated_at
+      ),
+      PRIMARY KEY(registry_workspace_id, assignment_id, assignment_generation, intent_id),
+      UNIQUE(registry_workspace_id, idempotency_key),
+      FOREIGN KEY(registry_workspace_id, assignment_id, assignment_generation, intent_id, assignment_manifest_sha256)
+        REFERENCES remote_worker_effect_intents(registry_workspace_id, assignment_id, assignment_generation, intent_id, assignment_manifest_sha256) ON DELETE RESTRICT,
+      ${fullIdentityFk},
+      CHECK(receipt_state <> 'completed_with_effect' OR hx305_outcome_sha256 IS NOT NULL)
+    );
+
+    CREATE INDEX idx_remote_worker_artifact_parts_chain
+      ON remote_worker_artifact_parts(registry_workspace_id, assignment_id, assignment_generation, upload_id, global_sequence);
+    CREATE INDEX idx_remote_worker_effect_transitions_chain
+      ON remote_worker_effect_transitions(registry_workspace_id, assignment_id, assignment_generation, intent_id, transition_sequence);
+  `);
+
+  createRemoteWorkerSettlementTriggers(db);
+}
+
+function createRemoteWorkerSettlementTriggers(db: DatabaseSync): void {
+  const zero = "0".repeat(64);
+  const bindAssignmentManifest = (table: string): string => `
+    CREATE TRIGGER trg_${table}_assignment_manifest_bound
+    BEFORE INSERT ON ${table}
+    FOR EACH ROW
+    WHEN NEW.assignment_manifest_sha256 <> COALESCE((
+      SELECT a.manifest_sha256 FROM remote_worker_assignments a
+      WHERE a.registry_workspace_id = NEW.registry_workspace_id AND a.assignment_id = NEW.assignment_id
+    ), '')
+    BEGIN
+      SELECT RAISE(ABORT, '${table} assignment manifest hash must bind the parent assignment');
+    END;
+  `;
+  const insertOnly = (table: string, label: string): string => `
+    CREATE TRIGGER trg_${table}_no_update
+    BEFORE UPDATE ON ${table}
+    FOR EACH ROW
+    BEGIN
+      SELECT RAISE(ABORT, '${label} is insert-only (no update)');
+    END;
+    CREATE TRIGGER trg_${table}_no_delete
+    BEFORE DELETE ON ${table}
+    FOR EACH ROW
+    BEGIN
+      SELECT RAISE(ABORT, '${label} is insert-only (no delete)');
+    END;
+  `;
+
+  db.exec(`
+    -- Assignment-manifest binding on the two roots; child rows inherit it through
+    -- their composite foreign key that carries assignment_manifest_sha256.
+    ${bindAssignmentManifest("remote_worker_artifact_uploads")}
+    ${bindAssignmentManifest("remote_worker_effect_intents")}
+
+    -- Insert-only tables: parts, blobs, manifests, entries, intents, transitions.
+    ${insertOnly("remote_worker_artifact_parts", "remote worker artifact part")}
+    ${insertOnly("remote_worker_artifact_blobs", "remote worker artifact blob")}
+    ${insertOnly("remote_worker_artifact_manifests", "remote worker artifact manifest")}
+    ${insertOnly("remote_worker_artifact_manifest_entries", "remote worker artifact manifest entry")}
+    ${insertOnly("remote_worker_effect_intents", "remote worker effect intent")}
+    ${insertOnly("remote_worker_effect_transitions", "remote worker effect transition")}
+
+    -- Parts append in one global contiguous sequence per upload.
+    CREATE TRIGGER trg_remote_worker_artifact_parts_sequence_guard
+    BEFORE INSERT ON remote_worker_artifact_parts
+    FOR EACH ROW
+    WHEN NEW.global_sequence <> 1 + COALESCE((
+      SELECT MAX(p.global_sequence) FROM remote_worker_artifact_parts p
+      WHERE p.registry_workspace_id = NEW.registry_workspace_id
+        AND p.assignment_id = NEW.assignment_id
+        AND p.assignment_generation = NEW.assignment_generation
+        AND p.upload_id = NEW.upload_id
+    ), 0)
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker artifact part sequence must be globally contiguous');
+    END;
+
+    -- Parts may only append to an open or assembling upload.
+    CREATE TRIGGER trg_remote_worker_artifact_parts_upload_open
+    BEFORE INSERT ON remote_worker_artifact_parts
+    FOR EACH ROW
+    WHEN 'open' <> COALESCE((
+      SELECT u.upload_state FROM remote_worker_artifact_uploads u
+      WHERE u.registry_workspace_id = NEW.registry_workspace_id
+        AND u.assignment_id = NEW.assignment_id
+        AND u.assignment_generation = NEW.assignment_generation
+        AND u.upload_id = NEW.upload_id
+    ), '') AND 'assembling' <> COALESCE((
+      SELECT u.upload_state FROM remote_worker_artifact_uploads u
+      WHERE u.registry_workspace_id = NEW.registry_workspace_id
+        AND u.assignment_id = NEW.assignment_id
+        AND u.assignment_generation = NEW.assignment_generation
+        AND u.upload_id = NEW.upload_id
+    ), '')
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker artifact part requires an open or assembling upload');
+    END;
+
+    -- Effect transitions append in one contiguous hash chain per intent.
+    CREATE TRIGGER trg_remote_worker_effect_transitions_chain_guard
+    BEFORE INSERT ON remote_worker_effect_transitions
+    FOR EACH ROW
+    WHEN
+      NEW.transition_sequence <> 1 + COALESCE((
+        SELECT MAX(t.transition_sequence) FROM remote_worker_effect_transitions t
+        WHERE t.registry_workspace_id = NEW.registry_workspace_id
+          AND t.assignment_id = NEW.assignment_id
+          AND t.assignment_generation = NEW.assignment_generation
+          AND t.intent_id = NEW.intent_id
+      ), 0)
+      OR NEW.previous_transition_sha256 <> COALESCE((
+        SELECT t.transition_sha256 FROM remote_worker_effect_transitions t
+        WHERE t.registry_workspace_id = NEW.registry_workspace_id
+          AND t.assignment_id = NEW.assignment_id
+          AND t.assignment_generation = NEW.assignment_generation
+          AND t.intent_id = NEW.intent_id
+        ORDER BY t.transition_sequence DESC LIMIT 1
+      ), '${zero}')
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker effect transition chain is out of order or misbound');
+    END;
+
+    -- Upload immutable identity: the full identity, attempt, staging root, and
+    -- artifact ceiling are frozen at insert; only lifecycle columns advance.
+    CREATE TRIGGER trg_remote_worker_artifact_uploads_immutable
+    BEFORE UPDATE ON remote_worker_artifact_uploads
+    FOR EACH ROW
+    WHEN
+      NEW.registry_workspace_id <> OLD.registry_workspace_id
+      OR NEW.execution_workspace_id <> OLD.execution_workspace_id
+      OR NEW.assignment_id <> OLD.assignment_id
+      OR NEW.assignment_generation <> OLD.assignment_generation
+      OR NEW.worker_id <> OLD.worker_id
+      OR NEW.worker_generation <> OLD.worker_generation
+      OR NEW.runtime_manifest_sha256 <> OLD.runtime_manifest_sha256
+      OR NEW.workspace_ceiling_sha256 <> OLD.workspace_ceiling_sha256
+      OR NEW.capability_ceiling_sha256 <> OLD.capability_ceiling_sha256
+      OR NEW.assignment_manifest_sha256 <> OLD.assignment_manifest_sha256
+      OR NEW.upload_id <> OLD.upload_id
+      OR NEW.upload_attempt <> OLD.upload_attempt
+      OR NEW.max_artifact_bytes <> OLD.max_artifact_bytes
+      OR NEW.staging_root_sha256 <> OLD.staging_root_sha256
+      OR NEW.idempotency_key <> OLD.idempotency_key
+      OR NEW.request_sha256 <> OLD.request_sha256
+      OR NEW.created_at <> OLD.created_at
+      OR (OLD.committed_manifest_sha256 IS NOT NULL AND NEW.committed_manifest_sha256 IS NOT OLD.committed_manifest_sha256)
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker artifact upload immutable bindings cannot change');
+    END;
+
+    -- Upload revision CAS: each state machine advances by exactly one on change
+    -- and holds otherwise; a terminal upload state can never leave.
+    CREATE TRIGGER trg_remote_worker_artifact_uploads_revision_cas
+    BEFORE UPDATE ON remote_worker_artifact_uploads
+    FOR EACH ROW
+    WHEN
+      NEW.upload_revision < OLD.upload_revision
+      OR NEW.verification_gate_revision < OLD.verification_gate_revision
+      OR NEW.cleanup_revision < OLD.cleanup_revision
+      OR (NEW.upload_state <> OLD.upload_state AND NEW.upload_revision <> OLD.upload_revision + 1)
+      OR (NEW.upload_state = OLD.upload_state AND NEW.upload_revision <> OLD.upload_revision)
+      OR (NEW.cleanup_state <> OLD.cleanup_state AND NEW.cleanup_revision <> OLD.cleanup_revision + 1)
+      OR (NEW.cleanup_state = OLD.cleanup_state AND NEW.cleanup_revision <> OLD.cleanup_revision)
+      OR (COALESCE(NEW.verification_gate_state, '') <> COALESCE(OLD.verification_gate_state, '')
+          AND OLD.verification_gate_state IS NOT NULL
+          AND NEW.verification_gate_revision <> OLD.verification_gate_revision + 1)
+      OR (OLD.upload_state IN ('committed', 'abandoned', 'quarantined') AND NEW.upload_state <> OLD.upload_state)
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker artifact upload revision must advance monotonically by one on transition');
+    END;
+
+    CREATE TRIGGER trg_remote_worker_artifact_uploads_no_delete
+    BEFORE DELETE ON remote_worker_artifact_uploads
+    FOR EACH ROW
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker artifact upload cannot be deleted');
+    END;
+
+    -- Verification attempt immutable identity and revision CAS.
+    CREATE TRIGGER trg_remote_worker_artifact_verifications_immutable
+    BEFORE UPDATE ON remote_worker_artifact_verifications
+    FOR EACH ROW
+    WHEN
+      NEW.registry_workspace_id <> OLD.registry_workspace_id
+      OR NEW.assignment_id <> OLD.assignment_id
+      OR NEW.assignment_generation <> OLD.assignment_generation
+      OR NEW.manifest_id <> OLD.manifest_id
+      OR NEW.verification_id <> OLD.verification_id
+      OR NEW.kind <> OLD.kind
+      OR NEW.attempt_index <> OLD.attempt_index
+      OR NEW.assignment_manifest_sha256 <> OLD.assignment_manifest_sha256
+      OR NEW.idempotency_key <> OLD.idempotency_key
+      OR NEW.created_at <> OLD.created_at
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker verification immutable bindings cannot change');
+    END;
+
+    CREATE TRIGGER trg_remote_worker_artifact_verifications_revision_cas
+    BEFORE UPDATE ON remote_worker_artifact_verifications
+    FOR EACH ROW
+    WHEN
+      NEW.attempt_revision < OLD.attempt_revision
+      OR (NEW.attempt_state <> OLD.attempt_state AND NEW.attempt_revision <> OLD.attempt_revision + 1)
+      OR (NEW.attempt_state = OLD.attempt_state AND NEW.attempt_revision <> OLD.attempt_revision)
+      OR (OLD.attempt_state IN ('worker_reported', 'passed', 'failed', 'indeterminate', 'blocked') AND NEW.attempt_state <> OLD.attempt_state)
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker verification attempt revision must advance monotonically by one on transition');
+    END;
+
+    CREATE TRIGGER trg_remote_worker_artifact_verifications_no_delete
+    BEFORE DELETE ON remote_worker_artifact_verifications
+    FOR EACH ROW
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker verification attempt cannot be deleted');
+    END;
+
+    -- Receipt immutable identity and revision CAS; only a manual-reconciliation
+    -- receipt may advance, and only to a terminal receipt state.
+    CREATE TRIGGER trg_remote_worker_effect_receipts_immutable
+    BEFORE UPDATE ON remote_worker_effect_receipts
+    FOR EACH ROW
+    WHEN
+      NEW.registry_workspace_id <> OLD.registry_workspace_id
+      OR NEW.assignment_id <> OLD.assignment_id
+      OR NEW.assignment_generation <> OLD.assignment_generation
+      OR NEW.intent_id <> OLD.intent_id
+      OR NEW.assignment_manifest_sha256 <> OLD.assignment_manifest_sha256
+      OR NEW.created_at <> OLD.created_at
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker effect receipt immutable bindings cannot change');
+    END;
+
+    CREATE TRIGGER trg_remote_worker_effect_receipts_revision_cas
+    BEFORE UPDATE ON remote_worker_effect_receipts
+    FOR EACH ROW
+    WHEN
+      NEW.receipt_revision <> OLD.receipt_revision + 1
+      OR OLD.receipt_state <> 'manual_reconciliation'
+      OR NEW.receipt_state = 'manual_reconciliation'
+      OR NEW.reconciliation_record_sha256 IS NULL
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker effect receipt may only advance from manual reconciliation with an operator record');
+    END;
+
+    CREATE TRIGGER trg_remote_worker_effect_receipts_no_delete
+    BEFORE DELETE ON remote_worker_effect_receipts
+    FOR EACH ROW
+    BEGIN
+      SELECT RAISE(ABORT, 'remote worker effect receipt cannot be deleted');
+    END;
+  `);
+}
+
+function createDurableHeartbeatOccurrenceSchema(db: DatabaseSync): void {
+  upgradeSessionControlEventsForHeartbeatPreemption(db);
+  db.exec(`
+    CREATE TABLE chat_heartbeat_occurrences (
+      occurrence_id TEXT PRIMARY KEY CHECK(length(occurrence_id) BETWEEN 1 AND 256),
+      workspace_id TEXT NOT NULL CHECK(length(workspace_id) BETWEEN 1 AND 256),
+      session_id TEXT NOT NULL CHECK(length(session_id) BETWEEN 1 AND 256),
+      session_incarnation_id TEXT NOT NULL CHECK(length(session_incarnation_id) BETWEEN 1 AND 320),
+      admission_id TEXT NOT NULL UNIQUE CHECK(length(admission_id) BETWEEN 1 AND 256),
+      admission_request_sha256 TEXT NOT NULL CHECK(
+        length(admission_request_sha256) = 64 AND admission_request_sha256 NOT GLOB '*[^0-9a-f]*'
+      ),
+      admission_idempotency_key TEXT NOT NULL CHECK(length(admission_idempotency_key) BETWEEN 1 AND 512),
+      admission_correlation_id TEXT NOT NULL CHECK(length(admission_correlation_id) BETWEEN 1 AND 256),
+      runtime_owner_id TEXT NOT NULL CHECK(length(runtime_owner_id) BETWEEN 1 AND 256),
+      system_actor_id TEXT NOT NULL CHECK(system_actor_id = 'system-heartbeat'),
+      admission_material_sha256 TEXT NOT NULL CHECK(
+        length(admission_material_sha256) = 64 AND admission_material_sha256 NOT GLOB '*[^0-9a-f]*'
+      ),
+      evaluated_policy_sha256 TEXT NOT NULL CHECK(
+        length(evaluated_policy_sha256) = 64 AND evaluated_policy_sha256 NOT GLOB '*[^0-9a-f]*'
+      ),
+      frozen_request_sha256 TEXT NOT NULL CHECK(
+        length(frozen_request_sha256) = 64 AND frozen_request_sha256 NOT GLOB '*[^0-9a-f]*'
+      ),
+      frozen_objective_sha256 TEXT NOT NULL CHECK(
+        length(frozen_objective_sha256) = 64 AND frozen_objective_sha256 NOT GLOB '*[^0-9a-f]*'
+      ),
+      claim_sha256 TEXT NOT NULL UNIQUE CHECK(
+        length(claim_sha256) = 64 AND claim_sha256 NOT GLOB '*[^0-9a-f]*'
+      ),
+      aggregate_revision INTEGER NOT NULL CHECK(typeof(aggregate_revision) = 'integer' AND aggregate_revision > 0),
+      controller_generation INTEGER NOT NULL CHECK(typeof(controller_generation) = 'integer' AND controller_generation > 0),
+      prior_last_proactive_at TEXT CHECK(
+        prior_last_proactive_at IS NULL OR (
+          strftime('%Y-%m-%dT%H:%M:%fZ', prior_last_proactive_at, '+0 days') IS NOT NULL
+          AND strftime('%Y-%m-%dT%H:%M:%fZ', prior_last_proactive_at, '+0 days') = prior_last_proactive_at
+        )
+      ),
+      prior_last_proactive_run_id TEXT CHECK(
+        prior_last_proactive_run_id IS NULL OR length(prior_last_proactive_run_id) BETWEEN 1 AND 256
+      ),
+      heartbeat_interval_seconds INTEGER NOT NULL CHECK(
+        typeof(heartbeat_interval_seconds) = 'integer' AND heartbeat_interval_seconds BETWEEN 900 AND 86400
+      ),
+      cooldown_seconds INTEGER NOT NULL CHECK(
+        typeof(cooldown_seconds) = 'integer' AND cooldown_seconds BETWEEN 0 AND 3600
+      ),
+      idle_floor_seconds INTEGER NOT NULL CHECK(
+        typeof(idle_floor_seconds) = 'integer' AND idle_floor_seconds BETWEEN 0 AND 86400
+      ),
+      observed_session_activity_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', observed_session_activity_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', observed_session_activity_at, '+0 days') = observed_session_activity_at
+      ),
+      user_message_id TEXT NOT NULL UNIQUE CHECK(length(user_message_id) BETWEEN 1 AND 256),
+      assistant_message_id TEXT NOT NULL UNIQUE CHECK(length(assistant_message_id) BETWEEN 1 AND 256),
+      turn_id TEXT NOT NULL UNIQUE CHECK(length(turn_id) BETWEEN 1 AND 256),
+      expected_durable_run_id TEXT NOT NULL UNIQUE CHECK(length(expected_durable_run_id) BETWEEN 1 AND 256),
+      durable_run_id TEXT UNIQUE CHECK(durable_run_id IS NULL OR length(durable_run_id) BETWEEN 1 AND 256),
+      capability_profile_id TEXT UNIQUE CHECK(
+        capability_profile_id IS NULL OR length(capability_profile_id) BETWEEN 1 AND 256
+      ),
+      capability_profile_hash TEXT CHECK(
+        capability_profile_hash IS NULL OR (
+          length(capability_profile_hash) = 64 AND capability_profile_hash NOT GLOB '*[^0-9a-f]*'
+        )
+      ),
+      state TEXT NOT NULL CHECK(state IN ('admitted', 'durable_bound', 'terminal', 'abandoned')),
+      revision INTEGER NOT NULL CHECK(typeof(revision) = 'integer' AND revision > 0),
+      claimed_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', claimed_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', claimed_at, '+0 days') = claimed_at
+      ),
+      durable_bound_at TEXT CHECK(
+        durable_bound_at IS NULL OR (
+          strftime('%Y-%m-%dT%H:%M:%fZ', durable_bound_at, '+0 days') IS NOT NULL
+          AND strftime('%Y-%m-%dT%H:%M:%fZ', durable_bound_at, '+0 days') = durable_bound_at
+        )
+      ),
+      terminal_at TEXT CHECK(
+        terminal_at IS NULL OR (
+          strftime('%Y-%m-%dT%H:%M:%fZ', terminal_at, '+0 days') IS NOT NULL
+          AND strftime('%Y-%m-%dT%H:%M:%fZ', terminal_at, '+0 days') = terminal_at
+        )
+      ),
+      abandoned_at TEXT CHECK(
+        abandoned_at IS NULL OR (
+          strftime('%Y-%m-%dT%H:%M:%fZ', abandoned_at, '+0 days') IS NOT NULL
+          AND strftime('%Y-%m-%dT%H:%M:%fZ', abandoned_at, '+0 days') = abandoned_at
+        )
+      ),
+      terminal_status TEXT CHECK(
+        terminal_status IS NULL OR terminal_status IN ('completed', 'failed', 'cancelled')
+      ),
+      terminal_handoff_sha256 TEXT CHECK(
+        terminal_handoff_sha256 IS NULL OR (
+          length(terminal_handoff_sha256) = 64 AND terminal_handoff_sha256 NOT GLOB '*[^0-9a-f]*'
+        )
+      ),
+      abandonment_reason TEXT CHECK(
+        abandonment_reason IS NULL OR abandonment_reason IN ('admission_closed', 'authority_drift', 'lifecycle_drift')
+      ),
+      updated_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0 days') = updated_at
+      ),
+      FOREIGN KEY(admission_id) REFERENCES chat_session_mutation_admissions(admission_id)
+        ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED,
+      FOREIGN KEY(durable_run_id) REFERENCES durable_runs(run_id)
+        ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED,
+      FOREIGN KEY(capability_profile_id) REFERENCES chat_turn_capability_profiles(profile_id)
+        ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED,
+      CHECK(admission_material_sha256 = frozen_request_sha256),
+      CHECK((prior_last_proactive_at IS NULL) = (prior_last_proactive_run_id IS NULL)),
+      CHECK(
+        (state = 'admitted' AND durable_bound_at IS NULL AND terminal_at IS NULL AND abandoned_at IS NULL
+          AND terminal_status IS NULL AND terminal_handoff_sha256 IS NULL AND abandonment_reason IS NULL
+          AND durable_run_id IS NULL AND capability_profile_id IS NULL AND capability_profile_hash IS NULL
+          AND revision = 1 AND updated_at = claimed_at)
+        OR (state = 'durable_bound' AND durable_bound_at IS NOT NULL AND terminal_at IS NULL AND abandoned_at IS NULL
+          AND terminal_status IS NULL AND terminal_handoff_sha256 IS NULL AND abandonment_reason IS NULL
+          AND durable_run_id IS NOT NULL AND durable_run_id = expected_durable_run_id
+          AND capability_profile_id IS NOT NULL AND capability_profile_hash IS NOT NULL)
+        OR (state = 'terminal' AND durable_bound_at IS NOT NULL AND terminal_at IS NOT NULL AND abandoned_at IS NULL
+          AND terminal_status IS NOT NULL AND terminal_handoff_sha256 IS NOT NULL AND abandonment_reason IS NULL
+          AND durable_run_id IS NOT NULL AND durable_run_id = expected_durable_run_id
+          AND capability_profile_id IS NOT NULL AND capability_profile_hash IS NOT NULL)
+        OR (state = 'abandoned' AND terminal_at IS NULL AND abandoned_at IS NOT NULL
+          AND terminal_status IS NULL AND terminal_handoff_sha256 IS NULL AND abandonment_reason IS NOT NULL
+          AND (
+            (durable_bound_at IS NULL AND durable_run_id IS NULL
+              AND capability_profile_id IS NULL AND capability_profile_hash IS NULL)
+            OR (abandonment_reason = 'authority_drift' AND durable_bound_at IS NOT NULL
+              AND durable_run_id IS NOT NULL AND durable_run_id = expected_durable_run_id
+              AND capability_profile_id IS NOT NULL AND capability_profile_hash IS NOT NULL)
+          ))
+      )
+    );
+
+    CREATE UNIQUE INDEX idx_chat_heartbeat_occurrences_one_open
+      ON chat_heartbeat_occurrences(session_id)
+      WHERE state IN ('admitted', 'durable_bound');
+    CREATE INDEX idx_chat_heartbeat_occurrences_recovery
+      ON chat_heartbeat_occurrences(state, updated_at, occurrence_id);
+    CREATE INDEX idx_chat_heartbeat_occurrences_session
+      ON chat_heartbeat_occurrences(workspace_id, session_id, claimed_at, occurrence_id);
+
+    CREATE TRIGGER trg_chat_heartbeat_occurrences_insert_guard
+    BEFORE INSERT ON chat_heartbeat_occurrences
+    WHEN NEW.state <> 'admitted'
+      OR NEW.revision <> 1 OR NEW.updated_at <> NEW.claimed_at
+      OR NEW.admission_material_sha256 <> NEW.frozen_request_sha256
+      OR abs(julianday(NEW.claimed_at) - julianday('now')) * 86400.0 > 1.0
+      OR NOT EXISTS (
+        SELECT 1 FROM chat_session_mutation_admissions admission
+        WHERE admission.admission_id = NEW.admission_id
+          AND admission.workspace_id = NEW.workspace_id
+          AND admission.session_id = NEW.session_id
+          AND admission.session_incarnation_id = NEW.session_incarnation_id
+          AND admission.turn_id = NEW.turn_id
+          AND admission.runtime_owner_id = NEW.runtime_owner_id
+          AND admission.actor_kind = 'system'
+          AND admission.actor_id = NEW.system_actor_id
+          AND admission.operation = 'chat_system_heartbeat'
+          AND admission.material_sha256 = NEW.admission_material_sha256
+          AND admission.request_sha256 = NEW.admission_request_sha256
+          AND admission.idempotency_key = NEW.admission_idempotency_key
+          AND admission.correlation_id = NEW.admission_correlation_id
+          AND admission.aggregate_revision = NEW.aggregate_revision
+          AND admission.controller_generation = NEW.controller_generation
+          AND admission.status = 'active'
+      )
+      OR NOT EXISTS (
+        SELECT 1 FROM session_autonomy_prefs prefs
+        WHERE prefs.session_id = NEW.session_id
+          AND prefs.last_proactive_at = NEW.claimed_at
+          AND prefs.last_proactive_run_id = NEW.occurrence_id
+      )
+      OR EXISTS (
+        SELECT 1 FROM chat_messages message
+        WHERE message.message_id IN (NEW.user_message_id, NEW.assistant_message_id)
+      )
+    BEGIN SELECT RAISE(ABORT, 'heartbeat occurrence admission or cadence invariant violated'); END;
+
+    CREATE TRIGGER trg_chat_heartbeat_occurrences_transition_guard
+    BEFORE UPDATE ON chat_heartbeat_occurrences
+    WHEN NEW.occurrence_id <> OLD.occurrence_id
+      OR NEW.workspace_id <> OLD.workspace_id OR NEW.session_id <> OLD.session_id
+      OR NEW.session_incarnation_id <> OLD.session_incarnation_id OR NEW.admission_id <> OLD.admission_id
+      OR NEW.admission_request_sha256 <> OLD.admission_request_sha256
+      OR NEW.admission_idempotency_key <> OLD.admission_idempotency_key
+      OR NEW.admission_correlation_id <> OLD.admission_correlation_id
+      OR NEW.runtime_owner_id <> OLD.runtime_owner_id OR NEW.system_actor_id <> OLD.system_actor_id
+      OR NEW.admission_material_sha256 <> OLD.admission_material_sha256
+      OR NEW.evaluated_policy_sha256 <> OLD.evaluated_policy_sha256
+      OR NEW.frozen_request_sha256 <> OLD.frozen_request_sha256
+      OR NEW.frozen_objective_sha256 <> OLD.frozen_objective_sha256
+      OR NEW.claim_sha256 <> OLD.claim_sha256
+      OR NEW.aggregate_revision <> OLD.aggregate_revision
+      OR NEW.controller_generation <> OLD.controller_generation
+      OR NEW.prior_last_proactive_at IS NOT OLD.prior_last_proactive_at
+      OR NEW.prior_last_proactive_run_id IS NOT OLD.prior_last_proactive_run_id
+      OR NEW.heartbeat_interval_seconds <> OLD.heartbeat_interval_seconds
+      OR NEW.cooldown_seconds <> OLD.cooldown_seconds OR NEW.idle_floor_seconds <> OLD.idle_floor_seconds
+      OR NEW.observed_session_activity_at <> OLD.observed_session_activity_at
+      OR NEW.user_message_id <> OLD.user_message_id OR NEW.assistant_message_id <> OLD.assistant_message_id
+      OR NEW.turn_id <> OLD.turn_id OR NEW.expected_durable_run_id <> OLD.expected_durable_run_id
+      OR NEW.claimed_at <> OLD.claimed_at
+      OR NEW.revision <> OLD.revision + 1
+      OR NEW.updated_at < OLD.updated_at
+      OR (
+        abs(julianday(NEW.updated_at) - julianday('now')) * 86400.0 > 1.0
+        AND NOT (
+          NEW.state = 'abandoned' AND NEW.abandoned_at = NEW.updated_at
+          AND EXISTS (
+            SELECT 1
+            FROM chat_session_control_events event_row
+            JOIN chat_session_control_grants successor
+              ON successor.workspace_id = event_row.workspace_id
+              AND successor.session_id = event_row.session_id
+              AND successor.generation = event_row.next_generation
+            JOIN chat_session_mutation_admissions admission
+              ON admission.admission_id = OLD.admission_id
+            WHERE substr(event_row.idempotency_key, 1, 18) = 'heartbeat-preempt_'
+              /* heartbeat preemption occurrence timestamp evidence */
+              AND event_row.reason_code = 'heartbeat_preempted'
+              AND event_row.workspace_id = OLD.workspace_id
+              AND event_row.session_id = OLD.session_id
+              AND event_row.previous_generation = OLD.controller_generation
+              AND event_row.next_generation = OLD.controller_generation + 1
+              AND event_row.previous_owner_kind = 'operator'
+              AND event_row.next_owner_kind = 'operator'
+              AND event_row.previous_lease_state = 'operator_active'
+              AND event_row.next_lease_state = 'operator_active'
+              AND event_row.request_id IS NULL
+              AND event_row.actor_kind = 'operator'
+              AND event_row.companion_session_id IS NULL
+              AND event_row.device_grant_id IS NULL
+              AND event_row.created_at = NEW.updated_at
+              AND successor.is_current = 1
+              AND successor.owner_kind = 'operator'
+              AND successor.lease_state = 'operator_active'
+              AND successor.transition_idempotency_key = event_row.idempotency_key
+              AND successor.transition_request_sha256 = event_row.request_sha256
+              AND successor.created_at = event_row.created_at
+              AND successor.updated_at = event_row.created_at
+              AND admission.status = 'cancelled'
+              AND admission.closed_at = event_row.created_at
+              AND ((OLD.state = 'admitted'
+                AND NEW.abandonment_reason = 'admission_closed'
+                AND admission.terminal_authority_kind = 'request_runtime'
+                AND admission.terminal_control_event_id IS NULL
+                AND admission.terminal_correlation_id = event_row.event_id)
+              OR (OLD.state = 'durable_bound'
+                AND NEW.abandonment_reason = 'authority_drift'
+                AND admission.terminal_authority_kind = 'authority_superseded'
+                AND admission.terminal_control_event_id = event_row.event_id))
+              AND NOT EXISTS (
+                SELECT 1 FROM chat_session_control_requests request_row
+                WHERE request_row.workspace_id = event_row.workspace_id
+                  AND request_row.session_id = event_row.session_id
+                  AND request_row.requested_generation = event_row.previous_generation
+                  AND request_row.status = 'pending'
+              )
+          )
+        )
+      )
+      OR (OLD.state <> 'admitted' AND (
+        NEW.durable_run_id IS NOT OLD.durable_run_id
+        OR NEW.capability_profile_id IS NOT OLD.capability_profile_id
+        OR NEW.capability_profile_hash IS NOT OLD.capability_profile_hash
+      ))
+      OR (OLD.state = 'admitted' AND NEW.state = 'durable_bound' AND (
+        NEW.durable_run_id <> OLD.expected_durable_run_id
+        OR NEW.durable_bound_at <> NEW.updated_at
+        OR NOT EXISTS (
+          SELECT 1 FROM chat_turn_mutation_admission_durable_bindings binding
+          WHERE binding.admission_id = OLD.admission_id AND binding.turn_id = OLD.turn_id
+            AND binding.workspace_id = OLD.workspace_id AND binding.session_id = OLD.session_id
+            AND binding.session_incarnation_id = OLD.session_incarnation_id
+            AND binding.durable_run_id = OLD.expected_durable_run_id
+        )
+        OR NOT EXISTS (
+          SELECT 1 FROM chat_turn_capability_profile_incarnation_bindings profile_binding
+          WHERE profile_binding.profile_id = NEW.capability_profile_id
+            AND profile_binding.turn_id = OLD.turn_id
+            AND profile_binding.profile_hash = NEW.capability_profile_hash
+        )
+        OR EXISTS (
+          SELECT 1 FROM chat_messages message
+          WHERE message.message_id IN (OLD.user_message_id, OLD.assistant_message_id)
+        )
+      ))
+      OR (OLD.state = 'durable_bound' AND NEW.state = 'terminal' AND (
+        NEW.durable_bound_at IS NOT OLD.durable_bound_at OR NEW.terminal_at <> NEW.updated_at
+        OR NOT EXISTS (
+          SELECT 1 FROM chat_session_mutation_admissions admission
+          JOIN durable_runs run ON run.run_id = OLD.durable_run_id
+          WHERE admission.admission_id = OLD.admission_id
+            AND admission.status IN ('completed', 'cancelled')
+            AND admission.terminal_authority_kind = 'durable_terminal'
+            AND admission.terminal_durable_run_id = OLD.durable_run_id
+            AND admission.terminal_durable_run_status = NEW.terminal_status
+            AND run.status = NEW.terminal_status
+        )
+      ))
+      OR (OLD.state = 'admitted' AND NEW.state = 'abandoned' AND (
+        NEW.abandoned_at <> NEW.updated_at
+        OR EXISTS (
+          SELECT 1 FROM chat_turn_mutation_admission_durable_bindings binding
+          WHERE binding.admission_id = OLD.admission_id
+        )
+        OR NOT EXISTS (
+          SELECT 1 FROM chat_session_mutation_admissions admission
+          WHERE admission.admission_id = OLD.admission_id AND admission.status <> 'active'
+            AND (
+              (NEW.abandonment_reason = 'admission_closed'
+                AND admission.terminal_authority_kind IN ('expired_recovery', 'request_runtime'))
+              OR (NEW.abandonment_reason = 'authority_drift'
+                AND admission.terminal_authority_kind = 'authority_superseded')
+              OR (NEW.abandonment_reason = 'lifecycle_drift'
+                AND admission.terminal_authority_kind = 'lifecycle_delete')
+            )
+        )
+      ))
+      OR (OLD.state = 'durable_bound' AND NEW.state = 'abandoned' AND (
+        NEW.abandoned_at <> NEW.updated_at OR NEW.abandonment_reason <> 'authority_drift'
+        OR NEW.durable_bound_at IS NOT OLD.durable_bound_at
+        OR NOT EXISTS (
+          SELECT 1 FROM chat_turn_mutation_admission_durable_bindings binding
+          WHERE binding.admission_id = OLD.admission_id AND binding.turn_id = OLD.turn_id
+            AND binding.workspace_id = OLD.workspace_id AND binding.session_id = OLD.session_id
+            AND binding.session_incarnation_id = OLD.session_incarnation_id
+            AND binding.durable_run_id = OLD.durable_run_id
+        )
+        OR NOT EXISTS (
+          SELECT 1
+          FROM chat_session_mutation_admissions admission
+          JOIN durable_runs run ON run.run_id = OLD.durable_run_id
+          JOIN chat_session_control_events event_row
+            ON event_row.event_id = admission.terminal_control_event_id
+          WHERE admission.admission_id = OLD.admission_id
+            AND admission.status = 'cancelled'
+            AND admission.terminal_authority_kind = 'authority_superseded'
+            AND event_row.reason_code = 'heartbeat_preempted'
+            AND event_row.workspace_id = OLD.workspace_id AND event_row.session_id = OLD.session_id
+            AND event_row.previous_generation = OLD.controller_generation
+            AND event_row.next_generation = OLD.controller_generation + 1
+            AND event_row.previous_owner_kind = 'operator' AND event_row.next_owner_kind = 'operator'
+            AND event_row.previous_lease_state = 'operator_active'
+            AND event_row.next_lease_state = 'operator_active'
+            AND event_row.actor_kind = 'operator'
+            AND run.workflow_key = 'chat.turn.execute' AND run.status = 'cancelled'
+            AND run.lease_owner_id IS NULL AND run.lease_expires_at IS NULL
+            AND run.lease_heartbeat_at IS NULL AND run.finished_at = NEW.updated_at
+        )
+      ))
+      OR NOT (
+        (OLD.state = 'admitted' AND NEW.state IN ('durable_bound', 'abandoned'))
+        OR (OLD.state = 'durable_bound' AND NEW.state IN ('terminal', 'abandoned'))
+      )
+    BEGIN SELECT RAISE(ABORT, 'heartbeat occurrence transition invariant violated'); END;
+
+    CREATE TRIGGER trg_chat_heartbeat_occurrences_terminal_evidence_guard
+    BEFORE UPDATE ON chat_heartbeat_occurrences
+    WHEN OLD.state = 'durable_bound' AND NEW.state = 'terminal' AND NOT EXISTS (
+      SELECT 1
+      FROM durable_runs run
+      JOIN chat_turn_traces trace ON trace.turn_id = OLD.turn_id
+      WHERE run.run_id = OLD.durable_run_id
+        AND run.workflow_key = 'chat.turn.execute'
+        AND run.status = NEW.terminal_status
+        AND run.status IN ('completed', 'failed', 'cancelled')
+        AND run.lease_owner_id IS NULL AND run.lease_expires_at IS NULL
+        AND json_valid(run.payload_json) AND json_valid(run.metadata_json)
+        AND json_type(run.metadata_json, '$') = 'object'
+        AND json_type(run.metadata_json, '$.autonomousAdmission') = 'object'
+        AND (
+          SELECT COUNT(*) FROM json_each(run.metadata_json, '$.autonomousAdmission')
+        ) = 2
+        AND NOT EXISTS (
+          SELECT 1 FROM json_each(run.metadata_json, '$.autonomousAdmission') admission_seal_field
+          WHERE admission_seal_field.key NOT IN ('material', 'materialSha256')
+        )
+        AND json_type(run.metadata_json, '$.autonomousAdmission.material') = 'object'
+        AND (
+          SELECT COUNT(*) FROM json_each(run.metadata_json, '$.autonomousAdmission.material')
+        ) = 8
+        AND NOT EXISTS (
+          SELECT 1 FROM json_each(run.metadata_json, '$.autonomousAdmission.material') autonomous_material_field
+          WHERE autonomous_material_field.key NOT IN (
+            'version', 'identity', 'sessionId', 'objectiveSha256', 'autonomous',
+            'admission', 'capability', 'cronAdmission'
+          )
+        )
+        AND json_extract(run.metadata_json, '$.autonomousAdmission.material.version')
+          = 'chat.autonomous.admission.v1'
+        AND json_extract(run.metadata_json, '$.autonomousAdmission.materialSha256')
+          = gc_sha256(gc_canonical_json(json_extract(
+            run.metadata_json, '$.autonomousAdmission.material'
+          )))
+        AND json_extract(run.metadata_json, '$.autonomousAdmission.material.identity.userMessageId')
+          = json_extract(run.payload_json, '$.userMessageId')
+        AND json_extract(run.metadata_json, '$.autonomousAdmission.material.identity.assistantMessageId')
+          = json_extract(run.payload_json, '$.assistantMessageId')
+        AND json_extract(run.metadata_json, '$.autonomousAdmission.material.identity.turnId') = OLD.turn_id
+        AND json_extract(run.metadata_json, '$.autonomousAdmission.material.identity.durableRunId') = run.run_id
+        AND json_extract(run.metadata_json, '$.autonomousAdmission.material.sessionId') = OLD.session_id
+        AND json_type(run.metadata_json, '$.objective') = 'text'
+        AND json_extract(run.metadata_json, '$.objective') = json_extract(run.payload_json, '$.request.content')
+        AND json_extract(run.metadata_json, '$.autonomousAdmission.material.objectiveSha256')
+          = gc_sha256(json_quote(json_extract(run.metadata_json, '$.objective')))
+        AND json_type(run.metadata_json, '$.autonomousAdmission.material.autonomous') = 'object'
+        AND NOT EXISTS (
+          SELECT 1 FROM json_each(run.metadata_json,
+            '$.autonomousAdmission.material.autonomous') autonomous_field
+          WHERE autonomous_field.key NOT IN (
+            'kind', 'systemActorId', 'sourceRunId', 'reason', 'deliverMode',
+            'deliveryChannel', 'profilePosture', 'commitmentId'
+          )
+        )
+        AND json_extract(run.metadata_json, '$.autonomousAdmission.material.autonomous.kind') = 'heartbeat'
+        AND json_extract(run.metadata_json,
+          '$.autonomousAdmission.material.autonomous.systemActorId') = 'system-heartbeat'
+        AND json_extract(run.metadata_json,
+          '$.autonomousAdmission.material.autonomous.deliverMode') = 'on_notify'
+        AND json_type(run.metadata_json,
+          '$.autonomousAdmission.material.autonomous.sourceRunId') = 'text'
+        AND length(json_extract(run.metadata_json,
+          '$.autonomousAdmission.material.autonomous.sourceRunId')) BETWEEN 1 AND 256
+        AND json_type(run.metadata_json,
+          '$.autonomousAdmission.material.autonomous.reason') = 'text'
+        AND length(json_extract(run.metadata_json,
+          '$.autonomousAdmission.material.autonomous.reason')) BETWEEN 1 AND 4096
+        AND json(json_extract(run.metadata_json, '$.autonomous'))
+          = json(json_extract(run.metadata_json, '$.autonomousAdmission.material.autonomous'))
+        AND json_extract(run.payload_json, '$.requestActor.actorKind') = 'system'
+        AND json_extract(run.payload_json, '$.requestActor.actorId') = 'system-heartbeat'
+        AND json_extract(run.metadata_json, '$.autonomousAdmission.material.admission.admissionId')
+          = json_extract(run.payload_json, '$.admissionId')
+        AND json_extract(run.metadata_json,
+          '$.autonomousAdmission.material.admission.sessionIncarnationId')
+          = json_extract(run.payload_json, '$.sessionIncarnationId')
+        AND json_extract(run.metadata_json, '$.autonomousAdmission.material.admission.workspaceId')
+          = json_extract(run.payload_json, '$.workspaceId')
+        AND json_extract(run.metadata_json,
+          '$.autonomousAdmission.material.admission.admissionMaterialSha256')
+          = json_extract(run.payload_json, '$.admissionMaterialSha256')
+        AND json_extract(run.metadata_json,
+          '$.autonomousAdmission.material.admission.effectiveRequestMaterialSha256')
+          = json_extract(run.payload_json, '$.effectiveRequestMaterialSha256')
+        AND json_extract(run.metadata_json, '$.autonomousAdmission.material.capability.profileId')
+          = json_extract(run.payload_json, '$.capabilityProfileId')
+        AND json_extract(run.metadata_json, '$.autonomousAdmission.material.capability.profileHash')
+          = json_extract(run.payload_json, '$.capabilityProfileHash')
+        AND json_extract(run.metadata_json, '$.autonomousAdmission.material.capability.profileId')
+          = json_extract(run.metadata_json, '$.capabilityProfileId')
+        AND json_extract(run.metadata_json, '$.autonomousAdmission.material.capability.profileHash')
+          = json_extract(run.metadata_json, '$.capabilityProfileHash')
+        AND json_type(run.metadata_json, '$.autonomousAdmission.material.capability.snapshotId') = 'text'
+        AND length(json_extract(run.metadata_json,
+          '$.autonomousAdmission.material.capability.snapshotId')) BETWEEN 1 AND 256
+        AND json_type(run.metadata_json, '$.autonomousAdmission.material.cronAdmission') = 'null'
+        AND json_type(run.metadata_json, '$.chatTurnRuntimeAuthority') = 'object'
+        AND json_type(run.metadata_json, '$.chatTurnRuntimeAuthority.material') = 'object'
+        AND (
+          SELECT COUNT(*) FROM json_each(run.metadata_json, '$.chatTurnRuntimeAuthority')
+        ) = 2
+        AND NOT EXISTS (
+          SELECT 1 FROM json_each(run.metadata_json, '$.chatTurnRuntimeAuthority') authority_field
+          WHERE authority_field.key NOT IN ('material', 'materialSha256')
+        )
+        AND (
+          SELECT COUNT(*) FROM json_each(run.metadata_json, '$.chatTurnRuntimeAuthority.material')
+        ) = CASE run.status WHEN 'completed' THEN 14 ELSE 13 END
+        AND NOT EXISTS (
+          SELECT 1 FROM json_each(run.metadata_json, '$.chatTurnRuntimeAuthority.material') material_field
+          WHERE material_field.key NOT IN (
+            'version', 'runId', 'turnId', 'transitionKind', 'durableStatus', 'traceStatus',
+            'transitionAt', 'postCommitGenerationId', 'postCommitEligibility', 'waitForEvent',
+            'terminalOutput', 'linkedFinalization', 'requiredFinalizers', 'heartbeatDecisionReceipt'
+          )
+        )
+        AND (
+          (run.status = 'completed'
+            AND json_type(run.metadata_json,
+              '$.chatTurnRuntimeAuthority.material.heartbeatDecisionReceipt') = 'object')
+          OR (run.status IN ('failed', 'cancelled')
+            AND json_type(run.metadata_json,
+              '$.chatTurnRuntimeAuthority.material.heartbeatDecisionReceipt') IS NULL)
+        )
+        AND json_extract(run.metadata_json, '$.chatTurnRuntimeAuthority.materialSha256')
+          = gc_sha256(gc_canonical_json(json_extract(
+              run.metadata_json, '$.chatTurnRuntimeAuthority.material'
+            )))
+        AND json_extract(run.metadata_json, '$.chatTurnRuntimeAuthority.material.version')
+          = 'chat.turn.runtime-authority.v1'
+        AND json_extract(run.metadata_json, '$.chatTurnRuntimeAuthority.material.runId') = run.run_id
+        AND json_extract(run.metadata_json, '$.chatTurnRuntimeAuthority.material.turnId') = OLD.turn_id
+        AND json_extract(run.metadata_json, '$.chatTurnRuntimeAuthority.material.durableStatus') = run.status
+        AND json_extract(run.metadata_json, '$.chatTurnRuntimeAuthority.material.traceStatus') = trace.status
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', json_extract(
+              run.metadata_json, '$.chatTurnRuntimeAuthority.material.transitionAt'
+            ), '+0 days')
+          = json_extract(run.metadata_json, '$.chatTurnRuntimeAuthority.material.transitionAt')
+        AND json_type(run.metadata_json,
+          '$.chatTurnRuntimeAuthority.material.postCommitEligibility') = 'object'
+        AND (
+          SELECT COUNT(*) FROM json_each(
+            run.metadata_json, '$.chatTurnRuntimeAuthority.material.postCommitEligibility'
+          )
+        ) = 4
+        AND NOT EXISTS (
+          SELECT 1 FROM json_each(
+            run.metadata_json, '$.chatTurnRuntimeAuthority.material.postCommitEligibility'
+          ) eligibility_field
+          WHERE eligibility_field.key NOT IN (
+            'version', 'autonomyEnabledAtParentSettlement', 'evalIntegrityTurn', 'humanSession'
+          )
+        )
+        AND json_extract(run.metadata_json,
+          '$.chatTurnRuntimeAuthority.material.postCommitEligibility.version') = 1
+        AND json_type(run.metadata_json,
+          '$.chatTurnRuntimeAuthority.material.postCommitEligibility.autonomyEnabledAtParentSettlement') = 'false'
+        AND json_type(run.metadata_json,
+          '$.chatTurnRuntimeAuthority.material.postCommitEligibility.evalIntegrityTurn') = 'false'
+        AND json_type(run.metadata_json,
+          '$.chatTurnRuntimeAuthority.material.postCommitEligibility.humanSession') = 'false'
+        AND json_type(run.metadata_json, '$.chatTurnRuntimeAuthority.material.waitForEvent') = 'null'
+        AND json_type(run.metadata_json, '$.waitForEvent') IS NULL
+        AND json_type(run.metadata_json, '$.linkedFinalizationPending') IS NULL
+        AND json_type(run.metadata_json, '$.autonomousChatPostCommitPending') IS NULL
+        AND json_type(run.metadata_json, '$.generalChatPostCommitPending') IS NULL
+        AND trace.session_id = OLD.session_id
+        AND trace.user_message_id = json_extract(run.payload_json, '$.userMessageId')
+        AND trace.assistant_message_id = json_extract(run.payload_json, '$.assistantMessageId')
+        AND NOT EXISTS (
+          SELECT 1 FROM chat_messages heartbeat_input
+          WHERE heartbeat_input.message_id = trace.user_message_id
+        )
+        AND json_valid(trace.durable_json)
+        AND json_extract(trace.durable_json, '$.runId') = run.run_id
+        AND json_extract(trace.durable_json, '$.status') = run.status
+        AND json_extract(trace.durable_json, '$.checkpointKind') = CASE run.status
+          WHEN 'completed' THEN 'run_completed'
+          WHEN 'failed' THEN 'run_failed'
+          ELSE 'run_cancelled'
+        END
+        AND (
+          (run.status = 'completed' AND trace.status = 'completed')
+          OR (run.status IN ('failed', 'cancelled') AND trace.status = run.status)
+        )
+        AND EXISTS (
+          SELECT 1
+          FROM durable_checkpoints checkpoint
+          WHERE checkpoint.checkpoint_id = (
+              SELECT latest.checkpoint_id
+              FROM durable_checkpoints latest
+              WHERE latest.run_id = run.run_id
+                AND latest.checkpoint_kind = CASE run.status
+                  WHEN 'completed' THEN 'run_completed'
+                  WHEN 'failed' THEN 'run_failed'
+                  ELSE 'run_cancelled'
+                END
+              ORDER BY latest.created_at DESC, latest.checkpoint_id DESC LIMIT 1
+            )
+            AND json_valid(checkpoint.state_json)
+            AND json_type(checkpoint.state_json, '$.chatTurnRuntimeAuthority') = 'object'
+            AND json(json_extract(checkpoint.state_json, '$.chatTurnRuntimeAuthority'))
+              = json(json_extract(run.metadata_json, '$.chatTurnRuntimeAuthority'))
+            AND (
+              (run.status = 'completed'
+                AND json_type(run.metadata_json, '$.heartbeatDecisionReceipt') = 'object'
+                AND json_type(checkpoint.state_json, '$.heartbeatDecisionReceipt') = 'object'
+                AND json_type(run.metadata_json, '$.heartbeatDecisionRawOutput') = 'text'
+                AND json_type(checkpoint.state_json, '$.heartbeatDecisionRawOutput') = 'text'
+                AND json(json_extract(run.metadata_json, '$.heartbeatDecisionReceipt'))
+                  = json(json_extract(run.metadata_json,
+                    '$.chatTurnRuntimeAuthority.material.heartbeatDecisionReceipt'))
+                AND json(json_extract(checkpoint.state_json, '$.heartbeatDecisionReceipt'))
+                  = json(json_extract(run.metadata_json, '$.heartbeatDecisionReceipt'))
+                AND json_extract(checkpoint.state_json, '$.heartbeatDecisionRawOutput')
+                  = json_extract(run.metadata_json, '$.heartbeatDecisionRawOutput')
+                AND (
+                  SELECT COUNT(*) FROM json_each(run.metadata_json, '$.heartbeatDecisionReceipt')
+                ) = 6
+                AND NOT EXISTS (
+                  SELECT 1 FROM json_each(run.metadata_json, '$.heartbeatDecisionReceipt') receipt_field
+                  WHERE receipt_field.key NOT IN (
+                    'version', 'occurrenceId', 'claimSha256', 'rawOutputSha256',
+                    'notify', 'normalizedMessageSha256'
+                  )
+                )
+                AND json_extract(run.metadata_json, '$.heartbeatDecisionReceipt.version') = 1
+                AND json_extract(run.metadata_json, '$.heartbeatDecisionReceipt.occurrenceId') = OLD.occurrence_id
+                AND json_extract(run.metadata_json, '$.heartbeatDecisionReceipt.claimSha256') = OLD.claim_sha256
+                AND json_extract(run.metadata_json, '$.heartbeatDecisionReceipt.rawOutputSha256')
+                  = gc_sha256(json_extract(run.metadata_json, '$.heartbeatDecisionRawOutput'))
+                AND json_valid(json_extract(run.metadata_json, '$.heartbeatDecisionRawOutput'))
+                AND json_type(json_extract(run.metadata_json, '$.heartbeatDecisionRawOutput'), '$') = 'object'
+                AND (
+                  (json_type(run.metadata_json, '$.heartbeatDecisionReceipt.notify') = 'false'
+                    AND json_type(run.metadata_json,
+                      '$.heartbeatDecisionReceipt.normalizedMessageSha256') = 'null'
+                    AND (
+                      SELECT COUNT(*) FROM json_each(
+                        json_extract(run.metadata_json, '$.heartbeatDecisionRawOutput')
+                      )
+                    ) = 1
+                    AND json_type(json_extract(run.metadata_json,
+                      '$.heartbeatDecisionRawOutput'), '$.notify') = 'false')
+                  OR
+                  (json_type(run.metadata_json, '$.heartbeatDecisionReceipt.notify') = 'true'
+                    AND json_type(run.metadata_json,
+                      '$.heartbeatDecisionReceipt.normalizedMessageSha256') = 'text'
+                    AND (
+                      SELECT COUNT(*) FROM json_each(
+                        json_extract(run.metadata_json, '$.heartbeatDecisionRawOutput')
+                      )
+                    ) = 2
+                    AND NOT EXISTS (
+                      SELECT 1 FROM json_each(
+                        json_extract(run.metadata_json, '$.heartbeatDecisionRawOutput')
+                      ) raw_field
+                      WHERE raw_field.key NOT IN ('message', 'notify')
+                    )
+                    AND json_type(json_extract(run.metadata_json,
+                      '$.heartbeatDecisionRawOutput'), '$.notify') = 'true'
+                    AND json_type(json_extract(run.metadata_json,
+                      '$.heartbeatDecisionRawOutput'), '$.message') = 'text'
+                    AND gc_unicode_scalar_length(gc_js_trim(json_extract(json_extract(
+                      run.metadata_json, '$.heartbeatDecisionRawOutput'), '$.message'))) BETWEEN 1 AND 4000
+                    AND json_extract(run.metadata_json,
+                      '$.heartbeatDecisionReceipt.normalizedMessageSha256')
+                      = gc_sha256(gc_js_trim(json_extract(json_extract(run.metadata_json,
+                        '$.heartbeatDecisionRawOutput'), '$.message'))))
+                ))
+              OR
+              (run.status IN ('failed', 'cancelled')
+                AND json_type(run.metadata_json, '$.heartbeatDecisionReceipt') IS NULL
+                AND json_type(run.metadata_json, '$.heartbeatDecisionRawOutput') IS NULL
+                AND json_type(checkpoint.state_json, '$.heartbeatDecisionReceipt') IS NULL
+                AND json_type(checkpoint.state_json, '$.heartbeatDecisionRawOutput') IS NULL)
+            )
+            AND (
+              (run.status = 'completed'
+                AND (
+                  (json_type(run.metadata_json, '$.heartbeatDecisionReceipt.notify') = 'true'
+                    AND json_extract(checkpoint.state_json, '$.assistantMessageId')
+                      = json_extract(run.payload_json, '$.assistantMessageId')
+                    AND json_extract(checkpoint.state_json, '$.outputText')
+                      = json_extract(run.metadata_json, '$.outputText')
+                    AND json_extract(checkpoint.state_json, '$.outputSummary')
+                      = json_extract(run.metadata_json, '$.outputSummary'))
+                  OR
+                  (json_type(run.metadata_json, '$.heartbeatDecisionReceipt.notify') = 'false'
+                    AND json_type(checkpoint.state_json, '$.assistantMessageId') IS NULL
+                    AND json_type(checkpoint.state_json, '$.outputText') IS NULL
+                    AND json_type(checkpoint.state_json, '$.outputSummary') IS NULL)
+                ))
+              OR (run.status IN ('failed', 'cancelled')
+                AND json_type(checkpoint.state_json, '$.assistantMessageId') IS NULL
+                AND json_type(checkpoint.state_json, '$.outputText') IS NULL
+                AND json_type(checkpoint.state_json, '$.outputSummary') IS NULL)
+            )
+        )
+        AND (
+          (json_extract(run.metadata_json, '$.chatTurnRuntimeAuthority.material.transitionKind')
+              = 'linked_finalization'
+            AND run.status = 'failed'
+            AND json(json_extract(run.metadata_json, '$.chatTurnRuntimeAuthority.material.requiredFinalizers'))
+              = json('["linked","general"]')
+            AND json_type(run.metadata_json, '$.chatTurnRuntimeAuthority.material.linkedFinalization') = 'object'
+            AND json_type(run.metadata_json, '$.linkedFinalization') = 'object'
+            AND json_extract(run.metadata_json, '$.linkedFinalization.finalizationId')
+              = json_extract(run.metadata_json,
+                '$.chatTurnRuntimeAuthority.material.linkedFinalization.finalizationId')
+            AND json_extract(run.metadata_json, '$.linkedFinalization.requestedAt')
+              = json_extract(run.metadata_json,
+                '$.chatTurnRuntimeAuthority.material.linkedFinalization.requestedAt')
+            AND json_extract(run.metadata_json, '$.linkedFinalization.reasonSha256')
+              = json_extract(run.metadata_json,
+                '$.chatTurnRuntimeAuthority.material.linkedFinalization.reasonSha256')
+            AND json_type(run.metadata_json, '$.chatTurnRuntimeAuthority.material.terminalOutput') = 'null'
+            AND json_type(run.metadata_json, '$.autonomousChatPostCommit') IS NULL)
+          OR
+          (json_extract(run.metadata_json, '$.chatTurnRuntimeAuthority.material.transitionKind') = 'terminal'
+            AND json_type(run.metadata_json, '$.chatTurnRuntimeAuthority.material.linkedFinalization') = 'null'
+            AND json_type(run.metadata_json, '$.linkedFinalization') IS NULL
+            AND (
+              (run.status = 'completed'
+                AND json_type(run.metadata_json, '$.autonomousChatPostCommit') = 'object'
+                AND json(json_extract(run.metadata_json,
+                  '$.chatTurnRuntimeAuthority.material.requiredFinalizers')) = json('["autonomous","general"]')
+                AND json_extract(run.metadata_json, '$.autonomousChatPostCommit.generationId')
+                  = json_extract(run.metadata_json,
+                    '$.chatTurnRuntimeAuthority.material.postCommitGenerationId')
+                AND json_extract(run.metadata_json, '$.autonomousChatPostCommit.requestedAt')
+                  = json_extract(run.metadata_json, '$.chatTurnRuntimeAuthority.material.transitionAt')
+                AND json_type(run.metadata_json, '$.autonomousChatPostCommit.completedAt') = 'text'
+                AND json_type(run.metadata_json, '$.autonomousChatPostCommit.heartbeatCleanup') = 'object'
+                AND (
+                  SELECT COUNT(*) FROM json_each(
+                    run.metadata_json, '$.autonomousChatPostCommit.heartbeatCleanup'
+                  )
+                ) = 1
+                AND json_extract(run.metadata_json,
+                  '$.autonomousChatPostCommit.heartbeatCleanup.status') = 'not_required'
+                AND (
+                  (json_type(run.metadata_json, '$.heartbeatDecisionReceipt.notify') = 'false'
+                    AND json_type(run.metadata_json,
+                      '$.chatTurnRuntimeAuthority.material.terminalOutput') = 'null'
+                    AND json_type(run.metadata_json, '$.outputText') IS NULL
+                    AND json_type(run.metadata_json, '$.finalOutput') IS NULL
+                    AND json_type(run.metadata_json, '$.outputSummary') IS NULL
+                    AND json_type(run.metadata_json, '$.finalSummary') IS NULL
+                    AND NOT EXISTS (
+                      SELECT 1 FROM chat_messages message
+                      WHERE message.message_id = json_extract(run.payload_json, '$.assistantMessageId')
+                    ))
+                  OR
+                  (json_type(run.metadata_json, '$.heartbeatDecisionReceipt.notify') = 'true'
+                    AND json_type(run.metadata_json,
+                      '$.chatTurnRuntimeAuthority.material.terminalOutput') = 'object'
+                    AND (
+                      SELECT COUNT(*) FROM json_each(
+                        run.metadata_json, '$.chatTurnRuntimeAuthority.material.terminalOutput'
+                      )
+                    ) = 3
+                    AND NOT EXISTS (
+                      SELECT 1 FROM json_each(
+                        run.metadata_json, '$.chatTurnRuntimeAuthority.material.terminalOutput'
+                      ) output_field
+                      WHERE output_field.key NOT IN (
+                        'assistantMessageId', 'outputTextSha256', 'outputSummarySha256'
+                      )
+                    )
+                    AND json_type(run.metadata_json, '$.outputText') = 'text'
+                    AND json_type(run.metadata_json, '$.outputSummary') = 'text'
+                    AND json_extract(run.metadata_json, '$.outputText')
+                      = gc_js_trim(json_extract(json_extract(run.metadata_json,
+                        '$.heartbeatDecisionRawOutput'), '$.message'))
+                    AND json_extract(run.metadata_json,
+                      '$.chatTurnRuntimeAuthority.material.terminalOutput.assistantMessageId')
+                      = json_extract(run.payload_json, '$.assistantMessageId')
+                    AND json_extract(run.metadata_json,
+                      '$.chatTurnRuntimeAuthority.material.terminalOutput.outputTextSha256')
+                      = gc_sha256(json_quote(json_extract(run.metadata_json, '$.outputText')))
+                    AND json_extract(run.metadata_json,
+                      '$.chatTurnRuntimeAuthority.material.terminalOutput.outputSummarySha256')
+                      = gc_sha256(json_quote(json_extract(run.metadata_json, '$.outputSummary')))
+                    AND json_extract(run.metadata_json, '$.finalOutput')
+                      = json_extract(run.metadata_json, '$.outputText')
+                    AND json_extract(run.metadata_json, '$.finalSummary')
+                      = json_extract(run.metadata_json, '$.outputSummary')
+                    AND EXISTS (
+                      SELECT 1 FROM chat_messages message
+                      WHERE message.message_id = json_extract(run.payload_json, '$.assistantMessageId')
+                        AND message.session_id = OLD.session_id
+                        AND message.role = 'assistant' AND message.actor_type = 'system'
+                        AND message.actor_id = 'system-heartbeat'
+                        AND message.content = json_extract(run.metadata_json, '$.outputText')
+                    ))
+                ))
+              OR
+              (run.status IN ('failed', 'cancelled')
+                AND json_type(run.metadata_json, '$.chatTurnRuntimeAuthority.material.terminalOutput') = 'null'
+                AND json_type(run.metadata_json, '$.outputText') IS NULL
+                AND json_type(run.metadata_json, '$.finalOutput') IS NULL
+                AND json_type(run.metadata_json, '$.outputSummary') IS NULL
+                AND json_type(run.metadata_json, '$.finalSummary') IS NULL
+                AND json_type(run.metadata_json, '$.autonomousChatPostCommit') IS NULL
+                AND json(json_extract(run.metadata_json,
+                  '$.chatTurnRuntimeAuthority.material.requiredFinalizers')) = json('["general"]'))
+            ))
+        )
+        AND json_type(run.metadata_json, '$.generalChatPostCommit') = 'object'
+        AND json_extract(run.metadata_json, '$.generalChatPostCommit.generationId')
+          = json_extract(run.metadata_json, '$.chatTurnRuntimeAuthority.material.postCommitGenerationId')
+        AND json_extract(run.metadata_json, '$.generalChatPostCommit.traceStatus') = trace.status
+        AND json_extract(run.metadata_json, '$.generalChatPostCommit.requestedAt')
+          = json_extract(run.metadata_json, '$.chatTurnRuntimeAuthority.material.transitionAt')
+        AND json(json_extract(run.metadata_json, '$.generalChatPostCommit.postCommitEligibility'))
+          = json(json_extract(run.metadata_json,
+            '$.chatTurnRuntimeAuthority.material.postCommitEligibility'))
+        AND json_extract(run.metadata_json, '$.generalChatPostCommit.parentLocalEffectsStatus') = 'settled'
+        AND json_type(run.metadata_json, '$.generalChatPostCommit.parentLocalEffectsSettledAt') = 'text'
+        AND json_type(run.metadata_json, '$.generalChatPostCommit.completedEffects') = 'array'
+        AND json_type(run.metadata_json, '$.generalChatPostCommit.durableEffectRunIds') = 'object'
+        AND json_type(run.metadata_json, '$.generalChatPostCommit.durableEffectOutcomes') = 'object'
+        AND json_array_length(run.metadata_json, '$.generalChatPostCommit.completedEffects') = 0
+        AND (
+          SELECT COUNT(*) FROM json_each(
+            run.metadata_json, '$.generalChatPostCommit.durableEffectRunIds'
+          )
+        ) = 0
+        AND (
+          SELECT COUNT(*) FROM json_each(
+            run.metadata_json, '$.generalChatPostCommit.durableEffectOutcomes'
+          )
+        ) = 0
+        AND json_extract(run.metadata_json, '$.generalChatPostCommit.childOutcomeAuthority')
+          = 'child_durable_runs'
+        AND json_extract(run.metadata_json, '$.generalChatPostCommit.settlementStatus')
+          IN ('completed', 'settled_with_failures')
+        AND json_type(run.metadata_json, '$.generalChatPostCommit.completedAt') = 'text'
+        AND (
+          SELECT COUNT(*) FROM json_each(
+            run.metadata_json, '$.generalChatPostCommit.durableEffectRunIds'
+          )
+        ) = (
+          SELECT COUNT(DISTINCT child_id.value) FROM json_each(
+            run.metadata_json, '$.generalChatPostCommit.durableEffectRunIds'
+          ) child_id
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM json_each(run.metadata_json, '$.generalChatPostCommit.durableEffectRunIds') effect_run
+          LEFT JOIN json_each(run.metadata_json, '$.generalChatPostCommit.durableEffectOutcomes') effect_outcome
+            ON effect_outcome.key = effect_run.key
+          LEFT JOIN durable_runs child_run ON child_run.run_id = effect_run.value
+          LEFT JOIN chat_session_mutation_admissions child_admission
+            ON child_admission.admission_id = json_extract(child_run.payload_json, '$.childAdmission.admissionId')
+          WHERE effect_run.key NOT IN ('background_review', 'commitments', 'memory_maintenance')
+            OR effect_run.type <> 'text'
+            OR effect_outcome.key IS NULL OR effect_outcome.type <> 'object'
+            OR json_extract(effect_outcome.value, '$.runId') <> effect_run.value
+            OR child_run.run_id IS NULL OR child_run.workflow_key <> 'chat.post_commit.effect'
+            OR child_run.status NOT IN ('completed', 'failed', 'cancelled', 'dead_lettered')
+            OR child_run.status <> json_extract(effect_outcome.value, '$.status')
+            OR child_run.lease_owner_id IS NOT NULL OR child_run.lease_expires_at IS NOT NULL
+            OR json_extract(child_run.payload_json, '$.parentRunId') <> run.run_id
+            OR json_extract(child_run.payload_json, '$.postCommitGenerationId')
+              <> json_extract(run.metadata_json, '$.generalChatPostCommit.generationId')
+            OR json_extract(child_run.payload_json, '$.effect') <> effect_run.key
+            OR child_admission.admission_id IS NULL
+            OR child_admission.status <> CASE child_run.status
+              WHEN 'completed' THEN 'completed' ELSE 'cancelled' END
+            OR child_admission.terminal_authority_kind <> 'post_commit_child_stage'
+            OR child_admission.terminal_durable_run_id <> child_run.run_id
+            OR child_admission.terminal_durable_run_status <> 'running'
+            OR child_admission.terminal_durable_lease_owner_id IS NULL
+            OR child_admission.terminal_durable_attempt_count IS NULL
+            OR child_admission.terminal_durable_run_version IS NULL
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM json_each(run.metadata_json, '$.generalChatPostCommit.durableEffectOutcomes') effect_outcome
+          LEFT JOIN json_each(run.metadata_json, '$.generalChatPostCommit.durableEffectRunIds') effect_run
+            ON effect_run.key = effect_outcome.key
+          WHERE effect_run.key IS NULL
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM durable_runs omitted_child
+          WHERE omitted_child.workflow_key = 'chat.post_commit.effect'
+            AND json_extract(omitted_child.payload_json, '$.parentRunId') = run.run_id
+            AND json_extract(omitted_child.payload_json, '$.postCommitGenerationId')
+              = json_extract(run.metadata_json, '$.generalChatPostCommit.generationId')
+            AND NOT EXISTS (
+              SELECT 1 FROM json_each(
+                run.metadata_json, '$.generalChatPostCommit.durableEffectRunIds'
+              ) admitted_child WHERE admitted_child.value = omitted_child.run_id
+            )
+        )
+        AND json_type(run.metadata_json, '$.chatTurnAdmissionHandoff') = 'object'
+        AND (
+          SELECT COUNT(*) FROM json_each(run.metadata_json, '$.chatTurnAdmissionHandoff')
+        ) = 10
+        AND NOT EXISTS (
+          SELECT 1 FROM json_each(run.metadata_json, '$.chatTurnAdmissionHandoff') marker_field
+          WHERE marker_field.key NOT IN (
+            'version', 'admissionId', 'sessionIncarnationId', 'turnId', 'parentRunId',
+            'postCommitGenerationId', 'parentLocalEffectsStatus', 'childRunIds',
+            'childRunIdsSha256', 'committedAt'
+          )
+        )
+        AND json_extract(run.metadata_json, '$.chatTurnAdmissionHandoff.version') = 1
+        AND json_extract(run.metadata_json, '$.chatTurnAdmissionHandoff.admissionId') = OLD.admission_id
+        AND json_extract(run.metadata_json, '$.chatTurnAdmissionHandoff.sessionIncarnationId')
+          = OLD.session_incarnation_id
+        AND json_extract(run.metadata_json, '$.chatTurnAdmissionHandoff.turnId') = OLD.turn_id
+        AND json_extract(run.metadata_json, '$.chatTurnAdmissionHandoff.parentRunId') = run.run_id
+        AND json_extract(run.metadata_json, '$.chatTurnAdmissionHandoff.postCommitGenerationId')
+          = json_extract(run.metadata_json, '$.generalChatPostCommit.generationId')
+        AND json_extract(run.metadata_json, '$.chatTurnAdmissionHandoff.parentLocalEffectsStatus') = 'settled'
+        AND json_type(run.metadata_json, '$.chatTurnAdmissionHandoff.childRunIds') = 'array'
+        AND json_extract(run.metadata_json, '$.chatTurnAdmissionHandoff.childRunIdsSha256')
+          = gc_sha256(gc_canonical_json(json_extract(
+              run.metadata_json, '$.chatTurnAdmissionHandoff.childRunIds'
+            )))
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', json_extract(
+              run.metadata_json, '$.chatTurnAdmissionHandoff.committedAt'
+            ), '+0 days')
+          = json_extract(run.metadata_json, '$.chatTurnAdmissionHandoff.committedAt')
+        AND (
+          SELECT COUNT(*) FROM json_each(run.metadata_json, '$.chatTurnAdmissionHandoff.childRunIds')
+        ) = (
+          SELECT COUNT(*) FROM json_each(
+            run.metadata_json, '$.generalChatPostCommit.durableEffectRunIds'
+          )
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM json_each(run.metadata_json, '$.chatTurnAdmissionHandoff.childRunIds') marker_child
+          WHERE marker_child.type <> 'text' OR EXISTS (
+            SELECT 1
+            FROM json_each(run.metadata_json, '$.chatTurnAdmissionHandoff.childRunIds') prior_marker_child
+            WHERE CAST(prior_marker_child.key AS INTEGER) < CAST(marker_child.key AS INTEGER)
+              AND prior_marker_child.value >= marker_child.value
+          ) OR NOT EXISTS (
+            SELECT 1 FROM json_each(
+              run.metadata_json, '$.generalChatPostCommit.durableEffectRunIds'
+            ) effect_run WHERE effect_run.value = marker_child.value
+          )
+        )
+    )
+    BEGIN SELECT RAISE(ABORT, 'heartbeat occurrence terminal runtime evidence invariant violated'); END;
+
+    CREATE TRIGGER trg_chat_heartbeat_occurrences_no_delete
+    BEFORE DELETE ON chat_heartbeat_occurrences
+    BEGIN SELECT RAISE(ABORT, 'heartbeat occurrences are append/transition-only'); END;
+  `);
+  replaceSessionControlAuthRevokeGuards(db);
+  upgradeSessionMutationAdmissionGuardForHeartbeatReclaim(db);
+}
+
+function upgradeSessionControlEventsForHeartbeatPreemption(db: DatabaseSync): void {
+  const tableName = "chat_session_control_events";
+  const table = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(tableName) as
+    | { sql?: unknown }
+    | undefined;
+  if (typeof table?.sql !== "string") {
+    throw new Error("SQLite migration 174 requires the session-control event ledger");
+  }
+  if (table.sql.includes("heartbeat_preempted")) return;
+  const upgradedTableSql = table.sql.replace(
+    "'session_reactivated', 'mutation_denied'",
+    "'session_reactivated', 'mutation_denied', 'heartbeat_preempted'",
+  );
+  if (upgradedTableSql === table.sql || !upgradedTableSql.includes("heartbeat_preempted")) {
+    throw new Error("SQLite migration 174 could not widen the session-control event reason check");
+  }
+  const indexes = db
+    .prepare(
+      `SELECT sql FROM sqlite_master
+       WHERE type = 'index' AND tbl_name = @tableName AND sql IS NOT NULL
+       ORDER BY name`,
+    )
+    .all({ tableName }) as Array<{ sql: string }>;
+  const triggers = db
+    .prepare(
+      `SELECT sql FROM sqlite_master
+       WHERE type = 'trigger' AND tbl_name = @tableName AND sql IS NOT NULL
+       ORDER BY name`,
+    )
+    .all({ tableName }) as Array<{ sql: string }>;
+  db.exec(`PRAGMA legacy_alter_table = ON;`);
+  try {
+    db.exec(`ALTER TABLE chat_session_control_events RENAME TO chat_session_control_events_hx411_old;`);
+    db.exec(upgradedTableSql);
+    db.exec(`INSERT INTO chat_session_control_events SELECT * FROM chat_session_control_events_hx411_old;`);
+    db.exec(`DROP TABLE chat_session_control_events_hx411_old;`);
+  } finally {
+    db.exec(`PRAGMA legacy_alter_table = OFF;`);
+  }
+  for (const row of indexes) db.exec(row.sql);
+  for (const row of triggers) db.exec(row.sql);
+
+  db.exec(`
+    CREATE TRIGGER trg_chat_session_control_events_heartbeat_preempted_guard
+    BEFORE INSERT ON chat_session_control_events
+    WHEN NEW.reason_code = 'heartbeat_preempted' AND NOT (
+      NEW.request_id IS NULL
+      AND NEW.previous_generation IS NOT NULL
+      AND NEW.next_generation = NEW.previous_generation + 1
+      AND NEW.previous_owner_kind = 'operator' AND NEW.next_owner_kind = 'operator'
+      AND NEW.previous_lease_state = 'operator_active' AND NEW.next_lease_state = 'operator_active'
+      AND NEW.actor_kind = 'operator'
+      AND NEW.companion_session_id IS NULL AND NEW.device_grant_id IS NULL
+      AND NEW.event_sequence = COALESCE((
+        SELECT MAX(prior_event.event_sequence) + 1
+        FROM chat_session_control_events prior_event
+        WHERE prior_event.session_id = NEW.session_id
+      ), 1)
+      AND EXISTS (
+        SELECT 1 FROM chat_session_control_grants prior
+        WHERE prior.workspace_id = NEW.workspace_id AND prior.session_id = NEW.session_id
+          AND prior.generation = NEW.previous_generation
+          AND prior.owner_kind = 'operator' AND prior.lease_state = 'operator_active'
+          AND prior.is_current = 1 AND prior.terminal_at IS NULL
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM chat_session_control_grants successor
+        WHERE successor.workspace_id = NEW.workspace_id AND successor.session_id = NEW.session_id
+          AND successor.generation = NEW.next_generation
+      )
+    )
+    BEGIN SELECT RAISE(ABORT, 'heartbeat preemption event invariant violated'); END;
+
+    CREATE TRIGGER trg_chat_session_control_grants_heartbeat_preempted_guard
+    BEFORE INSERT ON chat_session_control_grants
+    WHEN NEW.owner_kind = 'operator' AND EXISTS (
+      SELECT 1 FROM chat_session_control_grants prior
+      WHERE prior.session_id = NEW.session_id AND prior.workspace_id = NEW.workspace_id
+        AND prior.generation = NEW.generation - 1
+        AND prior.owner_kind = 'operator' AND prior.lease_state = 'superseded'
+    ) AND NOT EXISTS (
+      SELECT 1 FROM chat_session_control_events event_row
+      WHERE event_row.workspace_id = NEW.workspace_id AND event_row.session_id = NEW.session_id
+        AND event_row.previous_generation = NEW.generation - 1
+        AND event_row.next_generation = NEW.generation
+        AND event_row.previous_owner_kind = 'operator' AND event_row.next_owner_kind = 'operator'
+        AND event_row.previous_lease_state = 'operator_active'
+        AND event_row.next_lease_state = 'operator_active'
+        AND event_row.reason_code = 'heartbeat_preempted' AND event_row.actor_kind = 'operator'
+        AND event_row.request_id IS NULL AND event_row.companion_session_id IS NULL
+        AND event_row.device_grant_id IS NULL
+        AND event_row.idempotency_key = NEW.transition_idempotency_key
+        AND event_row.request_sha256 = NEW.transition_request_sha256
+        AND event_row.created_at = NEW.created_at AND NEW.updated_at = NEW.created_at
+    )
+    BEGIN SELECT RAISE(ABORT, 'operator heartbeat-preemption generation lacks its exact event'); END;
+  `);
+}
+
+function upgradeSessionMutationAdmissionGuardForHeartbeatReclaim(db: DatabaseSync): void {
+  const triggerName = "trg_chat_session_mutation_admissions_update_guard";
+  const row = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?").get(triggerName) as
+    | { sql?: unknown }
+    | undefined;
+  if (typeof row?.sql !== "string") {
+    throw new Error("SQLite migration 174 requires the mutation-admission update guard");
+  }
+  let upgradedSql = row.sql;
+  const anchor = `        OR (NEW.status = 'active' AND OLD.status = 'active'
+          AND OLD.runtime_lease_relinquished_at IS NULL
+          AND NEW.runtime_lease_relinquished_at IS NOT NULL`;
+  const heartbeatReclaim = `        OR (NEW.status = 'active' AND OLD.status = 'active'
+          /* heartbeat occurrence request-runtime reclaim */
+          AND OLD.admission_kind = 'turn_write'
+          AND OLD.actor_kind = 'system' AND OLD.actor_id = 'system-heartbeat'
+          AND OLD.operation = 'chat_system_heartbeat'
+          AND OLD.runtime_lease_relinquished_at IS NULL
+          AND julianday(OLD.runtime_lease_expires_at) <= julianday(NEW.runtime_last_heartbeat_at)
+          AND NEW.runtime_lease_relinquished_at IS NULL
+          AND NEW.runtime_lease_revision = OLD.runtime_lease_revision + 1
+          AND NEW.runtime_last_heartbeat_at >= OLD.runtime_last_heartbeat_at
+          AND NEW.runtime_lease_expires_at = strftime(
+            '%Y-%m-%dT%H:%M:%fZ', NEW.runtime_last_heartbeat_at, '+60 seconds'
+          )
+          AND NEW.closed_at IS OLD.closed_at AND NEW.terminal_actor_id IS OLD.terminal_actor_id
+          AND NEW.terminal_event_id IS OLD.terminal_event_id
+          AND NEW.terminal_idempotency_key IS OLD.terminal_idempotency_key
+          AND NEW.terminal_correlation_id IS OLD.terminal_correlation_id
+          AND NOT EXISTS (
+            SELECT 1 FROM chat_turn_mutation_admission_durable_bindings durable_binding
+            WHERE durable_binding.admission_id = OLD.admission_id
+          )
+          AND EXISTS (
+            SELECT 1 FROM chat_heartbeat_occurrences occurrence
+            WHERE occurrence.admission_id = OLD.admission_id
+              AND occurrence.workspace_id = OLD.workspace_id
+              AND occurrence.session_id = OLD.session_id
+              AND occurrence.session_incarnation_id = OLD.session_incarnation_id
+              AND occurrence.turn_id = OLD.turn_id
+              AND occurrence.runtime_owner_id = OLD.runtime_owner_id
+              AND occurrence.system_actor_id = OLD.actor_id
+              AND occurrence.admission_material_sha256 = OLD.material_sha256
+              AND occurrence.frozen_request_sha256 = OLD.material_sha256
+              AND occurrence.admission_request_sha256 = OLD.request_sha256
+              AND occurrence.admission_idempotency_key = OLD.idempotency_key
+              AND occurrence.admission_correlation_id = OLD.correlation_id
+              AND occurrence.aggregate_revision = OLD.aggregate_revision
+              AND occurrence.controller_generation = OLD.controller_generation
+              AND occurrence.state = 'admitted'
+          ))
+`;
+  if (!upgradedSql.includes("heartbeat occurrence request-runtime reclaim")) {
+    if (!upgradedSql.includes(anchor)) {
+      throw new Error("SQLite migration 174 could not locate the mutation-admission guard upgrade anchor");
+    }
+    upgradedSql = upgradedSql.replace(anchor, `${heartbeatReclaim}${anchor}`);
+  }
+  const terminalEffectsAnchor = `                  AND (
+                    SELECT COUNT(DISTINCT local_effect.value)
+                    FROM json_each(run.metadata_json, '$.generalChatPostCommit.completedEffects') local_effect
+                    WHERE typeof(local_effect.value) = 'text'
+                      AND local_effect.value IN ('capability_gap', 'realtime', 'agent_end')
+                  ) = 3`;
+  const heartbeatTerminalEffects = `                  AND (
+                    (
+                      SELECT COUNT(DISTINCT local_effect.value)
+                      FROM json_each(run.metadata_json, '$.generalChatPostCommit.completedEffects') local_effect
+                      WHERE typeof(local_effect.value) = 'text'
+                        AND local_effect.value IN ('capability_gap', 'realtime', 'agent_end')
+                    ) = 3
+                    OR (
+                      /* heartbeat occurrence durable-terminal zero-effect handoff */
+                      OLD.actor_kind = 'system' AND OLD.actor_id = 'system-heartbeat'
+                      AND OLD.operation = 'chat_system_heartbeat'
+                      AND json_array_length(
+                        run.metadata_json, '$.generalChatPostCommit.completedEffects'
+                      ) = 0
+                      AND EXISTS (
+                        SELECT 1 FROM chat_heartbeat_occurrences heartbeat_occurrence
+                        WHERE heartbeat_occurrence.admission_id = OLD.admission_id
+                          AND heartbeat_occurrence.workspace_id = OLD.workspace_id
+                          AND heartbeat_occurrence.session_id = OLD.session_id
+                          AND heartbeat_occurrence.session_incarnation_id = OLD.session_incarnation_id
+                          AND heartbeat_occurrence.turn_id = OLD.turn_id
+                          AND heartbeat_occurrence.durable_run_id = run.run_id
+                          AND heartbeat_occurrence.state = 'durable_bound'
+                          AND heartbeat_occurrence.controller_generation = OLD.controller_generation
+                          AND heartbeat_occurrence.aggregate_revision = OLD.aggregate_revision
+                          AND heartbeat_occurrence.admission_material_sha256 = OLD.material_sha256
+                          AND heartbeat_occurrence.frozen_request_sha256 = OLD.material_sha256
+                          AND json_extract(run.payload_json, '$.heartbeatOccurrenceId')
+                            = heartbeat_occurrence.occurrence_id
+                          AND json_extract(run.payload_json, '$.heartbeatClaimSha256')
+                            = heartbeat_occurrence.claim_sha256
+                      )
+                    )
+                  )`;
+  if (!upgradedSql.includes("heartbeat occurrence durable-terminal zero-effect handoff")) {
+    if (!upgradedSql.includes(terminalEffectsAnchor)) {
+      throw new Error("SQLite migration 174 could not locate the durable-terminal effects guard anchor");
+    }
+    upgradedSql = upgradedSql.replace(terminalEffectsAnchor, heartbeatTerminalEffects);
+  }
+  const terminalClockAnchor = "AND abs((julianday(NEW.closed_at) - julianday('now')) * 86400.0) <= 1.0";
+  const heartbeatTerminalClock = `AND (
+            abs((julianday(NEW.closed_at) - julianday('now')) * 86400.0) <= 1.0
+            OR EXISTS (
+              SELECT 1
+              FROM chat_session_control_events event_row
+              JOIN chat_session_control_grants successor
+                ON successor.workspace_id = event_row.workspace_id
+                AND successor.session_id = event_row.session_id
+                AND successor.generation = event_row.next_generation
+              JOIN chat_heartbeat_occurrences occurrence
+                ON occurrence.admission_id = OLD.admission_id
+              WHERE substr(event_row.idempotency_key, 1, 18) = 'heartbeat-preempt_'
+                /* heartbeat preemption terminal timestamp evidence */
+                AND event_row.reason_code = 'heartbeat_preempted'
+                AND event_row.workspace_id = OLD.workspace_id
+                AND event_row.session_id = OLD.session_id
+                AND event_row.previous_generation = OLD.controller_generation
+                AND event_row.next_generation = OLD.controller_generation + 1
+                AND event_row.previous_owner_kind = 'operator'
+                AND event_row.next_owner_kind = 'operator'
+                AND event_row.previous_lease_state = 'operator_active'
+                AND event_row.next_lease_state = 'operator_active'
+                AND event_row.request_id IS NULL
+                AND event_row.actor_kind = 'operator'
+                AND event_row.companion_session_id IS NULL
+                AND event_row.device_grant_id IS NULL
+                AND event_row.created_at = NEW.closed_at
+                AND successor.is_current = 1
+                AND successor.owner_kind = 'operator'
+                AND successor.lease_state = 'operator_active'
+                AND successor.transition_idempotency_key = event_row.idempotency_key
+                AND successor.transition_request_sha256 = event_row.request_sha256
+                AND successor.created_at = event_row.created_at
+                AND successor.updated_at = event_row.created_at
+                AND occurrence.workspace_id = OLD.workspace_id
+                AND occurrence.session_id = OLD.session_id
+                AND occurrence.controller_generation = OLD.controller_generation
+                AND occurrence.state IN ('admitted', 'durable_bound')
+                AND OLD.actor_kind = 'system'
+                AND OLD.actor_id = 'system-heartbeat'
+                AND OLD.operation = 'chat_system_heartbeat'
+                AND ((occurrence.state = 'admitted'
+                  AND NEW.terminal_authority_kind = 'request_runtime'
+                  AND NEW.terminal_control_event_id IS NULL
+                  AND NEW.terminal_correlation_id = event_row.event_id)
+                OR (occurrence.state = 'durable_bound'
+                  AND NEW.terminal_authority_kind = 'authority_superseded'
+                  AND NEW.terminal_control_event_id = event_row.event_id))
+                AND NOT EXISTS (
+                  SELECT 1 FROM chat_session_control_requests request_row
+                  WHERE request_row.workspace_id = event_row.workspace_id
+                    AND request_row.session_id = event_row.session_id
+                    AND request_row.requested_generation = event_row.previous_generation
+                    AND request_row.status = 'pending'
+                )
+            )
+          )`;
+  if (!upgradedSql.includes("heartbeat preemption terminal timestamp evidence")) {
+    if (!upgradedSql.includes(terminalClockAnchor)) {
+      throw new Error("SQLite migration 174 could not locate the terminal clock guard anchor");
+    }
+    upgradedSql = upgradedSql.replace(terminalClockAnchor, heartbeatTerminalClock);
+  }
+  if (upgradedSql === row.sql) return;
+  db.exec(`DROP TRIGGER ${triggerName};`);
+  db.exec(upgradedSql);
+}
+
+function createSessionControlLifecycleAndAdmissionSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TEMP TABLE gc_session_control_lifecycle_preflight (
+      ok INTEGER NOT NULL CHECK(ok = 1)
+    );
+    INSERT INTO gc_session_control_lifecycle_preflight(ok)
+    SELECT CASE WHEN
+      EXISTS (
+        SELECT 1
+        FROM chat_session_meta meta
+        LEFT JOIN chat_session_control_grants control
+          ON control.session_id = meta.session_id AND control.is_current = 1
+        WHERE control.session_id IS NULL OR control.workspace_id <> meta.workspace_id
+      )
+      OR EXISTS (
+        SELECT 1
+        FROM chat_session_control_grants control
+        LEFT JOIN chat_session_meta meta ON meta.session_id = control.session_id
+        WHERE control.is_current = 1
+          AND (meta.session_id IS NULL OR meta.workspace_id <> control.workspace_id)
+      )
+      OR EXISTS (
+        SELECT session_id
+        FROM chat_session_control_grants
+        WHERE is_current = 1
+        GROUP BY session_id
+        HAVING COUNT(*) <> 1
+      )
+    THEN 0 ELSE 1 END;
+    DROP TABLE gc_session_control_lifecycle_preflight;
+  `);
+
+  addColumnIfMissingIfTableExists(db, "chat_session_meta", "lifecycle_intent_id", "TEXT");
+  addColumnIfMissingIfTableExists(db, "chat_session_meta", "deletion_intent_id", "TEXT");
+
+  db.exec(`
+    CREATE TABLE chat_session_control_auth_revoke_operations (
+      idempotency_key TEXT PRIMARY KEY CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+      request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+      binding_kind TEXT NOT NULL CHECK(binding_kind IN ('companion_session', 'device_grant')),
+      binding_id TEXT NOT NULL CHECK(length(binding_id) BETWEEN 1 AND 256),
+      actor_id TEXT NOT NULL CHECK(length(actor_id) BETWEEN 1 AND 256),
+      correlation_id TEXT NOT NULL CHECK(length(correlation_id) BETWEEN 1 AND 256),
+      target_count INTEGER NOT NULL CHECK(typeof(target_count) = 'integer' AND target_count >= 0),
+      session_count INTEGER NOT NULL CHECK(typeof(session_count) = 'integer' AND session_count >= 0),
+      event_set_sha256 TEXT NOT NULL CHECK(length(event_set_sha256) = 64 AND event_set_sha256 NOT GLOB '*[^0-9a-f]*'),
+      occurred_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', occurred_at, '+0 days') IS NOT NULL
+          AND strftime('%Y-%m-%dT%H:%M:%fZ', occurred_at, '+0 days') = occurred_at
+      ),
+      FOREIGN KEY(idempotency_key) REFERENCES chat_session_control_auth_revoke_receipts(idempotency_key)
+        DEFERRABLE INITIALLY DEFERRED,
+      CHECK(
+        (target_count = 0 AND session_count = 0
+          AND event_set_sha256 = '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945')
+        OR (target_count > 0 AND session_count BETWEEN 1 AND target_count)
+      )
+    );
+
+    CREATE TABLE chat_session_control_auth_revoke_operation_targets (
+      operation_idempotency_key TEXT NOT NULL,
+      target_index INTEGER NOT NULL CHECK(typeof(target_index) = 'integer' AND target_index >= 0),
+      target_kind TEXT NOT NULL CHECK(target_kind IN ('pending_request', 'current_grant')),
+      workspace_id TEXT NOT NULL CHECK(length(workspace_id) BETWEEN 1 AND 256),
+      session_id TEXT NOT NULL CHECK(length(session_id) BETWEEN 1 AND 256),
+      request_id TEXT,
+      generation INTEGER NOT NULL CHECK(typeof(generation) = 'integer' AND generation > 0),
+      control_revision INTEGER NOT NULL CHECK(typeof(control_revision) = 'integer' AND control_revision > 0),
+      owner_kind TEXT NOT NULL CHECK(owner_kind IN ('operator', 'external_companion')),
+      lease_state TEXT NOT NULL CHECK(lease_state IN ('operator_active', 'external_live', 'external_stale')),
+      event_id TEXT NOT NULL UNIQUE CHECK(length(event_id) BETWEEN 1 AND 256),
+      event_sequence INTEGER NOT NULL CHECK(typeof(event_sequence) = 'integer' AND event_sequence > 0),
+      event_idempotency_key TEXT NOT NULL UNIQUE CHECK(length(event_idempotency_key) BETWEEN 1 AND 512),
+      event_reason_code TEXT NOT NULL CHECK(event_reason_code IN ('auth_revoked', 'mutation_denied', 'request_expired')),
+      PRIMARY KEY(operation_idempotency_key, target_index),
+      UNIQUE(operation_idempotency_key, target_kind, session_id, request_id, generation),
+      FOREIGN KEY(operation_idempotency_key)
+        REFERENCES chat_session_control_auth_revoke_operations(idempotency_key) ON DELETE RESTRICT,
+      CHECK((target_kind = 'pending_request' AND request_id IS NOT NULL)
+        OR (target_kind = 'current_grant' AND owner_kind = 'external_companion'))
+    );
+    CREATE INDEX idx_chat_session_control_auth_revoke_targets_session
+      ON chat_session_control_auth_revoke_operation_targets(operation_idempotency_key, session_id, target_index);
+
+    CREATE TABLE chat_session_lifecycle_intents (
+      intent_id TEXT PRIMARY KEY CHECK(length(intent_id) BETWEEN 1 AND 256),
+      session_incarnation_id TEXT NOT NULL CHECK(length(session_incarnation_id) BETWEEN 1 AND 320),
+      workspace_id TEXT NOT NULL CHECK(length(workspace_id) BETWEEN 1 AND 256),
+      session_id TEXT NOT NULL CHECK(length(session_id) BETWEEN 1 AND 256),
+      intent_kind TEXT NOT NULL CHECK(intent_kind IN ('initialize', 'reactivate', 'delete')),
+      expected_generation INTEGER CHECK(expected_generation IS NULL OR (typeof(expected_generation) = 'integer' AND expected_generation > 0)),
+      next_generation INTEGER NOT NULL CHECK(typeof(next_generation) = 'integer' AND next_generation > 0),
+      expected_revision INTEGER CHECK(expected_revision IS NULL OR (typeof(expected_revision) = 'integer' AND expected_revision > 0)),
+      actor_kind TEXT NOT NULL CHECK(actor_kind IN ('operator', 'system')),
+      actor_id TEXT NOT NULL CHECK(length(actor_id) BETWEEN 1 AND 256),
+      idempotency_key TEXT NOT NULL UNIQUE CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+      request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+      correlation_id TEXT NOT NULL CHECK(length(correlation_id) BETWEEN 1 AND 256),
+      event_id TEXT NOT NULL UNIQUE CHECK(length(event_id) BETWEEN 1 AND 256),
+      created_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') IS NOT NULL
+          AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') = created_at
+      ),
+      UNIQUE(workspace_id, session_id, intent_kind, next_generation),
+      CHECK(
+        (intent_kind = 'initialize' AND expected_generation IS NULL AND next_generation = 1
+          AND expected_revision IS NULL AND actor_kind = 'system')
+        OR (intent_kind = 'reactivate' AND expected_generation IS NOT NULL
+          AND next_generation = expected_generation + 1 AND expected_revision IS NULL)
+        OR (intent_kind = 'delete' AND expected_generation IS NOT NULL
+          AND next_generation = expected_generation AND expected_revision IS NOT NULL)
+      )
+    );
+    CREATE INDEX IF NOT EXISTS idx_chat_session_lifecycle_intents_session
+      ON chat_session_lifecycle_intents(session_id, next_generation, intent_kind);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_session_meta_lifecycle_intent
+      ON chat_session_meta(lifecycle_intent_id) WHERE lifecycle_intent_id IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_session_meta_deletion_intent
+      ON chat_session_meta(deletion_intent_id) WHERE deletion_intent_id IS NOT NULL;
+
+    CREATE TABLE chat_session_mutation_admissions (
+      admission_id TEXT PRIMARY KEY CHECK(length(admission_id) BETWEEN 1 AND 256),
+      session_incarnation_id TEXT NOT NULL CHECK(length(session_incarnation_id) BETWEEN 1 AND 320),
+      workspace_id TEXT NOT NULL CHECK(length(workspace_id) BETWEEN 1 AND 256),
+      session_id TEXT NOT NULL CHECK(length(session_id) BETWEEN 1 AND 256),
+      turn_id TEXT UNIQUE CHECK(turn_id IS NULL OR length(turn_id) BETWEEN 1 AND 256),
+      runtime_owner_id TEXT CHECK(runtime_owner_id IS NULL OR length(runtime_owner_id) BETWEEN 1 AND 256),
+      runtime_last_heartbeat_at TEXT CHECK(
+        runtime_last_heartbeat_at IS NULL OR (
+          strftime('%Y-%m-%dT%H:%M:%fZ', runtime_last_heartbeat_at, '+0 days') IS NOT NULL
+          AND strftime('%Y-%m-%dT%H:%M:%fZ', runtime_last_heartbeat_at, '+0 days') = runtime_last_heartbeat_at
+        )
+      ),
+      runtime_lease_expires_at TEXT CHECK(
+        runtime_lease_expires_at IS NULL OR (
+          strftime('%Y-%m-%dT%H:%M:%fZ', runtime_lease_expires_at, '+0 days') IS NOT NULL
+          AND strftime('%Y-%m-%dT%H:%M:%fZ', runtime_lease_expires_at, '+0 days') = runtime_lease_expires_at
+        )
+      ),
+      runtime_lease_revision INTEGER CHECK(
+        runtime_lease_revision IS NULL OR (typeof(runtime_lease_revision) = 'integer' AND runtime_lease_revision > 0)
+      ),
+      runtime_lease_relinquished_at TEXT CHECK(
+        runtime_lease_relinquished_at IS NULL OR (
+          strftime('%Y-%m-%dT%H:%M:%fZ', runtime_lease_relinquished_at, '+0 days') IS NOT NULL
+          AND strftime('%Y-%m-%dT%H:%M:%fZ', runtime_lease_relinquished_at, '+0 days') = runtime_lease_relinquished_at
+        )
+      ),
+      admission_kind TEXT NOT NULL CHECK(admission_kind IN ('synchronous', 'turn_write')),
+      aggregate_revision INTEGER NOT NULL CHECK(typeof(aggregate_revision) = 'integer' AND aggregate_revision > 0),
+      controller_generation INTEGER NOT NULL CHECK(typeof(controller_generation) = 'integer' AND controller_generation > 0),
+      actor_kind TEXT NOT NULL CHECK(actor_kind IN ('operator', 'external_companion', 'system')),
+      actor_id TEXT NOT NULL CHECK(length(actor_id) BETWEEN 1 AND 256),
+      operation TEXT NOT NULL CHECK(length(operation) BETWEEN 1 AND 128),
+      material_sha256 TEXT NOT NULL CHECK(length(material_sha256) = 64 AND material_sha256 NOT GLOB '*[^0-9a-f]*'),
+      status TEXT NOT NULL CHECK(status IN ('active', 'completed', 'cancelled')),
+      idempotency_key TEXT NOT NULL UNIQUE CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+      request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+      correlation_id TEXT NOT NULL CHECK(length(correlation_id) BETWEEN 1 AND 256),
+      admit_event_id TEXT NOT NULL UNIQUE CHECK(length(admit_event_id) BETWEEN 1 AND 256),
+      created_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') IS NOT NULL
+          AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') = created_at
+      ),
+      closed_at TEXT CHECK(
+        closed_at IS NULL OR (
+          strftime('%Y-%m-%dT%H:%M:%fZ', closed_at, '+0 days') IS NOT NULL
+            AND strftime('%Y-%m-%dT%H:%M:%fZ', closed_at, '+0 days') = closed_at
+        )
+      ),
+      terminal_actor_id TEXT,
+      terminal_event_id TEXT UNIQUE,
+      terminal_idempotency_key TEXT UNIQUE,
+      terminal_correlation_id TEXT,
+      terminal_authority_kind TEXT CHECK(terminal_authority_kind IS NULL OR terminal_authority_kind IN (
+        'synchronous', 'request_runtime', 'durable_run', 'durable_terminal', 'expired_recovery',
+        'lifecycle_delete', 'authority_superseded', 'post_commit_child_stage'
+      )),
+      terminal_runtime_owner_id TEXT CHECK(
+        terminal_runtime_owner_id IS NULL OR length(terminal_runtime_owner_id) BETWEEN 1 AND 256
+      ),
+      terminal_runtime_lease_revision INTEGER CHECK(
+        terminal_runtime_lease_revision IS NULL
+          OR (typeof(terminal_runtime_lease_revision) = 'integer' AND terminal_runtime_lease_revision > 0)
+      ),
+      terminal_durable_run_id TEXT CHECK(
+        terminal_durable_run_id IS NULL OR length(terminal_durable_run_id) BETWEEN 1 AND 256
+      ),
+      terminal_durable_lease_owner_id TEXT CHECK(
+        terminal_durable_lease_owner_id IS NULL OR length(terminal_durable_lease_owner_id) BETWEEN 1 AND 256
+      ),
+      terminal_durable_attempt_count INTEGER CHECK(
+        terminal_durable_attempt_count IS NULL
+          OR (typeof(terminal_durable_attempt_count) = 'integer' AND terminal_durable_attempt_count >= 0)
+      ),
+      terminal_durable_run_version INTEGER CHECK(
+        terminal_durable_run_version IS NULL
+          OR (typeof(terminal_durable_run_version) = 'integer' AND terminal_durable_run_version > 0)
+      ),
+      terminal_durable_run_status TEXT CHECK(
+        terminal_durable_run_status IS NULL OR terminal_durable_run_status IN (
+          'running', 'completed', 'failed', 'cancelled', 'dead_lettered'
+        )
+      ),
+      terminal_lifecycle_intent_id TEXT CHECK(
+        terminal_lifecycle_intent_id IS NULL OR length(terminal_lifecycle_intent_id) BETWEEN 1 AND 256
+      ),
+      terminal_control_event_id TEXT CHECK(
+        terminal_control_event_id IS NULL OR length(terminal_control_event_id) BETWEEN 1 AND 256
+      ),
+      CHECK(
+        (status = 'active' AND closed_at IS NULL AND terminal_actor_id IS NULL AND terminal_event_id IS NULL
+          AND terminal_idempotency_key IS NULL AND terminal_correlation_id IS NULL)
+        OR (status IN ('completed', 'cancelled') AND closed_at IS NOT NULL
+          AND length(terminal_actor_id) BETWEEN 1 AND 256 AND length(terminal_event_id) BETWEEN 1 AND 256
+          AND length(terminal_idempotency_key) BETWEEN 1 AND 512
+          AND length(terminal_correlation_id) BETWEEN 1 AND 256)
+      ),
+      CHECK((admission_kind = 'turn_write' AND turn_id IS NOT NULL
+          AND runtime_owner_id IS NOT NULL AND runtime_last_heartbeat_at IS NOT NULL
+          AND runtime_lease_expires_at IS NOT NULL AND runtime_lease_revision IS NOT NULL
+          AND runtime_lease_expires_at > runtime_last_heartbeat_at)
+        OR (admission_kind = 'synchronous' AND turn_id IS NULL
+          AND runtime_owner_id IS NULL AND runtime_last_heartbeat_at IS NULL
+          AND runtime_lease_expires_at IS NULL AND runtime_lease_revision IS NULL
+          AND runtime_lease_relinquished_at IS NULL)),
+      CHECK(
+        (status = 'active' AND terminal_authority_kind IS NULL
+          AND terminal_runtime_owner_id IS NULL AND terminal_runtime_lease_revision IS NULL
+          AND terminal_durable_run_id IS NULL AND terminal_durable_lease_owner_id IS NULL
+          AND terminal_durable_attempt_count IS NULL AND terminal_durable_run_version IS NULL
+          AND terminal_durable_run_status IS NULL AND terminal_lifecycle_intent_id IS NULL
+          AND terminal_control_event_id IS NULL)
+        OR (status IN ('completed', 'cancelled') AND (
+          (terminal_authority_kind = 'synchronous'
+            AND terminal_runtime_owner_id IS NULL AND terminal_runtime_lease_revision IS NULL
+            AND terminal_durable_run_id IS NULL AND terminal_durable_lease_owner_id IS NULL
+            AND terminal_durable_attempt_count IS NULL AND terminal_durable_run_version IS NULL
+            AND terminal_durable_run_status IS NULL AND terminal_lifecycle_intent_id IS NULL
+            AND terminal_control_event_id IS NULL)
+          OR (terminal_authority_kind IN ('request_runtime', 'expired_recovery')
+            AND terminal_runtime_owner_id IS NOT NULL AND terminal_runtime_lease_revision IS NOT NULL
+            AND terminal_durable_run_id IS NULL AND terminal_durable_lease_owner_id IS NULL
+            AND terminal_durable_attempt_count IS NULL AND terminal_durable_run_version IS NULL
+            AND terminal_durable_run_status IS NULL AND terminal_lifecycle_intent_id IS NULL
+            AND terminal_control_event_id IS NULL)
+          OR (terminal_authority_kind = 'durable_run'
+            AND terminal_runtime_owner_id IS NULL AND terminal_runtime_lease_revision IS NULL
+            AND terminal_durable_run_id IS NOT NULL AND terminal_durable_lease_owner_id IS NOT NULL
+            AND terminal_durable_attempt_count IS NOT NULL AND terminal_durable_run_version IS NOT NULL
+            AND terminal_durable_run_status = 'running' AND terminal_lifecycle_intent_id IS NULL
+            AND terminal_control_event_id IS NULL)
+          OR (terminal_authority_kind = 'durable_terminal'
+            AND terminal_runtime_owner_id IS NULL AND terminal_runtime_lease_revision IS NULL
+            AND terminal_durable_run_id IS NOT NULL AND terminal_durable_lease_owner_id IS NULL
+            AND terminal_durable_attempt_count IS NULL AND terminal_durable_run_version IS NOT NULL
+            AND terminal_durable_run_status IN ('completed', 'failed', 'cancelled', 'dead_lettered')
+            AND terminal_lifecycle_intent_id IS NULL AND terminal_control_event_id IS NULL)
+          OR (terminal_authority_kind = 'lifecycle_delete'
+            AND terminal_runtime_owner_id IS NULL AND terminal_runtime_lease_revision IS NULL
+            AND terminal_durable_run_id IS NULL AND terminal_durable_lease_owner_id IS NULL
+            AND terminal_durable_attempt_count IS NULL AND terminal_durable_run_version IS NULL
+            AND terminal_durable_run_status IS NULL AND terminal_lifecycle_intent_id IS NOT NULL
+            AND terminal_control_event_id IS NULL)
+          OR (terminal_authority_kind = 'authority_superseded'
+            AND terminal_runtime_owner_id IS NULL AND terminal_runtime_lease_revision IS NULL
+            AND terminal_durable_run_id IS NULL AND terminal_durable_lease_owner_id IS NULL
+            AND terminal_durable_attempt_count IS NULL AND terminal_durable_run_version IS NULL
+            AND terminal_durable_run_status IS NULL AND terminal_lifecycle_intent_id IS NULL
+            AND terminal_control_event_id IS NOT NULL)
+          OR (terminal_authority_kind = 'post_commit_child_stage'
+            AND terminal_runtime_owner_id IS NULL AND terminal_runtime_lease_revision IS NULL
+            AND terminal_durable_run_id IS NOT NULL AND terminal_durable_lease_owner_id IS NOT NULL
+            AND terminal_durable_attempt_count IS NOT NULL AND terminal_durable_run_version IS NOT NULL
+            AND terminal_durable_run_status = 'running' AND terminal_lifecycle_intent_id IS NULL
+            AND terminal_control_event_id IS NULL)
+        ))
+      )
+    );
+    CREATE UNIQUE INDEX idx_chat_session_mutation_admissions_one_active_turn
+      ON chat_session_mutation_admissions(session_id)
+      WHERE admission_kind = 'turn_write' AND status = 'active';
+    CREATE INDEX idx_chat_session_mutation_admissions_active
+      ON chat_session_mutation_admissions(workspace_id, session_id, status, created_at, admission_id);
+
+    CREATE TABLE chat_session_mutation_admission_events (
+      event_id TEXT PRIMARY KEY CHECK(length(event_id) BETWEEN 1 AND 256),
+      admission_id TEXT NOT NULL,
+      session_incarnation_id TEXT NOT NULL CHECK(length(session_incarnation_id) BETWEEN 1 AND 320),
+      workspace_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      turn_id TEXT CHECK(turn_id IS NULL OR length(turn_id) BETWEEN 1 AND 256),
+      runtime_owner_id TEXT CHECK(runtime_owner_id IS NULL OR length(runtime_owner_id) BETWEEN 1 AND 256),
+      runtime_lease_revision INTEGER CHECK(
+        runtime_lease_revision IS NULL OR (typeof(runtime_lease_revision) = 'integer' AND runtime_lease_revision > 0)
+      ),
+      event_sequence INTEGER NOT NULL CHECK(event_sequence IN (1, 2)),
+      event_type TEXT NOT NULL CHECK(event_type IN ('admitted', 'completed', 'cancelled')),
+      admission_kind TEXT NOT NULL CHECK(admission_kind IN ('synchronous', 'turn_write')),
+      aggregate_revision INTEGER NOT NULL CHECK(typeof(aggregate_revision) = 'integer' AND aggregate_revision > 0),
+      controller_generation INTEGER NOT NULL CHECK(typeof(controller_generation) = 'integer' AND controller_generation > 0),
+      actor_kind TEXT NOT NULL CHECK(actor_kind IN ('operator', 'external_companion', 'system')),
+      actor_id TEXT NOT NULL CHECK(length(actor_id) BETWEEN 1 AND 256),
+      operation TEXT NOT NULL CHECK(length(operation) BETWEEN 1 AND 128),
+      material_sha256 TEXT NOT NULL CHECK(length(material_sha256) = 64 AND material_sha256 NOT GLOB '*[^0-9a-f]*'),
+      idempotency_key TEXT NOT NULL UNIQUE CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+      request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+      correlation_id TEXT NOT NULL CHECK(length(correlation_id) BETWEEN 1 AND 256),
+      terminal_authority_kind TEXT,
+      terminal_runtime_owner_id TEXT,
+      terminal_runtime_lease_revision INTEGER,
+      terminal_durable_run_id TEXT,
+      terminal_durable_lease_owner_id TEXT,
+      terminal_durable_attempt_count INTEGER,
+      terminal_durable_run_version INTEGER,
+      terminal_durable_run_status TEXT,
+      terminal_lifecycle_intent_id TEXT,
+      terminal_control_event_id TEXT,
+      created_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') IS NOT NULL
+          AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') = created_at
+      ),
+      UNIQUE(admission_id, event_sequence),
+      FOREIGN KEY(admission_id) REFERENCES chat_session_mutation_admissions(admission_id) ON DELETE RESTRICT
+    );
+    CREATE INDEX idx_chat_session_mutation_admission_events_admission
+      ON chat_session_mutation_admission_events(admission_id, event_sequence);
+  `);
+
+  createChatTurnSessionIncarnationBindingSchema(db);
+  createSessionControlLifecycleAndAdmissionTriggers(db);
+  replaceSessionControlAuthRevokeGuards(db);
+}
+
+function createChatTurnSessionIncarnationBindingSchema(db: DatabaseSync): void {
+  if (!tableExists(db, "chat_turn_capability_profiles")) {
+    return;
+  }
+  if (tableExists(db, "chat_routed_context_snapshots")) {
+    db.exec(`
+      CREATE TEMP TABLE gc_chat_turn_profile_snapshot_preflight (
+        ok INTEGER NOT NULL CHECK(ok = 1)
+      );
+      INSERT INTO gc_chat_turn_profile_snapshot_preflight(ok)
+      SELECT CASE WHEN EXISTS (
+        SELECT 1
+        FROM chat_routed_context_snapshots snapshot
+        LEFT JOIN chat_turn_capability_profiles profile
+          ON profile.profile_id = snapshot.capability_profile_id
+        WHERE profile.profile_id IS NULL
+          OR profile.turn_id <> snapshot.turn_id
+          OR profile.session_id <> snapshot.session_id
+          OR profile.workspace_id <> snapshot.workspace_id
+          OR profile.profile_hash <> snapshot.capability_profile_hash
+      ) THEN 0 ELSE 1 END;
+      DROP TABLE gc_chat_turn_profile_snapshot_preflight;
+    `);
+  }
+  db.exec(`
+    CREATE TABLE chat_turn_session_incarnation_bindings (
+      turn_id TEXT PRIMARY KEY CHECK(length(turn_id) BETWEEN 1 AND 256),
+      workspace_id TEXT NOT NULL CHECK(length(workspace_id) BETWEEN 1 AND 256),
+      session_id TEXT NOT NULL CHECK(length(session_id) BETWEEN 1 AND 256),
+      session_incarnation_id TEXT NOT NULL CHECK(length(session_incarnation_id) BETWEEN 1 AND 320),
+      admission_id TEXT UNIQUE,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(admission_id) REFERENCES chat_session_mutation_admissions(admission_id)
+        ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED,
+      CHECK(admission_id IS NOT NULL
+        OR session_incarnation_id = 'legacy-session-incarnation:' || session_id)
+    );
+    CREATE INDEX idx_chat_turn_session_incarnation_bindings_session
+      ON chat_turn_session_incarnation_bindings(workspace_id, session_id, session_incarnation_id, turn_id);
+
+    INSERT INTO chat_turn_session_incarnation_bindings (
+      turn_id, workspace_id, session_id, session_incarnation_id, admission_id, created_at
+    )
+    SELECT turn_id, workspace_id, session_id,
+      'legacy-session-incarnation:' || session_id, NULL, created_at
+    FROM chat_turn_capability_profiles;
+
+    CREATE TABLE chat_turn_capability_profile_incarnation_bindings (
+      profile_id TEXT PRIMARY KEY CHECK(length(profile_id) BETWEEN 1 AND 256),
+      turn_id TEXT NOT NULL UNIQUE CHECK(length(turn_id) BETWEEN 1 AND 256),
+      profile_hash TEXT NOT NULL CHECK(
+        length(profile_hash) = 64 AND profile_hash NOT GLOB '*[^0-9a-f]*'
+      ),
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(turn_id) REFERENCES chat_turn_session_incarnation_bindings(turn_id)
+        ON DELETE RESTRICT,
+      FOREIGN KEY(profile_id) REFERENCES chat_turn_capability_profiles(profile_id)
+        ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED
+    );
+
+    INSERT INTO chat_turn_capability_profile_incarnation_bindings (
+      profile_id, turn_id, profile_hash, created_at
+    )
+    SELECT profile_id, turn_id, profile_hash, created_at
+    FROM chat_turn_capability_profiles;
+
+    CREATE TABLE chat_turn_mutation_admission_durable_bindings (
+      admission_id TEXT PRIMARY KEY CHECK(length(admission_id) BETWEEN 1 AND 256),
+      turn_id TEXT NOT NULL UNIQUE CHECK(length(turn_id) BETWEEN 1 AND 256),
+      workspace_id TEXT NOT NULL CHECK(length(workspace_id) BETWEEN 1 AND 256),
+      session_id TEXT NOT NULL CHECK(length(session_id) BETWEEN 1 AND 256),
+      session_incarnation_id TEXT NOT NULL CHECK(length(session_incarnation_id) BETWEEN 1 AND 320),
+      durable_run_id TEXT NOT NULL UNIQUE CHECK(length(durable_run_id) BETWEEN 1 AND 256),
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(admission_id) REFERENCES chat_session_mutation_admissions(admission_id) ON DELETE RESTRICT,
+      FOREIGN KEY(turn_id) REFERENCES chat_turn_session_incarnation_bindings(turn_id) ON DELETE RESTRICT,
+      FOREIGN KEY(durable_run_id) REFERENCES durable_runs(run_id)
+        ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED
+    );
+
+    CREATE TABLE chat_turn_user_input_continuation_seals (
+      seal_id TEXT PRIMARY KEY CHECK(length(seal_id) BETWEEN 1 AND 256),
+      version INTEGER NOT NULL CHECK(version = 1),
+      admission_id TEXT NOT NULL CHECK(length(admission_id) BETWEEN 1 AND 256),
+      session_incarnation_id TEXT NOT NULL CHECK(length(session_incarnation_id) BETWEEN 1 AND 320),
+      workspace_id TEXT NOT NULL CHECK(length(workspace_id) BETWEEN 1 AND 256),
+      session_id TEXT NOT NULL CHECK(length(session_id) BETWEEN 1 AND 256),
+      turn_id TEXT NOT NULL CHECK(length(turn_id) BETWEEN 1 AND 256),
+      durable_run_id TEXT NOT NULL CHECK(length(durable_run_id) BETWEEN 1 AND 256),
+      prompt_id TEXT NOT NULL CHECK(length(prompt_id) BETWEEN 1 AND 256),
+      event_key TEXT NOT NULL CHECK(event_key = 'chat.user_input.resolved'),
+      correlation_id TEXT NOT NULL CHECK(length(correlation_id) BETWEEN 1 AND 256),
+      resume_record_sha256 TEXT NOT NULL CHECK(
+        length(resume_record_sha256) = 64 AND resume_record_sha256 NOT GLOB '*[^0-9a-f]*'
+      ),
+      responder_actor_id TEXT NOT NULL CHECK(length(responder_actor_id) BETWEEN 1 AND 256),
+      responder_auth_actor_source TEXT NOT NULL CHECK(responder_auth_actor_source IN (
+        'none', 'token', 'basic', 'loopback', 'sse', 'device', 'companion', 'a2a_peer'
+      )),
+      waiting_run_version INTEGER NOT NULL CHECK(waiting_run_version > 0),
+      queued_run_version INTEGER NOT NULL CHECK(queued_run_version = waiting_run_version + 1),
+      resolved_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', resolved_at, '+0 days') IS NOT NULL
+          AND strftime('%Y-%m-%dT%H:%M:%fZ', resolved_at, '+0 days') = resolved_at
+      ),
+      material_sha256 TEXT NOT NULL CHECK(
+        length(material_sha256) = 64 AND material_sha256 NOT GLOB '*[^0-9a-f]*'
+      ),
+      UNIQUE(admission_id, durable_run_id, prompt_id),
+      UNIQUE(durable_run_id, prompt_id),
+      CHECK(correlation_id = prompt_id),
+      FOREIGN KEY(admission_id) REFERENCES chat_session_mutation_admissions(admission_id) ON DELETE RESTRICT,
+      FOREIGN KEY(turn_id) REFERENCES chat_turn_session_incarnation_bindings(turn_id) ON DELETE RESTRICT,
+      FOREIGN KEY(durable_run_id) REFERENCES durable_runs(run_id) ON DELETE RESTRICT
+    );
+    CREATE INDEX idx_chat_turn_user_input_continuation_seals_run
+      ON chat_turn_user_input_continuation_seals(durable_run_id, prompt_id);
+
+    CREATE TRIGGER trg_chat_turn_session_incarnation_bindings_insert_guard
+    BEFORE INSERT ON chat_turn_session_incarnation_bindings
+    WHEN NEW.admission_id IS NULL OR NOT EXISTS (
+      SELECT 1 FROM chat_session_mutation_admissions admission
+      WHERE admission.admission_id = NEW.admission_id AND admission.status = 'active'
+        AND admission.admission_kind = 'turn_write'
+        AND admission.turn_id = NEW.turn_id
+        AND admission.workspace_id = NEW.workspace_id AND admission.session_id = NEW.session_id
+        AND admission.session_incarnation_id = NEW.session_incarnation_id
+    )
+    BEGIN SELECT RAISE(ABORT, 'chat turn session incarnation authority invariant violated'); END;
+
+    CREATE TRIGGER trg_chat_turn_session_incarnation_bindings_no_update
+    BEFORE UPDATE ON chat_turn_session_incarnation_bindings
+    BEGIN SELECT RAISE(ABORT, 'chat turn session incarnation bindings are append-only'); END;
+    CREATE TRIGGER trg_chat_turn_session_incarnation_bindings_no_delete
+    BEFORE DELETE ON chat_turn_session_incarnation_bindings
+    BEGIN SELECT RAISE(ABORT, 'chat turn session incarnation bindings are append-only'); END;
+
+    CREATE TRIGGER trg_chat_turn_mutation_admission_durable_bindings_insert_guard
+    BEFORE INSERT ON chat_turn_mutation_admission_durable_bindings
+    WHEN NOT EXISTS (
+      SELECT 1
+      FROM chat_session_mutation_admissions admission
+      JOIN chat_turn_session_incarnation_bindings binding
+        ON binding.admission_id = admission.admission_id AND binding.turn_id = admission.turn_id
+      JOIN durable_runs run ON run.run_id = NEW.durable_run_id
+      WHERE admission.admission_id = NEW.admission_id
+        AND admission.status = 'active' AND admission.admission_kind = 'turn_write'
+        AND admission.runtime_lease_relinquished_at IS NULL
+        AND julianday(admission.runtime_lease_expires_at) > julianday('now')
+        AND admission.turn_id = NEW.turn_id
+        AND admission.workspace_id = NEW.workspace_id AND admission.session_id = NEW.session_id
+        AND admission.session_incarnation_id = NEW.session_incarnation_id
+        AND binding.workspace_id = NEW.workspace_id AND binding.session_id = NEW.session_id
+        AND binding.session_incarnation_id = NEW.session_incarnation_id
+        AND run.workflow_key = 'chat.turn.execute'
+        AND run.status IN ('queued', 'running', 'waiting', 'paused')
+        AND json_valid(run.payload_json) = 1
+        AND json_extract(run.payload_json, '$.version') = 'chat.turn.execute.v2'
+        AND json_extract(run.payload_json, '$.admissionId') = admission.admission_id
+        AND json_extract(run.payload_json, '$.sessionIncarnationId') = admission.session_incarnation_id
+        AND json_extract(run.payload_json, '$.admissionMaterialSha256') = admission.material_sha256
+        AND json_extract(run.payload_json, '$.workspaceId') = admission.workspace_id
+        AND json_type(run.payload_json, '$.admissionAggregateRevision') = 'integer'
+        AND json_extract(run.payload_json, '$.admissionAggregateRevision') = admission.aggregate_revision
+        AND json_type(run.payload_json, '$.admissionControllerGeneration') = 'integer'
+        AND json_extract(run.payload_json, '$.admissionControllerGeneration') = admission.controller_generation
+        AND json_extract(run.payload_json, '$.sessionId') = admission.session_id
+        AND json_extract(run.payload_json, '$.turnId') = admission.turn_id
+    )
+    BEGIN SELECT RAISE(ABORT, 'chat turn durable admission binding authority invariant violated'); END;
+
+    CREATE TRIGGER trg_chat_turn_mutation_admission_durable_bindings_no_update
+    BEFORE UPDATE ON chat_turn_mutation_admission_durable_bindings
+    BEGIN SELECT RAISE(ABORT, 'chat turn durable admission bindings are append-only'); END;
+    CREATE TRIGGER trg_chat_turn_mutation_admission_durable_bindings_no_delete
+    BEFORE DELETE ON chat_turn_mutation_admission_durable_bindings
+    BEGIN SELECT RAISE(ABORT, 'chat turn durable admission bindings are append-only'); END;
+
+    CREATE TRIGGER trg_chat_turn_user_input_continuation_seals_insert_guard
+    BEFORE INSERT ON chat_turn_user_input_continuation_seals
+    WHEN abs(julianday(NEW.resolved_at) - julianday('now')) * 86400.0 > 1.0
+      OR NOT EXISTS (
+        SELECT 1
+        FROM chat_session_mutation_admissions admission
+        JOIN chat_turn_mutation_admission_durable_bindings durable_binding
+          ON durable_binding.admission_id = admission.admission_id
+        JOIN durable_runs run ON run.run_id = durable_binding.durable_run_id
+        JOIN chat_turn_traces trace ON trace.turn_id = admission.turn_id
+        WHERE admission.admission_id = NEW.admission_id
+          AND admission.status = 'active' AND admission.admission_kind = 'turn_write'
+          AND admission.session_incarnation_id = NEW.session_incarnation_id
+          AND admission.workspace_id = NEW.workspace_id
+          AND admission.session_id = NEW.session_id
+          AND admission.turn_id = NEW.turn_id
+          AND durable_binding.durable_run_id = NEW.durable_run_id
+          AND run.workflow_key = 'chat.turn.execute' AND run.status = 'waiting'
+          AND run.version = NEW.waiting_run_version
+          AND trace.session_id = NEW.session_id AND trace.status = 'waiting_for_user_input'
+          AND json_valid(trace.pending_user_input_json) = 1
+          AND json_extract(trace.pending_user_input_json, '$.promptId') = NEW.prompt_id
+          AND json_extract(trace.pending_user_input_json, '$.turnId') = NEW.turn_id
+      )
+    BEGIN SELECT RAISE(ABORT, 'chat turn user-input continuation seal authority invariant violated'); END;
+    CREATE TRIGGER trg_chat_turn_user_input_continuation_seals_no_update
+    BEFORE UPDATE ON chat_turn_user_input_continuation_seals
+    BEGIN SELECT RAISE(ABORT, 'chat turn user-input continuation seals are append-only'); END;
+    CREATE TRIGGER trg_chat_turn_user_input_continuation_seals_no_delete
+    BEFORE DELETE ON chat_turn_user_input_continuation_seals
+    BEGIN SELECT RAISE(ABORT, 'chat turn user-input continuation seals are append-only'); END;
+
+    CREATE TRIGGER trg_chat_turn_capability_profile_incarnation_bindings_insert_guard
+    BEFORE INSERT ON chat_turn_capability_profile_incarnation_bindings
+    WHEN NOT EXISTS (
+      SELECT 1
+      FROM chat_turn_session_incarnation_bindings binding
+      JOIN chat_session_mutation_admissions admission
+        ON admission.admission_id = binding.admission_id
+      WHERE binding.turn_id = NEW.turn_id
+        AND admission.status = 'active' AND admission.admission_kind = 'turn_write'
+        AND admission.turn_id = NEW.turn_id
+        AND admission.workspace_id = binding.workspace_id
+        AND admission.session_id = binding.session_id
+        AND admission.session_incarnation_id = binding.session_incarnation_id
+    )
+    BEGIN SELECT RAISE(ABORT, 'chat turn capability profile binding authority invariant violated'); END;
+
+    CREATE TRIGGER trg_chat_turn_capability_profile_incarnation_bindings_no_update
+    BEFORE UPDATE ON chat_turn_capability_profile_incarnation_bindings
+    BEGIN SELECT RAISE(ABORT, 'chat turn capability profile incarnation bindings are append-only'); END;
+    CREATE TRIGGER trg_chat_turn_capability_profile_incarnation_bindings_no_delete
+    BEFORE DELETE ON chat_turn_capability_profile_incarnation_bindings
+    BEGIN SELECT RAISE(ABORT, 'chat turn capability profile incarnation bindings are append-only'); END;
+
+    CREATE TRIGGER trg_chat_turn_capability_profiles_incarnation_insert_guard
+    BEFORE INSERT ON chat_turn_capability_profiles
+    WHEN NOT EXISTS (
+      SELECT 1
+      FROM chat_turn_capability_profile_incarnation_bindings profile_binding
+      JOIN chat_turn_session_incarnation_bindings binding
+        ON binding.turn_id = profile_binding.turn_id
+      JOIN chat_session_mutation_admissions admission
+        ON admission.admission_id = binding.admission_id
+      WHERE binding.turn_id = NEW.turn_id
+        AND profile_binding.profile_id = NEW.profile_id
+        AND profile_binding.profile_hash = NEW.profile_hash
+        AND profile_binding.created_at = NEW.created_at
+        AND binding.workspace_id = NEW.workspace_id AND binding.session_id = NEW.session_id
+        AND admission.status = 'active' AND admission.admission_kind = 'turn_write'
+        AND admission.turn_id = NEW.turn_id
+        AND admission.workspace_id = binding.workspace_id
+        AND admission.session_id = binding.session_id
+        AND admission.session_incarnation_id = binding.session_incarnation_id
+    )
+    BEGIN SELECT RAISE(ABORT, 'chat turn capability profile requires a frozen session incarnation'); END;
+  `);
+
+  if (tableExists(db, "chat_routed_context_snapshots")) {
+    db.exec(`
+      CREATE TRIGGER trg_chat_routed_context_snapshots_incarnation_insert_guard
+      BEFORE INSERT ON chat_routed_context_snapshots
+      WHEN NOT EXISTS (
+        SELECT 1
+        FROM chat_turn_capability_profiles profile
+        JOIN chat_turn_capability_profile_incarnation_bindings profile_binding
+          ON profile_binding.profile_id = profile.profile_id AND profile_binding.turn_id = profile.turn_id
+        JOIN chat_turn_session_incarnation_bindings binding
+          ON binding.turn_id = profile.turn_id
+        JOIN chat_session_mutation_admissions admission
+          ON admission.admission_id = binding.admission_id
+        WHERE profile.profile_id = NEW.capability_profile_id
+          AND profile.profile_hash = NEW.capability_profile_hash
+          AND profile.turn_id = NEW.turn_id AND profile.session_id = NEW.session_id
+          AND profile.workspace_id = NEW.workspace_id
+          AND profile_binding.profile_hash = NEW.capability_profile_hash
+          AND binding.session_id = NEW.session_id AND binding.workspace_id = NEW.workspace_id
+          AND admission.status = 'active' AND admission.admission_kind = 'turn_write'
+          AND admission.turn_id = NEW.turn_id
+          AND admission.workspace_id = binding.workspace_id
+          AND admission.session_id = binding.session_id
+          AND admission.session_incarnation_id = binding.session_incarnation_id
+      )
+      BEGIN SELECT RAISE(ABORT, 'chat routed context snapshot requires an exact incarnation-bound profile'); END;
+    `);
+  }
+}
+
+function createSessionControlLifecycleAndAdmissionTriggers(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TRIGGER trg_chat_session_control_auth_revoke_operations_insert_guard
+    BEFORE INSERT ON chat_session_control_auth_revoke_operations
+    WHEN julianday(NEW.occurred_at) IS NULL
+      OR abs((julianday(NEW.occurred_at) - julianday('now')) * 86400.0) > 1.0
+      OR EXISTS (
+        SELECT 1 FROM chat_session_control_auth_revoke_receipts receipt
+        WHERE receipt.idempotency_key = NEW.idempotency_key
+      )
+      OR EXISTS (
+        SELECT 1 FROM chat_session_control_events event_row
+        WHERE event_row.request_sha256 = NEW.request_sha256
+           OR event_row.idempotency_key = NEW.idempotency_key
+      )
+    BEGIN SELECT RAISE(ABORT, 'session control auth revoke operation invariant violated'); END;
+    CREATE TRIGGER trg_chat_session_control_auth_revoke_operations_no_update
+    BEFORE UPDATE ON chat_session_control_auth_revoke_operations
+    BEGIN SELECT RAISE(ABORT, 'session control auth revoke operations are immutable'); END;
+    CREATE TRIGGER trg_chat_session_control_auth_revoke_operations_no_delete
+    BEFORE DELETE ON chat_session_control_auth_revoke_operations
+    BEGIN SELECT RAISE(ABORT, 'session control auth revoke operations are immutable'); END;
+
+    CREATE TRIGGER trg_chat_session_control_auth_revoke_targets_insert_guard
+    BEFORE INSERT ON chat_session_control_auth_revoke_operation_targets
+    WHEN NOT EXISTS (
+      SELECT 1
+      FROM chat_session_control_auth_revoke_operations operation
+      WHERE operation.idempotency_key = NEW.operation_idempotency_key
+        AND NOT EXISTS (
+          SELECT 1 FROM chat_session_control_auth_revoke_receipts receipt
+          WHERE receipt.idempotency_key = operation.idempotency_key
+        )
+        AND NEW.target_index < operation.target_count
+        AND NEW.event_sequence = 1 + COALESCE((
+          SELECT MAX(event_sequence) FROM chat_session_control_events event_row
+          WHERE event_row.session_id = NEW.session_id
+        ), 0) + (
+          SELECT COUNT(*) FROM chat_session_control_auth_revoke_operation_targets prior_target
+          WHERE prior_target.operation_idempotency_key = NEW.operation_idempotency_key
+            AND prior_target.session_id = NEW.session_id
+        )
+        AND (
+          (NEW.target_kind = 'pending_request'
+            AND NEW.event_reason_code IN ('mutation_denied', 'request_expired')
+            AND EXISTS (
+              SELECT 1
+              FROM chat_session_control_requests request_row
+              JOIN chat_session_control_grants control
+                ON control.session_id = request_row.session_id AND control.is_current = 1
+              WHERE request_row.request_id = NEW.request_id
+                AND request_row.status = 'pending'
+                AND request_row.workspace_id = NEW.workspace_id
+                AND request_row.session_id = NEW.session_id
+                AND control.workspace_id = NEW.workspace_id
+                AND control.generation = NEW.generation
+                AND control.control_revision = NEW.control_revision
+                AND control.owner_kind = NEW.owner_kind
+                AND control.lease_state = NEW.lease_state
+                AND ((operation.binding_kind = 'companion_session'
+                      AND request_row.companion_session_id = operation.binding_id)
+                  OR (operation.binding_kind = 'device_grant'
+                      AND request_row.device_grant_id = operation.binding_id))
+                AND ((request_row.expires_at <= operation.occurred_at
+                      AND NEW.event_reason_code = 'request_expired')
+                  OR (request_row.expires_at > operation.occurred_at
+                      AND NEW.event_reason_code = 'mutation_denied'))
+            ))
+          OR (NEW.target_kind = 'current_grant' AND NEW.event_reason_code = 'auth_revoked'
+            AND EXISTS (
+              SELECT 1 FROM chat_session_control_grants control
+              WHERE control.session_id = NEW.session_id AND control.workspace_id = NEW.workspace_id
+                AND control.generation = NEW.generation AND control.control_revision = NEW.control_revision
+                AND control.is_current = 1 AND control.owner_kind = 'external_companion'
+                AND control.lease_state = NEW.lease_state
+                AND control.request_id = NEW.request_id
+                AND ((operation.binding_kind = 'companion_session'
+                      AND control.companion_session_id = operation.binding_id)
+                  OR (operation.binding_kind = 'device_grant'
+                      AND control.device_grant_id = operation.binding_id))
+            ))
+        )
+    )
+    BEGIN SELECT RAISE(ABORT, 'session control auth revoke target invariant violated'); END;
+    CREATE TRIGGER trg_chat_session_control_auth_revoke_targets_no_update
+    BEFORE UPDATE ON chat_session_control_auth_revoke_operation_targets
+    BEGIN SELECT RAISE(ABORT, 'session control auth revoke operation targets are immutable'); END;
+    CREATE TRIGGER trg_chat_session_control_auth_revoke_targets_no_delete
+    BEFORE DELETE ON chat_session_control_auth_revoke_operation_targets
+    BEGIN SELECT RAISE(ABORT, 'session control auth revoke operation targets are immutable'); END;
+
+    CREATE TRIGGER trg_chat_session_lifecycle_intents_insert_guard
+    BEFORE INSERT ON chat_session_lifecycle_intents
+    WHEN julianday(NEW.created_at) IS NULL
+      OR abs((julianday(NEW.created_at) - julianday('now')) * 86400.0) > 1.0
+      OR (NEW.intent_kind IN ('initialize', 'reactivate') AND NEW.session_incarnation_id <> NEW.intent_id)
+      OR (NEW.intent_kind = 'delete' AND NOT EXISTS (
+        SELECT 1 FROM chat_session_meta meta
+        JOIN chat_session_control_grants control
+          ON control.session_id = meta.session_id AND control.is_current = 1
+        WHERE meta.session_id = NEW.session_id AND meta.workspace_id = NEW.workspace_id
+          AND meta.revision = NEW.expected_revision AND meta.deletion_intent_id IS NULL
+          AND NEW.session_incarnation_id = COALESCE(meta.lifecycle_intent_id, 'legacy-session-incarnation:' || meta.session_id)
+          AND control.workspace_id = NEW.workspace_id AND control.generation = NEW.expected_generation
+          AND control.owner_kind = 'operator' AND control.lease_state = 'operator_active'
+      ))
+      OR EXISTS (SELECT 1 FROM chat_session_control_events WHERE idempotency_key = NEW.idempotency_key)
+    BEGIN SELECT RAISE(ABORT, 'chat session lifecycle intent invariant violated'); END;
+    CREATE TRIGGER trg_chat_session_lifecycle_intents_no_update
+    BEFORE UPDATE ON chat_session_lifecycle_intents
+    BEGIN SELECT RAISE(ABORT, 'chat session lifecycle intents are immutable'); END;
+    CREATE TRIGGER trg_chat_session_lifecycle_intents_no_delete
+    BEFORE DELETE ON chat_session_lifecycle_intents
+    BEGIN SELECT RAISE(ABORT, 'chat session lifecycle intents are immutable'); END;
+
+    CREATE TRIGGER trg_chat_session_meta_lifecycle_insert_guard
+    BEFORE INSERT ON chat_session_meta
+    WHEN NEW.lifecycle_intent_id IS NULL OR NEW.deletion_intent_id IS NOT NULL OR NOT EXISTS (
+      SELECT 1
+      FROM chat_session_lifecycle_intents intent
+      WHERE intent.intent_id = NEW.lifecycle_intent_id
+        AND intent.workspace_id = NEW.workspace_id AND intent.session_id = NEW.session_id
+        AND intent.intent_kind IN ('initialize', 'reactivate')
+        AND intent.session_incarnation_id = intent.intent_id
+        AND NOT EXISTS (
+          SELECT 1 FROM chat_session_control_events event_row
+          WHERE event_row.idempotency_key = intent.idempotency_key
+        )
+        AND (
+          (intent.intent_kind = 'initialize' AND intent.next_generation = 1
+            AND NOT EXISTS (
+              SELECT 1 FROM chat_session_control_grants prior WHERE prior.session_id = NEW.session_id
+            ))
+          OR (intent.intent_kind = 'reactivate'
+            AND NOT EXISTS (
+              SELECT 1 FROM chat_session_control_grants current_row
+              WHERE current_row.session_id = NEW.session_id AND current_row.is_current = 1
+            )
+            AND (SELECT MAX(prior.generation) FROM chat_session_control_grants prior
+                 WHERE prior.session_id = NEW.session_id) = intent.expected_generation
+            AND EXISTS (
+              SELECT 1 FROM chat_session_control_grants terminal
+              WHERE terminal.session_id = NEW.session_id AND terminal.generation = intent.expected_generation
+                AND terminal.workspace_id = NEW.workspace_id AND terminal.is_current = 0
+                AND terminal.owner_kind = 'operator' AND terminal.lease_state = 'deleted'
+            ))
+        )
+    )
+    BEGIN SELECT RAISE(ABORT, 'chat session metadata requires an exact lifecycle intent'); END;
+
+    CREATE TRIGGER trg_chat_session_meta_lifecycle_after_insert
+    AFTER INSERT ON chat_session_meta
+    BEGIN
+      INSERT INTO chat_session_control_grants (
+        workspace_id, session_id, generation, is_current, owner_kind, lease_state,
+        requested_capabilities_json, requested_capabilities_sha256,
+        effective_capabilities_json, effective_capabilities_sha256,
+        control_revision, transition_idempotency_key, transition_request_sha256,
+        created_at, updated_at
+      )
+      SELECT intent.workspace_id, intent.session_id, intent.next_generation, 1, 'operator', 'operator_active',
+        '[]', '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945',
+        '[]', '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945',
+        1, intent.idempotency_key, intent.request_sha256, intent.created_at, intent.created_at
+      FROM chat_session_lifecycle_intents intent WHERE intent.intent_id = NEW.lifecycle_intent_id;
+
+      INSERT INTO chat_session_control_events (
+        event_id, workspace_id, session_id, event_sequence, request_id,
+        previous_generation, next_generation, previous_owner_kind, next_owner_kind,
+        previous_lease_state, next_lease_state, reason_code, actor_kind, actor_id,
+        companion_session_id, device_grant_id, idempotency_key, request_sha256,
+        correlation_id, created_at
+      )
+      SELECT intent.event_id, intent.workspace_id, intent.session_id,
+        COALESCE((SELECT MAX(event_sequence) + 1 FROM chat_session_control_events
+                  WHERE session_id = intent.session_id), 1),
+        NULL, intent.expected_generation, intent.next_generation,
+        CASE WHEN intent.intent_kind = 'reactivate' THEN 'operator' ELSE NULL END,
+        'operator', CASE WHEN intent.intent_kind = 'reactivate' THEN 'deleted' ELSE NULL END,
+        'operator_active',
+        CASE WHEN intent.intent_kind = 'initialize' THEN 'session_initialized' ELSE 'session_reactivated' END,
+        intent.actor_kind, intent.actor_id, NULL, NULL, intent.idempotency_key,
+        intent.request_sha256, intent.correlation_id, intent.created_at
+      FROM chat_session_lifecycle_intents intent WHERE intent.intent_id = NEW.lifecycle_intent_id;
+    END;
+
+    CREATE TRIGGER trg_chat_session_meta_workspace_and_intent_update_guard
+    BEFORE UPDATE ON chat_session_meta
+    WHEN NEW.workspace_id <> OLD.workspace_id
+      OR NEW.lifecycle_intent_id IS NOT OLD.lifecycle_intent_id
+      OR (NEW.deletion_intent_id IS NOT OLD.deletion_intent_id AND NOT (
+        OLD.deletion_intent_id IS NULL AND NEW.deletion_intent_id IS NOT NULL
+        AND EXISTS (
+          SELECT 1
+          FROM chat_session_lifecycle_intents intent
+          JOIN chat_session_control_grants control
+            ON control.session_id = OLD.session_id AND control.is_current = 1
+          WHERE intent.intent_id = NEW.deletion_intent_id
+            AND intent.intent_kind = 'delete'
+            AND intent.workspace_id = OLD.workspace_id AND intent.session_id = OLD.session_id
+            AND intent.session_incarnation_id = COALESCE(OLD.lifecycle_intent_id, 'legacy-session-incarnation:' || OLD.session_id)
+            AND intent.expected_revision = OLD.revision
+            AND intent.expected_generation = control.generation
+            AND control.workspace_id = OLD.workspace_id AND control.owner_kind = 'operator'
+            AND control.lease_state = 'operator_active'
+            AND NOT EXISTS (
+              SELECT 1 FROM chat_session_control_events event_row
+              WHERE event_row.idempotency_key = intent.idempotency_key
+            )
+        )
+      ))
+    BEGIN SELECT RAISE(ABORT, 'chat session workspace is immutable and lifecycle intent replacement is restricted'); END;
+
+    CREATE TRIGGER trg_chat_session_control_operator_generation_lifecycle_guard
+    BEFORE INSERT ON chat_session_control_grants
+    WHEN NEW.owner_kind = 'operator'
+      AND (
+        NOT EXISTS (SELECT 1 FROM chat_session_control_grants prior WHERE prior.session_id = NEW.session_id)
+        OR EXISTS (
+          SELECT 1 FROM chat_session_control_grants prior
+          WHERE prior.session_id = NEW.session_id
+            AND prior.generation = (SELECT MAX(generation) FROM chat_session_control_grants WHERE session_id = NEW.session_id)
+            AND prior.lease_state = 'deleted'
+        )
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM chat_session_meta meta
+        JOIN chat_session_lifecycle_intents intent ON intent.intent_id = meta.lifecycle_intent_id
+        WHERE meta.session_id = NEW.session_id AND meta.workspace_id = NEW.workspace_id
+          AND intent.session_id = NEW.session_id AND intent.workspace_id = NEW.workspace_id
+          AND intent.intent_kind IN ('initialize', 'reactivate')
+          AND intent.next_generation = NEW.generation
+          AND intent.idempotency_key = NEW.transition_idempotency_key
+          AND intent.request_sha256 = NEW.transition_request_sha256
+      )
+    BEGIN SELECT RAISE(ABORT, 'operator generation requires exact lifecycle intent'); END;
+
+    CREATE TRIGGER trg_chat_session_mutation_admissions_insert_guard
+    BEFORE INSERT ON chat_session_mutation_admissions
+    WHEN NEW.status <> 'active'
+      OR julianday(NEW.created_at) IS NULL
+      OR abs((julianday(NEW.created_at) - julianday('now')) * 86400.0) > 1.0
+      OR (NEW.admission_kind = 'turn_write' AND (
+        NEW.runtime_lease_revision <> 1
+        OR NEW.runtime_lease_relinquished_at IS NOT NULL
+        OR NEW.runtime_last_heartbeat_at <> NEW.created_at
+        OR abs((julianday(NEW.runtime_last_heartbeat_at) - julianday('now')) * 86400.0) > 1.0
+        OR abs((julianday(NEW.runtime_lease_expires_at) - julianday('now')) * 86400.0 - 60.0) > 1.0
+      ))
+      OR NOT EXISTS (
+        SELECT 1 FROM chat_session_meta meta
+        JOIN chat_session_control_grants control
+          ON control.session_id = meta.session_id AND control.is_current = 1
+        WHERE meta.session_id = NEW.session_id AND meta.workspace_id = NEW.workspace_id
+          AND meta.revision = NEW.aggregate_revision AND meta.deletion_intent_id IS NULL
+          AND NEW.session_incarnation_id = COALESCE(meta.lifecycle_intent_id, 'legacy-session-incarnation:' || meta.session_id)
+          AND control.workspace_id = NEW.workspace_id
+          AND control.generation = NEW.controller_generation
+          AND ((NEW.actor_kind IN ('operator', 'system')
+                AND control.owner_kind = 'operator' AND control.lease_state = 'operator_active')
+            OR (NEW.actor_kind = 'external_companion'
+                AND control.owner_kind = 'external_companion' AND control.lease_state = 'external_live'
+                AND control.companion_session_id = NEW.actor_id))
+      )
+    BEGIN SELECT RAISE(ABORT, 'session mutation admission authority invariant violated'); END;
+
+    CREATE TRIGGER trg_chat_session_mutation_admissions_after_insert
+    AFTER INSERT ON chat_session_mutation_admissions
+    BEGIN
+      INSERT INTO chat_session_mutation_admission_events (
+        event_id, admission_id, session_incarnation_id, workspace_id, session_id, turn_id,
+        runtime_owner_id, runtime_lease_revision,
+        event_sequence, event_type,
+        admission_kind, aggregate_revision, controller_generation, actor_kind, actor_id,
+        operation, material_sha256, idempotency_key, request_sha256, correlation_id,
+        terminal_authority_kind, terminal_runtime_owner_id, terminal_runtime_lease_revision,
+        terminal_durable_run_id, terminal_durable_lease_owner_id, terminal_durable_attempt_count,
+        terminal_durable_run_version, terminal_durable_run_status, terminal_lifecycle_intent_id,
+        terminal_control_event_id,
+        created_at
+      ) VALUES (
+        NEW.admit_event_id, NEW.admission_id, NEW.session_incarnation_id,
+        NEW.workspace_id, NEW.session_id, NEW.turn_id,
+        NEW.runtime_owner_id, NEW.runtime_lease_revision, 1, 'admitted',
+        NEW.admission_kind, NEW.aggregate_revision, NEW.controller_generation, NEW.actor_kind, NEW.actor_id,
+        NEW.operation, NEW.material_sha256, NEW.idempotency_key, NEW.request_sha256,
+        NEW.correlation_id,
+        NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+        NEW.created_at
+      );
+    END;
+
+    CREATE TRIGGER trg_chat_session_mutation_admissions_update_guard
+    BEFORE UPDATE ON chat_session_mutation_admissions
+    WHEN NEW.admission_id <> OLD.admission_id OR NEW.workspace_id <> OLD.workspace_id
+      OR NEW.session_id <> OLD.session_id OR NEW.session_incarnation_id <> OLD.session_incarnation_id
+      OR NEW.turn_id IS NOT OLD.turn_id
+      OR NEW.runtime_owner_id IS NOT OLD.runtime_owner_id
+      OR NEW.admission_kind <> OLD.admission_kind
+      OR NEW.aggregate_revision <> OLD.aggregate_revision
+      OR NEW.controller_generation <> OLD.controller_generation
+      OR NEW.actor_kind <> OLD.actor_kind OR NEW.actor_id <> OLD.actor_id
+      OR NEW.operation <> OLD.operation OR NEW.material_sha256 <> OLD.material_sha256
+      OR NEW.idempotency_key <> OLD.idempotency_key OR NEW.request_sha256 <> OLD.request_sha256
+      OR NEW.correlation_id <> OLD.correlation_id OR NEW.admit_event_id <> OLD.admit_event_id
+      OR NEW.created_at <> OLD.created_at OR OLD.status <> 'active'
+      OR NOT (
+        (NEW.status = 'active' AND OLD.status = 'active'
+          AND OLD.runtime_lease_relinquished_at IS NULL
+          AND julianday(OLD.runtime_lease_expires_at) > julianday('now')
+          AND NEW.runtime_lease_relinquished_at IS NULL
+          AND NEW.runtime_lease_revision = OLD.runtime_lease_revision + 1
+          AND NEW.runtime_last_heartbeat_at >= OLD.runtime_last_heartbeat_at
+          AND abs((julianday(NEW.runtime_last_heartbeat_at) - julianday('now')) * 86400.0) <= 1.0
+          AND abs((julianday(NEW.runtime_lease_expires_at) - julianday('now')) * 86400.0 - 60.0) <= 1.0
+          AND NEW.closed_at IS OLD.closed_at AND NEW.terminal_actor_id IS OLD.terminal_actor_id
+          AND NEW.terminal_event_id IS OLD.terminal_event_id
+          AND NEW.terminal_idempotency_key IS OLD.terminal_idempotency_key
+          AND NEW.terminal_correlation_id IS OLD.terminal_correlation_id
+          AND NOT EXISTS (
+            SELECT 1 FROM chat_turn_mutation_admission_durable_bindings durable_binding
+            WHERE durable_binding.admission_id = OLD.admission_id
+          ))
+        OR (NEW.status = 'active' AND OLD.status = 'active'
+          AND OLD.runtime_lease_relinquished_at IS NULL
+          AND NEW.runtime_lease_relinquished_at IS NOT NULL
+          AND abs((julianday(NEW.runtime_lease_relinquished_at) - julianday('now')) * 86400.0) <= 1.0
+          AND NEW.runtime_lease_revision = OLD.runtime_lease_revision + 1
+          AND NEW.runtime_last_heartbeat_at = OLD.runtime_last_heartbeat_at
+          AND NEW.runtime_lease_expires_at = OLD.runtime_lease_expires_at
+          AND NEW.closed_at IS OLD.closed_at AND NEW.terminal_actor_id IS OLD.terminal_actor_id
+          AND NEW.terminal_event_id IS OLD.terminal_event_id
+          AND NEW.terminal_idempotency_key IS OLD.terminal_idempotency_key
+          AND NEW.terminal_correlation_id IS OLD.terminal_correlation_id
+          AND EXISTS (
+            SELECT 1 FROM chat_turn_mutation_admission_durable_bindings durable_binding
+            WHERE durable_binding.admission_id = OLD.admission_id
+              AND durable_binding.turn_id = OLD.turn_id
+              AND durable_binding.session_incarnation_id = OLD.session_incarnation_id
+          ))
+        OR (NEW.status IN ('completed', 'cancelled')
+          AND NEW.runtime_last_heartbeat_at IS OLD.runtime_last_heartbeat_at
+          AND NEW.runtime_lease_expires_at IS OLD.runtime_lease_expires_at
+          AND NEW.runtime_lease_revision IS OLD.runtime_lease_revision
+          AND NEW.runtime_lease_relinquished_at IS OLD.runtime_lease_relinquished_at
+          AND julianday(NEW.closed_at) IS NOT NULL
+          AND abs((julianday(NEW.closed_at) - julianday('now')) * 86400.0) <= 1.0
+          AND (
+            (OLD.admission_kind = 'synchronous' AND NEW.terminal_authority_kind = 'synchronous')
+            OR (OLD.admission_kind = 'turn_write' AND NEW.terminal_authority_kind = 'request_runtime'
+              AND OLD.runtime_lease_relinquished_at IS NULL
+              AND julianday(OLD.runtime_lease_expires_at) > julianday('now')
+              AND NEW.terminal_runtime_owner_id = OLD.runtime_owner_id
+              AND NEW.terminal_runtime_lease_revision = OLD.runtime_lease_revision
+              AND NOT EXISTS (
+                SELECT 1 FROM chat_turn_mutation_admission_durable_bindings durable_binding
+                WHERE durable_binding.admission_id = OLD.admission_id
+              ))
+            OR (OLD.admission_kind = 'turn_write' AND NEW.terminal_authority_kind = 'expired_recovery'
+              AND NEW.status = 'cancelled'
+              AND OLD.runtime_lease_relinquished_at IS NULL
+              AND julianday(OLD.runtime_lease_expires_at) <= julianday('now')
+              AND NEW.terminal_runtime_owner_id = OLD.runtime_owner_id
+              AND NEW.terminal_runtime_lease_revision = OLD.runtime_lease_revision
+              AND NOT EXISTS (
+                SELECT 1 FROM chat_turn_mutation_admission_durable_bindings durable_binding
+                WHERE durable_binding.admission_id = OLD.admission_id
+              ))
+            OR (OLD.admission_kind = 'turn_write' AND NEW.terminal_authority_kind = 'durable_run'
+              AND EXISTS (
+                SELECT 1
+                FROM chat_turn_mutation_admission_durable_bindings durable_binding
+                JOIN durable_runs run ON run.run_id = durable_binding.durable_run_id
+                WHERE durable_binding.admission_id = OLD.admission_id
+                  AND durable_binding.turn_id = OLD.turn_id
+                  AND durable_binding.workspace_id = OLD.workspace_id
+                  AND durable_binding.session_id = OLD.session_id
+                  AND durable_binding.session_incarnation_id = OLD.session_incarnation_id
+                  AND run.run_id = NEW.terminal_durable_run_id
+                  AND run.workflow_key = 'chat.turn.execute' AND run.status = 'running'
+                  AND run.lease_owner_id = NEW.terminal_durable_lease_owner_id
+                  AND run.attempt_count = NEW.terminal_durable_attempt_count
+                  AND run.version = NEW.terminal_durable_run_version
+                  AND julianday(run.lease_expires_at) > julianday('now')
+                  AND json_valid(run.payload_json) = 1
+                  AND json_extract(run.payload_json, '$.version') = 'chat.turn.execute.v2'
+                  AND json_extract(run.payload_json, '$.admissionId') = OLD.admission_id
+                  AND json_extract(run.payload_json, '$.sessionIncarnationId') = OLD.session_incarnation_id
+                  AND json_extract(run.payload_json, '$.admissionMaterialSha256') = OLD.material_sha256
+                  AND json_extract(run.payload_json, '$.workspaceId') = OLD.workspace_id
+                  AND json_extract(run.payload_json, '$.admissionAggregateRevision') = OLD.aggregate_revision
+                  AND json_extract(run.payload_json, '$.admissionControllerGeneration') = OLD.controller_generation
+                  AND json_extract(run.payload_json, '$.sessionId') = OLD.session_id
+                  AND json_extract(run.payload_json, '$.turnId') = OLD.turn_id
+              ))
+            OR (OLD.admission_kind = 'turn_write' AND NEW.terminal_authority_kind = 'durable_terminal'
+              AND EXISTS (
+                SELECT 1
+                FROM chat_turn_mutation_admission_durable_bindings durable_binding
+                JOIN durable_runs run ON run.run_id = durable_binding.durable_run_id
+                WHERE durable_binding.admission_id = OLD.admission_id
+                  AND durable_binding.turn_id = OLD.turn_id
+                  AND durable_binding.workspace_id = OLD.workspace_id
+                  AND durable_binding.session_id = OLD.session_id
+                  AND durable_binding.session_incarnation_id = OLD.session_incarnation_id
+                  AND run.run_id = NEW.terminal_durable_run_id
+                  AND run.workflow_key = 'chat.turn.execute'
+                  AND run.status = NEW.terminal_durable_run_status
+                  AND run.status IN ('completed', 'failed', 'cancelled', 'dead_lettered')
+                  AND ((run.status = 'completed' AND NEW.status = 'completed')
+                    OR (run.status <> 'completed' AND NEW.status = 'cancelled'))
+                  AND run.version = NEW.terminal_durable_run_version
+                  AND run.lease_owner_id IS NULL AND run.lease_expires_at IS NULL
+                  AND json_valid(run.payload_json) = 1
+                  AND json_extract(run.payload_json, '$.version') = 'chat.turn.execute.v2'
+                  AND json_extract(run.payload_json, '$.admissionId') = OLD.admission_id
+                  AND json_extract(run.payload_json, '$.sessionIncarnationId') = OLD.session_incarnation_id
+                  AND json_extract(run.payload_json, '$.admissionMaterialSha256') = OLD.material_sha256
+                  AND json_extract(run.payload_json, '$.workspaceId') = OLD.workspace_id
+                  AND json_extract(run.payload_json, '$.admissionAggregateRevision') = OLD.aggregate_revision
+                  AND json_extract(run.payload_json, '$.admissionControllerGeneration') = OLD.controller_generation
+                  AND json_extract(run.payload_json, '$.sessionId') = OLD.session_id
+                  AND json_extract(run.payload_json, '$.turnId') = OLD.turn_id
+                  AND json_valid(run.metadata_json) = 1
+                  AND json_type(run.metadata_json, '$.linkedFinalizationPending') IS NULL
+                  AND json_type(run.metadata_json, '$.autonomousChatPostCommitPending') IS NULL
+                  AND json_type(run.metadata_json, '$.generalChatPostCommitPending') IS NULL
+                  AND json_type(run.metadata_json, '$.chatTurnAdmissionHandoff') = 'object'
+                  AND (
+                    SELECT COUNT(*) FROM json_each(run.metadata_json, '$.chatTurnAdmissionHandoff') marker_field
+                  ) = 10
+                  AND NOT EXISTS (
+                    SELECT 1 FROM json_each(run.metadata_json, '$.chatTurnAdmissionHandoff') marker_field
+                    WHERE marker_field.key NOT IN (
+                      'admissionId', 'childRunIds', 'childRunIdsSha256', 'committedAt',
+                      'parentLocalEffectsStatus', 'parentRunId', 'postCommitGenerationId',
+                      'sessionIncarnationId', 'turnId', 'version'
+                    )
+                  )
+                  AND json_extract(run.metadata_json, '$.chatTurnAdmissionHandoff.version') = 1
+                  AND json_extract(run.metadata_json, '$.chatTurnAdmissionHandoff.admissionId') = OLD.admission_id
+                  AND json_extract(run.metadata_json, '$.chatTurnAdmissionHandoff.sessionIncarnationId')
+                    = OLD.session_incarnation_id
+                  AND json_extract(run.metadata_json, '$.chatTurnAdmissionHandoff.turnId') = OLD.turn_id
+                  AND json_extract(run.metadata_json, '$.chatTurnAdmissionHandoff.parentRunId') = run.run_id
+                  AND json_type(run.metadata_json, '$.chatTurnAdmissionHandoff.postCommitGenerationId') = 'text'
+                  AND length(json_extract(
+                    run.metadata_json, '$.chatTurnAdmissionHandoff.postCommitGenerationId'
+                  )) > 0
+                  AND json_extract(run.metadata_json, '$.chatTurnAdmissionHandoff.parentLocalEffectsStatus') = 'settled'
+                  AND json_type(run.metadata_json, '$.generalChatPostCommit') = 'object'
+                  AND json_extract(run.metadata_json, '$.generalChatPostCommit.generationId')
+                    = json_extract(run.metadata_json, '$.chatTurnAdmissionHandoff.postCommitGenerationId')
+                  AND json_extract(run.metadata_json, '$.generalChatPostCommit.parentLocalEffectsStatus') = 'settled'
+                  AND json_type(run.metadata_json, '$.generalChatPostCommit.completedEffects') = 'array'
+                  AND (
+                    SELECT COUNT(DISTINCT local_effect.value)
+                    FROM json_each(run.metadata_json, '$.generalChatPostCommit.completedEffects') local_effect
+                    WHERE typeof(local_effect.value) = 'text'
+                      AND local_effect.value IN ('capability_gap', 'realtime', 'agent_end')
+                  ) = 3
+                  AND json_type(run.metadata_json, '$.chatTurnAdmissionHandoff.childRunIds') = 'array'
+                  AND gc_sha256(json(json_extract(
+                    run.metadata_json, '$.chatTurnAdmissionHandoff.childRunIds'
+                  ))) = json_extract(run.metadata_json, '$.chatTurnAdmissionHandoff.childRunIdsSha256')
+                  AND julianday(json_extract(
+                    run.metadata_json, '$.chatTurnAdmissionHandoff.committedAt'
+                  )) IS NOT NULL
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM json_each(run.metadata_json, '$.chatTurnAdmissionHandoff.childRunIds') left_child
+                    JOIN json_each(run.metadata_json, '$.chatTurnAdmissionHandoff.childRunIds') right_child
+                      ON CAST(left_child.key AS INTEGER) < CAST(right_child.key AS INTEGER)
+                    WHERE typeof(left_child.value) <> 'text' OR typeof(right_child.value) <> 'text'
+                      OR length(left_child.value) = 0 OR length(right_child.value) = 0
+                      OR left_child.value >= right_child.value
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM json_each(run.metadata_json, '$.chatTurnAdmissionHandoff.childRunIds') marker_child
+                    WHERE typeof(marker_child.value) <> 'text' OR NOT EXISTS (
+                      SELECT 1
+                      FROM durable_runs child_run
+                      JOIN chat_session_mutation_admissions child_admission
+                        ON child_admission.admission_id = json_extract(
+                          child_run.payload_json, '$.childAdmission.admissionId'
+                        )
+                      WHERE child_run.run_id = marker_child.value
+                        AND child_run.workflow_key = 'chat.post_commit.effect'
+                        AND json_valid(child_run.payload_json) = 1
+                        AND json_valid(child_run.metadata_json) = 1
+                        AND json_extract(child_run.payload_json, '$.version') = 'chat.post_commit.effect.v2'
+                        AND json_extract(child_run.payload_json, '$.parentRunId') = run.run_id
+                        AND json_extract(child_run.payload_json, '$.postCommitGenerationId')
+                          = json_extract(run.metadata_json, '$.chatTurnAdmissionHandoff.postCommitGenerationId')
+                        AND json_extract(child_run.payload_json, '$.effect')
+                          = json_extract(child_run.metadata_json, '$.effect')
+                        AND json_type(child_run.payload_json, '$.effect') = 'text'
+                        AND json_extract(child_run.payload_json, '$.effect') IN (
+                          'commitments', 'background_review', 'memory_maintenance'
+                        )
+                        AND json_type(child_run.payload_json, '$.traceStatus') = 'text'
+                        AND length(json_extract(child_run.payload_json, '$.traceStatus')) > 0
+                        AND json_extract(child_run.payload_json, '$.parentRunId')
+                          = json_extract(child_run.metadata_json, '$.parentRunId')
+                        AND json_extract(child_run.payload_json, '$.postCommitGenerationId')
+                          = json_extract(child_run.metadata_json, '$.postCommitGenerationId')
+                        AND json(json_extract(child_run.payload_json, '$.childAdmission'))
+                          = json(json_extract(child_run.metadata_json, '$.childAdmission'))
+                        AND json(json_extract(child_run.payload_json, '$.postCommitEligibility'))
+                          = json(json_extract(child_run.metadata_json, '$.postCommitEligibility'))
+                        AND json_extract(child_run.metadata_json, '$.workspaceId') = OLD.workspace_id
+                        AND json_extract(child_run.metadata_json, '$.sessionId') = OLD.session_id
+                        AND json_extract(child_run.metadata_json, '$.turnId') = OLD.turn_id
+                        AND json_type(child_run.payload_json, '$.childAdmission') = 'object'
+                        AND (
+                          SELECT COUNT(*) FROM json_each(
+                            child_run.payload_json, '$.childAdmission'
+                          ) child_admission_field
+                        ) = 10
+                        AND NOT EXISTS (
+                          SELECT 1 FROM json_each(
+                            child_run.payload_json, '$.childAdmission'
+                          ) child_admission_field
+                          WHERE child_admission_field.key NOT IN (
+                            'actorId', 'actorKind', 'admissionId', 'aggregateRevision',
+                            'controllerGeneration', 'materialSha256', 'operation', 'sessionId',
+                            'sessionIncarnationId', 'workspaceId'
+                          )
+                        )
+                        AND json_type(child_run.payload_json, '$.childAdmission.aggregateRevision') = 'integer'
+                        AND json_type(child_run.payload_json, '$.childAdmission.controllerGeneration') = 'integer'
+                        AND child_admission.admission_id = json_extract(
+                          child_run.payload_json, '$.childAdmission.admissionId'
+                        )
+                        AND child_admission.session_incarnation_id = json_extract(
+                          child_run.payload_json, '$.childAdmission.sessionIncarnationId'
+                        )
+                        AND child_admission.workspace_id = json_extract(
+                          child_run.payload_json, '$.childAdmission.workspaceId'
+                        )
+                        AND child_admission.session_id = json_extract(
+                          child_run.payload_json, '$.childAdmission.sessionId'
+                        )
+                        AND child_admission.aggregate_revision = json_extract(
+                          child_run.payload_json, '$.childAdmission.aggregateRevision'
+                        )
+                        AND child_admission.controller_generation = json_extract(
+                          child_run.payload_json, '$.childAdmission.controllerGeneration'
+                        )
+                        AND child_admission.actor_kind = json_extract(
+                          child_run.payload_json, '$.childAdmission.actorKind'
+                        )
+                        AND child_admission.actor_id = json_extract(
+                          child_run.payload_json, '$.childAdmission.actorId'
+                        )
+                        AND child_admission.operation = json_extract(
+                          child_run.payload_json, '$.childAdmission.operation'
+                        )
+                        AND child_admission.material_sha256 = json_extract(
+                          child_run.payload_json, '$.childAdmission.materialSha256'
+                        )
+                        AND child_admission.aggregate_revision >= OLD.aggregate_revision
+                        AND json_type(child_run.payload_json, '$.postCommitEligibility') = 'object'
+                        AND (
+                          SELECT COUNT(*) FROM json_each(
+                            child_run.payload_json, '$.postCommitEligibility'
+                          ) eligibility_field
+                        ) = 4
+                        AND NOT EXISTS (
+                          SELECT 1 FROM json_each(
+                            child_run.payload_json, '$.postCommitEligibility'
+                          ) eligibility_field
+                          WHERE eligibility_field.key NOT IN (
+                            'autonomyEnabledAtParentSettlement', 'evalIntegrityTurn', 'humanSession', 'version'
+                          )
+                        )
+                        AND json_type(child_run.payload_json, '$.postCommitEligibility.version') = 'integer'
+                        AND json_extract(child_run.payload_json, '$.postCommitEligibility.version') = 1
+                        AND json_type(
+                          child_run.payload_json, '$.postCommitEligibility.autonomyEnabledAtParentSettlement'
+                        ) IN ('true', 'false')
+                        AND json_type(
+                          child_run.payload_json, '$.postCommitEligibility.evalIntegrityTurn'
+                        ) IN ('true', 'false')
+                        AND json_type(
+                          child_run.payload_json, '$.postCommitEligibility.humanSession'
+                        ) IN ('true', 'false')
+                        AND child_admission.admission_kind = 'synchronous'
+                        AND child_admission.turn_id IS NULL
+                        AND child_admission.session_incarnation_id = OLD.session_incarnation_id
+                        AND child_admission.workspace_id = OLD.workspace_id
+                        AND child_admission.session_id = OLD.session_id
+                        AND child_admission.controller_generation = OLD.controller_generation
+                        AND child_admission.actor_kind = OLD.actor_kind
+                        AND child_admission.actor_id = OLD.actor_id
+                        AND child_admission.operation = 'chat_post_commit_child'
+                        AND child_admission.material_sha256 = gc_sha256(
+                          '{"childRunId":' || json_quote(child_run.run_id)
+                          || ',"effect":' || json_quote(json_extract(child_run.payload_json, '$.effect'))
+                          || ',"operation":"chat_post_commit_child"'
+                          || ',"parentRunId":' || json_quote(run.run_id)
+                          || ',"postCommitEligibility":{"autonomyEnabledAtParentSettlement":'
+                          || CASE json_type(
+                            child_run.payload_json, '$.postCommitEligibility.autonomyEnabledAtParentSettlement'
+                          ) WHEN 'true' THEN 'true' ELSE 'false' END
+                          || ',"evalIntegrityTurn":' || CASE json_type(
+                            child_run.payload_json, '$.postCommitEligibility.evalIntegrityTurn'
+                          ) WHEN 'true' THEN 'true' ELSE 'false' END
+                          || ',"humanSession":' || CASE json_type(
+                            child_run.payload_json, '$.postCommitEligibility.humanSession'
+                          ) WHEN 'true' THEN 'true' ELSE 'false' END
+                          || ',"version":1}'
+                          || ',"postCommitGenerationId":' || json_quote(json_extract(
+                            run.metadata_json, '$.chatTurnAdmissionHandoff.postCommitGenerationId'
+                          ))
+                          || ',"sessionId":' || json_quote(OLD.session_id)
+                          || ',"sessionIncarnationId":' || json_quote(OLD.session_incarnation_id)
+                          || ',"sourceTurnId":' || json_quote(OLD.turn_id)
+                          || ',"version":1'
+                          || ',"workspaceId":' || json_quote(OLD.workspace_id) || '}'
+                      )
+                    )
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM durable_runs omitted_child
+                    WHERE omitted_child.workflow_key = 'chat.post_commit.effect'
+                      AND json_valid(omitted_child.payload_json) = 1
+                      AND json_extract(omitted_child.payload_json, '$.version') = 'chat.post_commit.effect.v2'
+                      AND json_extract(omitted_child.payload_json, '$.parentRunId') = run.run_id
+                      AND json_extract(omitted_child.payload_json, '$.postCommitGenerationId')
+                        = json_extract(run.metadata_json, '$.chatTurnAdmissionHandoff.postCommitGenerationId')
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM json_each(
+                          run.metadata_json, '$.chatTurnAdmissionHandoff.childRunIds'
+                        ) listed_child
+                        WHERE listed_child.value = omitted_child.run_id
+                      )
+                  )
+              ))
+            OR (OLD.admission_kind = 'synchronous'
+              AND NEW.terminal_authority_kind = 'post_commit_child_stage'
+              AND NEW.terminal_actor_id = 'system:chat-post-commit-stage'
+              AND NEW.terminal_correlation_id = NEW.terminal_durable_run_id
+              AND EXISTS (
+                SELECT 1 FROM durable_runs run
+                WHERE run.run_id = NEW.terminal_durable_run_id
+                  AND run.workflow_key = 'chat.post_commit.effect' AND run.status = 'running'
+                  AND run.lease_owner_id = NEW.terminal_durable_lease_owner_id
+                  AND run.attempt_count = NEW.terminal_durable_attempt_count
+                  AND run.version = NEW.terminal_durable_run_version
+                  AND julianday(run.lease_expires_at) > julianday('now')
+                  AND json_valid(run.payload_json) = 1 AND json_valid(run.metadata_json) = 1
+                  AND json_extract(run.payload_json, '$.version') = 'chat.post_commit.effect.v2'
+                  AND json_type(run.payload_json, '$.effect') = 'text'
+                  AND json_extract(run.payload_json, '$.effect') IN (
+                    'commitments', 'background_review', 'memory_maintenance'
+                  )
+                  AND json_type(run.payload_json, '$.traceStatus') = 'text'
+                  AND length(json_extract(run.payload_json, '$.traceStatus')) > 0
+                  AND json_type(run.payload_json, '$.childAdmission') = 'object'
+                  AND (
+                    SELECT COUNT(*) FROM json_each(run.payload_json, '$.childAdmission') child_admission_field
+                  ) = 10
+                  AND NOT EXISTS (
+                    SELECT 1 FROM json_each(run.payload_json, '$.childAdmission') child_admission_field
+                    WHERE child_admission_field.key NOT IN (
+                      'actorId', 'actorKind', 'admissionId', 'aggregateRevision',
+                      'controllerGeneration', 'materialSha256', 'operation', 'sessionId',
+                      'sessionIncarnationId', 'workspaceId'
+                    )
+                  )
+                  AND json_extract(run.payload_json, '$.childAdmission.admissionId') = OLD.admission_id
+                  AND json_extract(run.payload_json, '$.childAdmission.sessionIncarnationId')
+                    = OLD.session_incarnation_id
+                  AND json_extract(run.payload_json, '$.childAdmission.workspaceId') = OLD.workspace_id
+                  AND json_extract(run.payload_json, '$.childAdmission.sessionId') = OLD.session_id
+                  AND json_extract(run.payload_json, '$.childAdmission.aggregateRevision') = OLD.aggregate_revision
+                  AND json_extract(run.payload_json, '$.childAdmission.controllerGeneration')
+                    = OLD.controller_generation
+                  AND json_extract(run.payload_json, '$.childAdmission.actorKind') = OLD.actor_kind
+                  AND json_extract(run.payload_json, '$.childAdmission.actorId') = OLD.actor_id
+                  AND json_extract(run.payload_json, '$.childAdmission.operation') = OLD.operation
+                  AND json_extract(run.payload_json, '$.childAdmission.materialSha256') = OLD.material_sha256
+                  AND json(json_extract(run.payload_json, '$.childAdmission'))
+                    = json(json_extract(run.metadata_json, '$.childAdmission'))
+                  AND json(json_extract(run.payload_json, '$.postCommitEligibility'))
+                    = json(json_extract(run.metadata_json, '$.postCommitEligibility'))
+                  AND json_type(run.payload_json, '$.postCommitEligibility') = 'object'
+                  AND (
+                    SELECT COUNT(*) FROM json_each(
+                      run.payload_json, '$.postCommitEligibility'
+                    ) eligibility_field
+                  ) = 4
+                  AND NOT EXISTS (
+                    SELECT 1 FROM json_each(run.payload_json, '$.postCommitEligibility') eligibility_field
+                    WHERE eligibility_field.key NOT IN (
+                      'autonomyEnabledAtParentSettlement', 'evalIntegrityTurn', 'humanSession', 'version'
+                    )
+                  )
+                  AND json_type(run.payload_json, '$.postCommitEligibility.version') = 'integer'
+                  AND json_extract(run.payload_json, '$.postCommitEligibility.version') = 1
+                  AND json_type(
+                    run.payload_json, '$.postCommitEligibility.autonomyEnabledAtParentSettlement'
+                  ) IN ('true', 'false')
+                  AND json_type(run.payload_json, '$.postCommitEligibility.evalIntegrityTurn') IN ('true', 'false')
+                  AND json_type(run.payload_json, '$.postCommitEligibility.humanSession') IN ('true', 'false')
+                  AND json_extract(run.payload_json, '$.parentRunId')
+                    = json_extract(run.metadata_json, '$.parentRunId')
+                  AND json_extract(run.payload_json, '$.postCommitGenerationId')
+                    = json_extract(run.metadata_json, '$.postCommitGenerationId')
+                  AND json_extract(run.payload_json, '$.effect') = json_extract(run.metadata_json, '$.effect')
+                  AND json_extract(run.metadata_json, '$.workspaceId') = OLD.workspace_id
+                  AND json_extract(run.metadata_json, '$.sessionId') = OLD.session_id
+                  AND json_type(run.metadata_json, '$.turnId') = 'text'
+                  AND length(json_extract(run.metadata_json, '$.turnId')) > 0
+                  AND OLD.material_sha256 = gc_sha256(
+                    '{"childRunId":' || json_quote(run.run_id)
+                    || ',"effect":' || json_quote(json_extract(run.payload_json, '$.effect'))
+                    || ',"operation":"chat_post_commit_child"'
+                    || ',"parentRunId":' || json_quote(json_extract(run.payload_json, '$.parentRunId'))
+                    || ',"postCommitEligibility":{"autonomyEnabledAtParentSettlement":'
+                    || CASE json_type(
+                      run.payload_json, '$.postCommitEligibility.autonomyEnabledAtParentSettlement'
+                    ) WHEN 'true' THEN 'true' ELSE 'false' END
+                    || ',"evalIntegrityTurn":' || CASE json_type(
+                      run.payload_json, '$.postCommitEligibility.evalIntegrityTurn'
+                    ) WHEN 'true' THEN 'true' ELSE 'false' END
+                    || ',"humanSession":' || CASE json_type(
+                      run.payload_json, '$.postCommitEligibility.humanSession'
+                    ) WHEN 'true' THEN 'true' ELSE 'false' END
+                    || ',"version":1}'
+                    || ',"postCommitGenerationId":' || json_quote(json_extract(
+                      run.payload_json, '$.postCommitGenerationId'
+                    ))
+                    || ',"sessionId":' || json_quote(OLD.session_id)
+                    || ',"sessionIncarnationId":' || json_quote(OLD.session_incarnation_id)
+                    || ',"sourceTurnId":' || json_quote(json_extract(run.metadata_json, '$.turnId'))
+                    || ',"version":1'
+                    || ',"workspaceId":' || json_quote(OLD.workspace_id) || '}'
+                  )
+                  AND ((NEW.status = 'completed' AND (
+                    (json_extract(run.payload_json, '$.effect') = 'commitments'
+                      AND NEW.terminal_idempotency_key = 'chat-post-commit-child-stage:v2:'
+                        || run.run_id || ':commitments_write:allowed')
+                    OR (json_extract(run.payload_json, '$.effect') = 'background_review'
+                      AND NEW.terminal_idempotency_key = 'chat-post-commit-child-stage:v2:'
+                        || run.run_id || ':background_evidence:allowed')
+                    OR (json_extract(run.payload_json, '$.effect') = 'memory_maintenance'
+                      AND NEW.terminal_idempotency_key = 'chat-post-commit-child-stage:v2:'
+                        || run.run_id || ':memory_maintenance_evaluation:allowed')
+                  )) OR (NEW.status = 'cancelled' AND (
+                    (json_extract(run.payload_json, '$.effect') = 'commitments'
+                      AND NEW.terminal_idempotency_key = 'chat-post-commit-child-stage:v2:'
+                        || run.run_id || ':commitments_write:late_blocked')
+                    OR (json_extract(run.payload_json, '$.effect') = 'background_review'
+                      AND NEW.terminal_idempotency_key IN (
+                        'chat-post-commit-child-stage:v2:' || run.run_id || ':background_counter:late_blocked',
+                        'chat-post-commit-child-stage:v2:' || run.run_id || ':background_evidence:late_blocked'
+                      ))
+                    OR (json_extract(run.payload_json, '$.effect') = 'memory_maintenance'
+                      AND NEW.terminal_idempotency_key = 'chat-post-commit-child-stage:v2:'
+                        || run.run_id || ':memory_maintenance_evaluation:late_blocked')
+                  )))
+              ))
+            OR (NEW.terminal_authority_kind = 'lifecycle_delete'
+              AND NEW.status = 'cancelled'
+              AND EXISTS (
+                SELECT 1 FROM chat_session_lifecycle_intents intent
+                JOIN chat_session_meta meta ON meta.deletion_intent_id = intent.intent_id
+                WHERE intent.intent_id = NEW.terminal_lifecycle_intent_id
+                  AND intent.intent_kind = 'delete'
+                  AND intent.workspace_id = OLD.workspace_id AND intent.session_id = OLD.session_id
+                  AND intent.session_incarnation_id = OLD.session_incarnation_id
+                  AND meta.workspace_id = OLD.workspace_id AND meta.session_id = OLD.session_id
+                  AND intent.actor_id = NEW.terminal_actor_id
+                  AND intent.correlation_id = NEW.terminal_correlation_id
+                  AND intent.created_at = NEW.closed_at
+                  AND NEW.terminal_idempotency_key = 'lifecycle:delete:admission:' || OLD.admission_id
+              ))
+            OR (NEW.terminal_authority_kind = 'authority_superseded'
+              AND NEW.status = 'cancelled'
+              AND NEW.terminal_actor_id = 'system:session-authority'
+              AND NEW.terminal_correlation_id = NEW.terminal_control_event_id
+              AND NEW.terminal_idempotency_key = 'admission:authority-superseded:'
+                || OLD.admission_id || ':' || NEW.terminal_control_event_id
+              AND EXISTS (
+                SELECT 1
+                FROM chat_session_meta meta
+                JOIN chat_session_control_grants control
+                  ON control.session_id = meta.session_id AND control.is_current = 1
+                JOIN chat_session_control_events event_row
+                  ON event_row.session_id = control.session_id
+                  AND event_row.idempotency_key = control.transition_idempotency_key
+                WHERE meta.session_id = OLD.session_id
+                  AND control.workspace_id = meta.workspace_id
+                  AND event_row.event_id = NEW.terminal_control_event_id
+                  AND event_row.next_generation = control.generation
+                  AND (
+                    meta.workspace_id <> OLD.workspace_id
+                    OR COALESCE(meta.lifecycle_intent_id, 'legacy-session-incarnation:' || meta.session_id)
+                      <> OLD.session_incarnation_id
+                    OR control.generation <> OLD.controller_generation
+                    OR (OLD.actor_kind IN ('operator', 'system')
+                      AND NOT (control.owner_kind = 'operator' AND control.lease_state = 'operator_active'))
+                    OR (OLD.actor_kind = 'external_companion'
+                      AND NOT (control.owner_kind = 'external_companion'
+                        AND control.lease_state = 'external_live'
+                        AND control.companion_session_id = OLD.actor_id))
+                  )
+              ))
+          ))
+      )
+    BEGIN SELECT RAISE(ABORT, 'session mutation admission identity and material are immutable'); END;
+
+    CREATE TRIGGER trg_chat_session_mutation_admissions_after_update
+    AFTER UPDATE ON chat_session_mutation_admissions
+    WHEN NEW.status <> OLD.status
+    BEGIN
+      INSERT INTO chat_session_mutation_admission_events (
+        event_id, admission_id, session_incarnation_id, workspace_id, session_id, turn_id,
+        runtime_owner_id, runtime_lease_revision,
+        event_sequence, event_type,
+        admission_kind, aggregate_revision, controller_generation, actor_kind, actor_id,
+        operation, material_sha256, idempotency_key, request_sha256, correlation_id,
+        terminal_authority_kind, terminal_runtime_owner_id, terminal_runtime_lease_revision,
+        terminal_durable_run_id, terminal_durable_lease_owner_id, terminal_durable_attempt_count,
+        terminal_durable_run_version, terminal_durable_run_status, terminal_lifecycle_intent_id,
+        terminal_control_event_id,
+        created_at
+      ) VALUES (
+        NEW.terminal_event_id, NEW.admission_id, NEW.session_incarnation_id,
+        NEW.workspace_id, NEW.session_id, NEW.turn_id,
+        NEW.runtime_owner_id, NEW.runtime_lease_revision, 2, NEW.status,
+        NEW.admission_kind, NEW.aggregate_revision, NEW.controller_generation, NEW.actor_kind,
+        NEW.terminal_actor_id, NEW.operation, NEW.material_sha256, NEW.terminal_idempotency_key,
+        NEW.request_sha256, NEW.terminal_correlation_id,
+        NEW.terminal_authority_kind, NEW.terminal_runtime_owner_id, NEW.terminal_runtime_lease_revision,
+        NEW.terminal_durable_run_id, NEW.terminal_durable_lease_owner_id, NEW.terminal_durable_attempt_count,
+        NEW.terminal_durable_run_version, NEW.terminal_durable_run_status, NEW.terminal_lifecycle_intent_id,
+        NEW.terminal_control_event_id,
+        NEW.closed_at
+      );
+    END;
+    CREATE TRIGGER trg_chat_session_mutation_admissions_no_delete
+    BEFORE DELETE ON chat_session_mutation_admissions
+    BEGIN SELECT RAISE(ABORT, 'session mutation admissions are durable'); END;
+    CREATE TRIGGER trg_chat_session_mutation_admission_events_no_update
+    BEFORE UPDATE ON chat_session_mutation_admission_events
+    BEGIN SELECT RAISE(ABORT, 'session mutation admission events are append-only'); END;
+    CREATE TRIGGER trg_chat_session_mutation_admission_events_no_delete
+    BEFORE DELETE ON chat_session_mutation_admission_events
+    BEGIN SELECT RAISE(ABORT, 'session mutation admission events are append-only'); END;
+
+    CREATE TRIGGER trg_chat_session_meta_lifecycle_delete_guard
+    BEFORE DELETE ON chat_session_meta
+    WHEN NOT EXISTS (
+      SELECT 1
+      FROM chat_session_lifecycle_intents intent
+      JOIN chat_session_control_grants terminal
+        ON terminal.session_id = OLD.session_id AND terminal.generation = intent.expected_generation
+      JOIN chat_session_control_events event_row
+        ON event_row.session_id = OLD.session_id AND event_row.idempotency_key = intent.idempotency_key
+      WHERE intent.intent_id = OLD.deletion_intent_id AND intent.intent_kind = 'delete'
+        AND intent.workspace_id = OLD.workspace_id AND intent.session_id = OLD.session_id
+        AND intent.session_incarnation_id = COALESCE(OLD.lifecycle_intent_id, 'legacy-session-incarnation:' || OLD.session_id)
+        AND intent.expected_revision = OLD.revision
+        AND terminal.workspace_id = OLD.workspace_id AND terminal.is_current = 0
+        AND terminal.owner_kind = 'operator' AND terminal.lease_state = 'deleted'
+        AND terminal.terminal_at = intent.created_at
+        AND event_row.reason_code = 'session_deleted'
+        AND event_row.previous_generation = intent.expected_generation
+        AND event_row.next_generation = intent.expected_generation
+        AND event_row.created_at = intent.created_at
+        AND NOT EXISTS (
+          SELECT 1 FROM chat_session_control_grants current_row
+          WHERE current_row.session_id = OLD.session_id AND current_row.is_current = 1
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM chat_session_control_requests request_row
+          WHERE request_row.session_id = OLD.session_id AND request_row.status = 'pending'
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM chat_session_mutation_admissions admission
+          WHERE admission.session_id = OLD.session_id AND admission.status = 'active'
+        )
+    )
+    BEGIN SELECT RAISE(ABORT, 'chat session metadata delete requires terminal lifecycle evidence'); END;
+  `);
+}
+
+function replaceSessionControlAuthRevokeGuards(db: DatabaseSync): void {
+  db.exec(`
+    DROP TRIGGER trg_chat_session_control_requests_transition_guard;
+    CREATE TRIGGER trg_chat_session_control_requests_transition_guard
+    BEFORE UPDATE ON chat_session_control_requests
+    WHEN OLD.status <> 'pending'
+      OR NEW.request_id <> OLD.request_id OR NEW.workspace_id <> OLD.workspace_id
+      OR NEW.session_id <> OLD.session_id OR NEW.companion_session_id <> OLD.companion_session_id
+      OR NEW.device_grant_id <> OLD.device_grant_id OR NEW.client_instance_id <> OLD.client_instance_id
+      OR NEW.principal_purpose <> OLD.principal_purpose OR NEW.token_sha256 <> OLD.token_sha256
+      OR NEW.requested_capabilities_json <> OLD.requested_capabilities_json
+      OR NEW.requested_capabilities_sha256 <> OLD.requested_capabilities_sha256
+      OR NEW.requested_generation <> OLD.requested_generation OR NEW.idempotency_key <> OLD.idempotency_key
+      OR NEW.request_sha256 <> OLD.request_sha256 OR NEW.expires_at <> OLD.expires_at
+      OR NEW.created_at <> OLD.created_at OR NEW.status = 'pending'
+      OR julianday(NEW.decided_at) IS NULL
+      OR (
+        abs((julianday(NEW.decided_at) - julianday('now')) * 86400.0) > 1.0
+        AND NOT EXISTS (
+          SELECT 1
+          FROM chat_session_control_auth_revoke_operation_targets target
+          JOIN chat_session_control_auth_revoke_operations operation
+            ON operation.idempotency_key = target.operation_idempotency_key
+          WHERE target.target_kind = 'pending_request' AND target.request_id = OLD.request_id
+            AND target.workspace_id = OLD.workspace_id AND target.session_id = OLD.session_id
+            AND operation.occurred_at = NEW.decided_at
+            AND NOT EXISTS (
+              SELECT 1 FROM chat_session_control_auth_revoke_receipts receipt
+              WHERE receipt.idempotency_key = operation.idempotency_key
+            )
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM chat_session_control_events event_row
+          WHERE substr(event_row.idempotency_key, 1, 26) = 'heartbeat-preempt-request_'
+            AND event_row.workspace_id = OLD.workspace_id
+            AND event_row.session_id = OLD.session_id
+            AND event_row.request_id = OLD.request_id
+            AND event_row.previous_generation = OLD.requested_generation
+            AND event_row.next_generation = OLD.requested_generation
+            AND event_row.previous_owner_kind = 'operator'
+            AND event_row.next_owner_kind = 'operator'
+            AND event_row.previous_lease_state = 'operator_active'
+            AND event_row.next_lease_state = 'operator_active'
+            AND event_row.reason_code = NEW.decision_reason_code
+            AND ((NEW.status = 'expired' AND event_row.reason_code = 'request_expired')
+              OR (NEW.status = 'cancelled' AND event_row.reason_code = 'request_cancelled'))
+            AND event_row.actor_kind = 'operator'
+            AND event_row.actor_id = NEW.decided_by_actor_id
+            AND event_row.companion_session_id = OLD.companion_session_id
+            AND event_row.device_grant_id = OLD.device_grant_id
+            AND event_row.created_at = NEW.decided_at
+        )
+      )
+    BEGIN SELECT RAISE(ABORT, 'session control request transition invariant violated'); END;
+
+    DROP TRIGGER trg_chat_session_control_grants_update_guard;
+    CREATE TRIGGER trg_chat_session_control_grants_update_guard
+    BEFORE UPDATE ON chat_session_control_grants
+    WHEN OLD.is_current <> 1 OR OLD.terminal_at IS NOT NULL
+      OR NEW.workspace_id <> OLD.workspace_id OR NEW.session_id <> OLD.session_id
+      OR NEW.generation <> OLD.generation OR NEW.owner_kind <> OLD.owner_kind
+      OR NEW.request_id IS NOT OLD.request_id OR NEW.companion_session_id IS NOT OLD.companion_session_id
+      OR NEW.device_grant_id IS NOT OLD.device_grant_id OR NEW.client_instance_id IS NOT OLD.client_instance_id
+      OR NEW.principal_purpose IS NOT OLD.principal_purpose
+      OR NEW.requested_capabilities_json <> OLD.requested_capabilities_json
+      OR NEW.requested_capabilities_sha256 <> OLD.requested_capabilities_sha256
+      OR NEW.effective_capabilities_json <> OLD.effective_capabilities_json
+      OR NEW.effective_capabilities_sha256 <> OLD.effective_capabilities_sha256
+      OR NEW.token_sha256 IS NOT OLD.token_sha256 OR NEW.token_expires_at IS NOT OLD.token_expires_at
+      OR NEW.transition_idempotency_key <> OLD.transition_idempotency_key
+      OR NEW.transition_request_sha256 <> OLD.transition_request_sha256 OR NEW.created_at <> OLD.created_at
+      OR NEW.control_revision <> OLD.control_revision + 1 OR NEW.updated_at < OLD.updated_at
+      OR julianday(NEW.updated_at) IS NULL
+      OR (
+        abs((julianday(NEW.updated_at) - julianday('now')) * 86400.0) > 1.0
+        AND NOT EXISTS (
+          SELECT 1
+          FROM chat_session_control_auth_revoke_operation_targets target
+          JOIN chat_session_control_auth_revoke_operations operation
+            ON operation.idempotency_key = target.operation_idempotency_key
+          WHERE target.target_kind = 'current_grant'
+            AND target.workspace_id = OLD.workspace_id AND target.session_id = OLD.session_id
+            AND target.generation = OLD.generation AND target.control_revision = OLD.control_revision
+            AND operation.occurred_at = NEW.updated_at AND NEW.terminal_at = operation.occurred_at
+            AND NOT EXISTS (
+              SELECT 1 FROM chat_session_control_auth_revoke_receipts receipt
+              WHERE receipt.idempotency_key = operation.idempotency_key
+            )
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM chat_session_control_events event_row
+          WHERE substr(event_row.idempotency_key, 1, 18) = 'heartbeat-preempt_'
+            AND event_row.workspace_id = OLD.workspace_id
+            AND event_row.session_id = OLD.session_id
+            AND event_row.request_id IS NULL
+            AND event_row.previous_generation = OLD.generation
+            AND event_row.next_generation = OLD.generation + 1
+            AND event_row.previous_owner_kind = 'operator'
+            AND event_row.next_owner_kind = 'operator'
+            AND event_row.previous_lease_state = 'operator_active'
+            AND event_row.next_lease_state = 'operator_active'
+            AND event_row.reason_code = 'heartbeat_preempted'
+            AND event_row.actor_kind = 'operator'
+            AND event_row.companion_session_id IS NULL
+            AND event_row.device_grant_id IS NULL
+            AND event_row.created_at = NEW.updated_at
+            AND NEW.terminal_at = NEW.updated_at
+        )
+      )
+      OR NOT (
+        (OLD.owner_kind = 'external_companion' AND OLD.lease_state = 'external_live'
+          AND NEW.is_current = 1 AND NEW.lease_state = 'external_live' AND NEW.terminal_at IS NULL
+          AND NEW.last_heartbeat_at >= OLD.last_heartbeat_at
+          AND julianday(NEW.last_heartbeat_at) IS NOT NULL
+          AND julianday(NEW.lease_expires_at) IS NOT NULL
+          AND julianday(NEW.reconnect_expires_at) IS NOT NULL
+          AND abs((julianday(NEW.last_heartbeat_at) - julianday('now')) * 86400.0) <= 1.0
+          AND abs((julianday(NEW.lease_expires_at) - julianday('now')) * 86400.0 - 60.0) <= 1.0
+          AND abs((julianday(NEW.reconnect_expires_at) - julianday('now')) * 86400.0 - 300.0) <= 1.0)
+        OR (OLD.owner_kind = 'external_companion' AND OLD.lease_state = 'external_live'
+          AND NEW.is_current = 1 AND NEW.lease_state = 'external_stale' AND NEW.terminal_at IS NULL
+          AND NEW.last_heartbeat_at = OLD.last_heartbeat_at AND NEW.lease_expires_at = OLD.lease_expires_at
+          AND NEW.reconnect_expires_at = OLD.reconnect_expires_at)
+        OR (NEW.is_current = 0 AND NEW.lease_state IN ('released', 'revoked', 'superseded', 'deleted')
+          AND NEW.terminal_at = NEW.updated_at AND NEW.last_heartbeat_at IS OLD.last_heartbeat_at
+          AND NEW.lease_expires_at IS OLD.lease_expires_at AND NEW.reconnect_expires_at IS OLD.reconnect_expires_at)
+      )
+    BEGIN SELECT RAISE(ABORT, 'session control current generation transition invariant violated'); END;
+
+    DROP TRIGGER trg_chat_session_control_events_insert_guard;
+    CREATE TRIGGER trg_chat_session_control_events_insert_guard
+    BEFORE INSERT ON chat_session_control_events
+    WHEN (NEW.request_id IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM chat_session_control_requests request_row
+      WHERE request_row.request_id = NEW.request_id
+        AND request_row.workspace_id = NEW.workspace_id AND request_row.session_id = NEW.session_id
+        AND request_row.companion_session_id = NEW.companion_session_id
+        AND request_row.device_grant_id = NEW.device_grant_id
+    )) OR (
+      (
+        EXISTS (
+          SELECT 1 FROM chat_session_control_auth_revoke_operations operation
+          WHERE operation.request_sha256 = NEW.request_sha256
+            AND NOT EXISTS (
+              SELECT 1 FROM chat_session_control_auth_revoke_receipts receipt
+              WHERE receipt.idempotency_key = operation.idempotency_key
+            )
+        )
+        OR EXISTS (
+          SELECT 1 FROM chat_session_control_auth_revoke_operations operation
+          WHERE operation.idempotency_key = NEW.idempotency_key
+        )
+        OR EXISTS (
+          SELECT 1 FROM chat_session_control_auth_revoke_operation_targets target
+          WHERE target.event_idempotency_key = NEW.idempotency_key
+        )
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM chat_session_control_auth_revoke_operation_targets target
+        JOIN chat_session_control_auth_revoke_operations operation
+          ON operation.idempotency_key = target.operation_idempotency_key
+        WHERE target.event_id = NEW.event_id
+          AND target.event_sequence = NEW.event_sequence
+          AND target.event_idempotency_key = NEW.idempotency_key
+          AND target.event_reason_code = NEW.reason_code
+          AND target.workspace_id = NEW.workspace_id AND target.session_id = NEW.session_id
+          AND operation.request_sha256 = NEW.request_sha256
+          AND operation.correlation_id = NEW.correlation_id
+          AND operation.actor_id = NEW.actor_id AND NEW.actor_kind = 'system'
+          AND operation.occurred_at = NEW.created_at
+          AND NOT EXISTS (
+            SELECT 1 FROM chat_session_control_auth_revoke_receipts receipt
+            WHERE receipt.idempotency_key = operation.idempotency_key
+          )
+          AND (
+            (target.target_kind = 'pending_request' AND NEW.request_id = target.request_id
+              AND NEW.previous_generation = target.generation AND NEW.next_generation = target.generation
+              AND NEW.previous_owner_kind = target.owner_kind AND NEW.next_owner_kind = target.owner_kind
+              AND NEW.previous_lease_state = target.lease_state AND NEW.next_lease_state = target.lease_state)
+            OR (target.target_kind = 'current_grant' AND NEW.request_id = target.request_id
+              AND NEW.previous_generation = target.generation AND NEW.next_generation = target.generation + 1
+              AND NEW.previous_owner_kind = 'external_companion' AND NEW.next_owner_kind = 'operator'
+              AND NEW.previous_lease_state = target.lease_state AND NEW.next_lease_state = 'operator_active')
+          )
+      )
+    )
+    BEGIN SELECT RAISE(ABORT, 'session control event request or auth operation invariant violated'); END;
+
+    DROP TRIGGER trg_chat_session_control_auth_revoke_receipts_insert_guard;
+    CREATE TRIGGER trg_chat_session_control_auth_revoke_receipts_insert_guard
+    BEFORE INSERT ON chat_session_control_auth_revoke_receipts
+    WHEN NOT EXISTS (
+      SELECT 1
+      FROM chat_session_control_auth_revoke_operations operation
+      WHERE operation.idempotency_key = NEW.idempotency_key
+        AND operation.request_sha256 = NEW.request_sha256
+        AND operation.binding_kind = NEW.binding_kind AND operation.binding_id = NEW.binding_id
+        AND operation.actor_id = NEW.actor_id AND operation.correlation_id = NEW.correlation_id
+        AND operation.target_count = NEW.target_count AND operation.session_count = NEW.session_count
+        AND operation.event_set_sha256 = NEW.event_set_sha256
+        AND operation.occurred_at = NEW.created_at
+        AND (SELECT COUNT(*) FROM chat_session_control_auth_revoke_operation_targets target
+             WHERE target.operation_idempotency_key = operation.idempotency_key) = operation.target_count
+        AND (SELECT COUNT(DISTINCT target.workspace_id || char(0) || target.session_id)
+             FROM chat_session_control_auth_revoke_operation_targets target
+             WHERE target.operation_idempotency_key = operation.idempotency_key) = operation.session_count
+        AND NOT EXISTS (
+          SELECT 1
+          FROM chat_session_control_auth_revoke_operation_targets target
+          LEFT JOIN chat_session_control_events event_row
+            ON event_row.event_id = target.event_id
+            AND event_row.event_sequence = target.event_sequence
+            AND event_row.idempotency_key = target.event_idempotency_key
+            AND event_row.reason_code = target.event_reason_code
+            AND event_row.workspace_id = target.workspace_id AND event_row.session_id = target.session_id
+            AND event_row.request_sha256 = operation.request_sha256
+            AND event_row.correlation_id = operation.correlation_id
+            AND event_row.actor_kind = 'system' AND event_row.actor_id = operation.actor_id
+            AND event_row.created_at = operation.occurred_at
+          WHERE target.operation_idempotency_key = operation.idempotency_key
+            AND event_row.event_id IS NULL
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM chat_session_control_events event_row
+          WHERE event_row.request_sha256 = operation.request_sha256
+            AND NOT EXISTS (
+              SELECT 1 FROM chat_session_control_auth_revoke_operation_targets target
+              WHERE target.operation_idempotency_key = operation.idempotency_key
+                AND target.event_id = event_row.event_id
+            )
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM chat_session_control_auth_revoke_operation_targets target
+          WHERE target.operation_idempotency_key = operation.idempotency_key
+            AND (
+              (target.target_kind = 'pending_request' AND NOT EXISTS (
+                SELECT 1 FROM chat_session_control_requests request_row
+                WHERE request_row.request_id = target.request_id
+                  AND request_row.status IN ('cancelled', 'expired')
+                  AND request_row.decided_at = operation.occurred_at
+                  AND request_row.decided_by_actor_id = operation.actor_id
+              ))
+              OR (target.target_kind = 'current_grant' AND (
+                NOT EXISTS (
+                  SELECT 1 FROM chat_session_control_grants prior
+                  WHERE prior.session_id = target.session_id AND prior.generation = target.generation
+                    AND prior.is_current = 0 AND prior.lease_state = 'revoked'
+                    AND prior.control_revision = target.control_revision + 1
+                    AND prior.updated_at = operation.occurred_at AND prior.terminal_at = operation.occurred_at
+                )
+                OR NOT EXISTS (
+                  SELECT 1 FROM chat_session_control_grants successor
+                  WHERE successor.session_id = target.session_id AND successor.generation = target.generation + 1
+                    AND successor.workspace_id = target.workspace_id AND successor.is_current = 1
+                    AND successor.owner_kind = 'operator' AND successor.lease_state = 'operator_active'
+                    AND successor.transition_idempotency_key = target.event_idempotency_key
+                    AND successor.transition_request_sha256 = operation.request_sha256
+                    AND successor.created_at = operation.occurred_at AND successor.updated_at = operation.occurred_at
+                )
+              ))
+            )
+        )
+    )
+    BEGIN SELECT RAISE(ABORT, 'session control auth revoke receipt invariant violated'); END;
+  `);
+
+  replaceSessionControlGrantInsertGuard(db);
+}
+
+function replaceSessionControlGrantInsertGuard(db: DatabaseSync): void {
+  db.exec(`
+    DROP TRIGGER trg_chat_session_control_grants_insert_guard;
+    CREATE TRIGGER trg_chat_session_control_grants_insert_guard
+    BEFORE INSERT ON chat_session_control_grants
+    WHEN NEW.is_current <> 1
+      OR EXISTS (
+        SELECT 1 FROM chat_session_control_grants prior
+        WHERE prior.session_id = NEW.session_id AND prior.workspace_id <> NEW.workspace_id
+      )
+      OR (NOT EXISTS (SELECT 1 FROM chat_session_control_grants prior WHERE prior.session_id = NEW.session_id)
+        AND NEW.generation <> 1)
+      OR (EXISTS (SELECT 1 FROM chat_session_control_grants prior WHERE prior.session_id = NEW.session_id)
+        AND NEW.generation <> (
+          SELECT MAX(prior.generation) + 1 FROM chat_session_control_grants prior WHERE prior.session_id = NEW.session_id
+        ))
+      OR (NEW.owner_kind = 'external_companion' AND NOT EXISTS (
+        SELECT 1
+        FROM chat_session_control_requests request_row
+        JOIN chat_session_control_tokens token_row ON token_row.token_sha256 = NEW.token_sha256
+        WHERE request_row.request_id = NEW.request_id
+          AND request_row.workspace_id = NEW.workspace_id AND request_row.session_id = NEW.session_id
+          AND request_row.companion_session_id = NEW.companion_session_id
+          AND request_row.device_grant_id = NEW.device_grant_id
+          AND request_row.client_instance_id = NEW.client_instance_id
+          AND request_row.principal_purpose = NEW.principal_purpose
+          AND request_row.requested_capabilities_json = NEW.requested_capabilities_json
+          AND request_row.requested_capabilities_sha256 = NEW.requested_capabilities_sha256
+          AND request_row.status = 'activated' AND request_row.decision_reason_code = 'handoff'
+          AND request_row.activated_generation = request_row.requested_generation + 1
+          AND request_row.activated_generation <= NEW.generation
+          AND token_row.workspace_id = NEW.workspace_id AND token_row.session_id = NEW.session_id
+          AND ((NEW.generation = request_row.activated_generation AND NEW.token_sha256 = request_row.token_sha256)
+            OR (NEW.generation > request_row.activated_generation AND EXISTS (
+              SELECT 1 FROM chat_session_control_grants prior
+              WHERE prior.workspace_id = NEW.workspace_id AND prior.session_id = NEW.session_id
+                AND prior.generation = NEW.generation - 1 AND prior.owner_kind = 'external_companion'
+                AND prior.request_id = NEW.request_id
+                AND prior.companion_session_id = NEW.companion_session_id
+                AND prior.device_grant_id = NEW.device_grant_id
+                AND prior.client_instance_id = NEW.client_instance_id
+                AND prior.principal_purpose = NEW.principal_purpose
+                AND prior.requested_capabilities_json = NEW.requested_capabilities_json
+                AND prior.requested_capabilities_sha256 = NEW.requested_capabilities_sha256
+                AND prior.effective_capabilities_json = NEW.effective_capabilities_json
+                AND prior.effective_capabilities_sha256 = NEW.effective_capabilities_sha256
+            )))
+          AND ((NEW.requested_capabilities_json = '["send"]' AND NEW.effective_capabilities_json = '["send"]')
+            OR (NEW.requested_capabilities_json = '["send","read"]'
+              AND NEW.effective_capabilities_json IN ('["send"]', '["send","read"]')))
+      ))
+      OR (NEW.owner_kind = 'external_companion' AND NOT EXISTS (
+        SELECT 1
+        FROM companion_sessions companion_session
+        JOIN auth_device_grants device_grant ON device_grant.grant_id = companion_session.grant_id
+        JOIN auth_device_requests device_request ON device_request.request_id = device_grant.request_id
+        WHERE companion_session.session_id = NEW.companion_session_id
+          AND companion_session.grant_id = NEW.device_grant_id
+          AND companion_session.principal_purpose = NEW.principal_purpose
+          AND device_grant.principal_purpose = NEW.principal_purpose
+          AND device_request.principal_purpose = NEW.principal_purpose
+          AND NEW.principal_purpose = 'session_control_client'
+          AND companion_session.revoked_at IS NULL AND device_grant.revoked_at IS NULL
+          AND strftime('%Y-%m-%dT%H:%M:%fZ', companion_session.refresh_token_expires_at, '+0 days')
+            IS NOT NULL
+          AND strftime('%Y-%m-%dT%H:%M:%fZ', companion_session.refresh_token_expires_at, '+0 days')
+            = companion_session.refresh_token_expires_at
+          AND companion_session.refresh_token_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          AND (device_grant.expires_at IS NULL OR (
+            strftime('%Y-%m-%dT%H:%M:%fZ', device_grant.expires_at, '+0 days') IS NOT NULL
+            AND strftime('%Y-%m-%dT%H:%M:%fZ', device_grant.expires_at, '+0 days') = device_grant.expires_at
+            AND device_grant.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          ))
+      ))
+      OR julianday(NEW.created_at) IS NULL
+      OR julianday(NEW.updated_at) IS NULL
+      OR (
+        (abs((julianday(NEW.created_at) - julianday('now')) * 86400.0) > 1.0
+          OR abs((julianday(NEW.updated_at) - julianday('now')) * 86400.0) > 1.0)
+        AND NOT EXISTS (
+          SELECT 1
+          FROM chat_session_control_auth_revoke_operation_targets target
+          JOIN chat_session_control_auth_revoke_operations operation
+            ON operation.idempotency_key = target.operation_idempotency_key
+          WHERE target.target_kind = 'current_grant'
+            AND target.workspace_id = NEW.workspace_id AND target.session_id = NEW.session_id
+            AND target.generation + 1 = NEW.generation
+            AND target.event_idempotency_key = NEW.transition_idempotency_key
+            AND operation.request_sha256 = NEW.transition_request_sha256
+            AND operation.occurred_at = NEW.created_at AND operation.occurred_at = NEW.updated_at
+            AND NEW.owner_kind = 'operator' AND NEW.lease_state = 'operator_active'
+            AND NOT EXISTS (
+              SELECT 1 FROM chat_session_control_auth_revoke_receipts receipt
+              WHERE receipt.idempotency_key = operation.idempotency_key
+            )
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM chat_session_control_events event_row
+          WHERE substr(event_row.idempotency_key, 1, 18) = 'heartbeat-preempt_'
+            AND event_row.workspace_id = NEW.workspace_id
+            AND event_row.session_id = NEW.session_id
+            AND event_row.request_id IS NULL
+            AND event_row.previous_generation = NEW.generation - 1
+            AND event_row.next_generation = NEW.generation
+            AND event_row.previous_owner_kind = 'operator'
+            AND event_row.next_owner_kind = 'operator'
+            AND event_row.previous_lease_state = 'operator_active'
+            AND event_row.next_lease_state = 'operator_active'
+            AND event_row.reason_code = 'heartbeat_preempted'
+            AND event_row.actor_kind = 'operator'
+            AND event_row.companion_session_id IS NULL
+            AND event_row.device_grant_id IS NULL
+            AND event_row.idempotency_key = NEW.transition_idempotency_key
+            AND event_row.request_sha256 = NEW.transition_request_sha256
+            AND event_row.created_at = NEW.created_at
+            AND NEW.updated_at = NEW.created_at
+        )
+      )
+      OR (NEW.owner_kind = 'external_companion' AND (
+        julianday(NEW.token_expires_at) IS NULL
+        OR julianday(NEW.last_heartbeat_at) IS NULL
+        OR julianday(NEW.lease_expires_at) IS NULL
+        OR julianday(NEW.reconnect_expires_at) IS NULL
+        OR abs((julianday(NEW.token_expires_at) - julianday('now')) * 86400.0 - 900.0) > 1.0
+        OR abs((julianday(NEW.last_heartbeat_at) - julianday('now')) * 86400.0) > 1.0
+        OR abs((julianday(NEW.lease_expires_at) - julianday('now')) * 86400.0 - 60.0) > 1.0
+        OR abs((julianday(NEW.reconnect_expires_at) - julianday('now')) * 86400.0 - 300.0) > 1.0
+      ))
+    BEGIN SELECT RAISE(ABORT, 'session control generation, workspace, or database-clock invariant violated'); END;
+  `);
+}
+
+function createSessionControlFoundationSchema(db: DatabaseSync): void {
+  addColumnIfMissingIfTableExists(
+    db,
+    "auth_device_requests",
+    "principal_purpose",
+    "TEXT NOT NULL DEFAULT 'general_companion' CHECK(principal_purpose IN ('general_companion', 'session_control_client'))",
+  );
+  addColumnIfMissingIfTableExists(
+    db,
+    "auth_device_grants",
+    "principal_purpose",
+    "TEXT NOT NULL DEFAULT 'general_companion' CHECK(principal_purpose IN ('general_companion', 'session_control_client'))",
+  );
+  addColumnIfMissingIfTableExists(
+    db,
+    "companion_sessions",
+    "principal_purpose",
+    "TEXT NOT NULL DEFAULT 'general_companion' CHECK(principal_purpose IN ('general_companion', 'session_control_client'))",
+  );
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS chat_session_control_tokens (
+      token_sha256 TEXT PRIMARY KEY CHECK(length(token_sha256) = 64 AND token_sha256 NOT GLOB '*[^0-9a-f]*'),
+      workspace_id TEXT NOT NULL CHECK(length(workspace_id) BETWEEN 1 AND 256),
+      session_id TEXT NOT NULL CHECK(length(session_id) BETWEEN 1 AND 256),
+      first_request_id TEXT CHECK(first_request_id IS NULL OR length(first_request_id) BETWEEN 1 AND 256),
+      created_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') = created_at
+      )
+    );
+
+    CREATE TABLE IF NOT EXISTS chat_session_control_requests (
+      request_id TEXT PRIMARY KEY CHECK(length(request_id) BETWEEN 1 AND 256),
+      workspace_id TEXT NOT NULL CHECK(length(workspace_id) BETWEEN 1 AND 256),
+      session_id TEXT NOT NULL CHECK(length(session_id) BETWEEN 1 AND 256),
+      companion_session_id TEXT NOT NULL CHECK(length(companion_session_id) BETWEEN 1 AND 256),
+      device_grant_id TEXT NOT NULL CHECK(length(device_grant_id) BETWEEN 1 AND 256),
+      client_instance_id TEXT NOT NULL CHECK(length(client_instance_id) BETWEEN 1 AND 256),
+      principal_purpose TEXT NOT NULL CHECK(principal_purpose = 'session_control_client'),
+      token_sha256 TEXT NOT NULL,
+      requested_capabilities_json TEXT NOT NULL CHECK(requested_capabilities_json IN ('["send"]', '["send","read"]')),
+      requested_capabilities_sha256 TEXT NOT NULL CHECK(
+        length(requested_capabilities_sha256) = 64 AND requested_capabilities_sha256 NOT GLOB '*[^0-9a-f]*'
+      ),
+      requested_generation INTEGER NOT NULL CHECK(
+        typeof(requested_generation) = 'integer' AND requested_generation > 0
+      ),
+      status TEXT NOT NULL CHECK(status IN ('pending', 'rejected', 'expired', 'activated', 'cancelled')),
+      idempotency_key TEXT NOT NULL UNIQUE CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+      request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+      expires_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', expires_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', expires_at, '+0 days') = expires_at
+      ),
+      created_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') = created_at
+      ),
+      decided_at TEXT CHECK(
+        decided_at IS NULL OR (
+          strftime('%Y-%m-%dT%H:%M:%fZ', decided_at, '+0 days') IS NOT NULL
+          AND strftime('%Y-%m-%dT%H:%M:%fZ', decided_at, '+0 days') = decided_at
+        )
+      ),
+      decided_by_actor_id TEXT CHECK(decided_by_actor_id IS NULL OR length(decided_by_actor_id) BETWEEN 1 AND 256),
+      decision_reason_code TEXT CHECK(
+        decision_reason_code IS NULL OR decision_reason_code IN (
+          'request_rejected', 'request_expired', 'request_cancelled', 'handoff'
+        )
+      ),
+      activated_generation INTEGER CHECK(
+        activated_generation IS NULL OR (typeof(activated_generation) = 'integer' AND activated_generation > 1)
+      ),
+      CHECK(
+        (requested_capabilities_json = '["send"]'
+          AND requested_capabilities_sha256 = '700f7799ef50095f9d008c356de23c0eb9562ec753f282f2f060079da99c2d2c')
+        OR (requested_capabilities_json = '["send","read"]'
+          AND requested_capabilities_sha256 = 'e58895e823b5a1618273223b24cd04ca99b2f30171b687fade8ef74a27df7a14')
+      ),
+      FOREIGN KEY(token_sha256) REFERENCES chat_session_control_tokens(token_sha256) ON DELETE RESTRICT,
+      CHECK(expires_at > created_at),
+      CHECK(
+        (status = 'pending' AND decided_at IS NULL AND decided_by_actor_id IS NULL
+          AND decision_reason_code IS NULL AND activated_generation IS NULL)
+        OR (status = 'activated' AND decided_at IS NOT NULL AND decided_at < expires_at
+          AND decided_by_actor_id IS NOT NULL AND decision_reason_code = 'handoff'
+          AND activated_generation = requested_generation + 1)
+        OR (status = 'rejected' AND decided_at IS NOT NULL AND decided_at < expires_at
+          AND decided_by_actor_id IS NOT NULL AND decision_reason_code = 'request_rejected'
+          AND activated_generation IS NULL)
+        OR (status = 'cancelled' AND decided_at IS NOT NULL AND decided_at < expires_at
+          AND decided_by_actor_id IS NOT NULL AND decision_reason_code = 'request_cancelled'
+          AND activated_generation IS NULL)
+        OR (status = 'expired' AND decided_at IS NOT NULL AND decided_at >= expires_at
+          AND decided_by_actor_id IS NOT NULL AND decision_reason_code = 'request_expired'
+          AND activated_generation IS NULL)
+      )
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_chat_session_control_requests_session_status
+      ON chat_session_control_requests(session_id, status, created_at, request_id);
+    CREATE INDEX IF NOT EXISTS idx_chat_session_control_requests_companion_status
+      ON chat_session_control_requests(companion_session_id, status, created_at);
+
+    CREATE TABLE IF NOT EXISTS chat_session_control_grants (
+      workspace_id TEXT NOT NULL CHECK(length(workspace_id) BETWEEN 1 AND 256),
+      session_id TEXT NOT NULL CHECK(length(session_id) BETWEEN 1 AND 256),
+      generation INTEGER NOT NULL CHECK(typeof(generation) = 'integer' AND generation > 0),
+      is_current INTEGER NOT NULL CHECK(typeof(is_current) = 'integer' AND is_current IN (0, 1)),
+      owner_kind TEXT NOT NULL CHECK(owner_kind IN ('operator', 'external_companion')),
+      lease_state TEXT NOT NULL CHECK(lease_state IN (
+        'operator_active', 'external_live', 'external_stale', 'released', 'revoked', 'superseded', 'deleted'
+      )),
+      request_id TEXT,
+      companion_session_id TEXT,
+      device_grant_id TEXT,
+      client_instance_id TEXT,
+      principal_purpose TEXT,
+      requested_capabilities_json TEXT NOT NULL CHECK(
+        requested_capabilities_json IN ('[]', '["send"]', '["send","read"]')
+      ),
+      requested_capabilities_sha256 TEXT NOT NULL CHECK(
+        length(requested_capabilities_sha256) = 64 AND requested_capabilities_sha256 NOT GLOB '*[^0-9a-f]*'
+      ),
+      effective_capabilities_json TEXT NOT NULL CHECK(
+        effective_capabilities_json IN ('[]', '["send"]', '["send","read"]')
+      ),
+      effective_capabilities_sha256 TEXT NOT NULL CHECK(
+        length(effective_capabilities_sha256) = 64 AND effective_capabilities_sha256 NOT GLOB '*[^0-9a-f]*'
+      ),
+      token_sha256 TEXT,
+      token_expires_at TEXT,
+      last_heartbeat_at TEXT,
+      lease_expires_at TEXT,
+      reconnect_expires_at TEXT,
+      control_revision INTEGER NOT NULL CHECK(typeof(control_revision) = 'integer' AND control_revision > 0),
+      transition_idempotency_key TEXT NOT NULL UNIQUE CHECK(length(transition_idempotency_key) BETWEEN 1 AND 512),
+      transition_request_sha256 TEXT NOT NULL CHECK(
+        length(transition_request_sha256) = 64 AND transition_request_sha256 NOT GLOB '*[^0-9a-f]*'
+      ),
+      created_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') = created_at
+      ),
+      updated_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0 days') = updated_at
+      ),
+      terminal_at TEXT CHECK(
+        terminal_at IS NULL OR (
+          strftime('%Y-%m-%dT%H:%M:%fZ', terminal_at, '+0 days') IS NOT NULL
+          AND strftime('%Y-%m-%dT%H:%M:%fZ', terminal_at, '+0 days') = terminal_at
+        )
+      ),
+      CHECK(
+        (requested_capabilities_json = '[]'
+          AND requested_capabilities_sha256 = '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945')
+        OR (requested_capabilities_json = '["send"]'
+          AND requested_capabilities_sha256 = '700f7799ef50095f9d008c356de23c0eb9562ec753f282f2f060079da99c2d2c')
+        OR (requested_capabilities_json = '["send","read"]'
+          AND requested_capabilities_sha256 = 'e58895e823b5a1618273223b24cd04ca99b2f30171b687fade8ef74a27df7a14')
+      ),
+      CHECK(
+        (effective_capabilities_json = '[]'
+          AND effective_capabilities_sha256 = '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945')
+        OR (effective_capabilities_json = '["send"]'
+          AND effective_capabilities_sha256 = '700f7799ef50095f9d008c356de23c0eb9562ec753f282f2f060079da99c2d2c')
+        OR (effective_capabilities_json = '["send","read"]'
+          AND effective_capabilities_sha256 = 'e58895e823b5a1618273223b24cd04ca99b2f30171b687fade8ef74a27df7a14')
+      ),
+      PRIMARY KEY(session_id, generation),
+      FOREIGN KEY(request_id) REFERENCES chat_session_control_requests(request_id) ON DELETE RESTRICT,
+      FOREIGN KEY(token_sha256) REFERENCES chat_session_control_tokens(token_sha256) ON DELETE RESTRICT,
+      CHECK(updated_at >= created_at),
+      CHECK(
+        (is_current = 1 AND terminal_at IS NULL AND lease_state IN ('operator_active', 'external_live', 'external_stale'))
+        OR (is_current = 0 AND terminal_at IS NOT NULL AND lease_state IN ('released', 'revoked', 'superseded', 'deleted'))
+      ),
+      CHECK(
+        (owner_kind = 'operator' AND request_id IS NULL AND companion_session_id IS NULL
+          AND device_grant_id IS NULL AND client_instance_id IS NULL AND principal_purpose IS NULL
+          AND requested_capabilities_json = '[]' AND effective_capabilities_json = '[]'
+          AND token_sha256 IS NULL AND token_expires_at IS NULL AND last_heartbeat_at IS NULL
+          AND lease_expires_at IS NULL AND reconnect_expires_at IS NULL)
+        OR (owner_kind = 'external_companion' AND generation >= 2 AND request_id IS NOT NULL
+          AND length(companion_session_id) BETWEEN 1 AND 256 AND length(device_grant_id) BETWEEN 1 AND 256
+          AND length(client_instance_id) BETWEEN 1 AND 256 AND principal_purpose = 'session_control_client'
+          AND requested_capabilities_json IN ('["send"]', '["send","read"]')
+          AND effective_capabilities_json IN ('["send"]', '["send","read"]')
+          AND token_sha256 IS NOT NULL AND token_expires_at IS NOT NULL AND last_heartbeat_at IS NOT NULL
+          AND lease_expires_at IS NOT NULL AND reconnect_expires_at IS NOT NULL
+          AND lease_expires_at > last_heartbeat_at AND reconnect_expires_at > lease_expires_at)
+      )
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_session_control_grants_one_current
+      ON chat_session_control_grants(session_id) WHERE is_current = 1;
+    CREATE INDEX IF NOT EXISTS idx_chat_session_control_grants_workspace_current
+      ON chat_session_control_grants(workspace_id, is_current, updated_at DESC, session_id);
+    CREATE INDEX IF NOT EXISTS idx_chat_session_control_grants_companion_current
+      ON chat_session_control_grants(companion_session_id, is_current, session_id);
+    CREATE INDEX IF NOT EXISTS idx_chat_session_control_grants_device_current
+      ON chat_session_control_grants(device_grant_id, is_current, session_id);
+
+    CREATE TABLE IF NOT EXISTS chat_session_control_events (
+      event_id TEXT PRIMARY KEY CHECK(length(event_id) BETWEEN 1 AND 256),
+      workspace_id TEXT NOT NULL CHECK(length(workspace_id) BETWEEN 1 AND 256),
+      session_id TEXT NOT NULL CHECK(length(session_id) BETWEEN 1 AND 256),
+      event_sequence INTEGER NOT NULL CHECK(typeof(event_sequence) = 'integer' AND event_sequence > 0),
+      request_id TEXT,
+      previous_generation INTEGER CHECK(
+        previous_generation IS NULL OR (typeof(previous_generation) = 'integer' AND previous_generation > 0)
+      ),
+      next_generation INTEGER NOT NULL CHECK(typeof(next_generation) = 'integer' AND next_generation > 0),
+      previous_owner_kind TEXT CHECK(previous_owner_kind IS NULL OR previous_owner_kind IN ('operator', 'external_companion')),
+      next_owner_kind TEXT CHECK(next_owner_kind IS NULL OR next_owner_kind IN ('operator', 'external_companion')),
+      previous_lease_state TEXT CHECK(previous_lease_state IS NULL OR previous_lease_state IN (
+        'operator_active', 'external_live', 'external_stale', 'released', 'revoked', 'superseded', 'deleted'
+      )),
+      next_lease_state TEXT NOT NULL CHECK(next_lease_state IN (
+        'operator_active', 'external_live', 'external_stale', 'released', 'revoked', 'superseded', 'deleted'
+      )),
+      reason_code TEXT NOT NULL CHECK(reason_code IN (
+        'session_initialized', 'request_created', 'request_rejected', 'request_expired', 'request_cancelled',
+        'handoff', 'heartbeat', 'lease_stale', 'reconnect', 'identity_revoked', 'release',
+        'operator_revoke', 'emergency_takeover', 'auth_revoked', 'session_deleted',
+        'session_reactivated', 'mutation_denied'
+      )),
+      actor_kind TEXT NOT NULL CHECK(actor_kind IN ('operator', 'external_companion', 'system')),
+      actor_id TEXT NOT NULL CHECK(length(actor_id) BETWEEN 1 AND 256),
+      companion_session_id TEXT CHECK(companion_session_id IS NULL OR length(companion_session_id) BETWEEN 1 AND 256),
+      device_grant_id TEXT CHECK(device_grant_id IS NULL OR length(device_grant_id) BETWEEN 1 AND 256),
+      idempotency_key TEXT NOT NULL UNIQUE CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+      request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+      correlation_id TEXT NOT NULL CHECK(length(correlation_id) BETWEEN 1 AND 256),
+      created_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') = created_at
+      ),
+      FOREIGN KEY(request_id) REFERENCES chat_session_control_requests(request_id) ON DELETE RESTRICT,
+      UNIQUE(session_id, event_sequence),
+      CHECK(
+        (reason_code = 'session_initialized' AND previous_generation IS NULL AND previous_owner_kind IS NULL
+          AND previous_lease_state IS NULL AND next_generation = 1 AND next_owner_kind = 'operator'
+          AND next_lease_state = 'operator_active' AND actor_kind = 'system')
+        OR (reason_code <> 'session_initialized' AND previous_generation IS NOT NULL)
+      )
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_chat_session_control_events_session_created
+      ON chat_session_control_events(session_id, event_sequence);
+    CREATE INDEX IF NOT EXISTS idx_chat_session_control_events_workspace_created
+      ON chat_session_control_events(workspace_id, created_at DESC, event_id);
+    CREATE INDEX IF NOT EXISTS idx_chat_session_control_events_companion_created
+      ON chat_session_control_events(companion_session_id, created_at DESC, event_id);
+    CREATE INDEX IF NOT EXISTS idx_chat_session_control_events_request_sha256
+      ON chat_session_control_events(request_sha256, workspace_id, session_id, event_sequence);
+
+    CREATE TABLE IF NOT EXISTS chat_session_control_auth_revoke_receipts (
+      idempotency_key TEXT PRIMARY KEY CHECK(length(idempotency_key) BETWEEN 1 AND 512),
+      request_sha256 TEXT NOT NULL CHECK(length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*'),
+      binding_kind TEXT NOT NULL CHECK(binding_kind IN ('companion_session', 'device_grant')),
+      binding_id TEXT NOT NULL CHECK(length(binding_id) BETWEEN 1 AND 256),
+      actor_id TEXT NOT NULL CHECK(length(actor_id) BETWEEN 1 AND 256),
+      correlation_id TEXT NOT NULL CHECK(length(correlation_id) BETWEEN 1 AND 256),
+      target_count INTEGER NOT NULL CHECK(typeof(target_count) = 'integer' AND target_count >= 0),
+      session_count INTEGER NOT NULL CHECK(typeof(session_count) = 'integer' AND session_count >= 0),
+      event_set_sha256 TEXT NOT NULL CHECK(
+        length(event_set_sha256) = 64 AND event_set_sha256 NOT GLOB '*[^0-9a-f]*'
+      ),
+      created_at TEXT NOT NULL CHECK(
+        strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') IS NOT NULL
+        AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+0 days') = created_at
+      ),
+      CHECK(
+        (target_count = 0 AND session_count = 0
+          AND event_set_sha256 = '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945')
+        OR (target_count > 0 AND session_count BETWEEN 1 AND target_count)
+      )
+    );
+
+    CREATE TRIGGER IF NOT EXISTS trg_auth_device_requests_principal_purpose_immutable
+    BEFORE UPDATE ON auth_device_requests
+    WHEN NEW.principal_purpose <> OLD.principal_purpose
+    BEGIN SELECT RAISE(ABORT, 'auth device request principal purpose is immutable'); END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_auth_device_grants_principal_purpose_guard
+    BEFORE INSERT ON auth_device_grants
+    WHEN NOT EXISTS (
+      SELECT 1 FROM auth_device_requests request_row
+      WHERE request_row.request_id = NEW.request_id
+        AND request_row.principal_purpose = NEW.principal_purpose
+    )
+    BEGIN SELECT RAISE(ABORT, 'auth device grant principal purpose must match its request'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_auth_device_grants_principal_purpose_immutable
+    BEFORE UPDATE ON auth_device_grants
+    WHEN NEW.request_id <> OLD.request_id
+      OR NEW.principal_purpose <> OLD.principal_purpose
+      OR NOT EXISTS (
+        SELECT 1 FROM auth_device_requests request_row
+        WHERE request_row.request_id = NEW.request_id
+          AND request_row.principal_purpose = NEW.principal_purpose
+      )
+    BEGIN SELECT RAISE(ABORT, 'auth device grant parent and principal purpose are immutable'); END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_companion_sessions_principal_purpose_guard
+    BEFORE INSERT ON companion_sessions
+    WHEN NOT EXISTS (
+      SELECT 1 FROM auth_device_grants grant_row
+      WHERE grant_row.grant_id = NEW.grant_id
+        AND grant_row.principal_purpose = NEW.principal_purpose
+    )
+    BEGIN SELECT RAISE(ABORT, 'companion session principal purpose must match its grant'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_companion_sessions_principal_purpose_immutable
+    BEFORE UPDATE ON companion_sessions
+    WHEN NEW.grant_id <> OLD.grant_id
+      OR NEW.principal_purpose <> OLD.principal_purpose
+      OR NOT EXISTS (
+        SELECT 1 FROM auth_device_grants grant_row
+        WHERE grant_row.grant_id = NEW.grant_id
+          AND grant_row.principal_purpose = NEW.principal_purpose
+      )
+    BEGIN SELECT RAISE(ABORT, 'companion session parent and principal purpose are immutable'); END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_chat_session_control_tokens_no_update
+    BEFORE UPDATE ON chat_session_control_tokens
+    BEGIN SELECT RAISE(ABORT, 'session control token hashes are immutable'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_chat_session_control_tokens_no_delete
+    BEFORE DELETE ON chat_session_control_tokens
+    BEGIN SELECT RAISE(ABORT, 'session control token hashes are immutable'); END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_chat_session_control_tokens_insert_guard
+    BEFORE INSERT ON chat_session_control_tokens
+    WHEN NOT EXISTS (
+      SELECT 1 FROM chat_session_control_grants grant_row
+      WHERE grant_row.workspace_id = NEW.workspace_id AND grant_row.session_id = NEW.session_id
+    )
+    BEGIN SELECT RAISE(ABORT, 'session control token binding invariant violated'); END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_chat_session_control_requests_insert_guard
+    BEFORE INSERT ON chat_session_control_requests
+    WHEN NEW.status <> 'pending'
+      OR NOT EXISTS (
+        SELECT 1 FROM chat_session_control_tokens token_row
+        WHERE token_row.token_sha256 = NEW.token_sha256
+          AND token_row.workspace_id = NEW.workspace_id
+          AND token_row.session_id = NEW.session_id
+          AND token_row.first_request_id = NEW.request_id
+      )
+      OR NOT EXISTS (
+        SELECT 1 FROM chat_session_control_grants grant_row
+        WHERE grant_row.workspace_id = NEW.workspace_id AND grant_row.session_id = NEW.session_id
+          AND grant_row.generation = NEW.requested_generation AND grant_row.is_current = 1
+          AND grant_row.owner_kind = 'operator' AND grant_row.lease_state = 'operator_active'
+      )
+      OR NOT EXISTS (
+        SELECT 1
+        FROM companion_sessions companion_session
+        JOIN auth_device_grants device_grant ON device_grant.grant_id = companion_session.grant_id
+        JOIN auth_device_requests device_request ON device_request.request_id = device_grant.request_id
+        WHERE companion_session.session_id = NEW.companion_session_id
+          AND companion_session.grant_id = NEW.device_grant_id
+          AND companion_session.principal_purpose = NEW.principal_purpose
+          AND device_grant.principal_purpose = NEW.principal_purpose
+          AND device_request.principal_purpose = NEW.principal_purpose
+          AND NEW.principal_purpose = 'session_control_client'
+          AND companion_session.revoked_at IS NULL AND device_grant.revoked_at IS NULL
+          AND strftime('%Y-%m-%dT%H:%M:%fZ', companion_session.refresh_token_expires_at, '+0 days')
+            = companion_session.refresh_token_expires_at
+          AND companion_session.refresh_token_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          AND (device_grant.expires_at IS NULL OR (
+            strftime('%Y-%m-%dT%H:%M:%fZ', device_grant.expires_at, '+0 days') = device_grant.expires_at
+            AND device_grant.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          ))
+      )
+    BEGIN SELECT RAISE(ABORT, 'session control request binding invariant violated'); END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_chat_session_control_requests_transition_guard
+    BEFORE UPDATE ON chat_session_control_requests
+    WHEN OLD.status <> 'pending'
+      OR NEW.request_id <> OLD.request_id OR NEW.workspace_id <> OLD.workspace_id
+      OR NEW.session_id <> OLD.session_id OR NEW.companion_session_id <> OLD.companion_session_id
+      OR NEW.device_grant_id <> OLD.device_grant_id OR NEW.client_instance_id <> OLD.client_instance_id
+      OR NEW.principal_purpose <> OLD.principal_purpose OR NEW.token_sha256 <> OLD.token_sha256
+      OR NEW.requested_capabilities_json <> OLD.requested_capabilities_json
+      OR NEW.requested_capabilities_sha256 <> OLD.requested_capabilities_sha256
+      OR NEW.requested_generation <> OLD.requested_generation OR NEW.idempotency_key <> OLD.idempotency_key
+      OR NEW.request_sha256 <> OLD.request_sha256 OR NEW.expires_at <> OLD.expires_at
+      OR NEW.created_at <> OLD.created_at OR NEW.status = 'pending'
+      OR abs((julianday(NEW.decided_at) - julianday('now')) * 86400.0) > 1.0
+    BEGIN SELECT RAISE(ABORT, 'session control request transition invariant violated'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_chat_session_control_requests_no_delete
+    BEFORE DELETE ON chat_session_control_requests
+    BEGIN SELECT RAISE(ABORT, 'session control requests are durable'); END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_chat_session_control_grants_insert_guard
+    BEFORE INSERT ON chat_session_control_grants
+    WHEN NEW.is_current <> 1
+      OR EXISTS (
+        SELECT 1 FROM chat_session_control_grants prior
+        WHERE prior.session_id = NEW.session_id AND prior.workspace_id <> NEW.workspace_id
+      )
+      OR (
+        NOT EXISTS (SELECT 1 FROM chat_session_control_grants prior WHERE prior.session_id = NEW.session_id)
+        AND NEW.generation <> 1
+      )
+      OR (
+        EXISTS (SELECT 1 FROM chat_session_control_grants prior WHERE prior.session_id = NEW.session_id)
+        AND NEW.generation <> (
+          SELECT MAX(prior.generation) + 1 FROM chat_session_control_grants prior WHERE prior.session_id = NEW.session_id
+        )
+      )
+      OR (NEW.owner_kind = 'external_companion' AND NOT EXISTS (
+        SELECT 1
+        FROM chat_session_control_requests request_row
+        JOIN chat_session_control_tokens token_row ON token_row.token_sha256 = NEW.token_sha256
+        WHERE request_row.request_id = NEW.request_id
+          AND request_row.workspace_id = NEW.workspace_id AND request_row.session_id = NEW.session_id
+          AND request_row.companion_session_id = NEW.companion_session_id
+          AND request_row.device_grant_id = NEW.device_grant_id
+          AND request_row.client_instance_id = NEW.client_instance_id
+          AND request_row.principal_purpose = NEW.principal_purpose
+          AND request_row.requested_capabilities_json = NEW.requested_capabilities_json
+          AND request_row.requested_capabilities_sha256 = NEW.requested_capabilities_sha256
+          AND request_row.status = 'activated' AND request_row.decision_reason_code = 'handoff'
+          AND request_row.activated_generation = request_row.requested_generation + 1
+          AND request_row.activated_generation <= NEW.generation
+          AND token_row.workspace_id = NEW.workspace_id AND token_row.session_id = NEW.session_id
+          AND (
+            (NEW.generation = request_row.activated_generation AND NEW.token_sha256 = request_row.token_sha256)
+            OR (NEW.generation > request_row.activated_generation AND EXISTS (
+              SELECT 1 FROM chat_session_control_grants prior
+              WHERE prior.workspace_id = NEW.workspace_id AND prior.session_id = NEW.session_id
+                AND prior.generation = NEW.generation - 1 AND prior.owner_kind = 'external_companion'
+                AND prior.request_id = NEW.request_id
+                AND prior.companion_session_id = NEW.companion_session_id
+                AND prior.device_grant_id = NEW.device_grant_id
+                AND prior.client_instance_id = NEW.client_instance_id
+                AND prior.principal_purpose = NEW.principal_purpose
+                AND prior.requested_capabilities_json = NEW.requested_capabilities_json
+                AND prior.requested_capabilities_sha256 = NEW.requested_capabilities_sha256
+                AND prior.effective_capabilities_json = NEW.effective_capabilities_json
+                AND prior.effective_capabilities_sha256 = NEW.effective_capabilities_sha256
+            ))
+          )
+          AND (
+            (NEW.requested_capabilities_json = '["send"]' AND NEW.effective_capabilities_json = '["send"]')
+            OR (NEW.requested_capabilities_json = '["send","read"]'
+              AND NEW.effective_capabilities_json IN ('["send"]', '["send","read"]'))
+          )
+      ))
+      OR (NEW.owner_kind = 'external_companion' AND NOT EXISTS (
+        SELECT 1
+        FROM companion_sessions companion_session
+        JOIN auth_device_grants device_grant ON device_grant.grant_id = companion_session.grant_id
+        JOIN auth_device_requests device_request ON device_request.request_id = device_grant.request_id
+        WHERE companion_session.session_id = NEW.companion_session_id
+          AND companion_session.grant_id = NEW.device_grant_id
+          AND companion_session.principal_purpose = NEW.principal_purpose
+          AND device_grant.principal_purpose = NEW.principal_purpose
+          AND device_request.principal_purpose = NEW.principal_purpose
+          AND NEW.principal_purpose = 'session_control_client'
+          AND companion_session.revoked_at IS NULL AND device_grant.revoked_at IS NULL
+          AND strftime('%Y-%m-%dT%H:%M:%fZ', companion_session.refresh_token_expires_at, '+0 days')
+            = companion_session.refresh_token_expires_at
+          AND companion_session.refresh_token_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          AND (device_grant.expires_at IS NULL OR (
+            strftime('%Y-%m-%dT%H:%M:%fZ', device_grant.expires_at, '+0 days') = device_grant.expires_at
+            AND device_grant.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          ))
+      ))
+      OR abs((julianday(NEW.created_at) - julianday('now')) * 86400.0) > 1.0
+      OR abs((julianday(NEW.updated_at) - julianday('now')) * 86400.0) > 1.0
+      OR (NEW.owner_kind = 'external_companion' AND (
+        abs((julianday(NEW.token_expires_at) - julianday('now')) * 86400.0 - 900.0) > 1.0
+        OR abs((julianday(NEW.last_heartbeat_at) - julianday('now')) * 86400.0) > 1.0
+        OR abs((julianday(NEW.lease_expires_at) - julianday('now')) * 86400.0 - 60.0) > 1.0
+        OR abs((julianday(NEW.reconnect_expires_at) - julianday('now')) * 86400.0 - 300.0) > 1.0
+      ))
+    BEGIN SELECT RAISE(ABORT, 'session control generation, workspace, or database-clock invariant violated'); END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_chat_session_control_grants_update_guard
+    BEFORE UPDATE ON chat_session_control_grants
+    WHEN OLD.is_current <> 1 OR OLD.terminal_at IS NOT NULL
+      OR NEW.workspace_id <> OLD.workspace_id OR NEW.session_id <> OLD.session_id
+      OR NEW.generation <> OLD.generation OR NEW.owner_kind <> OLD.owner_kind
+      OR NEW.request_id IS NOT OLD.request_id OR NEW.companion_session_id IS NOT OLD.companion_session_id
+      OR NEW.device_grant_id IS NOT OLD.device_grant_id OR NEW.client_instance_id IS NOT OLD.client_instance_id
+      OR NEW.principal_purpose IS NOT OLD.principal_purpose
+      OR NEW.requested_capabilities_json <> OLD.requested_capabilities_json
+      OR NEW.requested_capabilities_sha256 <> OLD.requested_capabilities_sha256
+      OR NEW.effective_capabilities_json <> OLD.effective_capabilities_json
+      OR NEW.effective_capabilities_sha256 <> OLD.effective_capabilities_sha256
+      OR NEW.token_sha256 IS NOT OLD.token_sha256 OR NEW.token_expires_at IS NOT OLD.token_expires_at
+      OR NEW.transition_idempotency_key <> OLD.transition_idempotency_key
+      OR NEW.transition_request_sha256 <> OLD.transition_request_sha256 OR NEW.created_at <> OLD.created_at
+      OR NEW.control_revision <> OLD.control_revision + 1 OR NEW.updated_at < OLD.updated_at
+      OR abs((julianday(NEW.updated_at) - julianday('now')) * 86400.0) > 1.0
+      OR NOT (
+        (OLD.owner_kind = 'external_companion' AND OLD.lease_state = 'external_live'
+          AND NEW.is_current = 1 AND NEW.lease_state = 'external_live' AND NEW.terminal_at IS NULL
+          AND NEW.last_heartbeat_at >= OLD.last_heartbeat_at
+          AND abs((julianday(NEW.last_heartbeat_at) - julianday('now')) * 86400.0) <= 1.0
+          AND abs((julianday(NEW.lease_expires_at) - julianday('now')) * 86400.0 - 60.0) <= 1.0
+          AND abs((julianday(NEW.reconnect_expires_at) - julianday('now')) * 86400.0 - 300.0) <= 1.0)
+        OR (OLD.owner_kind = 'external_companion' AND OLD.lease_state = 'external_live'
+          AND NEW.is_current = 1 AND NEW.lease_state = 'external_stale' AND NEW.terminal_at IS NULL
+          AND NEW.last_heartbeat_at = OLD.last_heartbeat_at AND NEW.lease_expires_at = OLD.lease_expires_at
+          AND NEW.reconnect_expires_at = OLD.reconnect_expires_at)
+        OR (NEW.is_current = 0 AND NEW.lease_state IN ('released', 'revoked', 'superseded', 'deleted')
+          AND NEW.terminal_at = NEW.updated_at AND NEW.last_heartbeat_at IS OLD.last_heartbeat_at
+          AND NEW.lease_expires_at IS OLD.lease_expires_at AND NEW.reconnect_expires_at IS OLD.reconnect_expires_at)
+      )
+    BEGIN SELECT RAISE(ABORT, 'session control current generation transition invariant violated'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_chat_session_control_grants_no_delete
+    BEFORE DELETE ON chat_session_control_grants
+    BEGIN SELECT RAISE(ABORT, 'session control grants are durable'); END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_chat_session_control_events_insert_guard
+    BEFORE INSERT ON chat_session_control_events
+    WHEN NEW.request_id IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM chat_session_control_requests request_row
+      WHERE request_row.request_id = NEW.request_id
+        AND request_row.workspace_id = NEW.workspace_id AND request_row.session_id = NEW.session_id
+        AND request_row.companion_session_id = NEW.companion_session_id
+        AND request_row.device_grant_id = NEW.device_grant_id
+    )
+    BEGIN SELECT RAISE(ABORT, 'session control event request attribution invariant violated'); END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_chat_session_control_events_no_update
+    BEFORE UPDATE ON chat_session_control_events
+    BEGIN SELECT RAISE(ABORT, 'session control events are append-only'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_chat_session_control_events_no_delete
+    BEFORE DELETE ON chat_session_control_events
+    BEGIN SELECT RAISE(ABORT, 'session control events are append-only'); END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_chat_session_control_auth_revoke_receipts_insert_guard
+    BEFORE INSERT ON chat_session_control_auth_revoke_receipts
+    WHEN abs((julianday(NEW.created_at) - julianday('now')) * 86400.0) > 1.0
+      OR (
+        SELECT COUNT(*) FROM chat_session_control_events event_row
+        WHERE event_row.request_sha256 = NEW.request_sha256
+      ) <> NEW.target_count
+      OR (
+        SELECT COUNT(DISTINCT event_row.workspace_id || char(0) || event_row.session_id)
+        FROM chat_session_control_events event_row
+        WHERE event_row.request_sha256 = NEW.request_sha256
+      ) <> NEW.session_count
+      OR (NEW.target_count > 0 AND NOT EXISTS (
+        SELECT 1 FROM chat_session_control_events event_row
+        WHERE event_row.request_sha256 = NEW.request_sha256
+          AND event_row.idempotency_key = NEW.idempotency_key
+      ))
+    BEGIN SELECT RAISE(ABORT, 'session control auth revoke receipt invariant violated'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_chat_session_control_auth_revoke_receipts_no_update
+    BEFORE UPDATE ON chat_session_control_auth_revoke_receipts
+    BEGIN SELECT RAISE(ABORT, 'session control auth revoke receipts are immutable'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_chat_session_control_auth_revoke_receipts_no_delete
+    BEFORE DELETE ON chat_session_control_auth_revoke_receipts
+    BEGIN SELECT RAISE(ABORT, 'session control auth revoke receipts are immutable'); END;
+
+    INSERT INTO chat_session_control_grants (
+      workspace_id, session_id, generation, is_current, owner_kind, lease_state,
+      requested_capabilities_json, requested_capabilities_sha256,
+      effective_capabilities_json, effective_capabilities_sha256,
+      control_revision, transition_idempotency_key, transition_request_sha256,
+      created_at, updated_at
+    )
+    SELECT
+      meta.workspace_id, meta.session_id, 1, 1, 'operator', 'operator_active',
+      '[]', '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945',
+      '[]', '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945',
+      1, 'migration:172:' || meta.session_id,
+      'b133aba1d745b01c28823f849c760975b6dbabae2f3e647ebdbe8fae58b96da9',
+      strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    FROM chat_session_meta meta
+    WHERE NOT EXISTS (
+      SELECT 1 FROM chat_session_control_grants grant_row WHERE grant_row.session_id = meta.session_id
+    );
+
+    INSERT INTO chat_session_control_events (
+      event_id, workspace_id, session_id, event_sequence, request_id, previous_generation, next_generation,
+      previous_owner_kind, next_owner_kind, previous_lease_state, next_lease_state,
+      reason_code, actor_kind, actor_id, companion_session_id, device_grant_id,
+      idempotency_key, request_sha256, correlation_id, created_at
+    )
+    SELECT
+      'sce_' || lower(hex(randomblob(24))), meta.workspace_id, meta.session_id, 1, NULL, NULL, 1,
+      NULL, 'operator', NULL, 'operator_active', 'session_initialized', 'system', 'system', NULL, NULL,
+      'migration:172:event:' || meta.session_id,
+      'b133aba1d745b01c28823f849c760975b6dbabae2f3e647ebdbe8fae58b96da9',
+      'migration:172', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    FROM chat_session_meta meta
+    JOIN chat_session_control_grants grant_row
+      ON grant_row.session_id = meta.session_id AND grant_row.generation = 1
+    WHERE NOT EXISTS (
+      SELECT 1 FROM chat_session_control_events event_row WHERE event_row.session_id = meta.session_id
+    );
+
+    CREATE TEMP TABLE IF NOT EXISTS gc_session_control_backfill_guard (
+      ok INTEGER NOT NULL CHECK(ok = 1)
+    );
+    DELETE FROM gc_session_control_backfill_guard;
+    INSERT INTO gc_session_control_backfill_guard(ok)
+    SELECT CASE WHEN EXISTS (
+      SELECT 1
+      FROM chat_session_meta meta
+      LEFT JOIN chat_session_control_grants grant_row
+        ON grant_row.session_id = meta.session_id AND grant_row.is_current = 1
+      WHERE grant_row.session_id IS NULL OR grant_row.workspace_id <> meta.workspace_id
+        OR NOT EXISTS (
+          SELECT 1 FROM chat_session_control_events event_row WHERE event_row.session_id = meta.session_id
+        )
+    ) THEN 0 ELSE 1 END;
+    DROP TABLE gc_session_control_backfill_guard;
+  `);
+}
 
 function scrubLegacyDeviceTokenPlaintext(db: DatabaseSync): void {
   if (!tableExists(db, "auth_device_requests")) {
@@ -5018,6 +14914,59 @@ function addColumnIfMissingIfTableExists(
     return;
   }
   addColumnIfMissing(db, tableName, columnName, columnSql);
+}
+
+function backfillSkillAggregateRevisions(db: DatabaseSync): void {
+  const runtimeSources: string[] = [];
+  if (tableExists(db, "skill_lifecycle")) {
+    runtimeSources.push(`
+      SELECT skill_id, created_at, updated_at
+      FROM skill_lifecycle
+      WHERE length(TRIM(created_at)) > 0 AND length(TRIM(updated_at)) > 0
+    `);
+  }
+  if (tableExists(db, "skill_state")) {
+    runtimeSources.push(`
+      SELECT skill_id, updated_at AS created_at, updated_at
+      FROM skill_state
+      WHERE length(TRIM(updated_at)) > 0
+    `);
+  }
+  if (runtimeSources.length > 0) {
+    db.exec(`
+      INSERT OR IGNORE INTO skill_aggregate_revisions (
+        aggregate_kind, aggregate_id, revision, created_at, updated_at
+      )
+      SELECT 'runtime_skill', TRIM(source.skill_id), 1, MIN(source.created_at), MAX(source.updated_at)
+      FROM (${runtimeSources.join(" UNION ALL ")}) AS source
+      WHERE length(TRIM(source.skill_id)) BETWEEN 1 AND 256
+      GROUP BY TRIM(source.skill_id);
+    `);
+  }
+  if (tableExists(db, "candidate_skill_versions")) {
+    db.exec(`
+      INSERT OR IGNORE INTO skill_aggregate_revisions (
+        aggregate_kind, aggregate_id, revision, created_at, updated_at
+      )
+      SELECT 'candidate_skill', TRIM(candidate_id), 1, MIN(created_at), MAX(updated_at)
+      FROM candidate_skill_versions
+      WHERE length(TRIM(candidate_id)) BETWEEN 1 AND 256
+        AND length(TRIM(created_at)) > 0
+        AND length(TRIM(updated_at)) > 0
+      GROUP BY TRIM(candidate_id);
+    `);
+  }
+  if (tableExists(db, "system_settings")) {
+    db.exec(`
+      INSERT OR IGNORE INTO skill_aggregate_revisions (
+        aggregate_kind, aggregate_id, revision, created_at, updated_at
+      )
+      SELECT 'activation_policy', 'global', 1, updated_at, updated_at
+      FROM system_settings
+      WHERE setting_key = 'skill_activation_policy_v1'
+        AND length(TRIM(updated_at)) > 0;
+    `);
+  }
 }
 
 function tableExists(db: DatabaseSync, tableName: string): boolean {

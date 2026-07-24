@@ -29,6 +29,22 @@ const host: LlmProviderAdapterHost = {
       "x-purpose": purpose,
     },
   }),
+  postJsonRequest: async ({ target, payload, timeoutMs, signal }) => {
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
+    const response = await fetch(target.url, {
+      method: "POST",
+      headers: target.headers,
+      body: JSON.stringify(payload),
+      signal: signal ? AbortSignal.any([timeoutSignal, signal]) : timeoutSignal,
+      redirect: "manual",
+    });
+    return {
+      response,
+      effectivePayload: payload,
+      outputCapRetriesRemaining: 0,
+    };
+  },
+  retryOutputCapFailure: async () => undefined,
 };
 
 describe("anthropicProviderAdapter", () => {
@@ -86,9 +102,8 @@ describe("anthropicProviderAdapter", () => {
       tool_choice: { type: "function", function: { name: "lookup" } } as never,
       response_format: { type: "json_object" },
       metadata: { route: "anthropic-test" },
-      temperature: 0.2,
-      top_p: 0.9,
-      max_tokens: 64,
+      top_p: 0.95,
+      max_tokens: 9_000,
       stop: ["STOP"],
       reasoning: { effort: "high" },
       timeoutMs: 123.9,
@@ -108,9 +123,8 @@ describe("anthropicProviderAdapter", () => {
     });
     expect(payload).toMatchObject({
       model: "claude-test",
-      max_tokens: 64,
-      temperature: 0.2,
-      top_p: 0.9,
+      max_tokens: 9_000,
+      top_p: 0.95,
       stop_sequences: ["STOP"],
       metadata: { route: "anthropic-test" },
       output_config: { format: { type: "json_object" } },
@@ -165,6 +179,80 @@ describe("anthropicProviderAdapter", () => {
     });
   });
 
+  it("fails closed when an explicit output cap cannot contain the thinking budget", () => {
+    expect(() =>
+      buildAnthropicMessagesPayload(
+        {
+          messages: [{ role: "user", content: "hello" }],
+          max_tokens: 1_600,
+          reasoning: { effort: "medium" },
+        },
+        "claude-sonnet-4-6",
+      ),
+    ).toThrow(/must be greater than the 4096-token thinking budget/i);
+  });
+
+  it("auto-sizes an omitted output cap above the thinking budget", () => {
+    expect(
+      buildAnthropicMessagesPayload(
+        {
+          messages: [{ role: "user", content: "hello" }],
+          reasoning: { effort: "xhigh" },
+        },
+        "claude-opus-4-8",
+      ),
+    ).toMatchObject({
+      max_tokens: 17_408,
+      thinking: { type: "adaptive" },
+      output_config: { effort: "xhigh" },
+    });
+  });
+
+  it("keeps manual thinking budget_tokens on pre-adaptive models", () => {
+    expect(
+      buildAnthropicMessagesPayload(
+        {
+          messages: [{ role: "user", content: "hello" }],
+          reasoning: { effort: "high" },
+        },
+        "claude-opus-4-5",
+      ),
+    ).toMatchObject({
+      max_tokens: 9_216,
+      thinking: { type: "enabled", budget_tokens: 8_192 },
+    });
+  });
+
+  it("uses model-aware adaptive defaults and fails closed on unsupported effort", () => {
+    expect(
+      buildAnthropicMessagesPayload(
+        { messages: [{ role: "user", content: "hello" }], reasoning: { effort: "high" } },
+        "claude-fable-5",
+      ),
+    ).toMatchObject({
+      max_tokens: 9_216,
+      output_config: { effort: "high" },
+    });
+    expect(
+      buildAnthropicMessagesPayload(
+        { messages: [{ role: "user", content: "hello" }], reasoning: { effort: "none" } },
+        "claude-sonnet-5",
+      ),
+    ).toMatchObject({ max_tokens: 1_024, thinking: { type: "disabled" } });
+    expect(() =>
+      buildAnthropicMessagesPayload(
+        { messages: [{ role: "user", content: "hello" }], reasoning: { effort: "none" } },
+        "claude-fable-5",
+      ),
+    ).toThrow(/cannot honor an explicit reasoning-off/i);
+    expect(() =>
+      buildAnthropicMessagesPayload(
+        { messages: [{ role: "user", content: "hello" }], reasoning: { effort: "ultra" } },
+        "claude-opus-4-8",
+      ),
+    ).toThrow(/does not support the ultra/i);
+  });
+
   it("normalizes streaming text, tool-call deltas, usage, and malformed SSE frames", async () => {
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
@@ -172,7 +260,14 @@ describe("anthropicProviderAdapter", () => {
         controller.enqueue(
           encoder.encode(
             [
-              `data: ${JSON.stringify({ type: "message_start", message: { id: "msg_stream", model: "claude-test" } })}`,
+              `data: ${JSON.stringify({
+                type: "message_start",
+                message: {
+                  id: "msg_stream",
+                  model: "claude-test",
+                  usage: { input_tokens: 7, cache_read_input_tokens: 2 },
+                },
+              })}`,
               "",
               `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "hello " } })}`,
               "",
@@ -195,7 +290,7 @@ describe("anthropicProviderAdapter", () => {
               `data: ${JSON.stringify({
                 type: "message_delta",
                 stop_reason: "max_tokens",
-                usage: { input_tokens: 7, output_tokens: 3 },
+                usage: { output_tokens: 3 },
               })}`,
               "",
               `data: ${JSON.stringify({ type: "message_stop" })}`,
@@ -262,7 +357,12 @@ describe("anthropicProviderAdapter", () => {
         id: "msg_stream",
         model: "claude-test",
         choices: [{ index: 0, delta: {}, finish_reason: "length" }],
-        usage: { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10 },
+        usage: {
+          prompt_tokens: 7,
+          completion_tokens: 3,
+          total_tokens: 10,
+          cache_read_input_tokens: 2,
+        },
       }),
     ]);
   });
@@ -758,11 +858,12 @@ function samplingRequest(overrides: Partial<ChatCompletionRequest> = {}): ChatCo
 }
 
 describe("anthropicModelRejectsSamplingControls", () => {
-  it("rejects sampling controls for Opus 4.7+ and Fable/Mythos", () => {
+  it("rejects sampling controls for Opus 4.7+, Sonnet 5, and Fable/Mythos", () => {
     expect(anthropicModelRejectsSamplingControls("claude-opus-4-7")).toBe(true);
     expect(anthropicModelRejectsSamplingControls("claude-opus-4-8")).toBe(true);
     expect(anthropicModelRejectsSamplingControls("claude-fable-5")).toBe(true);
     expect(anthropicModelRejectsSamplingControls("claude-mythos-5")).toBe(true);
+    expect(anthropicModelRejectsSamplingControls("claude-sonnet-5")).toBe(true);
   });
 
   it("allows sampling controls for older Anthropic models", () => {
@@ -783,15 +884,31 @@ describe("buildAnthropicMessagesPayload sampling guard", () => {
     expect(payload.top_p).toBe(0.9);
   });
 
-  it("strips temperature/top_p for Opus 4.8", () => {
-    const payload = buildAnthropicMessagesPayload(samplingRequest({ temperature: 0.5, top_p: 0.9 }), "claude-opus-4-8");
-    expect(payload.temperature).toBeUndefined();
-    expect(payload.top_p).toBeUndefined();
+  it("fails closed on temperature/top_p for Opus 4.8", () => {
+    expect(() =>
+      buildAnthropicMessagesPayload(samplingRequest({ temperature: 0.5, top_p: 0.9 }), "claude-opus-4-8"),
+    ).toThrow(/does not support explicit temperature or top_p/i);
   });
 
-  it("strips temperature for Fable 5", () => {
-    const payload = buildAnthropicMessagesPayload(samplingRequest({ temperature: 0.2 }), "claude-fable-5");
-    expect(payload.temperature).toBeUndefined();
+  it("fails closed on temperature for Fable 5", () => {
+    expect(() => buildAnthropicMessagesPayload(samplingRequest({ temperature: 0.2 }), "claude-fable-5")).toThrow(
+      /does not support explicit temperature or top_p/i,
+    );
+  });
+
+  it("rejects invalid manual-thinking sampling controls instead of silently stripping them", () => {
+    expect(() =>
+      buildAnthropicMessagesPayload(
+        samplingRequest({ reasoning: { effort: "high" }, temperature: 0.2, max_tokens: 9_000 }),
+        "claude-opus-4-5",
+      ),
+    ).toThrow(/thinking requests do not support explicit temperature/i);
+    expect(() =>
+      buildAnthropicMessagesPayload(
+        samplingRequest({ reasoning: { effort: "high" }, top_p: 0.9, max_tokens: 9_000 }),
+        "claude-opus-4-5",
+      ),
+    ).toThrow(/require top_p between 0.95 and 1/i);
   });
 
   it("still forwards temperature for the deprecated opus-4-1 snapshot", () => {

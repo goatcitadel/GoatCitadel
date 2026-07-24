@@ -126,11 +126,21 @@ describe("shouldRegisterSubagentFanoutExecutor", () => {
     mode: string;
     normalizedSubagentPolicy?: string;
     prefsSubagentPolicy?: string;
+    routedContextSnapshot?: boolean;
   }): PreparedAgentChatTurn {
     return {
       session: { sessionId: "sess-eligibility" },
       prefs: { mode: input.mode, subagentPolicy: input.prefsSubagentPolicy },
       normalized: { mode: input.mode, subagentPolicy: input.normalizedSubagentPolicy },
+      ...(input.routedContextSnapshot
+        ? {
+            routedContextSnapshot: {
+              snapshotId: "routed-snapshot-eligibility",
+              sourceRequestHash: "1".repeat(64),
+              snapshotHash: "2".repeat(64),
+            },
+          }
+        : {}),
     } as never;
   }
 
@@ -171,6 +181,18 @@ describe("shouldRegisterSubagentFanoutExecutor", () => {
     const prepared = preparedWith({ mode: "chat", normalizedSubagentPolicy: "auto_when_useful" });
     expect(shouldRegisterSubagentFanoutExecutor(prepared, SCHEDULED_TURN_PERMISSION_PROFILE_ID)).toBe(false);
     expect(shouldRegisterSubagentFanoutExecutor(prepared, HEARTBEAT_PERMISSION_PROFILE_ID)).toBe(false);
+  });
+
+  it("refuses registration for routed-context turns even when the request asked for automatic fanout", () => {
+    expect(
+      shouldRegisterSubagentFanoutExecutor(
+        preparedWith({
+          mode: "chat",
+          normalizedSubagentPolicy: "auto_when_useful",
+          routedContextSnapshot: true,
+        }),
+      ),
+    ).toBe(false);
   });
 
   it("refuses registration when the turn is floored to subagentPolicy off (the delegated-child shape)", () => {

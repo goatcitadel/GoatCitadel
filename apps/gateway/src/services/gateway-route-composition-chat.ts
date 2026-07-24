@@ -6,6 +6,7 @@ import { createAgentsRoutePort } from "./agents-route-service.js";
 import * as chatAttachmentService from "./chat-attachment-service.js";
 import * as chatCommandService from "./chat-command-service.js";
 import * as chatGeneratedArtifactService from "./chat-generated-artifact-service.js";
+import * as chatHistoryService from "./chat-history-service.js";
 import * as chatMessageRouteRuntime from "./chat-message-route-runtime.js";
 import * as chatSessionService from "./chat-session-service.js";
 import {
@@ -18,6 +19,7 @@ import * as chatThreadKnowledgeService from "./chat-thread-knowledge-service.js"
 import * as chatToolArtifactService from "./chat-tool-artifact-service.js";
 import * as chatWorkbenchService from "./chat-workbench-service.js";
 import { resolveEffectiveRuntimeScopeFromStorage } from "./effective-runtime-scope-service.js";
+import { getSessionControlRuntimeOwner } from "./session-control-runtime-owner.js";
 import type { GatewayRouteServiceDependencies } from "./gateway-route-services.js";
 import type { ChatStreamMutationLifecycle } from "./chat-turn-types.js";
 import type { GatewayRouteCompositionPort, RouteDependencyDomain } from "./gateway-route-composition-port.js";
@@ -28,9 +30,11 @@ export function composeChatRouteDependencies(
 ): RouteDependencyDomain<
   | "agents"
   | "chatAttachments"
+  | "chatCompactionBreakerActions"
   | "chatDelegate"
   | "chatMessages"
   | "chatProjects"
+  | "sessionControl"
   | "chatSessions"
   | "chatSupport"
   | "chatTools"
@@ -94,7 +98,8 @@ export function composeChatRouteDependencies(
     uploadChatAttachment: (input) => chatAttachmentService.uploadChatAttachment(chatAttachmentHost, input),
   };
   const chatSessions: GatewayRouteServiceDependencies["chatSessions"] = {
-    archiveChatSession: (sessionId) => chatSessionService.archiveChatSession(ChatSessionDependencies, sessionId),
+    archiveChatSession: (sessionId, expectedRevision) =>
+      chatSessionService.archiveChatSession(ChatSessionDependencies, sessionId, expectedRevision),
     archiveChatSessionsBulk: (input) => {
       const { citadelId, ...sessionInput } = input ?? {};
       const scope = resolveChatRuntimeScope(gateway, {
@@ -108,8 +113,8 @@ export function composeChatRouteDependencies(
     },
     applyChatSessionWorkbenchPatch: (sessionId, input) =>
       chatWorkbenchService.applyChatSessionWorkbenchPatch(ChatWorkbenchDependencies, sessionId, input),
-    assignChatSessionProject: (sessionId, projectId) =>
-      chatSessionService.assignChatSessionProject(ChatSessionDependencies, sessionId, projectId),
+    assignChatSessionProject: (sessionId, projectId, expectedRevision) =>
+      chatSessionService.assignChatSessionProject(ChatSessionDependencies, sessionId, projectId, expectedRevision),
     attachChatThreadKnowledgeAttachment: (sessionId, input) =>
       chatThreadKnowledgeService.attachChatThreadKnowledgeAttachment(ChatThreadKnowledgeDependencies, sessionId, input),
     createChatGeneratedArtifactFromTurn: (input) =>
@@ -130,7 +135,8 @@ export function composeChatRouteDependencies(
     },
     createChatSessionWorkbenchWorktree: (sessionId, input) =>
       chatWorkbenchService.createChatSessionWorkbenchWorktree(ChatWorkbenchDependencies, sessionId, input),
-    deleteChatSession: (sessionId) => chatSessionService.deleteChatSession(ChatSessionDependencies, sessionId),
+    deleteChatSession: (sessionId, expectedRevision) =>
+      chatSessionService.deleteChatSession(ChatSessionDependencies, sessionId, expectedRevision),
     exportChatSessionWorkbenchPatch: (sessionId) =>
       chatWorkbenchService.exportChatSessionWorkbenchPatch(ChatWorkbenchDependencies, sessionId),
     getChatGeneratedArtifact: (artifactId, options) => {
@@ -194,14 +200,16 @@ export function composeChatRouteDependencies(
         workspaceId: scope.workspaceId,
       });
     },
-    pinChatSession: (sessionId) => chatSessionService.pinChatSession(ChatSessionDependencies, sessionId),
+    pinChatSession: (sessionId, expectedRevision) =>
+      chatSessionService.pinChatSession(ChatSessionDependencies, sessionId, expectedRevision),
     removeChatThreadKnowledgeAttachment: (sessionId, attachmentId) =>
       chatThreadKnowledgeService.removeChatThreadKnowledgeAttachment(
         ChatThreadKnowledgeDependencies,
         sessionId,
         attachmentId,
       ),
-    restoreChatSession: (sessionId) => chatSessionService.restoreChatSession(ChatSessionDependencies, sessionId),
+    restoreChatSession: (sessionId, expectedRevision) =>
+      chatSessionService.restoreChatSession(ChatSessionDependencies, sessionId, expectedRevision),
     revertChatSessionWorkbenchChanges: (sessionId) =>
       chatWorkbenchService.revertChatSessionWorkbenchChanges(ChatWorkbenchDependencies, sessionId),
     revertChatSessionWorkbenchFile: (sessionId, input) =>
@@ -224,9 +232,10 @@ export function composeChatRouteDependencies(
       });
     },
     setChatSessionBinding: (input) => chatSessionService.setChatSessionBinding(ChatSessionDependencies, input),
-    unpinChatSession: (sessionId) => chatSessionService.unpinChatSession(ChatSessionDependencies, sessionId),
-    updateChatSession: (sessionId, input) =>
-      chatSessionService.updateChatSession(ChatSessionDependencies, sessionId, input),
+    unpinChatSession: (sessionId, expectedRevision) =>
+      chatSessionService.unpinChatSession(ChatSessionDependencies, sessionId, expectedRevision),
+    updateChatSession: (sessionId, input, expectedRevision) =>
+      chatSessionService.updateChatSession(ChatSessionDependencies, sessionId, input, expectedRevision),
   };
   const chatDelegate: GatewayRouteServiceDependencies["chatDelegate"] = {
     acceptChatDelegation: (sessionId, input) => gateway.acceptChatDelegation(sessionId, input),
@@ -253,57 +262,197 @@ export function composeChatRouteDependencies(
       gateway.approvalRuntime.resolveChatToolApproval(sessionId, approvalId, decision, options),
   };
   const chatMessages: GatewayRouteServiceDependencies["chatMessages"] = {
-    agentSendChatMessage: (sessionId, input) => gateway.chatTurnRuntime.agentSendChatMessage(sessionId, input),
+    agentSendChatMessage: (sessionId, input, authenticatedOperator, externalCompanion) =>
+      gateway.chatTurnRuntime.agentSendChatMessage(
+        sessionId,
+        input,
+        authenticatedOperator || externalCompanion
+          ? {
+              ...(authenticatedOperator ? { authenticatedOperator } : {}),
+              ...(externalCompanion ? { externalCompanion } : {}),
+            }
+          : undefined,
+      ),
     agentSendChatMessageStream: (
       sessionId,
       input,
       signal?: AbortSignal,
       mutationLifecycle?: ChatStreamMutationLifecycle,
+      authenticatedOperator?,
+      externalCompanion?,
     ) =>
       gateway.chatTurnRuntime.agentSendChatMessageStream(sessionId, input, {
         abortSignal: signal,
         ...(mutationLifecycle ? { mutationLifecycle } : {}),
+        ...(authenticatedOperator ? { authenticatedOperator } : {}),
+        ...(externalCompanion ? { externalCompanion } : {}),
       }),
-    answerChatUserInputPrompt: (sessionId, turnId, promptId, input) =>
+    answerChatUserInputPrompt: (sessionId, turnId, promptId, input, responder) =>
       chatMessageRouteRuntime.answerChatUserInputPrompt(
         chatMessageRouteRuntimeHost,
         sessionId,
         turnId,
         promptId,
         input,
+        responder,
       ),
     cancelChatTurn: (sessionId, turnId, cancelledBy) =>
       gateway.chatTurnRuntime.cancelChatTurn(sessionId, turnId, cancelledBy),
-    editChatTurn: (sessionId, turnId, input) => gateway.chatTurnRuntime.editChatTurn(sessionId, turnId, input),
+    editChatTurn: (sessionId, turnId, input, authenticatedOperator) =>
+      gateway.chatTurnRuntime.editChatTurn(
+        sessionId,
+        turnId,
+        input,
+        authenticatedOperator ? { authenticatedOperator } : undefined,
+      ),
     editChatTurnStream: (
       sessionId,
       turnId,
       input,
       signal?: AbortSignal,
       mutationLifecycle?: ChatStreamMutationLifecycle,
+      authenticatedOperator?,
     ) =>
       gateway.chatTurnRuntime.editChatTurnStream(sessionId, turnId, input, {
         abortSignal: signal,
         ...(mutationLifecycle ? { mutationLifecycle } : {}),
+        ...(authenticatedOperator ? { authenticatedOperator } : {}),
       }),
     getChatThread: (sessionId, options) =>
       chatMessageRouteRuntime.getChatThread(chatMessageRouteRuntimeHost, sessionId, options),
+    getChatTurnCapabilityProfile: (
+      sessionId: string,
+      turnId: string,
+      options?: { workspaceId?: string; operatorId?: string },
+    ) => {
+      const trace = gateway.storage.chatTurnTraces.get(turnId);
+      if (trace.sessionId !== sessionId) {
+        throw new NotFoundError({ entity: "Chat turn", id: turnId });
+      }
+      const sessionMeta = gateway.storage.chatSessionMeta.get(sessionId);
+      if (!sessionMeta) {
+        throw new NotFoundError({ entity: "Chat session", id: sessionId });
+      }
+      const workspaceId = gateway.normalizeWorkspaceId(sessionMeta.workspaceId);
+      if (options?.workspaceId && gateway.normalizeWorkspaceId(options.workspaceId) !== workspaceId) {
+        throw new NotFoundError({ entity: "Chat turn capability profile", id: turnId });
+      }
+      // Authorize against narrow indexed columns before loading profile_json,
+      // which contains full provider definitions and source provenance.
+      const scope = gateway.storage.chatTurnCapabilityProfiles.findScopeByTurn(turnId);
+      if (!scope) {
+        return { state: "legacy_missing" as const };
+      }
+      if (
+        scope.turnId !== turnId ||
+        scope.sessionId !== sessionId ||
+        scope.workspaceId !== workspaceId ||
+        (trace.capabilityProfileId !== undefined && trace.capabilityProfileId !== scope.profileId) ||
+        (trace.capabilityProfileHash !== undefined && trace.capabilityProfileHash !== scope.profileHash)
+      ) {
+        throw new NotFoundError({ entity: "Chat turn capability profile", id: turnId });
+      }
+      const actorId = options?.operatorId?.trim();
+      const boundActorIds = [scope.operatorId, scope.authActorId].filter((value): value is string => Boolean(value));
+      if (boundActorIds.length > 0 && (!actorId || !boundActorIds.includes(actorId))) {
+        throw new NotFoundError({ entity: "Chat turn capability profile", id: turnId });
+      }
+      const envelope = gateway.storage.chatTurnCapabilityProfiles.inspectByTurn(turnId);
+      if (envelope.state !== "available" || !envelope.profile) {
+        return envelope;
+      }
+      const profile = envelope.profile;
+      if (
+        profile.profileId !== scope.profileId ||
+        profile.hashes.profileHash !== scope.profileHash ||
+        profile.identity.turnId !== scope.turnId ||
+        profile.identity.sessionId !== scope.sessionId ||
+        profile.identity.workspaceId !== scope.workspaceId
+      ) {
+        throw new NotFoundError({ entity: "Chat turn capability profile", id: turnId });
+      }
+      const snapshot = gateway.storage.routedContextSnapshots.findByTurn(turnId);
+      if (!snapshot) {
+        return envelope;
+      }
+      if (
+        snapshot.turnId !== turnId ||
+        snapshot.sessionId !== sessionId ||
+        snapshot.workspaceId !== workspaceId ||
+        snapshot.capabilityProfileId !== profile.profileId ||
+        snapshot.capabilityProfileHash !== profile.hashes.profileHash
+      ) {
+        throw new NotFoundError({ entity: "Chat routed context snapshot", id: turnId });
+      }
+      const traceBinding = trace.routing.routedContext;
+      if (
+        !traceBinding ||
+        traceBinding.snapshotId !== snapshot.snapshotId ||
+        traceBinding.snapshotHash !== snapshot.snapshotHash ||
+        traceBinding.sourceRequestHash !== snapshot.sourceRequestHash ||
+        traceBinding.contentHash !== snapshot.contentHash
+      ) {
+        throw new NotFoundError({ entity: "Chat routed context snapshot", id: turnId });
+      }
+      const routedContext = gateway.storage.routedContextSnapshots.inspectByTurn(turnId);
+      if (
+        !routedContext ||
+        routedContext.snapshotId !== snapshot.snapshotId ||
+        routedContext.snapshotHash !== snapshot.snapshotHash
+      ) {
+        throw new NotFoundError({ entity: "Chat routed context snapshot", id: turnId });
+      }
+      return { ...envelope, routedContext };
+    },
     getTurnContextManifestForSession: (sessionId, turnId) =>
       chatMessageRouteRuntime.getTurnContextManifestForSession(chatMessageRouteRuntimeHost, sessionId, turnId),
+    listChatMessagePage: (input) =>
+      chatHistoryService.listChatMessagePage(
+        {
+          storage: gateway.storage,
+          ensureChatMessageProjection: (sessionId) => gateway.ensureChatMessageProjection(sessionId),
+        },
+        input,
+      ),
     listChatMessages: (sessionId, limit, cursor) => gateway.listChatMessages(sessionId, limit, cursor),
+    readChatHistoryWindow: (anchor, limit) =>
+      chatHistoryService.readChatHistoryWindow(
+        {
+          storage: gateway.storage,
+          ensureChatMessageProjection: (sessionId) => gateway.ensureChatMessageProjection(sessionId),
+        },
+        anchor,
+        limit,
+      ),
+    readChatHistoryContinuation: (input) =>
+      chatHistoryService.readChatHistoryContinuation(
+        {
+          storage: gateway.storage,
+          ensureChatMessageProjection: (sessionId) => gateway.ensureChatMessageProjection(sessionId),
+        },
+        input,
+      ),
     resumeAgentChatTurnStream: (sessionId, turnId, sinceEventId, signal?: AbortSignal) =>
       gateway.chatTurnRuntime.resumeAgentChatTurnStream(sessionId, turnId, sinceEventId, { abortSignal: signal }),
-    retryChatTurn: (sessionId, turnId, input) => gateway.chatTurnRuntime.retryChatTurn(sessionId, turnId, input),
+    retryChatTurn: (sessionId, turnId, input, authenticatedOperator) =>
+      gateway.chatTurnRuntime.retryChatTurn(
+        sessionId,
+        turnId,
+        input,
+        authenticatedOperator ? { authenticatedOperator } : undefined,
+      ),
     retryChatTurnStream: (
       sessionId,
       turnId,
       input,
       signal?: AbortSignal,
       mutationLifecycle?: ChatStreamMutationLifecycle,
+      authenticatedOperator?,
     ) =>
       gateway.chatTurnRuntime.retryChatTurnStream(sessionId, turnId, input, {
         abortSignal: signal,
         ...(mutationLifecycle ? { mutationLifecycle } : {}),
+        ...(authenticatedOperator ? { authenticatedOperator } : {}),
       }),
     routePreflight: (sessionId, input) => gateway.chatTurnRuntime.routePreflight(sessionId, input),
     selectChatBranchTurn: (sessionId, turnId) =>
@@ -313,10 +462,16 @@ export function composeChatRouteDependencies(
   return {
     agents,
     chatAttachments,
+    chatCompactionBreakerActions: gateway.chatCompactionBreakerActionService,
     chatDelegate,
     chatMessages,
+    // HX-411 controller-protocol owner. Sourced from the same storage-keyed
+    // memoized runtime owner the gateway uses for turn admission, so the control
+    // routes and the canonical send path share one durable authority.
+    sessionControl: getSessionControlRuntimeOwner(gateway.storage),
     chatProjects: {
-      archiveChatProject: (projectId) => gateway.chatProjectService.archiveChatProject(projectId),
+      archiveChatProject: (projectId, expectedRevision) =>
+        gateway.chatProjectService.archiveChatProject(projectId, expectedRevision),
       createChatProject: (input) => {
         const { citadelId, ...projectInput } = input;
         const scope = resolveChatRuntimeScope(gateway, {
@@ -325,7 +480,8 @@ export function composeChatRouteDependencies(
         });
         return gateway.chatProjectService.createChatProject({ ...projectInput, workspaceId: scope.workspaceId });
       },
-      hardDeleteChatProject: (projectId) => gateway.chatProjectService.hardDeleteChatProject(projectId),
+      hardDeleteChatProject: (projectId, expectedRevision) =>
+        gateway.chatProjectService.hardDeleteChatProject(projectId, expectedRevision),
       importChatProject: (input) => {
         const { citadelId, ...projectInput } = input;
         const scope = resolveChatRuntimeScope(gateway, {
@@ -338,18 +494,23 @@ export function composeChatRouteDependencies(
         const scope = resolveChatRuntimeScope(gateway, { citadelId, workspaceId });
         return gateway.chatProjectService.listChatProjects(view, limit, scope.workspaceId);
       },
-      restoreChatProject: (projectId) => gateway.chatProjectService.restoreChatProject(projectId),
-      updateChatProject: (projectId, input) => {
+      restoreChatProject: (projectId, expectedRevision) =>
+        gateway.chatProjectService.restoreChatProject(projectId, expectedRevision),
+      updateChatProject: (projectId, input, expectedRevision) => {
         const { citadelId, ...projectInput } = input;
         const scope = resolveChatRuntimeScope(gateway, {
           citadelId,
           projectId,
           workspaceId: projectInput.workspaceId,
         });
-        return gateway.chatProjectService.updateChatProject(projectId, {
-          ...projectInput,
-          workspaceId: scope.workspaceId,
-        });
+        return gateway.chatProjectService.updateChatProject(
+          projectId,
+          {
+            ...projectInput,
+            workspaceId: scope.workspaceId,
+          },
+          expectedRevision,
+        );
       },
     },
     chatSessions,
@@ -412,8 +573,8 @@ export function composeChatRouteDependencies(
           handleChatGoalStatusRequest({ sessionId, chatSessionMeta: gateway.storage.chatSessionMeta }),
         setChatSessionGoal: (sessionId, body) =>
           handleChatGoalSetRequest({ sessionId, body, chatSessionMeta: gateway.storage.chatSessionMeta }),
-        clearChatSessionGoal: (sessionId) =>
-          handleChatGoalClearRequest({ sessionId, chatSessionMeta: gateway.storage.chatSessionMeta }),
+        clearChatSessionGoal: (sessionId, expectedRevision) =>
+          handleChatGoalClearRequest({ sessionId, expectedRevision, chatSessionMeta: gateway.storage.chatSessionMeta }),
       },
     },
     chatTools,

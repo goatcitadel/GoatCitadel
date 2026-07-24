@@ -8,6 +8,7 @@ export type KanbanStatusTone = "neutral" | "active" | "warning" | "danger" | "su
 
 export interface KanbanCardModel {
   taskId: string;
+  revision?: number;
   runId: string;
   title: string;
   column: KanbanColumnId;
@@ -73,6 +74,7 @@ export function toKanbanCard(run: AgenticRunListItem, options: ToKanbanCardOptio
   const stale = isStaleActiveRun(run.status, run.updatedAt, options.now);
   return {
     taskId: run.taskId,
+    revision: run.taskRevision,
     runId: run.runId,
     title: run.title,
     column,

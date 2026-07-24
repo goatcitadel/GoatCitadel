@@ -16,6 +16,9 @@ export interface SurfaceRouteRequest {
 export interface SurfaceJudgeInput {
   prompt: string;
   citadelId: string;
+  workspaceId: string;
+  sessionId: string;
+  turnId: string;
   priors: SurfaceRouteOverrideExemplar[];
 }
 
@@ -51,7 +54,14 @@ export class SurfaceRouterService {
     let result = this.classify(request.prompt, request.context);
     if (result.confidence < this.judgeThreshold && this.judge) {
       const priors = this.fetchExemplars ? this.fetchExemplars(request.citadelId) : [];
-      const judged = await this.judge({ prompt: request.prompt, citadelId: request.citadelId, priors });
+      const judged = await this.judge({
+        prompt: request.prompt,
+        citadelId: request.citadelId,
+        workspaceId: request.workspaceId,
+        sessionId: request.sessionId,
+        turnId: request.turnId,
+        priors,
+      });
       if (judged) {
         result = {
           mode: "chat",

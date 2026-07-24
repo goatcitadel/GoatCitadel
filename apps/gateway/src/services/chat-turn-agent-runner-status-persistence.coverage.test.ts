@@ -6,8 +6,9 @@ import type {
   ChatTurnTraceRecord,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
-import { ChatTurnAgentRunner, type ChatTurnAgentRunnerInput } from "./chat-turn-agent-runner.js";
+import type { ChatTurnAgentRunnerInput } from "./chat-turn-agent-runner.js";
 import {
+  EffectAwareChatTurnAgentRunner as ChatTurnAgentRunner,
   createMockStorage,
   createToolCatalog,
   namedToolCallCompletion,

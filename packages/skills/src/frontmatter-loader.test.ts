@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { parseSkillMarkdown, SkillFrontmatterSchema } from "./frontmatter.js";
+import { parseSkillMarkdown, resolveSkillNameViolation, SkillFrontmatterSchema } from "./frontmatter.js";
 import { SkillsService, type SkillsLogger } from "./loader.js";
 
 function makeLoggerSpy(): SkillsLogger {
@@ -253,5 +253,60 @@ Body`,
 
     await expect(service.reload()).resolves.toEqual([]);
     expect(service.resolveActivation({ text: "@skill anything" }).selected).toEqual([]);
+  });
+
+  it("skips skills whose names would break capability-profile sealing and reports why", async () => {
+    const root = await makeTempDir();
+    await writeSkill(
+      path.join(root, "spaced"),
+      `---
+name: GoatCitadel Native Safe Improvement
+description: Frontmatter name contains spaces
+---
+Body`,
+    );
+    await writeSkill(
+      path.join(root, "healthy"),
+      `---
+name: healthy-skill
+description: Identifier-safe sibling skill
+---
+Body`,
+    );
+
+    const logger = makeLoggerSpy();
+    const service = new SkillsService([{ source: "bundled", dir: root }], logger);
+    const loaded = await service.reload();
+
+    // The unsafe-name skill must never become a LoadedSkill: its derived
+    // capability id would be rejected at chat-turn profile seal time and fail
+    // every routed-context send closed.
+    expect(loaded.map((skill) => skill.name)).toEqual(["healthy-skill"]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("spaced"),
+      expect.objectContaining({
+        source: "bundled",
+        skillName: "GoatCitadel Native Safe Improvement",
+        reason: expect.stringContaining("whitespace"),
+      }),
+    );
+  });
+});
+
+describe("resolveSkillNameViolation", () => {
+  it("accepts identifier-safe names, including legacy capitalized single tokens", () => {
+    expect(resolveSkillNameViolation("goatcitadel-native-safe-self-improvement")).toBeUndefined();
+    expect(resolveSkillNameViolation("Direct")).toBeUndefined();
+    expect(resolveSkillNameViolation("genie-npu-ir20")).toBeUndefined();
+    expect(resolveSkillNameViolation("x".repeat(200))).toBeUndefined();
+  });
+
+  it("rejects whitespace, control characters, and oversized names with actionable reasons", () => {
+    expect(resolveSkillNameViolation("GoatCitadel Native Safe Improvement")).toMatch(/whitespace/);
+    expect(resolveSkillNameViolation(`tab\tseparated`)).toMatch(/whitespace/);
+    expect(resolveSkillNameViolation(`nbsp${String.fromCharCode(0xa0)}name`)).toMatch(/whitespace/);
+    expect(resolveSkillNameViolation(`bell${String.fromCharCode(0x07)}name`)).toMatch(/control characters/);
+    expect(resolveSkillNameViolation(`del${String.fromCharCode(0x7f)}name`)).toMatch(/control characters/);
+    expect(resolveSkillNameViolation("x".repeat(201))).toMatch(/200/);
   });
 });

@@ -99,6 +99,7 @@ const ROUTE_COMPOSITION_PRIVATE_DEPENDENCY_NAMES = [
   "capabilityPackService",
   "capabilityScopeResolver",
   "capabilitySystemService",
+  "chatCompactionBreakerActionService",
   "chatMessageRouteRuntimeHost",
   "chatProjectService",
   "chatTurnRuntime",
@@ -206,7 +207,7 @@ describe("gateway service host guard", () => {
     expect(runtimePortBlock).toMatch(/\breadonly\s+mutationIdempotencyStore:\s+MutationIdempotencyStore\b/);
     expect(source).not.toMatch(/export function createGatewayRuntime[\s\S]*?return new GatewayService\(config\)/);
     expect(source).not.toMatch(/export function createGatewayAdminRuntime[\s\S]*?return new GatewayService\(config\)/);
-    expect(source).toContain("return createGatewayRuntimeFacade(new GatewayService(config));");
+    expect(source).toContain("return createGatewayRuntimeFacade(new GatewayService(config, options));");
 
     const appSource = await fs.readFile(new URL("../app.ts", SERVICES_DIR), "utf8");
     expect(appSource).not.toMatch(/\bgatewayRuntime\.storage\b/);
@@ -350,9 +351,12 @@ describe("gateway service host guard", () => {
     // Soft bloat cap. Bumped to 163 for workspace/citadel capability scoping: `invokeMcpTool`
     // (routes the REST /mcp/invoke surface through the guarded gateway method) + `capabilityScopeResolver`
     // (resolution for the capability-scope route service).
-    // Bumped to 164 for `syncSignalInboundRuntime` (Signal inbound poller resync
-    // on integration connection create/update/delete).
-    expect(portMemberCount).toBeLessThanOrEqual(164);
+    // Bumped to 164 for `syncSignalInboundRuntime` (legacy Signal inbound
+    // setting diagnostics on integration connection create/update/delete).
+    // Bumped to 171 for the integrated config-generation/inbound-channel owners,
+    // message projection, and the governed compaction-breaker route service.
+    // Bumped to 173 for explicit Skill Hub review and rollback-review owners.
+    expect(portMemberCount).toBeLessThanOrEqual(173);
     const portFactory = portSource.slice(
       portSource.indexOf("export function createGatewayRouteCompositionPort"),
       portSource.indexOf("export type RouteDependencyDomain"),

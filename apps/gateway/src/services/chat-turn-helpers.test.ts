@@ -10,6 +10,7 @@ import {
   isChatTurnCancelledError,
   isImageMimeType,
   mergeExecutionPlanStepStatuses,
+  readDurableCancellation,
   renderExecutionPlanAsMarkdown,
   splitIntoChunks,
   toTitleCase,
@@ -22,6 +23,18 @@ describe("chat-turn-helpers", () => {
     expect(isChatTurnCancelledError(new Error("chat turn cancelled by caller"))).toBe(true);
     expect(isChatTurnCancelledError(new Error("provider failed"))).toBe(false);
     expect(isChatTurnCancelledError("cancelled")).toBe(false);
+  });
+
+  it("accepts durable cancellation only from an actually aborted signal", () => {
+    const cancellation = Object.assign(new Error("operator cancelled durable run"), {
+      name: "DurableRunCancelledError",
+    });
+    expect(readDurableCancellation(undefined, cancellation)).toBeUndefined();
+    expect(readDurableCancellation(new AbortController().signal, cancellation)).toBeUndefined();
+
+    const controller = new AbortController();
+    controller.abort(cancellation);
+    expect(readDurableCancellation(controller.signal, cancellation)).toBe(cancellation);
   });
 
   it("chunks text with a defensive minimum chunk size", () => {

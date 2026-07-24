@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseClient } from "./db.js";
 import { createDatabase } from "./sqlite.js";
 import { ChatProjectRepository } from "./chat-project-repo.js";
+import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
 import { ChatSessionProjectRepository } from "./chat-session-project-repo.js";
 
 const createdFiles: string[] = [];
@@ -27,6 +28,7 @@ function createStore(): { db: DatabaseClient; repo: ChatSessionProjectRepository
   const dbPath = path.join(os.tmpdir(), `goatcitadel-chat-session-project-${randomUUID()}.db`);
   createdFiles.push(dbPath);
   const db = createDatabase({ dbPath });
+  new ChatSessionMetaRepository(db).ensure("session-a", undefined, "workspace-a");
   const project = new ChatProjectRepository(db).create(
     {
       workspaceId: "workspace-a",
@@ -49,13 +51,15 @@ describe("ChatSessionProjectRepository", () => {
     const first = repo.assign("session-a", projectId, "2026-03-26T00:00:01.000Z");
     assert.deepEqual(first, {
       sessionId: "session-a",
+      revision: 2,
       projectId,
       assignedAt: "2026-03-26T00:00:01.000Z",
     });
     assert.deepEqual(repo.get("session-a"), first);
 
     const replaced = repo.assign("session-a", projectId, "2026-03-26T00:00:02.000Z");
-    assert.equal(replaced.assignedAt, "2026-03-26T00:00:02.000Z");
+    assert.equal(replaced.assignedAt, "2026-03-26T00:00:01.000Z");
+    assert.equal(replaced.revision, 2);
     assert.deepEqual(repo.listBySessionIds([]), new Map());
     assert.deepEqual(repo.listBySessionIds(["session-a", "missing"]).get("session-a"), replaced);
 

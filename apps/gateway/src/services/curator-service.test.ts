@@ -407,6 +407,7 @@ describe("CuratorService.runCurator", () => {
 describe("CuratorService cron scheduler", () => {
   type CronJob = {
     jobId: string;
+    revision?: number;
     name: string;
     action: string;
     schedule: string;
@@ -423,6 +424,7 @@ describe("CuratorService cron scheduler", () => {
       get: (id: string) => CronJob | undefined;
       upsert: (job: CronJob, finishedAt: string) => void;
       upsertIfChanged: (job: CronJob, now: string) => void;
+      mergeRuntimeTelemetry: (jobId: string, patch: Partial<CronJob>, now: string) => CronJob;
     };
     systemSettings: {
       get: <T>(key: string) => { value: T } | undefined;
@@ -442,6 +444,12 @@ describe("CuratorService cron scheduler", () => {
         upsertIfChanged: (job, _now) => {
           crons.set(job.jobId, { ...job });
         },
+        mergeRuntimeTelemetry: (jobId, patch, _now) => {
+          const current = crons.get(jobId) as CronJob;
+          const next = { ...current, ...patch };
+          crons.set(jobId, next);
+          return next;
+        },
       },
       systemSettings: {
         get: <T>(key: string) => {
@@ -457,7 +465,7 @@ describe("CuratorService cron scheduler", () => {
     };
   }
 
-  it("ensureCuratorWeeklyCronJob registers the cron with action=curator and Sunday 02:00 PT schedule", () => {
+  it("ensureCuratorWeeklyCronJob registers the cron with action=curator and Sunday 02:00 PT schedule", async () => {
     const storageStub = makeStorageStub();
     const service = new CuratorService({
       listSkills: () => [],
@@ -468,8 +476,16 @@ describe("CuratorService cron scheduler", () => {
       publishRealtime: () => undefined,
       cycleDays: 7,
       storage: storageStub as never,
+      cronSpecOwner: {
+        reconcileSpec: async (cronSpec) => {
+          const current = storageStub.crons.get(cronSpec.jobId);
+          const saved = { ...current, ...cronSpec, revision: current?.revision ?? 1 } as never;
+          storageStub.crons.set(cronSpec.jobId, saved);
+          return saved;
+        },
+      },
     });
-    service.ensureCuratorWeeklyCronJob();
+    await service.ensureCuratorWeeklyCronJob();
     const job = storageStub.crons.get("curator_weekly");
     expect(job).toBeDefined();
     expect(job?.action).toBe("curator");
@@ -588,7 +604,7 @@ describe("CuratorService cron scheduler", () => {
       cycleDays: 7,
     });
     // No throw, no error
-    service.ensureCuratorWeeklyCronJob();
+    await service.ensureCuratorWeeklyCronJob();
     await service.runCuratorWeeklyIfDue();
     await service.runCuratorWeeklyIfDue({ force: true });
   });
@@ -729,7 +745,9 @@ describe("CuratorService.maybeRunIdleCurator (S3 idle janitor)", () => {
   });
 
   it("force=true bypasses the idle and cadence gates", async () => {
-    const settings = new Map<string, unknown>([["curator_idle_sweep_last_run_ms_v1", Date.parse("2026-06-15T11:59:00Z")]]);
+    const settings = new Map<string, unknown>([
+      ["curator_idle_sweep_last_run_ms_v1", Date.parse("2026-06-15T11:59:00Z")],
+    ]);
     const storage = {
       systemSettings: {
         get: <T>(key: string) => {
@@ -742,9 +760,14 @@ describe("CuratorService.maybeRunIdleCurator (S3 idle janitor)", () => {
       },
     };
     const archived: Array<{ skillId: string; reason: string }> = [];
-    const service = makeIdleService([selfGenerated({ name: "ghost", usageCount: 0 })], archived, {
-      isWorkspaceIdle: () => false,
-    }, storage);
+    const service = makeIdleService(
+      [selfGenerated({ name: "ghost", usageCount: 0 })],
+      archived,
+      {
+        isWorkspaceIdle: () => false,
+      },
+      storage,
+    );
     const result = await service.maybeRunIdleCurator({ force: true });
     expect(result?.autoApplied).toBe(true);
     expect(archived).toHaveLength(1);

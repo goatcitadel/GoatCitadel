@@ -25,13 +25,14 @@ export interface OnboardingStateHost {
   readonly onboardingMarkerPath: string;
   onboardingMarker: { completedAt?: string; completedBy?: string };
   getAuthRuntimeSettings(): AuthRuntimeSettings;
+  readSettingsRevision?(): number;
   publishRealtime(
     eventType: string,
     source: string,
     payload: Record<string, unknown>,
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
   ): void;
-  updateSettings(input: settingsAuthService.UpdateSettingsInput): RuntimeSettings;
+  updateSettings(input: settingsAuthService.UpdateSettingsInput): Promise<RuntimeSettings>;
 }
 
 export function getOnboardingStartupState(runtime: OnboardingStateHost): OnboardingStartupState {
@@ -184,6 +185,7 @@ export function getOnboardingState(runtime: OnboardingStateHost): OnboardingStat
       activeModel: llm.activeModel,
     }),
     settings: {
+      revision: runtime.readSettingsRevision?.() ?? 1,
       toolApprovalMode,
       defaultToolProfile,
       budgetMode,
@@ -219,11 +221,12 @@ export function getOnboardingState(runtime: OnboardingStateHost): OnboardingStat
   return response;
 }
 
-export function bootstrapOnboarding(
+export async function bootstrapOnboarding(
   runtime: OnboardingStateHost,
   input: OnboardingBootstrapInput,
-): OnboardingBootstrapResult {
-  runtime.updateSettings({
+): Promise<OnboardingBootstrapResult> {
+  await runtime.updateSettings({
+    expectedRevision: input.expectedRevision,
     toolApprovalMode: input.toolApprovalMode,
     defaultToolProfile: input.defaultToolProfile,
     budgetMode: input.budgetMode,

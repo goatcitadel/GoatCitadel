@@ -102,6 +102,17 @@ export interface GatewayEventInput {
     credentialType?: "api_key" | "oauth" | "unknown";
     /** Billing pool the usage drew from (subscription credit pool vs standard). */
     usagePool?: "standard" | "subscription" | "unknown";
+    /**
+     * Canonical per-provider-attempt records that already own session/cost
+     * projection. When present, ingest must not add another assistant aggregate.
+     */
+    canonicalUsageEventIds?: string[];
+    /** Exact owner tuple used to validate canonical usage references at ingest. */
+    canonicalUsageOwner?: {
+      workspaceId: string;
+      sessionId: string;
+      turnId: string;
+    };
   };
 }
 

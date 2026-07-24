@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { type ChatCitationRecord, type ChatThreadTurnRecord } from "@goatcitadel/contracts";
+import {
+  type ChatCitationRecord,
+  type ChatThreadSystemNoticeRecord,
+  type ChatThreadTurnRecord,
+} from "@goatcitadel/contracts";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { ChatStreamStatusBar } from "@goatcitadel/mission-control-shared/components/chat/ChatStreamStatusBar";
 import { SurfaceReconnectBanner } from "@goatcitadel/mission-control-shared/components/chat/SurfaceReconnectBanner";
@@ -13,11 +17,13 @@ import { toTitleCase } from "@goatcitadel/mission-control-shared/components/chat
 import {
   ChatThreadDelegationSummary,
   ChatThreadNotices,
+  ChatThreadSystemNoticeCard,
   ChatThreadTurnCard,
   ChatThreadWindowGap,
   THREAD_WINDOW_SIZE,
   buildThreadWindow,
   resolveEffectiveWindowStart,
+  type ChatThreadWindowItem,
 } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadPrimitives";
 import { useScrollToBottom } from "@goatcitadel/mission-control-shared/components/chat/useScrollToBottom";
 import {
@@ -257,6 +263,63 @@ export function resolveStreamingPreviewScrollSignal(
   return [preview.turnId, visibleLineCount, visibleCharacterBucket, preview.isRunning ? "running" : "idle"].join(":");
 }
 
+export type ThreadedTimelineItem =
+  | ChatThreadWindowItem
+  | { kind: "system_notice"; key: string; notice: ChatThreadSystemNoticeRecord }
+  | { kind: "system_notice_gap"; key: string; hiddenCount: number };
+
+export const THREAD_TIMELINE_CONTENT_LIMIT = 100;
+const EMPTY_SYSTEM_NOTICES: ChatThreadSystemNoticeRecord[] = [];
+
+/**
+ * Merges retained system notices into the selected, windowed conversation
+ * path without reordering turns or making notices branch participants.
+ */
+export function mergeSystemNoticesIntoThreadWindow(
+  windowItems: ChatThreadWindowItem[],
+  systemNotices: ChatThreadSystemNoticeRecord[],
+  alreadyHiddenSystemNoticeCount = 0,
+): ThreadedTimelineItem[] {
+  const orderedNotices = [...systemNotices].sort((left, right) => {
+    const timestampOrder = toTimelineTimestamp(left.message.timestamp) - toTimelineTimestamp(right.message.timestamp);
+    return timestampOrder || left.noticeId.localeCompare(right.noticeId);
+  });
+  const visibleTurnCount = windowItems.filter((item) => item.kind === "turn").length;
+  const noticeBudget = Math.max(0, Math.min(THREAD_WINDOW_SIZE, THREAD_TIMELINE_CONTENT_LIMIT - visibleTurnCount));
+  const locallyHiddenNoticeCount = Math.max(0, orderedNotices.length - noticeBudget);
+  const hiddenNoticeCount = Math.max(0, alreadyHiddenSystemNoticeCount) + locallyHiddenNoticeCount;
+  const notices = locallyHiddenNoticeCount > 0 ? orderedNotices.slice(locallyHiddenNoticeCount) : orderedNotices;
+  const merged: ThreadedTimelineItem[] = hiddenNoticeCount
+    ? [{ kind: "system_notice_gap", key: "system-notice-gap", hiddenCount: hiddenNoticeCount }]
+    : [];
+  let noticeIndex = 0;
+  for (const item of windowItems) {
+    if (item.kind === "gap") {
+      merged.push(item);
+      continue;
+    }
+    const turnTimestamp = toTimelineTimestamp(item.turn.userMessage.timestamp);
+    while (
+      noticeIndex < notices.length &&
+      toTimelineTimestamp(notices[noticeIndex]!.message.timestamp) <= turnTimestamp
+    ) {
+      const notice = notices[noticeIndex++]!;
+      merged.push({ kind: "system_notice", key: `system-notice:${notice.noticeId}`, notice });
+    }
+    merged.push(item);
+  }
+  while (noticeIndex < notices.length) {
+    const notice = notices[noticeIndex++]!;
+    merged.push({ kind: "system_notice", key: `system-notice:${notice.noticeId}`, notice });
+  }
+  return merged;
+}
+
+function toTimelineTimestamp(value: string): number {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
+}
+
 export function ThreadedTimeline({
   props,
   onOpenUniversalRunDetail,
@@ -268,8 +331,22 @@ export function ThreadedTimeline({
   const [manualWindowStart, setManualWindowStart] = useState<number | null>(null);
   const lastTurn = props.thread?.turns.at(-1) ?? null;
   const threadTurnCount = props.thread?.turns.length ?? 0;
-  const latestTurnId = props.thread?.activeLeafTurnId ?? lastTurn?.turnId ?? null;
-  const latestTraceStatus = lastTurn?.trace.status ?? null;
+  const systemNotices = props.thread?.systemNotices ?? EMPTY_SYSTEM_NOTICES;
+  const latestSystemNotice = systemNotices.at(-1) ?? null;
+  const hasThreadContent = threadTurnCount > 0 || systemNotices.length > 0;
+  const latestConversationTimestamp = lastTurn
+    ? toTimelineTimestamp(lastTurn.assistantMessage?.timestamp ?? lastTurn.userMessage.timestamp)
+    : Number.NEGATIVE_INFINITY;
+  const latestSystemNoticeTimestamp = latestSystemNotice
+    ? toTimelineTimestamp(latestSystemNotice.message.timestamp)
+    : Number.NEGATIVE_INFINITY;
+  const systemNoticeIsLatest = Boolean(
+    latestSystemNotice && latestSystemNoticeTimestamp >= latestConversationTimestamp,
+  );
+  const latestTurnId = systemNoticeIsLatest
+    ? `system-notice:${latestSystemNotice!.noticeId}`
+    : (props.thread?.activeLeafTurnId ?? lastTurn?.turnId ?? null);
+  const latestTraceStatus = systemNoticeIsLatest ? "completed" : (lastTurn?.trace.status ?? null);
   const sessionId = props.thread?.sessionId ?? null;
   /*
    * The host's `props.streamingPreview` only updates on stream start/stop now
@@ -382,6 +459,15 @@ export function ThreadedTimeline({
       props.thread?.turns,
     ],
   );
+  const timelineItems = useMemo(
+    () =>
+      mergeSystemNoticesIntoThreadWindow(
+        windowedThreadItems,
+        systemNotices,
+        props.thread?.systemNoticeHiddenCount ?? 0,
+      ),
+    [props.thread?.systemNoticeHiddenCount, systemNotices, windowedThreadItems],
+  );
   const liveStatus =
     props.streamError ||
     (props.streamStatus === "streaming"
@@ -398,7 +484,7 @@ export function ThreadedTimeline({
     onBottomStateChange: props.onBottomStateChange,
     signals: {
       sessionId: props.thread?.sessionId ?? null,
-      threadTurnCount,
+      threadTurnCount: threadTurnCount + systemNotices.length,
       latestTurnId,
       latestTraceStatus,
       latestTurnToolRunCount: lastTurn?.toolRuns.length ?? 0,
@@ -464,9 +550,9 @@ export function ThreadedTimeline({
       <div ref={scrollRef} className="mc-next-thread-scroll" onScroll={handleThreadScroll}>
         {props.loading ? (
           <div className="mc-next-thread-empty">Loading thread...</div>
-        ) : props.mode === "chat" && props.thread && props.thread.turns.length === 0 ? (
+        ) : props.mode === "chat" && props.thread && !hasThreadContent ? (
           <ChatFirstMessageCanvas props={props} />
-        ) : !props.thread || props.thread.turns.length === 0 ? (
+        ) : !props.thread || !hasThreadContent ? (
           <div className="mc-next-thread-empty">
             <p className="mc-next-thread-meta">
               <strong>GoatCitadel</strong>
@@ -496,13 +582,26 @@ export function ThreadedTimeline({
                 mode={props.mode}
                 onOpenRunDetails={onOpenRunDetails}
               />
-              {windowedThreadItems.map((item, itemIndex) => {
+              {timelineItems.map((item, itemIndex) => {
                 if (item.kind === "gap") {
                   return (
                     <ChatThreadWindowGap key={item.key} hiddenCount={item.hiddenCount} onExpand={showHiddenTurns} />
                   );
                 }
-                const previousItem = itemIndex > 0 ? windowedThreadItems[itemIndex - 1] : null;
+                if (item.kind === "system_notice_gap") {
+                  return (
+                    <div key={item.key} className="mc-next-thread-window-gap">
+                      <span>
+                        {item.hiddenCount} earlier heartbeat notification{item.hiddenCount === 1 ? "" : "s"} hidden for
+                        performance.
+                      </span>
+                    </div>
+                  );
+                }
+                if (item.kind === "system_notice") {
+                  return <ChatThreadSystemNoticeCard key={item.key} notice={item.notice} />;
+                }
+                const previousItem = itemIndex > 0 ? timelineItems[itemIndex - 1] : null;
                 const previousTurn = previousItem && previousItem.kind === "turn" ? previousItem.turn : null;
                 const groupedWithPrevious = previousTurn ? isTurnGroupedWith(previousTurn, item.turn) : false;
                 return (
@@ -537,7 +636,7 @@ export function ThreadedTimeline({
           </div>
         )}
       </div>
-      {!props.followOutput && props.thread && props.thread.turns.length > 0 ? (
+      {!props.followOutput && props.thread && hasThreadContent ? (
         <button type="button" className="mc-next-thread-jump-latest" onClick={jumpToLatest}>
           {jumpToLatestLabel}
         </button>

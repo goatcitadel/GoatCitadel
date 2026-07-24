@@ -6,12 +6,11 @@ import type {
   ToolInvokeRequest,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
+import type { ChatTurnAgentRunnerDeps, ChatTurnAgentRunnerInput } from "./chat-turn-agent-runner.js";
+import { attachGeneratedPresentationVisual } from "./chat-turn-agent-runner/artifact-write-helpers.js";
 import {
-  ChatTurnAgentRunner,
-  type ChatTurnAgentRunnerDeps,
-  type ChatTurnAgentRunnerInput,
-} from "./chat-turn-agent-runner.js";
-import {
+  EffectAwareChatTurnAgentRunner as ChatTurnAgentRunner,
+  createEffectAwareInvokeToolForTest,
   createExecuteToolCallForTest,
   createMockStorage,
   createToolCatalog,
@@ -85,7 +84,12 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
       if (input.toolName === "browser.search") {
         throw new Error("policy service unavailable");
       }
-      return { allowed: input.toolName !== "memory.search" };
+      const allowed = input.toolName !== "memory.search";
+      return {
+        allowed,
+        requiresApproval: false,
+        reasonCodes: allowed ? [] : ["memory_search_denied"],
+      };
     });
     const orchestrator = new ChatTurnAgentRunner({
       storage: createMockStorage() as never,
@@ -127,6 +131,8 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
     });
     const evaluateToolAccess = vi.fn((input: { toolName: string; args?: Record<string, unknown> }) => ({
       allowed: input.toolName !== "presentations.create" || typeof input.args?.path === "string",
+      requiresApproval: false,
+      reasonCodes: [],
     }));
     const invokeTool = vi.fn(
       async (request: ToolInvokeRequest): Promise<ToolInvokeResult> => ({
@@ -209,23 +215,27 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
         },
       }),
     );
+    const storage = createMockStorage() as Record<string, unknown>;
+    storage.chatSessionMeta = {
+      get: () => ({ workspaceId: "workspace-loop24" }),
+    };
     const orchestrator = new ChatTurnAgentRunner({
-      storage: createMockStorage() as never,
+      storage: storage as never,
       listToolCatalog: () => createToolCatalog(["presentations.create"]),
       createChatCompletion,
       generateImage,
       invokeTool,
     });
 
-    await orchestrator.run(
-      turnInput({
-        mode: "cowork",
-        content: "Create a real PowerPoint .pptx presentation about daily walking.",
-        historyMessages: [
-          { role: "user", content: "Create a real PowerPoint .pptx presentation about daily walking." },
-        ],
-      }),
-    );
+    const visualTurn = turnInput({
+      turnId: "turn-presentation-visual",
+      policyRunId: "durable-presentation-visual",
+      policyTaskId: "task-presentation-visual",
+      mode: "cowork",
+      content: "Create a real PowerPoint .pptx presentation about daily walking.",
+      historyMessages: [{ role: "user", content: "Create a real PowerPoint .pptx presentation about daily walking." }],
+    });
+    await orchestrator.run(visualTurn);
 
     expect(generateImage).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -233,6 +243,18 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
         model: "gpt-image-2",
         outputFormat: "png",
         responseFormat: "b64_json",
+      }),
+      expect.objectContaining({
+        operationId: "chat-turn:turn-presentation-visual:artifact-image-0",
+        dispatchGeneration: "chat-turn:turn-presentation-visual:artifact-image-0:generation-1",
+        callKind: "image_generation",
+        workspaceId: "workspace-loop24",
+        sessionId: "sess-loop24",
+        turnId: "turn-presentation-visual",
+        durableRunId: "durable-presentation-visual",
+        taskId: "task-presentation-visual",
+        agentId: "goatherder",
+        attemptIndex: 0,
       }),
     );
     expect(invokeTool).toHaveBeenCalledWith(
@@ -262,6 +284,30 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
     expect(JSON.stringify(presentationArgs?.slides ?? [])).not.toContain("starting friction");
   });
 
+  it("surfaces canonical usage persistence failures from best-effort presentation visuals", async () => {
+    const settlementError = new Error("canonical image usage settlement failed");
+    settlementError.name = "ModelUsageSettlementError";
+
+    await expect(
+      attachGeneratedPresentationVisual(
+        { title: "Usage Truth", slides: [] },
+        { content: "Create a deck about usage truth." },
+        async () => {
+          throw settlementError;
+        },
+      ),
+    ).rejects.toBe(settlementError);
+  });
+
+  it("keeps ordinary presentation image failures best-effort", async () => {
+    const args = { title: "Best Effort", slides: [] };
+    await expect(
+      attachGeneratedPresentationVisual(args, { content: "Create a deck." }, async () => {
+        throw new Error("image provider unavailable");
+      }),
+    ).resolves.toEqual({ args, providerCalls: 1 });
+  });
+
   it("uses the configured workspace artifact directory for write-jail fallbacks", async () => {
     const safeWriteFallbackDir = "F:\\code\\personal-ai\\workspace\\goatcitadel_out";
     const invokeTool = vi
@@ -285,6 +331,7 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
       });
     const executeToolCall = createExecuteToolCallForTest({
       invokeTool,
+      invokeToolWithEffectTruth: createEffectAwareInvokeToolForTest(invokeTool),
       toolNames: ["presentations.create"],
       safeWriteFallbackDir,
     });
@@ -384,6 +431,8 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
     });
     const evaluateToolAccess = vi.fn((input: { toolName: string; args?: Record<string, unknown> }) => ({
       allowed: input.toolName !== "documents.create" || typeof input.args?.path === "string",
+      requiresApproval: false,
+      reasonCodes: [],
     }));
     const invokeTool = vi.fn(
       async (request: ToolInvokeRequest): Promise<ToolInvokeResult> => ({
@@ -653,6 +702,7 @@ function createExecuteToolCall(input: {
   return createExecuteToolCallForTest({
     storage: input.storage,
     invokeTool: input.invokeTool,
+    invokeToolWithEffectTruth: createEffectAwareInvokeToolForTest(input.invokeTool),
     toolNames: ["browser.search", "file.find", "shell.exec", "session.status", "memory.search"],
   });
 }

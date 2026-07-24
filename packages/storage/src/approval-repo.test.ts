@@ -4,8 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
+import { canonicalJsonString } from "@goatcitadel/contracts";
 import { createDatabase } from "./sqlite.js";
-import { ApprovalRepository } from "./approval-repo.js";
+import type { DatabaseClient } from "./db.js";
+import { ApprovalRepository, type DeterministicDetachedApprovalCreateInput } from "./approval-repo.js";
 
 const createdFiles: string[] = [];
 
@@ -30,6 +32,41 @@ function createRepo(): ApprovalRepository {
 function createRepoAtPath(dbPath: string): ApprovalRepository {
   const db = createDatabase({ dbPath });
   return new ApprovalRepository(db);
+}
+
+function createInMemoryHarness(): { db: DatabaseClient; repo: ApprovalRepository } {
+  const db = createDatabase({ dbPath: ":memory:" });
+  return { db, repo: new ApprovalRepository(db) };
+}
+
+function deterministicDetachedInput(
+  overrides: Partial<DeterministicDetachedApprovalCreateInput> = {},
+): DeterministicDetachedApprovalCreateInput {
+  return {
+    approvalId: "mesh-capability-activation:" + "a".repeat(64),
+    kind: "mesh.capability.activate",
+    riskLevel: "danger",
+    payload: {
+      workspaceId: "workspace-a",
+      activationId: "activation-a",
+      activationRevision: 1,
+      requestSha256: "1".repeat(64),
+      capabilityId: "mesh:node-a:tool:status",
+      manifestSha256: "2".repeat(64),
+      entrySha256: "3".repeat(64),
+      descriptorSha256: "4".repeat(64),
+      permissionEnvelopeSha256: "5".repeat(64),
+      effectPosture: "read_only",
+    },
+    preview: {
+      activationId: "activation-a",
+      activationRevision: 1,
+      capabilityId: "mesh:node-a:tool:status",
+      effectPosture: "read_only",
+    },
+    linkage: { workspaceId: "workspace-a", sessionId: "session-a", turnId: "turn-a" },
+    ...overrides,
+  };
 }
 
 function formatInstantWithOffset(instantMs: number, offsetHours: number): string {
@@ -198,6 +235,200 @@ describe("ApprovalRepository", () => {
       }
     } finally {
       Date.now = originalDateNow;
+    }
+  });
+
+  it("creates exact-ID detached approvals from database time and replays without refreshing mutable state", () => {
+    const { db, repo } = createInMemoryHarness();
+    const originalDateNow = Date.now;
+    const wallClockBefore = originalDateNow();
+    try {
+      Date.now = () => Date.parse("2099-01-01T00:00:00.000Z");
+      const input = deterministicDetachedInput();
+      const first = repo.createDeterministicDetachedWithTtlDuration(input, 15 * 60_000);
+      assert.equal(first.created, true);
+      assert.equal(Date.parse(first.approval.expiresAt!) - Date.parse(first.approval.createdAt), 15 * 60_000);
+      assert.ok(Math.abs(Date.parse(first.approval.createdAt) - wallClockBefore) < 5_000);
+
+      const raw = db
+        .prepare("SELECT linkage_json, payload_json, preview_json FROM approvals WHERE approval_id = ?")
+        .get(input.approvalId) as {
+        linkage_json: string;
+        payload_json: string;
+        preview_json: string;
+      };
+      assert.equal(raw.linkage_json, canonicalJsonString(input.linkage));
+      assert.equal(raw.payload_json, canonicalJsonString(input.payload));
+      assert.equal(raw.preview_json, canonicalJsonString(input.preview));
+      assert.equal(raw.payload_json.includes("__gcApprovalLinkage"), false);
+
+      db.prepare("UPDATE approvals SET status = 'approved', expires_at = ? WHERE approval_id = ?").run(
+        "2000-01-01T00:00:00.000Z",
+        input.approvalId,
+      );
+      const replay = repo.createDeterministicDetachedWithTtlDuration(input, 15 * 60_000);
+      assert.equal(replay.created, false);
+      assert.equal(replay.approval.status, "approved");
+      assert.equal(replay.approval.expiresAt, "2000-01-01T00:00:00.000Z");
+    } finally {
+      Date.now = originalDateNow;
+      db.close();
+    }
+  });
+
+  it("preserves exact detached activation bytes through resolution and still replays the immutable request", () => {
+    const { db, repo } = createInMemoryHarness();
+    try {
+      const input = deterministicDetachedInput();
+      repo.createDeterministicDetachedWithTtlDuration(input, 15 * 60_000);
+      const before = db
+        .prepare("SELECT linkage_json, payload_json, preview_json FROM approvals WHERE approval_id = ?")
+        .get(input.approvalId) as { linkage_json: string; payload_json: string; preview_json: string };
+
+      const resolved = repo.resolve(input.approvalId, { decision: "approve", resolvedBy: "operator-1" });
+      assert.equal(resolved.status, "approved");
+      const after = db
+        .prepare("SELECT linkage_json, payload_json, preview_json FROM approvals WHERE approval_id = ?")
+        .get(input.approvalId) as { linkage_json: string; payload_json: string; preview_json: string };
+      assert.deepEqual(after, before);
+      assert.equal(after.payload_json.includes("__gcApprovalLinkage"), false);
+
+      const replay = repo.createDeterministicDetachedWithTtlDuration(input, 15 * 60_000);
+      assert.equal(replay.created, false);
+      assert.equal(replay.approval.status, "approved");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rejects edits and linkage enrichment for exact detached activation approvals without changing bytes", () => {
+    const { db, repo } = createInMemoryHarness();
+    try {
+      const input = deterministicDetachedInput();
+      repo.createDeterministicDetachedWithTtlDuration(input, 15 * 60_000);
+      const before = db
+        .prepare("SELECT status, linkage_json, payload_json, preview_json FROM approvals WHERE approval_id = ?")
+        .get(input.approvalId);
+
+      assert.throws(
+        () =>
+          repo.resolve(input.approvalId, {
+            decision: "edit",
+            resolvedBy: "operator-1",
+            editedPayload: { ...input.payload },
+          }),
+        /immutable/u,
+      );
+      assert.throws(
+        () =>
+          repo.resolve(input.approvalId, {
+            decision: "approve",
+            resolvedBy: "operator-1",
+            editedPayload: { ...input.payload },
+          }),
+        /immutable/u,
+      );
+      assert.throws(
+        () => repo.mergeLinkage(input.approvalId, { workspaceId: "workspace-a", tokenId: "token-1" }),
+        /linkage is immutable/u,
+      );
+      assert.deepEqual(
+        db
+          .prepare("SELECT status, linkage_json, payload_json, preview_json FROM approvals WHERE approval_id = ?")
+          .get(input.approvalId),
+        before,
+      );
+    } finally {
+      db.close();
+    }
+  });
+
+  it("conflicts when an exact deterministic approval ID is reused with changed immutable bytes", () => {
+    const { db, repo } = createInMemoryHarness();
+    try {
+      const input = deterministicDetachedInput();
+      repo.createDeterministicDetachedWithTtlDuration(input, 15 * 60_000);
+      for (const changed of [
+        { ...input, kind: "different.kind" },
+        { ...input, riskLevel: "nuclear" as const },
+        { ...input, payload: { ...input.payload, requestSha256: "9".repeat(64) } },
+        { ...input, preview: { ...input.preview, effectPosture: "unknown" } },
+        { ...input, linkage: { workspaceId: "workspace-b" } },
+      ]) {
+        assert.throws(
+          () => repo.createDeterministicDetachedWithTtlDuration(changed, 15 * 60_000),
+          /different immutable request bytes/i,
+        );
+      }
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rejects unsafe detached records and unknown top-level keys before reading getters", () => {
+    const { db, repo } = createInMemoryHarness();
+    try {
+      for (const field of ["payload", "preview", "linkage"] as const) {
+        let inheritedReads = 0;
+        const inheritedPrototype = Object.defineProperty({}, "secret", {
+          get() {
+            inheritedReads += 1;
+            return "must-not-read";
+          },
+        });
+        const inherited = Object.assign(Object.create(inheritedPrototype), { safe: "value" });
+        assert.throws(() =>
+          repo.createDeterministicDetachedWithTtlDuration(
+            { ...deterministicDetachedInput(), approvalId: `${field}-prototype`, [field]: inherited },
+            15 * 60_000,
+          ),
+        );
+        assert.equal(inheritedReads, 0);
+
+        let accessorReads = 0;
+        const accessor = Object.defineProperty({}, "unsafe", {
+          enumerable: true,
+          get() {
+            accessorReads += 1;
+            return "must-not-read";
+          },
+        });
+        assert.throws(() =>
+          repo.createDeterministicDetachedWithTtlDuration(
+            { ...deterministicDetachedInput(), approvalId: `${field}-accessor`, [field]: accessor },
+            15 * 60_000,
+          ),
+        );
+        assert.equal(accessorReads, 0);
+
+        let proxyReads = 0;
+        const proxied = new Proxy(
+          { safe: "value" },
+          {
+            get(target, property, receiver) {
+              proxyReads += 1;
+              return Reflect.get(target, property, receiver);
+            },
+          },
+        );
+        assert.throws(() =>
+          repo.createDeterministicDetachedWithTtlDuration(
+            { ...deterministicDetachedInput(), approvalId: `${field}-proxy`, [field]: proxied },
+            15 * 60_000,
+          ),
+        );
+        assert.equal(proxyReads, 0);
+      }
+
+      assert.throws(() =>
+        repo.createDeterministicDetachedWithTtlDuration(
+          { ...deterministicDetachedInput(), attackerControlled: true } as DeterministicDetachedApprovalCreateInput,
+          15 * 60_000,
+        ),
+      );
+      assert.equal((db.prepare("SELECT COUNT(*) AS count FROM approvals").get() as { count: number }).count, 0);
+    } finally {
+      db.close();
     }
   });
 

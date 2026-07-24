@@ -12,12 +12,80 @@ import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 import {
   beginDurableChatRun,
   finalizeDurableChatRun,
+  readCanonicalDurableChatTerminalOutput,
   type ChatDurableRunFinalizeDeps,
 } from "./chat-durable-run-service.js";
+import { DURABLE_RETRY_POLICY_DEFAULT } from "./durable-retry-policy.js";
+import {
+  computeEffectiveChatTurnRequestMaterialSha256,
+  computeFrozenChatTurnAdmissionMaterialSha256,
+} from "./session-control-service.js";
+import {
+  buildAutonomousChatAdmissionMetadataMaterial,
+  buildChatTurnRuntimeAuthoritySeal,
+  buildHeartbeatDecisionReceipt,
+  hashChatTurnRuntimeAuthorityValue,
+  sealAutonomousChatAdmissionMetadata,
+  withChatTurnRuntimeAuthorityCheckpoint,
+} from "./chat-durable-runtime-authority.js";
 
 describe("chat-durable-run-service", () => {
-  it("creates and schedules a durable chat run", () => {
+  it("reads terminal output only from the immutable prepared assistant message and preserves exact text", () => {
     const prepared = createPreparedTurn();
+    const trace = createTrace({ status: "completed", assistantMessageId: "assistant-1" });
+    const state = createFinalizeState();
+    state.deps.chatMessages = {
+      get: () => ({
+        messageId: "assistant-1",
+        sessionId: "session-1",
+        role: "assistant",
+        actorType: "agent",
+        actorId: "assistant",
+        content: "  Exact stored\noutput.  ",
+        timestamp: "2026-04-10T00:00:03.000Z",
+      }),
+    };
+
+    expect(readCanonicalDurableChatTerminalOutput(state.deps, prepared, trace)).toEqual({
+      assistantMessageId: "assistant-1",
+      outputText: "  Exact stored\noutput.  ",
+      outputSummary: "Exact stored output.",
+    });
+    expect(() =>
+      readCanonicalDurableChatTerminalOutput(
+        state.deps,
+        prepared,
+        createTrace({ status: "completed", assistantMessageId: "assistant-drift" }),
+      ),
+    ).toThrow("different assistant message");
+  });
+
+  it("rejects terminal assistant records with the wrong session, role, or actor type", () => {
+    const prepared = createPreparedTurn();
+    const trace = createTrace({ status: "completed", assistantMessageId: "assistant-1" });
+    const state = createFinalizeState();
+    for (const invalid of [
+      { sessionId: "other-session", role: "assistant", actorType: "agent" },
+      { sessionId: "session-1", role: "user", actorType: "agent" },
+      { sessionId: "session-1", role: "assistant", actorType: "system" },
+    ] as const) {
+      state.deps.chatMessages = {
+        get: () => ({
+          messageId: "assistant-1",
+          ...invalid,
+          actorId: "assistant",
+          content: "Output",
+          timestamp: "2026-04-10T00:00:03.000Z",
+        }),
+      };
+      expect(() => readCanonicalDurableChatTerminalOutput(state.deps, prepared, trace)).toThrow(
+        "invalid canonical linkage",
+      );
+    }
+  });
+
+  it("creates and schedules a durable chat run", () => {
+    const prepared = createPreparedTurn({ turnAdmission: undefined });
     const input = createSendRequest();
     const streamChunks: Array<{ chunk: ChatStreamChunkDraft; durableRunId?: string }> = [];
     const requestedRunIds: string[] = [];
@@ -116,7 +184,7 @@ describe("chat-durable-run-service", () => {
           },
           requestDurableRunProcessing: vi.fn(),
         },
-        createPreparedTurn(),
+        createPreparedTurn({ turnAdmission: undefined }),
         createSendRequest(),
         "chat_thread_turn_retried",
         { mutationLifecycle: { markCommitted } },
@@ -172,6 +240,65 @@ describe("chat-durable-run-service", () => {
         },
       },
     ]);
+  });
+
+  it("replays waiting turns only from their exact latest seal and checkpoint", () => {
+    const prepared = createPreparedTurn();
+    const trace = createTrace({
+      status: "waiting_for_approval",
+      failure: {
+        failureClass: "approval_required",
+        message: "Waiting for approval",
+        retryable: true,
+      },
+    });
+    const state = createFinalizeState();
+    finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace);
+    const stored = state.runs.get("run-waiting");
+    const checkpointCount = state.checkpoints.length;
+    const timelineCount = state.timelineEvents.length;
+    state.tracePatches.length = 0;
+
+    finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace);
+
+    expect(state.runs.get("run-waiting")).toEqual(stored);
+    expect(state.checkpoints).toHaveLength(checkpointCount);
+    expect(state.timelineEvents).toHaveLength(timelineCount);
+    expect(state.tracePatches).toEqual([
+      {
+        turnId: "turn-1",
+        patch: { durable: { runId: "run-waiting", status: "waiting", checkpointKind: "run_waiting" } },
+      },
+    ]);
+
+    state.checkpoints.length = 0;
+    expect(() => finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace)).toThrow(
+      "no exact latest waiting authority checkpoint",
+    );
+  });
+
+  it("accepts an exactly settled waiting finalizer and rejects stale output evidence", () => {
+    const prepared = createPreparedTurn();
+    const trace = createTrace({ status: "waiting_for_tool" });
+    const state = createFinalizeState();
+    finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace);
+    const run = state.runs.get("run-waiting")!;
+    const pending = run.metadata?.generalChatPostCommitPending as Record<string, unknown>;
+    const metadata = { ...(run.metadata ?? {}) };
+    delete metadata.generalChatPostCommitPending;
+    metadata.generalChatPostCommit = buildFinalGeneralSettlement(pending, "2026-04-10T00:00:04.000Z");
+    state.runs.set("run-waiting", { ...run, metadata });
+
+    expect(() => finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace)).not.toThrow();
+
+    const settled = state.runs.get("run-waiting")!;
+    state.runs.set("run-waiting", {
+      ...settled,
+      metadata: { ...(settled.metadata ?? {}), outputText: "stale terminal output" },
+    });
+    expect(() => finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace)).toThrow(
+      "stale output evidence for a waiting replay",
+    );
   });
 
   it("marks user-input waits as durable waiting checkpoints", () => {
@@ -259,7 +386,11 @@ describe("chat-durable-run-service", () => {
     // REPLACES metadata on updateRun, so the waiting branch must spread it).
     state.runs.set("run-waiting", {
       ...createRun("run-waiting", "running"),
-      metadata: { surface: "chat", objective: "Research this repo", retryPolicy: { maxAttempts: 3 } },
+      metadata: {
+        surface: "chat",
+        objective: "Research this repo",
+        retryPolicy: { ...DURABLE_RETRY_POLICY_DEFAULT },
+      },
     });
 
     finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace);
@@ -396,21 +527,17 @@ describe("chat-durable-run-service", () => {
       status: "cancelled",
     });
     const state = createFinalizeState();
-    state.runs.set("run-cancelled", {
-      ...createRun("run-cancelled", "cancelled"),
-      lastError: "cancelled by tester",
-      finishedAt: "2026-04-10T00:00:00.000Z",
-    });
+    finalizeDurableChatRun(state.deps, "run-cancelled", prepared, trace);
+    const settled = state.runs.get("run-cancelled");
+    const checkpointCount = state.checkpoints.length;
+    const timelineCount = state.timelineEvents.length;
+    state.tracePatches.length = 0;
 
     finalizeDurableChatRun(state.deps, "run-cancelled", prepared, trace);
 
-    expect(state.runs.get("run-cancelled")).toMatchObject({
-      status: "cancelled",
-      lastError: "cancelled by tester",
-      finishedAt: "2026-04-10T00:00:00.000Z",
-    });
-    expect(state.checkpoints).toEqual([]);
-    expect(state.timelineEvents).toEqual([]);
+    expect(state.runs.get("run-cancelled")).toEqual(settled);
+    expect(state.checkpoints).toHaveLength(checkpointCount);
+    expect(state.timelineEvents).toHaveLength(timelineCount);
     expect(state.tracePatches).toEqual([
       {
         turnId: "turn-1",
@@ -436,33 +563,20 @@ describe("chat-durable-run-service", () => {
       },
     });
     const state = createFinalizeState();
-    state.runs.set("run-cancelled", {
-      ...createRun("run-cancelled", "cancelled"),
-      lastError: "cancelled by operator",
-      finishedAt: "2026-04-10T00:00:00.000Z",
-    });
+    finalizeDurableChatRun(state.deps, "run-cancelled", prepared, createTrace({ status: "cancelled" }));
+    const settled = state.runs.get("run-cancelled");
+    const checkpointCount = state.checkpoints.length;
+    const timelineCount = state.timelineEvents.length;
+    state.tracePatches.length = 0;
 
-    finalizeDurableChatRun(state.deps, "run-cancelled", prepared, trace);
+    expect(() => finalizeDurableChatRun(state.deps, "run-cancelled", prepared, trace)).toThrow(
+      "no exact terminal replay authority",
+    );
 
-    expect(state.runs.get("run-cancelled")).toMatchObject({
-      status: "cancelled",
-      lastError: "cancelled by operator",
-      finishedAt: "2026-04-10T00:00:00.000Z",
-    });
-    expect(state.checkpoints).toEqual([]);
-    expect(state.timelineEvents).toEqual([]);
-    expect(state.tracePatches).toEqual([
-      {
-        turnId: "turn-1",
-        patch: {
-          durable: {
-            runId: "run-cancelled",
-            status: "cancelled",
-            checkpointKind: "run_cancelled",
-          },
-        },
-      },
-    ]);
+    expect(state.runs.get("run-cancelled")).toEqual(settled);
+    expect(state.checkpoints).toHaveLength(checkpointCount);
+    expect(state.timelineEvents).toHaveLength(timelineCount);
+    expect(state.tracePatches).toEqual([]);
   });
 
   it("does not let late traces rewrite already-terminal durable runs", () => {
@@ -476,34 +590,24 @@ describe("chat-durable-run-service", () => {
       },
     });
     const state = createFinalizeState();
-    state.runs.set("run-terminal", {
-      ...createRun("run-terminal", "completed"),
-      finishedAt: "2026-04-10T00:02:00.000Z",
-    });
+    state.runs.set("run-terminal", createRun("run-terminal", "running"));
+    finalizeDurableChatRun(state.deps, "run-terminal", prepared, createTrace({ status: "completed" }));
+    const settled = state.runs.get("run-terminal");
+    const checkpointCount = state.checkpoints.length;
+    const timelineCount = state.timelineEvents.length;
+    state.tracePatches.length = 0;
 
-    finalizeDurableChatRun(state.deps, "run-terminal", prepared, trace);
+    expect(() => finalizeDurableChatRun(state.deps, "run-terminal", prepared, trace)).toThrow(
+      "no exact terminal replay authority",
+    );
 
-    expect(state.runs.get("run-terminal")).toMatchObject({
-      status: "completed",
-      finishedAt: "2026-04-10T00:02:00.000Z",
-    });
-    expect(state.checkpoints).toEqual([]);
-    expect(state.timelineEvents).toEqual([]);
-    expect(state.tracePatches).toEqual([
-      {
-        turnId: "turn-1",
-        patch: {
-          durable: {
-            runId: "run-terminal",
-            status: "completed",
-            checkpointKind: "run_completed",
-          },
-        },
-      },
-    ]);
+    expect(state.runs.get("run-terminal")).toEqual(settled);
+    expect(state.checkpoints).toHaveLength(checkpointCount);
+    expect(state.timelineEvents).toHaveLength(timelineCount);
+    expect(state.tracePatches).toEqual([]);
   });
 
-  it("does not let late traces rewrite durable runs that already moved out of running", () => {
+  it("quarantines a waiting run that moved out of running without exact replay authority", () => {
     const prepared = createPreparedTurn();
     const trace = createTrace({
       status: "completed",
@@ -517,6 +621,7 @@ describe("chat-durable-run-service", () => {
     state.runs.set("run-late-waiting", {
       ...createRun("run-late-waiting", "waiting"),
       metadata: {
+        retryPolicy: { ...DURABLE_RETRY_POLICY_DEFAULT },
         waitForEvent: {
           eventKey: "cowork.turn.operator_resume",
           correlationId: "run-late-waiting",
@@ -524,7 +629,9 @@ describe("chat-durable-run-service", () => {
       },
     });
 
-    finalizeDurableChatRun(state.deps, "run-late-waiting", prepared, trace);
+    expect(() => finalizeDurableChatRun(state.deps, "run-late-waiting", prepared, trace)).toThrow(
+      "no exact waiting replay authority",
+    );
 
     expect(state.runs.get("run-late-waiting")).toMatchObject({
       status: "waiting",
@@ -532,18 +639,7 @@ describe("chat-durable-run-service", () => {
     expect(state.runs.get("run-late-waiting")?.finishedAt).toBeUndefined();
     expect(state.checkpoints).toEqual([]);
     expect(state.timelineEvents).toEqual([]);
-    expect(state.tracePatches).toEqual([
-      {
-        turnId: "turn-1",
-        patch: {
-          durable: {
-            runId: "run-late-waiting",
-            status: "waiting",
-            checkpointKind: "run_waiting",
-          },
-        },
-      },
-    ]);
+    expect(state.tracePatches).toEqual([]);
   });
 
   it("does not finalize after the database reports that the expected lease expired", () => {
@@ -615,7 +711,7 @@ describe("chat-durable-run-service", () => {
       expect.objectContaining({
         runId: "run-complete",
         checkpointKind: "run_completed",
-        state: {
+        state: expect.objectContaining({
           objective: "Ship the patch",
           currentStep: "completed",
           attemptedTools: [
@@ -643,7 +739,7 @@ describe("chat-durable-run-service", () => {
           assistantMessageId: "assistant-1",
           outputText: "Approved child phase completed with real output.",
           outputSummary: "Approved child phase completed with real output.",
-        },
+        }),
       }),
     ]);
     expect(state.timelineEvents).toEqual([
@@ -666,13 +762,14 @@ describe("chat-durable-run-service", () => {
     ]);
   });
 
-  it("commits autonomous post-commit recovery truth with the winning Chat completion", () => {
+  it("does not infer autonomous finalizer authority from descriptive autonomous metadata", () => {
     const prepared = createPreparedTurn();
     const trace = createTrace({ status: "completed" });
     const state = createFinalizeState();
     state.runs.set("run-complete", {
       ...createRun("run-complete", "running"),
       metadata: {
+        retryPolicy: { ...DURABLE_RETRY_POLICY_DEFAULT },
         surface: "chat",
         autonomous: {
           kind: "scheduled",
@@ -689,12 +786,9 @@ describe("chat-durable-run-service", () => {
       metadata: {
         surface: "chat",
         autonomous: expect.objectContaining({ kind: "scheduled" }),
-        autonomousChatPostCommitPending: {
-          version: 1,
-          requestedAt: expect.any(String),
-        },
       },
     });
+    expect(state.runs.get("run-complete")?.metadata).not.toHaveProperty("autonomousChatPostCommitPending");
   });
 
   it("rolls back every finalization projection when a late transaction write fails", () => {
@@ -731,7 +825,10 @@ describe("chat-durable-run-service", () => {
     const failed = createFinalizeState();
     failed.runs.set("run-complete", {
       ...createRun("run-complete", "running"),
-      metadata: { autonomous: { kind: "scheduled" } },
+      metadata: {
+        retryPolicy: { ...DURABLE_RETRY_POLICY_DEFAULT },
+        autonomous: { kind: "scheduled" },
+      },
     });
     finalizeDurableChatRun(failed.deps, "run-complete", prepared, createTrace({ status: "failed" }));
 
@@ -796,14 +893,368 @@ describe("chat-durable-run-service", () => {
         runId: "run-complete",
         checkpointKind: "run_failed",
         state: expect.objectContaining({
-          currentStep: "completed",
+          currentStep: "failed",
         }),
       }),
     ]);
+    expect(state.checkpoints[0]?.state).not.toHaveProperty("assistantMessageId");
+    expect(state.checkpoints[0]?.state).not.toHaveProperty("outputText");
+    expect(state.runs.get("run-complete")?.metadata).not.toHaveProperty("outputText");
+  });
+
+  it("quarantines legacy and unadmitted v2 runs without creating terminal or autonomous evidence", () => {
+    const trace = createTrace({ status: "completed" });
+    const legacy = createFinalizeState();
+    legacy.runs.set("run-complete", {
+      ...createRun("run-complete", "running"),
+      payload: { version: "chat.turn.execute.v1" },
+      metadata: {
+        retryPolicy: { ...DURABLE_RETRY_POLICY_DEFAULT },
+        autonomous: { kind: "scheduled" },
+      },
+    });
+    const legacyBefore = structuredClone(legacy.runs.get("run-complete"));
+
+    expect(() => finalizeDurableChatRun(legacy.deps, "run-complete", createPreparedTurn(), trace)).toThrow(
+      "quarantined from finalization",
+    );
+    expect(legacy.runs.get("run-complete")).toEqual(legacyBefore);
+    expect(legacy.checkpoints).toEqual([]);
+    expect(legacy.timelineEvents).toEqual([]);
+    expect(legacy.tracePatches).toEqual([]);
+    expect(legacy.runs.get("run-complete")?.metadata).not.toHaveProperty("autonomousChatPostCommitPending");
+
+    const unadmitted = createFinalizeState();
+    const unadmittedBefore = structuredClone(unadmitted.runs.get("run-complete"));
+    expect(() =>
+      finalizeDurableChatRun(unadmitted.deps, "run-complete", createPreparedTurn({ turnAdmission: undefined }), trace),
+    ).toThrow("no exact admitted finalize context");
+    expect(unadmitted.runs.get("run-complete")).toEqual(unadmittedBefore);
+    expect(unadmitted.checkpoints).toEqual([]);
+    expect(unadmitted.timelineEvents).toEqual([]);
+    expect(unadmitted.tracePatches).toEqual([]);
+  });
+
+  it("accepts an exact terminal replay while general post-commit remains pending", () => {
+    const prepared = createPreparedTurn();
+    const trace = createTrace({ status: "completed" });
+    const state = createFinalizeState();
+    finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
+    const settled = state.runs.get("run-complete");
+    const checkpointCount = state.checkpoints.length;
+    const timelineCount = state.timelineEvents.length;
+    state.tracePatches.length = 0;
+
+    finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
+
+    expect(state.runs.get("run-complete")).toEqual(settled);
+    expect(state.checkpoints).toHaveLength(checkpointCount);
+    expect(state.timelineEvents).toHaveLength(timelineCount);
+    expect(state.tracePatches).toEqual([
+      {
+        turnId: "turn-1",
+        patch: {
+          durable: { runId: "run-complete", status: "completed", checkpointKind: "run_completed" },
+        },
+      },
+    ]);
+  });
+
+  it("rejects terminal replay when the latest checkpoint or general finalizer evidence is missing", () => {
+    const prepared = createPreparedTurn();
+    const trace = createTrace({ status: "completed" });
+
+    const missingCheckpoint = createFinalizeState();
+    finalizeDurableChatRun(missingCheckpoint.deps, "run-complete", prepared, trace);
+    missingCheckpoint.checkpoints.length = 0;
+    expect(() => finalizeDurableChatRun(missingCheckpoint.deps, "run-complete", prepared, trace)).toThrow(
+      "no exact latest terminal authority checkpoint",
+    );
+
+    const missingFinalizer = createFinalizeState();
+    finalizeDurableChatRun(missingFinalizer.deps, "run-complete", prepared, trace);
+    const run = missingFinalizer.runs.get("run-complete")!;
+    const metadata = { ...(run.metadata ?? {}) };
+    delete metadata.generalChatPostCommitPending;
+    missingFinalizer.runs.set("run-complete", { ...run, metadata });
+    expect(() => finalizeDurableChatRun(missingFinalizer.deps, "run-complete", prepared, trace)).toThrow(
+      "general finalizer drifted from terminal authority",
+    );
+  });
+
+  it("rejects a handoff before the pending general finalizer settles", () => {
+    const prepared = createPreparedTurn();
+    const trace = createTrace({ status: "completed" });
+    const state = createFinalizeState();
+    finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
+    const run = state.runs.get("run-complete")!;
+    const pending = run.metadata?.generalChatPostCommitPending as Record<string, unknown>;
+    state.runs.set("run-complete", {
+      ...run,
+      metadata: {
+        ...(run.metadata ?? {}),
+        chatTurnAdmissionHandoff: buildExactTestHandoff(
+          "run-complete",
+          String(pending.generationId),
+          [],
+          "2026-04-10T00:00:04.000Z",
+        ),
+      },
+    });
+
+    expect(() => finalizeDurableChatRun(state.deps, "run-complete", prepared, trace)).toThrow(
+      "committed a handoff before finalizers settled",
+    );
+  });
+
+  it("accepts the exact all-settled general finalizer and admission handoff", () => {
+    const prepared = createPreparedTurn();
+    const trace = createTrace({ status: "completed" });
+    const state = createFinalizeState();
+    finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
+    const run = state.runs.get("run-complete")!;
+    const pending = run.metadata?.generalChatPostCommitPending as Record<string, unknown>;
+    const metadata = { ...(run.metadata ?? {}) };
+    delete metadata.generalChatPostCommitPending;
+    metadata.generalChatPostCommit = buildFinalGeneralSettlement(pending, "2026-04-10T00:00:04.000Z");
+    metadata.chatTurnAdmissionHandoff = buildExactTestHandoff(
+      "run-complete",
+      String(pending.generationId),
+      [],
+      "2026-04-10T00:00:04.000Z",
+    );
+    state.runs.set("run-complete", { ...run, metadata });
+    const checkpointCount = state.checkpoints.length;
+    const timelineCount = state.timelineEvents.length;
+    state.tracePatches.length = 0;
+
+    finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
+
+    expect(state.checkpoints).toHaveLength(checkpointCount);
+    expect(state.timelineEvents).toHaveLength(timelineCount);
+    expect(state.tracePatches).toHaveLength(1);
+  });
+
+  it("accepts a linked-to-general pending prefix but rejects an out-of-order general settlement", () => {
+    const prepared = createPreparedTurn();
+    const trace = createTrace({ status: "failed" });
+    const state = createFinalizeState();
+    finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
+    const run = state.runs.get("run-complete")!;
+    const checkpoint = state.checkpoints[0]!;
+    const pending = run.metadata?.generalChatPostCommitPending as Record<string, unknown>;
+    const requestedAt = String(pending.requestedAt);
+    const reason = "linked child finalization failed";
+    const finalizationId = "linked-finalization-1";
+    const authority = buildChatTurnRuntimeAuthoritySeal({
+      runId: "run-complete",
+      turnId: "turn-1",
+      transitionKind: "linked_finalization",
+      durableStatus: "failed",
+      traceStatus: "failed",
+      transitionAt: requestedAt,
+      postCommitGenerationId: String(pending.generationId),
+      postCommitEligibility: pending.postCommitEligibility as never,
+      linkedFinalization: { finalizationId, requestedAt, reason },
+      requiredFinalizers: ["linked", "general"],
+    });
+    const linkedPending = { reason, requestedAt, finalizationId };
+    state.runs.set("run-complete", {
+      ...run,
+      metadata: {
+        ...(run.metadata ?? {}),
+        linkedFinalizationPending: linkedPending,
+        chatTurnRuntimeAuthority: authority,
+      },
+    });
+    checkpoint.state = withChatTurnRuntimeAuthorityCheckpoint(checkpoint.state, authority);
+    state.tracePatches.length = 0;
+
+    expect(() => finalizeDurableChatRun(state.deps, "run-complete", prepared, trace)).not.toThrow();
+
+    const pendingPrefixRun = state.runs.get("run-complete")!;
+    const outOfOrderMetadata = { ...(pendingPrefixRun.metadata ?? {}) };
+    delete outOfOrderMetadata.generalChatPostCommitPending;
+    outOfOrderMetadata.generalChatPostCommit = buildFinalGeneralSettlement(pending, "2026-04-10T00:00:04.000Z");
+    state.runs.set("run-complete", { ...pendingPrefixRun, metadata: outOfOrderMetadata });
+    expect(() => finalizeDurableChatRun(state.deps, "run-complete", prepared, trace)).toThrow(
+      "settled finalizers out of canonical order",
+    );
+  });
+
+  it("finalizes and replays an exact silent system heartbeat without visible output or raw timeline disclosure", () => {
+    const rawOutput = '{"notify":false}';
+    const fixture = createHeartbeatFinalizeFixture(rawOutput);
+    const state = createFinalizeState();
+    state.runs.set(fixture.run.runId, fixture.run);
+
+    finalizeDurableChatRun(state.deps, fixture.run.runId, fixture.prepared, fixture.trace);
+
+    const completed = state.runs.get(fixture.run.runId)!;
+    expect(completed).toMatchObject({ status: "completed" });
+    expect(completed.metadata).toMatchObject({
+      heartbeatDecisionReceipt: fixture.receipt,
+      heartbeatDecisionRawOutput: rawOutput,
+      generalChatPostCommitPending: {
+        postCommitEligibility: {
+          version: 1,
+          autonomyEnabledAtParentSettlement: false,
+          evalIntegrityTurn: false,
+          humanSession: false,
+        },
+      },
+      autonomousChatPostCommitPending: expect.any(Object),
+      chatTurnRuntimeAuthority: {
+        material: {
+          heartbeatDecisionReceipt: fixture.receipt,
+          terminalOutput: null,
+        },
+      },
+    });
+    expect(completed.metadata).not.toHaveProperty("outputText");
+    expect(completed.metadata).not.toHaveProperty("outputSummary");
+    expect(state.checkpoints).toHaveLength(1);
+    expect(state.checkpoints[0]?.state).toMatchObject({
+      heartbeatDecisionReceipt: fixture.receipt,
+      heartbeatDecisionRawOutput: rawOutput,
+    });
+    expect(state.checkpoints[0]?.state).not.toHaveProperty("assistantMessageId");
+    expect(state.checkpoints[0]?.state).not.toHaveProperty("outputText");
+    expect(state.timelineEvents).toHaveLength(1);
+    expect(JSON.stringify(state.timelineEvents[0])).not.toContain("heartbeatDecisionRawOutput");
+    expect(JSON.stringify(state.timelineEvents[0])).not.toContain(rawOutput);
+
+    const checkpointCount = state.checkpoints.length;
+    const timelineCount = state.timelineEvents.length;
+    state.tracePatches.length = 0;
+    finalizeDurableChatRun(state.deps, fixture.run.runId, fixture.prepared, fixture.trace);
+    expect(state.checkpoints).toHaveLength(checkpointCount);
+    expect(state.timelineEvents).toHaveLength(timelineCount);
+    expect(state.tracePatches).toEqual([
+      {
+        turnId: fixture.trace.turnId,
+        patch: {
+          durable: {
+            runId: fixture.run.runId,
+            status: "completed",
+            checkpointKind: "run_completed",
+          },
+        },
+      },
+    ]);
+  });
+
+  it("finalizes a notifying system heartbeat only from its exact normalized system message", () => {
+    const rawOutput = '{"notify":true,"message":"  Check the backup now.  "}';
+    const fixture = createHeartbeatFinalizeFixture(rawOutput);
+    const state = createFinalizeState();
+    state.runs.set(fixture.run.runId, fixture.run);
+    state.deps.chatMessages = {
+      get: (messageId) =>
+        messageId === fixture.prepared.assistantMessageId
+          ? {
+              messageId,
+              sessionId: fixture.prepared.session.sessionId,
+              role: "assistant",
+              actorType: "system",
+              actorId: "system-heartbeat",
+              content: "Check the backup now.",
+              timestamp: "2026-04-10T00:00:03.000Z",
+            }
+          : undefined,
+    };
+
+    finalizeDurableChatRun(state.deps, fixture.run.runId, fixture.prepared, fixture.trace);
+
+    const completed = state.runs.get(fixture.run.runId)!;
+    expect(completed.metadata).toMatchObject({
+      heartbeatDecisionReceipt: fixture.receipt,
+      heartbeatDecisionRawOutput: rawOutput,
+      outputText: "Check the backup now.",
+      finalOutput: "Check the backup now.",
+      outputSummary: "Check the backup now.",
+      finalSummary: "Check the backup now.",
+      chatTurnRuntimeAuthority: {
+        material: {
+          heartbeatDecisionReceipt: fixture.receipt,
+          terminalOutput: expect.objectContaining({
+            assistantMessageId: fixture.prepared.assistantMessageId,
+          }),
+        },
+      },
+    });
+    expect(state.checkpoints[0]?.state).toMatchObject({
+      assistantMessageId: fixture.prepared.assistantMessageId,
+      outputText: "Check the backup now.",
+      outputSummary: "Check the backup now.",
+      heartbeatDecisionReceipt: fixture.receipt,
+      heartbeatDecisionRawOutput: rawOutput,
+    });
+    expect(JSON.stringify(state.timelineEvents[0])).not.toContain("heartbeatDecisionRawOutput");
+    expect(JSON.stringify(state.timelineEvents[0])).not.toContain(rawOutput);
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["repaired", { status: "complete" as const, repaired: true }],
+    ["extra-key", { status: "complete" as const, repaired: false, finishReason: "stop" }],
+  ])("rejects %s heartbeat completion evidence before finalization", (_case, completion) => {
+    const fixture = createHeartbeatFinalizeFixture('{"notify":false}');
+    const state = createFinalizeState();
+    state.runs.set(fixture.run.runId, fixture.run);
+
+    expect(() =>
+      finalizeDurableChatRun(state.deps, fixture.run.runId, fixture.prepared, { ...fixture.trace, completion }),
+    ).toThrow(/partial, repaired, or incomplete decision/);
+
+    expect(state.runs.get(fixture.run.runId)).toMatchObject({ status: "running" });
+    expect(state.checkpoints).toHaveLength(0);
+    expect(state.timelineEvents).toHaveLength(0);
+  });
+
+  it("terminally blocks a system heartbeat approval wait without decision or output evidence", () => {
+    const fixture = createHeartbeatFinalizeFixture(undefined);
+    const state = createFinalizeState();
+    state.runs.set(fixture.run.runId, fixture.run);
+    const approvalTrace = {
+      ...fixture.trace,
+      status: "waiting_for_approval" as const,
+      completion: { status: "interrupted" as const, repaired: false },
+    };
+
+    finalizeDurableChatRun(state.deps, fixture.run.runId, fixture.prepared, approvalTrace);
+
+    const failed = state.runs.get(fixture.run.runId)!;
+    expect(failed).toMatchObject({
+      status: "failed",
+      lastError: "System heartbeat tool execution requires an approval and was blocked.",
+      metadata: {
+        generalChatPostCommitPending: {
+          postCommitEligibility: {
+            version: 1,
+            autonomyEnabledAtParentSettlement: false,
+            evalIntegrityTurn: false,
+            humanSession: false,
+          },
+        },
+      },
+    });
+    expect(failed.metadata).not.toHaveProperty("heartbeatDecisionReceipt");
+    expect(failed.metadata).not.toHaveProperty("heartbeatDecisionRawOutput");
+    expect(failed.metadata).not.toHaveProperty("outputText");
+    expect(state.checkpoints[0]?.state).not.toHaveProperty("heartbeatDecisionReceipt");
+    expect(state.checkpoints[0]?.state).not.toHaveProperty("heartbeatDecisionRawOutput");
+    expect(state.checkpoints[0]?.state).not.toHaveProperty("assistantMessageId");
+    expect(state.tracePatches[0]?.patch).toMatchObject({
+      status: "failed",
+      failure: { failureClass: "approval_required", retryable: false },
+    });
   });
 });
 
 function createPreparedTurn(overrides: Partial<PreparedAgentChatTurn> = {}): PreparedAgentChatTurn {
+  const admittedRequest = { content: "Research this repo" };
+  const admissionMaterialSha256 = computeFrozenChatTurnAdmissionMaterialSha256(admittedRequest);
   return {
     session: { sessionId: "session-1" },
     route: { channel: "chat", account: "operator" },
@@ -857,6 +1308,20 @@ function createPreparedTurn(overrides: Partial<PreparedAgentChatTurn> = {}): Pre
     assistantMessageId: "assistant-1",
     branchKind: "append",
     effectiveToolAutonomy: "manual",
+    turnAdmission: {
+      identity: {
+        admissionId: "admission-1",
+        sessionIncarnationId: "incarnation-1",
+        workspaceId: "default",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        aggregateRevision: 1,
+        controllerGeneration: 1,
+        materialSha256: admissionMaterialSha256,
+      },
+      admittedRequest,
+      requestActor: { actorKind: "operator", actorId: "operator" },
+    },
     ...overrides,
   } as PreparedAgentChatTurn;
 }
@@ -866,6 +1331,7 @@ function createTrace(overrides: Partial<ChatTurnTraceRecord> = {}): ChatTurnTrac
     turnId: "turn-1",
     sessionId: "session-1",
     userMessageId: "user-1",
+    assistantMessageId: "assistant-1",
     branchKind: "append",
     status: "completed",
     mode: "chat",
@@ -897,6 +1363,8 @@ function createRun(
   status: DurableRunRecord["status"],
   workflowKey: DurableRunRecord["workflowKey"] = "chat.turn.execute",
 ): DurableRunRecord {
+  const request = { content: "Research this repo" };
+  const admissionMaterialSha256 = computeFrozenChatTurnAdmissionMaterialSha256(request);
   return {
     runId,
     workflowKey,
@@ -904,12 +1372,151 @@ function createRun(
     attemptCount: 0,
     maxAttempts: 3,
     version: 1,
-    payload: {},
-    metadata: {},
+    payload: {
+      version: "chat.turn.execute.v2",
+      admissionId: "admission-1",
+      sessionIncarnationId: "incarnation-1",
+      admissionMaterialSha256,
+      effectiveRequestMaterialSha256: computeEffectiveChatTurnRequestMaterialSha256(admissionMaterialSha256, request),
+      workspaceId: "default",
+      admissionAggregateRevision: 1,
+      admissionControllerGeneration: 1,
+      requestActor: { actorKind: "operator", actorId: "operator" },
+      request,
+      sessionId: "session-1",
+      turnId: "turn-1",
+      userMessageId: "user-1",
+      assistantMessageId: "assistant-1",
+    },
+    metadata: { retryPolicy: { ...DURABLE_RETRY_POLICY_DEFAULT } },
     createdAt: "2026-04-10T00:00:00.000Z",
     updatedAt: "2026-04-10T00:00:00.000Z",
     startedAt: "2026-04-10T00:00:00.000Z",
   };
+}
+
+function createHeartbeatFinalizeFixture(rawOutput: string | undefined): {
+  run: DurableRunRecord;
+  prepared: PreparedAgentChatTurn;
+  trace: ChatTurnTraceRecord;
+  receipt?: ReturnType<typeof buildHeartbeatDecisionReceipt>["receipt"];
+} {
+  const runId = "run-heartbeat";
+  const sessionId = "session-heartbeat";
+  const turnId = "turn-heartbeat";
+  const userMessageId = "user-heartbeat-ephemeral";
+  const assistantMessageId = "assistant-heartbeat";
+  const occurrenceId = "heartbeat-occurrence";
+  const claimSha256 = "a".repeat(64);
+  const request = {
+    content: "Perform the bounded heartbeat check and return the exact decision object.",
+    permissionProfileId: "heartbeat-restricted",
+    policyRunId: runId,
+  };
+  const admissionMaterialSha256 = computeFrozenChatTurnAdmissionMaterialSha256(request);
+  const payload = {
+    version: "chat.turn.execute.v2" as const,
+    admissionId: "admission-heartbeat",
+    sessionIncarnationId: "incarnation-heartbeat",
+    admissionMaterialSha256,
+    effectiveRequestMaterialSha256: computeEffectiveChatTurnRequestMaterialSha256(admissionMaterialSha256, request),
+    workspaceId: "default",
+    admissionAggregateRevision: 1,
+    admissionControllerGeneration: 1,
+    requestActor: { actorKind: "system", actorId: "system-heartbeat" },
+    request,
+    sessionId,
+    turnId,
+    userMessageId,
+    assistantMessageId,
+    heartbeatOccurrenceId: occurrenceId,
+    heartbeatClaimSha256: claimSha256,
+    heartbeatEvaluatedPolicySha256: "b".repeat(64),
+    heartbeatFrozenObjectiveSha256: "c".repeat(64),
+  };
+  const autonomous = {
+    kind: "heartbeat" as const,
+    systemActorId: "system-heartbeat",
+    sourceRunId: runId,
+    reason: `heartbeat self-wake:${sessionId}`,
+    deliverMode: "on_notify" as const,
+  };
+  const autonomousAdmission = sealAutonomousChatAdmissionMetadata(
+    buildAutonomousChatAdmissionMetadataMaterial({
+      identity: { userMessageId, turnId, assistantMessageId, durableRunId: runId },
+      sessionId,
+      objective: request.content,
+      autonomous,
+      payload,
+    }),
+  );
+  const decision = rawOutput ? buildHeartbeatDecisionReceipt({ occurrenceId, claimSha256, rawOutput }) : undefined;
+  const run: DurableRunRecord = {
+    ...createRun(runId, "running"),
+    runId,
+    payload,
+    metadata: {
+      retryPolicy: { ...DURABLE_RETRY_POLICY_DEFAULT },
+      objective: request.content,
+      autonomous,
+      autonomousAdmission,
+      ...(decision
+        ? {
+            heartbeatDecisionReceipt: decision.receipt,
+            heartbeatDecisionRawOutput: rawOutput,
+          }
+        : {}),
+    },
+    attemptCount: 1,
+  };
+  const prepared = createPreparedTurn({
+    session: { sessionId },
+    workspaceId: "default",
+    content: request.content,
+    userEventId: userMessageId,
+    userMessage: {
+      messageId: userMessageId,
+      sessionId,
+      role: "user",
+      actorType: "system",
+      actorId: "system-heartbeat",
+      content: request.content,
+      timestamp: "2026-04-10T00:00:00.000Z",
+    },
+    turnId,
+    assistantMessageId,
+    turnAdmission: {
+      identity: {
+        admissionId: payload.admissionId,
+        sessionIncarnationId: payload.sessionIncarnationId,
+        workspaceId: payload.workspaceId,
+        sessionId,
+        turnId,
+        aggregateRevision: payload.admissionAggregateRevision,
+        controllerGeneration: payload.admissionControllerGeneration,
+        materialSha256: admissionMaterialSha256,
+      },
+      admittedRequest: request,
+      requestActor: payload.requestActor,
+    },
+    serverOnlyPosture: {
+      kind: "system_heartbeat",
+      actorId: "system-heartbeat",
+      operation: "chat_system_heartbeat",
+      occurrenceId,
+      claimSha256,
+      durableRunId: runId,
+    },
+  } as Partial<PreparedAgentChatTurn>);
+  const trace = createTrace({
+    turnId,
+    sessionId,
+    userMessageId,
+    assistantMessageId,
+    status: "completed",
+    completion: { status: "complete", repaired: false },
+  });
+  return { run, prepared, trace, ...(decision ? { receipt: decision.receipt } : {}) };
 }
 
 function createFinalizeState(options?: {
@@ -976,6 +1583,10 @@ function createFinalizeState(options?: {
         return current;
       },
       updateRun: (input) => updateRun(runs, input.runId, input),
+      getLatestCheckpointByKind: (runId, checkpointKind) =>
+        [...checkpoints]
+          .reverse()
+          .find((checkpoint) => checkpoint.runId === runId && checkpoint.checkpointKind === checkpointKind),
       createCheckpoint: (input) => {
         const record: DurableCheckpointRecord = {
           checkpointId: `checkpoint-${checkpoints.length + 1}`,
@@ -1008,6 +1619,12 @@ function createFinalizeState(options?: {
             }
           : undefined,
     },
+    resolvePostCommitEligibility: () => ({
+      version: 1,
+      autonomyEnabledAtParentSettlement: true,
+      evalIntegrityTurn: false,
+      humanSession: true,
+    }),
     recordDurableTimelineEvent: (runId, eventType, payload) => {
       timelineEvents.push({ runId, eventType, payload });
     },
@@ -1059,4 +1676,42 @@ function updateRun(
   };
   runs.set(runId, next);
   return next;
+}
+
+function buildFinalGeneralSettlement(pending: Record<string, unknown>, completedAt: string): Record<string, unknown> {
+  return {
+    generationId: pending.generationId,
+    traceStatus: pending.traceStatus,
+    requestedAt: pending.requestedAt,
+    postCommitEligibility: pending.postCommitEligibility,
+    parentLocalEffectsStatus: "settled",
+    parentLocalEffectsSettledAt: completedAt,
+    completedEffects: pending.completedEffects,
+    durableEffectRunIds: pending.durableEffectRunIds,
+    durableEffectOutcomes: {},
+    childOutcomeAuthority: "child_durable_runs",
+    settlementStatus: "completed",
+    completedAt,
+  };
+}
+
+function buildExactTestHandoff(
+  parentRunId: string,
+  postCommitGenerationId: string,
+  childRunIds: string[],
+  committedAt: string,
+): Record<string, unknown> {
+  const normalizedChildRunIds = [...new Set(childRunIds)].sort((left, right) => left.localeCompare(right));
+  return {
+    version: 1,
+    admissionId: "admission-1",
+    sessionIncarnationId: "incarnation-1",
+    turnId: "turn-1",
+    parentRunId,
+    postCommitGenerationId,
+    parentLocalEffectsStatus: "settled",
+    childRunIds: normalizedChildRunIds,
+    childRunIdsSha256: hashChatTurnRuntimeAuthorityValue(normalizedChildRunIds),
+    committedAt,
+  };
 }

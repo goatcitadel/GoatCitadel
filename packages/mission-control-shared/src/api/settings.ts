@@ -3,6 +3,7 @@ import type {
   DeviceAccessGrantListResponse,
   DeviceAccessGrantRevokeResponse,
   GatewayInstallTokenResolution,
+  LlmProviderConfig,
   LlmProviderRequestConfig,
   OnboardingBootstrapInput,
   OnboardingBootstrapResult,
@@ -62,6 +63,7 @@ export async function resolveGatewayInstallToken(input?: {
 }
 
 export async function patchSettings(input: {
+  expectedRevision: number;
   deploymentProfile?: "local_dev" | "trusted_local" | "remote_hardened";
   toolApprovalMode?: "approve_all" | "approve_risky" | "bypass";
   defaultToolProfile?: string;
@@ -72,6 +74,8 @@ export async function patchSettings(input: {
   llm?: {
     activeProviderId?: string;
     activeModel?: string;
+    utilityProviderId?: string;
+    utilityModel?: string;
     upsertProvider?: {
       providerId: string;
       label?: string;
@@ -82,10 +86,12 @@ export async function patchSettings(input: {
         | "openai-codex-responses"
         | "anthropic-messages"
         | "bedrock-messages";
-      authMode?: "api-key" | "codex-oauth" | "claude-code-oauth";
+      authMode?: LlmProviderConfig["authMode"];
       defaultModel?: string;
       apiKey?: string;
       apiKeyEnv?: string;
+      googleCloud?: LlmProviderConfig["googleCloud"];
+      capabilities?: LlmProviderConfig["capabilities"];
       request?: LlmProviderRequestConfig;
       headers?: Record<string, string>;
     };

@@ -5,10 +5,13 @@ import {
   projectCapabilityToolSchemaForPublic,
   projectCodeModeRunArtifactPreviewForPublic,
 } from "../services/capability-public-projection.js";
+import { sendRouteError } from "./_error-handler.js";
 
 const DEFAULT_WORKSPACE_ID = "default";
 
 export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
+  const resolveActorId = (request: { authActorId?: string; ip?: string }) =>
+    request.authActorId?.trim() || `ip:${request.ip ?? "unknown"}`;
   const catalogQuerySchema = z.object({
     scope: z.enum(["inspectable", "callable"]).optional(),
     workspaceId: z.string().trim().min(1).optional(),
@@ -77,9 +80,11 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     candidateId: z.string().min(1),
   });
   const candidateActionBodySchema = z.object({
+    expectedRevision: z.number().int().positive(),
     versionId: z.string().trim().min(1).optional(),
   });
   const candidateRollbackBodySchema = z.object({
+    expectedRevision: z.number().int().positive(),
     targetVersionId: z.string().trim().min(1),
   });
   const chatOnlyModeSchema = z.enum(["chat", "cowork", "code"]).transform(() => "chat" as const);
@@ -136,6 +141,12 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     sessionId: z.string().trim().min(1).optional(),
     turnId: z.string().trim().min(1).optional(),
     workspaceId: z.string().trim().min(1).optional(),
+  });
+  const codeModeVerificationBodySchema = z.object({
+    commandName: z.enum(["git_diff_check", "test", "typecheck", "lint", "build", "check", "verify", "coverage"]),
+  });
+  const codeModeVerificationEvidenceQuerySchema = runDetailQuerySchema.extend({
+    limit: z.coerce.number().int().min(1).max(200).optional(),
   });
 
   const runsQuerySchema = z.object({
@@ -223,7 +234,11 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply
         .code(201)
-        .send(projectCapabilityPublicValue(fastify.services.capabilities.createCapabilityProposal(parsed.data)));
+        .send(
+          projectCapabilityPublicValue(
+            fastify.services.capabilities.createCapabilityProposal(parsed.data, resolveActorId(request)),
+          ),
+        );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -317,6 +332,10 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
+  // HX-402 P2: direct candidate lifecycle verbs are approval-first. Each verb
+  // commits one canonical `capability.lifecycle` approval (202 +
+  // pending-approval envelope); the recovered approval effect is the only
+  // executor. A no-op transition answers 200 with the unchanged detail.
   fastify.post("/api/v1/capabilities/candidates/:candidateId/promote", async (request, reply) => {
     const params = candidateParamsSchema.safeParse(request.params);
     const body = candidateActionBodySchema.safeParse(request.body ?? {});
@@ -329,13 +348,15 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(
-        projectCapabilityPublicValue(
-          fastify.services.capabilities.promoteCapabilityCandidate(params.data.candidateId, body.data.versionId),
-        ),
+      const outcome = fastify.services.capabilities.promoteCapabilityCandidate(
+        params.data.candidateId,
+        body.data.expectedRevision,
+        body.data.versionId,
+        resolveActorId(request),
       );
+      return reply.code(outcome.pendingApproval ? 202 : 200).send(projectCapabilityPublicValue(outcome));
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -351,13 +372,15 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(
-        projectCapabilityPublicValue(
-          fastify.services.capabilities.revokeCapabilityCandidate(params.data.candidateId, body.data.versionId),
-        ),
+      const outcome = fastify.services.capabilities.revokeCapabilityCandidate(
+        params.data.candidateId,
+        body.data.expectedRevision,
+        body.data.versionId,
+        resolveActorId(request),
       );
+      return reply.code(outcome.pendingApproval ? 202 : 200).send(projectCapabilityPublicValue(outcome));
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -373,13 +396,15 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(
-        projectCapabilityPublicValue(
-          fastify.services.capabilities.rollbackCapabilityCandidate(params.data.candidateId, body.data.targetVersionId),
-        ),
+      const outcome = fastify.services.capabilities.rollbackCapabilityCandidate(
+        params.data.candidateId,
+        body.data.targetVersionId,
+        body.data.expectedRevision,
+        resolveActorId(request),
       );
+      return reply.code(outcome.pendingApproval ? 202 : 200).send(projectCapabilityPublicValue(outcome));
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -424,6 +449,68 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.send(projectCapabilityPublicValue(run));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.get("/api/v1/code-mode/runs/:runId/verification/evidence", async (request, reply) => {
+    const params = runParamsSchema.safeParse(request.params);
+    const query = codeModeVerificationEvidenceQuerySchema.safeParse(request.query);
+    if (!params.success || !query.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          query: query.success ? undefined : query.error.flatten(),
+        },
+      });
+    }
+    try {
+      const { limit, ...scopeQuery } = query.data;
+      return reply.send({
+        items: projectCapabilityPublicValue(
+          fastify.services.capabilities.listCodeModeRunVerificationEvidence(
+            params.data.runId,
+            {
+              ...scopeQuery,
+              workspaceId: scopeQuery.workspaceId ?? DEFAULT_WORKSPACE_ID,
+            },
+            limit ?? 50,
+          ),
+        ),
+      });
+    } catch (error) {
+      return reply.code(404).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/code-mode/runs/:runId/verification", async (request, reply) => {
+    const params = runParamsSchema.safeParse(request.params);
+    const query = runDetailQuerySchema.safeParse(request.query);
+    const body = codeModeVerificationBodySchema.safeParse(request.body);
+    if (!params.success || !query.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          query: query.success ? undefined : query.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.send(
+        projectCapabilityPublicValue(
+          await fastify.services.capabilities.verifyCodeModeRun(
+            params.data.runId,
+            body.data,
+            {
+              ...query.data,
+              workspaceId: query.data.workspaceId ?? DEFAULT_WORKSPACE_ID,
+            },
+            request.authActorId,
+          ),
+        ),
+      );
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
     }
   });
 

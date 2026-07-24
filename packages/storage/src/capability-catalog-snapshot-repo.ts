@@ -1,5 +1,4 @@
-import type { CapabilityCatalogSnapshotRecord } from "@goatcitadel/contracts";
-import { NotFoundError } from "@goatcitadel/contracts";
+import { canonicalJsonString, NotFoundError, type CapabilityCatalogSnapshotRecord } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
 import { safeJsonParse } from "./safe-json.js";
 
@@ -27,13 +26,26 @@ export class CapabilityCatalogSnapshotRepository {
   }
 
   public create(input: CapabilityCatalogSnapshotRecord): CapabilityCatalogSnapshotRecord {
+    const inspectableJson = canonicalJsonString(input.inspectableEntries);
+    const callableJson = canonicalJsonString(input.callableEntries);
     this.insertStmt.run({
       snapshotId: input.snapshotId,
-      inspectableJson: JSON.stringify(input.inspectableEntries),
-      callableJson: JSON.stringify(input.callableEntries),
+      inspectableJson,
+      callableJson,
       createdAt: input.createdAt,
     });
-    return this.get(input.snapshotId);
+    const row = toSnapshotRow(this.getStmt.get(input.snapshotId));
+    if (!row) {
+      throw new Error(`Capability catalog snapshot ${input.snapshotId} was not persisted.`);
+    }
+    const stored = mapSnapshotRow(row);
+    if (
+      canonicalJsonString(stored.inspectableEntries) !== inspectableJson ||
+      canonicalJsonString(stored.callableEntries) !== callableJson
+    ) {
+      throw new Error(`Capability catalog snapshot ${input.snapshotId} conflicts with an existing immutable record.`);
+    }
+    return stored;
   }
 
   public get(snapshotId: string): CapabilityCatalogSnapshotRecord {
@@ -60,8 +72,11 @@ function mapSnapshotRow(row: CapabilityCatalogSnapshotRow): CapabilityCatalogSna
 }
 
 function parseEntries(raw: string): CapabilityCatalogSnapshotRecord["inspectableEntries"] {
-  const parsed = safeJsonParse<unknown>(raw, []);
-  return Array.isArray(parsed) ? parsed : [];
+  const parsed = safeJsonParse<unknown>(raw, undefined);
+  if (!Array.isArray(parsed)) {
+    throw new Error("Capability catalog snapshot contains malformed entry JSON.");
+  }
+  return parsed as CapabilityCatalogSnapshotRecord["inspectableEntries"];
 }
 
 function toSnapshotRow(value: unknown): CapabilityCatalogSnapshotRow | undefined {

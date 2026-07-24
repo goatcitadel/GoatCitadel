@@ -1,3 +1,4 @@
+import { SESSION_CONTROL_GENERATION_HEADER, SESSION_CONTROL_TOKEN_HEADER } from "@goatcitadel/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createGatewayLogger } from "./runtime-ux.js";
 
@@ -102,5 +103,47 @@ describe("runtime logger coverage", () => {
     expect(output).not.toContain("some-secret-value-v2");
     expect(output).not.toContain("sk-LIVE1234567890abcdefABCDEF");
     expect(output).not.toContain("sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+  });
+
+  it("redacts the session-control token header from terminal request metadata while keeping the generation", () => {
+    const logger = createGatewayLogger(true);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const secret = "b".repeat(64);
+
+    logger.info(
+      {
+        [SESSION_CONTROL_TOKEN_HEADER]: secret,
+        headers: {
+          "x-goatcitadel-session-control-token": secret,
+          [SESSION_CONTROL_GENERATION_HEADER.toLowerCase()]: "9",
+        },
+      },
+      "incoming control request",
+    );
+
+    const output = String(logSpy.mock.calls.at(-1)?.[0] ?? "");
+    expect(output).toContain("incoming control request");
+    expect(output).toContain("[redacted]");
+    expect(output).not.toContain(secret);
+    // The non-secret generation counter stays observable.
+    expect(output).toContain('"x-goatcitadel-control-generation":"9"');
+  });
+
+  it("redacts the session-control token header from terminal error metadata", () => {
+    const logger = createGatewayLogger(true);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const secret = "c".repeat(64);
+
+    logger.warn(
+      {
+        [SESSION_CONTROL_TOKEN_HEADER.toUpperCase()]: secret,
+        error: new Error("control token rejected"),
+      },
+      "control auth failed",
+    );
+
+    const output = String(warnSpy.mock.calls.at(-1)?.[0] ?? "");
+    expect(output).toContain("[redacted]");
+    expect(output).not.toContain(secret);
   });
 });

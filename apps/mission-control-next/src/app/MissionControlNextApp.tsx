@@ -787,11 +787,14 @@ export function MissionControlNextApp() {
 
           <ShellStatusStrip
             approvalsPill={approvalsPill}
+            buildIdentity={status.runtimeIdentity}
+            buildIdentityError={status.runtimeIdentityError}
             currentReleaseScope={currentReleaseScope}
             currentReleaseStatusLabel={currentReleaseStatusLabel}
             daemonStatusValue={daemonStatusValue}
             gatewayMessage={gatewayAccess.message}
             navigateApprovals={() => navigate({ area: "ops", section: "approvals", theme: route.theme })}
+            navigateBuildProof={() => navigate({ area: "ops", section: "diagnostics", theme: route.theme })}
             realtimeValue={realtimeStatusCopy.strip}
             sessionsPill={sessionsPill}
             spendPill={spendPill}

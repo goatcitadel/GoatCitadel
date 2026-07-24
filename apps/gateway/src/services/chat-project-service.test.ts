@@ -50,17 +50,20 @@ describe("ChatProjectService", () => {
       workspaceId: "ws-a",
     });
 
-    const updated = service.updateChatProject("project-1", {
-      workspaceId: " ws-b ",
-      name: "Gateway",
-    });
+    const updated = service.updateChatProject(
+      "project-1",
+      {
+        workspaceId: " ws-b ",
+        name: "Gateway",
+      },
+      1,
+    );
     expect(updated).toMatchObject({ projectId: "project-1", workspaceId: "ws-b", name: "Gateway" });
 
-    expect(service.archiveChatProject("project-1").archivedAt).toBeTruthy();
-    expect(service.restoreChatProject("project-1").archivedAt).toBeUndefined();
-    expect(service.hardDeleteChatProject("project-1")).toBe(true);
-    expect(service.hardDeleteChatProject("project-missing")).toBe(false);
-    expect(storage.chatProjects.hardDelete).toHaveBeenCalledWith("project-missing");
+    expect(service.archiveChatProject("project-1", 2).archivedAt).toBeTruthy();
+    expect(service.restoreChatProject("project-1", 3).archivedAt).toBeUndefined();
+    expect(service.hardDeleteChatProject("project-1", 4)).toBe(true);
+    expect(storage.chatProjects.hardDeleteWithRevision).toHaveBeenCalledWith("project-1", 4);
     expect(published.map((event) => event.payload.type)).toEqual([
       "chat_project_created",
       "chat_project_updated",
@@ -196,6 +199,7 @@ describe("ChatProjectService", () => {
     const { service, projects } = createService({ workspaceDir: "workspace" });
     projects.push({
       projectId: "project-existing",
+      revision: 1,
       workspaceId: "ws-a",
       name: "Existing",
       workspacePath: "Existing",
@@ -250,6 +254,7 @@ function createService(input: { workspaceDir?: string; readOnlyRoots?: string[] 
       create: vi.fn((input: Partial<ChatProjectRecord>) => {
         const project = {
           projectId: `project-${projects.length + 1}`,
+          revision: 1,
           workspaceId: input.workspaceId,
           name: input.name ?? "Untitled",
           description: input.description,
@@ -261,34 +266,50 @@ function createService(input: { workspaceDir?: string; readOnlyRoots?: string[] 
         projects.push(project);
         return project;
       }),
-      update: vi.fn((projectId: string, patch: Partial<ChatProjectRecord>) => {
+      updateWithRevision: vi.fn((projectId: string, patch: Partial<ChatProjectRecord>, expectedRevision: number) => {
         const project = projects.find((item) => item.projectId === projectId);
         if (!project) {
           throw new Error(`missing ${projectId}`);
         }
-        Object.assign(project, patch, { updatedAt: now });
+        if (project.revision !== expectedRevision) {
+          throw new Error(`stale ${projectId}`);
+        }
+        Object.assign(project, patch, { revision: project.revision + 1, updatedAt: now });
         return project;
       }),
-      archive: vi.fn((projectId: string) => {
+      archiveWithRevision: vi.fn((projectId: string, expectedRevision: number) => {
         const project = projects.find((item) => item.projectId === projectId);
         if (!project) {
           throw new Error(`missing ${projectId}`);
+        }
+        if (project.revision !== expectedRevision) {
+          throw new Error(`stale ${projectId}`);
         }
         project.archivedAt = now;
+        project.lifecycleStatus = "archived";
+        project.revision += 1;
         return project;
       }),
-      restore: vi.fn((projectId: string) => {
+      restoreWithRevision: vi.fn((projectId: string, expectedRevision: number) => {
         const project = projects.find((item) => item.projectId === projectId);
         if (!project) {
           throw new Error(`missing ${projectId}`);
         }
+        if (project.revision !== expectedRevision) {
+          throw new Error(`stale ${projectId}`);
+        }
         delete project.archivedAt;
+        project.lifecycleStatus = "active";
+        project.revision += 1;
         return project;
       }),
-      hardDelete: vi.fn((projectId: string) => {
+      hardDeleteWithRevision: vi.fn((projectId: string, expectedRevision: number) => {
         const index = projects.findIndex((item) => item.projectId === projectId);
         if (index === -1) {
           return false;
+        }
+        if (projects[index]?.revision !== expectedRevision) {
+          throw new Error(`stale ${projectId}`);
         }
         projects.splice(index, 1);
         return true;

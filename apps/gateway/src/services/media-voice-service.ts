@@ -115,6 +115,7 @@ export interface MediaVoiceDeps {
     };
   };
   readonly backgroundTasks: Set<Promise<unknown>>;
+  readonly runBackgroundWork?: <T>(label: string, work: (signal: AbortSignal) => Promise<T>) => Promise<T | undefined>;
   readonly isClosing: () => boolean;
   readonly publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => void;
   readonly recordDevDiagnostic: (input: DevDiagnosticInput) => void;
@@ -136,6 +137,11 @@ function safeJsonParse<T>(raw: string, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+function throwIfAborted(signal: AbortSignal | undefined, message: string): void {
+  if (!signal?.aborted) return;
+  throw signal.reason instanceof Error ? signal.reason : new Error(message);
 }
 
 export const __mediaVoiceServiceInternals = {
@@ -552,6 +558,31 @@ export class MediaVoiceService {
     const created = this.getMediaJob(jobId);
     this.processMediaJob(jobId);
     return created;
+  }
+
+  /**
+   * Re-enqueues media work left durable but unfinished by closed admission or
+   * a previous process exit. Startup is the only caller, so a persisted
+   * `running` row necessarily belongs to an interrupted process lifetime.
+   */
+  public resumeInterruptedMediaJobs(limit = 100): number {
+    if (this.deps.isClosing()) return 0;
+    const rows = this.deps.gatewaySql
+      .prepare(
+        `
+      SELECT job_id
+      FROM media_jobs
+      WHERE status IN ('queued', 'running')
+      ORDER BY created_at ASC
+      LIMIT ?
+    `,
+      )
+      .all(Math.max(1, Math.min(500, Math.trunc(limit)))) as Array<{ job_id?: unknown }>;
+    const jobIds = rows
+      .map((row) => (typeof row.job_id === "string" ? row.job_id.trim() : ""))
+      .filter((jobId) => jobId.length > 0);
+    jobIds.forEach((jobId) => this.processMediaJob(jobId));
+    return jobIds.length;
   }
 
   public getMediaJob(jobId: string): MediaJobRecord {
@@ -1458,9 +1489,29 @@ export class MediaVoiceService {
     if (this.deps.isClosing()) {
       return;
     }
-    const task = this.runMediaJob(jobId)
+    let workSignal: AbortSignal | undefined;
+    const task = (
+      this.deps.runBackgroundWork
+        ? this.deps.runBackgroundWork(`media-job:${jobId}`, (signal) => {
+            workSignal = signal;
+            return this.runMediaJob(jobId, signal);
+          })
+        : this.runMediaJob(jobId)
+    )
       .catch((error) => {
         const now = new Date().toISOString();
+        if (workSignal?.aborted) {
+          this.deps.gatewaySql
+            .prepare(
+              `
+          UPDATE media_jobs
+          SET status = 'queued', error = NULL, updated_at = @updatedAt, completed_at = NULL
+          WHERE job_id = @jobId
+        `,
+            )
+            .run({ updatedAt: now, jobId });
+          return;
+        }
         const errorMessage =
           error instanceof Error ? error.message : typeof error === "string" ? error : JSON.stringify(error);
         this.deps.gatewaySql
@@ -1485,10 +1536,11 @@ export class MediaVoiceService {
     void task;
   }
 
-  private async runMediaJob(jobId: string): Promise<void> {
+  private async runMediaJob(jobId: string, signal?: AbortSignal): Promise<void> {
     if (typeof jobId !== "string" || !jobId.trim()) {
       return;
     }
+    throwIfAborted(signal, `Media job ${jobId} was interrupted before execution.`);
     const now = new Date().toISOString();
     this.deps.gatewaySql
       .prepare(
@@ -1503,6 +1555,7 @@ export class MediaVoiceService {
         jobId,
       });
     const job = this.getMediaJob(jobId);
+    throwIfAborted(signal, `Media job ${jobId} was interrupted before dispatch.`);
     const attachmentId = job.attachmentId;
     if (!attachmentId) {
       this.deps.gatewaySql
@@ -1525,7 +1578,9 @@ export class MediaVoiceService {
     const attachment = this.deps.storage.chatAttachments.get(attachmentId);
     if (job.type === "audio_transcribe" || job.type === "video_transcribe") {
       const content = await this.deps.readChatAttachmentContent(attachmentId);
+      throwIfAborted(signal, `Media job ${jobId} was interrupted before transcription.`);
       const transcript = await this.transcribeAudioBytes(content.bytes, content.record.mimeType);
+      throwIfAborted(signal, `Media job ${jobId} was interrupted after transcription.`);
       const completedAt = new Date().toISOString();
       this.deps.gatewaySql
         .prepare(
@@ -1557,6 +1612,7 @@ export class MediaVoiceService {
     }
 
     if (job.type === "ocr" && attachment.mediaType === "image") {
+      throwIfAborted(signal, `Media job ${jobId} was interrupted before OCR settlement.`);
       const completedAt = new Date().toISOString();
       this.deps.gatewaySql
         .prepare(
@@ -1588,6 +1644,7 @@ export class MediaVoiceService {
       return;
     }
 
+    throwIfAborted(signal, `Media job ${jobId} was interrupted before settlement.`);
     const completedAt = new Date().toISOString();
     this.deps.gatewaySql
       .prepare(

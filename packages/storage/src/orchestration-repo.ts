@@ -53,6 +53,9 @@ interface OrchestrationRunRow {
   worktree_path: string | null;
   worktree_status: NonNullable<OrchestrationRun["worktreeStatus"]> | null;
   worktree_base_ref: string | null;
+  worktree_lease_owner_id: string | null;
+  worktree_lease_generation: number | null;
+  worktree_lease_expires_at: string | null;
   pending_approval_phase_id: string | null;
   pending_approved_by: string | null;
   pending_cost_increment_usd: number | null;
@@ -85,6 +88,9 @@ export class OrchestrationRepository {
   private readonly createRunStmt;
   private readonly updateRunStmt;
   private readonly updateRunIfCurrentStateStmt;
+  private readonly renewWorktreeLeaseStmt;
+  private readonly fenceWorktreeLeaseStmt;
+  private readonly adoptWorktreeLeaseStmt;
   private readonly getRunStmt;
   private readonly listRunsStmt;
   private readonly getLatestRunByPlanStmt;
@@ -98,6 +104,24 @@ export class OrchestrationRepository {
   public constructor(private readonly db: DatabaseClient) {
     const optionalExpectedExecutionState =
       db.dialect === "postgres" ? "CAST(@expectedExecutionState AS TEXT)" : "@expectedExecutionState";
+    const worktreeLeaseCanAdvance = `
+      @worktreeLeaseGeneration IS NOT NULL
+      AND (
+        worktree_lease_generation IS NULL
+        OR @worktreeLeaseGeneration > worktree_lease_generation
+        OR (
+          @worktreeLeaseGeneration = worktree_lease_generation
+          AND @worktreeLeaseOwnerId = worktree_lease_owner_id
+        )
+      )
+    `;
+    const worktreeStateCanAdvance = `
+      (
+        worktree_lease_generation IS NULL
+        AND @worktreeLeaseGeneration IS NULL
+      )
+      OR (${worktreeLeaseCanAdvance})
+    `;
     this.upsertPlanStmt = db.prepare(`
       INSERT INTO orchestration_plans (
         plan_id, workspace_id, plan_json, created_at, updated_at
@@ -122,7 +146,8 @@ export class OrchestrationRepository {
         workspace_id, durable_run_id, operator_id, auth_actor_id,
         auth_actor_source, permission_profile_id, local_operator_override_id,
         execution_state, worktree_path,
-        worktree_status, worktree_base_ref, pending_approval_phase_id,
+        worktree_status, worktree_base_ref, worktree_lease_owner_id,
+        worktree_lease_generation, worktree_lease_expires_at, pending_approval_phase_id,
         pending_approved_by, pending_cost_increment_usd, last_error
       ) VALUES (
         @runId, @planId, @status, @startedAt, @endedAt,
@@ -131,7 +156,8 @@ export class OrchestrationRepository {
         @workspaceId, @durableRunId, @operatorId, @authActorId,
         @authActorSource, @permissionProfileId, @localOperatorOverrideId,
         @executionState, @worktreePath,
-        @worktreeStatus, @worktreeBaseRef, @pendingApprovalPhaseId,
+        @worktreeStatus, @worktreeBaseRef, @worktreeLeaseOwnerId,
+        @worktreeLeaseGeneration, @worktreeLeaseExpiresAt, @pendingApprovalPhaseId,
         @pendingApprovedBy, @pendingCostIncrementUsd, @lastError
       )
     `);
@@ -154,9 +180,36 @@ export class OrchestrationRepository {
         permission_profile_id = @permissionProfileId,
         local_operator_override_id = @localOperatorOverrideId,
         execution_state = @executionState,
-        worktree_path = @worktreePath,
-        worktree_status = @worktreeStatus,
-        worktree_base_ref = @worktreeBaseRef,
+        worktree_path = CASE
+          WHEN ${worktreeStateCanAdvance}
+          THEN @worktreePath
+          ELSE worktree_path
+        END,
+        worktree_status = CASE
+          WHEN ${worktreeStateCanAdvance}
+          THEN @worktreeStatus
+          ELSE worktree_status
+        END,
+        worktree_base_ref = CASE
+          WHEN ${worktreeStateCanAdvance}
+          THEN @worktreeBaseRef
+          ELSE worktree_base_ref
+        END,
+        worktree_lease_owner_id = CASE
+          WHEN ${worktreeLeaseCanAdvance}
+          THEN @worktreeLeaseOwnerId
+          ELSE worktree_lease_owner_id
+        END,
+        worktree_lease_generation = CASE
+          WHEN ${worktreeLeaseCanAdvance}
+          THEN @worktreeLeaseGeneration
+          ELSE worktree_lease_generation
+        END,
+        worktree_lease_expires_at = CASE
+          WHEN ${worktreeLeaseCanAdvance}
+          THEN @worktreeLeaseExpiresAt
+          ELSE worktree_lease_expires_at
+        END,
         pending_approval_phase_id = @pendingApprovalPhaseId,
         pending_approved_by = @pendingApprovedBy,
         pending_cost_increment_usd = @pendingCostIncrementUsd,
@@ -182,9 +235,36 @@ export class OrchestrationRepository {
         permission_profile_id = @permissionProfileId,
         local_operator_override_id = @localOperatorOverrideId,
         execution_state = @executionState,
-        worktree_path = @worktreePath,
-        worktree_status = @worktreeStatus,
-        worktree_base_ref = @worktreeBaseRef,
+        worktree_path = CASE
+          WHEN ${worktreeStateCanAdvance}
+          THEN @worktreePath
+          ELSE worktree_path
+        END,
+        worktree_status = CASE
+          WHEN ${worktreeStateCanAdvance}
+          THEN @worktreeStatus
+          ELSE worktree_status
+        END,
+        worktree_base_ref = CASE
+          WHEN ${worktreeStateCanAdvance}
+          THEN @worktreeBaseRef
+          ELSE worktree_base_ref
+        END,
+        worktree_lease_owner_id = CASE
+          WHEN ${worktreeLeaseCanAdvance}
+          THEN @worktreeLeaseOwnerId
+          ELSE worktree_lease_owner_id
+        END,
+        worktree_lease_generation = CASE
+          WHEN ${worktreeLeaseCanAdvance}
+          THEN @worktreeLeaseGeneration
+          ELSE worktree_lease_generation
+        END,
+        worktree_lease_expires_at = CASE
+          WHEN ${worktreeLeaseCanAdvance}
+          THEN @worktreeLeaseExpiresAt
+          ELSE worktree_lease_expires_at
+        END,
         pending_approval_phase_id = @pendingApprovalPhaseId,
         pending_approved_by = @pendingApprovedBy,
         pending_cost_increment_usd = @pendingCostIncrementUsd,
@@ -195,6 +275,48 @@ export class OrchestrationRepository {
           (${optionalExpectedExecutionState} IS NULL AND execution_state IS NULL)
           OR execution_state = ${optionalExpectedExecutionState}
         )
+    `);
+    this.renewWorktreeLeaseStmt = db.prepare(`
+      UPDATE orchestration_runs
+      SET worktree_lease_expires_at = @worktreeLeaseExpiresAt
+      WHERE run_id = @runId
+        AND worktree_lease_owner_id = @worktreeLeaseOwnerId
+        AND worktree_lease_generation = @worktreeLeaseGeneration
+    `);
+    this.fenceWorktreeLeaseStmt = db.prepare(`
+      UPDATE orchestration_runs
+      SET status = 'failed',
+          ended_at = @endedAt,
+          execution_state = 'failed',
+          worktree_status = 'blocked',
+          pending_approval_phase_id = NULL,
+          pending_approved_by = NULL,
+          pending_cost_increment_usd = NULL,
+          last_error = @lastError
+      WHERE run_id = @runId
+        AND worktree_path = @worktreePath
+        AND worktree_lease_owner_id = @worktreeLeaseOwnerId
+        AND worktree_lease_generation = @worktreeLeaseGeneration
+        AND status IN ('queued', 'running', 'paused')
+    `);
+    this.adoptWorktreeLeaseStmt = db.prepare(`
+      UPDATE orchestration_runs
+      SET worktree_status = 'ready',
+          worktree_lease_owner_id = @worktreeLeaseOwnerId,
+          worktree_lease_generation = @worktreeLeaseGeneration,
+          worktree_lease_expires_at = @worktreeLeaseExpiresAt
+      WHERE run_id = @runId
+        AND worktree_path = @worktreePath
+        AND COALESCE(worktree_lease_owner_id, '') = @expectedWorktreeLeaseOwnerId
+        AND COALESCE(worktree_lease_generation, 0) = @expectedWorktreeLeaseGeneration
+        AND (
+          @worktreeLeaseGeneration > COALESCE(worktree_lease_generation, 0)
+          OR (
+            @worktreeLeaseGeneration = worktree_lease_generation
+            AND @worktreeLeaseOwnerId = worktree_lease_owner_id
+          )
+        )
+        AND status IN ('queued', 'running', 'paused')
     `);
 
     this.getRunStmt = db.prepare("SELECT * FROM orchestration_runs WHERE run_id = ?");
@@ -291,6 +413,9 @@ export class OrchestrationRepository {
       worktreePath: run.worktreePath ?? null,
       worktreeStatus: run.worktreeStatus ?? null,
       worktreeBaseRef: run.worktreeBaseRef ?? null,
+      worktreeLeaseOwnerId: run.worktreeLeaseOwnerId ?? null,
+      worktreeLeaseGeneration: run.worktreeLeaseGeneration ?? null,
+      worktreeLeaseExpiresAt: run.worktreeLeaseExpiresAt ?? null,
       pendingApprovalPhaseId: run.pendingApprovalPhaseId ?? null,
       pendingApprovedBy: run.pendingApprovedBy ?? null,
       pendingCostIncrementUsd: run.pendingCostIncrementUsd ?? null,
@@ -322,6 +447,9 @@ export class OrchestrationRepository {
       worktreePath: run.worktreePath ?? null,
       worktreeStatus: run.worktreeStatus ?? null,
       worktreeBaseRef: run.worktreeBaseRef ?? null,
+      worktreeLeaseOwnerId: run.worktreeLeaseOwnerId ?? null,
+      worktreeLeaseGeneration: run.worktreeLeaseGeneration ?? null,
+      worktreeLeaseExpiresAt: run.worktreeLeaseExpiresAt ?? null,
       pendingApprovalPhaseId: run.pendingApprovalPhaseId ?? null,
       pendingApprovedBy: run.pendingApprovedBy ?? null,
       pendingCostIncrementUsd: run.pendingCostIncrementUsd ?? null,
@@ -356,6 +484,9 @@ export class OrchestrationRepository {
       worktreePath: run.worktreePath ?? null,
       worktreeStatus: run.worktreeStatus ?? null,
       worktreeBaseRef: run.worktreeBaseRef ?? null,
+      worktreeLeaseOwnerId: run.worktreeLeaseOwnerId ?? null,
+      worktreeLeaseGeneration: run.worktreeLeaseGeneration ?? null,
+      worktreeLeaseExpiresAt: run.worktreeLeaseExpiresAt ?? null,
       pendingApprovalPhaseId: run.pendingApprovalPhaseId ?? null,
       pendingApprovedBy: run.pendingApprovedBy ?? null,
       pendingCostIncrementUsd: run.pendingCostIncrementUsd ?? null,
@@ -365,6 +496,45 @@ export class OrchestrationRepository {
     });
 
     return result.changes > 0 ? this.getRun(run.runId) : undefined;
+  }
+
+  public renewWorktreeLease(input: {
+    runId: string;
+    worktreeLeaseOwnerId: string;
+    worktreeLeaseGeneration: number;
+    worktreeLeaseExpiresAt: string;
+  }): OrchestrationRun | undefined {
+    const renewed = this.renewWorktreeLeaseStmt.run(input);
+    return renewed.changes > 0 ? this.getRun(input.runId) : undefined;
+  }
+
+  public fenceWorktreeLease(input: {
+    runId: string;
+    worktreePath: string;
+    worktreeLeaseOwnerId: string;
+    worktreeLeaseGeneration: number;
+    endedAt: string;
+    lastError: string;
+  }): OrchestrationRun | undefined {
+    const fenced = this.fenceWorktreeLeaseStmt.run(input);
+    return fenced.changes > 0 ? this.getRun(input.runId) : undefined;
+  }
+
+  public adoptWorktreeLease(input: {
+    runId: string;
+    worktreePath: string;
+    expectedWorktreeLeaseOwnerId?: string;
+    expectedWorktreeLeaseGeneration?: number;
+    worktreeLeaseOwnerId: string;
+    worktreeLeaseGeneration: number;
+    worktreeLeaseExpiresAt: string;
+  }): OrchestrationRun | undefined {
+    const adopted = this.adoptWorktreeLeaseStmt.run({
+      ...input,
+      expectedWorktreeLeaseOwnerId: input.expectedWorktreeLeaseOwnerId ?? "",
+      expectedWorktreeLeaseGeneration: input.expectedWorktreeLeaseGeneration ?? 0,
+    });
+    return adopted.changes > 0 ? this.getRun(input.runId) : undefined;
   }
 
   public getRun(runId: string): OrchestrationRun {
@@ -486,6 +656,10 @@ function mapRunRow(row: OrchestrationRunRow): OrchestrationRun {
     worktreePath: row.worktree_path ?? undefined,
     worktreeStatus: row.worktree_status ?? undefined,
     worktreeBaseRef: row.worktree_base_ref ?? undefined,
+    worktreeLeaseOwnerId: row.worktree_lease_owner_id ?? undefined,
+    worktreeLeaseGeneration:
+      typeof row.worktree_lease_generation === "number" ? row.worktree_lease_generation : undefined,
+    worktreeLeaseExpiresAt: row.worktree_lease_expires_at ?? undefined,
     pendingApprovalPhaseId: row.pending_approval_phase_id ?? undefined,
     pendingApprovedBy: row.pending_approved_by ?? undefined,
     pendingCostIncrementUsd:
@@ -538,6 +712,9 @@ function isOrchestrationRunRow(value: unknown): value is OrchestrationRunRow {
     (typeof value.worktree_path === "string" || value.worktree_path === null) &&
     (typeof value.worktree_status === "string" || value.worktree_status === null) &&
     (typeof value.worktree_base_ref === "string" || value.worktree_base_ref === null) &&
+    (typeof value.worktree_lease_owner_id === "string" || value.worktree_lease_owner_id === null) &&
+    (typeof value.worktree_lease_generation === "number" || value.worktree_lease_generation === null) &&
+    (typeof value.worktree_lease_expires_at === "string" || value.worktree_lease_expires_at === null) &&
     (typeof value.pending_approval_phase_id === "string" || value.pending_approval_phase_id === null) &&
     (typeof value.pending_approved_by === "string" || value.pending_approved_by === null) &&
     (typeof value.pending_cost_increment_usd === "number" || value.pending_cost_increment_usd === null) &&

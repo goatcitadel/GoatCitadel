@@ -61,6 +61,23 @@ function baseThread() {
     selectedTurnId: "turn-2",
     activeLeafTurnId: "turn-2",
     turns: [baseTurn("turn-1"), baseTurn("turn-2"), baseTurn("turn-3")],
+    systemNotices: [
+      {
+        kind: "system_heartbeat",
+        noticeId: "heartbeat-1",
+        turnId: "heartbeat-turn-1",
+        message: {
+          messageId: "heartbeat-1",
+          sessionId,
+          role: "assistant",
+          actorType: "system",
+          actorId: "system-heartbeat",
+          content: "Check the backup now.",
+          timestamp: "2026-05-04T12:00:02.000Z",
+        },
+      },
+    ],
+    systemNoticeHiddenCount: 2,
   };
 }
 
@@ -90,6 +107,7 @@ describe("chat-thread-reducer", () => {
     ]) {
       expect(isThreadMutatingStreamChunk({ type } as never)).toBe(true);
     }
+    expect(isThreadMutatingStreamChunk({ type: "tool_activity" } as never)).toBe(false);
     expect(isThreadMutatingStreamChunk({ type: "heartbeat" } as never)).toBe(false);
   });
 
@@ -152,6 +170,8 @@ describe("chat-thread-reducer", () => {
       primaryProviderId: "openai",
       effectiveModel: "gpt-5.5",
     });
+    expect(next.systemNotices).toBe(current.systemNotices);
+    expect(next.systemNoticeHiddenCount).toBe(2);
 
     const appendedWithoutKnownParent = updateThreadFromStreamChunk(
       current,
@@ -173,6 +193,29 @@ describe("chat-thread-reducer", () => {
       "turn-3",
       "turn-orphan",
     ]);
+    expect(appendedWithoutKnownParent.systemNotices).toBe(current.systemNotices);
+    expect(appendedWithoutKnownParent.systemNoticeHiddenCount).toBe(2);
+  });
+
+  it("preserves retained system notices when a replayed message_start refreshes an existing turn", () => {
+    const current = baseThread() as never;
+
+    const replayed = updateThreadFromStreamChunk(
+      current,
+      {
+        type: "message_start",
+        sessionId,
+        turnId: "turn-2",
+        messageId: "assistant-turn-2-replayed",
+      } as never,
+      null,
+      sessionId,
+      null,
+    )!;
+
+    expect(replayed.systemNotices).toBe(current.systemNotices);
+    expect(replayed.systemNoticeHiddenCount).toBe(2);
+    expect(replayed.turns[1]?.assistantMessage?.messageId).toBe("assistant-turn-2-replayed");
   });
 
   it("applies streamed deltas and final assistant content", () => {
@@ -190,6 +233,8 @@ describe("chat-thread-reducer", () => {
       sessionId,
       null,
     )!;
+    expect(started.systemNotices).toEqual([]);
+    expect(started.systemNoticeHiddenCount).toBe(0);
     const withDelta = updateThreadFromStreamChunk(
       started,
       { type: "delta", sessionId, turnId: "turn-new", messageId: "assistant-new", delta: "Hello" } as never,

@@ -5,6 +5,9 @@ import { FilterPillGroup } from "../primitives";
 import { MemoryRoutePage } from "./MemoryRoutePage";
 
 const memorySnapshot = vi.hoisted(() => ({
+  // HX-402 P1: approval-first mutation surface state.
+  pendingMutationApprovals: [] as Array<Record<string, unknown>>,
+  dismissPendingMutationApproval: vi.fn(),
   loading: false,
   error: null,
   notice: null,
@@ -213,8 +216,10 @@ describe("MemoryRoutePage batch selection", () => {
     evidenceApiMocks.fetchEvidenceEnvelopes.mockResolvedValue({ items: [] });
   });
 
-  it("selects items and forgets them atomically through the confirm dialog", async () => {
-    memorySnapshot.batchForgetItems.mockResolvedValue({ appliedCount: 2 });
+  it("selects items and routes the batch forget through the approval confirm dialog", async () => {
+    memorySnapshot.batchForgetItems.mockResolvedValue({
+      pendingApproval: { approvalId: "approval-batch-forget", status: "pending" },
+    });
     const renderer = await renderPage();
 
     await act(async () => {
@@ -229,7 +234,11 @@ describe("MemoryRoutePage batch selection", () => {
     });
     const modal = renderer.root.findByType(ConfirmModal);
     expect(modal.props.open).toBe(true);
-    expect(modal.props.message).toContain("applied atomically — either all are forgotten or none are");
+    // HX-402 P1: the confirm step is honest about the approval-first flow —
+    // nothing is forgotten yet, and once approved the batch applies atomically.
+    expect(modal.props.message).toContain("Nothing is forgotten yet");
+    expect(modal.props.message).toContain("applies atomically — either all are forgotten or none are");
+    expect(modal.props.confirmLabel).toBe("Request approval");
     expect(memorySnapshot.batchForgetItems).not.toHaveBeenCalled();
 
     await act(async () => {
@@ -295,7 +304,9 @@ describe("MemoryRoutePage batch selection", () => {
   });
 
   it("prunes batch actions to the items visible under the current search", async () => {
-    memorySnapshot.batchForgetItems.mockResolvedValue({ appliedCount: 1 });
+    memorySnapshot.batchForgetItems.mockResolvedValue({
+      pendingApproval: { approvalId: "approval-batch-prune", status: "pending" },
+    });
     const renderer = await renderPage();
 
     await act(async () => {

@@ -20,6 +20,7 @@ import {
   APPROVAL_EXPIRY_ACTOR_ID,
   clampInt,
   ConflictError,
+  isGoatError,
   NotFoundError,
   SECRET_REDACTION_MARKER,
   ValidationError,
@@ -30,6 +31,7 @@ import {
   type AuthRuntimeSettings,
   type AuthSettingsUpdateInput,
   type CompanionAuditEventRecord,
+  type CompanionPrincipalPurpose,
   type CompanionSessionAdminRecord,
   type CompanionSessionExchangeInput,
   type CompanionSessionExchangeResponse,
@@ -45,6 +47,7 @@ import {
   type DeviceAccessRequestStatus,
   type DeviceAccessRequestStatusResponse,
   type FilesystemReadAccessMode,
+  type LlmProviderConfig,
   type LlmProviderRequestConfig,
   type RealtimeEvent,
   type ToolApprovalMode,
@@ -52,7 +55,6 @@ import {
 import type { MeshService } from "@goatcitadel/mesh-core";
 import type { Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
-import { persistProviderApiKeyWithFallback } from "./provider-secret-persistence.js";
 import {
   preserveSettingsSecretsForPublicUpdate,
   requiresSettingsPublicProjectionReconciliation,
@@ -94,7 +96,7 @@ import {
   readAssistantAuthConfigSnapshotSync,
 } from "./gateway/auth-credential-planner.js";
 import type { LlamaCppRuntimeService } from "./llama-cpp-runtime-service.js";
-import type { LlmRuntimeUpdateInput, LlmService } from "./llm-service.js";
+import { LlmService, type LlmRuntimeUpdateInput } from "./llm-service.js";
 import type { NpuSidecarService } from "./npu-sidecar-service.js";
 import {
   buildCompanionSigningPayload,
@@ -127,6 +129,7 @@ export interface SettingsRuntimeDependencies {
     LlmService,
     | "deleteProviderApiKey"
     | "getRuntimeConfig"
+    | "exportConfigFile"
     | "getProviderSecretStatus"
     | "setProviderApiKey"
     | "updateNetworkAllowlist"
@@ -136,19 +139,19 @@ export interface SettingsRuntimeDependencies {
   readonly npuSidecar: Pick<NpuSidecarService, "getStatus" | "updateConfig" | "stop" | "start">;
   readonly llamaCppRuntime: Pick<LlamaCppRuntimeService, "getStatus" | "updateConfig" | "stop" | "start">;
   readFeatureFlags(): RuntimeSettings["features"];
+  readSettingsRevision?(): number;
   updateFeatureFlags(patch: Partial<RuntimeSettings["features"]>): RuntimeSettings["features"];
   assertDeploymentProfileUpdate(input: UpdateSettingsInput): void;
   assertFirecrawlRuntimeUpdate(input: UpdateSettingsInput): void;
-  persistLlmConfig(): void;
-  persistToolPolicyConfig(): void;
-  persistBudgetsConfig(): void;
-  persistAssistantConfig(): void;
 }
 
 export interface SettingsAuthRuntimeDependencies {
   readonly config: GatewayRuntimeConfig;
   readonly gatewaySql: Storage["gatewaySql"];
-  readonly storage: Pick<Storage, "audit" | "runImmediateTransaction" | "approvals" | "approvalEvents">;
+  readonly storage: Pick<
+    Storage,
+    "audit" | "runImmediateTransaction" | "approvals" | "approvalEvents" | "sessionControls"
+  >;
   /**
    * In-memory, single-use store for approved device-access tokens. The
    * plaintext token is NEVER persisted at rest; it lives here between approval
@@ -181,6 +184,7 @@ export interface SettingsAuthRuntimeDependencies {
 export function getSettings(deps: SettingsRuntimeDependencies): RuntimeSettings {
   const features = deps.readFeatureFlags();
   return {
+    revision: deps.readSettingsRevision?.() ?? 1,
     environment: deps.config.assistant.environment,
     deploymentProfile: deps.config.assistant.deploymentProfile,
     toolApprovalMode:
@@ -259,6 +263,7 @@ export function getSettings(deps: SettingsRuntimeDependencies): RuntimeSettings 
 }
 
 export interface UpdateSettingsInput {
+  expectedRevision?: number;
   deploymentProfile?: DeploymentProfile;
   toolApprovalMode?: ToolApprovalMode;
   defaultToolProfile?: string;
@@ -269,6 +274,8 @@ export interface UpdateSettingsInput {
   llm?: {
     activeProviderId?: string;
     activeModel?: string;
+    utilityProviderId?: string;
+    utilityModel?: string;
     upsertProvider?: {
       providerId: string;
       label?: string;
@@ -279,10 +286,12 @@ export interface UpdateSettingsInput {
         | "openai-codex-responses"
         | "anthropic-messages"
         | "bedrock-messages";
-      authMode?: "api-key" | "codex-oauth" | "claude-code-oauth";
+      authMode?: LlmProviderConfig["authMode"];
       defaultModel?: string;
       apiKey?: string;
       apiKeyEnv?: string;
+      googleCloud?: LlmProviderConfig["googleCloud"];
+      capabilities?: LlmProviderConfig["capabilities"];
       persistSecretToSecureStore?: boolean;
       request?: LlmProviderRequestConfig;
       headers?: Record<string, string>;
@@ -343,9 +352,115 @@ export interface UpdateSettingsInput {
   features?: Partial<RuntimeSettings["features"]>;
 }
 
+export interface SettingsConfigCandidate {
+  config: GatewayRuntimeConfig;
+  features: RuntimeSettings["features"];
+  llm: ReturnType<LlmService["exportConfigFile"]>;
+  settings: RuntimeSettings;
+  input: UpdateSettingsInput;
+}
+
 const UNSAFE_CONFIG_MUTATION_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 
+function assertProviderConfigMutationIsSecretFree(input: UpdateSettingsInput): void {
+  const provider = input.llm?.upsertProvider;
+  if (!provider) {
+    return;
+  }
+  const inlineValues = [
+    provider.apiKey,
+    provider.request?.auth && "token" in provider.request.auth ? provider.request.auth.token : undefined,
+    provider.request?.auth && "value" in provider.request.auth ? provider.request.auth.value : undefined,
+    provider.request?.proxy?.auth && "token" in provider.request.proxy.auth
+      ? provider.request.proxy.auth.token
+      : undefined,
+    provider.request?.proxy?.auth && "value" in provider.request.proxy.auth
+      ? provider.request.proxy.auth.value
+      : undefined,
+  ];
+  if (inlineValues.some((value) => value?.trim() && value.trim() !== SECRET_REDACTION_MARKER)) {
+    throw new ValidationError({
+      message:
+        "Inline provider credentials are not accepted in provider config. Save API keys through the provider secret endpoint and use env references for request/proxy auth.",
+    });
+  }
+}
+
+/**
+ * Builds and validates the settings mutation against isolated runtime owners.
+ * No live config, owner, persistence, or secure-secret state is mutated.
+ */
+export function buildSettingsCandidate(
+  deps: SettingsRuntimeDependencies,
+  rawInput: UpdateSettingsInput,
+): SettingsConfigCandidate {
+  assertProviderConfigMutationIsSecretFree(rawInput);
+
+  const candidateConfig = structuredClone(deps.config);
+  const currentLlm = deps.llmService.exportConfigFile();
+  const candidateLlmService = new LlmService(currentLlm, process.env, {
+    networkAllowlist: candidateConfig.toolPolicy.sandbox.networkAllowlist,
+    enforceNetworkAllowlist: true,
+  });
+  let candidateFeatures = structuredClone(deps.readFeatureFlags());
+  const noopNpuStatus = () => deps.npuSidecar.getStatus();
+  const noopLlamaStatus = () => deps.llamaCppRuntime.getStatus();
+  const candidateDeps: SettingsRuntimeDependencies = {
+    config: candidateConfig,
+    llmService: candidateLlmService,
+    meshService: { updateOptions: () => undefined },
+    npuSidecar: {
+      getStatus: noopNpuStatus,
+      updateConfig: () => undefined,
+      stop: async () => noopNpuStatus(),
+      start: async () => noopNpuStatus(),
+    },
+    llamaCppRuntime: {
+      getStatus: noopLlamaStatus,
+      updateConfig: () => undefined,
+      stop: async () => noopLlamaStatus(),
+      start: async () => noopLlamaStatus(),
+    },
+    readFeatureFlags: () => structuredClone(candidateFeatures),
+    readSettingsRevision: () => deps.readSettingsRevision?.() ?? 1,
+    updateFeatureFlags: (patch) => {
+      if (patch.durableKernelV1Enabled === false) {
+        throw new ValidationError({
+          message: "features.durableKernelV1Enabled is a shipped baseline runtime setting and cannot be disabled.",
+        });
+      }
+      candidateFeatures = { ...candidateFeatures, ...patch };
+      return structuredClone(candidateFeatures);
+    },
+    assertDeploymentProfileUpdate: (input) => deps.assertDeploymentProfileUpdate(input),
+    assertFirecrawlRuntimeUpdate: (input) => deps.assertFirecrawlRuntimeUpdate(input),
+  };
+
+  let settings: RuntimeSettings;
+  try {
+    settings = updateSettings(candidateDeps, rawInput);
+  } catch (error) {
+    if (isGoatError(error)) {
+      throw error;
+    }
+    throw new ValidationError({
+      message: error instanceof Error ? error.message : "Invalid settings update.",
+    });
+  }
+  const llm = candidateLlmService.exportConfigFile();
+  candidateConfig.llm = structuredClone(llm);
+  candidateConfig.assistant.features = structuredClone(candidateFeatures);
+  return {
+    config: candidateConfig,
+    features: candidateFeatures,
+    llm,
+    settings,
+    input: structuredClone(rawInput),
+  };
+}
+
 export function updateSettings(deps: SettingsRuntimeDependencies, rawInput: UpdateSettingsInput): RuntimeSettings {
+  assertProviderConfigMutationIsSecretFree(rawInput);
   const reconciledInput = requiresSettingsPublicProjectionReconciliation(rawInput)
     ? preserveSettingsSecretsForPublicUpdate(getSettings(deps), rawInput)
     : rawInput;
@@ -353,14 +468,8 @@ export function updateSettings(deps: SettingsRuntimeDependencies, rawInput: Upda
   deps.assertDeploymentProfileUpdate(input);
   deps.assertFirecrawlRuntimeUpdate(input);
 
-  let persistAssistant = false;
-  let persistToolPolicy = false;
-  let persistBudgets = false;
-  let persistLlm = false;
-
   if (input.deploymentProfile) {
     deps.config.assistant.deploymentProfile = input.deploymentProfile;
-    persistAssistant = true;
   }
 
   if (input.defaultToolProfile) {
@@ -377,8 +486,6 @@ export function updateSettings(deps: SettingsRuntimeDependencies, rawInput: Upda
     deps.llmService.updateNetworkAllowlist(deps.config.toolPolicy.sandbox.networkAllowlist, {
       enforce: true,
     });
-    persistAssistant = true;
-    persistToolPolicy = true;
   }
 
   if (input.toolApprovalMode) {
@@ -387,18 +494,14 @@ export function updateSettings(deps: SettingsRuntimeDependencies, rawInput: Upda
     deps.llmService.updateNetworkAllowlist(deps.config.toolPolicy.sandbox.networkAllowlist, {
       enforce: true,
     });
-    persistAssistant = true;
-    persistToolPolicy = true;
   }
 
   if (input.budgetMode) {
     deps.config.budgets.mode = input.budgetMode;
-    persistBudgets = true;
   }
 
   if (input.readAccessMode) {
     deps.config.toolPolicy.sandbox.readAccessMode = input.readAccessMode;
-    persistToolPolicy = true;
   }
 
   if (input.networkAllowlist) {
@@ -408,12 +511,10 @@ export function updateSettings(deps: SettingsRuntimeDependencies, rawInput: Upda
     deps.llmService.updateNetworkAllowlist(deps.config.toolPolicy.sandbox.networkAllowlist, {
       enforce: true,
     });
-    persistToolPolicy = true;
   }
 
   if (input.auth) {
     updateAuthSettings(deps, input.auth);
-    persistAssistant = true;
   }
 
   if (input.memory) {
@@ -444,7 +545,6 @@ export function updateSettings(deps: SettingsRuntimeDependencies, rawInput: Upda
     if (input.memory.qmdDistillerModel !== undefined) {
       deps.config.assistant.memory.qmd.distiller.model = input.memory.qmdDistillerModel.trim() || undefined;
     }
-    persistAssistant = true;
   }
 
   if (input.web?.firecrawl) {
@@ -477,7 +577,6 @@ export function updateSettings(deps: SettingsRuntimeDependencies, rawInput: Upda
     if (firecrawl.fallbackToNative !== undefined) {
       deps.config.assistant.web.firecrawl.fallbackToNative = firecrawl.fallbackToNative;
     }
-    persistAssistant = true;
   }
 
   if (input.mesh) {
@@ -520,7 +619,6 @@ export function updateSettings(deps: SettingsRuntimeDependencies, rawInput: Upda
       joinToken: process.env[deps.config.assistant.mesh.security.joinTokenEnv],
       defaultLeaseTtlSeconds: deps.config.assistant.mesh.leases.ttlSeconds,
     });
-    persistAssistant = true;
   }
 
   if (input.npu) {
@@ -540,7 +638,6 @@ export function updateSettings(deps: SettingsRuntimeDependencies, rawInput: Upda
         error: error instanceof Error ? error.message : String(error),
       });
     });
-    persistAssistant = true;
   }
 
   if (input.llamaCpp) {
@@ -624,7 +721,6 @@ export function updateSettings(deps: SettingsRuntimeDependencies, rawInput: Upda
         defaultModel: deps.config.assistant.llamaCpp.launch.alias,
       },
     } satisfies LlmRuntimeUpdateInput);
-    persistLlm = true;
     if (!deps.config.assistant.llamaCpp.enabled) {
       void deps.llamaCppRuntime.stop("disabled").catch((error) => {
         settingsLog.warn("llama.cpp runtime stop failed after settings update", {
@@ -636,12 +732,10 @@ export function updateSettings(deps: SettingsRuntimeDependencies, rawInput: Upda
         settingsLog.error("llama.cpp autostart failed after settings update", error);
       });
     }
-    persistAssistant = true;
   }
 
   if (input.features) {
     deps.updateFeatureFlags(input.features);
-    persistAssistant = true;
   }
 
   if (input.llm) {
@@ -650,36 +744,10 @@ export function updateSettings(deps: SettingsRuntimeDependencies, rawInput: Upda
       upsertProvider: input.llm.upsertProvider ? { ...input.llm.upsertProvider } : undefined,
     };
     const submittedApiKeyValue = llmInput.upsertProvider?.apiKey?.trim();
-    const submittedApiKey = submittedApiKeyValue === SECRET_REDACTION_MARKER ? undefined : submittedApiKeyValue;
     if (llmInput.upsertProvider && submittedApiKeyValue === SECRET_REDACTION_MARKER) {
       llmInput.upsertProvider.apiKey = undefined;
     }
-    if (llmInput.upsertProvider && submittedApiKey) {
-      persistProviderApiKeyWithFallback({
-        providerId: llmInput.upsertProvider.providerId,
-        apiKey: submittedApiKey,
-        preferredEnvVar: llmInput.upsertProvider.apiKeyEnv,
-        persistToEnv: llmInput.upsertProvider.persistSecretToSecureStore === false,
-        rootDir: deps.config.rootDir,
-        llmService: deps.llmService,
-      });
-      llmInput.upsertProvider.apiKey = undefined;
-    }
     deps.llmService.updateRuntimeConfig(llmInput satisfies LlmRuntimeUpdateInput);
-    persistLlm = true;
-  }
-
-  if (persistToolPolicy) {
-    deps.persistToolPolicyConfig();
-  }
-  if (persistBudgets) {
-    deps.persistBudgetsConfig();
-  }
-  if (persistAssistant) {
-    deps.persistAssistantConfig();
-  }
-  if (persistLlm) {
-    deps.persistLlmConfig();
   }
 
   return getSettings(deps);
@@ -1659,60 +1727,42 @@ export async function revokeDeviceAccessGrant(
   deps: SettingsAuthRuntimeDependencies,
   grantId: string,
   revokedBy: string,
+  options: { correlationId?: string } = {},
 ): Promise<DeviceAccessGrantContractRecord> {
-  const existingRow = deps.gatewaySql
-    .prepare(
-      `
-    SELECT *
-    FROM auth_device_grants
-    WHERE grant_id = @grantId
-    LIMIT 1
-  `,
-    )
-    .get({ grantId }) as Record<string, unknown> | undefined;
-  if (!existingRow) {
-    throw new NotFoundError("Device access grant not found.");
-  }
-
-  const revokedAt = new Date().toISOString();
-  deps.gatewaySql
-    .prepare(
-      `
-    UPDATE auth_device_grants
-    SET revoked_at = COALESCE(revoked_at, @revokedAt)
-    WHERE grant_id = @grantId
-  `,
-    )
-    .run({
-      grantId,
-      revokedAt,
-    });
-  deps.gatewaySql
-    .prepare(
-      `
-    UPDATE companion_sessions
-    SET revoked_at = COALESCE(revoked_at, @revokedAt)
-    WHERE grant_id = @grantId
-  `,
-    )
-    .run({
-      grantId,
-      revokedAt,
-    });
-
-  const grant = mapAuthDeviceGrantRow(
-    (deps.gatewaySql
+  const normalizedGrantId = requireAuthRevokeIdentifier(grantId, "grantId");
+  const normalizedRevokedBy = requireAuthRevokeIdentifier(revokedBy, "revokedBy");
+  let result!: DeviceAccessGrantContractRecord;
+  deps.storage.runImmediateTransaction(() => {
+    const revokeIdentity = buildAuthControlRevokeIdentity("device_grant", normalizedGrantId, normalizedRevokedBy);
+    deps.storage.sessionControls.revokeByAuthBinding(revokeIdentity);
+    const existingRow = deps.gatewaySql
       .prepare(
-        `
-      SELECT *
-      FROM auth_device_grants
-      WHERE grant_id = @grantId
-      LIMIT 1
-    `,
+        `SELECT * FROM auth_device_grants
+         WHERE grant_id = @grantId
+         LIMIT 1${deps.gatewaySql.dialect === "postgres" ? " FOR UPDATE" : ""}`,
       )
-      .get({ grantId }) as Record<string, unknown> | undefined) ?? existingRow,
-  );
-  const result = toDeviceAccessGrantRecord(grant);
+      .get({ grantId: normalizedGrantId }) as Record<string, unknown> | undefined;
+    if (!existingRow) throw new NotFoundError("Device access grant not found.");
+    const revokedAt = deps.gatewaySql.readDatabaseNow();
+    deps.gatewaySql
+      .prepare(
+        `UPDATE auth_device_grants
+         SET revoked_at = COALESCE(revoked_at, @revokedAt)
+         WHERE grant_id = @grantId`,
+      )
+      .run({ grantId: normalizedGrantId, revokedAt });
+    deps.gatewaySql
+      .prepare(
+        `UPDATE companion_sessions
+         SET revoked_at = COALESCE(revoked_at, @revokedAt)
+         WHERE grant_id = @grantId`,
+      )
+      .run({ grantId: normalizedGrantId, revokedAt });
+    const updatedRow = deps.gatewaySql
+      .prepare("SELECT * FROM auth_device_grants WHERE grant_id = @grantId LIMIT 1")
+      .get({ grantId: normalizedGrantId }) as Record<string, unknown> | undefined;
+    result = toDeviceAccessGrantRecord(mapAuthDeviceGrantRow(updatedRow ?? existingRow));
+  });
 
   await deps.storage.audit.append("approvals", {
     event: "auth.device_grant.revoke",
@@ -1725,16 +1775,21 @@ export async function revokeDeviceAccessGrant(
     revokedAt: result.revokedAt,
   });
 
-  deps.publishRealtime("auth_device_grant_revoked", "auth", {
-    grantId: result.grantId,
-    requestId: result.requestId,
-    actorId: result.actorId,
-    deviceLabel: result.deviceLabel,
-    deviceType: result.deviceType,
-    platform: result.platform,
-    revokedAt: result.revokedAt,
-    revokedBy,
-  });
+  deps.publishRealtime(
+    "auth_device_grant_revoked",
+    "auth",
+    {
+      grantId: result.grantId,
+      requestId: result.requestId,
+      actorId: result.actorId,
+      deviceLabel: result.deviceLabel,
+      deviceType: result.deviceType,
+      platform: result.platform,
+      revokedAt: result.revokedAt,
+      revokedBy,
+    },
+    options.correlationId ? { correlationId: options.correlationId } : undefined,
+  );
 
   return result;
 }
@@ -1775,7 +1830,7 @@ export function getActiveAuthDeviceGrantById(
 export function validateDeviceAccessToken(
   deps: SettingsAuthRuntimeDependencies,
   token: string,
-): { actorId: string; deviceId: string; grantId: string } | undefined {
+): { actorId: string; deviceId: string; grantId: string; principalPurpose: CompanionPrincipalPurpose } | undefined {
   const tokenHash = hashSensitiveToken(token);
   const clock = getAuthDatabaseClockSql(deps);
   let grant: AuthDeviceGrantRecord | undefined;
@@ -1832,6 +1887,7 @@ export function validateDeviceAccessToken(
     actorId: `device:${grant.grantId}`,
     deviceId: grant.grantId,
     grantId: grant.grantId,
+    principalPurpose: grant.principalPurpose,
   };
 }
 
@@ -1840,6 +1896,7 @@ export async function exchangeCompanionSessionFromDeviceGrant(
   grantId: string,
   input: CompanionSessionExchangeInput,
 ): Promise<CompanionSessionExchangeResponse> {
+  const normalizedGrantId = requireAuthRevokeIdentifier(grantId, "grantId");
   const signingPublicKeyPem = normalizeCompanionSigningPublicKeyPem(input.signingPublicKeyPem);
   assertCompanionSigningPublicKeyPem(signingPublicKeyPem);
 
@@ -1854,6 +1911,10 @@ export async function exchangeCompanionSessionFromDeviceGrant(
   let metadata: Record<string, unknown> = {};
 
   deps.storage.runImmediateTransaction(() => {
+    const replacementActorId = `companion:${sessionId}`;
+    deps.storage.sessionControls.revokeByAuthBinding(
+      buildAuthControlRevokeIdentity("device_grant", normalizedGrantId, replacementActorId),
+    );
     const grantRow = deps.gatewaySql
       .prepare(
         `
@@ -1865,11 +1926,14 @@ export async function exchangeCompanionSessionFromDeviceGrant(
           LIMIT 1${clock.lockRow}
         `,
       )
-      .get({ grantId }) as Record<string, unknown> | undefined;
+      .get({ grantId: normalizedGrantId }) as Record<string, unknown> | undefined;
     if (!grantRow) {
       throw new NotFoundError("Device access grant not found.");
     }
     grant = mapAuthDeviceGrantRow(grantRow);
+    // The purpose is carried immutably from the device grant (a storage trigger
+    // asserts grant.purpose === request.purpose); the exchange can never widen it.
+    const principalPurpose = grant.principalPurpose;
     ({ issuedAt, accessTokenExpiresAt, refreshTokenExpiresAt } = createCompanionCredentialWindow(deps));
     metadata = {
       ...grant.metadata,
@@ -1889,7 +1953,7 @@ export async function exchangeCompanionSessionFromDeviceGrant(
     `,
       )
       .run({
-        grantId,
+        grantId: normalizedGrantId,
         revokedAt: issuedAt,
       });
 
@@ -1907,7 +1971,8 @@ export async function exchangeCompanionSessionFromDeviceGrant(
         signature_algorithm,
         created_at,
         last_rotated_at,
-        metadata_json
+        metadata_json,
+        principal_purpose
       ) VALUES (
         @sessionId,
         @grantId,
@@ -1919,13 +1984,14 @@ export async function exchangeCompanionSessionFromDeviceGrant(
         @signatureAlgorithm,
         @createdAt,
         @lastRotatedAt,
-        @metadataJson
+        @metadataJson,
+        @principalPurpose
       )
     `,
       )
       .run({
         sessionId,
-        grantId,
+        grantId: normalizedGrantId,
         accessTokenHash: hashSensitiveToken(accessToken),
         accessTokenExpiresAt,
         refreshTokenHash: hashSensitiveToken(refreshToken),
@@ -1935,6 +2001,7 @@ export async function exchangeCompanionSessionFromDeviceGrant(
         createdAt: issuedAt,
         lastRotatedAt: issuedAt,
         metadataJson: JSON.stringify(metadata),
+        principalPurpose,
       });
 
     const finalGrant = deps.gatewaySql
@@ -1986,6 +2053,7 @@ export async function exchangeCompanionSessionFromDeviceGrant(
     refreshTokenExpiresAt,
     issuedAt,
     signatureAlgorithm: COMPANION_SIGNATURE_ALGORITHM,
+    principalPurpose: grant.principalPurpose,
   };
 }
 
@@ -2154,6 +2222,7 @@ export async function rotateCompanionSession(
     refreshTokenExpiresAt,
     issuedAt,
     signatureAlgorithm: session.signatureAlgorithm,
+    principalPurpose: session.principalPurpose,
   };
 }
 
@@ -2216,6 +2285,7 @@ export function getActiveCompanionSessionById(
 export function getCompanionSessionById(
   deps: SettingsAuthRuntimeDependencies,
   sessionId: string,
+  forUpdate = false,
 ): CompanionSessionRecord | undefined {
   const row = deps.gatewaySql
     .prepare(
@@ -2231,7 +2301,7 @@ export function getCompanionSessionById(
       INNER JOIN auth_device_grants g
         ON g.grant_id = s.grant_id
       WHERE s.session_id = @sessionId
-      LIMIT 1
+      LIMIT 1${forUpdate && deps.gatewaySql.dialect === "postgres" ? " FOR UPDATE OF s" : ""}
     `,
     )
     .get({
@@ -2368,30 +2438,30 @@ export async function revokeCompanionSession(
   deps: SettingsAuthRuntimeDependencies,
   sessionId: string,
   revokedBy: string,
+  options: { correlationId?: string } = {},
 ): Promise<CompanionSessionRevokeResponse> {
-  const session = getCompanionSessionById(deps, sessionId);
-  if (!session) {
-    throw new NotFoundError("Companion session not found.");
-  }
-
-  const revokedAt = new Date().toISOString();
-  deps.gatewaySql
-    .prepare(
-      `
-    UPDATE companion_sessions
-    SET revoked_at = COALESCE(revoked_at, @revokedAt)
-    WHERE session_id = @sessionId
-  `,
-    )
-    .run({
-      sessionId,
-      revokedAt,
-    });
-
-  const updated = getCompanionSessionById(deps, sessionId) ?? {
-    ...session,
-    revokedAt,
-  };
+  const normalizedSessionId = requireAuthRevokeIdentifier(sessionId, "sessionId");
+  const normalizedRevokedBy = requireAuthRevokeIdentifier(revokedBy, "revokedBy");
+  let updated!: CompanionSessionRecord;
+  deps.storage.runImmediateTransaction(() => {
+    const revokeIdentity = buildAuthControlRevokeIdentity(
+      "companion_session",
+      normalizedSessionId,
+      normalizedRevokedBy,
+    );
+    deps.storage.sessionControls.revokeByAuthBinding(revokeIdentity);
+    const session = getCompanionSessionById(deps, normalizedSessionId, true);
+    if (!session) throw new NotFoundError("Companion session not found.");
+    const revokedAt = deps.gatewaySql.readDatabaseNow();
+    deps.gatewaySql
+      .prepare(
+        `UPDATE companion_sessions
+         SET revoked_at = COALESCE(revoked_at, @revokedAt)
+         WHERE session_id = @sessionId`,
+      )
+      .run({ sessionId: normalizedSessionId, revokedAt });
+    updated = getCompanionSessionById(deps, normalizedSessionId) ?? { ...session, revokedAt };
+  });
   const record = toCompanionSessionAdminRecord(updated);
 
   await deps.storage.audit.append("approvals", {
@@ -2408,16 +2478,21 @@ export async function revokeCompanionSession(
     platform: record.platform,
   });
 
-  deps.publishRealtime("auth_companion_session_revoked", "auth", {
-    sessionId: record.sessionId,
-    grantId: record.grantId,
-    actorId: record.actorId,
-    deviceLabel: record.deviceLabel,
-    deviceType: record.deviceType,
-    platform: record.platform,
-    revokedAt: record.revokedAt,
-    revokedBy,
-  });
+  deps.publishRealtime(
+    "auth_companion_session_revoked",
+    "auth",
+    {
+      sessionId: record.sessionId,
+      grantId: record.grantId,
+      actorId: record.actorId,
+      deviceLabel: record.deviceLabel,
+      deviceType: record.deviceType,
+      platform: record.platform,
+      revokedAt: record.revokedAt,
+      revokedBy,
+    },
+    options.correlationId ? { correlationId: options.correlationId } : undefined,
+  );
 
   return { session: record };
 }
@@ -2626,6 +2701,7 @@ export function validateCompanionAccessToken(
     deviceId: session.grantId,
     grantId: session.grantId,
     sessionId: session.sessionId,
+    principalPurpose: session.principalPurpose,
   };
 }
 
@@ -2811,6 +2887,30 @@ export function verifyCompanionRequestSignature(
 class CompanionRequestTimestampBoundaryError extends Error {}
 
 class CompanionRequestSessionBoundaryError extends Error {}
+
+function requireAuthRevokeIdentifier(value: string, field: string): string {
+  const normalized = value.trim();
+  if (!normalized) throw new ValidationError({ code: "FIELD_REQUIRED", field });
+  if (normalized.length > 256) throw new ValidationError({ field });
+  return normalized;
+}
+
+function buildAuthControlRevokeIdentity(
+  bindingKind: "companion_session" | "device_grant",
+  bindingId: string,
+  actorId: string,
+) {
+  const materialSha256 = createHash("sha256")
+    .update(JSON.stringify({ version: 1, bindingKind, bindingId, actorId }), "utf8")
+    .digest("hex");
+  return {
+    bindingKind,
+    bindingId,
+    actorId,
+    idempotencyKey: `auth-control-revoke:v1:${materialSha256}`,
+    correlationId: `auth-revoke:${materialSha256}`,
+  } as const;
+}
 
 function rejectStaleCompanionRequest(
   deps: SettingsAuthRuntimeDependencies,

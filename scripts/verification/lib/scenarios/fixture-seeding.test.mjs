@@ -13,27 +13,30 @@ test("fails when the seeded thread has no artifact turn", async () => {
   };
 
   await assert.rejects(
-    seedMissionControlNextFixture("http://gateway.test", {}, {
-      assertOk(response) {
-        assert.equal(response.ok, true);
+    seedMissionControlNextFixture(
+      "http://gateway.test",
+      {},
+      {
+        assertOk(response) {
+          assert.equal(response.ok, true);
+        },
+        randomUUID: () => "00000000-0000-0000-0000-000000000000",
+        requestJson,
+        stabilizeMissionControlNextFileFixtureMtime: async () => {},
       },
-      randomUUID: () => "00000000-0000-0000-0000-000000000000",
-      requestJson,
-      stabilizeMissionControlNextFileFixtureMtime: async () => {},
-    }),
+    ),
     /did not return an artifact turn/,
   );
-  assert.deepEqual(requests, [
-    "/api/v1/dev/verification/seed",
-    "/api/v1/chat/sessions/session-1/thread",
-  ]);
+  assert.deepEqual(requests, ["/api/v1/dev/verification/seed", "/api/v1/chat/sessions/session-1/thread"]);
 });
 
 test("seeds the complete fixture and returns its identifiers", async () => {
   const requests = [];
   let agentIndex = 0;
   let taskIndex = 0;
-  const requestJson = async (_gatewayUrl, path) => {
+  let opsBoardRequest;
+  let settingsPatchRequest;
+  const requestJson = async (_gatewayUrl, path, options) => {
     requests.push(path);
     if (path === "/api/v1/dev/verification/seed") {
       return {
@@ -59,20 +62,44 @@ test("seeds the complete fixture and returns its identifiers", async () => {
     if (path === "/api/v1/files/upload") {
       return { ok: true, body: { fullPath: "workspace/verification/mission-control-next-proof.md" } };
     }
+    if (path === "/api/v1/ops/boards") {
+      opsBoardRequest = options;
+      return { ok: true, body: { boardId: "board-1" } };
+    }
+    if (path === "/api/v1/settings") {
+      if (options?.method === "PATCH") {
+        settingsPatchRequest = options;
+        return { ok: true, body: { revision: 8, features: { memoryLifecycleAdminV1Enabled: true } } };
+      }
+      return { ok: true, body: { revision: 7 } };
+    }
+    if (path === "/api/v1/dev/verification/memory-item-seed") {
+      return { ok: true, body: { itemId: "memory-1" } };
+    }
+    if (path === "/api/v1/memory/items?workspaceId=workspace-1&status=all&limit=200") {
+      return {
+        ok: true,
+        body: { items: [{ itemId: "memory-1", title: "Mission Control Next shell posture" }] },
+      };
+    }
     return { ok: true, body: {} };
   };
 
   const stabilizedPaths = [];
-  const result = await seedMissionControlNextFixture("http://gateway.test", {}, {
-    assertOk(response) {
-      assert.equal(response.ok, true);
+  const result = await seedMissionControlNextFixture(
+    "http://gateway.test",
+    {},
+    {
+      assertOk(response) {
+        assert.equal(response.ok, true);
+      },
+      randomUUID: () => "00000000-0000-0000-0000-000000000000",
+      requestJson,
+      stabilizeMissionControlNextFileFixtureMtime: async (_runtimeRoot, fullPath) => {
+        stabilizedPaths.push(fullPath);
+      },
     },
-    randomUUID: () => "00000000-0000-0000-0000-000000000000",
-    requestJson,
-    stabilizeMissionControlNextFileFixtureMtime: async (_runtimeRoot, fullPath) => {
-      stabilizedPaths.push(fullPath);
-    },
-  });
+  );
 
   assert.deepEqual(result, {
     workspaceId: "workspace-1",
@@ -82,7 +109,69 @@ test("seeds the complete fixture and returns its identifiers", async () => {
     sessions: { approval: "session-1", userInput: "session-2" },
     agentIds: ["agent-1", "agent-2"],
     taskIds: ["task-1", "task-2", "task-3", "task-4"],
+    opsBoardId: "board-1",
+    memoryItemId: "memory-1",
   });
   assert.deepEqual(stabilizedPaths, ["workspace/verification/mission-control-next-proof.md"]);
   assert.ok(requests.includes("/api/v1/prompt-packs/import"));
+  assert.ok(requests.indexOf("/api/v1/ops/boards") > requests.lastIndexOf("/api/v1/tasks"));
+  assert.deepEqual(opsBoardRequest, {
+    method: "POST",
+    body: {
+      workspaceId: "workspace-1",
+      name: "Verification command board",
+      description: "Five compiled operational summaries over canonical verification sources.",
+      placements: [
+        {
+          widgetId: "verification-runtime-truth",
+          kind: "runtime_truth_summary",
+          x: 0,
+          y: 0,
+          width: 4,
+          height: 4,
+        },
+        {
+          widgetId: "verification-approval-queue",
+          kind: "approval_queue_summary",
+          x: 4,
+          y: 0,
+          width: 4,
+          height: 4,
+        },
+        {
+          widgetId: "verification-usage-cost",
+          kind: "usage_cost_summary",
+          x: 8,
+          y: 0,
+          width: 4,
+          height: 4,
+        },
+        {
+          widgetId: "verification-agentic-runs",
+          kind: "agentic_run_kanban",
+          x: 0,
+          y: 4,
+          width: 6,
+          height: 4,
+        },
+        {
+          widgetId: "verification-task-status",
+          kind: "task_status_summary",
+          x: 6,
+          y: 4,
+          width: 6,
+          height: 4,
+        },
+      ],
+      idempotencyKey: "mission-control-next-visual-ops-board-v1",
+    },
+  });
+  assert.deepEqual(settingsPatchRequest, {
+    method: "PATCH",
+    body: {
+      expectedRevision: 7,
+      features: { memoryLifecycleAdminV1Enabled: true },
+    },
+  });
+  assert.ok(requests.includes("/api/v1/memory/items?workspaceId=workspace-1&status=all&limit=200"));
 });

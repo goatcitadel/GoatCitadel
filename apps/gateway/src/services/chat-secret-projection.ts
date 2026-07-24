@@ -34,6 +34,19 @@ export function projectChatMessageForPublic(message: ChatMessageRecord | undefin
   return redactStructuredSecrets(message).value;
 }
 
+/** Historical/search reopening is a discovery surface, so redact every role. */
+export function projectChatHistoryMessageForPublic(
+  message: ChatMessageRecord,
+): import("@goatcitadel/contracts").ChatHistoryMessageRecord {
+  return {
+    messageId: message.messageId,
+    sessionId: message.sessionId,
+    role: message.role,
+    content: redactSecretText(message.content).value,
+    timestamp: message.timestamp,
+  };
+}
+
 export function projectChatSessionForPublic(session: ChatSessionRecord): ChatSessionRecord {
   const projected = redactStructuredSecrets(session).value;
   return {

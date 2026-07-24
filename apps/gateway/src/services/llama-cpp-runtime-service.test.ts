@@ -832,7 +832,12 @@ describe("llama.cpp runtime helpers", () => {
 
     await expect(unconfigured.start()).rejects.toThrow("launch.modelPath must be configured");
     await expect(missingFile.start()).rejects.toThrow("llama.cpp model path does not exist");
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "http://127.0.0.1:8080/health",
+      expect.objectContaining({ method: "GET" }),
+    );
   });
 
   it("normalizes Hugging Face download jobs and supports immediate cancellation", async () => {

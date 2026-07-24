@@ -4,7 +4,12 @@ import { sendRouteError } from "./_error-handler.js";
 import { withRouteAccess } from "./route-access.js";
 
 const searchRequestSchema = z.object({
-  query: z.string().trim().min(1),
+  query: z.string().trim().min(1).max(512),
+  mode: z.enum(["quick", "research"]).optional(),
+  providers: z
+    .array(z.enum(["brave", "parallel"]))
+    .max(2)
+    .optional(),
   engines: z.array(z.string().trim().min(1)).optional(),
   maxResults: z.number().int().positive().max(50).optional(),
   freshness: z.enum(["any", "day", "week", "month"]).optional(),
@@ -21,7 +26,7 @@ export const researchSearchRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(
-        fastify.services.researchSearch.search({
+        await fastify.services.researchSearch.search({
           ...parsed.data,
           engines: parsed.data.engines as never,
         }),

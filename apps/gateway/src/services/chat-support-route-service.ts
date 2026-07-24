@@ -87,6 +87,7 @@ export interface ChatSupportRouteDependencies {
         };
         retrievalMode: ChatRetrievalMode;
         reflectionMode: ChatReflectionMode;
+        expectedRevision: number;
       }>,
     ): ProactivePolicy;
   };
@@ -142,7 +143,7 @@ export interface ChatSupportRouteDependencies {
   goal: {
     getChatSessionGoal(sessionId: string): Promise<ChatGoalStatusResponse>;
     setChatSessionGoal(sessionId: string, body: ChatGoalRequest): Promise<ChatGoalStatusResponse>;
-    clearChatSessionGoal(sessionId: string): Promise<ChatGoalStatusResponse>;
+    clearChatSessionGoal(sessionId: string, expectedRevision?: number): Promise<ChatGoalStatusResponse>;
   };
 }
 
@@ -246,7 +247,9 @@ export class ChatSupportRouteService {
     return this.deps.goal.setChatSessionGoal(sessionId, body);
   }
 
-  public clearChatSessionGoal(sessionId: string) {
-    return this.deps.goal.clearChatSessionGoal(sessionId);
+  public clearChatSessionGoal(sessionId: string, expectedRevision?: number) {
+    return expectedRevision === undefined
+      ? this.deps.goal.clearChatSessionGoal(sessionId)
+      : this.deps.goal.clearChatSessionGoal(sessionId, expectedRevision);
   }
 }

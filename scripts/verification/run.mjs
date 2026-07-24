@@ -24,6 +24,13 @@ import {
   runDeepEcosystemLane,
   runDesktopLane,
   runDurableRecoveryLane,
+  runUsageReconciliationLane,
+  runRoutedContextSnapshotsLane,
+  runModelCouncilLane,
+  runSkillLearningLane,
+  runSessionControlLane,
+  runReasoningProfilesLane,
+  runVertexFireworksProvidersLane,
   runFastLane,
   runExtensionsPackageLane,
   runSkillsCatalogLane,
@@ -64,6 +71,13 @@ const VALID_LANES = new Set([
   "api-compat",
   "operator-proof",
   "durable-recovery",
+  "usage-reconciliation",
+  "routed-context-snapshots",
+  "model-council",
+  "skill-learning",
+  "session-control",
+  "providers-vertex-fireworks",
+  "reasoning-profiles",
   "accessibility-smoke",
   "surface-regression",
   "visual-regression",
@@ -107,6 +121,13 @@ const REVIEW_LANES = new Set([
   "a2a-full",
   "operator-proof",
   "durable-recovery",
+  "usage-reconciliation",
+  "routed-context-snapshots",
+  "model-council",
+  "skill-learning",
+  "session-control",
+  "providers-vertex-fireworks",
+  "reasoning-profiles",
   "accessibility-smoke",
   "surface-regression",
   "visual-regression",
@@ -203,6 +224,20 @@ async function main() {
       await runOperatorProofLane(context, { profile });
     } else if (lane === "durable-recovery") {
       await runDurableRecoveryLane(context, { profile });
+    } else if (lane === "usage-reconciliation") {
+      await runUsageReconciliationLane(context, { profile });
+    } else if (lane === "routed-context-snapshots") {
+      await runRoutedContextSnapshotsLane(context, { profile });
+    } else if (lane === "model-council") {
+      await runModelCouncilLane(context, { profile });
+    } else if (lane === "skill-learning") {
+      await runSkillLearningLane(context, { profile });
+    } else if (lane === "session-control") {
+      await runSessionControlLane(context, { profile });
+    } else if (lane === "providers-vertex-fireworks") {
+      await runVertexFireworksProvidersLane(context, { profile });
+    } else if (lane === "reasoning-profiles") {
+      await runReasoningProfilesLane(context, { profile });
     } else if (lane === "accessibility-smoke") {
       await runAccessibilitySmokeLane(context, { profile });
     } else if (lane === "surface-regression") {
@@ -270,6 +305,7 @@ async function main() {
       await runA2AFullLane(context);
       await runOperatorProofLane(context, { profile });
       await runDurableRecoveryLane(context, { profile });
+      await runUsageReconciliationLane(context, { profile });
       await runAccessibilitySmokeLane(context, { profile });
       await runSurfaceRegressionLane(context, { profile });
       await runVisualRegressionLane(context, { profile, updateBaselines: false });

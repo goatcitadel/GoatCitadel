@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadLlmModelMetadataManifest, lookupModelMetadata } from "./llm-model-metadata.js";
+import { loadLlmModelMetadataManifest, lookupExactModelMetadata, lookupModelMetadata } from "./llm-model-metadata.js";
 
 const TEMP_ROOTS: string[] = [];
 
@@ -98,6 +98,49 @@ describe("LLM model metadata loader", () => {
     expect(result.manifest.entries).toEqual({});
     expect(result.errors[0]).toContain("does not match manifest shape");
   });
+
+  it("accepts an explicit reasoning capability and provider effort map", () => {
+    const path = join(tmp, "reasoning.json");
+    writeFileSync(
+      path,
+      JSON.stringify({
+        version: 1,
+        entries: {
+          "future/reasoner": {
+            contextWindow: 1000,
+            outputTokenLimit: 100,
+            reasoning: {
+              supportedEfforts: ["none", "high", "max", "ultra"],
+              providerEffortMap: { max: "xhigh", ultra: "ultra" },
+            },
+          },
+        },
+      }),
+    );
+    const result = loadLlmModelMetadataManifest(path);
+    expect(result.errors).toEqual([]);
+    expect(result.manifest.entries["future/reasoner"].reasoning?.supportedEfforts).toContain("ultra");
+  });
+
+  it("rejects unknown or unmapped reasoning effort declarations", () => {
+    const path = join(tmp, "bad-reasoning.json");
+    writeFileSync(
+      path,
+      JSON.stringify({
+        version: 1,
+        entries: {
+          "future/reasoner": {
+            contextWindow: 1000,
+            outputTokenLimit: 100,
+            reasoning: { supportedEfforts: ["high"], providerEffortMap: { ultra: "maximum" } },
+          },
+        },
+      }),
+    );
+    const result = loadLlmModelMetadataManifest(path);
+    expect(result.manifest.entries).toEqual({});
+    expect(result.errors[0]).toContain("does not match manifest shape");
+  });
 });
 
 describe("lookupModelMetadata", () => {
@@ -122,6 +165,7 @@ describe("lookupModelMetadata", () => {
     };
     const entry = lookupModelMetadata(manifest, "openai-codex", "gpt-5.5-codex-unknown");
     expect(entry).toEqual({ contextWindow: 272000, outputTokenLimit: 32000 });
+    expect(lookupExactModelMetadata(manifest, "openai-codex", "gpt-5.5-codex-unknown")).toBeUndefined();
   });
 
   it("returns undefined when no pattern matches", () => {

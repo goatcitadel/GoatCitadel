@@ -16,12 +16,9 @@ import {
   type SkillListItem,
 } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
+import type { CronSpecMutationOwner } from "./cron-config-generation-owner.js";
 import { computeSkillImmunity, gradeSkillUsage } from "./curator-grader.js";
-import {
-  planCuratorIdleSweep,
-  type CuratorIdleSweepResult,
-  type CuratorIdleSweepDeps,
-} from "./curator-idle-sweep.js";
+import { planCuratorIdleSweep, type CuratorIdleSweepResult, type CuratorIdleSweepDeps } from "./curator-idle-sweep.js";
 import { getZonedDateParts, toWeekKeyForTimezone } from "./improvement-replay.js";
 
 const CURATOR_WEEKLY_JOB_ID = "curator_weekly";
@@ -72,6 +69,7 @@ export interface CuratorServiceDeps {
   publishRealtime: (topic: string, payload: Record<string, unknown>) => void;
   cycleDays: number;
   storage?: Pick<Storage, "cronJobs" | "systemSettings">; // NEW: optional, gates curator cron methods
+  cronSpecOwner?: Pick<CronSpecMutationOwner, "reconcileSpec">;
   idleSweep?: CuratorIdleSweepCollaborators; // NEW (S3): optional, gates the idle janitor
 }
 
@@ -269,27 +267,24 @@ export class CuratorService {
     return { runId, scheduled: false, report };
   }
 
-  public ensureCuratorWeeklyCronJob(): void {
+  public async ensureCuratorWeeklyCronJob(): Promise<void> {
     if (!this.deps.storage) return;
+    if (!this.deps.cronSpecOwner) {
+      throw new Error("Cron spec owner is required to reconcile the weekly curator job.");
+    }
     const existing = this.deps.storage.cronJobs.get(CURATOR_WEEKLY_JOB_ID);
-    const now = this.deps.now().toISOString();
-    this.deps.storage.cronJobs.upsertIfChanged(
-      {
-        jobId: CURATOR_WEEKLY_JOB_ID,
-        name: "Curator Weekly Report",
-        action: "curator",
-        description: "Generate a proposal-only curator report over the skill registry.",
-        schedule: CURATOR_WEEKLY_SCHEDULE_LABEL,
-        enabled: existing?.enabled ?? true,
-        endAt: existing?.endAt,
-        lastRunAt: existing?.lastRunAt,
-        nextRunAt: existing?.nextRunAt,
-      },
-      now,
-    );
+    await this.deps.cronSpecOwner.reconcileSpec({
+      jobId: CURATOR_WEEKLY_JOB_ID,
+      name: "Curator Weekly Report",
+      action: "curator",
+      description: "Generate a proposal-only curator report over the skill registry.",
+      schedule: CURATOR_WEEKLY_SCHEDULE_LABEL,
+      enabled: existing?.enabled ?? true,
+      endAt: existing?.endAt,
+    });
   }
 
-  public async runCuratorWeeklyIfDue(options: { force?: boolean } = {}): Promise<void> {
+  public async runCuratorWeeklyIfDue(options: { force?: boolean; recordCronState?: boolean } = {}): Promise<void> {
     if (!this.deps.storage) return;
     const job = this.deps.storage.cronJobs.get(CURATOR_WEEKLY_JOB_ID);
     if (!job?.enabled) return;
@@ -305,16 +300,18 @@ export class CuratorService {
     await this.runCurator({ sync: false, dryRun: true, triggerMode: "scheduled" });
     this.deps.storage.systemSettings.set(CURATOR_WEEKLY_DEDUP_SETTING_KEY, weekKey);
     const finishedAt = this.deps.now().toISOString();
-    this.deps.storage.cronJobs.upsert(
-      {
-        ...job,
-        lastRunAt: finishedAt,
-        // Note: force-runs set nextRunAt = now + 7d which drifts from the Sunday 02:00 PT schedule.
-        // Normal scheduled runs naturally re-align since the time-of-week guard only fires on Sunday 02:00.
-        nextRunAt: new Date(this.deps.now().getTime() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-      },
-      finishedAt,
-    );
+    if (options.recordCronState !== false) {
+      this.deps.storage.cronJobs.mergeRuntimeTelemetry(
+        job.jobId,
+        {
+          lastRunAt: finishedAt,
+          // Note: force-runs set nextRunAt = now + 7d which drifts from the Sunday 02:00 PT schedule.
+          // Normal scheduled runs naturally re-align since the time-of-week guard only fires on Sunday 02:00.
+          nextRunAt: new Date(this.deps.now().getTime() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+        },
+        finishedAt,
+      );
+    }
   }
 
   /**

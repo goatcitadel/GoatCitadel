@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { ChatCompletionResponse, ToolInvokeRequest, ToolInvokeResult } from "@goatcitadel/contracts";
-import { ChatTurnAgentRunner } from "./chat-turn-agent-runner.js";
-import { createMockStorage, createToolCatalog } from "./chat-turn-agent-runner-test-fixtures.js";
+import {
+  EffectAwareChatTurnAgentRunner as ChatTurnAgentRunner,
+  createMockStorage,
+  createToolCatalog,
+} from "./chat-turn-agent-runner-test-fixtures.js";
 
 describe("ChatTurnAgentRunner Cowork repair behavior", () => {
   it("never runs repo inspection tools on the model's behalf for explicit-tools prompt-lab chat turns", async () => {

@@ -40,6 +40,8 @@ describe("dev verification routes", () => {
   let tempRoot: string | null = null;
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
     storageUpsertMany.mockReset();
     storageTurnCreate.mockReset();
     storageSetActiveLeaf.mockReset();
@@ -305,6 +307,7 @@ describe("dev verification routes", () => {
   });
 
   it("seeds deterministic memory items for verification lanes", async () => {
+    vi.stubEnv("GOATCITADEL_EMBEDDINGS_PROVIDER", "pseudo");
     const run = vi.fn();
     const prepare = vi.fn(() => ({ run }));
 
@@ -382,6 +385,118 @@ describe("dev verification routes", () => {
       pinned: true,
       lifecycleState: "active",
     });
+  });
+
+  it("holds a Gateway local embedding lease across llama.cpp memory seed generation", async () => {
+    vi.stubEnv("GOATCITADEL_EMBEDDINGS_PROVIDER", "llamacpp");
+    vi.stubEnv("GOATCITADEL_EMBEDDINGS_DIMENSIONS", "8");
+    vi.stubEnv("GOATCITADEL_EMBEDDINGS_URL", "http://127.0.0.1:8080/embedding");
+    const fetchEmbedding = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ embedding: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchEmbedding);
+    const release = vi.fn();
+    const acquireLocalEmbeddingLease = vi.fn(async () => ({ release }));
+    const run = vi.fn();
+
+    app = Fastify();
+    app.decorate("routeAccessManifest", []);
+    decorateDevVerification(app, {
+      isDevDiagnosticsEnabled: () => true,
+      acquireLocalEmbeddingLease,
+      storage: {
+        db: {
+          prepare: vi.fn(() => ({ run })),
+        },
+      },
+    });
+    app.decorate("gatewayConfig", { rootDir: "f:/tmp/goatcitadel-dev" } as never);
+    await app.register(devVerificationRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/dev/verification/memory-item-seed",
+      payload: {
+        workspaceId: "workspace-lease",
+        namespace: "memory-truth",
+        title: "Lease-governed memory",
+        content: "This write uses the configured llama.cpp embedding runtime.",
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(acquireLocalEmbeddingLease).toHaveBeenCalledWith({
+      providerId: "llamacpp",
+      url: "http://127.0.0.1:8080/embedding",
+      purpose: "memory_write",
+      signal: expect.any(AbortSignal),
+    });
+    expect(fetchEmbedding).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
+    const metadata = JSON.parse(run.mock.calls[0][0].metadataJson as string);
+    expect(metadata.embeddingMetadata).toMatchObject({ provider: "llamacpp", dimensions: 8 });
+  });
+
+  it("does not request a local runtime lease for pseudo or remote memory embeddings", async () => {
+    const acquireLocalEmbeddingLease = vi.fn(async () => ({ release: vi.fn() }));
+    const run = vi.fn();
+    app = Fastify();
+    app.decorate("routeAccessManifest", []);
+    decorateDevVerification(app, {
+      isDevDiagnosticsEnabled: () => true,
+      acquireLocalEmbeddingLease,
+      storage: {
+        db: {
+          prepare: vi.fn(() => ({ run })),
+        },
+      },
+    });
+    app.decorate("gatewayConfig", { rootDir: "f:/tmp/goatcitadel-dev" } as never);
+    await app.register(devVerificationRoutes);
+
+    vi.stubEnv("GOATCITADEL_EMBEDDINGS_PROVIDER", "pseudo");
+    const pseudoResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/dev/verification/memory-item-seed",
+      payload: {
+        workspaceId: "workspace-pseudo",
+        namespace: "memory-truth",
+        title: "Pseudo memory",
+        content: "Pseudo embeddings never create local process demand.",
+      },
+    });
+    expect(pseudoResponse.statusCode).toBe(201);
+
+    vi.stubEnv("GOATCITADEL_EMBEDDINGS_PROVIDER", "remote");
+    vi.stubEnv("GOATCITADEL_EMBEDDINGS_DIMENSIONS", "8");
+    vi.stubEnv("GOATCITADEL_EMBEDDINGS_URL", "https://embeddings.example/v1/embeddings");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ data: [{ embedding: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8] }] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+    const remoteResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/dev/verification/memory-item-seed",
+      payload: {
+        workspaceId: "workspace-remote",
+        namespace: "memory-truth",
+        title: "Remote memory",
+        content: "Remote embeddings do not borrow the host-managed llama process.",
+      },
+    });
+
+    expect(remoteResponse.statusCode).toBe(201);
+    expect(acquireLocalEmbeddingLease).not.toHaveBeenCalled();
   });
 
   it("seeds orphaned and dead-letter durable recovery scenarios", async () => {
@@ -565,6 +680,7 @@ describe("dev verification routes", () => {
           type: "json_object",
         },
       }),
+      expect.objectContaining({ callKind: "utility", utilityKind: "dev_provider_exercise" }),
     );
   });
 
@@ -611,6 +727,7 @@ describe("dev verification routes", () => {
           type: "json_schema",
         }),
       }),
+      expect.objectContaining({ callKind: "utility", utilityKind: "dev_provider_exercise" }),
     );
   });
 
@@ -660,6 +777,7 @@ describe("dev verification routes", () => {
           }),
         }),
       }),
+      expect.objectContaining({ callKind: "utility", utilityKind: "dev_provider_exercise" }),
     );
   });
 
@@ -940,6 +1058,7 @@ describe("dev verification routes", () => {
         model: "gpt-test",
         stream: true,
       }),
+      expect.objectContaining({ callKind: "utility", utilityKind: "dev_provider_exercise" }),
     );
     expect(tools.statusCode).toBe(200);
     expect(tools.json()).toMatchObject({
@@ -957,6 +1076,7 @@ describe("dev verification routes", () => {
         ],
         tool_choice: "auto",
       }),
+      expect.objectContaining({ callKind: "utility", utilityKind: "dev_provider_exercise" }),
     );
   });
 });

@@ -2,7 +2,16 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { MemoryBatchMutationOperation } from "@goatcitadel/contracts";
 import { AuditLog, Storage, TranscriptLog, type DatabaseClient } from "@goatcitadel/storage";
+import {
+  buildMemoryItemsApprovalStateMaterial,
+  buildMemoryLifecycleApprovalBinding,
+} from "./memory-journey-producer.js";
+import {
+  buildMemoryLifecycleApprovalPayload,
+  deriveMemoryLifecycleApprovalId,
+} from "./memory-domain-journey-producer.js";
 import { MemoryLifecycleService } from "./memory-lifecycle-service.js";
 import { createPostgresDialectStrictDb } from "./testing/postgres-dialect-strict-db.js";
 
@@ -140,6 +149,11 @@ function createHarness(options: { wrapDb?: (baseDb: DatabaseClient) => DatabaseC
       requireFeatureEnabled: () => undefined,
       publishRealtime: vi.fn(),
     } as never,
+    approvalAuthority: {
+      approvals: storage.approvals,
+      approvalEvents: storage.approvalEvents,
+      governanceJourneyEvents: storage.governanceJourneyEvents,
+    },
     resolveLearnedMemoryPolicy: vi.fn(() => ({ allowWrite: true, reason: "allowed" as const })),
     readTranscriptOrEmpty: vi.fn(async () => []),
   });
@@ -149,32 +163,101 @@ function createHarness(options: { wrapDb?: (baseDb: DatabaseClient) => DatabaseC
   return harness;
 }
 
+/**
+ * HX-402 P1: seed one resolved `memory.lifecycle` batch approval directly.
+ * The approvals repository's TTL-window SQL is genuinely postgres-flavored
+ * (`AT TIME ZONE`), which the sqlite-backed strict facade cannot execute, so
+ * this harness seeds the canonical approval row itself — the producer under
+ * test still revalidates every binding field from that row inside its own
+ * transaction, which is exactly the surface this file proves.
+ */
+function seedApprovedBatchApproval(
+  harness: Harness,
+  input: { actionId: string; operations: MemoryBatchMutationOperation[] },
+): { approvalId: string } {
+  const items = input.operations
+    .map((operation) => {
+      const row = readMemoryItemRow(harness.db, operation.itemId);
+      if (!row) throw new Error(`Missing seeded memory item ${operation.itemId}.`);
+      return {
+        itemId: row.item_id,
+        namespace: row.namespace,
+        title: row.title,
+        content: row.content,
+        metadata: JSON.parse(row.metadata_json) as Record<string, unknown>,
+        pinned: Boolean(row.pinned),
+        ttlOverrideSeconds: row.ttl_override_seconds ?? undefined,
+        expiresAt: row.expires_at ?? undefined,
+        status: row.status as "active" | "forgotten",
+        lifecycleState: row.status === "forgotten" ? "forgotten" : "active",
+        workspaceId: "default",
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        forgottenAt: row.forgotten_at ?? undefined,
+      };
+    })
+    .sort((left, right) => (left.itemId < right.itemId ? -1 : left.itemId > right.itemId ? 1 : 0));
+  const binding = buildMemoryLifecycleApprovalBinding({
+    workspaceId: "default",
+    subjectKind: "memory_item_batch",
+    action: "batch_mutated",
+    mutation: { actionId: input.actionId, operations: input.operations },
+    expectedState: buildMemoryItemsApprovalStateMaterial(items as never),
+  });
+  const approvalId = deriveMemoryLifecycleApprovalId(binding);
+  const resolvedAt = "2026-04-10T01:00:00.000Z";
+  harness.db
+    .prepare(
+      `INSERT INTO approvals (
+         approval_id, kind, risk_level, status, linkage_json, payload_json, preview_json,
+         explanation_status, created_at, expires_at, resolved_at, resolved_by
+       ) VALUES (
+         @approvalId, 'memory.lifecycle', 'danger', 'approved', @linkageJson, @payloadJson, '{}',
+         'not_requested', @createdAt, NULL, @resolvedAt, @resolvedBy
+       )`,
+    )
+    .run({
+      approvalId,
+      linkageJson: JSON.stringify({ workspaceId: "default" }),
+      payloadJson: JSON.stringify(
+        buildMemoryLifecycleApprovalPayload({
+          binding,
+          requesterId: "operator-requester",
+          mutation: { actionId: input.actionId, operations: input.operations },
+        }),
+      ),
+      createdAt: "2026-04-10T00:30:00.000Z",
+      resolvedAt,
+      resolvedBy: "operator-1",
+    });
+  return { approvalId };
+}
+
 describe("MemoryLifecycleService.batchMutateMemoryItems on the postgres dialect", () => {
   it("completes an atomic memory batch mutation through runImmediateTransaction without raw transaction SQL", () => {
     const harness = createHarness();
     seedMemoryItem(harness.db, { itemId: "item-1", title: "Original item 1", content: "Original content 1" });
     seedMemoryItem(harness.db, { itemId: "item-2", title: "Original item 2", content: "Original content 2" });
 
+    const batchInput = {
+      actionId: "batch-real-atomic",
+      source: "operator-ui",
+      operations: [
+        {
+          kind: "patch_item" as const,
+          itemId: "item-1",
+          patch: { title: "Updated via real transaction", pinned: true },
+        },
+        {
+          kind: "forget_item" as const,
+          itemId: "item-2",
+        },
+      ],
+    };
+    const approved = seedApprovedBatchApproval(harness, batchInput);
     const execSpy = vi.spyOn(harness.db, "exec");
 
-    const response = harness.service.batchMutateMemoryItems(
-      {
-        actionId: "batch-real-atomic",
-        source: "operator-ui",
-        operations: [
-          {
-            kind: "patch_item",
-            itemId: "item-1",
-            patch: { title: "Updated via real transaction", pinned: true },
-          },
-          {
-            kind: "forget_item",
-            itemId: "item-2",
-          },
-        ],
-      },
-      "operator-1",
-    );
+    const response = harness.service.batchMutateMemoryItems(batchInput, "operator-1", approved);
 
     expect(response).toMatchObject({
       status: "applied",
@@ -239,22 +322,22 @@ describe("MemoryLifecycleService.batchMutateMemoryItems on the postgres dialect"
     seedMemoryItem(harness.db, { itemId: "item-1", title: "Original item 1", content: "Original content 1" });
     seedMemoryItem(harness.db, { itemId: "item-2", title: "Original item 2", content: "Original content 2" });
 
+    const rollbackInput = {
+      actionId: "batch-real-rollback",
+      operations: [
+        { kind: "patch_item" as const, itemId: "item-1", patch: { title: "Should roll back" } },
+        { kind: "patch_item" as const, itemId: "item-2", patch: { title: "Throws on second update" } },
+      ],
+    };
+    const approved = seedApprovedBatchApproval(harness, rollbackInput);
+
     // Capture full row snapshots BEFORE the batch operation
     const item1Snapshot = readMemoryItemRow(harness.db, "item-1");
     const item2Snapshot = readMemoryItemRow(harness.db, "item-2");
 
-    expect(() =>
-      harness.service.batchMutateMemoryItems(
-        {
-          actionId: "batch-real-rollback",
-          operations: [
-            { kind: "patch_item", itemId: "item-1", patch: { title: "Should roll back" } },
-            { kind: "patch_item", itemId: "item-2", patch: { title: "Throws on second update" } },
-          ],
-        },
-        "operator-1",
-      ),
-    ).toThrow("Simulated real transactional update failure");
+    expect(() => harness.service.batchMutateMemoryItems(rollbackInput, "operator-1", approved)).toThrow(
+      "Simulated real transactional update failure",
+    );
 
     // Proof this is a REAL immediate-transaction rollback and not a
     // short-circuit before touching storage: the first UPDATE's write was

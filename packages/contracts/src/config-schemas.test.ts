@@ -579,6 +579,18 @@ describe("AgentSubagentDefaultsSchema", () => {
 });
 
 describe("CronJobSchema no_agent + chaining fields", () => {
+  it("accepts agent_turn action with its durable child configuration", () => {
+    const parsed = CronJobSchema.parse({
+      jobId: "agent-turn",
+      name: "Agent turn",
+      action: "agent_turn",
+      actionConfig: { agentTurn: { prompt: "Summarize the durable queue" } },
+      schedule: "*/5 * * * *",
+      enabled: true,
+    });
+    expect(parsed.action).toBe("agent_turn");
+  });
+
   it("accepts no_agent action with noAgent actionConfig", () => {
     const parsed = CronJobSchema.parse({
       jobId: "probe",

@@ -369,8 +369,8 @@ describe("mission-control-next route model", () => {
     expect(ROUTE_RELEASE_SCOPE.map((scope) => scope.status)).not.toContain(
       "needs_release_polish" satisfies ReleaseSurfaceStatus,
     );
-    expect(ROUTE_RELEASE_SCOPE.filter((scope) => scope.status === "ship")).toHaveLength(41);
-    expect(ROUTE_RELEASE_SCOPE.filter((scope) => scope.status === "experimental")).toHaveLength(5);
+    expect(ROUTE_RELEASE_SCOPE.filter((scope) => scope.status === "ship")).toHaveLength(42);
+    expect(ROUTE_RELEASE_SCOPE.filter((scope) => scope.status === "experimental")).toHaveLength(6);
     expect(describeReleaseScopeForOperator(getRouteReleaseScope({ area: "settings", section: "providers" }))).toBe(
       "Release-ready. Action: Configure provider credentials and run provider/model smoke evidence. Verification: verify:surface:regression, provider exercise paths. Constraint: Provider setup is release-bearing with smoke evidence, model discovery state, and plain failure copy.",
     );

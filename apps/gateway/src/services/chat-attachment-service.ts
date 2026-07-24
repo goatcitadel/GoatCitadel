@@ -118,24 +118,60 @@ export function getChatAttachment(deps: ChatAttachmentHost, attachmentId: string
 export async function readChatAttachmentContent(
   deps: Pick<ChatAttachmentHost, "config" | "storage">,
   attachmentId: string,
+  options: { maxBytes?: number } = {},
 ): Promise<{
   record: ChatAttachmentRecord;
   fullPath: string;
   bytes: Buffer;
 }> {
   const record = deps.storage.chatAttachments.get(attachmentId);
+  const maxBytes = options.maxBytes;
+  if (maxBytes !== undefined) {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+      throw new Error("Attachment read maxBytes must be a non-negative safe integer.");
+    }
+    if (record.sizeBytes > maxBytes) {
+      throw new Error(`Attachment ${attachmentId} exceeds the server read limit.`);
+    }
+  }
   const fullPath = path.resolve(deps.config.rootDir, deps.config.assistant.workspaceDir, record.storageRelPath);
   assertExistingPathRealpathAllowed(
     fullPath,
     deps.config.toolPolicy.sandbox.writeJailRoots,
     deps.config.toolPolicy.sandbox.readOnlyRoots,
   );
-  const bytes = await fs.readFile(fullPath);
+  const bytes =
+    maxBytes === undefined ? await fs.readFile(fullPath) : await readFileBounded(fullPath, maxBytes, attachmentId);
   return {
     record,
     fullPath,
     bytes,
   };
+}
+
+async function readFileBounded(fullPath: string, maxBytes: number, attachmentId: string): Promise<Buffer> {
+  const handle = await fs.open(fullPath, "r");
+  try {
+    const stat = await handle.stat();
+    if (stat.size > maxBytes) {
+      throw new Error(`Attachment ${attachmentId} exceeds the server read limit.`);
+    }
+    const buffer = Buffer.alloc(maxBytes + 1);
+    let offset = 0;
+    while (offset < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, offset, buffer.length - offset, offset);
+      if (bytesRead === 0) {
+        break;
+      }
+      offset += bytesRead;
+    }
+    if (offset > maxBytes) {
+      throw new Error(`Attachment ${attachmentId} exceeds the server read limit.`);
+    }
+    return buffer.subarray(0, offset);
+  } finally {
+    await handle.close();
+  }
 }
 
 function sanitizeAttachmentFileName(input: string): string {

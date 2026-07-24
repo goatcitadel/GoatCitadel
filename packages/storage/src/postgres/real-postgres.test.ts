@@ -23,6 +23,7 @@ import { ExternalSideEffectRunRepository } from "../external-side-effect-run-rep
 import { RemoteActionTokenRepository } from "../remote-action-token-repo.js";
 import { ToolGrantRepository } from "../tool-grant-repo.js";
 import { Storage } from "../index.js";
+import { ChatSessionLifecycleRepository } from "../chat-session-lifecycle-repo.js";
 import {
   assertSingleObservabilityChain,
   runConcurrentObservabilityWorkers,
@@ -74,6 +75,264 @@ async function waitForOperation<T>(operation: Promise<T>, description: string, t
     }
   }
 }
+
+test(
+  "real Postgres canonical usage ownership reads hold deletion fences until commit",
+  { skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane" },
+  async () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+    const schemaName = `coverage_usage_attribution_lock_${suffix}`;
+    const sessionId = `session-${suffix}`;
+    const turnId = `turn-${suffix}`;
+    const eventId = `usage-${suffix}`;
+    const adminPool = new Pool({ connectionString });
+    const scopedUrl = new URL(connectionString);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
+    const scopedPool = new Pool({ connectionString: scopedUrl.toString(), max: 3 });
+    const migrationClient = new PostgresDatabaseClient(
+      { connectionString: scopedUrl.toString(), database: "goatcitadel_test" },
+      { pool: scopedPool },
+    );
+    let locker: PoolClient | undefined;
+    let contender: PoolClient | undefined;
+    let lifecycleDb: PostgresSyncDatabaseClient | undefined;
+
+    try {
+      await adminPool.query(`CREATE SCHEMA ${schemaName}`);
+      await runPostgresMigrations(migrationClient, POSTGRES_MIGRATIONS);
+      lifecycleDb = new PostgresSyncDatabaseClient({
+        connectionString: scopedUrl.toString(),
+        database: "goatcitadel_test",
+        applicationName: `coverage-usage-lifecycle-${suffix}`,
+        pool: { max: 1, connectionTimeoutMs: 10_000 },
+      });
+      lifecycleDb.exec(`SET search_path TO ${schemaName}`);
+      new ChatSessionLifecycleRepository(lifecycleDb).initialize({
+        workspaceId: "workspace-a",
+        sessionId,
+        actorId: "operator-test",
+        idempotencyKey: `lifecycle:init:${sessionId}`,
+        correlationId: `correlation:lifecycle:init:${sessionId}`,
+        metadataTimestamp: "2026-07-13T00:00:00.000Z",
+      });
+      await scopedPool.query(
+        `INSERT INTO chat_turn_traces (
+           turn_id, session_id, user_message_id, status, mode, web_mode, memory_mode,
+           thinking_level, routing_json, started_at
+         ) VALUES ($1, $2, $3, 'running', 'chat', 'off', 'off', 'standard', '{}', $4)`,
+        [turnId, sessionId, `message-${suffix}`, "2026-07-13T00:00:00.500Z"],
+      );
+      await scopedPool.query(
+        `INSERT INTO model_usage_events (
+           event_id, idempotency_key, source, call_kind, operation_id, dispatch_generation,
+           dispatch_owner_id, dispatch_lease_expires_at, workspace_id, session_id, started_at
+         ) VALUES ($1, $2, 'manual_test', 'chat_initial', $3, 'generation-1',
+                   'owner-a', $4, 'workspace-a', $5, $6)`,
+        [
+          eventId,
+          `key-${suffix}`,
+          `operation-${suffix}`,
+          "2026-07-13T00:10:00.000Z",
+          sessionId,
+          "2026-07-13T00:00:01.000Z",
+        ],
+      );
+
+      locker = await scopedPool.connect();
+      contender = await scopedPool.connect();
+      await locker.query("BEGIN");
+      await locker.query("SELECT * FROM chat_session_meta WHERE session_id = $1 FOR UPDATE", [sessionId]);
+      await locker.query("SELECT * FROM chat_turn_traces WHERE turn_id = $1 FOR UPDATE", [turnId]);
+      await locker.query("SELECT * FROM model_usage_events WHERE event_id = $1 FOR UPDATE", [eventId]);
+
+      await contender.query("BEGIN");
+      await contender.query("SET LOCAL lock_timeout = '100ms'");
+      await assert.rejects(
+        contender.query("DELETE FROM chat_session_meta WHERE session_id = $1", [sessionId]),
+        (error: unknown) => (error as { code?: string }).code === "55P03",
+      );
+      await contender.query("ROLLBACK");
+
+      await contender.query("BEGIN");
+      await contender.query("SET LOCAL lock_timeout = '100ms'");
+      await assert.rejects(
+        contender.query("DELETE FROM chat_turn_traces WHERE turn_id = $1", [turnId]),
+        (error: unknown) => (error as { code?: string }).code === "55P03",
+      );
+      await contender.query("ROLLBACK");
+
+      await contender.query("BEGIN");
+      await contender.query("SET LOCAL lock_timeout = '100ms'");
+      await assert.rejects(
+        contender.query("DELETE FROM model_usage_events WHERE event_id = $1", [eventId]),
+        (error: unknown) => (error as { code?: string }).code === "55P03",
+      );
+      await contender.query("ROLLBACK");
+
+      await locker.query("COMMIT");
+      await contender.query("DELETE FROM model_usage_events WHERE event_id = $1", [eventId]);
+      await contender.query("DELETE FROM chat_turn_traces WHERE turn_id = $1", [turnId]);
+      await assert.rejects(
+        contender.query("DELETE FROM chat_session_meta WHERE session_id = $1", [sessionId]),
+        (error: unknown) => (error as { code?: string }).code === "23514",
+      );
+      const lifecycle = new ChatSessionLifecycleRepository(lifecycleDb);
+      lifecycleDb.transaction("immediate", () => {
+        lifecycle.deleteTree(
+          {
+            workspaceId: "workspace-a",
+            rootSessionId: sessionId,
+            expectedRootRevision: 1,
+            actorId: "operator-test",
+            idempotencyKey: `lifecycle:delete:${sessionId}`,
+            correlationId: `correlation:lifecycle:delete:${sessionId}`,
+          },
+          () => undefined,
+        );
+      });
+    } finally {
+      lifecycleDb?.close();
+      if (contender) {
+        try {
+          await contender.query("ROLLBACK");
+        } catch (error) {
+          void error;
+        }
+        contender.release();
+      }
+      if (locker) {
+        try {
+          await locker.query("ROLLBACK");
+        } catch (error) {
+          void error;
+        }
+        locker.release();
+      }
+      await scopedPool.end();
+      await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+      await adminPool.end();
+    }
+  },
+);
+
+test(
+  "real Postgres usage recovery skips live owner locks and preserves renewed or accepted truth",
+  { skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane" },
+  async () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+    const schemaName = `coverage_usage_recovery_lock_${suffix}`;
+    const intentEventId = `usage-intent-${suffix}`;
+    const acceptedEventId = `usage-accepted-${suffix}`;
+    const adminPool = new Pool({ connectionString });
+    const scopedUrl = new URL(connectionString);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
+    const scopedPool = new Pool({ connectionString: scopedUrl.toString(), max: 3 });
+    const migrationClient = new PostgresDatabaseClient(
+      { connectionString: scopedUrl.toString(), database: "goatcitadel_test" },
+      { pool: scopedPool },
+    );
+    let owner: PoolClient | undefined;
+    let recoveryStorage: Storage | undefined;
+
+    try {
+      await adminPool.query(`CREATE SCHEMA ${schemaName}`);
+      await runPostgresMigrations(migrationClient, POSTGRES_MIGRATIONS);
+      recoveryStorage = new Storage({
+        db: new PostgresSyncDatabaseClient({
+          connectionString: scopedUrl.toString(),
+          database: "goatcitadel_test",
+          applicationName: `gc-usage-recovery-${suffix}`,
+          pool: { max: 1, connectionTimeoutMs: 10_000 },
+        }),
+        transcriptsDir: ".",
+        auditDir: ".",
+      });
+      await scopedPool.query(
+        `INSERT INTO model_usage_events (
+           event_id, idempotency_key, source, call_kind, operation_id, dispatch_generation,
+           transport_status, dispatch_owner_id, dispatch_lease_expires_at, workspace_id, started_at
+         ) VALUES
+           ($1, $2, 'manual_test', 'chat_initial', $3, 'generation-1', 'intent', 'owner-a', $4, 'workspace-a', $5),
+           ($6, $7, 'manual_test', 'chat_initial', $8, 'generation-1', 'accepted', 'owner-b', $4, 'workspace-a', $5)`,
+        [
+          intentEventId,
+          `intent-key-${suffix}`,
+          `intent-operation-${suffix}`,
+          "2000-01-01T00:00:00.000Z",
+          "2026-07-13T00:00:00.000Z",
+          acceptedEventId,
+          `accepted-key-${suffix}`,
+          `accepted-operation-${suffix}`,
+        ],
+      );
+
+      owner = await scopedPool.connect();
+      await owner.query("BEGIN");
+      await owner.query(
+        `UPDATE model_usage_events
+         SET transport_status = 'accepted', dispatch_lease_expires_at = $2
+         WHERE event_id = $1 AND transport_status = 'intent'`,
+        [intentEventId, "2999-01-01T00:00:00.000Z"],
+      );
+      await owner.query(
+        `UPDATE model_usage_events
+         SET dispatch_lease_expires_at = $2
+         WHERE event_id = $1 AND transport_status = 'accepted'`,
+        [acceptedEventId, "2999-01-01T00:00:00.000Z"],
+      );
+
+      const whileLocked = recoveryStorage.modelUsageEvents.recoverExpiredBacklog("2026-07-13T10:00:00.000Z", {
+        batchSize: 10,
+        maxBatches: 2,
+      });
+      assert.deepEqual(whileLocked, {
+        recoveredIntentCount: 0,
+        recoveredAcceptedCount: 0,
+        batchCount: 1,
+        batchLimitReached: false,
+      });
+
+      await owner.query("COMMIT");
+      const afterCommit = recoveryStorage.modelUsageEvents.recoverExpiredBacklog("2026-07-13T10:00:00.000Z", {
+        batchSize: 10,
+        maxBatches: 2,
+      });
+      assert.equal(afterCommit.recoveredIntentCount, 0);
+      assert.equal(afterCommit.recoveredAcceptedCount, 0);
+      const rows = await scopedPool.query<{
+        event_id: string;
+        transport_status: string;
+        terminal_outcome: string;
+        dispatch_lease_expires_at: string;
+      }>(
+        `SELECT event_id, transport_status, terminal_outcome, dispatch_lease_expires_at
+         FROM model_usage_events WHERE event_id = ANY($1::text[]) ORDER BY event_id`,
+        [[intentEventId, acceptedEventId]],
+      );
+      assert.equal(rows.rows.length, 2);
+      for (const row of rows.rows) {
+        assert.equal(row.transport_status, "accepted");
+        assert.equal(row.terminal_outcome, "in_flight");
+        assert.equal(row.dispatch_lease_expires_at, "2999-01-01T00:00:00.000Z");
+      }
+    } finally {
+      if (owner) {
+        try {
+          await owner.query("ROLLBACK");
+        } catch {
+          // Transaction may already be committed.
+        }
+        owner.release();
+      }
+      recoveryStorage?.close();
+      await scopedPool.end();
+      await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+      await adminPool.end();
+    }
+  },
+);
 
 test(
   "real Postgres preserves dependency-plan truth through the delegation step repository",
@@ -4066,6 +4325,92 @@ test(
         )?.status,
         "running",
       );
+      const generationOwner = orchestration.updateRun({
+        ...orchestration.getRun(orchestrationRunId),
+        worktreePath: "/tmp/worktree",
+        worktreeStatus: "ready",
+        worktreeBaseRef: "HEAD",
+        worktreeLeaseOwnerId: "postgres-owner-a",
+        worktreeLeaseGeneration: 3,
+        worktreeLeaseExpiresAt: "2026-07-11T00:05:00.000Z",
+      });
+      const sameGenerationStaleOwner = orchestration.updateRun({
+        ...generationOwner,
+        worktreeLeaseOwnerId: "postgres-owner-b",
+        worktreeLeaseGeneration: 3,
+        worktreeLeaseExpiresAt: "2026-07-11T00:06:00.000Z",
+      });
+      assert.equal(sameGenerationStaleOwner.worktreeLeaseOwnerId, "postgres-owner-a");
+      assert.equal(sameGenerationStaleOwner.worktreeLeaseGeneration, 3);
+      assert.equal(sameGenerationStaleOwner.worktreeLeaseExpiresAt, "2026-07-11T00:05:00.000Z");
+      assert.equal(
+        orchestration.updateRun({
+          ...sameGenerationStaleOwner,
+          worktreeLeaseExpiresAt: "2026-07-11T00:07:00.000Z",
+        }).worktreeLeaseExpiresAt,
+        "2026-07-11T00:07:00.000Z",
+      );
+      assert.equal(
+        orchestration.renewWorktreeLease({
+          runId: orchestrationRunId,
+          worktreeLeaseOwnerId: "postgres-owner-a",
+          worktreeLeaseGeneration: 3,
+          worktreeLeaseExpiresAt: "2026-07-11T00:08:00.000Z",
+        })?.worktreeLeaseExpiresAt,
+        "2026-07-11T00:08:00.000Z",
+      );
+      const adoptedGeneration = orchestration.adoptWorktreeLease({
+        runId: orchestrationRunId,
+        worktreePath: "/tmp/worktree",
+        expectedWorktreeLeaseOwnerId: "postgres-owner-a",
+        expectedWorktreeLeaseGeneration: 3,
+        worktreeLeaseOwnerId: "postgres-owner-c",
+        worktreeLeaseGeneration: 4,
+        worktreeLeaseExpiresAt: "2026-07-11T00:09:00.000Z",
+      });
+      assert.equal(adoptedGeneration?.worktreeLeaseOwnerId, "postgres-owner-c");
+      assert.equal(adoptedGeneration?.worktreeLeaseGeneration, 4);
+      const staleMixedGeneration = orchestration.updateRunIfCurrentState(
+        {
+          ...sameGenerationStaleOwner,
+          worktreePath: "/tmp/stale-worktree",
+          worktreeStatus: "blocked",
+          worktreeBaseRef: "stale-ref",
+          worktreeLeaseOwnerId: "postgres-owner-a",
+          worktreeLeaseGeneration: 3,
+          worktreeLeaseExpiresAt: "2026-07-11T00:10:00.000Z",
+        },
+        {
+          status: adoptedGeneration!.status,
+          executionState: adoptedGeneration!.executionState,
+        },
+      );
+      assert.equal(staleMixedGeneration?.worktreePath, "/tmp/worktree");
+      assert.equal(staleMixedGeneration?.worktreeStatus, "ready");
+      assert.equal(staleMixedGeneration?.worktreeBaseRef, "HEAD");
+      assert.equal(staleMixedGeneration?.worktreeLeaseOwnerId, "postgres-owner-c");
+      assert.equal(staleMixedGeneration?.worktreeLeaseGeneration, 4);
+      assert.equal(
+        orchestration.fenceWorktreeLease({
+          runId: orchestrationRunId,
+          worktreePath: "/tmp/worktree",
+          worktreeLeaseOwnerId: "postgres-owner-b",
+          worktreeLeaseGeneration: 4,
+          endedAt: "2026-07-11T00:11:00.000Z",
+          lastError: "stale owner must not fence",
+        }),
+        undefined,
+      );
+      const fencedOrchestration = orchestration.fenceWorktreeLease({
+        runId: orchestrationRunId,
+        worktreePath: "/tmp/worktree",
+        worktreeLeaseOwnerId: "postgres-owner-c",
+        worktreeLeaseGeneration: 4,
+        endedAt: "2026-07-11T00:11:00.000Z",
+        lastError: "worktree lease lost",
+      });
+      assert.equal(fencedOrchestration?.status, "failed");
+      assert.equal(fencedOrchestration?.worktreeStatus, "blocked");
 
       const permissionProfiles = new PermissionProfileRepository(syncClient);
       const profile = permissionProfiles.createProfile({
@@ -5487,11 +5832,11 @@ test(
       );
 
       const final = await runPostgresMigrations(client, POSTGRES_MIGRATIONS);
-      assert.deepEqual(final.appliedVersions, [81, 82, 83, 84, 85]);
-      assert.equal(final.latestVersion, 85);
+      assert.deepEqual(final.appliedVersions, [81, 82, 83, 84, 85, 86, 87, 88, 89]);
+      assert.equal(final.latestVersion, 89);
       const replay = await runPostgresMigrations(client, POSTGRES_MIGRATIONS);
       assert.deepEqual(replay.appliedVersions, []);
-      assert.equal(replay.latestVersion, 85);
+      assert.equal(replay.latestVersion, 89);
 
       const legacyDelegationSteps = await client.query<{
         step_id: string;

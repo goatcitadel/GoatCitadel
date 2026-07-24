@@ -33,6 +33,14 @@ describe("sqlite chat turn trace repair migration", () => {
         name TEXT NOT NULL,
         applied_at TEXT NOT NULL
       );
+    `);
+    // Migrations 172+ fail closed on databases that claim applied history without the real
+    // predecessor tables, so build the genuine v28 schema before installing the stale trace shape.
+    for (let version = 1; version <= 28; version += 1) {
+      __sqliteInternals.applySchemaMigrationForTest(version, legacy);
+    }
+    legacy.exec(`
+      DROP TABLE IF EXISTS chat_turn_traces;
 
       CREATE TABLE chat_turn_traces (
         turn_id TEXT PRIMARY KEY,

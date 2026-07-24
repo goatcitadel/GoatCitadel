@@ -8,14 +8,20 @@ import type {
 } from "@goatcitadel/contracts";
 import { clampInt } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
+import { Buffer } from "node:buffer";
 import { mapWithConcurrency } from "../async-utils.js";
 import { ingestDocumentViaBackend, resolveIngestionTrustLevel, searchIngestedContext } from "../ingestion-backends.js";
 import { parseIngestionSourceType } from "../ingestion-source-type.js";
+import { sanitizeForModel } from "../tool-security.js";
 import {
   currentEmbeddingProfile,
   generateEmbedding,
   isEmbeddingCompatible,
   isEmbeddingCurrent,
+  type AcquireLocalEmbeddingLease,
+  type EmbeddingLeasePurpose,
+  type EmbeddingRuntimeOptions,
+  type PrepareEmbeddingUsageDispatch,
 } from "../local-embeddings.js";
 
 const EMBEDDING_CONCURRENCY = 8;
@@ -29,6 +35,7 @@ const UNSAFE_OBJECT_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 
 const KNOWLEDGE_TOOL_NAMES = new Set([
   "session.search",
+  "session.history",
   "memory.read",
   "memory.write",
   "memory.upsert",
@@ -40,13 +47,9 @@ const KNOWLEDGE_TOOL_NAMES = new Set([
   "embeddings.query",
 ]);
 
-export type ToolFamilyExecutor = (
-  request: ToolInvokeRequest,
-  config: ToolPolicyConfig,
-  storage: Storage,
-) => Promise<Record<string, unknown>>;
-
 export interface KnowledgeExecutorDeps {
+  acquireLocalEmbeddingLease?: AcquireLocalEmbeddingLease;
+  prepareEmbeddingUsageDispatch?: PrepareEmbeddingUsageDispatch;
   assertReadPathAllowedForRequest(
     candidate: string,
     request: ToolInvokeRequest,
@@ -77,12 +80,14 @@ export async function executeKnowledgeTool(
   switch (request.toolName) {
     case "session.search":
       return sessionSearch(request, storage);
+    case "session.history":
+      return sessionHistory(request, storage);
     case "memory.read":
       return memoryRead(request.args, storage);
     case "memory.write":
-      return memoryWrite(request, storage, false);
+      return memoryWrite(request, storage, false, deps);
     case "memory.upsert":
-      return memoryWrite(request, storage, true);
+      return memoryWrite(request, storage, true, deps);
     case "memory.search":
       return memorySearch(request.args, storage);
     case "citations.build":
@@ -92,15 +97,15 @@ export async function executeKnowledgeTool(
     case "docs.search":
       return docsSearch(request.args, storage);
     case "embeddings.index":
-      return embeddingsIndex(request.args, storage);
+      return embeddingsIndex(request, storage, deps);
     case "embeddings.query":
-      return embeddingsQuery(request.args, storage);
+      return embeddingsQuery(request, storage, deps);
     default:
       throw new Error(`Unsupported knowledge tool executor: ${request.toolName}`);
   }
 }
 
-async function memoryWrite(request: ToolInvokeRequest, storage: Storage, upsert: boolean) {
+async function memoryWrite(request: ToolInvokeRequest, storage: Storage, upsert: boolean, deps: KnowledgeExecutorDeps) {
   const args = request.args;
   const namespace = required(args.namespace, "namespace");
   const title = required(args.title, "title");
@@ -125,12 +130,22 @@ async function memoryWrite(request: ToolInvokeRequest, storage: Storage, upsert:
     },
   });
   const chunks = chunkText(content, 1200, 180, 400);
+  const canonicalUsageEventIds = new Set<string>();
   const embeddedChunks = await mapWithConcurrency(chunks, EMBEDDING_CONCURRENCY, async (chunk) => {
-    const generated = await generateEmbedding(chunk);
+    const generated = await generateEmbedding(
+      chunk,
+      undefined,
+      undefined,
+      embeddingRuntimeOptions(request, deps, "memory_write"),
+    );
+    collectUsageEventIds(canonicalUsageEventIds, generated.modelUsageEventIds);
     return {
       content: chunk,
       embedding: generated.embedding,
-      embeddingMetadata: generated.metadata,
+      embeddingMetadata: {
+        ...generated.metadata,
+        ...(generated.modelUsageEventIds ? { modelUsageEventIds: generated.modelUsageEventIds } : {}),
+      },
     };
   });
   storage.knowledge.appendChunks(doc.docId, embeddedChunks);
@@ -144,30 +159,219 @@ async function memoryWrite(request: ToolInvokeRequest, storage: Storage, upsert:
     attribution,
     ...(sourceAttribution.length > 0 ? { sourceAttribution } : {}),
     chunksSaved: chunks.length,
+    ...(canonicalUsageEventIds.size > 0 ? { modelUsageEventIds: [...canonicalUsageEventIds] } : {}),
   };
 }
 
 /**
  * P2-S4a `session.search`: read-only FTS recall over persisted chat messages.
  *
- * Defaults to the calling session (`scope:"session"`); `scope:"all"` searches every
- * session. Query sanitisation lives in the storage repo, so arbitrary user text is
+ * Defaults to the calling session (`scope:"session"`); `scope:"all"` searches the
+ * calling workspace. Query sanitisation lives in the storage repo, so arbitrary user text is
  * safe here. The repo enforces sensible limit/context-radius bounds.
  */
 function sessionSearch(request: ToolInvokeRequest, storage: Storage) {
   const query = (asString(request.args.query) ?? "").trim();
   const scope = asString(request.args.scope) === "all" ? "all" : "session";
   const limit = clampInt(request.args.limit, 10, 1, 50);
-  const contextRadius = clampInt(request.args.contextRadius, 2, 0, 10);
   if (!query) {
     return { scope, query: "", hits: [] };
   }
+  if (query.length > 512) {
+    throw new Error("session.search query must be 512 characters or fewer");
+  }
+  const workspaceId = resolveAuthorizedSessionWorkspace(request, storage, request.sessionId);
   const hits = storage.chatMessages.searchMessages(query, {
+    workspaceId,
     ...(scope === "session" ? { sessionId: request.sessionId } : {}),
+    includeHidden: scope === "session",
     limit,
-    contextRadius,
+    contextRadius: 0,
   });
-  return { scope, query, hits };
+  const authorizedHits = hits
+    .filter((hit) => {
+      if (
+        hit.workspaceId !== workspaceId ||
+        (scope === "session" && hit.sessionId !== request.sessionId) ||
+        !hit.messageId ||
+        !Number.isSafeInteger(hit.sequence) ||
+        hit.sequence < 1
+      ) {
+        return false;
+      }
+      const meta = storage.chatSessionMeta.get(hit.sessionId);
+      return meta?.workspaceId === workspaceId && (scope === "session" || meta.includeInHistory !== false);
+    })
+    .slice(0, limit);
+  return {
+    scope,
+    query: capUtf8Text(sanitizeForModel(query), 512, ""),
+    hits: authorizedHits.map((hit) => ({
+      workspaceId: hit.workspaceId,
+      sessionId: hit.sessionId,
+      messageId: hit.messageId,
+      sequence: hit.sequence,
+      role: hit.role,
+      excerpt: capUtf8Text(sanitizeForModel(hit.content), 1_024, "\n[search excerpt truncated]"),
+      timestamp: hit.timestamp,
+      score: hit.score,
+    })),
+  };
+}
+
+function sessionHistory(request: ToolInvokeRequest, storage: Storage) {
+  const targetSessionId = (asString(request.args.sessionId) ?? request.sessionId).trim();
+  const messageId = (asString(request.args.messageId) ?? "").trim();
+  const sequence = clampInt(request.args.sequence, 0, 0, Number.MAX_SAFE_INTEGER);
+  const limit = clampInt(request.args.limit, 21, 1, 101);
+  if (!messageId || sequence < 1) {
+    throw new Error("session.history requires an exact messageId and positive sequence from session.search");
+  }
+  const workspaceId = resolveAuthorizedSessionWorkspace(request, storage, targetSessionId);
+  const window = storage.chatMessages.readAnchoredWindow(
+    { workspaceId, sessionId: targetSessionId, messageId, sequence },
+    limit,
+  );
+  const providerWindow = capProviderSessionHistory(window.items, 64 * 1024);
+  return {
+    anchor: window.anchor,
+    items: providerWindow.items,
+    snapshotMaxSequence: window.snapshotMaxSequence,
+    hasOlder: window.hasOlder || providerWindow.droppedOlder,
+    hasNewer: window.hasNewer || providerWindow.droppedNewer,
+    truncated: providerWindow.truncated,
+    byteLength: providerWindow.byteLength,
+    ...(providerWindow.anchorExceededByteLimit ? { anchorExceededByteLimit: true } : {}),
+  };
+}
+
+function capProviderSessionHistory(
+  source: ReturnType<Storage["chatMessages"]["readAnchoredWindow"]>["items"],
+  maxBytes: number,
+) {
+  let contentWasTruncated = false;
+  const safeItems = source.map((entry) => {
+    const capped = capProviderMessageContent(sanitizeForModel(entry.message.content));
+    contentWasTruncated ||= capped.truncated;
+    return {
+      sequence: entry.sequence,
+      isAnchor: entry.isAnchor,
+      message: {
+        messageId: entry.message.messageId,
+        sessionId: entry.message.sessionId,
+        role: entry.message.role,
+        content: capped.content,
+        ...(capped.truncated ? { contentTruncated: true as const } : {}),
+        timestamp: entry.message.timestamp,
+      },
+    };
+  });
+  const anchorIndex = safeItems.findIndex((entry) => entry.isAnchor);
+  if (anchorIndex < 0) {
+    return {
+      items: [],
+      truncated: safeItems.length > 0 || contentWasTruncated,
+      byteLength: 2,
+      anchorExceededByteLimit: false,
+      droppedOlder: false,
+      droppedNewer: false,
+    };
+  }
+  let start = anchorIndex;
+  let end = anchorIndex + 1;
+  let items = safeItems.slice(start, end);
+  let byteLength = Buffer.byteLength(JSON.stringify(items), "utf8");
+  const anchorExceededByteLimit = byteLength > maxBytes;
+  while (!anchorExceededByteLimit && (start > 0 || end < safeItems.length)) {
+    let changed = false;
+    if (start > 0) {
+      const candidate = safeItems.slice(start - 1, end);
+      const bytes = Buffer.byteLength(JSON.stringify(candidate), "utf8");
+      if (bytes <= maxBytes) {
+        start -= 1;
+        items = candidate;
+        byteLength = bytes;
+        changed = true;
+      }
+    }
+    if (end < safeItems.length) {
+      const candidate = safeItems.slice(start, end + 1);
+      const bytes = Buffer.byteLength(JSON.stringify(candidate), "utf8");
+      if (bytes <= maxBytes) {
+        end += 1;
+        items = candidate;
+        byteLength = bytes;
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+  return {
+    items,
+    truncated: items.length < safeItems.length || contentWasTruncated || anchorExceededByteLimit,
+    byteLength,
+    anchorExceededByteLimit,
+    droppedOlder: start > 0,
+    droppedNewer: end < safeItems.length,
+  };
+}
+
+function capProviderMessageContent(content: string): { content: string; truncated: boolean } {
+  if (Buffer.byteLength(content, "utf8") <= 16 * 1024) {
+    return { content, truncated: false };
+  }
+  return {
+    content: capUtf8Text(content, 16 * 1024, "\n[historical message truncated]"),
+    truncated: true,
+  };
+}
+
+function capUtf8Text(content: string, maxBytes: number, suffix: string): string {
+  if (Buffer.byteLength(content, "utf8") <= maxBytes) return content;
+  let low = 0;
+  let high = content.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (Buffer.byteLength(`${content.slice(0, middle)}${suffix}`, "utf8") <= maxBytes) low = middle;
+    else high = middle - 1;
+  }
+  if (
+    low > 0 &&
+    low < content.length &&
+    isHighSurrogate(content.charCodeAt(low - 1)) &&
+    isLowSurrogate(content.charCodeAt(low))
+  ) {
+    low -= 1;
+  }
+  return `${content.slice(0, low)}${suffix}`;
+}
+
+function isHighSurrogate(value: number): boolean {
+  return value >= 0xd800 && value <= 0xdbff;
+}
+
+function isLowSurrogate(value: number): boolean {
+  return value >= 0xdc00 && value <= 0xdfff;
+}
+
+function resolveAuthorizedSessionWorkspace(
+  request: ToolInvokeRequest,
+  storage: Storage,
+  targetSessionId: string,
+): string {
+  const callingMeta = storage.chatSessionMeta.get(request.sessionId);
+  const targetMeta = storage.chatSessionMeta.get(targetSessionId);
+  const workspaceId = callingMeta?.workspaceId?.trim();
+  if (
+    !workspaceId ||
+    !targetMeta?.workspaceId ||
+    targetMeta.workspaceId !== workspaceId ||
+    (request.workspaceId !== undefined && request.workspaceId.trim() !== workspaceId) ||
+    (targetSessionId !== request.sessionId && targetMeta.includeInHistory === false)
+  ) {
+    throw new Error("Session history target is unavailable in the active workspace");
+  }
+  return workspaceId;
 }
 
 async function memoryRead(args: Record<string, unknown>, storage: Storage) {
@@ -342,9 +546,11 @@ async function docsIngest(
   if (sourceType === "file") {
     deps.assertReadPathAllowedForRequest(String(request.args.source ?? ""), request, config, storage);
   }
+  const { purpose: _purpose, ...embeddingRuntime } = embeddingRuntimeOptions(request, deps, "document_ingest");
   const ingested = await ingestDocumentViaBackend({
     request,
     storage,
+    embeddingRuntime,
     networkAllowlist: deps.resolveNetworkAllowlist(request, config),
     sourceAllowlist: deps.resolveExecutionGrantAllowedHosts(request, storage),
     fetchUrl: async (url) => {
@@ -371,6 +577,7 @@ async function docsIngest(
     chunksSaved: ingested.chunksSaved,
     cached: ingested.cached,
     chunks: ingested.chunks,
+    ...(ingested.modelUsageEventIds ? { modelUsageEventIds: ingested.modelUsageEventIds } : {}),
   };
 }
 
@@ -386,7 +593,8 @@ function docsSearch(args: Record<string, unknown>, storage: Storage) {
   });
 }
 
-async function embeddingsIndex(args: Record<string, unknown>, storage: Storage) {
+async function embeddingsIndex(request: ToolInvokeRequest, storage: Storage, deps: KnowledgeExecutorDeps) {
+  const args = request.args;
   const namespace = asString(args.namespace);
   const documentId = asString(args.documentId);
   const force = asBoolean(args.force, false);
@@ -399,6 +607,7 @@ async function embeddingsIndex(args: Record<string, unknown>, storage: Storage) 
   let skipped = 0;
   let stale = 0;
   const methods = new Set<string>();
+  const canonicalUsageEventIds = new Set<string>();
   for (const chunk of chunks) {
     const current = isEmbeddingCurrent(chunk.embedding, chunk.embeddingMetadata, embeddingProfileRequest);
     if (!force && current) {
@@ -408,8 +617,17 @@ async function embeddingsIndex(args: Record<string, unknown>, storage: Storage) 
     if (!current && chunk.embedding) {
       stale += 1;
     }
-    const generated = await generateEmbedding(chunk.content, undefined, embeddingProfileRequest);
-    storage.knowledge.updateChunkEmbedding(chunk.chunkId, generated.embedding, generated.metadata);
+    const generated = await generateEmbedding(
+      chunk.content,
+      undefined,
+      embeddingProfileRequest,
+      embeddingRuntimeOptions(request, deps, "embedding_index"),
+    );
+    collectUsageEventIds(canonicalUsageEventIds, generated.modelUsageEventIds);
+    storage.knowledge.updateChunkEmbedding(chunk.chunkId, generated.embedding, {
+      ...generated.metadata,
+      ...(generated.modelUsageEventIds ? { modelUsageEventIds: generated.modelUsageEventIds } : {}),
+    });
     methods.add(generated.method);
     indexed += 1;
   }
@@ -421,15 +639,24 @@ async function embeddingsIndex(args: Record<string, unknown>, storage: Storage) 
     stale,
     methods: [...methods],
     embeddingProfile,
+    ...(canonicalUsageEventIds.size > 0 ? { modelUsageEventIds: [...canonicalUsageEventIds] } : {}),
   };
 }
 
-async function embeddingsQuery(args: Record<string, unknown>, storage: Storage) {
+async function embeddingsQuery(request: ToolInvokeRequest, storage: Storage, deps: KnowledgeExecutorDeps) {
+  const args = request.args;
   const namespace = asString(args.namespace);
   const query = required(args.query, "query");
   const limit = clampInt(args.limit, 10, 1, 100);
   const embeddingProfileRequest = normalizeEmbeddingProfileRequest(args.embeddingProfile);
-  const generatedQuery = await generateEmbedding(query, undefined, embeddingProfileRequest);
+  const generatedQuery = await generateEmbedding(
+    query,
+    undefined,
+    embeddingProfileRequest,
+    embeddingRuntimeOptions(request, deps, "embedding_query"),
+  );
+  const canonicalUsageEventIds = new Set<string>();
+  collectUsageEventIds(canonicalUsageEventIds, generatedQuery.modelUsageEventIds);
   const chunks = storage.knowledge.listChunksByNamespace(namespace, 2000);
   const docById = new Map(storage.knowledge.listDocuments(namespace, 500).map((doc) => [doc.docId, doc] as const));
   let repairedEmbeddings = 0;
@@ -453,10 +680,19 @@ async function embeddingsQuery(args: Record<string, unknown>, storage: Storage) 
         missingEmbeddings += 1;
         embeddingStatus = "generated";
       }
-      const repaired = await generateEmbedding(chunk.content, undefined, embeddingProfileRequest);
+      const repaired = await generateEmbedding(
+        chunk.content,
+        undefined,
+        embeddingProfileRequest,
+        embeddingRuntimeOptions(request, deps, "embedding_repair"),
+      );
+      collectUsageEventIds(canonicalUsageEventIds, repaired.modelUsageEventIds);
       compatibleEmbedding = repaired.embedding;
-      embeddingMetadata = repaired.metadata;
-      storage.knowledge.updateChunkEmbedding(chunk.chunkId, repaired.embedding, repaired.metadata);
+      embeddingMetadata = {
+        ...repaired.metadata,
+        ...(repaired.modelUsageEventIds ? { modelUsageEventIds: repaired.modelUsageEventIds } : {}),
+      };
+      storage.knowledge.updateChunkEmbedding(chunk.chunkId, repaired.embedding, embeddingMetadata);
       repairedEmbeddings += 1;
     }
     return {
@@ -486,10 +722,39 @@ async function embeddingsQuery(args: Record<string, unknown>, storage: Storage) 
       ...(generatedQuery.metadata.fallbackReason ? { fallbackReason: generatedQuery.metadata.fallbackReason } : {}),
     },
     embeddingProfile: generatedQuery.profile,
+    ...(canonicalUsageEventIds.size > 0 ? { modelUsageEventIds: [...canonicalUsageEventIds] } : {}),
     repairedEmbeddings,
     missingEmbeddings,
     staleEmbeddings,
   };
+}
+
+function embeddingRuntimeOptions(
+  request: ToolInvokeRequest,
+  deps: KnowledgeExecutorDeps,
+  purpose: EmbeddingLeasePurpose,
+): EmbeddingRuntimeOptions {
+  return {
+    purpose,
+    ...(request.signal ? { signal: request.signal } : {}),
+    ...(deps.acquireLocalEmbeddingLease ? { acquireLocalServiceLease: deps.acquireLocalEmbeddingLease } : {}),
+    ...(deps.prepareEmbeddingUsageDispatch ? { prepareModelUsageDispatch: deps.prepareEmbeddingUsageDispatch } : {}),
+    modelUsageAttribution: {
+      workspaceId: request.workspaceId,
+      sessionId: request.sessionId,
+      durableRunId: request.runId,
+      taskId: request.taskId,
+      agentId: request.agentId,
+      utilityKind: `tool:${request.toolName}:${purpose}`,
+    },
+  };
+}
+
+function collectUsageEventIds(target: Set<string>, eventIds: string[] | undefined): void {
+  for (const eventId of eventIds ?? []) {
+    const normalized = eventId.trim();
+    if (normalized && normalized.length <= 256 && target.size < 1_000) target.add(normalized);
+  }
 }
 
 function normalizeEmbeddingProfileRequest(value: unknown): MemoryEmbeddingProfileRequest | undefined {

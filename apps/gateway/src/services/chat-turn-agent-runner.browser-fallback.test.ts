@@ -11,8 +11,8 @@ import type {
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
 import { CHAT_COMPLETION_TIMEOUT_MS_BY_MODE } from "./chat-agent-budget.js";
-import { ChatTurnAgentRunner } from "./chat-turn-agent-runner.js";
 import {
+  EffectAwareChatTurnAgentRunner as ChatTurnAgentRunner,
   createExecuteToolCallForTest,
   createMockStorage,
   createToolCatalog,
@@ -22,6 +22,10 @@ import {
   navigateToolCallCompletion,
   toolCallCompletion,
 } from "./chat-turn-agent-runner-test-fixtures.js";
+import {
+  MCP_REQUESTER_COMPOSITION_STATIC_GENERATIONS,
+  readMcpRequesterScopedTurnContext,
+} from "./mcp-requester-resolution-service.js";
 
 describe("ChatTurnAgentRunner browser fallback behavior", () => {
   it("continues Cowork from checkpoint-window evidence when maxToolLoops is exhausted", async () => {
@@ -2436,18 +2440,27 @@ describe("ChatTurnAgentRunner browser fallback behavior", () => {
         textSnippet: "Sorry, you have been blocked. Cloudflare Ray ID.",
       },
     });
-    const invokeMcpTool = vi.fn<() => Promise<McpInvokeResponse>>().mockResolvedValueOnce({
-      ok: true,
-      output: {
-        structuredContent: {
-          url: "https://www.imdb.com/calendar/",
-          finalUrl: "https://www.imdb.com/calendar/",
-          status: 200,
-          title: "IMDb Release Calendar",
-          textSnippet: "Upcoming movies this week.",
-        },
-      },
-    });
+    const mcpFenceEvents: string[] = [];
+    const invokeMcpTool = vi
+      .fn<(request: McpInvokeRequest, options?: { executionFence?: () => void }) => Promise<McpInvokeResponse>>()
+      .mockImplementationOnce(async (_request, options) => {
+        expect(options?.executionFence).toBeTypeOf("function");
+        mcpFenceEvents.push("before_fence");
+        options?.executionFence?.();
+        mcpFenceEvents.push("after_fence");
+        return {
+          ok: true,
+          output: {
+            structuredContent: {
+              url: "https://www.imdb.com/calendar/",
+              finalUrl: "https://www.imdb.com/calendar/",
+              status: 200,
+              title: "IMDb Release Calendar",
+              textSnippet: "Upcoming movies this week.",
+            },
+          },
+        };
+      });
     const orchestrator = new ChatTurnAgentRunner({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(["browser.navigate"]),
@@ -2512,7 +2525,11 @@ describe("ChatTurnAgentRunner browser fallback behavior", () => {
           url: "https://movieinsider.com/movies",
         }),
       }),
+      expect.objectContaining({
+        executionFence: expect.any(Function),
+      }),
     );
+    expect(mcpFenceEvents).toEqual(["before_fence", "after_fence"]);
     expect(executed.record.status).toBe("executed");
     expect(executed.record.result).toMatchObject({
       engineTier: "playwright_mcp",
@@ -2525,6 +2542,210 @@ describe("ChatTurnAgentRunner browser fallback behavior", () => {
       browserFailureClass: "remote_blocked",
       status: "failed",
     });
+  });
+
+  it("threads a branded requester turn context built from the frozen capability profile into MCP invocations (HX-415)", async () => {
+    const profileHash = "f".repeat(64);
+    const callableHash = "e".repeat(64);
+    const capabilityProfile = {
+      profileId: "chat-capability-profile-turn-mcp-ctx-1",
+      identity: {
+        turnId: "turn-mcp-ctx-1",
+        sessionId: "sess-mcp-ctx-1",
+        workspaceId: "workspace-1",
+        citadelId: "citadel-1",
+        authActorId: "operator-1",
+        authActorSource: "token",
+      },
+      catalog: {
+        snapshotId: "chat-cap-snap-ctx-1",
+        inspectableHash: callableHash,
+        callableHash,
+        inspectableCount: 1,
+        callableCount: 1,
+      },
+      selection: { tools: [] },
+      governance: {
+        policyDecisions: [{ toolName: "browser.navigate", allowed: true, requiresApproval: false, reasonCodes: [] }],
+      },
+      hashes: { profileHash },
+    };
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-remote-blocked-ctx-1",
+      result: {
+        url: "https://movieinsider.com/movies",
+        finalUrl: "https://movieinsider.com/movies",
+        status: 403,
+        title: "Attention Required! | Cloudflare",
+        textSnippet: "Sorry, you have been blocked. Cloudflare Ray ID.",
+      },
+    });
+    const invokeMcpTool = vi
+      .fn<
+        (
+          request: McpInvokeRequest,
+          options?: { executionFence?: () => void; mcpRequesterTurnContext?: unknown },
+        ) => Promise<McpInvokeResponse>
+      >()
+      .mockResolvedValueOnce({
+        ok: true,
+        output: {
+          structuredContent: {
+            url: "https://www.imdb.com/calendar/",
+            finalUrl: "https://www.imdb.com/calendar/",
+            status: 200,
+            title: "IMDb Release Calendar",
+            textSnippet: "Upcoming movies this week.",
+          },
+        },
+      });
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.navigate"]),
+      createChatCompletion: vi.fn(),
+      invokeTool,
+      invokeMcpTool,
+      evaluateToolAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
+      listMcpBrowserFallbackTargets: () => [
+        {
+          serverId: "srv-playwright",
+          label: "Playwright MCP",
+          tier: "playwright_mcp",
+          navigateToolName: "browser.navigate",
+          extractToolName: "browser.extract",
+        },
+      ],
+    } as never);
+
+    const executed = await (
+      orchestrator as unknown as {
+        executeToolCall(input: {
+          input: Record<string, unknown>;
+          turnId: string;
+          toolName: string;
+          rawArgs: Record<string, unknown>;
+        }): Promise<{ record: ChatToolRunRecord }>;
+      }
+    ).executeToolCall({
+      input: {
+        sessionId: "sess-mcp-ctx-1",
+        content: "What movies are coming out this week?",
+        mode: "chat",
+        providerId: "glm",
+        model: "glm-5",
+        webMode: "auto",
+        memoryMode: "off",
+        thinkingLevel: "standard",
+        toolAutonomy: "safe_auto",
+        capabilityProfile,
+      },
+      turnId: "turn-mcp-ctx-1",
+      toolName: "browser.navigate",
+      rawArgs: { url: "https://movieinsider.com/movies" },
+    });
+
+    expect(executed.record.status).toBe("executed");
+    expect(invokeMcpTool).toHaveBeenCalledTimes(1);
+    const options = invokeMcpTool.mock.calls[0]?.[1];
+    expect(options?.executionFence).toBeTypeOf("function");
+    // The context is the BRANDED handle built from the frozen profile record —
+    // readable only through the brand-checked reader, never a plain copy.
+    const context = readMcpRequesterScopedTurnContext(options?.mcpRequesterTurnContext);
+    expect(context).toEqual({
+      profileId: "chat-capability-profile-turn-mcp-ctx-1",
+      finalProfileSha256: profileHash,
+      turnId: "turn-mcp-ctx-1",
+      sessionId: "sess-mcp-ctx-1",
+      workspaceId: "workspace-1",
+      actorId: "operator-1",
+      actorSource: "token",
+      baseCallableCatalogSha256: callableHash,
+      finalCallableCatalogSha256: callableHash,
+      callableCatalogSnapshotId: "chat-cap-snap-ctx-1",
+      ...MCP_REQUESTER_COMPOSITION_STATIC_GENERATIONS,
+    });
+  });
+
+  it("omits the requester turn context when the turn has no capability profile (HX-415)", async () => {
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-remote-blocked-noctx-1",
+      result: {
+        url: "https://movieinsider.com/movies",
+        finalUrl: "https://movieinsider.com/movies",
+        status: 403,
+        title: "Attention Required! | Cloudflare",
+        textSnippet: "Sorry, you have been blocked. Cloudflare Ray ID.",
+      },
+    });
+    const invokeMcpTool = vi
+      .fn<
+        (
+          request: McpInvokeRequest,
+          options?: { executionFence?: () => void; mcpRequesterTurnContext?: unknown },
+        ) => Promise<McpInvokeResponse>
+      >()
+      .mockResolvedValueOnce({
+        ok: true,
+        output: {
+          structuredContent: {
+            url: "https://www.imdb.com/calendar/",
+            finalUrl: "https://www.imdb.com/calendar/",
+            status: 200,
+            title: "IMDb Release Calendar",
+            textSnippet: "Upcoming movies this week.",
+          },
+        },
+      });
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.navigate"]),
+      createChatCompletion: vi.fn(),
+      invokeTool,
+      invokeMcpTool,
+      listMcpBrowserFallbackTargets: () => [
+        {
+          serverId: "srv-playwright",
+          label: "Playwright MCP",
+          tier: "playwright_mcp",
+          navigateToolName: "browser.navigate",
+          extractToolName: "browser.extract",
+        },
+      ],
+    });
+
+    await (
+      orchestrator as unknown as {
+        executeToolCall(input: {
+          input: Record<string, unknown>;
+          turnId: string;
+          toolName: string;
+          rawArgs: Record<string, unknown>;
+        }): Promise<{ record: ChatToolRunRecord }>;
+      }
+    ).executeToolCall({
+      input: {
+        sessionId: "sess-mcp-noctx-1",
+        content: "What movies are coming out this week?",
+        mode: "chat",
+        providerId: "glm",
+        model: "glm-5",
+        webMode: "auto",
+        memoryMode: "off",
+        thinkingLevel: "standard",
+        toolAutonomy: "safe_auto",
+      },
+      turnId: "turn-mcp-noctx-1",
+      toolName: "browser.navigate",
+      rawArgs: { url: "https://movieinsider.com/movies" },
+    });
+
+    expect(invokeMcpTool).toHaveBeenCalledTimes(1);
+    const options = invokeMcpTool.mock.calls[0]?.[1];
+    expect(options && "mcpRequesterTurnContext" in options).toBe(false);
   });
 
   it("stops MCP browser fallback tiers when the turn budget expires mid-fallback", async () => {
@@ -7152,7 +7373,9 @@ describe("ChatTurnAgentRunner browser fallback behavior", () => {
     // The completion was called with the signal present.
     expect(createChatCompletion.mock.calls.length).toBeGreaterThanOrEqual(1);
     const firstCall = createChatCompletion.mock.calls[0]?.[0] as ChatCompletionRequest | undefined;
-    expect(firstCall?.signal).toBe(controller.signal);
+    expect(firstCall?.signal).toBeDefined();
+    expect(firstCall?.signal?.aborted).toBe(true);
+    expect(firstCall?.signal?.reason).toBe(controller.signal.reason);
     // Turn should be cancelled since the signal was aborted.
     expect(result.turnTrace.status).toBe("cancelled");
   });

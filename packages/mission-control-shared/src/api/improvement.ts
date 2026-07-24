@@ -13,6 +13,8 @@ import type {
   ImprovementCandidateLifecycleInput,
   ImprovementCandidateLifecycleResult,
   ImprovementCandidateRecord,
+  ImprovementLifecycleOperationKind,
+  ImprovementLifecycleTargetKind,
   ImprovementSignalRecord,
   RepairCandidateRecord,
   ReplayDiffSummary,
@@ -28,6 +30,31 @@ export type {
   ImprovementCandidateLifecycleInput,
   ImprovementCandidateLifecycleResult,
 };
+
+/**
+ * HX-402 P3: the pending `improvement.lifecycle` approval envelope returned by
+ * the approval-first activation/pause/rollback request routes. The request
+ * never mutates — the recovered approval effect applies the operation later
+ * through the durable intent/claim/inspection/settlement state machine.
+ */
+export interface ImprovementLifecyclePendingApproval {
+  approvalId: string;
+  status: "pending" | "approved" | "rejected" | "expired" | "edited";
+  kind: "improvement.lifecycle";
+  operationKind: ImprovementLifecycleOperationKind;
+  targetKind: ImprovementLifecycleTargetKind;
+  targetId: string;
+  workspaceId: string;
+  requestSha256: string;
+  expectedStateSha256: string;
+  expiresAt?: string;
+  createdAt: string;
+  replayed: boolean;
+}
+
+export type ImprovementLifecycleRequestOutcome =
+  | { pendingApproval: ImprovementLifecyclePendingApproval }
+  | { pendingApproval: null; noMutationRequired: true; activation: ImprovementActivationRecord };
 
 export async function fetchImprovementReports(limit = 24): Promise<{ items: WeeklyImprovementReportRecord[] }> {
   return request<{ items: WeeklyImprovementReportRecord[] }>(
@@ -171,12 +198,15 @@ export async function promoteImprovementCandidate(
   return runImprovementCandidateLifecycleAction(candidateId, "promote", input);
 }
 
-export async function requestImprovementActivation(candidateId: string): Promise<ImprovementActivationRecord> {
-  return request<ImprovementActivationRecord>(
+export async function requestImprovementActivation(
+  candidateId: string,
+  input?: { actorId?: string },
+): Promise<{ pendingApproval: ImprovementLifecyclePendingApproval }> {
+  return request<{ pendingApproval: ImprovementLifecyclePendingApproval }>(
     `/api/v1/improvement/candidates/${encodeURIComponent(candidateId)}/activation-request`,
     {
       method: "POST",
-      body: JSON.stringify({}),
+      body: JSON.stringify(input ?? {}),
     },
   );
 }
@@ -185,22 +215,28 @@ export async function fetchImprovementActivation(activationId: string): Promise<
   return request<ImprovementActivationRecord>(`/api/v1/improvement/activations/${encodeURIComponent(activationId)}`);
 }
 
-export async function pauseImprovementActivation(activationId: string): Promise<ImprovementActivationRecord> {
-  return request<ImprovementActivationRecord>(
+export async function pauseImprovementActivation(
+  activationId: string,
+  input?: { actorId?: string },
+): Promise<ImprovementLifecycleRequestOutcome> {
+  return request<ImprovementLifecycleRequestOutcome>(
     `/api/v1/improvement/activations/${encodeURIComponent(activationId)}/pause`,
     {
       method: "POST",
-      body: JSON.stringify({}),
+      body: JSON.stringify(input ?? {}),
     },
   );
 }
 
-export async function rollbackImprovementActivation(activationId: string): Promise<ImprovementActivationRecord> {
-  return request<ImprovementActivationRecord>(
+export async function rollbackImprovementActivation(
+  activationId: string,
+  input?: { actorId?: string },
+): Promise<ImprovementLifecycleRequestOutcome> {
+  return request<ImprovementLifecycleRequestOutcome>(
     `/api/v1/improvement/activations/${encodeURIComponent(activationId)}/rollback`,
     {
       method: "POST",
-      body: JSON.stringify({}),
+      body: JSON.stringify(input ?? {}),
     },
   );
 }

@@ -18,7 +18,18 @@ export interface UsageInput {
 export class TokenCostLedger {
   public constructor(private readonly repo: CostLedgerRepository) {}
 
-  public record(input: UsageInput): void {
+  public record(input: UsageInput): boolean {
+    const knownMetrics = [
+      input.tokenInput === undefined ? undefined : "input",
+      input.tokenOutput === undefined ? undefined : "output",
+      input.tokenCachedInput === undefined ? undefined : "cached",
+      input.costUsd === undefined ? undefined : "cost",
+    ].filter((metric): metric is string => metric !== undefined);
+    const hasUsageEvidence =
+      knownMetrics.length > 0 || Boolean(input.providerId || input.modelId || input.credentialType || input.usagePool);
+    if (!hasUsageEvidence) {
+      return false;
+    }
     this.repo.insert({
       sessionId: input.sessionId,
       agentId: input.agentId,
@@ -32,6 +43,8 @@ export class TokenCostLedger {
       tokenCachedInput: input.tokenCachedInput ?? 0,
       costUsd: input.costUsd ?? 0,
       createdAt: input.timestamp,
+      usageKnownMask: knownMetrics.join(","),
     });
+    return true;
   }
 }

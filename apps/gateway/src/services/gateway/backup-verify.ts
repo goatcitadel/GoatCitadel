@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import type {
   BackupManifestContractCoverageRecord,
   BackupManifestRecord,
@@ -11,6 +13,48 @@ import type {
 } from "@goatcitadel/contracts";
 
 export async function verifyBackupAtPath(backupPath: string): Promise<BackupVerifyResponse> {
+  const resolvedBackupPath = path.resolve(backupPath);
+  const materializationRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-backup-verify-"));
+  const materializedBackupPath = path.join(materializationRoot, "backup");
+  try {
+    await fs.cp(resolvedBackupPath, materializedBackupPath, {
+      recursive: true,
+      force: false,
+      errorOnExist: true,
+    });
+  } catch (error) {
+    await fs.rm(materializationRoot, { recursive: true, force: true }).catch(() => undefined);
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return verifyMaterializedBackupAtPath(resolvedBackupPath, resolvedBackupPath);
+    }
+    const issues: BackupVerifyIssue[] = [
+      {
+        code: "backup_materialization_failed",
+        message: `Backup could not be copied into a private verification snapshot: ${(error as Error).message}`,
+        path: resolvedBackupPath,
+      },
+    ];
+    return {
+      backupPath: resolvedBackupPath,
+      verified: false,
+      contractVerified: false,
+      filesVerified: 0,
+      issues,
+      contractCoverage: buildBackupVerifyContractCoverage(undefined, new Set(), issues),
+    };
+  }
+
+  try {
+    return await verifyMaterializedBackupAtPath(materializedBackupPath, resolvedBackupPath);
+  } finally {
+    await fs.rm(materializationRoot, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+async function verifyMaterializedBackupAtPath(
+  backupPath: string,
+  reportedBackupPath: string,
+): Promise<BackupVerifyResponse> {
   const resolvedBackupPath = path.resolve(backupPath);
   const issues: BackupVerifyIssue[] = [];
   const manifestPath = path.join(resolvedBackupPath, "manifest.json");
@@ -34,6 +78,7 @@ export async function verifyBackupAtPath(backupPath: string): Promise<BackupVeri
 
   if (manifest) {
     const seenPaths = new Set<string>();
+    const seenWindowsPaths = new Set<string>();
     for (const file of manifest.files) {
       const normalizedPath = normalizeBackupRelativePath(file.path);
       if (!normalizedPath) {
@@ -53,6 +98,16 @@ export async function verifyBackupAtPath(backupPath: string): Promise<BackupVeri
         continue;
       }
       seenPaths.add(normalizedPath);
+      const windowsPathKey = toWindowsBackupPathKey(normalizedPath);
+      if (seenWindowsPaths.has(windowsPathKey)) {
+        issues.push({
+          code: "manifest_duplicate_path",
+          message: `Manifest contains paths that resolve to the same target on Windows: ${normalizedPath}`,
+          path: normalizedPath,
+        });
+        continue;
+      }
+      seenWindowsPaths.add(windowsPathKey);
 
       const fullPath = path.join(payloadDir, normalizedPath);
       ensurePathWithinRoot(fullPath, payloadDir);
@@ -95,6 +150,8 @@ export async function verifyBackupAtPath(backupPath: string): Promise<BackupVeri
         path: extraPath,
       });
     }
+
+    verifySqlitePayloads(payloadDir, manifest, payloadVerifiedPaths, issues);
   }
 
   const contractCoverage = buildBackupVerifyContractCoverage(manifest, payloadVerifiedPaths, issues);
@@ -103,7 +160,7 @@ export async function verifyBackupAtPath(backupPath: string): Promise<BackupVeri
     verified && allContractSectionsVerified(contractCoverage) && !contractCoverage.legacyManifest;
 
   return {
-    backupPath: resolvedBackupPath,
+    backupPath: reportedBackupPath,
     backupId: manifest?.backupId,
     verified,
     contractVerified,
@@ -112,6 +169,94 @@ export async function verifyBackupAtPath(backupPath: string): Promise<BackupVeri
     manifest,
     contractCoverage,
   };
+}
+
+function verifySqlitePayloads(
+  payloadDir: string,
+  manifest: BackupManifestRecord,
+  payloadVerifiedPaths: Set<string>,
+  issues: BackupVerifyIssue[],
+): void {
+  const sqlitePaths = new Set<string>();
+  // `data/index.db` is the canonical pre-contract/legacy SQLite path. Newer
+  // manifests declare database paths explicitly, which avoids treating an
+  // unrelated *.db file under config as the runtime database.
+  for (const file of manifest.files) {
+    const normalizedPath = normalizeBackupRelativePath(file.path);
+    if (normalizedPath && isWindowsEquivalentBackupPath(normalizedPath, "data/index.db")) {
+      sqlitePaths.add(normalizedPath);
+    }
+  }
+  for (const databasePath of manifest.contractCoverage?.minimumSet.databasePaths ?? []) {
+    if (isSqliteDatabasePath(databasePath)) {
+      sqlitePaths.add(databasePath);
+    }
+  }
+
+  for (const databasePath of sqlitePaths) {
+    if (!payloadVerifiedPaths.has(databasePath)) {
+      continue;
+    }
+
+    const fullPath = path.join(payloadDir, databasePath);
+    ensurePathWithinRoot(fullPath, payloadDir);
+    if (!verifySqliteDatabaseAtPath(fullPath, databasePath, issues)) {
+      // Contract coverage must not describe a database as verified when only
+      // its byte length/hash passed but SQLite itself rejected the snapshot.
+      payloadVerifiedPaths.delete(databasePath);
+    }
+  }
+}
+
+function verifySqliteDatabaseAtPath(fullPath: string, relativePath: string, issues: BackupVerifyIssue[]): boolean {
+  let db: DatabaseSync | undefined;
+  try {
+    db = new DatabaseSync(fullPath, { readOnly: true });
+    const integrityRows = db.prepare("PRAGMA integrity_check;").all() as Array<Record<string, unknown>>;
+    const integrityMessages = integrityRows.map((row) => String(Object.values(row)[0] ?? ""));
+    if (integrityMessages.length === 0 || integrityMessages.some((message) => message.toLowerCase() !== "ok")) {
+      issues.push({
+        code: "sqlite_integrity_check_failed",
+        message: `SQLite integrity_check failed: ${summarizeSqliteMessages(integrityMessages)}`,
+        path: relativePath,
+      });
+      return false;
+    }
+
+    const foreignKeyViolation = db.prepare("PRAGMA foreign_key_check;").get() as Record<string, unknown> | undefined;
+    if (foreignKeyViolation) {
+      const table = String(foreignKeyViolation.table ?? "unknown");
+      const rowId = String(foreignKeyViolation.rowid ?? "unknown");
+      issues.push({
+        code: "sqlite_foreign_key_check_failed",
+        message: `SQLite foreign_key_check found a violation in table ${table} at row ${rowId}.`,
+        path: relativePath,
+      });
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    issues.push({
+      code: "sqlite_integrity_check_failed",
+      message: `SQLite integrity verification could not read the database: ${(error as Error).message}`,
+      path: relativePath,
+    });
+    return false;
+  } finally {
+    db?.close();
+  }
+}
+
+function isSqliteDatabasePath(filePath: string): boolean {
+  return /(?:^|\/)[^/]+\.(?:db|sqlite|sqlite3)$/i.test(filePath);
+}
+
+function summarizeSqliteMessages(messages: string[]): string {
+  if (messages.length === 0) {
+    return "no result returned";
+  }
+  return messages.slice(0, 3).join("; ");
 }
 
 function parseBackupManifest(raw: string, issues: BackupVerifyIssue[]): BackupManifestRecord | undefined {
@@ -169,8 +314,28 @@ function parseBackupManifest(raw: string, issues: BackupVerifyIssue[]): BackupMa
       });
       continue;
     }
+    const normalizedPath = normalizeBackupRelativePath(entry.path);
+    if (!normalizedPath) {
+      issues.push({
+        code: "manifest_invalid_path",
+        message: `Manifest file path is invalid: ${entry.path}`,
+        path: entry.path,
+      });
+      continue;
+    }
+    const reservedCanonicalPath = canonicalReservedBackupPath(normalizedPath);
+    if (reservedCanonicalPath && normalizedPath !== reservedCanonicalPath) {
+      issues.push({
+        code: "manifest_invalid_path",
+        message: `Manifest file path must use canonical spelling ${reservedCanonicalPath}: ${entry.path}`,
+        path: entry.path,
+      });
+      continue;
+    }
     files.push({
-      path: entry.path,
+      // Return the exact canonical path that verification used. Restore must
+      // never reinterpret raw separators differently from the verifier.
+      path: normalizedPath,
       sizeBytes: Math.max(0, Math.floor(entry.sizeBytes)),
       sha256: entry.sha256,
     });
@@ -404,6 +569,23 @@ function normalizeBackupRelativePath(input: string): string | undefined {
     return undefined;
   }
   return segments.join("/");
+}
+
+export function isWindowsEquivalentBackupPath(left: string, right: string): boolean {
+  return toWindowsBackupPathKey(left) === toWindowsBackupPathKey(right);
+}
+
+function canonicalReservedBackupPath(input: string): string | undefined {
+  for (const canonicalPath of ["data/index.db", "database/postgres.dump"] as const) {
+    if (isWindowsEquivalentBackupPath(input, canonicalPath)) {
+      return canonicalPath;
+    }
+  }
+  return undefined;
+}
+
+function toWindowsBackupPathKey(input: string): string {
+  return input.replaceAll("\\", "/").toLocaleLowerCase("en-US");
 }
 
 function ensurePathWithinRoot(targetPath: string, rootDir: string): void {

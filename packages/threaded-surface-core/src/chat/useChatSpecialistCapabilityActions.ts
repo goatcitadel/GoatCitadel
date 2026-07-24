@@ -19,6 +19,7 @@ import {
   fetchMcpTemplates,
   fetchSkills,
   installSkillImport,
+  isApiRequestError,
   updateChatSpecialistCandidate,
   updateSkillState,
 } from "@goatcitadel/mission-control-shared/api/client";
@@ -199,22 +200,44 @@ export function useChatSpecialistCapabilityActions(input: {
           if (!suggestion.candidateId) {
             throw new Error("This suggestion is missing the installed skill identifier.");
           }
-          const updated = await updateSkillState(suggestion.candidateId, {
+          const canonical = await fetchSkills();
+          setInstalledSkills(canonical.items);
+          const expectedRevision = readCanonicalSkillRevision(canonical.items, suggestion.candidateId);
+          // HX-402 P2: skill state changes are approval-first; this only
+          // requests one canonical skill.lifecycle approval.
+          const outcome = await updateSkillState(suggestion.candidateId, {
+            expectedRevision,
             state: "enabled",
             note: "Enabled from chat capability suggestion.",
           });
-          pushLocalNotice(`Enabled skill ${updated.skillId}. Resuming the original request now.`, "success");
+          if (outcome.pendingApproval) {
+            pushLocalNotice(
+              `Approval requested to enable skill ${suggestion.candidateId} (approval ${outcome.pendingApproval.approvalId}). Resolve it in Approvals, then retry your request.`,
+              "warning",
+            );
+            dismissCapabilitySuggestion(suggestion);
+            return;
+          }
+          pushLocalNotice(
+            `Skill ${suggestion.candidateId} is already enabled. Resuming the original request now.`,
+            "success",
+          );
           setInstalledSkills(await fetchSkills().then((result) => result.items));
           dismissCapabilitySuggestion(suggestion);
           await resumeCapabilitySuggestionTurn();
           return;
         }
 
-        if (suggestion.recommendedAction === "install_skill_disabled") {
+        if (
+          suggestion.recommendedAction === "install_skill_disabled" ||
+          suggestion.recommendedAction === "install_skill_enable"
+        ) {
           if (!suggestion.sourceRef) {
             throw new Error("This suggestion is missing the import source.");
           }
-          const installed = await installSkillImport({
+          // HX-402 P2: the legacy executable install is retired — the gateway
+          // validates and redirects into the governed Skill Hub review.
+          const redirected = await installSkillImport({
             sourceRef: suggestion.sourceRef,
             sourceProvider:
               suggestion.sourceProvider &&
@@ -224,46 +247,17 @@ export function useChatSpecialistCapabilityActions(input: {
                 : undefined,
             confirmHighRisk: suggestion.riskLevel === "high",
           });
+          const redirect = redirected?.redirect;
           pushLocalNotice(
-            installed.installedSkillId
-              ? `Installed ${installed.installedSkillId}. It remains disabled by default until you enable it.`
-              : "Installed the suggested skill. It remains disabled by default until you enable it.",
-            "success",
+            redirect?.eligible
+              ? `Validated the suggested skill. Installs are governed by the Skill Hub: review ${redirect.sourceRef} there and resolve its approval before it can run.`
+              : `Validated the suggested skill, but it cannot be installed: ${
+                  redirect?.ineligibleReason ?? "the source is not eligible for the governed Skill Hub review."
+                }`,
+            "warning",
           );
-          setInstalledSkills(await fetchSkills().then((result) => result.items));
           dismissCapabilitySuggestion(suggestion);
           window.location.hash = "skills";
-          return;
-        }
-
-        if (suggestion.recommendedAction === "install_skill_enable") {
-          if (!suggestion.sourceRef) {
-            throw new Error("This suggestion is missing the import source.");
-          }
-          const installed = await installSkillImport({
-            sourceRef: suggestion.sourceRef,
-            sourceProvider:
-              suggestion.sourceProvider &&
-              suggestion.sourceProvider !== "mcp_template" &&
-              suggestion.sourceProvider !== "code_mode"
-                ? suggestion.sourceProvider
-                : undefined,
-            confirmHighRisk: suggestion.riskLevel === "high",
-          });
-          if (!installed.installedSkillId) {
-            throw new Error("The skill installed, but GoatCitadel could not resolve its installed skill identifier.");
-          }
-          await updateSkillState(installed.installedSkillId, {
-            state: "enabled",
-            note: "Enabled immediately from chat capability suggestion.",
-          });
-          pushLocalNotice(
-            `Installed and enabled ${installed.installedSkillId}. Resuming the original request now.`,
-            "success",
-          );
-          setInstalledSkills(await fetchSkills().then((result) => result.items));
-          dismissCapabilitySuggestion(suggestion);
-          await resumeCapabilitySuggestionTurn();
           return;
         }
 
@@ -356,7 +350,28 @@ export function useChatSpecialistCapabilityActions(input: {
 
         throw new Error(`Unsupported capability action: ${suggestion.recommendedAction}`);
       } catch (err) {
-        setError((err as Error).message);
+        // HX-402 P2: install-and-enable no longer exists (the retired install
+        // redirects into the governed Skill Hub), so the only conflicted
+        // subject is the enable_skill candidate itself.
+        if (isSkillWriteConflict(err)) {
+          const conflictedSkillId = suggestion.candidateId;
+          if (conflictedSkillId) {
+            try {
+              const refreshed = await fetchSkills();
+              setInstalledSkills(refreshed.items);
+            } catch (refreshError) {
+              setError(
+                `Skill ${conflictedSkillId} changed elsewhere and the canonical refresh failed: ${errorMessage(refreshError)} No update or turn retry was replayed; retry explicitly.`,
+              );
+              return;
+            }
+          }
+          setError(
+            `Skill ${conflictedSkillId ?? "state"} changed elsewhere. Canonical skills were refreshed; no update or turn retry was replayed. Review the refreshed state and retry explicitly.`,
+          );
+          return;
+        }
+        setError(errorMessage(err));
       }
     },
     [
@@ -414,6 +429,29 @@ export function useChatSpecialistCapabilityActions(input: {
     handleCapabilitySuggestionAction,
     confirmCapabilitySuggestionAction,
   };
+}
+
+function readCanonicalSkillRevision(items: SkillListItem[], skillId: string): number {
+  const revision = items.find((item) => item.skillId === skillId)?.revision;
+  if (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 1) {
+    throw new Error(`Skill ${skillId} is missing a positive canonical revision. Refresh skills and retry explicitly.`);
+  }
+  return revision;
+}
+
+function isSkillWriteConflict(error: unknown): boolean {
+  if (!isApiRequestError(error) || error.status !== 409 || !isRecord(error.body)) {
+    return false;
+  }
+  return error.body.code === "WRITE_CONFLICT";
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 const CODE_MODE_CAPABILITY_CANDIDATE_SOURCE = `

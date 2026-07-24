@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DiscordPairingRecord, IntegrationConnection } from "@goatcitadel/contracts";
 import { DiscordRuntimeService, __discordRuntimeServiceInternals } from "./discord-runtime-service.js";
+import { SharedHostLifecycleService } from "./shared-host-lifecycle-service.js";
 
 function createConnection(config: Record<string, unknown> = {}): IntegrationConnection {
   return {
@@ -36,7 +37,8 @@ function createService(overrides: Partial<ConstructorParameters<typeof DiscordRu
     },
     touchPairing: () => {},
     onInboundMessage: vi.fn(),
-    onSlashCommand: vi.fn(async () => "ok"),
+    acceptSlashCommand: vi.fn(async () => ({ inboundEventId: "inbound-command-1" })),
+    awaitSlashCommandResult: vi.fn(async () => "ok"),
     listModelSuggestions: async () => [],
     publishDiagnostic: () => {},
     ...overrides,
@@ -59,11 +61,199 @@ function createPairingRecord(overrides: Partial<DiscordPairingRecord> = {}): Dis
 describe("DiscordRuntimeService", () => {
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
-  it("marks accepted guild messages as seen and keeps typing while the inbound turn runs", async () => {
-    vi.useFakeTimers();
+  it("rejects Discord ingress before connection or pairing side effects once drain begins", async () => {
+    const lifecycle = new SharedHostLifecycleService({ enabled: true });
+    lifecycle.markAccepting();
+    await lifecycle.drain({ mode: "pause", timeoutMs: 10, reason: "scale_down", actorId: "ops" });
+    const work = vi.fn(async () => undefined);
+    const service = createService({ sharedHostLifecycle: lifecycle });
 
+    await expect((service as any).runInboundWork("discord-message", work)).rejects.toMatchObject({
+      code: "SHARED_HOST_ADMISSION_CLOSED",
+      lifecycleState: "quiesced",
+    });
+    expect(work).not.toHaveBeenCalled();
+    expect(lifecycle.snapshot()).toMatchObject({ activeCount: 0 });
+  });
+
+  it("keeps a new-runtime login reservation active until the unresolved network login settles", async () => {
+    const lifecycle = new SharedHostLifecycleService({ enabled: true });
+    lifecycle.markAccepting();
+    const loginGate = deferred<string>();
+    const login = vi.fn(() => loginGate.promise);
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const connection = createConnection({ botToken: "token-login", guilds: {} });
+    const service = createService({
+      listConnections: () => [connection],
+      sharedHostLifecycle: lifecycle,
+    });
+    const runtime: any = {
+      token: "token-login",
+      client: { login, destroy },
+      connectionIds: new Set([connection.connectionId]),
+      active: true,
+      guildIds: [],
+      ready: false,
+    };
+    vi.spyOn(service as any, "createManagedRuntime").mockReturnValue(runtime);
+
+    await service.sync();
+    await vi.waitFor(() => expect(login).toHaveBeenCalledWith("token-login"));
+    expect(lifecycle.snapshot()).toMatchObject({ activeCount: 1, activeByKind: { worker: 1 } });
+
+    let drainSettled = false;
+    const drainPromise = lifecycle
+      .drain({ mode: "pause", timeoutMs: 1_000, reason: "scale_down", actorId: "ops" })
+      .then((result) => {
+        drainSettled = true;
+        return result;
+      });
+    await Promise.resolve();
+
+    expect(drainSettled).toBe(false);
+    expect(lifecycle.snapshot()).toMatchObject({ state: "draining", activeCount: 1 });
+
+    loginGate.resolve("token-login");
+    await expect(drainPromise).resolves.toMatchObject({ outcome: "quiesced" });
+    expect(lifecycle.snapshot()).toMatchObject({ state: "quiesced", activeCount: 0 });
+    await service.close();
+  });
+
+  it("individually admits and tracks command sync for an existing ready runtime", async () => {
+    const lifecycle = new SharedHostLifecycleService({ enabled: true });
+    lifecycle.markAccepting();
+    const commandGate = deferred<void>();
+    const setCommands = vi.fn(() => commandGate.promise);
+    const connection = createConnection({ botToken: "token-command", guilds: {} });
+    const service = createService({
+      listConnections: () => [connection],
+      sharedHostLifecycle: lifecycle,
+    });
+    const runtime: any = {
+      token: "token-command",
+      client: {
+        application: { commands: { set: setCommands } },
+        guilds: { cache: new Map(), fetch: vi.fn() },
+        destroy: vi.fn().mockResolvedValue(undefined),
+      },
+      connectionIds: new Set([connection.connectionId]),
+      active: true,
+      guildIds: [],
+      ready: true,
+    };
+    (service as any).runtimesByToken.set(runtime.token, runtime);
+
+    await service.sync();
+    await vi.waitFor(() => expect(setCommands).toHaveBeenCalledTimes(1));
+    expect(lifecycle.snapshot()).toMatchObject({ activeCount: 1, activeByKind: { worker: 1 } });
+
+    commandGate.resolve(undefined);
+    await runtime.commandSyncTask;
+
+    expect(lifecycle.snapshot()).toMatchObject({ activeCount: 0, activeByKind: { worker: 0 } });
+    await service.close();
+  });
+
+  it("force-closes with unresolved clientReady command sync and suppresses every late ready callback", async () => {
+    const lifecycle = new SharedHostLifecycleService({ enabled: true });
+    lifecycle.markAccepting();
+    const commandGate = deferred<void>();
+    const setCommands = vi.fn(() => commandGate.promise);
+    const publishDiagnostic = vi.fn();
+    const connection = createConnection({ botToken: "token-ready", guilds: { guild_1: {} } });
+    const service = createService({
+      listConnections: () => [connection],
+      publishDiagnostic,
+      sharedHostLifecycle: lifecycle,
+    });
+    const runtime: any = (service as any).createManagedRuntime("token-ready", [connection]);
+    runtime.client.application = { commands: { set: setCommands } };
+    const destroy = vi.spyOn(runtime.client, "destroy").mockResolvedValue(undefined);
+    const fetchGuild = vi.spyOn(runtime.client.guilds, "fetch");
+    (service as any).runtimesByToken.set(runtime.token, runtime);
+    (service as any).updateStatusSnapshot(runtime);
+
+    runtime.client.emit("clientReady", runtime.client);
+    await vi.waitFor(() => expect(setCommands).toHaveBeenCalledTimes(1));
+    expect(lifecycle.snapshot()).toMatchObject({ activeCount: 1, activeByKind: { worker: 1 } });
+
+    const drain = await lifecycle.drain({ mode: "force", timeoutMs: 10, reason: "deploy", actorId: "ops" });
+    expect(drain).toMatchObject({ outcome: "closing", snapshot: { state: "closing", activeCount: 1 } });
+
+    let closeSettled = false;
+    const closePromise = service.close().then(() => {
+      closeSettled = true;
+    });
+    runtime.client.emit("clientReady", runtime.client);
+    await Promise.resolve();
+
+    expect(closeSettled).toBe(false);
+    expect(setCommands).toHaveBeenCalledTimes(1);
+    expect(publishDiagnostic).toHaveBeenCalledTimes(1);
+
+    commandGate.resolve(undefined);
+    await closePromise;
+
+    expect(lifecycle.snapshot()).toMatchObject({ state: "closing", activeCount: 0 });
+    expect(fetchGuild).not.toHaveBeenCalled();
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(publishDiagnostic).toHaveBeenCalledTimes(1);
+    expect(service.getConnectionStatus(connection.connectionId)).toBeUndefined();
+
+    runtime.client.emit("clientReady", runtime.client);
+    await Promise.resolve();
+    expect(setCommands).toHaveBeenCalledTimes(1);
+    expect(publishDiagnostic).toHaveBeenCalledTimes(1);
+  });
+
+  it("observes tracked login rejection without an unhandled promise or leaked reservation", async () => {
+    const lifecycle = new SharedHostLifecycleService({ enabled: true });
+    lifecycle.markAccepting();
+    const loginGate = deferred<string>();
+    const connection = createConnection({ botToken: "token-reject", guilds: {} });
+    const service = createService({
+      listConnections: () => [connection],
+      sharedHostLifecycle: lifecycle,
+    });
+    const runtime: any = {
+      token: "token-reject",
+      client: {
+        login: vi.fn(() => loginGate.promise),
+        destroy: vi.fn().mockResolvedValue(undefined),
+      },
+      connectionIds: new Set([connection.connectionId]),
+      active: true,
+      guildIds: [],
+      ready: false,
+    };
+    vi.spyOn(service as any, "createManagedRuntime").mockReturnValue(runtime);
+    const unhandledRejection = vi.fn();
+    process.on("unhandledRejection", unhandledRejection);
+
+    try {
+      await service.sync();
+      await vi.waitFor(() => expect(runtime.client.login).toHaveBeenCalledTimes(1));
+      const trackedTask = runtime.loginTask;
+      loginGate.reject(new Error("Discord login rejected"));
+      await trackedTask;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(unhandledRejection).not.toHaveBeenCalled();
+      expect(service.getConnectionStatus(connection.connectionId)).toMatchObject({
+        ready: false,
+        lastError: "Discord login rejected",
+      });
+      expect(lifecycle.snapshot()).toMatchObject({ activeCount: 0, activeByKind: { worker: 0 } });
+    } finally {
+      process.off("unhandledRejection", unhandledRejection);
+      await service.close();
+    }
+  });
+
+  it("commits accepted guild messages before emitting provider-visible reactions", async () => {
     let resolveInbound: (() => void) | undefined;
     const onInboundMessage = vi.fn(
       () =>
@@ -79,7 +269,8 @@ describe("DiscordRuntimeService", () => {
       },
       touchPairing: () => {},
       onInboundMessage,
-      onSlashCommand: async () => "ok",
+      acceptSlashCommand: vi.fn(async () => ({ inboundEventId: "inbound-command-1" })),
+      awaitSlashCommandResult: async () => "ok",
       listModelSuggestions: async () => [],
       publishDiagnostic: () => {},
     });
@@ -117,10 +308,8 @@ describe("DiscordRuntimeService", () => {
     } as any;
 
     const handledPromise = (service as any).tryHandleMessageForConnection(runtime, createConnection(), message);
-    await vi.advanceTimersByTimeAsync(0);
+    await Promise.resolve();
 
-    expect(react).toHaveBeenCalledWith("👀");
-    expect(sendTyping).toHaveBeenCalledTimes(1);
     expect(onInboundMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         connectionId: "11111111-1111-1111-1111-111111111111",
@@ -130,16 +319,24 @@ describe("DiscordRuntimeService", () => {
         sourceMessageId: "msg_1",
       }),
     );
-
-    await vi.advanceTimersByTimeAsync(8_000);
-    expect(sendTyping).toHaveBeenCalledTimes(2);
+    expect(react).not.toHaveBeenCalled();
+    expect(sendTyping).not.toHaveBeenCalled();
 
     resolveInbound?.();
     await handledPromise;
+    expect(react).toHaveBeenCalledWith("👀");
   });
 
-  it("handles guild slash commands and routes them through the chat command callback", async () => {
-    const onSlashCommand = vi.fn().mockResolvedValue("Mode set to gpt-5.4.");
+  it("durably accepts guild slash commands before deferring the interaction", async () => {
+    const order: string[] = [];
+    const acceptSlashCommand = vi.fn(async () => {
+      order.push("accepted");
+      return { inboundEventId: "inbound-interaction-1" };
+    });
+    const awaitSlashCommandResult = vi.fn(async () => {
+      order.push("executed");
+      return "Mode set to gpt-5.4.";
+    });
     const service = new DiscordRuntimeService({
       listConnections: () => [],
       findApprovedPairing: () => undefined,
@@ -148,13 +345,18 @@ describe("DiscordRuntimeService", () => {
       },
       touchPairing: () => {},
       onInboundMessage: vi.fn(),
-      onSlashCommand,
+      acceptSlashCommand,
+      awaitSlashCommandResult,
       listModelSuggestions: async () => [],
       publishDiagnostic: () => {},
     });
 
-    const reply = vi.fn().mockResolvedValue(undefined);
-    const editReply = vi.fn().mockResolvedValue(undefined);
+    const reply = vi.fn(async () => {
+      order.push("deferred");
+    });
+    const editReply = vi.fn(async () => {
+      order.push("replied");
+    });
     const interaction = {
       inGuild: () => true,
       guildId: "guild_1",
@@ -187,16 +389,12 @@ describe("DiscordRuntimeService", () => {
     const handled = await (service as any).tryHandleInteractionForConnection(runtime, createConnection(), interaction);
 
     expect(handled).toBe(true);
-    expect(reply).toHaveBeenCalledWith({ ephemeral: true });
-    expect(onSlashCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        connectionId: "11111111-1111-1111-1111-111111111111",
-        target: "channel_1",
-        actorId: "user_1",
-        commandText: "/model gpt-5.4",
-        sourceCommandId: "interaction_1",
-      }),
+    expect(order).toEqual(["accepted", "deferred", "executed", "replied"]);
+    expect(acceptSlashCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceCommandId: "interaction_1", commandText: "/model gpt-5.4" }),
     );
+    expect(reply).toHaveBeenCalledWith({ ephemeral: true });
+    expect(awaitSlashCommandResult).toHaveBeenCalledWith("inbound-interaction-1");
     expect(editReply).toHaveBeenCalledWith({ content: "Mode set to gpt-5.4." });
   });
 
@@ -248,7 +446,8 @@ describe("DiscordRuntimeService", () => {
       },
       touchPairing: () => {},
       onInboundMessage: vi.fn(),
-      onSlashCommand: vi.fn(),
+      acceptSlashCommand: vi.fn(async () => ({ inboundEventId: "inbound-command-1" })),
+      awaitSlashCommandResult: vi.fn(),
       listModelSuggestions,
       publishDiagnostic: () => {},
     });
@@ -323,7 +522,7 @@ describe("DiscordRuntimeService", () => {
     expect(handled).toBe(true);
     expect(touchPairing).toHaveBeenCalledWith("pairing_1");
     expect(react).toHaveBeenCalledWith("👀");
-    expect(sendTyping).toHaveBeenCalledTimes(1);
+    expect(sendTyping).not.toHaveBeenCalled();
     expect(send).not.toHaveBeenCalled();
     expect(onInboundMessage).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -460,7 +659,8 @@ describe("DiscordRuntimeService", () => {
   });
 
   it("routes approved Discord DM slash commands and touches the pairing", async () => {
-    const onSlashCommand = vi.fn().mockResolvedValue("Mode set to gpt-5.4.");
+    const acceptSlashCommand = vi.fn().mockResolvedValue({ inboundEventId: "inbound-dm-1" });
+    const awaitSlashCommandResult = vi.fn().mockResolvedValue("Mode set to gpt-5.4.");
     const touchPairing = vi.fn();
     const service = createService({
       findApprovedPairing: () =>
@@ -468,7 +668,8 @@ describe("DiscordRuntimeService", () => {
           status: "approved",
         }),
       touchPairing,
-      onSlashCommand,
+      acceptSlashCommand,
+      awaitSlashCommandResult,
     });
 
     const deferReply = vi.fn().mockResolvedValue(undefined);
@@ -500,7 +701,7 @@ describe("DiscordRuntimeService", () => {
     expect(handled).toBe(true);
     expect(touchPairing).toHaveBeenCalledWith("pairing_1");
     expect(deferReply).toHaveBeenCalledWith({ ephemeral: false });
-    expect(onSlashCommand).toHaveBeenCalledWith(
+    expect(acceptSlashCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         actorId: "user_1",
         target: "dm_1",
@@ -511,14 +712,16 @@ describe("DiscordRuntimeService", () => {
         }),
       }),
     );
+    expect(awaitSlashCommandResult).toHaveBeenCalledWith("inbound-dm-1");
     expect(editReply).toHaveBeenCalledWith({ content: "Mode set to gpt-5.4." });
   });
 
   it("normalizes Discord approval slash commands as remote action tokens", async () => {
-    const onSlashCommand = vi.fn().mockResolvedValue("Approved approval-1.");
+    const acceptSlashCommand = vi.fn().mockResolvedValue({ inboundEventId: "inbound-approval-1" });
     const service = createService({
       findApprovedPairing: () => createPairingRecord({ status: "approved" }),
-      onSlashCommand,
+      acceptSlashCommand,
+      awaitSlashCommandResult: vi.fn().mockResolvedValue("Approved approval-1."),
     });
 
     const interaction = {
@@ -543,7 +746,7 @@ describe("DiscordRuntimeService", () => {
 
     await (service as any).handleDirectCommand({} as any, createConnection(), interaction);
 
-    expect(onSlashCommand).toHaveBeenCalledWith(
+    expect(acceptSlashCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         commandText: "/approve grat_secret",
       }),
@@ -551,10 +754,11 @@ describe("DiscordRuntimeService", () => {
   });
 
   it("normalizes Discord run details slash commands", async () => {
-    const onSlashCommand = vi.fn().mockResolvedValue("Run details.");
+    const acceptSlashCommand = vi.fn().mockResolvedValue({ inboundEventId: "inbound-run-details-1" });
     const service = createService({
       findApprovedPairing: () => createPairingRecord({ status: "approved" }),
-      onSlashCommand,
+      acceptSlashCommand,
+      awaitSlashCommandResult: vi.fn().mockResolvedValue("Run details."),
     });
 
     const interaction = {
@@ -580,7 +784,7 @@ describe("DiscordRuntimeService", () => {
 
     await (service as any).handleDirectCommand({} as any, createConnection(), interaction);
 
-    expect(onSlashCommand).toHaveBeenCalledWith(
+    expect(acceptSlashCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         commandText: "/run details durable-run-1",
       }),
@@ -628,9 +832,9 @@ describe("DiscordRuntimeService", () => {
   });
 
   it("ignores Discord DM slash commands when inbound DM policy is disabled", async () => {
-    const onSlashCommand = vi.fn().mockResolvedValue("should not run");
+    const acceptSlashCommand = vi.fn().mockResolvedValue({ inboundEventId: "should-not-run" });
     const service = createService({
-      onSlashCommand,
+      acceptSlashCommand,
     });
 
     const interaction = {
@@ -660,7 +864,7 @@ describe("DiscordRuntimeService", () => {
     );
 
     expect(handled).toBe(false);
-    expect(onSlashCommand).not.toHaveBeenCalled();
+    expect(acceptSlashCommand).not.toHaveBeenCalled();
     expect(interaction.reply).not.toHaveBeenCalled();
     expect(interaction.editReply).not.toHaveBeenCalled();
   });
@@ -781,6 +985,7 @@ describe("DiscordRuntimeService", () => {
         destroy,
       },
       connectionIds: new Set(["11111111-1111-1111-1111-111111111111"]),
+      active: true,
       guildIds: ["guild_1"],
       ready: true,
       connectedBotTag: "GoatBot#1234",
@@ -806,6 +1011,270 @@ describe("DiscordRuntimeService", () => {
       guildIds: ["guild_1"],
     });
     expect(status?.lastReconnectAt).toMatch(/^20/);
+  });
+
+  it("reconnects the existing client without duplicating Discord event handlers", async () => {
+    const connection = createConnection({ botToken: "token-handlers", guilds: {} });
+    const service = createService({ listConnections: () => [connection] });
+    const runtime: any = (service as any).createManagedRuntime("token-handlers", [connection]);
+    const destroy = vi.spyOn(runtime.client, "destroy").mockResolvedValue(undefined);
+    const login = vi.spyOn(runtime.client, "login").mockResolvedValue("token-handlers");
+    (service as any).runtimesByToken.set(runtime.token, runtime);
+    (service as any).updateStatusSnapshot(runtime);
+    const before = {
+      clientReady: runtime.client.listenerCount("clientReady"),
+      messageCreate: runtime.client.listenerCount("messageCreate"),
+      interactionCreate: runtime.client.listenerCount("interactionCreate"),
+    };
+
+    await service.reconnectConnection(connection.connectionId);
+
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(login).toHaveBeenCalledTimes(1);
+    expect(before).toEqual({ clientReady: 1, messageCreate: 1, interactionCreate: 1 });
+    expect({
+      clientReady: runtime.client.listenerCount("clientReady"),
+      messageCreate: runtime.client.listenerCount("messageCreate"),
+      interactionCreate: runtime.client.listenerCount("interactionCreate"),
+    }).toEqual(before);
+    await service.close();
+  });
+
+  it("binds reconnect readiness to the current login epoch after a stale logging-in callback", async () => {
+    const lifecycle = new SharedHostLifecycleService({ enabled: true });
+    lifecycle.markAccepting();
+    const reserve = vi.spyOn(lifecycle, "tryReserve");
+    const oldCommandGate = deferred<void>();
+    const loginGate = deferred<string>();
+    const freshCommandGate = deferred<void>();
+    const setCommands = vi
+      .fn()
+      .mockImplementationOnce(() => oldCommandGate.promise)
+      .mockImplementationOnce(() => freshCommandGate.promise);
+    const publishDiagnostic = vi.fn();
+    const connection = createConnection({ botToken: "token-overlap", guilds: {} });
+    const service = createService({
+      listConnections: () => [connection],
+      publishDiagnostic,
+      sharedHostLifecycle: lifecycle,
+    });
+    const runtime: any = (service as any).createManagedRuntime("token-overlap", [connection]);
+    runtime.client.application = { commands: { set: setCommands } };
+    runtime.ready = true;
+    const destroy = vi.spyOn(runtime.client, "destroy").mockResolvedValue(undefined);
+    const login = vi.spyOn(runtime.client, "login").mockImplementation(() => loginGate.promise);
+    (service as any).runtimesByToken.set(runtime.token, runtime);
+    (service as any).updateStatusSnapshot(runtime);
+    const handlers = {
+      clientReady: runtime.client.listenerCount("clientReady"),
+      messageCreate: runtime.client.listenerCount("messageCreate"),
+      interactionCreate: runtime.client.listenerCount("interactionCreate"),
+    };
+
+    await service.sync();
+    await vi.waitFor(() => expect(setCommands).toHaveBeenCalledTimes(1));
+    expect(lifecycle.snapshot()).toMatchObject({ activeCount: 1, activeByKind: { worker: 1 } });
+
+    const reconnectPromise = service.reconnectConnection(connection.connectionId);
+    await Promise.resolve();
+
+    expect(destroy).not.toHaveBeenCalled();
+    expect(login).not.toHaveBeenCalled();
+    expect(setCommands).toHaveBeenCalledTimes(1);
+    expect(publishDiagnostic).not.toHaveBeenCalled();
+
+    oldCommandGate.resolve(undefined);
+    await vi.waitFor(() => expect(login).toHaveBeenCalledTimes(1));
+
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(setCommands).toHaveBeenCalledTimes(1);
+    expect(lifecycle.snapshot()).toMatchObject({ activeCount: 1, activeByKind: { worker: 1 } });
+    expect(service.getConnectionStatus(connection.connectionId)).toMatchObject({ ready: false, lastError: undefined });
+
+    // This callback arrives after the new login epoch owns reconnect, but it
+    // carries no epoch and therefore cannot be trusted as current readiness.
+    runtime.client.emit("clientReady", runtime.client);
+    await Promise.resolve();
+
+    expect(setCommands).toHaveBeenCalledTimes(1);
+    expect(service.getConnectionStatus(connection.connectionId)).toMatchObject({ ready: false, lastError: undefined });
+    expect(publishDiagnostic).not.toHaveBeenCalled();
+    expect(lifecycle.snapshot()).toMatchObject({ activeCount: 1, activeByKind: { worker: 1 } });
+
+    loginGate.resolve("token-overlap");
+    await vi.waitFor(() => expect(setCommands).toHaveBeenCalledTimes(2));
+
+    expect(service.getConnectionStatus(connection.connectionId)).toMatchObject({ ready: true, lastError: undefined });
+    expect(publishDiagnostic).toHaveBeenCalledTimes(1);
+    expect(lifecycle.snapshot()).toMatchObject({ activeCount: 1, activeByKind: { worker: 1 } });
+
+    freshCommandGate.resolve(undefined);
+    await reconnectPromise;
+
+    expect(setCommands).toHaveBeenCalledTimes(2);
+    expect(service.getConnectionStatus(connection.connectionId)).toMatchObject({ ready: true, lastError: undefined });
+    expect(publishDiagnostic).toHaveBeenCalledTimes(1);
+    expect(reserve).toHaveBeenCalledTimes(3);
+    const reservationLabels = reserve.mock.calls.map(([, reservationId]) => String(reservationId));
+    expect(reservationLabels.some((label) => label.startsWith("discord-command-sync:existing-runtime:"))).toBe(true);
+    expect(reservationLabels.some((label) => label.startsWith("discord-login:"))).toBe(true);
+    expect(reservationLabels.some((label) => label.startsWith("discord-command-sync:reconnect:"))).toBe(true);
+    expect({
+      clientReady: runtime.client.listenerCount("clientReady"),
+      messageCreate: runtime.client.listenerCount("messageCreate"),
+      interactionCreate: runtime.client.listenerCount("interactionCreate"),
+    }).toEqual(handlers);
+    expect(handlers).toEqual({ clientReady: 1, messageCreate: 1, interactionCreate: 1 });
+    expect(lifecycle.snapshot()).toMatchObject({ activeCount: 0, activeByKind: { worker: 0 } });
+
+    await expect(
+      lifecycle.drain({ mode: "pause", timeoutMs: 10, reason: "scale_down", actorId: "ops" }),
+    ).resolves.toMatchObject({ outcome: "quiesced", snapshot: { state: "quiesced", activeCount: 0 } });
+    await service.close();
+  });
+
+  it("keeps callback readiness fenced after a later reconnect epoch rejects", async () => {
+    const lifecycle = new SharedHostLifecycleService({ enabled: true });
+    lifecycle.markAccepting();
+    const setCommands = vi.fn().mockResolvedValue(undefined);
+    const publishDiagnostic = vi.fn();
+    const connection = createConnection({ botToken: "token-fenced", guilds: {} });
+    const service = createService({
+      listConnections: () => [connection],
+      publishDiagnostic,
+      sharedHostLifecycle: lifecycle,
+    });
+    const runtime: any = (service as any).createManagedRuntime("token-fenced", [connection]);
+    runtime.client.application = { commands: { set: setCommands } };
+    runtime.ready = true;
+    vi.spyOn(runtime.client, "destroy").mockResolvedValue(undefined);
+    const login = vi
+      .spyOn(runtime.client, "login")
+      .mockResolvedValueOnce("token-fenced")
+      .mockRejectedValueOnce(new Error("second reconnect rejected"));
+    (service as any).runtimesByToken.set(runtime.token, runtime);
+    (service as any).updateStatusSnapshot(runtime);
+    const handlers = {
+      clientReady: runtime.client.listenerCount("clientReady"),
+      messageCreate: runtime.client.listenerCount("messageCreate"),
+      interactionCreate: runtime.client.listenerCount("interactionCreate"),
+    };
+
+    await service.sync();
+    await vi.waitFor(() => expect(setCommands).toHaveBeenCalledTimes(1));
+
+    await service.reconnectConnection(connection.connectionId);
+    expect(login).toHaveBeenCalledTimes(1);
+    expect(setCommands).toHaveBeenCalledTimes(2);
+    expect(service.getConnectionStatus(connection.connectionId)).toMatchObject({ ready: true, lastError: undefined });
+    expect(publishDiagnostic).toHaveBeenCalledTimes(1);
+    expect(runtime).toMatchObject({ loginEpoch: 1, successfulLoginEpoch: 1, callbackReadyFenceEpoch: 1 });
+
+    await service.reconnectConnection(connection.connectionId);
+    expect(login).toHaveBeenCalledTimes(2);
+    expect(setCommands).toHaveBeenCalledTimes(2);
+    expect(service.getConnectionStatus(connection.connectionId)).toMatchObject({
+      ready: false,
+      lastError: "second reconnect rejected",
+    });
+    expect(runtime).toMatchObject({ loginEpoch: 2, successfulLoginEpoch: 1, callbackReadyFenceEpoch: 2 });
+    expect(runtime.reconnectLoginEpoch).toBeUndefined();
+
+    runtime.client.emit("clientReady", runtime.client);
+    await Promise.resolve();
+
+    expect(setCommands).toHaveBeenCalledTimes(2);
+    expect(service.getConnectionStatus(connection.connectionId)).toMatchObject({
+      ready: false,
+      lastError: "second reconnect rejected",
+    });
+    expect(publishDiagnostic).toHaveBeenCalledTimes(1);
+    expect(lifecycle.snapshot()).toMatchObject({ activeCount: 0, activeByKind: { worker: 0 } });
+    expect({
+      clientReady: runtime.client.listenerCount("clientReady"),
+      messageCreate: runtime.client.listenerCount("messageCreate"),
+      interactionCreate: runtime.client.listenerCount("interactionCreate"),
+    }).toEqual(handlers);
+    expect(handlers).toEqual({ clientReady: 1, messageCreate: 1, interactionCreate: 1 });
+    await service.close();
+  });
+
+  it("keeps reconnect readiness fenced through force drain and close", async () => {
+    const lifecycle = new SharedHostLifecycleService({ enabled: true });
+    lifecycle.markAccepting();
+    const reserve = vi.spyOn(lifecycle, "tryReserve");
+    const loginGate = deferred<string>();
+    const setCommands = vi.fn().mockResolvedValue(undefined);
+    const publishDiagnostic = vi.fn();
+    const connection = createConnection({ botToken: "token-force-fenced", guilds: {} });
+    const service = createService({
+      listConnections: () => [connection],
+      publishDiagnostic,
+      sharedHostLifecycle: lifecycle,
+    });
+    const runtime: any = (service as any).createManagedRuntime("token-force-fenced", [connection]);
+    runtime.client.application = { commands: { set: setCommands } };
+    const destroy = vi.spyOn(runtime.client, "destroy").mockResolvedValue(undefined);
+    const login = vi.spyOn(runtime.client, "login").mockImplementation(() => loginGate.promise);
+    (service as any).runtimesByToken.set(runtime.token, runtime);
+    (service as any).updateStatusSnapshot(runtime);
+    const handlers = {
+      clientReady: runtime.client.listenerCount("clientReady"),
+      messageCreate: runtime.client.listenerCount("messageCreate"),
+      interactionCreate: runtime.client.listenerCount("interactionCreate"),
+    };
+
+    const reconnectPromise = service.reconnectConnection(connection.connectionId);
+    await vi.waitFor(() => expect(login).toHaveBeenCalledTimes(1));
+    expect(runtime).toMatchObject({ reconnectLoginEpoch: 1, callbackReadyFenceEpoch: 1 });
+    expect(lifecycle.snapshot()).toMatchObject({ activeCount: 1, activeByKind: { worker: 1 } });
+
+    await expect(
+      lifecycle.drain({ mode: "force", timeoutMs: 10, reason: "deploy", actorId: "ops" }),
+    ).resolves.toMatchObject({ outcome: "closing", snapshot: { state: "closing", activeCount: 1 } });
+
+    runtime.client.emit("clientReady", runtime.client);
+    await Promise.resolve();
+    expect(setCommands).not.toHaveBeenCalled();
+    expect(service.getConnectionStatus(connection.connectionId)).toMatchObject({ ready: false });
+    expect(publishDiagnostic).not.toHaveBeenCalled();
+
+    loginGate.resolve("token-force-fenced");
+    await reconnectPromise;
+
+    expect(runtime.reconnectLoginEpoch).toBeUndefined();
+    expect(runtime.callbackReadyFenceEpoch).toBe(1);
+    expect(lifecycle.snapshot()).toMatchObject({ state: "closing", activeCount: 0 });
+
+    const reservationCountAfterForceSettlement = reserve.mock.calls.length;
+    runtime.client.emit("clientReady", runtime.client);
+    await Promise.resolve();
+
+    expect(setCommands).not.toHaveBeenCalled();
+    expect(publishDiagnostic).not.toHaveBeenCalled();
+    expect(reserve).toHaveBeenCalledTimes(reservationCountAfterForceSettlement);
+    expect(service.getConnectionStatus(connection.connectionId)).toMatchObject({ ready: false });
+
+    const closePromise = service.close();
+    runtime.client.emit("clientReady", runtime.client);
+    await closePromise;
+
+    expect(lifecycle.snapshot()).toMatchObject({ state: "closing", activeCount: 0 });
+    expect(setCommands).not.toHaveBeenCalled();
+    expect(publishDiagnostic).not.toHaveBeenCalled();
+    expect(service.getConnectionStatus(connection.connectionId)).toBeUndefined();
+    expect(destroy).toHaveBeenCalledTimes(2);
+
+    runtime.client.emit("clientReady", runtime.client);
+    await Promise.resolve();
+    expect(setCommands).not.toHaveBeenCalled();
+    expect(publishDiagnostic).not.toHaveBeenCalled();
+    expect({
+      clientReady: runtime.client.listenerCount("clientReady"),
+      messageCreate: runtime.client.listenerCount("messageCreate"),
+      interactionCreate: runtime.client.listenerCount("interactionCreate"),
+    }).toEqual(handlers);
+    expect(handlers).toEqual({ clientReady: 1, messageCreate: 1, interactionCreate: 1 });
   });
 });
 
@@ -1136,4 +1605,14 @@ function createSlashInteraction(
       }),
     },
   };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }

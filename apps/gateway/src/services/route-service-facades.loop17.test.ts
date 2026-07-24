@@ -40,8 +40,10 @@ describe("route service facades", () => {
       "listMemoryItems",
       "listRecentContexts",
       "patchMaintenancePolicy",
-      "patchMemoryItem",
       "rejectMaintenanceRecommendation",
+      "requestMemoryBatchMutationApproval",
+      "requestMemoryForgetApproval",
+      "requestMemoryItemPatchApproval",
       "runMaintenanceNow",
     ]);
     const service = new MemoryRouteService(port as never);
@@ -118,30 +120,31 @@ describe("route service facades", () => {
       method: "listMemoryItems",
       args: [{ workspaceId: "workspace-1" }],
     });
-    expect(service.patchItem("item-1", { state: "kept" } as never, "operator")).toEqual({
-      method: "patchMemoryItem",
-      args: ["item-1", { state: "kept" }, "operator"],
-    });
-    expect(service.forgetItem("item-1", "operator")).toEqual({
-      method: "forgetMemoryItem",
-      args: ["item-1", "operator", undefined],
+    // HX-402 P1: mutation verbs delegate to the approval-request surface.
+    expect(service.requestItemPatchApproval("item-1", { state: "kept" } as never, "operator")).toEqual({
+      method: "requestMemoryItemPatchApproval",
+      args: ["item-1", { state: "kept" }, "operator", undefined],
     });
     const forgetHooks = { onCommit: vi.fn(), afterCommit: vi.fn() };
-    expect(service.forgetItem("item-1", "operator", forgetHooks)).toEqual({
-      method: "forgetMemoryItem",
-      args: ["item-1", "operator", forgetHooks],
+    expect(service.requestItemPatchApproval("item-1", { state: "kept" } as never, "operator", forgetHooks)).toEqual({
+      method: "requestMemoryItemPatchApproval",
+      args: ["item-1", { state: "kept" }, "operator", forgetHooks],
     });
     expect(service.listItemHistory("item-1", 5)).toEqual({
       method: "listMemoryItemHistory",
       args: ["item-1", 5],
     });
-    expect(service.forget({ workspaceId: "workspace-1", query: "old" } as never)).toEqual({
-      method: "forgetMemory",
+    expect(service.requestForgetApproval({ workspaceId: "workspace-1", query: "old" } as never)).toEqual({
+      method: "requestMemoryForgetApproval",
       args: [{ workspaceId: "workspace-1", query: "old" }, undefined],
     });
-    expect(service.forget({ workspaceId: "workspace-1", query: "old" } as never, forgetHooks)).toEqual({
-      method: "forgetMemory",
+    expect(service.requestForgetApproval({ workspaceId: "workspace-1", query: "old" } as never, forgetHooks)).toEqual({
+      method: "requestMemoryForgetApproval",
       args: [{ workspaceId: "workspace-1", query: "old" }, forgetHooks],
+    });
+    expect(service.requestBatchMutationApproval({ actionId: "batch-1", operations: [] } as never, "operator")).toEqual({
+      method: "requestMemoryBatchMutationApproval",
+      args: [{ actionId: "batch-1", operations: [] }, "operator", undefined],
     });
   });
 
@@ -181,9 +184,15 @@ describe("route service facades", () => {
     });
     expect(service.listCapabilityProposals()).toEqual({ method: "listProposals", args: [100] });
     expect(service.listCapabilityProposals(5)).toEqual({ method: "listProposals", args: [5] });
+    // HX-402 P2: proposal creation forwards the acting operator (undefined
+    // when the route has none so the service default applies).
     expect(service.createCapabilityProposal({ title: "Add API" } as never)).toEqual({
       method: "createProposal",
-      args: [{ title: "Add API" }],
+      args: [{ title: "Add API" }, undefined],
+    });
+    expect(service.createCapabilityProposal({ title: "Add API" } as never, "operator-1")).toEqual({
+      method: "createProposal",
+      args: [{ title: "Add API" }, "operator-1"],
     });
     expect(service.getCapabilityProposalDetail("proposal-1")).toEqual({
       method: "getProposalDetail",
@@ -193,17 +202,18 @@ describe("route service facades", () => {
       method: "getCandidateDetail",
       args: ["candidate-1"],
     });
-    expect(service.promoteCapabilityCandidate("candidate-1", "version-2")).toEqual({
+    // HX-402 P2: approval-first candidate verbs forward the requesting actor.
+    expect(service.promoteCapabilityCandidate("candidate-1", 7, "version-2", "operator-1")).toEqual({
       method: "promoteCandidate",
-      args: ["candidate-1", "version-2"],
+      args: ["candidate-1", 7, "version-2", "operator-1"],
     });
-    expect(service.revokeCapabilityCandidate("candidate-1")).toEqual({
+    expect(service.revokeCapabilityCandidate("candidate-1", 8)).toEqual({
       method: "revokeCandidate",
-      args: ["candidate-1", undefined],
+      args: ["candidate-1", 8, undefined, undefined],
     });
-    expect(service.rollbackCapabilityCandidate("candidate-1", "version-1")).toEqual({
+    expect(service.rollbackCapabilityCandidate("candidate-1", "version-1", 9, "operator-2")).toEqual({
       method: "rollbackCandidate",
-      args: ["candidate-1", "version-1"],
+      args: ["candidate-1", "version-1", 9, "operator-2"],
     });
     expect(service.listCodeModeRuns()).toEqual({ method: "listCodeModeRuns", args: [100] });
     expect(service.getCodeModeRun("run-1")).toEqual({ method: "getCodeModeRun", args: ["run-1"] });

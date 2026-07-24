@@ -58,9 +58,27 @@ afterEach(async () => {
   await Promise.all(apps.splice(0).map(async (app) => app.close()));
 });
 
+// HX-402 P1: the mutation verbs commit a canonical `memory.lifecycle`
+// approval instead of the forget itself; the idempotency claim now guards the
+// approval-request write (the route's canonical commit).
+const pendingApprovalFixture = {
+  approvalId: "11111111-2222-3333-4444-555555555555",
+  status: "pending",
+  kind: "memory.lifecycle",
+  action: "items_forgotten",
+  subjectKind: "memory_item",
+  subjectId: "memory-1",
+  workspaceId: "workspace-a",
+  requestSha256: "a".repeat(64),
+  expectedStateSha256: "b".repeat(64),
+  createdAt: "2026-07-22T00:00:00.000Z",
+  replayed: false,
+  itemIds: ["memory-1"],
+};
+
 describe("memory bulk-forget route commit truth", () => {
   it("keeps the HTTP claim completed when response delivery fails after the canonical commit", async () => {
-    const forget = vi.fn(
+    const requestForgetApproval = vi.fn(
       (
         _input: unknown,
         lifecycle?: {
@@ -70,17 +88,10 @@ describe("memory bulk-forget route commit truth", () => {
       ) => {
         lifecycle?.onCommit?.();
         lifecycle?.afterCommit?.();
-        return {
-          actionId: "forget-commit-truth",
-          matchedCount: 1,
-          alreadyForgottenCount: 0,
-          forgottenCount: 1,
-          itemIds: ["memory-1"],
-          items: [],
-        };
+        return { pendingApproval: pendingApprovalFixture };
       },
     );
-    const app = await buildApp({ forget }, true, "/api/v1/memory/forget");
+    const app = await buildApp({ requestForgetApproval }, true, "/api/v1/memory/forget");
     const request = {
       method: "POST" as const,
       url: "/api/v1/memory/forget",
@@ -99,12 +110,12 @@ describe("memory bulk-forget route commit truth", () => {
     expect(first.statusCode).toBe(500);
     expect(replay.statusCode).toBe(409);
     expect(replay.json()).toMatchObject({ error: expect.stringMatching(/duplicate/i) });
-    expect(forget).toHaveBeenCalledTimes(1);
+    expect(requestForgetApproval).toHaveBeenCalledTimes(1);
   });
 
   it("releases the HTTP claim when the service fails before its canonical commit", async () => {
     let attempt = 0;
-    const forget = vi.fn(
+    const requestForgetApproval = vi.fn(
       (
         _input: unknown,
         lifecycle?: {
@@ -118,17 +129,10 @@ describe("memory bulk-forget route commit truth", () => {
         }
         lifecycle?.onCommit?.();
         lifecycle?.afterCommit?.();
-        return {
-          actionId: "forget-precommit-retry",
-          matchedCount: 1,
-          alreadyForgottenCount: 0,
-          forgottenCount: 1,
-          itemIds: ["memory-1"],
-          items: [],
-        };
+        return { pendingApproval: pendingApprovalFixture };
       },
     );
-    const app = await buildApp({ forget }, false, "/api/v1/memory/forget");
+    const app = await buildApp({ requestForgetApproval }, false, "/api/v1/memory/forget");
     const request = {
       method: "POST" as const,
       url: "/api/v1/memory/forget",
@@ -145,15 +149,14 @@ describe("memory bulk-forget route commit truth", () => {
     const retry = await app.inject(request);
 
     expect(first.statusCode).toBe(500);
-    expect(retry.statusCode).toBe(200);
-    expect(forget).toHaveBeenCalledTimes(2);
+    expect(retry.statusCode).toBe(202);
+    expect(requestForgetApproval).toHaveBeenCalledTimes(2);
   });
 
   it("keeps the single-item HTTP claim completed when response delivery fails after commit", async () => {
-    const forgetItem = vi.fn(
+    const requestForgetApproval = vi.fn(
       (
-        _itemId: string,
-        _actorId: string,
+        _input: unknown,
         lifecycle?: {
           onCommit?: () => void;
           afterCommit?: () => void;
@@ -161,11 +164,11 @@ describe("memory bulk-forget route commit truth", () => {
       ) => {
         lifecycle?.onCommit?.();
         lifecycle?.afterCommit?.();
-        return { itemId: "memory-1", status: "forgotten" };
+        return { pendingApproval: pendingApprovalFixture };
       },
     );
     const routePath = "/api/v1/memory/items/:itemId/forget";
-    const app = await buildApp({ forgetItem }, true, routePath);
+    const app = await buildApp({ requestForgetApproval }, true, routePath);
     const request = {
       method: "POST" as const,
       url: "/api/v1/memory/items/memory-1/forget",
@@ -179,7 +182,7 @@ describe("memory bulk-forget route commit truth", () => {
     expect(first.statusCode).toBe(500);
     expect(replay.statusCode).toBe(409);
     expect(replay.json()).toMatchObject({ error: expect.stringMatching(/duplicate/i) });
-    expect(forgetItem).toHaveBeenCalledTimes(1);
+    expect(requestForgetApproval).toHaveBeenCalledTimes(1);
   });
 });
 

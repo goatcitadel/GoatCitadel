@@ -118,13 +118,14 @@ describe("external runtime approval adapter", () => {
     );
     const port = createPort(storage, { executeApprovedAction });
 
-    const result = await executeApprovedExternalRuntimePendingAction(port, approvalId, pending);
+    const controller = new AbortController();
+    const result = await executeApprovedExternalRuntimePendingAction(port, approvalId, pending, controller.signal);
 
     expect(result).toMatchObject({
       outcome: "blocked",
       policyReason: expect.stringMatching(/no longer matches executable pending state/i),
     });
-    expect(executeApprovedAction).toHaveBeenCalledWith(approvalId, undefined, {
+    expect(executeApprovedAction).toHaveBeenCalledWith(approvalId, controller.signal, {
       deferResolution: true,
       externalRuntimeReplay: true,
     });
@@ -214,15 +215,17 @@ describe("external runtime approval adapter", () => {
     });
     const port = createPort(storage, { executeApprovedAction, invokeApprovedExternalRuntimeTool });
 
-    const result = await executeApprovedExternalRuntimePendingAction(port, approvalId, pending);
+    const controller = new AbortController();
+    const result = await executeApprovedExternalRuntimePendingAction(port, approvalId, pending, controller.signal);
 
-    expect(executeApprovedAction).toHaveBeenCalledWith(approvalId, undefined, {
+    expect(executeApprovedAction).toHaveBeenCalledWith(approvalId, controller.signal, {
       deferResolution: true,
       externalRuntimeReplay: true,
     });
     expect(invokeApprovedExternalRuntimeTool).toHaveBeenCalledWith(
       expect.objectContaining({ policyContext: expect.objectContaining({ operatorId: "operator-1" }) }),
       expect.any(Function),
+      { signal: controller.signal },
     );
     expect(result).toMatchObject({ outcome: "executed", auditEventId: "audit-external" });
     expect(storage.externalSideEffectRuns.listByWorkspace("workspace-1")).toEqual([

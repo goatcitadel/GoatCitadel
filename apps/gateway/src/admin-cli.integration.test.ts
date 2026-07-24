@@ -3,16 +3,18 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { exec } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
-import { buildLlmStatusLines } from "./admin-cli.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildLlmStatusLines, runDatabaseCommand } from "./admin-cli.js";
 
 const execAsync = promisify(exec);
 const TEMP_ROOTS: string[] = [];
 const repoRoot = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "..");
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   while (TEMP_ROOTS.length > 0) {
     const next = TEMP_ROOTS.pop();
     if (next) {
@@ -51,6 +53,52 @@ describe("admin CLI llm status formatting", () => {
   });
 });
 
+describe("admin CLI database cutover revision handoff", () => {
+  it("reads the current revision immediately before an execute request", async () => {
+    const readSettingsRevision = vi.fn(() => 9);
+    const runDatabaseCutover = vi.fn(async () => ({ status: "completed" }));
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await runDatabaseCommand({ readSettingsRevision, runDatabaseCutover } as never, "cutover", [
+      "--profile",
+      "local",
+      "--execute",
+      "--confirm",
+    ]);
+
+    expect(readSettingsRevision).toHaveBeenCalledOnce();
+    expect(runDatabaseCutover).toHaveBeenCalledWith({
+      profile: "local",
+      execute: true,
+      confirm: true,
+      expectedRevision: 9,
+    });
+    expect(readSettingsRevision.mock.invocationCallOrder[0]).toBeLessThan(
+      runDatabaseCutover.mock.invocationCallOrder[0]!,
+    );
+    expect(log).toHaveBeenCalled();
+  });
+
+  it("keeps dry runs generation-free", async () => {
+    const readSettingsRevision = vi.fn(() => 9);
+    const runDatabaseCutover = vi.fn(async () => ({ status: "ready" }));
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await runDatabaseCommand({ readSettingsRevision, runDatabaseCutover } as never, "cutover", [
+      "--profile",
+      "hosted",
+      "--dry-run",
+    ]);
+
+    expect(readSettingsRevision).not.toHaveBeenCalled();
+    expect(runDatabaseCutover).toHaveBeenCalledWith({
+      profile: "hosted",
+      execute: false,
+      confirm: false,
+    });
+  });
+});
+
 describe("admin CLI offline backup commands", () => {
   it("verifies a backup without requiring the current runtime config to parse", async () => {
     const { runtimeRoot, backupDir } = await createOfflineBackupFixture();
@@ -74,7 +122,7 @@ describe("admin CLI offline backup commands", () => {
       GOATCITADEL_BACKUP_DIR: backupDir,
     });
 
-    expect(await readFile(path.join(runtimeRoot, "data", "index.db"), "utf8")).toBe(expected.database);
+    expect(await readFile(path.join(runtimeRoot, "data", "index.db"))).toEqual(expected.database);
     expect(await readFile(path.join(runtimeRoot, "config", "llm-providers.json"), "utf8")).toBe(expected.config);
   }, 45_000);
 });
@@ -83,7 +131,7 @@ async function createOfflineBackupFixture(): Promise<{
   runtimeRoot: string;
   backupDir: string;
   expected: {
-    database: string;
+    database: Buffer;
     transcript: string;
     audit: string;
     config: string;
@@ -101,7 +149,7 @@ async function createOfflineBackupFixture(): Promise<{
   await mkdir(path.join(payloadRoot, "config"), { recursive: true });
 
   const expected = {
-    database: "restored sqlite bytes\n",
+    database: await createSqliteDatabaseBytes(runtimeRoot),
     transcript: '{"event":"transcript"}\n',
     audit: '{"event":"audit"}\n',
     config: '{"providers":[{"providerId":"openai"}]}\n',
@@ -116,7 +164,7 @@ async function createOfflineBackupFixture(): Promise<{
   for (const entry of payloadEntries) {
     const fullPath = path.join(payloadRoot, entry.path);
     await mkdir(path.dirname(fullPath), { recursive: true });
-    await writeFile(fullPath, entry.raw, "utf8");
+    await writeFile(fullPath, entry.raw);
   }
 
   const manifest = {
@@ -147,6 +195,20 @@ async function createOfflineBackupFixture(): Promise<{
     backupDir,
     expected,
   };
+}
+
+async function createSqliteDatabaseBytes(rootDir: string): Promise<Buffer> {
+  const databasePath = path.join(rootDir, "fixture-source.db");
+  const db = new DatabaseSync(databasePath);
+  try {
+    db.exec("CREATE TABLE backup_fixture (id INTEGER PRIMARY KEY, value TEXT NOT NULL);");
+    db.exec("INSERT INTO backup_fixture (value) VALUES ('restored sqlite bytes');");
+  } finally {
+    db.close();
+  }
+  const bytes = await readFile(databasePath);
+  await rm(databasePath, { force: true });
+  return bytes;
 }
 
 async function runCli(args: string[], env: Record<string, string>) {

@@ -14,6 +14,7 @@ const appMocks = vi.hoisted(() => ({
   emitRefresh: vi.fn(),
   fetchDashboardState: vi.fn(),
   fetchHealthSummary: vi.fn(),
+  fetchRuntimeBuildIdentity: vi.fn(),
   listCitadels: vi.fn(),
   fetchRuntimeLifecycleExport: vi.fn(),
   fetchWorkspaces: vi.fn(),
@@ -56,6 +57,10 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchHealthSummary: appMocks.fetchHealthSummary,
   listCitadels: appMocks.listCitadels,
   fetchRuntimeLifecycleExport: appMocks.fetchRuntimeLifecycleExport,
+}));
+
+vi.mock("@goatcitadel/mission-control-shared/api/review-readiness", () => ({
+  fetchRuntimeBuildIdentity: appMocks.fetchRuntimeBuildIdentity,
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/components/GatewayAccessGate", () => ({
@@ -381,6 +386,24 @@ describe("MissionControlNextApp", () => {
     appMocks.fetchHealthSummary.mockResolvedValue({
       daemonStatus: { running: false },
     });
+    appMocks.fetchRuntimeBuildIdentity.mockResolvedValue({
+      schemaVersion: 1,
+      kind: "packaged",
+      version: "1.0.0",
+      buildSha: "a".repeat(40),
+      shortSha: "a".repeat(8),
+      integrity: "clean",
+      identitySource: "packaged_manifest",
+      release: {
+        verified: false,
+        certificateState: "absent",
+        requiredProof: { total: 25, passed: 0, missing: 25, failed: 0, stale: 0 },
+        acceptedFailureCount: 0,
+        acceptedFailures: [],
+        reasonCodes: ["certificate_absent"],
+        reasons: ["No release certificate is available to the running Gateway."],
+      },
+    });
     appMocks.listCitadels.mockResolvedValue({
       items: [
         { citadelId: "personal", name: "Personal" },
@@ -439,6 +462,37 @@ describe("MissionControlNextApp", () => {
     expect(css).not.toContain(
       ".mc-next-topbar-right > button.mc-next-start-button,\n.mc-next-topbar-right > button.mc-next-mode-toggle {\n  display: none;",
     );
+    // HX-303: identity is pinned outside the scrollable metrics and switches
+    // to a compact visual token at the mobile breakpoint.
+    expect(css).toContain(".mc-next-status-strip-identity {");
+    expect(css).toContain("max-width: calc(100vw - 6.5rem);");
+    expect(css).toContain(".mc-next-status-strip-identity .mc-next-status-value-compact {");
+    expect(css).toContain("display: block !important;");
+    expect(css).toContain(".mc-next-shell .mc-next-status-strip {");
+    expect(css).toContain("position: fixed;");
+    // The remaining runtime metrics are a horizontal scroll lane. They must
+    // not wrap character-by-character and expand the fixed mobile strip.
+    expect(css).toContain(
+      ".mc-next-shell .mc-next-status-details summary strong {\n    flex: 0 0 auto;\n    min-width: max-content;",
+    );
+    expect(css).toContain("white-space: nowrap;\n    overflow-wrap: normal;");
+    expect(css).toContain(".mc-next-status-strip-primary .mc-next-status-pill {\n    max-width: none;");
+  });
+
+  it("keeps the build identity action in compact shell chrome and links it to Ops proof", async () => {
+    appMocks.isCompactTopbar = true;
+    appMocks.isMobileNav = true;
+    const renderer = await renderApp();
+    const chip = renderer.root
+      .findAllByType("button")
+      .find((node) => String(node.props["aria-label"] ?? "").startsWith("Build identity:"));
+
+    expect(chip).toBeDefined();
+    expect(chip?.props["aria-label"]).toContain("Packaged · v1.0.0 · aaaaaaaa · proof unverified");
+    expect(chip?.props["data-identity-status"]).toBe("unverified");
+
+    await act(async () => chip?.props.onClick());
+    expect(window.location.pathname).toBe("/ops/diagnostics");
   });
 
   it("renders access-gate states and lets retry recover from preflight failures", async () => {

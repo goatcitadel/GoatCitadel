@@ -444,7 +444,7 @@ describe("ImprovementService ledger lifecycle", () => {
     assert.equal(passed.validationSummary, "validated by replay");
   });
 
-  it("exposes scheduler, replay-run, and signal read paths without mutating disabled jobs", () => {
+  it("exposes scheduler, replay-run, and signal read paths without mutating disabled jobs", async () => {
     const harness = createHarness();
 
     harness.service.startScheduler();
@@ -452,7 +452,7 @@ describe("ImprovementService ledger lifecycle", () => {
     harness.service.stopScheduler();
     harness.service.stopScheduler();
 
-    harness.service.ensureWeeklyImprovementCronJob();
+    await harness.service.ensureWeeklyImprovementCronJob();
     const cronJob = harness.storage.cronJobs.get(IMPROVEMENT_WEEKLY_JOB_ID);
     // First-run default is disabled (codex finding #27): the weekly job ships
     // sampled chat/tool traces to the LLM judge and must not start running
@@ -835,6 +835,9 @@ function createHarness(callbackOverrides: Partial<ImprovementServiceCallbacks> =
 
   const ctx: ServiceContext = {
     storage,
+    cronSpecOwner: {
+      reconcileSpec: async (cronSpec) => storage.cronJobs.reconcileSpec(cronSpec),
+    },
     config: {} as never,
     llmService: {} as never,
     policyEngine: {} as never,

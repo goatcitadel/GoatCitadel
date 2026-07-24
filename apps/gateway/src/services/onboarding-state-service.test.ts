@@ -2,6 +2,16 @@ import { describe, expect, it, vi } from "vitest";
 import { getOnboardingStartupState, getOnboardingState, type OnboardingStateHost } from "./onboarding-state-service.js";
 
 describe("onboarding-state-service", () => {
+  it("propagates the config-generation read fence instead of returning a mixed onboarding snapshot", () => {
+    const host = createHost();
+    const fence = new Error("settings generation is reconciling");
+    host.readSettingsRevision = vi.fn(() => {
+      throw fence;
+    });
+
+    expect(() => getOnboardingState(host)).toThrow(fence);
+  });
+
   it("adds Gateway-owned first-run checklist proof anchors to onboarding state", () => {
     const state = getOnboardingState(createHost());
 

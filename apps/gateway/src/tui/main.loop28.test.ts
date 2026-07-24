@@ -73,6 +73,8 @@ vi.mock("./live-feed.js", () => ({
 }));
 
 vi.mock("./api-client.js", () => ({
+  isTuiApiRequestError: (error: unknown) =>
+    typeof error === "object" && error !== null && Reflect.get(error, "name") === "TuiApiRequestError",
   TuiApiClient: class {
     public baseUrl: string;
     public readOnly: boolean;
@@ -674,6 +676,7 @@ describe("tui main loop28 entry coverage", () => {
       agentMode: true,
     });
     expect(state.client.updateSkillState).toHaveBeenCalledWith("skill-browser-research", {
+      expectedRevision: 6,
       state: "enabled",
       note: "Enabled from TUI capability suggestion.",
     });
@@ -700,6 +703,56 @@ describe("tui main loop28 entry coverage", () => {
     expect(writeSpy).toHaveBeenCalledWith("Hello");
     expect(tableSpy).toHaveBeenCalled();
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("Capability upgrade available"));
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("refetches a conflicted skill without replaying the TUI enable intent", async () => {
+    vi.spyOn(console, "clear").mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    vi.spyOn(console, "table").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    state.selectQueue = ["chat", "create", "quick", "0", "enable", "exit"];
+    state.inputQueue = ["", "Conflict chat", "Enable the browser skill", ""];
+    state.client.listSkills
+      .mockResolvedValueOnce({
+        items: [{ skillId: "skill-browser-research", revision: 6 }],
+      })
+      .mockResolvedValueOnce({
+        items: [{ skillId: "skill-browser-research", revision: 7 }],
+      });
+    state.client.updateSkillState.mockRejectedValueOnce({
+      name: "TuiApiRequestError",
+      status: 409,
+      body: {
+        code: "WRITE_CONFLICT",
+        details: { expectedRevision: 6, currentRevision: 7 },
+      },
+    });
+    state.loadResolvedProfile.mockResolvedValue({
+      profileName: "ops",
+      filePath: "profile.json",
+      profile: {
+        gatewayBaseUrl: "http://127.0.0.1:8787",
+        pollIntervalsMs: { activity: 10 },
+      },
+      auth: { mode: "none" },
+    });
+    process.argv = ["node", "main.ts"];
+
+    await import("./main.js");
+    await waitFor(() => state.liveStop.mock.calls.length === 1);
+
+    expect(state.client.updateSkillState).toHaveBeenCalledTimes(1);
+    expect(state.client.updateSkillState).toHaveBeenCalledWith("skill-browser-research", {
+      expectedRevision: 6,
+      state: "enabled",
+      note: "Enabled from TUI capability suggestion.",
+    });
+    expect(state.client.listSkills).toHaveBeenCalledTimes(2);
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("Skill changed before enable"));
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("Canonical revision is now 7"));
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("No update was replayed"));
     expect(process.exitCode).toBeUndefined();
   });
 
@@ -926,9 +979,14 @@ describe("tui main loop28 entry coverage", () => {
 
   it("drives alternate write and control actions across ops menu surfaces", async () => {
     vi.spyOn(console, "clear").mockImplementation(() => undefined);
-    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     vi.spyOn(console, "table").mockImplementation(() => undefined);
     vi.spyOn(console, "error").mockImplementation(() => undefined);
+    // HX-402 P1: the forget verb answers with a pending memory.lifecycle
+    // approval envelope; the TUI must surface it honestly.
+    state.client.forgetMemoryItem.mockResolvedValueOnce({
+      pendingApproval: { approvalId: "approval-tui-1", status: "pending" },
+    });
     state.selectQueue = [
       "memory",
       "forgotten",
@@ -1004,6 +1062,16 @@ describe("tui main loop28 entry coverage", () => {
     await waitFor(() => state.liveStop.mock.calls.length === 1);
 
     expect(state.client.forgetMemoryItem).toHaveBeenCalledWith("memory-1");
+    // The pending-approval envelope prints explicit no-mutation guidance.
+    expect(
+      logSpy.mock.calls.some(
+        ([line]) =>
+          typeof line === "string" &&
+          line.includes("requires approval") &&
+          line.includes("approval-tui-1") &&
+          line.includes("No memory changed yet"),
+      ),
+    ).toBe(true);
     expect(state.client.uploadFile).toHaveBeenCalledWith("notes/ops.txt", "ops note");
     expect(state.client.getCronRunDiff).toHaveBeenCalledWith("run-1");
     expect(state.client.toolsEvaluateAccess).toHaveBeenCalledWith({
@@ -1119,7 +1187,7 @@ describe("tui main loop28 entry coverage", () => {
     );
     expect(state.client.listMemoryItemHistory).toHaveBeenCalledWith("memory-1", 80);
     expect(state.client.runCronJob).toHaveBeenCalledWith("job-1");
-    expect(state.client.startCronJob).toHaveBeenCalledWith("job-1");
+    expect(state.client.startCronJob).toHaveBeenCalledWith("job-1", 1);
     expect(state.client.toolsInvoke).toHaveBeenCalledWith({
       toolName: "fs.list",
       args: {
@@ -1134,7 +1202,7 @@ describe("tui main loop28 entry coverage", () => {
         reason: "tools dry-run",
       },
     });
-    expect(state.client.updateTask).toHaveBeenCalledWith("task-1", { status: "done" });
+    expect(state.client.updateTask).toHaveBeenCalledWith("task-1", { expectedRevision: 6, status: "done" });
     expect(state.client.reloadSkills).toHaveBeenCalledTimes(1);
     expect(process.exitCode).toBeUndefined();
   });
@@ -1711,6 +1779,7 @@ function createMockTuiClient() {
       items: [
         {
           jobId: "job-1",
+          revision: 1,
           name: "Daily review",
           schedule: "daily",
           enabled: true,
@@ -1732,9 +1801,9 @@ function createMockTuiClient() {
     retryCronReviewItem: vi.fn(async (itemId: string) => ({ itemId, status: "queued" })),
     getCronRunDiff: vi.fn(async (runId: string) => ({ runId, changes: [] })),
     runCronJob: vi.fn(async (jobId: string) => ({ jobId, status: "running" })),
-    startCronJob: vi.fn(async (jobId: string) => ({ jobId, enabled: true })),
-    pauseCronJob: vi.fn(async (jobId: string) => ({ jobId, enabled: false })),
-    deleteCronJob: vi.fn(async (jobId: string) => ({ jobId, deleted: true })),
+    startCronJob: vi.fn(async (jobId: string, _expectedRevision: number) => ({ jobId, enabled: true })),
+    pauseCronJob: vi.fn(async (jobId: string, _expectedRevision: number) => ({ jobId, enabled: false })),
+    deleteCronJob: vi.fn(async (jobId: string, _expectedRevision: number) => ({ jobId, deleted: true })),
     toolsCatalog: vi.fn(async () => ({
       items: [
         {
@@ -1766,6 +1835,7 @@ function createMockTuiClient() {
       items: [
         {
           taskId: "task-1",
+          revision: 6,
           status: "in_progress",
           priority: "high",
           title: "Ops review",
@@ -1940,6 +2010,7 @@ function createMockTuiClient() {
       items: [
         {
           skillId: "skill-browser-research",
+          revision: 6,
           name: "Browser Research",
           source: "local",
           declaredTools: ["browser.search"],

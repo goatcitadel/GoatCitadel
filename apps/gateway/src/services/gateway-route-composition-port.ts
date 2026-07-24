@@ -24,6 +24,7 @@ import type { CapabilitySystemService } from "./capability-system-service.js";
 import type { ChatProjectService } from "./chat-project-service.js";
 import type { ChatProactiveService } from "./chat-proactive-service.js";
 import type { ChatSteerService } from "./chat-steer-service.js";
+import type { ChatCompactionBreakerActionService } from "./chat-compaction-breaker-action-service.js";
 import type { ChatTurnRuntimeService } from "./chat-turn-runtime-service.js";
 import type { CronAutomationService } from "./gateway/cron-automation-service.js";
 import type { DatabaseCutoverService } from "./database-cutover-service.js";
@@ -54,6 +55,13 @@ import type { TaskLifecycleService } from "./task-lifecycle-service.js";
 import type { ToolInvocationCoordinatorService } from "./tool-invocation-coordinator-service.js";
 import type { ChannelSetupRecentTestCacheEntry } from "./channel-setup-test-cache.js";
 import type { CapabilityScopeResolver } from "./capability-scope-resolver.js";
+import type { RuntimeSettings } from "./gateway/runtime-settings.js";
+import type { ConfigGenerationHealthSnapshot } from "./config-generation-service.js";
+import type {
+  DeleteProviderSecretInput,
+  ProviderSecretMutationResponse,
+  SaveProviderSecretInput,
+} from "./provider-secret-persistence.js";
 
 type RouteDependencyMethod<
   TDomain extends keyof GatewayRouteServiceDependencies,
@@ -70,6 +78,7 @@ export interface GatewayRouteCompositionPort {
   readonly capabilityPackService: CapabilityPackService;
   readonly capabilityScopeResolver: CapabilityScopeResolver;
   readonly capabilitySystemService: CapabilitySystemService;
+  readonly chatCompactionBreakerActionService: ChatCompactionBreakerActionService;
   readonly chatProactiveService: ChatProactiveService;
   readonly chatProjectService: ChatProjectService;
   readonly chatMessageRouteRuntimeHost: chatMessageRouteRuntime.ChatMessageRouteRuntimeHost;
@@ -110,6 +119,8 @@ export interface GatewayRouteCompositionPort {
   readonly taskLifecycleService: TaskLifecycleService;
   readonly toolInvocationCoordinator: ToolInvocationCoordinatorService;
   acceptChatDelegation: RouteDependencyMethod<"chatDelegate", "acceptChatDelegation">;
+  acceptInboundChannelEvent: RouteDependencyMethod<"integrationWebhooks", "acceptInboundChannelEvent">;
+  acceptInboundChannelEvents: RouteDependencyMethod<"integrationWebhooks", "acceptInboundChannelEvents">;
   approvePhase: RouteDependencyMethod<"orchestration", "approvePhase">;
   cancelOrchestrationRun: RouteDependencyMethod<"orchestration", "cancelOrchestrationRun">;
   assertDeploymentProfileUpdate: settingsAuthService.SettingsRuntimeDependencies["assertDeploymentProfileUpdate"];
@@ -140,6 +151,7 @@ export interface GatewayRouteCompositionPort {
   createOrchestrationPlan: RouteDependencyMethod<"orchestration", "createOrchestrationPlan">;
   enqueueApprovalResolutionEffects: settingsAuthService.SettingsAuthRuntimeDependencies["enqueueApprovalResolutionEffects"];
   ensureChatSessionModelDefaults: chatSessionService.ChatSessionDependencies["ensureChatSessionModelDefaults"];
+  ensureChatMessageProjection(sessionId: string): Promise<void>;
   ensureChatSessionRuntimeGrants: chatSessionService.ChatSessionDependencies["ensureChatSessionRuntimeGrants"];
   fetchWithDiagnosticsTimeout: IntegrationChannelServicePort["fetchWithDiagnosticsTimeout"];
   getChatSessionPrefs: RouteDependencyMethod<"chatSupport", "prefs">["getChatSessionPrefs"];
@@ -183,19 +195,20 @@ export interface GatewayRouteCompositionPort {
   lookupSkillSources: RouteDependencyMethod<"skills", "lookupSkillSources">;
   packageSkillExport: RouteDependencyMethod<"skills", "packageSkillExport">;
   previewSkillExport: RouteDependencyMethod<"skills", "previewSkillExport">;
+  prepareSkillHubRollbackReview: RouteDependencyMethod<"skills", "prepareSkillHubRollbackReview">;
   normalizeWorkspaceId: chatSessionService.ChatSessionDependencies["normalizeWorkspaceId"];
   parseChatCommand: RouteDependencyMethod<"chatSupport", "commands">["parseChatCommand"];
   patchMcpServerState: mcpServerAdminService.McpServerAdminHost["patchMcpServerState"];
   mcpOAuth: Pick<GatewayMcpOAuthService, "exchangeAuthorizationCode">;
   patchSessionAutonomyPrefs: chatSessionService.ChatSessionDependencies["patchSessionAutonomyPrefs"];
-  persistAssistantConfig: settingsAuthService.SettingsRuntimeDependencies["persistAssistantConfig"];
-  persistBudgetsConfig: settingsAuthService.SettingsRuntimeDependencies["persistBudgetsConfig"];
-  persistLlmConfig: settingsAuthService.SettingsRuntimeDependencies["persistLlmConfig"];
-  persistToolPolicyConfig: settingsAuthService.SettingsRuntimeDependencies["persistToolPolicyConfig"];
   publishRealtime: RouteDependencyMethod<"devVerification", "publishRealtime">;
   readConnectionConfigValue: IntegrationChannelServicePort["readConnectionConfigValue"];
   readDiscordPairings: IntegrationChannelServicePort["readDiscordPairings"];
   readFeatureFlags: settingsAuthService.SettingsRuntimeDependencies["readFeatureFlags"];
+  readSettingsRevision: NonNullable<settingsAuthService.SettingsRuntimeDependencies["readSettingsRevision"]>;
+  getConfigGenerationHealthSnapshot(): ConfigGenerationHealthSnapshot;
+  saveProviderSecret(input: SaveProviderSecretInput): Promise<ProviderSecretMutationResponse>;
+  deleteProviderSecret(input: DeleteProviderSecretInput): Promise<ProviderSecretMutationResponse>;
   readMcpAuthState: mcpServerAdminService.McpServerAdminHost["readMcpAuthState"];
   readMcpServers: mcpServerAdminService.McpServerAdminHost["readMcpServers"];
   readMcpTools: mcpServerAdminService.McpServerAdminHost["readMcpTools"];
@@ -207,6 +220,8 @@ export interface GatewayRouteCompositionPort {
   resolveApproval: settingsAuthService.SettingsAuthRuntimeDependencies["resolveApproval"];
   resolveApprovalWithRemoteToken: RouteDependencyMethod<"integrationWebhooks", "resolveApprovalWithRemoteToken">;
   resolveApprovalWithRemoteTokenId: RouteDependencyMethod<"integrationWebhooks", "resolveApprovalWithRemoteTokenId">;
+  awaitInboundChannelCommandResult: RouteDependencyMethod<"integrationWebhooks", "awaitInboundChannelCommandResult">;
+  findRemoteActionTokenId: RouteDependencyMethod<"integrationWebhooks", "findRemoteActionTokenId">;
   resolveConnectedMcpTools: mcpServerAdminService.McpServerAdminHost["resolveConnectedMcpTools"];
   resolveConnectionSecret: IntegrationChannelServicePort["resolveConnectionSecret"];
   resolveGatewayInstallToken: RouteDependencyMethod<"authAdmin", "resolveGatewayInstallToken">;
@@ -224,8 +239,10 @@ export interface GatewayRouteCompositionPort {
   syncSignalInboundRuntime: IntegrationChannelServicePort["syncSignalInboundRuntime"];
   updateChatSessionPrefs: RouteDependencyMethod<"chatSupport", "prefs">["updateChatSessionPrefs"];
   updateFeatureFlags: settingsAuthService.SettingsRuntimeDependencies["updateFeatureFlags"];
+  updateSettings(input: settingsAuthService.UpdateSettingsInput): Promise<RuntimeSettings>;
   updateSkillActivationPolicy: RouteDependencyMethod<"skills", "updateSkillActivationPolicy">;
   validateSkillImport: RouteDependencyMethod<"skills", "validateSkillImport">;
+  reviewSkillHubSource: RouteDependencyMethod<"skills", "reviewSkillHubSource">;
   verifyBackup: RouteDependencyMethod<"authAdmin", "verifyBackup">;
   verifyDatabaseCutover: RouteDependencyMethod<"authAdmin", "verifyDatabaseCutover">;
   writeDiscordPairings: IntegrationChannelServicePort["writeDiscordPairings"];
@@ -244,6 +261,7 @@ export type GatewayRouteCompositionPrivateDependencies = Pick<
   | "capabilityPackService"
   | "capabilityScopeResolver"
   | "capabilitySystemService"
+  | "chatCompactionBreakerActionService"
   | "chatMessageRouteRuntimeHost"
   | "chatProjectService"
   | "chatTurnRuntime"
@@ -283,6 +301,7 @@ export function createGatewayRouteCompositionPort(
     capabilityPackService: privateDependencies.capabilityPackService,
     capabilityScopeResolver: privateDependencies.capabilityScopeResolver,
     capabilitySystemService: privateDependencies.capabilitySystemService,
+    chatCompactionBreakerActionService: privateDependencies.chatCompactionBreakerActionService,
     chatMessageRouteRuntimeHost: privateDependencies.chatMessageRouteRuntimeHost,
     chatProjectService: privateDependencies.chatProjectService,
     chatTurnRuntime: privateDependencies.chatTurnRuntime,
@@ -325,6 +344,8 @@ export function createGatewayRouteCompositionPort(
     steerService: gateway.steerService,
     storage: gateway.storage,
     acceptChatDelegation: gateway.acceptChatDelegation.bind(gateway),
+    acceptInboundChannelEvent: gateway.acceptInboundChannelEvent.bind(gateway),
+    acceptInboundChannelEvents: gateway.acceptInboundChannelEvents.bind(gateway),
     approvePhase: gateway.approvePhase.bind(gateway),
     cancelOrchestrationRun: gateway.cancelOrchestrationRun.bind(gateway),
     assertDeploymentProfileUpdate: gateway.assertDeploymentProfileUpdate.bind(gateway),
@@ -349,6 +370,7 @@ export function createGatewayRouteCompositionPort(
     createOrchestrationPlan: gateway.createOrchestrationPlan.bind(gateway),
     enqueueApprovalResolutionEffects: gateway.enqueueApprovalResolutionEffects.bind(gateway),
     ensureChatSessionModelDefaults: gateway.ensureChatSessionModelDefaults.bind(gateway),
+    ensureChatMessageProjection: gateway.ensureChatMessageProjection.bind(gateway),
     ensureChatSessionRuntimeGrants: gateway.ensureChatSessionRuntimeGrants.bind(gateway),
     fetchWithDiagnosticsTimeout: gateway.fetchWithDiagnosticsTimeout.bind(gateway),
     getChatSessionPrefs: gateway.getChatSessionPrefs.bind(gateway),
@@ -391,20 +413,21 @@ export function createGatewayRouteCompositionPort(
     listSkillExportTargets: gateway.listSkillExportTargets.bind(gateway),
     lookupSkillSources: gateway.lookupSkillSources.bind(gateway),
     packageSkillExport: gateway.packageSkillExport.bind(gateway),
+    prepareSkillHubRollbackReview: gateway.prepareSkillHubRollbackReview.bind(gateway),
     previewSkillExport: gateway.previewSkillExport.bind(gateway),
     normalizeWorkspaceId: gateway.normalizeWorkspaceId.bind(gateway),
     parseChatCommand: gateway.parseChatCommand.bind(gateway),
     patchMcpServerState: gateway.patchMcpServerState.bind(gateway),
     mcpOAuth: gateway.mcpOAuth,
     patchSessionAutonomyPrefs: gateway.patchSessionAutonomyPrefs.bind(gateway),
-    persistAssistantConfig: gateway.persistAssistantConfig.bind(gateway),
-    persistBudgetsConfig: gateway.persistBudgetsConfig.bind(gateway),
-    persistLlmConfig: gateway.persistLlmConfig.bind(gateway),
-    persistToolPolicyConfig: gateway.persistToolPolicyConfig.bind(gateway),
     publishRealtime: gateway.publishRealtime.bind(gateway),
     readConnectionConfigValue: gateway.readConnectionConfigValue.bind(gateway),
     readDiscordPairings: gateway.readDiscordPairings.bind(gateway),
     readFeatureFlags: gateway.readFeatureFlags.bind(gateway),
+    readSettingsRevision: gateway.readSettingsRevision.bind(gateway),
+    getConfigGenerationHealthSnapshot: gateway.getConfigGenerationHealthSnapshot.bind(gateway),
+    saveProviderSecret: gateway.saveProviderSecret.bind(gateway),
+    deleteProviderSecret: gateway.deleteProviderSecret.bind(gateway),
     readMcpAuthState: gateway.readMcpAuthState.bind(gateway),
     readMcpServers: gateway.readMcpServers.bind(gateway),
     readMcpTools: gateway.readMcpTools.bind(gateway),
@@ -416,6 +439,8 @@ export function createGatewayRouteCompositionPort(
     resolveApproval: gateway.resolveApproval.bind(gateway),
     resolveApprovalWithRemoteToken: gateway.resolveApprovalWithRemoteToken.bind(gateway),
     resolveApprovalWithRemoteTokenId: gateway.resolveApprovalWithRemoteTokenId.bind(gateway),
+    awaitInboundChannelCommandResult: gateway.awaitInboundChannelCommandResult.bind(gateway),
+    findRemoteActionTokenId: gateway.findRemoteActionTokenId.bind(gateway),
     resolveConnectedMcpTools: gateway.resolveConnectedMcpTools.bind(gateway),
     resolveConnectionSecret: gateway.resolveConnectionSecret.bind(gateway),
     resolveGatewayInstallToken: gateway.resolveGatewayInstallToken.bind(gateway),
@@ -433,8 +458,10 @@ export function createGatewayRouteCompositionPort(
     syncSignalInboundRuntime: gateway.syncSignalInboundRuntime.bind(gateway),
     updateChatSessionPrefs: gateway.updateChatSessionPrefs.bind(gateway),
     updateFeatureFlags: gateway.updateFeatureFlags.bind(gateway),
+    updateSettings: gateway.updateSettings.bind(gateway),
     updateSkillActivationPolicy: gateway.updateSkillActivationPolicy.bind(gateway),
     validateSkillImport: gateway.validateSkillImport.bind(gateway),
+    reviewSkillHubSource: gateway.reviewSkillHubSource.bind(gateway),
     verifyBackup: gateway.verifyBackup.bind(gateway),
     verifyDatabaseCutover: gateway.verifyDatabaseCutover.bind(gateway),
     writeDiscordPairings: gateway.writeDiscordPairings.bind(gateway),

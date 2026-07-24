@@ -10,6 +10,7 @@ import {
   classifyChannelDeliveryFailure,
   type ChannelDeliveryRuntimeRepository,
 } from "./channel-delivery-runtime-service.js";
+import { SharedHostLifecycleService } from "./shared-host-lifecycle-service.js";
 
 function createRepository(): ChannelDeliveryRuntimeRepository & {
   created: CommsSendResult[];
@@ -41,6 +42,34 @@ function createRepository(): ChannelDeliveryRuntimeRepository & {
 }
 
 describe("ChannelDeliveryRuntimeService", () => {
+  it("does not hydrate, claim, or send outbound work after shared-host admission closes", async () => {
+    const lifecycle = new SharedHostLifecycleService({ enabled: true });
+    lifecycle.markAccepting();
+    await lifecycle.drain({
+      mode: "graceful",
+      reason: "test",
+      actorId: "test",
+      timeoutMs: 10,
+    });
+    const repository = {
+      ...createRepository(),
+      listDue: vi.fn(() => []),
+      claimAttempt: vi.fn(() => true),
+    };
+    const send = vi.fn();
+    const service = new ChannelDeliveryRuntimeService({
+      repository,
+      send,
+      sharedHostLifecycle: lifecycle,
+    });
+
+    await expect(service.drainDue()).resolves.toEqual([]);
+    expect(repository.listDue).not.toHaveBeenCalled();
+    expect(repository.claimAttempt).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+    expect(lifecycle.snapshot()).toMatchObject({ state: "quiesced", activeCount: 0 });
+  });
+
   it("deduplicates queued deliveries by idempotency key", () => {
     const repository = createRepository();
     const service = new ChannelDeliveryRuntimeService({

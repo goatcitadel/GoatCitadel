@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- LibrarySkillsSection coordinates the skill list, detail, evaluation workbench, and the HX-402 P2 approval-first state surface in one orchestrator (MemoryRoutePage precedent) until the Library surface is split. */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FileText, Plus, RefreshCw, Save, Sparkles, Workflow } from "lucide-react";
 import type { CapabilityProposalDetailRecord, SkillEvaluationRunRecord, SkillListItem } from "@goatcitadel/contracts";
@@ -12,6 +13,7 @@ import {
   fetchSkillImportHistory,
   fetchSkillSources,
   fetchSkills,
+  isApiRequestError,
   previewSkillEvaluation,
   promoteImprovementCandidate,
   rejectImprovementCandidate,
@@ -60,12 +62,17 @@ import {
   LibrarySelectableList,
 } from "../shared/library-primitives";
 import { describeSkillSourceDisposition, formatSkillImportPosture } from "./library-skill-trust-format";
+import { SkillHubOperatorPanel } from "./SkillHubOperatorPanel";
 
-export function LibrarySkillsSection({ route, navigate }: NativeRoutePagesProps) {
+export function LibrarySkillsSection({ route, navigate, activeWorkspaceId }: NativeRoutePagesProps) {
   const [selectedSkillId, setSelectedSkillId] = useState("");
   const [skillQuery, setSkillQuery] = useState("");
   const [skillPostureFilter, setSkillPostureFilter] = useState<SkillPostureFilter>("all");
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [pendingSkillState, setPendingSkillState] = useState<{
+    skillId: string;
+    state: SkillListItem["state"];
+  } | null>(null);
   const { loading, error, data, reload } = useAsyncLoad(async () => {
     const [skills, sources, history, policy] = await Promise.all([
       nativeLoad("Skills", fetchSkills(), { items: [] }),
@@ -109,11 +116,31 @@ export function LibrarySkillsSection({ route, navigate }: NativeRoutePagesProps)
     if (!selectedSkill) {
       return;
     }
+    if (!isPositiveRevision(selectedSkill.revision)) {
+      setNotice({
+        tone: "error",
+        message: "This skill is missing a canonical revision. Refresh the skill list before changing its state.",
+      });
+      return;
+    }
+    setPendingSkillState(null);
     try {
-      await updateSkillState(selectedSkill.skillId, { state });
-      setNotice({ tone: "success", message: `${selectedSkill.name} set to ${state}.` });
+      const outcome = await updateSkillState(selectedSkill.skillId, {
+        expectedRevision: selectedSkill.revision,
+        state,
+      });
+      setNotice({ tone: "success", message: describeSkillStateOutcome(outcome, selectedSkill.name, state) });
       await reload();
     } catch (stateError) {
+      if (isWriteConflict(stateError)) {
+        setPendingSkillState({ skillId: selectedSkill.skillId, state });
+        await reload();
+        setNotice({
+          tone: "error",
+          message: `${selectedSkill.name} changed elsewhere. The canonical skill list was refreshed; review it, then retry ${state} explicitly.`,
+        });
+        return;
+      }
       setNotice({ tone: "error", message: getErrorMessage(stateError) });
     }
   };
@@ -132,6 +159,10 @@ export function LibrarySkillsSection({ route, navigate }: NativeRoutePagesProps)
     <LibrarySectionShell loading={loading} error={error} onRetry={reload}>
       {notice ? <LibraryNotice notice={notice} /> : null}
       <LibraryLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
+      <SkillHubOperatorPanel
+        workspaceId={activeWorkspaceId}
+        onOpenApproval={(approvalId) => navigate({ area: "ops", section: "approvals", approvalId, theme: route.theme })}
+      />
       <div className="mc-next-settings-grid">
         <NativeCard
           title="Installed skills"
@@ -280,6 +311,15 @@ export function LibrarySkillsSection({ route, navigate }: NativeRoutePagesProps)
                   >
                     Disable
                   </button>
+                  {pendingSkillState?.skillId === selectedSkill.skillId ? (
+                    <button
+                      type="button"
+                      className="mc-next-settings-filter"
+                      onClick={() => void handleSkillState(pendingSkillState.state)}
+                    >
+                      {`Retry ${pendingSkillState.state}`}
+                    </button>
+                  ) : null}
                 </LibraryButtonRow>
                 <SkillEvaluationWorkbench skill={selectedSkill} onNotice={setNotice} />
               </>
@@ -355,6 +395,27 @@ export function LibrarySkillsSection({ route, navigate }: NativeRoutePagesProps)
 }
 
 export type SkillPostureFilter = "all" | "callable" | "review" | SkillListItem["state"];
+
+/** HX-402 P2: honest approval-first copy — pending names the approval and states nothing changed; otherwise it is a pure no-op. */
+export function describeSkillStateOutcome(outcome: unknown, skillName: string, state: string): string {
+  const pending = (outcome as { pendingApproval?: { approvalId?: unknown } | null } | undefined)?.pendingApproval;
+  const approvalId = typeof pending?.approvalId === "string" ? pending.approvalId : undefined;
+  return approvalId
+    ? `Approval requested to set ${skillName} to ${state}. Resolve approval ${approvalId} in Ops → Approvals; no change is applied until then.`
+    : `${skillName} is already ${state}; nothing to approve.`;
+}
+
+function isPositiveRevision(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+function isWriteConflict(error: unknown): boolean {
+  if (!isApiRequestError(error) || error.status !== 409) {
+    return false;
+  }
+  const body = error.body;
+  return Boolean(body && typeof body === "object" && "code" in body && body.code === "WRITE_CONFLICT");
+}
 
 export interface SkillDoctorSignal {
   id: string;

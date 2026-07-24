@@ -35,7 +35,7 @@ function setRawField(db: DatabaseClient, skillId: string, field: string, value: 
 
 describe("SkillLifecycleRepository", () => {
   it("upserts, finds, gets, and lists lifecycle records", () => {
-    const { repo } = createStore();
+    const { db, repo } = createStore();
     const base = {
       skillId: "skill-a",
       category: "community_imported" as const,
@@ -46,6 +46,14 @@ describe("SkillLifecycleRepository", () => {
         source: "marketplace",
         sourceRef: "skill://marketplace/skill-a",
         sourceProvider: "skillsmp",
+        commitSha: "0123456789abcdef0123456789abcdef01234567",
+        contentIntegrity: {
+          manifestVersion: "goatcitadel.skill-tree.v1" as const,
+          treeSha256: "a".repeat(64),
+          fileCount: 2,
+          totalBytes: 128,
+          verified: true,
+        },
       },
       createdAt: "2026-03-26T00:00:01.000Z",
       updatedAt: "2026-03-26T00:00:01.000Z",
@@ -54,6 +62,10 @@ describe("SkillLifecycleRepository", () => {
     assert.deepEqual(repo.upsert(base), base);
     assert.deepEqual(repo.get("skill-a"), base);
     assert.deepEqual(repo.find("skill-a"), base);
+
+    setRawField(db, "skill-a", "provenance_json", '{"source":"local","commitSha":"not-a-sha"}');
+    assert.deepEqual(repo.get("skill-a").provenance, { source: "local" });
+    repo.upsert(base);
 
     const updated = repo.upsert({
       ...base,

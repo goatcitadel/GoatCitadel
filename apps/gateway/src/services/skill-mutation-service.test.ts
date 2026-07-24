@@ -7,6 +7,7 @@ import { Storage } from "@goatcitadel/storage";
 import type { SkillLifecycleRecord } from "@goatcitadel/contracts";
 import { SkillMutationService, type SkillMutationLifecycleStore } from "./skill-mutation-service.js";
 import { __internal } from "./capability-system-service.js";
+import { SKILL_CONTENT_INTEGRITY_LIMITS } from "./skill-content-integrity.js";
 
 const { isSkillCallable } = __internal;
 
@@ -51,7 +52,7 @@ function createMemoryLifecycleStore(): SkillMutationLifecycleStore & { rows: Map
   };
 }
 
-function buildSkillMarkdown(body: string, name = "Self Authored Helper"): string {
+function buildSkillMarkdown(body: string, name = "self-authored-helper"): string {
   return [
     "---",
     `name: ${name}`,
@@ -347,7 +348,7 @@ describe("SkillMutationService", () => {
       skillId: "background-review-plan",
       evaluationRunId: "effect-plan-1",
       sourceTurnId: "turn-plan-1",
-      skillMarkdown: buildSkillMarkdown("Persisted exact plan.", "Background Review Plan"),
+      skillMarkdown: buildSkillMarkdown("Persisted exact plan.", "background-review-plan"),
     });
 
     harness.service.applyPreparedSkillMutationFilesSync(prepared);
@@ -362,10 +363,24 @@ describe("SkillMutationService", () => {
       evaluationRunId: "effect-plan-1",
     });
 
-    fsSync.writeFileSync(skillFilePath, buildSkillMarkdown("Operator edit.", "Background Review Plan"), "utf8");
+    fsSync.writeFileSync(skillFilePath, buildSkillMarkdown("Operator edit.", "background-review-plan"), "utf8");
     expect(() => harness.service.applyPreparedSkillMutationFilesSync(prepared)).toThrow(/conflict/i);
     expect(fsSync.readFileSync(skillFilePath, "utf8")).toContain("Operator edit.");
     expect(harness.storage.skillLifecycle.find(prepared.skillId)).toBeUndefined();
+  });
+
+  it("bounds existing source.json snapshots before reading rollback bytes", () => {
+    const harness = createHarness();
+    const skillDir = path.join(harness.service.selfSkillsRoot, "oversized-provenance");
+    fsSync.mkdirSync(skillDir, { recursive: true });
+    fsSync.writeFileSync(path.join(skillDir, "SKILL.md"), buildSkillMarkdown("Existing skill bytes."), "utf8");
+    const sourceJsonPath = path.join(skillDir, "source.json");
+    fsSync.writeFileSync(sourceJsonPath, "");
+    fsSync.truncateSync(sourceJsonPath, SKILL_CONTENT_INTEGRITY_LIMITS.maxSourceManifestBytes + 1);
+
+    expect(() => harness.service.captureSnapshotFor({ skillId: "oversized-provenance" })).toThrow(
+      `exceeds ${SKILL_CONTENT_INTEGRITY_LIMITS.maxSourceManifestBytes} bytes`,
+    );
   });
 
   it("does not publish a partial durable artifact when the exclusive write creates then throws", () => {
@@ -373,7 +388,7 @@ describe("SkillMutationService", () => {
     const prepared = harness.service.prepareDurableSkillMutation({
       skillId: "background-review-partial",
       evaluationRunId: "effect-plan-partial",
-      skillMarkdown: buildSkillMarkdown("Complete planned bytes.", "Background Review Partial"),
+      skillMarkdown: buildSkillMarkdown("Complete planned bytes.", "background-review-partial"),
     });
     const writeFileSync = fsSync.writeFileSync.bind(fsSync);
     let injected = false;
@@ -400,7 +415,7 @@ describe("SkillMutationService", () => {
     const prepared = harness.service.prepareDurableSkillMutation({
       skillId: "background-review-temp-cleanup",
       evaluationRunId: "effect-temp-cleanup",
-      skillMarkdown: buildSkillMarkdown("Published before cleanup.", "Background Review Temp Cleanup"),
+      skillMarkdown: buildSkillMarkdown("Published before cleanup.", "background-review-temp-cleanup"),
     });
     const rmSync = fsSync.rmSync.bind(fsSync);
     let injected = false;

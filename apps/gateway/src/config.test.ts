@@ -1,9 +1,11 @@
 import path from "node:path";
 import os from "node:os";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { ConfigValidationError } from "@goatcitadel/contracts";
 import { loadGatewayConfig } from "./config.js";
+import { syncUnifiedConfig } from "./config-sync-lib.js";
+import { ConfigGenerationService } from "./services/config-generation-service.js";
 
 const TEMP_ROOTS: string[] = [];
 
@@ -166,5 +168,37 @@ describe("loadGatewayConfig", () => {
     expect(config.toolPolicy).toBeDefined();
     expect(config.budgets).toBeDefined();
     expect(config.llm).toBeDefined();
+  });
+
+  it("repairs a stale split mirror from canonical startup truth without bumping its generation", async () => {
+    const { rootDir, configDir } = await createConfigFixture();
+    await syncUnifiedConfig(rootDir, { createUnifiedIfMissing: true });
+    const generation = new ConfigGenerationService(rootDir);
+    await generation.commit({
+      previousRuntime: null,
+      buildCandidate: () => ({ payload: generation.getActivePayload(), runtime: null }),
+      apply: () => undefined,
+      restore: () => undefined,
+    });
+
+    const activePath = path.join(configDir, "goatcitadel.json");
+    const before = JSON.parse(await readFile(activePath, "utf8")) as {
+      assistant: Record<string, unknown>;
+      generation: Record<string, unknown>;
+    };
+    await writeJson(path.join(configDir, "assistant.config.json"), {
+      ...before.assistant,
+      auth: { mode: "bearer" },
+    });
+
+    const loaded = await loadGatewayConfig(rootDir);
+    const repairedMirror = JSON.parse(await readFile(path.join(configDir, "assistant.config.json"), "utf8"));
+    const after = JSON.parse(await readFile(activePath, "utf8")) as {
+      generation: Record<string, unknown>;
+    };
+
+    expect(loaded.assistant.auth.mode).toBe("none");
+    expect(repairedMirror).toEqual(before.assistant);
+    expect(after.generation).toEqual(before.generation);
   });
 });

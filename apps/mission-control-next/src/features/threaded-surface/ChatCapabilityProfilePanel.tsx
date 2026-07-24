@@ -1,0 +1,383 @@
+import type {
+  ChatRoutedContextInspection,
+  ChatTurnCapabilityProfilePreview,
+  ChatTurnCapabilityProfileRecord,
+} from "@goatcitadel/contracts";
+import type { ChatCapabilityProfileInspection } from "@goatcitadel/threaded-surface-core";
+import { StatusChip } from "../native-routes/primitives";
+
+function shortHash(value: string | undefined, size = 12): string {
+  if (!value) {
+    return "not recorded";
+  }
+  return value.length > size ? `${value.slice(0, size)}…` : value;
+}
+
+function formatRoute(providerId?: string, model?: string): string {
+  return [providerId, model].filter(Boolean).join(" / ") || "route unresolved";
+}
+
+function formatLabel(value: string): string {
+  return value.replaceAll("_", " ");
+}
+
+function readinessTone(status: "ready" | "missing" | "blocked" | "unknown") {
+  return status === "ready" ? "success" : status === "missing" || status === "blocked" ? "critical" : "muted";
+}
+
+export function ChatCapabilityProfilePreflight({ profile }: { profile: ChatTurnCapabilityProfilePreview }) {
+  const blocked = profile.blockedReasons.length > 0;
+  const blockedReadiness = profile.authReadiness.filter(
+    (item) => item.status === "missing" || item.status === "blocked",
+  );
+  const ready = !blocked && blockedReadiness.length === 0;
+
+  return (
+    <section
+      className="mc-next-capability-profile mc-next-capability-profile-preflight"
+      aria-label="Capability profile before send"
+      data-profile-fingerprint={profile.fingerprint}
+    >
+      <div className="mc-next-capability-profile-head">
+        <StatusChip tone={ready ? "success" : "warning"}>
+          {ready ? "Capabilities ready" : "Profile needs review"}
+        </StatusChip>
+        <p aria-live="polite">
+          {profile.selectedTools.length} tools · {profile.trustedSkills.length} skills · memory {profile.memory.mode}
+          {profile.approval.toolsRequiringApproval.length > 0
+            ? ` · ${profile.approval.toolsRequiringApproval.length} approval-gated`
+            : " · no selected tool approvals"}
+        </p>
+      </div>
+      <details className="mc-next-capability-profile-disclosure">
+        <summary>Inspect proposed profile</summary>
+        <div className="mc-next-capability-profile-detail">
+          <dl className="mc-next-capability-profile-facts">
+            <div>
+              <dt>Route</dt>
+              <dd>{formatRoute(profile.providerId, profile.model)}</dd>
+            </div>
+            <div>
+              <dt>Fingerprint</dt>
+              <dd title={profile.fingerprint}>{shortHash(profile.fingerprint)}</dd>
+            </div>
+            <div>
+              <dt>Fallbacks</dt>
+              <dd>{profile.fallbackCount === 0 ? "Frozen off" : `${profile.fallbackCount} allowed`}</dd>
+            </div>
+            <div>
+              <dt>Memory scope</dt>
+              <dd>
+                {profile.memory.mode} · {profile.memory.retrievalMode}
+              </dd>
+            </div>
+          </dl>
+          <CapabilitySelectionLists
+            tools={profile.selectedTools.map((tool) => ({
+              label: `${tool.canonicalName} → ${tool.modelName}`,
+              detail: tool.requiresApproval ? "approval required" : "policy-ready",
+            }))}
+            skills={profile.trustedSkills.map((skill) => ({
+              label: skill.skillId,
+              detail: skill.trustLabel ?? "trust label pending",
+            }))}
+          />
+          <div className="mc-next-capability-profile-readiness" aria-label="Proposed auth readiness">
+            {profile.authReadiness.map((item) => (
+              <StatusChip key={`${item.kind}:${item.ref}`} tone={readinessTone(item.status)}>
+                {item.kind} · {item.status}
+              </StatusChip>
+            ))}
+          </div>
+          {profile.blockedReasons.length > 0 ? (
+            <ul className="mc-next-capability-profile-alerts" aria-label="Capability profile blockers">
+              {profile.blockedReasons.map((reason) => (
+                <li key={reason}>{reason}</li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      </details>
+    </section>
+  );
+}
+
+export function ChatCapabilityProfileRunDetail({ inspection }: { inspection?: ChatCapabilityProfileInspection }) {
+  if (!inspection || inspection.status === "idle") {
+    return null;
+  }
+  if (inspection.status !== "verified" || !inspection.profile) {
+    const tone = inspection.status === "legacy_missing" || inspection.status === "not_found" ? "muted" : "warning";
+    return (
+      <section
+        className="mc-next-context-card mc-next-capability-profile mc-next-capability-profile-run-detail"
+        aria-label="Persisted capability profile"
+        data-integrity-status={inspection.status}
+      >
+        <div className="mc-next-capability-profile-head">
+          <div>
+            <p className="mc-next-panel-kicker">Capability profile</p>
+            <h4>Immutable turn boundary</h4>
+          </div>
+          <StatusChip tone={inspection.status === "loading" ? "muted" : tone}>
+            {inspection.status === "loading" ? "Loading" : formatLabel(inspection.status)}
+          </StatusChip>
+        </div>
+        <p role={inspection.status === "invalid" || inspection.status === "forbidden" ? "alert" : "status"}>
+          {inspection.status === "loading" ? "Checking the scoped persisted profile…" : inspection.message}
+        </p>
+        {inspection.mismatchFields.length > 0 ? (
+          <p className="mc-next-capability-profile-warning">
+            Mismatch: {inspection.mismatchFields.join(", ")}. Profile detail remains hidden.
+          </p>
+        ) : null}
+      </section>
+    );
+  }
+
+  return (
+    <VerifiedCapabilityProfile
+      profile={inspection.profile}
+      routedContext={inspection.routedContext}
+      message={inspection.message}
+    />
+  );
+}
+
+function VerifiedCapabilityProfile({
+  profile,
+  routedContext,
+  message,
+}: {
+  profile: ChatTurnCapabilityProfileRecord;
+  routedContext?: ChatRoutedContextInspection;
+  message?: string;
+}) {
+  const blockedDecisions = profile.governance.policyDecisions.filter((decision) => !decision.allowed);
+  const approvalDecisions = profile.governance.policyDecisions.filter((decision) => decision.requiresApproval);
+  return (
+    <section
+      className="mc-next-context-card mc-next-capability-profile mc-next-capability-profile-run-detail"
+      aria-label="Persisted capability profile"
+      data-integrity-status="verified"
+      data-profile-id={profile.profileId}
+    >
+      <div className="mc-next-capability-profile-head">
+        <div>
+          <p className="mc-next-panel-kicker">Capability profile</p>
+          <h4>Immutable turn boundary</h4>
+        </div>
+        <StatusChip tone="success">Exact profile match</StatusChip>
+      </div>
+      <p>{message}</p>
+      <div className="mc-next-capability-profile-hash">
+        <span>Profile hash</span>
+        <code>{profile.hashes.profileHash}</code>
+      </div>
+      <div className="mc-next-capability-profile-chip-row">
+        <StatusChip tone="success">
+          {formatRoute(profile.selection.effectiveProviderId, profile.selection.effectiveModel)}
+        </StatusChip>
+        <StatusChip tone="muted">{profile.selection.tools.length} tools</StatusChip>
+        <StatusChip tone="muted">{profile.selection.trustedSkills.length} skills</StatusChip>
+        <StatusChip tone={profile.selection.allowedFallbacks.length === 0 ? "success" : "warning"}>
+          {profile.selection.allowedFallbacks.length === 0
+            ? "Fallback frozen off"
+            : `${profile.selection.allowedFallbacks.length} fallbacks`}
+        </StatusChip>
+      </div>
+      {routedContext ? <RoutedContextReceipt routedContext={routedContext} /> : null}
+      <details className="mc-next-capability-profile-disclosure">
+        <summary>Inspect frozen selections and governance</summary>
+        <div className="mc-next-capability-profile-detail">
+          <dl className="mc-next-capability-profile-facts">
+            <div>
+              <dt>Profile</dt>
+              <dd>{profile.profileId}</dd>
+            </div>
+            <div>
+              <dt>Created</dt>
+              <dd>{profile.createdAt}</dd>
+            </div>
+            <div>
+              <dt>Mode</dt>
+              <dd>{profile.selection.mode}</dd>
+            </div>
+            <div>
+              <dt>Web</dt>
+              <dd>{profile.selection.webMode}</dd>
+            </div>
+            <div>
+              <dt>Memory</dt>
+              <dd>
+                {profile.selection.memory.mode} · {profile.selection.memory.retrievalMode}
+              </dd>
+            </div>
+            <div>
+              <dt>Thinking</dt>
+              <dd>
+                {profile.selection.thinkingLevel} · {profile.selection.speedMode}
+              </dd>
+            </div>
+            <div>
+              <dt>Subagents</dt>
+              <dd>{formatLabel(profile.selection.subagentPolicy)}</dd>
+            </div>
+            <div>
+              <dt>Tool autonomy</dt>
+              <dd>{formatLabel(profile.selection.toolAutonomy)}</dd>
+            </div>
+          </dl>
+          <CapabilitySelectionLists
+            tools={profile.selection.tools.map((tool) => ({
+              label: `${tool.canonicalName} → ${tool.modelName}`,
+              detail: `definition ${shortHash(tool.definitionHash)}`,
+            }))}
+            skills={profile.selection.trustedSkills.map((skill) => ({
+              label: skill.skillId,
+              detail:
+                [
+                  skill.trustLabel,
+                  skill.commitSha ? `commit ${shortHash(skill.commitSha)}` : undefined,
+                  skill.treeSha256 ? `tree ${shortHash(skill.treeSha256)}` : undefined,
+                ]
+                  .filter(Boolean)
+                  .join(" · ") || "provenance pending",
+            }))}
+          />
+          <section className="mc-next-capability-profile-subsection" aria-label="Frozen policy posture">
+            <h5>Policy and approvals</h5>
+            <div className="mc-next-capability-profile-chip-row">
+              <StatusChip tone="muted">{profile.governance.permission.profileId}</StatusChip>
+              <StatusChip tone={approvalDecisions.length > 0 ? "warning" : "success"}>
+                {formatLabel(profile.governance.approval.mode)}
+              </StatusChip>
+              <StatusChip tone={blockedDecisions.length > 0 ? "warning" : "success"}>
+                {blockedDecisions.length} policy-blocked
+              </StatusChip>
+              <StatusChip tone="muted">{profile.governance.activeGrants.length} active grants</StatusChip>
+            </div>
+            {profile.governance.policyDecisions.length > 0 ? (
+              <ul className="mc-next-capability-profile-list">
+                {profile.governance.policyDecisions.map((decision) => (
+                  <li key={decision.toolName}>
+                    <strong>{decision.toolName}</strong>
+                    <span>
+                      {decision.allowed ? "allowed" : "blocked"}
+                      {decision.requiresApproval ? " · approval required" : ""}
+                      {decision.reasonCodes.length > 0 ? ` · ${decision.reasonCodes.join(", ")}` : ""}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p>No selected-tool policy decisions were recorded.</p>
+            )}
+          </section>
+          <section className="mc-next-capability-profile-subsection" aria-label="Frozen auth readiness">
+            <h5>Auth and runtime readiness</h5>
+            <div className="mc-next-capability-profile-readiness">
+              {profile.governance.authReadiness.map((item) => (
+                <StatusChip key={`${item.kind}:${item.ref}`} tone={readinessTone(item.status)}>
+                  {item.kind} · {item.ref} · {item.status}
+                </StatusChip>
+              ))}
+            </div>
+          </section>
+        </div>
+      </details>
+    </section>
+  );
+}
+
+function RoutedContextReceipt({ routedContext }: { routedContext: ChatRoutedContextInspection }) {
+  return (
+    <section className="mc-next-capability-profile-subsection" aria-label="Routed context receipt">
+      <h5>Routed context</h5>
+      <div className="mc-next-capability-profile-chip-row">
+        <StatusChip tone="success">{routedContext.includedCount} included</StatusChip>
+        <StatusChip tone={routedContext.truncatedCount > 0 ? "warning" : "muted"}>
+          {routedContext.truncatedCount} truncated
+        </StatusChip>
+        <StatusChip tone="muted">{routedContext.omittedCount} omitted</StatusChip>
+        <StatusChip tone="muted">{routedContext.alreadyAttachedCount} already attached</StatusChip>
+      </div>
+      <dl className="mc-next-capability-profile-facts">
+        <div>
+          <dt>Snapshot</dt>
+          <dd>{shortHash(routedContext.snapshotHash)}</dd>
+        </div>
+        <div>
+          <dt>Request</dt>
+          <dd>{shortHash(routedContext.sourceRequestHash)}</dd>
+        </div>
+        <div>
+          <dt>Content</dt>
+          <dd>{shortHash(routedContext.contentHash)}</dd>
+        </div>
+        <div>
+          <dt>Budget</dt>
+          <dd>
+            {routedContext.budget.usedTokens} / {routedContext.budget.effectiveBudgetTokens} tokens
+          </dd>
+        </div>
+      </dl>
+      <ul className="mc-next-capability-profile-list">
+        {routedContext.entries.map((entry) => (
+          <li key={`${entry.index}:${entry.kind}:${entry.sourceHash}`}>
+            <strong>
+              Source {entry.index + 1} · {formatLabel(entry.kind)}
+            </strong>
+            <span>
+              {formatLabel(entry.disposition)} · {entry.admittedTokens} tokens · {entry.admittedBytes} bytes · source{" "}
+              {shortHash(entry.sourceHash)}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function CapabilitySelectionLists({
+  tools,
+  skills,
+}: {
+  tools: Array<{ label: string; detail: string }>;
+  skills: Array<{ label: string; detail: string }>;
+}) {
+  return (
+    <div className="mc-next-capability-profile-columns">
+      <section className="mc-next-capability-profile-subsection" aria-label="Selected tools">
+        <h5>Selected tools</h5>
+        {tools.length > 0 ? (
+          <ul className="mc-next-capability-profile-list">
+            {tools.map((tool) => (
+              <li key={tool.label}>
+                <strong>{tool.label}</strong>
+                <span>{tool.detail}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p>No callable tools selected.</p>
+        )}
+      </section>
+      <section className="mc-next-capability-profile-subsection" aria-label="Trusted skills">
+        <h5>Trusted skills</h5>
+        {skills.length > 0 ? (
+          <ul className="mc-next-capability-profile-list">
+            {skills.map((skill) => (
+              <li key={skill.label}>
+                <strong>{skill.label}</strong>
+                <span>{skill.detail}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p>No runtime skills selected.</p>
+        )}
+      </section>
+    </div>
+  );
+}

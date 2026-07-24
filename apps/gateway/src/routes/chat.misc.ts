@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { sessionParamsSchema } from "./chat.shared.js";
+import { sendRouteError } from "./_error-handler.js";
 
 const resolveActorId = (request: { authActorId?: string; ip?: string }) =>
   request.authActorId?.trim() || `ip:${request.ip ?? "unknown"}`;
@@ -8,13 +9,14 @@ const resolveActorId = (request: { authActorId?: string; ip?: string }) =>
 const chatOnlyModeSchema = z.enum(["chat", "cowork", "code"]).transform(() => "chat" as const);
 
 const prefsPatchSchema = z.object({
+  expectedRevision: z.number().int().positive(),
   mode: chatOnlyModeSchema.optional(),
   providerId: z.string().optional(),
   model: z.string().optional(),
   planningMode: z.enum(["off", "advisory"]).optional(),
   webMode: z.enum(["auto", "off", "quick", "deep"]).optional(),
   memoryMode: z.enum(["auto", "on", "off"]).optional(),
-  thinkingLevel: z.enum(["off", "minimal", "standard", "extended", "deep"]).optional(),
+  thinkingLevel: z.enum(["off", "minimal", "standard", "extended", "deep", "max", "ultra"]).optional(),
   speedMode: z.enum(["standard", "fast"]).optional(),
   subagentPolicy: z.enum(["off", "ask_when_useful", "auto_when_useful"]).optional(),
   toolAutonomy: z.enum(["safe_auto", "manual"]).optional(),
@@ -42,6 +44,7 @@ const prefsPatchSchema = z.object({
 
 const commandParseSchema = z.object({
   commandText: z.string().min(1),
+  idempotencyKey: z.string().min(1).max(384).optional(),
   policyRunId: z.string().optional(),
   policyTaskId: z.string().optional(),
   permissionProfileId: z.string().optional(),
@@ -67,6 +70,7 @@ const researchParamsSchema = z.object({
 });
 
 const proactivePolicyPatchSchema = z.object({
+  expectedRevision: z.number().int().positive(),
   proactiveMode: z.enum(["off", "suggest", "auto_safe", "auto_full"]).optional(),
   autonomyBudget: z
     .object({
@@ -174,8 +178,13 @@ const steerRequestSchema = z.object({
 });
 
 const goalRequestSchema = z.object({
+  expectedRevision: z.number().int().positive(),
   goal: z.string().min(1),
   turnBudget: z.coerce.number().int().positive().max(1000).optional(),
+});
+
+const goalDeleteQuerySchema = z.object({
+  expectedRevision: z.coerce.number().int().positive(),
 });
 
 export function registerChatMiscRoutes(fastify: FastifyInstance): void {
@@ -207,7 +216,7 @@ export function registerChatMiscRoutes(fastify: FastifyInstance): void {
     try {
       return reply.send(chatSupport().updateChatSessionPrefs(params.data.sessionId, body.data));
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -233,6 +242,7 @@ export function registerChatMiscRoutes(fastify: FastifyInstance): void {
           operatorId: resolveActorId(request),
           authActorId: request.authActorId,
           authActorSource: request.authActorSource,
+          idempotencyKey: body.data.idempotencyKey,
           policyRunId: body.data.policyRunId,
           policyTaskId: body.data.policyTaskId,
           permissionProfileId: body.data.permissionProfileId,
@@ -309,7 +319,7 @@ export function registerChatMiscRoutes(fastify: FastifyInstance): void {
     try {
       return reply.send(chatSupport().updateChatSessionProactivePolicy(params.data.sessionId, body.data));
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -508,19 +518,25 @@ export function registerChatMiscRoutes(fastify: FastifyInstance): void {
     try {
       return reply.send(await chatSupport().setChatSessionGoal(params.data.sessionId, body.data));
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 
   fastify.delete("/api/v1/chat/sessions/:sessionId/goal", async (request, reply) => {
     const params = sessionParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return reply.code(400).send({ error: params.error.flatten() });
+    const query = goalDeleteQuerySchema.safeParse(request.query ?? {});
+    if (!params.success || !query.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          query: query.success ? undefined : query.error.flatten(),
+        },
+      });
     }
     try {
-      return reply.send(await chatSupport().clearChatSessionGoal(params.data.sessionId));
+      return reply.send(await chatSupport().clearChatSessionGoal(params.data.sessionId, query.data.expectedRevision));
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 }

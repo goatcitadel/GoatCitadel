@@ -1,14 +1,17 @@
 import { Readable } from "node:stream";
-import type { FastifyReply, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { IntegrationConnectionRecord, IntegrationWebhookRouteLike } from "../services/channel-inbound-dispatch.js";
+import { createAcceptedWebhookRateLimit, enforceAcceptedWebhookRateLimit } from "../services/webhook-rate-limit.js";
 
 // The inbound dispatch seam (trust gate + bot-loop guard + ingest idempotency)
-// lives in services/channel-inbound-dispatch.ts so non-webhook transports
-// (e.g. the Signal bridge poller) can share it. Re-exported here so webhook
-// route modules keep importing from this factory unchanged.
+// lives in services/channel-inbound-dispatch.ts so webhook and gateway
+// transports can share it. Re-exported here so webhook route modules keep
+// importing from this factory unchanged.
 export {
   DEFAULT_INBOUND_BOT_LOOP_GUARD_CONFIG,
+  dispatchInboundWebhookBatch,
+  dispatchInboundWebhookCommand,
   dispatchInboundVoiceWebhookMessage,
   dispatchInboundWebhookMessage,
   getInboundBotLoopGuard,
@@ -16,6 +19,7 @@ export {
 } from "../services/channel-inbound-dispatch.js";
 export type {
   InboundVoiceDispatchOptions,
+  DurableInboundChannelCommandResult,
   InboundWebhookDispatchOptions,
   IngestChannelMessageInput,
   IntegrationConnectionRecord,
@@ -50,6 +54,7 @@ type RawBodyKey = keyof WebhookRawBodyRequest;
 
 type FastifyWithGateway = {
   services: { integrationWebhooks: IntegrationWebhookRouteLike };
+  createRateLimit: FastifyInstance["createRateLimit"];
 };
 
 type WebhookRequest = FastifyRequest & Partial<WebhookRawBodyRequest>;
@@ -106,6 +111,7 @@ export function createWebhookHandler<TParsed>(
     dispatch: (context: WebhookHandlerContext & { parsed: TParsed }) => Promise<unknown>;
   },
 ) {
+  const acceptedRateLimit = createAcceptedWebhookRateLimit(fastify, options.source);
   return async (request: WebhookRequest, reply: FastifyReply) => {
     if (rejectOversizedWebhookPayload(request, reply)) {
       return;
@@ -158,6 +164,9 @@ export function createWebhookHandler<TParsed>(
         logWebhookVerificationFailure(request, options.source, params.data.connectionId, verification.logReason);
       }
       return reply.code(verification.statusCode ?? 401).send({ error: verification.error });
+    }
+    if (await enforceAcceptedWebhookRateLimit(acceptedRateLimit, request, reply)) {
+      return;
     }
 
     const parsed = await options.parsePayload(context);

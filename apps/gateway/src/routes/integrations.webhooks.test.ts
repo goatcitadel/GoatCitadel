@@ -14,6 +14,18 @@ import {
   integrationsRoutes,
 } from "./integrations-test-fixtures.js";
 
+function createDurableAcceptanceMock() {
+  return vi.fn(async (input: { eventType: string; message: { eventId: string } }) => ({
+    accepted: true as const,
+    durableAccepted: true as const,
+    deduped: false,
+    replied: false as const,
+    queued: true,
+    eventType: input.eventType,
+    inboundEventId: `inbound:${input.message.eventId}`,
+  }));
+}
+
 describe("integration provider webhook routes", () => {
   let app: FastifyInstance | null = null;
 
@@ -45,6 +57,7 @@ describe("integration provider webhook routes", () => {
       transport: "integration",
       turnId: "turn-1",
     }));
+    const acceptInboundChannelEvent = createDurableAcceptanceMock();
     app = Fastify();
     decorateIntegrationServices(app, {
       validateDeviceAccessToken: vi.fn(() => undefined),
@@ -52,6 +65,7 @@ describe("integration provider webhook routes", () => {
       ingestChannelMessage,
       setChatSessionBinding,
       respondToExistingChatMessage,
+      acceptInboundChannelEvent,
       recordDevDiagnostic: vi.fn(),
     });
     app.decorate("gatewayConfig", {
@@ -105,34 +119,32 @@ describe("integration provider webhook routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(ingestChannelMessage).toHaveBeenCalledWith(
-      "nextcloud-talk",
-      expect.stringContaining("nextcloud-talk:11111111-1111-1111-1111-111111111111:"),
+    expect(acceptInboundChannelEvent).toHaveBeenCalledWith(
       expect.objectContaining({
-        eventId: "1567",
-        account: "11111111-1111-1111-1111-111111111111",
-        room: "room-42",
-        actorId: "users/ada-lovelace",
-        content: "hi world !",
-        displayName: "Ada Lovelace",
+        channel: "nextcloud-talk",
+        idempotencyKey: expect.stringContaining("nextcloud-talk:11111111-1111-1111-1111-111111111111:"),
+        eventType: "Create",
+        bindingTarget: "room-42",
+        dispatchKind: "agent_turn",
+        message: expect.objectContaining({
+          eventId: "1567",
+          account: "11111111-1111-1111-1111-111111111111",
+          room: "room-42",
+          actorId: "users/ada-lovelace",
+          content: "hi world !",
+          displayName: "Ada Lovelace",
+        }),
       }),
     );
-    expect(setChatSessionBinding).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: "sess-nextcloud",
-        transport: "integration",
-        connectionId: "11111111-1111-1111-1111-111111111111",
-        target: "room-42",
-        writable: true,
-      }),
-    );
-    expect(respondToExistingChatMessage).toHaveBeenCalledWith("sess-nextcloud", "1567");
+    expect(ingestChannelMessage).not.toHaveBeenCalled();
+    expect(setChatSessionBinding).not.toHaveBeenCalled();
+    expect(respondToExistingChatMessage).not.toHaveBeenCalled();
     expect(response.json()).toEqual(
       expect.objectContaining({
         accepted: true,
-        replied: true,
-        sessionId: "sess-nextcloud",
-        turnId: "turn-1",
+        durableAccepted: true,
+        replied: false,
+        queued: true,
         eventType: "Create",
       }),
     );
@@ -162,6 +174,7 @@ describe("integration provider webhook routes", () => {
       transport: "integration",
       turnId: "turn-slack-1",
     }));
+    const acceptInboundChannelEvent = createDurableAcceptanceMock();
     const nowMs = Date.now();
     const timestamp = String(Math.floor(nowMs / 1000));
     const payload = JSON.stringify({
@@ -187,6 +200,7 @@ describe("integration provider webhook routes", () => {
       ingestChannelMessage,
       setChatSessionBinding,
       respondToExistingChatMessage,
+      acceptInboundChannelEvent,
       recordDevDiagnostic: vi.fn(),
     });
     app.decorate("gatewayConfig", {
@@ -215,36 +229,33 @@ describe("integration provider webhook routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(ingestChannelMessage).toHaveBeenCalledWith(
-      "slack",
-      "slack:11111111-1111-1111-1111-111111111111:Ev123Slack",
+    expect(acceptInboundChannelEvent).toHaveBeenCalledWith(
       expect.objectContaining({
-        eventId: "1712109984.200000",
-        account: "11111111-1111-1111-1111-111111111111",
-        room: "C111",
-        threadId: "1712109984.100000",
-        actorId: "U111",
-        content: "please help",
+        channel: "slack",
+        idempotencyKey: "slack:11111111-1111-1111-1111-111111111111:Ev123Slack",
+        eventType: "message",
+        bindingTarget: "C111",
+        dispatchKind: "agent_turn",
+        responseOptions: { deliveryReplyToMessageId: "1712109984.100000" },
+        message: expect.objectContaining({
+          eventId: "1712109984.200000",
+          account: "11111111-1111-1111-1111-111111111111",
+          room: "C111",
+          threadId: "1712109984.100000",
+          actorId: "U111",
+          content: "please help",
+        }),
       }),
     );
-    expect(setChatSessionBinding).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: "sess-slack",
-        transport: "integration",
-        connectionId: "11111111-1111-1111-1111-111111111111",
-        target: "C111",
-        writable: true,
-      }),
-    );
-    expect(respondToExistingChatMessage).toHaveBeenCalledWith("sess-slack", "1712109984.200000", {
-      deliveryReplyToMessageId: "1712109984.100000",
-    });
+    expect(ingestChannelMessage).not.toHaveBeenCalled();
+    expect(setChatSessionBinding).not.toHaveBeenCalled();
+    expect(respondToExistingChatMessage).not.toHaveBeenCalled();
     expect(response.json()).toEqual(
       expect.objectContaining({
         accepted: true,
-        replied: true,
-        sessionId: "sess-slack",
-        turnId: "turn-slack-1",
+        durableAccepted: true,
+        replied: false,
+        queued: true,
         eventType: "message",
       }),
     );
@@ -278,6 +289,7 @@ describe("integration provider webhook routes", () => {
       transport: "integration",
       turnId: "turn-telegram-1",
     }));
+    const acceptInboundChannelEvent = createDurableAcceptanceMock();
     const payload = JSON.stringify({
       update_id: 9001,
       message: {
@@ -305,6 +317,7 @@ describe("integration provider webhook routes", () => {
       ingestChannelMessage,
       setChatSessionBinding,
       respondToExistingChatMessage,
+      acceptInboundChannelEvent,
     });
     app.decorate("gatewayConfig", {
       assistant: {
@@ -332,35 +345,32 @@ describe("integration provider webhook routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(verifyTelegramWebhookSecretToken("telegram-webhook-secret", "telegram-webhook-secret")).toBe(true);
-    expect(ingestChannelMessage).toHaveBeenCalledWith(
-      "telegram",
-      "telegram:11111111-1111-1111-1111-111111111111:9001",
+    expect(acceptInboundChannelEvent).toHaveBeenCalledWith(
       expect.objectContaining({
-        eventId: "456",
-        account: "11111111-1111-1111-1111-111111111111",
-        room: "-1001234567890",
-        actorId: "777",
-        content: "please help",
+        channel: "telegram",
+        idempotencyKey: "telegram:11111111-1111-1111-1111-111111111111:9001",
+        eventType: "message",
+        bindingTarget: "-1001234567890",
+        dispatchKind: "agent_turn",
+        responseOptions: { deliveryReplyToMessageId: "456" },
+        message: expect.objectContaining({
+          eventId: "456",
+          account: "11111111-1111-1111-1111-111111111111",
+          room: "-1001234567890",
+          actorId: "777",
+          content: "please help",
+        }),
       }),
     );
-    expect(setChatSessionBinding).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: "sess-telegram",
-        transport: "integration",
-        connectionId: "11111111-1111-1111-1111-111111111111",
-        target: "-1001234567890",
-        writable: true,
-      }),
-    );
-    expect(respondToExistingChatMessage).toHaveBeenCalledWith("sess-telegram", "456", {
-      deliveryReplyToMessageId: "456",
-    });
+    expect(ingestChannelMessage).not.toHaveBeenCalled();
+    expect(setChatSessionBinding).not.toHaveBeenCalled();
+    expect(respondToExistingChatMessage).not.toHaveBeenCalled();
     expect(response.json()).toEqual(
       expect.objectContaining({
         accepted: true,
-        replied: true,
-        sessionId: "sess-telegram",
-        turnId: "turn-telegram-1",
+        durableAccepted: true,
+        replied: false,
+        queued: true,
         eventType: "message",
       }),
     );
@@ -394,6 +404,11 @@ describe("integration provider webhook routes", () => {
     }));
     const ingestChannelMessage = vi.fn();
     const respondToExistingChatMessage = vi.fn();
+    const acceptInboundChannelEvent = createDurableAcceptanceMock();
+    const awaitInboundChannelCommandResult = vi.fn(async () => ({
+      status: "completed" as const,
+      resultText: "Home channel set.",
+    }));
     const payload = JSON.stringify({
       update_id: 9002,
       message: {
@@ -412,6 +427,8 @@ describe("integration provider webhook routes", () => {
       ingestChannelMessage,
       setChatSessionBinding: vi.fn(),
       respondToExistingChatMessage,
+      acceptInboundChannelEvent,
+      awaitInboundChannelCommandResult,
     });
     app.decorate("gatewayConfig", {
       assistant: {
@@ -440,13 +457,12 @@ describe("integration provider webhook routes", () => {
     expect(response.statusCode).toBe(200);
     expect(ingestChannelMessage).not.toHaveBeenCalled();
     expect(respondToExistingChatMessage).not.toHaveBeenCalled();
-    expect(updateIntegrationConnection).toHaveBeenCalledWith(
-      "11111111-1111-1111-1111-111111111111",
+    expect(updateIntegrationConnection).not.toHaveBeenCalled();
+    expect(acceptInboundChannelEvent).toHaveBeenCalledWith(
       expect.objectContaining({
-        config: expect.objectContaining({
-          defaultChannelId: "-1001234567890",
-          defaultChatId: "-1001234567890",
-        }),
+        dispatchKind: "command",
+        eventType: "telegram-channel-command",
+        message: expect.objectContaining({ content: "/sethome" }),
       }),
     );
     expect(response.json()).toEqual(
@@ -484,6 +500,12 @@ describe("integration provider webhook routes", () => {
       ...patch,
     }));
     const ingestChannelMessage = vi.fn();
+    const acceptInboundChannelEvent = createDurableAcceptanceMock();
+    const awaitInboundChannelCommandResult = vi.fn(async () => ({
+      status: "completed" as const,
+      resultText:
+        "New Telegram channel session started. The next normal message in this chat will route to a fresh GoatCitadel session.",
+    }));
     const payload = JSON.stringify({
       update_id: 9008,
       message: {
@@ -502,6 +524,8 @@ describe("integration provider webhook routes", () => {
       ingestChannelMessage,
       setChatSessionBinding: vi.fn(),
       respondToExistingChatMessage: vi.fn(),
+      acceptInboundChannelEvent,
+      awaitInboundChannelCommandResult,
     });
     app.decorate("gatewayConfig", {
       assistant: {
@@ -529,12 +553,12 @@ describe("integration provider webhook routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(ingestChannelMessage).not.toHaveBeenCalled();
-    expect(updateIntegrationConnection).toHaveBeenCalledWith(
-      "11111111-1111-1111-1111-111111111111",
+    expect(updateIntegrationConnection).not.toHaveBeenCalled();
+    expect(acceptInboundChannelEvent).toHaveBeenCalledWith(
       expect.objectContaining({
-        config: expect.objectContaining({
-          telegramChannelSessions: expect.any(Object),
-        }),
+        dispatchKind: "command",
+        eventType: "telegram-channel-command",
+        message: expect.objectContaining({ content: "/new" }),
       }),
     );
     expect(response.json()).toEqual(
@@ -567,6 +591,7 @@ describe("integration provider webhook routes", () => {
     }));
     const setChatSessionBinding = vi.fn();
     const respondToExistingChatMessage = vi.fn(async () => ({ turnId: "turn-rotated" }));
+    const acceptInboundChannelEvent = createDurableAcceptanceMock();
     const payload = JSON.stringify({
       update_id: 9009,
       message: {
@@ -596,6 +621,7 @@ describe("integration provider webhook routes", () => {
       ingestChannelMessage,
       setChatSessionBinding,
       respondToExistingChatMessage,
+      acceptInboundChannelEvent,
     });
     app.decorate("gatewayConfig", {
       assistant: {
@@ -622,20 +648,21 @@ describe("integration provider webhook routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(ingestChannelMessage).toHaveBeenCalledWith(
-      "telegram",
-      expect.any(String),
+    expect(acceptInboundChannelEvent).toHaveBeenCalledWith(
       expect.objectContaining({
-        room: expect.stringMatching(/^-1001234567890~tg_/),
-        content: "start fresh",
+        channel: "telegram",
+        idempotencyKey: expect.any(String),
+        bindingTarget: "-1001234567890",
+        dispatchKind: "agent_turn",
+        message: expect.objectContaining({
+          room: expect.stringMatching(/^-1001234567890~tg_/),
+          content: "start fresh",
+        }),
       }),
     );
-    expect(setChatSessionBinding).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: "sess-telegram-rotated",
-        target: "-1001234567890",
-      }),
-    );
+    expect(ingestChannelMessage).not.toHaveBeenCalled();
+    expect(setChatSessionBinding).not.toHaveBeenCalled();
+    expect(respondToExistingChatMessage).not.toHaveBeenCalled();
   });
 
   it("handles Telegram /stop by cancelling the latest active channel session", async () => {
@@ -647,6 +674,11 @@ describe("integration provider webhook routes", () => {
       durableCancelled: true,
     }));
     const ingestChannelMessage = vi.fn();
+    const acceptInboundChannelEvent = createDurableAcceptanceMock();
+    const awaitInboundChannelCommandResult = vi.fn(async () => ({
+      status: "completed" as const,
+      resultText: "Stopped the active Telegram channel run.",
+    }));
     const payload = JSON.stringify({
       update_id: 9010,
       message: {
@@ -684,6 +716,8 @@ describe("integration provider webhook routes", () => {
       ingestChannelMessage,
       setChatSessionBinding: vi.fn(),
       respondToExistingChatMessage: vi.fn(),
+      acceptInboundChannelEvent,
+      awaitInboundChannelCommandResult,
     });
     app.decorate("gatewayConfig", {
       assistant: {
@@ -711,7 +745,14 @@ describe("integration provider webhook routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(ingestChannelMessage).not.toHaveBeenCalled();
-    expect(cancelLatestActiveChatTurnForSession).toHaveBeenCalledWith(expect.stringMatching(/^sess_/), "telegram:777");
+    expect(cancelLatestActiveChatTurnForSession).not.toHaveBeenCalled();
+    expect(acceptInboundChannelEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dispatchKind: "command",
+        eventType: "telegram-channel-command",
+        message: expect.objectContaining({ content: "/stop" }),
+      }),
+    );
     expect(response.json()).toEqual(
       expect.objectContaining({
         method: "sendMessage",
@@ -896,6 +937,11 @@ describe("integration provider webhook routes", () => {
         status: "approved",
       },
     }));
+    const acceptInboundChannelEvent = createDurableAcceptanceMock();
+    const awaitInboundChannelCommandResult = vi.fn(async () => ({
+      status: "completed" as const,
+      resultText: "Approved approval-1.",
+    }));
     const payload = JSON.stringify({
       update_id: 9004,
       callback_query: {
@@ -937,6 +983,9 @@ describe("integration provider webhook routes", () => {
       setChatSessionBinding: vi.fn(),
       respondToExistingChatMessage: vi.fn(),
       resolveApprovalWithRemoteToken,
+      findRemoteActionTokenId: vi.fn(() => "approval-action-1"),
+      acceptInboundChannelEvent,
+      awaitInboundChannelCommandResult,
     });
     app.decorate("gatewayConfig", {
       assistant: {
@@ -963,12 +1012,26 @@ describe("integration provider webhook routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(resolveApprovalWithRemoteToken).toHaveBeenCalledWith({
-      token: "grat_secret",
-      decision: "approve",
-      resolvedBy: "telegram:777",
-      connectorId: "integration:11111111-1111-1111-1111-111111111111",
-    });
+    expect(resolveApprovalWithRemoteToken).not.toHaveBeenCalled();
+    expect(acceptInboundChannelEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dispatchKind: "command",
+        eventType: "telegram-approval-callback",
+        message: expect.objectContaining({
+          content: "/approve",
+          metadata: expect.objectContaining({
+            approvalActionId: "approval-action-1",
+            approvalDecision: "approve",
+          }),
+        }),
+      }),
+    );
+    const acceptedApproval = acceptInboundChannelEvent.mock.calls[0]?.[0] as {
+      message?: { metadata?: Record<string, unknown> };
+    };
+    expect(acceptedApproval.message?.metadata).not.toHaveProperty("callbackQueryId");
+    expect(JSON.stringify(acceptInboundChannelEvent.mock.calls)).not.toContain("grat_secret");
+    expect(JSON.stringify(acceptInboundChannelEvent.mock.calls)).not.toContain("callback-1");
     expect(response.json()).toEqual(
       expect.objectContaining({
         method: "answerCallbackQuery",
@@ -1160,6 +1223,7 @@ describe("integration provider webhook routes", () => {
       transport: "integration",
       turnId: "turn-whatsapp-1",
     }));
+    const acceptInboundChannelEvent = createDurableAcceptanceMock();
     const payload = JSON.stringify({
       object: "whatsapp_business_account",
       entry: [
@@ -1206,6 +1270,7 @@ describe("integration provider webhook routes", () => {
       ingestChannelMessage,
       setChatSessionBinding,
       respondToExistingChatMessage,
+      acceptInboundChannelEvent,
     });
     app.decorate("gatewayConfig", {
       assistant: {
@@ -1232,36 +1297,33 @@ describe("integration provider webhook routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(ingestChannelMessage).toHaveBeenCalledWith(
-      "whatsapp",
-      "whatsapp:11111111-1111-1111-1111-111111111111:wamid.HBgLNDU2",
+    expect(acceptInboundChannelEvent).toHaveBeenCalledWith(
       expect.objectContaining({
-        eventId: "wamid.HBgLNDU2",
-        account: "11111111-1111-1111-1111-111111111111",
-        peer: "15558675309",
-        actorId: "15558675309",
-        content: "Need an operator check-in",
-        displayName: "Ada Lovelace",
+        channel: "whatsapp",
+        idempotencyKey: "whatsapp:11111111-1111-1111-1111-111111111111:wamid.HBgLNDU2",
+        eventType: "text",
+        bindingTarget: "15558675309",
+        dispatchKind: "agent_turn",
+        responseOptions: { deliveryReplyToMessageId: "wamid.HBgLNDU2" },
+        message: expect.objectContaining({
+          eventId: "wamid.HBgLNDU2",
+          account: "11111111-1111-1111-1111-111111111111",
+          peer: "15558675309",
+          actorId: "15558675309",
+          content: "Need an operator check-in",
+          displayName: "Ada Lovelace",
+        }),
       }),
     );
-    expect(setChatSessionBinding).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: "sess-whatsapp",
-        transport: "integration",
-        connectionId: "11111111-1111-1111-1111-111111111111",
-        target: "15558675309",
-        writable: true,
-      }),
-    );
-    expect(respondToExistingChatMessage).toHaveBeenCalledWith("sess-whatsapp", "wamid.HBgLNDU2", {
-      deliveryReplyToMessageId: "wamid.HBgLNDU2",
-    });
+    expect(ingestChannelMessage).not.toHaveBeenCalled();
+    expect(setChatSessionBinding).not.toHaveBeenCalled();
+    expect(respondToExistingChatMessage).not.toHaveBeenCalled();
     expect(response.json()).toEqual(
       expect.objectContaining({
         accepted: true,
-        replied: true,
-        sessionId: "sess-whatsapp",
-        turnId: "turn-whatsapp-1",
+        durableAccepted: true,
+        replied: false,
+        queued: true,
         eventType: "text",
       }),
     );
@@ -1340,6 +1402,7 @@ describe("integration provider webhook routes", () => {
       transport: "integration",
       turnId: "turn-line-1",
     }));
+    const acceptInboundChannelEvent = createDurableAcceptanceMock();
     const payload = JSON.stringify({
       destination: "Ubot123",
       events: [
@@ -1373,6 +1436,7 @@ describe("integration provider webhook routes", () => {
       ingestChannelMessage,
       setChatSessionBinding,
       respondToExistingChatMessage,
+      acceptInboundChannelEvent,
     });
     app.decorate("gatewayConfig", {
       assistant: {
@@ -1399,35 +1463,33 @@ describe("integration provider webhook routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(ingestChannelMessage).toHaveBeenCalledWith(
-      "line",
-      "line:11111111-1111-1111-1111-111111111111:01HV5R0EVTQ6AY9QX4QFTRMNY9",
+    expect(acceptInboundChannelEvent).toHaveBeenCalledWith(
       expect.objectContaining({
-        eventId: "325708",
-        account: "11111111-1111-1111-1111-111111111111",
-        room: "Cgroup123",
-        actorId: "Uuser123",
-        content: "Please open the Office Lab view",
+        channel: "line",
+        idempotencyKey: "line:11111111-1111-1111-1111-111111111111:01HV5R0EVTQ6AY9QX4QFTRMNY9",
+        eventType: "message",
+        bindingTarget: "Cgroup123",
+        dispatchKind: "agent_turn",
+        responseOptions: { deliveryReplyToMessageId: "325708" },
+        message: expect.objectContaining({
+          eventId: "325708",
+          account: "11111111-1111-1111-1111-111111111111",
+          room: "Cgroup123",
+          actorId: "Uuser123",
+          content: "Please open the Office Lab view",
+        }),
       }),
     );
-    expect(setChatSessionBinding).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: "sess-line",
-        transport: "integration",
-        connectionId: "11111111-1111-1111-1111-111111111111",
-        target: "Cgroup123",
-        writable: true,
-      }),
-    );
-    expect(respondToExistingChatMessage).toHaveBeenCalledWith("sess-line", "325708", {
-      deliveryReplyToMessageId: "325708",
-    });
+    expect(JSON.stringify(acceptInboundChannelEvent.mock.calls[0]?.[0])).not.toContain("reply-token-1");
+    expect(ingestChannelMessage).not.toHaveBeenCalled();
+    expect(setChatSessionBinding).not.toHaveBeenCalled();
+    expect(respondToExistingChatMessage).not.toHaveBeenCalled();
     expect(response.json()).toEqual(
       expect.objectContaining({
         accepted: true,
-        replied: true,
-        sessionId: "sess-line",
-        turnId: "turn-line-1",
+        durableAccepted: true,
+        replied: false,
+        queued: true,
         eventType: "message",
       }),
     );
@@ -1831,107 +1893,55 @@ describe("telegram inbound voice webhooks (channelVoiceInboundV1Enabled)", () =>
     expect(ingestChannelMessage).not.toHaveBeenCalled();
   });
 
-  it("acks fast, transcribes async, and ingests the framed transcript when the flag is on", async () => {
-    const ingestChannelMessage = vi.fn(async () => ({
+  it("durably accepts a voice event while its channel session is busy", async () => {
+    const hasRunningTurn = vi.fn(() => true);
+    const transcribeChannelVoice = vi.fn();
+    const ingestChannelMessage = vi.fn();
+    const acceptInboundChannelEvent = vi.fn(async (input: { eventType: string; message: { eventId: string } }) => ({
+      accepted: true as const,
+      durableAccepted: true as const,
       deduped: false,
-      session: { sessionId: "sess-voice" },
+      replied: false as const,
+      queued: true,
+      eventType: input.eventType,
+      inboundEventId: `inbound:${input.message.eventId}`,
     }));
-    const respondToExistingChatMessage = vi.fn(async () => ({ turnId: "turn-voice" }));
-    const transcribeChannelVoice = vi.fn(async () => ({ ok: true as const, transcript: "remind me about rent" }));
     const built = await buildVoiceApp({
       getIntegrationConnection: vi.fn(() => createTelegramVoiceConnection()),
       isVoiceInboundEnabled: () => true,
+      hasRunningTurn,
       transcribeChannelVoice,
+      acceptInboundChannelEvent,
       ingestChannelMessage,
       setChatSessionBinding: vi.fn(),
-      respondToExistingChatMessage,
+      respondToExistingChatMessage: vi.fn(),
       recordDevDiagnostic: vi.fn(),
     });
 
     const response = await postVoiceWebhook(built);
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual(
-      expect.objectContaining({ accepted: true, queued: true, transcription: "pending" }),
-    );
-    await vi.waitFor(() => {
-      expect(ingestChannelMessage).toHaveBeenCalledTimes(1);
+    expect(response.json()).toMatchObject({
+      accepted: true,
+      durableAccepted: true,
+      replied: false,
+      queued: true,
     });
-    expect(transcribeChannelVoice).toHaveBeenCalledWith(
-      expect.objectContaining({ channel: "telegram", fileId: "voice-file-640", mimeType: "audio/ogg" }),
-    );
-    expect(ingestChannelMessage).toHaveBeenCalledWith(
-      "telegram",
-      "telegram:11111111-1111-1111-1111-111111111111:9400",
+    expect(acceptInboundChannelEvent).toHaveBeenCalledWith(
       expect.objectContaining({
-        actorId: "777",
-        content: "[voice transcript — untrusted, auto-transcribed] remind me about rent",
+        channel: "telegram",
+        dispatchKind: "voice_agent_turn",
+        message: expect.objectContaining({ eventId: "640", content: "[telegram voice message]" }),
+        voiceRequest: {
+          channel: "telegram",
+          connectionConfig: {},
+          fileId: "voice-file-640",
+          mimeType: "audio/ogg",
+        },
       }),
     );
-  });
-
-  it("never routes a command-looking transcript into command parsing or approval resolution", async () => {
-    const ingestChannelMessage = vi.fn(async () => ({
-      deduped: false,
-      session: { sessionId: "sess-voice" },
-    }));
-    const parseChatCommand = vi.fn();
-    const resolveApprovalWithRemoteToken = vi.fn();
-    const built = await buildVoiceApp({
-      getIntegrationConnection: vi.fn(() => createTelegramVoiceConnection()),
-      isVoiceInboundEnabled: () => true,
-      transcribeChannelVoice: vi.fn(async () => ({ ok: true as const, transcript: "/approve gca:tok-1:a" })),
-      ingestChannelMessage,
-      setChatSessionBinding: vi.fn(),
-      respondToExistingChatMessage: vi.fn(async () => ({ turnId: "turn-voice" })),
-      parseChatCommand,
-      resolveApprovalWithRemoteToken,
-      recordDevDiagnostic: vi.fn(),
-    });
-
-    const response = await postVoiceWebhook(built);
-    expect(response.statusCode).toBe(200);
-    await vi.waitFor(() => {
-      expect(ingestChannelMessage).toHaveBeenCalledTimes(1);
-    });
-    expect(ingestChannelMessage).toHaveBeenCalledWith(
-      "telegram",
-      expect.any(String),
-      expect.objectContaining({
-        content: "[voice transcript — untrusted, auto-transcribed] /approve gca:tok-1:a",
-      }),
-    );
-    expect(parseChatCommand).not.toHaveBeenCalled();
-    expect(resolveApprovalWithRemoteToken).not.toHaveBeenCalled();
-  });
-
-  it("falls back to the placeholder when transcription fails so the message is never dropped", async () => {
-    const ingestChannelMessage = vi.fn(async () => ({
-      deduped: false,
-      session: { sessionId: "sess-voice" },
-    }));
-    const recordDevDiagnostic = vi.fn();
-    const built = await buildVoiceApp({
-      getIntegrationConnection: vi.fn(() => createTelegramVoiceConnection()),
-      isVoiceInboundEnabled: () => true,
-      transcribeChannelVoice: vi.fn(async () => ({ ok: false as const, reason: "download_failed" as const })),
-      ingestChannelMessage,
-      setChatSessionBinding: vi.fn(),
-      respondToExistingChatMessage: vi.fn(async () => ({ turnId: "turn-voice" })),
-      recordDevDiagnostic,
-    });
-
-    const response = await postVoiceWebhook(built);
-    expect(response.statusCode).toBe(200);
-    await vi.waitFor(() => {
-      expect(ingestChannelMessage).toHaveBeenCalledWith(
-        "telegram",
-        expect.any(String),
-        expect.objectContaining({ content: "[telegram voice message]" }),
-      );
-    });
-    expect(recordDevDiagnostic).toHaveBeenCalledWith(
-      expect.objectContaining({ event: "channel.voice_transcription_failed" }),
-    );
+    expect(hasRunningTurn).not.toHaveBeenCalled();
+    expect(transcribeChannelVoice).not.toHaveBeenCalled();
+    expect(ingestChannelMessage).not.toHaveBeenCalled();
   });
 });

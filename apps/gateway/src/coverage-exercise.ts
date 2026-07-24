@@ -378,10 +378,17 @@ async function exerciseRoutes(app: FastifyInstance, chat: ChatSeed): Promise<Exe
   await requestNotServerError(app, "GET", "/api/v1/dashboard/state");
   await requestNotServerError(app, "GET", "/api/v1/system/vitals");
   await requestNotServerError(app, "GET", "/api/v1/operators");
-  await requestNotServerError(app, "GET", "/api/v1/settings");
-  await requestNotServerError(app, "PATCH", "/api/v1/settings", { budgetMode: "balanced" });
+  const settingsSnapshot = await requestJson<{ revision: number }>(app, "GET", "/api/v1/settings");
+  await requestNotServerError(app, "PATCH", "/api/v1/settings", {
+    expectedRevision: settingsSnapshot.body.revision,
+    budgetMode: "balanced",
+  });
   await requestNotServerError(app, "GET", "/api/v1/auth/settings");
-  await requestNotServerError(app, "PATCH", "/api/v1/auth/settings", { allowLoopbackBypass: true });
+  const authSettingsSnapshot = await requestJson<{ revision: number }>(app, "GET", "/api/v1/auth/settings");
+  await requestNotServerError(app, "PATCH", "/api/v1/auth/settings", {
+    expectedRevision: authSettingsSnapshot.body.revision,
+    allowLoopbackBypass: true,
+  });
   await requestNotServerError(app, "GET", "/api/v1/memory/files?dir=memory");
 
   const cronJobId = `cov-${Date.now()}`;
@@ -416,8 +423,9 @@ async function exerciseRoutes(app: FastifyInstance, chat: ChatSeed): Promise<Exe
   await requestNotServerError(app, "POST", "/api/v1/costs/run-cheaper", {});
 
   await requestNotServerError(app, "GET", "/api/v1/llm/providers");
-  await requestNotServerError(app, "GET", "/api/v1/llm/config");
+  const llmConfigSnapshot = await requestJson<{ revision: number }>(app, "GET", "/api/v1/llm/config");
   await requestNotServerError(app, "PATCH", "/api/v1/llm/config", {
+    expectedRevision: llmConfigSnapshot.body.revision,
     activeProviderId: "openai",
   });
   await requestNotServerError(app, "GET", "/api/v1/llm/models");
@@ -865,11 +873,17 @@ async function exerciseRoutes(app: FastifyInstance, chat: ChatSeed): Promise<Exe
 async function exerciseProviderSecretRoutes(app: FastifyInstance): Promise<void> {
   const envSnapshot = snapshotEnvironment(getCoverageProviderSecretEnvNames(app));
   try {
-    await requestNotServerError(app, "POST", "/api/v1/secrets/providers/openai", {
+    const config = await requestNotServerError<{ revision?: number }>(app, "GET", "/api/v1/llm/config");
+    const expectedRevision = config.body.revision ?? 1;
+    const saved = await requestNotServerError<{ revision?: number }>(app, "POST", "/api/v1/secrets/providers/openai", {
       apiKey: "coverage-secret-value",
+      expectedRevision,
     });
     await requestNotServerError(app, "GET", "/api/v1/secrets/providers/openai/status");
-    await requestNotServerError(app, "DELETE", "/api/v1/secrets/providers/openai");
+    await requestNotServerError(app, "DELETE", "/api/v1/secrets/providers/openai", {
+      expectedRevision: saved.body.revision ?? expectedRevision,
+      storage: "all",
+    });
   } finally {
     restoreEnvironment(envSnapshot);
   }
@@ -993,10 +1007,10 @@ async function exerciseGatewayServiceMethods(app: FastifyInstance, seed: Exercis
     listToolGrants: [{ limit: 25 }],
     revokeToolGrant: ["missing-grant"],
     createApproval: [{ reason: "coverage", request: { toolName: "session.status", args: {} } }],
-    updateAuthSettings: [{ allowLoopbackBypass: true }],
+    updateAuthSettings: [{ expectedRevision: 1, allowLoopbackBypass: true }],
     getProviderSecretStatus: ["openai"],
-    saveProviderSecret: ["openai", "coverage-secret"],
-    deleteProviderSecret: ["openai"],
+    saveProviderSecret: ["openai", "coverage-secret", 1, "keychain"],
+    deleteProviderSecret: ["openai", 1, "all"],
     listMcpTools: ["missing-server"],
     connectMcpServer: ["missing-server"],
     disconnectMcpServer: ["missing-server"],
@@ -1240,13 +1254,13 @@ function collectCoverageMethodNames(target: Record<string, unknown>): string[] {
   return [...names];
 }
 
-async function requestNotServerError(
+async function requestNotServerError<T = unknown>(
   app: FastifyInstance,
   method: HttpMethod,
   url: string,
   payload?: Record<string, unknown>,
-): Promise<RequestResult> {
-  const result = await requestJson(app, method, url, payload);
+): Promise<RequestResult<T>> {
+  const result = await requestJson<T>(app, method, url, payload);
   if (result.statusCode >= 500) {
     console.warn(`[coverage-exercise] ${method} ${url} returned ${result.statusCode}`);
   }

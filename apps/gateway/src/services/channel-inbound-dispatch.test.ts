@@ -1,17 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  dispatchInboundWebhookMessage,
-  DEFAULT_INBOUND_BOT_LOOP_GUARD_CONFIG,
-  type IntegrationWebhookRouteLike,
-} from "./channel-inbound-dispatch.js";
-import { ChannelBotLoopGuard } from "./channel-bot-loop-guard.js";
+import { dispatchInboundWebhookMessage, type IntegrationWebhookRouteLike } from "./channel-inbound-dispatch.js";
 
 /**
  * Direct tests for the shared default-deny sender-allowlist gate in
  * channel-inbound-dispatch.ts (evaluateInboundWebhookAccess, invoked at the
  * top of dispatchInboundWebhookMessage). This is the exact seam every
- * inbound-capable channel (Telegram, Slack, WhatsApp, LINE, Nextcloud Talk,
- * plus the Signal bridge poller) dispatches through, so it is tested here
+ * inbound-capable webhook channel (Telegram, Slack, WhatsApp, LINE, and
+ * Nextcloud Talk) dispatches through, so it is tested here
  * independent of any single channel's webhook route/signature verification.
  *
  * Channel-specific route tests (e.g. whatsapp-webhook.test.ts) and the
@@ -30,6 +25,7 @@ function createGateway(): IntegrationWebhookRouteLike & {
   respondToExistingChatMessage: ReturnType<typeof vi.fn>;
   emitChannelActivity: ReturnType<typeof vi.fn>;
   recordDevDiagnostic: ReturnType<typeof vi.fn>;
+  acceptInboundChannelEvent: ReturnType<typeof vi.fn>;
 } {
   return {
     getIntegrationConnection: vi.fn(),
@@ -47,12 +43,22 @@ function createGateway(): IntegrationWebhookRouteLike & {
     emitChannelActivity: vi.fn(async () => ({ effects: [] }) as never),
     recordDevDiagnostic: vi.fn(),
     updateIntegrationConnection: vi.fn(),
+    acceptInboundChannelEvent: vi.fn(async (input: { eventType: string; message: { eventId: string } }) => ({
+      accepted: true as const,
+      durableAccepted: true as const,
+      deduped: false,
+      replied: false as const,
+      queued: true,
+      eventType: input.eventType,
+      inboundEventId: `inbound:${input.message.eventId}`,
+    })),
   } as unknown as IntegrationWebhookRouteLike & {
     ingestChannelMessage: ReturnType<typeof vi.fn>;
     setChatSessionBinding: ReturnType<typeof vi.fn>;
     respondToExistingChatMessage: ReturnType<typeof vi.fn>;
     emitChannelActivity: ReturnType<typeof vi.fn>;
     recordDevDiagnostic: ReturnType<typeof vi.fn>;
+    acceptInboundChannelEvent: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -107,7 +113,7 @@ describe("channel-inbound-dispatch shared sender-allowlist gate", () => {
     );
   });
 
-  it("allows a matching sender on a populated allowlist and proceeds through ingest", async () => {
+  it("allows a matching sender and commits it through durable acceptance", async () => {
     const gateway = createGateway();
 
     const result = await dispatchInboundWebhookMessage(gateway, {
@@ -128,21 +134,19 @@ describe("channel-inbound-dispatch shared sender-allowlist gate", () => {
 
     expect(result).toEqual({
       accepted: true,
+      durableAccepted: true,
       deduped: false,
-      replied: true,
-      sessionId: "session-1",
-      turnId: "turn-1",
+      replied: false,
+      queued: true,
       eventType: "message",
+      inboundEventId: "inbound:event-match",
     });
-    expect(gateway.ingestChannelMessage).toHaveBeenCalledTimes(1);
-    expect(gateway.setChatSessionBinding).toHaveBeenCalledWith({
-      sessionId: "session-1",
-      transport: "integration",
-      connectionId: CONNECTION_ID,
-      target: "C1",
-      writable: true,
-    });
-    expect(gateway.respondToExistingChatMessage).toHaveBeenCalledTimes(1);
+    expect(gateway.acceptInboundChannelEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ dispatchKind: "agent_turn", bindingTarget: "C1" }),
+    );
+    expect(gateway.ingestChannelMessage).not.toHaveBeenCalled();
+    expect(gateway.setChatSessionBinding).not.toHaveBeenCalled();
+    expect(gateway.respondToExistingChatMessage).not.toHaveBeenCalled();
     // No deny diagnostic should be recorded on the allow path.
     expect(gateway.recordDevDiagnostic).not.toHaveBeenCalledWith(
       expect.objectContaining({ event: "channel.sender_not_allowlisted" }),
@@ -228,11 +232,13 @@ describe("channel-inbound-dispatch shared sender-allowlist gate", () => {
     expect(result).toEqual(
       expect.objectContaining({
         accepted: true,
-        replied: true,
-        sessionId: "session-1",
+        durableAccepted: true,
+        replied: false,
+        queued: true,
       }),
     );
-    expect(gateway.ingestChannelMessage).toHaveBeenCalledTimes(1);
+    expect(gateway.acceptInboundChannelEvent).toHaveBeenCalledTimes(1);
+    expect(gateway.ingestChannelMessage).not.toHaveBeenCalled();
     expect(gateway.recordDevDiagnostic).not.toHaveBeenCalledWith(
       expect.objectContaining({ event: "channel.sender_not_allowlisted" }),
     );
@@ -268,131 +274,97 @@ describe("channel-inbound-dispatch shared sender-allowlist gate", () => {
     expect(result).toEqual(
       expect.objectContaining({
         accepted: true,
-        replied: true,
-        sessionId: "session-1",
+        durableAccepted: true,
+        replied: false,
+        queued: true,
       }),
     );
-    expect(gateway.ingestChannelMessage).toHaveBeenCalledTimes(1);
+    expect(gateway.acceptInboundChannelEvent).toHaveBeenCalledTimes(1);
+    expect(gateway.ingestChannelMessage).not.toHaveBeenCalled();
     expect(gateway.recordDevDiagnostic).not.toHaveBeenCalledWith(
       expect.objectContaining({ event: "channel.sender_not_allowlisted" }),
     );
   });
 });
 
-/**
- * Pins the reply-target resolution at channel-inbound-dispatch.ts:520
- * (`emitInboundWebhookActivity`): `options.bindingTarget ?? message.room ??
- * message.peer ?? message.account`. This is the address every channel
- * activity signal (seen/thinking/clear/waiting_approval/failed) is emitted
- * to, so a regression here would silently retarget replies at the wrong
- * peer/room.
- *
- * A third scenario from the original brief — "keeps the reply target stable
- * when session rotation occurs mid-dispatch" — is intentionally not present.
- * dispatchInboundWebhookMessage never touches telegram-channel-sessions.ts;
- * the target above is recomputed from the same immutable dispatch `options`
- * on every phase of a single dispatch call, so there is no rotation seam in
- * this harness for it to exercise. Session-rotation stability for that
- * mechanism is covered directly in telegram-channel-sessions.test.ts.
- */
-describe("channel-inbound-dispatch reply-target resolution", () => {
-  it("routes replies to the explicit binding target when provided", async () => {
+describe("channel-inbound-dispatch durable boundary", () => {
+  it("preserves the explicit binding target in the accepted envelope", async () => {
     const gateway = createGateway();
 
-    await dispatchInboundWebhookMessage(
-      gateway,
-      {
-        channel: "slack",
-        connectionId: CONNECTION_ID,
-        idempotencyKey: "slack:event-target-explicit",
-        eventType: "message",
-        bindingTarget: "explicit-target",
-        allowedSenders: ["u-owner"],
-        message: {
-          eventId: "event-target-explicit",
-          account: CONNECTION_ID,
-          room: "room-should-be-ignored",
-          peer: "peer-should-be-ignored",
-          actorId: "u-owner",
-          content: "hello",
-        },
+    await dispatchInboundWebhookMessage(gateway, {
+      channel: "slack",
+      connectionId: CONNECTION_ID,
+      idempotencyKey: "slack:event-target-explicit",
+      eventType: "message",
+      bindingTarget: "explicit-target",
+      allowedSenders: ["u-owner"],
+      message: {
+        eventId: "event-target-explicit",
+        account: CONNECTION_ID,
+        room: "room-should-be-ignored",
+        peer: "peer-should-be-ignored",
+        actorId: "u-owner",
+        content: "hello",
       },
-      new ChannelBotLoopGuard(DEFAULT_INBOUND_BOT_LOOP_GUARD_CONFIG),
-    );
+    });
 
-    expect(gateway.emitChannelActivity).toHaveBeenCalled();
-    // The explicit binding target must win over room/peer/account on every
-    // phase emitted for this dispatch, not just the first.
-    for (const call of gateway.emitChannelActivity.mock.calls) {
-      expect(call[0]).toEqual(expect.objectContaining({ target: "explicit-target" }));
-    }
+    expect(gateway.acceptInboundChannelEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bindingTarget: "explicit-target",
+        dispatchKind: "agent_turn",
+        message: expect.objectContaining({ room: "room-should-be-ignored", peer: "peer-should-be-ignored" }),
+      }),
+    );
+    expect(gateway.emitChannelActivity).not.toHaveBeenCalled();
   });
 
-  it("falls back to room, then peer, then account for the reply target", async () => {
-    // Case 1: no bindingTarget, room present -> room wins over peer.
-    const gatewayRoom = createGateway();
-    await dispatchInboundWebhookMessage(
-      gatewayRoom,
-      {
-        channel: "slack",
-        connectionId: CONNECTION_ID,
-        idempotencyKey: "slack:event-target-room",
-        eventType: "message",
+  it("strips access configuration before the durable owner receives the envelope", async () => {
+    const gateway = createGateway();
+    await dispatchInboundWebhookMessage(gateway, {
+      channel: "slack",
+      connectionId: CONNECTION_ID,
+      idempotencyKey: "slack:event-secret-free",
+      eventType: "message",
+      inboundAccessConfig: {
+        inboundAccessMode: "allowlist",
         allowedSenders: ["u-owner"],
-        message: {
-          eventId: "event-target-room",
-          account: CONNECTION_ID,
-          room: "room-fallback",
-          peer: "peer-fallback",
-          actorId: "u-owner",
-          content: "hello",
-        },
+        signingSecret: "must-not-persist",
       },
-      new ChannelBotLoopGuard(DEFAULT_INBOUND_BOT_LOOP_GUARD_CONFIG),
-    );
-    expect(gatewayRoom.emitChannelActivity).toHaveBeenCalledWith(expect.objectContaining({ target: "room-fallback" }));
+      message: {
+        eventId: "event-secret-free",
+        account: CONNECTION_ID,
+        room: "room-1",
+        actorId: "u-owner",
+        content: "hello",
+      },
+    });
 
-    // Case 2: no bindingTarget, no room, peer present -> peer wins over account.
-    const gatewayPeer = createGateway();
-    await dispatchInboundWebhookMessage(
-      gatewayPeer,
-      {
-        channel: "slack",
-        connectionId: CONNECTION_ID,
-        idempotencyKey: "slack:event-target-peer",
-        eventType: "message",
-        allowedSenders: ["u-owner"],
-        message: {
-          eventId: "event-target-peer",
-          account: CONNECTION_ID,
-          peer: "peer-fallback",
-          actorId: "u-owner",
-          content: "hello",
-        },
-      },
-      new ChannelBotLoopGuard(DEFAULT_INBOUND_BOT_LOOP_GUARD_CONFIG),
-    );
-    expect(gatewayPeer.emitChannelActivity).toHaveBeenCalledWith(expect.objectContaining({ target: "peer-fallback" }));
+    const accepted = gateway.acceptInboundChannelEvent.mock.calls[0]?.[0];
+    expect(accepted).not.toHaveProperty("inboundAccessConfig");
+    expect(accepted).not.toHaveProperty("allowedSenders");
+    expect(JSON.stringify(accepted)).not.toContain("must-not-persist");
+  });
 
-    // Case 3: no bindingTarget, no room, no peer -> falls all the way back to account.
-    const gatewayAccount = createGateway();
-    await dispatchInboundWebhookMessage(
-      gatewayAccount,
-      {
+  it("fails closed instead of acknowledging through an immediate fallback", async () => {
+    const gateway = createGateway();
+    Reflect.deleteProperty(gateway, "acceptInboundChannelEvent");
+
+    await expect(
+      dispatchInboundWebhookMessage(gateway, {
         channel: "slack",
         connectionId: CONNECTION_ID,
-        idempotencyKey: "slack:event-target-account",
+        idempotencyKey: "slack:event-no-owner",
         eventType: "message",
         allowedSenders: ["u-owner"],
         message: {
-          eventId: "event-target-account",
+          eventId: "event-no-owner",
           account: CONNECTION_ID,
           actorId: "u-owner",
           content: "hello",
         },
-      },
-      new ChannelBotLoopGuard(DEFAULT_INBOUND_BOT_LOOP_GUARD_CONFIG),
-    );
-    expect(gatewayAccount.emitChannelActivity).toHaveBeenCalledWith(expect.objectContaining({ target: CONNECTION_ID }));
+      }),
+    ).rejects.toThrow("Durable inbound channel acceptance is unavailable for message events");
+    expect(gateway.ingestChannelMessage).not.toHaveBeenCalled();
+    expect(gateway.respondToExistingChatMessage).not.toHaveBeenCalled();
   });
 });

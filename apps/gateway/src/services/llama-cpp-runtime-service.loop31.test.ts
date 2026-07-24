@@ -59,7 +59,7 @@ describe("llama.cpp runtime loop31 coverage tails", () => {
 
     await service.close();
 
-    expect(stop).toHaveBeenCalledWith("shutdown");
+    expect(stop).toHaveBeenCalledWith("shutdown", { force: true });
 
     const events: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
     const eventingService = new LlamaCppRuntimeService({

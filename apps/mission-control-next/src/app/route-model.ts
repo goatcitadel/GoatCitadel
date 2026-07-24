@@ -8,6 +8,7 @@ export type LibrarySection =
   | "skills"
   | "capabilities"
   | "memory"
+  | "journey"
   | "knowledge"
   | "notes"
   | "communications"
@@ -22,9 +23,11 @@ export type LibrarySection =
   | "citadel-blueprint"
   | "citadel-vault";
 export type OpsSection =
+  | "boards"
   | "activity"
   | "sessions"
   | "schedules"
+  | "workers"
   | "improvement"
   | "notifications"
   | "approvals"
@@ -352,6 +355,13 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
       section: "memory",
     },
     {
+      id: "library-journey",
+      label: "Journey",
+      description: "Inspect experimental read-only skill-learning and candidate evidence.",
+      area: "library",
+      section: "journey",
+    },
+    {
       id: "library-knowledge",
       label: "Knowledge",
       description: "Knowledge ingest and retrieval as attachable context.",
@@ -403,6 +413,13 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
   ],
   ops: [
     {
+      id: "ops-boards",
+      label: "Boards",
+      description: "Trusted saved layouts composed from canonical Ops summaries.",
+      area: "ops",
+      section: "boards",
+    },
+    {
       id: "ops-activity",
       label: "Activity",
       description: "Realtime event feed and retained operational signal.",
@@ -422,6 +439,13 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
       description: "Cron posture and scheduler review queue.",
       area: "ops",
       section: "schedules",
+    },
+    {
+      id: "ops-workers",
+      label: "Workers",
+      description: "Operator-visible remote-worker registry, assignments, events, and reconciliation.",
+      area: "ops",
+      section: "workers",
     },
     {
       id: "ops-improvement",
@@ -703,7 +727,7 @@ export const RAIL_GROUPS: Partial<Record<PrimaryArea, RailGroup[]>> = {
     {
       id: "library-knowledge",
       label: "Knowledge",
-      sections: ["agents", "skills", "capabilities", "memory", "knowledge", "notes"],
+      sections: ["agents", "skills", "capabilities", "memory", "journey", "knowledge", "notes"],
     },
     {
       id: "library-assets",
@@ -712,7 +736,7 @@ export const RAIL_GROUPS: Partial<Record<PrimaryArea, RailGroup[]>> = {
     },
   ],
   ops: [
-    { id: "ops-observe", label: "Observe", sections: ["activity", "sessions", "schedules"] },
+    { id: "ops-observe", label: "Observe", sections: ["boards", "activity", "sessions", "schedules", "workers"] },
     {
       id: "ops-control",
       label: "Operate",
@@ -840,6 +864,15 @@ export const ROUTE_RELEASE_SCOPE = [
   },
   {
     area: "library",
+    section: "journey",
+    status: "experimental",
+    releaseAction:
+      "Inspect currently captured learning, memory, approval, effect, and Skill Hub lifecycle evidence without mutation.",
+    verification: "verify:surface:regression, focused Journey route and service tests",
+    note: "Canonical producers cover skill learning, candidate governance, memory, approvals and effects, plus Skill Hub lifecycle events including rollback and revoke; import and cross-surface coverage remain experimental.",
+  },
+  {
+    area: "library",
     section: "knowledge",
     status: "ship",
     releaseAction: "Inspect knowledge sources and attachable context with source visibility.",
@@ -947,6 +980,14 @@ export const ROUTE_RELEASE_SCOPE = [
   },
   {
     area: "ops",
+    section: "boards",
+    status: "ship",
+    releaseAction: "Create, select, edit, archive, and restore trusted layouts built from compiled Ops summaries.",
+    verification: "focused HX-410 Mission Control tests, verify:surface:regression",
+    note: "Saved boards are layout-only projections; every widget reloads its canonical source and never becomes runtime authority.",
+  },
+  {
+    area: "ops",
     section: "activity",
     status: "ship",
     releaseAction: "Inspect realtime and retained operational events.",
@@ -968,6 +1009,15 @@ export const ROUTE_RELEASE_SCOPE = [
     releaseAction: "Review scheduler posture and create governed recurring work.",
     verification: "verify:surface:regression",
     note: "Schedules is release-bearing with governed recurring-work review and primary actions visible.",
+  },
+  {
+    area: "ops",
+    section: "workers",
+    status: "hide",
+    releaseAction:
+      "Inspect the read-only remote-worker registry, assignments, events, and reconciliation once live HX-501/HX-502/HX-504 authority is composed.",
+    verification: "remote-workers route + service proof; verify:surface:regression (fixture-seeded)",
+    note: "HX-507 remote-worker visibility is architecture-ship but implementation-hold pending live worker authority, so it is not counted in the visible release surface until the live data gate opens.",
   },
   {
     area: "ops",

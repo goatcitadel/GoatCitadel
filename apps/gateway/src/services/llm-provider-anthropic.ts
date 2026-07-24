@@ -1,19 +1,27 @@
-import type { ChatCompletionRequest, ChatCompletionResponse } from "@goatcitadel/contracts";
-import type { Dispatcher } from "undici";
+/* eslint-disable max-lines -- Anthropic request, stream, and usage normalization remain one provider-boundary owner. */
 import type {
-  LlmProviderAdapter,
-  LlmProviderAdapterHost,
-  LlmProviderRequestTarget,
-  LlmProviderResolution,
-} from "./llm-provider-adapter.js";
+  ChatCompletionRequest,
+  ChatCompletionResponse,
+  ModelUsageAttributionContext,
+} from "@goatcitadel/contracts";
+import type { ModelUsageAttemptHandle } from "@goatcitadel/gateway-core";
+import type { LlmProviderAdapter, LlmProviderAdapterHost, LlmProviderResolution } from "./llm-provider-adapter.js";
 import {
   applyEstimatedCostToChatResponseWithSource,
   applyEstimatedCostToStreamChunkWithSource,
+  observeProviderUsageWithTrustedEstimate,
 } from "./llm-pricing.js";
 import { readBoundedResponseText } from "./bounded-response-reader.js";
 import { parseProviderJsonResponse } from "./llm-response-parsing.js";
+import { extractProviderOwnedOutputCapErrorText, parseProviderOutputCapEvidence } from "./llm-output-cap-recovery.js";
+import {
+  assertAnthropicThinkingFitsMaxTokens,
+  resolveAnthropicEffort,
+  resolveAnthropicMaxTokensForVisibleOutput,
+  resolveAnthropicThinkingMode,
+  resolveAnthropicThinkingBudgetTokens,
+} from "./anthropic-reasoning-budget.js";
 
-type FetchRequestInitWithDispatcher = RequestInit & { dispatcher?: Dispatcher };
 const MAX_ANTHROPIC_ERROR_BODY_BYTES = 64 * 1024;
 const ANTHROPIC_ERROR_BODY_TIMEOUT_MS = 5000;
 const MAX_ANTHROPIC_SSE_BYTES = 16 * 1024 * 1024;
@@ -27,24 +35,84 @@ export const anthropicProviderAdapter: LlmProviderAdapter = {
     resolved: LlmProviderResolution,
     model: string,
     adapterHost: LlmProviderAdapterHost,
+    attribution: ModelUsageAttributionContext = {},
   ): Promise<ChatCompletionResponse> {
     const payload = buildAnthropicMessagesPayload(request, model);
+    const minimumEffectiveOutputTokenCap = resolveAnthropicMinimumEffectiveOutputTokenCap(payload);
     const target = adapterHost.buildRequestTarget(resolved, "messages", `${resolved.provider.baseUrl}/messages`);
     const timeoutMs = resolveChatCompletionTimeoutMs(request.timeoutMs, 60000);
-    const response = await postJsonRequest(target, payload, timeoutMs, request.signal);
-
-    if (isRedirect(response.status)) {
-      throw new Error(`messages request blocked redirect (${response.status})`);
-    }
-    if (!response.ok) {
-      throw new Error(await buildHttpError("messages request", response));
-    }
-
-    const json = await parseProviderJsonResponse<Record<string, unknown>>("messages request", response);
-    return applyEstimatedCostToChatResponseWithSource(adaptAnthropicMessageResponse(json), {
-      providerId: resolved.provider.providerId,
+    let dispatched = await adapterHost.postJsonRequest({
+      resolved,
       model,
+      requestedProviderId: attribution.requestedProviderId ?? request.providerId,
+      requestedModelId: attribution.requestedModelId ?? request.model,
+      attribution,
+      transportAttemptIndex: 0,
+      target,
+      payload,
+      timeoutMs,
+      signal: request.signal,
+      outputCapRecovery: {
+        requestedOutputTokenCap: request.max_tokens,
+        minimumEffectiveOutputTokenCap,
+        retriesRemaining: 1,
+      },
     });
+    while (true) {
+      try {
+        if (isRedirect(dispatched.response.status)) {
+          throw new Error(`messages request blocked redirect (${dispatched.response.status})`);
+        }
+        if (!dispatched.response.ok) {
+          throw new Error(await buildHttpError("messages request", dispatched.response));
+        }
+
+        const json = await parseProviderJsonResponse<Record<string, unknown>>("messages request", dispatched.response);
+        const providerErrorText = readAnthropicProviderErrorText(json);
+        if (providerErrorText) {
+          const recovered = isRecognizedOutputCapFailure(providerErrorText)
+            ? await adapterHost.retryOutputCapFailure({
+                resolved,
+                model,
+                requestedProviderId: attribution.requestedProviderId ?? request.providerId,
+                requestedModelId: attribution.requestedModelId ?? request.model,
+                attribution,
+                transportAttemptIndex: dispatched.lastTransportAttemptIndex ?? 0,
+                target,
+                payload: dispatched.effectivePayload,
+                timeoutMs,
+                signal: request.signal,
+                outputCapRecovery: {
+                  requestedOutputTokenCap: dispatched.logicalRequestedOutputTokenCap,
+                  minimumEffectiveOutputTokenCap: dispatched.minimumEffectiveOutputTokenCap,
+                  retriesRemaining: dispatched.outputCapRetriesRemaining,
+                },
+                dispatched,
+                providerErrorText,
+              })
+            : undefined;
+          if (recovered) {
+            dispatched = recovered;
+            continue;
+          }
+          throw createAnthropicProviderStreamError(providerErrorText);
+        }
+        const providerCompletion = adaptAnthropicMessageResponse(json);
+        const completion = applyEstimatedCostToChatResponseWithSource(providerCompletion, {
+          providerId: resolved.provider.providerId,
+          model,
+        });
+        observeProviderUsageWithTrustedEstimate(dispatched.usage, providerCompletion.usage, completion.usage);
+        dispatched.usage?.observeNormalized({ effectiveModelId: completion.model });
+        const terminal = dispatched.usage?.succeed();
+        const eventIds = [...(dispatched.priorModelUsageEventIds ?? [])];
+        if (terminal) eventIds.push(terminal.eventId);
+        return eventIds.length > 0 ? { ...completion, modelUsageEventIds: eventIds } : completion;
+      } catch (error) {
+        dispatched.usage?.fail(error);
+        throw error;
+      }
+    }
   },
 
   async *chatCompletionsStream(
@@ -52,219 +120,352 @@ export const anthropicProviderAdapter: LlmProviderAdapter = {
     resolved: LlmProviderResolution,
     model: string,
     adapterHost: LlmProviderAdapterHost,
+    attribution: ModelUsageAttributionContext = {},
   ): AsyncGenerator<Record<string, unknown>> {
     const payload = buildAnthropicMessagesPayload(request, model);
+    const minimumEffectiveOutputTokenCap = resolveAnthropicMinimumEffectiveOutputTokenCap(payload);
     payload.stream = true;
 
     const target = adapterHost.buildRequestTarget(resolved, "messages", `${resolved.provider.baseUrl}/messages`);
     const timeoutMs = resolveChatCompletionTimeoutMs(request.timeoutMs, 120000);
-    const response = await postJsonRequest(target, payload, timeoutMs, request.signal);
+    let dispatched = await adapterHost.postJsonRequest({
+      resolved,
+      model,
+      requestedProviderId: attribution.requestedProviderId ?? request.providerId,
+      requestedModelId: attribution.requestedModelId ?? request.model,
+      attribution,
+      transportAttemptIndex: 0,
+      target,
+      payload,
+      timeoutMs,
+      signal: request.signal,
+      outputCapRecovery: {
+        requestedOutputTokenCap: request.max_tokens,
+        minimumEffectiveOutputTokenCap,
+        retriesRemaining: 1,
+      },
+    });
+    attemptLoop: while (true) {
+      const accounting = dispatched.usage;
+      const priorModelUsageEventIds = dispatched.priorModelUsageEventIds ?? [];
+      let terminal = false;
+      let emittedVisibleChunk = false;
 
-    if (isRedirect(response.status)) {
-      throw new Error(`messages request blocked redirect (${response.status})`);
-    }
-    if (!response.ok) {
-      throw new Error(await buildHttpError("messages request", response));
-    }
+      try {
+        if (isRedirect(dispatched.response.status)) {
+          throw new Error(`messages request blocked redirect (${dispatched.response.status})`);
+        }
+        if (!dispatched.response.ok) {
+          throw new Error(await buildHttpError("messages request", dispatched.response));
+        }
 
-    const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-    if (!contentType.includes("text/event-stream") || !response.body) {
-      const json = await parseProviderJsonResponse<Record<string, unknown>>("messages request", response);
-      yield applyEstimatedCostToChatResponseWithSource(adaptAnthropicMessageResponse(json), {
-        providerId: resolved.provider.providerId,
-        model,
-      });
-      return;
-    }
-
-    const toolUseBuffers = new Map<
-      number,
-      {
-        id: string;
-        name: string;
-        partialJson: string;
-        toolCallIndex: number;
-      }
-    >();
-    const nativeContentBuffers = new Map<number, Record<string, unknown>>();
-    // Anthropic content-block indices include text blocks and may be sparse;
-    // downstream aggregation keys tool calls by a contiguous tool-call index, so
-    // assign each tool_use block its own stable ordinal as it starts.
-    let nextToolCallIndex = 0;
-    let messageId: string | undefined;
-    let messageModel: string | undefined;
-    let finishReason: string | undefined;
-    let usage: Record<string, unknown> | undefined;
-    let receivedMessageStart = false;
-
-    for await (const event of streamJsonSseResponse(response)) {
-      const eventType = typeof event.type === "string" ? event.type : "";
-      if (eventType === "message_start" && isRecord(event.message)) {
-        receivedMessageStart = true;
-        messageId = typeof event.message.id === "string" ? event.message.id : messageId;
-        messageModel = typeof event.message.model === "string" ? event.message.model : messageModel;
-        continue;
-      }
-      if (eventType === "error") {
-        throw new Error(buildAnthropicStreamError(event, receivedMessageStart));
-      }
-
-      if (eventType === "content_block_start" && typeof event.index === "number" && isRecord(event.content_block)) {
-        const block = event.content_block;
-        if (block.type === "tool_use") {
-          toolUseBuffers.set(event.index, {
-            id: String(block.id ?? `tool_${event.index}`),
-            name: String(block.name ?? ""),
-            partialJson:
-              typeof block.input === "string"
-                ? block.input
-                : isRecord(block.input) && Object.keys(block.input).length > 0
-                  ? JSON.stringify(block.input)
-                  : "",
-            toolCallIndex: nextToolCallIndex,
+        const contentType = dispatched.response.headers.get("content-type")?.toLowerCase() ?? "";
+        if (!contentType.includes("text/event-stream") || !dispatched.response.body) {
+          const json = await parseProviderJsonResponse<Record<string, unknown>>(
+            "messages request",
+            dispatched.response,
+          );
+          const providerErrorText = readAnthropicProviderErrorText(json);
+          if (providerErrorText) {
+            const recovered = isRecognizedOutputCapFailure(providerErrorText)
+              ? await adapterHost.retryOutputCapFailure({
+                  resolved,
+                  model,
+                  requestedProviderId: attribution.requestedProviderId ?? request.providerId,
+                  requestedModelId: attribution.requestedModelId ?? request.model,
+                  attribution,
+                  transportAttemptIndex: dispatched.lastTransportAttemptIndex ?? 0,
+                  target,
+                  payload: dispatched.effectivePayload,
+                  timeoutMs,
+                  signal: request.signal,
+                  outputCapRecovery: {
+                    requestedOutputTokenCap: dispatched.logicalRequestedOutputTokenCap,
+                    minimumEffectiveOutputTokenCap: dispatched.minimumEffectiveOutputTokenCap,
+                    retriesRemaining: dispatched.outputCapRetriesRemaining,
+                  },
+                  dispatched,
+                  providerErrorText,
+                })
+              : undefined;
+            if (recovered) {
+              terminal = true;
+              dispatched = recovered;
+              continue attemptLoop;
+            }
+            throw createAnthropicProviderStreamError(providerErrorText);
+          }
+          const providerCompletion = adaptAnthropicMessageResponse(json);
+          const completion = applyEstimatedCostToChatResponseWithSource(providerCompletion, {
+            providerId: resolved.provider.providerId,
+            model,
           });
-          nextToolCallIndex += 1;
-        }
-        if (isAnthropicReplayContentBlock(block)) {
-          nativeContentBuffers.set(event.index, { ...block });
-        }
-        continue;
-      }
-
-      if (eventType === "content_block_delta" && isRecord(event.delta)) {
-        if (event.delta.type === "text_delta") {
-          yield {
-            id: messageId ?? "message",
-            model: messageModel,
-            choices: [
-              {
-                index: 0,
-                delta: {
-                  content: String(event.delta.text ?? ""),
-                },
-              },
-            ],
-          };
-          continue;
+          observeProviderUsageWithTrustedEstimate(accounting, providerCompletion.usage, completion.usage);
+          accounting?.observeNormalized({ effectiveModelId: completion.model });
+          accounting?.succeed();
+          terminal = true;
+          emittedVisibleChunk = true;
+          yield withUsageEvent(completion, accounting, priorModelUsageEventIds);
+          return;
         }
 
-        if (event.delta.type === "input_json_delta" && typeof event.index === "number") {
-          const existing = toolUseBuffers.get(event.index);
-          if (existing) {
-            existing.partialJson += String(event.delta.partial_json ?? "");
+        const toolUseBuffers = new Map<
+          number,
+          {
+            id: string;
+            name: string;
+            partialJson: string;
+            toolCallIndex: number;
           }
-        }
-        if (typeof event.index === "number") {
-          const existing = nativeContentBuffers.get(event.index);
-          if (existing && event.delta.type === "thinking_delta") {
-            existing.thinking = `${String(existing.thinking ?? "")}${String(event.delta.thinking ?? "")}`;
-          }
-          if (existing && event.delta.type === "signature_delta") {
-            existing.signature = String(event.delta.signature ?? existing.signature ?? "");
-          }
-        }
-        continue;
-      }
+        >();
+        const nativeContentBuffers = new Map<number, Record<string, unknown>>();
+        // Anthropic content-block indices include text blocks and may be sparse;
+        // downstream aggregation keys tool calls by a contiguous tool-call index, so
+        // assign each tool_use block its own stable ordinal as it starts.
+        let nextToolCallIndex = 0;
+        let messageId: string | undefined;
+        let messageModel: string | undefined;
+        let finishReason: string | undefined;
+        let usage: Record<string, unknown> | undefined;
+        let receivedMessageStart = false;
 
-      if (eventType === "content_block_stop" && typeof event.index === "number") {
-        const nativeContent = nativeContentBuffers.get(event.index);
-        if (nativeContent) {
-          nativeContentBuffers.delete(event.index);
-          yield {
-            id: messageId,
-            model: messageModel,
-            choices: [
-              {
-                index: 0,
-                delta: {
-                  provider_native_content: [nativeContent],
-                },
-              },
-            ],
-          };
-        }
-        const toolUse = toolUseBuffers.get(event.index);
-        if (toolUse) {
-          toolUseBuffers.delete(event.index);
-          yield {
-            id: messageId ?? toolUse.id,
-            model: messageModel,
-            choices: [
-              {
-                index: 0,
-                delta: {
-                  tool_calls: [
+        for await (const event of streamJsonSseResponse(dispatched.response)) {
+          accounting?.renewLease();
+          const eventType = typeof event.type === "string" ? event.type : "";
+          if (eventType === "message_start" && isRecord(event.message)) {
+            receivedMessageStart = true;
+            messageId = typeof event.message.id === "string" ? event.message.id : messageId;
+            messageModel = typeof event.message.model === "string" ? event.message.model : messageModel;
+            accounting?.observeNormalized({ effectiveModelId: messageModel });
+            usage = mergeAnthropicUsage(usage, isRecord(event.message.usage) ? event.message.usage : undefined);
+            accounting?.observe(normalizeAnthropicUsage(usage));
+            continue;
+          }
+          if (eventType === "error") {
+            const providerErrorText = readAnthropicProviderErrorText(event);
+            const recovered =
+              !emittedVisibleChunk && providerErrorText && isRecognizedOutputCapFailure(providerErrorText)
+                ? await adapterHost.retryOutputCapFailure({
+                    resolved,
+                    model,
+                    requestedProviderId: attribution.requestedProviderId ?? request.providerId,
+                    requestedModelId: attribution.requestedModelId ?? request.model,
+                    attribution,
+                    transportAttemptIndex: dispatched.lastTransportAttemptIndex ?? 0,
+                    target,
+                    payload: dispatched.effectivePayload,
+                    timeoutMs,
+                    signal: request.signal,
+                    outputCapRecovery: {
+                      requestedOutputTokenCap: dispatched.logicalRequestedOutputTokenCap,
+                      minimumEffectiveOutputTokenCap: dispatched.minimumEffectiveOutputTokenCap,
+                      retriesRemaining: dispatched.outputCapRetriesRemaining,
+                    },
+                    dispatched,
+                    providerErrorText,
+                  })
+                : undefined;
+            if (recovered) {
+              terminal = true;
+              dispatched = recovered;
+              continue attemptLoop;
+            }
+            throw new Error(buildAnthropicStreamError(event, receivedMessageStart));
+          }
+
+          if (eventType === "content_block_start" && typeof event.index === "number" && isRecord(event.content_block)) {
+            const block = event.content_block;
+            if (block.type === "tool_use") {
+              toolUseBuffers.set(event.index, {
+                id: String(block.id ?? `tool_${event.index}`),
+                name: String(block.name ?? ""),
+                partialJson:
+                  typeof block.input === "string"
+                    ? block.input
+                    : isRecord(block.input) && Object.keys(block.input).length > 0
+                      ? JSON.stringify(block.input)
+                      : "",
+                toolCallIndex: nextToolCallIndex,
+              });
+              nextToolCallIndex += 1;
+            }
+            if (isAnthropicReplayContentBlock(block)) {
+              nativeContentBuffers.set(event.index, { ...block });
+            }
+            continue;
+          }
+
+          if (eventType === "content_block_delta" && isRecord(event.delta)) {
+            if (event.delta.type === "text_delta") {
+              emittedVisibleChunk = true;
+              yield withUsageEvent(
+                {
+                  id: messageId ?? "message",
+                  model: messageModel,
+                  choices: [
                     {
-                      index: toolUse.toolCallIndex,
-                      id: toolUse.id,
-                      type: "function",
-                      function: {
-                        name: toolUse.name,
-                        arguments: normalizeJsonString(toolUse.partialJson),
+                      index: 0,
+                      delta: {
+                        content: String(event.delta.text ?? ""),
                       },
                     },
                   ],
                 },
-              },
-            ],
-          };
-        }
-        continue;
-      }
+                accounting,
+                priorModelUsageEventIds,
+              );
+              continue;
+            }
 
-      if (eventType === "message_delta") {
-        const delta = isRecord(event.delta) ? event.delta : undefined;
-        finishReason =
-          typeof delta?.stop_reason === "string"
-            ? delta.stop_reason
-            : typeof event.stop_reason === "string"
-              ? event.stop_reason
-              : finishReason;
-        usage = isRecord(event.usage) ? event.usage : usage;
-        continue;
-      }
+            if (event.delta.type === "input_json_delta" && typeof event.index === "number") {
+              const existing = toolUseBuffers.get(event.index);
+              if (existing) {
+                existing.partialJson += String(event.delta.partial_json ?? "");
+              }
+            }
+            if (typeof event.index === "number") {
+              const existing = nativeContentBuffers.get(event.index);
+              if (existing && event.delta.type === "thinking_delta") {
+                existing.thinking = `${String(existing.thinking ?? "")}${String(event.delta.thinking ?? "")}`;
+              }
+              if (existing && event.delta.type === "signature_delta") {
+                existing.signature = String(event.delta.signature ?? existing.signature ?? "");
+              }
+            }
+            continue;
+          }
 
-      if (eventType === "message_stop") {
-        yield applyEstimatedCostToStreamChunkWithSource(
-          {
-            id: messageId,
-            model: messageModel,
-            choices: [
+          if (eventType === "content_block_stop" && typeof event.index === "number") {
+            const nativeContent = nativeContentBuffers.get(event.index);
+            if (nativeContent) {
+              nativeContentBuffers.delete(event.index);
+              emittedVisibleChunk = true;
+              yield withUsageEvent(
+                {
+                  id: messageId,
+                  model: messageModel,
+                  choices: [
+                    {
+                      index: 0,
+                      delta: {
+                        provider_native_content: [nativeContent],
+                      },
+                    },
+                  ],
+                },
+                accounting,
+                priorModelUsageEventIds,
+              );
+            }
+            const toolUse = toolUseBuffers.get(event.index);
+            if (toolUse) {
+              toolUseBuffers.delete(event.index);
+              emittedVisibleChunk = true;
+              yield withUsageEvent(
+                {
+                  id: messageId ?? toolUse.id,
+                  model: messageModel,
+                  choices: [
+                    {
+                      index: 0,
+                      delta: {
+                        tool_calls: [
+                          {
+                            index: toolUse.toolCallIndex,
+                            id: toolUse.id,
+                            type: "function",
+                            function: {
+                              name: toolUse.name,
+                              arguments: normalizeJsonString(toolUse.partialJson),
+                            },
+                          },
+                        ],
+                      },
+                    },
+                  ],
+                },
+                accounting,
+                priorModelUsageEventIds,
+              );
+            }
+            continue;
+          }
+
+          if (eventType === "message_delta") {
+            const delta = isRecord(event.delta) ? event.delta : undefined;
+            finishReason =
+              typeof delta?.stop_reason === "string"
+                ? delta.stop_reason
+                : typeof event.stop_reason === "string"
+                  ? event.stop_reason
+                  : finishReason;
+            usage = mergeAnthropicUsage(usage, isRecord(event.usage) ? event.usage : undefined);
+            accounting?.observe(normalizeAnthropicUsage(usage));
+            continue;
+          }
+
+          if (eventType === "message_stop") {
+            const finalChunk = applyEstimatedCostToStreamChunkWithSource(
               {
-                index: 0,
-                delta: {},
-                finish_reason: mapAnthropicStopReason(finishReason),
+                id: messageId,
+                model: messageModel,
+                choices: [
+                  {
+                    index: 0,
+                    delta: {},
+                    finish_reason: mapAnthropicStopReason(finishReason),
+                  },
+                ],
+                usage: normalizeAnthropicUsage(usage),
               },
-            ],
-            usage: normalizeAnthropicUsage(usage),
-          },
-          {
-            providerId: resolved.provider.providerId,
-            model,
-          },
-        );
+              {
+                providerId: resolved.provider.providerId,
+                model,
+              },
+            );
+            observeProviderUsageWithTrustedEstimate(accounting, normalizeAnthropicUsage(usage), finalChunk.usage);
+            accounting?.succeed();
+            terminal = true;
+            emittedVisibleChunk = true;
+            yield withUsageEvent(finalChunk, accounting, priorModelUsageEventIds);
+          }
+        }
+        if (!terminal) throw new Error("Anthropic stream ended before message_stop");
+        return;
+      } catch (error) {
+        accounting?.fail(error);
+        terminal = true;
+        throw error;
+      } finally {
+        if (!terminal) accounting?.cancel(new Error("stream consumer cancelled"));
       }
     }
   },
 };
 
-async function postJsonRequest(
-  target: LlmProviderRequestTarget,
-  payload: Record<string, unknown>,
-  timeoutMs: number,
-  externalSignal?: AbortSignal,
-): Promise<Response> {
-  const timeoutSignal = AbortSignal.timeout(timeoutMs);
-  const signal = externalSignal ? AbortSignal.any([timeoutSignal, externalSignal]) : timeoutSignal;
-  const requestInit: FetchRequestInitWithDispatcher = {
-    method: "POST",
-    headers: target.headers,
-    body: JSON.stringify(payload),
-    signal,
-    redirect: "manual",
-    dispatcher: target.dispatcher,
-  };
-  return fetch(target.url, requestInit);
+function readAnthropicProviderErrorText(event: Record<string, unknown>): string | undefined {
+  const eventType = typeof event.type === "string" ? event.type : undefined;
+  if (event.error === undefined && eventType !== "error") return undefined;
+  const providerError =
+    typeof event.error === "string"
+      ? event.error
+      : isRecord(event.error)
+        ? event.error
+        : {
+            ...(typeof event.message === "string" ? { message: event.message } : {}),
+            ...(typeof event.code === "string" ? { code: event.code } : {}),
+          };
+  return extractProviderOwnedOutputCapErrorText(JSON.stringify({ error: providerError }));
+}
+
+function createAnthropicProviderStreamError(message: string): Error {
+  const error = new Error(message);
+  error.name = "AnthropicProviderStreamError";
+  return error;
+}
+
+function isRecognizedOutputCapFailure(providerErrorText: string): boolean {
+  return parseProviderOutputCapEvidence(providerErrorText).status !== "not_recognized";
 }
 
 async function buildHttpError(action: string, response: Response): Promise<string> {
@@ -289,16 +490,18 @@ function resolveChatCompletionTimeoutMs(value: number | undefined, fallbackMs: n
 }
 
 /**
- * Newer Anthropic models (Opus 4.7+, Fable 5, Mythos 5) reject sampling controls
+ * Newer Anthropic models (Opus 4.7+, Sonnet 5, Fable 5, Mythos 5) reject sampling controls
  * (temperature/top_p/top_k) with a 400 — they use always-on adaptive sampling.
  * Detect them so the adapter omits those parameters instead of forwarding values
- * that would fail the request. Older models (bare claude-opus-4, claude-opus-4-1,
- * sonnet-4-6) still accept sampling controls.
+ * that would fail the request. Older models without enabled thinking still
+ * accept sampling controls; enabled thinking applies the stricter request-level
+ * compatibility rule below.
  */
 export function anthropicModelRejectsSamplingControls(model: string): boolean {
   const normalized = model.trim().toLowerCase();
   if (!normalized) return false;
   if (normalized.includes("fable") || normalized.includes("mythos")) return true;
+  if (/claude-sonnet-5(?:$|[.-])/u.test(normalized)) return true;
   const opusMinor = normalized.match(/claude-opus-4-(\d+)/);
   if (opusMinor) {
     const minor = Number.parseInt(opusMinor[1] ?? "", 10);
@@ -315,8 +518,32 @@ export function buildAnthropicMessagesPayload(request: ChatCompletionRequest, mo
   // across every provider. The umbrella kill switch (coworkRuntimeQualityV1Disabled)
   // is enforced upstream where the base prompt is assembled, not here.
   const { system, messages } = applyAnthropicCacheBreakpoints(built.system, built.messages);
-  const reasoningEffort = request.reasoning?.effort;
+  const thinkingMode = resolveAnthropicThinkingMode(model);
+  const reasoningEffort =
+    request.reasoning?.effort ??
+    (thinkingMode === "adaptive_default_disable_supported" || thinkingMode === "adaptive_always_on"
+      ? "high"
+      : undefined);
   const thinkingEnabled = Boolean(reasoningEffort && reasoningEffort !== "none");
+  const anthropicEffort = reasoningEffort ? resolveAnthropicEffort({ effort: reasoningEffort, model }) : undefined;
+  assertAnthropicSamplingCompatibility({ request, model, thinkingEnabled });
+  // Adaptive Messages requests omit budget_tokens on the wire, but Anthropic's
+  // max_tokens remains a shared cap for hidden thinking and visible output.
+  // Keep the same governed local allowance for every enabled mode so direct
+  // callers and output-cap recovery cannot silently erase the visible answer.
+  const thinkingBudgetTokens =
+    thinkingEnabled && reasoningEffort ? resolveAnthropicThinkingBudgetTokens(reasoningEffort) : undefined;
+  const maxTokens =
+    request.max_tokens ??
+    (thinkingBudgetTokens === undefined
+      ? 1_024
+      : resolveAnthropicMaxTokensForVisibleOutput({
+          effort: reasoningEffort ?? "low",
+          visibleOutputTokenBudget: 1_024,
+        }));
+  if (reasoningEffort && thinkingEnabled) {
+    assertAnthropicThinkingFitsMaxTokens({ effort: reasoningEffort, maxTokens });
+  }
   const payload: Record<string, unknown> = {
     model,
     messages,
@@ -328,8 +555,7 @@ export function buildAnthropicMessagesPayload(request: ChatCompletionRequest, mo
     if (request.temperature !== undefined) payload.temperature = request.temperature;
     if (request.top_p !== undefined) payload.top_p = request.top_p;
   }
-  if (request.max_tokens !== undefined) payload.max_tokens = request.max_tokens;
-  else payload.max_tokens = 1024;
+  payload.max_tokens = maxTokens;
   if (request.stop !== undefined) payload.stop_sequences = Array.isArray(request.stop) ? request.stop : [request.stop];
   const anthropicTools = mapAnthropicTools(request.tools);
   if (anthropicTools !== undefined) payload.tools = anthropicTools;
@@ -354,13 +580,64 @@ export function buildAnthropicMessagesPayload(request: ChatCompletionRequest, mo
   }
   if (request.response_format !== undefined) payload.output_config = { format: request.response_format };
   if (request.metadata !== undefined) payload.metadata = request.metadata;
-  if (thinkingEnabled) {
-    payload.thinking = {
-      type: "enabled",
-      budget_tokens: anthropicThinkingBudgetForEffort(reasoningEffort ?? "low"),
-    };
+  if (anthropicEffort) {
+    if (thinkingMode !== "manual") {
+      payload.output_config = {
+        ...(isRecord(payload.output_config) ? payload.output_config : {}),
+        effort: anthropicEffort,
+      };
+    }
+    if (thinkingMode === "manual") {
+      payload.thinking = {
+        type: "enabled",
+        budget_tokens: thinkingBudgetTokens,
+      };
+    } else if (thinkingMode === "adaptive_opt_in") {
+      payload.thinking = { type: "adaptive" };
+    }
+  } else if (reasoningEffort === "none" && thinkingMode === "adaptive_default_disable_supported") {
+    payload.thinking = { type: "disabled" };
   }
   return payload;
+}
+
+export function resolveAnthropicMinimumEffectiveOutputTokenCap(payload: Record<string, unknown>): number | undefined {
+  const thinking = isRecord(payload.thinking) ? payload.thinking : undefined;
+  if (thinking?.type === "enabled") {
+    const budgetTokens = thinking.budget_tokens;
+    return typeof budgetTokens === "number" && Number.isSafeInteger(budgetTokens) && budgetTokens > 0
+      ? budgetTokens + 1
+      : undefined;
+  }
+  const outputConfig = isRecord(payload.output_config) ? payload.output_config : undefined;
+  const effort = outputConfig?.effort;
+  if (effort !== "low" && effort !== "medium" && effort !== "high" && effort !== "xhigh" && effort !== "max") {
+    return undefined;
+  }
+  const budgetTokens = resolveAnthropicThinkingBudgetTokens(effort);
+  return budgetTokens === undefined ? undefined : budgetTokens + 1;
+}
+
+function assertAnthropicSamplingCompatibility(input: {
+  request: ChatCompletionRequest;
+  model: string;
+  thinkingEnabled: boolean;
+}): void {
+  if (anthropicModelRejectsSamplingControls(input.model)) {
+    if (input.request.temperature !== undefined || input.request.top_p !== undefined) {
+      throw new Error(`Anthropic model ${input.model} does not support explicit temperature or top_p controls.`);
+    }
+    return;
+  }
+  if (!input.thinkingEnabled) {
+    return;
+  }
+  if (input.request.temperature !== undefined) {
+    throw new Error("Anthropic thinking requests do not support explicit temperature.");
+  }
+  if (input.request.top_p !== undefined && (input.request.top_p < 0.95 || input.request.top_p > 1)) {
+    throw new Error("Anthropic thinking requests require top_p between 0.95 and 1.");
+  }
 }
 
 function mapAnthropicTools(tools: ChatCompletionRequest["tools"]): Array<Record<string, unknown>> | undefined {
@@ -734,18 +1011,41 @@ function normalizeAnthropicUsage(usage: Record<string, unknown> | undefined): Re
   if (!usage) {
     return undefined;
   }
-  const inputTokens = typeof usage.input_tokens === "number" ? usage.input_tokens : 0;
-  const outputTokens = typeof usage.output_tokens === "number" ? usage.output_tokens : 0;
+  const inputTokens = typeof usage.input_tokens === "number" ? usage.input_tokens : undefined;
+  const outputTokens = typeof usage.output_tokens === "number" ? usage.output_tokens : undefined;
   const cacheRead = typeof usage.cache_read_input_tokens === "number" ? usage.cache_read_input_tokens : undefined;
   const cacheCreation =
     typeof usage.cache_creation_input_tokens === "number" ? usage.cache_creation_input_tokens : undefined;
   return {
-    prompt_tokens: inputTokens,
-    completion_tokens: outputTokens,
-    total_tokens: inputTokens + outputTokens,
+    ...(inputTokens !== undefined ? { prompt_tokens: inputTokens } : {}),
+    ...(outputTokens !== undefined ? { completion_tokens: outputTokens } : {}),
+    ...(inputTokens !== undefined && outputTokens !== undefined ? { total_tokens: inputTokens + outputTokens } : {}),
     ...(cacheRead !== undefined ? { cache_read_input_tokens: cacheRead } : {}),
     ...(cacheCreation !== undefined ? { cache_creation_input_tokens: cacheCreation } : {}),
   };
+}
+
+function mergeAnthropicUsage(
+  current: Record<string, unknown> | undefined,
+  next: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!next) return current;
+  return { ...(current ?? {}), ...next };
+}
+
+function withUsageEvent<T extends object>(
+  value: T,
+  accounting: ModelUsageAttemptHandle | undefined,
+  priorModelUsageEventIds: readonly string[] = [],
+): T & { model_usage_event_id?: string; model_usage_event_ids?: string[] } {
+  const eventIds = [...new Set([...priorModelUsageEventIds, ...(accounting ? [accounting.eventId] : [])])];
+  return eventIds.length > 0
+    ? {
+        ...value,
+        model_usage_event_id: eventIds.at(-1),
+        model_usage_event_ids: eventIds,
+      }
+    : value;
 }
 
 function mapAnthropicStopReason(stopReason: string | undefined): string {
@@ -775,21 +1075,6 @@ function buildAnthropicStreamError(event: Record<string, unknown>, receivedMessa
         : undefined;
   const phase = receivedMessageStart ? "after message_start" : "before message_start";
   return `Anthropic stream error ${phase}: ${type ? `${type}: ` : ""}${message}`;
-}
-
-function anthropicThinkingBudgetForEffort(effort: NonNullable<ChatCompletionRequest["reasoning"]>["effort"]): number {
-  switch (effort) {
-    case "low":
-      return 1024;
-    case "medium":
-      return 4096;
-    case "high":
-      return 8192;
-    case "xhigh":
-      return 16384;
-    default:
-      return 1024;
-  }
 }
 
 function dedupeToolCalls<T extends { id: string }>(toolCalls: T[]): T[] {

@@ -437,8 +437,11 @@ export {
   fetchChatDelegationRun,
   fetchChatGeneratedArtifact,
   fetchChatGeneratedArtifacts,
+  fetchChatHistoryWindow,
+  fetchChatHistoryContinuation,
   fetchChatLearnedMemory,
   fetchChatMessages,
+  fetchChatMessagePage,
   fetchChatPendingApprovals,
   fetchChatProactiveRuns,
   fetchChatProactiveStatus,
@@ -455,9 +458,11 @@ export {
   fetchChatSessionWorkbenchOutput,
   fetchChatSessionWorkbenchTree,
   fetchChatSessionPrefs,
+  fetchChatSessionSearch,
   fetchChatSessions,
   fetchChatSpecialistCandidates,
   fetchChatToolArtifact,
+  fetchChatTurnCapabilityProfile,
   fetchChatThread,
   fetchThreadKnowledgeAttachments,
   hardDeleteChatProject,
@@ -772,7 +777,10 @@ export type { BrowserSessionGrantListQuery, BrowserSessionListQuery } from "./br
 export {
   createDurableRun,
   createExternalSideEffectReplayAuditRun,
+  closeDurableChildWatcher,
+  detachDurableChildWatcher,
   exportObserveRunTrace,
+  fetchDurableChildWatchers,
   fetchDurableRun,
   fetchObserveRunTrace,
   fetchDurableRunTimeline,
@@ -782,6 +790,8 @@ export {
   retryDurableRun,
   wakeDurableRun,
   recoverDurableDeadLetter,
+  reattachDurableChildWatcher,
+  watchDurableChildRun,
 } from "./durable.js";
 export type {
   ObserveRunTraceArtifact,
@@ -832,6 +842,16 @@ export {
   updateSkillState,
   validateSkillImport,
 } from "./skills.js";
+export {
+  createSkillHubOperatorApproval,
+  fetchSkillHubOperator,
+  type CreateSkillHubOperatorApprovalResponse,
+  type SkillHubOperatorAction,
+  type SkillHubOperatorActionGuard,
+  type SkillHubOperatorApprovalSummary,
+  type SkillHubOperatorItem,
+  type SkillHubOperatorListResponse,
+} from "./skill-hub.js";
 export {
   addTaskActivity,
   addTaskDeliverable,

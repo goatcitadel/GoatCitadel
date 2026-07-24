@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import { ConflictError } from "@goatcitadel/contracts";
 import { registerChatSessionRoutes } from "./chat.sessions.js";
 
 describe("chat session routes", () => {
@@ -49,6 +50,7 @@ describe("chat session routes", () => {
       workspaceId: "default",
       surface: "chat",
       limit: 2,
+      view: "all",
     });
 
     await expect(
@@ -69,27 +71,34 @@ describe("chat session routes", () => {
       app.inject({
         method: "PATCH",
         url: "/api/v1/chat/sessions/sess-1",
-        payload: { title: "Renamed", folderName: "Work" },
+        payload: { expectedRevision: 7, title: "Renamed", folderName: "Work" },
       }),
     ).resolves.toMatchObject({ statusCode: 200 });
-    expect(chatSessions.updateChatSession).toHaveBeenCalledWith("sess-1", {
-      title: "Renamed",
-      folderName: "Work",
-    });
+    expect(chatSessions.updateChatSession).toHaveBeenCalledWith("sess-1", { title: "Renamed", folderName: "Work" }, 7);
 
-    await expect(app.inject({ method: "DELETE", url: "/api/v1/chat/sessions/sess-1" })).resolves.toMatchObject({
+    await expect(
+      app.inject({ method: "DELETE", url: "/api/v1/chat/sessions/sess-1?mode=hard&expectedRevision=7" }),
+    ).resolves.toMatchObject({
       statusCode: 200,
     });
-    await expect(app.inject({ method: "POST", url: "/api/v1/chat/sessions/sess-1/pin" })).resolves.toMatchObject({
+    await expect(
+      app.inject({ method: "POST", url: "/api/v1/chat/sessions/sess-1/pin", payload: { expectedRevision: 7 } }),
+    ).resolves.toMatchObject({
       statusCode: 200,
     });
-    await expect(app.inject({ method: "POST", url: "/api/v1/chat/sessions/sess-1/unpin" })).resolves.toMatchObject({
+    await expect(
+      app.inject({ method: "POST", url: "/api/v1/chat/sessions/sess-1/unpin", payload: { expectedRevision: 7 } }),
+    ).resolves.toMatchObject({
       statusCode: 200,
     });
-    await expect(app.inject({ method: "POST", url: "/api/v1/chat/sessions/sess-1/archive" })).resolves.toMatchObject({
+    await expect(
+      app.inject({ method: "POST", url: "/api/v1/chat/sessions/sess-1/archive", payload: { expectedRevision: 7 } }),
+    ).resolves.toMatchObject({
       statusCode: 200,
     });
-    await expect(app.inject({ method: "POST", url: "/api/v1/chat/sessions/sess-1/restore" })).resolves.toMatchObject({
+    await expect(
+      app.inject({ method: "POST", url: "/api/v1/chat/sessions/sess-1/restore", payload: { expectedRevision: 7 } }),
+    ).resolves.toMatchObject({
       statusCode: 200,
     });
 
@@ -113,10 +122,10 @@ describe("chat session routes", () => {
     const project = await app.inject({
       method: "POST",
       url: "/api/v1/chat/sessions/sess-1/project",
-      payload: { projectId: "project-1" },
+      payload: { projectId: "project-1", expectedRevision: 7 },
     });
     expect(project.statusCode).toBe(200);
-    expect(chatSessions.assignChatSessionProject).toHaveBeenCalledWith("sess-1", "project-1");
+    expect(chatSessions.assignChatSessionProject).toHaveBeenCalledWith("sess-1", "project-1", 7);
 
     const bindingSet = await app.inject({
       method: "POST",
@@ -308,7 +317,7 @@ describe("chat session routes", () => {
     });
     app = buildApp(chatSessions);
 
-    const listed = await app.inject({ method: "GET", url: "/api/v1/chat/sessions?limit=1" });
+    const listed = await app.inject({ method: "GET", url: "/api/v1/chat/sessions?limit=1&q=deploy" });
     const searched = await app.inject({
       method: "GET",
       url: "/api/v1/chat/session-search?query=deploy&mode=discovery",
@@ -321,6 +330,10 @@ describe("chat session routes", () => {
     expect(listed.statusCode).toBe(200);
     expect(searched.statusCode).toBe(200);
     expect(recents.statusCode).toBe(200);
+    for (const response of [listed, searched]) {
+      expect(response.headers["cache-control"]).toBe("private, no-store");
+      expect(response.headers.pragma).toBe("no-cache");
+    }
     for (const payload of [listed.json(), searched.json(), recents.json()]) {
       const serialized = JSON.stringify(payload);
       expect(serialized).not.toContain("list-secret");
@@ -393,6 +406,30 @@ describe("chat session routes", () => {
         payload: { retrievalMode: "full_text" },
       }),
     ).resolves.toMatchObject({ statusCode: 400 });
+  });
+
+  it("maps stale aggregate revisions to an HTTP 409 conflict", async () => {
+    const updateChatSession = vi.fn(() => {
+      throw new ConflictError({
+        code: "WRITE_CONFLICT",
+        message: "Chat session changed since it was read",
+        details: { resourceKind: "chat_session", expectedRevision: 3, actualRevision: 4 },
+      });
+    });
+    app = buildApp(createChatSessionsService({ updateChatSession }));
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/chat/sessions/sess-1",
+      payload: { expectedRevision: 3, title: "stale title" },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      code: "WRITE_CONFLICT",
+      details: { resourceKind: "chat_session", expectedRevision: 3, actualRevision: 4 },
+    });
+    expect(updateChatSession).toHaveBeenCalledWith("sess-1", { title: "stale title" }, 3);
   });
 });
 

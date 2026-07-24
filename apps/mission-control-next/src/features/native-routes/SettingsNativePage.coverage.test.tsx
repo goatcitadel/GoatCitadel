@@ -1,6 +1,7 @@
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsNativePage } from "./SettingsNativePage";
+import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { __resetFormDirtyRegistryForTests, hasDirtySections } from "./library/use-form-dirty";
 
@@ -89,6 +90,9 @@ const settingsMocks = vi.hoisted(() => {
     installCapabilityPack: fn(),
     installLocalCapabilityPack: fn(),
     installVoiceRuntime: fn(),
+    isApiRequestError: vi.fn(
+      (error: unknown) => error instanceof Error && error.name === "ApiRequestError" && "status" in error,
+    ),
     invokeIntegrationConnectionAction: fn(),
     launchAddon: fn(),
     listCitadels: fn(),
@@ -140,6 +144,7 @@ const settingsMocks = vi.hoisted(() => {
     validateChannelSetupDraft: fn(),
     providerModelCatalog: {
       config: {
+        revision: 31,
         activeProviderId: "openai",
         activeModel: "gpt-5.4-mini",
         providers: [],
@@ -244,6 +249,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   installCapabilityPack: settingsMocks.installCapabilityPack,
   installLocalCapabilityPack: settingsMocks.installLocalCapabilityPack,
   installVoiceRuntime: settingsMocks.installVoiceRuntime,
+  isApiRequestError: settingsMocks.isApiRequestError,
   invokeIntegrationConnectionAction: settingsMocks.invokeIntegrationConnectionAction,
   launchAddon: settingsMocks.launchAddon,
   materializeStagedCapabilityPack: settingsMocks.materializeStagedCapabilityPack,
@@ -310,6 +316,7 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog", asy
 }));
 
 const settings = {
+  revision: 29,
   auth: {
     mode: "token",
     allowLoopbackBypass: false,
@@ -339,6 +346,18 @@ const settings = {
       commandSource: "settings",
       command: "llama-server",
       modelPath: "F:/models/llama-3.gguf",
+      leaseDiagnostics: {
+        state: "active",
+        activeLeaseCount: 2,
+        ownership: "owned",
+        purposes: [{ purpose: "chat_completion", count: 2 }],
+        persistentDemand: { manual: false, api: true, autostart: false },
+        evidence: {
+          lastProbe: { at: "2026-04-22T00:00:00.000Z", healthy: true },
+          lastExit: { at: "2026-04-21T23:50:00.000Z", unexpected: false, code: 0 },
+          lastRestart: { at: "2026-04-21T23:51:00.000Z", outcome: "ready" },
+        },
+      },
     },
   },
   npu: {
@@ -358,6 +377,7 @@ const settings = {
 const workspaces = [
   {
     workspaceId: "default",
+    revision: 11,
     name: "Default",
     slug: "default",
     description: "Primary workspace",
@@ -367,6 +387,7 @@ const workspaces = [
   },
   {
     workspaceId: "archive-1",
+    revision: 13,
     name: "Archive",
     slug: "archive",
     description: "Archived workspace",
@@ -378,6 +399,7 @@ const workspaces = [
 
 function setupResponses() {
   settingsMocks.providerModelCatalog.config = {
+    revision: 31,
     activeProviderId: "openai",
     activeModel: "gpt-5.4-mini",
     providers: [],
@@ -1016,8 +1038,8 @@ function setupResponses() {
     sessions: [{ sessionId: "cowork-demo", mode: "cowork" }],
   });
   settingsMocks.fetchProviderSecretStatus.mockResolvedValue({ hasSecret: false, source: "missing" });
-  settingsMocks.saveProviderSecret.mockResolvedValue({ hasSecret: true, source: "keychain" });
-  settingsMocks.deleteProviderSecret.mockResolvedValue({ hasSecret: false, source: "missing" });
+  settingsMocks.saveProviderSecret.mockResolvedValue({ revision: 32, hasSecret: true, source: "keychain" });
+  settingsMocks.deleteProviderSecret.mockResolvedValue({ revision: 32, hasSecret: false, source: "missing" });
   settingsMocks.fetchOpenAICodexOAuthStatus.mockResolvedValue({ connected: false, requiresReauth: false });
   settingsMocks.startOpenAICodexOAuthDeviceFlow.mockResolvedValue({
     providerId: "openai-codex",
@@ -1124,6 +1146,21 @@ async function change(node: ReactTestInstance, value: string, checked?: boolean)
   await flush();
 }
 
+function revisionConflict(
+  expectedRevision: number,
+  currentRevision: number,
+  path = "/api/v1/settings",
+  method = "PATCH",
+) {
+  return new ApiRequestError("stale settings", {
+    kind: "http",
+    method,
+    path,
+    status: 409,
+    body: { code: "WRITE_CONFLICT", details: { expectedRevision, currentRevision } },
+  });
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.unstubAllGlobals();
@@ -1136,6 +1173,447 @@ afterEach(() => {
 });
 
 describe("SettingsNativePage broad native sections", () => {
+  it("preserves a workspace draft, reloads the current revision, and retries after a 409", async () => {
+    const page = await mount("workspaces");
+    const nameInput = page.root.findAllByType("input")[8]!;
+    await change(nameInput, "Local workspace draft");
+
+    const staleError = new ApiRequestError("stale workspace", {
+      kind: "http",
+      method: "PATCH",
+      path: "/api/v1/workspaces/default",
+      status: 409,
+      body: { code: "WRITE_CONFLICT", details: { expectedRevision: 11, currentRevision: 12 } },
+    });
+    settingsMocks.updateWorkspace.mockRejectedValueOnce(staleError).mockResolvedValueOnce({
+      ...workspaces[0],
+      revision: 13,
+      name: "Local workspace draft",
+    });
+    settingsMocks.fetchWorkspaces.mockResolvedValueOnce({
+      items: [{ ...workspaces[0], revision: 12, name: "Remote workspace update" }, workspaces[1]],
+    });
+
+    await click(findButton(page.root, "Save changes"));
+
+    expect(settingsMocks.updateWorkspace).toHaveBeenNthCalledWith(1, "default", {
+      expectedRevision: 11,
+      name: "Local workspace draft",
+      description: "Primary workspace",
+      slug: "default",
+    });
+    expect(settingsMocks.fetchWorkspaces).toHaveBeenCalledTimes(2);
+    expect(collectText(page.root)).toContain("Your draft is preserved and the current revision was reloaded");
+    expect(
+      page.root.findAll((node) => node.type === "input" && node.props.value === "Local workspace draft"),
+    ).toHaveLength(1);
+
+    await click(findButton(page.root, "Save changes"));
+    expect(settingsMocks.updateWorkspace).toHaveBeenNthCalledWith(2, "default", {
+      expectedRevision: 12,
+      name: "Local workspace draft",
+      description: "Primary workspace",
+      slug: "default",
+    });
+  });
+
+  it("preserves the access draft and retries with the refreshed settings revision after a 409", async () => {
+    settingsMocks.fetchSettings.mockResolvedValueOnce({ ...settings, revision: 41 }).mockResolvedValueOnce({
+      ...settings,
+      revision: 42,
+      auth: { ...settings.auth, mode: "none", allowLoopbackBypass: true },
+    });
+    settingsMocks.patchSettings.mockRejectedValueOnce(revisionConflict(41, 42)).mockResolvedValueOnce({});
+
+    const access = await mount("access");
+    const authMode = access.root.findAllByType("select").find((select) => collectText(select).includes("Basic"))!;
+    const token = access.root.findByProps({ placeholder: "Only enter a new token when rotating credentials" });
+    await change(authMode, "basic");
+    await change(token, "local-token");
+    await click(findButton(access.root, "Save access settings"));
+
+    expect(settingsMocks.patchSettings).toHaveBeenNthCalledWith(1, {
+      expectedRevision: 41,
+      auth: {
+        mode: "basic",
+        allowLoopbackBypass: false,
+        token: "local-token",
+        basicUsername: undefined,
+        basicPassword: undefined,
+      },
+    });
+    expect(settingsMocks.fetchSettings).toHaveBeenCalledTimes(2);
+    const refreshedAuthMode = access.root
+      .findAllByType("select")
+      .find((select) => collectText(select).includes("Basic"))!;
+    const refreshedToken = access.root.findByProps({
+      placeholder: "Only enter a new token when rotating credentials",
+    });
+    expect(refreshedAuthMode.props.value).toBe("basic");
+    expect(refreshedToken.props.value).toBe("local-token");
+    expect(collectText(access.root)).toContain("Your draft is preserved");
+
+    await click(findButton(access.root, "Save access settings"));
+    expect(settingsMocks.patchSettings).toHaveBeenNthCalledWith(2, {
+      expectedRevision: 42,
+      auth: {
+        mode: "basic",
+        allowLoopbackBypass: false,
+        token: "local-token",
+        basicUsername: undefined,
+        basicPassword: undefined,
+      },
+    });
+  });
+
+  it("preserves the budget draft and retries with the refreshed settings revision after a 409", async () => {
+    settingsMocks.fetchSettings
+      .mockResolvedValueOnce({ ...settings, revision: 51, budgetMode: "balanced" })
+      .mockResolvedValueOnce({ ...settings, revision: 52, budgetMode: "power" });
+    settingsMocks.patchSettings.mockRejectedValueOnce(revisionConflict(51, 52)).mockResolvedValueOnce({});
+
+    const budget = await mount("budget");
+    const mode = budget.root.findByType("select");
+    await change(mode, "saver");
+    await click(findButton(budget.root, "Save budget mode"));
+
+    expect(settingsMocks.patchSettings).toHaveBeenNthCalledWith(1, {
+      expectedRevision: 51,
+      budgetMode: "saver",
+    });
+    expect(settingsMocks.fetchSettings).toHaveBeenCalledTimes(2);
+    expect(budget.root.findByType("select").props.value).toBe("saver");
+    expect(collectText(budget.root)).toContain("Your draft is preserved");
+
+    await click(findButton(budget.root, "Save budget mode"));
+    expect(settingsMocks.patchSettings).toHaveBeenNthCalledWith(2, {
+      expectedRevision: 52,
+      budgetMode: "saver",
+    });
+  });
+
+  it("preserves the tool approval draft and retries with the refreshed settings revision after a 409", async () => {
+    settingsMocks.fetchSettings
+      .mockResolvedValueOnce({ ...settings, revision: 61, toolApprovalMode: "approve_risky" })
+      .mockResolvedValueOnce({ ...settings, revision: 62, toolApprovalMode: "approve_all" });
+    settingsMocks.patchSettings.mockRejectedValueOnce(revisionConflict(61, 62)).mockResolvedValueOnce({});
+
+    const tools = await mount("tools");
+    const approvalMode = tools.root
+      .findAllByType("select")
+      .find((select) => collectText(select).includes("Skip normal prompts"))!;
+    await change(approvalMode, "bypass");
+    await click(findButton(tools.root, "Save mode"));
+
+    expect(settingsMocks.patchSettings).toHaveBeenNthCalledWith(1, {
+      expectedRevision: 61,
+      toolApprovalMode: "bypass",
+    });
+    expect(settingsMocks.fetchSettings).toHaveBeenCalledTimes(2);
+    expect(
+      tools.root.findAllByType("select").find((select) => collectText(select).includes("Skip normal prompts"))?.props
+        .value,
+    ).toBe("bypass");
+    expect(collectText(tools.root)).toContain("approval-mode draft is preserved");
+
+    await click(findButton(tools.root, "Save mode"));
+    expect(settingsMocks.patchSettings).toHaveBeenNthCalledWith(2, {
+      expectedRevision: 62,
+      toolApprovalMode: "bypass",
+    });
+  });
+
+  it("preserves onboarding defaults and retries against the refreshed runtime revision after a 409", async () => {
+    const onboardingBase = {
+      completed: false,
+      checklist: [],
+      settings: {
+        defaultToolProfile: "standard",
+        toolApprovalMode: "approve_risky",
+        budgetMode: "balanced",
+        networkAllowlist: ["api.old.example"],
+        auth: settings.auth,
+        llm: settings.llm,
+        mesh: { enabled: false, mode: "lan", nodeId: "", mdns: true, staticPeers: [], requireMtls: false },
+      },
+    };
+    settingsMocks.fetchOnboardingState.mockResolvedValueOnce(onboardingBase).mockResolvedValueOnce({
+      ...onboardingBase,
+      settings: {
+        ...onboardingBase.settings,
+        budgetMode: "power",
+        networkAllowlist: ["api.remote.example"],
+      },
+    });
+    settingsMocks.fetchSettings
+      .mockResolvedValueOnce({ ...settings, revision: 71 })
+      .mockResolvedValueOnce({ ...settings, revision: 72 });
+    settingsMocks.bootstrapOnboarding
+      .mockRejectedValueOnce(revisionConflict(71, 72, "/api/v1/onboarding/bootstrap", "POST"))
+      .mockResolvedValueOnce({});
+
+    const onboarding = await mount("onboarding");
+    const budgetMode = onboarding.root.findAllByType("select").find((select) => select.props.value === "balanced")!;
+    const allowlist = onboarding.root.findByProps({ placeholder: "example.com, api.example.com" });
+    await change(budgetMode, "saver");
+    await change(allowlist, "local.example, api.local.example");
+    await click(findButton(onboarding.root, "Apply defaults"));
+
+    expect(settingsMocks.bootstrapOnboarding).toHaveBeenNthCalledWith(1, {
+      expectedRevision: 71,
+      defaultToolProfile: "standard",
+      toolApprovalMode: "approve_risky",
+      budgetMode: "saver",
+      networkAllowlist: ["local.example", "api.local.example"],
+      auth: { allowLoopbackBypass: false },
+    });
+    expect(settingsMocks.fetchSettings).toHaveBeenCalledTimes(2);
+    expect(onboarding.root.findAllByType("select").find((select) => select.props.value === "saver")).toBeTruthy();
+    expect(onboarding.root.findByProps({ placeholder: "example.com, api.example.com" }).props.value).toBe(
+      "local.example, api.local.example",
+    );
+    expect(collectText(onboarding.root)).toContain("defaults draft is preserved");
+
+    await click(findButton(onboarding.root, "Apply defaults"));
+    expect(settingsMocks.bootstrapOnboarding).toHaveBeenNthCalledWith(2, {
+      expectedRevision: 72,
+      defaultToolProfile: "standard",
+      toolApprovalMode: "approve_risky",
+      budgetMode: "saver",
+      networkAllowlist: ["local.example", "api.local.example"],
+      auth: { allowLoopbackBypass: false },
+    });
+  });
+
+  it("preserves the llama.cpp draft and retries with the refreshed settings revision after a 409", async () => {
+    settingsMocks.fetchSettings.mockResolvedValueOnce({ ...settings, revision: 81 }).mockResolvedValueOnce({
+      ...settings,
+      revision: 82,
+      llamaCpp: { ...settings.llamaCpp, command: "remote-llama-command" },
+    });
+    settingsMocks.patchSettings.mockRejectedValueOnce(revisionConflict(81, 82)).mockResolvedValueOnce({});
+
+    const runtime = await mount("runtime");
+    const command = runtime.root.findByProps({ value: "llama-server" });
+    await change(command, "local-llama-command");
+    await click(buttons(runtime.root, "Save")[0]!);
+
+    expect(settingsMocks.patchSettings).toHaveBeenNthCalledWith(1, {
+      expectedRevision: 81,
+      llamaCpp: expect.objectContaining({ command: "local-llama-command" }),
+    });
+    expect(settingsMocks.fetchSettings).toHaveBeenCalledTimes(2);
+    expect(runtime.root.findByProps({ value: "local-llama-command" })).toBeTruthy();
+    expect(collectText(runtime.root)).toContain("llama.cpp draft is preserved");
+
+    await click(buttons(runtime.root, "Save")[0]!);
+    expect(settingsMocks.patchSettings).toHaveBeenNthCalledWith(2, {
+      expectedRevision: 82,
+      llamaCpp: expect.objectContaining({ command: "local-llama-command" }),
+    });
+  });
+
+  it("renders compact llama.cpp lease truth and handles older Gateway status", async () => {
+    const runtime = await mount("runtime");
+    const text = collectText(runtime.root);
+
+    expect(text).toContain("Lifecycle");
+    expect(text).toContain("Active leases");
+    expect(text).toContain("Chat completion ×2");
+    expect(text).toContain("Persistent demand");
+    expect(text).toContain("Api");
+    expect(text).toContain("Latest probe");
+    expect(text).toContain("Latest process exit");
+    expect(text).toContain("Latest restart");
+    expect(runtime.root.findByProps({ "aria-label": "llama.cpp lease lifecycle" }).props).toMatchObject({
+      role: "group",
+      "aria-live": "polite",
+    });
+    runtime.unmount();
+
+    const { leaseDiagnostics, ...legacyStatus } = settings.llamaCpp.status;
+    expect(leaseDiagnostics).toBeDefined();
+    settingsMocks.fetchSettings.mockResolvedValueOnce({
+      ...settings,
+      llamaCpp: { ...settings.llamaCpp, status: legacyStatus },
+    });
+    const legacyRuntime = await mount("runtime");
+    expect(collectText(legacyRuntime.root)).toContain(
+      "Lease lifecycle diagnostics are unavailable from this Gateway version.",
+    );
+    expect(
+      legacyRuntime.root.findAll((node) => node.props.role === "status" && collectText(node).includes("unavailable")),
+    ).toHaveLength(1);
+  });
+
+  it("reloads retired NPU state and retries normalization with the refreshed revision after a 409", async () => {
+    settingsMocks.fetchSettings.mockResolvedValueOnce({ ...settings, revision: 83 }).mockResolvedValueOnce({
+      ...settings,
+      revision: 84,
+      npu: { ...settings.npu, sidecarUrl: "http://127.0.0.1:49220" },
+    });
+    settingsMocks.patchSettings.mockRejectedValueOnce(revisionConflict(83, 84)).mockResolvedValueOnce({});
+
+    const runtime = await mount("runtime");
+    await click(findButton(runtime.root, "Normalize"));
+    expect(settingsMocks.patchSettings).toHaveBeenNthCalledWith(1, {
+      expectedRevision: 83,
+      npu: { enabled: false, autoStart: false, sidecarUrl: "http://127.0.0.1:39110" },
+    });
+    expect(collectText(runtime.root)).toContain("Current NPU settings were reloaded");
+
+    await click(findButton(runtime.root, "Normalize"));
+    expect(settingsMocks.patchSettings).toHaveBeenNthCalledWith(2, {
+      expectedRevision: 84,
+      npu: { enabled: false, autoStart: false, sidecarUrl: "http://127.0.0.1:49220" },
+    });
+  });
+
+  it("preserves only the provider routing draft and retries with the refreshed config revision after a 409", async () => {
+    settingsMocks.providerModelCatalog.config = {
+      ...settingsMocks.providerModelCatalog.config,
+      revision: 91,
+    };
+    settingsMocks.providerModelCatalog.providers = [
+      ...settingsMocks.providerModelCatalog.providers,
+      {
+        providerId: "anthropic",
+        label: "Anthropic",
+        baseUrl: "https://api.anthropic.com",
+        defaultModel: "claude-sonnet-5",
+        apiStyle: "anthropic-messages",
+        models: ["claude-sonnet-5"],
+        hasApiKey: true,
+        apiKeySource: "env",
+        modelProbeState: "ready",
+      },
+    ];
+    settingsMocks.patchSettings.mockRejectedValueOnce(revisionConflict(91, 92)).mockResolvedValueOnce({});
+    settingsMocks.reloadProviderCatalog.mockImplementationOnce(async () => {
+      settingsMocks.providerModelCatalog.config = {
+        ...settingsMocks.providerModelCatalog.config,
+        revision: 92,
+        activeProviderId: "openai",
+        activeModel: "gpt-remote",
+      };
+      settingsMocks.providerModelCatalog.providers = settingsMocks.providerModelCatalog.providers.map((provider) =>
+        provider.providerId === "anthropic" ? { ...provider, label: "Remote Anthropic" } : provider,
+      );
+    });
+
+    const providers = await mount("providers");
+    const routingProvider = providers.root
+      .findAllByType("select")
+      .find((select) => collectText(select).includes("Anthropic"))!;
+    await change(routingProvider, "anthropic");
+    await click(findButton(providers.root, "Save routing"));
+
+    expect(settingsMocks.patchSettings).toHaveBeenNthCalledWith(1, {
+      expectedRevision: 91,
+      llm: { activeProviderId: "anthropic", activeModel: "claude-sonnet-5" },
+    });
+    expect(routingProvider.props.value).toBe("anthropic");
+    expect(providers.root.findByProps({ placeholder: "OpenAI-compatible" }).props.value).toBe("Remote Anthropic");
+    expect(collectText(providers.root)).toContain("routing draft is preserved");
+
+    await click(findButton(providers.root, "Save routing"));
+    expect(settingsMocks.patchSettings).toHaveBeenNthCalledWith(2, {
+      expectedRevision: 92,
+      llm: { activeProviderId: "anthropic", activeModel: "claude-sonnet-5" },
+    });
+  });
+
+  it("preserves only the provider editor draft and retries with the refreshed config revision after a 409", async () => {
+    settingsMocks.providerModelCatalog.config = {
+      ...settingsMocks.providerModelCatalog.config,
+      revision: 93,
+    };
+    settingsMocks.providerModelCatalog.providers = [
+      ...settingsMocks.providerModelCatalog.providers,
+      {
+        providerId: "anthropic",
+        label: "Anthropic",
+        baseUrl: "https://api.anthropic.com",
+        defaultModel: "claude-sonnet-5",
+        apiStyle: "anthropic-messages",
+        models: ["claude-sonnet-5"],
+        hasApiKey: true,
+        apiKeySource: "env",
+        modelProbeState: "ready",
+      },
+    ];
+    settingsMocks.patchSettings.mockRejectedValueOnce(revisionConflict(93, 94)).mockResolvedValueOnce({});
+    settingsMocks.reloadProviderCatalog.mockImplementationOnce(async () => {
+      settingsMocks.providerModelCatalog.config = {
+        ...settingsMocks.providerModelCatalog.config,
+        revision: 94,
+        activeProviderId: "anthropic",
+        activeModel: "claude-sonnet-5",
+      };
+    });
+
+    const providers = await mount("providers");
+    const providerLabel = providers.root.findByProps({ placeholder: "OpenAI-compatible" });
+    await change(providerLabel, "Local OpenAI draft");
+    await click(findButton(providers.root, "Save provider"));
+
+    expect(settingsMocks.patchSettings).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        expectedRevision: 93,
+        llm: { upsertProvider: expect.objectContaining({ providerId: "openai", label: "Local OpenAI draft" }) },
+      }),
+    );
+    expect(providerLabel.props.value).toBe("Local OpenAI draft");
+    expect(
+      providers.root.findAllByType("select").find((select) => collectText(select).includes("Anthropic"))?.props.value,
+    ).toBe("anthropic");
+    expect(collectText(providers.root)).toContain("provider draft is preserved");
+
+    await click(findButton(providers.root, "Save provider"));
+    expect(settingsMocks.patchSettings).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        expectedRevision: 94,
+        llm: { upsertProvider: expect.objectContaining({ providerId: "openai", label: "Local OpenAI draft" }) },
+      }),
+    );
+  });
+
+  it("reloads provider state and retries ChatGPT setup with the refreshed config revision after a 409", async () => {
+    settingsMocks.providerModelCatalog.config = {
+      ...settingsMocks.providerModelCatalog.config,
+      revision: 95,
+    };
+    settingsMocks.patchSettings.mockRejectedValueOnce(revisionConflict(95, 96)).mockResolvedValueOnce({});
+    settingsMocks.reloadProviderCatalog.mockImplementationOnce(async () => {
+      settingsMocks.providerModelCatalog.config = {
+        ...settingsMocks.providerModelCatalog.config,
+        revision: 96,
+      };
+    });
+
+    const providers = await mount("providers");
+    await click(findButton(providers.root, "Add ChatGPT setup"));
+    expect(settingsMocks.patchSettings).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        expectedRevision: 95,
+        llm: { upsertProvider: expect.objectContaining({ providerId: "openai-codex" }) },
+      }),
+    );
+    expect(collectText(providers.root)).toContain("add ChatGPT setup again");
+
+    await click(findButton(providers.root, "Add ChatGPT setup"));
+    expect(settingsMocks.patchSettings).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        expectedRevision: 96,
+        llm: { upsertProvider: expect.objectContaining({ providerId: "openai-codex" }) },
+      }),
+    );
+  });
+
   it("covers settings fallback stats and route action tails without silently falling through", async () => {
     settingsMocks.fetchSettings.mockRejectedValueOnce(new Error("settings offline"));
     const navigate = vi.fn();
@@ -1205,6 +1683,7 @@ describe("SettingsNativePage broad native sections", () => {
     );
     await click(findButton(access.root, "Save access settings"));
     expect(settingsMocks.patchSettings).toHaveBeenCalledWith({
+      expectedRevision: 29,
       auth: expect.objectContaining({ token: "new-token" }),
     });
     await click(findButton(access.root, "Generate install token"));
@@ -1253,6 +1732,7 @@ describe("SettingsNativePage broad native sections", () => {
     await change(runtimeCheckboxes[1]!, "", false);
     await click(buttons(runtime.root, "Save")[0]!);
     expect(settingsMocks.patchSettings).toHaveBeenCalledWith({
+      expectedRevision: 29,
       llamaCpp: {
         enabled: false,
         autoStart: false,
@@ -1277,6 +1757,7 @@ describe("SettingsNativePage broad native sections", () => {
     // and refreshes status.
     await click(findButton(runtime.root, "Normalize"));
     expect(settingsMocks.patchSettings).toHaveBeenCalledWith({
+      expectedRevision: 29,
       npu: {
         enabled: false,
         autoStart: false,
@@ -1302,6 +1783,7 @@ describe("SettingsNativePage broad native sections", () => {
     await change(initialWorkspaceTextareas[1]!, "Updated default workspace description");
     await click(findButton(workspacesPage.root, "Save changes"));
     expect(settingsMocks.updateWorkspace).toHaveBeenCalledWith("default", {
+      expectedRevision: 11,
       name: "Default edited",
       slug: "default-edited",
       description: "Updated default workspace description",
@@ -1325,10 +1807,10 @@ describe("SettingsNativePage broad native sections", () => {
       await archiveModal?.props.onConfirm();
     });
     await flush();
-    expect(settingsMocks.archiveWorkspace).toHaveBeenCalledWith("default");
+    expect(settingsMocks.archiveWorkspace).toHaveBeenCalledWith("default", 11);
     await click(buttons(workspacesPage.root, "Archived")[1]!);
     await click(findExactButton(workspacesPage.root, "Restore"));
-    expect(settingsMocks.restoreWorkspace).toHaveBeenCalledWith("archive-1");
+    expect(settingsMocks.restoreWorkspace).toHaveBeenCalledWith("archive-1", 13);
     const workspaceInputs = workspacesPage.root.findAllByType("input");
     const workspaceTextareas = workspacesPage.root.findAllByType("textarea");
     await change(workspaceInputs[6]!, "Created workspace");
@@ -1385,7 +1867,10 @@ describe("SettingsNativePage broad native sections", () => {
       "bypass",
     );
     await click(findButton(tools.root, "Save mode"));
-    expect(settingsMocks.patchSettings).toHaveBeenCalledWith({ toolApprovalMode: "bypass" });
+    expect(settingsMocks.patchSettings).toHaveBeenCalledWith({
+      expectedRevision: 29,
+      toolApprovalMode: "bypass",
+    });
     await change(tools.root.findByProps({ placeholder: "Search tool name, category, or description" }), "shell");
     await change(tools.root.findAllByType("input").find((input) => input.props.value === "shell.run")!, "shell.exec");
     await change(tools.root.findAllByType("select").find((select) => select.props.value === "allow")!, "deny");
@@ -1626,6 +2111,7 @@ describe("SettingsNativePage broad native sections", () => {
     );
     await click(findButton(onboarding.root, "Apply defaults"));
     expect(settingsMocks.bootstrapOnboarding).toHaveBeenCalledWith({
+      expectedRevision: 29,
       defaultToolProfile: "danger",
       toolApprovalMode: "bypass",
       budgetMode: "power",
@@ -2294,6 +2780,7 @@ describe("SettingsNativePage broad native sections", () => {
 
     await click(findButton(providers.root, "Save routing"));
     expect(settingsMocks.patchSettings).toHaveBeenCalledWith({
+      expectedRevision: 31,
       llm: {
         activeProviderId: "anthropic",
         activeModel: "claude-sonnet-5",
@@ -2304,7 +2791,7 @@ describe("SettingsNativePage broad native sections", () => {
     expect(collectText(providers.root)).toContain("Enter a provider secret before saving.");
     await change(providers.root.findByProps({ placeholder: "Paste a new API key to save" }), " sk-live ");
     await click(findButton(providers.root, "Save secret"));
-    expect(settingsMocks.saveProviderSecret).toHaveBeenCalledWith("openai", "sk-live");
+    expect(settingsMocks.saveProviderSecret).toHaveBeenCalledWith("openai", "sk-live", 31);
 
     await click(findButton(providers.root, "Delete secret"));
     let secretModal = providers.root
@@ -2323,7 +2810,7 @@ describe("SettingsNativePage broad native sections", () => {
       await secretModal?.props.onConfirm();
     });
     await flush();
-    expect(settingsMocks.deleteProviderSecret).toHaveBeenCalledWith("openai");
+    expect(settingsMocks.deleteProviderSecret).toHaveBeenCalledWith("openai", 31);
 
     await click(findButton(providers.root, "Refresh models"));
     expect(collectText(providers.root)).toContain("live discovery failed: catalog timeout");
@@ -2346,6 +2833,7 @@ describe("SettingsNativePage broad native sections", () => {
     await change(inputs.find((input) => input.props.placeholder === "OPENAI_API_KEY")!, " LOCAL_KEY ");
     await click(findButton(providers.root, "Save provider"));
     expect(settingsMocks.patchSettings).toHaveBeenCalledWith({
+      expectedRevision: 31,
       llm: {
         upsertProvider: expect.objectContaining({
           providerId: "local-openai",
@@ -2361,6 +2849,7 @@ describe("SettingsNativePage broad native sections", () => {
 
     await click(findButton(providers.root, "Add provider and continue"));
     expect(settingsMocks.patchSettings).toHaveBeenCalledWith({
+      expectedRevision: 31,
       llm: {
         upsertProvider: expect.objectContaining({
           providerId: "openai-codex",
@@ -2388,6 +2877,7 @@ describe("SettingsNativePage broad native sections", () => {
       },
     ];
     settingsMocks.providerModelCatalog.config = {
+      revision: 31,
       activeProviderId: "openai-codex",
       activeModel: "gpt-5-codex",
       providers: [],

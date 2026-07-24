@@ -57,13 +57,10 @@ export function createSettingsRuntimeDependenciesForGateway(
     npuSidecar: gateway.npuSidecar,
     llamaCppRuntime: gateway.llamaCppRuntime,
     readFeatureFlags: () => gateway.readFeatureFlags(),
+    readSettingsRevision: () => gateway.readSettingsRevision(),
     updateFeatureFlags: (patch) => gateway.updateFeatureFlags(patch),
     assertDeploymentProfileUpdate: (input) => gateway.assertDeploymentProfileUpdate(input),
     assertFirecrawlRuntimeUpdate: (input) => gateway.assertFirecrawlRuntimeUpdate(input),
-    persistLlmConfig: () => gateway.persistLlmConfig(),
-    persistToolPolicyConfig: () => gateway.persistToolPolicyConfig(),
-    persistBudgetsConfig: () => gateway.persistBudgetsConfig(),
-    persistAssistantConfig: () => gateway.persistAssistantConfig(),
   };
 }
 

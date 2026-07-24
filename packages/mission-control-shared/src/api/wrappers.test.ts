@@ -612,19 +612,33 @@ describe("shared API wrappers", () => {
         body: JSON.stringify({ citadelId: "company", workspaceId: "engineering", title: "Scoped task" }),
       },
     );
-    await expectCall(tasks.updateTask("task/1", { title: "New" }), "/api/v1/tasks/task%2F1", { method: "PATCH" });
+    await expectCall(tasks.updateTask("task/1", { expectedRevision: 3, title: "New" }), "/api/v1/tasks/task%2F1", {
+      method: "PATCH",
+      body: JSON.stringify({ expectedRevision: 3, title: "New" }),
+    });
     await expectCall(
-      tasks.deleteTask("task/1", { mode: "hard", deletedBy: "me" }),
+      tasks.deleteTask("task/1", { expectedRevision: 4, mode: "hard", deletedBy: "me" }),
       "/api/v1/tasks/task%2F1?mode=hard",
       {
         method: "DELETE",
+        body: JSON.stringify({
+          mode: "hard",
+          expectedRevision: 4,
+          deletedBy: "me",
+        }),
       },
     );
-    await expectCall(tasks.restoreTask("task/1"), "/api/v1/tasks/task%2F1/restore", { method: "POST" });
+    await expectCall(tasks.restoreTask("task/1", 5), "/api/v1/tasks/task%2F1/restore", {
+      method: "POST",
+      body: JSON.stringify({ expectedRevision: 5 }),
+    });
     await expectCall(
-      tasks.restoreTask("task/1", "engineering", "company"),
+      tasks.restoreTask("task/1", 6, "engineering", "company"),
       "/api/v1/tasks/task%2F1/restore?citadelId=company&workspaceId=engineering",
-      { method: "POST" },
+      {
+        method: "POST",
+        body: JSON.stringify({ citadelId: "company", expectedRevision: 6, workspaceId: "engineering" }),
+      },
     );
     await expectCall(tasks.fetchTaskActivities("task/1"), "/api/v1/tasks/task%2F1/activities");
     await expectCall(tasks.addTaskActivity("task/1", { message: "hi" }), "/api/v1/tasks/task%2F1/activities", {
@@ -659,6 +673,43 @@ describe("shared API wrappers", () => {
       {
         method: "PATCH",
       },
+    );
+    await expectCall(
+      tasks.emitTaskDistress("task/1", {
+        expectedRevision: 7,
+        code: "needs_user",
+        severity: "warn",
+        title: "Need input",
+        summary: "Please review",
+      }),
+      "/api/v1/tasks/task%2F1/distress",
+      { method: "POST" },
+    );
+    await expectCall(
+      tasks.resolveTaskDistress("task/1", "signal/1", { expectedRevision: 8 }),
+      "/api/v1/tasks/task%2F1/distress/signal%2F1",
+      { method: "DELETE", body: JSON.stringify({ expectedRevision: 8 }) },
+    );
+    await expectCall(tasks.setTaskRetryBudget("task/1", 3, 9), "/api/v1/tasks/task%2F1/retry-budget", {
+      method: "POST",
+      body: JSON.stringify({ expectedRevision: 9, maxRetries: 3 }),
+    });
+    await expectCall(
+      tasks.verifyTaskArtifacts("task/1", [{ kind: "file", value: "proof.txt" }], 10),
+      "/api/v1/tasks/task%2F1/verify-artifacts",
+      {
+        method: "POST",
+        body: JSON.stringify({ claims: [{ kind: "file", value: "proof.txt" }], expectedRevision: 10 }),
+      },
+    );
+    await expectCall(
+      tasks.bulkTaskAction({
+        action: "unblock",
+        taskIds: ["task/1"],
+        expectedRevisionsByTaskId: { "task/1": 11 },
+      }),
+      "/api/v1/tasks/bulk",
+      { method: "POST" },
     );
   });
 
@@ -779,11 +830,13 @@ describe("shared API wrappers", () => {
       method: "POST",
     });
     await expectCall(platform.fetchProviderSecretStatus("provider/1"), "/api/v1/secrets/providers/provider%2F1/status");
-    await expectCall(platform.saveProviderSecret("provider/1", "key"), "/api/v1/secrets/providers/provider%2F1", {
+    await expectCall(platform.saveProviderSecret("provider/1", "key", 7), "/api/v1/secrets/providers/provider%2F1", {
       method: "POST",
+      body: JSON.stringify({ apiKey: "key", expectedRevision: 7 }),
     });
-    await expectCall(platform.deleteProviderSecret("provider/1"), "/api/v1/secrets/providers/provider%2F1", {
+    await expectCall(platform.deleteProviderSecret("provider/1", 8), "/api/v1/secrets/providers/provider%2F1", {
       method: "DELETE",
+      body: JSON.stringify({ expectedRevision: 8, storage: "all" }),
     });
     await expectCall(platform.fetchOpenAICodexOAuthStatus(), "/api/v1/llm/providers/openai-codex/oauth/status");
     await expectCall(

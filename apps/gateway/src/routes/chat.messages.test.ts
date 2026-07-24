@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import { NotFoundError } from "@goatcitadel/contracts";
 import { chatRoutes } from "./chat.js";
 
 describe("chat message routes", () => {
@@ -36,6 +37,7 @@ describe("chat message routes", () => {
     ] as const;
     const listChatMessages = vi.fn(async () => rawMessages);
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatMessages: { listChatMessages } } as never);
     await app.register(chatRoutes);
 
@@ -68,6 +70,7 @@ describe("chat message routes", () => {
       turns: [],
     }));
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatMessages: { getChatThread } } as never);
     await app.register(chatRoutes);
 
@@ -80,9 +83,41 @@ describe("chat message routes", () => {
     expect(getChatThread).toHaveBeenCalledWith("sess-1", { includeDecisionTrace: true });
   });
 
+  it("scopes capability-profile inspection to the authenticated operator and workspace", async () => {
+    const getChatTurnCapabilityProfile = vi
+      .fn()
+      .mockResolvedValueOnce({ state: "available", profile: { profileId: "profile-1" } })
+      .mockRejectedValueOnce(new NotFoundError({ entity: "chat turn capability profile", id: "turn-1" }));
+    app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
+    app.addHook("onRequest", async (request) => {
+      (request as typeof request & { authActorId?: string }).authActorId = "operator-1";
+    });
+    app.decorate("services", { chatMessages: { getChatTurnCapabilityProfile } } as never);
+    await app.register(chatRoutes);
+
+    const allowed = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat/sessions/session-1/turns/turn-1/capability-profile?workspaceId=workspace-1",
+    });
+    expect(allowed.statusCode).toBe(200);
+    expect(getChatTurnCapabilityProfile).toHaveBeenLastCalledWith("session-1", "turn-1", {
+      workspaceId: "workspace-1",
+      operatorId: "operator-1",
+    });
+
+    const denied = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat/sessions/session-1/turns/turn-1/capability-profile?workspaceId=other-workspace",
+    });
+    expect(denied.statusCode).toBe(404);
+    expect(JSON.stringify(denied.json())).not.toContain("profile-1");
+  });
+
   it("rejects invalid decision trace include flags without loading the thread", async () => {
     const getChatThread = vi.fn();
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatMessages: { getChatThread } } as never);
     await app.register(chatRoutes);
 
@@ -99,6 +134,7 @@ describe("chat message routes", () => {
   it("returns migration guidance for the removed POST /messages write path", async () => {
     const sendChatMessage = vi.fn();
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatMessages: { sendChatMessage } } as never);
     await app.register(chatRoutes);
 
@@ -119,6 +155,7 @@ describe("chat message routes", () => {
   it("returns validation error for missing content", async () => {
     const sendChatMessage = vi.fn();
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatMessages: { sendChatMessage } } as never);
     await app.register(chatRoutes);
 
@@ -129,6 +166,124 @@ describe("chat message routes", () => {
     });
     expect(response.statusCode).toBe(400);
     expect(sendChatMessage).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed or duplicate routed context before either send path reaches Chat persistence", async () => {
+    const agentSendChatMessage = vi.fn();
+    const agentSendChatMessageStream = vi.fn();
+    app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
+    app.decorate("services", { chatMessages: { agentSendChatMessage, agentSendChatMessageStream } } as never);
+    await app.register(chatRoutes);
+
+    const invalidContextRefs = [
+      [],
+      [{ kind: "url", ref: "https://example.test" }],
+      [{ kind: "attachment", ref: " attachment-1" }],
+      [{ kind: "attachment", ref: "attachment/../secret" }],
+      [{ kind: "attachment", ref: "attachment\nsecret" }],
+      [{ kind: "memory_item", ref: "memory-1", label: "line\nbreak" }],
+      [{ kind: "attachment", ref: "attachment-1", unknown: true }],
+      [
+        { kind: "memory_item", ref: "memory-1" },
+        { kind: "memory_item", ref: "memory-1" },
+      ],
+      Array.from({ length: 17 }, (_, index) => ({ kind: "attachment", ref: `attachment-${index}` })),
+      // HX-407 C1: external refs obey the exact same identifier-only gate.
+      [{ kind: "external_attachment", ref: " esa_att-1" }],
+      [{ kind: "external_attachment", ref: "esa_att/../escape" }],
+      [{ kind: "external_attachment", ref: "esa_att\nsmuggle" }],
+      [{ kind: "external_attachment", ref: "esa_att-1", label: "control\u0000label" }],
+      [{ kind: "external_attachment", ref: "esa_att-1", content: "smuggled transcript bytes" }],
+      [{ kind: "external_attachment", ref: "esa_att-1", admittedText: "smuggled bytes" }],
+      [{ kind: "external_attachment", ref: "esa_att-1", externalProvenance: { itemId: "item-1" } }],
+      [
+        { kind: "external_attachment", ref: "esa_att-1" },
+        { kind: "external_attachment", ref: "esa_att-1" },
+      ],
+    ];
+    for (const url of ["/api/v1/chat/sessions/sess-1/agent-send", "/api/v1/chat/sessions/sess-1/agent-send/stream"]) {
+      for (const contextRefs of invalidContextRefs) {
+        const response = await app.inject({
+          method: "POST",
+          url,
+          payload: { content: "hello", contextRefs },
+        });
+        expect(response.statusCode).toBe(400);
+      }
+    }
+    expect(agentSendChatMessage).not.toHaveBeenCalled();
+    expect(agentSendChatMessageStream).not.toHaveBeenCalled();
+  });
+
+  it("admits only the exact model-council opt-in and preserves it for Chat execution", async () => {
+    const routeDecision = {
+      action: "send" as const,
+      issuedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      requestedProviderId: "openai",
+      requestedModel: "gpt-5.4",
+      effectiveProviderId: "openai",
+      effectiveModel: "gpt-5.4",
+      selectionSource: "manual" as const,
+      fallbackPolicy: "off" as const,
+      fallbackResult: "not_applicable" as const,
+      runtimeReachability: "not_checked" as const,
+      runtimeClass: "cloud" as const,
+      fingerprint: "model-council-route",
+    };
+    const routePreflight = vi.fn(async () => ({ decision: routeDecision }));
+    const agentSendChatMessage = vi.fn(async () => ({
+      sessionId: "sess-1",
+      turnId: "turn-1",
+      assistantMessage: { messageId: "assistant-1", content: "one answer" },
+    }));
+    const agentSendChatMessageStream = vi.fn();
+    app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
+    app.decorate("services", {
+      chatMessages: { routePreflight, agentSendChatMessage, agentSendChatMessageStream },
+    } as never);
+    await app.register(chatRoutes);
+
+    for (const modelCouncil of [
+      false,
+      true,
+      null,
+      {},
+      { enabled: false },
+      { enabled: true, extra: true },
+      { unknown: true },
+    ]) {
+      for (const url of ["/api/v1/chat/sessions/sess-1/agent-send", "/api/v1/chat/sessions/sess-1/agent-send/stream"]) {
+        const response = await app.inject({
+          method: "POST",
+          url,
+          payload: { content: "hello", modelCouncil },
+        });
+        expect(response.statusCode).toBe(400);
+      }
+    }
+
+    const accepted = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/agent-send",
+      payload: {
+        content: "hello",
+        providerId: "openai",
+        model: "gpt-5.4",
+        routeDecision,
+        modelCouncil: { enabled: true },
+      },
+    });
+    expect(accepted.statusCode).toBe(200);
+    expect(agentSendChatMessage).toHaveBeenCalledWith(
+      "sess-1",
+      expect.objectContaining({ modelCouncil: { enabled: true } }),
+      undefined,
+    );
+    expect(agentSendChatMessage).toHaveBeenCalledTimes(1);
+    expect(agentSendChatMessageStream).not.toHaveBeenCalled();
   });
 
   it("preflights routes and requires a fresh route decision before agent sends", async () => {
@@ -145,6 +300,7 @@ describe("chat message routes", () => {
       fallbackResult: "not_applicable" as const,
       runtimeReachability: "not_checked" as const,
       runtimeClass: "cloud" as const,
+      capabilityCompactionDimensionHash: "a".repeat(64),
       fingerprint: "route-fingerprint",
     };
     const routePreflight = vi.fn(async () => ({ decision: routeDecision }));
@@ -154,6 +310,7 @@ describe("chat message routes", () => {
       assistantMessage: { messageId: "assistant-1", content: "ok" },
     }));
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatMessages: { routePreflight, agentSendChatMessage } } as never);
     await app.register(chatRoutes);
 
@@ -195,8 +352,206 @@ describe("chat message routes", () => {
         content: "hello",
         providerId: "openai",
         model: "gpt-5.4",
+        routeDecision: expect.objectContaining({
+          capabilityCompactionDimensionHash: "a".repeat(64),
+        }),
       }),
+      undefined,
     );
+  });
+
+  it("preserves max and ultra thinking levels through the governed Chat send boundary", async () => {
+    const routeDecision = {
+      action: "send" as const,
+      issuedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      requestedProviderId: "fireworks",
+      requestedModel: "accounts/goat/models/reasoner",
+      effectiveProviderId: "fireworks",
+      effectiveModel: "accounts/goat/models/reasoner",
+      selectionSource: "manual" as const,
+      fallbackPolicy: "off" as const,
+      fallbackResult: "not_applicable" as const,
+      runtimeReachability: "not_checked" as const,
+      runtimeClass: "cloud" as const,
+      fingerprint: "reasoning-profile-route",
+    };
+    const routePreflight = vi.fn(async () => ({ decision: routeDecision }));
+    const agentSendChatMessage = vi.fn(async () => ({
+      sessionId: "sess-1",
+      turnId: "turn-1",
+      assistantMessage: { messageId: "assistant-1", content: "ok" },
+    }));
+    app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
+    app.decorate("services", { chatMessages: { routePreflight, agentSendChatMessage } } as never);
+    await app.register(chatRoutes);
+
+    for (const thinkingLevel of ["max", "ultra"] as const) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/chat/sessions/sess-1/agent-send",
+        payload: {
+          content: "think carefully",
+          providerId: "fireworks",
+          model: "accounts/goat/models/reasoner",
+          thinkingLevel,
+          routeDecision,
+        },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(agentSendChatMessage).toHaveBeenLastCalledWith(
+        "sess-1",
+        expect.objectContaining({ thinkingLevel }),
+        undefined,
+      );
+    }
+
+    expect(agentSendChatMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("accepts routed context only with the exact fresh route fingerprint", async () => {
+    const routeDecision = {
+      action: "send" as const,
+      issuedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      requestedProviderId: "openai",
+      requestedModel: "gpt-5.4",
+      effectiveProviderId: "openai",
+      effectiveModel: "gpt-5.4",
+      selectionSource: "manual" as const,
+      fallbackPolicy: "off" as const,
+      fallbackResult: "not_applicable" as const,
+      runtimeReachability: "not_checked" as const,
+      runtimeClass: "cloud" as const,
+      capabilityFingerprint: "pre-context-capabilities",
+      fingerprint: "pre-context-route",
+    };
+    const routePreflight = vi
+      .fn()
+      .mockResolvedValueOnce({ decision: routeDecision })
+      .mockResolvedValueOnce({
+        decision: {
+          ...routeDecision,
+          capabilityFingerprint: "unrelated-capability-drift",
+          fingerprint: "changed-capability-route",
+        },
+      });
+    const agentSendChatMessage = vi.fn(async () => ({
+      sessionId: "sess-1",
+      turnId: "turn-1",
+      assistantMessage: { messageId: "assistant-1", content: "ok" },
+    }));
+    app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
+    app.decorate("services", { chatMessages: { routePreflight, agentSendChatMessage } } as never);
+    await app.register(chatRoutes);
+
+    const accepted = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/agent-send",
+      payload: {
+        content: "hello",
+        providerId: "openai",
+        model: "gpt-5.4",
+        contextRefs: [{ kind: "memory_item", ref: "memory-1" }],
+        routeDecision,
+      },
+    });
+    expect(accepted.statusCode).toBe(200);
+    expect(agentSendChatMessage).toHaveBeenCalledWith(
+      "sess-1",
+      expect.objectContaining({ contextRefs: [{ kind: "memory_item", ref: "memory-1" }] }),
+      undefined,
+    );
+
+    const rejected = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/agent-send",
+      payload: {
+        content: "hello",
+        providerId: "openai",
+        model: "gpt-5.4",
+        contextRefs: [{ kind: "memory_item", ref: "memory-1" }],
+        routeDecision,
+      },
+    });
+    expect(rejected.statusCode).toBe(409);
+    expect(rejected.json().error.reason).toBe("route_fingerprint_mismatch");
+    expect(agentSendChatMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("admits the C1 external_attachment routed-context kind on both send paths as identifiers only", async () => {
+    // HX-407 C4c: the route boundary accepts exactly the three reviewed kinds
+    // and forwards refs untouched; the server-side resolver (composed in C4a)
+    // owns every content lookup. The two pre-existing kinds must flow
+    // byte-identical next to the external ref.
+    const routeDecision = {
+      action: "send" as const,
+      issuedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      requestedProviderId: "openai",
+      requestedModel: "gpt-5.4",
+      effectiveProviderId: "openai",
+      effectiveModel: "gpt-5.4",
+      selectionSource: "manual" as const,
+      fallbackPolicy: "off" as const,
+      fallbackResult: "not_applicable" as const,
+      runtimeReachability: "not_checked" as const,
+      runtimeClass: "cloud" as const,
+      fingerprint: "external-context-route",
+    };
+    const routePreflight = vi.fn(async () => ({ decision: routeDecision }));
+    const agentSendChatMessage = vi.fn(async () => ({
+      sessionId: "sess-1",
+      turnId: "turn-1",
+      assistantMessage: { messageId: "assistant-1", content: "ok" },
+    }));
+    const agentSendChatMessageStream = vi.fn(async function* () {
+      yield { type: "message", message: { messageId: "assistant-2", content: "ok" } };
+    });
+    app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
+    app.decorate("services", {
+      chatMessages: { routePreflight, agentSendChatMessage, agentSendChatMessageStream },
+    } as never);
+    await app.register(chatRoutes);
+
+    const contextRefs = [
+      { kind: "attachment", ref: "attachment-1" },
+      { kind: "memory_item", ref: "memory-1" },
+      { kind: "external_attachment", ref: "esa_0123456789abcdef", label: "Codex rollout transcript" },
+    ];
+
+    const sent = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/agent-send",
+      payload: {
+        content: "use the imported rollout",
+        providerId: "openai",
+        model: "gpt-5.4",
+        contextRefs,
+        routeDecision,
+      },
+    });
+    expect(sent.statusCode).toBe(200);
+    expect(agentSendChatMessage).toHaveBeenCalledWith("sess-1", expect.objectContaining({ contextRefs }), undefined);
+
+    const streamed = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/agent-send/stream",
+      payload: {
+        content: "use the imported rollout",
+        providerId: "openai",
+        model: "gpt-5.4",
+        contextRefs,
+        routeDecision,
+      },
+    });
+    expect(streamed.statusCode).toBe(200);
+    expect(agentSendChatMessageStream).toHaveBeenCalledTimes(1);
+    expect(agentSendChatMessageStream.mock.calls[0]?.[0]).toBe("sess-1");
+    expect(agentSendChatMessageStream.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ contextRefs }));
   });
 
   it("rejects stale, mismatched, blocked, and changed route decisions", async () => {
@@ -219,6 +574,7 @@ describe("chat message routes", () => {
       .mockResolvedValueOnce({ decision: baseDecision, blockedReason: "No model configured" });
     const agentSendChatMessage = vi.fn();
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatMessages: { routePreflight, agentSendChatMessage } } as never);
     await app.register(chatRoutes);
 

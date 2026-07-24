@@ -85,6 +85,26 @@ describe("provider templates", () => {
     expect(googleModels).toContain("models/gemini-2.5-pro");
   });
 
+  it("ships governed Vertex AI and Fireworks provider templates", () => {
+    expect(findProviderTemplate("vertex")).toMatchObject({
+      label: "Google Vertex AI",
+      apiStyle: "openai-chat-completions",
+      authMode: "google-adc",
+      defaultModel: "google/gemini-2.5-flash",
+      googleCloud: { location: "us-central1", endpointId: "openapi" },
+    });
+    expect(findProviderTemplate("vertex")?.capabilities?.reasoningEfforts).toEqual(["low", "medium", "high"]);
+    expect(providerRecognizesModelId("vertex", "google/gemini-2.5-pro")).toBe(true);
+
+    expect(findProviderTemplate("fireworks")).toMatchObject({
+      label: "Fireworks AI",
+      baseUrl: "https://api.fireworks.ai/inference/v1",
+      apiStyle: "openai-chat-completions",
+      defaultModel: "accounts/fireworks/models/kimi-k2p6",
+    });
+    expect(providerAllowsForeignModelIds("fireworks")).toBe(true);
+  });
+
   it("includes a fallback MiniMax shortlist for offline model pickers", () => {
     const minimaxModels = findProviderTemplate("minimax")?.knownModels ?? [];
     expect(minimaxModels).toContain("MiniMax-M2.7");

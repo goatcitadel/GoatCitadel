@@ -6,45 +6,38 @@ on:
       - "v*"
   workflow_dispatch:
     inputs:
-      release_tag:
-        description: "Release tag to publish (for example v1.0.0)"
-        required: true
-        type: string
       allow_unsigned:
-        description: "Allow unsigned smoke artifacts. Not public-trust proof; only manual, clearly labeled convenience assets."
-        required: false
-        default: "false"
+        description: "Manual runs are unsigned smoke only. Choose true to run; false intentionally runs no jobs."
+        required: true
+        default: "true"
         type: choice
         options:
-          - "false"
           - "true"
+          - "false"
+
+concurrency:
+  group: release-installers-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   actions: read
-  contents: write
-  id-token: write
+  contents: read
+  id-token: none
 
 env:
   PNPM_VERSION: 10.31.0
-  NODE_VERSION: 22
+  NODE_VERSION: 22.23.1
+  DOTNET_VERSION: 10.0.300
+  RUST_TOOLCHAIN: 1.94.0
+  INNO_SETUP_VERSION: 6.7.3
+  INNO_SETUP_URL: https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe
+  INNO_SETUP_SHA256: 9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732
 
 jobs:
-  windows:
+  windows-build-inputs:
     runs-on: ${{ matrix.runner }}
-    # SECURITY (codex finding #7): The signing secrets are intentionally
-    # NOT declared at the job level. Job-level `env` is inherited by every
-    # step, including `pnpm install`, `cargo` commands, and third-party
-    # setup actions, any of which could be compromised (malicious
-    # dependency, build script, action) and exfiltrate the cert + password.
-    # We only expose `WINDOWS_SIGN_CERT_BASE64` / `WINDOWS_SIGN_CERT_PASSWORD`
-    # via per-step `env:` on the two signing steps, and only check for
-    # their presence (not value) in the pre-flight gate.
+    if: ${{ (github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.allow_unsigned == 'true') }}
     env:
-      WINDOWS_SIGN_CERT_BASE64_PRESENT: ${{ secrets.WINDOWS_SIGN_CERT_BASE64 != '' }}
-      WINDOWS_SIGN_CERT_PASSWORD_PRESENT: ${{ secrets.WINDOWS_SIGN_CERT_PASSWORD != '' }}
-      # Public package identity publisher. It must match the Authenticode
-      # certificate subject because the WinUI host embeds the same sparse
-      # package identity in its executable manifest.
       GOATCITADEL_WINDOWS_MSIX_PUBLISHER: ${{ vars.WINDOWS_MSIX_PUBLISHER || 'CN=GoatCitadel' }}
     strategy:
       fail-fast: false
@@ -56,29 +49,31 @@ jobs:
             runner: windows-11-arm
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@a15d269cd4658e1107c09f1fabf4cbd7bd1f308a # v4.4.0
         with:
           version: ${{ env.PNPM_VERSION }}
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Setup Rust
-        run: rustup default stable-msvc
+        run: |
+          rustup toolchain install "${{ env.RUST_TOOLCHAIN }}" --profile minimal
+          rustup default "${{ env.RUST_TOOLCHAIN }}"
 
       - name: Run Windows host unit tests
         timeout-minutes: 15
@@ -90,92 +85,472 @@ jobs:
       - name: Build Windows App SDK host
         run: pnpm package:windows-host --target ${{ matrix.target }}
 
-      - name: Require signing secrets for public releases
-        if: ${{ (github.event_name != 'workflow_dispatch' || github.event.inputs.allow_unsigned != 'true') && (env.WINDOWS_SIGN_CERT_BASE64_PRESENT != 'true' || env.WINDOWS_SIGN_CERT_PASSWORD_PRESENT != 'true') }}
-        run: |
-          echo "WINDOWS_SIGN_CERT_BASE64 and WINDOWS_SIGN_CERT_PASSWORD are required for public release installers."
-          exit 1
+      - name: Build unsigned Windows package identity input
+        run: pnpm package:windows-msix --allow-unsigned
 
-      - name: Sign desktop executable
-        if: ${{ (github.event_name != 'workflow_dispatch' || github.event.inputs.allow_unsigned != 'true') && env.WINDOWS_SIGN_CERT_BASE64_PRESENT == 'true' && env.WINDOWS_SIGN_CERT_PASSWORD_PRESENT == 'true' }}
+      - name: Stage exact Windows component signing inputs
+        if: ${{ github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v') }}
+        shell: pwsh
+        run: |
+          $stage = "artifacts/windows-component-input/${{ matrix.target }}"
+          if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          $sources = @{
+            "GoatCitadel-Mission-Control-Windows.exe" = "artifacts/installers/desktop/${{ matrix.target }}/GoatCitadel-Mission-Control-Windows.exe"
+            "GoatCitadel-Mission-Control-Windows-Identity.msix" = "artifacts/installers/windows-msix/GoatCitadel-Mission-Control-Windows-Identity.msix"
+            "identity-manifest.json" = "artifacts/installers/windows-msix/identity-manifest.json"
+          }
+          foreach ($entry in $sources.GetEnumerator()) {
+            if (-not (Test-Path -LiteralPath $entry.Value -PathType Leaf)) { throw "Missing component input: $($entry.Value)" }
+            Copy-Item -LiteralPath $entry.Value -Destination (Join-Path $stage $entry.Key)
+          }
+          $manifest = Get-Content -LiteralPath (Join-Path $stage "identity-manifest.json") -Raw | ConvertFrom-Json
+          if ($manifest.signed -ne $false -or $manifest.fileName -ne "GoatCitadel-Mission-Control-Windows-Identity.msix") {
+            throw "Unsigned identity manifest is invalid."
+          }
+          $actual = @(Get-ChildItem -LiteralPath $stage -Force | Select-Object -ExpandProperty Name | Sort-Object)
+          $expected = @("GoatCitadel-Mission-Control-Windows-Identity.msix", "GoatCitadel-Mission-Control-Windows.exe", "identity-manifest.json") | Sort-Object
+          if (Compare-Object $actual $expected) { throw "Windows component signing input contains unexpected files." }
+
+      - name: Upload exact Windows component signing inputs
+        if: ${{ github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-component-input-${{ matrix.target }}
+          path: |
+            artifacts/windows-component-input/${{ matrix.target }}/GoatCitadel-Mission-Control-Windows.exe
+            artifacts/windows-component-input/${{ matrix.target }}/GoatCitadel-Mission-Control-Windows-Identity.msix
+            artifacts/windows-component-input/${{ matrix.target }}/identity-manifest.json
+          if-no-files-found: error
+
+      - name: Build unsigned convenience bundle
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.allow_unsigned == 'true' }}
+        run: pnpm package:bundle --target ${{ matrix.target }}
+
+      - name: Install Inno Setup for unsigned convenience artifact
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.allow_unsigned == 'true' }}
+        shell: pwsh
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP "innosetup-$env:INNO_SETUP_VERSION.exe"
+          Invoke-WebRequest -Uri $env:INNO_SETUP_URL -OutFile $installer
+          $actualHash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualHash -ne $env:INNO_SETUP_SHA256) { throw "Inno Setup SHA-256 mismatch: $actualHash" }
+          $process = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-') -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Inno Setup installation failed with exit code $($process.ExitCode)." }
+          if (-not (Test-Path -LiteralPath 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' -PathType Leaf)) {
+            throw 'Pinned Inno Setup compiler was not installed.'
+          }
+
+      - name: Build unsigned convenience installer
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.allow_unsigned == 'true' }}
+        run: pnpm package:windows --target ${{ matrix.target }}
+
+      - name: Write unsigned convenience checksum
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.allow_unsigned == 'true' }}
+        shell: pwsh
+        run: |
+          $installer = "artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe"
+          $hash = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -LiteralPath "$installer.sha256" -Value "$hash *$(Split-Path $installer -Leaf)"
+
+      - name: Upload unsigned Windows convenience artifact
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.allow_unsigned == 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ matrix.target }}-unsigned-package-smoke-assets
+          path: |
+            artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe
+            artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe.sha256
+          if-no-files-found: error
+
+  windows-component-sign:
+    runs-on: ${{ matrix.runner }}
+    needs: windows-build-inputs
+    if: ${{ github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v') }}
+    environment: release
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows-x64
+            runner: windows-latest
+          - target: windows-arm64
+            runner: windows-11-arm
+    steps:
+      - name: Require externally protected release environment
+        shell: bash
+        env:
+          RELEASE_TRUST_READY: ${{ vars.GOATCITADEL_RELEASE_TRUST_READY }}
+        run: test "$RELEASE_TRUST_READY" = "true"
+
+      - name: Download exact Windows component signing inputs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: windows-component-input-${{ matrix.target }}
+          path: component-input
+
+      - name: Verify live release tag still resolves to this commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_EVENT_NAME" == "push" ]]
+          [[ "$GITHUB_REPOSITORY" == "goatcitadel/GoatCitadel" ]]
+          [[ "$GITHUB_REF" == "refs/tags/${RELEASE_TAG}" ]]
+          [[ "$RELEASE_TAG" =~ ^v[0-9][0-9A-Za-z.+-]{0,79}$ ]]
+          [[ "$RELEASE_TAG" != *".."* ]]
+          REMOTE_REFS=$(git ls-remote --exit-code "https://github.com/${GITHUB_REPOSITORY}.git" "refs/tags/${RELEASE_TAG}" "refs/tags/${RELEASE_TAG}^{}")
+          DIRECT_SHA=$(awk -v ref="refs/tags/${RELEASE_TAG}" '$2 == ref { print $1 }' <<< "$REMOTE_REFS")
+          PEELED_SHA=$(awk -v ref="refs/tags/${RELEASE_TAG}^{}" '$2 == ref { print $1 }' <<< "$REMOTE_REFS")
+          LIVE_SHA="${PEELED_SHA:-$DIRECT_SHA}"
+          [[ -n "$DIRECT_SHA" && "$LIVE_SHA" == "$GITHUB_SHA" ]]
+
+      # This fresh job has no checkout, package manager, dependency install, or
+      # repository execution. Reusable PFX material exists only while fixed SDK
+      # signtool commands sign the two admitted component paths.
+      - name: Sign and verify exact Windows components
         shell: pwsh
         env:
-          # SECURITY (codex finding #7): secrets are scoped to THIS step
-          # only — they are not present in env during pnpm install, cargo,
-          # or third-party setup steps. SECURITY (codex finding #10): we
-          # also resolve signtool via the Windows SDK install path rather
-          # than `Get-Command`, so a malicious earlier step cannot plant
-          # a fake signtool.exe on PATH and exfiltrate the cert+password.
           WINDOWS_SIGN_CERT_BASE64: ${{ secrets.WINDOWS_SIGN_CERT_BASE64 }}
           WINDOWS_SIGN_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGN_CERT_PASSWORD }}
         run: |
-          $certName = "goatcitadel-signing-cert-$([Guid]::NewGuid()).pfx"
-          $certPath = Join-Path $env:RUNNER_TEMP $certName
+          $expected = @("GoatCitadel-Mission-Control-Windows-Identity.msix", "GoatCitadel-Mission-Control-Windows.exe", "identity-manifest.json") | Sort-Object
+          $actual = @(Get-ChildItem -LiteralPath component-input -Force | Select-Object -ExpandProperty Name | Sort-Object)
+          if (Compare-Object $actual $expected) { throw "Component signer received an unexpected file inventory." }
+          $inputLimits = @{
+            "GoatCitadel-Mission-Control-Windows.exe" = 2147483648
+            "GoatCitadel-Mission-Control-Windows-Identity.msix" = 2147483648
+            "identity-manifest.json" = 4194304
+          }
+          foreach ($entry in $inputLimits.GetEnumerator()) {
+            $item = Get-Item -LiteralPath (Join-Path "component-input" $entry.Key) -Force
+            if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $item.Length -le 0 -or $item.Length -gt $entry.Value) {
+              throw "Component signer input is not a bounded regular non-reparse file: $($entry.Key)"
+            }
+          }
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_SIGN_CERT_BASE64) -or [string]::IsNullOrWhiteSpace($env:WINDOWS_SIGN_CERT_PASSWORD)) {
+            throw "WINDOWS_SIGN_CERT_BASE64 and WINDOWS_SIGN_CERT_PASSWORD are required."
+          }
+          $certPath = Join-Path $env:RUNNER_TEMP "goatcitadel-component-$([Guid]::NewGuid()).pfx"
           try {
             [System.IO.File]::WriteAllBytes($certPath, [System.Convert]::FromBase64String($env:WINDOWS_SIGN_CERT_BASE64))
-            # Resolve signtool from the Windows 10/11 SDK install path
-            # rather than searching PATH (codex finding #10).
             $sdkRoot = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
-            $signtool = Get-ChildItem -Path $sdkRoot -Recurse -Filter 'signtool.exe' -ErrorAction Stop |
+            $signtool = Get-ChildItem -LiteralPath $sdkRoot -Recurse -Filter 'signtool.exe' -ErrorAction Stop |
               Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |
               Sort-Object -Property @{Expression={[Version]($_.Directory.Parent.Name)}; Descending=$true} |
               Select-Object -ExpandProperty FullName -First 1
             if (-not $signtool) { throw "signtool.exe not found in Windows SDK at $sdkRoot" }
-            & $signtool sign /fd SHA256 /f $certPath /p $env:WINDOWS_SIGN_CERT_PASSWORD /tr http://timestamp.digicert.com /td SHA256 "artifacts/installers/desktop/${{ matrix.target }}/GoatCitadel-Mission-Control-Windows.exe"
-            & $signtool verify /pa "artifacts/installers/desktop/${{ matrix.target }}/GoatCitadel-Mission-Control-Windows.exe"
+            $desktop = Resolve-Path "component-input/GoatCitadel-Mission-Control-Windows.exe"
+            $identity = Resolve-Path "component-input/GoatCitadel-Mission-Control-Windows-Identity.msix"
+            & $signtool sign /fd SHA256 /f $certPath /p $env:WINDOWS_SIGN_CERT_PASSWORD /tr http://timestamp.digicert.com /td SHA256 $desktop
+            if ($LASTEXITCODE -ne 0) { throw "Desktop Authenticode signing failed." }
+            & $signtool verify /pa $desktop
+            if ($LASTEXITCODE -ne 0) { throw "Desktop Authenticode verification failed." }
+            & $signtool sign /fd SHA256 /f $certPath /p $env:WINDOWS_SIGN_CERT_PASSWORD /tr http://timestamp.digicert.com /td SHA256 $identity
+            if ($LASTEXITCODE -ne 0) { throw "MSIX signing failed." }
+            & $signtool verify /pa $identity
+            if ($LASTEXITCODE -ne 0) { throw "MSIX verification failed." }
+            $hash = (Get-FileHash $identity -Algorithm SHA256).Hash.ToLowerInvariant()
+            Set-Content -LiteralPath "$identity.sha256" -Value "$hash *$(Split-Path $identity -Leaf)"
+            $manifestPath = "component-input/identity-manifest.json"
+            $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+            if ($manifest.signed -ne $false -or $manifest.fileName -ne "GoatCitadel-Mission-Control-Windows-Identity.msix") {
+              throw "Unsigned identity manifest is invalid."
+            }
+            $manifest.signed = $true
+            $manifest.sha256 = $hash
+            $manifest.createdAt = (Get-Date).ToUniversalTime().ToString("o")
+            $manifest | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $manifestPath -Encoding utf8NoBOM
           } finally {
             Remove-Item -LiteralPath $certPath -Force -ErrorAction SilentlyContinue
           }
 
-      - name: Build and sign Windows package identity
-        if: ${{ (github.event_name != 'workflow_dispatch' || github.event.inputs.allow_unsigned != 'true') && env.WINDOWS_SIGN_CERT_BASE64_PRESENT == 'true' && env.WINDOWS_SIGN_CERT_PASSWORD_PRESENT == 'true' }}
-        shell: pwsh
-        env:
-          WINDOWS_SIGN_CERT_BASE64: ${{ secrets.WINDOWS_SIGN_CERT_BASE64 }}
-          WINDOWS_SIGN_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGN_CERT_PASSWORD }}
+      - name: Upload exact signed Windows components
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-signed-components-${{ matrix.target }}
+          path: |
+            component-input/GoatCitadel-Mission-Control-Windows.exe
+            component-input/GoatCitadel-Mission-Control-Windows-Identity.msix
+            component-input/GoatCitadel-Mission-Control-Windows-Identity.msix.sha256
+            component-input/identity-manifest.json
+          if-no-files-found: error
+
+  windows-assemble:
+    runs-on: ${{ matrix.runner }}
+    needs: windows-component-sign
+    if: ${{ github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v') }}
+    env:
+      GOATCITADEL_WINDOWS_MSIX_PUBLISHER: ${{ vars.WINDOWS_MSIX_PUBLISHER || 'CN=GoatCitadel' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows-x64
+            runner: windows-latest
+          - target: windows-arm64
+            runner: windows-11-arm
+    steps:
+      - name: Checkout exact release commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@a15d269cd4658e1107c09f1fabf4cbd7bd1f308a # v4.4.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Setup Rust
         run: |
-          $certName = "goatcitadel-identity-signing-cert-$([Guid]::NewGuid()).pfx"
-          $certPath = Join-Path $env:RUNNER_TEMP $certName
-          try {
-            [System.IO.File]::WriteAllBytes($certPath, [System.Convert]::FromBase64String($env:WINDOWS_SIGN_CERT_BASE64))
-            pnpm package:windows-msix --cert-path $certPath --cert-password $env:WINDOWS_SIGN_CERT_PASSWORD
-          } finally {
-            Remove-Item -LiteralPath $certPath -Force -ErrorAction SilentlyContinue
+          rustup toolchain install "${{ env.RUST_TOOLCHAIN }}" --profile minimal
+          rustup default "${{ env.RUST_TOOLCHAIN }}"
+
+      - name: Download exact signed Windows components
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: windows-signed-components-${{ matrix.target }}
+          path: artifacts/signed-components
+
+      - name: Admit signed Windows components
+        shell: pwsh
+        run: |
+          $expected = @("GoatCitadel-Mission-Control-Windows-Identity.msix", "GoatCitadel-Mission-Control-Windows-Identity.msix.sha256", "GoatCitadel-Mission-Control-Windows.exe", "identity-manifest.json") | Sort-Object
+          $actual = @(Get-ChildItem -LiteralPath artifacts/signed-components -Force | Select-Object -ExpandProperty Name | Sort-Object)
+          if (Compare-Object $actual $expected) { throw "Signed component transfer contains unexpected files." }
+          $desktop = Resolve-Path "artifacts/signed-components/GoatCitadel-Mission-Control-Windows.exe"
+          $identity = Resolve-Path "artifacts/signed-components/GoatCitadel-Mission-Control-Windows-Identity.msix"
+          foreach ($signedFile in @($desktop, $identity)) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $signedFile
+            if ($signature.Status -ne "Valid") { throw "Invalid Authenticode signature for $signedFile: $($signature.Status)" }
           }
+          $identityHash = (Get-FileHash $identity -Algorithm SHA256).Hash.ToLowerInvariant()
+          $checksum = (Get-Content -LiteralPath "$identity.sha256" -Raw).Trim().Split(' ')[0].ToLowerInvariant()
+          if ($checksum -ne $identityHash) { throw "Signed MSIX checksum mismatch." }
+          $manifest = Get-Content -LiteralPath "artifacts/signed-components/identity-manifest.json" -Raw | ConvertFrom-Json
+          if ($manifest.signed -ne $true -or $manifest.sha256 -ne $identityHash) { throw "Signed identity manifest mismatch." }
+
+      - name: Build Windows host output for signed executable
+        run: pnpm package:windows-host --target ${{ matrix.target }}
+
+      - name: Install admitted signed components
+        shell: pwsh
+        run: |
+          Copy-Item -LiteralPath "artifacts/signed-components/GoatCitadel-Mission-Control-Windows.exe" -Destination "artifacts/installers/desktop/${{ matrix.target }}/GoatCitadel-Mission-Control-Windows.exe" -Force
+          New-Item -ItemType Directory -Force -Path artifacts/installers/windows-msix | Out-Null
+          Copy-Item -LiteralPath "artifacts/signed-components/GoatCitadel-Mission-Control-Windows-Identity.msix" -Destination artifacts/installers/windows-msix -Force
+          Copy-Item -LiteralPath "artifacts/signed-components/GoatCitadel-Mission-Control-Windows-Identity.msix.sha256" -Destination artifacts/installers/windows-msix -Force
+          Copy-Item -LiteralPath "artifacts/signed-components/identity-manifest.json" -Destination artifacts/installers/windows-msix -Force
 
       - name: Build packaged bundle
         run: pnpm package:bundle --target ${{ matrix.target }}
 
       - name: Install Inno Setup
-        run: choco install innosetup --no-progress --yes
+        shell: pwsh
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP "innosetup-$env:INNO_SETUP_VERSION.exe"
+          Invoke-WebRequest -Uri $env:INNO_SETUP_URL -OutFile $installer
+          $actualHash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualHash -ne $env:INNO_SETUP_SHA256) { throw "Inno Setup SHA-256 mismatch: $actualHash" }
+          $process = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-') -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Inno Setup installation failed with exit code $($process.ExitCode)." }
+          if (-not (Test-Path -LiteralPath 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' -PathType Leaf)) {
+            throw 'Pinned Inno Setup compiler was not installed.'
+          }
 
-      - name: Build Windows installer
+      - name: Build unsigned Windows installer signing input
         run: pnpm package:windows --target ${{ matrix.target }}
 
-      - name: Sign Windows installer
-        if: ${{ (github.event_name != 'workflow_dispatch' || github.event.inputs.allow_unsigned != 'true') && env.WINDOWS_SIGN_CERT_BASE64_PRESENT == 'true' && env.WINDOWS_SIGN_CERT_PASSWORD_PRESENT == 'true' }}
+      - name: Stage exact Windows installer signing input
+        shell: pwsh
+        run: |
+          $packageVersion = node -e "process.stdout.write(require('./package.json').version)"
+          $stage = "artifacts/windows-assembly/${{ matrix.target }}"
+          $bundleManifest = "artifacts/installers/bundles/GoatCitadel-$packageVersion-${{ matrix.target }}/app/release-manifest.json"
+          if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path "$stage/app" | Out-Null
+          Copy-Item -LiteralPath "artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe" -Destination $stage
+          Copy-Item -LiteralPath "artifacts/installers/windows-msix/GoatCitadel-Mission-Control-Windows-Identity.msix" -Destination $stage
+          Copy-Item -LiteralPath "artifacts/installers/windows-msix/GoatCitadel-Mission-Control-Windows-Identity.msix.sha256" -Destination $stage
+          Copy-Item -LiteralPath "artifacts/installers/windows-msix/identity-manifest.json" -Destination $stage
+          Copy-Item -LiteralPath $bundleManifest -Destination "$stage/app/release-manifest.json"
+
+      - name: Upload exact Windows installer signing input
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-installer-input-${{ matrix.target }}
+          path: |
+            artifacts/windows-assembly/${{ matrix.target }}/GoatCitadel-Setup-${{ matrix.target }}.exe
+            artifacts/windows-assembly/${{ matrix.target }}/GoatCitadel-Mission-Control-Windows-Identity.msix
+            artifacts/windows-assembly/${{ matrix.target }}/GoatCitadel-Mission-Control-Windows-Identity.msix.sha256
+            artifacts/windows-assembly/${{ matrix.target }}/identity-manifest.json
+            artifacts/windows-assembly/${{ matrix.target }}/app/release-manifest.json
+          if-no-files-found: error
+
+  windows-installer-sign:
+    runs-on: ${{ matrix.runner }}
+    needs: windows-assemble
+    if: ${{ github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v') }}
+    environment: release
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows-x64
+            runner: windows-latest
+          - target: windows-arm64
+            runner: windows-11-arm
+    steps:
+      - name: Require externally protected release environment
+        shell: bash
+        env:
+          RELEASE_TRUST_READY: ${{ vars.GOATCITADEL_RELEASE_TRUST_READY }}
+        run: test "$RELEASE_TRUST_READY" = "true"
+
+      - name: Download exact Windows installer signing input
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: windows-installer-input-${{ matrix.target }}
+          path: installer-input
+
+      - name: Verify live release tag still resolves to this commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_EVENT_NAME" == "push" ]]
+          [[ "$GITHUB_REPOSITORY" == "goatcitadel/GoatCitadel" ]]
+          [[ "$GITHUB_REF" == "refs/tags/${RELEASE_TAG}" ]]
+          [[ "$RELEASE_TAG" =~ ^v[0-9][0-9A-Za-z.+-]{0,79}$ ]]
+          [[ "$RELEASE_TAG" != *".."* ]]
+          REMOTE_REFS=$(git ls-remote --exit-code "https://github.com/${GITHUB_REPOSITORY}.git" "refs/tags/${RELEASE_TAG}" "refs/tags/${RELEASE_TAG}^{}")
+          DIRECT_SHA=$(awk -v ref="refs/tags/${RELEASE_TAG}" '$2 == ref { print $1 }' <<< "$REMOTE_REFS")
+          PEELED_SHA=$(awk -v ref="refs/tags/${RELEASE_TAG}^{}" '$2 == ref { print $1 }' <<< "$REMOTE_REFS")
+          LIVE_SHA="${PEELED_SHA:-$DIRECT_SHA}"
+          [[ -n "$DIRECT_SHA" && "$LIVE_SHA" == "$GITHUB_SHA" ]]
+
+      # This second fresh signer is required because the final installer can
+      # only be assembled after its signed EXE/MSIX components exist.
+      - name: Sign and verify exact Windows installer
         shell: pwsh
         env:
-          # SECURITY (codex finding #7, #10): secrets scoped to this step
-          # only; signtool resolved from the Windows SDK path rather than
-          # PATH search.
           WINDOWS_SIGN_CERT_BASE64: ${{ secrets.WINDOWS_SIGN_CERT_BASE64 }}
           WINDOWS_SIGN_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGN_CERT_PASSWORD }}
         run: |
-          $certName = "goatcitadel-signing-cert-$([Guid]::NewGuid()).pfx"
-          $certPath = Join-Path $env:RUNNER_TEMP $certName
+          $expected = @("GoatCitadel-Setup-${{ matrix.target }}.exe", "GoatCitadel-Mission-Control-Windows-Identity.msix", "GoatCitadel-Mission-Control-Windows-Identity.msix.sha256", "identity-manifest.json", "app") | Sort-Object
+          $actual = @(Get-ChildItem -LiteralPath installer-input -Force | Select-Object -ExpandProperty Name | Sort-Object)
+          if (Compare-Object $actual $expected) { throw "Installer signer received an unexpected file inventory." }
+          $appFiles = @(Get-ChildItem -LiteralPath installer-input/app -Force | Select-Object -ExpandProperty Name)
+          if ($appFiles.Count -ne 1 -or $appFiles[0] -ne "release-manifest.json") { throw "Installer signer received unexpected app metadata." }
+          $inputLimits = @{
+            "GoatCitadel-Setup-${{ matrix.target }}.exe" = 4294967296
+            "GoatCitadel-Mission-Control-Windows-Identity.msix" = 2147483648
+            "GoatCitadel-Mission-Control-Windows-Identity.msix.sha256" = 512
+            "identity-manifest.json" = 4194304
+            "app/release-manifest.json" = 16777216
+          }
+          foreach ($entry in $inputLimits.GetEnumerator()) {
+            $item = Get-Item -LiteralPath (Join-Path "installer-input" $entry.Key) -Force
+            if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $item.Length -le 0 -or $item.Length -gt $entry.Value) {
+              throw "Installer signer input is not a bounded regular non-reparse file: $($entry.Key)"
+            }
+          }
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_SIGN_CERT_BASE64) -or [string]::IsNullOrWhiteSpace($env:WINDOWS_SIGN_CERT_PASSWORD)) {
+            throw "WINDOWS_SIGN_CERT_BASE64 and WINDOWS_SIGN_CERT_PASSWORD are required."
+          }
+          $certPath = Join-Path $env:RUNNER_TEMP "goatcitadel-installer-$([Guid]::NewGuid()).pfx"
           try {
             [System.IO.File]::WriteAllBytes($certPath, [System.Convert]::FromBase64String($env:WINDOWS_SIGN_CERT_BASE64))
             $sdkRoot = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
-            $signtool = Get-ChildItem -Path $sdkRoot -Recurse -Filter 'signtool.exe' -ErrorAction Stop |
+            $signtool = Get-ChildItem -LiteralPath $sdkRoot -Recurse -Filter 'signtool.exe' -ErrorAction Stop |
               Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |
               Sort-Object -Property @{Expression={[Version]($_.Directory.Parent.Name)}; Descending=$true} |
               Select-Object -ExpandProperty FullName -First 1
             if (-not $signtool) { throw "signtool.exe not found in Windows SDK at $sdkRoot" }
-            & $signtool sign /fd SHA256 /f $certPath /p $env:WINDOWS_SIGN_CERT_PASSWORD /tr http://timestamp.digicert.com /td SHA256 "artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe"
-            & $signtool verify /pa "artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe"
+            $installer = Resolve-Path "installer-input/GoatCitadel-Setup-${{ matrix.target }}.exe"
+            & $signtool sign /fd SHA256 /f $certPath /p $env:WINDOWS_SIGN_CERT_PASSWORD /tr http://timestamp.digicert.com /td SHA256 $installer
+            if ($LASTEXITCODE -ne 0) { throw "Installer Authenticode signing failed." }
+            & $signtool verify /pa $installer
+            if ($LASTEXITCODE -ne 0) { throw "Installer Authenticode verification failed." }
+            $hash = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+            Set-Content -LiteralPath "$installer.sha256" -Value "$hash *$(Split-Path $installer -Leaf)"
           } finally {
             Remove-Item -LiteralPath $certPath -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Upload exact signed Windows release input
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-signed-release-${{ matrix.target }}
+          path: |
+            installer-input/GoatCitadel-Setup-${{ matrix.target }}.exe
+            installer-input/GoatCitadel-Setup-${{ matrix.target }}.exe.sha256
+            installer-input/GoatCitadel-Mission-Control-Windows-Identity.msix
+            installer-input/GoatCitadel-Mission-Control-Windows-Identity.msix.sha256
+            installer-input/identity-manifest.json
+            installer-input/app/release-manifest.json
+          if-no-files-found: error
+
+  windows:
+    runs-on: ${{ matrix.runner }}
+    needs: windows-installer-sign
+    if: ${{ github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows-x64
+            runner: windows-latest
+          - target: windows-arm64
+            runner: windows-11-arm
+    steps:
+      - name: Download exact signed Windows release input
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: windows-signed-release-${{ matrix.target }}
+          path: artifacts/installers/windows
+
+      - name: Admit exact signed Windows release input
+        shell: pwsh
+        run: |
+          $root = "artifacts/installers/windows"
+          $expected = @("GoatCitadel-Setup-${{ matrix.target }}.exe", "GoatCitadel-Setup-${{ matrix.target }}.exe.sha256", "GoatCitadel-Mission-Control-Windows-Identity.msix", "GoatCitadel-Mission-Control-Windows-Identity.msix.sha256", "identity-manifest.json", "app") | Sort-Object
+          $actual = @(Get-ChildItem -LiteralPath $root -Force | Select-Object -ExpandProperty Name | Sort-Object)
+          if (Compare-Object $actual $expected) { throw "Windows release transfer contains unexpected files." }
+          $appFiles = @(Get-ChildItem -LiteralPath "$root/app" -Force | Select-Object -ExpandProperty Name)
+          if ($appFiles.Count -ne 1 -or $appFiles[0] -ne "release-manifest.json") { throw "Windows release transfer contains unexpected app metadata." }
+          $installer = Resolve-Path "$root/GoatCitadel-Setup-${{ matrix.target }}.exe"
+          $identity = Resolve-Path "$root/GoatCitadel-Mission-Control-Windows-Identity.msix"
+          foreach ($signedFile in @($installer, $identity)) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $signedFile
+            if ($signature.Status -ne "Valid") { throw "Invalid transferred Authenticode signature for $signedFile: $($signature.Status)" }
+          }
+          $installerHash = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          $installerChecksum = (Get-Content -LiteralPath "$installer.sha256" -Raw).Trim()
+          if ($installerChecksum -cne "$installerHash *$(Split-Path $installer -Leaf)") { throw "Signed installer checksum mismatch." }
+          $identityHash = (Get-FileHash $identity -Algorithm SHA256).Hash.ToLowerInvariant()
+          $identityChecksum = (Get-Content -LiteralPath "$identity.sha256" -Raw).Trim()
+          if ($identityChecksum -cne "$identityHash *$(Split-Path $identity -Leaf)") { throw "Signed MSIX checksum mismatch." }
+          $identityManifest = Get-Content -LiteralPath "$root/identity-manifest.json" -Raw | ConvertFrom-Json
+          if ($identityManifest.signed -ne $true -or $identityManifest.fileName -ne "GoatCitadel-Mission-Control-Windows-Identity.msix" -or $identityManifest.sha256 -ne $identityHash) {
+            throw "Signed identity manifest mismatch."
           }
 
       - name: Smoke install Windows installer
@@ -386,43 +761,72 @@ jobs:
         shell: pwsh
         run: |
           $installer = "artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe"
-          $hash = (Get-FileHash $installer -Algorithm SHA256).Hash
-          Set-Content -Path "$installer.sha256" -Value "$hash *$(Split-Path $installer -Leaf)"
+          $hash = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -LiteralPath "$installer.sha256" -Value "$hash *$(Split-Path $installer -Leaf)"
 
-      - name: Upload unsigned Windows package smoke assets
-        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.event.inputs.allow_unsigned == 'true' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.target }}-unsigned-package-smoke-assets
-          path: |
-            artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe
-            artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe.sha256
+      - name: Stage Windows release assets with target manifest
+        shell: pwsh
+        run: |
+          $readyRoot = "artifacts/installers/windows"
+          $assetRoot = "artifacts/release-assets/${{ matrix.target }}"
+          $bundleManifest = "$readyRoot/app/release-manifest.json"
+          $requiredFiles = @(
+            "$readyRoot/GoatCitadel-Setup-${{ matrix.target }}.exe",
+            "$readyRoot/GoatCitadel-Setup-${{ matrix.target }}.exe.sha256",
+            "$readyRoot/GoatCitadel-Mission-Control-Windows-Identity.msix",
+            "$readyRoot/GoatCitadel-Mission-Control-Windows-Identity.msix.sha256",
+            "$readyRoot/identity-manifest.json",
+            $bundleManifest
+          )
+          foreach ($requiredFile in $requiredFiles) {
+            if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
+              throw "Required Windows release asset is missing: $requiredFile"
+            }
+          }
+          if (Test-Path -LiteralPath $assetRoot) {
+            Remove-Item -LiteralPath $assetRoot -Recurse -Force
+          }
+          New-Item -ItemType Directory -Force -Path $assetRoot | Out-Null
+          New-Item -ItemType Directory -Force -Path "$assetRoot/app" | Out-Null
+          foreach ($requiredFile in $requiredFiles[0..4]) {
+            Copy-Item -LiteralPath $requiredFile -Destination $assetRoot
+          }
+          # Preserve the target bundle's exact app-relative manifest path. The
+          # release job downloads it as <target>-release-assets/app/release-manifest.json
+          # and binds those exact bytes into the release certificate.
+          Copy-Item -LiteralPath $bundleManifest -Destination "$assetRoot/app/release-manifest.json"
+          $actualFiles = @(Get-ChildItem -LiteralPath $assetRoot -Recurse -File -Force | ForEach-Object { $_.FullName.Substring((Resolve-Path $assetRoot).Path.Length + 1).Replace('\', '/') } | Sort-Object)
+          $expectedFiles = @(
+            "GoatCitadel-Setup-${{ matrix.target }}.exe",
+            "GoatCitadel-Setup-${{ matrix.target }}.exe.sha256",
+            "GoatCitadel-Mission-Control-Windows-Identity.msix",
+            "GoatCitadel-Mission-Control-Windows-Identity.msix.sha256",
+            "identity-manifest.json",
+            "app/release-manifest.json"
+          ) | Sort-Object
+          if (Compare-Object $actualFiles $expectedFiles) { throw "Windows release asset staging is not closed-world." }
 
       - name: Upload Windows release assets
-        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.allow_unsigned != 'true' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ matrix.target }}-release-assets
-          path: |
-            artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe
-            artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe.sha256
-            artifacts/installers/windows-msix/GoatCitadel-Mission-Control-Windows-Identity.msix
-            artifacts/installers/windows-msix/GoatCitadel-Mission-Control-Windows-Identity.msix.sha256
-            artifacts/installers/windows-msix/identity-manifest.json
+          path: artifacts/release-assets/${{ matrix.target }}/
+          if-no-files-found: error
 
   linux:
     runs-on: ubuntu-latest
+    if: ${{ (github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.allow_unsigned == 'true') }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@a15d269cd4658e1107c09f1fabf4cbd7bd1f308a # v4.4.0
         with:
           version: ${{ env.PNPM_VERSION }}
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
@@ -461,7 +865,7 @@ jobs:
 
       - name: Upload experimental Linux package smoke assets
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.allow_unsigned == 'true' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: linux-x64-experimental-package-smoke-assets
           path: |
@@ -469,34 +873,28 @@ jobs:
             artifacts/installers/linux/GoatCitadel-${{ env.PACKAGE_VERSION }}-linux-x64.tar.gz.sha256
 
       - name: Upload experimental Linux release assets
-        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.allow_unsigned != 'true' }}
-        uses: actions/upload-artifact@v4
+        if: ${{ github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: linux-x64-experimental-release-assets
           path: |
             artifacts/installers/linux/GoatCitadel-${{ env.PACKAGE_VERSION }}-linux-x64.tar.gz
             artifacts/installers/linux/GoatCitadel-${{ env.PACKAGE_VERSION }}-linux-x64.tar.gz.sha256
 
-  macos:
+  macos-build-inputs:
     runs-on: macos-14
-    env:
-      MACOS_DEVELOPER_ID_CERT_BASE64_PRESENT: ${{ secrets.MACOS_DEVELOPER_ID_CERT_BASE64 != '' }}
-      MACOS_DEVELOPER_ID_CERT_PASSWORD_PRESENT: ${{ secrets.MACOS_DEVELOPER_ID_CERT_PASSWORD != '' }}
-      MACOS_DEVELOPER_ID_SIGNING_IDENTITY_PRESENT: ${{ secrets.MACOS_DEVELOPER_ID_SIGNING_IDENTITY != '' }}
-      APPLE_ID_PRESENT: ${{ secrets.APPLE_ID != '' }}
-      APPLE_TEAM_ID_PRESENT: ${{ secrets.APPLE_TEAM_ID != '' }}
-      APPLE_APP_SPECIFIC_PASSWORD_PRESENT: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD != '' }}
+    if: ${{ (github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.allow_unsigned == 'true') }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@a15d269cd4658e1107c09f1fabf4cbd7bd1f308a # v4.4.0
         with:
           version: ${{ env.PNPM_VERSION }}
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
@@ -505,50 +903,19 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Setup Rust
-        run: rustup default stable
+        run: |
+          rustup toolchain install "${{ env.RUST_TOOLCHAIN }}" --profile minimal
+          rustup default "${{ env.RUST_TOOLCHAIN }}"
 
       - name: Resolve package version
         run: |
           PACKAGE_VERSION=$(node -e "process.stdout.write(require('./package.json').version)")
           echo "PACKAGE_VERSION=$PACKAGE_VERSION" >> "$GITHUB_ENV"
 
-      - name: Require macOS notarization secrets for public release DMGs
-        if: ${{ (github.event_name != 'workflow_dispatch' || github.event.inputs.allow_unsigned != 'true') && (env.MACOS_DEVELOPER_ID_CERT_BASE64_PRESENT != 'true' || env.MACOS_DEVELOPER_ID_CERT_PASSWORD_PRESENT != 'true' || env.MACOS_DEVELOPER_ID_SIGNING_IDENTITY_PRESENT != 'true' || env.APPLE_ID_PRESENT != 'true' || env.APPLE_TEAM_ID_PRESENT != 'true' || env.APPLE_APP_SPECIFIC_PASSWORD_PRESENT != 'true') }}
-        run: |
-          echo "MACOS_DEVELOPER_ID_CERT_BASE64, MACOS_DEVELOPER_ID_CERT_PASSWORD, MACOS_DEVELOPER_ID_SIGNING_IDENTITY, APPLE_ID, APPLE_TEAM_ID, and APPLE_APP_SPECIFIC_PASSWORD are required for public macOS notarized DMGs."
-          exit 1
-
-      - name: Import macOS Developer ID certificate
-        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.allow_unsigned != 'true' }}
-        env:
-          MACOS_DEVELOPER_ID_CERT_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_CERT_BASE64 }}
-          MACOS_DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_CERT_PASSWORD }}
-        run: |
-          CERT_PATH="$RUNNER_TEMP/goatcitadel-macos-cert.p12"
-          KEYCHAIN_PATH="$RUNNER_TEMP/goatcitadel-macos-signing.keychain-db"
-          KEYCHAIN_PASSWORD="$(uuidgen)"
-          echo "$MACOS_DEVELOPER_ID_CERT_BASE64" | base64 --decode > "$CERT_PATH"
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "$MACOS_DEVELOPER_ID_CERT_PASSWORD" -T /usr/bin/codesign
-          security list-keychains -d user -s "$KEYCHAIN_PATH"
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-
       - name: Build unsigned experimental macOS DMG
-        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.allow_unsigned == 'true' }}
         run: pnpm package:macos --target macos-arm64
 
-      - name: Build notarized experimental macOS DMG
-        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.allow_unsigned != 'true' }}
-        env:
-          GOATCITADEL_MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_DEVELOPER_ID_SIGNING_IDENTITY }}
-          GOATCITADEL_MACOS_NOTARY_APPLE_ID: ${{ secrets.APPLE_ID }}
-          GOATCITADEL_MACOS_NOTARY_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          GOATCITADEL_MACOS_NOTARY_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-        run: pnpm package:macos --target macos-arm64 --notarize
-
-      - name: Smoke macOS DMG
+      - name: Smoke unsigned macOS build input
         run: |
           DMG="artifacts/installers/macos/GoatCitadel-${PACKAGE_VERSION}-macos-arm64.dmg"
           test -f "$DMG"
@@ -564,42 +931,216 @@ jobs:
 
       - name: Upload unsigned macOS package smoke assets
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.allow_unsigned == 'true' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: macos-arm64-unsigned-package-smoke-assets
           path: |
             artifacts/installers/macos/GoatCitadel-${{ env.PACKAGE_VERSION }}-macos-arm64.dmg
             artifacts/installers/macos/GoatCitadel-${{ env.PACKAGE_VERSION }}-macos-arm64.dmg.sha256
 
-      - name: Upload experimental macOS release assets
-        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.allow_unsigned != 'true' }}
-        uses: actions/upload-artifact@v4
+      - name: Upload exact macOS signing input
+        if: ${{ github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: macos-arm64-experimental-release-assets
+          name: macos-arm64-signing-input
           path: |
             artifacts/installers/macos/GoatCitadel-${{ env.PACKAGE_VERSION }}-macos-arm64.dmg
             artifacts/installers/macos/GoatCitadel-${{ env.PACKAGE_VERSION }}-macos-arm64.dmg.sha256
+          if-no-files-found: error
 
-  release:
+  macos-sign-notarize:
+    runs-on: macos-14
+    needs: macos-build-inputs
+    if: ${{ github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v') }}
+    environment: release
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - name: Require externally protected release environment
+        env:
+          RELEASE_TRUST_READY: ${{ vars.GOATCITADEL_RELEASE_TRUST_READY }}
+        run: test "$RELEASE_TRUST_READY" = "true"
+
+      - name: Download exact macOS signing input
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: macos-arm64-signing-input
+          path: signing-input
+
+      - name: Verify live release tag still resolves to this commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_EVENT_NAME" == "push" ]]
+          [[ "$GITHUB_REPOSITORY" == "goatcitadel/GoatCitadel" ]]
+          [[ "$GITHUB_REF" == "refs/tags/${RELEASE_TAG}" ]]
+          [[ "$RELEASE_TAG" =~ ^v[0-9][0-9A-Za-z.+-]{0,79}$ ]]
+          [[ "$RELEASE_TAG" != *".."* ]]
+          REMOTE_REFS=$(git ls-remote --exit-code "https://github.com/${GITHUB_REPOSITORY}.git" "refs/tags/${RELEASE_TAG}" "refs/tags/${RELEASE_TAG}^{}")
+          DIRECT_SHA=$(awk -v ref="refs/tags/${RELEASE_TAG}" '$2 == ref { print $1 }' <<< "$REMOTE_REFS")
+          PEELED_SHA=$(awk -v ref="refs/tags/${RELEASE_TAG}^{}" '$2 == ref { print $1 }' <<< "$REMOTE_REFS")
+          LIVE_SHA="${PEELED_SHA:-$DIRECT_SHA}"
+          [[ -n "$DIRECT_SHA" && "$LIVE_SHA" == "$GITHUB_SHA" ]]
+
+      # This fresh job has no checkout, package manager, dependency install,
+      # Rust, or repository execution. The fixed shell signs one admitted app
+      # bundle, creates one DMG, notarizes it, and cleans its private keychain.
+      - name: Sign and notarize exact macOS DMG
+        env:
+          MACOS_DEVELOPER_ID_CERT_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_CERT_BASE64 }}
+          MACOS_DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_CERT_PASSWORD }}
+          MACOS_DEVELOPER_ID_SIGNING_IDENTITY: ${{ secrets.MACOS_DEVELOPER_ID_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          set -euo pipefail
+          PACKAGE_VERSION="${GITHUB_REF_NAME#v}"
+          echo "PACKAGE_VERSION=$PACKAGE_VERSION" >> "$GITHUB_ENV"
+          [[ "$GITHUB_EVENT_NAME" == "push" ]]
+          [[ "$GITHUB_REF" == "refs/tags/$GITHUB_REF_NAME" ]]
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9][0-9A-Za-z.+-]{0,79}$ ]]
+          [[ "$GITHUB_REF_NAME" != *".."* ]]
+          INPUT_DMG="signing-input/GoatCitadel-${PACKAGE_VERSION}-macos-arm64.dmg"
+          INPUT_SUM="${INPUT_DMG}.sha256"
+          test -f "$INPUT_DMG" -a ! -L "$INPUT_DMG"
+          test -f "$INPUT_SUM" -a ! -L "$INPUT_SUM"
+          test "$(stat -f %z "$INPUT_DMG")" -gt 0
+          test "$(stat -f %z "$INPUT_DMG")" -le 4294967296
+          test "$(stat -f %z "$INPUT_SUM")" -gt 0
+          test "$(stat -f %z "$INPUT_SUM")" -le 512
+          shopt -s nullglob dotglob
+          INPUTS=(signing-input/*)
+          [[ ${#INPUTS[@]} -eq 2 ]]
+          (cd signing-input && shasum -a 256 -c "$(basename "$INPUT_SUM")")
+          for required in MACOS_DEVELOPER_ID_CERT_BASE64 MACOS_DEVELOPER_ID_CERT_PASSWORD MACOS_DEVELOPER_ID_SIGNING_IDENTITY APPLE_ID APPLE_TEAM_ID APPLE_APP_SPECIFIC_PASSWORD; do
+            [[ -n "${!required:-}" ]] || { echo "Missing required macOS signing secret: $required"; exit 1; }
+          done
+
+          CERT_PATH="$RUNNER_TEMP/goatcitadel-macos-cert.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/goatcitadel-macos-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          MOUNT="$RUNNER_TEMP/goatcitadel-unsigned-mount"
+          WORK="$RUNNER_TEMP/goatcitadel-signed-work"
+          OUTPUT="$GITHUB_WORKSPACE/signed-output"
+          rm -rf "$CERT_PATH" "$KEYCHAIN_PATH" "$MOUNT" "$WORK" "$OUTPUT"
+          mkdir -p "$MOUNT" "$WORK/dmg-root" "$OUTPUT"
+          printf '%s' "$MACOS_DEVELOPER_ID_CERT_BASE64" | base64 --decode > "$CERT_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "$MACOS_DEVELOPER_ID_CERT_PASSWORD" -T /usr/bin/codesign
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          hdiutil attach "$INPUT_DMG" -nobrowse -readonly -mountpoint "$MOUNT"
+          test -d "$MOUNT/GoatCitadel Mission Control.app"
+          ditto "$MOUNT/GoatCitadel Mission Control.app" "$WORK/dmg-root/GoatCitadel Mission Control.app"
+          hdiutil detach "$MOUNT"
+          codesign --force --deep --options runtime --timestamp --sign "$MACOS_DEVELOPER_ID_SIGNING_IDENTITY" "$WORK/dmg-root/GoatCitadel Mission Control.app"
+          codesign --verify --deep --strict --verbose=2 "$WORK/dmg-root/GoatCitadel Mission Control.app"
+          ln -s /Applications "$WORK/dmg-root/Applications"
+          OUTPUT_DMG="$OUTPUT/GoatCitadel-${PACKAGE_VERSION}-macos-arm64.dmg"
+          hdiutil create -volname "GoatCitadel Mission Control" -srcfolder "$WORK/dmg-root" -ov -format UDZO "$OUTPUT_DMG"
+          xcrun notarytool submit "$OUTPUT_DMG" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --wait
+          xcrun stapler staple "$OUTPUT_DMG"
+          xcrun stapler validate "$OUTPUT_DMG"
+          hdiutil verify "$OUTPUT_DMG"
+          (cd "$OUTPUT" && shasum -a 256 "$(basename "$OUTPUT_DMG")" > "$(basename "$OUTPUT_DMG").sha256")
+
+      - name: Always remove macOS signing keychain and staging material
+        if: ${{ always() }}
+        run: |
+          hdiutil detach "$RUNNER_TEMP/goatcitadel-unsigned-mount" -force 2>/dev/null || true
+          security delete-keychain "$RUNNER_TEMP/goatcitadel-macos-signing.keychain-db" 2>/dev/null || true
+          rm -rf "$RUNNER_TEMP/goatcitadel-macos-cert.p12" "$RUNNER_TEMP/goatcitadel-macos-signing.keychain-db" "$RUNNER_TEMP/goatcitadel-unsigned-mount" "$RUNNER_TEMP/goatcitadel-signed-work"
+
+      - name: Upload exact notarized macOS output
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos-arm64-notarized-output
+          path: |
+            signed-output/GoatCitadel-${{ env.PACKAGE_VERSION }}-macos-arm64.dmg
+            signed-output/GoatCitadel-${{ env.PACKAGE_VERSION }}-macos-arm64.dmg.sha256
+          if-no-files-found: error
+
+  macos:
+    runs-on: macos-14
+    needs: macos-sign-notarize
+    if: ${{ github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v') }}
+    steps:
+      - name: Download exact notarized macOS output
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: macos-arm64-notarized-output
+          path: release-input
+
+      - name: Smoke notarized macOS DMG
+        run: |
+          set -euo pipefail
+          PACKAGE_VERSION="${GITHUB_REF_NAME#v}"
+          echo "PACKAGE_VERSION=$PACKAGE_VERSION" >> "$GITHUB_ENV"
+          DMG="release-input/GoatCitadel-${PACKAGE_VERSION}-macos-arm64.dmg"
+          SUM="${DMG}.sha256"
+          test -f "$DMG" -a ! -L "$DMG"
+          test -f "$SUM" -a ! -L "$SUM"
+          shopt -s nullglob dotglob
+          INPUTS=(release-input/*)
+          [[ ${#INPUTS[@]} -eq 2 ]]
+          (cd release-input && shasum -a 256 -c "$(basename "$SUM")")
+          hdiutil verify "$DMG"
+          MOUNT="$RUNNER_TEMP/goatcitadel-dmg"
+          mkdir -p "$MOUNT"
+          hdiutil attach "$DMG" -nobrowse -readonly -mountpoint "$MOUNT"
+          trap 'hdiutil detach "$MOUNT" || true' EXIT
+          APP="$MOUNT/GoatCitadel Mission Control.app"
+          test -d "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          xcrun stapler validate "$DMG"
+          hdiutil detach "$MOUNT"
+          trap - EXIT
+
+      - name: Upload experimental macOS release assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos-arm64-experimental-release-assets
+          path: |
+            release-input/GoatCitadel-${{ env.PACKAGE_VERSION }}-macos-arm64.dmg
+            release-input/GoatCitadel-${{ env.PACKAGE_VERSION }}-macos-arm64.dmg.sha256
+          if-no-files-found: error
+
+  release-inputs:
     runs-on: ubuntu-latest
     needs:
       - windows
       - linux
       - macos
-    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.allow_unsigned != 'true' }}
+    if: ${{ github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v') }}
     env:
-      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag || github.ref_name }}
+      RELEASE_TAG: ${{ github.ref_name }}
     steps:
+      - name: Require exact public release tag ref
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != "push" ]; then
+            echo "Public release trust requires a tag push event; received $GITHUB_EVENT_NAME."
+            exit 1
+          fi
+          EXPECTED_RELEASE_REF="refs/tags/${RELEASE_TAG}"
+          if [ "$GITHUB_REF" != "$EXPECTED_RELEASE_REF" ]; then
+            echo "Public release trust requires GITHUB_REF=$EXPECTED_RELEASE_REF; received $GITHUB_REF."
+            exit 1
+          fi
+
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@a15d269cd4658e1107c09f1fabf4cbd7bd1f308a # v4.4.0
         with:
           version: ${{ env.PNPM_VERSION }}
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
@@ -607,46 +1148,97 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Download packaged assets
-        uses: actions/download-artifact@v4
+      - name: Download Windows x64 release assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          path: release-artifacts
+          name: windows-x64-release-assets
+          path: release-artifacts/windows-x64-release-assets
+
+      - name: Download Windows arm64 release assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: windows-arm64-release-assets
+          path: release-artifacts/windows-arm64-release-assets
+
+      - name: Download Linux x64 release assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: linux-x64-experimental-release-assets
+          path: release-artifacts/linux-x64-experimental-release-assets
+
+      - name: Download macOS arm64 release assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: macos-arm64-experimental-release-assets
+          path: release-artifacts/macos-arm64-experimental-release-assets
 
       - name: Verify release artifact matrix
         run: |
+          set -euo pipefail
+          PACKAGE_VERSION="${RELEASE_TAG#v}"
           test -f release-artifacts/windows-x64-release-assets/GoatCitadel-Setup-windows-x64.exe
           test -f release-artifacts/windows-x64-release-assets/GoatCitadel-Setup-windows-x64.exe.sha256
           test -f release-artifacts/windows-x64-release-assets/GoatCitadel-Mission-Control-Windows-Identity.msix
           test -f release-artifacts/windows-x64-release-assets/GoatCitadel-Mission-Control-Windows-Identity.msix.sha256
           test -f release-artifacts/windows-x64-release-assets/identity-manifest.json
+          test -f release-artifacts/windows-x64-release-assets/app/release-manifest.json
           test -f release-artifacts/windows-arm64-release-assets/GoatCitadel-Setup-windows-arm64.exe
           test -f release-artifacts/windows-arm64-release-assets/GoatCitadel-Setup-windows-arm64.exe.sha256
           test -f release-artifacts/windows-arm64-release-assets/GoatCitadel-Mission-Control-Windows-Identity.msix
           test -f release-artifacts/windows-arm64-release-assets/GoatCitadel-Mission-Control-Windows-Identity.msix.sha256
           test -f release-artifacts/windows-arm64-release-assets/identity-manifest.json
-          test -f release-artifacts/linux-x64-experimental-release-assets/GoatCitadel-*-linux-x64.tar.gz
-          test -f release-artifacts/linux-x64-experimental-release-assets/GoatCitadel-*-linux-x64.tar.gz.sha256
-          test -f release-artifacts/macos-arm64-experimental-release-assets/GoatCitadel-*-macos-arm64.dmg
-          test -f release-artifacts/macos-arm64-experimental-release-assets/GoatCitadel-*-macos-arm64.dmg.sha256
-
-      - name: Install cosign
-        uses: sigstore/cosign-installer@v3
+          test -f release-artifacts/windows-arm64-release-assets/app/release-manifest.json
+          test -f "release-artifacts/linux-x64-experimental-release-assets/GoatCitadel-${PACKAGE_VERSION}-linux-x64.tar.gz"
+          test -f "release-artifacts/linux-x64-experimental-release-assets/GoatCitadel-${PACKAGE_VERSION}-linux-x64.tar.gz.sha256"
+          test -f "release-artifacts/macos-arm64-experimental-release-assets/GoatCitadel-${PACKAGE_VERSION}-macos-arm64.dmg"
+          test -f "release-artifacts/macos-arm64-experimental-release-assets/GoatCitadel-${PACKAGE_VERSION}-macos-arm64.dmg.sha256"
+          cat > "$RUNNER_TEMP/expected-release-inputs.txt" <<EOF
+          linux-x64-experimental-release-assets/GoatCitadel-${PACKAGE_VERSION}-linux-x64.tar.gz
+          linux-x64-experimental-release-assets/GoatCitadel-${PACKAGE_VERSION}-linux-x64.tar.gz.sha256
+          macos-arm64-experimental-release-assets/GoatCitadel-${PACKAGE_VERSION}-macos-arm64.dmg
+          macos-arm64-experimental-release-assets/GoatCitadel-${PACKAGE_VERSION}-macos-arm64.dmg.sha256
+          windows-arm64-release-assets/GoatCitadel-Mission-Control-Windows-Identity.msix
+          windows-arm64-release-assets/GoatCitadel-Mission-Control-Windows-Identity.msix.sha256
+          windows-arm64-release-assets/GoatCitadel-Setup-windows-arm64.exe
+          windows-arm64-release-assets/GoatCitadel-Setup-windows-arm64.exe.sha256
+          windows-arm64-release-assets/app/release-manifest.json
+          windows-arm64-release-assets/identity-manifest.json
+          windows-x64-release-assets/GoatCitadel-Mission-Control-Windows-Identity.msix
+          windows-x64-release-assets/GoatCitadel-Mission-Control-Windows-Identity.msix.sha256
+          windows-x64-release-assets/GoatCitadel-Setup-windows-x64.exe
+          windows-x64-release-assets/GoatCitadel-Setup-windows-x64.exe.sha256
+          windows-x64-release-assets/app/release-manifest.json
+          windows-x64-release-assets/identity-manifest.json
+          EOF
+          LC_ALL=C sort -o "$RUNNER_TEMP/expected-release-inputs.txt" "$RUNNER_TEMP/expected-release-inputs.txt"
+          if find release-artifacts -type l -print -quit | grep -q .; then
+            echo "Release inputs contain a link."
+            exit 1
+          fi
+          find release-artifacts -type f -printf '%P\n' | LC_ALL=C sort > "$RUNNER_TEMP/actual-release-inputs.txt"
+          diff -u "$RUNNER_TEMP/expected-release-inputs.txt" "$RUNNER_TEMP/actual-release-inputs.txt"
 
       - name: Generate CycloneDX SBOM
+        timeout-minutes: 5
+        env:
+          FETCH_LICENSE: "false"
+          CDXGEN_FETCH_PKG_METADATA: "false"
         run: |
+          set -euo pipefail
+          SBOM_PATH="artifacts/release/goatcitadel-${RELEASE_TAG}.cyclonedx.json"
           mkdir -p artifacts/release
-          pnpm dlx @cyclonedx/cyclonedx-npm --output-format json --output-file "artifacts/release/goatcitadel-${RELEASE_TAG}.cyclonedx.json"
-
-      - name: Sign release artifacts
-        run: node scripts/release/sign-release-artifacts.mjs --artifacts-dir release-artifacts
-
-      - name: Assemble release proof ZIP
-        run: |
-          node scripts/release/assemble-release-package.mjs \
-            --version "$RELEASE_TAG" \
-            --tag "$RELEASE_TAG" \
-            --artifacts-dir release-artifacts \
-            --sbom-file "artifacts/release/goatcitadel-${RELEASE_TAG}.cyclonedx.json"
+          env -u NODE_PATH node node_modules/@cyclonedx/cdxgen/bin/cdxgen.js . \
+            --type js \
+            --spec-version 1.6 \
+            --no-install-deps \
+            --fail-on-error \
+            --no-babel \
+            --no-recurse \
+            --validate \
+            --output "$SBOM_PATH"
+          env -u NODE_PATH node scripts/release/validate-pnpm-sbom.mjs \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --sbom-file "$SBOM_PATH"
 
       - name: Wait for 1.0 release proof
         env:
@@ -677,6 +1269,229 @@ jobs:
             --workflow security-trivy.yml \
             --timeout-ms 7200000
 
+      - name: Upload release signing metadata
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-signing-metadata-${{ env.RELEASE_TAG }}
+          path: artifacts/release/goatcitadel-${{ env.RELEASE_TAG }}.cyclonedx.json
+          if-no-files-found: error
+
+  # OIDC is split across two minimal signers. Neither checks out nor executes
+  # repository code; each signs only an explicit artifact downloaded from a
+  # completed no-OIDC job and uses SHA-pinned transfer/cosign actions.
+  release-artifact-sign:
+    runs-on: ubuntu-latest
+    needs:
+      - release-inputs
+    if: ${{ github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v') }}
+    environment: release
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - name: Require exact public release tag ref
+        run: |
+          test "$GITHUB_EVENT_NAME" = "push"
+          test "$GITHUB_REF" = "refs/tags/${RELEASE_TAG}"
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9][0-9A-Za-z.+-]{0,79}$ ]] || [[ "$RELEASE_TAG" == *".."* ]]; then
+            echo "Unsafe public release tag: $RELEASE_TAG"
+            exit 1
+          fi
+
+      - name: Require externally protected release environment
+        env:
+          RELEASE_TRUST_READY: ${{ vars.GOATCITADEL_RELEASE_TRUST_READY }}
+        run: test "$RELEASE_TRUST_READY" = "true"
+
+      - name: Download Windows x64 release assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: windows-x64-release-assets
+          path: release-artifacts/windows-x64-release-assets
+
+      - name: Download Windows arm64 release assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: windows-arm64-release-assets
+          path: release-artifacts/windows-arm64-release-assets
+
+      - name: Download Linux x64 release assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: linux-x64-experimental-release-assets
+          path: release-artifacts/linux-x64-experimental-release-assets
+
+      - name: Download macOS arm64 release assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: macos-arm64-experimental-release-assets
+          path: release-artifacts/macos-arm64-experimental-release-assets
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Verify live release tag still resolves to this commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_EVENT_NAME" == "push" ]]
+          [[ "$GITHUB_REPOSITORY" == "goatcitadel/GoatCitadel" ]]
+          [[ "$GITHUB_REF" == "refs/tags/${RELEASE_TAG}" ]]
+          [[ "$RELEASE_TAG" =~ ^v[0-9][0-9A-Za-z.+-]{0,79}$ ]]
+          [[ "$RELEASE_TAG" != *".."* ]]
+          REMOTE_REFS=$(git ls-remote --exit-code "https://github.com/${GITHUB_REPOSITORY}.git" "refs/tags/${RELEASE_TAG}" "refs/tags/${RELEASE_TAG}^{}")
+          DIRECT_SHA=$(awk -v ref="refs/tags/${RELEASE_TAG}" '$2 == ref { print $1 }' <<< "$REMOTE_REFS")
+          PEELED_SHA=$(awk -v ref="refs/tags/${RELEASE_TAG}^{}" '$2 == ref { print $1 }' <<< "$REMOTE_REFS")
+          LIVE_SHA="${PEELED_SHA:-$DIRECT_SHA}"
+          [[ -n "$DIRECT_SHA" && "$LIVE_SHA" == "$GITHUB_SHA" ]]
+
+      - name: Sign and verify the fixed release artifact set
+        shell: bash
+        run: |
+          set -euo pipefail
+          PACKAGE_VERSION="${RELEASE_TAG#v}"
+          IDENTITY="https://github.com/goatcitadel/GoatCitadel/.github/workflows/release-installers.yml@refs/tags/${RELEASE_TAG}"
+          GITHUB_CERTIFICATE_CLAIMS=(
+            --certificate-github-workflow-name "Release Installers and Bundles"
+            --certificate-github-workflow-ref "$GITHUB_REF"
+            --certificate-github-workflow-repository "goatcitadel/GoatCitadel"
+            --certificate-github-workflow-sha "$GITHUB_SHA"
+            --certificate-github-workflow-trigger "push"
+          )
+          cat > "$RUNNER_TEMP/expected-release-assets-before.txt" <<EOF
+          linux-x64-experimental-release-assets/GoatCitadel-${PACKAGE_VERSION}-linux-x64.tar.gz
+          linux-x64-experimental-release-assets/GoatCitadel-${PACKAGE_VERSION}-linux-x64.tar.gz.sha256
+          macos-arm64-experimental-release-assets/GoatCitadel-${PACKAGE_VERSION}-macos-arm64.dmg
+          macos-arm64-experimental-release-assets/GoatCitadel-${PACKAGE_VERSION}-macos-arm64.dmg.sha256
+          windows-arm64-release-assets/GoatCitadel-Mission-Control-Windows-Identity.msix
+          windows-arm64-release-assets/GoatCitadel-Mission-Control-Windows-Identity.msix.sha256
+          windows-arm64-release-assets/GoatCitadel-Setup-windows-arm64.exe
+          windows-arm64-release-assets/GoatCitadel-Setup-windows-arm64.exe.sha256
+          windows-arm64-release-assets/app/release-manifest.json
+          windows-arm64-release-assets/identity-manifest.json
+          windows-x64-release-assets/GoatCitadel-Mission-Control-Windows-Identity.msix
+          windows-x64-release-assets/GoatCitadel-Mission-Control-Windows-Identity.msix.sha256
+          windows-x64-release-assets/GoatCitadel-Setup-windows-x64.exe
+          windows-x64-release-assets/GoatCitadel-Setup-windows-x64.exe.sha256
+          windows-x64-release-assets/app/release-manifest.json
+          windows-x64-release-assets/identity-manifest.json
+          EOF
+          LC_ALL=C sort -o "$RUNNER_TEMP/expected-release-assets-before.txt" "$RUNNER_TEMP/expected-release-assets-before.txt"
+          if find release-artifacts -type l -print -quit | grep -q .; then
+            echo "Release signer input contains a link."
+            exit 1
+          fi
+          if find release-artifacts ! -type d ! -type f -print -quit | grep -q .; then
+            echo "Release signer input contains a non-regular entry."
+            exit 1
+          fi
+          if find release-artifacts -type f -size +4294967296c -print -quit | grep -q .; then
+            echo "Release signer input exceeds the per-file size bound."
+            exit 1
+          fi
+          find release-artifacts -type f -printf '%P\n' | LC_ALL=C sort > "$RUNNER_TEMP/actual-release-assets.txt"
+          diff -u "$RUNNER_TEMP/expected-release-assets-before.txt" "$RUNNER_TEMP/actual-release-assets.txt"
+
+          WIN_X64="release-artifacts/windows-x64-release-assets/GoatCitadel-Setup-windows-x64.exe"
+          test -f "$WIN_X64"
+          cosign sign-blob --yes --output-signature "${WIN_X64}.sig" --output-certificate "${WIN_X64}.pem" "$WIN_X64"
+          cosign verify-blob --signature "${WIN_X64}.sig" --certificate "${WIN_X64}.pem" --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity "$IDENTITY" "${GITHUB_CERTIFICATE_CLAIMS[@]}" "$WIN_X64"
+
+          WIN_X64_MSIX="release-artifacts/windows-x64-release-assets/GoatCitadel-Mission-Control-Windows-Identity.msix"
+          test -f "$WIN_X64_MSIX"
+          cosign sign-blob --yes --output-signature "${WIN_X64_MSIX}.sig" --output-certificate "${WIN_X64_MSIX}.pem" "$WIN_X64_MSIX"
+          cosign verify-blob --signature "${WIN_X64_MSIX}.sig" --certificate "${WIN_X64_MSIX}.pem" --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity "$IDENTITY" "${GITHUB_CERTIFICATE_CLAIMS[@]}" "$WIN_X64_MSIX"
+
+          WIN_ARM64="release-artifacts/windows-arm64-release-assets/GoatCitadel-Setup-windows-arm64.exe"
+          test -f "$WIN_ARM64"
+          cosign sign-blob --yes --output-signature "${WIN_ARM64}.sig" --output-certificate "${WIN_ARM64}.pem" "$WIN_ARM64"
+          cosign verify-blob --signature "${WIN_ARM64}.sig" --certificate "${WIN_ARM64}.pem" --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity "$IDENTITY" "${GITHUB_CERTIFICATE_CLAIMS[@]}" "$WIN_ARM64"
+
+          WIN_ARM64_MSIX="release-artifacts/windows-arm64-release-assets/GoatCitadel-Mission-Control-Windows-Identity.msix"
+          test -f "$WIN_ARM64_MSIX"
+          cosign sign-blob --yes --output-signature "${WIN_ARM64_MSIX}.sig" --output-certificate "${WIN_ARM64_MSIX}.pem" "$WIN_ARM64_MSIX"
+          cosign verify-blob --signature "${WIN_ARM64_MSIX}.sig" --certificate "${WIN_ARM64_MSIX}.pem" --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity "$IDENTITY" "${GITHUB_CERTIFICATE_CLAIMS[@]}" "$WIN_ARM64_MSIX"
+
+          LINUX_X64="release-artifacts/linux-x64-experimental-release-assets/GoatCitadel-${PACKAGE_VERSION}-linux-x64.tar.gz"
+          test -f "$LINUX_X64"
+          cosign sign-blob --yes --output-signature "${LINUX_X64}.sig" --output-certificate "${LINUX_X64}.pem" "$LINUX_X64"
+          cosign verify-blob --signature "${LINUX_X64}.sig" --certificate "${LINUX_X64}.pem" --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity "$IDENTITY" "${GITHUB_CERTIFICATE_CLAIMS[@]}" "$LINUX_X64"
+
+          MACOS_ARM64="release-artifacts/macos-arm64-experimental-release-assets/GoatCitadel-${PACKAGE_VERSION}-macos-arm64.dmg"
+          test -f "$MACOS_ARM64"
+          cosign sign-blob --yes --output-signature "${MACOS_ARM64}.sig" --output-certificate "${MACOS_ARM64}.pem" "$MACOS_ARM64"
+          cosign verify-blob --signature "${MACOS_ARM64}.sig" --certificate "${MACOS_ARM64}.pem" --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity "$IDENTITY" "${GITHUB_CERTIFICATE_CLAIMS[@]}" "$MACOS_ARM64"
+
+          cp "$RUNNER_TEMP/expected-release-assets-before.txt" "$RUNNER_TEMP/expected-release-assets-after.txt"
+          printf '%s\n' \
+            "${WIN_X64#release-artifacts/}.sig" "${WIN_X64#release-artifacts/}.pem" \
+            "${WIN_X64_MSIX#release-artifacts/}.sig" "${WIN_X64_MSIX#release-artifacts/}.pem" \
+            "${WIN_ARM64#release-artifacts/}.sig" "${WIN_ARM64#release-artifacts/}.pem" \
+            "${WIN_ARM64_MSIX#release-artifacts/}.sig" "${WIN_ARM64_MSIX#release-artifacts/}.pem" \
+            "${LINUX_X64#release-artifacts/}.sig" "${LINUX_X64#release-artifacts/}.pem" \
+            "${MACOS_ARM64#release-artifacts/}.sig" "${MACOS_ARM64#release-artifacts/}.pem" \
+            >> "$RUNNER_TEMP/expected-release-assets-after.txt"
+          LC_ALL=C sort -o "$RUNNER_TEMP/expected-release-assets-after.txt" "$RUNNER_TEMP/expected-release-assets-after.txt"
+          find release-artifacts -type f -printf '%P\n' | LC_ALL=C sort > "$RUNNER_TEMP/actual-release-assets.txt"
+          diff -u "$RUNNER_TEMP/expected-release-assets-after.txt" "$RUNNER_TEMP/actual-release-assets.txt"
+
+      - name: Upload signed release assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: signed-release-assets-${{ env.RELEASE_TAG }}
+          path: release-artifacts
+          if-no-files-found: error
+
+  release-assemble:
+    runs-on: ubuntu-latest
+    needs:
+      - release-artifact-sign
+    if: ${{ github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v') }}
+    permissions:
+      actions: read
+      contents: read
+      id-token: none
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - name: Require exact public release tag ref
+        run: |
+          test "$GITHUB_EVENT_NAME" = "push"
+          test "$GITHUB_REF" = "refs/tags/${RELEASE_TAG}"
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9][0-9A-Za-z.+-]{0,79}$ ]] || [[ "$RELEASE_TAG" == *".."* ]]; then
+            echo "Unsafe public release tag: $RELEASE_TAG"
+            exit 1
+          fi
+
+      - name: Checkout exact release commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Download signed release assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: signed-release-assets-${{ env.RELEASE_TAG }}
+          path: release-artifacts
+
+      - name: Download release signing metadata
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-signing-metadata-${{ env.RELEASE_TAG }}
+          path: artifacts/release
+
+      - name: Assemble release proof ZIP
+        run: |
+          node scripts/release/assemble-release-package.mjs \
+            --version "$RELEASE_TAG" \
+            --tag "$RELEASE_TAG" \
+            --artifacts-dir release-artifacts \
+            --sbom-file "artifacts/release/goatcitadel-${RELEASE_TAG}.cyclonedx.json"
+
       - name: Write commit-bound release certificate
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -685,27 +1500,331 @@ jobs:
             --version "$RELEASE_TAG" \
             --tag "$RELEASE_TAG" \
             --artifacts-dir release-artifacts \
+            --runtime-manifest "windows-x64=release-artifacts/windows-x64-release-assets/app/release-manifest.json" \
+            --runtime-manifest "windows-arm64=release-artifacts/windows-arm64-release-assets/app/release-manifest.json" \
             --proof-zip "artifacts/release/package/GoatCitadel-${RELEASE_TAG}-release-package.zip" \
             --out-file artifacts/release/release-certificate.json \
             --require-success
 
-      - name: Upload release proof bundle
-        uses: actions/upload-artifact@v4
+      - name: Upload exact certificate signing input
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: release-proof-${{ env.RELEASE_TAG }}
+          name: release-certificate-signing-input-${{ env.RELEASE_TAG }}
+          path: artifacts/release/release-certificate.json
+          if-no-files-found: error
+
+      - name: Upload no-OIDC finalization inputs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-package-inputs-${{ env.RELEASE_TAG }}
           path: |
             artifacts/release/goatcitadel-${{ env.RELEASE_TAG }}.cyclonedx.json
-            artifacts/release/package/*.zip
+            artifacts/release/package/GoatCitadel-${{ env.RELEASE_TAG }}-release-package.zip
+          if-no-files-found: error
+
+  release-certificate-sign:
+    runs-on: ubuntu-latest
+    needs:
+      - release-assemble
+    if: ${{ github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v') }}
+    environment: release
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - name: Require exact public release tag ref
+        run: |
+          test "$GITHUB_EVENT_NAME" = "push"
+          test "$GITHUB_REF" = "refs/tags/${RELEASE_TAG}"
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9][0-9A-Za-z.+-]{0,79}$ ]] || [[ "$RELEASE_TAG" == *".."* ]]; then
+            echo "Unsafe public release tag: $RELEASE_TAG"
+            exit 1
+          fi
+
+      - name: Require externally protected release environment
+        env:
+          RELEASE_TRUST_READY: ${{ vars.GOATCITADEL_RELEASE_TRUST_READY }}
+        run: test "$RELEASE_TRUST_READY" = "true"
+
+      - name: Download exact release certificate bytes
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-certificate-signing-input-${{ env.RELEASE_TAG }}
+          path: artifacts/release
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Admit exact bounded release certificate input
+        run: |
+          set -euo pipefail
+          test -f artifacts/release/release-certificate.json
+          test ! -L artifacts/release/release-certificate.json
+          test "$(find artifacts/release -type f | wc -l | tr -d ' ')" = "1"
+          test -z "$(find artifacts/release ! -type d ! -type f -print -quit)"
+          CERTIFICATE_SIZE=$(stat -c %s artifacts/release/release-certificate.json)
+          test "$CERTIFICATE_SIZE" -gt 0
+          test "$CERTIFICATE_SIZE" -le 2097152
+
+      - name: Verify live release tag still resolves to this commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_EVENT_NAME" == "push" ]]
+          [[ "$GITHUB_REPOSITORY" == "goatcitadel/GoatCitadel" ]]
+          [[ "$GITHUB_REF" == "refs/tags/${RELEASE_TAG}" ]]
+          [[ "$RELEASE_TAG" =~ ^v[0-9][0-9A-Za-z.+-]{0,79}$ ]]
+          [[ "$RELEASE_TAG" != *".."* ]]
+          REMOTE_REFS=$(git ls-remote --exit-code "https://github.com/${GITHUB_REPOSITORY}.git" "refs/tags/${RELEASE_TAG}" "refs/tags/${RELEASE_TAG}^{}")
+          DIRECT_SHA=$(awk -v ref="refs/tags/${RELEASE_TAG}" '$2 == ref { print $1 }' <<< "$REMOTE_REFS")
+          PEELED_SHA=$(awk -v ref="refs/tags/${RELEASE_TAG}^{}" '$2 == ref { print $1 }' <<< "$REMOTE_REFS")
+          LIVE_SHA="${PEELED_SHA:-$DIRECT_SHA}"
+          [[ -n "$DIRECT_SHA" && "$LIVE_SHA" == "$GITHUB_SHA" ]]
+
+      - name: Sign and verify release certificate attestation
+        run: |
+          cosign sign-blob --yes \
+            --bundle artifacts/release/release-certificate.sigstore.json \
+            artifacts/release/release-certificate.json
+          cosign verify-blob \
+            --bundle artifacts/release/release-certificate.sigstore.json \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "https://github.com/goatcitadel/GoatCitadel/.github/workflows/release-installers.yml@refs/tags/${RELEASE_TAG}" \
+            --certificate-github-workflow-name "Release Installers and Bundles" \
+            --certificate-github-workflow-ref "$GITHUB_REF" \
+            --certificate-github-workflow-repository "goatcitadel/GoatCitadel" \
+            --certificate-github-workflow-sha "$GITHUB_SHA" \
+            --certificate-github-workflow-trigger "push" \
             artifacts/release/release-certificate.json
 
+      - name: Upload attested release certificate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: attested-release-certificate-${{ env.RELEASE_TAG }}
+          path: |
+            artifacts/release/release-certificate.json
+            artifacts/release/release-certificate.sigstore.json
+          if-no-files-found: error
+
+  release-finalize:
+    runs-on: ubuntu-latest
+    needs:
+      - release-certificate-sign
+    if: ${{ github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v') }}
+    permissions:
+      actions: read
+      contents: read
+      id-token: none
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - name: Checkout exact release commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Download signed release assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: signed-release-assets-${{ env.RELEASE_TAG }}
+          path: release-artifacts
+
+      - name: Download no-OIDC finalization inputs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-package-inputs-${{ env.RELEASE_TAG }}
+          path: artifacts/release
+
+      - name: Download attested certificate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: attested-release-certificate-${{ env.RELEASE_TAG }}
+          path: artifacts/release
+
+      # The signed installer must exist before its digest can enter the final
+      # certificate, so embedding that certificate in the installer would be a
+      # hash cycle. Publish a minimal adjacent installer sidecar and a separate
+      # full public evidence archive.
+      - name: Assemble runtime release evidence and verified Windows distributions
+        run: |
+          node scripts/release/assemble-runtime-release-evidence.mjs \
+            --certificate artifacts/release/release-certificate.json \
+            --attestation artifacts/release/release-certificate.sigstore.json \
+            --artifacts-dir release-artifacts \
+            --proof-zip "artifacts/release/package/GoatCitadel-${RELEASE_TAG}-release-package.zip" \
+            --output-dir artifacts/release/runtime-evidence \
+            --archive-dir artifacts/release/package \
+            --installer "windows-x64=release-artifacts/windows-x64-release-assets/GoatCitadel-Setup-windows-x64.exe" \
+            --installer "windows-arm64=release-artifacts/windows-arm64-release-assets/GoatCitadel-Setup-windows-arm64.exe"
+
+      - name: Stage closed-world signed release output
+        shell: bash
+        run: |
+          set -euo pipefail
+          PACKAGE_VERSION="${RELEASE_TAG#v}"
+          [[ "$RELEASE_TAG" =~ ^v[0-9][0-9A-Za-z.+-]{0,79}$ ]]
+          [[ "$RELEASE_TAG" != *".."* ]]
+          echo "PACKAGE_VERSION=$PACKAGE_VERSION" >> "$GITHUB_ENV"
+          rm -rf signed-release-output
+          mkdir -p signed-release-output
+          RELEASE_ASSETS=(
+            "windows-x64-release-assets/GoatCitadel-Setup-windows-x64.exe"
+            "windows-x64-release-assets/GoatCitadel-Setup-windows-x64.exe.sha256"
+            "windows-x64-release-assets/GoatCitadel-Setup-windows-x64.exe.sig"
+            "windows-x64-release-assets/GoatCitadel-Setup-windows-x64.exe.pem"
+            "windows-x64-release-assets/GoatCitadel-Mission-Control-Windows-Identity.msix"
+            "windows-x64-release-assets/GoatCitadel-Mission-Control-Windows-Identity.msix.sha256"
+            "windows-x64-release-assets/GoatCitadel-Mission-Control-Windows-Identity.msix.sig"
+            "windows-x64-release-assets/GoatCitadel-Mission-Control-Windows-Identity.msix.pem"
+            "windows-x64-release-assets/identity-manifest.json"
+            "windows-x64-release-assets/app/release-manifest.json"
+            "windows-arm64-release-assets/GoatCitadel-Setup-windows-arm64.exe"
+            "windows-arm64-release-assets/GoatCitadel-Setup-windows-arm64.exe.sha256"
+            "windows-arm64-release-assets/GoatCitadel-Setup-windows-arm64.exe.sig"
+            "windows-arm64-release-assets/GoatCitadel-Setup-windows-arm64.exe.pem"
+            "windows-arm64-release-assets/GoatCitadel-Mission-Control-Windows-Identity.msix"
+            "windows-arm64-release-assets/GoatCitadel-Mission-Control-Windows-Identity.msix.sha256"
+            "windows-arm64-release-assets/GoatCitadel-Mission-Control-Windows-Identity.msix.sig"
+            "windows-arm64-release-assets/GoatCitadel-Mission-Control-Windows-Identity.msix.pem"
+            "windows-arm64-release-assets/identity-manifest.json"
+            "windows-arm64-release-assets/app/release-manifest.json"
+            "linux-x64-experimental-release-assets/GoatCitadel-${PACKAGE_VERSION}-linux-x64.tar.gz"
+            "linux-x64-experimental-release-assets/GoatCitadel-${PACKAGE_VERSION}-linux-x64.tar.gz.sha256"
+            "linux-x64-experimental-release-assets/GoatCitadel-${PACKAGE_VERSION}-linux-x64.tar.gz.sig"
+            "linux-x64-experimental-release-assets/GoatCitadel-${PACKAGE_VERSION}-linux-x64.tar.gz.pem"
+            "macos-arm64-experimental-release-assets/GoatCitadel-${PACKAGE_VERSION}-macos-arm64.dmg"
+            "macos-arm64-experimental-release-assets/GoatCitadel-${PACKAGE_VERSION}-macos-arm64.dmg.sha256"
+            "macos-arm64-experimental-release-assets/GoatCitadel-${PACKAGE_VERSION}-macos-arm64.dmg.sig"
+            "macos-arm64-experimental-release-assets/GoatCitadel-${PACKAGE_VERSION}-macos-arm64.dmg.pem"
+          )
+          for relative_path in "${RELEASE_ASSETS[@]}"; do
+            test -f "release-artifacts/$relative_path" -a ! -L "release-artifacts/$relative_path"
+            cp --parents "release-artifacts/$relative_path" signed-release-output
+          done
+          RELEASE_OUTPUTS=(
+            "artifacts/release/goatcitadel-${RELEASE_TAG}.cyclonedx.json"
+            "artifacts/release/package/GoatCitadel-${RELEASE_TAG}-release-package.zip"
+            "artifacts/release/package/GoatCitadel-${RELEASE_TAG}-release-evidence.zip"
+            "artifacts/release/package/GoatCitadel-${RELEASE_TAG}-windows-x64-verified.zip"
+            "artifacts/release/package/GoatCitadel-${RELEASE_TAG}-windows-arm64-verified.zip"
+            "artifacts/release/release-certificate.json"
+            "artifacts/release/release-certificate.sigstore.json"
+          )
+          for output_path in "${RELEASE_OUTPUTS[@]}"; do
+            test -f "$output_path" -a ! -L "$output_path"
+            cp --parents "$output_path" signed-release-output
+          done
+          FILE_COUNT=$(find signed-release-output -type f | wc -l | tr -d ' ')
+          [[ "$FILE_COUNT" == "35" ]]
+
+      - name: Upload signed release output
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: signed-release-${{ env.RELEASE_TAG }}
+          path: signed-release-output/
+          if-no-files-found: error
+
+  publish-release:
+    runs-on: ubuntu-latest
+    needs:
+      - release-finalize
+    if: ${{ github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v') }}
+    environment: release
+    permissions:
+      actions: read
+      contents: write
+      id-token: none
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - name: Require externally protected release environment
+        env:
+          RELEASE_TRUST_READY: ${{ vars.GOATCITADEL_RELEASE_TRUST_READY }}
+        run: test "$RELEASE_TRUST_READY" = "true"
+
+      - name: Download signed release output
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: signed-release-${{ env.RELEASE_TAG }}
+          path: .
+
+      - name: Validate closed-world publish input
+        shell: bash
+        run: |
+          set -euo pipefail
+          PACKAGE_VERSION="${RELEASE_TAG#v}"
+          [[ "$RELEASE_TAG" =~ ^v[0-9][0-9A-Za-z.+-]{0,79}$ ]]
+          [[ "$RELEASE_TAG" != *".."* ]]
+          echo "PACKAGE_VERSION=$PACKAGE_VERSION" >> "$GITHUB_ENV"
+          test "$(find release-artifacts -type f | wc -l | tr -d ' ')" = "28"
+          test "$(find artifacts/release/package -type f | wc -l | tr -d ' ')" = "4"
+          test -f "artifacts/release/goatcitadel-${RELEASE_TAG}.cyclonedx.json"
+          test -f artifacts/release/release-certificate.json
+          test -f artifacts/release/release-certificate.sigstore.json
+          jq -er '.schemaVersion == 2 and (.releaseAssets | length == 28)' artifacts/release/release-certificate.json > /dev/null
+          jq -r '.releaseAssets[].relativePath | "release-artifacts/" + .' artifacts/release/release-certificate.json \
+            > "$RUNNER_TEMP/expected-publish-files.txt"
+          cat >> "$RUNNER_TEMP/expected-publish-files.txt" <<EOF
+          artifacts/release/goatcitadel-${RELEASE_TAG}.cyclonedx.json
+          artifacts/release/package/GoatCitadel-${RELEASE_TAG}-release-evidence.zip
+          artifacts/release/package/GoatCitadel-${RELEASE_TAG}-release-package.zip
+          artifacts/release/package/GoatCitadel-${RELEASE_TAG}-windows-arm64-verified.zip
+          artifacts/release/package/GoatCitadel-${RELEASE_TAG}-windows-x64-verified.zip
+          artifacts/release/release-certificate.json
+          artifacts/release/release-certificate.sigstore.json
+          EOF
+          LC_ALL=C sort -o "$RUNNER_TEMP/expected-publish-files.txt" "$RUNNER_TEMP/expected-publish-files.txt"
+          find . -type f -printf '%P\n' | LC_ALL=C sort > "$RUNNER_TEMP/actual-publish-files.txt"
+          diff -u "$RUNNER_TEMP/expected-publish-files.txt" "$RUNNER_TEMP/actual-publish-files.txt"
+
+      - name: Verify live release tag still resolves to this commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_EVENT_NAME" == "push" ]]
+          [[ "$GITHUB_REPOSITORY" == "goatcitadel/GoatCitadel" ]]
+          [[ "$GITHUB_REF" == "refs/tags/${RELEASE_TAG}" ]]
+          [[ "$RELEASE_TAG" =~ ^v[0-9][0-9A-Za-z.+-]{0,79}$ ]]
+          [[ "$RELEASE_TAG" != *".."* ]]
+          REMOTE_REFS=$(git ls-remote --exit-code "https://github.com/${GITHUB_REPOSITORY}.git" "refs/tags/${RELEASE_TAG}" "refs/tags/${RELEASE_TAG}^{}")
+          DIRECT_SHA=$(awk -v ref="refs/tags/${RELEASE_TAG}" '$2 == ref { print $1 }' <<< "$REMOTE_REFS")
+          PEELED_SHA=$(awk -v ref="refs/tags/${RELEASE_TAG}^{}" '$2 == ref { print $1 }' <<< "$REMOTE_REFS")
+          LIVE_SHA="${PEELED_SHA:-$DIRECT_SHA}"
+          [[ -n "$DIRECT_SHA" && "$LIVE_SHA" == "$GITHUB_SHA" ]]
+
       - name: Publish GitHub release assets
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           target_commitish: ${{ github.sha }}
           generate_release_notes: true
+          fail_on_unmatched_files: true
+          overwrite_files: false
           files: |
-            release-artifacts/**/*
+            release-artifacts/windows-x64-release-assets/GoatCitadel-Setup-windows-x64.exe
+            release-artifacts/windows-x64-release-assets/GoatCitadel-Setup-windows-x64.exe.sha256
+            release-artifacts/windows-x64-release-assets/GoatCitadel-Setup-windows-x64.exe.sig
+            release-artifacts/windows-x64-release-assets/GoatCitadel-Setup-windows-x64.exe.pem
+            release-artifacts/windows-arm64-release-assets/GoatCitadel-Setup-windows-arm64.exe
+            release-artifacts/windows-arm64-release-assets/GoatCitadel-Setup-windows-arm64.exe.sha256
+            release-artifacts/windows-arm64-release-assets/GoatCitadel-Setup-windows-arm64.exe.sig
+            release-artifacts/windows-arm64-release-assets/GoatCitadel-Setup-windows-arm64.exe.pem
+            release-artifacts/linux-x64-experimental-release-assets/GoatCitadel-${{ env.PACKAGE_VERSION }}-linux-x64.tar.gz
+            release-artifacts/linux-x64-experimental-release-assets/GoatCitadel-${{ env.PACKAGE_VERSION }}-linux-x64.tar.gz.sha256
+            release-artifacts/linux-x64-experimental-release-assets/GoatCitadel-${{ env.PACKAGE_VERSION }}-linux-x64.tar.gz.sig
+            release-artifacts/linux-x64-experimental-release-assets/GoatCitadel-${{ env.PACKAGE_VERSION }}-linux-x64.tar.gz.pem
+            release-artifacts/macos-arm64-experimental-release-assets/GoatCitadel-${{ env.PACKAGE_VERSION }}-macos-arm64.dmg
+            release-artifacts/macos-arm64-experimental-release-assets/GoatCitadel-${{ env.PACKAGE_VERSION }}-macos-arm64.dmg.sha256
+            release-artifacts/macos-arm64-experimental-release-assets/GoatCitadel-${{ env.PACKAGE_VERSION }}-macos-arm64.dmg.sig
+            release-artifacts/macos-arm64-experimental-release-assets/GoatCitadel-${{ env.PACKAGE_VERSION }}-macos-arm64.dmg.pem
             artifacts/release/goatcitadel-${{ env.RELEASE_TAG }}.cyclonedx.json
-            artifacts/release/package/*.zip
+            artifacts/release/package/GoatCitadel-${{ env.RELEASE_TAG }}-release-package.zip
+            artifacts/release/package/GoatCitadel-${{ env.RELEASE_TAG }}-release-evidence.zip
+            artifacts/release/package/GoatCitadel-${{ env.RELEASE_TAG }}-windows-x64-verified.zip
+            artifacts/release/package/GoatCitadel-${{ env.RELEASE_TAG }}-windows-arm64-verified.zip
             artifacts/release/release-certificate.json
+            artifacts/release/release-certificate.sigstore.json

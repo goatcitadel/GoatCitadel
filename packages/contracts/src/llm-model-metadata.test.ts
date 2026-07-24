@@ -41,7 +41,7 @@ describe("shipped manifest at config/llm-model-metadata.json", () => {
   it("parses against LlmModelMetadataManifest and every entry is well-formed", () => {
     expect(parsedManifest.version).toBe(1);
     expect(typeof parsedManifest.entries).toBe("object");
-    expect(Object.keys(parsedManifest.entries)).toHaveLength(34);
+    expect(Object.keys(parsedManifest.entries)).toHaveLength(37);
     for (const [key, entry] of Object.entries(parsedManifest.entries)) {
       expect(key.toLowerCase()).not.toMatch(/(?:^|\/)(?:xai|grok)(?:\/|$)/);
       expect(entry.contextWindow, `${key} contextWindow`).toBeGreaterThan(0);

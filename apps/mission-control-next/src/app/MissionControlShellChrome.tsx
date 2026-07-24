@@ -5,6 +5,7 @@ import {
   Bot,
   BookOpenText,
   FolderKanban,
+  Fingerprint,
   LibraryBig,
   Menu,
   MoonStar,
@@ -22,12 +23,14 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
+import type { RuntimeBuildIdentity } from "@goatcitadel/contracts";
 import { PageErrorBoundary } from "@goatcitadel/mission-control-shared/components/PageErrorBoundary";
 import { SideInspectorDrawer } from "@goatcitadel/mission-control-shared/components/SideInspectorDrawer";
 import type { ShellDetailPanelEntry } from "@goatcitadel/mission-control-shared/components/ShellDetailPanelContext";
 import { NativeButton } from "@next/features/native-routes/primitives";
 import { useModalDialogBehavior } from "@next/features/threaded-surface/useModalDialogBehavior";
 import { TopbarOverflowMenu, type TopbarOverflowItem } from "./TopbarOverflowMenu";
+import { isRuntimeReleaseVerified } from "./runtime-build-identity";
 import {
   AREA_META,
   buildNavigationTarget,
@@ -569,27 +572,44 @@ export function ShellRail({
 
 export function ShellStatusStrip({
   approvalsPill,
+  buildIdentity,
+  buildIdentityError,
   currentReleaseScope,
   currentReleaseStatusLabel,
   daemonStatusValue,
   gatewayMessage,
   navigateApprovals,
+  navigateBuildProof,
   realtimeValue,
   sessionsPill,
   spendPill,
 }: {
   approvalsPill: StatusPillModel;
+  buildIdentity: RuntimeBuildIdentity | null;
+  buildIdentityError: string | null;
   currentReleaseScope: RouteReleaseScope;
   currentReleaseStatusLabel: string;
   daemonStatusValue: string;
   gatewayMessage: string;
   navigateApprovals: () => void;
+  navigateBuildProof: () => void;
   realtimeValue: string;
   sessionsPill: StatusPillModel;
   spendPill: StatusPillModel;
 }) {
+  const identityChip = formatRuntimeIdentityChip(buildIdentity, buildIdentityError);
   return (
     <footer className="mc-next-status-strip" aria-label="Mission Control status strip">
+      <div className="mc-next-status-strip-identity" data-shell-identity-anchor="pinned">
+        <StatusPill
+          icon={<Fingerprint size={15} />}
+          label="Build identity"
+          value={identityChip.value}
+          compactValue={identityChip.compactValue}
+          identityStatus={identityChip.status}
+          onClick={navigateBuildProof}
+        />
+      </div>
       <div className="mc-next-status-strip-primary">
         <StatusPill icon={<ShieldCheck size={15} />} label={gatewayMessage} value="Gateway ready" />
         <StatusPill icon={<Activity size={15} />} label="Live updates" value={realtimeValue} />
@@ -718,15 +738,19 @@ function StatusPill({
   icon,
   label,
   value,
+  compactValue,
   onClick,
   releaseStatus,
+  identityStatus,
   degraded = false,
 }: {
   icon: ReactNode;
   label: string;
   value: string;
+  compactValue?: string;
   onClick?: () => void;
   releaseStatus?: string;
+  identityStatus?: "verified" | "unverified" | "unavailable";
   degraded?: boolean;
 }) {
   const content = (
@@ -734,12 +758,18 @@ function StatusPill({
       <span className="mc-next-status-icon">{icon}</span>
       <div>
         <span>{label}</span>
-        <strong>{value}</strong>
+        <strong className={compactValue ? "mc-next-status-value-full" : undefined}>{value}</strong>
+        {compactValue ? (
+          <strong className="mc-next-status-value-compact" aria-hidden="true">
+            {compactValue}
+          </strong>
+        ) : null}
       </div>
     </>
   );
   const markerProps = {
     ...(releaseStatus ? { "data-release-status": releaseStatus } : {}),
+    ...(identityStatus ? { "data-identity-status": identityStatus } : {}),
     ...(degraded ? { "data-status": "degraded" } : {}),
   };
   const accessibleLabel = `${label}: ${value}${degraded ? " (unavailable)" : ""}`;
@@ -762,4 +792,27 @@ function StatusPill({
       {content}
     </div>
   );
+}
+
+export function formatRuntimeIdentityChip(
+  identity: RuntimeBuildIdentity | null,
+  error: string | null,
+): { value: string; compactValue: string; status: "verified" | "unverified" | "unavailable" } {
+  if (!identity || error) {
+    return { value: "Identity unavailable", compactValue: "Build ID unavailable", status: "unavailable" };
+  }
+  const kind = identity.kind === "development" ? "Dev" : identity.kind === "packaged" ? "Packaged" : "Source";
+  const version = identity.version === "unknown" ? "version unknown" : `v${identity.version.replace(/^v/i, "")}`;
+  const sha = identity.shortSha ?? "SHA unknown";
+  const integrity =
+    identity.integrity === "modified" ? "modified" : identity.integrity === "unknown" ? "unproven" : null;
+  const releaseVerified = isRuntimeReleaseVerified(identity);
+  const proof = releaseVerified ? "installed payload verified" : "proof unverified";
+  const compactKind = identity.kind === "development" ? "Dev" : identity.kind === "packaged" ? "Pkg" : "Src";
+  const compactProof = releaseVerified ? "verified" : "unverified";
+  return {
+    value: [kind, version, sha, integrity, proof].filter(Boolean).join(" · "),
+    compactValue: [compactKind, version, sha, integrity, compactProof].filter(Boolean).join("/"),
+    status: releaseVerified ? "verified" : "unverified",
+  };
 }

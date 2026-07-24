@@ -1,0 +1,197 @@
+import { createHash } from "node:crypto";
+import { redactSecretText } from "@goatcitadel/contracts";
+
+/**
+ * HX-505 remote-worker cell terminal capture (production-dark).
+ *
+ * Stdout/stderr are continuously drained and raw-byte counted. Only a bounded
+ * UTF-8-safe prefix and tail per stream are retained, with truncation flags,
+ * overlap-aware secret redaction, exit/signal, raw/retained totals, redaction
+ * count, and capture hashes. Unbounded raw output and credentials are never
+ * persisted. Raw byte counts are taken BEFORE redaction.
+ *
+ * Boundary redaction: each retained window over-captures a bounded redaction
+ * overhang of raw bytes past its retained bound, redacts the whole captured
+ * window, and only THEN truncates to the retained bound. A secret straddling the
+ * prefix-end cut or the tail-start cut is therefore fully present when it is
+ * redacted, so no partial secret can survive the truncation boundary.
+ *
+ * Capture-hash preimages are JSON-encoded (never separator characters) so the
+ * source stays plain text and the receipt hash is unambiguous even when redacted
+ * output itself contains unusual bytes.
+ */
+
+export const WORKER_CELL_TERMINAL_DEFAULT_PREFIX_BYTES = 8_192;
+export const WORKER_CELL_TERMINAL_DEFAULT_TAIL_BYTES = 8_192;
+export const WORKER_CELL_TERMINAL_MAX_BOUND_BYTES = 262_144;
+/** Extra raw bytes captured past each retained bound so a boundary-straddling secret is fully redacted. */
+export const WORKER_CELL_TERMINAL_REDACTION_OVERHANG_BYTES = 4_096;
+
+export type WorkerCellTerminalStream = "stdout" | "stderr";
+
+export interface WorkerCellTerminalCaptureOptions {
+  readonly maxPrefixBytes?: number;
+  readonly maxTailBytes?: number;
+}
+
+export interface WorkerCellTerminalStreamDiagnostics {
+  readonly stream: WorkerCellTerminalStream;
+  readonly rawByteLength: number;
+  readonly retainedByteLength: number;
+  readonly prefixText: string;
+  readonly tailText: string;
+  readonly prefixTruncated: boolean;
+  readonly tailTruncated: boolean;
+  readonly redactionCount: number;
+  readonly captureSha256: string;
+}
+
+export interface WorkerCellTerminalDiagnostics {
+  readonly stdout: WorkerCellTerminalStreamDiagnostics;
+  readonly stderr: WorkerCellTerminalStreamDiagnostics;
+  readonly exitCode: number | null;
+  readonly terminatedBySignal: string | null;
+  readonly totalRawBytes: number;
+  readonly totalRetainedBytes: number;
+  readonly totalRedactionCount: number;
+  readonly diagnosticCaptureSha256: string;
+}
+
+interface StreamState {
+  rawByteLength: number;
+  readonly prefix: number[];
+  readonly tail: number[];
+}
+
+export class WorkerCellTerminalCapture {
+  private readonly maxPrefixBytes: number;
+  private readonly maxTailBytes: number;
+  private readonly prefixCaptureBytes: number;
+  private readonly tailCaptureBytes: number;
+  private readonly streams: Record<WorkerCellTerminalStream, StreamState>;
+  private finalized = false;
+
+  public constructor(options: WorkerCellTerminalCaptureOptions = {}) {
+    this.maxPrefixBytes = bound(options.maxPrefixBytes, WORKER_CELL_TERMINAL_DEFAULT_PREFIX_BYTES);
+    this.maxTailBytes = bound(options.maxTailBytes, WORKER_CELL_TERMINAL_DEFAULT_TAIL_BYTES);
+    this.prefixCaptureBytes = this.maxPrefixBytes + WORKER_CELL_TERMINAL_REDACTION_OVERHANG_BYTES;
+    this.tailCaptureBytes = this.maxTailBytes + WORKER_CELL_TERMINAL_REDACTION_OVERHANG_BYTES;
+    this.streams = { stdout: newStreamState(), stderr: newStreamState() };
+  }
+
+  /**
+   * Drain a raw chunk, counting every byte and retaining only the bounded
+   * prefix/tail capture windows (each = its retained bound plus the redaction
+   * overhang).
+   */
+  public ingest(stream: WorkerCellTerminalStream, chunk: Buffer | Uint8Array): void {
+    if (this.finalized) throw new Error("Remote worker cell terminal capture is already finalized.");
+    const state = this.streams[stream];
+    for (const byte of chunk) {
+      state.rawByteLength += 1;
+      if (state.prefix.length < this.prefixCaptureBytes) {
+        state.prefix.push(byte);
+      }
+      state.tail.push(byte);
+      if (state.tail.length > this.tailCaptureBytes) {
+        state.tail.shift();
+      }
+    }
+  }
+
+  public finalize(input: {
+    exitCode: number | null;
+    terminatedBySignal: string | null;
+  }): WorkerCellTerminalDiagnostics {
+    this.finalized = true;
+    const stdout = this.finalizeStream("stdout");
+    const stderr = this.finalizeStream("stderr");
+    const totalRawBytes = stdout.rawByteLength + stderr.rawByteLength;
+    const totalRetainedBytes = stdout.retainedByteLength + stderr.retainedByteLength;
+    const totalRedactionCount = stdout.redactionCount + stderr.redactionCount;
+    const diagnosticCaptureSha256 = createHash("sha256")
+      .update(
+        JSON.stringify({
+          stdout: stdout.captureSha256,
+          stderr: stderr.captureSha256,
+          exitCode: input.exitCode,
+          terminatedBySignal: input.terminatedBySignal,
+        }),
+        "utf8",
+      )
+      .digest("hex");
+    return {
+      stdout,
+      stderr,
+      exitCode: input.exitCode,
+      terminatedBySignal: input.terminatedBySignal,
+      totalRawBytes,
+      totalRetainedBytes,
+      totalRedactionCount,
+      diagnosticCaptureSha256,
+    };
+  }
+
+  private finalizeStream(stream: WorkerCellTerminalStream): WorkerCellTerminalStreamDiagnostics {
+    const state = this.streams[stream];
+    // Redact the FULL captured window (retained bound + overhang), THEN truncate
+    // to the retained bound, so a secret straddling either cut is already masked.
+    const redactedPrefix = redactSecretText(decodeUtf8DropTrailingPartial(Buffer.from(state.prefix)));
+    const redactedTail = redactSecretText(decodeUtf8DropLeadingPartial(Buffer.from(state.tail)));
+    const prefixText = truncateUtf8Bytes(redactedPrefix.value, this.maxPrefixBytes, "keepStart");
+    const tailText = truncateUtf8Bytes(redactedTail.value, this.maxTailBytes, "keepEnd");
+    const retainedByteLength = Buffer.byteLength(prefixText, "utf8") + Buffer.byteLength(tailText, "utf8");
+    const captureSha256 = createHash("sha256")
+      .update(JSON.stringify({ stream, prefix: prefixText, tail: tailText }), "utf8")
+      .digest("hex");
+    return {
+      stream,
+      rawByteLength: state.rawByteLength,
+      retainedByteLength,
+      prefixText,
+      tailText,
+      prefixTruncated: state.rawByteLength > this.maxPrefixBytes,
+      tailTruncated: state.rawByteLength > this.maxTailBytes,
+      redactionCount: redactedPrefix.redactionCount + redactedTail.redactionCount,
+      captureSha256,
+    };
+  }
+}
+
+function newStreamState(): StreamState {
+  return { rawByteLength: 0, prefix: [], tail: [] };
+}
+
+function bound(value: number | undefined, fallback: number): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) return fallback;
+  return Math.min(value, WORKER_CELL_TERMINAL_MAX_BOUND_BYTES);
+}
+
+/** Truncate already-redacted UTF-8 text to a byte bound without splitting a character. */
+function truncateUtf8Bytes(text: string, maxBytes: number, mode: "keepStart" | "keepEnd"): string {
+  const buffer = Buffer.from(text, "utf8");
+  if (buffer.length <= maxBytes) return text;
+  return mode === "keepStart"
+    ? decodeUtf8DropTrailingPartial(buffer.subarray(0, maxBytes))
+    : decodeUtf8DropLeadingPartial(buffer.subarray(buffer.length - maxBytes));
+}
+
+/** Decode bytes to UTF-8, dropping a trailing partial multibyte sequence so a character is never split. */
+function decodeUtf8DropTrailingPartial(buffer: Buffer): string {
+  let end = buffer.length;
+  let lead = buffer.length - 1;
+  while (lead >= 0 && (buffer[lead]! & 0b1100_0000) === 0b1000_0000) lead -= 1;
+  if (lead >= 0) {
+    const leadByte = buffer[lead]!;
+    const sequenceLength = leadByte >= 0b1111_0000 ? 4 : leadByte >= 0b1110_0000 ? 3 : leadByte >= 0b1100_0000 ? 2 : 1;
+    if (end - lead < sequenceLength) end = lead;
+  }
+  return new TextDecoder("utf-8", { fatal: false }).decode(buffer.subarray(0, end));
+}
+
+/** Decode bytes to UTF-8, dropping a leading partial multibyte sequence so a character is never split. */
+function decodeUtf8DropLeadingPartial(buffer: Buffer): string {
+  let start = 0;
+  while (start < buffer.length && (buffer[start]! & 0b1100_0000) === 0b1000_0000) start += 1;
+  return new TextDecoder("utf-8", { fatal: false }).decode(buffer.subarray(start));
+}

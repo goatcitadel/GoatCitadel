@@ -47,7 +47,7 @@ const discordMock = vi.hoisted(() => {
 
   class FakeClient {
     public static instances: FakeClient[] = [];
-    public readonly handlers = new Map<string, (...args: unknown[]) => void>();
+    public readonly handlers = new Map<string, Array<(...args: unknown[]) => void>>();
     public readonly login = vi.fn(async () => undefined);
     public readonly destroy = vi.fn(async () => undefined);
     public readonly application = {
@@ -78,12 +78,14 @@ const discordMock = vi.hoisted(() => {
     }
 
     public on(event: string, handler: (...args: unknown[]) => void): this {
-      this.handlers.set(event, handler);
+      this.handlers.set(event, [...(this.handlers.get(event) ?? []), handler]);
       return this;
     }
 
     public emitForTest(event: string, ...args: unknown[]): void {
-      this.handlers.get(event)?.(...args);
+      for (const handler of this.handlers.get(event) ?? []) {
+        handler(...args);
+      }
     }
   }
 
@@ -137,7 +139,8 @@ describe("DiscordRuntimeService gateway runtime lifecycle", () => {
       },
       touchPairing: vi.fn(),
       onInboundMessage: vi.fn(async () => undefined),
-      onSlashCommand: vi.fn(async () => "ok"),
+      acceptSlashCommand: vi.fn(async () => ({ inboundEventId: "inbound-command-1" })),
+      awaitSlashCommandResult: vi.fn(async () => "ok"),
       listModelSuggestions: vi.fn(async () => []),
       publishDiagnostic,
     });
@@ -194,6 +197,69 @@ describe("DiscordRuntimeService gateway runtime lifecycle", () => {
     await service.close();
     expect(discordMock.FakeClient.instances[1]?.destroy).toHaveBeenCalledTimes(1);
     expect(service.getConnectionStatus("conn-3")).toBeUndefined();
+  });
+
+  it("reconnects a persistent client without installing duplicate provider event handlers", async () => {
+    const onInboundMessage = vi.fn(async () => undefined);
+    const service = new DiscordRuntimeService({
+      listConnections: () => [
+        createConnection("conn-reconnect", {
+          botToken: "token-a",
+          inboundDmPolicy: "open",
+        }),
+      ],
+      findApprovedPairing: () => undefined,
+      ensurePendingPairing: () => {
+        throw new Error("unexpected pairing request");
+      },
+      touchPairing: vi.fn(),
+      onInboundMessage,
+      acceptSlashCommand: vi.fn(async () => ({ inboundEventId: "inbound-command-1" })),
+      awaitSlashCommandResult: vi.fn(async () => "ok"),
+      listModelSuggestions: vi.fn(async () => []),
+      publishDiagnostic: vi.fn(),
+    });
+
+    await service.sync();
+    const client = discordMock.FakeClient.instances[0];
+    const originalMessageHandler = client?.handlers.get("messageCreate")?.[0];
+    expect(originalMessageHandler).toBeTypeOf("function");
+
+    await service.reconnectConnection("conn-reconnect");
+
+    expect(discordMock.FakeClient.instances).toHaveLength(1);
+    expect(client?.handlers.get("messageCreate")).toEqual([originalMessageHandler]);
+
+    const react = vi.fn(async () => undefined);
+    client?.emitForTest("messageCreate", {
+      id: "provider-message-1",
+      channelId: "dm-channel-1",
+      guildId: null,
+      content: "one provider event after reconnect",
+      inGuild: () => false,
+      channel: {
+        isDMBased: () => true,
+      },
+      author: {
+        id: "operator-1",
+        bot: false,
+        username: "operator",
+      },
+      react,
+    });
+
+    await vi.waitFor(() => {
+      expect(onInboundMessage).toHaveBeenCalledTimes(1);
+      expect(react).toHaveBeenCalledTimes(1);
+    });
+    expect(onInboundMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connectionId: "conn-reconnect",
+        sourceMessageId: "provider-message-1",
+        content: "one provider event after reconnect",
+      }),
+    );
+    await service.close();
   });
 });
 

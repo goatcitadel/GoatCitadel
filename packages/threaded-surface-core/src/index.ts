@@ -33,6 +33,18 @@ export {
 export type { MissionThreadedBtwSideChatProps } from "./chat/useBtwSideChatController";
 export { buildOrchestrationCommandSuggestions } from "./chat-command-suggestions";
 export type { ChatStreamingPreview, ChatVisualStreamMode } from "./chat/chat-streaming-preview";
+export {
+  verifyChatCapabilityProfileAgainstTurn,
+  type ChatCapabilityProfileInspection,
+  type ChatCapabilityProfileInspectionStatus,
+} from "./chat/useChatCapabilityProfileInspection";
+export {
+  deriveSessionControlBannerViewModel,
+  type MissionThreadedSessionControlBannerProps,
+  type SessionControlBannerActionPending,
+  type SessionControlBannerTone,
+  type SessionControlBannerViewModel,
+} from "./chat/session-control-banner";
 
 export type {
   MissionThreadedActiveSessionSurfaceProps,

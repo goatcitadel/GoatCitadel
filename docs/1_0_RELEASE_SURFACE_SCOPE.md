@@ -1,6 +1,6 @@
 # GoatCitadel 1.0 Release Surface Scope
 
-Last updated: 2026-06-01
+Last updated: 2026-07-14
 
 This table freezes the visible Mission Control Next `1.0` route surface after the final release-readiness promotion. The canonical route list is [apps/mission-control-next/src/app/route-model.ts](../apps/mission-control-next/src/app/route-model.ts); surface and visual verification consume [scripts/verification/lib/release-surface-manifest.mjs](../scripts/verification/lib/release-surface-manifest.mjs).
 
@@ -19,6 +19,7 @@ Status meanings:
 | `/library/skills` | `ship` | Review skill activation posture and lifecycle evidence. |
 | `/library/capabilities` | `ship` | Inspect capability availability, degraded posture, and callable/inspectable truth. |
 | `/library/memory` | `ship` | Route memory lifecycle through `MemoryLifecycleService` with operator provenance. |
+| `/library/journey` | `experimental` | Inspect the currently captured read-only skill-learning and candidate-governance timeline; incomplete producer coverage is labeled and no mutation or promotion is available. |
 | `/library/knowledge` | `ship` | Inspect knowledge sources with source visibility and provenance links. |
 | `/library/notes` | `ship` | Capture workspace-scoped notes, checklists, reminders, and follow-up state outside learned-memory promotion. |
 | `/library/communications` | `ship` | Inspect mail, agenda, contacts, and approval-gated drafts without storing raw credentials or sending without approval. |
@@ -32,6 +33,7 @@ Status meanings:
 | `/library/citadel-council` | `ship` | Inspect the agents seated in the Citadel by reference to the agents catalog. |
 | `/library/citadel-blueprint` | `ship` | Export the active Citadel as a secret-free Blueprint, or validate and import one. |
 | `/library/citadel-vault` | `ship` | Store, reveal, and delete Citadel secrets sealed at rest under a per-Citadel keychain key. |
+| `/ops/boards` | `ship` | Create, select, edit, archive, and restore trusted layouts composed from five compiled Ops summaries; each widget reloads its canonical source and the saved layout is never runtime authority. |
 | `/ops/activity` | `ship` | Inspect retained events and Ops attention signals. |
 | `/ops/sessions` | `ship` | Inspect session timelines, summaries, and operator evidence. |
 | `/ops/schedules` | `ship` | Review scheduler posture and primary governed-work actions. |
@@ -59,3 +61,11 @@ Status meanings:
 | `/settings/channels` | `ship` | Each visible channel has guided setup with live-auth/send diagnostics or blocked copy. |
 | `/settings/mcp` | `ship` | Local stdio, Approval Inbox, and governed remote http/sse no-auth, token-env, and OAuth2 paths are visible; OAuth records show connect/reconnect readiness and fail closed as `needs_auth` when token refs are missing or expired. |
 | `/settings/tools` | `ship` | Inspect tool catalog and scoped allow/deny grants. |
+
+## Held visibility surface — remote-worker Ops and one-Chat activity (HX-507)
+
+HX-507 adds an operator-visible remote-worker surface that is **architecture-ship but implementation-hold**: the projection routes, the Ops page, and the one-Chat activity are built and proven against seeded storage fixtures, but they are gated on live HX-501 admission/listener authority plus HX-502/HX-504 assignment/event composition, so no live worker data is populated yet. Because that live data is held, these routes are **not counted in the canonical `1.0` visible-route surface above** and carry no `ship`/`experimental` release status until the live gate opens.
+
+- `/ops/workers` (Observe group) renders the read-only remote-worker registry, detail, assignment, event, reconciliation, and control projections. It never projects `$0`, healthy, clean, completed, or operator-owned from absent evidence; usage/cost (HX-503), resource-cell/cleanup (HX-505), and artifact/effect (HX-506) sections stay explicitly `unavailable`.
+- The existing one-Chat `DurableBackgroundTaskRail` gains session/turn-bound remote-worker activity — no second conversation surface, scheduler, listener, state machine, event stream, cost ledger, or approval system. It is read-only; rotation, quarantine, revoke, recovery, cleanup, and reconciliation management remain in Ops.
+- Realtime reuses the existing `/api/v1/events` stream with content-free `remote_worker_changed` / `remote_worker_assignment_changed` invalidations; no second SSE channel and no migration are introduced.

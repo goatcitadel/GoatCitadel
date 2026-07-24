@@ -1,10 +1,64 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { runSurfaceRegressionLane } from "./surface-regression-lane.mjs";
+import { navigateSurfaceRoute, runSurfaceRegressionLane } from "./surface-regression-lane.mjs";
+
+test("first surface navigation retries once after a bounded cold-start readiness timeout", async () => {
+  let gotoCalls = 0;
+  let readinessCalls = 0;
+  const timeoutError = () => Object.assign(new Error("page.goto: Timeout 30000ms exceeded."), { name: "TimeoutError" });
+  const page = {
+    async goto() {
+      gotoCalls += 1;
+      if (gotoCalls === 1) {
+        throw timeoutError();
+      }
+    },
+    async waitForLoadState() {
+      readinessCalls += 1;
+      throw timeoutError();
+    },
+  };
+
+  const evidence = await navigateSurfaceRoute(page, "http://ui/chat", {
+    allowInitialColdStartRecovery: true,
+  });
+
+  assert.equal(gotoCalls, 2);
+  assert.equal(readinessCalls, 1);
+  assert.deepEqual(evidence, {
+    attempts: 2,
+    recoveryReason: "initial_navigation_timeout",
+    recoveryDisposition: "retried",
+  });
+});
+
+test("later surface navigation failures remain single-attempt failures", async () => {
+  let gotoCalls = 0;
+  const timeoutError = Object.assign(new Error("page.goto: Timeout 30000ms exceeded."), {
+    name: "TimeoutError",
+  });
+  const page = {
+    async goto() {
+      gotoCalls += 1;
+      throw timeoutError;
+    },
+  };
+
+  await assert.rejects(navigateSurfaceRoute(page, "http://ui/projects"), (error) => {
+    assert.deepEqual(error.navigationEvidence, {
+      attempts: 1,
+      recoveryReason: null,
+      recoveryDisposition: "failed_without_retry",
+    });
+    return true;
+  });
+  assert.equal(gotoCalls, 1);
+});
 
 test("surface regression returns failure evidence when a browser assertion throws", async () => {
   const results = [];
+  let stackOptions;
   const trace = {
     async retain() {
       return "playwright/surface-regression-chat-trace.zip";
@@ -76,7 +130,10 @@ test("surface regression returns failure evidence when a browser assertion throw
       async seedMissionControlNextFixture() {},
       async setBrowserCorrelation() {},
       startBrowserTrace: async () => trace,
-      startVerificationStack: async () => ({ gatewayUrl: "http://gateway", uiUrl: "http://ui" }),
+      startVerificationStack: async (_context, options) => {
+        stackOptions = options;
+        return { gatewayUrl: "http://gateway", uiUrl: "http://ui" };
+      },
       async stopVerificationStack() {},
       async waitForMissionControlShell() {},
       async waitForVerificationRouteReady() {},
@@ -84,8 +141,18 @@ test("surface regression returns failure evidence when a browser assertion throw
   );
 
   assert.equal(results.length, 1);
+  assert.equal(stackOptions.gatewayEnv.GOATCITADEL_AUTH_MODE, "token");
+  assert.equal(stackOptions.gatewayEnv.GOATCITADEL_AUTH_TOKEN, "verification-surface-regression-operator-token");
+  assert.equal(stackOptions.gatewayEnv.GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS, "true");
+  assert.notEqual(stackOptions.gatewayEnv.GOATCITADEL_AUTH_MODE, "none");
   assert.equal(results[0].status, "failed");
   assert.match(results[0].error, /console errors: route crashed/);
+  assert.deepEqual(results[0].metrics, {
+    route: "/chat",
+    navigationAttempts: 1,
+    navigationRecoveryReason: null,
+    navigationRecoveryDisposition: "not_needed",
+  });
   assert.deepEqual(results[0].artifacts.screenshots, ["screenshots/surface-regression-chat-failure.png"]);
   assert.deepEqual(results[0].artifacts.traces, ["playwright/surface-regression-chat-trace.zip"]);
   assert.deepEqual(results[0].artifacts.logs, ["playwright/surface-regression-chat-failure-console.json"]);

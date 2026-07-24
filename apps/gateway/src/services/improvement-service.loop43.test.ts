@@ -41,7 +41,7 @@ describe("ImprovementService loop43 weekly scheduler behavior", () => {
     await harness.service.runWeeklyImprovementSchedulerIfDue({ force: true });
     expect(harness.service.listDecisionReplayRuns(5)).toEqual([]);
 
-    harness.service.ensureWeeklyImprovementCronJob();
+    await harness.service.ensureWeeklyImprovementCronJob();
     const enabledJob = harness.storage.cronJobs.get(IMPROVEMENT_WEEKLY_JOB_ID);
     expect(enabledJob).toBeDefined();
     harness.storage.cronJobs.upsert(
@@ -71,7 +71,7 @@ describe("ImprovementService loop43 weekly scheduler behavior", () => {
   it("runs a forced weekly replay audit, persists the report, and advances the cron watermark", async () => {
     vi.useFakeTimers({ now: new Date("2026-05-17T09:30:00.000Z") });
     const harness = createHarness();
-    harness.service.ensureWeeklyImprovementCronJob();
+    await harness.service.ensureWeeklyImprovementCronJob();
     // First-run default is disabled (codex finding #27). Opt the operator in
     // before forcing the run, since the scheduler skips disabled jobs even
     // when force=true (matches the first loop43 test in this file).
@@ -141,6 +141,9 @@ function createHarness(): Harness {
   const published: Harness["published"] = [];
   const ctx: ImprovementServiceContext = {
     storage,
+    cronSpecOwner: {
+      reconcileSpec: async (cronSpec) => storage.cronJobs.reconcileSpec(cronSpec),
+    },
     gatewaySql: storage.gatewaySql,
     publishRealtime: (channel, topic, payload) => {
       published.push({ channel, topic, payload });

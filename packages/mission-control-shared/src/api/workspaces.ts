@@ -36,24 +36,27 @@ export async function createWorkspace(input: WorkspaceCreateInput): Promise<Work
   });
 }
 
-export async function updateWorkspace(workspaceId: string, input: WorkspaceUpdateInput): Promise<WorkspaceRecord> {
+export async function updateWorkspace(
+  workspaceId: string,
+  input: WorkspaceUpdateInput & { expectedRevision: number },
+): Promise<WorkspaceRecord> {
   return request<WorkspaceRecord>(`/api/v1/workspaces/${encodeURIComponent(workspaceId)}`, {
     method: "PATCH",
     body: JSON.stringify(input),
   });
 }
 
-export async function archiveWorkspace(workspaceId: string): Promise<WorkspaceRecord> {
+export async function archiveWorkspace(workspaceId: string, expectedRevision: number): Promise<WorkspaceRecord> {
   return request<WorkspaceRecord>(`/api/v1/workspaces/${encodeURIComponent(workspaceId)}/archive`, {
     method: "POST",
-    body: JSON.stringify({}),
+    body: JSON.stringify({ expectedRevision }),
   });
 }
 
-export async function restoreWorkspace(workspaceId: string): Promise<WorkspaceRecord> {
+export async function restoreWorkspace(workspaceId: string, expectedRevision: number): Promise<WorkspaceRecord> {
   return request<WorkspaceRecord>(`/api/v1/workspaces/${encodeURIComponent(workspaceId)}/restore`, {
     method: "POST",
-    body: JSON.stringify({}),
+    body: JSON.stringify({ expectedRevision }),
   });
 }
 

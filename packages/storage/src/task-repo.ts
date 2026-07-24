@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import type { DatabaseClient } from "./db.js";
 import type {
   AgenticTaskContext,
@@ -11,13 +12,14 @@ import type {
   TaskStatus,
   TaskUpdateInput,
 } from "@goatcitadel/contracts";
-import { NotFoundError, ValidationError } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import { loadAndSanitize, type QuarantineEntry } from "./load-and-sanitize.js";
 import { safeJsonParse } from "./safe-json.js";
 import { parseJsonObject } from "./state-validators.js";
 
 interface TaskRow {
   task_id: string;
+  revision: number | null | undefined;
   workspace_id: string;
   title: string;
   description: string | null;
@@ -53,6 +55,20 @@ export interface TaskStatusCount {
 export interface TaskRepositoryOptions {
   quarantine?: { record: (entry: QuarantineEntry) => unknown };
   logger?: { warn: (data: unknown, msg: string) => void };
+}
+
+interface TaskMutableState {
+  title: string;
+  description: string | null;
+  status: TaskStatus;
+  priority: TaskRecord["priority"];
+  assignedAgentId: string | null;
+  dueAt: string | null;
+  proactiveContext?: TaskProactiveContext;
+  agenticContext?: AgenticTaskContext;
+  distressSignals?: TaskDistressSignal[];
+  retryBudget?: TaskRetryBudget;
+  artifactVerification?: TaskArtifactVerification[];
 }
 
 export class TaskRepository {
@@ -104,19 +120,27 @@ export class TaskRepository {
         deleted_at = @deletedAt,
         deleted_by = @deletedBy,
         delete_reason = @deleteReason,
+        revision = revision + 1,
         updated_at = @updatedAt
       WHERE task_id = @taskId
+        AND revision = @expectedRevision
     `);
 
-    this.hardDeleteStmt = db.prepare("DELETE FROM tasks WHERE task_id = ?");
+    this.hardDeleteStmt = db.prepare(`
+      DELETE FROM tasks
+      WHERE task_id = @taskId
+        AND revision = @expectedRevision
+    `);
     this.softDeleteStmt = db.prepare(`
       UPDATE tasks
       SET
         deleted_at = @deletedAt,
         deleted_by = @deletedBy,
         delete_reason = @deleteReason,
+        revision = revision + 1,
         updated_at = @updatedAt
       WHERE task_id = @taskId
+        AND revision = @expectedRevision
     `);
     this.restoreStmt = db.prepare(`
       UPDATE tasks
@@ -124,8 +148,10 @@ export class TaskRepository {
         deleted_at = NULL,
         deleted_by = NULL,
         delete_reason = NULL,
+        revision = revision + 1,
         updated_at = @updatedAt
       WHERE task_id = @taskId
+        AND revision = @expectedRevision
     `);
   }
 
@@ -219,53 +245,72 @@ export class TaskRepository {
   public update(taskId: string, input: TaskUpdateInput, now = new Date().toISOString()): TaskRecord {
     return this.db.transaction("immediate", () => {
       const current = this.getForUpdate(taskId);
+      return this.updateWithRevision(taskId, input, current.revision, now);
+    });
+  }
+
+  public updateWithRevision(
+    taskId: string,
+    input: TaskUpdateInput,
+    expectedRevision: number,
+    now = new Date().toISOString(),
+  ): TaskRecord {
+    validateExpectedRevision(expectedRevision);
+    return this.db.transaction("immediate", () => {
+      const current = this.getForUpdate(taskId);
+      assertExpectedRevision(taskId, expectedRevision, current.revision);
       const nextAssignedAgentId =
         input.assignedAgentId === undefined ? (current.assignedAgentId ?? null) : input.assignedAgentId;
-
-      this.updateStmt.run({
-        taskId,
+      const nextProactiveContext =
+        input.proactiveContext === undefined ? current.proactiveContext : (input.proactiveContext ?? undefined);
+      const nextAgenticContext =
+        input.agenticContext === undefined ? current.agenticContext : (input.agenticContext ?? undefined);
+      const nextDistressSignals =
+        input.distressSignals === undefined ? current.distressSignals : (input.distressSignals ?? undefined);
+      const nextRetryBudget = input.retryBudget === undefined ? current.retryBudget : (input.retryBudget ?? undefined);
+      const nextArtifactVerification =
+        input.artifactVerification === undefined
+          ? current.artifactVerification
+          : (input.artifactVerification ?? undefined);
+      const next = {
         title: input.title ?? current.title,
         description: input.description ?? current.description ?? null,
         status: input.status ?? current.status,
         priority: input.priority ?? current.priority,
         assignedAgentId: nextAssignedAgentId,
         dueAt: input.dueAt ?? current.dueAt ?? null,
-        metadataJson:
-          input.proactiveContext === undefined && input.agenticContext === undefined
-            ? serializeTaskMetadata(current.proactiveContext, current.agenticContext)
-            : serializeTaskMetadata(
-                input.proactiveContext === undefined ? current.proactiveContext : (input.proactiveContext ?? undefined),
-                input.agenticContext === undefined ? current.agenticContext : (input.agenticContext ?? undefined),
-              ),
-        distressSignalsJson:
-          input.distressSignals === undefined
-            ? current.distressSignals
-              ? JSON.stringify(current.distressSignals)
-              : null
-            : input.distressSignals === null
-              ? null
-              : JSON.stringify(input.distressSignals),
-        retryBudgetJson:
-          input.retryBudget === undefined
-            ? current.retryBudget
-              ? JSON.stringify(current.retryBudget)
-              : null
-            : input.retryBudget === null
-              ? null
-              : JSON.stringify(input.retryBudget),
-        artifactVerificationJson:
-          input.artifactVerification === undefined
-            ? current.artifactVerification
-              ? JSON.stringify(current.artifactVerification)
-              : null
-            : input.artifactVerification === null
-              ? null
-              : JSON.stringify(input.artifactVerification),
+        proactiveContext: nextProactiveContext,
+        agenticContext: nextAgenticContext,
+        distressSignals: nextDistressSignals,
+        retryBudget: nextRetryBudget,
+        artifactVerification: nextArtifactVerification,
+      };
+
+      if (taskMutableStateMatches(current, next)) {
+        return current;
+      }
+
+      const result = this.updateStmt.run({
+        taskId,
+        expectedRevision,
+        title: next.title,
+        description: next.description,
+        status: next.status,
+        priority: next.priority,
+        assignedAgentId: nextAssignedAgentId,
+        dueAt: next.dueAt,
+        metadataJson: serializeTaskMetadata(nextProactiveContext, nextAgenticContext),
+        distressSignalsJson: nextDistressSignals ? JSON.stringify(nextDistressSignals) : null,
+        retryBudgetJson: nextRetryBudget ? JSON.stringify(nextRetryBudget) : null,
+        artifactVerificationJson: nextArtifactVerification ? JSON.stringify(nextArtifactVerification) : null,
         deletedAt: current.deletedAt ?? null,
         deletedBy: current.deletedBy ?? null,
         deleteReason: current.deleteReason ?? null,
         updatedAt: now,
       });
+      if (result.changes === 0) {
+        throwTaskWriteConflict(taskId, expectedRevision, this.find(taskId)?.revision);
+      }
       return this.get(taskId);
     });
   }
@@ -276,39 +321,85 @@ export class TaskRepository {
     deleteReason?: string,
     now = new Date().toISOString(),
   ): boolean {
-    const before = this.find(taskId);
-    if (!before || before.deletedAt) {
+    const current = this.find(taskId);
+    if (!current || current.deletedAt) {
       return false;
     }
-    this.softDeleteStmt.run({
-      taskId,
-      deletedAt: now,
-      deletedBy: deletedBy ?? null,
-      deleteReason: deleteReason ?? null,
-      updatedAt: now,
+    return this.softDeleteWithRevision(taskId, current.revision, deletedBy, deleteReason, now);
+  }
+
+  public softDeleteWithRevision(
+    taskId: string,
+    expectedRevision: number,
+    deletedBy?: string,
+    deleteReason?: string,
+    now = new Date().toISOString(),
+  ): boolean {
+    validateExpectedRevision(expectedRevision);
+    return this.db.transaction("immediate", () => {
+      const current = this.getForUpdate(taskId);
+      assertExpectedRevision(taskId, expectedRevision, current.revision);
+      if (current.deletedAt) {
+        return false;
+      }
+      const result = this.softDeleteStmt.run({
+        taskId,
+        expectedRevision,
+        deletedAt: now,
+        deletedBy: deletedBy ?? null,
+        deleteReason: deleteReason ?? null,
+        updatedAt: now,
+      });
+      if (result.changes === 0) {
+        throwTaskWriteConflict(taskId, expectedRevision, this.find(taskId)?.revision);
+      }
+      return true;
     });
-    return true;
   }
 
   public restore(taskId: string, now = new Date().toISOString()): boolean {
-    const before = this.find(taskId);
-    if (!before || !before.deletedAt) {
+    const current = this.find(taskId);
+    if (!current || !current.deletedAt) {
       return false;
     }
-    this.restoreStmt.run({
-      taskId,
-      updatedAt: now,
+    return this.restoreWithRevision(taskId, current.revision, now);
+  }
+
+  public restoreWithRevision(taskId: string, expectedRevision: number, now = new Date().toISOString()): boolean {
+    validateExpectedRevision(expectedRevision);
+    return this.db.transaction("immediate", () => {
+      const current = this.getForUpdate(taskId);
+      assertExpectedRevision(taskId, expectedRevision, current.revision);
+      if (!current.deletedAt) {
+        return false;
+      }
+      const result = this.restoreStmt.run({ taskId, expectedRevision, updatedAt: now });
+      if (result.changes === 0) {
+        throwTaskWriteConflict(taskId, expectedRevision, this.find(taskId)?.revision);
+      }
+      return true;
     });
-    return true;
   }
 
   public hardDelete(taskId: string): boolean {
-    const before = this.find(taskId);
-    if (!before) {
+    const current = this.find(taskId);
+    if (!current) {
       return false;
     }
-    this.hardDeleteStmt.run(taskId);
-    return true;
+    return this.hardDeleteWithRevision(taskId, current.revision);
+  }
+
+  public hardDeleteWithRevision(taskId: string, expectedRevision: number): boolean {
+    validateExpectedRevision(expectedRevision);
+    return this.db.transaction("immediate", () => {
+      const current = this.getForUpdate(taskId);
+      assertExpectedRevision(taskId, expectedRevision, current.revision);
+      const result = this.hardDeleteStmt.run({ taskId, expectedRevision });
+      if (result.changes === 0) {
+        throwTaskWriteConflict(taskId, expectedRevision, this.find(taskId)?.revision);
+      }
+      return true;
+    });
   }
 
   public statusCounts(): TaskStatusCount[] {
@@ -371,6 +462,7 @@ export class TaskRepository {
     };
     return {
       taskId: row.task_id,
+      revision: normalizeRevision(row.revision),
       workspaceId: row.workspace_id,
       title: row.title,
       description: row.description ?? undefined,
@@ -450,6 +542,51 @@ function serializeTaskMetadata(
   });
 }
 
+function taskMutableStateMatches(current: TaskRecord, next: TaskMutableState): boolean {
+  return (
+    next.title === current.title &&
+    next.description === (current.description ?? null) &&
+    next.status === current.status &&
+    next.priority === current.priority &&
+    next.assignedAgentId === (current.assignedAgentId ?? null) &&
+    next.dueAt === (current.dueAt ?? null) &&
+    isDeepStrictEqual(next.proactiveContext, current.proactiveContext) &&
+    isDeepStrictEqual(next.agenticContext, current.agenticContext) &&
+    isDeepStrictEqual(next.distressSignals, current.distressSignals) &&
+    isDeepStrictEqual(next.retryBudget, current.retryBudget) &&
+    isDeepStrictEqual(next.artifactVerification, current.artifactVerification)
+  );
+}
+
+function validateExpectedRevision(expectedRevision: number): void {
+  if (!Number.isInteger(expectedRevision) || expectedRevision < 1) {
+    throw new ValidationError({
+      code: "FIELD_INVALID",
+      field: "expectedRevision",
+      message: "expectedRevision must be a positive integer",
+    });
+  }
+}
+
+function assertExpectedRevision(taskId: string, expectedRevision: number, actualRevision: number): void {
+  if (expectedRevision !== actualRevision) {
+    throwTaskWriteConflict(taskId, expectedRevision, actualRevision);
+  }
+}
+
+function throwTaskWriteConflict(taskId: string, expectedRevision: number, actualRevision?: number): never {
+  const currentRevision = actualRevision ?? expectedRevision;
+  throw new ConflictError({
+    code: "WRITE_CONFLICT",
+    message: `task ${taskId} changed since revision ${expectedRevision}`,
+    details: { resourceKind: "task", resourceId: taskId, expectedRevision, currentRevision },
+  });
+}
+
+function normalizeRevision(value: number | null | undefined): number {
+  return Number.isInteger(value) && Number(value) > 0 ? Number(value) : 1;
+}
+
 function toTaskRow(value: unknown): TaskRow | undefined {
   return isTaskRow(value) ? value : undefined;
 }
@@ -479,6 +616,7 @@ function isTaskRow(value: unknown): value is TaskRow {
   return (
     isRecord(value) &&
     typeof value.task_id === "string" &&
+    (typeof value.revision === "number" || value.revision === null || value.revision === undefined) &&
     typeof value.workspace_id === "string" &&
     typeof value.title === "string" &&
     (typeof value.description === "string" || value.description === null) &&

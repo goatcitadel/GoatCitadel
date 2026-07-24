@@ -1,3 +1,4 @@
+import { ModelUsageSettlementError } from "@goatcitadel/gateway-core";
 import { describe, expect, it } from "vitest";
 import { computeChildDepth, enforceMaxDepth, runWithChildTimeout } from "./subagent-budget-enforcer.js";
 
@@ -45,6 +46,32 @@ describe("runWithChildTimeout", () => {
         },
       }),
     ).rejects.toThrowError(/timeout_exceeded/);
+  });
+  it("surfaces an immediate authoritative accounting fault after abort", async () => {
+    const accountingFault = new ModelUsageSettlementError("usage-child", "cancelled", new Error("database offline"));
+    const result = runWithChildTimeout({
+      timeoutSeconds: 0.01,
+      run: (signal) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () => queueMicrotask(() => reject(accountingFault)), { once: true });
+        }),
+    });
+
+    await expect(result).rejects.toBe(accountingFault);
+  });
+  it("stays bounded without inventing provider dispatch truth for an unacknowledged generic child", async () => {
+    const result = runWithChildTimeout({
+      timeoutSeconds: 0.01,
+      run: () => new Promise(() => undefined),
+    }).catch((error) => error);
+
+    const failure = await Promise.race([
+      result,
+      new Promise((resolve) => setTimeout(() => resolve("child-timeout-hung"), 250)),
+    ]);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).name).toBe("SubagentBudgetError");
+    expect((failure as Error).message).toContain("timeout_exceeded");
   });
   it("reports late child completion after timeout without changing the timeout result", async () => {
     const lateEvents: unknown[] = [];

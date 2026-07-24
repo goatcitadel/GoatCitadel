@@ -10,6 +10,7 @@ import type {
   ToolInvokeRequest,
   ToolPolicyConfig,
 } from "@goatcitadel/contracts";
+import { HEARTBEAT_READ_ONLY_ALLOW, HEARTBEAT_RESTRICTED_PROFILE } from "@goatcitadel/contracts";
 import { Storage } from "@goatcitadel/storage";
 import { ToolPolicyEngine } from "./engine.js";
 import { ToolRegistry } from "./tool-registry.js";
@@ -125,6 +126,20 @@ function createCustomAllowedRegistry(): ToolRegistry {
   ]);
 }
 
+function createHeartbeatBoundaryRegistry(): ToolRegistry {
+  return new ToolRegistry(
+    [...HEARTBEAT_READ_ONLY_ALLOW, "browser.search", "synthetic.safe", "ordinary.safe"].map((name) => ({
+      name,
+      category: "ops" as const,
+      riskLevel: "safe" as const,
+      requiresApproval: false,
+      description: `Registered policy-boundary test tool ${name}.`,
+      pack: "core" as const,
+      readOnly: true,
+    })),
+  );
+}
+
 const policyConfig: ToolPolicyConfig = {
   profiles: {
     danger: ["*"],
@@ -148,6 +163,211 @@ const host = (...parts: string[]): string => parts.join(".");
 const EXAMPLE_HOST = host("example", "com");
 const API_EXAMPLE_HOST = host("api", "example", "com");
 const BLOCKED_EXAMPLE_HOST = host("blocked", "example");
+
+describe("ToolPolicyEngine permission profile upper bound", () => {
+  it("executes the exact heartbeat read surface without materializing interactive approvals", async () => {
+    const storage = createStorageStub();
+    const engine = new ToolPolicyEngine(policyConfig, storage, createHeartbeatBoundaryRegistry());
+
+    for (const toolName of HEARTBEAT_READ_ONLY_ALLOW) {
+      const result = await engine.invoke({
+        toolName,
+        args: {},
+        agentId: "heartbeat",
+        sessionId: "session-heartbeat",
+        dryRun: true,
+        policyContext: {
+          permissionProfileId: HEARTBEAT_RESTRICTED_PROFILE.profileId,
+          permissionProfile: HEARTBEAT_RESTRICTED_PROFILE,
+        },
+      });
+      expect(result.outcome).toBe("executed");
+    }
+
+    expect(storage.approvals.create).not.toHaveBeenCalled();
+    expect(storage.approvals.createWithTtlDuration).not.toHaveBeenCalled();
+    expect(storage.pendingApprovalActions.upsertPending).not.toHaveBeenCalled();
+    expect(storage.approvalEvents.append).not.toHaveBeenCalled();
+  });
+
+  it("blocks an exact heartbeat tool when a new Ward would otherwise create an interactive approval", async () => {
+    const storage = createStorageStub();
+    Object.assign(storage, {
+      citadels: {
+        listWards: vi.fn((citadelId: string) =>
+          citadelId === "citadel-heartbeat"
+            ? [
+                {
+                  wardId: "ward-heartbeat-review",
+                  citadelId,
+                  name: "Review heartbeat reads",
+                  actionPattern: "time.now",
+                  effect: "require_approval",
+                  createdAt: "2026-07-15T00:00:00.000Z",
+                },
+              ]
+            : [],
+        ),
+      },
+    });
+    const engine = new ToolPolicyEngine(policyConfig, storage, createHeartbeatBoundaryRegistry());
+
+    const result = await engine.invoke({
+      toolName: "time.now",
+      args: {},
+      agentId: "heartbeat",
+      sessionId: "session-heartbeat",
+      citadelId: "citadel-heartbeat",
+      dryRun: true,
+      policyContext: {
+        permissionProfileId: HEARTBEAT_RESTRICTED_PROFILE.profileId,
+        permissionProfile: HEARTBEAT_RESTRICTED_PROFILE,
+      },
+    });
+
+    expect(result).toMatchObject({
+      outcome: "blocked",
+      audit: {
+        reasonCodes: expect.arrayContaining([
+          "citadel_ward_requires_approval",
+          "heartbeat_interactive_approval_forbidden",
+        ]),
+      },
+    });
+    expect(storage.toolAccessDecisions.record).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        allowed: false,
+        requiresApproval: false,
+        reasonCodes: expect.arrayContaining(["heartbeat_interactive_approval_forbidden"]),
+      }),
+    );
+    expect(storage.approvals.create).not.toHaveBeenCalled();
+    expect(storage.approvals.createWithTtlDuration).not.toHaveBeenCalled();
+    expect(storage.pendingApprovalActions.upsertPending).not.toHaveBeenCalled();
+    expect(storage.approvalEvents.append).not.toHaveBeenCalled();
+  });
+
+  it("keeps the heartbeat profile authoritative over broad config, agent allows, grants, and local override", () => {
+    const storage = createStorageStub();
+    const allowAllGrant = {
+      grantId: "grant-all",
+      toolPattern: "*",
+      decision: "allow",
+      scope: "session",
+      scopeRef: "session-heartbeat",
+      grantType: "persistent",
+      createdBy: "operator",
+      createdAt: "2026-07-15T00:00:00.000Z",
+    } as const;
+    vi.mocked(storage.toolGrants.list).mockReturnValue([allowAllGrant]);
+    const config: ToolPolicyConfig = {
+      ...policyConfig,
+      tools: { ...policyConfig.tools, allow: ["*"] },
+      agents: { heartbeat: { tools: { allow: ["*"] } } },
+    };
+    const engine = new ToolPolicyEngine(config, storage, createHeartbeatBoundaryRegistry());
+    const localOperatorOverride = {
+      overrideId: "override-heartbeat",
+      label: "Cannot widen a profile",
+      status: "active" as const,
+      scope: "session" as const,
+      scopeRef: "session-heartbeat",
+      operatorId: "operator",
+      reason: "Verify the active profile remains the upper bound.",
+      createdBy: "operator",
+      createdAt: "2026-07-15T00:00:00.000Z",
+      expiresAt: "2999-07-15T00:00:00.000Z",
+    };
+    const evaluate = (toolName: string) =>
+      engine.evaluateAccess({
+        toolName,
+        args: {},
+        agentId: "heartbeat",
+        sessionId: "session-heartbeat",
+        policyContext: {
+          permissionProfileId: HEARTBEAT_RESTRICTED_PROFILE.profileId,
+          permissionProfile: HEARTBEAT_RESTRICTED_PROFILE,
+          localOperatorOverrideId: localOperatorOverride.overrideId,
+          localOperatorOverride,
+        },
+      });
+
+    for (const toolName of HEARTBEAT_READ_ONLY_ALLOW) {
+      expect(evaluate(toolName)).toMatchObject({ allowed: true, requiresApproval: false });
+    }
+    for (const toolName of ["browser.search", "synthetic.safe"]) {
+      expect(evaluate(toolName)).toMatchObject({
+        allowed: false,
+        requiresApproval: false,
+        reasonCodes: ["permission_profile_upper_bound"],
+      });
+    }
+  });
+
+  it("preserves scoped grants inside an ordinary profile without allowing them to escape it", () => {
+    const storage = createStorageStub();
+    const allowAllGrant = {
+      grantId: "grant-ordinary",
+      toolPattern: "*",
+      decision: "allow",
+      scope: "session",
+      scopeRef: "session-ordinary",
+      grantType: "persistent",
+      createdBy: "operator",
+      createdAt: "2026-07-15T00:00:00.000Z",
+    } as const;
+    vi.mocked(storage.toolGrants.list).mockReturnValue([allowAllGrant]);
+    const profile = createPermissionProfile({ approvalMode: "approve_all", toolPatterns: ["ordinary.safe"] });
+    const engine = new ToolPolicyEngine(
+      { ...policyConfig, tools: { ...policyConfig.tools, allow: ["*"] } },
+      storage,
+      createHeartbeatBoundaryRegistry(),
+    );
+    const evaluate = (toolName: string) =>
+      engine.evaluateAccess({
+        toolName,
+        args: {},
+        agentId: "ordinary",
+        sessionId: "session-ordinary",
+        policyContext: { permissionProfileId: profile.profileId, permissionProfile: profile },
+      });
+
+    expect(evaluate("ordinary.safe")).toMatchObject({
+      allowed: true,
+      requiresApproval: false,
+      matchedGrantId: "grant-ordinary",
+    });
+    expect(evaluate("synthetic.safe")).toMatchObject({
+      allowed: false,
+      reasonCodes: ["permission_profile_upper_bound"],
+    });
+  });
+
+  it("preserves additive global and scoped-grant semantics when no permission profile is active", () => {
+    const storage = createStorageStub();
+    const allowGrant = {
+      grantId: "grant-no-profile",
+      toolPattern: "synthetic.safe",
+      decision: "allow",
+      scope: "session",
+      scopeRef: "session-no-profile",
+      grantType: "persistent",
+      createdBy: "operator",
+      createdAt: "2026-07-15T00:00:00.000Z",
+    } as const;
+    vi.mocked(storage.toolGrants.list).mockReturnValue([allowGrant]);
+    const engine = new ToolPolicyEngine(policyConfig, storage, createHeartbeatBoundaryRegistry());
+
+    expect(
+      engine.evaluateAccess({
+        toolName: "synthetic.safe",
+        args: {},
+        agentId: "ordinary",
+        sessionId: "session-no-profile",
+      }),
+    ).toMatchObject({ allowed: true, requiresApproval: false, matchedGrantId: "grant-no-profile" });
+  });
+});
 
 describe("ToolPolicyEngine grants", () => {
   it("passes grant list, create, and revoke operations through to storage", () => {
@@ -2973,6 +3193,317 @@ describe("ToolPolicyEngine outside-root read access", () => {
 
     expect(result.outcome).toBe("approval_required");
     expect(result.policyReason).not.toContain("browser.search requires at least one native search host");
+  });
+
+  it("fails closed for official search when full web access is disabled and the workspace allowlist is empty", async () => {
+    const engine = new ToolPolicyEngine(
+      { ...policyConfig, sandbox: { ...policyConfig.sandbox, networkAllowlist: [] } },
+      createStorageStub(),
+    );
+    const result = await engine.invoke({
+      toolName: "browser.search",
+      args: { query: "coverage", backend: "official", providers: ["brave"] },
+      agentId: "agent",
+      sessionId: "session",
+      policyContext: { fullWebAccess: false },
+      dryRun: true,
+    });
+    expect(result.outcome).toBe("blocked");
+    expect(result.audit?.reasonCodes).toContain("structural_safety_block");
+    expect(result.policyReason).toContain("api.search.brave.com");
+  });
+
+  it("ignores caller-supplied grant hosts and requires stored official-provider consent", async () => {
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        sandbox: { ...policyConfig.sandbox, networkAllowlist: ["api.search.brave.com"] },
+      },
+      createStorageStub(),
+    );
+    const result = await engine.invoke({
+      toolName: "browser.search",
+      args: { query: "coverage", backend: "official", providers: ["brave"] },
+      agentId: "agent",
+      sessionId: "session",
+      policyContext: { fullWebAccess: false, matchedGrantAllowedHosts: [] },
+      dryRun: true,
+    });
+    expect(result.outcome).toBe("approval_required");
+    expect(result.audit?.reasonCodes).toContain("official_search_provider_consent_required");
+  });
+
+  it("does not treat caller-supplied matching hosts as official-provider consent", () => {
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        sandbox: { ...policyConfig.sandbox, networkAllowlist: ["api.search.brave.com"] },
+      },
+      createStorageStub(),
+    );
+    const result = engine.evaluateAccess({
+      toolName: "browser.search",
+      args: { query: "coverage", backend: "official", providers: ["brave"] },
+      agentId: "agent",
+      sessionId: "session",
+      policyContext: { fullWebAccess: false, matchedGrantAllowedHosts: ["api.search.brave.com"] },
+    });
+    expect(result.allowed).toBe(true);
+    expect(result.requiresApproval).toBe(true);
+    expect(result.reasonCodes).toContain("official_search_provider_consent_required");
+  });
+
+  it("accepts only an active exact browser.search host-constrained grant as provider consent", () => {
+    const storage = createStorageStub();
+    vi.mocked(storage.toolGrants.list).mockReturnValue([
+      {
+        grantId: "grant-brave-consent",
+        toolPattern: "browser.search",
+        decision: "allow",
+        scope: "session",
+        scopeRef: "session",
+        grantType: "persistent",
+        constraints: { allowedHosts: ["api.search.brave.com"] },
+        createdBy: "operator",
+        createdAt: "2026-07-14T00:00:00.000Z",
+      },
+    ] as never);
+    const engine = new ToolPolicyEngine(
+      { ...policyConfig, sandbox: { ...policyConfig.sandbox, networkAllowlist: ["api.search.brave.com"] } },
+      storage,
+    );
+    const result = engine.evaluateAccess({
+      toolName: "browser.search",
+      args: { query: "coverage", backend: "official", providers: ["brave"] },
+      agentId: "agent",
+      sessionId: "session",
+      policyContext: { fullWebAccess: false },
+    });
+    expect(result.allowed).toBe(true);
+    expect(result.requiresApproval).toBe(false);
+    expect(result.matchedGrantId).toBe("grant-brave-consent");
+  });
+
+  it.each([
+    ["uppercase backend", { backend: "OFFICIAL" }, ["api.search.brave.com"]],
+    ["singular engine", { engine: "parallel" }, ["api.parallel.ai"]],
+    ["providers-only", { providers: ["brave"] }, ["api.search.brave.com"]],
+  ] as const)("uses canonical official-search selection for %s consent", (_label, selection, allowedHosts) => {
+    const storage = createStorageStub();
+    vi.mocked(storage.toolGrants.list).mockReturnValue([
+      {
+        grantId: "grant-canonical-consent",
+        toolPattern: "browser.search",
+        decision: "allow",
+        scope: "session",
+        scopeRef: "session",
+        grantType: "persistent",
+        constraints: { allowedHosts: [...allowedHosts] },
+        createdBy: "operator",
+        createdAt: "2026-07-14T00:00:00.000Z",
+      },
+    ] as never);
+    const result = new ToolPolicyEngine(
+      { ...policyConfig, sandbox: { ...policyConfig.sandbox, networkAllowlist: [...allowedHosts] } },
+      storage,
+    ).evaluateAccess({
+      toolName: "browser.search",
+      args: { query: "coverage", ...selection },
+      agentId: "agent",
+      sessionId: "session",
+      policyContext: { fullWebAccess: false },
+    });
+    expect(result.allowed).toBe(true);
+    expect(result.requiresApproval).toBe(false);
+    expect(result.matchedGrantId).toBe("grant-canonical-consent");
+  });
+
+  it.each([
+    ["unconstrained", undefined],
+    ["empty", { allowedHosts: [] }],
+    ["wrong", { allowedHosts: ["api.parallel.ai"] }],
+    ["superset", { allowedHosts: ["api.search.brave.com", "example.com"] }],
+  ] as const)("does not accept an %s browser.search allow grant as Brave consent", (_label, constraints) => {
+    const storage = createStorageStub();
+    vi.mocked(storage.toolGrants.list).mockReturnValue([
+      {
+        grantId: "grant-not-consent",
+        toolPattern: "browser.search",
+        decision: "allow",
+        scope: "session",
+        scopeRef: "session",
+        grantType: "persistent",
+        constraints,
+        createdBy: "operator",
+        createdAt: "2026-07-14T00:00:00.000Z",
+      },
+    ] as never);
+    const result = new ToolPolicyEngine(
+      { ...policyConfig, sandbox: { ...policyConfig.sandbox, networkAllowlist: ["api.search.brave.com"] } },
+      storage,
+    ).evaluateAccess({
+      toolName: "browser.search",
+      args: { query: "coverage", backend: "official", providers: ["brave"] },
+      agentId: "agent",
+      sessionId: "session",
+      policyContext: { fullWebAccess: false },
+    });
+    expect(result.allowed).toBe(true);
+    expect(result.requiresApproval).toBe(true);
+    expect(result.reasonCodes).toContain("official_search_provider_consent_required");
+  });
+
+  it("does not let an official-search host grant act as generic native browser.search access", () => {
+    const storage = createStorageStub();
+    vi.mocked(storage.toolGrants.list).mockReturnValue([
+      {
+        grantId: "grant-brave-only",
+        toolPattern: "browser.search",
+        decision: "allow",
+        scope: "session",
+        scopeRef: "session",
+        grantType: "persistent",
+        constraints: { allowedHosts: ["api.search.brave.com"] },
+        createdBy: "operator",
+        createdAt: "2026-07-14T00:00:00.000Z",
+      },
+    ] as never);
+    const request = {
+      toolName: "browser.search",
+      args: { query: "coverage", engine: "google" },
+      agentId: "agent",
+      sessionId: "session",
+    } as const;
+    const outsideProfile = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        profiles: { minimal: [] },
+        tools: { ...policyConfig.tools, profile: "minimal" },
+      },
+      storage,
+    ).evaluateAccess(request);
+    expect(outsideProfile.allowed).toBe(false);
+    expect(outsideProfile.reasonCodes).toContain("policy_disallow");
+    expect(outsideProfile.matchedGrantId).toBeUndefined();
+
+    const inProfile = new ToolPolicyEngine(policyConfig, storage).evaluateAccess(request);
+    expect(inProfile.allowed).toBe(true);
+    expect(inProfile.matchedGrantId).toBeUndefined();
+  });
+
+  it("requires one exact grant to cover both providers in research mode", () => {
+    const storage = createStorageStub();
+    vi.mocked(storage.toolGrants.list).mockReturnValue([
+      {
+        grantId: "grant-partial",
+        toolPattern: "browser.search",
+        decision: "allow",
+        scope: "session",
+        scopeRef: "session",
+        grantType: "persistent",
+        constraints: { allowedHosts: ["api.search.brave.com"] },
+        createdBy: "operator",
+        createdAt: "2026-07-14T00:00:00.000Z",
+      },
+    ] as never);
+    const config = {
+      ...policyConfig,
+      sandbox: { ...policyConfig.sandbox, networkAllowlist: ["api.search.brave.com", "api.parallel.ai"] },
+    };
+    const input = {
+      toolName: "browser.search",
+      args: { query: "coverage", backend: "official", mode: "research" },
+      agentId: "agent",
+      sessionId: "session",
+      policyContext: { fullWebAccess: false },
+    } as const;
+    expect(new ToolPolicyEngine(config, storage).evaluateAccess(input).requiresApproval).toBe(true);
+
+    vi.mocked(storage.toolGrants.list).mockReturnValue([
+      {
+        grantId: "grant-combined",
+        toolPattern: "browser.search",
+        decision: "allow",
+        scope: "session",
+        scopeRef: "session",
+        grantType: "persistent",
+        constraints: { allowedHosts: ["api.search.brave.com", "api.parallel.ai"] },
+        createdBy: "operator",
+        createdAt: "2026-07-14T00:00:00.000Z",
+      },
+    ] as never);
+    expect(new ToolPolicyEngine(config, storage).evaluateAccess(input).requiresApproval).toBe(false);
+  });
+
+  it.each(["bypass", "code_mode"] as const)(
+    "applies official-provider consent after %s approval clearing",
+    (posture) => {
+      const config = {
+        ...policyConfig,
+        tools: {
+          ...policyConfig.tools,
+          approvalMode: posture === "bypass" ? ("bypass" as const) : policyConfig.tools.approvalMode,
+        },
+        sandbox: { ...policyConfig.sandbox, networkAllowlist: ["api.search.brave.com"] },
+      };
+      const result = new ToolPolicyEngine(config, createStorageStub()).evaluateAccess({
+        toolName: "browser.search",
+        args: { query: "coverage", backend: "official", providers: ["brave"] },
+        agentId: "agent",
+        sessionId: "session",
+        policyContext: {
+          fullWebAccess: false,
+          ...(posture === "code_mode" ? { approvedCodeModeRunId: "code-mode-1" } : {}),
+        },
+      });
+      expect(result.allowed).toBe(true);
+      expect(result.requiresApproval).toBe(true);
+      expect(result.reasonCodes).toContain("official_search_provider_consent_required");
+    },
+  );
+
+  it("keeps deny-wins and treats revoked official-search grants as no consent", () => {
+    const storage = createStorageStub();
+    const baseGrant = {
+      toolPattern: "browser.search",
+      scope: "session" as const,
+      scopeRef: "session",
+      grantType: "persistent" as const,
+      constraints: { allowedHosts: ["api.search.brave.com"] },
+      createdBy: "operator",
+      createdAt: "2026-07-14T00:00:00.000Z",
+    };
+    const config = {
+      ...policyConfig,
+      sandbox: { ...policyConfig.sandbox, networkAllowlist: ["api.search.brave.com"] },
+    };
+    const input = {
+      toolName: "browser.search",
+      args: { query: "coverage", backend: "official", providers: ["brave"] },
+      agentId: "agent",
+      sessionId: "session",
+      policyContext: { fullWebAccess: false },
+    } as const;
+
+    vi.mocked(storage.toolGrants.list).mockReturnValue([
+      { grantId: "grant-deny", ...baseGrant, decision: "deny" },
+    ] as never);
+    const denied = new ToolPolicyEngine(config, storage).evaluateAccess(input);
+    expect(denied.allowed).toBe(false);
+    expect(denied.reasonCodes).toContain("grant_deny");
+
+    vi.mocked(storage.toolGrants.list).mockReturnValue([
+      {
+        grantId: "grant-revoked",
+        ...baseGrant,
+        decision: "allow",
+        revokedAt: "2026-07-14T00:01:00.000Z",
+      },
+    ] as never);
+    const revoked = new ToolPolicyEngine(config, storage).evaluateAccess(input);
+    expect(revoked.allowed).toBe(true);
+    expect(revoked.requiresApproval).toBe(true);
+    expect(revoked.reasonCodes).toContain("official_search_provider_consent_required");
   });
 
   it("does not audit dry-run public-host browser reads because public web access is the default", async () => {

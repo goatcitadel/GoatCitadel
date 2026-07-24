@@ -867,6 +867,7 @@ describe("NativeRoutePages Cowork task board", () => {
                     title: "Review release notes",
                     status: "planning",
                     priority: "normal",
+                    revision: 7,
                     deletedAt: "2026-05-02T18:30:00.000Z",
                     createdAt: "2026-05-02T18:00:00.000Z",
                     updatedAt: "2026-05-02T18:00:00.000Z",
@@ -884,7 +885,7 @@ describe("NativeRoutePages Cowork task board", () => {
       findButton(renderer!.root, "Restore").props.onClick();
     });
 
-    expect(mocks.restoreTask).toHaveBeenCalledWith("task-1", "default", "company");
+    expect(mocks.restoreTask).toHaveBeenCalledWith("task-1", 7, "default", "company");
   });
 });
 

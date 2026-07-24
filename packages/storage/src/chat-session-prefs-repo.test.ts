@@ -5,6 +5,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import { createDatabase } from "./sqlite.js";
+import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
 import { ChatSessionPrefsRepository } from "./chat-session-prefs-repo.js";
 
 const createdFiles: string[] = [];
@@ -21,16 +22,18 @@ afterEach(() => {
   }
 });
 
-function createRepo(): ChatSessionPrefsRepository {
+function createRepo(...sessionIds: string[]): ChatSessionPrefsRepository {
   const dbPath = path.join(os.tmpdir(), `goatcitadel-chat-prefs-${randomUUID()}.db`);
   createdFiles.push(dbPath);
   const db = createDatabase({ dbPath });
+  const meta = new ChatSessionMetaRepository(db);
+  for (const sessionId of sessionIds) meta.ensure(sessionId, undefined, "default");
   return new ChatSessionPrefsRepository(db);
 }
 
 describe("ChatSessionPrefsRepository", () => {
   it("returns defaults when ensuring a missing row", () => {
-    const repo = createRepo();
+    const repo = createRepo("sess-1");
     const prefs = repo.ensure("sess-1");
 
     assert.equal(prefs.mode, "chat");
@@ -54,7 +57,7 @@ describe("ChatSessionPrefsRepository", () => {
   });
 
   it("round-trips patched base chat prefs fields", () => {
-    const repo = createRepo();
+    const repo = createRepo("sess-1");
     const patched = repo.patch(
       "sess-1",
       {
@@ -117,7 +120,7 @@ describe("ChatSessionPrefsRepository", () => {
   });
 
   it("lists prefs for many sessions in one lookup", () => {
-    const repo = createRepo();
+    const repo = createRepo("sess-1", "sess-2");
     repo.patch("sess-1", { mode: "cowork" }, "2026-03-07T00:00:00.000Z");
     repo.patch("sess-2", { mode: "code" }, "2026-03-07T00:00:01.000Z");
 
@@ -132,7 +135,7 @@ describe("ChatSessionPrefsRepository", () => {
   });
 
   it("preserves existing prefs, clears dependent model fields, and handles legacy nullable controls", () => {
-    const repo = createRepo();
+    const repo = createRepo("sess-1");
     const created = repo.ensure("sess-1", "2026-03-07T00:00:00.000Z");
 
     assert.equal(repo.ensure("sess-1", "2026-03-07T00:01:00.000Z").createdAt, created.createdAt);
@@ -205,7 +208,7 @@ describe("ChatSessionPrefsRepository", () => {
   });
 
   it("throws when an adapter write cannot be read back", () => {
-    const repo = createRepo();
+    const repo = createRepo("sess-unreadable");
     let reads = 0;
     const internal = repo as unknown as {
       getStmt: { get: (...args: unknown[]) => unknown };

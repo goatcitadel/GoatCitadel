@@ -102,4 +102,61 @@ describe("LearnedMemoryRepository", () => {
     assert.deepEqual(repo.listItemsBySession("session-1", 10), []);
     assert.deepEqual(repo.listConflictsBySession("session-1", 10), []);
   });
+
+  it("keeps session learned memory evidence-only at the storage boundary (HX-402 P1)", () => {
+    const repo = createRepo();
+    // Authority-looking states can never be minted through this repository.
+    assert.throws(
+      () =>
+        repo.insertItem({
+          sessionId: "session-2",
+          itemType: "preference",
+          content: "attempted authority state",
+          confidence: 0.9,
+          status: "trusted" as never,
+          redacted: false,
+          sourceKind: "chat",
+          sourceRef: "message-3",
+          snippet: "attempted",
+        }),
+      /evidence-only/,
+    );
+    const item = repo.insertItem({
+      sessionId: "session-2",
+      itemType: "preference",
+      content: "legit evidence",
+      confidence: 0.5,
+      status: "active",
+      redacted: false,
+      sourceKind: "chat",
+      sourceRef: "message-4",
+      snippet: "legit",
+    });
+    assert.throws(
+      () => repo.updateItemFields(item.itemId, { status: "promoted", content: "still evidence", confidence: 0.5 }),
+      /evidence-only/,
+    );
+    assert.equal(repo.getItem(item.itemId)?.status, "active");
+
+    // Redacted evidence never accepts replacement content.
+    const redacted = repo.insertItem({
+      sessionId: "session-2",
+      itemType: "fact",
+      content: "[REDACTED]",
+      confidence: 0.2,
+      status: "dropped",
+      redacted: true,
+      sourceKind: "chat",
+      sourceRef: "message-5",
+      snippet: "Dropped due to secret redaction policy.",
+    });
+    assert.throws(
+      () => repo.updateItemFields(redacted.itemId, { status: "active", content: "sk-recovered", confidence: 0.2 }),
+      /redacted/i,
+    );
+    assert.equal(repo.getItem(redacted.itemId)?.content, "[REDACTED]");
+    // Status/confidence updates that keep the redacted content intact still work.
+    repo.updateItemFields(redacted.itemId, { status: "disabled", content: "[REDACTED]", confidence: 0.1 });
+    assert.equal(repo.getItem(redacted.itemId)?.status, "disabled");
+  });
 });

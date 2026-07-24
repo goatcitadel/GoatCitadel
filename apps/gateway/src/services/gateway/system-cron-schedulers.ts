@@ -65,7 +65,6 @@ export interface SystemCronSchedulerDeps {
   storage: Pick<Storage, "cronJobs" | "systemSettings" | "memoryContexts" | "memoryQmdRuns" | "costLedger">;
   rootDir: string;
   isFeatureEnabled(flag: SystemCronFeatureFlag): boolean;
-  persistCronJobsConfig(): void;
   publishRealtime(eventType: string, source: string, payload?: Record<string, unknown>): void;
   evidenceEnvelopeService?: Pick<EvidenceEnvelopeService, "createEnvelope">;
   recordDevDiagnostic(input: {
@@ -145,23 +144,22 @@ function recordSystemCronRunSuccess(
   const evidenceEnvelopeId = recordSystemCronRunEvidence(deps, job, input.runId, "ok", input.finishedAtIso, {
     summary: input.summary,
   });
-  const updated: CronJobRecord = {
-    ...job,
-    lastRunAt: input.finishedAtIso,
-    lastRunId: input.runId,
-    lastRunStatus: "ok",
-    lastRunEvidenceEnvelopeId: evidenceEnvelopeId,
-    lastFailureAt: undefined,
-    lastFailure: undefined,
-    failureCount: 0,
-    backoffUntil: undefined,
-    nextRunAt: input.nextRunAt,
-  };
-  if (input.lastRunOutput !== undefined) {
-    updated.lastRunOutput = input.lastRunOutput;
-  }
-  const saved = deps.storage.cronJobs.upsert(updated);
-  deps.persistCronJobsConfig();
+  const saved = deps.storage.cronJobs.mergeRuntimeTelemetry(
+    job.jobId,
+    {
+      lastRunAt: input.finishedAtIso,
+      lastRunId: input.runId,
+      lastRunStatus: "ok",
+      lastRunEvidenceEnvelopeId: evidenceEnvelopeId ?? null,
+      lastFailureAt: null,
+      lastFailure: null,
+      failureCount: 0,
+      backoffUntil: null,
+      nextRunAt: input.nextRunAt ?? null,
+      ...(input.lastRunOutput !== undefined ? { lastRunOutput: input.lastRunOutput } : {}),
+    },
+    input.finishedAtIso,
+  );
   return saved;
 }
 
@@ -176,24 +174,29 @@ function recordSystemCronRunFailure(
   const message = normalizeCronFailureMessage(error);
   const failureCount = Math.max(0, job.failureCount ?? 0) + 1;
   const backoffUntil = computeCronBackoffUntil(failedAt, failureCount);
-  const saved = deps.storage.cronJobs.upsert({
-    ...job,
-    lastRunAt: failedAtIso,
-    lastRunId: runId,
-    lastRunStatus: "failed",
-    lastRunEvidenceEnvelopeId: recordSystemCronRunEvidence(deps, job, runId, "failed", failedAtIso, {
-      failureMessage: message,
-    }),
-    lastFailureAt: failedAtIso,
-    lastFailure: {
-      message,
-      ...(error instanceof Error && error.name ? { code: error.name } : {}),
+  const saved = deps.storage.cronJobs.mergeRuntimeTelemetry(
+    job.jobId,
+    {
+      lastRunAt: failedAtIso,
+      lastRunId: runId,
+      lastRunStatus: "failed",
+      lastRunEvidenceEnvelopeId:
+        recordSystemCronRunEvidence(deps, job, runId, "failed", failedAtIso, {
+          failureMessage: message,
+        }) ?? null,
+      lastFailureAt: failedAtIso,
+      lastFailure: {
+        message,
+        ...(error instanceof Error && error.name ? { code: error.name } : {}),
+      },
+      failureCount,
+      backoffUntil,
+      nextRunAt:
+        (typeof job.schedule === "string" ? computeNextCronRunAt(job.schedule, failedAt, job.endAt) : undefined) ??
+        null,
     },
-    failureCount,
-    backoffUntil,
-    nextRunAt: typeof job.schedule === "string" ? computeNextCronRunAt(job.schedule, failedAt, job.endAt) : undefined,
-  });
-  deps.persistCronJobsConfig();
+    failedAtIso,
+  );
   deps.publishRealtime("cron_job_run", "cron", {
     type: "cron_job_run_failed",
     jobId: saved.jobId,

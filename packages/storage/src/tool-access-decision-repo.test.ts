@@ -10,6 +10,7 @@ import {
   type ToolAccessDecisionRecord,
 } from "./tool-access-decision-repo.js";
 import { createDatabase } from "./sqlite.js";
+import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
 
 const createdFiles: string[] = [];
 
@@ -36,20 +37,9 @@ function createRepoWithDb(): { repo: ToolAccessDecisionRepository; db: ReturnTyp
 }
 
 function insertSessionMeta(db: ReturnType<typeof createDatabase>, sessionId: string, workspaceId: string): void {
-  db.prepare(
-    `
-    INSERT INTO chat_session_meta (
-      session_id,
-      workspace_id,
-      title,
-      include_in_history,
-      pinned,
-      lifecycle_status,
-      created_at,
-      updated_at
-    ) VALUES (?, ?, ?, 1, 0, 'active', ?, ?)
-  `,
-  ).run(sessionId, workspaceId, "Coverage session", new Date().toISOString(), new Date().toISOString());
+  const repo = new ChatSessionMetaRepository(db);
+  repo.ensure(sessionId, undefined, workspaceId);
+  repo.patch(sessionId, { title: "Coverage session" });
 }
 
 function recordDecision(

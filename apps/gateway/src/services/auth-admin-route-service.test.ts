@@ -58,26 +58,26 @@ describe("AuthAdminRouteService", () => {
       method: "getCompanionSessionRecord",
       args: ["session-1"],
     });
-    expect(service.revokeCompanionSession("session-1", " tester ")).toEqual({
+    expect(service.revokeCompanionSession("session-1", " tester ", { correlationId: "corr-1" })).toEqual({
       method: "revokeCompanionSession",
-      args: ["session-1", "tester"],
+      args: ["session-1", "tester", { correlationId: "corr-1" }],
     });
     expect(service.revokeCompanionSession("session-2", "   ")).toEqual({
       method: "revokeCompanionSession",
-      args: ["session-2", "operator"],
+      args: ["session-2", "operator", undefined],
     });
     expect(service.listCompanionAuditEvents({ sessionId: "session-1" })).toEqual({
       method: "listCompanionAuditEvents",
       args: [{ sessionId: "session-1" }],
     });
     expect(service.listDeviceAccessGrants()).toEqual({ method: "listDeviceAccessGrants", args: [] });
-    expect(service.revokeDeviceAccessGrant("grant-1", " admin ")).toEqual({
+    expect(service.revokeDeviceAccessGrant("grant-1", " admin ", { correlationId: "corr-2" })).toEqual({
       method: "revokeDeviceAccessGrant",
-      args: ["grant-1", "admin"],
+      args: ["grant-1", "admin", { correlationId: "corr-2" }],
     });
     expect(service.revokeDeviceAccessGrant("grant-2")).toEqual({
       method: "revokeDeviceAccessGrant",
-      args: ["grant-2", "operator"],
+      args: ["grant-2", "operator", undefined],
     });
     expect(service.resolveGatewayInstallToken({ token: "install" })).toEqual({
       method: "resolveGatewayInstallToken",
@@ -105,9 +105,9 @@ describe("AuthAdminRouteService", () => {
       method: "verifyBackup",
       args: [{ filePath: "backup.zip" }],
     });
-    expect(service.runDatabaseCutover({ execute: false })).toEqual({
+    expect(service.runDatabaseCutover({ profile: "local", execute: false })).toEqual({
       method: "runDatabaseCutover",
-      args: [{ execute: false }],
+      args: [{ profile: "local", execute: false }],
     });
     expect(service.verifyDatabaseCutover({ source: "sqlite" })).toEqual({
       method: "verifyDatabaseCutover",

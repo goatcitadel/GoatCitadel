@@ -11,6 +11,7 @@ import {
   fetchCodeModeRun,
   fetchCodeModeRuns,
   fetchCodeModeRunArtifact,
+  fetchCodeModeRunVerificationEvidence,
 } from "@goatcitadel/mission-control-shared/api/capabilities";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { WorkbenchFileTree } from "@goatcitadel/mission-control-shared/components/WorkbenchFileTree";
@@ -35,6 +36,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/capabilities", () => ({
   fetchCodeModeRun: vi.fn(),
   fetchCodeModeRuns: vi.fn(),
   fetchCodeModeRunArtifact: vi.fn(),
+  fetchCodeModeRunVerificationEvidence: vi.fn(),
 }));
 
 const mockedFetchAgenticRuntimeAvailability = vi.mocked(fetchAgenticRuntimeAvailability);
@@ -43,6 +45,7 @@ const mockedFetchCodeModeRun = vi.mocked(fetchCodeModeRun);
 const mockedFetchCodeModeExecutionBackends = vi.mocked(fetchCodeModeExecutionBackends);
 const mockedFetchCodeModeRuns = vi.mocked(fetchCodeModeRuns);
 const mockedFetchCodeModeRunArtifact = vi.mocked(fetchCodeModeRunArtifact);
+const mockedFetchCodeModeRunVerificationEvidence = vi.mocked(fetchCodeModeRunVerificationEvidence);
 const mockedCompareCodeModeRuns = vi.mocked(compareCodeModeRuns);
 
 function instanceText(value: unknown): string {
@@ -338,6 +341,12 @@ describe("ThreadedWorkflowPanel", () => {
           approvalId: "approval-code-1",
           sessionId: "session-1",
           turnId: "turn-1",
+          executionRecovery: {
+            generation: 1,
+            phase: "terminal",
+            disposition: "terminal",
+            finalTranscriptEventId: "code-mode-final:helper-1",
+          },
           codeArtifact: {
             artifactId: "artifact-code",
             relPath: "data/code-mode-artifacts/helper-1/source.ts",
@@ -443,6 +452,12 @@ describe("ThreadedWorkflowPanel", () => {
         runtimeSupport: "active_runner",
         isolationProfile: "trusted-code execution",
       },
+      executionRecovery: {
+        generation: 1,
+        phase: "terminal",
+        disposition: "terminal",
+        finalTranscriptEventId: "code-mode-final:helper-1",
+      },
       codeArtifact: {
         artifactId: "artifact-code",
         relPath: "data/code-mode-artifacts/helper-1/source.ts",
@@ -508,6 +523,7 @@ describe("ThreadedWorkflowPanel", () => {
         createdAt: "2026-05-05T12:00:02.000Z",
       },
     });
+    mockedFetchCodeModeRunVerificationEvidence.mockResolvedValue({ items: [] });
     mockedCompareCodeModeRuns.mockResolvedValue({
       runId: "helper-1",
       baselineRunId: "helper-2",

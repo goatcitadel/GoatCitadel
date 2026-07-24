@@ -10,6 +10,9 @@ vi.mock("node:sqlite", () => ({
 }));
 
 import { GatewayService } from "./gateway-service.js";
+import { ConfigGenerationService } from "./config-generation-service.js";
+import { LlmService } from "./llm-service.js";
+import { SecretStoreService } from "./secret-store-service.js";
 
 const tempRoots: string[] = [];
 const originalAllowedOrigins = process.env.GOATCITADEL_ALLOWED_ORIGINS;
@@ -188,63 +191,129 @@ describe("GatewayService loop32 runtime facade behavior", () => {
     ).toThrow("web.firecrawl.baseUrl must be present in the outbound allowlist");
   });
 
-  it("persists assistant, tool policy, budget, LLM, and unified config through facade writers", async () => {
-    const rootDir = await createTempRoot();
+  it("projects cron specifications into unified config without runtime telemetry", () => {
     const gateway = createGatewayHarness();
-    gateway.config = createRuntimeConfig(rootDir) as never;
-    gateway.llmService = {
-      exportConfigFile: vi.fn(() => ({ activeProviderId: "openai", providers: [] })),
-    };
+    const runtimeConfig = createRuntimeConfig("F:/tmp/gc-loop32") as never;
+    const source = JSON.parse(
+      fs.readFileSync(path.resolve(process.cwd(), "../../config/goatcitadel.example.json"), "utf8"),
+    ) as Record<string, any>;
     gateway.storage = {
       cronJobs: {
         list: vi.fn(() => [
           {
-            jobId: "job-1",
-            name: "Runtime audit",
-            action: "runtime.audit",
-            actionConfig: { level: "strict" },
-            description: "Check runtime",
+            jobId: "operator-hourly",
+            revision: 7,
+            name: "Operator hourly",
+            action: "task",
+            description: "Run the operator task.",
             schedule: "0 * * * * America/Los_Angeles",
             enabled: true,
-            lastRunAt: "2026-05-15T00:00:00.000Z",
-            nextRunAt: "2026-05-15T01:00:00.000Z",
+            workdir: "F:/code/personal-ai",
+            contextFrom: "upstream",
+            lastRunAt: "2026-07-13T12:00:00.000Z",
+            nextRunAt: "2026-07-13T13:00:00.000Z",
+            lastRunId: "run-telemetry",
+            lastRunOutput: "must stay in Storage",
+            updatedAt: "2026-07-13T12:00:01.000Z",
           },
         ]),
       },
     };
-    gateway.readFeatureFlags = vi.fn(() => gateway.config.assistant.features);
-    gateway.serializeRootPath = vi.fn((value: string) => `serialized:${value}`);
+    gateway.serializeRootPath = vi.fn((value: string) => value);
 
-    GatewayService.prototype.persistLlmConfig.call(gateway);
-    GatewayService.prototype.persistToolPolicyConfig.call(gateway);
-    GatewayService.prototype.persistBudgetsConfig.call(gateway);
-    GatewayService.prototype.persistAssistantConfig.call(gateway);
+    const payload = (GatewayService.prototype as any).buildUnifiedConfigPayloadForRuntime.call(
+      gateway,
+      runtimeConfig,
+      source.llm,
+      runtimeConfig.assistant.features,
+    );
 
-    const configDir = path.join(rootDir, "config");
-    expect(JSON.parse(fs.readFileSync(path.join(configDir, "llm-providers.json"), "utf8"))).toEqual({
-      activeProviderId: "openai",
-      providers: [],
-    });
-    expect(JSON.parse(fs.readFileSync(path.join(configDir, "tool-policy.json"), "utf8")).sandbox).toMatchObject({
-      writeJailRoots: ["serialized:workspace"],
-      readOnlyRoots: ["serialized:data"],
-    });
-    expect(JSON.parse(fs.readFileSync(path.join(configDir, "budgets.json"), "utf8"))).toEqual({ mode: "balanced" });
-    expect(JSON.parse(fs.readFileSync(path.join(configDir, "assistant.config.json"), "utf8"))).toMatchObject({
-      deploymentProfile: "local",
-      database: { driver: "sqlite" },
-      auth: {
-        mode: "token",
-        allowLoopbackBypass: false,
-      },
-    });
-    expect(JSON.parse(fs.readFileSync(path.join(configDir, "goatcitadel.json"), "utf8"))).toMatchObject({
-      assistant: {
-        deploymentProfile: "local",
-      },
-      cronJobs: {
-        jobs: [expect.objectContaining({ jobId: "job-1", action: "runtime.audit" })],
-      },
+    expect(payload.cronJobs).toEqual({
+      jobs: [
+        {
+          jobId: "operator-hourly",
+          name: "Operator hourly",
+          action: "task",
+          description: "Run the operator task.",
+          schedule: "0 * * * * America/Los_Angeles",
+          enabled: true,
+          workdir: "F:/code/personal-ai",
+          contextFrom: "upstream",
+        },
+      ],
     });
   });
+
+  it("commits provider secrets through the generation owner without legacy LLM persistence", async () => {
+    const rootDir = await createTempRoot();
+    const source = JSON.parse(
+      fs.readFileSync(path.resolve(process.cwd(), "../../config/goatcitadel.example.json"), "utf8"),
+    ) as Record<string, any>;
+    const configDir = path.join(rootDir, "config");
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(path.join(configDir, "goatcitadel.json"), `${JSON.stringify(source, null, 2)}\n`, "utf8");
+    const secretStore = new MemorySecretStore();
+    const gateway = createGatewayHarness();
+    gateway.config = {
+      rootDir,
+      assistant: structuredClone(source.assistant),
+      toolPolicy: structuredClone(source.toolPolicy),
+      budgets: structuredClone(source.budgets),
+      llm: structuredClone(source.llm),
+    };
+    gateway.llmService = new LlmService(structuredClone(source.llm), {}, { secretStore });
+    gateway.storage = {
+      cronJobs: { list: vi.fn(() => structuredClone(source.cronJobs.jobs ?? [])) },
+    };
+    gateway.readFeatureFlags = vi.fn(() => structuredClone(gateway.config.assistant.features));
+    gateway.serializeRootPath = vi.fn((value: string) => value);
+    gateway.configGenerationService = new ConfigGenerationService(rootDir);
+
+    await expect(
+      GatewayService.prototype.saveProviderSecret.call(gateway, {
+        providerId: "openai",
+        apiKey: "sk-generation-owned",
+        expectedRevision: 1,
+        storage: "keychain",
+      }),
+    ).resolves.toEqual({
+      revision: 2,
+      providerId: "openai",
+      hasSecret: true,
+      source: "keychain",
+    });
+    expect(secretStore.getProviderApiKey("openai")).toBe("sk-generation-owned");
+    const activeRaw = fs.readFileSync(path.join(configDir, "goatcitadel.json"), "utf8");
+    expect(activeRaw).not.toContain("sk-generation-owned");
+
+    await expect(
+      GatewayService.prototype.saveProviderSecret.call(gateway, {
+        providerId: "openai",
+        apiKey: "sk-stale",
+        expectedRevision: 1,
+        storage: "keychain",
+      }),
+    ).rejects.toMatchObject({ details: { expectedRevision: 1, currentRevision: 2 } });
+    expect(secretStore.getProviderApiKey("openai")).toBe("sk-generation-owned");
+  });
 });
+
+class MemorySecretStore extends SecretStoreService {
+  private readonly values = new Map<string, string>();
+
+  public override isAvailable(): boolean {
+    return true;
+  }
+
+  public override setProviderApiKey(providerId: string, apiKey: string): void {
+    this.values.set(providerId, apiKey);
+  }
+
+  public override getProviderApiKey(providerId: string): string | undefined {
+    return this.values.get(providerId);
+  }
+
+  public override deleteProviderApiKey(providerId: string): void {
+    this.values.delete(providerId);
+  }
+}

@@ -36,6 +36,26 @@ describe("runCronCli", () => {
     expect(writes.join("\n")).toContain('"output": "alert"');
   });
 
+  it("keeps polling while a canonical cron run is still active", async () => {
+    const port: CronCliPort = {
+      runCronJobNow: vi.fn().mockResolvedValue({ jobId: "j", runId: "r1", status: "pending" }),
+      findCronRunById: vi
+        .fn()
+        .mockReturnValueOnce({ runId: "r1", jobId: "j", status: "unknown" })
+        .mockReturnValueOnce({ runId: "r1", jobId: "j", status: "ok", output: "done" }),
+    };
+    const writes: string[] = [];
+
+    await runCronCli(["run", "j", "--wait", "--timeout", "5000", "--poll-interval", "1"], {
+      port,
+      write: (line) => writes.push(line),
+      sleep: async () => {},
+    });
+
+    expect(port.findCronRunById).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(writes[0] ?? "{}")).toMatchObject({ status: "ok", output: "done" });
+  });
+
   it("exits with timeout error when --wait elapses without a result", async () => {
     const port = makePort({
       runCronJobNow: vi.fn().mockResolvedValue({ jobId: "j", runId: "r1", status: "ok" }),

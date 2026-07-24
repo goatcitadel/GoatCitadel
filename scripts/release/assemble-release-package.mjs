@@ -9,10 +9,11 @@ import { removeDirectorySafely } from "../packaging/safe-cleanup.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../..");
+const WINDOWS_RESERVED_BASENAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu;
 
 const args = parseArgs(process.argv.slice(2));
 const version = normalizeVersion(args.version);
-const tagName = args.tag ?? process.env.GITHUB_REF_NAME ?? `v${version}`;
+const tagName = normalizeTag(args.tag ?? process.env.GITHUB_REF_NAME ?? `v${version}`, version);
 const releaseSourceRef = process.env.GITHUB_SHA ?? "main";
 const artifactsDir = path.resolve(args.artifactsDir ?? path.join(repoRoot, "release-artifacts"));
 const sbomFile = path.resolve(
@@ -28,9 +29,7 @@ if (!fs.existsSync(sbomFile)) {
 }
 
 const artifactFiles = listInstallerArtifacts(artifactsDir);
-if (artifactFiles.length === 0) {
-  throw new Error(`No installer artifacts were found in ${artifactsDir}`);
-}
+validateFixedSignedArtifactInventory(artifactFiles, artifactsDir, version);
 
 const releaseDirName = `release-v${version}`;
 const releaseRoot = path.join(outDir, releaseDirName);
@@ -51,7 +50,7 @@ fs.mkdirSync(docsOutDir, { recursive: true });
 fs.mkdirSync(provenanceOutDir, { recursive: true });
 
 const copiedArtifacts = await Promise.all(
-  artifactFiles.map((artifactPath) => copyArtifactWithProofs(artifactPath, artifactOutDir)),
+  artifactFiles.map((artifactPath) => copyArtifactWithProofs(artifactPath, artifactOutDir, artifactsDir)),
 );
 const copiedSbomPath = path.join(sbomOutDir, path.basename(sbomFile));
 fs.copyFileSync(sbomFile, copiedSbomPath);
@@ -129,7 +128,18 @@ function parseArgs(argv) {
 }
 
 function normalizeVersion(value) {
-  return value.startsWith("v") ? value.slice(1) : value;
+  const normalized = typeof value === "string" && value.startsWith("v") ? value.slice(1) : value;
+  if (typeof normalized !== "string" || !/^[0-9][0-9a-z.+-]{0,79}$/iu.test(normalized) || normalized.includes("..")) {
+    throw new Error(`Invalid release version: ${String(value)}`);
+  }
+  return normalized;
+}
+
+function normalizeTag(value, version) {
+  if (value !== `v${version}`) {
+    throw new Error(`Release tag ${String(value)} must exactly match version v${version}.`);
+  }
+  return value;
 }
 
 function listInstallerArtifacts(rootDir) {
@@ -149,6 +159,7 @@ function listInstallerArtifacts(rootDir) {
       if (
         entry.name.endsWith(".exe") ||
         entry.name.endsWith(".msix") ||
+        entry.name.endsWith(".dmg") ||
         entry.name.endsWith(".pkg") ||
         entry.name.endsWith(".tar.gz")
       ) {
@@ -156,33 +167,94 @@ function listInstallerArtifacts(rootDir) {
       }
     }
   }
-  return files.sort((left, right) => left.localeCompare(right));
+  return files.sort((left, right) =>
+    compareStrings(relativeArtifactPath(rootDir, left), relativeArtifactPath(rootDir, right)),
+  );
 }
 
-async function copyArtifactWithProofs(artifactPath, destinationDir) {
+async function copyArtifactWithProofs(artifactPath, destinationDir, artifactsRoot) {
   const basename = path.basename(artifactPath);
+  const artifactRelativePath = relativeArtifactPath(artifactsRoot, artifactPath);
   const checksumPath = `${artifactPath}.sha256`;
   const signaturePath = `${artifactPath}.sig`;
   const certificatePath = `${artifactPath}.pem`;
 
-  for (const requiredPath of [checksumPath, signaturePath, certificatePath]) {
-    if (!fs.existsSync(requiredPath)) {
+  for (const requiredPath of [artifactPath, checksumPath, signaturePath, certificatePath]) {
+    if (!isRegularSingleLinkFile(requiredPath)) {
       throw new Error(`Missing release proof file for ${basename}: ${requiredPath}`);
     }
   }
 
-  const targetArtifactPath = path.join(destinationDir, basename);
+  const targetArtifactPath = path.join(destinationDir, ...artifactRelativePath.split("/"));
+  fs.mkdirSync(path.dirname(targetArtifactPath), { recursive: true });
   fs.copyFileSync(artifactPath, targetArtifactPath);
-  fs.copyFileSync(checksumPath, path.join(destinationDir, `${basename}.sha256`));
-  fs.copyFileSync(signaturePath, path.join(destinationDir, `${basename}.sig`));
-  fs.copyFileSync(certificatePath, path.join(destinationDir, `${basename}.pem`));
+  fs.copyFileSync(checksumPath, `${targetArtifactPath}.sha256`);
+  fs.copyFileSync(signaturePath, `${targetArtifactPath}.sig`);
+  fs.copyFileSync(certificatePath, `${targetArtifactPath}.pem`);
 
   return {
     fileName: basename,
-    relativePath: `artifact/${basename}`,
+    relativePath: `artifact/${artifactRelativePath}`,
     checksumSha256: await sha256File(artifactPath),
     sizeBytes: fs.statSync(artifactPath).size,
   };
+}
+
+function validateFixedSignedArtifactInventory(artifactFiles, rootDir, version) {
+  const actual = artifactFiles.map((filePath) => relativeArtifactPath(rootDir, filePath)).sort(compareStrings);
+  const expected = fixedSignedArtifactPaths(version);
+  if (
+    actual.length !== expected.length ||
+    new Set(actual.map((item) => item.toLowerCase())).size !== actual.length ||
+    actual.some((item, index) => item !== expected[index])
+  ) {
+    throw new Error(
+      `Release package must contain exactly the fixed signed artifact set. Expected: ${expected.join(", ")}; received: ${actual.join(", ")}.`,
+    );
+  }
+}
+
+function fixedSignedArtifactPaths(version) {
+  return [
+    "windows-x64-release-assets/GoatCitadel-Setup-windows-x64.exe",
+    "windows-x64-release-assets/GoatCitadel-Mission-Control-Windows-Identity.msix",
+    "windows-arm64-release-assets/GoatCitadel-Setup-windows-arm64.exe",
+    "windows-arm64-release-assets/GoatCitadel-Mission-Control-Windows-Identity.msix",
+    `linux-x64-experimental-release-assets/GoatCitadel-${version}-linux-x64.tar.gz`,
+    `macos-arm64-experimental-release-assets/GoatCitadel-${version}-macos-arm64.dmg`,
+  ].sort(compareStrings);
+}
+
+function relativeArtifactPath(rootDir, filePath) {
+  const relativePath = path.relative(path.resolve(rootDir), path.resolve(filePath)).replaceAll("\\", "/");
+  const segments = relativePath.split("/");
+  if (
+    !relativePath ||
+    Buffer.byteLength(relativePath, "utf8") > 240 ||
+    path.isAbsolute(relativePath) ||
+    path.win32.isAbsolute(relativePath) ||
+    segments.some(
+      (segment) =>
+        !segment ||
+        segment === "." ||
+        segment === ".." ||
+        /[<>:"|?*\u0000-\u001f]/u.test(segment) ||
+        /[. ]$/u.test(segment) ||
+        WINDOWS_RESERVED_BASENAME.test(segment),
+    )
+  ) {
+    throw new Error(`Unsafe release artifact path: ${relativePath}`);
+  }
+  return segments.join("/");
+}
+
+function isRegularSingleLinkFile(filePath) {
+  try {
+    const stats = fs.lstatSync(filePath);
+    return stats.isFile() && !stats.isSymbolicLink() && stats.nlink === 1;
+  } catch {
+    return false;
+  }
 }
 
 function copyDocs(destinationDir) {
@@ -270,14 +342,46 @@ function buildMetadataRecord(input) {
     buildCommands: [
       "pnpm install --frozen-lockfile",
       "pnpm package:windows-host --target <windows-target>",
-      "pnpm package:windows-msix --cert-path <pfx> --cert-password <password>",
-      "pnpm package:bundle --target <target>",
-      "pnpm package:windows --target <target>",
-      "pnpm dlx @cyclonedx/cyclonedx-npm --output-format json --output-file <sbom>",
-      "node scripts/release/sign-release-artifacts.mjs --artifacts-dir <dir>",
-      "node scripts/release/assemble-release-package.mjs --version <version> --artifacts-dir <dir> --sbom-file <sbom>",
+      "pnpm package:windows-msix --allow-unsigned",
+      "signtool sign /fd SHA256 /f <pfx> /p <password> /tr http://timestamp.digicert.com /td SHA256 component-input/GoatCitadel-Mission-Control-Windows.exe",
+      "signtool verify /pa component-input/GoatCitadel-Mission-Control-Windows.exe",
+      "signtool sign /fd SHA256 /f <pfx> /p <password> /tr http://timestamp.digicert.com /td SHA256 component-input/GoatCitadel-Mission-Control-Windows-Identity.msix",
+      "signtool verify /pa component-input/GoatCitadel-Mission-Control-Windows-Identity.msix",
+      "pnpm package:bundle --target <windows-target>",
+      "pnpm package:windows --target <windows-target>",
+      "signtool sign /fd SHA256 /f <pfx> /p <password> /tr http://timestamp.digicert.com /td SHA256 installer-input/GoatCitadel-Setup-<windows-target>.exe",
+      "signtool verify /pa installer-input/GoatCitadel-Setup-<windows-target>.exe",
+      "pnpm package:bundle --target linux-x64 --skip-desktop",
+      'tar -czf "<linux-tar>" -C "<bundle-parent>" "<bundle-directory>"',
+      'sha256sum "<linux-tar>" > "<linux-tar>.sha256"',
+      'tar -xzf "<linux-tar>" -C "<smoke-dir>"',
+      'sha256sum -c "<linux-tar>.sha256"',
+      "pnpm package:macos --target macos-arm64",
+      'codesign --force --deep --options runtime --timestamp --sign <developer-id> "$WORK/dmg-root/GoatCitadel Mission Control.app"',
+      'codesign --verify --deep --strict --verbose=2 "$WORK/dmg-root/GoatCitadel Mission Control.app"',
+      'hdiutil create -volname "GoatCitadel Mission Control" -srcfolder "$WORK/dmg-root" -ov -format UDZO "$OUTPUT_DMG"',
+      'xcrun notarytool submit "$OUTPUT_DMG" --apple-id <apple-id> --team-id <team-id> --password <app-password> --wait',
+      'xcrun stapler staple "$OUTPUT_DMG"',
+      'xcrun stapler validate "$OUTPUT_DMG"',
+      'hdiutil verify "$OUTPUT_DMG"',
+      'shasum -a 256 "$OUTPUT_DMG" > "$OUTPUT_DMG.sha256"',
+      "FETCH_LICENSE=false CDXGEN_FETCH_PKG_METADATA=false env -u NODE_PATH node node_modules/@cyclonedx/cdxgen/bin/cdxgen.js . --type js --spec-version 1.6 --no-install-deps --fail-on-error --no-babel --no-recurse --validate --output <sbom>",
+      "env -u NODE_PATH node scripts/release/validate-pnpm-sbom.mjs --repo-root <repo-root> --sbom-file <sbom>",
+      ...fixedSignedArtifactPaths(input.version).flatMap((relativePath) => {
+        const artifactPath = `release-artifacts/${relativePath}`;
+        return [
+          `cosign sign-blob --yes --output-signature ${artifactPath}.sig --output-certificate ${artifactPath}.pem ${artifactPath}`,
+          `cosign verify-blob --signature ${artifactPath}.sig --certificate ${artifactPath}.pem --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity <workflow-ref> --certificate-github-workflow-name "Release Installers and Bundles" --certificate-github-workflow-ref <tag-ref> --certificate-github-workflow-repository goatcitadel/GoatCitadel --certificate-github-workflow-sha <commit-sha> --certificate-github-workflow-trigger push ${artifactPath}`,
+        ];
+      }),
+      "node scripts/release/assemble-release-package.mjs --version <version> --tag <tag> --artifacts-dir <dir> --sbom-file <sbom>",
       "node scripts/release/wait-for-release-proof.mjs --repository <owner/repo> --commit <commit-sha> --timeout-ms 14400000",
-      "node scripts/release/write-release-certificate.mjs --version <version> --tag <tag> --artifacts-dir <dir> --proof-zip <zip> --out-file <certificate> --require-success",
+      "node scripts/release/wait-for-release-proof.mjs --repository <owner/repo> --commit <commit-sha> --workflow verification-fast.yml --timeout-ms 7200000",
+      "node scripts/release/wait-for-release-proof.mjs --repository <owner/repo> --commit <commit-sha> --workflow security-trivy.yml --timeout-ms 7200000",
+      "node scripts/release/write-release-certificate.mjs --version <version> --tag <tag> --artifacts-dir <dir> --runtime-manifest windows-x64=<dir>/windows-x64-release-assets/app/release-manifest.json --runtime-manifest windows-arm64=<dir>/windows-arm64-release-assets/app/release-manifest.json --proof-zip <zip> --out-file <certificate> --require-success",
+      "cosign sign-blob --yes --bundle artifacts/release/release-certificate.sigstore.json artifacts/release/release-certificate.json",
+      'cosign verify-blob --bundle artifacts/release/release-certificate.sigstore.json --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity <workflow-ref> --certificate-github-workflow-name "Release Installers and Bundles" --certificate-github-workflow-ref <tag-ref> --certificate-github-workflow-repository goatcitadel/GoatCitadel --certificate-github-workflow-sha <commit-sha> --certificate-github-workflow-trigger push artifacts/release/release-certificate.json',
+      "node scripts/release/assemble-runtime-release-evidence.mjs --certificate artifacts/release/release-certificate.json --attestation artifacts/release/release-certificate.sigstore.json --artifacts-dir release-artifacts --proof-zip <release-proof-zip> --output-dir artifacts/release/runtime-evidence --archive-dir artifacts/release/package --installer windows-x64=release-artifacts/windows-x64-release-assets/GoatCitadel-Setup-windows-x64.exe --installer windows-arm64=release-artifacts/windows-arm64-release-assets/GoatCitadel-Setup-windows-arm64.exe",
     ],
     artifacts: input.artifacts,
     sbom: input.sbomPath,
@@ -291,7 +395,7 @@ function buildSlsaAttestation(input) {
     _type: "https://in-toto.io/Statement/v1",
     predicateType: "https://slsa.dev/provenance/v1",
     subject: input.artifacts.map((artifact) => ({
-      name: artifact.fileName,
+      name: artifact.relativePath,
       digest: {
         sha256: artifact.checksumSha256,
       },
@@ -392,9 +496,9 @@ function renderHandoff(input) {
     ``,
     `**Owners:** @goatcitadel/maintainers`,
     `**Release date:** ${new Date().toISOString().slice(0, 10)}`,
-    `**Primary artifact:** artifact/${primaryArtifact.fileName}`,
-    `**Checksum:** artifact/${primaryArtifact.fileName}.sha256`,
-    `**Signature:** artifact/${primaryArtifact.fileName}.sig (certificate: artifact/${primaryArtifact.fileName}.pem)`,
+    `**Primary artifact:** ${primaryArtifact.relativePath}`,
+    `**Checksum:** ${primaryArtifact.relativePath}.sha256`,
+    `**Signature:** ${primaryArtifact.relativePath}.sig (certificate: ${primaryArtifact.relativePath}.pem)`,
     ``,
     `**CI job:** ${input.buildMetadata.workflow.name} (run ${input.buildMetadata.workflow.runId ?? "local"})`,
     `**Commit/tag:** ${input.tagName} (commit ${input.buildMetadata.commit ?? "local"})`,
@@ -421,7 +525,7 @@ function renderHandoff(input) {
     ``,
     `## Artifact manifest`,
     ...input.artifacts.map(
-      (artifact) => `- ${artifact.fileName} | sha256=${artifact.checksumSha256} | size=${artifact.sizeBytes} bytes`,
+      (artifact) => `- ${artifact.relativePath} | sha256=${artifact.checksumSha256} | size=${artifact.sizeBytes} bytes`,
     ),
   ].join("\n");
 }
@@ -485,4 +589,8 @@ async function sha256File(filePath) {
     hash.update(chunk);
   }
   return hash.digest("hex");
+}
+
+function compareStrings(left, right) {
+  return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
 }

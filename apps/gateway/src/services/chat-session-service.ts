@@ -13,6 +13,7 @@ import { logger } from "@goatcitadel/gateway-core";
 import {
   applyChatModePresetToPatch,
   buildChatModePrefsPatch,
+  ConflictError,
   type ChatSessionBindingRecord,
   type ChatSessionBulkArchiveInput,
   type ChatSessionBulkArchiveResult,
@@ -79,6 +80,7 @@ export function listChatSessions(deps: ChatSessionDependencies, query: ChatSessi
     limit: limit + 1,
   });
   const sessionIds = candidates.slice(0, limit).map((candidate) => candidate.sessionId);
+  const candidateOrderBySessionId = new Map(sessionIds.map((sessionId, index) => [sessionId, index]));
   const sessionsById = deps.storage.sessions.listBySessionIds(sessionIds);
   const projects = deps.storage.chatProjects.list("all", 2000, workspaceId);
   const projectById = new Map(projects.map((project) => [project.projectId, project]));
@@ -97,6 +99,7 @@ export function listChatSessions(deps: ChatSessionDependencies, query: ChatSessi
       return [];
     }
     const meta = metaBySessionId.get(session.sessionId) ?? {
+      revision: 1,
       workspaceId: MISSING_CHAT_SESSION_META_WORKSPACE_ID,
       includeInHistory: true,
       pinned: false,
@@ -140,15 +143,19 @@ export function listChatSessions(deps: ChatSessionDependencies, query: ChatSessi
     records = records.filter((record) => (record.tags ?? []).some((item) => item.toLowerCase() === tag));
   }
   if (query.mode) {
-    records = records.filter((record) => record.mode === query.mode);
+    records = records.filter(
+      (record) => normalizeConversationMode(record.mode) === normalizeConversationMode(query.mode),
+    );
   }
 
   const searchHitsBySessionId = query.q?.trim()
     ? buildSessionSearchHits(
         deps,
+        workspaceId,
         records.map((record) => record.sessionId),
         query.q.trim(),
-        Math.min(1000, Math.max(limit * 4, 160)),
+        Math.min(50, Math.max(limit * 4, 20)),
+        includeHidden,
       )
     : new Map<string, ChatSessionSearchHitRecord[]>();
   const searchScoreBySessionId = new Map<string, number>();
@@ -181,6 +188,12 @@ export function listChatSessions(deps: ChatSessionDependencies, query: ChatSessi
   }
 
   records.sort((left, right) => {
+    if (query.q?.trim()) {
+      return (
+        (candidateOrderBySessionId.get(left.sessionId) ?? Number.MAX_SAFE_INTEGER) -
+        (candidateOrderBySessionId.get(right.sessionId) ?? Number.MAX_SAFE_INTEGER)
+      );
+    }
     if (left.pinned !== right.pinned) {
       return left.pinned ? -1 : 1;
     }
@@ -207,6 +220,9 @@ export function searchChatSessions(
   if (!query) {
     throw new Error("query is required for session search");
   }
+  if (query.length > 512) {
+    throw new Error("session search query must be 512 characters or fewer");
+  }
   const mode = input.mode ?? "discovery";
   const limit = Math.max(
     1,
@@ -215,24 +231,19 @@ export function searchChatSessions(
   const candidates = listChatSessions(deps, {
     workspaceId: input.workspaceId,
     scope: "all",
-    view: "all",
+    view: input.view ?? "all",
     mode: input.surface,
-    limit: 20_000,
+    q: query,
+    limit: limit + 1,
     cursor: input.cursor,
     includeHidden: input.includeHidden ?? false,
   });
-  const hitsBySessionId = buildSessionSearchHits(
-    deps,
-    candidates.map((session) => session.sessionId),
-    query,
-    Math.min(500, Math.max(limit * 8, 80)),
-  );
   const normalizedQuery = query.toLowerCase();
   const items: ChatSessionSearchResult[] = [];
 
-  for (const session of candidates) {
+  for (const session of candidates.slice(0, limit)) {
     const matchedFields = collectSessionSearchMatchedFields(session, normalizedQuery);
-    const hits = hitsBySessionId.get(session.sessionId) ?? [];
+    const hits = session.searchHits ?? [];
     if (matchedFields.length === 0 && hits.length === 0) {
       continue;
     }
@@ -250,21 +261,10 @@ export function searchChatSessions(
     });
   }
 
-  items.sort((left, right) => {
-    if (right.score !== left.score) {
-      return right.score - left.score;
-    }
-    const updatedDelta = Date.parse(right.session.updatedAt) - Date.parse(left.session.updatedAt);
-    if (updatedDelta !== 0) {
-      return updatedDelta;
-    }
-    return right.session.sessionId.localeCompare(left.session.sessionId);
-  });
-  const sliced = items.slice(0, limit);
-  const last = sliced.at(-1)?.session;
+  const last = items.at(-1)?.session;
   return {
-    items: sliced,
-    nextCursor: items.length > limit && last ? `${last.updatedAt}|${last.sessionId}` : undefined,
+    items,
+    nextCursor: candidates.length > limit && last ? `${last.updatedAt}|${last.sessionId}` : undefined,
     query,
     mode,
     generatedAt: new Date().toISOString(),
@@ -311,6 +311,10 @@ function upsertChatSessionForPeer(
   };
   const now = new Date().toISOString();
   deps.storage.runImmediateTransaction(() => {
+    const existingMeta = deps.storage.chatSessionMeta.get(resolution.sessionId);
+    if (existingMeta && deps.normalizeWorkspaceId(existingMeta.workspaceId) !== workspaceId) {
+      throw new Error("stable chat session key already belongs to another workspace");
+    }
     deps.storage.sessions.upsert({
       sessionId: resolution.sessionId,
       sessionKey: resolution.sessionKey,
@@ -443,16 +447,21 @@ export function updateChatSession(
   deps: ChatSessionDependencies,
   sessionId: string,
   input: { title?: string; folderId?: string; folderName?: string; tags?: string[] },
+  expectedRevision?: number,
 ): ChatSessionRecord {
   deps.getSession(sessionId);
   const current = deps.requireChatSession(sessionId);
   const reconciled = preserveChatSessionSecretsForPublicUpdate(current, input);
-  deps.storage.chatSessionMeta.patch(sessionId, {
-    title: reconciled.title,
-    folderId: reconciled.folderId,
-    folderName: reconciled.folderName,
-    tags: reconciled.tags,
-  });
+  deps.storage.chatSessionMeta.patchWithRevision(
+    sessionId,
+    {
+      title: reconciled.title,
+      folderId: reconciled.folderId,
+      folderName: reconciled.folderName,
+      tags: reconciled.tags,
+    },
+    expectedRevision ?? current.revision,
+  );
   const updated = deps.requireChatSession(sessionId);
   deps.publishRealtime("chat_session_title_updated", "chat", {
     type: "chat_session_title_updated",
@@ -474,7 +483,16 @@ export function maybeAutoTitleChatSession(deps: ChatSessionDependencies, session
   if (!derivedTitle) {
     return;
   }
-  deps.storage.chatSessionMeta.patch(sessionId, { title: derivedTitle });
+  try {
+    deps.storage.chatSessionMeta.patchWithRevision(sessionId, { title: derivedTitle }, meta.revision);
+  } catch (error) {
+    if (error instanceof ConflictError) {
+      // A newer operator/runtime writer won after the untitled snapshot was
+      // read. Auto-title must never overwrite that newer value.
+      return;
+    }
+    throw error;
+  }
   deps.publishRealtime("chat_session_title_updated", "chat", {
     type: "chat_session_title_updated",
     sessionId,
@@ -482,17 +500,27 @@ export function maybeAutoTitleChatSession(deps: ChatSessionDependencies, session
   });
 }
 
-export function pinChatSession(deps: ChatSessionDependencies, sessionId: string): ChatSessionRecord {
+export function pinChatSession(
+  deps: ChatSessionDependencies,
+  sessionId: string,
+  expectedRevision?: number,
+): ChatSessionRecord {
   deps.getSession(sessionId);
-  deps.storage.chatSessionMeta.patch(sessionId, { pinned: true });
+  const current = deps.requireChatSession(sessionId);
+  deps.storage.chatSessionMeta.patchWithRevision(sessionId, { pinned: true }, expectedRevision ?? current.revision);
   const updated = deps.requireChatSession(sessionId);
   deps.publishRealtime("chat_session_updated", "chat", buildChatSessionUpdatedPayload("chat_session_pinned", updated));
   return updated;
 }
 
-export function unpinChatSession(deps: ChatSessionDependencies, sessionId: string): ChatSessionRecord {
+export function unpinChatSession(
+  deps: ChatSessionDependencies,
+  sessionId: string,
+  expectedRevision?: number,
+): ChatSessionRecord {
   deps.getSession(sessionId);
-  deps.storage.chatSessionMeta.patch(sessionId, { pinned: false });
+  const current = deps.requireChatSession(sessionId);
+  deps.storage.chatSessionMeta.patchWithRevision(sessionId, { pinned: false }, expectedRevision ?? current.revision);
   const updated = deps.requireChatSession(sessionId);
   deps.publishRealtime(
     "chat_session_updated",
@@ -502,12 +530,21 @@ export function unpinChatSession(deps: ChatSessionDependencies, sessionId: strin
   return updated;
 }
 
-export function archiveChatSession(deps: ChatSessionDependencies, sessionId: string): ChatSessionRecord {
+export function archiveChatSession(
+  deps: ChatSessionDependencies,
+  sessionId: string,
+  expectedRevision?: number,
+): ChatSessionRecord {
   deps.getSession(sessionId);
-  deps.storage.chatSessionMeta.patch(sessionId, {
-    lifecycleStatus: "archived",
-    archivedAt: new Date().toISOString(),
-  });
+  const current = deps.requireChatSession(sessionId);
+  deps.storage.chatSessionMeta.patchWithRevision(
+    sessionId,
+    {
+      lifecycleStatus: "archived",
+      archivedAt: new Date().toISOString(),
+    },
+    expectedRevision ?? current.revision,
+  );
   const updated = deps.requireChatSession(sessionId);
   deps.publishRealtime(
     "chat_session_updated",
@@ -517,12 +554,21 @@ export function archiveChatSession(deps: ChatSessionDependencies, sessionId: str
   return updated;
 }
 
-export function restoreChatSession(deps: ChatSessionDependencies, sessionId: string): ChatSessionRecord {
+export function restoreChatSession(
+  deps: ChatSessionDependencies,
+  sessionId: string,
+  expectedRevision?: number,
+): ChatSessionRecord {
   deps.getSession(sessionId);
-  deps.storage.chatSessionMeta.patch(sessionId, {
-    lifecycleStatus: "active",
-    archivedAt: undefined,
-  });
+  const current = deps.requireChatSession(sessionId);
+  deps.storage.chatSessionMeta.patchWithRevision(
+    sessionId,
+    {
+      lifecycleStatus: "active",
+      archivedAt: undefined,
+    },
+    expectedRevision ?? current.revision,
+  );
   const updated = deps.requireChatSession(sessionId);
   deps.publishRealtime(
     "chat_session_updated",
@@ -535,28 +581,60 @@ export function restoreChatSession(deps: ChatSessionDependencies, sessionId: str
 export async function deleteChatSession(
   deps: ChatSessionDependencies,
   sessionId: string,
+  expectedRevision?: number,
 ): Promise<{ deleted: boolean; sessionId: string }> {
-  deps.getSession(sessionId);
-  const sideChildSessionIds = [deps.storage.chatSideChats.getByParentSession(sessionId)?.childSessionId].filter(
-    (value): value is string => Boolean(value && value !== sessionId),
-  );
-  for (const childSessionId of sideChildSessionIds) {
+  let currentWithoutExpectedRevision: ChatSessionRecord | undefined;
+  if (expectedRevision === undefined) {
+    deps.getSession(sessionId);
+    currentWithoutExpectedRevision = deps.requireChatSession(sessionId);
+  }
+  const rootRevision = expectedRevision ?? currentWithoutExpectedRevision!.revision;
+  const idempotencyKey = `lifecycle:delete:${sessionId}:${rootRevision}`;
+  const correlationId = `chat-session-delete:${sessionId}:${rootRevision}`;
+  let deletionResults: ReturnType<Storage["deleteChatSessionTreeWithRevision"]>;
+  if (expectedRevision !== undefined) {
     try {
-      await deleteChatSession(deps, childSessionId);
+      deletionResults = deps.storage.replayChatSessionTreeDeletion({
+        rootSessionId: sessionId,
+        expectedRootRevision: rootRevision,
+        actorId: "operator",
+        idempotencyKey,
+        correlationId,
+      });
     } catch (error) {
-      log.warn("side chat child delete cleanup failed", {
-        sessionId,
-        childSessionId,
-        error: error instanceof Error ? error.message : String(error),
+      const liveReplayConflict =
+        error instanceof ConflictError && error.details?.sessionLifecycleCode === "CHAT_SESSION_DELETE_REPLAY_LIVE";
+      if (!liveReplayConflict) throw error;
+      const currentMeta = deps.storage.chatSessionMeta.get(sessionId);
+      if (!currentMeta) throw error;
+      deletionResults = deps.storage.deleteChatSessionTreeWithRevision({
+        workspaceId: deps.normalizeWorkspaceId(currentMeta.workspaceId),
+        rootSessionId: sessionId,
+        expectedRootRevision: rootRevision,
+        actorId: "operator",
+        idempotencyKey,
+        correlationId,
       });
     }
+  } else {
+    deletionResults = deps.storage.deleteChatSessionTreeWithRevision({
+      workspaceId: deps.normalizeWorkspaceId(currentWithoutExpectedRevision!.workspaceId),
+      rootSessionId: sessionId,
+      expectedRootRevision: rootRevision,
+      actorId: "operator",
+      idempotencyKey,
+      correlationId,
+    });
   }
-  const result = deps.storage.deleteChatSessionData(sessionId);
-  deps.clearChatTurnWriteLease(sessionId);
+  for (const deleted of deletionResults) {
+    deps.clearChatTurnWriteLease(deleted.sessionId);
+  }
   deps.operatorSummaryCache.invalidate();
   const cleanupResults = await Promise.allSettled([
-    deps.storage.transcripts.delete(sessionId),
-    ...result.cleanupRelPaths.map((storageRelPath) => deps.removeChatSessionStoredFile(storageRelPath)),
+    ...deletionResults.map((deleted) => deps.storage.transcripts.delete(deleted.sessionId)),
+    ...deletionResults.flatMap((deleted) =>
+      deleted.cleanupRelPaths.map((storageRelPath) => deps.removeChatSessionStoredFile(storageRelPath)),
+    ),
   ]);
   for (const cleanupResult of cleanupResults) {
     if (cleanupResult.status === "rejected") {
@@ -572,7 +650,7 @@ export async function deleteChatSession(
     mode: "hard",
   });
   return {
-    deleted: result.deleted,
+    deleted: deletionResults.some((result) => result.sessionId === sessionId && result.deleted),
     sessionId,
   };
 }
@@ -603,7 +681,7 @@ export async function archiveChatSessionsBulk(
 
   for (const session of candidates) {
     try {
-      const archived = archiveChatSession(deps, session.sessionId);
+      const archived = archiveChatSession(deps, session.sessionId, session.revision);
       archivedSessionIds.push(archived.sessionId);
     } catch (error) {
       failures.push({
@@ -629,37 +707,46 @@ export function assignChatSessionProject(
   deps: ChatSessionDependencies,
   sessionId: string,
   projectId?: string,
+  expectedRevision?: number,
 ): ChatSessionRecord {
   deps.getSession(sessionId);
   const meta = deps.storage.chatSessionMeta.ensure(sessionId);
   const workspaceId = deps.normalizeWorkspaceId(meta.workspaceId);
-  if (!projectId) {
-    deps.storage.chatSessionProjects.unassign(sessionId);
-    deps.storage.chatGeneratedArtifacts.updateProjectForSession(sessionId, undefined);
-    resetWorkbenchForProjectChange(deps, sessionId, undefined);
-    const updated = deps.requireChatSession(sessionId);
-    deps.publishRealtime(
-      "chat_session_updated",
-      "chat",
-      buildChatSessionUpdatedPayload("chat_session_project_unassigned", updated),
-    );
-    return updated;
+  if (projectId) {
+    const project = deps.storage.chatProjects.get(projectId);
+    if (deps.normalizeWorkspaceId(project.workspaceId) !== workspaceId) {
+      throw new Error("project workspace does not match session workspace");
+    }
   }
-  const project = deps.storage.chatProjects.get(projectId);
-  if (deps.normalizeWorkspaceId(project.workspaceId) !== workspaceId) {
-    throw new Error("project workspace does not match session workspace");
-  }
-  const currentProjectId = deps.storage.chatSessionProjects.get(sessionId)?.projectId;
-  deps.storage.chatSessionProjects.assign(sessionId, projectId);
-  deps.storage.chatGeneratedArtifacts.updateProjectForSession(sessionId, projectId);
-  if (currentProjectId !== projectId) {
-    resetWorkbenchForProjectChange(deps, sessionId, projectId);
-  }
+  deps.storage.runImmediateTransaction(() => {
+    let changed: boolean;
+    if (projectId) {
+      const assignment = deps.storage.chatSessionProjects.assignWithRevision(
+        sessionId,
+        projectId,
+        expectedRevision ?? meta.revision,
+      );
+      changed = assignment.revision !== (expectedRevision ?? meta.revision);
+    } else {
+      const unassignment = deps.storage.chatSessionProjects.unassignWithRevision(
+        sessionId,
+        expectedRevision ?? meta.revision,
+      );
+      changed = unassignment.unassigned;
+    }
+    if (changed) {
+      deps.storage.chatGeneratedArtifacts.updateProjectForSession(sessionId, projectId);
+      resetWorkbenchForProjectChange(deps, sessionId, projectId);
+    }
+  });
   const updated = deps.requireChatSession(sessionId);
   deps.publishRealtime(
     "chat_session_updated",
     "chat",
-    buildChatSessionUpdatedPayload("chat_session_project_assigned", updated),
+    buildChatSessionUpdatedPayload(
+      projectId ? "chat_session_project_assigned" : "chat_session_project_unassigned",
+      updated,
+    ),
   );
   return updated;
 }
@@ -730,16 +817,49 @@ export function updateChatSessionPrefs(
   deps: ChatSessionDependencies,
   sessionId: string,
   input: ChatSessionPrefsPatch,
+  expectedRevision?: number,
 ): ChatSessionPrefsRecord {
   deps.getSession(sessionId);
-  const normalizedInput = applyChatModePresetToPatch(input);
+  const { expectedRevision: inputExpectedRevision, ...prefsInput } = input;
+  const normalizedInput = applyChatModePresetToPatch(prefsInput);
   const { basePatch, autonomyPatch } = splitChatPrefsPatch(normalizedInput);
-  if (Object.keys(autonomyPatch).length > 0) {
-    deps.patchSessionAutonomyPrefs(sessionId, autonomyPatch);
-  }
-  const updated = deps.storage.chatSessionPrefs.patch(sessionId, basePatch);
-  const normalized = deps.ensureChatSessionModelDefaults(sessionId, updated);
-  const hydrated = deps.hydrateChatPrefsWithAutonomy(sessionId, normalized);
+  const currentRevision = deps.storage.chatSessionRevisions.ensure(sessionId).revision;
+  const result = deps.storage.chatSessionRevisions.runWithRevision(
+    sessionId,
+    expectedRevision ?? inputExpectedRevision ?? currentRevision,
+    () => {
+      let baseResult = deps.storage.chatSessionPrefs.patchWithinAggregate(
+        sessionId,
+        basePatch,
+        expectedRevision ?? inputExpectedRevision ?? currentRevision,
+      );
+      const normalizedBase = deps.ensureChatSessionModelDefaults(sessionId, baseResult.value);
+      if (normalizedBase.model !== baseResult.value.model) {
+        const normalizedResult = deps.storage.chatSessionPrefs.patchWithinAggregate(
+          sessionId,
+          { model: normalizedBase.model },
+          expectedRevision ?? inputExpectedRevision ?? currentRevision,
+        );
+        baseResult = {
+          value: normalizedResult.value,
+          changed: baseResult.changed || normalizedResult.changed,
+        };
+      }
+      const autonomyResult = deps.storage.sessionAutonomyPrefs.patchWithinAggregate(
+        sessionId,
+        autonomyPatch,
+        expectedRevision ?? inputExpectedRevision ?? currentRevision,
+      );
+      return {
+        value: baseResult.value,
+        changed: baseResult.changed || autonomyResult.changed,
+      };
+    },
+  );
+  const hydrated = {
+    ...deps.hydrateChatPrefsWithAutonomy(sessionId, result.value),
+    revision: result.revision,
+  };
   deps.publishRealtime("chat_session_updated", "chat", {
     type: "chat_session_prefs_updated",
     sessionId,
@@ -748,61 +868,69 @@ export function updateChatSessionPrefs(
   return hydrated;
 }
 
-interface SessionMessageSearchHitRow {
-  session_id: string;
-  message_id: string;
-  turn_id: string | null;
-  content: string;
-  timestamp: string;
-}
-
 function buildSessionSearchHits(
   deps: ChatSessionDependencies,
+  workspaceId: string,
   sessionIds: string[],
   query: string,
   limit = 160,
+  includeHidden = false,
 ): Map<string, ChatSessionSearchHitRecord[]> {
   if (!query.trim() || sessionIds.length === 0) {
     return new Map();
   }
-  const placeholders = sessionIds.map(() => "?").join(", ");
-  const rows = deps.storage.gatewaySql
-    .prepare(
-      `
-        SELECT
-          m.session_id,
-          m.message_id,
-          COALESCE(user_turn.turn_id, assistant_turn.turn_id) AS turn_id,
-          m.content,
-          m.timestamp
-        FROM chat_messages AS m
-        LEFT JOIN chat_turn_traces AS user_turn
-          ON user_turn.user_message_id = m.message_id
-        LEFT JOIN chat_turn_traces AS assistant_turn
-          ON assistant_turn.assistant_message_id = m.message_id
-        WHERE m.session_id IN (${placeholders})
-          AND LOWER(m.content) LIKE ?
-        ORDER BY m.timestamp DESC
-        LIMIT ?
-      `,
-    )
-    .all(...sessionIds, `%${query.trim().toLowerCase()}%`, limit) as SessionMessageSearchHitRow[];
+  const allowedSessionIds = new Set(sessionIds);
+  const rows = deps.storage.chatMessages.searchMessages(query, {
+    workspaceId,
+    includeHidden,
+    limit: Math.max(1, Math.min(50, limit)),
+    contextRadius: 0,
+  });
 
   const grouped = new Map<string, ChatSessionSearchHitRecord[]>();
-  for (const row of rows) {
-    if (!row?.session_id || !row.message_id || typeof row.content !== "string") {
-      continue;
+  const appendRow = (row: (typeof rows)[number]) => {
+    if (
+      row.workspaceId !== workspaceId ||
+      !allowedSessionIds.has(row.sessionId) ||
+      !row.messageId ||
+      !Number.isSafeInteger(row.sequence)
+    ) {
+      return;
     }
-    const hits = grouped.get(row.session_id) ?? [];
+    const hits = grouped.get(row.sessionId) ?? [];
     hits.push({
-      messageId: row.message_id,
-      turnId: row.turn_id ?? undefined,
+      workspaceId: row.workspaceId,
+      sessionId: row.sessionId,
+      messageId: row.messageId,
+      sequence: row.sequence,
       excerpt: buildSearchExcerpt(row.content, query),
       score: scoreSearchHit(row.content, query),
       matchedText: query,
       timestamp: row.timestamp,
     });
-    grouped.set(row.session_id, hits);
+    grouped.set(row.sessionId, hits);
+  };
+  for (const row of rows) {
+    appendRow(row);
+  }
+
+  // The global rank is intentionally capped at 50. A later stable metadata
+  // page can contain a content-only session below that global cut, so resolve
+  // at most three scoped hits for each bounded page candidate not represented
+  // above. This avoids both an unbounded scan and a giant dynamic IN clause.
+  for (const sessionId of sessionIds) {
+    if (grouped.has(sessionId)) {
+      continue;
+    }
+    for (const row of deps.storage.chatMessages.searchMessages(query, {
+      workspaceId,
+      sessionId,
+      includeHidden,
+      limit: 3,
+      contextRadius: 0,
+    })) {
+      appendRow(row);
+    }
   }
 
   for (const [sessionId, hits] of grouped) {
@@ -835,6 +963,10 @@ function buildSearchExcerpt(content: string, query: string): string {
   return `${prefix}${normalizedContent.slice(start, end)}${suffix}`;
 }
 
+function normalizeConversationMode(_mode?: string): "chat" {
+  return "chat";
+}
+
 function scoreSearchHit(content: string, query: string): number {
   const normalizedContent = content.toLowerCase();
   const normalizedQuery = query.trim().toLowerCase();
@@ -861,7 +993,7 @@ function collectSessionSearchMatchedFields(session: ChatSessionRecord, normalize
     ["account", session.account],
     ["projectName", session.projectName],
     ["folderName", session.folderName],
-    ["mode", session.mode],
+    ["mode", normalizeConversationMode(session.mode)],
   ];
   for (const tag of session.tags ?? []) {
     fields.push(["tags", tag]);

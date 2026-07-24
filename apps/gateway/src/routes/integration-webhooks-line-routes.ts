@@ -1,30 +1,31 @@
 import type { FastifyInstance } from "fastify";
 import {
-  deriveLineWebhookIdempotencyKey,
-  normalizeLineWebhookPayload,
+  deriveLineWebhookEventIdempotencyKey,
+  normalizeLineWebhookPayloads,
   verifyLineWebhookSignature,
 } from "../services/line-webhook.js";
-import { resolveLineChannelSecret } from "./integration-webhooks-shared.js";
+import { createWebhookRouteOptions, resolveLineChannelSecret } from "./integration-webhooks-shared.js";
 import {
-  CHANNEL_INBOUND_MAX_BYTES,
   createIgnoredWebhookReply,
-  createWebhookPreParsing,
   createWebhookHandler,
+  dispatchInboundWebhookBatch,
   dispatchInboundWebhookMessage,
   readHeaderValue,
 } from "./webhook-handler-factory.js";
 
-type LineDispatchPayload = Exclude<ReturnType<typeof normalizeLineWebhookPayload>, { kind: "ignore" }>;
+type LineDispatchPayload = Array<Exclude<ReturnType<typeof normalizeLineWebhookPayloads>[number], { kind: "ignore" }>>;
 
 export function registerLineWebhookRoutes(fastify: FastifyInstance): void {
+  const routeOptions = createWebhookRouteOptions("lineRawBody");
   fastify.post(
     "/api/v1/integrations/connections/:connectionId/line/webhook",
     {
-      bodyLimit: CHANNEL_INBOUND_MAX_BYTES,
-      preParsing: createWebhookPreParsing("lineRawBody"),
+      ...routeOptions,
       config: {
+        ...routeOptions.config,
         rateLimit: {
-          max: 500,
+          ...routeOptions.config.rateLimit,
+          max: routeOptions.config.rateLimit.max,
         },
       },
     },
@@ -52,43 +53,52 @@ export function registerLineWebhookRoutes(fastify: FastifyInstance): void {
         return { ok: true as const };
       },
       parsePayload: ({ connectionId, request }) => {
-        const normalized = normalizeLineWebhookPayload({
+        const normalized = normalizeLineWebhookPayloads({
           connectionId,
           payload: request.body,
         });
-        if (normalized.kind === "ignore") {
+        const messages = normalized.filter((event) => event.kind === "message");
+        if (messages.length === 0) {
+          const ignored = normalized.find((event) => event.kind === "ignore");
           return {
             kind: "reply" as const,
-            payload: createIgnoredWebhookReply(normalized.eventType, normalized.reason),
+            payload: createIgnoredWebhookReply(ignored?.eventType, ignored?.reason ?? "No supported LINE events"),
           };
         }
         return {
           kind: "dispatch" as const,
-          parsed: normalized,
+          parsed: messages,
         };
       },
-      dispatch: async ({ connectionId, connection, request, rawBody, parsed }) =>
-        dispatchInboundWebhookMessage(fastify.services.integrationWebhooks, {
+      dispatch: async ({ connectionId, connection, parsed }) => {
+        const inputs = parsed.map((event) => ({
           channel: "line",
           connectionId,
-          idempotencyKey: deriveLineWebhookIdempotencyKey(connectionId, request.body, rawBody),
-          eventType: parsed.eventType,
-          bindingTarget: parsed.room ?? parsed.peer,
+          idempotencyKey: deriveLineWebhookEventIdempotencyKey(connectionId, event),
+          eventType: event.eventType,
+          bindingTarget: event.room ?? event.peer,
           inboundAccessConfig: connection.config,
           message: {
-            eventId: parsed.eventId,
-            account: parsed.account,
-            peer: parsed.peer,
-            room: parsed.room,
-            actorId: parsed.actorId,
-            actorType: parsed.actorType,
-            content: parsed.content,
-            metadata: parsed.metadata,
+            eventId: event.eventId,
+            account: event.account,
+            peer: event.peer,
+            room: event.room,
+            actorId: event.actorId,
+            actorType: event.actorType,
+            content: event.content,
+            metadata: event.metadata,
           },
           responseOptions: {
-            deliveryReplyToMessageId: parsed.deliveryReplyToMessageId,
+            deliveryReplyToMessageId: event.deliveryReplyToMessageId,
           },
-        }),
+          dispatchKind: "agent_turn" as const,
+        }));
+        if (inputs.length === 1) {
+          const { dispatchKind: _dispatchKind, ...input } = inputs[0]!;
+          return dispatchInboundWebhookMessage(fastify.services.integrationWebhooks, input);
+        }
+        return dispatchInboundWebhookBatch(fastify.services.integrationWebhooks, inputs);
+      },
     }),
   );
 }

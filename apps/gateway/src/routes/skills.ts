@@ -2,13 +2,63 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { projectImportProvenanceReferencesForPublic } from "../services/import-provenance-public-projection.js";
 import { sendRouteError } from "./_error-handler.js";
+import { withRouteAccess } from "./route-access.js";
 
 const skillsListQuerySchema = z.object({
   workspaceId: z.string().trim().min(1).optional(),
 });
 
+const skillHubListQuerySchema = z.object({
+  workspaceId: z.string().trim().min(1),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+});
+
+const skillHubOperationSchema = z
+  .object({
+    workspaceId: z.string().trim().min(1),
+    snapshotId: z.string().trim().min(1),
+    operationKind: z.enum([
+      "install_inactive",
+      "stage_update_candidate",
+      "stage_rollback_candidate",
+      "activate",
+      "revoke",
+    ]),
+    sessionId: z.string().trim().min(1).optional(),
+    turnId: z.string().trim().min(1).optional(),
+  })
+  .superRefine((value, context) => {
+    if (value.turnId && !value.sessionId) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["turnId"],
+        message: "Skill Hub turn lineage requires a session ID.",
+      });
+    }
+  });
+
+const skillHubSourceReviewSchema = z
+  .object({
+    workspaceId: z.string().min(1).max(256),
+    sourceRef: z.string().min(1).max(2_048),
+    sourceType: z.enum(["git_url", "remote_bundle"]).optional(),
+    idempotencyKey: z.string().min(1).max(256),
+  })
+  .strict();
+
+const skillHubRollbackReviewSchema = z
+  .object({
+    workspaceId: z.string().min(1).max(256),
+    snapshotId: z.string().min(1).max(256),
+    idempotencyKey: z.string().min(1).max(256),
+  })
+  .strict();
+
 export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
   const skills = fastify.services.skills;
+  const operatorOnly = withRouteAccess(fastify, "operator");
+  const resolveActorId = (request: { authActorId?: string; ip?: string }) =>
+    request.authActorId?.trim() || `ip:${request.ip ?? "unknown"}`;
 
   const skillParamsSchema = z.object({
     skillId: z.string().min(1),
@@ -17,17 +67,20 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
   const stateSchema = z.enum(["enabled", "sleep", "disabled"]);
 
   const updateStateSchema = z.object({
+    expectedRevision: z.number().int().positive(),
     state: stateSchema,
     note: z.string().trim().max(300).optional(),
   });
 
   const bulkStateSchema = z.object({
     skillIds: z.array(z.string().min(1)).min(1),
+    expectedRevisionsBySkillId: z.record(z.string(), z.number().int().positive()),
     state: stateSchema,
     note: z.string().trim().max(300).optional(),
   });
 
   const activationPolicyPatchSchema = z.object({
+    expectedRevision: z.number().int().positive(),
     guardedAutoThreshold: z.number().min(0).max(1).optional(),
     requireFirstUseConfirmation: z.boolean().optional(),
   });
@@ -120,6 +173,71 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send({ items: skills.listSkills() });
   });
 
+  fastify.get("/api/v1/skills/hub", operatorOnly, async (request, reply) => {
+    reply.header("Cache-Control", "no-store");
+    const parsed = skillHubListQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(skills.listSkillHub(parsed.data));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/skills/hub/operations", operatorOnly, async (request, reply) => {
+    reply.header("Cache-Control", "no-store");
+    const parsed = skillHubOperationSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.code(201).send(
+        await skills.createSkillHubApproval({
+          ...parsed.data,
+          actorId: request.authActorId,
+        }),
+      );
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/skills/hub/reviews", operatorOnly, async (request, reply) => {
+    reply.header("Cache-Control", "no-store");
+    const parsed = skillHubSourceReviewSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      const reviewed = await skills.reviewSkillHubSource({
+        ...parsed.data,
+        actorId: request.authActorId,
+      });
+      return reply.code(reviewed.replayed ? 200 : 201).send(reviewed);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/skills/hub/rollback-reviews", operatorOnly, async (request, reply) => {
+    reply.header("Cache-Control", "no-store");
+    const parsed = skillHubRollbackReviewSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      const reviewed = await skills.prepareSkillHubRollbackReview({
+        ...parsed.data,
+        actorId: request.authActorId,
+      });
+      return reply.code(reviewed.replayed ? 200 : 201).send(reviewed);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
   fastify.post("/api/v1/skills/reload", async (_request, reply) => {
     const items = await skills.reloadSkills();
     return reply.send({ items });
@@ -189,15 +307,16 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
+  // HX-402 P2: the legacy executable install is retired. Validation stays
+  // advisory; the response is a structured redirect into the governed Skill
+  // Hub review surface and never publishes bytes or alters callability.
   fastify.post("/api/v1/skills/import/install", async (request, reply) => {
     const parsed = installImportSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply
-        .code(201)
-        .send(projectImportProvenanceReferencesForPublic(await skills.installSkillImport(parsed.data)));
+      return reply.send(projectImportProvenanceReferencesForPublic(await skills.installSkillImport(parsed.data)));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -277,16 +396,23 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
+  // HX-402 P2: operator skill-state verbs are approval-first. Each verb
+  // commits one canonical `skill.lifecycle` approval (202 + pending-approval
+  // envelope); the recovered approval effect is the only executor. A
+  // byte-identical current state answers 200 with a no-op envelope.
   fastify.patch("/api/v1/skills/by-id/state", async (request, reply) => {
     const body = updateStateByIdSchema.safeParse(request.body);
     if (!body.success) {
       return reply.code(400).send({ error: body.error.flatten() });
     }
     try {
-      const updated = skills.setSkillState(body.data.skillId, body.data.state, body.data.note);
-      return reply.send(updated);
+      const outcome = skills.setSkillState(body.data.skillId, body.data.state, body.data.note, {
+        expectedRevision: body.data.expectedRevision,
+        requesterId: resolveActorId(request),
+      });
+      return reply.code(outcome.pendingApproval ? 202 : 200).send(outcome);
     } catch (error) {
-      return reply.code(404).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -365,10 +491,13 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      const updated = skills.setSkillState(params.data.skillId, body.data.state, body.data.note);
-      return reply.send(updated);
+      const outcome = skills.setSkillState(params.data.skillId, body.data.state, body.data.note, {
+        expectedRevision: body.data.expectedRevision,
+        requesterId: resolveActorId(request),
+      });
+      return reply.code(outcome.pendingApproval ? 202 : 200).send(outcome);
     } catch (error) {
-      return reply.code(404).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -378,10 +507,13 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const items = skills.bulkSetSkillState(parsed.data.skillIds, parsed.data.state, parsed.data.note);
-      return reply.send({ items });
+      const outcome = skills.bulkSetSkillState(parsed.data.skillIds, parsed.data.state, parsed.data.note, {
+        expectedRevisionsBySkillId: parsed.data.expectedRevisionsBySkillId,
+        requesterId: resolveActorId(request),
+      });
+      return reply.code(outcome.pendingApproval ? 202 : 200).send(outcome);
     } catch (error) {
-      return reply.code(404).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -394,6 +526,15 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(skills.updateSkillActivationPolicy(parsed.data));
+    const { expectedRevision, ...input } = parsed.data;
+    try {
+      const outcome = skills.updateSkillActivationPolicy(input, {
+        expectedRevision,
+        requesterId: resolveActorId(request),
+      });
+      return reply.code(outcome.pendingApproval ? 202 : 200).send(outcome);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
   });
 };

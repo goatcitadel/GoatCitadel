@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { ConflictError } from "@goatcitadel/contracts";
 import { Storage } from "@goatcitadel/storage";
 import {
   archiveChatSession,
@@ -26,6 +27,7 @@ import {
   updateChatSessionPrefs,
 } from "./chat-session-service.js";
 import { projectChatSessionForPublic } from "./chat-secret-projection.js";
+import { handleChatGoalClearRequest, handleChatGoalSetRequest } from "./chat-steer-route.js";
 
 const NOW = "2026-05-03T16:00:00.000Z";
 
@@ -80,6 +82,147 @@ function createDeps(storage: Storage): ChatSessionDependencies {
 }
 
 describe("chat session service", () => {
+  it("rejects stale two-client writes across the chat-session aggregate and rolls back project side effects", async () => {
+    const { storage, cleanup } = createStorage();
+    try {
+      const deps = createDeps(storage);
+
+      const metaSession = createChatSession(deps, { workspaceId: "default", title: "Original" });
+      const clientAMeta = deps.requireChatSession(metaSession.sessionId);
+      const clientBMeta = deps.requireChatSession(metaSession.sessionId);
+      const renamed = updateChatSession(deps, metaSession.sessionId, { title: "Client A" }, clientAMeta.revision);
+      expect(renamed.revision).toBe(clientAMeta.revision + 1);
+      expect(() => pinChatSession(deps, metaSession.sessionId, clientBMeta.revision)).toThrow(ConflictError);
+      expect(deps.requireChatSession(metaSession.sessionId)).toMatchObject({ title: "Client A", pinned: false });
+
+      const prefsBefore = getChatSessionPrefs(deps, metaSession.sessionId);
+      const prefsUpdated = updateChatSessionPrefs(
+        deps,
+        metaSession.sessionId,
+        {
+          providerId: "openai",
+          model: "gpt-5",
+          proactiveMode: "suggest",
+          autonomyBudget: { maxActionsPerTurn: 4 },
+        },
+        prefsBefore.revision,
+      );
+      expect(prefsUpdated.revision).toBe(prefsBefore.revision + 1);
+      expect(() =>
+        updateChatSessionPrefs(
+          deps,
+          metaSession.sessionId,
+          { model: "gpt-4.1", reflectionMode: "on" },
+          prefsBefore.revision,
+        ),
+      ).toThrow(ConflictError);
+      expect(getChatSessionPrefs(deps, metaSession.sessionId)).toMatchObject({
+        revision: prefsUpdated.revision,
+        model: "gpt-5",
+      });
+      expect(storage.sessionAutonomyPrefs.get(metaSession.sessionId)).toMatchObject({
+        revision: prefsUpdated.revision,
+        proactiveMode: "suggest",
+        maxActionsPerTurn: 4,
+      });
+
+      const projectSession = createChatSession(deps, { workspaceId: "default", title: "Project race" });
+      const project = storage.chatProjects.create({
+        workspaceId: "default",
+        name: "Atomic project",
+        workspacePath: "projects/atomic",
+      });
+      storage.chatGeneratedArtifacts.create({
+        artifactId: "artifact-project-race",
+        sessionId: projectSession.sessionId,
+        workspaceId: "default",
+        turnId: "turn-project-race",
+        title: "Plan",
+        kind: "markdown",
+        content: "plan",
+        sourceSurface: "chat",
+        version: 1,
+        createdAt: NOW,
+        updatedAt: NOW,
+      });
+      const projectRevision = deps.requireChatSession(projectSession.sessionId).revision;
+      const workbenchPatch = vi.spyOn(storage.chatSessionWorkbench, "patch").mockImplementationOnce(() => {
+        throw new Error("workbench reset failed");
+      });
+      expect(() =>
+        assignChatSessionProject(deps, projectSession.sessionId, project.projectId, projectRevision),
+      ).toThrow("workbench reset failed");
+      workbenchPatch.mockRestore();
+      expect(storage.chatSessionProjects.get(projectSession.sessionId)).toBeUndefined();
+      expect(storage.chatGeneratedArtifacts.get("artifact-project-race").projectId).toBeUndefined();
+      expect(storage.chatSessionRevisions.get(projectSession.sessionId)?.revision).toBe(projectRevision);
+
+      const goalSession = createChatSession(deps, { workspaceId: "default", title: "Goal race" });
+      const goalSnapshot = storage.chatSessionMeta.ensure(goalSession.sessionId);
+      const goal = await handleChatGoalSetRequest({
+        sessionId: goalSession.sessionId,
+        body: { goal: "Ship", expectedRevision: goalSnapshot.revision },
+        chatSessionMeta: storage.chatSessionMeta,
+      });
+      expect(goal.revision).toBe(goalSnapshot.revision + 1);
+      await expect(
+        handleChatGoalClearRequest({
+          sessionId: goalSession.sessionId,
+          expectedRevision: goalSnapshot.revision,
+          chatSessionMeta: storage.chatSessionMeta,
+        }),
+      ).rejects.toBeInstanceOf(ConflictError);
+      expect(storage.chatSessionMeta.get(goalSession.sessionId)?.pinnedGoal).toBe("Ship");
+
+      const policySnapshot = storage.sessionAutonomyPrefs.ensure(goalSession.sessionId);
+      const policy = storage.sessionAutonomyPrefs.patchWithRevision(
+        goalSession.sessionId,
+        { proactiveMode: "suggest" },
+        policySnapshot.revision,
+      );
+      expect(policy.revision).toBe(policySnapshot.revision + 1);
+      expect(() =>
+        storage.sessionAutonomyPrefs.patchWithRevision(
+          goalSession.sessionId,
+          { reflectionMode: "on" },
+          policySnapshot.revision,
+        ),
+      ).toThrow(ConflictError);
+
+      const deleteSessionRecord = createChatSession(deps, { workspaceId: "default", title: "Delete race" });
+      const deleteSnapshot = deps.requireChatSession(deleteSessionRecord.sessionId);
+      updateChatSession(deps, deleteSessionRecord.sessionId, { title: "Newer title" }, deleteSnapshot.revision);
+      await expect(
+        deleteChatSession(deps, deleteSessionRecord.sessionId, deleteSnapshot.revision),
+      ).rejects.toBeInstanceOf(ConflictError);
+      expect(storage.sessions.getBySessionId(deleteSessionRecord.sessionId).sessionId).toBe(
+        deleteSessionRecord.sessionId,
+      );
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("lets a newer operator title win an auto-title race", () => {
+    const { storage, cleanup } = createStorage();
+    try {
+      const deps = createDeps(storage);
+      const session = createChatSession(deps, { workspaceId: "default" });
+      const originalPatchWithRevision = storage.chatSessionMeta.patchWithRevision.bind(storage.chatSessionMeta);
+      vi.spyOn(storage.chatSessionMeta, "patchWithRevision").mockImplementationOnce(
+        (sessionId, patch, expectedRevision, now) => {
+          originalPatchWithRevision(sessionId, { title: "Operator title" }, expectedRevision, now);
+          return originalPatchWithRevision(sessionId, patch, expectedRevision, now);
+        },
+      );
+
+      expect(() => maybeAutoTitleChatSession(deps, session.sessionId, "Generated title")).not.toThrow();
+      expect(storage.chatSessionMeta.get(session.sessionId)?.title).toBe("Operator title");
+    } finally {
+      cleanup();
+    }
+  });
+
   it("upserts one deterministic internal session for a stable orchestration key", () => {
     const { storage, cleanup } = createStorage();
     try {
@@ -105,6 +248,15 @@ describe("chat session service", () => {
       expect(first.sessionKey).toMatch(/^mission:operator:chat_[0-9a-f]{24}$/u);
       expect(listChatSessions(deps, { workspaceId: "default", includeHidden: true })).toHaveLength(2);
       expect(deps.ensureChatSessionRuntimeGrants).toHaveBeenCalledTimes(3);
+      expect(() =>
+        ensureChatSessionWithStableKey(deps, "delegation-run-a:step-a", {
+          workspaceId: "other-workspace",
+          title: "Must not move",
+          mode: "chat",
+        }),
+      ).toThrow("stable chat session key already belongs to another workspace");
+      expect(storage.chatSessionMeta.get(first.sessionId)?.workspaceId).toBe("default");
+      expect(storage.chatSessionMeta.get(first.sessionId)?.title).toBe("Delegate - Coder");
     } finally {
       cleanup();
     }
@@ -447,6 +599,7 @@ describe("chat session service", () => {
       expect(archiveChatSession(deps, created.sessionId).lifecycleStatus).toBe("archived");
       expect(restoreChatSession(deps, created.sessionId).lifecycleStatus).toBe("active");
 
+      const prefsRevisionBefore = storage.chatSessionRevisions.get(created.sessionId)?.revision;
       const prefs = updateChatSessionPrefs(deps, created.sessionId, {
         mode: "code",
         providerId: "openai",
@@ -469,16 +622,14 @@ describe("chat session service", () => {
         providerId: "openai",
         model: "gpt-5",
       });
-      expect(deps.patchSessionAutonomyPrefs).toHaveBeenCalledWith(
-        created.sessionId,
-        expect.objectContaining({
-          proactiveMode: "suggest",
-          maxActionsPerTurn: 2,
-          cooldownSeconds: 30,
-          retrievalMode: "layered",
-          reflectionMode: "on",
-        }),
-      );
+      expect(prefs.revision).toBe((prefsRevisionBefore ?? 0) + 1);
+      expect(storage.sessionAutonomyPrefs.get(created.sessionId)).toMatchObject({
+        proactiveMode: "suggest",
+        maxActionsPerTurn: 2,
+        cooldownSeconds: 30,
+        retrievalMode: "layered",
+        reflectionMode: "on",
+      });
       expect(deps.publishRealtime).toHaveBeenCalledWith(
         "chat_session_updated",
         "chat",
@@ -663,12 +814,14 @@ describe("chat session service", () => {
     try {
       const deps = createDeps(storage);
       const session = createChatSession(deps, { workspaceId: "default", title: "Delete me" });
-      const deleteSpy = vi.spyOn(storage, "deleteChatSessionData").mockReturnValue({
-        sessionId: session.sessionId,
-        deleted: true,
-        cleanupRelPaths: ["chat/sess/file.txt"],
-        attachments: [],
-      });
+      const deleteSpy = vi.spyOn(storage, "deleteChatSessionTreeWithRevision").mockReturnValue([
+        {
+          sessionId: session.sessionId,
+          deleted: true,
+          cleanupRelPaths: ["chat/sess/file.txt"],
+          attachments: [],
+        },
+      ]);
       vi.spyOn(storage.transcripts, "delete").mockRejectedValue(new Error("transcript locked"));
       deps.removeChatSessionStoredFile = vi.fn().mockRejectedValue(new Error("missing file"));
 
@@ -677,7 +830,14 @@ describe("chat session service", () => {
         sessionId: session.sessionId,
       });
 
-      expect(deleteSpy).toHaveBeenCalledWith(session.sessionId);
+      expect(deleteSpy).toHaveBeenCalledWith({
+        workspaceId: "default",
+        rootSessionId: session.sessionId,
+        expectedRootRevision: session.revision,
+        actorId: "operator",
+        idempotencyKey: `lifecycle:delete:${session.sessionId}:${session.revision}`,
+        correlationId: `chat-session-delete:${session.sessionId}:${session.revision}`,
+      });
       expect(deps.clearChatTurnWriteLease).toHaveBeenCalledWith(session.sessionId);
       expect(deps.operatorSummaryCache.invalidate).toHaveBeenCalled();
       expect(deps.removeChatSessionStoredFile).toHaveBeenCalledWith("chat/sess/file.txt");
@@ -686,6 +846,60 @@ describe("chat session service", () => {
         sessionId: session.sessionId,
         mode: "hard",
       });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("replays an acknowledged-lost delete after session metadata removal without transport pre-reads", async () => {
+    const { storage, cleanup } = createStorage();
+    try {
+      const deps = createDeps(storage);
+      deps.getSession = vi.fn(deps.getSession);
+      const session = createChatSession(deps, { workspaceId: "default", title: "Delete replay" });
+      const expectedRevision = session.revision;
+
+      await expect(deleteChatSession(deps, session.sessionId, expectedRevision)).resolves.toEqual({
+        deleted: true,
+        sessionId: session.sessionId,
+      });
+      expect(storage.sessions.listBySessionIds([session.sessionId]).size).toBe(0);
+      expect(storage.chatSessionMeta.get(session.sessionId)).toBeUndefined();
+
+      vi.mocked(deps.getSession).mockClear();
+      vi.mocked(deps.requireChatSession).mockClear();
+      const replaySpy = vi.spyOn(storage, "replayChatSessionTreeDeletion");
+      await expect(deleteChatSession(deps, session.sessionId, expectedRevision)).resolves.toEqual({
+        deleted: true,
+        sessionId: session.sessionId,
+      });
+
+      expect(replaySpy).toHaveBeenCalledWith({
+        rootSessionId: session.sessionId,
+        expectedRootRevision: expectedRevision,
+        actorId: "operator",
+        idempotencyKey: `lifecycle:delete:${session.sessionId}:${expectedRevision}`,
+        correlationId: `chat-session-delete:${session.sessionId}:${expectedRevision}`,
+      });
+      expect(deps.getSession).not.toHaveBeenCalled();
+      expect(deps.requireChatSession).not.toHaveBeenCalled();
+
+      await expect(deleteChatSession(deps, session.sessionId, expectedRevision + 1)).rejects.toMatchObject({
+        code: "ENTITY_NOT_FOUND",
+      });
+      storage.chatSessionLifecycles.reactivate({
+        workspaceId: "default",
+        sessionId: session.sessionId,
+        expectedTerminalGeneration: 1,
+        actorId: "operator",
+        idempotencyKey: `lifecycle:reactivate:${session.sessionId}:2`,
+        correlationId: `chat-session-reactivate:${session.sessionId}:2`,
+      });
+      await expect(deleteChatSession(deps, session.sessionId, expectedRevision)).rejects.toMatchObject({
+        code: "STATE_CONFLICT",
+        details: { sessionLifecycleCode: "CHAT_SESSION_DELETE_REPLAY_REACTIVATED" },
+      });
+      expect(storage.chatSessionMeta.get(session.sessionId)?.workspaceId).toBe("default");
     } finally {
       cleanup();
     }
@@ -756,11 +970,7 @@ describe("chat session service", () => {
       });
 
       expect(contentMatches.map((record) => record.sessionId)).toEqual([searchSession.sessionId]);
-      expect(contentMatches[0]?.searchHits?.map((hit) => hit.messageId)).toEqual([
-        "msg-start",
-        "msg-space",
-        "msg-contained",
-      ]);
+      expect(contentMatches[0]?.searchHits?.map((hit) => hit.messageId)).toEqual(["msg-start", "msg-space"]);
       expect(contentMatches[0]?.searchHits?.[1]).toMatchObject({
         excerpt: expect.stringMatching(/^\.\.\..*preflight.*\.\.\.$/),
         score: 4,

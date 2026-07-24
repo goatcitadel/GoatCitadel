@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { sendRouteError } from "./_error-handler.js";
 import {
   projectChatGeneratedArtifactForPublic,
   projectChatSessionForPublic,
@@ -17,7 +18,7 @@ const listChatSessionsSchema = z.object({
   projectId: z.string().min(1).optional(),
   folderId: z.string().min(1).optional(),
   tag: z.string().min(1).optional(),
-  q: z.string().optional(),
+  q: z.string().max(512).optional(),
   view: z.enum(["active", "archived", "all"]).optional(),
   mode: chatOnlyModeSchema.optional(),
   limit: z.coerce.number().int().positive().max(1000).default(200),
@@ -29,8 +30,9 @@ const listChatSessionsSchema = z.object({
 });
 
 const searchChatSessionsSchema = z.object({
-  query: z.string().trim().min(1),
+  query: z.string().trim().min(1).max(512),
   mode: z.enum(["discovery", "scroll", "browse"]).default("discovery"),
+  view: z.enum(["active", "archived", "all"]).default("all"),
   citadelId: z.string().min(1).optional(),
   workspaceId: z.string().min(1).optional(),
   surface: chatOnlyModeSchema.optional(),
@@ -86,6 +88,7 @@ const bulkArchiveSessionsSchema = z.object({
 });
 
 const updateSessionSchema = z.object({
+  expectedRevision: z.number().int().positive(),
   title: z.string().optional(),
   folderId: z.string().optional(),
   folderName: z.string().optional(),
@@ -93,7 +96,17 @@ const updateSessionSchema = z.object({
 });
 
 const assignProjectSchema = z.object({
+  expectedRevision: z.number().int().positive(),
   projectId: z.string().optional(),
+});
+
+const sessionRevisionSchema = z.object({
+  expectedRevision: z.number().int().positive(),
+});
+
+const deleteSessionQuerySchema = z.object({
+  mode: z.literal("hard"),
+  expectedRevision: z.coerce.number().int().positive(),
 });
 
 const bindingSchema = z.object({
@@ -215,6 +228,8 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
   });
 
   fastify.get("/api/v1/chat/session-search", async (request, reply) => {
+    reply.header("cache-control", "private, no-store");
+    reply.header("pragma", "no-cache");
     const parsed = searchChatSessionsSchema.safeParse(request.query);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -232,6 +247,10 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     const parsed = listChatSessionsSchema.safeParse(request.query);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    if (parsed.data.q?.trim()) {
+      reply.header("cache-control", "private, no-store");
+      reply.header("pragma", "no-cache");
     }
     const items = fastify.services.chatSessions.listChatSessions(parsed.data);
     const last = items.at(-1);
@@ -296,79 +315,122 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
+      const { expectedRevision, ...input } = body.data;
       return reply.send(
-        projectChatSessionForPublic(fastify.services.chatSessions.updateChatSession(params.data.sessionId, body.data)),
+        projectChatSessionForPublic(
+          fastify.services.chatSessions.updateChatSession(params.data.sessionId, input, expectedRevision),
+        ),
       );
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 
   fastify.delete("/api/v1/chat/sessions/:sessionId", async (request, reply) => {
     const params = sessionParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return reply.code(400).send({ error: params.error.flatten() });
+    const query = deleteSessionQuerySchema.safeParse(request.query ?? {});
+    if (!params.success || !query.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          query: query.success ? undefined : query.error.flatten(),
+        },
+      });
     }
     try {
-      return reply.send(await fastify.services.chatSessions.deleteChatSession(params.data.sessionId));
+      return reply.send(
+        await fastify.services.chatSessions.deleteChatSession(params.data.sessionId, query.data.expectedRevision),
+      );
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 
   fastify.post("/api/v1/chat/sessions/:sessionId/pin", async (request, reply) => {
     const params = sessionParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return reply.code(400).send({ error: params.error.flatten() });
+    const body = sessionRevisionSchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
     }
     try {
       return reply.send(
-        projectChatSessionForPublic(fastify.services.chatSessions.pinChatSession(params.data.sessionId)),
+        projectChatSessionForPublic(
+          fastify.services.chatSessions.pinChatSession(params.data.sessionId, body.data.expectedRevision),
+        ),
       );
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 
   fastify.post("/api/v1/chat/sessions/:sessionId/unpin", async (request, reply) => {
     const params = sessionParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return reply.code(400).send({ error: params.error.flatten() });
+    const body = sessionRevisionSchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
     }
     try {
       return reply.send(
-        projectChatSessionForPublic(fastify.services.chatSessions.unpinChatSession(params.data.sessionId)),
+        projectChatSessionForPublic(
+          fastify.services.chatSessions.unpinChatSession(params.data.sessionId, body.data.expectedRevision),
+        ),
       );
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 
   fastify.post("/api/v1/chat/sessions/:sessionId/archive", async (request, reply) => {
     const params = sessionParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return reply.code(400).send({ error: params.error.flatten() });
+    const body = sessionRevisionSchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
     }
     try {
       return reply.send(
-        projectChatSessionForPublic(fastify.services.chatSessions.archiveChatSession(params.data.sessionId)),
+        projectChatSessionForPublic(
+          fastify.services.chatSessions.archiveChatSession(params.data.sessionId, body.data.expectedRevision),
+        ),
       );
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 
   fastify.post("/api/v1/chat/sessions/:sessionId/restore", async (request, reply) => {
     const params = sessionParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return reply.code(400).send({ error: params.error.flatten() });
+    const body = sessionRevisionSchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
     }
     try {
       return reply.send(
-        projectChatSessionForPublic(fastify.services.chatSessions.restoreChatSession(params.data.sessionId)),
+        projectChatSessionForPublic(
+          fastify.services.chatSessions.restoreChatSession(params.data.sessionId, body.data.expectedRevision),
+        ),
       );
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -386,11 +448,15 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     try {
       return reply.send(
         projectChatSessionForPublic(
-          fastify.services.chatSessions.assignChatSessionProject(params.data.sessionId, body.data.projectId),
+          fastify.services.chatSessions.assignChatSessionProject(
+            params.data.sessionId,
+            body.data.projectId,
+            body.data.expectedRevision,
+          ),
         ),
       );
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 

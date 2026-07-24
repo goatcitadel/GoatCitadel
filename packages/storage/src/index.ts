@@ -1,7 +1,7 @@
 import type { ChatAttachmentRecord } from "@goatcitadel/contracts";
 import { ValidationError } from "@goatcitadel/contracts";
 import { createDatabase, type SqliteOptions } from "./sqlite.js";
-import type { DatabaseClient } from "./db.js";
+import type { DatabaseClient, DatabaseOnlineBackupOptions } from "./db.js";
 import { SessionRepository } from "./session-repo.js";
 import { IdempotencyRepository } from "./idempotency-repo.js";
 import { MutationIdempotencyRepository } from "./mutation-idempotency-repo.js";
@@ -12,6 +12,7 @@ import { PostgresAuditLog } from "./postgres-audit-log.js";
 import { ApprovalRepository } from "./approval-repo.js";
 import { CitadelRepository } from "./citadel-repo.js";
 import { CostLedgerRepository } from "./cost-ledger-repo.js";
+import { ModelUsageEventRepository } from "./model-usage-event-repo.js";
 import { LlmEvalProofRepository } from "./llm-eval-proof-repo.js";
 import { LlmRuntimeMeasurementRepository } from "./llm-runtime-measurement-repo.js";
 import { ApprovalEventRepository } from "./approval-event-repo.js";
@@ -21,15 +22,27 @@ import { ApprovalInboxRepository } from "./approval-inbox-repo.js";
 import { ApprovalEffectRepository } from "./approval-effect-repo.js";
 import { ApprovalWaitRunRepository } from "./approval-wait-run-repo.js";
 import { OrchestrationRepository } from "./orchestration-repo.js";
+import { OrchestrationWorktreeLeaseRepository } from "./orchestration-worktree-lease-repo.js";
 import { TaskRepository } from "./task-repo.js";
 import { TaskActivityRepository } from "./task-activity-repo.js";
 import { TaskDeliverableRepository } from "./task-deliverable-repo.js";
 import { TaskSubagentRepository } from "./task-subagent-repo.js";
 import { RealtimeEventRepository } from "./realtime-event-repo.js";
 import { CronJobRepository } from "./cron-job-repo.js";
+import { CronRunRepository } from "./cron-run-repo.js";
+import { InboundChannelEventRepository } from "./inbound-channel-event-repo.js";
 import { IntegrationConnectionRepository } from "./integration-connection-repo.js";
 import { ChannelSetupDraftRepository } from "./channel-setup-draft-repo.js";
 import { MeshRepository } from "./mesh-repo.js";
+import { MeshCapabilityNodeAdmissionRepository } from "./mesh-capability-node-admission-repo.js";
+import { MeshCapabilityPublicationRepository } from "./mesh-capability-publication-repo.js";
+import { RemoteWorkerAdmissionRepository } from "./remote-worker-admission-repo.js";
+import { RemoteWorkerArtifactRepository } from "./remote-worker-artifact-repo.js";
+import { RemoteWorkerAssignmentRepository } from "./remote-worker-assignment-repo.js";
+import { RemoteWorkerEffectRepository } from "./remote-worker-effect-repo.js";
+import { SessionControlRepository } from "./session-control-repo.js";
+import { SessionMutationAdmissionRepository } from "./session-mutation-admission-repo.js";
+import { HeartbeatOccurrenceRepository } from "./heartbeat-occurrence-repo.js";
 import { MemoryContextRepository } from "./memory-context-repo.js";
 import { ContextManifestRepository } from "./context-manifest-repo.js";
 import { MemoryQmdRunRepository } from "./memory-qmd-run-repo.js";
@@ -42,7 +55,9 @@ import { PermissionProfileRepository } from "./permission-profile-repo.js";
 import { KnowledgeRepository } from "./knowledge-repo.js";
 import { CommsDeliveryRepository } from "./comms-delivery-repo.js";
 import { ChatProjectRepository } from "./chat-project-repo.js";
+import { ChatSessionRevisionRepository } from "./chat-session-revision-repo.js";
 import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
+import { ChatSessionLifecycleRepository } from "./chat-session-lifecycle-repo.js";
 import { ChatSessionListRepository } from "./chat-session-list-repo.js";
 import { ChatSessionProjectRepository } from "./chat-session-project-repo.js";
 import { ChatSessionWorkbenchRepository } from "./chat-session-workbench-repo.js";
@@ -56,6 +71,16 @@ import { AgentCommitmentRepository } from "./agent-commitment-repo.js";
 import { OperatorProfileRepository } from "./operator-profile-repo.js";
 import { AutonomyAuditRepository } from "./autonomy-audit-repo.js";
 import { ChatTurnTraceRepository } from "./chat-turn-trace-repo.js";
+import { ChatTurnCapabilityProfileRepository } from "./chat-turn-capability-profile-repo.js";
+import { RoutedContextSnapshotRepository } from "./routed-context-snapshot-repo.js";
+export {
+  ChatTurnCapabilityProfileRepository,
+  sealChatTurnCapabilityProfile,
+  verifyCapabilityCatalogEntryUniqueness,
+  verifyChatTurnCapabilityCatalogBinding,
+  verifyChatTurnCapabilityProfile,
+  verifyChatTurnCapabilitySkillBindings,
+} from "./chat-turn-capability-profile-repo.js";
 import { ChatTurnRecoveryRepository } from "./chat-turn-recovery-repo.js";
 import { ChatStreamEventRepository } from "./chat-stream-event-repo.js";
 import { ChatExecutionPlanRepository } from "./chat-execution-plan-repo.js";
@@ -92,11 +117,73 @@ import { RealtimeStreamLeaseRepository } from "./realtime-stream-lease-repo.js";
 import { CapabilityCatalogSnapshotRepository } from "./capability-catalog-snapshot-repo.js";
 import { SkillLifecycleRepository } from "./skill-lifecycle-repo.js";
 import { CandidateSkillVersionRepository } from "./candidate-skill-version-repo.js";
+import { SkillHubSnapshotRepository } from "./skill-hub-snapshot-repo.js";
+import { SkillHubArtifactRepository } from "./skill-hub-artifact-repo.js";
+import { SkillHubOperationRepository } from "./skill-hub-operation-repo.js";
+import { SkillAggregateRevisionRepository } from "./skill-aggregate-revision-repo.js";
+import {
+  CandidateSkillEvidenceLinkRepository,
+  SkillLearningEvidenceRepository,
+} from "./skill-learning-evidence-repo.js";
+import { GovernanceJourneyEventRepository } from "./governance-journey-event-repo.js";
+import { WorkspacePathBridgeSnapshotRepository } from "./workspace-path-bridge-snapshot-repo.js";
+import { ExternalSourceConfigRepository } from "./external-source-config-repo.js";
+import { ExternalSourceScanRepository } from "./external-source-scan-repo.js";
+import { ExternalSourceImportRepository } from "./external-source-import-repo.js";
+import { OpsSavedBoardRepository } from "./ops-saved-board-repo.js";
+import {
+  ExternalSessionAttachmentRepository,
+  ExternalSourceKnowledgeLinkRepository,
+} from "./external-session-attachment-repo.js";
+export {
+  ExternalSourceConfigRepository,
+  sealExternalSourceRecord,
+  verifyExternalSourceRecord,
+} from "./external-source-config-repo.js";
+export {
+  ExternalSourceScanRepository,
+  computeExternalSourceManifestSha256,
+  decodeExternalSourceCursor,
+  encodeExternalSourceCursor,
+  sealExternalSourceCatalogItem,
+  sealExternalSourceScanRecord,
+  verifyExternalSourceCatalogItem,
+} from "./external-source-scan-repo.js";
+export {
+  ExternalSourceImportRepository,
+  computeExternalSourceArtifactSetSha256,
+  computeExternalSourceImportRequestSha256,
+  computeExternalSourceNormalizedSetSha256,
+  computeExternalSourceRawSetSha256,
+  computeExternalSourceSelectedItemSetSha256,
+  computeExternalSourceSettlementResultSha256,
+  deriveExternalSourceImportIdempotencyKey,
+  sealExternalSourceImportIntent,
+  sealExternalSourceImportItem,
+  sealExternalSourceImportPlan,
+  sealExternalSourceImportSettlement,
+  verifyExternalSourceImportIntent,
+  verifyExternalSourceImportItem,
+  verifyExternalSourceImportPlan,
+  verifyExternalSourceImportSettlement,
+} from "./external-source-import-repo.js";
+export {
+  EXTERNAL_SOURCE_KNOWLEDGE_DOCUMENT_PROVENANCE_KIND,
+  EXTERNAL_SOURCE_KNOWLEDGE_DOCUMENT_SOURCE_TYPE,
+  ExternalSessionAttachmentRepository,
+  ExternalSourceKnowledgeLinkRepository,
+  buildExternalSourceKnowledgeDocumentBinding,
+  sealExternalSourceKnowledgeLink,
+  verifyExternalSourceKnowledgeLink,
+  type ExternalSourceKnowledgeDocumentBinding,
+  type ExternalSourceKnowledgeDocumentBindingInput,
+} from "./external-session-attachment-repo.js";
 import { CapabilityProposalEventRepository, CapabilityProposalRepository } from "./capability-proposal-repo.js";
 import { SkillEvaluationRunRepository } from "./skill-evaluation-run-repo.js";
 import { StateValidationQuarantineRepository } from "./state-validation-quarantine-repo.js";
 import { CodeModeRunRepository } from "./code-mode-run-repo.js";
 import { DurableRunEventRepository } from "./durable-run-event-repo.js";
+import { DurableChildWatcherRepository } from "./durable-child-watcher-repo.js";
 import { ChatReflectionAttemptRepository } from "./chat-reflection-attempt-repo.js";
 import { EvidenceEnvelopeRepository } from "./evidence-envelope-repo.js";
 import { ExternalSideEffectRunRepository } from "./external-side-effect-run-repo.js";
@@ -120,6 +207,8 @@ export interface StorageOptions extends Partial<SqliteOptions> {
   db?: DatabaseClient;
   transcripts?: TranscriptLog | PostgresTranscriptLog;
   audit?: AuditLog | PostgresAuditLog;
+  /** Test/embedding override; production defaults to a one-minute usage recovery sweep. */
+  modelUsageRecoverySweepIntervalMs?: number;
 }
 
 export interface DeleteChatSessionDataResult {
@@ -129,7 +218,19 @@ export interface DeleteChatSessionDataResult {
   attachments: ChatAttachmentRecord[];
 }
 
+export interface DeleteChatSessionTreeInput {
+  workspaceId: string;
+  rootSessionId: string;
+  expectedRootRevision: number;
+  actorId?: string;
+  idempotencyKey?: string;
+  correlationId?: string;
+}
+
+export type ReplayChatSessionTreeDeletionInput = Omit<DeleteChatSessionTreeInput, "workspaceId">;
+
 export class Storage {
+  private modelUsageRecoverySweepTimer?: ReturnType<typeof setInterval>;
   public readonly db: DatabaseClient;
   public readonly sessions: SessionRepository;
   public readonly idempotency: IdempotencyRepository;
@@ -145,21 +246,34 @@ export class Storage {
   public readonly approvalEffects: ApprovalEffectRepository;
   public readonly approvalWaitRuns: ApprovalWaitRunRepository;
   public readonly costLedger: CostLedgerRepository;
+  public readonly modelUsageEvents: ModelUsageEventRepository;
   public readonly llmRuntimeMeasurements: LlmRuntimeMeasurementRepository;
   public readonly llmEvalProofRuns: LlmEvalProofRepository;
   public readonly orchestration: OrchestrationRepository;
+  public readonly orchestrationWorktreeLeases: OrchestrationWorktreeLeaseRepository;
   public readonly tasks: TaskRepository;
   public readonly taskActivities: TaskActivityRepository;
   public readonly taskDeliverables: TaskDeliverableRepository;
   public readonly taskSubagents: TaskSubagentRepository;
   public readonly realtimeEvents: RealtimeEventRepository;
   public readonly cronJobs: CronJobRepository;
+  public readonly cronRuns: CronRunRepository;
+  public readonly inboundChannelEvents: InboundChannelEventRepository;
   public readonly integrationConnections: IntegrationConnectionRepository;
   public readonly externalConnectorReviewStates: ExternalConnectorReviewStateRepository;
   public readonly channelSetupDrafts: ChannelSetupDraftRepository;
   public readonly agentProfiles: AgentProfileRepository;
   public readonly importedAgentCatalog: ImportedAgentCatalogRepository;
   public readonly mesh: MeshRepository;
+  public readonly meshCapabilityNodeAdmissions: MeshCapabilityNodeAdmissionRepository;
+  public readonly meshCapabilityPublications: MeshCapabilityPublicationRepository;
+  public readonly remoteWorkerAdmissions: RemoteWorkerAdmissionRepository;
+  public readonly remoteWorkerArtifacts: RemoteWorkerArtifactRepository;
+  public readonly remoteWorkerAssignments: RemoteWorkerAssignmentRepository;
+  public readonly remoteWorkerEffects: RemoteWorkerEffectRepository;
+  public readonly sessionControls: SessionControlRepository;
+  public readonly sessionMutationAdmissions: SessionMutationAdmissionRepository;
+  public readonly heartbeatOccurrences: HeartbeatOccurrenceRepository;
   public readonly memoryContexts: MemoryContextRepository;
   public readonly contextManifests: ContextManifestRepository;
   public readonly memoryQmdRuns: MemoryQmdRunRepository;
@@ -169,7 +283,9 @@ export class Storage {
   public readonly knowledge: KnowledgeRepository;
   public readonly commsDeliveries: CommsDeliveryRepository;
   public readonly chatProjects: ChatProjectRepository;
+  public readonly chatSessionRevisions: ChatSessionRevisionRepository;
   public readonly chatSessionMeta: ChatSessionMetaRepository;
+  public readonly chatSessionLifecycles: ChatSessionLifecycleRepository;
   public readonly chatSessionLists: ChatSessionListRepository;
   public readonly chatSessionProjects: ChatSessionProjectRepository;
   public readonly chatSessionWorkbench: ChatSessionWorkbenchRepository;
@@ -184,6 +300,8 @@ export class Storage {
   public readonly autonomyAudit: AutonomyAuditRepository;
   public readonly chatMessages: ChatMessageRepository;
   public readonly chatTurnTraces: ChatTurnTraceRepository;
+  public readonly chatTurnCapabilityProfiles: ChatTurnCapabilityProfileRepository;
+  public readonly routedContextSnapshots: RoutedContextSnapshotRepository;
   public readonly chatTurnRecovery: ChatTurnRecoveryRepository;
   public readonly chatStreamEvents: ChatStreamEventRepository;
   public readonly chatExecutionPlans: ChatExecutionPlanRepository;
@@ -219,11 +337,26 @@ export class Storage {
   public readonly capabilityCatalogSnapshots: CapabilityCatalogSnapshotRepository;
   public readonly skillLifecycle: SkillLifecycleRepository;
   public readonly candidateSkillVersions: CandidateSkillVersionRepository;
+  public readonly skillHubSnapshots: SkillHubSnapshotRepository;
+  public readonly skillHubArtifacts: SkillHubArtifactRepository;
+  public readonly skillHubOperations: SkillHubOperationRepository;
+  public readonly skillAggregateRevisions: SkillAggregateRevisionRepository;
+  public readonly skillLearningEvidence: SkillLearningEvidenceRepository;
+  public readonly candidateSkillEvidenceLinks: CandidateSkillEvidenceLinkRepository;
+  public readonly governanceJourneyEvents: GovernanceJourneyEventRepository;
+  public readonly workspacePathBridgeSnapshots: WorkspacePathBridgeSnapshotRepository;
+  public readonly externalSourceConfigs: ExternalSourceConfigRepository;
+  public readonly externalSourceScans: ExternalSourceScanRepository;
+  public readonly externalSourceImports: ExternalSourceImportRepository;
+  public readonly opsSavedBoards: OpsSavedBoardRepository;
+  public readonly externalSessionAttachments: ExternalSessionAttachmentRepository;
+  public readonly externalSourceKnowledgeLinks: ExternalSourceKnowledgeLinkRepository;
   public readonly capabilityProposals: CapabilityProposalRepository;
   public readonly capabilityProposalEvents: CapabilityProposalEventRepository;
   public readonly skillEvaluationRuns: SkillEvaluationRunRepository;
   public readonly codeModeRuns: CodeModeRunRepository;
   public readonly durableRunEvents: DurableRunEventRepository;
+  public readonly durableChildWatchers: DurableChildWatcherRepository;
   public readonly chatReflectionAttempts: ChatReflectionAttemptRepository;
   public readonly evidenceEnvelopes: EvidenceEnvelopeRepository;
   public readonly externalSideEffectRuns: ExternalSideEffectRunRepository;
@@ -263,21 +396,34 @@ export class Storage {
     this.approvalEffects = new ApprovalEffectRepository(this.db);
     this.approvalWaitRuns = new ApprovalWaitRunRepository(this.db);
     this.costLedger = new CostLedgerRepository(this.db);
+    this.modelUsageEvents = new ModelUsageEventRepository(this.db);
     this.llmRuntimeMeasurements = new LlmRuntimeMeasurementRepository(this.db);
     this.llmEvalProofRuns = new LlmEvalProofRepository(this.db);
     this.orchestration = new OrchestrationRepository(this.db);
+    this.orchestrationWorktreeLeases = new OrchestrationWorktreeLeaseRepository(this.db);
     this.tasks = new TaskRepository(this.db, { quarantine: this.stateValidationQuarantine });
     this.taskActivities = new TaskActivityRepository(this.db);
     this.taskDeliverables = new TaskDeliverableRepository(this.db);
     this.taskSubagents = new TaskSubagentRepository(this.db);
     this.realtimeEvents = new RealtimeEventRepository(this.db);
     this.cronJobs = new CronJobRepository(this.db, { quarantine: this.stateValidationQuarantine });
+    this.cronRuns = new CronRunRepository(this.db);
+    this.inboundChannelEvents = new InboundChannelEventRepository(this.db);
     this.integrationConnections = new IntegrationConnectionRepository(this.db);
     this.externalConnectorReviewStates = new ExternalConnectorReviewStateRepository(this.db);
     this.channelSetupDrafts = new ChannelSetupDraftRepository(this.db);
     this.agentProfiles = new AgentProfileRepository(this.db);
     this.importedAgentCatalog = new ImportedAgentCatalogRepository(this.db);
     this.mesh = new MeshRepository(this.db);
+    this.meshCapabilityNodeAdmissions = new MeshCapabilityNodeAdmissionRepository(this.db);
+    this.meshCapabilityPublications = new MeshCapabilityPublicationRepository(this.db);
+    this.remoteWorkerAdmissions = new RemoteWorkerAdmissionRepository(this.db);
+    this.remoteWorkerArtifacts = new RemoteWorkerArtifactRepository(this.db);
+    this.remoteWorkerAssignments = new RemoteWorkerAssignmentRepository(this.db);
+    this.remoteWorkerEffects = new RemoteWorkerEffectRepository(this.db);
+    this.sessionControls = new SessionControlRepository(this.db);
+    this.sessionMutationAdmissions = new SessionMutationAdmissionRepository(this.db);
+    this.heartbeatOccurrences = new HeartbeatOccurrenceRepository(this.db);
     this.memoryContexts = new MemoryContextRepository(this.db);
     this.contextManifests = new ContextManifestRepository(this.db);
     this.memoryQmdRuns = new MemoryQmdRunRepository(this.db);
@@ -287,6 +433,8 @@ export class Storage {
     this.knowledge = new KnowledgeRepository(this.db);
     this.commsDeliveries = new CommsDeliveryRepository(this.db);
     this.chatProjects = new ChatProjectRepository(this.db);
+    this.chatSessionRevisions = new ChatSessionRevisionRepository(this.db);
+    this.chatSessionLifecycles = new ChatSessionLifecycleRepository(this.db);
     this.chatSessionMeta = new ChatSessionMetaRepository(this.db);
     this.chatSessionLists = new ChatSessionListRepository(this.db);
     this.chatSessionProjects = new ChatSessionProjectRepository(this.db);
@@ -302,6 +450,8 @@ export class Storage {
     this.autonomyAudit = new AutonomyAuditRepository(this.db);
     this.chatMessages = new ChatMessageRepository(this.db, { quarantine: this.stateValidationQuarantine });
     this.chatTurnTraces = new ChatTurnTraceRepository(this.db);
+    this.chatTurnCapabilityProfiles = new ChatTurnCapabilityProfileRepository(this.db);
+    this.routedContextSnapshots = new RoutedContextSnapshotRepository(this.db);
     this.chatTurnRecovery = new ChatTurnRecoveryRepository(this.db);
     this.chatStreamEvents = new ChatStreamEventRepository(this.db);
     this.chatExecutionPlans = new ChatExecutionPlanRepository(this.db);
@@ -337,11 +487,26 @@ export class Storage {
     this.capabilityCatalogSnapshots = new CapabilityCatalogSnapshotRepository(this.db);
     this.skillLifecycle = new SkillLifecycleRepository(this.db);
     this.candidateSkillVersions = new CandidateSkillVersionRepository(this.db);
+    this.skillHubSnapshots = new SkillHubSnapshotRepository(this.db);
+    this.skillHubArtifacts = new SkillHubArtifactRepository(this.db);
+    this.skillHubOperations = new SkillHubOperationRepository(this.db);
+    this.skillAggregateRevisions = new SkillAggregateRevisionRepository(this.db);
+    this.skillLearningEvidence = new SkillLearningEvidenceRepository(this.db);
+    this.candidateSkillEvidenceLinks = new CandidateSkillEvidenceLinkRepository(this.db);
+    this.governanceJourneyEvents = new GovernanceJourneyEventRepository(this.db);
+    this.workspacePathBridgeSnapshots = new WorkspacePathBridgeSnapshotRepository(this.db);
+    this.externalSourceConfigs = new ExternalSourceConfigRepository(this.db);
+    this.externalSourceScans = new ExternalSourceScanRepository(this.db);
+    this.externalSourceImports = new ExternalSourceImportRepository(this.db);
+    this.opsSavedBoards = new OpsSavedBoardRepository(this.db);
+    this.externalSessionAttachments = new ExternalSessionAttachmentRepository(this.db);
+    this.externalSourceKnowledgeLinks = new ExternalSourceKnowledgeLinkRepository(this.db);
     this.capabilityProposals = new CapabilityProposalRepository(this.db);
     this.capabilityProposalEvents = new CapabilityProposalEventRepository(this.db);
     this.skillEvaluationRuns = new SkillEvaluationRunRepository(this.db);
     this.codeModeRuns = new CodeModeRunRepository(this.db);
     this.durableRunEvents = new DurableRunEventRepository(this.db);
+    this.durableChildWatchers = new DurableChildWatcherRepository(this.db);
     this.chatReflectionAttempts = new ChatReflectionAttemptRepository(this.db);
     this.evidenceEnvelopes = new EvidenceEnvelopeRepository(this.db);
     this.externalSideEffectRuns = new ExternalSideEffectRunRepository(this.db);
@@ -349,10 +514,43 @@ export class Storage {
     this.a2aTaskBindings = new A2ATaskBindingRepository(this.db);
     this.a2aTaskPushConfigs = new A2ATaskPushConfigRepository(this.db);
     this.runtimeDecisionTraces = new RuntimeDecisionTraceRepository(this.db);
+    const modelUsageRecoverySweepIntervalMs = Math.max(
+      10,
+      Math.floor(options.modelUsageRecoverySweepIntervalMs ?? 60_000),
+    );
+    this.modelUsageRecoverySweepTimer = setInterval(() => {
+      try {
+        this.modelUsageEvents.recoverExpiredBacklog(new Date().toISOString(), {
+          batchSize: 1_000,
+          maxBatches: 10,
+        });
+      } catch (error) {
+        // Keep storage available; a later periodic sweep retries the bounded backlog.
+        // eslint-disable-next-line no-console
+        console.warn("[goatcitadel] model usage recovery sweep failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }, modelUsageRecoverySweepIntervalMs);
+    this.modelUsageRecoverySweepTimer.unref?.();
   }
 
   public close(): void {
+    if (this.modelUsageRecoverySweepTimer) {
+      clearInterval(this.modelUsageRecoverySweepTimer);
+      this.modelUsageRecoverySweepTimer = undefined;
+    }
     this.db.close();
+  }
+
+  public async createSqliteSnapshot(destinationPath: string, options?: DatabaseOnlineBackupOptions): Promise<void> {
+    if (this.db.dialect !== "sqlite") {
+      throw new Error("Online SQLite snapshots are only available for SQLite storage");
+    }
+    if (typeof this.db.backupTo !== "function") {
+      throw new Error("The configured SQLite storage client does not support online snapshots");
+    }
+    await this.db.backupTo(destinationPath, options);
   }
 
   public runImmediateTransaction<T>(callback: () => T): T {
@@ -365,6 +563,73 @@ export class Storage {
       throw new ValidationError({ code: "FIELD_REQUIRED", field: "sessionId" });
     }
 
+    const revision = this.chatSessionRevisions.ensure(normalizedSessionId);
+    return this.deleteChatSessionDataWithRevision(normalizedSessionId, revision.revision);
+  }
+
+  public deleteChatSessionDataWithRevision(sessionId: string, expectedRevision: number): DeleteChatSessionDataResult {
+    const normalizedSessionId = sessionId.trim();
+    if (!normalizedSessionId) {
+      throw new ValidationError({ code: "FIELD_REQUIRED", field: "sessionId" });
+    }
+
+    const meta = this.chatSessionMeta.get(normalizedSessionId);
+    if (!meta) {
+      this.chatSessionRevisions.ensure(normalizedSessionId);
+      throw new Error(`Chat session metadata is missing for ${normalizedSessionId}`);
+    }
+    const results = this.deleteChatSessionTreeWithRevision({
+      workspaceId: meta.workspaceId,
+      rootSessionId: normalizedSessionId,
+      expectedRootRevision: expectedRevision,
+    });
+    const root = results.find((result) => result.sessionId === normalizedSessionId);
+    if (!root) {
+      throw new Error(`Chat session deletion did not return root ${normalizedSessionId}`);
+    }
+    return {
+      ...root,
+      cleanupRelPaths: dedupeStrings(results.flatMap((result) => result.cleanupRelPaths)),
+      attachments: results.flatMap((result) => result.attachments),
+    };
+  }
+
+  public deleteChatSessionTreeWithRevision(input: DeleteChatSessionTreeInput): DeleteChatSessionDataResult[] {
+    const idempotencyKey =
+      input.idempotencyKey ?? `lifecycle:delete:${input.rootSessionId}:${input.expectedRootRevision}`;
+    const outcome = this.chatSessionLifecycles.deleteTree(
+      {
+        workspaceId: input.workspaceId,
+        rootSessionId: input.rootSessionId,
+        expectedRootRevision: input.expectedRootRevision,
+        actorId: input.actorId ?? "operator",
+        idempotencyKey,
+        correlationId: input.correlationId ?? idempotencyKey,
+      },
+      (node) => this.deletePreparedChatSessionDataWithRevision(node.sessionId, node.revision),
+    );
+    return outcome.disposition === "deleted"
+      ? outcome.results
+      : outcome.nodes.map((node) => canonicalDeletionReplayResult(node.sessionId));
+  }
+
+  public replayChatSessionTreeDeletion(input: ReplayChatSessionTreeDeletionInput): DeleteChatSessionDataResult[] {
+    const idempotencyKey =
+      input.idempotencyKey ?? `lifecycle:delete:${input.rootSessionId}:${input.expectedRootRevision}`;
+    const outcome = this.chatSessionLifecycles.replayDeletionTree({
+      rootSessionId: input.rootSessionId,
+      expectedRootRevision: input.expectedRootRevision,
+      actorId: input.actorId ?? "operator",
+      idempotencyKey,
+      correlationId: input.correlationId ?? idempotencyKey,
+    });
+    return outcome.nodes.map((node) => canonicalDeletionReplayResult(node.sessionId));
+  }
+
+  private deletePreparedChatSessionDataWithRevision(
+    normalizedSessionId: string,
+    expectedRevision: number,
+  ): DeleteChatSessionDataResult {
     const attachments = this.chatAttachments.listBySession(normalizedSessionId, 10_000);
     const cleanupRelPaths = dedupeStrings([
       ...attachments.map((record) => record.storageRelPath),
@@ -373,7 +638,7 @@ export class Storage {
       ...this.chatToolArtifacts.listBySession(normalizedSessionId, 10_000).map((record) => record.storageRelPath),
     ]);
 
-    const deleted = this.db.transaction("immediate", () => {
+    const deleted = this.chatSessionRevisions.runDeleteWithRevision(normalizedSessionId, expectedRevision, () => {
       const attachmentIds = attachments.map((record) => record.attachmentId);
       const attachmentClause =
         attachmentIds.length > 0 ? ` OR attachment_id IN (${attachmentIds.map(() => "?").join(", ")})` : "";
@@ -476,6 +741,7 @@ export class Storage {
       const simpleSessionDeletes = [
         "proactive_actions",
         "proactive_runs",
+        "agent_commitments",
         "learned_memory_conflicts",
         "learned_memory_items",
         "chat_reflection_attempts",
@@ -487,9 +753,13 @@ export class Storage {
         "llm_eval_proof_runs",
         "chat_execution_plans",
         "chat_conversation_summaries",
+        "chat_compaction_breaker_actions",
+        "chat_compaction_breakers",
+        "chat_compaction_states",
         "tool_access_decisions",
         "tool_invocations",
         "policy_blocks",
+        "model_usage_events",
         "cost_ledger",
         "voice_sessions",
         "mesh_session_owners",
@@ -511,7 +781,6 @@ export class Storage {
         "chat_session_projects",
         "chat_session_workbench",
         "chat_attachments",
-        "chat_session_meta",
       ];
       for (const table of simpleSessionDeletes) {
         this.db.prepare(`DELETE FROM ${table} WHERE session_id = ?`).run(sid);
@@ -574,6 +843,10 @@ function dedupeStrings(values: Array<string | undefined>): string[] {
   return deduped;
 }
 
+function canonicalDeletionReplayResult(sessionId: string): DeleteChatSessionDataResult {
+  return { sessionId, deleted: true, cleanupRelPaths: [], attachments: [] };
+}
+
 export { createDatabase, createSqliteSchemaBlueprint, ensureParentDir } from "./sqlite.js";
 export type {
   SqliteOptions,
@@ -594,6 +867,7 @@ export * from "./approval-event-repo.js";
 export * from "./pending-approval-action-repo.js";
 export * from "./cost-ledger-repo.js";
 export * from "./orchestration-repo.js";
+export * from "./orchestration-worktree-lease-repo.js";
 export { TaskRepository } from "./task-repo.js";
 export type { TaskListQuery, TaskRepositoryOptions, TaskStatusCount } from "./task-repo.js";
 export * from "./task-activity-repo.js";
@@ -601,18 +875,35 @@ export * from "./task-deliverable-repo.js";
 export * from "./task-subagent-repo.js";
 export * from "./realtime-event-repo.js";
 export * from "./cron-job-repo.js";
+export * from "./cron-run-repo.js";
+export * from "./inbound-channel-event-repo.js";
 export * from "./integration-connection-repo.js";
 export * from "./agent-profile-repo.js";
 export * from "./imported-agent-catalog-repo.js";
 export * from "./mesh-repo.js";
+export * from "./mesh-capability-node-admission-repo.js";
+export * from "./mesh-capability-publication-repo.js";
+export * from "./remote-worker-admission-repo.js";
+export * from "./remote-worker-artifact-repo.js";
+export * from "./remote-worker-assignment-repo.js";
+export * from "./remote-worker-effect-repo.js";
+export * from "./remote-worker-cell-repo.js";
+export * from "./remote-worker-inference-repo.js";
+export * from "./remote-worker-nonce-repo.js";
+export * from "./session-control-repo.js";
+export * from "./session-mutation-admission-repo.js";
+export * from "./heartbeat-occurrence-repo.js";
 export * from "./memory-context-repo.js";
 export * from "./memory-qmd-run-repo.js";
 export * from "./tool-grant-repo.js";
 export * from "./tool-access-decision-repo.js";
+export * from "./model-usage-event-repo.js";
 export * from "./knowledge-repo.js";
 export * from "./comms-delivery-repo.js";
 export * from "./chat-project-repo.js";
+export * from "./chat-session-revision-repo.js";
 export * from "./chat-session-meta-repo.js";
+export * from "./chat-session-lifecycle-repo.js";
 export * from "./chat-session-list-repo.js";
 export * from "./chat-session-project-repo.js";
 export * from "./chat-session-branch-state-repo.js";
@@ -626,6 +917,7 @@ export * from "./chat-message-repo.js";
 export * from "./chat-stream-event-repo.js";
 export * from "./chat-turn-trace-repo.js";
 export * from "./chat-turn-recovery-repo.js";
+export * from "./routed-context-snapshot-repo.js";
 export * from "./chat-execution-plan-repo.js";
 export * from "./chat-conversation-summary-repo.js";
 export * from "./chat-tool-run-repo.js";
@@ -660,10 +952,22 @@ export * from "./approval-effect-repo.js";
 export * from "./transcript-outbox-repo.js";
 export * from "./realtime-stream-lease-repo.js";
 export * from "./durable-run-event-repo.js";
+export * from "./durable-child-watcher-repo.js";
 export * from "./chat-reflection-attempt-repo.js";
 export * from "./external-side-effect-run-repo.js";
 export * from "./runtime-decision-trace-repo.js";
 export * from "./skill-evaluation-run-repo.js";
+export * from "./candidate-skill-version-repo.js";
+export * from "./skill-hub-snapshot-repo.js";
+export * from "./skill-hub-artifact-repo.js";
+export * from "./skill-hub-operation-repo.js";
+export * from "./skill-aggregate-revision-repo.js";
+export * from "./skill-learning-evidence-repo.js";
+export * from "./governance-journey-event-repo.js";
+export * from "./governed-lifecycle-event-repo.js";
+export * from "./improvement-lifecycle-operation-repo.js";
+export * from "./workspace-path-bridge-snapshot-repo.js";
+export * from "./ops-saved-board-repo.js";
 export { loadAndSanitize } from "./load-and-sanitize.js";
 export type { QuarantineEntry, SafeParse, SafeParseResult } from "./load-and-sanitize.js";
 export { parseJsonObject, parseJsonArray, parseStringRecord } from "./state-validators.js";

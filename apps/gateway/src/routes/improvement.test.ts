@@ -171,6 +171,74 @@ describe("improvement routes", () => {
     expect(getHarnessAuditReport).toHaveBeenCalledOnce();
   });
 
+  it("forwards approval-first lifecycle requests with the requester and returns the pending-approval envelope", async () => {
+    // HX-402 P3: pause/rollback/activation-request never mutate — they return
+    // the pending `improvement.lifecycle` approval envelope (or the honest
+    // no-op envelope) and the recovered approval effect applies later.
+    const pendingApproval = {
+      approvalId: "11111111-2222-3333-4444-555555555555",
+      status: "pending",
+      kind: "improvement.lifecycle",
+      operationKind: "pause",
+      targetKind: "improvement_activation",
+      targetId: "act-1",
+      workspaceId: "default",
+      requestSha256: "a".repeat(64),
+      expectedStateSha256: "b".repeat(64),
+      createdAt: "2026-07-23T00:00:00.000Z",
+      replayed: false,
+    };
+    const requestImprovementActivation = vi.fn(() => ({
+      pendingApproval: { ...pendingApproval, operationKind: "activate", targetKind: "improvement_candidate" },
+    }));
+    const pauseImprovementActivation = vi.fn(() => ({ pendingApproval }));
+    const rollbackImprovementActivation = vi.fn(() => ({
+      pendingApproval: null,
+      noMutationRequired: true,
+      activation: { activationId: "act-1", status: "rolled_back" },
+    }));
+
+    app = Fastify();
+    app.decorate("services", {
+      improvement: {
+        requestImprovementActivation,
+        pauseImprovementActivation,
+        rollbackImprovementActivation,
+      },
+    } as never);
+    await app.register(improvementRoutes);
+
+    const activate = await app.inject({
+      method: "POST",
+      url: "/api/v1/improvement/candidates/cand-1/activation-request",
+      payload: { actorId: "operator-9" },
+    });
+    expect(activate.statusCode).toBe(200);
+    expect(requestImprovementActivation).toHaveBeenCalledWith("cand-1", { requesterId: "operator-9" });
+    expect(activate.json()).toMatchObject({ pendingApproval: { operationKind: "activate" } });
+
+    const pause = await app.inject({
+      method: "POST",
+      url: "/api/v1/improvement/activations/act-1/pause",
+      payload: { actorId: "operator-9" },
+    });
+    expect(pause.statusCode).toBe(200);
+    expect(pauseImprovementActivation).toHaveBeenCalledWith("act-1", { requesterId: "operator-9" });
+    expect(pause.json()).toMatchObject({
+      pendingApproval: { kind: "improvement.lifecycle", operationKind: "pause" },
+    });
+
+    // Body is optional: an empty request still routes with no requester.
+    const rollback = await app.inject({
+      method: "POST",
+      url: "/api/v1/improvement/activations/act-1/rollback",
+      payload: {},
+    });
+    expect(rollback.statusCode).toBe(200);
+    expect(rollbackImprovementActivation).toHaveBeenCalledWith("act-1", { requesterId: undefined });
+    expect(rollback.json()).toMatchObject({ pendingApproval: null, noMutationRequired: true });
+  });
+
   it("returns 409 for activation request, pause, and rollback conflicts", async () => {
     const requestImprovementActivation = vi.fn(async () => {
       throw new Error("candidate drifted");

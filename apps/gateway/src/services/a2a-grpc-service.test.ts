@@ -11,6 +11,7 @@ import { A2AGrpcClient, type A2AGrpcClientPort } from "./a2a-grpc-client.js";
 import { startA2AGrpcServer, type A2AGrpcServerHandle } from "./a2a-grpc-server.js";
 import { A2AJsonRpcServiceError } from "./a2a-json-rpc-error.js";
 import { A2ARouteService } from "./a2a-route-service.js";
+import { SharedHostLifecycleService } from "./shared-host-lifecycle-service.js";
 
 describe("A2A gRPC transport", () => {
   let storage: Storage | undefined;
@@ -26,7 +27,13 @@ describe("A2A gRPC transport", () => {
 
   it("accepts authenticated inbound gRPC task operations", async () => {
     const harness = createService({ bindings: ["GRPC"] });
-    const handle = await startA2AGrpcServer({ config: harness.config, a2a: harness.service });
+    const lifecycle = new SharedHostLifecycleService({ enabled: true });
+    lifecycle.markAccepting();
+    const handle = await startA2AGrpcServer({
+      config: harness.config,
+      a2a: harness.service,
+      sharedHostLifecycle: lifecycle,
+    });
     grpcHandles.push(handle);
 
     const client = new A2AGrpcClient();
@@ -77,6 +84,51 @@ describe("A2A gRPC transport", () => {
       expect.objectContaining({ authActorSource: "a2a_peer" }),
       expect.objectContaining({ turnIdentity: expect.any(Object) }),
     );
+    expect(lifecycle.snapshot()).toMatchObject({ activeCount: 0, activeByKind: { agent: 0, worker: 0 } });
+  });
+
+  it.each(["SendMessage", "SubscribeToTask"] as const)(
+    "rejects late %s ingress with retryable UNAVAILABLE after admission closes",
+    async (method) => {
+      const harness = createService({ bindings: ["GRPC"] });
+      const lifecycle = new SharedHostLifecycleService({ enabled: true });
+      lifecycle.markAccepting();
+      const handle = await startA2AGrpcServer({
+        config: harness.config,
+        a2a: harness.service,
+        sharedHostLifecycle: lifecycle,
+      });
+      grpcHandles.push(handle);
+      await lifecycle.drain({ mode: "pause", timeoutMs: 10, reason: "scale_down", actorId: "ops" });
+
+      await expect(
+        new A2AGrpcClient().call({
+          grpcUrl: handle.address!,
+          method,
+          params: method === "SendMessage" ? { text: "late" } : { taskId: "task-late" },
+          peer: { token: "peer-token" },
+          allowlist: ["127.0.0.1"],
+        }),
+      ).rejects.toMatchObject({ code: 14 });
+      expect(harness.tasks.createTask).not.toHaveBeenCalled();
+      expect(lifecycle.snapshot()).toMatchObject({ state: "quiesced", activeCount: 0 });
+    },
+  );
+
+  it("fences listener startup and leaves no reservation behind when admission is closed", async () => {
+    const harness = createService({ bindings: ["GRPC"] });
+    const lifecycle = new SharedHostLifecycleService({ enabled: true });
+    lifecycle.markAccepting();
+    await lifecycle.drain({ mode: "pause", timeoutMs: 10, reason: "startup_race", actorId: "ops" });
+
+    await expect(
+      startA2AGrpcServer({
+        config: harness.config,
+        a2a: harness.service,
+        sharedHostLifecycle: lifecycle,
+      }),
+    ).rejects.toMatchObject({ code: "SHARED_HOST_ADMISSION_CLOSED" });
+    expect(lifecycle.snapshot()).toMatchObject({ state: "quiesced", activeCount: 0 });
   });
 
   it("rejects inbound gRPC without peer bearer metadata", async () => {

@@ -23,6 +23,15 @@ export interface ChatTurnTraceHydrationOptions {
   includeDecisionTrace?: boolean;
 }
 
+export interface LoadChatTurnSessionStateOptions extends ChatTurnTraceHydrationOptions {
+  /**
+   * Internal projection boundary for callers that retain non-conversation
+   * traces alongside Chat. Excluded traces remain available in `traces`, but
+   * cannot become branch leaves or cause their hidden messages to hydrate.
+   */
+  isConversationTrace?: (trace: ChatTurnTraceRecord) => boolean;
+}
+
 export function createHydratedChatTurnTrace(
   deps: ChatTurnTraceHydrationDependencies,
   turnId: string,
@@ -184,7 +193,7 @@ export interface LoadChatTurnSessionStateDeps extends ChatTurnTraceHydrationDepe
 export async function loadChatTurnSessionState(
   deps: LoadChatTurnSessionStateDeps,
   sessionId: string,
-  options: { includeDecisionTrace?: boolean } = {},
+  options: LoadChatTurnSessionStateOptions = {},
 ): Promise<{
   traces: ChatTurnTraceRecord[];
   tracesById: Map<string, ChatTurnTraceRecord>;
@@ -196,8 +205,9 @@ export async function loadChatTurnSessionState(
 }> {
   await deps.ensureChatMessageProjection(sessionId);
   const rawTraces = deps.storage.chatTurnTraces.listBySession(sessionId, 2_000);
+  const conversationTraces = options.isConversationTrace ? rawTraces.filter(options.isConversationTrace) : rawTraces;
   const turnLineageById = new Map(
-    rawTraces.map((trace) => [
+    conversationTraces.map((trace) => [
       trace.turnId,
       {
         turnId: trace.turnId,
@@ -205,7 +215,19 @@ export async function loadChatTurnSessionState(
       },
     ]),
   );
-  const activeLeafTurnId = resolveChatActiveLeafTurnId(deps, sessionId, rawTraces);
+  const branchStateBeforeResolution = options.isConversationTrace
+    ? deps.storage.chatSessionBranchState.get(sessionId)
+    : undefined;
+  const conversationTurnIds = new Set(conversationTraces.map((trace) => trace.turnId));
+  const activeLeafTurnId = resolveChatActiveLeafTurnId(deps, sessionId, conversationTraces);
+  if (
+    options.isConversationTrace &&
+    !activeLeafTurnId &&
+    branchStateBeforeResolution &&
+    !conversationTurnIds.has(branchStateBeforeResolution.activeLeafTurnId)
+  ) {
+    deps.storage.chatSessionBranchState.clear(sessionId);
+  }
   const selectedPathTurnIds = activeLeafTurnId ? buildSelectedPathTurnIds(turnLineageById, activeLeafTurnId) : [];
   const rawTraceById = new Map(rawTraces.map((trace) => [trace.turnId, trace]));
   const pathParentTurnIds = selectedPathTurnIds.map((turnId) => rawTraceById.get(turnId)?.parentTurnId);
@@ -213,6 +235,9 @@ export async function loadChatTurnSessionState(
   const visibleTurnIds = new Set(selectedPathTurnIds);
   for (const siblings of siblingTracesByParent.values()) {
     for (const sibling of siblings) {
+      if (options.isConversationTrace && !options.isConversationTrace(sibling)) {
+        continue;
+      }
       visibleTurnIds.add(sibling.turnId);
       if (!rawTraceById.has(sibling.turnId)) {
         rawTraceById.set(sibling.turnId, sibling);
@@ -247,7 +272,9 @@ export async function loadChatTurnSessionState(
     turnLineageById,
     messages,
     messagesById,
-    childrenByTurnId: buildChatTurnChildrenMap(traces),
+    childrenByTurnId: buildChatTurnChildrenMap(
+      options.isConversationTrace ? traces.filter((trace) => conversationTurnIds.has(trace.turnId)) : traces,
+    ),
     activeLeafTurnId,
   };
 }

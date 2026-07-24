@@ -15,7 +15,10 @@ import type {
   ChatGeneratedArtifactSourceSurface,
   ChatGoalRequest,
   ChatGoalStatusResponse,
+  ChatHistoryWindowResponse,
+  ChatHistoryContinuationResponse,
   ChatMessageRecord,
+  ChatMessagePageResponse,
   ChatMode,
   ChatProjectRecord,
   ChatProjectImportResult,
@@ -56,6 +59,7 @@ import type {
   RoutingPreflightResult,
   ChatStreamChunk,
   ChatThreadResponse,
+  ChatTurnCapabilityProfileEnvelope,
   ChatUserInputPromptAnswerRequest,
   ChatUserInputPromptAnswerResponse,
   LearnedMemoryConflictRecord,
@@ -94,6 +98,16 @@ function originSurfaceInit(options?: ChatRequestSurfaceOptions): Pick<RequestIni
 
 function normalizeChatSurface(_surface?: ChatMode | ChatGeneratedArtifactSourceSurface | null): "chat" {
   return "chat";
+}
+
+const DEFAULT_CHAT_HISTORY_MAX_BYTES = 65_536;
+const MIN_CHAT_HISTORY_MAX_BYTES = 1_024;
+const MAX_CHAT_HISTORY_MAX_BYTES = 1_048_576;
+
+function clampChatHistoryMaxBytes(maxBytes?: number): number {
+  const normalized =
+    maxBytes !== undefined && Number.isFinite(maxBytes) ? Math.floor(maxBytes) : DEFAULT_CHAT_HISTORY_MAX_BYTES;
+  return Math.max(MIN_CHAT_HISTORY_MAX_BYTES, Math.min(MAX_CHAT_HISTORY_MAX_BYTES, normalized));
 }
 
 export interface ChatProjectsResponse {
@@ -200,6 +214,7 @@ export async function importChatProject(input: {
 export async function updateChatProject(
   projectId: string,
   input: {
+    expectedRevision: number;
     citadelId?: string;
     workspaceId?: string;
     name?: string;
@@ -214,25 +229,26 @@ export async function updateChatProject(
   });
 }
 
-export async function archiveChatProject(projectId: string): Promise<ChatProjectRecord> {
+export async function archiveChatProject(projectId: string, expectedRevision: number): Promise<ChatProjectRecord> {
   return request<ChatProjectRecord>(`/api/v1/chat/projects/${encodeURIComponent(projectId)}/archive`, {
     method: "POST",
-    body: JSON.stringify({}),
+    body: JSON.stringify({ expectedRevision }),
   });
 }
 
-export async function restoreChatProject(projectId: string): Promise<ChatProjectRecord> {
+export async function restoreChatProject(projectId: string, expectedRevision: number): Promise<ChatProjectRecord> {
   return request<ChatProjectRecord>(`/api/v1/chat/projects/${encodeURIComponent(projectId)}/restore`, {
     method: "POST",
-    body: JSON.stringify({}),
+    body: JSON.stringify({ expectedRevision }),
   });
 }
 
 export async function hardDeleteChatProject(
   projectId: string,
+  expectedRevision: number,
 ): Promise<{ deleted: boolean; projectId: string; mode: "hard" }> {
   return request<{ deleted: boolean; projectId: string; mode: "hard" }>(
-    `/api/v1/chat/projects/${encodeURIComponent(projectId)}?mode=hard`,
+    `/api/v1/chat/projects/${encodeURIComponent(projectId)}?mode=hard&expectedRevision=${encodeURIComponent(String(expectedRevision))}`,
     {
       method: "DELETE",
       body: JSON.stringify({}),
@@ -273,6 +289,7 @@ export async function fetchChatSessions(input?: {
 export async function fetchChatSessionSearch(input: {
   query: string;
   mode?: ChatSessionSearchMode;
+  view?: "active" | "archived" | "all";
   citadelId?: string;
   workspaceId?: string;
   surface?: ChatMode;
@@ -283,6 +300,7 @@ export async function fetchChatSessionSearch(input: {
   const query = new URLSearchParams();
   query.set("query", input.query);
   if (input.mode) query.set("mode", input.mode);
+  if (input.view) query.set("view", input.view);
   if (input.citadelId) query.set("citadelId", input.citadelId);
   if (input.workspaceId) query.set("workspaceId", input.workspaceId);
   if (input.surface) query.set("surface", input.surface);
@@ -327,7 +345,7 @@ export async function archiveWorkspaceChatSessions(input?: {
 
 export async function updateChatSession(
   sessionId: string,
-  input: { title?: string; folderId?: string; folderName?: string; tags?: string[] },
+  input: { expectedRevision: number; title?: string; folderId?: string; folderName?: string; tags?: string[] },
 ): Promise<ChatSessionRecord> {
   return request<ChatSessionRecord>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}`, {
     method: "PATCH",
@@ -335,44 +353,52 @@ export async function updateChatSession(
   });
 }
 
-export async function deleteChatSession(sessionId: string): Promise<{ deleted: boolean; sessionId: string }> {
-  return request<{ deleted: boolean; sessionId: string }>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}`, {
-    method: "DELETE",
-  });
+export async function deleteChatSession(
+  sessionId: string,
+  expectedRevision: number,
+): Promise<{ deleted: boolean; sessionId: string }> {
+  return request<{ deleted: boolean; sessionId: string }>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}?mode=hard&expectedRevision=${encodeURIComponent(String(expectedRevision))}`,
+    { method: "DELETE" },
+  );
 }
 
-export async function pinChatSession(sessionId: string): Promise<ChatSessionRecord> {
+export async function pinChatSession(sessionId: string, expectedRevision: number): Promise<ChatSessionRecord> {
   return request<ChatSessionRecord>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/pin`, {
     method: "POST",
-    body: JSON.stringify({}),
+    body: JSON.stringify({ expectedRevision }),
   });
 }
 
-export async function unpinChatSession(sessionId: string): Promise<ChatSessionRecord> {
+export async function unpinChatSession(sessionId: string, expectedRevision: number): Promise<ChatSessionRecord> {
   return request<ChatSessionRecord>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/unpin`, {
     method: "POST",
-    body: JSON.stringify({}),
+    body: JSON.stringify({ expectedRevision }),
   });
 }
 
-export async function archiveChatSession(sessionId: string): Promise<ChatSessionRecord> {
+export async function archiveChatSession(sessionId: string, expectedRevision: number): Promise<ChatSessionRecord> {
   return request<ChatSessionRecord>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/archive`, {
     method: "POST",
-    body: JSON.stringify({}),
+    body: JSON.stringify({ expectedRevision }),
   });
 }
 
-export async function restoreChatSession(sessionId: string): Promise<ChatSessionRecord> {
+export async function restoreChatSession(sessionId: string, expectedRevision: number): Promise<ChatSessionRecord> {
   return request<ChatSessionRecord>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/restore`, {
     method: "POST",
-    body: JSON.stringify({}),
+    body: JSON.stringify({ expectedRevision }),
   });
 }
 
-export async function assignChatSessionProject(sessionId: string, projectId?: string): Promise<ChatSessionRecord> {
+export async function assignChatSessionProject(
+  sessionId: string,
+  projectId: string | undefined,
+  expectedRevision: number,
+): Promise<ChatSessionRecord> {
   return request<ChatSessionRecord>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/project`, {
     method: "POST",
-    body: JSON.stringify({ projectId }),
+    body: JSON.stringify({ projectId, expectedRevision }),
   });
 }
 
@@ -573,6 +599,77 @@ export async function fetchChatMessages(
   );
 }
 
+export async function fetchChatHistoryWindow(input: {
+  workspaceId: string;
+  sessionId: string;
+  messageId: string;
+  sequence: number;
+  limit?: number;
+  maxBytes?: number;
+}): Promise<ChatHistoryWindowResponse> {
+  const query = new URLSearchParams({
+    workspaceId: input.workspaceId,
+    messageId: input.messageId,
+    sequence: String(input.sequence),
+    limit: String(input.limit ?? 21),
+    maxBytes: String(clampChatHistoryMaxBytes(input.maxBytes)),
+  });
+  return request<ChatHistoryWindowResponse>(
+    `/api/v1/chat/sessions/${encodeURIComponent(input.sessionId)}/history?${query.toString()}`,
+  );
+}
+
+export async function fetchChatHistoryContinuation(input: {
+  workspaceId: string;
+  sessionId: string;
+  direction: "older" | "newer";
+  cursor: { messageId: string; sequence: number; snapshotMaxSequence: number };
+  limit?: number;
+  maxBytes?: number;
+}): Promise<ChatHistoryContinuationResponse> {
+  const query = new URLSearchParams({
+    workspaceId: input.workspaceId,
+    direction: input.direction,
+    cursor: input.cursor.messageId,
+    cursorSequence: String(input.cursor.sequence),
+    snapshotMaxSequence: String(input.cursor.snapshotMaxSequence),
+    limit: String(input.limit ?? 21),
+    maxBytes: String(clampChatHistoryMaxBytes(input.maxBytes)),
+  });
+  return request<ChatHistoryContinuationResponse>(
+    `/api/v1/chat/sessions/${encodeURIComponent(input.sessionId)}/history?${query.toString()}`,
+  );
+}
+
+export async function fetchChatMessagePage(input: {
+  workspaceId: string;
+  sessionId: string;
+  limit?: number;
+  cursor?: string;
+  offset?: number;
+  snapshotMaxSequence?: number;
+  snapshotMessageCount?: number;
+}): Promise<ChatMessagePageResponse> {
+  if (input.cursor !== undefined && input.offset !== undefined) {
+    throw new Error("cursor and offset cannot be used together");
+  }
+  const query = new URLSearchParams({
+    workspaceId: input.workspaceId,
+    limit: String(input.limit ?? 200),
+  });
+  if (input.cursor) query.set("cursor", input.cursor);
+  if (input.offset !== undefined) query.set("offset", String(input.offset));
+  if (input.snapshotMaxSequence !== undefined) {
+    query.set("snapshotMaxSequence", String(input.snapshotMaxSequence));
+  }
+  if (input.snapshotMessageCount !== undefined) {
+    query.set("snapshotMessageCount", String(input.snapshotMessageCount));
+  }
+  return request<ChatMessagePageResponse>(
+    `/api/v1/chat/sessions/${encodeURIComponent(input.sessionId)}/history?${query.toString()}`,
+  );
+}
+
 export async function fetchChatGeneratedArtifacts(input?: {
   citadelId?: string;
   sessionId?: string;
@@ -739,6 +836,21 @@ export async function preflightChatRoute(
     ...originSurfaceInit(options),
     body: JSON.stringify(input),
   });
+}
+
+export async function fetchChatTurnCapabilityProfile(
+  sessionId: string,
+  turnId: string,
+  workspaceId?: string,
+): Promise<ChatTurnCapabilityProfileEnvelope> {
+  const query = new URLSearchParams();
+  if (workspaceId?.trim()) {
+    query.set("workspaceId", workspaceId.trim());
+  }
+  const suffix = query.size > 0 ? `?${query.toString()}` : "";
+  return request<ChatTurnCapabilityProfileEnvelope>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/capability-profile${suffix}`,
+  );
 }
 
 export async function classifySurfaceMode(input: SurfaceClassifyRequest): Promise<SurfaceClassifyResponse> {
@@ -1114,7 +1226,7 @@ export async function fetchChatSessionPrefs(sessionId: string): Promise<ChatSess
 
 export async function updateChatSessionPrefs(
   sessionId: string,
-  input: ChatSessionPrefsPatch,
+  input: ChatSessionPrefsPatch & { expectedRevision: number },
 ): Promise<ChatSessionPrefsRecord> {
   return request<ChatSessionPrefsRecord>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/prefs`, {
     method: "PATCH",
@@ -1144,7 +1256,7 @@ export async function updateChatProactivePolicy(
     autonomyBudget: Partial<ProactivePolicy["autonomyBudget"]>;
     retrievalMode: ProactivePolicy["retrievalMode"];
     reflectionMode: ProactivePolicy["reflectionMode"];
-  }>,
+  }> & { expectedRevision: number },
 ): Promise<ProactivePolicy> {
   return request<ProactivePolicy>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/proactive/policy`, {
     method: "PATCH",
@@ -1430,17 +1542,24 @@ export async function fetchChatSessionGoal(sessionId: string): Promise<ChatGoalS
   return request<ChatGoalStatusResponse>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/goal`);
 }
 
-export async function setChatSessionGoal(sessionId: string, input: ChatGoalRequest): Promise<ChatGoalStatusResponse> {
+export async function setChatSessionGoal(
+  sessionId: string,
+  input: ChatGoalRequest & { expectedRevision: number },
+): Promise<ChatGoalStatusResponse> {
   return request<ChatGoalStatusResponse>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/goal`, {
     method: "POST",
     body: JSON.stringify(input),
   });
 }
 
-export async function clearChatSessionGoal(sessionId: string): Promise<ChatGoalStatusResponse> {
-  return request<ChatGoalStatusResponse>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/goal`, {
-    method: "DELETE",
-  });
+export async function clearChatSessionGoal(
+  sessionId: string,
+  expectedRevision: number,
+): Promise<ChatGoalStatusResponse> {
+  return request<ChatGoalStatusResponse>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/goal?expectedRevision=${encodeURIComponent(String(expectedRevision))}`,
+    { method: "DELETE" },
+  );
 }
 
 export async function fetchCrossProjectRecentSessions(

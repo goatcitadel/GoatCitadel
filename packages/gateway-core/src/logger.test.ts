@@ -1,5 +1,6 @@
+import { SESSION_CONTROL_GENERATION_HEADER, SESSION_CONTROL_TOKEN_HEADER } from "@goatcitadel/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { logger } from "./logger.js";
+import { isSensitiveLogKey, logger } from "./logger.js";
 
 describe("gateway-core logger", () => {
   afterEach(() => {
@@ -208,5 +209,47 @@ describe("gateway-core logger", () => {
       msg: "nested error context",
       error: expect.objectContaining({ message: "nested boom", name: "Error" }),
     });
+  });
+
+  it("classifies the session-control token header as sensitive regardless of case", () => {
+    // The frozen control-token header carries the plaintext session-control
+    // secret. It must be classified sensitive by its complete key, case-
+    // insensitively, independent of the generic segment heuristic.
+    expect(isSensitiveLogKey(SESSION_CONTROL_TOKEN_HEADER)).toBe(true);
+    expect(isSensitiveLogKey(SESSION_CONTROL_TOKEN_HEADER.toLowerCase())).toBe(true);
+    expect(isSensitiveLogKey(SESSION_CONTROL_TOKEN_HEADER.toUpperCase())).toBe(true);
+    expect(isSensitiveLogKey("x-goatcitadel-session-control-token")).toBe(true);
+    // The generation header is a non-secret decimal counter and must not be
+    // redacted so operators can still observe control generations in logs.
+    expect(isSensitiveLogKey(SESSION_CONTROL_GENERATION_HEADER)).toBe(false);
+  });
+
+  it("redacts the session-control token header value from structured request metadata and errors", () => {
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const secret = "a".repeat(64);
+
+    logger.info("incoming control request", {
+      [SESSION_CONTROL_TOKEN_HEADER]: secret,
+      req: {
+        headers: {
+          "x-goatcitadel-session-control-token": secret,
+          [SESSION_CONTROL_GENERATION_HEADER.toLowerCase()]: "7",
+        },
+      },
+    });
+    const entry = JSON.parse(String(writeSpy.mock.calls.at(-1)?.[0] ?? "")) as Record<string, unknown>;
+    expect(entry[SESSION_CONTROL_TOKEN_HEADER]).toBe("[redacted]");
+    expect((entry.req as { headers: Record<string, unknown> }).headers["x-goatcitadel-session-control-token"]).toBe(
+      "[redacted]",
+    );
+    // Generation stays observable.
+    expect((entry.req as { headers: Record<string, unknown> }).headers["x-goatcitadel-control-generation"]).toBe("7");
+    expect(String(writeSpy.mock.calls.at(-1)?.[0] ?? "")).not.toContain(secret);
+
+    logger.error("control auth failed", {
+      [SESSION_CONTROL_TOKEN_HEADER]: secret,
+    });
+    expect(String(stderrSpy.mock.calls.at(-1)?.[0] ?? "")).not.toContain(secret);
   });
 });

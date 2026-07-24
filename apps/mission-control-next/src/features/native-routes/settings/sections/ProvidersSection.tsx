@@ -21,6 +21,7 @@ import {
   fetchLlmProviderAdvice,
   fetchOpenAICodexOAuthStatus,
   fetchProviderSecretStatus,
+  isApiRequestError,
   type OpenAICodexDevicePollResponse,
   type OpenAICodexDeviceStartResponse,
   type OpenAICodexOAuthStatus,
@@ -39,6 +40,7 @@ import {
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import {
   buildUniversalModelPickerOptions,
+  type ProviderModelCatalogOption,
   useProviderModelCatalog,
 } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
 import {
@@ -82,6 +84,7 @@ import {
   OPENAI_CODEX_MIN_POLL_MS,
   type ProviderEditorDraft,
   readStoredOpenAICodexOAuthFlow,
+  resolveProviderCredentialReady,
   writeStoredOpenAICodexOAuthFlow,
 } from "../../SettingsNativePage";
 
@@ -176,7 +179,12 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
   const selectedProviderIsLocal = isLikelyLocalProviderBaseUrl(selectedProvider?.baseUrl);
   const selectedProviderIsCodexOAuth = selectedProvider?.providerId === "openai-codex";
   const selectedProviderIsClaudeCodeOAuth = selectedProvider?.providerId === "claude-code";
-  const draftIsCodexOAuth = providerDraft.providerId.trim().toLowerCase() === "openai-codex";
+  const selectedProviderIsGoogleAdc = selectedProvider?.authMode === "google-adc";
+  const selectedProviderIsGoogleServiceAccount = selectedProvider?.authMode === "google-service-account";
+  const draftIsCodexOAuth =
+    providerDraft.providerId.trim().toLowerCase() === "openai-codex" || providerDraft.authMode === "codex-oauth";
+  const draftUsesGoogleAuth =
+    providerDraft.authMode === "google-adc" || providerDraft.authMode === "google-service-account";
   const hasCodexOAuthProvider = Boolean(codexOAuthProvider);
   const codexOAuthConnected = Boolean(codexOAuthStatus?.connected);
   const hasCodexOAuthCredential = Boolean(codexOAuthStatus?.connected || codexOAuthStatus?.requiresReauth);
@@ -265,11 +273,14 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
       ? "Create a new provider definition without expanding the gateway."
       : "Edit the selected provider through runtime settings. Secrets stay on the secure secret endpoints.";
   const selectedProviderCredentialReady = selectedProvider
-    ? selectedProviderIsCodexOAuth
-      ? codexOAuthConnected
-      : selectedProviderIsClaudeCodeOAuth
-        ? Boolean(secretState.data?.hasSecret || selectedProvider.hasApiKey)
-        : Boolean(secretState.data?.hasSecret || selectedProvider.hasApiKey || selectedProviderIsLocal)
+    ? resolveProviderCredentialReady({
+        providerId: selectedProvider.providerId,
+        authMode: selectedProvider.authMode,
+        hasApiKey: selectedProvider.hasApiKey,
+        hasSecret: secretState.data?.hasSecret,
+        oauthConnected: codexOAuthConnected,
+        localEndpoint: selectedProviderIsLocal,
+      })
     : false;
   const selectedProviderCredentialMeta = selectedProvider
     ? selectedProviderIsCodexOAuth
@@ -280,10 +291,12 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
           : "OAuth not connected"
       : selectedProviderIsLocal && !(secretState.data?.hasSecret || selectedProvider.hasApiKey)
         ? "Local endpoint, no key required"
-        : formatSecretStatusMeta(
-            secretState.data?.source ?? selectedProvider.apiKeySource,
-            secretState.data?.hasSecret ?? selectedProvider.hasApiKey ?? false,
-          )
+        : selectedProviderIsGoogleAdc
+          ? formatGoogleAdcReadinessMeta(selectedProvider.authReadiness)
+          : formatSecretStatusMeta(
+              secretState.data?.source ?? selectedProvider.apiKeySource,
+              secretState.data?.hasSecret ?? selectedProvider.hasApiKey ?? false,
+            )
     : "No provider selected";
   const selectedProviderSmokeEvidenceItems = selectedProvider
     ? deriveProviderSmokeEvidenceItems({
@@ -460,8 +473,13 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
       setNotice({ tone: "warning", message: "Choose both a provider and a model before saving routing." });
       return;
     }
+    if (!config) {
+      setNotice({ tone: "warning", message: "Reload provider settings before saving routing." });
+      return;
+    }
     try {
       await patchSettings({
+        expectedRevision: config.revision,
         llm: {
           activeProviderId: routingProviderId,
           activeModel: routingModel,
@@ -476,6 +494,15 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
       setRoutingBaseline({ providerId: routingProviderId, model: routingModel });
       await reload();
     } catch (saveError) {
+      if (isApiRequestError(saveError) && saveError.status === 409) {
+        await reload();
+        setNotice({
+          tone: "warning",
+          message:
+            "Provider settings changed elsewhere. Your routing draft is preserved; review the current settings, then save again to retry.",
+        });
+        return;
+      }
       setNotice({ tone: "error", message: getErrorMessage(saveError) });
     }
   };
@@ -499,8 +526,12 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
       setNotice({ tone: "warning", message: "Enter a provider secret before saving." });
       return;
     }
+    if (!config) {
+      setNotice({ tone: "warning", message: "Reload provider settings before saving a secret." });
+      return;
+    }
     try {
-      const next = await saveProviderSecret(selectedProviderId, secretValue.trim());
+      const next = await saveProviderSecret(selectedProviderId, secretValue.trim(), config.revision);
       setSecretState({ loading: false, error: null, data: next });
       setSecretValue("");
       setNotice({
@@ -509,6 +540,14 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
       });
       await reload();
     } catch (saveError) {
+      if (isApiRequestError(saveError) && saveError.status === 409) {
+        await reload();
+        setNotice({
+          tone: "warning",
+          message: "Provider settings changed elsewhere. Your secret was not changed; review and save again.",
+        });
+        return;
+      }
       setNotice({ tone: "error", message: getErrorMessage(saveError) });
     }
   };
@@ -517,9 +556,13 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
     if (!pendingDeleteSecret) {
       return;
     }
+    if (!config) {
+      setNotice({ tone: "warning", message: "Reload provider settings before removing a secret." });
+      return;
+    }
     setDeleteSecretBusy(true);
     try {
-      const next = await deleteProviderSecret(pendingDeleteSecret.providerId);
+      const next = await deleteProviderSecret(pendingDeleteSecret.providerId, config.revision);
       setSecretState({ loading: false, error: null, data: next });
       setNotice({
         tone: "success",
@@ -528,6 +571,14 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
       setPendingDeleteSecret(null);
       await reload();
     } catch (deleteError) {
+      if (isApiRequestError(deleteError) && deleteError.status === 409) {
+        await reload();
+        setNotice({
+          tone: "warning",
+          message: "Provider settings changed elsewhere. No secret was removed; review and try again.",
+        });
+        return;
+      }
       setNotice({ tone: "error", message: getErrorMessage(deleteError) });
     } finally {
       setDeleteSecretBusy(false);
@@ -720,10 +771,15 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
       setNotice({ tone: "info", message: "OpenAI Codex is already configured. Connect ChatGPT OAuth below." });
       return;
     }
+    if (!config) {
+      setNotice({ tone: "warning", message: "Reload provider settings before adding a provider." });
+      return;
+    }
     const draft = buildChatGptOAuthProviderDraft();
     setProviderSaveBusy(true);
     try {
       await patchSettings({
+        expectedRevision: config.revision,
         llm: {
           upsertProvider: {
             providerId: draft.providerId,
@@ -746,6 +802,14 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
       setNotice({ tone: "success", message: "ChatGPT provider added. Start ChatGPT login below." });
       void loadModelsForProvider(draft.providerId, { force: true });
     } catch (saveError) {
+      if (isApiRequestError(saveError) && saveError.status === 409) {
+        await reload();
+        setNotice({
+          tone: "warning",
+          message: "Provider settings changed elsewhere. Review the current settings, then add ChatGPT setup again.",
+        });
+        return;
+      }
       setNotice({ tone: "error", message: getErrorMessage(saveError) });
     } finally {
       setProviderSaveBusy(false);
@@ -757,6 +821,10 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
       setNotice({ tone: "warning", message: "Provide both a provider id and base URL before saving." });
       return;
     }
+    if (!config) {
+      setNotice({ tone: "warning", message: "Reload provider settings before saving this provider." });
+      return;
+    }
     if (providerRequestValidation.error) {
       setNotice({ tone: "error", message: providerRequestValidation.error });
       return;
@@ -764,15 +832,28 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
     setProviderSaveBusy(true);
     try {
       await patchSettings({
+        expectedRevision: config.revision,
         llm: {
           upsertProvider: {
             providerId: providerDraft.providerId.trim(),
             label: providerDraft.label.trim() || undefined,
             baseUrl: providerDraft.baseUrl.trim(),
             apiStyle: providerDraft.apiStyle,
-            authMode: draftIsCodexOAuth ? "codex-oauth" : undefined,
+            authMode: draftIsCodexOAuth ? "codex-oauth" : providerDraft.authMode || undefined,
             defaultModel: providerDraft.defaultModel.trim() || undefined,
-            apiKeyEnv: draftIsCodexOAuth ? undefined : providerDraft.apiKeyEnv.trim() || undefined,
+            apiKeyEnv:
+              draftIsCodexOAuth || providerDraft.authMode === "google-adc"
+                ? undefined
+                : providerDraft.apiKeyEnv.trim() || undefined,
+            googleCloud: draftUsesGoogleAuth
+              ? {
+                  projectId: providerDraft.googleProjectId.trim() || undefined,
+                  projectIdEnv: providerDraft.googleProjectIdEnv.trim() || undefined,
+                  location: providerDraft.googleLocation.trim() || undefined,
+                  locationEnv: providerDraft.googleLocationEnv.trim() || undefined,
+                  endpointId: providerDraft.googleEndpointId.trim() || undefined,
+                }
+              : undefined,
             request: providerRequestValidation.request,
           },
         },
@@ -785,6 +866,15 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
       setNotice({ tone: "success", message: `Saved provider ${providerDraft.providerId.trim()}.` });
       void loadModelsForProvider(providerDraft.providerId.trim(), { force: true });
     } catch (saveError) {
+      if (isApiRequestError(saveError) && saveError.status === 409) {
+        await reload();
+        setNotice({
+          tone: "warning",
+          message:
+            "Provider settings changed elsewhere. Your provider draft is preserved; review the current settings, then save again to retry.",
+        });
+        return;
+      }
       setNotice({ tone: "error", message: getErrorMessage(saveError) });
     } finally {
       setProviderSaveBusy(false);
@@ -1245,34 +1335,55 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                       meta: selectedProviderApiMeta,
                     },
                     {
-                      label: selectedProviderIsCodexOAuth || selectedProviderIsClaudeCodeOAuth ? "OAuth" : "API key",
+                      label:
+                        selectedProviderIsCodexOAuth || selectedProviderIsClaudeCodeOAuth
+                          ? "OAuth"
+                          : selectedProviderIsGoogleAdc
+                            ? "Google ADC"
+                            : selectedProviderIsGoogleServiceAccount
+                              ? "Service account"
+                              : "API key",
                       value: selectedProviderIsCodexOAuth
                         ? codexOAuthStatus?.connected
                           ? "Connected"
                           : codexOAuthStatus?.requiresReauth
                             ? "Reauth"
                             : "Missing"
-                        : selectedProviderIsClaudeCodeOAuth
-                          ? secretState.data?.hasSecret || selectedProvider.hasApiKey
+                        : selectedProviderIsGoogleAdc
+                          ? selectedProvider.hasApiKey
                             ? "Configured"
-                            : "Missing"
-                          : secretState.data?.hasSecret || selectedProvider.hasApiKey
-                            ? "Configured"
-                            : "Missing",
+                            : selectedProvider.authReadiness?.status === "invalid"
+                              ? "Invalid"
+                              : selectedProvider.authReadiness?.status === "unavailable"
+                                ? "Unavailable"
+                                : selectedProvider.authReadiness?.status === "missing"
+                                  ? "Missing"
+                                  : "Unknown"
+                          : selectedProviderIsClaudeCodeOAuth
+                            ? secretState.data?.hasSecret || selectedProvider.hasApiKey
+                              ? "Configured"
+                              : "Missing"
+                            : secretState.data?.hasSecret || selectedProvider.hasApiKey
+                              ? "Configured"
+                              : "Missing",
                       meta: selectedProviderIsCodexOAuth
                         ? (codexOAuthStatus?.accountLabel ?? "ChatGPT/Codex plan")
-                        : selectedProviderIsClaudeCodeOAuth
-                          ? "Claude subscription token"
-                          : formatSecretStatusMeta(
-                              secretState.data?.source ?? selectedProvider.apiKeySource,
-                              secretState.data?.hasSecret ?? selectedProvider.hasApiKey ?? false,
-                            ),
+                        : selectedProviderIsGoogleAdc
+                          ? formatGoogleAdcReadinessMeta(selectedProvider.authReadiness)
+                          : selectedProviderIsGoogleServiceAccount
+                            ? "Gateway-owned service-account JSON secret"
+                            : selectedProviderIsClaudeCodeOAuth
+                              ? "Claude subscription token"
+                              : formatSecretStatusMeta(
+                                  secretState.data?.source ?? selectedProvider.apiKeySource,
+                                  secretState.data?.hasSecret ?? selectedProvider.hasApiKey ?? false,
+                                ),
                     },
                     {
                       label: "Secret source",
-                      value: formatEffectiveConfigSourceLabel(
-                        secretState.data?.source ?? selectedProvider.apiKeySource,
-                      ),
+                      value: selectedProviderIsGoogleAdc
+                        ? formatGoogleAuthSourceLabel(selectedProvider.authReadiness?.source)
+                        : formatEffectiveConfigSourceLabel(secretState.data?.source ?? selectedProvider.apiKeySource),
                       meta: "Effective source label",
                     },
                     {
@@ -1339,22 +1450,49 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                       </NativeButton>
                     </SettingsButtonRow>
                   </>
+                ) : selectedProviderIsGoogleAdc ? (
+                  <>
+                    <SettingsNotice
+                      notice={{
+                        tone: "info",
+                        message:
+                          "Vertex AI uses Gateway-local Application Default Credentials. Credential files, refresh tokens, access tokens, and metadata tokens never roundtrip to Mission Control.",
+                      }}
+                    />
+                    <SettingsButtonRow>
+                      <NativeButton
+                        variant="secondary"
+                        onClick={() => void handleRefreshModels(selectedProvider.providerId)}
+                        disabled={providerProbeBusyId === selectedProvider.providerId}
+                      >
+                        <RefreshCw size={16} />
+                        {providerProbeBusyId === selectedProvider.providerId ? "Probing..." : "Validate ADC & models"}
+                      </NativeButton>
+                    </SettingsButtonRow>
+                  </>
                 ) : (
                   <>
-                    <SettingsField label="Provider secret">
+                    <SettingsField
+                      label={selectedProviderIsGoogleServiceAccount ? "Service-account JSON" : "Provider secret"}
+                    >
                       <input
                         className="mc-next-settings-input"
                         type="password"
                         value={secretValue}
-                        placeholder="Paste a new API key to save"
+                        placeholder={
+                          selectedProviderIsGoogleServiceAccount
+                            ? "Paste service-account JSON to replace the Gateway-owned secret"
+                            : "Paste a new API key to save"
+                        }
                         onChange={(event) => setSecretValue(event.target.value)}
                       />
                     </SettingsField>
                     <SettingsNotice
                       notice={{
                         tone: "info",
-                        message:
-                          "Key on file status comes from the gateway only. Saved key values do not roundtrip back to the browser; status only reports whether a key exists and whether it is stored in OS keychain, local .env fallback, inline config, or none. This field only accepts a replacement key.",
+                        message: selectedProviderIsGoogleServiceAccount
+                          ? "The JSON credential is sent only to the Gateway secret owner and never returned, projected into provider config, or written into public diagnostics. This field only accepts a replacement credential."
+                          : "Key on file status comes from the gateway only. Saved key values do not roundtrip back to the browser; status only reports whether a key exists and whether it is stored in OS keychain, local .env fallback, inline config, or none. This field only accepts a replacement key.",
                       }}
                     />
                     {secretState.error ? (
@@ -1463,6 +1601,29 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                   <p className="mc-next-settings-field-note">{providerApiStyleWarning}</p>
                 ) : null}
               </SettingsField>
+              <SettingsField label="Credential mode">
+                <select
+                  className="mc-next-settings-input"
+                  value={draftIsCodexOAuth ? "codex-oauth" : providerDraft.authMode}
+                  disabled={draftIsCodexOAuth}
+                  onChange={(event) =>
+                    setProviderDraft((current) => ({
+                      ...current,
+                      authMode: event.target.value as ProviderEditorDraft["authMode"],
+                    }))
+                  }
+                >
+                  <option value="">Provider default</option>
+                  <option value="api-key">API key</option>
+                  <option value="google-adc">Google ADC</option>
+                  <option value="google-service-account">Google service account</option>
+                  <option value="claude-code-oauth">Claude Code OAuth token</option>
+                  <option value="codex-oauth">ChatGPT/Codex OAuth</option>
+                </select>
+                <p className="mc-next-settings-field-note">
+                  Google credential contents remain Gateway-local; this field stores only the auth posture.
+                </p>
+              </SettingsField>
               <SettingsField label="Default model">
                 <input
                   className="mc-next-settings-input"
@@ -1476,8 +1637,12 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                   }
                 />
               </SettingsField>
-              {draftIsCodexOAuth ? null : (
-                <SettingsField label="API key env">
+              {draftIsCodexOAuth || providerDraft.authMode === "google-adc" ? null : (
+                <SettingsField
+                  label={
+                    providerDraft.authMode === "google-service-account" ? "Service-account JSON env" : "API key env"
+                  }
+                >
                   <input
                     className="mc-next-settings-input"
                     value={providerDraft.apiKeyEnv}
@@ -1491,6 +1656,60 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                   />
                 </SettingsField>
               )}
+              {draftUsesGoogleAuth ? (
+                <>
+                  <SettingsField label="Google Cloud project">
+                    <input
+                      className="mc-next-settings-input"
+                      value={providerDraft.googleProjectId}
+                      placeholder="my-project"
+                      onChange={(event) =>
+                        setProviderDraft((current) => ({ ...current, googleProjectId: event.target.value }))
+                      }
+                    />
+                  </SettingsField>
+                  <SettingsField label="Project env name">
+                    <input
+                      className="mc-next-settings-input"
+                      value={providerDraft.googleProjectIdEnv}
+                      placeholder="GOOGLE_CLOUD_PROJECT"
+                      onChange={(event) =>
+                        setProviderDraft((current) => ({ ...current, googleProjectIdEnv: event.target.value }))
+                      }
+                    />
+                  </SettingsField>
+                  <SettingsField label="Vertex location">
+                    <input
+                      className="mc-next-settings-input"
+                      value={providerDraft.googleLocation}
+                      placeholder="us-central1"
+                      onChange={(event) =>
+                        setProviderDraft((current) => ({ ...current, googleLocation: event.target.value }))
+                      }
+                    />
+                  </SettingsField>
+                  <SettingsField label="Location env name">
+                    <input
+                      className="mc-next-settings-input"
+                      value={providerDraft.googleLocationEnv}
+                      placeholder="GOOGLE_CLOUD_LOCATION"
+                      onChange={(event) =>
+                        setProviderDraft((current) => ({ ...current, googleLocationEnv: event.target.value }))
+                      }
+                    />
+                  </SettingsField>
+                  <SettingsField label="Vertex endpoint id">
+                    <input
+                      className="mc-next-settings-input"
+                      value={providerDraft.googleEndpointId}
+                      placeholder="openapi"
+                      onChange={(event) =>
+                        setProviderDraft((current) => ({ ...current, googleEndpointId: event.target.value }))
+                      }
+                    />
+                  </SettingsField>
+                </>
+              ) : null}
             </SettingsFieldGrid>
             {providerRequestValidation.error ? (
               <SettingsNotice notice={{ tone: "error", message: providerRequestValidation.error }} />
@@ -1608,6 +1827,30 @@ function formatSecretStatusMeta(source: string | undefined, hasSecret: boolean):
     return "Key on file in inline config";
   }
   return "Key on file; value is never returned";
+}
+
+function formatGoogleAdcReadinessMeta(readiness: ProviderModelCatalogOption["authReadiness"]): string {
+  if (!readiness) {
+    return "Gateway-local ADC readiness has not been inspected";
+  }
+  const source = formatGoogleAuthSourceLabel(readiness.source);
+  if (readiness.status === "ready" && readiness.liveVerified) {
+    return `${source}; live credential resolved by Gateway`;
+  }
+  if (readiness.status === "configured") {
+    return `${source}; supported credential shape found, live token not claimed`;
+  }
+  return `${source}; ${readiness.status.replaceAll("_", " ")} (${readiness.reasonCode})`;
+}
+
+function formatGoogleAuthSourceLabel(
+  source: NonNullable<ProviderModelCatalogOption["authReadiness"]>["source"] | undefined,
+): string {
+  if (source === "adc_file") return "ADC file";
+  if (source === "metadata") return "Google metadata service";
+  if (source === "keychain") return "secure store";
+  if (source === "env") return "environment";
+  return "no credential source";
 }
 
 function formatSecretStorageNotice(source: string | undefined, hasSecret: boolean): string {

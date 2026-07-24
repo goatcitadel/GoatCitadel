@@ -77,6 +77,15 @@ test("bounded response read checker exempts fetchAllowlisted reads in bounded-by
   assert.deepEqual(violations, []);
 });
 
+test("bounded response read checker recognizes governed official-search responses as wrapped", () => {
+  const violations = collectRawResponseReadViolations(
+    "packages/policy-engine/src/research-search-official-providers.ts",
+    "const response = await fetchAllowlisted(url); return response.json();",
+  );
+
+  assert.deepEqual(violations, []);
+});
+
 test("bounded response read checker flags bare fetch in bounded-by-construction files", () => {
   const violations = collectRawResponseReadViolations(
     "packages/policy-engine/src/tool-executor.ts",

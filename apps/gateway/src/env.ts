@@ -29,6 +29,8 @@ const GatewayEnvSchema = z.object({
   GOATCITADEL_RATE_LIMIT_MAX_MUTATION: z.coerce.number().int().positive().optional(),
   GOATCITADEL_RATE_LIMIT_MAX_AUTH: z.coerce.number().int().positive().optional(),
   GOATCITADEL_RATE_LIMIT_MAX_SSE_CONNECT: z.coerce.number().int().positive().optional(),
+  GOATCITADEL_RATE_LIMIT_MAX_WEBHOOK_INGRESS: z.coerce.number().int().positive().optional(),
+  GOATCITADEL_RATE_LIMIT_MAX_WEBHOOK_ACCEPTED: z.coerce.number().int().positive().optional(),
 
   /** Allow unauthenticated network binding (dangerous). */
   GOATCITADEL_ALLOW_UNAUTH_NETWORK: z.string().optional(),

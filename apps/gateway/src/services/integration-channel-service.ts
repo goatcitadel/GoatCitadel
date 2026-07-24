@@ -194,7 +194,7 @@ export class IntegrationChannelService {
  *   - `ntfy` : outbound-only notification delivery (no inbound messages).
  *
  * Every other inbound-capable channel (Discord, Telegram, Slack, WhatsApp,
- * LINE, Nextcloud Talk, Signal, Matrix, Mattermost, Teams, ...) is default-safe
+ * LINE, Nextcloud Talk, Matrix, Mattermost, Teams, ...) is default-safe
  * (allowlist) so unknown senders are denied until an operator explicitly allows
  * them. An operator who genuinely wants an open posture for one of those
  * channels must opt in via `inboundAccessMode: "open_legacy"`.
@@ -265,11 +265,13 @@ export function getIntegrationConnectionChannelRuntimeStatus(
     },
   };
 
-  if (
+  const legacySignalFeatureEnabled = connection.key === "signal" && deps.isFeatureEnabled("signalInboundV1Enabled");
+  const legacySignalInboundValue = connection.config.inboundEnabled;
+  const legacySignalConnectionInboundEnabled =
     connection.key === "signal" &&
-    capabilities.inboundModes.includes("poll") &&
-    !deps.isFeatureEnabled("signalInboundV1Enabled")
-  ) {
+    (legacySignalInboundValue === true ||
+      (typeof legacySignalInboundValue === "string" && legacySignalInboundValue.trim().toLowerCase() === "true"));
+  if (connection.key === "signal" && (legacySignalFeatureEnabled || legacySignalConnectionInboundEnabled)) {
     const metadata = runtimeStatus.metadata ?? {};
     const setupDiagnostics = Array.isArray(metadata.setupDiagnostics) ? metadata.setupDiagnostics : [];
     return {
@@ -278,13 +280,14 @@ export function getIntegrationConnectionChannelRuntimeStatus(
       lastReadyAt: undefined,
       metadata: {
         ...metadata,
-        readinessSource: "feature_flag",
+        readinessSource: "blocked_legacy_inbound",
         authoritative: true,
         featureFlag: "signalInboundV1Enabled",
-        featureEnabled: false,
+        featureEnabled: legacySignalFeatureEnabled,
+        legacyConnectionInboundEnabled: legacySignalConnectionInboundEnabled,
         setupDiagnostics: [
           ...setupDiagnostics,
-          "Signal inbound polling is configured on this connection, but signalInboundV1Enabled is disabled.",
+          "Signal inbound is blocked: the current bridge receive endpoint has no acknowledgement/replay contract. Legacy inbound settings never start polling; outbound sends remain available.",
         ],
       },
       runtimePosture: {
@@ -292,7 +295,7 @@ export function getIntegrationConnectionChannelRuntimeStatus(
         lifecycle: "stateless",
         inboundReadiness: "unsupported",
         operatorSummary:
-          "Signal inbound polling is configured, but the signalInboundV1Enabled feature flag is disabled, so no poller is active.",
+          "Signal is outbound-only. Legacy inbound=true is deprecated and blocked because the current bridge cannot safely replay or acknowledge received messages.",
       },
     };
   }

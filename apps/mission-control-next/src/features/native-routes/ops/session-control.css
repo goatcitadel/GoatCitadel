@@ -1,0 +1,131 @@
+/* HX-411 Ops session-control panel — semantic cards for pending control requests
+   and the current external controller. Bespoke design-system CSS (no Tailwind). */
+
+.mc-next-session-control-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.mc-next-session-control-owner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--mc-border-subtle, var(--border));
+  border-radius: var(--r-md, 10px);
+  background: var(--mc-surface-1, var(--card));
+}
+
+.mc-next-session-control-owner p {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: var(--text-xs, 0.75rem);
+  color: var(--text-secondary, var(--text-muted));
+}
+
+.mc-next-session-control-external {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--gc-risk-caution, var(--border));
+  border-left-width: 4px;
+  border-radius: var(--r-md, 10px);
+  background: var(--mc-surface-2, var(--card));
+}
+
+.mc-next-session-control-external[data-tone="external-stale"] {
+  border-color: var(--gc-risk-danger, var(--warning));
+}
+
+.mc-next-session-control-external-head,
+.mc-next-session-control-request-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mc-next-session-control-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.mc-next-session-control-external-actions,
+.mc-next-session-control-request-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.mc-next-session-control-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px 16px;
+  margin: 0;
+}
+
+.mc-next-session-control-meta > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.mc-next-session-control-meta dt {
+  font-size: var(--text-2xs, 0.68rem);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary, var(--text-muted));
+}
+
+.mc-next-session-control-meta dd {
+  margin: 0;
+  font-size: var(--text-xs, 0.75rem);
+  color: var(--foreground);
+  overflow-wrap: anywhere;
+}
+
+.mc-next-session-control-requests h4 {
+  margin: 0 0 8px;
+  font-size: var(--text-sm, 0.85rem);
+  color: var(--foreground);
+}
+
+.mc-next-session-control-requests ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+}
+
+.mc-next-session-control-request {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--mc-border-subtle, var(--border));
+  border-radius: var(--r-md, 10px);
+  background: var(--mc-surface-1, var(--card));
+}
+
+.mc-next-session-control-read-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-xs, 0.75rem);
+  color: var(--foreground);
+}
+
+.mc-next-session-control-hint {
+  margin: 0;
+  font-size: var(--text-xs, 0.75rem);
+  color: var(--text-secondary, var(--text-muted));
+}

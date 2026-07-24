@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { buildOfflineRestoreRequiredResponse, resolveBackupPathWithinDirectory } from "../services/backup-paths.js";
+import { sendRouteError } from "./_error-handler.js";
 import { withRouteAccess } from "./route-access.js";
 
 const retentionPatchSchema = z.object({
@@ -32,11 +33,22 @@ const backupVerifySchema = z.object({
   filePath: z.string().min(1),
 });
 
-const databaseCutoverSchema = z.object({
-  profile: z.enum(["local", "hosted"]),
-  execute: z.boolean().optional(),
-  confirm: z.boolean().optional(),
-});
+const databaseCutoverSchema = z
+  .object({
+    profile: z.enum(["local", "hosted"]),
+    execute: z.boolean().optional(),
+    confirm: z.boolean().optional(),
+    expectedRevision: z.number().int().positive().optional(),
+  })
+  .superRefine((input, context) => {
+    if (input.execute === true && input.expectedRevision === undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["expectedRevision"],
+        message: "expectedRevision is required when execute=true",
+      });
+    }
+  });
 
 const databaseVerifySchema = z.object({
   source: z.string().min(1),
@@ -166,10 +178,11 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
         profile: parsed.data.profile,
         execute: parsed.data.execute ?? false,
         confirm: parsed.data.confirm,
+        expectedRevision: parsed.data.expectedRevision,
       });
       return reply.send(result);
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 

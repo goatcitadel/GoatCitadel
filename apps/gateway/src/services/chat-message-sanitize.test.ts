@@ -1,16 +1,37 @@
 import { describe, expect, it } from "vitest";
 import type { ChatCompletionMessage } from "@goatcitadel/contracts";
-import { sanitizeMessages } from "./chat-message-sanitize.js";
+import {
+  INTERNAL_TOOL_EFFECT_POTENTIAL_KEY,
+  sanitizeMessages,
+  stripInternalToolEffectMetadataForProvider,
+} from "./chat-message-sanitize.js";
 
 type AssistantWithToolCalls = ChatCompletionMessage & {
-  tool_calls: Array<{ id: string; type: "function"; function: { name: string; arguments: string } }>;
+  tool_calls: Array<{
+    id: string;
+    type: "function";
+    function: { name: string; arguments: string };
+    [INTERNAL_TOOL_EFFECT_POTENTIAL_KEY]?: "none" | "unknown";
+  }>;
 };
 
-function assistantToolCall(id: string, name = "lookup", args = "{}"): AssistantWithToolCalls {
+function assistantToolCall(
+  id: string,
+  name = "lookup",
+  args = "{}",
+  potential?: "none" | "unknown",
+): AssistantWithToolCalls {
   return {
     role: "assistant",
     content: "",
-    tool_calls: [{ id, type: "function", function: { name, arguments: args } }],
+    tool_calls: [
+      {
+        id,
+        type: "function",
+        function: { name, arguments: args },
+        ...(potential ? { [INTERNAL_TOOL_EFFECT_POTENTIAL_KEY]: potential } : {}),
+      },
+    ],
   };
 }
 
@@ -57,11 +78,7 @@ describe("sanitizeMessages", () => {
   });
 
   it("drops a tool result that appears before its call (order-sensitive pairing)", () => {
-    const messages: ChatCompletionMessage[] = [
-      toolResult("call_1"),
-      assistantToolCall("call_1"),
-      toolResult("call_1"),
-    ];
+    const messages: ChatCompletionMessage[] = [toolResult("call_1"), assistantToolCall("call_1"), toolResult("call_1")];
 
     const sanitized = sanitizeMessages(messages);
 
@@ -69,7 +86,7 @@ describe("sanitizeMessages", () => {
     expect(sanitized).toEqual([assistantToolCall("call_1"), toolResult("call_1")]);
   });
 
-  it("fills a dangling assistant tool call with a synthetic skipped result", () => {
+  it("preserves a dangling unknown call with an inspect-before-retry result", () => {
     const messages: ChatCompletionMessage[] = [
       { role: "user", content: "hello" },
       assistantToolCall("call_1"),
@@ -82,11 +99,55 @@ describe("sanitizeMessages", () => {
     const synthetic = sanitized[2];
     expect(synthetic.role).toBe("tool");
     expect(synthetic.tool_call_id).toBe("call_1");
-    expect(JSON.parse(String(synthetic.content))).toMatchObject({ skipped: true });
+    expect(JSON.parse(String(synthetic.content))).toMatchObject({
+      interrupted: true,
+      recovery: "inspect_state_before_retry",
+      automaticReplaySuppressed: true,
+    });
     // Inserted immediately after the call that owns it — never reordered past
     // the following assistant message.
     expect(sanitized[1]).toBe(messages[1]);
     expect(sanitized[3]).toBe(messages[2]);
+  });
+
+  it("removes a dangling call only when internal metadata proves no effect", () => {
+    const call = assistantToolCall("call_safe", "time.now", "{}", "none");
+    call.content = "The safe read did not settle.";
+
+    const sanitized = sanitizeMessages([call, { role: "user", content: "continue" }]);
+
+    expect(sanitized).toEqual([
+      { role: "assistant", content: "The safe read did not settle." },
+      { role: "user", content: "continue" },
+    ]);
+    expect(JSON.stringify(sanitized)).not.toContain(INTERNAL_TOOL_EFFECT_POTENTIAL_KEY);
+  });
+
+  it("handles mixed safe and unknown dangling calls independently", () => {
+    const mixed = {
+      role: "assistant",
+      content: "",
+      tool_calls: [
+        {
+          id: "safe",
+          type: "function",
+          function: { name: "time.now", arguments: "{}" },
+          [INTERNAL_TOOL_EFFECT_POTENTIAL_KEY]: "none",
+        },
+        {
+          id: "remote",
+          type: "function",
+          function: { name: "plugin:send", arguments: "{}" },
+          [INTERNAL_TOOL_EFFECT_POTENTIAL_KEY]: "unknown",
+        },
+      ],
+    } as ChatCompletionMessage;
+
+    const sanitized = sanitizeMessages([mixed]);
+
+    expect(JSON.stringify(sanitized[0])).not.toContain("safe");
+    expect(JSON.stringify(sanitized[0])).toContain("remote");
+    expect(sanitized[1]).toMatchObject({ role: "tool", tool_call_id: "remote" });
   });
 
   it("fills every dangling id of a parallel multi-call assistant turn", () => {
@@ -186,5 +247,52 @@ describe("sanitizeMessages", () => {
 
     expect(JSON.stringify(messages)).toBe(snapshot);
     expect(messages).toHaveLength(1);
+  });
+
+  it("strips internal effect metadata recursively from every provider-bound shape", () => {
+    const providerValue = {
+      gc_internal_effect_potential: "unknown",
+      function: {
+        name: "lookup",
+        parameters: {
+          properties: {
+            nested: { gc_internal_private: true, type: "string" },
+          },
+        },
+      },
+      array: [{ keep: true, gc_internal_effect_receipt: "never-wire" }],
+    };
+
+    const stripped = stripInternalToolEffectMetadataForProvider(providerValue);
+
+    expect(stripped).toEqual({
+      function: {
+        name: "lookup",
+        parameters: { properties: { nested: { type: "string" } } },
+      },
+      array: [{ keep: true }],
+    });
+    expect(providerValue.gc_internal_effect_potential).toBe("unknown");
+  });
+
+  it("reads and strips provider-native effect metadata", () => {
+    const message = {
+      role: "assistant",
+      content: "",
+      provider_native_content: [
+        {
+          type: "tool_use",
+          id: "native-unknown",
+          name: "mcp:mutate",
+          input: {},
+          [INTERNAL_TOOL_EFFECT_POTENTIAL_KEY]: "unknown",
+        },
+      ],
+    } as ChatCompletionMessage;
+
+    const sanitized = sanitizeMessages([message]);
+
+    expect(JSON.stringify(sanitized)).not.toContain(INTERNAL_TOOL_EFFECT_POTENTIAL_KEY);
+    expect(sanitized.at(-1)).toMatchObject({ role: "tool", tool_call_id: "native-unknown" });
   });
 });

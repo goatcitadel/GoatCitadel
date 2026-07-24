@@ -61,24 +61,33 @@ export async function validateSkillImport(input: {
   });
 }
 
+/**
+ * HX-402 P2: the legacy executable install is retired. The gateway validates
+ * (advisory) and answers with a structured redirect into the governed Skill
+ * Hub review surface — no bytes are published and no skill becomes callable
+ * from this endpoint.
+ */
+export interface SkillImportRedirectResult {
+  disposition: "redirected_to_skill_hub";
+  validation: SkillImportValidationResult;
+  redirect: {
+    owner: "skill_hub";
+    reviewRoute: string;
+    sourceRef: string;
+    sourceType?: "git_url" | "remote_bundle";
+    eligible: boolean;
+    ineligibleReason?: string;
+  };
+}
+
 export async function installSkillImport(input: {
   sourceRef: string;
   sourceType?: SkillImportSourceType;
   sourceProvider?: SkillSourceProvider;
   force?: boolean;
   confirmHighRisk?: boolean;
-}): Promise<{
-  validation: SkillImportValidationResult;
-  installedPath: string;
-  sourceManifestPath: string;
-  installedSkillId?: string;
-}> {
-  return request<{
-    validation: SkillImportValidationResult;
-    installedPath: string;
-    sourceManifestPath: string;
-    installedSkillId?: string;
-  }>("/api/v1/skills/import/install", {
+}): Promise<SkillImportRedirectResult> {
+  return request<SkillImportRedirectResult>("/api/v1/skills/import/install", {
     method: "POST",
     body: JSON.stringify(input),
   });
@@ -126,11 +135,44 @@ export async function createSkillEvaluationProposal(runId: string): Promise<Skil
   });
 }
 
+/**
+ * HX-402 P2: operator skill-state mutations are approval-first. The gateway
+ * answers 202 with one canonical pending `skill.lifecycle` approval (the
+ * recovered approval effect is the only executor) or 200 with a no-op
+ * envelope when the reviewed state already matches.
+ */
+export interface SkillLifecyclePendingApproval {
+  approvalId: string;
+  status: string;
+  kind: "skill.lifecycle";
+  action: "skill_state_set" | "skill_state_bulk_set" | "activation_policy_updated";
+  subjectKind: "skill" | "skill_batch" | "skill_activation_policy";
+  subjectId?: string;
+  requestSha256: string;
+  expectedStateSha256: string;
+  expiresAt?: string;
+  createdAt: string;
+  replayed: boolean;
+  skillIds: string[];
+}
+
+export type SkillStateMutationOutcome =
+  | { pendingApproval: SkillLifecyclePendingApproval }
+  | { pendingApproval: null; noMutationRequired: true; skillState: SkillStateRecord };
+
+export type SkillStateBulkMutationOutcome =
+  | { pendingApproval: SkillLifecyclePendingApproval }
+  | { pendingApproval: null; noMutationRequired: true; skillStates: SkillStateRecord[] };
+
+export type SkillActivationPolicyMutationOutcome =
+  | { pendingApproval: SkillLifecyclePendingApproval }
+  | { pendingApproval: null; noMutationRequired: true; policy: SkillActivationPolicy };
+
 export async function updateSkillState(
   skillId: string,
-  input: { state: SkillRuntimeState; note?: string },
-): Promise<SkillStateRecord> {
-  return request<SkillStateRecord>("/api/v1/skills/by-id/state", {
+  input: { expectedRevision: number; state: SkillRuntimeState; note?: string },
+): Promise<SkillStateMutationOutcome> {
+  return request<SkillStateMutationOutcome>("/api/v1/skills/by-id/state", {
     method: "PATCH",
     body: JSON.stringify({ ...input, skillId }),
   });
@@ -138,10 +180,11 @@ export async function updateSkillState(
 
 export async function bulkUpdateSkillState(input: {
   skillIds: string[];
+  expectedRevisionsBySkillId: Record<string, number>;
   state: SkillRuntimeState;
   note?: string;
-}): Promise<{ items: SkillStateRecord[] }> {
-  return request<{ items: SkillStateRecord[] }>("/api/v1/skills/bulk-state", {
+}): Promise<SkillStateBulkMutationOutcome> {
+  return request<SkillStateBulkMutationOutcome>("/api/v1/skills/bulk-state", {
     method: "POST",
     body: JSON.stringify(input),
   });
@@ -152,9 +195,9 @@ export async function fetchSkillActivationPolicies(): Promise<SkillActivationPol
 }
 
 export async function patchSkillActivationPolicies(
-  input: Partial<SkillActivationPolicy>,
-): Promise<SkillActivationPolicy> {
-  return request<SkillActivationPolicy>("/api/v1/skills/activation-policies", {
+  input: Partial<Omit<SkillActivationPolicy, "revision">> & { expectedRevision: number },
+): Promise<SkillActivationPolicyMutationOutcome> {
+  return request<SkillActivationPolicyMutationOutcome>("/api/v1/skills/activation-policies", {
     method: "PATCH",
     body: JSON.stringify(input),
   });

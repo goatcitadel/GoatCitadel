@@ -5,7 +5,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createRoot, type Root } from "react-dom/client";
 import TestRenderer from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ThreadedTimeline, resolveStreamingPreviewScrollSignal } from "./ThreadedTimeline";
+import {
+  ThreadedTimeline,
+  mergeSystemNoticesIntoThreadWindow,
+  resolveStreamingPreviewScrollSignal,
+} from "./ThreadedTimeline";
 import {
   publishChannelActivityFromRealtimeEvent,
   resetChannelActivitySnapshots,
@@ -20,6 +24,8 @@ function buildProps(overrides: Partial<any> = {}): any {
       sessionId: "session-1",
       activeLeafTurnId: "turn-1",
       selectedTurnId: "turn-1",
+      systemNotices: [],
+      systemNoticeHiddenCount: 0,
       turns: [
         {
           turnId: "turn-1",
@@ -216,6 +222,173 @@ describe("ThreadedTimeline", () => {
     container = null;
     resetChannelActivitySnapshots();
     resetChatStreamingPreviewForTests();
+  });
+
+  it("renders a notice-only conversation without a starter canvas or user bubble", () => {
+    const notice = {
+      kind: "system_heartbeat",
+      noticeId: "assistant-heartbeat-1",
+      turnId: "turn-heartbeat-1",
+      message: {
+        messageId: "assistant-heartbeat-1",
+        sessionId: "session-1",
+        role: "assistant",
+        actorType: "system",
+        actorId: "system-heartbeat",
+        content: "Disk pressure high.",
+        timestamp: "2026-07-15T10:01:00.000Z",
+      },
+    };
+    const renderer = TestRenderer.create(
+      <ThreadedTimeline
+        props={
+          buildProps({
+            mode: "chat",
+            delegationRun: null,
+            thread: {
+              sessionId: "session-1",
+              turns: [],
+              systemNotices: [notice],
+              systemNoticeHiddenCount: 0,
+            },
+          }) as any
+        }
+      />,
+    );
+
+    expect(renderedText(renderer)).toContain("Disk pressure high.");
+    expect(renderedText(renderer)).toContain("Heartbeat");
+    expect(renderedText(renderer)).not.toContain("What should we tackle?");
+    expect(renderer.root.findAllByProps({ className: "mc-next-thread-bubble user" })).toHaveLength(0);
+  });
+
+  it("merges retained notices chronologically without reordering conversation turns", () => {
+    const props = buildProps();
+    const firstTurn = props.thread.turns[0];
+    const secondTurn = {
+      ...firstTurn,
+      turnId: "turn-2",
+      userMessage: {
+        ...firstTurn.userMessage,
+        messageId: "user-2",
+        timestamp: "2026-04-30T00:02:00.000Z",
+      },
+      trace: { ...firstTurn.trace, turnId: "turn-2", userMessageId: "user-2" },
+    };
+    const notice = {
+      kind: "system_heartbeat" as const,
+      noticeId: "heartbeat-between",
+      turnId: "turn-heartbeat",
+      message: {
+        ...firstTurn.assistantMessage,
+        messageId: "heartbeat-between",
+        timestamp: "2026-04-30T00:01:00.000Z",
+      },
+    };
+
+    expect(
+      mergeSystemNoticesIntoThreadWindow(
+        [
+          { kind: "turn", turn: firstTurn, index: 0 },
+          { kind: "turn", turn: secondTurn, index: 1 },
+        ],
+        [notice],
+      ).map((item) => {
+        if (item.kind === "turn") return item.turn.turnId;
+        if (item.kind === "system_notice") return item.notice.noticeId;
+        return `gap:${item.hiddenCount}`;
+      }),
+    ).toEqual(["turn-1", "heartbeat-between", "turn-2"]);
+  });
+
+  it("auto-follows when a retained system notice arrives on thread refetch", async () => {
+    const scrollIntoView = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(vi.fn());
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callback(0);
+      return 1;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const props = buildProps({ mode: "chat", followOutput: true, delegationRun: null, streamStatus: "idle" });
+    await act(async () => {
+      root?.render(<ThreadedTimeline props={props as any} />);
+      await Promise.resolve();
+    });
+    scrollIntoView.mockClear();
+    const notice = {
+      kind: "system_heartbeat",
+      noticeId: "assistant-heartbeat-refetch",
+      turnId: "turn-heartbeat-refetch",
+      message: {
+        ...props.thread.turns[0].assistantMessage,
+        messageId: "assistant-heartbeat-refetch",
+        actorType: "system",
+        actorId: "system-heartbeat",
+        content: "Heartbeat refetched.",
+        timestamp: "2026-04-30T00:03:00.000Z",
+      },
+    };
+    await act(async () => {
+      root?.render(
+        <ThreadedTimeline props={{ ...props, thread: { ...props.thread, systemNotices: [notice] } } as any} />,
+      );
+      await Promise.resolve();
+    });
+
+    expect(container?.textContent).toContain("Heartbeat refetched.");
+    expect(scrollIntoView).toHaveBeenCalled();
+    vi.unstubAllGlobals();
+    scrollIntoView.mockRestore();
+  });
+
+  it("bounds notice-heavy histories and exposes an explicit hidden-notice gap", () => {
+    const props = buildProps();
+    const notices = Array.from({ length: 85 }, (_, index) => ({
+      kind: "system_heartbeat" as const,
+      noticeId: `heartbeat-${String(index).padStart(3, "0")}`,
+      turnId: `turn-heartbeat-${index}`,
+      message: {
+        ...props.thread.turns[0].assistantMessage,
+        messageId: `heartbeat-${index}`,
+        timestamp: new Date(Date.UTC(2026, 3, 30, 1, index)).toISOString(),
+      },
+    }));
+
+    const items = mergeSystemNoticesIntoThreadWindow([], notices);
+
+    expect(items.filter((item) => item.kind === "system_notice")).toHaveLength(60);
+    expect(items[0]).toEqual({ kind: "system_notice_gap", key: "system-notice-gap", hiddenCount: 25 });
+    const lastItem = items.at(-1);
+    expect(lastItem?.kind === "system_notice" ? lastItem.notice.noticeId : undefined).toBe("heartbeat-084");
+  });
+
+  it("enforces one combined mixed-history bound with explicit server and local notice gaps", () => {
+    const props = buildProps();
+    const turns = Array.from({ length: 80 }, (_, index) => ({
+      kind: "turn" as const,
+      turn: {
+        ...props.thread.turns[0],
+        turnId: `turn-${index}`,
+        userMessage: { ...props.thread.turns[0].userMessage, messageId: `user-${index}` },
+      },
+      index,
+    }));
+    const notices = Array.from({ length: 60 }, (_, index) => ({
+      kind: "system_heartbeat" as const,
+      noticeId: `heartbeat-${index}`,
+      turnId: `turn-heartbeat-${index}`,
+      message: {
+        ...props.thread.turns[0].assistantMessage,
+        messageId: `heartbeat-${index}`,
+        timestamp: new Date(Date.UTC(2026, 3, 30, 2, index)).toISOString(),
+      },
+    }));
+
+    const items = mergeSystemNoticesIntoThreadWindow(turns, notices, 60);
+
+    expect(items.filter((item) => item.kind === "turn")).toHaveLength(80);
+    expect(items.filter((item) => item.kind === "system_notice")).toHaveLength(20);
+    expect(items.filter((item) => item.kind === "turn" || item.kind === "system_notice")).toHaveLength(100);
+    expect(items[0]).toEqual({ kind: "system_notice_gap", key: "system-notice-gap", hiddenCount: 100 });
   });
 
   it("folds agentic subagent activity behind an expandable card", () => {
