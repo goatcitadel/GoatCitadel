@@ -15,6 +15,7 @@ import { BrowserSessionsRoutePage } from "./ops/BrowserSessionsRoutePage";
 import { KanbanRoutePage } from "./ops/KanbanRoutePage";
 import { OpsSavedBoardsRoutePage } from "./ops/OpsSavedBoardsRoutePage";
 import { QualityDashboardRoutePage } from "./ops/QualityDashboardRoutePage";
+import { RemoteWorkersRoutePage } from "./ops/RemoteWorkersRoutePage";
 import { RunDetailRoutePage } from "./ops/RunDetailRoutePage";
 import { RuntimeRoutePage } from "./ops/RuntimeRoutePage";
 import { ProjectsRoutePage } from "./projects/ProjectsRoutePage";
@@ -95,6 +96,9 @@ export function NativeRoutePages(props: NativeRoutePagesProps) {
     }
     if (section === "quality") {
       return <QualityDashboardRoutePage {...props} />;
+    }
+    if (section === "workers") {
+      return <RemoteWorkersRoutePage {...props} />;
     }
     return <RuntimeRoutePage {...props} />;
   }

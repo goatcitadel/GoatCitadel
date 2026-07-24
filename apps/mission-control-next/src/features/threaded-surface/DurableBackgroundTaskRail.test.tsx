@@ -6,6 +6,17 @@ import { useDurableBackgroundTaskRail } from "./useDurableBackgroundTaskRail";
 
 vi.mock("./useDurableBackgroundTaskRail", () => ({ useDurableBackgroundTaskRail: vi.fn() }));
 
+// Keep the rail test hermetic: the inline remote-worker activity is exercised in
+// its own suite. Here we only assert the rail threads scope into it (no second
+// surface — it renders INSIDE the existing rail).
+const railMocks = vi.hoisted(() => ({ inlineProps: [] as Array<Record<string, unknown>> }));
+vi.mock("./RemoteWorkerInlineActivity", () => ({
+  RemoteWorkerInlineActivity: (props: Record<string, unknown>) => {
+    railMocks.inlineProps.push(props);
+    return null;
+  },
+}));
+
 const mockedUseRail = vi.mocked(useDurableBackgroundTaskRail);
 const control = vi.fn(async () => true);
 const refresh = vi.fn(async () => undefined);
@@ -158,6 +169,7 @@ describe("DurableBackgroundTaskRail", () => {
   beforeEach(() => {
     control.mockClear();
     refresh.mockClear();
+    railMocks.inlineProps.length = 0;
     mockedUseRail.mockReturnValue({
       snapshot,
       loading: false,
@@ -166,6 +178,27 @@ describe("DurableBackgroundTaskRail", () => {
       pendingWatcherId: null,
       refresh,
       control,
+    });
+  });
+
+  it("threads workspace/session/turn scope into the inline remote-worker activity inside the existing rail", () => {
+    act(() => {
+      create(
+        <DurableBackgroundTaskRail
+          parentRunId="parent-run"
+          workspaceId="workspace-a"
+          sessionId="session-a"
+          turnId="turn-a"
+          queuedCount={0}
+          streamStatus="open"
+          queueLabels={[]}
+        />,
+      );
+    });
+    expect(railMocks.inlineProps.at(-1)).toMatchObject({
+      workspaceId: "workspace-a",
+      sessionId: "session-a",
+      turnId: "turn-a",
     });
   });
 

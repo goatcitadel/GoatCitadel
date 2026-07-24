@@ -1701,6 +1701,7 @@ function UtilityBackgroundTasksPanel({
       parentRunId={activeProps.selectedTurn?.trace.durable?.runId}
       workspaceId={activeProps.workspaceId}
       sessionId={activeProps.selectedSessionId}
+      turnId={activeProps.selectedTurn?.turnId}
       queuedCount={activeProps.queuedCount}
       streamStatus={activeProps.streamStatus}
       queueLabels={activeProps.queueItems.map((item) => item.label)}

@@ -19,6 +19,7 @@ import {
 import { emitRefresh } from "@goatcitadel/mission-control-shared/state/refresh-bus";
 import type { RealtimeNotificationDescriptor } from "./use-shell-notifications";
 import { publishOpsSavedBoardRealtimeEvent } from "./ops-saved-board-realtime";
+import { publishRemoteWorkerRealtimeEvent } from "./remote-worker-realtime";
 
 /*
  * W4.4 (ship punchlist): event-stream lifecycle extracted from the shell.
@@ -136,6 +137,7 @@ export function useEventStream(options: UseEventStreamOptions): UseEventStreamRe
       (event) => {
         publishChannelActivityFromRealtimeEvent(event);
         publishOpsSavedBoardRealtimeEvent(event);
+        publishRemoteWorkerRealtimeEvent(event);
         const derivedRefresh = deriveRealtimeRefresh(event, { defaultTopics: ["surface"] });
         for (const topic of derivedRefresh.topics) {
           emitRefresh(topic, {

@@ -61,3 +61,11 @@ Status meanings:
 | `/settings/channels` | `ship` | Each visible channel has guided setup with live-auth/send diagnostics or blocked copy. |
 | `/settings/mcp` | `ship` | Local stdio, Approval Inbox, and governed remote http/sse no-auth, token-env, and OAuth2 paths are visible; OAuth records show connect/reconnect readiness and fail closed as `needs_auth` when token refs are missing or expired. |
 | `/settings/tools` | `ship` | Inspect tool catalog and scoped allow/deny grants. |
+
+## Held visibility surface — remote-worker Ops and one-Chat activity (HX-507)
+
+HX-507 adds an operator-visible remote-worker surface that is **architecture-ship but implementation-hold**: the projection routes, the Ops page, and the one-Chat activity are built and proven against seeded storage fixtures, but they are gated on live HX-501 admission/listener authority plus HX-502/HX-504 assignment/event composition, so no live worker data is populated yet. Because that live data is held, these routes are **not counted in the canonical `1.0` visible-route surface above** and carry no `ship`/`experimental` release status until the live gate opens.
+
+- `/ops/workers` (Observe group) renders the read-only remote-worker registry, detail, assignment, event, reconciliation, and control projections. It never projects `$0`, healthy, clean, completed, or operator-owned from absent evidence; usage/cost (HX-503), resource-cell/cleanup (HX-505), and artifact/effect (HX-506) sections stay explicitly `unavailable`.
+- The existing one-Chat `DurableBackgroundTaskRail` gains session/turn-bound remote-worker activity — no second conversation surface, scheduler, listener, state machine, event stream, cost ledger, or approval system. It is read-only; rotation, quarantine, revoke, recovery, cleanup, and reconciliation management remain in Ops.
+- Realtime reuses the existing `/api/v1/events` stream with content-free `remote_worker_changed` / `remote_worker_assignment_changed` invalidations; no second SSE channel and no migration are introduced.

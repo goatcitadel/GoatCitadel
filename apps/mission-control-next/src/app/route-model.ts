@@ -27,6 +27,7 @@ export type OpsSection =
   | "activity"
   | "sessions"
   | "schedules"
+  | "workers"
   | "improvement"
   | "notifications"
   | "approvals"
@@ -440,6 +441,13 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
       section: "schedules",
     },
     {
+      id: "ops-workers",
+      label: "Workers",
+      description: "Operator-visible remote-worker registry, assignments, events, and reconciliation.",
+      area: "ops",
+      section: "workers",
+    },
+    {
       id: "ops-improvement",
       label: "Improvement",
       description: "Replay and improvement loops.",
@@ -728,7 +736,7 @@ export const RAIL_GROUPS: Partial<Record<PrimaryArea, RailGroup[]>> = {
     },
   ],
   ops: [
-    { id: "ops-observe", label: "Observe", sections: ["boards", "activity", "sessions", "schedules"] },
+    { id: "ops-observe", label: "Observe", sections: ["boards", "activity", "sessions", "schedules", "workers"] },
     {
       id: "ops-control",
       label: "Operate",
@@ -1001,6 +1009,15 @@ export const ROUTE_RELEASE_SCOPE = [
     releaseAction: "Review scheduler posture and create governed recurring work.",
     verification: "verify:surface:regression",
     note: "Schedules is release-bearing with governed recurring-work review and primary actions visible.",
+  },
+  {
+    area: "ops",
+    section: "workers",
+    status: "hide",
+    releaseAction:
+      "Inspect the read-only remote-worker registry, assignments, events, and reconciliation once live HX-501/HX-502/HX-504 authority is composed.",
+    verification: "remote-workers route + service proof; verify:surface:regression (fixture-seeded)",
+    note: "HX-507 remote-worker visibility is architecture-ship but implementation-hold pending live worker authority, so it is not counted in the visible release surface until the live data gate opens.",
   },
   {
     area: "ops",

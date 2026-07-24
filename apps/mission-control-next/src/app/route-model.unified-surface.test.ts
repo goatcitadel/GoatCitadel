@@ -136,3 +136,16 @@ describe("trusted saved Ops boards route", () => {
     expect(RAIL_GROUPS.ops?.find((group) => group.id === "ops-observe")?.sections).toContain("boards");
   });
 });
+
+describe("remote-worker Ops route (HX-507B)", () => {
+  it("round-trips /ops/workers under the Observe group", () => {
+    const route = parseAppRoute("http://x/ops/workers");
+
+    expect(route).toMatchObject({ area: "ops", section: "workers" });
+    expect(buildAppHref(route)).toBe("/ops/workers");
+    expect(getRouteLabel(route)).toBe("Workers");
+    expect(routeKicker(route)).toBe("Ops · Observe · Workers");
+    expect(RAIL_ITEMS.ops.some((item) => item.id === "ops-workers" && item.section === "workers")).toBe(true);
+    expect(RAIL_GROUPS.ops?.find((group) => group.id === "ops-observe")?.sections).toContain("workers");
+  });
+});

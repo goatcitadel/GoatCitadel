@@ -7,11 +7,13 @@ import type {
   DurableBackgroundTaskSemanticLink,
 } from "@goatcitadel/contracts";
 import { useDurableBackgroundTaskRail } from "./useDurableBackgroundTaskRail";
+import { RemoteWorkerInlineActivity } from "./RemoteWorkerInlineActivity";
 
 export interface DurableBackgroundTaskRailProps {
   parentRunId?: string;
   workspaceId: string;
   sessionId?: string | null;
+  turnId?: string | null;
   queuedCount: number;
   streamStatus: string;
   queueLabels: string[];
@@ -99,6 +101,8 @@ export function DurableBackgroundTaskRail(props: DurableBackgroundTaskRailProps)
           />
         ))}
       </div>
+
+      <RemoteWorkerInlineActivity workspaceId={props.workspaceId} sessionId={props.sessionId} turnId={props.turnId} />
 
       {rail.snapshot ? <SynthesisLineage snapshot={rail.snapshot} /> : null}
       {rail.snapshot?.unknowns.length ? (
