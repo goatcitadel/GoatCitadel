@@ -409,6 +409,7 @@ function createFixture() {
         rootDir: "F:\\goat",
         workspaceDir: "workspace",
         writeJailRoots: ["F:\\goat\\workspace"],
+        hostPlatform: "windows",
         environment,
         service,
       });

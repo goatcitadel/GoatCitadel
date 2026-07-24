@@ -5,6 +5,12 @@ import path from "node:path";
 import test from "node:test";
 import { validatePnpmSbom } from "./validate-pnpm-sbom.mjs";
 
+// The release SBOM validator refuses to run while NODE_PATH is set (module-resolution
+// poisoning guard). CI runners (pnpm/setup-node) export NODE_PATH, which would trip every
+// happy-path validation below, so clear it here to mirror the clean release environment.
+// The dedicated poisoning test sets and restores NODE_PATH within its own scope.
+delete process.env.NODE_PATH;
+
 test("accepts exact required edges while documenting optional and direct-alias omissions", (t) => {
   const fixture = makeFixture(t);
 

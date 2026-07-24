@@ -12590,6 +12590,7 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     // written. The raw assignment lease and every provider credential never has
     // a column; output frames are secret-free and append-only. Production-dark:
     // no route, listener, startup, scheduler, or accounting owner.
+    integritySha256: "1db54aec0105b0cbb6382722d17956dc3ae213d25c4b5c856878c9abc881c91e",
     sql: `
       CREATE TABLE IF NOT EXISTS remote_worker_inference_requests (
         registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
@@ -12864,6 +12865,7 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     // artifact payload, raw terminal output, or credential ever has a column.
     // Production-dark: no route, listener, startup, scheduler, or accounting
     // owner.
+    integritySha256: "b174348a802498aecd3fe81cd6d6cd70f8d2649a2469a6f732167747bfc467cb",
     sql: `
       CREATE TABLE IF NOT EXISTS remote_worker_cells (
         registry_workspace_id TEXT NOT NULL CHECK(length(registry_workspace_id) BETWEEN 1 AND 256),
@@ -13182,6 +13184,7 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     // ABORTS if an existing completed remote assignment settlement cannot be
     // proven against a canonical HX-506 manifest. Production-dark: no route,
     // listener, startup, scheduler, or accounting owner.
+    integritySha256: "ee425c869259c905fcaca8ca8574fe059be54c6304acfcea5404dc837b897333",
     sql: buildRemoteWorkerSettlementPostgresSql(),
   },
 ];

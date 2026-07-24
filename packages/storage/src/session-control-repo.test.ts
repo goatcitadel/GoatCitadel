@@ -866,7 +866,7 @@ describe("SessionControlRepository SQLite foundation", () => {
       raw.exec("BEGIN IMMEDIATE");
       try {
         __sqliteInternals.applySchemaMigrationForTest(version, raw);
-        markApplied.run(version, `legacy-test-${version}`, new Date().toISOString());
+        markApplied.run(version, __sqliteInternals.getSchemaMigrationNameForTest(version), new Date().toISOString());
         raw.exec("COMMIT");
       } catch (error) {
         raw.exec("ROLLBACK");

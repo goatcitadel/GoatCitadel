@@ -149,7 +149,8 @@ describe("HX-407 paired external-source schema parity", () => {
         INSERT INTO schema_migrations (version, name, applied_at)
         VALUES (?, ?, '2026-07-14T08:00:00.000Z')
       `);
-      for (let version = 1; version <= 165; version += 1) mark.run(version, `legacy-${version}`);
+      for (let version = 1; version <= 165; version += 1)
+        mark.run(version, __sqliteInternals.getSchemaMigrationNameForTest(version));
       // The session-control migrations (172-174) fail closed unless the database carries the
       // real session/auth predecessor tables, so apply just their creators: chat workspace (10),
       // agentic chat (13), agentic depth (17), device auth (27), companion sessions (45), and

@@ -7,7 +7,7 @@ import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
-import { createDatabase } from "./sqlite.js";
+import { __sqliteInternals, createDatabase } from "./sqlite.js";
 import { ChatSessionLifecycleRepository } from "./chat-session-lifecycle-repo.js";
 import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
 
@@ -567,15 +567,13 @@ describe("sqlite schema migrations", () => {
         name TEXT NOT NULL,
         applied_at TEXT NOT NULL
       );
-      WITH RECURSIVE versions(version) AS (
-        SELECT 1
-        UNION ALL
-        SELECT version + 1 FROM versions WHERE version < 172
-      )
-      INSERT INTO schema_migrations(version, name, applied_at)
-      SELECT version, 'predecessor-' || version, '2026-07-15T00:00:00.000Z'
-      FROM versions;
     `);
+    const seedLedger = partial.prepare(
+      "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, '2026-07-15T00:00:00.000Z')",
+    );
+    for (let version = 1; version <= 172; version += 1) {
+      seedLedger.run(version, __sqliteInternals.getSchemaMigrationNameForTest(version));
+    }
     partial.close();
 
     assert.throws(
