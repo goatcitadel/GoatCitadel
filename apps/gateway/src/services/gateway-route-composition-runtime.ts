@@ -298,7 +298,10 @@ export function composeRuntimeAdminRouteDependencies(
     researchSearch: {
       search: (input) => researchSearch.search(input),
     },
-    remoteWorkers: gateway.storage.remoteWorkerAdmissions,
+    remoteWorkers: {
+      registry: gateway.storage.remoteWorkerAdmissions,
+      assignments: gateway.storage.remoteWorkerAssignments,
+    },
     runtimeLifecycle: {
       getRuntimeLifecycle: (input) => gateway.runtimeLifecycleReadService.getRuntimeLifecycle(input),
       getTranscript: (sessionId) => gateway.getTranscript(sessionId),

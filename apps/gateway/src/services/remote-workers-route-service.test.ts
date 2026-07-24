@@ -4,15 +4,21 @@ import {
   NotFoundError,
   REMOTE_WORKER_REGISTRY_CURSOR_SCHEMA_VERSION,
   canonicalJsonString,
+  type RemoteWorkerAssignmentEventRecord,
+  type RemoteWorkerAssignmentGenerationRecord,
+  type RemoteWorkerAssignmentRecord,
   type RemoteWorkerRegistryAdmission,
 } from "@goatcitadel/contracts";
-import type { RemoteWorkerRegistryRecord } from "@goatcitadel/storage";
+import type { RemoteWorkerAssignmentAggregate, RemoteWorkerRegistryRecord } from "@goatcitadel/storage";
 import { describe, expect, it, vi } from "vitest";
 import {
   RemoteWorkerRegistryInputError,
   RemoteWorkersRouteService,
+  decodeRemoteWorkerAssignmentCursor,
   decodeRemoteWorkerRegistryCursor,
+  encodeRemoteWorkerAssignmentCursor,
   encodeRemoteWorkerRegistryCursor,
+  type RemoteWorkerAssignmentStore,
   type RemoteWorkerRegistryStore,
 } from "./remote-workers-route-service.js";
 
@@ -62,12 +68,67 @@ function store(overrides: Partial<RemoteWorkerRegistryStore> = {}): RemoteWorker
   };
 }
 
+function assignmentStore(overrides: Partial<RemoteWorkerAssignmentStore> = {}): RemoteWorkerAssignmentStore {
+  return {
+    listAssignmentAggregates: vi.fn(() => ({ items: [] })),
+    findAssignmentAggregate: vi.fn(() => undefined),
+    findCurrentGeneration: vi.fn(() => undefined),
+    listEventsAfter: vi.fn(() => []),
+    ...overrides,
+  };
+}
+
+function assignmentRecord(overrides: Partial<RemoteWorkerAssignmentRecord> = {}): RemoteWorkerAssignmentRecord {
+  return {
+    registryWorkspaceId: "workspace-a",
+    assignmentId: "assign-a",
+    manifest: {
+      sessionId: "session-a",
+      turnId: "turn-a",
+      durableRunId: "run-a",
+    } as RemoteWorkerAssignmentRecord["manifest"],
+    manifestSha256: D("m"),
+    createdByActorId: "gateway-a",
+    idempotencyKey: "assignment:seed",
+    requestSha256: D("r"),
+    createdAt: "2026-07-15T11:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function generationRecord(): RemoteWorkerAssignmentGenerationRecord {
+  return {
+    assignmentGeneration: 1,
+    workerId: "worker-a",
+    workerGeneration: 2,
+    nodeId: "node-a",
+    startedAt: "2026-07-15T11:05:00.000Z",
+  } as RemoteWorkerAssignmentGenerationRecord;
+}
+
+function aggregate(overrides: Partial<RemoteWorkerAssignmentAggregate> = {}): RemoteWorkerAssignmentAggregate {
+  return {
+    assignment: assignmentRecord(),
+    generation: generationRecord(),
+    lease: {
+      assignmentGeneration: 1,
+      leaseRevision: 2,
+      workerSentThrough: 3,
+      serverAcknowledgedThrough: 2,
+      heartbeatAt: "2026-07-15T11:10:00.000Z",
+      expiresAt: "2099-01-01T00:00:00.000Z",
+    } as RemoteWorkerAssignmentAggregate["lease"],
+    materialization: { count: 0, chatTranscriptCount: 0, durableRunResultCount: 0 },
+    ...overrides,
+  };
+}
+
 describe("RemoteWorkersRouteService HX-507A", () => {
   it("projects a deeply frozen read-only page with explicit downstream unavailability", () => {
     const registry = store({
       listWorkerRegistry: vi.fn(() => ({ items: [record()], nextCursor: "worker-a" })),
     });
-    const service = new RemoteWorkersRouteService(registry, () => OBSERVED_AT);
+    const service = new RemoteWorkersRouteService(registry, assignmentStore(), () => OBSERVED_AT);
     const page = service.listRegistry({ workspaceId: "workspace-a", limit: 1 });
 
     expect(page).toMatchObject({
@@ -107,7 +168,7 @@ describe("RemoteWorkersRouteService HX-507A", () => {
 
   it("decodes only canonical workspace-bound cursors and passes the raw position to storage", () => {
     const registry = store({ listWorkerRegistry: vi.fn(() => ({ items: [] })) });
-    const service = new RemoteWorkersRouteService(registry, () => OBSERVED_AT);
+    const service = new RemoteWorkersRouteService(registry, assignmentStore(), () => OBSERVED_AT);
     const cursor = encodeRemoteWorkerRegistryCursor({
       schemaVersion: REMOTE_WORKER_REGISTRY_CURSOR_SCHEMA_VERSION,
       workspaceId: "workspace-a",
@@ -166,7 +227,7 @@ describe("RemoteWorkersRouteService HX-507A", () => {
         ],
       })),
     });
-    const page = new RemoteWorkersRouteService(registry, () => OBSERVED_AT).listRegistry({
+    const page = new RemoteWorkersRouteService(registry, assignmentStore(), () => OBSERVED_AT).listRegistry({
       workspaceId: "workspace-a",
     });
     expect(page.items.map((item) => item.posture.value)).toEqual(["quarantined", "revoked"]);
@@ -174,13 +235,14 @@ describe("RemoteWorkersRouteService HX-507A", () => {
 
   it("returns frozen detail, maps foreign-workspace absence to 404, and fails inconsistent storage closed", () => {
     const registry = store();
-    const service = new RemoteWorkersRouteService(registry, () => OBSERVED_AT);
+    const service = new RemoteWorkersRouteService(registry, assignmentStore(), () => OBSERVED_AT);
     const detail = service.getRegistryEntry({ workspaceId: "workspace-a", workerId: "worker-a" });
     expect(detail).toMatchObject({ readOnly: true, workspaceId: "workspace-a", item: { workerId: "worker-a" } });
     expect(Object.isFrozen(detail.item)).toBe(true);
 
     const missing = new RemoteWorkersRouteService(
       store({ findWorkerRegistryEntry: vi.fn(() => undefined) }),
+      assignmentStore(),
       () => OBSERVED_AT,
     );
     expect(() => missing.getRegistryEntry({ workspaceId: "workspace-b", workerId: "worker-a" })).toThrow(NotFoundError);
@@ -191,6 +253,7 @@ describe("RemoteWorkersRouteService HX-507A", () => {
           record({ admission: admission({ workerId: "worker-b", nodeId: "node-b" }) }),
         ),
       }),
+      assignmentStore(),
       () => OBSERVED_AT,
     );
     expect(() => wrongDetail.getRegistryEntry({ workspaceId: "workspace-a", workerId: "worker-a" })).toThrow(
@@ -203,6 +266,7 @@ describe("RemoteWorkersRouteService HX-507A", () => {
           items: [record({ admission: admission({ registryWorkspaceId: "workspace-b" }) })],
         })),
       }),
+      assignmentStore(),
       () => OBSERVED_AT,
     );
     expect(() => inconsistent.listRegistry({ workspaceId: "workspace-a" })).toThrow(TypeError);
@@ -214,6 +278,7 @@ describe("RemoteWorkersRouteService HX-507A", () => {
           nextCursor: "worker-a",
         })),
       }),
+      assignmentStore(),
       () => OBSERVED_AT,
     );
     expect(() => reordered.listRegistry({ workspaceId: "workspace-a", limit: 2 })).toThrow(/order is invalid/u);
@@ -231,6 +296,7 @@ describe("RemoteWorkersRouteService HX-507A", () => {
           items: [record(), record({ admission: admission({ workerId: "worker-b", nodeId: "node-b" }) })],
         })),
       }),
+      assignmentStore(),
       () => OBSERVED_AT,
     );
     expect(() => oversized.listRegistry({ workspaceId: "workspace-a", limit: 1 })).toThrow(
@@ -251,6 +317,7 @@ describe("RemoteWorkersRouteService HX-507A", () => {
 
     const shortPageWithCursor = new RemoteWorkersRouteService(
       store({ listWorkerRegistry: vi.fn(() => ({ items: [record()], nextCursor: "worker-a" })) }),
+      assignmentStore(),
       () => OBSERVED_AT,
     );
     expect(() => shortPageWithCursor.listRegistry({ workspaceId: "workspace-a", limit: 2 })).toThrow(
@@ -258,16 +325,255 @@ describe("RemoteWorkersRouteService HX-507A", () => {
     );
   });
 
-  it("composes only through storage.remoteWorkerAdmissions and registers the server route", () => {
+  it("composes only through the committed admission + assignment read owners and registers the server route", () => {
     const composition = readFileSync(new URL("./gateway-route-composition-runtime.ts", import.meta.url), "utf8");
     const services = readFileSync(new URL("./gateway-route-services.ts", import.meta.url), "utf8");
     const app = readFileSync(new URL("../app.ts", import.meta.url), "utf8");
-    expect(composition).toMatch(/remoteWorkers:\s*gateway\.storage\.remoteWorkerAdmissions/u);
-    expect(composition).not.toMatch(
-      /remoteWorkers:\s*gateway\.storage\.remoteWorker(?:Assignments|Usage|ResourceCells|Artifacts)/u,
+    expect(composition).toMatch(/registry:\s*gateway\.storage\.remoteWorkerAdmissions/u);
+    expect(composition).toMatch(/assignments:\s*gateway\.storage\.remoteWorkerAssignments/u);
+    // No usage/resource-cell/artifact owner is composed into this visibility tranche.
+    expect(composition).not.toMatch(/gateway\.storage\.remoteWorker(?:Usage|ResourceCells|Artifacts|Cells|Effects)/u);
+    expect(services).toMatch(
+      /remoteWorkers:\s*new RemoteWorkersRouteService\(deps\.remoteWorkers\.registry,\s*deps\.remoteWorkers\.assignments\)/u,
     );
-    expect(services).toMatch(/remoteWorkers:\s*new RemoteWorkersRouteService\(deps\.remoteWorkers\)/u);
     expect(app).toMatch(/import \{ remoteWorkersRoutes \} from "\.\/routes\/remote-workers\.js"/u);
     expect(app).toMatch(/await app\.register\(remoteWorkersRoutes\)/u);
   });
 });
+
+describe("RemoteWorkersRouteService HX-507B projections", () => {
+  it("projects a frozen, secret-free assignment page with derived lease freshness and phase", () => {
+    const assignments = assignmentStore({
+      listAssignmentAggregates: vi.fn(() => ({
+        items: [aggregate()],
+        nextCursor: { lastCreatedAt: "2026-07-15T11:00:00.000Z", lastAssignmentId: "assign-a" },
+      })),
+    });
+    const service = new RemoteWorkersRouteService(store(), assignments, () => OBSERVED_AT);
+    const page = service.listAssignments({ workspaceId: "workspace-a", workerId: "worker-a", limit: 1 });
+
+    expect(page).toMatchObject({
+      readOnly: true,
+      mutationSemantics: "none",
+      workspaceId: "workspace-a",
+      filters: { workerId: "worker-a" },
+      items: [
+        {
+          assignmentId: "assign-a",
+          identity: { value: { workerId: "worker-a" }, authorityClass: "canonical_record" },
+          lease: { value: { leaseRevision: 2, workerSentThrough: 3 }, authorityClass: "canonical_record" },
+          leaseFreshness: { value: { fresh: true }, authorityClass: "derived_projection" },
+          phase: { value: "leased", authorityClass: "derived_projection" },
+          unavailable: {
+            usageAndCost: { value: null, authorityClass: "unavailable" },
+            resourceCell: { value: null, authorityClass: "unavailable" },
+            artifactAndEffects: { value: null, authorityClass: "unavailable" },
+          },
+        },
+      ],
+    });
+    expect(Object.isFrozen(page)).toBe(true);
+    expect(assignments.listAssignmentAggregates).toHaveBeenCalledWith("workspace-a", {
+      workerId: "worker-a",
+      limit: 1,
+    });
+    // Never leaks lease tokens, dispatch authority, reason digests, idempotency keys, or manifest hashes.
+    expect(JSON.stringify(page)).not.toMatch(
+      /leaseToken|dispatchAuthority|reasonSha256|requestSha256|idempotency|manifestSha256|parentDispatch/u,
+    );
+    const decoded = decodeRemoteWorkerAssignmentCursor(page.nextCursor!);
+    expect(decoded).toMatchObject({ workspaceId: "workspace-a", workerId: "worker-a", lastAssignmentId: "assign-a" });
+  });
+
+  it("derives lease_expired, cancelling, and settled phases from canonical evidence", () => {
+    const build = (over: Partial<RemoteWorkerAssignmentAggregate>) =>
+      new RemoteWorkersRouteService(
+        store(),
+        assignmentStore({ listAssignmentAggregates: vi.fn(() => ({ items: [aggregate(over)] })) }),
+        () => OBSERVED_AT,
+      ).listAssignments({ workspaceId: "workspace-a" }).items[0]!;
+
+    const staleLease = build({
+      lease: {
+        assignmentGeneration: 1,
+        leaseRevision: 1,
+        workerSentThrough: 0,
+        serverAcknowledgedThrough: 0,
+        heartbeatAt: "2020-01-01T00:00:00.000Z",
+        expiresAt: "2020-01-01T00:00:00.000Z",
+      } as RemoteWorkerAssignmentAggregate["lease"],
+    });
+    expect(staleLease.phase.value).toBe("lease_expired");
+    expect(staleLease.leaseFreshness.value).toMatchObject({ fresh: false });
+
+    const cancelling = build({
+      control: {
+        expectedAssignmentGeneration: 1,
+        controlRevision: 1,
+        action: "cancel_requested",
+        createdAt: OBSERVED_AT,
+      } as RemoteWorkerAssignmentAggregate["control"],
+    });
+    expect(cancelling.phase.value).toBe("cancelling");
+    expect(cancelling.control?.value).toMatchObject({ action: "cancel_requested" });
+
+    const settled = build({
+      settlement: {
+        assignmentGeneration: 1,
+        outcome: "completed",
+        origin: "worker",
+        finalEventSequence: 4,
+        settledAt: OBSERVED_AT,
+      } as RemoteWorkerAssignmentAggregate["settlement"],
+      materialization: {
+        count: 2,
+        chatTranscriptCount: 1,
+        durableRunResultCount: 1,
+        latestMaterializedAt: OBSERVED_AT,
+      },
+    });
+    expect(settled.phase.value).toBe("settled");
+    expect(settled.settlement?.value).toMatchObject({ outcome: "completed" });
+    expect(settled.materialization.value).toMatchObject({ count: 2 });
+  });
+
+  it("projects an unstarted assignment as created with null identity/lease", () => {
+    const service = new RemoteWorkersRouteService(
+      store(),
+      assignmentStore({
+        listAssignmentAggregates: vi.fn(() => ({
+          items: [
+            {
+              assignment: assignmentRecord({
+                manifest: { durableRunId: "run-a" } as RemoteWorkerAssignmentRecord["manifest"],
+              }),
+              materialization: { count: 0, chatTranscriptCount: 0, durableRunResultCount: 0 },
+            },
+          ],
+        })),
+      }),
+      () => OBSERVED_AT,
+    );
+    const item = service.listAssignments({ workspaceId: "workspace-a" }).items[0]!;
+    expect(item.phase.value).toBe("created");
+    expect(item.identity.value).toBeNull();
+    expect(item.lease.value).toBeNull();
+    expect(item.leaseFreshness.value).toBeNull();
+    expect(item.lineage.value).toMatchObject({ sessionId: null, turnId: null });
+  });
+
+  it("rebinds a cursor to its exact workspace+filter set", () => {
+    const cursor = encodeRemoteWorkerAssignmentCursor({
+      schemaVersion: "goatcitadel.remote-worker-assignment-cursor.v1",
+      workspaceId: "workspace-a",
+      workerId: "worker-a",
+      sessionId: null,
+      turnId: null,
+      lastCreatedAt: "2026-07-15T11:00:00.000Z",
+      lastAssignmentId: "assign-a",
+    });
+    const service = new RemoteWorkersRouteService(store(), assignmentStore(), () => OBSERVED_AT);
+    // Same filter set is accepted.
+    expect(() => service.listAssignments({ workspaceId: "workspace-a", workerId: "worker-a", cursor })).not.toThrow();
+    // A different filter set is rejected — the cursor cannot be replayed across scopes.
+    expect(() => service.listAssignments({ workspaceId: "workspace-a", cursor })).toThrow(
+      RemoteWorkerRegistryInputError,
+    );
+    expect(() => service.listAssignments({ workspaceId: "workspace-b", workerId: "worker-a", cursor })).toThrow(
+      RemoteWorkerRegistryInputError,
+    );
+  });
+
+  it("returns sanitized ordered event summaries with explicit omitted content counts", () => {
+    const events: RemoteWorkerAssignmentEventRecord[] = [
+      eventRecord(1, "status"),
+      eventRecord(2, "transcript_delta"),
+      eventRecord(3, "terminal_output"),
+      eventRecord(4, "diagnostic"),
+    ];
+    const assignments = assignmentStore({
+      findCurrentGeneration: vi.fn(() => generationRecord()),
+      listEventsAfter: vi.fn(() => events),
+    });
+    const service = new RemoteWorkersRouteService(store(), assignments, () => OBSERVED_AT);
+    const page = service.getAssignmentEvents({ workspaceId: "workspace-a", assignmentId: "assign-a" });
+    expect(page.assignmentGeneration).toBe(1);
+    expect(page.items.map((item) => item.sequence)).toEqual([1, 2, 3, 4]);
+    expect(page.nextAfterSequence).toBe(4);
+    expect(page.omitted).toEqual({ transcriptDeltas: 1, terminalOutputs: 1, diagnostics: 1 });
+    // No payload body, hash, terminal chunk, or transcript text escapes — only sanitized metadata.
+    expect(JSON.stringify(page)).not.toMatch(/payload|Sha256|stdout|chunk|"text"|"role"/u);
+  });
+
+  it("404s events for an assignment with no started generation and isolates cross-workspace ids", () => {
+    const service = new RemoteWorkersRouteService(
+      store(),
+      assignmentStore({ findCurrentGeneration: vi.fn(() => undefined) }),
+      () => OBSERVED_AT,
+    );
+    expect(() => service.getAssignmentEvents({ workspaceId: "workspace-a", assignmentId: "missing" })).toThrow(
+      NotFoundError,
+    );
+  });
+
+  it("reconciles admission, assignment/lease, and settlement while holding HX-505 owners unavailable", () => {
+    const registry = store({
+      findWorkerRegistryEntry: vi.fn(() => record()),
+    });
+    const assignments = assignmentStore({
+      listAssignmentAggregates: vi.fn(() => ({
+        items: [
+          aggregate(),
+          aggregate({
+            assignment: assignmentRecord({ assignmentId: "assign-b" }),
+            lease: {
+              assignmentGeneration: 1,
+              leaseRevision: 1,
+              workerSentThrough: 0,
+              serverAcknowledgedThrough: 0,
+              heartbeatAt: "2020-01-01T00:00:00.000Z",
+              expiresAt: "2020-01-01T00:00:00.000Z",
+            } as RemoteWorkerAssignmentAggregate["lease"],
+          }),
+        ],
+      })),
+    });
+    const reconciliation = new RemoteWorkersRouteService(registry, assignments, () => OBSERVED_AT).getReconciliation({
+      workspaceId: "workspace-a",
+      workerId: "worker-a",
+    });
+    expect(reconciliation.posture.value).toBe("active");
+    expect(reconciliation.admissionControl.value?.status).toBe("consistent");
+    expect(reconciliation.assignmentLease.value?.status).toBe("divergent");
+    expect(reconciliation.settlementMaterialization.value?.status).toBe("empty");
+    expect(reconciliation.resourceCell).toMatchObject({ value: null, authorityClass: "unavailable" });
+    expect(reconciliation.cleanup).toMatchObject({ value: null, authorityClass: "unavailable" });
+    expect(Object.isFrozen(reconciliation)).toBe(true);
+  });
+
+  it("404s reconciliation for an unknown worker id", () => {
+    const service = new RemoteWorkersRouteService(
+      store({ findWorkerRegistryEntry: vi.fn(() => undefined) }),
+      assignmentStore(),
+      () => OBSERVED_AT,
+    );
+    expect(() => service.getReconciliation({ workspaceId: "workspace-a", workerId: "ghost" })).toThrow(NotFoundError);
+  });
+});
+
+function eventRecord(sequence: number, eventType: string): RemoteWorkerAssignmentEventRecord {
+  return {
+    registryWorkspaceId: "workspace-a",
+    assignmentId: "assign-a",
+    assignmentGeneration: 1,
+    sequence,
+    eventId: `event-${sequence}`,
+    eventType,
+    payload: { schemaVersion: "x", phase: "running" },
+    payloadSha256: D("p"),
+    previousEventSha256: D("q"),
+    eventSha256: D("s"),
+    workerSentThrough: sequence,
+    receivedAt: "2026-07-15T11:20:00.000Z",
+  } as unknown as RemoteWorkerAssignmentEventRecord;
+}

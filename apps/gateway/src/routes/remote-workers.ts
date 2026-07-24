@@ -15,15 +15,36 @@ const identifierSchema = z
   .refine((value) => value === value.normalize("NFKC").trim() && !/\p{Cc}/u.test(value));
 const paramsSchema = z.object({ workspaceId: identifierSchema }).strict();
 const detailParamsSchema = paramsSchema.extend({ workerId: identifierSchema }).strict();
+const assignmentParamsSchema = paramsSchema.extend({ assignmentId: identifierSchema }).strict();
 const emptyQuerySchema = z.object({}).strict();
-const listQuerySchema = z
+const listLimit = z
+  .string()
+  .regex(/^(?:[1-9]|[1-9]\d|100)$/u)
+  .transform(Number)
+  .optional();
+const cursorSchema = z.string().min(1).max(REMOTE_WORKER_REGISTRY_MAX_CURSOR_BYTES).optional();
+const listQuerySchema = z.object({ limit: listLimit, cursor: cursorSchema }).strict();
+const assignmentQuerySchema = z
   .object({
-    limit: z
+    workerId: identifierSchema.optional(),
+    sessionId: identifierSchema.optional(),
+    turnId: identifierSchema.optional(),
+    limit: listLimit,
+    cursor: cursorSchema,
+  })
+  .strict();
+const eventQuerySchema = z
+  .object({
+    afterSequence: z
       .string()
-      .regex(/^(?:[1-9]|[1-9]\d|100)$/u)
+      .regex(/^\d{1,15}$/u)
       .transform(Number)
       .optional(),
-    cursor: z.string().min(1).max(REMOTE_WORKER_REGISTRY_MAX_CURSOR_BYTES).optional(),
+    limit: z
+      .string()
+      .regex(/^(?:[1-9]\d?|1\d\d|200)$/u)
+      .transform(Number)
+      .optional(),
   })
   .strict();
 
@@ -84,6 +105,77 @@ export const remoteWorkersRoutes: FastifyPluginAsync = async (fastify) => {
       return sendRouteError(reply, error, request.log);
     }
   });
+
+  fastify.get(
+    "/api/v1/ops/workspaces/:workspaceId/remote-workers/:workerId/reconciliation",
+    operatorRead,
+    async (request, reply) => {
+      const params = detailParamsSchema.safeParse(request.params);
+      const query = emptyQuerySchema.safeParse(request.query);
+      if (!params.success || !query.success) return invalidRequest(reply);
+      const service = resolveService(fastify.services);
+      if (!service) return reply.code(503).send({ error: "Remote worker registry service is unavailable." });
+      try {
+        return reply.send(
+          service.getReconciliation({
+            workspaceId: params.data.workspaceId,
+            workerId: params.data.workerId,
+          }),
+        );
+      } catch (error) {
+        if (error instanceof RemoteWorkerRegistryInputError) return invalidRequest(reply);
+        return sendRouteError(reply, error, request.log);
+      }
+    },
+  );
+
+  fastify.get("/api/v1/ops/workspaces/:workspaceId/remote-worker-assignments", operatorRead, async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    const query = assignmentQuerySchema.safeParse(request.query);
+    if (!params.success || !query.success) return invalidRequest(reply);
+    const service = resolveService(fastify.services);
+    if (!service) return reply.code(503).send({ error: "Remote worker registry service is unavailable." });
+    try {
+      return reply.send(
+        service.listAssignments({
+          workspaceId: params.data.workspaceId,
+          ...(query.data.workerId === undefined ? {} : { workerId: query.data.workerId }),
+          ...(query.data.sessionId === undefined ? {} : { sessionId: query.data.sessionId }),
+          ...(query.data.turnId === undefined ? {} : { turnId: query.data.turnId }),
+          ...(query.data.limit === undefined ? {} : { limit: query.data.limit }),
+          ...(query.data.cursor === undefined ? {} : { cursor: query.data.cursor }),
+        }),
+      );
+    } catch (error) {
+      if (error instanceof RemoteWorkerRegistryInputError) return invalidRequest(reply);
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.get(
+    "/api/v1/ops/workspaces/:workspaceId/remote-worker-assignments/:assignmentId/events",
+    operatorRead,
+    async (request, reply) => {
+      const params = assignmentParamsSchema.safeParse(request.params);
+      const query = eventQuerySchema.safeParse(request.query);
+      if (!params.success || !query.success) return invalidRequest(reply);
+      const service = resolveService(fastify.services);
+      if (!service) return reply.code(503).send({ error: "Remote worker registry service is unavailable." });
+      try {
+        return reply.send(
+          service.getAssignmentEvents({
+            workspaceId: params.data.workspaceId,
+            assignmentId: params.data.assignmentId,
+            ...(query.data.afterSequence === undefined ? {} : { afterSequence: query.data.afterSequence }),
+            ...(query.data.limit === undefined ? {} : { limit: query.data.limit }),
+          }),
+        );
+      } catch (error) {
+        if (error instanceof RemoteWorkerRegistryInputError) return invalidRequest(reply);
+        return sendRouteError(reply, error, request.log);
+      }
+    },
+  );
 };
 
 function resolveService(services: unknown): RemoteWorkersRouteService | undefined {

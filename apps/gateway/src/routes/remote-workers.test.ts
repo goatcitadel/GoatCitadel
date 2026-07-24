@@ -23,6 +23,46 @@ const DETAIL = {
   item: { workerId: "worker-a" },
   observedAt: "2026-07-15T12:00:00.000Z",
 } as const;
+const ASSIGNMENT_PAGE = {
+  schemaVersion: "goatcitadel.remote-worker-assignment-page.v1",
+  readOnly: true,
+  mutationSemantics: "none",
+  workspaceId: "workspace-a",
+  filters: {},
+  items: [],
+  observedAt: "2026-07-15T12:00:00.000Z",
+} as const;
+const EVENT_PAGE = {
+  schemaVersion: "goatcitadel.remote-worker-assignment-event-page.v1",
+  readOnly: true,
+  mutationSemantics: "none",
+  workspaceId: "workspace-a",
+  assignmentId: "assign-a",
+  assignmentGeneration: 1,
+  items: [],
+  nextAfterSequence: 0,
+  omitted: { transcriptDeltas: 0, terminalOutputs: 0, diagnostics: 0 },
+  observedAt: "2026-07-15T12:00:00.000Z",
+} as const;
+const RECONCILIATION = {
+  schemaVersion: "goatcitadel.remote-worker-reconciliation.v1",
+  readOnly: true,
+  mutationSemantics: "none",
+  workspaceId: "workspace-a",
+  workerId: "worker-a",
+  observedAt: "2026-07-15T12:00:00.000Z",
+} as const;
+
+function fullService(overrides: Record<string, unknown> = {}) {
+  return {
+    listRegistry: vi.fn(() => PAGE),
+    getRegistryEntry: vi.fn(() => DETAIL),
+    getReconciliation: vi.fn(() => RECONCILIATION),
+    listAssignments: vi.fn(() => ASSIGNMENT_PAGE),
+    getAssignmentEvents: vi.fn(() => EVENT_PAGE),
+    ...overrides,
+  };
+}
 
 describe("remote worker operator registry routes HX-507A", () => {
   let app: FastifyInstance | undefined;
@@ -41,7 +81,8 @@ describe("remote worker operator registry routes HX-507A", () => {
     app.decorate("requireOperatorAuth", async () => undefined);
     app.decorateRequest("authActorId", "operator-a");
     app.decorateRequest("authActorSource", "loopback");
-    app.decorate("services", { remoteWorkers: { listRegistry, getRegistryEntry } } as never);
+    const service = fullService({ listRegistry, getRegistryEntry });
+    app.decorate("services", { remoteWorkers: service } as never);
     await app.register(remoteWorkersRoutes);
 
     const list = await app.inject({
@@ -65,10 +106,13 @@ describe("remote worker operator registry routes HX-507A", () => {
     expect(detail.statusCode).toBe(200);
     expect(getRegistryEntry).toHaveBeenCalledWith({ workspaceId: "workspace-a", workerId: "worker-a" });
     const getRoutes = routes.filter((route) => route.method === "GET");
-    expect(getRoutes).toHaveLength(2);
+    expect(getRoutes).toHaveLength(5);
     expect(getRoutes.map((route) => route.url).sort()).toEqual([
+      "/api/v1/ops/workspaces/:workspaceId/remote-worker-assignments",
+      "/api/v1/ops/workspaces/:workspaceId/remote-worker-assignments/:assignmentId/events",
       "/api/v1/ops/workspaces/:workspaceId/remote-workers",
       "/api/v1/ops/workspaces/:workspaceId/remote-workers/:workerId",
+      "/api/v1/ops/workspaces/:workspaceId/remote-workers/:workerId/reconciliation",
     ]);
     expect(routes.every((route) => route.method === "GET" || route.method === "HEAD")).toBe(true);
     expect(routes.every((route) => route.config.goatcitadelRouteAccessClass === "operator")).toBe(true);
@@ -242,6 +286,117 @@ describe("remote worker operator registry routes HX-507A", () => {
     });
     expect(response.statusCode).toBe(503);
     expect(response.headers["cache-control"]).toBe("no-store");
+  });
+});
+
+describe("remote worker operator assignment + reconciliation routes HX-507B", () => {
+  let app: FastifyInstance | undefined;
+
+  afterEach(async () => {
+    await app?.close();
+    app = undefined;
+  });
+
+  async function harness(overrides: Record<string, unknown> = {}): Promise<{
+    app: FastifyInstance;
+    service: ReturnType<typeof fullService>;
+  }> {
+    const service = fullService(overrides);
+    const instance = Fastify();
+    instance.decorate("requireOperatorAuth", async () => undefined);
+    instance.decorateRequest("authActorId", "operator-a");
+    instance.decorateRequest("authActorSource", "loopback");
+    instance.decorate("services", { remoteWorkers: service } as never);
+    await instance.register(remoteWorkersRoutes);
+    app = instance;
+    return { app: instance, service };
+  }
+
+  it("binds exact worker/session/turn filters and paging for the assignment list, no-store", async () => {
+    const { app: instance, service } = await harness();
+    const response = await instance.inject({
+      method: "GET",
+      url: "/api/v1/ops/workspaces/workspace-a/remote-worker-assignments?workerId=worker-a&sessionId=session-a&turnId=turn-a&limit=10&cursor=opaque",
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.headers.vary).toContain("Authorization");
+    expect(service.listAssignments).toHaveBeenCalledWith({
+      workspaceId: "workspace-a",
+      workerId: "worker-a",
+      sessionId: "session-a",
+      turnId: "turn-a",
+      limit: 10,
+      cursor: "opaque",
+    });
+  });
+
+  it("passes afterSequence and limit to the events route and 404s an unstarted assignment", async () => {
+    const { app: instance, service } = await harness();
+    const ok = await instance.inject({
+      method: "GET",
+      url: "/api/v1/ops/workspaces/workspace-a/remote-worker-assignments/assign-a/events?afterSequence=3&limit=25",
+    });
+    expect(ok.statusCode).toBe(200);
+    expect(service.getAssignmentEvents).toHaveBeenCalledWith({
+      workspaceId: "workspace-a",
+      assignmentId: "assign-a",
+      afterSequence: 3,
+      limit: 25,
+    });
+
+    const { app: notFound } = await harness({
+      getAssignmentEvents: vi.fn(() => {
+        throw new NotFoundError({ entity: "remote worker assignment", id: "unavailable" });
+      }),
+    });
+    const missing = await notFound.inject({
+      method: "GET",
+      url: "/api/v1/ops/workspaces/workspace-a/remote-worker-assignments/ghost/events",
+    });
+    expect(missing.statusCode).toBe(404);
+    expect(missing.headers["cache-control"]).toBe("no-store");
+  });
+
+  it("serves the worker reconciliation projection and 404s an unknown worker identically", async () => {
+    const { app: instance, service } = await harness();
+    const ok = await instance.inject({
+      method: "GET",
+      url: "/api/v1/ops/workspaces/workspace-a/remote-workers/worker-a/reconciliation",
+    });
+    expect(ok.statusCode).toBe(200);
+    expect(service.getReconciliation).toHaveBeenCalledWith({ workspaceId: "workspace-a", workerId: "worker-a" });
+
+    const { app: notFound } = await harness({
+      getReconciliation: vi.fn(() => {
+        throw new NotFoundError({ entity: "remote worker registry entry", id: "unavailable" });
+      }),
+    });
+    const missing = await notFound.inject({
+      method: "GET",
+      url: "/api/v1/ops/workspaces/foreign/remote-workers/ghost/reconciliation",
+    });
+    expect(missing.statusCode).toBe(404);
+    expect(missing.headers["cache-control"]).toBe("no-store");
+  });
+
+  it("rejects unknown query params and oversized limits on the new routes without echoing them", async () => {
+    const secret = "apiKey_SUPER_SECRET_xyz";
+    const { app: instance, service } = await harness();
+    for (const url of [
+      `/api/v1/ops/workspaces/workspace-a/remote-worker-assignments?${secret}=v`,
+      "/api/v1/ops/workspaces/workspace-a/remote-worker-assignments?limit=101",
+      "/api/v1/ops/workspaces/workspace-a/remote-worker-assignments/assign-a/events?limit=201",
+      `/api/v1/ops/workspaces/workspace-a/remote-workers/worker-a/reconciliation?${secret}=v`,
+    ]) {
+      const response = await instance.inject({ method: "GET", url });
+      expect(response.statusCode).toBe(400);
+      expect(response.body).not.toContain(secret);
+      expect(response.json()).toEqual({ error: "Remote worker registry request is invalid." });
+    }
+    expect(service.listAssignments).not.toHaveBeenCalled();
+    expect(service.getAssignmentEvents).not.toHaveBeenCalled();
+    expect(service.getReconciliation).not.toHaveBeenCalled();
   });
 });
 
