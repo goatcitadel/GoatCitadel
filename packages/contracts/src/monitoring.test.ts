@@ -1,5 +1,26 @@
 import { describe, expect, it } from "vitest";
-import type { CronJobAction, CronJobActionConfig, CronJobRecord } from "./monitoring.js";
+import type {
+  CronJobAction,
+  CronJobActionConfig,
+  CronJobRecord,
+  RealtimeEventLinks,
+  RealtimeEventType,
+} from "./monitoring.js";
+
+describe("RealtimeEventType remote-worker invalidations", () => {
+  it("includes the content-free remote-worker change signals", () => {
+    const worker: RealtimeEventType = "remote_worker_changed";
+    const assignment: RealtimeEventType = "remote_worker_assignment_changed";
+    expect(worker).toBe("remote_worker_changed");
+    expect(assignment).toBe("remote_worker_assignment_changed");
+  });
+
+  it("carries optional worker/assignment invalidation links", () => {
+    const links: RealtimeEventLinks = { workspaceId: "workspace-a", workerId: "worker-a", assignmentId: "assign-a" };
+    expect(links.workerId).toBe("worker-a");
+    expect(links.assignmentId).toBe("assign-a");
+  });
+});
 
 describe("CronJobAction", () => {
   it("includes no_agent", () => {
