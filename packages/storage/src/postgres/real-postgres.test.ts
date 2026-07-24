@@ -5832,11 +5832,18 @@ test(
       );
 
       const final = await runPostgresMigrations(client, POSTGRES_MIGRATIONS);
-      assert.deepEqual(final.appliedVersions, [81, 82, 83, 84, 85, 86, 87, 88, 89]);
-      assert.equal(final.latestVersion, 89);
+      // The seeded database is pinned at v80 above, so the full ledger applies every
+      // migration after it. Derive the tail from the registry so appended migrations
+      // do not require a hand-edited snapshot here.
+      const expectedLedgerTail = POSTGRES_MIGRATIONS.map((migration) => migration.version).filter(
+        (version) => version > 80,
+      );
+      const expectedLatestVersion = expectedLedgerTail[expectedLedgerTail.length - 1];
+      assert.deepEqual(final.appliedVersions, expectedLedgerTail);
+      assert.equal(final.latestVersion, expectedLatestVersion);
       const replay = await runPostgresMigrations(client, POSTGRES_MIGRATIONS);
       assert.deepEqual(replay.appliedVersions, []);
-      assert.equal(replay.latestVersion, 89);
+      assert.equal(replay.latestVersion, expectedLatestVersion);
 
       const legacyDelegationSteps = await client.query<{
         step_id: string;

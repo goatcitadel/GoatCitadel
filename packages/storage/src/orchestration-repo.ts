@@ -104,8 +104,16 @@ export class OrchestrationRepository {
   public constructor(private readonly db: DatabaseClient) {
     const optionalExpectedExecutionState =
       db.dialect === "postgres" ? "CAST(@expectedExecutionState AS TEXT)" : "@expectedExecutionState";
+    // Postgres cannot infer a parameter's type from an IS [NOT] NULL test alone
+    // ("could not determine data type of parameter"), and these two tests are the
+    // only places the lease generation appears without a column to infer from —
+    // the comparisons below bind against worktree_lease_generation (BIGINT). Cast
+    // just those two occurrences, matching the dialect-conditional style above so
+    // the SQLite text is byte-for-byte unchanged.
+    const nullTestWorktreeLeaseGeneration =
+      db.dialect === "postgres" ? "CAST(@worktreeLeaseGeneration AS BIGINT)" : "@worktreeLeaseGeneration";
     const worktreeLeaseCanAdvance = `
-      @worktreeLeaseGeneration IS NOT NULL
+      ${nullTestWorktreeLeaseGeneration} IS NOT NULL
       AND (
         worktree_lease_generation IS NULL
         OR @worktreeLeaseGeneration > worktree_lease_generation
@@ -118,7 +126,7 @@ export class OrchestrationRepository {
     const worktreeStateCanAdvance = `
       (
         worktree_lease_generation IS NULL
-        AND @worktreeLeaseGeneration IS NULL
+        AND ${nullTestWorktreeLeaseGeneration} IS NULL
       )
       OR (${worktreeLeaseCanAdvance})
     `;
