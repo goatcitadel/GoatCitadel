@@ -572,6 +572,11 @@ export class NodeExternalSourceArtifactFilesystem implements ExternalSourceArtif
     throwIfAborted(signal);
     const kind = mode === 0o700 ? "directory" : mode === 0o600 ? "file" : undefined;
     if (!kind) throw new ExternalSourceArtifactStoreError("filesystem_error");
+    // A directory legitimately changes mtime/size while sibling publications add
+    // CAS entries into it concurrently, so hardening a directory verifies node
+    // identity only (device, inode, birthtime, type) — enough to detect a TOCTOU
+    // swap — while a content file is still pinned to its exact version.
+    const sameNode = kind === "directory" ? sameFilesystemIdentity : sameIdentityAndVersion;
     const before = await this.lstat(absolutePath, signal);
     if (before.kind !== kind || before.symbolicLink || before.reparsePoint) {
       throw new ExternalSourceArtifactStoreError("unsafe_path");
@@ -582,16 +587,12 @@ export class NodeExternalSourceArtifactFilesystem implements ExternalSourceArtif
       const handle = await fs.open(absolutePath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
       try {
         const opened = fromNodeStat(await handle.stat({ bigint: true }));
-        if (!sameIdentityAndVersion(before, opened) || opened.kind !== kind) {
+        if (!sameNode(before, opened) || opened.kind !== kind) {
           throw new ExternalSourceArtifactStoreError("unsafe_path");
         }
         await handle.chmod(mode);
         const hardened = fromNodeStat(await handle.stat({ bigint: true }));
-        if (
-          !sameIdentityAndVersion(before, hardened) ||
-          hardened.kind !== kind ||
-          Number(hardened.mode & 0o777n) !== mode
-        ) {
+        if (!sameNode(before, hardened) || hardened.kind !== kind || Number(hardened.mode & 0o777n) !== mode) {
           throw new ExternalSourceArtifactStoreError("filesystem_error");
         }
       } finally {

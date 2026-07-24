@@ -295,7 +295,7 @@ export async function runA2AFullLane(context) {
 }
 
 async function resolveFastLaneCommandEnv(context, command) {
-  const tempBaseRoot = await resolveFastLaneTempBaseRoot(context);
+  const tempBaseRoot = await resolveFastLaneTempBaseRoot(context, command);
   const commandTempRoot = path.join(tempBaseRoot, sanitizeFilePart(command.id));
   const npmCacheRoot = path.join(commandTempRoot, "npm-cache");
   await fs.mkdir(commandTempRoot, { recursive: true });
@@ -323,10 +323,19 @@ async function resolveFastLaneCommandEnv(context, command) {
   };
 }
 
-async function resolveFastLaneTempBaseRoot(context) {
+async function resolveFastLaneTempBaseRoot(context, command) {
   const configuredTempRoot = process.env.GOATCITADEL_VERIFY_TEMP_ROOT?.trim();
   if (configuredTempRoot) {
     return path.join(configuredTempRoot, context.runId);
+  }
+  // The gateway suite exercises POSIX filesystem-security services (installed-tree
+  // scanner, external-source artifact store, workspace path bridge) that refuse any
+  // path whose ancestry includes a group- or world-writable directory. The system
+  // /tmp is mode 1777, so on POSIX route the gateway command's scratch space under
+  // the repo-owned artifact root, whose ancestry is operator-owned and carries no
+  // group/other write bits. Other lanes keep the faster system temp.
+  if (process.platform !== "win32" && command?.id === "fast.test.gateway") {
+    return path.join(context.artifactRoot, "tmp", "gateway-posix", context.runId.slice(-8));
   }
   const systemTempRoot =
     process.platform === "win32" ? os.tmpdir() : path.join("/tmp", `gcv-${process.pid}`, context.runId.slice(-8));
