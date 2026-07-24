@@ -164,30 +164,37 @@ describe("WorkspacePathBridgeExecutionResolver", () => {
     expect(service.resolve).not.toHaveBeenCalled();
   });
 
-  it("uses only the narrow project/write-jail intersection and rejects authority returned outside it", async () => {
-    const fixture = createFixture();
-    const nestedWriteRoot = path.win32.join(fixture.projectRoot, "safe");
-    const service = createService((request) => snapshot(request, fixture.workspaceRoot));
-    const resolver = createResolver(
-      fixture,
-      service,
-      {
-        workspaceId: "workspace-1",
-        project: projectBinding(),
-        gitIdentity: { expectedIdentitySha256: EXPECTED_GIT_IDENTITY },
-      },
-      [nestedWriteRoot],
-    );
+  // Windows-host only: this case resolves a relative cwd through
+  // resolveToolRequestPaths, which walks the real host filesystem with the host's
+  // native path dialect. On POSIX the synthetic C:\ fixtures cannot be resolved,
+  // so it is exercised on Windows (the sibling cases stay host-independent).
+  it.skipIf(process.platform !== "win32")(
+    "uses only the narrow project/write-jail intersection and rejects authority returned outside it",
+    async () => {
+      const fixture = createFixture();
+      const nestedWriteRoot = path.win32.join(fixture.projectRoot, "safe");
+      const service = createService((request) => snapshot(request, fixture.workspaceRoot));
+      const resolver = createResolver(
+        fixture,
+        service,
+        {
+          workspaceId: "workspace-1",
+          project: projectBinding(),
+          gitIdentity: { expectedIdentitySha256: EXPECTED_GIT_IDENTITY },
+        },
+        [nestedWriteRoot],
+      );
 
-    await expect(resolver.resolve(toolRequest("safe"), executionContext("narrow"))).resolves.toEqual({
-      status: "blocked",
-      reasonCode: "canonicalization_failed",
-    });
-    expect(service.resolve).toHaveBeenCalledWith(
-      expect.any(Object),
-      expect.objectContaining({ allowedRoots: [nestedWriteRoot] }),
-    );
-  });
+      await expect(resolver.resolve(toolRequest("safe"), executionContext("narrow"))).resolves.toEqual({
+        status: "blocked",
+        reasonCode: "canonicalization_failed",
+      });
+      expect(service.resolve).toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.objectContaining({ allowedRoots: [nestedWriteRoot] }),
+      );
+    },
+  );
 
   it("resolves trusted relative write-jail roots against rootDir before canonicalization", async () => {
     const fixture = createFixture();
@@ -214,41 +221,46 @@ describe("WorkspacePathBridgeExecutionResolver", () => {
     );
   });
 
-  it("requires a server-derived project Git identity and blocks a nested foreign repository swap", async () => {
-    const fixture = createFixture();
-    const service = createService((request) => snapshot(request, fixture.projectRoot, EXPECTED_GIT_IDENTITY));
-    const missingIdentity = createResolver(fixture, service, {
-      workspaceId: "workspace-1",
-      project: projectBinding(),
-    });
+  // Windows-host only (see above): resolves a relative cwd through the
+  // host-native filesystem path resolver.
+  it.skipIf(process.platform !== "win32")(
+    "requires a server-derived project Git identity and blocks a nested foreign repository swap",
+    async () => {
+      const fixture = createFixture();
+      const service = createService((request) => snapshot(request, fixture.projectRoot, EXPECTED_GIT_IDENTITY));
+      const missingIdentity = createResolver(fixture, service, {
+        workspaceId: "workspace-1",
+        project: projectBinding(),
+      });
 
-    await expect(missingIdentity.resolve(toolRequest("."), executionContext("missing-identity"))).resolves.toEqual({
-      status: "blocked",
-      reasonCode: "git_identity_mismatch",
-    });
-    expect(service.resolve).not.toHaveBeenCalled();
+      await expect(missingIdentity.resolve(toolRequest("."), executionContext("missing-identity"))).resolves.toEqual({
+        status: "blocked",
+        reasonCode: "git_identity_mismatch",
+      });
+      expect(service.resolve).not.toHaveBeenCalled();
 
-    const foreignRoot = path.win32.join(fixture.projectRoot, "nested-foreign-repo");
-    const foreignIdentity = "b".repeat(64);
-    const swappedService = createService((request) => ({
-      ...snapshot(request, foreignRoot, foreignIdentity),
-      gitIdentity: {
-        status: "verified",
-        topLevelPath: foreignRoot,
-        commonDirPath: path.win32.join(foreignRoot, ".git"),
-        identitySha256: foreignIdentity,
-      },
-    }));
-    const expectedProject = createResolver(fixture, swappedService, {
-      workspaceId: "workspace-1",
-      project: projectBinding(),
-      gitIdentity: { expectedIdentitySha256: EXPECTED_GIT_IDENTITY },
-    });
+      const foreignRoot = path.win32.join(fixture.projectRoot, "nested-foreign-repo");
+      const foreignIdentity = "b".repeat(64);
+      const swappedService = createService((request) => ({
+        ...snapshot(request, foreignRoot, foreignIdentity),
+        gitIdentity: {
+          status: "verified",
+          topLevelPath: foreignRoot,
+          commonDirPath: path.win32.join(foreignRoot, ".git"),
+          identitySha256: foreignIdentity,
+        },
+      }));
+      const expectedProject = createResolver(fixture, swappedService, {
+        workspaceId: "workspace-1",
+        project: projectBinding(),
+        gitIdentity: { expectedIdentitySha256: EXPECTED_GIT_IDENTITY },
+      });
 
-    await expect(
-      expectedProject.resolve(toolRequest("nested-foreign-repo"), executionContext("foreign-swap")),
-    ).resolves.toEqual({ status: "blocked", reasonCode: "git_identity_mismatch" });
-  });
+      await expect(
+        expectedProject.resolve(toolRequest("nested-foreign-repo"), executionContext("foreign-swap")),
+      ).resolves.toEqual({ status: "blocked", reasonCode: "git_identity_mismatch" });
+    },
+  );
 
   it("accepts an external Git common-dir only as matching identity evidence and blocks identity drift", async () => {
     const fixture = createFixture();
@@ -287,24 +299,31 @@ describe("WorkspacePathBridgeExecutionResolver", () => {
     });
   });
 
-  it("provides distinct fresh policy and pre-execute snapshots for TOCTOU revalidation", async () => {
-    const fixture = createFixture();
-    const service = createService((request) =>
-      request.verificationId.endsWith(":policy")
-        ? snapshot(request, fixture.workspaceRoot)
-        : snapshot(request, undefined, undefined, "symlink_escape"),
-    );
-    const resolver = createResolver(fixture, service, { workspaceId: "workspace-1" });
-    const request = toolRequest(".");
+  // Windows-host only (see above): the unbound cwd resolves through the
+  // host-native filesystem path resolver.
+  it.skipIf(process.platform !== "win32")(
+    "provides distinct fresh policy and pre-execute snapshots for TOCTOU revalidation",
+    async () => {
+      const fixture = createFixture();
+      const service = createService((request) =>
+        request.verificationId.endsWith(":policy")
+          ? snapshot(request, fixture.workspaceRoot)
+          : snapshot(request, undefined, undefined, "symlink_escape"),
+      );
+      const resolver = createResolver(fixture, service, { workspaceId: "workspace-1" });
+      const request = toolRequest(".");
 
-    await expect(resolver.resolve(request, { invocationId: "invoke-toctou", phase: "policy" })).resolves.toMatchObject({
-      status: "verified",
-      snapshotId: "invoke-toctou:policy",
-    });
-    await expect(
-      resolver.resolve(request, { invocationId: "invoke-toctou", phase: "pre_execute" }),
-    ).resolves.toMatchObject({ status: "blocked", reasonCode: "symlink_escape" });
-  });
+      await expect(
+        resolver.resolve(request, { invocationId: "invoke-toctou", phase: "policy" }),
+      ).resolves.toMatchObject({
+        status: "verified",
+        snapshotId: "invoke-toctou:policy",
+      });
+      await expect(
+        resolver.resolve(request, { invocationId: "invoke-toctou", phase: "pre_execute" }),
+      ).resolves.toMatchObject({ status: "blocked", reasonCode: "symlink_escape" });
+    },
+  );
 });
 
 describe("detectServerOwnedPathFlavor", () => {
