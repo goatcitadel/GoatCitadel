@@ -1,7 +1,5 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   ToolInvokeRequest,
   WorkspacePathBridgeResolveRequest,
@@ -14,16 +12,11 @@ import {
   type WorkspacePathBridgeSessionBinding,
 } from "./workspace-path-bridge-integration.js";
 
-const tempRoots: string[] = [];
 const EXPECTED_GIT_IDENTITY = "a".repeat(64);
-
-afterEach(async () => {
-  await Promise.all(tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
-});
 
 describe("WorkspacePathBridgeExecutionResolver", () => {
   it("derives project, write-jail, flavor, distro, and Git authority only from server bindings", async () => {
-    const fixture = await createFixture();
+    const fixture = createFixture();
     const service = createService((request) => snapshot(request, fixture.projectRoot, EXPECTED_GIT_IDENTITY));
     const resolver = createResolver(fixture, service, {
       workspaceId: "workspace-1",
@@ -68,7 +61,7 @@ describe("WorkspacePathBridgeExecutionResolver", () => {
   });
 
   it("uses trusted runtime provenance for MSYS and WSL while blocking ambiguous POSIX paths", async () => {
-    const fixture = await createFixture();
+    const fixture = createFixture();
     const service = createService((request) => snapshot(request, fixture.projectRoot));
     const msys = createResolver(fixture, service, {
       workspaceId: "workspace-1",
@@ -115,7 +108,7 @@ describe("WorkspacePathBridgeExecutionResolver", () => {
     "F:\\Work Space\\..\\Other",
     "F:\\Work Space\\Project\u0000suffix",
   ])("preserves unsafe absolute-like input %j for service rejection", async (cwd) => {
-    const fixture = await createFixture();
+    const fixture = createFixture();
     const service = createService((request) => snapshot(request, undefined, undefined, "invalid_path"));
     const resolver = createResolver(fixture, service, { workspaceId: "workspace-1" });
 
@@ -130,7 +123,7 @@ describe("WorkspacePathBridgeExecutionResolver", () => {
   });
 
   it("fails closed on workspace/project mismatch, archived or absolute projects, and missing write-jail intersection", async () => {
-    const fixture = await createFixture();
+    const fixture = createFixture();
     const service = createService((request) => snapshot(request, fixture.projectRoot));
     const cases: Array<{ binding: WorkspacePathBridgeSessionBinding; request?: ToolInvokeRequest; roots?: string[] }> =
       [
@@ -172,9 +165,8 @@ describe("WorkspacePathBridgeExecutionResolver", () => {
   });
 
   it("uses only the narrow project/write-jail intersection and rejects authority returned outside it", async () => {
-    const fixture = await createFixture();
-    const nestedWriteRoot = path.join(fixture.projectRoot, "safe");
-    await fs.mkdir(nestedWriteRoot);
+    const fixture = createFixture();
+    const nestedWriteRoot = path.win32.join(fixture.projectRoot, "safe");
     const service = createService((request) => snapshot(request, fixture.workspaceRoot));
     const resolver = createResolver(
       fixture,
@@ -198,9 +190,9 @@ describe("WorkspacePathBridgeExecutionResolver", () => {
   });
 
   it("resolves trusted relative write-jail roots against rootDir before canonicalization", async () => {
-    const fixture = await createFixture();
+    const fixture = createFixture();
     const service = createService((request) => snapshot(request, fixture.projectRoot, EXPECTED_GIT_IDENTITY));
-    const relativeProjectRoot = path.relative(fixture.rootDir, fixture.projectRoot);
+    const relativeProjectRoot = path.win32.relative(fixture.rootDir, fixture.projectRoot);
     const resolver = createResolver(
       fixture,
       service,
@@ -223,7 +215,7 @@ describe("WorkspacePathBridgeExecutionResolver", () => {
   });
 
   it("requires a server-derived project Git identity and blocks a nested foreign repository swap", async () => {
-    const fixture = await createFixture();
+    const fixture = createFixture();
     const service = createService((request) => snapshot(request, fixture.projectRoot, EXPECTED_GIT_IDENTITY));
     const missingIdentity = createResolver(fixture, service, {
       workspaceId: "workspace-1",
@@ -236,15 +228,14 @@ describe("WorkspacePathBridgeExecutionResolver", () => {
     });
     expect(service.resolve).not.toHaveBeenCalled();
 
-    const foreignRoot = path.join(fixture.projectRoot, "nested-foreign-repo");
-    await fs.mkdir(foreignRoot);
+    const foreignRoot = path.win32.join(fixture.projectRoot, "nested-foreign-repo");
     const foreignIdentity = "b".repeat(64);
     const swappedService = createService((request) => ({
       ...snapshot(request, foreignRoot, foreignIdentity),
       gitIdentity: {
         status: "verified",
         topLevelPath: foreignRoot,
-        commonDirPath: path.join(foreignRoot, ".git"),
+        commonDirPath: path.win32.join(foreignRoot, ".git"),
         identitySha256: foreignIdentity,
       },
     }));
@@ -260,8 +251,8 @@ describe("WorkspacePathBridgeExecutionResolver", () => {
   });
 
   it("accepts an external Git common-dir only as matching identity evidence and blocks identity drift", async () => {
-    const fixture = await createFixture();
-    const commonDir = path.join(fixture.outsideRoot, ".git");
+    const fixture = createFixture();
+    const commonDir = path.win32.join(fixture.outsideRoot, ".git");
     const service = createService((request) => ({
       ...snapshot(request, fixture.projectRoot, EXPECTED_GIT_IDENTITY),
       gitIdentity: {
@@ -286,7 +277,7 @@ describe("WorkspacePathBridgeExecutionResolver", () => {
       gitIdentity: {
         status: "verified",
         topLevelPath: fixture.projectRoot,
-        commonDirPath: path.join(fixture.outsideRoot, "swapped.git"),
+        commonDirPath: path.win32.join(fixture.outsideRoot, "swapped.git"),
         identitySha256: "b".repeat(64),
       },
     }));
@@ -297,7 +288,7 @@ describe("WorkspacePathBridgeExecutionResolver", () => {
   });
 
   it("provides distinct fresh policy and pre-execute snapshots for TOCTOU revalidation", async () => {
-    const fixture = await createFixture();
+    const fixture = createFixture();
     const service = createService((request) =>
       request.verificationId.endsWith(":policy")
         ? snapshot(request, fixture.workspaceRoot)
@@ -336,18 +327,21 @@ interface Fixture {
   outsideRoot: string;
 }
 
-async function createFixture(): Promise<Fixture> {
-  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "goat-path-bridge-integration-"));
-  tempRoots.push(rootDir);
-  const workspaceRoot = path.join(rootDir, "workspace");
-  const projectRoot = path.join(workspaceRoot, "project");
-  const outsideRoot = path.join(rootDir, "outside");
-  await Promise.all([fs.mkdir(projectRoot, { recursive: true }), fs.mkdir(outsideRoot, { recursive: true })]);
+// The resolver's Windows path bridge is filesystem-free — canonicalization is
+// delegated to the injected service — so these fixtures are synthetic Windows
+// paths and the resolver is pinned to hostPlatform "windows". That keeps every
+// case deterministic on POSIX CI, where process.platform would otherwise route
+// the suite through the native POSIX branch and invalidate the Windows-dialect
+// expectations below.
+let bridgeFixtureCounter = 0;
+function createFixture(): Fixture {
+  const rootDir = `C:\\goat\\bridge-${(bridgeFixtureCounter += 1)}`;
+  const workspaceRoot = path.win32.join(rootDir, "workspace");
   return {
-    rootDir: await fs.realpath(rootDir),
-    workspaceRoot: await fs.realpath(workspaceRoot),
-    projectRoot: await fs.realpath(projectRoot),
-    outsideRoot: await fs.realpath(outsideRoot),
+    rootDir,
+    workspaceRoot,
+    projectRoot: path.win32.join(workspaceRoot, "project"),
+    outsideRoot: path.win32.join(rootDir, "outside"),
   };
 }
 
@@ -362,6 +356,13 @@ function createResolver(
     rootDir: fixture.rootDir,
     workspaceDir: "workspace",
     writeJailRoots,
+    hostPlatform: "windows",
+    // Synthetic-path fixtures never touch disk: canonicalization is an identity,
+    // every trusted root is a directory, and nothing is a symlink. Path
+    // relationship logic (jail intersection, identity drift) still runs in full.
+    realpath: async (input: string) => input,
+    stat: async () => ({ isDirectory: () => true }),
+    lstat: async () => ({ isSymbolicLink: () => false }),
     resolveSessionBinding: () => binding,
   });
 }
