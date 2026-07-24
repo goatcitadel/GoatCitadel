@@ -20,7 +20,7 @@
 
 .mc-next-remote-activity__header h5 {
   margin: 0;
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
 }
 
 .mc-next-remote-activity__item {
@@ -43,12 +43,12 @@
   display: flex;
   flex-wrap: wrap;
   gap: 0.25rem 0.6rem;
-  font-size: 0.75rem;
+  font-size: var(--text-2xs);
   color: var(--text-2, #9aa0ac);
 }
 
 .mc-next-remote-activity__unavailable {
-  font-size: 0.72rem;
+  font-size: var(--text-2xs);
   color: var(--text-2, #9aa0ac);
   margin: 0;
 }
@@ -61,7 +61,7 @@
   color: var(--accent, #6b8afd);
   border-radius: 0.4rem;
   padding: 0.25rem 0.6rem;
-  font-size: 0.75rem;
+  font-size: var(--text-2xs);
   cursor: pointer;
 }
 

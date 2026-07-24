@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
 import { canonicalJsonString } from "./canonical-json.js";
+import { sha256Hex } from "./sha256.js";
 import { assertBoundedGovernanceMetadata } from "./skill-governance.js";
 
 /**
@@ -191,9 +191,7 @@ export function findGovernedMutationKind(
  */
 export function computeGovernedMutationMaterialSha256(material: Record<string, unknown>): string {
   assertBoundedGovernanceMetadata(material, "governed mutation material");
-  return createHash("sha256")
-    .update(canonicalJsonString({ version: GOVERNED_MUTATION_MATERIAL_VERSION, material }), "utf8")
-    .digest("hex");
+  return sha256Hex(canonicalJsonString({ version: GOVERNED_MUTATION_MATERIAL_VERSION, material }));
 }
 
 export interface GovernedLifecycleEventRecord {
@@ -422,12 +420,12 @@ export function isImprovementLifecycleSettlementDisposition(
 export function computeImprovementLifecycleRequestSha256(
   input: Omit<ImprovementLifecycleOperationRecord, "requestSha256" | "approvalId">,
 ): string {
-  return createHash("sha256").update(canonicalJsonString(input), "utf8").digest("hex");
+  return sha256Hex(canonicalJsonString(input));
 }
 
 export function computeImprovementLifecycleResultSha256(result: Record<string, unknown>): string {
   assertBoundedGovernanceMetadata(result, "improvement lifecycle result");
-  return createHash("sha256").update(canonicalJsonString(result), "utf8").digest("hex");
+  return sha256Hex(canonicalJsonString(result));
 }
 
 // ---------------------------------------------------------------------------

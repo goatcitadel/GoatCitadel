@@ -1,10 +1,10 @@
-import { createHash } from "node:crypto";
 import { canonicalJsonString } from "./canonical-json.js";
+import { sha256Hex } from "./sha256.js";
 
 const UTF8 = new TextEncoder();
 
 function sha256Utf8(value: string): string {
-  return createHash("sha256").update(value, "utf8").digest("hex");
+  return sha256Hex(value);
 }
 
 /**

@@ -70,7 +70,7 @@
   border-radius: 999px;
   color: var(--mc-next-muted, #91a9b2);
   background: rgba(7, 20, 28, 0.56);
-  font-size: 0.72rem;
+  font-size: var(--text-2xs);
   line-height: 1.15;
   overflow-wrap: anywhere;
 }
@@ -122,14 +122,14 @@
 
 .mc-next-background-task__title-row h5 {
   color: var(--mc-next-text, #e8fbff);
-  font-size: 0.9rem;
+  font-size: var(--text-sm);
 }
 
 .mc-next-background-task__title-row p,
 .mc-next-background-task__muted,
 .mc-next-background-task small {
   color: var(--mc-next-muted, #91a9b2);
-  font-size: 0.72rem;
+  font-size: var(--text-2xs);
   overflow-wrap: anywhere;
 }
 
@@ -137,7 +137,7 @@
   flex: 0 0 auto;
   padding: 4px 7px;
   border-radius: 999px;
-  font-size: 0.7rem;
+  font-size: var(--text-2xs);
   text-transform: capitalize;
 }
 
@@ -166,7 +166,7 @@
 
 .mc-next-background-task__section h6 {
   color: #b5cbd2;
-  font-size: 0.68rem;
+  font-size: var(--text-2xs);
   letter-spacing: 0.07em;
   text-transform: uppercase;
 }
@@ -192,7 +192,7 @@
   border-radius: 8px;
   background: rgba(3, 14, 20, 0.52);
   color: #cce4e9;
-  font-size: 0.76rem;
+  font-size: var(--text-2xs);
 }
 
 .mc-next-background-task__section li small {
@@ -225,7 +225,7 @@
   display: flex;
   align-items: flex-start;
   gap: 6px;
-  font-size: 0.75rem;
+  font-size: var(--text-2xs);
 }
 
 .mc-next-background-task__output {
@@ -234,13 +234,13 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   color: #cce4e9;
-  font-size: 0.76rem;
+  font-size: var(--text-2xs);
   line-height: 1.45;
 }
 
 .mc-next-background-task__integrity {
   color: #ffc0c8;
-  font-size: 0.72rem;
+  font-size: var(--text-2xs);
 }
 
 .mc-next-background-task__actions button,
@@ -275,7 +275,7 @@
 
 .mc-next-background-rail__synthesis > div > span {
   color: var(--mc-next-muted, #91a9b2);
-  font-size: 0.72rem;
+  font-size: var(--text-2xs);
   text-transform: capitalize;
 }
 
@@ -289,7 +289,7 @@
 
 .mc-next-background-rail__unknowns {
   color: var(--mc-next-muted, #91a9b2);
-  font-size: 0.75rem;
+  font-size: var(--text-2xs);
 }
 
 .mc-next-background-rail__unknowns summary {
