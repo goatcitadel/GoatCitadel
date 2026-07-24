@@ -868,3 +868,214 @@ describe("RemoteWorkerAssignmentRepository", () => {
     );
   });
 });
+
+// HX-507B operator read-projection extensions.
+function seedAssignment(
+  h: ReturnType<typeof createHarness>,
+  opts: { seed: string; sessionId?: string | null; turnId?: string | null; start?: boolean },
+): string {
+  const sessions = new ChatSessionMetaRepository(h.db);
+  const turns = new ChatTurnTraceRepository(h.db);
+  const now = h.durableRuns.readDatabaseNow();
+  const durableRunId = `run-${opts.seed}`;
+  const sessionId = opts.sessionId === undefined ? `session-${opts.seed}` : opts.sessionId;
+  const turnId = opts.turnId === undefined ? `turn-${opts.seed}` : opts.turnId;
+  if (sessionId) sessions.ensure(sessionId, now, "default");
+  if (sessionId && turnId) {
+    turns.create({
+      turnId,
+      sessionId,
+      userMessageId: `message-${opts.seed}`,
+      mode: "chat",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      startedAt: now,
+    });
+  }
+  const parentInput = {
+    executionWorkspaceId: "default",
+    durableRunId,
+    taskId: h.taskId,
+    ...(sessionId ? { sessionId } : {}),
+    ...(turnId ? { turnId } : {}),
+  } as const;
+  const parentContext = buildRemoteWorkerAssignmentParentContext(parentInput);
+  const parentContextSha256 = remoteWorkerAssignmentParentContextSha256(parentInput);
+  h.durableRuns.createRun({
+    runId: durableRunId,
+    workflowKey: "chat.turn.execute",
+    status: "running",
+    attemptCount: 1,
+    maxAttempts: 3,
+    leaseOwnerId: "gateway-a",
+    leaseHeartbeatAt: now,
+    leaseExpiresAt: FUTURE,
+    version: 1,
+    startedAt: now,
+    now,
+    metadata: {
+      remoteWorkerAssignmentParentContext: parentContext,
+      remoteWorkerAssignmentParentContextSha256: parentContextSha256,
+    },
+  });
+  const manifest: RemoteWorkerAssignmentManifest = {
+    schemaVersion: REMOTE_WORKER_ASSIGNMENT_MANIFEST_SCHEMA_VERSION,
+    protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
+    registryWorkspaceId: "default",
+    ...parentInput,
+    capabilityProfileSha256: D(`${opts.seed}:capability-profile`),
+    contextSnapshotSha256: D(`${opts.seed}:context`),
+    toolEffectPostureSha256: D(`${opts.seed}:posture`),
+    pathJailSha256: D(`${opts.seed}:jail`),
+    parentContextSha256,
+    requiredCapabilityClasses: ["durable_compute", "gateway_inference"],
+    deadlineAt: FUTURE,
+    leaseTtlSeconds: 60,
+    maxEventCount: 100,
+    maxEventBytes: 4_096,
+    eventLowWatermark: 2,
+    eventHighWatermark: 5,
+    maxOutputBytes: 65_536,
+    maxArtifactBytes: 1_048_576,
+  };
+  const assignment = h.assignments.createAssignment({
+    manifest,
+    createdByActorId: "gateway-a",
+    idempotencyKey: `assignment:${opts.seed}`,
+  }).assignment;
+  if (opts.start) {
+    h.assignments.startGeneration({
+      registryWorkspaceId: "default",
+      assignmentId: assignment.assignmentId,
+      workerId: h.worker.generation.workerId,
+      workerGeneration: h.worker.generation.workerGeneration,
+      nodeId: h.bootstrap.nodeId,
+      nodeAdmissionGeneration: h.nodeAdmission.admissionGeneration,
+      dispatchOwnerId: "gateway-a",
+      durableRunAttempt: 1,
+      leaseTokenSha256: D(`${opts.seed}:lease:1`),
+      idempotencyKey: `generation:${opts.seed}:1`,
+    });
+  }
+  return assignment.assignmentId;
+}
+
+describe("RemoteWorkerAssignmentRepository read projections (HX-507B)", () => {
+  it("projects the aggregate through created, started, controlled, and settled phases", () => {
+    const h = createHarness("agg-phases");
+    // created (no generation)
+    let aggregate = h.assignments.findAssignmentAggregate("default", h.assignment.assignmentId)!;
+    assert.ok(aggregate);
+    assert.equal(aggregate.generation, undefined);
+    assert.equal(aggregate.lease, undefined);
+    assert.equal(aggregate.control, undefined);
+    assert.equal(aggregate.settlement, undefined);
+    assert.equal(aggregate.materialization.count, 0);
+    assert.equal(aggregate.assignment.manifest.sessionId, h.sessionId);
+
+    // started (generation + lease)
+    h.assignments.startGeneration(h.startInput);
+    aggregate = h.assignments.findAssignmentAggregate("default", h.assignment.assignmentId)!;
+    assert.equal(aggregate.generation?.assignmentGeneration, 1);
+    assert.equal(aggregate.generation?.workerId, h.worker.generation.workerId);
+    assert.equal(aggregate.lease?.leaseRevision, 1);
+    assert.equal(aggregate.lease?.workerSentThrough, 0);
+
+    // controlled (cancellation requested)
+    h.assignments.requestCancellation({
+      registryWorkspaceId: "default",
+      assignmentId: h.assignment.assignmentId,
+      expectedAssignmentGeneration: 1,
+      expectedLeaseRevision: 1,
+      reasonCode: "operator.cancelled",
+      reasonSha256: D("agg-phases:reason"),
+      actorId: "operator-a",
+      idempotencyKey: "agg-phases:control",
+    });
+    aggregate = h.assignments.findAssignmentAggregate("default", h.assignment.assignmentId)!;
+    assert.equal(aggregate.control?.action, "cancel_requested");
+    assert.equal(aggregate.control?.controlRevision, 1);
+  });
+
+  it("carries the settlement receipt in the aggregate after a worker completion", () => {
+    const h = createHarness("agg-settled");
+    h.assignments.startGeneration(h.startInput);
+    const appended = h.assignments.appendEvents({
+      registryWorkspaceId: "default",
+      assignmentId: h.assignment.assignmentId,
+      expectedAssignmentGeneration: 1,
+      expectedLeaseRevision: 1,
+      leaseTokenSha256: h.startInput.leaseTokenSha256,
+      events: [statusEvent(1, REMOTE_WORKER_ASSIGNMENT_EVENT_GENESIS_SHA256, 3)],
+    });
+    h.assignments.settleAssignment({
+      registryWorkspaceId: "default",
+      assignmentId: h.assignment.assignmentId,
+      expectedAssignmentGeneration: 1,
+      expectedLeaseRevision: 1,
+      origin: "worker",
+      leaseTokenSha256: h.startInput.leaseTokenSha256,
+      outcome: "completed",
+      finalEventSequence: 1,
+      finalEventSha256: appended.events[0]!.eventSha256,
+      resultSha256: D("agg-settled:result"),
+      outputManifestSha256: commitOutputManifest(h),
+      idempotencyKey: "agg-settled:settle",
+    });
+    const aggregate = h.assignments.findAssignmentAggregate("default", h.assignment.assignmentId)!;
+    assert.equal(aggregate.settlement?.outcome, "completed");
+    assert.equal(aggregate.settlement?.origin, "worker");
+    assert.equal(aggregate.settlement?.finalEventSequence, 1);
+  });
+
+  it("lists workspace assignments newest-first with worker/session filters and cross-workspace isolation", () => {
+    const h = createHarness("agg-list");
+    // h.assignment is "created" with session-agg-list; seed two more started under the worker.
+    const second = seedAssignment(h, { seed: "agg-list-b", start: true });
+    const third = seedAssignment(h, { seed: "agg-list-c", sessionId: "shared-session", start: true });
+
+    const all = h.assignments.listAssignmentAggregates("default");
+    assert.equal(all.items.length, 3);
+    // Every started item carries generation truth; the created one does not.
+    const started = all.items.filter((item) => item.generation !== undefined);
+    assert.equal(started.length, 2);
+
+    // Worker filter: both started assignments share the harness worker.
+    const byWorker = h.assignments.listAssignmentAggregates("default", {
+      workerId: h.worker.generation.workerId,
+    });
+    assert.equal(byWorker.items.length, 2);
+    assert.deepEqual(new Set(byWorker.items.map((item) => item.assignment.assignmentId)), new Set([second, third]));
+
+    // Session filter binds storage lineage, not caller assertion.
+    const bySession = h.assignments.listAssignmentAggregates("default", { sessionId: "shared-session" });
+    assert.equal(bySession.items.length, 1);
+    assert.equal(bySession.items[0]!.assignment.assignmentId, third);
+
+    // Cross-workspace isolation: nothing leaks and the id is not found.
+    assert.equal(h.assignments.listAssignmentAggregates("other-workspace").items.length, 0);
+    assert.equal(h.assignments.findAssignmentAggregate("other-workspace", second), undefined);
+  });
+
+  it("paginates with an opaque (createdAt, assignmentId) cursor without overlap", () => {
+    const h = createHarness("agg-cursor");
+    seedAssignment(h, { seed: "agg-cursor-b" });
+    seedAssignment(h, { seed: "agg-cursor-c" });
+
+    const seen = new Set<string>();
+    let cursor: { lastCreatedAt: string; lastAssignmentId: string } | undefined;
+    let pages = 0;
+    do {
+      const page = h.assignments.listAssignmentAggregates("default", { limit: 1, ...(cursor ? { cursor } : {}) });
+      assert.ok(page.items.length <= 1);
+      for (const item of page.items) {
+        assert.equal(seen.has(item.assignment.assignmentId), false);
+        seen.add(item.assignment.assignmentId);
+      }
+      cursor = page.nextCursor;
+      pages += 1;
+    } while (cursor && pages < 10);
+    assert.equal(seen.size, 3);
+  });
+});

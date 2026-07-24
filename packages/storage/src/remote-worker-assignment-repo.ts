@@ -98,6 +98,52 @@ export interface ListRecoverableRemoteWorkerAssignment {
   lease: RemoteWorkerAssignmentLeaseRecord;
 }
 
+/**
+ * HX-507B operator read projection. Aggregates one assignment's current
+ * generation, lease, latest control, settlement, and a bounded materialization
+ * summary. All fields are canonical storage truth; the Gateway service layer is
+ * responsible for redacting secrets and attaching truth descriptors. Optional
+ * sections are absent (never guessed) when the underlying owner has no row.
+ */
+export interface RemoteWorkerAssignmentMaterializationSummary {
+  count: number;
+  chatTranscriptCount: number;
+  durableRunResultCount: number;
+  latestMaterializedAt?: string;
+}
+
+export interface RemoteWorkerAssignmentAggregate {
+  assignment: RemoteWorkerAssignmentRecord;
+  generation?: RemoteWorkerAssignmentGenerationRecord;
+  lease?: RemoteWorkerAssignmentLeaseRecord;
+  control?: RemoteWorkerAssignmentControlRecord;
+  settlement?: RemoteWorkerAssignmentSettlementRecord;
+  materialization: RemoteWorkerAssignmentMaterializationSummary;
+}
+
+export interface RemoteWorkerAssignmentAggregateCursor {
+  lastCreatedAt: string;
+  lastAssignmentId: string;
+}
+
+export interface ListRemoteWorkerAssignmentAggregatesOptions {
+  workerId?: string;
+  sessionId?: string;
+  turnId?: string;
+  limit?: number;
+  cursor?: RemoteWorkerAssignmentAggregateCursor;
+}
+
+export interface ListRemoteWorkerAssignmentAggregatesResult {
+  items: readonly RemoteWorkerAssignmentAggregate[];
+  nextCursor?: RemoteWorkerAssignmentAggregateCursor;
+}
+
+interface AssignmentListRow extends AssignmentRow {
+  current_assignment_generation: number | bigint | string | null;
+  current_worker_id: string | null;
+}
+
 interface AssignmentRow {
   registry_workspace_id: string;
   assignment_id: string;
@@ -1157,6 +1203,167 @@ export class RemoteWorkerAssignmentRepository {
       ),
       lease: this.mapLease(lease),
     }));
+  }
+
+  /**
+   * HX-507B workspace-scoped assignment projection list. Order is
+   * `(created_at DESC, assignment_id DESC)` with an opaque forward cursor bound
+   * to the last (createdAt, assignmentId). Optional exact `workerId` (via the
+   * current generation), `sessionId`, and `turnId` filters bind one stable set.
+   * Storage lineage — never a caller assertion — decides session/turn/worker
+   * membership. This is read-only; it never writes and never returns secrets.
+   */
+  public listAssignmentAggregates(
+    registryWorkspaceId: string,
+    options: ListRemoteWorkerAssignmentAggregatesOptions = {},
+  ): ListRemoteWorkerAssignmentAggregatesResult {
+    const workspace = identifier(registryWorkspaceId, "registryWorkspaceId");
+    const limit = options.limit === undefined ? 20 : positiveInteger(options.limit, "limit", 100);
+    const workerId = options.workerId === undefined ? undefined : identifier(options.workerId, "workerId");
+    const sessionId = options.sessionId === undefined ? undefined : identifier(options.sessionId, "sessionId");
+    const turnId = options.turnId === undefined ? undefined : identifier(options.turnId, "turnId");
+    const conditions = ["a.registry_workspace_id = @registryWorkspaceId"];
+    const params: Record<string, unknown> = { registryWorkspaceId: workspace, fetchLimit: limit + 1 };
+    if (sessionId !== undefined) {
+      conditions.push("a.session_id = @sessionId");
+      params.sessionId = sessionId;
+    }
+    if (turnId !== undefined) {
+      conditions.push("a.turn_id = @turnId");
+      params.turnId = turnId;
+    }
+    if (workerId !== undefined) {
+      conditions.push("g.worker_id = @workerId");
+      params.workerId = workerId;
+    }
+    if (options.cursor !== undefined) {
+      conditions.push(
+        "(a.created_at < @cursorCreatedAt OR (a.created_at = @cursorCreatedAt AND a.assignment_id < @cursorAssignmentId))",
+      );
+      params.cursorCreatedAt = identifier(options.cursor.lastCreatedAt, "cursorCreatedAt");
+      params.cursorAssignmentId = identifier(options.cursor.lastAssignmentId, "cursorAssignmentId");
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT a.*,
+                g.assignment_generation AS current_assignment_generation,
+                g.worker_id AS current_worker_id
+         FROM remote_worker_assignments a
+         LEFT JOIN remote_worker_assignment_generations g
+           ON g.registry_workspace_id = a.registry_workspace_id
+          AND g.assignment_id = a.assignment_id
+          AND g.assignment_generation = (
+            SELECT MAX(cg.assignment_generation) FROM remote_worker_assignment_generations cg
+            WHERE cg.registry_workspace_id = a.registry_workspace_id AND cg.assignment_id = a.assignment_id
+          )
+         WHERE ${conditions.join(" AND ")}
+         ORDER BY a.created_at DESC, a.assignment_id DESC
+         LIMIT @fetchLimit`,
+      )
+      .all(params) as AssignmentListRow[];
+    const hasMore = rows.length > limit;
+    const selected = hasMore ? rows.slice(0, limit) : rows;
+    const items = selected.map((row) => this.mapAssignmentAggregate(row));
+    const last = selected.at(-1);
+    return {
+      items,
+      ...(hasMore && last
+        ? { nextCursor: { lastCreatedAt: last.created_at, lastAssignmentId: last.assignment_id } }
+        : {}),
+    };
+  }
+
+  /**
+   * HX-507B single-assignment aggregate for the events route generation
+   * resolution and reconciliation projection. Returns undefined when the
+   * assignment does not exist in the workspace (no cross-workspace disclosure).
+   */
+  public findAssignmentAggregate(
+    registryWorkspaceId: string,
+    assignmentId: string,
+  ): RemoteWorkerAssignmentAggregate | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT a.*,
+                g.assignment_generation AS current_assignment_generation,
+                g.worker_id AS current_worker_id
+         FROM remote_worker_assignments a
+         LEFT JOIN remote_worker_assignment_generations g
+           ON g.registry_workspace_id = a.registry_workspace_id
+          AND g.assignment_id = a.assignment_id
+          AND g.assignment_generation = (
+            SELECT MAX(cg.assignment_generation) FROM remote_worker_assignment_generations cg
+            WHERE cg.registry_workspace_id = a.registry_workspace_id AND cg.assignment_id = a.assignment_id
+          )
+         WHERE a.registry_workspace_id = @registryWorkspaceId AND a.assignment_id = @assignmentId`,
+      )
+      .get({
+        registryWorkspaceId: identifier(registryWorkspaceId, "registryWorkspaceId"),
+        assignmentId: identifier(assignmentId, "assignmentId"),
+      }) as AssignmentListRow | undefined;
+    return row ? this.mapAssignmentAggregate(row) : undefined;
+  }
+
+  private mapAssignmentAggregate(row: AssignmentListRow): RemoteWorkerAssignmentAggregate {
+    const assignment = this.mapAssignment(row);
+    const currentGeneration =
+      row.current_assignment_generation === null ? undefined : asPositiveInteger(row.current_assignment_generation);
+    const generation =
+      currentGeneration === undefined
+        ? undefined
+        : this.mapGeneration(this.getGenerationRow(row.registry_workspace_id, row.assignment_id, currentGeneration));
+    const leaseRow =
+      currentGeneration === undefined
+        ? undefined
+        : this.findCurrentLeaseRow(row.registry_workspace_id, row.assignment_id, currentGeneration);
+    const controlRow =
+      currentGeneration === undefined
+        ? undefined
+        : this.findLatestControlRow(row.registry_workspace_id, row.assignment_id, currentGeneration);
+    const settlementRow = this.findSettlement(row.registry_workspace_id, row.assignment_id);
+    return {
+      assignment,
+      ...(generation ? { generation } : {}),
+      ...(leaseRow ? { lease: this.mapLease(leaseRow) } : {}),
+      ...(controlRow ? { control: this.mapControl(controlRow) } : {}),
+      ...(settlementRow ? { settlement: this.mapSettlement(settlementRow) } : {}),
+      materialization: this.summarizeMaterializations(row.registry_workspace_id, row.assignment_id),
+    };
+  }
+
+  private findCurrentLeaseRow(
+    registryWorkspaceId: string,
+    assignmentId: string,
+    assignmentGeneration: number,
+  ): LeaseRow | undefined {
+    return this.db
+      .prepare(
+        `SELECT * FROM remote_worker_assignment_leases
+         WHERE registry_workspace_id = @registryWorkspaceId AND assignment_id = @assignmentId
+           AND assignment_generation = @assignmentGeneration
+         ORDER BY lease_revision DESC LIMIT 1`,
+      )
+      .get({ registryWorkspaceId, assignmentId, assignmentGeneration }) as LeaseRow | undefined;
+  }
+
+  private summarizeMaterializations(
+    registryWorkspaceId: string,
+    assignmentId: string,
+  ): RemoteWorkerAssignmentMaterializationSummary {
+    const rows = this.db
+      .prepare(
+        `SELECT target_kind, materialized_at FROM remote_worker_assignment_materializations
+         WHERE registry_workspace_id = @registryWorkspaceId AND assignment_id = @assignmentId
+         ORDER BY materialized_at ASC`,
+      )
+      .all({ registryWorkspaceId, assignmentId }) as { target_kind: string; materialized_at: string }[];
+    const summary: RemoteWorkerAssignmentMaterializationSummary = {
+      count: rows.length,
+      chatTranscriptCount: rows.filter((r) => r.target_kind === "chat_transcript").length,
+      durableRunResultCount: rows.filter((r) => r.target_kind === "durable_run_result").length,
+    };
+    const latest = rows.at(-1)?.materialized_at;
+    return latest === undefined ? summary : { ...summary, latestMaterializedAt: latest };
   }
 
   private insertControl(
