@@ -91,7 +91,9 @@ function maxDeclaredMigrationVersion(source, label) {
 
 function runStaticScans() {
   const scan = runMeshCapabilityStaticScans({
-    opsPanelFiles: readFileRecords(["apps/mission-control-next/src/features/native-routes/ops/MeshCapabilityPanel.tsx"]),
+    opsPanelFiles: readFileRecords([
+      "apps/mission-control-next/src/features/native-routes/ops/MeshCapabilityPanel.tsx",
+    ]),
     opsClientFiles: readFileRecords([
       "packages/mission-control-shared/src/api/mesh-capabilities.ts",
       "packages/mission-control-shared/src/hooks/useMeshCapabilityOps.ts",
@@ -162,11 +164,33 @@ function provisionHermeticPostgres() {
   // lingering postmaster from a previous run.
   const port = 54_000 + (randomBytes(2).readUInt16BE(0) % 8_000);
   const tool = (name) => path.join(binDir, isWindows ? `${name}.exe` : name);
+  const removeDataDir = () => {
+    try {
+      fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5 });
+    } catch {
+      // best-effort: a wedged backend can briefly hold a handle on Windows.
+    }
+  };
+  // Stop a (possibly half-started) postmaster and remove its PGDATA. Called on
+  // every provisioning FAILURE path so a readiness-timeout / foreign-port /
+  // initdb failure can never leak a lingering postmaster + temp cluster that
+  // would collide with the next lane's hermetic cluster under the composed run.
+  const teardownFailedCluster = (postmasterStarted) => {
+    if (postmasterStarted) {
+      spawnSync(tool("pg_ctl"), ["-D", dataDir, "-m", "immediate", "stop"], {
+        encoding: "utf8",
+        windowsHide: true,
+        timeout: 30_000,
+      });
+    }
+    removeDataDir();
+  };
   const initdb = spawnSync(tool("initdb"), ["-D", dataDir, "-U", "gcproof", "-A", "trust", "-E", "UTF8"], {
     encoding: "utf8",
     windowsHide: true,
   });
   if (initdb.status !== 0) {
+    removeDataDir();
     return { error: `initdb failed (${initdb.status}): ${stripAnsi(initdb.stderr ?? "").slice(-400)}` };
   }
   const started = spawn(
@@ -175,7 +199,19 @@ function provisionHermeticPostgres() {
     { detached: true, stdio: "ignore", windowsHide: true },
   );
   started.unref();
-  const psqlArgs = (sql) => ["-h", "127.0.0.1", "-p", String(port), "-U", "gcproof", "-d", "postgres", "-tA", "-c", sql];
+  const psqlArgs = (sql) => [
+    "-h",
+    "127.0.0.1",
+    "-p",
+    String(port),
+    "-U",
+    "gcproof",
+    "-d",
+    "postgres",
+    "-tA",
+    "-c",
+    sql,
+  ];
   const deadline = Date.now() + 60_000;
   let ready = false;
   while (Date.now() < deadline) {
@@ -191,6 +227,7 @@ function provisionHermeticPostgres() {
         ready = true;
         break;
       }
+      teardownFailedCluster(true);
       return {
         error: `port 127.0.0.1:${port} is answered by a foreign PostgreSQL (data_directory ${reported}); refusing to run the proof against it.`,
       };
@@ -198,13 +235,18 @@ function provisionHermeticPostgres() {
     spawnSync(process.execPath, ["-e", "setTimeout(() => process.exit(0), 1000)"], { windowsHide: true });
   }
   if (!ready) {
+    teardownFailedCluster(true);
     return { error: `hermetic PostgreSQL did not accept connections on 127.0.0.1:${port} within 60s.` };
   }
   return {
     url: `postgresql://gcproof@127.0.0.1:${port}/postgres`,
     stop: () => {
-      spawnSync(tool("pg_ctl"), ["-D", dataDir, "-m", "fast", "stop"], { encoding: "utf8", windowsHide: true });
-      fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5 });
+      spawnSync(tool("pg_ctl"), ["-D", dataDir, "-m", "fast", "stop"], {
+        encoding: "utf8",
+        windowsHide: true,
+        timeout: 60_000,
+      });
+      removeDataDir();
     },
   };
 }

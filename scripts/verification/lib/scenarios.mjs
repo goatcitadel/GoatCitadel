@@ -190,6 +190,7 @@ function verificationLaneDeps() {
     stabilizeVisualRegressionSnapshot,
     stabilizeMissionControlNextFileFixtureMtime,
     startVerificationStack,
+    startVerificationUiProcess,
     startBrowserTrace,
     stopProcess,
     stopVerificationStack,
@@ -4605,7 +4606,16 @@ async function startVerificationUiProcess(context, gatewayUrl, packageName, name
       VITE_GOATCITADEL_DEV_DIAGNOSTICS_VERBOSE: "false",
     },
   );
-  await waitForHttp(uiUrl, `${packageName} UI`, 180000, handle);
+  try {
+    await waitForHttp(uiUrl, `${packageName} UI`, 180000, handle);
+  } catch (error) {
+    // A UI that never serves (build failure, or a vite dev server that starts
+    // but never answers) must not leak its process: stop it before propagating
+    // so callers that treat "no UI-served environment" as a conditional skip
+    // (runtime-truth) do not leave a lingering port-holding server behind.
+    await stopProcess(handle).catch(() => undefined);
+    throw error;
+  }
   return {
     handle,
     uiPort,
