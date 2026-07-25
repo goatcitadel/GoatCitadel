@@ -47,6 +47,15 @@ export interface TurnAdmissionHeartbeatHandle {
 export type RecoverDecisionCommittedHeartbeat = (identity: DecisionCommittedHeartbeatRecoveryIdentity) => Promise<void>;
 
 /**
+ * An admission with no request lease has nothing to renew, so it gets a handle
+ * backed by no timer at all. Shared because it carries no per-caller state.
+ */
+const INERT_REQUEST_LEASE_HEARTBEAT: TurnAdmissionHeartbeatHandle = Object.freeze({
+  stop: () => undefined,
+  assertHealthy: () => undefined,
+});
+
+/**
  * Process owner for explicit pre-durable turn leases. The WeakMap only ensures
  * one owner per Storage instance; it is never used to recover turn authority.
  * Every operation still receives the complete admission identity explicitly.
@@ -132,17 +141,26 @@ export class SessionControlRuntimeOwner {
     return this.service.recoverSystemHeartbeatOccurrence(input);
   }
 
+  /**
+   * An armed interval outlives its caller: it fires against whatever the
+   * admission has become, potentially long after the request — or the whole
+   * host — is gone. So resolve the lease up front and only arm a timer when
+   * there is really something to renew. Nothing may be left pending otherwise.
+   */
   public startRequestLeaseHeartbeat(
     admission: ActiveTurnAdmission,
     onFailure?: (error: unknown) => void,
   ): TurnAdmissionHeartbeatHandle {
+    if (!admission) throw new Error("A request-lease heartbeat requires an admission to renew.");
+    if (!admission.requestClaim) return INERT_REQUEST_LEASE_HEARTBEAT;
+
     let stopped = false;
     let failure: unknown;
     const timer = setInterval(() => {
       if (stopped || failure) return;
-      // A heartbeat interval must never be able to crash the host process. If the
-      // admission is nullish (e.g. a stray timer surviving a reflective sweep), stop
-      // cleanly instead of dereferencing undefined.
+      // Defence in depth only: unreachable while the pre-arm checks above hold. A
+      // heartbeat must never be able to crash the host process, so stop cleanly
+      // instead of dereferencing a torn-down admission.
       if (!admission?.requestClaim) {
         stopped = true;
         clearInterval(timer);
