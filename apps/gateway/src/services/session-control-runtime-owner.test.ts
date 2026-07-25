@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ActiveTurnAdmission } from "./chat-turn-types.js";
 import {
   DecisionCommittedHeartbeatAdmissionError,
   createAuthenticatedOperatorAdmissionContext,
@@ -230,6 +231,35 @@ describe("SessionControlRuntimeOwner", () => {
     expect(renewRequestLease).toHaveBeenCalledWith(admission);
     expect(() => handle.assertHealthy()).toThrow(failure);
     handle.stop();
+  });
+
+  it("refuses to arm a request-lease heartbeat without an admission to renew", () => {
+    vi.useFakeTimers();
+    const renewRequestLease = vi.fn();
+    const owner = new SessionControlRuntimeOwner({ renewRequestLease } as unknown as SessionControlService);
+
+    expect(() => owner.startRequestLeaseHeartbeat(undefined as never)).toThrow(
+      /request-lease heartbeat requires an admission/iu,
+    );
+
+    // A rejected call must leave nothing pending: a stray interval outlives the
+    // caller and fires against a torn-down admission long after shutdown.
+    expect(vi.getTimerCount()).toBe(0);
+    expect(renewRequestLease).not.toHaveBeenCalled();
+  });
+
+  it("arms no interval for an admission that holds no request lease", async () => {
+    vi.useFakeTimers();
+    const renewRequestLease = vi.fn();
+    const owner = new SessionControlRuntimeOwner({ renewRequestLease } as unknown as SessionControlService);
+
+    const handle = owner.startRequestLeaseHeartbeat({ identity: {} } as unknown as ActiveTurnAdmission);
+
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(renewRequestLease).not.toHaveBeenCalled();
+    expect(() => handle.assertHealthy()).not.toThrow();
+    expect(() => handle.stop()).not.toThrow();
   });
 
   it("drains expired unbound admissions in bounded stable startup batches", () => {
