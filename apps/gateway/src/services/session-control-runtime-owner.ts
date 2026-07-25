@@ -140,7 +140,10 @@ export class SessionControlRuntimeOwner {
     let failure: unknown;
     const timer = setInterval(() => {
       if (stopped || failure) return;
-      if (!admission.requestClaim) {
+      // A heartbeat interval must never be able to crash the host process. If the
+      // admission is nullish (e.g. a stray timer surviving a reflective sweep), stop
+      // cleanly instead of dereferencing undefined.
+      if (!admission?.requestClaim) {
         stopped = true;
         clearInterval(timer);
         return;
