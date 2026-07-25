@@ -134,6 +134,12 @@ export default tseslint.config(
   {
     files: ["**/*.ts", "**/*.tsx"],
     rules: {
+      // typescript-eslint's eslint-recommended turns no-dupe-keys off because tsc
+      // reports TS1117 instead. That delegation has a hole: every package tsconfig
+      // excludes **/*.test.ts, so duplicate keys in test files are checked by
+      // nobody and surface only as a vite "Duplicate key" build warning. Re-enable
+      // the syntactic check so a silently-overridden key fails lint.
+      "no-dupe-keys": "error",
       "no-console": "warn",
       "@typescript-eslint/no-explicit-any": "warn",
       "max-lines": ["warn", { max: 1000, skipBlankLines: true, skipComments: true }],

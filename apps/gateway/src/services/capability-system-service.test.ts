@@ -5632,7 +5632,9 @@ function createFakeStorage(approvalsById = new Map<string, ApprovalRequest>()) {
         return next;
       }),
     },
-    approvalEvents: realStorage.approvalEvents,
+    // NOTE: approvalEvents deliberately stays the vi.fn() spy declared further
+    // down this literal rather than realStorage.approvalEvents — see the comment
+    // on that stub before wiring it to real storage.
     governanceJourneyEvents: realStorage.governanceJourneyEvents,
     gatewaySql: realStorage.gatewaySql,
     runImmediateTransaction: <T>(callback: () => T): T => realStorage.runImmediateTransaction(callback),
@@ -6116,6 +6118,11 @@ function createFakeStorage(approvalsById = new Map<string, ApprovalRequest>()) {
       },
       markResolved: vi.fn(),
     },
+    // Deliberately a spy rather than realStorage.approvalEvents: every
+    // approval-event assertion in this file goes through
+    // toHaveBeenCalledWith(...) or injects failure via mockImplementationOnce(...),
+    // and no test reads approval_event rows back. A real repository satisfies
+    // neither (it is not a mock, and cannot be made to throw on demand).
     approvalEvents: {
       append: vi.fn(),
     },
