@@ -15,12 +15,12 @@ Before opening a PR that touches any of these areas, stop and read the matching 
 | If the alert / change involves… | Read |
 |---|---|
 | CodeQL rule `js/missing-rate-limiting` on a Fastify route | [§1](#1-codeql-jsmissing-rate-limiting-on-gateway-routes) |
-| `.github/secret_scanning.yml` | [§2](#2-secret-scanning-yml--narrow-allowlist) |
+| `.github/secret_scanning.yml` | [§2](#2-secret_scanningyml--narrow-allowlist) |
 | The token-shaped strings in `apps/gateway/src/services/improvement-common.redaction.security.test.ts` | [§3](#3-synthetic-token-fixtures-in-the-redaction-tests) |
 | A "looks-like-a-secret" string anywhere else in `apps/` or `packages/` | [§4](#4-other-secret-scanning-matches) |
 | Dependabot version/security alerts | [§5](#5-dependabot-triage) |
 | CodeQL rule `js/unhandled-error-in-stream-pipeline` | [§6](#6-codeql-jsunhandled-error-in-stream-pipeline) |
-| Anything under **Security → Code quality** (Standard or AI findings) | [§7](#7-code-quality-standard-findings) / [§8](#8-code-quality-ai-findings) |
+| Anything under **Security → Code quality** (Standard or AI findings) | [§7](#7-code-quality--standard-findings) / [§8](#8-code-quality--ai-findings) |
 
 Do not:
 
