@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { collectProjectReferenceFindings, collectWorkspaceProjectInput } from "./verify-tsconfig-project-references.mjs";
 
 const LARGE_TRACKED_FILE_BYTES = 25 * 1024 * 1024;
 const PERSONAL_PATH_SCAN_BYTES = 1 * 1024 * 1024;
@@ -193,7 +194,10 @@ function collectLiveRepoInput(rootDir) {
 
 function main() {
   const rootDir = process.cwd();
-  const findings = collectRepoHygieneFindings(collectLiveRepoInput(rootDir));
+  const findings = [
+    ...collectRepoHygieneFindings(collectLiveRepoInput(rootDir)),
+    ...collectProjectReferenceFindings(collectWorkspaceProjectInput(rootDir)),
+  ];
   if (findings.length > 0) {
     console.error("Repo hygiene check failed:");
     for (const finding of findings) {
