@@ -1071,9 +1071,31 @@ async function revalidatePosixDirectory(
   const path = snapshotStats(
     await maybeAwaitPosixScan(deadline, async () => lstat(directory.absolutePath, { bigint: true })),
   );
-  assertSamePosixStat(directory.initialStat, descriptor);
-  assertSamePosixStat(descriptor, path);
+  assertSamePosixDirectoryIdentity(directory.initialStat, descriptor);
+  assertSamePosixDirectoryIdentity(descriptor, path);
   assertSafePosixDirectory(descriptor, operatorUid);
+}
+
+/**
+ * Directory revalidation compares stable identity and posture only. A directory's
+ * mtime, ctime, size, and link count change whenever an unrelated entry is created
+ * or removed inside it, which happens continuously for a shared temp parent and for
+ * sibling workers operating alongside a scan — none of which is an integrity signal
+ * for the tree being scanned. The contents that do matter stay pinned independently:
+ * walk() compares the first and second entry-name reads of every scanned directory,
+ * and each directory is held open through a retained O_NOFOLLOW descriptor, so the
+ * node itself cannot be swapped. Files keep the exact-stat comparison.
+ */
+function assertSamePosixDirectoryIdentity(left: PosixStatSnapshot, right: PosixStatSnapshot): void {
+  if (
+    left.device !== right.device ||
+    left.inode !== right.inode ||
+    left.kind !== right.kind ||
+    left.uid !== right.uid ||
+    left.mode !== right.mode
+  ) {
+    throw invalid("Remote worker POSIX filesystem identity changed during scanning.");
+  }
 }
 
 function snapshotStats(stat: BigIntStats): PosixStatSnapshot {
