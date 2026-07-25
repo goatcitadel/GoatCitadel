@@ -13,6 +13,7 @@ import {
 } from "./lib/scenarios/fast-lane.mjs";
 
 const scriptPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "merge-fast-manifests.mjs");
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const allCommandIds = FAST_LANE_COMMANDS.map((command) => command.id);
 
 describe("fast lane command selection", () => {
@@ -79,6 +80,26 @@ describe("fast lane manifest merge", () => {
       assert.ok(fs.existsSync(path.join(outDir, "junit.xml")));
       const perf = JSON.parse(fs.readFileSync(path.join(outDir, "perf", "fast-lane-timing.json"), "utf8"));
       assert.equal(perf.integrityFailure, false);
+    });
+  });
+
+  it("writes the latest-run pointer beside the merged run, not into the repo", () => {
+    withTempDir((tempDir) => {
+      const outDir = path.join(tempDir, "merged");
+      const repoPointer = path.join(repoRoot, "artifacts", "verification", "latest-run.json");
+      const repoPointerBefore = fs.existsSync(repoPointer) ? fs.readFileSync(repoPointer, "utf8") : undefined;
+      writePart(tempDir, "part-a", allCommandIds, "2026-07-25T10:00:00.000Z");
+
+      const result = runMerge([tempDir, `--out=${outDir}`]);
+      assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+
+      const pointer = JSON.parse(fs.readFileSync(path.join(tempDir, "latest-run.json"), "utf8"));
+      assert.equal(pointer.artifactRoot, outDir);
+      // A merge that repointed the repo would send the staging script — which reads
+      // this pointer to find the run it must upload — at a directory in someone
+      // else's temp dir.
+      const repoPointerAfter = fs.existsSync(repoPointer) ? fs.readFileSync(repoPointer, "utf8") : undefined;
+      assert.equal(repoPointerAfter, repoPointerBefore);
     });
   });
 

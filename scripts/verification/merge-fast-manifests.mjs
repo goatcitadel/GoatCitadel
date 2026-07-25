@@ -125,7 +125,13 @@ async function main() {
   await writeJson(path.join(artifactRoot, FAST_LANE_PERF_ARTIFACT), perf);
   await writeText(path.join(artifactRoot, "summary.md"), buildSummaryMarkdown(manifest));
   await writeText(path.join(artifactRoot, "junit.xml"), buildJunitXml(manifest));
-  await writeJson(path.join(artifactsRoot, "latest-run.json"), {
+  // The pointer belongs beside the run it names, not in the repo's artifacts root.
+  // Writing it to the fixed root made every merge — including this script's own
+  // tests, which merge into a temp directory the test then deletes — repoint the
+  // repo at a run that no longer exists. `verify:repo:hygiene` runs those tests in
+  // the same job that later stages its manifest by following the pointer, so the
+  // checks slice silently uploaded a part with no manifest in it.
+  await writeJson(path.join(path.dirname(artifactRoot), "latest-run.json"), {
     runId,
     artifactRoot,
     startedAt: manifest.startedAt,
