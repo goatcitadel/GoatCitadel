@@ -37,6 +37,7 @@ export interface CompletionStreamAggregate {
   finishReason?: string;
   content: string;
   usage?: Record<string, unknown>;
+  modelUsageEventIds: Set<string>;
   toolCalls: Map<number, CompletionStreamToolCallState>;
   providerNativeContent: Array<Record<string, unknown>>;
 }
@@ -356,6 +357,7 @@ export function extractStructuredTextPart(part: unknown): string {
 export function createCompletionStreamAggregate(): CompletionStreamAggregate {
   return {
     content: "",
+    modelUsageEventIds: new Set<string>(),
     toolCalls: new Map<number, CompletionStreamToolCallState>(),
     providerNativeContent: [],
   };
@@ -380,6 +382,7 @@ export function absorbCompletionStreamChunk(
   if (rawChunk.usage && typeof rawChunk.usage === "object") {
     aggregate.usage = rawChunk.usage as Record<string, unknown>;
   }
+  collectModelUsageEventIds(aggregate.modelUsageEventIds, rawChunk);
 
   const choices = Array.isArray(rawChunk.choices) ? (rawChunk.choices as Array<Record<string, unknown>>) : [];
   let textDelta = "";
@@ -533,5 +536,19 @@ export function buildCompletionFromAggregate(aggregate: CompletionStreamAggregat
       },
     ],
     usage: aggregate.usage,
+    ...(aggregate.modelUsageEventIds.size > 0 ? { modelUsageEventIds: [...aggregate.modelUsageEventIds] } : {}),
   };
+}
+
+function collectModelUsageEventIds(target: Set<string>, value: Record<string, unknown>): void {
+  const candidates = [
+    ...(Array.isArray(value.model_usage_event_ids) ? value.model_usage_event_ids : []),
+    ...(Array.isArray(value.modelUsageEventIds) ? value.modelUsageEventIds : []),
+    value.model_usage_event_id,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") continue;
+    const eventId = candidate.trim();
+    if (eventId && eventId.length <= 256 && target.size < 1_000) target.add(eventId);
+  }
 }

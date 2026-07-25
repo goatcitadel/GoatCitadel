@@ -26,6 +26,8 @@ export interface CodeModeAiderExecutionInput {
   aiderAdapter: CodeModeAiderAdapterConfig;
   dockerBackend: CodeModeDockerBackendConfig;
   persister: CodeModeAiderArtifactPersister;
+  beforeDispatch?: () => Promise<void>;
+  onDispatchFailed?: () => Promise<void>;
   signal?: AbortSignal;
   spawnCommand?: typeof spawn;
   terminateProcessTree?: typeof terminateProcessTree;
@@ -92,13 +94,32 @@ export async function executeCodeModeAiderAdapter(
     invocationArgv: invocationPlan.command.argv,
     repositoryRootRelPath,
   });
+  if (input.signal?.aborted) {
+    const reason = formatAbortReason(input.signal);
+    throw new Error(`Aider adapter execution was aborted before dispatch: ${reason}`);
+  }
+  try {
+    await input.beforeDispatch?.();
+  } catch (error) {
+    // No process exists yet, so dispatch is known not to have occurred. Reset
+    // any tentative durable boundary that the hook managed to persist before
+    // it failed (for example, if a diagnostic sink threw after the write).
+    await input.onDispatchFailed?.();
+    throw error;
+  }
   const startedAt = new Date().toISOString();
-  const spawned = (input.spawnCommand ?? spawn)(command.executable, command.args, {
-    cwd: runRoot,
-    env: buildDockerClientEnv(process.env),
-    shell: false,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  let spawned: ChildProcess;
+  try {
+    spawned = (input.spawnCommand ?? spawn)(command.executable, command.args, {
+      cwd: runRoot,
+      env: buildDockerClientEnv(process.env),
+      shell: false,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (error) {
+    await input.onDispatchFailed?.();
+    throw error;
+  }
   const execution = await waitForAiderChild(spawned, {
     runId: input.runId,
     signal: input.signal,

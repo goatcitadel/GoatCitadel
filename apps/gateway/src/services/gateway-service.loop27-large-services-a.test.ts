@@ -7,6 +7,7 @@ vi.mock("node:sqlite", () => ({
 
 import { GatewayService } from "./gateway-service.js";
 import { McpServerStore } from "./mcp-server-store.js";
+import { SharedHostLifecycleService } from "./shared-host-lifecycle-service.js";
 
 function createGatewayHarness(overrides: Record<string, unknown> = {}) {
   const settings = new Map<string, unknown>();
@@ -15,6 +16,7 @@ function createGatewayHarness(overrides: Record<string, unknown> = {}) {
     backgroundTasks: new Set<Promise<unknown>>(),
     chatMessageProjectionBackfillAttempted: new Set<string>(),
     closing: false,
+    sharedHostLifecycle: new SharedHostLifecycleService({ enabled: false }),
     config: {
       rootDir: "F:/code/personal-ai",
       assistant: {
@@ -1209,5 +1211,15 @@ describe("GatewayService loop 27 large service coverage", () => {
     ]);
     await (GatewayService.prototype as any).ensureChatMessageProjection.call(gateway, "session-1");
     expect(gateway.storage.chatMessages.upsertMany).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not promote a transport-only session into canonical Chat metadata on read", () => {
+    const { gateway } = createGatewayHarness();
+    gateway.storage.chatSessionMeta.get.mockReturnValue(undefined);
+
+    expect(() => GatewayService.prototype.requireChatSession.call(gateway, "transport-only")).toThrow(
+      /canonical chat session metadata/i,
+    );
+    expect(gateway.storage.chatSessionMeta.ensure).not.toHaveBeenCalled();
   });
 });

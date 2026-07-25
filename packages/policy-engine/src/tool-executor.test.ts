@@ -169,8 +169,10 @@ describe("executeTool", () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const searchMessages = vi.fn(() => [
       {
+        workspaceId: "workspace-search",
         messageId: "m1",
         sessionId: "sess-search",
+        sequence: 1,
         role: "user",
         content: "deploy the gateway",
         timestamp: "2026-06-01T00:00:00.000Z",
@@ -186,22 +188,30 @@ describe("executeTool", () => {
         ],
       },
     ]);
-    const searchStorage = { chatMessages: { searchMessages } } as unknown as Storage;
+    const searchStorage = {
+      chatMessages: { searchMessages },
+      chatSessionMeta: {
+        get: vi.fn(() => ({ workspaceId: "workspace-search", includeInHistory: true })),
+      },
+    } as unknown as Storage;
 
     const request: ToolInvokeRequest = {
       toolName: "session.search",
       args: { query: "gateway deploy", limit: 5 },
       agentId: "agent",
       sessionId: "sess-search",
+      workspaceId: "workspace-search",
     };
 
     const result = await executeTool(request, policyConfig, searchStorage);
 
     // Default scope is the calling session.
     expect(searchMessages).toHaveBeenCalledWith("gateway deploy", {
+      workspaceId: "workspace-search",
       sessionId: "sess-search",
+      includeHidden: true,
       limit: 5,
-      contextRadius: 2,
+      contextRadius: 0,
     });
     expect(result).toMatchObject({ scope: "session", query: "gateway deploy" });
     expect(Array.isArray(result.hits)).toBe(true);
@@ -211,19 +221,183 @@ describe("executeTool", () => {
   it("session.search with scope:all does not pass a sessionId filter", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const searchMessages = vi.fn(() => []);
-    const searchStorage = { chatMessages: { searchMessages } } as unknown as Storage;
+    const searchStorage = {
+      chatMessages: { searchMessages },
+      chatSessionMeta: {
+        get: vi.fn(() => ({ workspaceId: "workspace-search", includeInHistory: true })),
+      },
+    } as unknown as Storage;
 
     const request: ToolInvokeRequest = {
       toolName: "session.search",
       args: { query: "anything", scope: "all" },
       agentId: "agent",
       sessionId: "sess-search",
+      workspaceId: "workspace-search",
     };
 
     const result = await executeTool(request, policyConfig, searchStorage);
 
-    expect(searchMessages).toHaveBeenCalledWith("anything", { limit: 10, contextRadius: 2 });
+    expect(searchMessages).toHaveBeenCalledWith("anything", {
+      workspaceId: "workspace-search",
+      includeHidden: false,
+      limit: 10,
+      contextRadius: 0,
+    });
     expect(result).toMatchObject({ scope: "all", query: "anything", hits: [] });
+  });
+
+  it("session.search fails closed when storage over-returns foreign or hidden hits", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const hit = (workspaceId: string, sessionId: string, messageId: string, sequence: number) => ({
+      workspaceId,
+      sessionId,
+      messageId,
+      sequence,
+      role: "user" as const,
+      content: `Bearer abcdefghijklmnopqrstuvwxyz ${messageId}`,
+      timestamp: "2026-06-01T00:00:00.000Z",
+      score: -1,
+      context: [],
+    });
+    const searchMessages = vi.fn(() => [
+      hit("workspace-search", "visible", "valid", 1),
+      hit("workspace-foreign", "foreign", "foreign", 2),
+      hit("workspace-search", "hidden", "hidden", 3),
+    ]);
+    const searchStorage = {
+      chatMessages: { searchMessages },
+      chatSessionMeta: {
+        get: vi.fn((sessionId: string) =>
+          sessionId === "foreign"
+            ? { workspaceId: "workspace-foreign", includeInHistory: true }
+            : { workspaceId: "workspace-search", includeInHistory: sessionId !== "hidden" },
+        ),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool(
+      {
+        toolName: "session.search",
+        args: { query: "token", scope: "all" },
+        agentId: "agent",
+        sessionId: "sess-search",
+        workspaceId: "workspace-search",
+      },
+      policyConfig,
+      searchStorage,
+    );
+
+    const hits = result.hits as Array<Record<string, unknown>>;
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({ workspaceId: "workspace-search", sessionId: "visible", messageId: "valid" });
+    expect(JSON.stringify(hits)).not.toContain("abcdefghijklmnopqrstuvwxyz");
+    expect(hits[0]).not.toHaveProperty("content");
+    expect(hits[0]).not.toHaveProperty("context");
+  });
+
+  it("session.history preserves the exact anchor while bounding and redacting provider output", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const oversized = `${"😀".repeat(5_000)} Bearer abcdefghijklmnopqrstuvwxyz`;
+    const source = Array.from({ length: 7 }, (_, index) => ({
+      sequence: index + 1,
+      isAnchor: index === 3,
+      message: {
+        messageId: `m${index + 1}`,
+        sessionId: "sess-search",
+        role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+        actorType: index % 2 === 0 ? ("user" as const) : ("agent" as const),
+        actorId: "private-actor",
+        content: oversized,
+        timestamp: `2026-06-01T00:00:0${index}.000Z`,
+        parts: [{ type: "text" as const, text: "private part" }],
+        attachments: [{ attachmentId: "private-attachment", fileName: "secret.txt" }],
+      },
+    }));
+    const readAnchoredWindow = vi.fn(() => ({
+      anchor: {
+        workspaceId: "workspace-search",
+        sessionId: "sess-search",
+        messageId: "m4",
+        sequence: 4,
+        state: "found" as const,
+      },
+      items: source,
+      snapshotMaxSequence: 7,
+      hasOlder: false,
+      hasNewer: false,
+    }));
+    const historyStorage = {
+      chatMessages: { readAnchoredWindow },
+      chatSessionMeta: {
+        get: vi.fn(() => ({ workspaceId: "workspace-search", includeInHistory: true })),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool(
+      {
+        toolName: "session.history",
+        args: { messageId: "m4", sequence: 4, limit: 7 },
+        agentId: "agent",
+        sessionId: "sess-search",
+        workspaceId: "workspace-search",
+      },
+      policyConfig,
+      historyStorage,
+    );
+
+    const serialized = JSON.stringify(result);
+    const items = result.items as Array<{ isAnchor: boolean; message: { content: string; contentTruncated?: true } }>;
+    expect(items.some((entry) => entry.isAnchor)).toBe(true);
+    expect(Number(result.byteLength)).toBeLessThanOrEqual(64 * 1024);
+    expect(result.truncated).toBe(true);
+    expect(result.hasOlder).toBe(true);
+    expect(result.hasNewer).toBe(true);
+    expect(result.anchorExceededByteLimit).toBeUndefined();
+    expect(items.some((entry) => entry.message.contentTruncated)).toBe(true);
+    expect(serialized).not.toContain("abcdefghijklmnopqrstuvwxyz");
+    expect(serialized).not.toContain("private-attachment");
+    expect(serialized).not.toContain("private-actor");
+    expect(serialized).not.toContain("�");
+  });
+
+  it("session.history denies cross-workspace and hidden cross-session targets", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const readAnchoredWindow = vi.fn();
+    const historyStorage = {
+      chatMessages: { readAnchoredWindow },
+      chatSessionMeta: {
+        get: vi.fn((sessionId: string) =>
+          sessionId === "caller"
+            ? { workspaceId: "workspace-search", includeInHistory: true }
+            : sessionId === "hidden"
+              ? { workspaceId: "workspace-search", includeInHistory: false }
+              : { workspaceId: "workspace-foreign", includeInHistory: true },
+        ),
+      },
+    } as unknown as Storage;
+    const base = {
+      toolName: "session.history",
+      agentId: "agent",
+      sessionId: "caller",
+      workspaceId: "workspace-search",
+    } as const;
+
+    await expect(
+      executeTool(
+        { ...base, args: { sessionId: "foreign", messageId: "m1", sequence: 1 } },
+        policyConfig,
+        historyStorage,
+      ),
+    ).rejects.toThrow(/unavailable/i);
+    await expect(
+      executeTool(
+        { ...base, args: { sessionId: "hidden", messageId: "m1", sequence: 1 } },
+        policyConfig,
+        historyStorage,
+      ),
+    ).rejects.toThrow(/unavailable/i);
+    expect(readAnchoredWindow).not.toHaveBeenCalled();
   });
 
   it("session.search returns empty without hitting the repo for a blank query", async () => {

@@ -152,6 +152,68 @@ describe("MeshService", () => {
     expect(storage.mesh.buildStatus).toHaveBeenCalledWith(false, "tailnet", "node-local");
   });
 
+  it("keeps prior runtime options when an atomic durable replacement fails", () => {
+    const storage = createMeshStorage();
+    const service = new MeshService(storage as never, baseOptions);
+    storage.mesh.issueJoinToken.mockImplementationOnce(() => {
+      throw new Error("join token write failed");
+    });
+
+    expect(() =>
+      service.replaceOptions({
+        ...baseOptions,
+        enabled: false,
+        localNodeId: "node-next",
+        joinToken: "next-token",
+      }),
+    ).toThrow("join token write failed");
+
+    expect(storage.db.transaction).toHaveBeenCalledWith("immediate", expect.any(Function));
+    expect(service.getOptionsSnapshot()).toEqual(baseOptions);
+    service.status();
+    expect(storage.mesh.buildStatus).toHaveBeenLastCalledWith(true, "tailnet", "node-local");
+  });
+
+  it("returns an exact durable rollback handle for a reversible replacement", () => {
+    const storage = createMeshStorage();
+    const service = new MeshService(storage as never, baseOptions);
+    const artifactSnapshot = {
+      nodeId: "node-next",
+      tokenHash: "candidate-token-hash",
+    };
+    storage.mesh.snapshotRuntimeArtifacts.mockReturnValueOnce(artifactSnapshot);
+
+    const replacement = service.replaceOptionsReversibly({
+      ...baseOptions,
+      localNodeId: "node-next",
+      joinToken: "next-token",
+    });
+
+    expect(storage.mesh.snapshotRuntimeArtifacts).toHaveBeenCalledWith("node-next", "next-token");
+    expect(service.getOptionsSnapshot()).toMatchObject({ localNodeId: "node-next", joinToken: "next-token" });
+
+    replacement.rollback();
+
+    expect(storage.mesh.restoreRuntimeArtifacts).toHaveBeenCalledWith(artifactSnapshot);
+    expect(service.getOptionsSnapshot()).toEqual(baseOptions);
+  });
+
+  it("idempotently restores a journaled runtime artifact receipt during startup recovery", () => {
+    const storage = createMeshStorage();
+    const service = new MeshService(storage as never, baseOptions);
+    const snapshot = {
+      nodeId: "candidate-only-node",
+      tokenHash: "a".repeat(64),
+    };
+
+    service.restoreRuntimeArtifactsForRecovery(snapshot);
+    service.restoreRuntimeArtifactsForRecovery(snapshot);
+
+    expect(storage.db.transaction).toHaveBeenCalledTimes(2);
+    expect(storage.mesh.restoreRuntimeArtifacts).toHaveBeenNthCalledWith(1, snapshot);
+    expect(storage.mesh.restoreRuntimeArtifacts).toHaveBeenNthCalledWith(2, snapshot);
+  });
+
   it("uses the service default lease ttl unless the request overrides it", () => {
     const storage = createMeshStorage();
     const service = new MeshService(storage as never, baseOptions);
@@ -224,9 +286,14 @@ describe("MeshService", () => {
 
 function createMeshStorage() {
   return {
+    db: {
+      transaction: vi.fn((_mode, callback: () => unknown) => callback()),
+    },
     mesh: {
       upsertNode: vi.fn(),
       issueJoinToken: vi.fn(),
+      snapshotRuntimeArtifacts: vi.fn((nodeId: string) => ({ nodeId })),
+      restoreRuntimeArtifacts: vi.fn(),
       buildStatus: vi.fn(() => ({
         enabled: true,
         mode: "tailnet",

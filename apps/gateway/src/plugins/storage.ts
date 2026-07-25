@@ -47,7 +47,7 @@ export const gatewayPlugin = fp(async (fastify) => {
   }
   setBootCheckpoint("storage-plugin:postgres-ready");
   const shouldStopBundledPostgres = shouldStopBundledPostgresOnClose();
-  const gateway = createGatewayRuntime(config);
+  const gateway = createGatewayRuntime(config, { sharedHostLifecycle: fastify.sharedHostLifecycle });
   gateway.attachDevDiagnosticsLogger(fastify.log);
   fastify.decorate("gatewayRuntime", gateway);
   fastify.decorate("gatewayAuth", gateway);
@@ -65,11 +65,26 @@ export const gatewayPlugin = fp(async (fastify) => {
 
   // codeql[js/missing-rate-limiting] Startup initialization is not an HTTP route handler.
   fastify.addHook("onReady", async () => {
+    const admission = fastify.sharedHostLifecycle.tryReserve("worker", "gateway:deferred-init");
+    if (!admission.admitted) {
+      fastify.log.warn(
+        { lifecycleState: admission.state },
+        "gateway deferred startup skipped because shared-host admission closed",
+      );
+      return;
+    }
+    const runDeferredInit = async () => {
+      try {
+        if (admission.reservation.signal.aborted) return;
+        await gateway.startDeferredInit(admission.reservation.signal);
+      } finally {
+        admission.reservation.release();
+      }
+    };
     if (shouldStartDeferredInitInBackground()) {
       setImmediate(() => {
         const deferredPhase = startupPhases.open("deferred_init", { owner: "gateway.storage" });
-        void gateway
-          .startDeferredInit()
+        void runDeferredInit()
           .then(() => deferredPhase.close("background"))
           .catch((error: unknown) => {
             deferredPhase.fail(formatStartupPhaseError(error));
@@ -81,7 +96,7 @@ export const gatewayPlugin = fp(async (fastify) => {
     }
     const deferredPhase = startupPhases.open("deferred_init", { owner: "gateway.storage" });
     try {
-      await gateway.startDeferredInit();
+      await runDeferredInit();
       deferredPhase.close("blocking");
     } catch (error) {
       deferredPhase.fail(formatStartupPhaseError(error));

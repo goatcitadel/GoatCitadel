@@ -32,6 +32,36 @@ type ExecuteToolCallResult = {
   userInputPrompt?: ChatUserInputPromptRecord;
 };
 
+/**
+ * Adapts legacy canned tool mocks to the effect-aware runner contract.
+ *
+ * Test doubles return their policy/execution outcome directly and have no
+ * real side effect to fence. An `executed` result therefore represents the
+ * point where the mock crossed into execution, while `approval_required` and
+ * `blocked` remain pre-dispatch policy outcomes.
+ */
+export function createEffectAwareInvokeToolForTest(
+  invokeTool: ChatTurnAgentRunnerDeps["invokeTool"],
+): NonNullable<ChatTurnAgentRunnerDeps["invokeToolWithEffectTruth"]> {
+  return async (request, options) => {
+    const result = await invokeTool(request);
+    if (result.outcome === "executed") {
+      options.executionFence();
+    }
+    return result;
+  };
+}
+
+/** Runner fixture that preserves explicit effect-aware mocks when supplied. */
+export class EffectAwareChatTurnAgentRunner extends ChatTurnAgentRunner {
+  constructor(deps: ChatTurnAgentRunnerDeps) {
+    super({
+      ...deps,
+      invokeToolWithEffectTruth: deps.invokeToolWithEffectTruth ?? createEffectAwareInvokeToolForTest(deps.invokeTool),
+    });
+  }
+}
+
 export function createToolCatalog(toolNames: string[] = ["browser.search"]): ToolCatalogEntry[] {
   return toolNames.map((toolName) => {
     if (toolName === "memory.search") {
@@ -474,6 +504,8 @@ export function createToolCatalog(toolNames: string[] = ["browser.search"]): Too
         },
         examples: [],
         pack: "core",
+        readOnly: true,
+        deterministic: true,
       };
     }
     if (toolName === "session.status") {
@@ -548,9 +580,13 @@ export function createToolCatalog(toolNames: string[] = ["browser.search"]): Too
 
 export function createExecuteToolCallForTest(input: {
   invokeTool: (request: ToolInvokeRequest, options?: { executionFence?: () => void }) => Promise<ToolInvokeResult>;
+  invokeToolWithEffectTruth?: NonNullable<ChatTurnAgentRunnerDeps["invokeToolWithEffectTruth"]>;
   toolNames: string[];
   storage?: ChatTurnAgentRunnerDeps["storage"];
   persistToolArtifact?: NonNullable<ChatTurnAgentRunnerDeps["persistToolArtifact"]>;
+  invokeMcpTool?: NonNullable<ChatTurnAgentRunnerDeps["invokeMcpTool"]>;
+  listMcpBrowserFallbackTargets?: NonNullable<ChatTurnAgentRunnerDeps["listMcpBrowserFallbackTargets"]>;
+  recordRuntimeDecision?: NonNullable<ChatTurnAgentRunnerDeps["recordRuntimeDecision"]>;
   safeWriteFallbackDir?: string;
 }): (input: ExecuteToolCallInput) => Promise<ExecuteToolCallResult> {
   const orchestrator = new ChatTurnAgentRunner({
@@ -561,6 +597,10 @@ export function createExecuteToolCallForTest(input: {
       choices: [{ index: 0, message: { role: "assistant", content: "" } }],
     }),
     invokeTool: input.invokeTool,
+    invokeToolWithEffectTruth: input.invokeToolWithEffectTruth,
+    invokeMcpTool: input.invokeMcpTool,
+    listMcpBrowserFallbackTargets: input.listMcpBrowserFallbackTargets,
+    recordRuntimeDecision: input.recordRuntimeDecision,
     persistToolArtifact: input.persistToolArtifact,
     safeWriteFallbackDir: input.safeWriteFallbackDir,
   });

@@ -354,6 +354,31 @@
         "apiKeyEnv": "GOOGLE_API_KEY"
       },
       {
+        "providerId": "vertex",
+        "label": "Google Vertex AI",
+        "baseUrl": "https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/us-central1/endpoints/openapi",
+        "apiStyle": "openai-chat-completions",
+        "defaultModel": "google/gemini-2.5-flash",
+        "authMode": "google-adc",
+        "googleCloud": {
+          "projectIdEnv": "GOOGLE_CLOUD_PROJECT",
+          "location": "us-central1",
+          "endpointId": "openapi"
+        },
+        "capabilities": {
+          "reasoning": true,
+          "reasoningEfforts": ["none", "low", "medium", "high"]
+        }
+      },
+      {
+        "providerId": "fireworks",
+        "label": "Fireworks AI",
+        "baseUrl": "https://api.fireworks.ai/inference/v1",
+        "apiStyle": "openai-chat-completions",
+        "defaultModel": "accounts/fireworks/models/kimi-k2p6",
+        "apiKeyEnv": "FIREWORKS_API_KEY"
+      },
+      {
         "providerId": "minimax",
         "label": "MiniMax (compatible endpoint)",
         "baseUrl": "https://api.minimax.io/v1",

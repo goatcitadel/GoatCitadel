@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { RefreshCw, Save } from "lucide-react";
-import { fetchSettings, patchSettings } from "@goatcitadel/mission-control-shared/api/client";
+import { fetchSettings, isApiRequestError, patchSettings } from "@goatcitadel/mission-control-shared/api/client";
 import {
   getErrorMessage,
   type Notice,
@@ -30,9 +30,14 @@ export function BudgetSection({ route, navigate }: SettingsSectionProps) {
   const [budgetDraft, setBudgetDraft] = useState<ReturnType<typeof normalizeBudgetMode>>("balanced");
   const [savingBudgetMode, setSavingBudgetMode] = useState(false);
   const savingBudgetModeRef = useRef(false);
+  const preserveBudgetDraftRef = useRef(false);
 
   useEffect(() => {
     if (data) {
+      if (preserveBudgetDraftRef.current) {
+        preserveBudgetDraftRef.current = false;
+        return;
+      }
       setBudgetDraft(normalizeBudgetMode(data.budgetMode));
     }
   }, [data]);
@@ -42,13 +47,27 @@ export function BudgetSection({ route, navigate }: SettingsSectionProps) {
     if (savingBudgetModeRef.current) {
       return;
     }
+    if (!data) {
+      setNotice({ tone: "warning", message: "Reload settings before saving the budget mode." });
+      return;
+    }
     try {
       savingBudgetModeRef.current = true;
       setSavingBudgetMode(true);
-      await patchSettings({ budgetMode: budgetDraft });
+      await patchSettings({ expectedRevision: data.revision, budgetMode: budgetDraft });
       setNotice({ tone: "success", message: "Budget mode saved." });
       await reload();
     } catch (saveError) {
+      if (isApiRequestError(saveError) && saveError.status === 409) {
+        preserveBudgetDraftRef.current = true;
+        await reload();
+        setNotice({
+          tone: "warning",
+          message:
+            "Budget settings changed elsewhere. Your draft is preserved; review the current settings, then save again to retry.",
+        });
+        return;
+      }
       setNotice({ tone: "error", message: getErrorMessage(saveError) });
     } finally {
       savingBudgetModeRef.current = false;
@@ -65,7 +84,9 @@ export function BudgetSection({ route, navigate }: SettingsSectionProps) {
   }
 
   const costEvidencePanel = (
-    <NativeCard density="compact" className="mc-next-settings-panel"
+    <NativeCard
+      density="compact"
+      className="mc-next-settings-panel"
       title="Cost evidence"
       subtitle="Inspect the runtime signals that explain spend, routing, and provider behavior."
     >
@@ -92,7 +113,9 @@ export function BudgetSection({ route, navigate }: SettingsSectionProps) {
       {notice ? <SettingsNotice notice={notice} /> : null}
       <SettingsGrid>
         {data ? (
-          <NativeCard density="compact" className="mc-next-settings-panel"
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
             title="Budget mode"
             subtitle="Set the default cost posture used by runtime settings and first-run defaults."
             stats={[
@@ -125,18 +148,16 @@ export function BudgetSection({ route, navigate }: SettingsSectionProps) {
                 <Save size={16} />
                 {savingBudgetMode ? "Saving..." : "Save budget mode"}
               </NativeButton>
-              <NativeButton
-                variant="secondary"
-                disabled={savingBudgetMode}
-                onClick={() => void reload()}
-              >
+              <NativeButton variant="secondary" disabled={savingBudgetMode} onClick={() => void reload()}>
                 <RefreshCw size={16} />
                 Refresh
               </NativeButton>
             </SettingsButtonRow>
           </NativeCard>
         ) : (
-          <NativeCard density="compact" className="mc-next-settings-panel"
+          <NativeCard
+            density="compact"
+            className="mc-next-settings-panel"
             title="Budget mode unavailable"
             subtitle="Budget mode could not be loaded, but cost and provider evidence remain reachable."
           >

@@ -1,5 +1,5 @@
 ---
-name: GoatCitadel Native Safe Improvement
+name: goatcitadel-native-safe-self-improvement
 description: "Capture corrections, log operational learnings, and draft review-gated improvement proposals for GoatCitadel guidance surfaces. Use when the user corrects GoatCitadel, a tool call fails, a routing choice was weak, a workflow succeeds unusually well, or GoatCitadel finishes a substantial task and should self-review."
 metadata:
   version: "0.2.0"

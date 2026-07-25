@@ -1,8 +1,10 @@
 # OpenClaw Parity Status
 
-Last updated: 2026-05-18
+Last updated: 2026-07-12
 
 This document is the shared status ledger for GoatCitadel parity epics.
+
+The active July 2026 broad-capability program, including Hermes Agent and operator-owned worker parity, is tracked in [OPENCLAW_HERMES_PARITY_PROGRAM.md](./OPENCLAW_HERMES_PARITY_PROGRAM.md). This file remains the contract-aligned ledger for the original OpenClaw epic IDs.
 
 ## Epic Status
 
@@ -26,6 +28,7 @@ This document is the shared status ledger for GoatCitadel parity epics.
 
 - `GC-P1-09` remains the main open parity epic.
 - `GC-P0-06`, `GC-P0-07`, `GC-P1-08`, `GC-P1-10`, `GC-P2-11`, `GC-P2-12`, and `GC-P2-13` stay visible here because they are follow-on reference lanes even after their primary parity work closed.
+- New implementation work should update the active OpenClaw/Hermes register rather than adding another competing parity ledger.
 
 ## Shipped post-1.0
 

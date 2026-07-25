@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CronJobRecord, DurableRunStatus } from "@goatcitadel/contracts";
+import type { CronJobRecord, CronRunRecord, DurableRunStatus } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import {
   computeNextCronRunAt,
@@ -17,6 +17,8 @@ import {
   parseSimpleCronSchedule,
   UPDATE_REVIEW_DAILY_JOB_ID,
 } from "./cron-automation-service.js";
+import { createTestCronSpecOwner } from "./cron-spec-owner.test-utils.js";
+import { SharedHostLifecycleService } from "../shared-host-lifecycle-service.js";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -241,8 +243,48 @@ class FakeCronJobs {
   }
 
   public upsert(job: CronJobRecord): CronJobRecord {
-    this.rows.set(job.jobId, { ...job });
+    this.rows.set(job.jobId, { revision: this.rows.get(job.jobId)?.revision ?? 1, ...job });
     return this.rows.get(job.jobId) as CronJobRecord;
+  }
+
+  public createSpec(job: Omit<CronJobRecord, "revision">): CronJobRecord {
+    return this.upsert({ ...job, revision: 1 });
+  }
+
+  public updateSpecWithRevision(jobId: string, patch: Partial<CronJobRecord>, expectedRevision: number): CronJobRecord {
+    const current = this.rows.get(jobId) as CronJobRecord;
+    const next = { ...current } as Record<string, unknown>;
+    for (const [key, value] of Object.entries(patch)) {
+      if (value === null) delete next[key];
+      else next[key] = value;
+    }
+    return this.upsert({ ...(next as unknown as CronJobRecord), revision: expectedRevision + 1 });
+  }
+
+  public mergeRuntimeTelemetry(jobId: string, patch: Partial<CronJobRecord>): CronJobRecord {
+    const current = this.rows.get(jobId) as CronJobRecord;
+    const next = { ...current } as Record<string, unknown>;
+    for (const [key, value] of Object.entries(patch)) {
+      if (value === null) delete next[key];
+      else next[key] = value;
+    }
+    this.rows.set(jobId, next as unknown as CronJobRecord);
+    return this.rows.get(jobId) as CronJobRecord;
+  }
+
+  public mergeRuntimeTelemetryForExecutionGeneration(
+    jobId: string,
+    executionGeneration: number,
+    patch: Partial<CronJobRecord>,
+  ): CronJobRecord | undefined {
+    if (this.rows.get(jobId)?.executionGeneration !== executionGeneration) {
+      return undefined;
+    }
+    return this.mergeRuntimeTelemetry(jobId, patch);
+  }
+
+  public deleteWithRevision(jobId: string): boolean {
+    return this.rows.delete(jobId);
   }
 
   public delete(jobId: string): boolean {
@@ -250,8 +292,143 @@ class FakeCronJobs {
   }
 }
 
+class FakeCronRuns {
+  private readonly rows = new Map<string, CronRunRecord>();
+
+  public constructor(private readonly jobs: FakeCronJobs) {}
+
+  public get(runId: string): CronRunRecord | undefined {
+    return this.rows.get(runId);
+  }
+
+  public list(): CronRunRecord[] {
+    return [...this.rows.values()];
+  }
+
+  public findByDurableRunId(runId: string): CronRunRecord | undefined {
+    return [...this.rows.values()].find((run) => run.childDurableRunId === runId);
+  }
+
+  public listPendingSettlement(): CronRunRecord[] {
+    return [...this.rows.values()].filter((run) =>
+      ["admitting", "admitted", "running", "waiting"].includes(run.status),
+    );
+  }
+
+  public beginAdmission(input: {
+    runId?: string;
+    jobId: string;
+    admissionKey: string;
+    scheduledFor: string;
+    trigger?: "scheduled_due" | "manual" | "forced";
+  }) {
+    const duplicate = [...this.rows.values()].find(
+      (run) => run.jobId === input.jobId && run.admissionKey === input.admissionKey,
+    );
+    if (duplicate) {
+      return { outcome: "duplicate" as const, run: duplicate };
+    }
+    const job = this.jobs.get(input.jobId) as CronJobRecord;
+    if (job.activeRunId) {
+      return { outcome: "blocked" as const, activeRun: this.rows.get(job.activeRunId) as CronRunRecord };
+    }
+    const runId = input.runId as string;
+    const executionGeneration = (job.executionGeneration ?? 0) + 1;
+    this.jobs.upsert({ ...job, executionGeneration, activeRunId: runId });
+    const now = new Date().toISOString();
+    const run: CronRunRecord = {
+      runId,
+      jobId: input.jobId,
+      admissionKey: input.admissionKey,
+      executionGeneration,
+      trigger: input.trigger ?? "scheduled_due",
+      jobRevision: job.revision,
+      action: job.action,
+      actionSnapshot: { action: job.action, actionConfig: job.actionConfig },
+      scheduledFor: input.scheduledFor,
+      status: "admitting",
+      phase: "child_admission",
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.rows.set(runId, run);
+    return { outcome: "begun" as const, run };
+  }
+
+  public attachDeterministicChild(
+    token: { runId: string; executionGeneration: number },
+    linkage: object,
+  ): CronRunRecord | undefined {
+    const current = this.rows.get(token.runId);
+    if (!current || current.executionGeneration !== token.executionGeneration) return undefined;
+    const next = { ...current, ...linkage, status: "admitted" as const, phase: "chat_execution" as const };
+    this.rows.set(token.runId, next);
+    return next;
+  }
+
+  public admitInlineExecution(token: { runId: string; executionGeneration: number }): CronRunRecord | undefined {
+    const current = this.rows.get(token.runId);
+    if (!current || current.executionGeneration !== token.executionGeneration) return undefined;
+    if (current.status === "running" && current.phase === "chat_execution") return current;
+    const next = { ...current, status: "running" as const, phase: "chat_execution" as const };
+    this.rows.set(token.runId, next);
+    return next;
+  }
+
+  public requireReconciliation(
+    token: { runId: string; executionGeneration: number },
+    input: { reason: string; error?: string },
+  ): CronRunRecord | undefined {
+    return this.terminalize(token, {
+      status: "manual_reconciliation_required",
+      reconciliationReason: input.reason,
+      failure: input.error ? { message: input.error } : undefined,
+    });
+  }
+
+  public advancePhase(
+    token: { runId: string; executionGeneration: number },
+    input: { status: CronRunRecord["status"]; phase: CronRunRecord["phase"]; linkage?: object },
+  ): CronRunRecord | undefined {
+    const current = this.rows.get(token.runId);
+    if (!current || current.executionGeneration !== token.executionGeneration) return undefined;
+    const next = { ...current, ...input.linkage, status: input.status, phase: input.phase } as CronRunRecord;
+    this.rows.set(token.runId, next);
+    return next;
+  }
+
+  public terminalize(
+    token: { runId: string; executionGeneration: number },
+    input: {
+      status: CronRunRecord["status"];
+      outcome?: Record<string, unknown>;
+      failure?: Record<string, unknown>;
+      reconciliationReason?: string;
+      evidenceEnvelopeId?: string;
+      now?: string;
+    },
+  ): CronRunRecord | undefined {
+    const current = this.rows.get(token.runId);
+    if (!current || current.executionGeneration !== token.executionGeneration) return undefined;
+    const next: CronRunRecord = {
+      ...current,
+      ...input,
+      phase: "settlement",
+      settledAt: input.now ?? new Date().toISOString(),
+      updatedAt: input.now ?? new Date().toISOString(),
+    };
+    this.rows.set(token.runId, next);
+    if (input.status !== "manual_reconciliation_required") {
+      const job = this.jobs.get(current.jobId);
+      if (job?.activeRunId === current.runId) this.jobs.upsert({ ...job, activeRunId: undefined });
+    }
+    return next;
+  }
+}
+
 function buildTaskJob(input: Partial<CronJobRecord> & Pick<CronJobRecord, "jobId">): CronJobRecord {
   return {
+    revision: input.revision ?? 1,
     name: input.jobId,
     action: "task",
     schedule: "0 12 * * *",
@@ -268,25 +445,48 @@ function createService(
     isFeatureEnabled?: boolean;
     handlers?: Partial<CronAutomationServiceDeps["runHandlers"]>;
     durableStatuses?: Record<string, DurableRunStatus>;
+    cronRuns?: FakeCronRuns;
+    sharedHostLifecycle?: SharedHostLifecycleService;
   } = {},
 ): CronAutomationService {
   const cronJobs = options.cronJobs ?? new FakeCronJobs();
+  const cronRuns = options.cronRuns ?? new FakeCronRuns(cronJobs);
   return new CronAutomationService({
     storage: {
       db,
       cronJobs,
+      cronRuns,
       runImmediateTransaction: <T>(callback: () => T): T => db.runImmediateTransaction(callback),
       durableRuns: {
         getRun: (runId: string) => {
-          const status = options.durableStatuses?.[runId];
-          return status ? { runId, status } : undefined;
+          const owner = cronRuns.findByDurableRunId(runId);
+          if (!owner) return undefined;
+          const status = options.durableStatuses?.[runId] ?? "queued";
+          const admission = {
+            cronRunId: owner.runId,
+            jobId: owner.jobId,
+            executionGeneration: owner.executionGeneration,
+          };
+          return {
+            runId,
+            workflowKey: "chat.turn.execute",
+            status,
+            payload: { cronAdmission: admission },
+            metadata: {
+              cronRunId: owner.runId,
+              cronJobId: owner.jobId,
+              cronExecutionGeneration: owner.executionGeneration,
+              cronAdmission: admission,
+            },
+          };
         },
       },
     } as unknown as Storage,
-    persistCronJobsConfig: () => {},
+    specOwner: createTestCronSpecOwner(cronJobs),
     publishRealtime,
     requireFeatureEnabled: () => {},
     isFeatureEnabled: () => options.isFeatureEnabled ?? true,
+    sharedHostLifecycle: options.sharedHostLifecycle,
     runHandlers: {
       task: async () => ({ taskId: "task-1" }),
       improvement: async () => {},
@@ -302,7 +502,14 @@ function createService(
         summary: "runtime healthy",
       }),
       noAgent: async () => ({ stdout: "", stderr: "", exitCode: 0, timedOut: false }),
-      agentTurn: async () => ({ mode: "agent_turn", durableRunId: "durable-1", sessionId: "sess-1", turnId: "turn-1" }),
+      agentTurn: async () => ({
+        mode: "agent_turn",
+        durableRunId: "durable-1",
+        sessionId: "sess-1",
+        turnId: "turn-1",
+        userMessageId: "message-user-1",
+        assistantMessageId: "message-assistant-1",
+      }),
       ...options.handlers,
     },
   });
@@ -412,30 +619,28 @@ describe("CronAutomationService job behavior", () => {
     expect(service.listCronJobs()).toHaveLength(4);
     expect(service.getCronJob(" EXISTING-JOB ")).toMatchObject({ jobId: "existing-job" });
     expect(() => service.getCronJob("missing-job")).toThrow("Cron job not found: missing-job");
-    expect(() =>
+    await expect(
       service.createCronJob({ jobId: "existing-job", name: "Existing", schedule: "0 12 * * * UTC" }),
-    ).toThrow("Cron job already exists: existing-job");
+    ).rejects.toThrow("Cron job already exists: existing-job");
 
     await expect(service.runCronJobNow("paused-job")).rejects.toThrow("Cron job is paused: paused-job");
     await expect(service.runCronJobNow("ended-job")).rejects.toThrow("Cron job has ended: ended-job");
     await expect(service.runCronJobNow("custom-job")).rejects.toThrow("Cron job has no runnable handler: custom-job");
   });
 
-  it("creates, updates, pauses, and deletes non-system jobs with persisted realtime events", () => {
+  it("creates, updates, pauses, and deletes non-system jobs with persisted realtime events", async () => {
     const db = new FakeDb();
     const cronJobs = new FakeCronJobs();
     const publishRealtime = vi.fn();
     const service = createService(db, publishRealtime, { cronJobs });
 
-    const created = service.createCronJob({
+    const created = await service.createCronJob({
       jobId: "Daily_Task",
       name: " Daily task ",
       schedule: "0 12 * * * UTC",
       description: " hello ",
       workdir: "F:/code/personal-ai",
       contextFrom: "upstream",
-      lastRunOutput: "previous",
-      lastRunId: "run-1",
     });
     expect(created).toMatchObject({
       jobId: "daily_task",
@@ -445,26 +650,33 @@ describe("CronAutomationService job behavior", () => {
       enabled: true,
       workdir: "F:/code/personal-ai",
       contextFrom: "upstream",
-      lastRunOutput: "previous",
-      lastRunId: "run-1",
     });
     expect(created.nextRunAt).toBeDefined();
 
-    const updated = service.updateCronJob("daily_task", {
-      action: "watchdog",
-      actionConfig: {
-        watchdog: {
-          checkId: "mcp_posture",
-          severityThreshold: "error",
-          notifyHomeChannel: true,
-        },
-      },
-      enabled: false,
-      workdir: null,
-      contextFrom: "upstream-2",
-      lastRunOutput: null,
-      lastRunId: "run-2",
+    cronJobs.mergeRuntimeTelemetry("daily_task", {
+      lastRunAt: "2026-07-12T12:00:00.000Z",
+      lastRunOutput: "newer scheduler result",
+      lastRunId: "scheduler-run-2",
+      lastRunStatus: "ok",
     });
+
+    const updated = await service.updateCronJob(
+      "daily_task",
+      {
+        action: "watchdog",
+        actionConfig: {
+          watchdog: {
+            checkId: "mcp_posture",
+            severityThreshold: "error",
+            notifyHomeChannel: true,
+          },
+        },
+        enabled: false,
+        workdir: null,
+        contextFrom: "upstream-2",
+      },
+      created.revision,
+    );
     expect(updated.actionConfig).toEqual({
       watchdog: {
         checkId: "mcp_posture",
@@ -474,12 +686,19 @@ describe("CronAutomationService job behavior", () => {
     });
     expect(updated.workdir).toBeUndefined();
     expect(updated.contextFrom).toBe("upstream-2");
-    expect(updated.lastRunOutput).toBeUndefined();
-    expect(updated.lastRunId).toBe("run-2");
-    expect(service.updateCronJob("daily_task", { action: "improvement" }).actionConfig).toBeUndefined();
-    expect(service.setCronJobEnabled("daily_task", true).enabled).toBe(true);
-    expect(service.deleteCronJob("daily_task")).toEqual({ deleted: true, jobId: "daily_task" });
-    expect(() => service.deleteCronJob(UPDATE_REVIEW_DAILY_JOB_ID)).toThrow("System cron job cannot be deleted");
+    expect(updated.lastRunOutput).toBe("newer scheduler result");
+    expect(updated.lastRunId).toBe("scheduler-run-2");
+    const changedAction = await service.updateCronJob("daily_task", { action: "improvement" }, updated.revision);
+    expect(changedAction.actionConfig).toBeUndefined();
+    const enabled = await service.setCronJobEnabled("daily_task", true, changedAction.revision);
+    expect(enabled.enabled).toBe(true);
+    await expect(service.deleteCronJob("daily_task", enabled.revision)).resolves.toEqual({
+      deleted: true,
+      jobId: "daily_task",
+    });
+    await expect(service.deleteCronJob(UPDATE_REVIEW_DAILY_JOB_ID, 1)).rejects.toThrow(
+      "System cron job cannot be deleted",
+    );
     expect(publishRealtime).toHaveBeenCalledWith(
       "system",
       "cron",
@@ -487,7 +706,7 @@ describe("CronAutomationService job behavior", () => {
     );
   });
 
-  it("runs due scheduled task jobs once per cron window and skips inactive/system jobs", async () => {
+  it("runs due scheduled task and built-in jobs once per cron window while skipping inactive jobs", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-15T12:03:00.000Z"));
     const db = new FakeDb();
@@ -518,8 +737,8 @@ describe("CronAutomationService job behavior", () => {
       vi.useRealTimers();
     }
 
-    expect(task).toHaveBeenCalledTimes(1);
-    expect(task.mock.calls[0]?.[0]).toMatchObject({ jobId: "due-job" });
+    expect(task).toHaveBeenCalledTimes(2);
+    expect(task.mock.calls.map((call) => call[0].jobId).sort()).toEqual(["due-job", UPDATE_REVIEW_DAILY_JOB_ID].sort());
     expect(cronJobs.get("due-job")?.lastRunAt).toBeDefined();
     expect(cronJobs.get("due-job")?.nextRunAt).toMatch(/^2026-05-15T12:0[0-4]:/);
   });
@@ -622,12 +841,13 @@ describe("CronAutomationService job behavior", () => {
     });
     expect(task).toHaveBeenCalledTimes(1);
     expect(forced).toMatchObject({ jobId: "backoff-due", status: "ok", force: true });
-    expect(cronJobs.get("backoff-due")).toMatchObject({
+    const clearedBackoffJob = cronJobs.get("backoff-due");
+    expect(clearedBackoffJob).toMatchObject({
       lastRunStatus: "ok",
       failureCount: 0,
-      backoffUntil: undefined,
-      lastFailure: undefined,
     });
+    expect(clearedBackoffJob?.backoffUntil).toBeUndefined();
+    expect(clearedBackoffJob?.lastFailure).toBeUndefined();
   });
 
   it("runs non-task handlers and records low-severity manual review entries when enabled", async () => {
@@ -691,7 +911,7 @@ describe("CronAutomationService job behavior", () => {
     });
 
     try {
-      expect(() =>
+      await expect(
         service.createCronJob({
           jobId: "new-no-agent",
           name: "New no-agent",
@@ -699,7 +919,7 @@ describe("CronAutomationService job behavior", () => {
           schedule: "0 12 * * * UTC",
           actionConfig: { noAgent: { command: "echo" } },
         }),
-      ).toThrow(EXPERIMENTAL_NO_AGENT_CRON_ENV);
+      ).rejects.toThrow(EXPERIMENTAL_NO_AGENT_CRON_ENV);
 
       cronJobs.upsert(
         buildTaskJob({
@@ -713,7 +933,9 @@ describe("CronAutomationService job behavior", () => {
       await expect(service.runCronJobNow("legacy-no-agent")).rejects.toThrow(EXPERIMENTAL_NO_AGENT_CRON_ENV);
       await service.runDueTaskCronJobs(new Date("2026-05-15T12:03:00.000Z"));
       expect(noAgent).not.toHaveBeenCalled();
-      expect(service.updateCronJob("legacy-no-agent", { enabled: false }).enabled).toBe(false);
+      await expect(service.updateCronJob("legacy-no-agent", { enabled: false }, 1)).resolves.toMatchObject({
+        enabled: false,
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -748,6 +970,71 @@ describe("CronAutomationService job behavior", () => {
     expect(cronJobs.get("curator-weekly")?.lastRunAt).toBeDefined();
     expect(cronJobs.get("curator-weekly")?.lastRunId).toBeDefined();
     expect(cronJobs.get("curator-weekly")?.nextRunAt).toBeDefined();
+  });
+
+  it("executes one curator effect and one terminal canonical run under concurrent same-tick sweeps", async () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-05-17T02:03:00.000Z");
+    vi.setSystemTime(now);
+    const db = new FakeDb();
+    const cronJobs = new FakeCronJobs();
+    const cronRuns = new FakeCronRuns(cronJobs);
+    let releaseCurator: (() => void) | undefined;
+    const curatorGate = new Promise<void>((resolve) => {
+      releaseCurator = resolve;
+    });
+    const curator = vi.fn(() => curatorGate);
+    const service = createService(db, vi.fn(), {
+      cronJobs,
+      cronRuns,
+      handlers: { curator },
+    });
+    cronJobs.upsert(
+      buildTaskJob({
+        jobId: "curator-weekly-concurrent",
+        action: "curator",
+        schedule: "0 2 * * 0 UTC",
+      }),
+    );
+
+    try {
+      const firstSweep = service.runDueTaskCronJobs(now);
+      expect(curator).toHaveBeenCalledTimes(1);
+      const overlappingSweep = service.runDueTaskCronJobs(now);
+      await overlappingSweep;
+      releaseCurator?.();
+      await firstSweep;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(curator).toHaveBeenCalledTimes(1);
+    expect(cronRuns.list()).toHaveLength(1);
+    expect(cronRuns.list()[0]).toMatchObject({
+      jobId: "curator-weekly-concurrent",
+      status: "completed",
+      phase: "settlement",
+      trigger: "scheduled_due",
+    });
+  });
+
+  it("records a manual curator invocation as one effect and one terminal canonical run", async () => {
+    const db = new FakeDb();
+    const cronJobs = new FakeCronJobs();
+    const cronRuns = new FakeCronRuns(cronJobs);
+    const curator = vi.fn(async () => undefined);
+    const service = createService(db, vi.fn(), { cronJobs, cronRuns, handlers: { curator } });
+    cronJobs.upsert(buildTaskJob({ jobId: "curator-manual", action: "curator" }));
+
+    const result = await service.runCronJobNow("curator-manual");
+
+    expect(curator).toHaveBeenCalledTimes(1);
+    expect(cronRuns.list()).toHaveLength(1);
+    expect(cronRuns.get(result.runId)).toMatchObject({
+      status: "completed",
+      phase: "settlement",
+      trigger: "manual",
+    });
   });
 
   it("records watchdog review items only when the configured threshold is met", async () => {
@@ -789,14 +1076,18 @@ describe("CronAutomationService job behavior", () => {
         expect.objectContaining({ type: "watchdog_check_attention_required", status: "warning" }),
       );
 
-      service.updateCronJob("watchdog-job", {
-        actionConfig: {
-          watchdog: {
-            checkId: "runtime_health",
-            severityThreshold: "warning",
+      await service.updateCronJob(
+        "watchdog-job",
+        {
+          actionConfig: {
+            watchdog: {
+              checkId: "runtime_health",
+              severityThreshold: "warning",
+            },
           },
         },
-      });
+        1,
+      );
       const warningResult = await service.runCronJobNow("watchdog-job");
       expect(recordSpy).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -854,7 +1145,7 @@ describe("CronAutomationService job behavior", () => {
       details: { count: 3 },
     });
 
-    const created = service.createCronJob({
+    const created = await service.createCronJob({
       jobId: "watchdog-default",
       name: "Watchdog default",
       action: "watchdog",
@@ -877,9 +1168,10 @@ function makeServiceWithNoAgent(opts: {
 }): CronAutomationService {
   const db = new FakeDb();
   const cronJobs = new FakeCronJobs();
+  const cronRuns = new FakeCronRuns(cronJobs);
   const deps: CronAutomationServiceDeps = {
-    storage: { db, cronJobs } as unknown as Storage,
-    persistCronJobsConfig: () => {},
+    storage: { db, cronJobs, cronRuns } as unknown as Storage,
+    specOwner: createTestCronSpecOwner(cronJobs),
     publishRealtime: opts.realtime,
     requireFeatureEnabled: () => {},
     isFeatureEnabled: () => false,
@@ -901,12 +1193,12 @@ function makeServiceWithNoAgent(opts: {
 }
 
 describe("createCronJob workdir + contextFrom", () => {
-  it("stores workdir and contextFrom on the persisted record", () => {
+  it("stores workdir and contextFrom on the persisted record", async () => {
     const service = makeServiceWithNoAgent({
       realtime: vi.fn(),
       runner: async () => ({ stdout: "", stderr: "", exitCode: 0, timedOut: false }),
     });
-    const saved = service.createCronJob({
+    const saved = await service.createCronJob({
       jobId: "chained",
       name: "Chained",
       action: "task",
@@ -926,9 +1218,10 @@ describe("contextFrom resolution", () => {
     task: CronAutomationServiceDeps["runHandlers"]["task"];
   }): CronAutomationService {
     const db = new FakeDb();
+    const cronRuns = new FakeCronRuns(opts.cronJobs);
     const deps: CronAutomationServiceDeps = {
-      storage: { db, cronJobs: opts.cronJobs } as unknown as Storage,
-      persistCronJobsConfig: () => {},
+      storage: { db, cronJobs: opts.cronJobs, cronRuns } as unknown as Storage,
+      specOwner: createTestCronSpecOwner(opts.cronJobs),
       publishRealtime: opts.realtime,
       requireFeatureEnabled: () => {},
       isFeatureEnabled: () => false,
@@ -1025,6 +1318,116 @@ describe("contextFrom resolution", () => {
   });
 });
 
+describe("shared-host cron admission", () => {
+  it("persists canonical inline admission before the task handler can perform side effects", async () => {
+    const db = new FakeDb();
+    const cronJobs = new FakeCronJobs();
+    cronJobs.upsert(buildTaskJob({ jobId: "canonical-inline" }));
+    const cronRuns = new FakeCronRuns(cronJobs);
+    let observedDuringHandler: CronRunRecord | undefined;
+    const service = createService(db, vi.fn(), {
+      cronJobs,
+      cronRuns,
+      handlers: {
+        task: async () => {
+          const activeRunId = cronJobs.get("canonical-inline")?.activeRunId;
+          observedDuringHandler = activeRunId ? cronRuns.get(activeRunId) : undefined;
+          return { taskId: "task-inline" };
+        },
+      },
+    });
+
+    const result = await service.runCronJobNow("canonical-inline", {
+      admissionKey: "manual:inline-proof",
+      scheduledFor: "2026-07-14T05:00:00.000Z",
+    });
+
+    expect(observedDuringHandler).toMatchObject({
+      runId: result.runId,
+      status: "running",
+      phase: "chat_execution",
+      admissionKey: "manual:inline-proof",
+    });
+    expect(cronRuns.get(result.runId)).toMatchObject({ status: "completed", phase: "settlement" });
+    expect(cronJobs.get("canonical-inline")?.activeRunId).toBeUndefined();
+  });
+
+  it("rejects a cron fire before canonical reservation or handler side effects once drain begins", async () => {
+    const db = new FakeDb();
+    const cronJobs = new FakeCronJobs();
+    cronJobs.upsert(buildTaskJob({ jobId: "drain-rejected" }));
+    const cronRuns = new FakeCronRuns(cronJobs);
+    const task = vi.fn(async () => ({ taskId: "should-not-run" }));
+    const lifecycle = new SharedHostLifecycleService({ enabled: true });
+    lifecycle.markAccepting();
+    await lifecycle.drain({ mode: "pause", timeoutMs: 10, reason: "scale_down", actorId: "ops" });
+    const service = createService(db, vi.fn(), {
+      cronJobs,
+      cronRuns,
+      handlers: { task },
+      sharedHostLifecycle: lifecycle,
+    });
+    await expect(service.runCronJobNow("drain-rejected")).rejects.toMatchObject({
+      code: "SHARED_HOST_ADMISSION_CLOSED",
+      lifecycleState: "quiesced",
+    });
+    expect(task).not.toHaveBeenCalled();
+    expect(cronRuns.listPendingSettlement()).toEqual([]);
+  });
+
+  it("holds an inline occurrence for reconciliation after restart instead of replaying its side effect", async () => {
+    const db = new FakeDb();
+    const cronJobs = new FakeCronJobs();
+    cronJobs.upsert(buildTaskJob({ jobId: "restart-inline" }));
+    const cronRuns = new FakeCronRuns(cronJobs);
+    const begun = cronRuns.beginAdmission({
+      runId: "run-before-restart",
+      jobId: "restart-inline",
+      admissionKey: "scheduled:2026-07-14T05:00:00.000Z",
+      scheduledFor: "2026-07-14T05:00:00.000Z",
+      trigger: "scheduled_due",
+    });
+    if (begun.outcome !== "begun") throw new Error("expected canonical admission");
+    cronRuns.admitInlineExecution({
+      runId: begun.run.runId,
+      executionGeneration: begun.run.executionGeneration,
+    });
+    const task = vi.fn(async () => ({ taskId: "must-not-replay" }));
+    const service = createService(db, vi.fn(), { cronJobs, cronRuns, handlers: { task } });
+
+    const recovery = await service.recoverPendingAgentTurnCronRuns();
+
+    expect(recovery).toMatchObject({ checkedCount: 1, settledCount: 1, reconciliationCount: 1 });
+    expect(cronRuns.get("run-before-restart")).toMatchObject({
+      status: "manual_reconciliation_required",
+      failure: { message: "restart_after_inline_admission" },
+    });
+    expect(task).not.toHaveBeenCalled();
+  });
+
+  it("does not run a recovery sweep after the shared host has quiesced", async () => {
+    const db = new FakeDb();
+    const cronJobs = new FakeCronJobs();
+    cronJobs.upsert(buildTaskJob({ jobId: "quiesced-recovery" }));
+    const cronRuns = new FakeCronRuns(cronJobs);
+    const begun = cronRuns.beginAdmission({
+      runId: "run-quiesced-recovery",
+      jobId: "quiesced-recovery",
+      admissionKey: "scheduled:quiesced",
+      scheduledFor: "2026-07-14T05:00:00.000Z",
+    });
+    if (begun.outcome !== "begun") throw new Error("expected canonical admission");
+    cronRuns.admitInlineExecution({ runId: begun.run.runId, executionGeneration: begun.run.executionGeneration });
+    const lifecycle = new SharedHostLifecycleService({ enabled: true });
+    lifecycle.markAccepting();
+    await lifecycle.drain({ mode: "pause", timeoutMs: 10, reason: "scale_down", actorId: "ops" });
+    const service = createService(db, vi.fn(), { cronJobs, cronRuns, sharedHostLifecycle: lifecycle });
+    const recovery = await service.recoverPendingAgentTurnCronRuns();
+    expect(recovery).toMatchObject({ checkedCount: 0, errors: [{ runId: "shared-host-admission" }] });
+    expect(cronRuns.get("run-quiesced-recovery")).toMatchObject({ status: "running" });
+  });
+});
+
 describe("no_agent cron action", () => {
   beforeEach(() => {
     vi.stubEnv(EXPERIMENTAL_NO_AGENT_CRON_ENV, "true");
@@ -1090,7 +1493,7 @@ describe("no_agent cron action", () => {
 });
 
 describe("agent_turn cron action", () => {
-  it("dispatches runCronJobNow to the agentTurn handler and emits the enqueued event", async () => {
+  it("admits runCronJobNow under a canonical token without reporting enqueue as success", async () => {
     const db = new FakeDb();
     const cronJobs = new FakeCronJobs();
     const publishRealtime = vi.fn();
@@ -1099,6 +1502,8 @@ describe("agent_turn cron action", () => {
       durableRunId: "durable-99",
       sessionId: "sess-cron",
       turnId: "turn-99",
+      userMessageId: "message-user-99",
+      assistantMessageId: "message-assistant-99",
       profilePosture: "creator_intersection" as const,
     }));
     const service = createService(db, publishRealtime, {
@@ -1107,7 +1512,7 @@ describe("agent_turn cron action", () => {
       durableStatuses: { "durable-99": "running" },
     });
 
-    const created = service.createCronJob({
+    const created = await service.createCronJob({
       jobId: "agent-turn-job",
       name: "Agent turn job",
       action: "agent_turn",
@@ -1125,7 +1530,7 @@ describe("agent_turn cron action", () => {
     const result = await service.runCronJobNow("agent-turn-job");
     expect(result).toMatchObject({
       jobId: "agent-turn-job",
-      status: "ok",
+      status: "pending",
       childDurableRunId: "durable-99",
       childDurableStatus: "running",
       childTurnId: "turn-99",
@@ -1135,12 +1540,17 @@ describe("agent_turn cron action", () => {
     expect(agentTurn.mock.calls[0]?.[0]).toMatchObject({
       runId: result.runId,
       config: { prompt: "Summarize alerts" },
+      cronRun: {
+        runId: result.runId,
+        jobId: "agent-turn-job",
+        executionGeneration: 1,
+      },
     });
     expect(publishRealtime).toHaveBeenCalledWith(
       "cron_job_run",
       "cron",
       expect.objectContaining({
-        type: "cron_agent_turn_enqueued",
+        type: "cron_agent_turn_admitted",
         jobId: "agent-turn-job",
         durableRunId: "durable-99",
         childDurableRunId: "durable-99",
@@ -1150,29 +1560,19 @@ describe("agent_turn cron action", () => {
         profilePosture: "creator_intersection",
       }),
     );
-    expect(cronJobs.get("agent-turn-job")?.lastRunStatus).toBe("ok");
+    expect(cronJobs.get("agent-turn-job")?.lastRunStatus).toBeUndefined();
     const lookup = service.findCronRunById(result.runId);
     expect(lookup).toMatchObject({
       childDurableRunId: "durable-99",
       childDurableStatus: "running",
       childTurnId: "turn-99",
-      profilePosture: "creator_intersection",
     });
-    expect(service.listCronReviewQueue()[0]).toMatchObject({
-      jobId: "agent-turn-job",
-      runId: result.runId,
-      summary: expect.objectContaining({
-        trigger: "manual_run",
-        childDurableRunId: "durable-99",
-        childTurnId: "turn-99",
-        profilePosture: "creator_intersection",
-      }),
-    });
+    expect(service.listCronReviewQueue()).toEqual([]);
   });
 
-  it("rejects creating an agent_turn job with an empty prompt", () => {
+  it("rejects creating an agent_turn job with an empty prompt", async () => {
     const service = createService(new FakeDb(), vi.fn());
-    expect(() =>
+    await expect(
       service.createCronJob({
         jobId: "agent-turn-empty",
         name: "Agent turn empty",
@@ -1180,14 +1580,21 @@ describe("agent_turn cron action", () => {
         schedule: "0 12 * * * UTC",
         actionConfig: { agentTurn: { prompt: "   " } },
       }),
-    ).toThrow("non-empty actionConfig.agentTurn.prompt");
+    ).rejects.toThrow("non-empty actionConfig.agentTurn.prompt");
   });
 
   it("includes due agent_turn jobs in the scheduled due-scan", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-15T12:03:00.000Z"));
     const cronJobs = new FakeCronJobs();
-    const agentTurn = vi.fn(async () => ({ mode: "agent_turn" as const, durableRunId: "durable-due" }));
+    const agentTurn = vi.fn(async () => ({
+      mode: "agent_turn" as const,
+      durableRunId: "durable-due",
+      sessionId: "session-due",
+      turnId: "turn-due",
+      userMessageId: "message-user-due",
+      assistantMessageId: "message-assistant-due",
+    }));
     const service = createService(new FakeDb(), vi.fn(), { cronJobs, handlers: { agentTurn } });
     cronJobs.upsert(
       buildTaskJob({
@@ -1205,9 +1612,10 @@ describe("agent_turn cron action", () => {
       vi.useRealTimers();
     }
 
-    expect(summary).toMatchObject({ dueCount: 1, ranCount: 1 });
+    expect(summary).toMatchObject({ dueCount: 1, ranCount: 0, pendingCount: 1 });
+    expect(summary.items).toContainEqual(expect.objectContaining({ jobId: "agent-turn-due", status: "pending" }));
     expect(agentTurn).toHaveBeenCalledTimes(1);
-    expect(cronJobs.get("agent-turn-due")?.lastRunStatus).toBe("ok");
+    expect(cronJobs.get("agent-turn-due")?.lastRunStatus).toBeUndefined();
   });
 
   it("records a review warning when an agent_turn run fails closed to inbox", async () => {

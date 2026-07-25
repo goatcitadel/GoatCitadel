@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -15,7 +16,7 @@ import type {
 import { clampInt } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { buildBundledDockerContainerName } from "../bundled-postgres-runtime.js";
-import { verifyBackupAtPath } from "./gateway/backup-verify.js";
+import { isWindowsEquivalentBackupPath, verifyBackupAtPath } from "./gateway/backup-verify.js";
 import type { GatewayRuntimeConfig } from "../config.js";
 import { resolveGatewayPostgresConnectionString } from "../postgres-runtime-config.js";
 import { resolveBackupDirectory, resolveBackupPathWithinDirectory } from "./backup-paths.js";
@@ -34,6 +35,16 @@ export interface BackupRetentionDeps {
   readonly config: GatewayRuntimeConfig;
 }
 
+/** Secret-free trust result for the newest published backup directory. */
+export interface LatestBackupTrustInspection {
+  observedAt: string;
+  backupId?: string;
+  createdAt?: string;
+  verified: boolean;
+  contractVerified: boolean;
+  issueCodes: string[];
+}
+
 export async function restoreBackupOffline(input: {
   rootDir: string;
   filePath: string;
@@ -49,43 +60,53 @@ export async function restoreBackupOffline(input: {
   if (!resolvedBackup.ok) {
     throw new Error(resolvedBackup.error);
   }
-
-  const verification = await verifyBackupOffline({
-    filePath: input.filePath,
-    backupDir: input.backupDir,
-  });
-  if (!verification.verified || !verification.manifest) {
-    throw new Error(formatBackupVerifyFailure(verification));
-  }
-
-  const payloadDir = path.join(resolvedBackup.resolvedPath, "payload");
-  const manifest = verification.manifest;
-  if (manifest.files.some((file) => file.path === "database/postgres.dump")) {
-    throw new Error(
-      "Postgres backups must be restored with pg_restore; file-copy restore is only available for SQLite backups.",
-    );
-  }
-
-  let filesRestored = 0;
-  for (const file of manifest.files) {
-    if (isEphemeralSqliteSidecar(file.path)) {
-      continue;
+  const restoreStageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-backup-restore-"));
+  try {
+    // Bind verification and restore to one private materialized copy. The
+    // operator-selected archive may otherwise change after verification and
+    // before file-copy restore consumes it.
+    const stagedBackupPath = path.join(restoreStageRoot, "backup");
+    await fs.cp(resolvedBackup.resolvedPath, stagedBackupPath, {
+      recursive: true,
+      force: false,
+      errorOnExist: true,
+    });
+    const verification = await verifyBackupAtPath(stagedBackupPath);
+    if (!verification.verified || !verification.manifest) {
+      throw new Error(formatBackupVerifyFailure(verification));
     }
-    const source = path.resolve(payloadDir, file.path);
-    ensurePathWithinRoot(source, payloadDir);
-    const target = path.resolve(runtimeRoot, file.path);
-    ensurePathWithinRoot(target, runtimeRoot);
-    await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.copyFile(source, target);
-    await restrictCredentialFilePermsIfSensitive(target, file.path);
-    filesRestored += 1;
-  }
 
-  return {
-    restored: true,
-    backupId: manifest.backupId,
-    filesRestored,
-  };
+    const payloadDir = path.join(stagedBackupPath, "payload");
+    const manifest = verification.manifest;
+    if (manifest.files.some((file) => isWindowsEquivalentBackupPath(file.path, "database/postgres.dump"))) {
+      throw new Error(
+        "Postgres backups must be restored with pg_restore; file-copy restore is only available for SQLite backups.",
+      );
+    }
+
+    let filesRestored = 0;
+    for (const file of manifest.files) {
+      if (isEphemeralSqliteSidecar(file.path)) {
+        continue;
+      }
+      const source = path.resolve(payloadDir, file.path);
+      ensurePathWithinRoot(source, payloadDir);
+      const target = path.resolve(runtimeRoot, file.path);
+      ensurePathWithinRoot(target, runtimeRoot);
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.copyFile(source, target);
+      await restrictCredentialFilePermsIfSensitive(target, file.path);
+      filesRestored += 1;
+    }
+
+    return {
+      restored: true,
+      backupId: manifest.backupId,
+      filesRestored,
+    };
+  } finally {
+    await fs.rm(restoreStageRoot, { recursive: true, force: true }).catch(() => undefined);
+  }
 }
 
 export async function verifyBackupAtRuntime(
@@ -142,6 +163,45 @@ export class BackupRetentionService {
     return manifests.slice(0, Math.max(1, Math.min(limit, 500)));
   }
 
+  /**
+   * Verify the newest published backup against its manifest without exposing
+   * the runtime backup directory, payload paths, or issue text to callers.
+   */
+  public async inspectLatestBackupTrust(): Promise<LatestBackupTrustInspection | undefined> {
+    const backupDir = this.getBackupDirectory();
+    const latest = (await listFilesSafe(backupDir))
+      .filter((entry) => entry.isDirectory() && entry.name.endsWith(".backup"))
+      .sort((left, right) => right.mtimeMs - left.mtimeMs)[0];
+    if (!latest) {
+      return undefined;
+    }
+
+    const observedAt = new Date().toISOString();
+    const inspectionRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-backup-trust-"));
+    try {
+      const publishedBackupPath = path.join(backupDir, latest.name);
+      const selectedIdentity = await assertStablePublishedBackupDirectory(publishedBackupPath, backupDir, latest);
+      const stagedBackupPath = path.join(inspectionRoot, "backup");
+      await fs.cp(publishedBackupPath, stagedBackupPath, {
+        recursive: true,
+        force: false,
+        errorOnExist: true,
+      });
+      await assertStablePublishedBackupDirectory(publishedBackupPath, backupDir, selectedIdentity);
+      const verification = await verifyBackupAtPath(stagedBackupPath);
+      return {
+        observedAt,
+        backupId: verification.backupId,
+        createdAt: verification.manifest?.createdAt,
+        verified: verification.verified,
+        contractVerified: verification.contractVerified,
+        issueCodes: verification.issues.slice(0, 20).map((issue) => issue.code.slice(0, 80)),
+      };
+    } finally {
+      await fs.rm(inspectionRoot, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
+
   public async createBackup(input?: { name?: string; outputPath?: string }): Promise<BackupCreateResponse> {
     const now = new Date();
     const timestamp = formatBackupTimestamp(now);
@@ -154,65 +214,61 @@ export class BackupRetentionService {
     const tempDir = `${outputPath}.tmp-${randomUUID().slice(0, 8)}`;
     ensurePathWithinRoot(tempDir, backupDir);
     const payloadDir = path.join(tempDir, "payload");
+    let published = false;
+    try {
+      await fs.mkdir(path.dirname(outputPath), { recursive: true });
+      await fs.rm(tempDir, { recursive: true, force: true });
+      await fs.mkdir(payloadDir, { recursive: true });
 
-    await fs.mkdir(path.dirname(outputPath), { recursive: true });
-    await fs.rm(tempDir, { recursive: true, force: true });
-    await fs.mkdir(payloadDir, { recursive: true });
-
-    if (this.config.assistant.database.driver === "postgres") {
-      await this.exportPostgresDump(payloadDir);
-      for (const includePath of this.buildBackupIncludePaths()) {
-        const source = path.resolve(this.config.rootDir, includePath);
-        const target = path.join(payloadDir, includePath);
-        await copyPathIfExists(source, target);
+      if (this.config.assistant.database.driver === "postgres") {
+        await this.exportPostgresDump(payloadDir);
+        for (const includePath of this.buildBackupIncludePaths()) {
+          const source = path.resolve(this.config.rootDir, includePath);
+          const target = path.join(payloadDir, includePath);
+          await copyPathIfExists(source, target);
+        }
+      } else {
+        await this.snapshotSqliteDatabase(payloadDir);
+        for (const includePath of this.buildBackupIncludePaths()) {
+          const source = path.resolve(this.config.rootDir, includePath);
+          const target = path.join(payloadDir, includePath);
+          await copyPathIfExists(source, target);
+        }
       }
-    } else {
-      this.checkpointSqliteBeforeBackup();
-      const includePaths = this.buildBackupIncludePaths();
-      for (const includePath of includePaths) {
-        const source = path.resolve(this.config.rootDir, includePath);
-        const target = path.join(payloadDir, includePath);
-        await copyPathIfExists(source, target);
+
+      const files = await collectBackupFileRecords(payloadDir);
+      const manifest: BackupManifestRecord = {
+        backupId,
+        createdAt: now.toISOString(),
+        appVersion: readAppVersion(),
+        gitRef: readGitRef(this.config.rootDir),
+        rootDir: this.config.rootDir,
+        files,
+        contractCoverage: buildBackupManifestContractCoverage(files),
+      };
+      const manifestPath = path.join(tempDir, "manifest.json");
+      const manifestRaw = `${JSON.stringify(manifest, null, 2)}\n`;
+      await fs.writeFile(manifestPath, manifestRaw, "utf8");
+
+      await fs.rm(outputPath, { recursive: true, force: true });
+      await fs.rename(tempDir, outputPath);
+      published = true;
+
+      return {
+        backupId,
+        outputPath,
+        bytes: files.reduce((sum, item) => sum + item.sizeBytes, 0) + Buffer.byteLength(manifestRaw, "utf8"),
+        manifest,
+      };
+    } finally {
+      if (!published) {
+        await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
       }
     }
-
-    const files = await collectBackupFileRecords(payloadDir);
-    const manifest: BackupManifestRecord = {
-      backupId,
-      createdAt: now.toISOString(),
-      appVersion: readAppVersion(),
-      gitRef: readGitRef(this.config.rootDir),
-      rootDir: this.config.rootDir,
-      files,
-      contractCoverage: buildBackupManifestContractCoverage(files),
-    };
-    const manifestPath = path.join(tempDir, "manifest.json");
-    const manifestRaw = `${JSON.stringify(manifest, null, 2)}\n`;
-    await fs.writeFile(manifestPath, manifestRaw, "utf8");
-
-    await fs.rm(outputPath, { recursive: true, force: true });
-    await fs.rename(tempDir, outputPath);
-
-    return {
-      backupId,
-      outputPath,
-      bytes: files.reduce((sum, item) => sum + item.sizeBytes, 0) + Buffer.byteLength(manifestRaw, "utf8"),
-      manifest,
-    };
   }
 
   public async verifyBackup(input: { filePath: string }): Promise<BackupVerifyResponse> {
     return verifyBackupAtRuntime(this.config, input);
-  }
-
-  private checkpointSqliteBeforeBackup(): void {
-    try {
-      this.gatewaySql.exec("PRAGMA wal_checkpoint(TRUNCATE);");
-    } catch (error) {
-      throw new Error(`failed to checkpoint sqlite before backup: ${(error as Error).message}`, {
-        cause: error,
-      });
-    }
   }
 
   // ── Retention ────────────────────────────────────────────────────────
@@ -310,14 +366,35 @@ export class BackupRetentionService {
   private buildBackupIncludePaths(): string[] {
     const paths = new Set<string>();
     if (this.config.assistant.database.driver === "sqlite") {
-      paths.add(path.relative(this.config.rootDir, this.config.dbPath).replaceAll("\\", "/"));
-      paths.add(`${path.relative(this.config.rootDir, this.config.dbPath).replaceAll("\\", "/")}-wal`);
-      paths.add(`${path.relative(this.config.rootDir, this.config.dbPath).replaceAll("\\", "/")}-shm`);
       paths.add(this.config.assistant.transcriptsDir.replaceAll("\\", "/"));
       paths.add(this.config.assistant.auditDir.replaceAll("\\", "/"));
     }
     paths.add("config");
     return [...paths];
+  }
+
+  private async snapshotSqliteDatabase(payloadDir: string): Promise<void> {
+    const runtimeRoot = path.resolve(this.config.rootDir);
+    const sourceDatabasePath = path.resolve(this.config.dbPath);
+    ensurePathWithinRoot(sourceDatabasePath, runtimeRoot);
+    const databaseRelativePath = path.relative(runtimeRoot, sourceDatabasePath).replaceAll("\\", "/");
+    if (
+      !databaseRelativePath ||
+      databaseRelativePath.startsWith("../") ||
+      path.posix.isAbsolute(databaseRelativePath)
+    ) {
+      throw new Error("SQLite database path must identify a file within the runtime root");
+    }
+    const targetDatabasePath = path.resolve(payloadDir, databaseRelativePath);
+    ensurePathWithinRoot(targetDatabasePath, payloadDir);
+    await fs.mkdir(path.dirname(targetDatabasePath), { recursive: true });
+
+    const createSqliteSnapshot = (this.storage as Storage & { createSqliteSnapshot?: Storage["createSqliteSnapshot"] })
+      .createSqliteSnapshot;
+    if (typeof createSqliteSnapshot !== "function") {
+      throw new Error("The configured storage does not support online SQLite snapshots");
+    }
+    await createSqliteSnapshot.call(this.storage, targetDatabasePath);
   }
 
   private async exportPostgresDump(payloadDir: string): Promise<void> {
@@ -395,7 +472,11 @@ async function listFilesSafe(dir: string): Promise<
   Array<{
     name: string;
     size: number;
+    dev: number;
+    ino: number;
     mtimeMs: number;
+    ctimeMs: number;
+    birthtimeMs: number;
     isFile: () => boolean;
     isDirectory: () => boolean;
   }>
@@ -405,7 +486,11 @@ async function listFilesSafe(dir: string): Promise<
     const result: Array<{
       name: string;
       size: number;
+      dev: number;
+      ino: number;
       mtimeMs: number;
+      ctimeMs: number;
+      birthtimeMs: number;
       isFile: () => boolean;
       isDirectory: () => boolean;
     }> = [];
@@ -420,7 +505,11 @@ async function listFilesSafe(dir: string): Promise<
       result.push({
         name: entry.name,
         size: stats.size,
+        dev: stats.dev,
+        ino: stats.ino,
         mtimeMs: stats.mtimeMs,
+        ctimeMs: stats.ctimeMs,
+        birthtimeMs: stats.birthtimeMs,
         isFile: () => entry.isFile(),
         isDirectory: () => entry.isDirectory(),
       });
@@ -429,6 +518,59 @@ async function listFilesSafe(dir: string): Promise<
   } catch {
     return [];
   }
+}
+
+interface PublishedBackupIdentity {
+  size: number;
+  dev: number;
+  ino: number;
+  mtimeMs: number;
+  ctimeMs: number;
+  birthtimeMs: number;
+}
+
+async function assertStablePublishedBackupDirectory(
+  backupPath: string,
+  backupRoot: string,
+  expected: PublishedBackupIdentity,
+): Promise<PublishedBackupIdentity> {
+  const before = await readPublishedBackupIdentity(backupPath);
+  if (!samePublishedBackupIdentity(before, expected)) {
+    throw new Error("Published backup changed before trust inspection could bind its bytes.");
+  }
+  const [realRoot, realBackup] = await Promise.all([fs.realpath(backupRoot), fs.realpath(backupPath)]);
+  ensurePathWithinRoot(realBackup, realRoot);
+  const after = await readPublishedBackupIdentity(backupPath);
+  if (!samePublishedBackupIdentity(before, after)) {
+    throw new Error("Published backup changed while trust inspection resolved its path.");
+  }
+  return after;
+}
+
+async function readPublishedBackupIdentity(backupPath: string): Promise<PublishedBackupIdentity> {
+  const stats = await fs.lstat(backupPath);
+  if (!stats.isDirectory() || stats.isSymbolicLink()) {
+    throw new Error("Published backup must be a stable directory, not a link.");
+  }
+  return {
+    size: stats.size,
+    dev: stats.dev,
+    ino: stats.ino,
+    mtimeMs: stats.mtimeMs,
+    ctimeMs: stats.ctimeMs,
+    birthtimeMs: stats.birthtimeMs,
+  };
+}
+
+function samePublishedBackupIdentity(left: PublishedBackupIdentity, right: PublishedBackupIdentity): boolean {
+  return (
+    left.size === right.size &&
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.mtimeMs === right.mtimeMs &&
+    left.ctimeMs === right.ctimeMs &&
+    left.birthtimeMs === right.birthtimeMs
+  );
 }
 
 async function directorySizeBytes(dir: string): Promise<number> {

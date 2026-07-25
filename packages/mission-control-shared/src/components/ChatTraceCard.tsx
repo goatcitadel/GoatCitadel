@@ -7,6 +7,7 @@ import {
 } from "@goatcitadel/contracts";
 import { ChatToolArtifactInspector } from "./chat/ChatToolArtifactInspector";
 import { getChatToolRunDiagnostics, getTraceFallbackAttemptCount } from "./chat/chat-tool-diagnostics";
+import { projectChatToolEffectTruth } from "./chat/chat-tool-effect-truth";
 import { ChatExecutionPlanSummary } from "./chat/ChatExecutionPlanSummary";
 import {
   formatMemoryCitationMeta,
@@ -310,6 +311,7 @@ export function ChatTraceCard({
               <ul className="chat-trace-list">
                 {trace.toolRuns.map((run) => {
                   const diagnostics = getChatToolRunDiagnostics(run);
+                  const effectTruth = projectChatToolEffectTruth(run);
                   return (
                     <li key={run.toolRunId}>
                       <span>{run.toolName}</span>
@@ -351,6 +353,19 @@ export function ChatTraceCard({
                       ) : null}
                       {run.error ? <p>Error: {run.error}</p> : null}
                       {run.failureGuidance ? <p>Next move: {run.failureGuidance}</p> : null}
+                      {effectTruth ? (
+                        <div className={`chat-tool-effect-truth is-${effectTruth.tone}`}>
+                          <strong>Effect truth: {effectTruth.tone}</strong>
+                          <p>{effectTruth.facts}</p>
+                          {effectTruth.guidance ? <p>{effectTruth.guidance}</p> : null}
+                          {effectTruth.tone === "concrete" ? (
+                            <p>
+                              A concrete receipt is recorded; verify it against the canonical owner ledger before
+                              relying on its ID.
+                            </p>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </li>
                   );
                 })}

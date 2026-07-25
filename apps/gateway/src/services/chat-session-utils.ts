@@ -80,6 +80,7 @@ export function buildChatSessionUpdatedPayload(
 export function toChatSessionRecord(
   session: SessionMeta,
   meta: {
+    revision: number;
     workspaceId?: string;
     mode?: ChatMode;
     title?: string;
@@ -101,6 +102,7 @@ export function toChatSessionRecord(
 ): ChatSessionRecord {
   return {
     sessionId: session.sessionId,
+    revision: meta.revision,
     sessionKey: session.sessionKey,
     workspaceId: meta.workspaceId ?? project?.workspaceId,
     scope: session.channel === "mission" ? "mission" : "external",

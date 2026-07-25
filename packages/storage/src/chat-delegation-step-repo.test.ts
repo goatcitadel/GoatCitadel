@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import type { ChatCitationRecord } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
 import { createDatabase } from "./sqlite.js";
+import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
 import { ChatDelegationStepRepository } from "./chat-delegation-step-repo.js";
 
 const createdFiles: string[] = [];
@@ -44,13 +45,9 @@ function setStepField(db: DatabaseClient, stepId: string, field: string, value: 
 }
 
 function createSessionMeta(db: DatabaseClient, sessionId: string, workspaceId: string): void {
-  db.prepare(
-    `
-      INSERT INTO chat_session_meta (
-        session_id, workspace_id, title, origin, include_in_history, pinned, lifecycle_status, tags_json, created_at, updated_at
-      ) VALUES (?, ?, ?, 'operator', 1, 0, 'active', '[]', ?, ?)
-    `,
-  ).run(sessionId, workspaceId, sessionId, "2026-03-26T00:00:00.000Z", "2026-03-26T00:00:00.000Z");
+  const meta = new ChatSessionMetaRepository(db);
+  meta.ensure(sessionId, "2026-03-26T00:00:00.000Z", workspaceId);
+  meta.patch(sessionId, { title: sessionId, origin: "operator" }, "2026-03-26T00:00:00.000Z");
 }
 
 function createDelegationRun(db: DatabaseClient, runId: string, sessionId: string, startedAt: string): void {

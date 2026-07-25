@@ -65,6 +65,13 @@ describe("llm routes", () => {
         service_tier: "flex",
         prompt_cache_retention: "in_memory",
       }),
+      expect.objectContaining({
+        operationId: expect.stringMatching(/^http:llm:chat:/),
+        dispatchGeneration: expect.any(String),
+        callKind: "chat_initial",
+        workspaceId: "default",
+        taskId: expect.stringMatching(/^http:llm:chat:/),
+      }),
     );
   });
 
@@ -112,6 +119,48 @@ describe("llm routes", () => {
     expect(rawResult.choices[0]!.message.content).toContain("direct-model-secret");
   });
 
+  it("derives replay-stable secret-free usage identity from the idempotency key", async () => {
+    const createChatCompletion = vi.fn(async () => ({
+      id: "cmpl-stable",
+      choices: [{ index: 0, message: { role: "assistant", content: "ok" } }],
+    }));
+    app = Fastify();
+    app.decorateRequest("idempotencyKey", "");
+    app.addHook("onRequest", async (request) => {
+      const value = request.headers["idempotency-key"];
+      request.idempotencyKey = typeof value === "string" ? value : "";
+    });
+    app.decorate("services", { llm: { createChatCompletion } } as never);
+    await app.register(llmRoutes);
+
+    const payload = { messages: [{ role: "user", content: "hello" }] };
+    const rawKey = "operator-secret-idempotency-key";
+    const first = await app.inject({
+      method: "POST",
+      url: "/api/v1/llm/chat-completions",
+      headers: { "idempotency-key": rawKey },
+      payload,
+    });
+    const second = await app.inject({
+      method: "POST",
+      url: "/api/v1/llm/chat-completions",
+      headers: { "idempotency-key": rawKey },
+      payload,
+    });
+
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+    const firstAttribution = createChatCompletion.mock.calls[0]?.[1];
+    const secondAttribution = createChatCompletion.mock.calls[1]?.[1];
+    expect(firstAttribution).toEqual(secondAttribution);
+    expect(firstAttribution).toMatchObject({
+      operationId: expect.stringMatching(/^http:llm:chat:[a-f0-9]{64}$/),
+      dispatchGeneration: expect.stringMatching(/^http-idempotency:[a-f0-9]{64}$/),
+      workspaceId: "default",
+    });
+    expect(JSON.stringify(firstAttribution)).not.toContain(rawKey);
+  });
+
   it("rejects invalid reasoning controls", async () => {
     app = Fastify();
     app.decorate("services", {
@@ -139,11 +188,85 @@ describe("llm routes", () => {
           { role: "developer", content: "Be terse." },
           { role: "user", content: "hello" },
         ],
-        reasoning: { effort: "max" },
+        reasoning: { effort: "extreme" },
       }),
     });
 
     expect(response.statusCode).toBe(400);
+  });
+
+  it("accepts max and ultra for model-metadata validation at the Gateway owner", async () => {
+    const createChatCompletion = vi.fn(async (request) => ({ id: "reasoning", choices: [], echo: request }));
+    app = Fastify();
+    app.decorate("services", {
+      llm: {
+        createChatCompletion,
+        getLlmConfig: vi.fn(),
+        listLlmProviders: vi.fn(),
+        updateLlmConfig: vi.fn(),
+        listLlmModels: vi.fn(),
+        previewLlmModels: vi.fn(),
+      },
+    } as never);
+    await app.register(llmRoutes);
+
+    for (const effort of ["max", "ultra"] as const) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/llm/chat-completions",
+        payload: { messages: [{ role: "user", content: "think" }], reasoning: { effort } },
+      });
+      expect(response.statusCode).toBe(200);
+    }
+    expect(createChatCompletion.mock.calls.map(([request]) => request.reasoning?.effort)).toEqual(["max", "ultra"]);
+  });
+
+  it("accepts secret-free Vertex auth posture without credential material", async () => {
+    const updateLlmConfig = vi.fn(async (request) => request);
+    app = Fastify();
+    app.decorate("services", {
+      llm: {
+        createChatCompletion: vi.fn(),
+        getLlmConfig: vi.fn(),
+        listLlmProviders: vi.fn(),
+        updateLlmConfig,
+        listLlmModels: vi.fn(),
+        previewLlmModels: vi.fn(),
+      },
+    } as never);
+    await app.register(llmRoutes);
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/llm/config",
+      payload: {
+        expectedRevision: 5,
+        upsertProvider: {
+          providerId: "vertex",
+          baseUrl:
+            "https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/us-central1/endpoints/openapi",
+          authMode: "google-adc",
+          defaultModel: "google/gemini-2.5-flash",
+          googleCloud: {
+            projectIdEnv: "GOOGLE_CLOUD_PROJECT",
+            location: "us-central1",
+            endpointId: "openapi",
+          },
+          capabilities: { reasoning: true, reasoningEfforts: ["low", "medium", "high"] },
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(updateLlmConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        upsertProvider: expect.objectContaining({
+          authMode: "google-adc",
+          googleCloud: { projectIdEnv: "GOOGLE_CLOUD_PROJECT", location: "us-central1", endpointId: "openapi" },
+        }),
+      }),
+    );
+    expect(JSON.stringify(updateLlmConfig.mock.calls)).not.toMatch(/private_key|refresh_token|access_token/u);
   });
 
   it("accepts apiStyle in config update payloads", async () => {
@@ -169,6 +292,7 @@ describe("llm routes", () => {
         "Content-Type": "application/json",
       },
       payload: JSON.stringify({
+        expectedRevision: 5,
         upsertProvider: {
           providerId: "anthropic",
           baseUrl: "https://api.anthropic.com/v1",
@@ -190,6 +314,7 @@ describe("llm routes", () => {
     expect(response.statusCode).toBe(200);
     expect(updateLlmConfig).toHaveBeenCalledWith(
       expect.objectContaining({
+        expectedRevision: 5,
         upsertProvider: expect.objectContaining({
           apiStyle: "anthropic-messages",
           request: expect.objectContaining({
@@ -226,6 +351,7 @@ describe("llm routes", () => {
         "Content-Type": "application/json",
       },
       payload: JSON.stringify({
+        expectedRevision: 5,
         upsertProvider: {
           providerId: "openai-codex",
           label: "OpenAI Codex (ChatGPT OAuth)",
@@ -240,6 +366,7 @@ describe("llm routes", () => {
     expect(response.statusCode).toBe(200);
     expect(updateLlmConfig).toHaveBeenCalledWith(
       expect.objectContaining({
+        expectedRevision: 5,
         upsertProvider: expect.objectContaining({
           providerId: "openai-codex",
           apiStyle: "openai-codex-responses",
@@ -603,8 +730,52 @@ describe("llm routes", () => {
           }),
         ],
       }),
+      expect.objectContaining({
+        operationId: expect.stringMatching(/^http:llm:image:/),
+        dispatchGeneration: expect.any(String),
+        callKind: "image_generation",
+        workspaceId: "default",
+        taskId: expect.stringMatching(/^http:llm:image:/),
+      }),
     );
   });
+
+  it.each([
+    ["/api/v1/llm/chat-completions", "createChatCompletion", { messages: [{ role: "user", content: "hello" }] }],
+    ["/api/v1/llm/images", "generateImage", { prompt: "draw a goat" }],
+  ] as const)(
+    "maps authoritative accounting faults from %s through shared route handling",
+    async (url, method, payload) => {
+      const accountingError = Object.assign(new Error("canonical usage persistence failed with secret-token"), {
+        name: "ModelUsageSettlementError",
+      });
+      const createChatCompletion = vi.fn(async () => {
+        throw accountingError;
+      });
+      const generateImage = vi.fn(async () => {
+        throw accountingError;
+      });
+      app = Fastify();
+      app.decorate("services", {
+        llm: {
+          createChatCompletion,
+          generateImage,
+        },
+      } as never);
+      await app.register(llmRoutes);
+
+      const response = await app.inject({ method: "POST", url, payload });
+
+      expect(response.statusCode).toBe(500);
+      expect(response.json()).toEqual({ error: "Internal server error" });
+      expect(response.body).not.toContain("secret-token");
+      const invoked = method === "createChatCompletion" ? createChatCompletion : generateImage;
+      expect(invoked).toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.objectContaining({ workspaceId: "default", dispatchGeneration: expect.any(String) }),
+      );
+    },
+  );
 
   it("projects provider config, discovery, and runtime diagnostics without hiding safe metadata", async () => {
     const rawProvider = {
@@ -615,6 +786,12 @@ describe("llm routes", () => {
       defaultModel: "custom-model",
       hasApiKey: true,
       apiKeySource: "env",
+      authReadiness: {
+        status: "configured",
+        source: "adc_file",
+        liveVerified: false,
+        reasonCode: "adc_file_configured",
+      },
       diagnostic: {
         authorization: "Bearer provider-short",
         tokenId: "provider-token-id",
@@ -699,6 +876,12 @@ describe("llm routes", () => {
       baseUrl: "https://provider.example.test/access-token/[REDACTED]?token=[REDACTED]",
       hasApiKey: true,
       apiKeySource: "env",
+      authReadiness: {
+        status: "configured",
+        source: "adc_file",
+        liveVerified: false,
+        reasonCode: "adc_file_configured",
+      },
       diagnostic: {
         authorization: "[REDACTED]",
         tokenId: "provider-token-id",

@@ -1,8 +1,18 @@
-import type { ChatCompletionRequest, ChatCompletionResponse, ChatMode } from "@goatcitadel/contracts";
+import type {
+  ChatCompletionRequest,
+  ChatCompletionResponse,
+  ChatMode,
+  ModelUsageAttributionContext,
+} from "@goatcitadel/contracts";
 import type { SurfaceJudgeInput, SurfaceJudgeResult } from "./surface-router-service.js";
+import { createUtilityModelUsageAttribution } from "./utility-model-usage-attribution.js";
+import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
 
 export interface SurfaceRouterJudgeDeps {
-  createChatCompletion: (request: ChatCompletionRequest) => Promise<ChatCompletionResponse>;
+  createChatCompletion: (
+    request: ChatCompletionRequest,
+    attribution: ModelUsageAttributionContext,
+  ) => Promise<ChatCompletionResponse>;
   resolveModelDefaults: () => { providerId?: string; model?: string };
 }
 
@@ -42,25 +52,43 @@ export function buildSurfaceRouterJudge(deps: SurfaceRouterJudgeDeps) {
         ? input.priors.map((prior) => `${prior.fromMode}->${prior.toMode}`).join(", ")
         : "none";
       const defaults = deps.resolveModelDefaults();
-      const completion = await deps.createChatCompletion({
-        providerId: defaults.providerId,
-        model: defaults.model,
-        messages: [
-          { role: "system", content: SURFACE_JUDGE_SYSTEM_PROMPT },
-          {
-            role: "user",
-            content: `Message: ${input.prompt}\nRecent mode-corrections in this citadel (from->to): ${priorsText}`,
+      const completion = await deps.createChatCompletion(
+        {
+          providerId: defaults.providerId,
+          model: defaults.model,
+          messages: [
+            { role: "system", content: SURFACE_JUDGE_SYSTEM_PROMPT },
+            {
+              role: "user",
+              content: `Message: ${input.prompt}\nRecent mode-corrections in this citadel (from->to): ${priorsText}`,
+            },
+          ],
+          temperature: 0,
+          max_tokens: 40,
+        },
+        createUtilityModelUsageAttribution({
+          operationId: `chat-turn:${encodeURIComponent(input.turnId)}:surface-router-judge`,
+          utilityKind: "surface_router_judge",
+          requestedProviderId: defaults.providerId,
+          requestedModelId: defaults.model,
+          lineage: {
+            workspaceId: input.workspaceId,
+            sessionId: input.sessionId,
+            turnId: input.turnId,
+            agentId: "surface-router-judge",
+            parentOperationId: `chat-turn:${encodeURIComponent(input.turnId)}`,
           },
-        ],
-        temperature: 0,
-        max_tokens: 40,
-      });
+        }),
+      );
       const rawContent = completion.choices?.[0]
         ? (completion.choices[0] as { message?: { content?: string } }).message?.content
         : undefined;
       const content = typeof rawContent === "string" ? rawContent : "";
       return parseSurfaceJudgeResult(content);
-    } catch {
+    } catch (error) {
+      if (isAuthoritativeModelUsageAccountingError(error)) {
+        throw error;
+      }
       return undefined;
     }
   };

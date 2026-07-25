@@ -15,11 +15,6 @@ const mocks = vi.hoisted(() => ({
   createWorkspacesRoutePortForGateway: vi.fn((gateway: any) => ({
     createWorkspace: (input: unknown) => ({ method: "createWorkspace", gateway, input }),
   })),
-  deleteProviderApiKeyWithFallback: vi.fn((input: unknown) => ({ method: "deleteProviderApiKeyWithFallback", input })),
-  persistProviderApiKeyWithFallback: vi.fn((input: unknown) => ({
-    method: "persistProviderApiKeyWithFallback",
-    input,
-  })),
   pickConnectorDiagnosticAction: vi.fn((checks: unknown) => ({ method: "pickConnectorDiagnosticAction", checks })),
   recordConnectorHealthRun: vi.fn((deps: unknown, report: unknown) => ({
     method: "recordConnectorHealthRun",
@@ -120,10 +115,6 @@ vi.mock("./gateway-route-composition-shared.js", () => ({
   getLlmConfigForGateway: (gateway: any) =>
     gateway.llmService.getRuntimeConfig({ includeKeychainForActiveProvider: true, useCache: true }),
 }));
-vi.mock("./provider-secret-persistence.js", () => ({
-  deleteProviderApiKeyWithFallback: mocks.deleteProviderApiKeyWithFallback,
-  persistProviderApiKeyWithFallback: mocks.persistProviderApiKeyWithFallback,
-}));
 vi.mock("./connector-diagnostics-helpers.js", () => ({
   pickConnectorDiagnosticAction: mocks.pickConnectorDiagnosticAction,
   recordConnectorHealthRun: mocks.recordConnectorHealthRun,
@@ -187,6 +178,14 @@ function createGateway() {
       listReputations: fn((limit?: number) => [{ limit }]),
       listRuns: fn((limit?: number) => [{ limit, runId: "assembly-1" }]),
     },
+    autonomyControlService: {
+      getStatus: fn((recentLimit?: number) => ({ revision: 8, recentLimit })),
+      revertAutonomousChangesSince: fn((sinceIso: string, opts?: unknown) => ({ sinceIso, opts })),
+      setKillSwitch: fn(async (disabled: boolean, expectedRevision: number) => ({
+        revision: expectedRevision + 1,
+        killSwitchEngaged: disabled,
+      })),
+    },
     capabilityPackService: {
       installLocalPack: fn((input: unknown) => ({ input, local: true })),
       installPack: fn((packId: string, input: unknown) => ({ packId, input })),
@@ -208,7 +207,7 @@ function createGateway() {
       clearInlineProviderApiKey: fn((providerId: string) => ({ providerId })),
       deleteOpenAICodexOAuthCredential: fn(() => ({ deleted: true })),
       exportConfigFile: fn(() => ({ providers: [{ providerId: "openai" }] })),
-      generateImage: fn((input: unknown) => ({ input, imageId: "image-1" })),
+      generateImage: fn((input: unknown, _attribution?: unknown) => ({ input, imageId: "image-1" })),
       getOpenAICodexOAuthStatus: fn(() => ({ connected: true })),
       getProviderSecretStatus: fn((providerId: string) => ({
         providerId,
@@ -241,8 +240,12 @@ function createGateway() {
     toolInvocationCoordinator: {
       invokeMcpTool: fn((input: unknown) => ({ input, mcp: true })),
     },
-    bulkSetSkillState: fn((skillIds: string[], state: string, note?: string) => [{ skillIds, state, note }]),
-    createChatCompletion: fn((request: unknown) => ({ request, id: "completion-1" })),
+    bulkSetSkillState: fn(
+      (skillIds: string[], state: string, note: string | undefined, expectedRevisionsBySkillId: unknown) => [
+        { skillIds, state, note, expectedRevisionsBySkillId },
+      ],
+    ),
+    createChatCompletion: fn((request: unknown, _attribution?: unknown) => ({ request, id: "completion-1" })),
     evaluateToolAccess: fn((input: unknown) => ({ input, allowed: true })),
     getSkillActivationPolicy: fn(() => ({ defaultState: "enabled" })),
     installSkillImport: fn((input: unknown) => ({ input, installed: true })),
@@ -258,6 +261,12 @@ function createGateway() {
     lookupSkillSources: fn((queryOrUrl: string, limit?: number) => ({ queryOrUrl, limit, items: [] })),
     patchMcpServerState: fn((serverId: string, patch: unknown) => ({ serverId, patch })),
     persistLlmConfig: fn(() => undefined),
+    deleteProviderSecret: fn(async (input: unknown) => ({ method: "deleteProviderSecret", input })),
+    saveProviderSecret: fn(async (input: unknown) => ({ method: "saveProviderSecret", input })),
+    updateSettings: fn(async (input: any) =>
+      input.llm ? { revision: 9, llm: { input: input.llm, updated: true } } : { method: "updateSettings", input },
+    ),
+    readSettingsRevision: fn(() => 8),
     publishRealtime: fn((eventType: string, source: string, payload?: unknown) => ({ eventType, source, payload })),
     readMcpAuthState: fn(() => ({ "server-1": { state: "connected" } })),
     readMcpServers: fn(() => [{ serverId: "server-1" }]),
@@ -268,8 +277,17 @@ function createGateway() {
     requireMcpServer: fn((serverId: string) => ({ serverId })),
     resolveConnectedMcpTools: fn((server: unknown, existing: unknown) => ({ server, existing })),
     resolveSkillActivation: fn((input: unknown) => ({ input, resolved: true })),
-    setSkillState: fn((skillId: string, state: string, note?: string) => ({ skillId, state, note })),
-    updateSkillActivationPolicy: fn((input: unknown) => ({ input, updated: true })),
+    setSkillState: fn((skillId: string, state: string, note: string | undefined, expectedRevision: number) => ({
+      skillId,
+      state,
+      note,
+      expectedRevision,
+    })),
+    updateSkillActivationPolicy: fn((input: unknown, expectedRevision: number) => ({
+      input,
+      expectedRevision,
+      updated: true,
+    })),
     validateSkillImport: fn((input: unknown) => ({ input, valid: true })),
     listCuratorStatus: fn(() => ({ generatedAt: "2026-05-16T00:00:00Z", cycleDays: 7, items: [] })),
     archiveCuratorSkill: fn((input: unknown) => ({ input, archived: true })),
@@ -295,7 +313,23 @@ function createDatabaseStub() {
 }
 
 describe("route composition loop 15 delegates", () => {
-  it("wires system route dependencies to runtime services and settings helpers", () => {
+  it("propagates the config-generation read fence through settings and LLM route composition", () => {
+    const gateway = createGateway();
+    const fence = new Error("settings generation is reconciling");
+    gateway.readSettingsRevision.mockImplementation(() => {
+      throw fence;
+    });
+    mocks.getSettings.mockImplementationOnce((deps: any) => deps.settingsGateway.readSettingsRevision());
+
+    const systemDeps = composeSystemRouteDependencies(gateway as never) as any;
+    const toolsDeps = composeToolsMcpRouteDependencies(gateway as never) as any;
+
+    expect(() => systemDeps.settings.getSettings()).toThrow(fence);
+    expect(() => systemDeps.settings.getAuthRuntimeSettings()).toThrow(fence);
+    expect(() => toolsDeps.llm.getLlmConfigWithDetails()).toThrow(fence);
+  });
+
+  it("wires system route dependencies to runtime services and settings helpers", async () => {
     const gateway = createGateway();
     const deps = composeSystemRouteDependencies(gateway as never) as any;
 
@@ -306,6 +340,11 @@ describe("route composition loop 15 delegates", () => {
     expect(deps.assembly.getAssemblyRunDetail("run-1")).toEqual({ runId: "run-1" });
     expect(deps.assembly.listAssemblyReputations(3)).toEqual([{ limit: 3 }]);
     expect(deps.assembly.listAssemblyRuns(2)).toEqual([{ limit: 2, runId: "assembly-1" }]);
+    await expect(deps.autonomyControl.setKillSwitch(false, 8)).resolves.toEqual({
+      revision: 9,
+      killSwitchEngaged: false,
+    });
+    expect(gateway.autonomyControlService.setKillSwitch).toHaveBeenCalledWith(false, 8);
     expect(deps.costs.storage).toBe(gateway.storage);
     expect(deps.media).toBe(gateway.mediaVoiceService);
     expect(deps.settings.createPersonality({ name: "Guide" })).toEqual({ input: { name: "Guide" } });
@@ -318,7 +357,7 @@ describe("route composition loop 15 delegates", () => {
       id: "guide",
       input: { tone: "direct" },
     });
-    expect(deps.settings.updateSettings({ deploymentProfile: "trusted_local" })).toMatchObject({
+    await expect(deps.settings.updateSettings({ deploymentProfile: "trusted_local" })).resolves.toMatchObject({
       method: "updateSettings",
       input: { deploymentProfile: "trusted_local" },
     });
@@ -363,8 +402,13 @@ describe("route composition loop 15 delegates", () => {
     expect(deps.improvement.improvement).toBe(gateway.improvementService);
     expect(deps.knowledge.knowledgeDocsIngest({ source: "doc" })).toMatchObject({ realtimeType: "knowledge" });
     expect(deps.memory).toBe(gateway.memoryLifecycleService);
-    expect(deps.skills.bulkSetSkillState(["skill-1"], "disabled", "test")).toEqual([
-      { skillIds: ["skill-1"], state: "disabled", note: "test" },
+    expect(deps.skills.bulkSetSkillState(["skill-1"], "disabled", "test", { "skill-1": 3 })).toEqual([
+      {
+        skillIds: ["skill-1"],
+        state: "disabled",
+        note: "test",
+        expectedRevisionsBySkillId: { "skill-1": 3 },
+      },
     ]);
     expect(deps.skills.getSkillActivationPolicy()).toEqual({ defaultState: "enabled" });
     expect(deps.skills.installSkillImport({ url: "https://example.test" })).toEqual({
@@ -393,13 +437,15 @@ describe("route composition loop 15 delegates", () => {
       input: { skillId: "skill-1" },
       resolved: true,
     });
-    expect(deps.skills.setSkillState("skill-1", "enabled", "ok")).toEqual({
+    expect(deps.skills.setSkillState("skill-1", "enabled", "ok", 3)).toEqual({
       skillId: "skill-1",
       state: "enabled",
       note: "ok",
+      expectedRevision: 3,
     });
-    expect(deps.skills.updateSkillActivationPolicy({ defaultState: "disabled" })).toEqual({
+    expect(deps.skills.updateSkillActivationPolicy({ defaultState: "disabled" }, 5)).toEqual({
       input: { defaultState: "disabled" },
+      expectedRevision: 5,
       updated: true,
     });
     expect(deps.skills.validateSkillImport({ url: "https://example.test" })).toEqual({
@@ -408,12 +454,21 @@ describe("route composition loop 15 delegates", () => {
     });
   });
 
-  it("wires tools, MCP, LLM, secret, and tool-invocation route dependencies", () => {
+  it("wires tools, MCP, LLM, secret, and tool-invocation route dependencies", async () => {
     const gateway = createGateway();
     const deps = composeToolsMcpRouteDependencies(gateway as never) as any;
+    const attribution = { workspaceId: "workspace-a", operationId: "route-operation-1" };
 
-    expect(deps.llm.createChatCompletion({ messages: [] })).toEqual({ request: { messages: [] }, id: "completion-1" });
-    expect(deps.llm.generateImage({ prompt: "ship" })).toEqual({ input: { prompt: "ship" }, imageId: "image-1" });
+    expect(deps.llm.createChatCompletion({ messages: [] }, attribution)).toEqual({
+      request: { messages: [] },
+      id: "completion-1",
+    });
+    expect(gateway.createChatCompletion).toHaveBeenCalledWith({ messages: [] }, attribution);
+    expect(deps.llm.generateImage({ prompt: "ship" }, attribution)).toEqual({
+      input: { prompt: "ship" },
+      imageId: "image-1",
+    });
+    expect(gateway.llmService.generateImage).toHaveBeenCalledWith({ prompt: "ship" }, attribution);
     expect(deps.llm.getOpenAICodexOAuthStatus()).toEqual({ connected: true });
     expect(deps.llm.getLlmConfigWithDetails()).toMatchObject({
       activeProviderId: "openai",
@@ -428,11 +483,15 @@ describe("route composition loop 15 delegates", () => {
     });
     expect(deps.llm.startOpenAICodexOAuthDeviceFlow()).toEqual({ flowId: "flow-1" });
     expect(deps.llm.deleteOpenAICodexOAuthCredential()).toEqual({ deleted: true });
-    expect(deps.llm.updateLlmConfig({ activeProviderId: "openai" })).toEqual({
+    await expect(deps.llm.updateLlmConfig({ expectedRevision: 8, activeProviderId: "openai" })).resolves.toEqual({
+      revision: 9,
       input: { activeProviderId: "openai" },
       updated: true,
     });
-    expect(gateway.persistLlmConfig).toHaveBeenCalledTimes(1);
+    expect(gateway.updateSettings).toHaveBeenCalledWith({
+      expectedRevision: 8,
+      llm: { activeProviderId: "openai" },
+    });
 
     expect(deps.mcp.completeMcpOAuth("server-1", "code", "state")).toMatchObject({ method: "completeMcpOAuth" });
     expect(deps.mcp.connectMcpServer("server-1")).toMatchObject({ method: "connectMcpServer" });
@@ -454,17 +513,26 @@ describe("route composition loop 15 delegates", () => {
       method: "updateMcpServerPolicy",
     });
 
-    expect(deps.secrets.deleteProviderSecret("openai")).toMatchObject({ method: "deleteProviderApiKeyWithFallback" });
+    await expect(deps.secrets.deleteProviderSecret("openai", 8, "all")).resolves.toEqual({
+      method: "deleteProviderSecret",
+      input: { providerId: "openai", expectedRevision: 8, storage: "all" },
+    });
     expect(deps.secrets.getProviderSecretStatus("openai")).toEqual({
       providerId: "openai",
       hasSecret: true,
       source: "env",
     });
-    expect(deps.secrets.saveProviderSecret("openai", "secret")).toMatchObject({
-      method: "persistProviderApiKeyWithFallback",
+    await expect(deps.secrets.saveProviderSecret("openai", "secret", 8, "env", "OPENAI_API_KEY")).resolves.toEqual({
+      method: "saveProviderSecret",
+      input: {
+        providerId: "openai",
+        apiKey: "secret",
+        expectedRevision: 8,
+        storage: "env",
+        envVar: "OPENAI_API_KEY",
+      },
     });
-    expect(gateway.llmService.clearInlineProviderApiKey).toHaveBeenCalledWith("openai");
-    expect(gateway.persistLlmConfig).toHaveBeenCalledTimes(2);
+    expect(gateway.persistLlmConfig).not.toHaveBeenCalled();
 
     expect(deps.tools.createToolGrant({ scope: "session" })).toEqual({
       input: { scope: "session" },

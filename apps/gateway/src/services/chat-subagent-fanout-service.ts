@@ -149,8 +149,9 @@ export function parseSubagentFanoutSubtasks(args: Record<string, unknown>): Suba
 /**
  * Registration-side eligibility gate: only Chat-normalized turns whose
  * subagentPolicy explicitly permits automatic subagents may hold a live fan-out
- * executor. `ask_when_useful` is a suggestion/confirmation posture, not a
- * model-callable auto-run. Delegated child turns are floored to
+ * executor. Routed-context turns are direct-only because their admitted bytes
+ * are bound to one provider/model budget. `ask_when_useful` is a
+ * suggestion/confirmation posture, not a model-callable auto-run. Delegated child turns are floored to
  * `subagentPolicy:"off"` by `executeDelegatedPlanStep`, so they can never
  * register one — which keeps the no-recursion guarantee independent of the
  * tool-schema gate. Even a child model that hallucinates an `agent.fanout` call
@@ -168,6 +169,9 @@ export function shouldRegisterSubagentFanoutExecutor(
   prepared: PreparedAgentChatTurn,
   permissionProfileId?: string,
 ): boolean {
+  if (prepared.routedContextSnapshot) {
+    return false;
+  }
   if (isRestrictedAutonomousPermissionProfile(permissionProfileId)) {
     return false;
   }

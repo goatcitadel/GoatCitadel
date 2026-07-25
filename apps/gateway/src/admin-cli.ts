@@ -144,7 +144,7 @@ async function runAuthCommand(gateway: GatewayAdminPort, action: string | undefi
   throw new Error("Unknown auth command");
 }
 
-async function runDatabaseCommand(
+export async function runDatabaseCommand(
   gateway: GatewayAdminPort,
   action: string | undefined,
   args: string[],
@@ -159,10 +159,14 @@ async function runDatabaseCommand(
     if (dryRun === execute) {
       throw new Error("Database cutover requires exactly one of --dry-run or --execute");
     }
+    // Read immediately before execute so the CLI never submits a revision from
+    // an earlier draft or a long-lived status snapshot.
+    const expectedRevision = execute ? gateway.readSettingsRevision() : undefined;
     const result = await gateway.runDatabaseCutover({
       profile: profileRaw,
       execute,
       confirm: args.includes("--confirm"),
+      ...(expectedRevision !== undefined ? { expectedRevision } : {}),
     });
     console.log(JSON.stringify(result, null, 2));
     return;

@@ -5,7 +5,7 @@ import { safeJsonParse } from "./safe-json.js";
 export interface KnowledgeDocumentRecord {
   docId: string;
   namespace: string;
-  sourceType: "file" | "url" | "text" | "memory";
+  sourceType: "file" | "url" | "text" | "memory" | "external_source_snapshot";
   sourceRef: string;
   title: string;
   metadata: Record<string, unknown>;
@@ -26,7 +26,7 @@ export interface KnowledgeChunkRecord {
 interface KnowledgeDocumentRow {
   doc_id: string;
   namespace: string;
-  source_type: "file" | "url" | "text" | "memory";
+  source_type: "file" | "url" | "text" | "memory" | "external_source_snapshot";
   source_ref: string;
   title: string;
   metadata_json: string;
@@ -141,7 +141,7 @@ export class KnowledgeRepository {
   public createDocument(
     input: {
       namespace: string;
-      sourceType: "file" | "url" | "text" | "memory";
+      sourceType: "file" | "url" | "text" | "memory" | "external_source_snapshot";
       sourceRef: string;
       title: string;
       metadata?: Record<string, unknown>;
@@ -349,7 +349,8 @@ function isKnowledgeDocumentRow(value: unknown): value is KnowledgeDocumentRow {
     (value.source_type === "file" ||
       value.source_type === "url" ||
       value.source_type === "text" ||
-      value.source_type === "memory") &&
+      value.source_type === "memory" ||
+      value.source_type === "external_source_snapshot") &&
     typeof value.source_ref === "string" &&
     typeof value.title === "string" &&
     typeof value.metadata_json === "string" &&

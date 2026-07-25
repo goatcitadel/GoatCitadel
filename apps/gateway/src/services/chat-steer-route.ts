@@ -8,6 +8,7 @@ import type { ChatSteerService } from "./chat-steer-service.js";
 
 export interface ChatSessionMetaSlice {
   ensure(sessionId: string): {
+    revision: number;
     pinnedGoal?: string;
     goalTurnBudget?: number;
     goalTurnsUsed: number;
@@ -21,6 +22,22 @@ export interface ChatSessionMetaSlice {
       goalSetAt?: string | null;
     },
   ): {
+    revision: number;
+    pinnedGoal?: string;
+    goalTurnBudget?: number;
+    goalTurnsUsed: number;
+    goalSetAt?: string;
+  };
+  patchWithRevision(
+    sessionId: string,
+    patch: {
+      pinnedGoal?: string | null;
+      goalTurnBudget?: number | null;
+      goalSetAt?: string | null;
+    },
+    expectedRevision: number,
+  ): {
+    revision: number;
     pinnedGoal?: string;
     goalTurnBudget?: number;
     goalTurnsUsed: number;
@@ -56,13 +73,19 @@ export async function handleChatGoalSetRequest(input: {
     throw new Error("goal is required.");
   }
   const setAt = (input.now ?? (() => new Date().toISOString()))();
-  const patched = input.chatSessionMeta.patch(input.sessionId, {
-    pinnedGoal: goal,
-    goalTurnBudget: input.body.turnBudget ?? null,
-    goalSetAt: setAt,
-  });
+  const current = input.chatSessionMeta.ensure(input.sessionId);
+  const patched = input.chatSessionMeta.patchWithRevision(
+    input.sessionId,
+    {
+      pinnedGoal: goal,
+      goalTurnBudget: input.body.turnBudget ?? null,
+      goalSetAt: setAt,
+    },
+    input.body.expectedRevision ?? current.revision,
+  );
   return {
     sessionId: input.sessionId,
+    revision: patched.revision,
     goal: patched.pinnedGoal ?? null,
     turnBudget: patched.goalTurnBudget ?? null,
     turnsUsed: patched.goalTurnsUsed,
@@ -73,14 +96,21 @@ export async function handleChatGoalSetRequest(input: {
 export async function handleChatGoalClearRequest(input: {
   sessionId: string;
   chatSessionMeta: ChatSessionMetaSlice;
+  expectedRevision?: number;
 }): Promise<ChatGoalStatusResponse> {
-  const cleared = input.chatSessionMeta.patch(input.sessionId, {
-    pinnedGoal: null,
-    goalTurnBudget: null,
-    goalSetAt: null,
-  });
+  const current = input.chatSessionMeta.ensure(input.sessionId);
+  const cleared = input.chatSessionMeta.patchWithRevision(
+    input.sessionId,
+    {
+      pinnedGoal: null,
+      goalTurnBudget: null,
+      goalSetAt: null,
+    },
+    input.expectedRevision ?? current.revision,
+  );
   return {
     sessionId: input.sessionId,
+    revision: cleared.revision,
     goal: cleared.pinnedGoal ?? null,
     turnBudget: cleared.goalTurnBudget ?? null,
     turnsUsed: cleared.goalTurnsUsed,
@@ -95,6 +125,7 @@ export async function handleChatGoalStatusRequest(input: {
   const current = input.chatSessionMeta.ensure(input.sessionId);
   return {
     sessionId: input.sessionId,
+    revision: current.revision,
     goal: current.pinnedGoal ?? null,
     turnBudget: current.goalTurnBudget ?? null,
     turnsUsed: current.goalTurnsUsed,

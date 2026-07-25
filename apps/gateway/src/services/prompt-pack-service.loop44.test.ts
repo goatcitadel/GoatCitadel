@@ -133,10 +133,16 @@ describe("PromptPackService loop44 scoring and benchmark watchdog behavior", () 
         ) => Promise<T>;
       }
     ).executeWithBenchmarkClaimHeartbeat("ppb-loop44", async (signal) => {
-      signal.addEventListener("abort", () => {
-        observedAbort = signal.reason;
+      return new Promise<string>((_resolve, reject) => {
+        signal.addEventListener(
+          "abort",
+          () => {
+            observedAbort = signal.reason;
+            reject(signal.reason);
+          },
+          { once: true },
+        );
       });
-      return new Promise<string>(() => undefined);
     });
 
     const rejection = expect(execution).rejects.toThrow(/was cancelled/);
@@ -146,6 +152,38 @@ describe("PromptPackService loop44 scoring and benchmark watchdog behavior", () 
     expect(observedAbort).toBeInstanceOf(Error);
     expect((observedAbort as Error).message).toMatch(/was cancelled/);
   });
+
+  it.each(["ModelUsageSettlementError", "ModelUsageDispatchPersistenceError", "ModelUsageDispatchUncertainError"])(
+    "drains heartbeat cancellation and surfaces %s",
+    async (faultName) => {
+      vi.useFakeTimers({ now: new Date("2026-05-15T00:00:00.000Z") });
+      const service = createHeartbeatService({
+        benchmarkRow: {
+          benchmark_run_id: "ppb-loop44-accounting",
+          status: "cancelled",
+        },
+      });
+      const accountingFault = Object.assign(new Error("canonical accounting failed"), { name: faultName });
+      const execution = (
+        service as unknown as {
+          executeWithBenchmarkClaimHeartbeat: <T>(
+            benchmarkRunId: string,
+            execute: (signal: AbortSignal) => Promise<T>,
+          ) => Promise<T>;
+        }
+      ).executeWithBenchmarkClaimHeartbeat(
+        "ppb-loop44-accounting",
+        (signal) =>
+          new Promise<string>((_resolve, reject) => {
+            signal.addEventListener("abort", () => queueMicrotask(() => reject(accountingFault)), { once: true });
+          }),
+      );
+
+      const rejection = expect(execution).rejects.toBe(accountingFault);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await rejection;
+    },
+  );
 });
 
 function createAutoScoreService(input: {

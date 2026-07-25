@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { sendRouteError } from "./_error-handler.js";
 
 const workspaceDocTypeSchema = z.enum(["goatcitadel", "agents", "claude", "vision"]);
 
@@ -24,11 +25,16 @@ const createWorkspaceSchema = z.object({
 });
 
 const updateWorkspaceSchema = z.object({
+  expectedRevision: z.number().int().positive(),
   citadelId: z.string().min(1).optional(),
   name: z.string().min(1).optional(),
   description: z.string().optional(),
   slug: z.string().min(1).optional(),
   workspacePrefs: z.record(z.unknown()).optional(),
+});
+
+const workspaceRevisionSchema = z.object({
+  expectedRevision: z.number().int().positive(),
 });
 
 const globalGuidanceParamsSchema = z.object({
@@ -93,33 +99,50 @@ export const workspacesRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(fastify.services.workspaces.updateWorkspace(params.data.workspaceId, body.data));
+      const { expectedRevision, ...input } = body.data;
+      return reply.send(fastify.services.workspaces.updateWorkspace(params.data.workspaceId, input, expectedRevision));
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 
   fastify.post("/api/v1/workspaces/:workspaceId/archive", async (request, reply) => {
     const params = workspaceParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return reply.code(400).send({ error: params.error.flatten() });
+    const body = workspaceRevisionSchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
     }
     try {
-      return reply.send(fastify.services.workspaces.archiveWorkspace(params.data.workspaceId));
+      return reply.send(
+        fastify.services.workspaces.archiveWorkspace(params.data.workspaceId, body.data.expectedRevision),
+      );
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 
   fastify.post("/api/v1/workspaces/:workspaceId/restore", async (request, reply) => {
     const params = workspaceParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return reply.code(400).send({ error: params.error.flatten() });
+    const body = workspaceRevisionSchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
     }
     try {
-      return reply.send(fastify.services.workspaces.restoreWorkspace(params.data.workspaceId));
+      return reply.send(
+        fastify.services.workspaces.restoreWorkspace(params.data.workspaceId, body.data.expectedRevision),
+      );
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 

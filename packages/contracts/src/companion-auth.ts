@@ -1,4 +1,4 @@
-import type { DeviceAccessRequestDeviceType } from "./auth.js";
+import type { CompanionPrincipalPurpose, DeviceAccessRequestDeviceType } from "./auth.js";
 import type { CompanionContractId } from "./companion.js";
 
 export type CompanionSignatureAlgorithm = "ed25519";
@@ -40,12 +40,16 @@ export interface CompanionSessionExchangeResponse extends CompanionSessionTokenB
   deviceLabel: string;
   deviceType: DeviceAccessRequestDeviceType;
   platform?: string;
+  /** Server-owned, immutable purpose carried from the device grant. */
+  principalPurpose: CompanionPrincipalPurpose;
 }
 
 export interface CompanionSessionRefreshResponse extends CompanionSessionTokenBundle {
   contractId: CompanionContractId;
   grantId: string;
   actorId: string;
+  /** Server-owned, immutable purpose; refresh can never broaden it. */
+  principalPurpose: CompanionPrincipalPurpose;
 }
 
 export interface CompanionSessionInfoResponse {
@@ -62,6 +66,8 @@ export interface CompanionSessionInfoResponse {
   refreshTokenExpiresAt: string;
   signatureAlgorithm: CompanionSignatureAlgorithm;
   metadata: Record<string, unknown>;
+  /** Server-owned, immutable purpose the companion session was minted with. */
+  principalPurpose: CompanionPrincipalPurpose;
 }
 
 export interface CompanionSessionAdminRecord extends CompanionSessionInfoResponse {

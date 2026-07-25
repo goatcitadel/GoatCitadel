@@ -20,6 +20,12 @@ const PROJECT_GROUPS = {
     "packages/orchestration/tsconfig.json",
     "packages/policy-engine/tsconfig.json",
     "packages/skills/tsconfig.json",
+    // The gateway's session-control CLI imports @goatcitadel/mission-control-shared
+    // subpaths, whose types resolve through that package's dist. It is not one of
+    // apps/gateway's project references, so nothing in this group would build it and
+    // the CLI's imports fail to resolve. Build it ahead of the gateway, exactly as
+    // the mission-control-next group already does.
+    "packages/mission-control-shared/tsconfig.json",
     "apps/gateway/tsconfig.json",
   ],
   "mission-control-next": [

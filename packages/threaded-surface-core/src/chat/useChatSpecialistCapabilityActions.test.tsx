@@ -33,6 +33,8 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchMcpTemplates: (...args: unknown[]) => fetchMcpTemplatesMock(...args),
   fetchSkills: (...args: unknown[]) => fetchSkillsMock(...args),
   installSkillImport: (...args: unknown[]) => installSkillImportMock(...args),
+  isApiRequestError: (error: unknown) =>
+    typeof error === "object" && error !== null && typeof Reflect.get(error, "status") === "number",
   updateChatSpecialistCandidate: (...args: unknown[]) => updateChatSpecialistCandidateMock(...args),
   updateSkillState: (...args: unknown[]) => updateSkillStateMock(...args),
 }));
@@ -109,9 +111,29 @@ function setupApiDefaults() {
     runId: "code-run-1",
     status: "approval_pending",
   });
-  updateSkillStateMock.mockResolvedValue({ skillId: "skill-planning", state: "enabled" });
-  installSkillImportMock.mockResolvedValue({ installedSkillId: "skill-installed" });
-  fetchSkillsMock.mockResolvedValue({ items: [{ skillId: "skill-planning", state: "enabled" }] });
+  // HX-402 P2: enable answers a no-op envelope (already enabled) by default,
+  // and the retired install answers a governed Skill Hub redirect.
+  updateSkillStateMock.mockResolvedValue({
+    pendingApproval: null,
+    noMutationRequired: true,
+    skillState: { skillId: "skill-planning", state: "enabled" },
+  });
+  installSkillImportMock.mockResolvedValue({
+    disposition: "redirected_to_skill_hub",
+    redirect: {
+      owner: "skill_hub",
+      reviewRoute: "/api/v1/skills/hub/reviews",
+      sourceRef: "skill://hosted",
+      sourceType: "remote_bundle",
+      eligible: true,
+    },
+  });
+  fetchSkillsMock.mockResolvedValue({
+    items: [
+      { skillId: "skill-planning", revision: 7, state: "enabled" },
+      { skillId: "skill-installed", revision: 3, state: "disabled" },
+    ],
+  });
   fetchMcpServersMock.mockResolvedValue({ items: [{ serverId: "server-1", name: "Filesystem" }] });
   fetchMcpTemplatesMock.mockResolvedValue({ items: [{ templateId: "template-1", name: "GitHub", installed: false }] });
 }
@@ -272,6 +294,7 @@ describe("useChatSpecialistCapabilityActions", () => {
     });
 
     expect(updateSkillStateMock).toHaveBeenCalledWith("skill-planning", {
+      expectedRevision: 7,
       state: "enabled",
       note: "Enabled from chat capability suggestion.",
     });
@@ -283,6 +306,109 @@ describe("useChatSpecialistCapabilityActions", () => {
         targetTurnId: "turn-1",
       }),
     );
+    expect(latestHarness?.result.capabilitySuggestions).toEqual([]);
+  });
+
+  it("fails closed without a canonical skill revision and never resumes automatically", async () => {
+    fetchSkillsMock.mockResolvedValue({ items: [{ skillId: "skill-planning", revision: 0, state: "enabled" }] });
+    await act(async () => {
+      create(<Harness />);
+      await flushEffects();
+    });
+    const suggestion = makeCapabilitySuggestion();
+    await act(async () => {
+      latestHarness?.result.setCapabilitySuggestions([suggestion]);
+      latestHarness?.result.handleCapabilitySuggestionAction(suggestion);
+    });
+    await act(async () => {
+      await latestHarness?.result.confirmCapabilitySuggestionAction();
+    });
+
+    expect(updateSkillStateMock).not.toHaveBeenCalled();
+    expect(latestHarness?.executedOutbound).toEqual([]);
+    expect(latestHarness?.errors).toContain(
+      "Skill skill-planning is missing a positive canonical revision. Refresh skills and retry explicitly.",
+    );
+    expect(latestHarness?.result.capabilitySuggestions).toEqual([suggestion]);
+  });
+
+  it("does not replay a capability suggestion after a stale revision conflict", async () => {
+    fetchSkillsMock
+      .mockResolvedValueOnce({ items: [{ skillId: "skill-planning", revision: 7, state: "disabled" }] })
+      .mockResolvedValueOnce({ items: [{ skillId: "skill-planning", revision: 8, state: "disabled" }] });
+    updateSkillStateMock.mockRejectedValueOnce(
+      Object.assign(new Error("Skill state changed elsewhere; refresh and retry explicitly."), {
+        status: 409,
+        body: { code: "WRITE_CONFLICT", details: { expectedRevision: 7, currentRevision: 8 } },
+      }),
+    );
+    await act(async () => {
+      create(<Harness />);
+      await flushEffects();
+    });
+    const suggestion = makeCapabilitySuggestion();
+    await act(async () => {
+      latestHarness?.result.setCapabilitySuggestions([suggestion]);
+      latestHarness?.result.handleCapabilitySuggestionAction(suggestion);
+    });
+    await act(async () => {
+      await latestHarness?.result.confirmCapabilitySuggestionAction();
+    });
+
+    expect(updateSkillStateMock).toHaveBeenCalledTimes(1);
+    expect(fetchSkillsMock).toHaveBeenCalledTimes(2);
+    expect(latestHarness?.installedSkills).toEqual([
+      expect.objectContaining({ skillId: "skill-planning", revision: 8 }),
+    ]);
+    expect(latestHarness?.executedOutbound).toEqual([]);
+    expect(latestHarness?.queuedOutbound).toEqual([]);
+    expect(latestHarness?.errors).toContain(
+      "Skill skill-planning changed elsewhere. Canonical skills were refreshed; no update or turn retry was replayed. Review the refreshed state and retry explicitly.",
+    );
+    expect(latestHarness?.result.capabilitySuggestions).toEqual([suggestion]);
+  });
+
+  // HX-402 P2 (coverage-preserving remodel): install_skill_enable can no
+  // longer install-and-enable — the retired install redirects into the
+  // governed Skill Hub, never touches skill state, and never resumes the
+  // failed turn.
+  it("redirects install-and-enable intents into the Skill Hub without state writes or resume", async () => {
+    installSkillImportMock.mockResolvedValueOnce({
+      disposition: "redirected_to_skill_hub",
+      redirect: {
+        owner: "skill_hub",
+        reviewRoute: "/api/v1/skills/hub/reviews",
+        sourceRef: "skill://hosted",
+        eligible: false,
+        ineligibleReason: "Local sources cannot be installed.",
+      },
+    });
+    await act(async () => {
+      create(<Harness />);
+      await flushEffects();
+    });
+    const suggestion = makeCapabilitySuggestion({
+      kind: "skill_import",
+      recommendedAction: "install_skill_enable",
+      title: "Hosted skill",
+      candidateId: undefined,
+      sourceRef: "skill://hosted",
+      sourceProvider: "github",
+    });
+    await act(async () => {
+      latestHarness?.result.setCapabilitySuggestions([suggestion]);
+      latestHarness?.result.handleCapabilitySuggestionAction(suggestion);
+    });
+    await act(async () => {
+      await latestHarness?.result.confirmCapabilitySuggestionAction();
+    });
+
+    expect(installSkillImportMock).toHaveBeenCalledTimes(1);
+    // ADVERSARIAL: no skill state write, no resume, no queued retry.
+    expect(updateSkillStateMock).not.toHaveBeenCalled();
+    expect(latestHarness?.executedOutbound).toEqual([]);
+    expect(latestHarness?.queuedOutbound).toEqual([]);
+    expect(latestHarness?.notices.at(-1)?.content).toContain("cannot be installed");
     expect(latestHarness?.result.capabilitySuggestions).toEqual([]);
   });
 
@@ -358,10 +484,9 @@ describe("useChatSpecialistCapabilityActions", () => {
     await act(async () => {
       await latestHarness?.result.confirmCapabilitySuggestionAction();
     });
-    expect(updateSkillStateMock).toHaveBeenCalledWith("skill-installed", {
-      state: "enabled",
-      note: "Enabled immediately from chat capability suggestion.",
-    });
+    // HX-402 P2: install-and-enable is a governed redirect — no state write.
+    expect(updateSkillStateMock).not.toHaveBeenCalled();
+    expect(latestHarness?.notices.at(-1)?.content).toContain("governed by the Skill Hub");
 
     await act(async () => {
       latestHarness?.result.handleCapabilitySuggestionAction(
@@ -584,9 +709,9 @@ describe("useChatSpecialistCapabilityActions", () => {
     expect(installSkillImportMock).toHaveBeenCalledWith(
       expect.objectContaining({ sourceProvider: undefined, confirmHighRisk: false }),
     );
-    expect(latestHarness?.notices.at(-1)?.content).toBe(
-      "Installed the suggested skill. It remains disabled by default until you enable it.",
-    );
+    // HX-402 P2: a malformed install response reads as not-eligible — the
+    // surface never claims an install happened.
+    expect(latestHarness?.notices.at(-1)?.content).toContain("cannot be installed");
 
     installSkillImportMock.mockResolvedValueOnce({});
     await act(async () => {
@@ -601,9 +726,8 @@ describe("useChatSpecialistCapabilityActions", () => {
     await act(async () => {
       await latestHarness?.result.confirmCapabilitySuggestionAction();
     });
-    expect(latestHarness?.errors).toContain(
-      "The skill installed, but GoatCitadel could not resolve its installed skill identifier.",
-    );
+    expect(latestHarness?.notices.at(-1)?.content).toContain("cannot be installed");
+    expect(updateSkillStateMock).not.toHaveBeenCalled();
 
     await act(async () => {
       latestHarness?.result.handleCapabilitySuggestionAction(

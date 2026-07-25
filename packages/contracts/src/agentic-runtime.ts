@@ -231,6 +231,7 @@ export interface AgenticTaskContext {
 
 export interface AgenticRunListItem {
   taskId: string;
+  taskRevision?: number;
   runId: string;
   boardId?: string;
   title: string;
@@ -293,6 +294,7 @@ export interface AgenticRunTreeEdge {
 
 export interface AgenticRunTreeResponse {
   runId: string;
+  taskRevision?: number;
   boardId?: string;
   generatedAt: string;
   nodes: AgenticRunTreeNode[];
@@ -322,6 +324,7 @@ export interface AgenticControlDescriptor {
 
 export interface AgenticControlRequest {
   action: AgenticControlAction;
+  expectedRevision?: number;
   controlId?: string;
   reason?: string;
   instruction?: string;
@@ -333,6 +336,7 @@ export interface AgenticControlRequest {
 export interface AgenticControlResponse {
   action: AgenticControlAction;
   taskId: string;
+  taskRevision: number;
   runId?: string;
   status: "recorded" | "applied" | "rejected";
   runtimeEffect: "state_only" | "runtime_pause" | "runtime_cancel" | "approval_resolution" | "navigation";

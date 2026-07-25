@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useRef, useState } from "react";
-import { act, create } from "react-test-renderer";
+import { act, create as createTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatThreadResponse } from "@goatcitadel/contracts";
 import {
@@ -7,6 +7,7 @@ import {
   resetChatStreamingPreviewForTests,
 } from "@goatcitadel/mission-control-shared/state/chat-streaming-preview-store";
 import {
+  captureOutboundRequestPrefsSnapshot,
   resolveOutboundExecutionPrefs,
   useChatOutboundExecution,
   type ActiveChatStreamState,
@@ -84,6 +85,28 @@ type HarnessState = {
 
 let latest: HarnessState | null = null;
 
+/**
+ * Every mounted Harness, so `afterEach` can unmount it.
+ *
+ * Each Harness publishes its hook handle to the module-level `latest` on every
+ * render, so `latest` is owned by whichever component rendered most recently.
+ * A Harness left mounted after its test ends keeps its pending async work alive
+ * (stream reconciliation timers, in-flight session loads, sidebar refreshes);
+ * when that work lands it re-renders that stale component and re-points
+ * `latest` at a previous test's hook instance. The next test then drives the
+ * wrong harness -- typically a streaming one when it asked for a plain send --
+ * so the mock it asserts on is never called at all. Unmounting after every test
+ * drops those components and their timers, so `latest` can only ever refer to a
+ * Harness the current test mounted.
+ */
+const mountedRenderers: ReturnType<typeof createTestRenderer>[] = [];
+
+function create(element: React.ReactElement) {
+  const renderer = createTestRenderer(element);
+  mountedRenderers.push(renderer);
+  return renderer;
+}
+
 function makeThread(): ChatThreadResponse {
   return {
     sessionId: "session-1",
@@ -124,7 +147,7 @@ function createDeferred<T>() {
 }
 
 function Harness(props: {
-  ensureFreshRoutePreflight?: () => Promise<any>;
+  ensureFreshRoutePreflight?: (input?: any) => Promise<any>;
   ensureSession?: () => Promise<any>;
   handleCommandExecution?: (sessionId: string, commandText: string) => Promise<void>;
   initialError?: string | null;
@@ -146,6 +169,8 @@ function Harness(props: {
   /** Test-only seam: lets a test poison the capability-suggestions setter to
    * simulate an onChunk handler throwing mid-processing. */
   setCapabilitySuggestionsOverride?: (...args: unknown[]) => void;
+  /** HX-407 C3: success-only consumer for queue-frozen external context refs. */
+  onExternalContextSent?: (item: unknown) => void;
 }) {
   const [thread, setThread] = useState<ChatThreadResponse | null>(
     props.initialThread === undefined ? makeThread() : props.initialThread,
@@ -272,6 +297,7 @@ function Harness(props: {
       ensureFreshRoutePreflight,
       isRoutePreflightAcknowledged: props.isRoutePreflightAcknowledged ?? (() => false),
     },
+    ...(props.onExternalContextSent ? { externalContext: { onExternalContextSent: props.onExternalContextSent } } : {}),
   });
 
   latest = {
@@ -419,6 +445,14 @@ describe("useChatOutboundExecution", () => {
   });
 
   afterEach(() => {
+    // Unmount before restoring real timers so the teardown clearTimeout calls
+    // still target the same timer implementation the test scheduled against.
+    act(() => {
+      for (const renderer of mountedRenderers.splice(0)) {
+        renderer.unmount();
+      }
+    });
+    latest = null;
     vi.useRealTimers();
   });
 
@@ -447,6 +481,150 @@ describe("useChatOutboundExecution", () => {
       speedMode: "fast",
       subagentPolicy: "off",
     });
+  });
+
+  it("uses the immutable queue-time request snapshot for preflight and send, retry, and edit dispatch", async () => {
+    const queuedPrefs = {
+      sessionId: "session-1",
+      mode: "chat",
+      providerId: "openai-codex",
+      model: "gpt-5.5",
+      webMode: "deep",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      speedMode: "fast",
+      subagentPolicy: "off",
+    } as any;
+    const requestPrefs = captureOutboundRequestPrefsSnapshot({ prefs: queuedPrefs, fullWebAccess: true });
+    expect(Object.isFrozen(requestPrefs)).toBe(true);
+    const ensureFreshRoutePreflight = vi.fn(async () => ({
+      selectionSource: "manual",
+      fallbackPolicy: "off",
+      fallbackResult: "not_applicable",
+      runtimeReachability: "not_checked",
+      runtimeClass: "cloud",
+      decision: { fingerprint: "queue-snapshot-route" },
+    }));
+    const changedPrefs = {
+      ...queuedPrefs,
+      providerId: "anthropic",
+      model: "claude-current",
+      webMode: "quick",
+      memoryMode: "auto",
+      thinkingLevel: "deep",
+      speedMode: "standard",
+      subagentPolicy: "ask_when_useful",
+    };
+    await act(async () => {
+      create(
+        <Harness prefs={changedPrefs} fullWebAccess={false} ensureFreshRoutePreflight={ensureFreshRoutePreflight} />,
+      );
+    });
+
+    await act(async () => {
+      await latest!.execute({
+        id: "queued-send-snapshot",
+        action: "send",
+        content: "Queued send",
+        attachments: [],
+        requestPrefs,
+        createdAt: "2026-05-03T12:45:00.000Z",
+      });
+      await latest!.execute({
+        id: "queued-retry-snapshot",
+        action: "retry",
+        targetTurnId: "turn-1",
+        content: "Original prompt",
+        attachments: [],
+        requestPrefs,
+        createdAt: "2026-05-03T12:45:00.000Z",
+      });
+      await latest!.execute({
+        id: "queued-edit-snapshot",
+        action: "edit",
+        targetTurnId: "turn-1",
+        content: "Queued edit",
+        attachments: [],
+        requestPrefs,
+        createdAt: "2026-05-03T12:45:00.000Z",
+      });
+    });
+
+    expect(ensureFreshRoutePreflight).toHaveBeenCalledTimes(3);
+    expect(ensureFreshRoutePreflight).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ requestPrefs, action: "send" }),
+    );
+    const expectedRequestPrefs = expect.objectContaining({
+      providerId: "openai-codex",
+      model: "gpt-5.5",
+      webMode: "deep",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      speedMode: "fast",
+      subagentPolicy: "off",
+      fullWebAccess: true,
+    });
+    expect(sendAgentChatMessageMock).toHaveBeenCalledWith("session-1", expectedRequestPrefs, { originSurface: "chat" });
+    expect(retryChatTurnMock).toHaveBeenCalledWith("session-1", "turn-1", expectedRequestPrefs, {
+      originSurface: "chat",
+    });
+    expect(editChatTurnMock).toHaveBeenCalledWith("session-1", "turn-1", expectedRequestPrefs, {
+      originSurface: "chat",
+    });
+  });
+
+  it("carries an explicit model-council opt-in through non-stream send, retry, and edit requests", async () => {
+    await act(async () => {
+      create(<Harness />);
+    });
+
+    await act(async () => {
+      await latest?.execute({
+        id: "queue-council-send",
+        action: "send",
+        content: "Convene the council",
+        attachments: [],
+        createdAt: "2026-05-03T12:45:00.000Z",
+        modelCouncil: { enabled: true },
+      });
+      await latest?.execute({
+        id: "queue-council-retry",
+        action: "retry",
+        targetTurnId: "turn-1",
+        content: "Original prompt",
+        attachments: [],
+        createdAt: "2026-05-03T12:45:00.000Z",
+        modelCouncil: { enabled: true },
+      });
+      await latest?.execute({
+        id: "queue-council-edit",
+        action: "edit",
+        targetTurnId: "turn-1",
+        content: "Edited prompt",
+        attachments: [],
+        createdAt: "2026-05-03T12:45:00.000Z",
+        modelCouncil: { enabled: true },
+      });
+    });
+
+    expect(sendAgentChatMessageMock).toHaveBeenCalledWith(
+      "session-1",
+      expect.objectContaining({ modelCouncil: { enabled: true } }),
+      expect.any(Object),
+    );
+    expect(retryChatTurnMock).toHaveBeenCalledWith(
+      "session-1",
+      "turn-1",
+      expect.objectContaining({ modelCouncil: { enabled: true } }),
+      expect.any(Object),
+    );
+    expect(editChatTurnMock).toHaveBeenCalledWith(
+      "session-1",
+      "turn-1",
+      expect.objectContaining({ modelCouncil: { enabled: true } }),
+      expect.any(Object),
+    );
   });
 
   it("coerces a locked Cowork surface send to Chat", async () => {
@@ -1345,6 +1523,20 @@ describe("useChatOutboundExecution", () => {
   });
 
   it("streams edit retry and rich send chunks through the realtime path", async () => {
+    const requestPrefs = captureOutboundRequestPrefsSnapshot({
+      prefs: {
+        sessionId: "session-1",
+        mode: "chat",
+        providerId: "openai-codex",
+        model: "gpt-5.5",
+        webMode: "deep",
+        memoryMode: "off",
+        thinkingLevel: "deep",
+        speedMode: "fast",
+        subagentPolicy: "off",
+      } as any,
+      fullWebAccess: true,
+    });
     streamAgentChatMessageMock.mockImplementationOnce(async (_sessionId, _payload, onChunk) => {
       onChunk({
         type: "message_start",
@@ -1445,9 +1637,25 @@ describe("useChatOutboundExecution", () => {
         content: "Stream this",
         attachments: [],
         createdAt: "2026-05-03T12:45:00.000Z",
+        modelCouncil: { enabled: true },
+        requestPrefs,
       });
     });
     expect(latest?.getSnapshot().pendingUserInput).toEqual(expect.objectContaining({ promptId: "prompt-stream" }));
+    expect(streamAgentChatMessageMock).toHaveBeenCalledWith(
+      "session-1",
+      expect.objectContaining({
+        modelCouncil: { enabled: true },
+        webMode: "deep",
+        memoryMode: "off",
+        thinkingLevel: "deep",
+        speedMode: "fast",
+        subagentPolicy: "off",
+        fullWebAccess: true,
+      }),
+      expect.any(Function),
+      expect.objectContaining({ originSurface: "chat" }),
+    );
 
     await act(async () => {
       await latest?.execute({
@@ -1457,6 +1665,8 @@ describe("useChatOutboundExecution", () => {
         content: "Original prompt",
         attachments: [],
         createdAt: "2026-05-03T12:45:00.000Z",
+        modelCouncil: { enabled: true },
+        requestPrefs,
       });
       await latest?.execute({
         id: "queue-edit-stream",
@@ -1465,19 +1675,40 @@ describe("useChatOutboundExecution", () => {
         content: "Edited prompt",
         attachments: [{ attachmentId: "file-1", fileName: "notes.txt", mimeType: "text/plain", sizeBytes: 9 }],
         createdAt: "2026-05-03T12:45:00.000Z",
+        modelCouncil: { enabled: true },
+        requestPrefs,
       });
     });
     expect(streamRetryChatTurnMock).toHaveBeenCalledWith(
       "session-1",
       "turn-1",
-      expect.objectContaining({ mode: "chat" }),
+      expect.objectContaining({
+        mode: "chat",
+        modelCouncil: { enabled: true },
+        webMode: "deep",
+        memoryMode: "off",
+        thinkingLevel: "deep",
+        speedMode: "fast",
+        subagentPolicy: "off",
+        fullWebAccess: true,
+      }),
       expect.any(Function),
       expect.objectContaining({ originSurface: "chat" }),
     );
     expect(streamEditChatTurnMock).toHaveBeenCalledWith(
       "session-1",
       "turn-1",
-      expect.objectContaining({ attachments: ["file-1"], content: "Edited prompt" }),
+      expect.objectContaining({
+        attachments: ["file-1"],
+        content: "Edited prompt",
+        modelCouncil: { enabled: true },
+        webMode: "deep",
+        memoryMode: "off",
+        thinkingLevel: "deep",
+        speedMode: "fast",
+        subagentPolicy: "off",
+        fullWebAccess: true,
+      }),
       expect.any(Function),
       expect.objectContaining({ originSurface: "chat" }),
     );
@@ -2462,10 +2693,25 @@ describe("useChatOutboundExecution", () => {
         delta: "Hello",
       });
       expect(recordChatStreamChunkActivityMock).toHaveBeenCalledWith("session-1");
+      recordChatStreamChunkActivityMock.mockClear();
       onChunk({
-        type: "message_done",
+        type: "tool_activity",
         eventId: "evt-2",
         sequence: 2,
+        sessionId: "session-1",
+        turnId: "turn-2",
+        toolRunId: "tool-run-1",
+        toolName: "session.status",
+        startedAt: "2026-05-03T12:45:00.000Z",
+        activityAt: "2026-05-03T12:45:05.000Z",
+        activitySequence: 1,
+        elapsedMs: 5_000,
+      });
+      expect(recordChatStreamChunkActivityMock).toHaveBeenCalledWith("session-1");
+      onChunk({
+        type: "message_done",
+        eventId: "evt-3",
+        sequence: 3,
         sessionId: "session-1",
         turnId: "turn-2",
         messageId: "assistant-2",
@@ -2820,6 +3066,141 @@ describe("useChatOutboundExecution", () => {
       });
 
       expect(previewPathCalls()).toHaveLength(0);
+    });
+  });
+
+  describe("HX-407 queue-frozen external context refs", () => {
+    const externalRefs = [
+      { kind: "external_attachment" as const, ref: "attachment-1", label: "External item-1" },
+      { kind: "external_attachment" as const, ref: "attachment-2", label: "External item-2" },
+    ];
+
+    it("sends the frozen refs as contextRefs and consumes the selection only after success", async () => {
+      const onExternalContextSent = vi.fn();
+      await act(async () => {
+        create(<Harness onExternalContextSent={onExternalContextSent} />);
+      });
+      const item = {
+        id: "queue-external-send",
+        action: "send" as const,
+        content: "Use the imported context",
+        attachments: [],
+        createdAt: "2026-05-03T12:45:00.000Z",
+        externalContextRefs: externalRefs,
+      };
+      await act(async () => {
+        await latest!.execute(item);
+      });
+
+      expect(sendAgentChatMessageMock).toHaveBeenCalledWith(
+        "session-1",
+        expect.objectContaining({
+          contextRefs: [
+            { kind: "external_attachment", ref: "attachment-1", label: "External item-1" },
+            { kind: "external_attachment", ref: "attachment-2", label: "External item-2" },
+          ],
+        }),
+        { originSurface: "chat" },
+      );
+      expect(onExternalContextSent).toHaveBeenCalledTimes(1);
+      expect(onExternalContextSent).toHaveBeenCalledWith(item);
+    });
+
+    it("streams the frozen refs on the realtime send path", async () => {
+      const onExternalContextSent = vi.fn();
+      streamAgentChatMessageMock.mockResolvedValueOnce(undefined);
+      await act(async () => {
+        create(<Harness streamEnabled onExternalContextSent={onExternalContextSent} />);
+      });
+      await act(async () => {
+        await latest!.execute({
+          id: "queue-external-stream",
+          action: "send",
+          content: "Stream with imported context",
+          attachments: [],
+          createdAt: "2026-05-03T12:45:00.000Z",
+          externalContextRefs: externalRefs,
+        });
+      });
+
+      expect(streamAgentChatMessageMock).toHaveBeenCalledWith(
+        "session-1",
+        expect.objectContaining({
+          contextRefs: [
+            expect.objectContaining({ kind: "external_attachment", ref: "attachment-1" }),
+            expect.objectContaining({ kind: "external_attachment", ref: "attachment-2" }),
+          ],
+        }),
+        expect.any(Function),
+        expect.objectContaining({ originSurface: "chat" }),
+      );
+      expect(onExternalContextSent).toHaveBeenCalledTimes(1);
+    });
+
+    it("retains the selection when the send fails", async () => {
+      const onExternalContextSent = vi.fn();
+      sendAgentChatMessageMock.mockRejectedValueOnce(new Error("send exploded"));
+      await act(async () => {
+        create(<Harness onExternalContextSent={onExternalContextSent} />);
+      });
+      await act(async () => {
+        await latest!.execute({
+          id: "queue-external-send-fail",
+          action: "send",
+          content: "Failing send",
+          attachments: [],
+          createdAt: "2026-05-03T12:45:00.000Z",
+          externalContextRefs: externalRefs,
+        });
+      });
+
+      expect(latest!.getSnapshot().error).toBe("send exploded");
+      expect(onExternalContextSent).not.toHaveBeenCalled();
+    });
+
+    it("retains the selection when the stream is aborted", async () => {
+      const onExternalContextSent = vi.fn();
+      streamAgentChatMessageMock.mockImplementationOnce(async () => {
+        throw { name: "AbortError" };
+      });
+      await act(async () => {
+        create(<Harness streamEnabled onExternalContextSent={onExternalContextSent} />);
+      });
+      await act(async () => {
+        await latest!.execute({
+          id: "queue-external-stream-abort",
+          action: "send",
+          content: "Aborted send",
+          attachments: [],
+          createdAt: "2026-05-03T12:45:00.000Z",
+          externalContextRefs: externalRefs,
+        });
+      });
+
+      expect(onExternalContextSent).not.toHaveBeenCalled();
+    });
+
+    it("never forwards external refs on edit dispatch", async () => {
+      const onExternalContextSent = vi.fn();
+      await act(async () => {
+        create(<Harness onExternalContextSent={onExternalContextSent} />);
+      });
+      await act(async () => {
+        await latest!.execute({
+          id: "queue-external-edit",
+          action: "edit",
+          targetTurnId: "turn-1",
+          content: "Edited prompt",
+          attachments: [],
+          createdAt: "2026-05-03T12:45:00.000Z",
+          externalContextRefs: externalRefs,
+        });
+      });
+
+      const editPayload = editChatTurnMock.mock.calls.at(-1)?.[2] as Record<string, unknown>;
+      expect(editPayload).toBeDefined();
+      expect(editPayload).not.toHaveProperty("contextRefs");
+      expect(onExternalContextSent).not.toHaveBeenCalled();
     });
   });
 });

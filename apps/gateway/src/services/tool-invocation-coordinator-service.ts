@@ -1,13 +1,17 @@
 /* eslint-disable max-lines -- Tool invocation coordination keeps policy, MCP, audit, and grant evidence in one reviewable runtime seam. */
 import { randomUUID } from "node:crypto";
+import { posix as posixPath, win32 as winPath } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
+  classifyToolEffectPotential,
+  isToolEffectPotentialRecord,
   redactSecretText,
   type ApprovalRequest,
   type AutonomousActivationGrantEvaluationInput,
   type AutonomousActivationGrantEvaluationResult,
   type AutonomousActivationRiskLevel,
   type AutonomousActivationRuntimeEvidence,
+  resolveMcpServerConnectionMode,
   type McpInvokeRequest,
   type McpInvokeResponse,
   type McpNormalizedContentItem,
@@ -16,9 +20,15 @@ import {
   type RealtimeEvent,
   type ToolInvokeRequest,
   type ToolInvokeResult,
+  type ToolEffectInvocationContext,
+  type ToolEffectPotentialRecord,
+  type ToolEffectReceiptEnvelope,
+  type ChatTurnCapabilityToolRuntimeOwnerBinding,
+  type WorkspacePathBridgeReasonCode,
   type WardEffect,
 } from "@goatcitadel/contracts";
 import type { ApprovalInboxRepository } from "@goatcitadel/storage";
+import { ToolExecutionPreconditionError, type ToolProcessSpawnBoundary } from "@goatcitadel/policy-engine";
 import type { HooksService } from "./hooks-service.js";
 import { parseToolCallHookPatch } from "./hook-patch-helpers.js";
 import {
@@ -37,11 +47,20 @@ import {
   isMcpAuthReadinessInvokeBlocked,
   resolveMcpInvokeAuthReadiness,
 } from "./mcp-oauth-token-service.js";
+import type { McpRequesterScopedTurnContextHandle } from "./mcp-requester-resolution-service.js";
 import type { McpRuntimeInvocationResult } from "./mcp-runtime.js";
-import type { PluginToolExecutionContext, PluginToolOverrideService } from "./plugin-tool-override-service.js";
+import type {
+  PluginToolExecutionContext,
+  PluginToolHandler,
+  PluginToolOverrideService,
+} from "./plugin-tool-override-service.js";
 import { runtimeLifecycleHookDispatcher } from "./runtime-lifecycle-hook-dispatcher.js";
 import type { EvidenceEnvelopeCreateRequest } from "./evidence-envelope-service.js";
 import { evaluateComputerUseSafety } from "../browser-runtime-guardrails.js";
+import {
+  buildToolRuntimeOwnerBinding,
+  type ToolCallBeforeHookInterpositionBinding,
+} from "./tool-runtime-interposition.js";
 
 type ToolCallHookPatch = Record<string, unknown> & {
   toolName?: string;
@@ -170,6 +189,383 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
+export type WorkspacePathBridgeExecutionDecision =
+  | { status: "not_applicable" }
+  | {
+      status: "verified";
+      snapshotId: string;
+      canonicalCwd: string;
+      /** Stable fingerprint excluding phase-specific id and creation time. */
+      snapshotFingerprintSha256?: string;
+      gitIdentitySha256?: string;
+    }
+  | { status: "blocked"; reasonCode: WorkspacePathBridgeReasonCode; snapshotId?: string };
+
+export interface WorkspacePathBridgeResolutionContext {
+  invocationId: string;
+  phase: "policy" | "pre_execute";
+  /** Process-local cancellation authority; never derive this from tool arguments. */
+  signal?: AbortSignal;
+}
+
+const WORKSPACE_PATH_BRIDGE_CWD_TOOLS = new Set([
+  "shell.exec",
+  "shell.exec_background",
+  "tests.run",
+  "lint.run",
+  "build.run",
+]);
+
+export function isWorkspacePathBridgeCwdTool(toolName: string): boolean {
+  return WORKSPACE_PATH_BRIDGE_CWD_TOOLS.has(toolName);
+}
+
+const WORKSPACE_PATH_BRIDGE_REASON_CODES = new Set<WorkspacePathBridgeReasonCode>([
+  "invalid_path",
+  "outside_jail",
+  "canonicalization_failed",
+  "symlink_escape",
+  "round_trip_mismatch",
+  "wsl_unavailable",
+  "wsl_conversion_failed",
+  "git_not_repository",
+  "git_unavailable",
+  "git_verification_failed",
+  "git_identity_mismatch",
+]);
+
+function hasWorkspacePathBridgeControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codePoint = value.charCodeAt(index);
+    if (codePoint <= 0x1f || codePoint === 0x7f) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isBoundedBridgeString(value: unknown, maxLength: number): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= maxLength &&
+    value === value.trim() &&
+    !hasWorkspacePathBridgeControlCharacter(value)
+  );
+}
+
+function isCanonicalHostExecutionCwd(value: unknown): value is string {
+  if (!isBoundedBridgeString(value, 2_048) || value.normalize("NFKC") !== value) return false;
+  if (value.startsWith("/")) {
+    return (
+      !value.startsWith("//") &&
+      !value.includes("\\") &&
+      posixPath.normalize(value) === value &&
+      value !== posixPath.parse(value).root
+    );
+  }
+  return (
+    /^[A-Za-z]:\\/u.test(value) &&
+    !value.includes("/") &&
+    winPath.normalize(value) === value &&
+    winPath.normalize(value) !== winPath.parse(value).root
+  );
+}
+
+function isWorkspacePathBridgeExecutionDecision(value: unknown): value is WorkspacePathBridgeExecutionDecision {
+  if (!isRecord(value) || typeof value.status !== "string") {
+    return false;
+  }
+  const keys = Object.keys(value).sort();
+  if (value.status === "not_applicable") {
+    return keys.length === 1 && keys[0] === "status";
+  }
+  if (value.status === "blocked") {
+    const hasSnapshotId = Object.prototype.hasOwnProperty.call(value, "snapshotId");
+    return (
+      keys.length === (hasSnapshotId ? 3 : 2) &&
+      keys[0] === "reasonCode" &&
+      keys[1] === (hasSnapshotId ? "snapshotId" : "status") &&
+      (!hasSnapshotId || (keys[2] === "status" && isBoundedBridgeString(value.snapshotId, 256))) &&
+      typeof value.reasonCode === "string" &&
+      WORKSPACE_PATH_BRIDGE_REASON_CODES.has(value.reasonCode as WorkspacePathBridgeReasonCode)
+    );
+  }
+  if (value.status !== "verified") return false;
+  const allowedKeys = new Set([
+    "canonicalCwd",
+    "gitIdentitySha256",
+    "snapshotFingerprintSha256",
+    "snapshotId",
+    "status",
+  ]);
+  if (!keys.every((key) => allowedKeys.has(key)) || keys.length < 3 || keys.length > 5) return false;
+  if (
+    !isBoundedBridgeString(value.snapshotId, 256) ||
+    !isCanonicalHostExecutionCwd(value.canonicalCwd) ||
+    (value.snapshotFingerprintSha256 !== undefined &&
+      (typeof value.snapshotFingerprintSha256 !== "string" ||
+        !/^[a-f0-9]{64}$/u.test(value.snapshotFingerprintSha256))) ||
+    (value.gitIdentitySha256 !== undefined &&
+      (typeof value.gitIdentitySha256 !== "string" ||
+        value.snapshotFingerprintSha256 === undefined ||
+        !/^[a-f0-9]{64}$/u.test(value.gitIdentitySha256)))
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function buildWorkspacePathBridgeBlockedResult(
+  reasonCode?: WorkspacePathBridgeReasonCode,
+  snapshotId?: string,
+): ToolInvokeResult {
+  return {
+    outcome: "blocked",
+    policyReason: "blocked: workspace path was not freshly verified for execution",
+    auditEventId: randomUUID(),
+    result: {
+      workspacePathBridge: {
+        status: "blocked",
+        ...(reasonCode ? { reasonCode } : {}),
+        ...(snapshotId ? { snapshotId } : {}),
+      },
+    },
+  };
+}
+
+function buildPluginRuntimeOwnerDriftResult(): ToolInvokeResult {
+  return {
+    outcome: "blocked",
+    policyReason: "blocked: immutable Chat tool runtime owner binding drifted",
+    auditEventId: randomUUID(),
+  };
+}
+
+function buildApprovedExternalRuntimeCancelledResult(): ToolInvokeResult {
+  return {
+    outcome: "blocked",
+    policyReason: "blocked: approved external runtime invocation was cancelled before execution",
+    auditEventId: randomUUID(),
+  };
+}
+
+function buildToolInvocationCancelledResult(): ToolInvokeResult {
+  return {
+    outcome: "blocked",
+    policyReason: "blocked: tool invocation was cancelled before execution",
+    auditEventId: randomUUID(),
+  };
+}
+
+type WorkspacePathBridgeApplication =
+  | {
+      ok: true;
+      request: ToolInvokeRequest;
+      snapshotId?: string;
+      snapshotFingerprintSha256?: string;
+      gitIdentitySha256?: string;
+    }
+  | { ok: false; result: ToolInvokeResult };
+
+async function applyFreshWorkspacePathBridge(
+  host: ToolInvocationCoordinatorHost,
+  request: ToolInvokeRequest,
+  context: WorkspacePathBridgeResolutionContext,
+): Promise<WorkspacePathBridgeApplication> {
+  if (!isWorkspacePathBridgeCwdTool(request.toolName)) {
+    return { ok: true, request };
+  }
+  if (!host.resolveWorkspacePathBridgeBeforeExecution) {
+    return { ok: false, result: buildWorkspacePathBridgeBlockedResult() };
+  }
+
+  let decision: WorkspacePathBridgeExecutionDecision;
+  try {
+    decision = await host.resolveWorkspacePathBridgeBeforeExecution({ ...request, args: { ...request.args } }, context);
+  } catch {
+    return { ok: false, result: buildWorkspacePathBridgeBlockedResult() };
+  }
+  if (!isWorkspacePathBridgeExecutionDecision(decision) || decision.status === "not_applicable") {
+    return { ok: false, result: buildWorkspacePathBridgeBlockedResult() };
+  }
+  if (decision.status === "blocked") {
+    return {
+      ok: false,
+      result: buildWorkspacePathBridgeBlockedResult(decision.reasonCode, decision.snapshotId),
+    };
+  }
+  if (typeof request.args.cwd !== "string") {
+    return { ok: false, result: buildWorkspacePathBridgeBlockedResult() };
+  }
+  return {
+    ok: true,
+    request: {
+      ...request,
+      args: {
+        ...request.args,
+        cwd: decision.canonicalCwd,
+      },
+    },
+    snapshotId: decision.snapshotId,
+    snapshotFingerprintSha256: decision.snapshotFingerprintSha256,
+    gitIdentitySha256: decision.gitIdentitySha256,
+  };
+}
+
+function createDeepWorkspacePathBridgePrecondition(input: {
+  host: ToolInvocationCoordinatorHost;
+  request: ToolInvokeRequest;
+  initial: Extract<WorkspacePathBridgeApplication, { ok: true }>;
+  invocationId: string;
+  snapshotIds: string[];
+  signal?: AbortSignal;
+  executionFence?: () => void;
+}): (boundary?: ToolProcessSpawnBoundary) => Promise<void> {
+  return async (boundary) => {
+    if (input.signal?.aborted) {
+      throw executionPreconditionFromResult(buildToolInvocationCancelledResult());
+    }
+    const fresh = await applyFreshWorkspacePathBridge(input.host, input.request, {
+      invocationId: input.invocationId,
+      phase: "pre_execute",
+      ...(input.signal ? { signal: input.signal } : {}),
+    });
+    if (!fresh.ok) {
+      throw executionPreconditionFromResult(
+        input.signal?.aborted ? buildToolInvocationCancelledResult() : fresh.result,
+      );
+    }
+    if (fresh.snapshotId) input.snapshotIds.push(fresh.snapshotId);
+
+    if (
+      !boundary ||
+      boundary.toolName !== input.request.toolName ||
+      typeof boundary.cwd !== "string" ||
+      typeof input.request.args.cwd !== "string" ||
+      !sameCanonicalExecutionCwd(boundary.cwd, input.request.args.cwd)
+    ) {
+      throw executionPreconditionFromResult(
+        buildWorkspacePathBridgeBlockedResult("round_trip_mismatch", fresh.snapshotId),
+      );
+    }
+    const driftReason = compareWorkspacePathBridgeApplications(input.initial, fresh, {
+      requireSnapshotFingerprint: true,
+    });
+    if (driftReason) {
+      throw executionPreconditionFromResult(buildWorkspacePathBridgeBlockedResult(driftReason, fresh.snapshotId));
+    }
+    if (input.signal?.aborted) {
+      throw executionPreconditionFromResult(buildToolInvocationCancelledResult());
+    }
+    input.executionFence?.();
+    if (input.signal?.aborted) {
+      throw executionPreconditionFromResult(buildToolInvocationCancelledResult());
+    }
+  };
+}
+
+function compareWorkspacePathBridgeApplications(
+  initial: Extract<WorkspacePathBridgeApplication, { ok: true }>,
+  fresh: Extract<WorkspacePathBridgeApplication, { ok: true }>,
+  options: { requireSnapshotFingerprint?: boolean } = {},
+): WorkspacePathBridgeReasonCode | undefined {
+  const initialCwd = initial.request.args.cwd;
+  const freshCwd = fresh.request.args.cwd;
+  if (
+    typeof initialCwd !== "string" ||
+    typeof freshCwd !== "string" ||
+    !sameCanonicalExecutionCwd(initialCwd, freshCwd)
+  ) {
+    return "round_trip_mismatch";
+  }
+  if (initial.gitIdentitySha256 !== fresh.gitIdentitySha256) {
+    return "git_identity_mismatch";
+  }
+  const fingerprintRequired =
+    options.requireSnapshotFingerprint === true ||
+    initial.snapshotFingerprintSha256 !== undefined ||
+    fresh.snapshotFingerprintSha256 !== undefined;
+  if (
+    fingerprintRequired &&
+    (!initial.snapshotFingerprintSha256 ||
+      !fresh.snapshotFingerprintSha256 ||
+      initial.snapshotFingerprintSha256 !== fresh.snapshotFingerprintSha256)
+  ) {
+    return "canonicalization_failed";
+  }
+  return undefined;
+}
+
+function executionPreconditionFromResult(
+  result: ToolInvokeResult,
+  snapshotIds: readonly string[] = [],
+): ToolExecutionPreconditionError {
+  const evidenced = withWorkspacePathBridgeEvidence(result, snapshotIds);
+  return new ToolExecutionPreconditionError(evidenced.policyReason.replace(/^blocked:\s*/u, ""), evidenced.result);
+}
+
+function sameCanonicalExecutionCwd(left: unknown, right: unknown): boolean {
+  if (typeof left !== "string" || typeof right !== "string") return false;
+  if (left.startsWith("/") || right.startsWith("/")) {
+    return left.startsWith("/") && right.startsWith("/") && posixPath.normalize(left) === posixPath.normalize(right);
+  }
+  return winPath.normalize(left).toLocaleLowerCase("en-US") === winPath.normalize(right).toLocaleLowerCase("en-US");
+}
+
+function withWorkspacePathBridgeEvidence(result: ToolInvokeResult, snapshotIds: readonly string[]): ToolInvokeResult {
+  if (snapshotIds.length === 0) {
+    return result;
+  }
+  const uniqueSnapshotIds = [...new Set(snapshotIds)];
+  const currentEvidence = result.result?.workspacePathBridge;
+  if (isRecord(currentEvidence) && currentEvidence.status === "blocked") {
+    return {
+      ...result,
+      result: {
+        ...(result.result ?? {}),
+        workspacePathBridge: {
+          ...currentEvidence,
+          priorVerifiedSnapshotIds: uniqueSnapshotIds,
+        },
+      },
+    };
+  }
+  // Successful tool output is a public payload and must remain byte-identical.
+  // Verified snapshot IDs are linked through realtime, diagnostics, and the
+  // durable evidence envelope below rather than being injected into tool data.
+  return result;
+}
+
+export interface RequesterScopedMcpDispatchInput {
+  server: McpServerRecord;
+  toolName: string;
+  arguments?: Record<string, unknown>;
+  signal?: AbortSignal;
+  /**
+   * HX-415 app-private, server-built turn context. Present ONLY when the
+   * chat-turn runner (which holds the frozen capability profile) threaded a
+   * branded handle through the invocation options — never derived from
+   * `McpInvokeRequest`. The dispatch provider brand-asserts it; a missing or
+   * forged (plain-object) value fails closed `requester_context_missing`.
+   */
+  mcpRequesterTurnContext?: McpRequesterScopedTurnContextHandle;
+}
+
+/**
+ * HX-415 app-private port. The provider derives requester authority from
+ * server-owned request context, resolves a per-attempt ephemeral connection,
+ * and drives the isolated requester-scoped runtime, firing `effectDispatch`
+ * exactly once at the effect-bearing `tools/call` write. It is never given, and
+ * must never trust, `McpInvokeRequest` authority/scope fields.
+ */
+export interface RequesterScopedMcpDispatchPort {
+  invoke(
+    input: RequesterScopedMcpDispatchInput,
+    options: { effectDispatch: () => void },
+  ): Promise<McpRuntimeInvocationResult>;
+}
+
 export interface ToolInvocationCoordinatorHost {
   readonly approvalInbox: Pick<
     ApprovalInboxRepository,
@@ -184,7 +580,10 @@ export interface ToolInvocationCoordinatorHost {
   readonly policyEngine: {
     invoke(
       request: ToolInvokeRequest,
-      options?: { beforeExecute?: () => void; externalSideEffect?: ToolExternalSideEffectBoundary },
+      options?: {
+        beforeExecute?: (boundary?: ToolProcessSpawnBoundary) => void | Promise<void>;
+        externalSideEffect?: ToolExternalSideEffectBoundary;
+      },
     ): Promise<ToolInvokeResult>;
     evaluateAccess(request: {
       toolName: "mcp.invoke";
@@ -204,6 +603,15 @@ export interface ToolInvocationCoordinatorHost {
   evaluateToolDeploymentGuard(request: ToolInvokeRequest): { reason: string } | null | undefined;
   isFeatureEnabled?(flag: "computerUseGuardrailsV1Enabled"): boolean;
   resolveToolHookWorkspaceId(request: ToolInvokeRequest): string;
+  /**
+   * Re-resolves any process working directory against current filesystem and
+   * Git evidence. Historical snapshot inspection is never execution authority.
+   */
+  resolveWorkspacePathBridgeBeforeExecution?(
+    request: ToolInvokeRequest,
+    context: WorkspacePathBridgeResolutionContext,
+  ): Promise<WorkspacePathBridgeExecutionDecision>;
+  resolveToolCallBeforeHookInterposition?(workspaceId: string): ToolCallBeforeHookInterpositionBinding;
   primeToolApprovalLifecycle(approvalId: string, request: ToolInvokeRequest): ApprovalRequest;
   scheduleApprovalExplanationById(approvalId: string): void;
   evaluateAutonomousActivationGrant?(
@@ -224,6 +632,14 @@ export interface ToolInvocationCoordinatorHost {
     server: McpServerRecord,
     input: Pick<McpInvokeRequest, "toolName" | "arguments" | "signal">,
   ): Promise<McpRuntimeInvocationResult>;
+  /**
+   * HX-415 app-private requester-scoped MCP dispatch. Undefined until a
+   * separately reviewed auth/profile integration composes server-built
+   * requester authority + attempt lease. It receives ONLY the tool
+   * name/arguments/signal plus the effect-dispatch callback and derives
+   * authority from server-owned request context — never from `McpInvokeRequest`.
+   */
+  readonly requesterScopedMcpDispatch?: RequesterScopedMcpDispatchPort;
   resolveApprovalWithRemoteTokenId(input: {
     tokenId: string;
     connectorId: string;
@@ -256,14 +672,54 @@ export interface ToolInvocationCoordinatorHost {
     };
     context?: Record<string, unknown>;
   }): void;
-  readonly pluginToolOverrideService?: Pick<PluginToolOverrideService, "resolveActiveHandler">;
+  readonly pluginToolOverrideService?: Pick<PluginToolOverrideService, "resolveActiveHandler"> &
+    Partial<Pick<PluginToolOverrideService, "resolveRuntimeOwnerBinding">>;
 }
 
 export interface ToolInvocationRuntimeOptions {
-  /** Process-local durable authority check; never serialize this callback. */
+  /** Process-local cancellation signal for fresh workspace-path verification. */
+  workspacePathBridgeSignal?: AbortSignal;
+  /**
+   * HX-415 app-private branded turn context for requester-scoped MCP dispatch.
+   * Originated ONLY by the chat-turn runner from the frozen capability-profile
+   * record; the direct route and approval replay never populate it, so those
+   * paths keep failing closed (`requester_context_missing`) one level deeper.
+   * Never serialized; brand-checked at the dispatch provider.
+   */
+  mcpRequesterTurnContext?: McpRequesterScopedTurnContextHandle;
+  /** Process-local durable fence immediately before the main tool executor. */
   executionFence?: () => void;
+  /**
+   * Process-local durable fence immediately before an auxiliary hook effect.
+   * This is deliberately distinct from the main executor boundary so an
+   * approval decision reached after a webhook remains actionable.
+   */
+  auxiliaryEffectFence?: () => void;
   /** Process-local concrete external-side-effect boundary; never serialize this object. */
   externalSideEffect?: ToolExternalSideEffectBoundary;
+  /**
+   * Process-local Chat correlation reserved for a canonical execution owner.
+   * The coordinator does not infer receipts from result payloads and currently
+   * has no owner that can prove the exact Chat toolRun/idempotency linkage.
+   */
+  effectContext?: ToolEffectInvocationContext;
+  /** Frozen planning-time classification for the original Chat tool owner. */
+  effectPotential?: ToolEffectPotentialRecord;
+  /** Exact hook set admitted by the immutable Chat capability profile. */
+  toolCallBeforeHookInterposition?: ToolCallBeforeHookInterpositionBinding;
+  /** Exact tool runtime owner admitted by the immutable Chat profile. */
+  toolRuntimeOwner?: ChatTurnCapabilityToolRuntimeOwnerBinding;
+  /**
+   * Called before the execution fence when an allowed runtime-owner override
+   * invalidates a frozen `none` classification.
+   */
+  onEffectPotentialEscalated?: (potential: ToolEffectPotentialRecord) => void;
+  /**
+   * Reserved owner-to-caller receipt channel. Until a canonical owner invokes
+   * this after committing a matching receipt, concrete Chat settlement remains
+   * intentionally unreachable in production.
+   */
+  onEffectReceipt?: (receipt: ToolEffectReceiptEnvelope) => void;
 }
 
 export interface ToolInvocationCoordinator {
@@ -272,12 +728,86 @@ export interface ToolInvocationCoordinator {
   invokeApprovedExternalRuntimeTool(
     request: ToolInvokeRequest,
     markExternalCallStarted?: () => void,
+    options?: ApprovedExternalRuntimeInvocationOptions,
   ): Promise<ToolInvokeResult>;
   invokeApprovedMcpRuntime(input: McpInvokeRequest, markExternalCallStarted?: () => void): Promise<McpInvokeResponse>;
 }
 
+export interface ApprovedExternalRuntimeInvocationOptions {
+  /** Process-local approval-worker cancellation authority; never deserialize from model input. */
+  signal?: AbortSignal;
+}
+
 export class ToolInvocationCoordinatorService implements ToolInvocationCoordinator {
   public constructor(private readonly host: ToolInvocationCoordinatorHost) {}
+
+  /**
+   * Rebuilds the deepest-spawn precondition for the canonical approval worker,
+   * whose policy replay bypasses invokeTool but must not bypass cwd/Git checks.
+   */
+  public async prepareApprovedBuiltinBeforeExecute(
+    request: ToolInvokeRequest,
+    options: { invocationId: string; signal?: AbortSignal },
+  ): Promise<((boundary?: ToolProcessSpawnBoundary) => Promise<void>) | undefined> {
+    if (!isWorkspacePathBridgeCwdTool(request.toolName)) {
+      return undefined;
+    }
+    const initial = await applyFreshWorkspacePathBridge(this.host, request, {
+      invocationId: options.invocationId,
+      phase: "policy",
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
+    if (!initial.ok) {
+      return async () => {
+        throw executionPreconditionFromResult(initial.result);
+      };
+    }
+    const snapshotIds = initial.snapshotId ? [initial.snapshotId] : [];
+    return createDeepWorkspacePathBridgePrecondition({
+      host: this.host,
+      request: initial.request,
+      initial,
+      invocationId: options.invocationId,
+      snapshotIds,
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
+  }
+
+  private resolveCurrentToolRuntimeOwnerBinding(
+    toolName: string,
+  ): ChatTurnCapabilityToolRuntimeOwnerBinding | undefined {
+    const service = this.host.pluginToolOverrideService;
+    if (!service) return buildToolRuntimeOwnerBinding("builtin");
+    const binding = service.resolveRuntimeOwnerBinding?.(toolName);
+    if (binding) return binding;
+    // A legacy override host cannot prove a stable handler generation. Treat
+    // an active handler as unbound; no-handler falls through to the builtin.
+    return service.resolveActiveHandler(toolName) ? undefined : buildToolRuntimeOwnerBinding("builtin");
+  }
+
+  private admitPluginRuntimeOwner(
+    toolName: string,
+    handler: PluginToolHandler,
+  ): ChatTurnCapabilityToolRuntimeOwnerBinding | undefined {
+    const currentHandler = this.host.pluginToolOverrideService?.resolveActiveHandler(toolName);
+    const currentOwner = this.resolveCurrentToolRuntimeOwnerBinding(toolName);
+    return currentHandler === handler && currentOwner?.kind === "plugin" ? currentOwner : undefined;
+  }
+
+  private isPluginRuntimeOwnerAdmissionCurrent(
+    toolName: string,
+    handler: PluginToolHandler,
+    admittedOwner: ChatTurnCapabilityToolRuntimeOwnerBinding,
+  ): boolean {
+    const currentHandler = this.host.pluginToolOverrideService?.resolveActiveHandler(toolName);
+    const currentOwner = this.resolveCurrentToolRuntimeOwnerBinding(toolName);
+    return (
+      currentHandler === handler &&
+      currentOwner?.kind === "plugin" &&
+      admittedOwner.kind === "plugin" &&
+      currentOwner.bindingHash === admittedOwner.bindingHash
+    );
+  }
 
   private runPostCommitConsumer(consumer: string, request: ToolInvokeRequest, callback: () => void): void {
     try {
@@ -395,6 +925,13 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         auditEventId: randomUUID(),
       };
     }
+    if (options.effectPotential !== undefined && !isToolEffectPotentialRecord(options.effectPotential)) {
+      return {
+        outcome: "blocked",
+        policyReason: "blocked: malformed frozen tool-effect classification",
+        auditEventId: randomUUID(),
+      };
+    }
 
     const normalizedRequest = this.host.normalizeToolInvokeRequest(request);
     if (containsRawApprovalActionBearer(normalizedRequest.args)) {
@@ -407,6 +944,48 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     const isCodeModeWrapperInvocation = Boolean(normalizedRequest.policyContext?.approvedCodeModeRunId);
     const toolHookWorkspaceId = this.host.resolveToolHookWorkspaceId(normalizedRequest);
     const toolHookEntityId = `${normalizedRequest.sessionId}:${randomUUID()}`;
+    let admittedToolCallBeforeHookInterposition: ToolCallBeforeHookInterpositionBinding | undefined;
+    if (options.effectPotential) {
+      const currentInterposition = this.host.resolveToolCallBeforeHookInterposition?.(toolHookWorkspaceId);
+      const expected = options.toolCallBeforeHookInterposition;
+      const expectedValid =
+        expected === undefined ||
+        (/^[a-f0-9]{64}$/u.test(expected.hash) && Number.isInteger(expected.count) && expected.count >= 0);
+      const exactBinding =
+        expected !== undefined &&
+        currentInterposition !== undefined &&
+        currentInterposition.hash === expected.hash &&
+        currentInterposition.count === expected.count;
+      const acceptedLegacyEmptyBinding = expected === undefined && currentInterposition?.count === 0;
+      if (!expectedValid || (!exactBinding && !acceptedLegacyEmptyBinding)) {
+        return {
+          outcome: "blocked",
+          policyReason: "blocked: immutable Chat tool-hook interposition binding drifted",
+          auditEventId: randomUUID(),
+        };
+      }
+      admittedToolCallBeforeHookInterposition = currentInterposition;
+
+      const currentOwner = this.resolveCurrentToolRuntimeOwnerBinding(normalizedRequest.toolName);
+      const expectedOwner = options.toolRuntimeOwner;
+      const expectedOwnerValid =
+        expectedOwner === undefined ||
+        ((expectedOwner.kind === "builtin" || expectedOwner.kind === "plugin") &&
+          /^[a-f0-9]{64}$/u.test(expectedOwner.bindingHash));
+      const exactOwner =
+        expectedOwner !== undefined &&
+        currentOwner !== undefined &&
+        expectedOwner.kind === currentOwner.kind &&
+        expectedOwner.bindingHash === currentOwner.bindingHash;
+      const acceptedLegacyBuiltinOwner = expectedOwner === undefined && currentOwner?.kind === "builtin";
+      if (!expectedOwnerValid || (!exactOwner && !acceptedLegacyBuiltinOwner)) {
+        return {
+          outcome: "blocked",
+          policyReason: "blocked: immutable Chat tool runtime owner binding drifted",
+          auditEventId: randomUUID(),
+        };
+      }
+    }
     const deploymentGuard = this.host.evaluateToolDeploymentGuard(normalizedRequest);
     if (deploymentGuard) {
       return {
@@ -435,6 +1014,22 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
             ...(current ?? {}),
             ...next,
           }),
+          expectedInterposition: admittedToolCallBeforeHookInterposition,
+          beforeExternalDispatch: () => {
+            if (options.effectPotential?.potential === "none") {
+              if (!options.onEffectPotentialEscalated) {
+                throw new Error("Inline hook dispatch cannot retain an unchangeable no-effect classification.");
+              }
+              options.onEffectPotentialEscalated(
+                classifyToolEffectPotential({
+                  toolName: normalizedRequest.toolName,
+                  trustedBuiltin: false,
+                  sourceKind: "remote",
+                }),
+              );
+            }
+            (options.auxiliaryEffectFence ?? options.executionFence)?.();
+          },
         });
     if (beforeHook.blockedBy) {
       return {
@@ -467,6 +1062,29 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       return {
         outcome: "blocked",
         policyReason: "blocked: raw approval action bearers cannot enter tool policy",
+        auditEventId: randomUUID(),
+      };
+    }
+
+    if (options.effectPotential && options.toolRuntimeOwner) {
+      const currentOwner = this.resolveCurrentToolRuntimeOwnerBinding(hookableRequest.toolName);
+      if (
+        !currentOwner ||
+        currentOwner.kind !== options.toolRuntimeOwner.kind ||
+        currentOwner.bindingHash !== options.toolRuntimeOwner.bindingHash
+      ) {
+        return {
+          outcome: "blocked",
+          policyReason: "blocked: immutable Chat tool runtime owner binding drifted",
+          auditEventId: randomUUID(),
+        };
+      }
+    }
+
+    if (options.effectPotential && hookableRequest.toolName !== normalizedRequest.toolName) {
+      return {
+        outcome: "blocked",
+        policyReason: "blocked: tool hook cannot rewrite an immutable Chat capability binding",
         auditEventId: randomUUID(),
       };
     }
@@ -525,18 +1143,50 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       isCodeModeWrapperInvocation || protectedApprovalActionDelivery
         ? undefined
         : this.host.pluginToolOverrideService?.resolveActiveHandler(hookableRequest.toolName);
+    const admittedOverrideRuntimeOwner = overrideHandler
+      ? this.admitPluginRuntimeOwner(hookableRequest.toolName, overrideHandler)
+      : undefined;
+    if (overrideHandler && !admittedOverrideRuntimeOwner) {
+      return buildPluginRuntimeOwnerDriftResult();
+    }
+    if (
+      overrideHandler &&
+      options.effectPotential &&
+      (!options.toolRuntimeOwner ||
+        options.toolRuntimeOwner.kind !== "plugin" ||
+        options.toolRuntimeOwner.bindingHash !== admittedOverrideRuntimeOwner?.bindingHash)
+    ) {
+      return buildPluginRuntimeOwnerDriftResult();
+    }
+    if (overrideHandler && options.effectPotential?.potential === "none" && !options.onEffectPotentialEscalated) {
+      return {
+        outcome: "blocked",
+        policyReason: "blocked: plugin override cannot execute under an unchangeable no-effect classification",
+        auditEventId: randomUUID(),
+      };
+    }
+    const bridgeApplication = await applyFreshWorkspacePathBridge(this.host, hookableRequest, {
+      invocationId: toolHookEntityId,
+      phase: "policy",
+      ...(options.workspacePathBridgeSignal ? { signal: options.workspacePathBridgeSignal } : {}),
+    });
+    if (!bridgeApplication.ok) {
+      return bridgeApplication.result;
+    }
+    let executionRequest = bridgeApplication.request;
+    const workspacePathBridgeSnapshotIds = bridgeApplication.snapshotId ? [bridgeApplication.snapshotId] : [];
     let approvedExternalRuntimeReplayId: string | undefined;
     let finalPolicyCheck: ToolInvokeResult | undefined;
     if (overrideHandler) {
       finalPolicyCheck = await this.host.policyEngine.invoke({
-        ...hookableRequest,
+        ...executionRequest,
         externalRuntime: true,
       });
       const overridePolicyFailure = buildPluginOverridePolicyFailure(finalPolicyCheck);
       if (overridePolicyFailure) {
         return overridePolicyFailure;
       }
-      approvedExternalRuntimeReplayId = extractVerifiedApprovalReplayId(finalPolicyCheck, hookableRequest);
+      approvedExternalRuntimeReplayId = extractVerifiedApprovalReplayId(finalPolicyCheck, executionRequest);
       if (approvedExternalRuntimeReplayId) {
         return {
           outcome: "blocked",
@@ -570,23 +1220,107 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     });
     try {
       if (overrideHandler) {
-        options.executionFence?.();
-        // Plugin handlers do not expose a deeper provider adapter boundary, so
-        // conservatively record it immediately before the approved handler.
-        options.externalSideEffect?.markStarted();
-        result = await overrideHandler(
-          hookableRequest.args ?? {},
-          buildPluginToolExecutionContext(hookableRequest, finalPolicyCheck, approvedExternalRuntimeReplayId),
-        );
+        if (!admittedOverrideRuntimeOwner) {
+          return buildPluginRuntimeOwnerDriftResult();
+        }
+        if (options.effectPotential?.potential === "none") {
+          options.onEffectPotentialEscalated?.(
+            classifyToolEffectPotential({
+              toolName: hookableRequest.toolName,
+              trustedBuiltin: false,
+              sourceKind: "plugin",
+            }),
+          );
+        }
+        const preExecuteBridge = await applyFreshWorkspacePathBridge(this.host, executionRequest, {
+          invocationId: toolHookEntityId,
+          phase: "pre_execute",
+          ...(options.workspacePathBridgeSignal ? { signal: options.workspacePathBridgeSignal } : {}),
+        });
+        const preExecuteDriftReason =
+          preExecuteBridge.ok && isWorkspacePathBridgeCwdTool(executionRequest.toolName)
+            ? compareWorkspacePathBridgeApplications(bridgeApplication, preExecuteBridge, {
+                requireSnapshotFingerprint: true,
+              })
+            : undefined;
+        if (!preExecuteBridge.ok) {
+          result = preExecuteBridge.result;
+        } else if (preExecuteDriftReason) {
+          if (preExecuteBridge.snapshotId) workspacePathBridgeSnapshotIds.push(preExecuteBridge.snapshotId);
+          result = buildWorkspacePathBridgeBlockedResult(preExecuteDriftReason, preExecuteBridge.snapshotId);
+        } else {
+          executionRequest = preExecuteBridge.request;
+          if (preExecuteBridge.snapshotId) {
+            workspacePathBridgeSnapshotIds.push(preExecuteBridge.snapshotId);
+          }
+          if (
+            !this.isPluginRuntimeOwnerAdmissionCurrent(
+              hookableRequest.toolName,
+              overrideHandler,
+              admittedOverrideRuntimeOwner,
+            ) ||
+            options.workspacePathBridgeSignal?.aborted
+          ) {
+            result = options.workspacePathBridgeSignal?.aborted
+              ? buildToolInvocationCancelledResult()
+              : buildPluginRuntimeOwnerDriftResult();
+          } else {
+            options.executionFence?.();
+            if (
+              !this.isPluginRuntimeOwnerAdmissionCurrent(
+                hookableRequest.toolName,
+                overrideHandler,
+                admittedOverrideRuntimeOwner,
+              ) ||
+              options.workspacePathBridgeSignal?.aborted
+            ) {
+              result = options.workspacePathBridgeSignal?.aborted
+                ? buildToolInvocationCancelledResult()
+                : buildPluginRuntimeOwnerDriftResult();
+            } else {
+              // Plugin handlers do not expose a deeper provider adapter boundary, so
+              // conservatively record it immediately before the approved handler.
+              options.externalSideEffect?.markStarted();
+              if (
+                !this.isPluginRuntimeOwnerAdmissionCurrent(
+                  hookableRequest.toolName,
+                  overrideHandler,
+                  admittedOverrideRuntimeOwner,
+                ) ||
+                options.workspacePathBridgeSignal?.aborted
+              ) {
+                result = options.workspacePathBridgeSignal?.aborted
+                  ? buildToolInvocationCancelledResult()
+                  : buildPluginRuntimeOwnerDriftResult();
+              } else {
+                result = await overrideHandler(
+                  executionRequest.args ?? {},
+                  buildPluginToolExecutionContext(executionRequest, finalPolicyCheck, approvedExternalRuntimeReplayId),
+                );
+              }
+            }
+          }
+        }
       } else {
+        const beforeExecute = isWorkspacePathBridgeCwdTool(executionRequest.toolName)
+          ? createDeepWorkspacePathBridgePrecondition({
+              host: this.host,
+              request: executionRequest,
+              initial: bridgeApplication,
+              invocationId: toolHookEntityId,
+              snapshotIds: workspacePathBridgeSnapshotIds,
+              ...(options.workspacePathBridgeSignal ? { signal: options.workspacePathBridgeSignal } : {}),
+              ...(options.executionFence ? { executionFence: options.executionFence } : {}),
+            })
+          : options.executionFence;
         const policyOptions = {
-          ...(options.executionFence ? { beforeExecute: options.executionFence } : {}),
+          ...(beforeExecute ? { beforeExecute } : {}),
           ...(options.externalSideEffect ? { externalSideEffect: options.externalSideEffect } : {}),
         };
         result =
-          options.executionFence || options.externalSideEffect
-            ? await this.host.policyEngine.invoke(hookableRequest, policyOptions)
-            : await this.host.policyEngine.invoke(hookableRequest);
+          beforeExecute || options.externalSideEffect
+            ? await this.host.policyEngine.invoke(executionRequest, policyOptions)
+            : await this.host.policyEngine.invoke(executionRequest);
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -620,6 +1354,8 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
           taskId: hookableRequest.taskId,
           error: errorMessage,
         },
+        expectedInterposition: admittedToolCallBeforeHookInterposition,
+        beforeExternalDispatch: options.auxiliaryEffectFence ?? options.executionFence,
       });
       throw error;
     }
@@ -633,11 +1369,12 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     // pre-execution policy check (finalPolicyCheck) so the ward is not silently dropped
     // on that path; for the engine path finalPolicyCheck is undefined and the result's
     // own wardEffect is used, preserving prior behavior exactly.
+    result = withWorkspacePathBridgeEvidence(result, workspacePathBridgeSnapshotIds);
     result = withRedactWardApplied(result, finalPolicyCheck);
 
     const approvalForResult =
       result.outcome === "approval_required" && result.approvalId
-        ? this.host.primeToolApprovalLifecycle(result.approvalId, hookableRequest)
+        ? this.host.primeToolApprovalLifecycle(result.approvalId, executionRequest)
         : undefined;
     const permissionProfileId =
       hookableRequest.policyContext?.permissionProfileId ?? hookableRequest.permissionProfileId;
@@ -662,6 +1399,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
           permissionProfileId,
           localOperatorOverrideId,
           runId: linkedRunId,
+          workspacePathBridgeSnapshotId: workspacePathBridgeSnapshotIds.at(-1),
         },
         {
           eventClass: "operational_signal",
@@ -696,6 +1434,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
           permissionProfileId,
           localOperatorOverrideId,
           runId: linkedRunId,
+          workspacePathBridgeSnapshotId: workspacePathBridgeSnapshotIds.at(-1),
         },
       });
     });
@@ -715,6 +1454,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
           policyReason: result.policyReason,
           permissionProfileId,
           localOperatorOverrideId,
+          workspacePathBridgeSnapshotIds,
         },
       });
     });
@@ -738,6 +1478,8 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
           taskId: hookableRequest.taskId,
           result,
         },
+        expectedInterposition: admittedToolCallBeforeHookInterposition,
+        beforeExternalDispatch: options.auxiliaryEffectFence ?? options.executionFence,
       });
     });
     this.runPostCommitConsumer("lifecycle observe hook enqueue", hookableRequest, () => {
@@ -756,6 +1498,8 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
           auditEventId: result.auditEventId,
           policyReason: result.policyReason,
         },
+        expectedInterposition: admittedToolCallBeforeHookInterposition,
+        beforeExternalDispatch: options.auxiliaryEffectFence ?? options.executionFence,
       });
     });
 
@@ -765,6 +1509,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
   public async invokeApprovedExternalRuntimeTool(
     request: ToolInvokeRequest,
     markExternalCallStarted?: () => void,
+    options: ApprovedExternalRuntimeInvocationOptions = {},
   ): Promise<ToolInvokeResult> {
     if (!this.host.isValidToolName(request.toolName)) {
       return {
@@ -804,57 +1549,123 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         auditEventId: randomUUID(),
       };
     }
+    const admittedOverrideRuntimeOwner = this.admitPluginRuntimeOwner(normalizedRequest.toolName, overrideHandler);
+    if (!admittedOverrideRuntimeOwner) {
+      return buildPluginRuntimeOwnerDriftResult();
+    }
+    const workspacePathBridgeInvocationId = `approved:${randomUUID()}`;
+    const policyBridge = await applyFreshWorkspacePathBridge(this.host, normalizedRequest, {
+      invocationId: workspacePathBridgeInvocationId,
+      phase: "policy",
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
+    if (!policyBridge.ok) {
+      return policyBridge.result;
+    }
+    if (options.signal?.aborted) {
+      return buildApprovedExternalRuntimeCancelledResult();
+    }
+    let executionRequest = policyBridge.request;
+    const workspacePathBridgeSnapshotIds = policyBridge.snapshotId ? [policyBridge.snapshotId] : [];
     const finalPolicyCheck = await this.host.policyEngine.invoke({
-      ...normalizedRequest,
+      ...executionRequest,
       externalRuntime: true,
     });
     const overridePolicyFailure = buildPluginOverridePolicyFailure(finalPolicyCheck);
     if (overridePolicyFailure) {
       return overridePolicyFailure;
     }
-    const startedAt = Date.now();
-    const toolRunId = `approved:${normalizedRequest.sessionId}:${startedAt}`;
+    const toolRunId = workspacePathBridgeInvocationId;
     this.host.recordDevDiagnostic?.({
       level: "debug",
       category: "tools",
       event: "tool.invocation.start",
       message: "Starting approved external runtime invocation",
-      sessionId: normalizedRequest.sessionId,
-      taskId: normalizedRequest.taskId,
+      sessionId: executionRequest.sessionId,
+      taskId: executionRequest.taskId,
       toolRunId,
-      toolName: normalizedRequest.toolName,
+      toolName: executionRequest.toolName,
       runtimeKind: "tool.invocation.override",
       runtimeStatus: "started",
       context: {
-        agentId: normalizedRequest.agentId,
+        agentId: executionRequest.agentId,
         approvalReplay: true,
+        workspacePathBridgeSnapshotId: workspacePathBridgeSnapshotIds.at(-1),
       },
     });
+    const preExecuteBridge = await applyFreshWorkspacePathBridge(this.host, executionRequest, {
+      invocationId: workspacePathBridgeInvocationId,
+      phase: "pre_execute",
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
+    if (!preExecuteBridge.ok) {
+      return withWorkspacePathBridgeEvidence(preExecuteBridge.result, workspacePathBridgeSnapshotIds);
+    }
+    const preExecuteDriftReason = isWorkspacePathBridgeCwdTool(executionRequest.toolName)
+      ? compareWorkspacePathBridgeApplications(policyBridge, preExecuteBridge, {
+          requireSnapshotFingerprint: true,
+        })
+      : undefined;
+    if (preExecuteDriftReason) {
+      if (preExecuteBridge.snapshotId) workspacePathBridgeSnapshotIds.push(preExecuteBridge.snapshotId);
+      return withWorkspacePathBridgeEvidence(
+        buildWorkspacePathBridgeBlockedResult(preExecuteDriftReason, preExecuteBridge.snapshotId),
+        workspacePathBridgeSnapshotIds,
+      );
+    }
+    executionRequest = preExecuteBridge.request;
+    if (preExecuteBridge.snapshotId) {
+      workspacePathBridgeSnapshotIds.push(preExecuteBridge.snapshotId);
+    }
+    if (
+      options.signal?.aborted ||
+      !this.isPluginRuntimeOwnerAdmissionCurrent(
+        executionRequest.toolName,
+        overrideHandler,
+        admittedOverrideRuntimeOwner,
+      )
+    ) {
+      return options.signal?.aborted
+        ? buildApprovedExternalRuntimeCancelledResult()
+        : buildPluginRuntimeOwnerDriftResult();
+    }
     markExternalCallStarted?.();
+    if (
+      options.signal?.aborted ||
+      !this.isPluginRuntimeOwnerAdmissionCurrent(
+        executionRequest.toolName,
+        overrideHandler,
+        admittedOverrideRuntimeOwner,
+      )
+    ) {
+      return options.signal?.aborted
+        ? buildApprovedExternalRuntimeCancelledResult()
+        : buildPluginRuntimeOwnerDriftResult();
+    }
     // Apply the redact ward before the result flows into realtime projection and the
     // evidence envelope below; the plugin result carries no wardEffect, so thread the
     // decision from finalPolicyCheck (mirrors the primary invocation seam).
     const result = withRedactWardApplied(
       await overrideHandler(
-        normalizedRequest.args ?? {},
-        buildPluginToolExecutionContext(normalizedRequest, finalPolicyCheck, undefined),
+        executionRequest.args ?? {},
+        buildPluginToolExecutionContext(executionRequest, finalPolicyCheck, undefined),
       ),
       finalPolicyCheck,
     );
     const permissionProfileId =
-      normalizedRequest.policyContext?.permissionProfileId ?? normalizedRequest.permissionProfileId;
+      executionRequest.policyContext?.permissionProfileId ?? executionRequest.permissionProfileId;
     const localOperatorOverrideId =
-      normalizedRequest.policyContext?.localOperatorOverrideId ?? normalizedRequest.localOperatorOverrideId;
-    const linkedRunId = normalizedRequest.runId ?? normalizedRequest.policyContext?.runId;
-    this.runPostCommitConsumer("approved external-runtime realtime projection", normalizedRequest, () => {
+      executionRequest.policyContext?.localOperatorOverrideId ?? executionRequest.localOperatorOverrideId;
+    const linkedRunId = executionRequest.runId ?? executionRequest.policyContext?.runId;
+    this.runPostCommitConsumer("approved external-runtime realtime projection", executionRequest, () => {
       this.host.publishRealtime(
         "tool_invoked",
         "policy",
         {
-          toolName: normalizedRequest.toolName,
-          sessionId: normalizedRequest.sessionId,
-          agentId: normalizedRequest.agentId,
-          taskId: normalizedRequest.taskId,
+          toolName: executionRequest.toolName,
+          sessionId: executionRequest.sessionId,
+          agentId: executionRequest.agentId,
+          taskId: executionRequest.taskId,
           outcome: result.outcome,
           policyReason: result.policyReason,
           approvalId: result.approvalId,
@@ -862,36 +1673,38 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
           permissionProfileId,
           localOperatorOverrideId,
           runId: linkedRunId,
+          workspacePathBridgeSnapshotId: workspacePathBridgeSnapshotIds.at(-1),
         },
         {
           eventClass: "operational_signal",
           eventAuthority: "retained_stream",
           links: {
-            sessionId: normalizedRequest.sessionId,
-            taskId: normalizedRequest.taskId,
+            sessionId: executionRequest.sessionId,
+            taskId: executionRequest.taskId,
             approvalId: result.approvalId,
             runId: linkedRunId,
           },
         },
       );
     });
-    this.runPostCommitConsumer("approved external-runtime evidence recording", normalizedRequest, () => {
+    this.runPostCommitConsumer("approved external-runtime evidence recording", executionRequest, () => {
       this.host.recordEvidenceEnvelope?.({
         eventKind: "tool_invocation",
-        sessionId: normalizedRequest.sessionId,
+        sessionId: executionRequest.sessionId,
         runId: linkedRunId,
         approvalId: result.approvalId,
         toolCallHashes: [result.auditEventId ?? toolRunId],
         metadata: {
           runtime: "plugin_override",
-          toolName: normalizedRequest.toolName,
-          taskId: normalizedRequest.taskId,
-          agentId: normalizedRequest.agentId,
+          toolName: executionRequest.toolName,
+          taskId: executionRequest.taskId,
+          agentId: executionRequest.agentId,
           outcome: result.outcome,
           policyReason: result.policyReason,
           permissionProfileId,
           localOperatorOverrideId,
           approvalReplay: true,
+          workspacePathBridgeSnapshotIds,
         },
       });
     });
@@ -955,6 +1768,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       runtimeEvaluation.decision.wardEffect,
       undefined,
       options.executionFence,
+      options.mcpRequesterTurnContext,
     );
   }
 
@@ -1021,6 +1835,33 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
 
   private resolveMcpRuntimeTarget(input: McpInvokeRequest): McpServerRecord | McpInvokeResponse {
     const server = this.host.requireMcpServer(input.serverId);
+    if (resolveMcpServerConnectionMode(server) === "requester_scoped") {
+      // HX-415 precondition routing: a requester-scoped server never joins global
+      // connect/discovery/status/tool state (connectMcpServer fails closed before
+      // any status patch; requester-scoped discovery never writes the global tool
+      // cache). The static-oriented preconditions below — `status === "connected"`,
+      // static OAuth/token readiness, and the global-tool-enabled lookup — are
+      // therefore inapplicable and must NOT gate it, or the app-private requester
+      // branch in executeMcpRuntime is unreachable in production. Authorization
+      // instead converges on that requester branch (which fails closed with
+      // `requester_context_missing` until a server-built dispatch is composed) plus
+      // the capability-scope gate and deny-wins policy already evaluated on the
+      // invoke path. Static safety gates that still apply are kept: a disabled or
+      // quarantined server is blocked. The static path below is left unchanged.
+      if (!server.enabled) {
+        return {
+          ok: false,
+          error: "MCP server is not enabled.",
+        };
+      }
+      if (server.trustTier === "quarantined") {
+        return {
+          ok: false,
+          error: `MCP server ${server.label} is quarantined and cannot execute tools.`,
+        };
+      }
+      return server;
+    }
     if (!server.enabled || server.status !== "connected") {
       return {
         ok: false,
@@ -1085,6 +1926,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     wardEffect?: WardEffect,
     markExternalCallStarted?: () => void,
     executionFence?: () => void,
+    mcpRequesterTurnContext?: McpRequesterScopedTurnContextHandle,
   ): Promise<McpInvokeResponse> {
     // Capability-scope choke point: every MCP invocation path converges here (model
     // approval-replay via invokeApprovedMcpRuntime, plus REST/durable/connector via
@@ -1094,22 +1936,61 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     if (scopeFailure) {
       return scopeFailure;
     }
-    executionFence?.();
-    markExternalCallStarted?.();
-    const runtime = isInternalMcpApprovalInboxServer(server)
-      ? await handleInternalMcpApprovalInboxInvoke(server, input, {
-          approvalInbox: this.host.approvalInbox,
-          resolveApprovalWithRemoteTokenId: (request) => this.host.resolveApprovalWithRemoteTokenId(request),
-          respondToMcpElicitation: (request) => this.host.respondToMcpElicitation(request),
-          listMcpElicitations: (filter) => this.host.listMcpElicitations(filter),
-        })
-      : isInternalMcpDurableTasksServer(server)
-        ? await handleInternalMcpDurableTasksInvoke(server, input, this.host.durableTasks)
-        : await this.host.invokeMcpRuntimeTool(server, {
-            toolName: input.toolName,
-            arguments: input.arguments,
-            signal: input.signal,
-          });
+    let runtime: McpRuntimeInvocationResult;
+    if (resolveMcpServerConnectionMode(server) === "requester_scoped") {
+      // HX-415: requester-scoped servers converge on the app-private dispatch
+      // port. The direct route and approval replay cannot manufacture a
+      // requester profile from `McpInvokeRequest`; without a server-built
+      // dispatch provider this server is not callable, and the HX-305 execution
+      // fence / external-effect marker stay untouched (a pre-dispatch failure).
+      // When composed, the provider fires them once, inside the runtime, at the
+      // effect-bearing `tools/call` write.
+      const dispatch = this.host.requesterScopedMcpDispatch;
+      if (!dispatch) {
+        return {
+          ok: false,
+          error:
+            "This MCP server resolves its connection per authenticated requester and cannot be invoked without a server-built requester context.",
+          reasonCodes: ["requester_context_missing"],
+        };
+      }
+      runtime = await dispatch.invoke(
+        {
+          server,
+          toolName: input.toolName,
+          arguments: input.arguments,
+          signal: input.signal,
+          // Server-built turn context threads ONLY from the app-private runtime
+          // options (chat-turn runner origin). `McpInvokeRequest` fields can
+          // never populate it; replay/direct callers pass no options context and
+          // therefore fail closed inside the provider.
+          ...(mcpRequesterTurnContext ? { mcpRequesterTurnContext } : {}),
+        },
+        {
+          effectDispatch: () => {
+            executionFence?.();
+            markExternalCallStarted?.();
+          },
+        },
+      );
+    } else {
+      executionFence?.();
+      markExternalCallStarted?.();
+      runtime = isInternalMcpApprovalInboxServer(server)
+        ? await handleInternalMcpApprovalInboxInvoke(server, input, {
+            approvalInbox: this.host.approvalInbox,
+            resolveApprovalWithRemoteTokenId: (request) => this.host.resolveApprovalWithRemoteTokenId(request),
+            respondToMcpElicitation: (request) => this.host.respondToMcpElicitation(request),
+            listMcpElicitations: (filter) => this.host.listMcpElicitations(filter),
+          })
+        : isInternalMcpDurableTasksServer(server)
+          ? await handleInternalMcpDurableTasksInvoke(server, input, this.host.durableTasks)
+          : await this.host.invokeMcpRuntimeTool(server, {
+              toolName: input.toolName,
+              arguments: input.arguments,
+              signal: input.signal,
+            });
+    }
     const runtimeRetryCount = "retryCount" in runtime ? runtime.retryCount : undefined;
     const runtimeDegraded = "degraded" in runtime ? runtime.degraded : undefined;
     const runtimeExternalOutcome = "externalOutcome" in runtime ? runtime.externalOutcome : undefined;

@@ -51,6 +51,67 @@ export interface LlamaCppModelsResponse {
   warning?: string;
 }
 
+export interface LlamaCppRuntimeLeaseRequest {
+  /** Stable diagnostic label such as `chat_completion` or `embedding`. */
+  purpose: string;
+}
+
+export interface LlamaCppRuntimeLease {
+  leaseId: string;
+  purpose: string;
+  acquiredAt: string;
+}
+
+export type LlamaCppRuntimeOwnership = "none" | "owned" | "external";
+
+export type LlamaCppRuntimeLeaseState = "idle" | "starting" | "active" | "idle_pending" | "persistent" | "closed";
+
+export interface LlamaCppRuntimeLeasePurposeSummary {
+  purpose: string;
+  count: number;
+}
+
+export interface LlamaCppRuntimeLeaseEvidence {
+  lastLease?: {
+    at: string;
+    action: "acquired" | "released" | "settled";
+    purpose: string;
+  };
+  lastStart?: {
+    at: string;
+    reason: "manual" | "api" | "autostart" | "lease" | "restart" | "other";
+    outcome: "requested" | "ready" | "failed";
+  };
+  lastProbe?: {
+    at: string;
+    healthy: boolean;
+  };
+  lastExit?: {
+    at: string;
+    unexpected: boolean;
+    code?: number;
+    signal?: string;
+  };
+  lastRestart?: {
+    at: string;
+    outcome: "scheduled" | "attempting" | "ready" | "failed" | "exhausted";
+  };
+}
+
+export interface LlamaCppRuntimeLeaseDiagnostics {
+  state: LlamaCppRuntimeLeaseState;
+  activeLeaseCount: number;
+  ownership: LlamaCppRuntimeOwnership;
+  idleDeadline?: string;
+  purposes: LlamaCppRuntimeLeasePurposeSummary[];
+  persistentDemand: {
+    manual: boolean;
+    api: boolean;
+    autostart: boolean;
+  };
+  evidence: LlamaCppRuntimeLeaseEvidence;
+}
+
 export interface LlamaCppRuntimeStatus {
   enabled: boolean;
   desiredState: "stopped" | "running";
@@ -65,6 +126,8 @@ export interface LlamaCppRuntimeStatus {
   lastError?: string;
   updatedAt: string;
   launchCommandPreview?: string;
+  /** Additive service-lifetime diagnostics; absent on older Gateway versions. */
+  leaseDiagnostics?: LlamaCppRuntimeLeaseDiagnostics;
 }
 
 export interface LlamaCppGpuInfo {

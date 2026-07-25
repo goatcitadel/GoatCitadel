@@ -3,6 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { asRecord, MemoryRoutePage, readMemoryWriteDecision, readMetadataString } from "./MemoryRoutePage";
 
 const memorySnapshot = vi.hoisted(() => ({
+  // HX-402 P1: approval-first mutation surface state.
+  pendingMutationApprovals: [] as Array<Record<string, unknown>>,
+  dismissPendingMutationApproval: vi.fn(),
   loading: false,
   error: null as string | null,
   notice: null as { tone: string; message: string } | null,

@@ -355,4 +355,172 @@ describe("AssemblyRepository", () => {
     assert.deepEqual(repo.listArtifacts(runId), []);
     assert.deepEqual(repo.listReputations(), []);
   });
+
+  it("claims and advances one council run with generation and lease CAS", () => {
+    const repo = createRepo();
+    const runId = "council-run-1";
+    const createdAt = "2026-07-13T00:00:00.000Z";
+    repo.createRun({
+      runId,
+      runKind: "chat_model_council",
+      sourceTurnId: "turn-1",
+      sourceSessionId: "session-1",
+      workspaceId: "default",
+      title: "Council turn",
+      status: "queued",
+      currentStage: "C0_resolve",
+      currentRoundIndex: 0,
+      problem: buildProblem(runId),
+      settings: buildSettings(),
+      adversarialSettings: buildAdversarialSettings(),
+      councilResolution: {
+        schemaVersion: "assembly.model-council-resolution.v1",
+        resolutionHash: "a".repeat(64),
+        turnId: "turn-1",
+        sessionId: "session-1",
+        workspaceId: "default",
+        capabilityProfileId: "profile-1",
+        capabilityProfileHash: "b".repeat(64),
+        historyHash: "d".repeat(64),
+        participants: [
+          {
+            participantId: "primary",
+            role: "primary",
+            providerId: "openai",
+            model: "gpt-5.4",
+            contextWindowTokens: 100_000,
+            routeConfigFingerprint: "e".repeat(64),
+            routeFingerprint: "c".repeat(64),
+            advisoryOnly: true,
+            toolsAllowed: false,
+          },
+        ],
+        synthesisParticipantId: "primary",
+        createdAt,
+      },
+      generation: 0,
+      createdAt,
+      updatedAt: createdAt,
+    });
+
+    assert.equal(repo.findCouncilRunByTurn("turn-1")?.runId, runId);
+    const claimed = repo.claimCouncilRun({
+      runId,
+      leaseOwnerId: "worker-a",
+      now: "2026-07-13T00:00:01.000Z",
+      leaseExpiresAt: "2026-07-13T00:01:01.000Z",
+    });
+    assert.equal(claimed?.generation, 1);
+    assert.equal(
+      repo.claimCouncilRun({
+        runId,
+        leaseOwnerId: "worker-b",
+        now: "2026-07-13T00:00:02.000Z",
+        leaseExpiresAt: "2026-07-13T00:01:02.000Z",
+      }),
+      undefined,
+    );
+
+    const renewed = repo.renewCouncilRunLease({
+      runId,
+      expectedGeneration: claimed!.generation!,
+      expectedStage: "C0_resolve",
+      leaseOwnerId: "worker-a",
+      now: "2026-07-13T00:00:03.000Z",
+      leaseExpiresAt: "2026-07-13T00:02:03.000Z",
+    });
+    assert.equal(renewed?.generation, 2);
+    assert.equal(
+      repo.renewCouncilRunLease({
+        runId,
+        expectedGeneration: claimed!.generation!,
+        expectedStage: "C0_resolve",
+        leaseOwnerId: "worker-a",
+        now: "2026-07-13T00:00:04.000Z",
+        leaseExpiresAt: "2026-07-13T00:02:04.000Z",
+      }),
+      undefined,
+    );
+
+    const advanced = repo.advanceCouncilRun({
+      runId,
+      expectedGeneration: renewed!.generation!,
+      expectedStage: "C0_resolve",
+      nextStage: "C1_participate",
+      leaseOwnerId: "worker-a",
+      leaseExpiresAt: "2026-07-13T00:01:03.000Z",
+      currentRoundIndex: 1,
+      status: "running",
+      updatedAt: "2026-07-13T00:00:03.000Z",
+    });
+    assert.equal(advanced?.generation, 3);
+    assert.equal(advanced?.currentStage, "C1_participate");
+    assert.equal(
+      repo.advanceCouncilRun({
+        runId,
+        expectedGeneration: claimed!.generation!,
+        expectedStage: "C0_resolve",
+        nextStage: "C1_participate",
+        leaseOwnerId: "worker-a",
+        leaseExpiresAt: "2026-07-13T00:01:04.000Z",
+        currentRoundIndex: 1,
+        status: "running",
+        updatedAt: "2026-07-13T00:00:04.000Z",
+      }),
+      undefined,
+    );
+
+    const round: AssemblyRound = {
+      roundId: `${runId}:council:C1_participate`,
+      runId,
+      roundIndex: 1,
+      stage: "C1_participate",
+      status: "completed",
+      participantIds: ["primary"],
+      artifactIds: [`${runId}:C1:primary`],
+      convergenceSnapshot: undefined,
+      stopCheck: undefined,
+      startedAt: "2026-07-13T00:00:05.000Z",
+      finishedAt: "2026-07-13T00:00:05.000Z",
+    };
+    assert.deepEqual(repo.saveCouncilRoundExact(round), round);
+    assert.deepEqual(repo.saveCouncilRoundExact(round), round);
+    assert.throws(
+      () => repo.saveCouncilRoundExact({ ...round, artifactIds: ["tampered"] }),
+      /immutable canonical bytes/i,
+    );
+    assert.throws(() => repo.updateRoundArtifacts(round.roundId, ["tampered"]), /immutable after insertion/i);
+    assert.throws(() => repo.completeRound(round.roundId, { status: "failed" }), /immutable after insertion/i);
+
+    const artifact: AssemblyArtifactRecord = {
+      artifactId: `${runId}:C1:primary`,
+      runId,
+      roundIndex: 1,
+      stage: "C1_participate",
+      artifactType: "model_council_participant",
+      participantModelRef: "openai:gpt-5.4",
+      blindedAuthorToken: undefined,
+      payload: {
+        attempt: {
+          attemptId: `${runId}:C1:primary`,
+          stage: "C1_participate",
+          participantId: "primary",
+          role: "primary",
+          status: "completed",
+          responseHash: "e".repeat(64),
+          effectiveProviderId: "openai",
+          effectiveModel: "gpt-5.4",
+          modelUsageEventIds: ["usage-1"],
+        },
+        responseText: "Primary answer",
+      },
+      createdAt: "2026-07-13T00:00:05.000Z",
+    };
+    assert.deepEqual(repo.saveCouncilArtifactsExact([artifact]), [artifact]);
+    assert.deepEqual(repo.saveCouncilArtifactsExact([artifact]), [artifact]);
+    assert.throws(
+      () => repo.saveCouncilArtifactsExact([{ ...artifact, participantModelRef: "tampered:model" }]),
+      /immutable canonical bytes/i,
+    );
+  });
 });

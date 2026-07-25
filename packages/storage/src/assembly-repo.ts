@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- This established owner exceeds the line limit; decomposition belongs in a separate behavior-preserving tranche. */
 import type { DatabaseClient } from "./db.js";
 import type {
   AdversarialReview,
@@ -11,9 +12,15 @@ import type {
   ConvergenceScore,
   DefenseResponse,
   AssemblyUsageSummary,
+  ModelCouncilAttemptEvidence,
+  ModelCouncilEvidence,
+  ModelCouncilParticipantArtifact,
+  ModelCouncilResolution,
+  ModelCouncilSynthesisArtifact,
   ModelReputation,
   PeerReview,
 } from "@goatcitadel/contracts";
+import { canonicalJsonString } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 
 interface AssemblyRunRow {
@@ -21,6 +28,13 @@ interface AssemblyRunRow {
   workspace_id: string | null;
   source_session_id: string | null;
   source_task_id: string | null;
+  source_turn_id: string | null;
+  run_kind: "assembly" | "chat_model_council";
+  generation: number;
+  lease_owner_id: string | null;
+  lease_expires_at: string | null;
+  council_resolution_json: string | null;
+  council_evidence_json: string | null;
   title: string;
   status: AssemblyRunStatus;
   current_stage: AssemblyStage;
@@ -82,14 +96,22 @@ interface AssemblyReputationRow {
 
 export class AssemblyRepository {
   private readonly getRunStmt;
+  private readonly findCouncilRunByTurnStmt;
   private readonly createRunStmt;
   private readonly updateRunStmt;
+  private readonly claimCouncilRunStmt;
+  private readonly renewCouncilRunLeaseStmt;
+  private readonly advanceCouncilRunStmt;
   private readonly listRunsStmt;
   private readonly createRoundStmt;
+  private readonly createCouncilRoundStmt;
+  private readonly getRoundStmt;
   private readonly updateRoundArtifactsStmt;
   private readonly updateRoundResultStmt;
   private readonly listRoundsStmt;
   private readonly createArtifactStmt;
+  private readonly createCouncilArtifactStmt;
+  private readonly getArtifactStmt;
   private readonly listArtifactsStmt;
   private readonly listArtifactsByTypeStmt;
   private readonly upsertReputationStmt;
@@ -97,12 +119,23 @@ export class AssemblyRepository {
 
   public constructor(private readonly db: DatabaseClient) {
     this.getRunStmt = db.prepare("SELECT * FROM assembly_runs WHERE run_id = ?");
+    this.findCouncilRunByTurnStmt = db.prepare(`
+      SELECT * FROM assembly_runs
+      WHERE run_kind = 'chat_model_council' AND source_turn_id = ?
+    `);
     this.createRunStmt = db.prepare(`
       INSERT INTO assembly_runs (
         run_id,
         workspace_id,
         source_session_id,
         source_task_id,
+        source_turn_id,
+        run_kind,
+        generation,
+        lease_owner_id,
+        lease_expires_at,
+        council_resolution_json,
+        council_evidence_json,
         title,
         status,
         current_stage,
@@ -123,6 +156,13 @@ export class AssemblyRepository {
         @workspaceId,
         @sourceSessionId,
         @sourceTaskId,
+        @sourceTurnId,
+        @runKind,
+        @generation,
+        @leaseOwnerId,
+        @leaseExpiresAt,
+        @councilResolutionJson,
+        @councilEvidenceJson,
         @title,
         @status,
         @currentStage,
@@ -144,6 +184,10 @@ export class AssemblyRepository {
       UPDATE assembly_runs
       SET
         title = @title,
+        generation = @generation,
+        lease_owner_id = @leaseOwnerId,
+        lease_expires_at = @leaseExpiresAt,
+        council_evidence_json = @councilEvidenceJson,
         status = @status,
         current_stage = @currentStage,
         current_round_index = @currentRoundIndex,
@@ -155,6 +199,60 @@ export class AssemblyRepository {
         finished_at = @finishedAt,
         updated_at = @updatedAt
       WHERE run_id = @runId
+    `);
+    this.claimCouncilRunStmt = db.prepare(`
+      UPDATE assembly_runs
+      SET
+        status = 'running',
+        started_at = COALESCE(started_at, @now),
+        lease_owner_id = @leaseOwnerId,
+        lease_expires_at = @leaseExpiresAt,
+        generation = generation + 1,
+        updated_at = @now
+      WHERE run_id = @runId
+        AND run_kind = 'chat_model_council'
+        AND status NOT IN ('completed', 'stopped')
+        AND (
+          lease_owner_id IS NULL
+          OR lease_owner_id = @leaseOwnerId
+          OR lease_expires_at IS NULL
+          OR lease_expires_at <= @now
+        )
+    `);
+    this.renewCouncilRunLeaseStmt = db.prepare(`
+      UPDATE assembly_runs
+      SET
+        lease_expires_at = @leaseExpiresAt,
+        generation = generation + 1,
+        updated_at = @now
+      WHERE run_id = @runId
+        AND run_kind = 'chat_model_council'
+        AND generation = @expectedGeneration
+        AND current_stage = @expectedStage
+        AND lease_owner_id = @leaseOwnerId
+        AND lease_expires_at > @now
+        AND status = 'running'
+    `);
+    this.advanceCouncilRunStmt = db.prepare(`
+      UPDATE assembly_runs
+      SET
+        status = @status,
+        current_stage = @nextStage,
+        current_round_index = @currentRoundIndex,
+        result_json = @resultJson,
+        usage_json = @usageJson,
+        error_text = @errorText,
+        council_evidence_json = @councilEvidenceJson,
+        lease_expires_at = @leaseExpiresAt,
+        finished_at = @finishedAt,
+        generation = generation + 1,
+        updated_at = @updatedAt
+      WHERE run_id = @runId
+        AND run_kind = 'chat_model_council'
+        AND generation = @expectedGeneration
+        AND current_stage = @expectedStage
+        AND lease_owner_id = @leaseOwnerId
+        AND lease_expires_at > @updatedAt
     `);
     this.listRunsStmt = db.prepare(`
       SELECT * FROM assembly_runs
@@ -197,6 +295,35 @@ export class AssemblyRepository {
         started_at = excluded.started_at,
         finished_at = excluded.finished_at
     `);
+    this.createCouncilRoundStmt = db.prepare(`
+      INSERT INTO assembly_rounds (
+        round_id,
+        run_id,
+        round_index,
+        stage,
+        status,
+        participant_ids_json,
+        artifact_ids_json,
+        convergence_snapshot_json,
+        stop_check_json,
+        started_at,
+        finished_at
+      ) VALUES (
+        @roundId,
+        @runId,
+        @roundIndex,
+        @stage,
+        @status,
+        @participantIdsJson,
+        @artifactIdsJson,
+        @convergenceSnapshotJson,
+        @stopCheckJson,
+        @startedAt,
+        @finishedAt
+      )
+      ON CONFLICT(round_id) DO NOTHING
+    `);
+    this.getRoundStmt = db.prepare("SELECT * FROM assembly_rounds WHERE round_id = ?");
     this.updateRoundArtifactsStmt = db.prepare(`
       UPDATE assembly_rounds
       SET artifact_ids_json = @artifactIdsJson
@@ -248,6 +375,31 @@ export class AssemblyRepository {
         payload_json = excluded.payload_json,
         created_at = excluded.created_at
     `);
+    this.createCouncilArtifactStmt = db.prepare(`
+      INSERT INTO assembly_artifacts (
+        artifact_id,
+        run_id,
+        round_index,
+        stage,
+        artifact_type,
+        participant_model_ref,
+        blinded_author_token,
+        payload_json,
+        created_at
+      ) VALUES (
+        @artifactId,
+        @runId,
+        @roundIndex,
+        @stage,
+        @artifactType,
+        @participantModelRef,
+        @blindedAuthorToken,
+        @payloadJson,
+        @createdAt
+      )
+      ON CONFLICT(artifact_id) DO NOTHING
+    `);
+    this.getArtifactStmt = db.prepare("SELECT * FROM assembly_artifacts WHERE artifact_id = ?");
     this.listArtifactsStmt = db.prepare(`
       SELECT * FROM assembly_artifacts
       WHERE run_id = @runId
@@ -323,6 +475,61 @@ export class AssemblyRepository {
     return mapRunRow(row);
   }
 
+  public findCouncilRunByTurn(turnId: string): AssemblyRunRecord | undefined {
+    const row = toAssemblyRunRow(this.findCouncilRunByTurnStmt.get(turnId));
+    return row ? mapRunRow(row) : undefined;
+  }
+
+  public claimCouncilRun(input: {
+    runId: string;
+    leaseOwnerId: string;
+    now: string;
+    leaseExpiresAt: string;
+  }): AssemblyRunRecord | undefined {
+    const result = this.claimCouncilRunStmt.run(input);
+    return Number(result.changes ?? 0) === 1 ? this.getRun(input.runId) : undefined;
+  }
+
+  public renewCouncilRunLease(input: {
+    runId: string;
+    expectedGeneration: number;
+    expectedStage: AssemblyStage;
+    leaseOwnerId: string;
+    now: string;
+    leaseExpiresAt: string;
+  }): AssemblyRunRecord | undefined {
+    const result = this.renewCouncilRunLeaseStmt.run(input);
+    return Number(result.changes ?? 0) === 1 ? this.getRun(input.runId) : undefined;
+  }
+
+  public advanceCouncilRun(input: {
+    runId: string;
+    expectedGeneration: number;
+    expectedStage: AssemblyStage;
+    nextStage: AssemblyStage;
+    leaseOwnerId: string;
+    leaseExpiresAt?: string;
+    currentRoundIndex: number;
+    status: AssemblyRunStatus;
+    result?: AssemblyResult;
+    usage?: AssemblyUsageSummary;
+    error?: string;
+    councilEvidence?: ModelCouncilEvidence;
+    finishedAt?: string;
+    updatedAt: string;
+  }): AssemblyRunRecord | undefined {
+    const result = this.advanceCouncilRunStmt.run({
+      ...input,
+      leaseExpiresAt: input.leaseExpiresAt ?? input.updatedAt,
+      resultJson: input.result ? JSON.stringify(input.result) : null,
+      usageJson: input.usage ? JSON.stringify(input.usage) : null,
+      errorText: input.error ?? null,
+      councilEvidenceJson: input.councilEvidence ? JSON.stringify(input.councilEvidence) : null,
+      finishedAt: input.finishedAt ?? null,
+    });
+    return Number(result.changes ?? 0) === 1 ? this.getRun(input.runId) : undefined;
+  }
+
   public updateRun(runId: string, patch: Partial<AssemblyRunRecord>): AssemblyRunRecord {
     const current = this.getRun(runId);
     const next: AssemblyRunRecord = {
@@ -345,11 +552,30 @@ export class AssemblyRepository {
   }
 
   public saveRound(round: AssemblyRound): AssemblyRound {
+    if (this.getRun(round.runId).runKind === "chat_model_council") {
+      return this.saveCouncilRoundExact(round);
+    }
     this.createRoundStmt.run(serializeRound(round));
     return this.listRounds(round.runId).find((candidate) => candidate.roundId === round.roundId) ?? round;
   }
 
+  public saveCouncilRoundExact(round: AssemblyRound): AssemblyRound {
+    const run = this.getRun(round.runId);
+    if (run.runKind !== "chat_model_council") {
+      throw new Error(`Assembly round ${round.roundId} does not belong to a model council run.`);
+    }
+    this.createCouncilRoundStmt.run(serializeRound(round));
+    const row = toAssemblyRoundRow(this.getRoundStmt.get(round.roundId));
+    if (!row) {
+      throw new Error(`Model council round ${round.roundId} was not persisted.`);
+    }
+    const persisted = mapRoundRow(row);
+    assertCanonicalExactReplay("round", round.roundId, persisted, round);
+    return persisted;
+  }
+
   public updateRoundArtifacts(roundId: string, artifactIds: string[]): void {
+    this.assertRoundIsMutableAssembly(roundId);
     this.updateRoundArtifactsStmt.run({
       roundId,
       artifactIdsJson: JSON.stringify(artifactIds),
@@ -365,6 +591,7 @@ export class AssemblyRepository {
       finishedAt?: string;
     },
   ): void {
+    this.assertRoundIsMutableAssembly(roundId);
     this.updateRoundResultStmt.run({
       roundId,
       status: input.status,
@@ -381,23 +608,43 @@ export class AssemblyRepository {
 
   public saveArtifacts(records: AssemblyArtifactRecord[]): AssemblyArtifactRecord[] {
     for (const record of records) {
-      this.createArtifactStmt.run({
-        artifactId: record.artifactId,
-        runId: record.runId,
-        roundIndex: record.roundIndex,
-        stage: record.stage,
-        artifactType: record.artifactType,
-        participantModelRef: record.participantModelRef ?? null,
-        blindedAuthorToken: record.blindedAuthorToken ?? null,
-        payloadJson: JSON.stringify(record.payload),
-        createdAt: record.createdAt,
-      });
+      if (this.getRun(record.runId).runKind === "chat_model_council") {
+        this.saveCouncilArtifactExact(record);
+      } else {
+        this.createArtifactStmt.run(serializeArtifact(record));
+      }
     }
     if (records.length === 0) {
       return [];
     }
     const first = records[0]!;
     return this.listArtifacts(first.runId);
+  }
+
+  public saveCouncilArtifactsExact(records: AssemblyArtifactRecord[]): AssemblyArtifactRecord[] {
+    return records.map((record) => this.saveCouncilArtifactExact(record));
+  }
+
+  private saveCouncilArtifactExact(record: AssemblyArtifactRecord): AssemblyArtifactRecord {
+    const run = this.getRun(record.runId);
+    if (run.runKind !== "chat_model_council") {
+      throw new Error(`Assembly artifact ${record.artifactId} does not belong to a model council run.`);
+    }
+    this.createCouncilArtifactStmt.run(serializeArtifact(record));
+    const row = toAssemblyArtifactRow(this.getArtifactStmt.get(record.artifactId));
+    if (!row) {
+      throw new Error(`Model council artifact ${record.artifactId} was not persisted.`);
+    }
+    const persisted = mapArtifactRow(row);
+    assertCanonicalExactReplay("artifact", record.artifactId, persisted, record);
+    return persisted;
+  }
+
+  private assertRoundIsMutableAssembly(roundId: string): void {
+    const row = toAssemblyRoundRow(this.getRoundStmt.get(roundId));
+    if (row && this.getRun(row.run_id).runKind === "chat_model_council") {
+      throw new Error(`Model council round ${roundId} is immutable after insertion.`);
+    }
   }
 
   public listArtifacts(runId: string, artifactType?: AssemblyArtifactType): AssemblyArtifactRecord[] {
@@ -449,6 +696,13 @@ function serializeRun(run: AssemblyRunRecord) {
     workspaceId: run.workspaceId ?? null,
     sourceSessionId: run.sourceSessionId ?? null,
     sourceTaskId: run.sourceTaskId ?? null,
+    sourceTurnId: run.sourceTurnId ?? null,
+    runKind: run.runKind ?? "assembly",
+    generation: run.generation ?? 0,
+    leaseOwnerId: run.leaseOwnerId ?? null,
+    leaseExpiresAt: run.leaseExpiresAt ?? null,
+    councilResolutionJson: run.councilResolution ? JSON.stringify(run.councilResolution) : null,
+    councilEvidenceJson: run.councilEvidence ? JSON.stringify(run.councilEvidence) : null,
     title: run.title,
     status: run.status,
     currentStage: run.currentStage,
@@ -471,6 +725,10 @@ function serializeRunUpdate(run: AssemblyRunRecord) {
   return {
     runId: run.runId,
     title: run.title,
+    generation: run.generation ?? 0,
+    leaseOwnerId: run.leaseOwnerId ?? null,
+    leaseExpiresAt: run.leaseExpiresAt ?? null,
+    councilEvidenceJson: run.councilEvidence ? JSON.stringify(run.councilEvidence) : null,
     status: run.status,
     currentStage: run.currentStage,
     currentRoundIndex: run.currentRoundIndex,
@@ -503,6 +761,8 @@ function serializeRound(round: AssemblyRound) {
 function mapRunRow(row: AssemblyRunRow): AssemblyRunRecord {
   return {
     runId: row.run_id,
+    runKind: row.run_kind,
+    sourceTurnId: row.source_turn_id ?? undefined,
     workspaceId: row.workspace_id ?? undefined,
     sourceSessionId: row.source_session_id ?? undefined,
     sourceTaskId: row.source_task_id ?? undefined,
@@ -517,6 +777,15 @@ function mapRunRow(row: AssemblyRunRow): AssemblyRunRecord {
     stopReason: row.stop_reason ?? undefined,
     usage: row.usage_json ? safeJsonParse<AssemblyUsageSummary | undefined>(row.usage_json, undefined) : undefined,
     error: row.error_text ?? undefined,
+    generation: row.generation,
+    leaseOwnerId: row.lease_owner_id ?? undefined,
+    leaseExpiresAt: row.lease_expires_at ?? undefined,
+    councilResolution: row.council_resolution_json
+      ? parseAssemblyOptionalObject<ModelCouncilResolution>(row.council_resolution_json)
+      : undefined,
+    councilEvidence: row.council_evidence_json
+      ? parseAssemblyOptionalObject<ModelCouncilEvidence>(row.council_evidence_json)
+      : undefined,
     createdAt: row.created_at,
     startedAt: row.started_at ?? undefined,
     finishedAt: row.finished_at ?? undefined,
@@ -673,6 +942,16 @@ function parseAssemblyArtifactPayload(row: AssemblyArtifactRow): AssemblyArtifac
         exports: [],
         createdAt: row.created_at,
       });
+    case "model_council_participant":
+      return parseAssemblyObject<ModelCouncilParticipantArtifact>(row.payload_json, {
+        attempt: createFallbackModelCouncilAttempt(row),
+        responseText: "",
+      });
+    case "model_council_synthesis":
+      return parseAssemblyObject<ModelCouncilSynthesisArtifact>(row.payload_json, {
+        attempt: createFallbackModelCouncilAttempt(row, "C3_synthesize"),
+        answer: "",
+      });
     case "proposal":
       return parseAssemblyObject(row.payload_json, {
         runId: row.run_id,
@@ -748,6 +1027,45 @@ function parseAssemblyArtifactPayload(row: AssemblyArtifactRow): AssemblyArtifac
   }
 }
 
+function serializeArtifact(record: AssemblyArtifactRecord) {
+  return {
+    artifactId: record.artifactId,
+    runId: record.runId,
+    roundIndex: record.roundIndex,
+    stage: record.stage,
+    artifactType: record.artifactType,
+    participantModelRef: record.participantModelRef ?? null,
+    blindedAuthorToken: record.blindedAuthorToken ?? null,
+    payloadJson: JSON.stringify(record.payload),
+    createdAt: record.createdAt,
+  };
+}
+
+function assertCanonicalExactReplay(
+  kind: "artifact" | "round",
+  id: string,
+  persisted: AssemblyArtifactRecord | AssemblyRound,
+  candidate: AssemblyArtifactRecord | AssemblyRound,
+): void {
+  if (canonicalJsonString(persisted) !== canonicalJsonString(candidate)) {
+    throw new Error(`Model council ${kind} ${id} conflicts with its immutable canonical bytes.`);
+  }
+}
+
+function createFallbackModelCouncilAttempt(
+  row: AssemblyArtifactRow,
+  stage: ModelCouncilAttemptEvidence["stage"] = "C1_participate",
+): ModelCouncilAttemptEvidence {
+  return {
+    attemptId: row.artifact_id,
+    stage,
+    participantId: row.participant_model_ref ?? "unknown",
+    role: stage === "C3_synthesize" ? "synthesis" : "advisory",
+    status: "failed",
+    modelUsageEventIds: [],
+  };
+}
+
 function parseAssemblyObject<T>(value: string, fallback: T): T {
   const parsed = safeJsonParse<unknown>(value, {});
   return isRecord(parsed) ? (parsed as T) : fallback;
@@ -770,8 +1088,16 @@ function toAssemblyRoundRows(value: unknown): AssemblyRoundRow[] {
   return Array.isArray(value) ? value.filter(isAssemblyRoundRow) : [];
 }
 
+function toAssemblyRoundRow(value: unknown): AssemblyRoundRow | undefined {
+  return isAssemblyRoundRow(value) ? value : undefined;
+}
+
 function toAssemblyArtifactRows(value: unknown): AssemblyArtifactRow[] {
   return Array.isArray(value) ? value.filter(isAssemblyArtifactRow) : [];
+}
+
+function toAssemblyArtifactRow(value: unknown): AssemblyArtifactRow | undefined {
+  return isAssemblyArtifactRow(value) ? value : undefined;
 }
 
 function toAssemblyReputationRows(value: unknown): AssemblyReputationRow[] {
@@ -787,6 +1113,13 @@ function isAssemblyRunRow(value: unknown): value is AssemblyRunRow {
     (typeof value.workspace_id === "string" || value.workspace_id === null) &&
     (typeof value.source_session_id === "string" || value.source_session_id === null) &&
     (typeof value.source_task_id === "string" || value.source_task_id === null) &&
+    (typeof value.source_turn_id === "string" || value.source_turn_id === null) &&
+    (value.run_kind === "assembly" || value.run_kind === "chat_model_council") &&
+    typeof value.generation === "number" &&
+    (typeof value.lease_owner_id === "string" || value.lease_owner_id === null) &&
+    (typeof value.lease_expires_at === "string" || value.lease_expires_at === null) &&
+    (typeof value.council_resolution_json === "string" || value.council_resolution_json === null) &&
+    (typeof value.council_evidence_json === "string" || value.council_evidence_json === null) &&
     typeof value.title === "string" &&
     typeof value.status === "string" &&
     typeof value.current_stage === "string" &&

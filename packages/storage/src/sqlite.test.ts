@@ -136,8 +136,10 @@ test("SQLite benchmark dedup migration preserves the newest complete duplicate b
     createDatabase({ dbPath }).close();
 
     const seed = new DatabaseSync(dbPath);
+    // Keep the session-control era (172+) stamped: migration 173 is deliberately not
+    // re-runnable over an intact schema, and this rewind only needs the dedup era replayed.
     seed.exec(`
-      DELETE FROM schema_migrations WHERE version >= 53;
+      DELETE FROM schema_migrations WHERE version >= 53 AND version < 172;
       DROP INDEX IF EXISTS idx_prompt_pack_benchmark_items_unique;
       DELETE FROM prompt_pack_benchmark_items;
       DELETE FROM prompt_pack_benchmark_runs;
@@ -273,8 +275,10 @@ test("SQLite benchmark dedup repair restores the archived winner for databases t
     createDatabase({ dbPath }).close();
 
     const seed = new DatabaseSync(dbPath);
+    // Same rewind bound as above: the dedup repair replay must not re-run the
+    // session-control migrations, which reject re-application over an intact schema.
     seed.exec(`
-      DELETE FROM schema_migrations WHERE version >= 61;
+      DELETE FROM schema_migrations WHERE version >= 61 AND version < 172;
       DELETE FROM prompt_pack_benchmark_items;
       DELETE FROM prompt_pack_benchmark_runs;
       DELETE FROM prompt_pack_benchmark_item_dedup_audit;
@@ -429,6 +433,14 @@ test("SQLite prompt pack content hash migration upgrades already-migrated databa
         name TEXT NOT NULL,
         applied_at TEXT NOT NULL
       );
+    `);
+    // Migrations 172+ fail closed on databases that claim applied history without the real
+    // predecessor tables, so build the genuine v135 schema before installing the pre-hash pack shape.
+    for (let version = 1; version <= 135; version += 1) {
+      __sqliteInternals.applySchemaMigrationForTest(version, seed);
+    }
+    seed.exec(`
+      DROP TABLE IF EXISTS prompt_packs;
       CREATE TABLE prompt_packs (
         pack_id TEXT PRIMARY KEY,
         name TEXT NOT NULL,

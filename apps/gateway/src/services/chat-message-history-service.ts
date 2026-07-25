@@ -2,13 +2,16 @@ import { createHash } from "node:crypto";
 import {
   redactStructuredSecrets,
   type ChatCompletionRequest,
+  type ChatCompactionAttemptDisposition,
+  type ChatCompactionBreakerRecord,
+  type ChatCompactionStateRecord,
   type ChatInputPart,
   type ChatMessageRecord,
   type TranscriptEvent,
 } from "@goatcitadel/contracts";
-import { estimateTokensFromText, truncateByTokenEstimate } from "@goatcitadel/memory-core";
-import type { Storage } from "@goatcitadel/storage";
-import { buildConversationCompactionSummary, trimNewestContextMessagesForPromptCache } from "./chat-compaction.js";
+import { estimateTokensFromText } from "@goatcitadel/memory-core";
+import { buildChatCompactionAttemptId, buildChatCompactionStateKey, type Storage } from "@goatcitadel/storage";
+import { buildConversationCompactionSummary } from "./chat-compaction.js";
 import type { LlmService } from "./llm-service.js";
 import type { ChatTurnSessionState } from "./chat-turn-prep-service.js";
 
@@ -17,7 +20,29 @@ type ChatSystemInstructionContent = ChatCompletionRequest["messages"][number]["c
 const CHAT_COMPACTION_RECENT_TURN_LIMIT = 6;
 const CHAT_COMPACTION_WINDOW_SIZE = 8;
 const CHAT_COMPACTION_TRIGGER_TOKENS = 2200;
-const CHAT_COMPACTION_SUMMARY_TOKEN_BUDGET = 360;
+const CHAT_COMPACTION_REARM_TOKENS = 1600;
+const CHAT_COMPACTION_MIN_GROWTH_TOKENS = 600;
+// Keep the durable boundary within the storage contract. Once a session grows
+// beyond this prefix, the remaining turns stay verbatim instead of risking an
+// oversized state write or silently dropping context.
+const CHAT_COMPACTION_MAX_BOUNDARY_TURNS = 512;
+
+export interface ChatCompactionDimension {
+  dimensionHash: string;
+  providerId?: string;
+  model?: string;
+  profileFingerprint?: string;
+  /** False for the preflight-only history build before capability selection is sealed. */
+  persistState?: boolean;
+  /**
+   * One-shot governed force evidence. Only a trusted Gateway action service
+   * may construct this after binding the authenticated actor to the action.
+   */
+  forceAction?: {
+    actionId: string;
+    actorHash: string;
+  };
+}
 
 export interface ChatMessageHistoryDependencies {
   readonly storage: Pick<Storage, "chatConversationSummaries">;
@@ -42,6 +67,7 @@ export async function buildLlmMessagesFromTranscript(
     providerId?: string;
     model?: string;
     guidanceSystemInstruction?: ChatSystemInstructionContent;
+    compactionDimension?: ChatCompactionDimension;
   },
 ): Promise<ChatCompletionRequest["messages"]> {
   const runtime = deps.llmService.getRuntimeConfig();
@@ -111,26 +137,32 @@ export async function buildLlmMessagesFromBranchPath(
     providerId?: string;
     model?: string;
     guidanceSystemInstruction?: ChatSystemInstructionContent;
+    compactionDimension?: ChatCompactionDimension;
   },
   state?: ChatTurnSessionState,
 ): Promise<ChatCompletionRequest["messages"]> {
   const sessionState = state ?? (await deps.loadChatTurnSessionState(sessionId));
   const orderedMessages: ChatMessageRecord[] = [];
+  const turnRecordsById = new Map<string, ChatMessageRecord[]>();
   for (const turnId of pathTurnIds) {
     const trace = sessionState.tracesById.get(turnId);
     if (!trace) {
       continue;
     }
     const userMessage = sessionState.messagesById.get(trace.userMessageId);
+    const turnRecords: ChatMessageRecord[] = [];
     if (userMessage) {
       orderedMessages.push(userMessage);
+      turnRecords.push(userMessage);
     }
     if (trace.assistantMessageId) {
       const assistantMessage = sessionState.messagesById.get(trace.assistantMessageId);
       if (assistantMessage) {
         orderedMessages.push(assistantMessage);
+        turnRecords.push(assistantMessage);
       }
     }
+    turnRecordsById.set(turnId, turnRecords);
   }
   if (currentUserMessage) {
     orderedMessages.push(currentUserMessage);
@@ -140,6 +172,8 @@ export async function buildLlmMessagesFromBranchPath(
     sessionId,
     branchHeadTurnId: pathTurnIds.at(-1),
     branchTurnIds: pathTurnIds,
+    turnRecordsById,
+    sessionState,
   });
 }
 
@@ -201,6 +235,9 @@ async function buildLlmMessagesFromRecords(
     sessionId?: string;
     branchHeadTurnId?: string;
     branchTurnIds?: string[];
+    turnRecordsById?: Map<string, ChatMessageRecord[]>;
+    sessionState?: ChatTurnSessionState;
+    compactionDimension?: ChatCompactionDimension;
   },
 ): Promise<ChatCompletionRequest["messages"]> {
   const runtime = deps.llmService.getRuntimeConfig();
@@ -235,9 +272,14 @@ async function buildLlmMessagesFromRecords(
           sessionId: options.sessionId,
           branchHeadTurnId: options.branchHeadTurnId ?? options.branchTurnIds.at(-1) ?? options.sessionId,
           branchTurnIds: options.branchTurnIds,
+          turnRecordsById: options.turnRecordsById,
+          sessionState: options.sessionState,
           records,
           mapped,
           tokenMultiplier,
+          providerId,
+          model,
+          compactionDimension: options.compactionDimension,
         })
       : mapped;
   const guidanceSystemInstruction = normalizeGuidanceSystemInstruction(options?.guidanceSystemInstruction);
@@ -281,49 +323,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 async function compactTranscriptMessages(
-  deps: ChatMessageHistoryDependencies,
-  sessionId: string,
-  transcript: TranscriptEvent[],
+  _deps: ChatMessageHistoryDependencies,
+  _sessionId: string,
+  _transcript: TranscriptEvent[],
   mapped: ChatCompletionRequest["messages"],
-  tokenMultiplier = 1,
+  _tokenMultiplier = 1,
 ): Promise<ChatCompletionRequest["messages"]> {
-  if (mapped.length <= CHAT_COMPACTION_RECENT_TURN_LIMIT * 2) {
-    return mapped;
-  }
-  if (estimateTokensFromText(stringifyMessagesForTokenEstimate(mapped)) <= CHAT_COMPACTION_TRIGGER_TOKENS) {
-    return mapped;
-  }
-  const records = transcript
-    .filter((event) => event.type === "message.user" || event.type === "message.assistant")
-    .map(
-      (event) =>
-        ({
-          messageId: event.eventId,
-          sessionId,
-          role: event.type === "message.user" ? "user" : "assistant",
-          actorType: event.type === "message.user" ? "user" : "agent",
-          actorId: event.type === "message.user" ? "operator" : "assistant",
-          content: extractMessagePreview(event.payload),
-          timestamp: event.timestamp,
-        }) satisfies ChatMessageRecord,
-    );
-  const recentRecords = records.slice(-(CHAT_COMPACTION_RECENT_TURN_LIMIT * 2));
-  const summary = buildConversationCompactionSummary(
-    records.slice(0, Math.max(0, records.length - recentRecords.length)),
-  );
-  const recentMessages = mapped.slice(-(CHAT_COMPACTION_RECENT_TURN_LIMIT * 2));
-  if (!summary) {
-    return trimNewestContextMessagesForPromptCache(recentMessages, CHAT_COMPACTION_TRIGGER_TOKENS, tokenMultiplier);
-  }
-  const summaryContent = truncateByTokenEstimate(summary, CHAT_COMPACTION_SUMMARY_TOKEN_BUDGET);
-  const recentMessageBudget = Math.max(240, CHAT_COMPACTION_TRIGGER_TOKENS - estimateTokensFromText(summaryContent));
-  return [
-    {
-      role: "system",
-      content: summaryContent,
-    },
-    ...trimNewestContextMessagesForPromptCache(recentMessages, recentMessageBudget, tokenMultiplier),
-  ];
+  // Transcript-only callers do not supply sealed branch lineage, an exact
+  // provider/model/profile dimension, or fresh provider usage. Running the
+  // old stateless compactor here would bypass the persistent breaker and make
+  // restart/fork behavior unverifiable, so compatibility history stays
+  // verbatim. Canonical Chat routes through compactBranchMappedMessages.
+  return mapped;
 }
 
 async function compactBranchMappedMessages(
@@ -332,69 +343,331 @@ async function compactBranchMappedMessages(
     sessionId: string;
     branchHeadTurnId: string;
     branchTurnIds: string[];
+    turnRecordsById?: Map<string, ChatMessageRecord[]>;
+    sessionState?: ChatTurnSessionState;
     records: ChatMessageRecord[];
     mapped: ChatCompletionRequest["messages"];
     tokenMultiplier?: number;
+    providerId?: string;
+    model?: string;
+    compactionDimension?: ChatCompactionDimension;
   },
 ): Promise<ChatCompletionRequest["messages"]> {
-  const totalTokens = estimateTokensFromText(stringifyMessagesForTokenEstimate(input.mapped));
-  if (
-    input.branchTurnIds.length <= CHAT_COMPACTION_RECENT_TURN_LIMIT ||
-    totalTokens <= CHAT_COMPACTION_TRIGGER_TOKENS
-  ) {
+  if (input.compactionDimension?.persistState === false) {
+    return input.mapped;
+  }
+  const totalTokens = Math.ceil(
+    estimateTokensFromText(stringifyMessagesForTokenEstimate(input.mapped)) * (input.tokenMultiplier ?? 1),
+  );
+  if (input.branchTurnIds.length <= CHAT_COMPACTION_RECENT_TURN_LIMIT) {
     return input.mapped;
   }
 
   const recentTurnIds = input.branchTurnIds.slice(-CHAT_COMPACTION_RECENT_TURN_LIMIT);
   const olderTurnIds = input.branchTurnIds.slice(0, Math.max(0, input.branchTurnIds.length - recentTurnIds.length));
-  if (olderTurnIds.length === 0) {
+  const grouped = input.turnRecordsById ?? buildBranchRecordGroups(input.branchTurnIds, input.records).turnMessagesById;
+  const safeCompleteOlderTurnIds = collectSafeCompleteSummaryTurnIds(olderTurnIds, grouped).slice(
+    0,
+    CHAT_COMPACTION_MAX_BOUNDARY_TURNS,
+  );
+  if (safeCompleteOlderTurnIds.length === 0) {
     return input.mapped;
   }
 
-  const grouped = buildBranchRecordGroups(input.branchTurnIds, input.records);
-  const summaryMessages: ChatCompletionRequest["messages"] = [];
-  for (let index = 0; index < olderTurnIds.length; index += CHAT_COMPACTION_WINDOW_SIZE) {
-    const windowTurnIds = olderTurnIds.slice(index, index + CHAT_COMPACTION_WINDOW_SIZE);
-    const windowMessages = windowTurnIds.flatMap((turnId) => grouped.turnMessagesById.get(turnId) ?? []);
-    if (windowMessages.length === 0) {
-      continue;
+  const dimension = input.compactionDimension ?? buildLegacyCompactionDimension(input.providerId, input.model);
+  const summaryRepo = deps.storage.chatConversationSummaries;
+  const breakerIdentity = {
+    sessionId: input.sessionId,
+    dimensionHash: dimension.dimensionHash,
+    ...((dimension.providerId ?? input.providerId) ? { providerId: dimension.providerId ?? input.providerId } : {}),
+    ...((dimension.model ?? input.model) ? { model: dimension.model ?? input.model } : {}),
+    ...(dimension.profileFingerprint ? { profileFingerprint: dimension.profileFingerprint } : {}),
+  };
+  const supportsState =
+    typeof summaryRepo.listCompactionStates === "function" && typeof summaryRepo.upsertCompactionState === "function";
+  const supportsBreaker =
+    typeof summaryRepo.getCompactionBreaker === "function" &&
+    typeof summaryRepo.commitCompactionBoundary === "function" &&
+    typeof summaryRepo.recordCompactionNoProgress === "function" &&
+    typeof summaryRepo.observeCompactionEvidence === "function";
+  const compatibleState = supportsState
+    ? selectCompatibleCompactionState(
+        summaryRepo.listCompactionStates(input.sessionId, dimension.dimensionHash),
+        input.branchTurnIds,
+        grouped,
+      )
+    : undefined;
+  let breaker: ChatCompactionBreakerRecord | undefined;
+  try {
+    breaker = supportsBreaker ? summaryRepo.getCompactionBreaker(input.sessionId, dimension.dimensionHash) : undefined;
+  } catch {
+    // Durable anti-thrashing truth is safety state. If it cannot be read, do
+    // not silently compact with a process-local approximation.
+    return input.mapped;
+  }
+  if (breaker?.status === "blocked_corrupt") {
+    return input.mapped;
+  }
+
+  const pendingEvidence = breaker?.pendingBranchHeadTurnId
+    ? resolveExactFirstProviderUsage(
+        input.sessionState,
+        input.branchTurnIds,
+        dimension,
+        breaker.pendingBranchHeadTurnId,
+      )
+    : undefined;
+  if (supportsBreaker && breaker?.pendingAttemptId && pendingEvidence) {
+    try {
+      breaker = summaryRepo.observeCompactionEvidence({
+        ...breakerIdentity,
+        evidenceTurnId: pendingEvidence.turnId,
+        evidenceObservedTurnCount: pendingEvidence.observedTurnCount,
+        reportedInputTokens: pendingEvidence.inputTokens,
+        rearmTokens: CHAT_COMPACTION_REARM_TOKENS,
+        triggerTokens: CHAT_COMPACTION_TRIGGER_TOKENS,
+      });
+    } catch {
+      return input.mapped;
     }
-    const summary = getOrCreateConversationSummary(deps, {
+  }
+  if (breaker?.status === "blocked_corrupt") {
+    return input.mapped;
+  }
+
+  let validatedForceAction: ChatCompactionDimension["forceAction"];
+  if (dimension.forceAction) {
+    if (!supportsBreaker || typeof summaryRepo.validatePendingCompactionBreakerForceAction !== "function") {
+      return input.mapped;
+    }
+    try {
+      const validation = summaryRepo.validatePendingCompactionBreakerForceAction({
+        sessionId: input.sessionId,
+        dimensionHash: dimension.dimensionHash,
+        actionId: dimension.forceAction.actionId,
+        actorHash: dimension.forceAction.actorHash,
+      });
+      breaker = validation.breaker;
+      validatedForceAction = dimension.forceAction;
+    } catch {
+      return input.mapped;
+    }
+  }
+  const latestExactUsage = resolveExactFirstProviderUsage(input.sessionState, input.branchTurnIds, dimension);
+  const observedInputTokens = latestExactUsage?.inputTokens;
+
+  let activeState = compatibleState;
+  if (
+    activeState &&
+    !activeState.armed &&
+    input.branchTurnIds.length > activeState.observedTurnCount &&
+    observedInputTokens !== undefined &&
+    observedInputTokens <= CHAT_COMPACTION_REARM_TOKENS
+  ) {
+    activeState = summaryRepo.upsertCompactionState({
+      ...activeState,
+      baselineInputTokens: observedInputTokens,
+      lastObservedInputTokens: observedInputTokens,
+      observedTurnCount: input.branchTurnIds.length,
+      armed: true,
+    });
+  }
+
+  const existingBoundaryCount = activeState?.boundaryTurnIds.length ?? 0;
+  const hasCompleteNewWindow = safeCompleteOlderTurnIds.length >= existingBoundaryCount + CHAT_COMPACTION_WINDOW_SIZE;
+  // A rough estimate may decide that an initial attempt is eligible. It never
+  // judges whether a committed attempt was healthy; only exact provider usage
+  // from a newer descendant can mutate breaker streaks.
+  const initialTriggerTokens = observedInputTokens ?? totalTokens;
+  const breakerAllowsAttempt = validatedForceAction
+    ? breaker?.status === "tripped"
+    : !breaker || breaker.status === "closed";
+  const canCreateInitialBoundary =
+    breakerAllowsAttempt &&
+    !activeState &&
+    (validatedForceAction
+      ? safeCompleteOlderTurnIds.length >= CHAT_COMPACTION_WINDOW_SIZE
+      : initialTriggerTokens >= CHAT_COMPACTION_TRIGGER_TOKENS);
+  const canExtendBoundary = Boolean(
+    breakerAllowsAttempt &&
+    activeState &&
+    hasCompleteNewWindow &&
+    (validatedForceAction ||
+      (activeState?.armed &&
+        observedInputTokens !== undefined &&
+        observedInputTokens >= CHAT_COMPACTION_TRIGGER_TOKENS &&
+        observedInputTokens - activeState.baselineInputTokens >= CHAT_COMPACTION_MIN_GROWTH_TOKENS)),
+  );
+  const targetBoundaryTurnIds =
+    canCreateInitialBoundary || canExtendBoundary ? safeCompleteOlderTurnIds : (activeState?.boundaryTurnIds ?? []);
+  if (targetBoundaryTurnIds.length === 0) {
+    return input.mapped;
+  }
+
+  const summaryMessages: ChatCompletionRequest["messages"] = [];
+  const summaryDispositions: Array<Exclude<ChatCompactionAttemptDisposition, "no_progress">> = [];
+  let completedBoundaryCount = 0;
+  for (let index = 0; index < targetBoundaryTurnIds.length; index += CHAT_COMPACTION_WINDOW_SIZE) {
+    const windowTurnIds = targetBoundaryTurnIds.slice(index, index + CHAT_COMPACTION_WINDOW_SIZE);
+    if (windowTurnIds.length !== CHAT_COMPACTION_WINDOW_SIZE) {
+      break;
+    }
+    const windowMessages = windowTurnIds.flatMap((turnId) => grouped.get(turnId) ?? []);
+    const summaryResult = getOrCreateConversationSummary(deps, {
       sessionId: input.sessionId,
       branchHeadTurnId: input.branchHeadTurnId,
       turnIds: windowTurnIds,
       messages: windowMessages,
     });
-    if (!summary) {
-      continue;
+    if (!summaryResult) {
+      break;
     }
     summaryMessages.push({
       role: "system",
-      content: summary,
+      content: summaryResult.summary,
     });
+    summaryDispositions.push(summaryResult.disposition);
+    completedBoundaryCount += windowTurnIds.length;
   }
 
-  const verbatimMessages = recentTurnIds.flatMap((turnId) => grouped.turnMessagesById.get(turnId) ?? []);
-  const finalVerbatimRecords = [...verbatimMessages, ...grouped.trailingMessages];
-  const mappedVerbatim = await Promise.all(
-    finalVerbatimRecords.map(async (message) => {
-      const mappedIndex = input.records.findIndex((item) => item.messageId === message.messageId);
-      if (mappedIndex >= 0) {
-        return input.mapped[mappedIndex]!;
+  if (completedBoundaryCount < existingBoundaryCount) {
+    // A corrupt/missing persisted window must fail closed. Returning the full
+    // prompt is safer than silently rolling a durable boundary backward.
+    return input.mapped;
+  }
+  const completedBoundaryTurnIds = targetBoundaryTurnIds.slice(0, completedBoundaryCount);
+  const attemptedNewBoundary = canCreateInitialBoundary || canExtendBoundary;
+  if (supportsBreaker && attemptedNewBoundary && completedBoundaryCount === existingBoundaryCount) {
+    const attemptedSourceHash = hashBranchTurnSource(targetBoundaryTurnIds, grouped);
+    const attemptId = buildChatCompactionAttemptId({
+      ...breakerIdentity,
+      branchHeadTurnId: input.branchHeadTurnId,
+      observedTurnCount: input.branchTurnIds.length,
+      boundarySourceHash: attemptedSourceHash,
+      disposition: "no_progress",
+    });
+    try {
+      breaker = summaryRepo.recordCompactionNoProgress({
+        ...breakerIdentity,
+        attemptId,
+        branchHeadTurnId: input.branchHeadTurnId,
+        observedTurnCount: input.branchTurnIds.length,
+        attemptedBoundarySourceHash: attemptedSourceHash,
+        expectedBreakerRevision: breaker?.revision,
+        ...(validatedForceAction ? { forceAction: validatedForceAction } : {}),
+      });
+    } catch {
+      return input.mapped;
+    }
+  }
+  if (supportsState && completedBoundaryTurnIds.length > existingBoundaryCount && attemptedNewBoundary) {
+    const boundarySourceHash = hashBranchTurnSource(completedBoundaryTurnIds, grouped);
+    const nextState = {
+      stateKey: buildChatCompactionStateKey(
+        input.sessionId,
+        dimension.dimensionHash,
+        completedBoundaryTurnIds,
+        boundarySourceHash,
+      ),
+      ...breakerIdentity,
+      boundaryTurnIds: completedBoundaryTurnIds,
+      boundarySourceHash,
+      baselineInputTokens: observedInputTokens ?? totalTokens,
+      lastObservedInputTokens: observedInputTokens ?? totalTokens,
+      observedTurnCount: input.branchTurnIds.length,
+      armed: false,
+    };
+    const existingWindowCount = existingBoundaryCount / CHAT_COMPACTION_WINDOW_SIZE;
+    const disposition = summaryDispositions.slice(existingWindowCount).includes("fallback") ? "fallback" : "structured";
+    const attemptId = buildChatCompactionAttemptId({
+      ...breakerIdentity,
+      branchHeadTurnId: input.branchHeadTurnId,
+      observedTurnCount: input.branchTurnIds.length,
+      boundarySourceHash,
+      disposition,
+    });
+    try {
+      if (supportsBreaker) {
+        const committed = summaryRepo.commitCompactionBoundary({
+          state: nextState,
+          attemptId,
+          branchHeadTurnId: input.branchHeadTurnId,
+          disposition,
+          expectedBreakerRevision: breaker?.revision,
+          ...(validatedForceAction ? { forceAction: validatedForceAction } : {}),
+        });
+        activeState = committed.state;
+        breaker = committed.breaker;
+      } else {
+        activeState = summaryRepo.upsertCompactionState(nextState);
       }
-      return message.role === "assistant"
-        ? { role: "assistant" as const, content: message.content }
-        : { role: "user" as const, content: message.content };
-    }),
+    } catch {
+      // A lost response after a successful concurrent commit is safe to
+      // recover only when the exact attempt and exact boundary are durable.
+      // If the same breaker revision is still current, the eligible attempt
+      // genuinely failed to commit and receives one idempotent no-progress
+      // strike. Revision drift belongs to another writer and is not charged.
+      if (!supportsBreaker) {
+        return input.mapped;
+      }
+      try {
+        const refreshedBreaker = summaryRepo.getCompactionBreaker(input.sessionId, dimension.dimensionHash);
+        if (refreshedBreaker?.pendingAttemptId === attemptId || refreshedBreaker?.lastAttemptId === attemptId) {
+          const durableState = summaryRepo
+            .listCompactionStates(input.sessionId, dimension.dimensionHash)
+            .find((state) => state.stateKey === nextState.stateKey);
+          if (!durableState) {
+            return input.mapped;
+          }
+          activeState = durableState;
+          breaker = refreshedBreaker;
+        } else {
+          const breakerRevisionUnchanged = breaker
+            ? refreshedBreaker?.revision === breaker.revision
+            : refreshedBreaker === undefined;
+          if (!breakerRevisionUnchanged) {
+            return input.mapped;
+          }
+          const noProgressAttemptId = buildChatCompactionAttemptId({
+            ...breakerIdentity,
+            branchHeadTurnId: input.branchHeadTurnId,
+            observedTurnCount: input.branchTurnIds.length,
+            boundarySourceHash,
+            disposition: "no_progress",
+          });
+          breaker = summaryRepo.recordCompactionNoProgress({
+            ...breakerIdentity,
+            attemptId: noProgressAttemptId,
+            branchHeadTurnId: input.branchHeadTurnId,
+            observedTurnCount: input.branchTurnIds.length,
+            attemptedBoundarySourceHash: boundarySourceHash,
+            expectedBreakerRevision: refreshedBreaker?.revision,
+            ...(validatedForceAction ? { forceAction: validatedForceAction } : {}),
+          });
+          return input.mapped;
+        }
+      } catch {
+        return input.mapped;
+      }
+    }
+  }
+
+  const renderedBoundaryCount = activeState?.boundaryTurnIds.length ?? completedBoundaryCount;
+  const summarizedMessageIds = new Set(
+    input.branchTurnIds
+      .slice(0, renderedBoundaryCount)
+      .flatMap((turnId) => grouped.get(turnId) ?? [])
+      .map((message) => message.messageId),
   );
+  const mappedVerbatim = input.records.flatMap((message, index) =>
+    summarizedMessageIds.has(message.messageId) ? [] : [input.mapped[index]!],
+  );
+  return [...summaryMessages.slice(0, renderedBoundaryCount / CHAT_COMPACTION_WINDOW_SIZE), ...mappedVerbatim];
+}
 
-  const summaryTokenBudget = estimateTokensFromText(stringifyMessagesForTokenEstimate(summaryMessages));
-  const verbatimTokenBudget = Math.max(240, CHAT_COMPACTION_TRIGGER_TOKENS - summaryTokenBudget);
-
-  return [
-    ...summaryMessages,
-    ...trimNewestContextMessagesForPromptCache(mappedVerbatim, verbatimTokenBudget, input.tokenMultiplier ?? 1),
-  ];
+interface ConversationCompactionSummaryResult {
+  summary: string;
+  disposition: Exclude<ChatCompactionAttemptDisposition, "no_progress">;
 }
 
 function getOrCreateConversationSummary(
@@ -405,44 +678,190 @@ function getOrCreateConversationSummary(
     turnIds: string[];
     messages: ChatMessageRecord[];
   },
-): string | undefined {
+): ConversationCompactionSummaryResult | undefined {
   if (input.turnIds.length === 0 || input.messages.length === 0) {
     return undefined;
   }
-  const source = input.messages
-    .map((message) => `${message.role.toUpperCase()}: ${message.content.trim()}`)
-    .filter((line) => line.length > 0)
-    .join("\n\n");
+  if (input.turnIds.length !== CHAT_COMPACTION_WINDOW_SIZE || input.messages.some(hasRichMessageContent)) {
+    return undefined;
+  }
+  const source = serializeSummarySource(input.turnIds, input.messages);
   if (!source) {
     return undefined;
   }
   const sourceHash = createHash("sha256").update(source).digest("hex");
-  const existing = deps.storage.chatConversationSummaries
-    .listByBranch(input.sessionId, input.branchHeadTurnId)
-    .find(
-      (summary) =>
-        summary.startTurnId === input.turnIds[0] &&
-        summary.endTurnId === input.turnIds.at(-1) &&
-        summary.sourceHash === sourceHash,
-    );
-  if (existing) {
-    return existing.summary;
-  }
-  const summary = buildConversationCompactionSummary(input.messages);
-  if (!summary) {
+  const summaryRepo = deps.storage.chatConversationSummaries;
+  try {
+    const existing =
+      typeof summaryRepo.findReusableWindow === "function"
+        ? summaryRepo.findReusableWindow({ sessionId: input.sessionId, turnIds: input.turnIds, sourceHash })
+        : (typeof summaryRepo.listBySession === "function"
+            ? summaryRepo.listBySession(input.sessionId, 128)
+            : summaryRepo.listByBranch(input.sessionId, input.branchHeadTurnId)
+          ).find((summary) => summary.sourceHash === sourceHash && arraysEqual(summary.turnIds, input.turnIds));
+    if (existing) {
+      return {
+        summary: existing.summary,
+        disposition: isStructuredConversationSummary(existing.summary) ? "structured" : "fallback",
+      };
+    }
+    const summary = buildConversationCompactionSummary(input.messages);
+    if (!summary) {
+      return undefined;
+    }
+    const persisted = deps.storage.chatConversationSummaries.upsert({
+      sessionId: input.sessionId,
+      branchHeadTurnId: input.branchHeadTurnId,
+      startTurnId: input.turnIds[0]!,
+      endTurnId: input.turnIds.at(-1)!,
+      turnIds: input.turnIds,
+      sourceHash,
+      tokenEstimate: estimateTokensFromText(source),
+      summary,
+    });
+    return {
+      summary: persisted.summary,
+      disposition:
+        persisted.summary === summary || isStructuredConversationSummary(persisted.summary) ? "structured" : "fallback",
+    };
+  } catch (storageError) {
+    // Corrupt/oversized legacy rows can collide with the exact-window key. A
+    // full verbatim prompt is the safe fallback; never omit the window.
+    void storageError;
     return undefined;
   }
-  const persisted = deps.storage.chatConversationSummaries.upsert({
-    sessionId: input.sessionId,
-    branchHeadTurnId: input.branchHeadTurnId,
-    startTurnId: input.turnIds[0]!,
-    endTurnId: input.turnIds.at(-1)!,
-    turnIds: input.turnIds,
-    sourceHash,
-    tokenEstimate: estimateTokensFromText(source),
-    summary,
+}
+
+function isStructuredConversationSummary(summary: string): boolean {
+  return summary.trimStart().startsWith("Compacted conversation context.");
+}
+
+function collectSafeCompleteSummaryTurnIds(
+  olderTurnIds: string[],
+  grouped: Map<string, ChatMessageRecord[]>,
+): string[] {
+  const safeTurnIds: string[] = [];
+  const completeTurnCount = Math.floor(olderTurnIds.length / CHAT_COMPACTION_WINDOW_SIZE) * CHAT_COMPACTION_WINDOW_SIZE;
+  for (let index = 0; index < completeTurnCount; index += CHAT_COMPACTION_WINDOW_SIZE) {
+    const windowTurnIds = olderTurnIds.slice(index, index + CHAT_COMPACTION_WINDOW_SIZE);
+    const windowRecords = windowTurnIds.flatMap((turnId) => grouped.get(turnId) ?? []);
+    const hasCompleteTurns = windowTurnIds.every((turnId) => {
+      const records = grouped.get(turnId) ?? [];
+      return records.some((record) => record.role === "user") && records.some((record) => record.role === "assistant");
+    });
+    if (!hasCompleteTurns || windowRecords.length === 0 || windowRecords.some(hasRichMessageContent)) {
+      break;
+    }
+    safeTurnIds.push(...windowTurnIds);
+  }
+  return safeTurnIds;
+}
+
+function selectCompatibleCompactionState(
+  states: ChatCompactionStateRecord[],
+  branchTurnIds: string[],
+  grouped: Map<string, ChatMessageRecord[]>,
+): ChatCompactionStateRecord | undefined {
+  return states
+    .filter((state) => isExactPrefix(state.boundaryTurnIds, branchTurnIds))
+    .filter((state) => state.boundarySourceHash === hashBranchTurnSource(state.boundaryTurnIds, grouped))
+    .sort((left, right) => right.boundaryTurnIds.length - left.boundaryTurnIds.length)[0];
+}
+
+interface ExactFirstProviderUsage {
+  turnId: string;
+  inputTokens: number;
+  observedTurnCount: number;
+}
+
+function resolveExactFirstProviderUsage(
+  state: ChatTurnSessionState | undefined,
+  branchTurnIds: string[],
+  dimension: ChatCompactionDimension,
+  afterTurnId?: string,
+): ExactFirstProviderUsage | undefined {
+  if (!state || !dimension.providerId || !dimension.model) {
+    return undefined;
+  }
+  const evidenceIndex = branchTurnIds.length - 1;
+  const afterIndex = afterTurnId === undefined ? -1 : branchTurnIds.lastIndexOf(afterTurnId);
+  if (evidenceIndex < 0 || (afterTurnId !== undefined && (afterIndex < 0 || evidenceIndex <= afterIndex))) {
+    return undefined;
+  }
+  const turnId = branchTurnIds[evidenceIndex]!;
+  const trace = state.tracesById.get(turnId);
+  if (trace?.status !== "completed") {
+    return undefined;
+  }
+  const usage = trace.completion?.firstProviderRequestUsage;
+  if (
+    usage?.source !== "provider_reported" ||
+    usage.availability !== "reported" ||
+    usage.compactionDimensionHash !== dimension.dimensionHash ||
+    usage.providerId !== dimension.providerId ||
+    usage.model !== dimension.model ||
+    !Number.isSafeInteger(usage.reportedInputTokens) ||
+    usage.reportedInputTokens! < 0 ||
+    usage.effectiveInputTokens !== usage.reportedInputTokens
+  ) {
+    // The dimension hash seals the provider/model/profile fingerprint. A
+    // deterministic estimate, mismatched route, failed turn, or malformed
+    // provider receipt is never allowed to judge breaker effectiveness.
+    return undefined;
+  }
+  return {
+    turnId,
+    inputTokens: usage.reportedInputTokens,
+    observedTurnCount: branchTurnIds.length,
+  };
+}
+
+function buildLegacyCompactionDimension(
+  providerId: string | undefined,
+  model: string | undefined,
+): ChatCompactionDimension {
+  const dimensionSource = JSON.stringify({
+    version: 1,
+    providerId: providerId ?? null,
+    model: model ?? null,
+    profile: null,
   });
-  return persisted.summary;
+  return {
+    dimensionHash: createHash("sha256").update(dimensionSource).digest("hex"),
+    providerId,
+    model,
+  };
+}
+
+function hashBranchTurnSource(turnIds: string[], grouped: Map<string, ChatMessageRecord[]>): string {
+  const records = turnIds.flatMap((turnId) => grouped.get(turnId) ?? []);
+  return createHash("sha256").update(serializeSummarySource(turnIds, records)).digest("hex");
+}
+
+function serializeSummarySource(turnIds: string[], messages: ChatMessageRecord[]): string {
+  return JSON.stringify({
+    version: 1,
+    turnIds,
+    messages: messages.map((message) => ({
+      messageId: message.messageId,
+      role: message.role,
+      content: message.content,
+      parts: message.parts ?? null,
+      attachments: message.attachments ?? null,
+    })),
+  });
+}
+
+function hasRichMessageContent(message: ChatMessageRecord): boolean {
+  return Boolean(message.attachments?.length || message.parts?.length);
+}
+
+function isExactPrefix(prefix: string[], path: string[]): boolean {
+  return prefix.length <= path.length && prefix.every((turnId, index) => turnId === path[index]);
+}
+
+function arraysEqual(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function normalizeMessagePart(input: unknown): ChatInputPart | undefined {

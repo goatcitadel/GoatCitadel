@@ -14,6 +14,11 @@ import type {
   LlamaCppGpuInfo,
   LlamaCppHardwareProfile,
   LlamaCppModelManifest,
+  LlamaCppRuntimeLease,
+  LlamaCppRuntimeLeaseDiagnostics,
+  LlamaCppRuntimeLeaseEvidence,
+  LlamaCppRuntimeLeaseRequest,
+  LlamaCppRuntimeOwnership,
   LlamaCppRuntimeStatus,
 } from "@goatcitadel/contracts";
 import { coerceHttpContentLength } from "@goatcitadel/contracts";
@@ -24,6 +29,39 @@ const execFileAsync = promisify(execFile);
 const DEFAULT_LLAMACPP_ALIAS = "gemma-4-local";
 const DEFAULT_LLAMACPP_REASONING_ARGS = ["--reasoning", "off"] as const;
 const MAX_DISCOVERED_LLAMACPP_MODELS = 512;
+const DEFAULT_LLAMACPP_LEASE_IDLE_TIMEOUT_MS = 30_000;
+const MAX_LLAMACPP_LEASE_PURPOSES = 8;
+
+type LlamaCppPersistentDemand = "manual" | "api" | "autostart";
+type LlamaCppStartEvidenceReason = NonNullable<LlamaCppRuntimeLeaseEvidence["lastStart"]>["reason"];
+
+interface LlamaCppHealthObservation {
+  healthy: boolean;
+  activeModelId?: string;
+}
+
+interface LlamaCppLifecycleObservationToken {
+  generation: number;
+  identityFingerprint: string;
+  process: ChildProcess | null;
+  ownedProcessTree: LlamaCppOwnedProcessTree | null;
+}
+
+interface LlamaCppRuntimeStateCache extends LlamaCppRuntimeStatus {
+  runtimeIdentityFingerprint?: string;
+}
+
+interface LlamaCppOwnedProcessTree {
+  child: ChildProcess;
+  pid: number;
+}
+
+export interface LlamaCppRuntimeServiceHooks {
+  spawnProcess?: (command: string, args: string[], options: Parameters<typeof spawn>[2]) => ChildProcess;
+  probeHealth?: () => Promise<LlamaCppHealthObservation>;
+  terminateOwnedProcess?: (process: ChildProcess) => Promise<void> | void;
+  persistState?: (path: string, status: LlamaCppRuntimeStatus) => Promise<void>;
+}
 
 export interface LlamaCppInstallDetection {
   found: boolean;
@@ -74,6 +112,28 @@ export interface LlamaCppRuntimeServiceOptions {
   rootDir: string;
   config: LlamaCppConfig;
   onEvent?: (eventType: string, payload: Record<string, unknown>) => void;
+  leaseIdleTimeoutMs?: number;
+  runtimeHooks?: LlamaCppRuntimeServiceHooks;
+}
+
+export interface LlamaCppRuntimeLeaseHandle extends LlamaCppRuntimeLease {
+  release(): Promise<void>;
+}
+
+export interface LlamaCppRuntimeLifecycleSnapshot {
+  persistentDemand: {
+    manual: boolean;
+    api: boolean;
+    autostart: boolean;
+  };
+  idleShutdownRemainingMs?: number;
+}
+
+export interface LlamaCppRuntimeConfigTransitionAssessment {
+  allowed: boolean;
+  identityChanged: boolean;
+  activeLeaseCount: number;
+  reason?: "active_leases";
 }
 
 interface CommandResolution {
@@ -83,6 +143,7 @@ interface CommandResolution {
 
 export class LlamaCppRuntimeService {
   private process: ChildProcess | null = null;
+  private ownedProcessTree: LlamaCppOwnedProcessTree | null = null;
   private desiredState: "stopped" | "running" = "stopped";
   private processState: "stopped" | "starting" | "running" | "error" = "stopped";
   private healthy = false;
@@ -96,6 +157,26 @@ export class LlamaCppRuntimeService {
   private lastCommandSource: LlamaCppRuntimeStatus["commandSource"] = "missing";
   private hfDownloadJobs = new Map<string, LlamaCppHuggingFaceDownloadJobStatus>();
   private hfDownloadControllers = new Map<string, AbortController>();
+  private readonly leases = new Map<string, LlamaCppRuntimeLease>();
+  private readonly persistentDemand = new Set<LlamaCppPersistentDemand>();
+  private readonly intentionalExits = new WeakSet<ChildProcess>();
+  private startupPromise: Promise<LlamaCppRuntimeStatus> | undefined;
+  private startupAbortController: AbortController | undefined;
+  private idleTimer: NodeJS.Timeout | undefined;
+  private idleDeadline?: string;
+  private ownership: LlamaCppRuntimeOwnership = "none";
+  private leaseEvidence: LlamaCppRuntimeLeaseEvidence = {};
+  private lifecycleGeneration = 0;
+  private disposed = false;
+  private stateLoaded = false;
+  private stateLoadPromise: Promise<void> | undefined;
+  private initPromise: Promise<void> | undefined;
+  private idleShutdownPromise: Promise<void> | undefined;
+  private stopPromise: Promise<LlamaCppRuntimeStatus> | undefined;
+  private closePromise: Promise<void> | undefined;
+  private readonly queuedStartupPromises = new Set<Promise<LlamaCppRuntimeStatus>>();
+  private readonly refreshPromises = new Set<Promise<LlamaCppRuntimeStatus>>();
+  private persistTail: Promise<void> = Promise.resolve();
 
   private readonly stateCachePath: string;
 
@@ -103,20 +184,145 @@ export class LlamaCppRuntimeService {
     this.stateCachePath = path.resolve(options.rootDir, "data", "llamacpp-runtime-state.json");
   }
 
-  public async init(): Promise<void> {
-    await this.loadCachedState();
+  public init(): Promise<void> {
+    if (this.initPromise) {
+      return this.initPromise;
+    }
+    const initialization = this.initCore();
+    this.initPromise = initialization;
+    void initialization.catch(() => {
+      if (this.initPromise === initialization) {
+        this.initPromise = undefined;
+      }
+    });
+    return initialization;
+  }
+
+  private async initCore(): Promise<void> {
+    await this.ensureStateLoaded();
+    if (this.disposed) {
+      return;
+    }
     if (this.options.config.enabled && this.options.config.autoStart) {
       await this.start("auto_start");
       return;
     }
-    await this.refresh();
+    this.syncDesiredState();
+    await this.refreshCore();
   }
 
   public updateConfig(config: LlamaCppConfig): void {
+    this.assertCanApplyConfig(config);
+    const identityChanged = hasLlamaCppRuntimeIdentityChanged(this.options.config, config);
+    if (identityChanged) {
+      this.lifecycleGeneration += 1;
+      this.startupAbortController?.abort();
+      this.cancelIdleShutdown();
+      this.cancelRestart();
+      this.restartTimestamps = [];
+      this.leaseEvidence = {};
+      this.lastError = undefined;
+      this.activeModelId = undefined;
+      this.lastCommand = undefined;
+      this.lastCommandSource = "missing";
+      this.healthy = false;
+      if (!this.ownedProcessTree) {
+        this.processState = "stopped";
+        this.ownership = "none";
+      }
+      this.updatedAt = new Date().toISOString();
+    }
     this.options = {
       ...this.options,
       config,
     };
+    if (!config.autoStart) {
+      this.persistentDemand.delete("autostart");
+    }
+    if (!config.enabled) {
+      this.lifecycleGeneration += 1;
+      this.startupAbortController?.abort();
+      this.closed = true;
+      this.persistentDemand.clear();
+      this.cancelIdleShutdown();
+      this.cancelRestart();
+    } else if (!this.hasRuntimeDemand()) {
+      this.scheduleIdleShutdown();
+    }
+    this.syncDesiredState();
+  }
+
+  public getConfigSnapshot(): LlamaCppConfig {
+    return structuredClone(this.options.config);
+  }
+
+  public getLifecycleSnapshot(): LlamaCppRuntimeLifecycleSnapshot {
+    const idleShutdownRemainingMs = this.idleDeadline
+      ? Math.max(0, new Date(this.idleDeadline).getTime() - Date.now())
+      : undefined;
+    return {
+      persistentDemand: {
+        manual: this.persistentDemand.has("manual"),
+        api: this.persistentDemand.has("api"),
+        autostart: this.persistentDemand.has("autostart"),
+      },
+      ...(idleShutdownRemainingMs === undefined ? {} : { idleShutdownRemainingMs }),
+    };
+  }
+
+  public assessConfigTransition(config: LlamaCppConfig): LlamaCppRuntimeConfigTransitionAssessment {
+    const identityChanged = hasLlamaCppRuntimeIdentityChanged(this.options.config, config);
+    const activeLeaseCount = this.leases.size;
+    const allowed = !identityChanged || activeLeaseCount === 0;
+    return {
+      allowed,
+      identityChanged,
+      activeLeaseCount,
+      ...(allowed ? {} : { reason: "active_leases" as const }),
+    };
+  }
+
+  public assertCanApplyConfig(config: LlamaCppConfig): void {
+    const assessment = this.assessConfigTransition(config);
+    if (!assessment.allowed) {
+      throw new Error(
+        `Cannot change llama.cpp runtime identity while ${assessment.activeLeaseCount} active lease(s) are in use`,
+      );
+    }
+  }
+
+  public async restoreLifecycleSnapshot(snapshot: LlamaCppRuntimeLifecycleSnapshot): Promise<LlamaCppRuntimeStatus> {
+    if (this.disposed) {
+      throw new Error("llama.cpp runtime service is closed");
+    }
+    await this.awaitStableLifecycle();
+    if (this.disposed) {
+      throw new Error("llama.cpp runtime service is closed");
+    }
+    this.cancelIdleShutdown();
+    this.persistentDemand.clear();
+    if (this.options.config.enabled) {
+      for (const demand of persistentDemandFromSnapshot(snapshot)) {
+        this.persistentDemand.add(demand);
+      }
+    }
+    this.closed = !this.options.config.enabled;
+    this.syncDesiredState();
+
+    if (this.options.config.enabled && this.hasRuntimeDemand()) {
+      const generation = this.lifecycleGeneration;
+      await this.awaitIdleShutdown();
+      this.assertLifecycleGeneration(generation);
+      return this.ensureStarted("lifecycle_restore", "other");
+    }
+    if (this.options.config.enabled && snapshot.idleShutdownRemainingMs !== undefined) {
+      this.scheduleIdleShutdown(snapshot.idleShutdownRemainingMs);
+    }
+    // A config transition can move from an externally owned endpoint to a new
+    // identity without persistent demand. Re-probe the new endpoint so the
+    // returned settings/runtime snapshot never carries health or ownership
+    // observed against the previous base URL.
+    return this.refreshCore();
   }
 
   public getStatus(): LlamaCppRuntimeStatus {
@@ -130,24 +336,233 @@ export class LlamaCppRuntimeService {
       desiredState: this.desiredState,
       processState: this.processState,
       baseUrl: normalizeLlamaCppProviderBaseUrl(this.options.config.server.baseUrl),
-      pid: this.process?.pid,
+      pid: this.process?.pid ?? this.ownedProcessTree?.pid,
       healthy: this.healthy,
-      activeModelId: this.activeModelId ?? normalizeOptionalText(this.options.config.launch.alias),
+      activeModelId: this.healthy
+        ? (this.activeModelId ?? normalizeOptionalText(this.options.config.launch.alias))
+        : undefined,
       command: this.lastCommand,
       commandSource: this.lastCommandSource,
       modelPath: resolveConfiguredPath(this.options.rootDir, this.options.config.launch.modelPath),
       lastError: this.lastError,
       updatedAt: this.updatedAt,
       launchCommandPreview: commandPreview,
+      leaseDiagnostics: this.buildLeaseDiagnostics(),
     };
   }
 
+  public async acquireLease(
+    input: LlamaCppRuntimeLeaseRequest,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<LlamaCppRuntimeLeaseHandle> {
+    if (this.disposed) {
+      throw new Error("llama.cpp runtime service is closed");
+    }
+    throwIfAborted(options.signal);
+    await this.awaitStableLifecycle(options.signal);
+    if (this.disposed) {
+      throw new Error("llama.cpp runtime service is closed");
+    }
+    const purpose = normalizeLeasePurpose(input.purpose);
+    const acquiredAt = new Date().toISOString();
+    const lease: LlamaCppRuntimeLease = {
+      leaseId: randomUUID(),
+      purpose,
+      acquiredAt,
+    };
+    this.cancelIdleShutdown();
+    this.leases.set(lease.leaseId, lease);
+    this.leaseEvidence.lastLease = { at: acquiredAt, action: "acquired", purpose };
+    this.syncDesiredState();
+    const generation = this.lifecycleGeneration;
+
+    try {
+      await waitForPromiseWithSignal(this.awaitIdleShutdown(), options.signal);
+      this.assertLifecycleGeneration(generation);
+      if (!this.leases.has(lease.leaseId)) {
+        throw new Error("llama.cpp lease was settled during a forced runtime transition");
+      }
+      await waitForPromiseWithSignal(this.ensureStarted("lease", "lease"), options.signal);
+      if (!this.leases.has(lease.leaseId) || this.disposed || !this.options.config.enabled) {
+        throw new Error("llama.cpp lease was settled during a forced runtime transition");
+      }
+    } catch (error) {
+      await this.releaseLease(lease.leaseId);
+      throw error;
+    }
+
+    let released = false;
+    return {
+      ...lease,
+      release: async () => {
+        if (released) {
+          return;
+        }
+        released = true;
+        await this.releaseLease(lease.leaseId);
+      },
+    };
+  }
+
+  public async releaseLease(leaseId: string): Promise<void> {
+    const lease = this.leases.get(leaseId);
+    if (!lease) {
+      return;
+    }
+    this.leases.delete(leaseId);
+    this.leaseEvidence.lastLease = {
+      at: new Date().toISOString(),
+      action: "released",
+      purpose: lease.purpose,
+    };
+    if (!this.hasRuntimeDemand()) {
+      this.cancelRestart();
+      if (this.startupPromise) {
+        await this.cancelUndemandedStartup();
+      } else {
+        this.scheduleIdleShutdown();
+      }
+    }
+    this.syncDesiredState();
+  }
+
   public async start(reason = "manual"): Promise<LlamaCppRuntimeStatus> {
-    this.desiredState = "running";
+    if (this.disposed) {
+      throw new Error("llama.cpp runtime service is closed");
+    }
+    await this.awaitStableLifecycle();
+    if (this.disposed) {
+      throw new Error("llama.cpp runtime service is closed");
+    }
+    const demand = classifyPersistentDemand(reason, this.options.config.autoStart);
+    if (demand) {
+      this.persistentDemand.add(demand);
+    }
+    this.cancelIdleShutdown();
+    this.syncDesiredState();
+    const generation = this.lifecycleGeneration;
+    await this.awaitIdleShutdown();
+    this.assertLifecycleGeneration(generation);
+    return this.ensureStarted(reason, classifyStartEvidenceReason(reason));
+  }
+
+  private ensureStarted(reason: string, evidenceReason: LlamaCppStartEvidenceReason): Promise<LlamaCppRuntimeStatus> {
+    const activeStartup = this.startupPromise;
+    if (activeStartup) {
+      if (!this.startupAbortController?.signal.aborted) {
+        return activeStartup;
+      }
+      const requestGeneration = this.lifecycleGeneration;
+      const replacement = activeStartup
+        .catch(() => undefined)
+        .then(() => {
+          if (this.disposed || this.closed || requestGeneration !== this.lifecycleGeneration) {
+            throw createRuntimeStartSupersededError();
+          }
+          if (reason === "lease" && !this.hasRuntimeDemand()) {
+            throw createLeaseAbortError();
+          }
+          if (reason === "restart" && !this.hasRuntimeDemand()) {
+            throw createRuntimeStartSupersededError();
+          }
+          if (this.startupPromise && this.startupPromise !== activeStartup) {
+            return this.ensureStarted(reason, evidenceReason);
+          }
+          return this.beginStartup(reason, evidenceReason);
+        });
+      this.trackQueuedStartup(replacement);
+      return replacement;
+    }
+    return this.beginStartup(reason, evidenceReason);
+  }
+
+  private beginStartup(reason: string, evidenceReason: LlamaCppStartEvidenceReason): Promise<LlamaCppRuntimeStatus> {
+    const generation = this.lifecycleGeneration;
+    const abortController = new AbortController();
+    this.startupAbortController = abortController;
+    const requestedAt = new Date().toISOString();
+    this.leaseEvidence.lastStart = { at: requestedAt, reason: evidenceReason, outcome: "requested" };
+    const startup = this.startCore(reason, generation, abortController.signal);
+    this.startupPromise = startup;
+    void startup.then(
+      () => {
+        if (this.startupPromise === startup) {
+          this.startupPromise = undefined;
+          this.startupAbortController = undefined;
+        }
+        if (generation !== this.lifecycleGeneration) {
+          return;
+        }
+        this.leaseEvidence.lastStart = {
+          at: new Date().toISOString(),
+          reason: evidenceReason,
+          outcome: "ready",
+        };
+        if (!this.hasRuntimeDemand()) {
+          this.scheduleIdleShutdown();
+        }
+      },
+      () => {
+        if (this.startupPromise === startup) {
+          this.startupPromise = undefined;
+          this.startupAbortController = undefined;
+        }
+        if (generation !== this.lifecycleGeneration) {
+          return;
+        }
+        this.leaseEvidence.lastStart = {
+          at: new Date().toISOString(),
+          reason: evidenceReason,
+          outcome: "failed",
+        };
+      },
+    );
+    return startup;
+  }
+
+  private async startCore(reason: string, generation: number, signal: AbortSignal): Promise<LlamaCppRuntimeStatus> {
+    this.assertLifecycleGeneration(generation);
     this.closed = false;
 
     if (!this.options.config.enabled) {
       throw new Error("llama.cpp runtime is disabled in assistant config");
+    }
+
+    let ownedStartAttemptPrepared = false;
+    if (this.process?.pid) {
+      this.ownedProcessTree ??= { child: this.process, pid: this.process.pid };
+      const status = await waitForPromiseWithSignal(this.refresh(), signal);
+      this.assertLifecycleGeneration(generation);
+      if (status.healthy) {
+        return status;
+      }
+      await this.prepareOwnedStartAttempt("unhealthy_restart");
+      ownedStartAttemptPrepared = true;
+      this.assertLifecycleGeneration(generation);
+    }
+
+    const observed = await waitForPromiseWithSignal(
+      this.readRemoteHealth().catch(() => undefined),
+      signal,
+    );
+    this.assertLifecycleGeneration(generation);
+    if (observed?.healthy) {
+      this.ownership = this.ownedProcessTree || this.process?.pid ? "owned" : "external";
+      this.processState = "running";
+      this.healthy = true;
+      this.activeModelId = observed.activeModelId ?? this.options.config.launch.alias;
+      this.lastError = undefined;
+      this.updatedAt = new Date().toISOString();
+      await this.persistState();
+      return this.getStatus();
+    }
+
+    // Count every owned-start attempt before validating launch inputs. A model or
+    // executable can disappear after a healthy process crashes; if those failures
+    // do not consume budget, the crash-restart loop can reschedule forever.
+    if (!ownedStartAttemptPrepared) {
+      await this.prepareOwnedStartAttempt(this.ownedProcessTree ? "orphaned_process_tree" : undefined);
+      this.assertLifecycleGeneration(generation);
     }
 
     const modelPath = resolveConfiguredPath(this.options.rootDir, this.options.config.launch.modelPath);
@@ -158,23 +573,11 @@ export class LlamaCppRuntimeService {
       throw new Error(`llama.cpp model path does not exist: ${modelPath}`);
     }
 
-    if (this.process?.pid && this.processState === "running") {
-      await this.refresh();
-      return this.getStatus();
-    }
-
-    const observed = await this.readRemoteHealth().catch(() => undefined);
-    if (observed?.healthy) {
-      this.processState = "running";
-      this.healthy = true;
-      this.activeModelId = observed.activeModelId ?? this.options.config.launch.alias;
-      this.lastError = undefined;
-      this.updatedAt = new Date().toISOString();
-      await this.persistState();
-      return this.getStatus();
-    }
-
-    const commandResolution = await resolveLlamaCppCommand(this.options.config.server.command);
+    const commandResolution = await waitForPromiseWithSignal(
+      resolveLlamaCppCommand(this.options.config.server.command),
+      signal,
+    );
+    this.assertLifecycleGeneration(generation);
     this.lastCommand = commandResolution.command;
     this.lastCommandSource = commandResolution.source;
     if (!commandResolution.command) {
@@ -183,23 +586,58 @@ export class LlamaCppRuntimeService {
       );
     }
 
-    this.assertRestartBudget();
-    this.bumpRestartCounter();
-
     this.processState = "starting";
     this.healthy = false;
     this.lastError = undefined;
     this.updatedAt = new Date().toISOString();
     this.emit("llamacpp_starting", { reason, command: commandResolution.command });
     await this.persistState();
+    throwIfAborted(signal);
+    this.assertLifecycleGeneration(generation);
 
-    const child = spawn(commandResolution.command, buildLlamaCppLaunchArgs(this.options.rootDir, this.options.config), {
-      cwd: this.options.rootDir,
-      env: process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
+    const spawnProcess = this.options.runtimeHooks?.spawnProcess ?? spawn;
+    const child = spawnProcess(
+      commandResolution.command,
+      buildLlamaCppLaunchArgs(this.options.rootDir, this.options.config),
+      {
+        cwd: this.options.rootDir,
+        env: process.env,
+        stdio: ["ignore", "pipe", "pipe"],
+        detached: process.platform !== "win32",
+        windowsHide: true,
+      },
+    );
+    child.on("error", (error) => {
+      const belongsToCurrentLifecycle =
+        generation === this.lifecycleGeneration &&
+        (this.process === child || (!child.pid && !this.process && !this.ownedProcessTree));
+      if (belongsToCurrentLifecycle) {
+        this.lastError = error.message;
+        this.processState = "error";
+        this.healthy = false;
+        this.activeModelId = undefined;
+        this.updatedAt = new Date().toISOString();
+        this.persistStateBestEffort("spawn_error");
+      }
+      this.emit("llamacpp_spawn_error", { message: error.message });
     });
     this.process = child;
+    if (!child.pid) {
+      this.process = null;
+      this.processState = "error";
+      this.healthy = false;
+      this.lastError = "llama.cpp server spawn did not return a process identifier";
+      this.updatedAt = new Date().toISOString();
+      try {
+        child.kill("SIGKILL");
+      } catch (error) {
+        this.emit("llamacpp_spawn_cleanup_error", { message: normalizeErrorMessage(error) });
+      }
+      await this.persistState();
+      throw new Error(this.lastError);
+    }
+    this.ownedProcessTree = { child, pid: child.pid };
+    this.ownership = "owned";
 
     child.stdout?.on("data", (chunk) => {
       const message = chunk.toString("utf8").trim();
@@ -214,15 +652,26 @@ export class LlamaCppRuntimeService {
         this.emit("llamacpp_stderr", { message });
       }
     });
-    child.on("error", (error) => {
-      this.lastError = error.message;
-      this.emit("llamacpp_spawn_error", { message: error.message });
-    });
     child.on("exit", (code, signal) => {
-      this.process = null;
-      const unexpected = !this.closed && this.desiredState === "running";
+      const isCurrentProcess = this.process === child;
+      if (isCurrentProcess) {
+        this.process = null;
+        this.ownership = this.ownedProcessTree?.child === child ? "owned" : "none";
+      }
+      const unexpected =
+        isCurrentProcess && !this.intentionalExits.has(child) && !this.closed && this.hasRuntimeDemand();
+      if (!isCurrentProcess) {
+        return;
+      }
+      this.leaseEvidence.lastExit = {
+        at: new Date().toISOString(),
+        unexpected,
+        ...(typeof code === "number" ? { code } : {}),
+        ...(signal ? { signal } : {}),
+      };
       this.processState = unexpected ? "error" : "stopped";
       this.healthy = false;
+      this.activeModelId = undefined;
       this.updatedAt = new Date().toISOString();
       if (unexpected) {
         this.lastError = `llama.cpp server exited unexpectedly (code=${code ?? "null"}, signal=${signal ?? "null"})`;
@@ -232,83 +681,183 @@ export class LlamaCppRuntimeService {
           signal,
           message: this.lastError,
         });
-        void this.persistState();
+        this.persistStateBestEffort("unexpected_exit");
         this.scheduleRestart();
       } else {
         this.emit("llamacpp_exited", { unexpected: false, code, signal });
-        void this.persistState();
+        this.persistStateBestEffort("expected_exit");
       }
     });
 
-    const healthy = await this.waitForHealthy(this.options.config.server.startTimeoutMs);
-    if (!healthy) {
-      this.processState = "error";
-      this.healthy = false;
-      this.lastError = "llama.cpp server did not become healthy within timeout";
+    try {
+      const healthy = await this.waitForHealthy(this.options.config.server.startTimeoutMs, signal);
+      this.assertLifecycleGeneration(generation);
+      if (!healthy) {
+        this.processState = "error";
+        this.healthy = false;
+        this.lastError = "llama.cpp server did not become healthy within timeout";
+        this.updatedAt = new Date().toISOString();
+        await this.persistState();
+        await this.stopOwnedProcess("startup_timeout");
+        throw new Error(this.lastError);
+      }
+
+      this.processState = "running";
+      this.healthy = true;
       this.updatedAt = new Date().toISOString();
       await this.persistState();
-      await this.stop("startup_timeout");
-      throw new Error(this.lastError);
+      this.emit("llamacpp_started", {
+        pid: this.process?.pid,
+        baseUrl: normalizeLlamaCppProviderBaseUrl(this.options.config.server.baseUrl),
+      });
+      return this.getStatus();
+    } catch (error) {
+      if (this.process === child) {
+        await this.stopOwnedProcess("startup_failed").catch(() => undefined);
+      }
+      throw error;
     }
+  }
 
-    this.processState = "running";
-    this.healthy = true;
-    this.updatedAt = new Date().toISOString();
-    await this.persistState();
-    this.emit("llamacpp_started", {
-      pid: this.process?.pid,
-      baseUrl: normalizeLlamaCppProviderBaseUrl(this.options.config.server.baseUrl),
+  public stop(reason = "manual", options: { force?: boolean } = {}): Promise<LlamaCppRuntimeStatus> {
+    if (this.stopPromise) {
+      return this.stopPromise;
+    }
+    const stopping = this.stopCore(reason, options);
+    const tracked = stopping.finally(() => {
+      if (this.stopPromise === tracked) {
+        this.stopPromise = undefined;
+      }
     });
+    this.stopPromise = tracked;
+    return tracked;
+  }
+
+  private async stopCore(reason: string, options: { force?: boolean }): Promise<LlamaCppRuntimeStatus> {
+    const force = options.force === true || this.disposed;
+    if (this.leases.size > 0 && !force) {
+      throw new Error(`Cannot stop llama.cpp runtime while ${this.leases.size} active lease(s) are in use`);
+    }
+    this.lifecycleGeneration += 1;
+    this.startupAbortController?.abort();
+    this.closed = true;
+    this.persistentDemand.clear();
+    if (force) {
+      this.settleLeases();
+    }
+    this.cancelIdleShutdown();
+    this.cancelRestart();
+    this.syncDesiredState();
+
+    const pendingStateLoad = this.stateLoadPromise;
+    if (pendingStateLoad) {
+      await pendingStateLoad.catch(() => undefined);
+    } else {
+      // A stop is authoritative and must not be overwritten later by a cold,
+      // stale cache read that had not started yet.
+      this.stateLoaded = true;
+    }
+    await this.awaitStartupQuiescence();
+    await this.awaitIdleShutdown();
+    await this.stopOwnedProcess(reason);
     return this.getStatus();
   }
 
-  public async stop(reason = "manual"): Promise<LlamaCppRuntimeStatus> {
-    this.desiredState = "stopped";
-    this.closed = true;
-    if (this.restartTimer) {
-      clearTimeout(this.restartTimer);
-      this.restartTimer = undefined;
-    }
-
-    const running = this.process;
-    if (!running?.pid) {
-      const health = await this.readRemoteHealth().catch(() => undefined);
+  private async stopOwnedProcess(reason: string): Promise<void> {
+    const ownedTree = this.ownedProcessTree;
+    if (!ownedTree) {
+      if (this.disposed) {
+        this.processState = "stopped";
+        this.healthy = false;
+        this.activeModelId = undefined;
+        this.ownership = "none";
+        this.updatedAt = new Date().toISOString();
+        await this.persistState();
+        return;
+      }
+      const token = this.captureLifecycleObservationToken();
+      const health = await this.readRemoteHealth(token).catch(() => undefined);
+      if (!this.isLifecycleObservationCurrent(token)) {
+        return;
+      }
       this.processState = health?.healthy ? "running" : "stopped";
       this.healthy = health?.healthy ?? false;
-      this.activeModelId = health?.activeModelId ?? this.activeModelId;
+      this.activeModelId = health?.healthy ? health.activeModelId : undefined;
+      this.ownership = health?.healthy ? "external" : "none";
       this.updatedAt = new Date().toISOString();
       await this.persistState();
-      return this.getStatus();
+      return;
     }
 
-    this.emit("llamacpp_stopping", { reason, pid: running.pid });
-    if (process.platform === "win32") {
-      await killWindowsProcessTree(running.pid);
-    } else {
-      try {
-        process.kill(running.pid, "SIGTERM");
-      } catch {
-        // ignore
+    const running = ownedTree.child;
+    this.intentionalExits.add(running);
+    this.emit("llamacpp_stopping", { reason, pid: ownedTree.pid });
+    try {
+      if (this.options.runtimeHooks?.terminateOwnedProcess) {
+        await this.options.runtimeHooks.terminateOwnedProcess(running);
+      } else if (process.platform === "win32") {
+        await killWindowsProcessTree(ownedTree.pid);
+      } else {
+        await terminatePosixProcess(running, ownedTree.pid);
       }
+    } catch (error) {
+      this.lastError = `Failed to terminate owned llama.cpp process tree: ${normalizeErrorMessage(error)}`;
+      this.processState = "error";
+      this.healthy = false;
+      this.activeModelId = undefined;
+      this.ownership = "owned";
+      this.updatedAt = new Date().toISOString();
+      await this.persistState();
+      throw error;
     }
 
-    this.process = null;
+    if (this.process === running) {
+      this.process = null;
+    }
+    if (this.ownedProcessTree === ownedTree) {
+      this.ownedProcessTree = null;
+    }
+    this.ownership = "none";
     this.processState = "stopped";
     this.healthy = false;
+    this.activeModelId = undefined;
     this.updatedAt = new Date().toISOString();
     await this.persistState();
-    return this.getStatus();
   }
 
   public async refresh(): Promise<LlamaCppRuntimeStatus> {
-    const health = await this.readRemoteHealth().catch(() => undefined);
+    if (this.disposed) {
+      return this.getStatus();
+    }
+    await this.awaitStableLifecycle();
+    if (this.disposed) {
+      return this.getStatus();
+    }
+    return this.refreshCore();
+  }
+
+  private refreshCore(): Promise<LlamaCppRuntimeStatus> {
+    const refreshing = this.refreshCoreTracked();
+    this.refreshPromises.add(refreshing);
+    void refreshing.finally(() => this.refreshPromises.delete(refreshing)).catch(() => undefined);
+    return refreshing;
+  }
+
+  private async refreshCoreTracked(): Promise<LlamaCppRuntimeStatus> {
+    const token = this.captureLifecycleObservationToken();
+    const health = await this.readRemoteHealth(token).catch(() => undefined);
+    if (!this.isLifecycleObservationCurrent(token)) {
+      return this.getStatus();
+    }
     if (!health?.healthy) {
       if (!this.process?.pid && this.desiredState === "stopped") {
         this.processState = "stopped";
-      } else if (this.process?.pid) {
+      } else if (this.ownedProcessTree || this.process?.pid) {
         this.processState = "error";
       }
+      this.ownership = this.ownedProcessTree || this.process?.pid ? "owned" : "none";
       this.healthy = false;
+      this.activeModelId = undefined;
       this.updatedAt = new Date().toISOString();
       await this.persistState();
       return this.getStatus();
@@ -316,6 +865,7 @@ export class LlamaCppRuntimeService {
 
     this.healthy = true;
     this.processState = "running";
+    this.ownership = this.ownedProcessTree || this.process?.pid ? "owned" : "external";
     this.activeModelId = health.activeModelId ?? this.options.config.launch.alias;
     this.lastError = undefined;
     this.updatedAt = new Date().toISOString();
@@ -331,14 +881,11 @@ export class LlamaCppRuntimeService {
     return this.listRemoteModels();
   }
 
-  private async listRemoteModels(): Promise<LlamaCppModelManifest[]> {
-    const url = joinUrl(
-      normalizeLlamaCppServerRoot(this.options.config.server.baseUrl),
-      this.options.config.server.modelsPath,
-    );
+  private async listRemoteModels(config: LlamaCppConfig = this.options.config): Promise<LlamaCppModelManifest[]> {
+    const url = joinUrl(normalizeLlamaCppServerRoot(config.server.baseUrl), config.server.modelsPath);
     const response = await fetch(url, {
       method: "GET",
-      signal: AbortSignal.timeout(this.options.config.server.requestTimeoutMs),
+      signal: AbortSignal.timeout(config.server.requestTimeoutMs),
       redirect: "manual",
     });
     if (!response.ok) {
@@ -349,7 +896,7 @@ export class LlamaCppRuntimeService {
       models?: Array<Record<string, unknown>>;
     }>(response, {
       maxBytes: 512 * 1024,
-      timeoutMs: this.options.config.server.requestTimeoutMs,
+      timeoutMs: config.server.requestTimeoutMs,
       label: "llama.cpp models",
     });
     const items = Array.isArray(payload.data) ? payload.data : Array.isArray(payload.models) ? payload.models : [];
@@ -632,18 +1179,58 @@ export class LlamaCppRuntimeService {
     });
   }
 
-  public async close(): Promise<void> {
-    await this.stop("shutdown");
+  public close(): Promise<void> {
+    if (this.closePromise) {
+      return this.closePromise;
+    }
+    const closing = this.closeCore();
+    const tracked = closing.catch((error) => {
+      if (this.closePromise === tracked) {
+        this.closePromise = undefined;
+      }
+      throw error;
+    });
+    this.closePromise = tracked;
+    return tracked;
   }
 
-  private async readRemoteHealth(): Promise<{ healthy: boolean; activeModelId?: string }> {
-    const healthUrl = joinUrl(
-      normalizeLlamaCppServerRoot(this.options.config.server.baseUrl),
-      this.options.config.server.healthPath,
-    );
+  private async closeCore(): Promise<void> {
+    this.disposed = true;
+    const inProgressStop = this.stopPromise;
+    if (inProgressStop) {
+      await inProgressStop.catch(() => undefined);
+    }
+    await this.stop("shutdown", { force: true });
+    await this.initPromise?.catch(() => undefined);
+    await this.awaitRefreshQuiescence();
+    await this.awaitStartupQuiescence();
+  }
+
+  private async readRemoteHealth(
+    token: LlamaCppLifecycleObservationToken = this.captureLifecycleObservationToken(),
+  ): Promise<LlamaCppHealthObservation> {
+    const config = structuredClone(this.options.config);
+    try {
+      const observation = this.options.runtimeHooks?.probeHealth
+        ? await this.options.runtimeHooks.probeHealth()
+        : await this.readRemoteHealthFromNetwork(config);
+      if (this.isLifecycleObservationCurrent(token)) {
+        this.leaseEvidence.lastProbe = { at: new Date().toISOString(), healthy: observation.healthy };
+      }
+      return observation;
+    } catch (error) {
+      if (this.isLifecycleObservationCurrent(token)) {
+        this.leaseEvidence.lastProbe = { at: new Date().toISOString(), healthy: false };
+      }
+      throw error;
+    }
+  }
+
+  private async readRemoteHealthFromNetwork(config: LlamaCppConfig): Promise<LlamaCppHealthObservation> {
+    const healthUrl = joinUrl(normalizeLlamaCppServerRoot(config.server.baseUrl), config.server.healthPath);
     const response = await fetch(healthUrl, {
       method: "GET",
-      signal: AbortSignal.timeout(this.options.config.server.requestTimeoutMs),
+      signal: AbortSignal.timeout(config.server.requestTimeoutMs),
       redirect: "manual",
     });
     if (!response.ok) {
@@ -651,11 +1238,11 @@ export class LlamaCppRuntimeService {
     }
 
     const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-    let activeModelId = normalizeOptionalText(this.options.config.launch.alias);
+    let activeModelId = normalizeOptionalText(config.launch.alias);
     if (contentType.includes("json")) {
       const payload = await readBoundedResponseJson<Record<string, unknown>>(response, {
         maxBytes: 128 * 1024,
-        timeoutMs: this.options.config.server.requestTimeoutMs,
+        timeoutMs: config.server.requestTimeoutMs,
         label: "llama.cpp health",
       });
       const modelAlias = typeof payload["model_alias"] === "string" ? payload["model_alias"] : undefined;
@@ -664,13 +1251,13 @@ export class LlamaCppRuntimeService {
     } else {
       await readBoundedResponseText(response, {
         maxBytes: 128 * 1024,
-        timeoutMs: this.options.config.server.requestTimeoutMs,
+        timeoutMs: config.server.requestTimeoutMs,
         label: "llama.cpp health",
       });
     }
 
     try {
-      const models = await this.listRemoteModels();
+      const models = await this.listRemoteModels(config);
       activeModelId = models[0]?.modelId ?? activeModelId;
     } catch {
       // keep alias fallback
@@ -682,25 +1269,58 @@ export class LlamaCppRuntimeService {
     };
   }
 
-  private async waitForHealthy(timeoutMs: number): Promise<boolean> {
+  private async waitForHealthy(timeoutMs: number, signal?: AbortSignal): Promise<boolean> {
     const startedAt = Date.now();
     while (Date.now() - startedAt < timeoutMs) {
+      throwIfAborted(signal);
       if (this.closed) {
         return false;
       }
-      const status = await this.refresh().catch(() => undefined);
+      const status = await waitForPromiseWithSignal(
+        this.refresh().catch(() => undefined),
+        signal,
+      );
       if (status?.healthy) {
         return true;
       }
-      await sleep(500);
+      await waitForPromiseWithSignal(sleep(500), signal);
     }
     return false;
   }
 
+  private ensureStateLoaded(): Promise<void> {
+    if (this.stateLoaded) {
+      return Promise.resolve();
+    }
+    if (this.stateLoadPromise) {
+      return this.stateLoadPromise;
+    }
+    const loading = this.loadCachedState();
+    this.stateLoadPromise = loading;
+    void loading.then(
+      () => {
+        this.stateLoaded = true;
+      },
+      () => {
+        if (this.stateLoadPromise === loading) {
+          this.stateLoadPromise = undefined;
+        }
+      },
+    );
+    return loading;
+  }
+
   private async loadCachedState(): Promise<void> {
+    const token = this.captureLifecycleObservationToken();
     try {
       const raw = await fs.readFile(this.stateCachePath, "utf8");
-      const parsed = JSON.parse(raw) as Partial<LlamaCppRuntimeStatus>;
+      const parsed = JSON.parse(raw) as Partial<LlamaCppRuntimeStateCache>;
+      if (
+        !this.isLifecycleObservationCurrent(token) ||
+        parsed.runtimeIdentityFingerprint !== token.identityFingerprint
+      ) {
+        return;
+      }
       this.processState = parsed.processState ?? this.processState;
       this.desiredState = parsed.desiredState ?? this.desiredState;
       this.healthy = parsed.healthy ?? false;
@@ -714,14 +1334,273 @@ export class LlamaCppRuntimeService {
     }
   }
 
-  private async persistState(): Promise<void> {
+  private persistState(): Promise<void> {
     const payload = this.getStatus();
-    await fs.mkdir(path.dirname(this.stateCachePath), { recursive: true });
-    await fs.writeFile(this.stateCachePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+    const cachePayload: LlamaCppRuntimeStateCache = {
+      ...payload,
+      runtimeIdentityFingerprint: llamaCppRuntimeIdentityFingerprint(this.options.config),
+    };
+    const write = this.persistTail
+      .catch(() => undefined)
+      .then(async () => {
+        if (this.options.runtimeHooks?.persistState) {
+          await this.options.runtimeHooks.persistState(this.stateCachePath, payload);
+          return;
+        }
+        await fs.mkdir(path.dirname(this.stateCachePath), { recursive: true });
+        await fs.writeFile(this.stateCachePath, `${JSON.stringify(cachePayload, null, 2)}\n`, "utf8");
+      });
+    this.persistTail = write;
+    return write;
+  }
+
+  private persistStateBestEffort(context: string): void {
+    void this.persistState().catch((error) => {
+      try {
+        this.emit("llamacpp_state_persist_failed", {
+          context,
+          message: normalizeErrorMessage(error).slice(0, 500),
+        });
+      } catch {
+        // Persistence is best-effort on event callbacks; never create a second
+        // unhandled failure while reporting the first one.
+      }
+    });
   }
 
   private emit(eventType: string, payload: Record<string, unknown>): void {
     this.options.onEvent?.(eventType, payload);
+  }
+
+  private buildLeaseDiagnostics(): LlamaCppRuntimeLeaseDiagnostics {
+    const purposeCounts = new Map<string, number>();
+    for (const lease of this.leases.values()) {
+      purposeCounts.set(lease.purpose, (purposeCounts.get(lease.purpose) ?? 0) + 1);
+    }
+    const purposes = [...purposeCounts.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .slice(0, MAX_LLAMACPP_LEASE_PURPOSES)
+      .map(([purpose, count]) => ({ purpose, count }));
+    return {
+      state:
+        this.disposed || this.closed
+          ? "closed"
+          : this.startupPromise || this.processState === "starting"
+            ? "starting"
+            : this.leases.size > 0
+              ? "active"
+              : this.idleTimer
+                ? "idle_pending"
+                : this.persistentDemand.size > 0
+                  ? "persistent"
+                  : "idle",
+      activeLeaseCount: this.leases.size,
+      ownership: this.ownership,
+      idleDeadline: this.idleDeadline,
+      purposes,
+      persistentDemand: {
+        manual: this.persistentDemand.has("manual"),
+        api: this.persistentDemand.has("api"),
+        autostart: this.persistentDemand.has("autostart"),
+      },
+      evidence: structuredClone(this.leaseEvidence),
+    };
+  }
+
+  private hasRuntimeDemand(): boolean {
+    return this.leases.size > 0 || this.persistentDemand.size > 0;
+  }
+
+  private async awaitStableLifecycle(signal?: AbortSignal): Promise<void> {
+    while (true) {
+      throwIfAborted(signal);
+      const stopping = this.stopPromise;
+      if (stopping) {
+        await waitForPromiseWithSignal(
+          stopping.then(() => undefined),
+          signal,
+        );
+        continue;
+      }
+      const generation = this.lifecycleGeneration;
+      await waitForPromiseWithSignal(this.ensureStateLoaded(), signal);
+      if (!this.stopPromise && generation === this.lifecycleGeneration) {
+        return;
+      }
+    }
+  }
+
+  private trackQueuedStartup(startup: Promise<LlamaCppRuntimeStatus>): void {
+    this.queuedStartupPromises.add(startup);
+    void startup.finally(() => this.queuedStartupPromises.delete(startup)).catch(() => undefined);
+  }
+
+  private async awaitStartupQuiescence(): Promise<void> {
+    while (true) {
+      const pending = [...(this.startupPromise ? [this.startupPromise] : []), ...this.queuedStartupPromises];
+      if (pending.length === 0) {
+        return;
+      }
+      await Promise.allSettled(pending);
+    }
+  }
+
+  private async awaitRefreshQuiescence(): Promise<void> {
+    while (this.refreshPromises.size > 0) {
+      await Promise.allSettled([...this.refreshPromises]);
+    }
+  }
+
+  private captureLifecycleObservationToken(): LlamaCppLifecycleObservationToken {
+    return {
+      generation: this.lifecycleGeneration,
+      identityFingerprint: llamaCppRuntimeIdentityFingerprint(this.options.config),
+      process: this.process,
+      ownedProcessTree: this.ownedProcessTree,
+    };
+  }
+
+  private isLifecycleObservationCurrent(token: LlamaCppLifecycleObservationToken): boolean {
+    return (
+      !this.disposed &&
+      token.generation === this.lifecycleGeneration &&
+      token.identityFingerprint === llamaCppRuntimeIdentityFingerprint(this.options.config) &&
+      token.process === this.process &&
+      token.ownedProcessTree === this.ownedProcessTree
+    );
+  }
+
+  private syncDesiredState(): void {
+    this.desiredState =
+      !this.options.config.enabled || this.closed
+        ? "stopped"
+        : this.hasRuntimeDemand() || Boolean(this.idleTimer)
+          ? "running"
+          : "stopped";
+  }
+
+  private settleLeases(): void {
+    const lastLease = [...this.leases.values()].at(-1);
+    if (lastLease) {
+      this.leaseEvidence.lastLease = {
+        at: new Date().toISOString(),
+        action: "settled",
+        purpose: lastLease.purpose,
+      };
+    }
+    this.leases.clear();
+  }
+
+  private scheduleIdleShutdown(delayMs?: number): void {
+    if (this.disposed || this.closed || this.hasRuntimeDemand() || this.idleTimer) {
+      return;
+    }
+    if (this.ownership !== "owned" && !this.startupPromise) {
+      this.syncDesiredState();
+      return;
+    }
+    const timeoutMs =
+      delayMs === undefined
+        ? normalizeLeaseIdleTimeoutMs(this.options.leaseIdleTimeoutMs)
+        : Math.max(0, Math.floor(delayMs));
+    this.idleDeadline = new Date(Date.now() + timeoutMs).toISOString();
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = undefined;
+      this.idleDeadline = undefined;
+      const shutdown = this.handleIdleShutdown();
+      this.idleShutdownPromise = shutdown;
+      void shutdown.then(
+        () => {
+          if (this.idleShutdownPromise === shutdown) {
+            this.idleShutdownPromise = undefined;
+          }
+        },
+        (error) => {
+          if (this.idleShutdownPromise === shutdown) {
+            this.idleShutdownPromise = undefined;
+          }
+          this.lastError = error instanceof Error ? error.message : String(error);
+          this.processState = this.ownedProcessTree || this.process?.pid ? "error" : "stopped";
+          this.healthy = false;
+          this.activeModelId = undefined;
+          this.updatedAt = new Date().toISOString();
+          this.emit("llamacpp_idle_shutdown_failed", { message: this.lastError });
+          this.persistStateBestEffort("idle_shutdown_failure");
+        },
+      );
+    }, timeoutMs);
+    this.idleTimer.unref();
+    this.syncDesiredState();
+  }
+
+  private cancelIdleShutdown(): void {
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = undefined;
+    }
+    this.idleDeadline = undefined;
+  }
+
+  private async awaitIdleShutdown(): Promise<void> {
+    const shutdown = this.idleShutdownPromise;
+    if (shutdown) {
+      await shutdown.catch(() => undefined);
+    }
+  }
+
+  private async handleIdleShutdown(): Promise<void> {
+    const pendingStartup = this.startupPromise;
+    if (pendingStartup) {
+      await pendingStartup.catch(() => undefined);
+    }
+    if (this.disposed || this.closed || this.hasRuntimeDemand()) {
+      this.syncDesiredState();
+      return;
+    }
+    if (this.ownership === "owned") {
+      await this.stopOwnedProcess("lease_idle_timeout");
+    }
+    this.syncDesiredState();
+    await this.persistState();
+  }
+
+  private async cancelUndemandedStartup(): Promise<void> {
+    if (!this.startupPromise || this.hasRuntimeDemand()) {
+      return;
+    }
+    if (this.processState === "running" && this.healthy) {
+      this.scheduleIdleShutdown();
+      return;
+    }
+    const pendingStartup = this.startupPromise;
+    this.lifecycleGeneration += 1;
+    this.startupAbortController?.abort();
+    this.cancelIdleShutdown();
+    this.cancelRestart();
+    this.syncDesiredState();
+    await pendingStartup.catch(() => undefined);
+    if (this.ownedProcessTree) {
+      await this.stopOwnedProcess("lease_start_cancelled");
+    } else {
+      this.processState = "stopped";
+      this.healthy = false;
+      this.ownership = "none";
+      this.updatedAt = new Date().toISOString();
+      await this.persistState();
+    }
+  }
+
+  private cancelRestart(): void {
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = undefined;
+    }
+  }
+
+  private assertLifecycleGeneration(generation: number): void {
+    if (this.disposed || generation !== this.lifecycleGeneration) {
+      throw new Error("llama.cpp runtime start was superseded by a forced transition");
+    }
   }
 
   private assertRestartBudget(): void {
@@ -729,7 +1608,7 @@ export class LlamaCppRuntimeService {
     const windowMs = this.options.config.server.restartBudget.windowMs;
     this.restartTimestamps = this.restartTimestamps.filter((timestamp) => now - timestamp <= windowMs);
     if (this.restartTimestamps.length >= this.options.config.server.restartBudget.maxRestarts) {
-      throw new Error("llama.cpp restart budget exhausted");
+      throw new LlamaCppRestartBudgetExhaustedError();
     }
   }
 
@@ -737,19 +1616,209 @@ export class LlamaCppRuntimeService {
     this.restartTimestamps.push(Date.now());
   }
 
+  private async prepareOwnedStartAttempt(cleanupReason?: string): Promise<void> {
+    let exhausted = false;
+    try {
+      this.assertRestartBudget();
+    } catch (error) {
+      if (!(error instanceof LlamaCppRestartBudgetExhaustedError)) {
+        throw error;
+      }
+      exhausted = true;
+    }
+    if (!exhausted) {
+      this.bumpRestartCounter();
+    }
+
+    if (cleanupReason && this.ownedProcessTree) {
+      try {
+        await this.stopOwnedProcess(cleanupReason);
+      } catch (error) {
+        if (exhausted) {
+          throw new LlamaCppRestartBudgetExhaustedError();
+        }
+        throw error;
+      }
+    }
+    if (exhausted) {
+      throw new LlamaCppRestartBudgetExhaustedError();
+    }
+  }
+
   private scheduleRestart(): void {
-    if (this.restartTimer || this.closed || this.desiredState !== "running") {
+    const restartDemand = this.hasRuntimeDemand() || (this.desiredState === "running" && !this.idleTimer);
+    if (this.restartTimer || this.closed || !restartDemand) {
       return;
     }
+    this.leaseEvidence.lastRestart = { at: new Date().toISOString(), outcome: "scheduled" };
     this.restartTimer = setTimeout(() => {
       this.restartTimer = undefined;
-      void this.start("restart").catch((error) => {
-        this.lastError = error instanceof Error ? error.message : String(error);
-        this.updatedAt = new Date().toISOString();
-        void this.persistState();
-      });
+      if (this.closed || this.disposed || !this.hasRuntimeDemand()) {
+        this.syncDesiredState();
+        this.persistStateBestEffort("restart_cancelled");
+        return;
+      }
+      const generation = this.lifecycleGeneration;
+      this.leaseEvidence.lastRestart = { at: new Date().toISOString(), outcome: "attempting" };
+      void this.ensureStarted("restart", "restart").then(
+        () => {
+          if (generation !== this.lifecycleGeneration) {
+            return;
+          }
+          this.leaseEvidence.lastRestart = { at: new Date().toISOString(), outcome: "ready" };
+        },
+        (error) => {
+          if (generation !== this.lifecycleGeneration) {
+            return;
+          }
+          const exhausted = error instanceof LlamaCppRestartBudgetExhaustedError;
+          this.leaseEvidence.lastRestart = {
+            at: new Date().toISOString(),
+            outcome: exhausted ? "exhausted" : "failed",
+          };
+          this.lastError = error instanceof Error ? error.message : String(error);
+          this.processState = "error";
+          this.healthy = false;
+          this.updatedAt = new Date().toISOString();
+          this.persistStateBestEffort("restart_failure");
+          if (!exhausted) {
+            this.scheduleRestart();
+          }
+        },
+      );
     }, this.options.config.server.restartBudget.backoffMs);
+    this.restartTimer.unref();
   }
+}
+
+class LlamaCppRestartBudgetExhaustedError extends Error {
+  public constructor() {
+    super("llama.cpp restart budget exhausted");
+    this.name = "LlamaCppRestartBudgetExhaustedError";
+  }
+}
+
+function normalizeLeasePurpose(value: string): string {
+  const purpose = value.trim().toLowerCase();
+  if (!/^[a-z][a-z0-9._-]{0,63}$/.test(purpose)) {
+    throw new Error("llama.cpp lease purpose must be a 1-64 character diagnostic label");
+  }
+  return purpose;
+}
+
+function normalizeLeaseIdleTimeoutMs(value: number | undefined): number {
+  if (value === undefined) {
+    return DEFAULT_LLAMACPP_LEASE_IDLE_TIMEOUT_MS;
+  }
+  if (!Number.isFinite(value)) {
+    return DEFAULT_LLAMACPP_LEASE_IDLE_TIMEOUT_MS;
+  }
+  return Math.max(0, Math.min(Math.floor(value), 24 * 60 * 60 * 1000));
+}
+
+function persistentDemandFromSnapshot(snapshot: LlamaCppRuntimeLifecycleSnapshot): LlamaCppPersistentDemand[] {
+  const demand: LlamaCppPersistentDemand[] = [];
+  if (snapshot.persistentDemand.manual) {
+    demand.push("manual");
+  }
+  if (snapshot.persistentDemand.api) {
+    demand.push("api");
+  }
+  if (snapshot.persistentDemand.autostart) {
+    demand.push("autostart");
+  }
+  return demand;
+}
+
+function hasLlamaCppRuntimeIdentityChanged(current: LlamaCppConfig, next: LlamaCppConfig): boolean {
+  return JSON.stringify(llamaCppRuntimeIdentity(current)) !== JSON.stringify(llamaCppRuntimeIdentity(next));
+}
+
+function llamaCppRuntimeIdentity(config: LlamaCppConfig): Record<string, unknown> {
+  return {
+    enabled: config.enabled,
+    baseUrl: config.server.baseUrl,
+    command: config.server.command,
+    extraArgs: config.server.extraArgs,
+    healthPath: config.server.healthPath,
+    modelsPath: config.server.modelsPath,
+    launch: config.launch,
+  };
+}
+
+function llamaCppRuntimeIdentityFingerprint(config: LlamaCppConfig): string {
+  return createHash("sha256")
+    .update(JSON.stringify(llamaCppRuntimeIdentity(config)))
+    .digest("hex");
+}
+
+function classifyPersistentDemand(reason: string, autoStart: boolean): LlamaCppPersistentDemand | undefined {
+  const normalized = reason.trim().toLowerCase();
+  if (normalized === "lease" || normalized === "restart" || normalized === "rollback") {
+    return undefined;
+  }
+  if (normalized === "api") {
+    return "api";
+  }
+  if (normalized === "auto_start" || normalized === "config_autostart") {
+    return "autostart";
+  }
+  if (autoStart && normalized !== "manual") {
+    return "autostart";
+  }
+  return "manual";
+}
+
+function classifyStartEvidenceReason(reason: string): LlamaCppStartEvidenceReason {
+  const normalized = reason.trim().toLowerCase();
+  if (normalized === "manual" || normalized === "api" || normalized === "lease" || normalized === "restart") {
+    return normalized;
+  }
+  if (normalized === "auto_start" || normalized === "config_autostart") {
+    return "autostart";
+  }
+  return "other";
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) {
+    return;
+  }
+  throw createLeaseAbortError();
+}
+
+function createLeaseAbortError(): Error {
+  const error = new Error("llama.cpp lease acquisition was aborted");
+  error.name = "AbortError";
+  return error;
+}
+
+function createRuntimeStartSupersededError(): Error {
+  return new Error("llama.cpp runtime start was superseded by a forced transition");
+}
+
+function waitForPromiseWithSignal<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) {
+    return promise;
+  }
+  throwIfAborted(signal);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      reject(createLeaseAbortError());
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    void promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
 }
 
 export async function adviseLlamaCppRuntime(input: {
@@ -1402,6 +2471,10 @@ function normalizeOptionalText(value: string | undefined | null): string | undef
   return trimmed ? trimmed : undefined;
 }
 
+function normalizeErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function hasReasoningOverride(args: readonly string[]): boolean {
   return args.some((arg) => arg === "--reasoning" || arg === "-rea");
 }
@@ -1418,6 +2491,124 @@ async function killWindowsProcessTree(pid: number): Promise<void> {
     });
     child.on("exit", () => resolve());
     child.on("error", () => resolve());
+  });
+}
+
+type PosixSignalTarget = "group" | "process" | "gone";
+
+export interface PosixTerminationHooks {
+  signalTree?: (pid: number, signal: NodeJS.Signals) => PosixSignalTarget;
+  waitForTreeExit?: (
+    child: ChildProcess,
+    pid: number,
+    target: Exclude<PosixSignalTarget, "gone">,
+    timeoutMs: number,
+  ) => Promise<boolean>;
+}
+
+export async function terminatePosixProcess(
+  child: ChildProcess,
+  pid: number,
+  hooks: PosixTerminationHooks = {},
+): Promise<void> {
+  const signalTree = hooks.signalTree ?? signalPosixProcessTree;
+  const waitForTreeExit = hooks.waitForTreeExit ?? waitForPosixTreeExit;
+  const termTarget = signalTree(pid, "SIGTERM");
+  if (termTarget === "gone" || (await waitForTreeExit(child, pid, termTarget, 5_000))) {
+    return;
+  }
+
+  const killTarget = signalTree(pid, "SIGKILL");
+  if (killTarget === "gone" || (await waitForTreeExit(child, pid, killTarget, 1_000))) {
+    return;
+  }
+
+  throw new Error(`llama.cpp process tree ${pid} remained alive after SIGKILL`);
+}
+
+function signalPosixProcessTree(pid: number, signal: NodeJS.Signals): PosixSignalTarget {
+  try {
+    process.kill(-pid, signal);
+    return "group";
+  } catch (error) {
+    if (!isNoSuchProcessError(error)) {
+      throw error;
+    }
+  }
+
+  try {
+    process.kill(pid, signal);
+    return "process";
+  } catch (error) {
+    if (isNoSuchProcessError(error)) {
+      return "gone";
+    }
+    throw error;
+  }
+}
+
+function waitForPosixTreeExit(
+  child: ChildProcess,
+  pid: number,
+  target: Exclude<PosixSignalTarget, "gone">,
+  timeoutMs: number,
+): Promise<boolean> {
+  return target === "group" ? waitForProcessGroupExit(pid, timeoutMs) : waitForChildExit(child, timeoutMs);
+}
+
+async function waitForProcessGroupExit(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() <= deadline) {
+    if (!isProcessGroupAlive(pid)) {
+      return true;
+    }
+    await sleep(Math.min(50, Math.max(1, deadline - Date.now())));
+  }
+  return !isProcessGroupAlive(pid);
+}
+
+function isProcessGroupAlive(pid: number): boolean {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    if (isNoSuchProcessError(error)) {
+      return false;
+    }
+    if (isNodeErrorWithCode(error, "EPERM")) {
+      return true;
+    }
+    throw error;
+  }
+}
+
+function isNoSuchProcessError(error: unknown): boolean {
+  return isNodeErrorWithCode(error, "ESRCH");
+}
+
+function isNodeErrorWithCode(error: unknown, code: string): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === code;
+}
+
+function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve(true);
+  }
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    const settle = (exited: boolean) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      child.removeListener("exit", onExit);
+      resolve(exited);
+    };
+    const onExit = () => settle(true);
+    const timer = setTimeout(() => settle(false), timeoutMs);
+    timer.unref();
+    child.once("exit", onExit);
   });
 }
 

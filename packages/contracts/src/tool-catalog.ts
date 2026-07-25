@@ -1,4 +1,5 @@
 import type { ToolCategory, ToolPack, ToolRiskLevel } from "./tools.js";
+import type { ToolEffectPotentialRecord } from "./tool-effect-truth.js";
 
 export interface ToolCatalogExample {
   title: string;
@@ -18,6 +19,8 @@ export interface ToolCatalogEntry {
   readOnly?: boolean;
   deterministic?: boolean;
   codeModeAllowed?: boolean;
+  /** Server-classified recovery upper bound; never a plugin-supplied hint. */
+  effectPotential?: ToolEffectPotentialRecord;
   recommendedContexts?: string[];
   preferredForIntents?: string[];
   usageHints?: string[];

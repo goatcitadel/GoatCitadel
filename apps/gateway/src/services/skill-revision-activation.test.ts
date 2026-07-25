@@ -154,7 +154,7 @@ function createHarness(): Harness {
   return harness;
 }
 
-function buildSkillMarkdown(body: string, name = "Self Authored Helper"): string {
+function buildSkillMarkdown(body: string, name = "self-authored-helper"): string {
   return [
     "---",
     `name: ${name}`,

@@ -685,6 +685,7 @@ function createTransientRetryHarness(fakeProviderDelayMs: number): {
 function createPrefs(sessionId: string): ChatSessionPrefsRecord {
   return {
     sessionId,
+    revision: 1,
     mode: "chat",
     planningMode: "off",
     providerId: undefined,

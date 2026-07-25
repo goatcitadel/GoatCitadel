@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   ApprovalEffectKind,
   ApprovalEffectRecord,
@@ -8,8 +8,9 @@ import type {
   ApprovalObservabilityDelivery,
   ApprovalObservabilityEnvelope,
 } from "@goatcitadel/contracts";
-import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
+import { canonicalJsonString, ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
+import { GovernanceJourneyEventRepository } from "./governance-journey-event-repo.js";
 import { safeJsonParse } from "./safe-json.js";
 
 interface ApprovalEffectRow {
@@ -36,11 +37,22 @@ interface ApprovalEffectRow {
   completed_at: string | null;
 }
 
+interface ApprovalEffectBatchRow extends ApprovalEffectRow {
+  gc_total_count: number;
+}
+
+export interface ApprovalEffectBatch {
+  approvalId: string;
+  effects: ApprovalEffectRecord[];
+  total: number;
+}
+
 export class ApprovalEffectRepository {
   private readonly getByIdStmt;
   private readonly getByIdempotencyKeyStmt;
   private readonly getByTargetStmt;
   private readonly listByApprovalStmt;
+  private readonly listByApprovalIdsStmtCache = new Map<number, ReturnType<DatabaseClient["prepare"]>>();
   private readonly lockFreshClaimStmt;
   private readonly lockApprovalForObservabilityStmt;
   private readonly upsertStmt;
@@ -53,8 +65,11 @@ export class ApprovalEffectRepository {
   private readonly skipEffectStmt;
   private readonly failEffectStmt;
   private readonly recoverExpiredStmt;
+  private readonly getApprovalJourneyOwnerStmt;
+  private readonly journeyEvents: GovernanceJourneyEventRepository;
 
   public constructor(private readonly db: DatabaseClient) {
+    this.journeyEvents = new GovernanceJourneyEventRepository(db);
     const databaseNowInstant = db.dialect === "postgres" ? "statement_timestamp()" : "julianday('now')";
     const leaseExpiryInstant =
       db.dialect === "postgres" ? "gc_try_parse_timestamptz(lease_expires_at)" : "julianday(lease_expires_at)";
@@ -86,6 +101,12 @@ export class ApprovalEffectRepository {
       SELECT *
       FROM approval_effects
       WHERE approval_id = ? AND effect_kind = ? AND target_kind = ? AND target_id = ?
+      LIMIT 1
+    `);
+    this.getApprovalJourneyOwnerStmt = db.prepare(`
+      SELECT linkage_json
+      FROM approvals
+      WHERE approval_id = ?
       LIMIT 1
     `);
     this.listByApprovalStmt = db.prepare(`
@@ -316,6 +337,47 @@ export class ApprovalEffectRepository {
   public listByApproval(approvalId: string): ApprovalEffectRecord[] {
     const rows = this.listByApprovalStmt.all(approvalId) as ApprovalEffectRow[];
     return rows.map(mapApprovalEffectRow);
+  }
+
+  /**
+   * Bounded batch read for operator projections. One query returns at most
+   * `limitPerApproval` rows per approval plus the canonical total, so callers
+   * can fail closed when an approval's effect set exceeds their display bound.
+   */
+  public listByApprovalIds(approvalIds: string[], limitPerApproval = 40): ApprovalEffectBatch[] {
+    const uniqueApprovalIds = [
+      ...new Set(approvalIds.map((item) => item.trim()).filter((item) => Boolean(item))),
+    ].slice(0, 20);
+    const safeLimit = Math.max(1, Math.min(200, Math.floor(limitPerApproval)));
+    if (uniqueApprovalIds.length === 0) return [];
+    let stmt = this.listByApprovalIdsStmtCache.get(uniqueApprovalIds.length);
+    if (!stmt) {
+      const placeholders = new Array(uniqueApprovalIds.length).fill("?").join(", ");
+      stmt = this.db.prepare(`
+        SELECT *
+        FROM (
+          SELECT approval_effects.*,
+                 COUNT(*) OVER (PARTITION BY approval_id) AS gc_total_count,
+                 ROW_NUMBER() OVER (PARTITION BY approval_id ORDER BY created_at ASC, effect_id ASC) AS gc_row_number
+          FROM approval_effects
+          WHERE approval_id IN (${placeholders})
+        ) ranked
+        WHERE gc_row_number <= ?
+        ORDER BY approval_id ASC, created_at ASC, effect_id ASC
+      `);
+      this.listByApprovalIdsStmtCache.set(uniqueApprovalIds.length, stmt);
+    }
+    const rows = stmt.all(...uniqueApprovalIds, safeLimit) as ApprovalEffectBatchRow[];
+    const batches = new Map<string, ApprovalEffectBatch>(
+      uniqueApprovalIds.map((approvalId) => [approvalId, { approvalId, effects: [], total: 0 }]),
+    );
+    for (const row of rows) {
+      const batch = batches.get(row.approval_id);
+      if (!batch) continue;
+      batch.effects.push(mapApprovalEffectRow(row));
+      batch.total = Number(row.gc_total_count);
+    }
+    return uniqueApprovalIds.map((approvalId) => batches.get(approvalId)!);
   }
 
   public lockFreshClaimForUpdate(
@@ -550,17 +612,7 @@ export class ApprovalEffectRepository {
       completedAt?: string;
     },
   ): ApprovalEffectRecord | undefined {
-    const updatedAt = input.updatedAt ?? new Date().toISOString();
-    const completedAt = input.completedAt ?? updatedAt;
-    const update = this.completeEffectStmt.run({
-      effectId,
-      workerId,
-      expectedVersion: _expectedVersion,
-      resultJson: JSON.stringify(input.result ?? {}),
-      updatedAt,
-      completedAt,
-    });
-    return Number(update.changes ?? 0) > 0 ? this.get(effectId) : undefined;
+    return this.settleEffect("completed", effectId, workerId, _expectedVersion, input);
   }
 
   public skipEffect(
@@ -573,17 +625,7 @@ export class ApprovalEffectRepository {
       completedAt?: string;
     },
   ): ApprovalEffectRecord | undefined {
-    const updatedAt = input.updatedAt ?? new Date().toISOString();
-    const completedAt = input.completedAt ?? updatedAt;
-    const update = this.skipEffectStmt.run({
-      effectId,
-      workerId,
-      expectedVersion: _expectedVersion,
-      resultJson: JSON.stringify(input.result ?? {}),
-      updatedAt,
-      completedAt,
-    });
-    return Number(update.changes ?? 0) > 0 ? this.get(effectId) : undefined;
+    return this.settleEffect("skipped", effectId, workerId, _expectedVersion, input);
   }
 
   public failEffect(
@@ -597,18 +639,118 @@ export class ApprovalEffectRepository {
       completedAt?: string;
     },
   ): ApprovalEffectRecord | undefined {
-    const updatedAt = input.updatedAt ?? new Date().toISOString();
-    const completedAt = input.completedAt ?? updatedAt;
-    const update = this.failEffectStmt.run({
-      effectId,
-      workerId,
-      expectedVersion: _expectedVersion,
-      resultJson: JSON.stringify(input.result ?? {}),
-      lastError: input.lastError,
-      updatedAt,
-      completedAt,
+    return this.settleEffect("failed", effectId, workerId, _expectedVersion, input);
+  }
+
+  private settleEffect(
+    status: "completed" | "skipped" | "failed",
+    effectId: string,
+    workerId: string,
+    expectedVersion: number,
+    input: {
+      result?: Record<string, unknown>;
+      lastError?: string;
+      updatedAt?: string;
+      completedAt?: string;
+    },
+  ): ApprovalEffectRecord | undefined {
+    return this.db.transaction("immediate", () => {
+      const updatedAt = input.updatedAt ?? new Date().toISOString();
+      const completedAt = input.completedAt ?? updatedAt;
+      const commonBindings = {
+        effectId,
+        workerId,
+        expectedVersion,
+        resultJson: JSON.stringify(input.result ?? {}),
+        updatedAt,
+        completedAt,
+      };
+      const statement =
+        status === "completed"
+          ? this.completeEffectStmt
+          : status === "skipped"
+            ? this.skipEffectStmt
+            : this.failEffectStmt;
+      const update = statement.run(
+        status === "failed"
+          ? { ...commonBindings, lastError: input.lastError ?? "Approval effect failed." }
+          : commonBindings,
+      );
+      if (Number(update.changes ?? 0) < 1) return undefined;
+      const effect = this.get(effectId);
+      this.recordTerminalJourney(effect, workerId);
+      return effect;
     });
-    return Number(update.changes ?? 0) > 0 ? this.get(effectId) : undefined;
+  }
+
+  private recordTerminalJourney(effect: ApprovalEffectRecord, workerId: string): void {
+    const approvalOwner = this.getApprovalJourneyOwnerStmt.get(effect.approvalId) as
+      | { linkage_json: string | null }
+      | undefined;
+    const linkage = approvalOwner?.linkage_json
+      ? safeJsonParse<Record<string, unknown>>(approvalOwner.linkage_json, {})
+      : {};
+    const workspaceId = readJourneyIdentifier(linkage.workspaceId);
+    if (!workspaceId) {
+      // Some legacy/global approvals have no canonical workspace. Keep their
+      // effect settlement canonical without inventing a Journey scope.
+      return;
+    }
+
+    const eventId = `approval-effect:journey:${effect.effectId}`;
+    const occurredAt = effect.completedAt ?? effect.updatedAt;
+    const fingerprint = createHash("sha256")
+      .update(
+        canonicalJsonString({
+          approvalId: effect.approvalId,
+          attemptCount: effect.attemptCount,
+          effectId: effect.effectId,
+          effectKind: effect.effectKind,
+          status: effect.status,
+          version: effect.version,
+          workspaceId,
+        }),
+        "utf8",
+      )
+      .digest("hex");
+
+    this.journeyEvents.create({
+      schemaVersion: "goatcitadel.journey-event.v1",
+      eventId,
+      idempotencyKey: `approval-effect:lifecycle:${effect.effectId}`,
+      scopeKind: "workspace",
+      workspaceId,
+      eventType: "approval_effect_lifecycle",
+      subjectKind: "approval_effect",
+      subjectId: effect.effectId,
+      action: effect.status,
+      actorId: requireJourneyIdentifier(workerId, "approval effect worker ID"),
+      actorType: "approval_effect",
+      sessionId: readJourneyIdentifier(linkage.sessionId),
+      turnId: readJourneyIdentifier(linkage.turnId),
+      approvalId: effect.approvalId,
+      fingerprint,
+      sourceKind: "approval_effect",
+      sourceId: effect.effectId,
+      trustDisposition: effect.status,
+      poisoningStatus: effect.status === "failed" ? "blocked" : "clean",
+      evidenceRefs: [{ owner: "approval", refId: effect.approvalId }],
+      provenance: {
+        sourceRequired: true,
+        approvalRequired: false,
+        effectKind: effect.effectKind,
+        targetKind: effect.targetKind,
+        attemptCount: effect.attemptCount,
+        version: effect.version,
+      },
+      summary: {
+        status: effect.status,
+        effectKind: effect.effectKind,
+        targetKind: effect.targetKind,
+      },
+      occurredAt,
+      recordedAt: occurredAt,
+    });
   }
 
   public recoverExpiredEffect(
@@ -625,6 +767,18 @@ export class ApprovalEffectRepository {
     });
     return Number(update.changes ?? 0) > 0 ? this.get(effectId) : undefined;
   }
+}
+
+function readJourneyIdentifier(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 && value.length <= 256 ? value : undefined;
+}
+
+function requireJourneyIdentifier(value: unknown, label: string): string {
+  const normalized = readJourneyIdentifier(value);
+  if (!normalized) {
+    throw new ValidationError({ message: `${label} is missing or too long.` });
+  }
+  return normalized;
 }
 
 function leaseDurationMsFromInstants(now: string, leaseExpiresAt: string): number {

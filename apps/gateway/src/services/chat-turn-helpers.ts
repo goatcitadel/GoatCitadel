@@ -332,7 +332,10 @@ export function readDurableRecoveryInterruption(signal: AbortSignal | undefined,
     : undefined;
 }
 
-export function readDurableCancellation(signal: AbortSignal | undefined, error: unknown): Error | undefined {
-  const candidate = signal?.aborted ? signal.reason : error;
+export function readDurableCancellation(signal: AbortSignal | undefined, _error: unknown): Error | undefined {
+  if (!signal?.aborted) {
+    return undefined;
+  }
+  const candidate = signal.reason;
   return candidate instanceof Error && candidate.name === "DurableRunCancelledError" ? candidate : undefined;
 }

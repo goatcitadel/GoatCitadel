@@ -18,13 +18,29 @@ describe("memory routes", () => {
     built.decorate("services", {
       memory: {
         ...gateway,
-        forget: gateway.forget ?? gateway.forgetMemory,
         runMaintenanceNow: gateway.runMaintenanceNow ?? gateway.runMemoryMaintenanceNow,
         getContext: gateway.getContext ?? gateway.getMemoryContext,
       },
     } as never);
     return { app: built, requireOperatorAuth };
   }
+
+  // HX-402 P1: mutation verbs answer with a pending memory.lifecycle approval.
+  const pendingApprovalFixture = (overrides: Record<string, unknown> = {}) => ({
+    approvalId: "11111111-2222-3333-4444-555555555555",
+    status: "pending",
+    kind: "memory.lifecycle",
+    action: "items_forgotten",
+    subjectKind: "memory_item",
+    subjectId: "memory-1",
+    workspaceId: "workspace-a",
+    requestSha256: "a".repeat(64),
+    expectedStateSha256: "b".repeat(64),
+    createdAt: "2026-07-22T00:00:00.000Z",
+    replayed: false,
+    itemIds: ["memory-1"],
+    ...overrides,
+  });
 
   afterEach(async () => {
     if (!app) {
@@ -46,9 +62,9 @@ describe("memory routes", () => {
     expect(listItems).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: "workspace-a", status: "active" }));
   });
 
-  it("forwards canonical commit callbacks, provenance, and authenticated actor for single-item forget", async () => {
-    const forgetItem = vi.fn(() => ({ itemId: "memory-1", status: "forgotten" }));
-    const built = buildApp({ forgetItem });
+  it("requests a memory.lifecycle approval with commit callbacks and authenticated requester for single-item forget", async () => {
+    const requestForgetApproval = vi.fn(() => ({ pendingApproval: pendingApprovalFixture() }));
+    const built = buildApp({ requestForgetApproval });
     app = built.app;
     app.decorateRequest("authActorId", "operator:single-forget");
     await app.register(memoryRoutes);
@@ -62,19 +78,49 @@ describe("memory routes", () => {
       },
     });
 
-    expect(response.statusCode).toBe(200);
-    expect(forgetItem).toHaveBeenCalledWith("memory-1", "operator:single-forget", {
-      actionId: "single-forget-action",
-      source: "route-proof",
-      onCommit: expect.any(Function),
-      afterCommit: expect.any(Function),
+    // The verb never mutates: it answers 202 with the pending approval.
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toMatchObject({
+      pendingApproval: { approvalId: "11111111-2222-3333-4444-555555555555", status: "pending" },
     });
+    expect(requestForgetApproval).toHaveBeenCalledWith(
+      {
+        itemIds: ["memory-1"],
+        actionId: "single-forget-action",
+        requesterId: "operator:single-forget",
+      },
+      {
+        onCommit: expect.any(Function),
+        afterCommit: expect.any(Function),
+      },
+    );
+  });
+
+  it("answers 200 with a zero-mutation outcome when a forget request needs no approval", async () => {
+    const requestForgetApproval = vi.fn(() => ({
+      pendingApproval: null,
+      noMutationRequired: true,
+      matchedCount: 1,
+      alreadyForgottenCount: 1,
+    }));
+    const built = buildApp({ requestForgetApproval });
+    app = built.app;
+    await app.register(memoryRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/memory/items/memory-1/forget",
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ pendingApproval: null, noMutationRequired: true });
   });
 
   it("rejects bulk forget without any criteria", async () => {
-    const forgetMemory = vi.fn();
+    const requestForgetApproval = vi.fn();
     const built = buildApp({
-      forgetMemory,
+      requestForgetApproval,
     });
     app = built.app;
     await app.register(memoryRoutes);
@@ -86,7 +132,7 @@ describe("memory routes", () => {
     });
 
     expect(response.statusCode).toBe(400);
-    expect(forgetMemory).not.toHaveBeenCalled();
+    expect(requestForgetApproval).not.toHaveBeenCalled();
     expect(response.json()).toMatchObject({
       error: {
         fieldErrors: {
@@ -101,17 +147,16 @@ describe("memory routes", () => {
     });
   });
 
-  it("forwards scoped bulk-forget provenance, actor, and canonical mutation lifecycle callbacks", async () => {
-    const forgetMemory = vi.fn(() => ({
-      actionId: "forget-action-1",
-      matchedCount: 1,
-      alreadyForgottenCount: 0,
-      forgottenCount: 1,
-      itemIds: ["mem_1"],
-      items: [],
+  it("forwards scoped bulk-forget criteria and the authenticated requester into the approval request", async () => {
+    const requestForgetApproval = vi.fn(() => ({
+      pendingApproval: pendingApprovalFixture({
+        subjectKind: "memory_item_batch",
+        subjectId: undefined,
+        itemIds: ["mem_1", "mem_2"],
+      }),
     }));
     const built = buildApp({
-      forgetMemory,
+      requestForgetApproval,
     });
     app = built.app;
     app.decorateRequest("authActorId", "operator:route-test");
@@ -130,9 +175,9 @@ describe("memory routes", () => {
       },
     });
 
-    expect(response.statusCode).toBe(200);
-    expect(forgetMemory).toHaveBeenCalledTimes(1);
-    expect(forgetMemory).toHaveBeenCalledWith(
+    expect(response.statusCode).toBe(202);
+    expect(requestForgetApproval).toHaveBeenCalledTimes(1);
+    expect(requestForgetApproval).toHaveBeenCalledWith(
       {
         itemIds: undefined,
         namespace: "project.alpha",
@@ -140,28 +185,22 @@ describe("memory routes", () => {
         workspaceId: "workspace-a",
         includeGlobal: true,
         actionId: "forget-action-1",
-        source: "route-test",
-        actorId: "operator:route-test",
+        requesterId: "operator:route-test",
       },
       {
         onCommit: expect.any(Function),
         afterCommit: expect.any(Function),
       },
     );
-    expect(response.json()).toEqual({
-      actionId: "forget-action-1",
-      matchedCount: 1,
-      alreadyForgottenCount: 0,
-      forgottenCount: 1,
-      itemIds: ["mem_1"],
-      items: [],
+    expect(response.json()).toMatchObject({
+      pendingApproval: { action: "items_forgotten", itemIds: ["mem_1", "mem_2"] },
     });
     expect(built.requireOperatorAuth).toHaveBeenCalledTimes(1);
   });
 
   it("rejects an oversized explicit bulk-forget target set before calling the service", async () => {
-    const forgetMemory = vi.fn();
-    const built = buildApp({ forgetMemory });
+    const requestForgetApproval = vi.fn();
+    const built = buildApp({ requestForgetApproval });
     app = built.app;
     await app.register(memoryRoutes);
 
@@ -175,13 +214,13 @@ describe("memory routes", () => {
     });
 
     expect(response.statusCode).toBe(400);
-    expect(forgetMemory).not.toHaveBeenCalled();
+    expect(requestForgetApproval).not.toHaveBeenCalled();
     expect(built.requireOperatorAuth).toHaveBeenCalledTimes(1);
   });
 
   it("rejects includeGlobal without an explicit workspace before calling the service", async () => {
-    const forgetMemory = vi.fn();
-    const built = buildApp({ forgetMemory });
+    const requestForgetApproval = vi.fn();
+    const built = buildApp({ requestForgetApproval });
     app = built.app;
     await app.register(memoryRoutes);
 
@@ -202,17 +241,17 @@ describe("memory routes", () => {
         },
       },
     });
-    expect(forgetMemory).not.toHaveBeenCalled();
+    expect(requestForgetApproval).not.toHaveBeenCalled();
     expect(built.requireOperatorAuth).toHaveBeenCalledTimes(1);
   });
 
   it("preserves operator authorization before bulk forget", async () => {
-    const forgetMemory = vi.fn();
+    const requestForgetApproval = vi.fn();
     const requireOperatorAuth = vi.fn(
       async (_request: unknown, reply: { code: (status: number) => { send: (body: { error: string }) => unknown } }) =>
         reply.code(401).send({ error: "Operator authentication required." }),
     );
-    const built = buildApp({ forgetMemory }, requireOperatorAuth);
+    const built = buildApp({ requestForgetApproval }, requireOperatorAuth);
     app = built.app;
     await app.register(memoryRoutes);
 
@@ -228,32 +267,51 @@ describe("memory routes", () => {
     expect(response.statusCode).toBe(401);
     expect(response.json()).toEqual({ error: "Operator authentication required." });
     expect(requireOperatorAuth).toHaveBeenCalledTimes(1);
-    expect(forgetMemory).not.toHaveBeenCalled();
+    expect(requestForgetApproval).not.toHaveBeenCalled();
   });
 
-  it("routes atomic memory item batch mutations through the memory service", async () => {
-    const batchMutateItems = vi.fn(() => ({
-      actionId: "batch-1",
-      status: "applied",
-      appliedCount: 2,
-      targetItemIds: ["mem-1", "mem-2"],
-      results: [],
-      ledger: {
-        actionId: "batch-1",
-        ownerId: "operator",
-        source: "route-test",
-        timestamp: "2026-06-20T00:00:00.000Z",
-        status: "applied",
-        targetItemIds: ["mem-1", "mem-2"],
-        operationKind: "mixed",
-        operationCount: 2,
-        reversal: { feasible: true, note: "reverse" },
-        reapply: { feasible: false, note: "reapply" },
-        evidence: { storesRawContent: false, redactionNote: "raw content excluded" },
+  it("routes item patches into the approval request surface", async () => {
+    const requestItemPatchApproval = vi.fn(() => ({
+      pendingApproval: pendingApprovalFixture({ action: "item_updated" }),
+    }));
+    const built = buildApp({ requestItemPatchApproval });
+    app = built.app;
+    app.decorateRequest("authActorId", "operator:patch-test");
+    await app.register(memoryRoutes);
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/memory/items/memory-1",
+      payload: { title: "Updated title", pinned: true },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toMatchObject({ pendingApproval: { action: "item_updated" } });
+    expect(requestItemPatchApproval).toHaveBeenCalledWith(
+      "memory-1",
+      {
+        title: "Updated title",
+        content: undefined,
+        metadata: undefined,
+        pinned: true,
+        ttlOverrideSeconds: undefined,
       },
+      "operator:patch-test",
+    );
+    expect(built.requireOperatorAuth).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes atomic memory item batch mutations into one batch approval request", async () => {
+    const requestBatchMutationApproval = vi.fn(() => ({
+      pendingApproval: pendingApprovalFixture({
+        action: "batch_mutated",
+        subjectKind: "memory_item_batch",
+        subjectId: undefined,
+        itemIds: ["mem-1", "mem-2"],
+      }),
     }));
     const built = buildApp({
-      batchMutateItems,
+      requestBatchMutationApproval,
     });
     app = built.app;
     await app.register(memoryRoutes);
@@ -281,14 +339,11 @@ describe("memory routes", () => {
       },
     });
 
-    expect(response.statusCode).toBe(200);
+    expect(response.statusCode).toBe(202);
     expect(response.json()).toMatchObject({
-      actionId: "batch-1",
-      ledger: {
-        evidence: { storesRawContent: false },
-      },
+      pendingApproval: { action: "batch_mutated", itemIds: ["mem-1", "mem-2"] },
     });
-    expect(batchMutateItems).toHaveBeenCalledWith(
+    expect(requestBatchMutationApproval).toHaveBeenCalledWith(
       {
         actionId: "batch-1",
         source: "route-test",

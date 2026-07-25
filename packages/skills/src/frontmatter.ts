@@ -40,6 +40,34 @@ export const SkillFrontmatterSchema = z
   })
   .passthrough();
 
+/**
+ * Guard skill names against characters the capability-profile seal rejects.
+ *
+ * A skill's frontmatter name becomes `<source>:<name>` (the skill id) and then
+ * `skill:<skillId>` (the capability id) inside sealed chat-turn capability
+ * profiles. The storage verifier (`assertSafeId` in
+ * packages/storage/src/chat-turn-capability-profile-repo.ts) rejects
+ * whitespace, ASCII control characters, and over-long identifiers — so a name
+ * that fails this check would fail every routed-context send at seal time.
+ * Mirror that contract here so unsafe names are rejected at load/authoring
+ * time instead.
+ */
+export function resolveSkillNameViolation(name: string): string | undefined {
+  if (name.length > 200) {
+    return "must be at most 200 characters so derived capability ids stay bounded";
+  }
+  if (/\s/u.test(name)) {
+    return 'must not contain whitespace; use a hyphenated identifier such as "my-skill-name"';
+  }
+  for (let index = 0; index < name.length; index += 1) {
+    const code = name.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f) {
+      return "must not contain control characters";
+    }
+  }
+  return undefined;
+}
+
 export function parseSkillMarkdown(markdown: string): ParsedSkillMarkdown {
   const normalizedMarkdown = markdown.charCodeAt(0) === 0xfeff ? markdown.slice(1) : markdown;
   const lines = normalizedMarkdown.split(/\r?\n/);

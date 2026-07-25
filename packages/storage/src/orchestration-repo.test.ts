@@ -89,6 +89,9 @@ describe("OrchestrationRepository", () => {
       worktreePath: "F:/code/personal-ai/.worktrees/run-1",
       worktreeStatus: "ready",
       worktreeBaseRef: "HEAD",
+      worktreeLeaseOwnerId: "gateway-owner-1",
+      worktreeLeaseGeneration: 3,
+      worktreeLeaseExpiresAt: "2026-02-27T00:05:00.000Z",
     };
 
     repo.createRun(run);
@@ -112,9 +115,130 @@ describe("OrchestrationRepository", () => {
     assert.equal(persistedRun.localOperatorOverrideId, "override-1");
     assert.equal(persistedRun.executionState, "paused_for_approval");
     assert.equal(persistedRun.worktreeStatus, "ready");
+    assert.equal(persistedRun.worktreeLeaseOwnerId, "gateway-owner-1");
+    assert.equal(persistedRun.worktreeLeaseGeneration, 3);
+    assert.equal(persistedRun.worktreeLeaseExpiresAt, "2026-02-27T00:05:00.000Z");
     assert.equal(persistedRun.pendingApprovalPhaseId, "phase-1");
     assert.equal(persistedRun.pendingApprovedBy, "operator");
     assert.equal(persistedRun.pendingCostIncrementUsd, 0.25);
+
+    const afterStaleLeaseUpdate = repo.updateRun({
+      ...persistedRun,
+      worktreeLeaseOwnerId: "stale-owner",
+      worktreeLeaseGeneration: 2,
+      worktreeLeaseExpiresAt: "2026-02-27T00:04:00.000Z",
+    });
+    assert.equal(afterStaleLeaseUpdate.worktreeLeaseOwnerId, "gateway-owner-1");
+    assert.equal(afterStaleLeaseUpdate.worktreeLeaseGeneration, 3);
+    assert.equal(afterStaleLeaseUpdate.worktreeLeaseExpiresAt, "2026-02-27T00:05:00.000Z");
+
+    const afterSameGenerationDifferentOwner = repo.updateRun({
+      ...afterStaleLeaseUpdate,
+      worktreeLeaseOwnerId: "same-generation-stale-owner",
+      worktreeLeaseGeneration: 3,
+      worktreeLeaseExpiresAt: "2026-02-27T00:06:00.000Z",
+    });
+    assert.equal(afterSameGenerationDifferentOwner.worktreeLeaseOwnerId, "gateway-owner-1");
+    assert.equal(afterSameGenerationDifferentOwner.worktreeLeaseGeneration, 3);
+    assert.equal(afterSameGenerationDifferentOwner.worktreeLeaseExpiresAt, "2026-02-27T00:05:00.000Z");
+
+    const afterSameOwnerRenewal = repo.updateRun({
+      ...afterSameGenerationDifferentOwner,
+      worktreeLeaseExpiresAt: "2026-02-27T00:07:00.000Z",
+    });
+    assert.equal(afterSameOwnerRenewal.worktreeLeaseOwnerId, "gateway-owner-1");
+    assert.equal(afterSameOwnerRenewal.worktreeLeaseGeneration, 3);
+    assert.equal(afterSameOwnerRenewal.worktreeLeaseExpiresAt, "2026-02-27T00:07:00.000Z");
+    assert.equal(
+      repo.renewWorktreeLease({
+        runId: run.runId,
+        worktreeLeaseOwnerId: "wrong-owner",
+        worktreeLeaseGeneration: 3,
+        worktreeLeaseExpiresAt: "2026-02-27T00:08:00.000Z",
+      }),
+      undefined,
+    );
+    assert.equal(
+      repo.renewWorktreeLease({
+        runId: run.runId,
+        worktreeLeaseOwnerId: "gateway-owner-1",
+        worktreeLeaseGeneration: 3,
+        worktreeLeaseExpiresAt: "2026-02-27T00:09:00.000Z",
+      })?.worktreeLeaseExpiresAt,
+      "2026-02-27T00:09:00.000Z",
+    );
+    const adopted = repo.adoptWorktreeLease({
+      runId: run.runId,
+      worktreePath: run.worktreePath!,
+      expectedWorktreeLeaseOwnerId: "gateway-owner-1",
+      expectedWorktreeLeaseGeneration: 3,
+      worktreeLeaseOwnerId: "gateway-owner-2",
+      worktreeLeaseGeneration: 4,
+      worktreeLeaseExpiresAt: "2026-02-27T00:11:00.000Z",
+    });
+    assert.equal(adopted?.worktreeLeaseOwnerId, "gateway-owner-2");
+    assert.equal(adopted?.worktreeLeaseGeneration, 4);
+
+    const afterStaleMixedGenerationUpdate = repo.updateRun({
+      ...afterSameOwnerRenewal,
+      worktreePath: "F:/stale-path",
+      worktreeStatus: "blocked",
+      worktreeBaseRef: "stale-ref",
+      worktreeLeaseOwnerId: "gateway-owner-1",
+      worktreeLeaseGeneration: 3,
+      worktreeLeaseExpiresAt: "2026-02-27T00:12:00.000Z",
+    });
+    assert.equal(afterStaleMixedGenerationUpdate.worktreePath, run.worktreePath);
+    assert.equal(afterStaleMixedGenerationUpdate.worktreeStatus, "ready");
+    assert.equal(afterStaleMixedGenerationUpdate.worktreeBaseRef, "HEAD");
+    assert.equal(afterStaleMixedGenerationUpdate.worktreeLeaseOwnerId, "gateway-owner-2");
+    assert.equal(afterStaleMixedGenerationUpdate.worktreeLeaseGeneration, 4);
+    assert.equal(afterStaleMixedGenerationUpdate.worktreeLeaseExpiresAt, "2026-02-27T00:11:00.000Z");
+
+    const afterStaleMixedGenerationCas = repo.updateRunIfCurrentState(
+      {
+        ...afterSameOwnerRenewal,
+        worktreePath: "F:/stale-cas-path",
+        worktreeStatus: "blocked",
+        worktreeBaseRef: "stale-cas-ref",
+        worktreeLeaseOwnerId: "gateway-owner-1",
+        worktreeLeaseGeneration: 3,
+        worktreeLeaseExpiresAt: "2026-02-27T00:13:00.000Z",
+      },
+      {
+        status: afterStaleMixedGenerationUpdate.status,
+        executionState: afterStaleMixedGenerationUpdate.executionState,
+      },
+    );
+    assert.equal(afterStaleMixedGenerationCas?.worktreePath, run.worktreePath);
+    assert.equal(afterStaleMixedGenerationCas?.worktreeStatus, "ready");
+    assert.equal(afterStaleMixedGenerationCas?.worktreeBaseRef, "HEAD");
+    assert.equal(afterStaleMixedGenerationCas?.worktreeLeaseOwnerId, "gateway-owner-2");
+    assert.equal(afterStaleMixedGenerationCas?.worktreeLeaseGeneration, 4);
+
+    assert.equal(
+      repo.fenceWorktreeLease({
+        runId: run.runId,
+        worktreePath: run.worktreePath!,
+        worktreeLeaseOwnerId: "stale-owner",
+        worktreeLeaseGeneration: 4,
+        endedAt: "2026-02-27T00:10:00.000Z",
+        lastError: "stale owner must not fence",
+      }),
+      undefined,
+    );
+    const fenced = repo.fenceWorktreeLease({
+      runId: run.runId,
+      worktreePath: run.worktreePath!,
+      worktreeLeaseOwnerId: "gateway-owner-2",
+      worktreeLeaseGeneration: 4,
+      endedAt: "2026-02-27T00:10:00.000Z",
+      lastError: "worktree lease lost",
+    });
+    assert.equal(fenced?.status, "failed");
+    assert.equal(fenced?.executionState, "failed");
+    assert.equal(fenced?.worktreeStatus, "blocked");
+    assert.equal(fenced?.lastError, "worktree lease lost");
 
     repo.createCheckpoint({
       runId: "run-1",
@@ -204,6 +328,18 @@ describe("OrchestrationRepository", () => {
         name TEXT NOT NULL,
         applied_at TEXT NOT NULL
       );
+    `);
+    // Migrations 172+ fail closed on databases that claim applied history without the real
+    // predecessor tables, so build the genuine v92 schema before installing the legacy
+    // orchestration shapes that predate workspace scoping.
+    for (let version = 1; version < 93; version += 1) {
+      __sqliteInternals.applySchemaMigrationForTest(version, legacy);
+    }
+    legacy.exec(`
+      DROP TABLE IF EXISTS orchestration_events;
+      DROP TABLE IF EXISTS orchestration_checkpoints;
+      DROP TABLE IF EXISTS orchestration_runs;
+      DROP TABLE IF EXISTS orchestration_plans;
       CREATE TABLE orchestration_plans (
         plan_id TEXT PRIMARY KEY,
         plan_json TEXT NOT NULL,

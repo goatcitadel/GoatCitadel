@@ -20,11 +20,37 @@ interface MockGatewayApp {
   services: {
     a2a: unknown;
   };
+  server: {
+    close: ReturnType<typeof vi.fn>;
+    listening: boolean;
+  };
+  sharedHostLifecycle: ReturnType<typeof createSharedHostLifecycleMock>;
 }
 
 interface MockA2AGrpcServer {
   close: ReturnType<typeof vi.fn>;
   enabled: boolean;
+}
+
+interface MockRemoteWorkerNativeRuntime {
+  close: ReturnType<typeof vi.fn>;
+  reload: ReturnType<typeof vi.fn>;
+  snapshot: ReturnType<typeof vi.fn>;
+  start: ReturnType<typeof vi.fn>;
+}
+
+function createSharedHostLifecycleMock() {
+  return {
+    markClosed: vi.fn(),
+    tryReserve: vi.fn(() => ({
+      admitted: true as const,
+      state: "accepting" as const,
+      reservation: {
+        signal: new AbortController().signal,
+        release: vi.fn(),
+      },
+    })),
+  };
 }
 
 const importMainWithMocks = async (
@@ -33,7 +59,9 @@ const importMainWithMocks = async (
     allowUnauthNetwork?: boolean;
     buildAppError?: Error;
     grpcServer?: MockA2AGrpcServer;
+    grpcStartError?: Error;
     host?: string;
+    remoteWorkerStartError?: Error;
     shouldWarnUnsafeBind?: boolean;
     terminalTask?: string;
     warnUnauthNonLoopback?: boolean;
@@ -70,6 +98,11 @@ const importMainWithMocks = async (
       services: {
         a2a: {},
       },
+      server: {
+        close: vi.fn(),
+        listening: false,
+      },
+      sharedHostLifecycle: createSharedHostLifecycleMock(),
     } satisfies MockGatewayApp);
   const setGoatcitadelTerminalTitle = vi.fn();
   const grpcServer =
@@ -78,7 +111,20 @@ const importMainWithMocks = async (
       close: vi.fn(async () => undefined),
       enabled: false,
     } satisfies MockA2AGrpcServer);
-  const startA2AGrpcServer = vi.fn(async () => grpcServer);
+  const startA2AGrpcServer = vi.fn(async () => {
+    if (options.grpcStartError !== undefined) throw options.grpcStartError;
+    return grpcServer;
+  });
+  const remoteWorkerNativeRuntime: MockRemoteWorkerNativeRuntime = {
+    close: vi.fn(async () => undefined),
+    reload: vi.fn(async () => ({ enabled: false, state: "disabled" })),
+    snapshot: vi.fn(() => ({ enabled: false, state: "uninitialized" })),
+    start: vi.fn(async () => {
+      if (options.remoteWorkerStartError !== undefined) throw options.remoteWorkerStartError;
+      return { enabled: false, state: "disabled" };
+    }),
+  };
+  const createRemoteWorkerNativeRuntimeService = vi.fn(() => remoteWorkerNativeRuntime);
 
   vi.doMock("./app.js", () => ({
     buildApp: vi.fn(async () => {
@@ -101,6 +147,9 @@ const importMainWithMocks = async (
   vi.doMock("./services/a2a-grpc-server.js", () => ({
     startA2AGrpcServer,
   }));
+  vi.doMock("./services/remote-worker-native-runtime-service.js", () => ({
+    createRemoteWorkerNativeRuntimeService,
+  }));
   vi.doMock("./startup-guard.js", () => ({
     INSECURE_LOCAL_ONLY_OVERRIDE_ENV: "GOATCITADEL_ALLOW_UNAUTHENTICATED_NETWORK",
     resolveAllowUnauthNetwork: vi.fn(() => options.allowUnauthNetwork ?? false),
@@ -110,7 +159,16 @@ const importMainWithMocks = async (
 
   await import("./main.js");
 
-  return { app, grpcServer, handlers, onSpy, setGoatcitadelTerminalTitle, startA2AGrpcServer };
+  return {
+    app,
+    createRemoteWorkerNativeRuntimeService,
+    grpcServer,
+    handlers,
+    onSpy,
+    remoteWorkerNativeRuntime,
+    setGoatcitadelTerminalTitle,
+    startA2AGrpcServer,
+  };
 };
 
 describe("gateway main entrypoint", () => {
@@ -122,18 +180,34 @@ describe("gateway main entrypoint", () => {
   });
 
   it("registers warning and shutdown handlers around a successful listen", async () => {
-    const { app, handlers, setGoatcitadelTerminalTitle, startA2AGrpcServer } = await importMainWithMocks({
-      terminalTask: " Gateway Dev ",
-    });
+    const {
+      app,
+      createRemoteWorkerNativeRuntimeService,
+      handlers,
+      remoteWorkerNativeRuntime,
+      setGoatcitadelTerminalTitle,
+      startA2AGrpcServer,
+    } = await importMainWithMocks({ terminalTask: " Gateway Dev " });
 
     expect(setGoatcitadelTerminalTitle).toHaveBeenCalledWith("Gateway Dev");
+    expect(createRemoteWorkerNativeRuntimeService).toHaveBeenCalledWith({
+      sharedHostLifecycle: app.sharedHostLifecycle,
+    });
+    expect(remoteWorkerNativeRuntime.start).toHaveBeenCalledTimes(1);
     expect(app.listen).toHaveBeenCalledWith({ host: "127.0.0.1", port: 8787 });
     expect(app.log.info).toHaveBeenCalledWith("gateway listening on http://127.0.0.1:8787");
     expect(startA2AGrpcServer).toHaveBeenCalledWith({
       a2a: app.services.a2a,
       config: app.gatewayConfig,
       logger: app.log,
+      sharedHostLifecycle: app.sharedHostLifecycle,
     });
+    expect(remoteWorkerNativeRuntime.start.mock.invocationCallOrder[0]).toBeLessThan(
+      app.listen.mock.invocationCallOrder[0] as number,
+    );
+    expect(app.listen.mock.invocationCallOrder[0]).toBeLessThan(
+      startA2AGrpcServer.mock.invocationCallOrder[0] as number,
+    );
 
     handlers.get("warning")?.[0]?.(
       Object.assign(new Error("deprecated option"), {
@@ -152,6 +226,7 @@ describe("gateway main entrypoint", () => {
 
     handlers.get("SIGTERM")?.[0]?.();
     await vi.waitFor(() => expect(app.close).toHaveBeenCalledTimes(1));
+    expect(remoteWorkerNativeRuntime.close).toHaveBeenCalledTimes(1);
     expect(app.log.info).toHaveBeenCalledWith({ signal: "SIGTERM" }, "shutting down gateway");
     await vi.waitFor(() => expect(process.exitCode).toBe(0));
   });
@@ -180,6 +255,11 @@ describe("gateway main entrypoint", () => {
       services: {
         a2a: {},
       },
+      server: {
+        close: vi.fn(),
+        listening: false,
+      },
+      sharedHostLifecycle: createSharedHostLifecycleMock(),
     } satisfies MockGatewayApp;
     const { handlers, setGoatcitadelTerminalTitle } = await importMainWithMocks({
       app,
@@ -189,6 +269,7 @@ describe("gateway main entrypoint", () => {
     expect(setGoatcitadelTerminalTitle).toHaveBeenCalledWith("Gateway");
     handlers.get("SIGINT")?.[0]?.();
     handlers.get("SIGINT")?.[0]?.();
+    await vi.advanceTimersByTimeAsync(0);
     expect(app.close).toHaveBeenCalledTimes(1);
 
     expect(() => vi.advanceTimersByTime(10_000)).toThrow("process.exit:1");
@@ -218,6 +299,11 @@ describe("gateway main entrypoint", () => {
       services: {
         a2a: {},
       },
+      server: {
+        close: vi.fn(),
+        listening: false,
+      },
+      sharedHostLifecycle: createSharedHostLifecycleMock(),
     } satisfies MockGatewayApp;
     const { handlers } = await importMainWithMocks({ app });
 
@@ -227,9 +313,7 @@ describe("gateway main entrypoint", () => {
   });
 
   it("logs startup failures and exits with failure code", async () => {
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: string | number | null) => {
-      throw new Error(`process.exit:${code}`);
-    });
+    const exitSpy = vi.spyOn(process, "exit");
     const app = {
       close: vi.fn(async () => undefined),
       gatewayConfig: {
@@ -250,12 +334,60 @@ describe("gateway main entrypoint", () => {
       services: {
         a2a: {},
       },
+      server: {
+        close: vi.fn(),
+        listening: false,
+      },
+      sharedHostLifecycle: createSharedHostLifecycleMock(),
     } satisfies MockGatewayApp;
 
-    await expect(importMainWithMocks({ app })).rejects.toThrow("process.exit:1");
+    const { remoteWorkerNativeRuntime } = await importMainWithMocks({ app });
 
     expect(app.log.error).toHaveBeenCalledWith(expect.objectContaining({ message: "port already in use" }));
+    expect(remoteWorkerNativeRuntime.close).toHaveBeenCalledTimes(1);
     expect(process.exitCode).toBe(1);
-    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("rolls back the production-dark listener when A2A startup fails", async () => {
+    const grpcError = new Error("A2A bind failed");
+    const app = {
+      close: vi.fn(async () => undefined),
+      gatewayConfig: { assistant: { auth: { mode: "token" } } },
+      listen: vi.fn(async () => undefined),
+      log: { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+      services: { a2a: {} },
+      server: { close: vi.fn(), listening: false },
+      sharedHostLifecycle: createSharedHostLifecycleMock(),
+    } satisfies MockGatewayApp;
+    const failing = await importMainWithMocks({ app, grpcStartError: grpcError });
+
+    expect(failing.remoteWorkerNativeRuntime.start).toHaveBeenCalledTimes(1);
+    expect(failing.remoteWorkerNativeRuntime.close).toHaveBeenCalledTimes(1);
+    expect(app.close).toHaveBeenCalledTimes(1);
+    expect(app.log.error).toHaveBeenCalledWith(grpcError);
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("fails before HTTP bind and closes the runtime owner when native listener startup fails", async () => {
+    const startError = new Error("remote worker listener failed");
+    const app = {
+      close: vi.fn(async () => undefined),
+      gatewayConfig: { assistant: { auth: { mode: "token" } } },
+      listen: vi.fn(async () => undefined),
+      log: { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+      services: { a2a: {} },
+      server: { close: vi.fn(), listening: false },
+      sharedHostLifecycle: createSharedHostLifecycleMock(),
+    } satisfies MockGatewayApp;
+    const failing = await importMainWithMocks({ app, remoteWorkerStartError: startError });
+
+    expect(failing.remoteWorkerNativeRuntime.start).toHaveBeenCalledTimes(1);
+    expect(failing.remoteWorkerNativeRuntime.close).toHaveBeenCalledTimes(1);
+    expect(app.listen).not.toHaveBeenCalled();
+    expect(failing.startA2AGrpcServer).not.toHaveBeenCalled();
+    expect(app.close).toHaveBeenCalledTimes(1);
+    expect(app.log.error).toHaveBeenCalledWith(startError);
+    expect(process.exitCode).toBe(1);
   });
 });

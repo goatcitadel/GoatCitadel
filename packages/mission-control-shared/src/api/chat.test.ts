@@ -133,6 +133,85 @@ describe("chat API origin surface headers", () => {
   );
 
   it(
+    "encodes exact anchored and snapshot-fenced history queries",
+    async () => {
+      const fetchMock = vi.fn(async () => jsonResponse({ items: [] }));
+      vi.stubGlobal("fetch", fetchMock);
+      const { fetchChatHistoryContinuation, fetchChatHistoryWindow, fetchChatMessagePage } = await import("./chat");
+
+      await fetchChatHistoryWindow({
+        workspaceId: "workspace / 1",
+        sessionId: "session / 1",
+        messageId: "message / 1",
+        sequence: 42,
+        limit: 17,
+        maxBytes: 32_000,
+      });
+      await fetchChatHistoryContinuation({
+        workspaceId: "workspace / 1",
+        sessionId: "session / 1",
+        direction: "newer",
+        cursor: { messageId: "message / 2", sequence: 43, snapshotMaxSequence: 99 },
+        limit: 11,
+        maxBytes: 24_000,
+      });
+      await fetchChatMessagePage({
+        workspaceId: "workspace / 1",
+        sessionId: "session / 1",
+        offset: 20,
+        limit: 10,
+        snapshotMaxSequence: 99,
+        snapshotMessageCount: 45,
+      });
+
+      const urls = fetchMock.mock.calls.map((call) => String(call[0]));
+      expect(urls[0]).toContain(
+        "/api/v1/chat/sessions/session%20%2F%201/history?workspaceId=workspace+%2F+1&messageId=message+%2F+1&sequence=42&limit=17&maxBytes=32000",
+      );
+      expect(urls[1]).toContain(
+        "/api/v1/chat/sessions/session%20%2F%201/history?workspaceId=workspace+%2F+1&direction=newer&cursor=message+%2F+2&cursorSequence=43&snapshotMaxSequence=99&limit=11&maxBytes=24000",
+      );
+      expect(urls[2]).toContain(
+        "/api/v1/chat/sessions/session%20%2F%201/history?workspaceId=workspace+%2F+1&limit=10&offset=20&snapshotMaxSequence=99&snapshotMessageCount=45",
+      );
+    },
+    CHAT_API_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "clamps both history queries to the gateway byte-budget bounds",
+    async () => {
+      const fetchMock = vi.fn(async () => jsonResponse({ items: [] }));
+      vi.stubGlobal("fetch", fetchMock);
+      const { fetchChatHistoryContinuation, fetchChatHistoryWindow } = await import("./chat");
+      const baseWindow = {
+        workspaceId: "workspace-1",
+        sessionId: "session-1",
+        messageId: "message-1",
+        sequence: 1,
+      };
+      const baseContinuation = {
+        workspaceId: "workspace-1",
+        sessionId: "session-1",
+        direction: "newer" as const,
+        cursor: { messageId: "message-1", sequence: 1, snapshotMaxSequence: 2 },
+      };
+
+      await fetchChatHistoryWindow({ ...baseWindow, maxBytes: 512 });
+      await fetchChatHistoryWindow({ ...baseWindow, maxBytes: 2_000_000 });
+      await fetchChatHistoryContinuation({ ...baseContinuation, maxBytes: 512 });
+      await fetchChatHistoryContinuation({ ...baseContinuation, maxBytes: 2_000_000 });
+
+      const urls = fetchMock.mock.calls.map((call) => String(call[0]));
+      expect(urls[0]).toContain("maxBytes=1024");
+      expect(urls[1]).toContain("maxBytes=1048576");
+      expect(urls[2]).toContain("maxBytes=1024");
+      expect(urls[3]).toContain("maxBytes=1048576");
+    },
+    CHAT_API_TEST_TIMEOUT_MS,
+  );
+
+  it(
     "wires chat API helpers to deterministic gateway routes",
     async () => {
       const fetchMock = vi.fn().mockImplementation((url: string) => {
@@ -176,10 +255,10 @@ describe("chat API origin surface headers", () => {
       await chat.fetchChatProjects("all", 25, " workspace-1 ", "company");
       await chat.createChatProject({ citadelId: "company", name: "Project", workspacePath: "F:/repo" });
       await chat.importChatProject({ citadelId: "company", sourceType: "local_folder", sourcePath: "F:/repo" });
-      await chat.updateChatProject("project 1", { citadelId: "company", name: "Renamed" });
-      await chat.archiveChatProject("project 1");
-      await chat.restoreChatProject("project 1");
-      await chat.hardDeleteChatProject("project 1");
+      await chat.updateChatProject("project 1", { expectedRevision: 5, citadelId: "company", name: "Renamed" });
+      await chat.archiveChatProject("project 1", 6);
+      await chat.restoreChatProject("project 1", 7);
+      await chat.hardDeleteChatProject("project 1", 8);
       await chat.fetchChatSessions({
         scope: "all",
         citadelId: "company",
@@ -195,14 +274,19 @@ describe("chat API origin surface headers", () => {
       });
       await chat.createChatSession({ citadelId: "company", title: "Chat", mode: "chat" }, { originSurface: "chat" });
       await chat.archiveWorkspaceChatSessions({ workspaceId: "workspace-1", scope: "mission", includeHidden: true });
-      await chat.updateChatSession(sessionId, { title: "Updated", folderName: "Ops", tags: ["release"] });
-      await chat.deleteChatSession(sessionId);
-      await chat.pinChatSession(sessionId);
-      await chat.unpinChatSession(sessionId);
-      await chat.archiveChatSession(sessionId);
-      await chat.restoreChatSession(sessionId);
-      await chat.assignChatSessionProject(sessionId, "project-2");
-      await chat.assignChatSessionProject(sessionId);
+      await chat.updateChatSession(sessionId, {
+        expectedRevision: 9,
+        title: "Updated",
+        folderName: "Ops",
+        tags: ["release"],
+      });
+      await chat.deleteChatSession(sessionId, 10);
+      await chat.pinChatSession(sessionId, 11);
+      await chat.unpinChatSession(sessionId, 12);
+      await chat.archiveChatSession(sessionId, 13);
+      await chat.restoreChatSession(sessionId, 14);
+      await chat.assignChatSessionProject(sessionId, "project-2", 15);
+      await chat.assignChatSessionProject(sessionId, undefined, 16);
       await chat.setChatSessionBinding(sessionId, {
         transport: "integration",
         connectionId: "connection-1",
@@ -274,9 +358,9 @@ describe("chat API origin surface headers", () => {
       const downloaded = await chat.downloadChatAttachment("attachment 1");
       await chat.fetchChatAttachmentPreview("attachment 1");
       await chat.fetchChatSessionPrefs(sessionId);
-      await chat.updateChatSessionPrefs(sessionId, { model: "gpt-5.5" } as never);
+      await chat.updateChatSessionPrefs(sessionId, { expectedRevision: 17, model: "gpt-5.5" });
       await chat.fetchChatProactiveStatus(sessionId);
-      await chat.updateChatProactivePolicy(sessionId, { proactiveMode: "suggest" } as never);
+      await chat.updateChatProactivePolicy(sessionId, { expectedRevision: 18, proactiveMode: "suggest" });
       await chat.triggerChatProactive(sessionId, { source: "manual", reason: "test" });
       await chat.triggerChatProactive(sessionId);
       await chat.fetchChatProactiveRuns(sessionId, 999);
@@ -304,6 +388,53 @@ describe("chat API origin surface headers", () => {
       expect(fetchMock.mock.calls.some(([url]) => String(url).includes("citadelId=company"))).toBe(true);
       expect(fetchMock.mock.calls.some(([url]) => String(url).includes("projectId=project-1"))).toBe(true);
       expect(fetchMock.mock.calls.some(([, init]) => String(init?.body).includes('"citadelId":"company"'))).toBe(true);
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            String(url).includes("/api/v1/chat/projects/project%201") &&
+            init?.method === "PATCH" &&
+            String(init.body).includes('"expectedRevision":5'),
+        ),
+      ).toBe(true);
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            String(url).includes("/api/v1/chat/sessions/session%201") &&
+            init?.method === "PATCH" &&
+            String(init.body).includes('"expectedRevision":9'),
+        ),
+      ).toBe(true);
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            String(url).includes("/api/v1/chat/sessions/session%201?mode=hard&expectedRevision=10") &&
+            init?.method === "DELETE",
+        ),
+      ).toBe(true);
+      expect(fetchMock.mock.calls.some(([, init]) => String(init?.body).includes('"expectedRevision":18'))).toBe(true);
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            String(url).includes("/api/v1/chat/projects/project%201/archive") &&
+            init?.method === "POST" &&
+            String(init.body).includes('"expectedRevision":6'),
+        ),
+      ).toBe(true);
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            String(url).includes("/api/v1/chat/projects/project%201/restore") &&
+            init?.method === "POST" &&
+            String(init.body).includes('"expectedRevision":7'),
+        ),
+      ).toBe(true);
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            String(url).includes("/api/v1/chat/projects/project%201?mode=hard&expectedRevision=8") &&
+            init?.method === "DELETE",
+        ),
+      ).toBe(true);
       expect(
         fetchMock.mock.calls.some(([url]) => String(url).includes("/api/v1/chat/sessions/session%201/agent-send")),
       ).toBe(true);
@@ -506,6 +637,24 @@ describe("chat stream terminal diagnostics", () => {
       expect(events).toContain("stream.start");
       expect(events).toContain("stream.aborted");
       expect(events).not.toContain("stream.complete");
+    },
+    CHAT_API_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "requests a turn capability profile with encoded identity and workspace scope",
+    async () => {
+      const fetchMock = vi.fn(async () => jsonResponse({ state: "legacy_missing" }));
+      vi.stubGlobal("fetch", fetchMock);
+      const { fetchChatTurnCapabilityProfile } = await import("./chat");
+
+      await fetchChatTurnCapabilityProfile("session / 1", "turn / 1", "workspace / 1");
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0]?.[0]).toContain(
+        "/api/v1/chat/sessions/session%20%2F%201/turns/turn%20%2F%201/capability-profile?workspaceId=workspace+%2F+1",
+      );
+      expect((fetchMock.mock.calls[0]?.[1]?.method ?? "GET").toUpperCase()).toBe("GET");
     },
     CHAT_API_TEST_TIMEOUT_MS,
   );

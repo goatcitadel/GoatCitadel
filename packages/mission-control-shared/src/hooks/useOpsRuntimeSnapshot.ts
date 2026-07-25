@@ -4,6 +4,7 @@ import {
   fetchDaemonStatus,
   fetchDashboardState,
   fetchHealthSummary,
+  fetchLlamaCppStatus,
   fetchLlmEvalProofRuns,
   fetchLlmLocalEngines,
   fetchLlmRuntimeMeasurements,
@@ -26,6 +27,7 @@ type RuntimeSnapshotData = {
   health: Awaited<ReturnType<typeof fetchHealthSummary>> | null;
   cost: Awaited<ReturnType<typeof fetchCostSummary>> | null;
   daemon: Awaited<ReturnType<typeof fetchDaemonStatus>> | null;
+  llamaCpp: Awaited<ReturnType<typeof fetchLlamaCppStatus>> | null;
   backups: Awaited<ReturnType<typeof listBackups>>["items"];
   sessions: Awaited<ReturnType<typeof fetchSessions>>["items"];
   mcpServers: Awaited<ReturnType<typeof fetchMcpServers>>["items"];
@@ -46,6 +48,7 @@ type RuntimeSnapshotSourceKey =
   | "health"
   | "cost"
   | "daemon"
+  | "llamaCpp"
   | "backups"
   | "sessions"
   | "mcpServers"
@@ -93,6 +96,7 @@ export function useOpsRuntimeSnapshot(activeSection = "activity") {
         health,
         cost,
         daemon,
+        llamaCpp,
         backups,
         sessions,
         mcpServers,
@@ -105,6 +109,7 @@ export function useOpsRuntimeSnapshot(activeSection = "activity") {
         loadRuntimeSnapshotSource("health", current, sourceSet, null, () => fetchHealthSummary()),
         loadRuntimeSnapshotSource("cost", current, sourceSet, null, () => fetchCostSummary("day")),
         loadRuntimeSnapshotSource("daemon", current, sourceSet, null, () => fetchDaemonStatus()),
+        loadRuntimeSnapshotSource("llamaCpp", current, sourceSet, null, () => fetchLlamaCppStatus()),
         loadRuntimeSnapshotSource("backups", current, sourceSet, [], async () => (await listBackups(10)).items),
         loadRuntimeSnapshotSource("sessions", current, sourceSet, [], async () => (await fetchSessions()).items),
         loadRuntimeSnapshotSource("mcpServers", current, sourceSet, [], async () => (await fetchMcpServers()).items),
@@ -137,6 +142,7 @@ export function useOpsRuntimeSnapshot(activeSection = "activity") {
         health: health.data,
         cost: cost.data,
         daemon: daemon.data,
+        llamaCpp: llamaCpp.data,
         backups: backups.data,
         sessions: sessions.data,
         mcpServers: mcpServers.data,
@@ -149,6 +155,7 @@ export function useOpsRuntimeSnapshot(activeSection = "activity") {
           health: health.status,
           cost: cost.status,
           daemon: daemon.status,
+          llamaCpp: llamaCpp.status,
           backups: backups.status,
           sessions: sessions.status,
           mcpServers: mcpServers.status,
@@ -376,9 +383,9 @@ function sourcesForOpsSection(activeSection: string): RuntimeSnapshotSourceKey[]
     case "costs":
       return ["cost"];
     case "runtime":
-      return ["backups", "mcpServers", "runtimeMeasurements", "localEngines", "evalProofRuns"];
+      return ["llamaCpp", "backups", "mcpServers", "runtimeMeasurements", "localEngines", "evalProofRuns"];
     case "diagnostics":
-      return ["timeline", "backups", "mcpServers", "runtimeMeasurements", "localEngines", "evalProofRuns"];
+      return ["timeline", "llamaCpp", "backups", "mcpServers", "runtimeMeasurements", "localEngines", "evalProofRuns"];
     default:
       return ["timeline"];
   }

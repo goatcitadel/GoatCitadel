@@ -7,6 +7,7 @@ import {
   type ChatTurnLifecycleStatus,
 } from "@goatcitadel/contracts";
 import { getChatToolRunDiagnostics } from "./chat-tool-diagnostics";
+import { projectChatToolEffectTruth } from "./chat-tool-effect-truth";
 import { parseTimestamp } from "./chat-display-helpers";
 
 export function ChatTurnActivityRows({
@@ -29,13 +30,19 @@ export function ChatTurnActivityRows({
     <div className="mc-next-thread-tool-activity" aria-label="Tool activity for this turn">
       {visibleRuns.map((run) => {
         const diagnostics = getChatToolRunDiagnostics(run);
+        const effectTruth = projectChatToolEffectTruth(run);
         const tone = getToolRunActivityTone(run.status, diagnostics.hasFailureSignal);
-        const summary =
+        const operationalSummary =
           diagnostics.summary ??
           diagnostics.artifactSummary ??
           diagnostics.engineLabel ??
           run.failureGuidance ??
           getToolRunActivityFallback(run.status);
+        const summary = effectTruth
+          ? effectTruth.tone === "uncertain"
+            ? `${effectTruth.summary} ${operationalSummary}`
+            : `${operationalSummary} ${effectTruth.summary}`
+          : operationalSummary;
         const elapsed = formatToolRunElapsed(run.startedAt, run.finishedAt);
 
         return (
@@ -48,7 +55,12 @@ export function ChatTurnActivityRows({
           >
             <span className="mc-next-thread-tool-activity-status">{formatToolRunStatus(run.status)}</span>
             <span className="mc-next-thread-tool-activity-name">{run.toolName}</span>
-            <span className="mc-next-thread-tool-activity-summary">{summary}</span>
+            <span className="mc-next-thread-tool-activity-summary" title={summary}>
+              {summary}
+            </span>
+            {effectTruth?.tone === "uncertain" ? (
+              <span className="mc-next-thread-tool-activity-badge">effect uncertain</span>
+            ) : null}
             {diagnostics.storedAsArtifact ? <span className="mc-next-thread-tool-activity-badge">artifact</span> : null}
             {run.approvalId ? <span className="mc-next-thread-tool-activity-badge">approval</span> : null}
             {elapsed ? <span className="mc-next-thread-tool-activity-elapsed">{elapsed}</span> : null}
@@ -245,12 +257,15 @@ function LiveActivityRow({
   onOpenRunDetails: () => void;
 }) {
   const diagnostics = getChatToolRunDiagnostics(run);
-  const summary =
+  const effectTruth = projectChatToolEffectTruth(run);
+  const operationalSummary =
     diagnostics.summary ??
     diagnostics.artifactSummary ??
     diagnostics.engineLabel ??
     run.failureGuidance ??
     getToolRunActivityFallback(run.status);
+  const summary =
+    effectTruth?.tone === "uncertain" ? `${effectTruth.summary} ${operationalSummary}` : operationalSummary;
   const elapsed =
     run.status === "started"
       ? formatToolRunElapsedLive(run.startedAt, nowMs)
@@ -265,7 +280,9 @@ function LiveActivityRow({
     >
       <LiveActivityRowGlyph run={run} hasFailureSignal={diagnostics.hasFailureSignal} />
       <span className="mc-next-live-activity-name">{run.toolName}</span>
-      <span className="mc-next-live-activity-summary">{summary}</span>
+      <span className="mc-next-live-activity-summary" title={summary}>
+        {summary}
+      </span>
       {elapsed ? <span className="mc-next-live-activity-elapsed">{elapsed}</span> : null}
     </button>
   );

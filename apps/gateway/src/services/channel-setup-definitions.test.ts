@@ -513,6 +513,71 @@ describe("channel setup definitions", () => {
     );
   });
 
+  it("advertises Signal as outbound-only and strips blocked legacy inbound settings", () => {
+    const signal = requireChannelSetupDefinition("channel.signal");
+    const wizardText = JSON.stringify(signal.definition.wizard);
+
+    expect(signal.definition.wizard.contentVersion).toBe("2026.07.signal.v3");
+    expect(signal.definition.wizard.introSummary).toContain("outbound-only");
+    expect(wizardText).toContain("no acknowledgement or replay contract");
+    expect(wizardText).not.toContain('"key":"inboundEnabled"');
+    expect(wizardText).not.toContain('"key":"pollIntervalSeconds"');
+
+    const hydrated = signal.hydrate(
+      createConnection({
+        catalogId: "channel.signal",
+        key: "signal",
+        config: {
+          baseUrl: "http://127.0.0.1:8080",
+          accountId: "+15551234567",
+          defaultRecipient: "+15557654321",
+          inboundEnabled: true,
+          pollIntervalSeconds: 5,
+        },
+      }),
+    );
+
+    expect(hydrated.draft).toEqual({
+      baseUrl: "http://127.0.0.1:8080",
+      accountId: "+15551234567",
+      defaultRecipient: "+15557654321",
+    });
+    expect(hydrated.hydration.warnings).toEqual([expect.stringContaining("blocked")]);
+    expect(
+      signal.normalize({
+        ...createDraft("channel.signal", hydrated.draft, "edit"),
+        hydration: hydrated.hydration,
+      }),
+    ).toEqual({
+      baseUrl: "http://127.0.0.1:8080",
+      accountId: "+15551234567",
+      defaultRecipient: "+15557654321",
+    });
+
+    const blockedIssues = signal.validate(
+      createDraft("channel.signal", {
+        baseUrl: "http://127.0.0.1:8080",
+        defaultRecipient: "+15557654321",
+        inboundEnabled: true,
+        pollIntervalSeconds: 5,
+      }),
+    );
+    expect(blockedIssues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ fieldKey: "inboundEnabled", failureCategory: "malformed_value" }),
+        expect.objectContaining({ fieldKey: "pollIntervalSeconds", failureCategory: "malformed_value" }),
+      ]),
+    );
+    expect(
+      signal.validate(
+        createDraft("channel.signal", {
+          baseUrl: "http://127.0.0.1:8080",
+          defaultRecipient: "+15557654321",
+        }),
+      ),
+    ).toEqual([]);
+  });
+
   it("preserves env-backed Mattermost auth during edit flows", () => {
     const definition = requireChannelSetupDefinition("channel.mattermost");
     const hydrated = definition.hydrate(

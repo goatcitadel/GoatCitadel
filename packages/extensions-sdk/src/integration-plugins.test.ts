@@ -1,9 +1,10 @@
 import path from "node:path";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   INTEGRATION_PLUGIN_MANIFEST_FILENAME,
+  INTEGRATION_PLUGIN_MANIFEST_MAX_BYTES,
   loadIntegrationPluginAuthorManifest,
   resolveIntegrationPluginAuthorManifestSource,
   validateIntegrationPluginAuthorManifest,
@@ -133,5 +134,74 @@ describe("extensions sdk integration-plugin manifest helpers", () => {
     expect(resolveIntegrationPluginAuthorManifestSource(tempDir)).toEqual({ source: tempDir });
 
     fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("bounds descriptor metadata before parsing and quarantines oversized local sources", async () => {
+    const tempDir = await fsPromises.mkdtemp(path.join(process.cwd(), "tmp-integration-plugin-oversized-"));
+    const manifestPath = path.join(tempDir, INTEGRATION_PLUGIN_MANIFEST_FILENAME);
+    await fsPromises.writeFile(manifestPath, "x".repeat(INTEGRATION_PLUGIN_MANIFEST_MAX_BYTES + 1), "utf8");
+
+    await expect(loadIntegrationPluginAuthorManifest(manifestPath)).rejects.toThrow(/byte limit/i);
+    expect(resolveIntegrationPluginAuthorManifestSource(tempDir)).toMatchObject({
+      source: tempDir,
+      manifestPath,
+      manifestError: expect.stringMatching(/byte limit/i),
+    });
+
+    await fsPromises.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("keeps async descriptor reads bounded when an opened file grows after fstat", async () => {
+    const close = vi.fn(async () => undefined);
+    const read = vi.fn(async (buffer: Buffer, offset: number, length: number) => {
+      buffer.fill(0x78, offset, offset + length);
+      return { bytesRead: length, buffer };
+    });
+    const open = vi.spyOn(fsPromises, "open").mockResolvedValueOnce({
+      stat: async () => ({ isFile: () => true, size: 1 }),
+      read,
+      close,
+    } as never);
+
+    try {
+      await expect(loadIntegrationPluginAuthorManifest("growing-integration-plugin.json")).rejects.toThrow(
+        /byte limit/i,
+      );
+      expect(read).toHaveBeenCalledTimes(1);
+      expect(read.mock.calls[0]?.[2]).toBe(INTEGRATION_PLUGIN_MANIFEST_MAX_BYTES + 1);
+      expect(close).toHaveBeenCalledTimes(1);
+    } finally {
+      open.mockRestore();
+    }
+  });
+
+  it("keeps sync descriptor reads bounded when an opened file grows after fstat", async () => {
+    const tempDir = await fsPromises.mkdtemp(path.join(process.cwd(), "tmp-integration-plugin-growing-sync-"));
+    const manifestPath = path.join(tempDir, INTEGRATION_PLUGIN_MANIFEST_FILENAME);
+    await fsPromises.writeFile(manifestPath, "{}", "utf8");
+    const open = vi.spyOn(fs, "openSync").mockReturnValueOnce(123);
+    const fstat = vi.spyOn(fs, "fstatSync").mockReturnValueOnce({ isFile: () => true, size: 2 } as never);
+    const read = vi.spyOn(fs, "readSync").mockImplementationOnce((_descriptor, buffer, offset, length) => {
+      (buffer as Buffer).fill(0x78, offset, offset + length);
+      return length;
+    });
+    const close = vi.spyOn(fs, "closeSync").mockImplementationOnce(() => undefined);
+
+    try {
+      expect(resolveIntegrationPluginAuthorManifestSource(tempDir)).toMatchObject({
+        source: tempDir,
+        manifestPath,
+        manifestError: expect.stringMatching(/byte limit/i),
+      });
+      expect(read).toHaveBeenCalledTimes(1);
+      expect(read.mock.calls[0]?.[3]).toBe(INTEGRATION_PLUGIN_MANIFEST_MAX_BYTES + 1);
+      expect(close).toHaveBeenCalledWith(123);
+    } finally {
+      close.mockRestore();
+      read.mockRestore();
+      fstat.mockRestore();
+      open.mockRestore();
+      await fsPromises.rm(tempDir, { recursive: true, force: true });
+    }
   });
 });

@@ -1,5 +1,7 @@
 import {
   type ChatMode,
+  type ChatHistoryWindowResponse,
+  type ChatSessionSearchHitRecord,
   type ChatSessionBindingRecord,
   type ChatSessionPrefsRecord,
   type ChatSpecialistCandidateRecord,
@@ -14,6 +16,8 @@ import {
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
 import {
   fetchChatGeneratedArtifacts,
+  fetchChatHistoryWindow,
+  fetchChatHistoryContinuation,
   fetchChatCommandCatalog,
   fetchChatLearnedMemory,
   fetchChatProjects,
@@ -22,6 +26,7 @@ import {
   fetchChatSessionBinding,
   fetchChatSessionPrefs,
   fetchChatSessions,
+  fetchChatSessionSearch,
   fetchChatSpecialistCandidates,
   fetchChatThread,
   fetchThreadKnowledgeAttachments,
@@ -186,11 +191,23 @@ export function useChatSessionData(input: {
   const [secondaryLoading, setSecondaryLoading] = useState(false);
   const [sidebarNextCursor, setSidebarNextCursor] = useState<string | null>(null);
   const [sidebarLoadingMore, setSidebarLoadingMore] = useState(false);
+  const [historicalWindow, setHistoricalWindow] = useState<ChatHistoryWindowResponse | null>(null);
+  const [historicalWindowLoading, setHistoricalWindowLoading] = useState(false);
+  const [historicalWindowError, setHistoricalWindowError] = useState<string | null>(null);
+  const [historicalWindowTarget, setHistoricalWindowTarget] = useState<{
+    workspaceId: string;
+    sessionId: string;
+  } | null>(null);
+  const [historicalContinuationLoading, setHistoricalContinuationLoading] = useState<"older" | "newer" | null>(null);
+  const [historicalContinuationError, setHistoricalContinuationError] = useState<string | null>(null);
 
   const initializedRef = useRef(false);
   const sidebarNextCursorRef = useRef<string | null>(null);
   const loadCoreGenerationRef = useRef(0);
   const loadSecondaryGenerationRef = useRef(0);
+  const loadSidebarGenerationRef = useRef(0);
+  const historicalWindowGenerationRef = useRef(0);
+  const historicalContinuationGenerationRef = useRef(0);
   const lastLoadedSessionIdRef = useRef<string | null>(null);
   const refreshSubscriptionStartedAtRef = useRef<number>(0);
   const updateSidebarNextCursor = useCallback((nextCursor: string | null) => {
@@ -213,12 +230,16 @@ export function useChatSessionData(input: {
 
   const loadSidebar = useCallback(
     async (nextHistoryView: ChatHistoryView = historyView, options: ChatSidebarLoadOptions = {}) => {
+      const generation = ++loadSidebarGenerationRef.current;
       const trimmedSearchQuery = searchQuery.trim();
       const sessionLimit = resolveSidebarSessionLimit(nextHistoryView, trimmedSearchQuery);
       const append = Boolean(options.append && !trimmedSearchQuery);
       const cursor = append ? (sidebarNextCursorRef.current ?? undefined) : undefined;
       if (append && !cursor) {
         return;
+      }
+      if (!append) {
+        setSidebarLoadingMore(false);
       }
       recordClientDiagnostic({
         level: "debug",
@@ -244,6 +265,7 @@ export function useChatSessionData(input: {
             cursor,
             mode: surfaceMode,
           });
+          if (generation !== loadSidebarGenerationRef.current) return;
           setSessions((current) => {
             if (!current) {
               return nextSessions;
@@ -264,31 +286,57 @@ export function useChatSessionData(input: {
             };
           });
           updateSidebarNextCursor(nextSessions.nextCursor ?? null);
+        } catch (error) {
+          if (generation === loadSidebarGenerationRef.current) throw error;
         } finally {
-          setSidebarLoadingMore(false);
+          if (generation === loadSidebarGenerationRef.current) {
+            setSidebarLoadingMore(false);
+          }
         }
         return;
       }
       const cacheKey = `${workspaceId}:${nextHistoryView}:${trimmedSearchQuery}:${sessionLimit}:${surfaceMode ?? "all"}`;
-      const { projects: nextProjects, sessions: nextSessions } = await getDevBootstrapPromise(
-        sidebarBootstrapCache,
-        cacheKey,
-        async () => {
-          const [projects, sessions] = await Promise.all([
-            fetchChatProjects("all", sessionLimit, workspaceId),
-            fetchChatSessions({
-              scope: "all",
-              view: nextHistoryView,
-              limit: sessionLimit,
-              workspaceId,
-              q: trimmedSearchQuery || undefined,
-              mode: surfaceMode,
-            }),
-          ]);
-          return { projects, sessions };
-        },
-        { bypassCache: options.bypassCache },
-      );
+      let nextProjects: ChatProjectsResponse;
+      let nextSessions: ChatSessionsResponse;
+      try {
+        ({ projects: nextProjects, sessions: nextSessions } = await getDevBootstrapPromise(
+          sidebarBootstrapCache,
+          cacheKey,
+          async () => {
+            const [projects, sessions] = await Promise.all([
+              fetchChatProjects("all", sessionLimit, workspaceId),
+              trimmedSearchQuery
+                ? fetchChatSessionSearch({
+                    query: trimmedSearchQuery,
+                    mode: "discovery",
+                    view: nextHistoryView,
+                    limit: sessionLimit,
+                    workspaceId,
+                    surface: surfaceMode,
+                  }).then<ChatSessionsResponse>((response) => ({
+                    items: response.items.map((item) => ({
+                      ...item.session,
+                      searchHits: item.hits,
+                    })),
+                    nextCursor: response.nextCursor,
+                  }))
+                : fetchChatSessions({
+                    scope: "all",
+                    view: nextHistoryView,
+                    limit: sessionLimit,
+                    workspaceId,
+                    mode: surfaceMode,
+                  }),
+            ]);
+            return { projects, sessions };
+          },
+          { bypassCache: options.bypassCache },
+        ));
+      } catch (error) {
+        if (generation === loadSidebarGenerationRef.current) throw error;
+        return;
+      }
+      if (generation !== loadSidebarGenerationRef.current) return;
       setProjects(nextProjects);
       setSessions(nextSessions);
       updateSidebarNextCursor(nextSessions.nextCursor ?? null);
@@ -307,6 +355,151 @@ export function useChatSessionData(input: {
     },
     [historyView, searchQuery, setSelectedSessionId, surfaceMode, updateSidebarNextCursor, workspaceId],
   );
+
+  const openHistoricalWindow = useCallback(
+    async (sessionId: string, hit: ChatSessionSearchHitRecord) => {
+      const generation = ++historicalWindowGenerationRef.current;
+      historicalContinuationGenerationRef.current += 1;
+      const target = { workspaceId, sessionId };
+      setHistoricalWindowTarget(target);
+      setHistoricalWindow(null);
+      setHistoricalWindowError(null);
+      setHistoricalContinuationError(null);
+      setHistoricalContinuationLoading(null);
+      if (hit.workspaceId !== workspaceId || hit.sessionId !== sessionId) {
+        setHistoricalWindowError("Search result identity does not belong to the selected workspace and conversation");
+        setHistoricalWindowLoading(false);
+        return false;
+      }
+      setHistoricalWindowLoading(true);
+      try {
+        const nextWindow = await fetchChatHistoryWindow({
+          workspaceId: hit.workspaceId,
+          sessionId: hit.sessionId,
+          messageId: hit.messageId,
+          sequence: hit.sequence,
+        });
+        if (generation !== historicalWindowGenerationRef.current) return false;
+        if (
+          nextWindow.anchor.workspaceId !== workspaceId ||
+          nextWindow.anchor.sessionId !== sessionId ||
+          nextWindow.anchor.messageId !== hit.messageId ||
+          nextWindow.anchor.sequence !== hit.sequence
+        ) {
+          setHistoricalWindowError("Historical response identity did not match the selected search result");
+          return false;
+        }
+        setHistoricalWindow(nextWindow);
+        return true;
+      } catch (error) {
+        if (generation !== historicalWindowGenerationRef.current) return false;
+        setHistoricalWindowError(error instanceof Error ? error.message : "Historical message could not be loaded");
+        return false;
+      } finally {
+        if (generation === historicalWindowGenerationRef.current) {
+          setHistoricalWindowLoading(false);
+        }
+      }
+    },
+    [workspaceId],
+  );
+
+  const returnToLatest = useCallback(() => {
+    historicalWindowGenerationRef.current += 1;
+    historicalContinuationGenerationRef.current += 1;
+    setHistoricalWindow(null);
+    setHistoricalWindowTarget(null);
+    setHistoricalWindowError(null);
+    setHistoricalWindowLoading(false);
+    setHistoricalContinuationLoading(null);
+    setHistoricalContinuationError(null);
+  }, []);
+
+  const loadHistoricalContinuation = useCallback(
+    async (direction: "older" | "newer") => {
+      const target = historicalWindowTarget;
+      const currentWindow = historicalWindow;
+      const cursor = direction === "older" ? currentWindow?.olderCursor : currentWindow?.newerCursor;
+      if (!target || currentWindow?.anchor.state !== "found" || !cursor) return false;
+      const generation = ++historicalContinuationGenerationRef.current;
+      setHistoricalContinuationLoading(direction);
+      setHistoricalContinuationError(null);
+      try {
+        const page = await fetchChatHistoryContinuation({
+          workspaceId: target.workspaceId,
+          sessionId: target.sessionId,
+          direction,
+          cursor,
+        });
+        if (generation !== historicalContinuationGenerationRef.current) return false;
+        if (page.cursorState === "stale") {
+          setHistoricalContinuationError("Historical continuation is stale because its boundary message changed");
+          return false;
+        }
+        const pageIsValid =
+          page.direction === direction &&
+          page.snapshotMaxSequence === cursor.snapshotMaxSequence &&
+          page.items.every(
+            (entry) =>
+              entry.message.sessionId === target.sessionId &&
+              entry.sequence <= cursor.snapshotMaxSequence &&
+              (direction === "older" ? entry.sequence < cursor.sequence : entry.sequence > cursor.sequence),
+          ) &&
+          (!page.nextCursor || page.nextCursor.snapshotMaxSequence === cursor.snapshotMaxSequence);
+        if (!pageIsValid) {
+          setHistoricalContinuationError("Historical continuation identity did not match the requested cursor");
+          return false;
+        }
+        setHistoricalWindow((active) => {
+          if (
+            !active ||
+            active.anchor.workspaceId !== target.workspaceId ||
+            active.anchor.sessionId !== target.sessionId ||
+            active.anchor.messageId !== currentWindow.anchor.messageId ||
+            active.anchor.sequence !== currentWindow.anchor.sequence
+          ) {
+            return active;
+          }
+          const combined = direction === "older" ? [...page.items, ...active.items] : [...active.items, ...page.items];
+          const seen = new Set<string>();
+          const items = combined.filter((entry) => {
+            const key = `${entry.message.messageId}:${entry.sequence}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          });
+          return {
+            ...active,
+            items,
+            ...(direction === "older"
+              ? { hasOlder: page.hasMore, olderCursor: page.nextCursor }
+              : { hasNewer: page.hasMore, newerCursor: page.nextCursor }),
+            truncated: active.truncated || page.truncated,
+            droppedItems: active.droppedItems + page.droppedItems,
+          };
+        });
+        return true;
+      } catch (error) {
+        if (generation !== historicalContinuationGenerationRef.current) return false;
+        setHistoricalContinuationError(error instanceof Error ? error.message : "Historical continuation failed");
+        return false;
+      } finally {
+        if (generation === historicalContinuationGenerationRef.current) {
+          setHistoricalContinuationLoading(null);
+        }
+      }
+    },
+    [historicalWindow, historicalWindowTarget],
+  );
+
+  useEffect(() => {
+    if (
+      historicalWindowTarget &&
+      (historicalWindowTarget.workspaceId !== workspaceId || historicalWindowTarget.sessionId !== selectedSessionId)
+    ) {
+      returnToLatest();
+    }
+  }, [historicalWindowTarget, returnToLatest, selectedSessionId, workspaceId]);
 
   const loadRuntimeCatalog = useCallback(async () => {
     const { runtimeSettings, commands, skills, servers, templates } = await getDevBootstrapPromise(
@@ -658,7 +851,16 @@ export function useChatSessionData(input: {
     secondaryLoading,
     sidebarNextCursor,
     sidebarLoadingMore,
+    historicalWindow,
+    historicalWindowLoading,
+    historicalWindowError,
+    historicalWindowTarget,
+    historicalContinuationLoading,
+    historicalContinuationError,
     loadSidebar,
+    openHistoricalWindow,
+    returnToLatest,
+    loadHistoricalContinuation,
     loadRuntimeCatalog,
     loadSessionCoreState,
     loadSessionSecondaryState,

@@ -104,6 +104,124 @@ describe("HooksService", () => {
     });
   });
 
+  it("crosses the caller-owned effect fence before the first tool hook webhook", async () => {
+    const events: string[] = [];
+    const { service, workspaceId } = createHarness({
+      fetchImpl: async () => {
+        events.push("fetch");
+        expect(events).toEqual(["fence", "fetch"]);
+        return new Response(JSON.stringify({}), { status: 200 });
+      },
+    });
+    service.createWorkspaceHook({
+      workspaceId,
+      label: "effect boundary",
+      trigger: "tool.call.before",
+      mode: "observe",
+      action: { type: "webhook", webhook: { url: "https://hooks.example.test/effect-boundary" } },
+    });
+    const expectedInterposition = service.getToolCallBeforeInterposition(workspaceId);
+
+    const result = await service.runInlineHooks({
+      workspaceId,
+      trigger: "tool.call.before",
+      entityType: "tool_call",
+      entityId: "tool-effect-boundary",
+      payload: { toolName: "time.now" },
+      expectedInterposition,
+      beforeExternalDispatch: () => events.push("fence"),
+    });
+
+    expect(result.runs).toHaveLength(1);
+    expect(events).toEqual(["fence", "fetch"]);
+  });
+
+  it("rejects exact-list interposition drift before a tool hook webhook", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({}), { status: 200 }));
+    const beforeExternalDispatch = vi.fn();
+    const { service, workspaceId } = createHarness({ fetchImpl });
+    const hook = service.createWorkspaceHook({
+      workspaceId,
+      label: "sealed hook",
+      trigger: "tool.call.before",
+      mode: "observe",
+      action: { type: "webhook", webhook: { url: "https://hooks.example.test/original" } },
+    });
+    const expectedInterposition = service.getToolCallBeforeInterposition(workspaceId);
+    service.updateWorkspaceHook(workspaceId, hook.hookId, {
+      action: { type: "webhook", webhook: { url: "https://hooks.example.test/replaced" } },
+    });
+
+    await expect(
+      service.runInlineHooks({
+        workspaceId,
+        trigger: "tool.call.before",
+        entityType: "tool_call",
+        entityId: "tool-drift",
+        payload: { toolName: "time.now" },
+        expectedInterposition,
+        beforeExternalDispatch,
+      }),
+    ).rejects.toThrow(/interposition binding drifted/i);
+    expect(beforeExternalDispatch).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("rejects after-hook action drift before the auxiliary fence or durable enqueue", () => {
+    const beforeExternalDispatch = vi.fn();
+    const { service, workspaceId } = createHarness();
+    const hook = service.createWorkspaceHook({
+      workspaceId,
+      label: "sealed after hook",
+      trigger: "tool.call.after",
+      mode: "observe",
+      action: { type: "webhook", webhook: { url: "https://hooks.example.test/original-after" } },
+    });
+    const expectedInterposition = service.getToolCallBeforeInterposition(workspaceId);
+    service.updateWorkspaceHook(workspaceId, hook.hookId, {
+      action: { type: "webhook", webhook: { url: "https://hooks.example.test/replaced-after" } },
+    });
+
+    expect(() =>
+      service.enqueueAfterHooks({
+        workspaceId,
+        trigger: "tool.call.after",
+        entityType: "tool_call",
+        entityId: "tool-after-drift",
+        payload: { toolName: "time.now", outcome: "executed" },
+        expectedInterposition,
+        beforeExternalDispatch,
+      }),
+    ).toThrow(/interposition binding drifted/i);
+    expect(beforeExternalDispatch).not.toHaveBeenCalled();
+  });
+
+  it("crosses the auxiliary effect fence before materializing an admitted after hook", () => {
+    const { service, workspaceId } = createHarness();
+    service.createWorkspaceHook({
+      workspaceId,
+      label: "admitted after hook",
+      trigger: "tool.call.after",
+      mode: "observe",
+      action: { type: "webhook", webhook: { url: "https://hooks.example.test/admitted-after" } },
+    });
+    const expectedInterposition = service.getToolCallBeforeInterposition(workspaceId);
+    const beforeExternalDispatch = vi.fn();
+
+    const runs = service.enqueueAfterHooks({
+      workspaceId,
+      trigger: "tool.call.after",
+      entityType: "tool_call",
+      entityId: "tool-after-admitted",
+      payload: { toolName: "time.now", outcome: "executed" },
+      expectedInterposition,
+      beforeExternalDispatch,
+    });
+
+    expect(beforeExternalDispatch).toHaveBeenCalledTimes(1);
+    expect(runs).toHaveLength(1);
+  });
+
   it("times out fail-open hooks without blocking the caller", async () => {
     const { service, workspaceId } = createHarness({
       workspacePrefs: {

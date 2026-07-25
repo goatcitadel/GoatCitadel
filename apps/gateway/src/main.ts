@@ -16,6 +16,11 @@ import {
 import { setGoatcitadelTerminalTitle } from "./runtime-ux.js";
 import { env } from "./env.js";
 import { startA2AGrpcServer, type A2AGrpcServerHandle } from "./services/a2a-grpc-server.js";
+import {
+  createRemoteWorkerNativeRuntimeService,
+  type RemoteWorkerNativeRuntimeService,
+} from "./services/remote-worker-native-runtime-service.js";
+import { SharedHostAdmissionClosedError } from "./services/shared-host-lifecycle-service.js";
 
 setBootCheckpoint("main.ts:body-start");
 const startupPhases = getStartupPhaseRecorder();
@@ -41,6 +46,7 @@ const app = await buildApp().then(
 setBootCheckpoint("main.ts:buildApp-returned");
 let shuttingDown = false;
 let a2aGrpcServer: A2AGrpcServerHandle | undefined;
+let remoteWorkerNativeRuntime: RemoteWorkerNativeRuntimeService | undefined;
 
 process.on("warning", (warning) => {
   app.log.warn(
@@ -60,11 +66,8 @@ const shutdown = async (signal: string) => {
   }
   shuttingDown = true;
   try {
-    if (a2aGrpcServer?.enabled) {
-      await a2aGrpcServer.close();
-      app.log.info("A2A gRPC listener stopped");
-    }
     const result = await performShutdown(app, signal, undefined, {
+      stopListeners: stopNetworkListeners,
       onForceExitArmed: () => {
         console.error("[gateway] graceful shutdown timed out after 10 s — forcing exit");
         process.exit(1);
@@ -113,14 +116,38 @@ try {
       );
     }
   }
+  const remoteWorkerPhase = startupPhases.open("remote_worker_native", { owner: "gateway.main" });
+  try {
+    remoteWorkerNativeRuntime = createRemoteWorkerNativeRuntimeService({
+      sharedHostLifecycle: app.sharedHostLifecycle,
+    });
+    const remoteWorkerSnapshot = await remoteWorkerNativeRuntime.start();
+    remoteWorkerPhase.close(
+      remoteWorkerSnapshot.state === "listening_dark"
+        ? `listening_dark:${remoteWorkerSnapshot.address ?? "bound"}`
+        : remoteWorkerSnapshot.state,
+    );
+  } catch (error) {
+    remoteWorkerPhase.fail(formatStartupPhaseError(error));
+    throw error;
+  }
   setBootCheckpoint("main.ts:listen-starting");
   const listenPhase = startupPhases.open("listen", { owner: "gateway.main" });
+  const listenerAdmission = app.sharedHostLifecycle.tryReserve("worker", "gateway:http-listener-startup");
+  if (!listenerAdmission.admitted) {
+    throw new SharedHostAdmissionClosedError(listenerAdmission.state, listenerAdmission.reason);
+  }
   try {
     await app.listen({ port, host });
+    if (listenerAdmission.reservation.signal.aborted) {
+      throw new Error("HTTP listener startup was interrupted by shared-host drain.");
+    }
     listenPhase.close(`http://${host}:${port}`);
   } catch (error) {
     listenPhase.fail(formatStartupPhaseError(error));
     throw error;
+  } finally {
+    listenerAdmission.reservation.release();
   }
   app.log.info(`gateway listening on http://${host}:${port}`);
   const a2aGrpcPhase = startupPhases.open("a2a_grpc", { owner: "gateway.main" });
@@ -128,6 +155,7 @@ try {
     a2aGrpcServer = await startA2AGrpcServer({
       config: app.gatewayConfig,
       a2a: app.services.a2a,
+      sharedHostLifecycle: app.sharedHostLifecycle,
       logger: app.log,
     });
     a2aGrpcPhase.close(a2aGrpcServer.enabled ? "enabled" : "disabled");
@@ -140,7 +168,42 @@ try {
 } catch (error) {
   app.log.error(error);
   process.exitCode = 1;
-  process.exit(1);
+  try {
+    if (!shuttingDown) {
+      shuttingDown = true;
+      await performShutdown(app, "STARTUP_FAILURE", undefined, { stopListeners: stopNetworkListeners });
+    }
+  } catch (cleanupError) {
+    app.log.error(cleanupError, "gateway startup-failure cleanup failed");
+  } finally {
+    endBootTracking();
+  }
+}
+
+async function stopNetworkListeners(): Promise<void> {
+  const stops: Promise<void>[] = [];
+  if (remoteWorkerNativeRuntime !== undefined) {
+    stops.push(
+      remoteWorkerNativeRuntime.close().then(() => {
+        app.log.info("Remote worker native listener stopped");
+      }),
+    );
+  }
+  if (a2aGrpcServer?.enabled) {
+    stops.push(
+      a2aGrpcServer.close().then(() => {
+        app.log.info("A2A gRPC listener stopped");
+      }),
+    );
+  }
+  if (app.server.listening) {
+    stops.push(
+      new Promise<void>((resolve, reject) => {
+        app.server.close((error) => (error ? reject(error) : resolve()));
+      }),
+    );
+  }
+  await Promise.all(stops);
 }
 
 function formatStartupPhaseError(error: unknown): string {

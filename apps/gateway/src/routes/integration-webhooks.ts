@@ -17,18 +17,21 @@ import {
   deriveGenericChannelInboundIdempotencyKey,
   verifyGenericChannelInboundSignature,
 } from "../services/generic-channel-webhook.js";
-
-const GENERIC_CHANNEL_INBOUND_RATE_LIMIT_MAX = 500;
+import { createAcceptedWebhookRateLimit, enforceAcceptedWebhookRateLimit } from "../services/webhook-rate-limit.js";
 
 export const integrationWebhookRoutes: FastifyPluginAsync = async (fastify) => {
   const genericChannelInboundOptions = createWebhookRouteOptions("genericChannelRawBody");
+  const genericAcceptedRateLimit = createAcceptedWebhookRateLimit(fastify, "generic");
   fastify.post(
     "/api/v1/integrations/connections/:connectionId/:channel/inbound",
     {
       ...genericChannelInboundOptions,
       config: {
         ...genericChannelInboundOptions.config,
-        rateLimit: { max: GENERIC_CHANNEL_INBOUND_RATE_LIMIT_MAX },
+        rateLimit: {
+          ...genericChannelInboundOptions.config.rateLimit,
+          max: genericChannelInboundOptions.config.rateLimit.max,
+        },
       },
     },
     async (request, reply) => {
@@ -91,6 +94,9 @@ export const integrationWebhookRoutes: FastifyPluginAsync = async (fastify) => {
           "Rejected generic channel inbound webhook because verification failed.",
         );
         return reply.code(401).send({ error: "Invalid generic channel inbound signature" });
+      }
+      if (await enforceAcceptedWebhookRateLimit(genericAcceptedRateLimit, request, reply)) {
+        return;
       }
 
       const parsed = channelInboundSchema.safeParse(request.body);
@@ -159,17 +165,38 @@ export const integrationWebhookRoutes: FastifyPluginAsync = async (fastify) => {
       }
 
       try {
-        const result = await fastify.services.integrationWebhooks.ingestChannelMessage(
-          params.data.channel,
-          deriveGenericChannelInboundIdempotencyKey(params.data.connectionId, params.data.channel, parsed.data.eventId),
-          {
+        const acceptInbound = fastify.services.integrationWebhooks.acceptInboundChannelEvent;
+        if (!acceptInbound) {
+          throw new Error("Durable inbound channel acceptance is unavailable.");
+        }
+        const result = await acceptInbound({
+          channel: params.data.channel,
+          connectionId: params.data.connectionId,
+          idempotencyKey: deriveGenericChannelInboundIdempotencyKey(
+            params.data.connectionId,
+            params.data.channel,
+            parsed.data.eventId,
+          ),
+          eventType: "generic-channel",
+          bindingTarget: parsed.data.room ?? parsed.data.peer,
+          dispatchKind: "record_only",
+          message: {
             ...parsed.data,
             account: params.data.connectionId,
           },
-        );
+        });
         return reply.send(result);
       } catch (error) {
-        return reply.code(400).send({ error: (error as Error).message });
+        request.log.error(
+          {
+            channel: params.data.channel,
+            connectionId: params.data.connectionId,
+            eventId: parsed.data.eventId,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          "Generic channel inbound webhook was not acknowledged because durable acceptance failed.",
+        );
+        return reply.code(503).send({ error: "Durable inbound channel acceptance failed" });
       }
     },
   );

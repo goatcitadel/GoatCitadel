@@ -1,9 +1,11 @@
+/* eslint-disable max-lines -- Orchestration execution, accounting, and synthesis invariants remain co-located while the engine boundary is being stabilized. */
 import type {
   ChatCitationRecord,
   ChatCompletionRequest,
   ChatCompletionResponse,
   ChatMode,
 } from "@goatcitadel/contracts";
+import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
 import type {
   OrchestrationExecutionCallbacks,
   OrchestrationExecutionResult,
@@ -322,17 +324,28 @@ async function executeStep(input: {
     }),
   });
   try {
-    const response = await input.callbacks.createChatCompletion({
-      providerId: input.step.providerId,
-      model: input.step.model,
-      stream: false,
-      memory: {
-        enabled: input.task.prefs.memoryMode !== "off",
-        mode: input.task.prefs.memoryMode === "off" ? "off" : "qmd",
-        sessionId: input.task.sessionId,
+    const response = await input.callbacks.createChatCompletion(
+      {
+        providerId: input.step.providerId,
+        model: input.step.model,
+        stream: false,
+        memory: {
+          enabled: input.task.prefs.memoryMode !== "off",
+          mode: input.task.prefs.memoryMode === "off" ? "off" : "qmd",
+          sessionId: input.task.sessionId,
+        },
+        messages: prompt.messages,
       },
-      messages: prompt.messages,
-    });
+      {
+        operationId: `orchestration-step:${input.step.stepId}`,
+        dispatchGeneration: `orchestration-step:${input.step.stepId}:generation-1`,
+        callKind: "utility",
+        agentId: input.step.role,
+        workerId: input.step.stepId,
+        utilityKind: "orchestration_step",
+        attemptIndex: 0,
+      },
+    );
     const finishedAt = new Date().toISOString();
     const output = extractCompletionText(response).trim() || "(no output returned)";
     return {
@@ -357,6 +370,9 @@ async function executeStep(input: {
       prompt: prompt.reference,
     };
   } catch (error) {
+    if (isAuthoritativeModelUsageAccountingError(error)) {
+      throw error;
+    }
     const finishedAt = new Date().toISOString();
     return {
       stepId: input.step.stepId,
@@ -793,17 +809,29 @@ async function tryRepairFinalSynthesis(input: {
         },
       ],
     });
-    const response = await input.callbacks.createChatCompletion({
-      providerId: repairSourceStep.providerId,
-      model: repairSourceStep.model,
-      stream: false,
-      memory: {
-        enabled: input.task.prefs.memoryMode !== "off",
-        mode: input.task.prefs.memoryMode === "off" ? "off" : "qmd",
-        sessionId: input.task.sessionId,
+    const repairOperationId = `orchestration-synthesis-repair:${repairSourceStep.stepId}`;
+    const response = await input.callbacks.createChatCompletion(
+      {
+        providerId: repairSourceStep.providerId,
+        model: repairSourceStep.model,
+        stream: false,
+        memory: {
+          enabled: input.task.prefs.memoryMode !== "off",
+          mode: input.task.prefs.memoryMode === "off" ? "off" : "qmd",
+          sessionId: input.task.sessionId,
+        },
+        messages: prompt.messages,
       },
-      messages: prompt.messages,
-    });
+      {
+        operationId: repairOperationId,
+        dispatchGeneration: `${repairOperationId}:generation-1`,
+        callKind: "chat_repair",
+        agentId: "synthesizer",
+        workerId: `repair-${repairSourceStep.stepId}`,
+        repairIndex: 1,
+        attemptIndex: 0,
+      },
+    );
     const output = extractCompletionText(response).trim();
     if (!output) {
       return undefined;
@@ -830,7 +858,10 @@ async function tryRepairFinalSynthesis(input: {
         citations: dedupeCitations([...repairSourceStep.citations, ...readCompletionCitations(response)]),
       },
     };
-  } catch {
+  } catch (error) {
+    if (isAuthoritativeModelUsageAccountingError(error)) {
+      throw error;
+    }
     return { repaired: false, repairFailed: true };
   }
 }

@@ -43,6 +43,28 @@ describe("tool registry", () => {
     expect(catalog.some((tool) => tool.toolName === "browser.context.configure")).toBe(true);
   });
 
+  it("keeps browser.search as the single governed model-callable official search path", () => {
+    const tool = createDefaultToolRegistry()
+      .toCatalog()
+      .find((entry) => entry.toolName === "browser.search");
+    expect(tool).toMatchObject({ category: "research", riskLevel: "caution", requiresApproval: false });
+    expect(tool?.argSchema).toMatchObject({
+      required: ["query"],
+      properties: {
+        backend: { enum: ["native", "firecrawl", "official"] },
+        mode: { enum: ["quick", "research"] },
+        providers: { maxItems: 2 },
+        maxResults: { maximum: 20 },
+      },
+    });
+    expect(
+      createDefaultToolRegistry()
+        .toCatalog()
+        .filter((entry) => entry.toolName.includes("search"))
+        .map((entry) => entry.toolName),
+    ).toContain("browser.search");
+  });
+
   it("includes specialized file/code/background-shell tools", () => {
     const catalog = createDefaultToolRegistry().toCatalog();
     expect(catalog.some((tool) => tool.toolName === "file.read_range")).toBe(true);
@@ -139,6 +161,20 @@ describe("tool registry", () => {
     expect(tool?.recommendedContexts).toEqual(expect.arrayContaining(["chat", "cowork", "code"]));
   });
 
+  it("registers session.history as an exact, safe, read-only anchored-history tool", () => {
+    const tool = createDefaultToolRegistry()
+      .toCatalog()
+      .find((item) => item.toolName === "session.history");
+    expect(tool).toMatchObject({
+      category: "session",
+      riskLevel: "safe",
+      requiresApproval: false,
+      readOnly: true,
+      pack: "core",
+    });
+    expect(tool?.argSchema).toMatchObject({ required: ["messageId", "sequence"] });
+  });
+
   it("registers schedule.manage as a danger, approval-gated tool (P1-F2)", () => {
     const catalog = createDefaultToolRegistry().toCatalog();
     const tool = catalog.find((item) => item.toolName === "schedule.manage");
@@ -162,6 +198,7 @@ describe("listReadOnlyBuiltinToolNames", () => {
   it("contains only safe, approval-free, read-only tools", () => {
     const names = listReadOnlyBuiltinToolNames();
     expect(names.has("session.search")).toBe(true);
+    expect(names.has("session.history")).toBe(true);
     expect(names.has("memory.read")).toBe(true);
     expect(names.has("time.now")).toBe(true);
     expect(names.has("fs.write")).toBe(false);

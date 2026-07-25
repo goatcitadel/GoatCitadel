@@ -695,6 +695,33 @@ describe("LlmService", () => {
     ).rejects.toThrowError(/reasoning effort is set to none/i);
   });
 
+  it("rejects sampling controls for GPT-5.4 reasoning on the default Responses path", async () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "openai",
+      providers: [
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-responses",
+          defaultModel: "gpt-5.4",
+        },
+      ],
+    };
+
+    const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
+
+    await expect(
+      service.chatCompletions({
+        providerId: "openai",
+        model: "gpt-5.4",
+        messages: [{ role: "user", content: "hello" }],
+        reasoning: { effort: "xhigh" },
+        temperature: 0.1,
+      }),
+    ).rejects.toThrowError(/reasoning effort is set to none/i);
+  });
+
   it("rejects sampling controls for older GPT-5 chat models", async () => {
     const config: LlmConfigFile = {
       activeProviderId: "openai",
@@ -1444,7 +1471,7 @@ describe("LlmService", () => {
           name: "answer",
           schema: { type: "object" },
         },
-        max_tokens: 128,
+        max_tokens: 2_048,
       });
 
       expect((completion.choices?.[0]?.message as Record<string, unknown> | undefined)?.content).toBe("ok");
@@ -1466,11 +1493,9 @@ describe("LlmService", () => {
     expect(payloadBody?.messages).toEqual([
       { role: "user", content: [{ type: "text", text: "hello", cache_control: { type: "ephemeral" } }] },
     ]);
-    expect(payloadBody?.thinking).toEqual({
-      type: "enabled",
-      budget_tokens: 1024,
-    });
+    expect(payloadBody?.thinking).toEqual({ type: "adaptive" });
     expect(payloadBody?.output_config).toEqual({
+      effort: "low",
       format: {
         type: "json_schema",
         name: "answer",
@@ -3138,20 +3163,17 @@ describe("LlmService", () => {
     globalThis.fetch = vi.fn(async (_input, init) => {
       payloadBody = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
       return new Response(
-        JSON.stringify({
-          id: "resp_codex_chat",
-          model: "gpt-5.5",
-          output: [
-            {
-              type: "message",
-              role: "assistant",
-              content: [{ type: "output_text", text: "ok" }],
-            },
-          ],
-        }),
+        [
+          'data: {"type":"response.output_text.delta","delta":"ok","response_id":"resp_codex_chat"}',
+          "",
+          'data: {"type":"response.completed","response":{"id":"resp_codex_chat","model":"gpt-5.5","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}}',
+          "",
+          "data: [DONE]",
+          "",
+        ].join("\n"),
         {
           status: 200,
-          headers: { "content-type": "application/json" },
+          headers: { "content-type": "text/plain; charset=utf-8" },
         },
       );
     }) as unknown as typeof fetch;
@@ -3427,6 +3449,7 @@ describe("LlmService", () => {
       return new Response(
         [
           'data: {"type":"response.output_item.done","item":{"type":"image_generation_call","result":"aW1hZ2UtYnl0ZXM=","revised_prompt":"Rendered prompt"}}',
+          'data: {"type":"response.completed","response":{"model":"gpt-image-2","output":[],"usage":{"input_tokens":0,"output_tokens":0,"cost_usd":0}}}',
           "data: [DONE]",
           "",
         ].join("\n\n"),
@@ -3551,7 +3574,7 @@ describe("LlmService", () => {
           prompt: "Generate malformed response proof",
           responseFormat: "b64_json",
         }),
-      ).rejects.toThrow("OpenAI Codex image generation returned no images");
+      ).rejects.toThrow("OpenAI Codex image generation for gpt-image-2 ended before response.completed");
     } finally {
       globalThis.fetch = originalFetch;
     }

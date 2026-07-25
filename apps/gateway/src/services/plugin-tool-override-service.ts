@@ -1,10 +1,13 @@
 import type {
+  ChatTurnCapabilityToolRuntimeOwnerBinding,
   IntegrationPluginToolOverride,
   ToolInvokeRequest,
   ToolInvokeResult,
   ToolPolicyActorContext,
 } from "@goatcitadel/contracts";
 import { ConflictError, ValidationError } from "@goatcitadel/contracts";
+import { randomUUID } from "node:crypto";
+import { buildToolRuntimeOwnerBinding } from "./tool-runtime-interposition.js";
 
 export interface PluginToolOverrideClaimInput {
   pluginId: string;
@@ -56,6 +59,8 @@ export interface PluginToolHandlerUnregistration {
 export class PluginToolOverrideService {
   private readonly claims = new Map<string, PluginToolOverrideClaimRecord>();
   private readonly handlers = new Map<string, PluginToolHandler>();
+  private readonly handlerGenerations = new Map<string, number>();
+  private readonly runtimeEpoch = randomUUID();
 
   public constructor(private readonly deps: PluginToolOverrideServiceDeps) {}
 
@@ -167,11 +172,15 @@ export class PluginToolOverrideService {
     if (typeof input.handler !== "function") {
       throw new ValidationError({ message: "handler must be a function." });
     }
-    this.handlers.set(makeKey(input.pluginId, input.toolName), input.handler);
+    const key = makeKey(input.pluginId, input.toolName);
+    this.handlers.set(key, input.handler);
+    this.handlerGenerations.set(key, (this.handlerGenerations.get(key) ?? 0) + 1);
   }
 
   public unregisterHandler(input: PluginToolHandlerUnregistration): void {
-    this.handlers.delete(makeKey(input.pluginId, input.toolName));
+    const key = makeKey(input.pluginId, input.toolName);
+    this.handlers.delete(key);
+    this.handlerGenerations.set(key, (this.handlerGenerations.get(key) ?? 0) + 1);
   }
 
   public resolveActiveHandler(toolName: string): PluginToolHandler | undefined {
@@ -180,6 +189,21 @@ export class PluginToolOverrideService {
       return undefined;
     }
     return this.handlers.get(makeKey(activeOverride.pluginId, activeOverride.toolName));
+  }
+
+  public resolveRuntimeOwnerBinding(toolName: string): ChatTurnCapabilityToolRuntimeOwnerBinding {
+    const activeOverride = this.resolveActiveOverride(toolName);
+    if (!activeOverride) return buildToolRuntimeOwnerBinding("builtin");
+    const key = makeKey(activeOverride.pluginId, activeOverride.toolName);
+    if (!this.handlers.has(key)) return buildToolRuntimeOwnerBinding("builtin");
+    return buildToolRuntimeOwnerBinding("plugin", {
+      runtimeEpoch: this.runtimeEpoch,
+      pluginId: activeOverride.pluginId,
+      toolName: activeOverride.toolName,
+      claimedAt: activeOverride.claimedAt,
+      approvedAt: activeOverride.approvedAt,
+      handlerGeneration: this.handlerGenerations.get(key) ?? 0,
+    });
   }
 
   private requireClaim(pluginId: string, toolName: string): PluginToolOverrideClaimRecord {

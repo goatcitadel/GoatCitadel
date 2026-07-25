@@ -34,6 +34,7 @@ export function useChatContextActions(input: {
   streamEnabled: boolean;
   codeModeNeedsProjectBinding: boolean;
   loadSidebar: () => Promise<void>;
+  refreshSessionAggregate?: (sessionId: string) => Promise<void>;
   ensureSession: () => Promise<ChatSessionRecord>;
   setError: (value: string | null) => void;
   setSending: (value: boolean) => void;

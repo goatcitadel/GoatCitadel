@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import { ConflictError, ValidationError } from "@goatcitadel/contracts";
 import { onboardingRoutes } from "./onboarding.js";
 
 describe("onboarding routes", () => {
@@ -76,6 +77,7 @@ describe("onboarding routes", () => {
       method: "POST",
       url: "/api/v1/onboarding/bootstrap",
       payload: {
+        expectedRevision: 6,
         llm: {
           upsertProvider: {
             providerId: "glm",
@@ -99,6 +101,7 @@ describe("onboarding routes", () => {
       method: "POST",
       url: "/api/v1/onboarding/bootstrap",
       payload: {
+        expectedRevision: 6,
         llm: {
           upsertProvider: {
             providerId: "local",
@@ -115,6 +118,7 @@ describe("onboarding routes", () => {
       method: "POST",
       url: "/api/v1/onboarding/bootstrap",
       payload: {
+        expectedRevision: 6,
         llm: {
           upsertProvider: {
             providerId: "local",
@@ -144,6 +148,7 @@ describe("onboarding routes", () => {
       method: "POST",
       url: "/api/v1/onboarding/bootstrap",
       payload: {
+        expectedRevision: 6,
         llm: {
           upsertProvider: {
             providerId: "openai",
@@ -182,7 +187,7 @@ describe("onboarding routes", () => {
 
   it("maps bootstrap service failures to bad requests", async () => {
     const bootstrapOnboarding = vi.fn(() => {
-      throw new Error("bootstrap rejected");
+      throw new ValidationError({ message: "bootstrap rejected" });
     });
     app = Fastify();
     app.decorate("services", { onboarding: { bootstrapOnboarding } } as never);
@@ -192,12 +197,41 @@ describe("onboarding routes", () => {
       method: "POST",
       url: "/api/v1/onboarding/bootstrap",
       payload: {
+        expectedRevision: 6,
         budgetMode: "balanced",
       },
     });
 
     expect(response.statusCode).toBe(400);
-    expect(response.json()).toEqual({ error: "bootstrap rejected" });
+    expect(response.json()).toMatchObject({ error: "bootstrap rejected", code: "FIELD_INVALID" });
+  });
+
+  it("returns 409 and does not enter bootstrap mutation for a stale revision", async () => {
+    const runtimeMutation = vi.fn();
+    const bootstrapOnboarding = vi.fn(() => {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: "Settings changed after this client loaded them.",
+        details: { expectedRevision: 4, currentRevision: 5 },
+      });
+    });
+    app = Fastify();
+    app.decorate("services", { onboarding: { bootstrapOnboarding } } as never);
+    await app.register(onboardingRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/onboarding/bootstrap",
+      payload: { expectedRevision: 4, budgetMode: "power" },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      code: "STATE_CONFLICT",
+      details: { expectedRevision: 4, currentRevision: 5 },
+    });
+    expect(bootstrapOnboarding).toHaveBeenCalledOnce();
+    expect(runtimeMutation).not.toHaveBeenCalled();
   });
 
   it("marks onboarding complete", async () => {

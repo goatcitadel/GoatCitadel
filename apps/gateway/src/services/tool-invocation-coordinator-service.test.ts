@@ -10,7 +10,7 @@ import type {
   ToolInvokeResult,
   ToolPolicyConfig,
 } from "@goatcitadel/contracts";
-import { PolicyViolationError } from "@goatcitadel/contracts";
+import { PolicyViolationError, TOOL_EFFECT_CLASSIFICATION_VERSION } from "@goatcitadel/contracts";
 import { ToolPolicyEngine } from "@goatcitadel/policy-engine";
 import { Storage } from "@goatcitadel/storage";
 import {
@@ -18,11 +18,25 @@ import {
   type ToolInvocationCoordinatorHost,
 } from "./tool-invocation-coordinator-service.js";
 import { applyMcpRedaction } from "./mcp-server-policy.js";
+import { createMcpRequesterScopedTurnContext } from "./mcp-requester-resolution-service.js";
 import { MCP_APPROVAL_INBOX_LIST_TOOL_NAME, MCP_APPROVAL_INBOX_URL } from "./mcp-approval-inbox.js";
 import { PluginToolOverrideService } from "./plugin-tool-override-service.js";
+import {
+  buildToolCallBeforeHookInterpositionBinding,
+  buildToolRuntimeOwnerBinding,
+} from "./tool-runtime-interposition.js";
 import { toToolInvokeRequest } from "./gateway/external-runtime-approval-adapter.js";
 
 const integrationTempRoots: string[] = [];
+const UNKNOWN_PLUGIN_EFFECT = {
+  version: TOOL_EFFECT_CLASSIFICATION_VERSION,
+  potential: "unknown",
+  sourceKind: "plugin",
+  reason: "plugin_runtime_untrusted",
+} as const;
+const STABLE_PLUGIN_RUNTIME_OWNER = { kind: "plugin", bindingHash: "a".repeat(64) } as const;
+const EMPTY_HOOK_BINDING = buildToolCallBeforeHookInterpositionBinding([]);
+const VERIFIED_WORKSPACE_CWD = "F:\\workspace\\project";
 
 afterEach(async () => {
   vi.unstubAllGlobals();
@@ -32,7 +46,7 @@ afterEach(async () => {
 function createToolRequest(overrides: Partial<ToolInvokeRequest> = {}): ToolInvokeRequest {
   return {
     toolName: "shell.exec",
-    args: { command: "echo hi" },
+    args: { command: "echo hi", cwd: VERIFIED_WORKSPACE_CWD },
     agentId: "agent-1",
     sessionId: "session-1",
     ...overrides,
@@ -106,6 +120,13 @@ function createHost(overrides: Partial<ToolInvocationCoordinatorHost> = {}): Too
     isValidToolName: vi.fn(() => true),
     evaluateToolDeploymentGuard: vi.fn(() => undefined),
     resolveToolHookWorkspaceId: vi.fn(() => "workspace-1"),
+    resolveWorkspacePathBridgeBeforeExecution: vi.fn(async (_request, context) => ({
+      status: "verified" as const,
+      snapshotId: `fixture-${context.invocationId}-${context.phase}`,
+      canonicalCwd: VERIFIED_WORKSPACE_CWD,
+      snapshotFingerprintSha256: "b".repeat(64),
+    })),
+    resolveToolCallBeforeHookInterposition: vi.fn(() => buildToolCallBeforeHookInterpositionBinding([])),
     parseToolCallHookPatch: vi.fn(() => undefined),
     primeToolApprovalLifecycle: vi.fn(
       (): ApprovalRequest =>
@@ -329,6 +350,52 @@ describe("ToolInvocationCoordinatorService", () => {
     expect(sideEffectStarted).toBe(false);
   });
 
+  it("keeps auxiliary after-hook dispatch distinct from a pre-executor approval", async () => {
+    const executionFence = vi.fn();
+    const auxiliaryEffectFence = vi.fn();
+    const afterBinding = { hash: "a".repeat(64), count: 1 };
+    const enqueueAfterHooks = vi.fn((input: { beforeExternalDispatch?: () => void }) => {
+      input.beforeExternalDispatch?.();
+      return [];
+    });
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        resolveToolCallBeforeHookInterposition: vi.fn(() => afterBinding),
+        hooksService: {
+          runInlineHooks: vi.fn(async () => ({ runs: [] })),
+          enqueueAfterHooks,
+        },
+        policyEngine: {
+          invoke: vi.fn(async () => ({
+            outcome: "approval_required",
+            approvalId: "approval-after-hook",
+            policyReason: "operator approval required",
+            auditEventId: "audit-approval-after-hook",
+          })),
+          evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: true, reasonCodes: [] })),
+        },
+      }),
+    );
+
+    const result = await coordinator.invokeTool(createToolRequest(), {
+      executionFence,
+      auxiliaryEffectFence,
+      effectPotential: UNKNOWN_PLUGIN_EFFECT,
+      toolCallBeforeHookInterposition: afterBinding,
+      toolRuntimeOwner: buildToolRuntimeOwnerBinding("builtin"),
+    });
+
+    expect(result).toMatchObject({ outcome: "approval_required", approvalId: "approval-after-hook" });
+    expect(executionFence).not.toHaveBeenCalled();
+    expect(auxiliaryEffectFence).toHaveBeenCalled();
+    expect(enqueueAfterHooks).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trigger: "tool.call.after",
+        beforeExternalDispatch: auxiliaryEffectFence,
+      }),
+    );
+  });
+
   it("checks durable ownership after plugin policy preflight and before the override handler", async () => {
     const pluginHandler = vi.fn(
       async (): Promise<ToolInvokeResult> => ({
@@ -343,6 +410,7 @@ describe("ToolInvocationCoordinatorService", () => {
       createHost({
         pluginToolOverrideService: {
           resolveActiveHandler: vi.fn(() => pluginHandler),
+          resolveRuntimeOwnerBinding: vi.fn(() => STABLE_PLUGIN_RUNTIME_OWNER),
         },
       }),
     );
@@ -630,6 +698,7 @@ describe("ToolInvocationCoordinatorService", () => {
         toolName: "shell.exec",
         args: {
           command: "pwd",
+          cwd: VERIFIED_WORKSPACE_CWD,
         },
         ignored: true,
       });
@@ -662,8 +731,10 @@ describe("ToolInvocationCoordinatorService", () => {
         toolName: "shell.exec",
         args: {
           command: "pwd",
+          cwd: VERIFIED_WORKSPACE_CWD,
         },
       }),
+      expect.objectContaining({ beforeExecute: expect.any(Function) }),
     );
     expect(enqueueAfterHooks).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -672,6 +743,7 @@ describe("ToolInvocationCoordinatorService", () => {
           toolName: "shell.exec",
           args: {
             command: "pwd",
+            cwd: VERIFIED_WORKSPACE_CWD,
           },
           result: expect.objectContaining({
             auditEventId: "audit-patched",
@@ -2106,6 +2178,222 @@ describe("ToolInvocationCoordinatorService", () => {
     );
   });
 
+  it("executes only the exact admitted plugin runtime owner generation", async () => {
+    const events: string[] = [];
+    const pluginHandler = vi.fn(async (): Promise<ToolInvokeResult> => {
+      events.push("handler");
+      return {
+        outcome: "executed",
+        result: { source: "plugin" },
+        auditEventId: "evt-plugin-owner",
+        policyReason: "plugin override",
+      };
+    });
+    const overrideService = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
+    overrideService.registerHandler({ pluginId: "p", toolName: "web_search", handler: pluginHandler });
+    overrideService.registerOverrideClaim({
+      pluginId: "p",
+      toolName: "web_search",
+      override: true,
+      claimedAt: "2026-07-13T00:00:00.000Z",
+    });
+    overrideService.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
+    const admittedOwner = overrideService.resolveRuntimeOwnerBinding("web_search");
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({ pluginToolOverrideService: overrideService }),
+    );
+
+    const result = await coordinator.invokeTool(createToolRequest({ toolName: "web_search" }), {
+      executionFence: () => events.push("main-fence"),
+      auxiliaryEffectFence: () => events.push("aux-fence"),
+      effectPotential: UNKNOWN_PLUGIN_EFFECT,
+      toolCallBeforeHookInterposition: EMPTY_HOOK_BINDING,
+      toolRuntimeOwner: admittedOwner,
+    });
+
+    expect(result.outcome).toBe("executed");
+    expect(events.indexOf("main-fence")).toBeGreaterThanOrEqual(0);
+    expect(events.indexOf("handler")).toBeGreaterThan(events.indexOf("main-fence"));
+    expect(pluginHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks a plugin handler swapped during awaited policy preflight before the executor fence", async () => {
+    const originalHandler = vi.fn(
+      async (): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        auditEventId: "evt-original-race",
+        policyReason: "original handler",
+      }),
+    );
+    const replacementHandler = vi.fn(
+      async (): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        auditEventId: "evt-replacement-race",
+        policyReason: "replacement handler",
+      }),
+    );
+    const overrideService = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
+    overrideService.registerHandler({ pluginId: "p", toolName: "web_search", handler: originalHandler });
+    overrideService.registerOverrideClaim({
+      pluginId: "p",
+      toolName: "web_search",
+      override: true,
+      claimedAt: "2026-07-13T00:00:00.000Z",
+    });
+    overrideService.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
+    const admittedOwner = overrideService.resolveRuntimeOwnerBinding("web_search");
+    const executionFence = vi.fn();
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        pluginToolOverrideService: overrideService,
+        policyEngine: {
+          invoke: vi.fn(async () => {
+            overrideService.registerHandler({
+              pluginId: "p",
+              toolName: "web_search",
+              handler: replacementHandler,
+            });
+            return {
+              outcome: "executed",
+              auditEventId: "evt-policy-race",
+              policyReason: "allowed external runtime",
+              result: { externalRuntime: true },
+            };
+          }),
+          evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
+        },
+      }),
+    );
+
+    const result = await coordinator.invokeTool(createToolRequest({ toolName: "web_search" }), {
+      executionFence,
+      auxiliaryEffectFence: vi.fn(),
+      effectPotential: UNKNOWN_PLUGIN_EFFECT,
+      toolCallBeforeHookInterposition: EMPTY_HOOK_BINDING,
+      toolRuntimeOwner: admittedOwner,
+    });
+
+    expect(result).toMatchObject({
+      outcome: "blocked",
+      policyReason: expect.stringContaining("runtime owner binding drifted"),
+    });
+    expect(executionFence).not.toHaveBeenCalled();
+    expect(originalHandler).not.toHaveBeenCalled();
+    expect(replacementHandler).not.toHaveBeenCalled();
+  });
+
+  it.each(["added", "removed", "replaced"] as const)(
+    "blocks a plugin runtime owner that is %s after profile seal",
+    async (driftKind) => {
+      const originalHandler = vi.fn(
+        async (): Promise<ToolInvokeResult> => ({
+          outcome: "executed",
+          auditEventId: "evt-original-handler",
+          policyReason: "original handler",
+        }),
+      );
+      const replacementHandler = vi.fn(
+        async (): Promise<ToolInvokeResult> => ({
+          outcome: "executed",
+          auditEventId: "evt-replacement-handler",
+          policyReason: "replacement handler",
+        }),
+      );
+      const overrideService = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
+      let admittedOwner = overrideService.resolveRuntimeOwnerBinding("web_search");
+
+      if (driftKind !== "added") {
+        overrideService.registerHandler({ pluginId: "p", toolName: "web_search", handler: originalHandler });
+        overrideService.registerOverrideClaim({
+          pluginId: "p",
+          toolName: "web_search",
+          override: true,
+          claimedAt: "2026-07-13T00:00:00.000Z",
+        });
+        overrideService.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
+        admittedOwner = overrideService.resolveRuntimeOwnerBinding("web_search");
+      }
+
+      if (driftKind === "added") {
+        overrideService.registerHandler({ pluginId: "p", toolName: "web_search", handler: originalHandler });
+        overrideService.registerOverrideClaim({
+          pluginId: "p",
+          toolName: "web_search",
+          override: true,
+          claimedAt: "2026-07-13T00:00:00.000Z",
+        });
+        overrideService.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
+      } else if (driftKind === "removed") {
+        overrideService.unregisterHandler({ pluginId: "p", toolName: "web_search" });
+      } else {
+        overrideService.registerHandler({ pluginId: "p", toolName: "web_search", handler: replacementHandler });
+      }
+
+      const policyInvoke = vi.fn(
+        async (): Promise<ToolInvokeResult> => ({
+          outcome: "executed",
+          auditEventId: "evt-policy-should-not-run",
+          policyReason: "allowed",
+        }),
+      );
+      const coordinator = new ToolInvocationCoordinatorService(
+        createHost({
+          pluginToolOverrideService: overrideService,
+          policyEngine: {
+            invoke: policyInvoke,
+            evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
+          },
+        }),
+      );
+
+      const result = await coordinator.invokeTool(createToolRequest({ toolName: "web_search" }), {
+        executionFence: vi.fn(),
+        auxiliaryEffectFence: vi.fn(),
+        effectPotential: UNKNOWN_PLUGIN_EFFECT,
+        toolCallBeforeHookInterposition: EMPTY_HOOK_BINDING,
+        toolRuntimeOwner: admittedOwner,
+      });
+
+      expect(result).toMatchObject({
+        outcome: "blocked",
+        policyReason: expect.stringContaining("runtime owner binding drifted"),
+      });
+      expect(policyInvoke).not.toHaveBeenCalled();
+      expect(originalHandler).not.toHaveBeenCalled();
+      expect(replacementHandler).not.toHaveBeenCalled();
+    },
+  );
+
+  it("fails closed for a legacy active plugin host with no frozen owner binding", async () => {
+    const pluginHandler = vi.fn(
+      async (): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        auditEventId: "evt-legacy-plugin",
+        policyReason: "legacy plugin",
+      }),
+    );
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        pluginToolOverrideService: {
+          resolveActiveHandler: vi.fn(() => pluginHandler),
+        },
+      }),
+    );
+
+    const result = await coordinator.invokeTool(createToolRequest({ toolName: "web_search" }), {
+      executionFence: vi.fn(),
+      auxiliaryEffectFence: vi.fn(),
+      effectPotential: UNKNOWN_PLUGIN_EFFECT,
+      toolCallBeforeHookInterposition: EMPTY_HOOK_BINDING,
+    });
+
+    expect(result).toMatchObject({
+      outcome: "blocked",
+      policyReason: expect.stringContaining("runtime owner binding drifted"),
+    });
+    expect(pluginHandler).not.toHaveBeenCalled();
+  });
+
   it("enforces a redact Citadel Ward on plugin-override output the plugin cannot know about", async () => {
     const pluginHandler = vi.fn(
       async (): Promise<ToolInvokeResult> => ({
@@ -3157,5 +3445,389 @@ describe("capability-scope choke point (executeMcpRuntime)", () => {
       policyReason: "blocked: MCP capability scope gate is not wired",
     });
     expect(invokeMcpRuntimeTool).not.toHaveBeenCalled();
+  });
+});
+
+describe("ToolInvocationCoordinatorService requester-scoped MCP seam (HX-415)", () => {
+  function requesterScopedServer(): McpServerRecord {
+    return createMcpServer({
+      serverId: "srv-1",
+      transport: "http",
+      connectionMode: "requester_scoped",
+      configurationRevision: 1,
+    });
+  }
+
+  it("fails closed with requester_context_missing when no server-built dispatch is composed (direct route)", async () => {
+    const invokeMcpRuntimeTool = vi.fn();
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        requireMcpServer: vi.fn(() => requesterScopedServer()),
+        invokeMcpRuntimeTool,
+      }),
+    );
+
+    const response = await coordinator.invokeMcpTool({
+      serverId: "srv-1",
+      toolName: "tool.echo",
+      agentId: "attacker-supplied",
+      sessionId: "session-1",
+      workspaceId: "workspace-forged",
+      arguments: { value: "hello" },
+    });
+
+    expect(response.ok).toBe(false);
+    expect(response.reasonCodes).toContain("requester_context_missing");
+    // The static runtime is never reached; a body agentId/workspace cannot
+    // manufacture a requester profile.
+    expect(invokeMcpRuntimeTool).not.toHaveBeenCalled();
+  });
+
+  it("fails closed on the approval-replay path too (no McpInvokeRequest-manufactured authority)", async () => {
+    const invokeMcpRuntimeTool = vi.fn();
+    const markExternalCallStarted = vi.fn();
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        requireMcpServer: vi.fn(() => requesterScopedServer()),
+        invokeMcpRuntimeTool,
+      }),
+    );
+
+    const response = await coordinator.invokeApprovedMcpRuntime(
+      { serverId: "srv-1", toolName: "tool.echo", agentId: "operator", sessionId: "session-1" },
+      markExternalCallStarted,
+    );
+
+    expect(response.ok).toBe(false);
+    expect(response.reasonCodes).toContain("requester_context_missing");
+    expect(invokeMcpRuntimeTool).not.toHaveBeenCalled();
+    // The HX-305 external-effect marker must remain untouched on a pre-dispatch fail.
+    expect(markExternalCallStarted).not.toHaveBeenCalled();
+  });
+
+  it("routes a requester-scoped server through the composed dispatch, never the static runtime", async () => {
+    const invokeMcpRuntimeTool = vi.fn();
+    const invoke = vi.fn(async () => ({ ok: true, output: { payload: "scoped" } }));
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        requireMcpServer: vi.fn(() => requesterScopedServer()),
+        invokeMcpRuntimeTool,
+        requesterScopedMcpDispatch: { invoke },
+      }),
+    );
+
+    const response = await coordinator.invokeMcpTool({
+      serverId: "srv-1",
+      toolName: "tool.echo",
+      agentId: "operator",
+      sessionId: "session-1",
+      arguments: { value: "hello" },
+    });
+
+    expect(response).toMatchObject({ ok: true, output: { payload: "scoped" } });
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invokeMcpRuntimeTool).not.toHaveBeenCalled();
+    // The dispatch port receives only tool name/arguments/signal + effect dispatch.
+    const [dispatchInput, dispatchOptions] = invoke.mock.calls[0] as [
+      Record<string, unknown>,
+      { effectDispatch: () => void },
+    ];
+    expect(dispatchInput.toolName).toBe("tool.echo");
+    expect(dispatchInput.arguments).toEqual({ value: "hello" });
+    expect(Object.keys(dispatchInput)).toEqual(expect.arrayContaining(["toolName", "arguments"]));
+    expect(dispatchInput).not.toHaveProperty("workspaceId");
+    expect(dispatchInput).not.toHaveProperty("agentId");
+    expect(dispatchInput).not.toHaveProperty("policyContext");
+    expect(typeof dispatchOptions.effectDispatch).toBe("function");
+  });
+
+  it("threads the app-private branded turn context from runtime options into the dispatch input", async () => {
+    const invoke = vi.fn(async () => ({ ok: true, output: { payload: "scoped" } }));
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        requireMcpServer: vi.fn(() => requesterScopedServer()),
+        requesterScopedMcpDispatch: { invoke },
+      }),
+    );
+    const mcpRequesterTurnContext = createMcpRequesterScopedTurnContext({
+      profileId: "chat-capability-profile-turn-1",
+      finalProfileSha256: "a".repeat(64),
+      turnId: "turn-1",
+      sessionId: "session-1",
+      workspaceId: "workspace-1",
+      actorId: "operator-1",
+      actorSource: "token",
+      baseCallableCatalogSha256: "b".repeat(64),
+      finalCallableCatalogSha256: "c".repeat(64),
+      callableCatalogSnapshotId: "chat-cap-snap-1",
+      globalNetworkPolicyGeneration: 1,
+      authConnectionGeneration: 1,
+      turnGeneration: 1,
+      preparationGeneration: 1,
+    });
+
+    const response = await coordinator.invokeMcpTool(
+      {
+        serverId: "srv-1",
+        toolName: "tool.echo",
+        agentId: "operator",
+        sessionId: "session-1",
+        arguments: { value: "hello" },
+      },
+      { mcpRequesterTurnContext },
+    );
+
+    expect(response).toMatchObject({ ok: true });
+    expect(invoke).toHaveBeenCalledTimes(1);
+    const [dispatchInput] = invoke.mock.calls[0] as [Record<string, unknown>];
+    // The exact branded handle instance is forwarded — never a copy a body
+    // could substitute — and it comes from options only, not from the request.
+    expect(dispatchInput.mcpRequesterTurnContext).toBe(mcpRequesterTurnContext);
+  });
+
+  it("never forwards a turn context on the approval-replay entry point", async () => {
+    const invoke = vi.fn(async () => ({ ok: true, output: { payload: "scoped" } }));
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        requireMcpServer: vi.fn(() => requesterScopedServer()),
+        requesterScopedMcpDispatch: { invoke },
+      }),
+    );
+
+    await coordinator.invokeApprovedMcpRuntime({
+      serverId: "srv-1",
+      toolName: "tool.echo",
+      agentId: "operator",
+      sessionId: "session-1",
+      arguments: { value: "hello" },
+    });
+
+    expect(invoke).toHaveBeenCalledTimes(1);
+    const [dispatchInput] = invoke.mock.calls[0] as [Record<string, unknown>];
+    // v1 replay floor: the replay path has no runner state and the pending
+    // approval payload carries no turn/profile linkage, so the provider input
+    // carries NO context and the composed provider fails closed
+    // (`requester_context_missing`) — pinned at the composed level too.
+    expect("mcpRequesterTurnContext" in dispatchInput).toBe(false);
+  });
+
+  it("cannot receive requester context from McpInvokeRequest body fields", async () => {
+    const invoke = vi.fn(async () => ({ ok: true, output: {} }));
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        requireMcpServer: vi.fn(() => requesterScopedServer()),
+        requesterScopedMcpDispatch: { invoke },
+      }),
+    );
+
+    await coordinator.invokeMcpTool({
+      serverId: "srv-1",
+      toolName: "tool.echo",
+      agentId: "forged-actor",
+      sessionId: "session-1",
+      workspaceId: "workspace-forged",
+      // Forged body payload attempting to smuggle a context-shaped object.
+      arguments: {
+        mcpRequesterTurnContext: { profileId: "chat-capability-profile-turn-1", actorId: "victim" },
+      },
+    } as never);
+
+    expect(invoke).toHaveBeenCalledTimes(1);
+    const [dispatchInput] = invoke.mock.calls[0] as [Record<string, unknown>];
+    expect("mcpRequesterTurnContext" in dispatchInput).toBe(false);
+  });
+
+  it("defers HX-305 effect markers into the runtime effect-dispatch callback", async () => {
+    const markExternalCallStarted = vi.fn();
+    let capturedEffectDispatch: (() => void) | undefined;
+    const invoke = vi.fn(async (_input, options: { effectDispatch: () => void }) => {
+      capturedEffectDispatch = options.effectDispatch;
+      return { ok: true, output: {} };
+    });
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        requireMcpServer: vi.fn(() => requesterScopedServer()),
+        requesterScopedMcpDispatch: { invoke },
+      }),
+    );
+
+    await coordinator.invokeApprovedMcpRuntime(
+      { serverId: "srv-1", toolName: "tool.echo", agentId: "operator", sessionId: "session-1" },
+      markExternalCallStarted,
+    );
+
+    // The coordinator never fires the marker early; it fires only when the
+    // runtime invokes the effect-dispatch callback at the tools/call write.
+    expect(markExternalCallStarted).not.toHaveBeenCalled();
+    capturedEffectDispatch?.();
+    expect(markExternalCallStarted).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the static MCP path unchanged and never consults the requester-scoped dispatch", async () => {
+    const invokeMcpRuntimeTool = vi.fn(async () => ({ ok: true, output: { payload: "static" } }));
+    const invoke = vi.fn();
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        requireMcpServer: vi.fn(() => createMcpServer()),
+        invokeMcpRuntimeTool,
+        requesterScopedMcpDispatch: { invoke },
+      }),
+    );
+
+    const response = await coordinator.invokeMcpTool({
+      serverId: "srv-1",
+      toolName: "tool.echo",
+      agentId: "operator",
+      sessionId: "session-1",
+      arguments: { value: "hello" },
+    });
+
+    expect(response).toMatchObject({ ok: true, output: { payload: "static" } });
+    expect(invokeMcpRuntimeTool).toHaveBeenCalledTimes(1);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+});
+
+describe("requester-scoped MCP target-resolution precondition routing (HX-415)", () => {
+  // Production posture: a requester-scoped server is NEVER connected or
+  // discovered globally (connectMcpServer throws before any status patch, and
+  // requester-scoped discovery never writes the global tool cache). It therefore
+  // stays `status: "disconnected"` with no global tool. The static-oriented
+  // preconditions in resolveMcpRuntimeTarget (connected + global-tool-enabled +
+  // static OAuth readiness) must NOT gate it; the invocation must reach the
+  // app-private requester branch in executeMcpRuntime. (The existing HX-415 seam
+  // fixtures pass only because the shared helper defaults status to "connected"
+  // and registers a global tool — that papers over the reviewer-flagged gate.)
+  function neverConnectedRequesterScopedServer(overrides: Partial<McpServerRecord> = {}): McpServerRecord {
+    return createMcpServer({
+      serverId: "srv-1",
+      transport: "http",
+      connectionMode: "requester_scoped",
+      configurationRevision: 1,
+      status: "disconnected",
+      ...overrides,
+    } as Partial<McpServerRecord>);
+  }
+
+  it("reaches the requester branch for a never-connected server with no global tool (fails closed requester_context_missing, no port)", async () => {
+    const invokeMcpRuntimeTool = vi.fn();
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        requireMcpServer: vi.fn(() => neverConnectedRequesterScopedServer()),
+        // Requester-scoped tools live only in the immutable profile, never the
+        // global catalog.
+        listMcpTools: vi.fn(() => []),
+        invokeMcpRuntimeTool,
+      }),
+    );
+
+    const response = await coordinator.invokeMcpTool({
+      serverId: "srv-1",
+      toolName: "tool.echo",
+      agentId: "operator",
+      sessionId: "session-1",
+      arguments: { value: "hello" },
+    });
+
+    expect(response.ok).toBe(false);
+    // NOT the static "MCP server is not connected." / "tool is not enabled."
+    // precondition rejection — it must converge on the requester fail-closed code.
+    expect(response.reasonCodes).toContain("requester_context_missing");
+    expect(invokeMcpRuntimeTool).not.toHaveBeenCalled();
+  });
+
+  it("routes a never-connected server with no global tool through a composed dispatch (approval-replay path)", async () => {
+    const invokeMcpRuntimeTool = vi.fn();
+    const invoke = vi.fn(async () => ({ ok: true, output: { payload: "scoped" } }));
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        requireMcpServer: vi.fn(() => neverConnectedRequesterScopedServer()),
+        listMcpTools: vi.fn(() => []),
+        invokeMcpRuntimeTool,
+        requesterScopedMcpDispatch: { invoke },
+      }),
+    );
+
+    const response = await coordinator.invokeApprovedMcpRuntime({
+      serverId: "srv-1",
+      toolName: "tool.echo",
+      agentId: "operator",
+      sessionId: "session-1",
+      arguments: { value: "hello" },
+    });
+
+    expect(response).toMatchObject({ ok: true, output: { payload: "scoped" } });
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invokeMcpRuntimeTool).not.toHaveBeenCalled();
+  });
+
+  it("keeps static servers gated on connected: a disconnected static server is blocked and never routed to requester dispatch", async () => {
+    const invokeMcpRuntimeTool = vi.fn();
+    const invoke = vi.fn();
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        // Static server (no connectionMode) that is not connected.
+        requireMcpServer: vi.fn(() => createMcpServer({ status: "disconnected" })),
+        invokeMcpRuntimeTool,
+        requesterScopedMcpDispatch: { invoke },
+      }),
+    );
+
+    const response = await coordinator.invokeMcpTool({
+      serverId: "srv-1",
+      toolName: "tool.echo",
+      agentId: "operator",
+      sessionId: "session-1",
+      arguments: { value: "hello" },
+    });
+
+    expect(response).toMatchObject({ ok: false, error: "MCP server is not connected." });
+    expect(invoke).not.toHaveBeenCalled();
+    expect(invokeMcpRuntimeTool).not.toHaveBeenCalled();
+  });
+
+  it("still blocks a disabled requester-scoped server and never routes it", async () => {
+    const invoke = vi.fn();
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        requireMcpServer: vi.fn(() => neverConnectedRequesterScopedServer({ enabled: false })),
+        listMcpTools: vi.fn(() => []),
+        requesterScopedMcpDispatch: { invoke },
+      }),
+    );
+
+    const response = await coordinator.invokeMcpTool({
+      serverId: "srv-1",
+      toolName: "tool.echo",
+      agentId: "operator",
+      sessionId: "session-1",
+    });
+
+    expect(response.ok).toBe(false);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("still blocks a quarantined requester-scoped server and never routes it", async () => {
+    const invoke = vi.fn();
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        requireMcpServer: vi.fn(() =>
+          neverConnectedRequesterScopedServer({ status: "connected", trustTier: "quarantined" }),
+        ),
+        listMcpTools: vi.fn(() => []),
+        requesterScopedMcpDispatch: { invoke },
+      }),
+    );
+
+    const response = await coordinator.invokeMcpTool({
+      serverId: "srv-1",
+      toolName: "tool.echo",
+      agentId: "operator",
+      sessionId: "session-1",
+    });
+
+    expect(response.ok).toBe(false);
+    expect(response.error).toContain("quarantined");
+    expect(invoke).not.toHaveBeenCalled();
   });
 });

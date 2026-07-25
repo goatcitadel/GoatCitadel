@@ -14,7 +14,7 @@ import type { PendingApprovalRecord } from "./chat-pending-approval";
 import type { PendingUserInputRecord } from "./chat-pending-user-input";
 import type { ChatVisualStreamMode } from "./chat-streaming-preview";
 import type { ChatHistoryView, ChatSidebarLoadOptions } from "./useChatSessionData";
-import type { OutboundQueueItem } from "./useChatSurfaceOrchestration";
+import type { OutboundQueueItem, OutboundRequestPrefsSnapshot } from "./useChatSurfaceOrchestration";
 
 export type PendingApprovalState = PendingApprovalRecord;
 export type PendingUserInputState = PendingUserInputRecord;
@@ -102,6 +102,8 @@ export interface UseChatOutboundRouting {
     sessionId?: string | null;
     action: OutboundQueueItem["action"];
     turnId?: string | null;
+    content?: string;
+    requestPrefs?: OutboundRequestPrefsSnapshot;
     force?: boolean;
   }) => Promise<RoutingPreflightResult | null>;
   isRoutePreflightAcknowledged: (hash: string) => boolean;

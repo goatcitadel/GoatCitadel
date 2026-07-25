@@ -6,6 +6,7 @@ export * from "./hooks/useMemoryOperatorSnapshot.js";
 export * from "./hooks/useOpsRuntimeSnapshot.js";
 export * from "./hooks/useProviderModelCatalog.js";
 export * from "./hooks/useRefreshSubscription.js";
+export * from "./hooks/useRemoteWorkerRegistry.js";
 export * from "./state/effects-mode.js";
 export * from "./state/event-stream-status-store.js";
 export * from "./state/channel-activity-store.js";

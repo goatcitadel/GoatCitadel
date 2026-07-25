@@ -139,6 +139,12 @@ export interface OrchestrationRun extends OrchestrationRunPolicyContext {
   worktreePath?: string;
   worktreeStatus?: OrchestrationWorktreeStatus;
   worktreeBaseRef?: string;
+  /** Durable owner token for the current worktree generation. */
+  worktreeLeaseOwnerId?: string;
+  /** Monotonically increasing fencing generation for destructive worktree operations. */
+  worktreeLeaseGeneration?: number;
+  /** Advisory expiry for the current worktree owner lease. */
+  worktreeLeaseExpiresAt?: string;
   pendingApprovalPhaseId?: string;
   pendingApprovedBy?: string;
   pendingCostIncrementUsd?: number;

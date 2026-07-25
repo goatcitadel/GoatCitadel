@@ -17,6 +17,7 @@ import { ChatDelegationStepRepository } from "./chat-delegation-step-repo.js";
 import { ChatInlineApprovalRepository } from "./chat-inline-approval-repo.js";
 import { ChatMessageRepository } from "./chat-message-repo.js";
 import { ChatSessionBindingRepository } from "./chat-session-binding-repo.js";
+import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
 import { ChatSessionPrefsRepository } from "./chat-session-prefs-repo.js";
 import { ChatSessionProjectRepository } from "./chat-session-project-repo.js";
 import { ChatSessionWorkbenchRepository } from "./chat-session-workbench-repo.js";
@@ -110,6 +111,7 @@ describe("storage defensive tail coverage", () => {
         account: "operator",
         timestamp: now,
       });
+      storage.chatSessionMeta.ensure("sess-tail", now, "default");
       return storage.sessions.getBySessionId("sess-tail").sessionId;
     });
 
@@ -275,7 +277,9 @@ describe("storage defensive tail coverage", () => {
   });
 
   it("covers chat prefs fallback branches when preserving existing controls", () => {
-    const repo = new ChatSessionPrefsRepository(createDb("chat-prefs-tail"));
+    const db = createDb("chat-prefs-tail");
+    new ChatSessionMetaRepository(db).ensure("sess-prefs", undefined, "default");
+    const repo = new ChatSessionPrefsRepository(db);
     repo.patch("sess-prefs", {
       imageProviderId: "google",
       imageModel: "gemini-image",
@@ -498,7 +502,9 @@ describe("storage defensive tail coverage", () => {
   });
 
   it("throws when chat session project assignment cannot be read back", () => {
-    const projects = new ChatSessionProjectRepository(createDb("session-project-tail"));
+    const db = createDb("session-project-tail");
+    new ChatSessionMetaRepository(db).ensure("sess-project", undefined, "default");
+    const projects = new ChatSessionProjectRepository(db);
     (projects as unknown as { getStmt: { get: () => unknown }; upsertStmt: { run: () => unknown } }).getStmt = {
       get: () => undefined,
     };

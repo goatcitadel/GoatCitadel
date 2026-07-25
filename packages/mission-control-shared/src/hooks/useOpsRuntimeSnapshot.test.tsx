@@ -8,6 +8,7 @@ const apiMocks = vi.hoisted(() => ({
   fetchDaemonStatus: vi.fn(),
   fetchDashboardState: vi.fn(),
   fetchHealthSummary: vi.fn(),
+  fetchLlamaCppStatus: vi.fn(),
   fetchLlmEvalProofRuns: vi.fn(),
   fetchLlmLocalEngines: vi.fn(),
   fetchLlmRuntimeMeasurements: vi.fn(),
@@ -25,6 +26,7 @@ vi.mock("../api/client", () => ({
   fetchDaemonStatus: apiMocks.fetchDaemonStatus,
   fetchDashboardState: apiMocks.fetchDashboardState,
   fetchHealthSummary: apiMocks.fetchHealthSummary,
+  fetchLlamaCppStatus: apiMocks.fetchLlamaCppStatus,
   fetchLlmEvalProofRuns: apiMocks.fetchLlmEvalProofRuns,
   fetchLlmLocalEngines: apiMocks.fetchLlmLocalEngines,
   fetchLlmRuntimeMeasurements: apiMocks.fetchLlmRuntimeMeasurements,
@@ -172,6 +174,22 @@ describe("useOpsRuntimeSnapshot", () => {
     apiMocks.fetchLlmRuntimeMeasurements.mockResolvedValue({ items: [] });
     apiMocks.fetchLlmLocalEngines.mockResolvedValue({ items: [] });
     apiMocks.fetchLlmEvalProofRuns.mockResolvedValue({ items: [] });
+    apiMocks.fetchLlamaCppStatus.mockResolvedValue({
+      enabled: true,
+      desiredState: "running",
+      processState: "running",
+      baseUrl: "http://127.0.0.1:8080/v1",
+      healthy: true,
+      updatedAt: "2026-04-22T00:00:00.000Z",
+      leaseDiagnostics: {
+        state: "active",
+        activeLeaseCount: 2,
+        ownership: "owned",
+        purposes: [{ purpose: "chat_completion", count: 2 }],
+        persistentDemand: { manual: false, api: false, autostart: false },
+        evidence: { lastProbe: { at: "2026-04-22T00:00:00.000Z", healthy: true } },
+      },
+    });
     apiMocks.startDaemon.mockResolvedValue({
       accepted: true,
       reason: "Started",
@@ -210,12 +228,15 @@ describe("useOpsRuntimeSnapshot", () => {
     expect(apiMocks.fetchTimelineSummary).toHaveBeenCalledTimes(1);
     expect(apiMocks.fetchHealthSummary).toHaveBeenCalledTimes(1);
     expect(apiMocks.fetchCostSummary).toHaveBeenCalledWith("day");
+    expect(apiMocks.fetchLlamaCppStatus).toHaveBeenCalledTimes(1);
     expect(apiMocks.fetchLlmRuntimeMeasurements).toHaveBeenCalledWith({ limit: 20 });
     expect(latest?.loading).toBe(false);
     expect(latest?.error).toBeNull();
     expect(latest?.data?.dashboard?.pendingApprovals).toBe(2);
     expect(latest?.data?.sessions).toHaveLength(1);
     expect(latest?.data?.mcpServers[0]?.label).toBe("GitHub");
+    expect(latest?.data?.llamaCpp?.leaseDiagnostics?.activeLeaseCount).toBe(2);
+    expect(latest?.data?.sourceStatus.llamaCpp).toEqual({ status: "ok" });
     expect(latest?.data?.sourceStatus.daemon).toEqual({ status: "ok" });
   });
 
@@ -244,6 +265,28 @@ describe("useOpsRuntimeSnapshot", () => {
     expect(latest?.data?.sourceStatus.health).toEqual({
       status: "error",
       message: "health unavailable",
+    });
+  });
+
+  it("isolates llama.cpp status failures as source truth", async () => {
+    apiMocks.fetchLlamaCppStatus.mockRejectedValueOnce(new Error("llama.cpp status unavailable"));
+
+    await act(async () => {
+      renderer = create(
+        <Harness
+          onValue={(value) => {
+            latest = value;
+          }}
+        />,
+      );
+    });
+    await flush();
+
+    expect(latest?.error).toBeNull();
+    expect(latest?.data?.llamaCpp).toBeNull();
+    expect(latest?.data?.sourceStatus.llamaCpp).toEqual({
+      status: "error",
+      message: "llama.cpp status unavailable",
     });
   });
 
@@ -305,6 +348,37 @@ describe("useOpsRuntimeSnapshot", () => {
     expect(apiMocks.fetchSessions).not.toHaveBeenCalled();
     expect(apiMocks.fetchMcpServers).not.toHaveBeenCalled();
     expect(apiMocks.fetchLlmRuntimeMeasurements).not.toHaveBeenCalled();
+    expect(apiMocks.fetchLlamaCppStatus).not.toHaveBeenCalled();
+  });
+
+  it("polls llama.cpp status for the active runtime section", async () => {
+    await act(async () => {
+      renderer = create(
+        <Harness
+          section="runtime"
+          onValue={(value) => {
+            latest = value;
+          }}
+        />,
+      );
+    });
+    await flush();
+
+    const refreshCallback = vi.mocked(useRefreshSubscription).mock.calls.at(-1)?.[1];
+    Object.values(apiMocks).forEach((mock) => mock.mockClear());
+    await act(async () => {
+      await refreshCallback?.({
+        topic: "system",
+        reason: "fallback_poll",
+        source: "test",
+        eventType: "fallback_poll",
+        timestamp: Date.now(),
+      });
+    });
+    await flush();
+
+    expect(apiMocks.fetchLlamaCppStatus).toHaveBeenCalledTimes(1);
+    expect(apiMocks.fetchTimelineSummary).not.toHaveBeenCalled();
   });
 
   it("ignores late load resolution and rejection after unmount", async () => {

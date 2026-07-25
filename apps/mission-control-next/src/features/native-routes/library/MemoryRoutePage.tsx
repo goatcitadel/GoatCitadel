@@ -445,6 +445,27 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
       ]}
     >
       {memory.notice ? <NoticeBanner tone={memory.notice.tone} message={memory.notice.message} /> : null}
+      {memory.pendingMutationApprovals.map((pending) => (
+        <div
+          key={pending.approvalId}
+          className="mc-next-runtime-notice tone-info"
+          role="status"
+          aria-live="polite"
+          aria-label={`Pending memory mutation approval ${pending.approvalId}`}
+        >
+          <div className="mc-next-runtime-actions">
+            <span>
+              {describePendingMemoryApproval(pending.action, pending.itemIds.length)} awaits approval{" "}
+              <code>{shortId(pending.approvalId)}</code>
+              {pending.replayed ? " (already requested)" : ""}. Nothing has changed yet — resolve it from the Approvals
+              surface to apply.
+            </span>
+            <NativeButton variant="outline" onClick={() => memory.dismissPendingMutationApproval(pending.approvalId)}>
+              Dismiss
+            </NativeButton>
+          </div>
+        </div>
+      ))}
       {sectionErrors?.settings ? (
         <SectionTruthNotice message="Memory settings truth is unavailable. Admin and maintenance controls are locked until the backend confirms feature state." />
       ) : null}
@@ -1834,6 +1855,24 @@ function collectMemoryRetrievalHints(metadata: unknown): string[] {
     }
   }
   return [...hints];
+}
+
+/**
+ * HX-402 P1: honest pending-approval copy for the approval-first mutation
+ * surface — the page must never imply a mutation happened before its
+ * `memory.lifecycle` approval resolved and the recovered effect executed.
+ */
+function describePendingMemoryApproval(
+  action: "item_updated" | "items_forgotten" | "batch_mutated",
+  itemCount: number,
+): string {
+  if (action === "item_updated") {
+    return "A memory item update";
+  }
+  if (action === "items_forgotten") {
+    return itemCount === 1 ? "A memory forget" : `A forget of ${itemCount} memory items`;
+  }
+  return `An atomic batch mutation of ${itemCount} memory item(s)`;
 }
 
 function SectionTruthNotice({ message }: { message: string | null | undefined }) {

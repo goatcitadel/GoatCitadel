@@ -605,4 +605,61 @@ describe("ChatTraceCard", () => {
     expect(text).not.toContain("Final URL: https://example.com/same");
     expect(text).not.toContain("Specialists:");
   });
+
+  it("renders inspect-before-retry effect truth and withholds unverified evidence refs", async () => {
+    const trace = {
+      ...makeTrace(),
+      toolRuns: [
+        {
+          toolRunId: "tool-uncertain-effect",
+          turnId: "turn-1",
+          sessionId: "session-1",
+          toolName: "http.post",
+          status: "failed",
+          startedAt: "2026-03-08T00:00:01.000Z",
+          finishedAt: "2026-03-08T00:00:02.000Z",
+          effectPotential: "unknown",
+          effectDisposition: "unknown",
+          effectOutcomeKind: "uncertain",
+          effectEvidence: {
+            version: "goatcitadel.tool-effect.v1",
+            outcomeKind: "uncertain",
+            reason: "dispatch_may_have_occurred",
+            refs: [{ owner: "external_side_effect", refId: "unverified-effect-ref" }],
+          },
+        },
+        {
+          toolRunId: "tool-concrete-effect",
+          turnId: "turn-1",
+          sessionId: "session-1",
+          toolName: "code_mode.run",
+          status: "executed",
+          startedAt: "2026-03-08T00:00:03.000Z",
+          finishedAt: "2026-03-08T00:00:04.000Z",
+          effectPotential: "unknown",
+          effectOutcomeKind: "concrete",
+          effectEvidence: {
+            version: "goatcitadel.tool-effect.v1",
+            outcomeKind: "concrete",
+            reason: "canonical_effect_receipt_linked",
+            refs: [{ owner: "code_mode", refId: "verified-code-run" }],
+          },
+        },
+      ],
+    } as unknown as ChatTurnTraceRecord;
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<ChatTraceCard trace={trace} workspaceId="default" defaultCollapsed={false} />);
+    });
+    const text = collectText(renderer.toJSON()).replace(/\s+/g, " ").trim();
+
+    expect(text).toContain("Effect truth: uncertain");
+    expect(text).toContain("potential unknown · disposition unknown · outcome uncertain");
+    expect(text).toContain("evidence dispatch_may_have_occurred");
+    expect(text).toContain("Inspect external or runtime state before retry");
+    expect(text).toContain("verify it against the canonical owner ledger");
+    expect(text).not.toContain("Verified effect receipt");
+    expect(text).not.toContain("verified-code-run");
+    expect(text).not.toContain("unverified-effect-ref");
+  });
 });

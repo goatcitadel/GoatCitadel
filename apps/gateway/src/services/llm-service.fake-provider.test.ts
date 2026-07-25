@@ -160,7 +160,7 @@ describe("LlmService fake OpenAI-compatible provider contracts", () => {
     ]);
   });
 
-  it("adds cost accounting for known OpenAI models through the fake provider", async () => {
+  it("does not guess discounted-input cost when the provider omits cache-token detail", async () => {
     server = await startFakeOpenAiCompatibleServer();
     const service = createOpenAiCompatibleLlmService(server.baseUrl, {
       providerId: "openai",
@@ -177,7 +177,7 @@ describe("LlmService fake OpenAI-compatible provider contracts", () => {
       prompt_tokens: 5,
       completion_tokens: 2,
       total_tokens: 7,
-      cost_usd: 0.0000052,
     });
+    expect(response.usage).not.toHaveProperty("cost_usd");
   });
 });

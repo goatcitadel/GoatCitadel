@@ -4,10 +4,24 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DurableRunRecord } from "@goatcitadel/contracts";
 import { Storage } from "@goatcitadel/storage";
-import { GENERAL_CHAT_POST_COMMIT_EFFECTS, type GeneralChatPostCommitProgress } from "./chat-durable-run-service.js";
+import {
+  GENERAL_CHAT_POST_COMMIT_EFFECTS,
+  type GeneralChatPostCommitEffectWorkflowPayload,
+  type GeneralChatPostCommitProgress,
+} from "./chat-durable-run-service.js";
 import { DurableRunService } from "./durable-run-service.js";
+import { DURABLE_RETRY_POLICY_DEFAULT } from "./durable-retry-policy.js";
+import {
+  buildChatTurnRuntimeAuthoritySeal,
+  withChatTurnRuntimeAuthority,
+  withChatTurnRuntimeAuthorityCheckpoint,
+} from "./chat-durable-runtime-authority.js";
 import { IDEMPOTENT_REALTIME_ENVELOPE_KEY, RealtimeEventService } from "./realtime-event-service.js";
 import type { ServiceContext } from "./service-context.js";
+import {
+  computeEffectiveChatTurnRequestMaterialSha256,
+  computeFrozenChatTurnAdmissionMaterialSha256,
+} from "./session-control-service.js";
 
 const roots: string[] = [];
 const services: DurableRunService[] = [];
@@ -68,7 +82,7 @@ describe("DurableRunService general Chat post-commit integration", () => {
       expect.arrayContaining([
         expect.objectContaining({
           parentRunId: parent.runId,
-          generationId: "generation-restart",
+          postCommitGenerationId: "generation-restart",
           workspaceId: "workspace-post-commit",
           sessionId: "session-post-commit",
           turnId: "turn-post-commit",
@@ -86,7 +100,7 @@ describe("DurableRunService general Chat post-commit integration", () => {
     });
 
     expect(await firstService.reconcileGeneralChatPostCommit(parent.runId)).toBe(false);
-    expect(onGeneral).toHaveBeenCalledTimes(3);
+    expect(onGeneral).toHaveBeenCalledTimes(2);
     expect(listPostCommitChildren(harness.storage)).toHaveLength(3);
 
     firstService.stopWorker();
@@ -94,17 +108,7 @@ describe("DurableRunService general Chat post-commit integration", () => {
     storages.splice(storages.indexOf(harness.storage), 1);
     const restartedStorage = openStorage(harness);
     const executeWorkflow = vi.fn(async (run: DurableRunRecord) => {
-      restartedStorage.runImmediateTransaction(() => {
-        const current = restartedStorage.durableRuns.getRunForUpdate(run.runId);
-        restartedStorage.durableRuns.updateRun({
-          runId: run.runId,
-          status: "completed",
-          finishedAt: new Date().toISOString(),
-          clearLease: true,
-          updatedAt: new Date().toISOString(),
-          expectedVersion: current.version,
-        });
-      });
+      settlePostCommitChild(restartedStorage, run, "completed");
     });
     const restartedService = createService(restartedStorage, onGeneral, executeWorkflow);
     restartedService.startWorker();
@@ -155,14 +159,12 @@ describe("DurableRunService general Chat post-commit integration", () => {
     const restartedStorage = openStorage(harness);
     for (const child of listPostCommitChildren(restartedStorage)) {
       const failed = child.metadata?.effect === "background_review";
-      restartedStorage.durableRuns.updateRun({
-        runId: child.runId,
-        status: failed ? "failed" : "completed",
-        finishedAt: new Date().toISOString(),
-        lastError: failed ? "provider failed after first token" : undefined,
-        updatedAt: new Date().toISOString(),
-        expectedVersion: child.version,
-      });
+      settlePostCommitChild(
+        restartedStorage,
+        child,
+        failed ? "failed" : "completed",
+        failed ? "provider failed after first token" : undefined,
+      );
     }
     const restartedService = createService(restartedStorage, onGeneral);
 
@@ -177,9 +179,9 @@ describe("DurableRunService general Chat post-commit integration", () => {
         },
       },
     });
-    expect(restartedStorage.durableRuns.getRun(parent.runId).metadata?.generalChatPostCommit).not.toHaveProperty(
-      "completedAt",
-    );
+    expect(restartedStorage.durableRuns.getRun(parent.runId).metadata?.generalChatPostCommit).toMatchObject({
+      completedAt: expect.any(String),
+    });
   });
 
   it("does not busy-wake the local worker while post-commit children run on another worker", async () => {
@@ -266,12 +268,36 @@ describe("DurableRunService general Chat post-commit integration", () => {
         progress.runEffect("capability_gap", () => undefined);
         if (progress.generationId === "generation-waiting") {
           const current = generationHarness.storage.durableRuns.getRun(generationParent.runId);
+          const replacement = buildParentRuntimeTransition(generationParent.runId, "generation-completed", "completed");
           generationHarness.storage.durableRuns.updateRun({
             runId: current.runId,
             status: "completed",
-            metadata: pendingMetadata("generation-completed", "completed"),
+            metadata: replacement.metadata,
             updatedAt: new Date().toISOString(),
             expectedVersion: current.version,
+          });
+          generationHarness.storage.durableRuns.createCheckpoint({
+            runId: current.runId,
+            checkpointKind: "run_completed",
+            state: replacement.checkpointState,
+          });
+          generationHarness.storage.chatMessages.upsert({
+            messageId: "assistant-post-commit",
+            sessionId: "session-post-commit",
+            role: "assistant",
+            actorType: "agent",
+            actorId: "assistant",
+            content: replacement.outputText!,
+            timestamp: "2026-07-11T00:00:00.000Z",
+          });
+          generationHarness.storage.chatTurnTraces.patch("turn-post-commit", {
+            status: "completed",
+            durable: {
+              runId: generationParent.runId,
+              status: "completed",
+              checkpointKind: "run_completed",
+            },
+            finishedAt: "2026-07-11T00:00:00.000Z",
           });
           return { status: "waiting" };
         }
@@ -414,22 +440,131 @@ function seedParent(
   generationId: string,
   status: DurableRunRecord["status"] = "completed",
 ): DurableRunRecord {
-  return storage.durableRuns.createRun({
-    runId: `parent-${generationId}`,
-    workflowKey: "chat.turn.execute",
-    status,
-    payload: {
-      version: "chat.turn.execute.v1",
-      sessionId: "session-post-commit",
-      turnId: "turn-post-commit",
-      userMessageId: "user-post-commit",
-      assistantMessageId: "assistant-post-commit",
-      branchKind: "append",
-      threadEventType: "chat_thread_turn_appended",
-      request: { content: "Please follow up tomorrow." },
-    },
-    metadata: pendingMetadata(generationId, status === "waiting" ? "waiting_for_approval" : "completed"),
+  const runId = `parent-${generationId}`;
+  const now = "2026-07-11T00:00:00.000Z";
+  const workspaceId = "workspace-post-commit";
+  const sessionId = "session-post-commit";
+  const turnId = "turn-post-commit";
+  const userMessageId = "user-post-commit";
+  const assistantMessageId = "assistant-post-commit";
+  const request = { content: "Please follow up tomorrow." };
+  const requestActor = { actorKind: "operator" as const, actorId: "operator:post-commit" };
+  const lifecycle = storage.chatSessionLifecycles.ensureActive({
+    workspaceId,
+    sessionId,
+    actorId: requestActor.actorId,
+    idempotencyKey: `lifecycle:${sessionId}`,
+    correlationId: `lifecycle:${sessionId}`,
+    metadataTimestamp: now,
   });
+  const sessionMeta = storage.chatSessionMeta.get(sessionId)!;
+  const admissionMaterialSha256 = computeFrozenChatTurnAdmissionMaterialSha256(request);
+  const admission = storage.sessionMutationAdmissions.admit({
+    workspaceId,
+    sessionId,
+    expectedSessionIncarnationId: lifecycle.intent.sessionIncarnationId,
+    turnId,
+    runtimeOwnerId: `integration:${runId}`,
+    admissionKind: "turn_write",
+    aggregateRevision: sessionMeta.revision,
+    controllerGeneration: lifecycle.generation,
+    actorKind: requestActor.actorKind,
+    actorId: requestActor.actorId,
+    operation: "chat_send",
+    materialSha256: admissionMaterialSha256,
+    idempotencyKey: `admission:${runId}`,
+    correlationId: `admission:${runId}`,
+  }).admission;
+  const payload = {
+    version: "chat.turn.execute.v2",
+    admissionId: admission.admissionId,
+    sessionIncarnationId: admission.sessionIncarnationId,
+    admissionMaterialSha256,
+    effectiveRequestMaterialSha256: computeEffectiveChatTurnRequestMaterialSha256(admissionMaterialSha256, request),
+    workspaceId,
+    admissionAggregateRevision: admission.aggregateRevision,
+    admissionControllerGeneration: admission.controllerGeneration,
+    requestActor,
+    sessionId,
+    turnId,
+    userMessageId,
+    assistantMessageId,
+    branchKind: "append",
+    threadEventType: "chat_thread_turn_appended",
+    request,
+  };
+  const transition = buildParentRuntimeTransition(runId, generationId, status);
+  let run = storage.durableRuns.createRun({
+    runId,
+    workflowKey: "chat.turn.execute",
+    status: "queued",
+    maxAttempts: DURABLE_RETRY_POLICY_DEFAULT.maxAttempts,
+    payload,
+    metadata: { retryPolicy: { ...DURABLE_RETRY_POLICY_DEFAULT } },
+    now,
+  });
+  storage.sessionMutationAdmissions.bindDurableRun({
+    admissionId: admission.admissionId,
+    sessionIncarnationId: admission.sessionIncarnationId,
+    workspaceId,
+    sessionId,
+    turnId,
+    durableRunId: runId,
+    requestRuntimeClaim: {
+      runtimeOwnerId: admission.runtimeOwnerId!,
+      leaseRevision: admission.runtimeLeaseRevision!,
+    },
+  });
+  run = storage.durableRuns.updateRun({
+    runId,
+    status,
+    metadata: transition.metadata,
+    updatedAt: now,
+    ...(status === "completed" ? { finishedAt: now } : {}),
+    expectedVersion: run.version,
+  });
+  storage.durableRuns.createCheckpoint({
+    runId,
+    checkpointKind: status === "waiting" ? "run_waiting" : "run_completed",
+    state: transition.checkpointState,
+    createdAt: now,
+  });
+  if (status === "completed") {
+    storage.chatMessages.upsert({
+      messageId: assistantMessageId,
+      sessionId,
+      role: "assistant",
+      actorType: "agent",
+      actorId: "assistant",
+      content: transition.outputText!,
+      timestamp: now,
+    });
+  }
+  storage.chatTurnTraces.create({
+    turnId,
+    sessionId,
+    userMessageId,
+    assistantMessageId,
+    status: status === "waiting" ? "waiting_for_approval" : "completed",
+    mode: "chat",
+    webMode: "auto",
+    memoryMode: "off",
+    thinkingLevel: "standard",
+    routing: {},
+    durable: {
+      runId,
+      status,
+      checkpointKind: status === "waiting" ? "run_waiting" : "run_completed",
+    },
+    startedAt: now,
+    ...(status === "completed"
+      ? {
+          finishedAt: now,
+          completion: { status: "complete", repaired: false, repair: { applied: false } },
+        }
+      : {}),
+  });
+  return run;
 }
 
 function pendingMetadata(generationId: string, traceStatus: string): Record<string, unknown> {
@@ -439,14 +574,148 @@ function pendingMetadata(generationId: string, traceStatus: string): Record<stri
       generationId,
       traceStatus,
       requestedAt: "2026-07-11T00:00:00.000Z",
+      postCommitEligibility: {
+        version: 1,
+        autonomyEnabledAtParentSettlement: true,
+        evalIntegrityTurn: false,
+        humanSession: true,
+      },
       completedEffects: [],
       durableEffectRunIds: {},
     },
   };
 }
 
+function buildParentRuntimeTransition(
+  runId: string,
+  generationId: string,
+  status: DurableRunRecord["status"],
+): { metadata: Record<string, unknown>; checkpointState: Record<string, unknown>; outputText?: string } {
+  const waiting = status === "waiting";
+  const traceStatus = waiting ? "waiting_for_approval" : "completed";
+  const pending = pendingMetadata(generationId, traceStatus);
+  const marker = pending.generalChatPostCommitPending as Record<string, unknown>;
+  const transitionAt = String(marker.requestedAt);
+  const postCommitEligibility = marker.postCommitEligibility as never;
+  const waitForEvent = { eventKey: "approval.resolved", correlationId: `approval:${generationId}` };
+  const outputText = "Post-commit parent output";
+  const authority = buildChatTurnRuntimeAuthoritySeal({
+    runId,
+    turnId: "turn-post-commit",
+    transitionKind: waiting ? "waiting" : "terminal",
+    durableStatus: waiting ? "waiting" : "completed",
+    traceStatus,
+    transitionAt,
+    postCommitGenerationId: generationId,
+    postCommitEligibility,
+    ...(waiting ? { waitForEvent } : {}),
+    ...(!waiting
+      ? {
+          terminalOutput: {
+            assistantMessageId: "assistant-post-commit",
+            outputText,
+            outputSummary: outputText,
+          },
+        }
+      : {}),
+    requiredFinalizers: ["general"],
+  });
+  const metadata = withChatTurnRuntimeAuthority(
+    {
+      ...pending,
+      retryPolicy: { ...DURABLE_RETRY_POLICY_DEFAULT },
+      ...(waiting
+        ? { waitForEvent }
+        : {
+            outputText,
+            finalOutput: outputText,
+            outputSummary: outputText,
+            finalSummary: outputText,
+          }),
+    },
+    authority,
+  );
+  const checkpointState = withChatTurnRuntimeAuthorityCheckpoint(
+    waiting
+      ? { waitForEvent }
+      : {
+          assistantMessageId: "assistant-post-commit",
+          outputText,
+          outputSummary: outputText,
+        },
+    authority,
+  );
+  return { metadata, checkpointState, ...(waiting ? {} : { outputText }) };
+}
+
 function listPostCommitChildren(storage: Storage): DurableRunRecord[] {
   return storage.durableRuns.listRuns(100).filter((run) => run.workflowKey === "chat.post_commit.effect");
+}
+
+function settlePostCommitChild(
+  storage: Storage,
+  observed: DurableRunRecord,
+  status: "completed" | "failed",
+  lastError?: string,
+): DurableRunRecord {
+  let claimed = storage.durableRuns.getRun(observed.runId);
+  if (claimed.status === "queued") {
+    const workerId = `integration-worker:${claimed.runId}`;
+    claimed =
+      storage.durableRuns.tryClaimQueuedRunWithDatabaseClock({
+        runId: claimed.runId,
+        workerId,
+        leaseDurationMs: 60_000,
+      }) ??
+      (() => {
+        throw new Error(`Could not claim post-commit child ${claimed.runId}`);
+      })();
+  }
+  if (claimed.status !== "running" || !claimed.leaseOwnerId) {
+    throw new Error(`Post-commit child ${claimed.runId} does not hold a live execution lease`);
+  }
+  const payload = claimed.payload as unknown as GeneralChatPostCommitEffectWorkflowPayload;
+  const stage =
+    payload.effect === "commitments"
+      ? "commitments_write"
+      : payload.effect === "background_review"
+        ? "background_evidence"
+        : "memory_maintenance_evaluation";
+  storage.sessionMutationAdmissions.runPostCommitChildStage(
+    {
+      childAdmission: payload.childAdmission,
+      parentRunId: payload.parentRunId,
+      postCommitGenerationId: payload.postCommitGenerationId,
+      effect: payload.effect,
+      childRunId: claimed.runId,
+      sourceTurnId: payload.input.turnId,
+      postCommitEligibility: payload.postCommitEligibility,
+      stage,
+      terminal: true,
+      durableClaim: {
+        durableRunId: claimed.runId,
+        leaseOwnerId: claimed.leaseOwnerId,
+        attemptCount: claimed.attemptCount,
+      },
+    },
+    () => ({
+      disposition: status === "completed" ? "allowed" : "late_blocked",
+      value: undefined,
+    }),
+  );
+  const now = new Date().toISOString();
+  return storage.runImmediateTransaction(() => {
+    const current = storage.durableRuns.getRunForUpdate(claimed.runId);
+    return storage.durableRuns.updateRun({
+      runId: current.runId,
+      status,
+      finishedAt: now,
+      ...(lastError ? { lastError } : { clearLastError: true }),
+      clearLease: true,
+      updatedAt: now,
+      expectedVersion: current.version,
+    });
+  });
 }
 
 async function waitFor(predicate: () => boolean, describe?: () => string): Promise<void> {

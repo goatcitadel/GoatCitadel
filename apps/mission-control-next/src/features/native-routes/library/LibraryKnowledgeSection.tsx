@@ -23,8 +23,21 @@ import {
   LibrarySectionShell,
   LibrarySelectableList,
 } from "../shared/library-primitives";
+import { LibraryExternalSourcesSection } from "./LibraryExternalSourcesSection";
 
-export function LibraryKnowledgeSection({ activeWorkspaceName }: NativeRoutePagesProps) {
+/**
+ * HX-407 provenance cross-link: knowledge documents recovered from governed
+ * external-source snapshots materialize under this namespace segment, so the
+ * knowledge browser can tag them and point at the External sources panel that
+ * owns their full content-free provenance chain.
+ */
+const EXTERNAL_SNAPSHOT_PATH_SEGMENT = "external-source-snapshots";
+
+export function isRecoveredExternalKnowledgePath(relativePath: string): boolean {
+  return relativePath.includes(EXTERNAL_SNAPSHOT_PATH_SEGMENT);
+}
+
+export function LibraryKnowledgeSection({ activeWorkspaceId, activeWorkspaceName }: NativeRoutePagesProps) {
   const [selectedFilePath, setSelectedFilePath] = useState("");
   const [search, setSearch] = useState("");
   const [preview, setPreview] = useState<LoadState<{ content: string; contentType: string }>>({
@@ -118,7 +131,9 @@ export function LibraryKnowledgeSection({ activeWorkspaceName }: NativeRoutePage
             items={visibleFiles.map((item) => ({
               id: item.relativePath,
               title: item.relativePath,
-              meta: formatBytes(item.size),
+              meta: isRecoveredExternalKnowledgePath(item.relativePath)
+                ? `${formatBytes(item.size)} · Recovered external snapshot`
+                : formatBytes(item.size),
               body: formatDateTime(item.modifiedAt),
             }))}
             selectedId={selectedFilePath}
@@ -198,8 +213,16 @@ export function LibraryKnowledgeSection({ activeWorkspaceName }: NativeRoutePage
               items={[
                 {
                   label: "Selected source",
-                  value: selectedFilePath ? "file" : "none",
-                  meta: selectedFilePath || "Choose a source to inspect provenance.",
+                  value: selectedFilePath
+                    ? isRecoveredExternalKnowledgePath(selectedFilePath)
+                      ? "recovered external snapshot"
+                      : "file"
+                    : "none",
+                  meta: selectedFilePath
+                    ? isRecoveredExternalKnowledgePath(selectedFilePath)
+                      ? "Approved external-source copy. The External sources panel below owns its exact import provenance."
+                      : selectedFilePath
+                    : "Choose a source to inspect provenance.",
                 },
                 {
                   label: "Preview",
@@ -264,6 +287,7 @@ export function LibraryKnowledgeSection({ activeWorkspaceName }: NativeRoutePage
           </NativeCard>
         </div>
       </div>
+      <LibraryExternalSourcesSection workspaceId={activeWorkspaceId} />
     </LibrarySectionShell>
   );
 }

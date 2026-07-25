@@ -1,6 +1,6 @@
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useChatRoutePreflight } from "./useChatRoutePreflight";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -46,6 +46,99 @@ describe("useChatRoutePreflight", () => {
     });
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("refreshes the capability preview when draft or provider/model selection changes", async () => {
+    vi.useFakeTimers();
+    preflightChatRoute.mockImplementation(
+      async (
+        _sessionId: string,
+        request: { content?: string; prefsOverride?: { providerId?: string; model?: string } },
+      ) => ({
+        selectionSource: "session",
+        effectiveProviderId: request.prefsOverride?.providerId,
+        effectiveModel: request.prefsOverride?.model,
+        fallbackPolicy: "off",
+        fallbackResult: "not_applicable",
+        runtimeReachability: "not_checked",
+        runtimeClass: "cloud",
+        capabilityProfile: {
+          fingerprint: `${request.content}:${request.prefsOverride?.providerId}:${request.prefsOverride?.model}`,
+        },
+      }),
+    );
+    let latest: ReturnType<typeof useChatRoutePreflight> | null = null;
+    function Harness(props: { content: string; prefs: typeof CHAT_PREFS }) {
+      latest = useChatRoutePreflight({
+        sessionId: "session-1",
+        prefs: props.prefs,
+        content: props.content,
+        surfaceMode: "chat",
+        displayAction: "send",
+      });
+      return null;
+    }
+
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness content="  first draft  " prefs={CHAT_PREFS} />);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(250);
+      await Promise.resolve();
+    });
+    expect(preflightChatRoute).toHaveBeenLastCalledWith(
+      "session-1",
+      expect.objectContaining({ content: "first draft" }),
+      { originSurface: "chat" },
+    );
+
+    await act(async () => {
+      renderer.update(<Harness content="second draft" prefs={CHAT_PREFS} />);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(250);
+      await Promise.resolve();
+    });
+    expect(preflightChatRoute).toHaveBeenCalledTimes(2);
+    expect((latest?.result?.capabilityProfile as { fingerprint?: string } | undefined)?.fingerprint).toContain(
+      "second draft",
+    );
+
+    const switchedPrefs = { ...CHAT_PREFS, providerId: "anthropic", model: "claude-next" };
+    await act(async () => {
+      renderer.update(<Harness content="second draft" prefs={switchedPrefs} />);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(250);
+      await Promise.resolve();
+    });
+    expect(preflightChatRoute).toHaveBeenCalledTimes(3);
+    expect(preflightChatRoute).toHaveBeenLastCalledWith(
+      "session-1",
+      expect.objectContaining({
+        content: "second draft",
+        prefsOverride: expect.objectContaining({ providerId: "anthropic", model: "claude-next" }),
+      }),
+      { originSurface: "chat" },
+    );
+
+    await act(async () => {
+      await latest!.ensureFreshPreflight({ action: "send", content: "exact sent content", force: true });
+    });
+    expect(preflightChatRoute).toHaveBeenLastCalledWith(
+      "session-1",
+      expect.objectContaining({ content: "exact sent content" }),
+      { originSurface: "chat" },
+    );
+    act(() => renderer.unmount());
+  });
+
   it("uses the locked Cowork surface when session prefs still say Chat", async () => {
     let latest: ReturnType<typeof useChatRoutePreflight> | null = null;
     function Harness() {
@@ -76,6 +169,65 @@ describe("useChatRoutePreflight", () => {
       { originSurface: "cowork" },
     );
     expect(latest?.resultHash).toBeTruthy();
+  });
+
+  it("uses an explicit queue-time request snapshot instead of current prefs", async () => {
+    let latest: ReturnType<typeof useChatRoutePreflight> | null = null;
+    function Harness() {
+      latest = useChatRoutePreflight({
+        sessionId: "session-1",
+        prefs: { ...CHAT_PREFS, providerId: "anthropic", model: "claude-current", thinkingLevel: "deep" },
+        surfaceMode: "chat",
+        fullWebAccess: false,
+        displayAction: "send",
+        enabled: false,
+      });
+      return null;
+    }
+
+    await act(async () => {
+      create(<Harness />);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await latest!.ensureFreshPreflight({
+        action: "send",
+        content: "queued content",
+        force: true,
+        requestPrefs: {
+          mode: "chat",
+          providerId: "openai-codex",
+          model: "gpt-5.5",
+          webMode: "deep",
+          memoryMode: "off",
+          thinkingLevel: "standard",
+          speedMode: "fast",
+          subagentPolicy: "off",
+          fullWebAccess: true,
+        },
+      });
+    });
+
+    expect(preflightChatRoute).toHaveBeenCalledTimes(1);
+    expect(preflightChatRoute).toHaveBeenCalledWith(
+      "session-1",
+      {
+        action: "send",
+        content: "queued content",
+        prefsOverride: {
+          mode: "chat",
+          providerId: "openai-codex",
+          model: "gpt-5.5",
+          webMode: "deep",
+          memoryMode: "off",
+          thinkingLevel: "standard",
+          speedMode: "fast",
+          subagentPolicy: "off",
+        },
+        fullWebAccess: true,
+      },
+      { originSurface: "chat" },
+    );
   });
 
   it("clears state while disabled and reuses cached preflight results", async () => {

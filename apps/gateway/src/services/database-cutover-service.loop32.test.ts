@@ -38,7 +38,7 @@ describe("DatabaseCutoverService loop32 fallback paths", () => {
     const service = new DatabaseCutoverService({
       config: createConfig(path.join(await createTempRoot(), "data", "index.db")),
       createBackup,
-      persistAssistantConfig: vi.fn(),
+      readSettingsRevision: () => 1,
     });
 
     await expect(service.runCutover({ profile: "local", execute: true, confirm: false })).rejects.toThrow(
@@ -54,7 +54,7 @@ describe("DatabaseCutoverService loop32 fallback paths", () => {
       createBackup: vi.fn(async () => {
         throw new Error("backup target unavailable");
       }),
-      persistAssistantConfig: vi.fn(),
+      readSettingsRevision: () => 1,
     });
 
     const result = await service.runCutover({ profile: "local", execute: false });

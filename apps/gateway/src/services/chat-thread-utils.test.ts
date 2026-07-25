@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ChatMessageRecord, ChatTurnTraceRecord } from "@goatcitadel/contracts";
+import type { ChatMessageRecord, ChatThreadSystemNoticeRecord, ChatTurnTraceRecord } from "@goatcitadel/contracts";
 import { buildChatThreadResponse, buildSelectedPathTurnIds, resolveNewestLeafTurnId } from "./chat-thread-utils.js";
 
 function makeMessage(messageId: string, role: "user" | "assistant", content: string): ChatMessageRecord {
@@ -39,6 +39,68 @@ function makeTrace(turnId: string, overrides: Partial<ChatTurnTraceRecord> = {})
 }
 
 describe("chat thread utils", () => {
+  it("keeps system notices separate, chronological, and inert when no conversation branch exists", () => {
+    const notice = (noticeId: string, timestamp: string): ChatThreadSystemNoticeRecord => ({
+      kind: "system_heartbeat",
+      noticeId,
+      turnId: `turn-${noticeId}`,
+      message: {
+        messageId: noticeId,
+        sessionId: "sess-1",
+        role: "assistant",
+        actorType: "system",
+        actorId: "system-heartbeat",
+        content: `Notice ${noticeId}`,
+        timestamp,
+      },
+    });
+
+    const thread = buildChatThreadResponse({
+      sessionId: "sess-1",
+      activeLeafTurnId: "turn-notice-late",
+      turns: [],
+      systemNotices: [
+        notice("notice-late", "2026-03-07T00:02:00.000Z"),
+        notice("notice-early", "2026-03-07T00:01:00.000Z"),
+      ],
+    });
+
+    expect(thread.turns).toEqual([]);
+    expect(thread.activeLeafTurnId).toBeUndefined();
+    expect(thread.selectedTurnId).toBeUndefined();
+    expect(thread.systemNotices.map((item) => item.noticeId)).toEqual(["notice-early", "notice-late"]);
+    expect(thread.systemNoticeHiddenCount).toBe(0);
+  });
+
+  it("bounds the Gateway system-notice response and reports the omitted count", () => {
+    const notices: ChatThreadSystemNoticeRecord[] = Array.from({ length: 75 }, (_, index) => ({
+      kind: "system_heartbeat",
+      noticeId: `notice-${String(index).padStart(3, "0")}`,
+      turnId: `heartbeat-turn-${index}`,
+      message: {
+        messageId: `notice-${index}`,
+        sessionId: "sess-1",
+        role: "assistant",
+        actorType: "system",
+        actorId: "system-heartbeat",
+        content: `Notice ${index}`,
+        timestamp: new Date(Date.UTC(2026, 2, 7, 0, index)).toISOString(),
+      },
+    }));
+
+    const thread = buildChatThreadResponse({
+      sessionId: "sess-1",
+      turns: [],
+      systemNotices: notices,
+      systemNoticeHiddenCount: 4,
+    });
+
+    expect(thread.systemNotices).toHaveLength(60);
+    expect(thread.systemNotices[0]?.noticeId).toBe("notice-015");
+    expect(thread.systemNotices.at(-1)?.noticeId).toBe("notice-074");
+    expect(thread.systemNoticeHiddenCount).toBe(19);
+  });
+
   it("builds the selected branch path and sibling metadata from an active leaf", () => {
     const thread = buildChatThreadResponse({
       sessionId: "sess-1",

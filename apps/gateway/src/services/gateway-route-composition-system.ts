@@ -53,7 +53,8 @@ export function composeSystemRouteDependencies(
       getStatus: (recentLimit) => gateway.autonomyControlService.getStatus(recentLimit),
       revertAutonomousChangesSince: (sinceIso, opts) =>
         gateway.autonomyControlService.revertAutonomousChangesSince(sinceIso, opts),
-      setKillSwitch: (disabled) => gateway.autonomyControlService.setKillSwitch(disabled),
+      setKillSwitch: (disabled, expectedRevision) =>
+        gateway.autonomyControlService.setKillSwitch(disabled, expectedRevision),
     },
     costs: createCostsRoutePort({
       storage: gateway.storage,
@@ -65,12 +66,15 @@ export function composeSystemRouteDependencies(
     settings: {
       createPersonality: (input) => gateway.personalityCatalogService.createPersonality(input),
       deletePersonality: (id) => gateway.personalityCatalogService.deletePersonality(id),
-      getAuthRuntimeSettings: () => settingsAuthService.getAuthRuntimeSettings(settingsRuntimeDeps),
+      getAuthRuntimeSettings: () => {
+        gateway.readSettingsRevision();
+        return settingsAuthService.getAuthRuntimeSettings(settingsRuntimeDeps);
+      },
       getPersonalityCatalog: () => gateway.personalityCatalogService.getCatalog(),
       getSettings: () => settingsAuthService.getSettings(settingsRuntimeDeps),
       setDefaultPersonality: (id) => gateway.personalityCatalogService.setDefaultPersonality(id),
       updatePersonality: (id, input) => gateway.personalityCatalogService.updatePersonality(id, input),
-      updateSettings: (input) => settingsAuthService.updateSettings(settingsRuntimeDeps, input),
+      updateSettings: (input) => gateway.updateSettings(input),
     },
     tasks: gateway.taskLifecycleService,
     voice: gateway.mediaVoiceService,

@@ -56,9 +56,11 @@ if (bootstrapPlan.shouldBuild) {
   console.log(`[dev] runtime workspace packages already fresh; skipped bootstrap (${bootstrapPlan.reason})`);
 }
 
-const devEnvBase = process.env.GOATCITADEL_UI_PACKAGE?.trim()
-  ? process.env
-  : { ...process.env, GOATCITADEL_UI_PACKAGE: DEFAULT_DEV_UI_PACKAGE };
+const devEnvBase = {
+  ...process.env,
+  GOATCITADEL_DEV: "1",
+  GOATCITADEL_UI_PACKAGE: process.env.GOATCITADEL_UI_PACKAGE?.trim() || DEFAULT_DEV_UI_PACKAGE,
+};
 // When the bootstrap step confirms all runtime packages are already fresh, the
 // supervisor's tsc -b reference build is guaranteed to be a no-op too. Forward
 // a "skip" hint so the supervisor doesn't repeat the same freshness check via

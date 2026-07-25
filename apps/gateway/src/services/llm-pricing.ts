@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { ChatCompletionResponse } from "@goatcitadel/contracts";
 
 interface TextModelPricing {
@@ -14,9 +15,19 @@ interface EstimateUsageCostInput {
   usage?: Record<string, unknown>;
 }
 
-const ZERO_COST_PROVIDER_IDS = new Set(["genie-ir20", "lmstudio", "localai", "ollama"]);
+interface CanonicalUsageObserver {
+  observe(usage: unknown): void;
+  observeNormalized(usage: {
+    costUsd?: number;
+    costSource?: "gateway_estimate";
+    pricingSource?: "gateway_estimate";
+  }): void;
+}
 
-// Pricing snapshot as of 2026-03-29.
+const ZERO_COST_PROVIDER_IDS = new Set(["genie-ir20", "llamacpp", "lmstudio", "localai", "ollama"]);
+export const MODEL_PRICING_CATALOG_VERSION = "2026-07-13";
+
+// Pricing snapshot as of 2026-07-13.
 // Sources:
 // - OpenAI model pages for GPT-5.4, GPT-5.4 mini, and GPT-4.1 mini.
 // - Z.AI pricing page for GLM-5.
@@ -24,7 +35,18 @@ const ZERO_COST_PROVIDER_IDS = new Set(["genie-ir20", "lmstudio", "localai", "ol
 // - Moonshot native Kimi K2.6 is inferred from OpenRouter's no-markup policy plus
 //   the OpenRouter Kimi K2.6 model page because Moonshot's public docs did not expose
 //   a machine-readable pricing table for that model.
+// - Google Vertex AI pricing for Gemini 2.5 Flash. Cached input deliberately uses
+//   the regular input rate here because this catalog has no verified cache-rate row.
+// - Fireworks model documentation for Kimi K2.6 (kimi-k2p6).
 const PRICING_BY_PROVIDER: Record<string, TextModelPricing[]> = {
+  fireworks: [
+    {
+      modelId: "accounts/fireworks/models/kimi-k2p6",
+      inputUsdPerMillion: 0.95,
+      cachedInputUsdPerMillion: 0.16,
+      outputUsdPerMillion: 4,
+    },
+  ],
   glm: [
     {
       modelId: "glm-5",
@@ -101,7 +123,60 @@ const PRICING_BY_PROVIDER: Record<string, TextModelPricing[]> = {
       outputUsdPerMillion: 4.5,
     },
   ],
+  vertex: [
+    {
+      modelId: "google/gemini-2.5-flash",
+      aliases: ["gemini-2.5-flash"],
+      inputUsdPerMillion: 0.3,
+      outputUsdPerMillion: 2.5,
+    },
+  ],
 };
+
+const MODEL_PRICING_CATALOG_HASH = createHash("sha256")
+  .update(
+    JSON.stringify({
+      version: MODEL_PRICING_CATALOG_VERSION,
+      zeroCostProviderIds: [...ZERO_COST_PROVIDER_IDS].sort(),
+      pricingByProvider: PRICING_BY_PROVIDER,
+    }),
+  )
+  .digest("hex");
+
+export interface ModelPricingLineage {
+  catalogVersion: string;
+  catalogHash: string;
+  inputRateUsdPerMillion: number;
+  outputRateUsdPerMillion: number;
+  cachedInputRateUsdPerMillion: number;
+}
+
+/** Frozen, secret-free pricing evidence captured before provider dispatch. */
+export function resolveModelPricingLineage(
+  providerId: string | undefined,
+  model: string | undefined,
+): ModelPricingLineage | undefined {
+  const normalizedProviderId = normalizeId(providerId);
+  if (!normalizedProviderId) return undefined;
+  if (ZERO_COST_PROVIDER_IDS.has(normalizedProviderId)) {
+    return {
+      catalogVersion: MODEL_PRICING_CATALOG_VERSION,
+      catalogHash: MODEL_PRICING_CATALOG_HASH,
+      inputRateUsdPerMillion: 0,
+      outputRateUsdPerMillion: 0,
+      cachedInputRateUsdPerMillion: 0,
+    };
+  }
+  const pricing = findPricing(normalizedProviderId, model);
+  if (!pricing) return undefined;
+  return {
+    catalogVersion: MODEL_PRICING_CATALOG_VERSION,
+    catalogHash: MODEL_PRICING_CATALOG_HASH,
+    inputRateUsdPerMillion: pricing.inputUsdPerMillion,
+    outputRateUsdPerMillion: pricing.outputUsdPerMillion,
+    cachedInputRateUsdPerMillion: pricing.cachedInputUsdPerMillion ?? pricing.inputUsdPerMillion,
+  };
+}
 
 export function estimateUsageCostUsd(input: EstimateUsageCostInput): number | undefined {
   const usage = input.usage;
@@ -128,17 +203,28 @@ export function estimateUsageCostUsd(input: EstimateUsageCostInput): number | un
     return undefined;
   }
 
-  const totalInputTokens = readUsageNumber(usage.prompt_tokens) ?? readUsageNumber(usage.input_tokens) ?? 0;
-  const totalOutputTokens = readUsageNumber(usage.completion_tokens) ?? readUsageNumber(usage.output_tokens) ?? 0;
+  const totalInputTokens = readUsageNumber(usage.prompt_tokens) ?? readUsageNumber(usage.input_tokens);
+  const totalOutputTokens = readUsageNumber(usage.completion_tokens) ?? readUsageNumber(usage.output_tokens);
+  if (totalInputTokens === undefined || totalOutputTokens === undefined) {
+    return undefined;
+  }
   const promptDetails = isRecord(usage.prompt_tokens_details) ? usage.prompt_tokens_details : undefined;
-  const cachedInputTokens =
+  const inputDetails = isRecord(usage.input_tokens_details) ? usage.input_tokens_details : undefined;
+  const observedCachedInputTokens =
     readUsageNumber(usage.cached_prompt_tokens) ??
     readUsageNumber(usage.cached_input_tokens) ??
     (promptDetails ? readUsageNumber(promptDetails.cached_tokens) : undefined) ??
-    readUsageNumber(usage.cache_read_input_tokens) ??
-    0;
-  const billableInputTokens = Math.max(0, totalInputTokens - cachedInputTokens);
+    (inputDetails ? readUsageNumber(inputDetails.cached_tokens) : undefined) ??
+    readUsageNumber(usage.cache_read_input_tokens);
   const cachedRate = pricing.cachedInputUsdPerMillion ?? pricing.inputUsdPerMillion;
+  if (observedCachedInputTokens === undefined && totalInputTokens > 0 && cachedRate !== pricing.inputUsdPerMillion) {
+    return undefined;
+  }
+  const cachedInputTokens = observedCachedInputTokens ?? 0;
+  if (cachedInputTokens > totalInputTokens) {
+    return undefined;
+  }
+  const billableInputTokens = Math.max(0, totalInputTokens - cachedInputTokens);
   const totalCostUsd =
     (billableInputTokens * pricing.inputUsdPerMillion +
       cachedInputTokens * cachedRate +
@@ -153,6 +239,9 @@ export function applyEstimatedCostToChatResponse(
   input: Omit<EstimateUsageCostInput, "usage">,
 ): ChatCompletionResponse {
   if (!response.usage || typeof response.usage !== "object") {
+    return response;
+  }
+  if (!canUseDispatchedModelPricing(input.providerId, input.model, response.model)) {
     return response;
   }
   const costUsd = estimateUsageCostUsd({
@@ -176,6 +265,15 @@ export function applyEstimatedCostToStreamChunk(
   input: Omit<EstimateUsageCostInput, "usage">,
 ): Record<string, unknown> {
   if (!isRecord(chunk.usage)) {
+    return chunk;
+  }
+  if (
+    !canUseDispatchedModelPricing(
+      input.providerId,
+      input.model,
+      typeof chunk.model === "string" ? chunk.model : undefined,
+    )
+  ) {
     return chunk;
   }
   const costUsd = estimateUsageCostUsd({
@@ -216,11 +314,33 @@ export function applyEstimatedCostToStreamChunkWithSource(
   );
 }
 
+/**
+ * Preserve the provider payload as untrusted/raw usage, then attach only the
+ * estimate that GoatCitadel itself computed as trusted gateway provenance.
+ * Provider-supplied `cost_source` is never authoritative.
+ */
+export function observeProviderUsageWithTrustedEstimate(
+  observer: CanonicalUsageObserver | undefined,
+  providerUsage: unknown,
+  pricedUsage: unknown,
+): void {
+  if (!observer) return;
+  observer.observe(providerUsage);
+  if (!isRecord(pricedUsage) || pricedUsage.cost_source !== "estimated") return;
+  const costUsd = readUsageNumber(pricedUsage.cost_usd) ?? readUsageNumber(pricedUsage.total_cost_usd);
+  if (costUsd === undefined || costUsd < 0) return;
+  observer.observeNormalized({
+    costUsd,
+    costSource: "gateway_estimate",
+    pricingSource: "gateway_estimate",
+  });
+}
+
 function annotateChatResponseUsageCostSource(
   response: ChatCompletionResponse,
   source: "provider_reported" | "estimated",
 ): ChatCompletionResponse {
-  if (!isRecord(response.usage) || !hasUsageCost(response.usage) || hasUsageCostSource(response.usage)) {
+  if (!isRecord(response.usage) || !hasUsageCost(response.usage)) {
     return response;
   }
   return {
@@ -236,7 +356,7 @@ function annotateStreamChunkUsageCostSource(
   chunk: Record<string, unknown>,
   source: "provider_reported" | "estimated",
 ): Record<string, unknown> {
-  if (!isRecord(chunk.usage) || !hasUsageCost(chunk.usage) || hasUsageCostSource(chunk.usage)) {
+  if (!isRecord(chunk.usage) || !hasUsageCost(chunk.usage)) {
     return chunk;
   }
   return {
@@ -255,10 +375,6 @@ function hasUsageCost(usage: unknown): boolean {
   return readUsageNumber(usage.cost_usd) !== undefined || readUsageNumber(usage.total_cost_usd) !== undefined;
 }
 
-function hasUsageCostSource(usage: Record<string, unknown>): boolean {
-  return Boolean(firstNonEmptyString(usage.cost_source, usage.costSource));
-}
-
 function findPricing(providerId: string, model: string | undefined): TextModelPricing | undefined {
   const normalizedModel = normalizeModelId(model);
   if (!normalizedModel) {
@@ -272,6 +388,28 @@ function findPricing(providerId: string, model: string | undefined): TextModelPr
     }
     return (entry.aliases ?? []).some((alias) => normalizeModelId(alias) === normalizedModel);
   });
+}
+
+function canUseDispatchedModelPricing(
+  providerId: string | undefined,
+  dispatchedModel: string | undefined,
+  reportedModel: string | undefined,
+): boolean {
+  const dispatched = normalizeModelId(dispatchedModel);
+  const reported = normalizeModelId(reportedModel);
+  if (!reported || !dispatched || reported === dispatched) return true;
+  const provider = normalizeId(providerId);
+  if (!provider) return false;
+  const dispatchedPricing = findPricing(provider, dispatched);
+  const reportedPricing = findPricing(provider, reported);
+  return Boolean(
+    dispatchedPricing &&
+    reportedPricing &&
+    dispatchedPricing.inputUsdPerMillion === reportedPricing.inputUsdPerMillion &&
+    dispatchedPricing.outputUsdPerMillion === reportedPricing.outputUsdPerMillion &&
+    (dispatchedPricing.cachedInputUsdPerMillion ?? dispatchedPricing.inputUsdPerMillion) ===
+      (reportedPricing.cachedInputUsdPerMillion ?? reportedPricing.inputUsdPerMillion),
+  );
 }
 
 function normalizeId(value: string | undefined): string | undefined {
@@ -292,18 +430,6 @@ function readUsageNumber(value: unknown): number | undefined {
     const parsed = Number(value);
     if (Number.isFinite(parsed)) {
       return parsed;
-    }
-  }
-  return undefined;
-}
-
-function firstNonEmptyString(...values: unknown[]): string | undefined {
-  for (const value of values) {
-    if (typeof value === "string") {
-      const trimmed = value.trim();
-      if (trimmed) {
-        return trimmed;
-      }
     }
   }
   return undefined;

@@ -1,8 +1,12 @@
-import type {
-  ConnectorDiagnosticReport,
-  McpServerTemplateRecord,
-  McpTemplateDiscoveryResult,
+import {
+  resolveMcpServerConnectionMode,
+  type ConnectorDiagnosticReport,
+  type McpServerRecord,
+  type McpServerTemplateRecord,
+  type McpTemplateDiscoveryResult,
 } from "@goatcitadel/contracts";
+import { projectMcpPublicValue } from "./mcp-public-projection.js";
+import type { McpRequesterScopeLastOutcome } from "./mcp-requester-resolution-service.js";
 
 export interface McpDiagnosticsHost {
   requireFeatureEnabled(flag: string): void;
@@ -20,6 +24,130 @@ export interface McpDiagnosticsHost {
   };
   pickConnectorDiagnosticAction(checks: ConnectorDiagnosticReport["checks"]): string | undefined;
   recordConnectorHealthRun(report: ConnectorDiagnosticReport): void;
+}
+
+/** Exact non-secret resolver binding reference from a server's configuration. */
+export interface McpRequesterScopeResolverRegistrationRef {
+  resolverId: string;
+  resolverVersion: string;
+  configGeneration: number;
+}
+
+export type McpRequesterScopeResolverRegistrationPosture = "registered" | "resolver_missing" | "resolver_binding_drift";
+
+/**
+ * Read port the composed requester-scoped runtime exposes for operator
+ * diagnostics (HX-415). It can answer only two questions — whether the exact
+ * configured resolver binding is registered in the Gateway-owned registry, and
+ * the last secret-free outcome classes for a serverId. It cannot resolve,
+ * mutate, or reach any endpoint/header/credential material.
+ */
+export interface McpRequesterScopeDiagnosticsReadPort {
+  resolveRegistrationPosture(
+    ref: McpRequesterScopeResolverRegistrationRef,
+  ): McpRequesterScopeResolverRegistrationPosture;
+  loadLastOutcome(serverId: string): McpRequesterScopeLastOutcome | undefined;
+}
+
+/**
+ * Secret-free per-server requester-scope posture (packet "API and operator
+ * surface"): resolver identity/generation from the server's non-secret
+ * configuration, the fixed `requesterContextRequired` marker, registry
+ * registration posture (`resolver_missing` for stock deployments), and the
+ * recorder's last outcome classes. It NEVER includes an endpoint or header
+ * preview, URL component, credential, actor/channel identifier, resolver cause
+ * text, or secret-derived hash.
+ */
+export interface McpRequesterScopePosture {
+  serverId: string;
+  connectionMode: "requester_scoped";
+  requesterContextRequired: true;
+  enabled: boolean;
+  resolverId: string;
+  resolverVersion: string;
+  resolverConfigGeneration: number;
+  resolverRegistration: McpRequesterScopeResolverRegistrationPosture;
+  lastOutcome?: {
+    outcomeClass: McpRequesterScopeLastOutcome["outcomeClass"];
+    atMs: number;
+    connectionGenerationClass: McpRequesterScopeLastOutcome["connectionGenerationClass"];
+    expiryClass: McpRequesterScopeLastOutcome["expiryClass"];
+    networkPolicyDecision: McpRequesterScopeLastOutcome["networkPolicyDecision"];
+    profileDrift: boolean;
+  };
+}
+
+export interface McpRequesterScopePostureHost {
+  listMcpServers(): McpServerRecord[];
+  requesterScopeDiagnostics: McpRequesterScopeDiagnosticsReadPort;
+}
+
+/**
+ * Project the secret-free requester-scope posture for every requester-scoped
+ * MCP server. Static servers are excluded entirely (their diagnostics remain
+ * the existing template/health surfaces). Fields are copied one by one from
+ * the non-secret configuration and the recorder — the server record is never
+ * spread — and the finished rows additionally pass through the public MCP
+ * projection as defense in depth before they are frozen. A malformed server
+ * record is skipped fail-closed rather than projected partially.
+ */
+export function listMcpRequesterScopePostures(host: McpRequesterScopePostureHost): McpRequesterScopePosture[] {
+  const postures: McpRequesterScopePosture[] = [];
+  let servers: McpServerRecord[];
+  try {
+    servers = host.listMcpServers();
+  } catch {
+    return [];
+  }
+  for (const server of servers) {
+    let posture: McpRequesterScopePosture | undefined;
+    try {
+      if (resolveMcpServerConnectionMode(server) !== "requester_scoped") continue;
+      const resolution = server.requesterResolution;
+      if (
+        !resolution ||
+        typeof resolution.resolverId !== "string" ||
+        typeof resolution.resolverVersion !== "string" ||
+        typeof resolution.configGeneration !== "number"
+      ) {
+        continue;
+      }
+      const registration = host.requesterScopeDiagnostics.resolveRegistrationPosture({
+        resolverId: resolution.resolverId,
+        resolverVersion: resolution.resolverVersion,
+        configGeneration: resolution.configGeneration,
+      });
+      const lastOutcome = host.requesterScopeDiagnostics.loadLastOutcome(server.serverId);
+      posture = {
+        serverId: server.serverId,
+        connectionMode: "requester_scoped",
+        requesterContextRequired: true,
+        enabled: server.enabled === true,
+        resolverId: resolution.resolverId,
+        resolverVersion: resolution.resolverVersion,
+        resolverConfigGeneration: resolution.configGeneration,
+        resolverRegistration: registration,
+        ...(lastOutcome
+          ? {
+              lastOutcome: {
+                outcomeClass: lastOutcome.outcomeClass,
+                atMs: lastOutcome.atMs,
+                connectionGenerationClass: lastOutcome.connectionGenerationClass,
+                expiryClass: lastOutcome.expiryClass,
+                networkPolicyDecision: lastOutcome.networkPolicyDecision,
+                profileDrift: lastOutcome.profileDrift === true,
+              },
+            }
+          : {}),
+      };
+    } catch {
+      continue;
+    }
+    const projected = projectMcpPublicValue(posture);
+    if (projected.lastOutcome) Object.freeze(projected.lastOutcome);
+    postures.push(Object.freeze(projected));
+  }
+  return postures;
 }
 
 export function listMcpTemplateDiscovery(host: McpDiagnosticsHost): McpTemplateDiscoveryResult[] {

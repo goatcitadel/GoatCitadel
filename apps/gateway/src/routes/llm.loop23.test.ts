@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import { ConflictError } from "@goatcitadel/contracts";
 import { llmRoutes } from "./llm.js";
 
 describe("llm route validation and error mapping loop 23", () => {
@@ -21,6 +22,7 @@ describe("llm route validation and error mapping loop 23", () => {
       method: "PATCH",
       url: "/api/v1/llm/config",
       payload: {
+        expectedRevision: 2,
         upsertProvider: {
           providerId: "openai",
           baseUrl: "https://api.openai.com/v1",
@@ -36,6 +38,7 @@ describe("llm route validation and error mapping loop 23", () => {
       method: "PATCH",
       url: "/api/v1/llm/config",
       payload: {
+        expectedRevision: 2,
         upsertProvider: {
           providerId: "openai",
           baseUrl: "https://api.openai.com/v1",
@@ -54,6 +57,38 @@ describe("llm route validation and error mapping loop 23", () => {
     expect(updateLlmConfig).not.toHaveBeenCalled();
     expect(JSON.stringify(missingClientKey.json())).toContain("clientCertPath and clientKeyPath");
     expect(JSON.stringify(conflictingTrust.json())).toContain("caCertPath cannot be combined");
+  });
+
+  it("requires a revision and maps stale LLM config writes to 409 without retry", async () => {
+    const updateLlmConfig = vi.fn(() => {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: "Settings changed after this client loaded them.",
+        details: { expectedRevision: 4, currentRevision: 5 },
+      });
+    });
+    app = buildApp({ updateLlmConfig });
+
+    const missing = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/llm/config",
+      payload: { activeProviderId: "openai" },
+    });
+    expect(missing.statusCode).toBe(400);
+    expect(updateLlmConfig).not.toHaveBeenCalled();
+
+    const stale = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/llm/config",
+      payload: { expectedRevision: 4, activeProviderId: "openai" },
+    });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json()).toEqual({
+      error: "Settings changed after this client loaded them.",
+      code: "STATE_CONFLICT",
+      details: { expectedRevision: 4, currentRevision: 5 },
+    });
+    expect(updateLlmConfig).toHaveBeenCalledOnce();
   });
 
   it("validates model preview auth, OAuth polling, and maps model discovery failures", async () => {

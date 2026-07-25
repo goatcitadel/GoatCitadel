@@ -16,6 +16,8 @@ export type RealtimeEventType =
   | "subagent_registered"
   | "subagent_updated"
   | "orchestration_event"
+  | "remote_worker_changed"
+  | "remote_worker_assignment_changed"
   | "system";
 
 export type RealtimeEventClass = "domain_fact" | "operational_signal" | "ui_notification";
@@ -33,6 +35,8 @@ export interface RealtimeEventLinks {
   connectorId?: string;
   tokenId?: string;
   messageId?: string;
+  workerId?: string;
+  assignmentId?: string;
 }
 
 export interface RealtimeEvent {
@@ -177,6 +181,11 @@ export interface CronWatchdogRunResult {
 
 export interface CronJobRecord {
   jobId: string;
+  revision: number;
+  /** Monotonic fencing generation for canonical cron_runs admission. */
+  executionGeneration?: number;
+  /** Canonical non-terminal run currently holding this job generation. */
+  activeRunId?: string;
   name: string;
   action: CronJobAction;
   actionConfig?: CronJobActionConfig;

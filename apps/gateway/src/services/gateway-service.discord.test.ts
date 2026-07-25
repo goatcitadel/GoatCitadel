@@ -39,6 +39,7 @@ function createGatewayHarness() {
   const settings = new Map<string, unknown>();
   const gateway = Object.create(GatewayService.prototype) as any;
   gateway.storage = {
+    runImmediateTransaction: vi.fn(<T>(callback: () => T): T => callback()),
     gatewaySql: {
       prepare: vi.fn(() => ({
         run: vi.fn(),
@@ -49,6 +50,7 @@ function createGatewayHarness() {
     },
     chatSessionMeta: {
       ensure: vi.fn(),
+      get: vi.fn(() => undefined),
     },
     chatSessionPrefs: {
       ensure: vi.fn(),

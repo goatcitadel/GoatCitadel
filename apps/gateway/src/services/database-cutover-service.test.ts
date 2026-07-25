@@ -40,45 +40,109 @@ describe("DatabaseCutoverService", () => {
         },
       } as never,
       createBackup,
+      readSettingsRevision: () => 1,
     });
 
-    await expect(service.runCutover({ profile: "local", execute: true, confirm: true })).rejects.toThrow(
-      "Database cutover already applied",
-    );
+    await expect(
+      service.runCutover({ profile: "local", execute: true, confirm: true, expectedRevision: 1 }),
+    ).rejects.toThrow("Database cutover already applied");
     expect(createBackup).not.toHaveBeenCalled();
   });
 
-  it("reports a reachable SQLite health snapshot when the configured database file exists", async () => {
+  it("probes the configured SQLite database read-only and reports its current migration version", async () => {
     const rootDir = await makeTempDir();
     const dbPath = path.join(rootDir, "data", "index.db");
     await fs.mkdir(path.dirname(dbPath), { recursive: true });
-    await fs.writeFile(dbPath, "", "utf8");
+    const database = new DatabaseSync(dbPath);
+    try {
+      database.exec(`
+        CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY);
+        INSERT INTO schema_migrations (version) VALUES (3), (7);
+      `);
+    } finally {
+      database.close();
+    }
+    const bytesBeforeProbe = await fs.readFile(dbPath);
     const service = new DatabaseCutoverService({
       config: buildSqliteConfig(dbPath),
       createBackup: vi.fn(),
+      readSettingsRevision: () => 1,
     });
 
-    await expect(service.getHealthSnapshot()).resolves.toEqual({
+    await expect(service.getHealthSnapshot()).resolves.toMatchObject({
       driver: "sqlite",
       configured: true,
       reachable: true,
+      migrationVersion: 7,
+      latencyMs: expect.any(Number),
       issues: [],
     });
+    await expect(fs.readFile(dbPath)).resolves.toEqual(bytesBeforeProbe);
   });
 
-  it("reports an explicit SQLite health issue when the configured database file is missing", async () => {
+  it("fails closed without creating or disclosing a missing configured SQLite path", async () => {
     const rootDir = await makeTempDir();
     const dbPath = path.join(rootDir, "data", "missing.db");
     const service = new DatabaseCutoverService({
       config: buildSqliteConfig(dbPath),
       createBackup: vi.fn(),
+      readSettingsRevision: () => 1,
     });
 
-    await expect(service.getHealthSnapshot()).resolves.toEqual({
+    const snapshot = await service.getHealthSnapshot();
+    expect(snapshot).toMatchObject({
       driver: "sqlite",
       configured: true,
       reachable: false,
-      issues: [`SQLite database is missing at ${dbPath}`],
+      latencyMs: expect.any(Number),
+      issues: ["SQLite database readiness probe failed."],
+    });
+    expect(JSON.stringify(snapshot)).not.toContain(dbPath);
+    await expect(fs.access(dbPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("fails closed on a corrupt SQLite file without returning raw database errors", async () => {
+    const rootDir = await makeTempDir();
+    const dbPath = path.join(rootDir, "corrupt-secret-name.db");
+    await fs.writeFile(dbPath, Buffer.alloc(4096, 0x41));
+    const service = new DatabaseCutoverService({
+      config: buildSqliteConfig(dbPath),
+      createBackup: vi.fn(),
+      readSettingsRevision: () => 1,
+    });
+
+    const snapshot = await service.getHealthSnapshot();
+    expect(snapshot).toMatchObject({
+      driver: "sqlite",
+      configured: true,
+      reachable: false,
+      issues: ["SQLite database readiness probe failed."],
+    });
+    expect(JSON.stringify(snapshot)).not.toContain("corrupt-secret-name");
+    expect(JSON.stringify(snapshot)).not.toContain("file is not a database");
+  });
+
+  it("fails closed when the migration-version query cannot run", async () => {
+    const rootDir = await makeTempDir();
+    const dbPath = path.join(rootDir, "data", "invalid-migration-schema.db");
+    await fs.mkdir(path.dirname(dbPath), { recursive: true });
+    const database = new DatabaseSync(dbPath);
+    try {
+      database.exec("CREATE TABLE schema_migrations (unexpected_column INTEGER NOT NULL);");
+    } finally {
+      database.close();
+    }
+    const service = new DatabaseCutoverService({
+      config: buildSqliteConfig(dbPath),
+      createBackup: vi.fn(),
+      readSettingsRevision: () => 1,
+    });
+
+    await expect(service.getHealthSnapshot()).resolves.toMatchObject({
+      driver: "sqlite",
+      configured: true,
+      reachable: false,
+      issues: ["SQLite database readiness probe failed."],
     });
   });
 });

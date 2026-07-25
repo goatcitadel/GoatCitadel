@@ -9,6 +9,13 @@ type DurableRoutePort = Pick<
   | "listDeadLetters"
   | "listRunCheckpoints"
   | "listRunTimeline"
+  | "watchChildRun"
+  | "listChildWatchers"
+  | "detachChildWatcher"
+  | "reattachChildWatcher"
+  | "closeChildWatcher"
+  | "getBackgroundTaskRail"
+  | "controlBackgroundTask"
   | "listRuns"
   | "pauseRun"
   | "recoverDeadLetter"
@@ -46,6 +53,39 @@ export class DurableRouteService {
 
   public listRunTimeline(runId: string, limit: number) {
     return this.durable.listRunTimeline(runId, limit);
+  }
+
+  public watchChildRun(input: Parameters<DurableRoutePort["watchChildRun"]>[0]) {
+    return this.durable.watchChildRun(input);
+  }
+
+  public listChildWatchers(parentRunId: string, limit: number) {
+    return this.durable.listChildWatchers(parentRunId, limit);
+  }
+
+  public detachChildWatcher(watcherId: string) {
+    return this.durable.detachChildWatcher(watcherId);
+  }
+
+  public reattachChildWatcher(watcherId: string) {
+    return this.durable.reattachChildWatcher(watcherId);
+  }
+
+  public closeChildWatcher(watcherId: string) {
+    return this.durable.closeChildWatcher(watcherId);
+  }
+
+  public getBackgroundTaskRail(parentRunId: string, input: Parameters<DurableRoutePort["getBackgroundTaskRail"]>[1]) {
+    return this.durable.getBackgroundTaskRail(parentRunId, input);
+  }
+
+  public controlBackgroundTask(
+    parentRunId: string,
+    watcherId: string,
+    input: Parameters<DurableRoutePort["controlBackgroundTask"]>[2],
+    actorId: string,
+  ) {
+    return this.durable.controlBackgroundTask(parentRunId, watcherId, input, actorId);
   }
 
   public pauseRun(runId: string, actorId: string) {

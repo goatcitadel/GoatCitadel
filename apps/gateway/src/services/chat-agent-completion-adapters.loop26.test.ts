@@ -192,6 +192,26 @@ describe("chat-agent-completion-adapters edge cases", () => {
     ]);
   });
 
+  it("unions canonical usage event ids across streaming chunks without duplicates", () => {
+    const aggregate = createCompletionStreamAggregate();
+
+    absorbCompletionStreamChunk(aggregate, {
+      model_usage_event_id: "usage-stream-a",
+      model_usage_event_ids: ["usage-stream-a", "usage-stream-b"],
+      choices: [{ delta: { content: "A" } }],
+    });
+    absorbCompletionStreamChunk(aggregate, {
+      modelUsageEventIds: ["usage-stream-b", "usage-stream-c"],
+      choices: [{ delta: { content: "B" }, finish_reason: "stop" }],
+    });
+
+    expect(buildCompletionFromAggregate(aggregate).modelUsageEventIds).toEqual([
+      "usage-stream-a",
+      "usage-stream-b",
+      "usage-stream-c",
+    ]);
+  });
+
   it("reports invalid provider tool-call protocol without treating phantom tools as callable", () => {
     const canonical = new Map([
       ["browser_search", "browser.search"],

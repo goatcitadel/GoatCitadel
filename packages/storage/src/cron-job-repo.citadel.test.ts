@@ -30,7 +30,7 @@ function createRepoWithDb(): { repo: CronJobRepository; db: ReturnType<typeof cr
 }
 
 function makeJob(jobId: string): CronJobRecord {
-  return { jobId, name: jobId, action: "task", schedule: "0 8 * * *", enabled: true };
+  return { jobId, revision: 1, name: jobId, action: "task", schedule: "0 8 * * *", enabled: true };
 }
 
 describe("CronJobRepository citadel scoping", () => {
@@ -39,14 +39,17 @@ describe("CronJobRepository citadel scoping", () => {
     repo.upsert(makeJob("a"));
     repo.upsert(makeJob("b"));
     repo.upsert(makeJob("global"));
-    db.prepare("UPDATE cron_jobs SET citadel_id = @citadelId WHERE job_id = @jobId").run({ citadelId: "ws-a", jobId: "a" });
-    db.prepare("UPDATE cron_jobs SET citadel_id = @citadelId WHERE job_id = @jobId").run({ citadelId: "ws-b", jobId: "b" });
+    db.prepare("UPDATE cron_jobs SET citadel_id = @citadelId WHERE job_id = @jobId").run({
+      citadelId: "ws-a",
+      jobId: "a",
+    });
+    db.prepare("UPDATE cron_jobs SET citadel_id = @citadelId WHERE job_id = @jobId").run({
+      citadelId: "ws-b",
+      jobId: "b",
+    });
 
     const scoped = repo.listByCitadel("ws-a");
-    assert.deepEqual(
-      scoped.map((job) => job.jobId).sort(),
-      ["a", "global"],
-    );
+    assert.deepEqual(scoped.map((job) => job.jobId).sort(), ["a", "global"]);
 
     // Unscoped list still returns everything.
     assert.equal(repo.list().length, 3);

@@ -21,12 +21,95 @@ import type {
   DurableRunRecord,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
-import { ConflictError, isChatTurnTerminalStatus, NotFoundError } from "@goatcitadel/contracts";
-import { getRequestAttribution, runWithIsolatedRequestAttribution, type Storage } from "@goatcitadel/storage";
+import {
+  CAPABILITY_LIFECYCLE_APPROVAL_KIND,
+  CAPABILITY_LIFECYCLE_EFFECT_KIND,
+  CAPABILITY_LIFECYCLE_EFFECT_TARGET_KIND,
+  EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_APPROVAL_KIND,
+  EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_KIND,
+  EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_TARGET_KIND,
+  IMPROVEMENT_LIFECYCLE_APPROVAL_KIND,
+  IMPROVEMENT_LIFECYCLE_EFFECT_KIND,
+  IMPROVEMENT_LIFECYCLE_EFFECT_TARGET_KIND,
+  MEMORY_LIFECYCLE_APPROVAL_KIND,
+  MEMORY_LIFECYCLE_EFFECT_KIND,
+  MEMORY_LIFECYCLE_EFFECT_TARGET_KIND,
+  MESH_CAPABILITY_ACTIVATION_APPROVAL_KIND,
+  SKILL_LIFECYCLE_APPROVAL_KIND,
+  SKILL_LIFECYCLE_EFFECT_KIND,
+  SKILL_LIFECYCLE_EFFECT_TARGET_KIND,
+  assertExternalSourceKnowledgeSnapshotApprovalPayload,
+  assertMeshCapabilityActivationApprovalPayload,
+  buildToolEffectEvidence,
+  canonicalJsonString,
+  ConflictError,
+  isChatTurnTerminalStatus,
+  NotFoundError,
+  type CandidateLifecycleActionResult,
+  type ExternalSourceKnowledgeSnapshotApprovalPayload,
+  type MeshCapabilityActivationApprovalPayload,
+} from "@goatcitadel/contracts";
+import {
+  buildApprovalEffectIdempotencyKey,
+  getRequestAttribution,
+  runWithIsolatedRequestAttribution,
+  type PostCommitEligibility,
+  type Storage,
+} from "@goatcitadel/storage";
+import {
+  MeshCapabilityActivationServiceError,
+  type MeshCapabilityActivationApplyResult,
+} from "./mesh-capability-activation-service.js";
+import { MemoryLifecycleApplyError } from "./memory-domain-journey-producer.js";
+import { parseMemoryLifecycleApprovalBinding } from "./memory-journey-producer.js";
+import type { MemoryLifecycleApplyResult } from "./memory-lifecycle-service.js";
+import {
+  ImprovementLifecycleApplyError,
+  parseImprovementLifecycleApprovalBinding,
+} from "./improvement-lifecycle-journey-producer.js";
+import type { ImprovementLifecycleApplyResult } from "./improvement-service.js";
+import {
+  CapabilityLifecycleApplyError,
+  parseCapabilityLifecycleApprovalBinding,
+  parseSkillLifecycleApprovalBinding,
+  SkillLifecycleApplyError,
+} from "./skill-governance-journey-producer.js";
+import type { SkillLifecycleApplyResult } from "./skill-state-service.js";
 import { APPROVAL_OBSERVABILITY_REALTIME_ENVELOPE_KEY } from "./realtime-event-service.js";
+import {
+  ExternalSourceKnowledgeEffectServiceError,
+  deriveExternalSourceKnowledgeSnapshotMaterializedIdentities,
+  type ExternalSourceKnowledgeSnapshotApplyResult,
+} from "./external-source-knowledge-effect-service.js";
+import type { ExternalSourceRequestActor } from "./external-source-service.js";
+import { materializeApprovedSkillHubIntent, type SkillHubLifecycleApplyResult } from "./skill-hub-lifecycle-service.js";
 import type { ApprovalRemoteTokenSecretService } from "./approval-remote-token-secret.js";
-import { markTerminalChatPostCommitPending } from "./chat-durable-run-service.js";
+import {
+  AUTONOMOUS_CHAT_POST_COMMIT_PENDING_METADATA_KEY,
+  GENERAL_CHAT_POST_COMMIT_PENDING_METADATA_KEY,
+  markTerminalChatPostCommitPending,
+  mergeCanonicalDurableChatTerminalOutputMetadata,
+  resetChatTurnRuntimeTransitionMetadata,
+} from "./chat-durable-run-service.js";
+import {
+  CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY,
+  buildChatTurnRuntimeAuthoritySeal,
+  readChatTurnRuntimeAuthoritySeal,
+  readExactGeneralChatPostCommitPendingMarker,
+  readExactGeneralChatPostCommitSettlement,
+  verifyAutonomousChatAdmissionRunMetadata,
+  verifyCheckpointAnchoredChatTurnRuntimeAuthority,
+  withChatTurnRuntimeAuthority,
+  withChatTurnRuntimeAuthorityCheckpoint,
+} from "./chat-durable-runtime-authority.js";
+import { assertDurableRetryPolicyMatchesRun, DURABLE_RETRY_POLICY_DEFAULT } from "./durable-retry-policy.js";
+import {
+  computeEffectiveChatTurnRequestMaterialSha256,
+  computeFrozenChatTurnAdmissionMaterialSha256,
+  reconstructAdmittedChatTurnRequest,
+} from "./session-control-service.js";
 import { readToolDomainExecutionFailure, type ToolDomainExecutionFailure } from "./tool-domain-result-truth.js";
+import type { SharedHostLifecycleAdmissionPort, SharedHostWorkReservation } from "./shared-host-lifecycle-service.js";
 
 export type ApprovalObservabilityEffectInput = ApprovalObservabilityEffectInputContract;
 
@@ -45,6 +128,7 @@ const APPROVAL_EFFECT_HEARTBEAT_MS = 5_000;
 const APPROVAL_EFFECT_POLL_MIN_MS = 1_000;
 const APPROVAL_EFFECT_POLL_JITTER_MS = 500;
 const APPROVAL_EFFECT_CHILD_WAIT_RETRY_MS = 2_000;
+const APPROVAL_EFFECT_CODE_MODE_CLAIM_RETRY_MS = 1_000;
 const APPROVAL_OBSERVABILITY_RETRY_BASE_MS = 1_000;
 const APPROVAL_OBSERVABILITY_RETRY_MAX_MS = 5 * 60_000;
 const APPROVAL_OBSERVABILITY_PREDECESSOR_RETRY_MS = 250;
@@ -52,6 +136,8 @@ const APPROVAL_WAIT_MATERIALIZE_RETRY_MS = 1_000;
 const APPROVAL_EXPIRY_SWEEP_INTERVAL_MS = 1_000;
 const APPROVAL_EFFECT_RESPONSE_SETTLE_MS = 500;
 const APPROVAL_MATERIALIZED_POST_COMMIT_METADATA_KEY = "approvalMaterializedPostCommit";
+export const MESH_CAPABILITY_ACTIVATION_EFFECT_KIND = "mesh_capability_activation_apply" as const;
+export const MESH_CAPABILITY_ACTIVATION_EFFECT_TARGET_KIND = "mesh_capability_activation" as const;
 
 interface ApprovalMaterializationPostCommitInput {
   approvalId: string;
@@ -79,6 +165,153 @@ interface ChatMaterializationProjection {
   options: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">;
 }
 
+function buildApprovalTerminalCheckpointState(
+  input: Record<string, unknown>,
+  terminalStatus: "completed" | "failed",
+  assistantMessageId: string,
+  outputText: string,
+  outputSummary: string,
+): Record<string, unknown> {
+  const checkpoint = { ...input };
+  for (const key of ["finalOutput", "finalSummary", "outputMessageId", "outputTraceStatus"]) {
+    delete checkpoint[key];
+  }
+  if (terminalStatus === "completed") {
+    return { ...checkpoint, assistantMessageId, outputText, outputSummary };
+  }
+  for (const key of ["assistantMessageId", "outputText", "outputSummary"]) {
+    delete checkpoint[key];
+  }
+  return checkpoint;
+}
+
+function requireExactApprovalChatParentAuthority(
+  storage: ApprovalEffectsServiceContext["storage"],
+  run: DurableRunRecord,
+  trace: ChatTurnTraceRecord | undefined,
+  expectedTurnId: string,
+): { sessionId: string } {
+  const payload =
+    run.payload && typeof run.payload === "object" && !Array.isArray(run.payload)
+      ? (run.payload as Record<string, unknown>)
+      : {};
+  const request = payload.request;
+  const requestActor = payload.requestActor;
+  if (
+    run.workflowKey !== "chat.turn.execute" ||
+    run.status !== "waiting" ||
+    payload.version !== "chat.turn.execute.v2" ||
+    typeof payload.admissionId !== "string" ||
+    typeof payload.sessionIncarnationId !== "string" ||
+    typeof payload.workspaceId !== "string" ||
+    typeof payload.sessionId !== "string" ||
+    typeof payload.turnId !== "string" ||
+    typeof payload.userMessageId !== "string" ||
+    typeof payload.assistantMessageId !== "string" ||
+    typeof payload.admissionMaterialSha256 !== "string" ||
+    typeof payload.effectiveRequestMaterialSha256 !== "string" ||
+    !Number.isSafeInteger(payload.admissionAggregateRevision) ||
+    !Number.isSafeInteger(payload.admissionControllerGeneration) ||
+    !request ||
+    typeof request !== "object" ||
+    Array.isArray(request) ||
+    !requestActor ||
+    typeof requestActor !== "object" ||
+    Array.isArray(requestActor) ||
+    payload.turnId !== expectedTurnId ||
+    !trace ||
+    trace.turnId !== payload.turnId ||
+    trace.sessionId !== payload.sessionId ||
+    trace.userMessageId !== payload.userMessageId ||
+    trace.assistantMessageId !== payload.assistantMessageId ||
+    (trace.status !== "waiting_for_approval" && trace.status !== "running")
+  ) {
+    throw new Error(`Durable run ${run.runId} has no canonical Chat parent context for approval post-commit.`);
+  }
+  const admission = storage.sessionMutationAdmissions.require(payload.admissionId);
+  const admittedRequest = reconstructAdmittedChatTurnRequest(request as never, payload.surfaceDerivation as never);
+  if (
+    admission.admissionKind !== "turn_write" ||
+    admission.sessionIncarnationId !== payload.sessionIncarnationId ||
+    admission.workspaceId !== payload.workspaceId ||
+    admission.sessionId !== payload.sessionId ||
+    admission.turnId !== payload.turnId ||
+    admission.materialSha256 !== payload.admissionMaterialSha256 ||
+    admission.aggregateRevision !== payload.admissionAggregateRevision ||
+    admission.controllerGeneration !== payload.admissionControllerGeneration ||
+    admission.actorKind !== (requestActor as Record<string, unknown>).actorKind ||
+    admission.actorId !== (requestActor as Record<string, unknown>).actorId ||
+    computeFrozenChatTurnAdmissionMaterialSha256(admittedRequest) !== payload.admissionMaterialSha256 ||
+    computeEffectiveChatTurnRequestMaterialSha256(payload.admissionMaterialSha256, request as never) !==
+      payload.effectiveRequestMaterialSha256
+  ) {
+    throw new Error(`Durable run ${run.runId} approval parent drifted from its mutation admission.`);
+  }
+  assertDurableRetryPolicyMatchesRun(run.metadata?.retryPolicy, run.maxAttempts, DURABLE_RETRY_POLICY_DEFAULT);
+  if (run.metadata?.autonomousAdmission !== undefined) {
+    verifyAutonomousChatAdmissionRunMetadata(run, { admission, trace });
+  } else if (
+    run.metadata?.[AUTONOMOUS_CHAT_POST_COMMIT_PENDING_METADATA_KEY] !== undefined ||
+    run.metadata?.autonomousChatPostCommit !== undefined
+  ) {
+    throw new Error(`Durable run ${run.runId} carries autonomous finalizer evidence without autonomous admission.`);
+  }
+  const authority = readChatTurnRuntimeAuthoritySeal(run.metadata?.[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY]);
+  if (
+    !authority ||
+    authority.material.runId !== run.runId ||
+    authority.material.turnId !== payload.turnId ||
+    authority.material.transitionKind !== "waiting" ||
+    authority.material.durableStatus !== "waiting" ||
+    authority.material.traceStatus !== "waiting_for_approval" ||
+    canonicalJsonString(run.metadata?.waitForEvent) !== canonicalJsonString(authority.material.waitForEvent)
+  ) {
+    throw new Error(`Durable run ${run.runId} has no exact waiting approval runtime authority.`);
+  }
+  const checkpoint = storage.durableRuns.getLatestCheckpointByKind(run.runId, "run_waiting");
+  if (!checkpoint) {
+    throw new Error(`Durable run ${run.runId} has no latest waiting approval authority checkpoint.`);
+  }
+  verifyCheckpointAnchoredChatTurnRuntimeAuthority(run.metadata, checkpoint.state);
+  if (
+    ["outputText", "finalOutput", "outputSummary", "finalSummary", "outputMessageId", "outputTraceStatus"].some(
+      (key) => run.metadata?.[key] !== undefined,
+    ) ||
+    ["assistantMessageId", "outputText", "outputSummary", "outputMessageId", "outputTraceStatus"].some(
+      (key) => checkpoint.state[key] !== undefined,
+    ) ||
+    run.metadata?.linkedFinalizationPending !== undefined ||
+    run.metadata?.linkedFinalization !== undefined ||
+    run.metadata?.chatTurnAdmissionHandoff !== undefined
+  ) {
+    throw new Error(`Durable run ${run.runId} carries stale terminal evidence while waiting for approval.`);
+  }
+  const pending = readExactGeneralChatPostCommitPendingMarker(
+    run.metadata?.[GENERAL_CHAT_POST_COMMIT_PENDING_METADATA_KEY],
+  );
+  const settlement = readExactGeneralChatPostCommitSettlement(run.metadata?.generalChatPostCommit);
+  const matchingPending =
+    pending &&
+    pending.generationId === authority.material.postCommitGenerationId &&
+    pending.traceStatus === authority.material.traceStatus &&
+    pending.requestedAt === authority.material.transitionAt &&
+    canonicalJsonString(pending.postCommitEligibility) ===
+      canonicalJsonString(authority.material.postCommitEligibility);
+  const matchingSettlement =
+    settlement &&
+    settlement.generationId === authority.material.postCommitGenerationId &&
+    settlement.traceStatus === authority.material.traceStatus &&
+    settlement.requestedAt === authority.material.transitionAt &&
+    canonicalJsonString(settlement.postCommitEligibility) ===
+      canonicalJsonString(authority.material.postCommitEligibility) &&
+    (settlement.settlementStatus === "completed" || settlement.settlementStatus === "settled_with_failures") &&
+    typeof settlement.completedAt === "string";
+  if (Boolean(pending) === Boolean(settlement) || (!matchingPending && !matchingSettlement)) {
+    throw new Error(`Durable run ${run.runId} waiting approval finalizer drifted from runtime authority.`);
+  }
+  return { sessionId: payload.sessionId };
+}
+
 export interface ApprovalChatTurnResumeResult {
   resumed: boolean;
   turnId?: string;
@@ -94,6 +327,7 @@ export interface ApprovalResolutionEffectsResult {
 
 export interface ApprovalEffectsServiceDeps {
   backgroundTasks: Set<Promise<void>>;
+  sharedHostLifecycle?: SharedHostLifecycleAdmissionPort;
   wakeDurableRun(
     runId: string,
     event: { eventKey: string; payload?: Record<string, unknown>; correlationId?: string },
@@ -102,6 +336,80 @@ export interface ApprovalEffectsServiceDeps {
   findProactiveDurableRunIdsForApproval(approvalId: string): string[];
   executeCodeModePendingApproval(approvalId: string, signal?: AbortSignal): Promise<ToolInvokeResult | undefined>;
   executeApprovedPendingAction(approvalId: string, signal?: AbortSignal): Promise<ToolInvokeResult | undefined>;
+  executeApprovedSkillHubLifecycleOperation?(
+    operationId: string,
+    approvalId: string,
+    requestSha256: string,
+    signal?: AbortSignal,
+  ): Promise<SkillHubLifecycleApplyResult>;
+  /**
+   * HX-407 C4: executes one approved `external_source.knowledge_snapshot`
+   * recovery through the composed C2 effect service. The executor revalidates
+   * the approval, the full C1 identity chain, current deny-wins policy, and
+   * the managed artifact, and converges on the deterministic terminal effect
+   * row this worker claimed.
+   */
+  executeApprovedExternalSourceKnowledgeSnapshot?(
+    input: { workspaceId: string; approvalId: string },
+    actor: ExternalSourceRequestActor,
+    signal?: AbortSignal,
+  ): Promise<ExternalSourceKnowledgeSnapshotApplyResult>;
+  /**
+   * HX-408 M2: executes one approved `mesh.capability.activate` through the
+   * composed activation owner. The executor revalidates the approval, rebuilds
+   * the exact activation input from live durable state (recovering the
+   * requester from the request Journey evidence), verifies the approved
+   * requestSha256 byte-exactly, and lets the storage activation guard
+   * re-verify binding, health, lease, and caps inside its transaction.
+   */
+  executeApprovedMeshCapabilityActivation?(input: {
+    workspaceId: string;
+    approvalId: string;
+  }): MeshCapabilityActivationApplyResult;
+  /**
+   * HX-402 P1: executes one approved `memory.lifecycle` mutation through the
+   * memory lifecycle owner. The executor revalidates the exact approval
+   * (kind, deterministic identity, workspace linkage, status, expiry),
+   * recovers the requester from the immutable request Journey evidence,
+   * byte-verifies the approved requestSha256 against the rebuilt mutation,
+   * re-checks current policy, and executes only through the approved producer
+   * (which revalidates everything again inside its own transaction).
+   */
+  executeApprovedMemoryLifecycleMutation?(input: {
+    workspaceId: string;
+    approvalId: string;
+  }): MemoryLifecycleApplyResult;
+  /**
+   * HX-402 P2: executes one approved `skill.lifecycle` mutation through the
+   * skill-state owner. The executor revalidates the exact approval (kind,
+   * deterministic identity, status, expiry), recovers the requester from the
+   * immutable request Journey evidence, byte-verifies the approved
+   * requestSha256, re-verifies the exact reviewed state material, re-checks
+   * the pinned policy, and writes the governed evidence pair inside the
+   * canonical transaction.
+   */
+  executeApprovedSkillLifecycleMutation?(input: { approvalId: string }): SkillLifecycleApplyResult;
+  /**
+   * HX-402 P2: executes one approved `capability.lifecycle` candidate
+   * transition through the capability owner under the same revalidation
+   * ladder.
+   */
+  executeApprovedCapabilityLifecycleMutation?(input: { approvalId: string }): CandidateLifecycleActionResult;
+  /**
+   * HX-402 P3: executes one approved `improvement.lifecycle` mutation through
+   * the improvement owner. The executor revalidates the exact approval (kind,
+   * deterministic identity, status, expiry), recovers the requester from the
+   * immutable request Journey evidence, byte-verifies the approved
+   * requestSha256, creates the durable P0 intent, claims it one-winner with
+   * database-clock lease fencing, executes the external callback, re-inspects
+   * exact external state, and commits state + settlement + signal + Journey
+   * in one immediate transaction. The external callback is never described as
+   * database-atomic; the intent state machine is the crash-recovery truth.
+   */
+  executeApprovedImprovementLifecycleMutation?(input: {
+    workspaceId: string;
+    approvalId: string;
+  }): ImprovementLifecycleApplyResult;
   enqueueAfterHooks(input: {
     workspaceId: string;
     trigger: "approval.resolve.after" | "approval.response.after";
@@ -110,6 +418,7 @@ export interface ApprovalEffectsServiceDeps {
     payload: Record<string, unknown>;
   }): void;
   resolveApprovalHookWorkspaceId(payload: Record<string, unknown>): string;
+  resolvePostCommitEligibility?(sessionId: string): PostCommitEligibility;
   recordDurableTimelineEvent?(
     runId: string,
     eventType: "run_completed" | "run_failed",
@@ -127,6 +436,7 @@ export interface ApprovalEffectsServiceContext {
     Storage,
     | "approvalEffects"
     | "approvals"
+    | "skillHubOperations"
     | "approvalWaitRuns"
     | "pendingApprovalActions"
     | "approvalInbox"
@@ -139,6 +449,7 @@ export interface ApprovalEffectsServiceContext {
     | "chatExecutionPlans"
     | "chatTurnTraces"
     | "durableRuns"
+    | "sessionMutationAdmissions"
     | "runImmediateTransaction"
     | "orchestration"
     | "audit"
@@ -191,6 +502,17 @@ export class ApprovalEffectsService {
     this.activeEffectAbortControllers.clear();
   }
 
+  /** Stop future claims while allowing the currently admitted effect to settle. */
+  public stopAdmission(): void {
+    this.workerStopped = true;
+    this.workerRequested = false;
+    this.observabilityWorkerRequested = false;
+    if (this.pollTimer) {
+      clearTimeout(this.pollTimer);
+      this.pollTimer = undefined;
+    }
+  }
+
   public requestEffectProcessing(): void {
     this.requestActionEffectProcessing();
     this.requestObservabilityEffectProcessing();
@@ -205,6 +527,12 @@ export class ApprovalEffectsService {
       return;
     }
     this.workerActive = true;
+    const reservation = this.reserveWorker("approval-effects-action");
+    if (reservation === null) {
+      this.workerActive = false;
+      this.workerRequested = false;
+      return;
+    }
     const backgroundTasks = this.deps.backgroundTasks;
     const task = runWithIsolatedRequestAttribution({}, () =>
       Promise.resolve().then(async () => {
@@ -221,6 +549,7 @@ export class ApprovalEffectsService {
           if (this.actionWorkerTask === task) {
             this.actionWorkerTask = undefined;
           }
+          reservation?.release();
         }
       }),
     );
@@ -237,6 +566,12 @@ export class ApprovalEffectsService {
       return;
     }
     this.observabilityWorkerActive = true;
+    const reservation = this.reserveWorker("approval-effects-observability");
+    if (reservation === null) {
+      this.observabilityWorkerActive = false;
+      this.observabilityWorkerRequested = false;
+      return;
+    }
     const backgroundTasks = this.deps.backgroundTasks;
     const task = runWithIsolatedRequestAttribution({}, () =>
       Promise.resolve().then(async () => {
@@ -250,10 +585,27 @@ export class ApprovalEffectsService {
         } finally {
           this.observabilityWorkerActive = false;
           backgroundTasks.delete(task);
+          reservation?.release();
         }
       }),
     );
     backgroundTasks.add(task);
+  }
+
+  private reserveWorker(label: string): SharedHostWorkReservation | undefined | null {
+    const admission = this.deps.sharedHostLifecycle?.tryReserve("worker", `${label}:${this.workerId}:${randomUUID()}`);
+    if (!admission) return undefined;
+    if (!admission.admitted) return null;
+    const stopOnForceDrain = () => this.stopWorker();
+    admission.reservation.signal.addEventListener("abort", stopOnForceDrain, { once: true });
+    const release = admission.reservation.release.bind(admission.reservation);
+    return {
+      ...admission.reservation,
+      release: () => {
+        admission.reservation.signal.removeEventListener("abort", stopOnForceDrain);
+        release();
+      },
+    };
   }
 
   private publishWorkerFailure(lane: "action" | "observability", error: unknown): void {
@@ -327,6 +679,41 @@ export class ApprovalEffectsService {
     }
     const enqueued: ApprovalEffectRecord[] = [];
     const wakePayload = buildWakePayload(approval, input);
+    if (approval.kind === "skill_hub.lifecycle" && input.decision === "approve") {
+      const intent = materializeApprovedSkillHubIntent(approval);
+      this.ctx.storage.skillHubOperations.createIntent(intent);
+      enqueued.push(
+        this.ctx.storage.approvalEffects.upsert({
+          approvalId: approval.approvalId,
+          effectKind: "skill_hub_lifecycle_apply",
+          targetKind: "skill_hub_operation",
+          targetId: intent.operationId,
+          payload: {
+            operationId: intent.operationId,
+            approvalId: intent.approvalId,
+            requestSha256: intent.requestSha256,
+          },
+        }),
+      );
+    }
+    if (approval.kind === EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_APPROVAL_KIND && input.decision === "approve") {
+      enqueued.push(this.enqueueExternalSourceKnowledgeSnapshotApply(approval));
+    }
+    if (approval.kind === MESH_CAPABILITY_ACTIVATION_APPROVAL_KIND && input.decision === "approve") {
+      enqueued.push(this.enqueueMeshCapabilityActivationApply(approval));
+    }
+    if (approval.kind === MEMORY_LIFECYCLE_APPROVAL_KIND && input.decision === "approve") {
+      enqueued.push(this.enqueueMemoryLifecycleApply(approval));
+    }
+    if (approval.kind === SKILL_LIFECYCLE_APPROVAL_KIND && input.decision === "approve") {
+      enqueued.push(this.enqueueSkillLifecycleApply(approval));
+    }
+    if (approval.kind === CAPABILITY_LIFECYCLE_APPROVAL_KIND && input.decision === "approve") {
+      enqueued.push(this.enqueueCapabilityLifecycleApply(approval));
+    }
+    if (approval.kind === IMPROVEMENT_LIFECYCLE_APPROVAL_KIND && input.decision === "approve") {
+      enqueued.push(this.enqueueImprovementLifecycleApply(approval));
+    }
     enqueued.push(
       this.ctx.storage.approvalEffects.upsert({
         approvalId: approval.approvalId,
@@ -481,6 +868,223 @@ export class ApprovalEffectsService {
       this.requestEffectProcessing();
     }
     return enqueued;
+  }
+
+  /**
+   * HX-407 C4: enqueue the approved knowledge-snapshot recovery on the SAME
+   * deterministic effect identity the C2 materialization writes terminally
+   * (`buildApprovalEffectIdempotencyKey` over approval/effect/target), with the
+   * byte-identical canonical payload, so the pending row this resolution
+   * creates and the terminal row the apply asserts are one row: a replayed
+   * resolution converges on the completed effect instead of double-executing,
+   * and the in-flight worker row satisfies the materialization's exact
+   * payload assert. The payload is server-derived approval material; a
+   * non-canonical payload fails the resolution loudly (fail closed).
+   */
+  private enqueueExternalSourceKnowledgeSnapshotApply(approval: ApprovalRequest): ApprovalEffectRecord {
+    const payload = approval.payload as unknown as ExternalSourceKnowledgeSnapshotApprovalPayload;
+    assertExternalSourceKnowledgeSnapshotApprovalPayload(payload);
+    const identities = deriveExternalSourceKnowledgeSnapshotMaterializedIdentities(payload);
+    if (identities.approvalId !== approval.approvalId) {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: `Approval ${approval.approvalId} payload does not derive its own knowledge-snapshot identity.`,
+      });
+    }
+    // Canonical key order end-to-end: the stored payload_json must equal
+    // canonicalJsonString(payload) byte-for-byte for the C2 insert-site assert.
+    const effectPayload = JSON.parse(
+      canonicalJsonString({
+        ...payload,
+        linkId: identities.linkId,
+        knowledgeDocumentId: identities.knowledgeDocumentId,
+      }),
+    ) as Record<string, unknown>;
+    return this.ctx.storage.approvalEffects.upsert({
+      approvalId: approval.approvalId,
+      effectKind: EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_KIND,
+      targetKind: EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_TARGET_KIND,
+      targetId: identities.targetId,
+      idempotencyKey: identities.effectIdempotencyKey,
+      payload: effectPayload,
+    });
+  }
+
+  /**
+   * HX-408 M2: enqueue the approved mesh capability activation on one
+   * deterministic effect identity per activation, with a server-derived
+   * payload copied from the immutable approval payload. The executor rebuilds
+   * the exact activation input from live durable state and the storage
+   * activation guard re-verifies everything inside its own transaction, so a
+   * replayed resolution converges instead of double-activating.
+   */
+  private enqueueMeshCapabilityActivationApply(approval: ApprovalRequest): ApprovalEffectRecord {
+    const payload = approval.payload as unknown as MeshCapabilityActivationApprovalPayload;
+    assertMeshCapabilityActivationApprovalPayload(payload);
+    return this.ctx.storage.approvalEffects.upsert({
+      approvalId: approval.approvalId,
+      effectKind: MESH_CAPABILITY_ACTIVATION_EFFECT_KIND,
+      targetKind: MESH_CAPABILITY_ACTIVATION_EFFECT_TARGET_KIND,
+      targetId: payload.activationId,
+      idempotencyKey: buildApprovalEffectIdempotencyKey({
+        approvalId: approval.approvalId,
+        effectKind: MESH_CAPABILITY_ACTIVATION_EFFECT_KIND,
+        targetKind: MESH_CAPABILITY_ACTIVATION_EFFECT_TARGET_KIND,
+        targetId: payload.activationId,
+      }),
+      payload: {
+        workspaceId: payload.workspaceId,
+        activationId: payload.activationId,
+        activationRevision: payload.activationRevision,
+        requestSha256: payload.requestSha256,
+      },
+    });
+  }
+
+  /**
+   * HX-402 P1: enqueue the recovered `memory.lifecycle` mutation effect on one
+   * deterministic effect identity per approval, with a server-derived
+   * content-free payload verified against the immutable approval binding. The
+   * executor and the approved producer revalidate everything again, so a
+   * replayed resolution converges instead of double-mutating.
+   */
+  private enqueueMemoryLifecycleApply(approval: ApprovalRequest): ApprovalEffectRecord {
+    const binding = parseMemoryLifecycleApprovalBinding(
+      (approval.payload as Record<string, unknown> | undefined)?.memoryLifecycle,
+    );
+    if (!binding || approval.linkage?.workspaceId !== binding.workspaceId) {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: `Approval ${approval.approvalId} does not carry a canonical memory.lifecycle binding.`,
+      });
+    }
+    return this.ctx.storage.approvalEffects.upsert({
+      approvalId: approval.approvalId,
+      effectKind: MEMORY_LIFECYCLE_EFFECT_KIND,
+      targetKind: MEMORY_LIFECYCLE_EFFECT_TARGET_KIND,
+      targetId: approval.approvalId,
+      idempotencyKey: buildApprovalEffectIdempotencyKey({
+        approvalId: approval.approvalId,
+        effectKind: MEMORY_LIFECYCLE_EFFECT_KIND,
+        targetKind: MEMORY_LIFECYCLE_EFFECT_TARGET_KIND,
+        targetId: approval.approvalId,
+      }),
+      payload: {
+        workspaceId: binding.workspaceId,
+        action: binding.action,
+        subjectKind: binding.subjectKind,
+        ...(binding.subjectId === undefined ? {} : { subjectId: binding.subjectId }),
+        requestSha256: binding.requestSha256,
+      },
+    });
+  }
+
+  /**
+   * HX-402 P2: enqueue the recovered `skill.lifecycle` mutation effect on one
+   * deterministic effect identity per approval, with a server-derived
+   * content-free payload verified against the immutable approval binding. The
+   * executor revalidates everything again, so a replayed resolution converges
+   * instead of double-mutating.
+   */
+  private enqueueSkillLifecycleApply(approval: ApprovalRequest): ApprovalEffectRecord {
+    const binding = parseSkillLifecycleApprovalBinding(
+      (approval.payload as Record<string, unknown> | undefined)?.skillLifecycle,
+    );
+    if (!binding) {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: `Approval ${approval.approvalId} does not carry a canonical skill.lifecycle binding.`,
+      });
+    }
+    return this.ctx.storage.approvalEffects.upsert({
+      approvalId: approval.approvalId,
+      effectKind: SKILL_LIFECYCLE_EFFECT_KIND,
+      targetKind: SKILL_LIFECYCLE_EFFECT_TARGET_KIND,
+      targetId: approval.approvalId,
+      idempotencyKey: buildApprovalEffectIdempotencyKey({
+        approvalId: approval.approvalId,
+        effectKind: SKILL_LIFECYCLE_EFFECT_KIND,
+        targetKind: SKILL_LIFECYCLE_EFFECT_TARGET_KIND,
+        targetId: approval.approvalId,
+      }),
+      payload: {
+        scope: "global",
+        action: binding.action,
+        subjectKind: binding.subjectKind,
+        ...(binding.subjectId === undefined ? {} : { subjectId: binding.subjectId }),
+        requestSha256: binding.requestSha256,
+      },
+    });
+  }
+
+  /** HX-402 P2: enqueue the recovered `capability.lifecycle` candidate effect (same discipline). */
+  private enqueueCapabilityLifecycleApply(approval: ApprovalRequest): ApprovalEffectRecord {
+    const binding = parseCapabilityLifecycleApprovalBinding(
+      (approval.payload as Record<string, unknown> | undefined)?.capabilityLifecycle,
+    );
+    if (!binding) {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: `Approval ${approval.approvalId} does not carry a canonical capability.lifecycle binding.`,
+      });
+    }
+    return this.ctx.storage.approvalEffects.upsert({
+      approvalId: approval.approvalId,
+      effectKind: CAPABILITY_LIFECYCLE_EFFECT_KIND,
+      targetKind: CAPABILITY_LIFECYCLE_EFFECT_TARGET_KIND,
+      targetId: binding.subjectId,
+      idempotencyKey: buildApprovalEffectIdempotencyKey({
+        approvalId: approval.approvalId,
+        effectKind: CAPABILITY_LIFECYCLE_EFFECT_KIND,
+        targetKind: CAPABILITY_LIFECYCLE_EFFECT_TARGET_KIND,
+        targetId: binding.subjectId,
+      }),
+      payload: {
+        scope: "global",
+        action: binding.action,
+        candidateId: binding.subjectId,
+        requestSha256: binding.requestSha256,
+      },
+    });
+  }
+
+  /**
+   * HX-402 P3: enqueue the recovered `improvement.lifecycle` mutation effect
+   * on one deterministic effect identity per approval, with a server-derived
+   * content-free payload verified against the immutable approval binding. The
+   * executor recreates the durable intent and revalidates everything again, so
+   * a replayed resolution converges on the immutable settlement instead of
+   * double-executing the external callback.
+   */
+  private enqueueImprovementLifecycleApply(approval: ApprovalRequest): ApprovalEffectRecord {
+    const binding = parseImprovementLifecycleApprovalBinding(
+      (approval.payload as Record<string, unknown> | undefined)?.improvementLifecycle,
+    );
+    if (!binding || approval.linkage?.workspaceId !== binding.workspaceId) {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: `Approval ${approval.approvalId} does not carry a canonical improvement.lifecycle binding.`,
+      });
+    }
+    return this.ctx.storage.approvalEffects.upsert({
+      approvalId: approval.approvalId,
+      effectKind: IMPROVEMENT_LIFECYCLE_EFFECT_KIND,
+      targetKind: IMPROVEMENT_LIFECYCLE_EFFECT_TARGET_KIND,
+      targetId: approval.approvalId,
+      idempotencyKey: buildApprovalEffectIdempotencyKey({
+        approvalId: approval.approvalId,
+        effectKind: IMPROVEMENT_LIFECYCLE_EFFECT_KIND,
+        targetKind: IMPROVEMENT_LIFECYCLE_EFFECT_TARGET_KIND,
+        targetId: approval.approvalId,
+      }),
+      payload: {
+        workspaceId: binding.workspaceId,
+        operationKind: binding.operationKind,
+        targetKind: binding.targetKind,
+        targetId: binding.targetId,
+        requestSha256: binding.requestSha256,
+      },
+    });
   }
 
   public enqueueApprovalWaitMaterialization(approval: ApprovalRequest): ApprovalEffectRecord | undefined {
@@ -714,6 +1318,27 @@ export class ApprovalEffectsService {
       case "pending_action_execute":
         await this.handlePendingActionExecute(effect, signal);
         return;
+      case "skill_hub_lifecycle_apply":
+        await this.handleSkillHubLifecycleApply(effect, signal);
+        return;
+      case EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_KIND:
+        await this.handleExternalSourceKnowledgeSnapshotApply(effect, signal);
+        return;
+      case MESH_CAPABILITY_ACTIVATION_EFFECT_KIND:
+        this.handleMeshCapabilityActivationApply(effect);
+        return;
+      case MEMORY_LIFECYCLE_EFFECT_KIND:
+        this.handleMemoryLifecycleApply(effect);
+        return;
+      case SKILL_LIFECYCLE_EFFECT_KIND:
+        this.handleSkillLifecycleApply(effect);
+        return;
+      case CAPABILITY_LIFECYCLE_EFFECT_KIND:
+        this.handleCapabilityLifecycleApply(effect);
+        return;
+      case IMPROVEMENT_LIFECYCLE_EFFECT_KIND:
+        this.handleImprovementLifecycleApply(effect);
+        return;
       case "approval_inbox_follow_up":
         await this.handleApprovalInboxFollowUp(effect);
         return;
@@ -738,6 +1363,418 @@ export class ApprovalEffectsService {
 
   private workerIdForEffect(effect: ApprovalEffectRecord): string {
     return effect.effectKind === "approval_observability" ? this.observabilityWorkerId : this.workerId;
+  }
+
+  private async handleSkillHubLifecycleApply(effect: ApprovalEffectRecord, signal?: AbortSignal): Promise<void> {
+    const execute = this.deps.executeApprovedSkillHubLifecycleOperation;
+    const operationId = asOptionalString(effect.payload.operationId);
+    const approvalId = asOptionalString(effect.payload.approvalId);
+    const requestSha256 = asOptionalString(effect.payload.requestSha256);
+    if (!execute || !operationId || !approvalId || !requestSha256) {
+      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+        lastError: "Skill Hub lifecycle effect is missing its executor or immutable operation identity.",
+        result: { operationId, approvalId, configured: Boolean(execute) },
+      });
+      return;
+    }
+    try {
+      const applied = await execute(operationId, approvalId, requestSha256, signal);
+      if (!this.isEffectStillClaimed(effect.effectId)) return;
+      const completed = this.ctx.storage.approvalEffects.completeEffect(
+        effect.effectId,
+        this.workerId,
+        effect.version,
+        {
+          result: {
+            operationId,
+            settlementId: applied.settlement.settlementId,
+            disposition: applied.settlement.disposition,
+            resultSha256: applied.settlement.resultSha256,
+            replayed: applied.replayed,
+          },
+        },
+      );
+      if (!completed) throw new Error(`Skill Hub lifecycle effect ${effect.effectId} lost its completion lease.`);
+    } catch (error) {
+      if (!this.isEffectStillClaimed(effect.effectId)) return;
+      this.deferClaimedEffectForRetry(effect, this.workerId, error, {
+        deliveryState: "retry_scheduled",
+        operationId,
+        approvalId,
+      });
+    }
+  }
+
+  /**
+   * HX-407 C4: execute one approved knowledge-snapshot recovery. The actor is
+   * reconstructed from the approval's own linkage (the authenticated operator
+   * whose request created the approval); the C2 apply then re-runs ownership,
+   * incarnation, drift, revision, artifact, and deny-wins policy checks
+   * against live state. Terminal governance denials (policy flip, expiry,
+   * revoke, drift, conflict) fail the effect closed instead of retrying
+   * forever; only cancellation/lease interruptions defer for retry.
+   */
+  private async handleExternalSourceKnowledgeSnapshotApply(
+    effect: ApprovalEffectRecord,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const execute = this.deps.executeApprovedExternalSourceKnowledgeSnapshot;
+    const workspaceId = asOptionalString(effect.payload.workspaceId);
+    if (!execute || !workspaceId) {
+      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+        lastError: "External source knowledge-snapshot effect is missing its executor or workspace binding.",
+        result: { workspaceId, configured: Boolean(execute) },
+      });
+      return;
+    }
+    let actor: ExternalSourceRequestActor | undefined;
+    try {
+      const approval = this.ctx.storage.approvals.get(effect.approvalId);
+      const linkageActorId = asOptionalString(approval.linkage?.authActorId);
+      const linkageActorSource = asOptionalString(approval.linkage?.authActorSource);
+      if (
+        linkageActorId &&
+        (linkageActorSource === "token" || linkageActorSource === "basic" || linkageActorSource === "loopback")
+      ) {
+        actor = { actorId: linkageActorId, source: linkageActorSource };
+      }
+    } catch {
+      actor = undefined;
+    }
+    if (!actor) {
+      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+        lastError: "External source knowledge-snapshot approval carries no authenticated operator linkage.",
+        result: { approvalId: effect.approvalId },
+      });
+      return;
+    }
+    try {
+      const applied = await execute({ workspaceId, approvalId: effect.approvalId }, actor, signal);
+      if (!this.isEffectStillClaimed(effect.effectId)) return;
+      const completed = this.ctx.storage.approvalEffects.completeEffect(
+        effect.effectId,
+        this.workerId,
+        effect.version,
+        {
+          result: {
+            disposition: "applied",
+            applyDisposition: applied.disposition,
+            linkId: applied.link.linkId,
+            knowledgeDocumentId: applied.knowledgeDocumentId,
+            chunkCount: applied.chunkCount,
+            normalizedArtifactSha256: applied.link.normalizedArtifactSha256,
+            ...(applied.threadKnowledgeAttachmentId
+              ? { threadKnowledgeAttachmentId: applied.threadKnowledgeAttachmentId }
+              : {}),
+          },
+        },
+      );
+      if (!completed) {
+        throw new Error(`External source knowledge-snapshot effect ${effect.effectId} lost its completion lease.`);
+      }
+    } catch (error) {
+      if (!this.isEffectStillClaimed(effect.effectId)) return;
+      // A deny-wins policy denial is the one governance outcome the C2 design
+      // explicitly allows to heal (deny now, re-allow later ⇒ apply succeeds),
+      // so it defers for bounded retry: the approval's own expiry converts a
+      // standing denial into a terminal `approval_expired` failure. Every
+      // other governance denial (expiry, revoke, drift, detach, conflict,
+      // tamper) fails the effect closed immediately.
+      if (
+        error instanceof ExternalSourceKnowledgeEffectServiceError &&
+        error.code !== "cancelled" &&
+        error.code !== "policy_denied"
+      ) {
+        this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+          lastError: error.message,
+          result: {
+            errorCode: error.code,
+            ...(error.reasonCode ? { reasonCode: error.reasonCode } : {}),
+          },
+        });
+        return;
+      }
+      this.deferClaimedEffectForRetry(effect, this.workerId, error, {
+        deliveryState: "retry_scheduled",
+        approvalId: effect.approvalId,
+        ...(error instanceof ExternalSourceKnowledgeEffectServiceError
+          ? { errorCode: error.code, ...(error.reasonCode ? { reasonCode: error.reasonCode } : {}) }
+          : {}),
+      });
+    }
+  }
+
+  /**
+   * HX-408 M2: execute one approved mesh capability activation. Every
+   * governance denial (state drift, expiry, foreign approval, missing request
+   * evidence, storage-guard conflict) is terminal and fails the effect closed
+   * with its content-free code; only unexpected infrastructure errors defer
+   * for bounded retry. Replays converge on the immutable activation row.
+   */
+  private handleMeshCapabilityActivationApply(effect: ApprovalEffectRecord): void {
+    const execute = this.deps.executeApprovedMeshCapabilityActivation;
+    const workspaceId = asOptionalString(effect.payload.workspaceId);
+    if (!execute || !workspaceId) {
+      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+        lastError: "Mesh capability activation effect is missing its executor or workspace binding.",
+        result: { workspaceId, configured: Boolean(execute) },
+      });
+      return;
+    }
+    try {
+      const applied = execute({ workspaceId, approvalId: effect.approvalId });
+      if (!this.isEffectStillClaimed(effect.effectId)) return;
+      const completed = this.ctx.storage.approvalEffects.completeEffect(
+        effect.effectId,
+        this.workerId,
+        effect.version,
+        {
+          result: {
+            disposition: "activated",
+            activationId: applied.activation.activationId,
+            activationRevision: applied.activation.activationRevision,
+            capabilityId: applied.activation.capabilityId,
+            requestSha256: applied.activation.requestSha256,
+            replayed: applied.replayed,
+          },
+        },
+      );
+      if (!completed) {
+        throw new Error(`Mesh capability activation effect ${effect.effectId} lost its completion lease.`);
+      }
+    } catch (error) {
+      if (!this.isEffectStillClaimed(effect.effectId)) return;
+      if (error instanceof MeshCapabilityActivationServiceError) {
+        this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+          lastError: error.message,
+          result: { errorCode: error.code },
+        });
+        return;
+      }
+      this.deferClaimedEffectForRetry(effect, this.workerId, error, {
+        deliveryState: "retry_scheduled",
+        approvalId: effect.approvalId,
+      });
+    }
+  }
+
+  /**
+   * HX-402 P1: execute one approved memory lifecycle mutation. Governance
+   * denials (missing/foreign/expired approval, missing request evidence,
+   * request drift, policy flip, producer state conflict) are terminal and fail
+   * the effect closed with their content-free code; only unexpected
+   * infrastructure errors defer for bounded retry. Replays converge on the
+   * immutable history/Journey/governed-event evidence.
+   */
+  private handleMemoryLifecycleApply(effect: ApprovalEffectRecord): void {
+    const execute = this.deps.executeApprovedMemoryLifecycleMutation;
+    const workspaceId = asOptionalString(effect.payload.workspaceId);
+    if (!execute || !workspaceId) {
+      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+        lastError: "Memory lifecycle effect is missing its executor or workspace binding.",
+        result: { workspaceId, configured: Boolean(execute) },
+      });
+      return;
+    }
+    try {
+      const applied = execute({ workspaceId, approvalId: effect.approvalId });
+      if (!this.isEffectStillClaimed(effect.effectId)) return;
+      const completed = this.ctx.storage.approvalEffects.completeEffect(
+        effect.effectId,
+        this.workerId,
+        effect.version,
+        {
+          result: {
+            disposition: applied.disposition,
+            action: applied.action,
+            subjectKind: applied.subjectKind,
+            ...(applied.subjectId === undefined ? {} : { subjectId: applied.subjectId }),
+            workspaceId: applied.workspaceId,
+            itemIds: applied.itemIds,
+            changedCount: applied.changedCount,
+          },
+        },
+      );
+      if (!completed) {
+        throw new Error(`Memory lifecycle effect ${effect.effectId} lost its completion lease.`);
+      }
+    } catch (error) {
+      if (!this.isEffectStillClaimed(effect.effectId)) return;
+      if (error instanceof MemoryLifecycleApplyError) {
+        this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+          lastError: error.message,
+          result: { errorCode: error.code },
+        });
+        return;
+      }
+      this.deferClaimedEffectForRetry(effect, this.workerId, error, {
+        deliveryState: "retry_scheduled",
+        approvalId: effect.approvalId,
+      });
+    }
+  }
+
+  /**
+   * HX-402 P2: execute one approved skill lifecycle mutation. Governance
+   * denials (missing/foreign/expired approval, missing request evidence,
+   * request/state drift, policy flip, producer state conflict) are terminal
+   * and fail the effect closed with their content-free code; only unexpected
+   * infrastructure errors defer for bounded retry. Replays converge on the
+   * immutable governed-event/Journey evidence (mesh-M2 worker split).
+   */
+  private handleSkillLifecycleApply(effect: ApprovalEffectRecord): void {
+    const execute = this.deps.executeApprovedSkillLifecycleMutation;
+    if (!execute) {
+      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+        lastError: "Skill lifecycle effect is missing its executor.",
+        result: { configured: false },
+      });
+      return;
+    }
+    try {
+      const applied = execute({ approvalId: effect.approvalId });
+      if (!this.isEffectStillClaimed(effect.effectId)) return;
+      const completed = this.ctx.storage.approvalEffects.completeEffect(
+        effect.effectId,
+        this.workerId,
+        effect.version,
+        {
+          result: {
+            disposition: applied.disposition,
+            action: applied.action,
+            subjectKind: applied.subjectKind,
+            ...(applied.subjectId === undefined ? {} : { subjectId: applied.subjectId }),
+            skillIds: applied.skillIds,
+            changedCount: applied.changedCount,
+          },
+        },
+      );
+      if (!completed) {
+        throw new Error(`Skill lifecycle effect ${effect.effectId} lost its completion lease.`);
+      }
+    } catch (error) {
+      if (!this.isEffectStillClaimed(effect.effectId)) return;
+      if (error instanceof SkillLifecycleApplyError) {
+        this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+          lastError: error.message,
+          result: { errorCode: error.code },
+        });
+        return;
+      }
+      this.deferClaimedEffectForRetry(effect, this.workerId, error, {
+        deliveryState: "retry_scheduled",
+        approvalId: effect.approvalId,
+      });
+    }
+  }
+
+  /**
+   * HX-402 P2: execute one approved capability candidate transition under the
+   * same terminal-vs-defer split.
+   */
+  private handleCapabilityLifecycleApply(effect: ApprovalEffectRecord): void {
+    const execute = this.deps.executeApprovedCapabilityLifecycleMutation;
+    if (!execute) {
+      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+        lastError: "Capability lifecycle effect is missing its executor.",
+        result: { configured: false },
+      });
+      return;
+    }
+    try {
+      const applied = execute({ approvalId: effect.approvalId });
+      if (!this.isEffectStillClaimed(effect.effectId)) return;
+      const completed = this.ctx.storage.approvalEffects.completeEffect(
+        effect.effectId,
+        this.workerId,
+        effect.version,
+        {
+          result: {
+            action: applied.action,
+            candidateId: applied.candidateId,
+            selectedVersionId: applied.selectedVersionId,
+            changedVersionIds: applied.changedVersionIds,
+            revision: applied.revision,
+          },
+        },
+      );
+      if (!completed) {
+        throw new Error(`Capability lifecycle effect ${effect.effectId} lost its completion lease.`);
+      }
+    } catch (error) {
+      if (!this.isEffectStillClaimed(effect.effectId)) return;
+      if (error instanceof CapabilityLifecycleApplyError) {
+        this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+          lastError: error.message,
+          result: { errorCode: error.code },
+        });
+        return;
+      }
+      this.deferClaimedEffectForRetry(effect, this.workerId, error, {
+        deliveryState: "retry_scheduled",
+        approvalId: effect.approvalId,
+      });
+    }
+  }
+
+  /**
+   * HX-402 P3: execute one approved improvement lifecycle mutation. Terminal
+   * governance denials (missing/foreign/expired approval, missing request
+   * evidence, request/state drift, tampered binding) fail the effect closed
+   * with their content-free code. A live competing claim and unexpected
+   * infrastructure crashes defer for bounded retry; recovery resumes from the
+   * durable intent and converges on the immutable settlement — including the
+   * truthful `failed`/`aborted` dispositions, which complete the effect with
+   * the settlement they honestly recorded.
+   */
+  private handleImprovementLifecycleApply(effect: ApprovalEffectRecord): void {
+    const execute = this.deps.executeApprovedImprovementLifecycleMutation;
+    const workspaceId = asOptionalString(effect.payload.workspaceId);
+    if (!execute || !workspaceId) {
+      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+        lastError: "Improvement lifecycle effect is missing its executor or workspace binding.",
+        result: { workspaceId, configured: Boolean(execute) },
+      });
+      return;
+    }
+    try {
+      const applied = execute({ workspaceId, approvalId: effect.approvalId });
+      if (!this.isEffectStillClaimed(effect.effectId)) return;
+      const completed = this.ctx.storage.approvalEffects.completeEffect(
+        effect.effectId,
+        this.workerId,
+        effect.version,
+        {
+          result: {
+            disposition: applied.disposition,
+            operationId: applied.operationId,
+            settlementId: applied.settlementId,
+            operationKind: applied.operationKind,
+            targetKind: applied.targetKind,
+            targetId: applied.targetId,
+            ...(applied.activationId === undefined ? {} : { activationId: applied.activationId }),
+            resultSha256: applied.resultSha256,
+            replayed: applied.replayed,
+          },
+        },
+      );
+      if (!completed) {
+        throw new Error(`Improvement lifecycle effect ${effect.effectId} lost its completion lease.`);
+      }
+    } catch (error) {
+      if (!this.isEffectStillClaimed(effect.effectId)) return;
+      if (error instanceof ImprovementLifecycleApplyError) {
+        this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+          lastError: error.message,
+          result: { errorCode: error.code },
+        });
+        return;
+      }
+      this.deferClaimedEffectForRetry(effect, this.workerId, error, {
+        deliveryState: "retry_scheduled",
+        approvalId: effect.approvalId,
+      });
+    }
   }
 
   private async handleWakeEffect(effect: ApprovalEffectRecord, resolveApprovalWait: boolean): Promise<void> {
@@ -1208,26 +2245,47 @@ export class ApprovalEffectsService {
         typeof pendingAction.request?.runId === "string" && pendingAction.request.runId.trim()
           ? pendingAction.request.runId.trim()
           : undefined;
-      this.ctx.publishRealtime(
-        "approval_effect_deferred",
-        "approvals",
+      const deferredReason = "Code Mode execution claim is still active; retry is scheduled.";
+      this.deferClaimedEffectForRetry(
+        effect,
+        this.workerId,
+        new Error(deferredReason),
         {
-          approvalId: effect.approvalId,
-          effectKind: effect.effectKind,
-          targetId: effect.targetId,
+          deliveryState: "retry_scheduled",
           actionType: pendingAction.actionType,
+          approvalId: effect.approvalId,
+          ...(codeModeRunId ? { runId: codeModeRunId } : {}),
           reason: "code_mode_run_already_claimed",
           resolutionStatus: refreshedPendingAction?.resolutionStatus ?? pendingAction.resolutionStatus ?? "pending",
         },
-        {
-          eventClass: "operational_signal",
-          eventAuthority: "retained_stream",
-          links: {
-            approvalId: effect.approvalId,
-            ...(codeModeRunId ? { runId: codeModeRunId } : {}),
-          },
-        },
+        APPROVAL_EFFECT_CODE_MODE_CLAIM_RETRY_MS,
       );
+      try {
+        this.ctx.publishRealtime(
+          "approval_effect_deferred",
+          "approvals",
+          {
+            approvalId: effect.approvalId,
+            effectKind: effect.effectKind,
+            targetId: effect.targetId,
+            actionType: pendingAction.actionType,
+            reason: "code_mode_run_already_claimed",
+            resolutionStatus: refreshedPendingAction?.resolutionStatus ?? pendingAction.resolutionStatus ?? "pending",
+          },
+          {
+            eventClass: "operational_signal",
+            eventAuthority: "retained_stream",
+            links: {
+              approvalId: effect.approvalId,
+              ...(codeModeRunId ? { runId: codeModeRunId } : {}),
+            },
+          },
+        );
+      } catch (diagnosticError) {
+        void diagnosticError;
+        // The durable effect retry is authoritative. A retained-stream
+        // diagnostic failure must not terminalize or strand the pending action.
+      }
       return;
     }
 
@@ -1409,8 +2467,15 @@ export class ApprovalEffectsService {
           .listByTurn(inlineApproval.turnId)
           .find((candidate) => candidate.approvalId === effect.approvalId);
         if (toolRun && toolRun.status !== "executed") {
+          const settlement = buildToolEffectEvidence({ potential: "unknown", phase: "completed" });
           this.ctx.storage.chatToolRuns.patch(toolRun.toolRunId, {
             status: "executed",
+            effectPotential: "unknown",
+            effectDisposition: settlement.disposition,
+            effectOutcomeKind: settlement.outcomeKind,
+            effectEvidence: settlement.evidence,
+            failureGuidance:
+              "Approved execution completed without a canonical effect receipt. Inspect external or runtime state before retrying or running it again.",
             result: toolResult,
             finishedAt: now,
           });
@@ -1710,8 +2775,15 @@ export class ApprovalEffectsService {
         .listByTurn(currentTrace.turnId)
         .find((candidate) => candidate.approvalId === input.approvalId);
       if (toolRun && toolRun.status !== "failed") {
+        const settlement = buildToolEffectEvidence({ potential: "unknown", phase: "dispatch_failed" });
         this.ctx.storage.chatToolRuns.patch(toolRun.toolRunId, {
           status: "failed",
+          effectPotential: "unknown",
+          effectDisposition: settlement.disposition,
+          effectOutcomeKind: settlement.outcomeKind,
+          effectEvidence: settlement.evidence,
+          failureGuidance:
+            "Approved execution may have changed state. Inspect external or runtime state before retry; automatic replay is suppressed.",
           result: input.toolResult,
           error: input.failure.message,
           finishedAt: input.now,
@@ -1915,16 +2987,68 @@ export class ApprovalEffectsService {
           finalized = true;
           return;
         }
-        let metadata: Record<string, unknown> = {
-          ...(latest.metadata ?? {}),
-          outputText: input.outputText,
-          finalOutput: input.outputText,
-          outputSummary: summarizeText(input.outputText),
-          finalSummary: summarizeText(input.outputText),
-        };
+        const outputSummary = summarizeText(input.outputText);
+        const assistantMessageId =
+          linkedTrace?.assistantMessageId ?? `assistant-approved-${input.postCommit?.turnId ?? runId}`;
+        let metadata: Record<string, unknown> =
+          mergeCanonicalDurableChatTerminalOutputMetadata(
+            latest.metadata,
+            terminalStatus === "completed"
+              ? { assistantMessageId, outputText: input.outputText, outputSummary }
+              : undefined,
+          ) ?? {};
+        let checkpointState = buildApprovalTerminalCheckpointState(
+          input.checkpointState,
+          terminalStatus,
+          assistantMessageId,
+          input.outputText,
+          outputSummary,
+        );
         if (input.postCommit && !matchingReceipt) {
           const generationId = randomUUID();
-          metadata = markTerminalChatPostCommitPending(metadata, input.now, input.postCommit.traceStatus, generationId);
+          const parentPayload = requireExactApprovalChatParentAuthority(
+            this.ctx.storage,
+            latest,
+            linkedTrace,
+            input.postCommit.turnId,
+          );
+          const postCommitEligibility = this.deps.resolvePostCommitEligibility?.(parentPayload.sessionId);
+          if (!postCommitEligibility) {
+            throw new Error(`Durable run ${runId} cannot freeze approval post-commit eligibility.`);
+          }
+          metadata = resetChatTurnRuntimeTransitionMetadata(metadata);
+          const includeAutonomous = latest.metadata?.autonomousAdmission !== undefined;
+          metadata = markTerminalChatPostCommitPending(
+            metadata,
+            input.now,
+            input.postCommit.traceStatus,
+            postCommitEligibility,
+            generationId,
+            { includeAutonomous },
+          );
+          const authority = buildChatTurnRuntimeAuthoritySeal({
+            runId,
+            turnId: input.postCommit.turnId,
+            transitionKind: "terminal",
+            durableStatus: terminalStatus,
+            traceStatus: input.postCommit.traceStatus,
+            transitionAt: input.now,
+            postCommitGenerationId: generationId,
+            postCommitEligibility,
+            ...(terminalStatus === "completed"
+              ? {
+                  terminalOutput: {
+                    assistantMessageId,
+                    outputText: input.outputText,
+                    outputSummary,
+                  },
+                }
+              : {}),
+            requiredFinalizers:
+              terminalStatus === "completed" && includeAutonomous ? ["autonomous", "general"] : ["general"],
+          });
+          metadata = withChatTurnRuntimeAuthority(metadata, authority);
+          checkpointState = withChatTurnRuntimeAuthorityCheckpoint(checkpointState, authority);
           metadata[APPROVAL_MATERIALIZED_POST_COMMIT_METADATA_KEY] = {
             version: 1,
             approvalId: input.postCommit.approvalId,
@@ -1953,10 +3077,10 @@ export class ApprovalEffectsService {
           this.ctx.storage.durableRuns.createCheckpoint({
             runId,
             checkpointKind,
-            state: input.checkpointState,
+            state: checkpointState,
             createdAt: input.now,
           });
-          this.deps.recordDurableTimelineEvent?.(runId, checkpointKind, input.checkpointState);
+          this.deps.recordDurableTimelineEvent?.(runId, checkpointKind, checkpointState);
         }
         finalized = true;
       });
@@ -2995,6 +4119,17 @@ function readStoredApprovedActionExecutionFailure(
     asOptionalString(actionRecord.reason) ??
     asOptionalString(actionRecord.error) ??
     "Approved action could not execute.";
+  const executionRecovery = asRecord(actionRecord.executionRecovery);
+  if (
+    actionRecord.manualReconciliationRequired === true ||
+    executionRecovery?.disposition === "manual_reconciliation"
+  ) {
+    return {
+      message: policyReason,
+      kind: "manual_reconciliation",
+      manualReconciliationRequired: true,
+    };
+  }
   const result = asRecord(actionRecord.result);
   const domainFailure = result ? readToolDomainExecutionFailure(result, policyReason) : undefined;
   if (domainFailure) {

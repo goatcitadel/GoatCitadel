@@ -100,6 +100,56 @@ describe("MeshRepository", () => {
     });
   });
 
+  it("restores exact runtime artifacts and removes candidate-only node/token rows", () => {
+    const { db, repo } = createStore();
+    const originalNode = {
+      nodeId: "node-overwritten",
+      label: "Before",
+      advertiseAddress: "https://before.example",
+      transport: "lan" as const,
+      status: "offline" as const,
+      capabilities: ["before"],
+      tlsFingerprint: "before-fingerprint",
+      joinedAt: "2026-01-01T00:00:00.000Z",
+      lastSeenAt: "2026-01-02T00:00:00.000Z",
+    };
+    repo.upsertNode(originalNode);
+    repo.issueJoinToken("existing-token", "2026-12-31T00:00:00.000Z");
+    const existingSnapshot = repo.snapshotRuntimeArtifacts("node-overwritten", "existing-token");
+    const originalTokenRow = db
+      .prepare("SELECT * FROM mesh_join_tokens WHERE token_hash = ?")
+      .get(existingSnapshot.tokenHash);
+
+    repo.upsertNode({
+      ...originalNode,
+      label: "Candidate",
+      joinedAt: "2026-02-01T00:00:00.000Z",
+      lastSeenAt: "2026-02-02T00:00:00.000Z",
+    });
+    repo.issueJoinToken("existing-token", "2027-12-31T00:00:00.000Z");
+    repo.restoreRuntimeArtifacts(existingSnapshot);
+
+    assert.deepEqual(repo.getNode("node-overwritten"), originalNode);
+    assert.deepEqual(
+      db.prepare("SELECT * FROM mesh_join_tokens WHERE token_hash = ?").get(existingSnapshot.tokenHash),
+      originalTokenRow,
+    );
+
+    const insertedSnapshot = repo.snapshotRuntimeArtifacts("candidate-only-node", "candidate-only-token");
+    repo.upsertNode({
+      ...originalNode,
+      nodeId: "candidate-only-node",
+    });
+    repo.issueJoinToken("candidate-only-token", "2027-12-31T00:00:00.000Z");
+    repo.restoreRuntimeArtifacts(insertedSnapshot);
+
+    assert.throws(() => repo.getNode("candidate-only-node"), /not found/);
+    assert.equal(
+      db.prepare("SELECT * FROM mesh_join_tokens WHERE token_hash = ?").get(insertedSnapshot.tokenHash),
+      undefined,
+    );
+  });
+
   it("joins and lists nodes with defaults, optional fields, and status counts", () => {
     const { db, repo } = createStore();
     repo.issueJoinToken("join-token-defaults", "2026-12-31T00:00:00.000Z");
@@ -236,11 +286,7 @@ describe("MeshRepository", () => {
     // First claimer wins the CAS (UPDATE … WHERE epoch = 1 affects one row). Its
     // returned record reads through the frozen SELECT, so correctness is asserted
     // below against the real `repo` rather than this return value.
-    racingRepo.claimSessionOwner(
-      "session-1",
-      { ownerNodeId: "node-b", expectedEpoch: 1 },
-      "2026-02-28T10:00:10.000Z",
-    );
+    racingRepo.claimSessionOwner("session-1", { ownerNodeId: "node-b", expectedEpoch: 1 }, "2026-02-28T10:00:10.000Z");
 
     // Second claimer reads the same stale epoch-1 snapshot but its UPDATE finds
     // no epoch-1 row (already bumped to 2) → changes === 0 → ConflictError.

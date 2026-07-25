@@ -503,7 +503,9 @@ describe("auth routes", () => {
     expect(source).toMatch(
       /fastify\.post\(\s*"\/api\/v1\/auth\/device-requests"[\s\S]*?rateLimit:\s*\{[\s\S]*?max:\s*5/,
     );
-    expect(source).toMatch(/fastify\.post\("\/api\/v1\/auth\/companion\/session\/exchange", deviceAuthRoute/);
+    expect(source).toMatch(
+      /fastify\.post\("\/api\/v1\/auth\/companion\/session\/exchange", deviceSessionExchangeRoute/,
+    );
     expect(source).toMatch(/fastify\.post\("\/api\/v1\/auth\/companion\/session\/refresh", publicAuthRoute/);
     expect(source).toMatch(
       /fastify\.post\("\/api\/v1\/auth\/companion\/sessions\/:sessionId\/revoke", operatorMutationRoute/,
@@ -674,6 +676,47 @@ describe("auth routes", () => {
     });
   });
 
+  it("forwards the correlation id and marks the device-grant revoke committed on canonical commit", async () => {
+    app = await buildApp("token");
+    const revokeSpy = vi.fn(async (grantId: string) => ({
+      grantId,
+      requestId: "request-device-1",
+      actorId: `device:${grantId}`,
+      deviceLabel: "LAN laptop",
+      deviceType: "desktop",
+      platform: "windows",
+      grantedBy: "operator:test",
+      createdAt: "2026-03-10T11:55:00.000Z",
+      revokedAt: "2026-03-10T12:10:00.000Z",
+      metadata: {},
+      principalPurpose: "general_companion",
+    }));
+    (
+      app as unknown as { services: { authAdmin: Record<string, unknown> } }
+    ).services.authAdmin.revokeDeviceAccessGrant = revokeSpy;
+    let committed: boolean | undefined;
+    app.addHook("onResponse", async (request) => {
+      committed = (request as { mutationCommitted?: boolean }).mutationCommitted;
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/devices/ef7d2d5a-f19c-4aa0-b5cf-1a501928ea3f/revoke",
+      headers: {
+        Authorization: "Bearer test-token",
+        "x-goatcitadel-correlation-id": "corr-device-revoke-1",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(revokeSpy).toHaveBeenCalledWith(
+      "ef7d2d5a-f19c-4aa0-b5cf-1a501928ea3f",
+      expect.any(String),
+      expect.objectContaining({ correlationId: "corr-device-revoke-1" }),
+    );
+    expect(committed).toBe(true);
+  });
+
   it("exchanges a device grant for a companion session bundle", async () => {
     app = await buildApp("token");
     const response = await app.inject({
@@ -791,6 +834,41 @@ describe("auth routes", () => {
         revokedAt: "2026-03-10T12:25:00.000Z",
       },
     });
+  });
+
+  it("forwards the correlation id and marks the companion-session revoke committed on canonical commit", async () => {
+    app = await buildApp("token");
+    const revokeSpy = vi.fn(async (sessionId: string) => ({
+      session: {
+        sessionId,
+        grantId: "ef7d2d5a-f19c-4aa0-b5cf-1a501928ea3f",
+        actorId: `companion:${sessionId}`,
+        revokedAt: "2026-03-10T12:25:00.000Z",
+      },
+    }));
+    (app as unknown as { services: { authAdmin: Record<string, unknown> } }).services.authAdmin.revokeCompanionSession =
+      revokeSpy;
+    let committed: boolean | undefined;
+    app.addHook("onResponse", async (request) => {
+      committed = (request as { mutationCommitted?: boolean }).mutationCommitted;
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/v1/auth/companion/sessions/${COMPANION_SESSION_ID}/revoke`,
+      headers: {
+        Authorization: "Bearer test-token",
+        "x-goatcitadel-correlation-id": "corr-companion-revoke-1",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(revokeSpy).toHaveBeenCalledWith(
+      COMPANION_SESSION_ID,
+      expect.any(String),
+      expect.objectContaining({ correlationId: "corr-companion-revoke-1" }),
+    );
+    expect(committed).toBe(true);
   });
 
   it("lists companion audit events for operator-authenticated requests", async () => {

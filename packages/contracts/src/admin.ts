@@ -92,6 +92,14 @@ export type DatabaseCutoverMode = "dry_run" | "execute";
 export type DatabaseCutoverStatus = "ready" | "completed" | "blocked" | "failed";
 export type DatabaseCutoverStepStatus = "pending" | "completed" | "skipped" | "blocked" | "failed";
 
+export interface DatabaseCutoverRequest {
+  profile: DatabaseCutoverProfile;
+  execute: boolean;
+  confirm?: boolean;
+  /** Required and positive for execute; optional for a non-mutating dry run. */
+  expectedRevision?: number;
+}
+
 export interface DatabaseCutoverStepRecord {
   id: string;
   label: string;
@@ -112,6 +120,14 @@ export interface DatabaseCutoverResponse {
   profile: DatabaseCutoverProfile;
   mode: DatabaseCutoverMode;
   status: DatabaseCutoverStatus;
+  /** Settings generation revision observed or committed by this cutover. */
+  revision: number;
+  /** Driver persisted in canonical config for the next Gateway process. */
+  configuredDriver: "sqlite" | "postgres";
+  /** Driver backing the current process's already-created Storage instance. */
+  activeStorageDriver: "sqlite" | "postgres";
+  /** True when the configured driver will not become active until restart. */
+  restartRequired: boolean;
   startedAt: string;
   finishedAt: string;
   backup?: BackupCreateResponse;

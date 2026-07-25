@@ -35,7 +35,7 @@
       "catalogExposure": "suggestable"
     },
     {
-      "skillId": "bundled:GoatCitadel Native Safe Improvement",
+      "skillId": "bundled:goatcitadel-native-safe-self-improvement",
       "owner": "library",
       "source": "bundled",
       "riskTier": "high",

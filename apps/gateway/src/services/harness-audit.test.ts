@@ -46,6 +46,7 @@ describe("buildHarnessAuditReport", () => {
         },
       ],
       policy: {
+        revision: 1,
         guardedAutoThreshold: 0.72,
         requireFirstUseConfirmation: true,
       },

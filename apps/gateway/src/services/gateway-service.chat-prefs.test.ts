@@ -87,17 +87,11 @@ describe("GatewayService chat session provider normalization", () => {
     });
   });
 
-  it("repairs stale cross-provider model selections to the selected provider default", () => {
+  it("normalizes stale cross-provider model selections to the selected provider default", () => {
     const initialPrefs = createPrefs({
       providerId: "openai",
       model: "claude-sonnet-4-6",
     });
-    const patchedPrefs = createPrefs({
-      providerId: "openai",
-      model: "gpt-5.4-mini",
-      updatedAt: "2026-04-03T00:01:00.000Z",
-    });
-
     const gateway = Object.create(GatewayService.prototype) as any;
 
     gateway.getSession = vi.fn(() => ({ sessionId: "sess-1" }));
@@ -115,15 +109,11 @@ describe("GatewayService chat session provider normalization", () => {
     gateway.storage = {
       chatSessionPrefs: {
         ensure: vi.fn(() => initialPrefs),
-        patch: vi.fn(() => patchedPrefs),
       },
     };
 
     const prefs = GatewayService.prototype.getChatSessionPrefs.call(gateway, "sess-1");
 
-    expect(gateway.storage.chatSessionPrefs.patch).toHaveBeenCalledWith("sess-1", {
-      model: "gpt-5.4-mini",
-    });
     expect(prefs.providerId).toBe("openai");
     expect(prefs.model).toBe("gpt-5.4-mini");
   });

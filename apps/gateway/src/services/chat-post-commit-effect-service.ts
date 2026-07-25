@@ -1,39 +1,63 @@
 import type { Storage } from "@goatcitadel/storage";
 import type { GeneralChatPostCommitDurableEffectExecutionInput } from "./chat-durable-run-service.js";
 import type { GeneralChatPostCommitEffectExecutionContext } from "./durable-execution-service.js";
-import type { BackgroundReviewService } from "./background-review-service.js";
 import {
-  commitGeneralChatPostCommitBackgroundSkillDecision,
+  buildBackgroundReviewMemoryEvidenceFingerprints,
+  buildBackgroundReviewSkillEvidenceFingerprint,
+  type BackgroundReviewService,
+} from "./background-review-service.js";
+import {
   commitGeneralChatPostCommitStage,
-  readGeneralChatPostCommitBackgroundSkillDecision,
   readGeneralChatPostCommitStage,
-  type GeneralChatPostCommitBackgroundSkillDecision,
+  readGeneralChatPostCommitStageResult,
+  type ChatPostCommitAtomicStageAuthorityPort,
+  type ChatPostCommitAuthorityDecision,
+  type ChatPostCommitEffectAuthorityContext,
+  type ChatPostCommitEffectReceiptStoragePort,
+  type ChatPostCommitFrozenEligibility,
   type GeneralChatPostCommitCanonicalEffect,
   type GeneralChatPostCommitCanonicalStage,
-  type ChatPostCommitEffectReceiptStoragePort,
+  type GeneralChatPostCommitStageCommitOptions,
   type GeneralChatPostCommitStageIdentity,
-  type GeneralChatPostCommitStageReceipt,
 } from "./chat-post-commit-effect-receipt.js";
 import type { CommitmentClassifierService } from "./gateway/commitment-classifier-service.js";
-import type { MemoryMaintenanceService } from "./memory-maintenance-service.js";
 import { IDEMPOTENT_REALTIME_ENVELOPE_KEY } from "./realtime-event-service.js";
 
 const BACKGROUND_REVIEW_TURNS_SINCE_SETTING_KEY = "background_review_turns_since_v1";
 const BACKGROUND_REVIEW_TURN_INTERVAL = 5;
 
-export type ChatPostCommitEffectStoragePort = Pick<Storage, "chatSessionMeta" | "systemSettings"> &
-  ChatPostCommitEffectReceiptStoragePort;
+export type ChatPostCommitEffectStoragePort = Pick<Storage, "systemSettings"> & ChatPostCommitEffectReceiptStoragePort;
 
-export interface ChatPostCommitEffectServiceDeps {
+export interface ChatPostCommitPredispatchAuthorityInput {
+  authority: ChatPostCommitEffectAuthorityContext;
+  parentRunId: string;
+  postCommitGenerationId: string;
+  effect: GeneralChatPostCommitCanonicalEffect;
+}
+
+/** D2-owned implementation port; D3 deliberately knows no storage admission API. */
+export interface ChatPostCommitEffectAuthorityPort {
+  predispatch(input: ChatPostCommitPredispatchAuthorityInput): ChatPostCommitAuthorityDecision;
+  atomicStage: ChatPostCommitAtomicStageAuthorityPort;
+}
+
+interface ChatPostCommitEffectServiceBaseDeps {
   readonly storage: ChatPostCommitEffectStoragePort;
   readonly commitmentClassifier: CommitmentClassifierService;
   readonly backgroundReview: BackgroundReviewService;
-  readonly memoryMaintenance: MemoryMaintenanceService;
   isAutonomyDisabled(): boolean;
-  isReplayScratchSession(sessionId: string): boolean;
   publishRealtime(eventType: string, source: string, payload: Record<string, unknown>): void;
-  requestDurableRunProcessing(runId: string): void;
 }
+
+export type ChatPostCommitEffectServiceDeps = ChatPostCommitEffectServiceBaseDeps &
+  (
+    | { readonly effectAuthority: ChatPostCommitEffectAuthorityPort; readonly allowUnfencedForTests?: false }
+    | {
+        readonly effectAuthority?: undefined;
+        /** Explicit standalone-test seam. Production composition must never set this. */
+        readonly allowUnfencedForTests: true;
+      }
+  );
 
 interface EligibleHumanTurn {
   autonomyEnabled: true;
@@ -45,10 +69,20 @@ type HumanTurnEligibility =
   | { eligible: true; guards: EligibleHumanTurn }
   | { eligible: false; result: Record<string, unknown> };
 
+type AuthorityAwareExecutionContext = GeneralChatPostCommitEffectExecutionContext & {
+  /** Frozen by the durable boundary; never synthesized from current session metadata. */
+  postCommitAuthority?: ChatPostCommitEffectAuthorityContext;
+};
+
+type EligibilityAwareEffectInput = GeneralChatPostCommitDurableEffectExecutionInput & {
+  postCommitEligibility?: unknown;
+};
+
 /**
  * Canonical downstream owner for deterministic `chat.post_commit.effect`
- * children. Provider reads may repeat, but every stateful stage commits under
- * the child's database-clock lease fence with a receipt in the same transaction.
+ * children. Background review is evidence-only and maintenance is production-
+ * dark. Commitments remain the sole stateful domain path and are fenced by the
+ * explicit D2 authority seam when it is configured.
  */
 export class ChatPostCommitEffectService {
   public constructor(private readonly deps: ChatPostCommitEffectServiceDeps) {}
@@ -58,6 +92,7 @@ export class ChatPostCommitEffectService {
     context: GeneralChatPostCommitEffectExecutionContext,
   ): Promise<Record<string, unknown>> {
     context.signal?.throwIfAborted();
+    this.assertAuthorityMatchesExecution(input, context);
     let result: Record<string, unknown>;
     switch (input.effect) {
       case "commitments":
@@ -81,7 +116,7 @@ export class ChatPostCommitEffectService {
       workspaceId: input.workspaceId,
       sessionId: input.sessionId,
       turnId: input.turnId,
-      deliverySemantics: "canonical_writes_exactly_once_provider_reads_at_least_once",
+      deliverySemantics: "canonical_receipts_exactly_once_provider_reads_at_least_once",
     };
   }
 
@@ -89,207 +124,207 @@ export class ChatPostCommitEffectService {
     input: Extract<GeneralChatPostCommitDurableEffectExecutionInput, { effect: "commitments" }>,
     context: GeneralChatPostCommitEffectExecutionContext,
   ): Promise<Record<string, unknown>> {
-    const eligibility = this.resolveEligibleHumanTurn(input.sessionId, input.autonomous);
-    if (!eligibility.eligible) {
-      return eligibility.result;
-    }
     const identity = this.stageIdentity(context, "commitments", "commitments_write");
     const existing = readGeneralChatPostCommitStage(this.deps.storage, identity);
     if (existing) {
-      return existing.result;
+      return readGeneralChatPostCommitStageResult(existing);
     }
+    const predispatch = this.resolvePredispatch(context, "commitments");
+    if (predispatch === "late_blocked") {
+      return this.commitLateBlocked(identity, context);
+    }
+    const eligibility = this.resolveEligibleHumanTurn(input);
+    if (!eligibility.eligible) {
+      return this.commitResult(identity, context, eligibility.result);
+    }
+
     const classifications = await this.deps.commitmentClassifier.classifyTurnForCommitments({
       sessionId: input.sessionId,
       workspaceId: input.workspaceId,
+      sourceTurnId: input.turnId,
       userText: input.userText,
       assistantText: input.assistantText,
       ...(context.signal ? { signal: context.signal } : {}),
     });
     context.signal?.throwIfAborted();
-    return commitGeneralChatPostCommitStage(this.deps.storage, identity, () => {
-      const persisted = this.deps.commitmentClassifier.persistTurnCommitments(
-        {
-          sessionId: input.sessionId,
-          workspaceId: input.workspaceId,
-          userText: input.userText,
-          assistantText: input.assistantText,
-          ...eligibility.guards,
-          ...(context.signal ? { signal: context.signal } : {}),
+    return readGeneralChatPostCommitStageResult(
+      commitGeneralChatPostCommitStage(
+        this.deps.storage,
+        identity,
+        () => {
+          const persisted = this.deps.commitmentClassifier.persistTurnCommitments(
+            {
+              sessionId: input.sessionId,
+              workspaceId: input.workspaceId,
+              userText: input.userText,
+              assistantText: input.assistantText,
+              ...eligibility.guards,
+              ...(context.signal ? { signal: context.signal } : {}),
+            },
+            classifications,
+            { strict: true },
+          );
+          return {
+            value: persisted,
+            result: { status: "classified", persistedCount: persisted.length },
+          };
         },
-        classifications,
-        { strict: true },
-      );
-      const result = { status: "classified", persistedCount: persisted.length };
-      return { value: persisted, result };
-    }).receipt.result;
+        this.stageCommitOptions(context, true),
+      ).receipt,
+    );
   }
 
   private async executeBackgroundReview(
     input: Extract<GeneralChatPostCommitDurableEffectExecutionInput, { effect: "background_review" }>,
     context: GeneralChatPostCommitEffectExecutionContext,
   ): Promise<Record<string, unknown>> {
-    if (input.delegatedChild) {
-      return { status: "skipped", reason: "delegated_child" };
+    const evidenceIdentity = this.stageIdentity(context, "background_review", "background_evidence");
+    const existingEvidence = readGeneralChatPostCommitStage(this.deps.storage, evidenceIdentity);
+    if (existingEvidence) {
+      return readGeneralChatPostCommitStageResult(existingEvidence);
     }
-    const eligibility = this.resolveEligibleHumanTurn(input.sessionId, input.autonomous);
+    const counterIdentity = this.stageIdentity(context, "background_review", "background_counter");
+    const existingCounter = readGeneralChatPostCommitStage(this.deps.storage, counterIdentity);
+    // A late nonterminal guard cancels the child admission. Its content-free
+    // receipt is therefore the terminal effect result; never attempt a second
+    // evidence-stage settlement against that already-closed admission.
+    if (existingCounter?.disposition === "late_blocked") {
+      return readGeneralChatPostCommitStageResult(existingCounter);
+    }
+    const predispatch = this.resolvePredispatch(context, "background_review");
+    if (predispatch === "late_blocked") {
+      return this.commitLateBlocked(evidenceIdentity, context);
+    }
+    const eligibility = this.resolveEligibleHumanTurn(input);
     if (!eligibility.eligible) {
-      return eligibility.result;
+      return this.commitResult(evidenceIdentity, context, eligibility.result);
+    }
+    if (input.delegatedChild) {
+      return this.commitResult(evidenceIdentity, context, { status: "skipped", reason: "delegated_child" });
     }
 
-    const counter = this.readOrCommitStage(context, "background_review", "background_counter", () => {
-      const due = this.advanceBackgroundReviewCounter();
-      return { value: due, result: { due } };
-    });
-    if (counter.result.due !== true) {
-      return { status: "skipped", reason: "counter_not_due" };
-    }
-
-    const memoryIdentity = this.stageIdentity(context, "background_review", "background_memory");
-    let memory = readGeneralChatPostCommitStage(this.deps.storage, memoryIdentity);
-    if (!memory) {
-      const facts = await this.deps.backgroundReview.extractTurnMemoryFacts(
-        input.userText,
-        input.assistantText,
-        context.signal,
-      );
-      context.signal?.throwIfAborted();
-      memory = commitGeneralChatPostCommitStage(this.deps.storage, memoryIdentity, () => {
-        const write =
-          facts.length > 0
-            ? this.deps.backgroundReview.recordMemoryFacts(input.workspaceId, facts, { strict: true })
-            : undefined;
-        const result = {
-          memoryFactCount: facts.length,
-          memoryOutcome: write?.outcome ?? "none",
-        };
-        return { value: write, result };
-      }).receipt;
-    }
-
-    const skillIdentity = this.stageIdentity(context, "background_review", "background_skill");
-    let skill = readGeneralChatPostCommitStage(this.deps.storage, skillIdentity);
-    if (!skill) {
-      let proposedDecision: GeneralChatPostCommitBackgroundSkillDecision | undefined =
-        readGeneralChatPostCommitBackgroundSkillDecision(this.deps.storage, skillIdentity);
-      if (!proposedDecision) {
-        const suggestion = await this.deps.backgroundReview.suggestTurnSkill(
-          input.userText,
-          input.assistantText,
-          context.signal,
-        );
-        context.signal?.throwIfAborted();
-        const plan = this.deps.backgroundReview.prepareSuggestedSkillMutation(
-          suggestion,
-          input.turnId,
-          context.effectRunId,
-        );
-        proposedDecision = plan ? { version: 1, shouldAuthor: true, plan } : { version: 1, shouldAuthor: false };
-      }
-      const decision = commitGeneralChatPostCommitBackgroundSkillDecision(
+    const counter =
+      existingCounter ??
+      commitGeneralChatPostCommitStage(
         this.deps.storage,
-        skillIdentity,
-        proposedDecision,
-      );
-      if (decision.shouldAuthor) {
-        this.deps.backgroundReview.applyPreparedSkillMutationFiles(decision.plan);
-      }
-      skill = commitGeneralChatPostCommitStage(this.deps.storage, skillIdentity, () => {
-        const mutation = decision.shouldAuthor
-          ? this.deps.backgroundReview.commitPreparedSkillMutation(decision.plan)
-          : undefined;
-        const result = {
-          skillProposed: decision.shouldAuthor,
-          skillMutationApplied: Boolean(mutation),
-          ...(mutation?.skillId ? { skillId: mutation.skillId } : {}),
-        };
-        return { value: mutation, result };
-      }).receipt;
+        counterIdentity,
+        () => {
+          const due = this.advanceBackgroundReviewCounter();
+          return { value: due, result: { due } };
+        },
+        this.stageCommitOptions(context, false),
+      ).receipt;
+    if (counter.disposition === "late_blocked") {
+      return readGeneralChatPostCommitStageResult(counter);
+    }
+    if (counter.result.due !== true) {
+      return this.commitResult(evidenceIdentity, context, { status: "skipped", reason: "counter_not_due" });
     }
 
-    const memoryFactCount = readNumber(memory.result.memoryFactCount);
-    const skillProposed = skill.result.skillProposed === true;
-    const skillId = readString(skill.result.skillId);
-    const summaryMarker = buildSummaryMarker(readString(memory.result.memoryOutcome), skillId);
-    if (summaryMarker) {
+    const lineage = {
+      workspaceId: input.workspaceId,
+      sessionId: input.sessionId,
+      sourceTurnId: input.turnId,
+      effectExecutionId: context.effectRunId,
+    };
+    const facts = await this.deps.backgroundReview.extractTurnMemoryFacts(
+      input.userText,
+      input.assistantText,
+      context.signal,
+      lineage,
+    );
+    context.signal?.throwIfAborted();
+    const suggestion = await this.deps.backgroundReview.suggestTurnSkill(
+      input.userText,
+      input.assistantText,
+      context.signal,
+      lineage,
+    );
+    context.signal?.throwIfAborted();
+
+    const memoryEvidenceFingerprints = buildBackgroundReviewMemoryEvidenceFingerprints(facts);
+    const skillEvidenceFingerprint = buildBackgroundReviewSkillEvidenceFingerprint(suggestion);
+    const result = readGeneralChatPostCommitStageResult(
+      commitGeneralChatPostCommitStage(
+        this.deps.storage,
+        evidenceIdentity,
+        () => ({
+          value: undefined,
+          result: {
+            status: "evidence_recorded",
+            memoryFactCount: memoryEvidenceFingerprints.length,
+            memoryEvidenceFingerprints,
+            skillProposed: Boolean(skillEvidenceFingerprint),
+            ...(skillEvidenceFingerprint ? { skillEvidenceFingerprint } : {}),
+            promotionDisposition: "governed_review_required",
+          },
+        }),
+        this.stageCommitOptions(context, true),
+      ).receipt,
+    );
+    if (result.status === "evidence_recorded") {
       this.publishIdempotent(
         "self_improvement_review",
         "system",
         {
-          type: "background_review",
+          type: "background_review_evidence",
           sessionId: input.sessionId,
           workspaceId: input.workspaceId,
-          summaryMarker,
-          memoryFactCount,
-          skillProposed,
-          ...(skillId ? { skillId } : {}),
+          memoryFactCount: readNumber(result.memoryFactCount),
+          skillProposed: result.skillProposed === true,
+          promotionDisposition: "governed_review_required",
         },
-        `${context.effectRunId}:background-review`,
-        skill.completedAt,
+        `${context.effectRunId}:background-review-evidence`,
+        new Date().toISOString(),
       );
     }
-    return {
-      status: "reviewed",
-      memoryFactCount,
-      skillProposed,
-      ...(skillId ? { skillId } : {}),
-    };
+    return result;
   }
 
   private executeMemoryMaintenance(
     input: Extract<GeneralChatPostCommitDurableEffectExecutionInput, { effect: "memory_maintenance" }>,
     context: GeneralChatPostCommitEffectExecutionContext,
   ): Record<string, unknown> {
-    if (input.delegatedChild) {
-      return { status: "skipped", reason: "delegated_child" };
+    const identity = this.stageIdentity(context, "memory_maintenance", "memory_maintenance_evaluation");
+    const existing = readGeneralChatPostCommitStage(this.deps.storage, identity);
+    if (existing) {
+      return readGeneralChatPostCommitStageResult(existing);
     }
-    const receipt = this.readOrCommitStage(context, "memory_maintenance", "memory_maintenance_evaluation", () => {
-      const result = this.deps.memoryMaintenance.noteSuccessfulRootTurnSync(input.sessionId);
-      return { value: result, result: { ...result } };
-    });
-    const result = receipt.result;
-    const memoryMaintenanceRunId = readString(result.memoryMaintenanceRunId);
-    const durableRunId = readString(result.durableRunId);
-    if (result.status === "enqueued" && memoryMaintenanceRunId && durableRunId) {
-      const payload = {
-        workspaceId: input.workspaceId,
-        runId: memoryMaintenanceRunId,
-        durableRunId,
-        triggerSource: "hybrid_due",
-      };
-      this.publishIdempotent(
-        "system",
-        "memory",
-        { type: "memory_maintenance_run_created", ...payload },
-        `${context.effectRunId}:memory-maintenance-created`,
-        receipt.completedAt,
-      );
-      this.publishIdempotent(
-        "system",
-        "durable",
-        { type: "durable_run_created", runId: durableRunId, workflowKey: "memory.maintenance", status: "queued" },
-        `${context.effectRunId}:memory-maintenance-durable-created`,
-        receipt.completedAt,
-      );
-      this.deps.requestDurableRunProcessing(durableRunId);
+    const predispatch = this.resolvePredispatch(context, "memory_maintenance");
+    if (predispatch === "late_blocked") {
+      return this.commitLateBlocked(identity, context);
     }
-    return result;
+    const eligibility = this.resolveEligibleHumanTurn({ ...input, autonomous: false });
+    if (!eligibility.eligible) {
+      return this.commitResult(identity, context, eligibility.result);
+    }
+    const result = input.delegatedChild
+      ? { status: "skipped", reason: "delegated_child" }
+      : {
+          status: "production_dark",
+          reason: "governed_memory_promotion_not_implemented",
+          enqueueDisposition: "not_enqueued",
+        };
+    return this.commitResult(identity, context, result);
   }
 
-  private resolveEligibleHumanTurn(sessionId: string, autonomous: boolean): HumanTurnEligibility {
-    if (autonomous) {
+  private resolveEligibleHumanTurn(
+    input: EligibilityAwareEffectInput | (EligibilityAwareEffectInput & { autonomous: boolean }),
+  ): HumanTurnEligibility {
+    const frozen = readFrozenEligibility(input.postCommitEligibility);
+    if (!frozen) {
+      return { eligible: false, result: { status: "skipped", reason: "frozen_eligibility_invalid" } };
+    }
+    if ("autonomous" in input && input.autonomous) {
       return { eligible: false, result: { status: "skipped", reason: "autonomous_turn" } };
     }
-    if (this.deps.isAutonomyDisabled()) {
+    if (!frozen.autonomyEnabledAtParentSettlement || this.deps.isAutonomyDisabled()) {
       return { eligible: false, result: { status: "skipped", reason: "autonomy_disabled" } };
     }
-    const origin = this.deps.storage.chatSessionMeta.get(sessionId)?.origin;
-    const evalIntegrityTurn = origin === "prompt_pack";
-    const humanSession =
-      origin !== "system" && origin !== "prompt_pack" && !this.deps.isReplayScratchSession(sessionId);
-    if (evalIntegrityTurn || !humanSession) {
+    if (frozen.evalIntegrityTurn || !frozen.humanSession) {
       return {
         eligible: false,
-        result: { status: "skipped", reason: evalIntegrityTurn ? "eval_integrity" : "non_human_session" },
+        result: { status: "skipped", reason: frozen.evalIntegrityTurn ? "eval_integrity" : "non_human_session" },
       };
     }
     return {
@@ -305,17 +340,162 @@ export class ChatPostCommitEffectService {
     ).due;
   }
 
-  private readOrCommitStage<TValue>(
+  private resolvePredispatch(
     context: GeneralChatPostCommitEffectExecutionContext,
     effect: GeneralChatPostCommitCanonicalEffect,
-    stage: GeneralChatPostCommitCanonicalStage,
-    apply: () => { value: TValue; result: Record<string, unknown> },
-  ): GeneralChatPostCommitStageReceipt {
-    const identity = this.stageIdentity(context, effect, stage);
-    return (
-      readGeneralChatPostCommitStage(this.deps.storage, identity) ??
-      commitGeneralChatPostCommitStage(this.deps.storage, identity, apply).receipt
+  ): ChatPostCommitAuthorityDecision {
+    const authority = this.resolveAuthority(context);
+    if (!authority) {
+      return "allowed";
+    }
+    const decision = this.deps.effectAuthority!.predispatch({
+      authority,
+      parentRunId: context.parentRunId,
+      postCommitGenerationId: context.generationId,
+      effect,
+    });
+    if (decision !== "allowed" && decision !== "late_blocked") {
+      throw new Error(`Unsupported durable Chat post-commit predispatch decision: ${String(decision)}`);
+    }
+    return decision;
+  }
+
+  private commitResult(
+    identity: GeneralChatPostCommitStageIdentity,
+    context: GeneralChatPostCommitEffectExecutionContext,
+    result: Record<string, unknown>,
+  ): Record<string, unknown> {
+    return readGeneralChatPostCommitStageResult(
+      commitGeneralChatPostCommitStage(
+        this.deps.storage,
+        identity,
+        () => ({ value: undefined, result }),
+        this.stageCommitOptions(context, true),
+      ).receipt,
     );
+  }
+
+  private commitLateBlocked(
+    identity: GeneralChatPostCommitStageIdentity,
+    context: GeneralChatPostCommitEffectExecutionContext,
+  ): Record<string, unknown> {
+    return readGeneralChatPostCommitStageResult(
+      commitGeneralChatPostCommitStage(
+        this.deps.storage,
+        identity,
+        () => {
+          throw new Error("late-blocked Chat post-commit stages must never apply domain content");
+        },
+        { ...this.stageCommitOptions(context, true), forcedDisposition: "late_blocked" },
+      ).receipt,
+    );
+  }
+
+  private stageCommitOptions(
+    context: GeneralChatPostCommitEffectExecutionContext,
+    terminal: boolean,
+  ): GeneralChatPostCommitStageCommitOptions {
+    const authority = this.resolveAuthority(context);
+    return authority
+      ? {
+          authority: {
+            context: authority,
+            parentRunId: context.parentRunId,
+            postCommitGenerationId: context.generationId,
+            port: this.deps.effectAuthority!.atomicStage,
+            terminal,
+          },
+          denyOnlyBlocked: () => this.deps.isAutonomyDisabled(),
+        }
+      : { denyOnlyBlocked: () => this.deps.isAutonomyDisabled() };
+  }
+
+  private resolveAuthority(
+    context: GeneralChatPostCommitEffectExecutionContext,
+  ): ChatPostCommitEffectAuthorityContext | undefined {
+    const authority = (context as AuthorityAwareExecutionContext).postCommitAuthority;
+    if (Boolean(authority) !== Boolean(this.deps.effectAuthority)) {
+      throw new Error(
+        "Durable Chat post-commit authority port and frozen execution identity must be configured together.",
+      );
+    }
+    return authority;
+  }
+
+  private assertAuthorityMatchesExecution(
+    input: GeneralChatPostCommitDurableEffectExecutionInput,
+    context: GeneralChatPostCommitEffectExecutionContext,
+  ): void {
+    const authority = this.resolveAuthority(context);
+    if (!authority) {
+      return;
+    }
+    if (
+      !hasExactKeys(authority as unknown as Record<string, unknown>, [
+        "child",
+        "childDurableClaim",
+        "parent",
+        "postCommitEligibility",
+      ]) ||
+      !hasExactKeys(authority.parent as unknown as Record<string, unknown>, [
+        "admissionId",
+        "aggregateRevision",
+        "controllerGeneration",
+        "materialSha256",
+        "sessionId",
+        "sessionIncarnationId",
+        "turnId",
+        "workspaceId",
+      ]) ||
+      !hasExactKeys(authority.child as unknown as Record<string, unknown>, [
+        "actorId",
+        "actorKind",
+        "admissionId",
+        "aggregateRevision",
+        "controllerGeneration",
+        "materialSha256",
+        "operation",
+        "sessionId",
+        "sessionIncarnationId",
+        "workspaceId",
+      ]) ||
+      !hasExactKeys(authority.childDurableClaim as unknown as Record<string, unknown>, [
+        "attemptCount",
+        "durableRunId",
+        "leaseOwnerId",
+      ]) ||
+      !isNonEmpty(context.parentRunId) ||
+      !isNonEmpty(context.generationId) ||
+      !isNonEmpty(authority.parent.admissionId) ||
+      !isNonEmpty(authority.child.admissionId) ||
+      authority.parent.sessionIncarnationId !== authority.child.sessionIncarnationId ||
+      authority.parent.workspaceId !== input.workspaceId ||
+      authority.parent.sessionId !== input.sessionId ||
+      authority.parent.turnId !== input.turnId ||
+      authority.child.workspaceId !== input.workspaceId ||
+      authority.child.sessionId !== input.sessionId ||
+      !isPositiveInteger(authority.parent.aggregateRevision) ||
+      !isPositiveInteger(authority.parent.controllerGeneration) ||
+      !isPositiveInteger(authority.child.aggregateRevision) ||
+      !isPositiveInteger(authority.child.controllerGeneration) ||
+      !isSha256(authority.parent.materialSha256) ||
+      !isSha256(authority.child.materialSha256) ||
+      authority.child.operation !== "chat_post_commit_child" ||
+      (authority.child.actorKind !== "operator" &&
+        authority.child.actorKind !== "external_companion" &&
+        authority.child.actorKind !== "system") ||
+      !isNonEmpty(authority.child.actorId) ||
+      authority.childDurableClaim.durableRunId !== context.effectRunId ||
+      authority.childDurableClaim.leaseOwnerId !== context.leaseOwnerId ||
+      !Number.isSafeInteger(authority.childDurableClaim.attemptCount) ||
+      authority.childDurableClaim.attemptCount < 0 ||
+      !sameFrozenEligibility(
+        readFrozenEligibility((input as EligibilityAwareEffectInput).postCommitEligibility),
+        authority.postCommitEligibility,
+      )
+    ) {
+      throw new Error("Durable Chat post-commit frozen authority does not match execution provenance.");
+    }
   }
 
   private stageIdentity(
@@ -345,23 +525,62 @@ export class ChatPostCommitEffectService {
   }
 }
 
-function buildSummaryMarker(memoryOutcome: string | undefined, skillId: string | undefined): string | undefined {
-  const parts: string[] = [];
-  if (memoryOutcome === "applied") {
-    parts.push("updated durable memory");
-  } else if (memoryOutcome === "proposed") {
-    parts.push("proposed durable memory");
-  }
-  if (skillId) {
-    parts.push(`drafted skill "${skillId}"`);
-  }
-  return parts.length > 0 ? `💾 Self-improvement review: ${parts.join("; ")}.` : undefined;
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
 function readNumber(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function isNonEmpty(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+function isSha256(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
+}
+
+function hasExactKeys(value: unknown, expected: readonly string[]): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  return Object.keys(value).sort().join(",") === [...expected].sort().join(",");
+}
+
+function readFrozenEligibility(value: unknown): ChatPostCommitFrozenEligibility | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const candidate = value as Partial<ChatPostCommitFrozenEligibility>;
+  if (
+    Object.keys(candidate).sort().join(",") !==
+    "autonomyEnabledAtParentSettlement,evalIntegrityTurn,humanSession,version"
+  ) {
+    return undefined;
+  }
+  if (
+    candidate.version !== 1 ||
+    typeof candidate.autonomyEnabledAtParentSettlement !== "boolean" ||
+    typeof candidate.evalIntegrityTurn !== "boolean" ||
+    typeof candidate.humanSession !== "boolean"
+  ) {
+    return undefined;
+  }
+  return candidate as ChatPostCommitFrozenEligibility;
+}
+
+function sameFrozenEligibility(
+  input: ChatPostCommitFrozenEligibility | undefined,
+  authority: ChatPostCommitFrozenEligibility,
+): boolean {
+  const frozenAuthority = readFrozenEligibility(authority);
+  return Boolean(
+    input &&
+    frozenAuthority &&
+    input.version === frozenAuthority.version &&
+    input.autonomyEnabledAtParentSettlement === frozenAuthority.autonomyEnabledAtParentSettlement &&
+    input.evalIntegrityTurn === frozenAuthority.evalIntegrityTurn &&
+    input.humanSession === frozenAuthority.humanSession,
+  );
 }

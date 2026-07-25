@@ -104,25 +104,32 @@ describe("additional shared API wrappers", () => {
       "/api/v1/capabilities/candidates/candidate%2F1",
     );
     await expectCall(
-      capabilities.promoteCapabilityCandidate("candidate/1", "version/1"),
+      capabilities.promoteCapabilityCandidate("candidate/1", 4, "version/1"),
       "/api/v1/capabilities/candidates/candidate%2F1/promote",
       {
         method: "POST",
       },
     );
+    expect(apiMocks.request.mock.calls.at(-1)?.[1]?.body).toBe(
+      JSON.stringify({ expectedRevision: 4, versionId: "version/1" }),
+    );
     await expectCall(
-      capabilities.revokeCapabilityCandidate("candidate/1"),
+      capabilities.revokeCapabilityCandidate("candidate/1", 5),
       "/api/v1/capabilities/candidates/candidate%2F1/revoke",
       {
         method: "POST",
       },
     );
+    expect(apiMocks.request.mock.calls.at(-1)?.[1]?.body).toBe(JSON.stringify({ expectedRevision: 5 }));
     await expectCall(
-      capabilities.rollbackCapabilityCandidate("candidate/1", "version/0"),
+      capabilities.rollbackCapabilityCandidate("candidate/1", "version/0", 6),
       "/api/v1/capabilities/candidates/candidate%2F1/rollback",
       {
         method: "POST",
       },
+    );
+    expect(apiMocks.request.mock.calls.at(-1)?.[1]?.body).toBe(
+      JSON.stringify({ expectedRevision: 6, targetVersionId: "version/0" }),
     );
     await expectCall(capabilities.fetchCodeModeRuns(0), "/api/v1/code-mode/runs?limit=1");
     await expectCall(
@@ -182,6 +189,33 @@ describe("additional shared API wrappers", () => {
       durable.fetchDurableRunTimeline("run/1", 9999),
       "/api/v1/durable/runs/run%2F1/timeline?limit=2000",
     );
+    await expectCall(
+      durable.watchDurableChildRun("parent/1", "child/1", {
+        source: "chat_delegation",
+        metadata: { stepId: "step-1" },
+      }),
+      "/api/v1/durable/runs/parent%2F1/children/child%2F1/watch",
+      { method: "POST" },
+    );
+    await expectCall(
+      durable.fetchDurableChildWatchers("parent/1", 9999),
+      "/api/v1/durable/runs/parent%2F1/child-watchers?limit=500",
+    );
+    await expectCall(
+      durable.detachDurableChildWatcher("watcher/1"),
+      "/api/v1/durable/child-watchers/watcher%2F1/detach",
+      { method: "POST" },
+    );
+    await expectCall(
+      durable.reattachDurableChildWatcher("watcher/1"),
+      "/api/v1/durable/child-watchers/watcher%2F1/reattach",
+      { method: "POST" },
+    );
+    await expectCall(
+      durable.closeDurableChildWatcher("watcher/1"),
+      "/api/v1/durable/child-watchers/watcher%2F1/close",
+      { method: "POST" },
+    );
     await expectCall(durable.pauseDurableRun("run/1", "operator"), "/api/v1/durable/runs/run%2F1/pause", {
       method: "POST",
     });
@@ -206,17 +240,20 @@ describe("additional shared API wrappers", () => {
       method: "POST",
     });
     await expectCall(
-      workspaces.updateWorkspace("workspace/1", { name: "New" } as never),
+      workspaces.updateWorkspace("workspace/1", { expectedRevision: 3, name: "New" }),
       "/api/v1/workspaces/workspace%2F1",
       {
         method: "PATCH",
+        body: JSON.stringify({ expectedRevision: 3, name: "New" }),
       },
     );
-    await expectCall(workspaces.archiveWorkspace("workspace/1"), "/api/v1/workspaces/workspace%2F1/archive", {
+    await expectCall(workspaces.archiveWorkspace("workspace/1", 3), "/api/v1/workspaces/workspace%2F1/archive", {
       method: "POST",
+      body: JSON.stringify({ expectedRevision: 3 }),
     });
-    await expectCall(workspaces.restoreWorkspace("workspace/1"), "/api/v1/workspaces/workspace%2F1/restore", {
+    await expectCall(workspaces.restoreWorkspace("workspace/1", 4), "/api/v1/workspaces/workspace%2F1/restore", {
       method: "POST",
+      body: JSON.stringify({ expectedRevision: 4 }),
     });
     await expectCall(workspaces.fetchGlobalGuidance(), "/api/v1/guidance/global");
     await expectCall(workspaces.updateGlobalGuidance("agents" as never, "body"), "/api/v1/guidance/global/agents", {
@@ -234,16 +271,31 @@ describe("additional shared API wrappers", () => {
     await expectCall(cron.createCronJob({ jobId: "job", name: "Job", schedule: "* * * * *" }), "/api/v1/cron/jobs", {
       method: "POST",
     });
-    await expectCall(cron.updateCronJob("job/1", { enabled: false }), "/api/v1/cron/jobs/job%2F1", { method: "PATCH" });
-    await expectCall(cron.startCronJob("job/1"), "/api/v1/cron/jobs/job%2F1/start", { method: "POST" });
-    await expectCall(cron.pauseCronJob("job/1"), "/api/v1/cron/jobs/job%2F1/pause", { method: "POST" });
-    await expectCall(cron.runCronJobNow("job/1"), "/api/v1/cron/jobs/job%2F1/run", { method: "POST" });
+    await expectCall(
+      cron.updateCronJob("job/1", { expectedRevision: 7, enabled: false }),
+      "/api/v1/cron/jobs/job%2F1",
+      { method: "PATCH", body: JSON.stringify({ expectedRevision: 7, enabled: false }) },
+    );
+    await expectCall(cron.startCronJob("job/1", 8), "/api/v1/cron/jobs/job%2F1/start", {
+      method: "POST",
+      body: JSON.stringify({ expectedRevision: 8 }),
+    });
+    await expectCall(cron.pauseCronJob("job/1", 9), "/api/v1/cron/jobs/job%2F1/pause", {
+      method: "POST",
+      body: JSON.stringify({ expectedRevision: 9 }),
+    });
+    await expectCall(cron.runCronJobNow("job/1"), "/api/v1/cron/jobs/job%2F1/run", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
     await expectCall(cron.fetchCronReviewQueue(9999), "/api/v1/cron/review-queue?limit=1000");
     await expectCall(cron.retryCronReviewQueueItem("item/1"), "/api/v1/cron/review-queue/item%2F1/retry", {
       method: "POST",
     });
     await expectCall(cron.fetchCronRunDiff("run/1"), "/api/v1/cron/runs/run%2F1/diff");
-    await expectCall(cron.deleteCronJob("job/1"), "/api/v1/cron/jobs/job%2F1", { method: "DELETE" });
+    await expectCall(cron.deleteCronJob("job/1", 10), "/api/v1/cron/jobs/job%2F1?expectedRevision=10", {
+      method: "DELETE",
+    });
     await expectCall(demo.fetchDemoState(), "/api/v1/demo/state");
     await expectCall(demo.bootstrapDemo(), "/api/v1/demo/bootstrap", { method: "POST" });
     await expectCall(

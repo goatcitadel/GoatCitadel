@@ -15,7 +15,14 @@ permissions:
 jobs:
   fast:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # The job bailed at the first failing step for a long time, so it never paid the
+    # cost of its later steps (real Postgres lane, production coverage gate). With
+    # those running end to end it now exceeds 45 minutes and is killed mid-run —
+    # "The operation was canceled" at 45m12s, not a failing assertion. Raise the
+    # budget so the completed pipeline can report. The durable fix is to split the
+    # independent steps into parallel jobs, which also stops a red step from hiding
+    # the ones behind it.
+    timeout-minutes: 90
     services:
       postgres:
         image: postgres:16-alpine

@@ -105,7 +105,9 @@ describe("restricted permission profiles", () => {
     for (const tool of [...DANGEROUS_SAMPLE_TOOLS, "fs.read", "http.get", "session.status"]) {
       expect(isToolAllowed(policy, tool), `${tool} must be denied on heartbeat-restricted`).toBe(false);
     }
-    expect(policy.approvalMode).toBe("approve_all");
+    // Heartbeat is unattended: tools inside the hard profile ceiling bypass
+    // interactive prompts, while deny/Wards/structural gates still win.
+    expect(policy.approvalMode).toBe("bypass");
   });
 
   it("resolveAutonomousPermissionProfile maps kind to profile (and back)", () => {
@@ -165,11 +167,7 @@ describe("buildAutonomousTurnContext", () => {
       systemActorId: "system-cron",
       runId: "run-xyz",
     });
-    const policy = resolveEffectivePolicy(
-      PERMISSIVE_CONFIG,
-      "proactive",
-      policyContext.permissionProfile,
-    );
+    const policy = resolveEffectivePolicy(PERMISSIVE_CONFIG, "proactive", policyContext.permissionProfile);
     expect(isToolAllowed(policy, "shell.exec")).toBe(false);
     expect(isToolAllowed(policy, "fs.write")).toBe(false);
     expect(isToolAllowed(policy, "fs.read")).toBe(true);

@@ -56,6 +56,7 @@ describe("settings PATCH schema feature-flag coverage (Phase 3.2)", () => {
 
   it("actually preserves the round-3 kill switches through a parse", () => {
     const parsed = updateSettingsSchema.parse({
+      expectedRevision: 1,
       features: {
         plannerFastPathV1Disabled: true,
         parallelToolExecutionV1Disabled: true,

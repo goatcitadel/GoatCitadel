@@ -23,6 +23,10 @@ export class NpuSidecarService {
     };
   }
 
+  public getConfigSnapshot(): NpuConfig {
+    return structuredClone(this.options.config);
+  }
+
   public getStatus(): NpuRuntimeStatus {
     return retiredStatus(this.options.config);
   }

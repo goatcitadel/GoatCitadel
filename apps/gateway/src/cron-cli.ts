@@ -10,7 +10,7 @@ import { createGatewayAdminRuntime } from "./services/gateway-runtime-factory.js
 import type { CronRunSnapshot } from "./services/gateway/cron-automation-service.js";
 
 export interface CronCliPort {
-  runCronJobNow(jobId: string): Promise<{ jobId: string; runId: string; status: "ok" }>;
+  runCronJobNow(jobId: string): Promise<{ jobId: string; runId: string; status: "ok" | "pending" }>;
   findCronRunById(runId: string): CronRunSnapshot | undefined;
 }
 
@@ -66,7 +66,7 @@ async function runRunCommand(args: string[], io: CronCliIo): Promise<void> {
   const startedAt = now();
   while (true) {
     const found = io.port.findCronRunById(queued.runId);
-    if (found) {
+    if (found && found.status !== "unknown") {
       io.write(JSON.stringify(found, null, 2));
       return;
     }

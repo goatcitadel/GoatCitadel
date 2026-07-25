@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import { ConflictError } from "@goatcitadel/contracts";
 import { adminRoutes } from "./admin.js";
 
 describe("admin routes", () => {
@@ -269,6 +270,10 @@ describe("admin routes", () => {
       profile: "local",
       mode: "dry_run",
       status: "ready",
+      revision: 7,
+      configuredDriver: "sqlite",
+      activeStorageDriver: "sqlite",
+      restartRequired: false,
       startedAt: "2026-04-09T12:00:00.000Z",
       finishedAt: "2026-04-09T12:00:01.000Z",
       runtimeFlipReady: false,
@@ -298,10 +303,66 @@ describe("admin routes", () => {
       profile: "local",
       execute: false,
       confirm: undefined,
+      expectedRevision: undefined,
     });
     expect(response.json()).toMatchObject({
       cutoverId: "cut-1",
       status: "ready",
+      revision: 7,
+    });
+  });
+
+  it.each([
+    { profile: "local", execute: true, confirm: true },
+    { profile: "local", execute: true, confirm: true, expectedRevision: 0 },
+    { profile: "local", execute: true, confirm: true, expectedRevision: -1 },
+    { profile: "local", execute: true, confirm: true, expectedRevision: 1.5 },
+  ])("rejects execute cutovers without a positive integer revision: %j", async (payload) => {
+    const runDatabaseCutover = vi.fn();
+    app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
+    app.decorate("services", { authAdmin: { runDatabaseCutover } } as never);
+    await app.register(adminRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/database/cutover",
+      payload,
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(runDatabaseCutover).not.toHaveBeenCalled();
+  });
+
+  it("returns a structured 409 for a stale execute cutover", async () => {
+    const runDatabaseCutover = vi.fn(async () => {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: "Settings changed during cutover.",
+        details: { expectedRevision: 7, currentRevision: 8 },
+      });
+    });
+    app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
+    app.decorate("services", { authAdmin: { runDatabaseCutover } } as never);
+    await app.register(adminRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/database/cutover",
+      payload: { profile: "hosted", execute: true, confirm: true, expectedRevision: 7 },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      code: "STATE_CONFLICT",
+      details: { expectedRevision: 7, currentRevision: 8 },
+    });
+    expect(runDatabaseCutover).toHaveBeenCalledWith({
+      profile: "hosted",
+      execute: true,
+      confirm: true,
+      expectedRevision: 7,
     });
   });
 

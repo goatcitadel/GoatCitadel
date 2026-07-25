@@ -18,6 +18,9 @@ import type {
   CodeModeRunComparisonRecord,
   CodeModeExecutionBackendsResponse,
   CodeModeRunRecord,
+  CodeModeVerificationCommandName,
+  CodeModeVerificationEvidenceRecord,
+  CodeModeVerificationStatus,
 } from "@goatcitadel/contracts";
 import type { MissionThreadedWorkflowPanel } from "@goatcitadel/threaded-surface-core";
 import {
@@ -26,7 +29,9 @@ import {
   fetchCodeModeExecutionBackends,
   fetchCodeModeRun,
   fetchCodeModeRunArtifact,
+  fetchCodeModeRunVerificationEvidence,
   fetchCodeModeRuns,
+  verifyCodeModeRun,
 } from "@goatcitadel/mission-control-shared/api/capabilities";
 import { AgenticRuntimeVisibilityPanel } from "@goatcitadel/mission-control-shared/components/AgenticRuntimeVisibilityPanel";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
@@ -77,6 +82,19 @@ const CODE_MODE_ARTIFACT_KINDS: Array<{ kind: CodeModeRunArtifactKind; label: st
   { kind: "aider_stdout", label: "Aider stdout" },
   { kind: "aider_stderr", label: "Aider stderr" },
 ];
+const CODE_MODE_VERIFICATION_COMMANDS: ReadonlyArray<{
+  name: CodeModeVerificationCommandName;
+  label: string;
+}> = [
+  { name: "git_diff_check", label: "Git diff whitespace check" },
+  { name: "test", label: "Project test script" },
+  { name: "typecheck", label: "Project typecheck script" },
+  { name: "lint", label: "Project lint script" },
+  { name: "build", label: "Project build script" },
+  { name: "check", label: "Project check script" },
+  { name: "verify", label: "Project verify script" },
+  { name: "coverage", label: "Project coverage script" },
+];
 
 export interface CapabilitySnapshotProfileSummary {
   snapshotId: string;
@@ -104,6 +122,82 @@ export function summarizeCapabilitySnapshotProfile(
     inspectableOnlyCount: snapshot.inspectableEntries.length - snapshot.callableEntries.length,
     reviewWarningCount: snapshot.inspectableEntries.filter((entry) => Boolean(entry.reviewWarning)).length,
     createdAt: snapshot.createdAt,
+  };
+}
+
+function effectiveCodeModeVerificationStatus(
+  run: CodeModeRunRecord,
+  evidence: CodeModeVerificationEvidenceRecord[],
+): CodeModeVerificationStatus {
+  const recordedStatus =
+    run.verification?.status ?? (run.status === "completed" ? "completed_unverified" : "not_applicable");
+  if (recordedStatus !== "verified") {
+    return recordedStatus;
+  }
+  const currentEvidence = evidence.find((item) => item.evidenceId === run.verification?.evidenceId);
+  return currentEvidence?.status === "verified" && currentEvidence.subject.subjectHash === run.verification?.subjectHash
+    ? "verified"
+    : "completed_unverified";
+}
+
+function codeModeVerificationTone(status: CodeModeVerificationStatus): "success" | "warning" | "critical" | "muted" {
+  if (status === "verified") {
+    return "success";
+  }
+  if (status === "verification_failed") {
+    return "critical";
+  }
+  if (status === "completed_unverified" || status === "stale") {
+    return "warning";
+  }
+  return "muted";
+}
+
+function codeModeVerificationCopy(
+  status: CodeModeVerificationStatus,
+  evidence: CodeModeVerificationEvidenceRecord | undefined,
+): string {
+  if (status === "verified" && evidence) {
+    return `Fresh named proof passed: ${evidence.commandLabel} (${evidence.scope} scope). This claim is bound to the recorded run, artifacts, and worktree state.`;
+  }
+  if (status === "verification_failed") {
+    return evidence?.reason
+      ? `The latest named proof failed: ${evidence.reason}.`
+      : "The latest named proof failed; execution output is still available for inspection.";
+  }
+  if (status === "stale") {
+    return "A previously passing proof is stale because its recorded source, artifact, worktree, or evidence binding changed.";
+  }
+  if (status === "completed_unverified") {
+    return "Execution completed, but no fresh durable named semantic proof is available for this exact state.";
+  }
+  return "Semantic verification is not applicable until execution completes successfully.";
+}
+
+function codeModeArtifactIntegritySummary(run: CodeModeRunRecord): {
+  label: string;
+  detail: string;
+  tone: "success" | "warning" | "critical";
+} {
+  const record = run.trustedCodeWriteVerification;
+  if (!record?.artifacts.length) {
+    return {
+      label: "not recorded",
+      detail: "Trusted Code artifact-integrity evidence is missing. This does not imply semantic verification.",
+      tone: "warning",
+    };
+  }
+  if (!record.artifacts.every((artifact) => artifact.verified)) {
+    return {
+      label: "mismatch",
+      detail: "One or more managed artifact hashes did not match the Trusted Code write record.",
+      tone: "critical",
+    };
+  }
+  return {
+    label: "hashes matched",
+    detail: `Managed artifact hashes matched at ${formatRunTimestamp(record.verifiedAt)}. This is artifact integrity, not semantic verification or a hostile-code sandbox claim.`,
+    tone: "success",
   };
 }
 
@@ -804,6 +898,12 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
   const [runDetail, setRunDetail] = useState<CodeModeRunRecord | null>(null);
   const [runDetailLoading, setRunDetailLoading] = useState(false);
   const [runDetailError, setRunDetailError] = useState<string | null>(null);
+  const [verificationCommandName, setVerificationCommandName] =
+    useState<CodeModeVerificationCommandName>("git_diff_check");
+  const [verificationEvidence, setVerificationEvidence] = useState<CodeModeVerificationEvidenceRecord[]>([]);
+  const [verificationEvidenceLoading, setVerificationEvidenceLoading] = useState(false);
+  const [verificationActionBusy, setVerificationActionBusy] = useState(false);
+  const [verificationError, setVerificationError] = useState<string | null>(null);
   const [capabilitySnapshot, setCapabilitySnapshot] = useState<CapabilityCatalogSnapshotRecord | null>(null);
   const [capabilitySnapshotLoading, setCapabilitySnapshotLoading] = useState(false);
   const [capabilitySnapshotError, setCapabilitySnapshotError] = useState<string | null>(null);
@@ -870,6 +970,14 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
   );
   const selectedRunDetail = runDetail?.runId === selectedRunSummary?.runId ? runDetail : null;
   const selectedRunApprovalId = selectedRunDetail?.approvalId ?? selectedRunSummary?.approvalId;
+  const selectedRunVerificationStatus = selectedRunDetail
+    ? effectiveCodeModeVerificationStatus(selectedRunDetail, verificationEvidence)
+    : "not_applicable";
+  const selectedRunVerificationEvidence = selectedRunDetail
+    ? (verificationEvidence.find((item) => item.evidenceId === selectedRunDetail.verification?.evidenceId) ??
+      verificationEvidence[0])
+    : undefined;
+  const selectedRunArtifactIntegrity = selectedRunDetail ? codeModeArtifactIntegritySummary(selectedRunDetail) : null;
   const capabilityProfile = useMemo(() => summarizeCapabilitySnapshotProfile(capabilitySnapshot), [capabilitySnapshot]);
   const reviewPacket = useMemo(() => {
     const validation = summarizeValidationForReview(workbenchState?.validationStatus, output, visibleRunItems.length);
@@ -1417,6 +1525,44 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
   }, [selectedRunScope, selectedRunSummary?.runId]);
 
   useEffect(() => {
+    if (!selectedRunSummary?.runId) {
+      setVerificationEvidence([]);
+      setVerificationEvidenceLoading(false);
+      setVerificationError(null);
+      return undefined;
+    }
+    let cancelled = false;
+    setVerificationEvidence([]);
+    setVerificationEvidenceLoading(true);
+    setVerificationError(null);
+    fetchCodeModeRunVerificationEvidence(selectedRunSummary.runId, {
+      ...selectedRunScope,
+      limit: 25,
+    })
+      .then((response) => {
+        if (!cancelled) {
+          setVerificationEvidence(response.items);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setVerificationEvidence([]);
+          setVerificationError(
+            error instanceof Error ? error.message : "Unable to load durable Code Mode verification evidence.",
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setVerificationEvidenceLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedRunScope, selectedRunSummary?.runId]);
+
+  useEffect(() => {
     const snapshotId = selectedRunDetail?.capabilitySnapshotId;
     if (!snapshotId) {
       setCapabilitySnapshot(null);
@@ -1651,6 +1797,42 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
       return;
     }
     setRunLogCopyNotice("Clipboard is not available in this environment.");
+  };
+  const runNamedCodeModeVerification = async () => {
+    if (
+      !selectedRunDetail ||
+      selectedRunDetail.status !== "completed" ||
+      !selectedRunDetail.sessionId ||
+      verificationActionBusy
+    ) {
+      return;
+    }
+    setVerificationActionBusy(true);
+    setVerificationError(null);
+    try {
+      const response = await verifyCodeModeRun(
+        selectedRunDetail.runId,
+        { commandName: verificationCommandName },
+        selectedRunScope,
+      );
+      if (!isMounted()) {
+        return;
+      }
+      setRunDetail(response.run);
+      setRunList((current) => current.map((run) => (run.runId === response.run.runId ? response.run : run)));
+      setVerificationEvidence((current) => [
+        response.evidence,
+        ...current.filter((item) => item.evidenceId !== response.evidence.evidenceId),
+      ]);
+    } catch (error) {
+      if (isMounted()) {
+        setVerificationError(error instanceof Error ? error.message : "Unable to run the named Code Mode proof.");
+      }
+    } finally {
+      if (isMounted()) {
+        setVerificationActionBusy(false);
+      }
+    }
   };
 
   return (
@@ -2329,6 +2511,106 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
                   ) : null}
                   {selectedRunDetail ? (
                     <>
+                      <section className="mc-next-workbench-output-preview" aria-label="Code Mode verification truth">
+                        <div className="mc-next-panel-list-head">
+                          <strong>Execution and verification truth</strong>
+                          <span>{verificationEvidence.length} durable proof events</span>
+                        </div>
+                        <div className="mc-next-workbench-action-row">
+                          <StatusChip tone={selectedRunDetail.status === "completed" ? "success" : "warning"}>
+                            Execution: {selectedRunDetail.status}
+                          </StatusChip>
+                          <StatusChip
+                            tone={
+                              verificationEvidenceLoading
+                                ? "muted"
+                                : codeModeVerificationTone(selectedRunVerificationStatus)
+                            }
+                          >
+                            Verification: {verificationEvidenceLoading ? "checking" : selectedRunVerificationStatus}
+                          </StatusChip>
+                          {selectedRunArtifactIntegrity ? (
+                            <StatusChip tone={selectedRunArtifactIntegrity.tone}>
+                              Artifact integrity: {selectedRunArtifactIntegrity.label}
+                            </StatusChip>
+                          ) : null}
+                        </div>
+                        <p className="mc-next-workbench-empty">
+                          {verificationEvidenceLoading
+                            ? "Checking the append-only proof ledger before displaying a semantic verification claim."
+                            : codeModeVerificationCopy(selectedRunVerificationStatus, selectedRunVerificationEvidence)}
+                        </p>
+                        {selectedRunArtifactIntegrity ? (
+                          <p className="mc-next-workbench-empty">{selectedRunArtifactIntegrity.detail}</p>
+                        ) : null}
+                        <div className="mc-next-workbench-action-row">
+                          <label className="mc-next-code-source-field">
+                            <span>Guarded named proof</span>
+                            <select
+                              aria-label="Guarded Code Mode verification command"
+                              value={verificationCommandName}
+                              onChange={(event) =>
+                                setVerificationCommandName(event.target.value as CodeModeVerificationCommandName)
+                              }
+                              disabled={verificationActionBusy}
+                            >
+                              {CODE_MODE_VERIFICATION_COMMANDS.map((command) => (
+                                <option key={command.name} value={command.name}>
+                                  {command.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <button
+                            type="button"
+                            className="mc-next-panel-button"
+                            onClick={() => void runNamedCodeModeVerification()}
+                            disabled={
+                              selectedRunDetail.status !== "completed" ||
+                              !selectedRunDetail.sessionId ||
+                              verificationActionBusy
+                            }
+                            title={
+                              selectedRunDetail.status !== "completed"
+                                ? "Named proof is available only after successful execution."
+                                : !selectedRunDetail.sessionId
+                                  ? "This run is not linked to a Chat workbench session."
+                                  : undefined
+                            }
+                          >
+                            {verificationActionBusy ? "Running named proof..." : "Run named proof"}
+                          </button>
+                        </div>
+                        <p className="mc-next-workbench-empty">
+                          The Gateway maps this selection to a fixed server-owned command in the linked Chat workbench.
+                          No arbitrary command text is accepted, and this does not establish hostile-code sandboxing.
+                        </p>
+                        {verificationError ? (
+                          <div className="mc-next-panel-banner warning">{verificationError}</div>
+                        ) : null}
+                        {selectedRunVerificationEvidence ? (
+                          <ul className="mc-next-context-list">
+                            <li>
+                              <strong>Latest proof event</strong>
+                              <p>
+                                {selectedRunVerificationEvidence.commandLabel} · {selectedRunVerificationEvidence.scope}
+                                scope · {selectedRunVerificationEvidence.commandStatus}
+                                {typeof selectedRunVerificationEvidence.exitCode === "number"
+                                  ? ` · exit ${selectedRunVerificationEvidence.exitCode}`
+                                  : ""}
+                              </p>
+                            </li>
+                            <li>
+                              <strong>Proof subject</strong>
+                              <p>{formatShortHash(selectedRunVerificationEvidence.subject.subjectHash)}</p>
+                            </li>
+                            <li>
+                              <strong>Recorded</strong>
+                              <p>{formatRunTimestamp(selectedRunVerificationEvidence.createdAt)}</p>
+                            </li>
+                          </ul>
+                        ) : null}
+                      </section>
                       <ul className="mc-next-context-list">
                         <li>
                           <strong>Status</strong>

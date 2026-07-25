@@ -425,7 +425,12 @@ describe("dashboard route service", () => {
         DATABASE_PASSWORD: "run-db-secret",
         tokenEnv: "RUN_DATABASE_PASSWORD",
       },
-      metadata: { authorization: "Bearer run-metadata-secret" },
+      metadata: {
+        authorization: "Bearer run-metadata-secret",
+        heartbeatDecisionReceipt: { version: 1, notify: false },
+        heartbeatDecisionRawOutput: '{"notify":false}',
+        nested: [{ heartbeatDecisionRawOutput: '{"notify":true,"message":"private"}', retained: true }],
+      },
       lastError: "password: run-error-secret",
       createdAt: "2026-05-30T00:00:00.000Z",
       updatedAt: "2026-05-30T00:01:00.000Z",
@@ -437,6 +442,8 @@ describe("dashboard route service", () => {
       state: {
         webhookUrl: "https://hooks.example.test/checkpoint/secret",
         secretRef: "vault:checkpoint",
+        heartbeatDecisionReceipt: { version: 1, notify: false },
+        heartbeatDecisionRawOutput: '{"notify":false}',
       },
       createdAt: "2026-05-30T00:00:10.000Z",
     };
@@ -550,18 +557,30 @@ describe("dashboard route service", () => {
       expect(JSON.stringify(exported)).not.toContain(value);
       expect(JSON.stringify(exportContent)).not.toContain(value);
     }
+    expect(JSON.stringify(trace)).not.toContain("heartbeatDecisionRawOutput");
+    expect(JSON.stringify(exported)).not.toContain("heartbeatDecisionRawOutput");
+    expect(JSON.stringify(exportContent)).not.toContain("heartbeatDecisionRawOutput");
     expect(trace).toMatchObject({
       run: {
         runId: rawRun.runId,
         status: "failed",
         payload: { DATABASE_PASSWORD: "[REDACTED]", tokenEnv: "RUN_DATABASE_PASSWORD" },
+        metadata: {
+          authorization: "[REDACTED]",
+          heartbeatDecisionReceipt: { version: 1, notify: false },
+          nested: [{ retained: true }],
+        },
       },
       durable: {
         checkpoints: {
           items: [
             {
               checkpointId: rawCheckpoint.checkpointId,
-              state: { webhookUrl: "[REDACTED]", secretRef: "vault:checkpoint" },
+              state: {
+                webhookUrl: "[REDACTED]",
+                secretRef: "vault:checkpoint",
+                heartbeatDecisionReceipt: { version: 1, notify: false },
+              },
             },
           ],
         },
@@ -606,7 +625,10 @@ describe("dashboard route service", () => {
     });
     expect(exportContent.trace).toEqual(exported.trace);
     expect(rawRun.payload.DATABASE_PASSWORD).toBe("run-db-secret");
+    expect(rawRun.metadata.heartbeatDecisionRawOutput).toBe('{"notify":false}');
+    expect(rawRun.metadata.nested[0]?.heartbeatDecisionRawOutput).toContain("private");
     expect(rawCheckpoint.state.webhookUrl).toBe("https://hooks.example.test/checkpoint/secret");
+    expect(rawCheckpoint.state.heartbeatDecisionRawOutput).toBe('{"notify":false}');
     expect(rawTimeline.payload.DATABASE_PASSWORD).toBe("timeline-db-secret");
     expect(rawLifecycle.toolRuns[0]?.result.authorization).toBe("Bearer tool-result-secret");
     expect(rawApproval.payload.DATABASE_PASSWORD).toBe("approval-db-secret");

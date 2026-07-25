@@ -2,6 +2,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import type {
   ChatTurnTraceRecord,
+  DurableChildWatcherCatchUpResult,
+  DurableChildWatcherCreateRequest,
+  DurableChildWatcherRecord,
+  DurableBackgroundTaskControlRequest,
+  DurableBackgroundTaskControlResponse,
+  DurableBackgroundTaskRailResponse,
   DurableCheckpointRecord,
   ContinuationGateDecision,
   DurableDeadLetterRecord,
@@ -16,15 +22,53 @@ import type {
 } from "@goatcitadel/contracts";
 import {
   CHAT_TURN_ACTIVE_STATUSES,
+  canonicalJsonString,
   isChatTurnTerminalStatus,
   isDurableRunTerminal,
   NotFoundError,
+  redactStructuredSecrets,
+  assertDurableChildWatcherCreateRequestBounds,
+  assertDurableChildWatcherIdBounds,
+  assertDurableChildWatcherRunIdBounds,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import {
+  computePostCommitChildAdmissionMaterialSha256,
+  type PostCommitChildAdmissionIdentity,
+  type PostCommitEligibility,
+  type SessionMutationAdmissionRecord,
+  type Storage,
+} from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import type { DurableWorkflowExecutorRegistry } from "./durable-execution-service.js";
 import type { EvidenceEnvelopeCreateRequest } from "./evidence-envelope-service.js";
+import type { SharedHostLifecycleAdmissionPort } from "./shared-host-lifecycle-service.js";
+import { projectDurableBackgroundTaskRail } from "./durable-background-task-projection.js";
+import {
+  CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY,
+  HEARTBEAT_DECISION_RAW_OUTPUT_METADATA_KEY,
+  HEARTBEAT_DECISION_RECEIPT_METADATA_KEY,
+  buildChatTurnRuntimeAuthoritySeal,
+  hashChatTurnRuntimeAuthorityValue,
+  readChatTurnRuntimeAuthoritySeal,
+  readExactAutonomousChatPostCommitSettlement,
+  readExactChatTurnAdmissionHandoff,
+  readExactGeneralChatPostCommitSettlement,
+  readExactLinkedFinalizationPendingMarker,
+  readExactLinkedFinalizationSettlement,
+  selectCanonicalGeneralChatPostCommitResolution,
+  verifyCheckpointAnchoredChatTurnRuntimeAuthority,
+  verifyAutonomousChatAdmissionRunMetadata,
+  withChatTurnRuntimeAuthority,
+  withChatTurnRuntimeAuthorityCheckpoint,
+  type ChatTurnRuntimeAuthoritySealV1,
+  type ExactLinkedFinalizationPendingMarker,
+} from "./chat-durable-runtime-authority.js";
+import {
+  DURABLE_RETRY_POLICY_DEFAULT,
+  assertDurableRetryPolicyMatchesRun,
+  normalizeDurableRetryPolicy,
+} from "./durable-retry-policy.js";
 import {
   AUTONOMOUS_CHAT_POST_COMMIT_PENDING_METADATA_KEY,
   GENERAL_CHAT_POST_COMMIT_DURABLE_EFFECTS,
@@ -39,6 +83,7 @@ import {
   hasAutonomousChatPostCommitPending,
   hasGeneralChatPostCommitPending,
   markGeneralChatPostCommitPending,
+  mergeCanonicalDurableChatTerminalOutputMetadata,
   readAutonomousChatPostCommitPendingMarker,
   readGeneralChatPostCommitCompletedEffects,
   readGeneralChatPostCommitPendingMarker,
@@ -65,12 +110,6 @@ export interface DurableRunServiceLogger {
   error(data: unknown, msg: string): void;
 }
 
-const DURABLE_RETRY_POLICY_DEFAULT: DurableRetryPolicy = {
-  maxAttempts: 3,
-  baseDelayMs: 5_000,
-  maxDelayMs: 60_000,
-  backoffMultiplier: 2,
-};
 // The lease must survive sustained event-loop starvation: a single native
 // browser navigation or repo-wide search can stall the loop for 60-90s on a
 // loaded workstation, and a 15s TTL caused the reaper to fail healthy runs at
@@ -86,16 +125,122 @@ const DURABLE_EVENT_LOOP_LAG_WARN_MS = 1_000;
 const DURABLE_EVENT_LOOP_LAG_PAUSE_MS = 2_000;
 const DURABLE_CHECKPOINT_KEEP_PER_RUN_DEFAULT = 50;
 const DURABLE_CHECKPOINT_DISK_BUDGET_BYTES_DEFAULT = 64 * 1024 * 1024;
+
+function readExactSystemHeartbeatFailurePayload(
+  run: DurableRunRecord,
+  payload: {
+    heartbeatOccurrenceId?: unknown;
+    heartbeatClaimSha256?: unknown;
+    heartbeatEvaluatedPolicySha256?: unknown;
+    heartbeatFrozenObjectiveSha256?: unknown;
+    requestActor?: unknown;
+  },
+): boolean {
+  const fields = [
+    payload.heartbeatOccurrenceId,
+    payload.heartbeatClaimSha256,
+    payload.heartbeatEvaluatedPolicySha256,
+    payload.heartbeatFrozenObjectiveSha256,
+  ];
+  if (fields.every((value) => value === undefined)) {
+    if (
+      run.metadata?.[HEARTBEAT_DECISION_RECEIPT_METADATA_KEY] !== undefined ||
+      run.metadata?.[HEARTBEAT_DECISION_RAW_OUTPUT_METADATA_KEY] !== undefined
+    ) {
+      throw new Error(`Non-heartbeat Chat run ${run.runId} contains heartbeat decision evidence.`);
+    }
+    return false;
+  }
+  const requestActor =
+    payload.requestActor && typeof payload.requestActor === "object" && !Array.isArray(payload.requestActor)
+      ? (payload.requestActor as Record<string, unknown>)
+      : undefined;
+  const autonomous =
+    run.metadata?.autonomous && typeof run.metadata.autonomous === "object" && !Array.isArray(run.metadata.autonomous)
+      ? (run.metadata.autonomous as Record<string, unknown>)
+      : undefined;
+  if (
+    typeof payload.heartbeatOccurrenceId !== "string" ||
+    !payload.heartbeatOccurrenceId.trim() ||
+    typeof payload.heartbeatClaimSha256 !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(payload.heartbeatClaimSha256) ||
+    typeof payload.heartbeatEvaluatedPolicySha256 !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(payload.heartbeatEvaluatedPolicySha256) ||
+    typeof payload.heartbeatFrozenObjectiveSha256 !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(payload.heartbeatFrozenObjectiveSha256) ||
+    requestActor?.actorKind !== "system" ||
+    requestActor.actorId !== "system-heartbeat" ||
+    autonomous?.kind !== "heartbeat" ||
+    autonomous.systemActorId !== "system-heartbeat" ||
+    run.metadata?.[HEARTBEAT_DECISION_RECEIPT_METADATA_KEY] !== undefined ||
+    run.metadata?.[HEARTBEAT_DECISION_RAW_OUTPUT_METADATA_KEY] !== undefined
+  ) {
+    throw new Error(`Durable Chat run ${run.runId} has malformed system-heartbeat failure evidence.`);
+  }
+  return true;
+}
 const COWORK_WORKFLOW_TIMEOUT_RESUME_EVENT = "cowork.turn.operator_resume";
 const AUTONOMY_KILL_SWITCH_RESUME_EVENT = "autonomy.v1.enabled";
 const RAW_REMOTE_APPROVAL_BEARER_PATTERN = /grat_[A-Za-z0-9_-]{43}/;
 const RAW_REMOTE_APPROVAL_BEARER_GLOBAL_PATTERN = /grat_[A-Za-z0-9_-]{43}/g;
+const CHAT_TERMINAL_OUTPUT_METADATA_KEYS = [
+  "outputText",
+  "finalOutput",
+  "outputSummary",
+  "finalSummary",
+  "outputMessageId",
+  "outputTraceStatus",
+] as const;
+const CHAT_TERMINAL_OUTPUT_CHECKPOINT_KEYS = ["assistantMessageId", "outputText", "outputSummary"] as const;
+const CHAT_RETRY_EXHAUSTION_DEAD_LETTER_PENDING_METADATA_KEY = "chatRetryExhaustionDeadLetterPending" as const;
+
+interface ChatRetryExhaustionDeadLetterPending {
+  version: 1;
+  attemptNo: number;
+  maxAttempts: number;
+  actorId: string;
+  reason: string;
+  reasonSha256: string;
+  requestedAt: string;
+}
+
+function readChatRetryExhaustionDeadLetterPending(value: unknown): ChatRetryExhaustionDeadLetterPending | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Chat retry-exhaustion dead-letter marker must be an object.");
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    Object.keys(record).sort().join(",") !== "actorId,attemptNo,maxAttempts,reason,reasonSha256,requestedAt,version" ||
+    record.version !== 1 ||
+    !Number.isSafeInteger(record.attemptNo) ||
+    !Number.isSafeInteger(record.maxAttempts) ||
+    Number(record.attemptNo) <= Number(record.maxAttempts) ||
+    Number(record.maxAttempts) < 1 ||
+    typeof record.actorId !== "string" ||
+    !record.actorId.trim() ||
+    typeof record.reason !== "string" ||
+    !record.reason.trim() ||
+    typeof record.reasonSha256 !== "string" ||
+    !/^[0-9a-f]{64}$/u.test(record.reasonSha256) ||
+    record.reasonSha256 !== hashChatTurnRuntimeAuthorityValue(record.reason) ||
+    typeof record.requestedAt !== "string" ||
+    Number.isNaN(Date.parse(record.requestedAt))
+  ) {
+    throw new Error("Chat retry-exhaustion dead-letter marker is invalid.");
+  }
+  return record as unknown as ChatRetryExhaustionDeadLetterPending;
+}
 
 function sameGeneralChatPostCommitGeneration(
   left: GeneralChatPostCommitPendingMarker,
   right: GeneralChatPostCommitPendingMarker,
 ): boolean {
-  return left.generationId === right.generationId && left.traceStatus === right.traceStatus;
+  return (
+    left.generationId === right.generationId &&
+    left.traceStatus === right.traceStatus &&
+    canonicalJsonString(left.postCommitEligibility) === canonicalJsonString(right.postCommitEligibility)
+  );
 }
 
 function buildGeneralChatPostCommitEffectRunId(
@@ -114,7 +259,10 @@ function assertGeneralChatPostCommitEffectChild(
   child: DurableRunRecord,
   expected: GeneralChatPostCommitEffectWorkflowPayload,
 ): void {
-  if (child.workflowKey !== "chat.post_commit.effect" || JSON.stringify(child.payload) !== JSON.stringify(expected)) {
+  if (
+    child.workflowKey !== "chat.post_commit.effect" ||
+    canonicalJsonString(child.payload) !== canonicalJsonString(expected)
+  ) {
     throw new Error(
       `Durable Chat post-commit child ${child.runId} does not match its parent generation and effect payload.`,
     );
@@ -136,10 +284,12 @@ function assertIdempotentDurableRunMatches(
   existing: DurableRunRecord,
   workflowKey: string,
   payload: Record<string, unknown>,
+  retryPolicy: DurableRetryPolicy,
 ): void {
   if (existing.workflowKey !== workflowKey || JSON.stringify(existing.payload) !== JSON.stringify(payload)) {
     throw new Error(`Durable run ${existing.runId} is already owned by a different immutable workflow payload.`);
   }
+  assertDurableRetryPolicyMatchesRun(existing.metadata?.retryPolicy, existing.maxAttempts, retryPolicy);
 }
 
 function assertGeneralChatPostCommitEffectChildLink(
@@ -151,12 +301,13 @@ function assertGeneralChatPostCommitEffectChildLink(
   const payload = child.payload as Partial<GeneralChatPostCommitEffectWorkflowPayload>;
   if (
     child.workflowKey !== "chat.post_commit.effect" ||
-    payload.version !== "chat.post_commit.effect.v1" ||
+    payload.version !== "chat.post_commit.effect.v2" ||
     payload.parentRunId !== parentRunId ||
-    payload.generationId !== generationId ||
+    payload.postCommitGenerationId !== generationId ||
+    payload.effect !== effect ||
     payload.input?.effect !== effect ||
     child.metadata?.parentRunId !== parentRunId ||
-    child.metadata?.generationId !== generationId ||
+    child.metadata?.postCommitGenerationId !== generationId ||
     child.metadata?.effect !== effect
   ) {
     throw new Error(`Durable Chat post-commit child ${child.runId} has inconsistent parent linkage.`);
@@ -207,13 +358,7 @@ function redactRawRemoteApprovalBearerText(value: string): string {
   return value.replace(RAW_REMOTE_APPROVAL_BEARER_GLOBAL_PATTERN, "[REDACTED]");
 }
 
-interface LinkedFinalizationPending {
-  reason: string;
-  requestedAt: string;
-  finalizationId: string;
-  claimId?: string;
-  claimExpiresAt?: string;
-}
+type LinkedFinalizationPending = ExactLinkedFinalizationPendingMarker;
 
 interface DurableChatCancellationLink {
   sessionId: string;
@@ -227,7 +372,7 @@ function readDurableChatCancellationLink(run: DurableRunRecord): DurableChatCanc
   }
   const payload = run.payload as Partial<DurableChatCancellationLink> & { version?: unknown };
   if (
-    payload.version !== "chat.turn.execute.v1" ||
+    (payload.version !== "chat.turn.execute.v1" && payload.version !== "chat.turn.execute.v2") ||
     typeof payload.sessionId !== "string" ||
     typeof payload.turnId !== "string" ||
     typeof payload.userMessageId !== "string"
@@ -239,6 +384,24 @@ function readDurableChatCancellationLink(run: DurableRunRecord): DurableChatCanc
     turnId: payload.turnId,
     userMessageId: payload.userMessageId,
   };
+}
+
+function isLegacyUnadmittedDurableChatTurn(run: DurableRunRecord): boolean {
+  return (
+    run.workflowKey === "chat.turn.execute" &&
+    (run.payload as { version?: unknown } | undefined)?.version === "chat.turn.execute.v1"
+  );
+}
+
+function isAdmittedV2ChatRun(run: DurableRunRecord): boolean {
+  return (
+    run.workflowKey === "chat.turn.execute" &&
+    (run.payload as { version?: unknown } | undefined)?.version === "chat.turn.execute.v2"
+  );
+}
+
+function isAutonomousAdmittedV2ChatRun(run: DurableRunRecord): boolean {
+  return isAdmittedV2ChatRun(run) && run.metadata?.autonomousAdmission !== undefined;
 }
 
 function assertDurableChatCancellationTraceLink(
@@ -256,6 +419,16 @@ function assertDurableChatCancellationTraceLink(
   }
 }
 
+function normalizeDurableCancellationReason(reason: string | undefined): string | undefined {
+  const trimmed = reason?.trim();
+  if (!trimmed) return undefined;
+  if (Buffer.byteLength(trimmed, "utf8") > 240) {
+    throw new Error("Durable cancellation reason exceeds 240 bytes.");
+  }
+  const redacted = redactStructuredSecrets(trimmed).value.trim();
+  return redacted || undefined;
+}
+
 const LINKED_FINALIZATION_CLAIM_TTL_MS = 30_000;
 const LINKED_FINALIZATION_TIMEOUT_MS = 60_000;
 const AUTONOMOUS_CHAT_POST_COMMIT_CLAIM_TTL_MS = 30_000;
@@ -270,30 +443,37 @@ function sameAutonomousChatPostCommitGeneration(
   left: AutonomousChatPostCommitPendingMarker,
   right: AutonomousChatPostCommitPendingMarker,
 ): boolean {
-  return left.version === right.version && left.requestedAt === right.requestedAt;
+  return (
+    left.version === right.version && left.requestedAt === right.requestedAt && left.generationId === right.generationId
+  );
 }
 
 function readLinkedFinalizationPending(run: DurableRunRecord): LinkedFinalizationPending | undefined {
   const value = (run.metadata as { linkedFinalizationPending?: unknown } | undefined)?.linkedFinalizationPending;
-  if (!value || typeof value !== "object") {
-    return undefined;
+  if (value === undefined) return undefined;
+  try {
+    return readExactLinkedFinalizationPendingMarker(value);
+  } catch (error) {
+    // Explicit compatibility for pre-finalization-id rows. New writers always
+    // persist exact keyed receipts, but old rows remain recoverable under a
+    // deterministic synthetic identity.
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw error;
+    const record = value as Record<string, unknown>;
+    if (
+      Object.keys(record).sort().join(",") !== "reason,requestedAt" ||
+      typeof record.reason !== "string" ||
+      !record.reason ||
+      typeof record.requestedAt !== "string" ||
+      Number.isNaN(Date.parse(record.requestedAt))
+    ) {
+      throw error;
+    }
+    return {
+      reason: record.reason,
+      requestedAt: record.requestedAt,
+      finalizationId: `legacy:${run.runId}:${record.requestedAt}`,
+    };
   }
-  const reason = (value as { reason?: unknown }).reason;
-  const requestedAt = (value as { requestedAt?: unknown }).requestedAt;
-  if (!(typeof reason === "string" && reason && typeof requestedAt === "string" && requestedAt)) {
-    return undefined;
-  }
-  const finalizationId = (value as { finalizationId?: unknown }).finalizationId;
-  const claimId = (value as { claimId?: unknown }).claimId;
-  const claimExpiresAt = (value as { claimExpiresAt?: unknown }).claimExpiresAt;
-  return {
-    reason,
-    requestedAt,
-    finalizationId:
-      typeof finalizationId === "string" && finalizationId ? finalizationId : `legacy:${run.runId}:${requestedAt}`,
-    ...(typeof claimId === "string" && claimId ? { claimId } : {}),
-    ...(typeof claimExpiresAt === "string" && claimExpiresAt ? { claimExpiresAt } : {}),
-  };
 }
 
 class DurableWorkflowTimeoutError extends Error {
@@ -303,6 +483,13 @@ class DurableWorkflowTimeoutError extends Error {
   ) {
     super(`Durable workflow ${runId} exceeded ${timeoutMs}ms execution timeout.`);
     this.name = "DurableWorkflowTimeoutError";
+  }
+}
+
+class DurableChatParentAuthoritySupersededError extends Error {
+  public constructor(public readonly runId: string) {
+    super(`Durable Chat parent ${runId} no longer owns the current session authority.`);
+    this.name = "DurableChatParentAuthoritySupersededError";
   }
 }
 
@@ -428,11 +615,13 @@ export class DurableRunService {
         run: DurableRunRecord,
         progress: GeneralChatPostCommitProgress,
       ) => Promise<Record<string, unknown> | void> | Record<string, unknown> | void;
+      resolvePostCommitEligibility?: (sessionId: string) => PostCommitEligibility;
       evaluateContinuationGate?: (run: DurableRunRecord) => ContinuationGateDecision | undefined;
       recordEvidenceEnvelope?: (input: EvidenceEnvelopeCreateRequest) => void;
       taskLifecycle?: {
         autoBlockOnIncompleteExit(taskId: string, runId: string): unknown;
       };
+      sharedHostLifecycle?: SharedHostLifecycleAdmissionPort;
     },
   ) {}
 
@@ -490,6 +679,172 @@ export class DurableRunService {
     return this.ctx.storage.durableRunEvents.listByRun(runId, limit);
   }
 
+  watchDurableChildRun(input: DurableChildWatcherCreateRequest): DurableChildWatcherRecord {
+    this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
+    const parentRunId = input.parentRunId.trim();
+    const childRunId = input.childRunId.trim();
+    if (!parentRunId || !childRunId) {
+      throw new Error("Both parentRunId and childRunId are required for a durable child watcher");
+    }
+    if (parentRunId === childRunId) {
+      throw new Error("A durable run cannot watch itself");
+    }
+    const watcherId =
+      input.watcherId?.trim() ||
+      `durable-child-watcher-${createHash("sha256")
+        .update(`${parentRunId}\u0000${childRunId}`)
+        .digest("hex")
+        .slice(0, 32)}`;
+    const source = input.source?.trim() || undefined;
+    const boundedInput: DurableChildWatcherCreateRequest = {
+      parentRunId,
+      childRunId,
+      watcherId,
+      source,
+      metadata: input.metadata ?? {},
+    };
+    assertDurableChildWatcherCreateRequestBounds(boundedInput);
+    this.ctx.storage.durableRuns.getRun(parentRunId);
+    this.ctx.storage.durableRuns.getRun(childRunId);
+    const metadata = redactStructuredSecrets(redactRawRemoteApprovalBearers(boundedInput.metadata ?? {})).value;
+    assertDurableChildWatcherCreateRequestBounds({ ...boundedInput, metadata });
+    let watcher!: DurableChildWatcherRecord;
+    this.ctx.storage.runImmediateTransaction(() => {
+      const created = this.ctx.storage.durableChildWatchers.create({
+        watcherId,
+        parentRunId,
+        childRunId,
+        source,
+        metadata,
+      });
+      watcher = this.ctx.storage.durableChildWatchers.catchUpWatcher(created.watcherId, 100).watcher;
+    });
+    return watcher;
+  }
+
+  listDurableChildWatchers(parentRunId: string, limit = 200): DurableChildWatcherRecord[] {
+    this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
+    assertDurableChildWatcherRunIdBounds(parentRunId);
+    this.ctx.storage.durableRuns.getRun(parentRunId);
+    return this.ctx.storage.durableChildWatchers.listByParent(parentRunId, limit);
+  }
+
+  detachDurableChildWatcher(watcherId: string): DurableChildWatcherRecord {
+    this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
+    assertDurableChildWatcherIdBounds(watcherId);
+    return this.ctx.storage.durableChildWatchers.detach(watcherId);
+  }
+
+  reattachDurableChildWatcher(watcherId: string): DurableChildWatcherCatchUpResult {
+    this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
+    assertDurableChildWatcherIdBounds(watcherId);
+    let result!: DurableChildWatcherCatchUpResult;
+    this.ctx.storage.runImmediateTransaction(() => {
+      const watcher = this.ctx.storage.durableChildWatchers.reattach(watcherId);
+      result = this.ctx.storage.durableChildWatchers.catchUpWatcher(watcher.watcherId, 100);
+    });
+    return result;
+  }
+
+  closeDurableChildWatcher(watcherId: string): DurableChildWatcherRecord {
+    this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
+    assertDurableChildWatcherIdBounds(watcherId);
+    return this.ctx.storage.durableChildWatchers.close(watcherId);
+  }
+
+  getDurableBackgroundTaskRail(
+    parentRunId: string,
+    input: { workspaceId: string; sessionId: string },
+  ): DurableBackgroundTaskRailResponse {
+    this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
+    assertDurableChildWatcherRunIdBounds(parentRunId);
+    return projectDurableBackgroundTaskRail(this.ctx.storage, { parentRunId, ...input });
+  }
+
+  controlDurableBackgroundTask(
+    parentRunId: string,
+    watcherId: string,
+    input: DurableBackgroundTaskControlRequest,
+    actorId = "operator",
+  ): DurableBackgroundTaskControlResponse {
+    this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
+    assertDurableChildWatcherRunIdBounds(parentRunId);
+    assertDurableChildWatcherIdBounds(watcherId);
+    assertNoRawRemoteApprovalBearer(actorId);
+
+    const before = this.getDurableBackgroundTaskRail(parentRunId, input);
+    const task = before.tasks.find((candidate) => candidate.watcherId === watcherId);
+    if (!task) {
+      throw new NotFoundError({ entity: "Durable background task", id: watcherId });
+    }
+    const alreadyConverged =
+      (input.action === "detach" && task.watcherState === "detached") ||
+      (input.action === "reattach" && task.watcherState === "attached") ||
+      (input.action === "cancel" && task.canonicalStatus === "cancelled");
+    if (!alreadyConverged && task.watcherRevision !== input.expectedWatcherRevision) {
+      throw new Error(`Durable child watcher ${watcherId} changed before ${input.action} could be applied.`);
+    }
+
+    let outcome: DurableBackgroundTaskControlResponse["outcome"] = alreadyConverged ? "converged" : "applied";
+    if (input.action === "detach") {
+      if (!alreadyConverged) {
+        if (!task.controls.detach.enabled) {
+          throw new Error(task.controls.detach.reason ?? `Durable child watcher ${watcherId} cannot be detached.`);
+        }
+        const transition = this.ctx.storage.runImmediateTransaction(() =>
+          this.ctx.storage.durableChildWatchers.detachIfRevision(watcherId, parentRunId, input.expectedWatcherRevision),
+        );
+        outcome = transition.outcome;
+      }
+    } else if (input.action === "reattach") {
+      if (!alreadyConverged) {
+        if (!task.controls.reattach.enabled) {
+          throw new Error(task.controls.reattach.reason ?? `Durable child watcher ${watcherId} cannot be reattached.`);
+        }
+        const transition = this.ctx.storage.runImmediateTransaction(() => {
+          const result = this.ctx.storage.durableChildWatchers.reattachIfRevision(
+            watcherId,
+            parentRunId,
+            input.expectedWatcherRevision,
+          );
+          this.ctx.storage.durableChildWatchers.catchUpWatcher(watcherId, 100);
+          return result;
+        });
+        outcome = transition.outcome;
+      }
+    } else {
+      if (!alreadyConverged) {
+        if (!task.controls.cancel.enabled || task.childVersion === undefined) {
+          throw new Error(task.controls.cancel.reason ?? `Durable child run ${task.childRunId} cannot be cancelled.`);
+        }
+        if (input.expectedChildVersion === undefined) {
+          throw new Error("expectedChildVersion is required to cancel a background task.");
+        }
+        const cancelled = this.cancelDurableRun(task.childRunId, `background-task-rail:${actorId}`, {
+          expectedVersion: input.expectedChildVersion,
+          reason: input.reason,
+          assertLockedPrecondition: () => {
+            this.ctx.storage.durableChildWatchers.claimControlRevision(
+              watcherId,
+              parentRunId,
+              input.expectedWatcherRevision,
+            );
+          },
+        });
+        if (cancelled.version !== input.expectedChildVersion + 1) outcome = "converged";
+      }
+    }
+
+    return {
+      version: "durable.background_task_control.v1",
+      action: input.action,
+      watcherId,
+      childRunId: task.childRunId,
+      outcome,
+      rail: this.getDurableBackgroundTaskRail(parentRunId, input),
+    };
+  }
+
   startWorker(): void {
     if (!this.isDurableFoundationEnabled() || !this.deps) {
       return;
@@ -502,20 +857,24 @@ export class DurableRunService {
     this.workerRequested = true;
     this.workerActive = true;
     const backgroundTasks = this.deps.backgroundTasks;
-    const bootTask = Promise.resolve().then(async () => {
-      try {
-        await this.performBootRecovery();
-      } catch (error) {
-        this.reportWorkerBackgroundFailure("boot_recovery", error);
-      }
-      try {
-        await this.runWorkerProcessingLoop();
-      } catch (error) {
-        this.reportWorkerBackgroundFailure("run_processing", error);
-      } finally {
+    const bootTask = Promise.resolve()
+      .then(() =>
+        this.runWithSharedHostWorkerAdmission(async () => {
+          try {
+            await this.performBootRecovery();
+          } catch (error) {
+            this.reportWorkerBackgroundFailure("boot_recovery", error);
+          }
+          try {
+            await this.runWorkerProcessingLoop();
+          } catch (error) {
+            this.reportWorkerBackgroundFailure("run_processing", error);
+          }
+        }),
+      )
+      .finally(() => {
         this.workerActive = false;
-      }
-    });
+      });
     backgroundTasks.add(bootTask);
     void bootTask.finally(() => {
       backgroundTasks.delete(bootTask);
@@ -640,6 +999,16 @@ export class DurableRunService {
     this.activeRunAbortControllers.clear();
   }
 
+  /** Stop future claims without interrupting the currently admitted execution. */
+  stopAdmission(): void {
+    this.workerStopped = true;
+    this.workerRequested = false;
+    if (this.pollTimer) {
+      clearTimeout(this.pollTimer);
+      this.pollTimer = undefined;
+    }
+  }
+
   requestRunProcessing(_runId?: string): void {
     if (!this.isDurableFoundationEnabled() || !this.deps || this.workerStopped) {
       return;
@@ -651,7 +1020,7 @@ export class DurableRunService {
     this.workerActive = true;
     const backgroundTasks = this.deps.backgroundTasks;
     const task = Promise.resolve()
-      .then(() => this.runWorkerProcessingLoop())
+      .then(() => this.runWithSharedHostWorkerAdmission(() => this.runWorkerProcessingLoop()))
       .catch((error) => {
         this.reportWorkerBackgroundFailure("run_processing", error);
       })
@@ -660,6 +1029,23 @@ export class DurableRunService {
         backgroundTasks.delete(task);
       });
     backgroundTasks.add(task);
+  }
+
+  private async runWithSharedHostWorkerAdmission(work: () => Promise<void>): Promise<void> {
+    const admission = this.deps?.sharedHostLifecycle?.tryReserve(
+      "worker",
+      `durable-worker:${this.workerId}:${randomUUID()}`,
+    );
+    if (admission && !admission.admitted) return;
+    const reservation = admission?.admitted ? admission.reservation : undefined;
+    const stopOnForceDrain = () => this.stopWorker();
+    reservation?.signal.addEventListener("abort", stopOnForceDrain, { once: true });
+    try {
+      await work();
+    } finally {
+      reservation?.signal.removeEventListener("abort", stopOnForceDrain);
+      reservation?.release();
+    }
   }
 
   private async runWorkerProcessingLoop(): Promise<void> {
@@ -736,67 +1122,87 @@ export class DurableRunService {
       return false;
     }
     try {
-      const observed = this.ctx.storage.durableRuns.getRun(runId);
-      if (!readAutonomousChatPostCommitPendingMarker(observed)) {
+      let observed = this.ctx.storage.durableRuns.getRun(runId);
+      const linkedPending = readLinkedFinalizationPending(observed);
+      if (linkedPending) {
+        await this.finalizePendingLinkedState(observed);
+        observed = this.ctx.storage.durableRuns.getRun(runId);
+        if (readLinkedFinalizationPending(observed)) {
+          return false;
+        }
+      }
+      const observedPending = readAutonomousChatPostCommitPendingMarker(observed);
+      if (!observedPending) {
         if (AUTONOMOUS_CHAT_POST_COMMIT_PENDING_METADATA_KEY in (observed.metadata ?? {})) {
           throw new Error(`Autonomous Chat post-commit ${runId} has an invalid pending marker.`);
         }
+        this.closeTerminalChatTurnAdmissionIfReady(observed);
         return true;
       }
+      this.verifyAutonomousChatTerminalAuthority(observed, observedPending);
       const claim = this.claimAutonomousChatPostCommit(observed);
       if (!claim) {
         return false;
       }
-      const postCommitAbort = new AbortController();
-      const claimHeartbeat = setInterval(
-        () => {
-          try {
-            if (!this.renewAutonomousChatPostCommitClaim(claim.run.runId, claim.pending)) {
-              postCommitAbort.abort(
-                new DurableWorkerInterruptionError(
-                  "lease_lost",
-                  `Autonomous Chat post-commit ${claim.run.runId} lost claim ownership.`,
-                ),
-              );
-            }
-          } catch (error) {
-            this.reportDurableRunRecoveryFailure(claim.run.runId, error);
-            postCommitAbort.abort(error);
-          }
-        },
-        Math.floor(AUTONOMOUS_CHAT_POST_COMMIT_CLAIM_TTL_MS / 3),
-      );
-      claimHeartbeat.unref?.();
-      const postCommitTimeout = setTimeout(() => {
-        postCommitAbort.abort(new DurableWorkflowTimeoutError(claim.run.runId, AUTONOMOUS_CHAT_POST_COMMIT_TIMEOUT_MS));
-      }, AUTONOMOUS_CHAT_POST_COMMIT_TIMEOUT_MS);
-      postCommitTimeout.unref?.();
-      let rejectOnAbort: (() => void) | undefined;
-      const aborted = new Promise<never>((_resolve, reject) => {
-        rejectOnAbort = () => {
-          const reason = postCommitAbort.signal.reason;
-          reject(reason instanceof Error ? reason : new Error(String(reason ?? "autonomous post-commit aborted")));
-        };
-        postCommitAbort.signal.addEventListener("abort", rejectOnAbort, { once: true });
-      });
+      this.verifyAutonomousChatTerminalAuthority(claim.run, claim.pending);
       let resolution: Record<string, unknown> | void;
-      try {
-        resolution = await Promise.race([
-          this.deps.onAutonomousChatPostCommit(claim.run, {
-            claimId: claim.pending.claimId!,
-            signal: postCommitAbort.signal,
-          }),
-          aborted,
-        ]);
-      } finally {
-        clearInterval(claimHeartbeat);
-        clearTimeout(postCommitTimeout);
-        if (rejectOnAbort) {
-          postCommitAbort.signal.removeEventListener("abort", rejectOnAbort);
+      const canonicalAutonomousAdmission = isAutonomousAdmittedV2ChatRun(claim.run);
+      const authoritySupersededBeforeSideEffect =
+        canonicalAutonomousAdmission &&
+        this.settleCanonicalAutonomousChatWriteAuthority(claim.run) === "authority_superseded";
+      if (!authoritySupersededBeforeSideEffect) {
+        const postCommitAbort = new AbortController();
+        const claimHeartbeat = setInterval(
+          () => {
+            try {
+              if (!this.renewAutonomousChatPostCommitClaim(claim.run.runId, claim.pending)) {
+                postCommitAbort.abort(
+                  new DurableWorkerInterruptionError(
+                    "lease_lost",
+                    `Autonomous Chat post-commit ${claim.run.runId} lost claim ownership.`,
+                  ),
+                );
+              }
+            } catch (error) {
+              this.reportDurableRunRecoveryFailure(claim.run.runId, error);
+              postCommitAbort.abort(error);
+            }
+          },
+          Math.floor(AUTONOMOUS_CHAT_POST_COMMIT_CLAIM_TTL_MS / 3),
+        );
+        claimHeartbeat.unref?.();
+        const postCommitTimeout = setTimeout(() => {
+          postCommitAbort.abort(
+            new DurableWorkflowTimeoutError(claim.run.runId, AUTONOMOUS_CHAT_POST_COMMIT_TIMEOUT_MS),
+          );
+        }, AUTONOMOUS_CHAT_POST_COMMIT_TIMEOUT_MS);
+        postCommitTimeout.unref?.();
+        let rejectOnAbort: (() => void) | undefined;
+        const aborted = new Promise<never>((_resolve, reject) => {
+          rejectOnAbort = () => {
+            const reason = postCommitAbort.signal.reason;
+            reject(reason instanceof Error ? reason : new Error(String(reason ?? "autonomous post-commit aborted")));
+          };
+          postCommitAbort.signal.addEventListener("abort", rejectOnAbort, { once: true });
+        });
+        try {
+          resolution = await Promise.race([
+            this.deps.onAutonomousChatPostCommit(claim.run, {
+              claimId: claim.pending.claimId!,
+              signal: postCommitAbort.signal,
+            }),
+            aborted,
+          ]);
+        } finally {
+          clearInterval(claimHeartbeat);
+          clearTimeout(postCommitTimeout);
+          if (rejectOnAbort) {
+            postCommitAbort.signal.removeEventListener("abort", rejectOnAbort);
+          }
         }
-      }
-      if (postCommitAbort.signal.aborted) {
-        return false;
+        if (postCommitAbort.signal.aborted) {
+          return false;
+        }
       }
       let clearedClaim = false;
       const cleared = this.retryDurableRunUpdate(runId, (current) => {
@@ -809,12 +1215,47 @@ export class DurableRunService {
         ) {
           return current;
         }
+        this.verifyAutonomousChatTerminalAuthority(current, currentPending);
+        const authoritySuperseded =
+          authoritySupersededBeforeSideEffect ||
+          (canonicalAutonomousAdmission &&
+            this.settleCanonicalAutonomousChatWriteAuthority(current) === "authority_superseded");
         const metadata = { ...(current.metadata ?? {}) };
         delete metadata[AUTONOMOUS_CHAT_POST_COMMIT_PENDING_METADATA_KEY];
-        metadata.autonomousChatPostCommit = {
-          ...(resolution ?? {}),
+        const generalPending = readGeneralChatPostCommitPendingMarker(current);
+        const generalSettlementGeneration =
+          metadata.generalChatPostCommit &&
+          typeof metadata.generalChatPostCommit === "object" &&
+          !Array.isArray(metadata.generalChatPostCommit) &&
+          typeof (metadata.generalChatPostCommit as Record<string, unknown>).generationId === "string"
+            ? ((metadata.generalChatPostCommit as Record<string, unknown>).generationId as string)
+            : undefined;
+        const generationId =
+          currentPending.generationId ??
+          generalPending?.generationId ??
+          generalSettlementGeneration ??
+          `legacy:${hashChatTurnRuntimeAuthorityValue([current.runId, currentPending.requestedAt]).slice(0, 32)}`;
+        if (
+          currentPending.generationId &&
+          generalPending?.generationId &&
+          currentPending.generationId !== generalPending.generationId
+        ) {
+          throw new Error(`Autonomous Chat post-commit ${runId} generation conflicts with general settlement.`);
+        }
+        const resolutionRecord = authoritySuperseded ? {} : (resolution ?? {});
+        const autonomousSettlement = {
+          delivery: authoritySuperseded
+            ? { status: "skipped", reason: "authority_superseded" }
+            : (resolutionRecord.delivery ?? { status: "skipped", reason: "delivery_not_reported" }),
+          heartbeatCleanup: authoritySuperseded
+            ? { status: "not_required" }
+            : (resolutionRecord.heartbeatCleanup ?? { status: "not_required" }),
+          generationId,
+          requestedAt: currentPending.requestedAt,
           completedAt: new Date().toISOString(),
         };
+        readExactAutonomousChatPostCommitSettlement(autonomousSettlement);
+        metadata.autonomousChatPostCommit = autonomousSettlement;
         const updated = this.ctx.storage.durableRuns.updateRun({
           runId: current.runId,
           status: current.status,
@@ -825,10 +1266,285 @@ export class DurableRunService {
         clearedClaim = true;
         return updated;
       });
+      if (clearedClaim && !hasAutonomousChatPostCommitPending(cleared)) {
+        if (!hasGeneralChatPostCommitPending(cleared)) {
+          this.closeTerminalChatTurnAdmissionIfReady(cleared);
+        }
+      }
       return clearedClaim && !hasAutonomousChatPostCommitPending(cleared);
     } catch (error) {
       this.reportDurableRunRecoveryFailure(runId, error);
       return false;
+    }
+  }
+
+  private verifyAutonomousChatTerminalAuthority(
+    run: DurableRunRecord,
+    pending: AutonomousChatPostCommitPendingMarker,
+  ): void {
+    const payload = run.payload as { version?: unknown; turnId?: unknown } | undefined;
+    if (run.workflowKey !== "chat.turn.execute" || payload?.version !== "chat.turn.execute.v2") {
+      if (run.metadata?.[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY] !== undefined) {
+        throw new Error(`Autonomous Chat post-commit ${run.runId} carries unauthorized runtime authority.`);
+      }
+      return;
+    }
+    this.requireExactParentTurnAdmission(run, { requireActive: false });
+    if (run.metadata?.autonomousAdmission === undefined) {
+      throw new Error(`Autonomous Chat post-commit ${run.runId} has no autonomous admission seal.`);
+    }
+    this.verifyCanonicalAutonomousChatAdmission(run);
+    const authority = readChatTurnRuntimeAuthoritySeal(run.metadata[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY]);
+    if (
+      !authority ||
+      authority.material.transitionKind !== "terminal" ||
+      authority.material.durableStatus !== "completed" ||
+      (authority.material.traceStatus !== "completed" && authority.material.traceStatus !== "partial") ||
+      authority.material.runId !== run.runId ||
+      authority.material.turnId !== payload.turnId ||
+      !pending.generationId ||
+      pending.generationId !== authority.material.postCommitGenerationId ||
+      pending.requestedAt !== authority.material.transitionAt
+    ) {
+      throw new Error(`Autonomous Chat post-commit ${run.runId} has no exact terminal runtime authority.`);
+    }
+    assertDurableRetryPolicyMatchesRun(run.metadata.retryPolicy, run.maxAttempts, DURABLE_RETRY_POLICY_DEFAULT);
+    const checkpoint = this.ctx.storage.durableRuns.getLatestCheckpointByKind(run.runId, "run_completed");
+    if (!checkpoint) {
+      throw new Error(`Autonomous Chat post-commit ${run.runId} has no authority-anchored terminal checkpoint.`);
+    }
+    verifyCheckpointAnchoredChatTurnRuntimeAuthority(run.metadata, checkpoint.state);
+    const generalPending = readGeneralChatPostCommitPendingMarker(run);
+    if (
+      !generalPending ||
+      generalPending.generationId !== authority.material.postCommitGenerationId ||
+      generalPending.traceStatus !== authority.material.traceStatus ||
+      generalPending.requestedAt !== authority.material.transitionAt ||
+      canonicalJsonString(generalPending.postCommitEligibility) !==
+        canonicalJsonString(authority.material.postCommitEligibility)
+    ) {
+      throw new Error(`Autonomous Chat post-commit ${run.runId} has no matching general generation.`);
+    }
+    const terminalOutput = authority.material.terminalOutput;
+    if (
+      !terminalOutput ||
+      typeof run.metadata.outputText !== "string" ||
+      typeof run.metadata.outputSummary !== "string" ||
+      run.metadata.outputMessageId !== undefined ||
+      run.metadata.outputTraceStatus !== undefined ||
+      run.metadata.finalOutput !== run.metadata.outputText ||
+      run.metadata.finalSummary !== run.metadata.outputSummary ||
+      hashChatTurnRuntimeAuthorityValue(run.metadata.outputText) !== terminalOutput.outputTextSha256 ||
+      hashChatTurnRuntimeAuthorityValue(run.metadata.outputSummary) !== terminalOutput.outputSummarySha256 ||
+      checkpoint.state.assistantMessageId !== terminalOutput.assistantMessageId ||
+      checkpoint.state.outputText !== run.metadata.outputText ||
+      checkpoint.state.outputSummary !== run.metadata.outputSummary
+    ) {
+      throw new Error(`Autonomous Chat post-commit ${run.runId} terminal output drifted from its authority.`);
+    }
+  }
+
+  private readCheckpointAnchoredChatTurnRuntimeAuthority(
+    run: DurableRunRecord,
+  ): ChatTurnRuntimeAuthoritySealV1 | undefined {
+    const payload = run.payload as { version?: unknown; turnId?: unknown } | undefined;
+    const authorityValue = run.metadata?.[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY];
+    const admittedV2Chat = run.workflowKey === "chat.turn.execute" && payload?.version === "chat.turn.execute.v2";
+    if (authorityValue === undefined) {
+      if (admittedV2Chat && run.metadata?.autonomousAdmission !== undefined) {
+        throw new Error(`Autonomous Chat run ${run.runId} has no checkpoint-anchored runtime authority.`);
+      }
+      return undefined;
+    }
+    if (!admittedV2Chat) {
+      throw new Error(`Durable run ${run.runId} carries runtime authority without an admitted v2 Chat turn.`);
+    }
+    this.requireExactParentTurnAdmission(run, { requireActive: false });
+    if (run.metadata?.autonomousAdmission !== undefined) this.verifyCanonicalAutonomousChatAdmission(run);
+    if (
+      !(run.status === "waiting" || run.status === "completed" || run.status === "failed" || run.status === "cancelled")
+    ) {
+      throw new Error(
+        `Durable Chat run ${run.runId} has runtime authority for an unrepresentable status ${run.status}.`,
+      );
+    }
+    const authority = readChatTurnRuntimeAuthoritySeal(authorityValue);
+    if (
+      !authority ||
+      authority.material.runId !== run.runId ||
+      authority.material.turnId !== payload.turnId ||
+      authority.material.durableStatus !== run.status
+    ) {
+      throw new Error(`Durable Chat run ${run.runId} runtime authority does not match its current state.`);
+    }
+    const checkpointKind =
+      run.status === "waiting"
+        ? "run_waiting"
+        : run.status === "completed"
+          ? "run_completed"
+          : run.status === "failed"
+            ? "run_failed"
+            : "run_cancelled";
+    const checkpoint = this.ctx.storage.durableRuns.getLatestCheckpointByKind(run.runId, checkpointKind);
+    if (!checkpoint) {
+      throw new Error(`Durable Chat run ${run.runId} has no checkpoint for its runtime authority.`);
+    }
+    verifyCheckpointAnchoredChatTurnRuntimeAuthority(run.metadata, checkpoint.state);
+    assertDurableRetryPolicyMatchesRun(run.metadata?.retryPolicy, run.maxAttempts, DURABLE_RETRY_POLICY_DEFAULT);
+    if (authority.material.durableStatus !== "completed") {
+      this.assertNoCanonicalChatTerminalOutput(run, checkpoint.state);
+    }
+    return authority;
+  }
+
+  private assertNoCanonicalChatTerminalOutput(run: DurableRunRecord, checkpointState?: Record<string, unknown>): void {
+    const metadata = run.metadata ?? {};
+    if (
+      CHAT_TERMINAL_OUTPUT_METADATA_KEYS.some((key) => metadata[key] !== undefined) ||
+      (checkpointState && CHAT_TERMINAL_OUTPUT_CHECKPOINT_KEYS.some((key) => checkpointState[key] !== undefined))
+    ) {
+      throw new Error(`Durable Chat run ${run.runId} carries stale output evidence for a no-output transition.`);
+    }
+  }
+
+  private verifyGeneralChatPostCommitRuntimeAuthority(
+    run: DurableRunRecord,
+    marker: GeneralChatPostCommitPendingMarker,
+  ): ChatTurnRuntimeAuthoritySealV1 {
+    const payload = run.payload as { version?: unknown } | undefined;
+    if (run.workflowKey !== "chat.turn.execute" || payload?.version !== "chat.turn.execute.v2") {
+      throw new Error(
+        `Durable Chat post-commit ${run.runId} has no exact admitted v2 authority and is quarantined from reconciliation.`,
+      );
+    }
+    const authority = this.readCheckpointAnchoredChatTurnRuntimeAuthority(run);
+    if (!authority) {
+      throw new Error(`Durable Chat post-commit ${run.runId} has no checkpoint-anchored runtime authority.`);
+    }
+    if (
+      marker.generationId !== authority.material.postCommitGenerationId ||
+      marker.traceStatus !== authority.material.traceStatus ||
+      marker.requestedAt !== authority.material.transitionAt ||
+      canonicalJsonString(marker.postCommitEligibility) !==
+        canonicalJsonString(authority.material.postCommitEligibility)
+    ) {
+      throw new Error(`Durable Chat post-commit ${run.runId} drifted from its checkpoint-anchored runtime authority.`);
+    }
+    return authority;
+  }
+
+  private arePriorChatTurnFinalizersSettled(
+    run: DurableRunRecord,
+    authority: ChatTurnRuntimeAuthoritySealV1 | undefined,
+  ): boolean {
+    if (!authority) return true;
+    if (authority.material.requiredFinalizers.includes("linked")) {
+      const linkedAuthority = authority.material.linkedFinalization;
+      if (!linkedAuthority) {
+        throw new Error(`Durable linked finalization ${run.runId} has incomplete runtime authority.`);
+      }
+      const pending = readLinkedFinalizationPending(run);
+      if (pending) {
+        if (run.metadata?.linkedFinalization !== undefined) {
+          throw new Error(`Durable linked finalization ${run.runId} has both pending and settled evidence.`);
+        }
+        if (
+          pending.finalizationId !== linkedAuthority.finalizationId ||
+          pending.requestedAt !== linkedAuthority.requestedAt ||
+          hashChatTurnRuntimeAuthorityValue(pending.reason) !== linkedAuthority.reasonSha256
+        ) {
+          throw new Error(`Durable linked finalization ${run.runId} drifted from its runtime authority.`);
+        }
+        return false;
+      }
+      if (run.metadata?.linkedFinalizationPending !== undefined) {
+        throw new Error(`Durable linked finalization ${run.runId} has an invalid pending marker.`);
+      }
+      const settlement = readExactLinkedFinalizationSettlement(run.metadata?.linkedFinalization);
+      if (
+        !settlement ||
+        settlement.finalizationId !== linkedAuthority.finalizationId ||
+        settlement.requestedAt !== linkedAuthority.requestedAt ||
+        settlement.reasonSha256 !== linkedAuthority.reasonSha256
+      ) {
+        throw new Error(`Durable linked finalization ${run.runId} has no exact settlement receipt.`);
+      }
+    } else if (
+      run.metadata?.linkedFinalizationPending !== undefined ||
+      run.metadata?.linkedFinalization !== undefined
+    ) {
+      throw new Error(`Durable Chat run ${run.runId} carries stray linked-finalization evidence.`);
+    }
+    if (authority.material.requiredFinalizers.includes("autonomous")) {
+      const pending = readAutonomousChatPostCommitPendingMarker(run);
+      if (pending) {
+        if (run.metadata?.autonomousChatPostCommit !== undefined) {
+          throw new Error(`Autonomous Chat post-commit ${run.runId} has both pending and settled evidence.`);
+        }
+        if (
+          pending.generationId !== authority.material.postCommitGenerationId ||
+          pending.requestedAt !== authority.material.transitionAt
+        ) {
+          throw new Error(`Autonomous Chat post-commit ${run.runId} drifted from its runtime authority.`);
+        }
+        return false;
+      }
+      if (run.metadata?.[AUTONOMOUS_CHAT_POST_COMMIT_PENDING_METADATA_KEY] !== undefined) {
+        throw new Error(`Autonomous Chat post-commit ${run.runId} has an invalid pending marker.`);
+      }
+      const settlement = readExactAutonomousChatPostCommitSettlement(run.metadata?.autonomousChatPostCommit);
+      if (
+        !settlement ||
+        settlement.generationId !== authority.material.postCommitGenerationId ||
+        settlement.requestedAt !== authority.material.transitionAt
+      ) {
+        throw new Error(`Autonomous Chat post-commit ${run.runId} has no exact settlement receipt.`);
+      }
+    } else if (
+      run.metadata?.[AUTONOMOUS_CHAT_POST_COMMIT_PENDING_METADATA_KEY] !== undefined ||
+      run.metadata?.autonomousChatPostCommit !== undefined
+    ) {
+      throw new Error(`Durable Chat run ${run.runId} carries stray autonomous finalizer evidence.`);
+    }
+    return true;
+  }
+
+  private verifyCanonicalTerminalOutputAgainstAuthority(
+    run: DurableRunRecord,
+    authority: ChatTurnRuntimeAuthoritySealV1,
+  ): void {
+    if (authority.material.durableStatus !== "completed") return;
+    const terminalOutput = authority.material.terminalOutput;
+    const payload = run.payload as { sessionId?: unknown } | undefined;
+    const checkpoint = this.ctx.storage.durableRuns.getLatestCheckpointByKind(run.runId, "run_completed");
+    if (
+      !terminalOutput ||
+      !checkpoint ||
+      typeof payload?.sessionId !== "string" ||
+      typeof run.metadata?.outputText !== "string" ||
+      typeof run.metadata.outputSummary !== "string" ||
+      run.metadata.outputMessageId !== undefined ||
+      run.metadata.outputTraceStatus !== undefined ||
+      run.metadata.finalOutput !== run.metadata.outputText ||
+      run.metadata.finalSummary !== run.metadata.outputSummary ||
+      hashChatTurnRuntimeAuthorityValue(run.metadata.outputText) !== terminalOutput.outputTextSha256 ||
+      hashChatTurnRuntimeAuthorityValue(run.metadata.outputSummary) !== terminalOutput.outputSummarySha256 ||
+      checkpoint.state.assistantMessageId !== terminalOutput.assistantMessageId ||
+      checkpoint.state.outputText !== run.metadata.outputText ||
+      checkpoint.state.outputSummary !== run.metadata.outputSummary
+    ) {
+      throw new Error(`Durable Chat run ${run.runId} terminal output drifted from its runtime authority.`);
+    }
+    const message = this.ctx.storage.chatMessages.get(terminalOutput.assistantMessageId);
+    if (
+      !message ||
+      message.messageId !== terminalOutput.assistantMessageId ||
+      message.sessionId !== payload.sessionId ||
+      message.role !== "assistant" ||
+      message.actorType !== "agent" ||
+      message.content !== run.metadata.outputText
+    ) {
+      throw new Error(`Durable Chat run ${run.runId} canonical assistant output no longer matches its authority.`);
     }
   }
 
@@ -912,6 +1628,26 @@ export class DurableRunService {
   }
 
   async reconcileGeneralChatPostCommit(runId: string): Promise<boolean> {
+    try {
+      let observed = this.ctx.storage.durableRuns.getRun(runId);
+      if (readLinkedFinalizationPending(observed)) {
+        await this.finalizePendingLinkedState(observed);
+        observed = this.ctx.storage.durableRuns.getRun(runId);
+        if (readLinkedFinalizationPending(observed)) {
+          return false;
+        }
+      }
+      if (hasAutonomousChatPostCommitPending(observed)) {
+        await this.reconcileAutonomousChatPostCommit(runId);
+        observed = this.ctx.storage.durableRuns.getRun(runId);
+        if (hasAutonomousChatPostCommitPending(observed)) {
+          return false;
+        }
+      }
+    } catch (error) {
+      this.reportDurableRunRecoveryFailure(runId, error);
+      return false;
+    }
     const inFlight = this.generalChatPostCommitInFlight.get(runId);
     if (inFlight) {
       return inFlight.work;
@@ -940,7 +1676,23 @@ export class DurableRunService {
           if (GENERAL_CHAT_POST_COMMIT_PENDING_METADATA_KEY in (observed.metadata ?? {})) {
             throw new Error(`Durable Chat post-commit ${runId} has an invalid pending marker.`);
           }
+          this.closeTerminalChatTurnAdmissionIfReady(observed);
           return true;
+        }
+        const authority = this.verifyGeneralChatPostCommitRuntimeAuthority(observed, marker);
+        if (!this.arePriorChatTurnFinalizersSettled(observed, authority)) {
+          return false;
+        }
+        if (this.hasSettledGeneralChatPostCommitParentEffects(observed, marker)) {
+          const settlement = this.settleGeneralChatPostCommitGeneration(runId, marker);
+          if (settlement.generationChanged) {
+            continue;
+          }
+          for (const childRunId of settlement.queuedChildRunIds) {
+            this.requestRunProcessing(childRunId);
+          }
+          this.closeTerminalChatTurnAdmissionIfReady(settlement.run);
+          return settlement.complete;
         }
         const completedEffects = new Set(readGeneralChatPostCommitCompletedEffects(observed));
         const progress: GeneralChatPostCommitProgress = {
@@ -967,107 +1719,282 @@ export class DurableRunService {
         if (!sameGeneralChatPostCommitGeneration(marker, reconciledMarker)) {
           continue;
         }
-        let generationChanged = false;
-        let childrenPending = false;
-        const queuedChildRunIds: string[] = [];
-        let cleared = reconciled;
-        this.ctx.storage.runImmediateTransaction(() => {
-          const current = this.ctx.storage.durableRuns.getRunForUpdate(runId);
-          const currentMarker = readGeneralChatPostCommitPendingMarker(current);
-          if (!currentMarker) {
-            cleared = current;
-            return;
-          }
-          if (!sameGeneralChatPostCommitGeneration(marker, currentMarker)) {
-            generationChanged = true;
-            cleared = current;
-            return;
-          }
-          const currentEffects = new Set(readGeneralChatPostCommitCompletedEffects(current));
-          const missingEffects = GENERAL_CHAT_POST_COMMIT_EFFECTS.filter(
-            (effect) =>
-              !currentEffects.has(effect) &&
-              (!isGeneralChatPostCommitDurableEffect(effect) || !currentMarker.durableEffectRunIds[effect]),
-          );
-          if (missingEffects.length > 0) {
-            throw new Error(
-              `Durable Chat post-commit ${runId} returned before reconciling effects: ${missingEffects.join(", ")}.`,
-            );
-          }
-          const durableEffectOutcomes: Record<string, Record<string, unknown>> = {};
-          for (const effect of GENERAL_CHAT_POST_COMMIT_DURABLE_EFFECTS) {
-            const childRunId = currentMarker.durableEffectRunIds[effect];
-            if (!childRunId) {
-              continue;
-            }
-            const expectedChildRunId = buildGeneralChatPostCommitEffectRunId(runId, marker.generationId, effect);
-            if (childRunId !== expectedChildRunId) {
-              throw new Error(`Durable Chat post-commit ${runId} has an invalid ${effect} child-run receipt.`);
-            }
-            const child = this.ctx.storage.durableRuns.getRunForUpdate(childRunId);
-            assertGeneralChatPostCommitEffectChildLink(child, runId, marker.generationId, effect);
-            if (!isDurableRunTerminal(child.status)) {
-              childrenPending = true;
-              if (child.status === "queued") {
-                queuedChildRunIds.push(childRunId);
-              }
-              continue;
-            }
-            durableEffectOutcomes[effect] = {
-              runId: childRunId,
-              status: child.status,
-              settledAt: child.finishedAt ?? child.updatedAt,
-              ...(child.lastError ? { error: child.lastError } : {}),
-            };
-            if (child.status === "completed") {
-              currentEffects.add(effect);
-            }
-          }
-          if (childrenPending) {
-            cleared = current;
-            return;
-          }
-          const metadata = { ...(current.metadata ?? {}) };
-          delete metadata[GENERAL_CHAT_POST_COMMIT_PENDING_METADATA_KEY];
-          const settledAt = new Date().toISOString();
-          const allDurableEffectsSucceeded = Object.values(durableEffectOutcomes).every(
-            (outcome) => outcome.status === "completed",
-          );
-          metadata.generalChatPostCommit = {
-            ...(resolution ?? {}),
-            generationId: marker.generationId,
-            traceStatus: marker.traceStatus,
-            completedEffects: [...currentEffects],
-            durableEffectRunIds: { ...currentMarker.durableEffectRunIds },
-            durableEffectOutcomes,
-            settlementStatus: allDurableEffectsSucceeded ? "completed" : "settled_with_failures",
-            settledAt,
-            ...(allDurableEffectsSucceeded ? { completedAt: settledAt } : {}),
-          };
-          cleared = this.ctx.storage.durableRuns.updateRun({
-            runId: current.runId,
-            status: current.status,
-            metadata,
-            updatedAt: settledAt,
-            expectedVersion: current.version,
-          });
-        });
-        if (generationChanged) {
+        const settlement = this.settleGeneralChatPostCommitGeneration(runId, marker, resolution);
+        if (settlement.generationChanged) {
           continue;
         }
-        if (childrenPending) {
-          for (const childRunId of queuedChildRunIds) {
-            this.requestRunProcessing(childRunId);
-          }
-          return false;
+        for (const childRunId of settlement.queuedChildRunIds) {
+          this.requestRunProcessing(childRunId);
         }
-        return !hasGeneralChatPostCommitPending(cleared);
+        this.closeTerminalChatTurnAdmissionIfReady(settlement.run);
+        return settlement.complete;
       }
       throw new Error(`Durable Chat post-commit ${runId} changed generations too many times to reconcile safely.`);
     } catch (error) {
+      if (error instanceof DurableChatParentAuthoritySupersededError) {
+        this.settleAuthoritySupersededGeneralChatPostCommit(runId);
+        return true;
+      }
       this.reportDurableRunRecoveryFailure(runId, error);
       return false;
     }
+  }
+
+  private hasSettledGeneralChatPostCommitParentEffects(
+    run: DurableRunRecord,
+    marker: GeneralChatPostCommitPendingMarker,
+  ): boolean {
+    const settled = run.metadata?.generalChatPostCommit;
+    if (!settled || typeof settled !== "object" || Array.isArray(settled)) return false;
+    const value = settled as Record<string, unknown>;
+    return value.generationId === marker.generationId && value.parentLocalEffectsStatus === "settled";
+  }
+
+  private settleGeneralChatPostCommitGeneration(
+    runId: string,
+    expectedMarker: GeneralChatPostCommitPendingMarker,
+    resolution?: Record<string, unknown> | void,
+  ): {
+    run: DurableRunRecord;
+    generationChanged: boolean;
+    complete: boolean;
+    queuedChildRunIds: string[];
+  } {
+    let generationChanged = false;
+    const queuedChildRunIds: string[] = [];
+    let settled = this.ctx.storage.durableRuns.getRun(runId);
+    this.ctx.storage.runImmediateTransaction(() => {
+      const current = this.ctx.storage.durableRuns.getRunForUpdate(runId);
+      const currentMarker = readGeneralChatPostCommitPendingMarker(current);
+      if (!currentMarker) {
+        settled = current;
+        return;
+      }
+      if (!sameGeneralChatPostCommitGeneration(expectedMarker, currentMarker)) {
+        generationChanged = true;
+        settled = current;
+        return;
+      }
+      const runtimeAuthority = this.verifyGeneralChatPostCommitRuntimeAuthority(current, currentMarker);
+      if (!this.arePriorChatTurnFinalizersSettled(current, runtimeAuthority)) {
+        throw new Error(`Durable Chat post-commit ${runId} cannot settle before its prior finalizers.`);
+      }
+      const currentEffects = new Set(readGeneralChatPostCommitCompletedEffects(current));
+      const missingEffects = GENERAL_CHAT_POST_COMMIT_EFFECTS.filter(
+        (effect) =>
+          !currentEffects.has(effect) &&
+          (!isGeneralChatPostCommitDurableEffect(effect) || !currentMarker.durableEffectRunIds[effect]),
+      );
+      if (missingEffects.length > 0) {
+        throw new Error(
+          `Durable Chat post-commit ${runId} returned before reconciling effects: ${missingEffects.join(", ")}.`,
+        );
+      }
+
+      let childrenPending = false;
+      let childFailure = false;
+      const durableEffectOutcomes: Record<string, Record<string, unknown>> = {};
+      for (const effect of GENERAL_CHAT_POST_COMMIT_DURABLE_EFFECTS) {
+        const childRunId = currentMarker.durableEffectRunIds[effect];
+        if (!childRunId) continue;
+        const expectedChildRunId = buildGeneralChatPostCommitEffectRunId(runId, currentMarker.generationId, effect);
+        if (childRunId !== expectedChildRunId) {
+          throw new Error(`Durable Chat post-commit ${runId} has an invalid ${effect} child-run receipt.`);
+        }
+        const child = this.ctx.storage.durableRuns.getRunForUpdate(childRunId);
+        assertGeneralChatPostCommitEffectChildLink(child, runId, currentMarker.generationId, effect);
+        if (!isDurableRunTerminal(child.status)) {
+          childrenPending = true;
+          durableEffectOutcomes[effect] = {
+            runId: childRunId,
+            status: child.status,
+            observedAt: child.updatedAt,
+          };
+          if (child.status === "queued") queuedChildRunIds.push(childRunId);
+          continue;
+        }
+        durableEffectOutcomes[effect] = {
+          runId: childRunId,
+          status: child.status,
+          settledAt: child.finishedAt ?? child.updatedAt,
+          ...(child.lastError ? { error: child.lastError } : {}),
+        };
+        if (child.status === "completed") {
+          currentEffects.add(effect);
+        } else {
+          childFailure = true;
+        }
+      }
+
+      const metadata = { ...(current.metadata ?? {}) };
+      const existingSettlement =
+        metadata.generalChatPostCommit &&
+        typeof metadata.generalChatPostCommit === "object" &&
+        !Array.isArray(metadata.generalChatPostCommit)
+          ? (metadata.generalChatPostCommit as Record<string, unknown>)
+          : {};
+      const localSettledAt =
+        typeof existingSettlement.parentLocalEffectsSettledAt === "string"
+          ? existingSettlement.parentLocalEffectsSettledAt
+          : new Date().toISOString();
+      const terminalParent =
+        current.status === "completed" || current.status === "failed" || current.status === "cancelled";
+      const admittedV2Parent =
+        current.workflowKey === "chat.turn.execute" &&
+        (current.payload as { version?: unknown } | undefined)?.version === "chat.turn.execute.v2";
+      if (isDurableRunTerminal(current.status) && !terminalParent && admittedV2Parent) {
+        throw new Error(
+          `Durable Chat parent ${runId} cannot hand off unrepresentable terminal status ${current.status}.`,
+        );
+      }
+      const parentFinalizationBlocked = false;
+      const committedAt = new Date().toISOString();
+      const childRunIds = [...new Set(Object.values(currentMarker.durableEffectRunIds))]
+        .filter((childRunId): childRunId is string => typeof childRunId === "string" && Boolean(childRunId))
+        .sort((left, right) => left.localeCompare(right));
+
+      if (terminalParent && admittedV2Parent && !parentFinalizationBlocked) {
+        const admission = this.requireExactParentTurnAdmission(current, { requireActive: false });
+        const expectedHandoff = {
+          version: 1 as const,
+          admissionId: admission.admissionId,
+          sessionIncarnationId: admission.sessionIncarnationId,
+          turnId: admission.turnId,
+          parentRunId: current.runId,
+          postCommitGenerationId: currentMarker.generationId,
+          parentLocalEffectsStatus: "settled" as const,
+          childRunIds,
+          childRunIdsSha256: createHash("sha256").update(canonicalJsonString(childRunIds)).digest("hex"),
+          committedAt,
+        };
+        const existingHandoff = metadata.chatTurnAdmissionHandoff;
+        if (existingHandoff === undefined) {
+          metadata.chatTurnAdmissionHandoff = expectedHandoff;
+        } else if (!this.isExactChatTurnAdmissionHandoff(existingHandoff, expectedHandoff)) {
+          throw new Error(`Durable Chat parent ${runId} has a conflicting terminal handoff marker.`);
+        }
+      }
+
+      const shouldRetainPending = terminalParent && (childrenPending || parentFinalizationBlocked);
+      if (!shouldRetainPending) {
+        delete metadata[GENERAL_CHAT_POST_COMMIT_PENDING_METADATA_KEY];
+      }
+      const completedAt = new Date().toISOString();
+      metadata.generalChatPostCommit = {
+        ...existingSettlement,
+        ...selectCanonicalGeneralChatPostCommitResolution(resolution),
+        generationId: currentMarker.generationId,
+        traceStatus: currentMarker.traceStatus,
+        requestedAt: currentMarker.requestedAt,
+        postCommitEligibility: currentMarker.postCommitEligibility,
+        parentLocalEffectsStatus: "settled",
+        parentLocalEffectsSettledAt: localSettledAt,
+        completedEffects: [...currentEffects],
+        durableEffectRunIds: { ...currentMarker.durableEffectRunIds },
+        durableEffectOutcomes,
+        childOutcomeAuthority: "child_durable_runs",
+        settlementStatus: parentFinalizationBlocked
+          ? "waiting_for_parent_finalization"
+          : childrenPending
+            ? "children_pending"
+            : childFailure
+              ? "settled_with_failures"
+              : "completed",
+        ...(shouldRetainPending ? {} : { completedAt }),
+      };
+      readExactGeneralChatPostCommitSettlement(metadata.generalChatPostCommit);
+      settled = this.ctx.storage.durableRuns.updateRun({
+        runId: current.runId,
+        status: current.status,
+        metadata,
+        updatedAt: completedAt,
+        expectedVersion: current.version,
+      });
+      if (!hasGeneralChatPostCommitPending(settled) && terminalParent) {
+        this.closeTerminalChatTurnAdmissionIfReady(settled);
+      }
+    });
+    return {
+      run: settled,
+      generationChanged,
+      complete: !hasGeneralChatPostCommitPending(settled),
+      queuedChildRunIds: [...new Set(queuedChildRunIds)],
+    };
+  }
+
+  private isExactChatTurnAdmissionHandoff(
+    value: unknown,
+    expected: {
+      version: 1;
+      admissionId: string;
+      sessionIncarnationId: string;
+      turnId: string;
+      parentRunId: string;
+      postCommitGenerationId: string;
+      parentLocalEffectsStatus: "settled";
+      childRunIds: string[];
+      childRunIdsSha256: string;
+      committedAt: string;
+    },
+  ): boolean {
+    try {
+      const record = readExactChatTurnAdmissionHandoff(value);
+      return Boolean(
+        record &&
+        record.version === expected.version &&
+        record.admissionId === expected.admissionId &&
+        record.sessionIncarnationId === expected.sessionIncarnationId &&
+        record.turnId === expected.turnId &&
+        record.parentRunId === expected.parentRunId &&
+        record.postCommitGenerationId === expected.postCommitGenerationId &&
+        record.parentLocalEffectsStatus === expected.parentLocalEffectsStatus &&
+        canonicalJsonString(record.childRunIds) === canonicalJsonString(expected.childRunIds) &&
+        record.childRunIdsSha256 === expected.childRunIdsSha256,
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  private settleAuthoritySupersededGeneralChatPostCommit(runId: string): void {
+    this.ctx.storage.runImmediateTransaction(() => {
+      const current = this.ctx.storage.durableRuns.getRunForUpdate(runId);
+      const marker = readGeneralChatPostCommitPendingMarker(current);
+      if (!marker) return;
+      const admission = this.requireExactParentTurnAdmission(current, { requireActive: false });
+      if (admission.status !== "cancelled" || admission.terminalAuthorityKind !== "authority_superseded") {
+        throw new Error(`Durable Chat parent ${runId} has no authority-superseded terminal evidence.`);
+      }
+      const completedEffects = readGeneralChatPostCommitCompletedEffects(current);
+      const blockedEffects = GENERAL_CHAT_POST_COMMIT_EFFECTS.filter(
+        (effect) =>
+          !completedEffects.includes(effect) &&
+          (!isGeneralChatPostCommitDurableEffect(effect) || !marker.durableEffectRunIds[effect]),
+      );
+      const metadata = { ...(current.metadata ?? {}) };
+      delete metadata[GENERAL_CHAT_POST_COMMIT_PENDING_METADATA_KEY];
+      metadata.generalChatPostCommit = {
+        generationId: marker.generationId,
+        traceStatus: marker.traceStatus,
+        requestedAt: marker.requestedAt,
+        postCommitEligibility: marker.postCommitEligibility,
+        settlementStatus: "authority_superseded",
+        completedEffects,
+        blockedEffects,
+        durableEffectRunIds: { ...marker.durableEffectRunIds },
+        childOutcomeAuthority: "child_durable_runs",
+        terminalControlEventId: admission.terminalControlEventId,
+        settledAt: new Date().toISOString(),
+      };
+      readExactGeneralChatPostCommitSettlement(metadata.generalChatPostCommit);
+      this.ctx.storage.durableRuns.updateRun({
+        runId: current.runId,
+        status: current.status,
+        metadata,
+        updatedAt: new Date().toISOString(),
+        expectedVersion: current.version,
+      });
+    });
   }
 
   /**
@@ -1204,12 +2131,16 @@ export class DurableRunService {
         return;
       }
 
+      const childAdmission = this.admitGeneralChatPostCommitChild(current, currentMarker, input, childRunId);
       const payload: GeneralChatPostCommitEffectWorkflowPayload = {
-        version: "chat.post_commit.effect.v1",
+        version: "chat.post_commit.effect.v2",
         parentRunId,
-        generationId: expectedMarker.generationId,
+        postCommitGenerationId: expectedMarker.generationId,
+        effect,
         traceStatus: expectedMarker.traceStatus,
         input,
+        childAdmission,
+        postCommitEligibility: expectedMarker.postCommitEligibility,
       };
       let child: DurableRunRecord | undefined;
       try {
@@ -1233,11 +2164,13 @@ export class DurableRunService {
           metadata: {
             retryPolicy: DURABLE_RETRY_POLICY_DEFAULT,
             parentRunId,
-            generationId: expectedMarker.generationId,
+            postCommitGenerationId: expectedMarker.generationId,
             effect,
             workspaceId: readGeneralChatPostCommitWorkspaceId(input),
             sessionId: input.sessionId,
             ...(readGeneralChatPostCommitTurnId(input) ? { turnId: readGeneralChatPostCommitTurnId(input) } : {}),
+            childAdmission,
+            postCommitEligibility: expectedMarker.postCommitEligibility,
           },
           now,
         });
@@ -1248,7 +2181,7 @@ export class DurableRunService {
             workflowKey: child.workflowKey,
             status: child.status,
             parentRunId,
-            generationId: expectedMarker.generationId,
+            postCommitGenerationId: expectedMarker.generationId,
             effect,
           },
           createdAt: now,
@@ -1257,7 +2190,7 @@ export class DurableRunService {
           workflowKey: child.workflowKey,
           status: child.status,
           parentRunId,
-          generationId: expectedMarker.generationId,
+          postCommitGenerationId: expectedMarker.generationId,
           effect,
           workspaceId: readGeneralChatPostCommitWorkspaceId(input),
           sessionId: input.sessionId,
@@ -1295,7 +2228,7 @@ export class DurableRunService {
           workflowKey: createdChild.workflowKey,
           status: createdChild.status,
           parentRunId,
-          generationId: expectedMarker.generationId,
+          postCommitGenerationId: expectedMarker.generationId,
           effect,
         },
         buildDurableRealtimeOptions(createdChild.runId),
@@ -1305,6 +2238,340 @@ export class DurableRunService {
       this.requestRunProcessing(committedChildRunId);
     }
     return committedChildRunId;
+  }
+
+  private requireExactParentTurnAdmission(
+    parentRun: DurableRunRecord,
+    options: { requireActive?: boolean } = {},
+  ): SessionMutationAdmissionRecord & { turnId: string } {
+    const payload = parentRun.payload as Record<string, unknown>;
+    const admissionId = typeof payload.admissionId === "string" ? payload.admissionId : "";
+    const requestActor =
+      payload.requestActor && typeof payload.requestActor === "object" && !Array.isArray(payload.requestActor)
+        ? (payload.requestActor as Record<string, unknown>)
+        : undefined;
+    const admission = admissionId ? this.ctx.storage.sessionMutationAdmissions.require(admissionId) : undefined;
+    if (
+      payload.version !== "chat.turn.execute.v2" ||
+      !admission ||
+      admission.admissionKind !== "turn_write" ||
+      (options.requireActive !== false && admission.status !== "active") ||
+      typeof admission.turnId !== "string" ||
+      payload.sessionIncarnationId !== admission.sessionIncarnationId ||
+      payload.workspaceId !== admission.workspaceId ||
+      payload.sessionId !== admission.sessionId ||
+      payload.turnId !== admission.turnId ||
+      payload.admissionMaterialSha256 !== admission.materialSha256 ||
+      payload.admissionAggregateRevision !== admission.aggregateRevision ||
+      payload.admissionControllerGeneration !== admission.controllerGeneration ||
+      requestActor?.actorKind !== admission.actorKind ||
+      requestActor.actorId !== admission.actorId
+    ) {
+      throw new Error(`Durable Chat parent ${parentRun.runId} has no exact turn admission lineage.`);
+    }
+    return admission as SessionMutationAdmissionRecord & { turnId: string };
+  }
+
+  private verifyCanonicalAutonomousChatAdmission(
+    run: DurableRunRecord,
+  ): ReturnType<typeof verifyAutonomousChatAdmissionRunMetadata> {
+    const admission = this.requireExactParentTurnAdmission(run, { requireActive: false });
+    const turnId = (run.payload as { turnId?: unknown } | undefined)?.turnId;
+    if (typeof turnId !== "string" || !turnId.trim()) {
+      throw new Error(`Autonomous Chat run ${run.runId} has no canonical turn identity.`);
+    }
+    const trace = this.ctx.storage.chatTurnTraces.get(turnId);
+    if (!trace) {
+      throw new Error(`Autonomous Chat run ${run.runId} has no canonical trace binding.`);
+    }
+    return verifyAutonomousChatAdmissionRunMetadata(run, { admission, trace });
+  }
+
+  private settleCanonicalAutonomousChatWriteAuthority(run: DurableRunRecord): "current" | "authority_superseded" {
+    const admission = this.requireExactParentTurnAdmission(run, { requireActive: false });
+    this.verifyCanonicalAutonomousChatAdmission(run);
+    const authority = this.ctx.storage.sessionMutationAdmissions.settleTurnWriteAuthority({
+      admissionId: admission.admissionId,
+      sessionIncarnationId: admission.sessionIncarnationId,
+      workspaceId: admission.workspaceId,
+      sessionId: admission.sessionId,
+      turnId: admission.turnId,
+    });
+    if (authority.disposition === "authority_superseded") return "authority_superseded";
+    if (authority.admission.status !== "active") {
+      throw new Error(`Autonomous Chat run ${run.runId} admission is already closed.`);
+    }
+    return "current";
+  }
+
+  private closeTerminalChatTurnAdmissionIfReady(run: DurableRunRecord): void {
+    const admittedV2Parent =
+      run.workflowKey === "chat.turn.execute" &&
+      (run.payload as { version?: unknown } | undefined)?.version === "chat.turn.execute.v2";
+    if (!admittedV2Parent) return;
+    if (!(run.status === "completed" || run.status === "failed" || run.status === "cancelled")) {
+      if (isDurableRunTerminal(run.status)) {
+        throw new Error(
+          `Durable Chat parent ${run.runId} cannot close admission from unrepresentable status ${run.status}.`,
+        );
+      }
+      return;
+    }
+    const metadata = run.metadata ?? {};
+    const retryExhaustion = readChatRetryExhaustionDeadLetterPending(
+      metadata[CHAT_RETRY_EXHAUSTION_DEAD_LETTER_PENDING_METADATA_KEY],
+    );
+    if (AUTONOMOUS_CHAT_POST_COMMIT_PENDING_METADATA_KEY in metadata) {
+      readAutonomousChatPostCommitPendingMarker(run);
+      return;
+    }
+    if ("linkedFinalizationPending" in metadata) {
+      readLinkedFinalizationPending(run);
+      return;
+    }
+    if (GENERAL_CHAT_POST_COMMIT_PENDING_METADATA_KEY in metadata) {
+      readGeneralChatPostCommitPendingMarker(run);
+      return;
+    }
+    if (metadata.chatTurnAdmissionHandoff === undefined) {
+      throw new Error(`Durable Chat parent ${run.runId} has no committed terminal handoff marker.`);
+    }
+    const admission = this.requireExactParentTurnAdmission(run, { requireActive: false });
+    const handoff = readExactChatTurnAdmissionHandoff(metadata.chatTurnAdmissionHandoff);
+    const generalSettlement = readExactGeneralChatPostCommitSettlement(metadata.generalChatPostCommit);
+    if (
+      !handoff ||
+      !generalSettlement ||
+      generalSettlement.settlementStatus === "authority_superseded" ||
+      (generalSettlement.settlementStatus !== "completed" &&
+        generalSettlement.settlementStatus !== "settled_with_failures") ||
+      typeof generalSettlement.completedAt !== "string"
+    ) {
+      throw new Error(`Durable Chat parent ${run.runId} has no exact completed general settlement.`);
+    }
+    const runtimeAuthority = this.readCheckpointAnchoredChatTurnRuntimeAuthority(run);
+    if (runtimeAuthority) {
+      if (
+        !runtimeAuthority.material.requiredFinalizers.includes("general") ||
+        generalSettlement.generationId !== runtimeAuthority.material.postCommitGenerationId ||
+        generalSettlement.traceStatus !== runtimeAuthority.material.traceStatus ||
+        generalSettlement.requestedAt !== runtimeAuthority.material.transitionAt ||
+        canonicalJsonString(generalSettlement.postCommitEligibility) !==
+          canonicalJsonString(runtimeAuthority.material.postCommitEligibility) ||
+        !this.arePriorChatTurnFinalizersSettled(run, runtimeAuthority)
+      ) {
+        throw new Error(`Durable Chat parent ${run.runId} finalizer settlements do not match runtime authority.`);
+      }
+      this.verifyCanonicalTerminalOutputAgainstAuthority(run, runtimeAuthority);
+    }
+    const childRunIds = [
+      ...new Set(Object.values(generalSettlement.durableEffectRunIds as Record<string, string>)),
+    ].sort((left, right) => left.localeCompare(right));
+    if (
+      handoff.admissionId !== admission.admissionId ||
+      handoff.sessionIncarnationId !== admission.sessionIncarnationId ||
+      handoff.turnId !== admission.turnId ||
+      handoff.parentRunId !== run.runId ||
+      handoff.postCommitGenerationId !== generalSettlement.generationId ||
+      canonicalJsonString(handoff.childRunIds) !== canonicalJsonString(childRunIds) ||
+      handoff.childRunIdsSha256 !== hashChatTurnRuntimeAuthorityValue(childRunIds)
+    ) {
+      throw new Error(`Durable Chat parent ${run.runId} terminal handoff drifted from its settlement evidence.`);
+    }
+    if (admission.status !== "active") {
+      if (
+        admission.terminalAuthorityKind === "authority_superseded" ||
+        admission.terminalAuthorityKind === "lifecycle_delete" ||
+        (admission.terminalAuthorityKind === "durable_terminal" &&
+          admission.terminalDurableRunId === run.runId &&
+          admission.terminalDurableRunStatus === run.status)
+      ) {
+        if (retryExhaustion) this.projectChatRetryExhaustionDeadLetter(run, retryExhaustion);
+        return;
+      }
+      throw new Error(`Durable Chat parent ${run.runId} admission was closed by conflicting authority.`);
+    }
+    const authority = this.ctx.storage.sessionMutationAdmissions.settleTurnWriteAuthority({
+      admissionId: admission.admissionId,
+      sessionIncarnationId: admission.sessionIncarnationId,
+      workspaceId: admission.workspaceId,
+      sessionId: admission.sessionId,
+      turnId: admission.turnId,
+    });
+    if (authority.disposition === "authority_superseded") {
+      if (retryExhaustion) this.projectChatRetryExhaustionDeadLetter(run, retryExhaustion);
+      return;
+    }
+    this.ctx.storage.sessionMutationAdmissions.closeTurnWrite({
+      admissionId: admission.admissionId,
+      sessionIncarnationId: admission.sessionIncarnationId,
+      workspaceId: admission.workspaceId,
+      sessionId: admission.sessionId,
+      turnId: admission.turnId,
+      status: run.status === "completed" ? "completed" : "cancelled",
+      actorId: admission.actorId,
+      idempotencyKey: `chat-turn-handoff:${run.runId}`,
+      correlationId: run.runId,
+    });
+    if (retryExhaustion) this.projectChatRetryExhaustionDeadLetter(run, retryExhaustion);
+  }
+
+  private projectChatRetryExhaustionDeadLetter(
+    run: DurableRunRecord,
+    marker: ChatRetryExhaustionDeadLetterPending,
+  ): void {
+    const current = this.ctx.storage.durableRuns.getRun(run.runId);
+    if (
+      current.status === "dead_lettered" &&
+      current.metadata?.[CHAT_RETRY_EXHAUSTION_DEAD_LETTER_PENDING_METADATA_KEY] === undefined
+    ) {
+      return;
+    }
+    const currentMarker = readChatRetryExhaustionDeadLetterPending(
+      current.metadata?.[CHAT_RETRY_EXHAUSTION_DEAD_LETTER_PENDING_METADATA_KEY],
+    );
+    if (
+      !currentMarker ||
+      canonicalJsonString(currentMarker) !== canonicalJsonString(marker) ||
+      current.status !== "failed" ||
+      current.attemptCount !== marker.attemptNo ||
+      current.maxAttempts !== marker.maxAttempts ||
+      current.lastError !== marker.reason
+    ) {
+      throw new Error(`Durable Chat run ${run.runId} retry-exhaustion projection conflicts with terminal truth.`);
+    }
+    this.assertExactAdmittedChatRetryAuthority(current);
+    this.ctx.storage.durableRuns.upsertDeadLetter({
+      runId: run.runId,
+      reason: marker.reason,
+      payload: {
+        actorId: marker.actorId,
+        attemptNo: marker.attemptNo,
+        maxAttempts: marker.maxAttempts,
+        failedAt: marker.requestedAt,
+      },
+    });
+    const metadata = { ...(current.metadata ?? {}) };
+    delete metadata[CHAT_RETRY_EXHAUSTION_DEAD_LETTER_PENDING_METADATA_KEY];
+    this.ctx.storage.durableRuns.updateRun({
+      runId: run.runId,
+      status: "dead_lettered",
+      metadata,
+      updatedAt: new Date().toISOString(),
+      clearLease: true,
+      expectedVersion: current.version,
+    });
+    this.recordDurableTimelineEvent(run.runId, "run_dead_lettered", {
+      actorId: marker.actorId,
+      reason: marker.reason,
+      attemptNo: marker.attemptNo,
+      maxAttempts: marker.maxAttempts,
+      admissionFinalized: true,
+    });
+  }
+
+  private admitGeneralChatPostCommitChild(
+    parentRun: DurableRunRecord,
+    marker: GeneralChatPostCommitPendingMarker,
+    input: GeneralChatPostCommitDurableEffectInput,
+    childRunId: string,
+  ): PostCommitChildAdmissionIdentity {
+    const parentAdmission = this.requireExactParentTurnAdmission(parentRun, { requireActive: false });
+    const authority = this.ctx.storage.sessionMutationAdmissions.settleTurnWriteAuthority({
+      admissionId: parentAdmission.admissionId,
+      sessionIncarnationId: parentAdmission.sessionIncarnationId,
+      workspaceId: parentAdmission.workspaceId,
+      sessionId: parentAdmission.sessionId,
+      turnId: parentAdmission.turnId,
+    });
+    if (authority.disposition === "authority_superseded") {
+      throw new DurableChatParentAuthoritySupersededError(parentRun.runId);
+    }
+    if (authority.admission.status !== "active") {
+      throw new Error(`Durable Chat post-commit parent ${parentRun.runId} admission is already closed.`);
+    }
+    const sessionIncarnationId = parentAdmission.sessionIncarnationId;
+    if (
+      parentAdmission.workspaceId !== input.workspaceId ||
+      parentAdmission.sessionId !== input.sessionId ||
+      parentAdmission.turnId !== input.turnId
+    ) {
+      throw new Error(`Durable Chat post-commit parent ${parentRun.runId} has no exact turn admission lineage.`);
+    }
+    const sessionMeta = this.ctx.storage.chatSessionMeta.get(input.sessionId);
+    if (
+      !sessionMeta ||
+      sessionMeta.workspaceId !== input.workspaceId ||
+      sessionMeta.revision < parentAdmission.aggregateRevision
+    ) {
+      throw new Error(`Durable Chat post-commit parent ${parentRun.runId} session authority is unavailable.`);
+    }
+    const materialSha256 = computePostCommitChildAdmissionMaterialSha256({
+      parentRunId: parentRun.runId,
+      postCommitGenerationId: marker.generationId,
+      effect: input.effect,
+      childRunId,
+      workspaceId: input.workspaceId,
+      sessionId: input.sessionId,
+      sourceTurnId: input.turnId,
+      sessionIncarnationId,
+      postCommitEligibility: marker.postCommitEligibility,
+    });
+    const outcome = this.ctx.storage.sessionMutationAdmissions.admit({
+      workspaceId: input.workspaceId,
+      sessionId: input.sessionId,
+      expectedSessionIncarnationId: sessionIncarnationId,
+      admissionKind: "synchronous",
+      aggregateRevision: sessionMeta.revision,
+      controllerGeneration: parentAdmission.controllerGeneration,
+      actorKind: parentAdmission.actorKind,
+      actorId: parentAdmission.actorId,
+      operation: "chat_post_commit_child",
+      materialSha256,
+      idempotencyKey: `chat-post-commit-child:${childRunId}`,
+      correlationId: childRunId,
+    });
+    const child = outcome.admission;
+    if (
+      child.status !== "active" ||
+      child.admissionKind !== "synchronous" ||
+      child.turnId !== undefined ||
+      child.sessionIncarnationId !== sessionIncarnationId ||
+      child.workspaceId !== input.workspaceId ||
+      child.sessionId !== input.sessionId ||
+      child.aggregateRevision !== sessionMeta.revision ||
+      child.controllerGeneration !== parentAdmission.controllerGeneration ||
+      child.actorKind !== parentAdmission.actorKind ||
+      child.actorId !== parentAdmission.actorId ||
+      child.operation !== "chat_post_commit_child" ||
+      child.materialSha256 !== materialSha256
+    ) {
+      throw new Error(`Durable Chat post-commit child ${childRunId} admission conflicts with its frozen lineage.`);
+    }
+    return {
+      admissionId: child.admissionId,
+      sessionIncarnationId: child.sessionIncarnationId,
+      workspaceId: child.workspaceId,
+      sessionId: child.sessionId,
+      aggregateRevision: child.aggregateRevision,
+      controllerGeneration: child.controllerGeneration,
+      actorKind: child.actorKind,
+      actorId: child.actorId,
+      operation: "chat_post_commit_child",
+      materialSha256: child.materialSha256,
+    };
+  }
+
+  private resolvePostCommitEligibility(sessionId: string): PostCommitEligibility {
+    const resolved = this.deps?.resolvePostCommitEligibility?.(sessionId);
+    if (resolved) return resolved;
+    const origin = this.ctx.storage.chatSessionMeta?.get?.(sessionId)?.origin;
+    return {
+      version: 1,
+      autonomyEnabledAtParentSettlement: !this.ctx.isFeatureEnabled("autonomyV1Disabled"),
+      evalIntegrityTurn: origin === "prompt_pack",
+      humanSession: origin !== "system" && origin !== "prompt_pack",
+    };
   }
 
   createDurableRun(
@@ -1326,6 +2593,13 @@ export class DurableRunService {
       throw new Error("workflowKey is required");
     }
     const retryPolicy = this.normalizeDurableRetryPolicy(input.retryPolicy);
+    if (
+      workflowKey === "chat.turn.execute" &&
+      (input.payload as { version?: unknown } | undefined)?.version === "chat.turn.execute.v2" &&
+      canonicalJsonString(retryPolicy) !== canonicalJsonString(DURABLE_RETRY_POLICY_DEFAULT)
+    ) {
+      throw new Error("Admitted v2 Chat runs require the exact canonical retry policy.");
+    }
     const now = new Date().toISOString();
     const status: DurableRunRecord["status"] = input.waitForEvent ? "waiting" : "queued";
     const metadata = {
@@ -1338,7 +2612,7 @@ export class DurableRunService {
     if (stableRunId) {
       const existing = findDurableRun(this.ctx.storage, stableRunId);
       if (existing) {
-        assertIdempotentDurableRunMatches(existing, workflowKey, input.payload ?? {});
+        assertIdempotentDurableRunMatches(existing, workflowKey, input.payload ?? {}, retryPolicy);
         return existing;
       }
     }
@@ -1390,7 +2664,7 @@ export class DurableRunService {
       if (!existing) {
         throw error;
       }
-      assertIdempotentDurableRunMatches(existing, workflowKey, input.payload ?? {});
+      assertIdempotentDurableRunMatches(existing, workflowKey, input.payload ?? {}, retryPolicy);
       return existing;
     }
     if (options.publishRealtime !== false) {
@@ -1459,6 +2733,7 @@ export class DurableRunService {
     }
     let next!: DurableRunRecord;
     this.ctx.storage.runImmediateTransaction(() => {
+      const metadata = this.prepareQueuedTransitionMetadata(current, "resume");
       next = this.ctx.storage.durableRuns.updateRun({
         runId,
         status: "queued",
@@ -1467,6 +2742,7 @@ export class DurableRunService {
         clearLease: true,
         updatedAt: new Date().toISOString(),
         clearLastError: true,
+        metadata,
         expectedVersion: current.version,
       });
       this.createDurableCheckpoint({
@@ -1487,12 +2763,85 @@ export class DurableRunService {
     return next;
   }
 
-  cancelDurableRun(runId: string, actorId = "operator"): DurableRunRecord {
+  private prepareQueuedTransitionMetadata(
+    run: DurableRunRecord,
+    transition: "wake" | "resume",
+  ): Record<string, unknown> {
+    this.assertExactAdmittedChatRetryAuthority(run);
+    const metadata = { ...(run.metadata ?? {}) };
+    const payload = run.payload as { version?: unknown; turnId?: unknown } | undefined;
+    const hasAutonomousAdmission = metadata.autonomousAdmission !== undefined;
+    const admittedAutonomousV2 = payload?.version === "chat.turn.execute.v2" && hasAutonomousAdmission;
+    if (admittedAutonomousV2) this.verifyCanonicalAutonomousChatAdmission(run);
+    const carriesWaitingAuthority =
+      metadata[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY] !== undefined ||
+      (metadata.waitForEvent !== undefined && metadata.waitForEvent !== null);
+    if (admittedAutonomousV2 && (transition === "wake" || carriesWaitingAuthority)) {
+      const authority = readChatTurnRuntimeAuthoritySeal(metadata[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY]);
+      if (
+        !authority ||
+        authority.material.transitionKind !== "waiting" ||
+        authority.material.durableStatus !== "waiting" ||
+        authority.material.runId !== run.runId ||
+        authority.material.turnId !== payload?.turnId
+      ) {
+        throw new Error(`Autonomous Chat run ${run.runId} has no exact waiting runtime authority.`);
+      }
+      if (canonicalJsonString(metadata.waitForEvent) !== canonicalJsonString(authority.material.waitForEvent)) {
+        throw new Error(`Autonomous Chat run ${run.runId} wait registration drifted from its runtime authority.`);
+      }
+      const waitingCheckpoint = this.ctx.storage.durableRuns.getLatestCheckpointByKind(run.runId, "run_waiting");
+      if (!waitingCheckpoint) {
+        throw new Error(`Autonomous Chat run ${run.runId} has no authority-anchored waiting checkpoint.`);
+      }
+      verifyCheckpointAnchoredChatTurnRuntimeAuthority(metadata, waitingCheckpoint.state);
+      if (metadata[GENERAL_CHAT_POST_COMMIT_PENDING_METADATA_KEY] !== undefined) {
+        throw new Error(`Autonomous Chat run ${run.runId} cannot queue before its waiting generation settles.`);
+      }
+      if (
+        metadata[AUTONOMOUS_CHAT_POST_COMMIT_PENDING_METADATA_KEY] !== undefined ||
+        metadata.linkedFinalizationPending !== undefined ||
+        metadata.chatTurnAdmissionHandoff !== undefined
+      ) {
+        throw new Error(`Autonomous Chat run ${run.runId} carries terminal finalization evidence while waiting.`);
+      }
+      const settlement = readExactGeneralChatPostCommitSettlement(metadata.generalChatPostCommit);
+      if (
+        !settlement ||
+        settlement.generationId !== authority.material.postCommitGenerationId ||
+        settlement.traceStatus !== authority.material.traceStatus ||
+        settlement.requestedAt !== authority.material.transitionAt ||
+        settlement.settlementStatus !== "completed" ||
+        typeof settlement.completedAt !== "string" ||
+        canonicalJsonString(settlement.postCommitEligibility) !==
+          canonicalJsonString(authority.material.postCommitEligibility)
+      ) {
+        throw new Error(`Autonomous Chat run ${run.runId} has no exact settled waiting generation.`);
+      }
+      delete metadata[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY];
+    } else if (!admittedAutonomousV2 && metadata[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY] !== undefined) {
+      throw new Error(`Durable run ${run.runId} carries runtime authority without an admitted autonomous Chat run.`);
+    }
+    delete metadata.waitForEvent;
+    return metadata;
+  }
+
+  cancelDurableRun(
+    runId: string,
+    actorId = "operator",
+    options?: { expectedVersion?: number; reason?: string; assertLockedPrecondition?: () => void },
+  ): DurableRunRecord {
     this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     assertNoRawRemoteApprovalBearer(actorId);
+    const cancellationReason = normalizeDurableCancellationReason(options?.reason);
     const current = this.ctx.storage.durableRuns.getRun(runId);
     if (current.status === "cancelled") {
       return current;
+    }
+    if (options?.expectedVersion !== undefined && current.version !== options.expectedVersion) {
+      throw new Error(
+        `Durable run ${runId} changed from version ${options.expectedVersion} to ${current.version} before cancellation.`,
+      );
     }
     if (current.status === "completed" || current.status === "failed" || current.status === "dead_lettered") {
       throw new Error(`Durable run ${runId} is already terminal (${current.status})`);
@@ -1506,6 +2855,12 @@ export class DurableRunService {
       if (lockedCurrent.status === "cancelled") {
         next = lockedCurrent;
         return;
+      }
+      options?.assertLockedPrecondition?.();
+      if (options?.expectedVersion !== undefined && lockedCurrent.version !== options.expectedVersion) {
+        throw new Error(
+          `Durable run ${runId} changed from version ${options.expectedVersion} to ${lockedCurrent.version} before cancellation.`,
+        );
       }
       if (
         lockedCurrent.status === "completed" ||
@@ -1558,6 +2913,44 @@ export class DurableRunService {
           }
         }
       }
+      let cancellationMetadata = lockedCurrent.metadata;
+      let cancellationCheckpointState: Record<string, unknown> = {
+        actorId,
+        previousStatus: lockedCurrent.status,
+        ...(cancellationReason ? { reason: cancellationReason } : {}),
+        ...(chatLink ? { sessionId: chatLink.sessionId, turnId: chatLink.turnId } : {}),
+      };
+      if (chatLink) {
+        const generationId = randomUUID();
+        const eligibility = this.resolvePostCommitEligibility(chatLink.sessionId);
+        cancellationMetadata = markGeneralChatPostCommitPending(
+          mergeCanonicalDurableChatTerminalOutputMetadata(lockedCurrent.metadata, undefined),
+          now,
+          "cancelled",
+          eligibility,
+          generationId,
+        );
+        if (isAdmittedV2ChatRun(lockedCurrent)) {
+          this.assertExactAdmittedChatRetryAuthority(lockedCurrent);
+          this.requireExactParentTurnAdmission(lockedCurrent);
+          if (lockedCurrent.metadata?.autonomousAdmission !== undefined) {
+            this.verifyCanonicalAutonomousChatAdmission(lockedCurrent);
+          }
+          const authority = buildChatTurnRuntimeAuthoritySeal({
+            runId,
+            turnId: chatLink.turnId,
+            transitionKind: "terminal",
+            durableStatus: "cancelled",
+            traceStatus: "cancelled",
+            transitionAt: now,
+            postCommitGenerationId: generationId,
+            postCommitEligibility: eligibility,
+            requiredFinalizers: ["general"],
+          });
+          cancellationMetadata = withChatTurnRuntimeAuthority(cancellationMetadata, authority);
+          cancellationCheckpointState = withChatTurnRuntimeAuthorityCheckpoint(cancellationCheckpointState, authority);
+        }
+      }
       next = this.ctx.storage.durableRuns.updateRun({
         runId,
         status: "cancelled",
@@ -1565,21 +2958,18 @@ export class DurableRunService {
         clearLease: true,
         updatedAt: now,
         lastError: `cancelled by ${actorId}`,
-        ...(chatLink ? { metadata: markGeneralChatPostCommitPending(lockedCurrent.metadata, now, "cancelled") } : {}),
+        ...(chatLink ? { metadata: cancellationMetadata } : {}),
         expectedVersion: lockedCurrent.version,
       });
       this.createDurableCheckpoint({
         runId,
         checkpointKind: "run_cancelled",
-        state: {
-          actorId,
-          previousStatus: lockedCurrent.status,
-          ...(chatLink ? { sessionId: chatLink.sessionId, turnId: chatLink.turnId } : {}),
-        },
+        state: cancellationCheckpointState,
       });
       this.recordDurableTimelineEvent(runId, "run_cancelled", {
         actorId,
         previousStatus: lockedCurrent.status,
+        ...(cancellationReason ? { reason: cancellationReason } : {}),
       });
       transitioned = true;
     });
@@ -1602,6 +2992,7 @@ export class DurableRunService {
     this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     assertNoRawRemoteApprovalBearer({ reason, actorId });
     const current = this.ctx.storage.durableRuns.getRun(runId);
+    this.assertExactAdmittedChatRetryAuthority(current);
     if (current.status !== "failed") {
       throw new Error(`Durable run ${runId} cannot be retried from ${current.status}`);
     }
@@ -1611,6 +3002,9 @@ export class DurableRunService {
     const recoverability = this.deps?.workflowRegistry.isWorkflowRecoverable(current);
     if (recoverability && !recoverability.recoverable) {
       throw new Error(recoverability.reason ?? `Durable run ${runId} cannot be safely retried.`);
+    }
+    if (isAdmittedV2ChatRun(current)) {
+      throw new Error(`Durable Chat run ${runId} requires a new mutation admission instead of manual replay.`);
     }
     return this.scheduleDurableRunRetry(current, reason, actorId);
   }
@@ -1632,6 +3026,7 @@ export class DurableRunService {
       if (!current) {
         throw new Error(`Durable run ${runId} cannot schedule running retry from ${observed.status}`);
       }
+      this.assertExactAdmittedChatRetryAuthority(current);
       const recoverability = this.deps?.workflowRegistry.isWorkflowRecoverable(current);
       if (recoverability && !recoverability.recoverable) {
         throw new Error(recoverability.reason ?? `Durable run ${runId} cannot be safely retried.`);
@@ -1658,10 +3053,42 @@ export class DurableRunService {
     actorId: string,
   ):
     | { outcome: "dead_lettered"; run: DurableRunRecord; attemptNo: number; reason: string }
+    | { outcome: "terminal_finalization_pending"; run: DurableRunRecord; attemptNo: number; reason: string }
     | { outcome: "scheduled"; run: DurableRunRecord; attemptNo: number; nextRetryAt: string } {
     const runId = current.runId;
+    this.assertExactAdmittedChatRetryAuthority(current);
     const attemptNo = current.attemptCount + 1;
     if (attemptNo > current.maxAttempts) {
+      if (isAdmittedV2ChatRun(current)) {
+        const requestedAt = this.readDurableDatabaseNow();
+        const exhaustedReason = redactRawRemoteApprovalBearerText(`retry_exhausted:${reason}`);
+        const retryExhaustion: ChatRetryExhaustionDeadLetterPending = {
+          version: 1,
+          attemptNo,
+          maxAttempts: current.maxAttempts,
+          actorId,
+          reason: exhaustedReason,
+          reasonSha256: hashChatTurnRuntimeAuthorityValue(exhaustedReason),
+          requestedAt,
+        };
+        const failed = this.persistCanonicalAdmittedChatFailureInTransaction(current, exhaustedReason, requestedAt, {
+          attemptCount: attemptNo,
+          retryExhaustion,
+        });
+        this.recordDurableTimelineEvent(runId, "run_retry_budget_exhausted", {
+          actorId,
+          reason: exhaustedReason,
+          attemptNo,
+          maxAttempts: current.maxAttempts,
+          finalizationPending: true,
+        });
+        return {
+          outcome: "terminal_finalization_pending",
+          run: failed,
+          attemptNo,
+          reason: exhaustedReason,
+        };
+      }
       const now = new Date().toISOString();
       const deadLetter = this.ctx.storage.durableRuns.upsertDeadLetter({
         runId,
@@ -1719,6 +3146,16 @@ export class DurableRunService {
   }
 
   private publishDurableRunRetryResult(result: ReturnType<DurableRunService["persistDurableRunRetry"]>): void {
+    if (result.outcome === "terminal_finalization_pending") {
+      this.publishDurableRealtimeSafely(result.run.runId, {
+        type: "durable_run_failed",
+        runId: result.run.runId,
+        error: result.reason,
+        retryExhausted: true,
+      });
+      this.requestRunProcessing(result.run.runId);
+      return;
+    }
     if (result.outcome === "dead_lettered") {
       this.publishDurableRealtimeSafely(result.run.runId, {
         type: "durable_run_dead_lettered",
@@ -1813,6 +3250,7 @@ export class DurableRunService {
     let next!: DurableRunRecord;
     try {
       this.ctx.storage.runImmediateTransaction(() => {
+        const metadata = this.prepareQueuedTransitionMetadata(current, "wake");
         next = this.ctx.storage.durableRuns.updateRun({
           runId,
           status: "queued",
@@ -1821,6 +3259,7 @@ export class DurableRunService {
           clearFinishedAt: true,
           clearLease: true,
           clearLastError: true,
+          metadata,
           expectedVersion: current.version,
         });
         this.recordDurableTimelineEvent(runId, "run_woken", {
@@ -1987,27 +3426,16 @@ export class DurableRunService {
   }
 
   normalizeDurableRetryPolicy(input: Partial<DurableRetryPolicy> | undefined): DurableRetryPolicy {
-    return {
-      maxAttempts: Math.max(
-        1,
-        Math.min(20, Math.floor(input?.maxAttempts ?? DURABLE_RETRY_POLICY_DEFAULT.maxAttempts)),
-      ),
-      baseDelayMs: Math.max(
-        100,
-        Math.min(300_000, Math.floor(input?.baseDelayMs ?? DURABLE_RETRY_POLICY_DEFAULT.baseDelayMs)),
-      ),
-      maxDelayMs: Math.max(
-        100,
-        Math.min(900_000, Math.floor(input?.maxDelayMs ?? DURABLE_RETRY_POLICY_DEFAULT.maxDelayMs)),
-      ),
-      backoffMultiplier: Math.max(
-        1,
-        Math.min(8, input?.backoffMultiplier ?? DURABLE_RETRY_POLICY_DEFAULT.backoffMultiplier),
-      ),
-    };
+    return normalizeDurableRetryPolicy(input);
+  }
+
+  private assertExactAdmittedChatRetryAuthority(run: DurableRunRecord): void {
+    if (!isAdmittedV2ChatRun(run)) return;
+    assertDurableRetryPolicyMatchesRun(run.metadata?.retryPolicy, run.maxAttempts, DURABLE_RETRY_POLICY_DEFAULT);
   }
 
   computeDurableRetryDelayMs(current: DurableRunRecord, attemptNo: number): number {
+    this.assertExactAdmittedChatRetryAuthority(current);
     const metadataPolicy = (current.metadata as { retryPolicy?: Partial<DurableRetryPolicy> } | undefined)?.retryPolicy;
     const policy = this.normalizeDurableRetryPolicy(metadataPolicy);
     const raw = policy.baseDelayMs * policy.backoffMultiplier ** Math.max(0, attemptNo - 1);
@@ -2020,7 +3448,7 @@ export class DurableRunService {
     payload?: Record<string, unknown>,
     stepKey?: string,
   ): DurableRunTimelineEvent {
-    const event: DurableRunTimelineEvent = {
+    const event: Omit<DurableRunTimelineEvent, "sequence"> = {
       eventId: randomUUID(),
       runId,
       eventType,
@@ -2028,7 +3456,25 @@ export class DurableRunService {
       payload: redactRawRemoteApprovalBearers(payload ?? {}),
       createdAt: new Date().toISOString(),
     };
-    return this.ctx.storage.durableRunEvents.append(event);
+    const appended = this.ctx.storage.durableRunEvents.append(event);
+    try {
+      this.ctx.storage.durableChildWatchers.catchUpAttachedByChild(runId, {
+        watcherLimit: 100,
+        eventLimitPerWatcher: 100,
+      });
+    } catch (error) {
+      // Child state is canonical and must not be rolled back because an
+      // observational projection is temporarily unavailable. Startup and the
+      // normal durable maintenance loop resume from the persisted watermark.
+      this.resolveLogger().warn(
+        {
+          runId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "durable child watcher projection deferred to reconciliation",
+      );
+    }
+    return appended;
   }
 
   private recordDurableTimelineEventSafely(
@@ -2060,6 +3506,7 @@ export class DurableRunService {
     if (!this.deps) {
       return 0;
     }
+    this.reconcileDurableChildWatchers();
     let reclaimedCount = 0;
     const recoveryObservedAt = new Date().toISOString();
     const runningRunIds = this.ctx.storage.durableRuns.listExpiredRunningRunIds(recoveryObservedAt);
@@ -2110,9 +3557,25 @@ export class DurableRunService {
       }
     }
     await this.reconcilePendingLinkedFinalizations();
-    await this.reconcilePendingGeneralChatPostCommits();
     await this.reconcilePendingAutonomousChatPostCommits();
+    await this.reconcilePendingGeneralChatPostCommits();
     return reclaimedCount;
+  }
+
+  private reconcileDurableChildWatchers(): void {
+    try {
+      this.ctx.storage.durableChildWatchers.catchUpAttached({
+        watcherLimit: 100,
+        eventLimitPerWatcher: 100,
+      });
+    } catch (error) {
+      this.resolveLogger().warn(
+        {
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "durable child watcher reconciliation deferred",
+      );
+    }
   }
 
   private async transitionExpiredRunToPendingFinalization(
@@ -2132,16 +3595,64 @@ export class DurableRunService {
         leaseOwnerId: current.leaseOwnerId,
         leaseExpiresAt: current.leaseExpiresAt,
       });
-      const priorMetadata = { ...(current.metadata ?? {}) };
+      this.assertExactAdmittedChatRetryAuthority(current);
+      const priorMetadata = {
+        ...(mergeCanonicalDurableChatTerminalOutputMetadata(current.metadata, undefined) ?? {}),
+      };
       delete (priorMetadata as { linkedFinalizationPending?: unknown }).linkedFinalizationPending;
-      failed = this.persistFailedRunInTransaction(current, safeReason, recoveryObservedAt, {
-        linkedFinalizationPending: {
-          reason: safeReason,
-          requestedAt: recoveryObservedAt,
-          finalizationId: randomUUID(),
-        },
+      const linkedFinalizationPending: LinkedFinalizationPending = {
+        reason: safeReason,
+        requestedAt: recoveryObservedAt,
+        finalizationId: randomUUID(),
+      };
+      let metadata: Record<string, unknown> = {
         ...priorMetadata,
-      });
+        linkedFinalizationPending,
+      };
+      let checkpointState: Record<string, unknown> = {
+        workflowKey: current.workflowKey,
+        error: safeReason,
+      };
+      const payload = current.payload as { version?: unknown; sessionId?: unknown; turnId?: unknown } | undefined;
+      if (
+        current.workflowKey === "chat.turn.execute" &&
+        payload?.version === "chat.turn.execute.v2" &&
+        typeof payload.sessionId === "string" &&
+        payload.sessionId.trim() &&
+        typeof payload.turnId === "string" &&
+        payload.turnId.trim()
+      ) {
+        const generationId = randomUUID();
+        const postCommitEligibility = this.resolvePostCommitEligibility(payload.sessionId);
+        metadata = markGeneralChatPostCommitPending(
+          metadata,
+          recoveryObservedAt,
+          "failed",
+          postCommitEligibility,
+          generationId,
+        );
+        this.requireExactParentTurnAdmission(current);
+        if (metadata.autonomousAdmission !== undefined) this.verifyCanonicalAutonomousChatAdmission(current);
+        const authority = buildChatTurnRuntimeAuthoritySeal({
+          runId: current.runId,
+          turnId: payload.turnId,
+          transitionKind: "linked_finalization",
+          durableStatus: "failed",
+          traceStatus: "failed",
+          transitionAt: recoveryObservedAt,
+          postCommitGenerationId: generationId,
+          postCommitEligibility,
+          linkedFinalization: {
+            finalizationId: linkedFinalizationPending.finalizationId,
+            requestedAt: linkedFinalizationPending.requestedAt,
+            reason: linkedFinalizationPending.reason,
+          },
+          requiredFinalizers: ["linked", "general"],
+        });
+        metadata = withChatTurnRuntimeAuthority(metadata, authority);
+        checkpointState = withChatTurnRuntimeAuthorityCheckpoint(checkpointState, authority);
+      }
+      failed = this.persistFailedRunInTransaction(current, safeReason, recoveryObservedAt, metadata, checkpointState);
       transitioned = true;
     });
     if (!transitioned) {
@@ -2221,10 +3732,16 @@ export class DurableRunService {
     if (!this.deps) {
       return;
     }
+    const observedPending = readLinkedFinalizationPending(run);
+    if (!observedPending) {
+      return;
+    }
+    this.verifyLinkedFinalizationAuthority(run, observedPending);
     const claim = this.claimPendingLinkedFinalization(run);
     if (!claim) {
       return;
     }
+    this.verifyLinkedFinalizationAuthority(claim.run, claim.pending);
     const finalizationAbort = new AbortController();
     const claimHeartbeat = setInterval(
       () => {
@@ -2275,7 +3792,7 @@ export class DurableRunService {
     if (finalizationAbort.signal.aborted) {
       return;
     }
-    this.retryDurableRunUpdate(run.runId, (current) => {
+    const cleared = this.retryDurableRunUpdate(run.runId, (current) => {
       const currentPending = readLinkedFinalizationPending(current);
       if (
         current.status !== "failed" ||
@@ -2287,14 +3804,84 @@ export class DurableRunService {
       }
       const metadata = { ...(current.metadata ?? {}) };
       delete (metadata as { linkedFinalizationPending?: unknown }).linkedFinalizationPending;
+      const completedAt = new Date().toISOString();
+      const settlement = {
+        version: 1 as const,
+        finalizationId: currentPending.finalizationId,
+        requestedAt: currentPending.requestedAt,
+        reasonSha256: hashChatTurnRuntimeAuthorityValue(currentPending.reason),
+        completedAt,
+      };
+      readExactLinkedFinalizationSettlement(settlement);
+      const authority = readChatTurnRuntimeAuthoritySeal(metadata[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY]);
+      if (authority) {
+        if (
+          authority.material.transitionKind !== "linked_finalization" ||
+          authority.material.linkedFinalization?.finalizationId !== currentPending.finalizationId ||
+          authority.material.linkedFinalization.requestedAt !== currentPending.requestedAt ||
+          authority.material.linkedFinalization.reasonSha256 !== settlement.reasonSha256
+        ) {
+          throw new Error(`Durable linked finalization ${current.runId} conflicts with its runtime authority.`);
+        }
+      }
+      metadata.linkedFinalization = settlement;
       return this.ctx.storage.durableRuns.updateRun({
         runId: current.runId,
         status: current.status,
         metadata,
-        updatedAt: new Date().toISOString(),
+        updatedAt: completedAt,
         expectedVersion: current.version,
       });
     });
+    if (!readLinkedFinalizationPending(cleared)) {
+      if (!hasAutonomousChatPostCommitPending(cleared) && !hasGeneralChatPostCommitPending(cleared)) {
+        this.closeTerminalChatTurnAdmissionIfReady(cleared);
+      }
+    }
+  }
+
+  private verifyLinkedFinalizationAuthority(run: DurableRunRecord, pending: LinkedFinalizationPending): void {
+    const payload = run.payload as { version?: unknown; turnId?: unknown } | undefined;
+    const authorityValue = run.metadata?.[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY];
+    if (run.workflowKey !== "chat.turn.execute" || payload?.version !== "chat.turn.execute.v2") {
+      if (authorityValue !== undefined) {
+        throw new Error(`Durable linked finalization ${run.runId} carries unauthorized runtime authority.`);
+      }
+      return;
+    }
+    this.requireExactParentTurnAdmission(run, { requireActive: false });
+    if (run.metadata?.autonomousAdmission !== undefined) this.verifyCanonicalAutonomousChatAdmission(run);
+    assertDurableRetryPolicyMatchesRun(run.metadata?.retryPolicy, run.maxAttempts, DURABLE_RETRY_POLICY_DEFAULT);
+    const authority = readChatTurnRuntimeAuthoritySeal(authorityValue);
+    if (
+      !authority ||
+      authority.material.transitionKind !== "linked_finalization" ||
+      authority.material.durableStatus !== "failed" ||
+      authority.material.traceStatus !== "failed" ||
+      authority.material.runId !== run.runId ||
+      authority.material.turnId !== payload.turnId ||
+      authority.material.linkedFinalization?.finalizationId !== pending.finalizationId ||
+      authority.material.linkedFinalization.requestedAt !== pending.requestedAt ||
+      authority.material.linkedFinalization.reasonSha256 !== hashChatTurnRuntimeAuthorityValue(pending.reason)
+    ) {
+      throw new Error(`Durable linked finalization ${run.runId} has no exact runtime authority.`);
+    }
+    const generalPending = readGeneralChatPostCommitPendingMarker(run);
+    if (
+      !generalPending ||
+      generalPending.generationId !== authority.material.postCommitGenerationId ||
+      generalPending.traceStatus !== authority.material.traceStatus ||
+      generalPending.requestedAt !== authority.material.transitionAt ||
+      canonicalJsonString(generalPending.postCommitEligibility) !==
+        canonicalJsonString(authority.material.postCommitEligibility)
+    ) {
+      throw new Error(`Durable linked finalization ${run.runId} has no matching general generation.`);
+    }
+    const checkpoint = this.ctx.storage.durableRuns.getLatestCheckpointByKind(run.runId, "run_failed");
+    if (!checkpoint) {
+      throw new Error(`Durable linked finalization ${run.runId} has no authority-anchored failure checkpoint.`);
+    }
+    verifyCheckpointAnchoredChatTurnRuntimeAuthority(run.metadata, checkpoint.state);
   }
 
   private claimPendingLinkedFinalization(
@@ -2917,6 +4504,15 @@ export class DurableRunService {
     }
     let run: DurableRunRecord | undefined;
     for (const runId of queuedRunIds) {
+      if (this.terminalizeQueuedLegacyUnadmittedChatTurn(runId)) {
+        continue;
+      }
+      try {
+        this.assertExactAdmittedChatRetryAuthority(this.ctx.storage.durableRuns.getRun(runId));
+      } catch (error) {
+        this.reportDurableRunRecoveryFailure(runId, error);
+        continue;
+      }
       const leaseOwnerId = randomUUID();
       this.ctx.storage.runImmediateTransaction(() => {
         run = this.tryClaimQueuedRunWithDatabaseClock({
@@ -2954,6 +4550,49 @@ export class DurableRunService {
       workflowKey: run.workflowKey,
     });
     return run;
+  }
+
+  /**
+   * v1 Chat payloads predate immutable session-incarnation admission. They are
+   * quarantined before lease acquisition, so they cannot execute and do not
+   * consume a retry attempt merely to discover that authority is absent.
+   */
+  private terminalizeQueuedLegacyUnadmittedChatTurn(runId: string): boolean {
+    const observed = this.ctx.storage.durableRuns.getRun(runId);
+    if (observed.status !== "queued" || !isLegacyUnadmittedDurableChatTurn(observed)) {
+      return false;
+    }
+    const reason =
+      "Legacy durable Chat run lacks immutable session-incarnation admission and requires manual reconciliation.";
+    let failed: DurableRunRecord | undefined;
+    this.ctx.storage.runImmediateTransaction(() => {
+      const current = this.ctx.storage.durableRuns.getRun(runId);
+      if (current.status !== "queued" || !isLegacyUnadmittedDurableChatTurn(current)) {
+        return;
+      }
+      const now = this.readDurableDatabaseNow();
+      const metadata = { ...(current.metadata ?? {}) };
+      delete (metadata as { linkedFinalizationPending?: unknown }).linkedFinalizationPending;
+      failed = this.persistFailedRunInTransaction(current, reason, now, {
+        ...metadata,
+        linkedFinalizationPending: {
+          reason,
+          requestedAt: now,
+          finalizationId: randomUUID(),
+        },
+      });
+    });
+    if (!failed) {
+      return false;
+    }
+    this.publishDurableRealtimeSafely(failed.runId, {
+      type: "durable_run_failed",
+      runId: failed.runId,
+      error: reason,
+    });
+    void this.notifyRunFailedSafely(failed, reason);
+    this.requestRunProcessing(failed.runId);
+    return true;
   }
 
   private tryClaimQueuedRunWithDatabaseClock(input: {
@@ -3038,6 +4677,101 @@ export class DurableRunService {
     throw new Error("Durable run repository is missing database-clock recovery claim authority");
   }
 
+  private persistCanonicalAdmittedChatFailureInTransaction(
+    current: DurableRunRecord,
+    message: string,
+    now: string,
+    options: {
+      attemptCount?: number;
+      retryExhaustion?: ChatRetryExhaustionDeadLetterPending;
+    } = {},
+  ): DurableRunRecord {
+    if (!isAdmittedV2ChatRun(current)) {
+      throw new Error(`Durable run ${current.runId} is not an admitted v2 Chat turn.`);
+    }
+    this.assertExactAdmittedChatRetryAuthority(current);
+    const payload = current.payload as {
+      sessionId?: unknown;
+      turnId?: unknown;
+      heartbeatOccurrenceId?: unknown;
+      heartbeatClaimSha256?: unknown;
+      heartbeatEvaluatedPolicySha256?: unknown;
+      heartbeatFrozenObjectiveSha256?: unknown;
+      requestActor?: unknown;
+    };
+    if (
+      typeof payload.sessionId !== "string" ||
+      !payload.sessionId.trim() ||
+      typeof payload.turnId !== "string" ||
+      !payload.turnId.trim()
+    ) {
+      throw new Error(`Durable Chat run ${current.runId} has no canonical failure identity.`);
+    }
+    this.requireExactParentTurnAdmission(current);
+    const currentMetadata = current.metadata ?? {};
+    if (
+      currentMetadata[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY] !== undefined ||
+      currentMetadata[GENERAL_CHAT_POST_COMMIT_PENDING_METADATA_KEY] !== undefined ||
+      currentMetadata[AUTONOMOUS_CHAT_POST_COMMIT_PENDING_METADATA_KEY] !== undefined ||
+      currentMetadata.linkedFinalizationPending !== undefined ||
+      currentMetadata.chatTurnAdmissionHandoff !== undefined ||
+      currentMetadata[CHAT_RETRY_EXHAUSTION_DEAD_LETTER_PENDING_METADATA_KEY] !== undefined
+    ) {
+      throw new Error(`Durable Chat run ${current.runId} carries conflicting terminal authority evidence.`);
+    }
+    const generationId = randomUUID();
+    const heartbeatPayload = readExactSystemHeartbeatFailurePayload(current, payload);
+    const postCommitEligibility = heartbeatPayload
+      ? {
+          version: 1 as const,
+          autonomyEnabledAtParentSettlement: false,
+          evalIntegrityTurn: false,
+          humanSession: false,
+        }
+      : this.resolvePostCommitEligibility(payload.sessionId);
+    const linkedFinalizationPending: LinkedFinalizationPending = {
+      reason: message,
+      requestedAt: now,
+      finalizationId: randomUUID(),
+    };
+    let metadata = markGeneralChatPostCommitPending(
+      mergeCanonicalDurableChatTerminalOutputMetadata(currentMetadata, undefined),
+      now,
+      "failed",
+      postCommitEligibility,
+      generationId,
+    );
+    metadata.linkedFinalizationPending = linkedFinalizationPending;
+    if (options.retryExhaustion) {
+      readChatRetryExhaustionDeadLetterPending(options.retryExhaustion);
+      metadata[CHAT_RETRY_EXHAUSTION_DEAD_LETTER_PENDING_METADATA_KEY] = options.retryExhaustion;
+    }
+    const authority = buildChatTurnRuntimeAuthoritySeal({
+      runId: current.runId,
+      turnId: payload.turnId,
+      transitionKind: "linked_finalization",
+      durableStatus: "failed",
+      traceStatus: "failed",
+      transitionAt: now,
+      postCommitGenerationId: generationId,
+      postCommitEligibility,
+      linkedFinalization: {
+        finalizationId: linkedFinalizationPending.finalizationId,
+        requestedAt: linkedFinalizationPending.requestedAt,
+        reason: linkedFinalizationPending.reason,
+      },
+      requiredFinalizers: ["linked", "general"],
+    });
+    metadata = withChatTurnRuntimeAuthority(metadata, authority);
+    const checkpointState = withChatTurnRuntimeAuthorityCheckpoint(
+      { workflowKey: current.workflowKey, error: message },
+      authority,
+    );
+    return this.persistFailedRunInTransaction(current, message, now, metadata, checkpointState, {
+      attemptCount: options.attemptCount,
+    });
+  }
+
   private async failWorkflowRun(run: DurableRunRecord, message: string): Promise<boolean> {
     const now = new Date().toISOString();
     const safeMessage = redactRawRemoteApprovalBearerText(message);
@@ -3048,26 +4782,9 @@ export class DurableRunService {
       if (!current) {
         return;
       }
-      failed = this.ctx.storage.durableRuns.updateRun({
-        runId: current.runId,
-        status: "failed",
-        finishedAt: now,
-        clearLease: true,
-        lastError: safeMessage,
-        metadata: current.metadata,
-        updatedAt: now,
-        expectedVersion: current.version,
-      });
-      this.createDurableCheckpoint({
-        runId: failed.runId,
-        checkpointKind: "run_failed",
-        state: { workflowKey: failed.workflowKey, error: safeMessage },
-        createdAt: now,
-      });
-      this.recordDurableTimelineEvent(failed.runId, "run_failed", {
-        workflowKey: failed.workflowKey,
-        error: safeMessage,
-      });
+      failed = isAdmittedV2ChatRun(current)
+        ? this.persistCanonicalAdmittedChatFailureInTransaction(current, safeMessage, now)
+        : this.persistFailedRunInTransaction(current, safeMessage, now);
       transitioned = true;
     });
     if (!transitioned) {
@@ -3097,6 +4814,7 @@ export class DurableRunService {
       error: safeMessage,
     });
     await this.notifyRunFailedSafely(failed, safeMessage);
+    if (isAdmittedV2ChatRun(failed)) this.requestRunProcessing(failed.runId);
     return true;
   }
 
@@ -3113,6 +4831,11 @@ export class DurableRunService {
     message: string,
     now: string,
     metadata: Record<string, unknown> | undefined = current.metadata,
+    checkpointState: Record<string, unknown> = {
+      workflowKey: current.workflowKey,
+      error: message,
+    },
+    options: { attemptCount?: number } = {},
   ): DurableRunRecord {
     const next = this.ctx.storage.durableRuns.updateRun({
       runId: current.runId,
@@ -3120,6 +4843,7 @@ export class DurableRunService {
       finishedAt: now,
       clearLease: true,
       lastError: message,
+      ...(options.attemptCount === undefined ? {} : { attemptCount: options.attemptCount }),
       metadata,
       updatedAt: now,
       expectedVersion: current.version,
@@ -3127,10 +4851,7 @@ export class DurableRunService {
     this.createDurableCheckpoint({
       runId: next.runId,
       checkpointKind: "run_failed",
-      state: {
-        workflowKey: next.workflowKey,
-        error: message,
-      },
+      state: checkpointState,
       createdAt: now,
     });
     this.recordDurableTimelineEvent(next.runId, "run_failed", {
@@ -3297,7 +5018,7 @@ function isCoworkDurableChatTurnRun(run: DurableRunRecord): boolean {
       }
     | undefined;
   return (
-    payload?.version === "chat.turn.execute.v1" &&
+    payload?.version === "chat.turn.execute.v2" &&
     payload.request?.mode === "cowork" &&
     payload.request?.normalizationProfile !== "prompt_pack_harness"
   );

@@ -1,0 +1,235 @@
+/* HX-408 M4 Ops mesh-capability panel — semantic cards for publication truth,
+   governed activation, and invocation outcomes. Bespoke design-system CSS. */
+
+.mc-next-mesh-caps-panel {
+  grid-column: 1 / -1;
+}
+
+.mc-next-mesh-caps-manifests,
+.mc-next-mesh-caps-entries,
+.mc-next-mesh-caps-invocations ul {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mc-next-mesh-caps-manifest {
+  min-width: 0;
+  padding: 0.85rem;
+  border: 1px solid color-mix(in oklab, var(--mc-border-subtle) 76%, transparent);
+  border-radius: 0.7rem;
+  color: var(--foreground);
+  background: color-mix(in oklab, var(--mc-surface-2) 92%, transparent);
+}
+
+.mc-next-mesh-caps-manifest-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+}
+
+.mc-next-mesh-caps-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.mc-next-mesh-caps-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem 0.75rem;
+  margin: 0;
+}
+
+.mc-next-mesh-caps-meta div {
+  min-width: 0;
+}
+
+.mc-next-mesh-caps-meta dt {
+  color: var(--muted-foreground);
+  font-size: var(--text-2xs, 0.75rem);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.mc-next-mesh-caps-meta dd {
+  margin: 0.12rem 0 0;
+  overflow-wrap: anywhere;
+  color: var(--foreground);
+  font-size: var(--text-xs, 0.8125rem);
+}
+
+.mc-next-mesh-caps-meta code,
+.mc-next-mesh-caps-invocation code {
+  overflow-wrap: anywhere;
+  font-size: var(--text-2xs, 0.75rem);
+  color: var(--foreground);
+}
+
+.mc-next-mesh-caps-entry {
+  min-width: 0;
+  padding: 0.75rem;
+  border: 1px solid color-mix(in oklab, var(--mc-border-subtle) 72%, transparent);
+  border-inline-start-width: 3px;
+  border-inline-start-color: var(--accent);
+  border-radius: 0.6rem;
+  color: var(--foreground);
+  background: color-mix(in oklab, var(--mc-surface-1) 94%, transparent);
+}
+
+.mc-next-mesh-caps-entry[data-status="active"] {
+  border-inline-start-color: var(--gc-risk-safe);
+}
+
+.mc-next-mesh-caps-entry[data-status="offline"] {
+  border-inline-start-color: var(--gc-risk-caution);
+}
+
+.mc-next-mesh-caps-entry[data-status="revoked"],
+.mc-next-mesh-caps-entry[data-status="blocked"] {
+  border-inline-start-color: var(--gc-risk-danger);
+}
+
+.mc-next-mesh-caps-entry[data-status="superseded"] {
+  border-inline-start-color: var(--muted-foreground);
+}
+
+.mc-next-mesh-caps-entry-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.mc-next-mesh-caps-entry-head h4 {
+  margin: 0;
+  color: var(--foreground);
+  font-size: var(--text-sm, 0.875rem);
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-mesh-caps-reasons {
+  margin: 0.55rem 0;
+  padding-inline-start: 1.1rem;
+  color: var(--muted-foreground);
+  font-size: var(--text-xs, 0.8125rem);
+  line-height: 1.45;
+}
+
+.mc-next-mesh-caps-entry-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.6rem;
+  margin-top: 0.65rem;
+}
+
+.mc-next-mesh-caps-revoke {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.6rem;
+}
+
+.mc-next-mesh-caps-revoke-reason {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: min(18rem, 100%);
+  color: var(--muted-foreground);
+  font-size: var(--text-2xs, 0.75rem);
+  font-weight: 650;
+}
+
+.mc-next-mesh-caps-revoke-reason input {
+  padding: 0.42rem 0.55rem;
+  border: 1px solid color-mix(in oklab, var(--mc-border-subtle) 82%, transparent);
+  border-radius: 0.5rem;
+  color: var(--foreground);
+  background: color-mix(in oklab, var(--mc-surface-1) 96%, transparent);
+  font-size: var(--text-xs, 0.8125rem);
+}
+
+.mc-next-mesh-caps-revoke-reason input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.mc-next-mesh-caps-receipt {
+  padding: 0.7rem 0.8rem;
+  margin-bottom: 0.75rem;
+  border: 1px solid color-mix(in oklab, var(--accent) 42%, transparent);
+  border-radius: 0.6rem;
+  color: var(--foreground);
+  background: color-mix(in oklab, var(--accent) 8%, transparent);
+}
+
+.mc-next-mesh-caps-receipt p {
+  margin: 0.5rem 0 0;
+  font-size: var(--text-xs, 0.8125rem);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-mesh-caps-invocations {
+  margin-top: 1rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid color-mix(in oklab, var(--mc-border-subtle) 72%, transparent);
+}
+
+.mc-next-mesh-caps-invocations h4 {
+  margin: 0 0 0.6rem;
+  color: var(--foreground);
+  font-size: var(--text-sm, 0.875rem);
+}
+
+.mc-next-mesh-caps-invocation {
+  min-width: 0;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid color-mix(in oklab, var(--mc-border-subtle) 70%, transparent);
+  border-radius: 0.55rem;
+  color: var(--foreground);
+  background: color-mix(in oklab, var(--mc-surface-1) 94%, transparent);
+}
+
+.mc-next-mesh-caps-invocation p {
+  margin: 0.4rem 0 0;
+  font-size: var(--text-xs, 0.8125rem);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-mesh-caps-hint {
+  margin: 0.6rem 0 0;
+  color: var(--muted-foreground);
+  font-size: var(--text-xs, 0.8125rem);
+  line-height: 1.5;
+}
+
+@media (max-width: 860px) {
+  .mc-next-mesh-caps-meta {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 560px) {
+  .mc-next-mesh-caps-entry-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .mc-next-mesh-caps-revoke {
+    width: 100%;
+  }
+
+  .mc-next-mesh-caps-revoke-reason {
+    min-width: 100%;
+  }
+}

@@ -33,6 +33,15 @@ describe("sqlite chat branching migration", () => {
         name TEXT NOT NULL,
         applied_at TEXT NOT NULL
       );
+    `);
+    // Migrations 172+ fail closed on databases that claim applied history without the real
+    // predecessor tables, so build the genuine v24 schema before reshaping it to the legacy premise.
+    for (let version = 1; version <= 24; version += 1) {
+      __sqliteInternals.applySchemaMigrationForTest(version, legacy);
+    }
+    legacy.exec(`
+      DROP TABLE IF EXISTS chat_turn_traces;
+      DROP TABLE IF EXISTS chat_session_prefs;
 
       CREATE TABLE chat_turn_traces (
         turn_id TEXT PRIMARY KEY,
@@ -82,6 +91,14 @@ describe("sqlite chat branching migration", () => {
         name TEXT NOT NULL,
         applied_at TEXT NOT NULL
       );
+    `);
+    // Same as above: real v24 schema first, then reshape to the pre-branching legacy shapes.
+    for (let version = 1; version <= 24; version += 1) {
+      __sqliteInternals.applySchemaMigrationForTest(version, legacy);
+    }
+    legacy.exec(`
+      DROP TABLE IF EXISTS chat_turn_traces;
+      DROP TABLE IF EXISTS chat_session_prefs;
 
       CREATE TABLE chat_session_prefs (
         session_id TEXT PRIMARY KEY,

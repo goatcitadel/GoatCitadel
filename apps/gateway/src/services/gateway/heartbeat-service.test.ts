@@ -34,7 +34,7 @@ interface HarnessOptions {
   eligibleBySession?: Record<string, boolean>;
   idleBySession?: Record<string, number>;
   runningBySession?: Record<string, boolean>;
-  enqueue?: (input: { sessionId: string; prompt: string }) => boolean | Promise<boolean>;
+  enqueue?: HeartbeatTickDeps["enqueueHeartbeatTurn"];
   /** Local-noon clock so the default active-hours window (08–22) passes. */
   now?: Date;
   idleFloorSeconds?: number;
@@ -75,6 +75,14 @@ function pinDate(localHour: number): Date {
 }
 
 describe("runHeartbeatTick", () => {
+  it("pins the silent heartbeat objective to the strict two-shape JSON contract", () => {
+    expect(HEARTBEAT_SYSTEM_PROMPT).toContain('{"notify":false}');
+    expect(HEARTBEAT_SYSTEM_PROMPT).toContain('{"notify":true,"message":"..."}');
+    expect(HEARTBEAT_SYSTEM_PROMPT).toContain("pure JSON only: no prose, code fence, or extra keys");
+    expect(HEARTBEAT_SYSTEM_PROMPT).toContain("at most 4000 Unicode scalar values");
+    expect(HEARTBEAT_SYSTEM_PROMPT).not.toContain("{notify:");
+  });
+
   it("fires a silent heartbeat for an eligible idle session with the heartbeat prompt", async () => {
     const { deps, enqueueHeartbeatTurn } = createHarness({ sessions: [session("s1")] });
     const result = await runHeartbeatTick(deps);
@@ -206,7 +214,7 @@ describe("runHeartbeatTick", () => {
     // Simulate the live shared timestamp: a fired heartbeat touches lastProactiveAt.
     let lastProactiveAt: string | undefined;
     const enqueue = vi.fn(() => {
-      lastProactiveAt = (firstNow).toISOString();
+      lastProactiveAt = firstNow.toISOString();
       return true;
     });
     const buildDeps = (now: Date): HeartbeatTickDeps => ({
@@ -254,6 +262,21 @@ describe("runHeartbeatTick", () => {
 
     expect(result.failed).toBe(1);
     expect(result.fired).toBe(0);
+  });
+
+  it.each([
+    [{ disposition: "database_not_due", reason: "cadence_changed" } as const, "skippedDatabaseNotDue"],
+    [{ disposition: "database_parked", reason: "execution_disabled" } as const, "skippedDatabaseParked"],
+    [{ disposition: "database_busy" } as const, "skippedDatabaseBusy"],
+    [{ disposition: "database_recovered", outcome: "terminal" } as const, "recoveredDatabaseOccurrence"],
+  ])("does not mislabel authoritative database outcome %o as an enqueue failure", async (outcome, counter) => {
+    const { deps } = createHarness({ sessions: [session("s1")], enqueue: () => outcome });
+
+    const result = await runHeartbeatTick(deps);
+
+    expect(result.failed).toBe(0);
+    expect(result.fired).toBe(0);
+    expect(result[counter]).toBe(1);
   });
 
   it("processes multiple sessions independently in one tick", async () => {

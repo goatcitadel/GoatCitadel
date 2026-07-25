@@ -5,6 +5,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import { createDatabase } from "./sqlite.js";
+import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
 import { SessionAutonomyPrefsRepository } from "./session-autonomy-prefs-repo.js";
 import type { DbStatement } from "./db.js";
 
@@ -22,16 +23,18 @@ afterEach(() => {
   }
 });
 
-function createRepo(): SessionAutonomyPrefsRepository {
+function createRepo(...sessionIds: string[]): SessionAutonomyPrefsRepository {
   const dbPath = path.join(os.tmpdir(), `goatcitadel-autonomy-${randomUUID()}.db`);
   createdFiles.push(dbPath);
   const db = createDatabase({ dbPath });
+  const meta = new ChatSessionMetaRepository(db);
+  for (const sessionId of sessionIds) meta.ensure(sessionId, undefined, "default");
   return new SessionAutonomyPrefsRepository(db);
 }
 
 describe("SessionAutonomyPrefsRepository", () => {
   it("returns defaults when ensuring missing rows", () => {
-    const repo = createRepo();
+    const repo = createRepo("sess-1");
     const prefs = repo.ensure("sess-1");
     assert.equal(prefs.proactiveMode, "off");
     assert.equal(prefs.maxActionsPerHour, 6);
@@ -42,7 +45,7 @@ describe("SessionAutonomyPrefsRepository", () => {
   });
 
   it("defaults heartbeat to ON with a 1h interval and 08–22 active hours (P1-F4)", () => {
-    const repo = createRepo();
+    const repo = createRepo("sess-hb");
     const prefs = repo.ensure("sess-hb");
     assert.equal(prefs.heartbeatEnabled, true);
     assert.equal(prefs.heartbeatIntervalSeconds, 3600);
@@ -56,7 +59,7 @@ describe("SessionAutonomyPrefsRepository", () => {
   });
 
   it("round-trips heartbeat prefs and clamps the interval to the 15m floor", () => {
-    const repo = createRepo();
+    const repo = createRepo("sess-hb");
     const patched = repo.patch("sess-hb", {
       heartbeatEnabled: false,
       heartbeatIntervalSeconds: 60, // below the 15-minute floor
@@ -75,7 +78,7 @@ describe("SessionAutonomyPrefsRepository", () => {
   });
 
   it("re-enables heartbeat and re-clamps a too-large interval to the 24h ceiling", () => {
-    const repo = createRepo();
+    const repo = createRepo("sess-hb");
     repo.patch("sess-hb", { heartbeatEnabled: false });
     const patched = repo.patch("sess-hb", {
       heartbeatEnabled: true,
@@ -86,7 +89,7 @@ describe("SessionAutonomyPrefsRepository", () => {
   });
 
   it("lists existing rows by session id in one map", () => {
-    const repo = createRepo();
+    const repo = createRepo("sess-1", "sess-2");
     repo.ensure("sess-1");
     repo.patch("sess-2", { proactiveMode: "suggest", maxActionsPerTurn: 4 });
     const map = repo.listBySessionIds(["sess-1", "sess-2", "sess-3"]);
@@ -96,7 +99,7 @@ describe("SessionAutonomyPrefsRepository", () => {
   });
 
   it("round-trips proactive budget, retrieval mode, and reflection mode", () => {
-    const repo = createRepo();
+    const repo = createRepo("sess-1");
     const prefs = repo.patch("sess-1", {
       proactiveMode: "auto_full",
       maxActionsPerHour: 12,
@@ -119,7 +122,7 @@ describe("SessionAutonomyPrefsRepository", () => {
   });
 
   it("touches proactive run state, clamps budgets, and handles empty or malformed adapter reads", () => {
-    const repo = createRepo();
+    const repo = createRepo("sess-touch", "unreadable");
 
     const touched = repo.touch("sess-touch", "run-1", "2026-03-08T00:00:00.000Z");
     assert.equal(touched.lastProactiveAt, "2026-03-08T00:00:00.000Z");
@@ -159,5 +162,68 @@ describe("SessionAutonomyPrefsRepository", () => {
       return originalPrepare(sql);
     };
     assert.equal(repo.listBySessionIds(["sess-touch"]).size, 0);
+  });
+
+  it("keeps cadence monotonic, rejects equal-time identity drift, and preserves it across preference patches", () => {
+    const repo = createRepo("sess-cadence");
+    const firstAt = "2026-07-15T10:00:00.000Z";
+    const laterAt = "2026-07-15T10:01:00.000Z";
+
+    const first = repo.touch("sess-cadence", "run-one", firstAt);
+    assert.equal(first.lastProactiveAt, firstAt);
+    assert.equal(first.lastProactiveRunId, "run-one");
+    assert.deepEqual(repo.touch("sess-cadence", "run-one", firstAt), first);
+    assert.throws(() => repo.touch("sess-cadence", "run-two", firstAt), /same run identity/iu);
+
+    const skewed = repo.touch("sess-cadence", "run-clock-skew", "2026-07-15T09:59:59.000Z");
+    assert.equal(skewed.lastProactiveAt, firstAt);
+    assert.equal(skewed.lastProactiveRunId, "run-one");
+
+    const advanced = repo.touch("sess-cadence", "run-two", laterAt);
+    assert.equal(advanced.lastProactiveAt, laterAt);
+    assert.equal(advanced.lastProactiveRunId, "run-two");
+    const patched = repo.patch("sess-cadence", { heartbeatEnabled: false, cooldownSeconds: 120 });
+    assert.equal(patched.lastProactiveAt, laterAt);
+    assert.equal(patched.lastProactiveRunId, "run-two");
+  });
+
+  it("consumes an exact prior cadence pair once and fails closed after competing progress", () => {
+    const repo = createRepo("sess-cas");
+    repo.ensure("sess-cas");
+    const claimedAt = "2026-07-15T11:00:00.000Z";
+    const consumed = repo.consumeHeartbeatCadenceWithinSessionLock({
+      sessionId: "sess-cas",
+      occurrenceId: "heartbeat-occurrence-one",
+      claimedAt,
+    });
+    assert.equal(consumed.lastProactiveAt, claimedAt);
+    assert.equal(consumed.lastProactiveRunId, "heartbeat-occurrence-one");
+    assert.deepEqual(
+      repo.consumeHeartbeatCadenceWithinSessionLock({
+        sessionId: "sess-cas",
+        occurrenceId: "heartbeat-occurrence-one",
+        claimedAt,
+      }),
+      consumed,
+    );
+    assert.throws(
+      () =>
+        repo.consumeHeartbeatCadenceWithinSessionLock({
+          sessionId: "sess-cas",
+          occurrenceId: "heartbeat-occurrence-two",
+          claimedAt: "2026-07-15T12:00:00.000Z",
+        }),
+      /cadence changed/iu,
+    );
+    assert.throws(
+      () =>
+        repo.consumeHeartbeatCadenceWithinSessionLock({
+          sessionId: "sess-cas",
+          occurrenceId: "heartbeat-occurrence-two",
+          claimedAt: "2026-07-15T12:00:00.000Z",
+          expectedLastProactiveAt: claimedAt,
+        }),
+      /expectedPriorCadence/iu,
+    );
   });
 });

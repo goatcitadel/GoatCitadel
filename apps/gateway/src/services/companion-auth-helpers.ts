@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
+import { normalizeCompanionPrincipalPurpose } from "@goatcitadel/contracts";
 import type {
   CompanionAuditEventRecord,
+  CompanionPrincipalPurpose,
   CompanionSessionAdminRecord,
   CompanionSessionInfoResponse,
   CompanionSignatureAlgorithm,
@@ -31,6 +33,7 @@ export interface CompanionSessionRecord {
   platform?: string;
   grantExpiresAt?: string;
   grantRevokedAt?: string;
+  principalPurpose: CompanionPrincipalPurpose;
 }
 
 export interface CompanionAccessValidationResult {
@@ -38,6 +41,7 @@ export interface CompanionAccessValidationResult {
   deviceId: string;
   grantId: string;
   sessionId: string;
+  principalPurpose: CompanionPrincipalPurpose;
 }
 
 export function mapCompanionSessionRow(row: Record<string, unknown>): CompanionSessionRecord {
@@ -65,6 +69,7 @@ export function mapCompanionSessionRow(row: Record<string, unknown>): CompanionS
     platform: typeof row.platform === "string" ? row.platform : undefined,
     grantExpiresAt: typeof row.grant_expires_at === "string" ? row.grant_expires_at : undefined,
     grantRevokedAt: typeof row.grant_revoked_at === "string" ? row.grant_revoked_at : undefined,
+    principalPurpose: normalizeCompanionPrincipalPurpose(row.principal_purpose),
   };
 }
 
@@ -83,6 +88,7 @@ export function toCompanionSessionInfoResponse(session: CompanionSessionRecord):
     refreshTokenExpiresAt: session.refreshTokenExpiresAt,
     signatureAlgorithm: session.signatureAlgorithm,
     metadata: session.metadata,
+    principalPurpose: session.principalPurpose,
   };
 }
 

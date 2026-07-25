@@ -27,6 +27,7 @@ const resolveActorId = (request: { authActorId?: string; ip?: string }) =>
 const statusSchema = z.enum(["planning", "inbox", "assigned", "in_progress", "testing", "review", "done", "blocked"]);
 
 const prioritySchema = z.enum(["low", "normal", "high", "urgent"]);
+const positiveRevisionSchema = z.number().int().positive();
 const agenticRunStatusSchema = z.enum([
   "queued",
   "planning",
@@ -108,6 +109,7 @@ const createTaskSchema = z.object({
 });
 
 const updateTaskSchema = z.object({
+  expectedRevision: positiveRevisionSchema,
   title: z.string().min(1).optional(),
   description: z.string().optional(),
   status: statusSchema.optional(),
@@ -214,6 +216,7 @@ const agenticRunAccessQuerySchema = z.object({
 
 const agenticControlSchema = z.object({
   action: z.enum(["pause", "cancel", "retry", "steer", "kill_child", "approve", "reject", "open_child"]),
+  expectedRevision: positiveRevisionSchema,
   controlId: z.string().min(1).optional(),
   reason: z.string().optional(),
   instruction: z.string().optional(),
@@ -246,6 +249,7 @@ const distressSignalCodeSchema = z.enum([
 const distressSeveritySchema = z.enum(["info", "warn", "critical"]);
 
 const emitDistressBodySchema = z.object({
+  expectedRevision: positiveRevisionSchema,
   code: distressSignalCodeSchema,
   severity: distressSeveritySchema,
   title: z.string().min(1),
@@ -254,9 +258,10 @@ const emitDistressBodySchema = z.object({
   evidenceRef: z.string().min(1).optional(),
 });
 
-const resolveDistressBodySchema = z.object({});
+const resolveDistressBodySchema = z.object({ expectedRevision: positiveRevisionSchema });
 
 const retryBudgetBodySchema = z.object({
+  expectedRevision: positiveRevisionSchema,
   maxRetries: z.number().int().nonnegative(),
 });
 
@@ -267,11 +272,12 @@ const artifactClaimSchema = z.object({
 });
 
 const verifyArtifactsBodySchema = z.object({
+  expectedRevision: positiveRevisionSchema,
   claims: z.array(artifactClaimSchema).min(1).max(MAX_TASK_ARTIFACT_CLAIMS),
 });
 
 const bulkRevisionGuardShape = {
-  expectedUpdatedAtByTaskId: z.record(z.string(), z.string().datetime()).optional(),
+  expectedRevisionsByTaskId: z.record(z.string(), positiveRevisionSchema),
 };
 
 const bulkActionBodySchema = z.discriminatedUnion("action", [
@@ -295,14 +301,15 @@ const deleteTaskQuerySchema = z.object({
   mode: z.enum(["soft", "hard"]).default("soft"),
 });
 
-const deleteTaskBodySchema = z
-  .object({
-    mode: z.enum(["soft", "hard"]).optional(),
-    deletedBy: z.string().min(1).optional(),
-    deleteReason: z.string().min(1).max(400).optional(),
-    confirmToken: z.string().optional(),
-  })
-  .optional();
+const deleteTaskBodySchema = z.object({
+  expectedRevision: positiveRevisionSchema,
+  mode: z.enum(["soft", "hard"]).optional(),
+  deletedBy: z.string().min(1).optional(),
+  deleteReason: z.string().min(1).max(400).optional(),
+  confirmToken: z.string().optional(),
+});
+
+const restoreTaskBodySchema = z.object({ expectedRevision: positiveRevisionSchema });
 
 export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/.well-known/agent-card.json", async (request, reply) => {
@@ -720,7 +727,13 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      const task = fastify.services.tasks.updateTask(taskId, parsed.data, readTaskWorkspaceAccess(request));
+      const { expectedRevision, ...input } = parsed.data;
+      const task = fastify.services.tasks.updateTaskWithRevision(
+        taskId,
+        input,
+        expectedRevision,
+        readTaskWorkspaceAccess(request),
+      );
       return reply.send(task);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -740,40 +753,57 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
 
-    const mode = bodyParsed.data?.mode ?? queryParsed.data.mode;
-    const deletedBy = bodyParsed.data?.deletedBy;
-    const deleteReason = bodyParsed.data?.deleteReason;
-    const confirmToken = bodyParsed.data?.confirmToken;
+    const mode = bodyParsed.data.mode ?? queryParsed.data.mode;
+    const { expectedRevision, deletedBy, deleteReason, confirmToken } = bodyParsed.data;
 
-    const deleted =
-      mode === "hard"
-        ? (() => {
-            if (confirmToken !== "PERMANENT_DELETE") {
-              return undefined;
-            }
-            return fastify.services.tasks.hardDeleteTask(taskId, readTaskWorkspaceAccess(request));
-          })()
-        : fastify.services.tasks.softDeleteTask(taskId, deletedBy, deleteReason, readTaskWorkspaceAccess(request));
-
-    if (mode === "hard" && deleted === undefined) {
-      if (confirmToken !== "PERMANENT_DELETE") {
+    try {
+      if (mode === "hard" && confirmToken !== "PERMANENT_DELETE") {
         return reply.code(400).send({ error: "Hard delete requires confirmToken=PERMANENT_DELETE" });
       }
-    }
 
-    if (!deleted) {
-      return reply.code(404).send({ error: `Task ${taskId} not found` });
+      const deleted =
+        mode === "hard"
+          ? fastify.services.tasks.hardDeleteTaskWithRevision(
+              taskId,
+              expectedRevision,
+              readTaskWorkspaceAccess(request),
+            )
+          : fastify.services.tasks.softDeleteTaskWithRevision(
+              taskId,
+              expectedRevision,
+              deletedBy,
+              deleteReason,
+              readTaskWorkspaceAccess(request),
+            );
+
+      if (!deleted) {
+        return reply.code(404).send({ error: `Task ${taskId} not found` });
+      }
+      return reply.send({ deleted: true, taskId, mode });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
     }
-    return reply.send({ deleted: true, taskId, mode });
   });
 
   fastify.post("/api/v1/tasks/:taskId/restore", async (request, reply) => {
     const taskId = (request.params as { taskId: string }).taskId;
-    const restored = fastify.services.tasks.restoreTask(taskId, readTaskWorkspaceAccess(request));
-    if (!restored) {
-      return reply.code(404).send({ error: `Task ${taskId} not found or not deleted` });
+    const parsed = restoreTaskBodySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send({ restored: true, taskId });
+    try {
+      const restored = fastify.services.tasks.restoreTaskWithRevision(
+        taskId,
+        parsed.data.expectedRevision,
+        readTaskWorkspaceAccess(request),
+      );
+      if (!restored) {
+        return reply.code(404).send({ error: `Task ${taskId} not found or not deleted` });
+      }
+      return reply.send({ restored: true, taskId });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
   });
 
   fastify.get("/api/v1/tasks/:taskId/activities", async (request, reply) => {
@@ -880,7 +910,13 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     const parsed = emitDistressBodySchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     try {
-      const task = fastify.services.tasks.emitDistressSignal(taskId, parsed.data, readTaskWorkspaceAccess(request));
+      const { expectedRevision, ...input } = parsed.data;
+      const task = fastify.services.tasks.emitDistressSignalWithRevision(
+        taskId,
+        input,
+        expectedRevision,
+        readTaskWorkspaceAccess(request),
+      );
       return reply.code(201).send(task);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -892,10 +928,11 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     const parsed = resolveDistressBodySchema.safeParse(request.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     try {
-      const task = fastify.services.tasks.resolveDistressSignal(
+      const task = fastify.services.tasks.resolveDistressSignalWithRevision(
         taskId,
         signalId,
         { resolvedBy: resolveActorId(request) },
+        parsed.data.expectedRevision,
         readTaskWorkspaceAccess(request),
       );
       return reply.send(task);
@@ -909,9 +946,10 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     const parsed = retryBudgetBodySchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     try {
-      const task = fastify.services.tasks.setRetryBudget(
+      const task = fastify.services.tasks.setRetryBudgetWithRevision(
         taskId,
         parsed.data.maxRetries,
+        parsed.data.expectedRevision,
         readTaskWorkspaceAccess(request),
       );
       return reply.send(task);
@@ -925,9 +963,10 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     const parsed = verifyArtifactsBodySchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     try {
-      const task = await fastify.services.tasks.verifyTaskArtifacts(
+      const task = await fastify.services.tasks.verifyTaskArtifactsWithRevision(
         taskId,
         parsed.data.claims,
+        parsed.data.expectedRevision,
         readTaskWorkspaceAccess(request),
       );
       return reply.send(task);

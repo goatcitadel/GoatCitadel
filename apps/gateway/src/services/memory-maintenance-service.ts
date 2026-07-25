@@ -32,6 +32,7 @@ import {
   MEMORY_RECOMMENDATION_DEDUP_WINDOW_MS,
   shouldSuppressMaintenanceRecommendation,
 } from "./memory-lifecycle-policy.js";
+import { createUtilityModelUsageAttribution } from "./utility-model-usage-attribution.js";
 
 const MEMORY_MAINTENANCE_WORKFLOW_KEY = "memory.maintenance";
 const MEMORY_MAINTENANCE_WORKFLOW_VERSION = "memory.maintenance.v1";
@@ -1022,47 +1023,60 @@ export class MemoryMaintenanceService {
     markdown: string;
     summary: string;
   }> {
-    const response = await this.ctx.llmService.chatCompletions({
-      providerId: input.providerId,
-      model: input.model,
-      max_tokens: MAX_MAINTENANCE_OUTPUT_TOKENS,
-      timeoutMs: 45_000,
-      messages: [
-        {
-          role: "system",
-          content: [
-            "You are Dream, GoatCitadel's workspace memory maintenance agent.",
-            "Use only the provided workspace evidence.",
-            "Produce a concise markdown artifact for future retrieval and operator inspection.",
-            "Do not copy raw transcripts verbatim unless a direct quote is necessary.",
-            "Do not invent facts, decisions, file paths, or open issues.",
-            "When evidence is thin or conflicting, say so explicitly.",
-            "Return markdown only with these sections in order:",
-            "# Workspace Memory",
-            "## Stable Context",
-            "## Active Threads",
-            "## Watchlist",
-            "## References",
-            "In the References section, cite exact source refs from the provided catalog.",
-          ].join("\n"),
+    const response = await this.ctx.llmService.chatCompletions(
+      {
+        providerId: input.providerId,
+        model: input.model,
+        max_tokens: MAX_MAINTENANCE_OUTPUT_TOKENS,
+        timeoutMs: 45_000,
+        messages: [
+          {
+            role: "system",
+            content: [
+              "You are Dream, GoatCitadel's workspace memory maintenance agent.",
+              "Use only the provided workspace evidence.",
+              "Produce a concise markdown artifact for future retrieval and operator inspection.",
+              "Do not copy raw transcripts verbatim unless a direct quote is necessary.",
+              "Do not invent facts, decisions, file paths, or open issues.",
+              "When evidence is thin or conflicting, say so explicitly.",
+              "Return markdown only with these sections in order:",
+              "# Workspace Memory",
+              "## Stable Context",
+              "## Active Threads",
+              "## Watchlist",
+              "## References",
+              "In the References section, cite exact source refs from the provided catalog.",
+            ].join("\n"),
+          },
+          {
+            role: "user",
+            content: buildMaintenanceConsolidationPrompt({
+              workspaceId: input.workspaceId,
+              runId: input.runId,
+              triggerSource: input.triggerSource,
+              policy: input.policy,
+              sources: input.sources,
+            }),
+          },
+        ],
+        metadata: {
+          surface: "memory_maintenance",
+          workspaceId: input.workspaceId,
+          runId: input.runId,
         },
-        {
-          role: "user",
-          content: buildMaintenanceConsolidationPrompt({
-            workspaceId: input.workspaceId,
-            runId: input.runId,
-            triggerSource: input.triggerSource,
-            policy: input.policy,
-            sources: input.sources,
-          }),
-        },
-      ],
-      metadata: {
-        surface: "memory_maintenance",
-        workspaceId: input.workspaceId,
-        runId: input.runId,
       },
-    });
+      createUtilityModelUsageAttribution({
+        operationId: `memory-maintenance:${encodeURIComponent(input.runId)}:consolidate`,
+        utilityKind: "memory_maintenance_consolidation",
+        requestedProviderId: input.providerId,
+        requestedModelId: input.model,
+        lineage: {
+          workspaceId: input.workspaceId,
+          taskId: input.runId,
+          agentId: "memory-maintenance",
+        },
+      }),
+    );
 
     const markdown = normalizeGeneratedMaintenanceMarkdown(
       extractCompletionText(response),

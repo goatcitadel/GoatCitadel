@@ -16,9 +16,9 @@
  *     restores each via its kind's existing restore function, marking each
  *     reverted. Per-entry failure isolation: one failure logs + continues.
  *   - {@link AutonomyControlService.getStatus} — master kill-switch state +
- *     recent-audit summary.
+ *     current settings revision + recent-audit summary.
  *   - {@link AutonomyControlService.setKillSwitch} — toggles `autonomyV1Disabled`
- *     through the gateway's feature-flag update path.
+ *     through the gateway's revision-fenced config-generation transaction.
  *
  * The per-subsystem restore functions are injected as callbacks (mirroring the
  * ImprovementService callbacks pattern) so this service stays decoupled from the
@@ -68,8 +68,10 @@ export interface AutonomyControlServiceDeps {
   storage: AutonomyControlStorage;
   /** Reads the master kill switch (`autonomyV1Disabled`). */
   isFeatureEnabled(flag: string): boolean;
-  /** Sets the master kill switch through the feature-flag update path. */
-  setKillSwitch(disabled: boolean): void;
+  /** Reads the canonical settings generation revision. */
+  readSettingsRevision(): number;
+  /** Sets the master kill switch through the config-generation transaction. */
+  setKillSwitch(input: { disabled: boolean; expectedRevision: number }): Promise<void>;
   /** Per-subsystem restore callbacks. */
   restoreHandlers: AutonomyRestoreHandlers;
   /** Best-effort diagnostics sink (failures never propagate). */
@@ -91,7 +93,8 @@ const DEFAULT_RECENT_LIMIT = 20;
 export class AutonomyControlService {
   private readonly storage: AutonomyControlStorage;
   private readonly isFeatureEnabled: (flag: string) => boolean;
-  private readonly setKillSwitchFlag: (disabled: boolean) => void;
+  private readonly readSettingsRevision: () => number;
+  private readonly setKillSwitchFlag: (input: { disabled: boolean; expectedRevision: number }) => Promise<void>;
   private readonly handlers: AutonomyRestoreHandlers;
   private readonly recordDevDiagnostic: (input: AutonomyControlDiagnostic) => void;
   private readonly now: () => string;
@@ -99,6 +102,7 @@ export class AutonomyControlService {
   public constructor(deps: AutonomyControlServiceDeps) {
     this.storage = deps.storage;
     this.isFeatureEnabled = deps.isFeatureEnabled;
+    this.readSettingsRevision = deps.readSettingsRevision;
     this.setKillSwitchFlag = deps.setKillSwitch;
     this.handlers = deps.restoreHandlers;
     this.recordDevDiagnostic = deps.recordDevDiagnostic;
@@ -129,6 +133,7 @@ export class AutonomyControlService {
   public getStatus(recentLimit = DEFAULT_RECENT_LIMIT): AutonomyControlStatus {
     const killSwitchEngaged = this.isFeatureEnabled("autonomyV1Disabled");
     return {
+      revision: this.readSettingsRevision(),
       killSwitchEngaged,
       autonomyEnabled: !killSwitchEngaged,
       audit: this.buildAuditSummary(recentLimit),
@@ -136,8 +141,8 @@ export class AutonomyControlService {
   }
 
   /** Engage/disengage the master kill switch (`autonomyV1Disabled`). */
-  public setKillSwitch(disabled: boolean): AutonomyControlStatus {
-    this.setKillSwitchFlag(disabled);
+  public async setKillSwitch(disabled: boolean, expectedRevision: number): Promise<AutonomyControlStatus> {
+    await this.setKillSwitchFlag({ disabled, expectedRevision });
     return this.getStatus();
   }
 

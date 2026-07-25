@@ -737,14 +737,18 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
+  // HX-402 P1: operator mutation verbs are approval-first. Each verb commits
+  // one canonical `memory.lifecycle` approval (202 + pending-approval
+  // envelope); the recovered approval effect is the only executor. The verbs
+  // never mutate memory rows directly.
   fastify.post("/api/v1/memory/items/batch-mutate", operatorOnly, async (request, reply) => {
     const body = batchMutationSchema.safeParse(request.body ?? {});
     if (!body.success) {
       return reply.code(400).send({ error: body.error.flatten() });
     }
     try {
-      return reply.send(
-        memory.batchMutateItems(
+      return reply.code(202).send(
+        memory.requestBatchMutationApproval(
           {
             actionId: body.data.actionId,
             source: body.data.source,
@@ -770,8 +774,8 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(
-        memory.patchItem(
+      return reply.code(202).send(
+        memory.requestItemPatchApproval(
           params.data.itemId,
           {
             title: body.data.title,
@@ -800,13 +804,18 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      const result = memory.forgetItem(params.data.itemId, resolveActorId(request), {
-        actionId: body.data.actionId,
-        source: body.data.source,
-        onCommit: () => commitMutationIdempotencyAlongsideCanonicalWrite(request),
-        afterCommit: () => markMutationCommitted(request),
-      });
-      return reply.send(result);
+      const outcome = memory.requestForgetApproval(
+        {
+          itemIds: [params.data.itemId],
+          actionId: body.data.actionId,
+          requesterId: resolveActorId(request),
+        },
+        {
+          onCommit: () => commitMutationIdempotencyAlongsideCanonicalWrite(request),
+          afterCommit: () => markMutationCommitted(request),
+        },
+      );
+      return reply.code(outcome.pendingApproval ? 202 : 200).send(outcome);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -838,7 +847,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: body.error.flatten() });
     }
     try {
-      const result = memory.forget(
+      const outcome = memory.requestForgetApproval(
         {
           itemIds: body.data.itemIds,
           namespace: body.data.namespace,
@@ -846,15 +855,14 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
           workspaceId: body.data.workspaceId,
           includeGlobal: body.data.includeGlobal,
           actionId: body.data.actionId,
-          source: body.data.source,
-          actorId: resolveActorId(request),
+          requesterId: resolveActorId(request),
         },
         {
           onCommit: () => commitMutationIdempotencyAlongsideCanonicalWrite(request),
           afterCommit: () => markMutationCommitted(request),
         },
       );
-      return reply.send(result);
+      return reply.code(outcome.pendingApproval ? 202 : 200).send(outcome);
     } catch (error) {
       const message = (error as Error).message;
       if (message.toLowerCase().includes("at least one criterion")) {

@@ -4,6 +4,7 @@ import {
   buildChatTurnChildrenMap,
   createHydratedChatTurnTrace,
   listHydratedChatTurnTraces,
+  loadChatTurnSessionState,
   resolveChatActiveLeafTurnId,
 } from "./chat-turn-trace-hydration.js";
 
@@ -195,6 +196,79 @@ describe("chat turn trace hydration", () => {
     expect(resolveChatActiveLeafTurnId({ storage }, "session-1", [])).toBeUndefined();
     expect(storage.chatSessionBranchState.setActiveLeaf).not.toHaveBeenCalled();
   });
+
+  it("retains a notice-only trace while clearing its stale conversation branch leaf", async () => {
+    const heartbeat = createTrace({
+      turnId: "heartbeat-turn",
+      userMessageId: "heartbeat-hidden-user",
+      assistantMessageId: "heartbeat-assistant",
+    });
+    const storage = createStorage({ traces: [heartbeat] });
+    storage.chatSessionBranchState.get = vi.fn(() => ({
+      sessionId: "session-1",
+      activeLeafTurnId: "heartbeat-turn",
+      updatedAt: "2026-07-15T00:00:00.000Z",
+    })) as never;
+    const ensureChatMessageProjection = vi.fn(async () => undefined);
+
+    const state = await loadChatTurnSessionState({ storage, ensureChatMessageProjection }, "session-1", {
+      isConversationTrace: () => false,
+    });
+
+    expect(state.traces).toEqual([heartbeat]);
+    expect(state.activeLeafTurnId).toBeUndefined();
+    expect(state.turnLineageById).toEqual(new Map());
+    expect(state.childrenByTurnId).toEqual(new Map());
+    expect(state.messagesById).toEqual(new Map());
+    expect(storage.chatMessages.listByMessageIds).toHaveBeenCalledWith([]);
+    expect(storage.chatSessionBranchState.clear).toHaveBeenCalledWith("session-1");
+    expect(storage.chatSessionBranchState.setActiveLeaf).not.toHaveBeenCalled();
+  });
+
+  it("repairs a stale system leaf to the newest conversation leaf without hydrating system messages", async () => {
+    const conversation = createTrace({
+      turnId: "conversation-turn",
+      parentTurnId: undefined,
+      userMessageId: "conversation-user",
+      assistantMessageId: "conversation-assistant",
+      startedAt: "2026-07-15T00:00:00.000Z",
+    });
+    const heartbeat = createTrace({
+      turnId: "heartbeat-turn",
+      parentTurnId: undefined,
+      userMessageId: "heartbeat-hidden-user",
+      assistantMessageId: "heartbeat-assistant",
+      startedAt: "2026-07-15T00:01:00.000Z",
+    });
+    const messages = new Map([
+      ["conversation-user", { messageId: "conversation-user", timestamp: "2026-07-15T00:00:00.000Z" }],
+      ["conversation-assistant", { messageId: "conversation-assistant", timestamp: "2026-07-15T00:00:01.000Z" }],
+      ["heartbeat-assistant", { messageId: "heartbeat-assistant", timestamp: "2026-07-15T00:01:01.000Z" }],
+    ]);
+    const storage = createStorage({ traces: [conversation, heartbeat], messages });
+    storage.chatSessionBranchState.get = vi.fn(() => ({
+      sessionId: "session-1",
+      activeLeafTurnId: "heartbeat-turn",
+      updatedAt: "2026-07-15T00:01:00.000Z",
+    })) as never;
+
+    const state = await loadChatTurnSessionState(
+      { storage, ensureChatMessageProjection: vi.fn(async () => undefined) },
+      "session-1",
+      { isConversationTrace: (trace) => trace.turnId !== "heartbeat-turn" },
+    );
+
+    expect(state.traces.map((trace) => trace.turnId)).toEqual(["conversation-turn", "heartbeat-turn"]);
+    expect(state.activeLeafTurnId).toBe("conversation-turn");
+    expect([...state.messagesById.keys()]).toEqual(["conversation-user", "conversation-assistant"]);
+    expect(storage.chatMessages.listByMessageIds).toHaveBeenCalledWith(["conversation-user", "conversation-assistant"]);
+    expect(storage.chatSessionBranchState.setActiveLeaf).toHaveBeenCalledWith(
+      "session-1",
+      "conversation-turn",
+      "2026-07-15T00:00:00.000Z",
+    );
+    expect(storage.chatSessionBranchState.clear).not.toHaveBeenCalled();
+  });
 });
 
 function createTrace(patch: Partial<ChatTurnTraceRecord> = {}): ChatTurnTraceRecord {
@@ -217,7 +291,7 @@ function createTrace(patch: Partial<ChatTurnTraceRecord> = {}): ChatTurnTraceRec
   };
 }
 
-function createStorage(options: { traces?: ChatTurnTraceRecord[] } = {}) {
+function createStorage(options: { traces?: ChatTurnTraceRecord[]; messages?: Map<string, unknown> } = {}) {
   return {
     chatExecutionPlans: {
       get: vi.fn((planId: string) => ({ planId, steps: [] })),
@@ -225,6 +299,18 @@ function createStorage(options: { traces?: ChatTurnTraceRecord[] } = {}) {
     chatSessionBranchState: {
       get: vi.fn(() => undefined),
       setActiveLeaf: vi.fn(),
+      clear: vi.fn(),
+    },
+    chatMessages: {
+      listByMessageIds: vi.fn(
+        (messageIds: string[]) =>
+          new Map(
+            messageIds.flatMap((messageId) => {
+              const message = options.messages?.get(messageId);
+              return message ? [[messageId, message]] : [];
+            }),
+          ),
+      ),
     },
     chatToolRuns: {
       listByTurn: vi.fn(() => [{ toolRunId: "tool-1", toolName: "memory.search", status: "executed" }]),
@@ -238,6 +324,7 @@ function createStorage(options: { traces?: ChatTurnTraceRecord[] } = {}) {
     },
     chatTurnTraces: {
       listBySession: vi.fn(() => options.traces ?? []),
+      listSiblingsByParentTurnIds: vi.fn(() => new Map()),
     },
     runtimeDecisionTraces: undefined,
   } as never;

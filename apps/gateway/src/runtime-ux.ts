@@ -1,6 +1,7 @@
 import process from "node:process";
 import chalk from "chalk";
 import type { FastifyBaseLogger } from "fastify";
+import { SESSION_CONTROL_TOKEN_HEADER } from "@goatcitadel/contracts";
 import { isSensitiveLogKey, redactSecretsInString } from "@goatcitadel/gateway-core";
 
 type TerminalLevel = "trace" | "debug" | "info" | "warn" | "error" | "fatal";
@@ -53,6 +54,19 @@ const compactMetaKeys = new Set([
 ]);
 
 const REDACTED_LOG_VALUE = "[redacted]";
+
+/**
+ * Lowercased frozen session-control token header key. The terminal reporter
+ * pins it explicitly (defense in depth alongside the shared `isSensitiveLogKey`
+ * classifier) so the plaintext control secret can never reach the terminal sink
+ * from request metadata or errors, even if the shared classifier is later
+ * refactored.
+ */
+const SESSION_CONTROL_TOKEN_HEADER_KEY = SESSION_CONTROL_TOKEN_HEADER.toLowerCase();
+
+function isTerminalSensitiveKey(key: string): boolean {
+  return key.toLowerCase() === SESSION_CONTROL_TOKEN_HEADER_KEY || isSensitiveLogKey(key);
+}
 
 export function isVerboseLoggingEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   const value = env.GOATCITADEL_VERBOSE?.trim().toLowerCase();
@@ -543,7 +557,7 @@ function sanitizeUnknown(value: unknown, verbose: boolean, seen = new WeakSet<ob
     if (typeof entry === "function") {
       continue;
     }
-    if (isSensitiveLogKey(key)) {
+    if (isTerminalSensitiveKey(key)) {
       result[key] = REDACTED_LOG_VALUE;
       continue;
     }

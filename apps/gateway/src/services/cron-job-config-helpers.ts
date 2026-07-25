@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import fsSync from "node:fs";
 import path from "node:path";
 import type { CronJobRecord } from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
@@ -10,14 +9,14 @@ import {
   MEMORY_FLUSH_DAILY_JOB_ID,
   PRIVATE_BETA_BACKUP_JOB_ID,
   UPDATE_REVIEW_DAILY_JOB_ID,
-  computeNextCronRunAt,
   normalizeCronEndAt,
   normalizeCronJobId,
   normalizeCronJobName,
   normalizeCronSchedule,
 } from "./gateway/cron-automation-service.js";
-import type { Storage } from "@goatcitadel/storage";
+import type { CronJobSpecInput, Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
+import type { CronSpecMutationOwner } from "./cron-config-generation-owner.js";
 import {
   COST_REPORT_HOURLY_SCHEDULE_LABEL,
   MEMORY_CONSOLIDATION_WEEKLY_SCHEDULE_LABEL,
@@ -39,8 +38,8 @@ const BUILT_IN_CRON_ACTIONS = new Map<string, CronJobRecord["action"]>([
 
 export interface CronJobConfigHost {
   readonly config: Pick<GatewayRuntimeConfig, "rootDir">;
-  readonly storage: Pick<Storage, "cronJobs" | "runImmediateTransaction">;
-  persistUnifiedConfig(): void;
+  readonly storage: Pick<Storage, "cronJobs">;
+  readonly cronConfigGenerationOwner: Pick<CronSpecMutationOwner, "reconcileSpec">;
 }
 
 export function getCronJobsConfigPath(host: CronJobConfigHost): string {
@@ -77,83 +76,60 @@ export async function loadCronJobsFromConfig(host: CronJobConfigHost): Promise<v
     return;
   }
 
-  host.storage.runImmediateTransaction(() => {
-    for (let index = 0; index < jobsArray.length; index += 1) {
-      const candidate = jobsArray[index];
-      const sanitized = sanitizeCronJobRow(candidate);
-      if (!sanitized) {
-        log.warn("dropping malformed cron job row", {
-          path: filePath,
-          index,
-          reason: describeMalformedCronRow(candidate),
-        });
-        continue;
-      }
-      let normalizedJobId: string;
-      let normalizedName: string;
-      let normalizedSchedule: string;
-      try {
-        normalizedJobId = normalizeCronJobId(sanitized.jobId);
-        normalizedName = normalizeCronJobName(sanitized.name);
-        normalizedSchedule = normalizeCronSchedule(sanitized.schedule);
-      } catch (error) {
-        log.warn("dropping cron job row with invalid jobId/name/schedule", {
-          path: filePath,
-          index,
-          jobId: sanitized.jobId,
-          reason: error instanceof Error ? error.message : String(error),
-        });
-        continue;
-      }
-      const existing = host.storage.cronJobs.get(normalizedJobId);
-      let normalizedEndAt: string | undefined;
-      try {
-        normalizedEndAt = normalizeCronEndAt(sanitized.endAt ?? existing?.endAt);
-      } catch (error) {
-        log.warn("dropping cron job row with invalid endAt", {
-          path: filePath,
-          index,
-          jobId: normalizedJobId,
-          reason: error instanceof Error ? error.message : String(error),
-        });
-        continue;
-      }
-      const persistedNext = sanitized.nextRunAt ?? existing?.nextRunAt;
-      const repairedNext = repairCronNextRunAt(normalizedSchedule, persistedNext, normalizedEndAt, Date.now());
-      const canonicalAction = BUILT_IN_CRON_ACTIONS.get(normalizedJobId);
-      if (repairedNext && repairedNext !== persistedNext) {
-        log.info("repaired stale nextRunAt", {
-          jobId: normalizedJobId,
-          schedule: normalizedSchedule,
-          persistedNextRunAt: persistedNext,
-          repairedNextRunAt: repairedNext,
-        });
-      }
-      host.storage.cronJobs.upsertIfChanged({
-        ...sanitized,
-        jobId: normalizedJobId,
-        name: normalizedName,
-        action: canonicalAction ?? sanitized.action ?? existing?.action ?? "task",
-        actionConfig: sanitized.actionConfig ?? existing?.actionConfig,
-        description: sanitized.description ?? existing?.description,
-        schedule: normalizedSchedule,
-        enabled: Boolean(sanitized.enabled),
-        endAt: normalizedEndAt,
-        lastRunAt: sanitized.lastRunAt ?? existing?.lastRunAt,
-        nextRunAt: repairedNext,
-        workdir: sanitized.workdir ?? existing?.workdir,
-        contextFrom: sanitized.contextFrom ?? existing?.contextFrom,
-        lastRunOutput: sanitized.lastRunOutput ?? existing?.lastRunOutput,
-        lastRunId: sanitized.lastRunId ?? existing?.lastRunId,
-        lastRunStatus: sanitized.lastRunStatus ?? existing?.lastRunStatus,
-        lastRunEvidenceEnvelopeId: sanitized.lastRunEvidenceEnvelopeId ?? existing?.lastRunEvidenceEnvelopeId,
-        lastFailureAt: sanitized.lastFailureAt ?? existing?.lastFailureAt,
-        lastFailure: sanitized.lastFailure ?? existing?.lastFailure,
-        failureCount: sanitized.failureCount ?? existing?.failureCount,
-        backoffUntil: sanitized.backoffUntil ?? existing?.backoffUntil,
+  for (let index = 0; index < jobsArray.length; index += 1) {
+    const candidate = jobsArray[index];
+    const sanitized = sanitizeCronJobRow(candidate);
+    if (!sanitized) {
+      log.warn("dropping malformed cron job row", {
+        path: filePath,
+        index,
+        reason: describeMalformedCronRow(candidate),
       });
+      continue;
     }
-  });
+    let normalizedJobId: string;
+    let normalizedName: string;
+    let normalizedSchedule: string;
+    try {
+      normalizedJobId = normalizeCronJobId(sanitized.jobId);
+      normalizedName = normalizeCronJobName(sanitized.name);
+      normalizedSchedule = normalizeCronSchedule(sanitized.schedule);
+    } catch (error) {
+      log.warn("dropping cron job row with invalid jobId/name/schedule", {
+        path: filePath,
+        index,
+        jobId: sanitized.jobId,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+      continue;
+    }
+    const existing = host.storage.cronJobs.get(normalizedJobId);
+    let normalizedEndAt: string | undefined;
+    try {
+      normalizedEndAt = normalizeCronEndAt(sanitized.endAt ?? existing?.endAt);
+    } catch (error) {
+      log.warn("dropping cron job row with invalid endAt", {
+        path: filePath,
+        index,
+        jobId: normalizedJobId,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+      continue;
+    }
+    const canonicalAction = BUILT_IN_CRON_ACTIONS.get(normalizedJobId);
+    await host.cronConfigGenerationOwner.reconcileSpec({
+      jobId: normalizedJobId,
+      name: normalizedName,
+      action: canonicalAction ?? sanitized.action ?? existing?.action ?? "task",
+      actionConfig: sanitized.actionConfig ?? existing?.actionConfig,
+      description: sanitized.description ?? existing?.description,
+      schedule: normalizedSchedule,
+      enabled: sanitized.enabled === undefined ? (existing?.enabled ?? true) : Boolean(sanitized.enabled),
+      endAt: normalizedEndAt,
+      workdir: sanitized.workdir ?? existing?.workdir,
+      contextFrom: sanitized.contextFrom ?? existing?.contextFrom,
+    });
+  }
 }
 
 interface SanitizedCronJobRow {
@@ -165,18 +141,8 @@ interface SanitizedCronJobRow {
   description?: string;
   enabled?: unknown;
   endAt?: string;
-  lastRunAt?: string;
-  nextRunAt?: string;
   workdir?: string;
   contextFrom?: string;
-  lastRunOutput?: string;
-  lastRunId?: string;
-  lastRunStatus?: CronJobRecord["lastRunStatus"];
-  lastRunEvidenceEnvelopeId?: string;
-  lastFailureAt?: string;
-  lastFailure?: CronJobRecord["lastFailure"];
-  failureCount?: number;
-  backoffUntil?: string;
 }
 
 function sanitizeCronJobRow(input: unknown): SanitizedCronJobRow | null {
@@ -195,232 +161,90 @@ function sanitizeCronJobRow(input: unknown): SanitizedCronJobRow | null {
     description: typeof record.description === "string" ? record.description : undefined,
     enabled: record.enabled,
     endAt: typeof record.endAt === "string" ? record.endAt : undefined,
-    lastRunAt: typeof record.lastRunAt === "string" ? record.lastRunAt : undefined,
-    nextRunAt: typeof record.nextRunAt === "string" ? record.nextRunAt : undefined,
     workdir: typeof record.workdir === "string" ? record.workdir : undefined,
     contextFrom: typeof record.contextFrom === "string" ? record.contextFrom : undefined,
-    lastRunOutput: typeof record.lastRunOutput === "string" ? record.lastRunOutput : undefined,
-    lastRunId: typeof record.lastRunId === "string" ? record.lastRunId : undefined,
-    lastRunStatus:
-      record.lastRunStatus === "ok" || record.lastRunStatus === "failed" ? record.lastRunStatus : undefined,
-    lastRunEvidenceEnvelopeId:
-      typeof record.lastRunEvidenceEnvelopeId === "string" ? record.lastRunEvidenceEnvelopeId : undefined,
-    lastFailureAt: typeof record.lastFailureAt === "string" ? record.lastFailureAt : undefined,
-    lastFailure: sanitizeCronLastFailure(record.lastFailure),
-    failureCount:
-      typeof record.failureCount === "number" && Number.isFinite(record.failureCount) && record.failureCount >= 0
-        ? Math.floor(record.failureCount)
-        : undefined,
-    backoffUntil: typeof record.backoffUntil === "string" ? record.backoffUntil : undefined,
   };
 }
 
-function sanitizeCronLastFailure(value: unknown): CronJobRecord["lastFailure"] | undefined {
-  if (!isPlainRecord(value) || typeof value.message !== "string") {
-    return undefined;
-  }
-  return {
-    message: value.message,
-    code: typeof value.code === "string" ? value.code : undefined,
-  };
-}
-
-function repairCronNextRunAt(
-  schedule: string,
-  persistedNextRunAt: string | undefined,
-  endAt: string | undefined,
-  nowMs: number,
-): string | undefined {
-  if (!persistedNextRunAt) {
-    return computeNextCronRunAt(schedule, new Date(nowMs), endAt);
-  }
-  const persisted = Date.parse(persistedNextRunAt);
-  if (!Number.isFinite(persisted)) {
-    return computeNextCronRunAt(schedule, new Date(nowMs), endAt);
-  }
-  // Recompute when the persisted nextRunAt is in the past — it would otherwise
-  // either fire on the next tick (harmless but noisy) or stay stuck if the
-  // schedule's timezone shifted. Future values are preserved verbatim.
-  if (persisted <= nowMs) {
-    return computeNextCronRunAt(schedule, new Date(nowMs), endAt);
-  }
-  return persistedNextRunAt;
-}
-
-export function persistCronJobsConfig(host: CronJobConfigHost): void {
-  const filePath = getCronJobsConfigPath(host);
-  fsSync.mkdirSync(path.dirname(filePath), { recursive: true });
-  const jobs = host.storage.cronJobs.list().map((job) => ({
-    jobId: job.jobId,
-    name: job.name,
-    action: job.action,
-    actionConfig: job.actionConfig,
-    description: job.description,
-    schedule: job.schedule,
-    enabled: job.enabled,
-    endAt: job.endAt,
-    lastRunAt: job.lastRunAt,
-    nextRunAt: job.nextRunAt,
-    workdir: job.workdir,
-    contextFrom: job.contextFrom,
-    lastRunOutput: job.lastRunOutput,
-    lastRunId: job.lastRunId,
-    lastRunStatus: job.lastRunStatus,
-    lastRunEvidenceEnvelopeId: job.lastRunEvidenceEnvelopeId,
-    lastFailureAt: job.lastFailureAt,
-    lastFailure: job.lastFailure,
-    failureCount: job.failureCount,
-    backoffUntil: job.backoffUntil,
-  }));
-  fsSync.writeFileSync(filePath, JSON.stringify({ jobs }, null, 2), "utf8");
-  host.persistUnifiedConfig();
-}
-
-export function ensurePrivateBetaBackupCronJob(host: CronJobConfigHost): void {
+export async function ensurePrivateBetaBackupCronJob(host: CronJobConfigHost): Promise<void> {
   const existing = host.storage.cronJobs.get(PRIVATE_BETA_BACKUP_JOB_ID);
-  const now = new Date().toISOString();
-  host.storage.cronJobs.upsertIfChanged(
-    {
-      jobId: PRIVATE_BETA_BACKUP_JOB_ID,
-      name: "Private Beta Daily Backup",
-      action: "backup",
-      description: existing?.description ?? "Create the daily private beta backup and prune retained snapshots.",
-      schedule: PRIVATE_BETA_BACKUP_SCHEDULE_LABEL,
-      enabled: existing?.enabled ?? true,
-      endAt: existing?.endAt,
-      lastRunAt: existing?.lastRunAt,
-      nextRunAt: existing?.nextRunAt,
-      workdir: existing?.workdir,
-      contextFrom: existing?.contextFrom,
-      lastRunOutput: existing?.lastRunOutput,
-      lastRunId: existing?.lastRunId,
-      lastRunStatus: existing?.lastRunStatus,
-      lastRunEvidenceEnvelopeId: existing?.lastRunEvidenceEnvelopeId,
-      lastFailureAt: existing?.lastFailureAt,
-      lastFailure: existing?.lastFailure,
-      failureCount: existing?.failureCount,
-      backoffUntil: existing?.backoffUntil,
-    },
-    now,
-  );
+  await reconcileBuiltIn(host, {
+    jobId: PRIVATE_BETA_BACKUP_JOB_ID,
+    name: "Private Beta Daily Backup",
+    action: "backup",
+    description: existing?.description ?? "Create the daily private beta backup and prune retained snapshots.",
+    schedule: PRIVATE_BETA_BACKUP_SCHEDULE_LABEL,
+    enabled: existing?.enabled ?? true,
+    endAt: existing?.endAt,
+    workdir: existing?.workdir,
+    contextFrom: existing?.contextFrom,
+  });
 }
 
-export function ensureMemoryFlushCronJob(host: CronJobConfigHost): void {
+export async function ensureMemoryFlushCronJob(host: CronJobConfigHost): Promise<void> {
   const existing = host.storage.cronJobs.get(MEMORY_FLUSH_DAILY_JOB_ID);
-  const now = new Date().toISOString();
-  host.storage.cronJobs.upsertIfChanged(
-    {
-      jobId: MEMORY_FLUSH_DAILY_JOB_ID,
-      name: "Memory Flush Daily",
-      action: "memory_flush",
-      description: existing?.description ?? "Prune expired memory artifacts and clear old maintenance context.",
-      schedule: MEMORY_FLUSH_DAILY_SCHEDULE_LABEL,
-      enabled: existing?.enabled ?? true,
-      endAt: existing?.endAt,
-      lastRunAt: existing?.lastRunAt,
-      nextRunAt: existing?.nextRunAt,
-      workdir: existing?.workdir,
-      contextFrom: existing?.contextFrom,
-      lastRunOutput: existing?.lastRunOutput,
-      lastRunId: existing?.lastRunId,
-      lastRunStatus: existing?.lastRunStatus,
-      lastRunEvidenceEnvelopeId: existing?.lastRunEvidenceEnvelopeId,
-      lastFailureAt: existing?.lastFailureAt,
-      lastFailure: existing?.lastFailure,
-      failureCount: existing?.failureCount,
-      backoffUntil: existing?.backoffUntil,
-    },
-    now,
-  );
+  await reconcileBuiltIn(host, {
+    jobId: MEMORY_FLUSH_DAILY_JOB_ID,
+    name: "Memory Flush Daily",
+    action: "memory_flush",
+    description: existing?.description ?? "Prune expired memory artifacts and clear old maintenance context.",
+    schedule: MEMORY_FLUSH_DAILY_SCHEDULE_LABEL,
+    enabled: existing?.enabled ?? true,
+    endAt: existing?.endAt,
+    workdir: existing?.workdir,
+    contextFrom: existing?.contextFrom,
+  });
 }
 
-export function ensureMemoryConsolidationCronJob(host: CronJobConfigHost): void {
+export async function ensureMemoryConsolidationCronJob(host: CronJobConfigHost): Promise<void> {
   const existing = host.storage.cronJobs.get(MEMORY_CONSOLIDATION_WEEKLY_JOB_ID);
-  const now = new Date().toISOString();
-  host.storage.cronJobs.upsertIfChanged(
-    {
-      jobId: MEMORY_CONSOLIDATION_WEEKLY_JOB_ID,
-      name: "Memory Consolidation Weekly",
-      action: "memory_consolidation",
-      description:
-        existing?.description ??
-        "Propose memory candidates from recent run traces (approval-gated; requires memoryConsolidationV1Enabled).",
-      schedule: MEMORY_CONSOLIDATION_WEEKLY_SCHEDULE_LABEL,
-      // Seeded DISABLED, unlike the other system jobs: consolidation is
-      // opt-in twice over (job.enabled AND the feature flag).
-      enabled: existing?.enabled ?? false,
-      endAt: existing?.endAt,
-      lastRunAt: existing?.lastRunAt,
-      nextRunAt: existing?.nextRunAt,
-      workdir: existing?.workdir,
-      contextFrom: existing?.contextFrom,
-      lastRunOutput: existing?.lastRunOutput,
-      lastRunId: existing?.lastRunId,
-      lastRunStatus: existing?.lastRunStatus,
-      lastRunEvidenceEnvelopeId: existing?.lastRunEvidenceEnvelopeId,
-      lastFailureAt: existing?.lastFailureAt,
-      lastFailure: existing?.lastFailure,
-      failureCount: existing?.failureCount,
-      backoffUntil: existing?.backoffUntil,
-    },
-    now,
-  );
+  await reconcileBuiltIn(host, {
+    jobId: MEMORY_CONSOLIDATION_WEEKLY_JOB_ID,
+    name: "Memory Consolidation Weekly",
+    action: "memory_consolidation",
+    description:
+      existing?.description ??
+      "Propose memory candidates from recent run traces (approval-gated; requires memoryConsolidationV1Enabled).",
+    schedule: MEMORY_CONSOLIDATION_WEEKLY_SCHEDULE_LABEL,
+    // Seeded DISABLED, unlike the other system jobs: consolidation is
+    // opt-in twice over (job.enabled AND the feature flag).
+    enabled: existing?.enabled ?? false,
+    endAt: existing?.endAt,
+    workdir: existing?.workdir,
+    contextFrom: existing?.contextFrom,
+  });
 }
 
-export function ensureCostReportCronJob(host: CronJobConfigHost): void {
+export async function ensureCostReportCronJob(host: CronJobConfigHost): Promise<void> {
   const existing = host.storage.cronJobs.get(COST_REPORT_HOURLY_JOB_ID);
-  const now = new Date().toISOString();
-  host.storage.cronJobs.upsertIfChanged(
-    {
-      jobId: COST_REPORT_HOURLY_JOB_ID,
-      name: "Cost Report Hourly",
-      action: "cost_report",
-      description: existing?.description ?? "Write the hourly usage and cost rollup report.",
-      schedule: COST_REPORT_HOURLY_SCHEDULE_LABEL,
-      enabled: existing?.enabled ?? true,
-      endAt: existing?.endAt,
-      lastRunAt: existing?.lastRunAt,
-      nextRunAt: existing?.nextRunAt,
-      workdir: existing?.workdir,
-      contextFrom: existing?.contextFrom,
-      lastRunOutput: existing?.lastRunOutput,
-      lastRunId: existing?.lastRunId,
-      lastRunStatus: existing?.lastRunStatus,
-      lastRunEvidenceEnvelopeId: existing?.lastRunEvidenceEnvelopeId,
-      lastFailureAt: existing?.lastFailureAt,
-      lastFailure: existing?.lastFailure,
-      failureCount: existing?.failureCount,
-      backoffUntil: existing?.backoffUntil,
-    },
-    now,
-  );
+  await reconcileBuiltIn(host, {
+    jobId: COST_REPORT_HOURLY_JOB_ID,
+    name: "Cost Report Hourly",
+    action: "cost_report",
+    description: existing?.description ?? "Write the hourly usage and cost rollup report.",
+    schedule: COST_REPORT_HOURLY_SCHEDULE_LABEL,
+    enabled: existing?.enabled ?? true,
+    endAt: existing?.endAt,
+    workdir: existing?.workdir,
+    contextFrom: existing?.contextFrom,
+  });
 }
 
-export function ensureUpdateReviewCronJob(host: CronJobConfigHost): void {
+export async function ensureUpdateReviewCronJob(host: CronJobConfigHost): Promise<void> {
   const existing = host.storage.cronJobs.get(UPDATE_REVIEW_DAILY_JOB_ID);
-  const now = new Date().toISOString();
-  host.storage.cronJobs.upsertIfChanged(
-    {
-      jobId: UPDATE_REVIEW_DAILY_JOB_ID,
-      name: "Daily Update Review",
-      action: "update_review",
-      description: existing?.description ?? "Generate the daily dependency and skill source review report.",
-      schedule: UPDATE_REVIEW_DAILY_SCHEDULE_LABEL,
-      enabled: existing?.enabled ?? true,
-      endAt: existing?.endAt,
-      lastRunAt: existing?.lastRunAt,
-      nextRunAt: existing?.nextRunAt,
-      workdir: existing?.workdir,
-      contextFrom: existing?.contextFrom,
-      lastRunOutput: existing?.lastRunOutput,
-      lastRunId: existing?.lastRunId,
-      lastRunStatus: existing?.lastRunStatus,
-      lastRunEvidenceEnvelopeId: existing?.lastRunEvidenceEnvelopeId,
-      lastFailureAt: existing?.lastFailureAt,
-      lastFailure: existing?.lastFailure,
-      failureCount: existing?.failureCount,
-      backoffUntil: existing?.backoffUntil,
-    },
-    now,
-  );
+  await reconcileBuiltIn(host, {
+    jobId: UPDATE_REVIEW_DAILY_JOB_ID,
+    name: "Daily Update Review",
+    action: "update_review",
+    description: existing?.description ?? "Generate the daily dependency and skill source review report.",
+    schedule: UPDATE_REVIEW_DAILY_SCHEDULE_LABEL,
+    enabled: existing?.enabled ?? true,
+    endAt: existing?.endAt,
+    workdir: existing?.workdir,
+    contextFrom: existing?.contextFrom,
+  });
+}
+
+async function reconcileBuiltIn(host: CronJobConfigHost, spec: CronJobSpecInput): Promise<void> {
+  await host.cronConfigGenerationOwner.reconcileSpec(spec);
 }

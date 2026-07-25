@@ -2097,6 +2097,7 @@ function createStorage(state: HarnessState) {
         const now = new Date().toISOString();
         const task: TaskRecord = {
           taskId: randomUUID(),
+          revision: 1,
           workspaceId: input.workspaceId,
           title: input.title,
           description: input.description,
@@ -2116,6 +2117,30 @@ function createStorage(state: HarnessState) {
         return task;
       },
       find: (taskId: string) => state.tasks.get(taskId),
+      updateWithRevision: (
+        taskId: string,
+        patch: Partial<TaskRecord> & {
+          proactiveContext?: TaskRecord["proactiveContext"] | null;
+          assignedAgentId?: string | null;
+        },
+        expectedRevision: number,
+      ) => {
+        const current = state.tasks.get(taskId);
+        if (!current) throw new Error(`Unknown task ${taskId}`);
+        if (current.revision !== expectedRevision) throw new Error(`Task revision conflict for ${taskId}`);
+        const next: TaskRecord = {
+          ...current,
+          ...patch,
+          revision: current.revision + 1,
+          proactiveContext:
+            patch.proactiveContext === null ? undefined : (patch.proactiveContext ?? current.proactiveContext),
+          assignedAgentId:
+            patch.assignedAgentId === null ? undefined : (patch.assignedAgentId ?? current.assignedAgentId),
+          updatedAt: new Date().toISOString(),
+        };
+        state.tasks.set(taskId, next);
+        return next;
+      },
       update: (
         taskId: string,
         patch: Partial<TaskRecord> & {

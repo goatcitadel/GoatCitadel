@@ -63,6 +63,7 @@ vi.mock("./chat-turn-entry-service.js", () => ({
 
 import * as chatTurnEntryService from "./chat-turn-entry-service.js";
 import { ChatTurnRuntimeService } from "./chat-turn-runtime-service.js";
+import { createAuthenticatedOperatorAdmissionContext } from "./session-control-service.js";
 
 describe("ChatTurnRuntimeService", () => {
   it("delegates send and retry operations through chat-turn entry helpers", async () => {
@@ -107,5 +108,76 @@ describe("ChatTurnRuntimeService", () => {
         turnId: "turn-1",
       }),
     ]);
+  });
+
+  it("forwards the server-authored operator admission context across send, retry, and edit paths", async () => {
+    const runtime = new ChatTurnRuntimeService({} as never);
+    const authenticatedOperator = createAuthenticatedOperatorAdmissionContext({
+      actorId: "operator-1",
+      authActorSource: "loopback",
+    });
+
+    await runtime.agentSendChatMessage("session-1", { content: "send" }, { authenticatedOperator });
+    for await (const _chunk of runtime.agentSendChatMessageStream(
+      "session-1",
+      { content: "stream" },
+      { authenticatedOperator },
+    )) {
+      // Consume the delegated generator so the entry helper is invoked.
+    }
+    await runtime.retryChatTurn("session-1", "turn-1", {}, { authenticatedOperator });
+    for await (const _chunk of runtime.retryChatTurnStream("session-1", "turn-1", {}, { authenticatedOperator })) {
+      // Consume the delegated generator so the entry helper is invoked.
+    }
+    await runtime.editChatTurn("session-1", "turn-1", { content: "edit" }, { authenticatedOperator });
+    for await (const _chunk of runtime.editChatTurnStream(
+      "session-1",
+      "turn-1",
+      { content: "edit stream" },
+      { authenticatedOperator },
+    )) {
+      // Consume the delegated generator so the entry helper is invoked.
+    }
+
+    expect(chatTurnEntryService.agentSendChatMessage).toHaveBeenLastCalledWith(
+      expect.anything(),
+      "session-1",
+      { content: "send" },
+      { authenticatedOperator },
+    );
+    expect(chatTurnEntryService.agentSendChatMessageStream).toHaveBeenLastCalledWith(
+      expect.anything(),
+      "session-1",
+      { content: "stream" },
+      { authenticatedOperator },
+    );
+    expect(chatTurnEntryService.retryChatTurn).toHaveBeenLastCalledWith(
+      expect.anything(),
+      "session-1",
+      "turn-1",
+      {},
+      { authenticatedOperator },
+    );
+    expect(chatTurnEntryService.retryChatTurnStream).toHaveBeenLastCalledWith(
+      expect.anything(),
+      "session-1",
+      "turn-1",
+      {},
+      { authenticatedOperator },
+    );
+    expect(chatTurnEntryService.editChatTurn).toHaveBeenLastCalledWith(
+      expect.anything(),
+      "session-1",
+      "turn-1",
+      { content: "edit" },
+      { authenticatedOperator },
+    );
+    expect(chatTurnEntryService.editChatTurnStream).toHaveBeenLastCalledWith(
+      expect.anything(),
+      "session-1",
+      "turn-1",
+      { content: "edit stream" },
+      { authenticatedOperator },
+    );
   });
 });

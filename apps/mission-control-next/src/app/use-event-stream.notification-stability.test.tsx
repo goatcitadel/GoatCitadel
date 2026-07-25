@@ -7,6 +7,7 @@ import { connectEventStream } from "@goatcitadel/mission-control-shared/api/shel
 import { deriveRealtimeRefresh } from "@goatcitadel/mission-control-shared/state/realtime-derived";
 import { useShellNotifications } from "./use-shell-notifications";
 import { REALTIME_COMPATIBILITY_DECAY_MS, REALTIME_REPLAY_GAP_DECAY_MS, useEventStream } from "./use-event-stream";
+import { publishOpsSavedBoardRealtimeEvent } from "./ops-saved-board-realtime";
 
 /*
  * MCNEXT-002: the realtime SSE subscription must NOT tear down/reconnect when
@@ -56,8 +57,12 @@ vi.mock("@goatcitadel/mission-control-shared/state/realtime-derived", () => ({
     soundCue: "ping" as const,
   })),
 }));
+vi.mock("./ops-saved-board-realtime", () => ({
+  publishOpsSavedBoardRealtimeEvent: vi.fn(),
+}));
 
 const mockedConnect = vi.mocked(connectEventStream);
+const mockedPublishOpsSavedBoardRealtimeEvent = vi.mocked(publishOpsSavedBoardRealtimeEvent);
 
 const BASE_PREFS: UiNotificationPreferences = {
   toastsEnabled: true,
@@ -91,6 +96,7 @@ describe("event stream notification-preference stability (MCNEXT-002)", () => {
 
   beforeEach(() => {
     mockedConnect.mockClear();
+    mockedPublishOpsSavedBoardRealtimeEvent.mockClear();
     closeSpy.mockClear();
     capturedOnEvent = null;
     container = document.createElement("div");
@@ -171,6 +177,7 @@ describe("event stream notification-preference stability (MCNEXT-002)", () => {
       await Promise.resolve();
     });
     expect(toastCount).toBe(0);
+    expect(mockedPublishOpsSavedBoardRealtimeEvent).toHaveBeenCalledWith({ eventId: "e1", source: "surface" });
 
     // Toggle toasts ON (new object). Stream stays connected (same onEvent).
     await act(async () => {

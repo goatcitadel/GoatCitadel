@@ -6,7 +6,7 @@ The 2026-07-05 daily competitive-watch report (GoatCitadel 0.1.0-rc.1 vs OpenCla
 
 **Key finding from exploration:** the report was built from public README/CHANGELOG only, and the docs badly undersell shipped code. In reality:
 
-- **Channels**: 15 setup definitions exist (`apps/gateway/src/services/channel-setup-definitions/`) including WhatsApp (stable, signed webhook inbound + rich media), Signal (outbound-only via bridge), iMessage, Teams, Google Chat, LINE, Zalo. README line 90 claims ~5. Real gap: Signal inbound + docs, not existence.
+- **Channels**: 15 setup definitions exist (`apps/gateway/src/services/channel-setup-definitions/`) including WhatsApp (stable, signed webhook inbound + rich media), Signal (outbound-only via bridge), iMessage, Teams, Google Chat, LINE, Zalo. README line 90 claims ~5. Signal inbound was investigated and is deliberately quarantined until a bridge offers durable acknowledgement/replay; the remaining gap is truthful breadth and diagnostics, not unsafe polling.
 - **Voice**: `media-voice-service.ts` (bounded whisper.cpp transcription), `voice-runtime/` managed installer already exist — but inbound channel voice is a text placeholder (`"[whatsapp audio]"`; Telegram voice notes silently dropped) and **no TTS engine exists** in the repo.
 - **Aggregator**: OpenRouter template + `openai-chat-completions` adapter + env-allowlisted `OPENROUTER_API_KEY` already exist. Real gap: model-discovery sync, metadata/pricing, and data-sensitivity posture.
 - **Scheduler**: cron CRUD, durable runtime, model-callable `schedule.manage` (capped), `deliveryChannel` to channels, and an ops-schedules UI page all exist. Real gap: `cron_job_executed` is not an evidence kind; runs carry no envelope; README says nothing.
@@ -77,12 +77,9 @@ Largest slice; proposal-first on existing rails — the job never writes approve
 
 **B1a WhatsApp hardening (no flag — existing stable path)**: negative-path tests in `whatsapp-webhook.test.ts` (signature mismatch, missing app secret, replayed eventId, non-allowlisted sender rejected pre-ingest, oversized body); tighten wizard copy in `channel-setup-definitions/whatsapp.ts` (inbound requires app secret + verify token, matching `channel-core.ts:449-453`); full Cloud API walkthrough in the setup guide.
 
-**B1b Signal inbound (`signalInboundV1Enabled`, default off)** — biggest breadth win; the bridge is local so inbound is a **poller**, not a public webhook (no new HTTP edge surface).
-- **Create** `apps/gateway/src/services/signal-inbound-runtime-service.ts` (+test): poll `signal-cli-rest-api` receive endpoint per interval, backoff, dedupe on envelope timestamp+source, normalize → dispatch through the existing `dispatchInboundWebhookMessage` in `routes/webhook-handler-factory.ts` (reuses `evaluateChannelInboundAccess` default-deny allowlist, `ChannelBotLoopGuard`, idempotency).
-- Modify `channel-core.ts` signal entry (:455) `inboundReadiness` wording; `channel-setup-definitions/signal.ts` wizard fields (`inboundEnabled`, `pollIntervalSeconds`) + version bumps; instantiate/start/stop in `gateway-service.ts` behind the flag; flag plumbing (5 sites).
-- Flagged assumption: bridge receive API shape unverified against a live bridge — pin a tested bridge version in docs.
+**B1b Signal inbound — retired/quarantined 2026-07-13.** The evaluated bridge receive operation has no durable acknowledgement or replay contract. Because a crash after destructive receive but before local commit could lose a message, production must not poll it. Signal remains outbound-only through the existing JSON-RPC send path. Legacy `signalInboundV1Enabled=true`, connection `inboundEnabled=true`, and polling interval settings fail closed with operator-visible diagnostics. Revisit inbound only when a bridge can prove durable cursor/acknowledgement and replay semantics.
 
-**Verify**: gateway + gateway-core vitest; `pnpm run verify:channels:runtime`; manual draft→test→finalize lifecycle then live inbound from allowlisted Signal account → governed turn; flag off → poller stops.
+**Verify**: gateway + gateway-core vitest; `pnpm run verify:channels:runtime`; production-source scan proving no receive endpoint or inbound dispatch wiring; legacy inbound settings produce diagnostics without scheduling or fetching; outbound sandbox send remains available.
 
 ### Phase B2 — Voice via channels
 
@@ -115,11 +112,11 @@ Largest slice; proposal-first on existing rails — the job never writes approve
 
 ## Suggested execution order
 
-Phase 0 → A1 → A2 → B1a → B1b → B3 → B2a → A3 → B2b. Rationale: docs fix the scoreboard immediately; A1 is the smallest code slice and a dependency of A3; B1/B3 are contained; B2a needs B1's dispatch seam settled; A3 and B2b are the largest/newest-surface slices. Tracks A and B are independent and can interleave freely.
+Phase 0 → A1 → A2 → B1a → B1b quarantine → B3 → B2a → A3 → B2b. Rationale: docs fix the scoreboard immediately; A1 is the smallest code slice and a dependency of A3; B1/B3 are contained; B2a needs B1's dispatch seam settled; A3 and B2b are the largest/newest-surface slices. Tracks A and B are independent and can interleave freely.
 
 ## Flagged assumptions to resolve during implementation
 
-1. Signal bridge receive API shape (poll endpoint) — verify against a pinned `signal-cli-rest-api` version.
+1. Signal inbound remains blocked unless a future pinned bridge version exposes and proves durable cursor/acknowledgement and replay semantics.
 2. Whether builtin `modelDiscovery` descriptors are consumed by `llm-service.ts` discovery (A2 step 1 is "trace this first").
 3. Mission-control data source for the schedules timeline payload.
 4. Whether the approval `edit` decision path supports per-candidate partial batch approval (else A3 v1 is all-or-nothing).

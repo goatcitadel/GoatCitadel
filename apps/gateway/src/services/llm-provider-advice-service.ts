@@ -11,6 +11,7 @@ import { estimateUsageCostUsd } from "./llm-pricing.js";
 const SYNTHETIC_USAGE = {
   prompt_tokens: 100_000,
   completion_tokens: 10_000,
+  cached_prompt_tokens: 0,
 };
 
 export function buildLlmProviderAdvice(
@@ -26,10 +27,9 @@ export function buildLlmProviderAdvice(
   const maxCandidates = Math.max(1, Math.min(input.maxCandidates ?? 5, 20));
   const taskHint = input.taskHint?.trim().toLowerCase() ?? "";
   const candidates = providers
-    .filter((provider) => !requireConfiguredKey || provider.hasApiKey || provider.authMode !== "api-key")
+    .filter((provider) => !requireConfiguredKey || provider.hasApiKey)
     .map((provider) => {
-      const configured =
-        provider.hasApiKey || provider.authMode === "codex-oauth" || provider.authMode === "claude-code-oauth";
+      const configured = provider.hasApiKey;
       const estimatedCostUsd = estimateUsageCostUsd({
         providerId: provider.providerId,
         model: provider.defaultModel,
@@ -110,8 +110,8 @@ function buildRiskNotes(
   runtimeFit: LlmProviderRuntimeFit | undefined,
 ): string[] {
   const notes: string[] = [];
-  if (!provider.hasApiKey && provider.authMode === "api-key") {
-    notes.push("Required API key is not configured.");
+  if (!provider.hasApiKey && provider.authMode !== undefined) {
+    notes.push("Required provider credential is not configured.");
   }
   if (estimatedCostUsd === undefined) {
     notes.push("No local pricing estimate is available for this provider/model.");

@@ -16,7 +16,7 @@ describe("chat-page-normalizers", () => {
     expect(normalizeSpecialistFingerprint({})).toBe(":");
   });
 
-  it("flattens user and assistant messages from thread turns", () => {
+  it("flattens conversation and system-notice messages in chronological order", () => {
     expect(flattenThreadMessages(null)).toEqual([]);
     expect(
       flattenThreadMessages({
@@ -26,15 +26,61 @@ describe("chat-page-normalizers", () => {
         turns: [
           {
             turnId: "turn-1",
-            userMessage: { messageId: "user-1", role: "user", content: "One" },
-            assistantMessage: { messageId: "assistant-1", role: "assistant", content: "Two" },
+            userMessage: {
+              messageId: "user-1",
+              role: "user",
+              content: "One",
+              timestamp: "2026-07-15T10:00:00.000Z",
+            },
+            assistantMessage: {
+              messageId: "assistant-1",
+              role: "assistant",
+              content: "Two",
+              timestamp: "2026-07-15T10:00:01.000Z",
+            },
           },
           {
             turnId: "turn-2",
-            userMessage: { messageId: "user-2", role: "user", content: "Three" },
+            userMessage: {
+              messageId: "user-2",
+              role: "user",
+              content: "Three",
+              timestamp: "2026-07-15T10:02:00.000Z",
+            },
+          },
+        ],
+        systemNotices: [
+          {
+            noticeId: "heartbeat-1",
+            message: {
+              messageId: "heartbeat-1",
+              role: "assistant",
+              content: "Disk pressure high",
+              timestamp: "2026-07-15T10:01:00.000Z",
+            },
           },
         ],
       } as never).map((message) => message.messageId),
-    ).toEqual(["user-1", "assistant-1", "user-2"]);
+    ).toEqual(["user-1", "assistant-1", "heartbeat-1", "user-2"]);
+  });
+
+  it("preserves user-before-assistant and stable notice order when timestamps tie", () => {
+    const timestamp = "2026-07-15T10:00:00.000Z";
+    expect(
+      flattenThreadMessages({
+        sessionId: "session-1",
+        turns: [
+          {
+            turnId: "turn-1",
+            userMessage: { messageId: "z-user", timestamp },
+            assistantMessage: { messageId: "a-assistant", timestamp },
+          },
+        ],
+        systemNotices: [
+          { noticeId: "notice-z", message: { messageId: "notice-z", timestamp } },
+          { noticeId: "notice-a", message: { messageId: "notice-a", timestamp } },
+        ],
+      } as never).map((message) => message.messageId),
+    ).toEqual(["z-user", "a-assistant", "notice-z", "notice-a"]);
   });
 });

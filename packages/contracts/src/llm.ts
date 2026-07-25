@@ -7,13 +7,29 @@ export type LlmApiStyle =
   | "anthropic-messages"
   | "bedrock-messages";
 
-export type LlmProviderAuthMode = "api-key" | "codex-oauth" | "claude-code-oauth";
+export type LlmProviderAuthMode =
+  | "api-key"
+  | "codex-oauth"
+  | "claude-code-oauth"
+  | "google-service-account"
+  | "google-adc";
+
+export type ChatCompletionReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
 export interface LlmProviderOAuthStatus {
   connected: boolean;
   accountLabel?: string;
   expiresAt?: string;
   requiresReauth?: boolean;
+}
+
+export interface LlmProviderAuthReadiness {
+  status: "configured" | "ready" | "missing" | "invalid" | "unknown" | "unavailable";
+  source: "keychain" | "env" | "adc_file" | "metadata" | "none";
+  /** True only after the Gateway auth owner has successfully resolved a live credential. */
+  liveVerified: boolean;
+  /** Bounded, secret-free machine-readable explanation. */
+  reasonCode: string;
 }
 
 export interface LlmProviderCapabilities {
@@ -24,11 +40,26 @@ export interface LlmProviderCapabilities {
   jsonMode: boolean;
   webSearch?: boolean;
   reasoning?: boolean;
+  /** Explicit provider-level reasoning contract. Models may narrow or remap it. */
+  reasoningEfforts?: ChatCompletionReasoningEffort[];
   voiceInput?: boolean;
   voiceOutput?: boolean;
   imageGenerate?: boolean;
   imageEdit?: boolean;
   artifacts?: boolean;
+}
+
+export interface LlmProviderGoogleCloudConfig {
+  /** Secret-free Google Cloud project selector. Credential/env project ids remain valid fallbacks. */
+  projectId?: string;
+  /** Optional environment variable containing the project id. */
+  projectIdEnv?: string;
+  /** Vertex region, for example `us-central1`. */
+  location?: string;
+  /** Optional environment variable containing the Vertex region. */
+  locationEnv?: string;
+  /** Vertex endpoint id. OpenAI-compatible Google models use `openapi`. */
+  endpointId?: string;
 }
 
 export type LlmProviderRequestAuthConfig =
@@ -89,6 +120,7 @@ export interface LlmProviderConfig {
   authMode?: LlmProviderAuthMode;
   apiKey?: string;
   apiKeyEnv?: string;
+  googleCloud?: LlmProviderGoogleCloudConfig;
   request?: LlmProviderRequestConfig;
   /** @deprecated Use request.headers instead. */
   headers?: Record<string, string>;
@@ -120,6 +152,7 @@ export interface ProviderProfile {
   apiStyle: LlmApiStyle;
   defaultModel: string;
   authMode?: LlmProviderAuthMode;
+  googleCloud?: LlmProviderGoogleCloudConfig;
   request?: LlmProviderRequestConfig;
   capabilities?: Partial<LlmProviderCapabilities>;
   knownModels?: string[];
@@ -162,7 +195,9 @@ export interface LlmProviderSummary {
   resolvedApiStyle?: LlmApiStyle;
   defaultModel: string;
   authMode?: LlmProviderAuthMode;
+  googleCloud?: LlmProviderGoogleCloudConfig;
   oauthStatus?: LlmProviderOAuthStatus;
+  authReadiness?: LlmProviderAuthReadiness;
   hasApiKey: boolean;
   apiKeySource: "inline" | "env" | "keychain" | "none";
   hasKeychainSecret?: boolean;
@@ -292,6 +327,7 @@ export interface ImageGenerationResponse {
   operation: "generate" | "edit";
   data: ImageGenerationResultItem[];
   evidence?: ImageGenerationEvidence;
+  modelUsageEventIds?: string[];
 }
 
 export interface LlmModelPreviewResponse {
@@ -492,7 +528,17 @@ export interface LlmProviderAdviceResponse {
 export type ChatCompletionRole = "system" | "developer" | "user" | "assistant" | "tool";
 
 export interface ChatCompletionReasoningConfig {
-  effort: "none" | "low" | "medium" | "high" | "xhigh";
+  effort: ChatCompletionReasoningEffort;
+}
+
+export interface ChatCompletionReasoningReceipt {
+  requested: ChatCompletionReasoningEffort;
+  actual: ChatCompletionReasoningEffort;
+  /** Exact effort value sent across the provider boundary after an explicit metadata mapping. */
+  providerEffort: ChatCompletionReasoningEffort;
+  disposition: "honored" | "downgraded" | "provider_default";
+  reasonCode: string;
+  capabilitySource: "model_metadata" | "provider_config" | "legacy_compatibility";
 }
 
 export interface ChatCompletionMessage {
@@ -549,6 +595,8 @@ export interface ChatCompletionResponse {
   model?: string;
   choices?: ChatCompletionResponseChoice[];
   usage?: Record<string, unknown>;
+  /** Canonical per-network-attempt usage events contributing to this response. */
+  modelUsageEventIds?: string[];
   memoryContext?: {
     contextId: string;
     cacheHit: boolean;
@@ -569,6 +617,7 @@ export interface ChatCompletionResponse {
     fallbackApiStyle?: LlmApiStyle;
     fallbackReason?: string;
     fallbackUsed?: boolean;
+    reasoning?: ChatCompletionReasoningReceipt;
   };
   citations?: Array<{
     citationId: string;

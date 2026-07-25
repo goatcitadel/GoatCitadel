@@ -6,6 +6,12 @@ import { ChatTurnExecutionRegistry } from "./chat-turn-execution-registry.js";
 import type { ChatTurnStreamHost } from "./chat-turn-stream-service.js";
 import { routeWithModelRouter } from "./model-router-decision-service.js";
 
+const { isChatTurnCancelledErrorMock } = vi.hoisted(() => ({
+  isChatTurnCancelledErrorMock: vi.fn(
+    (error: unknown) => error instanceof Error && error.name === "ProviderCancelledError",
+  ),
+}));
+
 vi.mock("./chat-turn-helpers.js", () => ({
   buildDelegationFailureGuidance: () => "fallback guidance",
   buildEmptyAssistantTurnFallbackText: () => "Recovered empty assistant output.",
@@ -17,7 +23,7 @@ vi.mock("./chat-turn-helpers.js", () => ({
   dedupeChatCitations: (items: unknown[]) => items,
   isIncompleteDelegatedTraceFailure: (failure: { failureClass?: string } | undefined) =>
     failure?.failureClass === "tool_run_budget_exceeded",
-  isChatTurnCancelledError: () => false,
+  isChatTurnCancelledError: isChatTurnCancelledErrorMock,
   mergeExecutionPlanStepStatuses: (_steps: unknown, next: unknown) => next,
   patchChatTurnTraceIfStatus: (
     repository: {
@@ -278,6 +284,29 @@ describe("streamPreparedAgentChatTurn", () => {
       expect.objectContaining({ event: "orchestration.step.timeout_without_provider_result" }),
     );
   });
+
+  it.each(["ModelUsageDispatchUncertainError", "ModelUsageSettlementError", "ModelUsageDispatchPersistenceError"])(
+    "rethrows %s from delegated execution without committing a failed-step projection",
+    async (errorName) => {
+      const host = createHost();
+      const accountingError = Object.assign(new Error(`canonical accounting failure: ${errorName}`), {
+        name: errorName,
+      });
+      host.agentSendChatMessage = vi.fn(async () => {
+        throw accountingError;
+      }) as never;
+
+      await expect(
+        executeDelegatedPlanStep(host, createPreparedTurn({ mode: "cowork" }), createDelegatedStepInput() as never),
+      ).rejects.toBe(accountingError);
+
+      expect(host.recordDevDiagnostic).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: expect.stringMatching(/orchestration\.step\.(failed|timeout)_before_result/),
+        }),
+      );
+    },
+  );
 
   it("converts delegated child failure responses into failed step results with guidance", async () => {
     const host = createHost();
@@ -787,6 +816,67 @@ describe("streamPreparedAgentChatTurn", () => {
     expect(persistedContent).not.toContain("Reasoning about the answer.");
   });
 
+  it("forwards retained tool-activity evidence through the durable stream sink exactly once", async () => {
+    const host = createHost();
+    host.turnRuntime.runStream = vi.fn(async function* () {
+      yield {
+        type: "tool_activity",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        toolRunId: "tool-run-1",
+        toolName: "session.status",
+        startedAt: "2026-07-13T08:00:00.000Z",
+        activityAt: "2026-07-13T08:00:05.000Z",
+        activitySequence: 1,
+        elapsedMs: 5_000,
+      };
+      yield {
+        type: "message_done",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "assistant-1",
+        content: "The tool completed.",
+      };
+    }) as never;
+
+    const persistChatStreamChunk = vi.fn();
+    const dispatchHost = {
+      ...host,
+      storage: {
+        ...host.storage,
+        durableRuns: { getRun: vi.fn(() => ({ status: "running" })) },
+      },
+      persistChatStreamChunk,
+      finalizeDurableChatRun: vi.fn(),
+      completeActiveChatTurnStream: vi.fn(),
+      closeActiveChatTurnStream: vi.fn(),
+    } as never;
+
+    await executePreparedAgentChatTurnBackground(
+      dispatchHost,
+      "session-1",
+      { content: "hello", mode: "chat" } as never,
+      createPreparedTurn(),
+      "chat_thread_turn_appended",
+      undefined,
+      undefined,
+      { streamRegistration: createTestStreamRegistration() },
+    );
+
+    const activityCalls = persistChatStreamChunk.mock.calls.filter(([chunk]) => chunk.type === "tool_activity");
+    expect(activityCalls).toHaveLength(1);
+    expect(activityCalls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        type: "tool_activity",
+        turnId: "turn-1",
+        toolRunId: "tool-run-1",
+        toolName: "session.status",
+        activitySequence: 1,
+        elapsedMs: 5_000,
+      }),
+    );
+  });
+
   it("persists zero thinking_delta chunks when the turn runtime never emits one (flag off)", async () => {
     const host = createHost();
     host.turnRuntime.runStream = vi.fn(async function* () {
@@ -825,6 +915,79 @@ describe("streamPreparedAgentChatTurn", () => {
 
     const thinkingCalls = persistChatStreamChunk.mock.calls.filter(([chunk]) => chunk.type === "thinking_delta");
     expect(thinkingCalls).toHaveLength(0);
+  });
+
+  it("forces a complex routed turn through the exact frozen direct path with hash-only usage attribution", async () => {
+    const host = createHost();
+    host.resolvePreparedTurnOrchestration = vi.fn(async () => createDelegatedModeOrchestrationResolution()) as never;
+    host.turnRuntime.runStream = vi.fn(async function* () {
+      yield {
+        type: "message_done",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "assistant-1",
+        content: "Answer grounded in the admitted context.",
+      };
+    }) as never;
+    const contextText = "Routed context snapshot (immutable).\nExact admitted bytes that must appear once.";
+    const prepared = createPreparedTurn({ mode: "cowork", subagentPolicy: "off" }) as any;
+    prepared.history = [
+      { role: "system", content: "Base guidance." },
+      { role: "system", content: contextText },
+      { role: "user", content: "Compare the selected evidence." },
+    ];
+    prepared.routedContextSnapshot = {
+      snapshotId: "routed-snapshot-1",
+      sourceRequestHash: "1".repeat(64),
+      snapshotHash: "2".repeat(64),
+      contextText,
+      entries: [{ ref: "memory-1", admittedText: "Exact admitted bytes that must not enter attribution." }],
+    };
+
+    for await (const _chunk of streamPreparedAgentChatTurn(
+      host,
+      "session-1",
+      { content: "Compare the selected evidence.", mode: "cowork" } as never,
+      prepared,
+      "chat_thread_turn_appended",
+      createDelegatedModeOrchestrationResolution(),
+    )) {
+      // Drain the direct turn.
+    }
+
+    expect(host.resolvePreparedTurnOrchestration).not.toHaveBeenCalled();
+    expect(host.createChatCompletion).not.toHaveBeenCalled();
+    expect(host.agentSendChatMessage).not.toHaveBeenCalled();
+    expect(host.agentSendChatMessageStream).not.toHaveBeenCalled();
+    expect(host.turnRuntime.runStream).toHaveBeenCalledTimes(1);
+    const runnerInput = vi.mocked(host.turnRuntime.runStream).mock.calls[0]?.[0] as any;
+    expect(
+      runnerInput.historyMessages.filter(
+        (message: { role: string; content: unknown }) =>
+          message.role === "system" &&
+          typeof message.content === "string" &&
+          message.content.startsWith("Routed context snapshot (immutable)."),
+      ),
+    ).toEqual([{ role: "system", content: contextText }]);
+    expect(runnerInput.serverContextUsageAttribution).toEqual({
+      contextSnapshotId: "routed-snapshot-1",
+      contextIntentHash: "1".repeat(64),
+      contextResolutionHash: "2".repeat(64),
+    });
+    expect(Object.keys(runnerInput.serverContextUsageAttribution).sort()).toEqual([
+      "contextIntentHash",
+      "contextResolutionHash",
+      "contextSnapshotId",
+    ]);
+    expect(JSON.stringify(runnerInput.serverContextUsageAttribution)).not.toMatch(
+      /memory-1|admittedText|Exact admitted bytes|contextText|contextRefs/,
+    );
+    expect(prepared.modelRouterDecision.orchestration).toEqual(
+      expect.objectContaining({
+        decision: "bypassed",
+        reason: expect.stringContaining("frozen provider/model budget"),
+      }),
+    );
   });
 
   it("streams orchestration progress and final synthesized deltas before message_done", async () => {
@@ -1024,7 +1187,7 @@ describe("streamPreparedAgentChatTurn", () => {
     expect(chunks.some((chunk) => chunk.type === "capability_upgrade_suggestion")).toBe(true);
   });
 
-  it("flags post-turn hooks autonomous:false for an interactive (human) turn", async () => {
+  it("retires direct commitments and legacy provider schedulers for an interactive turn", async () => {
     const host = createHost();
     for await (const _chunk of streamPreparedAgentChatTurn(
       host,
@@ -1035,22 +1198,12 @@ describe("streamPreparedAgentChatTurn", () => {
     )) {
       // drain
     }
-    expect(host.recordTurnCommitments).toHaveBeenCalledWith(expect.objectContaining({ autonomous: false }));
-    expect(host.scheduleBackgroundReviewIfDue).toHaveBeenCalledWith(
-      expect.objectContaining({
-        autonomous: false,
-        turnId: "turn-1",
-        delegatedChild: false,
-      }),
-    );
-    expect(host.scheduleMemoryMaintenancePostTurnEvaluation).toHaveBeenCalledWith({
-      sessionId: "session-1",
-      turnId: "turn-1",
-      delegatedChild: false,
-    });
+    expect(host.recordTurnCommitments).not.toHaveBeenCalled();
+    expect(host.scheduleBackgroundReviewIfDue).not.toHaveBeenCalled();
+    expect(host.scheduleMemoryMaintenancePostTurnEvaluation).not.toHaveBeenCalled();
   });
 
-  it("marks delegated-child post-turn schedules explicitly", async () => {
+  it("does not run legacy provider schedulers for delegated-child streamed turns", async () => {
     const host = createHost();
     for await (const _chunk of streamPreparedAgentChatTurn(
       host,
@@ -1062,17 +1215,16 @@ describe("streamPreparedAgentChatTurn", () => {
       // drain
     }
 
-    expect(host.scheduleBackgroundReviewIfDue).toHaveBeenCalledWith(
-      expect.objectContaining({ turnId: "turn-1", delegatedChild: true }),
+    expect(host.turnRuntime.runStream).toHaveBeenCalledWith(
+      expect.objectContaining({ parentDelegationStepId: "run-1:step-1" }),
     );
-    expect(host.scheduleMemoryMaintenancePostTurnEvaluation).toHaveBeenCalledWith({
-      sessionId: "session-1",
-      turnId: "turn-1",
-      delegatedChild: true,
-    });
+
+    expect(host.recordTurnCommitments).not.toHaveBeenCalled();
+    expect(host.scheduleBackgroundReviewIfDue).not.toHaveBeenCalled();
+    expect(host.scheduleMemoryMaintenancePostTurnEvaluation).not.toHaveBeenCalled();
   });
 
-  it("flags post-turn hooks autonomous:true for a heartbeat-restricted turn (P1-F2/F3 loop guard)", async () => {
+  it("retires autonomous direct commitments and provider schedulers", async () => {
     const host = createHost();
     for await (const _chunk of streamPreparedAgentChatTurn(
       host,
@@ -1083,10 +1235,9 @@ describe("streamPreparedAgentChatTurn", () => {
     )) {
       // drain
     }
-    // The classifier + background review must be told this is an autonomous turn
-    // so the host short-circuits them (no self-feeding cost-amplifying loop).
-    expect(host.recordTurnCommitments).toHaveBeenCalledWith(expect.objectContaining({ autonomous: true }));
-    expect(host.scheduleBackgroundReviewIfDue).toHaveBeenCalledWith(expect.objectContaining({ autonomous: true }));
+    expect(host.recordTurnCommitments).not.toHaveBeenCalled();
+    expect(host.scheduleBackgroundReviewIfDue).not.toHaveBeenCalled();
+    expect(host.scheduleMemoryMaintenancePostTurnEvaluation).not.toHaveBeenCalled();
   });
 
   it("persists advisory-only orchestration plans without delegated execution", async () => {
@@ -1142,6 +1293,33 @@ describe("streamPreparedAgentChatTurn", () => {
         mode: "cowork",
       } as never),
     ).rejects.toThrow("Prepared chat turn is not eligible for orchestration");
+  });
+
+  it("fails closed before orchestration persistence when a routed turn reaches the mode executor directly", async () => {
+    const host = createHost();
+    const prepared = createPreparedTurn({ mode: "cowork", subagentPolicy: "off" }) as any;
+    prepared.routedContextSnapshot = {
+      snapshotId: "routed-snapshot-guard",
+      sourceRequestHash: "3".repeat(64),
+      snapshotHash: "4".repeat(64),
+      contextText: "Routed context snapshot (immutable).\nGuarded bytes.",
+    };
+
+    await expect(
+      executePreparedModeOrchestration(
+        host,
+        prepared,
+        { content: "complex routed task", mode: "cowork" } as never,
+        undefined,
+        undefined,
+        createDelegatedModeOrchestrationResolution(),
+      ),
+    ).rejects.toThrow("cannot execute mode orchestration outside their frozen provider/model budget");
+
+    expect(host.resolvePreparedTurnOrchestration).not.toHaveBeenCalled();
+    expect(host.storage.chatExecutionPlans.create).not.toHaveBeenCalled();
+    expect(host.createChatCompletion).not.toHaveBeenCalled();
+    expect(host.agentSendChatMessage).not.toHaveBeenCalled();
   });
 
   it("finalizes approval-required streams without writing an assistant message", async () => {
@@ -1348,6 +1526,76 @@ describe("streamPreparedAgentChatTurn", () => {
       }),
     );
     expect(host.markChatTurnCancelled).toHaveBeenCalledWith("session-1", "turn-1");
+    expect(host.endActiveChatTurnExecution).toHaveBeenCalledWith("turn-1", controller);
+  });
+
+  it("does not let a provider cancellation-name spoof cancel an exact system heartbeat", async () => {
+    const host = createHost();
+    const providerError = Object.assign(new Error("provider supplied a cancellation-like error"), {
+      name: "ProviderCancelledError",
+    });
+    host.turnRuntime.runStream = vi.fn(async function* () {
+      yield* [] as Iterable<never>;
+      throw providerError;
+    }) as never;
+    const prepared = createPreparedTurn() as unknown as Record<string, unknown>;
+    prepared.serverOnlyPosture = {
+      kind: "system_heartbeat",
+      actorId: "system-heartbeat",
+      operation: "chat_system_heartbeat",
+      occurrenceId: "heartbeat-occurrence-1",
+      claimSha256: "a".repeat(64),
+      durableRunId: "run-1",
+    };
+
+    await expect(async () => {
+      for await (const _chunk of streamPreparedAgentChatTurn(
+        host,
+        "session-1",
+        { content: "heartbeat", mode: "chat" } as never,
+        prepared as never,
+        "chat_thread_turn_appended",
+        undefined,
+      )) {
+        // The provider throws before yielding any chunk.
+      }
+    }).rejects.toBe(providerError);
+
+    expect(host.markChatTurnCancelled).not.toHaveBeenCalled();
+    expect(host.endActiveChatTurnExecution).toHaveBeenCalled();
+  });
+
+  it("surfaces an authoritative cleanup settlement fault even when the turn signal is already aborted", async () => {
+    const host = createHost();
+    let controller: AbortController | undefined;
+    const settlementError = Object.assign(new Error("canonical cancellation settlement failed"), {
+      name: "ModelUsageSettlementError",
+    });
+    host.beginActiveChatTurnExecution = vi.fn(() => {
+      controller = new AbortController();
+      return controller;
+    }) as never;
+    host.turnRuntime.runStream = vi.fn(async function* () {
+      controller?.abort();
+      const unreachableChunks: Record<string, unknown>[] = [];
+      yield* unreachableChunks;
+      throw settlementError;
+    }) as never;
+
+    const consume = async (): Promise<void> => {
+      for await (const _chunk of streamPreparedAgentChatTurn(
+        host,
+        "session-1",
+        { content: "cancel while settlement fails", mode: "chat" } as never,
+        createPreparedTurn(),
+        "chat_thread_turn_appended",
+      )) {
+        // Drain until the authoritative cleanup fault is surfaced.
+      }
+    };
+
+    await expect(consume()).rejects.toBe(settlementError);
+    expect(host.markChatTurnCancelled).not.toHaveBeenCalled();
     expect(host.endActiveChatTurnExecution).toHaveBeenCalledWith("turn-1", controller);
   });
 

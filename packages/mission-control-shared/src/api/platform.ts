@@ -77,6 +77,7 @@ export interface FetchAddonSlotsParams {
 }
 
 export type LlmRuntimeConfigResponse = RuntimeSettingsResponse["llm"] & {
+  revision: number;
   providerConfigs?: LlmProviderConfig[];
 };
 
@@ -84,6 +85,10 @@ export interface ProviderSecretStatus {
   providerId: string;
   hasSecret: boolean;
   source: "none" | "keychain" | "env" | "inline";
+}
+
+export interface ProviderSecretMutationResponse extends ProviderSecretStatus {
+  revision: number;
 }
 
 export interface OpenAICodexOAuthStatus {
@@ -523,17 +528,26 @@ export async function fetchProviderSecretStatus(
   });
 }
 
-export async function saveProviderSecret(providerId: string, apiKey: string): Promise<ProviderSecretStatus> {
-  return request<ProviderSecretStatus>(`/api/v1/secrets/providers/${encodeURIComponent(providerId)}`, {
+export async function saveProviderSecret(
+  providerId: string,
+  apiKey: string,
+  expectedRevision: number,
+  options?: { storage?: "keychain" | "env"; envVar?: string },
+): Promise<ProviderSecretMutationResponse> {
+  return request<ProviderSecretMutationResponse>(`/api/v1/secrets/providers/${encodeURIComponent(providerId)}`, {
     method: "POST",
-    body: JSON.stringify({ apiKey }),
+    body: JSON.stringify({ apiKey, expectedRevision, ...options }),
   });
 }
 
-export async function deleteProviderSecret(providerId: string): Promise<ProviderSecretStatus> {
-  return request<ProviderSecretStatus>(`/api/v1/secrets/providers/${encodeURIComponent(providerId)}`, {
+export async function deleteProviderSecret(
+  providerId: string,
+  expectedRevision: number,
+  storage: "all" | "keychain" | "env" | "inline" = "all",
+): Promise<ProviderSecretMutationResponse> {
+  return request<ProviderSecretMutationResponse>(`/api/v1/secrets/providers/${encodeURIComponent(providerId)}`, {
     method: "DELETE",
-    body: JSON.stringify({}),
+    body: JSON.stringify({ expectedRevision, storage }),
   });
 }
 

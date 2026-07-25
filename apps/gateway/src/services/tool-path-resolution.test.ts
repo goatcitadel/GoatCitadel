@@ -142,7 +142,7 @@ describe("resolveToolRequestPaths", () => {
     );
   });
 
-  it("preserves filesystem root convenience for cwd resolution", async () => {
+  it("preserves filesystem roots for the fresh execution bridge to reject", async () => {
     const { projectRoot, workspaceRoot } = await createWorkspaceFixture();
     const request: ToolInvokeRequest = {
       toolName: "shell.exec",
@@ -157,7 +157,55 @@ describe("resolveToolRequestPaths", () => {
       projectWorkspacePath: "fixtures/prompt-pack-workspace",
     });
 
-    expect(resolved.args.cwd).toBe(projectRoot);
+    expect(resolved.args.cwd).toBe(path.parse(workspaceRoot).root);
+  });
+
+  it.each(["shell.exec", "shell.exec_background", "tests.run", "lint.run", "build.run"])(
+    "preserves exact cross-flavor cwd bytes for %s",
+    async (toolName) => {
+      const { projectRoot, workspaceRoot } = await createWorkspaceFixture();
+      for (const cwd of ["F:/Work Space/Project", "/f/Work Space\\Project", "/mnt/f/Work Space/Project"]) {
+        const request: ToolInvokeRequest = {
+          toolName,
+          args: { cwd, command: "pwd" },
+          agentId: "agent",
+          sessionId: "session",
+        };
+
+        const resolved = resolveToolRequestPaths(request, {
+          workspaceRoot,
+          projectRoot,
+          projectWorkspacePath: "fixtures/prompt-pack-workspace",
+        });
+
+        expect(resolved.args.cwd).toBe(cwd);
+      }
+    },
+  );
+
+  it.each([
+    "F:drive-relative",
+    "F:\\Work Space\\Project:stream",
+    "\\\\?\\F:\\Work Space\\Project",
+    "\\\\server\\share\\Project",
+    "F:\\Work Space\\..\\Other",
+    "F:\\Work Space\\Project\u0000suffix",
+  ])("does not normalize unsafe absolute-like cwd %j before bridge validation", async (cwd) => {
+    const { projectRoot, workspaceRoot } = await createWorkspaceFixture();
+    const request: ToolInvokeRequest = {
+      toolName: "shell.exec",
+      args: { cwd, command: "pwd" },
+      agentId: "agent",
+      sessionId: "session",
+    };
+
+    const resolved = resolveToolRequestPaths(request, {
+      workspaceRoot,
+      projectRoot,
+      projectWorkspacePath: "fixtures/prompt-pack-workspace",
+    });
+
+    expect(resolved.args.cwd).toBe(cwd);
   });
 
   it("routes project-relative write targets into the assigned project root", async () => {

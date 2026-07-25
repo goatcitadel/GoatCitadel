@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Approval lifecycle state and its side effects remain one audited owner during the parity integration. */
 /**
  * Approval lifecycle service.
  *
@@ -9,11 +10,16 @@
  * the only possible implementation.
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   APPROVAL_EXPIRY_ACTOR_ID,
+  MESH_CAPABILITY_ACTIVATION_APPROVAL_KIND,
+  canonicalJsonString,
+  assertMeshCapabilityActivationApprovalPayload,
   type ApprovalEffectRecord,
+  type ApprovalLinkage,
   type ApprovalListResponse,
+  type ApprovalReplayEvent,
   ConflictError,
   type ApprovalBulkResolveInput,
   type ApprovalBulkResolveResult,
@@ -26,6 +32,7 @@ import {
   type ToolGrantRecord,
   type ToolGrantScope,
   type ToolInvokeResult,
+  type MeshCapabilityActivationApprovalPayload,
   ValidationError,
 } from "@goatcitadel/contracts";
 import { DEVICE_ACCESS_APPROVAL_KIND } from "./device-access-helpers.js";
@@ -45,7 +52,12 @@ import {
 } from "./approval-observability.js";
 import { buildApprovalResolveResult, withApprovalFollowUp } from "./approval-follow-up.js";
 import { parseApprovalCreateHookPatch } from "./hook-patch-helpers.js";
-import type { ApprovalCreateAuthority, ToolPolicyEngine } from "@goatcitadel/policy-engine";
+import {
+  isOfficialResearchSearchInvocation,
+  resolveOfficialSearchProviders,
+  type ApprovalCreateAuthority,
+  type ToolPolicyEngine,
+} from "@goatcitadel/policy-engine";
 import type { Storage } from "@goatcitadel/storage";
 
 export class ApprovalExpiredAfterCommitError extends ValidationError {
@@ -94,6 +106,7 @@ export interface ApprovalLifecycleHost {
     | "chatTurnTraces"
     | "chatToolRuns"
     | "codeModeRuns"
+    | "governanceJourneyEvents"
     | "runImmediateTransaction"
   >;
 
@@ -149,6 +162,158 @@ export interface ApprovalLifecycleHost {
     options?: ApprovalResolutionEffectEnqueueOptions,
   ): ApprovalEffectRecord[];
   awaitApprovalResolutionEffects(approvalId: string): Promise<ApprovalEffectRecord[]>;
+}
+
+export const MESH_CAPABILITY_ACTIVATION_APPROVAL_TTL_MS = 15 * 60_000;
+
+export interface MeshCapabilityActivationApprovalLifecycleHost {
+  readonly storage: Pick<Storage, "approvals" | "approvalEvents" | "runImmediateTransaction">;
+}
+
+export interface MeshCapabilityActivationApprovalCommitInput {
+  approvalId: string;
+  payload: MeshCapabilityActivationApprovalPayload;
+  preview: Pick<
+    MeshCapabilityActivationApprovalPayload,
+    "activationId" | "activationRevision" | "capabilityId" | "effectPosture"
+  >;
+  linkage: Pick<ApprovalLinkage, "workspaceId" | "sessionId" | "turnId"> & { workspaceId: string };
+}
+
+export interface MeshCapabilityActivationApprovalCommitResult {
+  approval: ApprovalRequest;
+  replayed: boolean;
+}
+
+/**
+ * Commits the production-dark mesh activation approval record and its one
+ * canonical creation event. It deliberately performs none of the generic
+ * approval lifecycle enrichment, hook, wait-run, or pending-action work.
+ */
+export function commitMeshCapabilityActivationApproval(
+  host: MeshCapabilityActivationApprovalLifecycleHost,
+  input: MeshCapabilityActivationApprovalCommitInput,
+): MeshCapabilityActivationApprovalCommitResult {
+  assertMeshCapabilityActivationApprovalPayload(input.payload);
+  assertExactMeshActivationApprovalPreview(input.preview, input.payload);
+  assertExactMeshActivationApprovalLinkage(input.linkage, input.payload.workspaceId);
+
+  let result!: MeshCapabilityActivationApprovalCommitResult;
+  host.storage.runImmediateTransaction(() => {
+    const stored = host.storage.approvals.createDeterministicDetachedWithTtlDuration(
+      {
+        approvalId: input.approvalId,
+        kind: MESH_CAPABILITY_ACTIVATION_APPROVAL_KIND,
+        riskLevel: "danger",
+        payload: { ...input.payload },
+        preview: { ...input.preview },
+        linkage: { ...input.linkage },
+      },
+      MESH_CAPABILITY_ACTIVATION_APPROVAL_TTL_MS,
+    );
+    const existingEvents = host.storage.approvalEvents.listByApprovalId(stored.approval.approvalId);
+    if (stored.created) {
+      if (existingEvents.length !== 0) {
+        throw new ConflictError({
+          code: "STATE_CONFLICT",
+          message: `Approval ${stored.approval.approvalId} has inconsistent creation evidence.`,
+        });
+      }
+      host.storage.approvalEvents.append({
+        approvalId: stored.approval.approvalId,
+        eventType: "created",
+        actorId: "system",
+        timestamp: stored.approval.createdAt,
+        payload: {
+          kind: stored.approval.kind,
+          riskLevel: stored.approval.riskLevel,
+          status: stored.approval.status,
+        },
+      });
+    } else {
+      assertCanonicalMeshActivationCreatedEvent(stored.approval, existingEvents);
+    }
+    result = { approval: stored.approval, replayed: !stored.created };
+  });
+  return result;
+}
+
+function assertCanonicalMeshActivationCreatedEvent(
+  approval: ApprovalRequest,
+  events: readonly ApprovalReplayEvent[],
+): void {
+  const createdEvents = events.filter((event) => event.eventType === "created");
+  const created = createdEvents[0];
+  const expectedPayload = {
+    kind: MESH_CAPABILITY_ACTIVATION_APPROVAL_KIND,
+    riskLevel: "danger",
+    status: "pending",
+  };
+  if (
+    createdEvents.length !== 1 ||
+    !created ||
+    created.approvalId !== approval.approvalId ||
+    created.actorId !== "system" ||
+    created.timestamp !== approval.createdAt ||
+    canonicalJsonString(created.payload) !== canonicalJsonString(expectedPayload)
+  ) {
+    throw new ConflictError({
+      code: "STATE_CONFLICT",
+      message: `Approval ${approval.approvalId} has inconsistent creation evidence.`,
+    });
+  }
+}
+
+function assertExactMeshActivationApprovalPreview(
+  preview: MeshCapabilityActivationApprovalCommitInput["preview"],
+  payload: MeshCapabilityActivationApprovalPayload,
+): void {
+  assertExactKeys(preview, ["activationId", "activationRevision", "capabilityId", "effectPosture"], "preview");
+  if (
+    preview.activationId !== payload.activationId ||
+    preview.activationRevision !== payload.activationRevision ||
+    preview.capabilityId !== payload.capabilityId ||
+    preview.effectPosture !== payload.effectPosture
+  ) {
+    throw new ValidationError({
+      code: "FIELD_INVALID",
+      field: "preview",
+      message: "Mesh capability activation approval preview does not match its exact payload binding.",
+    });
+  }
+}
+
+function assertExactMeshActivationApprovalLinkage(
+  linkage: MeshCapabilityActivationApprovalCommitInput["linkage"],
+  workspaceId: string,
+): void {
+  const optionalKeys = ["sessionId", "turnId"].filter((key) => Object.prototype.hasOwnProperty.call(linkage, key));
+  assertExactKeys(linkage, ["workspaceId", ...optionalKeys], "linkage");
+  if (
+    linkage.workspaceId !== workspaceId ||
+    optionalKeys.some((key) => typeof linkage[key as "sessionId" | "turnId"] !== "string")
+  ) {
+    throw new ValidationError({
+      code: "FIELD_INVALID",
+      field: "linkage",
+      message: "Mesh capability activation approval linkage is not exact.",
+    });
+  }
+}
+
+function assertExactKeys(value: unknown, expectedKeys: readonly string[], field: string): void {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ValidationError({ code: "FIELD_INVALID", field });
+  }
+  const actualKeys = Object.keys(value).sort();
+  const sortedExpected = [...expectedKeys].sort();
+  if (canonicalJsonString(actualKeys) !== canonicalJsonString(sortedExpected)) {
+    throw new ValidationError({
+      code: "FIELD_INVALID",
+      field,
+      message: `Mesh capability activation approval ${field} has an invalid key set.`,
+    });
+  }
 }
 
 export function listToolGrants(
@@ -689,6 +854,12 @@ function commitStandardApprovalResolution(
       message: "Code Mode approvals are immutable; reject this run and create a new one with edited input.",
     });
   }
+  if (current.kind === MESH_CAPABILITY_ACTIVATION_APPROVAL_KIND && input.decision === "edit") {
+    throw new ValidationError({
+      message:
+        "Mesh capability activation approvals bind one exact immutable request; reject and request a new activation instead of editing.",
+    });
+  }
 
   const pendingAction = storage.pendingApprovalActions.find(approvalId);
   const approval = storage.approvals.resolve(
@@ -698,7 +869,7 @@ function commitStandardApprovalResolution(
   );
   const expiredRemoteTokenCount = storage.remoteActionTokens.expirePendingByApprovalId(approvalId);
 
-  storage.approvalEvents.append({
+  const resolutionEvent = storage.approvalEvents.append({
     approvalId,
     eventType: "resolved",
     actorId: input.resolvedBy,
@@ -717,6 +888,8 @@ function commitStandardApprovalResolution(
         : {}),
     },
   });
+
+  recordApprovalResolutionJourney(storage, approval, input, resolutionEvent, options.expiration);
 
   markChatInlineApprovalResolved(host, approval, input);
 
@@ -785,6 +958,90 @@ function commitStandardApprovalResolution(
 
   const effects = storage.approvalEffects.listByApproval(approvalId);
   return buildApprovalResolveResult(storage, approval, effects);
+}
+
+function recordApprovalResolutionJourney(
+  storage: ApprovalLifecycleHost["storage"],
+  approval: ApprovalRequest,
+  input: ApprovalResolveInput,
+  sourceEvent: ApprovalReplayEvent,
+  expiration?: ApprovalExpirationContext,
+): void {
+  const workspaceId = asJourneyIdentifier(approval.linkage?.workspaceId);
+  if (!workspaceId) {
+    // Legacy approval paths can lack workspace ownership. Never relabel those
+    // decisions as `default` or globally visible just to fill the projection.
+    return;
+  }
+
+  const action = expiration ? "expired" : `resolved_${approval.status}`;
+  const eventId = `approval:journey:${sourceEvent.eventId}`;
+  const fingerprint = createHash("sha256")
+    .update(
+      canonicalJsonString({
+        action,
+        actorId: sourceEvent.actorId,
+        approvalId: approval.approvalId,
+        sourceEventId: sourceEvent.eventId,
+        sourceTimestamp: sourceEvent.timestamp,
+        status: approval.status,
+        workspaceId,
+      }),
+      "utf8",
+    )
+    .digest("hex");
+
+  storage.governanceJourneyEvents.create({
+    schemaVersion: "goatcitadel.journey-event.v1",
+    eventId,
+    idempotencyKey: `approval:lifecycle:${sourceEvent.eventId}`,
+    scopeKind: "workspace",
+    workspaceId,
+    eventType: "approval_lifecycle",
+    subjectKind: "approval",
+    subjectId: approval.approvalId,
+    action,
+    actorId: sourceEvent.actorId,
+    actorType: isSystemActor(sourceEvent.actorId) ? "system" : "operator",
+    sessionId: asJourneyIdentifier(approval.linkage?.sessionId),
+    turnId: asJourneyIdentifier(approval.linkage?.turnId),
+    approvalId: approval.approvalId,
+    fingerprint,
+    sourceKind: "approval_event",
+    sourceId: sourceEvent.eventId,
+    trustDisposition: expiration ? "expired" : approval.status,
+    poisoningStatus: "clean",
+    evidenceRefs: [{ owner: "approval", refId: approval.approvalId }],
+    provenance: {
+      sourceRequired: true,
+      approvalRequired: false,
+      ...approvalJourneyLinkageProvenance(approval),
+    },
+    summary: {
+      decision: expiration ? "expired" : input.decision,
+      status: approval.status,
+      expired: Boolean(expiration),
+    },
+    occurredAt: sourceEvent.timestamp,
+    recordedAt: sourceEvent.timestamp,
+  });
+}
+
+function approvalJourneyLinkageProvenance(approval: ApprovalRequest): Record<string, string> {
+  const provenance: Record<string, string> = {};
+  for (const key of ["taskId", "runId", "durableRunId", "correlationId", "traceId"] as const) {
+    const value = asJourneyIdentifier(approval.linkage?.[key]);
+    if (value) provenance[key] = value;
+  }
+  return provenance;
+}
+
+function asJourneyIdentifier(value: string | undefined): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 && value.length <= 256 ? value : undefined;
+}
+
+function isSystemActor(actorId: string): boolean {
+  return actorId === "system" || actorId.startsWith("system:");
 }
 
 function markChatInlineApprovalResolved(
@@ -880,6 +1137,9 @@ export async function resolveChatToolApproval(
   if (persistentGrantScope && !toolPattern?.trim()) {
     throw new Error(`Approval ${approvalId} does not expose a tool pattern for persistent allow.`);
   }
+  const officialSearchAllowedHosts = persistentGrantScope
+    ? resolveOfficialSearchApprovalGrantHosts(approval, toolPattern)
+    : undefined;
   const resolution = await host.resolveApproval(approvalId, {
     decision,
     resolvedBy,
@@ -908,7 +1168,7 @@ export async function resolveChatToolApproval(
     for (const scopeRef of persistentGrantRequest.scopeRefs) {
       try {
         const nextGrant =
-          findExistingGrant(host, persistentGrantRequest.scope, scopeRef, toolPattern) ??
+          findExistingGrant(host, persistentGrantRequest.scope, scopeRef, toolPattern, officialSearchAllowedHosts) ??
           createToolGrant(host, {
             toolPattern,
             decision: "allow",
@@ -916,10 +1176,17 @@ export async function resolveChatToolApproval(
             scopeRef,
             grantType: "persistent",
             createdBy: resolvedBy,
+            ...(officialSearchAllowedHosts ? { constraints: { allowedHosts: officialSearchAllowedHosts } } : {}),
           });
         grant ??= nextGrant;
       } catch (error) {
-        const recoveredGrant = findExistingGrant(host, persistentGrantRequest.scope, scopeRef, toolPattern);
+        const recoveredGrant = findExistingGrant(
+          host,
+          persistentGrantRequest.scope,
+          scopeRef,
+          toolPattern,
+          officialSearchAllowedHosts,
+        );
         if (recoveredGrant) {
           grant ??= recoveredGrant;
           continue;
@@ -1032,8 +1299,41 @@ function findExistingGrant(
   scope: "session" | "workspace",
   scopeRef: string,
   toolPattern: string,
+  exactAllowedHosts?: string[],
 ): ToolGrantRecord | undefined {
   return host.policyEngine
     .listActiveGrants(scope, scopeRef, 500)
-    .find((grant) => grant.decision === "allow" && grant.toolPattern === toolPattern);
+    .find(
+      (grant) =>
+        grant.decision === "allow" &&
+        grant.toolPattern === toolPattern &&
+        (exactAllowedHosts === undefined ||
+          haveSameExactHostSet(grant.constraints?.allowedHosts ?? [], exactAllowedHosts)),
+    );
+}
+
+function resolveOfficialSearchApprovalGrantHosts(approval: ApprovalRequest, toolPattern: string): string[] | undefined {
+  if (approval.kind !== "browser.search" || toolPattern !== "browser.search") {
+    return undefined;
+  }
+  if (!isOfficialResearchSearchInvocation(approval.payload)) {
+    return undefined;
+  }
+  const providers = resolveOfficialSearchProviders(approval.payload);
+  const hosts = providers.map((provider) => (provider === "brave" ? "api.search.brave.com" : "api.parallel.ai"));
+  if (hosts.length === 0) {
+    throw new Error(`Approval ${approval.approvalId} does not select a supported official search provider.`);
+  }
+  return [...new Set(hosts)].sort();
+}
+
+function haveSameExactHostSet(left: string[], right: string[]): boolean {
+  const normalize = (values: string[]) =>
+    [...new Set(values.map((value) => value.trim().toLowerCase()).filter(Boolean))].sort();
+  const normalizedLeft = normalize(left);
+  const normalizedRight = normalize(right);
+  return (
+    normalizedLeft.length === normalizedRight.length &&
+    normalizedLeft.every((value, index) => value === normalizedRight[index])
+  );
 }

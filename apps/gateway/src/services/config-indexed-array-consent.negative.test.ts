@@ -44,7 +44,14 @@ describe("config indexed-array mutation surface", () => {
 async function collectRuntimeSourceFiles(roots: string[]): Promise<string[]> {
   const { stdout } = await execFileAsync(
     "git",
-    ["ls-files", "--", ...roots.map((root) => toGitPath(path.relative(repoRoot, root)))],
+    [
+      "ls-files",
+      "--cached",
+      "--others",
+      "--exclude-standard",
+      "--",
+      ...roots.map((root) => toGitPath(path.relative(repoRoot, root))),
+    ],
     {
       cwd: repoRoot,
       maxBuffer: 10 * 1024 * 1024,

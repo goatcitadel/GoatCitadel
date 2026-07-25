@@ -1,5 +1,6 @@
 import type { DatabaseClient } from "./db.js";
 import { NotFoundError } from "@goatcitadel/contracts";
+import { ChatSessionRevisionRepository } from "./chat-session-revision-repo.js";
 import type {
   ChatCodeAutoApplyPosture,
   ChatMode,
@@ -19,6 +20,7 @@ import type {
 
 interface ChatSessionPrefsRow {
   session_id: string;
+  aggregate_revision: number | null | undefined;
   mode: ChatMode;
   planning_mode: ChatPlanningMode;
   provider_id: string | null;
@@ -66,7 +68,11 @@ export interface ChatSessionPrefsPatchInput {
   codeAutoApply?: ChatCodeAutoApplyPosture;
 }
 
-const DEFAULT_PREFS: Omit<ChatSessionPrefsRecord, "sessionId" | "createdAt" | "updatedAt"> = {
+export interface RevisionedChatSessionPrefsRecord extends ChatSessionPrefsRecord {
+  revision: number;
+}
+
+const DEFAULT_PREFS: Omit<ChatSessionPrefsRecord, "sessionId" | "revision" | "createdAt" | "updatedAt"> = {
   mode: "chat",
   planningMode: "off",
   providerId: undefined,
@@ -92,9 +98,16 @@ const DEFAULT_PREFS: Omit<ChatSessionPrefsRecord, "sessionId" | "createdAt" | "u
 export class ChatSessionPrefsRepository {
   private readonly getStmt;
   private readonly upsertStmt;
+  private readonly revisions;
 
   public constructor(private readonly db: DatabaseClient) {
-    this.getStmt = db.prepare("SELECT * FROM chat_session_prefs WHERE session_id = ?");
+    this.revisions = new ChatSessionRevisionRepository(db);
+    this.getStmt = db.prepare(`
+      SELECT prefs.*, meta.revision AS aggregate_revision
+      FROM chat_session_prefs AS prefs
+      LEFT JOIN chat_session_meta AS meta ON meta.session_id = prefs.session_id
+      WHERE prefs.session_id = ?
+    `);
     this.upsertStmt = db.prepare(`
       INSERT INTO chat_session_prefs (
         session_id, mode, planning_mode, provider_id, model, image_provider_id, image_model,
@@ -134,12 +147,15 @@ export class ChatSessionPrefsRepository {
     `);
   }
 
-  public get(sessionId: string): ChatSessionPrefsRecord | undefined {
+  public get(sessionId: string): RevisionedChatSessionPrefsRecord | undefined {
     const row = toChatSessionPrefsRow(this.getStmt.get(sessionId));
-    return row ? mapRow(row) : undefined;
+    if (!row) {
+      return undefined;
+    }
+    return withRevision(mapRow(row), normalizeAggregateRevision(row.aggregate_revision));
   }
 
-  public listBySessionIds(sessionIds: string[]): Map<string, ChatSessionPrefsRecord> {
+  public listBySessionIds(sessionIds: string[]): Map<string, RevisionedChatSessionPrefsRecord> {
     const uniqueSessionIds = Array.from(new Set(sessionIds.map((sessionId) => sessionId.trim()).filter(Boolean)));
     if (uniqueSessionIds.length === 0) {
       return new Map();
@@ -147,13 +163,26 @@ export class ChatSessionPrefsRepository {
     const placeholders = uniqueSessionIds.map(() => "?").join(", ");
     const rows = toChatSessionPrefsRows(
       this.db
-        .prepare(`SELECT * FROM chat_session_prefs WHERE session_id IN (${placeholders})`)
+        .prepare(
+          `
+          SELECT prefs.*, meta.revision AS aggregate_revision
+          FROM chat_session_prefs AS prefs
+          LEFT JOIN chat_session_meta AS meta ON meta.session_id = prefs.session_id
+          WHERE prefs.session_id IN (${placeholders})
+        `,
+        )
         .all(...uniqueSessionIds),
     );
-    return new Map(rows.map((row) => [row.session_id, mapRow(row)]));
+    return new Map(
+      rows.map((row) => [
+        row.session_id,
+        withRevision(mapRow(row), normalizeAggregateRevision(row.aggregate_revision)),
+      ]),
+    );
   }
 
-  public ensure(sessionId: string, now = new Date().toISOString()): ChatSessionPrefsRecord {
+  public ensure(sessionId: string, now = new Date().toISOString()): RevisionedChatSessionPrefsRecord {
+    const revision = this.revisions.ensure(sessionId, now);
     const existing = this.get(sessionId);
     if (existing) {
       return existing;
@@ -183,15 +212,45 @@ export class ChatSessionPrefsRepository {
       createdAt: now,
       updatedAt: now,
     });
-    return mapRow(this.requireRow(sessionId));
+    return withRevision(mapRow(this.requireRow(sessionId)), revision.revision);
   }
 
   public patch(
     sessionId: string,
     input: ChatSessionPrefsPatchInput,
     now = new Date().toISOString(),
-  ): ChatSessionPrefsRecord {
+  ): RevisionedChatSessionPrefsRecord {
     const current = this.ensure(sessionId, now);
+    return this.patchWithRevision(sessionId, input, current.revision, now);
+  }
+
+  public patchWithRevision(
+    sessionId: string,
+    input: ChatSessionPrefsPatchInput,
+    expectedRevision: number,
+    now = new Date().toISOString(),
+  ): RevisionedChatSessionPrefsRecord {
+    const result = this.revisions.runWithRevision(
+      sessionId,
+      expectedRevision,
+      () => this.patchWithinAggregate(sessionId, input, expectedRevision, now),
+      now,
+    );
+    return { ...result.value, revision: result.revision };
+  }
+
+  /**
+   * Transaction-internal child mutation used by aggregate chat-session writes.
+   * The caller must already hold the chat-session revision fence and owns the
+   * single aggregate revision bump.
+   */
+  public patchWithinAggregate(
+    sessionId: string,
+    input: ChatSessionPrefsPatchInput,
+    revision: number,
+    now = new Date().toISOString(),
+  ): { value: RevisionedChatSessionPrefsRecord; changed: boolean } {
+    const current = this.get(sessionId) ?? this.createDefaultsUnchecked(sessionId, now, revision);
     const nextProviderId =
       input.providerId !== undefined ? normalizeOptional(input.providerId) : (current.providerId ?? null);
     const providerChanged = input.providerId !== undefined && nextProviderId !== (current.providerId ?? null);
@@ -201,7 +260,7 @@ export class ChatSessionPrefsRepository {
         : (current.imageProviderId ?? null);
     const imageProviderChanged =
       input.imageProviderId !== undefined && nextImageProviderId !== (current.imageProviderId ?? null);
-    this.upsertStmt.run({
+    const next = {
       sessionId,
       mode: "chat",
       planningMode: input.planningMode ?? current.planningMode,
@@ -218,8 +277,8 @@ export class ChatSessionPrefsRepository {
       webMode: input.webMode ?? current.webMode,
       memoryMode: input.memoryMode ?? current.memoryMode,
       thinkingLevel: input.thinkingLevel ?? current.thinkingLevel,
-      speedMode: input.speedMode ?? current.speedMode,
-      subagentPolicy: input.subagentPolicy ?? current.subagentPolicy,
+      speedMode: input.speedMode ?? current.speedMode ?? "standard",
+      subagentPolicy: input.subagentPolicy ?? current.subagentPolicy ?? "ask_when_useful",
       toolAutonomy: input.toolAutonomy ?? current.toolAutonomy,
       visionFallbackModel:
         input.visionFallbackModel !== undefined
@@ -241,8 +300,41 @@ export class ChatSessionPrefsRepository {
       codeAutoApply: input.codeAutoApply ?? current.codeAutoApply,
       createdAt: current.createdAt,
       updatedAt: now,
+    };
+    if (isSemanticNoop(current, next)) {
+      return { value: { ...current, revision }, changed: false };
+    }
+    this.upsertStmt.run(next);
+    return { value: withRevision(mapRow(this.requireRow(sessionId)), revision), changed: true };
+  }
+
+  private createDefaultsUnchecked(sessionId: string, now: string, revision: number): RevisionedChatSessionPrefsRecord {
+    this.upsertStmt.run({
+      sessionId,
+      mode: DEFAULT_PREFS.mode,
+      planningMode: DEFAULT_PREFS.planningMode,
+      providerId: null,
+      model: null,
+      imageProviderId: null,
+      imageModel: null,
+      webMode: DEFAULT_PREFS.webMode,
+      memoryMode: DEFAULT_PREFS.memoryMode,
+      thinkingLevel: DEFAULT_PREFS.thinkingLevel,
+      speedMode: DEFAULT_PREFS.speedMode,
+      subagentPolicy: DEFAULT_PREFS.subagentPolicy,
+      toolAutonomy: DEFAULT_PREFS.toolAutonomy,
+      visionFallbackModel: null,
+      orchestrationEnabled: DEFAULT_PREFS.orchestrationEnabled ? 1 : 0,
+      orchestrationIntensity: DEFAULT_PREFS.orchestrationIntensity,
+      orchestrationVisibility: DEFAULT_PREFS.orchestrationVisibility,
+      orchestrationProviderPreference: DEFAULT_PREFS.orchestrationProviderPreference,
+      orchestrationReviewDepth: DEFAULT_PREFS.orchestrationReviewDepth,
+      orchestrationParallelism: DEFAULT_PREFS.orchestrationParallelism,
+      codeAutoApply: DEFAULT_PREFS.codeAutoApply,
+      createdAt: now,
+      updatedAt: now,
     });
-    return mapRow(this.requireRow(sessionId));
+    return withRevision(mapRow(this.requireRow(sessionId)), revision);
   }
 
   private requireRow(sessionId: string): ChatSessionPrefsRow {
@@ -257,6 +349,7 @@ export class ChatSessionPrefsRepository {
 function mapRow(row: ChatSessionPrefsRow): ChatSessionPrefsRecord {
   return {
     sessionId: row.session_id,
+    revision: normalizeAggregateRevision(row.aggregate_revision),
     mode: "chat",
     planningMode: row.planning_mode,
     providerId: row.provider_id ?? undefined,
@@ -287,6 +380,57 @@ function normalizeOptional(value: string): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function withRevision(record: ChatSessionPrefsRecord, revision: number): RevisionedChatSessionPrefsRecord {
+  return { ...record, revision };
+}
+
+function isSemanticNoop(
+  current: RevisionedChatSessionPrefsRecord,
+  next: {
+    planningMode: ChatPlanningMode;
+    providerId: string | null;
+    model: string | null;
+    imageProviderId: string | null;
+    imageModel: string | null;
+    webMode: ChatWebMode;
+    memoryMode: ChatMemoryMode;
+    thinkingLevel: ChatThinkingLevel;
+    speedMode: ChatSpeedMode;
+    subagentPolicy: ChatSubagentPolicy;
+    toolAutonomy: "safe_auto" | "manual";
+    visionFallbackModel: string | null;
+    orchestrationEnabled: number;
+    orchestrationIntensity: ChatOrchestrationIntensity;
+    orchestrationVisibility: ChatOrchestrationVisibility;
+    orchestrationProviderPreference: ChatOrchestrationProviderPreference;
+    orchestrationReviewDepth: ChatOrchestrationReviewDepth;
+    orchestrationParallelism: ChatOrchestrationParallelism;
+    codeAutoApply: ChatCodeAutoApplyPosture;
+  },
+): boolean {
+  return (
+    next.planningMode === current.planningMode &&
+    next.providerId === (current.providerId ?? null) &&
+    next.model === (current.model ?? null) &&
+    next.imageProviderId === (current.imageProviderId ?? null) &&
+    next.imageModel === (current.imageModel ?? null) &&
+    next.webMode === current.webMode &&
+    next.memoryMode === current.memoryMode &&
+    next.thinkingLevel === current.thinkingLevel &&
+    next.speedMode === (current.speedMode ?? "standard") &&
+    next.subagentPolicy === (current.subagentPolicy ?? "ask_when_useful") &&
+    next.toolAutonomy === current.toolAutonomy &&
+    next.visionFallbackModel === (current.visionFallbackModel ?? null) &&
+    next.orchestrationEnabled === (current.orchestrationEnabled ? 1 : 0) &&
+    next.orchestrationIntensity === current.orchestrationIntensity &&
+    next.orchestrationVisibility === current.orchestrationVisibility &&
+    next.orchestrationProviderPreference === current.orchestrationProviderPreference &&
+    next.orchestrationReviewDepth === current.orchestrationReviewDepth &&
+    next.orchestrationParallelism === current.orchestrationParallelism &&
+    next.codeAutoApply === current.codeAutoApply
+  );
+}
+
 function toChatSessionPrefsRow(value: unknown): ChatSessionPrefsRow | undefined {
   return isChatSessionPrefsRow(value) ? value : undefined;
 }
@@ -304,6 +448,9 @@ function isChatSessionPrefsRow(value: unknown): value is ChatSessionPrefsRow {
   }
   return (
     typeof value.session_id === "string" &&
+    (typeof value.aggregate_revision === "number" ||
+      value.aggregate_revision === null ||
+      value.aggregate_revision === undefined) &&
     typeof value.mode === "string" &&
     typeof value.planning_mode === "string" &&
     (typeof value.provider_id === "string" || value.provider_id === null) &&
@@ -333,4 +480,8 @@ function isChatSessionPrefsRow(value: unknown): value is ChatSessionPrefsRow {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function normalizeAggregateRevision(value: number | null | undefined): number {
+  return Number.isSafeInteger(value) && Number(value) > 0 ? Number(value) : 1;
 }

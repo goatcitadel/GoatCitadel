@@ -10,7 +10,6 @@ import type {
   LearnedMemoryItemRecord,
   LearnedMemoryUpdateInput,
   MemoryWriteAuthority,
-  MemoryActionLedgerEntry,
   MemoryBatchMutationOperation,
   MemoryBatchMutationRequest,
   MemoryBatchMutationResponse,
@@ -38,6 +37,7 @@ import type {
   MemoryLearningStalenessReport,
   MemoryLearningStatus,
   MemoryLearningType,
+  ModelUsageAttributionContext,
   MemoryLifecyclePatch,
   MemoryMaintenancePolicyPatchInput,
   MemoryMaintenancePolicyRecord,
@@ -79,28 +79,63 @@ import type {
 import {
   ConflictError,
   MEMORY_FORGET_MAX_ITEM_IDS,
+  MEMORY_LIFECYCLE_APPROVAL_KIND,
   NotFoundError,
   PolicyViolationError,
   ValidationError,
-  deriveMemoryItemLifecycleState,
+  canonicalJsonString,
+  type ApprovalRequest,
   type BrowserContentGuardResult,
+  type GovernanceJourneyEventRecord,
 } from "@goatcitadel/contracts";
-import { assertWritePathInJail, scanBrowserContentGuard } from "@goatcitadel/policy-engine";
+import type { GovernedLifecycleEventRepository } from "@goatcitadel/storage";
+import {
+  assertWritePathInJail,
+  scanBrowserContentGuard,
+  type AcquireLocalEmbeddingLease,
+  type PrepareEmbeddingUsageDispatch,
+} from "@goatcitadel/policy-engine";
 import { buildMemoryWorkspaceScopeSql } from "@goatcitadel/storage";
 import { ChatLearnedMemoryService } from "./chat-learned-memory-service.js";
 import { MemoryContextService } from "./memory-context-service.js";
 import { mapMemoryItemRow, recordMemoryChange, requireMemoryItem, type MemoryItemHost } from "./memory-item-helpers.js";
-import { withMemoryEmbeddingMetadata } from "./memory-embedding-metadata.js";
+import { withMemoryEmbeddingMetadata, type MemoryEmbeddingRuntimeOptions } from "./memory-embedding-metadata.js";
 import { MemoryMaintenanceService } from "./memory-maintenance-service.js";
 import { normalizeMemoryForgetCriteria } from "./security-utils.js";
 import type { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
-import {
-  buildMemoryActionContext,
-  buildMemoryActionLedgerEntry,
-  buildMemoryChangeLedgerPayload,
-} from "./memory-action-ledger.js";
+import { buildMemoryActionLedgerEntry } from "./memory-action-ledger.js";
 import { MemoryWriteGateService } from "./memory-write-gate-service.js";
 import { matchesMemoryWorkspaceScope } from "./memory-lifecycle-policy.js";
+import {
+  buildMemoryItemApprovalStateMaterial,
+  buildMemoryItemsApprovalStateMaterial,
+  buildMemoryLifecycleApprovalBinding,
+  buildMemoryLifecycleRequestSha256,
+  buildMemoryLifecycleStateSha256,
+  deriveApprovedMemoryHistoryId,
+  parseMemoryLifecycleApprovalBinding,
+  resolveApprovedMemoryMutation,
+  type ApprovedMemoryMutationContext,
+  type ApprovedMemoryMutationAuthority,
+  type MemoryJourneyApprovalAction,
+  type MemoryJourneySubjectKind,
+  type MemoryJourneyEventAction,
+  type MemoryLifecycleApprovalBindingV1,
+} from "./memory-journey-producer.js";
+import {
+  buildMemoryLifecycleApprovalPayload,
+  buildMemoryLifecycleRequestJourneyEvent,
+  buildStructuredMemoryJourneyEvent,
+  createMemoryGovernedLifecycleRepository,
+  deriveMemoryLifecycleApprovalId,
+  MemoryLifecycleApplyError,
+  memoryLifecycleRequestJourneyIdempotencyKey,
+  mintMemoryMaintenanceSystemAuthority,
+  parseMemoryLifecycleRequestEnvelope,
+  persistApprovedMemoryMutationEvidence,
+  persistMemorySystemExpiryEvidence,
+  type MemoryMaintenanceSystemAuthority,
+} from "./memory-domain-journey-producer.js";
 
 export interface MemoryFileEntry {
   relativePath: string;
@@ -113,12 +148,61 @@ export interface MemoryForgetCommitHooks {
   onCommit?: () => void;
   /** Runs immediately after the canonical memory transaction commits. */
   afterCommit?: () => void;
+  /** Explicit canonical approval authority for the HX-402 Journey producer. */
+  approvedMutation?: ApprovedMemoryMutationContext;
 }
 
 export interface MemoryForgetItemOptions extends MemoryForgetCommitHooks {
   actionId?: string;
   source?: string;
 }
+
+/** Route-time commit hooks for the approval-request write (idempotency truth). */
+export interface MemoryMutationRequestHooks {
+  onCommit?: () => void;
+  afterCommit?: () => void;
+}
+
+export interface MemoryLifecyclePendingApproval {
+  approvalId: string;
+  status: ApprovalRequest["status"];
+  kind: typeof MEMORY_LIFECYCLE_APPROVAL_KIND;
+  action: MemoryJourneyApprovalAction;
+  subjectKind: MemoryJourneySubjectKind;
+  subjectId?: string;
+  workspaceId: string;
+  requestSha256: string;
+  expectedStateSha256: string;
+  expiresAt?: string;
+  createdAt: string;
+  replayed: boolean;
+  itemIds: string[];
+}
+
+export interface MemoryMutationApprovalEnvelope {
+  pendingApproval: MemoryLifecyclePendingApproval;
+}
+
+export type MemoryForgetApprovalOutcome =
+  | MemoryMutationApprovalEnvelope
+  | {
+      pendingApproval: null;
+      noMutationRequired: true;
+      matchedCount: number;
+      alreadyForgottenCount: number;
+    };
+
+export interface MemoryLifecycleApplyResult {
+  disposition: "applied" | "no_op";
+  action: MemoryJourneyApprovalAction;
+  subjectKind: MemoryJourneySubjectKind;
+  subjectId?: string;
+  workspaceId: string;
+  itemIds: string[];
+  changedCount: number;
+}
+
+const MEMORY_LIFECYCLE_APPROVAL_TTL_MS = 15 * 60_000;
 
 interface MemoryForgetSelectionRow {
   item_id: string;
@@ -152,11 +236,48 @@ interface MemoryLifecycleAdminDependencies extends MemoryItemHost {
   publishRealtime(channel: string, topic: string, payload: Record<string, unknown>): void;
 }
 
+/**
+ * Canonical approval-authority collaborators for the HX-402 P1 approval-first
+ * memory surface. Optional so read-only harnesses can omit them; every
+ * mutation entry point fails closed when the host is absent.
+ */
+export interface MemoryLifecycleApprovalAuthorityHost {
+  approvals: {
+    createDeterministicDetachedWithTtlDuration(
+      input: {
+        approvalId: string;
+        kind: string;
+        riskLevel: "safe" | "caution" | "danger";
+        payload: Record<string, unknown>;
+        preview: Record<string, unknown>;
+        linkage?: Record<string, unknown>;
+      },
+      ttlMs: number,
+    ): { approval: ApprovalRequest; created: boolean };
+    /** Throws NotFoundError when the approval does not exist. */
+    get(approvalId: string): ApprovalRequest;
+  };
+  approvalEvents: {
+    append(input: {
+      approvalId: string;
+      eventType: "created";
+      actorId: string;
+      timestamp: string;
+      payload: Record<string, unknown>;
+    }): unknown;
+  };
+  governanceJourneyEvents: {
+    create(record: GovernanceJourneyEventRecord): GovernanceJourneyEventRecord;
+    findByIdempotencyKey(idempotencyKey: string): GovernanceJourneyEventRecord | undefined;
+  };
+}
+
 export interface MemoryLifecycleDependencies {
   readonly context: MemoryContextService;
   readonly learned: ChatLearnedMemoryService;
   readonly maintenance: MemoryMaintenanceService;
   readonly admin: MemoryLifecycleAdminDependencies;
+  readonly approvalAuthority?: MemoryLifecycleApprovalAuthorityHost;
   resolveLearnedMemoryPolicy(sessionId: string): {
     allowWrite: boolean;
     memoryMode?: "off" | "auto" | "on";
@@ -170,6 +291,8 @@ export interface MemoryLifecycleDependencies {
   };
   readonly writeGate?: MemoryWriteGateService;
   readonly evidence?: Pick<EvidenceEnvelopeService, "createEnvelope">;
+  readonly acquireLocalEmbeddingLease?: AcquireLocalEmbeddingLease;
+  readonly prepareEmbeddingUsageDispatch?: PrepareEmbeddingUsageDispatch;
   resolveSessionWorkspaceId?: (sessionId: string) => string | undefined;
   readTranscriptOrEmpty(sessionId: string): Promise<TranscriptEvent[]>;
 }
@@ -180,7 +303,542 @@ export interface MemoryLifecycleDependencies {
  * composition, learned-memory persistence, and maintenance execution.
  */
 export class MemoryLifecycleService {
+  private governedLifecycleRepository?: GovernedLifecycleEventRepository;
+  private maintenanceSystemAuthority?: MemoryMaintenanceSystemAuthority;
+
   public constructor(private readonly deps: MemoryLifecycleDependencies) {}
+
+  private getGovernedLifecycleRepository(): GovernedLifecycleEventRepository {
+    this.governedLifecycleRepository ??= createMemoryGovernedLifecycleRepository(this.deps.admin.gatewaySql);
+    return this.governedLifecycleRepository;
+  }
+
+  private requireApprovalAuthority(): MemoryLifecycleApprovalAuthorityHost {
+    const authority = this.deps.approvalAuthority;
+    if (!authority) {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: "Operator memory mutations require the canonical approval authority host.",
+      });
+    }
+    return authority;
+  }
+
+  // ── HX-402 P1: approval-first operator mutation requests ─────────────
+
+  /**
+   * Request one approved memory-item patch. The route surface never mutates:
+   * it commits a canonical `memory.lifecycle` approval (deterministic
+   * payload-hash UUID identity over the exact request AND the exact reviewed
+   * state) plus immutable requester Journey evidence, and only the recovered
+   * approval effect may later execute the mutation.
+   */
+  public requestMemoryItemPatchApproval(
+    itemId: string,
+    patch: MemoryLifecyclePatch,
+    requesterId: string,
+    hooks: MemoryMutationRequestHooks = {},
+  ): MemoryMutationApprovalEnvelope {
+    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    const approvedPatch = snapshotApprovedMemoryItemPatch(patch);
+    const current = requireWorkspaceOwnedMemoryItem(requireMemoryItem(this.deps.admin, itemId));
+    const binding = buildMemoryLifecycleApprovalBinding({
+      workspaceId: current.workspaceId,
+      subjectKind: "memory_item",
+      subjectId: current.itemId,
+      action: "item_updated",
+      mutation: approvedPatch,
+      expectedState: buildMemoryItemApprovalStateMaterial(current),
+    });
+    const pendingApproval = this.commitMemoryLifecycleApproval({
+      binding,
+      requesterId,
+      mutation: approvedPatch,
+      itemIds: [current.itemId],
+      preview: {
+        title: "Approve memory item update",
+        action: binding.action,
+        subjectKind: binding.subjectKind,
+        subjectId: current.itemId,
+        workspaceId: current.workspaceId,
+        fieldCodes: Object.keys(approvedPatch).sort(),
+      },
+      hooks,
+    });
+    return { pendingApproval };
+  }
+
+  /**
+   * Request one approved forget. Criteria (namespace/query/workspace scope)
+   * resolve to exact item IDs at request time; the approval binds those IDs
+   * and their reviewed state, so scope can never widen between review and
+   * execution. Zero matching active items is a pure no-op: no approval row,
+   * no evidence, no mutation.
+   */
+  public requestMemoryForgetApproval(
+    input: MemoryForgetRequest & { requesterId: string },
+    hooks: MemoryMutationRequestHooks = {},
+  ): MemoryForgetApprovalOutcome {
+    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    if ((input.itemIds?.length ?? 0) > MEMORY_FORGET_MAX_ITEM_IDS) {
+      throw new ValidationError({
+        code: "FIELD_INVALID",
+        field: "itemIds",
+        message: `Memory forget accepts at most ${MEMORY_FORGET_MAX_ITEM_IDS} explicit item IDs.`,
+      });
+    }
+    if (input.itemIds?.some((itemId) => typeof itemId !== "string" || !itemId.trim())) {
+      throw new ValidationError({ code: "FIELD_INVALID", field: "itemIds" });
+    }
+    const criteria = normalizeMemoryForgetCriteria(input);
+    if (!criteria.hasCriteria) {
+      throw new ValidationError({
+        code: "FIELD_REQUIRED",
+        field: "itemIds",
+        message: "Memory forget requires at least one criterion: itemIds, namespace, or query.",
+      });
+    }
+    const workspaceId = input.workspaceId?.trim() || undefined;
+    const includeGlobal = input.includeGlobal === true;
+    if (input.includeGlobal !== undefined && !workspaceId) {
+      throw new ValidationError({
+        code: "FIELD_REQUIRED",
+        field: "workspaceId",
+        message: "Memory forget includeGlobal requires an explicit workspaceId.",
+      });
+    }
+    const matchedRows = this.selectForgetCandidateRows(criteria, workspaceId, includeGlobal);
+    if (criteria.hasItemIds && matchedRows.length !== criteria.itemIds.length) {
+      throw new ValidationError({
+        code: "FIELD_INVALID",
+        field: "itemIds",
+        message: "Every explicit memory item must exist and satisfy the requested workspace and filters.",
+      });
+    }
+    const activeRows = matchedRows.filter((row) => row.status === "active");
+    const alreadyForgottenCount = matchedRows.filter((row) => row.status === "forgotten").length;
+    if (activeRows.length === 0) {
+      return {
+        pendingApproval: null,
+        noMutationRequired: true,
+        matchedCount: matchedRows.length,
+        alreadyForgottenCount,
+      };
+    }
+    const activeItems = activeRows
+      .map((row) => requireWorkspaceOwnedMemoryItem(mapMemoryItemRow(this.deps.admin, row)))
+      .sort((left, right) => compareMemoryItemIds(left.itemId, right.itemId));
+    const approvalWorkspaceId = workspaceId ?? activeItems[0]?.workspaceId;
+    if (!approvalWorkspaceId || activeItems.some((item) => item.workspaceId !== approvalWorkspaceId)) {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: "Approved memory forget requires items owned by exactly one workspace.",
+      });
+    }
+    const itemIds = activeItems.map((item) => item.itemId);
+    const actionId = normalizeApprovedMemoryActionId(
+      input.actionId,
+      `approved-memory-forget-${deriveApprovedMemoryRequestDigest({ workspaceId: approvalWorkspaceId, itemIds })}`,
+    );
+    const subjectKind: MemoryJourneySubjectKind = itemIds.length === 1 ? "memory_item" : "memory_item_batch";
+    const subjectId = itemIds.length === 1 ? itemIds[0] : undefined;
+    const binding = buildMemoryLifecycleApprovalBinding({
+      workspaceId: approvalWorkspaceId,
+      subjectKind,
+      subjectId,
+      action: "items_forgotten",
+      mutation: { actionId, itemIds },
+      expectedState: buildMemoryItemsApprovalStateMaterial(activeItems),
+    });
+    const pendingApproval = this.commitMemoryLifecycleApproval({
+      binding,
+      requesterId: input.requesterId,
+      mutation: { actionId, itemIds },
+      itemIds,
+      preview: {
+        title: "Approve memory forget",
+        action: binding.action,
+        subjectKind,
+        ...(subjectId === undefined ? {} : { subjectId }),
+        workspaceId: approvalWorkspaceId,
+        itemCount: itemIds.length,
+        alreadyForgottenCount,
+      },
+      hooks,
+    });
+    return { pendingApproval };
+  }
+
+  /**
+   * Request one approved atomic batch mutation. One approval governs the whole
+   * batch; the recovered effect applies every operation in one transaction or
+   * none at all.
+   */
+  public requestMemoryBatchMutationApproval(
+    input: MemoryBatchMutationRequest,
+    requesterId: string,
+    hooks: MemoryMutationRequestHooks = {},
+  ): MemoryMutationApprovalEnvelope {
+    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    const operations = snapshotApprovedBatchOperations(normalizeBatchMutationOperations(input.operations));
+    const items = operations.map((operation) =>
+      requireWorkspaceOwnedMemoryItem(requireMemoryItem(this.deps.admin, operation.itemId)),
+    );
+    const workspaceId = items[0]?.workspaceId;
+    if (!workspaceId || items.some((item) => item.workspaceId !== workspaceId)) {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: "Approved memory batch mutations require items owned by exactly one workspace.",
+      });
+    }
+    const distinctItems = [...items].sort((left, right) => compareMemoryItemIds(left.itemId, right.itemId));
+    const actionId = normalizeApprovedMemoryActionId(
+      input.actionId,
+      `approved-memory-batch-${deriveApprovedMemoryRequestDigest({ workspaceId, operations })}`,
+    );
+    const binding = buildMemoryLifecycleApprovalBinding({
+      workspaceId,
+      subjectKind: "memory_item_batch",
+      action: "batch_mutated",
+      mutation: { actionId, operations },
+      expectedState: buildMemoryItemsApprovalStateMaterial(distinctItems),
+    });
+    const pendingApproval = this.commitMemoryLifecycleApproval({
+      binding,
+      requesterId,
+      mutation: { actionId, operations },
+      itemIds: distinctItems.map((item) => item.itemId),
+      preview: {
+        title: "Approve memory batch mutation",
+        action: binding.action,
+        subjectKind: binding.subjectKind,
+        workspaceId,
+        operationCount: operations.length,
+        patchCount: operations.filter((operation) => operation.kind === "patch_item").length,
+        forgetCount: operations.filter((operation) => operation.kind === "forget_item").length,
+      },
+      hooks,
+    });
+    return { pendingApproval };
+  }
+
+  private commitMemoryLifecycleApproval(input: {
+    binding: MemoryLifecycleApprovalBindingV1;
+    requesterId: string;
+    mutation: unknown;
+    itemIds: string[];
+    preview: Record<string, unknown>;
+    hooks: MemoryMutationRequestHooks;
+  }): MemoryLifecyclePendingApproval {
+    const authority = this.requireApprovalAuthority();
+    const requesterId = requireCanonicalMemoryActorId(input.requesterId);
+    const approvalId = deriveMemoryLifecycleApprovalId(input.binding);
+    const payload = buildMemoryLifecycleApprovalPayload({
+      binding: input.binding,
+      requesterId,
+      mutation: input.mutation,
+    });
+    const runTransaction = requireMemoryBatchTransaction(this.deps.admin.gatewaySql);
+    const committed = runTransaction(() => {
+      const stored = authority.approvals.createDeterministicDetachedWithTtlDuration(
+        {
+          approvalId,
+          kind: MEMORY_LIFECYCLE_APPROVAL_KIND,
+          riskLevel: "danger",
+          payload,
+          preview: { ...input.preview },
+          linkage: {
+            workspaceId: input.binding.workspaceId,
+            ...(input.binding.sessionId === undefined ? {} : { sessionId: input.binding.sessionId }),
+            ...(input.binding.turnId === undefined ? {} : { turnId: input.binding.turnId }),
+          },
+        },
+        MEMORY_LIFECYCLE_APPROVAL_TTL_MS,
+      );
+      if (stored.created) {
+        authority.approvalEvents.append({
+          approvalId,
+          eventType: "created",
+          actorId: "system",
+          timestamp: stored.approval.createdAt,
+          payload: {
+            kind: stored.approval.kind,
+            riskLevel: stored.approval.riskLevel,
+            status: stored.approval.status,
+          },
+        });
+        authority.governanceJourneyEvents.create(
+          buildMemoryLifecycleRequestJourneyEvent({
+            approval: stored.approval,
+            binding: input.binding,
+            requesterId,
+            itemCount: input.itemIds.length,
+          }),
+        );
+      } else {
+        // The original requester remains the immutable evidence. A byte-exact
+        // replay from the SAME requester converges; a different requester's
+        // identical mutation conflicts in the approvals owner because the
+        // requester is payload material. A missing evidence row self-heals so
+        // the recovered effect can never execute without requester evidence.
+        const evidence = authority.governanceJourneyEvents.findByIdempotencyKey(
+          memoryLifecycleRequestJourneyIdempotencyKey(approvalId),
+        );
+        if (!evidence) {
+          authority.governanceJourneyEvents.create(
+            buildMemoryLifecycleRequestJourneyEvent({
+              approval: stored.approval,
+              binding: input.binding,
+              requesterId,
+              itemCount: input.itemIds.length,
+            }),
+          );
+        }
+      }
+      input.hooks.onCommit?.();
+      return stored;
+    });
+    input.hooks.afterCommit?.();
+    if (committed.created) {
+      this.deps.admin.publishRealtime("system", "memory", {
+        type: "memory_mutation_approval_requested",
+        approvalId,
+        action: input.binding.action,
+        subjectKind: input.binding.subjectKind,
+        subjectId: input.binding.subjectId,
+        workspaceId: input.binding.workspaceId,
+        itemCount: input.itemIds.length,
+      });
+    }
+    return {
+      approvalId,
+      status: committed.approval.status,
+      kind: MEMORY_LIFECYCLE_APPROVAL_KIND,
+      action: input.binding.action,
+      subjectKind: input.binding.subjectKind,
+      ...(input.binding.subjectId === undefined ? {} : { subjectId: input.binding.subjectId }),
+      workspaceId: input.binding.workspaceId,
+      requestSha256: input.binding.requestSha256,
+      expectedStateSha256: input.binding.expectedStateSha256,
+      ...(committed.approval.expiresAt ? { expiresAt: committed.approval.expiresAt } : {}),
+      createdAt: committed.approval.createdAt,
+      replayed: !committed.created,
+      itemIds: [...input.itemIds],
+    };
+  }
+
+  private selectForgetCandidateRows(
+    criteria: ReturnType<typeof normalizeMemoryForgetCriteria>,
+    workspaceId: string | undefined,
+    includeGlobal: boolean,
+  ): MemoryForgetSelectionRow[] {
+    const clauses = ["1 = 1"];
+    const params: Record<string, string | number | null> = {};
+    const normalizedItemIds = [...criteria.itemIds].sort(compareMemoryItemIds);
+    if (normalizedItemIds.length > 0) {
+      const placeholders = normalizedItemIds.map((itemId, index) => {
+        const key = `itemId${index}`;
+        params[key] = itemId;
+        return `@${key}`;
+      });
+      clauses.push(`item_id IN (${placeholders.join(", ")})`);
+    }
+    if (criteria.namespace) {
+      clauses.push("namespace = @namespace");
+      params.namespace = criteria.namespace;
+    }
+    if (workspaceId) {
+      clauses.push(buildMemoryWorkspaceScopeSql(this.deps.admin.gatewaySql.dialect, { includeGlobal }));
+      params.workspaceId = workspaceId;
+    }
+    if (criteria.query) {
+      clauses.push(`(
+        LOWER(title) LIKE @query ESCAPE @escapeCharacter
+        OR LOWER(content) LIKE @query ESCAPE @escapeCharacter
+        OR LOWER(namespace) LIKE @query ESCAPE @escapeCharacter
+      )`);
+      params.query = `%${escapeMemoryLikePattern(criteria.query.toLowerCase())}%`;
+      params.escapeCharacter = "\\";
+    }
+    if (!criteria.hasItemIds) {
+      clauses.push("status = 'active'");
+      clauses.push("(expires_at IS NULL OR expires_at > @now)");
+      params.now = new Date().toISOString();
+    }
+    return this.deps.admin.gatewaySql
+      .prepare(
+        `
+        SELECT item_id, namespace, title, content, metadata_json, pinned, ttl_override_seconds, expires_at, status,
+               created_at, updated_at, forgotten_at, workspace_id
+        FROM memory_items
+        WHERE ${clauses.join(" AND ")}
+        ORDER BY item_id
+      `,
+      )
+      .all(params) as MemoryForgetSelectionRow[];
+  }
+
+  // ── HX-402 P1: the recovered `memory.lifecycle` approval effect ──────
+
+  /**
+   * Execute one approved `memory.lifecycle` mutation as the recovered
+   * approval effect. Revalidates the exact approval (kind, deterministic
+   * identity, workspace linkage, status, expiry), recovers the requester from
+   * the immutable request Journey evidence, byte-verifies the request hash
+   * against the rebuilt mutation, re-checks current policy, and then executes
+   * ONLY through the approved producer — which revalidates everything again
+   * inside its own transaction. Governance violations throw the terminal
+   * {@link MemoryLifecycleApplyError}; infrastructure errors propagate raw so
+   * the approval-effect worker defers the effect for bounded retry.
+   */
+  public executeApprovedMemoryLifecycleMutation(input: {
+    workspaceId: string;
+    approvalId: string;
+  }): MemoryLifecycleApplyResult {
+    const authority = this.requireApprovalAuthority();
+    let approval: ApprovalRequest;
+    try {
+      approval = authority.approvals.get(input.approvalId);
+    } catch (error) {
+      if (error instanceof NotFoundError) {
+        throw new MemoryLifecycleApplyError("memory_lifecycle_approval_not_executable");
+      }
+      throw error;
+    }
+    if (approval.kind !== MEMORY_LIFECYCLE_APPROVAL_KIND) {
+      throw new MemoryLifecycleApplyError("memory_lifecycle_approval_not_executable");
+    }
+    const payload = approval.payload as Record<string, unknown> | undefined;
+    const binding = parseMemoryLifecycleApprovalBinding(payload?.memoryLifecycle);
+    const envelope = parseMemoryLifecycleRequestEnvelope(payload);
+    if (
+      !binding ||
+      !envelope ||
+      binding.workspaceId !== input.workspaceId ||
+      approval.linkage?.workspaceId !== input.workspaceId ||
+      deriveMemoryLifecycleApprovalId(binding) !== approval.approvalId
+    ) {
+      throw new MemoryLifecycleApplyError("memory_lifecycle_approval_not_executable");
+    }
+    try {
+      this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    } catch {
+      throw new MemoryLifecycleApplyError("memory_lifecycle_policy_blocked");
+    }
+    if (approval.status !== "approved" || !approval.resolvedBy) {
+      throw new MemoryLifecycleApplyError("memory_lifecycle_approval_not_executable");
+    }
+    if (approval.expiresAt && Date.parse(approval.expiresAt) <= Date.now()) {
+      throw new MemoryLifecycleApplyError("memory_lifecycle_approval_expired");
+    }
+    const evidence = authority.governanceJourneyEvents.findByIdempotencyKey(
+      memoryLifecycleRequestJourneyIdempotencyKey(approval.approvalId),
+    );
+    if (!evidence || evidence.approvalId !== approval.approvalId || evidence.actorId !== envelope.requesterId) {
+      throw new MemoryLifecycleApplyError("memory_lifecycle_request_evidence_missing");
+    }
+    if (
+      buildMemoryLifecycleRequestSha256({
+        workspaceId: binding.workspaceId,
+        subjectKind: binding.subjectKind,
+        subjectId: binding.subjectId,
+        action: binding.action,
+        mutation: envelope.mutation,
+      }) !== binding.requestSha256
+    ) {
+      throw new MemoryLifecycleApplyError("memory_lifecycle_request_drift");
+    }
+    const resolvedBy = approval.resolvedBy;
+    const approvedMutation: ApprovedMemoryMutationContext = { approvalId: approval.approvalId };
+    try {
+      if (binding.action === "item_updated") {
+        const itemId = binding.subjectId;
+        if (!itemId || !isRecordValue(envelope.mutation)) {
+          throw new MemoryLifecycleApplyError("memory_lifecycle_approval_not_executable");
+        }
+        const applied = this.patchApprovedMemoryItem(
+          itemId,
+          envelope.mutation as MemoryLifecyclePatch,
+          resolvedBy,
+          approvedMutation,
+        );
+        return {
+          disposition: applied.changed ? "applied" : "no_op",
+          action: binding.action,
+          subjectKind: binding.subjectKind,
+          subjectId: itemId,
+          workspaceId: binding.workspaceId,
+          itemIds: [itemId],
+          changedCount: applied.changed ? 1 : 0,
+        };
+      }
+      if (binding.action === "items_forgotten") {
+        const mutation = parseApprovedForgetMutation(envelope.mutation);
+        if (!mutation) {
+          throw new MemoryLifecycleApplyError("memory_lifecycle_approval_not_executable");
+        }
+        const response = this.forgetMemory(
+          {
+            itemIds: mutation.itemIds,
+            workspaceId: binding.workspaceId,
+            actorId: resolvedBy,
+            actionId: mutation.actionId,
+          },
+          { approvedMutation },
+        );
+        return {
+          disposition: response.forgottenCount > 0 ? "applied" : "no_op",
+          action: binding.action,
+          subjectKind: binding.subjectKind,
+          ...(binding.subjectId === undefined ? {} : { subjectId: binding.subjectId }),
+          workspaceId: binding.workspaceId,
+          itemIds: mutation.itemIds,
+          changedCount: response.forgottenCount,
+        };
+      }
+      const mutation = parseApprovedBatchMutation(envelope.mutation);
+      if (!mutation) {
+        throw new MemoryLifecycleApplyError("memory_lifecycle_approval_not_executable");
+      }
+      const response = this.batchMutateMemoryItems(
+        { actionId: mutation.actionId, source: "approved_memory_lifecycle", operations: mutation.operations },
+        resolvedBy,
+        approvedMutation,
+      );
+      return {
+        disposition: response.appliedCount > 0 ? "applied" : "no_op",
+        action: binding.action,
+        subjectKind: binding.subjectKind,
+        workspaceId: binding.workspaceId,
+        itemIds: response.targetItemIds,
+        changedCount: response.appliedCount,
+      };
+    } catch (error) {
+      if (error instanceof MemoryLifecycleApplyError) throw error;
+      if (
+        error instanceof ConflictError ||
+        error instanceof NotFoundError ||
+        error instanceof ValidationError ||
+        error instanceof PolicyViolationError ||
+        error instanceof TypeError
+      ) {
+        throw new MemoryLifecycleApplyError("memory_lifecycle_apply_conflict");
+      }
+      throw error;
+    }
+  }
+
+  private memoryEmbeddingRuntimeOptions(attribution: ModelUsageAttributionContext): MemoryEmbeddingRuntimeOptions {
+    return {
+      ...(this.deps.acquireLocalEmbeddingLease
+        ? { acquireLocalServiceLease: this.deps.acquireLocalEmbeddingLease }
+        : {}),
+      ...(this.deps.prepareEmbeddingUsageDispatch
+        ? { prepareModelUsageDispatch: this.deps.prepareEmbeddingUsageDispatch }
+        : {}),
+      modelUsageAttribution: attribution,
+    };
+  }
 
   public listMemoryLearnings(
     input: {
@@ -239,25 +897,30 @@ export class MemoryLifecycleService {
   ): { previous: MemoryLearningRecord; next: MemoryLearningRecord } {
     this.ensureLearningSchema();
     const previous = this.requireMemoryLearning(learningId);
-    const next = this.insertMemoryLearning(
-      {
-        ...input,
-        workspaceId: input.workspaceId ?? previous.workspaceId,
-        key: input.key || previous.key,
-      },
-      actorId,
-      input.authority === "agent_proposed" ? "proposed" : "trusted",
-    );
-    const now = new Date().toISOString();
-    this.deps.admin.gatewaySql
-      .prepare(
-        `
+    // Atomic supersession with explicit correction provenance: the successor
+    // insert and the predecessor's superseded_by linkage commit together.
+    const next = this.runStructuredMemoryTransaction(() => {
+      const inserted = this.insertMemoryLearning(
+        {
+          ...input,
+          workspaceId: input.workspaceId ?? previous.workspaceId,
+          key: input.key || previous.key,
+        },
+        actorId,
+        input.authority === "agent_proposed" ? "proposed" : "trusted",
+      );
+      const now = new Date().toISOString();
+      this.deps.admin.gatewaySql
+        .prepare(
+          `
       UPDATE memory_learnings
       SET status = 'superseded', superseded_by_id = @nextId, updated_at = @updatedAt
       WHERE learning_id = @learningId
     `,
-      )
-      .run({ learningId, nextId: next.learningId, updatedAt: now });
+        )
+        .run({ learningId, nextId: inserted.learningId, updatedAt: now });
+      return inserted;
+    });
     this.deps.admin.publishRealtime("system", "memory", {
       type: "memory_learning_superseded",
       learningId,
@@ -349,11 +1012,7 @@ export class MemoryLifecycleService {
     const title = requireTrimmedText(input.title, "title");
     const summary = optionalTrimmedText(input.summary);
     const aliases = normalizeStringArray(input.aliases);
-    const metadata = await withMemoryEmbeddingMetadata(
-      input.metadata ?? {},
-      buildStructuredMemoryEmbeddingText([title, summary, ...aliases]),
-    );
-    const entity: MemoryEntityRecord = {
+    const entityWithoutEmbedding: MemoryEntityRecord = {
       id: randomUUID(),
       workspaceId: normalizeStructuredWorkspaceId(input.workspaceId),
       scope: normalizeStructuredScope(input.scope),
@@ -364,19 +1023,38 @@ export class MemoryLifecycleService {
       status: "active",
       confidence: normalizeConfidence(input.confidence),
       sourceRefs: normalizeSourceRefs(input.sourceRefs, actorId),
-      metadata,
+      metadata: { ...(input.metadata ?? {}) },
       authority: normalizeAuthority(input.authority),
       createdAt: now,
       updatedAt: now,
     };
     this.assertStructuredMemoryWriteAllowed(
-      entity.authority,
-      serializeStructuredMemoryForGate(entity),
-      entity.workspaceId,
+      entityWithoutEmbedding.authority,
+      serializeStructuredMemoryForGate(entityWithoutEmbedding),
+      entityWithoutEmbedding.workspaceId,
     );
-    this.deps.admin.gatewaySql
-      .prepare(
-        `
+    const entity: MemoryEntityRecord = {
+      ...entityWithoutEmbedding,
+      metadata: await withMemoryEmbeddingMetadata(
+        entityWithoutEmbedding.metadata,
+        buildStructuredMemoryEmbeddingText([title, summary, ...aliases]),
+        undefined,
+        this.memoryEmbeddingRuntimeOptions({
+          operationId: `memory-entity:${entityWithoutEmbedding.id}:embedding`,
+          dispatchGeneration: "initial-write",
+          workspaceId: entityWithoutEmbedding.workspaceId,
+          sessionId: firstSourceRefOfType(entityWithoutEmbedding.sourceRefs, "session"),
+          turnId: firstSourceRefOfType(entityWithoutEmbedding.sourceRefs, "turn"),
+          durableRunId: firstSourceRefOfType(entityWithoutEmbedding.sourceRefs, "run"),
+          utilityKind: "memory_entity_write_embedding",
+          agentId: actorId,
+        }),
+      ),
+    };
+    this.runStructuredMemoryTransaction(() => {
+      this.deps.admin.gatewaySql
+        .prepare(
+          `
       INSERT INTO memory_entities (
         entity_id, workspace_id, scope, title, entity_type, aliases_json, summary, status, confidence,
         source_refs_json, metadata_json, authority, created_at, updated_at, forgotten_at, superseded_by_id
@@ -385,24 +1063,34 @@ export class MemoryLifecycleService {
         @sourceRefsJson, @metadataJson, @authority, @createdAt, @updatedAt, NULL, NULL
       )
     `,
-      )
-      .run({
-        id: entity.id,
-        workspaceId: entity.workspaceId,
-        scope: entity.scope,
-        title: entity.title,
-        entityType: entity.entityType,
-        aliasesJson: JSON.stringify(entity.aliases),
-        summary: entity.summary ?? null,
-        status: entity.status,
-        confidence: entity.confidence,
-        sourceRefsJson: JSON.stringify(entity.sourceRefs),
-        metadataJson: JSON.stringify(entity.metadata),
-        authority: entity.authority,
-        createdAt: entity.createdAt,
-        updatedAt: entity.updatedAt,
-      });
-    this.recordStructuredMemoryChange("entity", entity.id, "created", actorId, { title: entity.title });
+        )
+        .run({
+          id: entity.id,
+          workspaceId: entity.workspaceId,
+          scope: entity.scope,
+          title: entity.title,
+          entityType: entity.entityType,
+          aliasesJson: JSON.stringify(entity.aliases),
+          summary: entity.summary ?? null,
+          status: entity.status,
+          confidence: entity.confidence,
+          sourceRefsJson: JSON.stringify(entity.sourceRefs),
+          metadataJson: JSON.stringify(entity.metadata),
+          authority: entity.authority,
+          createdAt: entity.createdAt,
+          updatedAt: entity.updatedAt,
+        });
+      this.recordStructuredMemoryChange(
+        "entity",
+        entity.id,
+        "created",
+        actorId,
+        { title: entity.title },
+        {
+          workspaceId: entity.workspaceId,
+        },
+      );
+    });
     this.deps.admin.publishRealtime("system", "memory", {
       type: "memory_entity_created",
       entityId: entity.id,
@@ -418,20 +1106,21 @@ export class MemoryLifecycleService {
       return current;
     }
     const now = new Date().toISOString();
-    this.deps.admin.gatewaySql
-      .prepare(
-        `
+    this.runStructuredMemoryTransaction(() => {
+      this.deps.admin.gatewaySql
+        .prepare(
+          `
       UPDATE memory_entities
       SET status = 'forgotten',
           forgotten_at = @forgottenAt,
           updated_at = @updatedAt
       WHERE entity_id = @entityId
     `,
-      )
-      .run({ entityId, forgottenAt: now, updatedAt: now });
-    this.deps.admin.gatewaySql
-      .prepare(
-        `
+        )
+        .run({ entityId, forgottenAt: now, updatedAt: now });
+      this.deps.admin.gatewaySql
+        .prepare(
+          `
       UPDATE memory_relations
       SET status = 'superseded',
           degraded_reason = @degradedReason,
@@ -439,13 +1128,23 @@ export class MemoryLifecycleService {
       WHERE status = 'active'
         AND (from_entity_id = @entityId OR to_entity_id = @entityId)
     `,
-      )
-      .run({
+        )
+        .run({
+          entityId,
+          degradedReason: "linked_entity_forgotten",
+          updatedAt: now,
+        });
+      this.recordStructuredMemoryChange(
+        "entity",
         entityId,
-        degradedReason: "linked_entity_forgotten",
-        updatedAt: now,
-      });
-    this.recordStructuredMemoryChange("entity", entityId, "forgotten", actorId, { previousStatus: current.status });
+        "forgotten",
+        actorId,
+        { previousStatus: current.status },
+        {
+          workspaceId: current.workspaceId,
+        },
+      );
+    });
     this.deps.admin.publishRealtime("system", "memory", {
       type: "memory_entity_forgotten",
       entityId,
@@ -498,11 +1197,7 @@ export class MemoryLifecycleService {
     const now = new Date().toISOString();
     const relationType = input.relationType.trim() || "related_to";
     const title = input.title?.trim() || `${from.title} ${relationType} ${to.title}`;
-    const metadata = await withMemoryEmbeddingMetadata(
-      input.metadata ?? {},
-      buildStructuredMemoryEmbeddingText([title]),
-    );
-    const relation: MemoryRelationRecord = {
+    const relationWithoutEmbedding: MemoryRelationRecord = {
       id: randomUUID(),
       workspaceId: normalizeStructuredWorkspaceId(input.workspaceId ?? from.workspaceId),
       scope: normalizeStructuredScope(input.scope),
@@ -513,19 +1208,38 @@ export class MemoryLifecycleService {
       status: "active",
       confidence: normalizeConfidence(input.confidence),
       sourceRefs: normalizeSourceRefs(input.sourceRefs, actorId),
-      metadata,
+      metadata: { ...(input.metadata ?? {}) },
       authority: normalizeAuthority(input.authority),
       createdAt: now,
       updatedAt: now,
     };
     this.assertStructuredMemoryWriteAllowed(
-      relation.authority,
-      serializeStructuredMemoryForGate(relation),
-      relation.workspaceId,
+      relationWithoutEmbedding.authority,
+      serializeStructuredMemoryForGate(relationWithoutEmbedding),
+      relationWithoutEmbedding.workspaceId,
     );
-    this.deps.admin.gatewaySql
-      .prepare(
-        `
+    const relation: MemoryRelationRecord = {
+      ...relationWithoutEmbedding,
+      metadata: await withMemoryEmbeddingMetadata(
+        relationWithoutEmbedding.metadata,
+        buildStructuredMemoryEmbeddingText([title]),
+        undefined,
+        this.memoryEmbeddingRuntimeOptions({
+          operationId: `memory-relation:${relationWithoutEmbedding.id}:embedding`,
+          dispatchGeneration: "initial-write",
+          workspaceId: relationWithoutEmbedding.workspaceId,
+          sessionId: firstSourceRefOfType(relationWithoutEmbedding.sourceRefs, "session"),
+          turnId: firstSourceRefOfType(relationWithoutEmbedding.sourceRefs, "turn"),
+          durableRunId: firstSourceRefOfType(relationWithoutEmbedding.sourceRefs, "run"),
+          utilityKind: "memory_relation_write_embedding",
+          agentId: actorId,
+        }),
+      ),
+    };
+    this.runStructuredMemoryTransaction(() => {
+      this.deps.admin.gatewaySql
+        .prepare(
+          `
       INSERT INTO memory_relations (
         relation_id, workspace_id, scope, title, from_entity_id, to_entity_id, relation_type, status, confidence,
         source_refs_json, metadata_json, authority, degraded_reason, created_at, updated_at, forgotten_at, superseded_by_id
@@ -534,24 +1248,34 @@ export class MemoryLifecycleService {
         @sourceRefsJson, @metadataJson, @authority, NULL, @createdAt, @updatedAt, NULL, NULL
       )
     `,
-      )
-      .run({
-        id: relation.id,
-        workspaceId: relation.workspaceId,
-        scope: relation.scope,
-        title: relation.title,
-        fromEntityId: relation.fromEntityId,
-        toEntityId: relation.toEntityId,
-        relationType: relation.relationType,
-        status: relation.status,
-        confidence: relation.confidence,
-        sourceRefsJson: JSON.stringify(relation.sourceRefs),
-        metadataJson: JSON.stringify(relation.metadata),
-        authority: relation.authority,
-        createdAt: relation.createdAt,
-        updatedAt: relation.updatedAt,
-      });
-    this.recordStructuredMemoryChange("relation", relation.id, "created", actorId, { title: relation.title });
+        )
+        .run({
+          id: relation.id,
+          workspaceId: relation.workspaceId,
+          scope: relation.scope,
+          title: relation.title,
+          fromEntityId: relation.fromEntityId,
+          toEntityId: relation.toEntityId,
+          relationType: relation.relationType,
+          status: relation.status,
+          confidence: relation.confidence,
+          sourceRefsJson: JSON.stringify(relation.sourceRefs),
+          metadataJson: JSON.stringify(relation.metadata),
+          authority: relation.authority,
+          createdAt: relation.createdAt,
+          updatedAt: relation.updatedAt,
+        });
+      this.recordStructuredMemoryChange(
+        "relation",
+        relation.id,
+        "created",
+        actorId,
+        { title: relation.title },
+        {
+          workspaceId: relation.workspaceId,
+        },
+      );
+    });
     this.deps.admin.publishRealtime("system", "memory", {
       type: "memory_relation_created",
       relationId: relation.id,
@@ -602,11 +1326,7 @@ export class MemoryLifecycleService {
     const decisionText = requireTrimmedText(input.decision, "decision");
     const rationale = requireTrimmedText(input.rationale, "rationale");
     const title = input.title?.trim() || decisionText.slice(0, 120);
-    const metadata = await withMemoryEmbeddingMetadata(
-      input.metadata ?? {},
-      buildStructuredMemoryEmbeddingText([title, decisionText, rationale]),
-    );
-    const decision: MemoryDecisionRecord = {
+    const decisionWithoutEmbedding: MemoryDecisionRecord = {
       id: randomUUID(),
       workspaceId: normalizeStructuredWorkspaceId(input.workspaceId),
       scope: normalizeStructuredScope(input.scope),
@@ -623,19 +1343,40 @@ export class MemoryLifecycleService {
       status: "active",
       confidence: normalizeConfidence(input.confidence),
       sourceRefs: normalizeSourceRefs(input.sourceRefs, actorId),
-      metadata,
+      metadata: { ...(input.metadata ?? {}) },
       authority: normalizeAuthority(input.authority),
       createdAt: now,
       updatedAt: now,
     };
     this.assertStructuredMemoryWriteAllowed(
-      decision.authority,
-      serializeStructuredMemoryForGate(decision),
-      decision.workspaceId,
+      decisionWithoutEmbedding.authority,
+      serializeStructuredMemoryForGate(decisionWithoutEmbedding),
+      decisionWithoutEmbedding.workspaceId,
     );
-    this.deps.admin.gatewaySql
-      .prepare(
-        `
+    const decision: MemoryDecisionRecord = {
+      ...decisionWithoutEmbedding,
+      metadata: await withMemoryEmbeddingMetadata(
+        decisionWithoutEmbedding.metadata,
+        buildStructuredMemoryEmbeddingText([title, decisionText, rationale]),
+        undefined,
+        this.memoryEmbeddingRuntimeOptions({
+          operationId: `memory-decision:${decisionWithoutEmbedding.id}:embedding`,
+          dispatchGeneration: "initial-write",
+          workspaceId: decisionWithoutEmbedding.workspaceId,
+          sessionId:
+            decisionWithoutEmbedding.sessionId ?? firstSourceRefOfType(decisionWithoutEmbedding.sourceRefs, "session"),
+          turnId: firstSourceRefOfType(decisionWithoutEmbedding.sourceRefs, "turn"),
+          durableRunId:
+            decisionWithoutEmbedding.runId ?? firstSourceRefOfType(decisionWithoutEmbedding.sourceRefs, "run"),
+          utilityKind: "memory_decision_write_embedding",
+          agentId: actorId,
+        }),
+      ),
+    };
+    this.runStructuredMemoryTransaction(() => {
+      this.deps.admin.gatewaySql
+        .prepare(
+          `
       INSERT INTO memory_decisions (
         decision_id, workspace_id, scope, title, decision_text, alternatives_json, rationale, expected_outcome,
         review_at, retrospective_json, linked_entity_ids_json, linked_relation_ids_json, session_id, run_id,
@@ -648,30 +1389,40 @@ export class MemoryLifecycleService {
         @updatedAt, NULL, NULL
       )
     `,
-      )
-      .run({
-        id: decision.id,
-        workspaceId: decision.workspaceId,
-        scope: decision.scope,
-        title: decision.title,
-        decision: decision.decision,
-        alternativesJson: JSON.stringify(decision.alternatives),
-        rationale: decision.rationale,
-        expectedOutcome: decision.expectedOutcome ?? null,
-        reviewAt: decision.reviewAt ?? null,
-        linkedEntityIdsJson: JSON.stringify(decision.linkedEntityIds),
-        linkedRelationIdsJson: JSON.stringify(decision.linkedRelationIds),
-        sessionId: decision.sessionId ?? null,
-        runId: decision.runId ?? null,
-        status: decision.status,
-        confidence: decision.confidence,
-        sourceRefsJson: JSON.stringify(decision.sourceRefs),
-        metadataJson: JSON.stringify(decision.metadata),
-        authority: decision.authority,
-        createdAt: decision.createdAt,
-        updatedAt: decision.updatedAt,
-      });
-    this.recordStructuredMemoryChange("decision", decision.id, "created", actorId, { title: decision.title });
+        )
+        .run({
+          id: decision.id,
+          workspaceId: decision.workspaceId,
+          scope: decision.scope,
+          title: decision.title,
+          decision: decision.decision,
+          alternativesJson: JSON.stringify(decision.alternatives),
+          rationale: decision.rationale,
+          expectedOutcome: decision.expectedOutcome ?? null,
+          reviewAt: decision.reviewAt ?? null,
+          linkedEntityIdsJson: JSON.stringify(decision.linkedEntityIds),
+          linkedRelationIdsJson: JSON.stringify(decision.linkedRelationIds),
+          sessionId: decision.sessionId ?? null,
+          runId: decision.runId ?? null,
+          status: decision.status,
+          confidence: decision.confidence,
+          sourceRefsJson: JSON.stringify(decision.sourceRefs),
+          metadataJson: JSON.stringify(decision.metadata),
+          authority: decision.authority,
+          createdAt: decision.createdAt,
+          updatedAt: decision.updatedAt,
+        });
+      this.recordStructuredMemoryChange(
+        "decision",
+        decision.id,
+        "created",
+        actorId,
+        { title: decision.title },
+        {
+          workspaceId: decision.workspaceId,
+        },
+      );
+    });
     this.deps.admin.publishRealtime("system", "memory", {
       type: "memory_decision_created",
       decisionId: decision.id,
@@ -699,23 +1450,40 @@ export class MemoryLifecycleService {
       `${current.title}\n${current.decision}\n${retrospective.outcome}\n${retrospective.notes}`,
       current.workspaceId,
     );
-    this.deps.admin.gatewaySql
-      .prepare(
-        `
+    this.runStructuredMemoryTransaction(() => {
+      this.deps.admin.gatewaySql
+        .prepare(
+          `
       UPDATE memory_decisions
       SET retrospective_json = @retrospectiveJson,
           improvement_candidate_id = COALESCE(@improvementCandidateId, improvement_candidate_id),
           updated_at = @updatedAt
       WHERE decision_id = @decisionId
     `,
-      )
-      .run({
+        )
+        .run({
+          decisionId,
+          retrospectiveJson: JSON.stringify(retrospective),
+          improvementCandidateId: retrospective.improvementCandidateId ?? null,
+          updatedAt: now,
+        });
+      // Explicit correction provenance: the retrospective is a correction of
+      // the decision record, and its improvement-candidate linkage (when
+      // given) is carried verbatim in history and Journey evidence.
+      this.recordStructuredMemoryChange(
+        "decision",
         decisionId,
-        retrospectiveJson: JSON.stringify(retrospective),
-        improvementCandidateId: retrospective.improvementCandidateId ?? null,
-        updatedAt: now,
-      });
-    this.recordStructuredMemoryChange("decision", decisionId, "retrospective_added", actorId, { ...retrospective });
+        "retrospective_added",
+        actorId,
+        { ...retrospective, correctionProvenance: "explicit" },
+        {
+          workspaceId: current.workspaceId,
+          ...(retrospective.improvementCandidateId === undefined
+            ? {}
+            : { correctionRefId: retrospective.improvementCandidateId }),
+        },
+      );
+    });
     this.deps.admin.publishRealtime("system", "memory", {
       type: "memory_decision_retrospective_added",
       decisionId,
@@ -731,18 +1499,27 @@ export class MemoryLifecycleService {
       return current;
     }
     const now = new Date().toISOString();
-    this.deps.admin.gatewaySql
-      .prepare(
-        `
+    this.runStructuredMemoryTransaction(() => {
+      this.deps.admin.gatewaySql
+        .prepare(
+          `
       UPDATE memory_decisions
       SET status = 'forgotten',
           forgotten_at = @forgottenAt,
           updated_at = @updatedAt
       WHERE decision_id = @decisionId
     `,
-      )
-      .run({ decisionId, forgottenAt: now, updatedAt: now });
-    this.recordStructuredMemoryChange("decision", decisionId, "forgotten", actorId, { previousStatus: current.status });
+        )
+        .run({ decisionId, forgottenAt: now, updatedAt: now });
+      this.recordStructuredMemoryChange(
+        "decision",
+        decisionId,
+        "forgotten",
+        actorId,
+        { previousStatus: current.status },
+        { workspaceId: current.workspaceId },
+      );
+    });
     this.deps.admin.publishRealtime("system", "memory", {
       type: "memory_decision_forgotten",
       decisionId,
@@ -894,6 +1671,57 @@ export class MemoryLifecycleService {
     return rows.map((row) => mapMemoryItemRow(this.deps.admin, row));
   }
 
+  /**
+   * Canonical runtime read for an explicitly routed memory item. It applies the
+   * same workspace/global compatibility scope as normal memory reads while
+   * excluding forgotten, expired, foreign-workspace, and malformed rows.
+   */
+  public getActiveMemoryItemForRoutedContext(
+    itemId: string,
+    workspaceId: string,
+    options: { allowGlobal?: boolean; nowIso?: string } = {},
+  ): MemoryItemRecord | undefined {
+    const normalizedItemId = itemId.trim();
+    if (!normalizedItemId || normalizedItemId.length > 256) {
+      return undefined;
+    }
+    const normalizedWorkspaceId = normalizeStructuredWorkspaceId(workspaceId);
+    const nowIso = options.nowIso ?? new Date().toISOString();
+    if (!isCanonicalIsoTimestamp(nowIso)) {
+      return undefined;
+    }
+    const row = this.deps.admin.gatewaySql
+      .prepare(
+        `
+      SELECT item_id, namespace, title, content, metadata_json, pinned, ttl_override_seconds, expires_at, status,
+             created_at, updated_at, forgotten_at, workspace_id
+      FROM memory_items
+      WHERE item_id = @itemId
+        AND status = 'active'
+        AND (expires_at IS NULL OR expires_at > @now)
+        AND ${buildMemoryWorkspaceScopeSql(this.deps.admin.gatewaySql.dialect, {
+          includeGlobal: options.allowGlobal === true,
+        })}
+      LIMIT 1
+    `,
+      )
+      .get({ itemId: normalizedItemId, workspaceId: normalizedWorkspaceId, now: nowIso }) as
+      | MemoryForgetSelectionRow
+      | undefined;
+    if (
+      !row ||
+      !isActiveRoutedContextMemoryRow(row, {
+        itemId: normalizedItemId,
+        workspaceId: normalizedWorkspaceId,
+        allowGlobal: options.allowGlobal === true,
+        nowIso,
+      })
+    ) {
+      return undefined;
+    }
+    return mapMemoryItemRow(this.deps.admin, row);
+  }
+
   public inspectExpiredActiveMemoryItems(input: { limit?: number; nowIso?: string } = {}): {
     totalCount: number;
     items: MemoryItemRecord[];
@@ -946,7 +1774,14 @@ export class MemoryLifecycleService {
     };
   }
 
-  public forgetExpiredActiveMemoryItems(input: { limit?: number; nowIso?: string; actorId?: string } = {}): {
+  /**
+   * Scheduled-maintenance expiry flush. HX-402 P1: runs under the
+   * module-private branded system authority — never a caller-supplied actor —
+   * and every expiry commits its status flip, history row, governed
+   * `maintenance_expired` event (system-actor-only in the frozen registry),
+   * and Journey evidence in one transaction.
+   */
+  public forgetExpiredActiveMemoryItems(input: { limit?: number; nowIso?: string } = {}): {
     totalCount: number;
     retainedPinnedCount: number;
     remainingUnpinnedCount: number;
@@ -970,25 +1805,54 @@ export class MemoryLifecycleService {
       LIMIT @limit
     `,
       )
-      .all({ now: nowIso, limit }) as Array<{
-      item_id: string;
-      namespace: string;
-      title: string;
-      content: string;
-      metadata_json: string | null;
-      pinned: number;
-      ttl_override_seconds: number | null;
-      expires_at: string | null;
-      status: MemoryItemRecord["status"];
-      created_at: string;
-      updated_at: string;
-      forgotten_at: string | null;
-      workspace_id: string | null;
-    }>;
+      .all({ now: nowIso, limit }) as MemoryForgetSelectionRow[];
 
-    const forgottenItems = rows.map((row) =>
-      this.forgetMemoryItemInternal(row.item_id, input.actorId ?? "memory-flush", { requireFeature: false }),
-    );
+    const authority = (this.maintenanceSystemAuthority ??= mintMemoryMaintenanceSystemAuthority());
+    const governedEvidence = this.getGovernedLifecycleRepository();
+    const runTransaction = requireMemoryBatchTransaction(this.deps.admin.gatewaySql);
+    const forgottenItems: MemoryItemRecord[] = [];
+    for (const row of rows) {
+      const forgotten = runTransaction(() => {
+        const current = requireMemoryItem(this.deps.admin, row.item_id);
+        if (current.status === "forgotten") {
+          return current;
+        }
+        const occurredAt = new Date().toISOString();
+        const updateResult = this.deps.admin.gatewaySql
+          .prepare(
+            `
+          UPDATE memory_items
+          SET status = 'forgotten', forgotten_at = @forgottenAt, updated_at = @updatedAt
+          WHERE item_id = @itemId AND status = 'active'
+        `,
+          )
+          .run({ itemId: current.itemId, forgottenAt: occurredAt, updatedAt: occurredAt }) as { changes: number };
+        if (updateResult.changes !== 1) {
+          return requireMemoryItem(this.deps.admin, current.itemId);
+        }
+        const change = recordMemoryChange(this.deps.admin, current.itemId, "forgotten", authority.actorId, {
+          previousStatus: "active",
+          systemAuthority: "memory_maintenance",
+          expiredAt: current.expiresAt ?? null,
+          storesRawContent: false,
+        });
+        const updated = requireMemoryItem(this.deps.admin, current.itemId);
+        persistMemorySystemExpiryEvidence(governedEvidence, {
+          authority,
+          change,
+          item: updated,
+          occurredAt: change.createdAt,
+        });
+        return updated;
+      });
+      forgottenItems.push(forgotten);
+      this.deps.admin.publishRealtime("system", "memory", {
+        type: "memory_item_forgotten",
+        itemId: forgotten.itemId,
+        namespace: forgotten.namespace,
+        lifecycleState: forgotten.lifecycleState,
+      });
+    }
     return {
       totalCount: ledger.totalCount,
       retainedPinnedCount: ledger.retainedPinnedCount,
@@ -1059,97 +1923,207 @@ export class MemoryLifecycleService {
     };
   }
 
-  public patchMemoryItem(itemId: string, patch: MemoryLifecyclePatch, actorId = "operator"): MemoryItemRecord {
+  /**
+   * HX-402 P1: the unapproved direct-patch branch is retired. This entry point
+   * only executes with a resolved `memory.lifecycle` approval; the route
+   * surface requests approvals via {@link requestMemoryItemPatchApproval}.
+   */
+  public patchMemoryItem(
+    itemId: string,
+    patch: MemoryLifecyclePatch,
+    actorId = "operator",
+    approvedMutation?: ApprovedMemoryMutationContext,
+  ): MemoryItemRecord {
     this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
-    const current = requireMemoryItem(this.deps.admin, itemId);
-    const now = new Date().toISOString();
-    const nextTtlOverrideSeconds =
-      patch.ttlOverrideSeconds === null
-        ? null
-        : patch.ttlOverrideSeconds !== undefined
-          ? Math.max(1, Math.min(31_536_000, Math.floor(patch.ttlOverrideSeconds)))
-          : (current.ttlOverrideSeconds ?? null);
-    const nextExpiresAt =
-      patch.ttlOverrideSeconds === null
-        ? null
-        : patch.ttlOverrideSeconds !== undefined
-          ? new Date(Date.parse(now) + Number(nextTtlOverrideSeconds) * 1000).toISOString()
-          : (current.expiresAt ?? null);
-    const next = {
-      title: patch.title !== undefined ? patch.title.trim() : current.title,
-      content: patch.content !== undefined ? patch.content : current.content,
-      metadata: patch.metadata !== undefined ? patch.metadata : current.metadata,
-      pinned: patch.pinned !== undefined ? patch.pinned : current.pinned,
-      ttlOverrideSeconds: nextTtlOverrideSeconds,
-      expiresAt: nextExpiresAt,
-    };
-    this.deps.admin.gatewaySql
-      .prepare(
-        `
-      UPDATE memory_items
-      SET title = @title,
-          content = @content,
-          metadata_json = @metadataJson,
-          pinned = @pinned,
-          ttl_override_seconds = @ttlOverrideSeconds,
-          expires_at = @expiresAt,
-          updated_at = @updatedAt
-      WHERE item_id = @itemId
-    `,
-      )
-      .run({
-        itemId,
-        title: next.title,
-        content: next.content,
-        metadataJson: JSON.stringify(next.metadata ?? {}),
-        pinned: next.pinned ? 1 : 0,
-        ttlOverrideSeconds: next.ttlOverrideSeconds,
-        expiresAt: next.expiresAt,
-        updatedAt: now,
-      });
-    if (patch.pinned !== undefined) {
-      recordMemoryChange(this.deps.admin, itemId, "pin_changed", actorId, { pinned: next.pinned });
-    }
-    if (patch.ttlOverrideSeconds !== undefined) {
-      const lifecycleState = deriveMemoryItemLifecycleState(
-        {
-          status: current.status,
-          expiresAt: next.expiresAt ?? undefined,
-          forgottenAt: current.forgottenAt,
-        },
-        now,
-      );
-      recordMemoryChange(this.deps.admin, itemId, "ttl_changed", actorId, {
-        ttlOverrideSeconds: next.ttlOverrideSeconds,
-        expiresAt: next.expiresAt,
-        lifecycleState,
+    if (!approvedMutation) {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: "Direct memory item mutation is retired; request a memory.lifecycle approval instead.",
       });
     }
-    recordMemoryChange(this.deps.admin, itemId, "updated", actorId, {
-      title: next.title,
-      metadata: next.metadata ?? {},
-    });
-    const updated = requireMemoryItem(this.deps.admin, itemId);
-    this.deps.admin.publishRealtime("system", "memory", {
-      type: "memory_item_updated",
-      itemId: updated.itemId,
-      namespace: updated.namespace,
-      lifecycleState: updated.lifecycleState,
-      expiresAt: updated.expiresAt,
-    });
-    return updated;
+    return this.patchApprovedMemoryItem(itemId, patch, actorId, approvedMutation).item;
   }
 
+  private patchApprovedMemoryItem(
+    itemId: string,
+    patch: MemoryLifecyclePatch,
+    actorId: string,
+    approvedMutation: ApprovedMemoryMutationContext,
+  ): { item: MemoryItemRecord; changed: boolean } {
+    // Snapshot the approved material once. Service callers are not assumed to
+    // hand us an inert JSON.parse result, so re-reading a getter/proxy-backed
+    // patch after hashing could otherwise apply bytes the approval never bound.
+    const approvedPatch = snapshotApprovedMemoryItemPatch(patch);
+    const initial = requireWorkspaceOwnedMemoryItem(requireMemoryItem(this.deps.admin, itemId));
+    const requestSha256 = buildMemoryLifecycleRequestSha256({
+      workspaceId: initial.workspaceId,
+      subjectKind: "memory_item",
+      subjectId: initial.itemId,
+      action: "item_updated",
+      mutation: approvedPatch,
+    });
+    const governedEvidence = this.getGovernedLifecycleRepository();
+    const runTransaction = requireMemoryBatchTransaction(this.deps.admin.gatewaySql);
+    const transactionResult = runTransaction(() => {
+      applyPostgresRowLockTimeout(this.deps.admin.gatewaySql);
+      const current = requireWorkspaceOwnedMemoryItem(requireMemoryItem(this.deps.admin, itemId));
+      if (current.workspaceId !== initial.workspaceId) {
+        throw new ConflictError({
+          code: "WRITE_CONFLICT",
+          message: "Memory item workspace ownership changed before the approved mutation.",
+        });
+      }
+      const authority = resolveApprovedMemoryMutation(this.deps.admin.gatewaySql, {
+        context: approvedMutation,
+        workspaceId: current.workspaceId,
+        actorId,
+        subjectKind: "memory_item",
+        subjectId: current.itemId,
+        action: "item_updated",
+        requestSha256,
+      });
+      const eventPlans = approvedMemoryPatchEventPlans(approvedPatch, authority, current);
+      const replayEntries = eventPlans.map((plan) => ({ plan, change: this.findMemoryChange(plan.changeId) }));
+      const replayCount = replayEntries.filter((entry) => entry.change !== undefined).length;
+      if (replayCount > 0) {
+        if (replayCount !== eventPlans.length) {
+          throw new ConflictError({
+            code: "WRITE_CONFLICT",
+            message: "Approved memory patch contains a partial immutable replay.",
+          });
+        }
+        for (const entry of replayEntries) {
+          const { plan, change: existingChange } = entry;
+          if (!existingChange) {
+            throw new ConflictError({
+              code: "WRITE_CONFLICT",
+              message: "Approved memory patch contains a partial immutable replay.",
+            });
+          }
+          const actualFieldCodes = approvedMemoryReplayFieldCodes(existingChange.payload, plan.fieldCodes);
+          const historyPayload = approvedMemoryHistoryPayload(authority, "approved_patch", actualFieldCodes);
+          const change = recordMemoryChange(
+            this.deps.admin,
+            current.itemId,
+            plan.changeType,
+            authority.actorId,
+            historyPayload,
+            { changeId: plan.changeId, createdAt: authority.occurredAt },
+          );
+          persistApprovedMemoryMutationEvidence(governedEvidence, {
+            authority,
+            change,
+            subjectId: current.itemId,
+            action: plan.action,
+            lifecycleState: current.lifecycleState,
+            fieldCodes: actualFieldCodes,
+          });
+        }
+        return { item: current, changed: false };
+      }
+      if (
+        buildMemoryLifecycleStateSha256(buildMemoryItemApprovalStateMaterial(current)) !== authority.expectedStateSha256
+      ) {
+        throw new ConflictError({
+          code: "WRITE_CONFLICT",
+          message: "Memory item state changed after approval review.",
+        });
+      }
+
+      const next = buildApprovedMemoryItemPatch(current, approvedPatch, authority.occurredAt);
+      const changedFields = approvedMemoryPatchChangedFields(current, next);
+      if (changedFields.length === 0) {
+        return { item: current, changed: false };
+      }
+      const updateResult = this.deps.admin.gatewaySql
+        .prepare(
+          `
+          UPDATE memory_items
+          SET title = @title,
+              content = @content,
+              metadata_json = @metadataJson,
+              pinned = @pinned,
+              ttl_override_seconds = @ttlOverrideSeconds,
+              expires_at = @expiresAt,
+              updated_at = @updatedAt
+          WHERE item_id = @itemId AND updated_at = @expectedUpdatedAt
+        `,
+        )
+        .run({
+          itemId: current.itemId,
+          title: next.title,
+          content: next.content,
+          metadataJson: canonicalJsonString(next.metadata),
+          pinned: next.pinned ? 1 : 0,
+          ttlOverrideSeconds: next.ttlOverrideSeconds,
+          expiresAt: next.expiresAt,
+          updatedAt: authority.occurredAt,
+          expectedUpdatedAt: current.updatedAt,
+        }) as { changes: number };
+      if (updateResult.changes !== 1) {
+        throw new ConflictError({
+          code: "WRITE_CONFLICT",
+          message: "Memory item changed during the approved atomic mutation.",
+        });
+      }
+      const updated = requireMemoryItem(this.deps.admin, current.itemId);
+      for (const plan of eventPlans) {
+        const actualFieldCodes = plan.fieldCodes.filter((field) => changedFields.includes(field));
+        if (actualFieldCodes.length === 0) continue;
+        const historyPayload = approvedMemoryHistoryPayload(authority, "approved_patch", actualFieldCodes);
+        const change = recordMemoryChange(
+          this.deps.admin,
+          current.itemId,
+          plan.changeType,
+          authority.actorId,
+          historyPayload,
+          { changeId: plan.changeId, createdAt: authority.occurredAt },
+        );
+        persistApprovedMemoryMutationEvidence(governedEvidence, {
+          authority,
+          change,
+          subjectId: current.itemId,
+          action: plan.action,
+          lifecycleState: updated.lifecycleState,
+          fieldCodes: actualFieldCodes,
+        });
+      }
+      return { item: updated, changed: true };
+    });
+    if (transactionResult.changed) {
+      this.deps.admin.publishRealtime("system", "memory", {
+        type: "memory_item_updated",
+        itemId: transactionResult.item.itemId,
+        namespace: transactionResult.item.namespace,
+        lifecycleState: transactionResult.item.lifecycleState,
+        expiresAt: transactionResult.item.expiresAt,
+      });
+    }
+    return transactionResult;
+  }
+
+  /**
+   * HX-402 P1: the unapproved single-item forget branch is retired. This entry
+   * point only executes with a resolved `memory.lifecycle` approval; the route
+   * surface requests approvals via {@link requestMemoryForgetApproval}.
+   */
   public forgetMemoryItem(
     itemId: string,
     actorId = "operator",
     options: MemoryForgetItemOptions = {},
   ): MemoryItemRecord {
     this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    if (!options.approvedMutation) {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: "Direct memory item forget is retired; request a memory.lifecycle approval instead.",
+      });
+    }
     const current = requireMemoryItem(this.deps.admin, itemId);
     const result = this.forgetMemory(
       {
         itemIds: [itemId],
+        workspaceId: current.workspaceId,
         actorId,
         actionId: options.actionId,
         source: options.source?.trim() || "gateway.memory.forget_item",
@@ -1157,50 +2131,10 @@ export class MemoryLifecycleService {
       {
         onCommit: options.onCommit,
         afterCommit: options.afterCommit,
+        approvedMutation: options.approvedMutation,
       },
     );
     return result.items[0] ?? (current.status === "forgotten" ? current : requireMemoryItem(this.deps.admin, itemId));
-  }
-
-  private forgetMemoryItemInternal(
-    itemId: string,
-    actorId = "operator",
-    options: { requireFeature: boolean },
-  ): MemoryItemRecord {
-    if (options.requireFeature) {
-      this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
-    }
-    const current = requireMemoryItem(this.deps.admin, itemId);
-    if (current.status === "forgotten") {
-      return current;
-    }
-    const now = new Date().toISOString();
-    this.deps.admin.gatewaySql
-      .prepare(
-        `
-      UPDATE memory_items
-      SET status = 'forgotten',
-          forgotten_at = @forgottenAt,
-          updated_at = @updatedAt
-      WHERE item_id = @itemId
-    `,
-      )
-      .run({
-        itemId,
-        forgottenAt: now,
-        updatedAt: now,
-      });
-    recordMemoryChange(this.deps.admin, itemId, "forgotten", actorId, {
-      previousStatus: current.status,
-    });
-    const forgotten = requireMemoryItem(this.deps.admin, itemId);
-    this.deps.admin.publishRealtime("system", "memory", {
-      type: "memory_item_forgotten",
-      itemId,
-      namespace: forgotten.namespace,
-      lifecycleState: forgotten.lifecycleState,
-    });
-    return forgotten;
   }
 
   public forgetMemory(
@@ -1237,371 +2171,533 @@ export class MemoryLifecycleService {
         message: "Memory forget includeGlobal requires an explicit workspaceId.",
       });
     }
-    const effectiveIncludeGlobal = workspaceId ? includeGlobal : true;
+    if (!hooks.approvedMutation) {
+      // HX-402 P1: the unapproved criteria-forget branch is retired. Criteria
+      // resolve to exact item IDs at request time inside
+      // requestMemoryForgetApproval; only the recovered approval effect
+      // executes, and it always carries the resolved approval context.
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: "Direct memory forget is retired; request a memory.lifecycle approval instead.",
+      });
+    }
+    const approvedHooks = {
+      ...hooks,
+      approvedMutation: hooks.approvedMutation,
+    };
+    const approvedItemIds = input.itemIds;
+    const approvedWorkspaceId = input.workspaceId;
+    const approvedActorId = input.actorId ?? "operator";
+    if (
+      !approvedWorkspaceId ||
+      approvedWorkspaceId !== approvedWorkspaceId.normalize("NFKC").trim() ||
+      approvedWorkspaceId.length > 256 ||
+      !Array.isArray(approvedItemIds) ||
+      approvedItemIds.length === 0 ||
+      approvedItemIds.some(
+        (itemId) => itemId !== itemId.normalize("NFKC").trim() || itemId.length === 0 || itemId.length > 256,
+      ) ||
+      new Set(approvedItemIds).size !== approvedItemIds.length ||
+      approvedActorId !== approvedActorId.normalize("NFKC").trim() ||
+      approvedActorId.length === 0 ||
+      approvedActorId.length > 256 ||
+      includeGlobal ||
+      !criteria.hasItemIds ||
+      criteria.namespace !== undefined ||
+      criteria.query !== undefined
+    ) {
+      throw new ValidationError({
+        code: "FIELD_INVALID",
+        field: "itemIds",
+        message: "Approved memory forget requires explicit workspace-owned item IDs only.",
+      });
+    }
+    return this.forgetApprovedMemoryItems(
+      [...approvedItemIds].sort(compareMemoryItemIds),
+      approvedWorkspaceId,
+      approvedActorId,
+      input.actionId,
+      approvedHooks,
+    );
+  }
 
-    const action = buildMemoryActionContext({
-      actionId: input.actionId,
-      ownerId: input.actorId?.trim() || "operator",
-      source: input.source,
-      defaultSource: "gateway.memory.forget",
+  private forgetApprovedMemoryItems(
+    itemIds: string[],
+    workspaceId: string,
+    actorId: string,
+    actionId: string | undefined,
+    hooks: MemoryForgetCommitHooks & { approvedMutation: ApprovedMemoryMutationContext },
+  ): MemoryForgetResponse {
+    const canonicalActionId = actionId?.normalize("NFKC").trim();
+    if (!canonicalActionId || canonicalActionId !== actionId || canonicalActionId.length > 120) {
+      throw new ValidationError({
+        code: "FIELD_REQUIRED",
+        field: "actionId",
+        message: "Approved memory forget requires a stable actionId.",
+      });
+    }
+    const uniqueItemIds = [...new Set(itemIds)];
+    if (uniqueItemIds.length !== itemIds.length) {
+      throw new ValidationError({ code: "FIELD_INVALID", field: "itemIds" });
+    }
+    const subjectKind = uniqueItemIds.length === 1 ? "memory_item" : "memory_item_batch";
+    const subjectId = uniqueItemIds.length === 1 ? uniqueItemIds[0] : undefined;
+    const requestSha256 = buildMemoryLifecycleRequestSha256({
+      workspaceId,
+      subjectKind,
+      subjectId,
+      action: "items_forgotten",
+      mutation: { actionId: canonicalActionId, itemIds: uniqueItemIds },
     });
-    const normalizedItemIds = [...criteria.itemIds].sort(compareMemoryItemIds);
-    const criteriaDigest = createHash("sha256")
-      .update(
-        JSON.stringify({
-          itemIds: normalizedItemIds,
-          namespace: criteria.namespace ?? null,
-          query: criteria.query ?? null,
-          workspaceId: workspaceId ?? null,
-          includeGlobal: effectiveIncludeGlobal,
-        }),
-      )
-      .digest("hex");
-    const gatewaySql = this.deps.admin.gatewaySql;
-    const runTransaction = requireMemoryBatchTransaction(gatewaySql);
-
+    const governedEvidence = this.getGovernedLifecycleRepository();
+    const runTransaction = requireMemoryBatchTransaction(this.deps.admin.gatewaySql);
     const transactionResult = runTransaction(() => {
-      if (gatewaySql.dialect === "postgres") {
-        gatewaySql
-          .prepare("SELECT set_config('lock_timeout', @lockTimeout, true)")
-          .run({ lockTimeout: `${MEMORY_FORGET_POSTGRES_LOCK_TIMEOUT_MS}ms` });
-      }
-      const clauses = ["1 = 1"];
-      const params: Record<string, string | number | null> = {};
-      if (normalizedItemIds.length > 0) {
-        const placeholders = normalizedItemIds.map((itemId, index) => {
-          const key = `itemId${index}`;
-          params[key] = itemId;
-          return `@${key}`;
-        });
-        clauses.push(`item_id IN (${placeholders.join(", ")})`);
-      }
-      if (criteria.namespace) {
-        clauses.push("namespace = @namespace");
-        params.namespace = criteria.namespace;
-      }
-      if (workspaceId) {
-        clauses.push(
-          buildMemoryWorkspaceScopeSql(gatewaySql.dialect, {
-            includeGlobal,
-          }),
-        );
-        params.workspaceId = workspaceId;
-      }
-      if (criteria.query) {
-        clauses.push(`(
-          LOWER(title) LIKE @query ESCAPE @escapeCharacter
-          OR LOWER(content) LIKE @query ESCAPE @escapeCharacter
-          OR LOWER(namespace) LIKE @query ESCAPE @escapeCharacter
-        )`);
-        params.query = `%${escapeMemoryLikePattern(criteria.query.toLowerCase())}%`;
-        params.escapeCharacter = "\\";
-      }
-      if (!criteria.hasItemIds) {
-        clauses.push("status = 'active'");
-        clauses.push("(expires_at IS NULL OR expires_at > @now)");
-        params.now = new Date().toISOString();
-      }
-
-      const lockClause = gatewaySql.dialect === "postgres" ? " FOR UPDATE" : "";
-      const matchedRows = gatewaySql
+      applyPostgresRowLockTimeout(this.deps.admin.gatewaySql);
+      const params: Record<string, string> = { workspaceId };
+      const placeholders = uniqueItemIds.map((itemId, index) => {
+        params[`itemId${index}`] = itemId;
+        return `@itemId${index}`;
+      });
+      const rows = this.deps.admin.gatewaySql
         .prepare(
           `
           SELECT item_id, namespace, title, content, metadata_json, pinned, ttl_override_seconds, expires_at, status,
                  created_at, updated_at, forgotten_at, workspace_id
           FROM memory_items
-          WHERE ${clauses.join(" AND ")}
-          ORDER BY item_id${lockClause}
+          WHERE workspace_id = @workspaceId AND item_id IN (${placeholders.join(", ")})
+          ORDER BY item_id${this.deps.admin.gatewaySql.dialect === "postgres" ? " FOR UPDATE" : ""}
         `,
         )
         .all(params) as MemoryForgetSelectionRow[];
-
-      if (criteria.hasItemIds && matchedRows.length !== normalizedItemIds.length) {
+      if (rows.length !== uniqueItemIds.length || rows.some((row, index) => row.item_id !== uniqueItemIds[index])) {
         throw new ValidationError({
           code: "FIELD_INVALID",
           field: "itemIds",
-          message: "Every explicit memory item must exist and satisfy the requested workspace and filters.",
+          message: "Every approved memory item must exist in the approval workspace.",
         });
       }
-
-      const activeItemIds = matchedRows
-        .filter((row) => row.status === "active")
-        .map((row) => row.item_id)
-        .sort(compareMemoryItemIds);
-      const alreadyForgottenCount = matchedRows.filter((row) => row.status === "forgotten").length;
-      const forgottenAt = new Date().toISOString();
-      const changedRows: MemoryForgetSelectionRow[] = [];
-      for (const itemIdChunk of chunkMemoryItemIds(activeItemIds)) {
-        const updateParams: Record<string, string | number | null> = {
-          forgottenAt,
-          updatedAt: forgottenAt,
-        };
-        const placeholders = itemIdChunk.map((itemId, index) => {
-          const key = `itemId${index}`;
-          updateParams[key] = itemId;
-          return `@${key}`;
-        });
-        changedRows.push(
-          ...(gatewaySql
-            .prepare(
-              `
-              UPDATE memory_items
-              SET status = 'forgotten',
-                  forgotten_at = @forgottenAt,
-                  updated_at = @updatedAt
-              WHERE status = 'active'
-                AND item_id IN (${placeholders.join(", ")})
-              RETURNING item_id, namespace, title, content, metadata_json, pinned, ttl_override_seconds, expires_at,
-                        status, created_at, updated_at, forgotten_at, workspace_id
-            `,
-            )
-            .all(updateParams) as MemoryForgetSelectionRow[]),
-        );
+      const authority = resolveApprovedMemoryMutation(this.deps.admin.gatewaySql, {
+        context: hooks.approvedMutation,
+        workspaceId,
+        actorId,
+        subjectKind,
+        subjectId,
+        action: "items_forgotten",
+        requestSha256,
+      });
+      const items = rows.map((row) => mapMemoryItemRow(this.deps.admin, row));
+      const plans = items.map((item) => approvedMemoryForgetEventPlan(item, authority));
+      const replayCount = plans.filter((plan) => this.findMemoryChange(plan.changeId)).length;
+      if (replayCount > 0) {
+        if (replayCount !== plans.length) {
+          throw new ConflictError({
+            code: "WRITE_CONFLICT",
+            message: "Approved memory forget contains a partial immutable replay.",
+          });
+        }
+        for (const [index, plan] of plans.entries()) {
+          const item = items[index] as MemoryItemRecord;
+          const change = recordMemoryChange(
+            this.deps.admin,
+            item.itemId,
+            "forgotten",
+            authority.actorId,
+            plan.historyPayload,
+            { changeId: plan.changeId, createdAt: authority.occurredAt },
+          );
+          persistApprovedMemoryMutationEvidence(governedEvidence, {
+            authority,
+            change,
+            subjectId: item.itemId,
+            action: "forgotten",
+            lifecycleState: item.lifecycleState,
+            fieldCodes: ["status"],
+            batchOperationIndex: uniqueItemIds.length > 1 ? index : undefined,
+          });
+        }
+        hooks.onCommit?.();
+        return { items, changed: false, replayed: true };
       }
-      changedRows.sort((left, right) => compareMemoryItemIds(left.item_id, right.item_id));
       if (
-        changedRows.length !== activeItemIds.length ||
-        changedRows.some((row, index) => row.item_id !== activeItemIds[index])
+        buildMemoryLifecycleStateSha256(buildMemoryItemsApprovalStateMaterial(items)) !== authority.expectedStateSha256
       ) {
         throw new ConflictError({
           code: "WRITE_CONFLICT",
-          message: "Memory forget targets changed during the atomic mutation.",
+          message: "Memory forget targets changed after approval review.",
         });
       }
-
-      for (const row of changedRows) {
-        recordMemoryChange(this.deps.admin, row.item_id, "forgotten", action.ownerId, {
-          previousStatus: "active",
-          actionId: action.actionId,
-          ownerId: action.ownerId,
-          source: action.source,
-          timestamp: action.timestamp,
-          operationKind: "forget_item",
-          operationCount: changedRows.length,
-          criteriaDigest,
-          requestedWorkspaceId: workspaceId ?? null,
-          effectiveWorkspaceId: resolveMemoryForgetEffectiveWorkspaceId(this.deps.admin, row) ?? null,
-          includeGlobal: effectiveIncludeGlobal,
-          storesRawContent: false,
+      if (items.every((item) => item.status === "forgotten")) {
+        hooks.onCommit?.();
+        return { items: [], changed: false, replayed: false, alreadyForgottenCount: items.length };
+      }
+      if (items.some((item) => item.status !== "active")) {
+        throw new ConflictError({
+          code: "WRITE_CONFLICT",
+          message: "Approved memory forget target states are mixed or unsupported.",
         });
+      }
+      const changedItems: MemoryItemRecord[] = [];
+      for (const [index, item] of items.entries()) {
+        const update = this.deps.admin.gatewaySql
+          .prepare(
+            `
+            UPDATE memory_items
+            SET status = 'forgotten', forgotten_at = @forgottenAt, updated_at = @updatedAt
+            WHERE item_id = @itemId AND workspace_id = @workspaceId
+              AND status = 'active' AND updated_at = @expectedUpdatedAt
+          `,
+          )
+          .run({
+            itemId: item.itemId,
+            workspaceId,
+            forgottenAt: authority.occurredAt,
+            updatedAt: authority.occurredAt,
+            expectedUpdatedAt: item.updatedAt,
+          }) as { changes: number };
+        if (update.changes !== 1) {
+          throw new ConflictError({
+            code: "WRITE_CONFLICT",
+            message: "Memory forget target changed during the approved atomic mutation.",
+          });
+        }
+        const plan = plans[index] as ReturnType<typeof approvedMemoryForgetEventPlan>;
+        const change = recordMemoryChange(
+          this.deps.admin,
+          item.itemId,
+          "forgotten",
+          authority.actorId,
+          plan.historyPayload,
+          { changeId: plan.changeId, createdAt: authority.occurredAt },
+        );
+        const forgotten = requireMemoryItem(this.deps.admin, item.itemId);
+        persistApprovedMemoryMutationEvidence(governedEvidence, {
+          authority,
+          change,
+          subjectId: item.itemId,
+          action: "forgotten",
+          lifecycleState: forgotten.lifecycleState,
+          fieldCodes: ["status"],
+          batchOperationIndex: uniqueItemIds.length > 1 ? index : undefined,
+        });
+        changedItems.push(forgotten);
       }
       hooks.onCommit?.();
-
-      return {
-        matchedCount: matchedRows.length,
-        alreadyForgottenCount,
-        changedRows,
-      };
+      return { items: changedItems, changed: true, replayed: false, alreadyForgottenCount: 0 };
     });
 
     hooks.afterCommit?.();
-    const forgottenItems = transactionResult.changedRows.map((row) => mapMemoryItemRow(this.deps.admin, row));
-    let realtimeError: unknown;
-    for (const [index, item] of forgottenItems.entries()) {
-      const sourceRow = transactionResult.changedRows[index];
-      try {
+    if (transactionResult.changed) {
+      for (const item of transactionResult.items) {
         this.deps.admin.publishRealtime("system", "memory", {
           type: "memory_item_forgotten",
           itemId: item.itemId,
           namespace: item.namespace,
           lifecycleState: item.lifecycleState,
-          actionId: action.actionId,
+          actionId: canonicalActionId,
           requestedWorkspaceId: workspaceId,
-          effectiveWorkspaceId: sourceRow
-            ? resolveMemoryForgetEffectiveWorkspaceId(this.deps.admin, sourceRow)
-            : undefined,
-          includeGlobal: effectiveIncludeGlobal,
-          source: action.source,
+          effectiveWorkspaceId: workspaceId,
+          includeGlobal: false,
+          source: "approved_memory_lifecycle",
         });
-      } catch (error) {
-        realtimeError ??= error;
       }
     }
-    if (realtimeError) {
-      throw realtimeError;
-    }
-
+    const replayedItems = transactionResult.replayed ? transactionResult.items : [];
+    const resultItems = transactionResult.changed ? transactionResult.items : replayedItems;
     return {
-      actionId: action.actionId,
-      matchedCount: transactionResult.matchedCount,
-      alreadyForgottenCount: transactionResult.alreadyForgottenCount,
-      forgottenCount: forgottenItems.length,
-      itemIds: forgottenItems.map((item) => item.itemId),
-      items: forgottenItems,
+      actionId: canonicalActionId,
+      matchedCount: uniqueItemIds.length,
+      alreadyForgottenCount: transactionResult.replayed ? 0 : (transactionResult.alreadyForgottenCount ?? 0),
+      forgottenCount: resultItems.length,
+      itemIds: resultItems.map((item) => item.itemId),
+      items: resultItems,
     };
   }
 
-  public batchMutateMemoryItems(input: MemoryBatchMutationRequest, actorId = "operator"): MemoryBatchMutationResponse {
+  /**
+   * HX-402 P1: the unapproved batch branch is retired. One resolved
+   * `memory.lifecycle` approval governs the whole batch and the recovered
+   * effect applies every operation in one transaction (all-or-nothing) after
+   * the same authority revalidation as single-item mutations.
+   */
+  public batchMutateMemoryItems(
+    input: MemoryBatchMutationRequest,
+    actorId = "operator",
+    approvedMutation?: ApprovedMemoryMutationContext,
+  ): MemoryBatchMutationResponse {
     this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
-    const operations = normalizeBatchMutationOperations(input.operations);
-    const runTransaction = requireMemoryBatchTransaction(this.deps.admin.gatewaySql);
-    const ownerId = actorId.trim() || "operator";
-
-    for (const operation of operations) {
-      requireMemoryItem(this.deps.admin, operation.itemId);
+    if (!approvedMutation) {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: "Direct memory batch mutation is retired; request a memory.lifecycle approval instead.",
+      });
     }
+    return this.applyApprovedMemoryBatchMutation(input, actorId, approvedMutation);
+  }
 
-    const ledgerOperations = operations.map((operation) => ({
-      kind: operation.kind,
-      itemId: operation.itemId,
-      changedFields: operation.kind === "patch_item" ? getBatchPatchChangedFields(operation.patch) : undefined,
-    }));
-    const ledger = buildMemoryActionLedgerEntry({
-      actionId: input.actionId,
-      ownerId,
-      source: input.source,
-      status: "applied",
-      operations: ledgerOperations,
-    });
-
-    const results = runTransaction(() =>
-      operations.map((operation, operationIndex) =>
-        this.applyBatchMemoryItemMutation(operation, operationIndex, ownerId, ledger),
-      ),
+  private applyApprovedMemoryBatchMutation(
+    input: MemoryBatchMutationRequest,
+    actorId: string,
+    approvedMutation: ApprovedMemoryMutationContext,
+  ): MemoryBatchMutationResponse {
+    const operations = snapshotApprovedBatchOperations(normalizeBatchMutationOperations(input.operations));
+    const actionId = input.actionId?.normalize("NFKC").trim();
+    if (!actionId || actionId !== input.actionId || actionId.length > 120) {
+      throw new ValidationError({
+        code: "FIELD_REQUIRED",
+        field: "actionId",
+        message: "Approved memory batch mutation requires a stable actionId.",
+      });
+    }
+    const initialItems = operations.map((operation) =>
+      requireWorkspaceOwnedMemoryItem(requireMemoryItem(this.deps.admin, operation.itemId)),
     );
-
-    this.deps.admin.publishRealtime("system", "memory", {
-      type: "memory_batch_mutation_applied",
-      actionId: ledger.actionId,
-      operationKind: ledger.operationKind,
-      itemIds: ledger.targetItemIds,
-      appliedCount: results.length,
+    const workspaceId = initialItems[0]?.workspaceId;
+    if (!workspaceId || initialItems.some((item) => item.workspaceId !== workspaceId)) {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: "Approved memory batch mutations require items owned by exactly one workspace.",
+      });
+    }
+    const requestSha256 = buildMemoryLifecycleRequestSha256({
+      workspaceId,
+      subjectKind: "memory_item_batch",
+      action: "batch_mutated",
+      mutation: { actionId, operations },
+    });
+    const governedEvidence = this.getGovernedLifecycleRepository();
+    const runTransaction = requireMemoryBatchTransaction(this.deps.admin.gatewaySql);
+    const transactionResult = runTransaction(() => {
+      applyPostgresRowLockTimeout(this.deps.admin.gatewaySql);
+      const items = operations.map((operation) =>
+        requireWorkspaceOwnedMemoryItem(requireMemoryItem(this.deps.admin, operation.itemId)),
+      );
+      if (items.some((item) => item.workspaceId !== workspaceId)) {
+        throw new ConflictError({
+          code: "WRITE_CONFLICT",
+          message: "Memory batch workspace ownership changed before the approved mutation.",
+        });
+      }
+      const authority = resolveApprovedMemoryMutation(this.deps.admin.gatewaySql, {
+        context: approvedMutation,
+        workspaceId,
+        actorId,
+        subjectKind: "memory_item_batch",
+        subjectId: undefined,
+        action: "batch_mutated",
+        requestSha256,
+      });
+      const plans = operations.map((operation, operationIndex) => ({
+        operation,
+        operationIndex,
+        changeId: deriveApprovedMemoryHistoryId({
+          approvalId: authority.approvalId,
+          subjectId: operation.itemId,
+          action: "batch_mutated",
+          ordinal: operationIndex,
+        }),
+      }));
+      const replayCount = plans.filter((plan) => this.findMemoryChange(plan.changeId)).length;
+      if (replayCount > 0) {
+        if (replayCount !== plans.length) {
+          throw new ConflictError({
+            code: "WRITE_CONFLICT",
+            message: "Approved memory batch contains a partial immutable replay.",
+          });
+        }
+        const results = plans.map((plan) => {
+          const item = requireMemoryItem(this.deps.admin, plan.operation.itemId);
+          const change = recordMemoryChange(
+            this.deps.admin,
+            item.itemId,
+            approvedBatchChangeType(plan.operation),
+            authority.actorId,
+            approvedBatchHistoryPayload(authority, plan.operation, plan.operationIndex),
+            { changeId: plan.changeId, createdAt: authority.occurredAt },
+          );
+          persistApprovedMemoryMutationEvidence(governedEvidence, {
+            authority,
+            change,
+            subjectId: item.itemId,
+            action: "batch_mutated",
+            lifecycleState: item.lifecycleState,
+            fieldCodes: approvedBatchFieldCodes(plan.operation),
+            batchOperationIndex: plan.operationIndex,
+            batchActionId: actionId,
+          });
+          return buildApprovedBatchResult(plan.operationIndex, plan.operation, item);
+        });
+        return { results, changed: false, authorityActorId: authority.actorId };
+      }
+      const sortedItems = [...items].sort((left, right) => compareMemoryItemIds(left.itemId, right.itemId));
+      if (
+        buildMemoryLifecycleStateSha256(buildMemoryItemsApprovalStateMaterial(sortedItems)) !==
+        authority.expectedStateSha256
+      ) {
+        throw new ConflictError({
+          code: "WRITE_CONFLICT",
+          message: "Memory batch targets changed after approval review.",
+        });
+      }
+      const results: MemoryBatchMutationResult[] = [];
+      for (const plan of plans) {
+        const current = requireWorkspaceOwnedMemoryItem(requireMemoryItem(this.deps.admin, plan.operation.itemId));
+        let updatedItem: MemoryItemRecord;
+        let fieldCodes: string[];
+        if (plan.operation.kind === "patch_item") {
+          const next = buildApprovedMemoryItemPatch(current, plan.operation.patch, authority.occurredAt);
+          fieldCodes = approvedMemoryPatchChangedFields(current, next);
+          if (fieldCodes.length === 0) {
+            updatedItem = current;
+          } else {
+            const updateResult = this.deps.admin.gatewaySql
+              .prepare(
+                `
+                UPDATE memory_items
+                SET title = @title,
+                    content = @content,
+                    metadata_json = @metadataJson,
+                    pinned = @pinned,
+                    ttl_override_seconds = @ttlOverrideSeconds,
+                    expires_at = @expiresAt,
+                    updated_at = @updatedAt
+                WHERE item_id = @itemId AND workspace_id = @workspaceId AND updated_at = @expectedUpdatedAt
+              `,
+              )
+              .run({
+                itemId: current.itemId,
+                workspaceId,
+                title: next.title,
+                content: next.content,
+                metadataJson: canonicalJsonString(next.metadata),
+                pinned: next.pinned ? 1 : 0,
+                ttlOverrideSeconds: next.ttlOverrideSeconds,
+                expiresAt: next.expiresAt,
+                updatedAt: authority.occurredAt,
+                expectedUpdatedAt: current.updatedAt,
+              }) as { changes: number };
+            if (updateResult.changes !== 1) {
+              throw new ConflictError({
+                code: "WRITE_CONFLICT",
+                message: "Memory batch target changed during the approved atomic mutation.",
+              });
+            }
+            updatedItem = requireMemoryItem(this.deps.admin, current.itemId);
+          }
+        } else {
+          if (current.status !== "active") {
+            throw new ConflictError({
+              code: "WRITE_CONFLICT",
+              message: "Approved memory batch forget targets must be active.",
+            });
+          }
+          const updateResult = this.deps.admin.gatewaySql
+            .prepare(
+              `
+              UPDATE memory_items
+              SET status = 'forgotten', forgotten_at = @forgottenAt, updated_at = @updatedAt
+              WHERE item_id = @itemId AND workspace_id = @workspaceId
+                AND status = 'active' AND updated_at = @expectedUpdatedAt
+            `,
+            )
+            .run({
+              itemId: current.itemId,
+              workspaceId,
+              forgottenAt: authority.occurredAt,
+              updatedAt: authority.occurredAt,
+              expectedUpdatedAt: current.updatedAt,
+            }) as { changes: number };
+          if (updateResult.changes !== 1) {
+            throw new ConflictError({
+              code: "WRITE_CONFLICT",
+              message: "Memory batch target changed during the approved atomic mutation.",
+            });
+          }
+          fieldCodes = ["status"];
+          updatedItem = requireMemoryItem(this.deps.admin, current.itemId);
+        }
+        const change = recordMemoryChange(
+          this.deps.admin,
+          current.itemId,
+          approvedBatchChangeType(plan.operation),
+          authority.actorId,
+          approvedBatchHistoryPayload(authority, plan.operation, plan.operationIndex),
+          { changeId: plan.changeId, createdAt: authority.occurredAt },
+        );
+        persistApprovedMemoryMutationEvidence(governedEvidence, {
+          authority,
+          change,
+          subjectId: current.itemId,
+          action: "batch_mutated",
+          lifecycleState: updatedItem.lifecycleState,
+          fieldCodes: fieldCodes.length > 0 ? fieldCodes : approvedBatchFieldCodes(plan.operation),
+          batchOperationIndex: plan.operationIndex,
+          batchActionId: actionId,
+        });
+        results.push(buildApprovedBatchResult(plan.operationIndex, plan.operation, updatedItem));
+      }
+      return { results, changed: true, authorityActorId: authority.actorId };
     });
 
-    return {
-      actionId: ledger.actionId,
+    const targetItemIds = [...new Set(operations.map((operation) => operation.itemId))];
+    const ledger = buildMemoryActionLedgerEntry({
+      actionId,
+      ownerId: transactionResult.authorityActorId,
+      source: input.source ?? "approved_memory_lifecycle",
       status: "applied",
-      appliedCount: results.length,
-      targetItemIds: ledger.targetItemIds,
-      results,
+      operations: operations.map((operation) => ({
+        kind: operation.kind,
+        itemId: operation.itemId,
+        changedFields: operation.kind === "patch_item" ? getBatchPatchChangedFields(operation.patch) : undefined,
+      })),
+    });
+    if (transactionResult.changed) {
+      this.deps.admin.publishRealtime("system", "memory", {
+        type: "memory_batch_mutation_applied",
+        actionId,
+        operationKind: ledger.operationKind,
+        itemIds: targetItemIds,
+        appliedCount: transactionResult.results.length,
+      });
+    }
+    return {
+      actionId,
+      status: "applied",
+      appliedCount: transactionResult.results.length,
+      targetItemIds,
+      results: transactionResult.results,
       ledger,
     };
   }
 
-  private applyBatchMemoryItemMutation(
-    operation: MemoryBatchMutationOperation,
-    operationIndex: number,
-    actorId: string,
-    ledger: MemoryActionLedgerEntry,
-  ): MemoryBatchMutationResult {
-    const item =
-      operation.kind === "patch_item"
-        ? this.applyBatchMemoryItemPatch(operation, actorId, ledger)
-        : this.applyBatchMemoryItemForget(operation.itemId, actorId, ledger);
-    return {
-      operationIndex,
-      kind: operation.kind,
-      itemId: item.itemId,
-      status: "applied",
-      item,
-    };
-  }
-
-  private applyBatchMemoryItemPatch(
-    operation: Extract<MemoryBatchMutationOperation, { kind: "patch_item" }>,
-    actorId: string,
-    ledger: MemoryActionLedgerEntry,
-  ): MemoryItemRecord {
-    const current = requireMemoryItem(this.deps.admin, operation.itemId);
-    const now = new Date().toISOString();
-    const patch = operation.patch;
-    const nextTtlOverrideSeconds =
-      patch.ttlOverrideSeconds === null
-        ? null
-        : patch.ttlOverrideSeconds !== undefined
-          ? Math.max(1, Math.min(31_536_000, Math.floor(patch.ttlOverrideSeconds)))
-          : (current.ttlOverrideSeconds ?? null);
-    const nextExpiresAt =
-      patch.ttlOverrideSeconds === null
-        ? null
-        : patch.ttlOverrideSeconds !== undefined
-          ? new Date(Date.parse(now) + Number(nextTtlOverrideSeconds) * 1000).toISOString()
-          : (current.expiresAt ?? null);
-    const next = {
-      title: patch.title !== undefined ? patch.title.trim() : current.title,
-      content: patch.content !== undefined ? patch.content : current.content,
-      metadata: patch.metadata !== undefined ? patch.metadata : current.metadata,
-      pinned: patch.pinned !== undefined ? patch.pinned : current.pinned,
-      ttlOverrideSeconds: nextTtlOverrideSeconds,
-      expiresAt: nextExpiresAt,
-    };
-
-    this.deps.admin.gatewaySql
+  private findMemoryChange(changeId: string): MemoryChangeEvent | undefined {
+    const row = this.deps.admin.gatewaySql
       .prepare(
         `
-      UPDATE memory_items
-      SET title = @title,
-          content = @content,
-          metadata_json = @metadataJson,
-          pinned = @pinned,
-          ttl_override_seconds = @ttlOverrideSeconds,
-          expires_at = @expiresAt,
-          updated_at = @updatedAt
-      WHERE item_id = @itemId
-    `,
+        SELECT change_id, item_id, change_type, actor_id, payload_json, created_at
+        FROM memory_change_history
+        WHERE change_id = ?
+      `,
       )
-      .run({
-        itemId: operation.itemId,
-        title: next.title,
-        content: next.content,
-        metadataJson: JSON.stringify(next.metadata ?? {}),
-        pinned: next.pinned ? 1 : 0,
-        ttlOverrideSeconds: next.ttlOverrideSeconds,
-        expiresAt: next.expiresAt,
-        updatedAt: now,
-      });
-
-    const changedFields = getBatchPatchChangedFields(patch);
-    recordMemoryChange(
-      this.deps.admin,
-      operation.itemId,
-      resolveBatchPatchChangeType(changedFields),
-      actorId,
-      buildMemoryChangeLedgerPayload(ledger, {
-        kind: operation.kind,
-        itemId: operation.itemId,
-        changedFields,
-      }),
-    );
-    return requireMemoryItem(this.deps.admin, operation.itemId);
-  }
-
-  private applyBatchMemoryItemForget(
-    itemId: string,
-    actorId: string,
-    ledger: MemoryActionLedgerEntry,
-  ): MemoryItemRecord {
-    const current = requireMemoryItem(this.deps.admin, itemId);
-    if (current.status === "forgotten") {
-      return current;
-    }
-    const now = new Date().toISOString();
-    this.deps.admin.gatewaySql
-      .prepare(
-        `
-      UPDATE memory_items
-      SET status = 'forgotten',
-          forgotten_at = @forgottenAt,
-          updated_at = @updatedAt
-      WHERE item_id = @itemId
-    `,
-      )
-      .run({
-        itemId,
-        forgottenAt: now,
-        updatedAt: now,
-      });
-    recordMemoryChange(
-      this.deps.admin,
-      itemId,
-      "forgotten",
-      actorId,
-      buildMemoryChangeLedgerPayload(ledger, {
-        kind: "forget_item",
-        itemId,
-      }),
-    );
-    return requireMemoryItem(this.deps.admin, itemId);
+      .get(changeId) as
+      | {
+          change_id: string;
+          item_id: string;
+          change_type: MemoryChangeEvent["changeType"];
+          actor_id: string | null;
+          payload_json: string | null;
+          created_at: string;
+        }
+      | undefined;
+    return row
+      ? {
+          changeId: row.change_id,
+          itemId: row.item_id,
+          changeType: row.change_type,
+          actorId: row.actor_id ?? undefined,
+          payload: this.deps.admin.tryParseJson<Record<string, unknown>>(row.payload_json, {}),
+          createdAt: row.created_at,
+        }
+      : undefined;
   }
 
   public listMemoryItemHistory(itemId: string, limit = 200): MemoryChangeEvent[] {
@@ -2038,13 +3134,26 @@ export class MemoryLifecycleService {
     });
     this.assertTraceCandidateContentAllowed(contentForGuard, input.workspaceId);
     const now = new Date().toISOString();
+    const candidateId = randomUUID();
+    const workspaceId = normalizeStructuredWorkspaceId(input.workspaceId);
     const metadata = await withMemoryEmbeddingMetadata(
       input.metadata ?? {},
       buildStructuredMemoryEmbeddingText([proposedInsight, sourceText]),
+      undefined,
+      this.memoryEmbeddingRuntimeOptions({
+        operationId: `memory-trace-candidate:${candidateId}:embedding`,
+        dispatchGeneration: "initial-write",
+        workspaceId,
+        sessionId: optionalTrimmedText(input.sourceSessionId),
+        turnId: optionalTrimmedText(input.sourceTurnId),
+        durableRunId: optionalTrimmedText(input.sourceRunId),
+        utilityKind: "memory_trace_candidate_write_embedding",
+        agentId: actorId,
+      }),
     );
     const candidate: TraceMemoryCandidateRecord = {
-      candidateId: randomUUID(),
-      workspaceId: normalizeStructuredWorkspaceId(input.workspaceId),
+      candidateId,
+      workspaceId,
       candidateType: normalizeTraceCandidateType(input.candidateType),
       status: "proposed",
       sourceText,
@@ -2112,30 +3221,36 @@ export class MemoryLifecycleService {
     }
     const key =
       readRecordString(candidate.metadata ?? {}, "key") ?? `trace.${candidate.candidateType}.${candidate.candidateId}`;
-    const learning = this.createMemoryLearning(
-      {
-        workspaceId: candidate.workspaceId,
-        key,
-        type: mapTraceCandidateToLearningType(candidate.candidateType),
-        insight: candidate.proposedInsight,
-        confidence: candidate.confidence,
-        sourceRefs: candidate.sourceRefs,
-        authority: "operator",
-      },
-      actorId,
-    );
-    const now = new Date().toISOString();
-    this.deps.admin.gatewaySql
-      .prepare(
-        `
+    // Atomic promotion: the trusted learning and the candidate's promoted
+    // linkage commit together, so a crash can never leave a candidate that
+    // reads as promoted without its learning (or vice versa).
+    const learning = this.runStructuredMemoryTransaction(() => {
+      const created = this.createMemoryLearning(
+        {
+          workspaceId: candidate.workspaceId,
+          key,
+          type: mapTraceCandidateToLearningType(candidate.candidateType),
+          insight: candidate.proposedInsight,
+          confidence: candidate.confidence,
+          sourceRefs: candidate.sourceRefs,
+          authority: "operator",
+        },
+        actorId,
+      );
+      const now = new Date().toISOString();
+      this.deps.admin.gatewaySql
+        .prepare(
+          `
       UPDATE memory_trace_candidates
       SET status = 'promoted',
           promoted_learning_id = @learningId,
           updated_at = @updatedAt
       WHERE candidate_id = @candidateId
     `,
-      )
-      .run({ candidateId, learningId: learning.learningId, updatedAt: now });
+        )
+        .run({ candidateId, learningId: created.learningId, updatedAt: now });
+      return created;
+    });
     this.deps.admin.publishRealtime("system", "memory", {
       type: "memory_trace_candidate_promoted",
       candidateId,
@@ -2872,13 +3987,23 @@ export class MemoryLifecycleService {
     return browserContentGuard;
   }
 
+  /**
+   * HX-402 P1: structured record mutations commit their history row AND their
+   * Journey evidence inside the caller's transaction. The Journey event is
+   * explicit review-only provenance (`approvalRequired: false`, never
+   * promotion or callability); when the Journey host is absent (read-only
+   * harnesses) the history row still commits atomically with the record.
+   */
   private recordStructuredMemoryChange(
     recordKind: "entity" | "relation" | "decision",
     recordId: string,
     changeType: MemoryChangeEvent["changeType"],
     actorId: string | undefined,
     payload: Record<string, unknown>,
-  ): void {
+    options: { workspaceId?: string; correctionRefId?: string } = {},
+  ): string {
+    const changeId = randomUUID();
+    const createdAt = new Date().toISOString();
     this.deps.admin.gatewaySql
       .prepare(
         `
@@ -2890,14 +4015,36 @@ export class MemoryLifecycleService {
     `,
       )
       .run({
-        changeId: randomUUID(),
+        changeId,
         recordKind,
         recordId,
         changeType,
         actorId: actorId?.trim() || null,
         payloadJson: JSON.stringify(payload ?? {}),
-        createdAt: new Date().toISOString(),
+        createdAt,
       });
+    const journeyHost = this.deps.approvalAuthority?.governanceJourneyEvents;
+    const workspaceId = options.workspaceId?.trim();
+    if (journeyHost && workspaceId) {
+      journeyHost.create(
+        buildStructuredMemoryJourneyEvent({
+          recordKind,
+          recordId,
+          changeId,
+          changeType,
+          actorId: actorId?.trim() || "operator",
+          workspaceId,
+          occurredAt: createdAt,
+          ...(options.correctionRefId === undefined ? {} : { correctionRefId: options.correctionRefId }),
+        }),
+      );
+    }
+    return changeId;
+  }
+
+  /** One transaction for a structured record write, its history row, and its Journey evidence. */
+  private runStructuredMemoryTransaction<T>(write: () => T): T {
+    return requireMemoryBatchTransaction(this.deps.admin.gatewaySql)(write);
   }
 }
 
@@ -3200,15 +4347,392 @@ function requireMemoryBatchTransaction(
   return runImmediateTransaction.bind(gatewaySql) as <T>(callback: () => T) => T;
 }
 
-const MEMORY_FORGET_UPDATE_CHUNK_SIZE = 500;
-const MEMORY_FORGET_POSTGRES_LOCK_TIMEOUT_MS = 5_000;
+const MEMORY_MUTATION_POSTGRES_LOCK_TIMEOUT_MS = 5_000;
 
-function chunkMemoryItemIds(itemIds: string[]): string[][] {
-  const chunks: string[][] = [];
-  for (let index = 0; index < itemIds.length; index += MEMORY_FORGET_UPDATE_CHUNK_SIZE) {
-    chunks.push(itemIds.slice(index, index + MEMORY_FORGET_UPDATE_CHUNK_SIZE));
+/**
+ * Bounded row-lock wait for the approved mutation transactions on PostgreSQL:
+ * a stalled foreign lock fails the mutation loudly (and rolls it back) instead
+ * of stalling the recovered effect worker indefinitely.
+ */
+function applyPostgresRowLockTimeout(gatewaySql: MemoryLifecycleAdminDependencies["gatewaySql"]): void {
+  if (gatewaySql.dialect !== "postgres") return;
+  gatewaySql
+    .prepare("SELECT set_config('lock_timeout', @lockTimeout, true)")
+    .run({ lockTimeout: `${MEMORY_MUTATION_POSTGRES_LOCK_TIMEOUT_MS}ms` });
+}
+
+function requireWorkspaceOwnedMemoryItem(item: MemoryItemRecord): MemoryItemRecord & { workspaceId: string } {
+  const workspaceId = item.workspaceId?.normalize("NFKC").trim();
+  if (!workspaceId || workspaceId !== item.workspaceId || workspaceId.length > 256) {
+    throw new ConflictError({
+      code: "STATE_CONFLICT",
+      message: "Approved memory mutations require an exact workspace-owned item.",
+    });
   }
-  return chunks;
+  return { ...item, workspaceId };
+}
+
+function approvedMemoryItemPatchMaterial(patch: MemoryLifecyclePatch): Record<string, unknown> {
+  const material: Record<string, unknown> = {};
+  if (patch.title !== undefined) material.title = patch.title;
+  if (patch.content !== undefined) material.content = patch.content;
+  if (patch.metadata !== undefined) material.metadata = patch.metadata;
+  if (patch.pinned !== undefined) material.pinned = patch.pinned;
+  if (patch.ttlOverrideSeconds !== undefined) material.ttlOverrideSeconds = patch.ttlOverrideSeconds;
+  return material;
+}
+
+function snapshotApprovedMemoryItemPatch(patch: MemoryLifecyclePatch): MemoryLifecyclePatch {
+  validateApprovedMemoryItemPatch(patch);
+  let snapshot: unknown;
+  try {
+    snapshot = JSON.parse(canonicalJsonString(approvedMemoryItemPatchMaterial(patch))) as unknown;
+  } catch {
+    throw new ValidationError({
+      code: "FIELD_INVALID",
+      field: "patch",
+      message: "Approved memory patch must be canonical JSON data.",
+    });
+  }
+  validateApprovedMemoryItemPatch(snapshot as MemoryLifecyclePatch);
+  return snapshot as MemoryLifecyclePatch;
+}
+
+function validateApprovedMemoryItemPatch(patch: MemoryLifecyclePatch): void {
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
+    throw new ValidationError({ code: "FIELD_INVALID", field: "patch" });
+  }
+  const allowedFields = new Set(["title", "content", "metadata", "pinned", "ttlOverrideSeconds"]);
+  if (Object.keys(patch).some((field) => !allowedFields.has(field))) {
+    throw new ValidationError({
+      code: "FIELD_INVALID",
+      field: "patch",
+      message: "Approved memory patch contains an unsupported field.",
+    });
+  }
+  if (
+    patch.title !== undefined &&
+    (typeof patch.title !== "string" || !patch.title.trim() || patch.title !== patch.title.normalize("NFKC").trim())
+  ) {
+    throw new ValidationError({
+      code: "FIELD_INVALID",
+      field: "title",
+      message: "Approved memory title must already be a non-empty canonical value.",
+    });
+  }
+  if (patch.content !== undefined && (typeof patch.content !== "string" || patch.content.length === 0)) {
+    throw new ValidationError({ code: "FIELD_INVALID", field: "content" });
+  }
+  if (
+    patch.metadata !== undefined &&
+    (!patch.metadata ||
+      typeof patch.metadata !== "object" ||
+      Array.isArray(patch.metadata) ||
+      !isApprovedMemoryJsonData(patch.metadata))
+  ) {
+    throw new ValidationError({ code: "FIELD_INVALID", field: "metadata" });
+  }
+  if (patch.metadata !== undefined) {
+    try {
+      canonicalJsonString(patch.metadata);
+    } catch {
+      throw new ValidationError({
+        code: "FIELD_INVALID",
+        field: "metadata",
+        message: "Approved memory metadata must be canonical JSON data.",
+      });
+    }
+  }
+  if (patch.pinned !== undefined && typeof patch.pinned !== "boolean") {
+    throw new ValidationError({ code: "FIELD_INVALID", field: "pinned" });
+  }
+  if (
+    patch.ttlOverrideSeconds !== undefined &&
+    patch.ttlOverrideSeconds !== null &&
+    (!Number.isInteger(patch.ttlOverrideSeconds) ||
+      patch.ttlOverrideSeconds < 1 ||
+      patch.ttlOverrideSeconds > 31_536_000)
+  ) {
+    throw new ValidationError({ code: "FIELD_INVALID", field: "ttlOverrideSeconds" });
+  }
+}
+
+function isApprovedMemoryJsonData(value: unknown, seen = new Set<object>(), depth = 0): boolean {
+  if (depth > 64) return false;
+  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value !== "object" || seen.has(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  if (!Array.isArray(value) && prototype !== Object.prototype && prototype !== null) return false;
+  if (Reflect.ownKeys(value).some((key) => typeof key !== "string")) return false;
+  seen.add(value);
+  const valid = Array.isArray(value)
+    ? value.every((entry) => isApprovedMemoryJsonData(entry, seen, depth + 1))
+    : Object.values(value).every((entry) => isApprovedMemoryJsonData(entry, seen, depth + 1));
+  seen.delete(value);
+  return valid;
+}
+
+function buildApprovedMemoryItemPatch(
+  current: MemoryItemRecord,
+  patch: MemoryLifecyclePatch,
+  occurredAt: string,
+): {
+  title: string;
+  content: string;
+  metadata: Record<string, unknown>;
+  pinned: boolean;
+  ttlOverrideSeconds: number | null;
+  expiresAt: string | null;
+} {
+  const ttlOverrideSeconds =
+    patch.ttlOverrideSeconds !== undefined ? patch.ttlOverrideSeconds : (current.ttlOverrideSeconds ?? null);
+  return {
+    title: patch.title !== undefined ? patch.title : current.title,
+    content: patch.content !== undefined ? patch.content : current.content,
+    metadata: patch.metadata !== undefined ? patch.metadata : current.metadata,
+    pinned: patch.pinned !== undefined ? patch.pinned : current.pinned,
+    ttlOverrideSeconds,
+    expiresAt:
+      patch.ttlOverrideSeconds === null
+        ? null
+        : patch.ttlOverrideSeconds !== undefined
+          ? new Date(Date.parse(occurredAt) + Number(ttlOverrideSeconds) * 1_000).toISOString()
+          : (current.expiresAt ?? null),
+  };
+}
+
+function approvedMemoryPatchChangedFields(
+  current: MemoryItemRecord,
+  next: ReturnType<typeof buildApprovedMemoryItemPatch>,
+): string[] {
+  const fields: string[] = [];
+  if (current.title !== next.title) fields.push("title");
+  if (current.content !== next.content) fields.push("content");
+  if (canonicalJsonString(current.metadata) !== canonicalJsonString(next.metadata)) fields.push("metadata");
+  if (current.pinned !== next.pinned) fields.push("pinned");
+  if ((current.ttlOverrideSeconds ?? null) !== next.ttlOverrideSeconds) fields.push("ttl_override");
+  if ((current.expiresAt ?? null) !== next.expiresAt) fields.push("expires_at");
+  return fields;
+}
+
+function approvedMemoryPatchEventPlans(
+  patch: MemoryLifecyclePatch,
+  authority: ApprovedMemoryMutationAuthority,
+  current: MemoryItemRecord,
+): Array<{
+  action: MemoryJourneyEventAction;
+  changeType: MemoryChangeEvent["changeType"];
+  changeId: string;
+  fieldCodes: string[];
+}> {
+  const fieldCodes = getBatchPatchChangedFields(patch).flatMap((field) =>
+    field === "ttlOverrideSeconds" ? ["ttl_override", "expires_at"] : [field],
+  );
+  const action = "item_updated" as const;
+  return [
+    {
+      action,
+      changeType: "updated",
+      changeId: deriveApprovedMemoryHistoryId({
+        approvalId: authority.approvalId,
+        subjectId: current.itemId,
+        action,
+      }),
+      fieldCodes,
+    },
+  ];
+}
+
+function approvedMemoryReplayFieldCodes(payload: Record<string, unknown>, allowedFieldCodes: string[]): string[] {
+  const value = payload.fieldCodes;
+  if (!Array.isArray(value) || value.length === 0 || value.some((field) => typeof field !== "string")) {
+    throw new ConflictError({
+      code: "WRITE_CONFLICT",
+      message: "Approved memory patch history has invalid changed-field evidence.",
+    });
+  }
+  const normalized = [...new Set(value as string[])].sort(compareMemoryItemIds);
+  if (
+    canonicalJsonString(normalized) !== canonicalJsonString(value) ||
+    normalized.some((field) => !allowedFieldCodes.includes(field))
+  ) {
+    throw new ConflictError({
+      code: "WRITE_CONFLICT",
+      message: "Approved memory patch history has invalid changed-field evidence.",
+    });
+  }
+  return normalized;
+}
+
+function approvedMemoryForgetEventPlan(
+  item: MemoryItemRecord,
+  authority: ApprovedMemoryMutationAuthority,
+): {
+  changeId: string;
+  historyPayload: Record<string, unknown>;
+} {
+  return {
+    changeId: deriveApprovedMemoryHistoryId({
+      approvalId: authority.approvalId,
+      subjectId: item.itemId,
+      action: "forgotten",
+    }),
+    historyPayload: approvedMemoryHistoryPayload(authority, "approved_forget", ["status"]),
+  };
+}
+
+function approvedMemoryHistoryPayload(
+  authority: ApprovedMemoryMutationAuthority,
+  operationKind: "approved_patch" | "approved_forget" | "approved_batch",
+  fieldCodes: string[],
+): Record<string, unknown> {
+  return {
+    approvalId: authority.approvalId,
+    requestSha256: authority.requestSha256,
+    expectedStateSha256: authority.expectedStateSha256,
+    operationKind,
+    fieldCodes: [...new Set(fieldCodes)].sort(compareMemoryItemIds),
+    correctionProvenance: authority.correctionActionId ? "explicit" : "not_applicable",
+    ...(authority.correctionActionId ? { correctionActionId: authority.correctionActionId } : {}),
+    storesRawContent: false,
+  };
+}
+
+/**
+ * Canonical, snapshotted batch operations for approval hashing and approved
+ * execution: patches are validated/cloned exactly like single-item approved
+ * patches, and target item IDs must be distinct so the batch's expected-state
+ * material, replay identity, and CAS guards stay exact.
+ */
+function snapshotApprovedBatchOperations(operations: MemoryBatchMutationOperation[]): MemoryBatchMutationOperation[] {
+  const itemIds = operations.map((operation) => operation.itemId);
+  if (new Set(itemIds).size !== itemIds.length) {
+    throw new ValidationError({
+      code: "FIELD_INVALID",
+      field: "operations",
+      message: "Approved memory batch operations must target distinct items.",
+    });
+  }
+  return operations.map((operation) => {
+    if (operation.itemId !== operation.itemId.normalize("NFKC").trim() || operation.itemId.length > 256) {
+      throw new ValidationError({ code: "FIELD_INVALID", field: "operations" });
+    }
+    if (operation.kind === "forget_item") {
+      return { kind: "forget_item", itemId: operation.itemId };
+    }
+    return { kind: "patch_item", itemId: operation.itemId, patch: snapshotApprovedMemoryItemPatch(operation.patch) };
+  });
+}
+
+function approvedBatchChangeType(operation: MemoryBatchMutationOperation): MemoryChangeEvent["changeType"] {
+  if (operation.kind === "forget_item") return "forgotten";
+  return resolveBatchPatchChangeType(getBatchPatchChangedFields(operation.patch));
+}
+
+function approvedBatchFieldCodes(operation: MemoryBatchMutationOperation): string[] {
+  if (operation.kind === "forget_item") return ["status"];
+  return getBatchPatchChangedFields(operation.patch).flatMap((field) =>
+    field === "ttlOverrideSeconds" ? ["ttl_override", "expires_at"] : [field],
+  );
+}
+
+function approvedBatchHistoryPayload(
+  authority: ApprovedMemoryMutationAuthority,
+  operation: MemoryBatchMutationOperation,
+  operationIndex: number,
+): Record<string, unknown> {
+  return {
+    ...approvedMemoryHistoryPayload(authority, "approved_batch", approvedBatchFieldCodes(operation)),
+    batchOperationIndex: operationIndex,
+    batchOperationKind: operation.kind,
+  };
+}
+
+function buildApprovedBatchResult(
+  operationIndex: number,
+  operation: MemoryBatchMutationOperation,
+  item: MemoryItemRecord,
+): MemoryBatchMutationResult {
+  return {
+    operationIndex,
+    kind: operation.kind,
+    itemId: item.itemId,
+    status: "applied",
+    item,
+  };
+}
+
+function normalizeApprovedMemoryActionId(actionId: string | undefined, fallback: string): string {
+  if (actionId === undefined) return fallback;
+  const canonical = actionId.normalize("NFKC").trim();
+  if (!canonical || canonical !== actionId || canonical.length > 120) {
+    throw new ValidationError({
+      code: "FIELD_INVALID",
+      field: "actionId",
+      message: "Memory mutation actionId must be a canonical identifier of at most 120 characters.",
+    });
+  }
+  return canonical;
+}
+
+function deriveApprovedMemoryRequestDigest(material: Record<string, unknown>): string {
+  return createHash("sha256")
+    .update(canonicalJsonString({ schemaVersion: "goatcitadel.memory-lifecycle-action-id.v1", material }), "utf8")
+    .digest("hex")
+    .slice(0, 32);
+}
+
+function requireCanonicalMemoryActorId(value: string): string {
+  const canonical = value.normalize("NFKC").trim();
+  if (!canonical || canonical !== value || canonical.length > 256) {
+    throw new ValidationError({
+      code: "FIELD_INVALID",
+      field: "requesterId",
+      message: "Memory mutation requester identity must be canonical.",
+    });
+  }
+  return canonical;
+}
+
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseApprovedForgetMutation(value: unknown): { actionId: string; itemIds: string[] } | undefined {
+  if (!isRecordValue(value)) return undefined;
+  const keys = Object.keys(value).sort();
+  if (canonicalJsonString(keys) !== canonicalJsonString(["actionId", "itemIds"])) return undefined;
+  const actionId = value.actionId;
+  const itemIds = value.itemIds;
+  if (
+    typeof actionId !== "string" ||
+    !actionId.trim() ||
+    !Array.isArray(itemIds) ||
+    itemIds.length === 0 ||
+    itemIds.some((itemId) => typeof itemId !== "string" || !itemId.trim())
+  ) {
+    return undefined;
+  }
+  return { actionId, itemIds: itemIds as string[] };
+}
+
+function parseApprovedBatchMutation(
+  value: unknown,
+): { actionId: string; operations: MemoryBatchMutationOperation[] } | undefined {
+  if (!isRecordValue(value)) return undefined;
+  const keys = Object.keys(value).sort();
+  if (canonicalJsonString(keys) !== canonicalJsonString(["actionId", "operations"])) return undefined;
+  const actionId = value.actionId;
+  if (typeof actionId !== "string" || !actionId.trim() || !Array.isArray(value.operations)) return undefined;
+  try {
+    return {
+      actionId,
+      operations: normalizeBatchMutationOperations(value.operations as MemoryBatchMutationOperation[]),
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function compareMemoryItemIds(left: string, right: string): number {
@@ -3219,19 +4743,52 @@ function escapeMemoryLikePattern(value: string): string {
   return value.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_");
 }
 
-function resolveMemoryForgetEffectiveWorkspaceId(
-  host: MemoryItemHost,
-  row: Pick<MemoryForgetSelectionRow, "metadata_json" | "workspace_id">,
-): string | undefined {
-  if (row.workspace_id !== null) {
-    return row.workspace_id;
+function isActiveRoutedContextMemoryRow(
+  row: MemoryForgetSelectionRow,
+  input: { itemId: string; workspaceId: string; allowGlobal: boolean; nowIso: string },
+): boolean {
+  if (!isCanonicalIsoTimestamp(input.nowIso)) {
+    return false;
   }
-  const metadata = host.tryParseJson<unknown>(row.metadata_json, {});
+  if (
+    row.item_id !== input.itemId ||
+    row.status !== "active" ||
+    row.forgotten_at !== null ||
+    (row.expires_at !== null &&
+      (!Number.isFinite(Date.parse(row.expires_at)) || Date.parse(row.expires_at) <= Date.parse(input.nowIso)))
+  ) {
+    return false;
+  }
+
+  let metadata: unknown;
+  try {
+    metadata = row.metadata_json === null ? undefined : JSON.parse(row.metadata_json);
+  } catch {
+    return false;
+  }
   if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
-    return undefined;
+    return false;
   }
-  const legacyWorkspaceId = (metadata as Record<string, unknown>).workspaceId;
-  return typeof legacyWorkspaceId === "string" && legacyWorkspaceId.trim() ? legacyWorkspaceId.trim() : undefined;
+
+  if (row.workspace_id !== null) {
+    return row.workspace_id === input.workspaceId;
+  }
+
+  const metadataRecord = metadata as Record<string, unknown>;
+  if (Object.prototype.hasOwnProperty.call(metadataRecord, "workspaceId")) {
+    const legacyWorkspaceId = metadataRecord.workspaceId;
+    return (
+      typeof legacyWorkspaceId === "string" &&
+      legacyWorkspaceId.trim().length > 0 &&
+      legacyWorkspaceId.trim() === input.workspaceId
+    );
+  }
+  return input.allowGlobal;
+}
+
+function isCanonicalIsoTimestamp(value: string): boolean {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
 }
 
 function getBatchPatchChangedFields(patch: MemoryLifecyclePatch): string[] {

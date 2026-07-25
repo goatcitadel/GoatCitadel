@@ -23,7 +23,7 @@ export interface ApprovalLinkage {
   actionType?: string;
   operatorId?: string;
   authActorId?: string;
-  authActorSource?: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion" | "a2a_peer";
+  authActorSource?: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion" | "a2a_peer" | "mesh_node";
   permissionProfileId?: string;
   localOperatorOverrideId?: string;
 }
@@ -127,6 +127,13 @@ export type ApprovalEffectKind =
   | "approval_inbox_follow_up"
   | "approval_after_hooks"
   | "approval_resolution_signals"
+  | "skill_hub_lifecycle_apply"
+  | "external_source_knowledge_snapshot_apply"
+  | "mesh_capability_activation_apply"
+  | "memory_lifecycle_apply"
+  | "skill_lifecycle_apply"
+  | "capability_lifecycle_apply"
+  | "improvement_lifecycle_apply"
   | "approval_observability";
 
 export type ApprovalObservabilityAuditStream = "tool_invocations" | "policy_blocks" | "approvals" | "hooks";
@@ -176,7 +183,19 @@ export interface ApprovalObservabilityEnvelope {
 
 export type ApprovalEffectStatus = "pending" | "running" | "completed" | "skipped" | "failed";
 
-export type ApprovalEffectTargetKind = "durable_run" | "chat_turn" | "pending_action" | "remote_token" | "approval";
+export type ApprovalEffectTargetKind =
+  | "durable_run"
+  | "chat_turn"
+  | "pending_action"
+  | "remote_token"
+  | "approval"
+  | "skill_hub_operation"
+  | "external_source_import_item"
+  | "mesh_capability_activation"
+  | "memory_record"
+  | "skill_state"
+  | "capability_candidate"
+  | "improvement_operation";
 
 export interface ApprovalEffectRecord {
   effectId: string;

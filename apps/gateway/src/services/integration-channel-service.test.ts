@@ -287,7 +287,7 @@ describe("integration-channel-service inbound access defaults", () => {
 });
 
 describe("integration-channel-service runtime status", () => {
-  it("marks configured Signal inbound polling unready when the feature flag is disabled", () => {
+  it("fails closed when a Signal connection retains the deprecated inbound toggle", () => {
     const deps = createDeps();
     deps.isFeatureEnabled = vi.fn((flag) => flag !== "signalInboundV1Enabled");
     const connection = createIntegrationConnection(deps, {
@@ -296,7 +296,7 @@ describe("integration-channel-service runtime status", () => {
       config: {
         baseUrl: "http://127.0.0.1:8080",
         accountId: "+15550001111",
-        inboundEnabled: true,
+        inboundEnabled: " TRUE ",
       },
     });
     updateIntegrationConnection(deps, connection.connectionId, {
@@ -307,16 +307,81 @@ describe("integration-channel-service runtime status", () => {
     const status = getIntegrationConnectionChannelRuntimeStatus(deps, connection.connectionId);
 
     expect(status.ready).toBe(false);
+    expect(status.inboundModes).toEqual(["none"]);
     expect(status.runtimePosture.inboundReadiness).toBe("unsupported");
     expect(status.metadata).toMatchObject({
-      readinessSource: "feature_flag",
+      readinessSource: "blocked_legacy_inbound",
       featureFlag: "signalInboundV1Enabled",
       featureEnabled: false,
+      legacyConnectionInboundEnabled: true,
     });
     expect(status.metadata.setupDiagnostics).toEqual(
       expect.arrayContaining([
-        "Signal inbound polling is configured on this connection, but signalInboundV1Enabled is disabled.",
+        expect.stringContaining("no acknowledgement/replay contract"),
+        expect.stringContaining("outbound sends remain available"),
       ]),
     );
+  });
+
+  it("fails closed when the deprecated global Signal inbound flag is enabled", () => {
+    const deps = createDeps();
+    deps.isFeatureEnabled = vi.fn((flag) => flag === "signalInboundV1Enabled");
+    const connection = createIntegrationConnection(deps, {
+      catalogId: "channel.signal",
+      label: "Signal",
+      config: {
+        baseUrl: "http://127.0.0.1:8080",
+        defaultRecipient: "+15550002222",
+      },
+    });
+    updateIntegrationConnection(deps, connection.connectionId, {
+      status: "connected",
+      lastSyncAt: "2026-07-05T12:00:00.000Z",
+    });
+
+    const status = getIntegrationConnectionChannelRuntimeStatus(deps, connection.connectionId);
+
+    expect(status).toMatchObject({
+      ready: false,
+      inboundModes: ["none"],
+      runtimePosture: {
+        outboundTransport: "api",
+        lifecycle: "stateless",
+        inboundReadiness: "unsupported",
+      },
+      metadata: {
+        readinessSource: "blocked_legacy_inbound",
+        featureEnabled: true,
+        legacyConnectionInboundEnabled: false,
+      },
+    });
+  });
+
+  it("keeps a clean outbound-only Signal connection ready", () => {
+    const deps = createDeps();
+    deps.isFeatureEnabled = vi.fn(() => false);
+    const connection = createIntegrationConnection(deps, {
+      catalogId: "channel.signal",
+      label: "Signal",
+      config: {
+        baseUrl: "http://127.0.0.1:8080",
+        defaultRecipient: "+15550003333",
+      },
+    });
+    updateIntegrationConnection(deps, connection.connectionId, {
+      status: "connected",
+      lastSyncAt: "2026-07-05T12:00:00.000Z",
+    });
+
+    const status = getIntegrationConnectionChannelRuntimeStatus(deps, connection.connectionId);
+
+    expect(status.ready).toBe(true);
+    expect(status.inboundModes).toEqual(["none"]);
+    expect(status.runtimePosture).toMatchObject({
+      outboundTransport: "api",
+      lifecycle: "stateless",
+      inboundReadiness: "unsupported",
+    });
+    expect(status.metadata.readinessSource).toBe("last_live_probe");
   });
 });

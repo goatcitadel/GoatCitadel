@@ -18,6 +18,8 @@ export interface CostLedgerRecord {
   tokenCachedInput: number;
   costUsd: number;
   createdAt: string;
+  /** Comma-separated metrics whose numeric values are authoritative, not lower-bound placeholders. */
+  usageKnownMask?: string;
 }
 
 export interface CostSummary {
@@ -28,12 +30,38 @@ export interface CostSummary {
   tokenCachedInput: number;
   tokenTotal: number;
   costUsd: number;
+  metricAvailability: {
+    inputTokensComplete: boolean;
+    outputTokensComplete: boolean;
+    cachedInputTokensComplete: boolean;
+    costUsdComplete: boolean;
+  };
 }
 
 export interface CostUsageAvailability {
   trackedEvents: number;
   unknownEvents: number;
+  /** Compatibility field name; counts every canonical or legacy usage attempt in the window. */
   totalAgentEvents: number;
+  metricAvailability: {
+    inputTokens: CostMetricAvailability;
+    outputTokens: CostMetricAvailability;
+    cachedInputTokens: CostMetricAvailability;
+    costUsd: CostMetricAvailability;
+  };
+}
+
+export interface CostMetricAvailability {
+  knownAttemptCount: number;
+  unknownAttemptCount: number;
+  complete: boolean;
+}
+
+export interface CostMetricCompleteness {
+  inputTokensComplete: boolean;
+  outputTokensComplete: boolean;
+  cachedInputTokensComplete: boolean;
+  costUsdComplete: boolean;
 }
 
 export interface CostDailySeriesSegment {
@@ -45,6 +73,7 @@ export interface CostDailySeriesSegment {
   tokenTotal: number;
   costUsd: number;
   models: string[];
+  metricAvailability: CostMetricCompleteness;
 }
 
 export interface CostDailySeriesDay {
@@ -56,6 +85,7 @@ export interface CostDailySeriesDay {
   tokenTotal: number;
   costUsd: number;
   segments: CostDailySeriesSegment[];
+  metricAvailability: CostMetricCompleteness;
 }
 
 export class CostLedgerRepository {
@@ -67,11 +97,90 @@ export class CostLedgerRepository {
   private readonly summaryUsageAvailabilityStmt;
   private readonly dailySeriesStmt;
   private readonly pruneStmt;
+  private readonly usageMaskSupported;
   private insertCount = 0;
 
   public constructor(private readonly db: DatabaseClient) {
     const providerAttributionSupported = hasCostLedgerColumn(db, "provider_id") && hasCostLedgerColumn(db, "model_id");
     const credentialDimsSupported = hasCostLedgerColumn(db, "credential_type") && hasCostLedgerColumn(db, "usage_pool");
+    const usageMaskSupported = hasCostLedgerColumn(db, "usage_known_mask");
+    this.usageMaskSupported = usageMaskSupported;
+    const maskKnown = (metric: "input" | "output" | "cached" | "cost") =>
+      usageMaskSupported
+        ? db.dialect === "postgres"
+          ? `CASE WHEN POSITION('${metric}' IN COALESCE(usage_known_mask, '')) > 0 THEN 1 ELSE 0 END`
+          : `CASE WHEN INSTR(COALESCE(usage_known_mask, ''), '${metric}') > 0 THEN 1 ELSE 0 END`
+        : "0";
+    const allSourceKnown = (metric: "input" | "output" | "cached" | "cost") => `MIN(${metric}_known)`;
+    const legacyUsageTracked = usageMaskSupported
+      ? "COALESCE(usage_known_mask, '') <> '' OR token_input > 0 OR token_output > 0 OR token_cached_input > 0 OR cost_usd > 0"
+      : "token_input > 0 OR token_output > 0 OR token_cached_input > 0 OR cost_usd > 0";
+    const canonicalUsageSupported = hasTable(db, "model_usage_events");
+    const legacyProviderId = providerAttributionSupported ? "provider_id" : "NULL";
+    const legacyModelId = providerAttributionSupported ? "model_id" : "NULL";
+    const usageCostSource = canonicalUsageSupported
+      ? `
+          SELECT
+            session_id, agent_id, task_id,
+            COALESCE(NULLIF(effective_provider_id, ''), NULLIF(requested_provider_id, '')) AS provider_id,
+            COALESCE(NULLIF(effective_model_id, ''), NULLIF(dispatched_model_id, ''), NULLIF(requested_model_id, '')) AS model_id,
+            SUBSTR(started_at, 1, 10) AS day,
+            input_tokens AS token_input,
+            output_tokens AS token_output,
+            cached_input_tokens AS token_cached_input,
+            cost_usd,
+            started_at AS created_at,
+            CASE WHEN input_tokens IS NOT NULL THEN 1 ELSE 0 END AS input_known,
+            CASE WHEN output_tokens IS NOT NULL THEN 1 ELSE 0 END AS output_known,
+            CASE WHEN cached_input_tokens IS NOT NULL THEN 1 ELSE 0 END AS cached_known,
+            CASE WHEN cost_usd IS NOT NULL THEN 1 ELSE 0 END AS cost_known
+          FROM model_usage_events
+          WHERE transport_status = 'accepted'
+            OR (
+              transport_status = 'dispatch_unknown'
+              AND (
+                dispatch_reconciliation IS NULL
+                OR dispatch_reconciliation IN (
+                  'confirmed_dispatched_usage_unknown',
+                  'superseded_by_new_generation'
+                )
+              )
+            )
+          UNION ALL
+          SELECT
+            session_id, agent_id, task_id,
+            ${legacyProviderId} AS provider_id,
+            ${legacyModelId} AS model_id,
+            day,
+            token_input,
+            token_output,
+            token_cached_input,
+            cost_usd,
+            created_at,
+            ${maskKnown("input")} AS input_known,
+            ${maskKnown("output")} AS output_known,
+            ${maskKnown("cached")} AS cached_known,
+            ${maskKnown("cost")} AS cost_known
+          FROM cost_ledger
+          WHERE canonical_usage_event_id IS NULL
+        `
+      : `
+          SELECT
+            session_id, agent_id, task_id,
+            ${legacyProviderId} AS provider_id,
+            ${legacyModelId} AS model_id,
+            day,
+            token_input,
+            token_output,
+            token_cached_input,
+            cost_usd,
+            created_at,
+            ${maskKnown("input")} AS input_known,
+            ${maskKnown("output")} AS output_known,
+            ${maskKnown("cached")} AS cached_known,
+            ${maskKnown("cost")} AS cost_known
+          FROM cost_ledger
+        `;
     // Build the INSERT column list to match whichever optional columns the schema
     // actually has (older DBs may predate provider attribution and/or credential dims).
     const insertColumns = ["session_id", "agent_id", "task_id"];
@@ -86,6 +195,10 @@ export class CostLedgerRepository {
       insertColumns.push("credential_type", "usage_pool");
       insertValues.push("@credentialType", "@usagePool");
     }
+    if (usageMaskSupported) {
+      insertColumns.push("usage_known_mask");
+      insertValues.push("@usageKnownMask");
+    }
     this.insertStmt = db.prepare(
       `INSERT INTO cost_ledger (${insertColumns.join(", ")}) VALUES (${insertValues.join(", ")})`,
     );
@@ -93,12 +206,16 @@ export class CostLedgerRepository {
     this.summaryByDayStmt = db.prepare(`
       SELECT
         day AS key,
-        SUM(token_input) AS token_input,
-        SUM(token_output) AS token_output,
-        SUM(token_cached_input) AS token_cached_input,
-        SUM(cost_usd) AS cost_usd
-      FROM cost_ledger
-      WHERE day >= @fromDay AND day <= @toDay
+        COALESCE(SUM(token_input), 0) AS token_input,
+        COALESCE(SUM(token_output), 0) AS token_output,
+        COALESCE(SUM(token_cached_input), 0) AS token_cached_input,
+        COALESCE(SUM(cost_usd), 0) AS cost_usd,
+        ${allSourceKnown("input")} AS input_known,
+        ${allSourceKnown("output")} AS output_known,
+        ${allSourceKnown("cached")} AS cached_known,
+        ${allSourceKnown("cost")} AS cost_known
+      FROM (${usageCostSource}) usage_costs
+      WHERE created_at >= @from AND created_at <= @to
       GROUP BY day
       ORDER BY day DESC
     `);
@@ -106,12 +223,16 @@ export class CostLedgerRepository {
     this.summaryBySessionStmt = db.prepare(`
       SELECT
         session_id AS key,
-        SUM(token_input) AS token_input,
-        SUM(token_output) AS token_output,
-        SUM(token_cached_input) AS token_cached_input,
-        SUM(cost_usd) AS cost_usd
-      FROM cost_ledger
-      WHERE created_at >= @from AND created_at <= @to
+        COALESCE(SUM(token_input), 0) AS token_input,
+        COALESCE(SUM(token_output), 0) AS token_output,
+        COALESCE(SUM(token_cached_input), 0) AS token_cached_input,
+        COALESCE(SUM(cost_usd), 0) AS cost_usd,
+        ${allSourceKnown("input")} AS input_known,
+        ${allSourceKnown("output")} AS output_known,
+        ${allSourceKnown("cached")} AS cached_known,
+        ${allSourceKnown("cost")} AS cost_known
+      FROM (${usageCostSource}) usage_costs
+      WHERE created_at >= @from AND created_at <= @to AND session_id IS NOT NULL
       GROUP BY session_id
       ORDER BY SUM(cost_usd) DESC
     `);
@@ -119,11 +240,15 @@ export class CostLedgerRepository {
     this.summaryByAgentStmt = db.prepare(`
       SELECT
         agent_id AS key,
-        SUM(token_input) AS token_input,
-        SUM(token_output) AS token_output,
-        SUM(token_cached_input) AS token_cached_input,
-        SUM(cost_usd) AS cost_usd
-      FROM cost_ledger
+        COALESCE(SUM(token_input), 0) AS token_input,
+        COALESCE(SUM(token_output), 0) AS token_output,
+        COALESCE(SUM(token_cached_input), 0) AS token_cached_input,
+        COALESCE(SUM(cost_usd), 0) AS cost_usd,
+        ${allSourceKnown("input")} AS input_known,
+        ${allSourceKnown("output")} AS output_known,
+        ${allSourceKnown("cached")} AS cached_known,
+        ${allSourceKnown("cost")} AS cost_known
+      FROM (${usageCostSource}) usage_costs
       WHERE created_at >= @from AND created_at <= @to AND agent_id IS NOT NULL
       GROUP BY agent_id
       ORDER BY SUM(cost_usd) DESC
@@ -132,26 +257,84 @@ export class CostLedgerRepository {
     this.summaryByTaskStmt = db.prepare(`
       SELECT
         task_id AS key,
-        SUM(token_input) AS token_input,
-        SUM(token_output) AS token_output,
-        SUM(token_cached_input) AS token_cached_input,
-        SUM(cost_usd) AS cost_usd
-      FROM cost_ledger
+        COALESCE(SUM(token_input), 0) AS token_input,
+        COALESCE(SUM(token_output), 0) AS token_output,
+        COALESCE(SUM(token_cached_input), 0) AS token_cached_input,
+        COALESCE(SUM(cost_usd), 0) AS cost_usd,
+        ${allSourceKnown("input")} AS input_known,
+        ${allSourceKnown("output")} AS output_known,
+        ${allSourceKnown("cached")} AS cached_known,
+        ${allSourceKnown("cost")} AS cost_known
+      FROM (${usageCostSource}) usage_costs
       WHERE created_at >= @from AND created_at <= @to AND task_id IS NOT NULL
       GROUP BY task_id
       ORDER BY SUM(cost_usd) DESC
     `);
 
-    this.summaryUsageAvailabilityStmt = db.prepare(`
-      SELECT
-        COUNT(*) AS total_agent_events,
-        SUM(CASE WHEN token_input > 0 OR token_output > 0 OR token_cached_input > 0 OR cost_usd > 0 THEN 1 ELSE 0 END) AS tracked_events,
-        SUM(CASE WHEN token_input = 0 AND token_output = 0 AND token_cached_input = 0 AND cost_usd = 0 THEN 1 ELSE 0 END) AS unknown_events
-      FROM cost_ledger
-      WHERE created_at >= @from
-        AND created_at <= @to
-        AND agent_id IS NOT NULL
-    `);
+    this.summaryUsageAvailabilityStmt = canonicalUsageSupported
+      ? db.prepare(`
+          SELECT
+            COUNT(*) AS total_agent_events,
+            SUM(CASE WHEN availability = 'tracked' THEN 1 ELSE 0 END) AS tracked_events,
+            SUM(CASE WHEN availability = 'unknown' THEN 1 ELSE 0 END) AS unknown_events,
+            SUM(input_known) AS input_known_events,
+            SUM(output_known) AS output_known_events,
+            SUM(cached_known) AS cached_known_events,
+            SUM(cost_known) AS cost_known_events
+          FROM (
+            SELECT
+              CASE
+                WHEN transport_status = 'accepted' THEN availability
+                ELSE 'unknown'
+              END AS availability,
+              CASE WHEN input_tokens IS NOT NULL THEN 1 ELSE 0 END AS input_known,
+              CASE WHEN output_tokens IS NOT NULL THEN 1 ELSE 0 END AS output_known,
+              CASE WHEN cached_input_tokens IS NOT NULL THEN 1 ELSE 0 END AS cached_known,
+              CASE WHEN cost_usd IS NOT NULL THEN 1 ELSE 0 END AS cost_known,
+              started_at AS occurred_at
+            FROM model_usage_events
+            WHERE transport_status = 'accepted'
+              OR (
+                transport_status = 'dispatch_unknown'
+                AND (
+                  dispatch_reconciliation IS NULL
+                  OR dispatch_reconciliation IN (
+                    'confirmed_dispatched_usage_unknown',
+                    'superseded_by_new_generation'
+                  )
+                )
+              )
+            UNION ALL
+            SELECT
+              CASE
+                WHEN ${legacyUsageTracked}
+                  THEN 'tracked'
+                ELSE 'unknown'
+              END AS availability,
+              ${maskKnown("input")} AS input_known,
+              ${maskKnown("output")} AS output_known,
+              ${maskKnown("cached")} AS cached_known,
+              ${maskKnown("cost")} AS cost_known,
+              created_at AS occurred_at
+          FROM cost_ledger
+          WHERE canonical_usage_event_id IS NULL
+          ) usage_attempts
+          WHERE occurred_at >= @from
+            AND occurred_at <= @to
+        `)
+      : db.prepare(`
+          SELECT
+            COUNT(*) AS total_agent_events,
+            SUM(CASE WHEN ${legacyUsageTracked} THEN 1 ELSE 0 END) AS tracked_events,
+            SUM(CASE WHEN ${legacyUsageTracked} THEN 0 ELSE 1 END) AS unknown_events,
+            SUM(${maskKnown("input")}) AS input_known_events,
+            SUM(${maskKnown("output")}) AS output_known_events,
+            SUM(${maskKnown("cached")}) AS cached_known_events,
+            SUM(${maskKnown("cost")}) AS cost_known_events
+          FROM cost_ledger
+          WHERE created_at >= @from
+            AND created_at <= @to
+        `);
 
     // A single MIN() dropped every model but the lexicographically smallest, so a provider/day
     // that used multiple models surfaced only one in the cost breakdown. Aggregate the DISTINCT
@@ -162,18 +345,22 @@ export class CostLedgerRepository {
         ? "string_agg(DISTINCT NULLIF(model_id, ''), ',')"
         : "GROUP_CONCAT(DISTINCT NULLIF(model_id, ''))";
     this.dailySeriesStmt = db.prepare(
-      providerAttributionSupported
+      canonicalUsageSupported || providerAttributionSupported
         ? `
           SELECT
             day AS iso_date,
             COALESCE(NULLIF(provider_id, ''), 'unattributed') AS provider_key,
             ${modelIdsAgg} AS model_ids,
-            SUM(token_input) AS token_input,
-            SUM(token_output) AS token_output,
-            SUM(token_cached_input) AS token_cached_input,
-            SUM(cost_usd) AS cost_usd
-          FROM cost_ledger
-          WHERE day >= @fromDay AND day <= @toDay
+            COALESCE(SUM(token_input), 0) AS token_input,
+            COALESCE(SUM(token_output), 0) AS token_output,
+            COALESCE(SUM(token_cached_input), 0) AS token_cached_input,
+            COALESCE(SUM(cost_usd), 0) AS cost_usd,
+            ${allSourceKnown("input")} AS input_known,
+            ${allSourceKnown("output")} AS output_known,
+            ${allSourceKnown("cached")} AS cached_known,
+            ${allSourceKnown("cost")} AS cost_known
+          FROM (${usageCostSource}) usage_costs
+          WHERE created_at >= @from AND created_at <= @to
           GROUP BY day, provider_key
           ORDER BY day ASC, SUM(cost_usd) DESC, provider_key ASC
         `
@@ -182,12 +369,16 @@ export class CostLedgerRepository {
             day AS iso_date,
             'unattributed' AS provider_key,
             NULL AS model_ids,
-            SUM(token_input) AS token_input,
-            SUM(token_output) AS token_output,
-            SUM(token_cached_input) AS token_cached_input,
-            SUM(cost_usd) AS cost_usd
-          FROM cost_ledger
-          WHERE day >= @fromDay AND day <= @toDay
+            COALESCE(SUM(token_input), 0) AS token_input,
+            COALESCE(SUM(token_output), 0) AS token_output,
+            COALESCE(SUM(token_cached_input), 0) AS token_cached_input,
+            COALESCE(SUM(cost_usd), 0) AS cost_usd,
+            ${allSourceKnown("input")} AS input_known,
+            ${allSourceKnown("output")} AS output_known,
+            ${allSourceKnown("cached")} AS cached_known,
+            ${allSourceKnown("cost")} AS cost_known
+          FROM (${usageCostSource}) usage_costs
+          WHERE created_at >= @from AND created_at <= @to
           GROUP BY day
           ORDER BY day ASC, SUM(cost_usd) DESC
         `,
@@ -213,6 +404,7 @@ export class CostLedgerRepository {
         modelId: normalizeOptionalText(record.modelId) ?? null,
         credentialType: normalizeOptionalText(record.credentialType) ?? null,
         usagePool: normalizeOptionalText(record.usagePool) ?? null,
+        usageKnownMask: this.usageMaskSupported ? (record.usageKnownMask ?? "input,output,cached,cost") : null,
       });
       if (shouldPrune) {
         const cutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
@@ -226,8 +418,8 @@ export class CostLedgerRepository {
     if (scope === "day") {
       const rows = toSummaryRows(
         this.summaryByDayStmt.all({
-          fromDay: fromIso.slice(0, 10),
-          toDay: toIso.slice(0, 10),
+          from: fromIso,
+          to: toIso,
         }),
       );
       return rows.map((row) => mapSummaryRow(scope, row));
@@ -251,12 +443,23 @@ export class CostLedgerRepository {
           total_agent_events: number | null;
           tracked_events: number | null;
           unknown_events: number | null;
+          input_known_events: number | null;
+          output_known_events: number | null;
+          cached_known_events: number | null;
+          cost_known_events: number | null;
         }
       | undefined;
+    const totalAgentEvents = Number(row?.total_agent_events ?? 0);
     return {
       trackedEvents: Number(row?.tracked_events ?? 0),
       unknownEvents: Number(row?.unknown_events ?? 0),
-      totalAgentEvents: Number(row?.total_agent_events ?? 0),
+      totalAgentEvents,
+      metricAvailability: {
+        inputTokens: mapMetricAvailability(totalAgentEvents, row?.input_known_events),
+        outputTokens: mapMetricAvailability(totalAgentEvents, row?.output_known_events),
+        cachedInputTokens: mapMetricAvailability(totalAgentEvents, row?.cached_known_events),
+        costUsd: mapMetricAvailability(totalAgentEvents, row?.cost_known_events),
+      },
     };
   }
 
@@ -264,8 +467,8 @@ export class CostLedgerRepository {
     const dayKeys = enumerateIsoDays(fromIso.slice(0, 10), toIso.slice(0, 10)).slice(-7);
     const rows = toDailySeriesRows(
       this.dailySeriesStmt.all({
-        fromDay: dayKeys[0] ?? fromIso.slice(0, 10),
-        toDay: dayKeys[dayKeys.length - 1] ?? toIso.slice(0, 10),
+        from: fromIso,
+        to: toIso,
       }),
     );
     const days = new Map<string, CostDailySeriesDay>();
@@ -279,6 +482,7 @@ export class CostLedgerRepository {
         tokenTotal: 0,
         costUsd: 0,
         segments: [],
+        metricAvailability: completeMetricAvailability(),
       });
     }
 
@@ -292,11 +496,13 @@ export class CostLedgerRepository {
       const tokenCachedInput = Number(row.token_cached_input ?? 0);
       const costUsd = Number(row.cost_usd ?? 0);
       const tokenTotal = tokenInput + tokenOutput;
+      const metricAvailability = mapMetricCompleteness(row);
       day.tokenInput += tokenInput;
       day.tokenOutput += tokenOutput;
       day.tokenCachedInput += tokenCachedInput;
       day.tokenTotal += tokenTotal;
       day.costUsd += costUsd;
+      day.metricAvailability = intersectMetricCompleteness(day.metricAvailability, metricAvailability);
       day.segments.push({
         providerKey: row.provider_key,
         label: formatProviderLabel(row.provider_key),
@@ -306,6 +512,7 @@ export class CostLedgerRepository {
         tokenTotal,
         costUsd,
         models: splitModelIds(row.model_ids),
+        metricAvailability,
       });
     }
 
@@ -319,6 +526,10 @@ interface SummaryRow {
   token_output: number;
   token_cached_input: number;
   cost_usd: number;
+  input_known: number;
+  output_known: number;
+  cached_known: number;
+  cost_known: number;
 }
 
 function mapSummaryRow(scope: CostSummary["scope"], row: SummaryRow): CostSummary {
@@ -333,6 +544,12 @@ function mapSummaryRow(scope: CostSummary["scope"], row: SummaryRow): CostSummar
     tokenCachedInput,
     tokenTotal: tokenInput + tokenOutput,
     costUsd: Number(row.cost_usd ?? 0),
+    metricAvailability: {
+      inputTokensComplete: Number(row.input_known ?? 0) === 1,
+      outputTokensComplete: Number(row.output_known ?? 0) === 1,
+      cachedInputTokensComplete: Number(row.cached_known ?? 0) === 1,
+      costUsdComplete: Number(row.cost_known ?? 0) === 1,
+    },
   };
 }
 
@@ -348,6 +565,10 @@ interface DailySeriesRow {
   token_output: number;
   token_cached_input: number;
   cost_usd: number;
+  input_known: number;
+  output_known: number;
+  cached_known: number;
+  cost_known: number;
 }
 
 function toDailySeriesRows(value: unknown): DailySeriesRow[] {
@@ -361,7 +582,11 @@ function isSummaryRow(value: unknown): value is SummaryRow {
     typeof value.token_input === "number" &&
     typeof value.token_output === "number" &&
     typeof value.token_cached_input === "number" &&
-    typeof value.cost_usd === "number"
+    typeof value.cost_usd === "number" &&
+    typeof value.input_known === "number" &&
+    typeof value.output_known === "number" &&
+    typeof value.cached_known === "number" &&
+    typeof value.cost_known === "number"
   );
 }
 
@@ -374,8 +599,57 @@ function isDailySeriesRow(value: unknown): value is DailySeriesRow {
     typeof value.token_input === "number" &&
     typeof value.token_output === "number" &&
     typeof value.token_cached_input === "number" &&
-    typeof value.cost_usd === "number"
+    typeof value.cost_usd === "number" &&
+    typeof value.input_known === "number" &&
+    typeof value.output_known === "number" &&
+    typeof value.cached_known === "number" &&
+    typeof value.cost_known === "number"
   );
+}
+
+function mapMetricCompleteness(
+  row: Pick<SummaryRow, "input_known" | "output_known" | "cached_known" | "cost_known">,
+): CostMetricCompleteness {
+  return {
+    inputTokensComplete: Number(row.input_known ?? 0) === 1,
+    outputTokensComplete: Number(row.output_known ?? 0) === 1,
+    cachedInputTokensComplete: Number(row.cached_known ?? 0) === 1,
+    costUsdComplete: Number(row.cost_known ?? 0) === 1,
+  };
+}
+
+function completeMetricAvailability(): CostMetricCompleteness {
+  return {
+    inputTokensComplete: true,
+    outputTokensComplete: true,
+    cachedInputTokensComplete: true,
+    costUsdComplete: true,
+  };
+}
+
+function intersectMetricCompleteness(
+  left: CostMetricCompleteness,
+  right: CostMetricCompleteness,
+): CostMetricCompleteness {
+  return {
+    inputTokensComplete: left.inputTokensComplete && right.inputTokensComplete,
+    outputTokensComplete: left.outputTokensComplete && right.outputTokensComplete,
+    cachedInputTokensComplete: left.cachedInputTokensComplete && right.cachedInputTokensComplete,
+    costUsdComplete: left.costUsdComplete && right.costUsdComplete,
+  };
+}
+
+function mapMetricAvailability(
+  totalAttemptCount: number,
+  knownValue: number | null | undefined,
+): CostMetricAvailability {
+  const knownAttemptCount = Math.max(0, Number(knownValue ?? 0));
+  const unknownAttemptCount = Math.max(0, totalAttemptCount - knownAttemptCount);
+  return {
+    knownAttemptCount,
+    unknownAttemptCount,
+    complete: unknownAttemptCount === 0,
+  };
 }
 
 function enumerateIsoDays(fromDay: string, toDay: string): string[] {
@@ -427,7 +701,7 @@ function splitModelIds(value: string | null): string[] {
 
 function hasCostLedgerColumn(
   db: DatabaseClient,
-  columnName: "provider_id" | "model_id" | "credential_type" | "usage_pool",
+  columnName: "provider_id" | "model_id" | "credential_type" | "usage_pool" | "usage_known_mask",
 ): boolean {
   try {
     if (db.dialect === "sqlite") {
@@ -445,6 +719,21 @@ function hasCostLedgerColumn(
       )
       .get<{ name?: string }>({ columnName });
     return row?.name === columnName;
+  } catch {
+    return false;
+  }
+}
+
+function hasTable(db: DatabaseClient, tableName: string): boolean {
+  try {
+    if (db.dialect === "sqlite") {
+      return Boolean(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(tableName));
+    }
+    return Boolean(
+      db
+        .prepare("SELECT table_name FROM information_schema.tables WHERE table_name = @tableName LIMIT 1")
+        .get({ tableName }),
+    );
   } catch {
     return false;
   }

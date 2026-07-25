@@ -1,3 +1,7 @@
+const INITIAL_ROUTE_NAVIGATION_MAX_ATTEMPTS = 2;
+const INITIAL_ROUTE_READINESS_GRACE_MS = 5_000;
+const INITIAL_ROUTE_TIMEOUT_REASON = "initial_navigation_timeout";
+
 export async function runSurfaceRegressionLane(context, _options = {}, deps) {
   const {
     appendTraceArtifact,
@@ -22,9 +26,13 @@ export async function runSurfaceRegressionLane(context, _options = {}, deps) {
     waitForVerificationRouteReady,
   } = deps;
   const verificationTarget = resolveVerificationTargetContext();
+  const surfaceOperatorToken = "verification-surface-regression-operator-token";
   const stack = await startVerificationStack(context, {
     includeUi: true,
     gatewayEnv: {
+      GOATCITADEL_AUTH_MODE: "token",
+      GOATCITADEL_AUTH_TOKEN: surfaceOperatorToken,
+      GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS: "true",
       GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
       GOATCITADEL_CODE_MODE_SANDBOX_REQUIRED: "false",
       GOATCITADEL_MESH_NODE_ID: "build-main",
@@ -50,7 +58,7 @@ export async function runSurfaceRegressionLane(context, _options = {}, deps) {
       const page = await browserContext.newPage();
       const browserLog = attachBrowserLogging(page);
 
-      for (const route of verificationTarget.surfaceRoutes) {
+      for (const [routeIndex, route] of verificationTarget.surfaceRoutes.entries()) {
         await runScenario(
           context,
           {
@@ -64,8 +72,13 @@ export async function runSurfaceRegressionLane(context, _options = {}, deps) {
             const artifactSlug = `surface-regression-${route.slug}`;
             const trace = await startBrowserTrace(context, { page, slug: artifactSlug });
             let artifacts;
+            let navigationEvidence = emptyNavigationEvidence();
             try {
-              await page.goto(buildVerificationUiUrl(stack.uiUrl, route.href), { waitUntil: "domcontentloaded" });
+              // Only the first read-only boot navigation can recover. Correlation and
+              // interaction hooks run after this boundary and are never retried.
+              navigationEvidence = await navigateSurfaceRoute(page, buildVerificationUiUrl(stack.uiUrl, route.href), {
+                allowInitialColdStartRecovery: routeIndex === 0,
+              });
               await waitForVerificationRouteReady(page, route, verificationTarget.packageName);
               await setBrowserCorrelation(page, correlationId, fixture?.sessionId);
               await performVerificationInteraction(page, route.interaction, verificationTarget.packageName);
@@ -89,10 +102,14 @@ export async function runSurfaceRegressionLane(context, _options = {}, deps) {
                   route: route.href,
                   consoleErrors: browserSanity.consoleErrors.length,
                   pageErrors: browserSanity.pageErrors.length,
+                  navigationAttempts: navigationEvidence.attempts,
+                  navigationRecoveryReason: navigationEvidence.recoveryReason,
+                  navigationRecoveryDisposition: navigationEvidence.recoveryDisposition,
                 },
                 artifacts,
               };
             } catch (error) {
+              navigationEvidence = navigationEvidenceFromError(error) ?? navigationEvidence;
               artifacts ??= await captureBrowserArtifacts(context, {
                 slug: `${artifactSlug}-failure`,
                 page,
@@ -105,7 +122,12 @@ export async function runSurfaceRegressionLane(context, _options = {}, deps) {
               return {
                 status: "failed",
                 error: formatBrowserFailure(error),
-                metrics: { route: route.href },
+                metrics: {
+                  route: route.href,
+                  navigationAttempts: navigationEvidence.attempts,
+                  navigationRecoveryReason: navigationEvidence.recoveryReason,
+                  navigationRecoveryDisposition: navigationEvidence.recoveryDisposition,
+                },
                 artifacts: appendTraceArtifact(artifacts, traceArtifact),
               };
             } finally {
@@ -210,7 +232,81 @@ export async function runSurfaceRegressionLane(context, _options = {}, deps) {
   } finally {
     await stopVerificationStack(stack);
   }
+}
 
+export async function navigateSurfaceRoute(page, url, options = {}) {
+  const allowInitialColdStartRecovery = options.allowInitialColdStartRecovery === true;
+  const maxAttempts = allowInitialColdStartRecovery ? INITIAL_ROUTE_NAVIGATION_MAX_ATTEMPTS : 1;
+  let recoveryReason = null;
+
+  for (let attempts = 1; attempts <= maxAttempts; attempts += 1) {
+    try {
+      await page.goto(url, { waitUntil: "domcontentloaded" });
+      return {
+        attempts,
+        recoveryReason,
+        recoveryDisposition: attempts > 1 ? "retried" : "not_needed",
+      };
+    } catch (error) {
+      const canRecover = allowInitialColdStartRecovery && attempts === 1 && isNavigationTimeoutError(error);
+      if (!canRecover) {
+        throw new SurfaceNavigationFailure(error, {
+          attempts,
+          recoveryReason,
+          recoveryDisposition: attempts > 1 ? "retry_exhausted" : "failed_without_retry",
+        });
+      }
+
+      recoveryReason = INITIAL_ROUTE_TIMEOUT_REASON;
+      try {
+        await page.waitForLoadState("domcontentloaded", {
+          timeout: INITIAL_ROUTE_READINESS_GRACE_MS,
+        });
+        return {
+          attempts,
+          recoveryReason,
+          recoveryDisposition: "completed_during_readiness_grace",
+        };
+      } catch (readinessError) {
+        if (!isNavigationTimeoutError(readinessError)) {
+          throw new SurfaceNavigationFailure(readinessError, {
+            attempts,
+            recoveryReason,
+            recoveryDisposition: "readiness_failed",
+          });
+        }
+      }
+    }
+  }
+
+  throw new Error("surface navigation attempt accounting exhausted unexpectedly");
+}
+
+class SurfaceNavigationFailure extends Error {
+  constructor(cause, navigationEvidence) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = cause instanceof Error ? cause.name : "SurfaceNavigationFailure";
+    this.navigationEvidence = navigationEvidence;
+    if (cause instanceof Error && cause.stack) {
+      this.stack = cause.stack;
+    }
+  }
+}
+
+function emptyNavigationEvidence() {
+  return {
+    attempts: 0,
+    recoveryReason: null,
+    recoveryDisposition: "not_started",
+  };
+}
+
+function navigationEvidenceFromError(error) {
+  return error instanceof SurfaceNavigationFailure ? error.navigationEvidence : null;
+}
+
+function isNavigationTimeoutError(error) {
+  return error instanceof Error && (error.name === "TimeoutError" || /Timeout \d+ms exceeded/iu.test(error.message));
 }
 
 function formatBrowserFailure(error) {

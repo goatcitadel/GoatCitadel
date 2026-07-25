@@ -233,6 +233,10 @@ export function composeIntegrationChannelRouteDependencies(
     },
     integrations,
     integrationWebhooks: createIntegrationWebhookRoutePort({
+      acceptInboundChannelEvent: (input) => gateway.acceptInboundChannelEvent(input),
+      acceptInboundChannelEvents: (inputs) => gateway.acceptInboundChannelEvents(inputs),
+      awaitInboundChannelCommandResult: (eventId) => gateway.awaitInboundChannelCommandResult(eventId),
+      findRemoteActionTokenId: (token) => gateway.findRemoteActionTokenId(token),
       getIntegrationConnection: (connectionId) => integrationChannel.getIntegrationConnection(connectionId),
       cancelLatestActiveChatTurnForSession: (sessionId, cancelledBy) =>
         gateway.cancelLatestActiveChatTurnForSession(sessionId, cancelledBy),

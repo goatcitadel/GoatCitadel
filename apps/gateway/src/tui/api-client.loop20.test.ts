@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { TuiApiClient } from "./api-client.js";
+import { TuiApiClient, TuiApiRequestError } from "./api-client.js";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -80,6 +80,34 @@ describe("TuiApiClient loop20 tails", () => {
     );
   });
 
+  it("preserves structured JSON conflict details for mutation callers", async () => {
+    const conflictBody = {
+      error: "runtime_skill skill-1 changed since revision 4",
+      code: "WRITE_CONFLICT",
+      details: {
+        resourceKind: "runtime_skill",
+        resourceId: "skill-1",
+        expectedRevision: 4,
+        currentRevision: 5,
+      },
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(conflictBody, 409)) as unknown as typeof fetch);
+    const client = new TuiApiClient({
+      baseUrl: "http://127.0.0.1:8787",
+      auth: { mode: "none" },
+      readOnly: false,
+    });
+
+    await expect(client.updateSkillState("skill-1", { expectedRevision: 4, state: "enabled" })).rejects.toMatchObject({
+      name: "TuiApiRequestError",
+      status: 409,
+      body: conflictBody,
+      bodyText: JSON.stringify(conflictBody),
+      method: "PATCH",
+      routePath: "/api/v1/skills/by-id/state",
+    } satisfies Partial<TuiApiRequestError>);
+  });
+
   it("skips non-data SSE frames and errors on truncated final frames with previews", async () => {
     const fetchMock = vi.fn(async () =>
       streamResponse([": keepalive\n\n", "event: ping\n\n", "data:   \n\n", 'data: {"type":"delta"}\n\n']),
@@ -157,7 +185,9 @@ describe("TuiApiClient loop20 tails", () => {
       }
       if (url.includes("/api/v1/skills/by-id/state")) {
         expect(init?.method).toBe("PATCH");
-        expect(init?.body).toBe(JSON.stringify({ state: "enabled", note: "ok", skillId: "skill-1" }));
+        expect(init?.body).toBe(
+          JSON.stringify({ expectedRevision: 5, state: "enabled", note: "ok", skillId: "skill-1" }),
+        );
         return jsonResponse({ skillId: "skill-1", state: "enabled" });
       }
       if (url.includes("/api/v1/llm/models/preview")) {
@@ -212,7 +242,9 @@ describe("TuiApiClient loop20 tails", () => {
     });
     await expect(client.listSkillSources(" browser automation ", 999)).resolves.toEqual({ items: [] });
     await expect(client.fetchSkillImportHistory(999)).resolves.toEqual({ items: [] });
-    await expect(client.updateSkillState("skill-1", { state: "enabled", note: "ok" })).resolves.toMatchObject({
+    await expect(
+      client.updateSkillState("skill-1", { expectedRevision: 5, state: "enabled", note: "ok" }),
+    ).resolves.toMatchObject({
       skillId: "skill-1",
     });
     await expect(client.fetchLlmConfig()).resolves.toEqual({ activeProviderId: "openai" });

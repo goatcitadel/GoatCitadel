@@ -210,6 +210,7 @@ async function run(): Promise<void> {
       {
         method: "POST",
         body: JSON.stringify({
+          expectedRevision: initialState.settings.revision,
           toolApprovalMode: runtimeDefaults.toolApprovalMode,
           budgetMode: runtimeDefaults.budgetMode,
           networkAllowlist: runtimeDefaults.networkAllowlist,
@@ -228,19 +229,45 @@ async function run(): Promise<void> {
               label: provider.providerLabel,
               baseUrl: provider.providerBaseUrl,
               defaultModel: provider.providerDefaultModel,
-              apiKey: provider.providerApiKey || undefined,
               apiKeyEnv: provider.providerApiKeyEnv || undefined,
-              persistSecretToSecureStore:
-                provider.providerApiKey.trim().length > 0 ? provider.saveProviderApiKeyToSecureStore : undefined,
             },
           },
           mesh,
-          markComplete: completion.markComplete,
-          completedBy: completion.completedBy,
+          markComplete: false,
         }),
       },
       auth,
     );
+
+    if (provider.providerApiKey && provider.saveProviderApiKeyToSecureStore) {
+      await requestJson(
+        gatewayBaseUrl,
+        `/api/v1/secrets/providers/${encodeURIComponent(provider.providerId)}`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            apiKey: provider.providerApiKey,
+            expectedRevision: bootstrap.state.settings.revision,
+            storage: "keychain",
+          }),
+        },
+        auth,
+      );
+    }
+
+    let finalState = bootstrap.state;
+    if (completion.markComplete) {
+      const completed = await requestJson<{ state: OnboardingBootstrapResult["state"] }>(
+        gatewayBaseUrl,
+        "/api/v1/onboarding/complete",
+        {
+          method: "POST",
+          body: JSON.stringify({ completedBy: completion.completedBy }),
+        },
+        auth,
+      );
+      finalState = completed.state;
+    }
 
     const runtimeConfig = await requestJson<LlmRuntimeConfig>(
       gatewayBaseUrl,
@@ -255,7 +282,7 @@ async function run(): Promise<void> {
         "Onboarding applied",
         [
           `Applied at ${bootstrap.appliedAt}`,
-          `Completed: ${bootstrap.state.completed ? "yes" : "no"}`,
+          `Completed: ${finalState.completed ? "yes" : "no"}`,
           `Effective provider: ${runtimeConfig.activeProviderId}`,
           `Effective model: ${runtimeConfig.activeModel}`,
         ],

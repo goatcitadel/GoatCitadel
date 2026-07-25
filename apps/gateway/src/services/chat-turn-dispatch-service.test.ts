@@ -9,8 +9,13 @@ vi.mock("./chat-turn-helpers.js", async (importOriginal) => ({
   splitIntoChunks: (value: string) => [value],
 }));
 
-const { launchPreparedAgentChatTurnStream, shouldUseDurableExecution } =
-  await import("./chat-turn-dispatch-service.js");
+const {
+  buildDurableChatCanonicalWriteFence,
+  executePreparedAgentChatTurnBackground,
+  launchPreparedAgentChatTurnStream,
+  shouldUseDurableExecution,
+} = await import("./chat-turn-dispatch-service.js");
+const chatTurnStreamService = await import("./chat-turn-stream-service.js");
 const { sendPreparedIntegrationChatTurn, streamPreparedIntegrationChatTurn } =
   await import("./chat-turn-dispatch-service.js");
 
@@ -29,6 +34,51 @@ describe("chat turn dispatch durable ownership", () => {
         content: "please look up the best way to eat sushi",
       }),
     ).toBe(false);
+  });
+
+  it("forces routed quick-web turns through durable admission", () => {
+    const durableRun = { runId: "run-routed-quick-web" } as DurableRunRecord;
+    const host = createHost({ beginDurableChatRun: vi.fn(() => durableRun) });
+    const input = {
+      content: "use the routed source for a quick lookup",
+      contextRefs: [{ kind: "attachment" as const, ref: "attachment-quick-web" }],
+    };
+    const prepared = createPrepared("chat", { normalizationProfile: "quick_web" });
+    const snapshotPrepared = createPrepared("chat", { normalizationProfile: "quick_web" }) as unknown as {
+      routedContextSnapshot?: unknown;
+    };
+    snapshotPrepared.routedContextSnapshot = { snapshotId: "snapshot-quick-web" };
+
+    expect(shouldUseDurableExecution(host, prepared, input)).toBe(true);
+    expect(
+      shouldUseDurableExecution(host, snapshotPrepared as never, { content: "use the already-resolved snapshot" }),
+    ).toBe(true);
+    launchPreparedAgentChatTurnStream(host, "session-1", input, prepared, "chat_thread_turn_appended");
+
+    expect(host.beginDurableChatRun).toHaveBeenCalledTimes(1);
+    expect(host.registerActiveChatTurnStream).toHaveBeenCalledWith("session-1", "turn-1", durableRun.runId, {
+      reservation: true,
+    });
+    expect(host.backgroundTasks.size).toBe(0);
+  });
+
+  it("rejects routed turns before dispatch when durable execution is disabled", () => {
+    const host = createHost();
+    host.config.assistant.durable.enabled = false;
+    host.isFeatureEnabled = vi.fn(() => false);
+    const input = {
+      content: "use the routed source",
+      contextRefs: [{ kind: "memory_item" as const, ref: "memory-disabled" }],
+    };
+    const prepared = createPrepared("chat");
+
+    expect(() => shouldUseDurableExecution(host, prepared, input)).toThrow(/routed chat context requires durable/i);
+    expect(() =>
+      launchPreparedAgentChatTurnStream(host, "session-1", input, prepared, "chat_thread_turn_appended"),
+    ).toThrow(/routed chat context requires durable/i);
+    expect(host.beginDurableChatRun).not.toHaveBeenCalled();
+    expect(host.registerActiveChatTurnStream).not.toHaveBeenCalled();
+    expect(host.backgroundTasks.size).toBe(0);
   });
 
   it("commits a non-durable streamed retry trace before background execution can outlive the request", async () => {
@@ -385,6 +435,48 @@ describe("chat turn dispatch durable ownership", () => {
     expect(response.trace?.status).toBe("completed");
   });
 
+  it("rejects routed integration sends before admission, trace creation, or external delivery", async () => {
+    const host = createHost();
+
+    await expect(
+      sendPreparedIntegrationChatTurn(
+        host,
+        "session-1",
+        {
+          content: "do not deliver routed bytes",
+          contextRefs: [{ kind: "attachment", ref: "attachment-integration" }],
+        },
+        createPrepared("chat"),
+        createBinding(),
+        "chat_thread_turn_appended",
+      ),
+    ).rejects.toThrow(/cannot use integration delivery/i);
+
+    expect(host.beginActiveChatTurnExecution).not.toHaveBeenCalled();
+    expect(host.storage.chatTurnTraces.create).not.toHaveBeenCalled();
+    expect(host.ensureSessionInternalToolGrant).not.toHaveBeenCalled();
+    expect(host.commsSend).not.toHaveBeenCalled();
+  });
+
+  it("rejects a prepared routed snapshot before a streamed integration envelope starts", async () => {
+    const host = createHost();
+    const prepared = createPrepared("chat") as unknown as { routedContextSnapshot?: unknown };
+    prepared.routedContextSnapshot = { snapshotId: "snapshot-integration" };
+    const stream = streamPreparedIntegrationChatTurn(
+      host,
+      "session-1",
+      { content: "do not stream routed bytes" },
+      prepared as never,
+      createBinding(),
+      "chat_thread_turn_retried",
+    );
+
+    await expect(stream.next()).rejects.toThrow(/cannot use integration delivery/i);
+    expect(host.beginActiveChatTurnExecution).not.toHaveBeenCalled();
+    expect(host.storage.chatTurnTraces.create).not.toHaveBeenCalled();
+    expect(host.commsSend).not.toHaveBeenCalled();
+  });
+
   it("releases integration execution ownership when trace creation fails", async () => {
     const host = createHost();
     vi.mocked(host.storage.chatTurnTraces.create).mockImplementationOnce(() => {
@@ -533,6 +625,101 @@ describe("chat turn dispatch durable ownership", () => {
       }),
     );
   });
+
+  it("terminalizes exact system-heartbeat approval drift without approval-wait or stream projections", async () => {
+    const blocked = new Error("heartbeat_interactive_approval_forbidden");
+    blocked.name = "SystemHeartbeatToolInvocationBlockedError";
+    const streamSpy = vi
+      .spyOn(chatTurnStreamService, "streamPreparedAgentChatTurn")
+      .mockImplementation(async function* () {
+        yield* [];
+        throw blocked;
+      });
+    const host = createHost();
+    const prepared = {
+      ...(createPrepared("chat") as Record<string, unknown>),
+      serverOnlyPosture: {
+        kind: "system_heartbeat",
+        actorId: "system-heartbeat",
+        operation: "chat_system_heartbeat",
+        occurrenceId: "heartbeat-occurrence-1",
+        claimSha256: "a".repeat(64),
+        durableRunId: "durable-heartbeat-1",
+      },
+    } as never;
+    const streamRegistration = host.registerActiveChatTurnStream("session-1", "turn-1", "durable-heartbeat-1");
+
+    try {
+      await executePreparedAgentChatTurnBackground(
+        host,
+        "session-1",
+        { content: "heartbeat" },
+        prepared,
+        "chat_thread_turn_appended",
+        "durable-heartbeat-1",
+        undefined,
+        {
+          streamRegistration,
+          skipMessageStart: true,
+          durableLeaseOwnerId: "heartbeat-worker-1",
+        },
+      );
+    } finally {
+      streamSpy.mockRestore();
+    }
+
+    expect(host.storage.chatTurnTraces.get("turn-1")).toMatchObject({
+      status: "failed",
+      failure: {
+        failureClass: "approval_required",
+        retryable: false,
+      },
+      completion: { status: "interrupted" },
+    });
+    expect(host.persistChatStreamChunk).not.toHaveBeenCalled();
+    expect(host.recordDevDiagnostic).not.toHaveBeenCalled();
+    expect(host.storage.chatMessages.upsert).not.toHaveBeenCalled();
+    expect(host.storage.approvals.create).not.toHaveBeenCalled();
+    expect(host.finalizeDurableChatRun).toHaveBeenCalledTimes(1);
+    expect(host.finalizeDurableChatRun).toHaveBeenCalledWith(
+      "durable-heartbeat-1",
+      prepared,
+      expect.objectContaining({ status: "failed" }),
+      "heartbeat-worker-1",
+    );
+  });
+
+  it("translates only exact heartbeat admission supersession into durable interruption before callback writes", () => {
+    const host = createHost();
+    vi.mocked(host.sessionControlRuntimeOwner.assertActiveTurnWrite).mockImplementation(() => {
+      throw new Error("authority_superseded");
+    });
+    const prepared = {
+      ...(createPrepared("chat") as Record<string, unknown>),
+      serverOnlyPosture: {
+        kind: "system_heartbeat",
+        actorId: "system-heartbeat",
+        operation: "chat_system_heartbeat",
+        occurrenceId: "heartbeat-occurrence-1",
+        claimSha256: "a".repeat(64),
+        durableRunId: "durable-heartbeat-1",
+      },
+    } as never;
+    const streamRegistration = host.registerActiveChatTurnStream("session-1", "turn-1", "durable-heartbeat-1");
+    const fence = buildDurableChatCanonicalWriteFence(host, prepared, "durable-heartbeat-1", {
+      streamRegistration,
+      durableLeaseOwnerId: "heartbeat-worker-1",
+    });
+    const work = vi.fn();
+
+    expect(() => fence!(work)).toThrow(
+      expect.objectContaining({
+        name: "DurableWorkerInterruptionError",
+        message: expect.stringMatching(/superseded/i),
+      }),
+    );
+    expect(work).not.toHaveBeenCalled();
+  });
 });
 
 function createHost(
@@ -586,8 +773,17 @@ function createHost(
       },
     },
     storage: {
+      runImmediateTransaction: <T>(work: () => T): T => work(),
       durableRuns: {
         getRun: vi.fn(() => ({ status: "running" })),
+        lockFreshActiveLeaseForUpdate: vi.fn(() => ({ status: "running" })),
+      },
+      chatMessages: {
+        get: vi.fn(() => undefined),
+        upsert: vi.fn(),
+      },
+      approvals: {
+        create: vi.fn(),
       },
       chatTurnTraces: {
         create: createTrace,
@@ -604,6 +800,9 @@ function createHost(
         get: vi.fn(() => traceState),
       },
     } as never,
+    sessionControlRuntimeOwner: {
+      assertActiveTurnWrite: vi.fn(),
+    },
     backgroundTasks: new Set(),
     isFeatureEnabled: vi.fn((flag: string) => flag === "durableKernelV1Enabled"),
     streamPersistedChatTurnEvents: vi.fn(async function* () {}),
@@ -657,6 +856,20 @@ function createPrepared(mode: "chat" | "cowork" | "code", normalizedOverrides: R
       actorId: "operator",
       content: "hello",
       timestamp: "2026-04-11T00:00:00.000Z",
+    },
+    turnAdmission: {
+      identity: {
+        admissionId: "admission:turn-1",
+        sessionIncarnationId: "incarnation:session-1",
+        workspaceId: "default",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        aggregateRevision: 1,
+        controllerGeneration: 1,
+        materialSha256: "a".repeat(64),
+      },
+      admittedRequest: { content: "hello" },
+      requestActor: { actorKind: "operator", actorId: "operator" },
     },
     assistantMessageId: "assistant-1",
     parentTurnId: "turn-0",

@@ -45,6 +45,7 @@ interface ServiceHarness {
   setKillSwitch: ReturnType<typeof vi.fn>;
   diagnostics: Array<{ event: string; level: string }>;
   flags: Record<string, boolean>;
+  revision: { current: number };
 }
 
 async function createService(
@@ -52,24 +53,28 @@ async function createService(
     autonomyDisabled?: boolean;
     handlers?: Partial<AutonomyRestoreHandlers>;
     now?: () => string;
+    revision?: number;
   } = {},
 ): Promise<ServiceHarness> {
   const storage = await createStorage();
   const handlers = createHandlers(options.handlers);
   const flags: Record<string, boolean> = { autonomyV1Disabled: Boolean(options.autonomyDisabled) };
-  const setKillSwitch = vi.fn((disabled: boolean) => {
-    flags.autonomyV1Disabled = disabled;
+  const revision = { current: options.revision ?? 7 };
+  const setKillSwitch = vi.fn(async (input: { disabled: boolean; expectedRevision: number }) => {
+    flags.autonomyV1Disabled = input.disabled;
+    revision.current += 1;
   });
   const diagnostics: Array<{ event: string; level: string }> = [];
   const deps: AutonomyControlServiceDeps = {
     storage,
     isFeatureEnabled: (flag) => flags[flag] === true,
+    readSettingsRevision: () => revision.current,
     setKillSwitch,
     restoreHandlers: handlers,
     recordDevDiagnostic: (input) => diagnostics.push({ event: input.event, level: input.level }),
     now: options.now,
   };
-  return { service: new AutonomyControlService(deps), storage, handlers, setKillSwitch, diagnostics, flags };
+  return { service: new AutonomyControlService(deps), storage, handlers, setKillSwitch, diagnostics, flags, revision };
 }
 
 function ref(kind: AutonomyAuditRestoreRef["kind"], extra: Record<string, unknown> = {}): AutonomyAuditRestoreRef {
@@ -92,6 +97,7 @@ describe("AutonomyControlService", () => {
     it("reflects the kill switch when engaged", async () => {
       const { service } = await createService({ autonomyDisabled: true });
       const status = service.getStatus();
+      expect(status.revision).toBe(7);
       expect(status.killSwitchEngaged).toBe(true);
       expect(status.autonomyEnabled).toBe(false);
     });
@@ -163,9 +169,20 @@ describe("AutonomyControlService", () => {
   describe("setKillSwitch", () => {
     it("toggles the flag through the injected setter and returns refreshed status", async () => {
       const { service, setKillSwitch } = await createService({ autonomyDisabled: false });
-      const status = service.setKillSwitch(true);
-      expect(setKillSwitch).toHaveBeenCalledWith(true);
+      const status = await service.setKillSwitch(true, 7);
+      expect(setKillSwitch).toHaveBeenCalledWith({ disabled: true, expectedRevision: 7 });
+      expect(status.revision).toBe(8);
       expect(status.killSwitchEngaged).toBe(true);
+    });
+
+    it("leaves status unchanged when the config-generation mutation rejects", async () => {
+      const { service, setKillSwitch } = await createService({ autonomyDisabled: false, revision: 11 });
+      const before = service.getStatus();
+      setKillSwitch.mockRejectedValueOnce(new Error("generation apply failed"));
+
+      await expect(service.setKillSwitch(true, 11)).rejects.toThrow("generation apply failed");
+
+      expect(service.getStatus()).toEqual(before);
     });
   });
 

@@ -14,6 +14,7 @@ import type {
   ChatSessionPrefsRecord,
   ChatTurnTraceRecord,
   LlmRuntimeConfig,
+  ModelUsageAttributionContext,
   OrchestrationPromptReference,
 } from "@goatcitadel/contracts";
 
@@ -136,7 +137,10 @@ export interface OrchestrationExecutionResult {
 }
 
 export interface OrchestrationExecutionCallbacks {
-  createChatCompletion: (request: ChatCompletionRequest) => Promise<ChatCompletionResponse>;
+  createChatCompletion: (
+    request: ChatCompletionRequest,
+    attribution?: ModelUsageAttributionContext,
+  ) => Promise<ChatCompletionResponse>;
   executeDelegatedStep?: (input: {
     task: OrchestrationTaskInput;
     plan: OrchestrationPlan;

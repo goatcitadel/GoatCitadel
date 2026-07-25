@@ -50,6 +50,7 @@ import {
   type ProjectIntakeModeId,
 } from "./ProjectsRoutePage.helpers";
 import { PROJECT_FILTER_VIEWS, useProjectPinController, type ProjectFilterView } from "./use-project-pin-archive";
+import { useProjectRevisionConflict } from "./use-project-revision-conflict";
 import "../native-routes.css";
 
 export { deriveProjectHome } from "./ProjectsRoutePage.helpers";
@@ -94,6 +95,16 @@ export function ProjectsRoutePage({
   const [filterView, setFilterView] = useState<ProjectFilterView>("all");
   const createProjectNameRef = useRef<HTMLInputElement | null>(null);
   const isMounted = useIsMounted();
+
+  const replaceProjects = useCallback((projects: ChatProjectRecord[]) => {
+    setState((current) => ({ ...current, projects }));
+  }, []);
+  const { revisionConflict, clearRevisionConflict, handleRevisionConflict } = useProjectRevisionConflict({
+    activeCitadelId,
+    activeWorkspaceId,
+    isMounted,
+    onProjectsRefreshed: replaceProjects,
+  });
 
   const pinController = useProjectPinController(activeWorkspaceId);
 
@@ -270,12 +281,25 @@ export function ProjectsRoutePage({
   );
 
   useEffect(() => {
+    if (revisionConflict?.preserveDraft && revisionConflict.projectId === selectedProject?.projectId) {
+      return;
+    }
+    if (revisionConflict && revisionConflict.projectId !== selectedProject?.projectId) {
+      clearRevisionConflict();
+    }
     setEditDraft({
       name: selectedProject?.name ?? "",
       workspacePath: selectedProject?.workspacePath ?? "",
       description: selectedProject?.description ?? "",
     });
-  }, [selectedProject?.description, selectedProject?.name, selectedProject?.workspacePath]);
+  }, [
+    revisionConflict,
+    clearRevisionConflict,
+    selectedProject?.description,
+    selectedProject?.name,
+    selectedProject?.projectId,
+    selectedProject?.workspacePath,
+  ]);
 
   const projectHome = useMemo(
     () => (selectedProject ? deriveProjectHome(selectedProject, selectedSessions, state.artifacts) : null),
@@ -402,6 +426,7 @@ export function ProjectsRoutePage({
     setProjectActionBusy("save");
     try {
       const project = await updateChatProject(selectedProject.projectId, {
+        expectedRevision: selectedProject.revision,
         citadelId: activeCitadelId,
         workspaceId: activeWorkspaceId,
         name,
@@ -415,11 +440,15 @@ export function ProjectsRoutePage({
         ...current,
         projects: current.projects.map((item) => (item.projectId === project.projectId ? project : item)),
       }));
+      clearRevisionConflict();
       recordRouteAction("projects", "project.updated", {
         projectId: project.projectId,
       });
     } catch (error) {
       if (isMounted()) {
+        if (await handleRevisionConflict(error, selectedProject.projectId, true, "save")) {
+          return;
+        }
         setActionError(getErrorMessage(error));
       }
     } finally {
@@ -433,7 +462,7 @@ export function ProjectsRoutePage({
     setActionError(null);
     setCardActionBusy(`archive:${project.projectId}`);
     try {
-      const archived = await archiveChatProject(project.projectId);
+      const archived = await archiveChatProject(project.projectId, project.revision);
       if (!isMounted()) {
         return;
       }
@@ -441,6 +470,7 @@ export function ProjectsRoutePage({
         ...current,
         projects: current.projects.map((item) => (item.projectId === archived.projectId ? archived : item)),
       }));
+      clearRevisionConflict();
       recordRouteAction("projects", "project.archived", {
         projectId: archived.projectId,
       });
@@ -449,6 +479,9 @@ export function ProjectsRoutePage({
       }
     } catch (error) {
       if (isMounted()) {
+        if (await handleRevisionConflict(error, project.projectId, false, "archive")) {
+          return;
+        }
         setActionError(getErrorMessage(error));
       }
     } finally {
@@ -462,7 +495,7 @@ export function ProjectsRoutePage({
     setActionError(null);
     setCardActionBusy(`restore:${project.projectId}`);
     try {
-      const restored = await restoreChatProject(project.projectId);
+      const restored = await restoreChatProject(project.projectId, project.revision);
       if (!isMounted()) {
         return;
       }
@@ -470,11 +503,15 @@ export function ProjectsRoutePage({
         ...current,
         projects: current.projects.map((item) => (item.projectId === restored.projectId ? restored : item)),
       }));
+      clearRevisionConflict();
       recordRouteAction("projects", "project.restored", {
         projectId: restored.projectId,
       });
     } catch (error) {
       if (isMounted()) {
+        if (await handleRevisionConflict(error, project.projectId, false, "restore")) {
+          return;
+        }
         setActionError(getErrorMessage(error));
       }
     } finally {
@@ -747,6 +784,7 @@ export function ProjectsRoutePage({
             ),
           }))}
         >
+          {revisionConflict ? <NoticeBanner tone="warning" message={revisionConflict.message} /> : null}
           {actionError ? <NoticeBanner tone="error" message={actionError} /> : null}
           {state.artifactIssue ? (
             <NoticeBanner tone="warning" message={`Project artifact records could not load: ${state.artifactIssue}`} />
@@ -884,7 +922,8 @@ export function ProjectsRoutePage({
                   </NativeButton>
                 </div>
                 <p className="mc-next-settings-field-note">
-                  Pin or archive {selectedProject.name} from the card glyphs in the projects list.
+                  Revision {selectedProject.revision} fences concurrent edits. Pin or archive {selectedProject.name}{" "}
+                  from the card glyphs in the projects list.
                 </p>
               </section>
             ) : null}

@@ -117,7 +117,7 @@ export async function fetchAgenticRunTree(
 
 export async function controlAgenticRun(
   runId: string,
-  input: AgenticControlRequest,
+  input: AgenticControlRequest & { expectedRevision: number },
   options: { workspaceId?: string } = {},
 ): Promise<AgenticControlResponse> {
   const query = new URLSearchParams();

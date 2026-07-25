@@ -267,6 +267,29 @@ describe("orchestration engine", () => {
     expect(result.finalOutput).toContain("Planner");
   });
 
+  it.each(["ModelUsageDispatchUncertainError", "ModelUsageSettlementError", "ModelUsageDispatchPersistenceError"])(
+    "rethrows %s from an attributed step without projecting an ordinary failed result",
+    async (errorName) => {
+      const accountingError = Object.assign(new Error(`canonical accounting failure: ${errorName}`), {
+        name: errorName,
+      });
+      const createChatCompletion = vi.fn().mockRejectedValue(accountingError);
+      const onStepResult = vi.fn();
+      const plan = createPlan();
+
+      await expect(
+        executeOrchestrationPlan({
+          task: createTask(),
+          plan: { ...plan, steps: [plan.steps[0]!] },
+          callbacks: { createChatCompletion, onStepResult },
+        }),
+      ).rejects.toBe(accountingError);
+
+      expect(createChatCompletion).toHaveBeenCalledTimes(1);
+      expect(onStepResult).not.toHaveBeenCalled();
+    },
+  );
+
   it("skips downstream stages when no upstream handoff completed", async () => {
     const createChatCompletion = vi.fn().mockRejectedValue(new Error("provider unavailable"));
 
@@ -655,6 +678,50 @@ describe("orchestration engine", () => {
     const repairPrompt = createChatCompletion.mock.calls[3]?.[0].messages.at(-1)?.content ?? "";
     expect(repairPrompt).toContain("Prioritized acquisition plan.");
     expect(repairPrompt).toContain("Concrete SEO and outreach assets.");
+  });
+
+  it.each(["ModelUsageDispatchUncertainError", "ModelUsageSettlementError", "ModelUsageDispatchPersistenceError"])(
+    "rethrows %s from final synthesis repair instead of recording repairFailed",
+    async (errorName) => {
+      const accountingError = Object.assign(new Error(`canonical repair accounting failure: ${errorName}`), {
+        name: errorName,
+      });
+      const createChatCompletion = vi
+        .fn()
+        .mockResolvedValueOnce(createCompletion("Prioritized acquisition plan."))
+        .mockResolvedValueOnce(createCompletion("Concrete SEO and outreach assets."))
+        .mockRejectedValueOnce(new Error("synthesis output empty"))
+        .mockRejectedValueOnce(accountingError);
+
+      await expect(
+        executeOrchestrationPlan({
+          task: { ...createTask(), objective: "Update SEO and get beta users beyond flyers." },
+          plan: createPlanWorkSynthesizePlan(),
+          callbacks: { createChatCompletion },
+        }),
+      ).rejects.toBe(accountingError);
+
+      expect(createChatCompletion).toHaveBeenCalledTimes(4);
+    },
+  );
+
+  it("preserves the synthesis fallback when an ordinary repair attempt fails", async () => {
+    const createChatCompletion = vi
+      .fn()
+      .mockResolvedValueOnce(createCompletion("Prioritized acquisition plan."))
+      .mockResolvedValueOnce(createCompletion("Concrete SEO and outreach assets."))
+      .mockRejectedValueOnce(new Error("synthesis output empty"))
+      .mockRejectedValueOnce(new Error("repair provider unavailable"));
+
+    const result = await executeOrchestrationPlan({
+      task: { ...createTask(), objective: "Update SEO and get beta users beyond flyers." },
+      plan: createPlanWorkSynthesizePlan(),
+      callbacks: { createChatCompletion },
+    });
+
+    expect(createChatCompletion).toHaveBeenCalledTimes(4);
+    expect(result.finalOutput).toContain("Synthesis Incomplete");
+    expect(result.integritySignals).toContain("orchestration_final_synthesis_fallback");
   });
 
   it("does not retry the same synthesizer provider after a provider outage", async () => {

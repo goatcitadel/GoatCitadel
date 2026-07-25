@@ -20,6 +20,7 @@ import type {
   DurableRunCreateRequest,
   DurableRunRecord,
   LlmApiStyle,
+  ModelUsageAttributionContext,
   ProactivePolicy,
   ProactiveActionRecord,
   ProactiveExecutionClass,
@@ -48,6 +49,7 @@ import {
 import { runIdempotentExternalSideEffect } from "./external-side-effect-runner-service.js";
 import { readToolDomainExecutionFailure } from "./tool-domain-result-truth.js";
 import type { ToolInvocationRuntimeOptions } from "./tool-invocation-coordinator-service.js";
+import { createUtilityModelUsageAttribution } from "./utility-model-usage-attribution.js";
 
 /** Origination mode for proactive planning (P1-F5). */
 export type ProactiveOriginationMode = "reactive" | "de_novo";
@@ -181,7 +183,10 @@ export interface ChatProactiveServiceCallbacks {
    * (or the master autonomy switch is off), de-novo planning yields no actions
    * and the reactive heuristic path is unaffected.
    */
-  createChatCompletion?(request: ChatCompletionRequest): Promise<ChatCompletionResponse>;
+  createChatCompletion?(
+    request: ChatCompletionRequest,
+    attribution: ModelUsageAttributionContext,
+  ): Promise<ChatCompletionResponse>;
   /** Cheap-model defaults for the de-novo planner (mirrors the F3 classifier). */
   resolveModelDefaults?(): { providerId?: string; model?: string };
   /** Resolve api-style so the de-novo planner can gate `response_format`/`temperature`. */
@@ -194,6 +199,7 @@ export interface ChatProactiveServiceCallbacks {
   isProactiveDeNovoEligibleSession?(sessionId: string): boolean;
 
   readonly backgroundTasks: Set<Promise<void>>;
+  runSchedulerWork?: (work: (signal: AbortSignal) => Promise<void>) => Promise<void | undefined>;
   closing: boolean;
 }
 
@@ -205,6 +211,7 @@ export interface ChatProactiveServiceContext {
     | "chatMessages"
     | "chatSessionMeta"
     | "chatSessionPrefs"
+    | "durableRunEvents"
     | "durableRuns"
     | "externalSideEffectRuns"
     | "mutationIdempotency"
@@ -388,7 +395,11 @@ export class ChatProactiveService {
       return;
     }
     this.scheduler = setInterval(() => {
-      const task = this.runSchedulerTick().catch((error) => {
+      const task = (
+        this.callbacks.runSchedulerWork
+          ? this.callbacks.runSchedulerWork((signal) => this.runSchedulerTick(signal))
+          : this.runSchedulerTick()
+      ).catch((error) => {
         log.error("scheduler tick failed", { error: error instanceof Error ? error.message : String(error) });
         this.publishRealtimeSafely("system", "chat", {
           type: "proactive_scheduler_error",
@@ -412,8 +423,8 @@ export class ChatProactiveService {
 
   // ── scheduler tick ───────────────────────────────────────────────
 
-  private async runSchedulerTick(): Promise<void> {
-    if (this.callbacks.closing) {
+  private async runSchedulerTick(signal?: AbortSignal): Promise<void> {
+    if (this.callbacks.closing || signal?.aborted) {
       return;
     }
     if (!this.ctx.isFeatureEnabled("durableKernelV1Enabled")) {
@@ -479,6 +490,7 @@ export class ChatProactiveService {
     let cursor = 0;
     const workers = Array.from({ length: maxWorkers }, async () => {
       while (cursor < candidates.length) {
+        if (signal?.aborted) return;
         const index = cursor;
         cursor += 1;
         const current = candidates[index];
@@ -530,7 +542,11 @@ export class ChatProactiveService {
     if (prefs.proactiveMode === "off") {
       return false;
     }
-    if (!this.resolveDeNovoPlannerModelDeps()) {
+    if (
+      !this.callbacks.createChatCompletion ||
+      !this.callbacks.resolveModelDefaults ||
+      !this.callbacks.resolveApiStyle
+    ) {
       return false;
     }
     if (this.callbacks.isProactiveDeNovoEligibleSession?.(sessionId) === false) {
@@ -583,6 +599,7 @@ export class ChatProactiveService {
   toProactivePolicy(sessionId: string, prefs: SessionAutonomyPrefs): ProactivePolicy {
     return {
       sessionId,
+      revision: prefs.revision,
       mode: prefs.proactiveMode,
       autonomyBudget: {
         maxActionsPerHour: prefs.maxActionsPerHour,
@@ -646,6 +663,10 @@ export class ChatProactiveService {
     sessionId: string,
     originationMode: ProactiveOriginationMode = "reactive",
     signal?: AbortSignal,
+    usageLineage?: {
+      proactiveRunId: string;
+      durableRunId: string;
+    },
   ): Promise<{
     confidence: number;
     reasoningSummary: string;
@@ -657,7 +678,7 @@ export class ChatProactiveService {
       // Reactive mode requires a human seed (exact legacy behavior). De-novo mode
       // (P1-F5) instead originates from open commitments/tasks + time signals.
       if (originationMode === "de_novo") {
-        return this.planDeNovoProactiveActions(sessionId, messages, signal);
+        return this.planDeNovoProactiveActions(sessionId, messages, signal, usageLineage);
       }
       return {
         confidence: 0.1,
@@ -668,7 +689,7 @@ export class ChatProactiveService {
     const text = latestUser.content.trim();
     if (!text) {
       if (originationMode === "de_novo") {
-        return this.planDeNovoProactiveActions(sessionId, messages, signal);
+        return this.planDeNovoProactiveActions(sessionId, messages, signal, usageLineage);
       }
       return {
         confidence: 0.1,
@@ -723,11 +744,11 @@ export class ChatProactiveService {
     sessionId: string,
     messages: Array<{ role: string; content: string }>,
     signal?: AbortSignal,
+    usageLineage?: {
+      proactiveRunId: string;
+      durableRunId: string;
+    },
   ): Promise<{ confidence: number; reasoningSummary: string; actions: ProactivePlannedAction[] }> {
-    const modelDeps = this.resolveDeNovoPlannerModelDeps(signal);
-    if (!modelDeps) {
-      return { confidence: 0.1, reasoningSummary: "De-novo planner is not available.", actions: [] };
-    }
     const context = this.assembleDeNovoContext(sessionId, messages);
     if (!hasDeNovoContext(context)) {
       return {
@@ -735,6 +756,10 @@ export class ChatProactiveService {
         reasoningSummary: "No open commitments or tasks to originate from.",
         actions: [],
       };
+    }
+    const modelDeps = this.resolveDeNovoPlannerModelDeps(sessionId, context, signal, usageLineage);
+    if (!modelDeps) {
+      return { confidence: 0.1, reasoningSummary: "De-novo planner is not available.", actions: [] };
     }
     const plan = await planDeNovoActions(context, modelDeps);
     return {
@@ -753,16 +778,39 @@ export class ChatProactiveService {
    * Returns `undefined` (de-novo disabled) when the cheap-model callbacks are not
    * wired — keeping the reactive path and flag-off behavior byte-identical.
    */
-  private resolveDeNovoPlannerModelDeps(signal?: AbortSignal): DeNovoPlannerModelDeps | undefined {
+  private resolveDeNovoPlannerModelDeps(
+    sessionId: string,
+    context: DeNovoPlanContext,
+    signal?: AbortSignal,
+    usageLineage?: {
+      proactiveRunId: string;
+      durableRunId: string;
+    },
+  ): DeNovoPlannerModelDeps | undefined {
     const { createChatCompletion, resolveModelDefaults, resolveApiStyle } = this.callbacks;
     if (!createChatCompletion || !resolveModelDefaults || !resolveApiStyle) {
       return undefined;
     }
+    const operationRef = usageLineage?.proactiveRunId ?? context.openTask?.taskId ?? sessionId;
     return {
-      createChatCompletion: (request) => createChatCompletion(request),
+      createChatCompletion: (request, attribution) => createChatCompletion(request, attribution),
       resolveModelDefaults: () => resolveModelDefaults(),
       resolveApiStyle: (providerId, model) => resolveApiStyle(providerId, model),
       signal,
+      modelUsageAttribution: createUtilityModelUsageAttribution({
+        operationId: `proactive:${encodeURIComponent(operationRef)}:denovo-plan`,
+        utilityKind: "proactive_denovo_planning",
+        lineage: {
+          workspaceId: this.getSessionWorkspaceId(sessionId),
+          sessionId,
+          durableRunId: usageLineage?.durableRunId,
+          taskId: context.openTask?.taskId,
+          agentId: "proactive-planner",
+          parentOperationId: usageLineage?.proactiveRunId
+            ? `proactive:${encodeURIComponent(usageLineage.proactiveRunId)}`
+            : undefined,
+        },
+      }),
     };
   }
 
@@ -1211,20 +1259,13 @@ export class ChatProactiveService {
     eventType: "run_waiting" | "run_completed",
     payload: Record<string, unknown>,
   ): void {
-    this.ctx.gatewaySql
-      .prepare(
-        `
-      INSERT INTO durable_run_events (event_id, run_id, event_type, step_key, payload_json, created_at)
-      VALUES (@eventId, @runId, @eventType, NULL, @payloadJson, @createdAt)
-    `,
-      )
-      .run({
-        eventId: randomUUID(),
-        runId,
-        eventType,
-        payloadJson: JSON.stringify(payload),
-        createdAt: new Date().toISOString(),
-      });
+    this.ctx.storage.durableRunEvents.append({
+      eventId: randomUUID(),
+      runId,
+      eventType,
+      payload,
+      createdAt: new Date().toISOString(),
+    });
   }
 
   private markDurableRunWaiting(
@@ -1393,15 +1434,19 @@ export class ChatProactiveService {
   }): TaskRecord {
     const existing = this.findReusableTask(input.sessionId);
     if (existing) {
-      const updated = this.ctx.storage.tasks.update(existing.taskId, {
-        status: existing.status === "blocked" ? "in_progress" : existing.status,
-        proactiveContext: {
-          ...(existing.proactiveContext ?? {}),
-          sessionId: input.sessionId,
-          originSurface: input.originSurface,
-          proactiveRunId: input.runId,
+      const updated = this.ctx.storage.tasks.updateWithRevision(
+        existing.taskId,
+        {
+          status: existing.status === "blocked" ? "in_progress" : existing.status,
+          proactiveContext: {
+            ...(existing.proactiveContext ?? {}),
+            sessionId: input.sessionId,
+            originSurface: input.originSurface,
+            proactiveRunId: input.runId,
+          },
         },
-      });
+        existing.revision,
+      );
       this.publishRealtimeSafely(
         "task_updated",
         "tasks",
@@ -1462,20 +1507,25 @@ export class ChatProactiveService {
       status?: TaskRecord["status"];
     },
   ): TaskRecord {
-    const updated = this.ctx.storage.tasks.update(taskId, {
-      ...(patch.status ? { status: patch.status } : {}),
-      proactiveContext: {
-        ...(this.ctx.storage.tasks.get(taskId).proactiveContext ?? {}),
-        sessionId: patch.sessionId,
-        originSurface: patch.originSurface,
-        proactiveRunId: patch.proactiveRunId,
-        durableRunId: patch.durableRunId,
-        approvalId: patch.approvalId,
-        nextWakeAt: patch.nextWakeAt,
-        stopReason: patch.stopReason,
-        externalReferenceRoots: patch.externalReferenceRoots,
+    const current = this.ctx.storage.tasks.get(taskId);
+    const updated = this.ctx.storage.tasks.updateWithRevision(
+      taskId,
+      {
+        ...(patch.status ? { status: patch.status } : {}),
+        proactiveContext: {
+          ...(current.proactiveContext ?? {}),
+          sessionId: patch.sessionId,
+          originSurface: patch.originSurface,
+          proactiveRunId: patch.proactiveRunId,
+          durableRunId: patch.durableRunId,
+          approvalId: patch.approvalId,
+          nextWakeAt: patch.nextWakeAt,
+          stopReason: patch.stopReason,
+          externalReferenceRoots: patch.externalReferenceRoots,
+        },
       },
-    });
+      current.revision,
+    );
     this.publishRealtimeSafely(
       "task_updated",
       "tasks",
@@ -2045,7 +2095,10 @@ export class ChatProactiveService {
     if (actions.length === 0) {
       throwIfProactiveDurableRunAborted(context?.signal);
       const originationMode: ProactiveOriginationMode = source === "de_novo" ? "de_novo" : "reactive";
-      const plan = await this.planProactiveActions(sessionId, originationMode, context?.signal);
+      const plan = await this.planProactiveActions(sessionId, originationMode, context?.signal, {
+        proactiveRunId,
+        durableRunId: run.runId,
+      });
       throwIfProactiveDurableRunAborted(context?.signal);
       if (plan.actions.length === 0) {
         const completed = this.finishProactiveDurableRun(
@@ -2469,17 +2522,26 @@ export class ChatProactiveService {
       };
       retrievalMode: ChatRetrievalMode;
       reflectionMode: ChatReflectionMode;
+      expectedRevision: number;
     }>,
   ): ProactivePolicy {
     this.callbacks.getSession(sessionId);
-    const next = this.patchSessionAutonomyPrefs(sessionId, {
+    const current = this.getSessionAutonomyPrefs(sessionId);
+    const patch = {
       proactiveMode: input.proactiveMode,
       maxActionsPerHour: input.autonomyBudget?.maxActionsPerHour,
       maxActionsPerTurn: input.autonomyBudget?.maxActionsPerTurn,
       cooldownSeconds: input.autonomyBudget?.cooldownSeconds,
       retrievalMode: input.retrievalMode,
       reflectionMode: input.reflectionMode,
-    });
+    };
+    const next = this.ctx.storage.sessionAutonomyPrefs.patchWithRevision
+      ? this.ctx.storage.sessionAutonomyPrefs.patchWithRevision(
+          sessionId,
+          patch,
+          input.expectedRevision ?? current.revision,
+        )
+      : this.patchSessionAutonomyPrefs(sessionId, patch);
     const policy = this.toProactivePolicy(sessionId, next);
     this.publishRealtimeSafely("system", "chat", {
       type: "proactive_policy_updated",

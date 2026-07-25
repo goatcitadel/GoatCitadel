@@ -14,7 +14,9 @@ import { reconcileInterruptedChatTurns } from "./chat-turn-interruption-recovery
  * transaction-control/PRAGMA SQL the way the real Postgres driver does. The
  * reconciler's new cross-table queries (listActive and the orphaned-latest-
  * user-message join) run through prepare/all only, so this pins that the boot
- * reconciliation path never issues dialect-unsafe raw exec statements.
+ * reconciliation path never issues dialect-unsafe raw exec statements. The
+ * sqlite-backed facade strips only Postgres row-lock syntax used by repository
+ * startup recovery; real Postgres coverage owns that syntax's semantics.
  */
 
 interface Harness {
@@ -37,7 +39,7 @@ function createPostgresDialectStrictDb(rootDir: string): DatabaseClient {
     dialect: "postgres",
     prepare: (sql) => {
       let stmt: ReturnType<DatabaseClient["prepare"]> | undefined;
-      const resolve = () => (stmt ??= inner.prepare(sql));
+      const resolve = () => (stmt ??= inner.prepare(translatePostgresSqlForSqlite(sql)));
       return {
         run: (...params: unknown[]) => resolve().run(...params),
         get: (...params: unknown[]) => resolve().get(...params),
@@ -58,6 +60,10 @@ function createPostgresDialectStrictDb(rootDir: string): DatabaseClient {
     close: () => inner.close(),
     transaction: (mode, callback) => inner.transaction(mode, callback),
   };
+}
+
+function translatePostgresSqlForSqlite(sql: string): string {
+  return sql.replace(/\bFOR UPDATE(?:\s+SKIP LOCKED)?\b/giu, "");
 }
 
 function createHarness(): Harness {

@@ -1,8 +1,9 @@
 import TestRenderer from "react-test-renderer";
 import { describe, expect, it, vi } from "vitest";
-import type { ChatThreadTurnRecord } from "@goatcitadel/contracts";
+import type { ChatThreadSystemNoticeRecord, ChatThreadTurnRecord } from "@goatcitadel/contracts";
 import {
   ChatThreadDelegationSummary,
+  ChatThreadSystemNoticeCard,
   ChatThreadTurnCard,
   StreamingAssistantSkeleton,
   buildThreadWindow,
@@ -89,6 +90,30 @@ function renderedText(renderer: TestRenderer.ReactTestRenderer): string {
 }
 
 describe("ChatThreadPrimitives", () => {
+  it("renders a retained heartbeat as an assistant-only system notice", () => {
+    const notice = {
+      kind: "system_heartbeat",
+      noticeId: "assistant-heartbeat-1",
+      turnId: "turn-heartbeat-1",
+      message: {
+        messageId: "assistant-heartbeat-1",
+        sessionId: "session-1",
+        role: "assistant",
+        actorType: "system",
+        actorId: "system-heartbeat",
+        content: "**Disk pressure high.**",
+        timestamp: "2026-07-15T10:01:00.000Z",
+      },
+    } as ChatThreadSystemNoticeRecord;
+
+    const renderer = TestRenderer.create(<ChatThreadSystemNoticeCard notice={notice} />);
+
+    expect(renderedText(renderer)).toContain("Heartbeat");
+    expect(renderedText(renderer)).toContain("Disk pressure high.");
+    expect(renderer.root.findAllByProps({ className: "mc-next-thread-bubble user" })).toHaveLength(0);
+    expect(renderer.root.findByProps({ "data-notice-id": "assistant-heartbeat-1" })).toBeTruthy();
+  });
+
   it("handles branch switching, surface activation, nested interactive guards, context, and citation slots", () => {
     const onSelectTurn = vi.fn();
     const onSwitchBranch = vi.fn();

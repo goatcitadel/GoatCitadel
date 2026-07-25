@@ -72,11 +72,19 @@ function createScriptedRepo(getRows: unknown[]): ChatSessionMetaRepository {
     get: () => undefined,
     all: () => [],
   };
+  const clockStatement: DbStatement = {
+    run: () => ({ changes: 0 }),
+    get: <T = unknown>() => ({ now: "2026-03-26T00:00:00.000Z" }) as T,
+    all: () => [],
+  };
   const db: DatabaseClient = {
     dialect: "sqlite",
     prepare(sql) {
       if (sql.includes("SELECT * FROM chat_session_meta WHERE session_id = ?")) {
         return selectStatement;
+      }
+      if (sql.includes("strftime(")) {
+        return clockStatement;
       }
       return writeStatement;
     },
@@ -88,9 +96,34 @@ function createScriptedRepo(getRows: unknown[]): ChatSessionMetaRepository {
 }
 
 describe("ChatSessionMetaRepository", () => {
+  it("uses a PostgreSQL row lock for transactionally fenced ownership reads", () => {
+    const preparedSql: string[] = [];
+    const emptyStatement: DbStatement = {
+      run: () => ({ changes: 0 }),
+      get: () => undefined,
+      all: () => [],
+    };
+    const db: DatabaseClient = {
+      dialect: "postgres",
+      prepare(sql) {
+        preparedSql.push(sql);
+        return emptyStatement;
+      },
+      exec() {},
+      close() {},
+      transaction(_mode, callback) {
+        return callback();
+      },
+    };
+    const repo = new ChatSessionMetaRepository(db);
+
+    assert.equal(repo.getForUpdate("session-missing"), undefined);
+    assert.ok(preparedSql.includes("SELECT * FROM chat_session_meta WHERE session_id = ? FOR UPDATE"));
+  });
+
   it("returns defaults when ensuring a missing row", () => {
     const repo = createRepo();
-    const meta = repo.ensure("sess-1");
+    const meta = repo.ensure("sess-1", "2026-03-26T00:00:00.000Z", "default");
 
     assert.equal(meta.workspaceId, "default");
     assert.equal(meta.origin, undefined);
@@ -101,6 +134,7 @@ describe("ChatSessionMetaRepository", () => {
 
   it("round-trips origin and history visibility fields", () => {
     const repo = createRepo();
+    repo.ensure("sess-1", "2026-03-26T00:00:00.000Z", "workspace-a");
     const patched = repo.patch(
       "sess-1",
       {
@@ -130,6 +164,7 @@ describe("ChatSessionMetaRepository", () => {
 
   it("sanitizes patch fields and preserves omitted values", () => {
     const repo = createRepo();
+    repo.ensure("sess-1", "2026-03-26T00:00:00.000Z", " workspace-a ");
     const first = repo.patch(
       "sess-1",
       {
@@ -198,6 +233,8 @@ describe("ChatSessionMetaRepository", () => {
 
   it("filters listed rows by workspace id", () => {
     const repo = createRepo();
+    repo.ensure("sess-1", "2026-03-26T00:00:00.000Z", "workspace-a");
+    repo.ensure("sess-2", "2026-03-26T00:00:00.000Z", "workspace-b");
     repo.patch("sess-1", { workspaceId: "workspace-a", origin: "operator", includeInHistory: true });
     repo.patch("sess-2", { workspaceId: "workspace-b", origin: "system", includeInHistory: false });
 
@@ -210,6 +247,8 @@ describe("ChatSessionMetaRepository", () => {
 
   it("lists sessions without a workspace filter and short-circuits empty lists", () => {
     const repo = createRepo();
+    repo.ensure("sess-1", "2026-03-26T00:00:00.000Z", "workspace-a");
+    repo.ensure("sess-2", "2026-03-26T00:00:00.000Z", "workspace-b");
     repo.patch("sess-1", { workspaceId: "workspace-a", origin: "operator", includeInHistory: true });
     repo.patch("sess-2", { workspaceId: "workspace-b", origin: "system", includeInHistory: false });
 
@@ -223,6 +262,10 @@ describe("ChatSessionMetaRepository", () => {
 
   it("lists folders grouped by workspace", () => {
     const repo = createRepo();
+    repo.ensure("sess-1", "2026-03-26T00:00:00.000Z", "workspace-a");
+    repo.ensure("sess-2", "2026-03-26T00:00:00.000Z", "workspace-a");
+    repo.ensure("sess-3", "2026-03-26T00:00:00.000Z", "workspace-a");
+    repo.ensure("sess-4", "2026-03-26T00:00:00.000Z", "workspace-b");
     repo.patch("sess-1", { workspaceId: "workspace-a", folderName: "Zulu Work" });
     repo.patch("sess-2", { workspaceId: "workspace-a", folderName: "Alpha Work" });
     repo.patch("sess-3", { workspaceId: "workspace-a", folderName: "Alpha Work" });
@@ -246,6 +289,7 @@ describe("ChatSessionMetaRepository", () => {
 
   it("normalizes malformed stored origins and tag payloads defensively", () => {
     const { db, repo } = createStore();
+    repo.ensure("sess-1", "2026-03-26T00:00:00.000Z", "default");
     repo.patch("sess-1", { origin: "operator", tags: [" One "] });
 
     assert.deepEqual(createScriptedRepo([validRow({ tags_json: null })]).get("sess-1")?.tags, []);
@@ -265,7 +309,7 @@ describe("ChatSessionMetaRepository", () => {
 
   it("rejects invalid workspace, origin, folder, and stored row shapes", () => {
     const { db, repo } = createStore();
-    repo.ensure("sess-1");
+    repo.ensure("sess-1", "2026-03-26T00:00:00.000Z", "default");
 
     assert.throws(
       () => repo.ensure("sess-blank-workspace", "2026-03-26T00:00:00.000Z", " "),
@@ -286,15 +330,15 @@ describe("ChatSessionMetaRepository", () => {
     assert.throws(() => repo.listBySessionIds(["sess-1"]), /Unexpected chat_session_meta row shape/);
   });
 
-  it("fails clearly when writes cannot be read back", () => {
+  it("fails clearly when lifecycle initialization or writes cannot be read back", () => {
     assert.throws(
-      () => createScriptedRepo([undefined, undefined]).ensure("sess-1", "2026-03-26T00:00:00.000Z"),
-      /chat_session_meta ensure did not return a row/,
+      () => createScriptedRepo([undefined, undefined]).ensure("sess-1", "2026-03-26T00:00:00.000Z", "default"),
+      /Chat session has no workspace-matched current owner/,
     );
 
     assert.throws(
       () =>
-        createScriptedRepo([undefined, validRow(), undefined]).patch(
+        createScriptedRepo([validRow(), validRow(), undefined]).patch(
           "sess-1",
           { title: "Lost write" },
           "2026-03-26T00:00:00.000Z",

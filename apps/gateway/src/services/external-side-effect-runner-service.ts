@@ -300,6 +300,13 @@ export interface IdempotentExternalSideEffectRunInput<TValue> extends ExternalSi
    * Absent / any other effect → behaves exactly as before (backward-compatible).
    */
   wardEffect?: WardEffect;
+  /**
+   * Narrow post-error escape hatch for an owning transport that can prove the
+   * provider request was not dispatched even though its outer delivery boundary
+   * was recorded. The default remains fail-closed: absent a positive proof, any
+   * error after `markExternalCallStarted()` is an unknown external outcome.
+   */
+  isExternalCallProvenNotDispatched?(error: unknown): boolean;
   execute(claim: ExternalSideEffectExecutionContext): Promise<TValue>;
   /** Optional canonical completion commit. When present it owns all terminal stores atomically. */
   commitCompleted?(claim: ExternalSideEffectExecutionContext, value: TValue): void;
@@ -759,7 +766,9 @@ export async function runIdempotentExternalSideEffect<TValue>(
     };
   } catch (error) {
     let failure = error;
-    let manualReconciliationRequired = externalCallStarted || boundaryClaimLost;
+    const externalCallProvenNotDispatched =
+      externalCallStarted && !boundaryClaimLost && safelyProvesExternalCallNotDispatched(input, error);
+    let manualReconciliationRequired = (externalCallStarted && !externalCallProvenNotDispatched) || boundaryClaimLost;
     if (!manualReconciliationRequired) {
       try {
         markIdempotentExternalSideEffectFailed(input.mutationStore, ownedClaim, input.checkedAt);
@@ -802,6 +811,21 @@ export async function runIdempotentExternalSideEffect<TValue>(
       error: failure instanceof Error ? failure : new Error("external_side_effect_failed"),
       output: buildExternalSideEffectReplayOutput(failedClaim, input.output),
     };
+  }
+}
+
+function safelyProvesExternalCallNotDispatched<TValue>(
+  input: IdempotentExternalSideEffectRunInput<TValue>,
+  error: unknown,
+): boolean {
+  if (!input.isExternalCallProvenNotDispatched) {
+    return false;
+  }
+  try {
+    return input.isExternalCallProvenNotDispatched(error) === true;
+  } catch {
+    // Classification failures must never reopen an ambiguous provider call.
+    return false;
   }
 }
 

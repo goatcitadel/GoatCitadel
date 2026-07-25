@@ -1,0 +1,71 @@
+/* HX-507B remote-worker inline activity inside the EXISTING Chat background
+   rail. Bespoke tokens only (--accent, never --mc-accent); status stays
+   text-visible, never color-only. */
+
+.mc-next-remote-activity {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border-top: 1px solid var(--border, rgba(120, 120, 140, 0.28));
+  padding-top: 0.6rem;
+  margin-top: 0.6rem;
+}
+
+.mc-next-remote-activity__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.mc-next-remote-activity__header h5 {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.mc-next-remote-activity__item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  border: 1px solid var(--border, rgba(120, 120, 140, 0.28));
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.6rem;
+}
+
+.mc-next-remote-activity__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.mc-next-remote-activity__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.6rem;
+  font-size: var(--text-2xs);
+  color: var(--text-2, #9aa0ac);
+}
+
+.mc-next-remote-activity__unavailable {
+  font-size: var(--text-2xs);
+  color: var(--text-2, #9aa0ac);
+  margin: 0;
+}
+
+.mc-next-remote-activity__ops-link {
+  align-self: flex-start;
+  min-height: 44px;
+  background: none;
+  border: 1px solid var(--accent, #6b8afd);
+  color: var(--accent, #6b8afd);
+  border-radius: 0.4rem;
+  padding: 0.25rem 0.6rem;
+  font-size: var(--text-2xs);
+  cursor: pointer;
+}
+
+.mc-next-remote-activity__ops-link:focus-visible {
+  outline: 2px solid var(--accent, #6b8afd);
+  outline-offset: 2px;
+}

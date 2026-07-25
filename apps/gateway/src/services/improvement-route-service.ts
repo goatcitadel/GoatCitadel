@@ -30,12 +30,12 @@ type ImprovementOperationsPort = Pick<
   | "listRepairCandidates"
   | "activateImprovementCandidate"
   | "approveImprovementCandidate"
-  | "pauseImprovementActivation"
   | "promoteImprovementCandidate"
   | "rejectImprovementCandidate"
-  | "requestImprovementActivation"
+  | "requestImprovementActivationApproval"
+  | "requestImprovementPauseApproval"
+  | "requestImprovementRollbackApproval"
   | "revertDecisionAutoTune"
-  | "rollbackImprovementActivation"
   | "runImprovementReplayManually"
   | "snoozeImprovementCandidate"
   | "updateRepairCandidateValidation"
@@ -139,20 +139,24 @@ export class ImprovementRouteService {
     return this.deps.improvement.promoteImprovementCandidate(candidateId, input);
   }
 
-  public requestImprovementActivation(candidateId: string) {
-    return this.deps.improvement.requestImprovementActivation(candidateId);
+  // HX-402 P3: the activation lifecycle route surface is approval-first. The
+  // request verbs never mutate — they commit one canonical deterministic
+  // `improvement.lifecycle` approval (plus requester Journey evidence) and
+  // only the recovered approval effect may later execute the mutation.
+  public requestImprovementActivation(candidateId: string, authority?: { requesterId?: string }) {
+    return this.deps.improvement.requestImprovementActivationApproval(candidateId, authority);
   }
 
   public getImprovementActivation(activationId: string) {
     return this.deps.improvement.getImprovementActivation(activationId);
   }
 
-  public pauseImprovementActivation(activationId: string) {
-    return this.deps.improvement.pauseImprovementActivation(activationId);
+  public pauseImprovementActivation(activationId: string, authority?: { requesterId?: string }) {
+    return this.deps.improvement.requestImprovementPauseApproval(activationId, authority);
   }
 
-  public rollbackImprovementActivation(activationId: string) {
-    return this.deps.improvement.rollbackImprovementActivation(activationId);
+  public rollbackImprovementActivation(activationId: string, authority?: { requesterId?: string }) {
+    return this.deps.improvement.requestImprovementRollbackApproval(activationId, authority);
   }
 
   public listImprovementReports(limit: number) {

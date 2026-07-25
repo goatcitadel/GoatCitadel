@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { LoadedSkill, SkillResolveInput, SkillActivationDecision } from "@goatcitadel/contracts";
-import { parseSkillMarkdown } from "./frontmatter.js";
+import { parseSkillMarkdown, resolveSkillNameViolation } from "./frontmatter.js";
 import { resolveSkillPrecedence } from "./precedence.js";
 import { resolveSkillActivation } from "./activation.js";
 import { resolveGeneratedRoutingHints } from "./routing-hints.generated.js";
@@ -39,9 +39,7 @@ export class SkillsService {
   ) {}
 
   public async reload(): Promise<LoadedSkill[]> {
-    const sourceSkills = await Promise.all(
-      this.sources.map((source) => loadSourceSkills(source, this.logger)),
-    );
+    const sourceSkills = await Promise.all(this.sources.map((source) => loadSourceSkills(source, this.logger)));
 
     this.loaded = resolveSkillPrecedence(sourceSkills.flat());
     return this.loaded;
@@ -110,6 +108,18 @@ async function loadSkillFromDir(
 
   try {
     const parsed = parseSkillMarkdown(raw);
+    const nameViolation = resolveSkillNameViolation(parsed.frontmatter.name);
+    if (nameViolation) {
+      // An unsafe name would flow into the `skill:<source>:<name>` capability
+      // id and fail chat-turn capability-profile sealing on every send. Reject
+      // the skill here, at load time, where the author can see exactly why.
+      logger.warn(`Skipping skill with unsafe name at ${skillFile}: name ${nameViolation}`, {
+        source: source.source,
+        skillName: parsed.frontmatter.name,
+        reason: `name ${nameViolation}`,
+      });
+      return undefined;
+    }
     return {
       skillId: `${source.source}:${parsed.frontmatter.name}`,
       name: parsed.frontmatter.name,

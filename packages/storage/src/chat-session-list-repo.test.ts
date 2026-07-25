@@ -114,6 +114,14 @@ describe("ChatSessionListRepository", () => {
           .map((item) => item.sessionId),
         ["session-search"],
       );
+
+      assert.deepEqual(
+        storage.chatSessionLists
+          .listCandidates({ workspaceId: "default", q: "gateway", limit: 10 })
+          .map((item) => item.sessionId),
+        ["session-code"],
+        "project-name-only matches must survive bounded SQL candidate selection",
+      );
     } finally {
       storage.close();
     }
@@ -144,6 +152,43 @@ describe("ChatSessionListRepository", () => {
       assert.deepEqual(
         second.map((item) => item.sessionId),
         ["session-new", "session-old"],
+      );
+    } finally {
+      storage.close();
+    }
+  });
+
+  it("applies canonical Chat mode normalization before the bounded candidate limit", () => {
+    const storage = createStorage();
+    try {
+      for (let index = 1; index <= 3; index += 1) {
+        const sessionId = `session-invalid-${index}`;
+        createSession(storage, {
+          sessionId,
+          timestamp: `2026-05-03T16:0${index}:00.000Z`,
+        });
+        storage.chatSessionMeta.ensure(sessionId, undefined, "default");
+        storage.chatSessionPrefs.ensure(sessionId);
+        storage.gatewaySql
+          .prepare("UPDATE chat_session_prefs SET mode = ? WHERE session_id = ?")
+          .run("voice", sessionId);
+      }
+      for (const [index, mode] of (["chat", "cowork"] as const).entries()) {
+        const sessionId = `session-chat-${index + 1}`;
+        createSession(storage, {
+          sessionId,
+          timestamp: `2026-05-03T15:0${index + 1}:00.000Z`,
+        });
+        storage.chatSessionMeta.ensure(sessionId, undefined, "default");
+        storage.chatSessionPrefs.ensure(sessionId);
+        storage.chatSessionPrefs.patch(sessionId, { mode });
+      }
+
+      assert.deepEqual(
+        storage.chatSessionLists
+          .listCandidates({ workspaceId: "default", mode: "chat", limit: 2 })
+          .map((item) => item.sessionId),
+        ["session-chat-2", "session-chat-1"],
       );
     } finally {
       storage.close();

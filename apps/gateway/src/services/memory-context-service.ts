@@ -1,15 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type {
-  ChatCompletionResponse,
-  MemoryContextAssemblyReport,
-  MemoryContextComposeRequest,
-  MemoryContextPack,
-  MemoryQmdStatsResponse,
-  MemoryRelationScope,
-  MemoryRetrievalMatchSignals,
-  MemoryRetrievalStatusResponse,
-  MemoryRetrievalStrategy,
+import {
+  ConflictError,
+  type ChatCompletionResponse,
+  type MemoryContextAssemblyReport,
+  type MemoryContextComposeRequest,
+  type MemoryContextPack,
+  type MemoryQmdStatsResponse,
+  type MemoryRelationScope,
+  type MemoryRetrievalMatchSignals,
+  type MemoryRetrievalStatusResponse,
+  type MemoryRetrievalStrategy,
 } from "@goatcitadel/contracts";
 import {
   buildCacheKey,
@@ -28,7 +29,14 @@ import {
   type MemorySourceInput,
   type ParsedDistillation,
 } from "@goatcitadel/memory-core";
-import { assertWritePathInJail, currentEmbeddingProfile, generateEmbedding } from "@goatcitadel/policy-engine";
+import {
+  assertWritePathInJail,
+  currentEmbeddingProfile,
+  EmbeddingUsageSettlementError,
+  generateEmbedding,
+  type AcquireLocalEmbeddingLease,
+  type PrepareEmbeddingUsageDispatch,
+} from "@goatcitadel/policy-engine";
 import type { Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 import { LlmService } from "./llm-service.js";
@@ -39,6 +47,9 @@ import {
   MEMORY_CONTEXT_PROMPT_INJECTION_REASON,
   sanitizeMemoryContextWrite,
 } from "./memory-context-safety.js";
+import { createUtilityModelUsageAttribution } from "./utility-model-usage-attribution.js";
+import { runBoundedUtilityModelCall } from "./utility-model-call.js";
+import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
 
 const DEFAULT_MEMORY_WORKSPACE_ID = "default";
 
@@ -48,6 +59,8 @@ export class MemoryContextService {
     private readonly llmService: LlmService,
     private readonly config: GatewayRuntimeConfig,
     private readonly publishRealtime: (eventType: string, payload: Record<string, unknown>) => void,
+    private readonly acquireLocalEmbeddingLease?: AcquireLocalEmbeddingLease,
+    private readonly prepareEmbeddingUsageDispatch?: PrepareEmbeddingUsageDispatch,
   ) {}
   public async compose(input: MemoryContextComposeRequest): Promise<MemoryContextPack> {
     const pack = await this.composeInternal(input);
@@ -259,43 +272,53 @@ export class MemoryContextService {
     const model =
       qmd.distiller.model ??
       (providerId === runtime.activeProviderId ? runtime.activeModel : qmd.distiller.fallbackCheapModel);
-    const distillerAbortController = new AbortController();
-    const distillerSignal = input.signal
-      ? AbortSignal.any([input.signal, distillerAbortController.signal])
-      : distillerAbortController.signal;
-
     try {
-      const response = await withTimeout(
-        this.llmService.chatCompletions({
-          providerId,
-          model,
-          response_format: { type: "json_object" },
-          temperature: 0.1,
-          max_tokens: Math.max(300, Math.min(1400, maxContextTokens)),
-          signal: distillerSignal,
-          messages: [
-            {
-              role: "system",
-              content:
-                "You are a context distiller. Only use provided evidence. Return strict JSON. " +
-                "Never invent citations.",
-            },
-            {
-              role: "user",
-              content: buildDistillerPrompt({
-                prompt,
-                candidates,
-              }),
-            },
-          ],
-        }),
-        qmd.distiller.timeoutMs,
-        "memory distiller timed out",
-        input.signal,
-        () => {
-          distillerAbortController.abort(new Error("memory distiller timed out"));
+      const attribution = createUtilityModelUsageAttribution({
+        operationId: `memory-context:${encodeURIComponent(cacheKey)}:distill`,
+        utilityKind: "memory_context_distillation",
+        requestedProviderId: providerId,
+        requestedModelId: model,
+        lineage: {
+          workspaceId: resolveTrustedMemoryUsageWorkspaceId(this.storage, input.sessionId) ?? input.workspaceId,
+          sessionId: input.sessionId,
+          durableRunId: input.runId,
+          taskId: input.taskId,
+          agentId: "memory-context-distiller",
+          contextSnapshotId: cacheKey,
         },
-      );
+      });
+      const response = await runBoundedUtilityModelCall({
+        timeoutMs: qmd.distiller.timeoutMs,
+        timeoutMessage: "memory distiller timed out",
+        parentSignal: input.signal,
+        start: (boundedSignal) =>
+          this.llmService.chatCompletions(
+            {
+              providerId,
+              model,
+              response_format: { type: "json_object" },
+              temperature: 0.1,
+              max_tokens: Math.max(300, Math.min(1400, maxContextTokens)),
+              signal: boundedSignal,
+              messages: [
+                {
+                  role: "system",
+                  content:
+                    "You are a context distiller. Only use provided evidence. Return strict JSON. " +
+                    "Never invent citations.",
+                },
+                {
+                  role: "user",
+                  content: buildDistillerPrompt({
+                    prompt,
+                    candidates,
+                  }),
+                },
+              ],
+            },
+            attribution,
+          ),
+      });
       throwIfMemoryContextAborted(input.signal);
 
       const parsed = parseDistillerResponse(response);
@@ -386,6 +409,9 @@ export class MemoryContextService {
       }
       return enrichedGenerated;
     } catch (error) {
+      if (isAuthoritativeModelUsageAccountingError(error)) {
+        throw error;
+      }
       if (isMemoryContextAbort(error, input.signal)) {
         throw error instanceof Error ? error : new Error("memory context composition aborted");
       }
@@ -535,12 +561,30 @@ export class MemoryContextService {
       return { providerIsReal: false };
     }
     try {
-      const generated = await generateEmbedding(prompt);
+      const generated = await generateEmbedding(prompt, undefined, undefined, {
+        purpose: "embedding_query",
+        ...(input.signal ? { signal: input.signal } : {}),
+        ...(this.acquireLocalEmbeddingLease ? { acquireLocalServiceLease: this.acquireLocalEmbeddingLease } : {}),
+        ...(this.prepareEmbeddingUsageDispatch
+          ? { prepareModelUsageDispatch: this.prepareEmbeddingUsageDispatch }
+          : {}),
+        modelUsageAttribution: {
+          workspaceId: input.workspaceId,
+          sessionId: input.sessionId,
+          durableRunId: input.runId,
+          taskId: input.taskId,
+          utilityKind: "memory_context_query_embedding",
+        },
+      });
       return {
         ...(generated.embedding.length > 0 ? { embedding: generated.embedding } : {}),
         providerIsReal: generated.metadata.provider !== "pseudo",
       };
-    } catch {
+    } catch (error) {
+      throwIfMemoryContextAborted(input.signal);
+      if (error instanceof ConflictError || error instanceof EmbeddingUsageSettlementError) {
+        throw error;
+      }
       return { providerIsReal: false };
     }
   }
@@ -953,39 +997,14 @@ function extractMessageContent(response: ChatCompletionResponse): string {
   return "";
 }
 
-async function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  message: string,
-  signal?: AbortSignal,
-  onTimeout?: () => void,
-): Promise<T> {
-  let timeoutHandle: NodeJS.Timeout | undefined;
-  let abortHandler: (() => void) | undefined;
-  throwIfMemoryContextAborted(signal);
-  const timeout = new Promise<never>((_, reject) => {
-    timeoutHandle = setTimeout(() => {
-      onTimeout?.();
-      reject(new Error(message));
-    }, timeoutMs);
-  });
-  const abort = new Promise<never>((_, reject) => {
-    if (!signal) {
-      return;
-    }
-    abortHandler = () => reject(toMemoryContextAbortError(signal));
-    signal.addEventListener("abort", abortHandler, { once: true });
-  });
-
+function resolveTrustedMemoryUsageWorkspaceId(storage: Storage, sessionId?: string): string | undefined {
+  if (!sessionId) {
+    return undefined;
+  }
   try {
-    return await Promise.race([promise, timeout, abort]);
-  } finally {
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
-    }
-    if (signal && abortHandler) {
-      signal.removeEventListener("abort", abortHandler);
-    }
+    return storage.chatSessionMeta.get(sessionId)?.workspaceId;
+  } catch {
+    return undefined;
   }
 }
 

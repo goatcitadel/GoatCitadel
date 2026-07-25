@@ -14,6 +14,7 @@ import type {
   DurableRunRecord,
   ExternalSideEffectRunRecord,
 } from "@goatcitadel/contracts";
+import { canonicalJsonString as canonicalJsonStringContract } from "@goatcitadel/contracts";
 import { projectPublicSecretValue } from "./public-secret-projection.js";
 
 /**
@@ -372,49 +373,11 @@ export function verifyEvidenceReceipt(receipt: unknown): EvidenceReceiptVerifica
  * content hash stable regardless of the key order the manifest was built with.
  */
 export function canonicalJsonString(value: unknown): string {
-  return canonicalize(value);
+  return canonicalJsonStringContract(value);
 }
 
 export function canonicalJsonBytes(value: unknown): Buffer {
   return Buffer.from(canonicalJsonString(value), "utf8");
-}
-
-function canonicalize(value: unknown): string {
-  if (value === null) {
-    return "null";
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      throw new Error("Cannot canonicalize a non-finite number in an evidence receipt manifest.");
-    }
-    return JSON.stringify(value);
-  }
-  if (typeof value === "boolean" || typeof value === "string") {
-    return JSON.stringify(value);
-  }
-  if (typeof value === "bigint") {
-    throw new Error("Cannot canonicalize a bigint in an evidence receipt manifest.");
-  }
-  if (Array.isArray(value)) {
-    // Arrays are order-significant; `undefined`/function entries serialize to null (JSON semantics).
-    return `[${value.map((entry) => canonicalizeArrayEntry(entry)).join(",")}]`;
-  }
-  if (isRecord(value)) {
-    const keys = Object.keys(value)
-      .filter((key) => value[key] !== undefined && typeof value[key] !== "function")
-      .sort();
-    const members = keys.map((key) => `${JSON.stringify(key)}:${canonicalize(value[key])}`);
-    return `{${members.join(",")}}`;
-  }
-  // undefined / function at the top level — represent as null so output stays valid JSON.
-  return "null";
-}
-
-function canonicalizeArrayEntry(entry: unknown): string {
-  if (entry === undefined || typeof entry === "function") {
-    return "null";
-  }
-  return canonicalize(entry);
 }
 
 function extractCorrelation(run: DurableRunRecord): {

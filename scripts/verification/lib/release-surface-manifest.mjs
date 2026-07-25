@@ -71,6 +71,7 @@ export const NEXT_RELEASE_SURFACE_STATUS_BY_SLUG = {
   "library-skills": "ship",
   "library-capabilities": "ship",
   "library-memory": "ship",
+  "library-journey": "experimental",
   "library-knowledge": "ship",
   "library-notes": "ship",
   "library-communications": "ship",
@@ -84,6 +85,7 @@ export const NEXT_RELEASE_SURFACE_STATUS_BY_SLUG = {
   "library-citadel-council": "ship",
   "library-citadel-blueprint": "ship",
   "library-citadel-vault": "ship",
+  "ops-boards": "ship",
   "ops-activity": "ship",
   "ops-sessions": "ship",
   "ops-schedules": "ship",
@@ -117,7 +119,7 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = withReleaseSurfaceStatus([
   {
     slug: "chat",
     href: "/chat",
-    readySelector: ".mc-next-threaded-surface[data-mode=\"chat\"]",
+    readySelector: '.mc-next-threaded-surface[data-mode="chat"]',
     expectedArea: "chat",
     expectedSection: "root",
   },
@@ -156,9 +158,17 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = withReleaseSurfaceStatus([
   {
     slug: "library-memory",
     href: "/library/memory",
-    readyText: "Memory",
+    readyText: "Mission Control Next shell posture",
     expectedArea: "library",
     expectedSection: "memory",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "library-journey",
+    href: "/library/journey",
+    readyText: "Journey timeline",
+    expectedArea: "library",
+    expectedSection: "journey",
     interaction: "open-inspector",
   },
   {
@@ -266,6 +276,14 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = withReleaseSurfaceStatus([
     interaction: "open-inspector",
   },
   {
+    slug: "ops-boards",
+    href: "/ops/boards",
+    readyText: "Verification command board",
+    expectedArea: "ops",
+    expectedSection: "boards",
+    interaction: "open-inspector",
+  },
+  {
     slug: "ops-activity",
     href: "/ops/activity",
     readyText: "Activity feed",
@@ -332,7 +350,7 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = withReleaseSurfaceStatus([
   {
     slug: "ops-runtime",
     href: "/ops/runtime",
-    readyText: "Runtime",
+    readyText: "approval.wait run",
     expectedArea: "ops",
     expectedSection: "runtime",
     interaction: "open-inspector",
@@ -495,7 +513,7 @@ export const NEXT_VISUAL_SCENARIO_MANIFEST = [
   {
     slug: "chat-pending-approval",
     href: "/chat?vr-blocked=1",
-    readySelector: ".mc-next-composer-blocking-prompt[data-blocker-kind=\"approval\"]",
+    readySelector: '.mc-next-composer-blocking-prompt[data-blocker-kind="approval"]',
     expectedArea: "chat",
     expectedSection: "root",
     interaction: "open-inspector",
@@ -504,7 +522,7 @@ export const NEXT_VISUAL_SCENARIO_MANIFEST = [
   {
     slug: "chat-pending-user-input",
     href: "/chat?vr-blocked=1",
-    readySelector: ".mc-next-composer-blocking-prompt[data-blocker-kind=\"user-input\"]",
+    readySelector: '.mc-next-composer-blocking-prompt[data-blocker-kind="user-input"]',
     expectedArea: "chat",
     expectedSection: "root",
     interaction: "open-inspector",

@@ -3,6 +3,7 @@ import type { MissionThreadedContextDockProps } from "@goatcitadel/threaded-surf
 import type {
   ChatMode,
   ChatPlanningMode,
+  ChatSessionPrefsPatch,
   ChatSpeedMode,
   ChatSubagentPolicy,
   ChatThinkingLevel,
@@ -12,6 +13,7 @@ import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/Con
 import { GeneratedArtifactViewer } from "@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactViewer";
 import { StatusChip } from "../native-routes/primitives";
 import { shortId } from "./workflow/format";
+import { ChatCapabilityProfileRunDetail } from "./ChatCapabilityProfilePanel";
 
 type DrawerTab = "context" | "trace" | "assist" | "session";
 
@@ -102,6 +104,13 @@ function getProjectSummary(props: MissionThreadedContextDockProps): string {
   return matchedProjectOption ?? props.selectedSession?.projectName ?? sessionProjectId ?? "No project bound";
 }
 
+function formatPreferenceDraftFields(patch: ChatSessionPrefsPatch): string {
+  const fields = Object.keys(patch)
+    .filter((key) => key !== "expectedRevision")
+    .map((key) => key.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase());
+  return fields.length > 0 ? fields.join(", ") : "session preferences";
+}
+
 export function ThreadedContextDrawer({
   surface,
   props,
@@ -157,6 +166,42 @@ export function ThreadedContextDrawer({
           </button>
         ))}
       </div>
+
+      {props.preferenceConflictDraft ? (
+        <div className="mc-next-context-card" role="status" aria-live="polite">
+          <p className="mc-next-panel-kicker">Unsaved preference draft</p>
+          <p>
+            The server preferences changed elsewhere. The latest server state remains canonical. Pending:{" "}
+            {formatPreferenceDraftFields(props.preferenceConflictDraft)}.
+          </p>
+          <div className="mc-next-context-actions">
+            <button
+              type="button"
+              className="mc-next-panel-button"
+              onClick={() => void props.onRetryPreferenceConflictDraft()}
+            >
+              Retry preference changes
+            </button>
+            <button type="button" className="mc-next-panel-button" onClick={props.onDiscardPreferenceConflictDraft}>
+              Discard preference draft
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {props.proactivePolicyConflict && props.proactivePolicyDraft ? (
+        <div className="mc-next-context-card" role="status" aria-live="polite">
+          <p className="mc-next-panel-kicker">Unsaved policy draft</p>
+          <p>The server policy changed elsewhere. The latest server state remains canonical.</p>
+          <button
+            type="button"
+            className="mc-next-panel-button"
+            onClick={() => void props.onProactivePolicyPatch(props.proactivePolicyDraft!)}
+          >
+            Retry preserved changes
+          </button>
+        </div>
+      ) : null}
 
       {activeTab === "context" ? (
         <div className="mc-next-context-section-stack">
@@ -286,6 +331,8 @@ export function ThreadedContextDrawer({
             </section>
           ) : null}
 
+          <ChatCapabilityProfileRunDetail inspection={props.capabilityProfileInspection} />
+
           {props.activeGeneratedArtifact ? (
             <section className="mc-next-context-card">
               <div className="mc-next-panel-list-head">
@@ -335,6 +382,7 @@ export function ThreadedContextDrawer({
                   </div>
                 ) : null}
               </section>
+              <ChatCapabilityProfileRunDetail inspection={props.capabilityProfileInspection} />
               <ChatTraceCard
                 trace={props.selectedTurn.trace}
                 workspaceId={props.selectedSession.workspaceId ?? "default"}
@@ -365,6 +413,8 @@ export function ThreadedContextDrawer({
                 <option value="standard">Standard</option>
                 <option value="extended">Extended</option>
                 <option value="deep">Deep</option>
+                <option value="max">Maximum (supported models only)</option>
+                <option value="ultra">Ultra (supported models only)</option>
               </select>
             </label>
             <label className="mc-next-context-field">

@@ -4,14 +4,22 @@ import { lookup as nodeDnsLookup, type LookupAddress, type LookupOptions } from 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { isIP } from "node:net";
 import path from "node:path";
-import { logger } from "@goatcitadel/gateway-core";
+import {
+  logger,
+  ModelUsageAccountingService,
+  ModelUsageDispatchUncertainError,
+  ModelUsageSettlementError,
+  type ModelUsageAttemptHandle,
+} from "@goatcitadel/gateway-core";
 import { assertExistingPathRealpathAllowed, assertHostAllowed } from "@goatcitadel/policy-engine";
 import { readBoundedResponseText } from "./bounded-response-reader.js";
 import { parseProviderJsonResponse } from "./llm-response-parsing.js";
+import { extractProviderOwnedOutputCapErrorText, resolveOutputCapRecovery } from "./llm-output-cap-recovery.js";
 import { Agent, ProxyAgent } from "undici";
 import type { Dispatcher } from "undici";
 import type {
   ChatCompletionRequest,
+  ChatCompletionReasoningReceipt,
   ChatCompletionResponse,
   ChatProviderFailureRecord,
   ImageAssetInput,
@@ -28,12 +36,15 @@ import type {
   LlmModelRecord,
   LlmModelPreviewRequest,
   LlmModelPreviewResponse,
+  ModelUsageAttributionContext,
   LlmProviderConfig,
+  LlmProviderCapabilities,
   ProviderModelCatalogSnapshot,
   LlmProviderSummary,
   LlmRuntimeConfig,
 } from "@goatcitadel/contracts";
 import {
+  canonicalJsonString,
   findProviderTemplate,
   inferProviderForModelId,
   providerAllowsForeignModelIds,
@@ -41,16 +52,29 @@ import {
   SECRET_REDACTION_MARKER,
 } from "@goatcitadel/contracts";
 import { clampSummaryReserveTokens, type ClampSummaryReserveResult } from "./chat-compaction.js";
-import { sanitizeMessages } from "./chat-message-sanitize.js";
-import { loadLlmModelMetadataManifest, lookupModelMetadata } from "./llm-model-metadata.js";
+import { sanitizeMessages, stripInternalToolEffectMetadataForProvider } from "./chat-message-sanitize.js";
+import { loadLlmModelMetadataManifest, lookupExactModelMetadata, lookupModelMetadata } from "./llm-model-metadata.js";
+import {
+  GoogleCloudAuthService,
+  type GoogleCloudCredentialSource,
+  type GoogleCloudCredentialType,
+} from "./google-cloud-auth-service.js";
+import { resolveLlmReasoningProfile } from "./llm-reasoning-profile.js";
 import { anthropicProviderAdapter } from "./llm-provider-anthropic.js";
 import {
   createLlmProviderAdapterRegistry,
   type LlmProviderAdapterHost,
   type LlmProviderAdapterRegistry,
+  type LlmProviderJsonRequestInput,
   type LlmProviderResolution,
+  type LlmTrackedJsonDispatch,
 } from "./llm-provider-adapter.js";
-import { applyEstimatedCostToChatResponse, applyEstimatedCostToStreamChunk } from "./llm-pricing.js";
+import {
+  applyEstimatedCostToChatResponse,
+  applyEstimatedCostToStreamChunk,
+  observeProviderUsageWithTrustedEstimate,
+  resolveModelPricingLineage,
+} from "./llm-pricing.js";
 import {
   OpenAICodexOAuthService,
   type OpenAICodexDevicePollResponse,
@@ -85,10 +109,15 @@ export interface LlmRuntimeUpdateInput {
     apiKeyEnv?: string;
     request?: LlmProviderRequestConfig;
     headers?: Record<string, string>;
+    googleCloud?: LlmProviderConfig["googleCloud"];
+    capabilities?: LlmProviderConfig["capabilities"];
   };
 }
 
-type ResolvedProvider = LlmProviderResolution;
+type ResolvedProvider = LlmProviderResolution & {
+  credentialType?: GoogleCloudCredentialType;
+  credentialSource?: GoogleCloudCredentialSource;
+};
 
 interface ProviderRequestTarget {
   url: string;
@@ -151,7 +180,32 @@ export interface LlmServiceOptions {
    * fetch time; production leaves this unset.
    */
   dnsLookup?: ProviderDnsLookupFn;
+  /**
+   * Process-local authority for the canonical llama.cpp runtime. The Gateway
+   * implementation binds the configured provider endpoint to the runtime
+   * endpoint before acquiring; arbitrary provider URLs never reach the owner.
+   */
+  localServiceLeaseAcquirer?: LlmLocalServiceLeaseAcquirer;
+  /** Canonical per-network-attempt accounting owner. */
+  modelUsageAccounting?: ModelUsageAccountingService;
+  /** Injected only for deterministic auth integration tests. */
+  googleCloudAuthService?: GoogleCloudAuthService;
 }
+
+export interface LlmLocalServiceLease {
+  release(): void | Promise<void>;
+}
+
+export interface LlmLocalServiceLeaseRequest {
+  providerId: string;
+  baseUrl: string;
+  purpose: "chat_completion" | "model_discovery";
+  signal?: AbortSignal;
+}
+
+export type LlmLocalServiceLeaseAcquirer = (
+  request: LlmLocalServiceLeaseRequest,
+) => Promise<LlmLocalServiceLease | undefined>;
 
 export interface LlmProviderSecretStatusOptions {
   includeKeychain?: boolean;
@@ -185,6 +239,17 @@ function normalizeConfiguredProviderId(providerId: string | undefined): string |
   return trimmed ? trimmed : undefined;
 }
 
+function resolveProviderEnvironmentValue(
+  configured: string | undefined,
+  envName: string | undefined,
+  env: NodeJS.ProcessEnv,
+): string | undefined {
+  const direct = configured?.trim();
+  if (direct) return direct;
+  const key = envName?.trim();
+  return key ? env[key]?.trim() || undefined : undefined;
+}
+
 const DISALLOWED_BASE_HOSTS = new Set(["0.0.0.0", "169.254.169.254", "metadata.google.internal", "100.100.100.200"]);
 const SECRET_STATUS_CACHE_TTL_MS = 60_000;
 type UndiciAgentConnectOptions = Exclude<
@@ -209,6 +274,7 @@ export class LlmService {
   private readonly providers = new Map<string, LlmProviderConfig>();
   private readonly secretStore: SecretStoreService;
   private readonly openAICodexOAuth: OpenAICodexOAuthService;
+  private readonly googleCloudAuth: GoogleCloudAuthService;
   private readonly secretStatusCache = new Map<string, SecretStatusCacheEntry>();
   private readonly modelDiscoveryCache = new Map<string, ModelDiscoveryCacheEntry>();
   // Per-process opaque tokens that key the in-memory model-discovery cache by credential WITHOUT
@@ -224,6 +290,8 @@ export class LlmService {
   ]);
   private readonly providerAdapterHost: LlmProviderAdapterHost = {
     buildRequestTarget: (resolved, purpose, endpointUrl) => this.buildRequestTarget(resolved, purpose, endpointUrl),
+    postJsonRequest: (input) => this.postTrackedJsonRequest(input),
+    retryOutputCapFailure: (input) => this.retryTrackedOutputCapFailure(input),
   };
   private networkAllowlist: string[];
   private enforceNetworkAllowlist: boolean;
@@ -235,6 +303,8 @@ export class LlmService {
   private utilityModel: string;
   private readonly modelMetadata: LlmModelMetadataManifest;
   private readonly modelCatalogCachePath: string | undefined;
+  private readonly localServiceLeaseAcquirer: LlmLocalServiceLeaseAcquirer | undefined;
+  private readonly modelUsageAccounting: ModelUsageAccountingService | undefined;
 
   public constructor(
     config: LlmConfigFile,
@@ -243,10 +313,13 @@ export class LlmService {
   ) {
     this.secretStore = options.secretStore ?? new SecretStoreService();
     this.openAICodexOAuth = new OpenAICodexOAuthService(this.secretStore, options.openAICodexOAuthFetch ?? fetch);
+    this.googleCloudAuth = options.googleCloudAuthService ?? new GoogleCloudAuthService({ env: this.env });
     this.networkAllowlist = [...(options.networkAllowlist ?? [])];
     this.enforceNetworkAllowlist = options.enforceNetworkAllowlist ?? true;
     this.tlsPathPolicy = options.tlsPathPolicy;
     this.dnsLookup = options.dnsLookup ?? nodeDnsLookup;
+    this.localServiceLeaseAcquirer = options.localServiceLeaseAcquirer;
+    this.modelUsageAccounting = options.modelUsageAccounting;
     this.activeProviderId = "";
     this.activeModel = "";
     this.utilityProviderId = "";
@@ -308,19 +381,46 @@ export class LlmService {
     return Array.from(this.providers.values()).map((provider) => {
       const includeKeychain =
         options.includeKeychainForProviderId === provider.providerId ? true : includeKeychainDefault;
+      const authMode = resolveProviderAuthMode(provider);
       const oauthStatus = isOpenAICodexProvider(provider) ? this.openAICodexOAuth.getStatus() : undefined;
-      const status = oauthStatus
+      const googleAuthReadiness =
+        authMode === "google-adc"
+          ? this.googleCloudAuth.inspectReadiness({
+              providerId: provider.providerId,
+              credentialMode: "adc",
+              projectId: resolveProviderEnvironmentValue(
+                provider.googleCloud?.projectId,
+                provider.googleCloud?.projectIdEnv,
+                this.env,
+              ),
+              location: resolveProviderEnvironmentValue(
+                provider.googleCloud?.location,
+                provider.googleCloud?.locationEnv,
+                this.env,
+              ),
+              endpointId: provider.googleCloud?.endpointId,
+            })
+          : undefined;
+      const status = googleAuthReadiness
         ? {
             providerId: provider.providerId,
-            hasApiKey: oauthStatus.connected,
-            apiKeySource: oauthStatus.connected ? ("keychain" as const) : ("none" as const),
-            hasKeychainSecret: oauthStatus.connected,
-            apiKeyRef: oauthStatus.connected ? "keychain:goatcitadel:provider:openai-codex:oauth" : undefined,
+            hasApiKey: googleAuthReadiness.status === "configured" || googleAuthReadiness.status === "ready",
+            apiKeySource: "none" as const,
+            hasKeychainSecret: false,
+            apiKeyRef: undefined,
           }
-        : this.getProviderSecretStatus(provider.providerId, {
-            includeKeychain,
-            useCache: options.useCache,
-          });
+        : oauthStatus
+          ? {
+              providerId: provider.providerId,
+              hasApiKey: oauthStatus.connected,
+              apiKeySource: oauthStatus.connected ? ("keychain" as const) : ("none" as const),
+              hasKeychainSecret: oauthStatus.connected,
+              apiKeyRef: oauthStatus.connected ? "keychain:goatcitadel:provider:openai-codex:oauth" : undefined,
+            }
+          : this.getProviderSecretStatus(provider.providerId, {
+              includeKeychain,
+              useCache: options.useCache,
+            });
       return {
         providerId: provider.providerId,
         label: provider.label,
@@ -328,8 +428,10 @@ export class LlmService {
         apiStyle: provider.apiStyle,
         resolvedApiStyle: resolveProviderExecutionApiStyle(provider, provider.defaultModel),
         defaultModel: provider.defaultModel,
-        authMode: resolveProviderAuthMode(provider),
+        authMode,
+        googleCloud: provider.googleCloud,
         oauthStatus,
+        authReadiness: googleAuthReadiness,
         hasApiKey: status.hasApiKey,
         apiKeySource: status.apiKeySource,
         hasKeychainSecret: status.hasKeychainSecret,
@@ -346,6 +448,28 @@ export class LlmService {
     }
     const multiplier = lookupModelMetadata(this.modelMetadata, providerId, model)?.tokenMultiplier;
     return typeof multiplier === "number" && Number.isFinite(multiplier) && multiplier > 0 ? multiplier : 1;
+  }
+
+  /**
+   * Return the server-owned context window for the exact frozen route.
+   *
+   * This deliberately does not consult provider discovery records or fall back
+   * to the active model: routed-context admission must be budgeted against the
+   * same provider/model pair that will cross the provider boundary.
+   */
+  public getModelContextWindow(providerId: string, model: string): number | undefined {
+    const contextWindow = lookupModelMetadata(this.modelMetadata, providerId, model)?.contextWindow;
+    return Number.isSafeInteger(contextWindow) && (contextWindow ?? 0) > 0 ? contextWindow : undefined;
+  }
+
+  /** Secret-free fingerprint of every configured selector that can change an exact model transport route. */
+  public getProviderRouteConfigFingerprint(providerId: string, model: string): string | undefined {
+    const provider = this.providers.get(providerId);
+    const contextWindowTokens = this.getModelContextWindow(providerId, model);
+    if (!provider || !contextWindowTokens) {
+      return undefined;
+    }
+    return fingerprintProviderRouteConfig(provider, model, contextWindowTokens);
   }
 
   public getRuntimeConfig(
@@ -417,10 +541,13 @@ export class LlmService {
             ? undefined
             : (preserveProjectedProviderString(existing?.apiKey, input.upsertProvider.apiKey) ?? existing?.apiKey),
         apiKeyEnv: isCodexOAuthProvider ? undefined : (input.upsertProvider.apiKeyEnv ?? existing?.apiKeyEnv),
+        googleCloud: mergeGoogleCloudConfig(existing?.googleCloud, input.upsertProvider.googleCloud),
         request: mergeProviderRequestConfig(existing?.request, input.upsertProvider.request),
         headers: mergeProviderHeaders(existing?.headers, input.upsertProvider.headers),
+        capabilities: input.upsertProvider.capabilities ?? existing?.capabilities,
       });
       this.providers.set(merged.providerId, merged);
+      this.googleCloudAuth.invalidate(merged.providerId);
       this.secretStatusCache.delete(merged.providerId);
       this.clearRequestDispatcherCache();
     }
@@ -494,6 +621,56 @@ export class LlmService {
     });
   }
 
+  /**
+   * Replaces the complete provider/routing snapshot after validating it into
+   * local state. Assignments happen only after every provider and active route
+   * has been normalized, so callers can safely use the prior export for
+   * deterministic rollback.
+   */
+  public replaceRuntimeConfig(config: LlmConfigFile): LlmRuntimeConfig {
+    const nextProviders = new Map<string, LlmProviderConfig>();
+    for (const provider of config.providers) {
+      const normalized = normalizeProvider(provider);
+      nextProviders.set(normalized.providerId, normalized);
+    }
+    if (nextProviders.size === 0) {
+      throw new Error("LLM configuration must include at least one provider");
+    }
+
+    const nextActiveProviderId = normalizeConfiguredProviderId(config.activeProviderId) ?? "";
+    const nextActiveProvider = nextActiveProviderId ? nextProviders.get(nextActiveProviderId) : undefined;
+    if (nextActiveProviderId && !nextActiveProvider) {
+      throw new Error(`Unknown LLM provider: ${nextActiveProviderId}`);
+    }
+    const nextActiveModel = nextActiveProvider
+      ? (resolveConfiguredModelForProvider(nextActiveProvider, config.activeModel, {
+          fallbackModel: nextActiveProvider.defaultModel,
+          onMismatch: "throw",
+        }) ?? "")
+      : "";
+
+    const nextUtilityProviderId = normalizeConfiguredProviderId(config.utilityProviderId) ?? "";
+    if (nextUtilityProviderId && !nextProviders.has(nextUtilityProviderId)) {
+      throw new Error(`Unknown utility LLM provider: ${nextUtilityProviderId}`);
+    }
+    const nextUtilityModel = nextUtilityProviderId ? (config.utilityModel?.trim() ?? "") : "";
+
+    this.providers.clear();
+    for (const [providerId, provider] of nextProviders) {
+      this.providers.set(providerId, provider);
+    }
+    this.activeProviderId = nextActiveProviderId;
+    this.activeModel = nextActiveModel;
+    this.utilityProviderId = nextUtilityProviderId;
+    this.utilityModel = nextUtilityModel;
+    this.secretStatusCache.clear();
+    this.modelDiscoveryCache.clear();
+    this.modelDiscoveryInFlight.clear();
+    this.modelDiscoveryAuthTokens.clear();
+    this.clearRequestDispatcherCache();
+    return this.getRuntimeConfig({ includeKeychainForActiveProvider: true, useCache: true });
+  }
+
   public getProviderSecretStatus(
     providerId: string,
     options: LlmProviderSecretStatusOptions = {},
@@ -501,6 +678,30 @@ export class LlmService {
     const provider = this.providers.get(providerId);
     if (!provider) {
       throw new Error(`Unknown LLM provider: ${providerId}`);
+    }
+
+    if (resolveProviderAuthMode(provider) === "google-adc") {
+      const readiness = this.googleCloudAuth.inspectReadiness({
+        providerId: provider.providerId,
+        credentialMode: "adc",
+        projectId: resolveProviderEnvironmentValue(
+          provider.googleCloud?.projectId,
+          provider.googleCloud?.projectIdEnv,
+          this.env,
+        ),
+        location: resolveProviderEnvironmentValue(
+          provider.googleCloud?.location,
+          provider.googleCloud?.locationEnv,
+          this.env,
+        ),
+        endpointId: provider.googleCloud?.endpointId,
+      });
+      return {
+        providerId: provider.providerId,
+        hasApiKey: readiness.status === "configured" || readiness.status === "ready",
+        apiKeySource: "none",
+        hasKeychainSecret: false,
+      };
     }
 
     const includeKeychain = options.includeKeychain ?? true;
@@ -562,6 +763,56 @@ export class LlmService {
       hasKeychainSecret: true,
       apiKeyRef: `keychain:goatcitadel:provider:${providerId}`,
     });
+    this.googleCloudAuth.invalidate(providerId);
+  }
+
+  /** @internal Secret-owner seam. Never expose the returned value through a route or projection. */
+  public readProviderKeychainApiKeyForPersistence(providerId: string): string | undefined {
+    const provider = this.providers.get(providerId);
+    if (!provider) {
+      throw new Error(`Unknown LLM provider: ${providerId}`);
+    }
+    if (isOpenAICodexProvider(provider)) {
+      throw new Error("OpenAI Codex uses ChatGPT OAuth. Connect it through the OpenAI Codex OAuth flow.");
+    }
+    return this.secretStore.getProviderApiKey(providerId);
+  }
+
+  /** @internal Read-only availability probe used to choose an explicit secret owner. */
+  public isProviderKeychainAvailable(): boolean {
+    return this.secretStore.isAvailable();
+  }
+
+  /** @internal Captures only the legacy inline API-key field for exact owner compensation. */
+  public readInlineProviderApiKeyForPersistence(providerId: string): string | undefined {
+    const provider = this.providers.get(providerId);
+    if (!provider) {
+      throw new Error(`Unknown LLM provider: ${providerId}`);
+    }
+    return provider.apiKey;
+  }
+
+  /** @internal Restores the exact pre-transaction inline API-key owner state. */
+  public restoreInlineProviderApiKeyForPersistence(providerId: string, apiKey: string | undefined): void {
+    const provider = this.providers.get(providerId);
+    if (!provider) {
+      throw new Error(`Unknown LLM provider: ${providerId}`);
+    }
+    this.providers.set(providerId, { ...provider, apiKey });
+    this.secretStatusCache.delete(providerId);
+    this.googleCloudAuth.invalidate(providerId);
+  }
+
+  /** @internal Invalidates source/status after an env-backed owner mutation. */
+  public invalidateProviderSecretStatus(providerId: string): void {
+    if (!this.providers.has(providerId)) {
+      throw new Error(`Unknown LLM provider: ${providerId}`);
+    }
+    this.secretStatusCache.delete(providerId);
+    this.googleCloudAuth.invalidate(providerId);
+    this.modelDiscoveryCache.clear();
+    this.modelDiscoveryInFlight.clear();
+    this.modelDiscoveryAuthTokens.clear();
   }
 
   public deleteProviderApiKey(providerId: string): void {
@@ -581,6 +832,7 @@ export class LlmService {
       throw error;
     }
     this.setCachedSecretStatus(this.buildQuickSecretStatus(provider));
+    this.googleCloudAuth.invalidate(providerId);
   }
 
   public getOpenAICodexOAuthStatus(): OpenAICodexOAuthStatus {
@@ -636,6 +888,17 @@ export class LlmService {
         headers: undefined,
         request: scrubProviderRequestSecrets(provider.request),
       })),
+    };
+  }
+
+  /** @internal Exact in-memory owner snapshot for reverse compensation only. */
+  public snapshotRuntimeConfigForPersistence(): LlmConfigFile {
+    return {
+      activeProviderId: this.activeProviderId,
+      activeModel: this.activeModel,
+      utilityProviderId: this.utilityProviderId || undefined,
+      utilityModel: this.utilityModel || undefined,
+      providers: Array.from(this.providers.values()).map((provider) => structuredClone(provider)),
     };
   }
 
@@ -741,11 +1004,325 @@ export class LlmService {
     };
   }
 
-  public async generateImage(request: ImageGenerationRequest): Promise<ImageGenerationResponse> {
+  private async postTrackedJsonRequest(input: LlmProviderJsonRequestInput): Promise<LlmTrackedJsonDispatch> {
+    const timeoutSignal = AbortSignal.timeout(input.timeoutMs);
+    const dispatchAbort = new AbortController();
+    const signal = input.signal
+      ? AbortSignal.any([timeoutSignal, input.signal, dispatchAbort.signal])
+      : AbortSignal.any([timeoutSignal, dispatchAbort.signal]);
+    const requestInit: FetchRequestInitWithDispatcher = {
+      method: "POST",
+      headers: input.target.headers,
+      body: JSON.stringify(input.payload),
+      signal,
+      redirect: "manual",
+      dispatcher: input.target.dispatcher,
+    };
+    const outputCapField = resolveOutputCapPayloadField(input.payload);
+    const minimumEffectiveOutputTokenCap = input.outputCapRecovery?.minimumEffectiveOutputTokenCap;
+    if (
+      minimumEffectiveOutputTokenCap !== undefined &&
+      (!Number.isSafeInteger(minimumEffectiveOutputTokenCap) ||
+        minimumEffectiveOutputTokenCap <= 0 ||
+        !outputCapField ||
+        minimumEffectiveOutputTokenCap > outputCapField.value)
+    ) {
+      throw new TypeError("Provider output-cap recovery semantic floor is invalid for the effective request payload.");
+    }
+    const requestedOutputTokenCap = outputCapField
+      ? (input.outputCapRecovery?.requestedOutputTokenCap ?? outputCapField.value)
+      : undefined;
+    const reservation = this.modelUsageAccounting?.prepareDispatch({
+      source: "llm_service",
+      attribution: input.attribution,
+      requestedProviderId: input.requestedProviderId,
+      requestedModelId: input.requestedModelId,
+      effectiveProviderId: input.resolved.provider.providerId,
+      effectiveModelId: input.model,
+      effectiveApiStyle: resolveProviderExecutionApiStyle(input.resolved.provider, input.model),
+      transportAttemptIndex: input.transportAttemptIndex,
+      ...(outputCapField && requestedOutputTokenCap
+        ? {
+            outputCap: {
+              requestedOutputTokenCap,
+              effectiveOutputTokenCap: outputCapField.value,
+              disposition:
+                input.transportRetry?.reason === "metadata_compatibility"
+                  ? "preserved_retry"
+                  : input.outputCapRecovery?.recoverySourceEventId
+                    ? "reduced_retry"
+                    : "initial",
+              recoverySourceEventId: input.outputCapRecovery?.recoverySourceEventId,
+              recoveryReasonCode: input.outputCapRecovery?.recoverySourceEventId ? "safe_lower_cap" : undefined,
+              providerAvailableTokens: input.outputCapRecovery?.providerAvailableTokens,
+              providerMinimumTokens: input.outputCapRecovery?.providerMinimumTokens,
+              requestInputEstimate: input.outputCapRecovery?.requestInputEstimate,
+              configuredContextWindowTokens: input.outputCapRecovery?.configuredContextWindowTokens,
+              safetyMarginTokens: input.outputCapRecovery?.safetyMarginTokens,
+              evidenceFormat: input.outputCapRecovery?.evidenceFormat,
+            },
+          }
+        : {}),
+      transportRetry: input.transportRetry,
+      credential: this.resolveModelUsageCredentialLineage(input.resolved as ResolvedProvider),
+      pricing: resolveModelPricingLineage(input.resolved.provider.providerId, input.model),
+    });
+
+    let pending: Promise<Response>;
+    try {
+      pending = fetch(input.target.url, requestInit);
+    } catch (error) {
+      reservation?.abandon();
+      rethrowIfProviderNetworkBlocked(error);
+      throw error;
+    }
+    let usage: ModelUsageAttemptHandle | undefined;
+    try {
+      usage = reservation?.accept();
+    } catch (cause) {
+      dispatchAbort.abort();
+      void pending.catch(() => undefined);
+      reservation?.markDispatchUnknown();
+      const error = new ModelUsageDispatchUncertainError(
+        "Provider dispatch outcome is uncertain; same-generation retry is blocked pending reconciliation",
+        { eventId: reservation?.eventId, cause },
+      );
+      throw error;
+    }
+    try {
+      const response = await pending;
+      const baseResult = {
+        response,
+        ...(usage ? { usage } : {}),
+        lastTransportAttemptIndex: input.transportAttemptIndex,
+        effectivePayload: input.payload,
+        outputCapRetriesRemaining: input.outputCapRecovery?.retriesRemaining ?? 0,
+        ...(requestedOutputTokenCap === undefined ? {} : { logicalRequestedOutputTokenCap: requestedOutputTokenCap }),
+        ...(minimumEffectiveOutputTokenCap === undefined ? {} : { minimumEffectiveOutputTokenCap }),
+      };
+      if (
+        response.ok ||
+        !isOutputCapRecoveryHttpStatus(response.status) ||
+        !input.outputCapRecovery ||
+        input.outputCapRecovery.retriesRemaining <= 0
+      ) {
+        return baseResult;
+      }
+      if (!outputCapField) {
+        return baseResult;
+      }
+      let errorText: string;
+      try {
+        errorText = await readProviderErrorBody("provider output-cap probe", response.clone());
+      } catch {
+        return baseResult;
+      }
+      const providerErrorText = extractProviderOwnedOutputCapErrorText(errorText);
+      if (!providerErrorText) {
+        return baseResult;
+      }
+      return (
+        (await this.retryTrackedOutputCapFailure({
+          ...input,
+          dispatched: baseResult,
+          providerErrorText,
+        })) ?? baseResult
+      );
+    } catch (error) {
+      if (error instanceof ModelUsageSettlementError) throw error;
+      usage?.fail(error);
+      rethrowIfProviderNetworkBlocked(error);
+      throw error;
+    }
+  }
+
+  private async retryTrackedOutputCapFailure(
+    input: LlmProviderJsonRequestInput & {
+      dispatched: LlmTrackedJsonDispatch;
+      providerErrorText: string;
+      providerFailureEvidence?: unknown;
+    },
+  ): Promise<LlmTrackedJsonDispatch | undefined> {
+    const outputCapField = resolveOutputCapPayloadField(input.dispatched.effectivePayload);
+    if (!outputCapField || input.dispatched.outputCapRetriesRemaining <= 0) return undefined;
+    const requestedOutputTokenCap = input.dispatched.logicalRequestedOutputTokenCap ?? outputCapField.value;
+    const decision = resolveOutputCapRecovery({
+      errorText: input.providerErrorText,
+      requestedOutputTokenCap,
+      effectiveOutputTokenCap: outputCapField.value,
+      configuredContextWindowTokens: this.getModelContextWindow(input.resolved.provider.providerId, input.model),
+      requestPayload: input.dispatched.effectivePayload,
+      tokenMultiplier: this.getModelTokenMultiplier(input.resolved.provider.providerId, input.model),
+    });
+    if (!decision.retry) return undefined;
+    if (
+      input.dispatched.minimumEffectiveOutputTokenCap !== undefined &&
+      decision.effectiveOutputTokenCap < input.dispatched.minimumEffectiveOutputTokenCap
+    ) {
+      // A generic context-window recovery must never reduce a provider request
+      // below a semantic floor such as Anthropic's governed reasoning reserve.
+      // Leave the original failure authoritative and do not dispatch a request
+      // that cannot preserve the caller's requested reasoning posture.
+      return undefined;
+    }
+    const outputCapError = new Error(input.providerErrorText);
+    outputCapError.name = "ProviderOutputCapError";
+    observeProviderFailureUsage(input.dispatched.usage, input.providerFailureEvidence, {
+      providerId: input.resolved.provider.providerId,
+      model: input.model,
+    });
+    input.dispatched.usage?.fail(outputCapError);
+    const retryPayload = {
+      ...input.dispatched.effectivePayload,
+      [outputCapField.field]: decision.effectiveOutputTokenCap,
+    };
+    const usage = input.dispatched.usage;
+    const retried = await this.postTrackedJsonRequest({
+      ...input,
+      transportAttemptIndex: (input.dispatched.lastTransportAttemptIndex ?? input.transportAttemptIndex) + 1,
+      payload: retryPayload,
+      outputCapRecovery: {
+        requestedOutputTokenCap,
+        minimumEffectiveOutputTokenCap: input.dispatched.minimumEffectiveOutputTokenCap,
+        retriesRemaining: input.dispatched.outputCapRetriesRemaining - 1,
+        recoverySourceEventId: usage?.eventId,
+        providerAvailableTokens: decision.providerAvailableOutputTokens,
+        providerMinimumTokens: decision.providerMinimumOutputTokens,
+        requestInputEstimate: decision.requestInputTokenEstimate,
+        configuredContextWindowTokens: decision.configuredContextWindowTokens,
+        safetyMarginTokens: decision.safetyMarginTokens,
+        evidenceFormat: decision.evidenceFormat,
+      },
+      ...(usage
+        ? {
+            transportRetry: {
+              parentEventId: usage.eventId,
+              reason: "output_cap_recovery" as const,
+            },
+          }
+        : {}),
+    });
+    return {
+      ...retried,
+      priorModelUsageEventIds: [...(usage ? [usage.eventId] : []), ...(retried.priorModelUsageEventIds ?? [])],
+    };
+  }
+
+  private async postTrackedMultipartRequest(input: {
+    resolved: ResolvedProvider;
+    model: string;
+    requestedProviderId?: string;
+    requestedModelId?: string;
+    attribution: ModelUsageAttributionContext;
+    transportAttemptIndex: number;
+    target: ProviderRequestTarget;
+    formData: FormData;
+    timeoutMs: number;
+    signal?: AbortSignal;
+  }): Promise<{ response: Response; usage?: ModelUsageAttemptHandle }> {
+    const timeoutSignal = AbortSignal.timeout(input.timeoutMs);
+    const dispatchAbort = new AbortController();
+    const signal = input.signal
+      ? AbortSignal.any([timeoutSignal, input.signal, dispatchAbort.signal])
+      : AbortSignal.any([timeoutSignal, dispatchAbort.signal]);
+    const requestInit: FetchRequestInitWithDispatcher = {
+      method: "POST",
+      headers: input.target.headers,
+      body: input.formData,
+      signal,
+      redirect: "manual",
+      dispatcher: input.target.dispatcher,
+    };
+    const reservation = this.modelUsageAccounting?.prepareDispatch({
+      source: "llm_service",
+      attribution: input.attribution,
+      requestedProviderId: input.requestedProviderId,
+      requestedModelId: input.requestedModelId,
+      effectiveProviderId: input.resolved.provider.providerId,
+      effectiveModelId: input.model,
+      effectiveApiStyle: resolveProviderExecutionApiStyle(input.resolved.provider, input.model),
+      transportAttemptIndex: input.transportAttemptIndex,
+      credential: this.resolveModelUsageCredentialLineage(input.resolved),
+      pricing: resolveModelPricingLineage(input.resolved.provider.providerId, input.model),
+    });
+    let pending: Promise<Response>;
+    try {
+      pending = fetch(input.target.url, requestInit);
+    } catch (error) {
+      reservation?.abandon();
+      rethrowIfProviderNetworkBlocked(error);
+      throw error;
+    }
+    let usage: ModelUsageAttemptHandle | undefined;
+    try {
+      usage = reservation?.accept();
+    } catch (cause) {
+      dispatchAbort.abort();
+      void pending.catch(() => undefined);
+      reservation?.markDispatchUnknown();
+      const error = new ModelUsageDispatchUncertainError(
+        "Provider dispatch outcome is uncertain; same-generation retry is blocked pending reconciliation",
+        { eventId: reservation?.eventId, cause },
+      );
+      throw error;
+    }
+    try {
+      return { response: await pending, usage };
+    } catch (error) {
+      if (error instanceof ModelUsageSettlementError) throw error;
+      usage?.fail(error);
+      rethrowIfProviderNetworkBlocked(error);
+      throw error;
+    }
+  }
+
+  private resolveModelUsageCredentialLineage(resolved: ResolvedProvider): {
+    credentialType: "api_key" | "oauth" | "service_account" | "adc" | "unknown";
+    usagePool: "standard" | "subscription" | "local" | "unknown";
+    credentialSource: "inline" | "env" | "keychain" | "oauth" | "adc" | "none" | "unknown";
+    credentialConfigFingerprint: string;
+  } {
+    const provider = resolved.provider;
+    const authMode = resolveProviderAuthMode(provider);
+    const local = isLocalBillingProvider(provider.providerId);
+    const requestAuth = provider.request?.auth;
+    const requestAuthSource = resolveRequestAuthSource(requestAuth);
+    const source =
+      resolved.credentialType === "adc"
+        ? "adc"
+        : resolved.credentialType === "service_account"
+          ? resolved.credentialSource === "env"
+            ? "env"
+            : "keychain"
+          : authMode === "codex-oauth" || authMode === "claude-code-oauth"
+            ? "oauth"
+            : requestAuthSource !== "none"
+              ? requestAuthSource
+              : this.getProviderSecretStatus(provider.providerId, { includeKeychain: true }).apiKeySource;
+    return {
+      credentialType:
+        resolved.credentialType ??
+        (authMode === "codex-oauth" || authMode === "claude-code-oauth"
+          ? "oauth"
+          : resolved.apiKey || requestAuth
+            ? "api_key"
+            : "unknown"),
+      usagePool:
+        authMode === "codex-oauth" || authMode === "claude-code-oauth" ? "subscription" : local ? "local" : "standard",
+      credentialSource: local && source === "none" ? "none" : source,
+      credentialConfigFingerprint: fingerprintProviderCredentialConfig(provider),
+    };
+  }
+
+  public async generateImage(
+    request: ImageGenerationRequest,
+    attributionInput: ModelUsageAttributionContext = {},
+  ): Promise<ImageGenerationResponse> {
     const prompt = request.prompt.trim();
     if (!prompt) {
       throw new Error("images requires a non-empty prompt");
     }
+    const attribution = normalizeModelUsageAttribution(attributionInput, "image_generation");
 
     const resolved = await this.resolveProvider(request.providerId, { requireAuth: true });
     this.assertProviderHostAllowed(resolved.provider.baseUrl);
@@ -758,7 +1335,7 @@ export class LlmService {
       Array.isArray(request.referenceImages) && request.referenceImages.length > 0 ? "edit" : "generate";
 
     if (isOpenAICodexProvider(resolved.provider)) {
-      const response = await this.generateOpenAICodexImage(request, resolved, model, operation);
+      const response = await this.generateOpenAICodexImage(request, resolved, model, operation, attribution);
       return attachImageGenerationEvidence(response, request, {
         providerId: resolved.provider.providerId,
         model,
@@ -796,24 +1373,49 @@ export class LlmService {
       }
 
       const timeoutMs = resolveChatCompletionTimeoutMs(request.timeoutMs, 120000);
-      const response = await postMultipartRequest(target, formData, timeoutMs);
-      if (isRedirect(response.status)) {
-        throw new Error(`image edit blocked redirect (${response.status})`);
-      }
-      if (!response.ok) {
-        throw new Error(await buildHttpError("image edit", response));
-      }
-      const imageResponse = adaptImageGenerationResponse(await parseProviderJsonResponse("image edit", response), {
-        providerId: resolved.provider.providerId,
+      const dispatched = await this.postTrackedMultipartRequest({
+        resolved,
         model,
-        operation,
+        requestedProviderId: attribution.requestedProviderId ?? request.providerId,
+        requestedModelId: attribution.requestedModelId ?? request.model,
+        attribution,
+        transportAttemptIndex: 0,
+        target,
+        formData,
+        timeoutMs,
       });
-      return attachImageGenerationEvidence(imageResponse, request, {
-        providerId: resolved.provider.providerId,
-        model,
-        operation,
-        prompt,
-      });
+      try {
+        if (isRedirect(dispatched.response.status)) {
+          throw new Error(`image edit blocked redirect (${dispatched.response.status})`);
+        }
+        if (!dispatched.response.ok) {
+          throw new Error(await buildHttpError("image edit", dispatched.response));
+        }
+        const json = await parseProviderJsonResponse("image edit", dispatched.response);
+        observeProviderPayloadUsage(
+          dispatched.usage,
+          isRecord(json.usage) ? json.usage : undefined,
+          firstNonEmptyString(json.model),
+          { providerId: resolved.provider.providerId, model },
+        );
+        const imageResponse = adaptImageGenerationResponse(json, {
+          providerId: resolved.provider.providerId,
+          model,
+          operation,
+        });
+        const terminal = dispatched.usage?.succeed();
+        const withUsage = terminal ? { ...imageResponse, modelUsageEventIds: [terminal.eventId] } : imageResponse;
+        return attachImageGenerationEvidence(withUsage, request, {
+          providerId: resolved.provider.providerId,
+          model,
+          operation,
+          prompt,
+        });
+      } catch (error) {
+        if (error instanceof ModelUsageSettlementError) throw error;
+        dispatched.usage?.fail(error);
+        throw error;
+      }
     }
 
     const target = this.buildRequestTarget(resolved, "chat", `${resolved.provider.baseUrl}/images/generations`);
@@ -832,24 +1434,49 @@ export class LlmService {
     if (request.moderation) payload.moderation = request.moderation;
 
     const timeoutMs = resolveChatCompletionTimeoutMs(request.timeoutMs, 120000);
-    const response = await postJsonRequest(target, payload, timeoutMs);
-    if (isRedirect(response.status)) {
-      throw new Error(`image generation blocked redirect (${response.status})`);
-    }
-    if (!response.ok) {
-      throw new Error(await buildHttpError("image generation", response));
-    }
-    const imageResponse = adaptImageGenerationResponse(await parseProviderJsonResponse("image generation", response), {
-      providerId: resolved.provider.providerId,
+    const dispatched = await this.postTrackedJsonRequest({
+      resolved,
       model,
-      operation,
+      requestedProviderId: attribution.requestedProviderId ?? request.providerId,
+      requestedModelId: attribution.requestedModelId ?? request.model,
+      attribution,
+      transportAttemptIndex: 0,
+      target,
+      payload,
+      timeoutMs,
     });
-    return attachImageGenerationEvidence(imageResponse, request, {
-      providerId: resolved.provider.providerId,
-      model,
-      operation,
-      prompt,
-    });
+    try {
+      if (isRedirect(dispatched.response.status)) {
+        throw new Error(`image generation blocked redirect (${dispatched.response.status})`);
+      }
+      if (!dispatched.response.ok) {
+        throw new Error(await buildHttpError("image generation", dispatched.response));
+      }
+      const json = await parseProviderJsonResponse("image generation", dispatched.response);
+      observeProviderPayloadUsage(
+        dispatched.usage,
+        isRecord(json.usage) ? json.usage : undefined,
+        firstNonEmptyString(json.model),
+        { providerId: resolved.provider.providerId, model },
+      );
+      const imageResponse = adaptImageGenerationResponse(json, {
+        providerId: resolved.provider.providerId,
+        model,
+        operation,
+      });
+      const terminal = dispatched.usage?.succeed();
+      const withUsage = terminal ? { ...imageResponse, modelUsageEventIds: [terminal.eventId] } : imageResponse;
+      return attachImageGenerationEvidence(withUsage, request, {
+        providerId: resolved.provider.providerId,
+        model,
+        operation,
+        prompt,
+      });
+    } catch (error) {
+      if (error instanceof ModelUsageSettlementError) throw error;
+      dispatched.usage?.fail(error);
+      throw error;
+    }
   }
 
   private async generateOpenAICodexImage(
@@ -857,6 +1484,7 @@ export class LlmService {
     resolved: ResolvedProvider,
     model: string,
     operation: "generate" | "edit",
+    attribution: ModelUsageAttributionContext,
   ): Promise<ImageGenerationResponse> {
     const referenceImages = request.referenceImages ?? [];
     if (referenceImages.length > 5) {
@@ -874,6 +1502,8 @@ export class LlmService {
     target.headers.Accept = "text/event-stream";
     const timeoutMs = resolveChatCompletionTimeoutMs(request.timeoutMs, 180000);
     const data: ImageGenerationResponse["data"] = [];
+    const eventIds: string[] = [];
+    let effectiveModel = model;
     const content: Array<Record<string, unknown>> = [
       { type: "input_text", text: request.prompt.trim() },
       ...referenceImages.map((image) => ({
@@ -884,21 +1514,50 @@ export class LlmService {
     ];
 
     for (let index = 0; index < count; index += 1) {
-      const response = await postJsonRequest(target, buildOpenAICodexImagePayload(request, model, content), timeoutMs);
-      if (isRedirect(response.status)) {
-        throw new Error(`OpenAI Codex image generation blocked redirect (${response.status})`);
+      const dispatched = await this.postTrackedJsonRequest({
+        resolved,
+        model,
+        requestedProviderId: attribution.requestedProviderId ?? request.providerId,
+        requestedModelId: attribution.requestedModelId ?? request.model,
+        attribution,
+        transportAttemptIndex: index,
+        target,
+        payload: buildOpenAICodexImagePayload(request, model, content),
+        timeoutMs,
+      });
+      if (dispatched.usage) eventIds.push(dispatched.usage.eventId);
+      try {
+        if (isRedirect(dispatched.response.status)) {
+          throw new Error(`OpenAI Codex image generation blocked redirect (${dispatched.response.status})`);
+        }
+        if (!dispatched.response.ok) {
+          throw new Error(await buildHttpError("OpenAI Codex image generation", dispatched.response));
+        }
+        const adapted = await adaptOpenAICodexImageResponse(dispatched.response, model);
+        data.push(...adapted.data);
+        effectiveModel = adapted.model ?? effectiveModel;
+        observeProviderPayloadUsage(dispatched.usage, adapted.usage, adapted.model, {
+          providerId: resolved.provider.providerId,
+          model,
+        });
+        dispatched.usage?.succeed();
+      } catch (error) {
+        if (error instanceof ModelUsageSettlementError) throw error;
+        observeProviderFailureUsage(dispatched.usage, error, {
+          providerId: resolved.provider.providerId,
+          model,
+        });
+        dispatched.usage?.fail(error);
+        throw error;
       }
-      if (!response.ok) {
-        throw new Error(await buildHttpError("OpenAI Codex image generation", response));
-      }
-      data.push(...(await adaptOpenAICodexImageResponse(response, model)));
     }
 
     return {
       providerId: resolved.provider.providerId,
-      model,
+      model: effectiveModel,
       operation,
       data: data.slice(0, 4),
+      ...(eventIds.length > 0 ? { modelUsageEventIds: eventIds } : {}),
     };
   }
 
@@ -908,7 +1567,10 @@ export class LlmService {
     }
   }
 
-  public async chatCompletions(request: ChatCompletionRequest): Promise<ChatCompletionResponse> {
+  public async chatCompletions(
+    request: ChatCompletionRequest,
+    attributionInput: ModelUsageAttributionContext = {},
+  ): Promise<ChatCompletionResponse> {
     if (!request.messages || request.messages.length === 0) {
       throw new Error("chat/completions requires at least one message");
     }
@@ -918,28 +1580,53 @@ export class LlmService {
     // never 400 on an orphan tool_result or a tool_use with no matching result.
     // This is the single chokepoint every provider style funnels through.
     const sanitizedRequest = withSanitizedMessages(request);
+    const attribution = normalizeModelUsageAttribution(attributionInput, "chat_initial");
 
     const resolved = await this.resolveProvider(sanitizedRequest.providerId, { requireAuth: true });
     this.assertProviderHostAllowed(resolved.provider.baseUrl);
-    const model = this.resolveRequestModel(resolved.provider, sanitizedRequest.model);
-    const apiStyle = resolveProviderExecutionApiStyle(resolved.provider, model);
-    const providerAdapter = this.providerAdapters.get(apiStyle);
-    if (providerAdapter) {
-      return providerAdapter.chatCompletions(sanitizedRequest, resolved, model, this.providerAdapterHost);
-    }
-
-    switch (apiStyle) {
-      case "openai-codex-responses":
-      case "openai-responses":
-        return this.executeOpenAiResponses(sanitizedRequest, resolved, model);
-      case "bedrock-messages":
-        throw new Error("AWS Bedrock messages API style is not yet supported in this version");
-      default:
-        return this.executeChatCompletions(sanitizedRequest, resolved, model);
+    const lease = await this.acquireLocalServiceLease(resolved, "chat_completion", sanitizedRequest.signal);
+    try {
+      const model = this.resolveRequestModel(resolved.provider, sanitizedRequest.model);
+      const reasoning = resolveLlmReasoningProfile({
+        request: sanitizedRequest,
+        providerId: resolved.provider.providerId,
+        providerCapabilities: inferProviderCapabilities(resolved.provider),
+        modelMetadata: lookupExactModelMetadata(this.modelMetadata, resolved.provider.providerId, model),
+        attribution,
+      });
+      const apiStyle = resolveProviderExecutionApiStyle(resolved.provider, model);
+      const providerAdapter = this.providerAdapters.get(apiStyle);
+      let completion: ChatCompletionResponse;
+      if (providerAdapter) {
+        completion = await providerAdapter.chatCompletions(
+          reasoning.request,
+          resolved,
+          model,
+          this.providerAdapterHost,
+          reasoning.attribution,
+        );
+      } else {
+        switch (apiStyle) {
+          case "openai-codex-responses":
+          case "openai-responses":
+            completion = await this.executeOpenAiResponses(reasoning.request, resolved, model, reasoning.attribution);
+            break;
+          case "bedrock-messages":
+            throw new Error("AWS Bedrock messages API style is not yet supported in this version");
+          default:
+            completion = await this.executeChatCompletions(reasoning.request, resolved, model, reasoning.attribution);
+        }
+      }
+      return attachReasoningReceipt(stripPrivateReasoningFromCompletion(completion), reasoning.receipt);
+    } finally {
+      await this.releaseLocalServiceLease(lease);
     }
   }
 
-  public async *chatCompletionsStream(request: ChatCompletionRequest): AsyncGenerator<Record<string, unknown>> {
+  public async *chatCompletionsStream(
+    request: ChatCompletionRequest,
+    attributionInput: ModelUsageAttributionContext = {},
+  ): AsyncGenerator<Record<string, unknown>> {
     if (!request.messages || request.messages.length === 0) {
       throw new Error("chat/completions requires at least one message");
     }
@@ -947,27 +1634,48 @@ export class LlmService {
     // See chatCompletions: pair tool calls/results once at the shared chokepoint
     // so every provider style sends an API-valid message list.
     const sanitizedRequest = withSanitizedMessages(request);
+    const attribution = normalizeModelUsageAttribution(attributionInput, "chat_initial");
 
     const resolved = await this.resolveProvider(sanitizedRequest.providerId, { requireAuth: true });
     this.assertProviderHostAllowed(resolved.provider.baseUrl);
-    const model = this.resolveRequestModel(resolved.provider, sanitizedRequest.model);
-    const apiStyle = resolveProviderExecutionApiStyle(resolved.provider, model);
-    const providerAdapter = this.providerAdapters.get(apiStyle);
-    if (providerAdapter) {
-      yield* providerAdapter.chatCompletionsStream(sanitizedRequest, resolved, model, this.providerAdapterHost);
-      return;
-    }
-
-    switch (apiStyle) {
-      case "openai-codex-responses":
-      case "openai-responses":
-        yield* this.executeOpenAiResponsesStream(sanitizedRequest, resolved, model);
-        return;
-      case "bedrock-messages":
-        throw new Error("AWS Bedrock messages API style is not yet supported in this version");
-      default:
-        yield* this.executeChatCompletionsStream(sanitizedRequest, resolved, model);
-        return;
+    const lease = await this.acquireLocalServiceLease(resolved, "chat_completion", sanitizedRequest.signal);
+    try {
+      const model = this.resolveRequestModel(resolved.provider, sanitizedRequest.model);
+      const reasoning = resolveLlmReasoningProfile({
+        request: sanitizedRequest,
+        providerId: resolved.provider.providerId,
+        providerCapabilities: inferProviderCapabilities(resolved.provider),
+        modelMetadata: lookupExactModelMetadata(this.modelMetadata, resolved.provider.providerId, model),
+        attribution,
+      });
+      const apiStyle = resolveProviderExecutionApiStyle(resolved.provider, model);
+      const providerAdapter = this.providerAdapters.get(apiStyle);
+      let stream: AsyncGenerator<Record<string, unknown>>;
+      if (providerAdapter) {
+        stream = providerAdapter.chatCompletionsStream(
+          reasoning.request,
+          resolved,
+          model,
+          this.providerAdapterHost,
+          reasoning.attribution,
+        );
+      } else {
+        switch (apiStyle) {
+          case "openai-codex-responses":
+          case "openai-responses":
+            stream = this.executeOpenAiResponsesStream(reasoning.request, resolved, model, reasoning.attribution);
+            break;
+          case "bedrock-messages":
+            throw new Error("AWS Bedrock messages API style is not yet supported in this version");
+          default:
+            stream = this.executeChatCompletionsStream(reasoning.request, resolved, model, reasoning.attribution);
+        }
+      }
+      for await (const chunk of stream) {
+        yield attachReasoningReceiptToChunk(stripPrivateReasoningFromChunk(chunk), reasoning.receipt);
+      }
+    } finally {
+      await this.releaseLocalServiceLease(lease);
     }
   }
 
@@ -988,6 +1696,7 @@ export class LlmService {
     request: ChatCompletionRequest,
     resolved: ResolvedProvider,
     model: string,
+    attribution: ModelUsageAttributionContext,
   ): Promise<ChatCompletionResponse> {
     const normalizedMessages = normalizeProviderMessages(request.messages, model);
 
@@ -1006,6 +1715,7 @@ export class LlmService {
     });
     if (request.tools !== undefined) payload.tools = request.tools;
     if (request.tool_choice !== undefined) payload.tool_choice = request.tool_choice;
+    if (request.parallel_tool_calls !== undefined) payload.parallel_tool_calls = request.parallel_tool_calls;
     if (request.stop !== undefined) payload.stop = request.stop;
     if (request.response_format !== undefined) payload.response_format = request.response_format;
     applyProviderSpecificChatOptions({
@@ -1018,42 +1728,113 @@ export class LlmService {
 
     const target = this.buildRequestTarget(resolved, "chat", `${resolved.provider.baseUrl}/chat/completions`);
     const timeoutMs = resolveChatCompletionTimeoutMs(request.timeoutMs, 60000);
-    let response = await postJsonRequest(target, payload, timeoutMs, request.signal);
-
-    if (isRedirect(response.status)) {
-      throw new Error(`chat completion blocked redirect (${response.status})`);
-    }
-
-    if (!response.ok) {
-      const errorText = await readProviderErrorBody("chat completion", response);
-      if (request.metadata !== undefined && isMetadataStoreCompatibilityError(errorText)) {
-        const fallbackPayload = { ...payload };
-        delete fallbackPayload.metadata;
-        response = await postJsonRequest(target, fallbackPayload, timeoutMs, request.signal);
-        if (isRedirect(response.status)) {
-          throw new Error(`chat completion blocked redirect (${response.status})`);
-        }
-        if (!response.ok) {
-          throw new Error(await buildHttpError("chat completion", response));
-        }
-      } else {
-        throw new Error(buildHttpErrorFromText("chat completion", response.status, response.statusText, errorText));
+    const eventIds: string[] = [];
+    let dispatched = await this.postTrackedJsonRequest({
+      resolved,
+      model,
+      requestedProviderId: attribution.requestedProviderId ?? request.providerId,
+      requestedModelId: attribution.requestedModelId ?? request.model,
+      attribution,
+      transportAttemptIndex: 0,
+      target,
+      payload,
+      timeoutMs,
+      signal: request.signal,
+      outputCapRecovery: {
+        requestedOutputTokenCap: request.max_tokens,
+        retriesRemaining: 1,
+      },
+    });
+    eventIds.push(...(dispatched.priorModelUsageEventIds ?? []));
+    if (dispatched.usage) eventIds.push(dispatched.usage.eventId);
+    try {
+      if (isRedirect(dispatched.response.status)) {
+        throw new Error(`chat completion blocked redirect (${dispatched.response.status})`);
       }
-    }
 
-    return applyEstimatedCostToChatResponseWithSource(
-      await parseProviderJsonResponse<ChatCompletionResponse>("chat completion", response),
-      {
+      if (!dispatched.response.ok) {
+        const errorText = await readProviderErrorBody("chat completion", dispatched.response);
+        if (request.metadata !== undefined && isMetadataStoreCompatibilityError(errorText)) {
+          const metadataError = createProviderMetadataCompatibilityError(
+            buildHttpErrorFromText(
+              "chat completion",
+              dispatched.response.status,
+              dispatched.response.statusText,
+              errorText,
+            ),
+          );
+          dispatched.usage?.fail(metadataError);
+          const retryParentEventId = dispatched.usage?.eventId;
+          const fallbackPayload = { ...dispatched.effectivePayload };
+          delete fallbackPayload.metadata;
+          dispatched = await this.postTrackedJsonRequest({
+            resolved,
+            model,
+            requestedProviderId: attribution.requestedProviderId ?? request.providerId,
+            requestedModelId: attribution.requestedModelId ?? request.model,
+            attribution,
+            transportAttemptIndex: (dispatched.lastTransportAttemptIndex ?? 0) + 1,
+            target,
+            payload: fallbackPayload,
+            timeoutMs,
+            signal: request.signal,
+            outputCapRecovery: {
+              requestedOutputTokenCap: dispatched.logicalRequestedOutputTokenCap,
+              retriesRemaining: dispatched.outputCapRetriesRemaining,
+            },
+            ...(retryParentEventId
+              ? {
+                  transportRetry: {
+                    parentEventId: retryParentEventId,
+                    reason: "metadata_compatibility" as const,
+                  },
+                }
+              : {}),
+          });
+          eventIds.push(...(dispatched.priorModelUsageEventIds ?? []));
+          if (dispatched.usage) eventIds.push(dispatched.usage.eventId);
+          if (isRedirect(dispatched.response.status)) {
+            throw new Error(`chat completion blocked redirect (${dispatched.response.status})`);
+          }
+          if (!dispatched.response.ok) {
+            throw new Error(await buildHttpError("chat completion", dispatched.response));
+          }
+        } else {
+          throw new Error(
+            buildHttpErrorFromText(
+              "chat completion",
+              dispatched.response.status,
+              dispatched.response.statusText,
+              errorText,
+            ),
+          );
+        }
+      }
+
+      const providerCompletion = await parseProviderJsonResponse<ChatCompletionResponse>(
+        "chat completion",
+        dispatched.response,
+      );
+      const completion = applyEstimatedCostToChatResponseWithSource(providerCompletion, {
         providerId: resolved.provider.providerId,
         model,
-      },
-    );
+      });
+      observeProviderUsageWithTrustedEstimate(dispatched.usage, providerCompletion.usage, completion.usage);
+      dispatched.usage?.observeNormalized({ effectiveModelId: completion.model });
+      dispatched.usage?.succeed();
+      return eventIds.length > 0 ? { ...completion, modelUsageEventIds: eventIds } : completion;
+    } catch (error) {
+      if (error instanceof ModelUsageSettlementError) throw error;
+      dispatched.usage?.fail(error);
+      throw error;
+    }
   }
 
   private async *executeChatCompletionsStream(
     request: ChatCompletionRequest,
     resolved: ResolvedProvider,
     model: string,
+    attribution: ModelUsageAttributionContext,
   ): AsyncGenerator<Record<string, unknown>> {
     const normalizedMessages = normalizeProviderMessages(request.messages, model);
 
@@ -1073,6 +1854,7 @@ export class LlmService {
     });
     if (request.tools !== undefined) payload.tools = request.tools;
     if (request.tool_choice !== undefined) payload.tool_choice = request.tool_choice;
+    if (request.parallel_tool_calls !== undefined) payload.parallel_tool_calls = request.parallel_tool_calls;
     if (request.stop !== undefined) payload.stop = request.stop;
     if (request.response_format !== undefined) payload.response_format = request.response_format;
     applyProviderSpecificChatOptions({
@@ -1085,34 +1867,154 @@ export class LlmService {
 
     const target = this.buildRequestTarget(resolved, "chat", `${resolved.provider.baseUrl}/chat/completions`);
     const timeoutMs = resolveChatCompletionTimeoutMs(request.timeoutMs, 120000);
-    let response = await postJsonRequest(target, payload, timeoutMs, request.signal);
-
-    if (isRedirect(response.status)) {
-      throw new Error(`chat completion blocked redirect (${response.status})`);
-    }
-
-    if (!response.ok) {
-      const errorText = await readProviderErrorBody("chat completion", response);
-      if (request.metadata !== undefined && isMetadataStoreCompatibilityError(errorText)) {
-        const fallbackPayload = { ...payload };
-        delete fallbackPayload.metadata;
-        response = await postJsonRequest(target, fallbackPayload, timeoutMs, request.signal);
-        if (isRedirect(response.status)) {
-          throw new Error(`chat completion blocked redirect (${response.status})`);
+    const eventIds: string[] = [];
+    let dispatched = await this.postTrackedJsonRequest({
+      resolved,
+      model,
+      requestedProviderId: attribution.requestedProviderId ?? request.providerId,
+      requestedModelId: attribution.requestedModelId ?? request.model,
+      attribution,
+      transportAttemptIndex: 0,
+      target,
+      payload,
+      timeoutMs,
+      signal: request.signal,
+      outputCapRecovery: {
+        requestedOutputTokenCap: request.max_tokens,
+        retriesRemaining: 1,
+      },
+    });
+    attemptLoop: while (true) {
+      // eslint-disable-next-line no-useless-assignment -- async-generator cancellation reaches finally between yields.
+      let terminal = false;
+      let providerTerminal = false;
+      let emittedVisibleChunk = false;
+      appendUniqueUsageEventIds(eventIds, dispatched);
+      try {
+        if (isRedirect(dispatched.response.status)) {
+          throw new Error(`chat completion blocked redirect (${dispatched.response.status})`);
         }
-        if (!response.ok) {
-          throw new Error(await buildHttpError("chat completion", response));
+
+        if (!dispatched.response.ok) {
+          const errorText = await readProviderErrorBody("chat completion", dispatched.response);
+          if (request.metadata !== undefined && isMetadataStoreCompatibilityError(errorText)) {
+            const metadataError = createProviderMetadataCompatibilityError(
+              buildHttpErrorFromText(
+                "chat completion",
+                dispatched.response.status,
+                dispatched.response.statusText,
+                errorText,
+              ),
+            );
+            dispatched.usage?.fail(metadataError);
+            const retryParentEventId = dispatched.usage?.eventId;
+            const fallbackPayload = { ...dispatched.effectivePayload };
+            delete fallbackPayload.metadata;
+            dispatched = await this.postTrackedJsonRequest({
+              resolved,
+              model,
+              requestedProviderId: attribution.requestedProviderId ?? request.providerId,
+              requestedModelId: attribution.requestedModelId ?? request.model,
+              attribution,
+              transportAttemptIndex: (dispatched.lastTransportAttemptIndex ?? 0) + 1,
+              target,
+              payload: fallbackPayload,
+              timeoutMs,
+              signal: request.signal,
+              outputCapRecovery: {
+                requestedOutputTokenCap: dispatched.logicalRequestedOutputTokenCap,
+                retriesRemaining: dispatched.outputCapRetriesRemaining,
+              },
+              ...(retryParentEventId
+                ? {
+                    transportRetry: {
+                      parentEventId: retryParentEventId,
+                      reason: "metadata_compatibility" as const,
+                    },
+                  }
+                : {}),
+            });
+            appendUniqueUsageEventIds(eventIds, dispatched);
+            if (isRedirect(dispatched.response.status)) {
+              throw new Error(`chat completion blocked redirect (${dispatched.response.status})`);
+            }
+            if (!dispatched.response.ok) {
+              throw new Error(await buildHttpError("chat completion", dispatched.response));
+            }
+          } else {
+            throw new Error(
+              buildHttpErrorFromText(
+                "chat completion",
+                dispatched.response.status,
+                dispatched.response.statusText,
+                errorText,
+              ),
+            );
+          }
         }
-      } else {
-        throw new Error(buildHttpErrorFromText("chat completion", response.status, response.statusText, errorText));
+
+        for await (const event of streamJsonSseResponse(dispatched.response, {
+          onDone: () => {
+            providerTerminal = true;
+          },
+        })) {
+          dispatched.usage?.renewLease();
+          const providerErrorText = readOpenAiCompatibleStreamErrorText(event);
+          if (providerErrorText) {
+            const failure = attachProviderUsageEvidence(createProviderStreamError(providerErrorText), event);
+            const recovered = !emittedVisibleChunk
+              ? await this.retryTrackedOutputCapFailure({
+                  resolved,
+                  model,
+                  requestedProviderId: attribution.requestedProviderId ?? request.providerId,
+                  requestedModelId: attribution.requestedModelId ?? request.model,
+                  attribution,
+                  transportAttemptIndex: dispatched.lastTransportAttemptIndex ?? 0,
+                  target,
+                  payload: dispatched.effectivePayload,
+                  timeoutMs,
+                  signal: request.signal,
+                  outputCapRecovery: {
+                    requestedOutputTokenCap: dispatched.logicalRequestedOutputTokenCap,
+                    retriesRemaining: dispatched.outputCapRetriesRemaining,
+                  },
+                  dispatched,
+                  providerErrorText,
+                  providerFailureEvidence: failure,
+                })
+              : undefined;
+            if (recovered) {
+              terminal = true;
+              dispatched = recovered;
+              continue attemptLoop;
+            }
+            throw failure;
+          }
+          const chunk = applyEstimatedCostToStreamChunkWithSource(event, {
+            providerId: resolved.provider.providerId,
+            model,
+          });
+          if (hasChatStreamFinishReason(chunk)) providerTerminal = true;
+          observeProviderUsageWithTrustedEstimate(dispatched.usage, event.usage, chunk.usage);
+          dispatched.usage?.observeNormalized({ effectiveModelId: firstNonEmptyString(chunk.model) });
+          emittedVisibleChunk = true;
+          yield attachStreamUsageEvents(chunk, eventIds);
+        }
+        if (!providerTerminal) throw new Error("Chat completion stream ended before a terminal marker");
+        dispatched.usage?.succeed();
+        terminal = true;
+        return;
+      } catch (error) {
+        if (error instanceof ModelUsageSettlementError) {
+          terminal = true;
+          throw error;
+        }
+        dispatched.usage?.fail(error);
+        terminal = true;
+        throw error;
+      } finally {
+        if (!terminal) dispatched.usage?.cancel(new Error("stream consumer cancelled"));
       }
-    }
-
-    for await (const event of streamJsonSseResponse(response)) {
-      yield applyEstimatedCostToStreamChunkWithSource(event, {
-        providerId: resolved.provider.providerId,
-        model,
-      });
     }
   }
 
@@ -1120,6 +2022,7 @@ export class LlmService {
     request: ChatCompletionRequest,
     resolved: ResolvedProvider,
     model: string,
+    attribution: ModelUsageAttributionContext,
   ): Promise<ChatCompletionResponse> {
     const payload = buildOpenAiResponsesPayload(request, model, resolved.provider);
     const codexResponsesProvider = isOpenAICodexResponsesProvider(resolved.provider);
@@ -1128,149 +2031,364 @@ export class LlmService {
     }
     const target = this.buildRequestTarget(resolved, "responses", `${resolved.provider.baseUrl}/responses`);
     const timeoutMs = resolveChatCompletionTimeoutMs(request.timeoutMs, 60000);
-    const response = await postJsonRequest(target, payload, timeoutMs, request.signal);
-
-    if (isRedirect(response.status)) {
-      throw new Error(`responses request blocked redirect (${response.status})`);
-    }
-    if (!response.ok) {
-      throw new Error(await buildHttpError("responses request", response));
-    }
-
-    if (codexResponsesProvider && response.body) {
-      return applyEstimatedCostToChatResponseWithSource(await collectOpenAiResponsesStreamCompletion(response, model), {
-        providerId: resolved.provider.providerId,
-        model,
-      });
-    }
-
-    const json = await parseProviderJsonResponse("responses request", response);
-    return applyEstimatedCostToChatResponseWithSource(adaptOpenAiResponsesResponse(json), {
-      providerId: resolved.provider.providerId,
+    let dispatched = await this.postTrackedJsonRequest({
+      resolved,
       model,
+      requestedProviderId: attribution.requestedProviderId ?? request.providerId,
+      requestedModelId: attribution.requestedModelId ?? request.model,
+      attribution,
+      transportAttemptIndex: 0,
+      target,
+      payload,
+      timeoutMs,
+      signal: request.signal,
+      outputCapRecovery: {
+        requestedOutputTokenCap: request.max_tokens,
+        retriesRemaining: 1,
+      },
     });
+    while (true) {
+      try {
+        if (isRedirect(dispatched.response.status)) {
+          throw new Error(`responses request blocked redirect (${dispatched.response.status})`);
+        }
+        if (!dispatched.response.ok) {
+          throw new Error(await buildHttpError("responses request", dispatched.response));
+        }
+
+        let rawCompletion: ChatCompletionResponse;
+        if (codexResponsesProvider && dispatched.response.body) {
+          try {
+            rawCompletion = await collectOpenAiResponsesStreamCompletion(dispatched.response, model);
+          } catch (error) {
+            const providerErrorText = readProviderOwnedOutputCapFailureText(error);
+            const recovered = providerErrorText
+              ? await this.retryTrackedOutputCapFailure({
+                  resolved,
+                  model,
+                  requestedProviderId: attribution.requestedProviderId ?? request.providerId,
+                  requestedModelId: attribution.requestedModelId ?? request.model,
+                  attribution,
+                  transportAttemptIndex: dispatched.lastTransportAttemptIndex ?? 0,
+                  target,
+                  payload: dispatched.effectivePayload,
+                  timeoutMs,
+                  signal: request.signal,
+                  outputCapRecovery: {
+                    requestedOutputTokenCap: dispatched.logicalRequestedOutputTokenCap,
+                    retriesRemaining: dispatched.outputCapRetriesRemaining,
+                  },
+                  dispatched,
+                  providerErrorText,
+                  providerFailureEvidence: error,
+                })
+              : undefined;
+            if (recovered) {
+              dispatched = recovered;
+              continue;
+            }
+            throw error;
+          }
+        } else {
+          const json = await parseProviderJsonResponse("responses request", dispatched.response);
+          if (json.status === "failed") {
+            const failure = buildResponsesStreamFailureError({ type: "response.failed", response: json });
+            const providerErrorText = readProviderOwnedOutputCapFailureText(failure);
+            const recovered = providerErrorText
+              ? await this.retryTrackedOutputCapFailure({
+                  resolved,
+                  model,
+                  requestedProviderId: attribution.requestedProviderId ?? request.providerId,
+                  requestedModelId: attribution.requestedModelId ?? request.model,
+                  attribution,
+                  transportAttemptIndex: dispatched.lastTransportAttemptIndex ?? 0,
+                  target,
+                  payload: dispatched.effectivePayload,
+                  timeoutMs,
+                  signal: request.signal,
+                  outputCapRecovery: {
+                    requestedOutputTokenCap: dispatched.logicalRequestedOutputTokenCap,
+                    retriesRemaining: dispatched.outputCapRetriesRemaining,
+                  },
+                  dispatched,
+                  providerErrorText,
+                  providerFailureEvidence: failure,
+                })
+              : undefined;
+            if (recovered) {
+              dispatched = recovered;
+              continue;
+            }
+            throw failure;
+          }
+          rawCompletion = adaptOpenAiResponsesResponse(json);
+        }
+        const completion = applyEstimatedCostToChatResponseWithSource(rawCompletion, {
+          providerId: resolved.provider.providerId,
+          model,
+        });
+        observeProviderUsageWithTrustedEstimate(dispatched.usage, rawCompletion.usage, completion.usage);
+        dispatched.usage?.observeNormalized({ effectiveModelId: completion.model });
+        const terminal = dispatched.usage?.succeed();
+        const eventIds = [...(dispatched.priorModelUsageEventIds ?? [])];
+        if (terminal) eventIds.push(terminal.eventId);
+        return eventIds.length > 0 ? { ...completion, modelUsageEventIds: eventIds } : completion;
+      } catch (error) {
+        if (error instanceof ModelUsageSettlementError) throw error;
+        observeProviderFailureUsage(dispatched.usage, error, {
+          providerId: resolved.provider.providerId,
+          model,
+        });
+        dispatched.usage?.fail(error);
+        throw error;
+      }
+    }
   }
 
   private async *executeOpenAiResponsesStream(
     request: ChatCompletionRequest,
     resolved: ResolvedProvider,
     model: string,
+    attribution: ModelUsageAttributionContext,
   ): AsyncGenerator<Record<string, unknown>> {
     const payload = buildOpenAiResponsesPayload(request, model, resolved.provider);
     payload.stream = true;
 
     const target = this.buildRequestTarget(resolved, "responses", `${resolved.provider.baseUrl}/responses`);
     const timeoutMs = resolveChatCompletionTimeoutMs(request.timeoutMs, 120000);
-    const response = await postJsonRequest(target, payload, timeoutMs, request.signal);
+    let dispatched = await this.postTrackedJsonRequest({
+      resolved,
+      model,
+      requestedProviderId: attribution.requestedProviderId ?? request.providerId,
+      requestedModelId: attribution.requestedModelId ?? request.model,
+      attribution,
+      transportAttemptIndex: 0,
+      target,
+      payload,
+      timeoutMs,
+      signal: request.signal,
+      outputCapRecovery: {
+        requestedOutputTokenCap: request.max_tokens,
+        retriesRemaining: 1,
+      },
+    });
+    attemptLoop: while (true) {
+      const accounting = dispatched.usage;
+      const eventIds = [...(dispatched.priorModelUsageEventIds ?? []), ...(accounting ? [accounting.eventId] : [])];
+      // eslint-disable-next-line no-useless-assignment -- async-generator cancellation reaches finally between yields.
+      let terminal = false;
+      let providerTerminal = false;
+      let emittedVisibleChunk = false;
+      try {
+        if (isRedirect(dispatched.response.status)) {
+          throw new Error(`responses request blocked redirect (${dispatched.response.status})`);
+        }
+        if (!dispatched.response.ok) {
+          throw new Error(await buildHttpError("responses request", dispatched.response));
+        }
 
-    if (isRedirect(response.status)) {
-      throw new Error(`responses request blocked redirect (${response.status})`);
-    }
-    if (!response.ok) {
-      throw new Error(await buildHttpError("responses request", response));
-    }
+        const contentType = dispatched.response.headers.get("content-type")?.toLowerCase() ?? "";
+        const shouldParseAsSse =
+          isOpenAICodexResponsesProvider(resolved.provider) || contentType.includes("text/event-stream");
+        if (!shouldParseAsSse || !dispatched.response.body) {
+          const json = await parseProviderJsonResponse("responses stream", dispatched.response);
+          if (json.status === "failed") {
+            const failure = buildResponsesStreamFailureError({ type: "response.failed", response: json });
+            const providerErrorText = readProviderOwnedOutputCapFailureText(failure);
+            const recovered = providerErrorText
+              ? await this.retryTrackedOutputCapFailure({
+                  resolved,
+                  model,
+                  requestedProviderId: attribution.requestedProviderId ?? request.providerId,
+                  requestedModelId: attribution.requestedModelId ?? request.model,
+                  attribution,
+                  transportAttemptIndex: dispatched.lastTransportAttemptIndex ?? 0,
+                  target,
+                  payload: dispatched.effectivePayload,
+                  timeoutMs,
+                  signal: request.signal,
+                  outputCapRecovery: {
+                    requestedOutputTokenCap: dispatched.logicalRequestedOutputTokenCap,
+                    retriesRemaining: dispatched.outputCapRetriesRemaining,
+                  },
+                  dispatched,
+                  providerErrorText,
+                  providerFailureEvidence: failure,
+                })
+              : undefined;
+            if (recovered) {
+              terminal = true;
+              dispatched = recovered;
+              continue attemptLoop;
+            }
+            throw failure;
+          }
+          const providerCompletion = adaptOpenAiResponsesResponse(json);
+          const completion = applyEstimatedCostToChatResponseWithSource(providerCompletion, {
+            providerId: resolved.provider.providerId,
+            model,
+          });
+          observeProviderUsageWithTrustedEstimate(accounting, providerCompletion.usage, completion.usage);
+          accounting?.observeNormalized({ effectiveModelId: completion.model });
+          accounting?.succeed();
+          terminal = true;
+          emittedVisibleChunk = true;
+          yield attachStreamUsageEvents(completion as Record<string, unknown>, eventIds);
+          return;
+        }
 
-    const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-    const shouldParseAsSse =
-      isOpenAICodexResponsesProvider(resolved.provider) || contentType.includes("text/event-stream");
-    if (!shouldParseAsSse || !response.body) {
-      const json = await parseProviderJsonResponse("responses stream", response);
-      yield applyEstimatedCostToChatResponseWithSource(adaptOpenAiResponsesResponse(json), {
-        providerId: resolved.provider.providerId,
-        model,
-      });
-      return;
-    }
-
-    const streamedFunctionCallIndexes = new Map<string, number>();
-    let nextStreamedFunctionCallIndex = 0;
-    const resolveStreamedFunctionCallIndex = (
-      event: Record<string, unknown>,
-      item: Record<string, unknown>,
-    ): number => {
-      const key =
-        firstNonEmptyString(item.call_id, item.id, event.item_id) ?? `anonymous:${nextStreamedFunctionCallIndex}`;
-      const existingIndex = streamedFunctionCallIndexes.get(key);
-      if (existingIndex !== undefined) {
-        return existingIndex;
-      }
-      const assignedIndex = nextStreamedFunctionCallIndex;
-      nextStreamedFunctionCallIndex += 1;
-      streamedFunctionCallIndexes.set(key, assignedIndex);
-      return assignedIndex;
-    };
-
-    for await (const event of streamJsonSseResponse(response, { forceSse: shouldParseAsSse })) {
-      const eventType = typeof event.type === "string" ? event.type : "";
-      if (eventType === "response.output_text.delta") {
-        yield {
-          id: String(event.item_id ?? event.response_id ?? event.id ?? "response"),
-          choices: [
-            {
-              index: 0,
-              delta: {
-                content: String(event.delta ?? ""),
-              },
-            },
-          ],
+        const streamedFunctionCallIndexes = new Map<string, number>();
+        let nextStreamedFunctionCallIndex = 0;
+        const resolveStreamedFunctionCallIndex = (
+          event: Record<string, unknown>,
+          item: Record<string, unknown>,
+        ): number => {
+          const key =
+            firstNonEmptyString(item.call_id, item.id, event.item_id) ?? `anonymous:${nextStreamedFunctionCallIndex}`;
+          const existingIndex = streamedFunctionCallIndexes.get(key);
+          if (existingIndex !== undefined) {
+            return existingIndex;
+          }
+          const assignedIndex = nextStreamedFunctionCallIndex;
+          nextStreamedFunctionCallIndex += 1;
+          streamedFunctionCallIndexes.set(key, assignedIndex);
+          return assignedIndex;
         };
-        continue;
-      }
 
-      if (eventType === "response.output_item.done") {
-        const item = isRecord(event.item) ? event.item : undefined;
-        if (item?.type === "function_call") {
-          const toolCallIndex = resolveStreamedFunctionCallIndex(event, item);
-          yield {
-            id: String(item.id ?? event.item_id ?? "response"),
-            choices: [
+        for await (const event of streamJsonSseResponse(dispatched.response, { forceSse: shouldParseAsSse })) {
+          accounting?.renewLease();
+          const eventType = typeof event.type === "string" ? event.type : "";
+          if (eventType === "response.output_text.delta") {
+            emittedVisibleChunk = true;
+            yield attachStreamUsageEvents(
               {
-                index: 0,
-                delta: {
-                  tool_calls: [
+                id: String(event.item_id ?? event.response_id ?? event.id ?? "response"),
+                choices: [
+                  {
+                    index: 0,
+                    delta: {
+                      content: String(event.delta ?? ""),
+                    },
+                  },
+                ],
+              },
+              eventIds,
+            );
+            continue;
+          }
+
+          if (eventType === "response.output_item.done") {
+            const item = isRecord(event.item) ? event.item : undefined;
+            if (item?.type === "function_call") {
+              const toolCallIndex = resolveStreamedFunctionCallIndex(event, item);
+              emittedVisibleChunk = true;
+              yield attachStreamUsageEvents(
+                {
+                  id: String(item.id ?? event.item_id ?? "response"),
+                  choices: [
                     {
-                      index: toolCallIndex,
-                      id: String(item.call_id ?? item.id ?? "call"),
-                      type: "function",
-                      function: {
-                        name: String(item.name ?? ""),
-                        arguments: String(item.arguments ?? "{}"),
+                      index: 0,
+                      delta: {
+                        tool_calls: [
+                          {
+                            index: toolCallIndex,
+                            id: String(item.call_id ?? item.id ?? "call"),
+                            type: "function",
+                            function: {
+                              name: String(item.name ?? ""),
+                              arguments: String(item.arguments ?? "{}"),
+                            },
+                          },
+                        ],
                       },
                     },
                   ],
                 },
-              },
-            ],
-          };
-        }
-        continue;
-      }
+                eventIds,
+              );
+            }
+            continue;
+          }
 
-      if (eventType === "response.completed" && isRecord(event.response)) {
-        const adapted = adaptOpenAiResponsesResponse(event.response);
-        yield applyEstimatedCostToStreamChunkWithSource(
-          {
-            id: adapted.id,
-            model: adapted.model,
-            choices: [
+          if (eventType === "response.completed" && isRecord(event.response)) {
+            const adapted = adaptOpenAiResponsesResponse(event.response);
+            const finalChunk = applyEstimatedCostToStreamChunkWithSource(
               {
-                index: 0,
-                delta: {},
-                finish_reason: adapted.choices?.[0]?.finish_reason ?? "stop",
+                id: adapted.id,
+                model: adapted.model,
+                choices: [
+                  {
+                    index: 0,
+                    delta: {},
+                    finish_reason: adapted.choices?.[0]?.finish_reason ?? "stop",
+                  },
+                ],
+                usage: adapted.usage,
               },
-            ],
-            usage: adapted.usage,
-          },
-          {
-            providerId: resolved.provider.providerId,
-            model,
-          },
-        );
-        continue;
-      }
+              {
+                providerId: resolved.provider.providerId,
+                model,
+              },
+            );
+            observeProviderUsageWithTrustedEstimate(accounting, adapted.usage, finalChunk.usage);
+            accounting?.observeNormalized({ effectiveModelId: firstNonEmptyString(finalChunk.model) });
+            providerTerminal = true;
+            emittedVisibleChunk = true;
+            yield attachStreamUsageEvents(finalChunk, eventIds);
+            continue;
+          }
 
-      if (eventType === "response.failed") {
-        throw buildResponsesStreamFailureError(event);
+          if (eventType === "response.failed") {
+            const failure = buildResponsesStreamFailureError(event);
+            const providerErrorText = readProviderOwnedOutputCapFailureText(failure);
+            const recovered =
+              !emittedVisibleChunk && providerErrorText
+                ? await this.retryTrackedOutputCapFailure({
+                    resolved,
+                    model,
+                    requestedProviderId: attribution.requestedProviderId ?? request.providerId,
+                    requestedModelId: attribution.requestedModelId ?? request.model,
+                    attribution,
+                    transportAttemptIndex: dispatched.lastTransportAttemptIndex ?? 0,
+                    target,
+                    payload: dispatched.effectivePayload,
+                    timeoutMs,
+                    signal: request.signal,
+                    outputCapRecovery: {
+                      requestedOutputTokenCap: dispatched.logicalRequestedOutputTokenCap,
+                      retriesRemaining: dispatched.outputCapRetriesRemaining,
+                    },
+                    dispatched,
+                    providerErrorText,
+                    providerFailureEvidence: failure,
+                  })
+                : undefined;
+            if (recovered) {
+              terminal = true;
+              dispatched = recovered;
+              continue attemptLoop;
+            }
+            throw failure;
+          }
+        }
+        if (!providerTerminal) throw new Error("Responses stream ended before response.completed");
+        accounting?.succeed();
+        terminal = true;
+        return;
+      } catch (error) {
+        if (error instanceof ModelUsageSettlementError) {
+          terminal = true;
+          throw error;
+        }
+        observeProviderFailureUsage(accounting, error, {
+          providerId: resolved.provider.providerId,
+          model,
+        });
+        accounting?.fail(error);
+        terminal = true;
+        throw error;
+      } finally {
+        if (!terminal) accounting?.cancel(new Error("stream consumer cancelled"));
       }
     }
   }
@@ -1288,12 +2406,86 @@ export class LlmService {
       throw new Error(`Unknown LLM provider: ${selectedId}`);
     }
 
+    const authMode = resolveProviderAuthMode(provider);
+    if (authMode === "google-service-account" || authMode === "google-adc") {
+      const secretStatus =
+        authMode === "google-service-account"
+          ? this.getProviderSecretStatus(provider.providerId, { includeKeychain: true, useCache: false })
+          : undefined;
+      if (secretStatus?.apiKeySource === "inline") {
+        throw new Error(
+          "Vertex AI service-account credentials must be stored in the Gateway keychain or referenced by apiKeyEnv.",
+        );
+      }
+      const serviceAccountJson = authMode === "google-service-account" ? this.resolveApiKey(provider) : undefined;
+      const cloud = await this.googleCloudAuth.resolve({
+        providerId: provider.providerId,
+        credentialMode: authMode === "google-service-account" ? "service-account" : "adc",
+        serviceAccountJson,
+        serviceAccountSource:
+          secretStatus?.apiKeySource === "env"
+            ? "env"
+            : secretStatus?.apiKeySource === "keychain"
+              ? "keychain"
+              : undefined,
+        projectId: resolveProviderEnvironmentValue(
+          provider.googleCloud?.projectId,
+          provider.googleCloud?.projectIdEnv,
+          this.env,
+        ),
+        location: resolveProviderEnvironmentValue(
+          provider.googleCloud?.location,
+          provider.googleCloud?.locationEnv,
+          this.env,
+        ),
+        endpointId: provider.googleCloud?.endpointId,
+      });
+      return {
+        provider: { ...provider, baseUrl: cloud.baseUrl },
+        apiKey: cloud.accessToken,
+        credentialType: cloud.credentialType,
+        credentialSource: cloud.credentialSource,
+      };
+    }
+
     const apiKey = isOpenAICodexProvider(provider)
       ? options.requireAuth
         ? await this.openAICodexOAuth.resolveAccessToken()
         : undefined
       : this.resolveApiKey(provider);
+    if (options.requireAuth && provider.providerId.trim().toLowerCase() === "fireworks" && !apiKey) {
+      throw new Error("Fireworks requires a configured API key before provider dispatch.");
+    }
     return { provider, apiKey };
+  }
+
+  private async acquireLocalServiceLease(
+    resolved: ResolvedProvider,
+    purpose: LlmLocalServiceLeaseRequest["purpose"],
+    signal?: AbortSignal,
+  ): Promise<LlmLocalServiceLease | undefined> {
+    if (resolved.provider.providerId.trim().toLowerCase() !== "llamacpp" || !this.localServiceLeaseAcquirer) {
+      return undefined;
+    }
+    return this.localServiceLeaseAcquirer({
+      providerId: resolved.provider.providerId,
+      baseUrl: resolved.provider.baseUrl,
+      purpose,
+      signal,
+    });
+  }
+
+  private async releaseLocalServiceLease(lease: LlmLocalServiceLease | undefined): Promise<void> {
+    if (!lease) {
+      return;
+    }
+    try {
+      await lease.release();
+    } catch (error) {
+      log.warn("Failed to release local provider lease", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private resolveRequestModel(provider: LlmProviderConfig, requestedModel?: string): string {
@@ -1700,12 +2892,14 @@ export class LlmService {
     }
     this.assertProviderHostAllowed(resolved.provider.baseUrl);
     const target = this.buildRequestTarget(resolved, "models", `${resolved.provider.baseUrl}/models`);
+    const discoverySignal = AbortSignal.timeout(15_000);
+    const lease = await this.acquireLocalServiceLease(resolved, "model_discovery", discoverySignal);
 
     try {
       const requestInit: FetchRequestInitWithDispatcher = {
         method: "GET",
         headers: target.headers,
-        signal: AbortSignal.timeout(15000),
+        signal: discoverySignal,
         redirect: "manual",
         dispatcher: target.dispatcher,
       };
@@ -1752,6 +2946,8 @@ export class LlmService {
         return { items: fallback, source: "error_fallback", warning: (error as Error).message };
       }
       throw error;
+    } finally {
+      await this.releaseLocalServiceLease(lease);
     }
   }
 }
@@ -1834,6 +3030,7 @@ function normalizeProvider(provider: LlmProviderConfig): LlmProviderConfig {
         : provider.providerId === "claude-code"
           ? "claude-code-oauth"
           : (provider.authMode ?? defaultAuthModeForProvider(provider.providerId)),
+    googleCloud: normalizeGoogleCloudConfig(provider.googleCloud),
     request: normalizeProviderRequestConfig(provider.request, provider.headers),
     headers: undefined,
   };
@@ -1860,6 +3057,16 @@ function normalizeProviderRequestConfig(
     return undefined;
   }
   return normalizedRequest;
+}
+
+function normalizeGoogleCloudConfig(config: LlmProviderConfig["googleCloud"]): LlmProviderConfig["googleCloud"] {
+  if (!config) return undefined;
+  const normalized = Object.fromEntries(
+    Object.entries(config)
+      .map(([key, value]) => [key, value?.trim()] as const)
+      .filter((entry): entry is [string, string] => Boolean(entry[1])),
+  ) as LlmProviderConfig["googleCloud"];
+  return normalized && Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
 // SECURITY (codex finding #25a, #30): Compare the host portion of two
@@ -1998,6 +3205,14 @@ function mergeProviderHeaders(
   if (!incoming) {
     return existing ? { ...existing } : undefined;
   }
+  return { ...existing, ...incoming };
+}
+
+function mergeGoogleCloudConfig(
+  existing: LlmProviderConfig["googleCloud"],
+  incoming: LlmProviderConfig["googleCloud"],
+): LlmProviderConfig["googleCloud"] {
+  if (!incoming) return existing ? { ...existing } : undefined;
   return { ...existing, ...incoming };
 }
 
@@ -2363,7 +3578,7 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function shouldAppendV1(providerId: string, baseUrl: string): boolean {
-  if (providerId === "perplexity" || providerId === "openai-codex") {
+  if (providerId === "perplexity" || providerId === "openai-codex" || providerId === "vertex") {
     return false;
   }
   const parsed = new URL(baseUrl);
@@ -2456,11 +3671,265 @@ function isMetadataStoreCompatibilityError(text: string): boolean {
   );
 }
 
+function createProviderMetadataCompatibilityError(message: string): Error {
+  const error = new Error(message);
+  error.name = "ProviderMetadataCompatibilityError";
+  return error;
+}
+
 function resolveChatCompletionTimeoutMs(value: number | undefined, fallbackMs: number): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return fallbackMs;
   }
   return Math.max(1, Math.floor(value));
+}
+
+function normalizeModelUsageAttribution(
+  input: ModelUsageAttributionContext,
+  defaultCallKind: NonNullable<ModelUsageAttributionContext["callKind"]>,
+): ModelUsageAttributionContext {
+  return {
+    ...input,
+    operationId: input.operationId?.trim() || `llm:${randomUUID()}`,
+    dispatchGeneration: input.dispatchGeneration?.trim() || randomUUID(),
+    callKind: input.callKind ?? defaultCallKind,
+    attemptIndex: input.attemptIndex ?? 0,
+    fallbackIndex: input.fallbackIndex ?? 0,
+    repairIndex: input.repairIndex ?? 0,
+  };
+}
+
+function attachStreamUsageEvents<T extends Record<string, unknown>>(value: T, eventIds: string[]): T {
+  if (eventIds.length === 0) return value;
+  return {
+    ...value,
+    model_usage_event_id: eventIds[eventIds.length - 1],
+    model_usage_event_ids: [...eventIds],
+  };
+}
+
+function attachReasoningReceipt(
+  response: ChatCompletionResponse,
+  receipt: ChatCompletionReasoningReceipt | undefined,
+): ChatCompletionResponse {
+  if (!receipt) return response;
+  return {
+    ...response,
+    routing: {
+      ...(response.routing ?? {}),
+      reasoning: receipt,
+    },
+  };
+}
+
+function attachReasoningReceiptToChunk(
+  chunk: Record<string, unknown>,
+  receipt: ChatCompletionReasoningReceipt | undefined,
+): Record<string, unknown> {
+  if (!receipt) return chunk;
+  return {
+    ...chunk,
+    routing: {
+      ...(isRecord(chunk.routing) ? chunk.routing : {}),
+      reasoning: receipt,
+    },
+  };
+}
+
+const PRIVATE_REASONING_RESPONSE_FIELDS = new Set([
+  "analysis",
+  "reasoning",
+  "reasoning_content",
+  "reasoning_details",
+  "thinking",
+]);
+const MAX_PUBLIC_RESPONSE_SANITIZE_NODES = 50_000;
+
+function stripPrivateReasoningFromCompletion(response: ChatCompletionResponse): ChatCompletionResponse {
+  return sanitizeProviderResponseForPublicProjection(response as Record<string, unknown>) as ChatCompletionResponse;
+}
+
+function stripPrivateReasoningFromChunk(chunk: Record<string, unknown>): Record<string, unknown> {
+  return sanitizeProviderResponseForPublicProjection(chunk);
+}
+
+export function sanitizeProviderResponseForPublicProjection(chunk: Record<string, unknown>): Record<string, unknown> {
+  const sanitized = Object.create(null) as Record<string, unknown>;
+  const seen = new WeakSet<object>();
+  seen.add(chunk);
+  let visitedNodes = 1;
+  const pending: Array<{
+    source: Record<string, unknown> | unknown[];
+    target: Record<string, unknown> | unknown[];
+  }> = [{ source: chunk, target: sanitized }];
+
+  const cloneValue = (value: unknown): unknown => {
+    visitedNodes += 1;
+    if (visitedNodes > MAX_PUBLIC_RESPONSE_SANITIZE_NODES) {
+      throw new Error("Provider response exceeded the public sanitization node limit.");
+    }
+    if (!Array.isArray(value) && !isRecord(value)) return value;
+    if (seen.has(value)) {
+      throw new Error("Provider response contained a cyclic or aliased object graph.");
+    }
+    seen.add(value);
+    const target: Record<string, unknown> | unknown[] = Array.isArray(value)
+      ? []
+      : (Object.create(null) as Record<string, unknown>);
+    pending.push({ source: value, target });
+    return target;
+  };
+
+  // Provider JSON can place private reasoning metadata below arbitrary vendor
+  // envelopes, content parts, or stream-delta extensions. Walk the complete
+  // bounded response graph iteratively so deeply nested payloads cannot escape
+  // the filter or exhaust the JavaScript call stack. Tool-call argument strings
+  // and every non-private public field remain byte-for-byte unchanged.
+  while (pending.length > 0) {
+    const next = pending.pop();
+    if (!next) break;
+    if (Array.isArray(next.source) && Array.isArray(next.target)) {
+      for (const value of next.source) next.target.push(cloneValue(value));
+      continue;
+    }
+    if (Array.isArray(next.source) || Array.isArray(next.target)) continue;
+    for (const [key, value] of Object.entries(next.source)) {
+      if (isPrivateReasoningResponseField(key)) continue;
+      Object.defineProperty(next.target, key, {
+        value: cloneValue(value),
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+    }
+  }
+  return sanitized;
+}
+
+function isPrivateReasoningResponseField(key: string): boolean {
+  const normalized = key.trim().toLowerCase().replaceAll("-", "_");
+  return (
+    PRIVATE_REASONING_RESPONSE_FIELDS.has(normalized) ||
+    normalized === "reasoningcontent" ||
+    normalized === "reasoningdetails" ||
+    normalized === "thinkingcontent" ||
+    normalized === "internal_reasoning" ||
+    normalized === "chain_of_thought"
+  );
+}
+
+function hasChatStreamFinishReason(chunk: Record<string, unknown>): boolean {
+  if (!Array.isArray(chunk.choices)) return false;
+  return chunk.choices.some(
+    (choice) => isRecord(choice) && choice.finish_reason !== undefined && choice.finish_reason !== null,
+  );
+}
+
+function isLocalBillingProvider(providerId: string): boolean {
+  return new Set(["genie-ir20", "llamacpp", "lmstudio", "localai", "ollama"]).has(providerId.trim().toLowerCase());
+}
+
+function normalizeSecretFreeProviderEndpoint(rawUrl: string): string {
+  try {
+    const url = new URL(rawUrl);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return "invalid-provider-url";
+  }
+}
+
+function projectProviderRequestAuthShape(auth: LlmProviderRequestAuthConfig | undefined) {
+  if (!auth) {
+    return undefined;
+  }
+  if (auth.type === "bearer") {
+    return {
+      type: auth.type,
+      headerName: auth.headerName?.trim().toLowerCase(),
+      tokenEnv: auth.tokenEnv,
+    };
+  }
+  if (auth.type === "header") {
+    return {
+      type: auth.type,
+      headerName: auth.headerName.trim().toLowerCase(),
+      valueEnv: auth.valueEnv,
+      scheme: auth.scheme,
+    };
+  }
+  return {
+    type: auth.type,
+    queryParam: auth.queryParam,
+    valueEnv: auth.valueEnv,
+    prefix: auth.prefix,
+  };
+}
+
+function projectProviderTlsShape(tls: LlmProviderRequestTlsConfig | undefined) {
+  return tls
+    ? {
+        insecureSkipVerify: Boolean(tls.insecureSkipVerify),
+        caCertPath: tls.caCertPath,
+        clientCertPath: tls.clientCertPath,
+        clientKeyPath: tls.clientKeyPath,
+        serverName: tls.serverName?.trim().toLowerCase(),
+      }
+    : undefined;
+}
+
+function fingerprintProviderCredentialConfig(provider: LlmProviderConfig): string {
+  const secretFree = {
+    providerId: provider.providerId,
+    endpoint: normalizeSecretFreeProviderEndpoint(provider.baseUrl),
+    apiStyle: provider.apiStyle,
+    authMode: resolveProviderAuthMode(provider),
+    apiKeyEnv: provider.apiKeyEnv,
+    googleCloud: provider.googleCloud,
+    requestAuth: projectProviderRequestAuthShape(provider.request?.auth),
+    headerNames: Object.keys(provider.request?.headers ?? provider.headers ?? {})
+      .map((name) => name.trim().toLowerCase())
+      .sort(),
+  };
+  return createHash("sha256").update(canonicalJsonString(secretFree)).digest("hex");
+}
+
+function fingerprintProviderRouteConfig(
+  provider: LlmProviderConfig,
+  model: string,
+  contextWindowTokens: number,
+): string {
+  const proxy = provider.request?.proxy;
+  const secretFree = {
+    schemaVersion: "llm.provider-route-config.v1",
+    providerId: provider.providerId,
+    model,
+    contextWindowTokens,
+    resolvedApiStyle: resolveProviderExecutionApiStyle(provider, model),
+    credentialConfigFingerprint: fingerprintProviderCredentialConfig(provider),
+    capabilities: inferProviderCapabilities(provider),
+    requestTransport: {
+      tls: projectProviderTlsShape(provider.request?.tls),
+      proxy: proxy
+        ? {
+            endpoint: normalizeSecretFreeProviderEndpoint(proxy.url),
+            bypassHosts: [...(proxy.bypassHosts ?? [])].map((host) => host.trim().toLowerCase()).sort(),
+            auth: projectProviderRequestAuthShape(proxy.auth),
+            tls: projectProviderTlsShape(proxy.tls),
+          }
+        : undefined,
+    },
+  };
+  return createHash("sha256").update(canonicalJsonString(secretFree)).digest("hex");
+}
+
+function resolveRequestAuthSource(auth: LlmProviderRequestAuthConfig | undefined): "inline" | "env" | "none" {
+  if (!auth) return "none";
+  if (auth.type === "bearer") {
+    if (auth.token?.trim()) return "inline";
+    return auth.tokenEnv?.trim() ? "env" : "none";
+  }
+  if (auth.value?.trim()) return "inline";
+  return auth.valueEnv?.trim() ? "env" : "none";
 }
 
 function applyMaxTokensPayloadField(input: {
@@ -2479,60 +3948,32 @@ function applyMaxTokensPayloadField(input: {
   input.payload.max_tokens = input.maxTokens;
 }
 
+function resolveOutputCapPayloadField(
+  payload: Readonly<Record<string, unknown>>,
+): { field: "max_tokens" | "max_completion_tokens" | "max_output_tokens"; value: number } | undefined {
+  const candidates = (["max_tokens", "max_completion_tokens", "max_output_tokens"] as const)
+    .map((field) => ({ field, value: payload[field] }))
+    .filter(
+      (
+        candidate,
+      ): candidate is { field: "max_tokens" | "max_completion_tokens" | "max_output_tokens"; value: number } =>
+        Number.isSafeInteger(candidate.value) && (candidate.value as number) > 0,
+    );
+  return candidates.length === 1 ? candidates[0] : undefined;
+}
+
+function isOutputCapRecoveryHttpStatus(status: number): boolean {
+  // Known provider output-cap rejections are client/request-shape failures.
+  // Never turn auth, rate-limit, redirect, or server failures into redispatch.
+  return status === 400 || status === 413 || status === 422;
+}
+
 function shouldUseMaxCompletionTokens(providerId: string, model: string): boolean {
   if (providerId !== "openai") {
     return false;
   }
   const normalized = model.trim().toLowerCase();
   return /^gpt-5(?:$|[.-])/.test(normalized);
-}
-
-async function postJsonRequest(
-  target: ProviderRequestTarget,
-  payload: Record<string, unknown>,
-  timeoutMs: number,
-  externalSignal?: AbortSignal,
-): Promise<Response> {
-  const timeoutSignal = AbortSignal.timeout(timeoutMs);
-  const signal = externalSignal ? AbortSignal.any([timeoutSignal, externalSignal]) : timeoutSignal;
-  const requestInit: FetchRequestInitWithDispatcher = {
-    method: "POST",
-    headers: target.headers,
-    body: JSON.stringify(payload),
-    signal,
-    redirect: "manual",
-    dispatcher: target.dispatcher,
-  };
-  try {
-    return await fetch(target.url, requestInit);
-  } catch (error) {
-    rethrowIfProviderNetworkBlocked(error);
-    throw error;
-  }
-}
-
-async function postMultipartRequest(
-  target: ProviderRequestTarget,
-  formData: FormData,
-  timeoutMs: number,
-  externalSignal?: AbortSignal,
-): Promise<Response> {
-  const timeoutSignal = AbortSignal.timeout(timeoutMs);
-  const signal = externalSignal ? AbortSignal.any([timeoutSignal, externalSignal]) : timeoutSignal;
-  const requestInit: FetchRequestInitWithDispatcher = {
-    method: "POST",
-    headers: target.headers,
-    body: formData,
-    signal,
-    redirect: "manual",
-    dispatcher: target.dispatcher,
-  };
-  try {
-    return await fetch(target.url, requestInit);
-  } catch (error) {
-    rethrowIfProviderNetworkBlocked(error);
-    throw error;
-  }
 }
 
 function createRequestDispatcher(
@@ -2960,7 +4401,7 @@ function tryParseJsonRecord(payload: string): Record<string, unknown> | null {
 
 async function* streamJsonSseResponse(
   response: Response,
-  options?: { forceSse?: boolean },
+  options?: { forceSse?: boolean; onDone?: () => void },
 ): AsyncGenerator<Record<string, unknown>> {
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   if (!response.body) {
@@ -3001,6 +4442,7 @@ async function* streamJsonSseResponse(
           .filter(Boolean);
         for (const payload of parseSseFramePayloads(dataLines)) {
           if (payload === "[DONE]") {
+            options?.onDone?.();
             return;
           }
           eventCount += 1;
@@ -3020,6 +4462,7 @@ async function* streamJsonSseResponse(
         .filter(Boolean);
       for (const payload of parseSseFramePayloads(dataLines)) {
         if (payload === "[DONE]") {
+          options?.onDone?.();
           return;
         }
         eventCount += 1;
@@ -3045,10 +4488,15 @@ async function* streamJsonSseResponse(
  */
 function withSanitizedMessages(request: ChatCompletionRequest): ChatCompletionRequest {
   const sanitized = sanitizeMessages(request.messages);
-  if (sanitized.length === request.messages.length && sanitized.every((m, i) => m === request.messages[i])) {
+  const tools = stripInternalToolEffectMetadataForProvider(request.tools);
+  if (
+    sanitized.length === request.messages.length &&
+    sanitized.every((m, i) => m === request.messages[i]) &&
+    tools === request.tools
+  ) {
     return request;
   }
-  return { ...request, messages: sanitized };
+  return { ...request, messages: sanitized, tools };
 }
 
 function buildOpenAiResponsesPayload(
@@ -3056,6 +4504,9 @@ function buildOpenAiResponsesPayload(
   model: string,
   provider: Pick<LlmProviderConfig, "providerId" | "apiStyle">,
 ): Record<string, unknown> {
+  if (provider.providerId.trim().toLowerCase() === "openai") {
+    validateOpenAiRequestCompatibility(request, model);
+  }
   const { instructions, input } = buildOpenAiResponsesInput(request.messages);
   const payload: Record<string, unknown> = {
     model,
@@ -3158,19 +4609,9 @@ async function collectOpenAiResponsesStreamCompletion(
     }
   }
 
-  return {
-    id: "response",
-    object: "chat.completion",
-    created: Math.floor(Date.now() / 1000),
-    model,
-    choices: [
-      {
-        index: 0,
-        message: { role: "assistant", content: outputText },
-        finish_reason: "stop",
-      },
-    ],
-  };
+  throw new Error(
+    `Responses stream for ${model} ended before response.completed${outputText ? ` after ${outputText.length} text characters` : ""}`,
+  );
 }
 
 function applyEstimatedCostToChatResponseWithSource(
@@ -3199,7 +4640,7 @@ function annotateChatResponseUsageCostSource(
   response: ChatCompletionResponse,
   source: "provider_reported" | "estimated",
 ): ChatCompletionResponse {
-  if (!isRecord(response.usage) || !hasUsageCost(response.usage) || hasUsageCostSource(response.usage)) {
+  if (!isRecord(response.usage) || !hasUsageCost(response.usage)) {
     return response;
   }
   return {
@@ -3215,7 +4656,7 @@ function annotateStreamChunkUsageCostSource(
   chunk: Record<string, unknown>,
   source: "provider_reported" | "estimated",
 ): Record<string, unknown> {
-  if (!isRecord(chunk.usage) || !hasUsageCost(chunk.usage) || hasUsageCostSource(chunk.usage)) {
+  if (!isRecord(chunk.usage) || !hasUsageCost(chunk.usage)) {
     return chunk;
   }
   return {
@@ -3234,10 +4675,6 @@ function hasUsageCost(usage: unknown): boolean {
   return readFiniteNumber(usage.cost_usd) !== undefined || readFiniteNumber(usage.total_cost_usd) !== undefined;
 }
 
-function hasUsageCostSource(usage: Record<string, unknown>): boolean {
-  return Boolean(firstNonEmptyString(usage.cost_source, usage.costSource));
-}
-
 function buildResponsesStreamFailureError(event: Record<string, unknown>): Error {
   const provider = readResponsesProviderFailure(event);
   const details = [provider?.code, provider?.message].filter((value): value is string => Boolean(value));
@@ -3245,6 +4682,103 @@ function buildResponsesStreamFailureError(event: Record<string, unknown>): Error
   const error = provider ? new Error(message, { cause: provider }) : new Error(message);
   if (provider) {
     (error as Error & { providerFailure?: ChatProviderFailureRecord }).providerFailure = provider;
+  }
+  const response = isRecord(event.response) ? event.response : undefined;
+  if (isRecord(response?.usage)) {
+    (error as Error & { providerUsage?: Record<string, unknown> }).providerUsage = response.usage;
+  }
+  const providerModel = firstNonEmptyString(response?.model);
+  if (providerModel) {
+    (error as Error & { providerModel?: string }).providerModel = providerModel;
+  }
+  return error;
+}
+
+function readProviderUsageFromError(error: unknown): Record<string, unknown> | undefined {
+  return error instanceof Error && isRecord((error as Error & { providerUsage?: unknown }).providerUsage)
+    ? (error as Error & { providerUsage: Record<string, unknown> }).providerUsage
+    : undefined;
+}
+
+function readProviderModelFromError(error: unknown): string | undefined {
+  return error instanceof Error
+    ? firstNonEmptyString((error as Error & { providerModel?: unknown }).providerModel)
+    : undefined;
+}
+
+function readProviderOwnedOutputCapFailureText(error: unknown): string | undefined {
+  if (!(error instanceof Error)) return undefined;
+  const providerFailure = (error as Error & { providerFailure?: unknown }).providerFailure;
+  if (!isRecord(providerFailure)) return undefined;
+  return extractProviderOwnedOutputCapErrorText(JSON.stringify({ error: providerFailure }));
+}
+
+function readOpenAiCompatibleStreamErrorText(event: Record<string, unknown>): string | undefined {
+  const eventType = firstNonEmptyString(event.type);
+  const rawError = event.error;
+  if (rawError === undefined && eventType !== "error") return undefined;
+  const providerError =
+    typeof rawError === "string"
+      ? rawError
+      : isRecord(rawError)
+        ? rawError
+        : {
+            ...(firstNonEmptyString(event.code) ? { code: firstNonEmptyString(event.code) } : {}),
+            ...(firstNonEmptyString(event.message) ? { message: firstNonEmptyString(event.message) } : {}),
+          };
+  return extractProviderOwnedOutputCapErrorText(JSON.stringify({ error: providerError }));
+}
+
+function createProviderStreamError(message: string): Error {
+  const error = new Error(message);
+  error.name = "ProviderStreamError";
+  return error;
+}
+
+function appendUniqueUsageEventIds(target: string[], dispatched: LlmTrackedJsonDispatch): void {
+  const seen = new Set(target);
+  for (const eventId of [
+    ...(dispatched.priorModelUsageEventIds ?? []),
+    ...(dispatched.usage ? [dispatched.usage.eventId] : []),
+  ]) {
+    if (seen.has(eventId)) continue;
+    target.push(eventId);
+    seen.add(eventId);
+  }
+}
+
+function observeProviderPayloadUsage(
+  observer: ModelUsageAttemptHandle | undefined,
+  providerUsage: unknown,
+  effectiveModelId: string | undefined,
+  input: { providerId?: string; model?: string },
+): void {
+  const priced = applyEstimatedCostToStreamChunkWithSource(
+    {
+      ...(providerUsage === undefined ? {} : { usage: providerUsage }),
+      ...(effectiveModelId ? { model: effectiveModelId } : {}),
+    },
+    input,
+  );
+  observeProviderUsageWithTrustedEstimate(observer, providerUsage, isRecord(priced.usage) ? priced.usage : undefined);
+  if (effectiveModelId) observer?.observeNormalized({ effectiveModelId });
+}
+
+function observeProviderFailureUsage(
+  observer: ModelUsageAttemptHandle | undefined,
+  error: unknown,
+  input: { providerId?: string; model?: string },
+): void {
+  observeProviderPayloadUsage(observer, readProviderUsageFromError(error), readProviderModelFromError(error), input);
+}
+
+function attachProviderUsageEvidence(error: Error, payload: Record<string, unknown> | undefined): Error {
+  if (isRecord(payload?.usage)) {
+    (error as Error & { providerUsage?: Record<string, unknown> }).providerUsage = payload.usage;
+  }
+  const providerModel = firstNonEmptyString(payload?.model);
+  if (providerModel) {
+    (error as Error & { providerModel?: string }).providerModel = providerModel;
   }
   return error;
 }
@@ -3632,7 +5166,7 @@ function toImageDataUrl(image: ImageAssetInput): string {
 async function adaptOpenAICodexImageResponse(
   response: Response,
   model: string,
-): Promise<ImageGenerationResponse["data"]> {
+): Promise<{ data: ImageGenerationResponse["data"]; usage?: Record<string, unknown>; model?: string }> {
   const body = await readBoundedResponseText(response, {
     maxBytes: MAX_CODEX_IMAGE_SSE_BYTES,
     timeoutMs: CODEX_IMAGE_RESPONSE_READ_TIMEOUT_MS,
@@ -3641,38 +5175,60 @@ async function adaptOpenAICodexImageResponse(
   const events = parseOpenAICodexImageEvents(body);
   const failure = events.find((event) => event.type === "response.failed" || event.type === "error");
   if (failure) {
-    const error = isRecord(failure.error) ? failure.error : undefined;
+    const failureResponse = isRecord(failure.response) ? failure.response : failure;
+    const error = isRecord(failure.error)
+      ? failure.error
+      : isRecord(failureResponse.error)
+        ? failureResponse.error
+        : undefined;
     const message =
       (typeof error?.message === "string" ? error.message : undefined) ??
       (typeof failure.message === "string" ? failure.message : undefined) ??
       "OpenAI Codex image generation failed";
-    throw new Error(message);
+    throw attachProviderUsageEvidence(new Error(message), failureResponse);
+  }
+  const completedEvent = events.find((event) => event.type === "response.completed" && isRecord(event.response));
+  if (!completedEvent || !isRecord(completedEvent.response)) {
+    throw new Error(`OpenAI Codex image generation for ${model} ended before response.completed.`);
   }
 
-  const outputItemImages = events
-    .filter((event) => {
-      const item = isRecord(event.item) ? event.item : undefined;
-      return event.type === "response.output_item.done" && item?.type === "image_generation_call";
-    })
-    .map((event) => (isRecord(event.item) ? toOpenAICodexImageResult(event.item) : undefined))
-    .filter((item): item is ImageGenerationResponse["data"][number] => Boolean(item));
+  try {
+    const outputItemImages = events
+      .filter((event) => {
+        const item = isRecord(event.item) ? event.item : undefined;
+        return event.type === "response.output_item.done" && item?.type === "image_generation_call";
+      })
+      .map((event) => (isRecord(event.item) ? toOpenAICodexImageResult(event.item) : undefined))
+      .filter((item): item is ImageGenerationResponse["data"][number] => Boolean(item));
 
-  const completedImages = events
-    .filter((event) => event.type === "response.completed" && isRecord(event.response))
-    .flatMap((event) => {
-      const responsePayload = event.response as Record<string, unknown>;
-      const output = Array.isArray(responsePayload.output) ? responsePayload.output : [];
-      return output
-        .filter((item): item is Record<string, unknown> => isRecord(item) && item.type === "image_generation_call")
-        .map(toOpenAICodexImageResult)
-        .filter((item): item is ImageGenerationResponse["data"][number] => Boolean(item));
-    });
+    const completedImages = events
+      .filter((event) => event.type === "response.completed" && isRecord(event.response))
+      .flatMap((event) => {
+        const responsePayload = event.response as Record<string, unknown>;
+        const output = Array.isArray(responsePayload.output) ? responsePayload.output : [];
+        return output
+          .filter((item): item is Record<string, unknown> => isRecord(item) && item.type === "image_generation_call")
+          .map(toOpenAICodexImageResult)
+          .filter((item): item is ImageGenerationResponse["data"][number] => Boolean(item));
+      });
 
-  const results = outputItemImages.length > 0 ? outputItemImages : completedImages;
-  if (results.length === 0) {
-    throw new Error(`OpenAI Codex image generation returned no images for ${model}.`);
+    const results = outputItemImages.length > 0 ? outputItemImages : completedImages;
+    if (results.length === 0) {
+      throw new Error(`OpenAI Codex image generation returned no images for ${model}.`);
+    }
+    return {
+      data: results.slice(0, 4),
+      ...(isRecord(completedEvent.response.usage) ? { usage: completedEvent.response.usage } : {}),
+      ...(firstNonEmptyString(completedEvent.response.model)
+        ? { model: firstNonEmptyString(completedEvent.response.model) }
+        : {}),
+    };
+  } catch (error) {
+    throw attachProviderUsageEvidence(
+      error instanceof Error ? error : new Error(String(error)),
+      completedEvent.response,
+    );
   }
-  return results.slice(0, 4);
 }
 
 function parseOpenAICodexImageEvents(body: string): Array<Record<string, unknown>> {
@@ -4023,17 +5579,7 @@ function modelRequiresReasoningContentForToolCalls(model: string): boolean {
   return normalized.includes("kimi") || normalized.includes("moonshot");
 }
 
-function inferProviderCapabilities(provider: LlmProviderConfig): {
-  vision: boolean;
-  audio: boolean;
-  video: boolean;
-  toolCalling: boolean;
-  jsonMode: boolean;
-  webSearch?: boolean;
-  reasoning?: boolean;
-  imageGenerate?: boolean;
-  imageEdit?: boolean;
-} {
+function inferProviderCapabilities(provider: LlmProviderConfig): LlmProviderCapabilities {
   const model = provider.defaultModel.toLowerCase();
   const base = provider.baseUrl.toLowerCase();
   const hasVision =
@@ -4074,6 +5620,7 @@ function inferProviderCapabilities(provider: LlmProviderConfig): {
     jsonMode: hasJsonMode,
     webSearch: hasWebSearch,
     reasoning: hasReasoning,
+    reasoningEfforts: provider.providerId.trim().toLowerCase() === "vertex" ? ["low", "medium", "high"] : undefined,
     imageGenerate: supportsImageGenerationProvider(provider.providerId),
     imageEdit: supportsImageGenerationProvider(provider.providerId),
     ...(provider.capabilities ?? {}),
@@ -4091,6 +5638,9 @@ function defaultAuthModeForProvider(providerId: string): LlmProviderConfig["auth
   }
   if (normalized === "claude-code") {
     return "claude-code-oauth";
+  }
+  if (normalized === "vertex") {
+    return "google-adc";
   }
   return undefined;
 }
@@ -4117,12 +5667,21 @@ function applyProviderSpecificChatOptions(input: {
   model: string;
   request: ChatCompletionRequest;
 }): void {
-  if (input.providerId !== "openai") {
+  const providerId = input.providerId.trim().toLowerCase();
+  if (providerId !== "openai" && providerId !== "vertex" && providerId !== "fireworks") {
     return;
   }
-  validateOpenAiChatRequestCompatibility(input.request, input.model);
-  if (input.request.reasoning?.effort) {
+  if (providerId === "openai") {
+    validateOpenAiRequestCompatibility(input.request, input.model);
+  }
+  if (input.request.reasoning?.effort && (providerId === "openai" || input.request.reasoning.effort !== "none")) {
     input.payload.reasoning_effort = input.request.reasoning.effort;
+  }
+  if (providerId === "fireworks") {
+    input.payload.context_length_exceeded_behavior = "error";
+  }
+  if (providerId !== "openai") {
+    return;
   }
   if (input.request.verbosity) {
     input.payload.verbosity = input.request.verbosity;
@@ -4135,7 +5694,7 @@ function applyProviderSpecificChatOptions(input: {
   }
 }
 
-function validateOpenAiChatRequestCompatibility(request: ChatCompletionRequest, model: string): void {
+function validateOpenAiRequestCompatibility(request: ChatCompletionRequest, model: string): void {
   const hasSamplingControls = request.temperature !== undefined || request.top_p !== undefined;
   if (!hasSamplingControls) {
     return;

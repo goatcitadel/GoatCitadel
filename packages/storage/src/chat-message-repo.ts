@@ -1,9 +1,13 @@
+/* eslint-disable max-lines -- This established owner exceeds the line limit; decomposition belongs in a separate behavior-preserving tranche. */
 import { randomUUID } from "node:crypto";
 
 import type { DatabaseClient } from "./db.js";
 import type { ChatInputPart, ChatMessageRecord, ChatMessageRole } from "@goatcitadel/contracts";
 import { loadAndSanitize, type QuarantineEntry } from "./load-and-sanitize.js";
 import { parseJsonArray } from "./state-validators.js";
+
+const MAX_SEARCH_QUERY_CHARS = 512;
+const MAX_SEARCH_QUERY_TOKENS = 64;
 
 interface ChatMessageRow {
   seq: number;
@@ -31,8 +35,10 @@ export interface ChatMessageRepositoryOptions {
 
 /** A single ranked FTS hit plus a small surrounding context window. */
 export interface ChatMessageSearchHit {
+  workspaceId: string;
   messageId: string;
   sessionId: string;
+  sequence: number;
   role: ChatMessageRole;
   content: string;
   timestamp: string;
@@ -44,6 +50,7 @@ export interface ChatMessageSearchHit {
 
 export interface ChatMessageSearchContextEntry {
   messageId: string;
+  sequence: number;
   role: ChatMessageRole;
   content: string;
   timestamp: string;
@@ -52,8 +59,12 @@ export interface ChatMessageSearchContextEntry {
 }
 
 export interface SearchMessagesOptions {
-  /** Restrict the search to a single session. Omit to search across all sessions. */
+  /** Authoritative workspace boundary. Cross-workspace search is never supported. */
+  workspaceId: string;
+  /** Restrict the search to a single session. Omit to search across this workspace. */
   sessionId?: string;
+  /** Include sessions hidden from history. Defaults to false. */
+  includeHidden?: boolean;
   /** Maximum number of ranked hits to return (clamped to [1, 50]). */
   limit?: number;
   /** Number of neighbouring messages to include on each side of a hit (clamped to [0, 10]). */
@@ -62,12 +73,58 @@ export interface SearchMessagesOptions {
 
 interface ChatMessageSearchRow {
   seq: number;
+  workspace_id: string;
+  include_in_history: number;
   message_id: string;
   session_id: string;
   role: ChatMessageRole;
   content: string;
   timestamp: string;
   score: number;
+}
+
+export interface ChatMessagePage {
+  items: ChatMessageRecord[];
+  cursorState: "start" | "valid" | "offset" | "stale";
+  nextCursor?: string;
+  hasOlder: boolean;
+  snapshotMaxSequence?: number;
+  snapshotMessageCount?: number;
+  offset?: number;
+  nextOffset?: number;
+}
+
+export interface ChatMessageAnchorIdentity {
+  workspaceId: string;
+  sessionId: string;
+  messageId: string;
+  sequence: number;
+}
+
+export interface ChatMessageAnchoredWindowEntry {
+  sequence: number;
+  message: ChatMessageRecord;
+  isAnchor: boolean;
+}
+
+export interface ChatMessageAnchoredWindow {
+  anchor: ChatMessageAnchorIdentity & {
+    state: "found" | "unavailable" | "identity_mismatch";
+    unavailableReason?: "missing_deleted_or_compacted";
+  };
+  items: ChatMessageAnchoredWindowEntry[];
+  snapshotMaxSequence?: number;
+  hasOlder: boolean;
+  hasNewer: boolean;
+}
+
+export interface ChatMessageHistoryContinuationPage {
+  direction: "older" | "newer";
+  cursorState: "valid" | "stale";
+  items: ChatMessageAnchoredWindowEntry[];
+  snapshotMaxSequence: number;
+  nextCursor?: { messageId: string; sequence: number; snapshotMaxSequence: number };
+  hasMore: boolean;
 }
 
 /**
@@ -101,12 +158,30 @@ export class ChatMessageRepository {
   private readonly upsertStmt;
   private readonly countStmt;
   private readonly listLatestStmt;
+  private readonly listAtOrBeforeSeqStmt;
+  private readonly listAtOrBeforeSeqOffsetStmt;
   private readonly listBeforeSeqStmt;
   private readonly getStmt;
   private readonly getCursorStmt;
   private readonly searchStmt;
   private readonly searchScopedStmt;
-  private readonly contextWindowStmt;
+  private readonly contextBeforeStmt;
+  private readonly contextAfterStmt;
+  private readonly sessionWorkspaceStmt;
+  private readonly anchorExactStmt;
+  private readonly anchorMessageIdentityStmt;
+  private readonly anchorSequenceIdentityStmt;
+  private readonly sessionHighWaterStmt;
+  private readonly sessionSnapshotCountStmt;
+  private readonly authorizedCursorStmt;
+  private readonly authorizedListAtOrBeforeSeqStmt;
+  private readonly authorizedListAtOrBeforeSeqOffsetStmt;
+  private readonly authorizedListBeforeSeqStmt;
+  private readonly authorizedListAfterSeqStmt;
+  private readonly authorizedSessionHighWaterStmt;
+  private readonly authorizedSessionSnapshotCountStmt;
+  private readonly anchoredBeforeStmt;
+  private readonly anchoredAfterStmt;
   private readonly deleteByMessageIdsStmtCache = new Map<number, ReturnType<DatabaseClient["prepare"]>>();
   private readonly listByMessageIdsStmtCache = new Map<number, ReturnType<DatabaseClient["prepare"]>>();
 
@@ -148,6 +223,20 @@ export class ChatMessageRepository {
       ORDER BY seq DESC
       LIMIT ?
     `);
+    this.listAtOrBeforeSeqStmt = db.prepare(`
+      SELECT *
+      FROM chat_messages
+      WHERE session_id = ? AND seq <= ?
+      ORDER BY seq DESC
+      LIMIT ?
+    `);
+    this.listAtOrBeforeSeqOffsetStmt = db.prepare(`
+      SELECT *
+      FROM chat_messages
+      WHERE session_id = ? AND seq <= ?
+      ORDER BY seq DESC
+      LIMIT ? OFFSET ?
+    `);
     this.listBeforeSeqStmt = db.prepare(`
       SELECT *
       FROM chat_messages
@@ -169,11 +258,137 @@ export class ChatMessageRepository {
     `);
     this.searchStmt = db.prepare(buildSearchSql(db.dialect, false));
     this.searchScopedStmt = db.prepare(buildSearchSql(db.dialect, true));
-    this.contextWindowStmt = db.prepare(`
-      SELECT message_id, role, content, timestamp, seq
+    this.contextBeforeStmt = db.prepare(`
+      SELECT m.message_id, m.role, m.content, m.timestamp, m.seq
+      FROM chat_messages AS m
+      INNER JOIN chat_session_meta AS meta ON meta.session_id = m.session_id
+      WHERE meta.workspace_id = ?
+        AND (? <> 0 OR meta.include_in_history <> 0)
+        AND m.session_id = ?
+        AND m.seq < ?
+      ORDER BY m.seq DESC
+      LIMIT ?
+    `);
+    this.contextAfterStmt = db.prepare(`
+      SELECT m.message_id, m.role, m.content, m.timestamp, m.seq
+      FROM chat_messages AS m
+      INNER JOIN chat_session_meta AS meta ON meta.session_id = m.session_id
+      WHERE meta.workspace_id = ?
+        AND (? <> 0 OR meta.include_in_history <> 0)
+        AND m.session_id = ?
+        AND m.seq > ?
+      ORDER BY m.seq ASC
+      LIMIT ?
+    `);
+    this.sessionWorkspaceStmt = db.prepare(`
+      SELECT workspace_id
+      FROM chat_session_meta
+      WHERE session_id = ?
+      LIMIT 1
+    `);
+    this.anchorExactStmt = db.prepare(`
+      SELECT cm.*
+      FROM chat_messages AS cm
+      INNER JOIN chat_session_meta AS meta ON meta.session_id = cm.session_id
+      WHERE meta.workspace_id = ?
+        AND cm.session_id = ?
+        AND cm.message_id = ?
+        AND cm.seq = ?
+      LIMIT 1
+    `);
+    this.anchorMessageIdentityStmt = db.prepare(`
+      SELECT cm.seq
+      FROM chat_messages AS cm
+      INNER JOIN chat_session_meta AS meta ON meta.session_id = cm.session_id
+      WHERE meta.workspace_id = ? AND cm.session_id = ? AND cm.message_id = ?
+      LIMIT 1
+    `);
+    this.anchorSequenceIdentityStmt = db.prepare(`
+      SELECT cm.message_id
+      FROM chat_messages AS cm
+      INNER JOIN chat_session_meta AS meta ON meta.session_id = cm.session_id
+      WHERE meta.workspace_id = ? AND cm.session_id = ? AND cm.seq = ?
+      LIMIT 1
+    `);
+    this.sessionHighWaterStmt = db.prepare(`
+      SELECT MAX(seq) AS seq
       FROM chat_messages
-      WHERE session_id = ? AND seq >= ? AND seq <= ?
-      ORDER BY seq ASC
+      WHERE session_id = ?
+    `);
+    this.sessionSnapshotCountStmt = db.prepare(`
+      SELECT COUNT(1) AS count
+      FROM chat_messages
+      WHERE session_id = ? AND seq <= ?
+    `);
+    this.anchoredBeforeStmt = db.prepare(`
+      SELECT cm.*
+      FROM chat_messages AS cm
+      INNER JOIN chat_session_meta AS meta ON meta.session_id = cm.session_id
+      WHERE meta.workspace_id = ? AND cm.session_id = ? AND cm.seq < ?
+      ORDER BY cm.seq DESC
+      LIMIT ?
+    `);
+    this.anchoredAfterStmt = db.prepare(`
+      SELECT cm.*
+      FROM chat_messages AS cm
+      INNER JOIN chat_session_meta AS meta ON meta.session_id = cm.session_id
+      WHERE meta.workspace_id = ? AND cm.session_id = ? AND cm.seq > ? AND cm.seq <= ?
+      ORDER BY cm.seq ASC
+      LIMIT ?
+    `);
+    this.authorizedCursorStmt = db.prepare(`
+      SELECT cm.seq
+      FROM chat_messages AS cm
+      INNER JOIN chat_session_meta AS meta ON meta.session_id = cm.session_id
+      WHERE meta.workspace_id = ? AND cm.session_id = ? AND cm.message_id = ?
+      LIMIT 1
+    `);
+    this.authorizedListAtOrBeforeSeqStmt = db.prepare(`
+      SELECT cm.*
+      FROM chat_messages AS cm
+      INNER JOIN chat_session_meta AS meta ON meta.session_id = cm.session_id
+      WHERE meta.workspace_id = ? AND cm.session_id = ? AND cm.seq <= ?
+      ORDER BY cm.seq DESC
+      LIMIT ?
+    `);
+    this.authorizedListAtOrBeforeSeqOffsetStmt = db.prepare(`
+      SELECT cm.*
+      FROM chat_messages AS cm
+      INNER JOIN chat_session_meta AS meta ON meta.session_id = cm.session_id
+      WHERE meta.workspace_id = ? AND cm.session_id = ? AND cm.seq <= ?
+      ORDER BY cm.seq DESC
+      LIMIT ? OFFSET ?
+    `);
+    this.authorizedListBeforeSeqStmt = db.prepare(`
+      SELECT cm.*
+      FROM chat_messages AS cm
+      INNER JOIN chat_session_meta AS meta ON meta.session_id = cm.session_id
+      WHERE meta.workspace_id = ? AND cm.session_id = ? AND cm.seq < ?
+      ORDER BY cm.seq DESC
+      LIMIT ?
+    `);
+    this.authorizedListAfterSeqStmt = db.prepare(`
+      SELECT cm.*
+      FROM chat_messages AS cm
+      INNER JOIN chat_session_meta AS meta ON meta.session_id = cm.session_id
+      WHERE meta.workspace_id = ?
+        AND cm.session_id = ?
+        AND cm.seq > ?
+        AND cm.seq <= ?
+      ORDER BY cm.seq ASC
+      LIMIT ?
+    `);
+    this.authorizedSessionHighWaterStmt = db.prepare(`
+      SELECT MAX(cm.seq) AS seq
+      FROM chat_messages AS cm
+      INNER JOIN chat_session_meta AS meta ON meta.session_id = cm.session_id
+      WHERE meta.workspace_id = ? AND cm.session_id = ?
+    `);
+    this.authorizedSessionSnapshotCountStmt = db.prepare(`
+      SELECT COUNT(1) AS count
+      FROM chat_messages AS cm
+      INNER JOIN chat_session_meta AS meta ON meta.session_id = cm.session_id
+      WHERE meta.workspace_id = ? AND cm.session_id = ? AND cm.seq <= ?
     `);
   }
 
@@ -185,7 +400,7 @@ export class ChatMessageRepository {
    * {@link buildSafeFtsMatchQuery} so arbitrary punctuation/operators never raise an
    * FTS syntax error. Returns `[]` for an empty/no-token query or when nothing matches.
    */
-  public searchMessages(query: string, options: SearchMessagesOptions = {}): ChatMessageSearchHit[] {
+  public searchMessages(query: string, options: SearchMessagesOptions): ChatMessageSearchHit[] {
     const matchExpression =
       this.db.dialect === "postgres" ? buildSafePostgresSearchQuery(query) : buildSafeFtsMatchQuery(query);
     if (matchExpression === null) {
@@ -193,28 +408,48 @@ export class ChatMessageRepository {
     }
     const limit = clampSearchInt(options.limit, 10, 1, 50);
     const contextRadius = clampSearchInt(options.contextRadius, 2, 0, 10);
+    const workspaceId = options.workspaceId.trim();
+    if (!workspaceId) {
+      return [];
+    }
     const sessionId = options.sessionId?.trim();
+    const includeHidden = options.includeHidden === true ? 1 : 0;
 
     const rows = sessionId
-      ? toSearchRows(this.searchScopedStmt.all(matchExpression, sessionId, limit))
-      : toSearchRows(this.searchStmt.all(matchExpression, limit));
+      ? toSearchRows(this.searchScopedStmt.all(matchExpression, workspaceId, includeHidden, sessionId, limit))
+      : toSearchRows(this.searchStmt.all(matchExpression, workspaceId, includeHidden, limit));
 
-    return rows.map((row) => ({
-      messageId: row.message_id,
-      sessionId: row.session_id,
-      role: row.role,
-      content: row.content,
-      timestamp: row.timestamp,
-      score: row.score,
-      context: this.loadContextWindow(row, contextRadius),
-    }));
+    return rows
+      .filter(
+        (row) =>
+          row.workspace_id === workspaceId &&
+          (!sessionId || row.session_id === sessionId) &&
+          (includeHidden !== 0 || row.include_in_history !== 0),
+      )
+      .map((row) => ({
+        workspaceId: row.workspace_id,
+        messageId: row.message_id,
+        sessionId: row.session_id,
+        sequence: row.seq,
+        role: row.role,
+        content: row.content,
+        timestamp: row.timestamp,
+        score: row.score,
+        context: this.loadContextWindow(row, contextRadius, workspaceId, includeHidden),
+      }));
   }
 
-  private loadContextWindow(row: ChatMessageSearchRow, contextRadius: number): ChatMessageSearchContextEntry[] {
+  private loadContextWindow(
+    row: ChatMessageSearchRow,
+    contextRadius: number,
+    workspaceId: string,
+    includeHidden: number,
+  ): ChatMessageSearchContextEntry[] {
     if (contextRadius <= 0) {
       return [
         {
           messageId: row.message_id,
+          sequence: row.seq,
           role: row.role,
           content: row.content,
           timestamp: row.timestamp,
@@ -222,11 +457,26 @@ export class ChatMessageRepository {
         },
       ];
     }
-    const windowRows = toContextRows(
-      this.contextWindowStmt.all(row.session_id, row.seq - contextRadius, row.seq + contextRadius),
+    const beforeRows = toContextRows(
+      this.contextBeforeStmt.all(workspaceId, includeHidden, row.session_id, row.seq, contextRadius),
+    ).reverse();
+    const afterRows = toContextRows(
+      this.contextAfterStmt.all(workspaceId, includeHidden, row.session_id, row.seq, contextRadius),
     );
+    const windowRows: ChatMessageContextRow[] = [
+      ...beforeRows,
+      {
+        message_id: row.message_id,
+        role: row.role,
+        content: row.content,
+        timestamp: row.timestamp,
+        seq: row.seq,
+      },
+      ...afterRows,
+    ];
     return windowRows.map((windowRow) => ({
       messageId: windowRow.message_id,
+      sequence: windowRow.seq,
       role: windowRow.role,
       content: windowRow.content,
       timestamp: windowRow.timestamp,
@@ -395,11 +645,348 @@ export class ChatMessageRepository {
           if (typeof cursorRow?.seq === "number") {
             return toChatMessageRows(this.listBeforeSeqStmt.all(sessionId, cursorRow.seq, safeLimit));
           }
-          return toChatMessageRows(this.listLatestStmt.all(sessionId, safeLimit));
+          return [];
         })()
       : toChatMessageRows(this.listLatestStmt.all(sessionId, safeLimit));
     rows.reverse();
     return rows.map((row) => this.mapRow(row));
+  }
+
+  /**
+   * Stable keyset page bounded by an authoritative workspace/session identity.
+   * A stale cursor is explicit and never degrades to the newest page.
+   */
+  public listPage(input: { workspaceId: string; sessionId: string; limit?: number; cursor?: string }): ChatMessagePage {
+    const workspaceId = input.workspaceId.trim();
+    const sessionId = input.sessionId.trim();
+    const safeLimit = Math.max(1, Math.min(1000, Math.floor(input.limit ?? 200)));
+    if (!workspaceId || !sessionId || this.resolveSessionWorkspace(sessionId) !== workspaceId) {
+      return { items: [], cursorState: input.cursor ? "stale" : "start", hasOlder: false };
+    }
+
+    return this.db.transaction("deferred", () => {
+      const snapshotMaxSequence = toCursorRow(this.authorizedSessionHighWaterStmt.get(workspaceId, sessionId))?.seq;
+      if (input.cursor) {
+        const cursorRow = toCursorRow(this.authorizedCursorStmt.get(workspaceId, sessionId, input.cursor));
+        if (cursorRow?.seq === undefined) {
+          return {
+            items: [],
+            cursorState: "stale" as const,
+            hasOlder: false,
+            snapshotMaxSequence,
+          };
+        }
+        const rows = toChatMessageRows(
+          this.authorizedListBeforeSeqStmt.all(workspaceId, sessionId, cursorRow.seq, safeLimit + 1),
+        );
+        return this.buildPage(rows, safeLimit, "valid", snapshotMaxSequence);
+      }
+      const rows =
+        snapshotMaxSequence === undefined
+          ? []
+          : toChatMessageRows(
+              this.authorizedListAtOrBeforeSeqStmt.all(workspaceId, sessionId, snapshotMaxSequence, safeLimit + 1),
+            );
+      return this.buildPage(rows, safeLimit, "start", snapshotMaxSequence);
+    });
+  }
+
+  /**
+   * Legacy numeric paging frozen to an explicit sequence high-water mark.
+   * Page zero captures the mark. Every later offset must replay it, otherwise
+   * the request is stale rather than silently shifting under concurrent appends.
+   */
+  public listOffsetPage(input: {
+    workspaceId: string;
+    sessionId: string;
+    limit?: number;
+    offset?: number;
+    snapshotMaxSequence?: number;
+    snapshotMessageCount?: number;
+  }): ChatMessagePage {
+    const workspaceId = input.workspaceId.trim();
+    const sessionId = input.sessionId.trim();
+    const safeLimit = Math.max(1, Math.min(1000, Math.floor(input.limit ?? 200)));
+    const offset = Math.max(0, Math.min(1_000_000, Math.floor(input.offset ?? 0)));
+    if (!workspaceId || !sessionId || this.resolveSessionWorkspace(sessionId) !== workspaceId) {
+      return { items: [], cursorState: "stale", hasOlder: false, offset };
+    }
+    const requestedSnapshot = input.snapshotMaxSequence;
+    if (requestedSnapshot !== undefined && (!Number.isSafeInteger(requestedSnapshot) || requestedSnapshot < 1)) {
+      return { items: [], cursorState: "stale", hasOlder: false, offset };
+    }
+    if (offset > 0 && (requestedSnapshot === undefined || input.snapshotMessageCount === undefined)) {
+      return { items: [], cursorState: "stale", hasOlder: false, offset };
+    }
+
+    return this.db.transaction("deferred", () => {
+      const observedHighWater = toCursorRow(this.authorizedSessionHighWaterStmt.get(workspaceId, sessionId))?.seq;
+      if (
+        observedHighWater === undefined ||
+        (requestedSnapshot !== undefined && requestedSnapshot > observedHighWater)
+      ) {
+        return { items: [], cursorState: "stale" as const, hasOlder: false, offset };
+      }
+      const snapshotMaxSequence = requestedSnapshot ?? observedHighWater;
+      const observedSnapshotCount = Number(
+        toCountRow(this.authorizedSessionSnapshotCountStmt.get(workspaceId, sessionId, snapshotMaxSequence))?.count ??
+          0,
+      );
+      if (
+        input.snapshotMessageCount !== undefined &&
+        (!Number.isSafeInteger(input.snapshotMessageCount) ||
+          input.snapshotMessageCount < 0 ||
+          input.snapshotMessageCount !== observedSnapshotCount)
+      ) {
+        return {
+          items: [],
+          cursorState: "stale" as const,
+          hasOlder: false,
+          offset,
+          snapshotMaxSequence,
+          snapshotMessageCount: observedSnapshotCount,
+        };
+      }
+      const snapshotMessageCount = input.snapshotMessageCount ?? observedSnapshotCount;
+      const rows = toChatMessageRows(
+        this.authorizedListAtOrBeforeSeqOffsetStmt.all(
+          workspaceId,
+          sessionId,
+          snapshotMaxSequence,
+          safeLimit + 1,
+          offset,
+        ),
+      );
+      const hasOlder = rows.length > safeLimit;
+      const selected = rows.slice(0, safeLimit);
+      const nextOffset = hasOlder ? offset + selected.length : undefined;
+      selected.reverse();
+      return {
+        items: selected.map((row) => this.mapRow(row)),
+        cursorState: "offset" as const,
+        hasOlder,
+        snapshotMaxSequence,
+        snapshotMessageCount,
+        offset,
+        nextOffset,
+      };
+    });
+  }
+
+  /**
+   * Resolve an exact historical anchor and a balanced, bounded context window.
+   * Global sequence gaps are intentionally ignored: neighbours are selected by
+   * per-session ordering, so messages interleaved from other sessions cannot
+   * under-fill the result.
+   */
+  public readAnchoredWindow(anchor: ChatMessageAnchorIdentity, limit = 21): ChatMessageAnchoredWindow {
+    const normalized = {
+      workspaceId: anchor.workspaceId.trim(),
+      sessionId: anchor.sessionId.trim(),
+      messageId: anchor.messageId.trim(),
+      sequence: Math.floor(anchor.sequence),
+    };
+    const empty = (state: "unavailable" | "identity_mismatch"): ChatMessageAnchoredWindow => ({
+      anchor: {
+        ...normalized,
+        state,
+        ...(state === "unavailable" ? { unavailableReason: "missing_deleted_or_compacted" as const } : {}),
+      },
+      items: [],
+      hasOlder: false,
+      hasNewer: false,
+    });
+    if (
+      !normalized.workspaceId ||
+      !normalized.sessionId ||
+      !normalized.messageId ||
+      !Number.isSafeInteger(normalized.sequence) ||
+      normalized.sequence < 1
+    ) {
+      return empty("identity_mismatch");
+    }
+    if (this.resolveSessionWorkspace(normalized.sessionId) !== normalized.workspaceId) {
+      return empty("identity_mismatch");
+    }
+
+    return this.db.transaction("deferred", () => {
+      const anchorRow = toChatMessageRow(
+        this.anchorExactStmt.get(
+          normalized.workspaceId,
+          normalized.sessionId,
+          normalized.messageId,
+          normalized.sequence,
+        ),
+      );
+      if (!anchorRow) {
+        const messageIdentity = toCursorRow(
+          this.anchorMessageIdentityStmt.get(normalized.workspaceId, normalized.sessionId, normalized.messageId),
+        )?.seq;
+        const sequenceIdentity = toMessageIdentityRow(
+          this.anchorSequenceIdentityStmt.get(normalized.workspaceId, normalized.sessionId, normalized.sequence),
+        )?.messageId;
+        return empty(
+          messageIdentity !== undefined || sequenceIdentity !== undefined ? "identity_mismatch" : "unavailable",
+        );
+      }
+
+      const snapshotMaxSequence =
+        toCursorRow(this.authorizedSessionHighWaterStmt.get(normalized.workspaceId, normalized.sessionId))?.seq ??
+        normalized.sequence;
+      const safeLimit = Math.max(1, Math.min(101, Math.floor(limit)));
+      const neighborBudget = safeLimit - 1;
+      const rawBefore = toChatMessageRows(
+        this.anchoredBeforeStmt.all(
+          normalized.workspaceId,
+          normalized.sessionId,
+          normalized.sequence,
+          neighborBudget + 1,
+        ),
+      );
+      const rawAfter = toChatMessageRows(
+        this.anchoredAfterStmt.all(
+          normalized.workspaceId,
+          normalized.sessionId,
+          normalized.sequence,
+          snapshotMaxSequence,
+          neighborBudget + 1,
+        ),
+      );
+      let beforeCount = Math.floor(neighborBudget / 2);
+      let afterCount = neighborBudget - beforeCount;
+      beforeCount = Math.min(beforeCount, rawBefore.length);
+      afterCount = Math.min(afterCount, rawAfter.length);
+      let remaining = neighborBudget - beforeCount - afterCount;
+      if (remaining > 0) {
+        const beforeExtra = Math.min(remaining, rawBefore.length - beforeCount);
+        beforeCount += beforeExtra;
+        remaining -= beforeExtra;
+      }
+      if (remaining > 0) {
+        afterCount += Math.min(remaining, rawAfter.length - afterCount);
+      }
+      const before = rawBefore.slice(0, beforeCount).reverse();
+      const after = rawAfter.slice(0, afterCount);
+      return {
+        anchor: { ...normalized, state: "found" as const },
+        items: [
+          ...before.map((row) => ({ sequence: row.seq, message: this.mapRow(row), isAnchor: false })),
+          { sequence: anchorRow.seq, message: this.mapRow(anchorRow), isAnchor: true },
+          ...after.map((row) => ({ sequence: row.seq, message: this.mapRow(row), isAnchor: false })),
+        ],
+        snapshotMaxSequence,
+        hasOlder: rawBefore.length > beforeCount,
+        hasNewer: rawAfter.length > afterCount,
+      };
+    });
+  }
+
+  /**
+   * Page away from an exact anchored-window boundary using an immutable sequence
+   * high-water mark. The boundary row must still exist with the same identity;
+   * otherwise the cursor is stale and no latest-page fallback is attempted.
+   */
+  public readHistoryContinuation(input: {
+    workspaceId: string;
+    sessionId: string;
+    direction: "older" | "newer";
+    cursorMessageId: string;
+    cursorSequence: number;
+    snapshotMaxSequence: number;
+    limit?: number;
+  }): ChatMessageHistoryContinuationPage {
+    const workspaceId = input.workspaceId.trim();
+    const sessionId = input.sessionId.trim();
+    const cursorMessageId = input.cursorMessageId.trim();
+    const cursorSequence = Math.floor(input.cursorSequence);
+    const snapshotMaxSequence = Math.floor(input.snapshotMaxSequence);
+    const safeLimit = Math.max(1, Math.min(101, Math.floor(input.limit ?? 21)));
+    const stale = (): ChatMessageHistoryContinuationPage => ({
+      direction: input.direction,
+      cursorState: "stale",
+      items: [],
+      snapshotMaxSequence,
+      hasMore: false,
+    });
+    if (
+      !workspaceId ||
+      !sessionId ||
+      !cursorMessageId ||
+      !Number.isSafeInteger(cursorSequence) ||
+      cursorSequence < 1 ||
+      !Number.isSafeInteger(snapshotMaxSequence) ||
+      snapshotMaxSequence < cursorSequence ||
+      this.resolveSessionWorkspace(sessionId) !== workspaceId
+    ) {
+      return stale();
+    }
+
+    return this.db.transaction("deferred", () => {
+      const cursor = toCursorRow(this.authorizedCursorStmt.get(workspaceId, sessionId, cursorMessageId))?.seq;
+      if (cursor !== cursorSequence) {
+        return stale();
+      }
+      const rows = toChatMessageRows(
+        input.direction === "older"
+          ? this.authorizedListBeforeSeqStmt.all(workspaceId, sessionId, cursorSequence, safeLimit + 1)
+          : this.authorizedListAfterSeqStmt.all(
+              workspaceId,
+              sessionId,
+              cursorSequence,
+              snapshotMaxSequence,
+              safeLimit + 1,
+            ),
+      );
+      const hasMore = rows.length > safeLimit;
+      const selected = rows.slice(0, safeLimit);
+      if (input.direction === "older") {
+        selected.reverse();
+      }
+      const boundary = input.direction === "older" ? selected.at(0) : selected.at(-1);
+      return {
+        direction: input.direction,
+        cursorState: "valid" as const,
+        items: selected.map((row) => ({
+          sequence: row.seq,
+          message: this.mapRow(row),
+          isAnchor: false,
+        })),
+        snapshotMaxSequence,
+        ...(hasMore && boundary
+          ? {
+              nextCursor: {
+                messageId: boundary.message_id,
+                sequence: boundary.seq,
+                snapshotMaxSequence,
+              },
+            }
+          : {}),
+        hasMore,
+      };
+    });
+  }
+
+  private resolveSessionWorkspace(sessionId: string): string | undefined {
+    return toWorkspaceRow(this.sessionWorkspaceStmt.get(sessionId))?.workspaceId;
+  }
+
+  private buildPage(
+    rowsDescending: ChatMessageRow[],
+    limit: number,
+    cursorState: "start" | "valid",
+    snapshotMaxSequence?: number,
+  ): ChatMessagePage {
+    const hasOlder = rowsDescending.length > limit;
+    const selected = rowsDescending.slice(0, limit);
+    const nextCursor = hasOlder ? selected.at(-1)?.message_id : undefined;
+    selected.reverse();
+    return {
+      items: selected.map((row) => this.mapRow(row)),
+      cursorState,
+      nextCursor,
+      hasOlder,
+      snapshotMaxSequence,
+    };
   }
 
   private mapRow(row: ChatMessageRow): ChatMessageRecord {
@@ -603,6 +1190,14 @@ function toCursorRow(value: unknown): { seq?: number } | undefined {
   return seq === undefined ? undefined : { seq };
 }
 
+function toWorkspaceRow(value: unknown): { workspaceId: string } | undefined {
+  return isRecord(value) && typeof value.workspace_id === "string" ? { workspaceId: value.workspace_id } : undefined;
+}
+
+function toMessageIdentityRow(value: unknown): { messageId: string } | undefined {
+  return isRecord(value) && typeof value.message_id === "string" ? { messageId: value.message_id } : undefined;
+}
+
 function clampSearchInt(value: unknown, fallback: number, min: number, max: number): number {
   const numeric = typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : fallback;
   return Math.max(min, Math.min(max, numeric));
@@ -614,9 +1209,12 @@ function toSearchRow(value: unknown): ChatMessageSearchRow | undefined {
   }
   const seq = coerceNumber(value.seq);
   const score = coerceNumber(value.score);
+  const includeInHistory = coerceNumber(value.include_in_history);
   if (
     seq === undefined ||
     score === undefined ||
+    includeInHistory === undefined ||
+    typeof value.workspace_id !== "string" ||
     typeof value.message_id !== "string" ||
     typeof value.session_id !== "string" ||
     typeof value.role !== "string" ||
@@ -627,6 +1225,8 @@ function toSearchRow(value: unknown): ChatMessageSearchRow | undefined {
   }
   return {
     seq,
+    workspace_id: value.workspace_id,
+    include_in_history: includeInHistory,
     message_id: value.message_id,
     session_id: value.session_id,
     role: value.role as ChatMessageRole,
@@ -688,10 +1288,11 @@ function toContextRows(value: unknown): ChatMessageContextRow[] {
 }
 
 function extractSearchTokens(rawQuery: string): string[] | null {
-  if (typeof rawQuery !== "string") {
+  if (typeof rawQuery !== "string" || rawQuery.length > MAX_SEARCH_QUERY_CHARS) {
     return null;
   }
-  return rawQuery.match(/[\p{L}\p{N}]+/gu);
+  const tokens = rawQuery.match(/[\p{L}\p{N}]+/gu);
+  return tokens && tokens.length <= MAX_SEARCH_QUERY_TOKENS ? tokens : null;
 }
 
 function buildSearchSql(dialect: DatabaseClient["dialect"], scoped: boolean): string {
@@ -702,6 +1303,8 @@ function buildSearchSql(dialect: DatabaseClient["dialect"], scoped: boolean): st
       )
       SELECT
         m.seq AS seq,
+        meta.workspace_id AS workspace_id,
+        meta.include_in_history AS include_in_history,
         m.message_id AS message_id,
         m.session_id AS session_id,
         m.role AS role,
@@ -709,8 +1312,12 @@ function buildSearchSql(dialect: DatabaseClient["dialect"], scoped: boolean): st
         m.timestamp AS timestamp,
         -ts_rank_cd(m.content_search_vector, search_query.query) AS score
       FROM chat_messages AS m
+      INNER JOIN chat_session_meta AS meta
+        ON meta.session_id = m.session_id
       CROSS JOIN search_query
-      WHERE m.content_search_vector @@ search_query.query${scoped ? " AND m.session_id = ?" : ""}
+      WHERE m.content_search_vector @@ search_query.query
+        AND meta.workspace_id = ?
+        AND (? <> 0 OR meta.include_in_history <> 0)${scoped ? " AND m.session_id = ?" : ""}
       ORDER BY score ASC, m.timestamp DESC, m.seq DESC
       LIMIT ?
     `;
@@ -722,6 +1329,8 @@ function buildSearchSql(dialect: DatabaseClient["dialect"], scoped: boolean): st
   return `
     SELECT
       m.seq AS seq,
+      meta.workspace_id AS workspace_id,
+      meta.include_in_history AS include_in_history,
       m.message_id AS message_id,
       m.session_id AS session_id,
       m.role AS role,
@@ -730,7 +1339,10 @@ function buildSearchSql(dialect: DatabaseClient["dialect"], scoped: boolean): st
       bm25(chat_messages_fts) AS score
     FROM chat_messages_fts
     JOIN chat_messages AS m ON m.seq = chat_messages_fts.rowid
-    WHERE chat_messages_fts MATCH ?${scoped ? " AND m.session_id = ?" : ""}
+    INNER JOIN chat_session_meta AS meta ON meta.session_id = m.session_id
+    WHERE chat_messages_fts MATCH ?
+      AND meta.workspace_id = ?
+      AND (? <> 0 OR meta.include_in_history <> 0)${scoped ? " AND m.session_id = ?" : ""}
     ORDER BY score ASC
     LIMIT ?
   `;

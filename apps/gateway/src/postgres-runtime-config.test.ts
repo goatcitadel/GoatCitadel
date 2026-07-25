@@ -1,14 +1,28 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterAll, describe, expect, it } from "vitest";
 import type { GatewayRuntimeConfig } from "./config.js";
 import {
   resolveGatewayPostgresConnectionOptions,
   resolveGatewayPostgresConnectionString,
 } from "./postgres-runtime-config.js";
 
+// Hermetic root: bundled-password resolution reads
+// `<rootDir>/data/secrets/postgres-bundled-password`. Point rootDir at an
+// isolated empty temp dir so a real local secret at the repo root is never
+// injected into the connection string (keeps the test deterministic and
+// matching CI, where no such file exists).
+const hermeticRootDir = fs.mkdtempSync(path.join(os.tmpdir(), "gateway-pg-runtime-config-"));
+
+afterAll(() => {
+  fs.rmSync(hermeticRootDir, { recursive: true, force: true });
+});
+
 function buildConfig(): GatewayRuntimeConfig {
   return {
-    rootDir: "F:/code/personal-ai",
-    dbPath: "F:/code/personal-ai/data/index.db",
+    rootDir: hermeticRootDir,
+    dbPath: path.join(hermeticRootDir, "data/index.db"),
     toolPolicy: {
       profiles: {},
       tools: {

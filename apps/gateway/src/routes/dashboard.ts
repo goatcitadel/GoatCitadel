@@ -3,7 +3,13 @@ import { z } from "zod";
 import { projectSettingsPublicValue } from "../services/provider-settings-public-projection.js";
 import { projectPublicSecretValue } from "../services/public-secret-projection.js";
 import { preserveKnownPublicProjectionSecretsForUpdate } from "../services/integration-connection-public-projection.js";
-import { LlmProviderRequestConfigSchema } from "@goatcitadel/contracts";
+import {
+  isGoatError,
+  LlmProviderCapabilitiesSchema,
+  LlmProviderGoogleCloudConfigSchema,
+  LlmProviderRequestConfigSchema,
+} from "@goatcitadel/contracts";
+import { sendRouteError } from "./_error-handler.js";
 
 const memoryQuerySchema = z.object({
   dir: z.string().default("memory"),
@@ -11,6 +17,16 @@ const memoryQuerySchema = z.object({
 
 const cronJobParamsSchema = z.object({
   jobId: z.string().min(1),
+});
+
+const cronJobRevisionSchema = z
+  .object({
+    expectedRevision: z.number().int().positive(),
+  })
+  .strict();
+
+const cronJobDeleteQuerySchema = z.object({
+  expectedRevision: z.coerce.number().int().positive(),
 });
 
 const cronRunParamsSchema = z.object({
@@ -42,60 +58,61 @@ const cronReviewQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(1000).default(200),
 });
 
-const cronJobCreateSchema = z.object({
-  jobId: z.string().min(3).max(64),
-  name: z.string().min(1).max(120),
-  action: z
-    .enum([
-      "task",
-      "improvement",
-      "curator",
-      "backup",
-      "memory_flush",
-      "memory_consolidation",
-      "cost_report",
-      "update_review",
-      "watchdog",
-      "no_agent",
-    ])
-    .optional(),
-  actionConfig: z.record(z.string(), z.unknown()).optional(),
-  description: z.string().max(2000).optional(),
-  schedule: z.string().min(1).max(128),
-  enabled: z.boolean().optional(),
-  endAt: z.string().datetime().optional(),
-  workdir: z.string().min(1).optional(),
-  contextFrom: z.string().min(1).optional(),
-  lastRunOutput: z.string().optional(),
-  lastRunId: z.string().min(1).optional(),
-});
+const cronJobCreateSchema = z
+  .object({
+    jobId: z.string().min(3).max(64),
+    name: z.string().min(1).max(120),
+    action: z
+      .enum([
+        "task",
+        "improvement",
+        "curator",
+        "backup",
+        "memory_flush",
+        "memory_consolidation",
+        "cost_report",
+        "update_review",
+        "watchdog",
+        "no_agent",
+      ])
+      .optional(),
+    actionConfig: z.record(z.string(), z.unknown()).optional(),
+    description: z.string().max(2000).optional(),
+    schedule: z.string().min(1).max(128),
+    enabled: z.boolean().optional(),
+    endAt: z.string().datetime().optional(),
+    workdir: z.string().min(1).optional(),
+    contextFrom: z.string().min(1).optional(),
+  })
+  .strict();
 
-const cronJobUpdateSchema = z.object({
-  name: z.string().min(1).max(120).optional(),
-  action: z
-    .enum([
-      "task",
-      "improvement",
-      "curator",
-      "backup",
-      "memory_flush",
-      "memory_consolidation",
-      "cost_report",
-      "update_review",
-      "watchdog",
-      "no_agent",
-    ])
-    .optional(),
-  actionConfig: z.union([z.record(z.string(), z.unknown()), z.null()]).optional(),
-  description: z.string().max(2000).optional(),
-  schedule: z.string().min(1).max(128).optional(),
-  enabled: z.boolean().optional(),
-  endAt: z.union([z.string().datetime(), z.null()]).optional(),
-  workdir: z.union([z.string().min(1), z.null()]).optional(),
-  contextFrom: z.union([z.string().min(1), z.null()]).optional(),
-  lastRunOutput: z.union([z.string(), z.null()]).optional(),
-  lastRunId: z.union([z.string().min(1), z.null()]).optional(),
-});
+const cronJobUpdateSchema = z
+  .object({
+    expectedRevision: z.number().int().positive(),
+    name: z.string().min(1).max(120).optional(),
+    action: z
+      .enum([
+        "task",
+        "improvement",
+        "curator",
+        "backup",
+        "memory_flush",
+        "memory_consolidation",
+        "cost_report",
+        "update_review",
+        "watchdog",
+        "no_agent",
+      ])
+      .optional(),
+    actionConfig: z.union([z.record(z.string(), z.unknown()), z.null()]).optional(),
+    description: z.string().max(2000).optional(),
+    schedule: z.string().min(1).max(128).optional(),
+    enabled: z.boolean().optional(),
+    endAt: z.union([z.string().datetime(), z.null()]).optional(),
+    workdir: z.union([z.string().min(1), z.null()]).optional(),
+    contextFrom: z.union([z.string().min(1), z.null()]).optional(),
+  })
+  .strict();
 
 const authUpdateSchema = z.object({
   mode: z.enum(["none", "token", "basic"]).optional(),
@@ -135,6 +152,7 @@ const personalityDefaultSchema = z.object({
 });
 
 export const updateSettingsSchema = z.object({
+  expectedRevision: z.number().int().positive(),
   deploymentProfile: z.enum(["local_dev", "trusted_local", "remote_hardened"]).optional(),
   toolApprovalMode: z.enum(["approve_all", "approve_risky", "bypass"]).optional(),
   defaultToolProfile: z.string().min(1).optional(),
@@ -154,12 +172,16 @@ export const updateSettingsSchema = z.object({
           label: z.string().min(1).optional(),
           baseUrl: z.string().url().optional(),
           apiStyle: llmApiStyleSchema.optional(),
-          authMode: z.enum(["api-key", "codex-oauth", "claude-code-oauth"]).optional(),
+          authMode: z
+            .enum(["api-key", "codex-oauth", "claude-code-oauth", "google-service-account", "google-adc"])
+            .optional(),
           defaultModel: z.string().min(1).optional(),
           apiKey: z.string().min(1).optional(),
           apiKeyEnv: z.string().min(1).optional(),
+          googleCloud: LlmProviderGoogleCloudConfigSchema.optional(),
           request: LlmProviderRequestConfigSchema.optional(),
           headers: z.record(z.string()).optional(),
+          capabilities: LlmProviderCapabilitiesSchema.partial().optional(),
         })
         .optional(),
     })
@@ -255,6 +277,7 @@ export const updateSettingsSchema = z.object({
       utilityModelRoutingV1Enabled: z.boolean().optional(),
       cronEvidenceV1Enabled: z.boolean().optional(),
       memoryConsolidationV1Enabled: z.boolean().optional(),
+      // Deprecated compatibility input; true records a blocked Signal posture.
       signalInboundV1Enabled: z.boolean().optional(),
       channelVoiceInboundV1Enabled: z.boolean().optional(),
       channelVoiceReplyV1Enabled: z.boolean().optional(),
@@ -451,9 +474,12 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const job = fastify.services.cron.createCronJob(parsed.data);
+      const job = await fastify.services.cron.createCronJob(parsed.data);
       return reply.code(201).send(projectPublicSecretValue(job));
     } catch (error) {
+      if (isGoatError(error)) {
+        return sendRouteError(reply, error, request.log);
+      }
       const message = (error as Error).message;
       return reply.code(isUnsupportedCronActionError(message) ? 409 : 400).send({ error: message });
     }
@@ -468,18 +494,26 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsedBody.success) {
       return reply.code(400).send({ error: parsedBody.error.flatten() });
     }
-    if (Object.keys(parsedBody.data).length === 0) {
+    const { expectedRevision, ...parsedUpdate } = parsedBody.data;
+    if (Object.keys(parsedUpdate).length === 0) {
       return reply.code(400).send({ error: "No update fields were provided." });
     }
     try {
-      const update = containsPublicProjectionMarker(parsedBody.data)
+      const update = containsPublicProjectionMarker(parsedUpdate)
         ? reconcileCronPublicUpdate(
             fastify.services.cron.getCronJob(parsedParams.data.jobId) as unknown as Record<string, unknown>,
-            parsedBody.data as Record<string, unknown>,
+            parsedUpdate as Record<string, unknown>,
           )
-        : parsedBody.data;
-      return reply.send(projectPublicSecretValue(fastify.services.cron.updateCronJob(parsedParams.data.jobId, update)));
+        : parsedUpdate;
+      return reply.send(
+        projectPublicSecretValue(
+          await fastify.services.cron.updateCronJob(parsedParams.data.jobId, update, expectedRevision),
+        ),
+      );
     } catch (error) {
+      if (isGoatError(error)) {
+        return sendRouteError(reply, error, request.log);
+      }
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("not found");
       return reply.code(notFound ? 404 : isUnsupportedCronActionError(message) ? 409 : 400).send({ error: message });
@@ -487,13 +521,30 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.post("/api/v1/cron/jobs/:jobId/start", async (request, reply) => {
-    const parsed = cronJobParamsSchema.safeParse(request.params);
-    if (!parsed.success) {
-      return reply.code(400).send({ error: parsed.error.flatten() });
+    const parsedParams = cronJobParamsSchema.safeParse(request.params);
+    const parsedBody = cronJobRevisionSchema.safeParse(request.body ?? {});
+    if (!parsedParams.success || !parsedBody.success) {
+      return reply.code(400).send({
+        error: {
+          params: parsedParams.success ? undefined : parsedParams.error.flatten(),
+          body: parsedBody.success ? undefined : parsedBody.error.flatten(),
+        },
+      });
     }
     try {
-      return reply.send(projectPublicSecretValue(fastify.services.cron.setCronJobEnabled(parsed.data.jobId, true)));
+      return reply.send(
+        projectPublicSecretValue(
+          await fastify.services.cron.setCronJobEnabled(
+            parsedParams.data.jobId,
+            true,
+            parsedBody.data.expectedRevision,
+          ),
+        ),
+      );
     } catch (error) {
+      if (isGoatError(error)) {
+        return sendRouteError(reply, error, request.log);
+      }
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("not found");
       return reply.code(notFound ? 404 : 400).send({ error: message });
@@ -501,13 +552,30 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.post("/api/v1/cron/jobs/:jobId/pause", async (request, reply) => {
-    const parsed = cronJobParamsSchema.safeParse(request.params);
-    if (!parsed.success) {
-      return reply.code(400).send({ error: parsed.error.flatten() });
+    const parsedParams = cronJobParamsSchema.safeParse(request.params);
+    const parsedBody = cronJobRevisionSchema.safeParse(request.body ?? {});
+    if (!parsedParams.success || !parsedBody.success) {
+      return reply.code(400).send({
+        error: {
+          params: parsedParams.success ? undefined : parsedParams.error.flatten(),
+          body: parsedBody.success ? undefined : parsedBody.error.flatten(),
+        },
+      });
     }
     try {
-      return reply.send(projectPublicSecretValue(fastify.services.cron.setCronJobEnabled(parsed.data.jobId, false)));
+      return reply.send(
+        projectPublicSecretValue(
+          await fastify.services.cron.setCronJobEnabled(
+            parsedParams.data.jobId,
+            false,
+            parsedBody.data.expectedRevision,
+          ),
+        ),
+      );
     } catch (error) {
+      if (isGoatError(error)) {
+        return sendRouteError(reply, error, request.log);
+      }
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("not found");
       return reply.code(notFound ? 404 : 400).send({ error: message });
@@ -543,17 +611,29 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.delete("/api/v1/cron/jobs/:jobId", async (request, reply) => {
-    const parsed = cronJobParamsSchema.safeParse(request.params);
-    if (!parsed.success) {
-      return reply.code(400).send({ error: parsed.error.flatten() });
+    const parsedParams = cronJobParamsSchema.safeParse(request.params);
+    const parsedQuery = cronJobDeleteQuerySchema.safeParse(request.query);
+    if (!parsedParams.success || !parsedQuery.success) {
+      return reply.code(400).send({
+        error: {
+          params: parsedParams.success ? undefined : parsedParams.error.flatten(),
+          query: parsedQuery.success ? undefined : parsedQuery.error.flatten(),
+        },
+      });
     }
     try {
-      const result = fastify.services.cron.deleteCronJob(parsed.data.jobId);
+      const result = await fastify.services.cron.deleteCronJob(
+        parsedParams.data.jobId,
+        parsedQuery.data.expectedRevision,
+      );
       if (!result.deleted) {
         return reply.code(404).send({ error: `Cron job not found: ${result.jobId}` });
       }
       return reply.send(result);
     } catch (error) {
+      if (isGoatError(error)) {
+        return sendRouteError(reply, error, request.log);
+      }
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("not found");
       const protectedJob = message.toLowerCase().includes("cannot be deleted");
@@ -632,14 +712,18 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      return reply.send(projectSettingsPublicValue(fastify.services.settings.updateSettings(parsed.data)));
+      return reply.send(projectSettingsPublicValue(await fastify.services.settings.updateSettings(parsed.data)));
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 
   fastify.get("/api/v1/auth/settings", async (_request, reply) => {
-    return reply.send(fastify.services.settings.getAuthRuntimeSettings());
+    const settings = fastify.services.settings.getSettings();
+    return reply.send({
+      revision: settings.revision,
+      ...fastify.services.settings.getAuthRuntimeSettings(),
+    });
   });
 
   fastify.patch("/api/v1/auth/settings", async (request, reply) => {
@@ -647,15 +731,17 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     if (unsafeKey) {
       return reply.code(400).send({ error: `Unsafe config key is not allowed: ${unsafeKey}` });
     }
-    const parsed = authUpdateSchema.safeParse(request.body);
+    const parsed = authUpdateSchema.extend({ expectedRevision: z.number().int().positive() }).safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
 
     try {
-      return reply.send(fastify.services.settings.updateSettings({ auth: parsed.data }).auth);
+      const { expectedRevision, ...auth } = parsed.data;
+      const updated = await fastify.services.settings.updateSettings({ expectedRevision, auth });
+      return reply.send({ revision: updated.revision, ...updated.auth });
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 

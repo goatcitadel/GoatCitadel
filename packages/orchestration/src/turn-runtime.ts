@@ -2,10 +2,12 @@ import type {
   ChatCompletionRequest,
   ChatMode,
   ChatNormalizationProfile,
+  ChatRetrievalMode,
   ChatSpeedMode,
   ChatSubagentPolicy,
   ChatStreamChunkDraft,
   ChatThinkingLevel,
+  ChatTurnCapabilityProfileRecord,
   ChatTurnBranchKind,
   ChatTurnTraceRecord,
   ChatWebMode,
@@ -16,6 +18,8 @@ export interface TurnRuntimeRequest {
   sessionId: string;
   turnId: string;
   userMessageId: string;
+  /** Canonical persisted delegation step for a server-created worker turn. */
+  parentDelegationStepId?: string;
   parentTurnId?: string;
   branchKind?: ChatTurnBranchKind;
   sourceTurnId?: string;
@@ -25,6 +29,7 @@ export interface TurnRuntimeRequest {
   providerId?: string;
   webMode: ChatWebMode;
   memoryMode: "auto" | "on" | "off";
+  retrievalMode: ChatRetrievalMode;
   thinkingLevel: ChatThinkingLevel;
   speedMode?: ChatSpeedMode;
   subagentPolicy?: ChatSubagentPolicy;
@@ -44,6 +49,12 @@ export interface TurnRuntimeRequest {
   modelRouter?: ChatTurnTraceRecord["routing"]["modelRouter"];
   signal?: AbortSignal;
   canonicalWriteFence?: <T>(work: () => T) => T;
+  /** Immutable server-owned capability upper bound for this admitted Chat turn. */
+  capabilityProfile?: ChatTurnCapabilityProfileRecord;
+  /** Original admitted content when a durable continuation adds answered-prompt context. */
+  capabilityProfileContent?: string;
+  /** Stable provider/model/capability-selection dimension used by compaction hysteresis. */
+  compactionDimensionHash?: string;
 }
 
 export interface TurnRuntimeResult {
@@ -56,6 +67,7 @@ export interface TurnRuntimeResult {
     cachedInputTokens?: number;
     costUsd?: number;
   };
+  modelUsageEventIds?: string[];
   requiresApproval?: {
     approvalId: string;
     toolName?: string;

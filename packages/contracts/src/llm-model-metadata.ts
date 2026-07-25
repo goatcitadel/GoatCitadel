@@ -1,4 +1,13 @@
+import type { ChatCompletionReasoningEffort } from "./llm.js";
+
 export type LlmModelLifecycleStatus = "available" | "experimental" | "deprecated" | "retired";
+
+export interface LlmModelReasoningMetadata {
+  /** Explicit semantic effort levels supported by this model. */
+  supportedEfforts: ChatCompletionReasoningEffort[];
+  /** Optional wire-level mapping for providers whose effort vocabulary differs. */
+  providerEffortMap?: Partial<Record<ChatCompletionReasoningEffort, ChatCompletionReasoningEffort>>;
+}
 
 export interface LlmModelMetadataEntry {
   contextWindow: number;
@@ -14,6 +23,8 @@ export interface LlmModelMetadataEntry {
    * context-budget trimming doesn't undercount. Absent implies 1 (no scaling).
    */
   tokenMultiplier?: number;
+  /** Explicit reasoning capability. Its absence never authorizes max/ultra. */
+  reasoning?: LlmModelReasoningMetadata;
 }
 
 export interface LlmModelMetadataManifest {

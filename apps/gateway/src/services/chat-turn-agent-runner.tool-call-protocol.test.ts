@@ -6,8 +6,11 @@ import type {
   ToolInvokeRequest,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
-import { ChatTurnAgentRunner } from "./chat-turn-agent-runner.js";
-import { createMockStorage, createToolCatalog } from "./chat-turn-agent-runner-test-fixtures.js";
+import {
+  EffectAwareChatTurnAgentRunner as ChatTurnAgentRunner,
+  createMockStorage,
+  createToolCatalog,
+} from "./chat-turn-agent-runner-test-fixtures.js";
 
 type RequestMessage = {
   role: string;

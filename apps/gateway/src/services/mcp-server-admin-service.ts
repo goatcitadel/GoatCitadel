@@ -9,6 +9,7 @@ import type {
   McpServerUpdateInput,
 } from "@goatcitadel/contracts";
 import { normalizeSafeEnvKeyNames } from "@goatcitadel/policy-engine";
+import { resolveMcpServerConnectionMode } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import type { ToolPolicyActorContext } from "@goatcitadel/contracts";
 import { inferMcpCategory, normalizeMcpPolicy } from "./mcp-server-policy.js";
@@ -148,6 +149,15 @@ export function updateMcpServerPolicy(
 
 export async function connectMcpServer(host: McpServerAdminHost, serverId: string): Promise<McpServerRecord> {
   const server = host.requireMcpServer(serverId);
+  // HX-415: a requester-scoped server resolves its connection per authenticated
+  // requester. It is never connected or discovered globally, and never mutates
+  // shared server status, tool cache, or error state. Fail closed BEFORE any
+  // `connecting`/`error` status patch so no global state is written.
+  if (resolveMcpServerConnectionMode(server) === "requester_scoped") {
+    throw new Error(
+      "Requester-scoped MCP servers require an authenticated requester context and cannot be connected or discovered globally.",
+    );
+  }
   if (!isRuntimeSupportedMcpDefinition(server)) {
     throw new Error(buildUnsupportedMcpTransportMessage(server.transport));
   }
@@ -304,6 +314,12 @@ export async function resolveConnectedMcpTools(
   existingTools: McpToolRecord[],
   actorContext?: ToolPolicyActorContext,
 ): Promise<McpToolRecord[]> {
+  // HX-415 defense in depth: requester-scoped discovery is ephemeral and
+  // profile-bound. The global tool-resolution path never discovers or infers
+  // tools for a requester-scoped server, and never writes them to shared state.
+  if (resolveMcpServerConnectionMode(server) === "requester_scoped") {
+    return [];
+  }
   if (isInternalMcpApprovalInboxServer(server)) {
     return createInternalMcpApprovalInboxTools(server.serverId);
   }

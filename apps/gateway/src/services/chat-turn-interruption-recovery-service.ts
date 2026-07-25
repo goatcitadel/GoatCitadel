@@ -18,13 +18,23 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { isDurableRunTerminal, NotFoundError } from "@goatcitadel/contracts";
+import {
+  buildToolEffectEvidence,
+  isDurableRunTerminal,
+  NotFoundError,
+  redactStructuredSecrets,
+  TOOL_EFFECT_CLASSIFICATION_VERSION,
+} from "@goatcitadel/contracts";
 import type {
+  ChatMessageRecord,
   ChatMode,
+  ChatStreamUsageRecord,
   ChatTurnFailureRecord,
+  ChatTurnRepairRecord,
   ChatTurnTraceRecord,
   DurableRunRecord,
   RealtimeEvent,
+  TranscriptEvent,
 } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { buildChatTurnRealtimeOptions } from "./chat-turn-realtime.js";
@@ -35,7 +45,17 @@ export const INTERRUPTED_BY_RESTART_MESSAGE =
 export interface ChatTurnInterruptionRecoveryDeps {
   storage: Pick<
     Storage,
-    "chatTurnTraces" | "chatTurnRecovery" | "chatSessionPrefs" | "chatSessionBranchState" | "durableRuns"
+    | "chatTurnTraces"
+    | "chatToolRuns"
+    | "chatTurnRecovery"
+    | "chatSessionPrefs"
+    | "chatSessionBranchState"
+    | "chatMessages"
+    | "chatStreamEvents"
+    | "sessions"
+    | "transcriptOutbox"
+    | "durableRuns"
+    | "runImmediateTransaction"
   >;
   publishRealtime(
     eventType: string,
@@ -62,7 +82,23 @@ export interface ChatTurnInterruptionRecoveryResult {
   synthesizedTurnIds: string[];
   /** Active traces left untouched because a live durable run still owns them. */
   skippedDurableOwnedTurnIds: string[];
+  /** Turns restored from an authoritative retained message_done source. */
+  restoredFinalTurnIds: string[];
+  /** Turns that retain their completed streamed prefix after interruption. */
+  preservedPartialTurnIds: string[];
+  /** Newly queued durable transcript entries; duplicate event ids are not counted. */
+  transcriptEventsEnqueued: number;
+  /** Dangling canonical tool calls settled without replay. */
+  reconciledToolRunIds: string[];
+  /** Reconciled calls whose external state must be inspected before retry. */
+  unknownEffectToolRunIds: string[];
 }
+
+const MAX_RECOVERED_ASSISTANT_BYTES = 128 * 1024;
+const RECOVERED_CONTENT_TRUNCATION_MARKER = "\n...[recovered prefix truncated]";
+const RECOVERY_PAGE_SIZE = 500;
+const RECOVERY_DIAGNOSTIC_LIMIT_BYTES = 2 * 1024;
+const RECOVERY_DIAGNOSTIC_TRUNCATION_MARKER = "...[truncated]";
 
 export function reconcileInterruptedChatTurns(
   deps: ChatTurnInterruptionRecoveryDeps,
@@ -72,41 +108,491 @@ export function reconcileInterruptedChatTurns(
     interruptedTurnIds: [],
     synthesizedTurnIds: [],
     skippedDurableOwnedTurnIds: [],
+    restoredFinalTurnIds: [],
+    preservedPartialTurnIds: [],
+    transcriptEventsEnqueued: 0,
+    reconciledToolRunIds: [],
+    unknownEffectToolRunIds: [],
   };
 
-  for (const trace of deps.storage.chatTurnTraces.listActive()) {
-    if (isOwnedByLiveDurableRun(deps, trace)) {
-      result.skippedDurableOwnedTurnIds.push(trace.turnId);
-      continue;
+  let activeCursor: { startedAt: string; turnId: string } | undefined;
+  while (true) {
+    const page = deps.storage.chatTurnTraces.listActivePage({
+      afterStartedAt: activeCursor?.startedAt,
+      afterTurnId: activeCursor?.turnId,
+      limit: RECOVERY_PAGE_SIZE,
+    });
+    if (page.length === 0) {
+      break;
     }
+    for (const trace of page) {
+      try {
+        if (isOwnedByLiveDurableRun(deps, trace)) {
+          result.skippedDurableOwnedTurnIds.push(trace.turnId);
+          continue;
+        }
+        reconcileDanglingToolRuns(deps, trace, now, result);
+        const recoveredSource = resolveRecoveredAssistantSource(deps.storage, trace);
+        if (recoveredSource) {
+          const enqueued = persistRecoveredAssistantSource(deps, trace, recoveredSource, now);
+          result.transcriptEventsEnqueued += enqueued ? 1 : 0;
+          if (recoveredSource.final) {
+            result.restoredFinalTurnIds.push(trace.turnId);
+          } else {
+            result.preservedPartialTurnIds.push(trace.turnId);
+          }
+          announceInterruptedTurn(
+            deps,
+            trace.sessionId,
+            trace.turnId,
+            recoveredSource.final
+              ? "chat.turn.final_source_restored_after_restart"
+              : "chat.turn.partial_prefix_preserved_after_restart",
+            {
+              previousStatus: trace.status,
+              assistantMessageId: recoveredSource.messageId,
+              recoveredBytes: Buffer.byteLength(recoveredSource.content, "utf8"),
+              finalSource: recoveredSource.final,
+              sourceIncomplete: Boolean(recoveredSource.sourceIncomplete),
+            },
+          );
+          continue;
+        }
+      } catch (error) {
+        recordInterruptionRecoveryFailure(deps, trace, error, "recovered assistant output");
+      }
+      try {
+        deps.storage.chatTurnTraces.patch(trace.turnId, {
+          status: "failed",
+          failure: buildInterruptedByRestartFailure(),
+          completion: {
+            finishReason: trace.completion?.finishReason,
+            status: "interrupted",
+            repaired: Boolean(trace.completion?.repaired),
+          },
+          // A waiting_for_user_input turn can never collect its answer after the
+          // process died; clear the prompt so it doesn't sit on a terminal row.
+          pendingUserInput: null,
+          finishedAt: now,
+        });
+        result.interruptedTurnIds.push(trace.turnId);
+        announceInterruptedTurn(deps, trace.sessionId, trace.turnId, "chat.turn.interrupted_by_restart", {
+          previousStatus: trace.status,
+        });
+      } catch (error) {
+        recordInterruptionRecoveryFailure(deps, trace, error, "interrupted trace fallback");
+      }
+    }
+    const last = page.at(-1)!;
+    activeCursor = { startedAt: last.startedAt, turnId: last.turnId };
+    if (page.length < RECOVERY_PAGE_SIZE) {
+      break;
+    }
+  }
+
+  reconcileOrphanedUserMessages(deps, now, result);
+
+  return result;
+}
+
+function recordInterruptionRecoveryFailure(
+  deps: ChatTurnInterruptionRecoveryDeps,
+  trace: ChatTurnTraceRecord,
+  error: unknown,
+  phase: string,
+): void {
+  recordDevDiagnosticSafely(deps, {
+    level: "warn",
+    category: "chat",
+    event: "chat.turn.interruption_recovery_persistence_failed",
+    message: buildBoundedRecoveryDiagnostic(`Failed to persist ${phase}; recovery continued with the next turn`, error),
+    sessionId: trace.sessionId,
+    turnId: trace.turnId,
+  });
+}
+
+function reconcileDanglingToolRuns(
+  deps: ChatTurnInterruptionRecoveryDeps,
+  trace: ChatTurnTraceRecord,
+  now: string,
+  result: ChatTurnInterruptionRecoveryResult,
+): void {
+  const dangling = deps.storage.chatToolRuns
+    .listByTurn(trace.turnId)
+    .filter((toolRun) => toolRun.status === "started" && !toolRun.finishedAt);
+  for (const toolRun of dangling) {
+    try {
+      if (toolRun.effectOutcomeKind === "concrete" && toolRun.effectEvidence?.refs.length) {
+        deps.storage.chatToolRuns.patch(toolRun.toolRunId, {
+          status: "failed",
+          error: INTERRUPTED_BY_RESTART_MESSAGE,
+          failureGuidance:
+            "A canonical effect receipt exists, but the Chat call did not settle. Inspect the linked owner receipt before any retry; automatic replay was suppressed.",
+          finishedAt: now,
+        });
+      } else {
+        const phase =
+          toolRun.effectEvidence?.reason === "planned_before_dispatch"
+            ? ("skipped" as const)
+            : ("interrupted" as const);
+        const settlement = buildToolEffectEvidence({
+          potential: toolRun.effectPotential ?? "unknown",
+          phase,
+        });
+        deps.storage.chatToolRuns.patch(toolRun.toolRunId, {
+          status: "failed",
+          effectPotential: toolRun.effectPotential ?? "unknown",
+          effectDisposition: settlement.disposition ?? null,
+          effectOutcomeKind: settlement.outcomeKind,
+          effectEvidence: settlement.evidence,
+          error: INTERRUPTED_BY_RESTART_MESSAGE,
+          failureGuidance:
+            settlement.disposition === "unknown"
+              ? "The tool may have changed external or runtime state. Inspect state before retry; automatic replay was suppressed."
+              : "No tool effect could have occurred. Retry is safe after reviewing the interrupted turn.",
+          finishedAt: now,
+        });
+        if (settlement.disposition === "unknown") {
+          result.unknownEffectToolRunIds.push(toolRun.toolRunId);
+        }
+      }
+      result.reconciledToolRunIds.push(toolRun.toolRunId);
+    } catch (error) {
+      recordDevDiagnosticSafely(deps, {
+        level: "warn",
+        category: "chat",
+        event: "chat.turn.tool_effect_reconciliation_failed",
+        message: buildBoundedRecoveryDiagnostic("Failed to reconcile interrupted tool effect truth", error),
+        sessionId: trace.sessionId,
+        turnId: trace.turnId,
+        context: { toolRunId: toolRun.toolRunId, classificationVersion: TOOL_EFFECT_CLASSIFICATION_VERSION },
+      });
+    }
+  }
+}
+
+function reconcileOrphanedUserMessages(
+  deps: ChatTurnInterruptionRecoveryDeps,
+  now: string,
+  result: ChatTurnInterruptionRecoveryResult,
+): void {
+  let cursor: { timestamp: string; messageId: string } | undefined;
+  while (true) {
+    const page = deps.storage.chatTurnRecovery.listOrphanedLatestUserMessagesPage({
+      afterTimestamp: cursor?.timestamp,
+      afterMessageId: cursor?.messageId,
+      limit: RECOVERY_PAGE_SIZE,
+    });
+    if (page.length === 0) {
+      break;
+    }
+    for (const orphan of page) {
+      try {
+        const turnId = synthesizeInterruptedTrace(deps, orphan, now);
+        result.synthesizedTurnIds.push(turnId);
+        announceInterruptedTurn(deps, orphan.sessionId, turnId, "chat.turn.interrupted_by_restart_synthesized", {
+          userMessageId: orphan.messageId,
+        });
+      } catch (error) {
+        recordDevDiagnosticSafely(deps, {
+          level: "warn",
+          category: "chat",
+          event: "chat.turn.orphan_interruption_recovery_failed",
+          message: buildBoundedRecoveryDiagnostic(
+            "Failed to synthesize interrupted orphan; recovery continued with the next message",
+            error,
+          ),
+          sessionId: orphan.sessionId,
+          context: { userMessageId: orphan.messageId },
+        });
+      }
+    }
+    const last = page.at(-1)!;
+    cursor = { timestamp: last.timestamp, messageId: last.messageId };
+    if (page.length < RECOVERY_PAGE_SIZE) {
+      break;
+    }
+  }
+}
+
+interface RecoveredAssistantSource {
+  messageId: string;
+  content: string;
+  timestamp: string;
+  final: boolean;
+  repaired?: boolean;
+  repair?: ChatTurnRepairRecord;
+  usage?: ChatStreamUsageRecord;
+  sourceIncomplete?: boolean;
+}
+
+function resolveRecoveredAssistantSource(
+  storage: ChatTurnInterruptionRecoveryDeps["storage"],
+  trace: ChatTurnTraceRecord,
+): RecoveredAssistantSource | undefined {
+  const existingMessage = trace.assistantMessageId ? storage.chatMessages.get(trace.assistantMessageId) : undefined;
+  if (existingMessage?.role === "assistant" && existingMessage.content.trim()) {
+    const wasRecoveredPartial =
+      trace.status === "partial" &&
+      trace.completion?.status === "interrupted" &&
+      trace.failure?.failureClass === "interrupted_by_restart";
+    return {
+      messageId: existingMessage.messageId,
+      content: boundRecoveredContent(existingMessage.content),
+      timestamp: existingMessage.timestamp,
+      final: !wasRecoveredPartial,
+    };
+  }
+
+  let messageId = trace.assistantMessageId;
+  let finalContent: string | undefined;
+  let finalTimestamp: string | undefined;
+  let repaired = false;
+  let repair: RecoveredAssistantSource["repair"];
+  let usage: RecoveredAssistantSource["usage"];
+  let completedPrefix = "";
+  let prefixTruncated = false;
+  let sourceIncomplete = false;
+  let latestDeltaTimestamp: string | undefined;
+  let afterSequence = 0;
+  let expectedSequence: number | undefined;
+  while (true) {
+    const page = storage.chatStreamEvents.listByTurn(trace.turnId, afterSequence, 5_000);
+    if (page.length === 0) {
+      break;
+    }
+    for (const event of page) {
+      if (expectedSequence === undefined) {
+        sourceIncomplete = event.sequence > 1;
+      } else if (event.sequence !== expectedSequence) {
+        sourceIncomplete = true;
+      }
+      expectedSequence = event.sequence + 1;
+      const payload = event.payload;
+      const type = typeof payload.type === "string" ? payload.type : event.chunkType;
+      if (type === "message_start" && typeof payload.messageId === "string") {
+        messageId = payload.messageId;
+        continue;
+      }
+      if (type === "delta" && typeof payload.delta === "string" && payload.delta.length > 0) {
+        if (!prefixTruncated) {
+          const appended = appendRecoveredPrefix(completedPrefix, payload.delta);
+          completedPrefix = appended.content;
+          prefixTruncated = appended.truncated;
+        }
+        latestDeltaTimestamp = event.createdAt;
+        if (!messageId && typeof payload.messageId === "string") {
+          messageId = payload.messageId;
+        }
+        continue;
+      }
+      if (type === "usage" && isRecord(payload.usage)) {
+        usage = payload.usage as unknown as ChatStreamUsageRecord;
+        continue;
+      }
+      if (type === "message_done" && typeof payload.content === "string" && payload.content.trim()) {
+        finalContent = payload.content;
+        finalTimestamp = event.createdAt;
+        messageId = typeof payload.messageId === "string" ? payload.messageId : messageId;
+        repaired = payload.repaired === true;
+        repair = isRecord(payload.repair) ? (payload.repair as unknown as ChatTurnRepairRecord) : undefined;
+      }
+    }
+    const nextSequence = page.at(-1)?.sequence ?? afterSequence;
+    if (nextSequence <= afterSequence) {
+      sourceIncomplete = true;
+      break;
+    }
+    afterSequence = nextSequence;
+    if (page.length < 5_000) {
+      break;
+    }
+  }
+
+  if (messageId && finalContent?.trim()) {
+    const durableFinalSource = hasAuthoritativeDurableFinalOutput(storage, trace, finalContent);
+    return {
+      messageId,
+      content: boundRecoveredContent(finalContent),
+      timestamp: finalTimestamp ?? new Date().toISOString(),
+      final: durableFinalSource,
+      repaired: durableFinalSource ? repaired : false,
+      repair: durableFinalSource ? repair : undefined,
+      usage,
+      sourceIncomplete: sourceIncomplete || Buffer.byteLength(finalContent, "utf8") > MAX_RECOVERED_ASSISTANT_BYTES,
+    };
+  }
+  if (!messageId || !completedPrefix.trim()) {
+    return undefined;
+  }
+  const incompletePrefix = prefixTruncated || sourceIncomplete;
+  return {
+    messageId,
+    content: incompletePrefix
+      ? appendRecoveryPostureMarker(
+          completedPrefix,
+          prefixTruncated ? RECOVERED_CONTENT_TRUNCATION_MARKER : "\n...[retained stream history incomplete]",
+        )
+      : completedPrefix,
+    timestamp: latestDeltaTimestamp ?? new Date().toISOString(),
+    final: false,
+    usage,
+    sourceIncomplete: incompletePrefix,
+  };
+}
+
+/**
+ * Retained stream chunks are replay projections, not canonical completion
+ * records. A message_done chunk may restore a completed turn only when the
+ * durable owner independently committed the same terminal output. Otherwise
+ * the content is retained as an explicitly interrupted prefix.
+ */
+function hasAuthoritativeDurableFinalOutput(
+  storage: ChatTurnInterruptionRecoveryDeps["storage"],
+  trace: ChatTurnTraceRecord,
+  content: string,
+): boolean {
+  const runId = trace.durable?.runId;
+  if (!runId) {
+    return false;
+  }
+  let run: DurableRunRecord;
+  try {
+    run = storage.durableRuns.getRun(runId);
+  } catch (error) {
+    if (error instanceof NotFoundError) {
+      return false;
+    }
+    throw error;
+  }
+  if (run.status !== "completed") {
+    return false;
+  }
+  const finalOutput = run.metadata?.finalOutput;
+  return typeof finalOutput === "string" && finalOutput === content;
+}
+
+function persistRecoveredAssistantSource(
+  deps: ChatTurnInterruptionRecoveryDeps,
+  trace: ChatTurnTraceRecord,
+  source: RecoveredAssistantSource,
+  now: string,
+): boolean {
+  const session = deps.storage.sessions.getBySessionId(trace.sessionId);
+  const message: ChatMessageRecord = {
+    messageId: source.messageId,
+    sessionId: trace.sessionId,
+    role: "assistant",
+    actorType: "agent",
+    actorId: "assistant",
+    content: source.content,
+    timestamp: source.timestamp,
+  };
+  const transcriptEvent: TranscriptEvent = {
+    eventId: source.messageId,
+    actionId: `chat-recovery:${trace.turnId}`,
+    idempotencyKey: `chat-recovery:${trace.turnId}:${source.messageId}`,
+    sessionId: trace.sessionId,
+    sessionKey: session.sessionKey,
+    timestamp: source.timestamp,
+    type: "message.assistant",
+    actorType: "agent",
+    actorId: "assistant",
+    payload: { message },
+  };
+  const wasAlreadyQueued = Boolean(deps.storage.transcriptOutbox.get(source.messageId));
+  deps.storage.runImmediateTransaction(() => {
+    deps.storage.chatMessages.upsert(message, now);
+    deps.storage.transcriptOutbox.enqueue(transcriptEvent, now);
     deps.storage.chatTurnTraces.patch(trace.turnId, {
-      status: "failed",
-      failure: buildInterruptedByRestartFailure(),
+      assistantMessageId: source.messageId,
+      status: source.final ? "completed" : "partial",
+      failure: source.final ? undefined : buildInterruptedByRestartFailure(true),
       completion: {
-        finishReason: trace.completion?.finishReason,
-        status: "interrupted",
-        repaired: Boolean(trace.completion?.repaired),
+        status: source.final ? "complete" : "interrupted",
+        repaired: source.final ? Boolean(source.repaired) : false,
+        ...(source.final && source.repair ? { repair: source.repair } : {}),
+        ...(source.usage ? { usage: source.usage } : {}),
       },
-      // A waiting_for_user_input turn can never collect its answer after the
-      // process died; clear the prompt so it doesn't sit on a terminal row.
       pendingUserInput: null,
       finishedAt: now,
     });
-    result.interruptedTurnIds.push(trace.turnId);
-    announceInterruptedTurn(deps, trace.sessionId, trace.turnId, "chat.turn.interrupted_by_restart", {
-      previousStatus: trace.status,
-    });
-  }
+  });
+  return !wasAlreadyQueued;
+}
 
-  for (const orphan of deps.storage.chatTurnRecovery.listOrphanedLatestUserMessages()) {
-    const turnId = synthesizeInterruptedTrace(deps, orphan, now);
-    result.synthesizedTurnIds.push(turnId);
-    announceInterruptedTurn(deps, orphan.sessionId, turnId, "chat.turn.interrupted_by_restart_synthesized", {
-      userMessageId: orphan.messageId,
-    });
+function boundRecoveredContent(value: string): string {
+  const buffer = Buffer.from(value, "utf8");
+  if (buffer.byteLength <= MAX_RECOVERED_ASSISTANT_BYTES) {
+    return value;
   }
+  const marker = Buffer.from(RECOVERED_CONTENT_TRUNCATION_MARKER, "utf8");
+  const contentBudget = Math.max(0, MAX_RECOVERED_ASSISTANT_BYTES - marker.byteLength);
+  let retainedBytes = 0;
+  let retainedCodeUnits = 0;
+  for (const character of value) {
+    const characterBytes = Buffer.byteLength(character, "utf8");
+    if (retainedBytes + characterBytes > contentBudget) {
+      break;
+    }
+    retainedBytes += characterBytes;
+    retainedCodeUnits += character.length;
+  }
+  const bounded = `${value.slice(0, retainedCodeUnits)}${RECOVERED_CONTENT_TRUNCATION_MARKER}`;
+  if (Buffer.byteLength(bounded, "utf8") > MAX_RECOVERED_ASSISTANT_BYTES) {
+    throw new Error("Recovered assistant prefix exceeded its UTF-8 byte cap.");
+  }
+  return bounded;
+}
 
-  return result;
+function appendRecoveredPrefix(current: string, delta: string): { content: string; truncated: boolean } {
+  const markerBytes = Buffer.byteLength(RECOVERED_CONTENT_TRUNCATION_MARKER, "utf8");
+  const rawBudget = MAX_RECOVERED_ASSISTANT_BYTES - markerBytes;
+  const combined = `${current}${delta}`;
+  if (Buffer.byteLength(combined, "utf8") <= rawBudget) {
+    return { content: combined, truncated: false };
+  }
+  return { content: truncateUtf8ToBytes(combined, rawBudget), truncated: true };
+}
+
+function appendRecoveryPostureMarker(content: string, marker: string): string {
+  const markerBytes = Buffer.byteLength(marker, "utf8");
+  return `${truncateUtf8ToBytes(content, Math.max(0, MAX_RECOVERED_ASSISTANT_BYTES - markerBytes))}${marker}`;
+}
+
+function truncateUtf8ToBytes(value: string, maxBytes: number): string {
+  if (Buffer.byteLength(value, "utf8") <= maxBytes) {
+    return value;
+  }
+  let retainedBytes = 0;
+  let retainedCodeUnits = 0;
+  for (const character of value) {
+    const bytes = Buffer.byteLength(character, "utf8");
+    if (retainedBytes + bytes > maxBytes) {
+      break;
+    }
+    retainedBytes += bytes;
+    retainedCodeUnits += character.length;
+  }
+  return value.slice(0, retainedCodeUnits);
+}
+
+function buildBoundedRecoveryDiagnostic(prefix: string, error: unknown): string {
+  const rawMessage = `${prefix}: ${error instanceof Error ? error.message : String(error)}`;
+  const redacted = redactStructuredSecrets(rawMessage).value;
+  const normalized = String(redacted);
+  if (Buffer.byteLength(normalized, "utf8") <= RECOVERY_DIAGNOSTIC_LIMIT_BYTES) {
+    return normalized;
+  }
+  const markerBytes = Buffer.byteLength(RECOVERY_DIAGNOSTIC_TRUNCATION_MARKER, "utf8");
+  return `${truncateUtf8ToBytes(
+    normalized,
+    Math.max(0, RECOVERY_DIAGNOSTIC_LIMIT_BYTES - markerBytes),
+  )}${RECOVERY_DIAGNOSTIC_TRUNCATION_MARKER}`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isOwnedByLiveDurableRun(deps: ChatTurnInterruptionRecoveryDeps, trace: ChatTurnTraceRecord): boolean {
@@ -126,12 +612,14 @@ function isOwnedByLiveDurableRun(deps: ChatTurnInterruptionRecoveryDeps, trace: 
   return !isDurableRunTerminal(run.status);
 }
 
-function buildInterruptedByRestartFailure(): ChatTurnFailureRecord {
+function buildInterruptedByRestartFailure(hasCompletedPrefix = false): ChatTurnFailureRecord {
   return {
     failureClass: "interrupted_by_restart",
-    message: INTERRUPTED_BY_RESTART_MESSAGE,
+    message: hasCompletedPrefix
+      ? `${INTERRUPTED_BY_RESTART_MESSAGE} The completed response prefix was preserved.`
+      : INTERRUPTED_BY_RESTART_MESSAGE,
     retryable: true,
-    recommendedAction: "retry",
+    recommendedAction: hasCompletedPrefix ? "continue_from_partial" : "retry",
   };
 }
 
@@ -188,7 +676,7 @@ function announceInterruptedTurn(
   event: string,
   context: Record<string, unknown>,
 ): void {
-  deps.recordDevDiagnostic({
+  recordDevDiagnosticSafely(deps, {
     level: "warn",
     category: "chat",
     event,
@@ -197,14 +685,42 @@ function announceInterruptedTurn(
     turnId,
     context,
   });
-  deps.publishRealtime(
-    "chat_thread_updated",
-    "chat",
-    {
-      type: "chat_thread_turn_interrupted",
+  try {
+    deps.publishRealtime(
+      "chat_thread_updated",
+      "chat",
+      {
+        type: "chat_thread_turn_interrupted",
+        sessionId,
+        turnId,
+      },
+      buildChatTurnRealtimeOptions({ sessionId, turnId }),
+    );
+  } catch (error) {
+    // The durable recovery write is canonical; an operational notification
+    // failure must never roll it back or cause the turn to be reclassified.
+    recordDevDiagnosticSafely(deps, {
+      level: "warn",
+      category: "chat",
+      event: "chat.turn.interruption_recovery_notification_failed",
+      message: buildBoundedRecoveryDiagnostic(
+        "Recovered turn state persisted but its realtime notification failed",
+        error,
+      ),
       sessionId,
       turnId,
-    },
-    buildChatTurnRealtimeOptions({ sessionId, turnId }),
-  );
+    });
+  }
+}
+
+function recordDevDiagnosticSafely(
+  deps: ChatTurnInterruptionRecoveryDeps,
+  input: Parameters<ChatTurnInterruptionRecoveryDeps["recordDevDiagnostic"]>[0],
+): void {
+  try {
+    deps.recordDevDiagnostic(input);
+  } catch (diagnosticError) {
+    void diagnosticError;
+    // Diagnostics are non-canonical. Recovery continues from durable state.
+  }
 }

@@ -24,6 +24,7 @@ import type { ChatProactivePolicyPatch } from "./useChatDelegationPolicyActions"
 import type { MissionControlDockSectionId } from "./useMissionControlSurfaceState";
 import type { ChatVisualStreamMode } from "./chat-streaming-preview";
 import type { WorkTrustDescriptor } from "./work-trust";
+import type { ChatCapabilityProfileInspection } from "./useChatCapabilityProfileInspection";
 
 export interface ChatContextDockPanelsProps {
   mode: "chat" | "cowork" | "code";
@@ -59,9 +60,13 @@ export interface ChatContextDockPanelsProps {
   onStreamEnabledChange: (checked: boolean) => void;
   onVisualStreamModeChange: (mode: ChatVisualStreamMode) => void;
   prefs: ChatSessionPrefsRecord | null;
+  preferenceConflictDraft: ChatSessionPrefsPatch | null;
+  onRetryPreferenceConflictDraft: () => Promise<void>;
+  onDiscardPreferenceConflictDraft: () => void;
   selectedSessionId: string | null;
   showTracePanel: boolean;
   selectedTurn: ChatThreadTurnRecord | null;
+  capabilityProfileInspection: ChatCapabilityProfileInspection;
   activeGeneratedArtifact?: ChatGeneratedArtifactRecord | null;
   routePreflight?: RoutingPreflightResult | null;
   trust?: WorkTrustDescriptor;
@@ -72,6 +77,8 @@ export interface ChatContextDockPanelsProps {
   coworkItems: CoworkTaskItem[];
   coworkViewModel?: CoworkRunViewModel | null;
   proactiveStatus: ProactivePolicy | null;
+  proactivePolicyDraft: ChatProactivePolicyPatch | null;
+  proactivePolicyConflict: boolean;
   proactiveRuns: ProactiveRunRecord[];
   proactiveSuggestionCount: number;
   capabilitySuggestions: ChatCapabilityUpgradeSuggestion[];

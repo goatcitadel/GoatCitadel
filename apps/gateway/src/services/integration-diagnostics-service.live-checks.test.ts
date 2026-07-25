@@ -6,6 +6,7 @@ const liveProbeMocks = vi.hoisted(() => ({
   imessage: vi.fn(),
   line: vi.fn(),
   mattermost: vi.fn(),
+  ntfy: vi.fn(),
   signal: vi.fn(),
   slack: vi.fn(),
   telegram: vi.fn(),
@@ -20,6 +21,7 @@ vi.mock("./channel-bot-live-probes.js", () => ({
   runIMessageBridgeLiveChecks: liveProbeMocks.imessage,
   runLineBotLiveChecks: liveProbeMocks.line,
   runMattermostBotLiveChecks: liveProbeMocks.mattermost,
+  runNtfyLiveChecks: liveProbeMocks.ntfy,
   runSignalBridgeLiveChecks: liveProbeMocks.signal,
   runSlackBotLiveChecks: liveProbeMocks.slack,
   runTelegramBotLiveChecks: liveProbeMocks.telegram,
@@ -60,6 +62,16 @@ describe("integration diagnostics live-check routing", () => {
         liveProbeMocks.slack,
       ],
       ["telegram", { botToken: "telegram-token", defaultChatId: "123", parseMode: "HTML" }, liveProbeMocks.telegram],
+      [
+        "ntfy",
+        {
+          baseUrl: "https://ntfy.example.test",
+          topic: "goatcitadel-ops",
+          token: "ntfy-token",
+          priority: "4",
+        },
+        liveProbeMocks.ntfy,
+      ],
       [
         "whatsapp",
         {
@@ -122,6 +134,15 @@ describe("integration diagnostics live-check routing", () => {
         phoneNumberId: "phone-1",
         baseUrl: "https://graph.facebook.com",
         apiVersion: "v20.0",
+      }),
+    );
+    expect(liveProbeMocks.ntfy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseUrl: "https://ntfy.example.test",
+        topic: "goatcitadel-ops",
+        token: "ntfy-token",
+        priority: "4",
+        dryRun: false,
       }),
     );
     expect(liveProbeMocks.mattermost).toHaveBeenCalledWith(

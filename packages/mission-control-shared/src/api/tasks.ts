@@ -86,6 +86,7 @@ export async function createTask(input: {
 export async function updateTask(
   taskId: string,
   input: Partial<Pick<TaskRecord, "status" | "priority" | "title" | "description" | "dueAt">> & {
+    expectedRevision: number;
     assignedAgentId?: string | null;
     citadelId?: string;
     workspaceId?: string;
@@ -102,7 +103,8 @@ export async function updateTask(
 
 export async function deleteTask(
   taskId: string,
-  input?: {
+  input: {
+    expectedRevision: number;
     mode?: "soft" | "hard";
     deletedBy?: string;
     deleteReason?: string;
@@ -111,22 +113,19 @@ export async function deleteTask(
     workspaceId?: string;
   },
 ): Promise<{ deleted: boolean; taskId: string; mode: "soft" | "hard" }> {
-  const mode = input?.mode ?? "soft";
+  const mode = input.mode ?? "soft";
   return request<{ deleted: boolean; taskId: string; mode: "soft" | "hard" }>(
-    withWorkspaceQuery(
-      `/api/v1/tasks/${encodeURIComponent(taskId)}?mode=${mode}`,
-      input?.workspaceId,
-      input?.citadelId,
-    ),
+    withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}?mode=${mode}`, input.workspaceId, input.citadelId),
     {
       method: "DELETE",
       body: JSON.stringify({
         mode,
-        deletedBy: input?.deletedBy,
-        deleteReason: input?.deleteReason,
-        confirmToken: input?.confirmToken,
-        citadelId: input?.citadelId,
-        workspaceId: input?.workspaceId,
+        expectedRevision: input.expectedRevision,
+        deletedBy: input.deletedBy,
+        deleteReason: input.deleteReason,
+        confirmToken: input.confirmToken,
+        citadelId: input.citadelId,
+        workspaceId: input.workspaceId,
       }),
     },
   );
@@ -134,6 +133,7 @@ export async function deleteTask(
 
 export async function restoreTask(
   taskId: string,
+  expectedRevision: number,
   workspaceId?: string,
   citadelId?: string,
 ): Promise<{ restored: boolean; taskId: string }> {
@@ -141,7 +141,7 @@ export async function restoreTask(
     withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}/restore`, workspaceId, citadelId),
     {
       method: "POST",
-      body: JSON.stringify({ citadelId, workspaceId }),
+      body: JSON.stringify({ citadelId, expectedRevision, workspaceId }),
     },
   );
 }
@@ -252,6 +252,7 @@ export async function updateTaskSubagent(
 }
 
 export interface EmitTaskDistressBody {
+  expectedRevision: number;
   code: TaskDistressSignalCode;
   severity: TaskDistressSeverity;
   title: string;
@@ -276,17 +277,17 @@ export async function emitTaskDistress(
 export async function resolveTaskDistress(
   taskId: string,
   signalId: string,
-  input?: { citadelId?: string; workspaceId?: string },
+  input: { expectedRevision: number; citadelId?: string; workspaceId?: string },
 ): Promise<TaskRecord> {
   return request<TaskRecord>(
     withWorkspaceQuery(
       `/api/v1/tasks/${encodeURIComponent(taskId)}/distress/${encodeURIComponent(signalId)}`,
-      input?.workspaceId,
-      input?.citadelId,
+      input.workspaceId,
+      input.citadelId,
     ),
     {
       method: "DELETE",
-      body: JSON.stringify(input ?? {}),
+      body: JSON.stringify(input),
     },
   );
 }
@@ -294,6 +295,7 @@ export async function resolveTaskDistress(
 export async function setTaskRetryBudget(
   taskId: string,
   maxRetries: number,
+  expectedRevision: number,
   workspaceId?: string,
   citadelId?: string,
 ): Promise<TaskRecord> {
@@ -301,7 +303,7 @@ export async function setTaskRetryBudget(
     withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}/retry-budget`, workspaceId, citadelId),
     {
       method: "POST",
-      body: JSON.stringify({ citadelId, maxRetries, workspaceId }),
+      body: JSON.stringify({ citadelId, expectedRevision, maxRetries, workspaceId }),
     },
   );
 }
@@ -309,6 +311,7 @@ export async function setTaskRetryBudget(
 export async function verifyTaskArtifacts(
   taskId: string,
   claims: TaskArtifactClaim[],
+  expectedRevision: number,
   workspaceId?: string,
   citadelId?: string,
 ): Promise<TaskRecord> {
@@ -316,16 +319,17 @@ export async function verifyTaskArtifacts(
     withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}/verify-artifacts`, workspaceId, citadelId),
     {
       method: "POST",
-      body: JSON.stringify({ citadelId, claims, workspaceId }),
+      body: JSON.stringify({ citadelId, claims, expectedRevision, workspaceId }),
     },
   );
 }
 
-export type BulkTaskActionInput =
+export type BulkTaskActionInput = (
   | { action: "unblock"; taskIds: string[] }
   | { action: "retry"; taskIds: string[]; reason: string }
   | { action: "reassign"; taskIds: string[]; assignedAgentId: string }
-  | { action: "close"; taskIds: string[] };
+  | { action: "close"; taskIds: string[] }
+) & { expectedRevisionsByTaskId: Record<string, number> };
 
 export async function bulkTaskAction(
   input: BulkTaskActionInput & { citadelId?: string; workspaceId?: string },

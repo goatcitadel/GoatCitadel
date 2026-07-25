@@ -1,6 +1,7 @@
 import type { WebhookRawBodyRequest } from "./webhook-handler-factory.js";
 import { CHANNEL_INBOUND_MAX_BYTES, createWebhookPreParsing } from "./webhook-handler-factory.js";
 import { readConfigSecret } from "../services/channel-secret-resolution.js";
+import { buildWebhookIngressRateLimitKey, resolveWebhookRateLimitConfig } from "../services/webhook-rate-limit.js";
 export {
   isAllowedSecretEnvName,
   isAllowedTelegramBotTokenEnvName,
@@ -11,12 +12,14 @@ export {
 } from "../services/channel-secret-resolution.js";
 
 export function createWebhookRouteOptions(rawBodyKey?: keyof WebhookRawBodyRequest) {
+  const { maxIngress } = resolveWebhookRateLimitConfig();
   return {
     bodyLimit: CHANNEL_INBOUND_MAX_BYTES,
     ...(rawBodyKey ? { preParsing: createWebhookPreParsing(rawBodyKey) } : {}),
     config: {
       rateLimit: {
-        max: 500,
+        max: maxIngress,
+        keyGenerator: buildWebhookIngressRateLimitKey,
       },
     },
   };

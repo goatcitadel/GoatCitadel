@@ -1,5 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { LlmProviderCapabilitiesSchema, LlmProviderGoogleCloudConfigSchema } from "@goatcitadel/contracts";
+import { sendRouteError } from "./_error-handler.js";
 
 const onboardingTimingEnabled = process.env.GOATCITADEL_DEBUG_ONBOARDING_TIMING === "1";
 
@@ -88,6 +90,7 @@ const llmProviderRequestSchema = z.object({
 });
 
 const bootstrapSchema = z.object({
+  expectedRevision: z.number().int().positive(),
   toolApprovalMode: z.enum(["approve_all", "approve_risky", "bypass"]).optional(),
   defaultToolProfile: z.enum(["minimal", "standard", "coding", "ops", "research", "danger"]).optional(),
   budgetMode: z.enum(["saver", "balanced", "power"]).optional(),
@@ -111,13 +114,17 @@ const bootstrapSchema = z.object({
           label: z.string().min(1).optional(),
           baseUrl: z.string().url().optional(),
           apiStyle: llmApiStyleSchema.optional(),
-          authMode: z.enum(["api-key", "codex-oauth", "claude-code-oauth"]).optional(),
+          authMode: z
+            .enum(["api-key", "codex-oauth", "claude-code-oauth", "google-service-account", "google-adc"])
+            .optional(),
           defaultModel: z.string().min(1).optional(),
           apiKey: z.string().min(1).optional(),
           apiKeyEnv: z.string().min(1).optional(),
+          googleCloud: LlmProviderGoogleCloudConfigSchema.optional(),
           persistSecretToSecureStore: z.boolean().optional(),
           request: llmProviderRequestSchema.optional(),
           headers: z.record(z.string()).optional(),
+          capabilities: LlmProviderCapabilitiesSchema.partial().optional(),
         })
         .optional(),
     })
@@ -170,9 +177,9 @@ export const onboardingRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      return reply.send(fastify.services.onboarding.bootstrapOnboarding(parsed.data));
+      return reply.send(await fastify.services.onboarding.bootstrapOnboarding(parsed.data));
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 

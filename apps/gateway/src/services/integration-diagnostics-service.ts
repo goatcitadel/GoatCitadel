@@ -11,6 +11,7 @@ import {
   runIMessageBridgeLiveChecks,
   runLineBotLiveChecks,
   runMattermostBotLiveChecks,
+  runNtfyLiveChecks,
   runSignalBridgeLiveChecks,
   runSlackBotLiveChecks,
   runTelegramBotLiveChecks,
@@ -211,6 +212,20 @@ export function buildIntegrationConnectionChecks(
           status: "pass",
           message:
             "Telegram rich-message policy: Bot API photo/document delivery is preflighted, caption limits are recorded, metadata-only attachments are blocked, and rich batches are capped at 10 attachments.",
+        });
+        break;
+      case "ntfy":
+        checkUrl("url", "ntfy server URL", deps.readConnectionConfigValue(config, "baseUrl"), true);
+        requireText(
+          "target",
+          "ntfy topic",
+          deps.readConnectionConfigValue(config, "topic") ?? deps.readConnectionConfigValue(config, "defaultTopic"),
+        );
+        checks.push({
+          key: "delivery_posture",
+          status: "pass",
+          message:
+            "ntfy is outbound-only; sandbox diagnostics publish at most once and require manual receipt confirmation.",
         });
         break;
       case "google-chat":
@@ -556,6 +571,23 @@ export async function runIntegrationConnectionLiveChecks(
         fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
       });
     }
+    case "ntfy": {
+      const baseUrl = deps.readConnectionConfigValue(config, "baseUrl");
+      const topic =
+        deps.readConnectionConfigValue(config, "topic") ?? deps.readConnectionConfigValue(config, "defaultTopic");
+      if (!baseUrl || !topic) {
+        return { checks: [] };
+      }
+      return runNtfyLiveChecks({
+        baseUrl,
+        topic,
+        token: deps.resolveConnectionSecret(config, "token", "tokenEnv"),
+        priority: deps.readConnectionConfigValue(config, "priority"),
+        dryRun: readBoolean(config.dryRun),
+        includeSandboxSend: options.includeSandboxSend,
+        fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
+      });
+    }
     case "whatsapp": {
       const accessToken =
         deps.resolveConnectionSecret(config, "accessToken", "accessTokenEnv") ??
@@ -711,6 +743,10 @@ export async function runIntegrationConnectionLiveChecks(
 function readTargetString(target: Record<string, unknown> | undefined, key: string): string | undefined {
   const value = target?.[key];
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function readBoolean(value: unknown): boolean {
+  return value === true || (typeof value === "string" && value.trim().toLowerCase() === "true");
 }
 
 function hasConnectionEnvValue(

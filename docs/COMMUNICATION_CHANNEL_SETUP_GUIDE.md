@@ -1,6 +1,6 @@
 # Communication Channel Setup Guide
 
-Last updated: 2026-07-05
+Last updated: 2026-07-13
 Target audience: beginner to intermediate operators
 
 This guide walks through GoatCitadel channel setup in the order that makes the most sense for operator-facing `1.0` validation.
@@ -22,7 +22,7 @@ Discord, Slack, Telegram, Google Chat, Teams, Mattermost, WhatsApp, Signal, LINE
 | `channel.teams` | Incoming webhook | sandbox webhook probe | yes |
 | `channel.mattermost` | Bot token | auth, channel resolution, sandbox send/delete | yes |
 | `channel.whatsapp` | Cloud API access token + phone-number id | sender auth plus sandbox send; signed inbound webhook runtime when app secret + verify token are configured | yes |
-| `channel.signal` | Bridge URL | sandbox send through the Signal bridge JSON-RPC path; optional inbound polling of the bridge receive endpoint when enabled with an account id | yes |
+| `channel.signal` | Bridge URL | outbound-only sandbox send through the Signal bridge JSON-RPC path; GoatCitadel does not invoke the bridge receive endpoint | yes |
 | `channel.imessage` | BlueBubbles bridge URL + password | bridge query plus sandbox send/unsend | yes |
 | `channel.nextcloud-talk` | Base URL + Talk token | structural and semantic validation | yes |
 | `channel.line` | Channel access token | token auth plus sandbox push send; signed inbound webhook runtime when channel secret is configured | yes |
@@ -35,6 +35,8 @@ Inbound capability is derived from the runtime capability rules (`packages/gatew
 
 - **Bidirectional (inbound available when configured):** Telegram, Slack, Discord, WhatsApp (app secret + verify token), LINE (channel secret), Nextcloud Talk (webhook).
 - **Outbound delivery today:** Signal (bridge), iMessage (bridge), Microsoft Teams, Google Chat, Mattermost, ntfy, Zalo OA, Zalo Personal.
+
+Signal is deliberately outbound-only. The current bridge receive operation does not provide a durable acknowledgement or replay contract, so polling it could lose a message if GoatCitadel crashed after the destructive receive but before committing the event locally. Production therefore never calls that receive operation. Legacy `inboundEnabled=true`, `pollIntervalSeconds`, and `signalInboundV1Enabled=true` settings are deprecated, fail closed, and produce an operator-visible diagnostic; they do not start polling or disable outbound sends.
 
 Webhook-ingress channels (Telegram, Slack, WhatsApp, LINE, Nextcloud Talk) start with an empty default-deny sender allowlist; unknown senders are rejected before any message reaches the runtime. Discord's gateway ingress is governed differently: guild allowlist policy plus per-guild channel/role/user rules and mention requirements (`apps/gateway/src/services/discord-runtime-service.ts`), so scope those pairing rules deliberately — a configured guild/channel without a user list accepts any member who mentions the bot. In every case, accepted messages still pass the standard policy gate.
 

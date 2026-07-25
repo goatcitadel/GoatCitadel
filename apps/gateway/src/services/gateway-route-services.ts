@@ -16,10 +16,7 @@ import {
   type VaultKeyProvider,
 } from "./citadels-route-service.js";
 import { CapabilitiesRouteService, type CapabilitiesRoutePort } from "./capabilities-route-service.js";
-import {
-  CapabilityScopeRouteService,
-  type CapabilityScopeRouteServiceDeps,
-} from "./capability-scope-route-service.js";
+import { CapabilityScopeRouteService, type CapabilityScopeRouteServiceDeps } from "./capability-scope-route-service.js";
 import {
   createCapabilityPacksRouteService,
   type CapabilityPacksRoutePort,
@@ -30,6 +27,7 @@ import {
   type ChatAttachmentsRoutePort,
   type ChatAttachmentsRouteService,
 } from "./chat-attachments-route-service.js";
+import type { ChatCompactionBreakerActionService } from "./chat-compaction-breaker-action-service.js";
 import {
   createChatDelegateRouteService,
   type ChatDelegateRoutePort,
@@ -62,10 +60,7 @@ import {
   type ChannelSetupRouteService,
 } from "./channel-setup-route-service.js";
 import { createCommsRouteService, type CommsRoutePort, type CommsRouteService } from "./comms-route-service.js";
-import {
-  createComplianceRouteService,
-  type ComplianceRouteService,
-} from "./compliance-export-route-service.js";
+import { createComplianceRouteService, type ComplianceRouteService } from "./compliance-export-route-service.js";
 import type { ComplianceExportServiceDeps } from "./compliance-export-service.js";
 import {
   createConnectorsRouteService,
@@ -126,6 +121,7 @@ import {
   type KnowledgeRoutePort,
   type KnowledgeRouteService,
 } from "./knowledge-route-service.js";
+import type { JourneyTimelineRouteService } from "./journey-timeline-route-service.js";
 import type { LocalAiRouteService } from "./local-ai-route-service.js";
 import {
   createLlamaCppRouteService,
@@ -142,6 +138,7 @@ import { createMeshRouteService, type MeshRoutePort, type MeshRouteService } fro
 import { createMobileRouteService, type MobileRoutePort, type MobileRouteService } from "./mobile-route-service.js";
 import { createNpuRouteService, type NpuRoutePort, type NpuRouteService } from "./npu-route-service.js";
 import type { PersonalOpsRouteService } from "./personal-ops-route-service.js";
+import type { OpsSavedBoardService } from "./ops-saved-board-service.js";
 import {
   createOnboardingRouteService,
   type OnboardingRoutePort,
@@ -154,12 +151,18 @@ import {
 } from "./obsidian-route-service.js";
 import { OrchestrationRouteService, type OrchestrationRoutePort } from "./orchestration-route-service.js";
 import { PromptPacksRouteService, type PromptPacksRoutePort } from "./prompt-packs-route-service.js";
+import type { SessionControlRouteService } from "./session-control-route-service.js";
 import {
   createRealtimeEventsRouteService,
   type RealtimeEventsRoutePort,
   type RealtimeEventsRouteService,
 } from "./realtime-events-route-service.js";
 import { ResearchSearchRouteService, type ResearchSearchRoutePort } from "./research-search-broker-service.js";
+import {
+  RemoteWorkersRouteService,
+  type RemoteWorkerAssignmentStore,
+  type RemoteWorkerRegistryStore,
+} from "./remote-workers-route-service.js";
 import { RuntimeLifecycleRouteService, type RuntimeLifecycleRoutePort } from "./runtime-lifecycle-route-service.js";
 import {
   createSessionsListRouteService,
@@ -192,6 +195,11 @@ import {
   type WorkspacesRoutePort,
   type WorkspacesRouteService,
 } from "./workspaces-route-service.js";
+import type { WorkspacePathBridgeRouteService } from "../routes/workspace-path-bridge.js";
+import type { ExternalSourceRouteService } from "./external-source-route-service.js";
+import type { MeshCapabilityActivationService } from "./mesh-capability-activation-service.js";
+import type { MeshCapabilityInvocationService } from "./mesh-capability-invocation-service.js";
+import type { MeshCapabilityPublicationService } from "./mesh-capability-publication-service.js";
 export interface GatewayRouteServices {
   a2a: A2ARouteService;
   addons: AddonsRouteService;
@@ -206,6 +214,7 @@ export interface GatewayRouteServices {
   capabilities: CapabilitiesRouteService;
   capabilityPacks: CapabilityPacksRouteService;
   chatAttachments: ChatAttachmentsRouteService;
+  chatCompactionBreakerActions: ChatCompactionBreakerActionService;
   chatDelegate: ChatDelegateRouteService;
   chatMessages: ChatMessagesRouteService;
   chatProjects: ChatProjectsRouteService;
@@ -225,6 +234,7 @@ export interface GatewayRouteServices {
   durable: DurableRouteService;
   evidence: EvidenceRouteService;
   evidenceReceipts: EvidenceReceiptsRouteService;
+  externalSources?: ExternalSourceRouteService;
   files: FilesRouteService;
   gatewayEvents: GatewayEventsRouteService;
   health: HealthRouteService;
@@ -233,6 +243,7 @@ export interface GatewayRouteServices {
   integrations: IntegrationRouteService;
   integrationWebhooks: IntegrationWebhookRouteService;
   knowledge: KnowledgeRouteService;
+  journeyTimeline?: JourneyTimelineRouteService;
   localAi: LocalAiRouteService;
   llamaCpp: LlamaCppRouteService;
   llm: LlmRouteService;
@@ -241,17 +252,37 @@ export interface GatewayRouteServices {
   modelComparisons: ModelComparisonService;
   media: MediaRouteService;
   mesh: MeshRouteService;
+  /**
+   * HX-408: the authenticated mesh capability publication owner. Composed
+   * directly from storage by the gateway service (like `externalSources`),
+   * so the base composition port does not carry it.
+   */
+  meshCapabilityPublication?: MeshCapabilityPublicationService;
+  /**
+   * HX-408 M2: the governed mesh capability activation owner (operator
+   * request/revoke routes). Composed directly by the gateway service.
+   */
+  meshCapabilityActivation?: MeshCapabilityActivationService;
+  /**
+   * HX-408 M3: the generation-fenced mesh invocation owner (node-facing
+   * input/progress/settlement routes). Composed directly by the gateway
+   * service over the existing mesh replication transport.
+   */
+  meshCapabilityInvocation?: MeshCapabilityInvocationService;
   mobile: MobileRouteService;
   npu: NpuRouteService;
   personalOps: PersonalOpsRouteService;
+  opsSavedBoards?: OpsSavedBoardService;
   onboarding: OnboardingRouteService;
   obsidian: ObsidianRouteService;
   orchestration: OrchestrationRouteService;
   promptPacks: PromptPacksRouteService;
   realtimeEvents: RealtimeEventsRouteService;
   researchSearch: ResearchSearchRouteService;
+  remoteWorkers: RemoteWorkersRouteService;
   runtimeLifecycle: RuntimeLifecycleRouteService;
   secrets: SecretsRouteService;
+  sessionControl: SessionControlRouteService;
   settings: SettingsRouteService;
   sessionsList: SessionsListRouteService;
   skills: SkillsRouteService;
@@ -260,6 +291,7 @@ export interface GatewayRouteServices {
   toolsInvoke: ToolsInvokeRouteService;
   updateScout: UpdateScoutRouteService;
   voice: VoiceRouteService;
+  workspacePathBridge?: WorkspacePathBridgeRouteService;
   workspaces: WorkspacesRouteService;
 }
 
@@ -279,6 +311,7 @@ export interface GatewayRouteServiceDependencies {
   capabilities: CapabilitiesRoutePort;
   capabilityPacks: CapabilityPacksRoutePort;
   chatAttachments: ChatAttachmentsRoutePort;
+  chatCompactionBreakerActions: ChatCompactionBreakerActionService;
   chatDelegate: ChatDelegateRoutePort;
   chatMessages: ChatMessagesRoutePort;
   chatProjects: ChatProjectsRoutePort;
@@ -323,8 +356,10 @@ export interface GatewayRouteServiceDependencies {
   promptPacks: PromptPacksRoutePort;
   realtimeEvents: RealtimeEventsRoutePort;
   researchSearch: ResearchSearchRoutePort;
+  remoteWorkers: { registry: RemoteWorkerRegistryStore; assignments: RemoteWorkerAssignmentStore };
   runtimeLifecycle: RuntimeLifecycleRoutePort;
   secrets: SecretsRoutePort;
+  sessionControl: SessionControlRouteService;
   settings: SettingsRoutePort;
   sessionsList: SessionsListRoutePort;
   skills: SkillsRoutePort;
@@ -351,6 +386,7 @@ export function createGatewayRouteServices(deps: GatewayRouteServiceDependencies
     capabilities: new CapabilitiesRouteService(deps.capabilities),
     capabilityPacks: createCapabilityPacksRouteService(deps.capabilityPacks),
     chatAttachments: createChatAttachmentsRouteService(deps.chatAttachments),
+    chatCompactionBreakerActions: deps.chatCompactionBreakerActions,
     chatDelegate: createChatDelegateRouteService(deps.chatDelegate),
     chatMessages: createChatMessagesRouteService(deps.chatMessages),
     chatProjects: createChatProjectsRouteService(deps.chatProjects),
@@ -395,8 +431,10 @@ export function createGatewayRouteServices(deps: GatewayRouteServiceDependencies
     promptPacks: new PromptPacksRouteService(deps.promptPacks),
     realtimeEvents: createRealtimeEventsRouteService(deps.realtimeEvents),
     researchSearch: new ResearchSearchRouteService(deps.researchSearch),
+    remoteWorkers: new RemoteWorkersRouteService(deps.remoteWorkers.registry, deps.remoteWorkers.assignments),
     runtimeLifecycle: new RuntimeLifecycleRouteService(deps.runtimeLifecycle),
     secrets: createSecretsRouteService(deps.secrets),
+    sessionControl: deps.sessionControl,
     settings: createSettingsRouteService(deps.settings),
     sessionsList: createSessionsListRouteService(deps.sessionsList),
     skills: new SkillsRouteService(deps.skills),

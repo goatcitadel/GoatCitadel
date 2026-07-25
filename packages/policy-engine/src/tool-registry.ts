@@ -91,7 +91,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     argSchema: {
       type: "object",
       properties: {
-        query: { type: "string" },
+        query: { type: "string", maxLength: 512 },
         scope: { type: "string", enum: ["session", "all"] },
         limit: { type: "integer", minimum: 1, maximum: 50 },
         contextRadius: { type: "integer", minimum: 0, maximum: 10 },
@@ -111,7 +111,40 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     preferredForIntents: ["recall_history", "memory_lookup"],
     usageHints: [
       "Use when the user references something from earlier in the conversation that you can no longer see.",
-      "Defaults to this session; pass scope:'all' only when you must search across other conversations.",
+      "Defaults to this session; scope:'all' remains confined to the active workspace.",
+    ],
+  },
+  {
+    name: "session.history",
+    category: "session",
+    riskLevel: "safe",
+    requiresApproval: false,
+    description:
+      "Reopen bounded transcript context around an exact workspace-authorized message and sequence returned by session.search.",
+    argSchema: {
+      type: "object",
+      properties: {
+        sessionId: { type: "string" },
+        messageId: { type: "string" },
+        sequence: { type: "integer", minimum: 1 },
+        limit: { type: "integer", minimum: 1, maximum: 101 },
+      },
+      required: ["messageId", "sequence"],
+    },
+    examples: [
+      {
+        title: "Reopen context around a search hit",
+        args: { sessionId: "session-id-from-search", messageId: "message-id-from-search", sequence: 42, limit: 21 },
+      },
+    ],
+    pack: "core",
+    readOnly: true,
+    deterministic: true,
+    recommendedContexts: ["chat", "cowork", "code"],
+    preferredForIntents: ["recall_history", "memory_lookup"],
+    usageHints: [
+      "Use the exact sessionId, messageId, and sequence returned by session.search.",
+      "An unavailable anchor means it was deleted or compacted; do not silently substitute the latest transcript.",
     ],
   },
   {
@@ -628,17 +661,23 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     category: "research",
     riskLevel: "caution",
     requiresApproval: false,
-    description: "Search web using browser automation.",
+    description: "Search the web through governed browser or official US/global-English provider execution.",
     pack: "core",
     recommendedContexts: ["chat", "cowork", "code"],
     preferredForIntents: ["live_data", "web_lookup", "research"],
-    usageHints: ["Use to discover candidate sources before navigating to a page."],
+    usageHints: [
+      "Use to discover candidate sources before navigating to a page.",
+      "Use backend=official for bounded Brave/Parallel API search; external request accounting is response-local only.",
+    ],
     argSchema: {
       type: "object",
       properties: {
         query: { type: "string" },
-        maxResults: { type: "integer", minimum: 1, maximum: 10 },
-        backend: { type: "string", enum: ["native", "firecrawl"] },
+        maxResults: { type: "integer", minimum: 1, maximum: 20 },
+        backend: { type: "string", enum: ["native", "firecrawl", "official"] },
+        mode: { type: "string", enum: ["quick", "research"] },
+        providers: { type: "array", items: { type: "string", enum: ["brave", "parallel"] }, maxItems: 2 },
+        freshness: { type: "string", enum: ["any", "day", "week", "month"] },
       },
       required: ["query"],
     },
@@ -646,6 +685,10 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
       {
         title: "Search for authoritative sources before extracting",
         args: { query: "OpenAI background mode docs", maxResults: 5, backend: "firecrawl" },
+      },
+      {
+        title: "Search official providers for current primary sources",
+        args: { query: "OpenTelemetry specification updates", maxResults: 5, backend: "official", mode: "quick" },
       },
     ],
   },

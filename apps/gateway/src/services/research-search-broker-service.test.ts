@@ -1,71 +1,66 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { ResearchSearchBrokerService } from "./research-search-broker-service.js";
 
 describe("ResearchSearchBrokerService", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
-  it("excludes Chinese domestic search engines and refuses scraping fallback", () => {
-    vi.stubEnv("GOATCITADEL_SEARCH_GOOGLE_API_KEY", "");
-    vi.stubEnv("GOATCITADEL_SEARCH_BING_API_KEY", "");
-    const service = new ResearchSearchBrokerService();
-
-    const response = service.search({
+  it("is advisory-only and points execution to governed browser.search", async () => {
+    const result = await new ResearchSearchBrokerService().search({
       query: "latest GoatCitadel skill updates",
-      engines: ["google", "baidu", "bing_cn", "sogou"] as never,
-      maxResults: 10,
+      providers: ["brave", "parallel"],
+      maxResults: 50,
     });
 
-    expect(response.results).toEqual([]);
-    expect(response.engineStatuses).toEqual([
+    expect(result).toMatchObject({
+      query: "latest GoatCitadel skill updates",
+      results: [],
+      providerAttempts: [],
+      execution: {
+        kind: "advisory_only",
+        executableTool: "browser.search",
+        requiredBackend: "official",
+      },
+      accounting: {
+        scope: "response_local",
+        persistence: "not_persisted",
+        cost: "unknown",
+        outboundRequests: [],
+      },
+      routing: { attemptedProviders: [], successfulProviders: [] },
+    });
+    expect(result.warnings.join(" ")).toContain("did not execute");
+  });
+
+  it("retains exclusions and compatibility status without scraping", async () => {
+    const result = await new ResearchSearchBrokerService().search({
+      query: "latest GoatCitadel skill updates",
+      engines: ["google", "brave", "baidu", "bing_cn", "sogou"] as never,
+    });
+
+    expect(result.engineStatuses).toContainEqual(
       expect.objectContaining({
         engine: "google",
         status: "unavailable",
-        message: expect.stringContaining("will not scrape"),
+        message: expect.stringContaining("no scraping"),
       }),
-    ]);
-    expect(response.warnings.join(" ")).toContain("Baidu is excluded");
-    expect(response.warnings.join(" ")).toContain("Bing CN is excluded");
-    expect(response.warnings.join(" ")).toContain("No scraping fallback");
+    );
+    expect(result.warnings.join(" ")).toContain("Baidu is excluded");
+    expect(result.warnings.join(" ")).toContain("Bing CN is excluded");
+    expect(result.warnings.join(" ")).toContain("Sogou is excluded");
   });
 
-  it("reports degraded status when an official provider key exists but live execution is disabled", () => {
-    vi.stubEnv("GOATCITADEL_SEARCH_BRAVE_API_KEY", "configured");
-    const service = new ResearchSearchBrokerService();
-
-    const response = service.search({
-      query: "provider pricing",
-      engines: ["brave"],
-    });
-
-    expect(response.engineStatuses).toEqual([
-      expect.objectContaining({
-        engine: "brave",
-        status: "degraded",
-        message: expect.stringContaining("Official API credentials are configured"),
-      }),
-    ]);
-    expect(response.results).toEqual([]);
-  });
-
-  it("exposes Parallel as a configured advisory provider without claiming live search", () => {
-    vi.stubEnv("GOATCITADEL_SEARCH_PARALLEL_API_KEY", "configured");
-    const service = new ResearchSearchBrokerService();
-
-    const response = service.search({
-      query: "GoatCitadel release evidence",
-      engines: ["parallel"],
-    });
-
-    expect(response.engineStatuses).toEqual([
-      expect.objectContaining({
-        engine: "parallel",
-        status: "degraded",
-        message: expect.stringContaining("live broker execution is not enabled"),
-      }),
-    ]);
-    expect(response.results).toEqual([]);
-    expect(response.warnings.join(" ")).toContain("advisory-only");
+  it.each([
+    "find api_key=super-secret-value123",
+    "Authorization: Bearer abc123def456ghi789jkl",
+    "Authorization: Basic dXNlcjpwYXNz",
+    "find AKIAIOSFODNN7EXAMPLE",
+    "inspect http://service.internal/admin",
+    "search my-printer.local credentials",
+    "inspect http://[::1]/admin",
+    "inspect http://[fd12:3456::1]/admin",
+    "inspect http://[fe80::1]/admin",
+  ])("never echoes blocked sensitive query content: %s", async (query) => {
+    const serialized = JSON.stringify(await new ResearchSearchBrokerService().search({ query, providers: ["brave"] }));
+    expect(serialized).not.toContain(query);
+    expect(serialized).toContain("[redacted-sensitive-query]");
+    expect(serialized).toContain("no external search was attempted");
   });
 });

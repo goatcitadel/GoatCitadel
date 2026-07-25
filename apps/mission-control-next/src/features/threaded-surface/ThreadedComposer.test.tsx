@@ -87,6 +87,7 @@ function buildProps(overrides: Partial<any> = {}) {
     },
     currentWebMode: "auto",
     currentReviewDepth: "off",
+    modelCouncilEnabled: false,
     fullWebAccess: false,
     routePreflight: null,
     routePreflightLoading: false,
@@ -111,6 +112,7 @@ function buildProps(overrides: Partial<any> = {}) {
     onTogglePlanningMode: vi.fn(),
     onToggleResearchMode: vi.fn(),
     onToggleReviewMode: vi.fn(),
+    onToggleModelCouncil: vi.fn(),
     onDismissPresetWarning: vi.fn(),
     onAcknowledgeRouteBoundary: vi.fn(),
     onApprovePending: vi.fn(),
@@ -307,6 +309,7 @@ describe("ThreadedComposer", () => {
     expect(markup).toContain(">Plan<");
     expect(markup).toContain(">Research<");
     expect(markup).toContain(">Review<");
+    expect(markup).toContain(">Council<");
     expect(markup).toContain(">Attach context<");
     expect(markup).not.toContain("Subagent policy");
     expect(markup).not.toContain("Thinking level");
@@ -325,6 +328,7 @@ describe("ThreadedComposer", () => {
       onTogglePlanningMode: vi.fn(),
       onToggleResearchMode: vi.fn(),
       onToggleReviewMode: vi.fn(),
+      onToggleModelCouncil: vi.fn(),
       onAttachFiles: vi.fn(),
       onRunQuickResearch: vi.fn(),
       onReviewRunDetails: vi.fn(),
@@ -335,6 +339,7 @@ describe("ThreadedComposer", () => {
       planningMode: "advisory",
       currentWebMode: "quick",
       currentReviewDepth: "standard",
+      modelCouncilEnabled: true,
       pendingAttachments: [
         {
           attachmentId: "attachment-brief",
@@ -349,16 +354,19 @@ describe("ThreadedComposer", () => {
     expect(findSuggestionButton(renderer.root, "Plan").props["aria-pressed"]).toBe(true);
     expect(findSuggestionButton(renderer.root, "Research").props["aria-pressed"]).toBe(true);
     expect(findSuggestionButton(renderer.root, "Review").props["aria-pressed"]).toBe(true);
+    expect(findSuggestionButton(renderer.root, "Council").props["aria-pressed"]).toBe(true);
     expect(findSuggestionButton(renderer.root, "Attach context").props["aria-pressed"]).toBe(true);
 
     await click(findSuggestionButton(renderer.root, "Plan"));
     await click(findSuggestionButton(renderer.root, "Research"));
     await click(findSuggestionButton(renderer.root, "Review"));
+    await click(findSuggestionButton(renderer.root, "Council"));
     await click(findSuggestionButton(renderer.root, "Attach context"));
 
     expect(callbacks.onTogglePlanningMode).toHaveBeenCalledTimes(1);
     expect(callbacks.onToggleResearchMode).toHaveBeenCalledTimes(1);
     expect(callbacks.onToggleReviewMode).toHaveBeenCalledTimes(1);
+    expect(callbacks.onToggleModelCouncil).toHaveBeenCalledTimes(1);
     expect(callbacks.onAttachFiles).toHaveBeenCalledTimes(1);
     expect(callbacks.onRunQuickResearch).not.toHaveBeenCalled();
     expect(callbacks.onReviewRunDetails).not.toHaveBeenCalled();
@@ -1308,5 +1316,163 @@ describe("ThreadedComposer", () => {
     });
 
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:preview");
+  });
+});
+
+describe("ThreadedComposer external source strip (HX-407 C3)", () => {
+  const FULL_SHA = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
+
+  function externalAttachment(id: string, overrides: Partial<Record<string, unknown>> = {}) {
+    return {
+      schemaVersion: "goatcitadel.external-source.v1",
+      attachmentId: id,
+      workspaceId: "default",
+      sessionId: "session-1",
+      sourceId: "source-1",
+      importId: "import-1",
+      itemId: `item-${id}`,
+      normalizedArtifactSha256: FULL_SHA,
+      mode: "read_only_external",
+      status: "attached",
+      revision: 1,
+      attachedByActorId: "operator-1",
+      attachedAt: "2026-07-14T08:00:00.000Z",
+      ...overrides,
+    };
+  }
+
+  function externalControls(overrides: Partial<Record<string, unknown>> = {}) {
+    return {
+      attachments: [externalAttachment("attachment-1")],
+      selectedAttachmentIds: [],
+      busyAttachmentId: null,
+      canMutate: true,
+      error: null,
+      onToggleSelect: vi.fn(),
+      onClearSelection: vi.fn(),
+      onAttach: vi.fn(),
+      onDetach: vi.fn(),
+      onRequestKnowledgeSnapshot: vi.fn(),
+      ...overrides,
+    };
+  }
+
+  it("renders nothing at all while the capability is absent (pre-C4 degradation)", () => {
+    const markup = buildMarkup({ externalSourceControls: null });
+    expect(markup).not.toContain("External sources");
+    expect(markup).not.toContain("mc-next-composer-external-strip");
+  });
+
+  it("renders content-free read-only chips with provenance, no raw JSON, and no full hash", () => {
+    const markup = buildMarkup({
+      externalSourceControls: externalControls({ selectedAttachmentIds: ["attachment-1"] }),
+    });
+
+    expect(markup).toContain("External sources");
+    expect(markup).toContain("item-attachment-1");
+    expect(markup).toContain("Read-only");
+    expect(markup).toContain("1 selected for the next turn");
+    // Truncated digest only — never the full 64-hex artifact hash.
+    expect(markup).toContain(FULL_SHA.slice(0, 12));
+    expect(markup).not.toContain(FULL_SHA);
+    // Semantic chips, not a raw JSON dump, and no transcript content.
+    expect(markup).not.toContain('"attachmentId"');
+    expect(markup).not.toContain('"normalizedArtifactSha256"');
+    // Provenance chain is exposed as an accessible title.
+    expect(markup).toContain("Source source-1 · Import import-1 · Item item-attachment-1");
+  });
+
+  it("toggles explicit per-turn selection through an accessible checkbox and clears it", async () => {
+    const controls = externalControls({ selectedAttachmentIds: ["attachment-1"] });
+    const renderer = await renderComposer({ externalSourceControls: controls });
+
+    const checkbox = renderer.root.find(
+      (node) =>
+        node.type === "input" &&
+        node.props["aria-label"] === "Include external source item-attachment-1 in the next turn",
+    );
+    expect(checkbox.props.checked).toBe(true);
+    await act(async () => {
+      checkbox.props.onChange({ target: { checked: false } });
+    });
+    expect(controls.onToggleSelect).toHaveBeenCalledWith("attachment-1");
+
+    await click(findButton(renderer.root, "Clear selection"));
+    expect(controls.onClearSelection).toHaveBeenCalledTimes(1);
+    renderer.unmount();
+  });
+
+  it("keeps detach and knowledge-copy disabled while the incarnation is missing, with an honest hint", async () => {
+    const controls = externalControls({ canMutate: false });
+    const renderer = await renderComposer({ externalSourceControls: controls });
+
+    const detach = findButton(renderer.root, "Detach");
+    const knowledge = findButton(renderer.root, "Request knowledge copy");
+    expect(detach.props.disabled).toBe(true);
+    expect(knowledge.props.disabled).toBe(true);
+    const markup = buildMarkup({ externalSourceControls: externalControls({ canMutate: false }) });
+    expect(markup).toContain("stay disabled until the server provides the live session incarnation");
+    // The live posture (C4b activation) renders no disabled-mutation hint at all.
+    const liveMarkup = buildMarkup({ externalSourceControls: externalControls({ canMutate: true }) });
+    expect(liveMarkup).not.toContain("stay disabled until");
+    renderer.unmount();
+  });
+
+  it("routes detach and governed knowledge-copy actions to the host controls", async () => {
+    const controls = externalControls();
+    const renderer = await renderComposer({ externalSourceControls: controls });
+
+    await click(findButton(renderer.root, "Request knowledge copy"));
+    expect(controls.onRequestKnowledgeSnapshot).toHaveBeenCalledWith("attachment-1");
+    await click(findButton(renderer.root, "Detach"));
+    expect(controls.onDetach).toHaveBeenCalledWith("attachment-1");
+    renderer.unmount();
+  });
+
+  it("attaches an imported item through the labelled identifier-only form", async () => {
+    const controls = externalControls({ attachments: [] });
+    const renderer = await renderComposer({ externalSourceControls: controls });
+
+    expect(
+      renderer.root.findAll((node) => node.type === "p" && collectText(node).includes("Import them in the Library")),
+    ).toHaveLength(1);
+    await click(findButton(renderer.root, "Attach imported item"));
+    const fields = renderer.root.findAll(
+      (node) => node.type === "input" && typeof node.props.id === "string" && node.props.id.includes("-"),
+    );
+    const byLabel = (suffix: string): ReactTestInstance => {
+      const field = fields.find((node) => String(node.props.id).endsWith(suffix));
+      if (!field) {
+        throw new Error(`Missing attach-form field ${suffix}`);
+      }
+      return field;
+    };
+    await act(async () => {
+      byLabel("-source").props.onChange({ target: { value: " source-1 " } });
+    });
+    await act(async () => {
+      byLabel("-import").props.onChange({ target: { value: "import-1" } });
+    });
+    await act(async () => {
+      byLabel("-item").props.onChange({ target: { value: "item-9" } });
+    });
+    await click(findButton(renderer.root, "Attach read-only"));
+    expect(controls.onAttach).toHaveBeenCalledWith({ sourceId: "source-1", importId: "import-1", itemId: "item-9" });
+    renderer.unmount();
+  });
+
+  it("arms the Attach context chip when an external selection exists", () => {
+    const armed = buildMarkup({
+      externalSourceControls: externalControls({ selectedAttachmentIds: ["attachment-1"] }),
+    });
+    const unarmed = buildMarkup({ externalSourceControls: externalControls() });
+    const armedIndex = armed.indexOf(">Attach context<");
+    const unarmedIndex = unarmed.indexOf(">Attach context<");
+    expect(armedIndex).toBeGreaterThan(-1);
+    expect(unarmedIndex).toBeGreaterThan(-1);
+    const armedButton = armed.slice(armed.lastIndexOf("<button", armedIndex), armedIndex);
+    const unarmedButton = unarmed.slice(unarmed.lastIndexOf("<button", unarmedIndex), unarmedIndex);
+    expect(armedButton).toContain('aria-pressed="true"');
+    expect(unarmedButton).toContain('aria-pressed="false"');
   });
 });

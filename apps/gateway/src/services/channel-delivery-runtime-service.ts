@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   ChannelAttachmentInput,
   ChannelDeliveryDiagnostics,
@@ -11,6 +11,7 @@ import {
   type ChannelDeliveryRichFormat,
   type ChannelRichMessageDeliveryPlan,
 } from "@goatcitadel/gateway-core";
+import type { SharedHostLifecycleAdmissionPort } from "./shared-host-lifecycle-service.js";
 
 export type ChannelDeliveryRuntimeStatus =
   | "queued"
@@ -225,6 +226,7 @@ export class ChannelDeliveryRuntimeService {
       onDeliverySent?: (record: ChannelDeliveryRuntimeRecord) => void;
       onDeliveryFailed?: (record: ChannelDeliveryRuntimeRecord) => void;
       now?: () => Date;
+      sharedHostLifecycle?: SharedHostLifecycleAdmissionPort;
     },
   ) {}
 
@@ -348,6 +350,17 @@ export class ChannelDeliveryRuntimeService {
   }
 
   public async drainDue(limit = 25): Promise<ChannelDeliveryRuntimeRecord[]> {
+    const admission = this.deps.sharedHostLifecycle?.tryReserve("worker", `channel-delivery-drain:${randomUUID()}`);
+    if (admission && !admission.admitted) return [];
+    try {
+      return await this.drainDueAdmitted(limit, admission?.admitted ? admission.reservation.signal : undefined);
+    } finally {
+      if (admission?.admitted) admission.reservation.release();
+    }
+  }
+
+  private async drainDueAdmitted(limit: number, signal?: AbortSignal): Promise<ChannelDeliveryRuntimeRecord[]> {
+    if (signal?.aborted) return [];
     const now = this.now();
     this.hydrateDueDeliveries(now, limit);
     const due = [...this.deliveries.values()]
@@ -359,6 +372,7 @@ export class ChannelDeliveryRuntimeService {
       .slice(0, Math.max(1, limit));
     const results: ChannelDeliveryRuntimeRecord[] = [];
     for (const delivery of due) {
+      if (signal?.aborted) break;
       const result = await this.processDelivery(delivery);
       if (result) {
         results.push(result);

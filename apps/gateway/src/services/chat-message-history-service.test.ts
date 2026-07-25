@@ -91,7 +91,7 @@ describe("chat-message-history-service", () => {
     expect(serialized).not.toContain("legacy-system-secret");
   });
 
-  it("compacts long transcripts while preserving recent turns", async () => {
+  it("keeps stateless transcript history verbatim because it lacks durable breaker lineage", async () => {
     const transcript = Array.from({ length: 48 }, (_, index) =>
       createTranscriptEvent(`event-${index}`, index % 2 === 0 ? "message.user" : "message.assistant", {
         content: `${index % 2 === 0 ? "User" : "Assistant"} ${index} ${"detail ".repeat(260)}`,
@@ -99,38 +99,64 @@ describe("chat-message-history-service", () => {
     );
     const deps = createDeps({
       transcript,
-      buildUserMessageContent: async (message) => [
-        { type: "text", text: message.content },
-        { nested: { content: ["array", "content"] } },
-      ],
+      buildUserMessageContent: async (message) => message.content,
     });
 
     const messages = await buildLlmMessagesFromTranscript(deps, "session-1");
 
-    expect(messages[0]).toEqual(
-      expect.objectContaining({
-        role: "system",
-        content: expect.stringContaining("Compacted conversation context"),
-      }),
-    );
+    expect(messages[0]).toEqual(expect.objectContaining({ role: "user", content: expect.stringContaining("User 0") }));
     expect(messages.at(-1)).toEqual(
       expect.objectContaining({
         role: "assistant",
         content: expect.stringContaining("Assistant 47"),
       }),
     );
-    expect(messages.length).toBeLessThan(transcript.length);
+    expect(messages).toHaveLength(transcript.length);
+  });
+
+  it("keeps rich transcript windows verbatim even when the provider adapter flattens their content", async () => {
+    const transcript = Array.from({ length: 48 }, (_, index) =>
+      createTranscriptEvent(
+        `rich-event-${index}`,
+        index % 2 === 0 ? "message.user" : "message.assistant",
+        index === 2
+          ? {
+              message: {
+                content: `User ${index} ${"detail ".repeat(260)}`,
+                attachments: [
+                  {
+                    attachmentId: "attachment-1",
+                    fileName: "evidence.txt",
+                    mimeType: "text/plain",
+                    sizeBytes: 42,
+                  },
+                ],
+              },
+            }
+          : { content: `${index % 2 === 0 ? "User" : "Assistant"} ${index} ${"detail ".repeat(260)}` },
+      ),
+    );
+    const deps = createDeps({
+      transcript,
+      buildUserMessageContent: async (message) => message.content,
+    });
+
+    const messages = await buildLlmMessagesFromTranscript(deps, "session-1");
+
+    expect(messages).toHaveLength(transcript.length);
+    expect(messages[2]).toEqual(expect.objectContaining({ role: "user", content: expect.stringContaining("User 2") }));
+    expect(messages.some((message) => message.role === "system")).toBe(false);
   });
 
   it("builds branch-path messages from traced turns and reuses persisted compaction summaries", async () => {
-    const sessionState = createBranchSessionState(8);
+    const sessionState = createBranchSessionState(14);
     const summaries = [
       {
         sessionId: "session-1",
-        branchHeadTurnId: "turn-8",
+        branchHeadTurnId: "turn-14",
         startTurnId: "turn-1",
-        endTurnId: "turn-2",
-        turnIds: ["turn-1", "turn-2"],
+        endTurnId: "turn-8",
+        turnIds: Array.from({ length: 8 }, (_, index) => `turn-${index + 1}`),
         sourceHash: "not-matching",
         tokenEstimate: 100,
         summary: "stale summary",
@@ -153,7 +179,7 @@ describe("chat-message-history-service", () => {
     const messages = await buildLlmMessagesFromBranchPath(
       deps,
       "session-1",
-      Array.from({ length: 8 }, (_, index) => `turn-${index + 1}`),
+      Array.from({ length: 14 }, (_, index) => `turn-${index + 1}`),
       createMessage("current-user", "user", "Current branch question."),
       { guidanceSystemInstruction: "Use branch context." },
     );
@@ -169,10 +195,10 @@ describe("chat-message-history-service", () => {
     expect(upsert).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: "session-1",
-        branchHeadTurnId: "turn-8",
+        branchHeadTurnId: "turn-14",
         startTurnId: "turn-1",
-        endTurnId: "turn-2",
-        turnIds: ["turn-1", "turn-2"],
+        endTurnId: "turn-8",
+        turnIds: Array.from({ length: 8 }, (_, index) => `turn-${index + 1}`),
       }),
     );
   });
@@ -257,17 +283,26 @@ describe("chat-message-history-service", () => {
   });
 
   it("reuses matching persisted branch compaction summaries before writing new ones", async () => {
-    const sessionState = createBranchSessionState(8, "persisted");
-    const source = ["turn-1", "turn-2"]
-      .flatMap((turnId) => {
-        const trace = sessionState.tracesById.get(turnId)!;
-        return [
-          sessionState.messagesById.get(trace.userMessageId)!,
-          sessionState.messagesById.get(trace.assistantMessageId!)!,
-        ];
-      })
-      .map((message) => `${message.role.toUpperCase()}: ${message.content.trim()}`)
-      .join("\n\n");
+    const sessionState = createBranchSessionState(14, "persisted");
+    const turnIds = Array.from({ length: 8 }, (_, index) => `turn-${index + 1}`);
+    const sourceMessages = turnIds.flatMap((turnId) => {
+      const trace = sessionState.tracesById.get(turnId)!;
+      return [
+        sessionState.messagesById.get(trace.userMessageId)!,
+        sessionState.messagesById.get(trace.assistantMessageId!)!,
+      ];
+    });
+    const source = JSON.stringify({
+      version: 1,
+      turnIds,
+      messages: sourceMessages.map((message) => ({
+        messageId: message.messageId,
+        role: message.role,
+        content: message.content,
+        parts: null,
+        attachments: null,
+      })),
+    });
     const sourceHash = createHash("sha256").update(source).digest("hex");
     const upsert = vi.fn((input) => input);
     const deps = createDeps({
@@ -275,13 +310,13 @@ describe("chat-message-history-service", () => {
       summaries: [
         {
           sessionId: "session-1",
-          branchHeadTurnId: "turn-8",
+          branchHeadTurnId: "turn-14",
           startTurnId: "turn-1",
-          endTurnId: "turn-2",
-          turnIds: ["turn-1", "turn-2"],
+          endTurnId: "turn-8",
+          turnIds,
           sourceHash,
           tokenEstimate: 100,
-          summary: "Persisted summary for the first two turns.",
+          summary: "Persisted summary for the first eight turns.",
           createdAt: "2026-05-14T00:00:00.000Z",
           updatedAt: "2026-05-14T00:00:00.000Z",
         },
@@ -292,11 +327,11 @@ describe("chat-message-history-service", () => {
     const messages = await buildLlmMessagesFromBranchPath(
       deps,
       "session-1",
-      Array.from({ length: 8 }, (_, index) => `turn-${index + 1}`),
+      Array.from({ length: 14 }, (_, index) => `turn-${index + 1}`),
       undefined,
     );
 
-    expect(messages[0]).toEqual({ role: "system", content: "Persisted summary for the first two turns." });
+    expect(messages[0]).toEqual({ role: "system", content: "Persisted summary for the first eight turns." });
     expect(upsert).not.toHaveBeenCalled();
   });
 
@@ -325,12 +360,15 @@ describe("chat-message-history-service", () => {
         content: expect.stringContaining("Assistant 29"),
       }),
     );
-    expect(messages.length).toBeLessThan(transcript.length);
+    expect(messages).toHaveLength(transcript.length);
   });
 
   it("skips blank branch compaction windows without persisting empty summaries", async () => {
-    const sessionState = createBranchSessionState(8, "blank-window");
-    for (const messageId of ["user-1", "assistant-1", "user-2", "assistant-2"]) {
+    const sessionState = createBranchSessionState(14, "blank-window");
+    for (const messageId of Array.from({ length: 8 }, (_, index) => index + 1).flatMap((index) => [
+      `user-${index}`,
+      `assistant-${index}`,
+    ])) {
       const message = sessionState.messagesById.get(messageId)!;
       sessionState.messagesById.set(messageId, { ...message, content: "   " });
     }
@@ -340,16 +378,12 @@ describe("chat-message-history-service", () => {
     const messages = await buildLlmMessagesFromBranchPath(
       deps,
       "session-1",
-      Array.from({ length: 8 }, (_, index) => `turn-${index + 1}`),
+      Array.from({ length: 14 }, (_, index) => `turn-${index + 1}`),
       undefined,
     );
 
-    expect(messages[0]).toEqual(
-      expect.objectContaining({
-        role: "user",
-        content: expect.stringContaining("blank-window user 3"),
-      }),
-    );
+    expect(messages[0]).toEqual({ role: "user", content: "   " });
+    expect(messages).toHaveLength(28);
     expect(upsert).not.toHaveBeenCalled();
   });
 

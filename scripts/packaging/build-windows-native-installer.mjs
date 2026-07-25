@@ -24,8 +24,7 @@ function main() {
   const version = args.version || packageJson.version;
   const outDir = path.resolve(args.outDir || path.join(repoRoot, "artifacts", "installers", "windows"));
   const bundleDir = path.resolve(
-    args.bundleDir ||
-    path.join(repoRoot, "artifacts", "installers", "bundles", `GoatCitadel-${version}-${target}`),
+    args.bundleDir || path.join(repoRoot, "artifacts", "installers", "bundles", `GoatCitadel-${version}-${target}`),
   );
   const issPath = path.join(outDir, `GoatCitadel-${target}.iss`);
   const bundleZipPath = path.join(outDir, `GoatCitadel-${target}.zip`);
@@ -35,13 +34,17 @@ function main() {
   }
 
   fs.mkdirSync(outDir, { recursive: true });
-  fs.writeFileSync(issPath, renderIss({
-    target,
-    architecture: supportedTargets[target],
-    version,
-    bundleZipPath,
-    outDir,
-  }), "utf8");
+  fs.writeFileSync(
+    issPath,
+    renderIss({
+      target,
+      architecture: supportedTargets[target],
+      version,
+      bundleZipPath,
+      outDir,
+    }),
+    "utf8",
+  );
 
   if (args.emitOnly) {
     console.log(`Wrote Inno Setup script: ${issPath}`);
@@ -107,7 +110,9 @@ function parseArgs(argv) {
 }
 
 function printUsage() {
-  console.log("Usage: node scripts/packaging/build-windows-native-installer.mjs --target <windows-x64|windows-arm64> [--version <semver>] [--bundle-dir <dir>] [--out-dir <dir>] [--emit-only]");
+  console.log(
+    "Usage: node scripts/packaging/build-windows-native-installer.mjs --target <windows-x64|windows-arm64> [--version <semver>] [--bundle-dir <dir>] [--out-dir <dir>] [--emit-only]",
+  );
 }
 
 function resolveIscc() {
@@ -154,7 +159,13 @@ function createBundleArchive(sourceDir, destinationZip) {
   }
 }
 
-export function renderIss({ target: bundleTarget, architecture, version: bundleVersion, bundleZipPath: currentBundleZipPath, outDir: currentOutDir }) {
+export function renderIss({
+  target: bundleTarget,
+  architecture,
+  version: bundleVersion,
+  bundleZipPath: currentBundleZipPath,
+  outDir: currentOutDir,
+}) {
   return `
 #define MyAppName "GoatCitadel"
 #define MyAppVersion "${bundleVersion}"
@@ -208,6 +219,13 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "S
 
 [Files]
 Source: "{#MyBundleZip}"; DestDir: "{tmp}"; DestName: "bundle.zip"; Flags: deleteafterinstall
+; Final release identity cannot be embedded in the signed installer without a
+; digest cycle. Verified distribution ZIPs place this fixed, data-only
+; pair beside the installer. Copy only those exact files into the packaged app
+; when present; a standalone installer remains usable but truthfully reports
+; proof unverified.
+Source: "{src}\\release-evidence\\release-certificate.json"; DestDir: "{app}\\app\\release-evidence"; Flags: external skipifsourcedoesntexist
+Source: "{src}\\release-evidence\\release-certificate.sigstore.json"; DestDir: "{app}\\app\\release-evidence"; Flags: external skipifsourcedoesntexist
 
 [Icons]
 Name: "{autoprograms}\\GoatCitadel"; Filename: "{app}\\{#MyDesktopExe}"; WorkingDir: "{app}"

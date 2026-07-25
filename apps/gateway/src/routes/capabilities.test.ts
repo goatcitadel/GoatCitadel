@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import { ConflictError } from "@goatcitadel/contracts";
 import { capabilitiesRoutes } from "./capabilities.js";
 
 describe("capabilities routes", () => {
@@ -77,6 +78,7 @@ describe("capabilities routes", () => {
       })),
       getCapabilityCandidateDetail: vi.fn((candidateId: string) => ({
         candidateId,
+        revision: 1,
         versions: [],
         relatedProposals: [],
         activationBlocked: false,
@@ -86,20 +88,34 @@ describe("capabilities routes", () => {
         proposalId,
         status: "proposal",
       })),
-      promoteCapabilityCandidate: vi.fn((candidateId: string, versionId?: string) => ({
-        action: "promote",
-        candidateId,
-        selectedVersionId: versionId,
+      // HX-402 P2: candidate lifecycle verbs answer pending capability.lifecycle
+      // approval envelopes; the recovered approval effect is the only executor.
+      promoteCapabilityCandidate: vi.fn((candidateId: string) => ({
+        pendingApproval: {
+          kind: "capability.lifecycle",
+          action: "candidate_promoted",
+          candidateId,
+          status: "pending",
+          approvalId: "promote-approval",
+        },
       })),
-      revokeCapabilityCandidate: vi.fn((candidateId: string, versionId?: string) => ({
-        action: "revoke",
-        candidateId,
-        selectedVersionId: versionId,
+      revokeCapabilityCandidate: vi.fn((candidateId: string) => ({
+        pendingApproval: {
+          kind: "capability.lifecycle",
+          action: "candidate_revoked",
+          candidateId,
+          status: "pending",
+          approvalId: "revoke-approval",
+        },
       })),
-      rollbackCapabilityCandidate: vi.fn((candidateId: string, targetVersionId: string) => ({
-        action: "rollback",
-        candidateId,
-        targetVersionId,
+      rollbackCapabilityCandidate: vi.fn((candidateId: string) => ({
+        pendingApproval: {
+          kind: "capability.lifecycle",
+          action: "candidate_rolled_back",
+          candidateId,
+          status: "pending",
+          approvalId: "rollback-approval",
+        },
       })),
       createCapabilityProposal: vi.fn((payload: Record<string, unknown>) => ({
         proposalId: "proposal-created",
@@ -227,6 +243,22 @@ describe("capabilities routes", () => {
         status: "completed",
         ...payload,
       })),
+      verifyCodeModeRun: vi.fn(
+        async (runId: string, input: Record<string, unknown>, scope: Record<string, unknown>, operatorId?: string) => ({
+          run: { runId, status: "completed", verification: { status: "verified" } },
+          evidence: {
+            evidenceId: "proof-1",
+            runId,
+            status: "verified",
+            input,
+            scope,
+            operatorId,
+          },
+        }),
+      ),
+      listCodeModeRunVerificationEvidence: vi.fn((runId: string, scope: Record<string, unknown>, limit: number) => [
+        { evidenceId: "proof-1", runId, scope, limit },
+      ]),
       ...overrides,
     };
   }
@@ -421,14 +453,17 @@ describe("capabilities routes", () => {
     });
 
     expect(response.statusCode).toBe(201);
-    expect(createCapabilityProposal).toHaveBeenCalledWith({
-      proposalKind: "skill",
-      title: "Summarizer Upgrade",
-      summary: "Promote a better summarizer candidate",
-      payload: {
-        candidateId: "candidate-1",
+    expect(createCapabilityProposal).toHaveBeenCalledWith(
+      {
+        proposalKind: "skill",
+        title: "Summarizer Upgrade",
+        summary: "Promote a better summarizer candidate",
+        payload: {
+          candidateId: "candidate-1",
+        },
       },
-    });
+      "operator-test",
+    );
     expect(response.json()).toMatchObject({
       proposalId: "proposal-1",
       proposalKind: "skill",
@@ -689,18 +724,19 @@ describe("capabilities routes", () => {
   });
 
   it("promotes a candidate through the capability route service", async () => {
-    const promoteCapabilityCandidate = vi.fn((candidateId: string, versionId?: string) => ({
-      action: "promote",
-      candidateId,
-      selectedVersionId: versionId,
-      changedVersionIds: [versionId],
-      occurredAt: "2026-04-10T01:00:00.000Z",
-      detail: {
+    // HX-402 P2: the promote verb answers with a pending capability.lifecycle
+    // approval envelope; the recovered approval effect is the only executor.
+    const promoteCapabilityCandidate = vi.fn((candidateId: string) => ({
+      pendingApproval: {
+        approvalId: "22222222-3333-4444-5555-666677778888",
+        status: "pending",
+        kind: "capability.lifecycle",
+        action: "candidate_promoted",
         candidateId,
-        versions: [],
-        relatedProposals: [],
-        activationBlocked: false,
-        activationBlockers: [],
+        requestSha256: "a".repeat(64),
+        expectedStateSha256: "b".repeat(64),
+        createdAt: "2026-04-10T01:00:00.000Z",
+        replayed: false,
       },
     }));
 
@@ -729,16 +765,59 @@ describe("capabilities routes", () => {
       method: "POST",
       url: "/api/v1/capabilities/candidates/candidate-1/promote",
       payload: {
+        expectedRevision: 3,
         versionId: "version-2",
       },
     });
 
-    expect(response.statusCode).toBe(200);
-    expect(promoteCapabilityCandidate).toHaveBeenCalledWith("candidate-1", "version-2");
-    expect(response.json()).toMatchObject({
-      action: "promote",
+    expect(response.statusCode).toBe(202);
+    expect(promoteCapabilityCandidate).toHaveBeenCalledWith("candidate-1", 3, "version-2", "ip:127.0.0.1");
+    expect(response.json().pendingApproval).toMatchObject({
+      kind: "capability.lifecycle",
+      action: "candidate_promoted",
       candidateId: "candidate-1",
-      selectedVersionId: "version-2",
+    });
+  });
+
+  it("requires candidate revisions and returns structured stale-write conflicts", async () => {
+    const promoteCapabilityCandidate = vi.fn(() => {
+      throw new ConflictError({
+        code: "WRITE_CONFLICT",
+        message: "candidate_skill candidate-1 changed since revision 2",
+        details: {
+          resourceKind: "candidate_skill",
+          resourceId: "candidate-1",
+          expectedRevision: 2,
+          currentRevision: 3,
+        },
+      });
+    });
+    app = Fastify();
+    app.decorate("services", { capabilities: { promoteCapabilityCandidate } } as never);
+    await app.register(capabilitiesRoutes);
+
+    const missing = await app.inject({
+      method: "POST",
+      url: "/api/v1/capabilities/candidates/candidate-1/promote",
+      payload: { versionId: "version-1" },
+    });
+    const stale = await app.inject({
+      method: "POST",
+      url: "/api/v1/capabilities/candidates/candidate-1/promote",
+      payload: { expectedRevision: 2, versionId: "version-1" },
+    });
+
+    expect(missing.statusCode).toBe(400);
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json()).toEqual({
+      error: "candidate_skill candidate-1 changed since revision 2",
+      code: "WRITE_CONFLICT",
+      details: {
+        resourceKind: "candidate_skill",
+        resourceId: "candidate-1",
+        expectedRevision: 2,
+        currentRevision: 3,
+      },
     });
   });
 
@@ -802,6 +881,64 @@ describe("capabilities routes", () => {
       turnId: "turn-1",
       status: "approval_pending",
     });
+  });
+
+  it("runs only a named Code Mode proof in the authenticated actor scope", async () => {
+    const service = await registerCapabilitiesService();
+
+    const response = await app!.inject({
+      method: "POST",
+      url: "/api/v1/code-mode/runs/code-run-1/verification?workspaceId=workspace-1&sessionId=session-1&turnId=turn-1",
+      payload: { commandName: "typecheck" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(service.verifyCodeModeRun).toHaveBeenCalledWith(
+      "code-run-1",
+      { commandName: "typecheck" },
+      { workspaceId: "workspace-1", sessionId: "session-1", turnId: "turn-1" },
+      "operator-test",
+    );
+    expect(response.json()).toMatchObject({
+      run: { runId: "code-run-1", verification: { status: "verified" } },
+      evidence: { evidenceId: "proof-1", status: "verified" },
+    });
+  });
+
+  it("rejects arbitrary Code Mode verification commands", async () => {
+    const service = await registerCapabilitiesService();
+
+    const rawCommand = await app!.inject({
+      method: "POST",
+      url: "/api/v1/code-mode/runs/code-run-1/verification",
+      payload: { commandName: "powershell", command: "Remove-Item", args: ["-Recurse"] },
+    });
+    const missingName = await app!.inject({
+      method: "POST",
+      url: "/api/v1/code-mode/runs/code-run-1/verification",
+      payload: { command: "pnpm", args: ["test"] },
+    });
+
+    expect(rawCommand.statusCode).toBe(400);
+    expect(missingName.statusCode).toBe(400);
+    expect(service.verifyCodeModeRun).not.toHaveBeenCalled();
+  });
+
+  it("lists bounded verification evidence in the requested run scope", async () => {
+    const service = await registerCapabilitiesService();
+
+    const response = await app!.inject({
+      method: "GET",
+      url: "/api/v1/code-mode/runs/code-run-1/verification/evidence?workspaceId=workspace-1&sessionId=session-1&limit=25",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(service.listCodeModeRunVerificationEvidence).toHaveBeenCalledWith(
+      "code-run-1",
+      { workspaceId: "workspace-1", sessionId: "session-1" },
+      25,
+    );
+    expect(response.json()).toMatchObject({ items: [{ evidenceId: "proof-1", runId: "code-run-1" }] });
   });
 
   it("reads snapshot, proposal, and Code Mode details by id", async () => {
@@ -978,6 +1115,7 @@ describe("capabilities routes", () => {
     };
     const rawCandidate = {
       candidateId: "candidate-secret",
+      revision: 7,
       versions: [],
       relatedProposals: [rawProposal],
       originatingRun: rawRun,
@@ -1035,6 +1173,7 @@ describe("capabilities routes", () => {
       promoteCapabilityCandidate: vi.fn(() => ({
         action: "promote",
         candidateId: rawCandidate.candidateId,
+        revision: 8,
         selectedVersionId: "version-1",
         changedVersionIds: ["version-1"],
         occurredAt: "2026-07-09T00:00:00.000Z",
@@ -1043,6 +1182,7 @@ describe("capabilities routes", () => {
       revokeCapabilityCandidate: vi.fn(() => ({
         action: "revoke",
         candidateId: rawCandidate.candidateId,
+        revision: 8,
         selectedVersionId: "version-1",
         changedVersionIds: ["version-1"],
         occurredAt: "2026-07-09T00:00:00.000Z",
@@ -1051,6 +1191,7 @@ describe("capabilities routes", () => {
       rollbackCapabilityCandidate: vi.fn(() => ({
         action: "rollback",
         candidateId: rawCandidate.candidateId,
+        revision: 8,
         selectedVersionId: "version-1",
         changedVersionIds: ["version-1"],
         occurredAt: "2026-07-09T00:00:00.000Z",
@@ -1080,17 +1221,17 @@ describe("capabilities routes", () => {
       app!.inject({
         method: "POST",
         url: `/api/v1/capabilities/candidates/${rawCandidate.candidateId}/promote`,
-        payload: { versionId: "version-1" },
+        payload: { expectedRevision: rawCandidate.revision, versionId: "version-1" },
       }),
       app!.inject({
         method: "POST",
         url: `/api/v1/capabilities/candidates/${rawCandidate.candidateId}/revoke`,
-        payload: { versionId: "version-1" },
+        payload: { expectedRevision: rawCandidate.revision, versionId: "version-1" },
       }),
       app!.inject({
         method: "POST",
         url: `/api/v1/capabilities/candidates/${rawCandidate.candidateId}/rollback`,
-        payload: { targetVersionId: "version-1" },
+        payload: { expectedRevision: rawCandidate.revision, targetVersionId: "version-1" },
       }),
       app!.inject({ method: "GET", url: "/api/v1/code-mode/runs" }),
       app!.inject({ method: "GET", url: `/api/v1/code-mode/runs/${rawRun.runId}` }),
@@ -1323,6 +1464,7 @@ describe("capabilities routes", () => {
       method: "POST",
       url: "/api/v1/capabilities/candidates/candidate-1/revoke",
       payload: {
+        expectedRevision: 4,
         versionId: "version-2",
       },
     });
@@ -1330,21 +1472,22 @@ describe("capabilities routes", () => {
       method: "POST",
       url: "/api/v1/capabilities/candidates/candidate-1/rollback",
       payload: {
+        expectedRevision: 4,
         targetVersionId: "version-1",
       },
     });
 
-    expect(revokeResponse.statusCode).toBe(200);
-    expect(rollbackResponse.statusCode).toBe(200);
-    expect(service.revokeCapabilityCandidate).toHaveBeenCalledWith("candidate-1", "version-2");
-    expect(service.rollbackCapabilityCandidate).toHaveBeenCalledWith("candidate-1", "version-1");
-    expect(revokeResponse.json()).toMatchObject({
-      action: "revoke",
-      selectedVersionId: "version-2",
+    expect(revokeResponse.statusCode).toBe(202);
+    expect(rollbackResponse.statusCode).toBe(202);
+    expect(service.revokeCapabilityCandidate).toHaveBeenCalledWith("candidate-1", 4, "version-2", "operator-test");
+    expect(service.rollbackCapabilityCandidate).toHaveBeenCalledWith("candidate-1", "version-1", 4, "operator-test");
+    expect(revokeResponse.json().pendingApproval).toMatchObject({
+      action: "candidate_revoked",
+      candidateId: "candidate-1",
     });
-    expect(rollbackResponse.json()).toMatchObject({
-      action: "rollback",
-      targetVersionId: "version-1",
+    expect(rollbackResponse.json().pendingApproval).toMatchObject({
+      action: "candidate_rolled_back",
+      candidateId: "candidate-1",
     });
   });
 

@@ -8,6 +8,9 @@ import {
 import type { Storage } from "@goatcitadel/storage";
 import type { ApprovalExplainerConfig } from "../config.js";
 import { LlmService } from "./llm-service.js";
+import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
+import { createUtilityModelUsageAttribution } from "./utility-model-usage-attribution.js";
+import { runBoundedUtilityModelCall } from "./utility-model-call.js";
 
 export interface ApprovalExplainerRealtimePayload {
   approvalId: string;
@@ -90,11 +93,25 @@ export class ApprovalExplainerService {
         request.response_format = { type: "json_object" };
       }
 
-      const response = await withTimeout(
-        this.llmService.chatCompletions(request),
-        this.config.timeoutMs,
-        "approval explainer timed out",
-      );
+      const attribution = createUtilityModelUsageAttribution({
+        operationId: `approval:${encodeURIComponent(approval.approvalId)}:explanation`,
+        utilityKind: "approval_explanation",
+        requestedProviderId: providerId,
+        requestedModelId: model,
+        lineage: {
+          workspaceId: approval.linkage?.workspaceId,
+          sessionId: approval.linkage?.sessionId,
+          turnId: approval.linkage?.turnId,
+          durableRunId: approval.linkage?.durableRunId,
+          taskId: approval.linkage?.taskId,
+          agentId: "approval-explainer",
+        },
+      });
+      const response = await runBoundedUtilityModelCall({
+        timeoutMs: this.config.timeoutMs,
+        timeoutMessage: "approval explainer timed out",
+        start: (signal) => this.llmService.chatCompletions({ ...request, signal }, attribution),
+      });
 
       const parsed = parseExplanationResponse(response);
       const explanation: ApprovalExplanation = {
@@ -124,6 +141,9 @@ export class ApprovalExplainerService {
         model,
       });
     } catch (error) {
+      if (isAuthoritativeModelUsageAccountingError(error)) {
+        throw error;
+      }
       const message = truncate((error as Error).message, 500);
       this.storage.approvals.setExplanationFailed(approval.approvalId, message);
       this.storage.approvalEvents.append({
@@ -238,21 +258,6 @@ function asOptionalString(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
-}
-
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-  let timeoutHandle: NodeJS.Timeout | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timeoutHandle = setTimeout(() => reject(new Error(message)), timeoutMs);
-  });
-
-  try {
-    return await Promise.race([promise, timeout]);
-  } finally {
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
-    }
-  }
 }
 
 function truncate(value: string, maxLength: number): string {

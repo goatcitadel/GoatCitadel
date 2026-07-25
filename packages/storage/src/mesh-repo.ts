@@ -26,6 +26,27 @@ interface MeshNodeRow {
   last_seen_at: string;
 }
 
+interface MeshJoinTokenRow {
+  token_hash: string;
+  created_at: string;
+  expires_at: string;
+  used_at: string | null;
+  used_by_node_id: string | null;
+}
+
+export interface MeshRuntimeArtifactSnapshot {
+  nodeId: string;
+  node?: MeshNodeRecord;
+  tokenHash?: string;
+  joinToken?: {
+    tokenHash: string;
+    createdAt: string;
+    expiresAt: string;
+    usedAt?: string;
+    usedByNodeId?: string;
+  };
+}
+
 interface MeshLeaseRow {
   lease_key: string;
   holder_node_id: string;
@@ -60,6 +81,8 @@ interface MeshReplicationOffsetRow {
 
 export class MeshRepository {
   private readonly upsertNodeStmt;
+  private readonly restoreNodeStmt;
+  private readonly deleteNodeStmt;
   private readonly getNodeStmt;
   private readonly listNodesStmt;
   private readonly getLeaseStmt;
@@ -80,6 +103,9 @@ export class MeshRepository {
   private readonly listOffsetsStmt;
   private readonly getOffsetStmt;
   private readonly insertJoinTokenStmt;
+  private readonly getJoinTokenStmt;
+  private readonly restoreJoinTokenStmt;
+  private readonly deleteJoinTokenStmt;
   private readonly consumeJoinTokenStmt;
   private readonly statusCountsStmt;
 
@@ -101,6 +127,25 @@ export class MeshRepository {
         tls_fingerprint = excluded.tls_fingerprint,
         last_seen_at = excluded.last_seen_at
     `);
+    this.restoreNodeStmt = db.prepare(`
+      INSERT INTO mesh_nodes (
+        node_id, label, advertise_address, transport, status, capabilities_json,
+        tls_fingerprint, joined_at, last_seen_at
+      ) VALUES (
+        @nodeId, @label, @advertiseAddress, @transport, @status, @capabilitiesJson,
+        @tlsFingerprint, @joinedAt, @lastSeenAt
+      )
+      ON CONFLICT(node_id) DO UPDATE SET
+        label = excluded.label,
+        advertise_address = excluded.advertise_address,
+        transport = excluded.transport,
+        status = excluded.status,
+        capabilities_json = excluded.capabilities_json,
+        tls_fingerprint = excluded.tls_fingerprint,
+        joined_at = excluded.joined_at,
+        last_seen_at = excluded.last_seen_at
+    `);
+    this.deleteNodeStmt = db.prepare("DELETE FROM mesh_nodes WHERE node_id = ?");
     this.getNodeStmt = db.prepare("SELECT * FROM mesh_nodes WHERE node_id = ?");
     this.listNodesStmt = db.prepare("SELECT * FROM mesh_nodes ORDER BY last_seen_at DESC LIMIT @limit");
 
@@ -232,6 +277,20 @@ export class MeshRepository {
         expires_at = excluded.expires_at
       WHERE mesh_join_tokens.used_at IS NULL
     `);
+    this.getJoinTokenStmt = db.prepare("SELECT * FROM mesh_join_tokens WHERE token_hash = ?");
+    this.restoreJoinTokenStmt = db.prepare(`
+      INSERT INTO mesh_join_tokens (
+        token_hash, created_at, expires_at, used_at, used_by_node_id
+      ) VALUES (
+        @tokenHash, @createdAt, @expiresAt, @usedAt, @usedByNodeId
+      )
+      ON CONFLICT(token_hash) DO UPDATE SET
+        created_at = excluded.created_at,
+        expires_at = excluded.expires_at,
+        used_at = excluded.used_at,
+        used_by_node_id = excluded.used_by_node_id
+    `);
+    this.deleteJoinTokenStmt = db.prepare("DELETE FROM mesh_join_tokens WHERE token_hash = ?");
     this.consumeJoinTokenStmt = db.prepare(`
       UPDATE mesh_join_tokens
       SET used_at = @usedAt,
@@ -284,6 +343,67 @@ export class MeshRepository {
       createdAt: new Date().toISOString(),
       expiresAt,
     });
+  }
+
+  /**
+   * Captures the exact durable rows a runtime-options replacement may mutate.
+   * The snapshot is intentionally scoped to the candidate node/token pair so
+   * a later owner failure can remove inserts as well as restore overwritten
+   * rows without disturbing unrelated mesh activity.
+   */
+  public snapshotRuntimeArtifacts(nodeId: string, rawToken?: string): MeshRuntimeArtifactSnapshot {
+    const nodeRow = toMeshNodeRow(this.getNodeStmt.get(nodeId));
+    const normalizedToken = rawToken?.trim();
+    const tokenHash = normalizedToken ? hashJoinToken(normalizedToken) : undefined;
+    const tokenRow = tokenHash ? toMeshJoinTokenRow(this.getJoinTokenStmt.get(tokenHash)) : undefined;
+    return {
+      nodeId,
+      node: nodeRow ? mapNodeRow(nodeRow) : undefined,
+      tokenHash,
+      joinToken: tokenRow
+        ? {
+            tokenHash: tokenRow.token_hash,
+            createdAt: tokenRow.created_at,
+            expiresAt: tokenRow.expires_at,
+            usedAt: tokenRow.used_at ?? undefined,
+            usedByNodeId: tokenRow.used_by_node_id ?? undefined,
+          }
+        : undefined,
+    };
+  }
+
+  /** Restores a runtime-artifact snapshot exactly, including row absence. */
+  public restoreRuntimeArtifacts(snapshot: MeshRuntimeArtifactSnapshot): void {
+    if (snapshot.node) {
+      this.restoreNodeStmt.run({
+        nodeId: snapshot.node.nodeId,
+        label: snapshot.node.label ?? null,
+        advertiseAddress: snapshot.node.advertiseAddress ?? null,
+        transport: snapshot.node.transport,
+        status: snapshot.node.status,
+        capabilitiesJson: JSON.stringify(snapshot.node.capabilities),
+        tlsFingerprint: snapshot.node.tlsFingerprint ?? null,
+        joinedAt: snapshot.node.joinedAt,
+        lastSeenAt: snapshot.node.lastSeenAt,
+      });
+    } else {
+      this.deleteNodeStmt.run(snapshot.nodeId);
+    }
+
+    if (!snapshot.tokenHash) {
+      return;
+    }
+    if (snapshot.joinToken) {
+      this.restoreJoinTokenStmt.run({
+        tokenHash: snapshot.joinToken.tokenHash,
+        createdAt: snapshot.joinToken.createdAt,
+        expiresAt: snapshot.joinToken.expiresAt,
+        usedAt: snapshot.joinToken.usedAt ?? null,
+        usedByNodeId: snapshot.joinToken.usedByNodeId ?? null,
+      });
+    } else {
+      this.deleteJoinTokenStmt.run(snapshot.tokenHash);
+    }
   }
 
   public consumeJoinToken(rawToken: string, usedByNodeId: string, now = new Date().toISOString()): boolean {
@@ -652,6 +772,10 @@ function toMeshNodeRows(value: unknown): MeshNodeRow[] {
   return Array.isArray(value) ? value.filter(isMeshNodeRow) : [];
 }
 
+function toMeshJoinTokenRow(value: unknown): MeshJoinTokenRow | undefined {
+  return isMeshJoinTokenRow(value) ? value : undefined;
+}
+
 function toMeshLeaseRow(value: unknown): MeshLeaseRow | undefined {
   return isMeshLeaseRow(value) ? value : undefined;
 }
@@ -698,6 +822,19 @@ function isMeshNodeRow(value: unknown): value is MeshNodeRow {
     (typeof value.tls_fingerprint === "string" || value.tls_fingerprint === null) &&
     typeof value.joined_at === "string" &&
     typeof value.last_seen_at === "string"
+  );
+}
+
+function isMeshJoinTokenRow(value: unknown): value is MeshJoinTokenRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    typeof value.token_hash === "string" &&
+    typeof value.created_at === "string" &&
+    typeof value.expires_at === "string" &&
+    (typeof value.used_at === "string" || value.used_at === null) &&
+    (typeof value.used_by_node_id === "string" || value.used_by_node_id === null)
   );
 }
 

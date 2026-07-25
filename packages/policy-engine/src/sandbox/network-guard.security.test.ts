@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   assertHostAllowed,
   assertNotPrivateOrReservedHost,
+  createIsolatedGuardedDispatcher,
   evaluateHostEgress,
+  fetchAllowlistedOnce,
   redactUrlForError,
 } from "./network-guard.js";
 
@@ -155,5 +157,78 @@ describe("assertNotPrivateOrReservedHost (codex #11, #12, #13, #23)", () => {
     expect(captured as string).not.toContain("security-credentials");
     expect(captured as string).not.toContain("token=secret");
     expect(captured as string).not.toContain("/latest");
+  });
+});
+
+// HX-415: requester-scoped MCP connections must resolve to a fresh, per-attempt
+// guarded dispatcher that never enters or reuses the shared guarded-Agent
+// cache. The shared cache keys by (dnsLookup, host+allowlist); a requester
+// attempt supplies its own dispatcher so no per-requester connection, Agent, or
+// keep-alive pool is ever shared across requesters or attempts.
+describe("requester-scoped isolated guarded dispatcher (HX-415)", () => {
+  const originalFetch = global.fetch;
+  let captured: Array<{ url: string; init: RequestInit & { dispatcher?: unknown } }>;
+
+  beforeEach(() => {
+    captured = [];
+    global.fetch = vi.fn(async (url: string, init?: RequestInit & { dispatcher?: unknown }) => {
+      captured.push({ url, init: init ?? {} });
+      return new Response("{}", { status: 200 });
+    }) as unknown as typeof global.fetch;
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  function destroy(dispatcher: unknown): void {
+    void (dispatcher as { destroy?: () => Promise<void> }).destroy?.();
+  }
+
+  it("returns a fresh dispatcher instance per call and never a shared singleton", () => {
+    const host = "iso-fresh.example.com";
+    const a = createIsolatedGuardedDispatcher(`https://${host}/`, [host]);
+    const b = createIsolatedGuardedDispatcher(`https://${host}/`, [host]);
+    try {
+      expect(a).not.toBe(b);
+    } finally {
+      destroy(a);
+      destroy(b);
+    }
+  });
+
+  it("uses the caller's isolated dispatcher and never enters or reuses the shared cache", async () => {
+    const host = "iso-cache.example.com";
+    const allowlist = [host];
+    const isolated = createIsolatedGuardedDispatcher(`https://${host}/`, allowlist);
+    try {
+      // Requester-scoped attempt: an explicit isolated dispatcher is threaded through.
+      await fetchAllowlistedOnce(`https://${host}/attempt`, { allowlist, dispatcher: isolated });
+      // Two shared-path calls to the SAME host reuse one cached dispatcher.
+      await fetchAllowlistedOnce(`https://${host}/shared-a`, { allowlist });
+      await fetchAllowlistedOnce(`https://${host}/shared-b`, { allowlist });
+
+      expect(captured[0]?.init.dispatcher).toBe(isolated);
+      expect(captured[1]?.init.dispatcher).toBe(captured[2]?.init.dispatcher);
+      // The isolated attempt dispatcher is never the shared cache's Agent.
+      expect(captured[1]?.init.dispatcher).not.toBe(isolated);
+    } finally {
+      destroy(isolated);
+    }
+  });
+
+  it("still enforces the host allowlist on the isolated path before any fetch", async () => {
+    const isolated = createIsolatedGuardedDispatcher("https://iso-allow.example.com/", ["iso-allow.example.com"]);
+    try {
+      await expect(
+        fetchAllowlistedOnce("https://not-allowlisted.example.com/x", {
+          allowlist: ["iso-allow.example.com"],
+          dispatcher: isolated,
+        }),
+      ).rejects.toThrow();
+      expect(captured).toHaveLength(0);
+    } finally {
+      destroy(isolated);
+    }
   });
 });

@@ -34,6 +34,11 @@ export interface ChatRouteResolutionDependencies {
       sessionId: string;
     };
   }>;
+  resolveCapabilityPreflight?(
+    sessionId: string,
+    input: RoutingPreflightRequest,
+    route: ResolvedChatRouteDescriptor,
+  ): Promise<NonNullable<RoutingPreflightResult["capabilityProfile"]>>;
 }
 
 export interface ResolvedChatRouteDescriptor {
@@ -73,7 +78,7 @@ function normalizeRequestedModel(providerId: string, model: string): string {
   return trimmed;
 }
 
-function buildPreviewPrefs(
+export function buildPreviewPrefs(
   sessionPrefs: ChatSessionPrefsRecord,
   input: RoutingPreflightRequest,
 ): ChatSessionPrefsRecord {
@@ -333,6 +338,16 @@ export async function preflightChatRoute(
     runtimeReachability = "not_checked";
   }
 
+  const capabilityProfile =
+    input.content?.trim() && deps.resolveCapabilityPreflight
+      ? await deps.resolveCapabilityPreflight(sessionId, input, {
+          ...descriptor,
+          blockedReason,
+        })
+      : undefined;
+  const frozenFallbackPolicy = capabilityProfile ? "off" : descriptor.fallbackPolicy;
+  const frozenFallbackResult = capabilityProfile ? "not_applicable" : descriptor.fallbackResult;
+
   const resultWithoutDecision = {
     requestedProviderId: descriptor.requestedProviderId,
     requestedModel: descriptor.requestedModel,
@@ -340,12 +355,13 @@ export async function preflightChatRoute(
     effectiveModel: descriptor.effectiveModel,
     selectionSource: descriptor.selectionSource,
     normalizationReason: descriptor.normalizationReason,
-    fallbackPolicy: descriptor.fallbackPolicy,
-    fallbackResult: descriptor.fallbackResult,
+    fallbackPolicy: frozenFallbackPolicy,
+    fallbackResult: frozenFallbackResult,
     runtimeReachability,
     runtimeClass: descriptor.runtimeClass,
     blockedReason,
     degradedReason: descriptor.degradedReason,
+    ...(capabilityProfile ? { capabilityProfile } : {}),
   } satisfies Omit<RoutingPreflightResult, "decision">;
 
   return {
@@ -378,6 +394,10 @@ export function createRoutingDecisionSnapshot(
     runtimeClass: result.runtimeClass,
     blockedReason: result.blockedReason,
     degradedReason: result.degradedReason,
+    capabilityFingerprint: result.capabilityProfile?.fingerprint,
+    capabilityContentHash: result.capabilityProfile?.contentHash,
+    capabilityProfileSchemaVersion: result.capabilityProfile?.schemaVersion,
+    capabilityCompactionDimensionHash: result.capabilityProfile?.compactionDimensionHash,
   };
   return {
     ...snapshotWithoutFingerprint,
@@ -407,6 +427,10 @@ export function createRoutingDecisionFingerprint(
     runtimeClass: input.runtimeClass,
     blockedReason: input.blockedReason,
     degradedReason: input.degradedReason,
+    capabilityFingerprint: input.capabilityFingerprint,
+    capabilityContentHash: input.capabilityContentHash,
+    capabilityProfileSchemaVersion: input.capabilityProfileSchemaVersion,
+    capabilityCompactionDimensionHash: input.capabilityCompactionDimensionHash,
   };
   return createHash("sha256").update(stableJson(payload)).digest("hex");
 }

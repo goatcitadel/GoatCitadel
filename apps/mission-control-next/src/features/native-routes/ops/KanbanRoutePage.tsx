@@ -11,7 +11,12 @@ import {
 } from "react";
 import { Activity, AlertTriangle, LayoutDashboard, RefreshCw, Users } from "lucide-react";
 import { Virtuoso, type Components } from "react-virtuoso";
-import { bulkTaskAction, fetchAgenticRuns } from "@goatcitadel/mission-control-shared/api/client";
+import {
+  ApiRequestError,
+  bulkTaskAction,
+  fetchAgenticRuns,
+  type BulkTaskActionInput,
+} from "@goatcitadel/mission-control-shared/api/client";
 import type { AgenticRunListItem } from "@goatcitadel/contracts";
 import { getRouteReleaseScope, routeKicker } from "@next/app/route-model";
 import { NativePageFrame } from "../NativeRoutePageLayout";
@@ -36,6 +41,11 @@ const KANBAN_VIRTUALIZE_THRESHOLD = 24;
 
 type BulkAction = "unblock" | "retry" | "close";
 
+interface PendingBulkConflict {
+  action: BulkAction;
+  taskIds: string[];
+}
+
 const KANBAN_STATUS_CHIP_TONE = {
   neutral: "neutral",
   active: "live",
@@ -52,6 +62,7 @@ export function KanbanRoutePage(props: NativeRoutePagesProps) {
   const [loading, setLoading] = useState(true);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [pendingConflict, setPendingConflict] = useState<PendingBulkConflict | null>(null);
   const isMounted = useIsMounted();
   // Monotonic request id drops superseded/late run-list responses so
   // a slow earlier load cannot overwrite a newer workspace's board, and so a
@@ -123,10 +134,30 @@ export function KanbanRoutePage(props: NativeRoutePagesProps) {
       if (ids.length === 0) {
         return;
       }
-      const body =
+      const cardsByTaskId = new Map(cards.map((card) => [card.taskId, card]));
+      const missingRevisionTaskId = ids.find((taskId) => {
+        const revision = cardsByTaskId.get(taskId)?.revision;
+        return !Number.isInteger(revision) || Number(revision) < 1;
+      });
+      if (missingRevisionTaskId) {
+        setActionError(
+          `Task ${missingRevisionTaskId} does not have canonical revision data. Refresh before retrying this action.`,
+        );
+        return;
+      }
+      const expectedRevisionsByTaskId = Object.fromEntries(
+        ids.map((taskId) => [taskId, cardsByTaskId.get(taskId)!.revision!]),
+      );
+      const body: BulkTaskActionInput & { workspaceId?: string } =
         action === "retry"
-          ? { action, taskIds: ids, reason: "operator-bulk-retry", workspaceId: props.activeWorkspaceId }
-          : { action, taskIds: ids, workspaceId: props.activeWorkspaceId };
+          ? {
+              action,
+              taskIds: ids,
+              expectedRevisionsByTaskId,
+              reason: "operator-bulk-retry",
+              workspaceId: props.activeWorkspaceId,
+            }
+          : { action, taskIds: ids, expectedRevisionsByTaskId, workspaceId: props.activeWorkspaceId };
       setBulkBusy(true);
       setActionError(null);
       setNotice(null);
@@ -136,10 +167,19 @@ export function KanbanRoutePage(props: NativeRoutePagesProps) {
           return;
         }
         setSelected(new Set());
+        setPendingConflict(null);
         setNotice(`${ids.length} selected task${ids.length === 1 ? "" : "s"} updated.`);
         await load();
       } catch (err) {
-        if (isMounted()) {
+        if (err instanceof ApiRequestError && err.status === 409) {
+          await load();
+          if (isMounted()) {
+            setPendingConflict({ action, taskIds: ids });
+            setActionError(
+              "One or more selected tasks changed. Canonical task data was refreshed; review the preserved selection, then retry explicitly.",
+            );
+          }
+        } else if (isMounted()) {
           setActionError(err instanceof Error ? err.message : String(err));
         }
       } finally {
@@ -148,7 +188,7 @@ export function KanbanRoutePage(props: NativeRoutePagesProps) {
         }
       }
     },
-    [isMounted, load, props.activeWorkspaceId, selected],
+    [cards, isMounted, load, props.activeWorkspaceId, selected],
   );
 
   const hasSelection = selected.size > 0;
@@ -213,6 +253,18 @@ export function KanbanRoutePage(props: NativeRoutePagesProps) {
       {actionError ? (
         <div data-testid="kanban-action-error">
           <NoticeBanner tone="error" message={actionError} />
+          {pendingConflict ? (
+            <NativeButton
+              variant="outline"
+              className="mc-next-kanban-action"
+              data-testid="kanban-conflict-retry"
+              aria-label={`Retry ${pendingConflict.action} for ${pendingConflict.taskIds.length} previously selected tasks`}
+              disabled={bulkBusy || selected.size === 0}
+              onClick={() => void runBulk(pendingConflict.action)}
+            >
+              Retry {formatBulkAction(pendingConflict.action)}
+            </NativeButton>
+          ) : null}
         </div>
       ) : null}
       {notice ? (
@@ -329,8 +381,10 @@ export const KanbanCard = memo(function KanbanCard({
           type="checkbox"
           data-testid={`kanban-select-${card.taskId}`}
           checked={checked}
+          disabled={!card.revision}
           onChange={handleToggle}
           aria-label={`Select ${card.title}`}
+          title={card.revision ? undefined : "Canonical task revision unavailable"}
         />
         <span className="title">{card.title}</span>
       </label>
@@ -374,3 +428,7 @@ export const KanbanCard = memo(function KanbanCard({
     <li className={`mc-next-kanban-card tone-${card.statusTone}`}>{content}</li>
   );
 });
+
+function formatBulkAction(action: BulkAction): string {
+  return action.slice(0, 1).toUpperCase() + action.slice(1);
+}

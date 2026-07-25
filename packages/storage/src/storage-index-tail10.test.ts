@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { NotFoundError } from "@goatcitadel/contracts";
 import { Storage } from "./index.js";
 
 test("Storage defaults to an in-memory sqlite database and handles empty session cleanup", () => {
@@ -18,12 +19,7 @@ test("Storage defaults to an in-memory sqlite database and handles empty session
       storage.runImmediateTransaction(() => "committed"),
       "committed",
     );
-    assert.deepEqual(storage.deleteChatSessionData("missing-session"), {
-      sessionId: "missing-session",
-      deleted: false,
-      cleanupRelPaths: [],
-      attachments: [],
-    });
+    assert.throws(() => storage.deleteChatSessionData("missing-session"), NotFoundError);
   } finally {
     storage.close();
     fs.rmSync(root, { recursive: true, force: true });

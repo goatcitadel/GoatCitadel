@@ -1,0 +1,193 @@
+.mc-next-capability-profile {
+  display: grid;
+  gap: 0.55rem;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.mc-next-capability-profile-preflight {
+  padding: 0.56rem 0.64rem;
+  border: 1px solid color-mix(in oklab, var(--gc-risk-safe) 28%, var(--mc-border-subtle));
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--gc-risk-safe) 7%, var(--mc-surface-1));
+}
+
+.mc-next-capability-profile-head,
+.mc-next-capability-profile-chip-row,
+.mc-next-capability-profile-readiness {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.mc-next-capability-profile-head {
+  justify-content: space-between;
+}
+
+.mc-next-capability-profile-head > div,
+.mc-next-capability-profile-head > p {
+  min-width: 0;
+}
+
+.mc-next-capability-profile h4,
+.mc-next-capability-profile h5,
+.mc-next-capability-profile p,
+.mc-next-capability-profile dl,
+.mc-next-capability-profile ul {
+  margin: 0;
+}
+
+.mc-next-capability-profile p,
+.mc-next-capability-profile dd,
+.mc-next-capability-profile li,
+.mc-next-capability-profile summary {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
+.mc-next-capability-profile-disclosure {
+  min-width: 0;
+  border-top: 1px solid color-mix(in oklab, var(--mc-border-subtle) 78%, transparent);
+  padding-top: 0.42rem;
+}
+
+.mc-next-capability-profile-disclosure summary {
+  width: fit-content;
+  color: var(--foreground);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.mc-next-capability-profile-disclosure summary:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.mc-next-capability-profile-detail,
+.mc-next-capability-profile-subsection {
+  display: grid;
+  gap: 0.48rem;
+  min-width: 0;
+}
+
+.mc-next-capability-profile-detail {
+  padding-top: 0.55rem;
+}
+
+.mc-next-capability-profile-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.42rem;
+}
+
+.mc-next-capability-profile-facts > div {
+  display: grid;
+  gap: 0.12rem;
+  min-width: 0;
+  padding: 0.4rem;
+  border: 1px solid var(--mc-border-subtle);
+  border-radius: var(--r-xs);
+  background: color-mix(in oklab, var(--mc-surface-2) 86%, transparent);
+}
+
+.mc-next-capability-profile-facts dt,
+.mc-next-capability-profile-hash span {
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.mc-next-capability-profile-facts dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--foreground);
+  overflow-wrap: anywhere;
+}
+
+.mc-next-capability-profile-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.mc-next-capability-profile-subsection {
+  align-content: start;
+  padding: 0.45rem;
+  border: 1px solid var(--mc-border-subtle);
+  border-radius: var(--r-xs);
+}
+
+.mc-next-capability-profile-list,
+.mc-next-capability-profile-alerts {
+  display: grid;
+  gap: 0.34rem;
+  padding: 0;
+  list-style: none;
+}
+
+.mc-next-capability-profile-list li {
+  display: grid;
+  gap: 0.08rem;
+  min-width: 0;
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid color-mix(in oklab, var(--mc-border-subtle) 62%, transparent);
+}
+
+.mc-next-capability-profile-list li:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.mc-next-capability-profile-list strong,
+.mc-next-capability-profile-list span {
+  overflow-wrap: anywhere;
+}
+
+.mc-next-capability-profile-list strong {
+  color: var(--foreground);
+  font-weight: 650;
+}
+
+.mc-next-capability-profile-alerts li,
+.mc-next-capability-profile-warning {
+  color: var(--gc-risk-warn);
+}
+
+.mc-next-capability-profile-hash {
+  display: grid;
+  gap: 0.18rem;
+  min-width: 0;
+  padding: 0.42rem;
+  border-radius: var(--r-xs);
+  background: color-mix(in oklab, var(--mc-surface-2) 86%, transparent);
+}
+
+.mc-next-capability-profile-hash code {
+  min-width: 0;
+  color: var(--foreground);
+  font-size: var(--text-2xs);
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+@media (width < 720px) {
+  .mc-next-capability-profile-head {
+    display: grid;
+    justify-items: start;
+  }
+
+  .mc-next-capability-profile-facts,
+  .mc-next-capability-profile-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mc-next-capability-profile-preflight {
+    padding-inline: 0.52rem;
+  }
+}

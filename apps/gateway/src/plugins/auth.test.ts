@@ -1,7 +1,9 @@
+import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import { authPlugin } from "./auth.js";
 import { authRoutes } from "../routes/auth.js";
+import { installRouteAccessTracking } from "../routes/route-access.js";
 import type { AuthConfig } from "../config.js";
 
 vi.mock("node:sqlite", () => ({
@@ -24,7 +26,10 @@ function defaultAuthConfig(): AuthConfig {
   };
 }
 
-async function buildApp(authPatch: Partial<AuthConfig>): Promise<FastifyInstance> {
+async function buildApp(
+  authPatch: Partial<AuthConfig>,
+  opts: { routeAccessTracking?: "before" | "after" } = {},
+): Promise<FastifyInstance> {
   const auth = {
     ...defaultAuthConfig(),
     ...authPatch,
@@ -49,6 +54,15 @@ async function buildApp(authPatch: Partial<AuthConfig>): Promise<FastifyInstance
           actorId: "device:test-grant",
           deviceId: "test-grant",
           grantId: "test-grant",
+          principalPurpose: "general_companion",
+        };
+      }
+      if (token === "device-control-bearer") {
+        return {
+          actorId: "device:control-grant",
+          deviceId: "control-grant",
+          grantId: "control-grant",
+          principalPurpose: "session_control_client",
         };
       }
       return undefined;
@@ -60,6 +74,16 @@ async function buildApp(authPatch: Partial<AuthConfig>): Promise<FastifyInstance
           deviceId: "test-grant",
           grantId: "test-grant",
           sessionId: "test-session",
+          principalPurpose: "general_companion",
+        };
+      }
+      if (token === "companion-control-bearer") {
+        return {
+          actorId: "companion:control-session",
+          deviceId: "control-grant",
+          grantId: "control-grant",
+          sessionId: "control-session",
+          principalPurpose: "session_control_client",
         };
       }
       return undefined;
@@ -171,12 +195,32 @@ async function buildApp(authPatch: Partial<AuthConfig>): Promise<FastifyInstance
     },
   } as never);
 
+  // Mirror the production composition seam: app.ts installs route-access
+  // tracking (whose global preHandler hosts the central purpose guard) BEFORE
+  // registering authPlugin (whose signature preHandler persists the
+  // companion_request_replays row). `"before"` reproduces the real order;
+  // `"after"` simulates the reversed order for the ordering guardrail test.
+  if (opts.routeAccessTracking === "before") {
+    installRouteAccessTracking(app);
+  }
   await app.register(authPlugin);
+  if (opts.routeAccessTracking === "after") {
+    installRouteAccessTracking(app);
+  }
   await app.register(authRoutes);
 
   app.get("/protected", async (request) => ({
     ok: true,
     actorId: request.authActorId,
+    actorSource: request.authActorSource,
+    principalPurpose: request.authPrincipalPurpose ?? null,
+  }));
+
+  // A tracked (/api/v1), replay-persisting, non-control mutating route. The
+  // policy classifier resolves it to the operator class, and the purpose guard
+  // must reject a purpose-bound companion here before the signature preHandler.
+  app.post("/api/v1/chat/messages", async (request) => ({
+    ok: true,
     actorSource: request.authActorSource,
   }));
 
@@ -611,6 +655,128 @@ describe("auth plugin", () => {
       actorSource: "device",
       actorId: "device:test-grant",
     });
+  });
+
+  it("projects the immutable principal purpose from device and companion bearers", async () => {
+    app = await buildApp({
+      mode: "token",
+      token: { value: "alpha-token", queryParam: "access_token" },
+    });
+
+    const genericDevice = await app.inject({
+      method: "GET",
+      url: "/protected",
+      headers: { Authorization: "Bearer device-bearer" },
+    });
+    expect(genericDevice.json()).toMatchObject({ actorSource: "device", principalPurpose: "general_companion" });
+
+    const controlDevice = await app.inject({
+      method: "GET",
+      url: "/protected",
+      headers: { Authorization: "Bearer device-control-bearer" },
+    });
+    expect(controlDevice.json()).toMatchObject({ actorSource: "device", principalPurpose: "session_control_client" });
+
+    const genericCompanion = await app.inject({
+      method: "GET",
+      url: "/protected",
+      headers: { Authorization: "Bearer companion-bearer" },
+    });
+    expect(genericCompanion.json()).toMatchObject({
+      actorSource: "companion",
+      principalPurpose: "general_companion",
+    });
+
+    const controlCompanion = await app.inject({
+      method: "GET",
+      url: "/protected",
+      headers: { Authorization: "Bearer companion-control-bearer" },
+    });
+    expect(controlCompanion.json()).toMatchObject({
+      actorSource: "companion",
+      principalPurpose: "session_control_client",
+    });
+
+    // Operator tokens carry no purpose projection at all.
+    const operator = await app.inject({
+      method: "GET",
+      url: "/protected",
+      headers: { Authorization: "Bearer alpha-token" },
+    });
+    expect(operator.json()).toMatchObject({ actorSource: "token", principalPurpose: null });
+  });
+
+  it("composes route-access tracking before authPlugin so the guard precedes replay persistence", () => {
+    // The guard-before-replay-persistence guarantee is registration-order
+    // dependent: installRouteAccessTracking's global preHandler (which hosts the
+    // central purpose guard) MUST be registered before authPlugin (whose
+    // signature preHandler inserts the companion_request_replays row). Pin the
+    // real app.ts composition order so a future reorder fails loudly here instead
+    // of silently violating "the central purpose guard runs before ... signed-
+    // request replay persistence".
+    const appSource = fs.readFileSync(new URL("../app.ts", import.meta.url), "utf8");
+    const trackingIndex = appSource.indexOf("installRouteAccessTracking(app)");
+    const authPluginIndex = appSource.indexOf("register(authPlugin)");
+    expect(trackingIndex).toBeGreaterThan(-1);
+    expect(authPluginIndex).toBeGreaterThan(-1);
+    expect(trackingIndex).toBeLessThan(authPluginIndex);
+  });
+
+  it("rejects a purpose-bound companion before the real replay-persistence hook runs (composed order)", async () => {
+    app = await buildApp(
+      { mode: "token", token: { value: "alpha-token", queryParam: "access_token" } },
+      { routeAccessTracking: "before" },
+    );
+    // verifyCompanionRequestSignature is the sole writer of companion_request_replays
+    // (settings-auth-service.ts). Spying on it lets us assert no replay row would be
+    // persisted, without booting a real database.
+    const verifyReplayPersistence = vi.fn(() => undefined);
+    (app.gatewayAuth as unknown as { verifyCompanionRequestSignature: unknown }).verifyCompanionRequestSignature =
+      verifyReplayPersistence;
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/messages",
+      headers: {
+        Authorization: "Bearer companion-control-bearer",
+        "x-goatcitadel-companion-timestamp": "2026-03-30T12:00:00.000Z",
+        "x-goatcitadel-companion-nonce": "nonce-123456",
+        "x-goatcitadel-companion-signature": "ZmFrZV9zaWduYXR1cmU",
+      },
+      payload: { text: "control" },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(verifyReplayPersistence).not.toHaveBeenCalled();
+  });
+
+  it("would persist the companion replay before the guard if authPlugin were composed first (guardrail)", async () => {
+    // Reversed order: authPlugin's signature preHandler is registered before the
+    // route-access tracking hook, so the replay writer is reached BEFORE the 403.
+    // This proves the ordering is load-bearing — if app.ts is ever reordered, the
+    // source-order test above fails and this documents the concrete consequence.
+    app = await buildApp(
+      { mode: "token", token: { value: "alpha-token", queryParam: "access_token" } },
+      { routeAccessTracking: "after" },
+    );
+    const verifyReplayPersistence = vi.fn(() => undefined);
+    (app.gatewayAuth as unknown as { verifyCompanionRequestSignature: unknown }).verifyCompanionRequestSignature =
+      verifyReplayPersistence;
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/messages",
+      headers: {
+        Authorization: "Bearer companion-control-bearer",
+        "x-goatcitadel-companion-timestamp": "2026-03-30T12:00:00.000Z",
+        "x-goatcitadel-companion-nonce": "nonce-123456",
+        "x-goatcitadel-companion-signature": "ZmFrZV9zaWduYXR1cmU",
+      },
+      payload: { text: "control" },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(verifyReplayPersistence).toHaveBeenCalled();
   });
 
   it("accepts companion bearer tokens for read requests", async () => {

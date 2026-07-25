@@ -87,6 +87,9 @@ export function buildCheckpointDetails(
       worktreePath: run.worktreePath ?? null,
       worktreeStatus: run.worktreeStatus ?? null,
       worktreeBaseRef: run.worktreeBaseRef ?? null,
+      worktreeLeaseOwnerId: run.worktreeLeaseOwnerId ?? null,
+      worktreeLeaseGeneration: run.worktreeLeaseGeneration ?? null,
+      worktreeLeaseExpiresAt: run.worktreeLeaseExpiresAt ?? null,
     },
     approvalState: {
       pendingApprovalPhaseId: run.pendingApprovalPhaseId ?? null,

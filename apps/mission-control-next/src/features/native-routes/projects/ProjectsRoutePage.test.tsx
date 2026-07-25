@@ -16,6 +16,7 @@ import {
   restoreChatProject,
   updateChatProject,
 } from "@goatcitadel/mission-control-shared/api/client";
+import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { deriveProjectHome, ProjectsRoutePage } from "./ProjectsRoutePage";
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
@@ -25,6 +26,8 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchChatGeneratedArtifacts: vi.fn(),
   fetchChatProjects: vi.fn(),
   fetchChatSessions: vi.fn(),
+  isApiRequestError: (error: unknown) =>
+    error instanceof Error && error.name === "ApiRequestError" && "status" in error,
   restoreChatProject: vi.fn(),
   updateChatProject: vi.fn(),
 }));
@@ -41,6 +44,7 @@ const mockedUpdateChatProject = vi.mocked(updateChatProject);
 function project(overrides: Partial<ChatProjectRecord>): ChatProjectRecord {
   return {
     projectId: "project-alpha",
+    revision: 7,
     workspaceId: "default",
     name: "Alpha",
     description: "Primary project",
@@ -442,15 +446,77 @@ describe("ProjectsRoutePage", () => {
     });
     expect(mockedUpdateChatProject).toHaveBeenCalledWith(
       "project-alpha",
-      expect.objectContaining({ citadelId: "company", name: "Alpha renamed", workspaceId: "default" }),
+      expect.objectContaining({
+        expectedRevision: 7,
+        citadelId: "company",
+        name: "Alpha renamed",
+        workspaceId: "default",
+      }),
     );
 
     await act(async () => {
       findButton(renderer.root, "Archive project Alpha renamed").props.onClick();
       await Promise.resolve();
     });
-    expect(mockedArchiveChatProject).toHaveBeenCalledWith("project-alpha");
+    expect(mockedArchiveChatProject).toHaveBeenCalledWith("project-alpha", 7);
     expect(navigate).toHaveBeenCalledWith({ area: "projects", theme: "ops" }, { replace: true });
+  });
+
+  it("preserves a project draft, reloads the current revision, and retries after a 409", async () => {
+    const renderer = await renderPage(
+      defaultProps({ route: { area: "projects", projectId: "project-alpha", theme: "ops" } }),
+    );
+    const localNameInput = renderer.root.findAll((node) => node.type === "input" && node.props.value === "Alpha")[0]!;
+    act(() => {
+      localNameInput.props.onChange({ target: { value: "Local draft" } });
+    });
+
+    const staleError = new ApiRequestError("stale project", {
+      kind: "http",
+      method: "PATCH",
+      path: "/api/v1/chat/projects/project-alpha",
+      status: 409,
+      body: { code: "WRITE_CONFLICT", details: { expectedRevision: 7, currentRevision: 8 } },
+    });
+    mockedUpdateChatProject
+      .mockRejectedValueOnce(staleError)
+      .mockResolvedValueOnce(project({ projectId: "project-alpha", revision: 9, name: "Local draft" }));
+    mockedFetchChatProjects.mockResolvedValueOnce({
+      items: [
+        project({ projectId: "project-alpha", revision: 8, name: "Remote update" }),
+        project({ projectId: "project-beta", revision: 2, name: "Beta" }),
+      ],
+    } as any);
+
+    await act(async () => {
+      findButton(renderer.root, "Save project").props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mockedUpdateChatProject).toHaveBeenNthCalledWith(
+      1,
+      "project-alpha",
+      expect.objectContaining({ expectedRevision: 7, name: "Local draft" }),
+    );
+    expect(mockedFetchChatProjects).toHaveBeenCalledTimes(2);
+    expect(pageText(renderer)).toContain("current revision was reloaded and your draft was preserved");
+    expect(renderer.root.findAll((node) => node.type === "input" && node.props.value === "Local draft")).toHaveLength(
+      1,
+    );
+
+    await act(async () => {
+      findButton(renderer.root, "Save project").props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(mockedUpdateChatProject).toHaveBeenNthCalledWith(
+      2,
+      "project-alpha",
+      expect.objectContaining({ expectedRevision: 8, name: "Local draft" }),
+    );
   });
 
   it("does not auto-select an archived project when returning to the projects root", async () => {
@@ -489,7 +555,7 @@ describe("ProjectsRoutePage", () => {
       });
       await Promise.resolve();
     });
-    expect(mockedRestoreChatProject).toHaveBeenCalledWith("project-archived");
+    expect(mockedRestoreChatProject).toHaveBeenCalledWith("project-archived", 7);
     expect(findButtonByAriaLabel(renderer.root, "Archive project Archived")).toBeDefined();
 
     mockedRestoreChatProject.mockRejectedValueOnce(new Error("restore failed"));

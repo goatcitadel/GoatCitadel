@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { CronJobRecord, ToolPolicyActorContext } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { CronAutomationService } from "./cron-automation-service.js";
+import { createTestCronSpecOwner } from "./cron-spec-owner.test-utils.js";
 import {
   buildScheduleCreateActionConfig,
   parseScheduleManageArgs,
@@ -23,7 +24,7 @@ describe("schedule.manage cron integration (P1-F2)", () => {
     permissionProfileId: "trusted_local_power",
   };
 
-  it("create persists an agent_turn job with the creator profile, then list + cancel round-trip", () => {
+  it("create persists an agent_turn job with the creator profile, then list + cancel round-trip", async () => {
     const cronJobs = new FakeCronJobs();
     const service = createService(cronJobs);
 
@@ -38,7 +39,7 @@ describe("schedule.manage cron integration (P1-F2)", () => {
       policyContext: creatorCtx,
       existingJobs: service.listCronJobs(),
     });
-    const created = service.createCronJob({
+    const created = await service.createCronJob({
       jobId: "morning-briefing-abc12345",
       name: validated.name,
       action: "agent_turn",
@@ -68,15 +69,15 @@ describe("schedule.manage cron integration (P1-F2)", () => {
     expect(listed[0]).toMatchObject({ jobId: "morning-briefing-abc12345", name: "Morning briefing", enabled: true });
 
     // --- cancel ---
-    const cancelled = service.deleteCronJob("morning-briefing-abc12345");
+    const cancelled = await service.deleteCronJob("morning-briefing-abc12345", created.revision);
     expect(cancelled).toEqual({ deleted: true, jobId: "morning-briefing-abc12345" });
     expect(service.listCronJobs()).toHaveLength(0);
   });
 
-  it("preserves creator provenance through the real action-config normalizer", () => {
+  it("preserves creator provenance through the real action-config normalizer", async () => {
     const cronJobs = new FakeCronJobs();
     const service = createService(cronJobs);
-    const created = service.createCronJob({
+    const created = await service.createCronJob({
       jobId: "with-channel-xyz98765",
       name: "Channel delivery",
       action: "agent_turn",
@@ -117,6 +118,21 @@ class FakeCronJobs {
     this.rows.set(job.jobId, { ...job });
     return this.rows.get(job.jobId) as CronJobRecord;
   }
+  public createSpec(job: Omit<CronJobRecord, "revision">): CronJobRecord {
+    return this.upsert({ ...job, revision: 1 });
+  }
+  public mergeRuntimeTelemetry(jobId: string, patch: Partial<CronJobRecord>): CronJobRecord {
+    const current = this.rows.get(jobId) as CronJobRecord;
+    const next = { ...current } as Record<string, unknown>;
+    for (const [key, value] of Object.entries(patch)) {
+      if (value === null) delete next[key];
+      else next[key] = value;
+    }
+    return this.upsert(next as unknown as CronJobRecord);
+  }
+  public deleteWithRevision(jobId: string): boolean {
+    return this.rows.delete(jobId);
+  }
   public delete(jobId: string): boolean {
     return this.rows.delete(jobId);
   }
@@ -125,7 +141,7 @@ class FakeCronJobs {
 function createService(cronJobs: FakeCronJobs): CronAutomationService {
   return new CronAutomationService({
     storage: { db: { prepare: () => ({ run: () => {} }) }, cronJobs } as unknown as Storage,
-    persistCronJobsConfig: () => {},
+    specOwner: createTestCronSpecOwner(cronJobs),
     publishRealtime: vi.fn(),
     requireFeatureEnabled: () => {},
     isFeatureEnabled: () => false,

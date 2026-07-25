@@ -6,6 +6,7 @@ import {
   type DemoBootstrapStateResponse,
   type EvidenceEnvelope,
   type DeviceAccessGrantRecord,
+  type LlmProviderConfig,
   type LlmProviderRequestConfig,
 } from "@goatcitadel/contracts";
 import type {
@@ -241,7 +242,13 @@ export type ProviderEditorDraft = {
     | "anthropic-messages"
     | "bedrock-messages";
   defaultModel: string;
+  authMode: NonNullable<LlmProviderConfig["authMode"]> | "";
   apiKeyEnv: string;
+  googleProjectId: string;
+  googleProjectIdEnv: string;
+  googleLocation: string;
+  googleLocationEnv: string;
+  googleEndpointId: string;
 };
 
 const OPENAI_CODEX_OAUTH_FLOW_STORAGE_KEY = "goatcitadel:openai-codex:oauth-flow";
@@ -256,7 +263,13 @@ export function createEmptyProviderEditorDraft(): ProviderEditorDraft {
     baseUrl: "",
     apiStyle: "openai-responses",
     defaultModel: "",
+    authMode: "",
     apiKeyEnv: "",
+    googleProjectId: "",
+    googleProjectIdEnv: "",
+    googleLocation: "",
+    googleLocationEnv: "",
+    googleEndpointId: "",
   };
 }
 
@@ -272,6 +285,8 @@ export function buildProviderEditorDraft(
       | "anthropic-messages"
       | "bedrock-messages";
     defaultModel: string;
+    authMode?: LlmProviderConfig["authMode"];
+    googleCloud?: LlmProviderConfig["googleCloud"];
     apiKeySource?: string;
     apiKeyRef?: string;
   } | null,
@@ -282,7 +297,13 @@ export function buildProviderEditorDraft(
     baseUrl: provider?.baseUrl ?? "",
     apiStyle: provider?.apiStyle ?? "openai-responses",
     defaultModel: provider?.defaultModel ?? "",
+    authMode: provider?.authMode ?? "",
     apiKeyEnv: provider?.apiKeySource === "env" ? (provider.apiKeyRef ?? "") : "",
+    googleProjectId: provider?.googleCloud?.projectId ?? "",
+    googleProjectIdEnv: provider?.googleCloud?.projectIdEnv ?? "",
+    googleLocation: provider?.googleCloud?.location ?? "",
+    googleLocationEnv: provider?.googleCloud?.locationEnv ?? "",
+    googleEndpointId: provider?.googleCloud?.endpointId ?? "",
   };
 }
 
@@ -294,7 +315,13 @@ export function buildChatGptOAuthProviderDraft(): ProviderEditorDraft {
     baseUrl: template?.baseUrl ?? "https://chatgpt.com/backend-api/codex",
     apiStyle: template?.apiStyle === "openai-codex-responses" ? template.apiStyle : "openai-codex-responses",
     defaultModel: template?.defaultModel ?? "gpt-5.5",
+    authMode: "codex-oauth",
     apiKeyEnv: "",
+    googleProjectId: "",
+    googleProjectIdEnv: "",
+    googleLocation: "",
+    googleLocationEnv: "",
+    googleEndpointId: "",
   };
 }
 
@@ -507,6 +534,19 @@ export function formatProviderCredentialLabel(
     return "OAuth missing";
   }
   return hasApiKey ? "secret ready" : "secret missing";
+}
+
+export function resolveProviderCredentialReady(input: {
+  providerId: string;
+  authMode?: LlmProviderConfig["authMode"];
+  hasApiKey?: boolean;
+  hasSecret?: boolean;
+  oauthConnected?: boolean;
+  localEndpoint?: boolean;
+}): boolean {
+  if (input.providerId === "openai-codex") return input.oauthConnected === true;
+  if (input.authMode === "google-adc") return input.hasApiKey === true;
+  return input.hasSecret === true || input.hasApiKey === true || input.localEndpoint === true;
 }
 
 type ProviderSmokeEvidenceInput = {

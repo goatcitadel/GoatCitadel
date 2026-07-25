@@ -174,7 +174,7 @@ export const HEARTBEAT_RESTRICTED_PROFILE: PermissionProfileRecord = {
   builtin: true,
   status: "active",
   scope: "global",
-  approvalMode: "approve_all",
+  approvalMode: "bypass",
   toolPatterns: [...HEARTBEAT_READ_ONLY_ALLOW],
   allow: [],
   deny: [...HEARTBEAT_RESTRICTED_DENY],
@@ -270,7 +270,7 @@ export interface LocalOperatorOverrideCreateInput {
 export interface ToolPolicyActorContext {
   operatorId?: string;
   authActorId?: string;
-  authActorSource?: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion" | "a2a_peer";
+  authActorSource?: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion" | "a2a_peer" | "mesh_node";
   permissionProfileId?: string;
   permissionProfile?: PermissionProfileRecord;
   localOperatorOverrideId?: string;

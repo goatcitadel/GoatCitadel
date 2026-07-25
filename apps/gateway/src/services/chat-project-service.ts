@@ -112,11 +112,15 @@ export class ChatProjectService {
       .find((project) => project.workspacePath === relativeWorkspacePath);
 
     const project = existing
-      ? this.ctx.storage.chatProjects.update(existing.projectId, {
-          workspaceId,
-          name: existing.name === existing.workspacePath ? desiredName : existing.name || desiredName,
-          workspacePath: relativeWorkspacePath,
-        })
+      ? this.ctx.storage.chatProjects.updateWithRevision(
+          existing.projectId,
+          {
+            workspaceId,
+            name: existing.name === existing.workspacePath ? desiredName : existing.name || desiredName,
+            workspacePath: relativeWorkspacePath,
+          },
+          existing.revision,
+        )
       : this.ctx.storage.chatProjects.create({
           workspaceId,
           name: desiredName,
@@ -154,11 +158,16 @@ export class ChatProjectService {
       workspacePath?: string;
       color?: string;
     },
+    expectedRevision: number,
   ): ChatProjectRecord {
-    const updated = this.ctx.storage.chatProjects.update(projectId, {
-      ...input,
-      workspaceId: input.workspaceId ? this.ctx.normalizeWorkspaceId(input.workspaceId) : undefined,
-    });
+    const updated = this.ctx.storage.chatProjects.updateWithRevision(
+      projectId,
+      {
+        ...input,
+        workspaceId: input.workspaceId ? this.ctx.normalizeWorkspaceId(input.workspaceId) : undefined,
+      },
+      expectedRevision,
+    );
     this.ctx.publishRealtime("system", "chat", {
       type: "chat_project_updated",
       projectId: updated.projectId,
@@ -168,8 +177,8 @@ export class ChatProjectService {
     return updated;
   }
 
-  archiveChatProject(projectId: string): ChatProjectRecord {
-    const archived = this.ctx.storage.chatProjects.archive(projectId);
+  archiveChatProject(projectId: string, expectedRevision: number): ChatProjectRecord {
+    const archived = this.ctx.storage.chatProjects.archiveWithRevision(projectId, expectedRevision);
     this.ctx.publishRealtime("system", "chat", {
       type: "chat_project_archived",
       projectId: archived.projectId,
@@ -177,8 +186,8 @@ export class ChatProjectService {
     return archived;
   }
 
-  restoreChatProject(projectId: string): ChatProjectRecord {
-    const restored = this.ctx.storage.chatProjects.restore(projectId);
+  restoreChatProject(projectId: string, expectedRevision: number): ChatProjectRecord {
+    const restored = this.ctx.storage.chatProjects.restoreWithRevision(projectId, expectedRevision);
     this.ctx.publishRealtime("system", "chat", {
       type: "chat_project_restored",
       projectId: restored.projectId,
@@ -186,8 +195,8 @@ export class ChatProjectService {
     return restored;
   }
 
-  hardDeleteChatProject(projectId: string): boolean {
-    const deleted = this.ctx.storage.chatProjects.hardDelete(projectId);
+  hardDeleteChatProject(projectId: string, expectedRevision: number): boolean {
+    const deleted = this.ctx.storage.chatProjects.hardDeleteWithRevision(projectId, expectedRevision);
     if (deleted) {
       this.ctx.publishRealtime("system", "chat", {
         type: "chat_project_deleted",

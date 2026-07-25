@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatThreadTurnRecord, ChatToolRunRecord } from "@goatcitadel/contracts";
 import {
   ChatLiveActivityRail,
+  ChatTurnActivityRows,
   deriveLiveActivityPhase,
   formatToolRunElapsedLive,
   type ChatLiveActivityPhase,
@@ -93,6 +94,56 @@ describe("formatToolRunElapsedLive", () => {
     const startedAt = "2026-05-15T00:00:05.000Z";
     const nowMs = Date.parse(startedAt) - 1000;
     expect(formatToolRunElapsedLive(startedAt, nowMs)).toBeUndefined();
+  });
+});
+
+describe("ChatTurnActivityRows effect truth", () => {
+  it("prominently warns on uncertain effects and shows only verified concrete receipts", () => {
+    const toolRuns = [
+      createToolRun({
+        toolRunId: "uncertain-tool",
+        toolName: "http.post",
+        status: "failed",
+        effectPotential: "unknown",
+        effectDisposition: "unknown",
+        effectOutcomeKind: "uncertain",
+        effectEvidence: {
+          version: "goatcitadel.tool-effect.v1",
+          outcomeKind: "uncertain",
+          reason: "dispatch_may_have_occurred",
+          refs: [{ owner: "external_side_effect", refId: "forged-uncertain-ref" }],
+        },
+      }),
+      createToolRun({
+        toolRunId: "concrete-tool",
+        toolName: "code_mode.run",
+        status: "executed",
+        effectPotential: "unknown",
+        effectOutcomeKind: "concrete",
+        effectEvidence: {
+          version: "goatcitadel.tool-effect.v1",
+          outcomeKind: "concrete",
+          reason: "canonical_effect_receipt_linked",
+          refs: [{ owner: "code_mode", refId: "code-run-verified" }],
+        },
+      }),
+    ] satisfies ChatToolRunRecord[];
+    const renderer = TestRenderer.create(
+      <ChatTurnActivityRows mode="chat" toolRuns={toolRuns} onOpenRunDetails={vi.fn()} />,
+    );
+    const text = renderedText(renderer);
+
+    expect(text).toContain("potential unknown");
+    expect(text).toContain("disposition unknown");
+    expect(text).toContain("outcome uncertain");
+    expect(text).toContain("evidence dispatch_may_have_occurred");
+    expect(text).toContain("Inspect external or runtime state before retry");
+    expect(text).toContain("effect uncertain");
+    expect(text).toContain("verify it against the canonical owner ledger");
+    expect(text).not.toContain("Verified receipt");
+    expect(text).not.toContain("code-run-verified");
+    expect(text).not.toContain("forged-uncertain-ref");
+    renderer.unmount();
   });
 });
 

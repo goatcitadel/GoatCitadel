@@ -1,11 +1,12 @@
 // Extracted verbatim from `../../SettingsNativePage.tsx` as part of the
 // per-section settings decomposition.
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RefreshCw, Save } from "lucide-react";
 import {
   fetchDaemonStatus,
   fetchDeviceAccessGrants,
   fetchSettings,
+  isApiRequestError,
   patchSettings,
   resolveGatewayInstallToken,
   revokeDeviceAccessGrant,
@@ -58,6 +59,7 @@ export function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
     basicUsername: "",
     basicPassword: "",
   });
+  const preserveAccessDraftRef = useRef(false);
   const [installToken, setInstallToken] = useState<string>("");
   const continuityItems = useMemo(
     () =>
@@ -75,6 +77,10 @@ export function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
     if (!data) {
       return;
     }
+    if (preserveAccessDraftRef.current) {
+      preserveAccessDraftRef.current = false;
+      return;
+    }
     setForm({
       mode: data.settings.auth?.mode ?? "none",
       allowLoopbackBypass: data.settings.auth?.allowLoopbackBypass ?? false,
@@ -85,8 +91,13 @@ export function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
   }, [data]);
 
   const handleSave = async () => {
+    if (!data) {
+      setNotice({ tone: "warning", message: "Reload settings before saving access changes." });
+      return;
+    }
     try {
       await patchSettings({
+        expectedRevision: data.settings.revision,
         auth: {
           mode: form.mode as "none" | "token" | "basic",
           allowLoopbackBypass: form.allowLoopbackBypass,
@@ -104,6 +115,16 @@ export function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
       }));
       await reload();
     } catch (saveError) {
+      if (isApiRequestError(saveError) && saveError.status === 409) {
+        preserveAccessDraftRef.current = true;
+        await reload();
+        setNotice({
+          tone: "warning",
+          message:
+            "Access settings changed elsewhere. Your draft is preserved; review the current settings, then save again to retry.",
+        });
+        return;
+      }
       setNotice({ tone: "error", message: getErrorMessage(saveError) });
     }
   };

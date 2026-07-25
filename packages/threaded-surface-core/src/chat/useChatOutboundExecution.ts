@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Outbound chat execution coordinates streaming, retries, attachments, and effect settlement in one hook. */
 import type {
   ChatMessageRecord,
   ChatMode,
@@ -34,7 +35,7 @@ import { shouldApplyFetchedMessagesAfterStream, shouldExecuteLocalChatCommand } 
 import type { ChatErrorSource } from "./chat-error-copy";
 import { useChatOperatorPrompts } from "./useChatOperatorPrompts";
 import { useChatStreamingPreviewState } from "./useChatStreamingPreviewState";
-import type { OutboundQueueItem } from "./useChatSurfaceOrchestration";
+import type { OutboundQueueItem, OutboundRequestPrefsSnapshot } from "./useChatSurfaceOrchestration";
 import type { ActiveChatStreamState, UseChatOutboundExecutionInput } from "./useChatOutboundExecution.types";
 export type {
   ActiveChatStreamState,
@@ -76,7 +77,22 @@ export function abortActiveChatStream(stream: ActiveChatStreamState | null): voi
   stream.controller.abort();
 }
 
-export function resolveOutboundExecutionPrefs(prefs: ChatSessionPrefsRecord | null | undefined) {
+/**
+ * HX-407 C3 seam: the queue-frozen external-source selection rides each send
+ * item as `externalContextRefs`; this callback fires exactly once per item that
+ * completed WITHOUT throwing, so the owning selection state clears only after a
+ * successful send (failed and aborted sends retain the selection).
+ */
+export interface UseChatOutboundExternalContext {
+  onExternalContextSent?: (item: OutboundQueueItem) => void;
+}
+
+type OutboundExecutionPrefsSource = Pick<
+  ChatSessionPrefsRecord,
+  "memoryMode" | "webMode" | "thinkingLevel" | "speedMode" | "subagentPolicy"
+>;
+
+export function resolveOutboundExecutionPrefs(prefs: OutboundExecutionPrefsSource | null | undefined) {
   const memoryMode = prefs?.memoryMode ?? "auto";
   return {
     useMemory: memoryMode !== "off",
@@ -88,8 +104,34 @@ export function resolveOutboundExecutionPrefs(prefs: ChatSessionPrefsRecord | nu
   };
 }
 
-export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
+export function captureOutboundRequestPrefsSnapshot(input: {
+  prefs: ChatSessionPrefsRecord | null | undefined;
+  selectedProviderId?: string;
+  selectedModel?: string;
+  fullWebAccess?: boolean;
+}): OutboundRequestPrefsSnapshot {
+  const executionPrefs = resolveOutboundExecutionPrefs(input.prefs);
+  return Object.freeze({
+    mode: "chat",
+    providerId: input.prefs?.providerId ?? input.selectedProviderId,
+    model: input.prefs?.model ?? input.selectedModel,
+    webMode: executionPrefs.webMode,
+    memoryMode: executionPrefs.memoryMode,
+    thinkingLevel: executionPrefs.thinkingLevel,
+    speedMode: executionPrefs.speedMode,
+    subagentPolicy: executionPrefs.subagentPolicy,
+    fullWebAccess: Boolean(input.fullWebAccess),
+  });
+}
+
+export function useChatOutboundExecution(
+  input: UseChatOutboundExecutionInput & { externalContext?: UseChatOutboundExternalContext },
+) {
   const { sessionConfig, streamConfig, stateConfig, stateSetters, operations, refs, routing } = input;
+  // Synced ref: the callback stays render-current without widening the
+  // executeOutboundItem dependency list (the standard pattern in this hook).
+  const onExternalContextSentRef = useRef(input.externalContext?.onExternalContextSent);
+  onExternalContextSentRef.current = input.externalContext?.onExternalContextSent;
   const { surfaceMode, selectedSessionId, selectedSession, prefs, fullWebAccess, selectedProviderId, selectedModel } =
     sessionConfig;
   const { streamEnabled, visualStreamMode = "smooth", activeStreamRef } = streamConfig;
@@ -378,12 +420,28 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
       const trimmedContent = item.content.trim();
       const attachmentsSnapshot = item.attachments;
       const attachmentIds = attachmentsSnapshot.map((entry) => entry.attachmentId);
+      // Queue-frozen external-source selection: sends carry exactly the refs
+      // captured at enqueue time (never re-read from live selection state).
+      const externalContextRefs =
+        item.action === "send" && item.externalContextRefs && item.externalContextRefs.length > 0
+          ? item.externalContextRefs.map((ref) => ({ ...ref }))
+          : undefined;
+      const externalContextOptIn = externalContextRefs ? { contextRefs: externalContextRefs } : {};
       const currentPrefs = prefsRef.current;
-      const effectiveMode: ChatMode = "chat";
+      const requestPrefs =
+        item.requestPrefs ??
+        captureOutboundRequestPrefsSnapshot({
+          prefs: currentPrefs,
+          selectedProviderId,
+          selectedModel,
+          fullWebAccess,
+        });
+      const effectiveMode: ChatMode = requestPrefs.mode;
       const shouldAutoRoute = false;
-      const executionProviderId = currentPrefs?.providerId ?? selectedProviderId;
-      const executionModel = currentPrefs?.model ?? selectedModel;
-      const outboundPrefs = resolveOutboundExecutionPrefs(currentPrefs);
+      const executionProviderId = requestPrefs.providerId;
+      const executionModel = requestPrefs.model;
+      const outboundPrefs = resolveOutboundExecutionPrefs(requestPrefs);
+      const councilOptIn = item.modelCouncil ? { modelCouncil: item.modelCouncil } : {};
       const optimisticPrefs =
         currentPrefs && (executionProviderId || executionModel)
           ? {
@@ -391,6 +449,11 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
               mode: effectiveMode,
               providerId: executionProviderId,
               model: executionModel,
+              webMode: requestPrefs.webMode,
+              memoryMode: requestPrefs.memoryMode,
+              thinkingLevel: requestPrefs.thinkingLevel,
+              speedMode: requestPrefs.speedMode,
+              subagentPolicy: requestPrefs.subagentPolicy,
             }
           : currentPrefs;
       const localAttachments = attachmentsSnapshot.map((entry) => ({
@@ -475,6 +538,8 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
           sessionId: session.sessionId,
           action: item.action,
           turnId: item.targetTurnId,
+          content: trimmedContent,
+          requestPrefs,
           force: true,
         });
         if (routePreflight?.blockedReason) {
@@ -771,12 +836,13 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
                     model: routeExecutionModel,
                     routeDecision: routeExecutionDecision,
                     mode: effectiveMode,
-                    webMode: currentPrefs?.webMode,
-                    memoryMode: currentPrefs?.memoryMode,
-                    thinkingLevel: currentPrefs?.thinkingLevel,
-                    speedMode: currentPrefs?.speedMode,
-                    subagentPolicy: currentPrefs?.subagentPolicy,
-                    ...(fullWebAccess ? { fullWebAccess: true } : {}),
+                    webMode: requestPrefs.webMode,
+                    memoryMode: requestPrefs.memoryMode,
+                    thinkingLevel: requestPrefs.thinkingLevel,
+                    speedMode: requestPrefs.speedMode,
+                    subagentPolicy: requestPrefs.subagentPolicy,
+                    ...councilOptIn,
+                    ...(requestPrefs.fullWebAccess ? { fullWebAccess: true } : {}),
                   },
                   onChunk,
                   { signal: controller.signal, originSurface: effectiveMode },
@@ -793,7 +859,8 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
                     providerId: routeExecutionProviderId,
                     model: routeExecutionModel,
                     routeDecision: routeExecutionDecision,
-                    ...(fullWebAccess ? { fullWebAccess: true } : {}),
+                    ...councilOptIn,
+                    ...(requestPrefs.fullWebAccess ? { fullWebAccess: true } : {}),
                   },
                   onChunk,
                   { signal: controller.signal, originSurface: effectiveMode },
@@ -804,13 +871,15 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
                   {
                     content: trimmedContent,
                     attachments: attachmentIds,
+                    ...externalContextOptIn,
                     ...outboundPrefs,
                     mode: shouldAutoRoute ? undefined : effectiveMode,
                     ...(shouldAutoRoute ? { autoRoute: true as const } : {}),
                     providerId: routeExecutionProviderId,
                     model: routeExecutionModel,
                     routeDecision: routeExecutionDecision,
-                    ...(fullWebAccess ? { fullWebAccess: true } : {}),
+                    ...councilOptIn,
+                    ...(requestPrefs.fullWebAccess ? { fullWebAccess: true } : {}),
                   },
                   onChunk,
                   { signal: controller.signal, originSurface: effectiveMode },
@@ -852,12 +921,13 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
                     model: routeExecutionModel,
                     routeDecision: routeExecutionDecision,
                     mode: effectiveMode,
-                    webMode: currentPrefs?.webMode,
-                    memoryMode: currentPrefs?.memoryMode,
-                    thinkingLevel: currentPrefs?.thinkingLevel,
-                    speedMode: currentPrefs?.speedMode,
-                    subagentPolicy: currentPrefs?.subagentPolicy,
-                    ...(fullWebAccess ? { fullWebAccess: true } : {}),
+                    webMode: requestPrefs.webMode,
+                    memoryMode: requestPrefs.memoryMode,
+                    thinkingLevel: requestPrefs.thinkingLevel,
+                    speedMode: requestPrefs.speedMode,
+                    subagentPolicy: requestPrefs.subagentPolicy,
+                    ...councilOptIn,
+                    ...(requestPrefs.fullWebAccess ? { fullWebAccess: true } : {}),
                   },
                   { originSurface: effectiveMode },
                 )
@@ -873,7 +943,8 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
                       providerId: routeExecutionProviderId,
                       model: routeExecutionModel,
                       routeDecision: routeExecutionDecision,
-                      ...(fullWebAccess ? { fullWebAccess: true } : {}),
+                      ...councilOptIn,
+                      ...(requestPrefs.fullWebAccess ? { fullWebAccess: true } : {}),
                     },
                     { originSurface: effectiveMode },
                   )
@@ -882,13 +953,15 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
                     {
                       content: trimmedContent,
                       attachments: attachmentIds,
+                      ...externalContextOptIn,
                       ...outboundPrefs,
                       mode: shouldAutoRoute ? undefined : effectiveMode,
                       ...(shouldAutoRoute ? { autoRoute: true as const } : {}),
                       providerId: routeExecutionProviderId,
                       model: routeExecutionModel,
                       routeDecision: routeExecutionDecision,
-                      ...(fullWebAccess ? { fullWebAccess: true } : {}),
+                      ...councilOptIn,
+                      ...(requestPrefs.fullWebAccess ? { fullWebAccess: true } : {}),
                     },
                     { originSurface: effectiveMode },
                   );
@@ -902,6 +975,12 @@ export function useChatOutboundExecution(input: UseChatOutboundExecutionInput) {
           });
         }
         setEditingTurnId(null);
+        // Successful (non-thrown) completion is the ONLY point that consumes
+        // the frozen external-source selection; the catch/abort paths below
+        // return without reaching here, so failed sends retain it.
+        if (externalContextRefs) {
+          onExternalContextSentRef.current?.(item);
+        }
         const completedSessionId = session.sessionId;
         void loadSidebar(undefined, { bypassCache: true, preferredSessionId: completedSessionId }).catch(
           (sidebarError: unknown) => {

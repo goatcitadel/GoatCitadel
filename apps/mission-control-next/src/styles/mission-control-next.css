@@ -1568,7 +1568,7 @@
   font-variant-numeric: tabular-nums;
   font-size: var(--text-2xs);
   color: var(--text-muted);
-  overflow-x: auto;
+  overflow: hidden;
   scrollbar-width: none;
 }
 
@@ -1585,6 +1585,33 @@
   padding-inline-end: 0.2rem;
   overflow-x: auto;
   scrollbar-width: none;
+}
+
+/* Build identity is shell truth, not a scrollable metric. Keep it outside the
+   horizontally scrolling runtime pills so it remains visible at every width. */
+.mc-next-status-strip-identity {
+  position: relative;
+  z-index: 2;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: min(34rem, 70vw);
+  background: inherit;
+}
+
+.mc-next-status-strip-identity .mc-next-status-pill,
+.mc-next-status-strip-identity .mc-next-status-pill > div {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.mc-next-status-strip-identity .mc-next-status-pill strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mc-next-status-value-compact {
+  display: none !important;
 }
 
 .mc-next-status-strip-primary::-webkit-scrollbar {
@@ -1653,6 +1680,23 @@
 
 .mc-next-status-pill[data-status="degraded"] {
   border-color: color-mix(in oklab, var(--gc-risk-danger, var(--gc-risk-caution)) 32%, var(--border));
+}
+
+.mc-next-status-pill[data-identity-status="verified"] strong {
+  color: color-mix(in oklab, var(--gc-risk-safe) 72%, var(--foreground));
+}
+
+.mc-next-status-pill[data-identity-status="unverified"] strong {
+  color: color-mix(in oklab, var(--gc-risk-caution) 76%, var(--foreground));
+}
+
+.mc-next-status-pill[data-identity-status="unavailable"] strong {
+  color: color-mix(in oklab, var(--gc-risk-danger) 72%, var(--foreground));
+}
+
+.mc-next-status-pill[data-identity-status]:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--mc-area-color) 66%, transparent);
+  outline-offset: 2px;
 }
 
 .mc-next-status-icon {
@@ -2710,17 +2754,40 @@
     min-height: 1.15rem;
     padding-top: 0.08rem;
     padding-bottom: 0.12rem;
-    overflow-x: auto;
-    overflow-y: hidden;
-    overscroll-behavior-inline: contain;
-    scrollbar-width: none;
-    /*
-     * The strip scrolls horizontally on narrow viewports but its scrollbar is
-     * hidden, so right-side pills (Spend / Serving) sat off-screen with no hint
-     * they were reachable. Fade the trailing edge to signal "swipe for more".
-     */
-    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 1.1rem), transparent);
-    mask-image: linear-gradient(to right, #000 calc(100% - 1.1rem), transparent);
+    overflow: hidden;
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+
+  /* Threaded mobile surfaces intentionally fall back to document flow so the
+     composer and context panels remain usable. Keep shell identity out of that
+     scroll: it is runtime trust chrome and must remain visible at the viewport
+     edge even when the work area becomes taller than 100dvh. The qualified
+     selectors also outrank the later threaded-surface responsive rules. */
+  .mc-next-shell .mc-next-status-strip {
+    position: fixed;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: var(--z-topbar);
+    flex-wrap: nowrap;
+  }
+
+  .mc-next-app-frame {
+    padding-bottom: calc(1.75rem + env(safe-area-inset-bottom));
+  }
+
+  .mc-next-shell .mc-next-surface-host-work .mc-next-threaded-surface.unified .mc-next-threaded-composer-card {
+    bottom: calc(1.75rem + env(safe-area-inset-bottom));
+  }
+
+  .mc-next-shell .mc-next-status-details,
+  .mc-next-shell .mc-next-status-details summary,
+  .mc-next-shell .mc-next-status-details summary strong {
+    flex: 0 0 auto;
+    min-width: max-content;
+    width: auto;
+    white-space: nowrap;
   }
 
   .mc-next-status-strip::-webkit-scrollbar {
@@ -2746,6 +2813,45 @@
   .mc-next-status-pill strong {
     font-size: var(--text-2xs);
     line-height: 1;
+    white-space: nowrap;
+    overflow-wrap: normal;
+  }
+
+  .mc-next-status-strip-identity {
+    flex: 0 1 auto;
+    max-width: calc(100vw - 6.5rem);
+  }
+
+  .mc-next-status-strip-primary {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+  }
+
+  .mc-next-status-strip-primary .mc-next-status-pill {
+    max-width: none;
+  }
+
+  .mc-next-status-strip-identity .mc-next-status-value-full {
+    display: none;
+  }
+
+  .mc-next-status-strip-identity .mc-next-status-value-compact {
+    display: block !important;
+  }
+
+  .mc-next-status-details summary {
+    min-height: 1.15rem;
+    padding: 0.08rem 0.3rem;
+  }
+
+  .mc-next-status-details summary > span {
+    display: none;
+  }
+
+  .mc-next-status-details summary strong::before {
+    display: none;
   }
 
   .notification-stack {

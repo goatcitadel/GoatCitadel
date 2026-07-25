@@ -17,6 +17,7 @@ import {
   resolveBrowserFallbackToolName,
   withBrowserFallbackChain,
 } from "../chat-agent-browser-results.js";
+import { isDurableControlError } from "../durable-control-error.js";
 
 export interface BrowserFallbackExecutorDeps {
   invokeTool: (request: ToolInvokeRequest, options?: { executionFence?: () => void }) => Promise<ToolInvokeResult>;
@@ -77,6 +78,8 @@ export interface AlternateBuiltinBrowserFallbackInput {
   normalizedResult?: Record<string, unknown>;
   error?: string;
   turnBudgetDeadline?: number;
+  /** Effect-aware Chat invocation bound to the original tool-run fence. */
+  invokeTool?: (request: ToolInvokeRequest) => Promise<ToolInvokeResult>;
 }
 
 export async function tryAlternateBuiltinBrowserResult(
@@ -126,7 +129,7 @@ export async function tryAlternateBuiltinBrowserResult(
     }
     const alternateArgs = { ...input.args, url };
     try {
-      const result = await invokeTurnTool(deps, input.turnInput, {
+      const request: ToolInvokeRequest = {
         toolName: input.toolName,
         args: alternateArgs,
         agentId: "assistant",
@@ -143,7 +146,10 @@ export async function tryAlternateBuiltinBrowserResult(
           reason: `chat mode ${input.turnInput.mode}`,
         },
         policyContext: deps.buildPolicyContext(input.turnInput),
-      });
+      };
+      const result = input.invokeTool
+        ? await input.invokeTool(request)
+        : await invokeTurnTool(deps, input.turnInput, request);
       if (result.outcome !== "executed") {
         input.fallbackChain.push(
           buildBrowserFallbackChainEntry({
@@ -178,6 +184,7 @@ export async function tryAlternateBuiltinBrowserResult(
         return withBrowserFallbackChain(normalized, input.fallbackChain);
       }
     } catch (error) {
+      if (isDurableControlError(error)) throw error;
       input.fallbackChain.push(
         buildBrowserFallbackChainEntry({
           toolName: input.toolName,
@@ -221,7 +228,7 @@ async function tryAlternateBuiltinSearchEngines(
     }
     const alternateArgs = { ...input.args, engine };
     try {
-      const result = await invokeTurnTool(deps, input.turnInput, {
+      const request: ToolInvokeRequest = {
         toolName: "browser.search",
         args: alternateArgs,
         agentId: "assistant",
@@ -238,7 +245,10 @@ async function tryAlternateBuiltinSearchEngines(
           reason: `search engine fallback (${engine}) after ${input.classification.failureClass}`,
         },
         policyContext: deps.buildPolicyContext(input.turnInput),
-      });
+      };
+      const result = input.invokeTool
+        ? await input.invokeTool(request)
+        : await invokeTurnTool(deps, input.turnInput, request);
       if (result.outcome !== "executed") {
         input.fallbackChain.push(
           buildBrowserFallbackChainEntry({
@@ -272,6 +282,7 @@ async function tryAlternateBuiltinSearchEngines(
         return withBrowserFallbackChain(normalized, input.fallbackChain);
       }
     } catch (error) {
+      if (isDurableControlError(error)) throw error;
       input.fallbackChain.push(
         buildBrowserFallbackChainEntry({
           toolName: "browser.search",
@@ -293,6 +304,8 @@ export interface McpBrowserFallbackInput {
   args: Record<string, unknown>;
   fallbackChain: Array<Record<string, unknown>>;
   turnBudgetDeadline?: number;
+  /** MCP invocation bound to the original Chat tool-run execution fence. */
+  invokeMcpTool?: (request: McpInvokeRequest) => Promise<McpInvokeResponse>;
 }
 
 export async function tryBrowserFallbackAcrossMcpTiers(
@@ -313,15 +326,19 @@ export async function tryBrowserFallbackAcrossMcpTiers(
     }
     let response: McpInvokeResponse | undefined;
     try {
-      response = await invokeTurnMcpTool(deps, input.turnInput, {
+      const request: McpInvokeRequest = {
         serverId: target.serverId,
         toolName: resolvedToolName,
         arguments: buildBrowserFallbackArguments(input.toolName, input.args),
         agentId: "assistant",
         sessionId: input.turnInput.sessionId,
         signal: input.turnInput.signal,
-      });
+      };
+      response = input.invokeMcpTool
+        ? await input.invokeMcpTool(request)
+        : await invokeTurnMcpTool(deps, input.turnInput, request);
     } catch (mcpError) {
+      if (isDurableControlError(mcpError)) throw mcpError;
       input.fallbackChain.push(
         buildBrowserFallbackChainEntry({
           toolName: resolvedToolName,

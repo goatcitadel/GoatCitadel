@@ -20,6 +20,9 @@ import {
 } from "./MemoryRoutePage";
 
 const memorySnapshot = vi.hoisted(() => ({
+  // HX-402 P1: approval-first mutation surface state.
+  pendingMutationApprovals: [] as Array<Record<string, unknown>>,
+  dismissPendingMutationApproval: vi.fn(),
   loading: false,
   error: null,
   notice: null,

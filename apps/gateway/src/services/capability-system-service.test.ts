@@ -2,36 +2,45 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ApprovalCreateInput,
   ApprovalRequest,
   ApprovalResolveInput,
   CapabilityArtifactRecord,
+  CapabilityCatalogEntry,
   CapabilityCatalogSnapshotRecord,
-  CapabilityProposalEventRecord,
-  CapabilityProposalRecord,
   CandidateSkillVersionRecord,
+  ChatMessageRecord,
   CodeModeSandboxMetadata,
   CodeModeRunRecord,
+  LoadedSkill,
   PendingApprovalAction,
   PermissionProfileRecord,
   RuntimeDecisionTraceAppendInput,
   RuntimeDecisionTraceQuery,
   RuntimeDecisionTraceRecord,
+  SkillLifecycleRecord,
   ToolPolicyActorContext,
   ToolCatalogEntry,
   ToolInvokeRequest,
   ToolInvokeResult,
+  TranscriptEvent,
 } from "@goatcitadel/contracts";
+import { ConflictError } from "@goatcitadel/contracts";
+import { Storage } from "@goatcitadel/storage";
 import { CapabilitySystemService, __internal } from "./capability-system-service.js";
 import type { CapabilityRuntimeConfig } from "../config.js";
 
 const tempRoots: string[] = [];
+const storageCleanups: Array<() => void> = [];
 const digestPinnedRunnerImage =
   "ghcr.io/goatcitadel/code-mode-runner@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 afterEach(async () => {
+  for (const cleanup of storageCleanups.splice(0).reverse()) cleanup();
   await Promise.all(
     tempRoots.splice(0).map(async (root) => {
       await fs.rm(root, { recursive: true, force: true });
@@ -40,6 +49,262 @@ afterEach(async () => {
 });
 
 describe("CapabilitySystemService", () => {
+  it("projects only a bounded hexadecimal commitSha from an imported skill source manifest", async () => {
+    const validDir = await fs.mkdtemp(path.join(os.tmpdir(), "goat-skill-provenance-valid-"));
+    const invalidDir = await fs.mkdtemp(path.join(os.tmpdir(), "goat-skill-provenance-invalid-"));
+    tempRoots.push(validDir, invalidDir);
+    const validCommitSha = "a".repeat(40);
+    await fs.writeFile(
+      path.join(validDir, "source.json"),
+      JSON.stringify({ provenance: { commitSha: validCommitSha } }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(invalidDir, "source.json"),
+      JSON.stringify({ provenance: { commitSha: "not-a-git-object-id" } }),
+      "utf8",
+    );
+    const loadedSkills: LoadedSkill[] = [
+      {
+        skillId: "valid-import",
+        name: "Valid import",
+        source: "extra",
+        dir: validDir,
+        declaredTools: [],
+        requires: [],
+        keywords: [],
+        instructionBody: "valid",
+        mtime: "2026-07-13T00:00:00.000Z",
+      },
+      {
+        skillId: "invalid-import",
+        name: "Invalid import",
+        source: "extra",
+        dir: invalidDir,
+        declaredTools: [],
+        requires: [],
+        keywords: [],
+        instructionBody: "invalid",
+        mtime: "2026-07-13T00:00:00.000Z",
+      },
+    ];
+    const harness = await createHarness({ loadedSkills });
+
+    harness.service.listSkills();
+
+    expect(harness.storage.skillLifecycle.find("valid-import")?.provenance?.commitSha).toBe(validCommitSha);
+    expect(harness.storage.skillLifecycle.find("invalid-import")?.provenance?.commitSha).toBeUndefined();
+  });
+
+  it("re-enqueues a redacted bounded terminal Code Mode transcript exactly once", async () => {
+    const harness = await createHarness();
+    harness.storage.sessions.upsert({ sessionId: "session-transcript", sessionKey: "mission:session-transcript" });
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      sessionId: "session-transcript",
+    });
+    const syntheticToken = "sk-proj-1234567890abcdefghijklmnopqrstuvwxyz";
+    harness.storage.codeModeRuns.upsert({
+      ...run,
+      status: "failed",
+      codeArtifact: {
+        ...run.codeArtifact,
+        relPath: `code-mode/${syntheticToken}/source.ts`,
+      },
+      stdoutPreview: `${syntheticToken}\n${"😀".repeat(20_000)}`,
+      stderrPreview: `Bearer abcdefghijklmnopqrstuvwxyz`,
+      error: `execution interrupted with ${syntheticToken}`,
+      errorCode: "execution_interrupted_after_boundary",
+      finishedAt: "2026-07-13T00:00:00.000Z",
+      executionRecovery: {
+        ...run.executionRecovery,
+        generation: 1,
+        phase: "terminal",
+        disposition: "manual_reconciliation",
+        interruptedAt: "2026-07-13T00:00:00.000Z",
+        interruptionReason: `worker lost ${syntheticToken}`,
+      },
+    });
+
+    const first = harness.service.reconcileCodeModeFinalTranscriptDeliveries();
+    const second = harness.service.reconcileCodeModeFinalTranscriptDeliveries();
+
+    expect(first).toMatchObject({ checked: 1, enqueued: 1, errors: [] });
+    expect(second).toMatchObject({ checked: 0, enqueued: 0, errors: [] });
+    const eventId = `code-mode-final:${run.runId}`;
+    expect(harness.storage.transcriptOutbox.listPending()).toHaveLength(1);
+    const event = harness.storage.transcriptOutbox.get(eventId)!.event;
+    const message = (event.payload as { message: ChatMessageRecord }).message;
+    expect(message.messageId).toBe(eventId);
+    expect(Buffer.byteLength(message.content, "utf8")).toBeLessThanOrEqual(24 * 1024);
+    expect(message.content).not.toContain(syntheticToken);
+    expect(message.content).not.toContain("abcdefghijklmnopqrstuvwxyz");
+    expect(message.content).not.toContain("�");
+    expect(message.content).toContain("does not establish hostile-code sandboxing");
+    expect(harness.storage.chatMessages.get(eventId)?.content).toBe(message.content);
+    expect(harness.storage.codeModeRuns.get(run.runId).executionRecovery.finalTranscriptEnqueuedAt).toBe(
+      "2026-07-13T00:00:00.000Z",
+    );
+  });
+
+  it("drains terminal transcript recovery beyond one page and isolates a failing first run", async () => {
+    const harness = await createHarness();
+    harness.storage.sessions.upsert({ sessionId: "session-transcript-page", sessionKey: "mission:transcript-page" });
+    const template = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+    });
+    const syntheticToken = "sk-proj-1234567890abcdefghijklmnopqrstuvwxyz";
+    for (let index = 0; index < 501; index += 1) {
+      const suffix = index.toString().padStart(3, "0");
+      harness.storage.codeModeRuns.upsert({
+        ...template,
+        runId: `code-run-transcript-page-${suffix}`,
+        sessionId: index === 0 ? `missing-${syntheticToken}` : "session-transcript-page",
+        status: "failed",
+        createdAt: new Date(Date.parse("2026-07-13T00:00:00.000Z") + index).toISOString(),
+        finishedAt: new Date(Date.parse("2026-07-13T01:00:00.000Z") + index).toISOString(),
+        executionRecovery: {
+          generation: 1,
+          phase: "terminal",
+          disposition: "terminal",
+          finalTranscriptEventId: `code-mode-final:code-run-transcript-page-${suffix}`,
+        },
+      });
+    }
+
+    const recovered = harness.service.reconcileCodeModeFinalTranscriptDeliveries(100);
+
+    expect(recovered.checked).toBe(501);
+    expect(recovered.enqueued).toBe(500);
+    expect(recovered.errors).toHaveLength(1);
+    expect(recovered.errors[0]).not.toContain(syntheticToken);
+    expect(Buffer.byteLength(recovered.errors[0]!, "utf8")).toBeLessThanOrEqual(2_048);
+    expect(harness.storage.transcriptOutbox.get("code-mode-final:code-run-transcript-page-500")).toBeDefined();
+    expect(
+      harness.storage.codeModeRuns.get("code-run-transcript-page-000").executionRecovery.finalTranscriptEnqueuedAt,
+    ).toBeUndefined();
+  });
+
+  it("caps oversized poison-row transcript recovery errors and reports omitted failures", async () => {
+    const harness = await createHarness();
+    const template = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+    });
+    const syntheticToken = "sk-proj-1234567890abcdefghijklmnopqrstuvwxyz";
+    const oversizedFragment = `${syntheticToken}-${"😀".repeat(2_000)}`;
+    for (let index = 0; index < 501; index += 1) {
+      const suffix = index.toString().padStart(3, "0");
+      harness.storage.codeModeRuns.upsert({
+        ...template,
+        runId: `code-run-poison-${suffix}`,
+        sessionId: `missing-${oversizedFragment}-${suffix}`,
+        status: "failed",
+        createdAt: new Date(Date.parse("2026-07-13T00:00:00.000Z") + index).toISOString(),
+        finishedAt: new Date(Date.parse("2026-07-13T01:00:00.000Z") + index).toISOString(),
+        executionRecovery: {
+          generation: 1,
+          phase: "terminal",
+          disposition: "terminal",
+          finalTranscriptEventId: `code-mode-final:code-run-poison-${suffix}`,
+        },
+      });
+    }
+
+    const recovered = harness.service.reconcileCodeModeFinalTranscriptDeliveries(100);
+
+    expect(recovered.checked).toBe(501);
+    expect(recovered.enqueued).toBe(0);
+    expect(recovered.errors.length).toBeGreaterThan(0);
+    expect(recovered.errors.length).toBeLessThanOrEqual(32);
+    expect(recovered.omittedErrors).toBe(501 - recovered.errors.length);
+    expect(recovered.errors.reduce((total, error) => total + Buffer.byteLength(error, "utf8"), 0)).toBeLessThanOrEqual(
+      24 * 1024,
+    );
+    for (const error of recovered.errors) {
+      expect(Buffer.byteLength(error, "utf8")).toBeLessThanOrEqual(2 * 1024);
+      expect(error).not.toContain(syntheticToken);
+      expect(error).not.toContain("�");
+    }
+  });
+
+  it("publishes a UTF-8-safe bounded error when terminal transcript enqueue is deferred", async () => {
+    const harness = await createHarness();
+    harness.storage.sessions.upsert({ sessionId: "session-transcript-deferred", sessionKey: "mission:deferred" });
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      sessionId: "session-transcript-deferred",
+    });
+    harness.storage.codeModeRuns.upsert({
+      ...run,
+      status: "failed",
+      finishedAt: "2026-07-13T00:00:00.000Z",
+      executionRecovery: {
+        generation: 1,
+        phase: "terminal",
+        disposition: "terminal",
+        finalTranscriptEventId: `code-mode-final:${run.runId}`,
+      },
+    });
+    const syntheticToken = "sk-proj-1234567890abcdefghijklmnopqrstuvwxyz";
+    vi.spyOn(harness.storage, "runImmediateTransaction").mockImplementation(() => {
+      throw new Error(`${syntheticToken}-${"😀".repeat(20_000)}`);
+    });
+
+    await harness.service.executeApprovedCodeModeRun("approval-1");
+
+    const deferredCall = harness.publishRealtime.mock.calls.find(
+      ([eventType]) => eventType === "code_mode_transcript_delivery_deferred",
+    );
+    expect(deferredCall).toBeDefined();
+    const error = (deferredCall?.[2] as { error: string }).error;
+    expect(Buffer.byteLength(error, "utf8")).toBeLessThanOrEqual(2 * 1024);
+    expect(error).not.toContain(syntheticToken);
+    expect(error).not.toContain("�");
+    expect(error).toContain("...[truncated]");
+  });
+
+  it("keeps a terminal Code Mode outcome authoritative when its recovery diagnostic sink also fails", async () => {
+    const harness = await createHarness();
+    harness.storage.sessions.upsert({ sessionId: "session-transcript-diagnostic", sessionKey: "mission:diagnostic" });
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      sessionId: "session-transcript-diagnostic",
+    });
+    harness.storage.codeModeRuns.upsert({
+      ...run,
+      status: "failed",
+      finishedAt: "2026-07-13T00:00:00.000Z",
+      executionRecovery: {
+        generation: 1,
+        phase: "terminal",
+        disposition: "terminal",
+        finalTranscriptEventId: `code-mode-final:${run.runId}`,
+      },
+    });
+    vi.spyOn(harness.storage, "runImmediateTransaction").mockImplementation(() => {
+      throw new Error("synthetic transcript transaction failure");
+    });
+    harness.publishRealtime.mockImplementation((eventType: string) => {
+      if (eventType === "code_mode_transcript_delivery_deferred") {
+        throw new Error("synthetic diagnostic sink failure");
+      }
+    });
+
+    await expect(harness.service.executeApprovedCodeModeRun("approval-1")).resolves.toMatchObject({
+      outcome: "executed",
+      result: expect.objectContaining({ runId: run.runId, status: "failed" }),
+    });
+    expect(harness.storage.codeModeRuns.get(run.runId)).toMatchObject({
+      status: "failed",
+      executionRecovery: expect.objectContaining({ phase: "terminal" }),
+    });
+  });
+
   it("records current sandbox metadata and emits callable-only wrapper manifests for Code Mode runs", async () => {
     const harness = await createHarness({
       toolCatalog: [
@@ -1049,10 +1314,16 @@ describe("CapabilitySystemService", () => {
           ]),
           notes: expect.arrayContaining([expect.stringContaining("Does not claim hostile-code sandboxing")]),
         }),
+        verification: expect.objectContaining({
+          status: "completed_unverified",
+        }),
       }),
     });
     expect(harness.storage.codeModeRuns.get(run.runId)).toMatchObject({
       status: "completed",
+      verification: expect.objectContaining({
+        status: "completed_unverified",
+      }),
       trustedCodeWriteVerification: expect.objectContaining({
         claimBoundary: "trusted_code_artifact_integrity_not_hostile_sandbox",
       }),
@@ -1110,7 +1381,195 @@ describe("CapabilitySystemService", () => {
     );
   });
 
-  it("releases Code Mode execution claims when interrupted after child execution starts", async () => {
+  it("releases the execution claim when an abort wins immediately before child dispatch", async () => {
+    const controller = new AbortController();
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+    });
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { shouldNotDispatch: true };",
+    });
+    const approval = harness.approvals.get("approval-1");
+    harness.approvals.set("approval-1", {
+      ...approval!,
+      status: "approved",
+      resolvedAt: "2026-04-10T00:00:00.000Z",
+    });
+    vi.spyOn(harness.storage.codeModeRuns, "markExecutionBoundaryCrossed").mockImplementationOnce(() => {
+      controller.abort(new Error("approval effect lease ownership moved before dispatch"));
+      return undefined;
+    });
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1", controller.signal);
+
+    expect(result).toBeUndefined();
+    expect(harness.storage.codeModeRuns.get(run.runId)).toMatchObject({
+      status: "approval_pending",
+      executionRecovery: {
+        generation: 1,
+        phase: "not_started",
+        disposition: "retryable",
+      },
+    });
+    expect(harness.storage.pendingApprovalActions.markResolved).not.toHaveBeenCalledWith(
+      "approval-1",
+      expect.any(String),
+      expect.anything(),
+    );
+    expect(harness.publishRealtime).not.toHaveBeenCalledWith(
+      "code_mode_execution_boundary_crossed",
+      "capabilities",
+      expect.anything(),
+    );
+  });
+
+  it("resets and releases a tentative boundary when the child channel is known closed before send", async () => {
+    const harness = await createHarness({
+      sandboxConfig: { required: false, bestEffortHostEnabled: false },
+      spawnCodeModeChild: vi.fn(() => fakeCodeModeDispatchChild({ connected: false })) as never,
+    });
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { shouldNotDispatch: true };",
+    });
+    const resetBoundary = vi.spyOn(harness.storage.codeModeRuns, "resetExecutionBoundaryBeforeDispatch");
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+
+    expect(result).toBeUndefined();
+    expect(resetBoundary).toHaveBeenCalledOnce();
+    expect(harness.storage.codeModeRuns.get(run.runId)).toMatchObject({
+      status: "approval_pending",
+      executionRecovery: {
+        generation: 1,
+        phase: "not_started",
+        disposition: "retryable",
+      },
+    });
+  });
+
+  it("resets and releases a tentative boundary when the pre-dispatch hook fails after its durable write", async () => {
+    const child = fakeCodeModeDispatchChild({ connected: true });
+    const send = vi.spyOn(child, "send");
+    child.kill = () => {
+      child.killed = true;
+      setImmediate(() => {
+        child.exitCode = 1;
+        child.emit("close", 1, null);
+      });
+      return true;
+    };
+    const harness = await createHarness({
+      sandboxConfig: { required: false, bestEffortHostEnabled: false },
+      spawnCodeModeChild: vi.fn(() => child) as never,
+    });
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { shouldNotDispatch: true };",
+    });
+    harness.publishRealtime.mockImplementation((eventType: string) => {
+      if (eventType === "code_mode_execution_boundary_crossed") {
+        throw new Error("synthetic boundary notification failure");
+      }
+    });
+    const resetBoundary = vi.spyOn(harness.storage.codeModeRuns, "resetExecutionBoundaryBeforeDispatch");
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+
+    expect(result).toBeUndefined();
+    expect(send).not.toHaveBeenCalled();
+    expect(resetBoundary).toHaveBeenCalledOnce();
+    expect(harness.storage.codeModeRuns.get(run.runId)).toMatchObject({
+      status: "approval_pending",
+      executionRecovery: {
+        generation: 1,
+        phase: "not_started",
+        disposition: "retryable",
+      },
+    });
+  });
+
+  it("keeps asynchronous IPC dispatch uncertainty in manual reconciliation", async () => {
+    const harness = await createHarness({
+      sandboxConfig: { required: false, bestEffortHostEnabled: false },
+      spawnCodeModeChild: vi.fn(() =>
+        fakeCodeModeDispatchChild({
+          connected: true,
+          asynchronousSendError: Object.assign(new Error("write EPIPE"), { code: "EPIPE" }),
+        }),
+      ) as never,
+    });
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { mayHaveDispatched: true };",
+    });
+    const resetBoundary = vi.spyOn(harness.storage.codeModeRuns, "resetExecutionBoundaryBeforeDispatch");
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+
+    expect(result).toMatchObject({
+      outcome: "executed",
+      result: expect.objectContaining({
+        runId: run.runId,
+        status: "failed",
+        errorCode: "execution_interrupted_after_boundary",
+      }),
+    });
+    expect(resetBoundary).not.toHaveBeenCalled();
+    expect(harness.storage.codeModeRuns.get(run.runId)).toMatchObject({
+      status: "failed",
+      executionRecovery: expect.objectContaining({
+        phase: "terminal",
+        disposition: "manual_reconciliation",
+        interruptionReason: expect.stringContaining("write EPIPE"),
+      }),
+    });
+  });
+
+  it("keeps a correlated child error authoritative over a late IPC acknowledgement failure", async () => {
+    const harness = await createHarness({
+      sandboxConfig: { required: false, bestEffortHostEnabled: false },
+      spawnCodeModeChild: vi.fn(() =>
+        fakeCodeModeDispatchChild({
+          connected: true,
+          asynchronousSendError: new Error("late IPC close after child response"),
+          responseBeforeAsynchronousSendError: {
+            code: "UNAWAITED_WRAPPER_CALL",
+            message: "Code Mode source returned before all wrapper calls were awaited.",
+            details: { pendingWrapperCallCount: 1 },
+          },
+        }),
+      ) as never,
+    });
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      saveCandidateOnSuccess: false,
+    });
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+
+    expect(result?.result).toMatchObject({
+      runId: run.runId,
+      status: "failed",
+      errorCode: "UNAWAITED_WRAPPER_CALL",
+      errorDetails: { pendingWrapperCallCount: 1 },
+    });
+    expect(harness.storage.codeModeRuns.get(run.runId)).toMatchObject({
+      status: "failed",
+      errorCode: "UNAWAITED_WRAPPER_CALL",
+      executionRecovery: {
+        phase: "terminal",
+        disposition: "terminal",
+      },
+    });
+  });
+
+  it("fails closed for manual reconciliation when interrupted after child execution starts", async () => {
     const controller = new AbortController();
     const harness = await createHarness({
       sandboxConfig: {
@@ -1129,7 +1588,7 @@ describe("CapabilitySystemService", () => {
     });
     const run = await harness.service.createCodeModeRun({
       language: "typescript",
-      source: "return await capabilities.tool.safe_read();",
+      source: "console.log('tool started'); return await capabilities.tool.safe_read();",
     });
     const approval = harness.approvals.get("approval-1");
     harness.approvals.set("approval-1", {
@@ -1140,14 +1599,28 @@ describe("CapabilitySystemService", () => {
 
     const result = await harness.service.executeApprovedCodeModeRun("approval-1", controller.signal);
 
-    expect(result).toBeUndefined();
+    expect(result).toMatchObject({
+      outcome: "executed",
+      result: expect.objectContaining({
+        runId: run.runId,
+        status: "failed",
+        errorCode: "execution_interrupted_after_boundary",
+      }),
+    });
     const storedRun = harness.storage.codeModeRuns.get(run.runId);
-    expect(storedRun).toMatchObject({ status: "approval_pending" });
-    expect(storedRun.startedAt).toBeUndefined();
-    expect(harness.storage.pendingApprovalActions.markResolved).not.toHaveBeenCalledWith(
+    expect(storedRun).toMatchObject({
+      status: "failed",
+      executionRecovery: {
+        phase: "terminal",
+        disposition: "manual_reconciliation",
+        interruptionReason: "approval effect lease ownership moved after child start",
+      },
+    });
+    expect(storedRun.stdoutPreview).toContain("tool started");
+    expect(harness.storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(
       "approval-1",
-      expect.any(String),
-      expect.anything(),
+      "failed",
+      expect.objectContaining({ manualReconciliationRequired: true }),
     );
     expect(harness.publishRealtime).toHaveBeenCalledWith(
       "code_mode_run_interrupted",
@@ -1155,7 +1628,7 @@ describe("CapabilitySystemService", () => {
       expect.objectContaining({
         runId: run.runId,
         approvalId: "approval-1",
-        status: "approval_pending",
+        status: "failed",
       }),
     );
   });
@@ -1204,6 +1677,182 @@ describe("CapabilitySystemService", () => {
         errorCode: "RUN_ALREADY_CLAIMED",
       }),
     );
+  });
+
+  it("requeues and completes a pre-restart claimed run immediately after the stale-owner bound", async () => {
+    const startedAtMs = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(startedAtMs);
+    try {
+      const harness = await createHarness({
+        sandboxConfig: {
+          required: false,
+          bestEffortHostEnabled: false,
+        },
+      });
+      const run = await harness.service.createCodeModeRun({
+        language: "typescript",
+        source: "return { recovered: true };",
+      });
+      const approval = harness.approvals.get("approval-1");
+      harness.approvals.set("approval-1", {
+        ...approval!,
+        status: "approved",
+        resolvedAt: "2026-04-10T00:00:00.000Z",
+      });
+      harness.storage.codeModeRuns.claimForExecution({
+        runId: run.runId,
+        approvalId: "approval-1",
+        sandbox: run.sandbox,
+        startedAt: new Date(startedAtMs).toISOString(),
+      });
+
+      const immediateReplay = await harness.service.executeApprovedCodeModeRun("approval-1");
+
+      expect(immediateReplay).toBeUndefined();
+      expect(harness.storage.codeModeRuns.get(run.runId)).toMatchObject({
+        status: "running",
+        executionRecovery: {
+          phase: "claimed",
+          disposition: "none",
+        },
+      });
+      expect(harness.storage.pendingApprovalActions.find("approval-1")).toMatchObject({
+        resolutionStatus: "pending",
+      });
+
+      nowSpy.mockReturnValue(startedAtMs + 15_501);
+      const recoveredReplay = await harness.service.executeApprovedCodeModeRun("approval-1");
+
+      expect(recoveredReplay).toMatchObject({
+        outcome: "executed",
+        result: expect.objectContaining({
+          runId: run.runId,
+          status: "completed",
+        }),
+      });
+      expect(harness.storage.codeModeRuns.get(run.runId)).toMatchObject({
+        status: "completed",
+        executionRecovery: {
+          phase: "terminal",
+          disposition: "terminal",
+          generation: 2,
+        },
+      });
+      expect(harness.storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(
+        "approval-1",
+        "executed",
+        expect.objectContaining({
+          runId: run.runId,
+          outcome: "completed",
+        }),
+      );
+      expect(harness.publishRealtime).toHaveBeenCalledWith(
+        "code_mode_run_claim_recovered",
+        "capabilities",
+        expect.objectContaining({
+          runId: run.runId,
+          status: "approval_pending",
+        }),
+      );
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("terminalizes a pre-restart post-boundary run for manual reconciliation after the stale-owner bound", async () => {
+    const startedAtMs = Date.now();
+    const startedAt = new Date(startedAtMs).toISOString();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(startedAtMs);
+    try {
+      const harness = await createHarness({
+        sandboxConfig: {
+          required: false,
+          bestEffortHostEnabled: false,
+        },
+      });
+      const run = await harness.service.createCodeModeRun({
+        language: "typescript",
+        source: "return { mustNotReplay: true };",
+      });
+      const approval = harness.approvals.get("approval-1");
+      harness.approvals.set("approval-1", {
+        ...approval!,
+        status: "approved",
+        resolvedAt: "2026-04-10T00:00:00.000Z",
+      });
+      const claimed = harness.storage.codeModeRuns.claimForExecution({
+        runId: run.runId,
+        approvalId: "approval-1",
+        sandbox: run.sandbox,
+        startedAt,
+      });
+      harness.storage.codeModeRuns.markExecutionBoundaryCrossed({
+        runId: run.runId,
+        approvalId: "approval-1",
+        startedAt,
+        executionGeneration: claimed!.executionRecovery.generation,
+        boundaryCrossedAt: new Date(startedAtMs + 1).toISOString(),
+      });
+
+      expect(await harness.service.executeApprovedCodeModeRun("approval-1")).toBeUndefined();
+      expect(harness.storage.pendingApprovalActions.find("approval-1")).toMatchObject({
+        resolutionStatus: "pending",
+      });
+
+      nowSpy.mockReturnValue(startedAtMs + 15_501);
+      const recoveredReplay = await harness.service.executeApprovedCodeModeRun("approval-1");
+
+      expect(recoveredReplay).toMatchObject({
+        outcome: "executed",
+        result: expect.objectContaining({
+          runId: run.runId,
+          status: "failed",
+          errorCode: "execution_interrupted_after_boundary",
+          manualReconciliationRequired: true,
+          executionRecovery: expect.objectContaining({
+            phase: "terminal",
+            disposition: "manual_reconciliation",
+          }),
+        }),
+      });
+      expect(harness.storage.codeModeRuns.get(run.runId)).toMatchObject({
+        status: "failed",
+        executionRecovery: {
+          generation: 1,
+          phase: "terminal",
+          disposition: "manual_reconciliation",
+          boundaryCrossedAt: new Date(startedAtMs + 1).toISOString(),
+          interruptedAt: expect.any(String),
+          interruptionReason: expect.stringContaining("Gateway restarted"),
+        },
+      });
+      expect(harness.storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(
+        "approval-1",
+        "failed",
+        expect.objectContaining({
+          runId: run.runId,
+          recoveredTerminalOutcome: true,
+          manualReconciliationRequired: true,
+          errorCode: "execution_interrupted_after_boundary",
+          executionRecovery: expect.objectContaining({ disposition: "manual_reconciliation" }),
+        }),
+      );
+      expect(harness.publishRealtime).toHaveBeenCalledWith(
+        "code_mode_run_manual_reconciliation_required",
+        "capabilities",
+        expect.objectContaining({
+          runId: run.runId,
+          status: "failed",
+        }),
+      );
+      expect(harness.publishRealtime).not.toHaveBeenCalledWith(
+        "code_mode_run_completed",
+        "capabilities",
+        expect.anything(),
+      );
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it("terminalizes the linked Code Mode run when a pending action points at a missing row", async () => {
@@ -1394,16 +2043,18 @@ describe("CapabilitySystemService", () => {
     });
     const reclaimedStartedAt = "2026-04-10T00:09:00.000Z";
     vi.spyOn(harness.storage.codeModeRuns, "finishExecutionClaim").mockImplementationOnce((input) => {
-      harness.storage.codeModeRuns.releaseExecutionClaim({
-        runId: input.runId,
-        approvalId: input.approvalId,
-        startedAt: input.startedAt,
-      });
-      harness.storage.codeModeRuns.claimForExecution({
-        runId: input.runId,
-        approvalId: input.approvalId,
-        sandbox: input.sandbox,
+      const current = harness.storage.codeModeRuns.get(input.runId);
+      harness.storage.codeModeRuns.upsert({
+        ...current,
+        status: "running",
         startedAt: reclaimedStartedAt,
+        result: undefined,
+        executionRecovery: {
+          ...current.executionRecovery,
+          generation: current.executionRecovery.generation + 1,
+          phase: "claimed",
+          disposition: "none",
+        },
       });
       return undefined;
     });
@@ -1468,7 +2119,7 @@ describe("CapabilitySystemService", () => {
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("records launch-time sandbox failure metadata when required host isolation becomes unavailable", async () => {
+  it("records launch-time sandbox failure metadata and releases the claim for retry", async () => {
     const unavailableSandbox = {
       runnerId: "goatcitadel.best-effort-host",
       runnerVersion: "0.1.0",
@@ -1505,26 +2156,36 @@ describe("CapabilitySystemService", () => {
     const storedRun = harness.storage.codeModeRuns.get(run.runId);
 
     expect(run.sandbox).toMatchObject({ available: true });
-    expect(result).toMatchObject({
-      outcome: "executed",
-      result: expect.objectContaining({
-        runId: run.runId,
-        status: "failed",
-        sandbox: expect.objectContaining({
-          available: false,
-          checksFailed: expect.arrayContaining(["launch_preparation_failed"]),
-          failClosedReason: expect.stringContaining("launch preparation failed"),
-        }),
-      }),
-    });
+    expect(result).toBeUndefined();
     expect(storedRun).toMatchObject({
-      status: "failed",
+      status: "approval_pending",
       sandbox: expect.objectContaining({
         available: false,
         checksFailed: expect.arrayContaining(["launch_preparation_failed"]),
         failClosedReason: expect.stringContaining("launch preparation failed"),
       }),
+      executionRecovery: expect.objectContaining({
+        phase: "not_started",
+        disposition: "retryable",
+        interruptionReason: expect.any(String),
+      }),
     });
+    expect(storedRun.startedAt).toBeUndefined();
+    expect(harness.storage.pendingApprovalActions.markResolved).not.toHaveBeenCalledWith(
+      "approval-1",
+      expect.any(String),
+      expect.anything(),
+    );
+    expect(harness.publishRealtime).toHaveBeenCalledWith(
+      "code_mode_run_dispatch_deferred",
+      "capabilities",
+      expect.objectContaining({ runId: run.runId, status: "approval_pending" }),
+    );
+    expect(harness.publishRealtime).not.toHaveBeenCalledWith(
+      "code_mode_execution_boundary_crossed",
+      "capabilities",
+      expect.anything(),
+    );
   });
 
   it("returns candidate and proposal detail and supports promotion, rollback, and revoke", async () => {
@@ -1588,21 +2249,87 @@ describe("CapabilitySystemService", () => {
       candidateId: "candidate-demo",
     });
 
-    expect(harness.service.getCandidateDetail("candidate-demo")).toMatchObject({
+    const initialDetail = harness.service.getCandidateDetail("candidate-demo");
+    expect(initialDetail).toMatchObject({
       candidateId: "candidate-demo",
+      revision: 1,
       activationBlocked: true,
       originatingRun: expect.objectContaining({ runId: "code-run-existing" }),
     });
 
-    const promoted = harness.service.promoteCandidate("candidate-demo", "version-b");
+    // HX-402 P2 (coverage-preserving remodel): promote/rollback/revoke are
+    // approval-first — each verb requests one canonical capability.lifecycle
+    // approval and only the recovered effect executes the transition.
+    const executeApproved = (pending: { approvalId: string }) => {
+      harness.storage.approvals.resolve(pending.approvalId, {
+        decision: "approve",
+        resolvedBy: "operator-resolver",
+      });
+      return harness.service.executeApprovedCapabilityLifecycleMutation({ approvalId: pending.approvalId });
+    };
+
+    const promoteRequest = harness.service.promoteCandidate("candidate-demo", initialDetail.revision, "version-b");
+    if (!promoteRequest.pendingApproval) throw new Error("expected pending promote approval");
+    expect(promoteRequest.pendingApproval).toMatchObject({
+      kind: "capability.lifecycle",
+      action: "candidate_promoted",
+      candidateId: "candidate-demo",
+      status: "pending",
+    });
+    // No mutation before approval: the reviewed detail is unchanged.
+    expect(harness.service.getCandidateDetail("candidate-demo")).toMatchObject({
+      revision: 1,
+      activationBlocked: true,
+    });
+    const promoted = executeApproved(promoteRequest.pendingApproval);
+    expect(promoted.revision).toBe(2);
     expect(promoted.detail.activeVersion?.versionId).toBe("version-b");
     expect(promoted.detail.activationBlocked).toBe(false);
 
-    const rolledBack = harness.service.rollbackCandidate("candidate-demo", "version-a");
+    let staleWrite: unknown;
+    try {
+      harness.service.promoteCandidate("candidate-demo", initialDetail.revision, "version-a");
+    } catch (error) {
+      staleWrite = error;
+    }
+    expect(staleWrite).toBeInstanceOf(ConflictError);
+    expect(staleWrite).toMatchObject({
+      code: "WRITE_CONFLICT",
+      details: { expectedRevision: 1, currentRevision: 2 },
+    });
+
+    // Byte-identical target state is a pure no-op: no approval row is minted.
+    const noOp = harness.service.promoteCandidate("candidate-demo", promoted.revision, "version-b");
+    expect(noOp.pendingApproval).toBeNull();
+    expect(noOp).toMatchObject({
+      noMutationRequired: true,
+      detail: expect.objectContaining({ revision: promoted.revision }),
+    });
+
+    const rollbackRequest = harness.service.rollbackCandidate("candidate-demo", "version-a", promoted.revision);
+    if (!rollbackRequest.pendingApproval) throw new Error("expected pending rollback approval");
+    expect(rollbackRequest.pendingApproval.action).toBe("candidate_rolled_back");
+    const rolledBack = executeApproved(rollbackRequest.pendingApproval);
+    expect(rolledBack.revision).toBe(3);
     expect(rolledBack.detail.activeVersion?.versionId).toBe("version-a");
 
-    const revoked = harness.service.revokeCandidate("candidate-demo", "version-a");
+    const revokeRequest = harness.service.revokeCandidate("candidate-demo", rolledBack.revision, "version-a");
+    if (!revokeRequest.pendingApproval) throw new Error("expected pending revoke approval");
+    expect(revokeRequest.pendingApproval.action).toBe("candidate_revoked");
+    const revoked = executeApproved(revokeRequest.pendingApproval);
+    expect(revoked.revision).toBe(4);
     expect(revoked.detail.activationBlocked).toBe(true);
+
+    // Every approved transition wrote its governed lifecycle evidence.
+    const governedRows = harness.storage.gatewaySql
+      .prepare(`SELECT operation FROM governed_lifecycle_events WHERE domain = 'capability_state' ORDER BY operation`)
+      .all() as Array<{ operation: string }>;
+    expect(governedRows.map((row) => row.operation)).toEqual([
+      "candidate_promoted",
+      "candidate_revoked",
+      "candidate_rolled_back",
+      "proposal_created",
+    ]);
 
     const proposalDetail = harness.service.getProposalDetail(proposal.proposalId);
     expect(proposalDetail).toMatchObject({
@@ -1611,6 +2338,79 @@ describe("CapabilitySystemService", () => {
     });
     expect(proposalDetail.events).toHaveLength(1);
     expect(proposalDetail.events[0]?.eventType).toBe("created");
+  });
+
+  it("projects mesh publication entries into the inspectable catalog with callable truth preserved", async () => {
+    const meshProjection = {
+      nodeId: "node-a",
+      admissionGeneration: 1,
+      publisherGeneration: 1,
+      manifestSha256: "a".repeat(64),
+      entrySha256: "b".repeat(64),
+      localId: "project.status",
+      capabilityKind: "tool" as const,
+      status: "review_required" as const,
+      reasons: ["operator_review_required"],
+      effectPosture: "read_only" as const,
+    };
+    const meshEntries: CapabilityCatalogEntry[] = [
+      {
+        capabilityId: "mesh:node-a:tool:project.status",
+        kind: "mesh_tool",
+        category: "mesh_published",
+        title: "Project status",
+        summary: "Mesh tool published by node node-a.",
+        callable: false,
+        mesh: meshProjection,
+      },
+      {
+        capabilityId: "mesh:node-a:skill:project.guide",
+        kind: "mesh_skill",
+        category: "mesh_published",
+        title: "Project guide",
+        summary: "Mesh skill published by node node-a.",
+        callable: false,
+        mesh: { ...meshProjection, localId: "project.guide", capabilityKind: "skill" },
+      },
+      {
+        capabilityId: "mesh:node-a:tool:project.active",
+        kind: "mesh_tool",
+        category: "mesh_published",
+        title: "Project active",
+        summary: "Mesh tool with a live activation.",
+        callable: true,
+        mesh: { ...meshProjection, localId: "project.active", status: "active", reasons: ["activation_live"] },
+      },
+    ];
+    const harness = await createHarness({ meshCatalogEntries: meshEntries });
+
+    const inspectable = harness.service.listCatalog("inspectable");
+    const meshInspectable = inspectable.filter((entry) => entry.category === "mesh_published");
+    expect(meshInspectable.map((entry) => entry.capabilityId)).toEqual([
+      "mesh:node-a:tool:project.status",
+      "mesh:node-a:skill:project.guide",
+      "mesh:node-a:tool:project.active",
+    ]);
+    expect(meshInspectable[0]?.mesh?.status).toBe("review_required");
+
+    const callable = harness.service.listCatalog("callable");
+    expect(callable.filter((entry) => entry.kind === "mesh_skill")).toEqual([]);
+    expect(callable.filter((entry) => entry.category === "mesh_published").map((entry) => entry.capabilityId)).toEqual([
+      "mesh:node-a:tool:project.active",
+    ]);
+    // Mesh entries never satisfy the local-tool filters that feed tool schema
+    // resolution and code-mode wrappers.
+    const snapshot = harness.service.freezeCatalogSnapshot();
+    expect(
+      snapshot.callableEntries.some((entry) => entry.kind === "tool" && entry.capabilityId.startsWith("mesh:")),
+    ).toBe(false);
+    const directory = harness.service.getCompactToolDirectorySnapshot();
+    expect(directory.tools.some((tool) => tool.capabilityId.startsWith("mesh:"))).toBe(false);
+  });
+
+  it("keeps the catalog unchanged when no mesh projection producer is composed", async () => {
+    const harness = await createHarness();
+    expect(harness.service.listCatalog("inspectable").some((entry) => entry.category === "mesh_published")).toBe(false);
   });
 
   it("lists catalog snapshots, runs, proposals, and inline approval queue items", async () => {
@@ -2520,9 +3320,10 @@ describe("CapabilitySystemService", () => {
       finishedAt: "2026-05-18T00:00:00.000Z",
     });
 
-    await expect(harness.service.executeApprovedCodeModeRun("approval-1")).rejects.toThrow(
-      "only approval_pending runs can execute",
-    );
+    await expect(harness.service.executeApprovedCodeModeRun("approval-1")).resolves.toMatchObject({
+      outcome: "executed",
+      result: expect.objectContaining({ runId: run.runId, status: "completed" }),
+    });
 
     expect(harness.storage.codeModeRuns.get(run.runId)).toMatchObject({
       status: "completed",
@@ -2530,20 +3331,16 @@ describe("CapabilitySystemService", () => {
     });
     expect(harness.storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(
       "approval-1",
-      "failed",
+      "executed",
       expect.objectContaining({
         runId: run.runId,
-        reason: expect.stringContaining("only approval_pending runs can execute"),
+        recoveredTerminalOutcome: true,
       }),
     );
-    expect(harness.publishRealtime).toHaveBeenCalledWith(
+    expect(harness.publishRealtime).not.toHaveBeenCalledWith(
       "code_mode_run_refused",
       "capabilities",
-      expect.objectContaining({
-        runId: run.runId,
-        status: "completed",
-        errorCode: "INVALID_RUN_STATE",
-      }),
+      expect.anything(),
     );
   });
 
@@ -2649,6 +3446,10 @@ describe("CapabilitySystemService", () => {
       errorDetails: expect.objectContaining({
         pendingWrapperCallCount: expect.any(Number),
       }),
+      executionRecovery: {
+        phase: "terminal",
+        disposition: "terminal",
+      },
     });
     expect(harness.invokeTool).toHaveBeenCalledTimes(1);
   });
@@ -3013,7 +3814,7 @@ describe("CapabilitySystemService", () => {
     expect(harness.invokeTool).not.toHaveBeenCalled();
   });
 
-  it("records unavailable sandbox metadata when launch preparation fails after an available probe", async () => {
+  it("records unavailable sandbox metadata and releases the claim when launch preparation fails", async () => {
     const availableSandbox = {
       runnerId: "goatcitadel.best-effort-host",
       runnerVersion: "0.1.0",
@@ -3038,16 +3839,26 @@ describe("CapabilitySystemService", () => {
     const result = await harness.service.executeApprovedCodeModeRun("approval-1");
     const storedRun = harness.storage.codeModeRuns.get(run.runId);
 
-    expect(result?.result).toMatchObject({
-      runId: run.runId,
-      status: "failed",
-    });
-    expect(storedRun.sandbox).toMatchObject({
-      available: false,
-      required: true,
-      checksFailed: expect.arrayContaining(["launch_preparation_failed"]),
+    expect(result).toBeUndefined();
+    expect(storedRun).toMatchObject({
+      status: "approval_pending",
+      sandbox: {
+        available: false,
+        required: true,
+        checksFailed: expect.arrayContaining(["launch_preparation_failed"]),
+      },
+      executionRecovery: expect.objectContaining({
+        phase: "not_started",
+        disposition: "retryable",
+      }),
     });
     expect(storedRun.sandbox?.failClosedReason).toContain("launch preparation failed");
+    expect(storedRun.startedAt).toBeUndefined();
+    expect(harness.publishRealtime).not.toHaveBeenCalledWith(
+      "code_mode_execution_boundary_crossed",
+      "capabilities",
+      expect.anything(),
+    );
   });
 
   it("refuses Code Mode execution when the durable approval is not approved", async () => {
@@ -3848,15 +4659,233 @@ describe("CapabilitySystemService", () => {
     expect(candidates).toHaveLength(1);
     expect(candidates[0]).toMatchObject({
       sourceKind: "code_mode_generated",
+      lineageStatus: "governed",
+      workspaceId: "default",
+      sourceFingerprint: run.codeHash,
+      createdByActorId: "system:code-mode",
       originatingRunId: run.runId,
       lifecycleState: "candidate",
     });
+    const candidateDetail = harness.service.getCandidateDetail(candidates[0]!.candidateId);
+    expect(candidateDetail.revision).toBe(1);
     expect(harness.publishRealtime).toHaveBeenCalledWith(
       "candidate_skill_staged",
       "capabilities",
       expect.objectContaining({
         originatingRunId: run.runId,
+        revision: 1,
       }),
+    );
+  });
+
+  it("rolls back the first candidate aggregate revision when Code Mode candidate insertion fails", async () => {
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+    });
+    vi.spyOn(harness.storage.candidateSkillVersions, "upsert").mockImplementationOnce(() => {
+      throw new Error("candidate insert failed");
+    });
+    const input = {
+      capabilityProposal: { candidateId: "candidate-revision-rollback" },
+    };
+
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true, bundle: 'rollback' };",
+      requestedOutputIntent: "Generate a rollback probe skill.",
+      saveCandidateOnSuccess: true,
+      input,
+    });
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+
+    expect(result).toMatchObject({
+      outcome: "executed",
+      result: expect.objectContaining({
+        runId: run.runId,
+        status: "failed",
+        errorCode: "candidate_stage_failed",
+        error: "candidate insert failed",
+      }),
+    });
+    expect(harness.storage.candidateSkillVersions.list(10)).toEqual([]);
+    expect(
+      harness.storage.skillAggregateRevisions.get("candidate_skill", "candidate-revision-rollback"),
+    ).toBeUndefined();
+    expect(
+      harness.service
+        .listCatalog("inspectable")
+        .some((entry) => entry.kind === "candidate_skill" && entry.candidateId === "candidate-revision-rollback"),
+    ).toBe(false);
+    expect(
+      harness.service
+        .listCatalog("callable")
+        .some((entry) => entry.kind === "candidate_skill" && entry.candidateId === "candidate-revision-rollback"),
+    ).toBe(false);
+
+    const failedRun = harness.storage.codeModeRuns.get(run.runId);
+    const source = await fs.readFile(path.resolve(harness.rootDir, failedRun.codeArtifact.relPath), "utf8");
+    const wrapperManifest = JSON.parse(
+      await fs.readFile(path.resolve(harness.rootDir, failedRun.wrapperManifestArtifact.relPath), "utf8"),
+    ) as Record<string, unknown>;
+    const stageCandidateBundle = Reflect.get(harness.service, "stageCandidateBundle") as (
+      runRecord: CodeModeRunRecord,
+      sourceText: string,
+      wrapper: Record<string, unknown>,
+      sampleInput: Record<string, unknown>,
+    ) => Promise<void>;
+    const versionId = `version-${sha256Text(`code-mode-candidate\u0000${run.runId}`).slice(0, 32)}`;
+    const instructionPath = path.resolve(
+      harness.rootDir,
+      "data",
+      "capability-candidates",
+      "candidate-revision-rollback",
+      versionId,
+      "SKILL.md",
+    );
+    const orphanInstruction = await fs.readFile(instructionPath, "utf8");
+    await fs.writeFile(instructionPath, `${orphanInstruction}\nTampered orphan bytes.`, "utf8");
+
+    await expect(stageCandidateBundle.call(harness.service, failedRun, source, wrapperManifest, input)).rejects.toThrow(
+      "does not match the deterministic candidate bytes",
+    );
+    expect(harness.storage.candidateSkillVersions.list(10)).toEqual([]);
+    expect(
+      harness.storage.skillAggregateRevisions.get("candidate_skill", "candidate-revision-rollback"),
+    ).toBeUndefined();
+
+    await fs.writeFile(instructionPath, orphanInstruction, "utf8");
+    await stageCandidateBundle.call(harness.service, failedRun, source, wrapperManifest, input);
+    expect(harness.storage.candidateSkillVersions.list(10)).toHaveLength(1);
+    expect(harness.service.getCandidateDetail("candidate-revision-rollback").revision).toBe(1);
+  });
+
+  it("treats an exact Code Mode candidate stage replay as an immutable no-op", async () => {
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+    });
+    const input = {
+      capabilityProposal: { candidateId: "candidate-exact-replay" },
+    };
+    const run = await harness.service.createCodeModeRun({
+      language: "javascript",
+      source: "return { ok: true, bundle: 'replay' };",
+      requestedOutputIntent: "Generate an exact replay probe skill.",
+      saveCandidateOnSuccess: true,
+      input,
+    });
+    await harness.service.executeApprovedCodeModeRun("approval-1");
+    const completedRun = harness.storage.codeModeRuns.get(run.runId);
+    const source = await fs.readFile(path.resolve(harness.rootDir, completedRun.codeArtifact.relPath), "utf8");
+    const wrapperManifest = JSON.parse(
+      await fs.readFile(path.resolve(harness.rootDir, completedRun.wrapperManifestArtifact.relPath), "utf8"),
+    ) as Record<string, unknown>;
+    const stageCandidateBundle = Reflect.get(harness.service, "stageCandidateBundle") as (
+      runRecord: CodeModeRunRecord,
+      sourceText: string,
+      wrapper: Record<string, unknown>,
+      sampleInput: Record<string, unknown>,
+    ) => Promise<void>;
+    const stagedEventsBeforeReplay = harness.publishRealtime.mock.calls.filter(
+      ([eventType]) => eventType === "candidate_skill_staged",
+    ).length;
+
+    await stageCandidateBundle.call(harness.service, completedRun, source, wrapperManifest, input);
+
+    expect(harness.storage.candidateSkillVersions.list(10)).toHaveLength(1);
+    expect(harness.service.getCandidateDetail("candidate-exact-replay").revision).toBe(1);
+    expect(
+      harness.publishRealtime.mock.calls.filter(([eventType]) => eventType === "candidate_skill_staged"),
+    ).toHaveLength(stagedEventsBeforeReplay);
+  });
+
+  it("advances an existing Code Mode candidate from revision one to two for a second version", async () => {
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+    });
+    const candidateId = "candidate-code-mode-second-version";
+    const firstRun = await harness.service.createCodeModeRun({
+      language: "javascript",
+      source: "return { ok: true, version: 1 };",
+      requestedOutputIntent: "Generate the first candidate version.",
+      saveCandidateOnSuccess: true,
+      input: { capabilityProposal: { candidateId } },
+    });
+    await harness.service.executeApprovedCodeModeRun("approval-1");
+    const secondRun = await harness.service.createCodeModeRun({
+      language: "javascript",
+      source: "return { ok: true, version: 2 };",
+      requestedOutputIntent: "Generate the second candidate version.",
+      saveCandidateOnSuccess: true,
+      input: { capabilityProposal: { candidateId } },
+    });
+    await harness.service.executeApprovedCodeModeRun("approval-1");
+
+    const detail = harness.service.getCandidateDetail(candidateId);
+    expect(detail.revision).toBe(2);
+    expect(detail.versions).toHaveLength(2);
+    expect(new Set(detail.versions.map((version) => version.originatingRunId))).toEqual(
+      new Set([firstRun.runId, secondRun.runId]),
+    );
+    expect(
+      harness.publishRealtime.mock.calls
+        .filter(([eventType]) => eventType === "candidate_skill_staged")
+        .map(([, , payload]) => payload.revision),
+    ).toEqual([1, 2]);
+  });
+
+  it("never stages a candidate after a successful child result is terminalized as interrupted", async () => {
+    const controller = new AbortController();
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+    });
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true, bundle: 'must-not-stage' };",
+      requestedOutputIntent: "Generate a reusable helper skill.",
+      saveCandidateOnSuccess: true,
+    });
+    const approval = harness.approvals.get("approval-1");
+    harness.approvals.set("approval-1", {
+      ...approval!,
+      status: "approved",
+      resolvedAt: "2026-04-10T00:00:00.000Z",
+    });
+    const recordOutput = harness.storage.codeModeRuns.recordExecutionOutput.bind(harness.storage.codeModeRuns);
+    vi.spyOn(harness.storage.codeModeRuns, "recordExecutionOutput").mockImplementationOnce((input) => {
+      const recorded = recordOutput(input);
+      controller.abort(new Error("worker lease ownership moved after successful child output"));
+      return recorded;
+    });
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1", controller.signal);
+
+    expect(result).toMatchObject({
+      outcome: "executed",
+      result: expect.objectContaining({
+        runId: run.runId,
+        status: "failed",
+        errorCode: "execution_interrupted_after_boundary",
+      }),
+    });
+    expect(harness.storage.codeModeRuns.get(run.runId).executionRecovery.disposition).toBe("manual_reconciliation");
+    expect(harness.storage.candidateSkillVersions.list(10)).toEqual([]);
+    expect(harness.publishRealtime).not.toHaveBeenCalledWith(
+      "candidate_skill_staged",
+      "capabilities",
+      expect.anything(),
     );
   });
 
@@ -3869,7 +4898,7 @@ describe("CapabilitySystemService", () => {
     });
     const skillMarkdown = [
       "---",
-      'name: "Lesson Worksheet Helper"',
+      'name: "lesson-worksheet-helper"',
       'description: "Creates reusable worksheet workflows from lesson notes."',
       "---",
       "",
@@ -3920,6 +4949,10 @@ describe("CapabilitySystemService", () => {
       candidateId: "candidate-lesson-worksheet",
       title: "Lesson Worksheet Helper",
       lifecycleState: "candidate",
+      lineageStatus: "governed",
+      workspaceId: "default",
+      sourceFingerprint: run.codeHash,
+      createdByActorId: "system:code-mode",
       originatingRunId: run.runId,
     });
     const proof = JSON.parse(
@@ -3930,9 +4963,13 @@ describe("CapabilitySystemService", () => {
       candidateId: "candidate-lesson-worksheet",
       sourceSessionId: "session-1",
       sourceTurnId: "turn-1",
+      lineageStatus: "governed",
+      workspaceId: "default",
+      sourceFingerprint: run.codeHash,
+      createdByActorId: "system:code-mode",
       skillContentValidation: {
         valid: true,
-        inferredSkillName: "Lesson Worksheet Helper",
+        inferredSkillName: "lesson-worksheet-helper",
       },
     });
   });
@@ -4023,6 +5060,185 @@ describe("CapabilitySystemService", () => {
   });
 });
 
+// HX-402 P2: governed capability lifecycle — the recovered effect ladder,
+// the one-transaction review-only proposal, and the branded fail-safe revoke.
+describe("CapabilitySystemService governed lifecycle (HX-402 P2)", () => {
+  async function seedCandidate(harness: Awaited<ReturnType<typeof createHarness>>): Promise<void> {
+    harness.storage.candidateSkillVersions.upsert(
+      await createCandidateVersion(harness.rootDir, {
+        candidateId: "candidate-gov",
+        versionId: "version-a",
+        lifecycleState: "candidate",
+        originatingRunId: undefined,
+        updatedAt: "2026-04-10T00:01:00.000Z",
+      }),
+    );
+    harness.storage.candidateSkillVersions.upsert(
+      await createCandidateVersion(harness.rootDir, {
+        candidateId: "candidate-gov",
+        versionId: "version-b",
+        lifecycleState: "candidate",
+        originatingRunId: undefined,
+        updatedAt: "2026-04-10T00:02:00.000Z",
+      }),
+    );
+  }
+
+  function countGoverned(harness: Awaited<ReturnType<typeof createHarness>>): number {
+    const row = harness.storage.gatewaySql
+      .prepare(`SELECT COUNT(*) AS count FROM governed_lifecycle_events WHERE domain = 'capability_state'`)
+      .get() as { count: number };
+    return Number(row.count);
+  }
+
+  it("denial and expiry are zero-delta; unknown and foreign approvals are terminal", async () => {
+    const harness = await createHarness();
+    await seedCandidate(harness);
+    const detail = harness.service.getCandidateDetail("candidate-gov");
+    const request = harness.service.promoteCandidate("candidate-gov", detail.revision, "version-b");
+    if (!request.pendingApproval) throw new Error("expected pending approval");
+
+    // Pending approvals never execute.
+    expect(() =>
+      harness.service.executeApprovedCapabilityLifecycleMutation({ approvalId: request.pendingApproval!.approvalId }),
+    ).toThrow(/missing, foreign, malformed, or not approved/);
+
+    harness.storage.approvals.resolve(request.pendingApproval.approvalId, {
+      decision: "reject",
+      resolvedBy: "operator-resolver",
+    });
+    expect(() =>
+      harness.service.executeApprovedCapabilityLifecycleMutation({ approvalId: request.pendingApproval!.approvalId }),
+    ).toThrow(/missing, foreign, malformed, or not approved/);
+    // Zero delta: no lifecycle state changed, no governed claim was minted.
+    expect(harness.service.getCandidateDetail("candidate-gov").revision).toBe(detail.revision);
+    expect(countGoverned(harness)).toBe(0);
+    expect(() =>
+      harness.service.executeApprovedCapabilityLifecycleMutation({ approvalId: "capability-missing" }),
+    ).toThrow(/missing, foreign, malformed, or not approved/);
+  });
+
+  it("replays the original approval identity for byte-exact requests and converges effect replays", async () => {
+    const harness = await createHarness();
+    await seedCandidate(harness);
+    const detail = harness.service.getCandidateDetail("candidate-gov");
+    const first = harness.service.promoteCandidate("candidate-gov", detail.revision, "version-b");
+    const replayed = harness.service.promoteCandidate("candidate-gov", detail.revision, "version-b");
+    if (!first.pendingApproval || !replayed.pendingApproval) throw new Error("expected pending approvals");
+    expect(replayed.pendingApproval.approvalId).toBe(first.pendingApproval.approvalId);
+    expect(replayed.pendingApproval.replayed).toBe(true);
+
+    harness.storage.approvals.resolve(first.pendingApproval.approvalId, {
+      decision: "approve",
+      resolvedBy: "operator-resolver",
+    });
+    const applied = harness.service.executeApprovedCapabilityLifecycleMutation({
+      approvalId: first.pendingApproval.approvalId,
+    });
+    expect(applied.changedVersionIds).toEqual(["version-b"]);
+    // Exact effect replay converges on committed evidence without re-mutating.
+    const replayApply = harness.service.executeApprovedCapabilityLifecycleMutation({
+      approvalId: first.pendingApproval.approvalId,
+    });
+    expect(replayApply.candidateId).toBe("candidate-gov");
+    expect(countGoverned(harness)).toBe(1);
+    expect(harness.service.getCandidateDetail("candidate-gov").revision).toBe(applied.revision);
+  });
+
+  it("conflicts terminally when the candidate version set drifts from the reviewed material", async () => {
+    const harness = await createHarness();
+    await seedCandidate(harness);
+    const detail = harness.service.getCandidateDetail("candidate-gov");
+    const request = harness.service.promoteCandidate("candidate-gov", detail.revision, "version-b");
+    if (!request.pendingApproval) throw new Error("expected pending approval");
+    harness.storage.approvals.resolve(request.pendingApproval.approvalId, {
+      decision: "approve",
+      resolvedBy: "operator-resolver",
+    });
+    // Drift the reviewed version set through the branded fail-safe revoke.
+    harness.service.systemRevokeCandidate("candidate-gov", "integrity_quarantine");
+    expect(() =>
+      harness.service.executeApprovedCapabilityLifecycleMutation({ approvalId: request.pendingApproval!.approvalId }),
+    ).toThrow(/drifted from the exact reviewed material/);
+  });
+
+  it("commits review-only proposals with source and Journey in one transaction and keeps them non-callable", async () => {
+    const harness = await createHarness();
+    const proposal = harness.service.createProposal(
+      {
+        proposalKind: "skill",
+        title: "Review-only proposal",
+        summary: "Stays non-callable",
+        payload: {},
+      },
+      "operator-one",
+    );
+    const governed = harness.storage.gatewaySql
+      .prepare(
+        `SELECT operation, source_required AS sourceRequired, approval_required AS approvalRequired, approval_id AS approvalId
+         FROM governed_lifecycle_events WHERE target_id = @proposalId`,
+      )
+      .get({ proposalId: proposal.proposalId }) as
+      | { operation: string; sourceRequired: number; approvalRequired: number; approvalId: string | null }
+      | undefined;
+    expect(governed).toMatchObject({ operation: "proposal_created", approvalId: null });
+    expect(Number(governed!.sourceRequired)).toBe(1);
+    expect(Number(governed!.approvalRequired)).toBe(0);
+    // Non-callable pin: proposals never reach the callable catalog.
+    expect(
+      harness.service
+        .listCatalog("callable")
+        .some((entry) => entry.skillId === proposal.proposalId || entry.toolName === proposal.proposalId),
+    ).toBe(false);
+    const journeyRow = harness.storage.gatewaySql
+      .prepare(
+        `SELECT COUNT(*) AS count FROM governance_journey_events WHERE subject_id = @proposalId AND action = 'proposal_created'`,
+      )
+      .get({ proposalId: proposal.proposalId }) as { count: number };
+    expect(Number(journeyRow.count)).toBe(1);
+  });
+
+  it("rolls the proposal row back when a later coupled write fails (one transaction)", async () => {
+    const harness = await createHarness();
+    const before = harness.storage.capabilityProposals.list(10).length;
+    // Poison the source-history write that runs AFTER the proposal upsert and
+    // BEFORE the governed evidence: the shared immediate transaction must
+    // roll the already-written proposal row back.
+    const spy = vi.spyOn(harness.storage.capabilityProposalEvents, "append").mockImplementationOnce(() => {
+      throw new Error("simulated proposal-source outage");
+    });
+    expect(() =>
+      harness.service.createProposal(
+        { proposalKind: "skill", title: "Atomic proposal", summary: "Must roll back", payload: {} },
+        "operator-one",
+      ),
+    ).toThrow(/simulated proposal-source outage/);
+    spy.mockRestore();
+    expect(harness.storage.capabilityProposals.list(10).length).toBe(before);
+    expect(countGoverned(harness)).toBe(0);
+  });
+
+  it("fail-safe system revoke writes canonical state, governed system event, and Journey without approval", async () => {
+    const harness = await createHarness();
+    await seedCandidate(harness);
+    const revoked = harness.service.systemRevokeCandidate("candidate-gov", "integrity_quarantine");
+    expect(revoked.changedVersionIds).toEqual(["version-a", "version-b"]);
+    expect(harness.service.getCandidateDetail("candidate-gov").activationBlocked).toBe(true);
+    const governed = harness.storage.gatewaySql
+      .prepare(
+        `SELECT operation, actor_type AS actorType, approval_id AS approvalId FROM governed_lifecycle_events WHERE domain = 'capability_state'`,
+      )
+      .all() as Array<{ operation: string; actorType: string; approvalId: string | null }>;
+    expect(governed).toEqual([
+      expect.objectContaining({ operation: "system_revoked", actorType: "system", approvalId: null }),
+    ]);
+    // Idempotent repeat is a no-op with no second governed claim.
+    const repeat = harness.service.systemRevokeCandidate("candidate-gov", "integrity_quarantine");
+    expect(repeat.changedVersionIds).toEqual([]);
+    expect(countGoverned(harness)).toBe(1);
+  });
+});
+
 async function createHarness(input?: {
   toolCatalog?: ToolCatalogEntry[];
   sandboxConfig?: {
@@ -4044,6 +5260,9 @@ async function createHarness(input?: {
   aiderAdapter?: CapabilityRuntimeConfig["codeModeAiderAdapter"];
   invokeTool?: (request: ToolInvokeRequest) => Promise<ToolInvokeResult>;
   reserveApprovalWaitRun?: boolean;
+  spawnCodeModeChild?: ConstructorParameters<typeof CapabilitySystemService>[0]["spawnCodeModeChild"];
+  loadedSkills?: LoadedSkill[];
+  meshCatalogEntries?: CapabilityCatalogEntry[];
 }) {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-capability-system-"));
   tempRoots.push(rootDir);
@@ -4125,7 +5344,10 @@ async function createHarness(input?: {
       codeModeV1Enabled: true,
     }),
     listToolCatalog: () => input?.toolCatalog ?? [createTool("tool.safe_read")],
-    listLoadedSkills: () => [],
+    ...(input?.meshCatalogEntries === undefined
+      ? {}
+      : { listMeshCapabilityCatalogEntries: () => input.meshCatalogEntries as CapabilityCatalogEntry[] }),
+    listLoadedSkills: () => input?.loadedSkills ?? [],
     readSkillStates: () => new Map(),
     invokeTool,
     createApproval,
@@ -4134,6 +5356,7 @@ async function createHarness(input?: {
     readPolicySnapshot: () => ({ mode: "test" }),
     resolvePolicyContext: input?.resolvePolicyContext,
     resolveSandboxMetadata: input?.resolveSandboxMetadata,
+    spawnCodeModeChild: input?.spawnCodeModeChild,
   });
 
   return {
@@ -4151,19 +5374,126 @@ async function createHarness(input?: {
   };
 }
 
+function fakeCodeModeDispatchChild(input: {
+  connected: boolean;
+  asynchronousSendError?: Error;
+  responseBeforeAsynchronousSendError?: {
+    code: string;
+    message: string;
+    details?: Record<string, unknown>;
+  };
+}) {
+  const child = new EventEmitter() as EventEmitter & {
+    stdin: PassThrough;
+    stdout: PassThrough;
+    stderr: PassThrough;
+    connected: boolean;
+    killed: boolean;
+    exitCode: number | null;
+    send: (message: unknown, callback?: (error: Error | null) => void) => boolean;
+    kill: () => boolean;
+  };
+  child.stdin = new PassThrough();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.connected = input.connected;
+  child.killed = false;
+  child.exitCode = null;
+  child.kill = () => {
+    child.killed = true;
+    return true;
+  };
+  child.send = (message, callback) => {
+    const request = message as { id?: unknown; method?: unknown };
+    if (
+      input.responseBeforeAsynchronousSendError &&
+      request.method === "run.execute" &&
+      typeof request.id === "string"
+    ) {
+      child.emit("message", {
+        jsonrpc: "2.0",
+        id: request.id,
+        error: input.responseBeforeAsynchronousSendError,
+      });
+    }
+    if (input.asynchronousSendError) {
+      setImmediate(() => {
+        callback?.(input.asynchronousSendError!);
+        child.connected = false;
+        child.exitCode = 1;
+        child.emit("close", 1, null);
+      });
+    }
+    return true;
+  };
+  if (!input.connected) {
+    setImmediate(() => {
+      child.exitCode = 1;
+      child.emit("close", 1, null);
+    });
+  }
+  return child;
+}
+
 function createFakeStorage(approvalsById = new Map<string, ApprovalRequest>()) {
+  // HX-402 P2: the governed lifecycle owner, approvals, and Journey are REAL
+  // storage — the approval-first candidate lifecycle and one-transaction
+  // proposal evidence run against the trigger-protected schema, while
+  // unrelated collaborators stay lightweight fakes.
+  const realStorage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
+  storageCleanups.push(() => realStorage.close());
   const snapshots = new Map<string, CapabilityCatalogSnapshotRecord>();
-  const proposals = new Map<string, CapabilityProposalRecord>();
-  const proposalEvents = new Map<string, CapabilityProposalEventRecord[]>();
   const codeModeRuns = new Map<string, CodeModeRunRecord>();
   const runtimeDecisionRecords: RuntimeDecisionTraceRecord[] = [];
   const candidateVersions = new Map<string, CandidateSkillVersionRecord>();
   const pendingActions = new Map<string, PendingApprovalAction>();
   const systemSettings = new Map<string, { key: string; value: unknown; updatedAt: string }>();
   const sessionMeta = new Map<string, { sessionId: string; workspaceId?: string }>();
+  const skillLifecycles = new Map<string, SkillLifecycleRecord>();
   const turnTraces = new Map<string, { turnId: string; sessionId: string; durable?: { runId?: string } }>();
+  const sessions = new Map<string, { sessionId: string; sessionKey: string }>();
+  const chatMessages = new Map<string, ChatMessageRecord>();
+  const transcriptOutbox = new Map<string, { eventId: string; event: TranscriptEvent; enqueuedAt: string }>();
+  const skillAggregateRevisions = new Map<string, number>();
 
   return {
+    sessions: {
+      upsert(input: { sessionId: string; sessionKey: string }) {
+        const record = { sessionId: input.sessionId, sessionKey: input.sessionKey };
+        sessions.set(input.sessionId, record);
+        return record;
+      },
+      getBySessionId(sessionId: string) {
+        const session = sessions.get(sessionId);
+        if (!session) {
+          throw new Error(`Missing session ${sessionId}`);
+        }
+        return session;
+      },
+    },
+    chatMessages: {
+      upsert(message: ChatMessageRecord) {
+        chatMessages.set(message.messageId, message);
+        return message;
+      },
+      get(messageId: string) {
+        return chatMessages.get(messageId);
+      },
+    },
+    transcriptOutbox: {
+      enqueue(event: TranscriptEvent, enqueuedAt = event.timestamp) {
+        if (!transcriptOutbox.has(event.eventId)) {
+          transcriptOutbox.set(event.eventId, { eventId: event.eventId, event, enqueuedAt });
+        }
+        return transcriptOutbox.get(event.eventId);
+      },
+      get(eventId: string) {
+        return transcriptOutbox.get(eventId);
+      },
+      listPending() {
+        return [...transcriptOutbox.values()];
+      },
+    },
     systemSettings: {
       get: vi.fn((key: string) => systemSettings.get(key)),
       set: vi.fn((key: string, value: unknown, now = "2026-04-10T00:00:00.000Z") => {
@@ -4186,48 +5516,110 @@ function createFakeStorage(approvalsById = new Map<string, ApprovalRequest>()) {
       },
     },
     skillLifecycle: {
-      find: () => undefined,
-      upsert: vi.fn(),
-    },
-    capabilityProposals: {
-      upsert(record: CapabilityProposalRecord) {
-        proposals.set(record.proposalId, record);
+      find: (skillId: string) => skillLifecycles.get(skillId),
+      upsert: vi.fn((record: SkillLifecycleRecord) => {
+        skillLifecycles.set(record.skillId, record);
         return record;
+      }),
+    },
+    skillAggregateRevisions: {
+      get(aggregateKind: string, aggregateId: string) {
+        const key = `${aggregateKind}\u0000${aggregateId}`;
+        const revision = skillAggregateRevisions.get(key);
+        return revision === undefined
+          ? undefined
+          : {
+              aggregateKind,
+              aggregateId,
+              revision,
+              createdAt: "2026-04-10T00:00:00.000Z",
+              updatedAt: "2026-04-10T00:00:00.000Z",
+            };
       },
-      list(limit = 100) {
-        return [...proposals.values()].slice(0, limit);
+      ensure(aggregateKind: string, aggregateId: string, now = "2026-04-10T00:00:00.000Z") {
+        const key = `${aggregateKind}\u0000${aggregateId}`;
+        const revision = skillAggregateRevisions.get(key) ?? 1;
+        skillAggregateRevisions.set(key, revision);
+        return { aggregateKind, aggregateId, revision, createdAt: now, updatedAt: now };
       },
-      get(proposalId: string) {
-        const proposal = proposals.get(proposalId);
-        if (!proposal) {
-          throw new Error(`Missing proposal ${proposalId}`);
+      runWithRevision<T>(
+        aggregateKind: string,
+        aggregateId: string,
+        expectedRevision: number,
+        mutation: () => { value: T; changed: boolean },
+        now = "2026-04-10T00:00:00.000Z",
+      ) {
+        const key = `${aggregateKind}\u0000${aggregateId}`;
+        const currentRevision = skillAggregateRevisions.get(key) ?? 1;
+        skillAggregateRevisions.set(key, currentRevision);
+        if (currentRevision !== expectedRevision) {
+          throw new ConflictError({
+            code: "WRITE_CONFLICT",
+            message: `${aggregateKind} ${aggregateId} changed since revision ${expectedRevision}`,
+            details: {
+              resourceKind: aggregateKind,
+              resourceId: aggregateId,
+              expectedRevision,
+              currentRevision,
+            },
+          });
         }
-        return proposal;
+        const result = mutation();
+        const revision = result.changed ? currentRevision + 1 : currentRevision;
+        skillAggregateRevisions.set(key, revision);
+        return { ...result, revision, updatedAt: now };
+      },
+      createWithInitialRevision<T>(
+        aggregateKind: string,
+        aggregateId: string,
+        mutation: () => { value: T; changed: boolean },
+        now = "2026-04-10T00:00:00.000Z",
+      ) {
+        const key = `${aggregateKind}\u0000${aggregateId}`;
+        const currentRevision = skillAggregateRevisions.get(key);
+        if (currentRevision !== undefined) {
+          throw new ConflictError({
+            code: "WRITE_CONFLICT",
+            message: `${aggregateKind} ${aggregateId} already exists at revision ${currentRevision}`,
+            details: {
+              resourceKind: aggregateKind,
+              resourceId: aggregateId,
+              expectedState: "absent",
+              currentRevision,
+            },
+          });
+        }
+        const result = mutation();
+        if (!result.changed) {
+          throw new TypeError("initial skill aggregate revision mutation must report changed: true");
+        }
+        skillAggregateRevisions.set(key, 1);
+        return { ...result, revision: 1, updatedAt: now };
       },
     },
-    capabilityProposalEvents: {
-      append(record: CapabilityProposalEventRecord) {
-        const items = proposalEvents.get(record.proposalId) ?? [];
-        items.push(record);
-        proposalEvents.set(record.proposalId, items);
-        return record;
-      },
-      listByProposalId(proposalId: string) {
-        return proposalEvents.get(proposalId) ?? [];
-      },
-    },
+    // HX-402 P2: proposal rows and their event history are REAL storage so
+    // the one-transaction proposal/source/Journey coupling is provable.
+    capabilityProposals: realStorage.capabilityProposals,
+    capabilityProposalEvents: realStorage.capabilityProposalEvents,
     approvals: {
+      // HX-402 P2: deterministic detached lifecycle approvals live in REAL
+      // storage; pre-seeded fake approvals (code mode fixtures) stay in the
+      // map and win on lookup.
+      createDeterministicDetachedWithTtlDuration: (
+        input: Parameters<Storage["approvals"]["createDeterministicDetachedWithTtlDuration"]>[0],
+        ttlMs: number,
+      ) => realStorage.approvals.createDeterministicDetachedWithTtlDuration(input, ttlMs),
       get: vi.fn((approvalId: string) => {
         const approval = approvalsById.get(approvalId);
-        if (!approval) {
-          throw new Error(`Missing approval ${approvalId}`);
+        if (approval) {
+          return approval;
         }
-        return approval;
+        return realStorage.approvals.get(approvalId);
       }),
       resolve: vi.fn((approvalId: string, input: { decision: "approve" | "reject" | "edit"; resolvedBy: string }) => {
         const approval = approvalsById.get(approvalId);
         if (!approval) {
-          throw new Error(`Missing approval ${approvalId}`);
+          return realStorage.approvals.resolve(approvalId, input as never);
         }
         const status = input.decision === "approve" ? "approved" : input.decision === "reject" ? "rejected" : "edited";
         const next = {
@@ -4240,6 +5632,10 @@ function createFakeStorage(approvalsById = new Map<string, ApprovalRequest>()) {
         return next;
       }),
     },
+    approvalEvents: realStorage.approvalEvents,
+    governanceJourneyEvents: realStorage.governanceJourneyEvents,
+    gatewaySql: realStorage.gatewaySql,
+    runImmediateTransaction: <T>(callback: () => T): T => realStorage.runImmediateTransaction(callback),
     codeModeRuns: {
       upsert(record: CodeModeRunRecord) {
         codeModeRuns.set(record.runId, record);
@@ -4292,7 +5688,12 @@ function createFakeStorage(approvalsById = new Map<string, ApprovalRequest>()) {
         startedAt: string;
       }) {
         const run = codeModeRuns.get(input.runId);
-        if (!run || run.approvalId !== input.approvalId || run.status !== "approval_pending") {
+        if (
+          !run ||
+          run.approvalId !== input.approvalId ||
+          run.status !== "approval_pending" ||
+          run.executionRecovery.phase !== "not_started"
+        ) {
           return undefined;
         }
         const next = {
@@ -4304,28 +5705,223 @@ function createFakeStorage(approvalsById = new Map<string, ApprovalRequest>()) {
           error: undefined,
           errorCode: undefined,
           errorDetails: undefined,
+          executionRecovery: {
+            ...run.executionRecovery,
+            generation: run.executionRecovery.generation + 1,
+            phase: "claimed",
+            disposition: "none",
+            boundaryCrossedAt: undefined,
+            interruptedAt: undefined,
+            interruptionReason: undefined,
+          },
         } satisfies CodeModeRunRecord;
         codeModeRuns.set(input.runId, next);
         return next;
       },
-      releaseExecutionClaim(input: { runId: string; approvalId: string; startedAt?: string }) {
+      releaseExecutionClaim(input: {
+        runId: string;
+        approvalId: string;
+        startedAt: string;
+        executionGeneration: number;
+        interruptedAt: string;
+        interruptionReason: string;
+        sandbox?: CodeModeRunRecord["sandbox"];
+      }) {
         const run = codeModeRuns.get(input.runId);
         if (
           !run ||
           run.approvalId !== input.approvalId ||
           run.status !== "running" ||
-          (input.startedAt && run.startedAt !== input.startedAt)
+          run.startedAt !== input.startedAt ||
+          run.executionRecovery.generation !== input.executionGeneration ||
+          run.executionRecovery.phase !== "claimed"
         ) {
           return undefined;
         }
         const next = {
           ...run,
           status: "approval_pending",
+          sandbox: input.sandbox,
           startedAt: undefined,
           finishedAt: undefined,
           error: undefined,
           errorCode: undefined,
           errorDetails: undefined,
+          executionRecovery: {
+            ...run.executionRecovery,
+            phase: "not_started",
+            disposition: "retryable",
+            interruptedAt: input.interruptedAt,
+            interruptionReason: input.interruptionReason,
+          },
+        } satisfies CodeModeRunRecord;
+        codeModeRuns.set(input.runId, next);
+        return next;
+      },
+      markExecutionBoundaryCrossed(input: {
+        runId: string;
+        approvalId: string;
+        startedAt: string;
+        executionGeneration: number;
+        boundaryCrossedAt: string;
+      }) {
+        const run = codeModeRuns.get(input.runId);
+        if (
+          !run ||
+          run.approvalId !== input.approvalId ||
+          run.status !== "running" ||
+          run.startedAt !== input.startedAt ||
+          run.executionRecovery.generation !== input.executionGeneration ||
+          run.executionRecovery.phase !== "claimed"
+        ) {
+          return undefined;
+        }
+        const next = {
+          ...run,
+          executionRecovery: {
+            ...run.executionRecovery,
+            phase: "boundary_crossed",
+            boundaryCrossedAt: input.boundaryCrossedAt,
+          },
+        } satisfies CodeModeRunRecord;
+        codeModeRuns.set(input.runId, next);
+        return next;
+      },
+      resetExecutionBoundaryBeforeDispatch(input: {
+        runId: string;
+        approvalId: string;
+        startedAt: string;
+        executionGeneration: number;
+      }) {
+        const run = codeModeRuns.get(input.runId);
+        if (
+          !run ||
+          run.approvalId !== input.approvalId ||
+          run.status !== "running" ||
+          run.startedAt !== input.startedAt ||
+          run.executionRecovery.generation !== input.executionGeneration ||
+          run.executionRecovery.phase !== "boundary_crossed"
+        ) {
+          return undefined;
+        }
+        const next = {
+          ...run,
+          executionRecovery: {
+            ...run.executionRecovery,
+            phase: "claimed",
+            boundaryCrossedAt: undefined,
+          },
+        } satisfies CodeModeRunRecord;
+        codeModeRuns.set(input.runId, next);
+        return next;
+      },
+      recordExecutionOutput(
+        input: CodeModeRunRecord & {
+          approvalId: string;
+          startedAt: string;
+          executionGeneration: number;
+          executionPhase: "output_captured_completed" | "output_captured_failed";
+        },
+      ) {
+        const run = codeModeRuns.get(input.runId);
+        if (
+          !run ||
+          run.approvalId !== input.approvalId ||
+          run.status !== "running" ||
+          run.startedAt !== input.startedAt ||
+          run.executionRecovery.generation !== input.executionGeneration ||
+          run.executionRecovery.phase !== "boundary_crossed"
+        ) {
+          return undefined;
+        }
+        const next = {
+          ...run,
+          stdoutArtifact: input.stdoutArtifact,
+          stderrArtifact: input.stderrArtifact,
+          stdoutPreview: input.stdoutPreview,
+          stderrPreview: input.stderrPreview,
+          stdoutTruncated: input.stdoutTruncated,
+          stderrTruncated: input.stderrTruncated,
+          trustedCodeWriteVerification: input.trustedCodeWriteVerification,
+          result: input.result,
+          error: input.error,
+          errorCode: input.errorCode,
+          errorDetails: input.errorDetails,
+          executionRecovery: { ...run.executionRecovery, phase: input.executionPhase },
+        } satisfies CodeModeRunRecord;
+        codeModeRuns.set(input.runId, next);
+        return next;
+      },
+      markExecutionInterrupted(input: {
+        runId: string;
+        approvalId: string;
+        startedAt?: string;
+        executionGeneration: number;
+        interruptedAt: string;
+        interruptionReason: string;
+        errorDetails?: Record<string, unknown>;
+      }) {
+        const run = codeModeRuns.get(input.runId);
+        if (
+          !run ||
+          run.approvalId !== input.approvalId ||
+          run.status !== "running" ||
+          (input.startedAt !== undefined && run.startedAt !== input.startedAt) ||
+          run.executionRecovery.generation !== input.executionGeneration
+        ) {
+          return undefined;
+        }
+        const next = {
+          ...run,
+          status: "failed",
+          error: `Code Mode execution was interrupted after its mutation boundary: ${input.interruptionReason}`,
+          errorCode: "execution_interrupted_after_boundary",
+          errorDetails: { manualReconciliationRequired: true, ...(input.errorDetails ?? {}) },
+          finishedAt: input.interruptedAt,
+          executionRecovery: {
+            ...run.executionRecovery,
+            phase: "terminal",
+            disposition: "manual_reconciliation",
+            interruptedAt: input.interruptedAt,
+            interruptionReason: input.interruptionReason,
+          },
+        } satisfies CodeModeRunRecord;
+        codeModeRuns.set(input.runId, next);
+        return next;
+      },
+      failExecutionClaimBeforeDispatch(input: {
+        runId: string;
+        approvalId: string;
+        startedAt: string;
+        executionGeneration: number;
+        finishedAt: string;
+        error: string;
+        errorCode?: string;
+        errorDetails?: Record<string, unknown>;
+      }) {
+        const run = codeModeRuns.get(input.runId);
+        if (
+          !run ||
+          run.approvalId !== input.approvalId ||
+          run.status !== "running" ||
+          run.startedAt !== input.startedAt ||
+          run.executionRecovery.generation !== input.executionGeneration ||
+          run.executionRecovery.phase !== "claimed"
+        ) {
+          return undefined;
+        }
+        const next = {
+          ...run,
+          status: "failed",
+          error: input.error,
+          errorCode: input.errorCode,
+          errorDetails: input.errorDetails,
+          finishedAt: input.finishedAt,
+          executionRecovery: {
+            ...run.executionRecovery,
+            phase: "terminal",
+            disposition: "terminal",
+          },
         } satisfies CodeModeRunRecord;
         codeModeRuns.set(input.runId, next);
         return next;
@@ -4343,7 +5939,10 @@ function createFakeStorage(approvalsById = new Map<string, ApprovalRequest>()) {
           !run ||
           run.approvalId !== input.approvalId ||
           run.status !== "running" ||
-          run.startedAt !== input.startedAt
+          run.startedAt !== input.startedAt ||
+          run.executionRecovery.generation !== input.executionRecovery.generation ||
+          (input.status === "completed" && run.executionRecovery.phase !== "output_captured_completed") ||
+          (input.status === "failed" && run.executionRecovery.phase !== "output_captured_failed")
         ) {
           return undefined;
         }
@@ -4358,11 +5957,73 @@ function createFakeStorage(approvalsById = new Map<string, ApprovalRequest>()) {
           stdoutTruncated: input.stdoutTruncated,
           stderrTruncated: input.stderrTruncated,
           trustedCodeWriteVerification: input.trustedCodeWriteVerification,
+          verification: input.verification,
           result: input.result,
           error: input.error,
           errorCode: input.errorCode,
           errorDetails: input.errorDetails,
           finishedAt: input.finishedAt,
+          executionRecovery: {
+            ...input.executionRecovery,
+            phase: "terminal",
+            disposition:
+              input.executionRecovery.disposition === "manual_reconciliation" ? "manual_reconciliation" : "terminal",
+          },
+        } satisfies CodeModeRunRecord;
+        codeModeRuns.set(input.runId, next);
+        return next;
+      },
+      listPendingFinalTranscriptDelivery(limit = 100) {
+        return [...codeModeRuns.values()]
+          .filter(
+            (run) =>
+              Boolean(run.sessionId) &&
+              (run.status === "completed" || run.status === "failed") &&
+              Boolean(run.executionRecovery.finalTranscriptEventId) &&
+              !run.executionRecovery.finalTranscriptEnqueuedAt,
+          )
+          .sort((left, right) =>
+            `${left.finishedAt ?? left.createdAt}\u0000${left.runId}`.localeCompare(
+              `${right.finishedAt ?? right.createdAt}\u0000${right.runId}`,
+            ),
+          )
+          .slice(0, limit);
+      },
+      listPendingFinalTranscriptDeliveryPage(
+        input: {
+          afterFinishedAt?: string;
+          afterRunId?: string;
+          limit?: number;
+        } = {},
+      ) {
+        const pending = this.listPendingFinalTranscriptDelivery(Number.MAX_SAFE_INTEGER);
+        return pending
+          .filter((run) => {
+            if (!input.afterFinishedAt || !input.afterRunId) {
+              return true;
+            }
+            const sortAt = run.finishedAt ?? run.createdAt;
+            return sortAt > input.afterFinishedAt || (sortAt === input.afterFinishedAt && run.runId > input.afterRunId);
+          })
+          .slice(0, input.limit ?? 100);
+      },
+      markFinalTranscriptEnqueued(input: {
+        runId: string;
+        executionGeneration: number;
+        eventId: string;
+        enqueuedAt: string;
+      }) {
+        const run = codeModeRuns.get(input.runId);
+        if (
+          !run ||
+          run.executionRecovery.generation !== input.executionGeneration ||
+          run.executionRecovery.finalTranscriptEventId !== input.eventId
+        ) {
+          return undefined;
+        }
+        const next = {
+          ...run,
+          executionRecovery: { ...run.executionRecovery, finalTranscriptEnqueuedAt: input.enqueuedAt },
         } satisfies CodeModeRunRecord;
         codeModeRuns.set(input.runId, next);
         return next;
@@ -4412,6 +6073,9 @@ function createFakeStorage(approvalsById = new Map<string, ApprovalRequest>()) {
           throw new Error(`Missing candidate version ${versionId}`);
         }
         return version;
+      },
+      find(versionId: string) {
+        return candidateVersions.get(versionId);
       },
       list(limit = 100) {
         return [...candidateVersions.values()].slice(0, limit);
@@ -4488,9 +6152,6 @@ function createFakeStorage(approvalsById = new Map<string, ApprovalRequest>()) {
       listBySession: vi.fn((sessionId: string) =>
         [...turnTraces.values()].filter((trace) => trace.sessionId === sessionId),
       ),
-    },
-    runImmediateTransaction<T>(callback: () => T): T {
-      return callback();
     },
   };
 }

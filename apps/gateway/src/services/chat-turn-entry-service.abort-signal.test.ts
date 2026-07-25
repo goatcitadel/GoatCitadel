@@ -28,6 +28,7 @@ import {
   sendPreparedIntegrationChatTurn,
   type ChatTurnDispatchHost,
 } from "./chat-turn-dispatch-service.js";
+import { ChatTurnExecutionRegistry } from "./chat-turn-execution-registry.js";
 
 function createPrepared(mode: "chat" | "cowork" | "code" = "chat") {
   return {
@@ -58,6 +59,34 @@ function createPrepared(mode: "chat" | "cowork" | "code" = "chat") {
       globalFilesUsed: [],
       workspaceFilesUsed: [],
       truncated: false,
+    },
+  } as never;
+}
+
+/**
+ * The durable dispatch branch (`launchPreparedAgentChatTurnStream`) requires
+ * `prepared.turnAdmission` to be populated -- `buildDurableChatCanonicalWriteFence`
+ * throws "has no immutable mutation admission" for a durable run without one.
+ * Mirrors the `turnAdmission` shape built by the sibling
+ * `chat-turn-dispatch-service.test.ts` `createPrepared()` helper, which every
+ * other durable-branch test in this dispatch host family already relies on.
+ */
+function createDurablePrepared(mode: "chat" | "cowork" | "code" = "chat") {
+  return {
+    ...(createPrepared(mode) as Record<string, unknown>),
+    turnAdmission: {
+      identity: {
+        admissionId: "admission:turn-1",
+        sessionIncarnationId: "incarnation:session-1",
+        workspaceId: "default",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        aggregateRevision: 1,
+        controllerGeneration: 1,
+        materialSha256: "a".repeat(64),
+      },
+      admittedRequest: { content: "hello" },
+      requestActor: { actorKind: "operator", actorId: "operator" },
     },
   } as never;
 }
@@ -390,6 +419,11 @@ describe("agentSendChatMessage abort signal coverage", () => {
       const streamReady = new Promise<void>((resolve) => {
         resolveStream = resolve;
       });
+      // launchPreparedAgentChatTurnStream registers a real stream lease before
+      // dispatch; a bare vi.fn() resolves to undefined, which trips the
+      // "has no active stream registration" guard in
+      // buildDurableChatCanonicalWriteFence once a durable admission is present.
+      const executionRegistry = new ChatTurnExecutionRegistry();
 
       const host: ChatTurnDispatchHost & {
         cancelDurableChatRun: ReturnType<typeof vi.fn>;
@@ -431,7 +465,9 @@ describe("agentSendChatMessage abort signal coverage", () => {
         completeActiveChatTurnStream: vi.fn(),
         closeActiveChatTurnStream: vi.fn(),
         beginDurableChatRun: vi.fn(() => durableRun),
-        registerActiveChatTurnStream: vi.fn(),
+        registerActiveChatTurnStream: vi.fn((sessionId: string, turnId: string, runId?: string) =>
+          executionRegistry.registerActiveStream(sessionId, turnId, 0, runId),
+        ),
         ensureSessionInternalToolGrant: vi.fn(),
         requireExecutedToolResult: vi.fn(),
         commsSend: vi.fn(),
@@ -455,7 +491,7 @@ describe("agentSendChatMessage abort signal coverage", () => {
         host,
         "session-1",
         { content: "hello", mode: "chat" },
-        createPrepared("chat"),
+        createDurablePrepared("chat"),
         "chat_thread_turn_appended",
         undefined,
         { abortSignal: controller.signal },
@@ -484,6 +520,11 @@ describe("agentSendChatMessage abort signal coverage", () => {
         startedAt: "2026-05-16T00:00:00.000Z",
       } as unknown as ChatTurnTraceRecord;
       const cancelDurableChatRun = vi.fn();
+      // launchPreparedAgentChatTurnStream registers a real stream lease before
+      // dispatch; a bare vi.fn() resolves to undefined, which trips the
+      // "has no active stream registration" guard in
+      // buildDurableChatCanonicalWriteFence once a durable admission is present.
+      const executionRegistry = new ChatTurnExecutionRegistry();
       const host: ChatTurnDispatchHost & {
         cancelDurableChatRun: ReturnType<typeof vi.fn>;
       } = {
@@ -511,7 +552,9 @@ describe("agentSendChatMessage abort signal coverage", () => {
         completeActiveChatTurnStream: vi.fn(),
         closeActiveChatTurnStream: vi.fn(),
         beginDurableChatRun: vi.fn(() => ({ runId: "durable-run-2" }) as DurableRunRecord),
-        registerActiveChatTurnStream: vi.fn(),
+        registerActiveChatTurnStream: vi.fn((sessionId: string, turnId: string, runId?: string) =>
+          executionRegistry.registerActiveStream(sessionId, turnId, 0, runId),
+        ),
         ensureSessionInternalToolGrant: vi.fn(),
         requireExecutedToolResult: vi.fn(),
         commsSend: vi.fn(),
@@ -533,7 +576,7 @@ describe("agentSendChatMessage abort signal coverage", () => {
         host,
         "session-1",
         { content: "hello", mode: "chat" },
-        createPrepared("chat"),
+        createDurablePrepared("chat"),
         "chat_thread_turn_appended",
         undefined,
         { abortSignal: controller.signal },

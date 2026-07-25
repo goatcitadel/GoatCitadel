@@ -21,12 +21,7 @@
  */
 
 /** The autonomous subsystem a single audit entry came from. */
-export type AutonomyAuditKind =
-  | "skill_revision"
-  | "operator_profile"
-  | "curator_archive"
-  | "tune"
-  | "memory";
+export type AutonomyAuditKind = "skill_revision" | "operator_profile" | "curator_archive" | "tune" | "memory";
 
 /** All audit kinds, for iteration / validation. */
 export const AUTONOMY_AUDIT_KINDS: readonly AutonomyAuditKind[] = [
@@ -115,6 +110,8 @@ export interface AutonomyRevertSummary {
 
 /** Master kill-switch + recent-audit view returned by {@link AutonomyControlService.getStatus}. */
 export interface AutonomyControlStatus {
+  /** Current settings generation revision required by kill-switch mutations. */
+  revision: number;
   /** True when the master kill switch (`autonomyV1Disabled`) is engaged. */
   killSwitchEngaged: boolean;
   /** Convenience inverse of {@link killSwitchEngaged}. */
