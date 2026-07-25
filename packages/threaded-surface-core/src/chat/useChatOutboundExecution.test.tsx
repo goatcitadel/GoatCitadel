@@ -3104,7 +3104,13 @@ describe("useChatOutboundExecution", () => {
         expect.any(Function),
         expect.objectContaining({ originSurface: "chat" }),
       );
-      expect(onExternalContextSent).toHaveBeenCalledTimes(1);
+      // The streaming path reports the sent refs after the stream promise settles,
+      // one microtask beyond the act() above. Asserting synchronously is a race that
+      // only loses under load (it failed in the coverage lane, never locally), so
+      // wait for the callback instead of assuming it already ran.
+      await vi.waitFor(() => {
+        expect(onExternalContextSent).toHaveBeenCalledTimes(1);
+      });
     });
 
     it("retains the selection when the send fails", async () => {
