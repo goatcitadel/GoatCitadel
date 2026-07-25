@@ -13187,7 +13187,64 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     integritySha256: "ee425c869259c905fcaca8ca8574fe059be54c6304acfcea5404dc837b897333",
     sql: buildRemoteWorkerSettlementPostgresSql(),
   },
+  {
+    version: 122,
+    name: "workspace_path_bridge_posix_flavor",
+    // Native POSIX path-bridge evidence (paired with SQLite 180). Widens the
+    // frozen `input_flavor`/`target_flavor` CHECK on the two tables that persist
+    // a path flavor so a POSIX host can record its own evidence; previously
+    // every flavor named a Windows host path, which made external-source
+    // registration Windows-only. No column is added, dropped, or retyped and no
+    // row is rewritten: the accepted domain only grows, so every existing row
+    // stays valid under the new CHECK. The constraints are located through
+    // pg_constraint rather than by assuming PostgreSQL's generated names.
+    integritySha256: "881d90b8db7c78e8871189704acf1bc3e705d21518cc1560ae65793c6ff381bf",
+    sql: buildWorkspacePathBridgePosixFlavorPostgresSql(),
+  },
 ];
+
+function buildWorkspacePathBridgePosixFlavorPostgresSql(): string {
+  const widen = (table: string, column: string) => `
+      DO $posix_flavor$
+      DECLARE
+        frozen_constraint TEXT;
+      BEGIN
+        IF to_regclass('public.${table}') IS NULL THEN
+          RETURN;
+        END IF;
+        FOR frozen_constraint IN
+          SELECT conname
+          FROM pg_constraint
+          WHERE conrelid = 'public.${table}'::regclass
+            AND contype = 'c'
+            AND pg_get_constraintdef(oid) LIKE '%${column}%'
+            AND pg_get_constraintdef(oid) LIKE '%windows_native%'
+            AND pg_get_constraintdef(oid) NOT LIKE '%posix%'
+            -- The paired wsl/distro CHECK also names the flavor columns; it is
+            -- unaffected by the widened domain and must survive untouched.
+            AND pg_get_constraintdef(oid) NOT LIKE '%distro%'
+        LOOP
+          EXECUTE format('ALTER TABLE public.${table} DROP CONSTRAINT %I', frozen_constraint);
+        END LOOP;
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conrelid = 'public.${table}'::regclass
+            AND conname = '${table}_${column}_posix_check'
+        ) THEN
+          ALTER TABLE public.${table}
+            ADD CONSTRAINT ${table}_${column}_posix_check
+            CHECK(${column} IN ('windows_native', 'windows_forward', 'msys', 'wsl', 'posix'));
+        END IF;
+      END
+      $posix_flavor$;
+  `;
+  return [
+    widen("workspace_path_bridge_snapshots", "input_flavor"),
+    widen("workspace_path_bridge_snapshots", "target_flavor"),
+    widen("external_source_configs", "input_flavor"),
+    widen("external_source_configs", "target_flavor"),
+  ].join("\n");
+}
 
 function buildRemoteWorkerSettlementPostgresSql(): string {
   const identity = `

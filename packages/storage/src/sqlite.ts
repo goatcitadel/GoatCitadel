@@ -6682,6 +6682,25 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
           createRemoteWorkerSettlementSchema(db);
         },
       },
+      {
+        version: 180,
+        name: "workspace_path_bridge_posix_flavor",
+        up: (db) => {
+          // Native POSIX path-bridge evidence (paired with PostgreSQL 122).
+          // Widens the frozen `input_flavor`/`target_flavor` CHECK on the two
+          // tables that persist a path flavor so a POSIX host can record its own
+          // evidence. Previously every flavor named a Windows host path, which
+          // made external-source registration Windows-only. No column is added,
+          // dropped, or retyped and no row is rewritten: the accepted domain
+          // only grows, so every existing row stays valid under the new CHECK.
+          // Repair-only sparse databases without the 162 predecessors skip
+          // instead of inventing tables.
+          if (!tableExists(db, "workspace_path_bridge_snapshots")) {
+            return;
+          }
+          widenPathFlavorChecksForPosix(db);
+        },
+      },
     ],
   },
 ];
@@ -8841,6 +8860,112 @@ function createDurableHeartbeatOccurrenceSchema(db: DatabaseSync): void {
   `);
   replaceSessionControlAuthRevokeGuards(db);
   upgradeSessionMutationAdmissionGuardForHeartbeatReclaim(db);
+}
+
+const FROZEN_PATH_FLAVOR_CHECK = "IN ('windows_native', 'windows_forward', 'msys', 'wsl')";
+const POSIX_PATH_FLAVOR_CHECK = "IN ('windows_native', 'windows_forward', 'msys', 'wsl', 'posix')";
+
+/**
+ * SQLite cannot alter a CHECK constraint, so each table that persists a path
+ * flavor is rebuilt with the widened domain. Only the CHECK text changes: the
+ * column list, indexes and triggers are carried across verbatim, and the copy
+ * is a straight `SELECT *`.
+ */
+function widenPathFlavorChecksForPosix(db: DatabaseSync): void {
+  // Every table's DDL is captured BEFORE the first rename. Renaming a table
+  // rewrites the foreign keys of tables that reference it, so `external_source_configs`
+  // would otherwise be rebuilt from SQL that points at the parent's scratch name.
+  const plans = ["workspace_path_bridge_snapshots", "external_source_configs"]
+    .filter((tableName) => tableExists(db, tableName))
+    .map((tableName) => capturePathFlavorRebuildPlan(db, tableName))
+    .filter((plan): plan is PathFlavorRebuildPlan => plan !== undefined);
+  for (const plan of plans) {
+    rebuildTableWithPosixPathFlavor(db, plan);
+  }
+  const violations = db.prepare("PRAGMA foreign_key_check").all() as unknown[];
+  if (violations.length > 0) {
+    throw new Error("SQLite migration 180 left dangling path-bridge foreign keys");
+  }
+}
+
+interface PathFlavorRebuildPlan {
+  tableName: string;
+  upgradedTableSql: string;
+  indexes: string[];
+  triggers: string[];
+}
+
+function capturePathFlavorRebuildPlan(db: DatabaseSync, tableName: string): PathFlavorRebuildPlan | undefined {
+  const table = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(tableName) as
+    | { sql?: unknown }
+    | undefined;
+  if (typeof table?.sql !== "string") {
+    throw new Error(`SQLite migration 180 requires the ${tableName} table`);
+  }
+  // Already widened (fresh database created from a later blueprint, or a rerun).
+  if (table.sql.includes("'posix'")) return undefined;
+  if (!table.sql.includes(FROZEN_PATH_FLAVOR_CHECK)) {
+    throw new Error(`SQLite migration 180 could not find the ${tableName} path-flavor check`);
+  }
+  const readDdl = (type: "index" | "trigger") =>
+    (
+      db
+        .prepare(
+          `SELECT sql FROM sqlite_master
+           WHERE type = @type AND tbl_name = @tableName AND sql IS NOT NULL
+           ORDER BY name`,
+        )
+        .all({ type, tableName }) as Array<{ sql: string }>
+    ).map((row) => row.sql);
+  return {
+    tableName,
+    upgradedTableSql: table.sql.replaceAll(FROZEN_PATH_FLAVOR_CHECK, POSIX_PATH_FLAVOR_CHECK),
+    indexes: readDdl("index"),
+    triggers: readDdl("trigger"),
+  };
+}
+
+/**
+ * Rebuilds one table without ever renaming the original.
+ *
+ * Renaming a table rewrites the foreign keys of every table that references it,
+ * and those references are not restored when the scratch table is dropped — so
+ * renaming `external_source_configs` silently corrupted `external_source_scans`.
+ * Staging the replacement under a scratch name and renaming only THAT keeps
+ * every referencing table untouched, because nothing references the scratch.
+ */
+function rebuildTableWithPosixPathFlavor(db: DatabaseSync, plan: PathFlavorRebuildPlan): void {
+  const { tableName } = plan;
+  const stagingName = `${tableName}_posix_flavor_new`;
+  const stagingSql = plan.upgradedTableSql.replace(
+    new RegExp(`^CREATE\\s+TABLE\\s+("?)${tableName}\\1`, "u"),
+    `CREATE TABLE ${stagingName}`,
+  );
+  if (!stagingSql.startsWith(`CREATE TABLE ${stagingName}`)) {
+    throw new Error(`SQLite migration 180 could not stage a replacement for ${tableName}`);
+  }
+  // Migrations run inside BEGIN IMMEDIATE, where `PRAGMA foreign_keys` is a
+  // no-op; `defer_foreign_keys` is the in-transaction equivalent and resets
+  // itself at COMMIT. It covers the window where the original is dropped and
+  // the staged replacement has not yet taken its name.
+  db.exec(`PRAGMA defer_foreign_keys = ON;`);
+  db.exec(`DROP TABLE IF EXISTS ${stagingName};`);
+  db.exec(stagingSql);
+  db.exec(`INSERT INTO ${stagingName} SELECT * FROM ${tableName};`);
+  db.exec(`DROP TABLE ${tableName};`);
+  // A modern RENAME reparses every trigger and view in the schema, so an
+  // unrelated stale trigger elsewhere in a repair-only database would abort
+  // this migration. Legacy mode renames without that schema-wide rewrite, which
+  // is precisely what is wanted: nothing references the staging name, so there
+  // is nothing for the rewrite to fix up.
+  db.exec(`PRAGMA legacy_alter_table = ON;`);
+  try {
+    db.exec(`ALTER TABLE ${stagingName} RENAME TO ${tableName};`);
+  } finally {
+    db.exec(`PRAGMA legacy_alter_table = OFF;`);
+  }
+  for (const sql of plan.indexes) db.exec(sql);
+  for (const sql of plan.triggers) db.exec(sql);
 }
 
 function upgradeSessionControlEventsForHeartbeatPreemption(db: DatabaseSync): void {

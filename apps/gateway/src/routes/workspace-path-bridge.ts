@@ -6,6 +6,7 @@ import {
   type WorkspacePathBridgeResolveRequest,
   type WorkspacePathBridgeSnapshotRecord,
 } from "@goatcitadel/contracts";
+import { isWorkspacePathBridgeUnsupportedFlavorError } from "../services/workspace-path-bridge-errors.js";
 import { sendRouteError } from "./_error-handler.js";
 import { withRouteAccess } from "./route-access.js";
 
@@ -15,7 +16,7 @@ const identifier = z
   .max(256)
   .regex(/^[A-Za-z0-9._:-]+$/u);
 const workspaceId = identifier;
-const flavor = z.enum(["windows_native", "windows_forward", "msys", "wsl"]);
+const flavor = z.enum(["windows_native", "windows_forward", "msys", "wsl", "posix"]);
 
 const resolveBodySchema = z
   .object({
@@ -46,6 +47,12 @@ const resolveBodySchema = z
       context.addIssue({
         code: z.ZodIssueCode.custom,
         message: "Expected Git identity requires Git-bound verification.",
+      });
+    }
+    if ((value.inputFlavor === "posix") !== (value.targetFlavor === "posix")) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "POSIX and Windows path flavors cannot be translated into one another.",
       });
     }
   });
@@ -97,6 +104,9 @@ export const workspacePathBridgeRoutes: FastifyPluginAsync<WorkspacePathBridgeRo
     } catch (error) {
       if (isConflict(error)) {
         return reply.code(409).send({ error: "Workspace path bridge evidence changed; use a new verification id." });
+      }
+      if (isWorkspacePathBridgeUnsupportedFlavorError(error)) {
+        return reply.code(422).send({ error: error.message, code: error.code, hostPlatform: error.hostPlatform });
       }
       return sendRouteError(reply, error, request.log);
     } finally {

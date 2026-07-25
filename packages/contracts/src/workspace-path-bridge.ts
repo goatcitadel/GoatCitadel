@@ -3,7 +3,13 @@ export const WORKSPACE_PATH_BRIDGE_MAX_PATH_LENGTH = 2_048;
 export const WORKSPACE_PATH_BRIDGE_MAX_SNAPSHOT_BYTES = 65_536;
 export const WORKSPACE_PATH_BRIDGE_MAX_LIST_LIMIT = 100;
 
-export type WorkspacePathFlavor = "windows_native" | "windows_forward" | "msys" | "wsl";
+/**
+ * `posix` is a native POSIX host path. The other four flavors all describe a
+ * path on a Windows host — `msys` and `wsl` merely spell one with forward
+ * slashes. A single translation therefore never mixes `posix` with the others;
+ * see {@link assertCoherentWorkspacePathFlavors}.
+ */
+export type WorkspacePathFlavor = "windows_native" | "windows_forward" | "msys" | "wsl" | "posix";
 export type WorkspacePathBridgeStatus = "verified" | "blocked" | "unavailable";
 export type WorkspacePathBridgeReasonCode =
   | "invalid_path"
@@ -78,7 +84,26 @@ export interface WorkspacePathBridgeListResponse {
 }
 
 const SHA256 = /^[a-f0-9]{64}$/u;
-const FLAVORS = new Set<WorkspacePathFlavor>(["windows_native", "windows_forward", "msys", "wsl"]);
+const FLAVORS = new Set<WorkspacePathFlavor>(["windows_native", "windows_forward", "msys", "wsl", "posix"]);
+
+export function isWorkspacePathFlavor(value: unknown): value is WorkspacePathFlavor {
+  return FLAVORS.has(value as WorkspacePathFlavor);
+}
+
+/**
+ * A native POSIX host path and a Windows host path are never two ends of the
+ * same translation, so a request that pairs `posix` with any Windows flavor is
+ * rejected rather than silently resolved by whichever host happens to serve it.
+ */
+export function assertCoherentWorkspacePathFlavors(
+  inputFlavor: WorkspacePathFlavor,
+  targetFlavor: WorkspacePathFlavor,
+  subject = "Workspace path bridge",
+): void {
+  if ((inputFlavor === "posix") !== (targetFlavor === "posix")) {
+    throw new Error(`${subject} cannot translate between POSIX and Windows path flavors.`);
+  }
+}
 const STATUSES = new Set<WorkspacePathBridgeStatus>(["verified", "blocked", "unavailable"]);
 const REASONS = new Set<WorkspacePathBridgeReasonCode>([
   "invalid_path",
@@ -148,6 +173,7 @@ export function assertWorkspacePathBridgeSnapshot(value: WorkspacePathBridgeSnap
   if (!FLAVORS.has(value.inputFlavor) || !FLAVORS.has(value.targetFlavor)) {
     throw new Error("Workspace path bridge flavor is invalid.");
   }
+  assertCoherentWorkspacePathFlavors(value.inputFlavor, value.targetFlavor);
   if (typeof value.gitIdentityRequired !== "boolean") {
     throw new Error("Workspace path bridge Git identity posture is invalid.");
   }

@@ -15,6 +15,7 @@ import {
   type WorkspacePathFlavor,
 } from "@goatcitadel/contracts";
 import { sealWorkspacePathBridgeSnapshot, type WorkspacePathBridgeSnapshotRepository } from "@goatcitadel/storage";
+import { WorkspacePathBridgeUnsupportedFlavorError } from "./workspace-path-bridge-errors.js";
 
 const execFileAsync = promisify(execFile);
 const WIN = path.win32;
@@ -25,6 +26,7 @@ const RESERVED_WIN32 = /^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$/iu;
 const MAX_PROCESS_OUTPUT_BYTES = 64 * 1024;
 const PROCESS_TIMEOUT_MS = 5_000;
 const MAX_ALLOWED_ROOTS = 16;
+const WINDOWS_FLAVORS = new Set<WorkspacePathFlavor>(["windows_native", "windows_forward", "msys", "wsl"]);
 
 function hasControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
@@ -572,10 +574,16 @@ function validateRequestEnvelope(request: WorkspacePathBridgeResolveRequest): vo
   assertExactRequestKeys(request);
   validateIdentifier(request.verificationId, "verificationId", 256);
   validateIdentifier(request.workspaceId, "workspaceId", 256);
-  if (!new Set<WorkspacePathFlavor>(["windows_native", "windows_forward", "msys", "wsl"]).has(request.inputFlavor)) {
+  // `posix` is a well-formed flavor that this Windows-host service cannot
+  // serve; it is a client mistake, not a malformed envelope, so it carries its
+  // own typed error rather than surfacing as an opaque failure.
+  if (request.inputFlavor === "posix" || request.targetFlavor === "posix") {
+    throw new WorkspacePathBridgeUnsupportedFlavorError("windows", "posix");
+  }
+  if (!WINDOWS_FLAVORS.has(request.inputFlavor)) {
     throw new Error("Workspace path bridge input flavor is invalid.");
   }
-  if (!new Set<WorkspacePathFlavor>(["windows_native", "windows_forward", "msys", "wsl"]).has(request.targetFlavor)) {
+  if (!WINDOWS_FLAVORS.has(request.targetFlavor)) {
     throw new Error("Workspace path bridge target flavor is invalid.");
   }
   if (typeof request.requireGitIdentity !== "boolean") {

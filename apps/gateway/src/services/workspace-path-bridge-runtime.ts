@@ -10,7 +10,11 @@ import {
   sep as nativeSeparator,
   win32 as WIN,
 } from "node:path";
-import { canonicalJsonString, type WorkspacePathBridgeSnapshotRecord } from "@goatcitadel/contracts";
+import {
+  canonicalJsonString,
+  type WorkspacePathBridgeResolveRequest,
+  type WorkspacePathBridgeSnapshotRecord,
+} from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { resolveWorkspacePathBridgeRuntimeConfig } from "./workspace-path-bridge-config.js";
 import {
@@ -21,7 +25,22 @@ import {
   type WorkspacePathBridgeHostPlatform,
   type WorkspacePathBridgeSessionBinding,
 } from "./workspace-path-bridge-integration.js";
+import { WorkspacePathBridgePosixService } from "./workspace-path-bridge-posix-service.js";
 import { WorkspacePathBridgeService } from "./workspace-path-bridge-service.js";
+
+/**
+ * The inspection surface shared by the Windows and POSIX bridge services. Both
+ * emit the same immutable snapshot record, so routes and the external-source
+ * verifier bind to this rather than to one host's implementation.
+ */
+export interface WorkspacePathBridgeInspectionService {
+  resolve(
+    request: WorkspacePathBridgeResolveRequest,
+    options?: { signal?: AbortSignal; allowedRoots?: readonly string[] },
+  ): Promise<WorkspacePathBridgeSnapshotRecord>;
+  inspect(workspaceId: string, snapshotId: string): WorkspacePathBridgeSnapshotRecord;
+  list(workspaceId: string, limit?: number): WorkspacePathBridgeSnapshotRecord[];
+}
 
 const SHA256 = /^[a-f0-9]{64}$/u;
 
@@ -38,7 +57,7 @@ export interface WorkspacePathBridgeRuntimeOptions {
   dataDir?: string;
   hostPlatform?: WorkspacePathBridgeHostPlatform;
   environment?: Readonly<Record<string, string | undefined>>;
-  service?: WorkspacePathBridgeService;
+  service?: WorkspacePathBridgeInspectionService;
   realpath?: (input: string) => Promise<string>;
   stat?: (input: string) => Promise<{ isDirectory(): boolean }>;
   lstat?: (input: string) => Promise<{ isSymbolicLink(): boolean }>;
@@ -51,7 +70,7 @@ export interface WorkspacePathBridgeRuntimeOptions {
  * bindings, and the coordinator's fresh execution resolver.
  */
 export class WorkspacePathBridgeRuntime {
-  public readonly service: WorkspacePathBridgeService;
+  public readonly service: WorkspacePathBridgeInspectionService;
   public readonly executionResolver: WorkspacePathBridgeExecutionResolver;
   private readonly pathSource: WorkspacePathBridgeSessionBinding["pathSource"];
   private readonly workspaceRoot: string;
@@ -61,12 +80,24 @@ export class WorkspacePathBridgeRuntime {
     this.hostPlatform = options.hostPlatform ?? (process.platform === "win32" ? "windows" : "posix");
     this.pathSource = resolveWorkspacePathBridgeRuntimeConfig(options.environment, this.hostPlatform).pathSource;
     this.workspaceRoot = resolveAbsoluteConfigPath(options.rootDir, options.workspaceDir, this.hostPlatform);
+    // A POSIX host has no path flavors to translate, and the Windows service
+    // rejects every POSIX root it is handed. Selecting by host platform is what
+    // makes registration — not just tool execution — work off Windows.
+    const bridgeDependencies = {
+      repository: options.storage.workspacePathBridgeSnapshots,
+      allowedRootsForWorkspace: (workspaceId: string) => this.resolveAllowedRootsForWorkspace(workspaceId),
+      ...(options.realpath ? { realpath: options.realpath } : {}),
+      ...(options.stat ? { stat: options.stat } : {}),
+      ...(options.lstat ? { lstat: options.lstat } : {}),
+    };
     this.service =
       options.service ??
-      new WorkspacePathBridgeService({
-        repository: options.storage.workspacePathBridgeSnapshots,
-        allowedRootsForWorkspace: (workspaceId) => this.resolveAllowedRootsForWorkspace(workspaceId),
-      });
+      (this.hostPlatform === "posix"
+        ? new WorkspacePathBridgePosixService({
+            ...bridgeDependencies,
+            ...(options.runGit ? { runGit: options.runGit } : {}),
+          })
+        : new WorkspacePathBridgeService(bridgeDependencies));
     this.executionResolver = new WorkspacePathBridgeExecutionResolver({
       service: this.service,
       rootDir: options.rootDir,

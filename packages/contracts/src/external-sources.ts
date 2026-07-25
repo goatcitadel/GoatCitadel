@@ -1,6 +1,6 @@
 /* eslint-disable max-lines -- External-source protocol contracts remain colocated through the parity schema freeze. */
 import { canonicalJsonString } from "./canonical-json.js";
-import type { WorkspacePathFlavor } from "./workspace-path-bridge.js";
+import { assertCoherentWorkspacePathFlavors, type WorkspacePathFlavor } from "./workspace-path-bridge.js";
 
 export const EXTERNAL_SOURCE_SCHEMA_VERSION = "goatcitadel.external-source.v1" as const;
 export const EXTERNAL_SOURCE_CURSOR_VERSION = "goatcitadel.external-source-cursor.v1" as const;
@@ -567,6 +567,11 @@ export function normalizeExternalSourceCreateInput(value: unknown): ExternalSour
   ) {
     throw new Error("External source flavor is invalid.");
   }
+  assertCoherentWorkspacePathFlavors(
+    value.inputFlavor as WorkspacePathFlavor,
+    value.targetFlavor as WorkspacePathFlavor,
+    "External source",
+  );
   if (typeof value.requireGitIdentity !== "boolean")
     throw new Error("External source Git identity posture is invalid.");
   const distro = value.distro === undefined ? undefined : normalizeInputText(value.distro, "distro", 64);
@@ -1559,7 +1564,7 @@ const CATALOG_DISPOSITIONS = new Set<ExternalSourceCatalogDisposition>([
   "blocked",
 ]);
 const IMPORT_DISPOSITIONS = new Set<ExternalSourceImportDisposition>(["applied", "blocked", "manual_reconciliation"]);
-const PATH_FLAVORS = new Set<WorkspacePathFlavor>(["windows_native", "windows_forward", "msys", "wsl"]);
+const PATH_FLAVORS = new Set<WorkspacePathFlavor>(["windows_native", "windows_forward", "msys", "wsl", "posix"]);
 const SHA256 = /^[a-f0-9]{64}$/u;
 const MTIME_NS = /^\d{20}$/u;
 const UTF8 = new TextEncoder();
