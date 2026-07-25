@@ -417,7 +417,16 @@ function applyDeleteEffect(
   }
   requireCurrentProviderEnvOwner(llmService, effect.providerId, envVar);
   delete env[envVar];
-  deleteLocalEnvVar(envVar, { rootDir });
+  // A silently-dropped disk removal would let this effect record a completed
+  // delete while the secret survives in .env and is reloaded on next start.
+  // Throwing hands the partial state to the caller's compensating restore().
+  const removal = deleteLocalEnvVar(envVar, { rootDir });
+  if (!removal.updated && removal.reason === "no-writable-env-file") {
+    throw new Error(
+      `Provider secret env deletion could not reach a writable .env file for ${effect.providerId} ` +
+        `(probed: ${removal.probedRoots.join(", ")}).`,
+    );
+  }
   llmService.invalidateProviderSecretStatus(effect.providerId);
 }
 
@@ -570,8 +579,17 @@ export function deleteProviderApiKeyWithFallback(input: DeleteProviderApiKeyInpu
   if (status.apiKeySource === "env") {
     const envVar = resolveProviderEnvVar(input.llmService, input.providerId);
     if (envVar) {
+      // Remove from disk before memory. A silent disk failure would otherwise
+      // report the secret as deleted while it survives in .env and gets
+      // reloaded into the environment on the next start.
+      const removal = deleteLocalEnvVar(envVar, { rootDir: input.rootDir });
+      if (!removal.updated && removal.reason === "no-writable-env-file") {
+        throw new Error(
+          `Could not remove ${envVar} for provider ${input.providerId}: no writable .env file was found ` +
+            `(probed: ${removal.probedRoots.join(", ")}). The secret may still be present on disk.`,
+        );
+      }
       delete (input.env ?? process.env)[envVar];
-      deleteLocalEnvVar(envVar, { rootDir: input.rootDir });
     }
     return {
       providerId: input.providerId,
@@ -742,7 +760,8 @@ function persistProviderApiKeyToEnv(
   const writeResult = upsertLocalEnvVar(envVar, apiKey, { rootDir });
   if (!writeResult.updated) {
     throw new Error(
-      `Secure keychain is unavailable on this host, and GoatCitadel could not persist ${envVar} to the local .env file.`,
+      `Secure keychain is unavailable on this host, and GoatCitadel could not persist ${envVar} to the local .env file ` +
+        `(probed: ${writeResult.probedRoots.join(", ")}).`,
     );
   }
 

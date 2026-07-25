@@ -1,9 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
+import { logger } from "@goatcitadel/gateway-core";
 import { repoHasConfigMarker } from "./config-files.js";
 
 const ENV_FILE_MODE = 0o600;
+
+const envFileLog = logger.child("env-file");
 
 /**
  * Atomic + owner-only write for credential files. Writes to a sibling temp file
@@ -165,58 +168,87 @@ export function readLocalEnvVar(key: string, options?: { rootDir?: string }): Lo
   return { path: envPath, present: true, value: parsed[validatedKey] };
 }
 
-export function resolveWritableEnvFilePath(options?: { rootDir?: string }): string | undefined {
-  const envRoot = process.env.GOATCITADEL_ROOT_DIR?.trim();
-  const cwd = process.cwd();
-  const explicitRoot = options?.rootDir ? path.resolve(options.rootDir) : undefined;
-
-  // An explicit runtime root is authoritative. Do not let the developer
-  // checkout's marker redirect a detached/test/runtime root to the wrong .env.
-  if (explicitRoot) {
-    const explicitEnvPath = path.join(explicitRoot, ".env");
-    if (repoHasConfigMarker(explicitRoot) || fs.existsSync(explicitEnvPath)) {
-      return explicitEnvPath;
-    }
-  }
-
-  const rootCandidates = [
-    explicitRoot,
-    envRoot ? path.resolve(envRoot) : undefined,
-    cwd,
-    path.resolve(cwd, ".."),
-    path.resolve(cwd, "../.."),
-  ].filter(Boolean) as string[];
-
-  const deduped = Array.from(new Set(rootCandidates));
-  for (const root of deduped) {
-    if (repoHasConfigMarker(root)) {
-      return path.join(root, ".env");
-    }
-  }
-
-  for (const root of deduped) {
-    const envPath = path.join(root, ".env");
-    if (fs.existsSync(envPath)) {
-      return envPath;
-    }
-  }
-
-  return undefined;
+/** Outcome of probing for a writable `.env`, including the roots that were tried. */
+export interface EnvFileProbeResult {
+  /** Absolute `.env` path, or undefined when no candidate root qualified. */
+  path?: string;
+  /** Roots probed, in priority order — the debuggable part of a failed probe. */
+  probedRoots: string[];
 }
 
-export function upsertLocalEnvVar(
-  key: string,
-  value: string,
-  options?: { rootDir?: string },
-): { path?: string; updated: boolean } {
-  const envPath = resolveWritableEnvFilePath(options);
-  if (!envPath) {
-    return { updated: false };
+/**
+ * Locates the `.env` that credential writes should target, and reports which
+ * roots were considered.
+ *
+ * An explicit `rootDir` is authoritative: it is the caller asserting where the
+ * install lives, so resolution stops there. It deliberately does NOT fall back
+ * to cwd-derived roots, because `.env` is a credential sink — falling through
+ * would make the write target depend on the directory the process was started
+ * from, and a gateway launched from `apps/gateway` could persist a secret into
+ * the repo root's `.env` instead of the install the caller named.
+ *
+ * Without a `rootDir` this is discovery mode (startup, CLIs): GOATCITADEL_ROOT_DIR
+ * first, then cwd, cwd/.., cwd/../.., preferring any root carrying the config
+ * marker before falling back to a root that merely has a `.env` already.
+ */
+export function probeWritableEnvFilePath(options?: { rootDir?: string }): EnvFileProbeResult {
+  const explicitRoot = options?.rootDir?.trim() ? path.resolve(options.rootDir) : undefined;
+  const envRoot = process.env.GOATCITADEL_ROOT_DIR?.trim();
+  const cwd = process.cwd();
+
+  const rootCandidates = explicitRoot
+    ? [explicitRoot]
+    : ([envRoot ? path.resolve(envRoot) : undefined, cwd, path.resolve(cwd, ".."), path.resolve(cwd, "../..")].filter(
+        Boolean,
+      ) as string[]);
+
+  const probedRoots = Array.from(new Set(rootCandidates));
+  for (const root of probedRoots) {
+    if (repoHasConfigMarker(root)) {
+      return { path: path.join(root, ".env"), probedRoots };
+    }
   }
 
+  for (const root of probedRoots) {
+    const envPath = path.join(root, ".env");
+    if (fs.existsSync(envPath)) {
+      return { path: envPath, probedRoots };
+    }
+  }
+
+  return { probedRoots };
+}
+
+export function resolveWritableEnvFilePath(options?: { rootDir?: string }): string | undefined {
+  return probeWritableEnvFilePath(options).path;
+}
+
+/**
+ * Result of a credential write. Modelled as a discriminated union so the
+ * compiler — not a convention — forces callers to handle the failure: `path`
+ * exists only on the success arm, so reading it without first narrowing on
+ * `updated` is a type error.
+ */
+export type EnvFileWriteResult =
+  | { updated: true; path: string }
+  | { updated: false; reason: "no-writable-env-file"; probedRoots: string[] };
+
+export function upsertLocalEnvVar(key: string, value: string, options?: { rootDir?: string }): EnvFileWriteResult {
   const validatedKey = key.trim();
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(validatedKey)) {
     throw new Error(`Invalid env var key: ${key}`);
+  }
+
+  const probe = probeWritableEnvFilePath(options);
+  const envPath = probe.path;
+  if (!envPath) {
+    // Never fail silently: a dropped credential is invisible at the call site
+    // unless the operator can see which roots were tried.
+    envFileLog.warn("could not persist env var: no writable .env file found", {
+      envVar: validatedKey,
+      probedRoots: probe.probedRoots,
+    });
+    return { updated: false, reason: "no-writable-env-file", probedRoots: probe.probedRoots };
   }
 
   const nextLine = `${validatedKey}=${serializeEnvValue(value)}`;
@@ -256,15 +288,33 @@ export function upsertLocalEnvVar(
   return { path: envPath, updated: true };
 }
 
-export function deleteLocalEnvVar(key: string, options?: { rootDir?: string }): { path?: string; updated: boolean } {
-  const envPath = resolveWritableEnvFilePath(options);
-  if (!envPath || !fs.existsSync(envPath)) {
-    return { path: envPath, updated: false };
-  }
+/**
+ * Result of a credential removal. `key-absent` is a benign no-op (nothing to
+ * remove); `no-writable-env-file` means the removal could not be attempted at
+ * all and the secret may still be on disk.
+ */
+export type EnvFileDeleteResult =
+  | { updated: true; path: string }
+  | { updated: false; reason: "key-absent"; path: string }
+  | { updated: false; reason: "no-writable-env-file"; probedRoots: string[] };
 
+export function deleteLocalEnvVar(key: string, options?: { rootDir?: string }): EnvFileDeleteResult {
   const validatedKey = key.trim();
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(validatedKey)) {
     throw new Error(`Invalid env var key: ${key}`);
+  }
+
+  const probe = probeWritableEnvFilePath(options);
+  const envPath = probe.path;
+  if (!envPath) {
+    envFileLog.warn("could not remove env var: no writable .env file found", {
+      envVar: validatedKey,
+      probedRoots: probe.probedRoots,
+    });
+    return { updated: false, reason: "no-writable-env-file", probedRoots: probe.probedRoots };
+  }
+  if (!fs.existsSync(envPath)) {
+    return { path: envPath, updated: false, reason: "key-absent" };
   }
 
   const raw = fs.readFileSync(envPath, "utf8");
@@ -289,7 +339,7 @@ export function deleteLocalEnvVar(key: string, options?: { rootDir?: string }): 
   });
 
   if (!removed) {
-    return { path: envPath, updated: false };
+    return { path: envPath, updated: false, reason: "key-absent" };
   }
 
   const normalized = [

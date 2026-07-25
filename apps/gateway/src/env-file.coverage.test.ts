@@ -87,7 +87,7 @@ describe("env-file tail behavior", () => {
     const raw = await fs.readFile(envPath, "utf8");
 
     expect(replaced).toEqual({ path: envPath, updated: true });
-    expect(missingDelete).toEqual({ path: envPath, updated: false });
+    expect(missingDelete).toEqual({ path: envPath, updated: false, reason: "key-absent" });
     expect(raw).toContain("# keep me");
     expect(raw).toContain('TAIL_REPLACED="new\\tvalue"');
     expect(raw).toContain("TAIL_OTHER=value");

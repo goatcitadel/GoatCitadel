@@ -196,9 +196,18 @@ export async function resolveGatewayInstallToken(params: InstallTokenParams): Pr
     const envFileOptions = { rootDir: params.runtimeConfig.rootDir };
     const writeResult = upsertLocalEnvVar(ENV_TOKEN_KEY, token, envFileOptions);
     if (!writeResult.updated) {
-      warnings.push("No local .env file was found, so the token could not be persisted.");
+      warnings.push(
+        `No local .env file was found (probed: ${writeResult.probedRoots.join(", ")}), so the token could not be persisted.`,
+      );
     } else {
-      upsertLocalEnvVar(ENV_MODE_KEY, "token", envFileOptions);
+      // The token landed but the mode did not: auth would stay off on restart
+      // while a live token sits in .env. Surface it rather than assume it stuck.
+      const modeResult = upsertLocalEnvVar(ENV_MODE_KEY, "token", envFileOptions);
+      if (!modeResult.updated) {
+        warnings.push(
+          `The token was persisted to ${writeResult.path}, but ${ENV_MODE_KEY} could not be written; set it manually to keep token auth enabled after restart.`,
+        );
+      }
       envPath = writeResult.path;
       persistedToEnv = true;
     }
