@@ -204,7 +204,6 @@ export const anthropicProviderAdapter: LlmProviderAdapter = {
           accounting?.observeNormalized({ effectiveModelId: completion.model });
           accounting?.succeed();
           terminal = true;
-          emittedVisibleChunk = true;
           yield withUsageEvent(completion, accounting, priorModelUsageEventIds);
           return;
         }

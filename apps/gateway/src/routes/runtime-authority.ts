@@ -14,7 +14,11 @@ const projectionQuerySchema = z
   })
   .strict();
 
-export const runtimeAuthorityRoutes: FastifyPluginAsync = async (fastify) => {
+// `_opts` is declared but unused: Fastify always supplies plugin options, and
+// the unit tests invoke this plugin directly. Declaring it keeps the arity of
+// the implementation aligned with `FastifyPluginAsync`, which requires two
+// arguments at every call site (CodeQL js/superfluous-trailing-arguments).
+export const runtimeAuthorityRoutes: FastifyPluginAsync = async (fastify, _opts) => {
   const operatorOnly = withRouteAccess(fastify, "operator");
 
   fastify.get("/api/v1/ops/runtime-authority", operatorOnly, async (request, reply) => {

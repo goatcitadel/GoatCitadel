@@ -1405,7 +1405,9 @@ function snapshotBoundedJsonValue(input: unknown, depth: number, state: { nodes:
     }
     return input;
   }
-  if (typeof input !== "object" || input === null || nodeTypes.isProxy(input)) {
+  // No null check here: null already returned early above, so re-testing it is
+  // unreachable (CodeQL js/comparison-between-incompatible-types).
+  if (typeof input !== "object" || nodeTypes.isProxy(input)) {
     throw new McpRequesterResolutionError("discovery_output_invalid");
   }
   if (Array.isArray(input)) {

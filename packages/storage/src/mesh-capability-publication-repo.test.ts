@@ -79,11 +79,11 @@ function createPostgresFacade(db: DatabaseClient, preparedSql: string[]): Databa
   };
 }
 
-function staticStatement(row: unknown): DbStatement {
+function staticStatement(row: Record<string, unknown>): DbStatement {
   return {
     run: () => ({ changes: 0 }),
     get: () => row,
-    all: () => (row === undefined ? [] : [row]),
+    all: () => [row],
   } as unknown as DbStatement;
 }
 

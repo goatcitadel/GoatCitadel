@@ -351,7 +351,9 @@ function snapshotPeerCertificateChain(
   const chain: Buffer[] = [];
   const seen = new Set<string>();
   let current = detailed;
-  while (current !== undefined && Buffer.isBuffer(current.raw)) {
+  // `current` is never undefined here: the seed is guarded above and each
+  // reassignment is gated by the `issuer === undefined` break below.
+  while (Buffer.isBuffer(current.raw)) {
     if (current.raw.byteLength < 1 || current.raw.byteLength > 64 * 1024 || chain.length >= 16) throw unavailable();
     const certificate = Buffer.from(current.raw);
     const digest = sha256Hex(certificate);

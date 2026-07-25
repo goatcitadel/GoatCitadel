@@ -59,6 +59,8 @@ async function main() {
 
   // Composite project references reject `--noEmit`; use build mode for both
   // validation commands. Outputs land in ignored dist/tsbuildinfo locations.
+  // `mode` is therefore label-only by design — it selects the log line above,
+  // not the command. Do not "restore" a mode-dependent argument list here.
   await runTypeScriptCommand(["exec", compiler, "-b", ...projects, "--pretty", "false", "--force"]);
 }
 
@@ -115,21 +117,24 @@ function resolveGroups(requestedGroups) {
     }
     selected.push(groupName);
   }
-  return dedupeProjects(selected);
+  return dedupeValues(selected);
 }
 
-function dedupeProjects(values) {
+function dedupeValues(values) {
   const seen = new Set();
   const deduped = [];
   for (const value of values) {
-    const normalized = value.replaceAll("\\", "/");
-    if (seen.has(normalized)) {
+    if (seen.has(value)) {
       continue;
     }
-    seen.add(normalized);
-    deduped.push(normalized);
+    seen.add(value);
+    deduped.push(value);
   }
   return deduped;
+}
+
+function dedupeProjects(projectPaths) {
+  return dedupeValues(projectPaths.map((projectPath) => projectPath.replaceAll("\\", "/")));
 }
 
 async function runTypeScriptCommand(args) {
