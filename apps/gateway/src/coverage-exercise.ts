@@ -280,11 +280,16 @@ async function exerciseChatCommands(app: FastifyInstance, sessionId: string): Pr
     `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/proactive/status`,
   );
   assertExpectedStatus("proactive status", proactiveStatus, [200]);
+  // The policy PATCH is CAS-guarded: expectedRevision is required. Take it from the
+  // status read above rather than assuming a fresh session starts at a fixed value.
+  const proactiveStatusBody = proactiveStatus.body as { revision?: number; policy?: { revision?: number } } | undefined;
+  const expectedProactiveRevision = proactiveStatusBody?.policy?.revision ?? proactiveStatusBody?.revision ?? 1;
   const proactivePolicy = await requestJson(
     app,
     "PATCH",
     `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/proactive/policy`,
     {
+      expectedRevision: expectedProactiveRevision,
       proactiveMode: "off",
       retrievalMode: "standard",
       reflectionMode: "off",
