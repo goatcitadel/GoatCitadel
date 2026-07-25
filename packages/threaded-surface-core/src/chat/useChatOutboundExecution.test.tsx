@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useRef, useState } from "react";
-import { act, create } from "react-test-renderer";
+import { act, create as createTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatThreadResponse } from "@goatcitadel/contracts";
 import {
@@ -84,6 +84,28 @@ type HarnessState = {
 };
 
 let latest: HarnessState | null = null;
+
+/**
+ * Every mounted Harness, so `afterEach` can unmount it.
+ *
+ * Each Harness publishes its hook handle to the module-level `latest` on every
+ * render, so `latest` is owned by whichever component rendered most recently.
+ * A Harness left mounted after its test ends keeps its pending async work alive
+ * (stream reconciliation timers, in-flight session loads, sidebar refreshes);
+ * when that work lands it re-renders that stale component and re-points
+ * `latest` at a previous test's hook instance. The next test then drives the
+ * wrong harness -- typically a streaming one when it asked for a plain send --
+ * so the mock it asserts on is never called at all. Unmounting after every test
+ * drops those components and their timers, so `latest` can only ever refer to a
+ * Harness the current test mounted.
+ */
+const mountedRenderers: ReturnType<typeof createTestRenderer>[] = [];
+
+function create(element: React.ReactElement) {
+  const renderer = createTestRenderer(element);
+  mountedRenderers.push(renderer);
+  return renderer;
+}
 
 function makeThread(): ChatThreadResponse {
   return {
@@ -423,6 +445,14 @@ describe("useChatOutboundExecution", () => {
   });
 
   afterEach(() => {
+    // Unmount before restoring real timers so the teardown clearTimeout calls
+    // still target the same timer implementation the test scheduled against.
+    act(() => {
+      for (const renderer of mountedRenderers.splice(0)) {
+        renderer.unmount();
+      }
+    });
+    latest = null;
     vi.useRealTimers();
   });
 
@@ -3062,22 +3092,17 @@ describe("useChatOutboundExecution", () => {
         await latest!.execute(item);
       });
 
-      // Same async boundary as the streaming case below: the send resolves and the
-      // refs are reported a microtask past the act() above, so assert once the
-      // mocks have settled rather than on the tick act() returned.
-      await vi.waitFor(() => {
-        expect(sendAgentChatMessageMock).toHaveBeenCalledWith(
-          "session-1",
-          expect.objectContaining({
-            contextRefs: [
-              { kind: "external_attachment", ref: "attachment-1", label: "External item-1" },
-              { kind: "external_attachment", ref: "attachment-2", label: "External item-2" },
-            ],
-          }),
-          { originSurface: "chat" },
-        );
-        expect(onExternalContextSent).toHaveBeenCalledTimes(1);
-      });
+      expect(sendAgentChatMessageMock).toHaveBeenCalledWith(
+        "session-1",
+        expect.objectContaining({
+          contextRefs: [
+            { kind: "external_attachment", ref: "attachment-1", label: "External item-1" },
+            { kind: "external_attachment", ref: "attachment-2", label: "External item-2" },
+          ],
+        }),
+        { originSurface: "chat" },
+      );
+      expect(onExternalContextSent).toHaveBeenCalledTimes(1);
       expect(onExternalContextSent).toHaveBeenCalledWith(item);
     });
 
@@ -3109,13 +3134,7 @@ describe("useChatOutboundExecution", () => {
         expect.any(Function),
         expect.objectContaining({ originSurface: "chat" }),
       );
-      // The streaming path reports the sent refs after the stream promise settles,
-      // one microtask beyond the act() above. Asserting synchronously is a race that
-      // only loses under load (it failed in the coverage lane, never locally), so
-      // wait for the callback instead of assuming it already ran.
-      await vi.waitFor(() => {
-        expect(onExternalContextSent).toHaveBeenCalledTimes(1);
-      });
+      expect(onExternalContextSent).toHaveBeenCalledTimes(1);
     });
 
     it("retains the selection when the send fails", async () => {
