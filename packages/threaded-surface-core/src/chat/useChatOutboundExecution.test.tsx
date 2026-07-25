@@ -3062,17 +3062,22 @@ describe("useChatOutboundExecution", () => {
         await latest!.execute(item);
       });
 
-      expect(sendAgentChatMessageMock).toHaveBeenCalledWith(
-        "session-1",
-        expect.objectContaining({
-          contextRefs: [
-            { kind: "external_attachment", ref: "attachment-1", label: "External item-1" },
-            { kind: "external_attachment", ref: "attachment-2", label: "External item-2" },
-          ],
-        }),
-        { originSurface: "chat" },
-      );
-      expect(onExternalContextSent).toHaveBeenCalledTimes(1);
+      // Same async boundary as the streaming case below: the send resolves and the
+      // refs are reported a microtask past the act() above, so assert once the
+      // mocks have settled rather than on the tick act() returned.
+      await vi.waitFor(() => {
+        expect(sendAgentChatMessageMock).toHaveBeenCalledWith(
+          "session-1",
+          expect.objectContaining({
+            contextRefs: [
+              { kind: "external_attachment", ref: "attachment-1", label: "External item-1" },
+              { kind: "external_attachment", ref: "attachment-2", label: "External item-2" },
+            ],
+          }),
+          { originSurface: "chat" },
+        );
+        expect(onExternalContextSent).toHaveBeenCalledTimes(1);
+      });
       expect(onExternalContextSent).toHaveBeenCalledWith(item);
     });
 
