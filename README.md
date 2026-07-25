@@ -12,6 +12,7 @@
   <a href="./apps/mission-control-next"><img alt="Mission Control Next" src="https://img.shields.io/badge/ui-Mission%20Control%20Next-0f172a?style=for-the-badge"></a>
   <a href="./apps/gateway"><img alt="Fastify Gateway" src="https://img.shields.io/badge/runtime-Fastify%20Gateway-123c52?style=for-the-badge"></a>
   <a href="./package.json"><img alt="pnpm monorepo" src="https://img.shields.io/badge/monorepo-pnpm-f69220?style=for-the-badge"></a>
+  <a href="./LICENSE"><img alt="License Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-6366f1?style=for-the-badge"></a>
   <a href="https://deepwiki.com/goatcitadel/GoatCitadel"><img alt="Ask DeepWiki" src="https://deepwiki.com/badge.svg"></a>
 </p>
 
@@ -29,7 +30,7 @@
   <a href="./docs/1_0_CONTRACT.md"><strong>1.0 contract</strong></a>
 </p>
 
-README last updated: 2026-07-03
+README last updated: 2026-07-25
 
 **GoatCitadel** is a local-first AI command center for operators who want more leverage than a chat box and more control than a hidden-state agent platform. You work in one unified surface — conversation, supervised agentic runs, and governed code execution — inside **Citadels**: protected AI operating spaces with their own charter, memory boundary, agents, approval rules, sealed secrets, and durable evidence.
 
@@ -75,6 +76,7 @@ Full model: [docs/CITADELS_OPERATING_MODEL.md](./docs/CITADELS_OPERATING_MODEL.m
 | Understand what is actually shipped | [Current release truth](#current-release-truth) |
 | Check supported claims and proof | [Claims boundaries](#claims-boundaries) and [Verification](#verification) |
 | Contribute safely | [Development posture](#development-posture) and [CONTRIBUTING.md](./CONTRIBUTING.md) |
+| Report a vulnerability | [SECURITY.md](./SECURITY.md) — private advisory, not a public issue |
 
 ## Recent Highlights
 
@@ -530,6 +532,25 @@ When changing this repo:
 
 Before acting on a GitHub Security finding, read [docs/security/findings-triage.md](./docs/security/findings-triage.md).
 
+## Contributing
+
+| Document | What it covers |
+| --- | --- |
+| [CONTRIBUTING.md](./CONTRIBUTING.md) | Setup, quality gates, PR expectations, and the AI-assisted contribution bar |
+| [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md) | Community standards and the enforcement path |
+| [AGENTS.md](./AGENTS.md) | Required reading for coding agents: source-of-truth order, validation lanes, and claims that need fresh proof |
+| [SECURITY.md](./SECURITY.md) | Private vulnerability reporting, safe harbor, and supported lines |
+
+Pull requests use one of two templates: the default human template, or
+[`.github/PULL_REQUEST_TEMPLATE/agent.md`](./.github/PULL_REQUEST_TEMPLATE/agent.md)
+for agent-authored changes, which asks for the validation lanes that actually
+ran and the ones that did not.
+
 ## License And Credits
 
-See [ASSET_LICENSES.md](./ASSET_LICENSES.md) and [CREDITS.md](./CREDITS.md).
+GoatCitadel source is licensed under the [Apache License 2.0](./LICENSE).
+
+Bundled third-party assets carry their own licenses and are tracked separately —
+see [ASSET_LICENSES.md](./ASSET_LICENSES.md) and [CREDITS.md](./CREDITS.md).
+Shipped assets are restricted to CC0 / Public Domain, CC BY 4.0, and the SIL
+Open Font License 1.1 for bundled fonts.

@@ -19,6 +19,8 @@ const requiredFiles = [
   "CHANGELOG.md",
   "AGENTS.md",
   "CONTRIBUTING.md",
+  "CODE_OF_CONDUCT.md",
+  "LICENSE",
   "SECURITY.md",
   "docs/1_0_CONTRACT.md",
   "docs/1_0_RELEASE_EVIDENCE.md",
@@ -34,6 +36,7 @@ const requiredHeadings = {
   "CHANGELOG.md": ["# Changelog", "## [Unreleased]", "## [0.1.0-rc.1]", "## [1.0.0]"],
   "AGENTS.md": ["# AGENTS.md - GoatCitadel", "## Current Product Truth", "## Agent Roles", "## Safety Boundaries (Non-Overridable)"],
   "CONTRIBUTING.md": ["# Contributing to GoatCitadel", "## Quality Gates", "## Governance Docs Policy"],
+  "CODE_OF_CONDUCT.md": ["# Contributor Covenant Code of Conduct", "## Enforcement", "## Attribution"],
   "SECURITY.md": ["# Security Policy", "## Reporting a Vulnerability", "## Security Invariants"],
   "docs/1_0_CONTRACT.md": [
     "# GoatCitadel 1.0 Contract",

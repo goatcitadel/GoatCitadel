@@ -1,6 +1,7 @@
 {
   "name": "@goatcitadel/policy-engine",
   "version": "1.0.0",
+  "license": "Apache-2.0",
   "goatcitadelOwner": "policy",
   "type": "module",
   "main": "./dist/index.js",

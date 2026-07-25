@@ -1,6 +1,7 @@
 {
   "name": "@goatcitadel/mission-control-desktop",
   "version": "1.0.0",
+  "license": "Apache-2.0",
   "goatcitadelOwner": "desktop",
   "private": true,
   "type": "module",

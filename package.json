@@ -2,6 +2,7 @@
   "name": "goatcitadel",
   "private": true,
   "version": "0.1.0-rc.1",
+  "license": "Apache-2.0",
   "packageManager": "pnpm@10.31.0",
   "bin": {
     "goatcitadel": "./bin/goatcitadel.mjs",

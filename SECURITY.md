@@ -1,16 +1,19 @@
 # Security Policy
 
-Last updated: 2026-06-23
+Last updated: 2026-07-25
 
 ## Supported Versions
 
-GoatCitadel now ships at `1.x`. Security support follows the current stable line first, then the immediately prior prerelease line for critical fixes only when a stable upgrade is not yet practical.
+The published product line is the `0.1.0-rc.1` release candidate, shipped as the GitHub prerelease `GoatCitadel 0.1.0 RC`. Workspace libraries such as `@goatcitadel/extensions-sdk` are versioned and published independently on their own `1.0.0` line. Security support follows the current published release candidate first; source builds are supported at the current `main` commit only.
 
-| Version line | Supported |
+| Line | Supported |
 |---|---|
-| `1.x` | Yes |
-| `0.9.x-beta.x` | Critical fixes only |
-| Earlier prerelease builds | No |
+| `0.1.0-rc.x` release candidate | Yes |
+| Published workspace packages on `1.0.0` (for example `@goatcitadel/extensions-sdk`) | Yes |
+| `main` source builds | Best effort, current commit only |
+| The historical `v1.0.0` git tag and earlier prerelease builds | No |
+
+Fixes land on the current release candidate line. There is no long-term support branch, and older tags are not backported.
 
 ## Reporting a Vulnerability
 
@@ -27,12 +30,27 @@ Current reporting path:
 
 - Open a private GitHub security advisory in the repository.
 
+Do not open a public issue or pull request for an unfixed vulnerability.
+
 Response target:
 
 - Initial triage within 2 business days.
 - Fix, mitigation, or remediation ETA within 7 calendar days once reproduced.
 
 Do not publish exploit details before coordinated remediation.
+
+Reports about contributor behavior rather than a technical vulnerability belong in the [Code of Conduct](./CODE_OF_CONDUCT.md) enforcement path instead.
+
+## Safe Harbor
+
+Good-faith security research on your own installation is welcome. We will not pursue action against research that stays within these limits:
+
+- Test only against instances you own or operate. GoatCitadel is local-first; there is no shared hosted service to test against.
+- Do not access, modify, or exfiltrate another person's data.
+- Do not run denial-of-service, spam, or social-engineering tests against maintainers or users.
+- Give us a reasonable window to remediate before public disclosure.
+
+This is a good-faith statement from the maintainers, not a legal contract, and it does not bind third parties whose services you might reach through an integration.
 
 ## Disclosure Process
 
