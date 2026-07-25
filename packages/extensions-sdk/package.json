@@ -33,7 +33,7 @@
     "build": "pnpm run clean && tsc -b tsconfig.json",
     "typecheck": "tsc -b tsconfig.json",
     "test": "vitest run",
-    "test:coverage": "vitest run --coverage.enabled --coverage.provider=v8 --coverage.reporter=json --coverage.reporter=text-summary --coverage.reportsDirectory=coverage",
+    "test:coverage": "vitest run --coverage.enabled --coverage.provider=v8 --coverage.reporter=json --coverage.reporter=text-summary --coverage.reportsDirectory=coverage --coverage.reportOnFailure",
     "lint": "tsc -b tsconfig.json",
     "prepublish:check": "pnpm run lint && pnpm run test && pnpm run build",
     "publish:github:dry-run": "pnpm run prepublish:check && node scripts/publish-github.mjs --dry-run",

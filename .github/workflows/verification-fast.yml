@@ -68,15 +68,12 @@ jobs:
       - name: Verify workflow and PowerShell syntax
         run: pnpm verify:workflows
 
-      - name: Run ESLint
-        run: pnpm lint --max-warnings 0
-
       - name: Install Playwright Chromium
         run: pnpm exec playwright install chromium
 
-      - name: Run docs checks
-        run: pnpm docs:check
-
+      # ESLint and the root typecheck run in code-quality.yml, and the lane itself
+      # runs docs:check as fast.docs — duplicating them here only lengthened the
+      # critical path and blurred which gate owns each check.
       - name: Run fast verification
         run: pnpm verify:fast
 
@@ -95,8 +92,16 @@ jobs:
           GOATCITADEL_TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/goatcitadel_test
         run: pnpm --filter @goatcitadel/gateway test:postgres:memory
 
+      # `pnpm verify:fast` already ran every package's test:coverage script, so the
+      # gate aggregates those reports instead of executing the whole suite a second
+      # time. These two c8 reports are the only collection work the lane does not do.
+      - name: Collect gateway coverage extras
+        run: |
+          pnpm --filter @goatcitadel/gateway coverage:smoke
+          pnpm --filter @goatcitadel/gateway coverage:exercise
+
       - name: Enforce production coverage gate
-        run: pnpm coverage:collect && pnpm coverage:gate:production
+        run: pnpm coverage:collect:reuse && pnpm coverage:gate:production
 
       - name: Verify artifact redaction
         id: artifact-redaction

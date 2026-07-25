@@ -58,7 +58,7 @@
     "pretest:postgres:memory": "pnpm --filter @goatcitadel/storage build",
     "test:postgres:memory": "vitest run src/services/memory-lifecycle-service.real-postgres.test.ts",
     "test:improvement-ledger": "tsx --test src/services/improvement-service.node.test.ts src/improvement-operator-proof.node.test.ts",
-    "test:coverage": "vitest run --coverage.enabled --coverage.provider=v8 --coverage.reporter=json --coverage.reporter=text-summary --coverage.reportsDirectory=coverage",
+    "test:coverage": "vitest run --coverage.enabled --coverage.provider=v8 --coverage.reporter=json --coverage.reporter=text-summary --coverage.reportsDirectory=coverage --coverage.reportOnFailure && tsx --test src/services/chat-generated-artifact-service.test.ts src/services/chat-thread-knowledge-service.test.ts",
     "coverage:smoke": "c8 --report-dir=coverage-smoke --reporter=json tsx src/coverage-smoke.ts",
     "coverage:exercise": "c8 --report-dir=coverage-exercise --reporter=json tsx src/coverage-exercise.ts",
     "presmoke": "node ../../scripts/run-unless-env.mjs GOATCITADEL_SKIP_EXTENSIONS_SDK_PREBUILD pnpm --filter @goatcitadel/extensions-sdk build",

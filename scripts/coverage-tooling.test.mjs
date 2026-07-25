@@ -839,7 +839,7 @@ describe("coverage tooling", () => {
       "utf8",
     );
 
-    assert.match(workflow, /pnpm coverage:collect && pnpm coverage:gate:production/);
+    assert.match(workflow, /pnpm coverage:collect:reuse && pnpm coverage:gate:production/);
     assert.match(workflow, /node scripts\/verify-artifact-redaction\.mjs artifacts\/coverage/);
     assert.match(workflow, /artifacts\/coverage\/coverage-summary\.json/);
     assert.match(workflow, /artifacts\/coverage\/coverage-summary\.md/);
@@ -932,7 +932,122 @@ describe("coverage tooling", () => {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
+
+  it("reuses reports written by an earlier run instead of executing the suites again", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "goat-coverage-reuse-"));
+    try {
+      writeReusableWorkspace(tempDir, [
+        { dir: "apps/demo", name: "@demo/app", report: true },
+        { dir: "packages/lib", name: "@demo/lib", report: true },
+      ]);
+      const reportPath = path.join(tempDir, "apps", "demo", "coverage", "coverage-final.json");
+      const reportBefore = fs.readFileSync(reportPath, "utf8");
+
+      // A temp directory is not a pnpm workspace, so this only succeeds because
+      // --skip-run never shells out to `pnpm -r test:coverage`.
+      const result = spawnSync(process.execPath, [path.join(scriptsDir, "coverage-collect.mjs"), "--skip-run"], {
+        cwd: tempDir,
+        encoding: "utf8",
+      });
+      assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+
+      const summary = JSON.parse(
+        fs.readFileSync(path.join(tempDir, "artifacts", "coverage", "coverage-summary.json"), "utf8"),
+      );
+      assert.equal(summary.status, "success");
+      assert.equal(summary.coverageFinalFiles.length, 2);
+      assert.equal(summary.linePercent, 100);
+      // Reuse must not wipe the reports it was handed.
+      assert.equal(fs.readFileSync(reportPath, "utf8"), reportBefore);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when a reused report is older than the sources it claims to measure", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "goat-coverage-reuse-stale-"));
+    try {
+      writeReusableWorkspace(tempDir, [
+        { dir: "apps/demo", name: "@demo/app", report: true },
+        { dir: "packages/lib", name: "@demo/lib", report: true, reportAgeMs: 60 * 60 * 1000 },
+      ]);
+
+      const result = spawnSync(process.execPath, [path.join(scriptsDir, "coverage-collect.mjs"), "--skip-run"], {
+        cwd: tempDir,
+        encoding: "utf8",
+      });
+      assert.notEqual(result.status, 0, `${result.stderr}\n${result.stdout}`);
+      assert.match(`${result.stderr}\n${result.stdout}`, /predates their own source files/);
+      assert.match(`${result.stderr}\n${result.stdout}`, /packages\/lib/);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when a package declaring test:coverage produced no report", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "goat-coverage-reuse-missing-"));
+    try {
+      writeReusableWorkspace(tempDir, [
+        { dir: "apps/demo", name: "@demo/app", report: true },
+        { dir: "packages/lib", name: "@demo/lib", report: false },
+      ]);
+
+      const result = spawnSync(process.execPath, [path.join(scriptsDir, "coverage-collect.mjs"), "--skip-run"], {
+        cwd: tempDir,
+        encoding: "utf8",
+      });
+      assert.notEqual(result.status, 0, `${result.stderr}\n${result.stdout}`);
+      assert.match(`${result.stderr}\n${result.stdout}`, /packages\/lib \(@demo\/lib\)/);
+
+      const summary = JSON.parse(
+        fs.readFileSync(path.join(tempDir, "artifacts", "coverage", "coverage-summary.json"), "utf8"),
+      );
+      assert.equal(summary.status, "failed");
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });
+
+function writeReusableWorkspace(tempDir, packages) {
+  for (const entry of packages) {
+    const packageDir = path.join(tempDir, entry.dir);
+    fs.mkdirSync(path.join(packageDir, "src"), { recursive: true });
+    fs.writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({ name: entry.name, scripts: { "test:coverage": "vitest run" } }),
+      "utf8",
+    );
+    const sourcePath = path.resolve(packageDir, "src", "example.ts");
+    fs.writeFileSync(sourcePath, "export function example(value) {\n  return value + 1;\n}\n", "utf8");
+    if (!entry.report) {
+      continue;
+    }
+    const reportDir = path.join(packageDir, "coverage");
+    fs.mkdirSync(reportDir, { recursive: true });
+    const reportPath = path.join(reportDir, "coverage-final.json");
+    fs.writeFileSync(
+      reportPath,
+      JSON.stringify({
+        [sourcePath]: {
+          path: sourcePath,
+          statementMap: { 0: location(2) },
+          s: { 0: 1 },
+          l: { 2: 1 },
+          fnMap: { 0: functionLocation("example", 1) },
+          f: { 0: 1 },
+          branchMap: {},
+          b: {},
+        },
+      }),
+      "utf8",
+    );
+    if (entry.reportAgeMs) {
+      const backdated = new Date(Date.now() - entry.reportAgeMs);
+      fs.utimesSync(reportPath, backdated, backdated);
+    }
+  }
+}
 
 function location(line, startColumn = 0, endColumn = 1) {
   return {
