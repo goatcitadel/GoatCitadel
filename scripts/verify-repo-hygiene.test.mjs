@@ -97,3 +97,41 @@ test("repo hygiene accepts complete root EOL policy", () => {
 
   assert.equal(findings.length, 0);
 });
+
+test("repo hygiene flags a workspace build that force-rebuilds referenced projects", () => {
+  // `tsc -b --force` rebuilds every project in the reference graph, not just
+  // this package. Under `pnpm --filter <pkg>... build` the siblings run
+  // concurrently, so a forced rebuild rewrites a shared package's declaration
+  // outputs while they are being read (transient TS2306).
+  const findings = collectRepoHygieneFindings({
+    trackedFiles: ["packages/example-sdk/package.json"],
+    ignoredTrackedFiles: [],
+    fileInfoByPath: new Map([["packages/example-sdk/package.json", { size: 256 }]]),
+    readTextFile: () =>
+      JSON.stringify({
+        name: "@goatcitadel/example-sdk",
+        scripts: { build: "pnpm run clean && tsc -b tsconfig.json --force" },
+      }),
+  });
+
+  assert.deepEqual(
+    findings.map((finding) => finding.code),
+    ["TSC_BUILD_FORCE_REBUILDS_REFERENCES"],
+  );
+  assert.match(findings[0]?.message ?? "", /--force/);
+});
+
+test("repo hygiene accepts a scoped clean-then-build without --force", () => {
+  const findings = collectRepoHygieneFindings({
+    trackedFiles: ["packages/example-sdk/package.json"],
+    ignoredTrackedFiles: [],
+    fileInfoByPath: new Map([["packages/example-sdk/package.json", { size: 256 }]]),
+    readTextFile: () =>
+      JSON.stringify({
+        name: "@goatcitadel/example-sdk",
+        scripts: { build: "pnpm run clean && tsc -b tsconfig.json" },
+      }),
+  });
+
+  assert.equal(findings.length, 0);
+});

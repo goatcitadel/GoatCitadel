@@ -67,6 +67,10 @@ export function collectRepoHygieneFindings(input) {
     findings.push(...eolPolicyFindings);
   }
 
+  if (readTextFile) {
+    findings.push(...collectForcedProjectBuildFindings(trackedFiles, readTextFile));
+  }
+
   for (const filePath of trackedFiles) {
     const info = fileInfoByPath.get(filePath);
     const size = info?.size;
@@ -137,6 +141,45 @@ function collectGitAttributesEolPolicyFindings(source) {
     filePath: ".gitattributes",
     message: `.gitattributes must include '${line}' so cross-platform scripts keep deterministic line endings.`,
   }));
+}
+
+const WORKSPACE_PACKAGE_JSON = /^(?:packages|apps)\/[^/]+\/package\.json$/u;
+const TSC_BUILD_FORCE = /\btsc\b[^&|]*\s-b\b[^&|]*\s--force\b/u;
+
+/**
+ * `tsc -b --force` rebuilds every project in the reference graph, not just the
+ * package that ran it. `pnpm --filter <pkg>... build` runs sibling packages
+ * concurrently, so one forced build rewrites a shared package's declaration
+ * outputs while the siblings are reading them — surfacing as a transient
+ * TS2306 "is not a module" against the shared package.
+ *
+ * A package that needs a guaranteed-fresh build should delete its own outputs
+ * (dist AND its .tsbuildinfo, or tsc considers the project up to date and emits
+ * nothing) and then run a plain `tsc -b`.
+ */
+function collectForcedProjectBuildFindings(trackedFiles, readTextFile) {
+  const findings = [];
+  for (const filePath of trackedFiles) {
+    if (!WORKSPACE_PACKAGE_JSON.test(filePath)) continue;
+    let scripts;
+    try {
+      scripts = JSON.parse(readTextFile(filePath) || "{}").scripts;
+    } catch {
+      continue;
+    }
+    for (const [name, command] of Object.entries(scripts ?? {})) {
+      if (typeof command === "string" && TSC_BUILD_FORCE.test(command)) {
+        findings.push({
+          code: "TSC_BUILD_FORCE_REBUILDS_REFERENCES",
+          filePath,
+          message:
+            `Script "${name}" passes --force to \`tsc -b\`, which rebuilds referenced projects too and races ` +
+            "concurrent sibling builds. Delete this package's own dist and .tsbuildinfo, then run `tsc -b` without --force.",
+        });
+      }
+    }
+  }
+  return findings;
 }
 
 export function normalizeRepoPath(value) {
