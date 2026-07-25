@@ -158,6 +158,10 @@ describe("ModelUsageAccountingService", () => {
     assert.equal(storage.modelUsageEvents.list({ workspaceId: "workspace-1" }).summary.attemptCount, 0);
   });
 
+  // Real SQLite-backed harness: this case builds and tears down a database per run
+  // and sits close to vitest's 5s default under CI load. The suite ran under
+  // node:test before, which applied no such default, so the margin was never
+  // exercised. Give it explicit headroom rather than leaving it marginal.
   it("makes an intent-abandon persistence fault authoritative over a synchronous fetch error", () => {
     const { storage, accounting } = createHarness();
     const reservation = accounting.prepareDispatch(dispatchInput());
@@ -181,7 +185,7 @@ describe("ModelUsageAccountingService", () => {
     );
     assert.equal(abandonCalls, 1);
     assert.equal(storage.modelUsageEvents.findByEventId(reservation.eventId)?.transportStatus, "intent");
-  });
+  }, 20_000);
 
   it("makes a dispatch-unknown persistence fault authoritative and leaves recovery ownership intact", () => {
     const { storage, accounting } = createHarness();
