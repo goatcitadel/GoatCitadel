@@ -20,6 +20,7 @@ overrides:
   postcss: 8.5.18
   qs: 6.15.2
   shell-quote: 1.9.0
+  tar: 7.5.18
   undici: 6.27.0
   uuid: 14.0.0
   ws@^8.0.0: 8.21.0
@@ -6399,8 +6400,8 @@ packages:
     resolution: {integrity: sha512-1MOpMXuhGzGL5TTCZFItxCc0AARf1EZFQkGqMm7ERKj8+Hgr5oLvJOVFcC+lRmR8hCe2S3jC4T5D7Vg/d7/fhA==}
     engines: {node: '>=6'}
 
-  tar@7.5.17:
-    resolution: {integrity: sha512-wPEBwzapC+2PaTYPH6e2L+cNOEE227S47wUYFqlegcs8zlLLmeb9Fcff1HVZY4Fwku/1Eyv38n7GYwB2aaS71g==}
+  tar@7.5.18:
+    resolution: {integrity: sha512-PwA+nJl+AzsS9hRqtNRRq8/kTdNPoOLEPXpz9WBaErNm4+TFedJyQFJLITWdsmIBnwNS/TwXf1NV5Ak1KITc8g==}
     engines: {node: '>=18'}
 
   test-exclude@7.0.2:
@@ -7499,7 +7500,7 @@ snapshots:
       read-package-json-fast: 5.0.0
       semver: 7.8.5
       ssri: 13.0.1
-      tar: 7.5.17
+      tar: 7.5.18
       treeverse: 3.0.0
       undici: 6.27.0
       walk-up-path: 4.0.0
@@ -13304,7 +13305,7 @@ snapshots:
 
   tapable@2.3.2: {}
 
-  tar@7.5.17:
+  tar@7.5.18:
     dependencies:
       '@isaacs/fs-minipass': 4.0.1
       chownr: 3.0.0
