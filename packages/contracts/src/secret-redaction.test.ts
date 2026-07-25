@@ -510,43 +510,80 @@ describe("redactSecretText", () => {
   it("keeps repeated assignment redaction bounded on single-line provider output", () => {
     const small = "password: safevalue ".repeat(2_500);
     const large = small.repeat(2);
-    const measure = (input: string): { elapsedMs: number; redactionCount: number } => {
-      const startedAt = performance.now();
-      const result = redactSecretText(input);
-      return {
-        elapsedMs: performance.now() - startedAt,
-        redactionCount: result.redactionCount,
+
+    // Every per-match context predicate (type annotations, control-flow labels,
+    // object properties) inspects the input through a window bounded to +/-4096
+    // characters around the match. That bound is what keeps a single-line
+    // provider dump linear: drop it and each of the N matches rescans back to
+    // the start of the input, making the routine quadratic.
+    //
+    // Wall clock cannot police that invariant. A 2x input only separates the
+    // two hypotheses by 2x (linear 2.04x, quadratic 3.45x measured), which is
+    // narrower than shared-runner scheduler noise under v8 coverage: the
+    // previous `largeMs / smallMs < 3.5` assertion both reddened main on a
+    // correct implementation (3.527 on run 30147015070) and let a deliberately
+    // quadratic scan pass 7 times out of 8. Counting the characters the routine
+    // slices out of the input measures the same invariant deterministically,
+    // producing identical numbers on every machine.
+    const countInputScan = (input: string): number => {
+      const nativeSlice = String.prototype.slice;
+      let scanned = 0;
+      String.prototype.slice = function countedSlice(this: string, start?: number, end?: number): string {
+        const sliced = nativeSlice.call(this, start, end);
+        // Count only windows carved out of the provider dump itself. Predicates
+        // re-slice their own already-bounded windows, which stay under this floor.
+        if (this.length >= 8_192) {
+          scanned += sliced.length;
+        }
+        return sliced;
       };
-    };
-    const median = (samples: number[]): number =>
-      [...samples].sort((left, right) => left - right)[Math.floor(samples.length / 2)] ?? Number.POSITIVE_INFINITY;
-
-    // Warm both input sizes before sampling so JIT compilation is not charged to
-    // only one side of the scaling comparison. Alternating order and using a
-    // median keeps a scheduler pause or GC cycle from becoming the measurement.
-    const warmedSmall = measure(small);
-    const warmedLarge = measure(large);
-    const smallSamples: number[] = [];
-    const largeSamples: number[] = [];
-    for (let index = 0; index < 3; index += 1) {
-      const orderedInputs = index % 2 === 0 ? ([small, large] as const) : ([large, small] as const);
-      const first = measure(orderedInputs[0]);
-      const second = measure(orderedInputs[1]);
-      if (orderedInputs[0] === small) {
-        smallSamples.push(first.elapsedMs);
-        largeSamples.push(second.elapsedMs);
-      } else {
-        largeSamples.push(first.elapsedMs);
-        smallSamples.push(second.elapsedMs);
+      try {
+        redactSecretText(input);
+      } finally {
+        String.prototype.slice = nativeSlice;
       }
-    }
-    const smallMs = Math.max(1, median(smallSamples));
-    const largeMs = median(largeSamples);
+      return scanned;
+    };
 
-    expect(warmedSmall.redactionCount).toBe(2_500);
-    expect(warmedLarge.redactionCount).toBe(5_000);
-    expect(largeMs).toBeLessThan(2_000);
-    expect(largeMs / smallMs).toBeLessThan(3.5);
+    const smallScan = countInputScan(small);
+    const largeScan = countInputScan(large);
+
+    // Keeps the scan assertions from ever passing vacuously: if the predicates
+    // stop reading the input through String.prototype.slice, this fails loudly
+    // instead of silently measuring zero work.
+    expect(smallScan).toBeGreaterThan(small.length);
+
+    // Doubling the input doubles the work rather than squaring it.
+    // Measured: 2.043 bounded, 3.448 with an unbounded line-start lookup.
+    expect(largeScan / smallScan).toBeLessThan(2.5);
+
+    // Moving the same 2_500 matches away from either end of the input must not
+    // change per-match context work at all. Bounded windows are invariant to
+    // the padding (measured: exactly zero extra characters when a pad doubles),
+    // while an unbounded lookup pays pad x matches: a backward scan blows out
+    // the leading pad (measured: +1_000_000_000) and a forward scan the
+    // trailing one (measured: +1_500_000_000). Both directions are checked
+    // because each is blind to the other's pad.
+    const padLength = 200_000;
+    const padBudget = 4 * padLength;
+    const leadingPad = (length: number): string => `${"-".repeat(length)} ${small}`;
+    const trailingPad = (length: number): string => `${small} ${"-".repeat(length)}`;
+    const paddedResult = redactSecretText(leadingPad(padLength));
+
+    expect(paddedResult.redactionCount).toBe(2_500);
+    expect(countInputScan(leadingPad(padLength * 2)) - countInputScan(leadingPad(padLength))).toBeLessThan(padBudget);
+    expect(countInputScan(trailingPad(padLength * 2)) - countInputScan(trailingPad(padLength))).toBeLessThan(padBudget);
+
+    // Wall clock is kept only as an absolute catastrophe budget, with ~24x
+    // headroom over the ~83ms this input actually takes, never as a ratio.
+    const smallResult = redactSecretText(small);
+    const startedAt = performance.now();
+    const largeResult = redactSecretText(large);
+    const elapsedMs = performance.now() - startedAt;
+
+    expect(smallResult.redactionCount).toBe(2_500);
+    expect(largeResult.redactionCount).toBe(5_000);
+    expect(elapsedMs).toBeLessThan(2_000);
   });
 
   it("redacts remote approval capability tokens inside callback data and free text", () => {
