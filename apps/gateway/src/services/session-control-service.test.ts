@@ -701,6 +701,94 @@ describe("SessionControlService", () => {
     );
   });
 
+  // Request-lease renewal is reached only from the runtime owner's heartbeat
+  // interval, which no route may arm, so nothing else drives these branches.
+  it("renews the request lease in place against the presented claim and advances the stored revision", () => {
+    const materialSha256 = computeChatTurnAdmissionMaterialSha256(BASE_REQUEST);
+    // The presented claim is the live admission's own claim object, which the
+    // renewal then mutates in place — snapshot it at call time or the recorded
+    // argument reads back with the post-renewal revision.
+    let presentedClaim: unknown;
+    const renewTurnWriteRequestLease = vi.fn((input: { requestRuntimeClaim: unknown }) => {
+      presentedClaim = { ...(input.requestRuntimeClaim as Record<string, unknown>) };
+      return record({ materialSha256, runtimeLeaseRevision: 2 });
+    });
+    const storage = {
+      chatSessionMeta: { get: vi.fn(() => ({ sessionId: "session-1", workspaceId: "workspace-1", revision: 7 })) },
+      sessionControls: {
+        getControl: vi.fn(() => ({ generation: 3 })),
+        resolveMutationAuthority: vi.fn(() => ({ generation: 3 })),
+      },
+      sessionMutationAdmissions: {
+        admit: vi.fn(() => ({ disposition: "created", admission: record({ materialSha256 }) })),
+        renewTurnWriteRequestLease,
+      },
+    };
+    const service = new SessionControlService(storage as unknown as Storage);
+    const active = service.admitOperatorChatTurn({
+      sessionId: "session-1",
+      turnId: "turn-1",
+      request: BASE_REQUEST,
+      runtimeOwnerId: "runtime-1",
+      actorId: "operator-1",
+      idempotencyKey: "admit-turn-1",
+      correlationId: "correlation-1",
+    });
+    const claim = active.requestClaim;
+
+    const renewed = service.renewRequestLease(active);
+
+    expect(renewTurnWriteRequestLease).toHaveBeenCalledWith(
+      expect.objectContaining({
+        admissionId: "admission-1",
+        workspaceId: "workspace-1",
+        sessionId: "session-1",
+        sessionIncarnationId: "incarnation-1",
+        turnId: "turn-1",
+      }),
+    );
+    expect(presentedClaim).toEqual({ runtimeOwnerId: "runtime-1", leaseRevision: 1 });
+    // The live admission object is renewed in place: a heartbeat must not hand
+    // back a detached copy the caller's later writes would ignore.
+    expect(renewed).toBe(active);
+    expect(active.requestClaim).toBe(claim);
+    expect(active.requestClaim).toEqual({ runtimeOwnerId: "runtime-1", leaseRevision: 2 });
+  });
+
+  it("fails closed when a lease renewal or turn write is attempted without an exclusive request claim", () => {
+    const renewTurnWriteRequestLease = vi.fn();
+    const assertActiveTurnWrite = vi.fn();
+    const service = new SessionControlService({
+      sessionMutationAdmissions: { renewTurnWriteRequestLease, assertActiveTurnWrite },
+    } as unknown as Storage);
+    const identity = {
+      admissionId: "admission-1",
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+      sessionIncarnationId: "incarnation-1",
+      turnId: "turn-1",
+      aggregateRevision: 7,
+      controllerGeneration: 3,
+      materialSha256: "a".repeat(64),
+    } as never;
+    const durableOnly = {
+      identity,
+      admittedRequest: BASE_REQUEST,
+      requestActor: { actorKind: "operator", actorId: "operator-1" },
+      requestClaim: { runtimeOwnerId: "runtime-1", leaseRevision: 1 },
+      durableClaim: { durableRunId: "run-1", claimToken: "claim-1", leaseRevision: 1 },
+    } as never;
+    const claimless = { identity, admittedRequest: BASE_REQUEST, requestActor: durableOnly.requestActor } as never;
+
+    // A durable claim has superseded the request lease — renewing it would
+    // resurrect a second writer for the same turn.
+    expect(() => service.renewRequestLease(durableOnly)).toThrow(ConflictError);
+    expect(() => service.renewRequestLease(claimless)).toThrow(ConflictError);
+    expect(() => service.assertActiveTurnWrite(claimless)).toThrow(ConflictError);
+    expect(renewTurnWriteRequestLease).not.toHaveBeenCalled();
+    expect(assertActiveTurnWrite).not.toHaveBeenCalled();
+  });
+
   it("denies the session event read to a send-only external controller but allows it once read is delegated", () => {
     const companion = {
       actorKind: "external_companion" as const,

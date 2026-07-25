@@ -292,10 +292,12 @@ describe("SessionControlRuntimeOwner", () => {
       "reconnect",
       "release",
       "revoke",
+      "authorizeExternalSessionRead",
       "getControl",
       "getDetail",
       "listControls",
       "listEvents",
+      "pageControlEventStream",
     ] as const;
     const service = Object.fromEntries(
       methods.map((method) => [method, vi.fn(() => `result:${method}`)]),
@@ -309,6 +311,47 @@ describe("SessionControlRuntimeOwner", () => {
       expect(service[method] as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(command);
       expect(service[method] as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(1);
     }
+  });
+
+  /**
+   * These pass-throughs carry turn-write authority and are deliberately absent
+   * from the route seam, so no route-level exercise reaches them. Cover the
+   * delegation directly instead.
+   */
+  it("delegates every turn-authority pass-through to the sole control-domain owner unchanged", () => {
+    const admission = { identity: { admissionId: "admission-1" } } as never;
+    const renewed = { identity: { admissionId: "admission-1" }, requestClaim: { leaseRevision: 2 } } as never;
+    const renewRequestLease = vi.fn(() => renewed);
+    const bindDurableRun = vi.fn();
+    const assertActiveTurnWrite = vi.fn();
+    const closeTurnWrite = vi.fn();
+    const cancelExpiredUnboundTurnAdmissions = vi.fn(() => ["admission-1"]);
+    const owner = new SessionControlRuntimeOwner({
+      renewRequestLease,
+      bindDurableRun,
+      assertActiveTurnWrite,
+      closeTurnWrite,
+      cancelExpiredUnboundTurnAdmissions,
+    } as unknown as SessionControlService);
+    const closeInput = { admission, disposition: "committed" } as never;
+    const cancelInput = {
+      actorId: "system:gateway-startup",
+      idempotencyKeyPrefix: "gateway-startup:expired-unbound-chat-turn",
+      correlationId: "correlation-1",
+      limit: 10,
+    } as never;
+
+    expect(owner.renewRequestLease(admission)).toBe(renewed);
+    owner.bindDurableRun(admission, "run-1");
+    owner.assertActiveTurnWrite(admission);
+    owner.closeTurnWrite(closeInput);
+
+    expect(owner.cancelExpiredUnboundTurnAdmissions(cancelInput)).toEqual(["admission-1"]);
+    expect(renewRequestLease).toHaveBeenCalledWith(admission);
+    expect(bindDurableRun).toHaveBeenCalledWith(admission, "run-1");
+    expect(assertActiveTurnWrite).toHaveBeenCalledWith(admission);
+    expect(closeTurnWrite).toHaveBeenCalledWith(closeInput);
+    expect(cancelExpiredUnboundTurnAdmissions).toHaveBeenCalledWith(cancelInput);
   });
 });
 

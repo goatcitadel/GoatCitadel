@@ -19,6 +19,7 @@ import * as chatThreadKnowledgeService from "./chat-thread-knowledge-service.js"
 import * as chatToolArtifactService from "./chat-tool-artifact-service.js";
 import * as chatWorkbenchService from "./chat-workbench-service.js";
 import { resolveEffectiveRuntimeScopeFromStorage } from "./effective-runtime-scope-service.js";
+import { createSessionControlRouteService } from "./session-control-route-service.js";
 import { getSessionControlRuntimeOwner } from "./session-control-runtime-owner.js";
 import type { GatewayRouteServiceDependencies } from "./gateway-route-services.js";
 import type { ChatStreamMutationLifecycle } from "./chat-turn-types.js";
@@ -467,8 +468,10 @@ export function composeChatRouteDependencies(
     chatMessages,
     // HX-411 controller-protocol owner. Sourced from the same storage-keyed
     // memoized runtime owner the gateway uses for turn admission, so the control
-    // routes and the canonical send path share one durable authority.
-    sessionControl: getSessionControlRuntimeOwner(gateway.storage),
+    // routes and the canonical send path share one durable authority — projected
+    // down to the controller-protocol subset so the route layer never reaches the
+    // owner's turn-admission, request-lease, or durable-binding methods.
+    sessionControl: createSessionControlRouteService(getSessionControlRuntimeOwner(gateway.storage)),
     chatProjects: {
       archiveChatProject: (projectId, expectedRevision) =>
         gateway.chatProjectService.archiveChatProject(projectId, expectedRevision),
