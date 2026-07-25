@@ -188,12 +188,17 @@ async function main() {
   const fastOptions = {
     failFast: maybeParseBool(options["fail-fast"] ?? process.env.GOATCITADEL_VERIFY_FAIL_FAST, false),
     serial: maybeParseBool(options.serial ?? process.env.GOATCITADEL_VERIFY_SERIAL, false),
+    // `--commands=fast.test.gateway,fast.build` runs one slice of the lane so CI can
+    // spread the lane across parallel jobs. Each slice writes its own partial
+    // manifest; merge-fast-manifests.mjs recomposes them into one run.
+    commands: typeof options.commands === "string" ? options.commands : undefined,
   };
   const context = await createRunContext(lane, {
     runId: typeof options["run-id"] === "string" ? options["run-id"] : undefined,
     profile,
     includeSoak,
     durationMs,
+    commandSelection: lane === "fast" ? fastOptions.commands : undefined,
   });
 
   let manifest;

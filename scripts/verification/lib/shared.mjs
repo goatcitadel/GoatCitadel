@@ -16,7 +16,7 @@ export const repoRoot = path.resolve(import.meta.dirname, "..", "..", "..");
 export const artifactsRoot = path.join(repoRoot, "artifacts", "verification");
 const WINDOWS_CMD_PATH = "C:\\Windows\\System32\\cmd.exe";
 const COMMAND_SUMMARY_CAPTURE_BYTES = 256 * 1024;
-const FAST_LANE_PERF_ARTIFACT = "perf/fast-lane-timing.json";
+export const FAST_LANE_PERF_ARTIFACT = "perf/fast-lane-timing.json";
 const FAST_LANE_PERF_BUDGETS = Object.freeze({
   total: { warnMs: 240_000, failMs: 300_000 },
   "fast.test": { warnMs: 135_000 },
@@ -44,6 +44,9 @@ export async function createRunContext(lane, options = {}) {
       profile: options.profile ?? "local",
       includeSoak: options.includeSoak ?? false,
       durationMs: options.durationMs,
+      // Set when the run was asked for a slice of a lane rather than all of it.
+      // The lane-wide perf budgets cannot be judged from one slice.
+      ...(options.commandSelection ? { commandSelection: options.commandSelection } : {}),
     },
   });
 
@@ -79,8 +82,13 @@ export async function finalizeRunContext(context, statusOverride) {
     durationMs,
     status: statusOverride ?? deriveManifestStatus(context.manifest),
   });
+  // A sliced run holds only part of the lane, so its timings cannot be measured
+  // against the lane's budgets — most slices record no fast.test scenario at all,
+  // which the budget reads as a missing measurement. merge-fast-manifests.mjs
+  // evaluates the budgets once the parts are recomposed into a whole run.
+  const partialRun = typeof baseManifest.metadata?.commandSelection === "string";
   const fastLanePerf =
-    baseManifest.lane === "fast" ? await writeFastLanePerfArtifact(context, baseManifest) : undefined;
+    baseManifest.lane === "fast" && !partialRun ? await writeFastLanePerfArtifact(context, baseManifest) : undefined;
   const finalStatus =
     statusOverride ??
     (fastLanePerf?.integrityFailure || (fastLanePerf?.strict && fastLanePerf.status === "failed")
@@ -373,7 +381,7 @@ export function deriveManifestStatus(manifest) {
   return "passed";
 }
 
-function tallyScenarioCounts(scenarios) {
+export function tallyScenarioCounts(scenarios) {
   return scenarios.reduce(
     (counts, item) => {
       if (item.status === "passed") {
@@ -399,7 +407,7 @@ function tallyScenarioCounts(scenarios) {
   );
 }
 
-function buildSummaryMarkdown(manifest) {
+export function buildSummaryMarkdown(manifest) {
   const fastLanePerf = manifest.metadata?.fastLanePerf;
   const lines = [
     `# Verification Run ${manifest.runId}`,
@@ -588,7 +596,7 @@ function derivePerfBudgetStatus(budgets) {
   return "passed";
 }
 
-function buildJunitXml(manifest) {
+export function buildJunitXml(manifest) {
   const testcases = manifest.scenarios.map((item) => {
     const durationSeconds = (item.durationMs / 1000).toFixed(3);
     const name = escapeXml(item.title);

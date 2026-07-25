@@ -12,31 +12,18 @@ on:
 permissions:
   contents: read
 
+# The lane used to run as one serial job that outgrew its 45-minute budget and was
+# killed mid-run. Its work is now spread across jobs that run at the same time: the
+# non-test checks, the three test slices, and the real-Postgres lanes all finish
+# independently, and `gate` recomposes them. Each slice records its own partial
+# verification manifest; merge-fast-manifests.mjs fails closed if the union of those
+# parts does not cover every command the lane defines, so a dropped job cannot pass
+# as a green run that quietly skipped checks.
 jobs:
-  fast:
+  checks:
+    name: Checks
     runs-on: ubuntu-latest
-    # The job bailed at the first failing step for a long time, so it never paid the
-    # cost of its later steps (real Postgres lane, production coverage gate). With
-    # those running end to end it now exceeds 45 minutes and is killed mid-run —
-    # "The operation was canceled" at 45m12s, not a failing assertion. Raise the
-    # budget so the completed pipeline can report. The durable fix is to split the
-    # independent steps into parallel jobs, which also stops a red step from hiding
-    # the ones behind it.
-    timeout-minutes: 90
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_DB: goatcitadel_test
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d goatcitadel_test"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -68,37 +55,181 @@ jobs:
       - name: Verify workflow and PowerShell syntax
         run: pnpm verify:workflows
 
-      - name: Install Playwright Chromium
-        run: pnpm exec playwright install chromium
+      - name: Run fast verification checks
+        run: >-
+          pnpm verify:fast --commands=fast.skills-catalog,fast.repo-hygiene,fast.storage-migration-parity,fast.extensions-sdk-build,fast.extensions-sdk-package,fast.typecheck,fast.smoke,fast.build,fast.docs
 
-      # ESLint and the root typecheck run in code-quality.yml, and the lane itself
-      # runs docs:check as fast.docs — duplicating them here only lengthened the
-      # critical path and blurred which gate owns each check.
-      - name: Run fast verification
-        run: pnpm verify:fast
-
-      - name: Run real Postgres storage lane
-        env:
-          GOATCITADEL_TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/goatcitadel_test
-        run: pnpm --filter @goatcitadel/storage test:postgres
-
-      - name: Run real Postgres Gateway auth lane
-        env:
-          GOATCITADEL_TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/goatcitadel_test
-        run: pnpm --filter @goatcitadel/gateway test:postgres:auth
-
-      - name: Run real Postgres Gateway memory lifecycle lane
-        env:
-          GOATCITADEL_TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/goatcitadel_test
-        run: pnpm --filter @goatcitadel/gateway test:postgres:memory
-
-      # `pnpm verify:fast` already ran every package's test:coverage script, so the
-      # gate aggregates those reports instead of executing the whole suite a second
-      # time. These two c8 reports are the only collection work the lane does not do.
+      # The only coverage collection the lane itself does not do.
       - name: Collect gateway coverage extras
         run: |
           pnpm --filter @goatcitadel/gateway coverage:smoke
           pnpm --filter @goatcitadel/gateway coverage:exercise
+
+      - name: Stage checks part
+        if: always()
+        run: bash scripts/verification/stage-fast-part.sh part
+
+      - name: Upload checks part
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-fast-part-checks
+          path: part
+          if-no-files-found: error
+
+  tests:
+    name: Tests (${{ matrix.slice }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - slice: gateway
+            commands: fast.test.gateway
+          - slice: storage
+            commands: fast.test.storage
+          - slice: ui
+            commands: fast.test.mission-control-next,fast.test.policy-engine,fast.test.libraries
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.31.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The single-job lane built the workspace as fast.typecheck before any suite
+      # ran. That scenario is recorded once, by the checks job, so each test slice
+      # reproduces the build here rather than re-running the scenario.
+      - name: Build workspace
+        run: pnpm typecheck
+
+      - name: Install Playwright Chromium
+        if: matrix.slice == 'ui'
+        run: pnpm exec playwright install chromium
+
+      - name: Run fast verification tests
+        run: pnpm verify:fast --commands=${{ matrix.commands }}
+
+      - name: Stage tests part
+        if: always()
+        run: bash scripts/verification/stage-fast-part.sh part
+
+      - name: Upload tests part
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-fast-part-tests-${{ matrix.slice }}
+          path: part
+          if-no-files-found: error
+
+  postgres:
+    name: Real Postgres lanes
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: goatcitadel_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d goatcitadel_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      GOATCITADEL_TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/goatcitadel_test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.31.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run real Postgres storage lane
+        run: pnpm --filter @goatcitadel/storage test:postgres
+
+      - name: Run real Postgres Gateway auth lane
+        run: pnpm --filter @goatcitadel/gateway test:postgres:auth
+
+      - name: Run real Postgres Gateway memory lifecycle lane
+        run: pnpm --filter @goatcitadel/gateway test:postgres:memory
+
+  gate:
+    name: Coverage gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [checks, tests, postgres]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.31.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Restore verification parts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: verification-fast-part-*
+          path: parts
+
+      - name: Restore coverage reports
+        run: |
+          # Each part carries the coverage its slice produced under part/coverage/,
+          # mirroring the workspace layout; copy it back so coverage:collect:reuse
+          # finds the reports where the packages would have written them.
+          for part in parts/*/; do
+            if [ -d "${part}coverage" ]; then
+              cp -r "${part}coverage/." .
+            fi
+          done
+          # Reuse rejects a report older than the sources it measures, which is what
+          # protects a stale local re-run. Across jobs that comparison is meaningless:
+          # every job in this run checked out the same commit, and the restored files
+          # carry mtimes from another machine. Re-stamp them so the freshness check
+          # measures what it can actually see.
+          find apps packages -type f -path '*/coverage*/coverage-final.json' -exec touch {} +
+          find apps packages -type f -path '*/coverage*/coverage-final.json' -print
+
+      - name: Merge verification manifests
+        run: node scripts/verification/merge-fast-manifests.mjs parts --out=artifacts/verification/merged
 
       - name: Enforce production coverage gate
         run: pnpm coverage:collect:reuse && pnpm coverage:gate:production
