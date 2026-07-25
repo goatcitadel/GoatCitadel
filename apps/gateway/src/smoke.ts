@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
-import { cp, mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
+import { cp, mkdtemp, mkdir, rm } from "node:fs/promises";
 import { buildApp } from "./app.js";
 
 interface JsonResponse<T = unknown> {
@@ -982,9 +982,11 @@ async function smokeOnboarding(app: Awaited<ReturnType<typeof buildApp>>): Promi
   };
   assert.equal(typeof bootstrapBody.appliedAt, "string");
   assert.equal(bootstrapBody.state.completed, true);
-  const envPath = path.join(process.env.GOATCITADEL_ROOT_DIR ?? "", ".env");
-  const envFile = await readFile(envPath, "utf8");
-  assert.match(envFile, /OPENAI_API_KEY="sk-smoke-value"/);
+  // Bootstrap no longer accepts an inline apiKey: provider config takes an env
+  // reference only, and the route rejects inline credentials with FIELD_INVALID
+  // ("Save API keys through the provider secret endpoint"). So onboarding writes
+  // no .env here — provider secret persistence is covered by the secrets step
+  // against /api/v1/secrets/providers/*.
 }
 
 async function postJson<T>(
