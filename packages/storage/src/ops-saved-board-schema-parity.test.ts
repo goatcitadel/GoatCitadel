@@ -140,8 +140,20 @@ describe("HX-410 trusted ops saved board schema parity", () => {
   });
 });
 
+/**
+ * The coverage lane runs these tests compiled from dist/, where the TypeScript
+ * sources do not exist, while the fast lane runs them from src/ via tsx. Resolve
+ * the checked-in migration source for either layout.
+ */
+function sqliteSourceUrl(): URL {
+  const candidates = [new URL("./sqlite.ts", import.meta.url), new URL("../src/sqlite.ts", import.meta.url)];
+  const found = candidates.find((candidate) => fs.existsSync(candidate));
+  assert.ok(found, "SQLite migration source must be readable from either the src or dist layout");
+  return found;
+}
+
 function sqlite167Source(): string {
-  const source = fs.readFileSync(new URL("./sqlite.ts", import.meta.url), "utf8");
+  const source = fs.readFileSync(sqliteSourceUrl(), "utf8");
   const start = source.indexOf("version: 167");
   assert.notEqual(start, -1);
   const end = source.indexOf("          `);", start);

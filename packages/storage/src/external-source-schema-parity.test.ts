@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { rmSync, readFileSync } from "node:fs";
+import { existsSync, rmSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -27,8 +27,20 @@ afterEach(() => {
   for (const db of databases.splice(0)) db.close();
 });
 
+/**
+ * The coverage lane runs these tests compiled from dist/, where the TypeScript
+ * sources do not exist, while the fast lane runs them from src/ via tsx. Resolve
+ * the checked-in migration source for either layout.
+ */
+function sqliteSourceUrl(): URL {
+  const candidates = [new URL("./sqlite.ts", import.meta.url), new URL("../src/sqlite.ts", import.meta.url)];
+  const found = candidates.find((candidate) => existsSync(candidate));
+  assert.ok(found, "SQLite migration source must be readable from either the src or dist layout");
+  return found;
+}
+
 function sqlite166Source(): string {
-  const source = readFileSync(new URL("./sqlite.ts", import.meta.url), "utf8");
+  const source = readFileSync(sqliteSourceUrl(), "utf8");
   const start = source.indexOf("version: 166");
   assert.notEqual(start, -1, "SQLite migration 166 must exist");
   const end = source.indexOf("          `);", start);
