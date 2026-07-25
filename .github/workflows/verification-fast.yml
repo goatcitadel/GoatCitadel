@@ -137,7 +137,7 @@ jobs:
   postgres:
     name: Real Postgres lanes
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:16-alpine
@@ -171,6 +171,13 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      # The single-job lane had already built the workspace as fast.typecheck before
+      # these lanes ran. On its own the storage lane only builds @goatcitadel/storage,
+      # so the Gateway services these tests reach import `@goatcitadel/skills/dist`
+      # from a package nobody compiled. Build the workspace first, as the test slices do.
+      - name: Build workspace
+        run: pnpm typecheck
 
       - name: Run real Postgres storage lane
         run: pnpm --filter @goatcitadel/storage test:postgres
