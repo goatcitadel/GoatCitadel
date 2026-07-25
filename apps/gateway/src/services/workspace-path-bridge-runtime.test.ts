@@ -110,6 +110,50 @@ describe("WorkspacePathBridgeRuntime", () => {
     expect(fixture.resolve).not.toHaveBeenCalled();
   });
 
+  it("serves POSIX path-bridge evidence on a POSIX host instead of the Windows-only service", async () => {
+    // No `service` override: this proves the runtime *selects* the POSIX
+    // implementation, which is what makes external-source registration work off
+    // Windows. The Windows service rejects "/app/workspace" outright.
+    const runtime = createPosixInspectionRuntime();
+
+    const snapshot = await runtime.service.resolve({
+      verificationId: "external-source-binding-1",
+      workspaceId: "workspace-1",
+      inputPath: "/app/workspace/external-codex",
+      inputFlavor: "posix",
+      targetFlavor: "posix",
+      requireGitIdentity: false,
+    });
+
+    expect(snapshot).toMatchObject({
+      snapshotId: "external-source-binding-1",
+      workspaceId: "workspace-1",
+      inputFlavor: "posix",
+      targetFlavor: "posix",
+      status: "verified",
+      callable: true,
+      canonicalHostPath: "/app/workspace/external-codex",
+    });
+    expect(runtime.service.inspect("workspace-1", "external-source-binding-1").snapshotSha256).toBe(
+      snapshot.snapshotSha256,
+    );
+  });
+
+  it("keeps a POSIX host from resolving Windows path flavors", async () => {
+    const runtime = createPosixInspectionRuntime();
+
+    await expect(
+      runtime.service.resolve({
+        verificationId: "external-source-binding-2",
+        workspaceId: "workspace-1",
+        inputPath: "C:\\work\\external-codex",
+        inputFlavor: "windows_native",
+        targetFlavor: "windows_native",
+        requireGitIdentity: false,
+      }),
+    ).rejects.toMatchObject({ code: "unsupported_path_flavor", hostPlatform: "posix" });
+  });
+
   it("starts at /app and enforces native POSIX jail, symlink, and restart-safe Git identity", async () => {
     const symlinks = new Set<string>();
     let commonDir = "/app/workspace/repos/project-1/.git";
@@ -416,6 +460,49 @@ function createFixture() {
     },
   };
   return fixture;
+}
+
+/**
+ * A POSIX-host runtime with a real in-memory snapshot repository and NO service
+ * override, so the host-platform selection itself is under test.
+ */
+function createPosixInspectionRuntime(): WorkspacePathBridgeRuntime {
+  const records = new Map<string, WorkspacePathBridgeSnapshotRecord>();
+  const directories = new Set(["/app", "/app/workspace", "/app/workspace/external-codex"]);
+  return new WorkspacePathBridgeRuntime({
+    storage: {
+      chatSessionMeta: { get: vi.fn(() => undefined) },
+      chatSessionProjects: { get: vi.fn(() => undefined) },
+      chatProjects: { find: vi.fn(() => undefined) },
+      workspaces: { find: vi.fn(() => ({ workspaceId: "workspace-1", lifecycleStatus: "active" })) },
+      workspacePathBridgeSnapshots: {
+        create: (record: WorkspacePathBridgeSnapshotRecord) => {
+          records.set(record.snapshotId, record);
+          return record;
+        },
+        find: (snapshotId: string) => records.get(snapshotId),
+        get: (snapshotId: string) => {
+          const record = records.get(snapshotId);
+          if (!record) throw new Error("not found");
+          return record;
+        },
+        listByWorkspace: (workspaceId: string, limit: number) =>
+          [...records.values()].filter((record) => record.workspaceId === workspaceId).slice(0, limit),
+      },
+    } as never,
+    rootDir: "/app",
+    workspaceDir: "./workspace",
+    dataDir: "./data",
+    writeJailRoots: ["/app/workspace"],
+    hostPlatform: "posix",
+    environment: {},
+    realpath: async (value) => value,
+    stat: async (value) => ({ isDirectory: () => directories.has(value) }),
+    lstat: async () => ({ isSymbolicLink: () => false }),
+    runGit: async () => {
+      throw new Error("Unexpected Git command.");
+    },
+  });
 }
 
 function createPosixRuntime(input: {
