@@ -10,6 +10,13 @@ import { prepareVerificationRuntime } from "../runtime.mjs";
 // while the second full pass cost the pipeline roughly seventeen minutes.
 const FAST_LANE_TEMP_MIN_FREE_BYTES = 1024 * 1024 * 1024;
 const FAST_LANE_SAFE_TEST_CONCURRENCY = 2;
+// The gateway suite is 860 files and was the lane's single longest scenario at
+// roughly eight and a half minutes. Sharding only pays off across machines, so the
+// shards run serially in a local lane and one-per-job in CI.
+const GATEWAY_TEST_SHARD_COUNT = 4;
+const GATEWAY_TEST_SHARDS = Object.freeze(
+  Array.from({ length: GATEWAY_TEST_SHARD_COUNT }, (_unused, index) => index + 1),
+);
 const FAST_LANE_LIBRARY_TEST_FILTERS = Object.freeze([
   "@goatcitadel/contracts",
   "@goatcitadel/extensions-sdk",
@@ -38,10 +45,26 @@ export const FAST_LANE_COMMANDS = Object.freeze([
     args: ["verify:extensions:package:from-build"],
   },
   { id: "fast.typecheck", title: "Root typecheck", args: ["typecheck"] },
+  ...GATEWAY_TEST_SHARDS.map((shard) => ({
+    id: `fast.test.gateway.shard${shard}`,
+    title: `Gateway tests (shard ${shard}/${GATEWAY_TEST_SHARD_COUNT})`,
+    args: [
+      "--filter",
+      "@goatcitadel/gateway",
+      "test:coverage:vitest",
+      // No `--` separator: pnpm forwards that literally, and vitest then reads the
+      // shard flag as a positional filter and silently runs the whole suite.
+      `--shard=${shard}/${GATEWAY_TEST_SHARD_COUNT}`,
+      // Each shard needs its own report directory. The collector discovers any
+      // `coverage*` directory, so the shards merge without further wiring.
+      `--coverage.reportsDirectory=coverage-shard-${shard}`,
+    ],
+    env: { GOATCITADEL_SKIP_EXTENSIONS_SDK_PREBUILD: "1" },
+  })),
   {
-    id: "fast.test.gateway",
-    title: "Gateway tests",
-    args: ["--filter", "@goatcitadel/gateway", "test:coverage"],
+    id: "fast.test.gateway.node",
+    title: "Gateway node-runner tests",
+    args: ["--filter", "@goatcitadel/gateway", "test:node"],
     env: { GOATCITADEL_SKIP_EXTENSIONS_SDK_PREBUILD: "1" },
   },
   {
@@ -95,7 +118,7 @@ export const FAST_LANE_STAGES = Object.freeze([
   {
     id: "fast.test.gateway",
     mode: "serial",
-    commands: ["fast.test.gateway"],
+    commands: [...GATEWAY_TEST_SHARDS.map((shard) => `fast.test.gateway.shard${shard}`), "fast.test.gateway.node"],
   },
   {
     id: "fast.test.storage",
