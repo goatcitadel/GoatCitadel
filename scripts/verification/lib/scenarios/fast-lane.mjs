@@ -3,6 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { clampString, maybeParseBool, repoRoot, runCommand, runScenario, sanitizeFilePart } from "../shared.mjs";
 import { prepareVerificationRuntime } from "../runtime.mjs";
+// The lane runs each package's `test:coverage` script rather than `test` so the
+// production coverage gate can aggregate what this run already measured instead of
+// executing every suite a second time. Instrumentation is close to free here
+// (gateway +6%, storage faster because its coverage script runs compiled output),
+// while the second full pass cost the pipeline roughly seventeen minutes.
 const FAST_LANE_TEMP_MIN_FREE_BYTES = 1024 * 1024 * 1024;
 const FAST_LANE_SAFE_TEST_CONCURRENCY = 2;
 const FAST_LANE_LIBRARY_TEST_FILTERS = Object.freeze([
@@ -36,23 +41,23 @@ export const FAST_LANE_COMMANDS = Object.freeze([
   {
     id: "fast.test.gateway",
     title: "Gateway tests",
-    args: ["--filter", "@goatcitadel/gateway", "test"],
+    args: ["--filter", "@goatcitadel/gateway", "test:coverage"],
     env: { GOATCITADEL_SKIP_EXTENSIONS_SDK_PREBUILD: "1" },
   },
   {
     id: "fast.test.storage",
     title: "Storage tests",
-    args: ["--filter", "@goatcitadel/storage", "test"],
+    args: ["--filter", "@goatcitadel/storage", "test:coverage"],
   },
   {
     id: "fast.test.mission-control-next",
     title: "Mission Control Next tests",
-    args: ["--filter", "@goatcitadel/mission-control-next", "test"],
+    args: ["--filter", "@goatcitadel/mission-control-next", "test:coverage"],
   },
   {
     id: "fast.test.policy-engine",
     title: "Policy engine tests",
-    args: ["--filter", "@goatcitadel/policy-engine", "test"],
+    args: ["--filter", "@goatcitadel/policy-engine", "test:coverage"],
   },
   {
     id: "fast.test.libraries",
@@ -61,7 +66,7 @@ export const FAST_LANE_COMMANDS = Object.freeze([
       ...FAST_LANE_LIBRARY_TEST_FILTERS.flatMap((filter) => ["--filter", filter]),
       "-r",
       "--workspace-concurrency=2",
-      "test",
+      "test:coverage",
     ],
   },
   {

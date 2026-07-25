@@ -85,6 +85,13 @@ const PRODUCTION_RISK_TIERS = [
     ],
   },
 ];
+// `--skip-run` (or GOATCITADEL_COVERAGE_SKIP_RUN=1) aggregates reports that a prior
+// test run already wrote instead of executing every package suite again. The fast
+// verification lane runs each package's `test:coverage` script, so re-running them
+// here doubled the pipeline's wall clock for no extra signal. Reuse is fail-closed:
+// every package that declares a `test:coverage` script must have produced a report,
+// otherwise a lost artifact would read as low coverage instead of a broken pipeline.
+const skipRun = resolveSkipRun();
 const sourceRunId = crypto.randomUUID();
 const runStartedAt = new Date().toISOString();
 const sourceFingerprint = await buildCoverageSourceFingerprint(repoRoot);
@@ -96,8 +103,10 @@ const collector = {
 
 const warnings = [];
 
-await removeCoverageDirectories(path.join(repoRoot, "apps"));
-await removeCoverageDirectories(path.join(repoRoot, "packages"));
+if (!skipRun) {
+  await removeCoverageDirectories(path.join(repoRoot, "apps"));
+  await removeCoverageDirectories(path.join(repoRoot, "packages"));
+}
 await fs.mkdir(artifactsDir, { recursive: true });
 await writeSummary({
   generatedAt: runStartedAt,
@@ -109,43 +118,38 @@ await writeSummary({
   warnings,
 });
 
-try {
-  execSync("pnpm --filter @goatcitadel/gateway... --filter @goatcitadel/threaded-surface-core... --if-present build", {
-    cwd: repoRoot,
-    stdio: "inherit",
-  });
-  execSync("pnpm -r --workspace-concurrency=1 --if-present test:coverage", {
-    cwd: repoRoot,
-    stdio: "inherit",
-  });
-  execSync("pnpm --filter @goatcitadel/gateway --if-present coverage:smoke", {
-    cwd: repoRoot,
-    stdio: "inherit",
-  });
-  execSync("pnpm --filter @goatcitadel/gateway --if-present coverage:exercise", {
-    cwd: repoRoot,
-    stdio: "inherit",
-  });
-} catch (error) {
-  const failedAt = new Date().toISOString();
-  warnings.push("Coverage collection failed before summary generation completed.");
-  await writeSummary({
-    generatedAt: failedAt,
-    status: "failed",
-    sourceRunId,
-    sourceFingerprint,
-    collector,
-    runStartedAt,
-    runFinishedAt: failedAt,
-    warnings,
-    error: error instanceof Error ? error.message : String(error),
-  });
-  throw error;
+if (!skipRun) {
+  try {
+    execSync(
+      "pnpm --filter @goatcitadel/gateway... --filter @goatcitadel/threaded-surface-core... --if-present build",
+      {
+        cwd: repoRoot,
+        stdio: "inherit",
+      },
+    );
+    execSync("pnpm -r --workspace-concurrency=1 --if-present test:coverage", {
+      cwd: repoRoot,
+      stdio: "inherit",
+    });
+    execSync("pnpm --filter @goatcitadel/gateway --if-present coverage:smoke", {
+      cwd: repoRoot,
+      stdio: "inherit",
+    });
+    execSync("pnpm --filter @goatcitadel/gateway --if-present coverage:exercise", {
+      cwd: repoRoot,
+      stdio: "inherit",
+    });
+  } catch (error) {
+    await failCollection("Coverage collection failed before summary generation completed.", error);
+  }
 }
 
 const coverageFiles = await findCoverageFinalFiles(repoRoot);
-const coverageMap = await loadCoverageMap(coverageFiles, warnings);
 const sourceFiles = await collectSourceFiles(repoRoot);
+if (skipRun) {
+  await assertReusedCoverageIsUsable(coverageFiles, sourceFiles);
+}
+const coverageMap = await loadCoverageMap(coverageFiles, warnings);
 const coveragePolicy = await loadCoveragePolicy(sourceFiles);
 const excludedSourceFileSet = new Set(coveragePolicy.excludedFiles.map((item) => item.path));
 const includedSourceFiles = sourceFiles.filter((filePath) => {
@@ -354,6 +358,111 @@ console.log(`[coverage] file coverage: ${summary.fileCoveragePercent}% (${summar
 console.log(`[coverage] line coverage: ${summary.linePercent}% (${summary.lineTotals.covered}/${summary.lineTotals.total})`);
 console.log(`[coverage] branch coverage: ${summary.branchPercent}% (${summary.branchTotals.covered}/${summary.branchTotals.total})`);
 console.log(`[coverage] function coverage: ${summary.functionPercent}% (${summary.functionTotals.covered}/${summary.functionTotals.total})`);
+
+function resolveSkipRun() {
+  if (process.argv.slice(2).includes("--skip-run")) {
+    return true;
+  }
+  const raw = String(process.env.GOATCITADEL_COVERAGE_SKIP_RUN ?? "").trim().toLowerCase();
+  return raw === "1" || raw === "true";
+}
+
+async function failCollection(warning, error) {
+  const failedAt = new Date().toISOString();
+  warnings.push(warning);
+  await writeSummary({
+    generatedAt: failedAt,
+    status: "failed",
+    sourceRunId,
+    sourceFingerprint,
+    collector,
+    runStartedAt,
+    runFinishedAt: failedAt,
+    warnings,
+    error: error instanceof Error ? error.message : String(error),
+  });
+  throw error;
+}
+
+/**
+ * Reuse mode trusts reports written by an earlier process, which fails in two ways
+ * that a full collection cannot. A package whose report never arrived is
+ * indistinguishable from a package with no covered lines, and a report left behind
+ * by an older run is indistinguishable from one measuring the current source. Both
+ * cases fail the collection rather than quietly reporting a number nobody measured.
+ */
+async function assertReusedCoverageIsUsable(coverageFiles, sourceFiles) {
+  const expected = await findPackagesDeclaringCoverageScript(repoRoot);
+  const reportedAt = new Map();
+  for (const file of coverageFiles) {
+    const packageDir = path.relative(repoRoot, path.dirname(path.dirname(file))).replaceAll("\\", "/");
+    const stats = await fs.stat(file);
+    reportedAt.set(packageDir, Math.max(reportedAt.get(packageDir) ?? 0, stats.mtimeMs));
+  }
+
+  const missing = expected.filter((entry) => !reportedAt.has(entry.dir));
+  if (missing.length > 0) {
+    const detail = missing.map((entry) => `${entry.dir} (${entry.name})`).join(", ");
+    await failCollection(
+      "Coverage reuse failed: one or more packages produced no coverage report.",
+      new Error(
+        `[coverage:collect] --skip-run found no coverage-final.json for ${missing.length} package(s) that declare a `
+          + `test:coverage script: ${detail}. Run the package suites (pnpm verify:fast) before reusing coverage, or `
+          + "drop --skip-run to collect from scratch.",
+      ),
+    );
+  }
+
+  const sourcedAt = new Map();
+  for (const filePath of sourceFiles) {
+    const relativePath = path.relative(repoRoot, filePath).replaceAll("\\", "/");
+    const packageDir = relativePath.split("/").slice(0, 2).join("/");
+    if (!reportedAt.has(packageDir)) {
+      continue;
+    }
+    const stats = await fs.stat(filePath);
+    sourcedAt.set(packageDir, Math.max(sourcedAt.get(packageDir) ?? 0, stats.mtimeMs));
+  }
+
+  const stale = expected.filter((entry) => (sourcedAt.get(entry.dir) ?? 0) > (reportedAt.get(entry.dir) ?? 0));
+  if (stale.length > 0) {
+    const detail = stale
+      .map((entry) => `${entry.dir} (report ${new Date(reportedAt.get(entry.dir)).toISOString()})`)
+      .join(", ");
+    await failCollection(
+      "Coverage reuse failed: one or more packages have coverage older than their sources.",
+      new Error(
+        `[coverage:collect] --skip-run found ${stale.length} package(s) whose coverage-final.json predates their own `
+          + `source files: ${detail}. Those reports measure code that no longer exists. Re-run the package suites `
+          + "(pnpm verify:fast) before reusing coverage, or drop --skip-run to collect from scratch.",
+      ),
+    );
+  }
+}
+
+async function findPackagesDeclaringCoverageScript(root) {
+  const out = [];
+  for (const base of ["apps", "packages"]) {
+    const entries = await safeReadDir(path.join(root, base));
+    for (const entry of entries) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const manifestPath = path.join(root, base, entry.name, "package.json");
+      let manifest;
+      try {
+        manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+      } catch {
+        continue;
+      }
+      if (typeof manifest?.scripts?.["test:coverage"] !== "string") {
+        continue;
+      }
+      out.push({ dir: `${base}/${entry.name}`, name: manifest.name ?? `${base}/${entry.name}` });
+    }
+  }
+  return out;
+}
 
 async function removeCoverageDirectories(root) {
   const entries = await safeReadDir(root);

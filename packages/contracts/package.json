@@ -35,7 +35,7 @@
     "build": "tsc -b tsconfig.json",
     "typecheck": "tsc -b tsconfig.json",
     "test": "vitest run",
-    "test:coverage": "vitest run --coverage.enabled --coverage.provider=v8 --coverage.reporter=json --coverage.reporter=text-summary --coverage.reportsDirectory=coverage",
+    "test:coverage": "vitest run --coverage.enabled --coverage.provider=v8 --coverage.reporter=json --coverage.reporter=text-summary --coverage.reportsDirectory=coverage --coverage.reportOnFailure",
     "lint": "tsc -b tsconfig.json"
   }
 }

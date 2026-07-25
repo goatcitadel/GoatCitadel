@@ -19,7 +19,7 @@
     "preview": "vite preview",
     "typecheck": "pnpm run build:deps && tsc -b tsconfig.json tsconfig.node.json",
     "test": "vitest run",
-    "test:coverage": "vitest run --coverage.enabled --coverage.provider=v8 --coverage.reporter=json --coverage.reporter=text-summary --coverage.reportsDirectory=coverage",
+    "test:coverage": "vitest run --coverage.enabled --coverage.provider=v8 --coverage.reporter=json --coverage.reporter=text-summary --coverage.reportsDirectory=coverage --coverage.reportOnFailure",
     "lint": "pnpm run build:deps && tsc -b tsconfig.json tsconfig.node.json"
   },
   "dependencies": {

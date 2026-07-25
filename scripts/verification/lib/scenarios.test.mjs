@@ -267,17 +267,17 @@ test("fast verification lane keeps required fast commands", () => {
 
 test("fast verification split tests preserve recursive package coverage", () => {
   const commandById = new Map(FAST_LANE_COMMANDS.map((command) => [command.id, command]));
-  assert.deepEqual(commandById.get("fast.test.gateway")?.args, ["--filter", "@goatcitadel/gateway", "test"]);
-  assert.deepEqual(commandById.get("fast.test.storage")?.args, ["--filter", "@goatcitadel/storage", "test"]);
+  assert.deepEqual(commandById.get("fast.test.gateway")?.args, ["--filter", "@goatcitadel/gateway", "test:coverage"]);
+  assert.deepEqual(commandById.get("fast.test.storage")?.args, ["--filter", "@goatcitadel/storage", "test:coverage"]);
   assert.deepEqual(commandById.get("fast.test.mission-control-next")?.args, [
     "--filter",
     "@goatcitadel/mission-control-next",
-    "test",
+    "test:coverage",
   ]);
   assert.deepEqual(commandById.get("fast.test.policy-engine")?.args, [
     "--filter",
     "@goatcitadel/policy-engine",
-    "test",
+    "test:coverage",
   ]);
 
   const libraryArgs = commandById.get("fast.test.libraries")?.args ?? [];
@@ -300,6 +300,22 @@ test("fast verification split tests preserve recursive package coverage", () => 
   assert.equal(commandById.get("fast.test.gateway")?.env?.GOATCITADEL_SKIP_EXTENSIONS_SDK_PREBUILD, "1");
   assert.deepEqual(commandById.get("fast.smoke")?.args, ["smoke", "--", "--profile", "fast"]);
   assert.equal(commandById.get("fast.smoke")?.env?.GOATCITADEL_SKIP_EXTENSIONS_SDK_PREBUILD, "1");
+});
+
+test("fast verification test commands instrument coverage so the gate can reuse this run", () => {
+  const testCommands = FAST_LANE_COMMANDS.filter((command) => command.id.startsWith("fast.test."));
+  assert.equal(testCommands.length, 5);
+  for (const command of testCommands) {
+    assert.ok(
+      command.args.includes("test:coverage"),
+      `${command.id} must run test:coverage so pnpm coverage:collect --skip-run can aggregate this run`,
+    );
+    assert.equal(
+      command.args.includes("test"),
+      false,
+      `${command.id} must not fall back to the uninstrumented test script`,
+    );
+  }
 });
 
 test("fast verification stage plan isolates policy and schedules every command exactly once", () => {
