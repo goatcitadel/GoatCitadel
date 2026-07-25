@@ -238,6 +238,19 @@ generic `dedupeValues` plus a path-normalizing `dedupeProjects`.
 Confirm a suggestion by reading the implementation it describes — and, for test findings, by
 running the test — before opening the offered pull request.
 
+### There is no way to dismiss an AI finding
+
+Unlike Standard findings, which carry a per-row **Dismiss** button, the AI findings surface offers
+exactly two actions on a selected finding: **Open pull request** and **Assign to Copilot**. There is
+no dismiss, ignore, or close affordance, and no API to reach one. A finding you have judged to be a
+false positive can only be left alone; it stays listed until the underlying file changes again and
+the suggestion is recomputed.
+
+Therefore **this document is the dismissal record.** When you reject an AI finding, add it to the
+table above with the evidence, because the UI will keep showing it and the next reader has no other
+way to learn it was already triaged. Do not open the offered pull request just to make the entry
+disappear.
+
 ---
 
 ## References
