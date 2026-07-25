@@ -43,5 +43,8 @@ function canonicalizeArrayEntry(entry: unknown): string {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  // Null is checked first so the comparison operand stays unnarrowed; the
+  // `typeof value === "object"` form ahead of it reads as a null-vs-object
+  // comparison to static analyzers (CodeQL js/comparison-between-incompatible-types).
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }

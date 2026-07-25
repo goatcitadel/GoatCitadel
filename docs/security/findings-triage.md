@@ -1,6 +1,6 @@
 # GitHub Security Findings — Triage Reference
 
-Last updated: 2026-05-20
+Last updated: 2026-07-25
 
 This document explains how to triage the recurring categories of GitHub Security findings against this repo and how to fix them **once** without rediscovering the same root cause every time. New AI agents (Claude, Codex, Copilot review bots) and human contributors should read this before opening a PR that touches rate-limit configuration, stream pipeline error handling, Dependabot alerts, the secret-scanning allowlist, or the synthetic-token fixtures used by the secret-redaction tests.
 
@@ -20,6 +20,7 @@ Before opening a PR that touches any of these areas, stop and read the matching 
 | A "looks-like-a-secret" string anywhere else in `apps/` or `packages/` | [§4](#4-other-secret-scanning-matches) |
 | Dependabot version/security alerts | [§5](#5-dependabot-triage) |
 | CodeQL rule `js/unhandled-error-in-stream-pipeline` | [§6](#6-codeql-jsunhandled-error-in-stream-pipeline) |
+| Anything under **Security → Code quality** (Standard or AI findings) | [§7](#7-code-quality-standard-findings) / [§8](#8-code-quality-ai-findings) |
 
 Do not:
 
@@ -182,6 +183,60 @@ gh api --paginate "repos/goatcitadel/GoatCitadel/code-scanning/alerts?state=open
 ```
 
 If the query is empty and local `pipeline(...)` call sites are visibly awaited or caught, treat the rule as currently clear. If GitHub still shows an alert for already-handled code, dismiss as `false positive` only with a comment naming the exact local handler and the validation/query evidence.
+
+---
+
+## 7. Code Quality — Standard findings
+
+**Code Quality is a different product from code scanning.** Findings under
+`https://github.com/goatcitadel/GoatCitadel/security/quality` are *not* returned by the
+`code-scanning/alerts` REST API, and there is no GraphQL surface for them either. Probing
+`repos/.../code-quality/alerts` returns 404. The only way to enumerate them is the web UI:
+
+- Standard findings (full CodeQL scan): `/security/quality`, then `/security/quality/rules/<url-encoded rule id>`
+- AI findings (recently-changed files): `/security/quality/ai-findings`
+
+Do not report "no quality findings" on the strength of an empty `code-scanning/alerts` query.
+
+### Rules seen so far and the fix pattern for each
+
+| Rule | Category | Fix pattern |
+|---|---|---|
+| `js/useless-assignment-to-local` | Maintainability | Delete the dead write. When the right-hand side is a call with durable side effects (e.g. `summaryRepo.recordCompactionNoProgress`), keep the call and drop only the assignment, with a comment naming why the result is discarded. |
+| `js/comparison-between-incompatible-types` | Reliability | Usually an artifact of narrowing order, not a real defect. Put the `=== null` / `!== undefined` check **before** the `typeof x === "object"` guard so the compared operand is still unnarrowed. Where the check is genuinely unreachable (a loop condition already guaranteed by an earlier `break`), delete it and comment the invariant. |
+| `js/superfluous-trailing-arguments` | Reliability | Do **not** delete the argument at the call site. `FastifyPluginAsync` declares two *required* parameters, so `routes(fastify as never)` fails typecheck with TS2554. Fix the plugin instead: declare the ignored second parameter as `_opts` (allowed by the `argsIgnorePattern: "^_"` rule in `eslint.config.js`). |
+
+Applied examples live in [`apps/gateway/src/services/chat-message-history-service.ts`](../../apps/gateway/src/services/chat-message-history-service.ts),
+[`packages/contracts/src/canonical-json.ts`](../../packages/contracts/src/canonical-json.ts), and
+[`apps/gateway/src/routes/runtime-authority.ts`](../../apps/gateway/src/routes/runtime-authority.ts).
+
+Each fixed site carries an inline comment naming the rule, so a later "cleanup" pass does not
+silently revert the analyzer-visible form back into the flagged one. Preserve those comments.
+
+---
+
+## 8. Code Quality — AI findings
+
+These are Copilot suggestions over recently-changed files, not CodeQL results. They arrive as a
+pre-built diff with an "Open pull request" button.
+
+**Verify the stated premise against the source before applying any of them.** Every AI finding
+triaged on 2026-07-25 except one was a false positive, and in two cases applying the offered diff
+would have broken a passing test:
+
+| Reported | Why it was wrong |
+|---|---|
+| `ThreadedTimeline.loop25.test.tsx` — "`createElement(C, { props })` should spread the props" | `ThreadedTimeline` genuinely destructures a prop *named* `props`. The offered diff breaks the component contract. |
+| `capability-system-service.test.ts` — "the second run reuses the first run's approval" | The harness `approvals` Map is keyed by `approvalId`, so the second `createApproval` overwrites the entry; the second execute resolves the second run. The offered diff also reads `.value.id`, a field that does not exist (the field is `approvalId`, and an async mock's `mock.results[].value` is a Promise). |
+| `llm-service.test.ts` — "`/v1` should not be appended to a path-carrying base URL" | `shouldAppendV1` appends `/v1` to every path that is not already version-suffixed; bare roots are one case, not the only one. The expectation matches intended behaviour. |
+| `run-ts7-workspace.mjs` — "`mode` never alters the command" | Correct observation, intended design. The comment above `runTypeScriptCommand` explains that composite project references reject `--noEmit`. The offered diff also removed `--force` from build mode, which is a behaviour change. |
+
+The one accepted suggestion was a genuine naming/semantics issue: `dedupeProjects` was being reused
+to deduplicate group *names* while applying path separator normalization. It was split into a
+generic `dedupeValues` plus a path-normalizing `dedupeProjects`.
+
+Confirm a suggestion by reading the implementation it describes — and, for test findings, by
+running the test — before opening the offered pull request.
 
 ---
 

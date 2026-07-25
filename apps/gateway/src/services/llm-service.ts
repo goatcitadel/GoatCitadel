@@ -2232,7 +2232,6 @@ export class LlmService {
           accounting?.observeNormalized({ effectiveModelId: completion.model });
           accounting?.succeed();
           terminal = true;
-          emittedVisibleChunk = true;
           yield attachStreamUsageEvents(completion as Record<string, unknown>, eventIds);
           return;
         }

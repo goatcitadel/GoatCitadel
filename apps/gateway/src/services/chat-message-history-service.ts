@@ -597,7 +597,6 @@ async function compactBranchMappedMessages(
           ...(validatedForceAction ? { forceAction: validatedForceAction } : {}),
         });
         activeState = committed.state;
-        breaker = committed.breaker;
       } else {
         activeState = summaryRepo.upsertCompactionState(nextState);
       }
@@ -620,7 +619,6 @@ async function compactBranchMappedMessages(
             return input.mapped;
           }
           activeState = durableState;
-          breaker = refreshedBreaker;
         } else {
           const breakerRevisionUnchanged = breaker
             ? refreshedBreaker?.revision === breaker.revision
@@ -635,7 +633,9 @@ async function compactBranchMappedMessages(
             boundarySourceHash,
             disposition: "no_progress",
           });
-          breaker = summaryRepo.recordCompactionNoProgress({
+          // The returned record is intentionally discarded: this path always
+          // returns the unmapped prompt, so no later read observes `breaker`.
+          summaryRepo.recordCompactionNoProgress({
             ...breakerIdentity,
             attemptId: noProgressAttemptId,
             branchHeadTurnId: input.branchHeadTurnId,
