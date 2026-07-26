@@ -1,22 +1,54 @@
+import path from "node:path";
+
+/**
+ * Groups report paths by the collector that produced them.
+ *
+ * A sharded suite writes one report per shard — apps/gateway/coverage-shard-1..4 —
+ * which are the same tool instrumenting the same build, not independent collectors.
+ * Merging them as if they were separate collectors keeps every counter that shares
+ * a source location once per shard, which multiplies the branch and function
+ * denominators by the shard count. Every other report keeps its own group, so a c8
+ * report and a vitest report of one package still merge conservatively.
+ */
+export function collectorGroupKey(coverageFilePath) {
+  const reportDir = path.dirname(coverageFilePath);
+  const packageDir = path.dirname(reportDir);
+  const reportName = path.basename(reportDir).replace(/-shard-\d+$/, "");
+  return `${packageDir}::${reportName}`;
+}
+
 /**
  * Merges Istanbul coverage for one source file by source location rather than
  * collector-local numeric IDs. Vitest/V8 and c8 can assign different IDs and
  * map shapes to the same file, so numeric-key merging corrupts hit attribution.
+ *
+ * Where two entries hold several counters that share one source location, the
+ * merge cannot tell which counter in one report answers to which in the other, so
+ * it keeps each report's copies apart rather than guess. That is right across
+ * collectors and wrong across shards of one: a sharded run produces the same
+ * instrumentation of the same file several times, so keeping the copies apart
+ * counts every ambiguous counter once per shard and inflates the denominator.
+ * Pass `sameCollector` when the entries come from one tool measuring one build —
+ * the maps then agree counter for counter, so the nth copy of an ambiguous
+ * location in one report is the nth copy in the other.
  */
-export function mergeCoverageEntries(left, right) {
+export function mergeCoverageEntries(left, right, options = {}) {
+  const sameCollector = options.sameCollector === true;
   const statements = mergeMappedCounters(left, right, {
     mapKey: "statementMap",
     hitKey: "s",
+    sameCollector,
     identity: (item) => locationKey(item),
     intrinsicallyAmbiguous: (item) => hasIncompleteLocation(item),
   });
   const functions = mergeMappedCounters(left, right, {
     mapKey: "fnMap",
     hitKey: "f",
+    sameCollector,
     identity: (item) => JSON.stringify([String(item?.name ?? ""), locationKey(item?.decl), locationKey(item?.loc)]),
     intrinsicallyAmbiguous: (item) => hasIncompleteLocation(item?.decl) || hasIncompleteLocation(item?.loc),
   });
-  const branches = mergeBranchCounters(left, right);
+  const branches = mergeBranchCounters(left, right, { sameCollector });
 
   return {
     ...left,
@@ -56,7 +88,7 @@ function mergeMappedCounters(left, right, options) {
       const occurrence = occurrenceByIdentity.get(baseIdentity) ?? 0;
       occurrenceByIdentity.set(baseIdentity, occurrence + 1);
       const identity = ambiguousIdentities.has(baseIdentity)
-        ? JSON.stringify([baseIdentity, "collector", entryIndex, occurrence])
+        ? ambiguousIdentity(baseIdentity, entryIndex, occurrence, options.sameCollector)
         : JSON.stringify([baseIdentity, 0]);
       const hitCount = normalizeHitCount(hits[id], options.hitKey, id);
       const existing = records.get(identity);
@@ -83,7 +115,13 @@ function mergeMappedCounters(left, right, options) {
   return { coverageMap, hits };
 }
 
-function mergeBranchCounters(left, right) {
+function ambiguousIdentity(baseIdentity, entryIndex, occurrence, sameCollector) {
+  return sameCollector
+    ? JSON.stringify([baseIdentity, "occurrence", occurrence])
+    : JSON.stringify([baseIdentity, "collector", entryIndex, occurrence]);
+}
+
+function mergeBranchCounters(left, right, options = {}) {
   const groups = new Map();
   const groupOrder = [];
   const entries = [left, right];
@@ -119,7 +157,7 @@ function mergeBranchCounters(left, right) {
       const occurrence = occurrenceByIdentity.get(baseIdentity) ?? 0;
       occurrenceByIdentity.set(baseIdentity, occurrence + 1);
       const identity = ambiguousIdentities.has(baseIdentity)
-        ? JSON.stringify([baseIdentity, "collector", entryIndex, occurrence])
+        ? ambiguousIdentity(baseIdentity, entryIndex, occurrence, options.sameCollector)
         : JSON.stringify([baseIdentity, 0]);
       let group = groups.get(identity);
       if (!group) {

@@ -3,7 +3,7 @@ import path from "node:path";
 import { execSync } from "node:child_process";
 import crypto from "node:crypto";
 import ts from "typescript";
-import { mergeCoverageEntries } from "./coverage-merge.mjs";
+import { collectorGroupKey, mergeCoverageEntries } from "./coverage-merge.mjs";
 import { normalizeCoveragePathForLookup as normalizePathForLookup } from "./coverage-paths.mjs";
 import { buildCoverageSourceFingerprint } from "./coverage-source-fingerprint.mjs";
 
@@ -516,6 +516,27 @@ async function findCoverageFinalFiles(root) {
 }
 
 async function loadCoverageMap(files, warningsList) {
+  const groups = new Map();
+  for (const filePath of files) {
+    const key = collectorGroupKey(filePath);
+    if (!groups.has(key)) {
+      groups.set(key, []);
+    }
+    groups.get(key).push(filePath);
+  }
+
+  const map = new Map();
+  for (const groupFiles of groups.values()) {
+    const groupMap = await loadCoverageGroup(groupFiles, warningsList);
+    for (const [normalized, data] of groupMap) {
+      const existing = map.get(normalized);
+      map.set(normalized, existing ? mergeCoverageEntries(existing, data) : data);
+    }
+  }
+  return map;
+}
+
+async function loadCoverageGroup(files, warningsList) {
   const map = new Map();
   for (const filePath of files) {
     let raw = "";
@@ -537,7 +558,7 @@ async function loadCoverageMap(files, warningsList) {
     for (const [coveredPath, data] of Object.entries(parsed)) {
       const normalized = normalizePathForLookup(String(coveredPath));
       const existing = map.get(normalized);
-      map.set(normalized, existing ? mergeCoverageEntries(existing, data) : data);
+      map.set(normalized, existing ? mergeCoverageEntries(existing, data, { sameCollector: true }) : data);
     }
   }
   return map;

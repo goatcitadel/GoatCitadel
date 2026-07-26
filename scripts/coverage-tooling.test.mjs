@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
-import { mergeCoverageEntries } from "./coverage-merge.mjs";
+import { collectorGroupKey, mergeCoverageEntries } from "./coverage-merge.mjs";
 import { normalizeCoveragePathForLookup } from "./coverage-paths.mjs";
 import { buildCoverageSourceFingerprint } from "./coverage-source-fingerprint.mjs";
 
@@ -130,6 +130,59 @@ describe("coverage tooling", () => {
       Object.values(merged.s).reduce((total, count) => total + count, 0),
       10,
     );
+  });
+
+  it("folds repeated same-location counters together across shards of one collector", () => {
+    // Two shards of one suite instrument the same build, so their maps agree
+    // counter for counter. Keeping each shard's copy of an ambiguous location
+    // separate — right across collectors — would count this file's two statements
+    // four times and inflate the denominator by the shard count.
+    const shardOne = {
+      path: "/repo/src/repeated.ts",
+      statementMap: { 0: location(30), 1: location(30) },
+      s: { 0: 1, 1: 0 },
+      fnMap: {},
+      f: {},
+      branchMap: { 0: branchLocation("if", 7, [location(7), location(8)]) },
+      b: { 0: [1, 0] },
+    };
+    const shardTwo = {
+      path: "/repo/src/repeated.ts",
+      statementMap: { 0: location(30), 1: location(30) },
+      s: { 0: 0, 1: 2 },
+      fnMap: {},
+      f: {},
+      branchMap: { 0: branchLocation("if", 7, [location(7), location(8)]) },
+      b: { 0: [0, 3] },
+    };
+
+    const merged = mergeCoverageEntries(shardOne, shardTwo, { sameCollector: true });
+
+    assert.equal(Object.keys(merged.statementMap).length, 2);
+    assert.deepEqual(Object.values(merged.s), [1, 2]);
+    assert.equal(Object.keys(merged.branchMap).length, 1);
+    // Hits still union: an arm covered by only one shard counts as covered.
+    assert.deepEqual(Object.values(merged.b), [[1, 3]]);
+
+    // Without the flag the copies stay apart, which is what protects a c8 report
+    // merged with a vitest one.
+    const acrossCollectors = mergeCoverageEntries(shardOne, shardTwo);
+    assert.equal(Object.keys(acrossCollectors.statementMap).length, 4);
+  });
+
+  it("groups shard report directories under one collector", () => {
+    const repoRoot = path.resolve(scriptsDir, "..");
+    const gateway = path.join(repoRoot, "apps", "gateway");
+    const shardOne = collectorGroupKey(path.join(gateway, "coverage-shard-1", "coverage-final.json"));
+    const shardFour = collectorGroupKey(path.join(gateway, "coverage-shard-4", "coverage-final.json"));
+    const smoke = collectorGroupKey(path.join(gateway, "coverage-smoke", "coverage-final.json"));
+    const otherPackage = collectorGroupKey(
+      path.join(repoRoot, "packages", "storage", "coverage-shard-1", "coverage-final.json"),
+    );
+
+    assert.equal(shardOne, shardFour);
+    assert.notEqual(shardOne, smoke);
+    assert.notEqual(shardOne, otherPackage);
   });
 
   it("preserves locationless implicit branch arms conservatively across collectors", () => {
