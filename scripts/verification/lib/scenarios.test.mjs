@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   A2A_FULL_LANE_COMMANDS,
   FAST_LANE_COMMANDS,
@@ -612,4 +613,44 @@ test("provider truth status fails configured auth, route, and protocol errors", 
   for (const error of ["unsupported provider feature", "model not supported", "model unavailable now"]) {
     assert.equal(deriveProviderStatus({ error }, { providerConfigured: true }), "degraded");
   }
+});
+
+test("every lane that seeds the Mission Control Next fixture starts its stack with operator auth", async () => {
+  // The fixture creates an Ops saved board, which is operator-authenticated.
+  // `startVerificationStack` defaults to GOATCITADEL_AUTH_MODE=none, and the auth
+  // plugin short-circuits that to actor source `none` before the loopback branch
+  // runs, so the seed answers 403. This guard is source-level rather than
+  // behavioural so a NEW lane that seeds the fixture cannot silently reintroduce
+  // it -- that is exactly how api-compat, realtime-truth and ui-parity regressed.
+  const libDir = path.dirname(fileURLToPath(import.meta.url));
+  const roots = [libDir, path.join(libDir, "scenarios")];
+  const offenders = [];
+  for (const root of roots) {
+    for (const entry of await fs.readdir(root, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith(".mjs") || entry.name.endsWith(".test.mjs")) {
+        continue;
+      }
+      const source = await fs.readFile(path.join(root, entry.name), "utf8");
+      // Only a module that both seeds the fixture AND owns the stack can fix the
+      // env. A helper that seeds against a URL it was handed (api-compat) cannot,
+      // so it is the owning lane's job; the seeder itself raises an actionable
+      // error for that case.
+      const seeds = /\bawait\s+seedMissionControlNextFixture\s*\(/u.test(source);
+      const ownsStack = /\bawait\s+startVerificationStack\s*\(/u.test(source);
+      if (!seeds || !ownsStack) {
+        continue;
+      }
+      const authorized =
+        source.includes("VERIFICATION_OPERATOR_AUTH_ENV") ||
+        /GOATCITADEL_AUTH_MODE:\s*"token"/u.test(source);
+      if (!authorized) {
+        offenders.push(entry.name);
+      }
+    }
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    `these lanes seed the Mission Control Next fixture without operator auth and will 403: ${offenders.join(", ")}`,
+  );
 });

@@ -16,10 +16,14 @@ export async function runApiCompatibilityLane(context, _options = {}, deps) {
     snapshotRestContract,
     startVerificationStack,
     stopVerificationStack,
+    VERIFICATION_OPERATOR_AUTH_ENV,
     writeJson,
   } = deps;
   const stack = await startVerificationStack(context, {
     includeUi: false,
+    // Snapshotting the shell facts seeds the Mission Control Next fixture, which
+    // creates an operator-authenticated Ops saved board.
+    gatewayEnv: { ...VERIFICATION_OPERATOR_AUTH_ENV },
   });
   try {
     await runScenario(

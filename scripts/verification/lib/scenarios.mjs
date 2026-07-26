@@ -108,6 +108,24 @@ const TAB_ROUTES = [
 ];
 
 const NEXT_UI_PACKAGE = "@goatcitadel/mission-control-next";
+
+/**
+ * Gateway env that gives a verification lane a real authenticated operator.
+ *
+ * `startVerificationStack` defaults to `GOATCITADEL_AUTH_MODE=none`, and the auth
+ * plugin short-circuits that to actor source `none` before the loopback branch
+ * runs. Operator-authenticated routes — the Ops saved boards the Mission Control
+ * Next fixture seeds, approvals, compaction-breaker actions — then answer 403,
+ * because they need a specific actor identity to record, not merely an
+ * unauthenticated local caller. Token mode keeps that path alive while the
+ * loopback bypass lets the lane's plain `requestJson` calls through without
+ * threading a header everywhere.
+ */
+export const VERIFICATION_OPERATOR_AUTH_ENV = Object.freeze({
+  GOATCITADEL_AUTH_MODE: "token",
+  GOATCITADEL_AUTH_TOKEN: "verification-operator-token",
+  GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS: "true",
+});
 const AXE_SOURCE_PATH = createRequire(import.meta.url).resolve("axe-core/axe.min.js");
 const VISUAL_BASELINE_ROOT_DIR = path.join(repoRoot, "scripts", "verification", "baselines", "visual");
 const VISUAL_DIFF_PIXEL_DELTA = 18;
@@ -128,6 +146,7 @@ function verificationLaneDeps() {
     API_COMPAT_ALLOWLIST_PATH,
     API_COMPAT_BASELINE_PATH,
     NEXT_UI_PACKAGE,
+    VERIFICATION_OPERATOR_AUTH_ENV,
     VISUAL_DIFF_RATIO_THRESHOLD,
     VISUAL_ROUTE_READY_TIMEOUT_MS,
     assertApprovalIngressMatrix,
@@ -1244,7 +1263,7 @@ async function runGatewayApiSurfaceScenarios(context, gatewayUrl, seed) {
         `/api/v1/capabilities/candidates/${encodeURIComponent(candidateId)}/promote`,
         {
           method: "POST",
-          body: {},
+          body: { expectedRevision: await readCapabilityCandidateRevision(gatewayUrl, candidateId, "promote") },
         },
       );
       assertOk(promoted, "promote candidate");
@@ -1254,7 +1273,7 @@ async function runGatewayApiSurfaceScenarios(context, gatewayUrl, seed) {
         `/api/v1/capabilities/candidates/${encodeURIComponent(candidateId)}/revoke`,
         {
           method: "POST",
-          body: {},
+          body: { expectedRevision: await readCapabilityCandidateRevision(gatewayUrl, candidateId, "revoke") },
         },
       );
       assertOk(revoked, "revoke candidate");
@@ -1772,7 +1791,9 @@ export async function runOperatorProofLane(context, _options = {}) {
           `/api/v1/capabilities/candidates/${encodeURIComponent(candidateId)}/promote`,
           {
             method: "POST",
-            body: {},
+            body: {
+              expectedRevision: await readCapabilityCandidateRevision(stack.gatewayUrl, candidateId, "promote"),
+            },
           },
         );
         assertOk(promoted, "promote operator-proof candidate");
@@ -1782,7 +1803,9 @@ export async function runOperatorProofLane(context, _options = {}) {
           `/api/v1/capabilities/candidates/${encodeURIComponent(candidateId)}/revoke`,
           {
             method: "POST",
-            body: {},
+            body: {
+              expectedRevision: await readCapabilityCandidateRevision(stack.gatewayUrl, candidateId, "revoke"),
+            },
           },
         );
         assertOk(revoked, "revoke operator-proof candidate");
@@ -3072,6 +3095,12 @@ export async function runUiParityLane(context, _options = {}) {
   const stack = await startVerificationStack(context, {
     includeUi: false,
     gatewayEnv: {
+      // The Ops saved-board routes require a real authenticated operator
+      // identity for their audit actor, and `auth.mode === "none"` short-circuits
+      // attribution to `auth:none` before the loopback branch is ever reached.
+      // Token mode plus the loopback bypass is what the surface- and
+      // visual-regression lanes already use to seed the same fixture.
+      ...VERIFICATION_OPERATOR_AUTH_ENV,
       GOATCITADEL_FEATURE_MEMORY_LIFECYCLE_ADMIN_V1_ENABLED: "true",
       GOATCITADEL_FEATURE_MEMORY_MAINTENANCE_V1_ENABLED: "true",
       GOATCITADEL_FEATURE_DURABLE_KERNEL_V1_ENABLED: "true",
@@ -3503,6 +3532,9 @@ export async function runRealtimeTruthLane(context, _options = {}) {
   try {
     stack = await startVerificationStack(context, {
       includeUi: true,
+      // Seeding the Mission Control Next fixture creates an Ops saved board,
+      // which is operator-authenticated. See VERIFICATION_OPERATOR_AUTH_ENV.
+      gatewayEnv: { ...VERIFICATION_OPERATOR_AUTH_ENV },
     });
     await ensureOnboardingComplete(stack.gatewayUrl, "verification-realtime-truth");
     const fixture = await seedMissionControlNextFixture(stack.gatewayUrl);
@@ -4228,6 +4260,24 @@ async function waitForCodeModeRunCompletion(gatewayUrl, runId, options = {}) {
   throw new Error(
     `code mode run ${runId} did not reach a terminal state in time; last status=${latest?.status ?? "unknown"} body=${JSON.stringify(latest?.body ?? null)}`,
   );
+}
+
+/**
+ * Reads the candidate's current revision for a lifecycle verb's CAS guard.
+ *
+ * HX-402 made `promote`/`revoke`/`rollback` approval-first and compare-and-swap:
+ * `expectedRevision` is required, and a promote that commits an approval bumps
+ * the revision. Re-reading before each verb is what keeps a two-verb sequence
+ * from failing the second CAS with a stale revision.
+ */
+async function readCapabilityCandidateRevision(gatewayUrl, candidateId, label) {
+  const detail = await requestJson(gatewayUrl, `/api/v1/capabilities/candidates/${encodeURIComponent(candidateId)}`);
+  assertOk(detail, `read candidate revision for ${label}`);
+  const revision = detail.body?.revision;
+  if (!Number.isInteger(revision) || revision < 1) {
+    throw new Error(`candidate ${candidateId} exposed no usable revision for ${label}: ${JSON.stringify(revision)}`);
+  }
+  return revision;
 }
 
 async function waitForCapabilityCandidate(gatewayUrl, candidateId, attempts = 20) {

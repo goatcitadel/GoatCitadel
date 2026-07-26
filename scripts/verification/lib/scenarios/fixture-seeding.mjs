@@ -298,6 +298,18 @@ export async function seedMissionControlNextFixture(gatewayUrl, options = {}, de
       idempotencyKey: "mission-control-next-visual-ops-board-v1",
     },
   });
+  if (opsBoardResponse?.status === 403) {
+    // A bare "403" here sends the reader hunting through the Ops board route.
+    // The cause is always the lane's stack: `startVerificationStack` defaults to
+    // GOATCITADEL_AUTH_MODE=none, and the auth plugin short-circuits that to
+    // actor source `none` before the loopback branch runs, so a route that needs
+    // a specific operator identity to record has none to record.
+    throw new Error(
+      "create mission-control-next verification Ops board was denied (403): the Ops saved-board routes require an "
+        + "authenticated operator, but this lane's gateway is running with GOATCITADEL_AUTH_MODE=none. Spread "
+        + "VERIFICATION_OPERATOR_AUTH_ENV into the lane's startVerificationStack gatewayEnv.",
+    );
+  }
   assertOk(opsBoardResponse, "create mission-control-next verification Ops board");
   const opsBoardId = opsBoardResponse.body?.boardId;
   if (!opsBoardId) {

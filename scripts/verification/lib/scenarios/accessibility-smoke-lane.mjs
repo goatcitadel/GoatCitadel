@@ -81,6 +81,7 @@ export async function runAccessibilitySmokeLane(context, options = {}, deps) {
     startBrowserTrace,
     startVerificationStack,
     stopVerificationStack,
+    VERIFICATION_OPERATOR_AUTH_ENV,
     waitForVerificationRouteReady,
     writeJson,
   } = deps;
@@ -90,6 +91,9 @@ export async function runAccessibilitySmokeLane(context, options = {}, deps) {
     stack = await startVerificationStack(context, {
       includeUi: true,
       gatewayEnv: {
+        // Seeding the Mission Control Next fixture creates an operator-authenticated
+        // Ops saved board. See VERIFICATION_OPERATOR_AUTH_ENV.
+        ...VERIFICATION_OPERATOR_AUTH_ENV,
         GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
         GOATCITADEL_CODE_MODE_SANDBOX_REQUIRED: "false",
         GOATCITADEL_MESH_NODE_ID: "build-main",
