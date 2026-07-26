@@ -164,15 +164,57 @@ export const A2A_FULL_LANE_COMMANDS = Object.freeze([
   },
 ]);
 
+/**
+ * Resolves a `--commands=a,b,c` selection into the command ids to run. An empty
+ * selection means "the whole lane", which keeps `pnpm verify:fast` unchanged. An
+ * unrecognised or empty-after-filtering id is an error rather than a silent no-op:
+ * a shard that quietly runs nothing would report success and take its share of the
+ * lane's coverage with it.
+ */
+export function resolveFastLaneSelection(raw) {
+  const requested = String(raw ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+  if (requested.length === 0) {
+    return undefined;
+  }
+  const unknown = requested.filter((id) => !FAST_LANE_COMMAND_BY_ID.has(id));
+  if (unknown.length > 0) {
+    throw new Error(
+      `Unknown fast lane command id(s): ${unknown.join(", ")}. Known ids: `
+        + `${FAST_LANE_COMMANDS.map((command) => command.id).join(", ")}.`,
+    );
+  }
+  return new Set(requested);
+}
+
+export function selectFastLaneStages(stages, selection) {
+  if (!selection) {
+    return stages;
+  }
+  const selected = stages
+    .map((stage) => ({ ...stage, commands: stage.commands.filter((id) => selection.has(id)) }))
+    .filter((stage) => stage.commands.length > 0);
+  const scheduled = new Set(selected.flatMap((stage) => stage.commands));
+  const dropped = [...selection].filter((id) => !scheduled.has(id));
+  if (dropped.length > 0) {
+    throw new Error(`Fast lane command id(s) not scheduled by any stage: ${dropped.join(", ")}.`);
+  }
+  return selected;
+}
+
 export async function runFastLane(context, options = {}) {
   const failFast = maybeParseBool(options.failFast ?? process.env.GOATCITADEL_VERIFY_FAIL_FAST, false);
   const serial = failFast || maybeParseBool(options.serial ?? process.env.GOATCITADEL_VERIFY_SERIAL, false);
   const injectedFailureScenario =
     typeof options.injectFailureScenario === "string" ? options.injectFailureScenario : undefined;
   const executionOptions = { failFast, injectFailureScenario: injectedFailureScenario };
-  const stages = serial
-    ? [{ id: "fast.serial", mode: "serial", commands: FAST_LANE_COMMANDS.map((item) => item.id) }]
-    : FAST_LANE_STAGES;
+  const selection = resolveFastLaneSelection(options.commands ?? process.env.GOATCITADEL_VERIFY_FAST_COMMANDS);
+  const stages = selectFastLaneStages(
+    serial ? [{ id: "fast.serial", mode: "serial", commands: FAST_LANE_COMMANDS.map((item) => item.id) }] : FAST_LANE_STAGES,
+    selection,
+  );
 
   for (const stage of stages) {
     if (stage.mode === "parallel") {

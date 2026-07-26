@@ -840,6 +840,13 @@ describe("coverage tooling", () => {
     );
 
     assert.match(workflow, /pnpm coverage:collect:reuse && pnpm coverage:gate:production/);
+    // The split lane ships raw coverage between jobs, so every part is scanned
+    // before it becomes a downloadable artifact — not just the final summary.
+    assert.match(workflow, /bash scripts\/verification\/stage-fast-part\.sh part/);
+    assert.match(
+      fs.readFileSync(path.join(scriptsDir, "verification", "stage-fast-part.sh"), "utf8"),
+      /node scripts\/verify-artifact-redaction\.mjs "\$out"/,
+    );
     assert.match(workflow, /node scripts\/verify-artifact-redaction\.mjs artifacts\/coverage/);
     assert.match(workflow, /artifacts\/coverage\/coverage-summary\.json/);
     assert.match(workflow, /artifacts\/coverage\/coverage-summary\.md/);

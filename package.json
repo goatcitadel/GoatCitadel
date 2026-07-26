@@ -78,6 +78,7 @@
     "verify:mcp:conformance": "node --test scripts/mcp-conformance.test.mjs scripts/mcp-server-stdio-runner.test.mjs",
     "verify:mcp:requester-scope": "node scripts/verification/mcp-requester-scope-proof.mjs",
     "verify:fast": "node scripts/verification/run.mjs fast",
+    "verify:fast:merge": "node scripts/verification/merge-fast-manifests.mjs",
     "verify:a2a:full": "node scripts/verification/run.mjs a2a-full",
     "verify:deep:core": "node scripts/verification/run.mjs deep-core",
     "verify:deep:ecosystem": "node scripts/verification/run.mjs deep-ecosystem",

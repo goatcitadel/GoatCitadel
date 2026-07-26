@@ -216,7 +216,33 @@ function fastTestScenario(id, startedAt, finishedAt) {
   };
 }
 
-async function createFinalizeTestContext({ startedAt = new Date(Date.now() - 1_000).toISOString(), scenarios }) {
+test("a sliced run is not judged against the whole lane's budgets", async () => {
+  // Most slices carry no fast.test scenario, which the lane budget reads as a
+  // missing measurement. Judging a part that way failed every non-test CI job.
+  const context = await createFinalizeTestContext({ scenarios: [], metadata: { commandSelection: "fast.docs" } });
+  await withNonStrictPerfBudget(async () => {
+    try {
+      const manifest = await finalizeRunContext(context);
+
+      assert.equal(manifest.status, "passed");
+      assert.equal(manifest.metadata.fastLanePerf, undefined);
+      assert.equal(manifest.metadata.commandSelection, "fast.docs");
+      const perfWritten = await fs
+        .access(path.join(context.artifactRoot, "perf", "fast-lane-timing.json"))
+        .then(() => true)
+        .catch(() => false);
+      assert.equal(perfWritten, false);
+    } finally {
+      await fs.rm(context.artifactRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+async function createFinalizeTestContext({
+  startedAt = new Date(Date.now() - 1_000).toISOString(),
+  scenarios,
+  metadata = {},
+}) {
   const artifactRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-fast-perf-integrity-"));
   return {
     lane: "fast",
@@ -228,7 +254,7 @@ async function createFinalizeTestContext({ startedAt = new Date(Date.now() - 1_0
       startedAt,
       repoRoot: "repo",
       artifactRoot,
-      metadata: {},
+      metadata,
       counts: {
         passed: scenarios.length,
         failed: 0,
