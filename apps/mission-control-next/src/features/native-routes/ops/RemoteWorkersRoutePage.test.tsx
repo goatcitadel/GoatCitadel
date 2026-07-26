@@ -45,17 +45,30 @@ const truth = <T,>(value: T | null, authorityClass: string, owner = "storage.rem
   observedAt: OBS,
 });
 
-function item(): RemoteWorkerRegistryItem {
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+function item(
+  options: { workerId?: string; workspaceId?: string; nodeId?: string; label?: string } = {},
+): RemoteWorkerRegistryItem {
+  const workerId = options.workerId ?? "worker-a";
+  const workspaceId = options.workspaceId ?? "workspace-a";
+  const nodeId = options.nodeId ?? "node-a";
   return {
     schemaVersion: "goatcitadel.remote-worker-registry-item.v1",
-    workerId: "worker-a",
+    workerId,
     admission: truth(
       {
-        registryWorkspaceId: "workspace-a",
-        workerId: "worker-a",
-        nodeId: "node-a",
+        registryWorkspaceId: workspaceId,
+        workerId,
+        nodeId,
         workerGeneration: 2,
-        workerLabel: "Office worker",
+        workerLabel: options.label ?? "Office worker",
         platform: "windows",
         architecture: "x64",
         allowedWorkspaceCount: 2,
@@ -73,16 +86,16 @@ function item(): RemoteWorkerRegistryItem {
   } as unknown as RemoteWorkerRegistryItem;
 }
 
-function assignmentProjection() {
+function assignmentProjection(options: { assignmentId?: string; workerId?: string; nodeId?: string } = {}) {
   const t = <T,>(value: T | null, ac: string) => truth(value, ac, "storage.remoteWorkerAssignments");
+  const assignmentId = options.assignmentId ?? "assign-a";
+  const workerId = options.workerId ?? "worker-a";
+  const nodeId = options.nodeId ?? "node-a";
   return {
     schemaVersion: "goatcitadel.remote-worker-assignment-projection.v1",
-    assignmentId: "assign-a",
+    assignmentId,
     lineage: t({ sessionId: "session-a", turnId: "turn-a", durableRunId: "run-a" }, "canonical_record"),
-    identity: t(
-      { assignmentGeneration: 1, workerId: "worker-a", workerGeneration: 2, nodeId: "node-a" },
-      "canonical_record",
-    ),
+    identity: t({ assignmentGeneration: 1, workerId, workerGeneration: 2, nodeId }, "canonical_record"),
     lease: t(
       { assignmentGeneration: 1, leaseRevision: 2, workerSentThrough: 3, serverAcknowledgedThrough: 2 },
       "canonical_record",
@@ -96,12 +109,12 @@ function assignmentProjection() {
   };
 }
 
-function reconciliation() {
+function reconciliation(options: { workspaceId?: string; workerId?: string } = {}) {
   const t = <T,>(value: T | null, ac: string) => truth(value, ac, "gateway.remoteWorkers");
   return {
     schemaVersion: "goatcitadel.remote-worker-reconciliation.v1",
-    workspaceId: "workspace-a",
-    workerId: "worker-a",
+    workspaceId: options.workspaceId ?? "workspace-a",
+    workerId: options.workerId ?? "worker-a",
     posture: t("active", "derived_projection"),
     admissionControl: t({ status: "consistent", summary: "Generation 2 admitted." }, "derived_projection"),
     assignmentLease: t({ status: "divergent", summary: "1 expired lease." }, "derived_projection"),
@@ -112,11 +125,11 @@ function reconciliation() {
   };
 }
 
-function props(): NativeRoutePagesProps {
+function props(workspaceId = "workspace-a"): NativeRoutePagesProps {
   return {
     route: { area: "ops", section: "workers" },
-    activeWorkspaceId: "workspace-a",
-    activeWorkspaceName: "Workspace A",
+    activeWorkspaceId: workspaceId,
+    activeWorkspaceName: workspaceId === "workspace-a" ? "Workspace A" : "Workspace B",
     pendingApprovals: 0,
     navigate: vi.fn(),
     setActiveWorkspaceId: vi.fn(),
@@ -224,5 +237,107 @@ describe("RemoteWorkersRoutePage", () => {
     });
     await flush();
     expect(textOf(renderer!.toJSON())).toContain("Registry unavailable");
+  });
+
+  it("hides the previous worker detail while a newly selected worker is loading", async () => {
+    const workerB = item({ workerId: "worker-b", nodeId: "node-b", label: "Travel worker" });
+    const detailB = deferred<Awaited<ReturnType<typeof fetchRemoteWorkerDetail>>>();
+    const assignmentsB = deferred<Awaited<ReturnType<typeof fetchRemoteWorkerAssignments>>>();
+    const reconciliationB = deferred<Awaited<ReturnType<typeof fetchRemoteWorkerReconciliation>>>();
+    mockedRegistry.mockReturnValue({
+      page: { items: [item(), workerB] } as never,
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    });
+    mockedDetail.mockImplementation((_workspaceId, workerId) =>
+      workerId === "worker-b" ? detailB.promise : Promise.resolve({ item: item() } as never),
+    );
+    mockedAssignments.mockImplementation((_workspaceId, options) =>
+      options?.workerId === "worker-b"
+        ? assignmentsB.promise
+        : Promise.resolve({ items: [assignmentProjection()] } as never),
+    );
+    mockedReconciliation.mockImplementation((_workspaceId, workerId) =>
+      workerId === "worker-b" ? reconciliationB.promise : Promise.resolve(reconciliation() as never),
+    );
+    await act(async () => {
+      renderer = create(<RemoteWorkersRoutePage {...props()} />);
+    });
+    await flush();
+
+    const officeWorker = renderer!.root.findAllByType("button").find((node) => textOf(node).includes("Office worker"));
+    await act(async () => {
+      officeWorker!.props.onClick();
+    });
+    await flush();
+    expect(textOf(renderer!.toJSON())).toContain("assign-a");
+    expect(textOf(renderer!.toJSON())).toContain("node-a");
+
+    const travelWorker = renderer!.root.findAllByType("button").find((node) => textOf(node).includes("Travel worker"));
+    await act(async () => {
+      travelWorker!.props.onClick();
+      await Promise.resolve();
+    });
+    const loadingText = textOf(renderer!.toJSON());
+    expect(loadingText).toContain("Travel worker");
+    expect(loadingText).toContain("Assignments are loading or unavailable.");
+    expect(loadingText).not.toContain("assign-a");
+
+    await act(async () => {
+      detailB.resolve({ item: workerB } as never);
+      assignmentsB.resolve({
+        items: [assignmentProjection({ assignmentId: "assign-b", workerId: "worker-b", nodeId: "node-b" })],
+      } as never);
+      reconciliationB.resolve(reconciliation({ workerId: "worker-b" }) as never);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const resolvedText = textOf(renderer!.toJSON());
+    expect(resolvedText).toContain("node-b");
+    expect(resolvedText).toContain("assign-b");
+  });
+
+  it("remounts selection state by workspace and ignores prior-workspace detail completion", async () => {
+    const detailA = deferred<Awaited<ReturnType<typeof fetchRemoteWorkerDetail>>>();
+    const workspaceBWorker = item({
+      workerId: "worker-b",
+      workspaceId: "workspace-b",
+      nodeId: "node-b",
+      label: "Workspace B worker",
+    });
+    mockedRegistry.mockImplementation((workspaceId) => ({
+      page: { items: workspaceId === "workspace-a" ? [item()] : [workspaceBWorker] } as never,
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    }));
+    mockedDetail.mockImplementation((workspaceId) =>
+      workspaceId === "workspace-a" ? detailA.promise : Promise.resolve({ item: workspaceBWorker } as never),
+    );
+    await act(async () => {
+      renderer = create(<RemoteWorkersRoutePage {...props("workspace-a")} />);
+    });
+    await flush();
+    const workerButton = renderer!.root.findAllByType("button").find((node) => textOf(node).includes("Office worker"));
+    await act(async () => {
+      workerButton!.props.onClick();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      renderer!.update(<RemoteWorkersRoutePage {...props("workspace-b")} />);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      detailA.resolve({ item: item() } as never);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const text = textOf(renderer!.toJSON());
+    expect(text).toContain("Workspace B worker");
+    expect(text).toContain("Select a worker");
+    expect(text).not.toContain("node-a");
   });
 });

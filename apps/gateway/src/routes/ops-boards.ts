@@ -100,13 +100,13 @@ export const opsSavedBoardRoutes: FastifyPluginAsync<OpsSavedBoardRoutesOptions>
   const operatorRead = withRouteAccess(fastify, "operator", {
     onRequest: async (request, reply) => {
       markReadResponse(reply);
-      resolveAuthenticatedOperator(request, reply);
+      if (!resolveAuthenticatedOperator(request, reply)) return reply;
     },
   });
   const operatorMutation = withRouteAccess(fastify, "operator", {
     onRequest: async (request, reply) => {
       markNoStore(reply);
-      resolveAuthenticatedOperator(request, reply);
+      if (!resolveAuthenticatedOperator(request, reply)) return reply;
     },
   });
 
@@ -140,7 +140,7 @@ export const opsSavedBoardRoutes: FastifyPluginAsync<OpsSavedBoardRoutesOptions>
     const body = parseCreateBody(request.body);
     if (!body) return reply.code(400).send({ error: "Invalid ops saved board create request." });
     const actorId = resolveAuthenticatedOperator(request, reply);
-    if (!actorId) return;
+    if (!actorId) return reply;
     try {
       const record = options.service.create(body, actorId);
       reply.header(
@@ -160,7 +160,7 @@ export const opsSavedBoardRoutes: FastifyPluginAsync<OpsSavedBoardRoutesOptions>
       return reply.code(400).send({ error: "Invalid ops saved board update request." });
     }
     const actorId = resolveAuthenticatedOperator(request, reply);
-    if (!actorId) return;
+    if (!actorId) return reply;
     try {
       return reply.send(options.service.update(params.data.boardId, body, actorId));
     } catch (error) {
@@ -179,7 +179,7 @@ export const opsSavedBoardRoutes: FastifyPluginAsync<OpsSavedBoardRoutesOptions>
         return reply.code(400).send({ error: `Invalid ops saved board ${operation} request.` });
       }
       const actorId = resolveAuthenticatedOperator(request, reply);
-      if (!actorId) return;
+      if (!actorId) return reply;
       try {
         return reply.send(options.service[operation](params.data.boardId, body, actorId));
       } catch (error) {

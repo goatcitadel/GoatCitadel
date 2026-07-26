@@ -17,7 +17,9 @@ services:
             exit 1
             ;;
         esac
-        exec docker-entrypoint.sh "$$@"
+        # With `sh -c`, Compose's first command argument becomes `$0`, not `$1`.
+        # Forward it explicitly so the official entrypoint actually starts Postgres.
+        exec docker-entrypoint.sh "$$0" "$$@"
     command: ["postgres"]
     environment:
       POSTGRES_DB: goatcitadel
@@ -43,6 +45,8 @@ services:
       postgres:
         condition: service_healthy
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     cap_drop:
       - ALL
     security_opt:
@@ -68,6 +72,7 @@ services:
       GOATCITADEL_AUTH_MODE: token
       GOATCITADEL_AUTH_TOKEN: ${GOATCITADEL_AUTH_TOKEN:?Set GOATCITADEL_AUTH_TOKEN to a long random value before running docker compose}
       GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS: "false"
+      GOATCITADEL_LOCAL_ENV_FILE: /app/data/.env
       GOATCITADEL_ALLOWED_ORIGINS: ${GOATCITADEL_ALLOWED_ORIGINS:-http://localhost:4173,http://127.0.0.1:4173}
       GOATCITADEL_VITE_ALLOWED_HOSTS: ${GOATCITADEL_VITE_ALLOWED_HOSTS:-localhost,127.0.0.1}
       VITE_GATEWAY_ALLOWED_HOSTS: ${VITE_GATEWAY_ALLOWED_HOSTS:-localhost,127.0.0.1}
@@ -85,10 +90,12 @@ services:
       retries: 10
       start_period: 30s
     volumes:
+      - goatcitadel-config:/app/config
       - goatcitadel-data:/app/data
       - goatcitadel-workspace:/app/workspace
 
 volumes:
   goatcitadel-postgres:
+  goatcitadel-config:
   goatcitadel-data:
   goatcitadel-workspace:

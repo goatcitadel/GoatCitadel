@@ -57,13 +57,7 @@ jobs:
 
       - name: Run fast verification checks
         run: >-
-          pnpm verify:fast --commands=fast.skills-catalog,fast.repo-hygiene,fast.storage-migration-parity,fast.extensions-sdk-build,fast.extensions-sdk-package,fast.typecheck,fast.smoke,fast.build,fast.docs
-
-      # The only coverage collection the lane itself does not do.
-      - name: Collect gateway coverage extras
-        run: |
-          pnpm --filter @goatcitadel/gateway coverage:smoke
-          pnpm --filter @goatcitadel/gateway coverage:exercise
+          pnpm verify:fast --commands=fast.skills-catalog,fast.repo-hygiene,fast.storage-migration-parity,fast.extensions-sdk-build,fast.extensions-sdk-package,fast.typecheck,fast.coverage.gateway.smoke,fast.coverage.gateway.exercise,fast.smoke,fast.build,fast.docs
 
       - name: Stage checks part
         if: always()
@@ -198,7 +192,12 @@ jobs:
         run: pnpm --filter @goatcitadel/gateway test:postgres:memory
 
   gate:
-    name: Coverage gate
+    # Keep this exact name aligned with the protected-branch required context.
+    # `always()` is required because a skipped required job reports success on
+    # GitHub; the final step below converts every failed/skipped dependency to a
+    # failing aggregate check.
+    name: fast
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [checks, tests, postgres]
@@ -267,3 +266,15 @@ jobs:
             artifacts/coverage/coverage-summary.json
             artifacts/coverage/coverage-summary.md
           if-no-files-found: error
+
+      - name: Enforce upstream job results
+        if: always()
+        env:
+          CHECKS_RESULT: ${{ needs.checks.result }}
+          TESTS_RESULT: ${{ needs.tests.result }}
+          POSTGRES_RESULT: ${{ needs.postgres.result }}
+        run: |
+          if [ "$CHECKS_RESULT" != "success" ] || [ "$TESTS_RESULT" != "success" ] || [ "$POSTGRES_RESULT" != "success" ]; then
+            echo "One or more required verification jobs did not succeed: checks=$CHECKS_RESULT tests=$TESTS_RESULT postgres=$POSTGRES_RESULT" >&2
+            exit 1
+          fi

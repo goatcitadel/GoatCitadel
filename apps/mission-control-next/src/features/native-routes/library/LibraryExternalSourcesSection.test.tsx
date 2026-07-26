@@ -21,6 +21,16 @@ vi.mock("@goatcitadel/mission-control-shared/api/external-sources", () => apiMoc
 const FULL_SHA = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const timestamp = "2026-07-14T08:00:00.000Z";
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 function sourceSummary(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     schemaVersion: "goatcitadel.external-source.v1",
@@ -433,6 +443,114 @@ describe("LibraryExternalSourcesSection", () => {
     const markup = markupOf(renderer);
     expect(markup).toContain("identity_drift: the root changed");
     expect(markup).toContain("Operator-only source detail");
+    renderer.unmount();
+  });
+
+  it("ignores a late source-detail result after a newer source is selected", async () => {
+    const sourceA = sourceSummary({ sourceId: "source-a", label: "Source A" });
+    const sourceB = sourceSummary({ sourceId: "source-b", label: "Source B" });
+    const detailA = deferred<ReturnType<typeof sourceDetail>>();
+    apiMocks.fetchExternalSources.mockResolvedValue({
+      schemaVersion: "goatcitadel.external-source.v1",
+      workspaceId: "workspace-1",
+      items: [sourceA, sourceB],
+    });
+    apiMocks.fetchExternalSourceDetail.mockImplementation((_workspaceId: string, sourceId: string) => {
+      if (sourceId === "source-a") {
+        return detailA.promise;
+      }
+      return Promise.resolve(
+        sourceDetail({
+          source: {
+            ...sourceDetail().source,
+            sourceId: "source-b",
+            label: "Source B",
+            canonicalRootPath: "/verified/source-b",
+          },
+        }),
+      );
+    });
+    const renderer = await renderSection();
+
+    await click(findButton(renderer.root, "Source A"));
+    await click(findButton(renderer.root, "Source B"));
+    expect(markupOf(renderer)).toContain("/verified/source-b");
+
+    await act(async () => {
+      detailA.resolve(
+        sourceDetail({
+          source: {
+            ...sourceDetail().source,
+            sourceId: "source-a",
+            label: "Source A",
+            canonicalRootPath: "/stale/source-a",
+          },
+        }),
+      );
+      await Promise.resolve();
+    });
+
+    expect(markupOf(renderer)).toContain("/verified/source-b");
+    expect(markupOf(renderer)).not.toContain("/stale/source-a");
+    renderer.unmount();
+  });
+
+  it("invalidates pending actions and clears exact-root drafts when the workspace changes", async () => {
+    const staleDetail = deferred<ReturnType<typeof sourceDetail>>();
+    apiMocks.fetchExternalSources.mockImplementation((workspaceId: string) =>
+      Promise.resolve({
+        schemaVersion: "goatcitadel.external-source.v1",
+        workspaceId,
+        items:
+          workspaceId === "workspace-1"
+            ? [sourceSummary({ sourceId: "source-a", label: "Workspace A source" })]
+            : [
+                sourceSummary({
+                  sourceId: "source-b",
+                  workspaceId: "workspace-2",
+                  label: "Workspace B source",
+                }),
+              ],
+      }),
+    );
+    apiMocks.fetchExternalSourceDetail.mockImplementation(() => staleDetail.promise);
+    const renderer = await renderSection();
+
+    await click(findButton(renderer.root, "Register source"));
+    const rootInput = renderer.root.find(
+      (node) => node.type === "input" && node.props.placeholder === "Exact verified root; symlinks are never followed",
+    );
+    await act(async () => {
+      rootInput.props.onChange({ target: { value: "/workspace-a/private-root" } });
+    });
+    await click(findButton(renderer.root, "Workspace A source"));
+
+    await act(async () => {
+      renderer.update(<LibraryExternalSourcesSection workspaceId="workspace-2" />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      staleDetail.resolve(
+        sourceDetail({
+          source: {
+            ...sourceDetail().source,
+            sourceId: "source-a",
+            canonicalRootPath: "/stale/workspace-a",
+          },
+        }),
+      );
+      await Promise.resolve();
+    });
+
+    expect(markupOf(renderer)).toContain("Workspace B source");
+    expect(markupOf(renderer)).not.toContain("/stale/workspace-a");
+    expect(markupOf(renderer)).not.toContain("/workspace-a/private-root");
+    await click(findButton(renderer.root, "Register source"));
+    const resetRootInput = renderer.root.find(
+      (node) => node.type === "input" && node.props.placeholder === "Exact verified root; symlinks are never followed",
+    );
+    expect(resetRootInput.props.value).toBe("");
     renderer.unmount();
   });
 });

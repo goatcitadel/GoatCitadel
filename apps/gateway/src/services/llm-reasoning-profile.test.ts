@@ -173,6 +173,31 @@ describe("resolveLlmReasoningProfile", () => {
     }
   });
 
+  it("omits unsupported reasoning for a legacy provider with no reasoning control", () => {
+    const result = resolveLlmReasoningProfile({
+      request: request("medium"),
+      providerId: "qwopus-local",
+      providerCapabilities: { ...BASE_CAPABILITIES, reasoning: false, reasoningEfforts: undefined },
+      attribution: { callKind: "chat_initial", requestedReasoningLevel: "medium" },
+    });
+
+    expect(result.request.reasoning).toEqual({ effort: "none" });
+    expect(result.receipt).toMatchObject({
+      requested: "medium",
+      actual: "none",
+      providerEffort: "none",
+      disposition: "downgraded",
+      reasonCode: "legacy_provider_reasoning_omitted",
+      capabilitySource: "legacy_compatibility",
+    });
+    expect(result.attribution).toMatchObject({
+      requestedReasoningLevel: "medium",
+      dispatchedReasoningEffort: "none",
+      reasoningDisposition: "downgraded",
+      reasoningReasonCode: "legacy_provider_reasoning_omitted",
+    });
+  });
+
   it("downgrades only a declared fallback attempt and preserves requested truth", () => {
     const result = resolveLlmReasoningProfile({
       request: request("ultra"),

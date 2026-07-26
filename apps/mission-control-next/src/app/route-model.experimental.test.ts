@@ -5,6 +5,7 @@ import { isExperimentalRoute, isHiddenRoute } from "./route-model";
 describe("isExperimentalRoute (NAV-02 rail gating)", () => {
   it("flags every experimental surface that is gated out of the primary rails", () => {
     const experimental = [
+      { area: "library", section: "journey" },
       { area: "library", section: "curator" },
       { area: "ops", section: "improvement" },
       { area: "ops", section: "kanban" },

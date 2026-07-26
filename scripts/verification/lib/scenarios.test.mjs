@@ -9,13 +9,70 @@ import {
   buildOrchestrationPerformanceScenarioResult,
   deriveProviderStatus,
   exerciseMissionControlNextMobileRail,
+  getNextCoreNavigationRoutes,
   openMissionControlNextThreadedContext,
   performVerificationInteraction,
   requireCanonicalMemorySeed,
   runFastLane,
+  writeAutonomyGrantRuntimeToolPolicy,
 } from "./scenarios.mjs";
 import { FAST_LANE_STAGES } from "./scenarios/fast-lane.mjs";
 import { buildFastLanePerfPayload, finalizeRunContext, recordScenario } from "./shared.mjs";
+
+test("autonomy-grant verification override drops the stale unified-config generation", async (t) => {
+  const runtimeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-autonomy-policy-test-"));
+  t.after(() => fs.rm(runtimeRoot, { recursive: true, force: true }));
+  const configDir = path.join(runtimeRoot, "config");
+  await fs.mkdir(configDir, { recursive: true });
+  await fs.writeFile(
+    path.join(configDir, "goatcitadel.json"),
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        generation: {
+          id: "generation-before-policy-override",
+          digest: "a".repeat(64),
+          createdAt: "2026-07-26T00:00:00.000Z",
+        },
+        toolPolicy: { tools: { profile: "chat-agent" } },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+
+  await writeAutonomyGrantRuntimeToolPolicy(runtimeRoot);
+
+  const unified = JSON.parse(await fs.readFile(path.join(configDir, "goatcitadel.json"), "utf8"));
+  const split = JSON.parse(await fs.readFile(path.join(configDir, "tool-policy.json"), "utf8"));
+  assert.equal("generation" in unified, false);
+  assert.deepEqual(unified.toolPolicy, split);
+  assert.equal(unified.toolPolicy.tools.profile, "danger");
+  assert.equal(unified.toolPolicy.tools.approvalMode, "bypass");
+});
+
+test("deep-core navigation follows the one-chat release surface", () => {
+  const slugs = [
+    "chat",
+    "projects",
+    "library-skills",
+    "library-prompt-packs",
+    "ops-activity",
+    "ops-approvals",
+    "ops-kanban",
+    "settings-providers",
+  ];
+  const surfaceRoutes = slugs.map((slug) => ({ slug, href: `/${slug}` }));
+
+  assert.deepEqual(
+    getNextCoreNavigationRoutes({
+      packageName: "@goatcitadel/mission-control-next",
+      surfaceRoutes,
+    }).map((route) => route.slug),
+    slugs,
+  );
+});
 
 test("Mission Control Next shell interaction targets Route details instead of Chat context", async () => {
   let inspectorVisible = false;
@@ -256,6 +313,8 @@ test("fast verification lane keeps required fast commands", () => {
     "fast.test.gateway.shard1",
     "fast.test.gateway.shard4",
     "fast.test.gateway.node",
+    "fast.coverage.gateway.smoke",
+    "fast.coverage.gateway.exercise",
     "fast.test.storage",
     "fast.test.mission-control-next",
     "fast.test.policy-engine",
@@ -280,6 +339,10 @@ test("gateway shards cover the suite exactly once and report to their own direct
       shard.args.includes(`--coverage.reportsDirectory=coverage-shard-${position}`),
       `${shard.id} must write its own coverage directory or the shards overwrite each other`,
     );
+    assert.ok(
+      shard.args.includes("--maxWorkers=4"),
+      `${shard.id} must cap coverage workers so high-core hosts do not starve filesystem-heavy tests`,
+    );
     // Trailing args only reach vitest when the script ends in a single vitest call.
     assert.ok(shard.args.includes("test:coverage:vitest"));
     // pnpm forwards a `--` separator literally, and vitest then treats the shard
@@ -292,11 +355,22 @@ test("gateway shards cover the suite exactly once and report to their own direct
 
 test("fast verification split tests preserve recursive package coverage", () => {
   const commandById = new Map(FAST_LANE_COMMANDS.map((command) => [command.id, command]));
+  assert.deepEqual(commandById.get("fast.coverage.gateway.smoke")?.args, [
+    "--filter",
+    "@goatcitadel/gateway",
+    "coverage:smoke",
+  ]);
+  assert.deepEqual(commandById.get("fast.coverage.gateway.exercise")?.args, [
+    "--filter",
+    "@goatcitadel/gateway",
+    "coverage:exercise",
+  ]);
   assert.deepEqual(commandById.get("fast.test.storage")?.args, ["--filter", "@goatcitadel/storage", "test:coverage"]);
   assert.deepEqual(commandById.get("fast.test.mission-control-next")?.args, [
     "--filter",
     "@goatcitadel/mission-control-next",
     "test:coverage",
+    "--maxWorkers=4",
   ]);
   assert.deepEqual(commandById.get("fast.test.policy-engine")?.args, [
     "--filter",
@@ -374,6 +448,11 @@ test("fast verification stage plan isolates policy and schedules every command e
         "fast.test.gateway.shard4",
         "fast.test.gateway.node",
       ],
+    },
+    {
+      id: "fast.coverage.gateway",
+      mode: "serial",
+      commands: ["fast.coverage.gateway.smoke", "fast.coverage.gateway.exercise"],
     },
     {
       id: "fast.test.storage",

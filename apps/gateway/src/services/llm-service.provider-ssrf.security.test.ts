@@ -80,6 +80,39 @@ describe("findBlockedResolvedProviderAddress (Finding 4 — resolved-IP policy)"
     expect(findBlockedResolvedProviderAddress("http://localhost:11434/v1", "127.0.0.1")).toBeUndefined();
   });
 
+  it("permits only an RFC1918 bridge address for Docker's exact host alias", () => {
+    const providerUrl = "http://host.docker.internal:8080/v1";
+    expect(findBlockedResolvedProviderAddress(providerUrl, "10.0.0.1", ["host.docker.internal"])).toBeUndefined();
+    expect(
+      findBlockedResolvedProviderAddress(providerUrl, "172.17.0.1", ["host.docker.internal:8080"]),
+    ).toBeUndefined();
+    expect(
+      findBlockedResolvedProviderAddress(providerUrl, "::ffff:192.168.65.254", ["host.docker.internal"]),
+    ).toBeUndefined();
+
+    for (const allowlist of [
+      [],
+      ["*"],
+      ["*.docker.internal"],
+      [".docker.internal"],
+      ["host.docker.internal:9090"],
+      ["provider.example"],
+    ]) {
+      expect(findBlockedResolvedProviderAddress(providerUrl, "192.168.65.254", allowlist)).toBeTruthy();
+    }
+    expect(
+      findBlockedResolvedProviderAddress("http://host.docker.internal.example/v1", "192.168.65.254", [
+        "host.docker.internal.example",
+      ]),
+    ).toBeTruthy();
+    expect(
+      findBlockedResolvedProviderAddress("http://provider.example/v1", "192.168.65.254", ["provider.example"]),
+    ).toBeTruthy();
+    expect(findBlockedResolvedProviderAddress(providerUrl, "127.0.0.1", ["host.docker.internal"])).toBeTruthy();
+    expect(findBlockedResolvedProviderAddress(providerUrl, "169.254.169.254", ["host.docker.internal"])).toBeTruthy();
+    expect(findBlockedResolvedProviderAddress(providerUrl, "224.0.0.1", ["host.docker.internal"])).toBeTruthy();
+  });
+
   it("permits public addresses (does not over-block legitimate remote providers)", () => {
     expect(findBlockedResolvedProviderAddress("http://api.openai.com/v1", "104.18.0.1")).toBeUndefined();
   });

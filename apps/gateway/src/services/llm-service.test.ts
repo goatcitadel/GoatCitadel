@@ -2878,6 +2878,9 @@ describe("LlmService", () => {
       const models = await service.listModels("openai-codex");
       expect(models.map((model) => model.id)).toEqual([
         "gpt-5.5",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
         "gpt-5.5-pro",
         "gpt-5.4",
         "gpt-5.4-pro",
@@ -2899,6 +2902,9 @@ describe("LlmService", () => {
 
     expect(result.source).toBe("template_fallback");
     expect(result.warning).toContain("template");
+    expect(result.items.map((model) => model.id)).toContain("gpt-5.6-sol");
+    expect(result.items.map((model) => model.id)).toContain("gpt-5.6-terra");
+    expect(result.items.map((model) => model.id)).toContain("gpt-5.6-luna");
     expect(result.items.map((model) => model.id)).toContain("gpt-5.5");
   });
 
@@ -3040,6 +3046,138 @@ describe("LlmService", () => {
     expect(payloadBody?.top_p).toBeUndefined();
     expect(payloadBody?.service_tier).toBeUndefined();
     expect(payloadBody?.text).toEqual({ verbosity: "low" });
+  });
+
+  it("uses the Codex Responses Lite envelope for GPT-5.6 subscription tools", async () => {
+    const secretStore = createTrackedSecretStore({
+      "provider:openai-codex:oauth": JSON.stringify({
+        accessToken: "codex-access-token",
+        refreshToken: "codex-refresh-token",
+        expiresAt: Date.now() + 10 * 60_000,
+        updatedAt: Date.now(),
+      }),
+    });
+    const service = new LlmService(createCodexConfig(), process.env, { secretStore });
+    const originalFetch = globalThis.fetch;
+    let payloadBody: Record<string, unknown> | undefined;
+    let responsesLiteHeader: string | null = null;
+
+    globalThis.fetch = vi.fn(async (_input, init) => {
+      const headers = new Headers(init?.headers);
+      responsesLiteHeader = headers.get("x-openai-internal-codex-responses-lite");
+      payloadBody = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
+      return new Response(
+        [
+          'data: {"type":"response.output_item.added","item":{"type":"function_call","call_id":"call_status","name":"lookup_status","arguments":""}}',
+          "",
+          'data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_status","name":"lookup_status","arguments":"{}"}}',
+          "",
+          'data: {"type":"response.completed","response":{"id":"resp_codex_lite","model":"gpt-5.6-sol","output":[],"usage":{"input_tokens":8,"output_tokens":2,"total_tokens":10}}}',
+          "",
+          "data: [DONE]",
+          "",
+        ].join("\n"),
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      );
+    }) as unknown as typeof fetch;
+
+    try {
+      const completion = await service.chatCompletions({
+        providerId: "openai-codex",
+        model: "openai-codex/gpt-5.6-sol",
+        messages: [
+          { role: "developer", content: "Use the supplied tool." },
+          { role: "user", content: "Check status." },
+        ],
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "lookup_status",
+              description: "Look up runtime status.",
+              parameters: { type: "object", properties: {}, additionalProperties: false },
+            },
+          },
+        ],
+        tool_choice: "required",
+        parallel_tool_calls: true,
+      });
+
+      expect((completion.choices?.[0]?.message as Record<string, unknown> | undefined)?.tool_calls).toEqual([
+        {
+          id: "call_status",
+          type: "function",
+          function: { name: "lookup_status", arguments: "{}" },
+        },
+      ]);
+
+      const streamChunks: Array<Record<string, unknown>> = [];
+      for await (const chunk of service.chatCompletionsStream({
+        providerId: "openai-codex",
+        model: "openai-codex/gpt-5.6-sol",
+        messages: [
+          { role: "developer", content: "Use the supplied tool." },
+          { role: "user", content: "Check status." },
+        ],
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "lookup_status",
+              description: "Look up runtime status.",
+              parameters: { type: "object", properties: {}, additionalProperties: false },
+            },
+          },
+        ],
+      })) {
+        streamChunks.push(chunk);
+      }
+      expect(streamChunks).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            choices: [
+              expect.objectContaining({
+                delta: expect.objectContaining({
+                  tool_calls: [expect.objectContaining({ function: { name: "lookup_status", arguments: "{}" } })],
+                }),
+              }),
+            ],
+          }),
+          expect.objectContaining({
+            choices: [expect.objectContaining({ finish_reason: "tool_calls" })],
+          }),
+        ]),
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(responsesLiteHeader).toBe("true");
+    expect(payloadBody?.instructions).toBeUndefined();
+    expect(payloadBody?.tools).toBeUndefined();
+    expect(payloadBody).toMatchObject({
+      model: "gpt-5.6-sol",
+      tool_choice: "auto",
+      parallel_tool_calls: false,
+      reasoning: { context: "all_turns" },
+      input: [
+        {
+          type: "additional_tools",
+          role: "developer",
+          tools: [expect.objectContaining({ type: "function", name: "lookup_status" })],
+        },
+        {
+          type: "message",
+          role: "developer",
+          content: [{ type: "input_text", text: "Use the supplied tool." }],
+        },
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Check status." }],
+        },
+      ],
+    });
   });
 
   it("adapts non-stream OpenAI Codex chat calls from the stream-only Responses bridge", async () => {

@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { Pool, PoolClient, QueryResultRow } from "pg";
+import { Client, type Pool, type PoolClient, type QueryResultRow } from "pg";
 import {
   buildPostgresMigrationLockSql,
   buildPostgresMigrationTryLockSql,
   buildPostgresMigrationUnlockSql,
+  buildPostgresPoolConfig,
   parsePostgresMigrationTryLockResult,
   PostgresDatabaseClient,
 } from "./postgres/client.js";
@@ -159,6 +160,29 @@ function createHealthSession(responses: QueryRows[], identityOids: string[] = []
 }
 
 describe("PostgresDatabaseClient", () => {
+  it("preserves connection-string startup options before enforcing UTF-8", () => {
+    const config = buildPostgresPoolConfig({
+      connectionString: " postgres://operator:secret@example.test/goatcitadel?options=-csearch_path%3Dworkspace_a ",
+      database: "ignored",
+      applicationName: "pool-contract",
+    });
+    assert.deepEqual(config, {
+      application_name: "pool-contract",
+      options: "-csearch_path=workspace_a -c client_encoding=UTF8",
+      max: 10,
+      min: 0,
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 5_000,
+      connectionString:
+        "postgres://operator:secret@example.test/goatcitadel?options=-csearch_path%3Dworkspace_a+-c+client_encoding%3DUTF8",
+      ssl: undefined,
+    });
+    assert.equal(
+      (new Client(config) as unknown as { connectionParameters: { options?: string } }).connectionParameters.options,
+      config.options,
+    );
+  });
+
   it("builds and validates a nonblocking migration lock attempt", () => {
     const sql = buildPostgresMigrationTryLockSql("$1");
 

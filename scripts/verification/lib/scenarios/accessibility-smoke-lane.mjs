@@ -90,6 +90,9 @@ export async function runAccessibilitySmokeLane(context, options = {}, deps) {
     stack = await startVerificationStack(context, {
       includeUi: true,
       gatewayEnv: {
+        GOATCITADEL_AUTH_MODE: "token",
+        GOATCITADEL_AUTH_TOKEN: "verification-accessibility-smoke-operator-token",
+        GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS: "true",
         GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
         GOATCITADEL_CODE_MODE_SANDBOX_REQUIRED: "false",
         GOATCITADEL_MESH_NODE_ID: "build-main",

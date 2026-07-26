@@ -102,6 +102,9 @@ test("release manifest rejects reordered records, forged summaries, and oversize
 
 test("bundle manifest collection rejects links, enforces early bounds, and streams payload hashes", () => {
   const source = fs.readFileSync(new URL("./build-bundle.mjs", import.meta.url), "utf8");
+  assert.match(source, /"--config\.node-linker=hoisted",\s*"--config\.package-import-method=copy",\s*gatewayDeployDir/);
+  assert.match(source, /materializeHardLinkedFiles\(gatewayDeployDir\)/);
+  assert.match(source, /removeEmptyDirectories\(bundleRoot\)/);
   assert.match(source, /Release payload cannot contain a symlink or junction/);
   assert.match(source, /Release payload cannot contain a hard-linked file/);
   assert.match(source, /stats\.nlink !== 1/);

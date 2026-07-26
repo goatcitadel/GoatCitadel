@@ -114,7 +114,7 @@ export function createWebhookHandler<TParsed>(
   const acceptedRateLimit = createAcceptedWebhookRateLimit(fastify, options.source);
   return async (request: WebhookRequest, reply: FastifyReply) => {
     if (rejectOversizedWebhookPayload(request, reply)) {
-      return;
+      return reply;
     }
     const hostHeaderError = validateWebhookHostHeader(request);
     if (hostHeaderError) {
@@ -166,7 +166,7 @@ export function createWebhookHandler<TParsed>(
       return reply.code(verification.statusCode ?? 401).send({ error: verification.error });
     }
     if (await enforceAcceptedWebhookRateLimit(acceptedRateLimit, request, reply)) {
-      return;
+      return reply;
     }
 
     const parsed = await options.parsePayload(context);

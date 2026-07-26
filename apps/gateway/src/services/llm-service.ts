@@ -374,6 +374,7 @@ export class LlmService {
     if (options?.enforce !== undefined) {
       this.enforceNetworkAllowlist = options.enforce;
     }
+    this.clearRequestDispatcherCache();
   }
 
   public listProviders(options: LlmListProvidersOptions = {}): LlmProviderSummary[] {
@@ -2030,6 +2031,7 @@ export class LlmService {
       payload.stream = true;
     }
     const target = this.buildRequestTarget(resolved, "responses", `${resolved.provider.baseUrl}/responses`);
+    applyOpenAICodexResponsesLiteHeader(target.headers, resolved.provider, model);
     const timeoutMs = resolveChatCompletionTimeoutMs(request.timeoutMs, 60000);
     let dispatched = await this.postTrackedJsonRequest({
       resolved,
@@ -2155,6 +2157,7 @@ export class LlmService {
     payload.stream = true;
 
     const target = this.buildRequestTarget(resolved, "responses", `${resolved.provider.baseUrl}/responses`);
+    applyOpenAICodexResponsesLiteHeader(target.headers, resolved.provider, model);
     const timeoutMs = resolveChatCompletionTimeoutMs(request.timeoutMs, 120000);
     let dispatched = await this.postTrackedJsonRequest({
       resolved,
@@ -2319,7 +2322,10 @@ export class LlmService {
                   {
                     index: 0,
                     delta: {},
-                    finish_reason: adapted.choices?.[0]?.finish_reason ?? "stop",
+                    finish_reason:
+                      streamedFunctionCallIndexes.size > 0
+                        ? "tool_calls"
+                        : (adapted.choices?.[0]?.finish_reason ?? "stop"),
                   },
                 ],
                 usage: adapted.usage,
@@ -2620,7 +2626,9 @@ export class LlmService {
     const usesProxy = Boolean(
       requestConfig?.proxy && !shouldBypassProxy(targetUrl.hostname, requestConfig.proxy.bypassHosts),
     );
-    const guardedLookup = usesProxy ? undefined : createProviderGuardedLookup(endpoint, this.dnsLookup);
+    const guardedLookup = usesProxy
+      ? undefined
+      : createProviderGuardedLookup(endpoint, this.dnsLookup, () => this.networkAllowlist);
 
     const cacheKey = buildRequestDispatcherCacheKey(targetUrl, requestConfig);
     const cached = this.requestDispatcherCache.get(cacheKey);
@@ -4216,6 +4224,41 @@ function isConfiguredLoopbackHost(hostOrUrl: string): boolean {
   return host === "localhost" || host === "127.0.0.1" || host === "::1";
 }
 
+function isConfiguredDockerHostAliasExplicitlyAllowlisted(
+  hostOrUrl: string,
+  networkAllowlist: readonly string[],
+): boolean {
+  let hostname: string;
+  let authority: string;
+  try {
+    const parsed = new URL(hostOrUrl);
+    hostname = stripIpv6Brackets(parsed.hostname.toLowerCase());
+    authority = parsed.host.toLowerCase();
+  } catch {
+    hostname = stripIpv6Brackets(hostOrUrl.trim().toLowerCase());
+    authority = hostname;
+  }
+  if (hostname !== "host.docker.internal") {
+    return false;
+  }
+  return networkAllowlist.some((entry) => {
+    const normalized = entry.trim().toLowerCase();
+    return normalized === hostname || normalized === authority;
+  });
+}
+
+function isRfc1918Ipv4(address: string): boolean {
+  const normalized = stripIpv6Brackets(address).toLowerCase();
+  const ipv4 = isIP(normalized) === 6 ? extractIpv4MappedAddress(normalized) : normalized;
+  if (!ipv4 || isIP(ipv4) !== 4) {
+    return false;
+  }
+  const parts = ipv4.split(".").map((part) => Number(part));
+  const a = parts[0] ?? -1;
+  const b = parts[1] ?? -1;
+  return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+}
+
 // Sentinel embedded in the guarded-lookup error. undici surfaces a lookup
 // failure as `TypeError: fetch failed` with the real reason on `error.cause`,
 // so this marker lets the fetch helpers recognise and re-surface an SSRF block
@@ -4263,10 +4306,21 @@ function rethrowIfProviderNetworkBlocked(error: unknown): void {
 // Loopback resolved addresses are permitted ONLY when the configured host is a
 // loopback literal (localhost/127.0.0.1/::1) — this is how a legitimately-local
 // runtime (llama.cpp, Ollama, LM Studio) keeps reaching 127.0.0.1 while a remote
-// host that rebinds to loopback is blocked. All other private/reserved resolved
-// addresses are blocked regardless of the configured host. Exported for unit
-// coverage.
-export function findBlockedResolvedProviderAddress(hostOrUrl: string, resolvedAddress: string): string | undefined {
+// host that rebinds to loopback is blocked. Docker's exact host alias may resolve
+// to an RFC1918 bridge address only while that exact hostname or configured
+// authority is explicitly allowlisted, so containerized GoatCitadel can reach an
+// operator-configured host runtime without letting wildcard/suffix grants open
+// private DNS destinations. The exception deliberately excludes loopback,
+// link-local/metadata, multicast, and other reserved addresses.
+// Exported for unit coverage.
+export function findBlockedResolvedProviderAddress(
+  hostOrUrl: string,
+  resolvedAddress: string,
+  networkAllowlist: readonly string[] = [],
+): string | undefined {
+  if (isConfiguredDockerHostAliasExplicitlyAllowlisted(hostOrUrl, networkAllowlist) && isRfc1918Ipv4(resolvedAddress)) {
+    return undefined;
+  }
   if (isLoopbackResolvedIp(resolvedAddress)) {
     return isConfiguredLoopbackHost(hostOrUrl) ? undefined : resolvedAddress;
   }
@@ -4276,10 +4330,11 @@ export function findBlockedResolvedProviderAddress(hostOrUrl: string, resolvedAd
 function findBlockedResolvedProviderAddressList(
   hostOrUrl: string,
   address: string | LookupAddress[],
+  networkAllowlist: readonly string[],
 ): string | undefined {
   const candidates = Array.isArray(address) ? address.map((entry) => entry.address) : [address];
   for (const candidate of candidates) {
-    const blocked = findBlockedResolvedProviderAddress(hostOrUrl, candidate);
+    const blocked = findBlockedResolvedProviderAddress(hostOrUrl, candidate, networkAllowlist);
     if (blocked) {
       return blocked;
     }
@@ -4292,14 +4347,18 @@ function findBlockedResolvedProviderAddressList(
 // socket is opened. Mirrors the guarded-lookup pattern used by the policy-engine
 // network guard, but applies llm-service's own provider-host policy so the
 // fetch-time block stays consistent with validateProviderBaseUrl.
-function createProviderGuardedLookup(hostOrUrl: string, dnsLookup: ProviderDnsLookupFn): ProviderDnsLookupFn {
+function createProviderGuardedLookup(
+  hostOrUrl: string,
+  dnsLookup: ProviderDnsLookupFn,
+  getNetworkAllowlist: () => readonly string[],
+): ProviderDnsLookupFn {
   return (hostname, options, callback) => {
     dnsLookup(hostname, options, (error, address, family) => {
       if (error) {
         callback(error, address, family);
         return;
       }
-      const blocked = findBlockedResolvedProviderAddressList(hostOrUrl, address);
+      const blocked = findBlockedResolvedProviderAddressList(hostOrUrl, address, getNetworkAllowlist());
       if (blocked) {
         callback(new Error(PROVIDER_ADDRESS_BLOCKED_MESSAGE), address, family);
         return;
@@ -4506,13 +4565,37 @@ function buildOpenAiResponsesPayload(
   if (provider.providerId.trim().toLowerCase() === "openai") {
     validateOpenAiRequestCompatibility(request, model);
   }
-  const { instructions, input } = buildOpenAiResponsesInput(request.messages);
+  const { instructions, input: standardInput } = buildOpenAiResponsesInput(request.messages);
+  const codexResponsesLite = usesOpenAICodexResponsesLite(provider, model);
+  const mappedTools = mapOpenAiResponsesTools(request.tools);
+  const codexInput = codexResponsesLite
+    ? standardInput.map((item) => (typeof item.type === "string" ? item : { type: "message", ...item }))
+    : standardInput;
+  const input = codexResponsesLite
+    ? [
+        {
+          type: "additional_tools",
+          role: "developer",
+          tools: Array.isArray(mappedTools) ? mappedTools : [],
+        },
+        ...(instructions
+          ? [
+              {
+                type: "message",
+                role: "developer",
+                content: [{ type: "input_text", text: instructions }],
+              },
+            ]
+          : []),
+        ...codexInput,
+      ]
+    : codexInput;
   const payload: Record<string, unknown> = {
     model,
     input,
   };
 
-  if (instructions) {
+  if (instructions && !codexResponsesLite) {
     payload.instructions = instructions;
   }
   if (!isOpenAICodexResponsesProvider(provider)) {
@@ -4534,9 +4617,18 @@ function buildOpenAiResponsesPayload(
       payload.input = ensureJsonKeywordInResponsesInput(input);
     }
   }
-  if (request.tools !== undefined) payload.tools = mapOpenAiResponsesTools(request.tools);
+  if (request.tools !== undefined && !codexResponsesLite) payload.tools = mappedTools;
   if (request.tool_choice !== undefined) payload.tool_choice = mapOpenAiResponsesToolChoice(request.tool_choice);
-  if (request.parallel_tool_calls !== undefined) payload.parallel_tool_calls = request.parallel_tool_calls;
+  if (codexResponsesLite) {
+    payload.tool_choice = "auto";
+    payload.parallel_tool_calls = false;
+    payload.reasoning = {
+      ...(isRecord(payload.reasoning) ? payload.reasoning : {}),
+      context: "all_turns",
+    };
+  } else if (request.parallel_tool_calls !== undefined) {
+    payload.parallel_tool_calls = request.parallel_tool_calls;
+  }
   if (request.metadata !== undefined) payload.metadata = request.metadata;
   if (request.service_tier && !isOpenAICodexResponsesProvider(provider)) payload.service_tier = request.service_tier;
   if (request.prompt_cache_retention) payload.prompt_cache_retention = request.prompt_cache_retention;
@@ -4575,19 +4667,45 @@ function isOpenAICodexResponsesProvider(provider: Pick<LlmProviderConfig, "provi
   return provider.providerId.trim().toLowerCase() === "openai-codex" || provider.apiStyle === "openai-codex-responses";
 }
 
+function usesOpenAICodexResponsesLite(
+  provider: Pick<LlmProviderConfig, "providerId" | "apiStyle">,
+  model: string,
+): boolean {
+  return isOpenAICodexResponsesProvider(provider) && /^gpt-5\.6-(?:sol|terra|luna)$/iu.test(model.trim());
+}
+
+function applyOpenAICodexResponsesLiteHeader(
+  headers: Record<string, string>,
+  provider: Pick<LlmProviderConfig, "providerId" | "apiStyle">,
+  model: string,
+): void {
+  if (usesOpenAICodexResponsesLite(provider, model)) {
+    headers["x-openai-internal-codex-responses-lite"] = "true";
+  }
+}
+
 async function collectOpenAiResponsesStreamCompletion(
   response: Response,
   model: string,
 ): Promise<ChatCompletionResponse> {
   let outputText = "";
+  const streamedOutputItems: Array<Record<string, unknown>> = [];
   for await (const event of streamJsonSseResponse(response, { forceSse: true })) {
     const eventType = typeof event.type === "string" ? event.type : "";
     if (eventType === "response.output_text.delta") {
       outputText += String(event.delta ?? "");
       continue;
     }
+    if (eventType === "response.output_item.done" && isRecord(event.item)) {
+      streamedOutputItems.push(event.item);
+      continue;
+    }
     if (eventType === "response.completed" && isRecord(event.response)) {
-      const completion = adaptOpenAiResponsesResponse(event.response);
+      const providerOutput = Array.isArray(event.response.output) ? event.response.output.filter(isRecord) : [];
+      const completion = adaptOpenAiResponsesResponse({
+        ...event.response,
+        ...(providerOutput.length === 0 && streamedOutputItems.length > 0 ? { output: streamedOutputItems } : {}),
+      });
       const message = completion.choices?.[0]?.message as Record<string, unknown> | undefined;
       if (outputText && (typeof message?.content !== "string" || message.content.length === 0)) {
         return {
@@ -4595,7 +4713,7 @@ async function collectOpenAiResponsesStreamCompletion(
           choices: [
             {
               index: 0,
-              message: { role: "assistant", content: outputText },
+              message: { ...message, role: "assistant", content: outputText },
               finish_reason: completion.choices?.[0]?.finish_reason ?? "stop",
             },
           ],

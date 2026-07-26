@@ -154,6 +154,7 @@ function verificationLaneDeps() {
     compareRestContract,
     compareVisualBaseline,
     createAuthMatrixCredentials,
+    delay,
     emptyArtifacts,
     ensureGatewayWorkspaceBuild,
     ensureOnboardingComplete,
@@ -470,7 +471,7 @@ export async function runAgenticGovernanceLane(context) {
 // into the runtime so `mcp.invoke` is allowed by the base policy; the autonomy grant then
 // becomes the sole gate the lane actually exercises. Deny-by-default posture for
 // `mcp.invoke` is covered separately by the policy-engine deny-wins tests.
-async function writeAutonomyGrantRuntimeToolPolicy(runtimeRoot) {
+export async function writeAutonomyGrantRuntimeToolPolicy(runtimeRoot) {
   const toolPolicy = {
     profiles: { danger: ["*"] },
     tools: {
@@ -503,7 +504,13 @@ async function writeAutonomyGrantRuntimeToolPolicy(runtimeRoot) {
   try {
     const unified = await readJson(unifiedPath);
     if (unified && typeof unified === "object" && !Array.isArray(unified)) {
-      await writeJson(unifiedPath, { ...unified, toolPolicy });
+      const updated = { ...unified, toolPolicy };
+      // `generation.digest` covers the unified sections. This verification-only
+      // policy override intentionally changes one of those sections, so retain no
+      // stale digest: an absent generation is the supported fresh-install path and
+      // the Gateway stamps the isolated config again during startup.
+      delete updated.generation;
+      await writeJson(unifiedPath, updated);
     }
   } catch (error) {
     if (error?.code !== "ENOENT") {
@@ -932,7 +939,7 @@ export async function runDeepCoreLane(context, _options = {}) {
           subsystem: "chat",
         },
         async ({ correlationId }) => {
-          await page.evaluate((workspaceId) => {
+          await page.addInitScript((workspaceId) => {
             window.localStorage.setItem("goatcitadel.ui.workspace_id.v1", String(workspaceId));
           }, seedResponse.body.workspaceId);
           if (verificationTarget.isNext) {
@@ -1047,7 +1054,7 @@ export async function runDeepCoreLane(context, _options = {}) {
           let dashboardPerf;
           let chatPerf;
           if (verificationTarget.isNext) {
-            await page.evaluate((workspaceId) => {
+            await page.addInitScript((workspaceId) => {
               window.localStorage.setItem("goatcitadel.ui.workspace_id.v1", String(workspaceId));
               window.localStorage.setItem("goatcitadel.ui.effects_mode.v1", "reduced");
             }, seedResponse.body.workspaceId);
@@ -1236,28 +1243,11 @@ async function runGatewayApiSurfaceScenarios(context, gatewayUrl, seed) {
         throw new Error(`code mode run ${runId} finished with status ${completedRun.body?.status ?? "unknown"}`);
       }
       const candidateId = `candidate-${String(completedRun.body?.codeHash ?? "").slice(0, 12)}`;
-
-      const candidateDetail = await waitForCapabilityCandidate(gatewayUrl, candidateId);
-
-      const promoted = await requestJson(
+      const candidateLifecycle = await exerciseCapabilityCandidatePromotionAndRevocation(
         gatewayUrl,
-        `/api/v1/capabilities/candidates/${encodeURIComponent(candidateId)}/promote`,
-        {
-          method: "POST",
-          body: {},
-        },
+        candidateId,
+        "deep-core candidate",
       );
-      assertOk(promoted, "promote candidate");
-
-      const revoked = await requestJson(
-        gatewayUrl,
-        `/api/v1/capabilities/candidates/${encodeURIComponent(candidateId)}/revoke`,
-        {
-          method: "POST",
-          body: {},
-        },
-      );
-      assertOk(revoked, "revoke candidate");
 
       const outPath = path.join(context.artifactRoot, "diagnostics", "core-api-chat-code-mode-lifecycle.json");
       await writeJson(outPath, {
@@ -1266,9 +1256,13 @@ async function runGatewayApiSurfaceScenarios(context, gatewayUrl, seed) {
         codeModeRun: codeModeRun.body,
         resolvedApproval: resolvedApproval.body,
         completedRun: completedRun.body,
-        candidateDetail: candidateDetail.body,
-        promoted: promoted.body,
-        revoked: revoked.body,
+        candidateDetail: candidateLifecycle.initialDetail.body,
+        promotionRequest: candidateLifecycle.promotionRequest.body,
+        promotionResolution: candidateLifecycle.promotionResolution.body,
+        promotedDetail: candidateLifecycle.promotedDetail.body,
+        revocationRequest: candidateLifecycle.revocationRequest.body,
+        revocationResolution: candidateLifecycle.revocationResolution.body,
+        revokedDetail: candidateLifecycle.revokedDetail.body,
       });
       return {
         status: "passed",
@@ -1442,9 +1436,11 @@ async function runGatewayApiSurfaceScenarios(context, gatewayUrl, seed) {
         },
       });
       assertOk(deliverable, "append task deliverable");
+      const taskRevision = requirePositiveRevision(task.body, "created task");
       const deleted = await requestJson(gatewayUrl, `/api/v1/tasks/${encodeURIComponent(taskId)}`, {
         method: "DELETE",
         body: {
+          expectedRevision: taskRevision,
           mode: "soft",
           workspaceId,
           deletedBy: "verification",
@@ -1457,9 +1453,13 @@ async function runGatewayApiSurfaceScenarios(context, gatewayUrl, seed) {
         `/api/v1/tasks?view=trash&workspaceId=${encodeURIComponent(workspaceId)}&limit=20`,
       );
       assertOk(trash, "list task trash");
+      const trashedTask = Array.isArray(trash.body?.items)
+        ? trash.body.items.find((item) => item?.taskId === taskId)
+        : undefined;
+      const trashedTaskRevision = requirePositiveRevision(trashedTask, "soft-deleted task");
       const restored = await requestJson(gatewayUrl, `/api/v1/tasks/${encodeURIComponent(taskId)}/restore`, {
         method: "POST",
-        body: { workspaceId },
+        body: { workspaceId, expectedRevision: trashedTaskRevision },
       });
       assertOk(restored, "restore task");
       const outPath = path.join(context.artifactRoot, "diagnostics", "core-api-workspaces-tasks.json");
@@ -1508,9 +1508,11 @@ async function runGatewayApiSurfaceScenarios(context, gatewayUrl, seed) {
       assertOk(preview, "preview file");
       const settings = await requestJson(gatewayUrl, "/api/v1/settings");
       assertOk(settings, "read settings");
+      const settingsRevision = requirePositiveRevision(settings.body, "settings");
       const settingsPatch = await requestJson(gatewayUrl, "/api/v1/settings", {
         method: "PATCH",
         body: {
+          expectedRevision: settingsRevision,
           budgetMode: settings.body?.budgetMode ?? "balanced",
         },
       });
@@ -1765,27 +1767,11 @@ export async function runOperatorProofLane(context, _options = {}) {
           throw new Error(`code mode run ${runId} finished with status ${completedRun.body?.status ?? "unknown"}`);
         }
         const candidateId = `candidate-${String(completedRun.body?.codeHash ?? "").slice(0, 12)}`;
-        const candidateDetail = await waitForCapabilityCandidate(stack.gatewayUrl, candidateId);
-
-        const promoted = await requestJson(
+        const candidateLifecycle = await exerciseCapabilityCandidatePromotionAndRevocation(
           stack.gatewayUrl,
-          `/api/v1/capabilities/candidates/${encodeURIComponent(candidateId)}/promote`,
-          {
-            method: "POST",
-            body: {},
-          },
+          candidateId,
+          "operator-proof candidate",
         );
-        assertOk(promoted, "promote operator-proof candidate");
-
-        const revoked = await requestJson(
-          stack.gatewayUrl,
-          `/api/v1/capabilities/candidates/${encodeURIComponent(candidateId)}/revoke`,
-          {
-            method: "POST",
-            body: {},
-          },
-        );
-        assertOk(revoked, "revoke operator-proof candidate");
 
         const outPath = path.join(context.artifactRoot, "diagnostics", "operator-proof-chat-code-mode-lifecycle.json");
         await writeJson(outPath, {
@@ -1801,9 +1787,13 @@ export async function runOperatorProofLane(context, _options = {}) {
           codeModeRun: codeModeRun.body,
           resolvedApproval: resolvedApproval.body,
           completedRun: completedRun.body,
-          candidateDetail: candidateDetail.body,
-          promoted: promoted.body,
-          revoked: revoked.body,
+          candidateDetail: candidateLifecycle.initialDetail.body,
+          promotionRequest: candidateLifecycle.promotionRequest.body,
+          promotionResolution: candidateLifecycle.promotionResolution.body,
+          promotedDetail: candidateLifecycle.promotedDetail.body,
+          revocationRequest: candidateLifecycle.revocationRequest.body,
+          revocationResolution: candidateLifecycle.revocationResolution.body,
+          revokedDetail: candidateLifecycle.revokedDetail.body,
         });
         return {
           status: "passed",
@@ -2755,21 +2745,21 @@ export async function runDeepEcosystemLane(context, _options = {}) {
       await runScenario(
         context,
         {
-          id: "ecosystem.office.route",
+          id: "ecosystem.ops-kanban.route",
           lane: "deep-ecosystem",
-          title: "Office route renders with reduced effects",
-          subsystem: "office",
+          title: "Ops Kanban route renders with reduced effects",
+          subsystem: "ops-kanban",
         },
         async ({ correlationId }) => {
           await page.addInitScript(() => {
             window.localStorage.setItem("goatcitadel.ui.effects_mode.v1", "reduced");
           });
           if (verificationTarget.isNext) {
-            const officeSuccessorRoute = getVerificationRoute(verificationTarget, "cowork-board");
-            await page.goto(buildVerificationUiUrl(stack.uiUrl, officeSuccessorRoute.href), {
+            const opsKanbanRoute = getVerificationRoute(verificationTarget, "ops-kanban");
+            await page.goto(buildVerificationUiUrl(stack.uiUrl, opsKanbanRoute.href), {
               waitUntil: "domcontentloaded",
             });
-            await waitForVerificationRouteReady(page, officeSuccessorRoute, verificationPackageName);
+            await waitForVerificationRouteReady(page, opsKanbanRoute, verificationPackageName);
           } else {
             await page.goto(`${stack.uiUrl}/?tab=office`, { waitUntil: "domcontentloaded" });
             await page.waitForSelector(".office-stage-panel", { timeout: 25000 });
@@ -2784,10 +2774,10 @@ export async function runDeepEcosystemLane(context, _options = {}) {
               await new Promise((resolve) => setTimeout(resolve, 120));
             });
           });
-          const perfPath = path.join(context.artifactRoot, "perf", "ecosystem-office-perf.json");
+          const perfPath = path.join(context.artifactRoot, "perf", "ecosystem-ops-kanban-perf.json");
           await writeJson(perfPath, perf);
           const artifacts = await captureBrowserArtifacts(context, {
-            slug: "ecosystem-office-route",
+            slug: "ecosystem-ops-kanban-route",
             page,
             browserLog,
             gatewayUrl: stack.gatewayUrl,
@@ -2802,7 +2792,7 @@ export async function runDeepEcosystemLane(context, _options = {}) {
             },
             notes: [
               verificationTarget.isNext
-                ? "Office successor route rendered with reduced effects enabled."
+                ? "Ops Kanban rendered with reduced effects enabled."
                 : "Office route rendered with reduced effects enabled.",
             ],
             artifacts,
@@ -3072,6 +3062,9 @@ export async function runUiParityLane(context, _options = {}) {
   const stack = await startVerificationStack(context, {
     includeUi: false,
     gatewayEnv: {
+      GOATCITADEL_AUTH_MODE: "token",
+      GOATCITADEL_AUTH_TOKEN: "verification-ui-parity-operator-token",
+      GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS: "true",
       GOATCITADEL_FEATURE_MEMORY_LIFECYCLE_ADMIN_V1_ENABLED: "true",
       GOATCITADEL_FEATURE_MEMORY_MAINTENANCE_V1_ENABLED: "true",
       GOATCITADEL_FEATURE_DURABLE_KERNEL_V1_ENABLED: "true",
@@ -3390,32 +3383,78 @@ export async function runMemoryTruthLane(context, _options = {}) {
           throw new Error(`memory-truth exposed foreign workspace item ${foreignTitle}`);
         }
 
-        const patched = await requestJson(stack.gatewayUrl, `/api/v1/memory/items/${encodeURIComponent(item.itemId)}`, {
-          method: "PATCH",
-          body: {
-            ttlOverrideSeconds: 1,
+        const patchRequest = await requestJson(
+          stack.gatewayUrl,
+          `/api/v1/memory/items/${encodeURIComponent(item.itemId)}`,
+          {
+            method: "PATCH",
+            body: {
+              ttlOverrideSeconds: 1,
+            },
           },
-        });
-        assertOk(patched, "patch memory item ttl");
-        await delay(1500);
+        );
+        assertOk(patchRequest, "request memory item ttl patch approval");
+        const patchApprovalId = patchRequest.body?.pendingApproval?.approvalId;
+        if (typeof patchApprovalId !== "string" || !patchApprovalId.trim()) {
+          throw new Error("memory-truth ttl patch did not return a pending memory.lifecycle approval");
+        }
+        const patchResolution = await requestJson(
+          stack.gatewayUrl,
+          `/api/v1/approvals/${encodeURIComponent(patchApprovalId)}/resolve`,
+          {
+            method: "POST",
+            body: {
+              decision: "approve",
+              resolutionNote: "memory-truth ttl lifecycle verification",
+            },
+          },
+        );
+        assertOk(patchResolution, "resolve memory item ttl patch approval");
 
-        const activeItems = await requestJson(
-          stack.gatewayUrl,
-          `/api/v1/memory/items?workspaceId=${encodeURIComponent(memoryWorkspaceId)}&status=active&limit=200`,
-        );
-        assertOk(activeItems, "list active memory items after expiry");
-        const allItems = await requestJson(
-          stack.gatewayUrl,
-          `/api/v1/memory/items?workspaceId=${encodeURIComponent(memoryWorkspaceId)}&status=all&limit=200`,
-        );
-        assertOk(allItems, "list all memory items after expiry");
+        let activeItems = null;
+        let allItems = null;
+        let expiredItem = null;
+        let patchedItem = null;
+        for (let attempt = 0; attempt < 40; attempt += 1) {
+          activeItems = await requestJson(
+            stack.gatewayUrl,
+            `/api/v1/memory/items?workspaceId=${encodeURIComponent(memoryWorkspaceId)}&status=active&limit=200`,
+          );
+          assertOk(activeItems, "list active memory items after ttl approval");
+          allItems = await requestJson(
+            stack.gatewayUrl,
+            `/api/v1/memory/items?workspaceId=${encodeURIComponent(memoryWorkspaceId)}&status=all&limit=200`,
+          );
+          assertOk(allItems, "list all memory items after ttl approval");
+          patchedItem = allItems.body?.items?.find((entry) => entry.itemId === item.itemId) ?? null;
+          const patchApplied =
+            patchedItem?.ttlOverrideSeconds === 1 &&
+            typeof patchedItem?.expiresAt === "string" &&
+            Number.isFinite(Date.parse(patchedItem.expiresAt));
+          const visibleAsActive = activeItems.body?.items?.some((entry) => entry.itemId === item.itemId) === true;
+          if (patchApplied && !visibleAsActive && patchedItem.lifecycleState === "expired") {
+            expiredItem = patchedItem;
+            break;
+          }
+          await delay(250);
+        }
+        if (!patchedItem || patchedItem.ttlOverrideSeconds !== 1 || !patchedItem.expiresAt) {
+          throw new Error(
+            `memory-truth approval ${patchApprovalId} did not apply the ttl patch: ${JSON.stringify(patchedItem)}`,
+          );
+        }
+        if (!expiredItem) {
+          throw new Error(
+            `memory-truth expected ${item.itemId} to expire after the approved ttl patch; ` +
+              `expiresAt=${patchedItem.expiresAt}; active=${JSON.stringify(activeItems?.body ?? null)}`,
+          );
+        }
         const history = await requestJson(
           stack.gatewayUrl,
           `/api/v1/memory/items/${encodeURIComponent(item.itemId)}/history?limit=50`,
         );
         assertOk(history, "read memory item history after expiry");
 
-        const expiredItem = allItems.body?.items?.find((entry) => entry.itemId === item.itemId);
         if (activeItems.body?.items?.some((entry) => entry.itemId === item.itemId)) {
           throw new Error(`memory-truth expected ${item.itemId} to disappear from active reads after expiry`);
         }
@@ -3467,7 +3506,9 @@ export async function runMemoryTruthLane(context, _options = {}) {
           await writeJson(outPath, {
             seeded: seeded.body,
             created: created.body,
-            patched: patched.body,
+            patchRequest: patchRequest.body,
+            patchResolution: patchResolution.body,
+            patchedItem,
             activeItems: activeItems.body,
             allItems: allItems.body,
             history: history.body,
@@ -3503,6 +3544,11 @@ export async function runRealtimeTruthLane(context, _options = {}) {
   try {
     stack = await startVerificationStack(context, {
       includeUi: true,
+      gatewayEnv: {
+        GOATCITADEL_AUTH_MODE: "token",
+        GOATCITADEL_AUTH_TOKEN: "verification-realtime-truth-operator-token",
+        GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS: "true",
+      },
     });
     await ensureOnboardingComplete(stack.gatewayUrl, "verification-realtime-truth");
     const fixture = await seedMissionControlNextFixture(stack.gatewayUrl);
@@ -3579,27 +3625,17 @@ export async function runRealtimeTruthLane(context, _options = {}) {
             throw new Error(`realtime-truth expected replay-gap SSE event, got ${JSON.stringify(sseReplayGap)}`);
           }
 
-          await page.evaluate(() => {
-            window.localStorage.removeItem("goatcitadel.events.cursor.v1");
+          // Replace the live same-origin document before installing the stale
+          // cursor. This closes its EventSource without crossing into an opaque
+          // origin, where the shared browser-state initializer cannot access
+          // localStorage. It also prevents that EventSource from racing the write.
+          await page.setContent("<!doctype html><html><body></body></html>");
+          await page.evaluate((cursor) => {
+            window.localStorage.setItem("goatcitadel.events.cursor.v1", cursor);
+          }, String(seeded.body?.staleCursor ?? ""));
+          await page.goto(buildVerificationUiUrl(stack.uiUrl, "/ops/activity"), {
+            waitUntil: "domcontentloaded",
           });
-          await page.reload({ waitUntil: "domcontentloaded" });
-          await waitForVerificationRouteReady(
-            page,
-            {
-              expectedArea: "ops",
-              expectedSection: "activity",
-              readyText: "Activity feed",
-            },
-            NEXT_UI_PACKAGE,
-          );
-
-          await page.evaluate(
-            (cursor) => {
-              window.localStorage.setItem("goatcitadel.events.cursor.v1", cursor);
-            },
-            String(seeded.body?.staleCursor ?? ""),
-          );
-          await page.reload({ waitUntil: "domcontentloaded" });
           await waitForVerificationRouteReady(
             page,
             {
@@ -3750,8 +3786,8 @@ async function runLiveProviderScenarios(context, gatewayUrl) {
           const status = deriveProviderStatus(response.body, { providerConfigured: true });
           return {
             status,
-            providerId: provider.providerId,
-            modelId: provider.defaultModel,
+            providerId: response.body?.providerId ?? null,
+            modelId: response.body?.model,
             error: response.body?.ok ? undefined : response.body?.error,
             notes: response.body?.ok ? [clampString(response.body.outputPreview ?? "", 240)] : [],
             artifacts: {
@@ -3765,6 +3801,13 @@ async function runLiveProviderScenarios(context, gatewayUrl) {
             metrics: {
               elapsedMs: response.body?.elapsedMs ?? 0,
               chunkCount: response.body?.chunkCount ?? 0,
+              requestedProviderId: response.body?.requestedProviderId ?? provider.providerId,
+              requestedModel: response.body?.requestedModel ?? provider.defaultModel,
+              returnedModel: response.body?.model ?? null,
+              usage: response.body?.usage ?? null,
+              modelUsageEventIds: response.body?.modelUsageEventIds ?? [],
+              toolCallObserved: response.body?.toolCallObserved ?? false,
+              toolResultRoundTrip: response.body?.toolResultRoundTrip ?? false,
             },
           };
         },
@@ -4014,15 +4057,15 @@ function getVerificationRoute(verificationTarget, slug) {
   return route;
 }
 
-function getNextCoreNavigationRoutes(verificationTarget) {
+export function getNextCoreNavigationRoutes(verificationTarget) {
   return [
     "chat",
-    "cowork",
-    "code",
-    "library-memory",
+    "projects",
+    "library-skills",
     "library-prompt-packs",
     "ops-activity",
     "ops-approvals",
+    "ops-kanban",
     "settings-providers",
   ].map((slug) => getVerificationRoute(verificationTarget, slug));
 }
@@ -4243,6 +4286,130 @@ async function waitForCapabilityCandidate(gatewayUrl, candidateId, attempts = 20
     await delay(250);
   }
   throw new Error(`candidate ${candidateId} did not become available in time`);
+}
+
+async function exerciseCapabilityCandidatePromotionAndRevocation(gatewayUrl, candidateId, label) {
+  const initialDetail = await waitForCapabilityCandidate(gatewayUrl, candidateId);
+  const initialRevision = requirePositiveRevision(initialDetail.body, `${label} initial detail`);
+  const versionId = initialDetail.body?.versions?.[0]?.versionId;
+  if (typeof versionId !== "string" || !versionId.trim()) {
+    throw new Error(`${label} did not expose a candidate version to review`);
+  }
+
+  const promotionRequest = await requestJson(
+    gatewayUrl,
+    `/api/v1/capabilities/candidates/${encodeURIComponent(candidateId)}/promote`,
+    {
+      method: "POST",
+      body: { expectedRevision: initialRevision, versionId },
+    },
+  );
+  assertOk(promotionRequest, `request ${label} promotion`);
+  const promotionResolution = await resolveCapabilityLifecycleApproval(
+    gatewayUrl,
+    promotionRequest.body?.pendingApproval,
+    `${label} promotion`,
+  );
+  const promotedDetail = await waitForCapabilityCandidateState(
+    gatewayUrl,
+    candidateId,
+    initialRevision,
+    (body) =>
+      body?.activeVersion?.versionId === versionId &&
+      (body.activeVersion.lifecycleState === "approved" || body.activeVersion.lifecycleState === "trusted") &&
+      body.activationBlocked === false,
+    `${label} promotion`,
+  );
+  const promotedRevision = requirePositiveRevision(promotedDetail.body, `${label} promoted detail`);
+
+  const revocationRequest = await requestJson(
+    gatewayUrl,
+    `/api/v1/capabilities/candidates/${encodeURIComponent(candidateId)}/revoke`,
+    {
+      method: "POST",
+      body: { expectedRevision: promotedRevision, versionId },
+    },
+  );
+  assertOk(revocationRequest, `request ${label} revocation`);
+  const revocationResolution = await resolveCapabilityLifecycleApproval(
+    gatewayUrl,
+    revocationRequest.body?.pendingApproval,
+    `${label} revocation`,
+  );
+  const revokedDetail = await waitForCapabilityCandidateState(
+    gatewayUrl,
+    candidateId,
+    promotedRevision,
+    (body) => {
+      const selected = Array.isArray(body?.versions)
+        ? body.versions.find((version) => version?.versionId === versionId)
+        : undefined;
+      return (
+        selected?.lifecycleState === "revoked" &&
+        body?.activeVersion?.versionId !== versionId &&
+        body?.activationBlocked === true
+      );
+    },
+    `${label} revocation`,
+  );
+
+  return {
+    initialDetail,
+    promotionRequest,
+    promotionResolution,
+    promotedDetail,
+    revocationRequest,
+    revocationResolution,
+    revokedDetail,
+  };
+}
+
+async function resolveCapabilityLifecycleApproval(gatewayUrl, pendingApproval, label) {
+  const approvalId = pendingApproval?.approvalId;
+  if (typeof approvalId !== "string" || !approvalId.trim()) {
+    throw new Error(`${label} did not return a pending capability.lifecycle approval`);
+  }
+  const resolved = await requestJson(gatewayUrl, `/api/v1/approvals/${encodeURIComponent(approvalId)}/resolve`, {
+    method: "POST",
+    body: {
+      decision: "approve",
+      resolvedBy: "verification",
+      resolutionNote: `${label} verification approval`,
+    },
+  });
+  assertOk(resolved, `resolve ${label} approval`);
+  return resolved;
+}
+
+async function waitForCapabilityCandidateState(
+  gatewayUrl,
+  candidateId,
+  previousRevision,
+  predicate,
+  label,
+  attempts = 40,
+) {
+  let latest = null;
+  for (let index = 0; index < attempts; index += 1) {
+    latest = await requestJson(gatewayUrl, `/api/v1/capabilities/candidates/${encodeURIComponent(candidateId)}`);
+    assertOk(latest, `read ${label} candidate detail`);
+    const revision = requirePositiveRevision(latest.body, `${label} candidate detail`);
+    if (revision > previousRevision && predicate(latest.body)) {
+      return latest;
+    }
+    await delay(250);
+  }
+  throw new Error(
+    `${label} did not apply in time; last candidate detail=${JSON.stringify(latest?.body ?? null)}`,
+  );
+}
+
+function requirePositiveRevision(value, label) {
+  const revision = value?.revision;
+  if (!Number.isSafeInteger(revision) || revision < 1) {
+    throw new Error(`${label} did not return a valid positive revision`);
+  }
+  return revision;
 }
 
 async function waitForDurableRunStatus(gatewayUrl, runId, acceptedStatuses, attempts = 30) {

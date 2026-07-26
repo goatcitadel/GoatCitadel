@@ -44,6 +44,32 @@ const SHA_B = "b".repeat(64);
 const SHA_C = "c".repeat(64);
 const ACTIVATION_ID = `mesh-activation-${"d".repeat(48)}`;
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+function activationResponse(approvalId: string) {
+  return {
+    replayed: false,
+    activationId: ACTIVATION_ID,
+    activationRevision: 1,
+    approvalId,
+    approvalStatus: "pending",
+    approvalExpiresAt: "2026-07-23T10:15:00.000Z",
+    diff: {
+      permissionDisposition: "initial",
+      permissionsAdded: ["filesystemRead:workspace://project"],
+      permissionsRemoved: [],
+      effectDisposition: "initial",
+      currentEffectPosture: "unknown",
+    },
+  };
+}
+
 function entry(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     nodeId: "node-a",
@@ -160,21 +186,9 @@ describe("MeshCapabilityPanel", () => {
 
   it("requests activation with the exact entry binding and renders the semantic diff receipt", async () => {
     inspection([entry()]);
-    apiMocks.requestMeshCapabilityActivation.mockResolvedValueOnce({
-      replayed: false,
-      activationId: ACTIVATION_ID,
-      activationRevision: 1,
-      approvalId: "3b1e8a10-0000-4000-8000-000000000001",
-      approvalStatus: "pending",
-      approvalExpiresAt: "2026-07-23T10:15:00.000Z",
-      diff: {
-        permissionDisposition: "initial",
-        permissionsAdded: ["filesystemRead:workspace://project"],
-        permissionsRemoved: [],
-        effectDisposition: "initial",
-        currentEffectPosture: "unknown",
-      },
-    });
+    apiMocks.requestMeshCapabilityActivation.mockResolvedValueOnce(
+      activationResponse("3b1e8a10-0000-4000-8000-000000000001"),
+    );
     let renderer: ReactTestRenderer;
     act(() => {
       renderer = create(<MeshCapabilityPanel workspaceId="default" />);
@@ -194,6 +208,52 @@ describe("MeshCapabilityPanel", () => {
     expect(text).toContain("Approval pending");
     expect(text).toContain("1 added, 0 removed");
     expect(text).toContain("unknown");
+    renderer!.unmount();
+  });
+
+  it("ignores a prior-workspace activation receipt without clearing the newer workspace action", async () => {
+    inspection([entry()]);
+    const activationA = deferred<ReturnType<typeof activationResponse>>();
+    const activationB = deferred<ReturnType<typeof activationResponse>>();
+    apiMocks.requestMeshCapabilityActivation.mockImplementation(({ workspaceId }: { workspaceId: string }) =>
+      workspaceId === "workspace-a" ? activationA.promise : activationB.promise,
+    );
+    let renderer: ReactTestRenderer;
+    act(() => {
+      renderer = create(<MeshCapabilityPanel workspaceId="workspace-a" />);
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Request activation").props.onClick();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      renderer!.update(<MeshCapabilityPanel workspaceId="workspace-b" />);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Request activation").props.onClick();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      activationA.resolve(activationResponse("workspace-a-approval"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(collectText(renderer!.root)).toContain("Requesting…");
+    expect(collectText(renderer!.root)).not.toContain("workspace-a");
+    expect(hookState.reload).not.toHaveBeenCalled();
+
+    await act(async () => {
+      activationB.resolve(activationResponse("workspace-b-approval"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(collectText(renderer!.root)).toContain("Approval requested");
+    expect(collectText(renderer!.root)).toContain("workspace-b-approv");
+    expect(collectText(renderer!.root)).not.toContain("workspace-a");
+    expect(hookState.reload).toHaveBeenCalledTimes(1);
     renderer!.unmount();
   });
 

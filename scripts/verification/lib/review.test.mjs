@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { generateVerificationReview } from "./review.mjs";
+import { generateVerificationReview, validateExplicitReviewTarget } from "./review.mjs";
 
 test("verification review classifies accessibility failures and recommends the focused smoke lane", async () => {
   const artifactRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-accessibility-review-"));
@@ -50,3 +50,183 @@ test("verification review classifies accessibility failures and recommends the f
     await fs.rm(artifactRoot, { recursive: true, force: true });
   }
 });
+
+test("verification review reports a manifest-level failure when no scenario captured the setup error", async () => {
+  const artifactRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-manifest-failure-review-"));
+  try {
+    const manifest = {
+      ...buildExplicitReviewManifest(artifactRoot),
+      status: "failed",
+      counts: { passed: 0, failed: 0, degraded: 0, skipped: 0, notConfigured: 0 },
+      scenarios: [],
+    };
+
+    const { review } = await generateVerificationReview({ artifactRoot }, { manifest });
+
+    assert.equal(review.status, "issues_found");
+    assert.equal(review.summary.totalFailures, 1);
+    assert.equal(review.items[0].scenarioId, "all.manifest");
+    assert.equal(review.items[0].severity, "high");
+  } finally {
+    await fs.rm(artifactRoot, { recursive: true, force: true });
+  }
+});
+
+test("explicit verification review accepts the expected fresh finalized all-lane manifest", () => {
+  const artifactRoot = path.join(os.tmpdir(), "verification-all-run");
+  const manifest = buildExplicitReviewManifest(artifactRoot);
+
+  assert.equal(
+    validateExplicitReviewTarget({
+      artifactRoot,
+      latestPointer: { runId: manifest.runId, artifactRoot },
+      manifest,
+      expectedRunId: manifest.runId,
+      startedAfter: "2026-07-25T23:59:59.000Z",
+    }),
+    manifest,
+  );
+});
+
+test("explicit verification review rejects a running or unfinalized manifest", () => {
+  const artifactRoot = path.join(os.tmpdir(), "verification-all-run");
+  const manifest = {
+    ...buildExplicitReviewManifest(artifactRoot),
+    status: "running",
+    finishedAt: undefined,
+  };
+
+  assert.throws(
+    () =>
+      validateExplicitReviewTarget({
+        artifactRoot,
+        latestPointer: { runId: manifest.runId, artifactRoot },
+        manifest,
+        expectedRunId: manifest.runId,
+      }),
+    /running or unfinalized/u,
+  );
+});
+
+test("explicit verification review rejects a non-all lane", () => {
+  const artifactRoot = path.join(os.tmpdir(), "verification-all-run");
+  const manifest = { ...buildExplicitReviewManifest(artifactRoot), lane: "runtime-truth" };
+
+  assert.throws(
+    () =>
+      validateExplicitReviewTarget({
+        artifactRoot,
+        latestPointer: { runId: manifest.runId, artifactRoot },
+        manifest,
+        expectedRunId: manifest.runId,
+      }),
+    /expected lane all/u,
+  );
+});
+
+test("explicit verification review permits only an exact expected-lane override", () => {
+  const artifactRoot = path.join(os.tmpdir(), "verification-runtime-truth-run");
+  const manifest = { ...buildExplicitReviewManifest(artifactRoot), lane: "runtime-truth" };
+  const latestPointer = { runId: manifest.runId, artifactRoot };
+
+  assert.equal(
+    validateExplicitReviewTarget({
+      artifactRoot,
+      latestPointer,
+      manifest,
+      expectedRunId: manifest.runId,
+      expectedLane: "runtime-truth",
+    }),
+    manifest,
+  );
+  assert.throws(
+    () =>
+      validateExplicitReviewTarget({
+        artifactRoot,
+        latestPointer,
+        manifest,
+        expectedRunId: manifest.runId,
+        expectedLane: "auth-matrix",
+      }),
+    /expected lane auth-matrix/u,
+  );
+});
+
+test("explicit verification review rejects pointer, manifest, and freshness mismatches", () => {
+  const artifactRoot = path.join(os.tmpdir(), "verification-all-run");
+  const manifest = buildExplicitReviewManifest(artifactRoot);
+
+  assert.throws(
+    () =>
+      validateExplicitReviewTarget({
+        artifactRoot,
+        latestPointer: { runId: "different-run", artifactRoot },
+        manifest,
+        expectedRunId: manifest.runId,
+      }),
+    /does not match manifest run/u,
+  );
+  assert.throws(
+    () =>
+      validateExplicitReviewTarget({
+        artifactRoot,
+        latestPointer: { runId: manifest.runId, artifactRoot: path.join(os.tmpdir(), "different-run") },
+        manifest,
+        expectedRunId: manifest.runId,
+      }),
+    /pointer artifact path/u,
+  );
+  assert.throws(
+    () =>
+      validateExplicitReviewTarget({
+        artifactRoot,
+        latestPointer: { runId: manifest.runId, artifactRoot },
+        manifest,
+        expectedRunId: "different-run",
+      }),
+    /Expected verification run/u,
+  );
+  assert.throws(
+    () =>
+      validateExplicitReviewTarget({
+        artifactRoot,
+        latestPointer: { runId: manifest.runId, artifactRoot },
+        manifest: { ...manifest, artifactRoot: path.join(os.tmpdir(), "different-run") },
+        expectedRunId: manifest.runId,
+      }),
+    /manifest artifact path/u,
+  );
+  assert.throws(
+    () =>
+      validateExplicitReviewTarget({
+        artifactRoot,
+        latestPointer: { runId: manifest.runId, artifactRoot },
+        manifest,
+      }),
+    /requires an explicit freshness guard/u,
+  );
+  assert.throws(
+    () =>
+      validateExplicitReviewTarget({
+        artifactRoot,
+        latestPointer: { runId: manifest.runId, artifactRoot },
+        manifest,
+        startedAfter: "2026-07-26T00:00:01.000Z",
+      }),
+    /before required freshness boundary/u,
+  );
+});
+
+function buildExplicitReviewManifest(artifactRoot) {
+  return {
+    runId: path.basename(artifactRoot),
+    lane: "all",
+    status: "passed",
+    startedAt: "2026-07-26T00:00:00.000Z",
+    finishedAt: "2026-07-26T00:00:01.000Z",
+    durationMs: 1000,
+    artifactRoot,
+    counts: { passed: 1, failed: 0, degraded: 0, skipped: 0, notConfigured: 0 },
+    scenarios: [],
+  };
+}

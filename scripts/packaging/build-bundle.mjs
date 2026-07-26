@@ -19,6 +19,7 @@ import {
   renderPosixLauncher,
   renderWindowsLaunchers,
 } from "./lib/package-renderers.mjs";
+import { materializeHardLinkedFiles, removeEmptyDirectories } from "./lib/release-payload-ownership.mjs";
 import { removeDirectorySafely } from "./safe-cleanup.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -74,6 +75,8 @@ async function main() {
   // gateway crashes at startup with ERR_MODULE_NOT_FOUND and the installer's Chromium step
   // (node node_modules/playwright/cli.js) fails. Hoisting puts every dependency at the
   // top level as a real directory, which the tar round-trip preserves losslessly.
+  // Release payload files must be independently owned. pnpm's default store import
+  // strategy may hard-link packages when the store shares a volume with the bundle.
   runPnpm(
     [
       "--dir",
@@ -84,6 +87,7 @@ async function main() {
       "--prod",
       "--legacy",
       "--config.node-linker=hoisted",
+      "--config.package-import-method=copy",
       gatewayDeployDir,
     ],
     {
@@ -93,6 +97,10 @@ async function main() {
     },
   );
   pruneGatewayDeploy(gatewayDeployDir);
+  const materializedGatewayFiles = materializeHardLinkedFiles(gatewayDeployDir);
+  if (materializedGatewayFiles > 0) {
+    console.log(`Materialized ${materializedGatewayFiles} hard-linked gateway deployment files.`);
+  }
 
   copyFile(path.join(repoRoot, "bin", "goatcitadel.mjs"), path.join(appRoot, "bin", "goatcitadel.mjs"));
   copyFile(path.join(repoRoot, "package.json"), path.join(appRoot, "package.json"));
@@ -121,6 +129,10 @@ async function main() {
     destinationDir: runtimeNodeDir,
   });
   writeLaunchers(bundleRoot);
+  const removedEmptyDirectories = removeEmptyDirectories(bundleRoot);
+  if (removedEmptyDirectories > 0) {
+    console.log(`Removed ${removedEmptyDirectories} empty release payload directories.`);
+  }
   await writeReleaseManifest({
     bundleRoot,
     appRoot,

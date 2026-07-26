@@ -77,6 +77,24 @@ describe("env-file tail behavior", () => {
     }
   });
 
+  it("honors an operator-configured local env file outside the runtime config root", async () => {
+    const root = await createRepoRoot("goatcitadel-env-config-root-");
+    const durableDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-env-durable-data-"));
+    tempRoots.push(durableDataRoot);
+    const envPath = path.join(durableDataRoot, ".env");
+
+    await withTemporaryEnv(["GOATCITADEL_LOCAL_ENV_FILE"], async () => {
+      process.env.GOATCITADEL_LOCAL_ENV_FILE = envPath;
+
+      expect(resolveWritableEnvFilePath({ rootDir: root })).toBe(envPath);
+      expect(upsertLocalEnvVar("TAIL_DOCKER_SECRET", "persisted-value", { rootDir: root })).toEqual({
+        path: envPath,
+        updated: true,
+      });
+      expect(await fs.readFile(envPath, "utf8")).toContain('TAIL_DOCKER_SECRET="persisted-value"');
+    });
+  });
+
   it("preserves comments while replacing exported keys and leaves missing deletes untouched", async () => {
     const root = await createRepoRoot("goatcitadel-env-edit-tail-");
     const envPath = path.join(root, ".env");

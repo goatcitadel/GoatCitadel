@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import {
   requestMeshCapabilityActivation,
@@ -29,6 +29,10 @@ import "./mesh-capabilities.css";
  */
 export function MeshCapabilityPanel({ workspaceId }: { workspaceId: string }) {
   const ops = useMeshCapabilityOps(workspaceId);
+  const mountedRef = useRef(true);
+  const activeWorkspaceRef = useRef(workspaceId);
+  const actionRequestRef = useRef(0);
+  activeWorkspaceRef.current = workspaceId;
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [revokeReasons, setRevokeReasons] = useState<Record<string, string>>({});
@@ -37,35 +41,67 @@ export function MeshCapabilityPanel({ workspaceId }: { workspaceId: string }) {
     response: MeshCapabilityActivationRequestResponse;
   } | null>(null);
 
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      actionRequestRef.current += 1;
+    };
+  }, []);
+
+  useEffect(() => {
+    actionRequestRef.current += 1;
+    setPendingAction(null);
+    setActionError(null);
+    setRevokeReasons({});
+    setLastActivation(null);
+  }, [workspaceId]);
+
   const reload = ops.reload;
   const runAction = useCallback(
-    async (key: string, operation: () => Promise<void>) => {
+    async (key: string, operation: (isCurrent: () => boolean) => Promise<void>) => {
+      if (!mountedRef.current || activeWorkspaceRef.current !== workspaceId) {
+        return;
+      }
+      const requestId = actionRequestRef.current + 1;
+      actionRequestRef.current = requestId;
+      const isCurrent = () =>
+        mountedRef.current && activeWorkspaceRef.current === workspaceId && actionRequestRef.current === requestId;
       setPendingAction(key);
       setActionError(null);
       try {
-        await operation();
+        await operation(isCurrent);
+        if (!isCurrent()) {
+          return;
+        }
         await reload();
       } catch {
-        setActionError(
-          "The mesh capability action was rejected. Publication state may have drifted — reload and retry against current truth.",
-        );
+        if (isCurrent()) {
+          setActionError(
+            "The mesh capability action was rejected. Publication state may have drifted — reload and retry against current truth.",
+          );
+        }
       } finally {
-        setPendingAction(null);
+        if (isCurrent()) {
+          setPendingAction(null);
+        }
       }
     },
-    [reload],
+    [reload, workspaceId],
   );
 
   const handleRequestActivation = useCallback(
     (entry: MeshCapabilityOpsEntry) => {
-      void runAction(`activate:${entry.entrySha256}`, async () => {
+      void runAction(`activate:${entry.entrySha256}`, async (isCurrent) => {
         const response = await requestMeshCapabilityActivation({
           workspaceId,
           capabilityId: deriveCapabilityId(entry),
           manifestSha256: entry.manifestSha256,
           entrySha256: entry.entrySha256,
         });
-        setLastActivation({ localId: entry.localId, response });
+        if (isCurrent()) {
+          setLastActivation({ localId: entry.localId, response });
+        }
       });
     },
     [runAction, workspaceId],
@@ -86,9 +122,11 @@ export function MeshCapabilityPanel({ workspaceId }: { workspaceId: string }) {
         setActionError("Enter a revocation reason before revoking the activation.");
         return;
       }
-      void runAction(`revoke:${activationId}`, async () => {
+      void runAction(`revoke:${activationId}`, async (isCurrent) => {
         await revokeMeshCapabilityActivation({ workspaceId, activationId, reason });
-        setLastActivation(null);
+        if (isCurrent()) {
+          setLastActivation(null);
+        }
       });
     },
     [revokeReasons, runAction, workspaceId],

@@ -358,7 +358,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
       });
     }
     if (rejectExternalTranscriptRead(fastify, request, reply, params.data.sessionId)) {
-      return;
+      return reply;
     }
     try {
       const items = await fastify.services.chatMessages.listChatMessages(
@@ -386,7 +386,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
       });
     }
     if (rejectExternalTranscriptRead(fastify, request, reply, params.data.sessionId)) {
-      return;
+      return reply;
     }
     try {
       if (
@@ -448,7 +448,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: query.error.flatten() });
     }
     if (rejectExternalTranscriptRead(fastify, request, reply, params.data.sessionId)) {
-      return;
+      return reply;
     }
     try {
       return reply.send(
@@ -502,7 +502,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
           actor: request,
         });
         if (decisionRejected) {
-          return;
+          return reply;
         }
       }
       const sent = await fastify.services.chatMessages.agentSendChatMessage(
@@ -583,7 +583,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
             actor: request,
           });
           if (decisionRejected) {
-            return;
+            return reply;
           }
         }
       } catch (error) {
@@ -622,7 +622,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
         });
       }
       if (rejectExternalTranscriptRead(fastify, request, reply, params.data.sessionId)) {
-        return;
+        return reply;
       }
       const headerEventId =
         typeof request.headers["last-event-id"] === "string" ? request.headers["last-event-id"] : undefined;
@@ -757,7 +757,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
         actor: request,
       });
       if (decisionRejected) {
-        return;
+        return reply;
       }
       const result = await fastify.services.chatMessages.retryChatTurn(
         params.data.sessionId,
@@ -793,7 +793,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
         actor: request,
       });
       if (decisionRejected) {
-        return;
+        return reply;
       }
     } catch (error) {
       return sendChatWriteError(reply, error);
@@ -835,7 +835,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
         actor: request,
       });
       if (decisionRejected) {
-        return;
+        return reply;
       }
       const result = await fastify.services.chatMessages.editChatTurn(
         params.data.sessionId,
@@ -871,7 +871,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
         actor: request,
       });
       if (decisionRejected) {
-        return;
+        return reply;
       }
     } catch (error) {
       return sendChatWriteError(reply, error);

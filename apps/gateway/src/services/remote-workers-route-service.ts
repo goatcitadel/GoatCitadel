@@ -53,6 +53,7 @@ import type {
 
 const ASSIGNMENTS_OWNER = "storage.remoteWorkerAssignments";
 const GATEWAY_OWNER = "gateway.remoteWorkers";
+const REMOTE_WORKER_RECONCILIATION_MAX_PAGES = 100;
 
 export interface RemoteWorkerRegistryStore {
   listWorkerRegistry(
@@ -292,10 +293,33 @@ export class RemoteWorkersRouteService {
     const now = this.now();
     const posture: RemoteWorkerRegistryPosture =
       worker.control?.action === "quarantine" ? "quarantined" : worker.control ? "revoked" : "active";
-    const workerAssignments = this.assignments.listAssignmentAggregates(workspaceId, {
-      workerId,
-      limit: REMOTE_WORKER_ASSIGNMENT_MAX_LIMIT,
-    }).items;
+    const workerAssignments: RemoteWorkerAssignmentAggregate[] = [];
+    let cursor: ListRemoteWorkerAssignmentAggregatesOptions["cursor"];
+    const seenCursors = new Set<string>();
+    for (let pageNumber = 1; ; pageNumber += 1) {
+      const page = this.assignments.listAssignmentAggregates(workspaceId, {
+        workerId,
+        limit: REMOTE_WORKER_ASSIGNMENT_MAX_LIMIT,
+        ...(cursor === undefined ? {} : { cursor }),
+      });
+      if (page.items.length > REMOTE_WORKER_ASSIGNMENT_MAX_LIMIT) {
+        throw new TypeError("Remote worker assignment reconciliation page is inconsistent.");
+      }
+      workerAssignments.push(...page.items);
+      if (page.nextCursor === undefined) break;
+      if (pageNumber >= REMOTE_WORKER_RECONCILIATION_MAX_PAGES) {
+        throw new TypeError(
+          `Remote worker assignment reconciliation exceeded ${REMOTE_WORKER_RECONCILIATION_MAX_PAGES} pages.`,
+        );
+      }
+
+      const cursorKey = `${page.nextCursor.lastCreatedAt}\u0000${page.nextCursor.lastAssignmentId}`;
+      if (seenCursors.has(cursorKey)) {
+        throw new TypeError("Remote worker assignment reconciliation cursor did not advance.");
+      }
+      seenCursors.add(cursorKey);
+      cursor = page.nextCursor;
+    }
     return freezeRemoteWorkerReconciliation({
       schemaVersion: REMOTE_WORKER_RECONCILIATION_SCHEMA_VERSION,
       readOnly: true,

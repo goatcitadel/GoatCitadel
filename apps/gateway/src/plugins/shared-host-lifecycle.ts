@@ -84,7 +84,9 @@ export const sharedHostLifecyclePlugin = fp<SharedHostLifecyclePluginOptions>(as
   fastify.addHook("onError", async (request) => releaseRequestReservation(request));
   fastify.addHook("onRequestAbort", async (request) => releaseRequestReservation(request));
 
-  fastify.addHook("onClose", async () => {
+  // preClose runs before every resource-release onClose hook, including the
+  // Gateway runtime hook that closes the audit/realtime storage client.
+  fastify.addHook("preClose", async () => {
     try {
       const state = lifecycle.snapshot().state;
       if (state === "starting") {

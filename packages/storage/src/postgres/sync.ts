@@ -70,7 +70,7 @@ export class PostgresSyncDatabaseClient implements DatabaseClient {
       this.fatalError = error instanceof Error ? error : new Error(String(error));
     } finally {
       this.closed = true;
-      void this.worker.terminate();
+      this.retireWorker();
     }
   }
 
@@ -138,7 +138,7 @@ export class PostgresSyncDatabaseClient implements DatabaseClient {
       // an in-flight begin; retire the worker so the server releases any socket.
       this.closed = true;
       this.fatalError = error instanceof Error ? error : new Error(String(error));
-      void this.worker.terminate();
+      this.retireWorker();
       throw error;
     }
     this.activeSessionId = sessionId;
@@ -166,7 +166,7 @@ export class PostgresSyncDatabaseClient implements DatabaseClient {
     } catch (error) {
       this.closed = true;
       this.fatalError = error instanceof Error ? error : new Error(String(error));
-      void this.worker.terminate();
+      this.retireWorker();
       if (!hasPrimaryError) {
         primaryError = error;
         hasPrimaryError = true;
@@ -178,6 +178,14 @@ export class PostgresSyncDatabaseClient implements DatabaseClient {
       throw primaryError;
     }
     return result as T;
+  }
+
+  private retireWorker(): void {
+    // Worker termination is asynchronous while DatabaseClient.close() is a
+    // synchronous contract. Once close has been requested, do not let a slow
+    // coverage-instrumented worker keep the host process alive indefinitely.
+    this.worker.unref();
+    void this.worker.terminate();
   }
 
   public executeRun(sql: string, params: unknown[]): DbRunResult {

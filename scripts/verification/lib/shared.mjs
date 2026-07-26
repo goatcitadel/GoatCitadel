@@ -34,6 +34,7 @@ export function createRunId(lane) {
 export async function createRunContext(lane, options = {}) {
   const runId = options.runId || createRunId(lane);
   const artifactRoot = path.join(artifactsRoot, runId);
+  const latestRunPointerPath = path.join(artifactsRoot, "latest-run.json");
   const manifest = createVerificationRunManifest({
     runId,
     lane,
@@ -56,7 +57,7 @@ export async function createRunContext(lane, options = {}) {
   await fs.mkdir(path.join(artifactRoot, "provider-results"), { recursive: true });
   await fs.mkdir(path.join(artifactRoot, "perf"), { recursive: true });
   await writeJson(path.join(artifactRoot, "manifest.json"), manifest);
-  await writeJson(path.join(artifactsRoot, "latest-run.json"), {
+  await writeJson(latestRunPointerPath, {
     runId,
     artifactRoot,
     startedAt: manifest.startedAt,
@@ -68,6 +69,7 @@ export async function createRunContext(lane, options = {}) {
     repoRoot,
     runId,
     artifactRoot,
+    latestRunPointerPath,
     manifest,
   };
 }
@@ -115,6 +117,19 @@ export async function finalizeRunContext(context, statusOverride) {
   await writeManifest(context, finalManifest);
   await writeText(path.join(context.artifactRoot, "summary.md"), buildSummaryMarkdown(finalManifest));
   await writeText(path.join(context.artifactRoot, "junit.xml"), buildJunitXml(finalManifest));
+  // Nested verification processes create their own run contexts and therefore
+  // temporarily take ownership of the global latest-run pointer. Reassert the
+  // parent only after all of its final artifacts are durable so an explicit
+  // review can bind to the run that actually just finalized.
+  if (context.latestRunPointerPath) {
+    await writeJson(context.latestRunPointerPath, {
+      runId: context.runId,
+      artifactRoot: context.artifactRoot,
+      startedAt: finalManifest.startedAt,
+      finishedAt: finalManifest.finishedAt,
+      status: finalManifest.status,
+    });
+  }
   return finalManifest;
 }
 

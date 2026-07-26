@@ -115,11 +115,17 @@
 
 .mc-next-threaded-surface.unified .mc-next-threaded-primary-column,
 .mc-next-threaded-surface.unified .mc-next-threaded-stage.mode-chat.has-context .mc-next-threaded-primary-column {
+  min-width: 0;
   max-width: none;
   margin-inline: 0;
 }
 
 .mc-next-surface-host-work .mc-next-threaded-primary-column > .mc-next-threaded-dropzone {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
 }
 
@@ -225,6 +231,11 @@
 }
 
 .mc-next-threaded-surface.unified .mc-next-threaded-conversation {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr) auto;
 }
 
@@ -379,11 +390,15 @@
 }
 
 .mc-next-threaded-surface.unified .mc-next-threaded-composer-card {
+  min-width: 0;
   padding: 8px 18px 14px;
   background: linear-gradient(to top, var(--background) 72%, transparent);
 }
 
 .mc-next-threaded-surface.unified .mc-next-composer {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
   max-width: 780px;
   margin: 0 auto;
   padding: 10px 12px;
@@ -657,6 +672,9 @@
 
 .mc-next-threaded-surface.unified .mc-next-composer-blocked-actions {
   display: flex;
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
   align-items: center;
   gap: 0.52rem;
   margin-bottom: 0.5rem;
@@ -669,7 +687,9 @@
 }
 
 .mc-next-threaded-surface.unified .mc-next-composer-blocked-actions p {
+  min-width: 0;
   margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .mc-next-context-summary-grid {

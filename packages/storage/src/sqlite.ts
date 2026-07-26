@@ -1,5 +1,6 @@
 /* eslint-disable max-lines */
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { backup, DatabaseSync } from "node:sqlite";
@@ -200,6 +201,12 @@ class SqliteDatabaseClient implements DatabaseClient {
   }
 }
 
+// Per-process schema snapshot used by createDatabase when the template is enabled.
+let schemaTemplatePath: string | undefined;
+let schemaTemplateDirectory: string | undefined;
+let schemaTemplateCleanupRegistered = false;
+let schemaTemplateUnavailable = false;
+
 function pathsReferToSameFile(left: string, right: string): boolean {
   return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
 }
@@ -218,6 +225,15 @@ function makeSqliteSnapshotSelfContained(snapshotPath: string): void {
 
 export function createDatabase(options: SqliteOptions): DatabaseClient {
   ensureParentDir(options.dbPath);
+  // Opt-in test accelerator. Replaying the migration registry costs roughly 600ms
+  // per database and the storage suite creates about 1,200 of them, so two thirds
+  // of that suite was spent rebuilding one identical schema. With the template on,
+  // the first fresh database in a process is snapshotted and later ones start from
+  // that file. `migrate` still runs and still validates the ledger — it simply
+  // finds every version applied and does no work.
+  const templateEnabled = isSchemaTemplateEnabled() && !isEphemeralSqliteLocation(options.dbPath);
+  const existedBefore = templateEnabled && fs.existsSync(options.dbPath);
+  const seededFromTemplate = templateEnabled && !existedBefore && seedFromSchemaTemplate(options.dbPath);
   const db = new DatabaseSync(options.dbPath, {
     timeout: SQLITE_BUSY_TIMEOUT_MS,
   });
@@ -280,7 +296,115 @@ export function createDatabase(options: SqliteOptions): DatabaseClient {
     }
     throw error;
   }
+  if (templateEnabled && !seededFromTemplate && !existedBefore) {
+    captureSchemaTemplate(db, options.dbPath);
+  }
   return new SqliteDatabaseClient(db);
+}
+
+function isSchemaTemplateEnabled(): boolean {
+  return process.env.GOATCITADEL_SQLITE_SCHEMA_TEMPLATE === "1";
+}
+
+/**
+ * SQLite does not open these locations as ordinary files. Treating one as a
+ * template destination either disables the accelerator (Windows) or writes a
+ * literal `:memory:`/URI-named file into the working directory (POSIX).
+ */
+function isEphemeralSqliteLocation(dbPath: string): boolean {
+  if (dbPath === "" || dbPath === ":memory:") {
+    return true;
+  }
+  if (!dbPath.startsWith("file:")) {
+    return false;
+  }
+  const queryIndex = dbPath.indexOf("?");
+  const uriPath = queryIndex === -1 ? dbPath : dbPath.slice(0, queryIndex);
+  if (uriPath === "file::memory:") {
+    return true;
+  }
+  const query = queryIndex === -1 ? "" : dbPath.slice(queryIndex + 1);
+  return new URLSearchParams(query).get("mode")?.trim().toLowerCase() === "memory";
+}
+
+function seedFromSchemaTemplate(dbPath: string): boolean {
+  if (!schemaTemplatePath) {
+    return false;
+  }
+  try {
+    fs.copyFileSync(schemaTemplatePath, dbPath);
+    return true;
+  } catch {
+    // A template that cannot be copied is a lost optimisation, never a failure:
+    // fall through and migrate this database the ordinary way.
+    return false;
+  }
+}
+
+/**
+ * Snapshots the freshly migrated schema for the rest of this process.
+ *
+ * The template is deliberately per-process and never reused across runs. A cached
+ * file on disk would have to be invalidated whenever the migration registry
+ * changes, and getting that wrong means tests silently running against a schema
+ * nobody declared. Paying the migration once per process keeps the cache trivially
+ * correct, and the suite creates roughly five databases per test file.
+ *
+ * Only called for a database this process just created, so the snapshot holds
+ * schema and whatever the migrations themselves seed — never a caller's data.
+ */
+function captureSchemaTemplate(db: DatabaseSync, dbPath: string): void {
+  if (schemaTemplatePath || schemaTemplateUnavailable) {
+    return;
+  }
+  let unownedTemplateDirectory: string | undefined;
+  try {
+    // Fold the WAL back into the main file so the copy is self-contained.
+    db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+    const templateDir = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-schema-template-"));
+    unownedTemplateDirectory = templateDir;
+    const candidate = path.join(templateDir, "schema-template.db");
+    fs.copyFileSync(dbPath, candidate);
+    registerSchemaTemplateCleanup(templateDir);
+    schemaTemplatePath = candidate;
+    unownedTemplateDirectory = undefined;
+  } catch {
+    if (unownedTemplateDirectory) {
+      try {
+        fs.rmSync(unownedTemplateDirectory, { recursive: true, force: true });
+      } catch {
+        // Preserve the ordinary migration result; process temp cleanup is best-effort.
+      }
+    }
+    // Never let the accelerator break a caller; just stop trying.
+    schemaTemplateUnavailable = true;
+  }
+}
+
+function registerSchemaTemplateCleanup(templateDirectory: string): void {
+  // This exact path comes from mkdtempSync above. Never derive the removal target
+  // from a caller path, environment variable, prefix scan, or glob.
+  schemaTemplateDirectory = templateDirectory;
+  if (schemaTemplateCleanupRegistered) {
+    return;
+  }
+  schemaTemplateCleanupRegistered = true;
+  process.once("exit", cleanupSchemaTemplate);
+}
+
+function cleanupSchemaTemplate(): void {
+  const ownedTemplateDirectory = schemaTemplateDirectory;
+  schemaTemplateDirectory = undefined;
+  schemaTemplatePath = undefined;
+  if (!ownedTemplateDirectory) {
+    return;
+  }
+  try {
+    fs.rmSync(ownedTemplateDirectory, { recursive: true, force: true });
+  } catch {
+    // The process is already exiting; do not replace its real exit status with
+    // best-effort test-accelerator cleanup noise.
+  }
 }
 
 function migrate(db: DatabaseSync): void {

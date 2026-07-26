@@ -59,6 +59,7 @@ jobs:
             runner: ubuntu-latest
           - laneScript: verify:channels:runtime
             artifactSlug: channels-runtime
+            reviewLane: agentic-channels-runtime
             runner: ubuntu-latest
           - laneScript: verify:extensions:package
             artifactSlug: extensions-package
@@ -123,6 +124,10 @@ jobs:
       - name: Install Playwright Chromium
         run: pnpm exec playwright install chromium
 
+      - name: Capture release proof freshness boundary
+        id: proof-start
+        run: node -e "require('node:fs').appendFileSync(process.env.GITHUB_OUTPUT, 'started_after=' + new Date().toISOString() + '\n')"
+
       - name: Run release proof lane
         env:
           GOATCITADEL_UI_PACKAGE: "@goatcitadel/mission-control-next"
@@ -136,7 +141,10 @@ jobs:
 
       - name: Run review generation
         if: always()
-        run: pnpm verify:review
+        run: >-
+          pnpm verify:review --
+          --started-after="${{ steps.proof-start.outputs.started_after }}"
+          --expected-lane="${{ matrix.reviewLane || matrix.artifactSlug }}"
 
       - name: Verify artifact redaction
         id: artifact-redaction

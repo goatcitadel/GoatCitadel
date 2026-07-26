@@ -1,64 +1,17 @@
 import assert from "node:assert/strict";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { describe, it } from "node:test";
 import {
   REMOTE_WORKER_EFFECT_CORRELATION_SCHEMA_VERSION,
   type RemoteWorkerEffectCorrelation,
   type RemoteWorkerEffectTransitionState,
 } from "@goatcitadel/contracts";
-import { Pool } from "pg";
-import { PostgresDatabaseClient } from "./postgres/client.js";
-import { runPostgresMigrations } from "./postgres/migrator.js";
-import { POSTGRES_MIGRATIONS } from "./postgres/migrations.js";
-import { PostgresSyncDatabaseClient } from "./postgres/sync.js";
 import { RemoteWorkerEffectRepository } from "./remote-worker-effect-repo.js";
-import { seedRemoteWorkerGeneration } from "./remote-worker-artifact-repo.test.js";
+import { createRemoteWorkerPostgresTestScope, seedRemoteWorkerGeneration } from "./remote-worker-test-fixtures.js";
 
 const postgresConnectionString = process.env.GOATCITADEL_TEST_POSTGRES_URL?.trim();
 const postgresIt = postgresConnectionString ? it : it.skip;
 const D = (value: string): string => createHash("sha256").update(value, "utf8").digest("hex");
-
-interface Scoped {
-  adminPool: Pool;
-  scopedPool: Pool;
-  db: PostgresSyncDatabaseClient;
-  teardown: () => Promise<void>;
-}
-
-async function scoped(prefix: string): Promise<Scoped> {
-  assert.ok(postgresConnectionString);
-  const suffix = randomUUID().replaceAll("-", "");
-  const schemaName = `${prefix}_${suffix}`;
-  const adminPool = new Pool({ connectionString: postgresConnectionString, max: 2 });
-  const scopedUrl = new URL(postgresConnectionString);
-  scopedUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
-  const database = decodeURIComponent(scopedUrl.pathname.replace(/^\//u, "")) || "postgres";
-  const scopedPool = new Pool({ connectionString: scopedUrl.toString(), max: 4 });
-  const migrations = new PostgresDatabaseClient(
-    { connectionString: scopedUrl.toString(), database },
-    { pool: scopedPool },
-  );
-  const db = new PostgresSyncDatabaseClient({
-    connectionString: scopedUrl.toString(),
-    database,
-    applicationName: `hx506-effect-${suffix}`,
-    pool: { max: 1, connectionTimeoutMs: 10_000 },
-  });
-  await adminPool.query(`CREATE SCHEMA ${schemaName}`);
-  db.exec(`SET search_path TO ${schemaName}`);
-  await runPostgresMigrations(migrations, POSTGRES_MIGRATIONS);
-  return {
-    adminPool,
-    scopedPool,
-    db,
-    teardown: async () => {
-      db.close();
-      await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`).catch(() => undefined);
-      await scopedPool.end().catch(() => undefined);
-      await adminPool.end().catch(() => undefined);
-    },
-  };
-}
 
 function correlation(transitionState: RemoteWorkerEffectTransitionState): RemoteWorkerEffectCorrelation {
   const crossed = ["external_boundary_started", "completed_no_effect", "completed_with_effect"].includes(
@@ -81,7 +34,7 @@ describe("RemoteWorkerEffectRepository live PostgreSQL (skips without GOATCITADE
     "chains transitions, books receipts, and enforces insert-only and non-authority",
     { timeout: 300_000 },
     async () => {
-      const scope = await scoped("hx506_effect");
+      const scope = await createRemoteWorkerPostgresTestScope(postgresConnectionString!, "hx506_effect");
       try {
         const effects = new RemoteWorkerEffectRepository(scope.db);
         const ctx = seedRemoteWorkerGeneration(scope.db, "effect");
@@ -180,7 +133,7 @@ describe("RemoteWorkerEffectRepository live PostgreSQL (skips without GOATCITADE
     "serializes the transition hash chain so two connections cannot both write sequence 1",
     { timeout: 300_000 },
     async () => {
-      const scope = await scoped("hx506_effect_chain");
+      const scope = await createRemoteWorkerPostgresTestScope(postgresConnectionString!, "hx506_effect_chain");
       try {
         const ctx = seedRemoteWorkerGeneration(scope.db, "chain");
         const key = {

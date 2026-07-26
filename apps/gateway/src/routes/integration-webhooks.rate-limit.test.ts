@@ -101,6 +101,38 @@ describe("signed webhook staged rate limits", () => {
       loopbackStatuses.push((await injectGeneric(app, "127.0.0.1", `loopback-${attempt}`, true)).statusCode);
     }
     expect(loopbackStatuses).toEqual([200, 200, 200]);
+
+    const address = await app.listen({ host: "127.0.0.1", port: 0 });
+    const liveBody = JSON.stringify({
+      eventId: "accepted-live-overflow",
+      account: CONNECTION_ID,
+      actorId: "operator-1",
+      content: "hello",
+    });
+    const liveTimestamp = String(Math.floor(Date.now() / 1000));
+    const liveExceeded = await fetch(
+      new URL(`/api/v1/integrations/connections/${CONNECTION_ID}/discord/inbound`, `${address}/`),
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-forwarded-for": "203.0.113.82",
+          "x-goatcitadel-channel-timestamp": liveTimestamp,
+          "x-goatcitadel-channel-signature": buildGenericChannelInboundSignature(
+            liveTimestamp,
+            liveBody,
+            "generic-secret",
+          ),
+        },
+        body: liveBody,
+      },
+    );
+    expect(liveExceeded.status).toBe(429);
+    expect(await liveExceeded.json()).toMatchObject({ error: "Accepted webhook callback rate limit exceeded" });
+
+    const health = await fetch(new URL("/health/rate-limit-proof", `${address}/`));
+    expect(health.status).toBe(200);
+    expect(await health.json()).toEqual({ ok: true });
     expect(acceptInboundChannelEvent).toHaveBeenCalledTimes(8);
     expect(ingestChannelMessage).not.toHaveBeenCalled();
   });
@@ -164,6 +196,10 @@ describe("signed webhook staged rate limits", () => {
 
 async function buildRateLimitedWebhookApp(integrationWebhooks: Record<string, unknown>): Promise<FastifyInstance> {
   const next = Fastify();
+  next.addHook("preSerialization", async (_request, _reply, payload) => {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    return payload;
+  });
   await next.register(rateLimit, {
     global: false,
     timeWindow: "1 minute",
@@ -190,6 +226,7 @@ async function buildRateLimitedWebhookApp(integrationWebhooks: Record<string, un
       ...integrationWebhooks,
     },
   } as never);
+  next.get("/health/rate-limit-proof", async () => ({ ok: true }));
   await next.register(integrationWebhookRoutes);
   return next;
 }

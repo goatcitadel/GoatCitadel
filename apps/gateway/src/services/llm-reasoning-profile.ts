@@ -62,7 +62,9 @@ export function resolveLlmReasoningProfile(input: {
     requested === dispatchedRequest ? "requested_reasoning_supported" : "reasoning_changed_before_provider_dispatch";
 
   if (!supported.has(dispatchedRequest)) {
-    if (baseAttribution.callKind !== "chat_fallback") {
+    const canOmitUnsupportedLegacyReasoning =
+      capability.source === "legacy_compatibility" && supported.size === 1 && supported.has("none");
+    if (baseAttribution.callKind !== "chat_fallback" && !canOmitUnsupportedLegacyReasoning) {
       throw new LlmReasoningProfileError({
         requested: dispatchedRequest,
         supported: [...supported],
@@ -70,18 +72,24 @@ export function resolveLlmReasoningProfile(input: {
         message: `Reasoning effort ${dispatchedRequest} is not supported by the selected provider/model.`,
       });
     }
-    const downgrade = nearestLowerSupportedEffort(dispatchedRequest, supported);
-    if (!downgrade) {
-      throw new LlmReasoningProfileError({
-        requested: dispatchedRequest,
-        supported: [...supported],
-        code: "unsupported_reasoning_fallback",
-        message: `Reasoning effort ${dispatchedRequest} cannot be safely downgraded for the fallback provider/model.`,
-      });
+    if (canOmitUnsupportedLegacyReasoning) {
+      actual = "none";
+      disposition = "downgraded";
+      reasonCode = "legacy_provider_reasoning_omitted";
+    } else {
+      const downgrade = nearestLowerSupportedEffort(dispatchedRequest, supported);
+      if (!downgrade) {
+        throw new LlmReasoningProfileError({
+          requested: dispatchedRequest,
+          supported: [...supported],
+          code: "unsupported_reasoning_fallback",
+          message: `Reasoning effort ${dispatchedRequest} cannot be safely downgraded for the fallback provider/model.`,
+        });
+      }
+      actual = downgrade;
+      disposition = "downgraded";
+      reasonCode = "fallback_model_effort_downgrade";
     }
-    actual = downgrade;
-    disposition = "downgraded";
-    reasonCode = "fallback_model_effort_downgrade";
   }
 
   const providerEffort = capability.providerEffortMap?.[actual] ?? actual;

@@ -3,6 +3,7 @@ import { Pool, types } from "pg";
 import type { PostgresConnectionOptions } from "./client.js";
 import type { PostgresWorkerRequest, PostgresWorkerResponse } from "./protocol.js";
 import { sanitizeParamsForServerEncoding } from "./server-encoding.js";
+import { buildPostgresConnectionStringStartupConfig, buildPostgresStartupOptions } from "./startup-options.js";
 
 types.setTypeParser(20, (value) => Number(value));
 types.setTypeParser(21, (value) => Number(value));
@@ -268,8 +269,7 @@ function getPinnedSessionClient(
 export function buildPostgresSyncWorkerPoolConfig(options: PostgresConnectionOptions) {
   if (options.connectionString?.trim()) {
     return {
-      connectionString: options.connectionString.trim(),
-      options: "-c client_encoding=UTF8",
+      ...buildPostgresConnectionStringStartupConfig(options.connectionString),
       max: options.pool?.max ?? 10,
       min: options.pool?.min ?? 0,
       idleTimeoutMillis: options.pool?.idleTimeoutMs ?? 30_000,
@@ -285,7 +285,7 @@ export function buildPostgresSyncWorkerPoolConfig(options: PostgresConnectionOpt
     database: options.database,
     user: options.user,
     password: options.password,
-    options: "-c client_encoding=UTF8",
+    options: buildPostgresStartupOptions(),
     max: options.pool?.max ?? 10,
     min: options.pool?.min ?? 0,
     idleTimeoutMillis: options.pool?.idleTimeoutMs ?? 30_000,

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { Client } from "pg";
 import {
   buildPostgresSyncWorkerPoolConfig,
   createPostgresSyncWorkerRuntime,
@@ -15,7 +16,8 @@ import type { PostgresWorkerResponse } from "./postgres/protocol.js";
 
 test("builds Postgres worker pool config for connection strings and discrete options", () => {
   const fromConnectionString = buildPostgresSyncWorkerPoolConfig({
-    connectionString: " postgres://user:pass@example.test/db ",
+    connectionString:
+      " postgres://user:pass@example.test/db?options=-csearch_path%3Dtenant_proof+-cstatement_timeout%3D5000 ",
     database: "ignored",
     sslMode: "require",
     applicationName: "coverage-worker",
@@ -28,8 +30,9 @@ test("builds Postgres worker pool config for connection strings and discrete opt
   });
 
   assert.deepEqual(fromConnectionString, {
-    connectionString: "postgres://user:pass@example.test/db",
-    options: "-c client_encoding=UTF8",
+    connectionString:
+      "postgres://user:pass@example.test/db?options=-csearch_path%3Dtenant_proof+-cstatement_timeout%3D5000+-c+client_encoding%3DUTF8",
+    options: "-csearch_path=tenant_proof -cstatement_timeout=5000 -c client_encoding=UTF8",
     max: 7,
     min: 2,
     idleTimeoutMillis: 123,
@@ -37,6 +40,11 @@ test("builds Postgres worker pool config for connection strings and discrete opt
     application_name: "coverage-worker",
     ssl: { rejectUnauthorized: false },
   });
+  assert.equal(
+    (new Client(fromConnectionString) as unknown as { connectionParameters: { options?: string } }).connectionParameters
+      .options,
+    fromConnectionString.options,
+  );
 
   const fromDiscreteOptions = buildPostgresSyncWorkerPoolConfig({
     database: "goatcitadel",

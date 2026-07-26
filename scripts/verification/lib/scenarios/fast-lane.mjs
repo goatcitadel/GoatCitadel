@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { GATEWAY_COVERAGE_SHARD_COUNT, gatewayCoverageShardDirectory } from "../../../coverage-shard-contract.mjs";
 import { clampString, maybeParseBool, repoRoot, runCommand, runScenario, sanitizeFilePart } from "../shared.mjs";
 import { prepareVerificationRuntime } from "../runtime.mjs";
 // The lane runs each package's `test:coverage` script rather than `test` so the
@@ -13,9 +14,9 @@ const FAST_LANE_SAFE_TEST_CONCURRENCY = 2;
 // The gateway suite is 860 files and was the lane's single longest scenario at
 // roughly eight and a half minutes. Sharding only pays off across machines, so the
 // shards run serially in a local lane and one-per-job in CI.
-const GATEWAY_TEST_SHARD_COUNT = 4;
+const FAST_LANE_VITEST_MAX_WORKERS = 4;
 const GATEWAY_TEST_SHARDS = Object.freeze(
-  Array.from({ length: GATEWAY_TEST_SHARD_COUNT }, (_unused, index) => index + 1),
+  Array.from({ length: GATEWAY_COVERAGE_SHARD_COUNT }, (_unused, index) => index + 1),
 );
 const FAST_LANE_LIBRARY_TEST_FILTERS = Object.freeze([
   "@goatcitadel/contracts",
@@ -47,17 +48,21 @@ export const FAST_LANE_COMMANDS = Object.freeze([
   { id: "fast.typecheck", title: "Root typecheck", args: ["typecheck"] },
   ...GATEWAY_TEST_SHARDS.map((shard) => ({
     id: `fast.test.gateway.shard${shard}`,
-    title: `Gateway tests (shard ${shard}/${GATEWAY_TEST_SHARD_COUNT})`,
+    title: `Gateway tests (shard ${shard}/${GATEWAY_COVERAGE_SHARD_COUNT})`,
     args: [
       "--filter",
       "@goatcitadel/gateway",
       "test:coverage:vitest",
       // No `--` separator: pnpm forwards that literally, and vitest then reads the
       // shard flag as a positional filter and silently runs the whole suite.
-      `--shard=${shard}/${GATEWAY_TEST_SHARD_COUNT}`,
+      `--shard=${shard}/${GATEWAY_COVERAGE_SHARD_COUNT}`,
       // Each shard needs its own report directory. The collector discovers any
       // `coverage*` directory, so the shards merge without further wiring.
-      `--coverage.reportsDirectory=coverage-shard-${shard}`,
+      `--coverage.reportsDirectory=${gatewayCoverageShardDirectory(shard)}`,
+      // Vitest otherwise uses availableParallelism()-1 workers. That overloaded
+      // high-core Windows hosts with concurrent SQLite/filesystem setup and turned
+      // unrelated 15-second tests into false failures under coverage.
+      `--maxWorkers=${FAST_LANE_VITEST_MAX_WORKERS}`,
     ],
     env: { GOATCITADEL_SKIP_EXTENSIONS_SDK_PREBUILD: "1" },
   })),
@@ -68,14 +73,39 @@ export const FAST_LANE_COMMANDS = Object.freeze([
     env: { GOATCITADEL_SKIP_EXTENSIONS_SDK_PREBUILD: "1" },
   },
   {
+    id: "fast.coverage.gateway.smoke",
+    title: "Gateway smoke coverage",
+    args: ["--filter", "@goatcitadel/gateway", "coverage:smoke"],
+    env: { GOATCITADEL_SKIP_EXTENSIONS_SDK_PREBUILD: "1" },
+  },
+  {
+    id: "fast.coverage.gateway.exercise",
+    title: "Gateway exercise coverage",
+    args: ["--filter", "@goatcitadel/gateway", "coverage:exercise"],
+    env: { GOATCITADEL_SKIP_EXTENSIONS_SDK_PREBUILD: "1" },
+  },
+  {
     id: "fast.test.storage",
     title: "Storage tests",
     args: ["--filter", "@goatcitadel/storage", "test:coverage"],
+    // The suite creates ~1,200 SQLite databases and replaying the migration
+    // registry costs ~600ms each, which was about two thirds of this scenario.
+    // The template snapshots the migrated schema once per process; the ledger is
+    // still validated on every database.
+    env: { GOATCITADEL_SQLITE_SCHEMA_TEMPLATE: "1" },
   },
   {
     id: "fast.test.mission-control-next",
     title: "Mission Control Next tests",
-    args: ["--filter", "@goatcitadel/mission-control-next", "test:coverage"],
+    args: [
+      "--filter",
+      "@goatcitadel/mission-control-next",
+      "test:coverage",
+      // This scenario runs beside the recursive library coverage command. An
+      // uncapped Vitest pool on each side can oversubscribe a high-core host and
+      // turn the shell's cold dynamic import into a false 20-second timeout.
+      `--maxWorkers=${FAST_LANE_VITEST_MAX_WORKERS}`,
+    ],
   },
   {
     id: "fast.test.policy-engine",
@@ -119,6 +149,11 @@ export const FAST_LANE_STAGES = Object.freeze([
     id: "fast.test.gateway",
     mode: "serial",
     commands: [...GATEWAY_TEST_SHARDS.map((shard) => `fast.test.gateway.shard${shard}`), "fast.test.gateway.node"],
+  },
+  {
+    id: "fast.coverage.gateway",
+    mode: "serial",
+    commands: ["fast.coverage.gateway.smoke", "fast.coverage.gateway.exercise"],
   },
   {
     id: "fast.test.storage",
@@ -205,8 +240,8 @@ export function resolveFastLaneSelection(raw) {
   const unknown = requested.filter((id) => !FAST_LANE_COMMAND_BY_ID.has(id));
   if (unknown.length > 0) {
     throw new Error(
-      `Unknown fast lane command id(s): ${unknown.join(", ")}. Known ids: `
-        + `${FAST_LANE_COMMANDS.map((command) => command.id).join(", ")}.`,
+      `Unknown fast lane command id(s): ${unknown.join(", ")}. Known ids: ` +
+        `${FAST_LANE_COMMANDS.map((command) => command.id).join(", ")}.`,
     );
   }
   return new Set(requested);
@@ -235,7 +270,9 @@ export async function runFastLane(context, options = {}) {
   const executionOptions = { failFast, injectFailureScenario: injectedFailureScenario };
   const selection = resolveFastLaneSelection(options.commands ?? process.env.GOATCITADEL_VERIFY_FAST_COMMANDS);
   const stages = selectFastLaneStages(
-    serial ? [{ id: "fast.serial", mode: "serial", commands: FAST_LANE_COMMANDS.map((item) => item.id) }] : FAST_LANE_STAGES,
+    serial
+      ? [{ id: "fast.serial", mode: "serial", commands: FAST_LANE_COMMANDS.map((item) => item.id) }]
+      : FAST_LANE_STAGES,
     selection,
   );
 

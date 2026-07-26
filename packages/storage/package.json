@@ -21,7 +21,7 @@
     "typecheck": "tsc -b tsconfig.json",
     "test": "tsx --test \"src/**/*.test.ts\"",
     "test:postgres": "pnpm build && tsx --test \"src/postgres/real-postgres.test.ts\"",
-    "test:coverage": "node -e \"const {rmSync}=require('node:fs');rmSync('dist',{recursive:true,force:true});rmSync('tsconfig.tsbuildinfo',{force:true})\" && tsc -b tsconfig.json && c8 --report-dir=coverage --reporter=json --reporter=text-summary node --test \"dist/**/*.test.js\"",
+    "test:coverage": "node -e \"const {rmSync}=require('node:fs');rmSync('dist',{recursive:true,force:true});rmSync('tsconfig.tsbuildinfo',{force:true})\" && tsc -b tsconfig.json && c8 --report-dir=coverage --reporter=json --reporter=text-summary node --test --test-concurrency=1 \"dist/**/*.test.js\"",
     "lint": "tsc -b tsconfig.json"
   },
   "devDependencies": {

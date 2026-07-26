@@ -18,8 +18,14 @@ export async function runApiCompatibilityLane(context, _options = {}, deps) {
     stopVerificationStack,
     writeJson,
   } = deps;
+  const apiCompatibilityOperatorToken = "verification-api-compat-operator-token";
   const stack = await startVerificationStack(context, {
     includeUi: false,
+    gatewayEnv: {
+      GOATCITADEL_AUTH_MODE: "token",
+      GOATCITADEL_AUTH_TOKEN: apiCompatibilityOperatorToken,
+      GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS: "true",
+    },
   });
   try {
     await runScenario(

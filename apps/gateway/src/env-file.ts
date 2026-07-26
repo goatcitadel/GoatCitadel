@@ -180,18 +180,26 @@ export interface EnvFileProbeResult {
  * Locates the `.env` that credential writes should target, and reports which
  * roots were considered.
  *
- * An explicit `rootDir` is authoritative: it is the caller asserting where the
- * install lives, so resolution stops there. It deliberately does NOT fall back
- * to cwd-derived roots, because `.env` is a credential sink — falling through
- * would make the write target depend on the directory the process was started
- * from, and a gateway launched from `apps/gateway` could persist a secret into
- * the repo root's `.env` instead of the install the caller named.
+ * `GOATCITADEL_LOCAL_ENV_FILE` is the operator's authoritative credential sink
+ * when configured (the Docker runtime points it at its persistent data volume).
+ * Otherwise an explicit `rootDir` is authoritative: it is the caller asserting
+ * where the install lives, so resolution stops there. It deliberately does NOT
+ * fall back to cwd-derived roots, because `.env` is a credential sink — falling
+ * through would make the write target depend on the directory the process was
+ * started from, and a gateway launched from `apps/gateway` could persist a
+ * secret into the repo root's `.env` instead of the install the caller named.
  *
  * Without a `rootDir` this is discovery mode (startup, CLIs): GOATCITADEL_ROOT_DIR
  * first, then cwd, cwd/.., cwd/../.., preferring any root carrying the config
  * marker before falling back to a root that merely has a `.env` already.
  */
 export function probeWritableEnvFilePath(options?: { rootDir?: string }): EnvFileProbeResult {
+  const configuredEnvFile = process.env.GOATCITADEL_LOCAL_ENV_FILE?.trim();
+  if (configuredEnvFile) {
+    const envPath = path.resolve(configuredEnvFile);
+    return { path: envPath, probedRoots: [path.dirname(envPath)] };
+  }
+
   const explicitRoot = options?.rootDir?.trim() ? path.resolve(options.rootDir) : undefined;
   const envRoot = process.env.GOATCITADEL_ROOT_DIR?.trim();
   const cwd = process.cwd();

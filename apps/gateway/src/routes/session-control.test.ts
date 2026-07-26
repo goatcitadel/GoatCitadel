@@ -87,6 +87,10 @@ function buildServices(overrides: Partial<MockServices> = {}): MockServices {
 
 async function buildApp(services: MockServices, principal: Principal): Promise<FastifyInstance> {
   const app = Fastify();
+  app.addHook("preSerialization", async (_request, _reply, payload) => {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    return payload;
+  });
   installRouteAccessTracking(app);
   app.decorate("gatewayConfig", {
     assistant: { auth: { mode: "token", allowLoopbackBypass: false } },
@@ -420,13 +424,18 @@ describe("session-control routes: headers, token hashing, command shaping", () =
   it("rejects a malformed control body before calling the service", async () => {
     const services = buildServices();
     app = await buildApp(services, "scc");
-    const reply = await app.inject({
+    const address = await app.listen({ host: "127.0.0.1", port: 0 });
+    const reply = await fetch(new URL("/api/v1/chat/sessions/session-1/control/requests", `${address}/`), {
       method: "POST",
-      url: "/api/v1/chat/sessions/session-1/control/requests",
-      headers: companionHeaders(),
-      payload: { capabilities: ["read"] },
+      headers: { ...companionHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({ capabilities: ["read"] }),
     });
-    expect(reply.statusCode).toBe(400);
+    expect(reply.status).toBe(400);
+
+    const followUp = await fetch(new URL("/api/v1/chat/sessions/session-1/control", `${address}/`), {
+      headers: companionHeaders(),
+    });
+    expect(followUp.status).toBe(200);
     expect(services.sessionControl.createExternalRequest).not.toHaveBeenCalled();
   });
 });
@@ -557,13 +566,19 @@ describe("external companion transcript read wiring", () => {
       } as never,
     });
     app = await buildApp(services, "scc");
-    const reply = await app.inject({
-      method: "GET",
-      url: "/api/v1/chat/sessions/session-1/messages",
+    const address = await app.listen({ host: "127.0.0.1", port: 0 });
+    const reply = await fetch(new URL("/api/v1/chat/sessions/session-1/messages", `${address}/`), {
       headers: { [SESSION_CONTROL_CLIENT_INSTANCE_HEADER]: CLIENT_INSTANCE_ID },
     });
-    expect(reply.statusCode).toBe(409);
-    expect(reply.json().details.sessionControlCode).toBe("SESSION_CONTROL_CAPABILITY_DENIED");
+    expect(reply.status).toBe(409);
+    expect(((await reply.json()) as { details: { sessionControlCode: string } }).details.sessionControlCode).toBe(
+      "SESSION_CONTROL_CAPABILITY_DENIED",
+    );
+
+    const followUp = await fetch(new URL("/api/v1/chat/sessions/session-1/control", `${address}/`), {
+      headers: companionHeaders(),
+    });
+    expect(followUp.status).toBe(200);
     expect(services.chatMessages.listChatMessages).not.toHaveBeenCalled();
   });
 

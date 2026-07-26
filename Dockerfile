@@ -19,10 +19,14 @@ COPY . .
 
 RUN corepack prepare pnpm@10.31.0 --activate
 RUN pnpm install --frozen-lockfile
+RUN pnpm --filter @goatcitadel/gateway-core... build
 RUN pnpm config:sync
 RUN pnpm build
 
 FROM node:22-bookworm-slim AS runtime
+
+ARG GOATCITADEL_UID=10001
+ARG GOATCITADEL_GID=10001
 
 ENV NODE_ENV=production
 ENV GATEWAY_HOST=0.0.0.0
@@ -32,12 +36,13 @@ ENV MISSION_CONTROL_PORT=4173
 
 WORKDIR /app
 
-RUN groupadd --system goatcitadel && useradd --system --gid goatcitadel --create-home --home-dir /home/goatcitadel goatcitadel
+RUN groupadd --gid "${GOATCITADEL_GID}" goatcitadel \
+  && useradd --uid "${GOATCITADEL_UID}" --gid goatcitadel --create-home --home-dir /home/goatcitadel --shell /usr/sbin/nologin goatcitadel
 
-COPY --from=builder /app /app
+COPY --from=builder --chown=goatcitadel:goatcitadel /app /app
 
 RUN mkdir -p /app/data /app/workspace /app/.worktrees /app/.tmp \
-  && chown -R goatcitadel:goatcitadel /app /home/goatcitadel
+  && chown -R goatcitadel:goatcitadel /app/data /app/workspace /app/.worktrees /app/.tmp /home/goatcitadel
 
 USER goatcitadel
 

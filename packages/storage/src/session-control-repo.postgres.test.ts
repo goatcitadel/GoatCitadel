@@ -101,7 +101,10 @@ describe("SessionControlRepository live PostgreSQL authority", () => {
             createdAt: legacyReceiptCreatedAt,
           });
         const applied = await runPostgresMigrations(migrations, POSTGRES_MIGRATIONS);
-        assert.deepEqual(applied.appliedVersions, [115, 116]);
+        assert.deepEqual(
+          applied.appliedVersions,
+          POSTGRES_MIGRATIONS.filter((migration) => migration.version >= 115).map((migration) => migration.version),
+        );
         assert.deepEqual((await runPostgresMigrations(migrations, POSTGRES_MIGRATIONS)).appliedVersions, []);
         assert.equal(
           setupDb

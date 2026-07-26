@@ -44,8 +44,9 @@ describe("provider templates", () => {
     });
     const codexModels = findProviderTemplate("openai-codex")?.knownModels ?? [];
     expect(codexModels).not.toContain("gpt-5.6");
-    expect(codexModels).not.toContain("gpt-5.6-terra");
-    expect(codexModels).not.toContain("gpt-5.6-luna");
+    expect(codexModels).toContain("gpt-5.6-sol");
+    expect(codexModels).toContain("gpt-5.6-terra");
+    expect(codexModels).toContain("gpt-5.6-luna");
     expect(codexModels).toContain("gpt-5.5");
   });
 
@@ -150,6 +151,9 @@ describe("provider templates", () => {
   it("recognizes shared bare model ids for each provider that explicitly supports them", () => {
     expect(providerRecognizesModelId("openai", "gpt-5.6")).toBe(true);
     expect(providerRecognizesModelId("openai-codex", "gpt-5.6")).toBe(false);
+    expect(providerRecognizesModelId("openai-codex", "gpt-5.6-sol")).toBe(true);
+    expect(providerRecognizesModelId("openai-codex", "gpt-5.6-terra")).toBe(true);
+    expect(providerRecognizesModelId("openai-codex", "gpt-5.6-luna")).toBe(true);
     expect(providerRecognizesModelId("openai-codex", "gpt-5.4")).toBe(true);
     expect(providerRecognizesModelId("openai-codex", "openai/gpt-5.6")).toBe(false);
     expect(providerRecognizesModelId("openai-codex", "openai-codex/gpt-5.4")).toBe(true);

@@ -205,6 +205,40 @@ test("non-strict finalization does not enforce an ordinary over-budget result", 
   });
 });
 
+test("finalization reclaims the latest-run pointer after a nested verification run", async () => {
+  const context = await createFinalizeTestContext({
+    lane: "all",
+    scenarios: [],
+  });
+  const latestRunPointerPath = path.join(context.artifactRoot, "latest-run.json");
+  context.latestRunPointerPath = latestRunPointerPath;
+  await fs.writeFile(
+    latestRunPointerPath,
+    `${JSON.stringify({
+      runId: "nested-install-smoke",
+      artifactRoot: path.join(context.artifactRoot, "nested-install-smoke"),
+      startedAt: new Date().toISOString(),
+    })}\n`,
+    "utf8",
+  );
+
+  try {
+    const manifest = await finalizeRunContext(context);
+    const pointer = JSON.parse(await fs.readFile(latestRunPointerPath, "utf8"));
+
+    assert.equal(manifest.status, "passed");
+    assert.deepEqual(pointer, {
+      runId: context.runId,
+      artifactRoot: context.artifactRoot,
+      startedAt: manifest.startedAt,
+      finishedAt: manifest.finishedAt,
+      status: "passed",
+    });
+  } finally {
+    await fs.rm(context.artifactRoot, { recursive: true, force: true });
+  }
+});
+
 function fastTestScenario(id, startedAt, finishedAt) {
   return {
     id,
@@ -240,17 +274,18 @@ test("a sliced run is not judged against the whole lane's budgets", async () => 
 
 async function createFinalizeTestContext({
   startedAt = new Date(Date.now() - 1_000).toISOString(),
+  lane = "fast",
   scenarios,
   metadata = {},
 }) {
   const artifactRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-fast-perf-integrity-"));
   return {
-    lane: "fast",
+    lane,
     runId: "fast-perf-integrity",
     artifactRoot,
     manifest: {
       runId: "fast-perf-integrity",
-      lane: "fast",
+      lane,
       startedAt,
       repoRoot: "repo",
       artifactRoot,

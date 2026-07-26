@@ -122,6 +122,7 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = withReleaseSurfaceStatus([
     readySelector: '.mc-next-threaded-surface[data-mode="chat"]',
     expectedArea: "chat",
     expectedSection: "root",
+    fixtureSessionKey: "approval",
   },
   {
     slug: "projects",
@@ -350,7 +351,7 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = withReleaseSurfaceStatus([
   {
     slug: "ops-runtime",
     href: "/ops/runtime",
-    readyText: "approval.wait run",
+    readyText: "Runtime authority map",
     expectedArea: "ops",
     expectedSection: "runtime",
     interaction: "open-inspector",

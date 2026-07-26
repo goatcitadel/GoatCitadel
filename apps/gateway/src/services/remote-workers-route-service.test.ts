@@ -551,6 +551,107 @@ describe("RemoteWorkersRouteService HX-507B projections", () => {
     expect(Object.isFrozen(reconciliation)).toBe(true);
   });
 
+  it("reconciles every assignment page instead of reporting false consistency from the first page", () => {
+    const secondPageCursor = {
+      lastCreatedAt: "2026-07-15T10:00:00.000Z",
+      lastAssignmentId: "assign-page-one",
+    };
+    const expired = aggregate({
+      assignment: assignmentRecord({ assignmentId: "assign-expired" }),
+      lease: {
+        assignmentGeneration: 1,
+        leaseRevision: 1,
+        workerSentThrough: 0,
+        serverAcknowledgedThrough: 0,
+        heartbeatAt: "2020-01-01T00:00:00.000Z",
+        expiresAt: "2020-01-01T00:00:00.000Z",
+      } as RemoteWorkerAssignmentAggregate["lease"],
+    });
+    const settledWithoutMaterialization = aggregate({
+      assignment: assignmentRecord({ assignmentId: "assign-unmaterialized" }),
+      settlement: {
+        assignmentGeneration: 1,
+        outcome: "completed",
+        origin: "worker",
+        finalEventSequence: 4,
+        settledAt: OBSERVED_AT,
+      } as RemoteWorkerAssignmentAggregate["settlement"],
+    });
+    const listAssignmentAggregates = vi.fn(
+      (_workspaceId: string, options?: Parameters<RemoteWorkerAssignmentStore["listAssignmentAggregates"]>[1]) =>
+        options?.cursor
+          ? { items: [expired, settledWithoutMaterialization] }
+          : { items: [aggregate()], nextCursor: secondPageCursor },
+    );
+    const service = new RemoteWorkersRouteService(
+      store({ findWorkerRegistryEntry: vi.fn(() => record()) }),
+      assignmentStore({ listAssignmentAggregates }),
+      () => OBSERVED_AT,
+    );
+
+    const reconciliation = service.getReconciliation({ workspaceId: "workspace-a", workerId: "worker-a" });
+
+    expect(reconciliation.assignmentLease.value).toEqual({
+      status: "divergent",
+      summary: "3 assignment(s): 1 with a fresh lease, 1 with an expired unsettled lease.",
+    });
+    expect(reconciliation.settlementMaterialization.value).toEqual({
+      status: "divergent",
+      summary: "1 settled assignment(s); 0 carry recorded materialization receipts.",
+    });
+    expect(listAssignmentAggregates).toHaveBeenNthCalledWith(1, "workspace-a", {
+      workerId: "worker-a",
+      limit: 100,
+    });
+    expect(listAssignmentAggregates).toHaveBeenNthCalledWith(2, "workspace-a", {
+      workerId: "worker-a",
+      limit: 100,
+      cursor: secondPageCursor,
+    });
+  });
+
+  it("fails closed when reconciliation storage repeats a pagination cursor", () => {
+    const repeatedCursor = {
+      lastCreatedAt: "2026-07-15T10:00:00.000Z",
+      lastAssignmentId: "assign-repeat",
+    };
+    const service = new RemoteWorkersRouteService(
+      store({ findWorkerRegistryEntry: vi.fn(() => record()) }),
+      assignmentStore({
+        listAssignmentAggregates: vi.fn(() => ({ items: [aggregate()], nextCursor: repeatedCursor })),
+      }),
+      () => OBSERVED_AT,
+    );
+
+    expect(() => service.getReconciliation({ workspaceId: "workspace-a", workerId: "worker-a" })).toThrow(
+      "Remote worker assignment reconciliation cursor did not advance.",
+    );
+  });
+
+  it("bounds full reconciliation scans and fails closed instead of running an unbounded Ops request", () => {
+    let pageNumber = 0;
+    const listAssignmentAggregates = vi.fn(() => {
+      pageNumber += 1;
+      return {
+        items: [aggregate({ assignment: assignmentRecord({ assignmentId: `assign-${pageNumber}` }) })],
+        nextCursor: {
+          lastCreatedAt: new Date(Date.parse("2026-07-15T10:00:00.000Z") - pageNumber * 60_000).toISOString(),
+          lastAssignmentId: `assign-${pageNumber}`,
+        },
+      };
+    });
+    const service = new RemoteWorkersRouteService(
+      store({ findWorkerRegistryEntry: vi.fn(() => record()) }),
+      assignmentStore({ listAssignmentAggregates }),
+      () => OBSERVED_AT,
+    );
+
+    expect(() => service.getReconciliation({ workspaceId: "workspace-a", workerId: "worker-a" })).toThrow(
+      "Remote worker assignment reconciliation exceeded 100 pages.",
+    );
+    expect(listAssignmentAggregates).toHaveBeenCalledTimes(100);
+  });
+
   it("404s reconciliation for an unknown worker id", () => {
     const service = new RemoteWorkersRouteService(
       store({ findWorkerRegistryEntry: vi.fn(() => undefined) }),

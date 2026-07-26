@@ -1,4 +1,12 @@
 node_modules
+apps/*/node_modules
+packages/*/node_modules
+target
+**/target
+.worktrees
+.playwright-cli
+.scratch
+.superpowers
 .git
 .gitignore
 .assistant
@@ -7,8 +15,24 @@ node_modules
 artifacts
 backups
 coverage
+apps/*/coverage
+apps/*/coverage-*
+packages/*/coverage
+packages/*/coverage-*
 output
+apps/*/output
+apps/*/artifacts
+apps/*/.scratch
+apps/*/.codex-temp
 apps/gateway/backups
+apps/*/backups
+apps/*/dist
+apps/*/dist-node
+packages/*/dist
+apps/**/bin
+apps/**/obj
+*.tsbuildinfo
+**/*.tsbuildinfo
 apps/mission-control/dist
 apps/mission-control/dist-node
 assets/source/**/*.zip
@@ -20,6 +44,7 @@ assets/source/office/_downloads
 data
 config/*.json
 !config/*.example.json
+!config/llm-model-metadata.json
 *.log
 tmp-*.log
 .codex-*.log
@@ -41,3 +66,24 @@ tmp-*.log
 # Lock files explicitly OK to copy — kept here as a hint that the deny
 # list above is not exhaustive; if you add a new secret-bearing file
 # pattern, list it here too.
+
+# Keep high-volume prune guards after every re-inclusion rule. BuildKit can
+# then stop walking these trees instead of reconsidering them for a later `!`.
+.git
+.claude
+.assistant
+.worktrees
+node_modules
+**/node_modules
+target
+**/target
+artifacts
+data
+workspace
+reports
+**/coverage
+**/coverage-*
+**/dist
+**/dist-node
+**/bin
+**/obj

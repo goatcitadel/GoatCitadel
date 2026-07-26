@@ -2,12 +2,11 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
-import type { ChatCompletionRequest, ChatMessageRecord } from "@goatcitadel/contracts";
+import type { ChatMessageRecord } from "@goatcitadel/contracts";
 import { Storage } from "@goatcitadel/storage";
 import { listMissingTrackedRouteAccessClasses } from "./route-access.js";
+import { registerDevVerificationProviderExerciseRoute } from "./dev-verification-provider-exercise.js";
 import { withMemoryEmbeddingMetadata } from "../services/memory-embedding-metadata.js";
-import { createUtilityModelUsageAttribution } from "../services/utility-model-usage-attribution.js";
-import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
 
 const listDiagnosticsQuerySchema = z.object({
   level: z.enum(["debug", "info", "warn", "error"]).optional(),
@@ -21,12 +20,6 @@ const seedScenarioSchema = z.object({
   sessionTitle: z.string().trim().min(1).default("Verification Demo Session"),
   sessionCount: z.coerce.number().int().min(1).max(40).default(12),
   longThreadTurns: z.coerce.number().int().min(2).max(120).default(24),
-});
-
-const providerExerciseSchema = z.object({
-  providerId: z.string().trim().min(1).optional(),
-  model: z.string().trim().min(1).optional(),
-  scenario: z.enum(["simple", "stream", "tools", "structured"]),
 });
 
 const chatApprovalScenarioSchema = z.object({
@@ -677,75 +670,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
     });
   });
 
-  fastify.post("/api/v1/dev/verification/provider-exercise", async (request, reply) => {
-    if (!devVerificationEnabled()) {
-      return reply.code(404).send({ error: "Development verification endpoints are disabled." });
-    }
-    const parsed = providerExerciseSchema.safeParse(request.body ?? {});
-    if (!parsed.success) {
-      return reply.code(400).send({ error: parsed.error.flatten() });
-    }
-    const startedAt = Date.now();
-    try {
-      const payload = buildProviderExercisePayload(parsed.data.scenario, parsed.data.providerId, parsed.data.model);
-      const usageAttribution = createUtilityModelUsageAttribution({
-        operationId: `dev-provider-exercise:${encodeURIComponent(request.id)}`,
-        utilityKind: "dev_provider_exercise",
-        requestedProviderId: payload.providerId,
-        requestedModelId: payload.model,
-        lineage: { agentId: "dev-verification" },
-      });
-      if (parsed.data.scenario === "stream") {
-        let chunkCount = 0;
-        let preview = "";
-        for await (const chunk of fastify.services.devVerification.createChatCompletionStream(
-          payload,
-          usageAttribution,
-        )) {
-          chunkCount += 1;
-          if (!preview) {
-            preview = JSON.stringify(chunk).slice(0, 240);
-          }
-        }
-        return reply.send({
-          ok: true,
-          providerId: payload.providerId,
-          model: payload.model,
-          scenario: parsed.data.scenario,
-          elapsedMs: Date.now() - startedAt,
-          chunkCount,
-          outputPreview: preview,
-        });
-      }
-
-      const result = await fastify.services.devVerification.createChatCompletion(payload, usageAttribution);
-      const firstChoice = Array.isArray(result.choices) ? result.choices[0] : undefined;
-      const content =
-        typeof firstChoice?.message?.content === "string"
-          ? firstChoice.message.content
-          : JSON.stringify(firstChoice?.message?.content ?? "").slice(0, 240);
-      return reply.send({
-        ok: true,
-        providerId: payload.providerId,
-        model: payload.model,
-        scenario: parsed.data.scenario,
-        elapsedMs: Date.now() - startedAt,
-        outputPreview: content.slice(0, 240),
-      });
-    } catch (error) {
-      if (isAuthoritativeModelUsageAccountingError(error)) {
-        throw error;
-      }
-      return reply.send({
-        ok: false,
-        providerId: parsed.data.providerId,
-        model: parsed.data.model,
-        scenario: parsed.data.scenario,
-        elapsedMs: Date.now() - startedAt,
-        error: (error as Error).message,
-      });
-    }
-  });
+  registerDevVerificationProviderExerciseRoute(fastify, devVerificationEnabled);
 };
 
 function createRequestAbortScope(
@@ -773,94 +698,4 @@ function createRequestAbortScope(
       reply.raw.off("close", abort);
     },
   };
-}
-
-function buildProviderExercisePayload(
-  scenario: z.infer<typeof providerExerciseSchema>["scenario"],
-  providerId?: string,
-  model?: string,
-): ChatCompletionRequest {
-  const base: ChatCompletionRequest = {
-    providerId,
-    model,
-    memory: {
-      enabled: false,
-      mode: "off",
-    },
-    messages: [
-      {
-        role: "system" as const,
-        content: "You are a concise verification responder. Reply compactly.",
-      },
-      {
-        role: "user" as const,
-        content:
-          scenario === "structured"
-            ? "Return a short JSON object with keys summary and confidence."
-            : "Reply with one short sentence confirming the provider is healthy.",
-      },
-    ],
-  };
-
-  if (scenario === "tools") {
-    return {
-      ...base,
-      tools: [
-        {
-          type: "function",
-          function: {
-            name: "echo_status",
-            description: "Echo a health status message.",
-            parameters: {
-              type: "object",
-              properties: {
-                message: { type: "string" },
-              },
-              required: ["message"],
-            },
-          },
-        },
-      ],
-      tool_choice: "auto",
-    };
-  }
-
-  if (scenario === "structured") {
-    if (providerId === "deepseek") {
-      return {
-        ...base,
-        response_format: {
-          type: "json_object",
-        },
-      };
-    }
-    return {
-      ...base,
-      response_format: {
-        type: "json_schema",
-        json_schema: {
-          name: "verification_status",
-          ...(providerId === "anthropic" ? { strict: true } : {}),
-          schema: {
-            type: "object",
-            properties: {
-              summary: { type: "string" },
-              confidence: { type: "string" },
-            },
-            required: ["summary", "confidence"],
-            additionalProperties: false,
-          },
-        },
-      },
-    };
-  }
-
-  if (scenario === "stream") {
-    return {
-      ...base,
-      stream: true,
-    };
-  }
-
-  return base;
 }

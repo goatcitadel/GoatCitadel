@@ -431,6 +431,12 @@ Use the smallest lane that proves your change. The full lane set:
 | Ecosystem & packaging | `verify:extensions:package` · `verify:extensions:package:from-build` · `verify:plugins:marketplace` · `verify:skills:catalog` · `verify:workflows` · `verify:design:quality` · `verify:deep:core` · `verify:deep:ecosystem` |
 | Architecture guard | `verify:architecture:metrics` |
 
+`verify:review` is the final review step for a completed `verify:all` artifact. It intentionally refuses an
+unfinalized, implicitly selected, or unexpected non-`all` latest run. Capture the fresh `verify:all` run id from
+`artifacts/verification/latest-run.json`, then run `pnpm verify:review -- --run-id=<runId>`; automation may also
+set an ISO-8601 lower bound with `--started-after=<timestamp>`. The release-proof matrix may review one exact
+non-`all` lane by also passing `--expected-lane=<lane>`; this override never accepts a different latest lane.
+
 Proof-type shorthand:
 
 - Live end-to-end proof: `verify:runtime:truth`, `verify:durable:recovery`, `verify:operator:proof`, `verify:surface:regression`, `verify:visual:regression`, `verify:backup:roundtrip`, and `verify:desktop`.
@@ -439,7 +445,7 @@ Proof-type shorthand:
 - Backup proof: `verify:backup:roundtrip` now restores and verifies the full minimum operator backup set.
 - Parity sample: `verify:catalog:parity` now executes the runtime-backed operator action classes declared in its parity scenario; it is a parity sample, not proof every future visible catalog entry has a live action.
 - Architecture debt guard: `verify:architecture:metrics` fails on coupling regressions and reports large-service debt. It is not proof broad `GatewayService` decomposition is complete.
-- Architecture baseline provenance: update the accepted snapshot only with `pnpm architecture:baseline:update`. The generator refuses dirty measured Gateway or collector source and binds the regenerated metrics to the clean `HEAD` revision; do not hand-edit the metric values or source-revision fields.
+- Architecture baseline provenance: update the accepted snapshot only with `pnpm architecture:baseline:update`. By default the generator refuses dirty measured Gateway or collector source and binds the regenerated metrics to the clean `HEAD` revision. An explicitly uncommitted review candidate may use `pnpm architecture:baseline:update -- --allow-dirty-review-candidate`; that exception records `sourceTreeState: "dirty"`, the base `HEAD`, and a SHA-256 digest of the exact measured Gateway and collector source. Do not hand-edit the metric values or provenance fields.
 
 For UI changes, include browser or visual proof when practical. `verify:visual:regression` compares checked-in shell and route baselines for the current Mission Control Next surface. Intentional visual baseline updates go through:
 

@@ -463,6 +463,17 @@ describe("MeshCapabilityInvocationService dispatch + settlement", () => {
     const dispatchPromise = service.dispatch(dispatchInputFor(activation), { executionFence: fence });
     await new Promise((resolve) => setTimeout(resolve, 20));
     const invocationId = listDispatchEvents(harness.storage)[0]!.payload.invocationId as string;
+    service.recordProgress(harness.identity, {
+      invocationId,
+      sequence: 1,
+      stage: "executing",
+      publisherGeneration: activation.publisherGeneration,
+      publicationLeaseFencingToken: activation.publicationLeaseFencingToken,
+    });
+    const progressSequences = (
+      service as unknown as { progressSequences: Map<string, { lastSequence: number; count: number }> }
+    ).progressSequences;
+    expect(progressSequences.size).toBe(1);
 
     harness.clock.value += 60_000;
     const outcome = await dispatchPromise;
@@ -474,6 +485,7 @@ describe("MeshCapabilityInvocationService dispatch + settlement", () => {
       manualReconciliationRequired: true,
       errorCode: "mesh_capability_dispatch_deadline_expired",
     });
+    expect(progressSequences.size).toBe(0);
     expect(fence).toHaveBeenCalledTimes(1);
     const settlement = harness.storage.meshCapabilityPublications.findInvocationSettlement("default", invocationId);
     expect(settlement).toMatchObject({
@@ -521,6 +533,18 @@ describe("MeshCapabilityInvocationService dispatch + settlement", () => {
       executionFence: fence,
     });
     await new Promise((resolve) => setTimeout(resolve, 25));
+    const invocationId = listDispatchEvents(harness.storage)[0]!.payload.invocationId as string;
+    service.recordProgress(harness.identity, {
+      invocationId,
+      sequence: 1,
+      stage: "executing",
+      publisherGeneration: activation.publisherGeneration,
+      publicationLeaseFencingToken: activation.publicationLeaseFencingToken,
+    });
+    const progressSequences = (
+      service as unknown as { progressSequences: Map<string, { lastSequence: number; count: number }> }
+    ).progressSequences;
+    expect(progressSequences.size).toBe(1);
     controller.abort();
     const outcome = await dispatchPromise;
     expect(outcome).toMatchObject({
@@ -529,6 +553,7 @@ describe("MeshCapabilityInvocationService dispatch + settlement", () => {
       deliveryUncertain: true,
       errorCode: "mesh_capability_dispatch_cancelled",
     });
+    expect(progressSequences.size).toBe(0);
     expect(fence).toHaveBeenCalledTimes(1);
     const settlement = harness.storage.meshCapabilityPublications.findInvocationSettlement(
       "default",
@@ -833,6 +858,17 @@ describe("MeshCapabilityInvocationService dispatch + settlement", () => {
       deadlineAt: new Date(Date.now() + 1_200).toISOString(),
       idempotencyKey: "mesh-capability-invocation:tool-run-orphan",
     });
+    service.recordProgress(harness.identity, {
+      invocationId,
+      sequence: 1,
+      stage: "executing",
+      publisherGeneration: activation.publisherGeneration,
+      publicationLeaseFencingToken: activation.publicationLeaseFencingToken,
+    });
+    const progressSequences = (
+      service as unknown as { progressSequences: Map<string, { lastSequence: number; count: number }> }
+    ).progressSequences;
+    expect(progressSequences.size).toBe(1);
     await new Promise((resolve) => setTimeout(resolve, 1_400));
     harness.clock.value += 2_000;
 
@@ -842,6 +878,7 @@ describe("MeshCapabilityInvocationService dispatch + settlement", () => {
       disposition: "unknown",
       errorCode: "mesh_capability_dispatch_deadline_expired",
     });
+    expect(progressSequences.size).toBe(0);
     // Idempotent: a second sweep finds nothing left to reconcile.
     expect(service.reconcileExpiredInvocationIntents("default")).toBe(0);
   });

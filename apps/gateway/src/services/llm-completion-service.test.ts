@@ -330,6 +330,96 @@ describe("createChatCompletionStream", () => {
     );
   });
 
+  it("records the provider-returned model for a primary stream", async () => {
+    const host = createHost(async function* () {
+      yield {
+        model: "primary-model-actual",
+        choices: [{ delta: { content: "primary stream" } }],
+      };
+    });
+
+    const result = await collectStream(createChatCompletionStream(host, createRequest()));
+
+    expect(result.error).toBeUndefined();
+    expect(result.chunks.at(-1)).toEqual(
+      expect.objectContaining({
+        routing: expect.objectContaining({
+          effectiveProviderId: "primary",
+          effectiveModel: "primary-model-actual",
+        }),
+      }),
+    );
+    expect(host.llmService.resolveExecutionApiStyle).toHaveBeenLastCalledWith("primary", "primary-model");
+  });
+
+  it("records the provider-returned model for a fallback stream", async () => {
+    const host = createHost(async function* (request) {
+      if ((request.providerId ?? "primary") === "primary") {
+        throw new Error("primary hard fail");
+      }
+      yield {
+        model: "backup-model-actual",
+        choices: [{ delta: { content: "fallback stream" } }],
+      };
+    });
+
+    const result = await collectStream(createChatCompletionStream(host, createRequest()));
+
+    expect(result.error).toBeUndefined();
+    expect(result.chunks.at(-1)).toEqual(
+      expect.objectContaining({
+        routing: expect.objectContaining({
+          fallbackProviderId: "backup",
+          fallbackModel: "backup-model-actual",
+          effectiveProviderId: "backup",
+          effectiveModel: "backup-model-actual",
+        }),
+      }),
+    );
+    expect(host.llmService.resolveExecutionApiStyle).toHaveBeenLastCalledWith("backup", "backup-model");
+  });
+
+  it("keeps Codex API-style resolution on the dispatched prefixed model while recording the returned alias", async () => {
+    const host = createHost(async function* () {
+      yield {
+        model: "gpt-5.6",
+        choices: [{ delta: { content: "codex stream" } }],
+      };
+    });
+    host.llmService.getRuntimeConfig = vi.fn(() => ({
+      activeProviderId: "openai-codex",
+      activeModel: "openai-codex/gpt-5.6",
+      providers: [{ providerId: "openai-codex", defaultModel: "gpt-5.5" }],
+    })) as never;
+    host.llmService.resolveExecutionApiStyle = vi.fn((providerId: string, model: string) => {
+      if (providerId === "openai-codex" && !model.startsWith("openai-codex/")) {
+        throw new Error("unprefixed future Codex alias is not locally catalogued");
+      }
+      return "openai-codex-responses";
+    }) as never;
+
+    const result = await collectStream(
+      createChatCompletionStream(host, {
+        ...createRequest(),
+        providerId: "openai-codex",
+        model: "openai-codex/gpt-5.6",
+      }),
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.chunks.at(-1)).toEqual(
+      expect.objectContaining({
+        routing: expect.objectContaining({
+          effectiveProviderId: "openai-codex",
+          effectiveModel: "gpt-5.6",
+          effectiveApiStyle: "openai-codex-responses",
+        }),
+      }),
+    );
+    expect(host.llmService.resolveExecutionApiStyle).toHaveBeenCalledWith("openai-codex", "openai-codex/gpt-5.6");
+    expect(host.llmService.resolveExecutionApiStyle).not.toHaveBeenCalledWith("openai-codex", "gpt-5.6");
+  });
+
   it("retains canonical stream event ids in the final completion envelope", async () => {
     const host = createHost(async function* () {
       yield {
@@ -587,6 +677,45 @@ describe("createChatCompletionStream", () => {
 });
 
 describe("createChatCompletion", () => {
+  it("keeps Codex API-style resolution on the dispatched prefixed model while recording the returned alias", async () => {
+    const host = createCompletionHost({
+      completion: async () => ({
+        model: "gpt-5.6",
+        choices: [{ index: 0, message: { role: "assistant", content: "codex response" }, finish_reason: "stop" }],
+      }),
+    });
+    host.llmService.getRuntimeConfig = vi.fn(() => ({
+      activeProviderId: "openai-codex",
+      activeModel: "openai-codex/gpt-5.6",
+      providers: [{ providerId: "openai-codex", defaultModel: "gpt-5.5" }],
+    })) as never;
+    host.llmService.resolveExecutionApiStyle = vi.fn((providerId: string, model: string) => {
+      if (providerId === "openai-codex" && !model.startsWith("openai-codex/")) {
+        throw new Error("unprefixed future Codex alias is not locally catalogued");
+      }
+      return "openai-codex-responses";
+    }) as never;
+
+    const response = await createChatCompletion(host, {
+      ...createRequest(),
+      providerId: "openai-codex",
+      model: "openai-codex/gpt-5.6",
+    });
+
+    expect(response).toEqual(
+      expect.objectContaining({
+        model: "gpt-5.6",
+        routing: expect.objectContaining({
+          effectiveProviderId: "openai-codex",
+          effectiveModel: "gpt-5.6",
+          effectiveApiStyle: "openai-codex-responses",
+        }),
+      }),
+    );
+    expect(host.llmService.resolveExecutionApiStyle).toHaveBeenCalledWith("openai-codex", "openai-codex/gpt-5.6");
+    expect(host.llmService.resolveExecutionApiStyle).not.toHaveBeenCalledWith("openai-codex", "gpt-5.6");
+  });
+
   it.each(["ModelUsageDispatchUncertainError", "ModelUsageSettlementError", "ModelUsageDispatchPersistenceError"])(
     "never retries or falls back after canonical usage persistence fails (%s)",
     async (errorName) => {

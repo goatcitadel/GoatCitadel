@@ -1,3 +1,12 @@
+export const USAGE_RECONCILIATION_GATEWAY_CORE_ACCOUNTING_ARGS = [
+  "--filter",
+  "@goatcitadel/gateway-core",
+  "exec",
+  "vitest",
+  "run",
+  "src/model-usage-accounting.test.ts",
+];
+
 export async function runUsageReconciliationLane(context, _options, deps) {
   const {
     clampString,
@@ -59,7 +68,7 @@ export async function runUsageReconciliationLane(context, _options, deps) {
       id: "usage-reconciliation.gateway-core-accounting",
       title: "Canonical accounting ownership",
       subsystem: "gateway-core",
-      args: ["--filter", "@goatcitadel/gateway-core", "exec", "tsx", "--test", "src/model-usage-accounting.test.ts"],
+      args: USAGE_RECONCILIATION_GATEWAY_CORE_ACCOUNTING_ARGS,
     },
     {
       id: "usage-reconciliation.gateway-core-ingest",

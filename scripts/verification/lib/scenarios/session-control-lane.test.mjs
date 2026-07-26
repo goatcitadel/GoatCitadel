@@ -160,6 +160,10 @@ test("session-control lane composes the full 28-scenario required-proof matrix w
 
   const storageCommand = byLogName.get("session-control.storage");
   assert.deepEqual(storageCommand.args.slice(0, 4), ["--filter", "@goatcitadel/storage", "exec", "tsx"]);
+  assert.ok(
+    storageCommand.args.includes("--test-concurrency=1"),
+    "migration-rewinding live PostgreSQL files execute serially against the shared proof database",
+  );
   assert.ok(storageCommand.args.includes("src/session-control-schema-parity.test.ts"));
   assert.ok(storageCommand.args.includes("src/chat-session-lifecycle-repo.test.ts"));
   assert.ok(storageCommand.args.includes("src/session-control-repo.test.ts"));

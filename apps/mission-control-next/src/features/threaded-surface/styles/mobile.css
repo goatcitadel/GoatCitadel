@@ -327,6 +327,8 @@
   }
 
   .mc-next-threaded-surface.unified .mc-next-threaded-stage {
+    box-sizing: border-box;
+    width: 100%;
     padding-inline: 0.42rem;
   }
 

@@ -630,8 +630,10 @@ describe("dev verification routes", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({
       ok: false,
-      providerId: "glm",
-      model: "glm-5",
+      requestedProviderId: "glm",
+      requestedModel: "glm-5",
+      providerId: null,
+      model: null,
       scenario: "simple",
       error: "provider unavailable",
     });
@@ -639,7 +641,8 @@ describe("dev verification routes", () => {
 
   it("uses json_object for DeepSeek structured verification payloads", async () => {
     const createChatCompletion = vi.fn(async () => ({
-      choices: [{ message: { content: '{"summary":"ok","confidence":"high"}' } }],
+      model: "deepseek-chat",
+      choices: [{ message: { role: "assistant", content: '{"summary":"ok","confidence":"high"}' } }],
     }));
 
     app = Fastify();
@@ -686,7 +689,8 @@ describe("dev verification routes", () => {
 
   it("keeps json_schema for non-DeepSeek structured verification payloads", async () => {
     const createChatCompletion = vi.fn(async () => ({
-      choices: [{ message: { content: '{"summary":"ok","confidence":"high"}' } }],
+      model: "gpt-4.1-mini",
+      choices: [{ message: { role: "assistant", content: '{"summary":"ok","confidence":"high"}' } }],
     }));
 
     app = Fastify();
@@ -733,7 +737,8 @@ describe("dev verification routes", () => {
 
   it("sets strict json_schema for Anthropic structured verification payloads", async () => {
     const createChatCompletion = vi.fn(async () => ({
-      choices: [{ message: { content: '{"summary":"ok","confidence":"high"}' } }],
+      model: "claude-sonnet-4-6",
+      choices: [{ message: { role: "assistant", content: '{"summary":"ok","confidence":"high"}' } }],
     }));
 
     app = Fastify();
@@ -1006,13 +1011,54 @@ describe("dev verification routes", () => {
 
   it("exercises stream and tool provider verification payloads", async () => {
     async function* streamChunks() {
-      yield { choices: [{ delta: { content: "first" } }] };
-      yield { choices: [{ delta: { content: "second" } }] };
+      yield {
+        model: "gpt-test-actual",
+        choices: [{ delta: { content: "first" } }],
+      };
+      yield {
+        choices: [{ delta: { content: "second" } }],
+        usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 },
+        model_usage_event_id: "usage-stream-1",
+        routing: {
+          effectiveProviderId: "openai",
+          effectiveModel: "gpt-test-actual",
+        },
+      };
     }
     const createChatCompletionStream = vi.fn(() => streamChunks());
-    const createChatCompletion = vi.fn(async () => ({
-      choices: [{ message: { content: [{ text: "tool ready" }] } }],
-    }));
+    const createChatCompletion = vi
+      .fn()
+      .mockResolvedValueOnce({
+        model: "gpt-test-actual",
+        choices: [
+          {
+            message: {
+              role: "assistant",
+              content: "",
+              tool_calls: [
+                {
+                  id: "call-echo-1",
+                  type: "function",
+                  function: {
+                    name: "echo_status",
+                    arguments: '{"message":"goatcitadel-provider-tool-roundtrip"}',
+                  },
+                },
+              ],
+            },
+          },
+        ],
+        usage: { prompt_tokens: 8, completion_tokens: 4, total_tokens: 12 },
+        modelUsageEventIds: ["usage-tool-call"],
+        routing: { effectiveProviderId: "openai", effectiveModel: "gpt-test-actual" },
+      })
+      .mockResolvedValueOnce({
+        model: "gpt-test-actual",
+        choices: [{ message: { role: "assistant", content: [{ text: "tool ready" }] } }],
+        usage: { prompt_tokens: 12, completion_tokens: 3, total_tokens: 15 },
+        modelUsageEventIds: ["usage-tool-result"],
+        routing: { effectiveProviderId: "openai", effectiveModel: "gpt-test-actual" },
+      });
 
     app = Fastify();
     app.decorate("routeAccessManifest", []);
@@ -1050,7 +1096,11 @@ describe("dev verification routes", () => {
       ok: true,
       scenario: "stream",
       chunkCount: 2,
-      outputPreview: expect.stringContaining("first"),
+      requestedModel: "gpt-test",
+      model: "gpt-test-actual",
+      outputPreview: "firstsecond",
+      usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 },
+      modelUsageEventIds: ["usage-stream-1"],
     });
     expect(createChatCompletionStream).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1064,9 +1114,15 @@ describe("dev verification routes", () => {
     expect(tools.json()).toMatchObject({
       ok: true,
       scenario: "tools",
+      requestedModel: "gpt-test",
+      model: "gpt-test-actual",
       outputPreview: expect.stringContaining("tool ready"),
+      toolCallObserved: true,
+      toolResultRoundTrip: true,
+      modelUsageEventIds: ["usage-tool-call", "usage-tool-result"],
     });
-    expect(createChatCompletion).toHaveBeenCalledWith(
+    expect(createChatCompletion).toHaveBeenNthCalledWith(
+      1,
       expect.objectContaining({
         tools: [
           expect.objectContaining({
@@ -1074,9 +1130,262 @@ describe("dev verification routes", () => {
             function: expect.objectContaining({ name: "echo_status" }),
           }),
         ],
-        tool_choice: "auto",
+        tool_choice: "required",
+        parallel_tool_calls: false,
       }),
       expect.objectContaining({ callKind: "utility", utilityKind: "dev_provider_exercise" }),
     );
+    expect(createChatCompletion).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({
+            role: "assistant",
+            tool_calls: [expect.objectContaining({ id: "call-echo-1" })],
+          }),
+          expect.objectContaining({
+            role: "tool",
+            tool_call_id: "call-echo-1",
+            content: expect.stringContaining("goatcitadel-provider-tool-roundtrip"),
+          }),
+        ]),
+      }),
+      expect.objectContaining({ callKind: "utility", utilityKind: "dev_provider_exercise" }),
+    );
+    expect(createChatCompletion.mock.calls[1]?.[0]).not.toHaveProperty("tools");
+  });
+
+  it("rejects requested-model routing metadata as provider-returned model evidence", async () => {
+    async function* streamChunks() {
+      yield {
+        choices: [{ delta: { content: "routing only" } }],
+        routing: { effectiveProviderId: "openai", effectiveModel: "gpt-requested" },
+      };
+    }
+    const createChatCompletion = vi.fn(async () => ({
+      choices: [{ message: { role: "assistant", content: "routing only" } }],
+      routing: { effectiveProviderId: "openai", effectiveModel: "gpt-requested" },
+    }));
+
+    app = Fastify();
+    app.decorate("routeAccessManifest", []);
+    decorateDevVerification(app, {
+      isDevDiagnosticsEnabled: () => true,
+      createChatCompletion,
+      createChatCompletionStream: vi.fn(() => streamChunks()),
+    });
+    app.decorate("gatewayConfig", { rootDir: "f:/tmp/goatcitadel-dev" } as never);
+    await app.register(devVerificationRoutes);
+
+    for (const scenario of ["simple", "stream"] as const) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/dev/verification/provider-exercise",
+        payload: { scenario, providerId: "openai", model: "gpt-requested" },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        ok: false,
+        scenario,
+        requestedModel: "gpt-requested",
+        providerId: null,
+        model: null,
+        error: expect.stringContaining("did not report a returned model"),
+      });
+    }
+  });
+
+  it("rejects empty provider text and malformed structured evidence", async () => {
+    async function* emptyStream() {
+      yield { model: "gpt-test-actual", choices: [{ delta: { content: "" } }] };
+    }
+    const createChatCompletion = vi
+      .fn()
+      .mockResolvedValueOnce({
+        model: "gpt-test-actual",
+        choices: [{ message: { role: "assistant", content: "" } }],
+      })
+      .mockResolvedValueOnce({
+        model: "gpt-test-actual",
+        choices: [{ message: { role: "assistant", content: '{"summary":"ok","confidence":""}' } }],
+      })
+      .mockResolvedValueOnce({
+        model: "gpt-test-actual",
+        choices: [{ message: { role: "user", content: "not assistant output" } }],
+      })
+      .mockResolvedValueOnce({
+        model: "gpt-test-actual",
+        choices: [
+          {
+            message: {
+              role: "assistant",
+              content: '{"summary":"ok","confidence":"high","unexpected":true}',
+            },
+          },
+        ],
+      });
+
+    app = Fastify();
+    app.decorate("routeAccessManifest", []);
+    decorateDevVerification(app, {
+      isDevDiagnosticsEnabled: () => true,
+      createChatCompletion,
+      createChatCompletionStream: vi.fn(() => emptyStream()),
+    });
+    app.decorate("gatewayConfig", { rootDir: "f:/tmp/goatcitadel-dev" } as never);
+    await app.register(devVerificationRoutes);
+
+    const requests = [
+      { scenario: "simple", error: "contained no assistant text" },
+      { scenario: "structured", error: "only non-empty string summary and confidence fields" },
+      { scenario: "stream", error: "contained no assistant text" },
+      { scenario: "simple", error: "was not an assistant message" },
+      { scenario: "structured", error: "only non-empty string summary and confidence fields" },
+    ] as const;
+    for (const item of requests) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/dev/verification/provider-exercise",
+        payload: { scenario: item.scenario, providerId: "openai", model: "gpt-test" },
+      });
+      expect(response.json()).toMatchObject({
+        ok: false,
+        scenario: item.scenario,
+        model: null,
+        error: expect.stringContaining(item.error),
+      });
+    }
+  });
+
+  it("rejects malformed tool-call roles and types across both protocol phases", async () => {
+    const validToolCall = {
+      id: "call-valid",
+      type: "function",
+      function: {
+        name: "echo_status",
+        arguments: '{"message":"goatcitadel-provider-tool-roundtrip"}',
+      },
+    };
+    const createChatCompletion = vi
+      .fn()
+      .mockResolvedValueOnce({
+        model: "gpt-test-actual",
+        choices: [{ message: { role: "tool", content: "", tool_calls: [validToolCall] } }],
+      })
+      .mockResolvedValueOnce({
+        model: "gpt-test-actual",
+        choices: [{ message: { role: "assistant", content: "", tool_calls: [{ ...validToolCall, type: "custom" }] } }],
+      })
+      .mockResolvedValueOnce({
+        model: "gpt-test-actual",
+        choices: [{ message: { role: "assistant", content: "", tool_calls: [validToolCall] } }],
+      })
+      .mockResolvedValueOnce({
+        model: "gpt-test-actual",
+        choices: [{ message: { role: "user", content: "not an assistant result" } }],
+      });
+
+    app = Fastify();
+    app.decorate("routeAccessManifest", []);
+    decorateDevVerification(app, {
+      isDevDiagnosticsEnabled: () => true,
+      createChatCompletion,
+      createChatCompletionStream: vi.fn(),
+    });
+    app.decorate("gatewayConfig", { rootDir: "f:/tmp/goatcitadel-dev" } as never);
+    await app.register(devVerificationRoutes);
+
+    for (const expectedError of [
+      "tool-call response was not an assistant message",
+      "tool call was not a function call",
+      "follow-up response was not an assistant message",
+    ]) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/dev/verification/provider-exercise",
+        payload: { scenario: "tools", providerId: "openai", model: "gpt-test" },
+      });
+      expect(response.json()).toMatchObject({
+        ok: false,
+        model: null,
+        error: expect.stringContaining(expectedError),
+      });
+    }
+    expect(createChatCompletion).toHaveBeenCalledTimes(4);
+  });
+
+  it("fails provider tool verification when the model answers without a tool call", async () => {
+    const createChatCompletion = vi.fn(async () => ({
+      model: "gpt-test-actual",
+      choices: [{ message: { role: "assistant", content: "tool ready" } }],
+    }));
+
+    app = Fastify();
+    app.decorate("routeAccessManifest", []);
+    decorateDevVerification(app, {
+      isDevDiagnosticsEnabled: () => true,
+      createChatCompletion,
+      createChatCompletionStream: vi.fn(),
+    });
+    app.decorate("gatewayConfig", { rootDir: "f:/tmp/goatcitadel-dev" } as never);
+    await app.register(devVerificationRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/dev/verification/provider-exercise",
+      payload: { scenario: "tools", providerId: "openai", model: "gpt-test" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      ok: false,
+      scenario: "tools",
+      error: expect.stringContaining("expected exactly one tool call"),
+    });
+    expect(createChatCompletion).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails provider tool verification when the tool arguments do not match the safe probe", async () => {
+    const createChatCompletion = vi.fn(async () => ({
+      model: "gpt-test-actual",
+      choices: [
+        {
+          message: {
+            role: "assistant",
+            content: "",
+            tool_calls: [
+              {
+                id: "call-wrong-1",
+                type: "function",
+                function: { name: "echo_status", arguments: '{"message":"wrong"}' },
+              },
+            ],
+          },
+        },
+      ],
+    }));
+
+    app = Fastify();
+    app.decorate("routeAccessManifest", []);
+    decorateDevVerification(app, {
+      isDevDiagnosticsEnabled: () => true,
+      createChatCompletion,
+      createChatCompletionStream: vi.fn(),
+    });
+    app.decorate("gatewayConfig", { rootDir: "f:/tmp/goatcitadel-dev" } as never);
+    await app.register(devVerificationRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/dev/verification/provider-exercise",
+      payload: { scenario: "tools", providerId: "openai", model: "gpt-test" },
+    });
+
+    expect(response.json()).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("unexpected arguments"),
+    });
+    expect(createChatCompletion).toHaveBeenCalledTimes(1);
   });
 });

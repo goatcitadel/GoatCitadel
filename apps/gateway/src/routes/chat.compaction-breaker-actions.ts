@@ -59,7 +59,7 @@ export async function registerChatCompactionBreakerActionRoutes(
       }
       const actorId = resolveSpecificOperator(request, reply);
       if (!actorId) {
-        return;
+        return reply;
       }
       try {
         return reply.code(201).send(
@@ -88,7 +88,7 @@ export async function registerChatCompactionBreakerActionRoutes(
     }
     const actorId = resolveSpecificOperator(request, reply);
     if (!actorId) {
-      return;
+      return reply;
     }
     try {
       const action = await service.createAction({
@@ -112,7 +112,7 @@ export async function registerChatCompactionBreakerActionRoutes(
       }
       const actorId = resolveSpecificOperator(request, reply);
       if (!actorId) {
-        return;
+        return reply;
       }
       try {
         return reply.send({ action: service.inspectAction({ ...params.data, actorId }) });
@@ -132,7 +132,7 @@ export async function registerChatCompactionBreakerActionRoutes(
       }
       const actorId = resolveSpecificOperator(request, reply);
       if (!actorId) {
-        return;
+        return reply;
       }
       try {
         return reply.send(service.repair({ ...params.data, actorId }));

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import path from "node:path";
-import { generateVerificationReview, loadManifestForReview } from "./lib/review.mjs";
+import { generateVerificationReview, loadManifestForReview, validateExplicitReviewTarget } from "./lib/review.mjs";
 import {
   runArchitectureMetricsLane,
   runAgenticChannelsRuntimeLane,
@@ -174,6 +174,14 @@ async function main() {
       runId: latestPointer.runId,
     };
     const manifest = await loadManifestForReview(context.artifactRoot);
+    validateExplicitReviewTarget({
+      artifactRoot: context.artifactRoot,
+      latestPointer,
+      manifest,
+      expectedRunId: options["run-id"] ?? process.env.GOATCITADEL_VERIFY_REVIEW_RUN_ID,
+      expectedLane: options["expected-lane"] ?? process.env.GOATCITADEL_VERIFY_REVIEW_EXPECTED_LANE,
+      startedAfter: options["started-after"] ?? process.env.GOATCITADEL_VERIFY_REVIEW_STARTED_AFTER,
+    });
     await generateVerificationReview(context, {
       manifest,
       reviewGatewayUrl: options["review-gateway-url"],

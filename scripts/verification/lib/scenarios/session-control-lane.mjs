@@ -468,6 +468,12 @@ export async function runSessionControlLane(context, _options, deps) {
         "exec",
         "tsx",
         "--test",
+        // The live PostgreSQL suites deliberately rewind and reapply the shared
+        // migration ledger. Running test files concurrently lets one suite
+        // mutate that ledger while another is asserting it, producing a
+        // false failure (or, worse, a false pass) unrelated to repository
+        // behavior. Keep this combined proof deterministic against one URL.
+        "--test-concurrency=1",
         "src/session-control-schema-parity.test.ts",
         "src/chat-session-lifecycle-repo.test.ts",
         "src/chat-session-lifecycle-repo.postgres.test.ts",

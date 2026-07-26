@@ -863,30 +863,46 @@ describe("chat routes additional coverage", () => {
     const agentSendChatMessage = vi.fn();
     const routePreflight = vi.fn(async () => matchingRoutePreflight());
     app = Fastify();
+    app.addHook("preSerialization", async (_request, _reply, payload) => {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      return payload;
+    });
     app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("services", { chatMessages: { agentSendChatMessage, routePreflight } } as never);
     await app.register(chatRoutes);
+    app.get("/health/route-decision-proof", async () => ({ ok: true }));
+    const address = await app.listen({ host: "127.0.0.1", port: 0 });
 
-    const missing = await app.inject({
+    const missing = await fetch(new URL("/api/v1/chat/sessions/sess-1/agent-send", `${address}/`), {
       method: "POST",
-      url: "/api/v1/chat/sessions/sess-1/agent-send",
-      payload: {
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
         content: "Hello",
-      },
+      }),
     });
-    expect(missing.statusCode).toBe(409);
-    expect(missing.json().error).toMatchObject({ code: "route_changed", reason: "route_decision_required" });
+    expect(missing.status).toBe(409);
+    expect(((await missing.json()) as { error: unknown }).error).toMatchObject({
+      code: "route_changed",
+      reason: "route_decision_required",
+    });
 
-    const expired = await app.inject({
+    const expired = await fetch(new URL("/api/v1/chat/sessions/sess-1/agent-send", `${address}/`), {
       method: "POST",
-      url: "/api/v1/chat/sessions/sess-1/agent-send",
-      payload: {
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
         content: "Hello",
         routeDecision: testRouteDecision({ expiresAt: "2000-01-01T00:00:00.000Z" }),
-      },
+      }),
     });
-    expect(expired.statusCode).toBe(409);
-    expect(expired.json().error).toMatchObject({ code: "route_changed", reason: "route_decision_expired" });
+    expect(expired.status).toBe(409);
+    expect(((await expired.json()) as { error: unknown }).error).toMatchObject({
+      code: "route_changed",
+      reason: "route_decision_expired",
+    });
+
+    const health = await fetch(new URL("/health/route-decision-proof", `${address}/`));
+    expect(health.status).toBe(200);
+    expect(await health.json()).toEqual({ ok: true });
     expect(agentSendChatMessage).not.toHaveBeenCalled();
   });
 

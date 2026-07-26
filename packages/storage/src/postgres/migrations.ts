@@ -13201,6 +13201,34 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     integritySha256: "881d90b8db7c78e8871189704acf1bc3e705d21518cc1560ae65793c6ff381bf",
     sql: buildWorkspacePathBridgePosixFlavorPostgresSql(),
   },
+  {
+    version: 123,
+    name: "skill_aggregate_revision_constraint_repair",
+    // Fresh PostgreSQL bootstraps run the generated v2 canonical schema before
+    // the forward ledger. That generated schema already contains this table but
+    // cannot reflect SQLite CHECK expressions, so v106's CREATE IF NOT EXISTS
+    // does not install its five authority constraints. Recreate the same named
+    // checks transactionally for both fresh installs and upgraded databases.
+    // Existing invalid rows fail the migration closed instead of being repaired
+    // or silently grandfathered.
+    sql: `
+      ALTER TABLE skill_aggregate_revisions
+        DROP CONSTRAINT IF EXISTS skill_aggregate_revisions_aggregate_kind_check,
+        DROP CONSTRAINT IF EXISTS skill_aggregate_revisions_aggregate_id_check,
+        DROP CONSTRAINT IF EXISTS skill_aggregate_revisions_revision_check,
+        DROP CONSTRAINT IF EXISTS skill_aggregate_revisions_created_at_check,
+        DROP CONSTRAINT IF EXISTS skill_aggregate_revisions_updated_at_check;
+
+      ALTER TABLE skill_aggregate_revisions
+        ADD CONSTRAINT skill_aggregate_revisions_aggregate_kind_check
+          CHECK(aggregate_kind IN ('runtime_skill', 'candidate_skill', 'activation_policy')),
+        ADD CONSTRAINT skill_aggregate_revisions_aggregate_id_check
+          CHECK(aggregate_id = BTRIM(aggregate_id) AND char_length(aggregate_id) BETWEEN 1 AND 256),
+        ADD CONSTRAINT skill_aggregate_revisions_revision_check CHECK(revision > 0),
+        ADD CONSTRAINT skill_aggregate_revisions_created_at_check CHECK(char_length(BTRIM(created_at)) > 0),
+        ADD CONSTRAINT skill_aggregate_revisions_updated_at_check CHECK(char_length(BTRIM(updated_at)) > 0);
+    `,
+  },
 ];
 
 function buildWorkspacePathBridgePosixFlavorPostgresSql(): string {

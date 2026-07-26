@@ -203,20 +203,14 @@ export function buildExternalSourcesLaneChecks() {
     {
       id: "external-sources.storage-core",
       title:
-        "Storage owners: import/attachment/knowledge-link repositories with Journey coupling, atomic materialization, external snapshot-entry verification",
-      // NOTE: src/external-source-schema-parity.test.ts is deliberately NOT
-      // cited: one of its five tests (sparse-database repair backfill) is
-      // inherited base-RED from the HX-411 migration-guard change, its owners
-      // sit outside the C4 allowlist, and the C1 report already flagged it for
-      // a dedicated repair slice. Live schema truth is executed instead by
-      // external-sources.live-postgres, which runs the FULL migration ledger
-      // against a real cluster before the replay/concurrency proof.
+        "Storage owners: paired schema parity plus import/attachment/knowledge-link repositories with Journey coupling, atomic materialization, external snapshot-entry verification",
       args: [
         "--filter",
         "@goatcitadel/storage",
         "exec",
         "tsx",
         "--test",
+        "src/external-source-schema-parity.test.ts",
         "src/external-source-import-attachment-repo.test.ts",
         "src/routed-context-snapshot-repo.test.ts",
       ],
@@ -289,11 +283,10 @@ export function buildRowCompletionMatrix() {
       checks: ["external-sources.live-postgres", "external-sources.storage-core"],
       suites: [
         "packages/storage/src/external-source-closure-repo.postgres.test.ts (live replay + racing applies after the FULL migration ledger runs on a real cluster)",
+        "packages/storage/src/external-source-schema-parity.test.ts (paired SQLite/PostgreSQL DDL, caps, foreign keys, and sparse-repair behavior)",
         "packages/storage/src/external-source-import-attachment-repo.test.ts (atomic materialization + Journey coupling)",
       ],
-      note:
-        "src/external-source-schema-parity.test.ts is inherited base-RED (HX-411 migration-guard, owners outside the C4 allowlist, " +
-        "flagged for its own repair slice) and is not cited until repaired; live schema truth executes in external-sources.live-postgres.",
+      note: "Static paired schema parity and the full-ledger live PostgreSQL replay/concurrency proof both execute; neither is substituted or skipped.",
     },
     {
       row: 2,

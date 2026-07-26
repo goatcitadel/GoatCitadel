@@ -299,8 +299,9 @@ describe("MissionControlNextApp shell helpers", () => {
   });
 
   it("keeps the rail-hidden experimental routes scoped and reachable (F-M11)", () => {
-    // The three surfaces that have no rail entry and previously no palette entry.
+    // The library/ops surfaces that have no rail entry and need explicit palette reachability.
     const experimentalRoutes = [
+      { area: "library", section: "journey" },
       { area: "library", section: "curator" },
       { area: "ops", section: "improvement" },
       { area: "ops", section: "kanban" },

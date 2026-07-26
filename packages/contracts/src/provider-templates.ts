@@ -43,7 +43,16 @@ export const providerTemplates: readonly ProviderTemplateDefinition[] = [
     baseUrl: "https://chatgpt.com/backend-api/codex",
     defaultModel: "gpt-5.5",
     apiStyle: "openai-codex-responses",
-    knownModels: ["gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5.4-pro", "gpt-5.4-mini"],
+    knownModels: [
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+      "gpt-5.5",
+      "gpt-5.5-pro",
+      "gpt-5.4",
+      "gpt-5.4-pro",
+      "gpt-5.4-mini",
+    ],
   },
   {
     providerId: "anthropic",

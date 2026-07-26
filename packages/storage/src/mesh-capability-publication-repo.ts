@@ -574,7 +574,7 @@ export class MeshCapabilityPublicationRepository {
       ) AS superseded_by_manifest_sha256
       FROM mesh_capability_manifests manifest
       WHERE manifest.workspace_id = @workspaceId
-        AND (@nodeId IS NULL OR manifest.node_id = @nodeId)
+        AND (CAST(@nodeId AS TEXT) IS NULL OR manifest.node_id = @nodeId)
       ORDER BY manifest.created_at DESC, manifest.manifest_sha256 DESC
       LIMIT @limit
     `,

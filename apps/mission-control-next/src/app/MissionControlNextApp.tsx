@@ -84,6 +84,7 @@ const EXPERIMENTAL_COMMAND_ROUTES: ReadonlyArray<{
   section: NonNullable<AppRoute["section"]>;
   label: string;
 }> = [
+  { area: "library", section: "journey", label: "Library → Journey" },
   { area: "library", section: "curator", label: "Library → Skill Curator" },
   { area: "ops", section: "improvement", label: "Ops → Improvement" },
   { area: "ops", section: "kanban", label: "Ops → Kanban" },
@@ -219,8 +220,8 @@ export function MissionControlNextApp() {
       });
     // F-M11: the experimental library/ops surfaces are filtered out of the rails
     // (NAV-02) and were unreachable from the palette. Settings experimental
-    // sections already appear via `settingsItems`, but curator/improvement/kanban
-    // had no palette entry at all. Add them explicitly, labelled "Experimental"
+    // sections already appear via `settingsItems`, but Journey/curator/improvement/kanban
+    // have no rail-derived palette entry. Add them explicitly, labelled "Experimental"
     // so they stay discoverable and honestly scoped.
     const experimentalItems = EXPERIMENTAL_COMMAND_ROUTES.map((entry) => ({
       id: `experimental-${entry.area}-${entry.section}`,

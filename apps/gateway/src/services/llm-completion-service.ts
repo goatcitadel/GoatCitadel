@@ -276,7 +276,7 @@ export async function createChatCompletion(
         routing.effectiveModel = response.model ?? attemptRequest.model ?? primaryModel;
         routing.effectiveApiStyle = host.llmService.resolveExecutionApiStyle(
           routing.effectiveProviderId,
-          routing.effectiveModel,
+          attemptRequest.model ?? primaryModel,
         );
         if (index > 0) {
           routing.fallbackUsed = true;
@@ -388,10 +388,7 @@ export async function createChatCompletion(
           routing.fallbackUsed = true;
           routing.fallbackProviderId = fallback.providerId;
           routing.fallbackModel = response.model ?? fallback.model;
-          routing.fallbackApiStyle = host.llmService.resolveExecutionApiStyle(
-            fallback.providerId,
-            routing.fallbackModel,
-          );
+          routing.fallbackApiStyle = host.llmService.resolveExecutionApiStyle(fallback.providerId, fallback.model);
           routing.fallbackReason = `primary failed (${lastError?.message ?? "unknown error"})`;
           routing.effectiveProviderId = fallback.providerId;
           routing.effectiveModel = routing.fallbackModel;
@@ -741,9 +738,11 @@ export async function* createChatCompletionStream(
                 });
               },
             });
+        let returnedModel: string | undefined;
         for await (const chunk of attemptStream) {
           attemptStreamed = true;
           streamed = true;
+          returnedModel = readReturnedStreamModel(chunk) ?? returnedModel;
           appendTelemetryChunk(telemetryChunks, chunk);
           collectCanonicalUsageEventIds(canonicalUsageEventIds, chunk);
           if (shouldBufferForTransform) {
@@ -753,10 +752,10 @@ export async function* createChatCompletionStream(
           }
         }
         routing.effectiveProviderId = attemptRequest.providerId ?? primaryProviderId;
-        routing.effectiveModel = attemptRequest.model ?? primaryModel;
+        routing.effectiveModel = returnedModel ?? attemptRequest.model ?? primaryModel;
         routing.effectiveApiStyle = host.llmService.resolveExecutionApiStyle(
           routing.effectiveProviderId,
-          routing.effectiveModel,
+          attemptRequest.model ?? primaryModel,
         );
         if (index > 0) {
           routing.fallbackUsed = true;
@@ -915,9 +914,11 @@ export async function* createChatCompletionStream(
                   });
                 },
               });
+          let returnedModel: string | undefined;
           for await (const chunk of fallbackStream) {
             attemptStreamed = true;
             streamed = true;
+            returnedModel = readReturnedStreamModel(chunk) ?? returnedModel;
             appendTelemetryChunk(telemetryChunks, chunk);
             collectCanonicalUsageEventIds(canonicalUsageEventIds, chunk);
             if (shouldBufferForTransform) {
@@ -928,11 +929,11 @@ export async function* createChatCompletionStream(
           }
           routing.fallbackUsed = true;
           routing.fallbackProviderId = fallback.providerId;
-          routing.fallbackModel = fallback.model;
+          routing.fallbackModel = returnedModel ?? fallback.model;
           routing.fallbackApiStyle = host.llmService.resolveExecutionApiStyle(fallback.providerId, fallback.model);
           routing.fallbackReason = `primary failed (${lastError?.message ?? "unknown error"})`;
           routing.effectiveProviderId = fallback.providerId;
-          routing.effectiveModel = fallback.model;
+          routing.effectiveModel = routing.fallbackModel;
           routing.effectiveApiStyle = routing.fallbackApiStyle;
           break;
         } catch (error) {
@@ -1276,6 +1277,12 @@ function collectCanonicalUsageEventIds(target: Set<string>, chunk: Record<string
     const normalized = candidate.trim();
     if (normalized && normalized.length <= 256 && target.size < 256) target.add(normalized);
   }
+}
+
+function readReturnedStreamModel(chunk: Record<string, unknown>): string | undefined {
+  if (typeof chunk.model !== "string") return undefined;
+  const normalized = chunk.model.trim();
+  return normalized && normalized.length <= 512 ? normalized : undefined;
 }
 
 function filterCrossProviderFallbackTargets(

@@ -44,6 +44,7 @@
   },
   "devDependencies": {
     "@types/adm-zip": "0.5.7",
+    "@types/pg": "8.20.0",
     "@types/shell-quote": "1.7.5"
   },
   "scripts": {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type {
   ExternalSourceCatalogItem,
   ExternalSourceDetailResponse,
@@ -85,6 +85,10 @@ const EMPTY_REGISTER_DRAFT: RegisterDraft = {
  */
 export function LibraryExternalSourcesSection({ workspaceId }: { workspaceId: string }) {
   const formInstanceId = useId();
+  const mountedRef = useRef(true);
+  const activeWorkspaceRef = useRef(workspaceId);
+  const actionRequestRef = useRef(0);
+  activeWorkspaceRef.current = workspaceId;
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
@@ -111,40 +115,70 @@ export function LibraryExternalSourcesSection({ workspaceId }: { workspaceId: st
   }, [workspaceId]);
 
   useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      actionRequestRef.current += 1;
+    };
+  }, []);
+
+  useEffect(() => {
+    actionRequestRef.current += 1;
+    setBusyKey(null);
     setSelectedSourceId(null);
     setDetail(null);
     setCatalog(null);
     setSelectedItemIds([]);
     setPlan(null);
     setImportDetail(null);
+    setImportLookupId("");
+    setRegisterOpen(false);
+    setRegisterDraft(EMPTY_REGISTER_DRAFT);
     setActionError(null);
     setActionNotice(null);
   }, [workspaceId]);
 
-  const runAction = useCallback(async (key: string, operation: () => Promise<string | null>) => {
-    setBusyKey(key);
-    setActionError(null);
-    setActionNotice(null);
-    try {
-      const notice = await operation();
-      if (notice) {
-        setActionNotice(notice);
+  const runAction = useCallback(
+    async (key: string, operation: (isCurrent: () => boolean) => Promise<string | null>) => {
+      if (!mountedRef.current || activeWorkspaceRef.current !== workspaceId) {
+        return;
       }
-    } catch (error) {
-      setActionError(describeActionError(error));
-    } finally {
-      setBusyKey(null);
-    }
-  }, []);
+      const requestId = actionRequestRef.current + 1;
+      actionRequestRef.current = requestId;
+      const isCurrent = () =>
+        mountedRef.current && activeWorkspaceRef.current === workspaceId && actionRequestRef.current === requestId;
+      setBusyKey(key);
+      setActionError(null);
+      setActionNotice(null);
+      try {
+        const notice = await operation(isCurrent);
+        if (isCurrent() && notice) {
+          setActionNotice(notice);
+        }
+      } catch (error) {
+        if (isCurrent()) {
+          setActionError(describeActionError(error));
+        }
+      } finally {
+        if (isCurrent()) {
+          setBusyKey(null);
+        }
+      }
+    },
+    [workspaceId],
+  );
 
   const loadCatalogPage = useCallback(
-    async (sourceId: string, scanId: string, cursor?: string) => {
+    async (sourceId: string, scanId: string, isCurrent: () => boolean, cursor?: string) => {
       const page = await fetchExternalSourceCatalogPage(sourceId, {
         workspaceId,
         scanId,
         ...(cursor ? { cursor } : {}),
         limit: 50,
       });
+      if (!isCurrent()) {
+        return;
+      }
       setCatalog((current) =>
         cursor && current && current.scanId === page.scanId
           ? { ...page, items: [...current.items, ...page.items] }
@@ -154,22 +188,34 @@ export function LibraryExternalSourcesSection({ workspaceId }: { workspaceId: st
     [workspaceId],
   );
 
+  const loadSelectedSource = useCallback(
+    async (sourceId: string, isCurrent: () => boolean) => {
+      const nextDetail = await fetchExternalSourceDetail(workspaceId, sourceId);
+      if (!isCurrent()) {
+        return;
+      }
+      setDetail(nextDetail);
+      if (nextDetail.latestScan && nextDetail.latestScan.status === "sealed" && nextDetail.latestScan.itemCount > 0) {
+        await loadCatalogPage(sourceId, nextDetail.latestScan.scanId, isCurrent);
+      }
+    },
+    [loadCatalogPage, workspaceId],
+  );
+
   const handleSelectSource = useCallback(
     (sourceId: string) => {
       setSelectedSourceId(sourceId);
+      setDetail(null);
       setCatalog(null);
       setSelectedItemIds([]);
       setPlan(null);
-      void runAction(`detail:${sourceId}`, async () => {
-        const nextDetail = await fetchExternalSourceDetail(workspaceId, sourceId);
-        setDetail(nextDetail);
-        if (nextDetail.latestScan && nextDetail.latestScan.status === "sealed" && nextDetail.latestScan.itemCount > 0) {
-          await loadCatalogPage(sourceId, nextDetail.latestScan.scanId);
-        }
+      setImportDetail(null);
+      void runAction(`detail:${sourceId}`, async (isCurrent) => {
+        await loadSelectedSource(sourceId, isCurrent);
         return null;
       });
     },
-    [loadCatalogPage, runAction, workspaceId],
+    [loadSelectedSource, runAction],
   );
 
   const handleScan = useCallback(() => {
@@ -177,17 +223,23 @@ export function LibraryExternalSourcesSection({ workspaceId }: { workspaceId: st
       return;
     }
     const sourceId = detail.source.sourceId;
-    void runAction("scan", async () => {
+    void runAction("scan", async (isCurrent) => {
       const scan = await scanExternalSource(sourceId, {
         workspaceId,
         expectedRevision: detail.source.revision,
       });
+      if (!isCurrent()) {
+        return null;
+      }
       const nextDetail = await fetchExternalSourceDetail(workspaceId, sourceId);
+      if (!isCurrent()) {
+        return null;
+      }
       setDetail(nextDetail);
       setSelectedItemIds([]);
       setPlan(null);
       if (scan.status === "sealed" && scan.itemCount > 0) {
-        await loadCatalogPage(sourceId, scan.scanId);
+        await loadCatalogPage(sourceId, scan.scanId, isCurrent);
       } else {
         setCatalog(null);
       }
@@ -214,7 +266,7 @@ export function LibraryExternalSourcesSection({ workspaceId }: { workspaceId: st
     if (!detail || !catalog || selectedItemIds.length === 0) {
       return;
     }
-    void runAction("plan", async () => {
+    void runAction("plan", async (isCurrent) => {
       const planned = await createExternalSourceImportPlan({
         workspaceId,
         sourceId: detail.source.sourceId,
@@ -222,6 +274,9 @@ export function LibraryExternalSourcesSection({ workspaceId }: { workspaceId: st
         selectedItemIds: [...selectedItemIds],
         expectedRevision: detail.source.revision,
       });
+      if (!isCurrent()) {
+        return null;
+      }
       setPlan(planned);
       setImportDetail(null);
       return planned.plan.blockerCodes.length > 0
@@ -234,13 +289,16 @@ export function LibraryExternalSourcesSection({ workspaceId }: { workspaceId: st
     if (!plan) {
       return;
     }
-    void runAction("apply", async () => {
+    void runAction("apply", async (isCurrent) => {
       const applied: ExternalSourceImportApplyResponse = await applyExternalSourceImport({
         workspaceId,
         planId: plan.plan.planId,
         expectedPlanSha256: plan.plan.planSha256,
         idempotencyKey: plan.idempotencyKey,
       });
+      if (!isCurrent()) {
+        return null;
+      }
       setImportDetail(applied);
       setPlan(null);
       setSelectedItemIds([]);
@@ -255,14 +313,17 @@ export function LibraryExternalSourcesSection({ workspaceId }: { workspaceId: st
     if (!importId) {
       return;
     }
-    void runAction("import-lookup", async () => {
-      setImportDetail(await fetchExternalSourceImportDetail(workspaceId, importId));
+    void runAction("import-lookup", async (isCurrent) => {
+      const nextImportDetail = await fetchExternalSourceImportDetail(workspaceId, importId);
+      if (isCurrent()) {
+        setImportDetail(nextImportDetail);
+      }
       return null;
     });
   }, [importLookupId, runAction, workspaceId]);
 
   const handleRegister = useCallback(() => {
-    void runAction("register", async () => {
+    void runAction("register", async (isCurrent) => {
       const expectedWorkspaceRevision = Number.parseInt(registerDraft.expectedWorkspaceRevision, 10);
       const producerVersions = registerDraft.acceptedProducerVersions
         .split(",")
@@ -285,13 +346,25 @@ export function LibraryExternalSourcesSection({ workspaceId }: { workspaceId: st
           : {}),
         acceptedProducerVersions: producerVersions,
       });
+      if (!isCurrent()) {
+        return null;
+      }
       setRegisterOpen(false);
       setRegisterDraft(EMPTY_REGISTER_DRAFT);
       await list.reload();
-      handleSelectSource(created.source.sourceId);
+      if (!isCurrent()) {
+        return null;
+      }
+      setSelectedSourceId(created.source.sourceId);
+      setDetail(null);
+      setCatalog(null);
+      setSelectedItemIds([]);
+      setPlan(null);
+      setImportDetail(null);
+      await loadSelectedSource(created.source.sourceId, isCurrent);
       return `Registered ${created.source.label}. No scan ran; seal one explicitly.`;
     });
-  }, [handleSelectSource, list, registerDraft, runAction, workspaceId]);
+  }, [list, loadSelectedSource, registerDraft, runAction, workspaceId]);
 
   const supported = list.data?.supported ?? true;
   const sources = list.data?.sources?.items ?? [];
@@ -430,8 +503,8 @@ export function LibraryExternalSourcesSection({ workspaceId }: { workspaceId: st
                   onLoadMore={
                     catalog.nextCursor
                       ? () =>
-                          void runAction("catalog-more", async () => {
-                            await loadCatalogPage(catalog.sourceId, catalog.scanId, catalog.nextCursor);
+                          void runAction("catalog-more", async (isCurrent) => {
+                            await loadCatalogPage(catalog.sourceId, catalog.scanId, isCurrent, catalog.nextCursor);
                             return null;
                           })
                       : null

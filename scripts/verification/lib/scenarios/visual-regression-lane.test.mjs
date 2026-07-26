@@ -1,7 +1,73 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { runVisualRegressionLane } from "./visual-regression-lane.mjs";
+import { assertMobileVisualGeometry, runVisualRegressionLane } from "./visual-regression-lane.mjs";
+
+test("mobile pending-input geometry checks overflow and every operator control", async () => {
+  let selectors = [];
+  const page = {
+    async evaluate(_callback, input) {
+      selectors = input;
+      return {
+        viewportWidth: 390,
+        documentOverflow: 0,
+        bodyOverflow: 0,
+        targets: input.map((selector) => ({ selector, missing: false, left: 24, right: 366, width: 342 })),
+      };
+    },
+  };
+
+  await assertMobileVisualGeometry(
+    page,
+    { slug: "chat-pending-user-input" },
+    { slug: "mobile-dark", viewport: { width: 390, height: 844 } },
+  );
+
+  assert.deepEqual(selectors, [
+    '.mc-next-composer-blocking-prompt[data-blocker-kind="user-input"] .chat-user-input-card',
+    ".mc-next-composer-blocked-actions",
+    ".mc-next-composer-primary",
+  ]);
+});
+
+test("mobile visual geometry rejects horizontal document overflow and clipped pending-input controls", async () => {
+  await assert.rejects(
+    assertMobileVisualGeometry(
+      {
+        async evaluate() {
+          return { viewportWidth: 390, documentOverflow: 24, bodyOverflow: 0, targets: [] };
+        },
+      },
+      { slug: "chat" },
+      { slug: "mobile-dark", viewport: { width: 390, height: 844 } },
+    ),
+    /overflowed horizontally.*document=24/u,
+  );
+
+  await assert.rejects(
+    assertMobileVisualGeometry(
+      {
+        async evaluate(_callback, selectors) {
+          return {
+            viewportWidth: 390,
+            documentOverflow: 0,
+            bodyOverflow: 0,
+            targets: selectors.map((selector, index) => ({
+              selector,
+              missing: false,
+              left: 24,
+              right: index === 2 ? 406 : 366,
+              width: index === 2 ? 382 : 342,
+            })),
+          };
+        },
+      },
+      { slug: "chat-pending-user-input" },
+      { slug: "mobile-light", viewport: { width: 390, height: 844 } },
+    ),
+    /clipped \.mc-next-composer-primary horizontally/u,
+  );
+});
 
 test("visual regression returns failure evidence when a browser assertion throws", async () => {
   const results = [];
@@ -97,6 +163,7 @@ test("visual regression returns failure evidence when a browser assertion throws
   assert.equal(stackOptions.gatewayEnv.GOATCITADEL_AUTH_MODE, "token");
   assert.equal(stackOptions.gatewayEnv.GOATCITADEL_AUTH_TOKEN, "verification-visual-regression-operator-token");
   assert.equal(stackOptions.gatewayEnv.GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS, "true");
+  assert.equal(stackOptions.gatewayEnv.GOATCITADEL_DISABLE_MAINTENANCE_SCHEDULER, "true");
   assert.notEqual(stackOptions.gatewayEnv.GOATCITADEL_AUTH_MODE, "none");
   assert.equal(results[0].status, "failed");
   assert.match(results[0].error, /page errors: render crashed/);

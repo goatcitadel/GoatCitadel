@@ -188,6 +188,47 @@ describe("sharedHostLifecyclePlugin", () => {
       expect(publishRealtime).toHaveBeenCalled();
     },
   );
+
+  it("persists terminal lifecycle evidence before storage closes", async () => {
+    process.env.GOATCITADEL_SHARED_HOST_DRAIN_ENABLED = "true";
+    let storageOpen = true;
+    let lateDeliveryCount = 0;
+    const assertStorageOpen = () => {
+      if (storageOpen) return;
+      lateDeliveryCount += 1;
+      throw new Error("storage already closed");
+    };
+    const auditAppend = vi.fn(async () => assertStorageOpen());
+    const publishRealtime = vi.fn(() => {
+      assertStorageOpen();
+      return { eventId: "event-1" };
+    });
+    const { app } = await createHarness({ auditAppend, publishRealtime });
+    app.addHook("onClose", async () => {
+      storageOpen = false;
+    });
+
+    await app.close();
+    apps.splice(apps.indexOf(app), 1);
+
+    expect(lateDeliveryCount).toBe(0);
+    expect(storageOpen).toBe(false);
+    expect(auditAppend).toHaveBeenCalledWith(
+      "hooks",
+      expect.objectContaining({ eventType: "shared_host.lifecycle.transition", to: "closed" }),
+      expect.any(Object),
+    );
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "shared_host_lifecycle",
+      "gateway",
+      expect.objectContaining({ eventType: "shared_host.lifecycle.transition", to: "closed" }),
+      expect.any(Object),
+    );
+    expect(app.sharedHostLifecycle.snapshot()).toMatchObject({
+      state: "closed",
+      evidence: { state: "healthy", pendingCount: 0, failedCount: 0 },
+    });
+  });
 });
 
 async function createHarness(

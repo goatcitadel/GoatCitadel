@@ -49,13 +49,13 @@ export function registerSessionControlRoutes(fastify: FastifyInstance): void {
     setControlCacheHeaders(reply);
     const sessionId = parseSessionId(reply, request);
     if (sessionId === undefined) {
-      return;
+      return reply;
     }
     const input = parseControlBody(reply, parseSessionControlRequestInput, request.body) as
       | SessionControlRequestInput
       | undefined;
     if (input === undefined) {
-      return;
+      return reply;
     }
     try {
       const actor = resolveSessionControlCompanionActor(request);
@@ -79,7 +79,7 @@ export function registerSessionControlRoutes(fastify: FastifyInstance): void {
     setControlCacheHeaders(reply);
     const sessionId = parseSessionId(reply, request);
     if (sessionId === undefined) {
-      return;
+      return reply;
     }
     try {
       const detail = fastify.services.sessionControl.getDetail({ actor: resolveControlReadActor(request), sessionId });
@@ -101,7 +101,7 @@ export function registerSessionControlRoutes(fastify: FastifyInstance): void {
     async (request, reply) => {
       const sessionId = parseSessionId(reply, request);
       if (sessionId === undefined) {
-        return;
+        return reply;
       }
       let actor: SessionControlProtocolActor;
       try {
@@ -119,13 +119,13 @@ export function registerSessionControlRoutes(fastify: FastifyInstance): void {
     setControlCacheHeaders(reply);
     const sessionId = parseSessionId(reply, request);
     if (sessionId === undefined) {
-      return;
+      return reply;
     }
     const input = parseControlBody(reply, parseSessionControlHandoffInput, request.body) as
       | SessionControlHandoffInput
       | undefined;
     if (input === undefined) {
-      return;
+      return reply;
     }
     try {
       const response = fastify.services.sessionControl.handoff({
@@ -147,13 +147,13 @@ export function registerSessionControlRoutes(fastify: FastifyInstance): void {
     setControlCacheHeaders(reply);
     const sessionId = parseSessionId(reply, request);
     if (sessionId === undefined) {
-      return;
+      return reply;
     }
     const input = parseControlBody(reply, parseSessionControlHeartbeatInput, request.body) as
       | SessionControlHeartbeatInput
       | undefined;
     if (input === undefined) {
-      return;
+      return reply;
     }
     try {
       const actor = resolveSessionControlCompanionActor(request);
@@ -179,13 +179,13 @@ export function registerSessionControlRoutes(fastify: FastifyInstance): void {
     setControlCacheHeaders(reply);
     const sessionId = parseSessionId(reply, request);
     if (sessionId === undefined) {
-      return;
+      return reply;
     }
     const input = parseControlBody(reply, parseSessionControlReconnectInput, request.body) as
       | SessionControlReconnectInput
       | undefined;
     if (input === undefined) {
-      return;
+      return reply;
     }
     try {
       const actor = resolveSessionControlCompanionActor(request);
@@ -211,13 +211,13 @@ export function registerSessionControlRoutes(fastify: FastifyInstance): void {
     setControlCacheHeaders(reply);
     const sessionId = parseSessionId(reply, request);
     if (sessionId === undefined) {
-      return;
+      return reply;
     }
     const input = parseControlBody(reply, parseSessionControlReleaseInput, request.body) as
       | SessionControlReleaseInput
       | undefined;
     if (input === undefined) {
-      return;
+      return reply;
     }
     try {
       const actor = resolveSessionControlCompanionActor(request);
@@ -243,13 +243,13 @@ export function registerSessionControlRoutes(fastify: FastifyInstance): void {
     setControlCacheHeaders(reply);
     const sessionId = parseSessionId(reply, request);
     if (sessionId === undefined) {
-      return;
+      return reply;
     }
     const input = parseControlBody(reply, parseSessionControlRevokeInput, request.body) as
       | SessionControlRevokeInput
       | undefined;
     if (input === undefined) {
-      return;
+      return reply;
     }
     try {
       const response = fastify.services.sessionControl.revoke({

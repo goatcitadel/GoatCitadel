@@ -326,9 +326,14 @@ function ReconciliationCard({ reconciliation }: { reconciliation: RemoteWorkerRe
 }
 
 export function RemoteWorkersRoutePage(props: NativeRoutePagesProps) {
+  return <RemoteWorkersWorkspaceRoutePage key={props.activeWorkspaceId} {...props} />;
+}
+
+function RemoteWorkersWorkspaceRoutePage(props: NativeRoutePagesProps) {
   const workspaceId = props.activeWorkspaceId;
   const registry = useRemoteWorkerRegistry(workspaceId);
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null);
+  const [detailScope, setDetailScope] = useState<{ workspaceId: string; workerId: string } | null>(null);
   const [detail, setDetail] = useState<RemoteWorkerRegistryDetail | null>(null);
   const [assignments, setAssignments] = useState<RemoteWorkerAssignmentPage | null>(null);
   const [reconciliation, setReconciliation] = useState<RemoteWorkerReconciliation | null>(null);
@@ -342,6 +347,10 @@ export function RemoteWorkersRoutePage(props: NativeRoutePagesProps) {
     async (workerId: string) => {
       const loadId = detailSequenceRef.current + 1;
       detailSequenceRef.current = loadId;
+      setDetailScope({ workspaceId, workerId });
+      setDetail(null);
+      setAssignments(null);
+      setReconciliation(null);
       setDetailLoading(true);
       setDetailError(null);
       const [detailResult, assignmentResult, reconciliationResult] = await Promise.allSettled([
@@ -361,9 +370,14 @@ export function RemoteWorkersRoutePage(props: NativeRoutePagesProps) {
 
   useEffect(() => {
     if (!selectedWorkerId) {
+      setDetailScope(null);
       setDetail(null);
       setAssignments(null);
       setReconciliation(null);
+      setDetailLoading(false);
+      setDetailError(null);
+      setExpandedAssignment(null);
+      setEventPages({});
       return;
     }
     setExpandedAssignment(null);
@@ -437,9 +451,14 @@ export function RemoteWorkersRoutePage(props: NativeRoutePagesProps) {
   }, []);
 
   const items = useMemo(() => registry.page?.items ?? [], [registry.page]);
+  const detailMatchesSelection = detailScope?.workspaceId === workspaceId && detailScope.workerId === selectedWorkerId;
+  const visibleDetail = detailMatchesSelection ? detail : null;
+  const visibleAssignments = detailMatchesSelection ? assignments : null;
+  const visibleReconciliation = detailMatchesSelection ? reconciliation : null;
+  const visibleDetailError = detailMatchesSelection ? detailError : null;
   const selectedItem = useMemo(
-    () => detail?.item ?? items.find((item) => item.workerId === selectedWorkerId) ?? null,
-    [detail, items, selectedWorkerId],
+    () => visibleDetail?.item ?? items.find((item) => item.workerId === selectedWorkerId) ?? null,
+    [items, selectedWorkerId, visibleDetail],
   );
 
   return (
@@ -485,18 +504,20 @@ export function RemoteWorkersRoutePage(props: NativeRoutePagesProps) {
                 ← Back to registry
               </NativeButton>
               <h2>{selectedItem?.admission.value?.workerLabel ?? shortId(selectedWorkerId)}</h2>
-              {detailError ? <ErrorState title="Detail unavailable" description={detailError} size="inline" /> : null}
+              {visibleDetailError ? (
+                <ErrorState title="Detail unavailable" description={visibleDetailError} size="inline" />
+              ) : null}
               {selectedItem ? <IdentityCard item={selectedItem} /> : null}
               {selectedItem ? <ControlsCard item={selectedItem} /> : null}
 
               <section className="mc-next-remote-workers__section" aria-label="Assignments">
                 <h3>Assignments</h3>
-                {assignments === null ? (
+                {visibleAssignments === null ? (
                   <p className="mc-next-remote-workers__unavailable">Assignments are loading or unavailable.</p>
-                ) : assignments.items.length === 0 ? (
+                ) : visibleAssignments.items.length === 0 ? (
                   <p className="mc-next-remote-workers__unavailable">No assignments reference this worker.</p>
                 ) : (
-                  assignments.items.map((assignment) => (
+                  visibleAssignments.items.map((assignment) => (
                     <AssignmentCard
                       key={assignment.assignmentId}
                       assignment={assignment}
@@ -508,7 +529,7 @@ export function RemoteWorkersRoutePage(props: NativeRoutePagesProps) {
                 )}
               </section>
 
-              {reconciliation ? <ReconciliationCard reconciliation={reconciliation} /> : null}
+              {visibleReconciliation ? <ReconciliationCard reconciliation={visibleReconciliation} /> : null}
 
               <section className="mc-next-remote-workers__section" aria-label="Usage and diagnostics">
                 <h3>Usage & diagnostics</h3>

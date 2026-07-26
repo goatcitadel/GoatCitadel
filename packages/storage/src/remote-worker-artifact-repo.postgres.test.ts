@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { describe, it } from "node:test";
 import {
   REMOTE_WORKER_ARTIFACT_MANIFEST_SCHEMA_VERSION,
@@ -10,13 +10,9 @@ import {
   type RemoteWorkerArtifactManifest,
   type RemoteWorkerSettlementIdentity,
 } from "@goatcitadel/contracts";
-import { Pool } from "pg";
-import { PostgresDatabaseClient } from "./postgres/client.js";
-import { runPostgresMigrations } from "./postgres/migrator.js";
-import { POSTGRES_MIGRATIONS } from "./postgres/migrations.js";
 import { PostgresSyncDatabaseClient } from "./postgres/sync.js";
 import { RemoteWorkerArtifactRepository } from "./remote-worker-artifact-repo.js";
-import { seedRemoteWorkerGeneration } from "./remote-worker-artifact-repo.test.js";
+import { createRemoteWorkerPostgresTestScope, seedRemoteWorkerGeneration } from "./remote-worker-test-fixtures.js";
 
 // HX-506 live-PostgreSQL artifact-owner proof. Skips with a visible reason when
 // GOATCITADEL_TEST_POSTGRES_URL is unset; the hermetic native cluster provisions
@@ -25,50 +21,6 @@ const postgresConnectionString = process.env.GOATCITADEL_TEST_POSTGRES_URL?.trim
 const postgresIt = postgresConnectionString ? it : it.skip;
 const D = (value: string): string => createHash("sha256").update(value, "utf8").digest("hex");
 const FUTURE = "2099-01-01T00:00:00.000Z";
-
-interface Scoped {
-  schemaName: string;
-  adminPool: Pool;
-  scopedPool: Pool;
-  db: PostgresSyncDatabaseClient;
-  teardown: () => Promise<void>;
-}
-
-async function scoped(prefix: string): Promise<Scoped> {
-  assert.ok(postgresConnectionString);
-  const suffix = randomUUID().replaceAll("-", "");
-  const schemaName = `${prefix}_${suffix}`;
-  const adminPool = new Pool({ connectionString: postgresConnectionString, max: 2 });
-  const scopedUrl = new URL(postgresConnectionString);
-  scopedUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
-  const database = decodeURIComponent(scopedUrl.pathname.replace(/^\//u, "")) || "postgres";
-  const scopedPool = new Pool({ connectionString: scopedUrl.toString(), max: 4 });
-  const migrations = new PostgresDatabaseClient(
-    { connectionString: scopedUrl.toString(), database },
-    { pool: scopedPool },
-  );
-  const db = new PostgresSyncDatabaseClient({
-    connectionString: scopedUrl.toString(),
-    database,
-    applicationName: `hx506-${suffix}`,
-    pool: { max: 1, connectionTimeoutMs: 10_000 },
-  });
-  await adminPool.query(`CREATE SCHEMA ${schemaName}`);
-  db.exec(`SET search_path TO ${schemaName}`);
-  await runPostgresMigrations(migrations, POSTGRES_MIGRATIONS);
-  return {
-    schemaName,
-    adminPool,
-    scopedPool,
-    db,
-    teardown: async () => {
-      db.close();
-      await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`).catch(() => undefined);
-      await scopedPool.end().catch(() => undefined);
-      await adminPool.end().catch(() => undefined);
-    },
-  };
-}
 
 function buildManifest(
   identity: RemoteWorkerSettlementIdentity,
@@ -102,7 +54,7 @@ describe("RemoteWorkerArtifactRepository live PostgreSQL (skips without GOATCITA
     "commits, replays, isolates composite identity, and enforces immutable triggers",
     { timeout: 300_000 },
     async () => {
-      const scope = await scoped("hx506_artifact");
+      const scope = await createRemoteWorkerPostgresTestScope(postgresConnectionString!, "hx506_artifact");
       try {
         const artifacts = new RemoteWorkerArtifactRepository(scope.db);
         const ctx = seedRemoteWorkerGeneration(scope.db, "artifact");
@@ -285,7 +237,7 @@ describe("RemoteWorkerArtifactRepository live PostgreSQL (skips without GOATCITA
     "declares one winner when two connections open the same upload attempt",
     { timeout: 300_000 },
     async () => {
-      const scope = await scoped("hx506_artifact_race");
+      const scope = await createRemoteWorkerPostgresTestScope(postgresConnectionString!, "hx506_artifact_race");
       try {
         const ctx = seedRemoteWorkerGeneration(scope.db, "race");
         const key = {

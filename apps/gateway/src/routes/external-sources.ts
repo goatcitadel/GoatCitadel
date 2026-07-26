@@ -159,7 +159,7 @@ export const externalSourceRoutes: FastifyPluginAsync<ExternalSourceRoutesOption
 
   fastify.post("/api/v1/library/external-sources", operatorMutation, async (request, reply) => {
     const actor = resolveSpecificOperator(request, reply);
-    if (!actor) return;
+    if (!actor) return reply;
     const parsed = createBodySchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "Invalid external source registration request." });
     let input;
@@ -185,7 +185,7 @@ export const externalSourceRoutes: FastifyPluginAsync<ExternalSourceRoutesOption
 
   fastify.get("/api/v1/library/external-sources", operatorRead, async (request, reply) => {
     const actor = resolveSpecificOperator(request, reply);
-    if (!actor) return;
+    if (!actor) return reply;
     const query = workspaceQuerySchema.safeParse(request.query);
     if (!query.success) return reply.code(400).send({ error: "Invalid external source list query." });
     try {
@@ -197,7 +197,7 @@ export const externalSourceRoutes: FastifyPluginAsync<ExternalSourceRoutesOption
 
   fastify.get("/api/v1/library/external-sources/:sourceId", operatorRead, async (request, reply) => {
     const actor = resolveSpecificOperator(request, reply);
-    if (!actor) return;
+    if (!actor) return reply;
     const params = sourceParamsSchema.safeParse(request.params);
     const query = workspaceQuerySchema.safeParse(request.query);
     if (!params.success || !query.success) {
@@ -212,7 +212,7 @@ export const externalSourceRoutes: FastifyPluginAsync<ExternalSourceRoutesOption
 
   fastify.patch("/api/v1/library/external-sources/:sourceId", operatorMutation, async (request, reply) => {
     const actor = resolveSpecificOperator(request, reply);
-    if (!actor) return;
+    if (!actor) return reply;
     const params = sourceParamsSchema.safeParse(request.params);
     const parsed = updateBodySchema.safeParse(request.body);
     if (!params.success || !parsed.success) {
@@ -233,7 +233,7 @@ export const externalSourceRoutes: FastifyPluginAsync<ExternalSourceRoutesOption
 
   fastify.post("/api/v1/library/external-sources/:sourceId/scans", operatorMutation, async (request, reply) => {
     const actor = resolveSpecificOperator(request, reply);
-    if (!actor) return;
+    if (!actor) return reply;
     const params = sourceParamsSchema.safeParse(request.params);
     const parsed = scanBodySchema.safeParse(request.body);
     if (!params.success || !parsed.success) {
@@ -257,7 +257,7 @@ export const externalSourceRoutes: FastifyPluginAsync<ExternalSourceRoutesOption
 
   fastify.get("/api/v1/library/external-sources/:sourceId/items", operatorRead, async (request, reply) => {
     const actor = resolveSpecificOperator(request, reply);
-    if (!actor) return;
+    if (!actor) return reply;
     const params = sourceParamsSchema.safeParse(request.params);
     const parsed = catalogQuerySchema.safeParse(request.query);
     if (!params.success || !parsed.success) {
@@ -287,7 +287,7 @@ export const externalSourceRoutes: FastifyPluginAsync<ExternalSourceRoutesOption
 
   fastify.post("/api/v1/library/external-source-import-plans", operatorMutation, async (request, reply) => {
     const actor = resolveSpecificOperator(request, reply);
-    if (!actor) return;
+    if (!actor) return reply;
     const parsed = importPlanBodySchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "Invalid external source import plan request." });
     let input;
@@ -310,7 +310,7 @@ export const externalSourceRoutes: FastifyPluginAsync<ExternalSourceRoutesOption
 
   fastify.post("/api/v1/library/external-source-imports", operatorMutation, async (request, reply) => {
     const actor = resolveSpecificOperator(request, reply);
-    if (!actor) return;
+    if (!actor) return reply;
     const parsed = importApplyBodySchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "Invalid external source import request." });
     let input;
@@ -336,7 +336,7 @@ export const externalSourceRoutes: FastifyPluginAsync<ExternalSourceRoutesOption
 
   fastify.get("/api/v1/library/external-source-imports/:importId", operatorRead, async (request, reply) => {
     const actor = resolveSpecificOperator(request, reply);
-    if (!actor) return;
+    if (!actor) return reply;
     const params = importParamsSchema.safeParse(request.params);
     const query = workspaceQuerySchema.safeParse(request.query);
     if (!params.success || !query.success) {
@@ -358,7 +358,7 @@ export const externalSourceRoutes: FastifyPluginAsync<ExternalSourceRoutesOption
 
   fastify.get("/api/v1/chat/sessions/:sessionId/external-source-attachments", operatorRead, async (request, reply) => {
     const actor = resolveSpecificOperator(request, reply);
-    if (!actor) return;
+    if (!actor) return reply;
     const params = sessionParamsSchema.safeParse(request.params);
     const query = attachmentListQuerySchema.safeParse(request.query);
     if (!params.success || !query.success) {
@@ -386,7 +386,7 @@ export const externalSourceRoutes: FastifyPluginAsync<ExternalSourceRoutesOption
     operatorMutation,
     async (request, reply) => {
       const actor = resolveSpecificOperator(request, reply);
-      if (!actor) return;
+      if (!actor) return reply;
       const params = sessionParamsSchema.safeParse(request.params);
       const parsed = attachBodySchema.safeParse(request.body);
       if (!params.success || !parsed.success || parsed.data.sessionId !== params.data.sessionId) {
@@ -415,7 +415,7 @@ export const externalSourceRoutes: FastifyPluginAsync<ExternalSourceRoutesOption
     operatorMutation,
     async (request, reply) => {
       const actor = resolveSpecificOperator(request, reply);
-      if (!actor) return;
+      if (!actor) return reply;
       const params = sessionAttachmentParamsSchema.safeParse(request.params);
       const parsed = detachBodySchema.safeParse(request.body);
       if (
@@ -448,7 +448,7 @@ export const externalSourceRoutes: FastifyPluginAsync<ExternalSourceRoutesOption
     operatorMutation,
     async (request, reply) => {
       const actor = resolveSpecificOperator(request, reply);
-      if (!actor) return;
+      if (!actor) return reply;
       const params = importParamsSchema.safeParse(request.params);
       const parsed = knowledgeSnapshotRequestBodySchema.safeParse(request.body);
       if (!params.success || !parsed.success || parsed.data.importId !== params.data.importId) {

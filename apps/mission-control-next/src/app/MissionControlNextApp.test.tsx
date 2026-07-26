@@ -789,6 +789,24 @@ describe("MissionControlNextApp", () => {
     expect(JSON.stringify(renderer.toJSON())).toContain("Direct URL only");
   });
 
+  it("keeps the rail-hidden experimental Journey route reachable from the command palette", async () => {
+    const renderer = await renderApp("http://localhost:5173/library/knowledge");
+
+    await act(async () => {
+      findButton(renderer, "Command Palette").props.onClick();
+    });
+    const paletteSearch = renderer.root.findAllByType("input").find((node) => node.props.role === "combobox");
+    expect(paletteSearch).toBeDefined();
+    await act(async () => {
+      paletteSearch!.props.onChange({ target: { value: "journey" } });
+    });
+    await act(async () => {
+      findButton(renderer, "Library → Journey (Experimental)").props.onClick();
+    });
+
+    expect(window.location.pathname).toBe("/library/journey");
+  });
+
   it("exposes Citadel, workspace, and command switching in the mobile drawer", async () => {
     appMocks.isCompactTopbar = true;
     appMocks.isMobileNav = true;

@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Pool, type PoolClient } from "pg";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   POSTGRES_MIGRATIONS,
   PostgresDatabaseClient,
@@ -12,6 +12,10 @@ import {
   runPostgresMigrations,
 } from "@goatcitadel/storage";
 import type { MemoryForgetRequest } from "@goatcitadel/contracts";
+import {
+  acquireGatewayLivePostgresTestLease,
+  type GatewayLivePostgresTestLease,
+} from "../test/live-postgres-suite-lock.js";
 import { MemoryLifecycleService, type MemoryForgetApprovalOutcome } from "./memory-lifecycle-service.js";
 
 const realPostgresUrl = process.env.GOATCITADEL_TEST_POSTGRES_URL?.trim();
@@ -46,6 +50,17 @@ afterEach(async () => {
  * lifecycle + Journey commit, and the P0 owner's trigger immutability.
  */
 describe.skipIf(!realPostgresUrl)("MemoryLifecycleService real PostgreSQL bulk forget", { timeout: 120_000 }, () => {
+  let livePostgresTestLease: GatewayLivePostgresTestLease | undefined;
+
+  beforeAll(async () => {
+    livePostgresTestLease = await acquireGatewayLivePostgresTestLease(realPostgresUrl!);
+  }, 120_000);
+
+  afterAll(async () => {
+    await livePostgresTestLease?.release();
+    livePostgresTestLease = undefined;
+  }, 120_000);
+
   it("binds canonical-workspace criteria beyond the list cap and commits history plus governed evidence atomically", async () => {
     const harness = await createHarness();
     await seedScopedCompletenessFixture(harness.scopedPool);

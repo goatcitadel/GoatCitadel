@@ -158,6 +158,16 @@ describe("HX-408 mesh capability publication live PostgreSQL parity (skips witho
           1,
           "the byte-exact replay stores no second manifest row",
         );
+        assert.deepEqual(
+          repo.listManifestRecords(WORKSPACE, { nodeId: NODE_ID }).map((record) => record.manifest.manifestSha256),
+          [manifest.manifestSha256],
+          "the optional node filter stays typed and executable on live PostgreSQL",
+        );
+        assert.deepEqual(
+          repo.listManifestRecords(WORKSPACE).map((record) => record.manifest.manifestSha256),
+          [manifest.manifestSha256],
+          "the null node filter stays typed and executable on live PostgreSQL",
+        );
         const changed = buildManifest("publication-pg-1", [entryStatus], lease.fencingToken);
         assert.throws(
           () => repo.publishManifest(changed),

@@ -36,6 +36,7 @@ type SyncHarnessInternals = {
   dialect: "postgres";
   worker: {
     postMessage: ReturnType<typeof mock.fn>;
+    unref: ReturnType<typeof mock.fn>;
     terminate: ReturnType<typeof mock.fn>;
   };
   closed: boolean;
@@ -67,6 +68,7 @@ function createSyncHarness(
       Atomics.store(state, 0, 1);
       Atomics.notify(state, 0, 1);
     }),
+    unref: mock.fn(),
     terminate: mock.fn(async () => 0),
   };
   internals.closed = false;
@@ -143,6 +145,7 @@ describe("PostgresSyncDatabaseClient statement adapter", () => {
     );
     client.close();
     client.close();
+    assert.equal(internals.worker.unref.mock.callCount(), 1);
     assert.equal(internals.worker.terminate.mock.callCount(), 1);
     assert.throws(() => client.exec("SELECT 3"), /already closed/);
     assert.deepEqual(
@@ -236,6 +239,7 @@ describe("PostgresSyncDatabaseClient statement adapter", () => {
       },
     ]);
     assert.equal(timedOut.internals.closed, true);
+    assert.equal(timedOut.internals.worker.unref.mock.callCount(), 1);
     assert.equal(timedOut.internals.worker.terminate.mock.callCount(), 1);
     assert.match(timedOut.internals.fatalError?.message ?? "", /session_begin/);
     assert.throws(() => timedOut.client.exec("SELECT after ambiguous begin"), /already closed/);
@@ -246,6 +250,7 @@ describe("PostgresSyncDatabaseClient statement adapter", () => {
     }));
     assert.throws(() => rejected.client.withPinnedSession(() => "must not run"), /session checkout failed/);
     assert.equal(rejected.internals.closed, true);
+    assert.equal(rejected.internals.worker.unref.mock.callCount(), 1);
     assert.equal(rejected.internals.worker.terminate.mock.callCount(), 1);
     assert.match(rejected.internals.fatalError?.message ?? "", /session checkout failed/);
   });
@@ -266,6 +271,7 @@ describe("PostgresSyncDatabaseClient statement adapter", () => {
       /migration failed/,
     );
     assert.equal(internals.closed, true);
+    assert.equal(internals.worker.unref.mock.callCount(), 1);
     assert.equal(internals.worker.terminate.mock.callCount(), 1);
     assert.match(internals.fatalError?.message ?? "", /session cleanup failed/);
   });
@@ -300,6 +306,7 @@ describe("PostgresSyncDatabaseClient statement adapter", () => {
     }
 
     assert.equal(timedOut.internals.closed, true);
+    assert.equal(timedOut.internals.worker.unref.mock.callCount(), 1);
     assert.equal(timedOut.internals.worker.terminate.mock.callCount(), 1);
     assert.match(timedOut.internals.fatalError?.message ?? "", /Timed out waiting for Postgres response \(close\)/);
     assert.throws(() => timedOut.client.exec("SELECT after-close"), /already closed/);

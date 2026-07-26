@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import ts from "typescript";
@@ -8,7 +9,7 @@ function getArchitectureBaselinePath(rootDir = repoRoot) {
 }
 
 const ARCHITECTURE_BASELINE_PATH = getArchitectureBaselinePath(repoRoot);
-const ARCHITECTURE_BASELINE_SCHEMA_VERSION = 1;
+const ARCHITECTURE_BASELINE_SCHEMA_VERSION = 2;
 const GUARDED_BASELINE_SCALAR_KEYS = [
   "gatewayLineCount",
   "gatewayPublicMethodCount",
@@ -692,10 +693,11 @@ export async function collectArchitectureMetrics(rootDir = repoRoot) {
   const serviceContextPath = path.join(servicesDir, "service-context.ts");
   const buildServiceContextPath = path.join(servicesDir, "gateway", "build-service-context.ts");
 
-  const [routeFiles, gatewaySourceFiles, serviceFiles] = await Promise.all([
+  const [routeFiles, gatewaySourceFiles, serviceFiles, measuredSourceSha256] = await Promise.all([
     listFiles(routesDir, (filePath) => filePath.endsWith(".ts")),
     listFiles(gatewaySrcDir, (filePath) => filePath.endsWith(".ts") && !filePath.endsWith(".test.ts")),
     listFiles(servicesDir, (filePath) => filePath.endsWith(".ts") && !filePath.endsWith(".test.ts")),
+    collectMeasuredSourceSha256(rootDir, gatewaySrcDir),
   ]);
   const routeFacingServiceFiles = serviceFiles.filter((filePath) => filePath.endsWith("-route-service.ts"));
   const gatewayServiceSource = await fs.readFile(gatewayServicePath, "utf8");
@@ -820,6 +822,7 @@ export async function collectArchitectureMetrics(rootDir = repoRoot) {
 
   return {
     generatedAt: new Date().toISOString(),
+    measuredSourceSha256,
     gatewayLineCount,
     largeServiceDebt,
     gatewayPublicMethodCount,
@@ -890,7 +893,7 @@ export function assertArchitectureMetricsCaptureClean(statusOutput) {
   );
 }
 
-export function createArchitectureMetricsBaseline(metrics, sourceRevision) {
+export function createArchitectureMetricsBaseline(metrics, sourceRevision, options = {}) {
   if (typeof sourceRevision !== "string" || !/^[0-9a-f]{40}$/.test(sourceRevision)) {
     throw new Error("Architecture metrics baseline source revision must be a full lowercase Git revision.");
   }
@@ -908,6 +911,7 @@ export function createArchitectureMetricsBaseline(metrics, sourceRevision) {
   const baseline = {
     schemaVersion: ARCHITECTURE_BASELINE_SCHEMA_VERSION,
     ...snapshot,
+    sourceTreeState: options.sourceTreeState ?? "clean",
     hostCallbackCollectorCorrectedAt: metrics.generatedAt,
     hostCallbackSourceRevision: sourceRevision,
     dependencyMemberCollectorCapturedAt: metrics.generatedAt,
@@ -935,6 +939,12 @@ export function validateArchitectureMetricsBaseline(baseline) {
     if (typeof baseline[key] !== "string" || !/^[0-9a-f]{40}$/.test(baseline[key])) {
       throw new Error(`Architecture metrics baseline ${key} must be a full lowercase Git revision.`);
     }
+  }
+  if (!/^[0-9a-f]{64}$/.test(baseline.measuredSourceSha256 ?? "")) {
+    throw new Error("Architecture metrics baseline measuredSourceSha256 must be a lowercase SHA-256 digest.");
+  }
+  if (baseline.sourceTreeState !== "clean" && baseline.sourceTreeState !== "dirty") {
+    throw new Error('Architecture metrics baseline sourceTreeState must be either "clean" or "dirty".');
   }
   for (const key of GUARDED_BASELINE_SCALAR_KEYS) {
     if (!isNonNegativeSafeInteger(baseline[key])) {
@@ -1321,6 +1331,30 @@ async function listFiles(rootDir, predicate) {
   }
 
   return files;
+}
+
+async function collectMeasuredSourceSha256(rootDir, gatewaySrcDir) {
+  const gatewayFiles = await listFiles(gatewaySrcDir, (filePath) => filePath.endsWith(".ts"));
+  const ownerFiles = [
+    path.join(rootDir, "package.json"),
+    path.join(rootDir, "scripts", "update-architecture-metrics-baseline.mjs"),
+    path.join(rootDir, "scripts", "verification", "lib", "architecture-metrics.mjs"),
+    path.join(rootDir, "scripts", "verification", "lib", "architecture-metrics.test.mjs"),
+    path.join(rootDir, "scripts", "verification", "lib", "scenarios", "architecture-metrics-lane.mjs"),
+  ];
+  const measuredFiles = [...new Set([...gatewayFiles, ...ownerFiles])].sort((left, right) => left.localeCompare(right));
+  const digest = createHash("sha256");
+  for (const filePath of measuredFiles) {
+    const content = await fs.readFile(filePath);
+    const relativePath = path.relative(rootDir, filePath).replaceAll("\\", "/");
+    digest.update(relativePath, "utf8");
+    digest.update("\0", "utf8");
+    digest.update(String(content.length), "utf8");
+    digest.update("\0", "utf8");
+    digest.update(content);
+    digest.update("\0", "utf8");
+  }
+  return digest.digest("hex");
 }
 
 async function countPatternAcrossFiles(filePaths, pattern) {

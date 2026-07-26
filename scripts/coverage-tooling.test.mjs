@@ -501,6 +501,14 @@ describe("coverage tooling", () => {
     assert.ok(coverageIndex > buildIndex, "coverage tests must run after their workspace dependencies are built");
   });
 
+  it("serializes storage coverage so live PostgreSQL setup and cleanup cannot race across test files", () => {
+    const storagePackage = JSON.parse(
+      fs.readFileSync(path.join(scriptsDir, "..", "packages", "storage", "package.json"), "utf8"),
+    );
+
+    assert.match(storagePackage.scripts["test:coverage"], /node --test --test-concurrency=1/);
+  });
+
   it("rejects non-Linux artifacts as production coverage evidence", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "goat-coverage-platform-"));
     try {
@@ -908,6 +916,33 @@ describe("coverage tooling", () => {
     assert.doesNotMatch(workflow, /(?:apps|packages)\/\*\*\/coverage/);
   });
 
+  it("keeps the protected fast check aggregate fail-closed across every dependency", () => {
+    const workflow = fs.readFileSync(
+      path.join(scriptsDir, "..", ".github", "workflows", "verification-fast.yml"),
+      "utf8",
+    );
+    const gate = workflow.match(/\n  gate:\n[\s\S]*$/)?.[0] ?? "";
+    assert.match(gate, /\n    name: fast\n/);
+    assert.match(gate, /\n    if: \$\{\{ always\(\) \}\}\n/);
+    assert.match(gate, /\n    needs: \[checks, tests, postgres\]\n/);
+    for (const dependency of ["checks", "tests", "postgres"]) {
+      assert.match(gate, new RegExp(`\\$\\{\\{ needs\\.${dependency}\\.result \\}\\}`));
+    }
+    assert.match(gate, /- name: Enforce upstream job results[\s\S]*exit 1/);
+  });
+
+  it("records Gateway smoke and exercise coverage through named fast-lane commands", () => {
+    const workflow = fs.readFileSync(
+      path.join(scriptsDir, "..", ".github", "workflows", "verification-fast.yml"),
+      "utf8",
+    );
+    const checks = workflow.match(/\n  checks:\n[\s\S]*?\n  tests:\n/)?.[0] ?? "";
+    assert.match(checks, /--commands=[^\n]*fast\.coverage\.gateway\.smoke/);
+    assert.match(checks, /--commands=[^\n]*fast\.coverage\.gateway\.exercise/);
+    assert.doesNotMatch(checks, /Collect gateway coverage extras/);
+    assert.doesNotMatch(checks, /pnpm --filter @goatcitadel\/gateway coverage:(?:smoke|exercise)/);
+  });
+
   it("ratchets fresh gateway and shared coverage with a stability margin", () => {
     const source = fs.readFileSync(path.join(scriptsDir, "coverage-collect.mjs"), "utf8");
     const tier = source.match(/id: "gateway-shared-contracts",[\s\S]*?sourcePrefixes:/)?.[0] ?? "";
@@ -1044,6 +1079,74 @@ describe("coverage tooling", () => {
     }
   });
 
+  it("fails closed when one fresh report masks a stale report from the same package", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "goat-coverage-reuse-mixed-age-"));
+    try {
+      writeReusableWorkspace(tempDir, [
+        {
+          dir: "apps/demo",
+          name: "@demo/app",
+          reports: [{ name: "coverage", ageMs: 60 * 60 * 1000 }, { name: "coverage-smoke" }],
+        },
+      ]);
+
+      const result = spawnSync(process.execPath, [path.join(scriptsDir, "coverage-collect.mjs"), "--skip-run"], {
+        cwd: tempDir,
+        encoding: "utf8",
+      });
+      assert.notEqual(result.status, 0, `${result.stderr}\n${result.stdout}`);
+      assert.match(`${result.stderr}\n${result.stdout}`, /predates their own source files/);
+      assert.match(`${result.stderr}\n${result.stdout}`, /apps\/demo\/coverage/);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts all four fresh Gateway shards and rejects missing or mixed shard layouts", () => {
+    for (const testCase of [
+      {
+        label: "all four shards",
+        reports: [1, 2, 3, 4].map((shard) => ({ name: `coverage-shard-${shard}` })),
+        shouldPass: true,
+      },
+      {
+        label: "missing shard two",
+        reports: [1, 3, 4].map((shard) => ({ name: `coverage-shard-${shard}` })),
+        shouldPass: false,
+        expected: /requires exactly 4 Gateway shard reports[\s\S]*coverage-shard-2/,
+      },
+      {
+        label: "mixed regular and sharded reports",
+        reports: [{ name: "coverage" }, ...[1, 2, 3, 4].map((shard) => ({ name: `coverage-shard-${shard}` }))],
+        shouldPass: false,
+        expected: /both unsharded apps\/gateway\/coverage and sharded Gateway reports/,
+      },
+    ]) {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "goat-coverage-reuse-shards-"));
+      try {
+        writeReusableWorkspace(tempDir, [
+          {
+            dir: "apps/gateway",
+            name: "@goatcitadel/gateway",
+            reports: testCase.reports,
+          },
+        ]);
+        const result = spawnSync(process.execPath, [path.join(scriptsDir, "coverage-collect.mjs"), "--skip-run"], {
+          cwd: tempDir,
+          encoding: "utf8",
+        });
+        if (testCase.shouldPass) {
+          assert.equal(result.status, 0, `${testCase.label}\n${result.stderr}\n${result.stdout}`);
+        } else {
+          assert.notEqual(result.status, 0, testCase.label);
+          assert.match(`${result.stderr}\n${result.stdout}`, testCase.expected, testCase.label);
+        }
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    }
+  });
+
   it("fails closed when a package declaring test:coverage produced no report", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "goat-coverage-reuse-missing-"));
     try {
@@ -1080,31 +1183,34 @@ function writeReusableWorkspace(tempDir, packages) {
     );
     const sourcePath = path.resolve(packageDir, "src", "example.ts");
     fs.writeFileSync(sourcePath, "export function example(value) {\n  return value + 1;\n}\n", "utf8");
-    if (!entry.report) {
+    const reports = entry.reports ?? (entry.report ? [{ name: "coverage", ageMs: entry.reportAgeMs }] : []);
+    if (reports.length === 0) {
       continue;
     }
-    const reportDir = path.join(packageDir, "coverage");
-    fs.mkdirSync(reportDir, { recursive: true });
-    const reportPath = path.join(reportDir, "coverage-final.json");
-    fs.writeFileSync(
-      reportPath,
-      JSON.stringify({
-        [sourcePath]: {
-          path: sourcePath,
-          statementMap: { 0: location(2) },
-          s: { 0: 1 },
-          l: { 2: 1 },
-          fnMap: { 0: functionLocation("example", 1) },
-          f: { 0: 1 },
-          branchMap: {},
-          b: {},
-        },
-      }),
-      "utf8",
-    );
-    if (entry.reportAgeMs) {
-      const backdated = new Date(Date.now() - entry.reportAgeMs);
-      fs.utimesSync(reportPath, backdated, backdated);
+    for (const report of reports) {
+      const reportDir = path.join(packageDir, report.name);
+      fs.mkdirSync(reportDir, { recursive: true });
+      const reportPath = path.join(reportDir, "coverage-final.json");
+      fs.writeFileSync(
+        reportPath,
+        JSON.stringify({
+          [sourcePath]: {
+            path: sourcePath,
+            statementMap: { 0: location(2) },
+            s: { 0: 1 },
+            l: { 2: 1 },
+            fnMap: { 0: functionLocation("example", 1) },
+            f: { 0: 1 },
+            branchMap: {},
+            b: {},
+          },
+        }),
+        "utf8",
+      );
+      if (report.ageMs) {
+        const backdated = new Date(Date.now() - report.ageMs);
+        fs.utimesSync(reportPath, backdated, backdated);
+      }
     }
   }
 }

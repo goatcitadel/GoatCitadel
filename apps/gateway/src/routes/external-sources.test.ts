@@ -114,6 +114,27 @@ describe("HX-407 external source routes", () => {
     expect(service.create).not.toHaveBeenCalled();
   });
 
+  it("finishes a live HTTP actor denial before accepting the next request", async () => {
+    const service = createService();
+    const next = await buildApp(service);
+    next.get("/health/rejection-proof", async () => ({ ok: true }));
+    const address = await next.listen({ host: "127.0.0.1", port: 0 });
+
+    const denied = await fetch(
+      new URL("/api/v1/chat/sessions/session-1/external-source-attachments?workspaceId=workspace-1", `${address}/`),
+      {
+        headers: { "x-test-auth-source": "none", "x-test-auth-actor": "auth:none" },
+      },
+    );
+    expect(denied.status).toBe(403);
+    expect(await denied.json()).toEqual({ error: "A specific authenticated operator route is required." });
+
+    const health = await fetch(new URL("/health/rejection-proof", `${address}/`));
+    expect(health.status).toBe(200);
+    expect(await health.json()).toEqual({ ok: true });
+    expect(service.listSessionAttachments).not.toHaveBeenCalled();
+  });
+
   it("derives immutable ownership from the request and rejects body actor smuggling", async () => {
     const service = createService();
     const next = await buildApp(service);
@@ -517,6 +538,13 @@ describe("HX-407 external source routes", () => {
     const next = Fastify();
     next.decorateRequest("authActorId", "anonymous");
     next.decorateRequest("authActorSource", "none");
+    // Mirror the full Gateway's async public-error projection boundary. Without
+    // an asynchronous preSerialization hop, Fastify injection can hide the
+    // double-send race that occurs when a handler sends and then bare-returns.
+    next.addHook("preSerialization", async (_request, _reply, payload) => {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      return payload;
+    });
     next.addHook("onRequest", async (request) => {
       const source = readHeader(request, "x-test-auth-source");
       request.authActorSource = ["token", "basic", "loopback", "device", "companion"].includes(source ?? "")

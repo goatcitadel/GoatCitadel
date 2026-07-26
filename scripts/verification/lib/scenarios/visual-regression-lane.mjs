@@ -58,6 +58,7 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
       GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS: "true",
       GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
       GOATCITADEL_CODE_MODE_SANDBOX_REQUIRED: "false",
+      GOATCITADEL_DISABLE_MAINTENANCE_SCHEDULER: "true",
       GOATCITADEL_MESH_NODE_ID: "build-main",
       OPENAI_API_KEY: "sk-visual-regression",
     },
@@ -148,6 +149,7 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
                   });
                   await page.waitForTimeout(1000);
                   await stabilizeVisualRegressionSnapshot(page);
+                  await assertMobileVisualGeometry(page, route, variant);
                   await assertNoFooterStatusCollision(page, { route, variant });
                   artifacts = await captureBrowserArtifacts(context, {
                     slug: artifactSlug,
@@ -226,6 +228,76 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
     }
   } finally {
     await stopVerificationStack(stack);
+  }
+}
+
+export async function assertMobileVisualGeometry(page, route, variant) {
+  if (!variant?.viewport || variant.viewport.width > 840) {
+    return;
+  }
+  const pendingInputSelectors =
+    route?.slug === "chat-pending-user-input"
+      ? [
+          '.mc-next-composer-blocking-prompt[data-blocker-kind="user-input"] .chat-user-input-card',
+          ".mc-next-composer-blocked-actions",
+          ".mc-next-composer-primary",
+        ]
+      : [];
+  const geometry = await page.evaluate((selectors) => {
+    const viewportWidth = window.innerWidth;
+    const doc = document.documentElement;
+    const body = document.body;
+    return {
+      viewportWidth,
+      documentOverflow: doc ? doc.scrollWidth - viewportWidth : 0,
+      bodyOverflow: body ? body.scrollWidth - viewportWidth : 0,
+      targets: selectors.map((selector) => {
+        const element = document.querySelector(selector);
+        if (!(element instanceof HTMLElement)) {
+          return { selector, missing: true };
+        }
+        const rect = element.getBoundingClientRect();
+        const ancestors = [];
+        let ancestor = element;
+        while (ancestor instanceof HTMLElement && ancestors.length < 8) {
+          const ancestorRect = ancestor.getBoundingClientRect();
+          const style = window.getComputedStyle(ancestor);
+          ancestors.push({
+            node: `${ancestor.tagName.toLowerCase()}${ancestor.className ? `.${String(ancestor.className).trim().replace(/\s+/g, ".")}` : ""}`,
+            left: ancestorRect.left,
+            right: ancestorRect.right,
+            width: ancestorRect.width,
+            boxSizing: style.boxSizing,
+            minWidth: style.minWidth,
+            paddingInline: `${style.paddingInlineStart}/${style.paddingInlineEnd}`,
+          });
+          ancestor = ancestor.parentElement;
+        }
+        return {
+          selector,
+          missing: false,
+          left: rect.left,
+          right: rect.right,
+          width: rect.width,
+          ancestors,
+        };
+      }),
+    };
+  }, pendingInputSelectors);
+  if (geometry.documentOverflow > 1 || geometry.bodyOverflow > 1) {
+    throw new Error(
+      `${route.slug} ${variant.slug} overflowed horizontally (document=${geometry.documentOverflow}, body=${geometry.bodyOverflow})`,
+    );
+  }
+  for (const target of geometry.targets) {
+    if (target.missing) {
+      throw new Error(`${route.slug} ${variant.slug} did not render required mobile geometry target ${target.selector}`);
+    }
+    if (target.width <= 0 || target.left < -1 || target.right > geometry.viewportWidth + 1) {
+      throw new Error(
+        `${route.slug} ${variant.slug} clipped ${target.selector} horizontally (left=${target.left}, right=${target.right}, viewport=${geometry.viewportWidth}, ancestors=${JSON.stringify(target.ancestors)})`,
+      );
+    }
   }
 }
 

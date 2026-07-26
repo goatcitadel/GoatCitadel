@@ -2,7 +2,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { Pool } from "pg";
 import {
   POSTGRES_MIGRATIONS,
@@ -43,6 +43,10 @@ import {
   type SettingsAuthRuntimeDependencies,
   type SettingsRuntimeDependencies,
 } from "./settings-auth-service.js";
+import {
+  acquireGatewayLivePostgresTestLease,
+  type GatewayLivePostgresTestLease,
+} from "../test/live-postgres-suite-lock.js";
 import { buildCompanionSigningPayload } from "./companion-auth-helpers.js";
 import {
   COMPANION_ACCESS_TOKEN_TTL_MS,
@@ -3032,6 +3036,17 @@ describe("settings-auth-service companion session lifecycle", () => {
 const realPostgresUrl = process.env.GOATCITADEL_TEST_POSTGRES_URL?.trim();
 
 describe.skipIf(!realPostgresUrl)("settings-auth-service real PostgreSQL authority", { timeout: 120_000 }, () => {
+  let livePostgresTestLease: GatewayLivePostgresTestLease | undefined;
+
+  beforeAll(async () => {
+    livePostgresTestLease = await acquireGatewayLivePostgresTestLease(realPostgresUrl!);
+  }, 120_000);
+
+  afterAll(async () => {
+    await livePostgresTestLease?.release();
+    livePostgresTestLease = undefined;
+  }, 120_000);
+
   it("preserves device, rotation, and replay expiry fences across row-lock waits", async () => {
     expect(realPostgresUrl).toBeTruthy();
     const suffix = crypto.randomUUID().replaceAll("-", "").slice(0, 12);

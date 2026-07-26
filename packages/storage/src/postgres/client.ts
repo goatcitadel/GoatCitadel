@@ -30,6 +30,7 @@ import {
   quotePostgresIdentifier,
 } from "./migration-ledger-compatibility.js";
 import { sanitizeParamsForServerEncoding } from "./server-encoding.js";
+import { buildPostgresConnectionStringStartupConfig, buildPostgresStartupOptions } from "./startup-options.js";
 
 const POSTGRES_MIGRATION_QUIESCENCE_RETRY_MS = 50;
 const POSTGRES_MIGRATION_QUIESCENCE_TIMEOUT_MS = 5_000;
@@ -156,7 +157,7 @@ export class PostgresDatabaseClient {
   ) {
     this.migrationsTable = input?.migrationsTable ?? "schema_migrations";
     this.quotedMigrationsTable = quotePostgresIdentifier(this.migrationsTable);
-    this.pool = input?.pool ?? new Pool(buildPoolConfig(options));
+    this.pool = input?.pool ?? new Pool(buildPostgresPoolConfig(options));
   }
 
   public async query<T extends QueryResultRow = QueryResultRow>(
@@ -612,10 +613,10 @@ function findMigrationNameDrift(appliedMigrations: ReadonlyArray<{ version: numb
   return issues;
 }
 
-function buildPoolConfig(options: PostgresConnectionOptions): PoolConfig {
+export function buildPostgresPoolConfig(options: PostgresConnectionOptions): PoolConfig {
   const base: PoolConfig = {
     application_name: options.applicationName ?? "goatcitadel",
-    options: "-c client_encoding=UTF8",
+    options: buildPostgresStartupOptions(),
     max: options.pool?.max ?? 10,
     min: options.pool?.min ?? 0,
     idleTimeoutMillis: options.pool?.idleTimeoutMs ?? 30_000,
@@ -623,9 +624,10 @@ function buildPoolConfig(options: PostgresConnectionOptions): PoolConfig {
   };
 
   if (options.connectionString?.trim()) {
+    const startup = buildPostgresConnectionStringStartupConfig(options.connectionString);
     return {
       ...base,
-      connectionString: options.connectionString.trim(),
+      ...startup,
       ssl: mapSslMode(options.sslMode),
     };
   }

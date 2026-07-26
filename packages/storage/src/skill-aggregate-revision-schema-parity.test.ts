@@ -34,5 +34,20 @@ describe("skill aggregate revision schema parity", () => {
     }
     assert.match(migrationSql, /WHERE setting_key = 'skill_activation_policy_v1'/);
     assert.equal((migrationSql.match(/ON CONFLICT \(aggregate_kind, aggregate_id\) DO NOTHING/g) ?? []).length, 3);
+
+    const repair = POSTGRES_MIGRATIONS.find(
+      (candidate) => candidate.name === "skill_aggregate_revision_constraint_repair",
+    );
+    assert.equal(repair?.version, 123);
+    const repairSql = repair?.sql ?? "";
+    for (const column of ["aggregate_kind", "aggregate_id", "revision", "created_at", "updated_at"]) {
+      assert.match(repairSql, new RegExp(`DROP CONSTRAINT IF EXISTS skill_aggregate_revisions_${column}_check`));
+      assert.match(repairSql, new RegExp(`ADD CONSTRAINT skill_aggregate_revisions_${column}_check`));
+    }
+    assert.match(repairSql, /aggregate_kind IN \('runtime_skill', 'candidate_skill', 'activation_policy'\)/);
+    assert.match(repairSql, /aggregate_id = BTRIM\(aggregate_id\) AND char_length\(aggregate_id\) BETWEEN 1 AND 256/);
+    assert.match(repairSql, /CHECK\(revision > 0\)/);
+    assert.match(repairSql, /CHECK\(char_length\(BTRIM\(created_at\)\) > 0\)/);
+    assert.match(repairSql, /CHECK\(char_length\(BTRIM\(updated_at\)\) > 0\)/);
   });
 });

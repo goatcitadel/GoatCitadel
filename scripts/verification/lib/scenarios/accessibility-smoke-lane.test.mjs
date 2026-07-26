@@ -28,6 +28,7 @@ test("accessibility smoke retains browser evidence and a failure-only trace for 
     async close() {},
   };
   let restored = false;
+  let stackOptions;
 
   await runAccessibilitySmokeLane(
     { artifactRoot: "artifacts" },
@@ -90,7 +91,10 @@ test("accessibility smoke retains browser evidence and a failure-only trace for 
       }),
       async setBrowserCorrelation() {},
       startBrowserTrace: async () => trace,
-      startVerificationStack: async () => ({ gatewayUrl: "http://gateway", uiUrl: "http://ui" }),
+      startVerificationStack: async (_context, options) => {
+        stackOptions = options;
+        return { gatewayUrl: "http://gateway", uiUrl: "http://ui" };
+      },
       async stopVerificationStack() {},
       async waitForVerificationRouteReady() {},
       async writeJson() {},
@@ -103,5 +107,11 @@ test("accessibility smoke retains browser evidence and a failure-only trace for 
   assert.deepEqual(results[0].artifacts.screenshots, ["screenshots/accessibility-smoke-chat.png"]);
   assert.deepEqual(results[0].artifacts.traces, ["playwright/accessibility-smoke-chat-trace.zip"]);
   assert.ok(results[0].artifacts.diagnostics.includes("diagnostics/accessibility-smoke-chat-accessibility.json"));
+  assert.equal(stackOptions.gatewayEnv.GOATCITADEL_AUTH_MODE, "token");
+  assert.equal(
+    stackOptions.gatewayEnv.GOATCITADEL_AUTH_TOKEN,
+    "verification-accessibility-smoke-operator-token",
+  );
+  assert.equal(stackOptions.gatewayEnv.GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS, "true");
   assert.equal(restored, true);
 });

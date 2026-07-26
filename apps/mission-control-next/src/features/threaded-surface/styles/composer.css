@@ -993,6 +993,9 @@ details.mc-next-thread-action-menu > .mc-next-thread-action-menu-summary {
 
 .mc-next-composer-blocking-prompt {
   display: grid;
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
   gap: 0.4rem;
   scroll-margin-block: 0.75rem;
 }
@@ -1003,7 +1006,20 @@ details.mc-next-thread-action-menu > .mc-next-thread-action-menu-summary {
 .mc-next-composer-blocking-prompt .chat-user-input-options,
 .mc-next-composer-blocking-prompt .chat-user-input-option-copy {
   display: grid;
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
   gap: 0.42rem;
+}
+
+.mc-next-composer-blocking-prompt .chat-approval-title,
+.mc-next-composer-blocking-prompt .chat-approval-reason,
+.mc-next-composer-blocking-prompt .chat-approval-id,
+.mc-next-composer-blocking-prompt .chat-user-input-option-row,
+.mc-next-composer-blocking-prompt .chat-user-input-option-description {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .mc-next-composer-blocking-prompt .chat-approval-card {

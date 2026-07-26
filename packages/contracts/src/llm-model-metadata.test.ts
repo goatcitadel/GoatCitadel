@@ -54,9 +54,17 @@ describe("shipped manifest at config/llm-model-metadata.json", () => {
 
   it("includes the critical entries called out in the plan", () => {
     expect(parsedManifest.entries["openai-codex/*"]).toEqual({ contextWindow: 272000, outputTokenLimit: 32000 });
-    expect(parsedManifest.entries["openai-codex/gpt-5.6"]).toEqual({
-      contextWindow: 1050000,
-      outputTokenLimit: 128000,
+    expect(parsedManifest.entries["openai-codex/gpt-5.6-sol"]).toEqual({
+      contextWindow: 272000,
+      outputTokenLimit: 32000,
+    });
+    expect(parsedManifest.entries["openai-codex/gpt-5.6-terra"]).toEqual({
+      contextWindow: 272000,
+      outputTokenLimit: 32000,
+    });
+    expect(parsedManifest.entries["openai-codex/gpt-5.6-luna"]).toEqual({
+      contextWindow: 272000,
+      outputTokenLimit: 32000,
     });
     expect(parsedManifest.entries["openrouter/deepseek/deepseek-v4-pro"]).toEqual({
       contextWindow: 128000,

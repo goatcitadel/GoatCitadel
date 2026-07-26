@@ -194,6 +194,9 @@ importers:
       '@types/adm-zip':
         specifier: 0.5.7
         version: 0.5.7
+      '@types/pg':
+        specifier: 8.20.0
+        version: 8.20.0
       '@types/shell-quote':
         specifier: 1.7.5
         version: 1.7.5

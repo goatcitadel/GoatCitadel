@@ -20,6 +20,7 @@ test("fails when the seeded thread has no artifact turn", async () => {
         assertOk(response) {
           assert.equal(response.ok, true);
         },
+        delay: async () => {},
         randomUUID: () => "00000000-0000-0000-0000-000000000000",
         requestJson,
         stabilizeMissionControlNextFileFixtureMtime: async () => {},
@@ -35,7 +36,8 @@ test("seeds the complete fixture and returns its identifiers", async () => {
   let agentIndex = 0;
   let taskIndex = 0;
   let opsBoardRequest;
-  let settingsPatchRequest;
+  const settingsPatchRequests = [];
+  const retryDelays = [];
   const requestJson = async (_gatewayUrl, path, options) => {
     requests.push(path);
     if (path === "/api/v1/dev/verification/seed") {
@@ -68,10 +70,20 @@ test("seeds the complete fixture and returns its identifiers", async () => {
     }
     if (path === "/api/v1/settings") {
       if (options?.method === "PATCH") {
-        settingsPatchRequest = options;
+        settingsPatchRequests.push(options);
+        if (settingsPatchRequests.length === 1) {
+          return {
+            ok: false,
+            status: 409,
+            body: {
+              code: "STATE_CONFLICT",
+              error: "Settings are temporarily unavailable while runtime owners reconcile a config generation.",
+            },
+          };
+        }
         return { ok: true, body: { revision: 8, features: { memoryLifecycleAdminV1Enabled: true } } };
       }
-      return { ok: true, body: { revision: 7 } };
+      return { ok: true, body: { revision: settingsPatchRequests.length === 0 ? 7 : 8 } };
     }
     if (path === "/api/v1/dev/verification/memory-item-seed") {
       return { ok: true, body: { itemId: "memory-1" } };
@@ -92,6 +104,9 @@ test("seeds the complete fixture and returns its identifiers", async () => {
     {
       assertOk(response) {
         assert.equal(response.ok, true);
+      },
+      delay: async (ms) => {
+        retryDelays.push(ms);
       },
       randomUUID: () => "00000000-0000-0000-0000-000000000000",
       requestJson,
@@ -166,12 +181,22 @@ test("seeds the complete fixture and returns its identifiers", async () => {
       idempotencyKey: "mission-control-next-visual-ops-board-v1",
     },
   });
-  assert.deepEqual(settingsPatchRequest, {
-    method: "PATCH",
-    body: {
-      expectedRevision: 7,
-      features: { memoryLifecycleAdminV1Enabled: true },
+  assert.deepEqual(settingsPatchRequests, [
+    {
+      method: "PATCH",
+      body: {
+        expectedRevision: 7,
+        features: { memoryLifecycleAdminV1Enabled: true },
+      },
     },
-  });
+    {
+      method: "PATCH",
+      body: {
+        expectedRevision: 8,
+        features: { memoryLifecycleAdminV1Enabled: true },
+      },
+    },
+  ]);
+  assert.deepEqual(retryDelays, [250]);
   assert.ok(requests.includes("/api/v1/memory/items?workspaceId=workspace-1&status=all&limit=200"));
 });

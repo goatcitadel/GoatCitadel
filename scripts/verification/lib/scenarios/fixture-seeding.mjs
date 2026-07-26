@@ -3,12 +3,12 @@
  *
  * @param {string} gatewayUrl gateway base URL
  * @param {object} [options={}] scenario-specific fixture controls
- * @param {object} deps request, assertion, UUID, and file-mtime dependencies
+ * @param {object} deps request, assertion, delay, UUID, and file-mtime dependencies
  * @returns {Promise<object>} identifiers and metadata for the seeded verification scenario
  * @throws {Error} when required seed or thread identifiers are missing
  */
 export async function seedMissionControlNextFixture(gatewayUrl, options = {}, deps) {
-  const { assertOk, randomUUID, requestJson, stabilizeMissionControlNextFileFixtureMtime } = deps;
+  const { assertOk, delay, randomUUID, requestJson, stabilizeMissionControlNextFileFixtureMtime } = deps;
   const seedResponse = await requestJson(gatewayUrl, "/api/v1/dev/verification/seed", {
     method: "POST",
     body: {
@@ -304,20 +304,7 @@ export async function seedMissionControlNextFixture(gatewayUrl, options = {}, de
     throw new Error("mission-control-next verification Ops board did not return boardId");
   }
 
-  const settingsResponse = await requestJson(gatewayUrl, "/api/v1/settings");
-  assertOk(settingsResponse, "read mission-control-next verification settings");
-  const settingsRevision = settingsResponse.body?.revision;
-  if (!Number.isSafeInteger(settingsRevision) || settingsRevision < 1) {
-    throw new Error("mission-control-next verification settings did not return a valid revision");
-  }
-  const updatedSettingsResponse = await requestJson(gatewayUrl, "/api/v1/settings", {
-    method: "PATCH",
-    body: {
-      expectedRevision: settingsRevision,
-      features: { memoryLifecycleAdminV1Enabled: true },
-    },
-  });
-  assertOk(updatedSettingsResponse, "enable mission-control-next verification memory admin");
+  const updatedSettingsResponse = await enableVerificationMemoryAdmin(gatewayUrl, { assertOk, delay, requestJson });
   if (updatedSettingsResponse.body?.features?.memoryLifecycleAdminV1Enabled !== true) {
     throw new Error("mission-control-next verification memory admin did not become enabled");
   }
@@ -395,4 +382,52 @@ export async function seedMissionControlNextFixture(gatewayUrl, options = {}, de
     opsBoardId,
     memoryItemId,
   };
+}
+
+const SETTINGS_RECONCILIATION_CONFLICT_MESSAGE =
+  "Settings are temporarily unavailable while runtime owners reconcile a config generation.";
+const SETTINGS_RECONCILIATION_ATTEMPTS = 120;
+const SETTINGS_RECONCILIATION_RETRY_MS = 250;
+
+async function enableVerificationMemoryAdmin(gatewayUrl, deps) {
+  const { assertOk, delay, requestJson } = deps;
+  for (let attempt = 1; attempt <= SETTINGS_RECONCILIATION_ATTEMPTS; attempt += 1) {
+    const settingsResponse = await requestJson(gatewayUrl, "/api/v1/settings");
+    if (!settingsResponse.ok) {
+      if (isSettingsReconciliationConflict(settingsResponse) && attempt < SETTINGS_RECONCILIATION_ATTEMPTS) {
+        await delay(SETTINGS_RECONCILIATION_RETRY_MS);
+        continue;
+      }
+      assertOk(settingsResponse, "read mission-control-next verification settings");
+    }
+
+    const settingsRevision = settingsResponse.body?.revision;
+    if (!Number.isSafeInteger(settingsRevision) || settingsRevision < 1) {
+      throw new Error("mission-control-next verification settings did not return a valid revision");
+    }
+    const updatedSettingsResponse = await requestJson(gatewayUrl, "/api/v1/settings", {
+      method: "PATCH",
+      body: {
+        expectedRevision: settingsRevision,
+        features: { memoryLifecycleAdminV1Enabled: true },
+      },
+    });
+    if (updatedSettingsResponse.ok) {
+      return updatedSettingsResponse;
+    }
+    if (isSettingsReconciliationConflict(updatedSettingsResponse) && attempt < SETTINGS_RECONCILIATION_ATTEMPTS) {
+      await delay(SETTINGS_RECONCILIATION_RETRY_MS);
+      continue;
+    }
+    assertOk(updatedSettingsResponse, "enable mission-control-next verification memory admin");
+  }
+  throw new Error("mission-control-next verification settings reconciliation retry budget was exhausted");
+}
+
+function isSettingsReconciliationConflict(response) {
+  return (
+    response?.status === 409 &&
+    response.body?.code === "STATE_CONFLICT" &&
+    response.body?.error === SETTINGS_RECONCILIATION_CONFLICT_MESSAGE
+  );
 }

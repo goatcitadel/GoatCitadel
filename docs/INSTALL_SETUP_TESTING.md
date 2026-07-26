@@ -270,6 +270,10 @@ The compose file already enables:
 - dedicated Postgres service healthchecks
 - non-root container runtime
 - dropped Linux capabilities and `no-new-privileges`
+- named volumes for mutable runtime config, data, and workspace state
+- owner-only env-backed provider-secret persistence at `/app/data/.env` when an operator explicitly selects env storage
+
+`docker compose down -v` deletes those named volumes, including runtime config, provider secrets saved to env storage, and application data. Use it only when you intentionally want to erase the Compose deployment state.
 
 ### Hostname and browser allowlists
 

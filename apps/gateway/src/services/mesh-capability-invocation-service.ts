@@ -493,7 +493,7 @@ export class MeshCapabilityInvocationService {
     if (output) {
       this.storeVaultOutput(identity.workspaceId, submission.invocationId, output, submission.outputSha256);
     }
-    this.progressSequences.delete(vaultKey(identity.workspaceId, submission.invocationId));
+    this.clearProgressTracking(identity.workspaceId, submission.invocationId);
     this.publishRealtime?.("mesh_capability_invocation_settled", "mesh", {
       workspaceId: identity.workspaceId,
       invocationId: settlement.invocationId,
@@ -746,6 +746,7 @@ export class MeshCapabilityInvocationService {
         publicationLeaseFencingToken: intent.publicationLeaseFencingToken,
         idempotencyKey: `mesh-capability-settlement:gateway:${intent.invocationId}`,
       });
+      this.clearProgressTracking(intent.workspaceId, intent.invocationId);
       this.publishRealtime?.("mesh_capability_invocation_settled", "mesh", {
         workspaceId: intent.workspaceId,
         invocationId: intent.invocationId,
@@ -758,7 +759,14 @@ export class MeshCapabilityInvocationService {
       return settlement;
     } catch {
       // One-winner: converge on a concurrent settlement when present.
-      return this.storage.meshCapabilityPublications.findInvocationSettlement(intent.workspaceId, intent.invocationId);
+      const settlement = this.storage.meshCapabilityPublications.findInvocationSettlement(
+        intent.workspaceId,
+        intent.invocationId,
+      );
+      if (settlement) {
+        this.clearProgressTracking(intent.workspaceId, intent.invocationId);
+      }
+      return settlement;
     }
   }
 
@@ -768,6 +776,7 @@ export class MeshCapabilityInvocationService {
     invocationId: string,
     settlement: MeshCapabilityInvocationSettlementRecord,
   ): MeshCapabilityInvocationDispatchOutcome {
+    this.clearProgressTracking(workspaceId, invocationId);
     const vault = this.readVaultEntry(workspaceId, invocationId);
     const output =
       settlement.disposition === "succeeded" &&
@@ -787,6 +796,10 @@ export class MeshCapabilityInvocationService {
       ...(settlement.errorCode === undefined ? {} : { errorCode: settlement.errorCode }),
       receipt: buildReceipt(intent, invocationId, settlement),
     };
+  }
+
+  private clearProgressTracking(workspaceId: string, invocationId: string): void {
+    this.progressSequences.delete(vaultKey(workspaceId, invocationId));
   }
 
   private buildGatewaySettledOutcome(

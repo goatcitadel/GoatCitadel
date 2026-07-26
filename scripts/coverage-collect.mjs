@@ -4,6 +4,10 @@ import { execSync } from "node:child_process";
 import crypto from "node:crypto";
 import ts from "typescript";
 import { collectorGroupKey, mergeCoverageEntries } from "./coverage-merge.mjs";
+import {
+  GATEWAY_COVERAGE_SHARD_COUNT,
+  gatewayCoverageShardDirectory,
+} from "./coverage-shard-contract.mjs";
 import { normalizeCoveragePathForLookup as normalizePathForLookup } from "./coverage-paths.mjs";
 import { buildCoverageSourceFingerprint } from "./coverage-source-fingerprint.mjs";
 
@@ -393,14 +397,19 @@ async function failCollection(warning, error) {
  */
 async function assertReusedCoverageIsUsable(coverageFiles, sourceFiles) {
   const expected = await findPackagesDeclaringCoverageScript(repoRoot);
-  const reportedAt = new Map();
+  const reportsByPackage = new Map();
   for (const file of coverageFiles) {
     const packageDir = path.relative(repoRoot, path.dirname(path.dirname(file))).replaceAll("\\", "/");
     const stats = await fs.stat(file);
-    reportedAt.set(packageDir, Math.max(reportedAt.get(packageDir) ?? 0, stats.mtimeMs));
+    const reports = reportsByPackage.get(packageDir) ?? [];
+    reports.push({
+      reportDirectory: path.basename(path.dirname(file)),
+      mtimeMs: stats.mtimeMs,
+    });
+    reportsByPackage.set(packageDir, reports);
   }
 
-  const missing = expected.filter((entry) => !reportedAt.has(entry.dir));
+  const missing = expected.filter((entry) => !reportsByPackage.has(entry.dir));
   if (missing.length > 0) {
     const detail = missing.map((entry) => `${entry.dir} (${entry.name})`).join(", ");
     await failCollection(
@@ -413,31 +422,82 @@ async function assertReusedCoverageIsUsable(coverageFiles, sourceFiles) {
     );
   }
 
+  const gatewayLayoutError = validateReusedGatewayCoverageLayout(reportsByPackage.get("apps/gateway") ?? []);
+  if (gatewayLayoutError) {
+    await failCollection("Coverage reuse failed: Gateway coverage inputs are incomplete or mixed.", gatewayLayoutError);
+  }
+
   const sourcedAt = new Map();
   for (const filePath of sourceFiles) {
     const relativePath = path.relative(repoRoot, filePath).replaceAll("\\", "/");
     const packageDir = relativePath.split("/").slice(0, 2).join("/");
-    if (!reportedAt.has(packageDir)) {
+    if (!reportsByPackage.has(packageDir)) {
       continue;
     }
     const stats = await fs.stat(filePath);
     sourcedAt.set(packageDir, Math.max(sourcedAt.get(packageDir) ?? 0, stats.mtimeMs));
   }
 
-  const stale = expected.filter((entry) => (sourcedAt.get(entry.dir) ?? 0) > (reportedAt.get(entry.dir) ?? 0));
+  // Every input must be fresh. Taking only the newest report lets one current
+  // shard mask stale regular/smoke reports that are then merged into its hits.
+  const stale = expected.flatMap((entry) => {
+    const sourceMtimeMs = sourcedAt.get(entry.dir) ?? 0;
+    return (reportsByPackage.get(entry.dir) ?? [])
+      .filter((report) => sourceMtimeMs > report.mtimeMs)
+      .map((report) => ({ entry, report }));
+  });
   if (stale.length > 0) {
     const detail = stale
-      .map((entry) => `${entry.dir} (report ${new Date(reportedAt.get(entry.dir)).toISOString()})`)
+      .map(
+        ({ entry, report }) =>
+          `${entry.dir}/${report.reportDirectory} (report ${new Date(report.mtimeMs).toISOString()})`,
+      )
       .join(", ");
     await failCollection(
       "Coverage reuse failed: one or more packages have coverage older than their sources.",
       new Error(
-        `[coverage:collect] --skip-run found ${stale.length} package(s) whose coverage-final.json predates their own `
+        `[coverage:collect] --skip-run found ${stale.length} coverage report(s) whose coverage-final.json predates their own `
           + `source files: ${detail}. Those reports measure code that no longer exists. Re-run the package suites `
           + "(pnpm verify:fast) before reusing coverage, or drop --skip-run to collect from scratch.",
       ),
     );
   }
+}
+
+function validateReusedGatewayCoverageLayout(reports) {
+  if (reports.length === 0) {
+    return undefined;
+  }
+  const reportDirectories = new Set(reports.map((report) => report.reportDirectory));
+  const regularCoveragePresent = reportDirectories.has("coverage");
+  const expectedShardDirectories = Array.from({ length: GATEWAY_COVERAGE_SHARD_COUNT }, (_unused, index) =>
+    gatewayCoverageShardDirectory(index + 1),
+  );
+  const shardLikeDirectories = [...reportDirectories].filter((directory) => directory.startsWith("coverage-shard-"));
+
+  if (regularCoveragePresent && shardLikeDirectories.length > 0) {
+    return new Error(
+      "[coverage:collect] --skip-run found both unsharded apps/gateway/coverage and sharded Gateway reports. " +
+        "They can come from different runs and must not be merged as one collector.",
+    );
+  }
+  if (!regularCoveragePresent && shardLikeDirectories.length === 0) {
+    return new Error(
+      "[coverage:collect] --skip-run found Gateway auxiliary coverage but no primary suite report. Expected " +
+        "apps/gateway/coverage or all Gateway shard reports.",
+    );
+  }
+  if (shardLikeDirectories.length > 0) {
+    const missingShards = expectedShardDirectories.filter((directory) => !reportDirectories.has(directory));
+    const unexpectedShards = shardLikeDirectories.filter((directory) => !expectedShardDirectories.includes(directory));
+    if (missingShards.length > 0 || unexpectedShards.length > 0) {
+      return new Error(
+        `[coverage:collect] --skip-run requires exactly ${GATEWAY_COVERAGE_SHARD_COUNT} Gateway shard reports. ` +
+          `Missing: ${missingShards.join(", ") || "none"}. Unexpected: ${unexpectedShards.join(", ") || "none"}.`,
+      );
+    }
+  }
+  return undefined;
 }
 
 async function findPackagesDeclaringCoverageScript(root) {

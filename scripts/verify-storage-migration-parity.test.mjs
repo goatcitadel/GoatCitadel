@@ -802,8 +802,8 @@ test("current registries and checked-in manifest cover every migration exactly",
 
   assert.equal(sqlite.migrations.length, 180);
   assert.deepEqual([sqlite.firstVersion, sqlite.lastVersion], [1, 180]);
-  assert.equal(postgres.migrations.length, 122);
-  assert.deepEqual([postgres.firstVersion, postgres.lastVersion], [1, 122]);
+  assert.equal(postgres.migrations.length, 123);
+  assert.deepEqual([postgres.firstVersion, postgres.lastVersion], [1, 123]);
   assert.equal(
     postgres.migrations.find((record) => record.version === 62)?.name,
     "chat_delegation_step_degraded_handoff_repairs",

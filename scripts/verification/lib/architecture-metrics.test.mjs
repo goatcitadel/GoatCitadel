@@ -379,7 +379,7 @@ test("architecture baseline validation fails closed on missing, null, or forged 
     {
       label: "missing schema",
       mutate: (baseline) => delete baseline.schemaVersion,
-      expected: /schemaVersion must be 1/i,
+      expected: /schemaVersion must be 2/i,
     },
     {
       label: "null guarded scalar",
@@ -394,6 +394,18 @@ test("architecture baseline validation fails closed on missing, null, or forged 
         baseline.dependencyMemberSourceRevision = "deadbeef";
       },
       expected: /full lowercase Git revision/i,
+    },
+    {
+      label: "missing measured source digest",
+      mutate: (baseline) => delete baseline.measuredSourceSha256,
+      expected: /measuredSourceSha256 must be a lowercase SHA-256 digest/i,
+    },
+    {
+      label: "forged source tree state",
+      mutate: (baseline) => {
+        baseline.sourceTreeState = "forged";
+      },
+      expected: /sourceTreeState must be either/i,
     },
     {
       label: "forged map total",
@@ -418,7 +430,7 @@ test("architecture baseline validation fails closed on missing, null, or forged 
   }
 });
 
-test("architecture baseline capture refuses dirty measured source and binds clean metrics to a revision", () => {
+test("architecture baseline capture refuses implicit dirty source and binds clean or explicit dirty metrics", () => {
   assert.doesNotThrow(() => assertArchitectureMetricsCaptureClean(""));
   assert.throws(
     () => assertArchitectureMetricsCaptureClean(" M apps/gateway/src/services/gateway-service.ts\0"),
@@ -436,7 +448,16 @@ test("architecture baseline capture refuses dirty measured source and binds clea
 
   assert.equal(baseline.hostCallbackSourceRevision, sourceRevision);
   assert.equal(baseline.dependencyMemberSourceRevision, sourceRevision);
+  assert.equal(baseline.sourceTreeState, "clean");
+  assert.equal(baseline.measuredSourceSha256, metrics.measuredSourceSha256);
   assert.equal(baseline.gatewayLineCount, metrics.gatewayLineCount);
   assert.doesNotThrow(() => validateArchitectureMetricsBaseline(baseline));
+  const dirtyBaseline = createArchitectureMetricsBaseline(metrics, sourceRevision, { sourceTreeState: "dirty" });
+  assert.equal(dirtyBaseline.sourceTreeState, "dirty");
+  assert.doesNotThrow(() => validateArchitectureMetricsBaseline(dirtyBaseline));
+  assert.throws(
+    () => createArchitectureMetricsBaseline(metrics, sourceRevision, { sourceTreeState: "forged" }),
+    /sourceTreeState must be either/i,
+  );
   assert.throws(() => createArchitectureMetricsBaseline(metrics, "deadbeef"), /full lowercase Git revision/i);
 });

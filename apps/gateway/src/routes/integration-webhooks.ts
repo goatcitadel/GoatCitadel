@@ -96,7 +96,7 @@ export const integrationWebhookRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(401).send({ error: "Invalid generic channel inbound signature" });
       }
       if (await enforceAcceptedWebhookRateLimit(genericAcceptedRateLimit, request, reply)) {
-        return;
+        return reply;
       }
 
       const parsed = channelInboundSchema.safeParse(request.body);

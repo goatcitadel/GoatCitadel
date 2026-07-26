@@ -105,6 +105,11 @@ describe("ChatSessionLifecycleRepository live PostgreSQL", () => {
           setupDb.prepare("SELECT MAX(version) AS version FROM schema_migrations").get<{ version: number }>()!.version,
           113,
         );
+        assert.equal(
+          (await scopedPool.query<{ schema_name: string }>("SELECT current_schema() AS schema_name")).rows[0]
+            ?.schema_name,
+          schemaName,
+        );
         await rewindPostgresSessionLifecycleMigration(scopedPool);
         setupDb
           .prepare(
@@ -134,7 +139,10 @@ describe("ChatSessionLifecycleRepository live PostgreSQL", () => {
            WHERE session_id = $1`,
         );
         await assert.rejects(
-          runPostgresMigrations(migrations, POSTGRES_MIGRATIONS),
+          runPostgresMigrations(
+            migrations,
+            POSTGRES_MIGRATIONS.filter((migration) => migration.version <= 115),
+          ),
           /lifecycle preflight invariant violated/iu,
         );
         assert.equal(setupDb.prepare("SELECT 1 FROM schema_migrations WHERE version = 115").get(), undefined);
@@ -148,7 +156,10 @@ describe("ChatSessionLifecycleRepository live PostgreSQL", () => {
                updated_at = created_at, terminal_at = NULL
            WHERE session_id = $1`,
         );
-        assert.deepEqual((await runPostgresMigrations(migrations, POSTGRES_MIGRATIONS)).appliedVersions, [115, 116]);
+        assert.deepEqual(
+          (await runPostgresMigrations(migrations, POSTGRES_MIGRATIONS)).appliedVersions,
+          POSTGRES_MIGRATIONS.filter((migration) => migration.version >= 115).map((migration) => migration.version),
+        );
         assert.deepEqual((await runPostgresMigrations(migrations, POSTGRES_MIGRATIONS)).appliedVersions, []);
         assert.equal(
           setupDb
@@ -266,7 +277,12 @@ async function rewindPostgresSessionLifecycleMigration(pool: Pool): Promise<void
     DROP TABLE IF EXISTS chat_turn_mutation_admission_durable_bindings;
     DROP TABLE IF EXISTS chat_turn_session_incarnation_bindings;
     DROP TABLE IF EXISTS chat_session_mutation_admission_events;
-    DROP TABLE IF EXISTS chat_session_mutation_admissions;
+    -- Historical migration 2 materializes the current runtime schema. Newer
+    -- runtime tables can therefore hold foreign keys into the v115 admission
+    -- table even while this fixture rewinds the ledger to v113. CASCADE is
+    -- scoped to the fixture's random schema and removes only those dependent
+    -- constraints; their owning forward migrations recreate them below.
+    DROP TABLE IF EXISTS chat_session_mutation_admissions CASCADE;
     DROP TABLE IF EXISTS chat_session_control_auth_revoke_operation_targets;
     DROP TABLE IF EXISTS chat_session_control_auth_revoke_operations;
     DROP TABLE IF EXISTS chat_session_lifecycle_intents;
