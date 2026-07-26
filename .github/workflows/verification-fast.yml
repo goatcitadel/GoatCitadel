@@ -191,6 +191,34 @@ jobs:
       - name: Run real Postgres Gateway memory lifecycle lane
         run: pnpm --filter @goatcitadel/gateway test:postgres:memory
 
+  bundled-postgres-restart:
+    name: Bundled Postgres stopped-container restart
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.31.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Confirm Docker availability
+        run: docker info
+
+      - name: Prove stopped bundled Postgres recovery
+        run: pnpm verify:bundled-postgres:restart
+
   gate:
     # Keep this exact name aligned with the protected-branch required context.
     # `always()` is required because a skipped required job reports success on
@@ -200,7 +228,7 @@ jobs:
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: [checks, tests, postgres]
+    needs: [checks, tests, postgres, bundled-postgres-restart]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -273,8 +301,9 @@ jobs:
           CHECKS_RESULT: ${{ needs.checks.result }}
           TESTS_RESULT: ${{ needs.tests.result }}
           POSTGRES_RESULT: ${{ needs.postgres.result }}
+          BUNDLED_POSTGRES_RESTART_RESULT: ${{ needs.bundled-postgres-restart.result }}
         run: |
-          if [ "$CHECKS_RESULT" != "success" ] || [ "$TESTS_RESULT" != "success" ] || [ "$POSTGRES_RESULT" != "success" ]; then
-            echo "One or more required verification jobs did not succeed: checks=$CHECKS_RESULT tests=$TESTS_RESULT postgres=$POSTGRES_RESULT" >&2
+          if [ "$CHECKS_RESULT" != "success" ] || [ "$TESTS_RESULT" != "success" ] || [ "$POSTGRES_RESULT" != "success" ] || [ "$BUNDLED_POSTGRES_RESTART_RESULT" != "success" ]; then
+            echo "One or more required verification jobs did not succeed: checks=$CHECKS_RESULT tests=$TESTS_RESULT postgres=$POSTGRES_RESULT bundled-postgres-restart=$BUNDLED_POSTGRES_RESTART_RESULT" >&2
             exit 1
           fi

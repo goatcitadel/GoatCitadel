@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { NON_RETRYABLE_STARTUP_EXIT_CODE } from "./startup-errors.js";
 
 // The supervisor persists its last-successful reference-build signature in
 // node_modules/.cache so warm restarts can skip tsc -b. Each test in this file
@@ -75,6 +76,7 @@ describe("dev supervisor coverage", () => {
     createConnectionMock.mockReset();
     statMock.mockReset();
     readdirMock.mockReset();
+    process.exitCode = undefined;
     fs.rmSync(supervisorRefSignatureCacheFile, { force: true });
 
     process.env.GOATCITADEL_GATEWAY_WATCH_POLL_MS = "999999";
@@ -111,6 +113,7 @@ describe("dev supervisor coverage", () => {
   });
 
   afterEach(() => {
+    process.exitCode = undefined;
     delete process.env.GOATCITADEL_GATEWAY_WATCH_POLL_MS;
     delete process.env.GOATCITADEL_GATEWAY_HEALTH_TIMEOUT_MS;
     delete process.env.GOATCITADEL_GATEWAY_REFERENCE_BUILD;
@@ -241,5 +244,90 @@ describe("dev supervisor coverage", () => {
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("gateway exited before becoming healthy"));
     expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("gateway did not become healthy in time"));
     expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining("[gateway-supervisor] fatal"));
+  });
+
+  it("lets the startup waiter own an exit that occurs during the health request", async () => {
+    process.env.GOATCITADEL_GATEWAY_HEALTH_TIMEOUT_MS = "5000";
+    process.env.GOATCITADEL_GATEWAY_RESTART_BASE_BACKOFF_MS = "5000";
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    let spawnedChild: EventEmitter | undefined;
+
+    spawnMock.mockImplementation(() => {
+      const child = new EventEmitter() as EventEmitter & {
+        pid: number;
+        kill: () => boolean;
+      };
+      child.pid = 56789;
+      child.kill = () => true;
+      spawnedChild = child;
+      return child;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown) => {
+        const url = typeof input === "string" ? input : String(input);
+        if (url.endsWith("/livez")) {
+          return new Response("ok", { status: 200 });
+        }
+        spawnedChild?.emit("exit", 1, null);
+        return new Response("ok", { status: 200 });
+      }),
+    );
+
+    await import("./dev-supervisor.js");
+    await vi.waitFor(() => {
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("gateway exited before becoming healthy"));
+    });
+
+    expect(logSpy).not.toHaveBeenCalledWith(expect.stringContaining("gateway online in"));
+    expect(
+      logSpy.mock.calls.filter((call) => call.some((value) => String(value).includes("scheduling restart"))),
+    ).toHaveLength(1);
+
+    process.emit("SIGINT");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+
+  it("stops after one non-retryable startup exit instead of scheduling a loop", async () => {
+    process.env.GOATCITADEL_GATEWAY_HEALTH_TIMEOUT_MS = "5000";
+    process.env.GOATCITADEL_GATEWAY_RESTART_BASE_BACKOFF_MS = "1";
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    spawnMock.mockImplementation(() => {
+      const child = new EventEmitter() as EventEmitter & {
+        pid: number;
+        kill: () => boolean;
+      };
+      child.pid = 65432;
+      child.kill = () => true;
+      setTimeout(() => {
+        child.emit("exit", NON_RETRYABLE_STARTUP_EXIT_CODE, null);
+      }, 0);
+      return child;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("not ready");
+      }),
+    );
+
+    await import("./dev-supervisor.js");
+    await vi.waitFor(() => {
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("gateway startup requires operator action; automatic restart disabled"),
+      );
+    });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(process.exitCode).toBe(NON_RETRYABLE_STARTUP_EXIT_CODE);
+    expect(logSpy).not.toHaveBeenCalledWith(expect.stringContaining("scheduling restart"));
+
+    process.emit("SIGINT");
+    await new Promise((resolve) => setTimeout(resolve, 20));
   });
 });

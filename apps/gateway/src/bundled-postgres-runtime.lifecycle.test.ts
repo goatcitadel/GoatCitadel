@@ -67,6 +67,7 @@ vi.mock("./postgres-runtime-config.js", () => ({
 }));
 
 import { buildBundledDockerContainerName, ensureBundledPostgresRuntime } from "./bundled-postgres-runtime.js";
+import { NonRetryableStartupError } from "./startup-errors.js";
 
 const tempDirs: string[] = [];
 
@@ -93,7 +94,11 @@ beforeEach(() => {
     if (command === "docker" && args[0] === "inspect") {
       return JSON.stringify([
         {
+          State: { Running: true },
           Config: { Env: ["POSTGRES_HOST_AUTH_METHOD=scram-sha-256"] },
+          HostConfig: {
+            PortBindings: { "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "45432" }] },
+          },
           NetworkSettings: { Ports: { "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "45432" }] } },
         },
       ]);
@@ -241,8 +246,12 @@ describe("bundled postgres runtime lifecycle", () => {
       if (command === "docker" && args[0] === "inspect") {
         return JSON.stringify([
           {
+            State: { Running: false },
             Config: { Env: ["POSTGRES_HOST_AUTH_METHOD=scram-sha-256"] },
-            NetworkSettings: { Ports: { "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "45432" }] } },
+            HostConfig: {
+              PortBindings: { "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "45432" }] },
+            },
+            NetworkSettings: { Ports: {} },
           },
         ]);
       }
@@ -257,6 +266,41 @@ describe("bundled postgres runtime lifecycle", () => {
     expect(handle?.strategy).toBe("docker");
     expect(mocks.execFileSync).toHaveBeenCalledWith("docker", expect.arrayContaining(["start"]), expect.any(Object));
     await expect(handle?.stop()).resolves.toBeUndefined();
+  });
+
+  it("fails once with an operator repair command for an unsafe stopped container", async () => {
+    const rootDir = await makeTempDir();
+    const containerName = buildBundledDockerContainerName(rootDir);
+    mocks.dbScripts.push({ queryOne: new Error("ECONNREFUSED") });
+    mocks.dockerStates.push("exited");
+    mocks.execFileSync.mockImplementation((command: string, args: string[]) => {
+      if (command === "docker" && args[0] === "info") {
+        return "";
+      }
+      if (command === "docker" && args[0] === "ps") {
+        return args.includes("--all") ? (mocks.dockerStates.shift() ?? "") : "";
+      }
+      if (command === "docker" && args[0] === "inspect") {
+        return JSON.stringify([
+          {
+            State: { Running: false },
+            Config: { Env: ["POSTGRES_PASSWORD=secret"] },
+            HostConfig: {
+              PortBindings: { "5432/tcp": [{ HostIp: "0.0.0.0", HostPort: "45432" }] },
+            },
+            NetworkSettings: { Ports: {} },
+          },
+        ]);
+      }
+      return "";
+    });
+
+    const action = ensureBundledPostgresRuntime(buildConfig(rootDir));
+
+    await expect(action).rejects.toBeInstanceOf(NonRetryableStartupError);
+    await expect(action).rejects.toThrow(`Run: docker rm ${containerName}`);
+    await expect(action).rejects.toThrow("GoatCitadel will not remove or recreate an existing container automatically");
+    expect(mocks.execFileSync).not.toHaveBeenCalledWith("docker", expect.arrayContaining(["rm"]), expect.anything());
   });
 
   it("fails clearly when neither native binaries nor Docker are available", async () => {

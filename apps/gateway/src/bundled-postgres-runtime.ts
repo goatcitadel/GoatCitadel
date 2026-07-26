@@ -8,6 +8,7 @@ import { PostgresDatabaseClient } from "@goatcitadel/storage";
 import { isBootTrackerVerbose, setBootCheckpoint } from "./boot-tracker.js";
 import type { GatewayRuntimeConfig } from "./config.js";
 import { isBundledPostgresMode, resolveGatewayPostgresConnectionOptions } from "./postgres-runtime-config.js";
+import { NonRetryableStartupError } from "./startup-errors.js";
 
 export const POSTGRES_IMAGE = "postgres:16-alpine";
 const READY_POLL_MS = 500;
@@ -82,6 +83,11 @@ interface DockerPostgresSecurityInspection {
   loopbackOnly: boolean;
   trustAuth: boolean;
   details: string[];
+}
+
+interface DockerPortBinding {
+  hostIp: string;
+  hostPort: string;
 }
 
 export async function ensureBundledPostgresRuntime(
@@ -339,7 +345,7 @@ async function tryStartDockerBundledPostgres(
 
   const state = inspectDockerContainerState(containerName);
   if (state === "running") {
-    assertDockerBundledPostgresContainerIsHardened(containerName);
+    assertDockerBundledPostgresContainerIsHardened(containerName, config.assistant.database.bundledPostgres.port);
     return {
       strategy: "docker",
       // The container was already running before this process arrived, so
@@ -349,7 +355,7 @@ async function tryStartDockerBundledPostgres(
   }
 
   if (state === "stopped") {
-    assertDockerBundledPostgresContainerIsHardened(containerName);
+    assertDockerBundledPostgresContainerIsHardened(containerName, config.assistant.database.bundledPostgres.port);
     execFileSync("docker", ["start", containerName], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
@@ -649,17 +655,20 @@ function inspectDockerContainerState(containerName: string): "missing" | "runnin
   }
 }
 
-function assertDockerBundledPostgresContainerIsHardened(containerName: string): void {
-  const inspection = inspectDockerPostgresSecurity(containerName);
+function assertDockerBundledPostgresContainerIsHardened(containerName: string, expectedHostPort: number): void {
+  const inspection = inspectDockerPostgresSecurity(containerName, expectedHostPort);
   if (inspection.loopbackOnly && !inspection.trustAuth) {
     return;
   }
   const reason = inspection.details.length > 0 ? inspection.details.join("; ") : "unknown Docker inspect shape";
-  throw new Error(
+  throw new NonRetryableStartupError(
     [
       `Refusing to reuse bundled Postgres Docker container ${containerName}: ${reason}.`,
       "Legacy containers may expose unauthenticated Postgres beyond loopback.",
-      "Remove the old container and restart so GoatCitadel can recreate it with 127.0.0.1 publishing and password auth.",
+      `Run: docker rm ${containerName}`,
+      "Then restart GoatCitadel so it can recreate the container with 127.0.0.1 publishing and password configuration.",
+      "If the preserved data directory was initialized with trust authentication, harden or migrate its PostgreSQL authentication files before reusing it.",
+      "GoatCitadel will not remove or recreate an existing container automatically. The repair command does not delete bind-mounted database files.",
     ].join("\n"),
   );
 }
@@ -681,11 +690,14 @@ function assertReachableBundledDockerPostgresIsHardened(
     );
   }
   for (const name of names) {
-    assertDockerBundledPostgresContainerIsHardened(name);
+    assertDockerBundledPostgresContainerIsHardened(name, config.assistant.database.bundledPostgres.port);
   }
 }
 
-function inspectDockerPostgresSecurity(containerName: string): DockerPostgresSecurityInspection {
+function inspectDockerPostgresSecurity(
+  containerName: string,
+  expectedHostPort: number,
+): DockerPostgresSecurityInspection {
   let parsed: unknown;
   try {
     const output = execFileSync("docker", ["inspect", containerName], {
@@ -700,10 +712,13 @@ function inspectDockerPostgresSecurity(containerName: string): DockerPostgresSec
       details: ["could not inspect Docker container security settings"],
     };
   }
-  return parseDockerPostgresSecurityInspection(parsed);
+  return parseDockerPostgresSecurityInspection(parsed, expectedHostPort);
 }
 
-function parseDockerPostgresSecurityInspection(value: unknown): DockerPostgresSecurityInspection {
+function parseDockerPostgresSecurityInspection(
+  value: unknown,
+  expectedHostPort?: number,
+): DockerPostgresSecurityInspection {
   const container = Array.isArray(value) ? value[0] : value;
   const details: string[] = [];
   const env = readDockerInspectEnv(container);
@@ -711,23 +726,57 @@ function parseDockerPostgresSecurityInspection(value: unknown): DockerPostgresSe
   if (trustAuth) {
     details.push("POSTGRES_HOST_AUTH_METHOD=trust");
   }
-  const portBindings = readDockerInspectPortBindings(container);
-  if (portBindings.length === 0) {
-    details.push("missing 5432/tcp port binding");
+  const running = readDockerInspectRunningState(container);
+  const declaredBindings = readDockerInspectDeclaredPortBindings(container);
+  const effectiveBindings = readDockerInspectEffectivePortBindings(container);
+  if (declaredBindings.length === 0) {
+    details.push("missing declared 5432/tcp port binding");
   }
-  const unsafeBindings = portBindings.filter((binding) => !isLoopbackDockerHostIp(binding.hostIp));
-  if (unsafeBindings.length > 0) {
-    details.push(
-      `non-loopback publish ${unsafeBindings
-        .map((binding) => `${binding.hostIp || "0.0.0.0"}:${binding.hostPort || "*"}`)
-        .join(", ")}`,
-    );
+  const effectiveBindingRequired = running !== false;
+  if (effectiveBindingRequired && effectiveBindings.length === 0) {
+    details.push("missing effective 5432/tcp port binding");
   }
+  appendUnsafeDockerBindings(details, "declared", declaredBindings);
+  appendUnsafeDockerBindings(details, "effective", effectiveBindings);
+  const expectedHostPortText = expectedHostPort === undefined ? undefined : String(expectedHostPort);
+  const hasUnexpectedHostPort = [...declaredBindings, ...effectiveBindings].some(
+    (binding) => expectedHostPortText !== undefined && binding.hostPort !== expectedHostPortText,
+  );
+  if (hasUnexpectedHostPort) {
+    details.push(`5432/tcp publish does not use configured host port ${expectedHostPortText}`);
+  }
+  const hasConflictingBindings =
+    effectiveBindingRequired &&
+    declaredBindings.length > 0 &&
+    effectiveBindings.length > 0 &&
+    !dockerBindingSetsMatch(declaredBindings, effectiveBindings);
+  if (hasConflictingBindings) {
+    details.push("declared and effective 5432/tcp bindings conflict");
+  }
+  const hasUnsafeBinding = [...declaredBindings, ...effectiveBindings].some(
+    (binding) => !isLoopbackDockerHostIp(binding.hostIp),
+  );
   return {
-    loopbackOnly: portBindings.length > 0 && unsafeBindings.length === 0,
+    loopbackOnly:
+      declaredBindings.length > 0 &&
+      (!effectiveBindingRequired || effectiveBindings.length > 0) &&
+      !hasUnsafeBinding &&
+      !hasUnexpectedHostPort &&
+      !hasConflictingBindings,
     trustAuth,
     details,
   };
+}
+
+function dockerBindingSetsMatch(left: DockerPortBinding[], right: DockerPortBinding[]): boolean {
+  const normalize = (bindings: DockerPortBinding[]) =>
+    [...new Set(bindings.map((binding) => `${binding.hostIp.trim().toLowerCase()}:${binding.hostPort.trim()}`))].sort();
+  const normalizedLeft = normalize(left);
+  const normalizedRight = normalize(right);
+  return (
+    normalizedLeft.length === normalizedRight.length &&
+    normalizedLeft.every((binding, index) => binding === normalizedRight[index])
+  );
 }
 
 function readDockerInspectEnv(container: unknown): string[] {
@@ -742,7 +791,30 @@ function readDockerInspectEnv(container: unknown): string[] {
   return Array.isArray(env) ? env.filter((entry): entry is string => typeof entry === "string") : [];
 }
 
-function readDockerInspectPortBindings(container: unknown): Array<{ hostIp: string; hostPort: string }> {
+function readDockerInspectRunningState(container: unknown): boolean | undefined {
+  if (!container || typeof container !== "object") {
+    return undefined;
+  }
+  const state = (container as { State?: unknown }).State;
+  if (!state || typeof state !== "object") {
+    return undefined;
+  }
+  const running = (state as { Running?: unknown }).Running;
+  return typeof running === "boolean" ? running : undefined;
+}
+
+function readDockerInspectDeclaredPortBindings(container: unknown): DockerPortBinding[] {
+  if (!container || typeof container !== "object") {
+    return [];
+  }
+  const hostConfig = (container as { HostConfig?: unknown }).HostConfig;
+  if (!hostConfig || typeof hostConfig !== "object") {
+    return [];
+  }
+  return readDockerPortBindings((hostConfig as { PortBindings?: unknown }).PortBindings);
+}
+
+function readDockerInspectEffectivePortBindings(container: unknown): DockerPortBinding[] {
   if (!container || typeof container !== "object") {
     return [];
   }
@@ -750,7 +822,10 @@ function readDockerInspectPortBindings(container: unknown): Array<{ hostIp: stri
   if (!networkSettings || typeof networkSettings !== "object") {
     return [];
   }
-  const ports = (networkSettings as { Ports?: unknown }).Ports;
+  return readDockerPortBindings((networkSettings as { Ports?: unknown }).Ports);
+}
+
+function readDockerPortBindings(ports: unknown): DockerPortBinding[] {
   if (!ports || typeof ports !== "object") {
     return [];
   }
@@ -772,7 +847,23 @@ function readDockerInspectPortBindings(container: unknown): Array<{ hostIp: stri
             : "",
       };
     })
-    .filter((binding): binding is { hostIp: string; hostPort: string } => Boolean(binding));
+    .filter((binding): binding is DockerPortBinding => Boolean(binding));
+}
+
+function appendUnsafeDockerBindings(
+  details: string[],
+  source: "declared" | "effective",
+  bindings: DockerPortBinding[],
+): void {
+  const unsafeBindings = bindings.filter((binding) => !isLoopbackDockerHostIp(binding.hostIp));
+  if (unsafeBindings.length === 0) {
+    return;
+  }
+  details.push(
+    `non-loopback ${source} publish ${unsafeBindings
+      .map((binding) => `${binding.hostIp || "0.0.0.0"}:${binding.hostPort || "*"}`)
+      .join(", ")}`,
+  );
 }
 
 function isLoopbackDockerHostIp(hostIp: string): boolean {

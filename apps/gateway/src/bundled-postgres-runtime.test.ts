@@ -95,7 +95,13 @@ invalid
   it("accepts only loopback-published, non-trust Docker postgres containers", () => {
     const inspect = (hostIp: string, env: string[] = []) => [
       {
+        State: { Running: true },
         Config: { Env: env },
+        HostConfig: {
+          PortBindings: {
+            "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "45432" }],
+          },
+        },
         NetworkSettings: {
           Ports: {
             "5432/tcp": [{ HostIp: hostIp, HostPort: "45432" }],
@@ -112,7 +118,7 @@ invalid
     expect(__bundledPostgresRuntimeInternals.parseDockerPostgresSecurityInspection(inspect("0.0.0.0"))).toEqual({
       loopbackOnly: false,
       trustAuth: false,
-      details: ["non-loopback publish 0.0.0.0:45432"],
+      details: ["non-loopback effective publish 0.0.0.0:45432", "declared and effective 5432/tcp bindings conflict"],
     });
     expect(
       __bundledPostgresRuntimeInternals.parseDockerPostgresSecurityInspection(
@@ -122,6 +128,185 @@ invalid
       loopbackOnly: true,
       trustAuth: true,
       details: ["POSTGRES_HOST_AUTH_METHOD=trust"],
+    });
+  });
+
+  it("denies a running container without a declared binding", () => {
+    const inspection = __bundledPostgresRuntimeInternals.parseDockerPostgresSecurityInspection([
+      {
+        State: { Running: true },
+        Config: { Env: [] },
+        HostConfig: { PortBindings: {} },
+        NetworkSettings: {
+          Ports: {
+            "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "45432" }],
+          },
+        },
+      },
+    ]);
+
+    expect(inspection).toEqual({
+      loopbackOnly: false,
+      trustAuth: false,
+      details: ["missing declared 5432/tcp port binding"],
+    });
+  });
+
+  it("accepts a stopped container from its declared loopback binding", () => {
+    const inspection = __bundledPostgresRuntimeInternals.parseDockerPostgresSecurityInspection([
+      {
+        State: { Running: false },
+        Config: { Env: ["POSTGRES_PASSWORD=secret"] },
+        HostConfig: {
+          PortBindings: {
+            "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "45432" }],
+          },
+        },
+        NetworkSettings: { Ports: {} },
+      },
+    ]);
+
+    expect(inspection).toEqual({
+      loopbackOnly: true,
+      trustAuth: false,
+      details: [],
+    });
+  });
+
+  it("denies a stopped container whose declared mapping uses the wrong host port", () => {
+    const inspection = __bundledPostgresRuntimeInternals.parseDockerPostgresSecurityInspection(
+      [
+        {
+          State: { Running: false },
+          Config: { Env: [] },
+          HostConfig: {
+            PortBindings: {
+              "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "55432" }],
+            },
+          },
+          NetworkSettings: { Ports: {} },
+        },
+      ],
+      45432,
+    );
+
+    expect(inspection).toEqual({
+      loopbackOnly: false,
+      trustAuth: false,
+      details: ["5432/tcp publish does not use configured host port 45432"],
+    });
+  });
+
+  it("denies stopped containers without a safe declared binding", () => {
+    expect(
+      __bundledPostgresRuntimeInternals.parseDockerPostgresSecurityInspection([
+        {
+          State: { Running: false },
+          Config: { Env: [] },
+          HostConfig: { PortBindings: {} },
+          NetworkSettings: { Ports: {} },
+        },
+      ]),
+    ).toEqual({
+      loopbackOnly: false,
+      trustAuth: false,
+      details: ["missing declared 5432/tcp port binding"],
+    });
+
+    expect(
+      __bundledPostgresRuntimeInternals.parseDockerPostgresSecurityInspection([
+        {
+          State: { Running: false },
+          Config: { Env: [] },
+          HostConfig: {
+            PortBindings: {
+              "5432/tcp": [{ HostIp: "0.0.0.0", HostPort: "45432" }],
+            },
+          },
+          NetworkSettings: { Ports: {} },
+        },
+      ]),
+    ).toEqual({
+      loopbackOnly: false,
+      trustAuth: false,
+      details: ["non-loopback declared publish 0.0.0.0:45432"],
+    });
+  });
+
+  it("denies contradictory running-container declarations", () => {
+    const inspection = __bundledPostgresRuntimeInternals.parseDockerPostgresSecurityInspection([
+      {
+        State: { Running: true },
+        Config: { Env: [] },
+        HostConfig: {
+          PortBindings: {
+            "5432/tcp": [{ HostIp: "0.0.0.0", HostPort: "45432" }],
+          },
+        },
+        NetworkSettings: {
+          Ports: {
+            "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "45432" }],
+          },
+        },
+      },
+    ]);
+
+    expect(inspection).toEqual({
+      loopbackOnly: false,
+      trustAuth: false,
+      details: ["non-loopback declared publish 0.0.0.0:45432", "declared and effective 5432/tcp bindings conflict"],
+    });
+  });
+
+  it("denies conflicting loopback-only declared and effective mappings", () => {
+    const inspection = __bundledPostgresRuntimeInternals.parseDockerPostgresSecurityInspection(
+      [
+        {
+          State: { Running: true },
+          Config: { Env: [] },
+          HostConfig: {
+            PortBindings: {
+              "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "45432" }],
+            },
+          },
+          NetworkSettings: {
+            Ports: {
+              "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "55432" }],
+            },
+          },
+        },
+      ],
+      45432,
+    );
+
+    expect(inspection).toEqual({
+      loopbackOnly: false,
+      trustAuth: false,
+      details: [
+        "5432/tcp publish does not use configured host port 45432",
+        "declared and effective 5432/tcp bindings conflict",
+      ],
+    });
+  });
+
+  it("requires an effective binding while the container is running", () => {
+    const inspection = __bundledPostgresRuntimeInternals.parseDockerPostgresSecurityInspection([
+      {
+        State: { Running: true },
+        Config: { Env: [] },
+        HostConfig: {
+          PortBindings: {
+            "5432/tcp": [{ HostIp: "127.0.0.1", HostPort: "45432" }],
+          },
+        },
+        NetworkSettings: { Ports: {} },
+      },
+    ]);
+
+    expect(inspection).toEqual({
+      loopbackOnly: false,
+      trustAuth: false,
+      details: ["missing effective 5432/tcp port binding"],
     });
   });
 });

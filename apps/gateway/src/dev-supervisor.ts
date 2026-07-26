@@ -33,6 +33,7 @@ import {
   resolveWarnUnauthNonLoopback,
   shouldWarnUnauthNonLoopbackBind,
 } from "./startup-guard.js";
+import { NON_RETRYABLE_STARTUP_EXIT_CODE } from "./startup-errors.js";
 
 loadLocalEnvFile();
 
@@ -97,6 +98,7 @@ const watchRoots = [
 let child: ChildProcess | null = null;
 let shuttingDown = false;
 let restarting = false;
+let terminalStartupFailure = false;
 let polling = false;
 let lastSignature = "";
 let lastSuccessfulReferenceBuildSignature: string | undefined =
@@ -160,7 +162,7 @@ async function main(): Promise<void> {
 }
 
 async function pollForChanges(): Promise<void> {
-  if (polling || restarting || shuttingDown) {
+  if (polling || restarting || shuttingDown || terminalStartupFailure) {
     return;
   }
   polling = true;
@@ -176,7 +178,7 @@ async function pollForChanges(): Promise<void> {
 }
 
 function scheduleSourceChangeRestart(): void {
-  if (shuttingDown) {
+  if (shuttingDown || terminalStartupFailure) {
     return;
   }
   if (sourceChangeRestartTimer) {
@@ -189,7 +191,7 @@ function scheduleSourceChangeRestart(): void {
 }
 
 async function restartGateway(reason: string): Promise<void> {
-  if (restarting || shuttingDown) {
+  if (restarting || shuttingDown || terminalStartupFailure) {
     return;
   }
   const now = Date.now();
@@ -258,12 +260,13 @@ async function startChild(): Promise<void> {
   });
 
   let startupExitInfo: ChildExitInfo | undefined;
+  let startupPending = true;
   child.on("exit", (code, signal) => {
     startupExitInfo = { code, signal };
     if (child?.pid === currentPid) {
       child = null;
     }
-    if (shuttingDown || restarting) {
+    if (shuttingDown || restarting || startupPending) {
       return;
     }
     log.warn("gateway exited", {
@@ -271,10 +274,7 @@ async function startChild(): Promise<void> {
       code: code ?? "null",
       signal: signal ?? "null",
     });
-    const delay = registerFailureAndGetDelay("process_exit");
-    if (delay !== null) {
-      scheduleRestartAfter(delay, "process exit");
-    }
+    handleUnexpectedGatewayExit(startupExitInfo, "process_exit", "process exit");
   });
 
   const healthStartedAt = Date.now();
@@ -288,6 +288,7 @@ async function startChild(): Promise<void> {
     shouldStop: () => startupExitInfo !== undefined,
   });
   const healthElapsedMs = Date.now() - healthStartedAt;
+  startupPending = false;
   if (healthResult === "healthy") {
     resetFailureBudget();
     log.success(`gateway online in ${Date.now() - startupStartedAt}ms`, {
@@ -307,10 +308,7 @@ async function startChild(): Promise<void> {
       startupElapsedMs: Date.now() - startupStartedAt,
       reason: "process_exit_before_health",
     });
-    const delay = registerFailureAndGetDelay("process_exit_before_health");
-    if (delay !== null) {
-      scheduleRestartAfter(delay, "process exit before health");
-    }
+    handleUnexpectedGatewayExit(startupExitInfo, "process_exit_before_health", "process exit before health");
     return;
   }
 
@@ -324,6 +322,30 @@ async function startChild(): Promise<void> {
   const delay = registerFailureAndGetDelay("health_timeout");
   if (delay !== null) {
     scheduleRestartAfter(delay, "health timeout");
+  }
+}
+
+function handleUnexpectedGatewayExit(
+  exitInfo: ChildExitInfo | undefined,
+  failureReason: string,
+  restartReason: string,
+): void {
+  if (exitInfo?.code === NON_RETRYABLE_STARTUP_EXIT_CODE) {
+    terminalStartupFailure = true;
+    clearRestartTimer();
+    clearSourceChangeRestartTimer();
+    log.error("gateway startup requires operator action; automatic restart disabled", {
+      code: NON_RETRYABLE_STARTUP_EXIT_CODE,
+      signal: exitInfo.signal ?? "null",
+      reason: failureReason,
+      advice: "Correct the startup configuration reported above, then run pnpm dev again.",
+    });
+    process.exitCode = NON_RETRYABLE_STARTUP_EXIT_CODE;
+    return;
+  }
+  const delay = registerFailureAndGetDelay(failureReason);
+  if (delay !== null) {
+    scheduleRestartAfter(delay, restartReason);
   }
 }
 
@@ -453,7 +475,11 @@ async function waitForGatewayHealth(
     if (options.shouldStop?.()) {
       return "stopped";
     }
-    if (await isGatewayHealthy()) {
+    const healthy = await isGatewayHealthy();
+    if (options.shouldStop?.()) {
+      return "stopped";
+    }
+    if (healthy) {
       return "healthy";
     }
     if (options.shouldStop?.()) {
@@ -474,7 +500,7 @@ async function waitForGatewayHealth(
     }
     await sleep(300);
   }
-  return "timeout";
+  return options.shouldStop?.() ? "stopped" : "timeout";
 }
 
 async function waitForPortClosed(timeoutMs: number): Promise<boolean> {
@@ -609,7 +635,7 @@ function registerFailureAndGetDelay(reason: string): number | null {
 }
 
 function scheduleRestartAfter(delayMs: number, reason: string): void {
-  if (shuttingDown || restartTimer) {
+  if (shuttingDown || terminalStartupFailure || restartTimer) {
     return;
   }
   const delay = Math.max(100, delayMs);

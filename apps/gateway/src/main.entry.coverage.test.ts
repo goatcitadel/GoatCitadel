@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { NON_RETRYABLE_STARTUP_EXIT_CODE, NonRetryableStartupError } from "./startup-errors.js";
 
 const buildAppMock = vi.fn();
 const shouldWarnMock = vi.fn();
@@ -77,6 +78,31 @@ describe("gateway main entrypoint coverage", () => {
   afterEach(() => {
     process.exitCode = undefined;
     vi.restoreAllMocks();
+  });
+
+  it("exits once with the non-retryable code when app construction needs operator action", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    buildAppMock.mockRejectedValue(new NonRetryableStartupError("repair the managed Postgres container"));
+
+    await import("./main.js");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(process.exitCode).toBe(NON_RETRYABLE_STARTUP_EXIT_CODE);
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.objectContaining({ startupFailureKind: "non_retryable_configuration" }),
+    );
+    expect(performShutdownMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps ordinary app-construction failures retryable", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    buildAppMock.mockRejectedValue(new Error("temporary app construction failure"));
+
+    await import("./main.js");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(process.exitCode).toBe(1);
+    expect(performShutdownMock).not.toHaveBeenCalled();
   });
 
   it("starts listening when bind is safe", async () => {
@@ -233,6 +259,41 @@ describe("gateway main entrypoint coverage", () => {
     expect(errorMock).toHaveBeenCalled();
     expect(remoteWorkerStartMock).toHaveBeenCalledTimes(1);
     expect(process.exitCode).toBe(1);
+    expect(performShutdownMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves cleanup while classifying a post-build operator-action failure", async () => {
+    const listenMock = vi.fn().mockRejectedValue(new NonRetryableStartupError("repair listener configuration"));
+    const errorMock = vi.fn();
+    buildAppMock.mockResolvedValue({
+      gatewayConfig: {
+        assistant: {
+          auth: { mode: "token" },
+        },
+      },
+      listen: listenMock,
+      close: vi.fn().mockResolvedValue(undefined),
+      log: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: errorMock,
+      },
+      services: {
+        a2a: {},
+      },
+      sharedHostLifecycle: createSharedHostLifecycleMock(),
+    });
+    shouldWarnMock.mockReturnValue(false);
+    resolveWarnMock.mockReturnValue(true);
+    resolveAllowMock.mockReturnValue(false);
+
+    await import("./main.js");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(process.exitCode).toBe(NON_RETRYABLE_STARTUP_EXIT_CODE);
+    expect(errorMock).toHaveBeenCalledWith(
+      expect.objectContaining({ startupFailureKind: "non_retryable_configuration" }),
+    );
     expect(performShutdownMock).toHaveBeenCalledTimes(1);
   });
 });

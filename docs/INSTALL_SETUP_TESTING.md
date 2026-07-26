@@ -560,6 +560,20 @@ $pid = Get-NetTCPConnection -LocalPort 8787 -State Listen -ErrorAction SilentlyC
 if ($pid) { Stop-Process -Id $pid -Force }
 ```
 
+### Dev startup stops after inspecting bundled Postgres
+
+GoatCitadel automatically restarts a stopped bundled-Postgres container only when Docker still declares a loopback-only `5432/tcp` mapping and the container does not request trust authentication. A running container must also have an effective loopback-only mapping. Conflicting, missing, wildcard, or non-loopback mappings fail closed.
+
+An unsafe legacy container is a non-retryable startup configuration error. The Gateway exits with code `78`, and the dev supervisor prints the diagnostic once instead of entering a restart loop. The diagnostic includes the exact container name and a command like:
+
+```bash
+docker rm goatcitadel-postgres-<host>-<runtime-hash>
+```
+
+Before running that command, inspect the named container and back up the associated database directory if needed. `docker rm` removes the stopped container record; it does not delete GoatCitadel's bind-mounted database files. If the database directory itself was initialized with trust authentication, harden or migrate that directory before reusing it because removing only the container does not rewrite PostgreSQL authentication files.
+
+GoatCitadel never removes or recreates an existing bundled-Postgres container automatically. After completing the manual repair, restart `pnpm dev`.
+
 ### Provider configured but chat still fails
 
 1. Verify the base URL is OpenAI-compatible.

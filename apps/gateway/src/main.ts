@@ -21,6 +21,7 @@ import {
   type RemoteWorkerNativeRuntimeService,
 } from "./services/remote-worker-native-runtime-service.js";
 import { SharedHostAdmissionClosedError } from "./services/shared-host-lifecycle-service.js";
+import { resolveGatewayStartupExitCode } from "./startup-errors.js";
 
 setBootCheckpoint("main.ts:body-start");
 const startupPhases = getStartupPhaseRecorder();
@@ -31,152 +32,160 @@ const allowUnauthNetwork = resolveAllowUnauthNetwork();
 
 setGoatcitadelTerminalTitle(env.GOATCITADEL_TERMINAL_TASK?.trim() || "Gateway");
 
-setBootCheckpoint("main.ts:buildApp-starting");
-const buildAppPhase = startupPhases.open("build_app", { owner: "gateway.main" });
-const app = await buildApp().then(
-  (builtApp) => {
-    buildAppPhase.close();
-    return builtApp;
-  },
-  (error: unknown) => {
-    buildAppPhase.fail(formatStartupPhaseError(error));
-    throw error;
-  },
-);
-setBootCheckpoint("main.ts:buildApp-returned");
+type GatewayApp = Awaited<ReturnType<typeof buildApp>>;
+
+let app!: GatewayApp;
 let shuttingDown = false;
 let a2aGrpcServer: A2AGrpcServerHandle | undefined;
 let remoteWorkerNativeRuntime: RemoteWorkerNativeRuntimeService | undefined;
 
-process.on("warning", (warning) => {
-  app.log.warn(
-    {
-      warningName: warning.name,
-      code: "code" in warning ? (warning as Error & { code?: string }).code : undefined,
-      detail: warning.message,
-      stack: warning.stack,
-    },
-    `node warning: ${warning.name}`,
-  );
-});
+await runGateway();
 
-const shutdown = async (signal: string) => {
-  if (shuttingDown) {
+async function runGateway(): Promise<void> {
+  setBootCheckpoint("main.ts:buildApp-starting");
+  const buildAppPhase = startupPhases.open("build_app", { owner: "gateway.main" });
+  try {
+    app = await buildApp();
+    buildAppPhase.close();
+  } catch (error) {
+    buildAppPhase.fail(formatStartupPhaseError(error));
+    console.error(error);
+    process.exitCode = resolveGatewayStartupExitCode(error);
+    endBootTracking();
     return;
   }
-  shuttingDown = true;
-  try {
-    const result = await performShutdown(app, signal, undefined, {
-      stopListeners: stopNetworkListeners,
-      onForceExitArmed: () => {
-        console.error("[gateway] graceful shutdown timed out after 10 s — forcing exit");
-        process.exit(1);
+  setBootCheckpoint("main.ts:buildApp-returned");
+
+  process.on("warning", (warning) => {
+    app.log.warn(
+      {
+        warningName: warning.name,
+        code: "code" in warning ? (warning as Error & { code?: string }).code : undefined,
+        detail: warning.message,
+        stack: warning.stack,
       },
-    });
-    if (result.reached !== "force-exit-armed") {
-      process.exitCode = 0;
-    }
-  } catch (error) {
-    app.log.error(error, "gateway shutdown failed");
-    process.exitCode = 1;
-  }
-};
-
-process.on("SIGINT", () => {
-  void shutdown("SIGINT");
-});
-
-process.on("SIGTERM", () => {
-  void shutdown("SIGTERM");
-});
-
-try {
-  const unsafeBind = shouldWarnUnauthNonLoopbackBind(host, app.gatewayConfig.assistant.auth);
-  if (unsafeBind) {
-    if (!allowUnauthNetwork) {
-      app.log.error(
-        {
-          host,
-          authMode: app.gatewayConfig.assistant.auth.mode,
-          overrideEnv: `${INSECURE_LOCAL_ONLY_OVERRIDE_ENV}=true`,
-        },
-        "Refusing to bind gateway to non-loopback host without configured auth.",
-      );
-      throw new Error(
-        `Unsafe gateway bind blocked: non-loopback host requires auth. Set GOATCITADEL_AUTH_MODE and credentials or ${INSECURE_LOCAL_ONLY_OVERRIDE_ENV}=true to override intentionally.`,
-      );
-    }
-    if (warnUnauthNonLoopback) {
-      app.log.warn(
-        {
-          host,
-          authMode: app.gatewayConfig.assistant.auth.mode,
-        },
-        "Binding gateway to non-loopback host without configured auth. Set GOATCITADEL_AUTH_TOKEN or GOATCITADEL_AUTH_MODE=basic for safer remote access.",
-      );
-    }
-  }
-  const remoteWorkerPhase = startupPhases.open("remote_worker_native", { owner: "gateway.main" });
-  try {
-    remoteWorkerNativeRuntime = createRemoteWorkerNativeRuntimeService({
-      sharedHostLifecycle: app.sharedHostLifecycle,
-    });
-    const remoteWorkerSnapshot = await remoteWorkerNativeRuntime.start();
-    remoteWorkerPhase.close(
-      remoteWorkerSnapshot.state === "listening_dark"
-        ? `listening_dark:${remoteWorkerSnapshot.address ?? "bound"}`
-        : remoteWorkerSnapshot.state,
+      `node warning: ${warning.name}`,
     );
-  } catch (error) {
-    remoteWorkerPhase.fail(formatStartupPhaseError(error));
-    throw error;
-  }
-  setBootCheckpoint("main.ts:listen-starting");
-  const listenPhase = startupPhases.open("listen", { owner: "gateway.main" });
-  const listenerAdmission = app.sharedHostLifecycle.tryReserve("worker", "gateway:http-listener-startup");
-  if (!listenerAdmission.admitted) {
-    throw new SharedHostAdmissionClosedError(listenerAdmission.state, listenerAdmission.reason);
-  }
-  try {
-    await app.listen({ port, host });
-    if (listenerAdmission.reservation.signal.aborted) {
-      throw new Error("HTTP listener startup was interrupted by shared-host drain.");
+  });
+
+  const shutdown = async (signal: string) => {
+    if (shuttingDown) {
+      return;
     }
-    listenPhase.close(`http://${host}:${port}`);
-  } catch (error) {
-    listenPhase.fail(formatStartupPhaseError(error));
-    throw error;
-  } finally {
-    listenerAdmission.reservation.release();
-  }
-  app.log.info(`gateway listening on http://${host}:${port}`);
-  const a2aGrpcPhase = startupPhases.open("a2a_grpc", { owner: "gateway.main" });
-  try {
-    a2aGrpcServer = await startA2AGrpcServer({
-      config: app.gatewayConfig,
-      a2a: app.services.a2a,
-      sharedHostLifecycle: app.sharedHostLifecycle,
-      logger: app.log,
-    });
-    a2aGrpcPhase.close(a2aGrpcServer.enabled ? "enabled" : "disabled");
-  } catch (error) {
-    a2aGrpcPhase.fail(formatStartupPhaseError(error));
-    throw error;
-  }
-  startupPhases.markReady();
-  endBootTracking();
-} catch (error) {
-  app.log.error(error);
-  process.exitCode = 1;
-  try {
-    if (!shuttingDown) {
-      shuttingDown = true;
-      await performShutdown(app, "STARTUP_FAILURE", undefined, { stopListeners: stopNetworkListeners });
+    shuttingDown = true;
+    try {
+      const result = await performShutdown(app, signal, undefined, {
+        stopListeners: stopNetworkListeners,
+        onForceExitArmed: () => {
+          console.error("[gateway] graceful shutdown timed out after 10 s — forcing exit");
+          process.exit(1);
+        },
+      });
+      if (result.reached !== "force-exit-armed") {
+        process.exitCode = 0;
+      }
+    } catch (error) {
+      app.log.error(error, "gateway shutdown failed");
+      process.exitCode = 1;
     }
-  } catch (cleanupError) {
-    app.log.error(cleanupError, "gateway startup-failure cleanup failed");
-  } finally {
+  };
+
+  process.on("SIGINT", () => {
+    void shutdown("SIGINT");
+  });
+
+  process.on("SIGTERM", () => {
+    void shutdown("SIGTERM");
+  });
+
+  try {
+    const unsafeBind = shouldWarnUnauthNonLoopbackBind(host, app.gatewayConfig.assistant.auth);
+    if (unsafeBind) {
+      if (!allowUnauthNetwork) {
+        app.log.error(
+          {
+            host,
+            authMode: app.gatewayConfig.assistant.auth.mode,
+            overrideEnv: `${INSECURE_LOCAL_ONLY_OVERRIDE_ENV}=true`,
+          },
+          "Refusing to bind gateway to non-loopback host without configured auth.",
+        );
+        throw new Error(
+          `Unsafe gateway bind blocked: non-loopback host requires auth. Set GOATCITADEL_AUTH_MODE and credentials or ${INSECURE_LOCAL_ONLY_OVERRIDE_ENV}=true to override intentionally.`,
+        );
+      }
+      if (warnUnauthNonLoopback) {
+        app.log.warn(
+          {
+            host,
+            authMode: app.gatewayConfig.assistant.auth.mode,
+          },
+          "Binding gateway to non-loopback host without configured auth. Set GOATCITADEL_AUTH_TOKEN or GOATCITADEL_AUTH_MODE=basic for safer remote access.",
+        );
+      }
+    }
+    const remoteWorkerPhase = startupPhases.open("remote_worker_native", { owner: "gateway.main" });
+    try {
+      remoteWorkerNativeRuntime = createRemoteWorkerNativeRuntimeService({
+        sharedHostLifecycle: app.sharedHostLifecycle,
+      });
+      const remoteWorkerSnapshot = await remoteWorkerNativeRuntime.start();
+      remoteWorkerPhase.close(
+        remoteWorkerSnapshot.state === "listening_dark"
+          ? `listening_dark:${remoteWorkerSnapshot.address ?? "bound"}`
+          : remoteWorkerSnapshot.state,
+      );
+    } catch (error) {
+      remoteWorkerPhase.fail(formatStartupPhaseError(error));
+      throw error;
+    }
+    setBootCheckpoint("main.ts:listen-starting");
+    const listenPhase = startupPhases.open("listen", { owner: "gateway.main" });
+    const listenerAdmission = app.sharedHostLifecycle.tryReserve("worker", "gateway:http-listener-startup");
+    if (!listenerAdmission.admitted) {
+      throw new SharedHostAdmissionClosedError(listenerAdmission.state, listenerAdmission.reason);
+    }
+    try {
+      await app.listen({ port, host });
+      if (listenerAdmission.reservation.signal.aborted) {
+        throw new Error("HTTP listener startup was interrupted by shared-host drain.");
+      }
+      listenPhase.close(`http://${host}:${port}`);
+    } catch (error) {
+      listenPhase.fail(formatStartupPhaseError(error));
+      throw error;
+    } finally {
+      listenerAdmission.reservation.release();
+    }
+    app.log.info(`gateway listening on http://${host}:${port}`);
+    const a2aGrpcPhase = startupPhases.open("a2a_grpc", { owner: "gateway.main" });
+    try {
+      a2aGrpcServer = await startA2AGrpcServer({
+        config: app.gatewayConfig,
+        a2a: app.services.a2a,
+        sharedHostLifecycle: app.sharedHostLifecycle,
+        logger: app.log,
+      });
+      a2aGrpcPhase.close(a2aGrpcServer.enabled ? "enabled" : "disabled");
+    } catch (error) {
+      a2aGrpcPhase.fail(formatStartupPhaseError(error));
+      throw error;
+    }
+    startupPhases.markReady();
     endBootTracking();
+  } catch (error) {
+    app.log.error(error);
+    process.exitCode = resolveGatewayStartupExitCode(error);
+    try {
+      if (!shuttingDown) {
+        shuttingDown = true;
+        await performShutdown(app, "STARTUP_FAILURE", undefined, { stopListeners: stopNetworkListeners });
+      }
+    } catch (cleanupError) {
+      app.log.error(cleanupError, "gateway startup-failure cleanup failed");
+    } finally {
+      endBootTracking();
+    }
   }
 }
 

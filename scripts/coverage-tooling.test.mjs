@@ -922,10 +922,11 @@ describe("coverage tooling", () => {
       "utf8",
     );
     const gate = workflow.match(/\n  gate:\n[\s\S]*$/)?.[0] ?? "";
+    const dependencies = ["checks", "tests", "postgres", "bundled-postgres-restart"];
     assert.match(gate, /\n    name: fast\n/);
     assert.match(gate, /\n    if: \$\{\{ always\(\) \}\}\n/);
-    assert.match(gate, /\n    needs: \[checks, tests, postgres\]\n/);
-    for (const dependency of ["checks", "tests", "postgres"]) {
+    assert.match(gate, new RegExp(`\\n    needs: \\[${dependencies.join(", ")}\\]\\n`));
+    for (const dependency of dependencies) {
       assert.match(gate, new RegExp(`\\$\\{\\{ needs\\.${dependency}\\.result \\}\\}`));
     }
     assert.match(gate, /- name: Enforce upstream job results[\s\S]*exit 1/);
