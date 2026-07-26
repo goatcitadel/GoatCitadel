@@ -2,9 +2,11 @@ import fp from "fastify-plugin";
 import path from "node:path";
 import { setBootCheckpoint } from "../boot-tracker.js";
 import { ensureBundledPostgresRuntime } from "../bundled-postgres-runtime.js";
+import { BundledPostgresRecoverySupervisor } from "../bundled-postgres-recovery-supervisor.js";
 import { repoHasConfigMarker } from "../config-files.js";
 import { loadGatewayConfig } from "../config.js";
 import { getStartupPhaseRecorder } from "../diagnostics/startup-phases.js";
+import { isBundledPostgresMode } from "../postgres-runtime-config.js";
 import {
   createGatewayRuntime,
   type GatewayAuthValidationPort,
@@ -48,6 +50,17 @@ export const gatewayPlugin = fp(async (fastify) => {
   setBootCheckpoint("storage-plugin:postgres-ready");
   const shouldStopBundledPostgres = shouldStopBundledPostgresOnClose();
   const gateway = createGatewayRuntime(config, { sharedHostLifecycle: fastify.sharedHostLifecycle });
+  let recoveredBundledPostgres: Awaited<ReturnType<typeof ensureBundledPostgresRuntime>>;
+  const bundledPostgresRecovery =
+    isBundledPostgresMode(config) && config.assistant.database.bundledPostgres.autoStart
+      ? new BundledPostgresRecoverySupervisor({
+          getHealth: () => gateway.routeServices.health.getDatabaseHealthSnapshot(),
+          recover: async () => {
+            recoveredBundledPostgres = await ensureBundledPostgresRuntime(config);
+          },
+          logger: fastify.log,
+        })
+      : undefined;
   gateway.attachDevDiagnosticsLogger(fastify.log);
   fastify.decorate("gatewayRuntime", gateway);
   fastify.decorate("gatewayAuth", gateway);
@@ -65,6 +78,7 @@ export const gatewayPlugin = fp(async (fastify) => {
 
   // codeql[js/missing-rate-limiting] Startup initialization is not an HTTP route handler.
   fastify.addHook("onReady", async () => {
+    bundledPostgresRecovery?.start();
     const admission = fastify.sharedHostLifecycle.tryReserve("worker", "gateway:deferred-init");
     if (!admission.admitted) {
       fastify.log.warn(
@@ -105,9 +119,11 @@ export const gatewayPlugin = fp(async (fastify) => {
   });
 
   fastify.addHook("onClose", async () => {
+    await bundledPostgresRecovery?.stop();
     await gateway.close();
     if (shouldStopBundledPostgres) {
       await bundledPostgres?.stop();
+      await recoveredBundledPostgres?.stop();
     }
   });
 });
