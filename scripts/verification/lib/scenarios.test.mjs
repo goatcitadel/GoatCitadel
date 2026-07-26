@@ -253,7 +253,9 @@ test("fast verification lane keeps required fast commands", () => {
   }
 
   for (const expectedId of [
-    "fast.test.gateway",
+    "fast.test.gateway.shard1",
+    "fast.test.gateway.shard4",
+    "fast.test.gateway.node",
     "fast.test.storage",
     "fast.test.mission-control-next",
     "fast.test.policy-engine",
@@ -265,9 +267,31 @@ test("fast verification lane keeps required fast commands", () => {
   assert.equal(commandArgs.has("-r --workspace-concurrency=1 test"), false);
 });
 
+test("gateway shards cover the suite exactly once and report to their own directories", () => {
+  const shards = FAST_LANE_COMMANDS.filter((command) => /^fast\.test\.gateway\.shard\d+$/.test(command.id));
+  assert.equal(shards.length, 4);
+
+  const seen = new Set();
+  for (const [index, shard] of shards.entries()) {
+    const position = index + 1;
+    assert.equal(shard.id, `fast.test.gateway.shard${position}`);
+    assert.ok(shard.args.includes(`--shard=${position}/${shards.length}`), `${shard.id} must claim its own slice`);
+    assert.ok(
+      shard.args.includes(`--coverage.reportsDirectory=coverage-shard-${position}`),
+      `${shard.id} must write its own coverage directory or the shards overwrite each other`,
+    );
+    // Trailing args only reach vitest when the script ends in a single vitest call.
+    assert.ok(shard.args.includes("test:coverage:vitest"));
+    // pnpm forwards a `--` separator literally, and vitest then treats the shard
+    // flag as a positional filter and runs the whole suite in every shard.
+    assert.equal(shard.args.includes("--"), false, `${shard.id} must not use a -- separator`);
+    seen.add(shard.args.join(" "));
+  }
+  assert.equal(seen.size, shards.length, "every shard must run a distinct command");
+});
+
 test("fast verification split tests preserve recursive package coverage", () => {
   const commandById = new Map(FAST_LANE_COMMANDS.map((command) => [command.id, command]));
-  assert.deepEqual(commandById.get("fast.test.gateway")?.args, ["--filter", "@goatcitadel/gateway", "test:coverage"]);
   assert.deepEqual(commandById.get("fast.test.storage")?.args, ["--filter", "@goatcitadel/storage", "test:coverage"]);
   assert.deepEqual(commandById.get("fast.test.mission-control-next")?.args, [
     "--filter",
@@ -297,18 +321,26 @@ test("fast verification split tests preserve recursive package coverage", () => 
   }
   assert.ok(libraryArgs.includes("--workspace-concurrency=2"));
 
-  assert.equal(commandById.get("fast.test.gateway")?.env?.GOATCITADEL_SKIP_EXTENSIONS_SDK_PREBUILD, "1");
+  assert.equal(commandById.get("fast.test.gateway.shard1")?.env?.GOATCITADEL_SKIP_EXTENSIONS_SDK_PREBUILD, "1");
   assert.deepEqual(commandById.get("fast.smoke")?.args, ["smoke", "--", "--profile", "fast"]);
   assert.equal(commandById.get("fast.smoke")?.env?.GOATCITADEL_SKIP_EXTENSIONS_SDK_PREBUILD, "1");
 });
 
 test("fast verification test commands instrument coverage so the gate can reuse this run", () => {
+  // The two node-runner files vitest excludes contribute no coverage today, and
+  // running them under c8 would mix a dense line map into vitest's v8 map for the
+  // same sources. They stay uninstrumented on purpose.
+  const uninstrumented = new Set(["fast.test.gateway.node"]);
   const testCommands = FAST_LANE_COMMANDS.filter((command) => command.id.startsWith("fast.test."));
-  assert.equal(testCommands.length, 5);
+  assert.equal(testCommands.length, 9);
+
   for (const command of testCommands) {
+    if (uninstrumented.has(command.id)) {
+      continue;
+    }
     assert.ok(
-      command.args.includes("test:coverage"),
-      `${command.id} must run test:coverage so pnpm coverage:collect --skip-run can aggregate this run`,
+      command.args.some((arg) => arg === "test:coverage" || arg === "test:coverage:vitest"),
+      `${command.id} must run a coverage script so pnpm coverage:collect --skip-run can aggregate this run`,
     );
     assert.equal(
       command.args.includes("test"),
@@ -335,7 +367,13 @@ test("fast verification stage plan isolates policy and schedules every command e
     {
       id: "fast.test.gateway",
       mode: "serial",
-      commands: ["fast.test.gateway"],
+      commands: [
+        "fast.test.gateway.shard1",
+        "fast.test.gateway.shard2",
+        "fast.test.gateway.shard3",
+        "fast.test.gateway.shard4",
+        "fast.test.gateway.node",
+      ],
     },
     {
       id: "fast.test.storage",

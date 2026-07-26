@@ -41,7 +41,7 @@ describe("fast lane command selection", () => {
   });
 
   it("covers every command exactly once when the shards are unioned", () => {
-    const shards = ["fast.test.gateway", "fast.test.storage"];
+    const shards = ["fast.test.gateway.shard1", "fast.test.storage"];
     const rest = allCommandIds.filter((id) => !shards.includes(id));
     const scheduled = [
       ...selectFastLaneStages(FAST_LANE_STAGES, resolveFastLaneSelection(shards.join(","))),
@@ -55,11 +55,11 @@ describe("fast lane manifest merge", () => {
   it("recomposes partial manifests into one run", () => {
     withTempDir((tempDir) => {
       const outDir = path.join(tempDir, "merged");
-      writePart(tempDir, "part-a", ["fast.test.gateway"], "2026-07-25T10:00:00.000Z");
+      writePart(tempDir, "part-a", ["fast.test.gateway.shard1"], "2026-07-25T10:00:00.000Z");
       writePart(
         tempDir,
         "part-b",
-        allCommandIds.filter((id) => id !== "fast.test.gateway"),
+        allCommandIds.filter((id) => id !== "fast.test.gateway.shard1"),
         "2026-07-25T10:00:30.000Z",
       );
 
@@ -124,7 +124,7 @@ describe("fast lane manifest merge", () => {
 
   it("fails closed when a shard never reported its commands", () => {
     withTempDir((tempDir) => {
-      writePart(tempDir, "part-a", ["fast.test.gateway"], "2026-07-25T10:00:00.000Z");
+      writePart(tempDir, "part-a", ["fast.test.gateway.shard1"], "2026-07-25T10:00:00.000Z");
 
       const result = runMerge([tempDir, `--out=${path.join(tempDir, "merged")}`]);
       assert.notEqual(result.status, 0, `${result.stderr}\n${result.stdout}`);
@@ -147,11 +147,11 @@ describe("fast lane manifest merge", () => {
   it("propagates a failed scenario into the merged status", () => {
     withTempDir((tempDir) => {
       const outDir = path.join(tempDir, "merged");
-      writePart(tempDir, "part-a", ["fast.test.gateway"], "2026-07-25T10:00:00.000Z", { status: "failed" });
+      writePart(tempDir, "part-a", ["fast.test.gateway.shard1"], "2026-07-25T10:00:00.000Z", { status: "failed" });
       writePart(
         tempDir,
         "part-b",
-        allCommandIds.filter((id) => id !== "fast.test.gateway"),
+        allCommandIds.filter((id) => id !== "fast.test.gateway.shard1"),
         "2026-07-25T10:00:30.000Z",
       );
 

@@ -85,8 +85,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - slice: gateway
-            commands: fast.test.gateway
+          # The gateway suite is 860 files and was the lane's longest scenario.
+          # vitest --shard splits it; each shard writes its own coverage directory
+          # and the gate merges them. The two node-runner files ride with shard 4.
+          - slice: gateway-1
+            commands: fast.test.gateway.shard1
+          - slice: gateway-2
+            commands: fast.test.gateway.shard2
+          - slice: gateway-3
+            commands: fast.test.gateway.shard3
+          - slice: gateway-4
+            commands: fast.test.gateway.shard4,fast.test.gateway.node
           - slice: storage
             commands: fast.test.storage
           - slice: ui
