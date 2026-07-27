@@ -117,6 +117,7 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
                       VISUAL_ROUTE_READY_TIMEOUT_MS,
                     );
                     await assertNextVisualScenarioChrome(page, route);
+                    await prepareVisualScenarioState(page, route);
                   } catch (readyError) {
                     const readyFailure = await captureRouteReadyFailure(context, {
                       page,
@@ -231,6 +232,17 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
   }
 }
 
+export async function prepareVisualScenarioState(page, route) {
+  if (route?.visualState !== "composer-palette") {
+    return;
+  }
+  await page.keyboard.press("Control+K");
+  await page.locator(".mc-next-command-popover.palette-sheet").waitFor({ state: "visible", timeout: 15000 });
+  await page
+    .getByRole("searchbox", { name: "Search commands and context" })
+    .waitFor({ state: "visible", timeout: 15000 });
+}
+
 export async function assertMobileVisualGeometry(page, route, variant) {
   if (!variant?.viewport || variant.viewport.width > 840) {
     return;
@@ -291,7 +303,9 @@ export async function assertMobileVisualGeometry(page, route, variant) {
   }
   for (const target of geometry.targets) {
     if (target.missing) {
-      throw new Error(`${route.slug} ${variant.slug} did not render required mobile geometry target ${target.selector}`);
+      throw new Error(
+        `${route.slug} ${variant.slug} did not render required mobile geometry target ${target.selector}`,
+      );
     }
     if (target.width <= 0 || target.left < -1 || target.right > geometry.viewportWidth + 1) {
       throw new Error(

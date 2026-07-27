@@ -64,6 +64,7 @@ import { SHELL_ROUTE_SHORTCUT_LETTERS, useShellKeyboardManager } from "./use-she
 import { ShortcutsOverlay } from "./ShortcutsOverlay";
 import { useGatewayAccess } from "./use-gateway-access";
 import { useShellStatus } from "./use-shell-status";
+import { requestChatComposerPaletteOpen } from "./composer-palette-events";
 import { useShellNotifications } from "./use-shell-notifications";
 import { useEventStream } from "./use-event-stream";
 import { useShellInspector } from "./use-shell-inspector";
@@ -347,8 +348,15 @@ export function MissionControlNextApp() {
     [],
   );
 
+  const openContextualPalette = useCallback(() => {
+    if (route.area === "chat" && requestChatComposerPaletteOpen()) {
+      return;
+    }
+    setPaletteOpen(true);
+  }, [route.area]);
+
   useShellKeyboardManager({
-    onOpenPalette: () => setPaletteOpen(true),
+    onOpenPalette: openContextualPalette,
     onClosePalette: () => setPaletteOpen(false),
     isPaletteOpen: paletteOpen,
     onDismissTopmost: dismissTopmost,
@@ -879,7 +887,7 @@ export function MissionControlNextApp() {
             isCompactTopbar={isCompactTopbar}
             mode={mode}
             navigate={navigate}
-            onOpenPalette={() => setPaletteOpen(true)}
+            onOpenPalette={openContextualPalette}
             onOpenNav={() => setNavOpen(true)}
             onToggleInspector={() => setInspectorOpen((current) => !current)}
             operatorNotificationCount={operatorNotificationCount}
@@ -910,7 +918,7 @@ export function MissionControlNextApp() {
               navOpen={navOpen}
               navigate={navigate}
               onClose={() => setNavOpen(false)}
-              onOpenPalette={() => setPaletteOpen(true)}
+              onOpenPalette={openContextualPalette}
               pendingApprovals={pendingApprovals}
               preloadRouteChunk={preloadRouteChunk}
               railSignalLines={railSignalLines}

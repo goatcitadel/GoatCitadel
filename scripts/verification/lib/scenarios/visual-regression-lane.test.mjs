@@ -1,7 +1,42 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { assertMobileVisualGeometry, runVisualRegressionLane } from "./visual-regression-lane.mjs";
+import {
+  assertMobileVisualGeometry,
+  prepareVisualScenarioState,
+  runVisualRegressionLane,
+} from "./visual-regression-lane.mjs";
+
+test("composer palette visual state opens through the keyboard contract", async () => {
+  const calls = [];
+  const visibleTarget = {
+    async waitFor(options) {
+      calls.push(options);
+    },
+  };
+  await prepareVisualScenarioState(
+    {
+      keyboard: {
+        async press(value) {
+          calls.push(value);
+        },
+      },
+      locator(value) {
+        calls.push(value);
+        return visibleTarget;
+      },
+      getByRole(role, options) {
+        calls.push([role, options]);
+        return visibleTarget;
+      },
+    },
+    { visualState: "composer-palette" },
+  );
+
+  assert.equal(calls[0], "Control+K");
+  assert.equal(calls[1], ".mc-next-command-popover.palette-sheet");
+  assert.deepEqual(calls[3], ["searchbox", { name: "Search commands and context" }]);
+});
 
 test("mobile pending-input geometry checks overflow and every operator control", async () => {
   let selectors = [];

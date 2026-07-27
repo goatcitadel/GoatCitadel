@@ -512,6 +512,15 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = withReleaseSurfaceStatus([
  */
 export const NEXT_VISUAL_SCENARIO_MANIFEST = [
   {
+    slug: "chat-composer-palette",
+    href: "/chat",
+    readySelector: '.mc-next-threaded-surface[data-mode="chat"]',
+    expectedArea: "chat",
+    expectedSection: "root",
+    fixtureSessionKey: "approval",
+    visualState: "composer-palette",
+  },
+  {
     slug: "chat-pending-approval",
     href: "/chat?vr-blocked=1",
     readySelector: '.mc-next-composer-blocking-prompt[data-blocker-kind="approval"]',

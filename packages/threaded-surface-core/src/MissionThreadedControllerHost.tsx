@@ -12,6 +12,7 @@ import {
   type RefObject,
 } from "react";
 import type {
+  AgentProfileRecord,
   ChatAttachmentRecord,
   ChatGeneratedArtifactRecord,
   ChatMode,
@@ -38,6 +39,7 @@ import {
   clearChatSessionGoal,
   createChatGeneratedArtifact,
   createChatSession,
+  downloadFile,
   fetchAgents,
   fetchChatGeneratedArtifact,
   fetchChatSessionGoal,
@@ -51,6 +53,7 @@ import {
   setChatSessionGoal,
   steerChatSession,
   updateChatSessionPrefs,
+  uploadChatAttachment,
 } from "@goatcitadel/mission-control-shared/api/client";
 import {
   controlAgenticRun,
@@ -136,7 +139,7 @@ import {
 } from "./chat/session-control-banner";
 import { useChatApprovalController } from "./chat/useChatApprovalController";
 import { useChatContextActions } from "./chat/useChatContextActions";
-import { useChatComposerInteractions } from "./chat/useChatComposerInteractions";
+import { applyComposerSuggestion, useChatComposerInteractions } from "./chat/useChatComposerInteractions";
 import {
   abortActiveChatStream,
   captureOutboundRequestPrefsSnapshot,
@@ -153,6 +156,8 @@ import { useChatSessionData } from "./chat/useChatSessionData";
 import { useChatSessionControls, type SessionMetadataConflictDraft } from "./chat/useChatSessionControls";
 import { useChatDockWorkbenchController } from "./chat/useChatDockWorkbenchController";
 import { useChatProviderRoutingController } from "./chat/useChatProviderRoutingController";
+import { useChatComposerPaletteController } from "./chat/useChatComposerPaletteController";
+import { detectComposerPaletteTrigger, type ComposerPaletteItem } from "./chat/composer-palette";
 import { useChatRoutePreflight } from "./chat/useChatRoutePreflight";
 import {
   resolveOutboundDraftContent,
@@ -885,7 +890,10 @@ export function MissionThreadedControllerHost({
       promptFraming?: string;
     }>
   >([]);
+  const [activeAgents, setActiveAgents] = useState<AgentProfileRecord[]>([]);
   const [selectedPresetId, setSelectedPresetId] = useState<string>("");
+  const [composerPaletteGlobalOpen, setComposerPaletteGlobalOpen] = useState(false);
+  const [composerPaletteQuery, setComposerPaletteQuery] = useState("");
   const [workbenchDiscardConfirm, setWorkbenchDiscardConfirm] = useState<{
     title: string;
     message: string;
@@ -965,6 +973,7 @@ export function MissionThreadedControllerHost({
         if (cancelled) {
           return;
         }
+        setActiveAgents(response.items);
         setPresetProfiles(
           response.items
             .filter((item) => item.presetDefaults?.presetLabel)
@@ -983,6 +992,7 @@ export function MissionThreadedControllerHost({
       })
       .catch(() => {
         if (!cancelled) {
+          setActiveAgents([]);
           setPresetProfiles([]);
         }
       });
@@ -1446,6 +1456,41 @@ export function MissionThreadedControllerHost({
     mcpServers,
     mcpTemplates,
   });
+  const composerPaletteEnabled = settings?.features?.unifiedComposerPaletteV1Enabled === true;
+  const composerPaletteTrigger = useMemo(() => detectComposerPaletteTrigger(draft), [draft]);
+  const composerPaletteMode = composerPaletteGlobalOpen ? "all" : (composerPaletteTrigger?.mode ?? "all");
+  const composerPaletteSearchQuery = composerPaletteGlobalOpen
+    ? composerPaletteQuery
+    : (composerPaletteTrigger?.query ?? "");
+  const composerPaletteProjects = useMemo(() => projects?.items ?? [], [projects?.items]);
+  const composerPaletteKnowledge = useMemo(
+    () => threadKnowledgeAttachments?.items ?? [],
+    [threadKnowledgeAttachments?.items],
+  );
+  const composerPalette = useChatComposerPaletteController({
+    enabled: composerPaletteEnabled,
+    active: composerPaletteGlobalOpen || composerPaletteTrigger !== null,
+    sessionKey: selectedSessionId ?? `new:${workspaceId}`,
+    workspaceId: selectedSession?.workspaceId ?? workspaceId,
+    mode: composerPaletteMode,
+    query: composerPaletteSearchQuery,
+    commandCatalog,
+    inlineCommandSuggestions: commandSuggestions,
+    providerOptions,
+    agents: activeAgents,
+    installedSkills,
+    projects: composerPaletteProjects,
+    knowledgeAttachments: composerPaletteKnowledge,
+    externalSourcesAvailable: externalSourceAttachments.supported === true,
+  });
+  const effectiveCommandSuggestions = composerPaletteEnabled ? composerPalette.items : commandSuggestions;
+  useEffect(() => {
+    setCommandIndex(0);
+  }, [composerPaletteGlobalOpen, composerPaletteQuery, composerPaletteTrigger?.mode, setCommandIndex]);
+  useEffect(() => {
+    setComposerPaletteGlobalOpen(false);
+    setComposerPaletteQuery("");
+  }, [selectedSessionId]);
   outboundRequestPrefsSnapshotRef.current = captureOutboundRequestPrefsSnapshot({
     prefs,
     selectedProviderId,
@@ -2994,82 +3039,177 @@ export function MissionThreadedControllerHost({
     setThreadKnowledgeAttachments,
     threadKnowledgeAttachments?.items,
   ]);
-  const handleAttachKnowledgeUrl = useCallback(async () => {
-    const normalizedKnowledgeUrl = knowledgeUrlDraft.trim();
-    if (!normalizedKnowledgeUrl) {
-      return;
-    }
-    try {
-      const session = await ensureSession();
-      const response = await attachThreadKnowledgeAttachment(session.sessionId, {
-        url: normalizedKnowledgeUrl,
-        title: normalizedKnowledgeUrl,
-        retrievalMode: knowledgeUrlMode,
-      });
-      setThreadKnowledgeAttachments((current) => ({
-        items: [response.item, ...(current?.items ?? [])],
-      }));
-      setKnowledgeUrlDraft("");
-      pushLocalNotice("Attached a thread knowledge source.", "success");
-    } catch (cause) {
-      setUiError(cause instanceof Error ? cause.message : "Unable to attach thread knowledge source.");
-    }
-  }, [ensureSession, knowledgeUrlDraft, knowledgeUrlMode, pushLocalNotice, setUiError, setThreadKnowledgeAttachments]);
-  const handleApplyPreset = useCallback(async () => {
-    try {
-      const preset = presetProfiles.find((item) => item.agentId === selectedPresetId);
-      if (!preset) {
+  const handleAttachKnowledgeUrlValue = useCallback(
+    async (value: string) => {
+      const normalizedKnowledgeUrl = value.trim();
+      if (!normalizedKnowledgeUrl) {
         return;
       }
-      const session = await ensureSession();
-      const patch: ChatSessionPrefsPatch = {
-        providerId: preset.preferredProviderId,
-        model: preset.preferredModel,
-        toolAutonomy: preset.toolsPosture,
-      };
-      const hasPatch = Object.values(patch).some((value) => value !== undefined);
-      if (hasPatch) {
-        await applyPrefPatchToSession(session.sessionId, patch, {
-          syncLocalState: true,
+      try {
+        const session = await ensureSession();
+        const response = await attachThreadKnowledgeAttachment(session.sessionId, {
+          url: normalizedKnowledgeUrl,
+          title: normalizedKnowledgeUrl,
+          retrievalMode: knowledgeUrlMode,
         });
+        setThreadKnowledgeAttachments((current) => ({
+          items: [response.item, ...(current?.items ?? [])],
+        }));
+        if (knowledgeUrlDraft.trim() === normalizedKnowledgeUrl) setKnowledgeUrlDraft("");
+        pushLocalNotice("Attached a thread knowledge source.", "success");
+      } catch (cause) {
+        setUiError(cause instanceof Error ? cause.message : "Unable to attach thread knowledge source.");
       }
-      if (preset.promptFraming) {
-        setDraft((current) =>
-          current.trim() ? `${preset.promptFraming}\n\n${current.trim()}` : (preset.promptFraming ?? ""),
+    },
+    [ensureSession, knowledgeUrlDraft, knowledgeUrlMode, pushLocalNotice, setUiError, setThreadKnowledgeAttachments],
+  );
+  const handleAttachKnowledgeUrl = useCallback(
+    () => handleAttachKnowledgeUrlValue(knowledgeUrlDraft),
+    [handleAttachKnowledgeUrlValue, knowledgeUrlDraft],
+  );
+  const handleApplyPresetById = useCallback(
+    async (agentId: string) => {
+      try {
+        const preset = presetProfiles.find((item) => item.agentId === agentId);
+        if (!preset) {
+          return;
+        }
+        const session = await ensureSession();
+        const patch: ChatSessionPrefsPatch = {
+          providerId: preset.preferredProviderId,
+          model: preset.preferredModel,
+          toolAutonomy: preset.toolsPosture,
+        };
+        const hasPatch = Object.values(patch).some((value) => value !== undefined);
+        if (hasPatch) {
+          await applyPrefPatchToSession(session.sessionId, patch, {
+            syncLocalState: true,
+          });
+        }
+        if (preset.promptFraming) {
+          setDraft((current) =>
+            current.trim() ? `${preset.promptFraming}\n\n${current.trim()}` : (preset.promptFraming ?? ""),
+          );
+        }
+        const missingKnowledgeAttachmentIds = (preset.knowledgeAttachmentIds ?? []).filter(
+          (attachmentId) =>
+            !(threadKnowledgeAttachments?.items ?? []).some((item) => item.attachmentId === attachmentId),
         );
+        if (missingKnowledgeAttachmentIds.length > 0) {
+          const warning =
+            missingKnowledgeAttachmentIds.length === 1
+              ? `Skipped 1 unavailable knowledge default.`
+              : `Skipped ${missingKnowledgeAttachmentIds.length} unavailable knowledge defaults.`;
+          setPresetApplyWarning(warning);
+          pushLocalNotice(warning, "warning");
+        } else {
+          setPresetApplyWarning(null);
+        }
+        if (preset.routeHint && preset.routeHint !== messageMode) {
+          handleNavigateSurface(preset.routeHint);
+        }
+        pushLocalNotice(`Applied ${preset.label}.`, "success");
+      } catch (err) {
+        setUiError((err as Error).message);
       }
-      const missingKnowledgeAttachmentIds = (preset.knowledgeAttachmentIds ?? []).filter(
-        (attachmentId) => !(threadKnowledgeAttachments?.items ?? []).some((item) => item.attachmentId === attachmentId),
+    },
+    [
+      applyPrefPatchToSession,
+      ensureSession,
+      handleNavigateSurface,
+      messageMode,
+      presetProfiles,
+      pushLocalNotice,
+      setUiError,
+      setPresetApplyWarning,
+      threadKnowledgeAttachments?.items,
+    ],
+  );
+  const handleApplyPreset = useCallback(
+    () => handleApplyPresetById(selectedPresetId),
+    [handleApplyPresetById, selectedPresetId],
+  );
+  const handleAttachPaletteFile = useCallback(
+    async (relativePath: string) => {
+      const session = await ensureSession();
+      const downloaded = await downloadFile(relativePath, {
+        workspaceId: session.workspaceId ?? workspaceId,
+      });
+      const fileName = relativePath.split(/[\\/]/u).filter(Boolean).at(-1) ?? "attachment";
+      const payload =
+        downloaded.encoding === "base64"
+          ? Uint8Array.from(globalThis.atob(downloaded.content), (character) => character.charCodeAt(0))
+          : downloaded.content;
+      const uploaded = await uploadChatAttachment({
+        sessionId: session.sessionId,
+        projectId: session.projectId,
+        file: new File([payload], fileName, { type: downloaded.contentType || "application/octet-stream" }),
+      });
+      setPendingAttachments((current) =>
+        current.some((attachment) => attachment.attachmentId === uploaded.attachmentId)
+          ? current
+          : [...current, uploaded],
       );
-      if (missingKnowledgeAttachmentIds.length > 0) {
-        const warning =
-          missingKnowledgeAttachmentIds.length === 1
-            ? `Skipped 1 unavailable knowledge default.`
-            : `Skipped ${missingKnowledgeAttachmentIds.length} unavailable knowledge defaults.`;
-        setPresetApplyWarning(warning);
-        pushLocalNotice(warning, "warning");
-      } else {
-        setPresetApplyWarning(null);
+      pushLocalNotice(`Attached ${fileName} for the next turn.`, "success");
+    },
+    [ensureSession, pushLocalNotice, workspaceId],
+  );
+  const handleComposerPaletteSelect = useCallback(
+    async (item: ComposerPaletteItem) => {
+      setComposerPaletteGlobalOpen(false);
+      setComposerPaletteQuery("");
+      try {
+        switch (item.action.type) {
+          case "insert_command": {
+            const command = item.action.value;
+            setDraft((current) => applyComposerSuggestion(current, command));
+            break;
+          }
+          case "select_model": {
+            const session = await ensureSession();
+            await applyPrefPatchToSession(
+              session.sessionId,
+              { providerId: item.action.providerId, model: item.action.model },
+              { syncLocalState: true },
+            );
+            pushLocalNotice(`Selected ${item.action.model}.`, "success");
+            break;
+          }
+          case "select_preset":
+            setSelectedPresetId(item.action.agentId);
+            await handleApplyPresetById(item.action.agentId);
+            break;
+          case "switch_project":
+            await handleAssignProject(item.action.projectId);
+            break;
+          case "attach_file":
+            await handleAttachPaletteFile(item.action.relativePath);
+            break;
+          case "attach_context":
+            pushLocalNotice("This knowledge attachment is available to the next turn.", "success");
+            break;
+          case "attach_url":
+            await handleAttachKnowledgeUrlValue(item.action.url);
+            break;
+          case "launch_external_source":
+            pushLocalNotice("Opened the governed external-source attachment flow.");
+            break;
+        }
+      } catch (cause) {
+        setUiError(cause instanceof Error ? cause.message : "Unable to apply the palette action.");
       }
-      if (preset.routeHint && preset.routeHint !== messageMode) {
-        handleNavigateSurface(preset.routeHint);
-      }
-      pushLocalNotice(`Applied ${preset.label}.`, "success");
-    } catch (err) {
-      setUiError((err as Error).message);
-    }
-  }, [
-    applyPrefPatchToSession,
-    ensureSession,
-    handleNavigateSurface,
-    messageMode,
-    presetProfiles,
-    pushLocalNotice,
-    setUiError,
-    setPresetApplyWarning,
-    selectedPresetId,
-    threadKnowledgeAttachments?.items,
-  ]);
+    },
+    [
+      applyPrefPatchToSession,
+      ensureSession,
+      handleApplyPresetById,
+      handleAssignProject,
+      handleAttachKnowledgeUrlValue,
+      handleAttachPaletteFile,
+      pushLocalNotice,
+      setUiError,
+    ],
+  );
 
   const handleRevealSelectedTurnDetails = useCallback(() => {
     if (!selectedTurn) {
@@ -3132,7 +3272,7 @@ export function MissionThreadedControllerHost({
   } = useChatComposerInteractions({
     draft,
     lastEditableDraft,
-    commandSuggestions,
+    commandSuggestions: effectiveCommandSuggestions,
     commandIndex,
     error,
     dockOpen,
@@ -3158,6 +3298,9 @@ export function MissionThreadedControllerHost({
     setEditingTurnId,
     setDockOpen,
     setArchiveWorkspaceConfirmOpen,
+    onApplySuggestion: composerPaletteEnabled
+      ? (item) => void handleComposerPaletteSelect(item as ComposerPaletteItem)
+      : undefined,
   });
   const handleToggleDock = useCallback(() => {
     handleDockOpenChange(!dockOpen);
@@ -3722,8 +3865,30 @@ export function MissionThreadedControllerHost({
         planningMode: planningMode === "advisory" ? "advisory" : "off",
         effectiveToolAutonomy,
         draft,
-        commandSuggestions,
+        commandSuggestions: effectiveCommandSuggestions,
         commandIndex,
+        composerPalette: composerPaletteEnabled
+          ? {
+              enabled: true,
+              globalOpen: composerPaletteGlobalOpen,
+              query: composerPaletteQuery,
+              loading: composerPalette.loading,
+              failures: composerPalette.failures,
+              onOpen: () => {
+                if (!blockHistoricalMutation()) setComposerPaletteGlobalOpen(true);
+              },
+              onClose: () => {
+                setComposerPaletteGlobalOpen(false);
+                setComposerPaletteQuery("");
+                setCommandIndex(0);
+              },
+              onQueryChange: setComposerPaletteQuery,
+              onIndexChange: setCommandIndex,
+              onSelect: (item) => {
+                if (!blockHistoricalMutation()) void handleComposerPaletteSelect(item as ComposerPaletteItem);
+              },
+            }
+          : undefined,
         pendingAttachments,
         pendingAttachmentModes,
         threadKnowledgeAttachments: threadKnowledgeAttachments?.items ?? [],

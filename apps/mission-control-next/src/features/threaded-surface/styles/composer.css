@@ -1275,6 +1275,98 @@ details.mc-next-thread-action-menu > .mc-next-thread-action-menu-summary {
   font-size: var(--text-md);
 }
 
+.mc-next-command-popover {
+  max-height: min(26rem, 48vh);
+  padding: 0.42rem;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: color-mix(in oklab, var(--card) 96%, transparent);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.22);
+}
+
+.mc-next-composer-palette-options {
+  display: grid;
+  gap: 0.52rem;
+}
+
+.mc-next-composer-palette-search {
+  position: sticky;
+  z-index: 1;
+  top: -0.42rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.28rem 0.6rem;
+  align-items: center;
+  margin: -0.42rem -0.42rem 0.18rem;
+  padding: 0.68rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--card);
+}
+
+.mc-next-composer-palette-search label {
+  grid-column: 1 / -1;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.mc-next-composer-palette-search input {
+  min-width: 0;
+  min-height: 2.4rem;
+  padding: 0.5rem 0.68rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--background);
+  color: var(--foreground);
+}
+
+.mc-next-composer-palette-search > span,
+.mc-next-command-item small {
+  color: var(--text-secondary);
+  font-family: var(--mc-font-mono);
+  font-size: var(--text-xs);
+}
+
+.mc-next-composer-palette-status {
+  margin: 0;
+  padding: 0.46rem 0.62rem;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
+.mc-next-composer-palette-status.warning {
+  color: var(--warning);
+}
+
+@media (width < 720px) {
+  .mc-next-command-popover.palette-sheet {
+    position: fixed;
+    z-index: var(--z-modal);
+    right: 0.5rem;
+    bottom: 0.5rem;
+    left: 0.5rem;
+    max-height: min(76dvh, 38rem);
+    padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+    border-radius: var(--r-lg);
+    box-shadow: 0 -18px 60px rgba(0, 0, 0, 0.34);
+  }
+
+  .mc-next-composer-palette-search {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mc-next-composer-palette-search > span {
+    display: none;
+  }
+
+  .mc-next-command-item {
+    min-height: 3.25rem;
+  }
+}
+
 .mc-next-composer-attachment,
 .mc-next-composer-knowledge-chip {
   display: flex;

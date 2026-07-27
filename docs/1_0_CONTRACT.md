@@ -27,6 +27,8 @@ No visible Mission Control page or catalog entry may remain half-baked, parity-i
 
 The current `apps/mission-control-next` operator navigation is `Work / Projects / Library / Ops / Settings`, where `Work` is the single Chat surface. Planning, research, approvals, agentic orchestration, artifacts, and governed code-capability context appear in Chat rather than separate Cowork or Code panes. The older `Work / Observe / Tune` grouping is a legacy release taxonomy only:
 
+When `unifiedComposerPaletteV1Enabled` is enabled by the Gateway, `/`, `@`, the compatibility `$` skill alias, and `Ctrl/Cmd+K` project one accessible Chat composer palette. Mission Control builds the palette from existing operator-scoped command, provider/model, active-agent, callable-skill, project, file, thread-knowledge, URL, and external-source APIs; there is no broad palette catalog API and no client-owned runtime authority. Individual source failures remain visible without hiding successful sources. Selecting an item performs its typed local/Gateway action without navigating away from Chat, and the existing attachment controls and slash syntax remain compatibility paths.
+
 - `Work`: maps to current Chat, task, approval, and inline agentic/code-capability workflows
 - `Observe`: maps to current Ops, activity, runtime, cost, diagnostics, and Library evidence surfaces
 - `Tune`: maps to current Settings, providers, integrations, channels, tools, agents, and workspace controls

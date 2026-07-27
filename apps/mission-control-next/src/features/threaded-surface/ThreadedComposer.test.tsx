@@ -687,6 +687,94 @@ describe("ThreadedComposer", () => {
     expect(markup).toContain("$react-expert");
   });
 
+  it("renders one searchable palette with source truth, failure isolation, and keyboard selection", async () => {
+    const onOpen = vi.fn();
+    const onClose = vi.fn();
+    const onQueryChange = vi.fn();
+    const onIndexChange = vi.fn();
+    const onSelect = vi.fn();
+    const renderer = await renderComposer({
+      commandSuggestions: [
+        {
+          key: "model-openai-test",
+          command: "gpt-test",
+          description: "Use the configured test model.",
+          applyValue: "/model openai/gpt-test",
+          source: "models",
+          sourceLabel: "Model",
+          availabilityLabel: "Available",
+          action: { type: "select_model", providerId: "openai", model: "gpt-test" },
+        },
+      ],
+      composerPalette: {
+        enabled: true,
+        globalOpen: true,
+        query: "gpt",
+        loading: false,
+        failures: [{ source: "files", sourceLabel: "Workspace files", message: "offline" }],
+        onOpen,
+        onClose,
+        onQueryChange,
+        onIndexChange,
+        onSelect,
+      },
+    });
+
+    const search = renderer.root.findByProps({
+      placeholder: "Commands, models, agents, skills, projects, files, URLs…",
+    });
+    const paletteText = collectText(renderer.root).replace(/\s+/gu, " ");
+    expect(paletteText).toContain("Model · Available");
+    expect(paletteText).toContain("Workspace files unavailable; other sources remain available.");
+
+    await act(async () => {
+      search.props.onChange({ target: { value: "new query" } });
+      search.props.onKeyDown({ key: "ArrowDown", preventDefault: vi.fn() });
+      search.props.onKeyDown({ key: "Enter", preventDefault: vi.fn() });
+    });
+
+    expect(onQueryChange).toHaveBeenCalledWith("new query");
+    expect(onIndexChange).toHaveBeenCalledWith(0);
+    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ key: "model-openai-test" }));
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it("confirms project switches before applying the palette action", async () => {
+    const onSelect = vi.fn();
+    const projectItem = {
+      key: "project-goatcitadel",
+      command: "GoatCitadel",
+      description: "F:/code/personal-ai",
+      applyValue: "project-1",
+      source: "projects",
+      sourceLabel: "Project",
+      availabilityLabel: "Switch with confirmation",
+      action: { type: "switch_project", projectId: "project-1", projectName: "GoatCitadel" },
+    };
+    const renderer = await renderComposer({
+      commandSuggestions: [projectItem],
+      composerPalette: {
+        enabled: true,
+        globalOpen: true,
+        query: "",
+        loading: false,
+        failures: [],
+        onOpen: vi.fn(),
+        onClose: vi.fn(),
+        onQueryChange: vi.fn(),
+        onIndexChange: vi.fn(),
+        onSelect,
+      },
+    });
+
+    await click(findButton(renderer.root, "GoatCitadel"));
+    expect(onSelect).not.toHaveBeenCalled();
+    const confirm = renderer.root.findAllByType(ConfirmModal).find((modal) => modal.props.open);
+    expect(confirm?.props.message).toContain("Switch to GoatCitadel?");
+    await act(async () => confirm?.props.onConfirm());
+    expect(onSelect).toHaveBeenCalledWith(projectItem);
+  });
+
   it("uses surface-specific primary action labels", () => {
     expect(buildMarkup({ mode: "cowork" })).toContain("Delegate");
     expect(buildMarkup({ mode: "code" })).toContain("Implement");

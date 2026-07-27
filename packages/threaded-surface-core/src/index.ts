@@ -32,6 +32,19 @@ export {
 } from "./chat/chat-page-pure-helpers";
 export type { MissionThreadedBtwSideChatProps } from "./chat/useBtwSideChatController";
 export { buildOrchestrationCommandSuggestions } from "./chat-command-suggestions";
+export {
+  ComposerPaletteSourceRegistry,
+  createUrlPaletteItem,
+  detectComposerPaletteTrigger,
+  rankComposerPaletteItems,
+  type ComposerPaletteAction,
+  type ComposerPaletteItem,
+  type ComposerPaletteMode,
+  type ComposerPaletteSearchResult,
+  type ComposerPaletteSourceDefinition,
+  type ComposerPaletteSourceFailure,
+  type ComposerPaletteSourceId,
+} from "./chat/composer-palette";
 export type { ChatStreamingPreview, ChatVisualStreamMode } from "./chat/chat-streaming-preview";
 export {
   verifyChatCapabilityProfileAgainstTurn,

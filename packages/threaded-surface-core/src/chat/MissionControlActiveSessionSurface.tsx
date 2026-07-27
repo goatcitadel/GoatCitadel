@@ -32,6 +32,8 @@ import type { MidTurnDisposition } from "./chat-page-pure-helpers";
 import type { OutboundContextBlock } from "./useChatSurfaceOrchestration";
 import type { ChatCapabilityProfileInspection } from "./useChatCapabilityProfileInspection";
 import type { MissionThreadedSessionControlBannerProps } from "./session-control-banner";
+import type { CommandSuggestionItem } from "../chat-command-suggestions";
+import type { ComposerPaletteSourceFailure } from "./composer-palette";
 
 export interface ThreadedContextSelectionState {
   label: string;
@@ -162,8 +164,20 @@ export interface MissionControlActiveSessionSurfaceProps {
   planningMode: "off" | "advisory";
   effectiveToolAutonomy?: string;
   draft: string;
-  commandSuggestions: Array<{ key: string; command: string; description: string; applyValue: string }>;
+  commandSuggestions: CommandSuggestionItem[];
   commandIndex: number;
+  composerPalette?: {
+    enabled: boolean;
+    globalOpen: boolean;
+    query: string;
+    loading: boolean;
+    failures: ComposerPaletteSourceFailure[];
+    onOpen: () => void;
+    onClose: () => void;
+    onQueryChange: (value: string) => void;
+    onIndexChange: (value: number) => void;
+    onSelect: (item: CommandSuggestionItem) => void;
+  };
   pendingAttachments: Array<Pick<ChatAttachmentRecord, "attachmentId" | "fileName" | "mimeType" | "sizeBytes">>;
   pendingAttachmentModes?: Record<string, "message" | ThreadKnowledgeRetrievalMode>;
   threadKnowledgeAttachments?: ThreadKnowledgeAttachmentRecord[];
