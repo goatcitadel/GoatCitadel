@@ -15,6 +15,7 @@ const windowsCmd = "C:\\Windows\\System32\\cmd.exe";
 
 let runtimeRoot;
 let containerName;
+let containerImage;
 let supervisor;
 
 try {
@@ -73,6 +74,9 @@ try {
     });
   }
   if (containerName && runtimeRoot) {
+    if (!containerImage) {
+      containerImage = tryInspectContainerImage(containerName);
+    }
     await removeReviewContainer(containerName, runtimeRoot).catch((error) => {
       process.stderr.write(
         `[bundled-postgres-restart] cleanup refused or failed for ${containerName}: ${formatError(error)}\n`,
@@ -81,6 +85,12 @@ try {
     });
   }
   if (runtimeRoot) {
+    await reclaimRuntimeRootOwnership(runtimeRoot, containerImage).catch((error) => {
+      process.stderr.write(
+        `[bundled-postgres-restart] failed to reclaim ownership of the temporary runtime root: ${formatError(error)}\n`,
+      );
+      process.exitCode = 1;
+    });
     await fs.rm(runtimeRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 }).catch((error) => {
       process.stderr.write(
         `[bundled-postgres-restart] failed to remove temporary runtime root: ${formatError(error)}\n`,
@@ -226,6 +236,16 @@ function inspectContainerId(name) {
   return id;
 }
 
+function tryInspectContainerImage(name) {
+  const result = run("docker", ["container", "inspect", "--format", "{{.Config.Image}}", name], {
+    allowFailure: true,
+  });
+  if (result.status !== 0) {
+    return undefined;
+  }
+  return result.stdout.trim() || undefined;
+}
+
 function assertContainerState(name, expected) {
   const result = run("docker", ["container", "inspect", "--format", "{{.State.Status}}", name]);
   const actual = result.stdout.trim().toLowerCase();
@@ -276,6 +296,65 @@ async function removeReviewContainer(name, rootDir) {
   const removal = run("docker", ["rm", "--force", name], { allowFailure: true });
   if (removal.status !== 0) {
     throw new Error(removal.stderr.trim() || `docker rm --force ${name} failed.`);
+  }
+}
+
+// initdb inside the bundled container creates PGDATA as the image's `postgres` user with mode
+// 0700, and a Linux bind mount propagates that ownership to the host directory. The invoking
+// user can then no longer read the tree it created, so removing it needs the container runtime
+// to hand ownership back first. Docker Desktop on Windows masks this behind its own mount
+// translation, which is why the host-side removal alone is enough there.
+async function reclaimRuntimeRootOwnership(rootDir, image) {
+  if (process.platform === "win32" || !image) {
+    return;
+  }
+  const uid = process.getuid?.();
+  const gid = process.getgid?.();
+  if (uid === undefined || gid === undefined) {
+    return;
+  }
+  assertTemporaryRuntimeRoot(rootDir);
+  const dataDir = path.join(rootDir, "data");
+  if (!(await pathExists(dataDir))) {
+    return;
+  }
+  const result = run(
+    "docker",
+    [
+      "run",
+      "--rm",
+      "--user",
+      "0:0",
+      "--entrypoint",
+      "chown",
+      "--volume",
+      `${dataDir}:/goatcitadel-reclaim`,
+      image,
+      "-R",
+      `${uid}:${gid}`,
+      "/goatcitadel-reclaim",
+    ],
+    { allowFailure: true },
+  );
+  if (result.status !== 0) {
+    throw new Error(result.stderr.trim() || `docker chown of ${dataDir} failed (exit ${result.status ?? "unknown"}).`);
+  }
+}
+
+function assertTemporaryRuntimeRoot(rootDir) {
+  const resolved = path.resolve(rootDir);
+  const expectedPrefix = path.resolve(os.tmpdir(), "goatcitadel-bundled-postgres-restart-");
+  if (resolved === expectedPrefix || !resolved.startsWith(expectedPrefix)) {
+    throw new Error(`Refusing to rewrite ownership under ${resolved}: not a temporary runtime root.`);
+  }
+}
+
+async function pathExists(target) {
+  try {
+    await fs.stat(target);
+    return true;
+  } catch {
+    return false;
   }
 }
 
