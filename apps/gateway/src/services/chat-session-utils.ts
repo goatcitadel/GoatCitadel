@@ -98,7 +98,12 @@ export function toChatSessionRecord(
     goalSetAt?: string;
   },
   project?: ChatProjectRecord,
-  extras?: Partial<Pick<ChatSessionRecord, "searchHits" | "lastHandoff" | "delegationParent" | "generatedArtifacts">>,
+  extras?: Partial<
+    Pick<
+      ChatSessionRecord,
+      "searchHits" | "lastHandoff" | "delegationParent" | "generatedArtifacts" | "forkRelationships"
+    >
+  >,
 ): ChatSessionRecord {
   return {
     sessionId: session.sessionId,
@@ -122,6 +127,7 @@ export function toChatSessionRecord(
     lastHandoff: extras?.lastHandoff,
     delegationParent: extras?.delegationParent,
     generatedArtifacts: extras?.generatedArtifacts,
+    forkRelationships: extras?.forkRelationships,
     channel: session.channel,
     account: session.account,
     updatedAt: session.updatedAt,

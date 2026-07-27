@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Chat-session aggregate operations stay together so revision and deletion invariants remain visible. */
 /**
  * Chat session service.
  *
@@ -14,6 +15,8 @@ import {
   applyChatModePresetToPatch,
   buildChatModePrefsPatch,
   ConflictError,
+  CHAT_SESSION_FORK_MANIFEST_VERSION,
+  isChatTurnTerminalStatus,
   type ChatSessionBindingRecord,
   type ChatSessionBulkArchiveInput,
   type ChatSessionBulkArchiveResult,
@@ -22,6 +25,9 @@ import {
   type ChatSessionPrefsPatch,
   type ChatSessionPrefsRecord,
   type ChatSessionRecord,
+  type ChatSessionForkManifest,
+  type ChatSessionForkRequest,
+  type ChatSessionForkResponse,
   type ChatSessionSearchHitRecord,
   type ChatSessionSearchQuery,
   type ChatSessionSearchResponse,
@@ -55,6 +61,7 @@ export interface ChatSessionDependencies {
   publishRealtime(eventType: string, source: string, payload: Record<string, unknown>): void;
   clearChatTurnWriteLease(sessionId: string): void;
   removeChatSessionStoredFile(storageRelPath: string): Promise<void>;
+  copyChatSessionStoredFile(storageRelPath: string, copyId: string): Promise<string>;
   ensureChatSessionModelDefaults(sessionId: string, prefs: ChatSessionPrefsRecord): ChatSessionPrefsRecord;
   hydrateChatPrefsWithAutonomy(sessionId: string, prefs: ChatSessionPrefsRecord): ChatSessionPrefsRecord;
   patchSessionAutonomyPrefs(sessionId: string, patch: ReturnType<typeof splitChatPrefsPatch>["autonomyPatch"]): void;
@@ -88,6 +95,9 @@ export function listChatSessions(deps: ChatSessionDependencies, query: ChatSessi
   const prefsBySessionId = deps.storage.chatSessionPrefs.listBySessionIds(sessionIds);
   const projectLinkBySessionId = deps.storage.chatSessionProjects.listBySessionIds(sessionIds);
   const generatedArtifactsBySessionId = deps.storage.chatGeneratedArtifacts.listBySessionIds(sessionIds);
+  const forkRelationshipsBySessionId = new Map(
+    sessionIds.map((sessionId) => [sessionId, deps.storage.chatSessionForks.listRelationships(sessionId, workspaceId)]),
+  );
   const delegationParentBySessionId = deps.storage.chatDelegationSteps.listParentsByChildSessionIds(
     sessionIds,
     workspaceId,
@@ -117,6 +127,7 @@ export function listChatSessions(deps: ChatSessionDependencies, query: ChatSessi
         generatedArtifacts: (generatedArtifactsBySessionId.get(session.sessionId) ?? [])
           .slice(0, 6)
           .map(buildGeneratedArtifactReference),
+        forkRelationships: forkRelationshipsBySessionId.get(session.sessionId),
       },
     );
   });
@@ -210,6 +221,276 @@ export function listChatSessions(deps: ChatSessionDependencies, query: ChatSessi
   });
 
   return records.slice(0, limit);
+}
+
+export async function forkChatSessionFromTurn(
+  deps: ChatSessionDependencies,
+  sessionId: string,
+  turnId: string,
+  input: ChatSessionForkRequest,
+  actorId: string,
+): Promise<ChatSessionForkResponse> {
+  const source = deps.requireChatSession(sessionId);
+  const workspaceId = deps.normalizeWorkspaceId(source.workspaceId);
+  if (input.expectedRevision !== undefined && source.revision !== input.expectedRevision) {
+    throw new ConflictError({
+      code: "STATE_CONFLICT",
+      message: `Chat session revision changed from ${input.expectedRevision} to ${source.revision}.`,
+    });
+  }
+  const traces = deps.storage.chatTurnTraces.listBySession(sessionId, 10_000);
+  const traceById = new Map(traces.map((trace) => [trace.turnId, trace]));
+  const selected = traceById.get(turnId);
+  if (!selected || selected.sessionId !== sessionId) {
+    throw new Error(`Turn ${turnId} is not part of chat session ${sessionId}.`);
+  }
+  const path = buildForkPath(traceById, turnId);
+  for (const trace of path) {
+    const unsettledTool = trace.toolRuns.some((run) => run.status === "started" || run.status === "approval_required");
+    if (
+      !isChatTurnTerminalStatus(trace.status) ||
+      trace.pendingApprovalSummary ||
+      trace.pendingUserInput ||
+      unsettledTool
+    ) {
+      throw new ConflictError({ code: "STATE_CONFLICT", message: `Turn ${trace.turnId} still has unsettled work.` });
+    }
+  }
+
+  const sourceMessages = deps.storage.chatMessages.listByMessageIds(
+    path.flatMap((trace) => [trace.userMessageId, trace.assistantMessageId].filter((id): id is string => Boolean(id))),
+  );
+  const sourceAttachments = deps.storage.chatAttachments.listByIds(
+    [
+      ...new Set(
+        [...sourceMessages.values()].flatMap((message) => message.attachments?.map((item) => item.attachmentId) ?? []),
+      ),
+    ],
+    workspaceId,
+  );
+  const copiedAttachmentStorage = await Promise.all(
+    sourceAttachments.map(async (attachment) => ({
+      attachment,
+      storageRelPath: await deps.copyChatSessionStoredFile(attachment.storageRelPath, randomUUID()),
+    })),
+  );
+
+  const createdAt = new Date().toISOString();
+  const title = input.title?.trim() || `Fork of ${source.title?.trim() || "Chat"}`;
+  const created = createChatSession(deps, { workspaceId, title, mode: "chat", origin: "operator" });
+  const forkId = `fork_${randomUUID()}`;
+  const turnIdMap = new Map(path.map((trace) => [trace.turnId, `turn_${randomUUID()}`]));
+  const messageIdMap = new Map<string, string>();
+  const attachmentIdMap = new Map(
+    copiedAttachmentStorage.map(({ attachment }) => [attachment.attachmentId, `att_${randomUUID()}`]),
+  );
+  const traceHashes = new Map(path.map((trace) => [trace.turnId, sha256(stableJson(trace))]));
+  const messageMappings: ChatSessionForkManifest["messageMappings"] = [];
+  const turnMappings: ChatSessionForkManifest["turnMappings"] = [];
+  const artifactCopies: ChatSessionForkManifest["artifactCopies"] = [];
+
+  deps.storage.runImmediateTransaction(() => {
+    const sourcePrefs = deps.storage.chatSessionPrefs.get(sessionId);
+    if (sourcePrefs) {
+      const {
+        sessionId: _sessionId,
+        revision: _revision,
+        createdAt: _createdAt,
+        updatedAt: _updatedAt,
+        ...prefs
+      } = sourcePrefs;
+      deps.storage.chatSessionPrefs.patch(created.sessionId, prefs, createdAt);
+    }
+    const sourceProject = deps.storage.chatSessionProjects.get(sessionId);
+    if (sourceProject) {
+      deps.storage.chatSessionProjects.assign(created.sessionId, sourceProject.projectId, createdAt);
+    }
+    for (const { attachment, storageRelPath } of copiedAttachmentStorage) {
+      const copiedAttachmentId = attachmentIdMap.get(attachment.attachmentId)!;
+      deps.storage.chatAttachments.create(
+        { ...attachment, attachmentId: copiedAttachmentId, sessionId: created.sessionId, storageRelPath },
+        attachment.createdAt,
+      );
+    }
+    for (const trace of path) {
+      const copiedTurnId = turnIdMap.get(trace.turnId)!;
+      const copyMessage = (sourceMessageId: string | undefined): string | undefined => {
+        if (!sourceMessageId) return undefined;
+        const message = sourceMessages.get(sourceMessageId);
+        if (!message) return undefined;
+        const copiedMessageId = `msg_${randomUUID()}`;
+        messageIdMap.set(sourceMessageId, copiedMessageId);
+        deps.storage.chatMessages.upsert({
+          ...message,
+          messageId: copiedMessageId,
+          sessionId: created.sessionId,
+          attachments: message.attachments?.map((attachment) => ({
+            ...attachment,
+            attachmentId: attachmentIdMap.get(attachment.attachmentId) ?? attachment.attachmentId,
+          })),
+        });
+        messageMappings.push({
+          sourceMessageId,
+          copiedMessageId,
+          sourceTurnId: trace.turnId,
+          copiedTurnId,
+          role: message.role,
+          contentHash: sha256(message.content),
+        });
+        return copiedMessageId;
+      };
+      const copiedUserMessageId = copyMessage(trace.userMessageId);
+      if (!copiedUserMessageId) throw new Error(`Fork source user message ${trace.userMessageId} is missing.`);
+      const copiedAssistantMessageId = copyMessage(trace.assistantMessageId);
+      const sourceTraceHash = traceHashes.get(trace.turnId)!;
+      const importedRouting = {
+        ...trace.routing,
+        forkImport: {
+          sourceSessionId: sessionId,
+          sourceTurnId: trace.turnId,
+          sourceTraceHash,
+          importedAt: createdAt,
+          durableRunId: trace.durable?.runId,
+          toolRunHashes: trace.toolRuns.map((run) => sha256(stableJson(run))),
+          approvalHashes: deps.storage.chatInlineApprovals
+            .listByTurn(trace.turnId)
+            .map((approval) => sha256(stableJson(approval))),
+        },
+      };
+      const copied = deps.storage.chatTurnTraces.create({
+        turnId: copiedTurnId,
+        sessionId: created.sessionId,
+        userMessageId: copiedUserMessageId,
+        parentTurnId: trace.parentTurnId ? turnIdMap.get(trace.parentTurnId) : undefined,
+        branchKind: "append",
+        assistantMessageId: copiedAssistantMessageId,
+        status: trace.status,
+        mode: "chat",
+        model: trace.model,
+        webMode: trace.webMode,
+        memoryMode: trace.memoryMode,
+        thinkingLevel: trace.thinkingLevel,
+        speedMode: trace.speedMode,
+        subagentPolicy: trace.subagentPolicy,
+        effectiveToolAutonomy: trace.effectiveToolAutonomy,
+        routing: importedRouting,
+        retrieval: trace.retrieval,
+        reflection: trace.reflection,
+        completion: trace.completion,
+        guidance: trace.guidance,
+        citations: trace.citations,
+        failure: trace.failure,
+        startedAt: trace.startedAt,
+        finishedAt: trace.finishedAt,
+      });
+      turnMappings.push({
+        sourceTurnId: trace.turnId,
+        copiedTurnId,
+        sourceParentTurnId: trace.parentTurnId,
+        copiedParentTurnId: copied.parentTurnId,
+        sourceTraceHash,
+        copiedTraceHash: sha256(stableJson(copied)),
+      });
+      const sourceArtifacts = deps.storage.chatGeneratedArtifacts.listByTurn(trace.turnId, 100);
+      const artifactIdMap = new Map<string, string>();
+      for (const artifact of sourceArtifacts.sort((a, b) => a.version - b.version)) {
+        const copiedArtifactId = `artifact_${randomUUID()}`;
+        artifactIdMap.set(artifact.artifactId, copiedArtifactId);
+        const contentHash = artifact.contentHash ?? sha256(artifact.content);
+        deps.storage.chatGeneratedArtifacts.create({
+          ...artifact,
+          artifactId: copiedArtifactId,
+          sessionId: created.sessionId,
+          workspaceId,
+          turnId: copiedTurnId,
+          supersedesArtifactId: artifact.supersedesArtifactId
+            ? artifactIdMap.get(artifact.supersedesArtifactId)
+            : undefined,
+          contentHash,
+        });
+        artifactCopies.push({
+          sourceArtifactId: artifact.artifactId,
+          copiedArtifactId,
+          contentHash,
+          version: artifact.version,
+        });
+      }
+    }
+    deps.storage.chatSessionBranchState.setActiveLeaf(created.sessionId, turnIdMap.get(turnId)!, createdAt);
+    const contextSnapshotHashes = path.flatMap((trace) => {
+      const snapshot = deps.storage.routedContextSnapshots.findByTurn(trace.turnId);
+      return snapshot ? [snapshot.snapshotHash] : [];
+    });
+    const manifest: ChatSessionForkManifest = {
+      manifestVersion: CHAT_SESSION_FORK_MANIFEST_VERSION,
+      forkId,
+      sourceSessionId: sessionId,
+      sourceTurnId: turnId,
+      newSessionId: created.sessionId,
+      workspaceId,
+      transcriptPathHash: sha256(stableJson(messageMappings.map((mapping) => [mapping.role, mapping.contentHash]))),
+      turnMappings,
+      messageMappings,
+      attachmentCopies: copiedAttachmentStorage.map(({ attachment }) => ({
+        sourceAttachmentId: attachment.attachmentId,
+        copiedAttachmentId: attachmentIdMap.get(attachment.attachmentId)!,
+        sha256: attachment.sha256,
+      })),
+      artifactCopies,
+      contextSnapshotHashes,
+      sourceEvidenceHashes: [...new Set(turnMappings.flatMap((mapping) => [mapping.sourceTraceHash]))],
+      createdByActorId: actorId,
+      createdAt,
+    };
+    deps.storage.chatSessionForks.create(manifest);
+  });
+  deps.operatorSummaryCache.invalidate();
+  const manifest = deps.storage.chatSessionForks.get(forkId);
+  const session = {
+    ...deps.requireChatSession(created.sessionId),
+    forkRelationships: deps.storage.chatSessionForks.listRelationships(created.sessionId, workspaceId),
+  };
+  deps.publishRealtime("chat_session_forked", "gateway", {
+    forkId,
+    sourceSessionId: sessionId,
+    newSessionId: created.sessionId,
+    sourceTurnId: turnId,
+  });
+  return { session, manifest };
+}
+
+function buildForkPath(
+  traceById: Map<string, ReturnType<Storage["chatTurnTraces"]["get"]>>,
+  turnId: string,
+): ReturnType<Storage["chatTurnTraces"]["get"]>[] {
+  const path: ReturnType<Storage["chatTurnTraces"]["get"]>[] = [];
+  const visited = new Set<string>();
+  let cursor: string | undefined = turnId;
+  while (cursor) {
+    if (visited.has(cursor)) throw new Error("Chat turn ancestry contains a cycle.");
+    visited.add(cursor);
+    const trace = traceById.get(cursor);
+    if (!trace) throw new Error(`Chat turn ancestry is incomplete at ${cursor}.`);
+    path.push(trace);
+    cursor = trace.parentTurnId;
+  }
+  return path.reverse();
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .filter(([, item]) => item !== undefined)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
 }
 
 export function searchChatSessions(

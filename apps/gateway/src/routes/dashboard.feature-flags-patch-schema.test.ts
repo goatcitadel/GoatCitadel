@@ -32,6 +32,7 @@ const EXPECTED_PATCH_TOGGLEABLE: Record<keyof FeatureFlagsConfig, true> = {
   unifiedComposerPaletteV1Enabled: true,
   attachedContextToolsV1Enabled: true,
   chatSessionStatusV1Enabled: true,
+  conversationForksV1Enabled: true,
   channelVoiceInboundV1Enabled: true,
   channelVoiceReplyV1Enabled: true,
   signalInboundV1Enabled: true,

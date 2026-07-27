@@ -26,6 +26,7 @@ const attachThreadKnowledgeAttachmentMock = vi.fn();
 const createChatGeneratedArtifactMock = vi.fn();
 const createChatSideChatMock = vi.fn();
 const createChatSessionMock = vi.fn();
+const forkChatSessionFromTurnMock = vi.fn();
 const fetchAgentsMock = vi.fn();
 const fetchChatGeneratedArtifactMock = vi.fn();
 const fetchChatSessionGoalMock = vi.fn();
@@ -235,6 +236,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   createChatGeneratedArtifact: (...args: unknown[]) => createChatGeneratedArtifactMock(...args),
   createChatSideChat: (...args: unknown[]) => createChatSideChatMock(...args),
   createChatSession: (...args: unknown[]) => createChatSessionMock(...args),
+  forkChatSessionFromTurn: (...args: unknown[]) => forkChatSessionFromTurnMock(...args),
   fetchAgents: (...args: unknown[]) => fetchAgentsMock(...args),
   fetchChatGeneratedArtifact: (...args: unknown[]) => fetchChatGeneratedArtifactMock(...args),
   fetchChatSessionGoal: (...args: unknown[]) => fetchChatSessionGoalMock(...args),
@@ -561,6 +563,15 @@ function setupMocks() {
     sessionId: "session-new",
     sessionKey: "session-new",
     title: "Trail from Launch plan",
+  });
+  forkChatSessionFromTurnMock.mockResolvedValue({
+    session: {
+      ...selectedSession,
+      sessionId: "session-new",
+      sessionKey: "session-new",
+      title: "Fork of Launch plan",
+    },
+    manifest: { forkId: "fork-1" },
   });
   fetchChatSessionGoalMock.mockResolvedValue({
     sessionId: "session-1",
@@ -2924,7 +2935,7 @@ describe("MissionThreadedControllerHost", () => {
     expect(updateChatSessionPrefsMock).toHaveBeenCalled();
   });
 
-  it("starts a new thread with selected conversation context attached", async () => {
+  it("creates an independent fork from a terminal turn after confirmation", async () => {
     await renderHost();
     await selectDefaultSession();
 
@@ -2940,32 +2951,20 @@ describe("MissionThreadedControllerHost", () => {
 
     await act(async () => {
       latestSurfaceInput?.activeSessionSurfaceProps?.onStartNewThreadFromTurn("turn-1");
+      await flushEffects(4);
+    });
+    const confirm = confirmModalProps.filter((props) => props.title === "Fork conversation from this turn?").at(-1);
+    expect(confirm?.message).toContain("1 turn");
+    await act(async () => {
+      await confirm?.onConfirm();
       await flushEffects(12);
     });
 
-    expect(createChatSessionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workspaceId: "workspace-1",
-        mode: "chat",
-        projectId: "project-1",
-        title: "Trail from Launch plan",
-      }),
-      { originSurface: "chat" },
-    );
-    expect(updateChatSessionPrefsMock).toHaveBeenCalledWith(
-      "session-new",
-      expect.objectContaining({
-        providerId: "openai",
-        model: "gpt-5.5",
-        webMode: "auto",
-      }),
-    );
-    expect(latestSurfaceInput?.activeSessionSurfaceProps?.outboundContext).toMatchObject({
-      label: "1 selected turn",
-      sourceLabel: "Launch plan",
-      sessionId: "session-new",
-      turnIds: ["turn-1"],
+    expect(forkChatSessionFromTurnMock).toHaveBeenCalledWith("session-1", "turn-1", {
+      expectedRevision: selectedSession.revision,
+      title: "Fork of Launch plan",
     });
+    expect(createChatSessionMock).not.toHaveBeenCalled();
   });
 
   it("hydrates server metadata without overwriting conflicting rename and organization drafts", async () => {

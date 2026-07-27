@@ -39,7 +39,7 @@ import {
   attachThreadKnowledgeAttachment,
   clearChatSessionGoal,
   createChatGeneratedArtifact,
-  createChatSession,
+  forkChatSessionFromTurn,
   downloadFile,
   fetchAgents,
   fetchChatGeneratedArtifact,
@@ -96,7 +96,6 @@ import {
 import { ThreadedLoadingState } from "./chat/ThreadedLoadingState";
 import {
   buildContextSelectionState,
-  buildPrefsPatchFromRecord,
   buildSelectedConversationContext,
   canReadAttachmentInFull,
   formatAgenticBackgroundHandoffNotice,
@@ -913,6 +912,13 @@ export function MissionThreadedControllerHost({
     message: string;
     patch: ChatSessionPrefsPatch;
   } | null>(null);
+  const [forkConfirm, setForkConfirm] = useState<{
+    turnId: string;
+    turnCount: number;
+    attachmentCount: number;
+    artifactCount: number;
+  } | null>(null);
+  const [forkPending, setForkPending] = useState(false);
   const [agenticRunTree, setAgenticRunTree] = useState<AgenticRunTreeResponse | null>(null);
   const [agenticControlPending, setAgenticControlPending] = useState<string | null>(null);
   const [agenticControlStatus, setAgenticControlStatus] = useState<string | null>(null);
@@ -2873,78 +2879,50 @@ export function MissionThreadedControllerHost({
   }, [selectedSessionId]);
   const handleStartNewThreadFromTurn = useCallback(
     async (turnId: string) => {
-      if (!thread) {
-        setUiError("No active conversation is available to start a new thread from.");
-        return;
-      }
-      const contextTurnIds = selectedContextTurnIds.length > 0 ? selectedContextTurnIds : [turnId];
-      const sourceLabel = getThreadSourceLabel({ selectedSession, selectedSessionId, visibleSessionLabelById });
-      const context = buildSelectedConversationContext({
-        thread,
-        turnIds: contextTurnIds,
-        sourceLabel,
-        sourceSessionId: selectedSessionId ?? undefined,
-      });
-      if (!context) {
-        setUiError("Select at least one turn before starting a new thread with context.");
+      if (!thread || !selectedSessionId || !selectedSession) {
+        setUiError("No active conversation is available to fork.");
         return;
       }
       setUiError(null);
+      setForkPending(true);
       try {
-        const projectId =
-          selectedSession?.projectId ??
-          (selectedProjectId !== "all" && selectedProjectId !== "none" ? selectedProjectId : undefined);
         const nextHistoryView = historyView === "archived" ? "active" : historyView;
-        const created = await createChatSession(
-          {
-            workspaceId,
-            mode: messageMode,
-            projectId,
-            title: `Trail from ${trimForkTitle(sourceLabel)}`,
-          },
-          { originSurface: messageMode },
-        );
-        const prefsPatch = buildPrefsPatchFromRecord(prefs);
-        if (prefsPatch) {
-          await applyPrefPatchToSession(created.sessionId, prefsPatch, { syncLocalState: false });
-        }
+        const result = await forkChatSessionFromTurn(selectedSessionId, turnId, {
+          expectedRevision: selectedSession.revision,
+          title: `Fork of ${trimForkTitle(selectedSession.title || "Chat")}`,
+        });
         if (nextHistoryView !== historyView) {
           setHistoryView(nextHistoryView);
         }
-        setSelectedSessionId(created.sessionId);
+        setSelectedSessionId(result.session.sessionId);
         setSelectedTurnId(null);
         setSelectedContextTurnIds([]);
-        setPendingThreadContext({ ...context, sessionId: created.sessionId });
-        setThread({
-          sessionId: created.sessionId,
-          turns: [],
-        });
+        setPendingThreadContext(null);
+        setThread(null);
         setDraft("");
-        await loadSidebar(nextHistoryView, { bypassCache: true, preferredSessionId: created.sessionId });
-        pushLocalNotice(`Started a new thread with ${context.label} attached as context.`, "success");
+        await loadSidebar(nextHistoryView, { bypassCache: true, preferredSessionId: result.session.sessionId });
+        await loadSessionCoreState(result.session.sessionId, { background: false, includeThread: true });
+        pushLocalNotice("Created an independent fork with immutable source provenance.", "success");
         composerRef.current?.focus();
       } catch (cause) {
-        setUiError(cause instanceof Error ? cause.message : "Unable to start a new thread from this context.");
+        setUiError(cause instanceof Error ? cause.message : "Unable to fork this conversation.");
+      } finally {
+        setForkPending(false);
+        setForkConfirm(null);
       }
     },
     [
-      applyPrefPatchToSession,
       composerRef,
       historyView,
+      loadSessionCoreState,
       loadSidebar,
-      messageMode,
-      prefs,
       pushLocalNotice,
-      selectedContextTurnIds,
-      selectedProjectId,
       selectedSession,
       selectedSessionId,
       setHistoryView,
       setSelectedSessionId,
       setThread,
       thread,
-      visibleSessionLabelById,
-      workspaceId,
     ],
   );
   const handleTogglePlanningMode = useCallback(() => {
@@ -3863,7 +3841,24 @@ export function MissionThreadedControllerHost({
         onToggleContextTurn: handleToggleContextTurn,
         onClearContextSelection: handleClearContextSelection,
         onStartNewThreadFromTurn: (turnId) => {
-          if (!blockHistoricalMutation()) void handleStartNewThreadFromTurn(turnId);
+          if (blockHistoricalMutation()) return;
+          const byId = new Map((thread?.turns ?? []).map((turn) => [turn.turnId, turn]));
+          const path = [];
+          let cursor = byId.get(turnId);
+          while (cursor) {
+            path.push(cursor);
+            cursor = cursor.parentTurnId ? byId.get(cursor.parentTurnId) : undefined;
+          }
+          setForkConfirm({
+            turnId,
+            turnCount: path.length,
+            attachmentCount: path.reduce(
+              (count, turn) =>
+                count + (turn.userMessage.attachments?.length ?? 0) + (turn.assistantMessage?.attachments?.length ?? 0),
+              0,
+            ),
+            artifactCount: path.reduce((count, turn) => count + (turn.generatedArtifacts?.length ?? 0), 0),
+          });
         },
         onSwitchBranch: (turnId) => {
           if (!blockHistoricalMutation()) void handleSelectBranchTurnAndSync(turnId);
@@ -4572,6 +4567,13 @@ export function MissionThreadedControllerHost({
                   {selectedSession.scope === "external" ? "External writeback (non-resumable)" : "Mission session"}
                 </StatusChip>
               ) : null}
+              {selectedSession?.forkRelationships?.[0] ? (
+                <StatusChip tone="muted">
+                  {selectedSession.forkRelationships[0].direction === "forked_from"
+                    ? "Forked conversation"
+                    : "Has forks"}
+                </StatusChip>
+              ) : null}
               {!isCodeSurface && visibleRunStateLabel ? (
                 <StatusChip tone="muted">{visibleRunStateLabel}</StatusChip>
               ) : null}
@@ -4583,6 +4585,23 @@ export function MissionThreadedControllerHost({
       {isRefreshing ? <p className="status-banner">Refreshing chat context...</p> : null}
 
       {renderSurface(threadedSurfaceInput)}
+      <ConfirmModal
+        open={Boolean(forkConfirm)}
+        title="Fork conversation from this turn?"
+        message={
+          forkConfirm
+            ? `Create an independent chat containing ${forkConfirm.turnCount} turn${forkConfirm.turnCount === 1 ? "" : "s"}, ${forkConfirm.attachmentCount} attachment${forkConfirm.attachmentCount === 1 ? "" : "s"}, and ${forkConfirm.artifactCount} artifact${forkConfirm.artifactCount === 1 ? "" : "s"}. Original execution evidence is retained as read-only provenance, not replayed.`
+            : ""
+        }
+        confirmLabel={forkPending ? "Forking..." : "Create fork"}
+        pending={forkPending}
+        cancelDisabled={forkPending}
+        disableDismiss={forkPending}
+        onCancel={() => setForkConfirm(null)}
+        onConfirm={async () => {
+          if (forkConfirm && !blockHistoricalMutation()) await handleStartNewThreadFromTurn(forkConfirm.turnId);
+        }}
+      />
       <ConfirmModal
         open={Boolean(capabilitySuggestionConfirm)}
         title={capabilityConfirmationCopy?.title ?? "Confirm capability action"}

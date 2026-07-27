@@ -277,6 +277,7 @@ export const updateSettingsSchema = z.object({
       unifiedComposerPaletteV1Enabled: z.boolean().optional(),
       attachedContextToolsV1Enabled: z.boolean().optional(),
       chatSessionStatusV1Enabled: z.boolean().optional(),
+      conversationForksV1Enabled: z.boolean().optional(),
       utilityModelRoutingV1Enabled: z.boolean().optional(),
       cronEvidenceV1Enabled: z.boolean().optional(),
       memoryConsolidationV1Enabled: z.boolean().optional(),

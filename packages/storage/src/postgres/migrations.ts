@@ -13229,6 +13229,26 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ADD CONSTRAINT skill_aggregate_revisions_updated_at_check CHECK(char_length(BTRIM(updated_at)) > 0);
     `,
   },
+  {
+    version: 124,
+    name: "chat_session_fork_manifests",
+    sql: `
+      CREATE TABLE IF NOT EXISTS chat_session_fork_manifests (
+        fork_id TEXT PRIMARY KEY,
+        source_session_id TEXT NOT NULL,
+        source_turn_id TEXT NOT NULL,
+        new_session_id TEXT NOT NULL UNIQUE REFERENCES sessions(session_id) ON DELETE CASCADE,
+        workspace_id TEXT NOT NULL,
+        transcript_path_hash TEXT NOT NULL,
+        manifest_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_chat_session_forks_source
+        ON chat_session_fork_manifests(source_session_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_chat_session_forks_workspace
+        ON chat_session_fork_manifests(workspace_id, created_at DESC);
+    `,
+  },
 ];
 
 function buildWorkspacePathBridgePosixFlavorPostgresSql(): string {

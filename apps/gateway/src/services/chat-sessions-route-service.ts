@@ -12,6 +12,7 @@ export const chatSessionsRouteMethods = [
   "createChatSessionWorkbenchWorktree",
   "deleteChatSession",
   "exportChatSessionWorkbenchPatch",
+  "forkChatSessionFromTurn",
   "getChatGeneratedArtifact",
   "getChatSessionBinding",
   "getChatSessionStatus",

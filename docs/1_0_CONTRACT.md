@@ -89,6 +89,7 @@ The repo must not claim these at `1.0` unless separately proven and documented:
 `1.0` must stay explicit about compatibility and recovery:
 
 - REST and SSE contract changes are additive unless a separately documented migration window is announced.
+- Chat conversation forks are independent materialized sessions, not context links. Forking is limited to settled terminal paths, uses revision CAS when supplied, copies attachment bytes and generated artifact versions, and retains immutable source provenance without replaying or duplicating execution evidence.
 - Config evolution continues to flow through the managed GoatCitadel config sync path.
 - Storage migrations are forward-upgrade paths. Rollback across schema changes is not promised; restore from a verified backup is the supported recovery path.
 - Backup create, list, and verify are shipped through the admin API/CLI surface.

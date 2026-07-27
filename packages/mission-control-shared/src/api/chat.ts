@@ -47,6 +47,8 @@ import type {
   ChatSessionPrefsPatch,
   ChatSessionPrefsRecord,
   ChatSessionRecord,
+  ChatSessionForkRequest,
+  ChatSessionForkResponse,
   ChatSessionSearchMode,
   ChatSessionSearchResponse,
   ChatSessionStatusResponse,
@@ -331,6 +333,17 @@ export async function createChatSession(
     ...originSurfaceInit(options),
     body: JSON.stringify(input ?? {}),
   });
+}
+
+export async function forkChatSessionFromTurn(
+  sessionId: string,
+  turnId: string,
+  input: ChatSessionForkRequest = {},
+): Promise<ChatSessionForkResponse> {
+  return request<ChatSessionForkResponse>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/fork`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
 }
 
 export async function archiveWorkspaceChatSessions(input?: {

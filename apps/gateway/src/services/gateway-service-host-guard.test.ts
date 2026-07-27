@@ -356,7 +356,8 @@ describe("gateway service host guard", () => {
     // Bumped to 171 for the integrated config-generation/inbound-channel owners,
     // message projection, and the governed compaction-breaker route service.
     // Bumped to 173 for explicit Skill Hub review and rollback-review owners.
-    expect(portMemberCount).toBeLessThanOrEqual(173);
+    // Bumped to 174 for the Gateway-owned Chat session status read service.
+    expect(portMemberCount).toBeLessThanOrEqual(174);
     const portFactory = portSource.slice(
       portSource.indexOf("export function createGatewayRouteCompositionPort"),
       portSource.indexOf("export type RouteDependencyDomain"),

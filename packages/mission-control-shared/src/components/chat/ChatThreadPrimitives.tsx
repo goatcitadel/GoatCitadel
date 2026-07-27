@@ -1128,11 +1128,11 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
                     <button
                       type="button"
                       className="mc-next-thread-inline-button"
-                      aria-label={`Start a new thread from turn ${turn.turnId}`}
+                      aria-label={`Fork conversation from turn ${turn.turnId}`}
                       disabled={isStreamingTurn}
                       onClick={() => onStartNewThreadFromTurn?.(turn.turnId)}
                     >
-                      Start new thread
+                      Fork from this turn
                     </button>
                   ) : null}
                   {hasEditAction ? (

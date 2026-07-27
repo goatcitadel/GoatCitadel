@@ -62,6 +62,7 @@ import { ChatSessionListRepository } from "./chat-session-list-repo.js";
 import { ChatSessionProjectRepository } from "./chat-session-project-repo.js";
 import { ChatSessionWorkbenchRepository } from "./chat-session-workbench-repo.js";
 import { ChatSessionBranchStateRepository } from "./chat-session-branch-state-repo.js";
+import { ChatSessionForkRepository } from "./chat-session-fork-repo.js";
 import { ChatSessionBindingRepository } from "./chat-session-binding-repo.js";
 import { ChatSideChatRepository } from "./chat-side-chat-repo.js";
 import { ChatAttachmentRepository } from "./chat-attachment-repo.js";
@@ -290,6 +291,7 @@ export class Storage {
   public readonly chatSessionProjects: ChatSessionProjectRepository;
   public readonly chatSessionWorkbench: ChatSessionWorkbenchRepository;
   public readonly chatSessionBranchState: ChatSessionBranchStateRepository;
+  public readonly chatSessionForks: ChatSessionForkRepository;
   public readonly chatSessionBindings: ChatSessionBindingRepository;
   public readonly chatSideChats: ChatSideChatRepository;
   public readonly chatAttachments: ChatAttachmentRepository;
@@ -440,6 +442,7 @@ export class Storage {
     this.chatSessionProjects = new ChatSessionProjectRepository(this.db);
     this.chatSessionWorkbench = new ChatSessionWorkbenchRepository(this.db);
     this.chatSessionBranchState = new ChatSessionBranchStateRepository(this.db);
+    this.chatSessionForks = new ChatSessionForkRepository(this.db);
     this.chatSessionBindings = new ChatSessionBindingRepository(this.db);
     this.chatSideChats = new ChatSideChatRepository(this.db);
     this.chatAttachments = new ChatAttachmentRepository(this.db);
