@@ -1812,6 +1812,7 @@ export class GatewayService {
       toolLoopDetection: this.config.toolPolicy.tools.loopDetection,
       safeWriteFallbackDir: path.resolve(config.rootDir, config.assistant.workspaceDir, "goatcitadel_out"),
       chatThinkingStreamV1Enabled: () => this.isFeatureEnabled("chatThinkingStreamV1Enabled"),
+      attachedContextToolsV1Enabled: () => this.isFeatureEnabled("attachedContextToolsV1Enabled"),
       parallelToolExecutionV1Disabled: () => this.isFeatureEnabled("parallelToolExecutionV1Disabled"),
       subagentFanoutV1Disabled: () => this.isFeatureEnabled("subagentFanoutV1Disabled"),
     });
@@ -5539,6 +5540,7 @@ export class GatewayService {
         subagentPolicy: input.normalized.subagentPolicy ?? input.prefs.subagentPolicy,
         normalizationProfile: input.normalized.normalizationProfile,
         toolAutonomy: input.effectiveToolAutonomy,
+        routedContextRequested: input.routedContextRequested,
         historyMessages: input.historyMessages,
         routeResolution: {
           requestedProviderId: routeResolution.requestedProviderId,
@@ -5739,6 +5741,7 @@ export class GatewayService {
         normalized,
         effectiveMode: "chat",
         effectiveToolAutonomy: prefs.planningMode === "advisory" ? "manual" : prefs.toolAutonomy,
+        routedContextRequested: Boolean(request.contextRefs?.length),
         routeResolution: route,
         historyMessages,
         request,

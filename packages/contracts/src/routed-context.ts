@@ -5,6 +5,16 @@ export const CHAT_ROUTED_CONTEXT_MAX_REFS = 16;
 export const CHAT_ROUTED_CONTEXT_MAX_REF_LENGTH = 256;
 export const CHAT_ROUTED_CONTEXT_MAX_LABEL_LENGTH = 160;
 export const CHAT_ROUTED_CONTEXT_MAX_SNAPSHOT_BYTES = 1_048_576;
+export const CHAT_ROUTED_CONTEXT_TOOL_MAX_MATCHES = 50;
+export const CHAT_ROUTED_CONTEXT_TOOL_MAX_READ_LINES = 200;
+export const CHAT_ROUTED_CONTEXT_TOOL_MAX_OUTPUT_BYTES = 32_768;
+export const CHAT_ROUTED_CONTEXT_TOOL_MAX_QUERY_LENGTH = 512;
+export const CHAT_ROUTED_CONTEXT_TOOL_NAMES = [
+  "context.list",
+  "context.grep",
+  "context.query",
+  "context.read_range",
+] as const;
 export const CHAT_ROUTED_CONTEXT_REF_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u;
 const CHAT_ROUTED_CONTEXT_CONTROL_SOURCE = `[${String.fromCharCode(0)}-${String.fromCharCode(0x1f)}${String.fromCharCode(0x7f)}]`;
 export const CHAT_ROUTED_CONTEXT_CONTROL_PATTERN = new RegExp(CHAT_ROUTED_CONTEXT_CONTROL_SOURCE, "u");
@@ -125,4 +135,62 @@ export interface ChatRoutedContextBindingReceipt {
   snapshotHash: string;
   sourceRequestHash: string;
   contentHash: string;
+}
+
+export type ChatRoutedContextToolName = (typeof CHAT_ROUTED_CONTEXT_TOOL_NAMES)[number];
+
+/** Exact immutable-source receipt returned by every content-bearing context tool result. */
+export interface ChatRoutedContextToolSourceReceipt {
+  snapshotId: string;
+  snapshotHash: string;
+  sourceHash: string;
+  entryIndex: number;
+  sourceRef: string;
+  sourceKind: ChatRoutedContextKind;
+  sourceLabel: string;
+  startLine: number;
+  endLine: number;
+}
+
+/** Content-free entry projection returned by `context.list`. */
+export interface ChatRoutedContextToolListEntry {
+  entryIndex: number;
+  sourceRef: string;
+  sourceKind: ChatRoutedContextKind;
+  sourceLabel: string;
+  disposition: ChatRoutedContextDisposition;
+  sourceHash: string;
+  admittedBytes: number;
+  admittedTokens: number;
+  lineCount: number;
+  eligible: boolean;
+}
+
+export interface ChatRoutedContextToolListResult {
+  snapshotId: string;
+  snapshotHash: string;
+  entries: ChatRoutedContextToolListEntry[];
+}
+
+export interface ChatRoutedContextToolMatch {
+  receipt: ChatRoutedContextToolSourceReceipt;
+  text: string;
+  score?: number;
+}
+
+export interface ChatRoutedContextToolSearchResult {
+  snapshotId: string;
+  snapshotHash: string;
+  retrievalMode: "literal" | "hybrid" | "lexical_fallback";
+  matches: ChatRoutedContextToolMatch[];
+  truncated: boolean;
+  modelUsageEventIds?: string[];
+}
+
+export interface ChatRoutedContextToolReadRangeResult {
+  snapshotId: string;
+  snapshotHash: string;
+  receipt: ChatRoutedContextToolSourceReceipt;
+  text: string;
+  truncated: boolean;
 }

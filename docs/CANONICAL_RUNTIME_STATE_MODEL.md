@@ -54,6 +54,7 @@ Authority:
 - Resolution, attestation, and budget owner: `apps/gateway/src/services/chat-routed-context-service.ts`
 - Persistence and content-free inspection projection: `packages/storage/src/routed-context-snapshot-repo.ts`
 - Durable replay verification: `apps/gateway/src/services/durable-execution-service.ts`
+- Snapshot-bound tool execution: `packages/policy-engine/src/tool-executor/context-executor.ts`
 
 Canonical bindings:
 - Snapshot identity is bound to `turnId`, `sessionId`, `workspaceId`, `capabilityProfileId`, and `capabilityProfileHash`.
@@ -68,6 +69,10 @@ Notes:
 - Routed `memory_item` reads are workspace-only in v1. Global memory fails closed until a future explicit server-owned capability-profile policy field admits it; caller input, generic grants, and ordinary memory mode do not provide that authority.
 - Durable execution strips raw `contextRefs` from its payload, verifies the stored snapshot against the bound profile, run, turn trace, and hashes, then reuses the frozen admitted text without live source re-resolution. Missing, corrupt, or mismatched bindings fail closed.
 - A retry or edit creates a new turn-bound snapshot. Existing snapshots are never updated in place.
+- When `attachedContextToolsV1Enabled` is enabled and a turn requests routed context, its frozen capability profile may admit `context.list`, `context.grep`, `context.query`, and `context.read_range`. Final execution removes them if the persisted snapshot has no eligible admitted text.
+- Every `context.*` invocation receives its turn, workspace, snapshot ID, and snapshot hash from the server-owned Chat runner. Those fields are absent from the public tool-invoke body; matching authority-shaped model arguments are rejected. The executor re-verifies the snapshot, session, workspace, hashes, and source workspace before reading bytes.
+- `context.list` is content-free. Literal grep and 1-based range reads are line- and byte-bounded. Query embeddings, when configured, are generated only over bounded in-memory snapshot chunks and are never persisted into the knowledge store; unavailable or failed embeddings fall back to deterministic lexical scoring over the same frozen bytes.
+- Content-bearing results retain snapshot/source hashes, entry index/reference, and exact line ranges in the tool run. Chat derives normal tool citations from those receipts. `session.status` projects the four tool names only when its invocation carries the same valid active-turn snapshot binding.
 
 ### Durable Run
 

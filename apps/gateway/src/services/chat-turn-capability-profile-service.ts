@@ -67,6 +67,7 @@ export interface ChatTurnCapabilityProfileResolveInput {
   subagentPolicy: ChatSubagentPolicy;
   normalizationProfile?: ChatNormalizationProfile;
   toolAutonomy: "safe_auto" | "manual";
+  routedContextRequested?: boolean;
   historyMessages: ChatCompletionRequest["messages"];
   routeResolution: ChatTurnCapabilityRouteResolution;
   operatorId?: string;
@@ -102,6 +103,7 @@ export interface ChatTurnCapabilityProfileResolveDeps {
     subagentPolicy: ChatSubagentPolicy;
     normalizationProfile?: ChatNormalizationProfile;
     toolAutonomy: "safe_auto" | "manual";
+    routedContextRequested?: boolean;
     operatorId?: string;
     authActorId?: string;
     authActorSource?: ToolPolicyActorContext["authActorSource"];
@@ -240,6 +242,7 @@ export async function resolveChatTurnCapabilityProfile(
     subagentPolicy: input.subagentPolicy,
     normalizationProfile: input.normalizationProfile,
     toolAutonomy: input.toolAutonomy,
+    routedContextRequested: input.routedContextRequested,
     operatorId: input.operatorId,
     authActorId: input.authActorId,
     authActorSource: input.authActorSource,

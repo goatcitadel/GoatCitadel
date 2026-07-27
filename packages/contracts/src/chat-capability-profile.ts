@@ -254,5 +254,7 @@ export interface ChatTurnCapabilityProfileEnvelope {
   profile?: ChatTurnCapabilityProfileRecord;
   /** Sibling immutable context evidence; excluded from capability-profile.v1 hashes. */
   routedContext?: import("./routed-context.js").ChatRoutedContextInspection;
+  /** Currently callable snapshot-bound context tools after final entry admission. */
+  availableContextTools?: import("./routed-context.js").ChatRoutedContextToolName[];
   error?: string;
 }

@@ -28,6 +28,7 @@ export function buildUpdatedFeatureFlags(
     autonomyV1Disabled: patch.autonomyV1Disabled ?? current.autonomyV1Disabled,
     chatThinkingStreamV1Enabled: patch.chatThinkingStreamV1Enabled ?? current.chatThinkingStreamV1Enabled,
     unifiedComposerPaletteV1Enabled: patch.unifiedComposerPaletteV1Enabled ?? current.unifiedComposerPaletteV1Enabled,
+    attachedContextToolsV1Enabled: patch.attachedContextToolsV1Enabled ?? current.attachedContextToolsV1Enabled,
     channelVoiceInboundV1Enabled: patch.channelVoiceInboundV1Enabled ?? current.channelVoiceInboundV1Enabled,
     signalInboundV1Enabled: patch.signalInboundV1Enabled ?? current.signalInboundV1Enabled,
     plannerFastPathV1Disabled: patch.plannerFastPathV1Disabled ?? current.plannerFastPathV1Disabled,
@@ -71,6 +72,7 @@ export function resolveGatewayFeatureFlags(
     chatThinkingStreamV1Enabled: stored?.chatThinkingStreamV1Enabled ?? fromConfig.chatThinkingStreamV1Enabled,
     unifiedComposerPaletteV1Enabled:
       stored?.unifiedComposerPaletteV1Enabled ?? fromConfig.unifiedComposerPaletteV1Enabled,
+    attachedContextToolsV1Enabled: stored?.attachedContextToolsV1Enabled ?? fromConfig.attachedContextToolsV1Enabled,
     channelVoiceInboundV1Enabled: stored?.channelVoiceInboundV1Enabled ?? fromConfig.channelVoiceInboundV1Enabled,
     signalInboundV1Enabled: stored?.signalInboundV1Enabled ?? fromConfig.signalInboundV1Enabled,
     plannerFastPathV1Disabled: stored?.plannerFastPathV1Disabled ?? fromConfig.plannerFastPathV1Disabled,

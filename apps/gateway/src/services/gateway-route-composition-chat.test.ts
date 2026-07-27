@@ -394,7 +394,18 @@ describe("composeChatRouteDependencies", () => {
           authActorId: "operator-1",
         },
         hashes: { profileHash: "a".repeat(64) },
-        selection: { tools: [{ providerDefinition: { secretDefinition: true } }] },
+        selection: {
+          tools: [
+            {
+              canonicalName: "context.list",
+              providerDefinition: { secretDefinition: true },
+            },
+            {
+              canonicalName: "context.read_range",
+              providerDefinition: { secretDefinition: true },
+            },
+          ],
+        },
       },
     }));
     const findScopeByTurn = vi.fn(() => ({
@@ -416,6 +427,19 @@ describe("composeChatRouteDependencies", () => {
       workspaceId: "normalized:workspace-1",
       capabilityProfileId: "profile-1",
       capabilityProfileHash: "a".repeat(64),
+      entries: [
+        {
+          index: 0,
+          kind: "memory_item",
+          ref: "memory-1",
+          label: "Memory 1",
+          disposition: "included",
+          admittedBytes: 12,
+          admittedTokens: 3,
+          admittedText: "frozen truth",
+          sourceHash: "f".repeat(64),
+        },
+      ],
     }));
     const inspectRoutedContextByTurn = vi.fn(() => ({
       snapshotId: "snapshot-1",
@@ -486,6 +510,7 @@ describe("composeChatRouteDependencies", () => {
         includedCount: 1,
         entries: [{ kind: "memory_item", ref: "memory-1" }],
       },
+      availableContextTools: ["context.list", "context.read_range"],
     });
     expect(inspectByTurn).toHaveBeenCalledOnce();
     expect(findRoutedContextByTurn).toHaveBeenCalledWith("turn-1");

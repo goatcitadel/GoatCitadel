@@ -339,6 +339,12 @@ export interface ToolInvokeRequest {
   args: Record<string, unknown>;
   agentId: string;
   sessionId: string;
+  /** Server-authored active turn binding. Direct/client tool routes must never accept it. */
+  turnId?: string;
+  /** Server-authored immutable routed-context binding for context.* tools. */
+  routedContextSnapshotId?: string;
+  /** Server-authored hash paired with routedContextSnapshotId. */
+  routedContextSnapshotHash?: string;
   workspaceId?: string;
   /** Protected parent operating-world scope resolved by the gateway when available. */
   citadelId?: string;
