@@ -711,6 +711,7 @@ import type { BaseAgentPromptSkill, BaseAgentPromptToolset } from "./base-agent-
 import { TaskLifecycleService } from "./task-lifecycle-service.js";
 import { BrowserSessionRuntimeService } from "./browser-session-runtime-service.js";
 import { ReviewReadinessService } from "./review-readiness-service.js";
+import { ChatSessionStatusService } from "./chat-session-status-service.js";
 import { resolvePackagedRuntimeAppDir, RuntimeReleaseTrustService } from "./runtime-release-trust-service.js";
 import { RuntimeAuthorityProjectionService } from "./runtime-authority-projection-service.js";
 import { createDefaultArtifactProbers, createDurableTaskAutoBlockBridge } from "./gateway-kanban-wiring.js";
@@ -1343,6 +1344,7 @@ export class GatewayService {
   public readonly mcpElicitationService = new McpElicitationService();
   public readonly browserSessionRuntimeService: BrowserSessionRuntimeService;
   public readonly reviewReadinessService: ReviewReadinessService;
+  public readonly chatSessionStatusService: ChatSessionStatusService;
   private readonly runtimeReleaseTrustService: RuntimeReleaseTrustService;
   public readonly runtimeAuthorityProjectionService: RuntimeAuthorityProjectionService;
   private readonly guidanceService: GuidanceService;
@@ -1561,6 +1563,7 @@ export class GatewayService {
       // services populate. Same contract as scheduleManage: policy/approval/
       // audit fire first in `engine.invoke`.
       subagentFanout: (request) => this.subagentFanout.execute(request),
+      getChatSessionStatus: (sessionId) => this.chatSessionStatusService.getModelProjection(sessionId),
     });
     const secretStore = new SecretStoreService();
     this.secretStore = secretStore;
@@ -1718,6 +1721,11 @@ export class GatewayService {
           runtime: this.llamaCppRuntime,
         });
       },
+    });
+    this.chatSessionStatusService = new ChatSessionStatusService({
+      storage: this.storage,
+      getModelContextWindow: (providerId, model) => this.llmService.getModelContextWindow(providerId, model),
+      getRuntimeIdentity: () => this.reviewReadinessService.getRuntimeIdentity(),
     });
     this.assemblyService = new AssemblyService({
       storage: this.storage,

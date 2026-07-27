@@ -5,6 +5,7 @@ import {
   getDeleteSessionConfirmationMessage,
   groupDelegatedSessionsForRail,
   isConfirmableCapabilityAction,
+  isLocalChatStatusCommand,
   parseBtwCommand,
   resolveChatRefreshPlan,
   resolveOptimisticChatPrefs,
@@ -15,6 +16,11 @@ import {
 } from "./chat-page-pure-helpers";
 
 describe("chat-page-pure-helpers coverage", () => {
+  it("recognizes only the local status command", () => {
+    expect(isLocalChatStatusCommand(" /STATUS ")).toBe(true);
+    expect(isLocalChatStatusCommand("/status explain")).toBe(false);
+  });
+
   it("builds compact stable suggestion sync keys without full-object serialization", () => {
     const capability = {
       kind: "skill_import",

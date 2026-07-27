@@ -49,6 +49,7 @@ import type {
   ChatSessionRecord,
   ChatSessionSearchMode,
   ChatSessionSearchResponse,
+  ChatSessionStatusResponse,
   ChatSpecialistCandidatePatchInput,
   ChatSpecialistCandidateRecord,
   ChatSpecialistCandidateSuggestionRecord,
@@ -350,6 +351,12 @@ export async function updateChatSession(
   return request<ChatSessionRecord>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}`, {
     method: "PATCH",
     body: JSON.stringify(input),
+  });
+}
+
+export async function fetchChatSessionStatus(sessionId: string): Promise<ChatSessionStatusResponse> {
+  return request<ChatSessionStatusResponse>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/status`, {
+    cache: "no-store",
   });
 }
 

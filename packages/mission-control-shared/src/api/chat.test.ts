@@ -294,6 +294,7 @@ describe("chat API origin surface headers", () => {
         writable: true,
       });
       await chat.fetchChatSessionBinding(sessionId);
+      await chat.fetchChatSessionStatus(sessionId);
       await chat.fetchChatSessionWorkbench(sessionId);
       await chat.createChatSessionWorkbenchWorktree(sessionId, { baseRef: "main" });
       await chat.fetchChatSessionWorkbenchTree(sessionId);
@@ -437,6 +438,9 @@ describe("chat API origin surface headers", () => {
       ).toBe(true);
       expect(
         fetchMock.mock.calls.some(([url]) => String(url).includes("/api/v1/chat/sessions/session%201/agent-send")),
+      ).toBe(true);
+      expect(
+        fetchMock.mock.calls.some(([url]) => String(url).endsWith("/api/v1/chat/sessions/session%201/status")),
       ).toBe(true);
       expect(fetchMock.mock.calls.some(([, init]) => init?.method === "PATCH")).toBe(true);
       expect(fetchMock.mock.calls.some(([, init]) => init?.method === "DELETE")).toBe(true);

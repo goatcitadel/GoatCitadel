@@ -67,6 +67,12 @@ describe("chat session routes", () => {
       includeInHistory: false,
     });
 
+    const status = await app.inject({ method: "GET", url: "/api/v1/chat/sessions/sess-1/status" });
+    expect(status.statusCode).toBe(200);
+    expect(status.headers["cache-control"]).toBe("private, no-store");
+    expect(status.json()).toMatchObject({ schemaVersion: "chat.session-status.v1", sessionId: "sess-1" });
+    expect(chatSessions.getChatSessionStatus).toHaveBeenCalledWith("sess-1");
+
     await expect(
       app.inject({
         method: "PATCH",
@@ -505,6 +511,7 @@ function createChatSessionsService(overrides: Record<string, unknown> = {}) {
     assignChatSessionProject: vi.fn(() => ({ sessionId: "sess-1", projectId: "project-1" })),
     setChatSessionBinding: vi.fn(() => ({ sessionId: "sess-1", transport: "integration" })),
     getChatSessionBinding: vi.fn(() => ({ sessionId: "sess-1", transport: "integration" })),
+    getChatSessionStatus: vi.fn(() => ({ schemaVersion: "chat.session-status.v1", sessionId: "sess-1" })),
     getChatSessionWorkbench: vi.fn(async () => ({ sessionId: "sess-1", status: "ready" })),
     createChatSessionWorkbenchWorktree: vi.fn(async () => ({ sessionId: "sess-1", worktreePath: "worktree" })),
     getChatSessionWorkbenchTree: vi.fn(async () => ({ rootPath: "repo", items: [] })),

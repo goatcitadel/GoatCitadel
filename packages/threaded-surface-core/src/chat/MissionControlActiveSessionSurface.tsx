@@ -6,6 +6,7 @@ import type {
   ChatMode,
   ChatOrchestrationReviewDepth,
   ChatSessionRecord,
+  ChatSessionStatusResponse,
   ChatThinkingLevel,
   ChatThreadResponse,
   ChatWebMode,
@@ -107,6 +108,14 @@ export interface MissionControlActiveSessionSurfaceProps {
   delegationRun: ActiveChatDelegationRun | null;
   delegationSuggestion: ChatDelegationSuggestionRecord | null;
   notices: ChatThreadNotice[];
+  sessionStatusPanel?: {
+    open: boolean;
+    loading: boolean;
+    error: string | null;
+    status: ChatSessionStatusResponse | null;
+    onRefresh: () => void;
+    onClose: () => void;
+  };
   /**
    * HX-411 controller banner data + operator actions, present only while an
    * external session_control_client owns this session. Content-free (no secret);

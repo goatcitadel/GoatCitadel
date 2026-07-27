@@ -150,6 +150,12 @@ export function composeChatRouteDependencies(
       });
     },
     getChatSessionBinding: (sessionId) => chatSessionService.getChatSessionBinding(ChatSessionDependencies, sessionId),
+    getChatSessionStatus: (sessionId) => {
+      if (!gateway.isFeatureEnabled("chatSessionStatusV1Enabled")) {
+        throw new NotFoundError({ entity: "Chat session status", id: sessionId });
+      }
+      return gateway.chatSessionStatusService.getOperatorStatus(sessionId);
+    },
     getChatSessionWorkbench: (sessionId) =>
       chatWorkbenchService.getChatSessionWorkbench(ChatWorkbenchDependencies, sessionId),
     getChatSessionWorkbenchDiff: (sessionId) =>

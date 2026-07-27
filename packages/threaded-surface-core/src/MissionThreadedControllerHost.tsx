@@ -19,6 +19,7 @@ import type {
   ChatModePresetRecord,
   ChatSessionRecord,
   ChatSessionSearchHitRecord,
+  ChatSessionStatusResponse,
   ChatSessionWorkbenchCommandRunRequest,
   ChatSessionWorkbenchDiffResponse,
   ChatSessionWorkbenchFileDiffResponse,
@@ -44,6 +45,7 @@ import {
   fetchChatGeneratedArtifact,
   fetchChatSessionGoal,
   fetchChatSessionPrefs,
+  fetchChatSessionStatus,
   fetchMcpServers,
   fetchMcpTemplates,
   fetchRuntimeLifecycleExport,
@@ -131,6 +133,7 @@ import {
   buildSuggestionSyncKey,
   shouldApplyFetchedMessagesAfterStream,
   shouldExecuteLocalChatCommand,
+  isLocalChatStatusCommand,
 } from "./chat/chat-page-pure-helpers";
 import { resolveOutboundSurfaceMode } from "./pure-helpers";
 import {
@@ -894,6 +897,12 @@ export function MissionThreadedControllerHost({
   const [selectedPresetId, setSelectedPresetId] = useState<string>("");
   const [composerPaletteGlobalOpen, setComposerPaletteGlobalOpen] = useState(false);
   const [composerPaletteQuery, setComposerPaletteQuery] = useState("");
+  const [sessionStatusPanel, setSessionStatusPanel] = useState<{
+    open: boolean;
+    loading: boolean;
+    error: string | null;
+    status: ChatSessionStatusResponse | null;
+  }>({ open: false, loading: false, error: null, status: null });
   const [workbenchDiscardConfirm, setWorkbenchDiscardConfirm] = useState<{
     title: string;
     message: string;
@@ -1063,6 +1072,38 @@ export function MissionThreadedControllerHost({
     loadSessionSecondaryState,
   } = sessionData;
   const currentSessionMode: ChatMode = "chat";
+  const sessionStatusEnabled = settings?.features?.chatSessionStatusV1Enabled === true;
+  const refreshSessionStatus = useCallback(async () => {
+    if (!selectedSessionId || !sessionStatusEnabled) return;
+    setSessionStatusPanel((current) => ({ ...current, open: true, loading: true, error: null }));
+    try {
+      const status = await fetchChatSessionStatus(selectedSessionId);
+      setSessionStatusPanel({ open: true, loading: false, error: null, status });
+    } catch (statusError) {
+      setSessionStatusPanel((current) => ({
+        ...current,
+        open: true,
+        loading: false,
+        error: statusError instanceof Error ? statusError.message : String(statusError),
+      }));
+    }
+  }, [selectedSessionId, sessionStatusEnabled]);
+
+  useEffect(() => {
+    setSessionStatusPanel({ open: false, loading: false, error: null, status: null });
+  }, [selectedSessionId]);
+
+  useEffect(() => {
+    if (sessionStatusPanel.open && sessionStatusEnabled) void refreshSessionStatus();
+    // Thread and attention changes are fed by the existing realtime refresh path.
+  }, [
+    approvalsCount,
+    eventStreamStatus.state,
+    refreshSessionStatus,
+    sessionStatusEnabled,
+    sessionStatusPanel.open,
+    thread,
+  ]);
 
   const lastEmittedModeRef = useRef<ChatMode | null>(null);
   useEffect(() => {
@@ -1423,8 +1464,13 @@ export function MissionThreadedControllerHost({
       );
       return Promise.resolve();
     }
+    if (sessionStatusEnabled && selectedSessionId && isLocalChatStatusCommand(draft)) {
+      setDraft("");
+      void refreshSessionStatus();
+      return Promise.resolve();
+    }
     return composerSendHandlerRef.current();
-  }, []);
+  }, [draft, refreshSessionStatus, selectedSessionId, sessionStatusEnabled]);
 
   useEffect(() => {
     queuedOutboundSetterRef.current = setQueuedOutbound;
@@ -3788,6 +3834,13 @@ export function MissionThreadedControllerHost({
         delegationRun: visibleDelegationRun,
         delegationSuggestion,
         notices: threadNotices,
+        sessionStatusPanel: sessionStatusEnabled
+          ? {
+              ...sessionStatusPanel,
+              onRefresh: () => void refreshSessionStatus(),
+              onClose: () => setSessionStatusPanel((current) => ({ ...current, open: false })),
+            }
+          : undefined,
         followOutput: followThreadOutput,
         streamStatus: streamStatus as ChatStreamStatus,
         visualStreamMode,

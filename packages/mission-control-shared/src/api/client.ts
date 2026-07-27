@@ -460,6 +460,7 @@ export {
   fetchChatProjects,
   fetchChatResearchRun,
   fetchChatSessionBinding,
+  fetchChatSessionStatus,
   fetchChatSideChat,
   fetchChatSessionGeneratedArtifacts,
   fetchChatSessionWorkbench,
