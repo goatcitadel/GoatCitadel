@@ -193,7 +193,10 @@ describe("shared boundary and presentation tail components", () => {
     });
 
     const onDismiss = vi.fn();
-    const stack = create(<NotificationStack items={grouped} onDismiss={onDismiss} />);
+    let stack!: ReturnType<typeof create>;
+    act(() => {
+      stack = create(<NotificationStack items={grouped} onDismiss={onDismiss} />);
+    });
     expect(textOf(stack.toJSON())).toContain("x 2");
     act(() => {
       stack.root.findByType("button").props.onClick();
@@ -201,6 +204,41 @@ describe("shared boundary and presentation tail components", () => {
     expect(onDismiss).toHaveBeenCalledWith("n1");
     stack.update(<NotificationStack items={[]} onDismiss={onDismiss} />);
     expect(stack.toJSON()).toBeNull();
+
+    // The enter animation must run only on an item's FIRST mount. Grouped
+    // upserts move items to the front of the list, which re-inserts their DOM
+    // nodes; re-applying the animation class there restarts the keyframe
+    // animation from opacity 0 and makes the whole stack flicker translucent
+    // during event bursts.
+    const itemClasses = (renderer: ReturnType<typeof create>): Map<string, string> => {
+      const map = new Map<string, string>();
+      for (const node of renderer.root.findAll((candidate) => candidate.type === "div")) {
+        const className = String(node.props.className ?? "");
+        if (!className.split(" ").includes("notification-item")) {
+          continue;
+        }
+        const message = textOf(node.children as unknown);
+        map.set(message, className);
+      }
+      return map;
+    };
+    const first: NotificationItem = { id: "e1", tone: "info", message: "First", timestamp: now };
+    const second: NotificationItem = { id: "e2", tone: "info", message: "Second", timestamp: now + 1 };
+    let enterStack!: ReturnType<typeof create>;
+    act(() => {
+      enterStack = create(<NotificationStack items={[first]} onDismiss={onDismiss} />);
+    });
+    expect([...itemClasses(enterStack).values()][0]).toContain("notification-item-enter");
+    act(() => {
+      enterStack.update(<NotificationStack items={[second, { ...first, count: 2 }]} onDismiss={onDismiss} />);
+    });
+    const classesAfterReorder = itemClasses(enterStack);
+    expect([...classesAfterReorder.entries()].find(([text]) => text.includes("Second"))?.[1]).toContain(
+      "notification-item-enter",
+    );
+    expect([...classesAfterReorder.entries()].find(([text]) => text.includes("First"))?.[1]).not.toContain(
+      "notification-item-enter",
+    );
 
     expect(create(<ChatStreamStatusBar status="idle" queuedCount={0} error={null} />).toJSON()).toBeNull();
     expect(textOf(create(<ChatStreamStatusBar status="connecting" queuedCount={0} error={null} />).toJSON())).toContain(

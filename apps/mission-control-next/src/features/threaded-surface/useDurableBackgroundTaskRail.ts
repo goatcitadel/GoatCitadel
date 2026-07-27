@@ -4,6 +4,7 @@ import {
   controlDurableBackgroundTask,
   fetchDurableBackgroundTaskRail,
 } from "@goatcitadel/mission-control-shared/api/durable";
+import { isApiRequestError } from "@goatcitadel/mission-control-shared/api/client";
 
 const ACTIVE_POLL_INTERVAL_MS = 3_000;
 
@@ -48,7 +49,15 @@ export function useDurableBackgroundTaskRail(input: {
       setError(null);
     } catch (caught) {
       if (requestId !== requestSequence.current || activeScopeKey.current !== scopeKey) return;
-      setError(caught instanceof Error ? caught.message : "Background-task state could not be loaded.");
+      if (isApiRequestError(caught) && caught.status === 404) {
+        // A parent run without a durable rail is a normal state, not a
+        // failure — surfacing the raw 404 envelope here painted an API error
+        // JSON blob into the Background tasks panel.
+        setSnapshot(null);
+        setError(null);
+      } else {
+        setError(caught instanceof Error ? caught.message : "Background-task state could not be loaded.");
+      }
     } finally {
       if (requestId === requestSequence.current && activeScopeKey.current === scopeKey) {
         setLoading(false);

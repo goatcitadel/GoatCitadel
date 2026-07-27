@@ -296,6 +296,7 @@ export function MissionControlNextApp() {
   });
 
   const shellThemeClass = resolveShellThemeClass(resolveEffectiveShellTheme(route.theme, theme));
+  const effectiveChromeTheme = resolveEffectiveShellTheme(route.theme, theme);
   const currentAreaMeta = AREA_META[route.area];
   const currentRailItems = route.area === "chat" ? buildModeRail(route.mode) : RAIL_ITEMS[route.area];
   const groupedRailItems = useMemo(
@@ -595,7 +596,22 @@ export function MissionControlNextApp() {
       setNotificationSoundMode(notificationPreferences.soundMode === "off" ? lastEnabledSoundModeRef.current : "off"),
     [notificationPreferences.soundMode, setNotificationSoundMode, lastEnabledSoundModeRef],
   );
-  const handleToggleTheme = useCallback(() => setTheme(theme === "dark" ? "light" : "dark"), [setTheme, theme]);
+  /*
+   * Toggle from the EFFECTIVE theme (a `?theme=` route pin wins over the
+   * stored preference) and drop the pin when toggling: flipping only the
+   * hidden preference while the pin stays rendered made the control appear
+   * dead and its icon lie about the visible theme.
+   */
+  const handleToggleTheme = useCallback(() => {
+    setTheme(effectiveChromeTheme === "dark" ? "light" : "dark");
+    if (route.theme) {
+      const unpinned = normalizeAppRoute({ ...route, theme: undefined });
+      window.history.replaceState({}, "", buildAppHref(unpinned));
+      startTransition(() => {
+        setRoute(unpinned);
+      });
+    }
+  }, [effectiveChromeTheme, route, setTheme]);
   const soundEnabled = notificationPreferences.soundMode !== "off";
 
   useEffect(() => {
@@ -761,7 +777,7 @@ export function MissionControlNextApp() {
             realtimeDegraded={realtimeStatusCopy.degraded}
             route={route}
             soundEnabled={soundEnabled}
-            theme={theme}
+            theme={effectiveChromeTheme}
             workspaceOptions={workspaceOptions}
           />
 

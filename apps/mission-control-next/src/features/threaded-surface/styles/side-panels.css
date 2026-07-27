@@ -80,6 +80,10 @@
   padding: 0.46rem;
   padding-left: calc(0.46rem + 9px);
   padding-right: calc(0.46rem + var(--mc-scrollbar-safe-gutter));
+  /* clip, not hidden: hidden containers can still be side-scrolled by focus
+     (scrollIntoView), which shifted the whole dock ~14px left and truncated
+     the leading glyph of every line in capture runs. */
+  overflow-x: clip;
 }
 
 .mc-next-threaded-panel-switcher {
@@ -169,6 +173,17 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 0.55rem;
+  min-width: 0;
+}
+
+/* Status chips have min-width:auto content floors; in the ~256px utility
+   column a nowrap chip row painted past the panel's right edge ("0 citations"
+   clipped at the viewport). Let chips wrap and shrink inside the column. */
+.mc-next-utility-chip-row {
+  flex-wrap: wrap;
+}
+
+.mc-next-utility-chip-row .mc-next-status-chip {
   min-width: 0;
 }
 

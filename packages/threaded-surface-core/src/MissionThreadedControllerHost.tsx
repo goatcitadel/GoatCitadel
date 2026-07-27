@@ -2332,7 +2332,8 @@ export function MissionThreadedControllerHost({
         gatewayDetail:
           gatewayStatus?.detail ??
           "Mission Control has not received shell gateway status for this threaded surface yet.",
-        approvalsSummary: approvalsCount > 0 ? `${approvalsCount} decisions` : "Decisions clear",
+        approvalsSummary:
+          approvalsCount > 0 ? `${approvalsCount} decision${approvalsCount === 1 ? "" : "s"}` : "Decisions clear",
         runStateSummary: visibleRunStateSummary ?? backgroundHandoffRunStateSummary,
         activeModeLabel: activeModePreset.label,
         providerModelSummary: effectiveProviderModelSummary,

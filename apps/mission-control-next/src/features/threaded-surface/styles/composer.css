@@ -686,6 +686,15 @@ details.mc-next-thread-action-menu > .mc-next-thread-action-menu-summary {
   font-weight: 700;
 }
 
+/* Send is genuinely disabled while a blocking prompt is pending, but had no
+   disabled treatment — it read as a live CTA directly under "Resolve the
+   approval before sending another instruction." */
+.mc-next-composer-primary:disabled {
+  opacity: 0.55;
+  filter: saturate(0.55);
+  cursor: not-allowed;
+}
+
 .mc-next-threaded-surface.unified .mc-next-composer-inline-select,
 .mc-next-threaded-surface.unified .mc-next-composer-inline-button {
   min-height: 1.58rem;

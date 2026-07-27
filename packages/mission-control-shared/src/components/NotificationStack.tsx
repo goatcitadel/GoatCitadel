@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, useEffect, useRef } from "react";
 
 export interface NotificationItem {
   id: string;
@@ -42,6 +42,24 @@ interface NotificationStackProps {
 }
 
 function NotificationStackInner({ items, onDismiss }: NotificationStackProps) {
+  // Grouped upserts move an item to the front of the list, which re-inserts
+  // its DOM node and would restart a CSS animation declared on every item —
+  // during event bursts the whole stack then flickers from opacity 0. Scope
+  // the enter animation to ids this instance has not rendered before.
+  const seenIdsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const liveIds = new Set(items.map((item) => item.id));
+    for (const id of liveIds) {
+      seenIdsRef.current.add(id);
+    }
+    for (const id of seenIdsRef.current) {
+      if (!liveIds.has(id)) {
+        seenIdsRef.current.delete(id);
+      }
+    }
+  }, [items]);
+
   if (items.length === 0) {
     return null;
   }
@@ -58,7 +76,7 @@ function NotificationStackInner({ items, onDismiss }: NotificationStackProps) {
       {items.map((item) => (
         <div
           key={item.id}
-          className={`notification-item ${item.tone}`}
+          className={`notification-item ${item.tone}${seenIdsRef.current.has(item.id) ? "" : " notification-item-enter"}`}
           role={item.tone === "error" || item.tone === "warning" ? "alert" : "status"}
           aria-live={item.tone === "error" || item.tone === "warning" ? "assertive" : "polite"}
           aria-atomic="true"

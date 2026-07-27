@@ -4097,7 +4097,7 @@ describe("SettingsNativePage access", () => {
       await act(async () => {
         findFirstSelect(renderer!.root).props.onChange({ target: { value: "basic" } });
         findLoopbackCheckbox(renderer!.root).props.onChange({ target: { checked: false } });
-        findInputByPlaceholder(renderer!.root, "Only enter a new token when rotating credentials").props.onChange({
+        findInputByPlaceholder(renderer!.root, "New token (only when rotating)").props.onChange({
           target: { value: "rotated-token" },
         });
         const optionalInputs = findInputsByPlaceholder(renderer!.root, "Optional");

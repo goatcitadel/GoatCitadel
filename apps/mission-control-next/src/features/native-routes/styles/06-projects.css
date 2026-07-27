@@ -238,6 +238,10 @@
 
 .mc-next-project-lead-card {
   display: grid;
+  /* Stretched to the taller sibling panel, leftover height otherwise
+     distributes into the auto rows and inflates the action buttons into
+     ~65px slabs (the citadel lead card already anchors content). */
+  align-content: start;
   gap: 0.55rem;
   min-width: 0;
   padding: 0.78rem 0.86rem;

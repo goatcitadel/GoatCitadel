@@ -180,7 +180,7 @@ export function deriveProjectHome(
     artifactCount,
     artifactCountsBySessionId,
     artifactCountSource: artifacts === undefined ? "session_refs" : "records",
-    lastActivityLabel: sortedSessions[0] ? formatDateTime(sortedSessions[0].lastActivityAt) : "None",
+    lastActivityLabel: sortedSessions[0] ? formatDateTime(sortedSessions[0].lastActivityAt) : "No activity yet",
     ...health,
   };
 }

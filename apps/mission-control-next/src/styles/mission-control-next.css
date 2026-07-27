@@ -228,7 +228,13 @@
   --text-secondary: color-mix(in oklab, var(--foreground) 82%, var(--muted-foreground));
   --text-muted: var(--muted-foreground);
   --border-default: var(--border);
-  --border-subtle: var(--mc-border-subtle);
+  /* Do NOT re-declare --border-subtle here: --mc-border-subtle above is
+     defined as var(--border-subtle) on this same element, so aliasing back
+     creates a custom-property cycle that makes BOTH guaranteed-invalid and
+     empties --border/--border-default/--line shell-wide (every
+     `var(--border)` border silently computes to none). The canonical
+     .theme-* declaration in mission-control-next-tokens.css already applies
+     to this element via its theme class. */
   --border-emphasis: var(--mc-border-strong);
   --accent-primary: var(--primary);
   --accent-strong: var(--brand);
@@ -287,7 +293,13 @@
   --text-secondary: color-mix(in oklab, var(--foreground) 84%, var(--muted-foreground));
   --text-muted: var(--muted-foreground);
   --border-default: var(--border);
-  --border-subtle: var(--mc-border-subtle);
+  /* Do NOT re-declare --border-subtle here: --mc-border-subtle above is
+     defined as var(--border-subtle) on this same element, so aliasing back
+     creates a custom-property cycle that makes BOTH guaranteed-invalid and
+     empties --border/--border-default/--line shell-wide (every
+     `var(--border)` border silently computes to none). The canonical
+     .theme-* declaration in mission-control-next-tokens.css already applies
+     to this element via its theme class. */
   --border-emphasis: var(--mc-border-strong);
   --accent-primary: var(--primary);
   --accent-strong: color-mix(in oklab, var(--mc-area-color) 62%, oklch(0.4 0.02 255));
@@ -2001,7 +2013,9 @@
 .notification-stack {
   position: fixed;
   right: 1rem;
-  bottom: 1rem;
+  /* Clear the 32px status strip so toasts never cover its Details/Approvals
+     controls. */
+  bottom: 2.75rem;
   z-index: var(--z-toast);
   display: grid;
   gap: 0.65rem;
@@ -2039,6 +2053,11 @@
   border: 1px solid var(--border);
   background: color-mix(in oklab, var(--mc-surface-2) 96%, transparent);
   box-shadow: var(--mc-shadow-soft);
+}
+
+/* First mount only (see NotificationStack.tsx): grouped upserts re-insert the
+   node, and an always-on animation restarts from opacity 0 on every burst. */
+.notification-item-enter {
   animation: mcNotificationEnter var(--motion-slow) var(--motion-ease) both;
 }
 
@@ -2129,10 +2148,15 @@
     color-mix(in oklab, var(--mc-surface-2) 96%, transparent);
 }
 
-.notification-dismiss {
+/* Two-class selector so this wins over the later .gc-button base rule, which
+   otherwise re-applies the elevated-slab background and stretches the button
+   to the toast's full height. */
+.notification-item .notification-dismiss {
   min-width: 2rem;
   min-height: 2rem;
+  align-self: flex-start;
   padding: 0;
+  border-color: transparent;
   background: transparent;
   box-shadow: none;
 }
@@ -2334,6 +2358,19 @@
   display: none;
 }
 
+/* The native marker is suppressed above; without a replacement the collapsed
+   box reads as an empty panel. Same chevron idiom as
+   .mc-next-thread-step-output-details (timeline.css). */
+.gateway-access-details summary::after {
+  content: "▼";
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.gateway-access-details[open] summary::after {
+  content: "▲";
+}
+
 .gateway-access-details[open] summary {
   margin-bottom: 0.25rem;
 }
@@ -2352,8 +2389,10 @@
   height: 1.6rem;
   padding: 0;
   border-radius: var(--r-pill);
-  border: 1px solid var(--border);
-  background: color-mix(in oklab, var(--mc-surface-1) 88%, transparent);
+  border: 1px solid var(--border-default, var(--border));
+  /* Surface-3 fill so the off-state track is visible on the white light-theme
+     card (surface-1 at 88% was indistinguishable from the card). */
+  background: var(--bg-surface-3, color-mix(in oklab, var(--mc-surface-1) 88%, transparent));
   position: relative;
   box-shadow: inset 0 1px 0 color-mix(in oklab, white 10%, transparent);
 }
@@ -2957,7 +2996,8 @@
   .mc-next-rail,
   .mc-spin,
   .gc-button,
-  .notification-item {
+  .notification-item,
+  .notification-item-enter {
     transition: none;
     animation: none;
   }

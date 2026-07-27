@@ -217,7 +217,7 @@ export function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
                     className="mc-next-settings-input"
                     type="password"
                     value={form.token}
-                    placeholder="Only enter a new token when rotating credentials"
+                    placeholder="New token (only when rotating)"
                     onChange={(event) => setForm((current) => ({ ...current, token: event.target.value }))}
                   />
                 </SettingsField>

@@ -240,7 +240,10 @@
 .mc-next-settings-input,
 .mc-next-settings-textarea,
 .mc-next-select-field select {
-  border-color: color-mix(in oklab, var(--border) 54%, transparent);
+  /* Resting fields must stay discoverable: at 54% of the (already ~10%-alpha)
+     border token the box outline vanished against NativeCard surfaces
+     (Citadel Wards/Vault, Ops Schedules). Keep the base-rule strength. */
+  border-color: color-mix(in oklab, var(--border) 84%, transparent);
   background: color-mix(in oklab, var(--mc-surface-1) 68%, var(--background));
 }
 

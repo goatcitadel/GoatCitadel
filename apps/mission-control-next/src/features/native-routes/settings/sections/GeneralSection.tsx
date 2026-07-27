@@ -15,6 +15,7 @@ import { type UiDensity, useUiPreferences } from "@goatcitadel/mission-control-s
 import {
   nativeLoad,
   nativeLoadIssues,
+  humanizeEnumToken,
   SettingsActionList,
   SettingsButtonRow,
   SettingsField,
@@ -111,7 +112,7 @@ export function GeneralSection({ activeCitadelId, activeWorkspaceName, route, na
                 { label: "MCP", value: String(data.mcpServers?.length ?? 0), meta: "External tool servers" },
                 {
                   label: "Mesh readiness",
-                  value: data.meshReadiness?.status ?? "unknown",
+                  value: humanizeEnumToken(data.meshReadiness?.status) || "Unknown",
                   meta: data.meshReadiness
                     ? `${data.meshReadiness.blockers.length} blocker${data.meshReadiness.blockers.length === 1 ? "" : "s"}`
                     : "diagnostics unavailable",

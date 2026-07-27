@@ -11,7 +11,7 @@ import {
 } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
 import { EmptyState, NativeButton, NoticeBanner } from "../primitives";
-import { getErrorMessage } from "../shared/native-helpers";
+import { getErrorMessage, humanizeEnumToken } from "../shared/native-helpers";
 import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
 
@@ -271,15 +271,23 @@ export function CitadelOverviewRoutePage({
             >
               <NativeList
                 items={[
-                  { title: "Risk posture", body: gatehouse.riskPosture },
-                  { title: "Model policy", body: gatehouse.modelPolicyDefault },
-                  { title: "Sharing", body: gatehouse.sharingDefault },
-                  { title: "External writes", body: gatehouse.externalWritesDefault },
+                  { title: "Risk posture", body: humanizeEnumToken(gatehouse.riskPosture) },
+                  { title: "Model policy", body: humanizeEnumToken(gatehouse.modelPolicyDefault) },
+                  { title: "Sharing", body: humanizeEnumToken(gatehouse.sharingDefault) },
+                  { title: "External writes", body: humanizeEnumToken(gatehouse.externalWritesDefault) },
                 ]}
                 density="compact"
               />
             </NativeCard>
           ) : null}
+        </NativeGrid>
+      )}
+
+      {/* Rendered outside the posture grid: as a spanning (grid-column 1/-1)
+          member it pinned the auto-fit track count at its maximum, leaving a
+          permanently empty fourth track beside the three posture cards. */}
+      {state.staged ? (
+        <NativeGrid>
           <NativeCard
             title="Default Citadels"
             subtitle="Personal and Company are the default operating spaces available from the Mason."
@@ -316,7 +324,7 @@ export function CitadelOverviewRoutePage({
             </NativeButton>
           </NativeCard>
         </NativeGrid>
-      )}
+      ) : null}
 
       {state.staged ? (
         <p className="mc-next-citadel-footnote">

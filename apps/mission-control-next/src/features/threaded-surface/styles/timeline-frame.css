@@ -48,7 +48,11 @@
   z-index: 10;
   padding: 7px 0;
   border: 0;
-  background: linear-gradient(to top, var(--background) 72%, transparent);
+  /* Fixed-height fade: a percentage stop scales with the card, and the blocked
+     composer is ~570px tall — a 28%-of-height fade leaves ~160px of timeline
+     text half-visible (and glyph-clipped) through the sticky card at compact
+     widths. Fade only the top sliver regardless of composer height. */
+  background: linear-gradient(to top, var(--background) calc(100% - 14px), transparent);
 }
 
 .mc-next-surface-host-work .mc-next-threaded-surface.unified .mc-next-threaded-composer-card {

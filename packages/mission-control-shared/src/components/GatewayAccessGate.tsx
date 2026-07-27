@@ -403,7 +403,7 @@ export function GatewayAccessGate({
             <>
               <button
                 type="button"
-                className="gc-button"
+                className="gc-button active"
                 onClick={() => void handleConnect()}
                 disabled={busy || deviceApprovalBusy}
               >
@@ -423,7 +423,7 @@ export function GatewayAccessGate({
               </button>
             </>
           ) : (
-            <button type="button" className="gc-button" onClick={() => void onRetry()} disabled={busy}>
+            <button type="button" className="gc-button active" onClick={() => void onRetry()} disabled={busy}>
               {busy ? (isChecking ? "Checking..." : "Re-checking...") : "Retry gateway check"}
             </button>
           )}

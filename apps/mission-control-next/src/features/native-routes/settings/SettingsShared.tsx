@@ -35,6 +35,7 @@ import {
 } from "../primitives";
 import {
   getErrorMessage,
+  humanizeEnumToken,
   nativeLoad,
   nativeLoadIssues,
   useAsyncLoad,
@@ -49,7 +50,7 @@ import {
   type NativeRouteErrorContext,
 } from "../shared/native-route-errors";
 
-export { getErrorMessage, nativeLoad, nativeLoadIssues, useAsyncLoad };
+export { getErrorMessage, humanizeEnumToken, nativeLoad, nativeLoadIssues, useAsyncLoad };
 export type { LoadState, NativeLoadIssue, NativeLoadResult, Notice };
 
 // ---------------------------------------------------------------------------
