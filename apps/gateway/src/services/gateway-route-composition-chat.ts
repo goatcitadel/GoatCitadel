@@ -75,6 +75,27 @@ export function composeChatRouteDependencies(
       assertWritePathInJail(fullPath, gateway.config.toolPolicy.sandbox.writeJailRoots);
       await fs.rm(fullPath, { force: true });
     },
+    copyChatSessionStoredFile: async (storageRelPath, copyId) => {
+      const normalized = storageRelPath.trim().replaceAll("\\", "/");
+      if (!normalized) {
+        throw new Error("Attachment storage path is empty.");
+      }
+      const sourcePath = resolvePortablePath(gateway.config.rootDir, gateway.config.assistant.workspaceDir, normalized);
+      const destinationRelPath = path.posix.join(
+        path.posix.dirname(normalized),
+        "forks",
+        `${copyId}-${path.posix.basename(normalized)}`,
+      );
+      const destinationPath = resolvePortablePath(
+        gateway.config.rootDir,
+        gateway.config.assistant.workspaceDir,
+        destinationRelPath,
+      );
+      assertWritePathInJail(destinationPath, gateway.config.toolPolicy.sandbox.writeJailRoots);
+      await fs.mkdir(path.dirname(destinationPath), { recursive: true });
+      await fs.copyFile(sourcePath, destinationPath);
+      return destinationRelPath;
+    },
     ensureChatSessionModelDefaults: (sessionId, prefs) => gateway.ensureChatSessionModelDefaults(sessionId, prefs),
     hydrateChatPrefsWithAutonomy: (sessionId, prefs) => gateway.hydrateChatPrefsWithAutonomy(sessionId, prefs),
     patchSessionAutonomyPrefs: (sessionId, patch) => gateway.patchSessionAutonomyPrefs(sessionId, patch),
@@ -133,6 +154,12 @@ export function composeChatRouteDependencies(
         ...sessionInput,
         workspaceId: scope.workspaceId,
       });
+    },
+    forkChatSessionFromTurn: (sessionId, turnId, input, actorId) => {
+      if (!gateway.isFeatureEnabled("conversationForksV1Enabled")) {
+        throw new NotFoundError({ entity: "Chat session fork", id: turnId });
+      }
+      return chatSessionService.forkChatSessionFromTurn(ChatSessionDependencies, sessionId, turnId, input, actorId);
     },
     createChatSessionWorkbenchWorktree: (sessionId, input) =>
       chatWorkbenchService.createChatSessionWorkbenchWorktree(ChatWorkbenchDependencies, sessionId, input),

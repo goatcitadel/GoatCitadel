@@ -261,6 +261,7 @@ export interface ChatSessionRecord {
   lastHandoff?: ChatSessionHandoffRecord;
   delegationParent?: ChatSessionDelegationParentRecord;
   generatedArtifacts?: ChatGeneratedArtifactReference[];
+  forkRelationships?: import("./chat-fork.js").ChatSessionForkRelationship[];
   channel: string;
   account: string;
   updatedAt: string;
@@ -1479,6 +1480,15 @@ export interface ChatTurnTraceRecord {
     fallbackReason?: string;
     fallbackUsed?: boolean;
     modelRouter?: ChatModelRouterTraceRecord;
+    forkImport?: {
+      sourceSessionId: string;
+      sourceTurnId: string;
+      sourceTraceHash: string;
+      importedAt: string;
+      durableRunId?: string;
+      toolRunHashes: string[];
+      approvalHashes: string[];
+    };
   };
   retrieval?: {
     l0Used: boolean;

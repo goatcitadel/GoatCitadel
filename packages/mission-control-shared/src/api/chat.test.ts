@@ -110,6 +110,22 @@ describe("chat API origin surface headers", () => {
     CHAT_API_TEST_TIMEOUT_MS,
   );
 
+  it("posts an independent fork request to the selected turn endpoint", async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({ session: { sessionId: "forked" }, manifest: { forkId: "fork-1" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { forkChatSessionFromTurn } = await import("./chat");
+
+    await forkChatSessionFromTurn("source/session", "turn 1", { expectedRevision: 4, title: "Fork" });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toContain("/api/v1/chat/sessions/source%2Fsession/turns/turn%201/fork");
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({ expectedRevision: 4, title: "Fork" }),
+    });
+  });
+
   it(
     "normalizes legacy Cowork origin surface to Chat",
     async () => {

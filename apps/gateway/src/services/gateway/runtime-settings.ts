@@ -117,6 +117,7 @@ export interface RuntimeSettings {
     attachedContextToolsV1Enabled?: boolean;
     /** Canonical Chat session status endpoint, panel, and model-safe projection. */
     chatSessionStatusV1Enabled?: boolean;
+    conversationForksV1Enabled?: boolean;
     /** Inbound channel voice ingestion (B2a). Absent/false (default) ⇒ Telegram/WhatsApp voice keeps today's placeholder/drop behavior. */
     channelVoiceInboundV1Enabled?: boolean;
     /** Deprecated compatibility value; true emits a blocked-setting diagnostic but never enables Signal receive. */

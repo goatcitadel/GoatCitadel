@@ -3635,6 +3635,24 @@ export class GatewayService {
     await fs.rm(fullPath, { force: true });
   }
 
+  private async copyChatSessionStoredFile(storageRelPath: string, copyId: string): Promise<string> {
+    const normalized = storageRelPath.trim().replaceAll("\\", "/");
+    if (!normalized) {
+      throw new Error("Attachment storage path is empty.");
+    }
+    const sourcePath = path.resolve(this.config.rootDir, this.config.assistant.workspaceDir, normalized);
+    const destinationRelPath = path.posix.join(
+      path.posix.dirname(normalized),
+      "forks",
+      `${copyId}-${path.posix.basename(normalized)}`,
+    );
+    const destinationPath = path.resolve(this.config.rootDir, this.config.assistant.workspaceDir, destinationRelPath);
+    assertWritePathInJail(destinationPath, this.config.toolPolicy.sandbox.writeJailRoots);
+    await fs.mkdir(path.dirname(destinationPath), { recursive: true });
+    await fs.copyFile(sourcePath, destinationPath);
+    return destinationRelPath;
+  }
+
   private buildChatSessionDependencies(): chatSessionService.ChatSessionDependencies {
     return {
       storage: this.storage,
@@ -3646,6 +3664,7 @@ export class GatewayService {
       publishRealtime: (eventType, source, payload) => this.publishRealtime(eventType, source, payload),
       clearChatTurnWriteLease: (sessionId) => this.clearChatTurnWriteLease(sessionId),
       removeChatSessionStoredFile: (storageRelPath) => this.removeChatSessionStoredFile(storageRelPath),
+      copyChatSessionStoredFile: (storageRelPath, copyId) => this.copyChatSessionStoredFile(storageRelPath, copyId),
       ensureChatSessionModelDefaults: (sessionId, prefs) => this.ensureChatSessionModelDefaults(sessionId, prefs),
       hydrateChatPrefsWithAutonomy: (sessionId, prefs) => this.hydrateChatPrefsWithAutonomy(sessionId, prefs),
       patchSessionAutonomyPrefs: (sessionId, patch) => this.patchSessionAutonomyPrefs(sessionId, patch),

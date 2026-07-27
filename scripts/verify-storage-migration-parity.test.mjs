@@ -677,7 +677,7 @@ test("Postgres v2 owner closure treats the independently manifested SQLite group
   const registryEndIndex = sqliteSourceText.lastIndexOf(registryEndMarker);
   assert.ok(registryEndIndex > 0, "test must locate the canonical SQLite migration registry tail");
   const appendedSqliteSource = `${sqliteSourceText.slice(0, registryEndIndex)}      {
-        version: 181,
+        version: 182,
         name: "synthetic_append_only_test",
         up: () => {},
       },
@@ -700,7 +700,7 @@ ${sqliteSourceText.slice(registryEndIndex)}`;
     sqlite: appendedSqlite,
     postgres: unchangedOwnerPostgres,
   });
-  assert.equal(updated.sources.sqlite.expectedLastVersion, 181);
+  assert.equal(updated.sources.sqlite.expectedLastVersion, 182);
   assert.deepEqual(updated.exceptions[0].ownerProvenance, manifest.exceptions[0].ownerProvenance);
 });
 
@@ -800,10 +800,10 @@ test("current registries and checked-in manifest cover every migration exactly",
   });
   const manifest = JSON.parse(manifestText);
 
-  assert.equal(sqlite.migrations.length, 180);
-  assert.deepEqual([sqlite.firstVersion, sqlite.lastVersion], [1, 180]);
-  assert.equal(postgres.migrations.length, 123);
-  assert.deepEqual([postgres.firstVersion, postgres.lastVersion], [1, 123]);
+  assert.equal(sqlite.migrations.length, 181);
+  assert.deepEqual([sqlite.firstVersion, sqlite.lastVersion], [1, 181]);
+  assert.equal(postgres.migrations.length, 124);
+  assert.deepEqual([postgres.firstVersion, postgres.lastVersion], [1, 124]);
   assert.equal(
     postgres.migrations.find((record) => record.version === 62)?.name,
     "chat_delegation_step_degraded_handoff_repairs",

@@ -75,6 +75,11 @@ const createSessionSchema = z.object({
   includeInHistory: z.boolean().optional(),
 });
 
+const forkSessionSchema = z.object({
+  title: z.string().trim().min(1).max(160).optional(),
+  expectedRevision: z.number().int().positive().optional(),
+});
+
 const createSideChatSchema = z.object({
   createdFromSurface: chatOnlyModeSchema.optional(),
   sourceTurnId: z.string().min(1).optional(),
@@ -197,6 +202,30 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
           .listChatGeneratedArtifacts(parsed.data)
           .map(projectChatGeneratedArtifactForPublic),
       });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/chat/sessions/:sessionId/turns/:turnId/fork", async (request, reply) => {
+    const params = sessionTurnParamsSchema.safeParse(request.params);
+    const body = forkSessionSchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      const result = await fastify.services.chatSessions.forkChatSessionFromTurn(
+        params.data.sessionId,
+        params.data.turnId,
+        body.data,
+        request.authActorId || "operator",
+      );
+      return reply.code(201).send({ ...result, session: projectChatSessionForPublic(result.session) });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }

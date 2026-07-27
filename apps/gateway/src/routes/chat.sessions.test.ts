@@ -73,6 +73,19 @@ describe("chat session routes", () => {
     expect(status.json()).toMatchObject({ schemaVersion: "chat.session-status.v1", sessionId: "sess-1" });
     expect(chatSessions.getChatSessionStatus).toHaveBeenCalledWith("sess-1");
 
+    const forked = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/turns/turn-2/fork",
+      payload: { expectedRevision: 7, title: "Forked launch" },
+    });
+    expect(forked.statusCode).toBe(201);
+    expect(chatSessions.forkChatSessionFromTurn).toHaveBeenCalledWith(
+      "sess-1",
+      "turn-2",
+      { expectedRevision: 7, title: "Forked launch" },
+      "operator",
+    );
+
     await expect(
       app.inject({
         method: "PATCH",
@@ -512,6 +525,10 @@ function createChatSessionsService(overrides: Record<string, unknown> = {}) {
     setChatSessionBinding: vi.fn(() => ({ sessionId: "sess-1", transport: "integration" })),
     getChatSessionBinding: vi.fn(() => ({ sessionId: "sess-1", transport: "integration" })),
     getChatSessionStatus: vi.fn(() => ({ schemaVersion: "chat.session-status.v1", sessionId: "sess-1" })),
+    forkChatSessionFromTurn: vi.fn(async () => ({
+      session: { sessionId: "sess-fork", revision: 1, updatedAt: "2026-05-14T00:00:00.000Z" },
+      manifest: { forkId: "fork-1" },
+    })),
     getChatSessionWorkbench: vi.fn(async () => ({ sessionId: "sess-1", status: "ready" })),
     createChatSessionWorkbenchWorktree: vi.fn(async () => ({ sessionId: "sess-1", worktreePath: "worktree" })),
     getChatSessionWorkbenchTree: vi.fn(async () => ({ rootPath: "repo", items: [] })),

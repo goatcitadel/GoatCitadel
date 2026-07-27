@@ -461,6 +461,7 @@ export {
   fetchChatResearchRun,
   fetchChatSessionBinding,
   fetchChatSessionStatus,
+  forkChatSessionFromTurn,
   fetchChatSideChat,
   fetchChatSessionGeneratedArtifacts,
   fetchChatSessionWorkbench,

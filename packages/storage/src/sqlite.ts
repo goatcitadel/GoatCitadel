@@ -6825,11 +6825,38 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
           widenPathFlavorChecksForPosix(db);
         },
       },
+      {
+        version: 181,
+        name: "chat_session_fork_manifests",
+        up: (db) => {
+          createChatSessionForkManifestSchema(db);
+        },
+      },
     ],
   },
 ];
 
 const SCHEMA_MIGRATIONS = createSqliteMigrationRegistry(SCHEMA_MIGRATION_GROUPS);
+
+function createChatSessionForkManifestSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS chat_session_fork_manifests (
+      fork_id TEXT PRIMARY KEY,
+      source_session_id TEXT NOT NULL,
+      source_turn_id TEXT NOT NULL,
+      new_session_id TEXT NOT NULL UNIQUE,
+      workspace_id TEXT NOT NULL,
+      transcript_path_hash TEXT NOT NULL,
+      manifest_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (new_session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_chat_session_forks_source
+      ON chat_session_fork_manifests(source_session_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_chat_session_forks_workspace
+      ON chat_session_fork_manifests(workspace_id, created_at DESC);
+  `);
+}
 
 function createRemoteWorkerRequestNonceSchema(db: DatabaseSync): void {
   db.exec(`
