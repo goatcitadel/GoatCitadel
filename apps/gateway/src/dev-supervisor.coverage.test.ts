@@ -80,6 +80,11 @@ describe("dev supervisor coverage", () => {
     fs.rmSync(supervisorRefSignatureCacheFile, { force: true });
 
     process.env.GOATCITADEL_GATEWAY_WATCH_POLL_MS = "999999";
+    // On POSIX a shutdown parks in stopChild's SIGTERM grace period, and the supervisor
+    // instance keeps running there long after the test that signalled it has finished —
+    // long enough to land `process.exitCode = 0` in the middle of a later test. Collapse
+    // the grace period so each test's teardown completes inside its own test.
+    process.env.GOATCITADEL_GATEWAY_STOP_GRACE_MS = "10";
     delete process.env.GOATCITADEL_GATEWAY_HEALTH_TIMEOUT_MS;
     delete process.env.GOATCITADEL_GATEWAY_REFERENCE_BUILD;
     delete process.env.GOATCITADEL_GATEWAY_RESTART_BASE_BACKOFF_MS;
@@ -115,6 +120,7 @@ describe("dev supervisor coverage", () => {
   afterEach(() => {
     process.exitCode = undefined;
     delete process.env.GOATCITADEL_GATEWAY_WATCH_POLL_MS;
+    delete process.env.GOATCITADEL_GATEWAY_STOP_GRACE_MS;
     delete process.env.GOATCITADEL_GATEWAY_HEALTH_TIMEOUT_MS;
     delete process.env.GOATCITADEL_GATEWAY_REFERENCE_BUILD;
     delete process.env.GOATCITADEL_GATEWAY_RESTART_BASE_BACKOFF_MS;
@@ -329,5 +335,55 @@ describe("dev supervisor coverage", () => {
 
     process.emit("SIGINT");
     await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+
+  it("abandons an in-flight restart when shutdown lands inside the POSIX stop grace period", async () => {
+    // stopChild's POSIX branch parks for a 1.2s SIGTERM grace period; Windows takes a
+    // synchronous taskkill instead. Pin the platform or this regression is invisible to
+    // every non-POSIX developer and only ever reproduces on CI.
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    try {
+      process.env.GOATCITADEL_GATEWAY_HEALTH_TIMEOUT_MS = "1";
+      process.env.GOATCITADEL_GATEWAY_RESTART_BASE_BACKOFF_MS = "1";
+      // Widen the grace period back out so there is a window to signal into at all.
+      process.env.GOATCITADEL_GATEWAY_STOP_GRACE_MS = "800";
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+      // stopChild signals the negative pid to reach the child's process group. The mock
+      // pid is fake, so keep the signal away from whatever really owns that group on CI.
+      vi.spyOn(process, "kill").mockImplementation(() => true);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          throw new Error("not ready");
+        }),
+      );
+
+      await import("./dev-supervisor.js");
+      // The readiness poll still runs one full 300ms iteration before it reports the
+      // timeout, and the retry is scheduled a further ~100ms out, so the restart only
+      // reaches the grace period around 400ms and holds it until ~1200ms. Signal in the
+      // middle of that window.
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      const restartsInFlight = logSpy.mock.calls.filter((call) =>
+        call.some((value) => String(value).includes("restarting gateway (health timeout)")),
+      );
+      const spawnsBeforeShutdown = spawnMock.mock.calls.length;
+      process.emit("SIGINT");
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+
+      // Guard the guard: if the retry never got in flight, the shutdown race below is
+      // never exercised and this test would pass without proving anything.
+      expect(restartsInFlight).toHaveLength(1);
+      expect(spawnsBeforeShutdown).toBe(1);
+      // Spawning here would outlive the supervisor and orphan a gateway on the port.
+      expect(spawnMock).toHaveBeenCalledTimes(spawnsBeforeShutdown);
+    } finally {
+      if (originalPlatform) {
+        Object.defineProperty(process, "platform", originalPlatform);
+      }
+    }
   });
 });
