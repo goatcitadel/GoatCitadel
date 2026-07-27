@@ -1,10 +1,16 @@
 import type { ChatModelProviderOption } from "@goatcitadel/mission-control-shared/components/ChatModelPicker";
+import type { ComposerPaletteAction, ComposerPaletteSourceId } from "./chat/composer-palette";
 
 export interface CommandSuggestionItem {
   key: string;
   command: string;
   description: string;
   applyValue: string;
+  source?: ComposerPaletteSourceId;
+  sourceLabel?: string;
+  availabilityLabel?: string;
+  action?: ComposerPaletteAction;
+  keywords?: string[];
 }
 
 interface BuildModelCommandSuggestionsInput {

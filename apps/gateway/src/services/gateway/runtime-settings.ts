@@ -111,6 +111,8 @@ export interface RuntimeSettings {
     autonomyV1Disabled?: boolean;
     /** Thinking-display skeleton. Absent/false (default) ⇒ no thinking_delta chunks are emitted; behavior is byte-identical to today. */
     chatThinkingStreamV1Enabled?: boolean;
+    /** Unified Chat composer palette. Absent uses the server-configured rollout default. */
+    unifiedComposerPaletteV1Enabled?: boolean;
     /** Inbound channel voice ingestion (B2a). Absent/false (default) ⇒ Telegram/WhatsApp voice keeps today's placeholder/drop behavior. */
     channelVoiceInboundV1Enabled?: boolean;
     /** Deprecated compatibility value; true emits a blocked-setting diagnostic but never enables Signal receive. */

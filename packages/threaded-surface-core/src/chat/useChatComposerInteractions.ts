@@ -50,6 +50,7 @@ export function useChatComposerInteractions(input: {
   setEditingTurnId: (value: string | null) => void;
   setDockOpen: React.Dispatch<React.SetStateAction<boolean>>;
   setArchiveWorkspaceConfirmOpen: (value: boolean) => void;
+  onApplySuggestion?: (item: CommandSuggestionItem) => void;
 }) {
   const {
     commandSuggestions,
@@ -80,6 +81,7 @@ export function useChatComposerInteractions(input: {
     setEditingTurnId,
     setDockOpen,
     setArchiveWorkspaceConfirmOpen,
+    onApplySuggestion,
   } = input;
 
   const dragDepthRef = useRef(0);
@@ -148,7 +150,10 @@ export function useChatComposerInteractions(input: {
         if (event.key === "Tab") {
           event.preventDefault();
           const suggestion = commandSuggestions[commandIndex];
-          if (suggestion) setDraft((current) => applyComposerSuggestion(current, suggestion.applyValue));
+          if (suggestion) {
+            if (onApplySuggestion) onApplySuggestion(suggestion);
+            else setDraft((current) => applyComposerSuggestion(current, suggestion.applyValue));
+          }
           return;
         }
       }
@@ -171,6 +176,7 @@ export function useChatComposerInteractions(input: {
       handleSend,
       handleTogglePlanningMode,
       lastEditableDraft,
+      onApplySuggestion,
       setCommandIndex,
       setDockOpen,
       setDraft,

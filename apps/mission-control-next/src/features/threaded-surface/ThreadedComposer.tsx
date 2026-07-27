@@ -9,10 +9,11 @@ import {
   type ChatPendingApprovalState,
 } from "@goatcitadel/mission-control-shared/components/chat/ChatPendingApprovalPanel";
 import { ChatPendingUserInputPanel } from "@goatcitadel/mission-control-shared/components/chat/ChatPendingUserInputPanel";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { ContextStrip, type ContextStripMode, StatusChip } from "../native-routes/primitives";
 import { describeThreadedUiError } from "./threaded-error-copy";
 import { useAutoGrowTextarea } from "./useAutoGrowTextarea";
+import { OPEN_CHAT_COMPOSER_PALETTE_EVENT } from "../../app/composer-palette-events";
 import { ThreadedModeControl } from "./ThreadedModeControl";
 import { isImageAttachment, PendingImagePreview } from "./ThreadedComposerAttachmentPreview";
 import { getComposerPersonality, PersonalityPresenceChip } from "./ThreadedComposerPersonality";
@@ -397,8 +398,18 @@ type ThreadedExternalSourceControls = NonNullable<MissionThreadedActiveSessionSu
  * never render transcript content or raw JSON, and no affordance edits the
  * immutable imported evidence.
  */
-function ExternalSourceStrip({ controls, disabled }: { controls: ThreadedExternalSourceControls; disabled: boolean }) {
+function ExternalSourceStrip({
+  controls,
+  disabled,
+  openAttachFormToken = 0,
+}: {
+  controls: ThreadedExternalSourceControls;
+  disabled: boolean;
+  openAttachFormToken?: number;
+}) {
   const stripInstanceId = useId();
+  const stripRef = useRef<HTMLElement | null>(null);
+  const sourceInputRef = useRef<HTMLInputElement | null>(null);
   const [attachFormOpen, setAttachFormOpen] = useState(false);
   const [attachSourceId, setAttachSourceId] = useState("");
   const [attachImportId, setAttachImportId] = useState("");
@@ -410,8 +421,19 @@ function ExternalSourceStrip({ controls, disabled }: { controls: ThreadedExterna
     ? null
     : "Attach, detach, and knowledge-copy actions stay disabled until the server provides the live session incarnation.";
 
+  useEffect(() => {
+    if (openAttachFormToken <= 0) return;
+    setAttachFormOpen(true);
+    stripRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    globalThis.setTimeout(() => sourceInputRef.current?.focus(), 0);
+  }, [openAttachFormToken]);
+
   return (
-    <section className="mc-next-composer-external-strip" aria-label="Read-only external source attachments">
+    <section
+      ref={stripRef}
+      className="mc-next-composer-external-strip"
+      aria-label="Read-only external source attachments"
+    >
       <div className="mc-next-composer-external-head">
         <strong>External sources</strong>
         <span aria-live="polite">
@@ -449,6 +471,7 @@ function ExternalSourceStrip({ controls, disabled }: { controls: ThreadedExterna
           <label htmlFor={`${stripInstanceId}-source`}>
             <span>Source id</span>
             <input
+              ref={sourceInputRef}
               id={`${stripInstanceId}-source`}
               value={attachSourceId}
               disabled={disabled || !controls.canMutate}
@@ -596,6 +619,12 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
   const composerInstanceId = useId();
   const commandSuggestionsListboxId = `${composerInstanceId}-command-suggestions`;
   const commandSuggestionsOpen = props.commandSuggestions.length > 0;
+  const composerPaletteVisible = commandSuggestionsOpen || Boolean(props.composerPalette?.globalOpen);
+  const paletteSearchRef = useRef<HTMLInputElement | null>(null);
+  const [externalSourceOpenToken, setExternalSourceOpenToken] = useState(0);
+  const [projectSwitchCandidate, setProjectSwitchCandidate] = useState<
+    (typeof props.commandSuggestions)[number] | null
+  >(null);
   const commandSuggestionOptionId = (key: string) => `${commandSuggestionsListboxId}-${key}`;
   const activeCommandSuggestion =
     commandSuggestionsOpen && props.commandIndex >= 0 && props.commandIndex < props.commandSuggestions.length
@@ -604,6 +633,69 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
   const commandSuggestionsActiveDescendant = activeCommandSuggestion
     ? commandSuggestionOptionId(activeCommandSuggestion.key)
     : undefined;
+  useEffect(() => {
+    const palette = props.composerPalette;
+    if (!palette?.enabled || typeof window === "undefined") return;
+    const handlePaletteRequest = (event: Event) => {
+      event.preventDefault();
+      palette.onOpen();
+    };
+    window.addEventListener(OPEN_CHAT_COMPOSER_PALETTE_EVENT, handlePaletteRequest);
+    return () => window.removeEventListener(OPEN_CHAT_COMPOSER_PALETTE_EVENT, handlePaletteRequest);
+  }, [props.composerPalette]);
+  useEffect(() => {
+    if (props.composerPalette?.globalOpen) paletteSearchRef.current?.focus();
+  }, [props.composerPalette?.globalOpen]);
+  const applyComposerPaletteItem = (item: (typeof props.commandSuggestions)[number]) => {
+    if (item.action?.type === "switch_project") {
+      setProjectSwitchCandidate(item);
+      return;
+    }
+    if (item.action?.type === "launch_external_source") {
+      props.composerPalette?.onClose();
+      setExternalSourceOpenToken((current) => current + 1);
+      return;
+    }
+    if (props.composerPalette?.enabled) {
+      props.composerPalette.onSelect(item);
+      globalThis.setTimeout(() => props.composerRef.current?.focus(), 0);
+    } else props.onApplyDraftCommand(item.applyValue);
+  };
+  const handlePaletteSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    const palette = props.composerPalette;
+    if (!palette) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      palette.onClose();
+      props.composerRef.current?.focus();
+      return;
+    }
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      palette.onIndexChange(Math.min(props.commandIndex + 1, Math.max(0, props.commandSuggestions.length - 1)));
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      palette.onIndexChange(Math.max(0, props.commandIndex - 1));
+      return;
+    }
+    if (event.key === "Home") {
+      event.preventDefault();
+      palette.onIndexChange(0);
+      return;
+    }
+    if (event.key === "End") {
+      event.preventDefault();
+      palette.onIndexChange(Math.max(0, props.commandSuggestions.length - 1));
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const selected = props.commandSuggestions[props.commandIndex];
+      if (selected) applyComposerPaletteItem(selected);
+    }
+  };
   const contextStripMode = toContextStripMode(props.mode);
   // planningEnabled was used by the inline Plan toggle, which moved to the
   // Context Drawer's Assist tab. The composer keeps the "Planning mode is on"
@@ -1021,38 +1113,97 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
           role="combobox"
           aria-label="Message composer"
           aria-autocomplete="list"
-          aria-expanded={commandSuggestionsOpen}
-          aria-controls={commandSuggestionsOpen ? commandSuggestionsListboxId : undefined}
+          aria-expanded={composerPaletteVisible}
+          aria-controls={composerPaletteVisible ? commandSuggestionsListboxId : undefined}
           aria-activedescendant={commandSuggestionsActiveDescendant}
         />
       </div>
 
-      {commandSuggestionsOpen ? (
-        <div
-          className="mc-next-command-popover"
-          role="listbox"
-          id={commandSuggestionsListboxId}
-          aria-label="Composer suggestions"
-        >
-          {props.commandSuggestions.map((item, index) => {
-            const isHighlighted = index === props.commandIndex;
-            return (
-              <button
-                key={item.key}
-                id={commandSuggestionOptionId(item.key)}
-                type="button"
-                role="option"
-                aria-selected={isHighlighted}
-                className={`mc-next-command-item${isHighlighted ? " active" : ""}`}
-                onClick={() => props.onApplyDraftCommand(item.applyValue)}
-              >
-                <strong>{item.command}</strong>
-                <span>{item.description}</span>
-              </button>
-            );
-          })}
+      {composerPaletteVisible ? (
+        <div className={`mc-next-command-popover${props.composerPalette?.globalOpen ? " palette-sheet" : ""}`}>
+          {props.composerPalette?.globalOpen ? (
+            <div className="mc-next-composer-palette-search" role="search">
+              <label htmlFor={`${composerInstanceId}-palette-query`}>Search commands and context</label>
+              <input
+                ref={paletteSearchRef}
+                id={`${composerInstanceId}-palette-query`}
+                type="search"
+                value={props.composerPalette.query}
+                onChange={(event) => props.composerPalette?.onQueryChange(event.target.value)}
+                onKeyDown={handlePaletteSearchKeyDown}
+                aria-controls={commandSuggestionsListboxId}
+                aria-activedescendant={commandSuggestionsActiveDescendant}
+                placeholder="Commands, models, agents, skills, projects, files, URLs…"
+              />
+              <span aria-hidden="true">Esc to close</span>
+            </div>
+          ) : null}
+          {props.composerPalette?.loading ? (
+            <p className="mc-next-composer-palette-status" role="status">
+              Searching available sources…
+            </p>
+          ) : null}
+          {(props.composerPalette?.failures.length ?? 0) > 0 ? (
+            <p className="mc-next-composer-palette-status warning" role="status">
+              {props.composerPalette?.failures.map((failure) => failure.sourceLabel).join(", ")} unavailable; other
+              sources remain available.
+            </p>
+          ) : null}
+          <div
+            className="mc-next-composer-palette-options"
+            role="listbox"
+            id={commandSuggestionsListboxId}
+            aria-label="Composer suggestions"
+          >
+            {props.commandSuggestions.map((item, index) => {
+              const isHighlighted = index === props.commandIndex;
+              return (
+                <button
+                  key={item.key}
+                  id={commandSuggestionOptionId(item.key)}
+                  type="button"
+                  role="option"
+                  aria-selected={isHighlighted}
+                  className={`mc-next-command-item${isHighlighted ? " active" : ""}`}
+                  onMouseMove={() => props.composerPalette?.onIndexChange(index)}
+                  onClick={() => applyComposerPaletteItem(item)}
+                >
+                  <strong>{item.command}</strong>
+                  <span>{item.description}</span>
+                  {item.sourceLabel || item.availabilityLabel ? (
+                    <small>
+                      {item.sourceLabel ?? "Command"} · {item.availabilityLabel ?? "Available"}
+                    </small>
+                  ) : null}
+                </button>
+              );
+            })}
+            {!props.composerPalette?.loading && props.commandSuggestions.length === 0 ? (
+              <p className="mc-next-composer-palette-status">No available matches.</p>
+            ) : null}
+          </div>
         </div>
       ) : null}
+
+      <ConfirmModal
+        open={projectSwitchCandidate !== null}
+        title="Switch this Chat to another project?"
+        message={
+          projectSwitchCandidate?.action?.type === "switch_project"
+            ? `Switch to ${projectSwitchCandidate.action.projectName}? The current draft and attachments stay in Chat.`
+            : "Switch this Chat to the selected project?"
+        }
+        confirmLabel="Switch project"
+        onCancel={() => setProjectSwitchCandidate(null)}
+        onConfirm={() => {
+          const selected = projectSwitchCandidate;
+          setProjectSwitchCandidate(null);
+          if (selected) {
+            props.composerPalette?.onSelect(selected);
+            globalThis.setTimeout(() => props.composerRef.current?.focus(), 0);
+          }
+        }}
+      />
 
       {props.pendingAttachments.length > 0 ? (
         <div className="mc-next-composer-attachments">
@@ -1110,7 +1261,11 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
       ) : null}
 
       {props.externalSourceControls ? (
-        <ExternalSourceStrip controls={props.externalSourceControls} disabled={composerActionDisabled} />
+        <ExternalSourceStrip
+          controls={props.externalSourceControls}
+          disabled={composerActionDisabled}
+          openAttachFormToken={externalSourceOpenToken}
+        />
       ) : null}
 
       <div className="mc-next-composer-controls">

@@ -95,6 +95,7 @@ Notes:
 - Legacy traces without durable linkage may still require compatibility reads or resume fallbacks for historical rows, but new mission-session LLM sends do not bypass durable ownership.
 - Runs may be linked to sessions, turns, tasks, and approvals.
 - The `durableKernelV1Enabled` feature flag gates durable-run APIs. The `replayOverridesV1Enabled` flag (default: off) gates replay-with-overrides.
+- `unifiedComposerPaletteV1Enabled` is a Gateway-authored Mission Control projection gate. It changes only the Chat composer discovery surface: its client registry reads existing scoped APIs, caches source results per session, and degrades source failures independently. It does not create a second capability catalog, widen file/workspace access, or make inactive agents, candidates, proposals, or non-callable skills executable.
 
 ### Chat Tool Effect Truth
 

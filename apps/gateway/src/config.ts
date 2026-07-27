@@ -97,6 +97,8 @@ export interface FeatureFlagsConfig {
    * detection site) so the client's collapsible ChatThinkingSection can render.
    */
   chatThinkingStreamV1Enabled?: boolean;
+  /** Unified Chat composer palette for slash commands and contextual resources. */
+  unifiedComposerPaletteV1Enabled?: boolean;
   /**
    * Competitive-gap program phase B2b: TTS voice replies to audio-capable
    * channels (Telegram voice notes in v1). Absent/false (default) ⇒ the reply
@@ -753,6 +755,7 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
     ],
     ["autonomyV1Disabled", process.env.GOATCITADEL_FEATURE_AUTONOMY_V1_DISABLED],
     ["chatThinkingStreamV1Enabled", process.env.GOATCITADEL_FEATURE_CHAT_THINKING_STREAM_V1_ENABLED],
+    ["unifiedComposerPaletteV1Enabled", process.env.GOATCITADEL_FEATURE_UNIFIED_COMPOSER_PALETTE_V1_ENABLED],
     ["channelVoiceInboundV1Enabled", process.env.GOATCITADEL_FEATURE_CHANNEL_VOICE_INBOUND_V1_ENABLED],
     ["signalInboundV1Enabled", process.env.GOATCITADEL_FEATURE_SIGNAL_INBOUND_V1_ENABLED],
     ["plannerFastPathV1Disabled", process.env.GOATCITADEL_FEATURE_PLANNER_FAST_PATH_V1_DISABLED],
@@ -1306,6 +1309,9 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       // constructs/emits a thinking_delta chunk unless an operator opts in — with
       // this flag left at its default, runtime behavior is byte-identical to today.
       chatThinkingStreamV1Enabled: featuresInput.chatThinkingStreamV1Enabled ?? false,
+      // Server-authored rollout gate. The focused palette proof is green; operators
+      // can still disable the surface explicitly while retaining legacy paths.
+      unifiedComposerPaletteV1Enabled: featuresInput.unifiedComposerPaletteV1Enabled ?? true,
       // Channel voice inbound (B2a): default OFF. `?? false` keeps inbound
       // Telegram/WhatsApp voice handling byte-identical unless an operator opts in.
       channelVoiceInboundV1Enabled: featuresInput.channelVoiceInboundV1Enabled ?? false,

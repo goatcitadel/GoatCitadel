@@ -29,6 +29,7 @@ const EXPECTED_PATCH_TOGGLEABLE: Record<keyof FeatureFlagsConfig, true> = {
   orchestrationFinalStreamingV1Disabled: true,
   autonomyV1Disabled: true,
   chatThinkingStreamV1Enabled: true,
+  unifiedComposerPaletteV1Enabled: true,
   channelVoiceInboundV1Enabled: true,
   channelVoiceReplyV1Enabled: true,
   signalInboundV1Enabled: true,

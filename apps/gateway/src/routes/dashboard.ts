@@ -274,6 +274,7 @@ export const updateSettingsSchema = z.object({
       subagentFanoutV1Disabled: z.boolean().optional(),
       chatTurnInterruptionRecoveryV1Disabled: z.boolean().optional(),
       chatThinkingStreamV1Enabled: z.boolean().optional(),
+      unifiedComposerPaletteV1Enabled: z.boolean().optional(),
       utilityModelRoutingV1Enabled: z.boolean().optional(),
       cronEvidenceV1Enabled: z.boolean().optional(),
       memoryConsolidationV1Enabled: z.boolean().optional(),
