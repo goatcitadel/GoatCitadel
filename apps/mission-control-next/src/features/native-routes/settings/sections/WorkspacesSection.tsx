@@ -627,8 +627,6 @@ export function WorkspacesSection({
             className="mc-next-settings-panel"
             title="Workspace directory"
             subtitle="Switch between active and archived workspaces, then edit the selected one."
-            scrollBody
-            bodyMaxHeight="min(54vh, 30rem)"
             stats={[
               { label: "Total", value: String(data?.items?.length ?? 0) },
               ...(activeCitadelId ? [{ label: "Citadel", value: activeCitadelId }] : []),

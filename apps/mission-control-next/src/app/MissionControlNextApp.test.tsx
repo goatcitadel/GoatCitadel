@@ -496,6 +496,10 @@ describe("MissionControlNextApp", () => {
       "\r\n",
       "\n",
     );
+    const nativeCss = readFileSync(
+      new URL("../features/native-routes/styles/03-shared-native-primitives.css", import.meta.url),
+      "utf8",
+    ).replaceAll("\r\n", "\n");
 
     expect(css).toContain(".mc-next-body:not(.is-work-area) {\n  align-items: stretch;\n  overflow: hidden;\n}");
     expect(css).toContain(
@@ -505,6 +509,12 @@ describe("MissionControlNextApp", () => {
       ".mc-next-stage:not(.mc-next-stage-work) .mc-next-stage-scroll {\n  height: 100%;\n  padding: 0.85rem 0.85rem 2.75rem;\n  overflow: auto;",
     );
     expect(css).toContain("scrollbar-gutter: stable;");
+    expect(nativeCss).toContain("overflow: auto;\n  overscroll-behavior-x: contain;\n  overscroll-behavior-y: auto;");
+    expect(css).toMatch(
+      /\.mc-next-stage:not\(\.mc-next-stage-work\) \.mc-next-stage-scroll\s*\{[\s\S]*?overscroll-behavior: contain;/,
+    );
+    expect(css).toMatch(/\.mc-gc-combobox-list\s*\{[\s\S]*?overscroll-behavior: contain;/);
+    expect(css).toMatch(/\.mc-next-shell-inspector\.side-inspector-drawer\s*\{[\s\S]*?overscroll-behavior: contain;/);
   });
 
   it("keeps the build identity action in compact shell chrome and links it to Ops proof", async () => {

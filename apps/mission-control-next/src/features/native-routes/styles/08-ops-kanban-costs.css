@@ -357,7 +357,8 @@
 .mc-next-kanban-column-scroller {
   max-height: min(62vh, 38rem);
   overflow-y: auto;
-  overscroll-behavior: contain;
+  overscroll-behavior-x: contain;
+  overscroll-behavior-y: auto;
   scrollbar-gutter: stable;
 }
 

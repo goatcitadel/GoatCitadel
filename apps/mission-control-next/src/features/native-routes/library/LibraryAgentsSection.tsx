@@ -205,8 +205,6 @@ export function LibraryAgentsSection({ activeWorkspaceId, route, navigate }: Nat
             title="Imported catalog"
             subtitle="Imported definitions are shown before editing so duplicate or stale agents are obvious."
             density="compact"
-            scrollBody
-            bodyMaxHeight="min(32vh, 18rem)"
           >
             <LibraryActionList
               items={(data?.catalog ?? []).map((item) => ({

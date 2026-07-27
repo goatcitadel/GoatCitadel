@@ -986,8 +986,6 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
           className="mc-next-settings-panel mc-next-provider-directory"
           title="Providers & Models"
           subtitle="Available providers, probe posture, and current catalog coverage."
-          scrollBody
-          bodyMaxHeight="min(62vh, 36rem)"
           stats={[
             { label: "Configured", value: String(providers.length) },
             { label: "Active workspace", value: activeWorkspaceId },
@@ -1112,8 +1110,6 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
             className="mc-next-settings-panel mc-next-provider-model-picker-card"
             title="Universal model picker"
             subtitle="Search configured provider catalogs with runtime fallback and availability evidence."
-            scrollBody
-            bodyMaxHeight="min(58vh, 34rem)"
             stats={[
               { label: "Matches", value: String(universalModelOptions.length) },
               {

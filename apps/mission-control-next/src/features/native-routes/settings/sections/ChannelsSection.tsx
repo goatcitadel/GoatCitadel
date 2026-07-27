@@ -311,8 +311,6 @@ export function ChannelsSection(_props: SettingsSectionProps) {
               className="mc-next-settings-panel"
               title="Channel definitions"
               subtitle="Available guided setup definitions for supported channel integrations."
-              scrollBody
-              bodyMaxHeight="min(54vh, 30rem)"
               stats={[
                 { label: "Definitions", value: String(data.definitions?.length ?? 0) },
                 { label: "Existing channels", value: String(data.connections?.length ?? 0) },
@@ -323,7 +321,13 @@ export function ChannelsSection(_props: SettingsSectionProps) {
                   className="mc-next-settings-input"
                   value={createCatalogId}
                   onChange={(event) => setCreateCatalogId(event.target.value)}
+                  disabled={(data.definitions?.length ?? 0) === 0}
                 >
+                  <option value="" disabled>
+                    {(data.definitions?.length ?? 0) > 0
+                      ? "Choose a channel definition"
+                      : "No channel definitions available"}
+                  </option>
                   {(data.definitions ?? []).map((item) => (
                     <option key={item.catalog.catalogId} value={item.catalog.catalogId}>
                       {item.catalog.label}
@@ -345,7 +349,7 @@ export function ChannelsSection(_props: SettingsSectionProps) {
                     Connect Slack
                   </NativeButton>
                 ) : null}
-                <NativeButton variant="default" onClick={() => void handleCreate()}>
+                <NativeButton variant="default" disabled={!createCatalogId} onClick={() => void handleCreate()}>
                   <Plus size={16} />
                   Create setup draft
                 </NativeButton>

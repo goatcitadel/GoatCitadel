@@ -530,7 +530,11 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
                     className="mc-next-settings-input"
                     value={createCatalogId}
                     onChange={(event) => setCreateCatalogId(event.target.value)}
+                    disabled={createableCatalog.length === 0}
                   >
+                    <option value="" disabled>
+                      {createableCatalog.length > 0 ? "Choose an integration" : "No integrations available"}
+                    </option>
                     {createableCatalog.map((item) => (
                       <option key={item.catalogId} value={item.catalogId}>
                         {item.label}
@@ -579,7 +583,7 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
                 }}
               />
               <SettingsButtonRow>
-                <NativeButton variant="default" onClick={() => void handleCreate()}>
+                <NativeButton variant="default" disabled={!createCatalogId} onClick={() => void handleCreate()}>
                   <Plus size={16} />
                   Create connection
                 </NativeButton>
@@ -594,8 +598,6 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
               className="mc-next-settings-panel"
               title="Connected integrations"
               subtitle="Review live connections and jump into the selected one."
-              scrollBody
-              bodyMaxHeight="min(48vh, 28rem)"
               stats={[
                 { label: "Connections", value: String(data.connections.length) },
                 { label: "Catalog", value: String(data.catalog.length) },
@@ -658,8 +660,6 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
                 ? "Update, diagnose, or remove the selected integration connection."
                 : "Available connection definitions stay visible while you decide what to create next."
             }
-            scrollBody
-            bodyMaxHeight="min(72vh, 42rem)"
           >
             {selectedConnection ? (
               <>

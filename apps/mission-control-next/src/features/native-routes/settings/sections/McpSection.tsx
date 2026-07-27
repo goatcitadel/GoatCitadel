@@ -306,8 +306,6 @@ export function McpSection(_props: SettingsSectionProps) {
                 className="mc-next-settings-panel"
                 title="MCP servers"
                 subtitle="Connected and disconnected MCP servers available to the operator."
-                scrollBody
-                bodyMaxHeight="min(48vh, 28rem)"
                 stats={[
                   { label: "Servers", value: String(data.servers?.length ?? 0) },
                   { label: "Templates", value: String(data.templates?.length ?? 0) },
@@ -629,8 +627,6 @@ export function McpSection(_props: SettingsSectionProps) {
               className="mc-next-settings-panel"
               title={selectedServer?.label ?? "Server detail"}
               subtitle="Edit, connect, diagnose, or delete the selected MCP server."
-              scrollBody
-              bodyMaxHeight="min(72vh, 42rem)"
             >
               {selectedServer ? (
                 <>

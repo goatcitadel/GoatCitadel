@@ -390,7 +390,8 @@
   overflow: auto;
   padding: 0.55rem;
   padding-inline-end: calc(0.55rem + var(--mc-scrollbar-safe-gutter));
-  overscroll-behavior: contain;
+  overscroll-behavior-x: contain;
+  overscroll-behavior-y: auto;
   scrollbar-gutter: stable;
   border-radius: var(--r-sm);
   font-size: var(--text-2xs);

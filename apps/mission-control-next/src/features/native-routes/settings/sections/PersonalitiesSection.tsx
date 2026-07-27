@@ -236,8 +236,6 @@ export function PersonalitiesSection(_props: SettingsSectionProps) {
             className="mc-next-settings-panel"
             title="Personality catalog"
             subtitle="Built-in presets, custom overlays, and the global Work default."
-            scrollBody
-            bodyMaxHeight="min(64vh, 38rem)"
             stats={[
               { label: "Presets", value: String(data.items?.length ?? 0) },
               { label: "Custom", value: String(customCount) },

@@ -436,8 +436,6 @@ export function AddonsSection(_props: SettingsSectionProps) {
               title="1.0 add-on posture"
               subtitle="Experimental local extensions with operator-reviewed install and launch controls."
               stats={productPosture.stats}
-              scrollBody
-              bodyMaxHeight="min(58vh, 34rem)"
             >
               <SettingsActionList
                 items={productPosture.criteria.map((item) => ({
@@ -455,8 +453,6 @@ export function AddonsSection(_props: SettingsSectionProps) {
             className="mc-next-settings-panel"
             title="Add-on catalog"
             subtitle="Experimental add-on runtimes and their current local install posture."
-            scrollBody
-            bodyMaxHeight="min(58vh, 34rem)"
             stats={[
               { label: "Catalog", value: String(data.catalog?.length ?? 0) },
               { label: "Installed", value: String(data.installed?.length ?? 0) },
@@ -488,8 +484,6 @@ export function AddonsSection(_props: SettingsSectionProps) {
             className="mc-next-settings-panel"
             title={selectedAddon?.label ?? "Add-on detail"}
             subtitle="Operator-reviewed lifecycle controls for the selected local add-on."
-            scrollBody
-            bodyMaxHeight="min(72vh, 42rem)"
           >
             {selectedAddon ? (
               <>
@@ -629,8 +623,6 @@ export function AddonsSection(_props: SettingsSectionProps) {
             className="mc-next-settings-panel"
             title="Capability packs"
             subtitle="Bundled review-first packs over skills, add-ons, MCP templates, plugins, and runtime presets."
-            scrollBody
-            bodyMaxHeight="min(72vh, 42rem)"
             stats={[
               { label: "Packs", value: String(data.capabilityPacks?.length ?? 0) },
               { label: "Staged", value: String(data.stagedPacks?.length ?? 0) },
@@ -771,8 +763,6 @@ export function AddonsSection(_props: SettingsSectionProps) {
             className="mc-next-settings-panel"
             title="Portable pack"
             subtitle="Local-file manifests are staged for review; skills and add-ons are not auto-enabled."
-            scrollBody
-            bodyMaxHeight="min(72vh, 42rem)"
           >
             <SettingsFieldGrid>
               <SettingsField label="Manifest JSON" span={2}>

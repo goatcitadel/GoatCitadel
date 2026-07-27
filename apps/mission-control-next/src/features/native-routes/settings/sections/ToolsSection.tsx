@@ -255,8 +255,6 @@ export function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
               className="mc-next-settings-panel"
               title="Tool catalog"
               subtitle="Review the full catalog instead of a tiny first-page slice."
-              scrollBody
-              bodyMaxHeight="min(64vh, 38rem)"
               stats={[
                 { label: "Tools", value: String(data.tools?.length ?? 0) },
                 { label: "Grants", value: String(data.grants?.length ?? 0) },
@@ -378,8 +376,6 @@ export function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
             className="mc-next-settings-panel"
             title={selectedTool?.toolName ?? "Tool detail"}
             subtitle="Selected catalog entry and tool grants."
-            scrollBody
-            bodyMaxHeight="min(72vh, 42rem)"
           >
             {selectedTool ? (
               <>

@@ -259,7 +259,8 @@
   color: var(--foreground);
   font: 400 var(--text-sm)/1.4 var(--mc-font-sans);
   outline: none;
-  overscroll-behavior: contain;
+  overscroll-behavior-x: contain;
+  overscroll-behavior-y: auto;
   scrollbar-gutter: stable;
 }
 
@@ -1339,7 +1340,8 @@
 .mc-next-settings-code-block pre {
   margin: 0;
   padding-inline-end: var(--mc-scrollbar-safe-gutter);
-  overscroll-behavior: contain;
+  overscroll-behavior-x: contain;
+  overscroll-behavior-y: auto;
   scrollbar-gutter: stable;
   white-space: pre-wrap;
   word-break: break-word;
@@ -1454,7 +1456,8 @@
   padding-inline-end: var(--mc-scrollbar-safe-gutter);
   list-style: none;
   overflow: auto;
-  overscroll-behavior: contain;
+  overscroll-behavior-x: contain;
+  overscroll-behavior-y: auto;
   scrollbar-gutter: stable;
 }
 

@@ -157,7 +157,8 @@
 .mc-next-settings-selectable-list.is-scrollable,
 .mc-next-settings-action-list.is-scrollable {
   overflow: auto;
-  overscroll-behavior: contain;
+  overscroll-behavior-x: contain;
+  overscroll-behavior-y: auto;
   padding-right: 0.18rem;
   padding-inline-end: var(--mc-scrollbar-safe-gutter);
   scrollbar-gutter: stable;
@@ -243,7 +244,8 @@
    spacing (Virtuoso manages item flow, so the grid `gap` cannot apply). */
 .mc-next-directory-list-virtuoso {
   overflow-y: auto;
-  overscroll-behavior: contain;
+  overscroll-behavior-x: contain;
+  overscroll-behavior-y: auto;
   padding-right: 0.18rem;
   padding-inline-end: var(--mc-scrollbar-safe-gutter);
   scrollbar-gutter: stable;

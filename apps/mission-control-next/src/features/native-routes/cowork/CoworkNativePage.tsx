@@ -473,8 +473,6 @@ export function CoworkNativePage({
           title="Agent board"
           subtitle="Inspectable operator posture. Board controls record intent; they are not autonomous live-control guarantees."
           density="compact"
-          scrollBody
-          bodyMaxHeight="min(62vh, 34rem)"
           stats={[
             { label: "Operators", value: String(operators.length) },
             { label: "Active tasks", value: String(tasks.filter((item) => item.status !== "done").length) },
@@ -748,8 +746,6 @@ export function CoworkNativePage({
               }
               density="compact"
               className="mc-next-cowork-task-detail-card"
-              scrollBody
-              bodyMaxHeight="min(68vh, 38rem)"
             >
               {selectedTask ? (
                 <>

@@ -74,6 +74,11 @@ import {
 } from "./scenarios/provider-reasoning-lanes.mjs";
 import { runSurfaceRegressionLane as runSurfaceRegressionLaneImpl } from "./scenarios/surface-regression-lane.mjs";
 import {
+  assertNativeStageScrollContract,
+  assertProviderAnchorAndAdviceContract,
+  NATIVE_SCROLL_HANDOFF_ROUTE_SLUGS,
+} from "./scenarios/native-scroll-contract-proof.mjs";
+import {
   auditPageAccessibility,
   probeKeyboardFocus,
   runAccessibilitySmokeLane as runAccessibilitySmokeLaneImpl,
@@ -136,6 +141,8 @@ function verificationLaneDeps() {
     assertLegacyRedirectResolution,
     assertNextVisualScenarioChrome,
     assertNoFooterStatusCollision,
+    assertNativeStageScrollContract,
+    assertProviderAnchorAndAdviceContract,
     assertOk,
     assertVisualBaselineCoverage,
     appendTraceArtifact,
@@ -164,6 +171,7 @@ function verificationLaneDeps() {
     isAllowedStatus,
     issueOperatorSseToken,
     maybeParseBool,
+    NATIVE_SCROLL_HANDOFF_ROUTE_SLUGS,
     path,
     performVerificationInteraction,
     pinVisualRegressionProvider,
@@ -3630,9 +3638,12 @@ export async function runRealtimeTruthLane(context, _options = {}) {
           // origin, where the shared browser-state initializer cannot access
           // localStorage. It also prevents that EventSource from racing the write.
           await page.setContent("<!doctype html><html><body></body></html>");
-          await page.evaluate((cursor) => {
-            window.localStorage.setItem("goatcitadel.events.cursor.v1", cursor);
-          }, String(seeded.body?.staleCursor ?? ""));
+          await page.evaluate(
+            (cursor) => {
+              window.localStorage.setItem("goatcitadel.events.cursor.v1", cursor);
+            },
+            String(seeded.body?.staleCursor ?? ""),
+          );
           await page.goto(buildVerificationUiUrl(stack.uiUrl, "/ops/activity"), {
             waitUntil: "domcontentloaded",
           });
@@ -4409,9 +4420,7 @@ async function waitForCapabilityCandidateState(
     }
     await delay(250);
   }
-  throw new Error(
-    `${label} did not apply in time; last candidate detail=${JSON.stringify(latest?.body ?? null)}`,
-  );
+  throw new Error(`${label} did not apply in time; last candidate detail=${JSON.stringify(latest?.body ?? null)}`);
 }
 
 function requirePositiveRevision(value, label) {
@@ -5350,6 +5359,101 @@ async function runMissionControlNextMobileShellProof(context, input) {
           return {
             status: "passed",
             metrics: {
+              consoleErrors: browserSanity.consoleErrors.length,
+              pageErrors: browserSanity.pageErrors.length,
+            },
+            artifacts,
+          };
+        } catch (error) {
+          artifacts ??= await captureBrowserArtifacts(context, {
+            slug: `${artifactSlug}-failure`,
+            page,
+            browserLog,
+            gatewayUrl: input.gatewayUrl,
+            correlationId,
+            logCursor: browserLogCursor,
+          });
+          const traceArtifact = await trace.retain().catch(() => null);
+          return {
+            status: "failed",
+            error: formatBrowserScenarioFailure(error),
+            metrics: {},
+            artifacts: appendTraceArtifact(artifacts, traceArtifact),
+          };
+        } finally {
+          await trace.discard().catch(() => undefined);
+        }
+      },
+    );
+
+    await runScenario(
+      context,
+      {
+        id: "surface-regression.mobile.native-stage-scroll",
+        lane: "surface-regression",
+        title: "Mission Control Next mobile native routes reach their final content without overflow",
+        subsystem: "mission-control",
+      },
+      async ({ correlationId }) => {
+        const browserLogCursor = browserLog.mark();
+        const artifactSlug = "surface-regression-mobile-native-stage-scroll";
+        const trace = await startBrowserTrace(context, { page, slug: artifactSlug });
+        let artifacts;
+        const routes = [
+          {
+            slug: "settings-providers",
+            href: "/settings/providers",
+            expectedArea: "settings",
+            expectedSection: "providers",
+            readyText: "Providers",
+          },
+          {
+            slug: "ops-runtime",
+            href: "/ops/runtime",
+            expectedArea: "ops",
+            expectedSection: "runtime",
+            readyText: "Runtime authority map",
+          },
+          {
+            slug: "projects",
+            href: "/projects",
+            expectedArea: "projects",
+            expectedSection: "root",
+            readyText: "Project containers",
+          },
+          {
+            slug: "library-memory",
+            href: "/library/memory",
+            expectedArea: "library",
+            expectedSection: "memory",
+            readyText: "Mission Control Next shell posture",
+          },
+        ];
+        try {
+          const routeMetrics = [];
+          for (const route of routes) {
+            await page.goto(buildVerificationUiUrl(input.uiUrl, route.href), { waitUntil: "domcontentloaded" });
+            await waitForVerificationRouteReady(page, route, input.packageName);
+            await setBrowserCorrelation(page, correlationId, input.sessionId);
+            await assertNoHorizontalOverflow(page, `mobile ${route.slug}`);
+            routeMetrics.push({
+              route: route.href,
+              ...(await assertNativeStageScrollContract(page, { label: `mobile ${route.slug}` })),
+            });
+          }
+          const browserSanity = assertBrowserConsoleHealthy(browserLog, browserLogCursor, input.packageName);
+          artifacts = await captureBrowserArtifacts(context, {
+            slug: artifactSlug,
+            page,
+            browserLog,
+            gatewayUrl: input.gatewayUrl,
+            correlationId,
+            logCursor: browserLogCursor,
+          });
+          return {
+            status: "passed",
+            metrics: {
+              routes: routeMetrics,
               consoleErrors: browserSanity.consoleErrors.length,
               pageErrors: browserSanity.pageErrors.length,
             },

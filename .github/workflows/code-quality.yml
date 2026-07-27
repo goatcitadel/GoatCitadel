@@ -50,3 +50,5 @@ jobs:
           node scripts/check-mission-control-next-token-drift.mjs
           node --test scripts/check-mission-control-next-contrast.test.mjs
           node scripts/check-mission-control-next-contrast.mjs
+          node --test scripts/check-mission-control-next-scroll-contracts.test.mjs
+          node scripts/check-mission-control-next-scroll-contracts.mjs

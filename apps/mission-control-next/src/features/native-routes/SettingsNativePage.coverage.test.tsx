@@ -2585,11 +2585,26 @@ describe("SettingsNativePage broad native sections", () => {
   it("covers channel draft selection warnings and Slack OAuth polling branches", async () => {
     settingsMocks.fetchChannelSetupDefinitions.mockResolvedValueOnce({ items: [] });
     const emptyChannels = await mount("channels");
-    await click(findButton(emptyChannels.root, "Create setup draft"));
+    const emptyChannelSelect = emptyChannels.root
+      .findAllByType("select")
+      .find((select) => collectText(select).includes("No channel definitions available"))!;
+    const emptyCreateButton = findButton(emptyChannels.root, "Create setup draft");
+    expect(emptyChannelSelect.props.value).toBe("");
+    expect(emptyChannelSelect.props.disabled).toBe(true);
+    expect(emptyCreateButton.props.disabled).toBe(true);
+    await click(emptyCreateButton);
     expect(collectText(emptyChannels.root)).toContain("Choose a channel definition first.");
+    expect(settingsMocks.createChannelSetupDraft).not.toHaveBeenCalled();
 
     const channels = await mount("channels");
-    await click(findButton(channels.root, "Create setup draft"));
+    const populatedChannelSelect = channels.root
+      .findAllByType("select")
+      .find((select) => collectText(select).includes("Choose a channel definition"))!;
+    const populatedCreateButton = findButton(channels.root, "Create setup draft");
+    expect(populatedChannelSelect.props.value).toBe("channel.slack");
+    expect(populatedChannelSelect.props.disabled).toBe(false);
+    expect(populatedCreateButton.props.disabled).toBe(false);
+    await click(populatedCreateButton);
     expect(settingsMocks.createChannelSetupDraft).toHaveBeenCalledWith({ catalogId: "channel.slack" });
 
     settingsMocks.fetchSlackOAuthStatus.mockResolvedValueOnce({
@@ -3024,6 +3039,8 @@ describe("SettingsNativePage partial gateway responses", () => {
     const channels = await mount("channels");
 
     expect(collectText(channels.root)).toContain("Channel definitions");
+    expect(collectText(channels.root)).toContain("No channel definitions available");
+    expect(findButton(channels.root, "Create setup draft").props.disabled).toBe(true);
   });
 
   it("renders the MCP section when server, preview, server-mode, and elicitation payloads are empty", async () => {

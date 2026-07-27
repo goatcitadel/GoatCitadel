@@ -413,8 +413,6 @@ export function RuntimeRoutePage({
               title="Session evidence"
               subtitle="Recent session posture, channel mix, and operator-ready evidence."
               density="compact"
-              scrollBody
-              bodyMaxHeight="min(66vh, 38rem)"
               stats={[
                 { label: "Visible", value: String(data.sessions.length || data.dashboard?.sessions?.length || 0) },
                 { label: "Workspace", value: activeWorkspaceName },
@@ -483,8 +481,6 @@ export function RuntimeRoutePage({
               title="Scheduled jobs"
               subtitle="Current cadence and next-run posture for scheduled operator work."
               density="compact"
-              scrollBody
-              bodyMaxHeight="min(58vh, 32rem)"
               stats={[
                 { label: "Jobs", value: String(data.timeline?.scheduler?.jobs?.length ?? 0) },
                 { label: "Review queue", value: String(data.timeline?.scheduler?.reviewQueue?.length ?? 0) },
@@ -747,8 +743,6 @@ export function RuntimeRoutePage({
               title="Scheduler review"
               subtitle="Review items waiting on schedule, approvals, or follow-on operator attention."
               density="compact"
-              scrollBody
-              bodyMaxHeight="min(50vh, 28rem)"
             >
               <NativeList
                 items={(data.timeline?.scheduler?.reviewQueue ?? []).map(formatSchedulerReviewItem)}

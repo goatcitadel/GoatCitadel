@@ -6,6 +6,8 @@ export async function runSurfaceRegressionLane(context, _options = {}, deps) {
   const {
     appendTraceArtifact,
     assertBrowserConsoleHealthy,
+    assertNativeStageScrollContract,
+    assertProviderAnchorAndAdviceContract,
     assertLegacyRedirectResolution,
     attachBrowserLogging,
     buildVerificationUiUrl,
@@ -13,6 +15,7 @@ export async function runSurfaceRegressionLane(context, _options = {}, deps) {
     chromium,
     ensureOnboardingComplete,
     installMissionControlNextBrowserState,
+    NATIVE_SCROLL_HANDOFF_ROUTE_SLUGS,
     performVerificationInteraction,
     resolveVerificationTargetContext,
     runMissionControlNextMobileShellProof,
@@ -76,11 +79,25 @@ export async function runSurfaceRegressionLane(context, _options = {}, deps) {
             try {
               // Only the first read-only boot navigation can recover. Correlation and
               // interaction hooks run after this boundary and are never retried.
-              navigationEvidence = await navigateSurfaceRoute(page, buildVerificationUiUrl(stack.uiUrl, route.href), {
+              const routeHref =
+                verificationTarget.isNext && route.slug === "settings-providers"
+                  ? `${route.href}#providers-routing`
+                  : route.href;
+              navigationEvidence = await navigateSurfaceRoute(page, buildVerificationUiUrl(stack.uiUrl, routeHref), {
                 allowInitialColdStartRecovery: routeIndex === 0,
               });
               await waitForVerificationRouteReady(page, route, verificationTarget.packageName);
               await setBrowserCorrelation(page, correlationId, fixture?.sessionId);
+              let nativeScrollEvidence = null;
+              if (verificationTarget.isNext && route.slug !== "chat" && route.slug !== "library-prompt-packs") {
+                if (route.slug === "settings-providers") {
+                  await assertProviderAnchorAndAdviceContract(page);
+                }
+                nativeScrollEvidence = await assertNativeStageScrollContract(page, {
+                  label: route.slug,
+                  probeNestedBoundary: NATIVE_SCROLL_HANDOFF_ROUTE_SLUGS.has(route.slug),
+                });
+              }
               await performVerificationInteraction(page, route.interaction, verificationTarget.packageName);
               const browserSanity = assertBrowserConsoleHealthy(
                 browserLog,
@@ -105,6 +122,13 @@ export async function runSurfaceRegressionLane(context, _options = {}, deps) {
                   navigationAttempts: navigationEvidence.attempts,
                   navigationRecoveryReason: navigationEvidence.recoveryReason,
                   navigationRecoveryDisposition: navigationEvidence.recoveryDisposition,
+                  ...(nativeScrollEvidence
+                    ? {
+                        nativeStageOverflowed: nativeScrollEvidence.overflowed,
+                        nativeStageMaxScrollTop: nativeScrollEvidence.maxScrollTop,
+                        nestedScrollHandoff: nativeScrollEvidence.nestedHandoff,
+                      }
+                    : {}),
                 },
                 artifacts,
               };

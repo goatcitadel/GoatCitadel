@@ -4290,6 +4290,31 @@ describe("SettingsNativePage Trust & Policy", () => {
 });
 
 describe("SettingsNativePage integrations", () => {
+  it("keeps an empty integration catalog truthful and non-actionable", async () => {
+    mocks.fetchIntegrationCatalog.mockResolvedValueOnce({ items: [] } as any);
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = renderPage("integrations");
+    });
+    await flushAsyncUpdates();
+
+    const catalogSelect = renderer!.root
+      .findAllByType("select")
+      .find((select) => collectText(select).includes("No integrations available"))!;
+    const createButton = findButton(renderer!.root, "Create connection");
+    expect(catalogSelect.props.value).toBe("");
+    expect(catalogSelect.props.disabled).toBe(true);
+    expect(createButton.props.disabled).toBe(true);
+
+    await act(async () => {
+      createButton.props.onClick();
+    });
+    await flushAsyncUpdates();
+    expect(mocks.createIntegrationConnection).not.toHaveBeenCalled();
+    expect(collectText(renderer!.root)).toContain("Choose an integration catalog entry first.");
+  });
+
   it("renders plugin trust metadata and blocked Google Meet prerequisites", async () => {
     let renderer: ReactTestRenderer | null = null;
 
@@ -4304,6 +4329,12 @@ describe("SettingsNativePage integrations", () => {
     expect(mocks.fetchExternalSideEffectRuns).toHaveBeenCalledWith({ workspaceId: "default", limit: 25 });
     expect(mocks.fetchIntegrationFormSchema).toHaveBeenCalledWith("github");
     expect(mocks.fetchGoogleMeetPrerequisiteStatus).toHaveBeenCalledTimes(1);
+    const catalogSelect = renderer!.root
+      .findAllByType("select")
+      .find((select) => collectText(select).includes("Choose an integration"))!;
+    expect(catalogSelect.props.value).toBe("github");
+    expect(catalogSelect.props.disabled).toBe(false);
+    expect(findButton(renderer!.root, "Create connection").props.disabled).toBe(false);
     expect(text).toContain("GitHub setup");
     expect(text).toContain("Token environment variable");
     expect(text).toContain("Advanced JSON");
