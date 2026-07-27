@@ -65,6 +65,11 @@ const restartMaxFailures = readPositiveInt(process.env.GOATCITADEL_GATEWAY_RESTA
 const restartBaseBackoffMs = readPositiveInt(process.env.GOATCITADEL_GATEWAY_RESTART_BASE_BACKOFF_MS, 1000);
 const restartMaxBackoffMs = readPositiveInt(process.env.GOATCITADEL_GATEWAY_RESTART_MAX_BACKOFF_MS, 30_000);
 const restartCircuitOpenMs = readPositiveInt(process.env.GOATCITADEL_GATEWAY_RESTART_CIRCUIT_MS, 60_000);
+// POSIX stops the child by signalling its process group and giving it a grace period to
+// exit before escalating to SIGKILL; Windows takes a synchronous taskkill instead. This is
+// the longest await in a restart, so it is also the window a shutdown signal is most likely
+// to land in — keep it tunable so tests can collapse it instead of racing a fixed 1.2s.
+const stopGraceMs = readPositiveInt(process.env.GOATCITADEL_GATEWAY_STOP_GRACE_MS, 1200);
 const referenceBuildMode = resolveReferenceBuildMode(process.env.GOATCITADEL_GATEWAY_REFERENCE_BUILD);
 const useWorkspaceTypeScriptGraph = shouldUseWorkspaceTypeScriptGraph();
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -212,8 +217,23 @@ async function restartGateway(reason: string): Promise<void> {
   }
 }
 
+/**
+ * `restartGateway` only checks the shutdown and terminal-failure flags on entry, but the
+ * work it drives spans several awaits — most of all the 1.2s SIGTERM grace period inside
+ * `stopChild` on POSIX, where Windows instead takes a synchronous taskkill. A Ctrl-C (or a
+ * non-retryable startup exit) that lands inside one of those windows must not be overtaken
+ * by a fresh spawn, or the supervisor starts a gateway it will never own and orphans it on
+ * the port after exiting.
+ */
+function shouldAbandonStart(): boolean {
+  return shuttingDown || terminalStartupFailure;
+}
+
 async function startChild(): Promise<void> {
   const startupStartedAt = Date.now();
+  if (shouldAbandonStart()) {
+    return;
+  }
   if (await isPortOpen()) {
     log.error("gateway port already in use before spawn", {
       host: gatewayHealthHost,
@@ -224,6 +244,12 @@ async function startChild(): Promise<void> {
     if (delay !== null) {
       scheduleRestartAfter(delay, "port in use");
     }
+    return;
+  }
+
+  // isPortOpen() above is its own await boundary, so re-check before committing to the
+  // reference build and the spawn that follows it.
+  if (shouldAbandonStart()) {
     return;
   }
 
@@ -433,7 +459,7 @@ async function stopChild(reason: string): Promise<void> {
       } catch {
         running.kill("SIGTERM");
       }
-      await sleep(1200);
+      await sleep(stopGraceMs);
       if (isProcessAlive(pid)) {
         try {
           process.kill(-pid, "SIGKILL");
