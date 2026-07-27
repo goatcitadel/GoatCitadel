@@ -191,9 +191,11 @@ export function SettingsSectionShell({
 export function SettingsGrid({
   children,
   variant,
+  className,
 }: {
   children: ReactNode;
   variant?: "default" | "balanced" | "detail-wide" | "three-column";
+  className?: string;
 }) {
   const variantClass =
     variant === "balanced"
@@ -203,11 +205,11 @@ export function SettingsGrid({
         : variant === "three-column"
           ? "is-three-column"
           : "";
-  return <div className={["mc-next-settings-grid", variantClass].filter(Boolean).join(" ")}>{children}</div>;
+  return <div className={["mc-next-settings-grid", variantClass, className].filter(Boolean).join(" ")}>{children}</div>;
 }
 
-export function SettingsStack({ children }: { children: ReactNode }) {
-  return <div className="mc-next-settings-stack">{children}</div>;
+export function SettingsStack({ children, className }: { children: ReactNode; className?: string }) {
+  return <div className={["mc-next-settings-stack", className].filter(Boolean).join(" ")}>{children}</div>;
 }
 
 type SettingsPostureCardRow = { name: string; state: string; tone: ChipTone; age?: string };

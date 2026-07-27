@@ -27,7 +27,6 @@ import type { RuntimeBuildIdentity } from "@goatcitadel/contracts";
 import { PageErrorBoundary } from "@goatcitadel/mission-control-shared/components/PageErrorBoundary";
 import { SideInspectorDrawer } from "@goatcitadel/mission-control-shared/components/SideInspectorDrawer";
 import type { ShellDetailPanelEntry } from "@goatcitadel/mission-control-shared/components/ShellDetailPanelContext";
-import { NativeButton } from "@next/features/native-routes/primitives";
 import { useModalDialogBehavior } from "@next/features/threaded-surface/useModalDialogBehavior";
 import { TopbarOverflowMenu, type TopbarOverflowItem } from "./TopbarOverflowMenu";
 import { isRuntimeReleaseVerified } from "./runtime-build-identity";
@@ -146,16 +145,22 @@ export function ShellTopbar({
       active: soundEnabled,
       onSelect: handleToggleNotificationSound,
     },
-    {
-      id: "theme",
-      label: theme === "dark" ? "Switch to light theme" : "Switch to dark theme",
-      icon: theme === "dark" ? <SunMedium size={15} /> : <MoonStar size={15} />,
-      onSelect: handleToggleTheme,
-    },
+    ...(inspectorAvailable
+      ? [
+          {
+            id: "route-details",
+            label: inspectorOpen ? "Hide Route details" : "Open Route details",
+            ariaLabel: inspectorOpen ? "Hide Route details" : "Open Route details",
+            icon: inspectorOpen ? <PanelRightClose size={15} /> : <PanelRightOpen size={15} />,
+            active: inspectorOpen,
+            onSelect: onToggleInspector,
+          },
+        ]
+      : []),
   ];
 
   return (
-    <header className="mc-next-topbar">
+    <header className="mc-next-topbar" data-compact={isCompactTopbar || undefined}>
       <div className="mc-next-topbar-left">
         <button
           type="button"
@@ -222,28 +227,6 @@ export function ShellTopbar({
           <span>Command Palette</span>
           <kbd>Ctrl K</kbd>
         </button>
-        {!isCompactTopbar ? (
-          <>
-            <NativeButton
-              variant="secondary"
-              className="mc-next-start-button"
-              onClick={handleOpenStartHere}
-              title="Open Start Here"
-            >
-              <Rocket size={15} />
-              Start Here
-            </NativeButton>
-            <NativeButton
-              variant="secondary"
-              className="mc-next-mode-toggle"
-              onClick={handleToggleMode}
-              title={mode === "simple" ? "Switch to Expert mode" : "Switch to Guided mode"}
-            >
-              <SlidersHorizontal size={15} />
-              {mode === "simple" ? "Guided" : "Expert"}
-            </NativeButton>
-          </>
-        ) : null}
         <label className="mc-next-select-field mc-next-workspace-field">
           <span>Workspace</span>
           <select
@@ -291,43 +274,16 @@ export function ShellTopbar({
           <Bell size={16} />
           <span>{operatorNotificationCount}</span>
         </button>
-        {!isCompactTopbar ? (
-          <button
-            type="button"
-            className={`mc-next-icon-button mc-next-audio-toggle${soundEnabled ? " active" : ""}`}
-            onClick={handleToggleNotificationSound}
-            aria-pressed={soundEnabled}
-            aria-label={soundEnabled ? "Disable notification sounds" : "Enable notification sounds"}
-            title={soundEnabled ? "Disable notification sounds" : "Enable notification sounds"}
-          >
-            {soundEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
-            <span>{soundEnabled ? "On" : "Off"}</span>
-          </button>
-        ) : null}
-        {inspectorAvailable ? (
-          <NativeButton
-            variant="secondary"
-            className="mc-next-wa-button"
-            onClick={onToggleInspector}
-            aria-label={inspectorOpen ? "Hide Route details" : "Open Route details"}
-            title={inspectorOpen ? "Hide Route details" : "Open Route details"}
-          >
-            {inspectorOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
-            {inspectorOpen ? "Hide Route details" : "Open Route details"}
-          </NativeButton>
-        ) : null}
-        {!isCompactTopbar ? (
-          <button
-            type="button"
-            className="mc-next-icon-button mc-next-theme-toggle"
-            onClick={handleToggleTheme}
-            aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-            title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-          >
-            {theme === "dark" ? <SunMedium size={16} /> : <MoonStar size={16} />}
-          </button>
-        ) : null}
-        {isCompactTopbar ? <TopbarOverflowMenu items={topbarOverflowItems} /> : null}
+        <button
+          type="button"
+          className="mc-next-icon-button mc-next-theme-toggle"
+          onClick={handleToggleTheme}
+          aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+          title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+        >
+          {theme === "dark" ? <SunMedium size={16} /> : <MoonStar size={16} />}
+        </button>
+        <TopbarOverflowMenu items={topbarOverflowItems} />
       </div>
     </header>
   );

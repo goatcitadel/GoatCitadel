@@ -135,6 +135,12 @@ export async function addCitadelWard(citadelId: string, ward: WardBody): Promise
   });
 }
 
+export async function removeCitadelWard(citadelId: string, wardId: string): Promise<void> {
+  await request<void>(`/api/v1/citadels/${id(citadelId)}/wards/${id(wardId)}`, {
+    method: "DELETE",
+  });
+}
+
 export async function evaluateCitadelGatehouseAction(
   citadelId: string,
   action: string,

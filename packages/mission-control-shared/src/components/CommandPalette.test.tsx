@@ -167,6 +167,31 @@ describe("CommandPalette", () => {
     expect(onClose).toHaveBeenCalledTimes(2);
   });
 
+  it("renders grouped descriptions, current state, and keyboard hints", () => {
+    const markup = renderToStaticMarkup(
+      <CommandPalette
+        open
+        onClose={() => undefined}
+        items={[
+          {
+            id: "memory",
+            label: "Memory",
+            group: "Library",
+            description: "Review memory lifecycle and provenance.",
+            keyHint: "G L",
+            active: true,
+            run: vi.fn(),
+          },
+        ]}
+      />,
+    );
+    expect(markup).toContain("command-palette-group");
+    expect(markup).toContain("Library");
+    expect(markup).toContain("Review memory lifecycle and provenance.");
+    expect(markup).toContain("Current");
+    expect(markup).toContain("G L");
+  });
+
   it("closes on escape and handles empty results and tab focus fallback", () => {
     const onClose = vi.fn();
     const renderer = create(

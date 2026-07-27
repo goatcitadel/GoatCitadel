@@ -2139,14 +2139,15 @@
   place-items: center;
   padding: 1.5rem;
   background:
-    radial-gradient(circle at top left, color-mix(in oklab, var(--primary) 12%, transparent), transparent 34%),
-    linear-gradient(180deg, color-mix(in oklab, var(--background) 96%, transparent), var(--background));
+    linear-gradient(90deg, color-mix(in oklab, var(--primary) 4%, transparent) 1px, transparent 1px),
+    linear-gradient(color-mix(in oklab, var(--primary) 4%, transparent) 1px, transparent 1px), var(--background);
+  background-size: 32px 32px;
 }
 
 .gateway-access-card {
   width: min(56rem, 100%);
   position: relative;
-  border-radius: var(--r-lg);
+  border-radius: var(--r-md);
   background:
     linear-gradient(180deg, color-mix(in oklab, var(--primary) 6%, transparent), transparent 60%),
     color-mix(in oklab, var(--card) 95%, transparent);
@@ -2190,7 +2191,71 @@
 
 .gateway-access-title {
   font-size: clamp(1.55rem, 3vw, 2rem);
+  font-family: var(--font-display, var(--font-sans));
   letter-spacing: -0.03em;
+}
+
+.gateway-access-progress {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.42rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.gateway-access-progress li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.42rem;
+  padding: 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--mc-surface-1);
+  color: var(--text-secondary);
+}
+
+.gateway-access-progress li[data-state="active"] {
+  border-color: color-mix(in oklab, var(--primary) 58%, var(--border));
+  background: color-mix(in oklab, var(--mc-surface-1) 91%, var(--primary));
+  color: var(--foreground);
+}
+
+.gateway-access-progress li[data-state="blocked"] {
+  border-color: color-mix(in oklab, var(--danger) 58%, var(--border));
+}
+
+.gateway-access-progress li > span {
+  display: grid;
+  place-items: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  border: 1px solid currentColor;
+  border-radius: var(--r-pill);
+  font: 700 var(--text-2xs) / 1 var(--mc-font-mono);
+}
+
+.gateway-access-progress li > div {
+  display: grid;
+  gap: 0.12rem;
+}
+
+.gateway-access-progress strong {
+  font-size: var(--text-xs);
+}
+
+.gateway-access-progress small {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--text-2xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 680px) {
+  .gateway-access-progress {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .gateway-access-subtitle,
@@ -2994,7 +3059,7 @@
   padding: 0 16px;
   gap: 12px;
   overflow: visible;
-  background: var(--mc-surface-1);
+  background: color-mix(in oklab, var(--mc-surface-1) 94%, var(--background));
   border-bottom-color: var(--border);
 }
 
@@ -3083,6 +3148,7 @@
   background: transparent;
   border-bottom-color: var(--mc-area-color);
   box-shadow: none;
+  color: var(--foreground);
 }
 
 .mc-next-command-search {
@@ -3126,6 +3192,27 @@
   border-radius: var(--r-sm);
   border-color: var(--border);
   background: var(--background);
+}
+
+.mc-next-topbar-more-menu {
+  min-width: 15.5rem;
+  padding: 0.35rem;
+  border-radius: var(--r-md);
+  background: var(--mc-surface-2);
+  box-shadow: 0 18px 40px color-mix(in oklab, var(--background) 72%, transparent);
+}
+
+.mc-next-topbar-more-item {
+  border-radius: var(--r-sm);
+}
+
+.mc-next-brand h1,
+.mc-next-rail-head h2,
+.native-page-header h1,
+.threaded-surface-title,
+.threaded-empty-state h1 {
+  font-family: var(--font-display, var(--mc-font-display));
+  letter-spacing: -0.02em;
 }
 
 .mc-next-audio-toggle span {

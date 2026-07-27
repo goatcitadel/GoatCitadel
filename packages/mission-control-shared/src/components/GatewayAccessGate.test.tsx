@@ -155,6 +155,9 @@ describe("GatewayAccessGate", () => {
     expect(checking).toContain("Starting Mission Control");
     expect(checking).toContain("Checking gateway");
     expect(checking).toContain("theme-citadel-light");
+    expect(checking).toContain("Reach gateway");
+    expect(checking).toContain("Verify access");
+    expect(checking).toContain("Open control plane");
 
     const unreachable = renderToStaticMarkup(
       <GatewayAccessGate

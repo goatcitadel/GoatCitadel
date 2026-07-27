@@ -333,6 +333,12 @@ function findButton(renderer: ReactTestRenderer, text: string) {
   return button;
 }
 
+async function openTopbarMore(renderer: ReactTestRenderer) {
+  await act(async () => {
+    renderer.root.findByProps({ "aria-label": "More controls" }).props.onClick();
+  });
+}
+
 function readNodeText(node: { children?: unknown[] } | string | number | null | undefined): string {
   if (typeof node === "string" || typeof node === "number") {
     return String(node);
@@ -579,8 +585,9 @@ describe("MissionControlNextApp", () => {
       expect.objectContaining({ eventId: "evt-1" }),
     );
 
+    await openTopbarMore(renderer);
     await act(async () => {
-      findButton(renderer, "Guided").props.onClick();
+      findButton(renderer, "Switch to Expert mode").props.onClick();
       renderer.root.findByProps({ "aria-label": "Switch to light theme" }).props.onClick();
     });
     expect(appMocks.setMode).toHaveBeenCalledWith("advanced");
@@ -616,6 +623,7 @@ describe("MissionControlNextApp", () => {
     expect(readNodeText(renderer.root.findByProps({ "aria-label": "Open notifications" }))).toBe("2");
     expect(appMocks.playOperatorAttentionSound).toHaveBeenCalledWith("soft_update", "off");
 
+    await openTopbarMore(renderer);
     await act(async () => {
       renderer.root.findByProps({ "aria-label": "Enable notification sounds" }).props.onClick();
     });
@@ -670,6 +678,7 @@ describe("MissionControlNextApp", () => {
     });
     expect(window.location.pathname).toBe("/settings/onboarding");
 
+    await openTopbarMore(renderer);
     await act(async () => {
       findButton(renderer, "Start Here").props.onClick();
     });
@@ -693,6 +702,7 @@ describe("MissionControlNextApp", () => {
   it("keeps the route inspector off Chat while preserving non-Chat trust evidence", async () => {
     const renderer = await renderApp("http://localhost:5173/settings/providers?sessionId=session-1&turnId=turn-1");
 
+    await openTopbarMore(renderer);
     await act(async () => {
       renderer.root.findByProps({ "aria-label": "Open Route details" }).props.onClick();
     });
@@ -713,6 +723,7 @@ describe("MissionControlNextApp", () => {
     });
     expect(appMocks.setDetailPanelPinned).toHaveBeenCalledWith(true);
 
+    await openTopbarMore(renderer);
     await act(async () => {
       renderer.root.findByProps({ "aria-label": "Open Route details" }).props.onClick();
       renderer.root
@@ -726,6 +737,7 @@ describe("MissionControlNextApp", () => {
   it("clears the shell inspector when entering Chat so it cannot resurrect on return", async () => {
     const renderer = await renderApp("http://localhost:5173/settings/providers");
 
+    await openTopbarMore(renderer);
     await act(async () => {
       renderer.root.findByProps({ "aria-label": "Open Route details" }).props.onClick();
     });
@@ -753,6 +765,7 @@ describe("MissionControlNextApp", () => {
         ?.props.onClick();
     });
     expect(window.location.pathname).toBe("/settings/general");
+    await openTopbarMore(renderer);
     expect(renderer.root.findAllByProps({ "aria-label": "Open Route details" }).length).toBeGreaterThan(0);
     expect(JSON.stringify(renderer.toJSON())).not.toContain("Release readiness");
   });
@@ -1027,6 +1040,7 @@ describe("MissionControlNextApp", () => {
   it("surfaces release readiness action and verification truth in the route inspector", async () => {
     const renderer = await renderApp("http://localhost:5173/settings/providers");
 
+    await openTopbarMore(renderer);
     await act(async () => {
       renderer.root.findByProps({ "aria-label": "Open Route details" }).props.onClick();
     });

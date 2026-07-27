@@ -117,6 +117,24 @@
   background: transparent;
 }
 
+.mc-next-threaded-title-block {
+  display: grid;
+  gap: 0.04rem;
+  min-width: 0;
+}
+
+.mc-next-threaded-title-kicker {
+  color: var(--text-tertiary);
+  font: 700 var(--text-2xs) / 1 var(--font-mono, var(--mc-font-mono));
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mc-next-threaded-title-block h1 {
+  font-family: var(--font-display, var(--font-sans));
+  letter-spacing: -0.02em;
+}
+
 .mc-next-threaded-stage[data-stage-posture="fast-conversation"] .mc-next-threaded-header {
   border-bottom-color: color-mix(in oklab, var(--area-chat) 22%, var(--mc-border-subtle));
 }
@@ -192,6 +210,86 @@
   display: flex;
   flex-wrap: wrap;
   gap: 0.24rem;
+}
+
+.mc-next-threaded-runtime-detail {
+  position: relative;
+}
+
+.mc-next-threaded-runtime-detail summary {
+  min-height: 1.55rem;
+  padding: 0.18rem 0.42rem;
+  border: 1px solid var(--mc-border-subtle, var(--border));
+  border-radius: var(--r-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: var(--text-2xs);
+  list-style-position: inside;
+}
+
+.mc-next-threaded-runtime-detail > div {
+  position: absolute;
+  z-index: var(--z-popover);
+  top: calc(100% + 0.3rem);
+  right: 0;
+  display: grid;
+  gap: 0.3rem;
+  width: max-content;
+  max-width: min(22rem, 80vw);
+  padding: 0.55rem;
+  border: 1px solid var(--mc-border-default, var(--border));
+  border-radius: var(--r-md);
+  background: var(--mc-surface-2);
+  box-shadow: var(--mc-shadow-soft);
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+}
+
+.mc-next-threaded-execution-overview {
+  display: grid;
+  gap: 0.48rem;
+  margin: 0.45rem 0.65rem 0;
+  padding: 0.6rem 0.72rem;
+  border: 1px solid color-mix(in oklab, var(--area-chat) 24%, var(--mc-border-subtle));
+  border-left: 3px solid color-mix(in oklab, var(--area-chat) 72%, var(--foreground));
+  border-radius: var(--r-md);
+  background: color-mix(in oklab, var(--mc-surface-1) 93%, var(--area-chat));
+}
+
+.mc-next-threaded-execution-overview-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.65rem;
+}
+
+.mc-next-threaded-execution-overview-head > div {
+  display: grid;
+  gap: 0.08rem;
+}
+
+.mc-next-threaded-execution-overview-head span {
+  color: var(--text-tertiary);
+  font: 700 var(--text-2xs) / 1 var(--font-mono, var(--mc-font-mono));
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mc-next-threaded-execution-overview-head strong {
+  color: var(--text);
+  font-family: var(--font-display, var(--font-sans));
+  font-size: var(--text-sm);
+}
+
+.mc-next-threaded-execution-overview .chat-execution-plan-summary {
+  display: grid;
+  gap: 0.18rem;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.mc-next-threaded-execution-overview .chat-execution-plan-summary p {
+  margin: 0;
 }
 
 /* ---- in-surface mode control ---- */

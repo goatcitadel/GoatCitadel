@@ -1021,6 +1021,15 @@
   margin-top: 2px;
 }
 
+.command-palette-group {
+  display: block;
+  padding: 0.65rem 0.65rem 0.25rem;
+  color: var(--fg-muted, var(--text-muted));
+  font: 700 var(--text-2xs) / 1 var(--font-mono, var(--mc-font-mono));
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
 /* `.gc-button` (specificity 0,1,0) sets `justify-content: center`; this action
    carries both classes, so it needs equal-or-higher specificity to keep its
    intended left alignment. Scope to `.gc-button.command-palette-action`. */
@@ -1030,11 +1039,59 @@
   text-align: left;
   justify-content: flex-start;
   padding: 0.55rem 0.7rem;
+  gap: 0.7rem;
 }
 
 .command-palette-action.active {
   border-color: var(--border-emphasis, var(--border-strong));
   background: color-mix(in oklab, var(--mc-area-color, var(--area-chat)) 12%, var(--bg-surface-2, var(--mc-surface-2)));
+}
+
+.command-palette-action.is-current {
+  box-shadow: inset 2px 0 0 var(--mc-area-color, var(--area-chat));
+}
+
+.command-palette-action-copy {
+  display: grid;
+  flex: 1 1 auto;
+  gap: 0.08rem;
+  min-width: 0;
+}
+
+.command-palette-action-copy strong {
+  color: var(--fg-primary, var(--foreground));
+  font-size: var(--text-xs);
+}
+
+.command-palette-action-copy small {
+  overflow: hidden;
+  color: var(--fg-muted, var(--text-muted));
+  font-size: var(--text-2xs);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-palette-action-meta {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.34rem;
+  color: var(--fg-muted, var(--text-muted));
+}
+
+.command-palette-action-meta em {
+  color: var(--mc-area-color, var(--area-chat));
+  font-size: var(--text-2xs);
+  font-style: normal;
+}
+
+.command-palette-action-meta kbd {
+  padding: 0.14rem 0.26rem;
+  border: 1px solid var(--border-subtle, var(--mc-border-subtle));
+  border-radius: var(--r-xs);
+  background: var(--bg-inset, var(--mc-surface-0));
+  font-size: var(--text-2xs);
 }
 
 .command-palette-empty {

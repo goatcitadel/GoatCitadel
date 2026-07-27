@@ -28,7 +28,7 @@ export function TopbarOverflowMenu({ items, label = "More" }: { items: TopbarOve
   const menuId = useId();
 
   useEffect(() => {
-    if (!open || typeof document === "undefined") {
+    if (!open || typeof document === "undefined" || typeof document.addEventListener !== "function") {
       return undefined;
     }
     const handlePointerDown = (event: Event) => {

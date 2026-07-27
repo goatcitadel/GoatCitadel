@@ -32,6 +32,36 @@ interface ReviewState {
   summary: BlueprintReviewSummary | null;
 }
 
+type MasonStageState = "complete" | "active" | "pending";
+
+function buildMasonStages(
+  answers: Partial<MasonAnswers>,
+  sessionStarted: boolean,
+  reviewComplete: boolean,
+): Array<{ label: string; detail: string; state: MasonStageState }> {
+  const definitionComplete = Boolean(answers.kind && answers.purpose?.trim());
+  const prioritiesComplete = Boolean(answers.goals?.length || answers.successDefinition?.length);
+  const boundariesComplete = Boolean(
+    answers.riskPosture || answers.boundaries?.length || answers.sensitiveAreas?.length,
+  );
+  const checkpoints = [sessionStarted, definitionComplete, prioritiesComplete, boundariesComplete, reviewComplete];
+  const firstIncomplete = checkpoints.findIndex((complete) => !complete);
+  const activeIndex = firstIncomplete === -1 ? checkpoints.length - 1 : firstIncomplete;
+  const labels = [
+    ["Begin", "Open a guided staging session."],
+    ["Define", "Name the Citadel and state its purpose."],
+    ["Priorities", "Capture goals and what success means."],
+    ["Boundaries", "Describe risk posture, sealed areas, and limits."],
+    ["Review", "Generate and inspect the Blueprint before activation."],
+  ] as const;
+
+  return labels.map(([label, detail], index) => ({
+    label,
+    detail,
+    state: checkpoints[index] ? "complete" : index === activeIndex ? "active" : "pending",
+  }));
+}
+
 /** Flatten the partial answers into operator-readable rows for the session summary. */
 function describeAnswers(answers: Partial<MasonAnswers>): Array<{ title: string; body?: string }> {
   const rows: Array<{ title: string; body?: string }> = [];
@@ -136,6 +166,7 @@ export function CitadelMasonRoutePage({
   const canDraft = session
     ? typeof session.answers.kind === "string" && (session.answers.purpose ?? "").trim().length > 0
     : false;
+  const masonStages = buildMasonStages(session?.answers ?? {}, Boolean(session), Boolean(review.summary));
 
   return (
     <NativePageFrame
@@ -147,6 +178,24 @@ export function CitadelMasonRoutePage({
       loading={questions.loading}
       error={questions.error}
     >
+      <section className="mc-next-mason-progress" aria-label="Citadel staging progress">
+        <div className="mc-next-mason-progress-copy">
+          <span>Fail-closed staging</span>
+          <strong>Blueprint progress</strong>
+          <p>These checkpoints summarize captured answers. They do not activate the Citadel or open any Gate.</p>
+        </div>
+        <ol>
+          {masonStages.map((stage, index) => (
+            <li key={stage.label} data-state={stage.state} aria-current={stage.state === "active" ? "step" : undefined}>
+              <span>{index + 1}</span>
+              <div>
+                <strong>{stage.label}</strong>
+                <small>{stage.detail}</small>
+              </div>
+            </li>
+          ))}
+        </ol>
+      </section>
       <NativeGrid>
         <NativeCard
           title="Setup questions"
@@ -162,6 +211,13 @@ export function CitadelMasonRoutePage({
               ))}
             </ol>
           )}
+          <div className="mc-next-mason-preflight" aria-label="Staging preflight">
+            <strong>Preflight</strong>
+            <span>{questions.items.length > 0 ? "Setup prompts ready" : "Setup prompts unavailable"}</span>
+            <span>{session ? "Session is staged" : "No staging session yet"}</span>
+            <span>{canDraft ? "Minimum Blueprint inputs captured" : "Kind and purpose still required"}</span>
+            <span>{review.summary ? "Blueprint reviewed" : "Activation remains unavailable"}</span>
+          </div>
         </NativeCard>
 
         <NativeCard

@@ -936,10 +936,10 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
   return (
     <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
       {notice ? <SettingsNotice notice={notice} /> : null}
-      <SettingsGrid variant="detail-wide">
+      <SettingsGrid variant="detail-wide" className="mc-next-provider-master-detail">
         <NativeCard
           density="compact"
-          className="mc-next-settings-panel"
+          className="mc-next-settings-panel mc-next-provider-directory"
           title="Providers & Models"
           subtitle="Available providers, probe posture, and current catalog coverage."
           scrollBody
@@ -985,10 +985,10 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
             maxHeight="min(44vh, 25rem)"
           />
         </NativeCard>
-        <SettingsStack>
+        <SettingsStack className="mc-next-provider-detail-stack">
           <NativeCard
             density="compact"
-            className="mc-next-settings-panel"
+            className="mc-next-settings-panel mc-next-provider-routing-card"
             title="Active routing"
             subtitle="Change the provider/model pair Mission Control uses by default."
           >
@@ -1045,7 +1045,7 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
           </NativeCard>
           <NativeCard
             density="compact"
-            className="mc-next-settings-panel"
+            className="mc-next-settings-panel mc-next-provider-model-picker-card"
             title="Universal model picker"
             subtitle="Search configured provider catalogs with runtime fallback and availability evidence."
             scrollBody
@@ -1114,7 +1114,7 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
           </NativeCard>
           <NativeCard
             density="compact"
-            className="mc-next-settings-panel"
+            className="mc-next-settings-panel mc-next-provider-advice-card"
             title="Provider advice"
             subtitle="Advisory routing guidance only; no provider configuration is mutated."
             stats={[
@@ -1175,7 +1175,7 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
           </NativeCard>
           <NativeCard
             density="compact"
-            className="mc-next-settings-panel"
+            className="mc-next-settings-panel mc-next-provider-oauth-card"
             title="OpenAI Codex ChatGPT login"
             subtitle="Connect the OpenAI Codex provider through ChatGPT OAuth. No API key needed."
             stats={[
@@ -1315,7 +1315,7 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
           </NativeCard>
           <NativeCard
             density="compact"
-            className="mc-next-settings-panel"
+            className="mc-next-settings-panel mc-next-provider-detail-card"
             title={selectedProvider?.label ?? "Provider detail"}
             subtitle="Credential posture, probe state, and read-only runtime trust signals."
           >
@@ -1389,7 +1389,12 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                     {
                       label: "Probe",
                       value: formatProviderProbeStateLabel(selectedProvider.modelProbeState),
-                      meta: formatProviderProbeSourceMeta(selectedProvider),
+                      meta:
+                        selectedProvider.modelProbeSource === "error_fallback"
+                          ? "Fallback after probe error; inspect model discovery below"
+                          : selectedProvider.modelProbeState === "error"
+                            ? "Live discovery failed; inspect model discovery below"
+                            : formatProviderProbeSourceMeta(selectedProvider),
                     },
                     {
                       label: "Provider models",
@@ -1535,7 +1540,7 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
           </NativeCard>
           <NativeCard
             density="compact"
-            className="mc-next-settings-panel"
+            className="mc-next-settings-panel mc-next-provider-editor-card"
             title="Provider editor"
             subtitle={editorHint}
           >

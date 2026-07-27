@@ -9,12 +9,26 @@ const apiMocks = vi.hoisted(() => ({
   listCitadelWards: vi.fn(),
   addCitadelWard: vi.fn(),
   evaluateCitadelGatehouseAction: vi.fn(),
+  removeCitadelWard: vi.fn(),
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   listCitadelWards: apiMocks.listCitadelWards,
   addCitadelWard: apiMocks.addCitadelWard,
   evaluateCitadelGatehouseAction: apiMocks.evaluateCitadelGatehouseAction,
+  removeCitadelWard: apiMocks.removeCitadelWard,
+}));
+
+vi.mock("@goatcitadel/mission-control-shared/components/ConfirmModal", () => ({
+  ConfirmModal: (props: { open: boolean; title: string; confirmLabel: string; onConfirm: () => void }) =>
+    props.open ? (
+      <div role="dialog" aria-label={props.title}>
+        <span>{props.title}</span>
+        <button type="button" onClick={props.onConfirm}>
+          {props.confirmLabel}
+        </button>
+      </div>
+    ) : null,
 }));
 
 function makeProps(): NativeRoutePagesProps {
@@ -68,6 +82,7 @@ describe("CitadelWardsRoutePage", () => {
       createdAt: "t",
     });
     apiMocks.evaluateCitadelGatehouseAction.mockResolvedValue({ action: "shell.run", effect: "deny" });
+    apiMocks.removeCitadelWard.mockResolvedValue(undefined);
   });
 
   it("renders the Wards header", () => {
@@ -132,5 +147,35 @@ describe("CitadelWardsRoutePage", () => {
     });
     expect(apiMocks.evaluateCitadelGatehouseAction).toHaveBeenCalledWith("default", "shell.run");
     expect(treeString(renderer!)).toContain("shell.run");
+  });
+
+  it("deletes a selected Ward only after confirmation", async () => {
+    apiMocks.listCitadelWards.mockResolvedValue([
+      {
+        wardId: "w0",
+        citadelId: "default",
+        name: "Seal finance",
+        actionPattern: "finance.*",
+        effect: "deny",
+        createdAt: "t",
+      },
+    ]);
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(<CitadelWardsRoutePage {...makeProps()} />);
+    });
+    await act(async () => {
+      buttonByLabel(renderer!, "Delete Ward").props.onClick();
+    });
+    expect(treeString(renderer!)).toContain("Delete this Ward?");
+    await act(async () => {
+      const confirmButtons = renderer!.root.findAll(
+        (node) => node.type === "button" && instanceText(node).includes("Delete Ward"),
+      );
+      confirmButtons.at(-1)?.props.onClick();
+      await Promise.resolve();
+    });
+    expect(apiMocks.removeCitadelWard).toHaveBeenCalledWith("default", "w0");
+    expect(treeString(renderer!)).not.toContain("Seal finance");
   });
 });

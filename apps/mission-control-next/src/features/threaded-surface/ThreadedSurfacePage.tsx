@@ -42,6 +42,7 @@ import { StatusChip } from "../native-routes/primitives";
 import { ChatModelPicker } from "@goatcitadel/mission-control-shared/components/ChatModelPicker";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { GeneratedArtifactViewer } from "@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactViewer";
+import { ChatExecutionPlanSummary } from "@goatcitadel/mission-control-shared/components/chat/ChatExecutionPlanSummary";
 import {
   Sheet,
   SheetContent,
@@ -853,8 +854,12 @@ function ThreadConversationSurface({
             mode={props.modeOverridePending ?? (props.autoRouteActive ? undefined : props.mode)}
             preview={props.surfaceRoutePreview}
             onOverride={props.onModeOverride}
+            variant="compact"
           />
-          <h1>{props.sessionTitle}</h1>
+          <div className="mc-next-threaded-title-block">
+            <span className="mc-next-threaded-title-kicker">Operator thread</span>
+            <h1>{props.sessionTitle}</h1>
+          </div>
           <span>{props.summary}</span>
         </div>
 
@@ -879,20 +884,6 @@ function ThreadConversationSurface({
             </StatusChip>
             <StatusChip
               tone="muted"
-              title="Conversation token usage"
-              ariaLabel={`Tokens: ${formatTokenLabel(usageTotals.tokens)}`}
-            >
-              {formatTokenLabel(usageTotals.tokens)}
-            </StatusChip>
-            <StatusChip
-              tone="muted"
-              title="Conversation estimated cost"
-              ariaLabel={`Cost: ${formatCostLabel(usageTotals.costUsd)}`}
-            >
-              {formatCostLabel(usageTotals.costUsd)}
-            </StatusChip>
-            <StatusChip
-              tone="muted"
               title="Pending tool and risk approvals waiting on you"
               ariaLabel={`Approvals: ${headerStatus.approvalsSummary}`}
             >
@@ -905,6 +896,19 @@ function ThreadConversationSurface({
             >
               {headerStatus.compactPolicySummary}
             </StatusChip>
+            <details className="mc-next-threaded-runtime-detail">
+              <summary>Runtime detail</summary>
+              <div>
+                <span aria-label={`Tokens: ${formatTokenLabel(usageTotals.tokens)}`}>
+                  Tokens {formatTokenLabel(usageTotals.tokens)}
+                </span>
+                <span aria-label={`Cost: ${formatCostLabel(usageTotals.costUsd)}`}>
+                  Estimated cost {formatCostLabel(usageTotals.costUsd)}
+                </span>
+                <span>{headerStatus.providerModelSummary}</span>
+                <span>{routeSelectionSummary}</span>
+              </div>
+            </details>
           </div>
         </div>
 
@@ -969,6 +973,24 @@ function ThreadConversationSurface({
       </header>
 
       <section className="mc-next-threaded-conversation">
+        {props.selectedTurn?.trace.executionPlan ? (
+          <section
+            className="mc-next-threaded-execution-overview"
+            aria-label="Current execution plan"
+            aria-live="polite"
+          >
+            <div className="mc-next-threaded-execution-overview-head">
+              <div>
+                <span>Governed execution</span>
+                <strong>Current plan and progress</strong>
+              </div>
+              <StatusChip tone={approvalsAreBlocking ? "warning" : (props.trust.runtimeTone ?? "muted")}>
+                {approvalsAreBlocking ? "Waiting for approval" : headerStatus.runtimeRunSummary}
+              </StatusChip>
+            </div>
+            <ChatExecutionPlanSummary plan={props.selectedTurn.trace.executionPlan} />
+          </section>
+        ) : null}
         {props.historicalWindow || props.historicalWindowLoading || props.historicalWindowError ? (
           <section className="mc-next-threaded-history-banner" aria-live="polite">
             <div>

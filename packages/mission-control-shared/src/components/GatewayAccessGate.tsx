@@ -229,7 +229,7 @@ export function GatewayAccessGate({
   };
 
   return (
-    <section className={`gateway-access-shell ${themeClass}`} aria-live="polite">
+    <section className={`gateway-access-shell ${themeClass}`} data-status={access.status} aria-live="polite">
       <div className="panel panel-pad-spacious panel-accent gateway-access-card">
         <div className="gateway-access-header">
           <div className="gateway-access-copy">
@@ -264,6 +264,44 @@ export function GatewayAccessGate({
             <p className="gateway-access-note">Mission Control will retry the gateway handshake automatically.</p>
           ) : null}
         </div>
+
+        <ol className="gateway-access-progress" aria-label="Gateway access progress">
+          <li
+            data-state={
+              access.status === "checking" ? "active" : access.status === "unreachable" ? "blocked" : "complete"
+            }
+          >
+            <span>1</span>
+            <div>
+              <strong>Reach gateway</strong>
+              <small>{access.status === "unreachable" ? "Target did not answer" : gatewayBaseUrl}</small>
+            </div>
+          </li>
+          <li
+            data-state={
+              access.status === "needs-auth"
+                ? "active"
+                : access.status === "misconfigured"
+                  ? "blocked"
+                  : access.status === "ready"
+                    ? "complete"
+                    : "pending"
+            }
+          >
+            <span>2</span>
+            <div>
+              <strong>Verify access</strong>
+              <small>{needsAuth ? "Credentials or device approval required" : shellState.label}</small>
+            </div>
+          </li>
+          <li data-state={access.status === "ready" ? "complete" : "pending"}>
+            <span>3</span>
+            <div>
+              <strong>Open control plane</strong>
+              <small>{access.status === "ready" ? "Live surfaces available" : "Waits for verified access"}</small>
+            </div>
+          </li>
+        </ol>
 
         {shellState.detail ? (
           <details className="gateway-access-details">

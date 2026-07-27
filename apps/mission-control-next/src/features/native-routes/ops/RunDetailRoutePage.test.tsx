@@ -7,6 +7,7 @@ const runTraceHarness = vi.hoisted(() => ({
   fetchEvidenceReceipt: vi.fn(),
   fetchObserveRunTrace: vi.fn(),
   fetchOrchestrationRunTrace: vi.fn(),
+  verifyEvidenceReceipt: vi.fn(),
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
@@ -19,6 +20,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     fetchEvidenceReceipt: runTraceHarness.fetchEvidenceReceipt,
     fetchObserveRunTrace: runTraceHarness.fetchObserveRunTrace,
     fetchOrchestrationRunTrace: runTraceHarness.fetchOrchestrationRunTrace,
+    verifyEvidenceReceipt: runTraceHarness.verifyEvidenceReceipt,
   };
 });
 
@@ -27,6 +29,7 @@ beforeEach(() => {
   runTraceHarness.fetchEvidenceReceipt.mockReset();
   runTraceHarness.fetchObserveRunTrace.mockReset();
   runTraceHarness.fetchOrchestrationRunTrace.mockReset();
+  runTraceHarness.verifyEvidenceReceipt.mockReset();
   runTraceHarness.fetchOrchestrationRunTrace.mockRejectedValue(new Error("not an orchestration run"));
   Object.defineProperty(globalThis.navigator, "clipboard", {
     configurable: true,
@@ -565,14 +568,33 @@ describe("RunDetailRoutePage", () => {
       errors: [],
     });
     const receipt = {
-      manifest: { schemaVersion: "1.0.0", runId: "run-receipt", generatedAt: "2026-05-02T19:01:00.000Z" },
+      manifest: {
+        schemaVersion: "1.0.0",
+        runId: "run-receipt",
+        generatedAt: "2026-05-02T19:01:00.000Z",
+        lineage: {
+          runId: "run-receipt",
+          workflowKey: "chat.turn",
+          status: "completed",
+          attemptCount: 1,
+          maxAttempts: 3,
+          outcome: "succeeded",
+          createdAt: "2026-05-02T19:00:00.000Z",
+          updatedAt: "2026-05-02T19:01:00.000Z",
+        },
+        approvalEffects: [],
+        sideEffects: [],
+        artifacts: [],
+        notes: [],
+      },
       contentHash: "abc123",
       hashAlgorithm: "sha256",
       signatureAlgorithm: "ed25519",
       signature: "sig==",
       publicKey: "pub==",
     };
-    runTraceHarness.fetchEvidenceReceipt.mockResolvedValueOnce(receipt);
+    runTraceHarness.fetchEvidenceReceipt.mockResolvedValue(receipt);
+    runTraceHarness.verifyEvidenceReceipt.mockResolvedValue({ valid: true, reasons: [] });
 
     // This suite runs in the Node test environment (no jsdom), so the component's browser-download
     // path has no DOM. Provide the minimal document/URL surface the handler touches, then restore it.
@@ -609,6 +631,15 @@ describe("RunDetailRoutePage", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
+
+    await act(async () => {
+      findButton(renderer!.root, "Inspect signed receipt").props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(runTraceHarness.verifyEvidenceReceipt).toHaveBeenCalledWith(receipt);
+    expect(collectText(renderer!.root)).toContain("Signature valid");
+    expect(collectText(renderer!.root)).toContain("The Gateway verified the posted receipt");
 
     await act(async () => {
       findButton(renderer!.root, "Download evidence receipt").props.onClick();

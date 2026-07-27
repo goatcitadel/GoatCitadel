@@ -124,6 +124,22 @@ function namespaceGroup(namespace: string): string {
   return namespace.slice(0, Math.min(...cuts));
 }
 
+function formatRecommendationPatchValue(value: unknown): string {
+  if (value === null) return "Clear value";
+  if (typeof value === "string") return value || "Empty text";
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) {
+    const primitiveValues = value.filter((item): item is string | number | boolean =>
+      ["string", "number", "boolean"].includes(typeof item),
+    );
+    return primitiveValues.length === value.length
+      ? primitiveValues.join(", ") || "Empty list"
+      : `${value.length} items`;
+  }
+  if (typeof value === "object") return `${Object.keys(value).length} nested fields`;
+  return "Runtime-provided value";
+}
+
 export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWorkspaceId }: NativeRoutePagesProps) {
   const memory = useMemoryOperatorSnapshot(activeWorkspaceId);
   const [search, setSearch] = useState("");
@@ -1454,30 +1470,64 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
           )}
         </NativeCard>
         <NativeCard
-          title="Runs and recommendations"
-          subtitle="Recommendation and durable-run linkage stays visible instead of being buried under files."
+          title="Maintenance review"
+          subtitle="Review proposed memory changes before accepting them, with durable-run linkage kept alongside the queue."
         >
           <div className="mc-next-settings-grid">
             <div className="mc-next-settings-stack">
-              <div className="mc-next-settings-code-block">
-                <span>Recommendations</span>
+              <section className="mc-next-memory-review-queue" aria-label="Memory recommendation review queue">
+                <header>
+                  <div>
+                    <span>Review queue</span>
+                    <strong>{memory.data?.maintenanceRecommendations.length ?? 0} recommendations</strong>
+                  </div>
+                  <p>Accept or reject only after checking the rationale and proposed fields.</p>
+                </header>
                 {(memory.data?.maintenanceRecommendations.length ?? 0) > 0 ? (
-                  <ul className="mc-next-approvals-compact-list">
+                  <ul>
                     {memory.data?.maintenanceRecommendations.slice(0, 8).map((item) => (
                       <li key={item.recommendationId}>
-                        <strong>{item.kind}</strong>
-                        {" · "}
-                        {item.status}
-                        {" · "}
-                        {item.summary}
+                        <div className="mc-next-memory-review-head">
+                          <div>
+                            <span>{item.kind.replaceAll("_", " ")}</span>
+                            <strong>{item.summary}</strong>
+                          </div>
+                          <StatusChip tone={item.status === "queued" ? "warning" : "muted"}>{item.status}</StatusChip>
+                        </div>
+                        <p>{item.rationale ?? "No additional rationale was recorded for this recommendation."}</p>
+                        <dl>
+                          <div>
+                            <dt>Created</dt>
+                            <dd>{formatShortDateTime(item.createdAt)}</dd>
+                          </div>
+                          <div>
+                            <dt>Updated</dt>
+                            <dd>{formatShortDateTime(item.updatedAt)}</dd>
+                          </div>
+                        </dl>
+                        <details>
+                          <summary>Inspect proposed changes</summary>
+                          {Object.keys(item.proposedPatch).length > 0 ? (
+                            <ul className="mc-next-memory-review-patch">
+                              {Object.entries(item.proposedPatch).map(([field, value]) => (
+                                <li key={field}>
+                                  <span>{field.replace(/([a-z])([A-Z])/g, "$1 $2")}</span>
+                                  <strong>{formatRecommendationPatchValue(value)}</strong>
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <p>No field-level patch was recorded.</p>
+                          )}
+                        </details>
                         <div
                           className="mc-next-runtime-actions"
                           role="group"
                           aria-label={`Resolve recommendation ${item.kind}`}
                         >
                           <NativeButton
-                            variant="secondary"
-                            disabled={!maintenanceControlsReady}
+                            variant="default"
+                            disabled={!maintenanceControlsReady || item.status !== "queued"}
                             aria-label={`Accept recommendation ${item.kind}: ${item.summary}`}
                             onClick={() => void memory.resolveRecommendation(item.recommendationId, "accept")}
                           >
@@ -1485,7 +1535,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                           </NativeButton>
                           <NativeButton
                             variant="secondary"
-                            disabled={!maintenanceControlsReady}
+                            disabled={!maintenanceControlsReady || item.status !== "queued"}
                             aria-label={`Reject recommendation ${item.kind}: ${item.summary}`}
                             onClick={() => void memory.resolveRecommendation(item.recommendationId, "reject")}
                           >
@@ -1498,7 +1548,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                 ) : (
                   <EmptyState size="compact" title="No maintenance recommendations." />
                 )}
-              </div>
+              </section>
               <div className="mc-next-settings-code-block">
                 <span>Recent runs</span>
                 {(memory.data?.maintenanceRuns.length ?? 0) > 0 ? (

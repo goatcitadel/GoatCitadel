@@ -22,6 +22,174 @@
   min-width: 0;
 }
 
+.mc-next-provider-master-detail {
+  align-items: start;
+  grid-template-columns: minmax(17rem, 0.62fr) minmax(0, 1.62fr);
+  gap: 0.75rem;
+}
+
+.mc-next-provider-detail-stack {
+  gap: 0.75rem;
+}
+
+.mc-next-provider-detail-card {
+  order: 0;
+}
+
+.mc-next-provider-routing-card {
+  order: 1;
+}
+
+.mc-next-provider-oauth-card {
+  order: 2;
+}
+
+.mc-next-provider-editor-card {
+  order: 3;
+}
+
+.mc-next-provider-model-picker-card {
+  order: 4;
+}
+
+.mc-next-provider-advice-card {
+  order: 5;
+}
+
+@media (min-width: 1024px) {
+  .mc-next-provider-directory {
+    position: sticky;
+    top: 0.75rem;
+    max-height: calc(100dvh - 8.5rem);
+  }
+}
+
+@media (max-width: 1023px) {
+  .mc-next-provider-master-detail {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.mc-next-memory-review-queue {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.mc-next-memory-review-queue > header {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.58rem 0.62rem;
+  border: 1px solid var(--border-subtle);
+  border-left: 3px solid var(--area-library);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+}
+
+.mc-next-memory-review-queue > header > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.mc-next-memory-review-queue > header span,
+.mc-next-memory-review-head span,
+.mc-next-memory-review-queue dt {
+  color: var(--fg-muted);
+  font: 700 var(--text-2xs) / 1 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.mc-next-memory-review-queue > header p,
+.mc-next-memory-review-queue li > p {
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+}
+
+.mc-next-memory-review-queue > ul {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mc-next-memory-review-queue > ul > li {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.62rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  background: var(--bg-surface-2);
+}
+
+.mc-next-memory-review-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.55rem;
+}
+
+.mc-next-memory-review-head > div {
+  display: grid;
+  gap: 0.18rem;
+}
+
+.mc-next-memory-review-queue dl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin: 0;
+}
+
+.mc-next-memory-review-queue dl > div {
+  display: flex;
+  gap: 0.28rem;
+}
+
+.mc-next-memory-review-queue dd {
+  margin: 0;
+  color: var(--fg-secondary);
+  font-size: var(--text-2xs);
+}
+
+.mc-next-memory-review-queue details {
+  padding: 0.4rem 0.48rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+}
+
+.mc-next-memory-review-queue summary {
+  color: var(--fg-secondary);
+  cursor: pointer;
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.mc-next-memory-review-patch {
+  display: grid;
+  gap: 0.28rem;
+  margin: 0.45rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mc-next-memory-review-patch li {
+  display: grid;
+  grid-template-columns: minmax(7rem, 0.7fr) minmax(0, 1.3fr);
+  gap: 0.45rem;
+  color: var(--fg-secondary);
+  font-size: var(--text-xs);
+}
+
+.mc-next-memory-review-patch li > span {
+  color: var(--fg-muted);
+  text-transform: capitalize;
+}
+
 .mc-next-settings-panel {
   align-content: start;
 }

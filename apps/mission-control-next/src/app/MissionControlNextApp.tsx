@@ -202,10 +202,29 @@ export function MissionControlNextApp() {
       return {
         id: `go-${area}`,
         label: `Go to ${meta.label}`,
+        group: "Navigate",
+        description: meta.kicker,
+        keyHint: letter ? `G ${letter.toUpperCase()}` : undefined,
+        active: route.area === area,
         keywords: [area, meta.kicker, meta.label, ...(letter ? [`g ${letter}`, `g${letter}`] : [])],
         run: () => navigate(buildPrimaryAreaRoute(area)),
       };
     });
+    const surfaceItems = (["library", "ops"] as const).flatMap((area) =>
+      RAIL_ITEMS[area]
+        .filter((railItem) => !isHiddenRoute(railItem) && !isExperimentalRoute(railItem))
+        .map((railItem) => ({
+          id: `${area}-${railItem.section}`,
+          label: railItem.label,
+          group: AREA_META[area].label,
+          description: railItem.description,
+          active: route.area === area && route.section === railItem.section,
+          keywords: [area, railItem.section, railItem.label.toLowerCase(), railItem.description.toLowerCase()].filter(
+            (keyword): keyword is string => Boolean(keyword),
+          ),
+          run: () => navigate({ area, section: railItem.section, theme: route.theme }),
+        })),
+    );
     const settingsItems = RAIL_ITEMS.settings
       .filter((railItem) => !isHiddenRoute(railItem))
       .map((railItem) => {
@@ -214,6 +233,9 @@ export function MissionControlNextApp() {
         return {
           id: `settings-${section}`,
           label: `Settings → ${railItem.label}`,
+          group: "Settings",
+          description: railItem.description,
+          active: route.area === "settings" && route.section === section,
           keywords: ["settings", ...(section ? [section] : []), railItem.label.toLowerCase(), descriptionWords],
           run: () => navigate({ area: "settings", section, theme: route.theme }),
         };
@@ -226,11 +248,14 @@ export function MissionControlNextApp() {
     const experimentalItems = EXPERIMENTAL_COMMAND_ROUTES.map((entry) => ({
       id: `experimental-${entry.area}-${entry.section}`,
       label: `${entry.label} (Experimental)`,
+      group: "Experimental",
+      description: "Direct route to an explicitly experimental surface.",
+      active: route.area === entry.area && route.section === entry.section,
       keywords: [entry.area, entry.section, entry.label.toLowerCase(), "experimental"],
       run: () => navigate({ area: entry.area, section: entry.section, theme: route.theme }),
     }));
-    return [...areaItems, ...settingsItems, ...experimentalItems];
-  }, [buildPrimaryAreaRoute, navigate, route.theme]);
+    return [...areaItems, ...surfaceItems, ...settingsItems, ...experimentalItems];
+  }, [buildPrimaryAreaRoute, navigate, route.area, route.section, route.theme]);
 
   // H-7: dismiss the topmost UI layer when Escape fires (palette handled
   // separately because it's already a controlled dialog). Order matters:

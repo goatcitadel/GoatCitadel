@@ -26,17 +26,18 @@
   --risk-danger: oklch(0.7 0.18 28);
   --risk-nuclear: oklch(0.68 0.22 345);
 
-  --brand: #7de7ff;
-  --brand-deep: #0f6070;
+  --brand: #00e5ff;
+  --brand-deep: #087989;
   --brand-ink: #071016;
 
   --font-sans: "Geist Variable", ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+  --font-display: "Hanken Grotesk Variable", var(--font-sans);
   --font-mono: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
 
-  --r-xs: 0.32rem;
-  --r-sm: 0.5rem;
-  --r-md: 0.9rem;
-  --r-lg: 1.25rem;
+  --r-xs: 0.25rem;
+  --r-sm: 0.375rem;
+  --r-md: 0.625rem;
+  --r-lg: 0.875rem;
   --r-pill: 999px;
 
   /*
@@ -99,12 +100,12 @@
      as distinct panels on the page; surface-2 lifted above surface-1 (was an
      inverted #10141a well); elevated capped where muted text still clears AA.
      Verify with `pnpm contrast:check` after any change here. */
-  --bg-app: #0b1016;
-  --bg-surface-1: #141c25;
-  --bg-surface-2: #1c2732;
-  --bg-surface-3: #263440;
-  --bg-elevated: #31414f;
-  --bg-inset: #070b10;
+  --bg-app: #080f11;
+  --bg-surface-1: #0d1516;
+  --bg-surface-2: #151d1e;
+  --bg-surface-3: #222b2d;
+  --bg-elevated: #333a3c;
+  --bg-inset: #050a0b;
 
   --fg-primary: #f3f9fb;
   --fg-secondary: #c8d5dc;
@@ -114,7 +115,7 @@
   --border-hairline: rgba(255, 255, 255, 0.06);
   --border-subtle: rgba(255, 255, 255, 0.1);
   --border-default: rgba(255, 255, 255, 0.14);
-  --border-strong: rgba(125, 231, 255, 0.24);
+  --border-strong: rgba(0, 229, 255, 0.25);
 }
 
 .theme-citadel-light {

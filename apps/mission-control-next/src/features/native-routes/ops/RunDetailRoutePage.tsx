@@ -6,6 +6,9 @@ import {
   fetchEvidenceReceipt,
   fetchObserveRunTrace,
   fetchOrchestrationRunTrace,
+  verifyEvidenceReceipt,
+  type EvidenceReceipt,
+  type EvidenceReceiptVerification,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
 import { EmptyState, ErrorState, NativeButton, NoticeBanner, StatusChip } from "../primitives";
@@ -68,6 +71,11 @@ export function RunDetailRoutePage({ route, activeWorkspaceId, activeWorkspaceNa
   const [downloadingReceipt, setDownloadingReceipt] = useState(false);
   const [receiptNotice, setReceiptNotice] = useState<string | null>(null);
   const [receiptError, setReceiptError] = useState<string | null>(null);
+  const [receiptInspection, setReceiptInspection] = useState<{
+    loading: boolean;
+    receipt: EvidenceReceipt | null;
+    verification: EvidenceReceiptVerification | null;
+  }>({ loading: false, receipt: null, verification: null });
   const { loading, error, data, reload } = useAsyncLoad(async () => {
     if (!runId) {
       return {
@@ -153,6 +161,21 @@ export function RunDetailRoutePage({ route, activeWorkspaceId, activeWorkspaceNa
     }
   };
 
+  const inspectEvidenceReceipt = async () => {
+    if (!runId) return;
+    setReceiptInspection({ loading: true, receipt: null, verification: null });
+    setReceiptError(null);
+    setReceiptNotice(null);
+    try {
+      const receipt = await fetchEvidenceReceipt(runId);
+      const verification = await verifyEvidenceReceipt(receipt);
+      setReceiptInspection({ loading: false, receipt, verification });
+    } catch (err) {
+      setReceiptInspection({ loading: false, receipt: null, verification: null });
+      setReceiptError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
   return (
     <NativePageFrame
       area="ops"
@@ -171,6 +194,14 @@ export function RunDetailRoutePage({ route, activeWorkspaceId, activeWorkspaceNa
         <>
           <NativeButton
             variant="default"
+            onClick={() => void inspectEvidenceReceipt()}
+            disabled={!runId || receiptInspection.loading}
+          >
+            <ShieldCheck size={16} />
+            {receiptInspection.loading ? "Verifying receipt..." : "Inspect signed receipt"}
+          </NativeButton>
+          <NativeButton
+            variant="secondary"
             onClick={() => void downloadEvidenceReceipt()}
             disabled={!runId || downloadingReceipt}
           >
@@ -203,6 +234,77 @@ export function RunDetailRoutePage({ route, activeWorkspaceId, activeWorkspaceNa
           ]}
         >
           <RunSummary detail={detail} />
+        </NativeCard>
+
+        <NativeCard
+          title="Signed evidence receipt"
+          subtitle="Built and verified on demand through the Gateway's existing receipt endpoints."
+          className={
+            receiptInspection.verification && !receiptInspection.verification.valid
+              ? "mc-next-run-detail-attention"
+              : "mc-next-run-receipt-card"
+          }
+        >
+          {receiptInspection.receipt && receiptInspection.verification ? (
+            <div className="mc-next-run-receipt-inspector">
+              <div className="mc-next-run-receipt-verdict">
+                <div>
+                  <span>Verification</span>
+                  <strong>{receiptInspection.verification.valid ? "Signature valid" : "Verification failed"}</strong>
+                </div>
+                <StatusChip tone={receiptInspection.verification.valid ? "success" : "critical"}>
+                  {receiptInspection.verification.valid ? "Verified" : "Untrusted"}
+                </StatusChip>
+              </div>
+              <dl>
+                <div>
+                  <dt>Outcome</dt>
+                  <dd>{receiptInspection.receipt.manifest.lineage.outcome}</dd>
+                </div>
+                <div>
+                  <dt>Generated</dt>
+                  <dd>{formatDateTime(receiptInspection.receipt.manifest.generatedAt)}</dd>
+                </div>
+                <div>
+                  <dt>Approvals</dt>
+                  <dd>{receiptInspection.receipt.manifest.approvalEffects.length}</dd>
+                </div>
+                <div>
+                  <dt>Side effects</dt>
+                  <dd>{receiptInspection.receipt.manifest.sideEffects.length}</dd>
+                </div>
+                <div>
+                  <dt>Artifacts</dt>
+                  <dd>{receiptInspection.receipt.manifest.artifacts.length}</dd>
+                </div>
+                <div>
+                  <dt>Signature</dt>
+                  <dd>{receiptInspection.receipt.signatureAlgorithm}</dd>
+                </div>
+              </dl>
+              {receiptInspection.verification.reasons.length > 0 ? (
+                <ul className="mc-next-run-receipt-reasons">
+                  {receiptInspection.verification.reasons.map((reason, index) => (
+                    <li key={`${reason}-${index}`}>{reason}</li>
+                  ))}
+                </ul>
+              ) : (
+                <p>The Gateway verified the posted receipt without reporting integrity failures.</p>
+              )}
+              <details className="mc-next-run-receipt-raw">
+                <summary>Expert receipt payload</summary>
+                <LibraryCodeBlock label="Signed receipt JSON">
+                  {JSON.stringify(receiptInspection.receipt, null, 2)}
+                </LibraryCodeBlock>
+              </details>
+            </div>
+          ) : (
+            <EmptyState
+              size="compact"
+              title="Receipt not loaded"
+              description="Inspect the signed receipt when you need integrity, lineage, approval, side-effect, and artifact proof."
+            />
+          )}
         </NativeCard>
 
         <NativeCard

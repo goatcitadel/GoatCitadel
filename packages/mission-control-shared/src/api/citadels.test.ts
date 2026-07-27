@@ -94,6 +94,13 @@ describe("citadel api client", () => {
     expect(body(init)).toEqual({ action: "vault.read" });
   });
 
+  it("removeCitadelWard DELETEs the encoded Ward resource", async () => {
+    await citadels.removeCitadelWard("c/1", "ward/9");
+    const [path, init] = lastCall();
+    expect(path).toBe("/api/v1/citadels/c%2F1/wards/ward%2F9");
+    expect(init?.method).toBe("DELETE");
+  });
+
   it("validateCitadelBlueprint posts to the shared validate endpoint", async () => {
     await citadels.validateCitadelBlueprint({ anything: true });
     expect(lastCall()[0]).toBe("/api/v1/blueprints/validate");

@@ -44,9 +44,7 @@ function instanceText(node: ReactTestInstance | string): string {
 }
 
 function findButtonByLabel(renderer: ReactTestRenderer, label: string): ReactTestInstance {
-  const [first] = renderer.root.findAll(
-    (node) => node.type === "button" && instanceText(node).includes(label),
-  );
+  const [first] = renderer.root.findAll((node) => node.type === "button" && instanceText(node).includes(label));
   if (!first) {
     throw new Error(`No button found containing "${label}"`);
   }
@@ -56,10 +54,7 @@ function findButtonByLabel(renderer: ReactTestRenderer, label: string): ReactTes
 describe("CitadelMasonRoutePage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    apiMocks.getMasonSetupQuestions.mockResolvedValue([
-      "What is this Citadel for?",
-      "What must stay sealed?",
-    ]);
+    apiMocks.getMasonSetupQuestions.mockResolvedValue(["What is this Citadel for?", "What must stay sealed?"]);
     apiMocks.createMasonSession.mockResolvedValue({
       sessionId: "s1",
       answers: {},
@@ -99,6 +94,9 @@ describe("CitadelMasonRoutePage", () => {
     expect(apiMocks.getMasonSetupQuestions).toHaveBeenCalledOnce();
     expect(treeString(renderer!)).toContain("What is this Citadel for?");
     expect(treeString(renderer!)).toContain("Start setup");
+    expect(treeString(renderer!)).toContain("Blueprint progress");
+    expect(treeString(renderer!)).toContain("Fail-closed staging");
+    expect(treeString(renderer!)).toContain("Activation remains unavailable");
   });
 
   it("starts a session and reveals the message field", async () => {

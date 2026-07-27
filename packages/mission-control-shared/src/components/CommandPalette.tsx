@@ -5,6 +5,10 @@ export interface CommandPaletteItem {
   id: string;
   label: string;
   keywords?: string[];
+  group?: string;
+  description?: string;
+  keyHint?: string;
+  active?: boolean;
   run: () => void;
 }
 
@@ -34,14 +38,14 @@ export function CommandPalette({ open, onClose, items }: CommandPaletteProps) {
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) {
-      return items.slice(0, 12);
+      return items.slice(0, 24);
     }
     return items
       .filter((item) => {
         const haystack = [item.label, ...(item.keywords ?? [])].join(" ").toLowerCase();
         return haystack.includes(q);
       })
-      .slice(0, 12);
+      .slice(0, 24);
   }, [items, query]);
 
   useEffect(() => {
@@ -216,10 +220,19 @@ export function CommandPalette({ open, onClose, items }: CommandPaletteProps) {
           ) : (
             filtered.map((item, index) => (
               <li key={item.id} className="command-palette-item">
+                {item.group && filtered[index - 1]?.group !== item.group ? (
+                  <span className="command-palette-group" role="presentation">
+                    {item.group}
+                  </span>
+                ) : null}
                 <button
                   id={`${listboxId}-option-${item.id}`}
                   type="button"
-                  className={["gc-button", `command-palette-action${selectedIndex === index ? " active" : ""}`]
+                  className={[
+                    "gc-button",
+                    `command-palette-action${selectedIndex === index ? " active" : ""}`,
+                    item.active ? "is-current" : "",
+                  ]
                     .filter(Boolean)
                     .join(" ")}
                   role="option"
@@ -231,8 +244,15 @@ export function CommandPalette({ open, onClose, items }: CommandPaletteProps) {
                     closePalette();
                   }}
                 >
-                  <span>{item.label}</span>
-                  <span className="command-palette-go">↵</span>
+                  <span className="command-palette-action-copy">
+                    <strong>{item.label}</strong>
+                    {item.description ? <small>{item.description}</small> : null}
+                  </span>
+                  <span className="command-palette-action-meta">
+                    {item.active ? <em>Current</em> : null}
+                    {item.keyHint ? <kbd>{item.keyHint}</kbd> : null}
+                    <span className="command-palette-go">↵</span>
+                  </span>
                 </button>
               </li>
             ))

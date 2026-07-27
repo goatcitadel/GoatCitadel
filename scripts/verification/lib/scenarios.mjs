@@ -3941,9 +3941,19 @@ export async function performVerificationInteraction(page, interaction, packageN
     return;
   }
   if (interaction === "open-inspector" && packageName === NEXT_UI_PACKAGE) {
-    const routeDetailsButton = page.getByRole("button", { name: /^(Open|Hide) Route details$/i }).first();
-    await routeDetailsButton.waitFor({ timeout: 15000 });
     const inspector = page.locator(".mc-next-shell-inspector");
+    const routeDetailsButton = page.getByRole("button", { name: /^(Open|Hide) Route details$/i }).first();
+    if (!(await routeDetailsButton.isVisible().catch(() => false))) {
+      const overflowButton = page.getByRole("button", { name: /^More controls$/i }).first();
+      await overflowButton.waitFor({ timeout: 15000 });
+      await overflowButton.click();
+      const routeDetailsMenuItem = page.getByRole("menuitem", { name: /^(Open|Hide) Route details$/i }).first();
+      await routeDetailsMenuItem.waitFor({ timeout: 15000 });
+      await routeDetailsMenuItem.click();
+      await inspector.waitFor({ state: "visible", timeout: 15000 });
+      return;
+    }
+    await routeDetailsButton.waitFor({ timeout: 15000 });
     const deadline = Date.now() + 15000;
     let attemptedClick = false;
 

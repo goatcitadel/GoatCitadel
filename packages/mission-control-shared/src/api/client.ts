@@ -346,6 +346,11 @@ export interface EvidenceReceipt {
   publicKey: string;
 }
 
+export interface EvidenceReceiptVerification {
+  valid: boolean;
+  reasons: string[];
+}
+
 /**
  * Build + fetch the signed Evidence Receipt for a run (operator-only on the gateway). Uses the
  * shared `request` transport so auth/error handling matches every other mutating call.
@@ -353,6 +358,13 @@ export interface EvidenceReceipt {
 export async function fetchEvidenceReceipt(runId: string): Promise<EvidenceReceipt> {
   return request<EvidenceReceipt>(`/api/v1/runs/${encodeURIComponent(runId)}/evidence-receipt`, {
     method: "POST",
+  });
+}
+
+export async function verifyEvidenceReceipt(receipt: EvidenceReceipt): Promise<EvidenceReceiptVerification> {
+  return request<EvidenceReceiptVerification>("/api/v1/evidence-receipts/verify", {
+    method: "POST",
+    body: JSON.stringify(receipt),
   });
 }
 
