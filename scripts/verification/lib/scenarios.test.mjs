@@ -17,6 +17,7 @@ import {
   writeAutonomyGrantRuntimeToolPolicy,
 } from "./scenarios.mjs";
 import { FAST_LANE_STAGES } from "./scenarios/fast-lane.mjs";
+import { GATEWAY_COVERAGE_SHARD_COUNT } from "../../coverage-shard-contract.mjs";
 import { buildFastLanePerfPayload, finalizeRunContext, recordScenario } from "./shared.mjs";
 
 test("autonomy-grant verification override drops the stale unified-config generation", async (t) => {
@@ -388,7 +389,7 @@ test("fast verification lane keeps required fast commands", () => {
 
 test("gateway shards cover the suite exactly once and report to their own directories", () => {
   const shards = FAST_LANE_COMMANDS.filter((command) => /^fast\.test\.gateway\.shard\d+$/.test(command.id));
-  assert.equal(shards.length, 4);
+  assert.equal(shards.length, GATEWAY_COVERAGE_SHARD_COUNT);
 
   const seen = new Set();
   for (const [index, shard] of shards.entries()) {
@@ -466,7 +467,19 @@ test("fast verification test commands instrument coverage so the gate can reuse 
   // same sources. They stay uninstrumented on purpose.
   const uninstrumented = new Set(["fast.test.gateway.node"]);
   const testCommands = FAST_LANE_COMMANDS.filter((command) => command.id.startsWith("fast.test."));
-  assert.equal(testCommands.length, 9);
+  const expectedTestCommandIds = [
+    "fast.test.gateway.node",
+    ...Array.from({ length: GATEWAY_COVERAGE_SHARD_COUNT }, (_unused, index) => `fast.test.gateway.shard${index + 1}`),
+    "fast.test.libraries",
+    "fast.test.mission-control-next",
+    "fast.test.policy-engine",
+    "fast.test.storage",
+  ];
+  assert.deepEqual(
+    testCommands.map((command) => command.id).sort(),
+    expectedTestCommandIds.sort(),
+    "fast.test command inventory changed; update this test's expected command ids",
+  );
 
   for (const command of testCommands) {
     if (uninstrumented.has(command.id)) {

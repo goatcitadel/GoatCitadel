@@ -3458,7 +3458,7 @@ export async function runMemoryTruthLane(context, _options = {}) {
         if (activeItems.body?.items?.some((entry) => entry.itemId === item.itemId)) {
           throw new Error(`memory-truth expected ${item.itemId} to disappear from active reads after expiry`);
         }
-        if (!expiredItem || expiredItem.lifecycleState !== "expired") {
+        if (expiredItem.lifecycleState !== "expired") {
           throw new Error(`memory-truth expected ${item.itemId} to remain visible as expired in status=all`);
         }
 

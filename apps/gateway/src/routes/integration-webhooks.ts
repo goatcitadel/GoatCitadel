@@ -9,6 +9,7 @@ import { createWebhookRouteOptions, resolveGenericChannelInboundSecret } from ".
 import { channelConnectionInboundParamsSchema, channelInboundSchema } from "./integration-webhook-schemas.js";
 import {
   CHANNEL_INBOUND_MAX_BYTES,
+  createIgnoredWebhookReply,
   parseContentLength,
   readHeaderValue,
   validateWebhookHostHeader,
@@ -62,7 +63,11 @@ export const integrationWebhookRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(400).send({ error: "Integration connection does not match inbound channel" });
       }
       if (connection.enabled === false || (connection.status !== undefined && connection.status !== "connected")) {
-        return reply.code(409).send({ error: "Integration connection is not connected" });
+        // Same policy as webhook-handler-factory: reply 200-ignored rather
+        // than a non-2xx so external providers do not auto-disable the
+        // webhook subscription on repeated failures; "disable" stays an
+        // effective local inbound kill switch either way.
+        return reply.send(createIgnoredWebhookReply(undefined, "connection_disabled"));
       }
 
       const rawBody = (request as typeof request & { genericChannelRawBody?: Buffer }).genericChannelRawBody;
