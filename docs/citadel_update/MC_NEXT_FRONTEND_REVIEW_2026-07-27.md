@@ -146,6 +146,15 @@ found were overwhelmingly of one family — layout-primitive edge cases (auto-fi
 min-content overflow, nowrap in narrow tracks) plus one systemic token-cycle regression — and the
 fixes here close all of the high-severity items. The deferred list is polish, not blockers.
 
-**Follow-up required:** the border-cycle fix restores hairlines app-wide, so the visual-regression
-baselines must be refreshed (Linux renderer via `visual-rebaseline.yml`) for all routes/variants on
-this branch before the visual lane will pass.
+**Visual baselines: refreshed (no outstanding follow-up).** Because the border-cycle fixes change
+hairline rendering app-wide, `visual-rebaseline.yml` was run twice against this branch on the Linux
+renderer — run 30273608156 after the initial fixes, and run 30277840694 after the review round that
+also broke the remaining Citadel Light cycle — and both results were cherry-picked into this PR
+(all 400 baselines, then the 324 affected by the light/dark token changes).
+
+**Review-feedback round (same PR):** the Citadel Light theme block carried a second border-token
+cycle (`--border: var(--border-default)` + `--border-default: var(--border)`) that the first fix did
+not reach — confirmed live and fixed by dropping the reverse alias in both theme blocks. The
+durable-rail 404 handling was also corrected: the gateway returns a successful empty rail for a
+valid childless run, so a 404 (missing or scope-mismatched run) stays an error, rendered as an
+operator sentence rather than the raw API envelope.
