@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
-import { ConflictError } from "@goatcitadel/contracts";
+import { ConflictError, ValidationError } from "@goatcitadel/contracts";
 import { registerChatSessionRoutes } from "./chat.sessions.js";
 
 describe("chat session routes", () => {
@@ -406,6 +406,44 @@ describe("chat session routes", () => {
         payload: { retrievalMode: "full_text" },
       }),
     ).resolves.toMatchObject({ statusCode: 400 });
+  });
+
+  it("returns structured client errors for invalid session and artifact scopes", async () => {
+    const scopeError = () =>
+      new ValidationError({
+        field: "workspaceId",
+        message: "workspace default belongs to citadel personal, not company",
+      });
+    app = buildApp(
+      createChatSessionsService({
+        listChatSessions: vi.fn(() => {
+          throw scopeError();
+        }),
+        listChatGeneratedArtifacts: vi.fn(() => {
+          throw scopeError();
+        }),
+      }),
+    );
+
+    const responses = await Promise.all([
+      app.inject({
+        method: "GET",
+        url: "/api/v1/chat/sessions?citadelId=company&workspaceId=default",
+      }),
+      app.inject({
+        method: "GET",
+        url: "/api/v1/chat/generated-artifacts?citadelId=company&workspaceId=default",
+      }),
+    ]);
+
+    for (const response of responses) {
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toEqual({
+        error: "workspace default belongs to citadel personal, not company",
+        code: "FIELD_INVALID",
+        details: { field: "workspaceId" },
+      });
+    }
   });
 
   it("maps stale aggregate revisions to an HTTP 409 conflict", async () => {

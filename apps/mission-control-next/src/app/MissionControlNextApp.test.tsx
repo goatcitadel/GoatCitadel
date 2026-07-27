@@ -27,6 +27,7 @@ const appMocks = vi.hoisted(() => ({
   resetEventStreamStatus: vi.fn(),
   resetChannelActivitySnapshots: vi.fn(),
   setActiveCitadelId: vi.fn(),
+  setActiveScope: vi.fn(),
   setActiveWorkspaceId: vi.fn(),
   setDetailPanelPinned: vi.fn(),
   setMode: vi.fn(),
@@ -181,6 +182,7 @@ vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
     setActiveCitadelId: appMocks.setActiveCitadelId,
     activeWorkspaceId: appMocks.activeWorkspaceId,
     setActiveWorkspaceId: appMocks.setActiveWorkspaceId,
+    setActiveScope: appMocks.setActiveScope,
     theme: "dark",
     setTheme: appMocks.setTheme,
     notifications: {
@@ -656,10 +658,6 @@ describe("MissionControlNextApp", () => {
     expect(citadelSelect).toBeDefined();
     expect(workspaceSelect).toBeDefined();
     await act(async () => {
-      citadelSelect?.props.onChange({ target: { value: "company" } });
-    });
-    expect(appMocks.setActiveCitadelId).toHaveBeenCalledWith("company");
-    await act(async () => {
       workspaceSelect?.props.onChange({ target: { value: "workspace-2" } });
     });
     expect(appMocks.setActiveWorkspaceId).toHaveBeenCalledWith("workspace-2");
@@ -701,6 +699,74 @@ describe("MissionControlNextApp", () => {
       popstateHandler?.();
     });
     expect(JSON.stringify(renderer.toJSON())).toContain("Threaded chat");
+
+    await act(async () => {
+      citadelSelect?.props.onChange({ target: { value: "company" } });
+    });
+    expect(appMocks.setActiveCitadelId).toHaveBeenCalledWith("company");
+    expect(JSON.stringify(renderer.toJSON())).toContain("Loading Personal workspaces");
+  });
+
+  it("pauses scoped routes when the active Citadel has no workspaces", async () => {
+    appMocks.activeCitadelId = "company";
+    appMocks.activeWorkspaceId = "default";
+    appMocks.fetchWorkspaces.mockResolvedValue({ items: [] });
+
+    const renderer = await renderApp("http://localhost:5173/projects");
+    const rendered = JSON.stringify(renderer.toJSON());
+
+    expect(rendered).toContain("Company needs a workspace");
+    expect(rendered).not.toContain("Native projects/root");
+    const workspaceSelect = renderer.root.findByProps({ "aria-label": "Active Workspace" });
+    expect(workspaceSelect.props.disabled).toBe(true);
+    expect(readNodeText(workspaceSelect)).toContain("No workspaces");
+    expect(appMocks.setActiveScope).not.toHaveBeenCalled();
+
+    await act(async () => {
+      findButton(renderer, "Create workspace").props.onClick();
+    });
+    expect(window.location.pathname).toBe("/settings/workspaces");
+    expect(JSON.stringify(renderer.toJSON())).toContain("Native settings/workspaces");
+  });
+
+  it("keeps scoped routes paused until a stale workspace is atomically replaced", async () => {
+    appMocks.activeCitadelId = "company";
+    appMocks.activeWorkspaceId = "default";
+    appMocks.fetchWorkspaces.mockResolvedValue({
+      items: [{ workspaceId: "engineering", name: "Engineering" }],
+    });
+
+    const renderer = await renderApp("http://localhost:5173/projects");
+
+    expect(appMocks.setActiveScope).toHaveBeenCalledWith({
+      citadelId: "company",
+      workspaceId: "engineering",
+    });
+    expect(JSON.stringify(renderer.toJSON())).toContain("Loading Company workspaces");
+    expect(JSON.stringify(renderer.toJSON())).not.toContain("Native projects/root");
+  });
+
+  it("ignores an obsolete workspace response after a Citadel switch begins", async () => {
+    let resolveWorkspaces!: (value: { items: Array<{ workspaceId: string; name: string }> }) => void;
+    appMocks.fetchWorkspaces.mockReturnValue(
+      new Promise((resolve) => {
+        resolveWorkspaces = resolve;
+      }),
+    );
+
+    const renderer = await renderApp("http://localhost:5173/projects");
+    const citadelSelect = renderer.root.findByProps({ "aria-label": "Active Citadel" });
+    await act(async () => {
+      citadelSelect.props.onChange({ target: { value: "company" } });
+    });
+    await act(async () => {
+      resolveWorkspaces({ items: [{ workspaceId: "workspace-1", name: "Workspace One" }] });
+    });
+    await flush();
+
+    expect(JSON.stringify(renderer.toJSON())).toContain("Loading Personal workspaces");
+    expect(JSON.stringify(renderer.toJSON())).not.toContain("Native projects/root");
+    expect(appMocks.setActiveScope).not.toHaveBeenCalled();
   });
 
   it("keeps the route inspector off Chat while preserving non-Chat trust evidence", async () => {
@@ -1016,8 +1082,16 @@ describe("MissionControlNextApp", () => {
 
   it("covers shell fallback and trust-report warning/error branches", async () => {
     appMocks.activeWorkspaceId = "missing-workspace";
+    const fallbackRenderer = await renderApp("http://localhost:5173/chat");
+    expect(appMocks.setActiveScope).toHaveBeenCalledWith({
+      citadelId: "personal",
+      workspaceId: "workspace-2",
+    });
+    expect(JSON.stringify(fallbackRenderer.toJSON())).toContain("Loading Personal workspaces");
+    fallbackRenderer.unmount();
+
+    appMocks.activeWorkspaceId = "workspace-2";
     const noSessionRenderer = await renderApp("http://localhost:5173/chat");
-    expect(appMocks.setActiveWorkspaceId).toHaveBeenCalledWith("workspace-2");
     await act(async () => {
       (appMocks.threadedRouteProps?.onCopyTrustReport as (sessionId?: string) => void)(undefined);
     });
@@ -1109,7 +1183,8 @@ describe("MissionControlNextApp", () => {
 
     appMocks.fetchWorkspaces.mockRejectedValueOnce(new Error("workspace offline"));
     const workspaceRenderer = await renderApp("http://localhost:5173/settings/access");
-    expect(JSON.stringify(workspaceRenderer.toJSON())).toContain("Native settings/access");
+    expect(JSON.stringify(workspaceRenderer.toJSON())).toContain("Workspaces could not load");
+    expect(JSON.stringify(workspaceRenderer.toJSON())).not.toContain("Native settings/access");
     workspaceRenderer.unmount();
 
     const qualityRenderer = await renderApp("http://localhost:5173/ops/quality?sessionId=session-1&theme=light");

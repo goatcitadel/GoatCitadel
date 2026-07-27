@@ -1,10 +1,6 @@
-import { startTransition, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ShieldCheck } from "lucide-react";
-import {
-  fetchWorkspaces,
-  getGatewayApiBaseUrl,
-  type EventStreamConnectionState,
-} from "@goatcitadel/mission-control-shared/api/shell-client";
+import { fetchWorkspaces, getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/shell-client";
 import { fetchRuntimeLifecycleExport, listCitadels } from "@goatcitadel/mission-control-shared/api/client";
 import {
   buildThreadedGatewayStatusSummary,
@@ -20,7 +16,6 @@ import {
 } from "@goatcitadel/mission-control-shared/components/ShellDetailPanelContext";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { resolveEffectiveEffectsMode } from "@goatcitadel/mission-control-shared/state/effects-mode";
-import { type RealtimeTruthMode } from "@goatcitadel/mission-control-shared/state/realtime-derived";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import {
   LazyNativeRoutePages,
@@ -39,6 +34,7 @@ import {
   ShellStatusStrip,
   ShellTopbar,
   type RailSection,
+  type WorkspaceSelectionStatus,
 } from "./MissionControlShellChrome";
 import {
   describeDirtySections,
@@ -67,11 +63,31 @@ import { coerceLegacyHrefToNext, resolveRouteFromLocation } from "./legacy-route
 import { SHELL_ROUTE_SHORTCUT_LETTERS, useShellKeyboardManager } from "./use-shell-keyboard-manager";
 import { ShortcutsOverlay } from "./ShortcutsOverlay";
 import { useGatewayAccess } from "./use-gateway-access";
-import { useShellStatus, type ShellStatusState } from "./use-shell-status";
+import { useShellStatus } from "./use-shell-status";
 import { useShellNotifications } from "./use-shell-notifications";
 import { useEventStream } from "./use-event-stream";
 import { useShellInspector } from "./use-shell-inspector";
-import { NativeButton } from "@next/features/native-routes/primitives";
+import { EmptyState, ErrorState, NativeButton } from "@next/features/native-routes/primitives";
+import {
+  countDashboardSessions,
+  describeDashboardFooterPill,
+  describeRealtimeTruthUi,
+  formatUsd,
+  isImmersiveRoute,
+  resolveEffectiveShellTheme,
+  resolveShellThemeClass,
+} from "./mission-control-shell-model";
+
+export {
+  countDashboardSessions,
+  describeDashboardFooterPill,
+  describeRealtimeTruthUi,
+  formatUsd,
+  isImmersiveRoute,
+  resolveEffectiveShellTheme,
+  resolveShellThemeClass,
+  usesEmbeddedRouteHeader,
+} from "./mission-control-shell-model";
 
 /**
  * F-M11: experimental library/ops surfaces that are filtered out of the rails
@@ -103,6 +119,48 @@ function preloadRouteChunk(targetRoute: AppRoute): void {
   void preloadNativeRoutePages();
 }
 
+function WorkspaceScopeGate({
+  status,
+  citadelName,
+  error,
+  onCreateWorkspace,
+  onRetry,
+}: {
+  status: Exclude<WorkspaceSelectionStatus, "ready">;
+  citadelName: string;
+  error: string | null;
+  onCreateWorkspace: () => void;
+  onRetry: () => void;
+}) {
+  if (status === "error") {
+    return (
+      <ErrorState
+        size="default"
+        title="Workspaces could not load"
+        description={`GoatCitadel could not validate the active workspace inside ${citadelName}. Scoped requests are paused so an invalid Citadel/workspace pair cannot reach the Gateway.`}
+        technicalDetails={error}
+        primaryAction={<NativeButton onClick={onRetry}>Retry</NativeButton>}
+      />
+    );
+  }
+  if (status === "empty") {
+    return (
+      <EmptyState
+        tone="accent"
+        title={`${citadelName} needs a workspace`}
+        description="Create a workspace before opening Chat, Projects, Library, or Ops in this Citadel. Scoped requests remain paused until the workspace exists."
+        primaryAction={<NativeButton onClick={onCreateWorkspace}>Create workspace</NativeButton>}
+      />
+    );
+  }
+  return (
+    <EmptyState
+      title={`Loading ${citadelName} workspaces`}
+      description="Validating the Citadel/workspace boundary before loading scoped runtime data."
+    />
+  );
+}
+
 export function MissionControlNextApp() {
   useBeforeUnloadGuard();
   const {
@@ -117,6 +175,7 @@ export function MissionControlNextApp() {
     setActiveCitadelId,
     activeWorkspaceId,
     setActiveWorkspaceId,
+    setActiveScope,
     theme,
     setTheme,
     notifications: notificationPreferences,
@@ -134,6 +193,9 @@ export function MissionControlNextApp() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [citadelOptions, setCitadelOptions] = useState<Array<{ citadelId: string; name: string }>>([]);
   const [workspaceOptions, setWorkspaceOptions] = useState<Array<{ workspaceId: string; name: string }>>([]);
+  const [workspaceSelectionStatus, setWorkspaceSelectionStatus] = useState<WorkspaceSelectionStatus>("resolving");
+  const [workspaceSelectionError, setWorkspaceSelectionError] = useState<string | null>(null);
+  const workspaceLoadSequence = useRef(0);
 
   // W4.4: cohesive state moved into dedicated hooks. The shell still composes
   // them (e.g. status reset depends on gateway readiness, event stream feeds
@@ -336,7 +398,13 @@ export function MissionControlNextApp() {
   // same right-side workspace; retain the inspector on every non-Chat route.
   const hasVisibleInspector = shellInspectorAvailable && (detailPanelPinned || inspectorOpen);
   const activeWorkspaceName =
-    workspaceOptions.find((item) => item.workspaceId === activeWorkspaceId)?.name ?? activeWorkspaceId;
+    workspaceSelectionStatus === "ready"
+      ? (workspaceOptions.find((item) => item.workspaceId === activeWorkspaceId)?.name ?? activeWorkspaceId)
+      : workspaceSelectionStatus === "empty"
+        ? "No workspace"
+        : workspaceSelectionStatus === "error"
+          ? "Workspaces unavailable"
+          : "Loading workspaces";
   const activeCitadelName = citadelOptions.find((item) => item.citadelId === activeCitadelId)?.name ?? activeCitadelId;
 
   const copyTrustReport = useCallback(
@@ -533,6 +601,10 @@ export function MissionControlNextApp() {
         const fallbackCitadelId =
           response.items.find((item) => item.citadelId === "personal")?.citadelId ?? response.items[0]?.citadelId;
         if (fallbackCitadelId) {
+          workspaceLoadSequence.current += 1;
+          setWorkspaceOptions([]);
+          setWorkspaceSelectionError(null);
+          setWorkspaceSelectionStatus("resolving");
           setActiveCitadelId(fallbackCitadelId);
         }
       }
@@ -542,24 +614,38 @@ export function MissionControlNextApp() {
   }, [activeCitadelId, setActiveCitadelId]);
 
   const loadWorkspaceOptions = useCallback(async () => {
+    const sequence = ++workspaceLoadSequence.current;
+    setWorkspaceSelectionError(null);
+    setWorkspaceSelectionStatus("resolving");
     try {
       const response = await fetchWorkspaces("all", 400, activeCitadelId);
-      setWorkspaceOptions(
-        response.items.map((item) => ({
-          workspaceId: item.workspaceId,
-          name: item.name,
-        })),
-      );
-      if (!response.items.some((item) => item.workspaceId === activeWorkspaceId)) {
-        const fallbackWorkspaceId = response.items[0]?.workspaceId;
-        if (fallbackWorkspaceId) {
-          setActiveWorkspaceId(fallbackWorkspaceId);
-        }
+      if (sequence !== workspaceLoadSequence.current) {
+        return;
       }
-    } catch {
+      const options = response.items.map((item) => ({
+        workspaceId: item.workspaceId,
+        name: item.name,
+      }));
+      setWorkspaceOptions(options);
+      if (response.items.some((item) => item.workspaceId === activeWorkspaceId)) {
+        setWorkspaceSelectionStatus("ready");
+        return;
+      }
+      const fallbackWorkspaceId = response.items[0]?.workspaceId;
+      if (fallbackWorkspaceId) {
+        setActiveScope({ citadelId: activeCitadelId, workspaceId: fallbackWorkspaceId });
+        return;
+      }
+      setWorkspaceSelectionStatus("empty");
+    } catch (error) {
+      if (sequence !== workspaceLoadSequence.current) {
+        return;
+      }
       setWorkspaceOptions([]);
+      setWorkspaceSelectionError(error instanceof Error ? error.message : "Workspace directory could not load.");
+      setWorkspaceSelectionStatus("error");
     }
-  }, [activeCitadelId, activeWorkspaceId, setActiveWorkspaceId]);
+  }, [activeCitadelId, activeWorkspaceId, setActiveScope]);
 
   const clearInvalidProjectSelection = useCallback(() => {
     if (route.area !== "projects" || (!route.projectId && !route.artifactId)) {
@@ -570,6 +656,10 @@ export function MissionControlNextApp() {
 
   const handleSelectCitadel = useCallback(
     (citadelId: string) => {
+      workspaceLoadSequence.current += 1;
+      setWorkspaceOptions([]);
+      setWorkspaceSelectionError(null);
+      setWorkspaceSelectionStatus("resolving");
       setActiveCitadelId(citadelId);
       clearInvalidProjectSelection();
     },
@@ -676,12 +766,22 @@ export function MissionControlNextApp() {
   // sources warm up together (status hook itself does not trigger first load).
   useEffect(() => {
     if (!gatewayReady) {
+      workspaceLoadSequence.current += 1;
       setCitadelOptions([]);
       setWorkspaceOptions([]);
+      setWorkspaceSelectionError(null);
+      setWorkspaceSelectionStatus("resolving");
       return;
     }
-    void Promise.all([loadCitadelOptions(), loadWorkspaceOptions(), refreshStatus()]);
-  }, [gatewayReady, loadCitadelOptions, loadWorkspaceOptions, refreshStatus]);
+    void Promise.all([loadCitadelOptions(), refreshStatus()]);
+  }, [gatewayReady, loadCitadelOptions, refreshStatus]);
+
+  useEffect(() => {
+    if (!gatewayReady) {
+      return;
+    }
+    void loadWorkspaceOptions();
+  }, [gatewayReady, loadWorkspaceOptions]);
 
   useEffect(() => {
     document.title = `GoatCitadel ${currentRouteLabel}`;
@@ -700,19 +800,31 @@ export function MissionControlNextApp() {
   }
 
   const pageErrorResetKey = buildAppHref(route);
-  const routeContent = renderRouteContent({
-    route,
-    activeCitadelId,
-    activeCitadelName,
-    activeWorkspaceId,
-    activeWorkspaceName,
-    gatewayStatus: threadedGatewayStatus,
-    pendingApprovals,
-    navigate,
-    onCopyTrustReport: copyTrustReport,
-    setActiveCitadelId,
-    setActiveWorkspaceId,
-  });
+  const workspaceManagementRoute = route.area === "settings" && route.section === "workspaces";
+  const routeContent =
+    workspaceSelectionStatus === "ready" || (workspaceSelectionStatus === "empty" && workspaceManagementRoute) ? (
+      renderRouteContent({
+        route,
+        activeCitadelId,
+        activeCitadelName,
+        activeWorkspaceId: workspaceSelectionStatus === "ready" ? activeWorkspaceId : "",
+        activeWorkspaceName,
+        gatewayStatus: threadedGatewayStatus,
+        pendingApprovals,
+        navigate,
+        onCopyTrustReport: copyTrustReport,
+        setActiveCitadelId,
+        setActiveWorkspaceId,
+      })
+    ) : (
+      <WorkspaceScopeGate
+        status={workspaceSelectionStatus}
+        citadelName={activeCitadelName}
+        error={workspaceSelectionError}
+        onCreateWorkspace={() => navigate({ area: "settings", section: "workspaces", theme: route.theme })}
+        onRetry={() => void loadWorkspaceOptions()}
+      />
+    );
 
   return (
     <ShellDetailPanelProvider
@@ -779,6 +891,7 @@ export function MissionControlNextApp() {
             soundEnabled={soundEnabled}
             theme={effectiveChromeTheme}
             workspaceOptions={workspaceOptions}
+            workspaceSelectionStatus={workspaceSelectionStatus}
           />
 
           <div className={`mc-next-body${usesFullStageLayout ? " is-work-area" : ""}`}>
@@ -805,6 +918,7 @@ export function MissionControlNextApp() {
               route={route}
               taskBacklogCount={taskBacklogCount}
               workspaceOptions={workspaceOptions}
+              workspaceSelectionStatus={workspaceSelectionStatus}
             />
 
             <ShellRouteStage
@@ -984,130 +1098,4 @@ export function buildRailSections(area: PrimaryArea, items: RailItem[]): RailSec
       items: items.filter((item) => item.section != null && group.sections.includes(item.section)),
     }))
     .filter((group) => group.items.length > 0);
-}
-
-export function resolveShellThemeClass(theme: "dark" | "light"): "theme-signal-noir" | "theme-citadel-light" {
-  return theme === "light" ? "theme-citadel-light" : "theme-signal-noir";
-}
-
-export function resolveEffectiveShellTheme(
-  routeTheme: string | undefined,
-  preferredTheme: "dark" | "light",
-): "dark" | "light" {
-  return routeTheme === "dark" || routeTheme === "light" ? routeTheme : preferredTheme;
-}
-
-export function describeRealtimeTruthUi(
-  streamState: EventStreamConnectionState,
-  truthMode: RealtimeTruthMode,
-): {
-  badge: string;
-  inspector: string;
-  rail: string;
-  stage: string;
-  strip: string;
-  degraded: boolean;
-} {
-  if (streamState !== "open") {
-    return {
-      badge: "Polling",
-      inspector: "Polling fallback",
-      rail: "Polling fallback active",
-      stage: "Realtime degraded",
-      strip: "Polling fallback",
-      degraded: true,
-    };
-  }
-
-  if (truthMode === "replay-gap") {
-    return {
-      badge: "Live recovery",
-      inspector: "Streaming via replay recovery",
-      rail: "Streaming with replay recovery",
-      stage: "Realtime replay recovery",
-      strip: "Streaming (replay recovery)",
-      degraded: true,
-    };
-  }
-
-  if (truthMode === "compatibility") {
-    // N1 (QA finding): "compatibility" is per-event topic-inference provenance
-    // (keyword match vs explicit `links` ids), not a transport downgrade.
-    // While the stream is open it is NOT a degradation — badge/strip/rail read
-    // healthy exactly like "authoritative". The nuance stays visible only in
-    // the inspector detail line, softened to avoid implying a fallback.
-    return {
-      badge: "Live",
-      inspector: "Streaming (inferred refresh)",
-      rail: "Gateway live with streaming",
-      stage: "Realtime connected",
-      strip: "Streaming",
-      degraded: false,
-    };
-  }
-
-  return {
-    badge: "Live",
-    inspector: "Connected",
-    rail: "Gateway live with streaming",
-    stage: "Realtime connected",
-    strip: "Streaming",
-    degraded: false,
-  };
-}
-
-export function isImmersiveRoute(route: AppRoute): boolean {
-  return route.area === "library" && route.section === "prompt-packs";
-}
-
-export function usesEmbeddedRouteHeader(route: AppRoute): boolean {
-  return (
-    route.area === "library" ||
-    route.area === "projects" ||
-    route.area === "ops" ||
-    route.area === "settings" ||
-    (route.area === "cowork" && (route.section === "tasks" || route.section === "board"))
-  );
-}
-
-export function formatUsd(value: number): string {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 4,
-  }).format(Number.isFinite(value) ? value : 0);
-}
-
-/**
- * F-H4: the always-visible status strip shows dashboard-derived truth (pending
- * approvals, sessions, spend). On a refresh failure `use-shell-status` keeps the
- * prior `dashboard` object, so without this the footer would keep presenting the
- * last-good numbers as if current. Mirror the honest `healthError`→"Unavailable"
- * daemon path: when `dashboardError` is set we mark the pill stale and show
- * "Unavailable" rather than a confidently stale value. The `shellStatusError`
- * chip is gated to the stage header (hidden on ops/library/settings/projects),
- * so this strip is the only always-visible signal.
- */
-export function describeDashboardFooterPill(
-  dashboard: ShellStatusState["dashboard"],
-  dashboardError: string | null,
-  formatted: string,
-): { value: string; degraded: boolean } {
-  if (dashboardError) {
-    return { value: "Unavailable", degraded: true };
-  }
-  if (!dashboard) {
-    return { value: "—", degraded: false };
-  }
-  return { value: formatted, degraded: false };
-}
-
-/**
- * `sessions` is required by DashboardStateResponse, but partial gateway
- * responses (e.g. a stub returning {}) can omit it at runtime — count a
- * missing list as 0 instead of crashing the footer pill and rail signal.
- */
-export function countDashboardSessions(dashboard: ShellStatusState["dashboard"]): number {
-  return dashboard?.sessions?.length ?? 0;
 }

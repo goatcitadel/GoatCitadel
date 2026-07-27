@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
-import { ConflictError } from "@goatcitadel/contracts";
+import { ConflictError, ValidationError } from "@goatcitadel/contracts";
 import { registerChatProjectRoutes } from "./chat.projects.js";
 
 describe("chat project routes", () => {
@@ -143,6 +143,29 @@ describe("chat project routes", () => {
     });
     expect(failed.statusCode).toBe(500);
     expect(failed.json()).toEqual({ error: "Internal server error" });
+  });
+
+  it("returns a structured client error when project scope ownership is invalid", async () => {
+    app = buildApp({
+      listChatProjects: vi.fn(() => {
+        throw new ValidationError({
+          field: "workspaceId",
+          message: "workspace default belongs to citadel personal, not company",
+        });
+      }),
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat/projects?citadelId=company&workspaceId=default",
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({
+      error: "workspace default belongs to citadel personal, not company",
+      code: "FIELD_INVALID",
+      details: { field: "workspaceId" },
+    });
   });
 
   it("returns validation and service errors for project mutations", async () => {

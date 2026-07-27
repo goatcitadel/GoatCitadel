@@ -198,7 +198,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
           .map(projectChatGeneratedArtifactForPublic),
       });
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -252,10 +252,14 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       reply.header("cache-control", "private, no-store");
       reply.header("pragma", "no-cache");
     }
-    const items = fastify.services.chatSessions.listChatSessions(parsed.data);
-    const last = items.at(-1);
-    const nextCursor = items.length === parsed.data.limit && last ? `${last.updatedAt}|${last.sessionId}` : undefined;
-    return reply.send({ items: items.map(projectChatSessionForPublic), nextCursor });
+    try {
+      const items = fastify.services.chatSessions.listChatSessions(parsed.data);
+      const last = items.at(-1);
+      const nextCursor = items.length === parsed.data.limit && last ? `${last.updatedAt}|${last.sessionId}` : undefined;
+      return reply.send({ items: items.map(projectChatSessionForPublic), nextCursor });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
   });
 
   fastify.post("/api/v1/chat/sessions", async (request, reply) => {

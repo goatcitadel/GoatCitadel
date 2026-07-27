@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ChatProjectRecord, WorkspaceRecord } from "@goatcitadel/contracts";
+import { ValidationError, type ChatProjectRecord, type WorkspaceRecord } from "@goatcitadel/contracts";
 import {
   resolveEffectiveRuntimeScopeFromStorage,
   type EffectiveRuntimeScopeDependencies,
@@ -88,6 +88,9 @@ describe("resolveEffectiveRuntimeScopeFromStorage", () => {
 
     expect(() =>
       resolveEffectiveRuntimeScopeFromStorage(deps, { citadelId: "personal", workspaceId: "finance" }),
+    ).toThrow(ValidationError);
+    expect(() =>
+      resolveEffectiveRuntimeScopeFromStorage(deps, { citadelId: "personal", workspaceId: "finance" }),
     ).toThrow(/belongs to citadel company/);
   });
 
@@ -101,6 +104,9 @@ describe("resolveEffectiveRuntimeScopeFromStorage", () => {
       },
     });
 
+    expect(() =>
+      resolveEffectiveRuntimeScopeFromStorage(deps, { workspaceId: "finance", projectId: "project-1" }),
+    ).toThrow(ValidationError);
     expect(() =>
       resolveEffectiveRuntimeScopeFromStorage(deps, { workspaceId: "finance", projectId: "project-1" }),
     ).toThrow(/belongs to workspace engineering/);

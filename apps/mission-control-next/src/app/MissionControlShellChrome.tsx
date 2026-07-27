@@ -55,6 +55,8 @@ export type StatusPillModel = {
   degraded?: boolean;
 };
 
+export type WorkspaceSelectionStatus = "resolving" | "ready" | "empty" | "error";
+
 export const PRIMARY_NAV: Array<{ area: PrimaryArea; icon: LucideIcon }> = [
   { area: "chat", icon: Bot },
   { area: "projects", icon: FolderKanban },
@@ -62,6 +64,13 @@ export const PRIMARY_NAV: Array<{ area: PrimaryArea; icon: LucideIcon }> = [
   { area: "ops", icon: Activity },
   { area: "settings", icon: SlidersHorizontal },
 ];
+
+function describeWorkspaceSelectionStatus(status: WorkspaceSelectionStatus): string {
+  if (status === "resolving") return "Loading workspaces…";
+  if (status === "empty") return "No workspaces";
+  if (status === "error") return "Workspaces unavailable";
+  return "Workspace";
+}
 
 export function ShellTopbar({
   activeCitadelId,
@@ -93,6 +102,7 @@ export function ShellTopbar({
   soundEnabled,
   theme,
   workspaceOptions,
+  workspaceSelectionStatus = "ready",
 }: {
   activeCitadelId: string;
   activeCitadelName: string;
@@ -123,7 +133,10 @@ export function ShellTopbar({
   soundEnabled: boolean;
   theme: "dark" | "light";
   workspaceOptions: Array<{ workspaceId: string; name: string }>;
+  workspaceSelectionStatus?: WorkspaceSelectionStatus;
 }) {
+  const workspaceSelectionReady = workspaceSelectionStatus === "ready";
+  const workspacePlaceholder = describeWorkspaceSelectionStatus(workspaceSelectionStatus);
   const topbarOverflowItems: TopbarOverflowItem[] = [
     {
       id: "start-here",
@@ -231,20 +244,17 @@ export function ShellTopbar({
           <span>Workspace</span>
           <select
             aria-label="Active Workspace"
-            title={activeWorkspaceName}
-            value={activeWorkspaceId}
+            title={workspaceSelectionReady ? activeWorkspaceName : workspacePlaceholder}
+            value={workspaceSelectionReady ? activeWorkspaceId : ""}
+            disabled={!workspaceSelectionReady}
             onChange={(event) => handleSelectWorkspace(event.target.value)}
           >
-            {[...workspaceOptions, { workspaceId: activeWorkspaceId, name: activeWorkspaceName }]
-              .filter(
-                (item, index, items) =>
-                  items.findIndex((candidate) => candidate.workspaceId === item.workspaceId) === index,
-              )
-              .map((item) => (
-                <option key={item.workspaceId} value={item.workspaceId}>
-                  {item.name}
-                </option>
-              ))}
+            {!workspaceSelectionReady ? <option value="">{workspacePlaceholder}</option> : null}
+            {workspaceOptions.map((item) => (
+              <option key={item.workspaceId} value={item.workspaceId}>
+                {item.name}
+              </option>
+            ))}
           </select>
         </label>
         <span className="mc-next-topbar-divider" aria-hidden="true" />
@@ -313,6 +323,7 @@ export function ShellRail({
   route,
   taskBacklogCount,
   workspaceOptions,
+  workspaceSelectionStatus = "ready",
 }: {
   activeCitadelId: string;
   activeCitadelName: string;
@@ -336,9 +347,12 @@ export function ShellRail({
   route: AppRoute;
   taskBacklogCount: number;
   workspaceOptions: Array<{ workspaceId: string; name: string }>;
+  workspaceSelectionStatus?: WorkspaceSelectionStatus;
 }) {
   const railRef = useRef<HTMLElement | null>(null);
   const modalOpen = isMobileNav && navOpen;
+  const workspaceSelectionReady = workspaceSelectionStatus === "ready";
+  const workspacePlaceholder = describeWorkspaceSelectionStatus(workspaceSelectionStatus);
   useModalDialogBehavior({
     open: modalOpen,
     onClose,
@@ -401,22 +415,20 @@ export function ShellRail({
                 <span>Workspace</span>
                 <select
                   aria-label="Active Workspace"
-                  value={activeWorkspaceId}
+                  value={workspaceSelectionReady ? activeWorkspaceId : ""}
+                  disabled={!workspaceSelectionReady}
+                  title={workspaceSelectionReady ? activeWorkspaceName : workspacePlaceholder}
                   onChange={(event) => {
                     handleSelectWorkspace(event.target.value);
                     onClose();
                   }}
                 >
-                  {[...workspaceOptions, { workspaceId: activeWorkspaceId, name: activeWorkspaceName }]
-                    .filter(
-                      (item, index, items) =>
-                        items.findIndex((candidate) => candidate.workspaceId === item.workspaceId) === index,
-                    )
-                    .map((item) => (
-                      <option key={item.workspaceId} value={item.workspaceId}>
-                        {item.name}
-                      </option>
-                    ))}
+                  {!workspaceSelectionReady ? <option value="">{workspacePlaceholder}</option> : null}
+                  {workspaceOptions.map((item) => (
+                    <option key={item.workspaceId} value={item.workspaceId}>
+                      {item.name}
+                    </option>
+                  ))}
                 </select>
               </label>
               <button

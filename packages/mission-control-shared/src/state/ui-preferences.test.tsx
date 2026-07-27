@@ -137,6 +137,7 @@ describe("ui preferences", () => {
       latest.setStatusCenterExpanded(true);
       latest.setActiveCitadelId("company");
       latest.setActiveWorkspaceId("workspace-1");
+      latest.setActiveScope({ citadelId: "company", workspaceId: "workspace-1" });
       latest.setTheme("light");
       latest.setNotificationToastsEnabled(false);
       latest.setNotificationSoundMode("subtle");
@@ -252,6 +253,22 @@ describe("ui preferences", () => {
     expect(hook.result.activeCitadelId).toBe("personal");
     expect(hook.result.activeWorkspaceId).toBe("default");
     expect(hook.result.showTechnicalDetails).toBe(false);
+
+    hook.renderer.unmount();
+  });
+
+  it("updates and persists Citadel and workspace as one active scope", () => {
+    const storage = installWindow();
+    const hook = renderPreferences();
+
+    act(() => {
+      hook.result.setActiveScope({ citadelId: "company", workspaceId: "engineering" });
+    });
+
+    expect(hook.result.activeCitadelId).toBe("company");
+    expect(hook.result.activeWorkspaceId).toBe("engineering");
+    expect(storage.getItem("goatcitadel.ui.citadel_id.v1")).toBe("company");
+    expect(storage.getItem("goatcitadel.ui.workspace_id.v1")).toBe("engineering");
 
     hook.renderer.unmount();
   });

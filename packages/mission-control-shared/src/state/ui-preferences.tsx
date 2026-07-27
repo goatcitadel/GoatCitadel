@@ -33,6 +33,7 @@ interface UiPreferencesValue {
   setActiveCitadelId: (citadelId: string) => void;
   activeWorkspaceId: string;
   setActiveWorkspaceId: (workspaceId: string) => void;
+  setActiveScope: (scope: { citadelId: string; workspaceId: string }) => void;
   theme: UiTheme;
   setTheme: (theme: UiTheme) => void;
   notifications: UiNotificationPreferences;
@@ -76,6 +77,7 @@ const UiPreferencesContext = createContext<UiPreferencesValue>({
   setActiveCitadelId: () => {},
   activeWorkspaceId: "default",
   setActiveWorkspaceId: () => {},
+  setActiveScope: () => {},
   theme: "dark",
   setTheme: () => {},
   notifications: {
@@ -158,6 +160,14 @@ export function UiPreferencesProvider(props: { children: ReactNode }) {
         const normalized = normalizeWorkspaceId(workspaceId);
         setActiveWorkspaceIdState(normalized);
         writeStorage(WORKSPACE_KEY, normalized);
+      },
+      setActiveScope: (scope) => {
+        const normalizedCitadelId = normalizeCitadelId(scope.citadelId);
+        const normalizedWorkspaceId = normalizeWorkspaceId(scope.workspaceId);
+        setActiveCitadelIdState(normalizedCitadelId);
+        setActiveWorkspaceIdState(normalizedWorkspaceId);
+        writeStorage(CITADEL_KEY, normalizedCitadelId);
+        writeStorage(WORKSPACE_KEY, normalizedWorkspaceId);
       },
       theme,
       setTheme: (nextTheme) => {

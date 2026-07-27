@@ -74,15 +74,19 @@ export function registerChatProjectRoutes(fastify: FastifyInstance): void {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send({
-      items: fastify.services.chatProjects.listChatProjects(
-        parsed.data.view,
-        parsed.data.limit,
-        parsed.data.workspaceId,
-        parsed.data.citadelId,
-      ),
-      view: parsed.data.view,
-    });
+    try {
+      return reply.send({
+        items: fastify.services.chatProjects.listChatProjects(
+          parsed.data.view,
+          parsed.data.limit,
+          parsed.data.workspaceId,
+          parsed.data.citadelId,
+        ),
+        view: parsed.data.view,
+      });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
   });
 
   fastify.post("/api/v1/chat/projects", async (request, reply) => {
