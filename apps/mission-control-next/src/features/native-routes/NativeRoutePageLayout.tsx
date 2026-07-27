@@ -1,10 +1,15 @@
 import { useEffect, useRef, type ReactNode } from "react";
-import { ArrowRight, FlaskConical, Minus, RefreshCw, TrendingDown, TrendingUp } from "lucide-react";
+import { ArrowRight, ChevronDown, FlaskConical, Minus, RefreshCw, TrendingDown, TrendingUp } from "lucide-react";
 import { Virtuoso } from "react-virtuoso";
 import { BlocksShuffleLoader } from "../../components/BlocksShuffleLoader";
 import type { AppRoute, ReleaseSurfaceStatus } from "@next/app/route-model";
 import { recordRouteDiagnostic } from "./route-diagnostics";
 import { EmptyState, ErrorState, NativeButton, type AreaSlug } from "./primitives";
+import {
+  normalizeNativeRouteError,
+  type NativeRouteError,
+  type NativeRouteErrorContext,
+} from "./shared/native-route-errors";
 
 /**
  * F-M11: on-surface "Experimental" badge for routes scoped `experimental` in
@@ -40,6 +45,8 @@ export function NativePageFrame({
   loading,
   error,
   onRetry,
+  errorSecondaryAction,
+  errorContext,
   children,
   area,
   metrics,
@@ -53,8 +60,10 @@ export function NativePageFrame({
   title: string;
   description: string;
   loading: boolean;
-  error: string | null;
+  error: NativeRouteError | null;
   onRetry?: () => void;
+  errorSecondaryAction?: ReactNode;
+  errorContext?: NativeRouteErrorContext;
   children: ReactNode;
   area?: AreaSlug;
   metrics?: NativePageMetric[];
@@ -111,6 +120,7 @@ export function NativePageFrame({
   }, [kicker, loading, title]);
 
   const hasHeadRow = Boolean(metrics?.length) || Boolean(actions);
+  const errorPresentation = error ? normalizeNativeRouteError(error, { resourceLabel: title, ...errorContext }) : null;
 
   return (
     <section ref={pageRef} className={["mc-next-directory-page", className ?? ""].filter(Boolean).join(" ")}>
@@ -167,10 +177,12 @@ export function NativePageFrame({
        * empty-state copy ("No Charter found") that silently contradicted the error above
        * it — an operator could not tell a real fetch failure from genuinely-empty data.
        */}
-      {error ? (
+      {errorPresentation ? (
         <ErrorState
           size="inline"
-          description={error}
+          title={errorPresentation.title}
+          description={errorPresentation.description}
+          technicalDetails={errorPresentation.technicalDetail}
           primaryAction={
             onRetry ? (
               <NativeButton variant="outline" onClick={onRetry}>
@@ -179,6 +191,7 @@ export function NativePageFrame({
               </NativeButton>
             ) : undefined
           }
+          secondaryActions={errorSecondaryAction}
         />
       ) : loading ? (
         <BlocksShuffleLoader compact label="Loading current route data…" />
@@ -194,6 +207,7 @@ export function NativeGrid({ children, className }: { children: ReactNode; class
 }
 
 export function NativeCard({
+  id,
   title,
   subtitle,
   stats,
@@ -205,6 +219,7 @@ export function NativeCard({
   bodyMaxHeight,
   className,
 }: {
+  id?: string;
   title: string;
   subtitle: string;
   stats?: Array<{ label: string; value: string }>;
@@ -223,6 +238,8 @@ export function NativeCard({
 }) {
   return (
     <article
+      id={id}
+      tabIndex={id ? -1 : undefined}
       className={["mc-next-directory-card", density === "compact" ? "is-compact" : "", className ?? ""]
         .filter(Boolean)
         .join(" ")}
@@ -259,6 +276,81 @@ export function NativeCard({
         {children}
       </div>
     </article>
+  );
+}
+
+export type NativeSectionIndexItem = {
+  id: string;
+  label: string;
+};
+
+export function NativeSectionIndex({
+  items,
+  label = "On this page",
+}: {
+  items: NativeSectionIndexItem[];
+  label?: string;
+}) {
+  if (items.length < 2) {
+    return null;
+  }
+  return (
+    <nav className="mc-next-section-index" aria-label={label}>
+      <span>{label}</span>
+      <div className="mc-next-section-index-links">
+        {items.map((item) => (
+          <a key={item.id} href={`#${item.id}`}>
+            {item.label}
+          </a>
+        ))}
+      </div>
+    </nav>
+  );
+}
+
+export function NativeDisclosureCard({
+  id,
+  title,
+  subtitle,
+  children,
+  stats,
+  defaultOpen = false,
+  className,
+}: {
+  id: string;
+  title: string;
+  subtitle: string;
+  children: ReactNode;
+  stats?: Array<{ label: string; value: string }>;
+  defaultOpen?: boolean;
+  className?: string;
+}) {
+  return (
+    <details
+      className={["mc-next-disclosure-card", className ?? ""].filter(Boolean).join(" ")}
+      open={defaultOpen || undefined}
+    >
+      <summary id={id}>
+        <span>
+          <strong>{title}</strong>
+          <small>{subtitle}</small>
+        </span>
+        <ChevronDown size={16} aria-hidden="true" />
+      </summary>
+      <div className="mc-next-disclosure-card-body">
+        {stats?.length ? (
+          <div className="mc-next-directory-stats">
+            {stats.map((item) => (
+              <div key={`${item.label}-${item.value}`}>
+                <strong>{item.value}</strong>
+                <span>{item.label}</span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {children}
+      </div>
+    </details>
   );
 }
 

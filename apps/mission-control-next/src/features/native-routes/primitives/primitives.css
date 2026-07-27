@@ -608,6 +608,16 @@
   margin-top: 0.35rem;
 }
 
+.mc-next-filter-pill-scroller {
+  position: relative;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.mc-next-filter-pill-hint {
+  display: none;
+}
+
 .mc-next-filter-pill {
   display: inline-flex;
   align-items: center;
@@ -836,6 +846,38 @@
   font-size: var(--text-xs);
 }
 
+.mc-next-error-state-details {
+  margin-top: 0.15rem;
+  min-width: 0;
+  color: var(--fg-muted, var(--text-muted));
+  font-size: var(--text-2xs);
+}
+
+.mc-next-error-state-details summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--fg-secondary, var(--text-secondary));
+  font-weight: 650;
+}
+
+.mc-next-error-state-details summary:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--accent, var(--mc-area-color)) 60%, transparent);
+  outline-offset: 2px;
+  border-radius: var(--r-xs);
+}
+
+.mc-next-error-state-details code {
+  display: block;
+  max-width: min(70ch, 100%);
+  margin-top: 0.3rem;
+  padding: 0.42rem 0.5rem;
+  border: 1px solid var(--border-subtle, var(--mc-border-subtle));
+  border-radius: var(--r-xs);
+  background: var(--bg-surface-2, var(--mc-surface-2));
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .mc-next-error-state-actions {
   display: flex;
   flex-wrap: wrap;
@@ -849,6 +891,52 @@
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
+}
+
+@media (max-width: 640px) {
+  .mc-next-filter-pill-scroller {
+    padding-bottom: 1.05rem;
+  }
+
+  .mc-next-filter-pill-group {
+    display: flex;
+    width: 100%;
+    max-width: 100%;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    scrollbar-width: thin;
+    padding-right: 2.75rem;
+  }
+
+  .mc-next-filter-pill-scroller::after {
+    content: "";
+    position: absolute;
+    top: 0.35rem;
+    right: 0;
+    width: 2.8rem;
+    height: 1.55rem;
+    pointer-events: none;
+    background: linear-gradient(90deg, transparent, var(--bg-surface-1, var(--mc-surface-1)) 72%);
+  }
+
+  .mc-next-filter-pill-hint {
+    display: block;
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    color: var(--fg-muted, var(--text-muted));
+    font: 600 var(--text-2xs) / 1 var(--font-mono, var(--mc-font-mono));
+  }
+
+  .mc-next-error-state[data-size="inline"] {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .mc-next-error-state[data-size="inline"] .mc-next-error-state-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
 }
 
 /* ============================================================

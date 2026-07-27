@@ -579,10 +579,20 @@ export function ShellStatusStrip({
       </div>
       <details className="mc-next-status-details">
         <summary>
-          <span>Runtime details</span>
+          <span>Details</span>
           <strong>{daemonStatusValue}</strong>
         </summary>
         <div className="mc-next-status-details-popover">
+          <div className="mc-next-status-details-mobile-only">
+            <StatusPill icon={<Activity size={15} />} label="Live updates" value={realtimeValue} />
+            <StatusPill
+              icon={<Workflow size={15} />}
+              label="Approvals"
+              value={approvalsPill.value}
+              degraded={approvalsPill.degraded}
+              onClick={navigateApprovals}
+            />
+          </div>
           {currentReleaseScope.status === "ship" ? null : (
             <StatusPill
               icon={<ShieldCheck size={15} />}

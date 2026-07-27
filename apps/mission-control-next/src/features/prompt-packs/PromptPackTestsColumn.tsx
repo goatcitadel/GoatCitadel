@@ -62,22 +62,29 @@ export function PromptPackTestsColumn({
           </p>
         </div>
       </div>
-      <div className="mc-pp-filter-row" role="tablist" aria-label="Prompt pack test filters">
-        {FILTER_OPTIONS.map((option) => {
-          const count = option.count(testOutcomeSummary, testsLength);
-          const active = testResultFilter === option.value;
-          return (
-            <button
-              key={option.value}
-              type="button"
-              className={`mc-pp-filter-chip${active ? " active" : ""}`}
-              onClick={() => onSetTestResultFilter(option.value)}
-            >
-              <span>{option.label}</span>
-              <strong>{count}</strong>
-            </button>
-          );
-        })}
+      <div className="mc-pp-filter-scroller">
+        <div className="mc-pp-filter-row" role="tablist" aria-label="Prompt pack test filters">
+          {FILTER_OPTIONS.map((option) => {
+            const count = option.count(testOutcomeSummary, testsLength);
+            const active = testResultFilter === option.value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                className={`mc-pp-filter-chip${active ? " active" : ""}`}
+                onClick={() => onSetTestResultFilter(option.value)}
+              >
+                <span>{option.label}</span>
+                <strong>{count}</strong>
+              </button>
+            );
+          })}
+        </div>
+        <span className="mc-pp-filter-hint" aria-hidden="true">
+          Swipe for more filters
+        </span>
       </div>
       <div className="mc-pp-test-list" role="list" aria-label="Prompt pack tests">
         {filteredTests.map((test) => {

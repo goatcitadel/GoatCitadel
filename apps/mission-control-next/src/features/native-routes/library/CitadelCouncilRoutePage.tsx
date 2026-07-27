@@ -36,6 +36,7 @@ export function CitadelCouncilRoutePage({
   const [selectedAgentId, setSelectedAgentId] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const selectAgentId = useId();
+  const removeReasonId = useId();
 
   useEffect(() => {
     let cancelled = false;
@@ -96,6 +97,10 @@ export function CitadelCouncilRoutePage({
   };
 
   const seatedAgentIds = new Set(council.items.map((item) => item.agentId));
+  const removeDisabled = !selectedAgentId || !seatedAgentIds.has(selectedAgentId);
+  const removeDisabledReason = !selectedAgentId
+    ? "Select a seated agent before removing a Council seat."
+    : "The selected agent is not currently seated in this Council.";
 
   return (
     <NativePageFrame
@@ -135,12 +140,19 @@ export function CitadelCouncilRoutePage({
               </button>
               <button
                 type="button"
+                className="mc-next-council-remove"
                 onClick={handleRemoveSeat}
-                disabled={!selectedAgentId || !seatedAgentIds.has(selectedAgentId)}
+                disabled={removeDisabled}
+                aria-describedby={removeDisabled ? removeReasonId : undefined}
               >
                 <Trash2 size={16} aria-hidden="true" />
                 Remove
               </button>
+              {removeDisabled ? (
+                <span id={removeReasonId} className="mc-next-council-remove-reason">
+                  {removeDisabledReason}
+                </span>
+              ) : null}
             </div>
           }
         >

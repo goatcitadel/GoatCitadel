@@ -61,7 +61,7 @@ import {
   SettingsStack,
   SettingsWizardSteps,
 } from "../SettingsShared";
-import { NativeCard } from "../../NativeRoutePageLayout";
+import { NativeCard, NativeDisclosureCard, NativeSectionIndex } from "../../NativeRoutePageLayout";
 import { NativeButton, NativeMetricGrid, NativeSelectableList } from "../../primitives";
 import { useDraftTransitionGuard, useFormDirty } from "../../library/use-form-dirty";
 import {
@@ -936,8 +936,18 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
   return (
     <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
       {notice ? <SettingsNotice notice={notice} /> : null}
+      <NativeSectionIndex
+        items={[
+          { id: "providers-directory", label: "Directory" },
+          { id: "providers-routing", label: "Active routing" },
+          { id: "providers-models", label: "Model picker" },
+          { id: "providers-editor", label: "Editor" },
+          { id: "providers-oauth", label: "OAuth" },
+        ]}
+      />
       <SettingsGrid variant="detail-wide" className="mc-next-provider-master-detail">
         <NativeCard
+          id="providers-directory"
           density="compact"
           className="mc-next-settings-panel mc-next-provider-directory"
           title="Providers & Models"
@@ -987,6 +997,7 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
         </NativeCard>
         <SettingsStack className="mc-next-provider-detail-stack">
           <NativeCard
+            id="providers-routing"
             density="compact"
             className="mc-next-settings-panel mc-next-provider-routing-card"
             title="Active routing"
@@ -1044,6 +1055,7 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
             </SettingsButtonRow>
           </NativeCard>
           <NativeCard
+            id="providers-models"
             density="compact"
             className="mc-next-settings-panel mc-next-provider-model-picker-card"
             title="Universal model picker"
@@ -1112,19 +1124,14 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
               }}
             />
           </NativeCard>
-          <NativeCard
-            density="compact"
-            className="mc-next-settings-panel mc-next-provider-advice-card"
+          <NativeDisclosureCard
+            id="providers-advice"
             title="Provider advice"
             subtitle="Advisory routing guidance only; no provider configuration is mutated."
-            stats={[
-              { label: "Candidates", value: String(providerAdvice.data?.candidates?.length ?? 0) },
-              {
-                label: "Mutation",
-                value: providerAdvice.data?.mutationPerformed === false ? "none" : "none",
-              },
-            ]}
           >
+            <p className="mc-next-settings-field-note">
+              {providerAdvice.data?.candidates?.length ?? 0} advisory candidates · no configuration mutation
+            </p>
             {providerAdvice.error ? <SettingsNotice notice={{ tone: "error", message: providerAdvice.error }} /> : null}
             {providerAdvice.data ? (
               <>
@@ -1172,29 +1179,30 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                 {providerAdvice.loading ? "Loading advice..." : "Load advice"}
               </NativeButton>
             </SettingsButtonRow>
-          </NativeCard>
-          <NativeCard
-            density="compact"
-            className="mc-next-settings-panel mc-next-provider-oauth-card"
+          </NativeDisclosureCard>
+          <NativeDisclosureCard
+            id="providers-oauth"
             title="OpenAI Codex ChatGPT login"
             subtitle="Connect the OpenAI Codex provider through ChatGPT OAuth. No API key needed."
-            stats={[
-              {
-                label: "Provider",
-                value: hasCodexOAuthProvider ? "Ready" : "Missing",
-              },
-              {
-                label: "Login",
-                value: codexOAuthConnected
-                  ? "Connected"
-                  : codexOAuthStatus?.requiresReauth
-                    ? "Reauth"
-                    : codexOAuthFlow
-                      ? "Waiting"
-                      : "Not started",
-              },
-            ]}
+            defaultOpen={Boolean(
+              selectedProviderIsCodexOAuth || codexOAuthConnected || codexOAuthStatus?.requiresReauth || codexOAuthFlow,
+            )}
           >
+            <NativeMetricGrid
+              items={[
+                { label: "Provider", value: hasCodexOAuthProvider ? "Ready" : "Missing" },
+                {
+                  label: "Login",
+                  value: codexOAuthConnected
+                    ? "Connected"
+                    : codexOAuthStatus?.requiresReauth
+                      ? "Reauth"
+                      : codexOAuthFlow
+                        ? "Waiting"
+                        : "Not started",
+                },
+              ]}
+            />
             <SettingsWizardSteps steps={codexOAuthWizardSteps} />
             {hasOrphanCodexOAuthCredential ? (
               <SettingsNotice
@@ -1312,8 +1320,9 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                 </NativeButton>
               ) : null}
             </SettingsButtonRow>
-          </NativeCard>
+          </NativeDisclosureCard>
           <NativeCard
+            id="providers-trust"
             density="compact"
             className="mc-next-settings-panel mc-next-provider-detail-card"
             title={selectedProvider?.label ?? "Provider detail"}
@@ -1539,6 +1548,7 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
             )}
           </NativeCard>
           <NativeCard
+            id="providers-editor"
             density="compact"
             className="mc-next-settings-panel mc-next-provider-editor-card"
             title="Provider editor"

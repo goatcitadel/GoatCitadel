@@ -25,6 +25,7 @@ import { NativeCard } from "../NativeRoutePageLayout";
 import { EmptyState, NativeButton, NoticeBanner, StatusChip } from "../primitives";
 import { formatDateTime, useAsyncLoad } from "../shared/native-helpers";
 import { LibraryField, LibraryFieldGrid, LibraryMetricGrid, LibrarySectionShell } from "../shared/library-primitives";
+import { presentNativeRouteError } from "../shared/native-route-errors";
 
 const SOURCE_KINDS: Array<{ value: ExternalSourceKind; label: string }> = [
   { value: "codex_sessions", label: "Codex sessions" },
@@ -83,7 +84,13 @@ const EMPTY_REGISTER_DRAFT: RegisterDraft = {
  * one informational card — the same benign-absence mapping as
  * CitadelBlueprintRoutePage's 404 branch.
  */
-export function LibraryExternalSourcesSection({ workspaceId }: { workspaceId: string }) {
+export function LibraryExternalSourcesSection({
+  workspaceId,
+  onConfigureAccess,
+}: {
+  workspaceId: string;
+  onConfigureAccess?: () => void;
+}) {
   const formInstanceId = useId();
   const mountedRef = useRef(true);
   const activeWorkspaceRef = useRef(workspaceId);
@@ -369,9 +376,27 @@ export function LibraryExternalSourcesSection({ workspaceId }: { workspaceId: st
   const supported = list.data?.supported ?? true;
   const sources = list.data?.sources?.items ?? [];
   const busy = busyKey !== null;
+  const listErrorPresentation = list.error
+    ? presentNativeRouteError(list.error, {
+        resourceLabel: "External knowledge sources",
+        authenticationDescription:
+          "External knowledge sources require a specific authenticated operator identity because imported roots and provenance are owner-scoped. Configure operator access, then retry.",
+      })
+    : null;
 
   return (
-    <LibrarySectionShell loading={list.loading} error={list.error} onRetry={() => void list.reload()}>
+    <LibrarySectionShell
+      loading={list.loading}
+      error={listErrorPresentation}
+      onRetry={() => void list.reload()}
+      errorSecondaryAction={
+        listErrorPresentation?.category === "authentication-required" && onConfigureAccess ? (
+          <NativeButton variant="outline" onClick={onConfigureAccess}>
+            Configure access
+          </NativeButton>
+        ) : undefined
+      }
+    >
       {!supported ? (
         <NativeCard
           title="External sources"

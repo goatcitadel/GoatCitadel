@@ -806,6 +806,13 @@
   scrollbar-gutter: stable;
 }
 
+.mc-next-horizontal-scroll-hint {
+  margin: 0 0 0.38rem;
+  color: var(--text-muted);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+}
+
 .mc-next-trust-policy-controls {
   display: grid;
   gap: 0.5rem;
@@ -845,6 +852,24 @@
   font-size: var(--text-2xs);
   font-weight: 800;
   text-transform: uppercase;
+}
+
+.mc-next-trust-policy-table thead th:first-child,
+.mc-next-trust-policy-table tbody td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  background: color-mix(in oklab, var(--mc-surface-2) 98%, var(--background));
+}
+
+.mc-next-trust-policy-table thead th:nth-child(2),
+.mc-next-trust-policy-table tbody th[scope="row"] {
+  position: sticky;
+  left: 32px;
+  z-index: 2;
+  min-width: 14rem;
+  background: color-mix(in oklab, var(--mc-surface-1) 98%, var(--background));
+  box-shadow: 1px 0 color-mix(in oklab, var(--border) 72%, transparent);
 }
 
 .mc-next-trust-policy-table tbody tr:last-child th,
@@ -1035,6 +1060,10 @@
 }
 
 @media (max-width: 1023px) {
+  .mc-next-horizontal-scroll-hint {
+    display: none;
+  }
+
   .mc-next-trust-policy-table-wrap {
     overflow: visible;
     border: 0;
@@ -1082,8 +1111,10 @@
 
   .mc-next-trust-policy-table th,
   .mc-next-trust-policy-table td {
+    position: static;
     padding: 0;
     border-bottom: 0;
+    box-shadow: none;
   }
 
   .mc-next-trust-policy-table td {

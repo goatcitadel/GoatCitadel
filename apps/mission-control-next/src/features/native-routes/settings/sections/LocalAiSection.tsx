@@ -76,7 +76,7 @@ export function LocalAiSection(_props: SettingsSectionProps) {
       <SettingsGrid>
         <NativeCard
           density="compact"
-          className="mc-next-settings-panel"
+          className="mc-next-settings-panel mc-next-local-ai-hardware-card"
           title="Hardware readiness"
           subtitle="Read-only local scan and runtime detection."
         >

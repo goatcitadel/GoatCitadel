@@ -580,8 +580,8 @@ describe("ProjectsRoutePage", () => {
     const renderer = await renderPage(defaultProps({ navigate }));
 
     expect(renderedText(renderer)).toContain("No active projects found in this workspace.");
-    expect(renderedText(renderer)).toContain("Create project setup");
-    expect(renderedText(renderer)).toContain("Use Start Here sample mission");
+    expect(renderedText(renderer)).toContain("Create a bounded home for the work");
+    expect(renderedText(renderer)).toContain("Use sample mission");
     expect(findButton(renderer.root, "New Chat").props.disabled).toBe(true);
     act(() => {
       findButton(renderer.root, "New Chat").props.onClick();
@@ -589,7 +589,7 @@ describe("ProjectsRoutePage", () => {
     expect(mockedCreateChatSession).not.toHaveBeenCalled();
     act(() => {
       findButton(renderer.root, "Start Chat").props.onClick();
-      findButton(renderer.root, "Use Start Here sample mission").props.onClick();
+      findButton(renderer.root, "Use sample mission").props.onClick();
     });
     expect(navigate).toHaveBeenCalledWith({ area: "chat", theme: "ops" });
     expect(navigate).toHaveBeenCalledWith({ area: "settings", section: "onboarding", theme: "ops" });

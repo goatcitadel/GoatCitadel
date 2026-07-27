@@ -1768,6 +1768,10 @@
   box-shadow: var(--mc-shadow-strong);
 }
 
+.mc-next-status-details-mobile-only {
+  display: none;
+}
+
 /* OD 2026-07-04 shell frame: bright high-trust operations console. This layer
    ports the prototype's coherent chrome without changing route contracts,
    threaded timeline rendering, or generated artifact display internals. */
@@ -2786,14 +2790,14 @@
   }
 
   .mc-next-topbar-status .mc-next-badge-button {
-    width: 1.65rem;
+    width: auto;
     min-width: 1.65rem;
     justify-content: center;
-    padding-inline: 0;
+    padding-inline: 0.32rem;
   }
 
   .mc-next-topbar-status .mc-next-badge-label {
-    display: none;
+    display: inline;
   }
 
   .mc-next-topbar-right > button.mc-next-start-button,
@@ -2883,19 +2887,23 @@
   }
 
   .mc-next-status-strip-identity {
-    flex: 0 1 auto;
-    max-width: calc(100vw - 6.5rem);
+    flex: 1 1 0;
+    max-width: none;
+    overflow: hidden;
   }
 
   .mc-next-status-strip-primary {
-    flex: 1 1 0;
+    flex: 0 0 auto;
     min-width: 0;
-    overflow-x: auto;
-    overscroll-behavior-inline: contain;
+    overflow: visible;
   }
 
   .mc-next-status-strip-primary .mc-next-status-pill {
     max-width: none;
+  }
+
+  .mc-next-status-strip-primary .mc-next-status-pill:nth-child(n + 2) {
+    display: none;
   }
 
   .mc-next-status-strip-identity .mc-next-status-value-full {
@@ -2912,7 +2920,16 @@
   }
 
   .mc-next-status-details summary > span {
+    display: inline;
+    font-size: var(--text-2xs);
+  }
+
+  .mc-next-status-details summary strong {
     display: none;
+  }
+
+  .mc-next-status-details-mobile-only {
+    display: contents;
   }
 
   .mc-next-status-details summary strong::before {

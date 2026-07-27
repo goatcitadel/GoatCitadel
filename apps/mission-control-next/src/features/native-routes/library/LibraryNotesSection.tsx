@@ -7,13 +7,7 @@ import {
 } from "@goatcitadel/mission-control-shared/api/personal-ops";
 import { NativeCard } from "../NativeRoutePageLayout";
 import type { NativeRoutePagesProps } from "../types";
-import {
-  getErrorMessage,
-  nativeLoad,
-  nativeLoadIssues,
-  useAsyncLoad,
-  type Notice,
-} from "../shared/native-helpers";
+import { getErrorMessage, nativeLoad, nativeLoadIssues, useAsyncLoad, type Notice } from "../shared/native-helpers";
 import {
   LibraryActionCardGrid,
   LibraryButtonRow,
@@ -24,6 +18,7 @@ import {
   LibrarySectionShell,
   LibrarySelectableList,
 } from "../shared/library-primitives";
+import { NativeButton } from "../primitives";
 
 export function LibraryNotesSection({ activeWorkspaceId, activeWorkspaceName }: NativeRoutePagesProps) {
   const [title, setTitle] = useState("");
@@ -31,6 +26,7 @@ export function LibraryNotesSection({ activeWorkspaceId, activeWorkspaceName }: 
   const [reminderTitle, setReminderTitle] = useState("");
   const [dueAt, setDueAt] = useState("");
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [noteSaving, setNoteSaving] = useState(false);
   const { loading, error, data, reload } = useAsyncLoad(async () => {
     const [notes, reminders] = await Promise.all([
       nativeLoad("Notes", listNotes(activeWorkspaceId), { items: [] }),
@@ -47,6 +43,7 @@ export function LibraryNotesSection({ activeWorkspaceId, activeWorkspaceName }: 
   const upcomingReminders = useMemo(() => data?.reminders.slice(0, 20) ?? [], [data?.reminders]);
 
   const handleCreateNote = async () => {
+    setNoteSaving(true);
     try {
       const created = await createNote({ workspaceId: activeWorkspaceId, title, body });
       setTitle("");
@@ -55,6 +52,8 @@ export function LibraryNotesSection({ activeWorkspaceId, activeWorkspaceName }: 
       await reload();
     } catch (createError) {
       setNotice({ tone: "error", message: getErrorMessage(createError) });
+    } finally {
+      setNoteSaving(false);
     }
   };
 
@@ -117,9 +116,12 @@ export function LibraryNotesSection({ activeWorkspaceId, activeWorkspaceName }: 
               </LibraryField>
             </LibraryFieldGrid>
             <LibraryButtonRow>
-              <button type="button" className="mc-next-settings-filter" onClick={() => void handleCreateNote()}>
-                Save note
-              </button>
+              <NativeButton
+                onClick={() => void handleCreateNote()}
+                disabled={noteSaving || !title.trim() || !body.trim()}
+              >
+                {noteSaving ? "Saving note..." : "Save note"}
+              </NativeButton>
             </LibraryButtonRow>
           </NativeCard>
           <NativeCard title="Reminders" subtitle="Operator-visible commitments and follow-ups.">

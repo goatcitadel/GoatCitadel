@@ -1,37 +1,46 @@
-import type React from "react";
+import { useId, type ReactNode } from "react";
 import { RefreshCw } from "lucide-react";
 import { BlocksShuffleLoader } from "../../../components/BlocksShuffleLoader";
 import { NativeCard, NativeList } from "../NativeRoutePageLayout";
 import {
   EmptyState,
   ErrorState,
+  FilterPillGroup,
   NativeButton,
   NativeMetricGrid,
   NativeSelectableList,
   NoticeBanner,
 } from "../primitives";
 import type { NativeLoadIssue, Notice } from "./native-helpers";
+import { normalizeNativeRouteError, type NativeRouteError, type NativeRouteErrorContext } from "./native-route-errors";
 
 export function LibrarySectionShell({
   loading,
   error,
   onRetry,
+  errorSecondaryAction,
+  errorContext,
   children,
 }: {
   loading: boolean;
-  error: string | null;
+  error: NativeRouteError | null;
   /** F-M12: wired to the section's reload() so the error path offers retry. */
   onRetry?: () => void;
-  children: React.ReactNode;
+  errorSecondaryAction?: ReactNode;
+  errorContext?: NativeRouteErrorContext;
+  children: ReactNode;
 }) {
   if (loading) {
     return <BlocksShuffleLoader compact label="Loading current route data…" />;
   }
   if (error) {
+    const presentation = normalizeNativeRouteError(error, errorContext);
     return (
       <ErrorState
         size="inline"
-        description={error}
+        title={presentation.title}
+        description={presentation.description}
+        technicalDetails={presentation.technicalDetail}
         primaryAction={
           onRetry ? (
             <NativeButton variant="outline" onClick={() => onRetry()}>
@@ -40,25 +49,18 @@ export function LibrarySectionShell({
             </NativeButton>
           ) : undefined
         }
+        secondaryActions={errorSecondaryAction}
       />
     );
   }
   return <>{children}</>;
 }
 
-export function LibraryFieldGrid({ children }: { children: React.ReactNode }) {
+export function LibraryFieldGrid({ children }: { children: ReactNode }) {
   return <div className="mc-next-settings-field-grid">{children}</div>;
 }
 
-export function LibraryField({
-  label,
-  children,
-  span = 1,
-}: {
-  label: string;
-  children: React.ReactNode;
-  span?: 1 | 2;
-}) {
+export function LibraryField({ label, children, span = 1 }: { label: string; children: ReactNode; span?: 1 | 2 }) {
   return (
     <label className={`mc-next-settings-field${span === 2 ? " span-2" : ""}`}>
       <span>{label}</span>
@@ -67,7 +69,7 @@ export function LibraryField({
   );
 }
 
-export function LibraryButtonRow({ children }: { children: React.ReactNode }) {
+export function LibraryButtonRow({ children }: { children: ReactNode }) {
   return <div className="mc-next-settings-button-row">{children}</div>;
 }
 
@@ -201,28 +203,26 @@ export function LibraryFilterBar({
   options,
   value,
   onChange,
+  label = "Filter library records",
 }: {
   options: Array<{ id: string; label: string }>;
   value: string;
   onChange: (value: string) => void;
+  label?: string;
 }) {
+  const filterId = useId();
   return (
-    <div className="mc-next-settings-filter-bar">
-      {options.map((item) => (
-        <button
-          key={item.id}
-          type="button"
-          className={`mc-next-settings-filter${value === item.id ? " active" : ""}`}
-          onClick={() => onChange(item.id)}
-        >
-          {item.label}
-        </button>
-      ))}
-    </div>
+    <FilterPillGroup
+      label={label}
+      idPrefix={`library-filter-${filterId}`}
+      value={value}
+      options={options.map((item) => ({ value: item.id, label: item.label }))}
+      onChange={onChange}
+    />
   );
 }
 
-export function LibraryCodeBlock({ label, children }: { label: string; children: React.ReactNode }) {
+export function LibraryCodeBlock({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="mc-next-settings-code-block">
       <span>{label}</span>

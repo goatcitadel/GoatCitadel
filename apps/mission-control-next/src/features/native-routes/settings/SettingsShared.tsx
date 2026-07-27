@@ -24,7 +24,15 @@ import type { fetchSettings } from "@goatcitadel/mission-control-shared/api/clie
 import type { AppRoute, ReleaseSurfaceStatus } from "@next/app/route-model";
 import { BlocksShuffleLoader } from "../../../components/BlocksShuffleLoader";
 import { NativeCard, NativePageFrame } from "../NativeRoutePageLayout";
-import { ThreePartChip, EmptyState, ErrorState, NativeButton, NoticeBanner, type ChipTone } from "../primitives";
+import {
+  ThreePartChip,
+  EmptyState,
+  ErrorState,
+  FilterPillGroup,
+  NativeButton,
+  NoticeBanner,
+  type ChipTone,
+} from "../primitives";
 import {
   getErrorMessage,
   nativeLoad,
@@ -35,6 +43,11 @@ import {
   type NativeLoadResult,
   type Notice,
 } from "../shared/native-helpers";
+import {
+  normalizeNativeRouteError,
+  type NativeRouteError,
+  type NativeRouteErrorContext,
+} from "../shared/native-route-errors";
 
 export { getErrorMessage, nativeLoad, nativeLoadIssues, useAsyncLoad };
 export type { LoadState, NativeLoadIssue, NativeLoadResult, Notice };
@@ -154,12 +167,16 @@ export function SettingsSectionShell({
   loading,
   error,
   onRetry,
+  errorSecondaryAction,
+  errorContext,
   children,
 }: {
   loading: boolean;
-  error: string | null;
+  error: NativeRouteError | null;
   /** F-M12: wired to the section's reload() so the error path offers retry. */
   onRetry?: () => void;
+  errorSecondaryAction?: ReactNode;
+  errorContext?: NativeRouteErrorContext;
   children: ReactNode;
 }) {
   if (loading) {
@@ -170,10 +187,13 @@ export function SettingsSectionShell({
     );
   }
   if (error) {
+    const presentation = normalizeNativeRouteError(error, errorContext);
     return (
       <ErrorState
         size="inline"
-        description={error}
+        title={presentation.title}
+        description={presentation.description}
+        technicalDetails={presentation.technicalDetail}
         primaryAction={
           onRetry ? (
             <NativeButton variant="outline" onClick={() => onRetry()}>
@@ -182,6 +202,7 @@ export function SettingsSectionShell({
             </NativeButton>
           ) : undefined
         }
+        secondaryActions={errorSecondaryAction}
       />
     );
   }
@@ -474,24 +495,22 @@ export function SettingsFilterBar({
   options,
   value,
   onChange,
+  label = "Filter settings records",
 }: {
   options: Array<{ id: string; label: string }>;
   value: string;
   onChange: (value: string) => void;
+  label?: string;
 }) {
+  const filterId = useId();
   return (
-    <div className="mc-next-settings-filter-bar">
-      {options.map((item) => (
-        <button
-          key={item.id}
-          type="button"
-          className={`mc-next-settings-filter${value === item.id ? " active" : ""}`}
-          onClick={() => onChange(item.id)}
-        >
-          {item.label}
-        </button>
-      ))}
-    </div>
+    <FilterPillGroup
+      label={label}
+      idPrefix={`settings-filter-${filterId}`}
+      value={value}
+      options={options.map((item) => ({ value: item.id, label: item.label }))}
+      onChange={onChange}
+    />
   );
 }
 

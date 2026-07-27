@@ -89,26 +89,31 @@ export function FilterPillGroup({ label, options, value, onChange, idPrefix = "f
   }
 
   return (
-    <div className="mc-next-filter-pill-group" role="tablist" aria-label={label}>
-      {options.map((option, index) => {
-        const selected = option.value === value;
-        return (
-          <FilterPill
-            key={option.value}
-            ref={(node) => {
-              refs.current[index] = node;
-            }}
-            id={`${idPrefix}-${option.value}`}
-            label={option.label}
-            count={option.count}
-            selected={selected}
-            tabIndex={index === activeIndex ? 0 : -1}
-            ariaLabel={option.ariaLabel}
-            onSelect={() => onChange(option.value)}
-            onKeyDown={handleKeyDown(index)}
-          />
-        );
-      })}
+    <div className="mc-next-filter-pill-scroller">
+      <div className="mc-next-filter-pill-group" role="tablist" aria-label={label}>
+        {options.map((option, index) => {
+          const selected = option.value === value;
+          return (
+            <FilterPill
+              key={option.value}
+              ref={(node) => {
+                refs.current[index] = node;
+              }}
+              id={`${idPrefix}-${option.value}`}
+              label={option.label}
+              count={option.count}
+              selected={selected}
+              tabIndex={index === activeIndex ? 0 : -1}
+              ariaLabel={option.ariaLabel}
+              onSelect={() => onChange(option.value)}
+              onKeyDown={handleKeyDown(index)}
+            />
+          );
+        })}
+      </div>
+      <span className="mc-next-filter-pill-hint" aria-hidden="true">
+        Swipe for more filters
+      </span>
     </div>
   );
 }

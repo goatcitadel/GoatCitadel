@@ -342,6 +342,34 @@
     color-mix(in oklab, var(--mc-surface-1) 70%, var(--background));
 }
 
+.mc-next-project-empty-guide-promoted {
+  margin-top: 0;
+  padding: 0.82rem;
+}
+
+.mc-next-project-empty-guide-promoted > div:first-child {
+  display: grid;
+  gap: 0.22rem;
+}
+
+.mc-next-project-empty-guide-promoted > div:first-child > strong {
+  font-size: var(--text-md);
+}
+
+.mc-next-project-lead-eyebrow {
+  color: color-mix(in oklab, var(--mc-area-color) 72%, var(--text-muted));
+  font-size: var(--text-2xs);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.mc-next-project-lead-stack > .mc-next-disclosure-card .mc-next-project-citadel-lead {
+  padding: 0.5rem 0 0;
+  border: 0;
+  background: transparent;
+}
+
 .mc-next-project-control-section {
   border-color: color-mix(in oklab, var(--border) 42%, transparent);
   background: color-mix(in oklab, var(--mc-surface-1) 62%, var(--background));

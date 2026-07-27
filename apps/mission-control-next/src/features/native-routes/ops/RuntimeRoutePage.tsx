@@ -53,9 +53,11 @@ import {
 import { isRuntimeReleaseVerified } from "@next/app/runtime-build-identity";
 import {
   NativeCard,
+  NativeDisclosureCard,
   NativeGrid,
   NativeList,
   NativePageFrame,
+  NativeSectionIndex,
   type NativePageMetric,
   QuickJumpCard,
 } from "../NativeRoutePageLayout";
@@ -911,10 +913,19 @@ export function RuntimeRoutePage({
       case "runtime":
         return (
           <NativeGrid>
+            <NativeSectionIndex
+              items={[
+                { id: "ops-runtime-posture", label: "Runtime posture" },
+                { id: "ops-runtime-efficiency", label: "Efficiency" },
+                { id: "ops-runtime-evidence", label: "Eval evidence" },
+                { id: "ops-runtime-recovery", label: "Recovery" },
+              ]}
+            />
             <RuntimeAuthorityPanel workspaceId={activeWorkspaceId} theme={route.theme} navigate={navigate} />
             <SessionControlPanel sessionId={route.sessionId} />
             <MeshCapabilityPanel workspaceId={activeWorkspaceId} />
             <NativeCard
+              id="ops-runtime-posture"
               title="Runtime posture"
               subtitle="Daemon state, service-manager controls, and backup truth in one runtime view."
               density="compact"
@@ -980,12 +991,24 @@ export function RuntimeRoutePage({
                 ]}
               />
               {!daemonControllable && daemonHandoff ? (
-                <DaemonControlHandoffPanel handoff={daemonHandoff} />
+                <NativeDisclosureCard
+                  id="ops-runtime-handoff"
+                  title="Service-manager handoff"
+                  subtitle="Operator steps for a runtime that cannot be controlled from this process."
+                >
+                  <DaemonControlHandoffPanel handoff={daemonHandoff} />
+                </NativeDisclosureCard>
               ) : !daemonControllable && data.daemon?.controlMessage ? (
                 <EmptyState size="compact" title={data.daemon.controlMessage} />
               ) : null}
               {daemonDiagnostics.length > 0 || daemonRepairActions.length > 0 ? (
-                <DaemonRecoveryPanel diagnostics={daemonDiagnostics} repairActions={daemonRepairActions} />
+                <NativeDisclosureCard
+                  id="ops-runtime-recovery"
+                  title="Recovery and diagnostics"
+                  subtitle="Repair actions and retained diagnostic evidence."
+                >
+                  <DaemonRecoveryPanel diagnostics={daemonDiagnostics} repairActions={daemonRepairActions} />
+                </NativeDisclosureCard>
               ) : null}
               <div className="mc-next-runtime-actions">
                 <NativeButton
@@ -1017,12 +1040,10 @@ export function RuntimeRoutePage({
               </div>
             </NativeCard>
             <LlamaCppRuntimeTruthCard status={data.llamaCpp} sourceStatus={data.sourceStatus.llamaCpp} />
-            <NativeCard
+            <NativeDisclosureCard
+              id="ops-runtime-efficiency"
               title="LLM runtime efficiency"
               subtitle="Live and cached model-call measurements from gateway runtime paths."
-              density="compact"
-              scrollBody
-              bodyMaxHeight="min(46vh, 24rem)"
               stats={[
                 { label: "Measurements", value: String(runtimeMeasurements.length) },
                 {
@@ -1063,13 +1084,11 @@ export function RuntimeRoutePage({
                 maxHeight="min(30vh, 16rem)"
                 ariaLabel="LLM runtime measurements"
               />
-            </NativeCard>
-            <NativeCard
+            </NativeDisclosureCard>
+            <NativeDisclosureCard
+              id="ops-runtime-engine-fit"
               title="Local engine fit"
               subtitle="Configured local and OpenAI-compatible engines with measured, cached, or unavailable proof labels."
-              density="compact"
-              scrollBody
-              bodyMaxHeight="min(46vh, 24rem)"
               stats={[
                 { label: "Configured", value: String(configuredLocalEngines.length) },
                 { label: "Fit", value: `${fittedLocalEngines.length}/${localEngines.length}` },
@@ -1088,13 +1107,11 @@ export function RuntimeRoutePage({
                 maxHeight="min(34vh, 18rem)"
                 ariaLabel="Local engine fit"
               />
-            </NativeCard>
-            <NativeCard
+            </NativeDisclosureCard>
+            <NativeDisclosureCard
+              id="ops-runtime-evidence"
               title="Eval evidence"
               subtitle="Pareto proof records compare model candidates without pretending to invoke unsupported engines."
-              density="compact"
-              scrollBody
-              bodyMaxHeight="min(46vh, 24rem)"
               stats={[
                 { label: "Runs", value: String(evalProofRuns.length) },
                 { label: "Latest", value: latestEvalRun?.status ?? "none" },
@@ -1130,11 +1147,11 @@ export function RuntimeRoutePage({
                 maxHeight="min(30vh, 16rem)"
                 ariaLabel="Eval evidence"
               />
-            </NativeCard>
-            <NativeCard
+            </NativeDisclosureCard>
+            <NativeDisclosureCard
+              id="ops-runtime-browser-proof"
               title="Browser proof abstraction"
               subtitle="Governed browser evidence records for observe, extract, and act steps; no autonomous browser control plane."
-              density="compact"
               stats={[
                 { label: "Kinds", value: "observe / extract / act" },
                 { label: "Policy", value: "governed evidence" },
@@ -1165,13 +1182,11 @@ export function RuntimeRoutePage({
                 density="compact"
                 ariaLabel="Browser proof abstraction"
               />
-            </NativeCard>
-            <NativeCard
+            </NativeDisclosureCard>
+            <NativeDisclosureCard
+              id="ops-runtime-backups"
               title="Backup posture"
               subtitle="Recovery state should be inspectable without sharing a connector card."
-              density="compact"
-              scrollBody
-              bodyMaxHeight="min(46vh, 24rem)"
             >
               <NativeList
                 items={data.backups.map((backup) => ({
@@ -1184,13 +1199,11 @@ export function RuntimeRoutePage({
                 maxHeight="min(34vh, 18rem)"
                 ariaLabel="Backup posture"
               />
-            </NativeCard>
-            <NativeCard
+            </NativeDisclosureCard>
+            <NativeDisclosureCard
+              id="ops-runtime-integrations"
               title="Integration runtime"
               subtitle="MCP and connector runtime posture stays separate from backups."
-              density="compact"
-              scrollBody
-              bodyMaxHeight="min(46vh, 24rem)"
             >
               <NativeList
                 items={data.mcpServers.map((item) => ({
@@ -1203,7 +1216,7 @@ export function RuntimeRoutePage({
                 maxHeight="min(34vh, 18rem)"
                 ariaLabel="Integration runtime"
               />
-            </NativeCard>
+            </NativeDisclosureCard>
           </NativeGrid>
         );
       case "diagnostics":
@@ -1466,11 +1479,12 @@ export function RuntimeRoutePage({
     if (!data || runtime.error || degradedSources.length > 0) {
       return undefined;
     }
-    return <RuntimeHeroLead data={data} pendingApprovals={pendingApprovals} />;
-  }, [data, degradedSources.length, pendingApprovals, runtime.error]);
+    return <RuntimeHeroLead data={data} pendingApprovals={pendingApprovals} compact={section !== "runtime"} />;
+  }, [data, degradedSources.length, pendingApprovals, runtime.error, section]);
 
   return (
     <NativePageFrame
+      className={`mc-next-ops-runtime-page mc-next-ops-runtime-page-${section}`}
       area="ops"
       kicker={routeKicker({ ...route, section })}
       title={labelForOpsSection(section)}
@@ -1525,7 +1539,15 @@ export function formatRuntimeFreshnessTime(timestamp: number): string {
  * day spend as supporting facts. Reuses the same daemon/health/cost fields the
  * Runtime posture card and head metrics render; it adds no new data source.
  */
-function RuntimeHeroLead({ data, pendingApprovals }: { data: OpsRuntimeData; pendingApprovals: number }) {
+function RuntimeHeroLead({
+  data,
+  pendingApprovals,
+  compact,
+}: {
+  data: OpsRuntimeData;
+  pendingApprovals: number;
+  compact: boolean;
+}) {
   const daemonRuntimeUnavailable = sourceFailed(data, "daemon") && sourceFailed(data, "health");
   const daemonRunning = daemonRuntimeUnavailable
     ? null
@@ -1547,8 +1569,26 @@ function RuntimeHeroLead({ data, pendingApprovals }: { data: OpsRuntimeData; pen
       : "Gateway runtime is reachable, but the daemon is stopped.";
   const readinessTone: StatusChipTone = daemonRuntimeUnavailable ? "critical" : daemonRunning ? "success" : "warning";
 
+  const metrics = [
+    {
+      label: "Serving posture",
+      value: daemonRunning === null ? "unavailable" : daemonRunning ? "running" : "stopped",
+      meta: `${daemonHost} · ${daemonState}`,
+    },
+    {
+      label: "Day spend",
+      value: daySpend,
+      meta: "Dashboard daily total",
+    },
+    {
+      label: "Connectors",
+      value: String(mcpCount),
+      meta: "MCP runtime servers",
+    },
+  ];
+
   return (
-    <>
+    <div className={`mc-next-runtime-hero-lead${compact ? " is-compact" : ""}`}>
       <div className="mc-next-runtime-chip-row">
         <StatusChip tone={readinessTone}>
           {daemonRuntimeUnavailable ? "Runtime unavailable" : daemonRunning ? "Runtime ready" : "Daemon stopped"}
@@ -1559,26 +1599,15 @@ function RuntimeHeroLead({ data, pendingApprovals }: { data: OpsRuntimeData; pen
         </StatusChip>
       </div>
       <p className="mc-next-settings-field-note">{readinessLine}</p>
-      <MetricGrid
-        items={[
-          {
-            label: "Serving posture",
-            value: daemonRunning === null ? "unavailable" : daemonRunning ? "running" : "stopped",
-            meta: `${daemonHost} · ${daemonState}`,
-          },
-          {
-            label: "Day spend",
-            value: daySpend,
-            meta: "Dashboard daily total",
-          },
-          {
-            label: "Connectors",
-            value: String(mcpCount),
-            meta: "MCP runtime servers",
-          },
-        ]}
-      />
-    </>
+      {compact ? (
+        <details className="mc-next-runtime-hero-details">
+          <summary>Runtime details</summary>
+          <MetricGrid items={metrics} />
+        </details>
+      ) : (
+        <MetricGrid items={metrics} />
+      )}
+    </div>
   );
 }
 

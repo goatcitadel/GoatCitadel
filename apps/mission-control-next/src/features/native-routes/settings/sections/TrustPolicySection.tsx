@@ -327,83 +327,88 @@ function TrustPolicyMatrix({ rows }: { rows: TrustPolicyMatrixRow[] }) {
   };
 
   return (
-    <div className="mc-next-trust-policy-table-wrap" data-native-scroll="true">
-      <table className="mc-next-trust-policy-table">
-        <thead>
-          <tr>
-            <th scope="col" style={{ width: "32px" }}></th>
-            <th scope="col">Capability / tool / source</th>
-            <th scope="col">Status</th>
-            <th scope="col">Trust state</th>
-            <th scope="col">Callable state</th>
-            <th scope="col">Grants</th>
-            <th scope="col">Blockers</th>
-            <th scope="col">Declared governance</th>
-            <th scope="col">Owner action</th>
-            <th scope="col">Last-use evidence</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.flatMap((row) => {
-            const isExpanded = !!expandedRows[row.id];
+    <div className="mc-next-trust-policy-matrix">
+      <p className="mc-next-horizontal-scroll-hint" aria-hidden="true">
+        Scroll to inspect policy columns
+      </p>
+      <div className="mc-next-trust-policy-table-wrap" data-native-scroll="true" tabIndex={0}>
+        <table className="mc-next-trust-policy-table">
+          <thead>
+            <tr>
+              <th scope="col" style={{ width: "32px" }}></th>
+              <th scope="col">Capability / tool / source</th>
+              <th scope="col">Status</th>
+              <th scope="col">Trust state</th>
+              <th scope="col">Callable state</th>
+              <th scope="col">Grants</th>
+              <th scope="col">Blockers</th>
+              <th scope="col">Declared governance</th>
+              <th scope="col">Owner action</th>
+              <th scope="col">Last-use evidence</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.flatMap((row) => {
+              const isExpanded = !!expandedRows[row.id];
 
-            return [
-              <tr
-                key={row.id}
-                className={isExpanded ? "is-expanded" : ""}
-                style={{ cursor: "pointer" }}
-                onClick={() => toggleRow(row.id)}
-              >
-                <td style={{ verticalAlign: "middle", textAlign: "center", padding: "0.25rem" }}>
-                  <button
-                    type="button"
-                    className="mc-next-trust-toggle-btn"
-                    aria-label={isExpanded ? "Collapse row" : "Expand row"}
-                    aria-expanded={isExpanded}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleRow(row.id);
-                    }}
-                  >
-                    {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                  </button>
-                </td>
-                <th scope="row">
-                  <div className="mc-next-trust-row-header">
-                    <div>
-                      <strong>{row.label}</strong>
-                      <span>
-                        {labelForKind(row.kind)}
-                        {row.source ? ` - ${row.source}` : ""}
-                      </span>
-                    </div>
-                  </div>
-                </th>
-                <td data-label="Status">
-                  <TrustPolicyStatusBadge status={normalizeTrustPolicyStatus(row.status)} />
-                </td>
-                <td data-label="Trust state">{row.trustState?.trim() || "Unknown"}</td>
-                <td data-label="Callable state">{labelForCallableState(row)}</td>
-                <td data-label="Grants">{formatList(row.grants, "No grants attached")}</td>
-                <td data-label="Blockers">{formatList(row.blockers, "No blockers reported")}</td>
-                <td data-label="Declared governance">{renderDeclaredGovernance(row)}</td>
-                <td data-label="Owner action">
-                  <strong>{row.owner ?? "Unknown owner"}</strong>
-                  <span>{row.actionNeeded ?? "Refresh the snapshot or inspect the source owner."}</span>
-                </td>
-                <td data-label="Last-use evidence">{formatLastUse(row)}</td>
-              </tr>,
-              isExpanded && (
-                <tr key={`${row.id}-details`} className="mc-next-trust-policy-details-row">
-                  <td colSpan={10}>
-                    <TrustPolicyRowDetails row={row} />
+              return [
+                <tr
+                  key={row.id}
+                  className={isExpanded ? "is-expanded" : ""}
+                  style={{ cursor: "pointer" }}
+                  onClick={() => toggleRow(row.id)}
+                >
+                  <td style={{ verticalAlign: "middle", textAlign: "center", padding: "0.25rem" }}>
+                    <button
+                      type="button"
+                      className="mc-next-trust-toggle-btn"
+                      aria-label={isExpanded ? "Collapse row" : "Expand row"}
+                      aria-expanded={isExpanded}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleRow(row.id);
+                      }}
+                    >
+                      {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                    </button>
                   </td>
-                </tr>
-              ),
-            ];
-          })}
-        </tbody>
-      </table>
+                  <th scope="row">
+                    <div className="mc-next-trust-row-header">
+                      <div>
+                        <strong>{row.label}</strong>
+                        <span>
+                          {labelForKind(row.kind)}
+                          {row.source ? ` - ${row.source}` : ""}
+                        </span>
+                      </div>
+                    </div>
+                  </th>
+                  <td data-label="Status">
+                    <TrustPolicyStatusBadge status={normalizeTrustPolicyStatus(row.status)} />
+                  </td>
+                  <td data-label="Trust state">{row.trustState?.trim() || "Unknown"}</td>
+                  <td data-label="Callable state">{labelForCallableState(row)}</td>
+                  <td data-label="Grants">{formatList(row.grants, "No grants attached")}</td>
+                  <td data-label="Blockers">{formatList(row.blockers, "No blockers reported")}</td>
+                  <td data-label="Declared governance">{renderDeclaredGovernance(row)}</td>
+                  <td data-label="Owner action">
+                    <strong>{row.owner ?? "Unknown owner"}</strong>
+                    <span>{row.actionNeeded ?? "Refresh the snapshot or inspect the source owner."}</span>
+                  </td>
+                  <td data-label="Last-use evidence">{formatLastUse(row)}</td>
+                </tr>,
+                isExpanded && (
+                  <tr key={`${row.id}-details`} className="mc-next-trust-policy-details-row">
+                    <td colSpan={10}>
+                      <TrustPolicyRowDetails row={row} />
+                    </td>
+                  </tr>
+                ),
+              ];
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

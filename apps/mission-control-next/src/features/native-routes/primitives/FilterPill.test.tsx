@@ -60,6 +60,7 @@ describe("FilterPillGroup", () => {
     );
     expect(markup).toContain('role="tablist"');
     expect(markup).toContain('aria-label="Memory namespace filter"');
+    expect(markup).toContain("Swipe for more filters");
   });
 
   it("renders nothing when no options are supplied", () => {

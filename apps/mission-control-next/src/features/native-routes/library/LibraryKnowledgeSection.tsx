@@ -37,7 +37,8 @@ export function isRecoveredExternalKnowledgePath(relativePath: string): boolean 
   return relativePath.includes(EXTERNAL_SNAPSHOT_PATH_SEGMENT);
 }
 
-export function LibraryKnowledgeSection({ activeWorkspaceId, activeWorkspaceName }: NativeRoutePagesProps) {
+export function LibraryKnowledgeSection(props: NativeRoutePagesProps) {
+  const { activeWorkspaceId, activeWorkspaceName } = props;
   const [selectedFilePath, setSelectedFilePath] = useState("");
   const [search, setSearch] = useState("");
   const [preview, setPreview] = useState<LoadState<{ content: string; contentType: string }>>({
@@ -287,7 +288,10 @@ export function LibraryKnowledgeSection({ activeWorkspaceId, activeWorkspaceName
           </NativeCard>
         </div>
       </div>
-      <LibraryExternalSourcesSection workspaceId={activeWorkspaceId} />
+      <LibraryExternalSourcesSection
+        workspaceId={activeWorkspaceId}
+        onConfigureAccess={() => props.navigate({ area: "settings", section: "access", theme: props.route.theme })}
+      />
     </LibrarySectionShell>
   );
 }

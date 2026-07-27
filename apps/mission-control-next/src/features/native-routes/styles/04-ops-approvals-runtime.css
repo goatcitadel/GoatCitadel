@@ -461,6 +461,35 @@
   align-items: center;
 }
 
+.mc-next-runtime-hero-lead {
+  display: grid;
+  gap: 0.48rem;
+  min-width: 0;
+}
+
+.mc-next-runtime-hero-details {
+  min-width: 0;
+  border-top: 1px solid color-mix(in oklab, var(--border) 66%, transparent);
+  padding-top: 0.42rem;
+}
+
+.mc-next-runtime-hero-details summary {
+  width: max-content;
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.mc-next-runtime-hero-details summary:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 3px;
+}
+
+.mc-next-runtime-hero-details[open] summary {
+  margin-bottom: 0.48rem;
+}
+
 .mc-next-runtime-notice {
   padding: 0.5rem 0.56rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
@@ -543,6 +572,14 @@
 
 .mc-next-runtime-posture-card {
   grid-column: 1 / -1;
+}
+
+.mc-next-ops-runtime-page-runtime .mc-next-native-grid > .mc-next-section-index {
+  order: -2;
+}
+
+.mc-next-ops-runtime-page-runtime .mc-next-runtime-posture-card {
+  order: -1;
 }
 
 .mc-next-runtime-metric-grid {

@@ -32,7 +32,7 @@ import { NewSessionButton, ProjectGlyphButton, filterEmptyLabel } from "./Projec
 import { ProjectHomeBasePanel } from "./ProjectHomeBasePanel";
 import type { AppRoute } from "@next/app/route-model";
 import { useIsMounted } from "@next/hooks/use-is-mounted";
-import { NativeCard, NativeGrid, NativePageFrame } from "../NativeRoutePageLayout";
+import { NativeCard, NativeDisclosureCard, NativeGrid, NativePageFrame } from "../NativeRoutePageLayout";
 import { EmptyState, FilterPillGroup, NativeButton, NativeSelectableList, NoticeBanner } from "../primitives";
 import { readRouteDiagnosticNow, recordRouteAction, recordRouteDataLoad } from "../route-diagnostics";
 import type { NativeRoutePagesProps } from "../types";
@@ -574,6 +574,29 @@ export function ProjectsRoutePage({
         </div>
       </article>
     ) : null;
+  const emptyProjectLead =
+    state.projects.length === 0 ? (
+      <article className="mc-next-project-empty-guide mc-next-project-empty-guide-promoted">
+        <div>
+          <span className="mc-next-project-lead-eyebrow">First project</span>
+          <strong>Create a bounded home for the work</strong>
+          <p>Start with a project, then open Chat or use the sample mission to shape its first run.</p>
+        </div>
+        <div className="mc-next-settings-button-row">
+          <NativeButton onClick={handleFocusCreateProject}>
+            <FolderPlus size={16} />
+            Create project
+          </NativeButton>
+          <NativeButton variant="outline" onClick={() => handleOpenSurface("chat")}>
+            <MessageSquarePlus size={16} />
+            Start Chat
+          </NativeButton>
+          <NativeButton variant="outline" onClick={handleOpenStartHere}>
+            Use sample mission
+          </NativeButton>
+        </div>
+      </article>
+    ) : null;
   const citadelLead = (
     <article className="mc-next-project-citadel-lead" aria-label="Default Citadels">
       <div>
@@ -609,7 +632,18 @@ export function ProjectsRoutePage({
   const leadContent = (
     <div className="mc-next-project-lead-stack">
       {projectContinuationLead}
-      {citadelLead}
+      {emptyProjectLead}
+      {state.projects.length === 0 ? (
+        <NativeDisclosureCard
+          id="projects-citadel-context"
+          title="About Citadels"
+          subtitle="How Personal and Company operating spaces govern projects."
+        >
+          {citadelLead}
+        </NativeDisclosureCard>
+      ) : (
+        citadelLead
+      )}
     </div>
   );
 
@@ -628,8 +662,13 @@ export function ProjectsRoutePage({
         { label: "Citadel", value: activeCitadelId ?? "legacy" },
       ]}
       actions={
-        <>
-          {SURFACES.map((surface) => (
+        state.projects.length === 0 ? (
+          <NativeButton onClick={handleFocusCreateProject}>
+            <FolderPlus size={16} />
+            Create project
+          </NativeButton>
+        ) : (
+          SURFACES.map((surface) => (
             <NewSessionButton
               key={`head-${surface.mode}`}
               mode={surface.mode}
@@ -637,8 +676,8 @@ export function ProjectsRoutePage({
               disabled={!selectedProject}
               onSelect={() => void handleNewSession(surface.mode)}
             />
-          ))}
-        </>
+          ))
+        )
       }
     >
       <NativeGrid className="mc-next-native-projects-grid">
@@ -743,27 +782,6 @@ export function ProjectsRoutePage({
                       : filterEmptyLabel(filterView)
                   }
                 />
-                {state.projects.length === 0 ? (
-                  <div className="mc-next-project-empty-guide">
-                    <div>
-                      <strong>Choose the first project move</strong>
-                      <p>Create a project, start Chat, or use the sample mission to shape the first run.</p>
-                    </div>
-                    <div className="mc-next-settings-button-row">
-                      <NativeButton onClick={handleFocusCreateProject}>
-                        <FolderPlus size={16} />
-                        Create project setup
-                      </NativeButton>
-                      {SURFACES.map((surface) => (
-                        <NativeButton key={surface.mode} onClick={() => handleOpenSurface(surface.mode)}>
-                          <MessageSquarePlus size={16} />
-                          Start Chat
-                        </NativeButton>
-                      ))}
-                      <NativeButton onClick={handleOpenStartHere}>Use Start Here sample mission</NativeButton>
-                    </div>
-                  </div>
-                ) : null}
               </>
             )}
           </NativeSelectableList>

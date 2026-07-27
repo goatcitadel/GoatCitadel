@@ -12,6 +12,8 @@ export type ErrorStateProps = {
   /** Typically a Retry button wired to the route's reload(). */
   primaryAction?: ReactNode;
   secondaryActions?: ReactNode;
+  /** Raw transport or protocol text, hidden behind an operator-opened disclosure. */
+  technicalDetails?: ReactNode;
   tone?: ErrorStateTone;
   /** `inline` is a compact banner (drop-in for .mc-next-directory-alert);
    *  `default` is a full centred panel mirroring EmptyState. */
@@ -28,6 +30,7 @@ export function ErrorState({
   description,
   primaryAction,
   secondaryActions,
+  technicalDetails,
   tone = "danger",
   size = "inline",
 }: ErrorStateProps) {
@@ -44,6 +47,12 @@ export function ErrorState({
         {title !== undefined && title !== null ? <p className="mc-next-error-state-title">{title}</p> : null}
         {description !== undefined && description !== null ? (
           <p className="mc-next-error-state-description">{description}</p>
+        ) : null}
+        {technicalDetails !== undefined && technicalDetails !== null ? (
+          <details className="mc-next-error-state-details">
+            <summary>Technical details</summary>
+            <code>{technicalDetails}</code>
+          </details>
         ) : null}
       </div>
       {hasActions ? (

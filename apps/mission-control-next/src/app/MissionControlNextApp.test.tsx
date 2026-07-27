@@ -461,7 +461,7 @@ describe("MissionControlNextApp", () => {
     expect(css).toContain(".mc-dialog-content {");
     expect(css).toContain("transform: translate(-50%, -50%);");
     expect(css).toContain("@media (max-width: 1180px) {");
-    expect(css).toContain(".mc-next-topbar-status .mc-next-badge-label {\n    display: none;");
+    expect(css).toContain(".mc-next-topbar-status .mc-next-badge-label {\n    display: inline;");
     // Guardrail: the restored quick-glance status cluster (release scope /
     // degraded-realtime / approvals) must never be silently re-hidden.
     expect(css).not.toContain(".mc-next-topbar-status {\n  display: none;");
@@ -469,20 +469,24 @@ describe("MissionControlNextApp", () => {
       ".mc-next-topbar-right > button.mc-next-start-button,\n.mc-next-topbar-right > button.mc-next-mode-toggle {\n  display: none;",
     );
     // HX-303: identity is pinned outside the scrollable metrics and switches
-    // to a compact visual token at the mobile breakpoint.
+    // to a compact visual token at the mobile breakpoint. It shares the row
+    // with a non-shrinking Gateway pill and the labeled Details control.
     expect(css).toContain(".mc-next-status-strip-identity {");
-    expect(css).toContain("max-width: calc(100vw - 6.5rem);");
+    expect(css).toContain("flex: 1 1 0;");
+    expect(css).toContain("overflow: hidden;");
+    expect(css).toContain(".mc-next-status-strip-primary {\n    flex: 0 0 auto;");
     expect(css).toContain(".mc-next-status-strip-identity .mc-next-status-value-compact {");
     expect(css).toContain("display: block !important;");
     expect(css).toContain(".mc-next-shell .mc-next-status-strip {");
     expect(css).toContain("position: fixed;");
-    // The remaining runtime metrics are a horizontal scroll lane. They must
-    // not wrap character-by-character and expand the fixed mobile strip.
+    // Detail and status values must not wrap character-by-character and expand
+    // the fixed mobile strip.
     expect(css).toContain(
       ".mc-next-shell .mc-next-status-details summary strong {\n    flex: 0 0 auto;\n    min-width: max-content;",
     );
     expect(css).toContain("white-space: nowrap;\n    overflow-wrap: normal;");
     expect(css).toContain(".mc-next-status-strip-primary .mc-next-status-pill {\n    max-width: none;");
+    expect(css).toContain(".mc-next-status-details summary > span {\n    display: inline;");
   });
 
   it("keeps the build identity action in compact shell chrome and links it to Ops proof", async () => {
@@ -553,7 +557,7 @@ describe("MissionControlNextApp", () => {
     expect(appMocks.fetchWorkspaces).toHaveBeenCalledWith("all", 400, "personal");
     expect(appMocks.fetchDashboardState).toHaveBeenCalled();
     expect(appMocks.connectEventStream).toHaveBeenCalled();
-    expect(renderer.root.findByProps({ "aria-label": "Approvals: 2 pending" })).toBeDefined();
+    expect(renderer.root.findAllByProps({ "aria-label": "Approvals: 2 pending" })).toHaveLength(2);
     expect(renderer.root.findByProps({ "aria-label": "Sessions: 2 visible" })).toBeDefined();
     expect(renderer.root.findByProps({ "aria-label": "Spend: $1.25" })).toBeDefined();
 

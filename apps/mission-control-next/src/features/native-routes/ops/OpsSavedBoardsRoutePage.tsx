@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import { Archive, PanelsTopLeft, Pencil, Plus, RefreshCw, RotateCcw } from "lucide-react";
+import { Archive, PanelsTopLeft, Pencil, Plus, RefreshCw, RotateCcw, ShieldCheck } from "lucide-react";
 import type { OpsSavedBoardRecord } from "@goatcitadel/contracts";
 import {
   archiveOpsSavedBoard,
@@ -18,6 +18,7 @@ import { getRouteReleaseScope, routeKicker } from "@next/app/route-model";
 import { NativePageFrame } from "../NativeRoutePageLayout";
 import { EmptyState, NativeButton, NoticeBanner, StatusChip } from "../primitives";
 import type { NativeRoutePagesProps } from "../types";
+import { presentNativeRouteError } from "../shared/native-route-errors";
 import { OpsSavedBoardsEditor, type OpsSavedBoardsEditorSession } from "./OpsSavedBoardsEditor";
 import { createOpsSavedBoardsDraft } from "./OpsSavedBoardsModel";
 import { OpsSavedBoardsWidget } from "./OpsSavedBoardsWidgets";
@@ -363,6 +364,13 @@ export function OpsSavedBoardsRoutePage(props: NativeRoutePagesProps) {
   const activeCount = visibleBoards?.filter((board) => board.status === "active").length ?? 0;
   const archivedCount = visibleBoards?.filter((board) => board.status === "archived").length ?? 0;
   const fatalListError = visibleBoards === null && stateMatchesWorkspace ? listError : null;
+  const fatalErrorPresentation = fatalListError
+    ? presentNativeRouteError(fatalListError, {
+        resourceLabel: "Saved boards",
+        authenticationDescription:
+          "Saved boards require a specific authenticated operator identity so ownership and audit evidence remain trustworthy. Configure operator access, then retry.",
+      })
+    : null;
 
   return (
     <NativePageFrame
@@ -372,8 +380,18 @@ export function OpsSavedBoardsRoutePage(props: NativeRoutePagesProps) {
       title="Saved boards"
       description={`Trusted operational layouts for ${props.activeWorkspaceName}; every widget reloads its canonical source independently.`}
       loading={!stateMatchesWorkspace || (listLoading && visibleBoards === null)}
-      error={fatalListError}
+      error={fatalErrorPresentation}
       onRetry={() => void loadBoards()}
+      errorSecondaryAction={
+        fatalErrorPresentation?.category === "authentication-required" ? (
+          <NativeButton
+            variant="outline"
+            onClick={() => props.navigate({ area: "settings", section: "access", theme: props.route.theme })}
+          >
+            <ShieldCheck size={16} /> Configure access
+          </NativeButton>
+        ) : undefined
+      }
       releaseStatus={getRouteReleaseScope(props.route).status}
       metrics={[
         { label: "Visible boards", value: String(visibleBoards?.length ?? 0) },

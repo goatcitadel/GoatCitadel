@@ -39,7 +39,7 @@ import {
   SettingsStack,
   useAsyncLoad,
 } from "../SettingsShared";
-import { NativeCard } from "../../NativeRoutePageLayout";
+import { NativeCard, NativeDisclosureCard, NativeSectionIndex } from "../../NativeRoutePageLayout";
 import { NativeButton, NativeSelectableList } from "../../primitives";
 import {
   createEmptyPermissionProfileDraft,
@@ -361,225 +361,218 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
     <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
       {notice ? <SettingsNotice notice={notice} /> : null}
       {data ? (
-        <SettingsGrid variant="three-column">
-          <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
-          <NativeCard
-            density="compact"
-            className="mc-next-settings-panel"
-            title="Permission profiles"
-            subtitle="Profiles define normal defaults; hard denies, scoped grants, auth, path jails, and disabled capabilities still win."
-            stats={[
-              { label: "Profiles", value: String(data.profiles?.length ?? 0) },
-              { label: "Chat effective", value: chatEffectiveProfileLabel },
+        <>
+          <NativeSectionIndex
+            items={[
+              { id: "permissions-profiles", label: "Profiles" },
+              { id: "permissions-effective", label: "Core grants" },
+              { id: "permissions-override", label: "Local override" },
+              { id: "permissions-autonomy", label: "Autonomous grants" },
             ]}
-          >
-            <NativeSelectableList
-              items={(data.profiles ?? []).map((profile) => ({
-                id: profile.profileId,
-                title: profile.label,
-                meta: profile.builtin ? "Built-in" : profile.scope,
-                body: profile.description ?? describePermissionProfile(profile),
-              }))}
-              selectedId={selectedProfile?.profileId ?? ""}
-              onSelect={setSelectedProfileId}
-              emptyLabel="No permission profiles returned by the gateway."
-              maxHeight="22rem"
-            />
-          </NativeCard>
-          <SettingsStack>
+          />
+          <SettingsGrid variant="three-column">
+            <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
             <NativeCard
+              id="permissions-profiles"
               density="compact"
               className="mc-next-settings-panel"
-              title={selectedProfile?.label ?? "Profile"}
-              subtitle={selectedProfile ? describePermissionProfile(selectedProfile) : "Select a profile to activate."}
+              title="Permission profiles"
+              subtitle="Profiles define normal defaults; hard denies, scoped grants, auth, path jails, and disabled capabilities still win."
               stats={[
-                {
-                  label: "Approval mode",
-                  value: selectedProfile ? describeToolApprovalMode(selectedProfile.approvalMode) : "-",
-                },
-                { label: "Tool patterns", value: String(selectedProfile?.toolPatterns?.length ?? 0) },
-                { label: "Read access", value: describeReadAccessMode(selectedProfile?.readAccessMode ?? "") },
+                { label: "Profiles", value: String(data.profiles?.length ?? 0) },
+                { label: "Chat effective", value: chatEffectiveProfileLabel },
               ]}
             >
-              {selectedProfile ? (
-                <>
-                  <SettingsActionList
-                    items={selectedProfile.toolPatterns.map((pattern) => ({
-                      label: pattern,
-                      description: "Profile tool pattern",
-                    }))}
-                    emptyLabel="This profile does not add tool patterns."
-                  />
-                  <SettingsActionList
-                    items={[
-                      {
-                        label: "Allow",
-                        description: (selectedProfile.allow ?? []).length
-                          ? (selectedProfile.allow ?? []).join(", ")
-                          : "No extra allow patterns",
-                      },
-                      {
-                        label: "Deny",
-                        description: (selectedProfile.deny ?? []).length
-                          ? (selectedProfile.deny ?? []).join(", ")
-                          : "No profile deny patterns",
-                      },
-                      {
-                        label: "Default policy contexts",
-                        description: selectedProfile.defaultForSurfaces?.length
-                          ? formatPermissionContextList(selectedProfile.defaultForSurfaces)
-                          : "No automatic policy-context default",
-                      },
-                    ]}
-                    emptyLabel="No profile policy details."
-                  />
-                  {activationBlockedByRemoteHardened ? (
-                    <p className="mc-next-settings-field-note">{promptSkippingProfileRestriction}</p>
-                  ) : null}
-                  {hasLegacyOnlyPermissionContexts(selectedProfile.defaultForSurfaces) ? (
-                    <p className="mc-next-settings-field-note" role="status">
-                      Compatibility warning: this profile defaults only to legacy policy keys and does not govern
-                      current Chat. Add Chat or All policy contexts if intended; GoatCitadel has not broadened it
-                      automatically.
-                    </p>
-                  ) : null}
-                  <SettingsButtonRow>
-                    <NativeButton
-                      variant="default"
-                      disabled={activationBlockedByRemoteHardened}
-                      onClick={() => void handleActivateProfile(selectedProfile.profileId, "chat")}
-                    >
-                      <ShieldCheck size={16} />
-                      Use for Chat
-                    </NativeButton>
-                    <NativeButton
-                      variant="secondary"
-                      disabled={activationBlockedByRemoteHardened}
-                      onClick={() => void handleActivateProfile(selectedProfile.profileId, "all")}
-                    >
-                      <ShieldCheck size={16} />
-                      Use across all policy contexts
-                    </NativeButton>
-                  </SettingsButtonRow>
-                  <SettingsButtonRow>
-                    {PRIMARY_PERMISSION_CONTEXTS.filter((surface) => surface !== "chat").map((surface) => (
+              <NativeSelectableList
+                items={(data.profiles ?? []).map((profile) => ({
+                  id: profile.profileId,
+                  title: profile.label,
+                  meta: profile.builtin ? "Built-in" : profile.scope,
+                  body: profile.description ?? describePermissionProfile(profile),
+                }))}
+                selectedId={selectedProfile?.profileId ?? ""}
+                onSelect={setSelectedProfileId}
+                emptyLabel="No permission profiles returned by the gateway."
+                maxHeight="22rem"
+              />
+            </NativeCard>
+            <SettingsStack>
+              <NativeCard
+                density="compact"
+                className="mc-next-settings-panel"
+                title={selectedProfile?.label ?? "Profile"}
+                subtitle={
+                  selectedProfile ? describePermissionProfile(selectedProfile) : "Select a profile to activate."
+                }
+                stats={[
+                  {
+                    label: "Approval mode",
+                    value: selectedProfile ? describeToolApprovalMode(selectedProfile.approvalMode) : "-",
+                  },
+                  { label: "Tool patterns", value: String(selectedProfile?.toolPatterns?.length ?? 0) },
+                  { label: "Read access", value: describeReadAccessMode(selectedProfile?.readAccessMode ?? "") },
+                ]}
+              >
+                {selectedProfile ? (
+                  <>
+                    <SettingsActionList
+                      items={selectedProfile.toolPatterns.map((pattern) => ({
+                        label: pattern,
+                        description: "Profile tool pattern",
+                      }))}
+                      emptyLabel="This profile does not add tool patterns."
+                    />
+                    <SettingsActionList
+                      items={[
+                        {
+                          label: "Allow",
+                          description: (selectedProfile.allow ?? []).length
+                            ? (selectedProfile.allow ?? []).join(", ")
+                            : "No extra allow patterns",
+                        },
+                        {
+                          label: "Deny",
+                          description: (selectedProfile.deny ?? []).length
+                            ? (selectedProfile.deny ?? []).join(", ")
+                            : "No profile deny patterns",
+                        },
+                        {
+                          label: "Default policy contexts",
+                          description: selectedProfile.defaultForSurfaces?.length
+                            ? formatPermissionContextList(selectedProfile.defaultForSurfaces)
+                            : "No automatic policy-context default",
+                        },
+                      ]}
+                      emptyLabel="No profile policy details."
+                    />
+                    {activationBlockedByRemoteHardened ? (
+                      <p className="mc-next-settings-field-note">{promptSkippingProfileRestriction}</p>
+                    ) : null}
+                    {hasLegacyOnlyPermissionContexts(selectedProfile.defaultForSurfaces) ? (
+                      <p className="mc-next-settings-field-note" role="status">
+                        Compatibility warning: this profile defaults only to legacy policy keys and does not govern
+                        current Chat. Add Chat or All policy contexts if intended; GoatCitadel has not broadened it
+                        automatically.
+                      </p>
+                    ) : null}
+                    <SettingsButtonRow>
                       <NativeButton
-                        key={surface}
-                        variant="secondary"
+                        variant="default"
                         disabled={activationBlockedByRemoteHardened}
-                        onClick={() => void handleActivateProfile(selectedProfile.profileId, surface)}
+                        onClick={() => void handleActivateProfile(selectedProfile.profileId, "chat")}
                       >
                         <ShieldCheck size={16} />
-                        Use for {formatPermissionContextLabel(surface)}
+                        Use for Chat
                       </NativeButton>
-                    ))}
-                  </SettingsButtonRow>
-                  <details className="mc-next-disclosure">
-                    <summary>Legacy compatibility contexts</summary>
-                    <p className="mc-next-settings-field-note">
-                      Cowork and Code are retained policy keys for stored activations and older API clients. They are
-                      not separate Mission Control surfaces and do not govern current Chat.
-                    </p>
+                      <NativeButton
+                        variant="secondary"
+                        disabled={activationBlockedByRemoteHardened}
+                        onClick={() => void handleActivateProfile(selectedProfile.profileId, "all")}
+                      >
+                        <ShieldCheck size={16} />
+                        Use across all policy contexts
+                      </NativeButton>
+                    </SettingsButtonRow>
                     <SettingsButtonRow>
-                      {LEGACY_PERMISSION_CONTEXTS.map((surface) => (
+                      {PRIMARY_PERMISSION_CONTEXTS.filter((surface) => surface !== "chat").map((surface) => (
                         <NativeButton
                           key={surface}
                           variant="secondary"
                           disabled={activationBlockedByRemoteHardened}
                           onClick={() => void handleActivateProfile(selectedProfile.profileId, surface)}
                         >
-                          {surface === "code" ? <Code2 size={16} /> : <ShieldCheck size={16} />}
+                          <ShieldCheck size={16} />
                           Use for {formatPermissionContextLabel(surface)}
                         </NativeButton>
                       ))}
                     </SettingsButtonRow>
-                  </details>
-                </>
-              ) : (
-                <SettingsEmptyState label="Select a profile." />
-              )}
-            </NativeCard>
-            {selectedProfile && !selectedProfile.builtin ? (
+                    <details className="mc-next-disclosure">
+                      <summary>Legacy compatibility contexts</summary>
+                      <p className="mc-next-settings-field-note">
+                        Cowork and Code are retained policy keys for stored activations and older API clients. They are
+                        not separate Mission Control surfaces and do not govern current Chat.
+                      </p>
+                      <SettingsButtonRow>
+                        {LEGACY_PERMISSION_CONTEXTS.map((surface) => (
+                          <NativeButton
+                            key={surface}
+                            variant="secondary"
+                            disabled={activationBlockedByRemoteHardened}
+                            onClick={() => void handleActivateProfile(selectedProfile.profileId, surface)}
+                          >
+                            {surface === "code" ? <Code2 size={16} /> : <ShieldCheck size={16} />}
+                            Use for {formatPermissionContextLabel(surface)}
+                          </NativeButton>
+                        ))}
+                      </SettingsButtonRow>
+                    </details>
+                  </>
+                ) : (
+                  <SettingsEmptyState label="Select a profile." />
+                )}
+              </NativeCard>
+              {selectedProfile && !selectedProfile.builtin ? (
+                <NativeCard
+                  density="compact"
+                  className="mc-next-settings-panel"
+                  title="Edit custom profile"
+                  subtitle="Update or archive the selected profile."
+                >
+                  <PermissionProfileDraftFields
+                    draft={profileEditDraft}
+                    bypassUnavailableReason={promptSkippingProfileRestriction ?? undefined}
+                    setDraft={setProfileEditDraft}
+                  />
+                  <SettingsButtonRow>
+                    <NativeButton variant="default" onClick={() => void handleUpdateSelectedProfile()}>
+                      <Save size={16} />
+                      Save profile
+                    </NativeButton>
+                    <NativeButton
+                      variant="destructive"
+                      onClick={() =>
+                        selectedProfile && !selectedProfile.builtin
+                          ? setPendingArchiveProfile({
+                              profileId: selectedProfile.profileId,
+                              label: selectedProfile.label,
+                            })
+                          : setNotice({ tone: "warning", message: "Select a custom permission profile to archive." })
+                      }
+                    >
+                      <Trash2 size={16} />
+                      Archive profile
+                    </NativeButton>
+                  </SettingsButtonRow>
+                </NativeCard>
+              ) : null}
               <NativeCard
                 density="compact"
                 className="mc-next-settings-panel"
-                title="Edit custom profile"
-                subtitle="Update or archive the selected profile."
+                title="Custom profile"
+                subtitle="Create a workspace-scoped profile for your own workflow."
               >
                 <PermissionProfileDraftFields
-                  draft={profileEditDraft}
+                  draft={profileDraft}
                   bypassUnavailableReason={promptSkippingProfileRestriction ?? undefined}
-                  setDraft={setProfileEditDraft}
+                  setDraft={setProfileDraft}
                 />
                 <SettingsButtonRow>
-                  <NativeButton variant="default" onClick={() => void handleUpdateSelectedProfile()}>
-                    <Save size={16} />
-                    Save profile
-                  </NativeButton>
-                  <NativeButton
-                    variant="destructive"
-                    onClick={() =>
-                      selectedProfile && !selectedProfile.builtin
-                        ? setPendingArchiveProfile({
-                            profileId: selectedProfile.profileId,
-                            label: selectedProfile.label,
-                          })
-                        : setNotice({ tone: "warning", message: "Select a custom permission profile to archive." })
-                    }
-                  >
-                    <Trash2 size={16} />
-                    Archive profile
+                  <NativeButton variant="default" onClick={() => void handleCreateProfile()}>
+                    <Plus size={16} />
+                    Create profile
                   </NativeButton>
                 </SettingsButtonRow>
               </NativeCard>
-            ) : null}
+            </SettingsStack>
             <NativeCard
+              id="permissions-effective"
               density="compact"
               className="mc-next-settings-panel"
-              title="Custom profile"
-              subtitle="Create a workspace-scoped profile for your own workflow."
+              title="Effective policy contexts"
+              subtitle="Chat includes conversation, agentic work, and Chat-launched Code Mode. Direct tools and MCP remain separate policy contexts."
             >
-              <PermissionProfileDraftFields
-                draft={profileDraft}
-                bypassUnavailableReason={promptSkippingProfileRestriction ?? undefined}
-                setDraft={setProfileDraft}
-              />
-              <SettingsButtonRow>
-                <NativeButton variant="default" onClick={() => void handleCreateProfile()}>
-                  <Plus size={16} />
-                  Create profile
-                </NativeButton>
-              </SettingsButtonRow>
-            </NativeCard>
-          </SettingsStack>
-          <NativeCard
-            density="compact"
-            className="mc-next-settings-panel"
-            title="Effective policy contexts"
-            subtitle="Chat includes conversation, agentic work, and Chat-launched Code Mode. Direct tools and MCP remain separate policy contexts."
-          >
-            <SettingsActionList
-              items={primaryEffectiveContexts.map((item) => ({
-                id: item.surface,
-                label: formatPermissionContextLabel(item.surface),
-                description: `${item.profileLabel ?? item.profileId ?? "Safe"}${
-                  item.approvalMode ? `, ${describeToolApprovalMode(normalizeToolApprovalMode(item.approvalMode))}` : ""
-                }${
-                  item.localOperatorOverrideId
-                    ? `, override ${item.localOperatorOverrideId} until ${formatDateTime(item.localOperatorOverride?.expiresAt)}`
-                    : ""
-                } · ${PERMISSION_CONTEXT_PRESENTATION[item.surface].description}`,
-              }))}
-              emptyLabel="No effective primary policy context returned."
-            />
-            <details className="mc-next-disclosure">
-              <summary>Legacy compatibility contexts</summary>
-              <p className="mc-next-settings-field-note">
-                These retained Cowork and Code policy keys keep stored activations and older API clients inspectable.
-                They are not separate Mission Control surfaces and do not govern current Chat.
-              </p>
               <SettingsActionList
-                items={legacyEffectiveContexts.map((item) => ({
+                items={primaryEffectiveContexts.map((item) => ({
                   id: item.surface,
                   label: formatPermissionContextLabel(item.surface),
                   description: `${item.profileLabel ?? item.profileId ?? "Safe"}${
@@ -592,146 +585,171 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
                       : ""
                   } · ${PERMISSION_CONTEXT_PRESENTATION[item.surface].description}`,
                 }))}
-                emptyLabel="No legacy compatibility context returned."
+                emptyLabel="No effective primary policy context returned."
               />
-            </details>
-          </NativeCard>
-          <NativeCard
-            density="compact"
-            className="mc-next-settings-panel"
-            title="Local Operator Override"
-            subtitle={
-              isRemoteHardened
-                ? "Remote Hardened mode keeps Local Operator Override unavailable."
-                : settingsUnavailable
-                  ? "Settings could not be loaded, so Local Operator Override stays unavailable."
-                  : "A time-boxed local action that skips normal prompts and grants broad local tool access for the selected scope. Deny rules, auth, path jails, network blocks, disabled capabilities, and Code Mode policy and artifact checks remain enforced."
-            }
-            stats={[
-              { label: "Status", value: activeOverrides.length ? `${activeOverrides.length} active` : "Inactive" },
-              {
-                label: "Next expiry",
-                value: primaryActiveOverride ? formatDateTime(primaryActiveOverride.expiresAt) : "-",
-              },
-            ]}
-          >
-            {activeOverrides.length ? (
-              <SettingsActionList
-                items={activeOverrides.map((override) => ({
-                  label: override.overrideId,
-                  description: `${override.reason} · started by ${override.createdBy} · operator ${override.operatorId}`,
-                  meta: `${override.scope}${override.scopeRef ? ` · ${override.scopeRef}` : ""} · expires ${formatDateTime(override.expiresAt)}`,
-                  onClick: () => void handleRevokeOverride(override.overrideId),
-                  actionLabel: "End",
-                }))}
-                emptyLabel="No active override evidence."
-              />
-            ) : null}
-            <SettingsField label="Reason">
-              <textarea
-                className="mc-next-settings-input"
-                value={overrideDraft.reason}
-                onChange={(event) => setOverrideDraft((current) => ({ ...current, reason: event.target.value }))}
-                rows={4}
-                placeholder="Why this local run needs temporary fast-path execution"
-              />
-            </SettingsField>
-            <SettingsField label="Scope">
-              <select
-                className="mc-next-settings-input"
-                value={overrideDraft.scope}
-                onChange={(event) =>
-                  setOverrideDraft((current) => {
-                    const scope = event.target.value as LocalOperatorOverrideScope;
-                    return {
-                      ...current,
-                      scope,
-                      scopeRef: resetLocalOperatorOverrideScopeRefForScope(scope, activeWorkspaceId),
-                    };
-                  })
-                }
-              >
-                {LOCAL_OPERATOR_OVERRIDE_SCOPE_OPTIONS.map((scope) => (
-                  <option key={scope} value={scope}>
-                    {labelForLocalOperatorOverrideScope(scope)}
-                  </option>
-                ))}
-              </select>
-            </SettingsField>
-            {overrideDraft.scope !== "operator" ? (
-              <SettingsField label={overrideDraft.scope === "workspace" ? "Workspace" : "Target id"}>
-                <input
+              <details className="mc-next-disclosure">
+                <summary>Legacy compatibility contexts</summary>
+                <p className="mc-next-settings-field-note">
+                  These retained Cowork and Code policy keys keep stored activations and older API clients inspectable.
+                  They are not separate Mission Control surfaces and do not govern current Chat.
+                </p>
+                <SettingsActionList
+                  items={legacyEffectiveContexts.map((item) => ({
+                    id: item.surface,
+                    label: formatPermissionContextLabel(item.surface),
+                    description: `${item.profileLabel ?? item.profileId ?? "Safe"}${
+                      item.approvalMode
+                        ? `, ${describeToolApprovalMode(normalizeToolApprovalMode(item.approvalMode))}`
+                        : ""
+                    }${
+                      item.localOperatorOverrideId
+                        ? `, override ${item.localOperatorOverrideId} until ${formatDateTime(item.localOperatorOverride?.expiresAt)}`
+                        : ""
+                    } · ${PERMISSION_CONTEXT_PRESENTATION[item.surface].description}`,
+                  }))}
+                  emptyLabel="No legacy compatibility context returned."
+                />
+              </details>
+            </NativeCard>
+            <NativeCard
+              id="permissions-override"
+              density="compact"
+              className="mc-next-settings-panel"
+              title="Local Operator Override"
+              subtitle={
+                isRemoteHardened
+                  ? "Remote Hardened mode keeps Local Operator Override unavailable."
+                  : settingsUnavailable
+                    ? "Settings could not be loaded, so Local Operator Override stays unavailable."
+                    : "A time-boxed local action that skips normal prompts and grants broad local tool access for the selected scope. Deny rules, auth, path jails, network blocks, disabled capabilities, and Code Mode policy and artifact checks remain enforced."
+              }
+              stats={[
+                { label: "Status", value: activeOverrides.length ? `${activeOverrides.length} active` : "Inactive" },
+                {
+                  label: "Next expiry",
+                  value: primaryActiveOverride ? formatDateTime(primaryActiveOverride.expiresAt) : "-",
+                },
+              ]}
+            >
+              {activeOverrides.length ? (
+                <SettingsActionList
+                  items={activeOverrides.map((override) => ({
+                    label: override.overrideId,
+                    description: `${override.reason} · started by ${override.createdBy} · operator ${override.operatorId}`,
+                    meta: `${override.scope}${override.scopeRef ? ` · ${override.scopeRef}` : ""} · expires ${formatDateTime(override.expiresAt)}`,
+                    onClick: () => void handleRevokeOverride(override.overrideId),
+                    actionLabel: "End",
+                  }))}
+                  emptyLabel="No active override evidence."
+                />
+              ) : null}
+              <SettingsField label="Reason">
+                <textarea
                   className="mc-next-settings-input"
-                  value={overrideDraft.scope === "workspace" ? activeWorkspaceId : (overrideDraft.scopeRef ?? "")}
-                  onChange={(event) => setOverrideDraft((current) => ({ ...current, scopeRef: event.target.value }))}
-                  disabled={overrideDraft.scope === "workspace"}
-                  placeholder={overrideDraft.scope === "session" ? "session id" : "run id"}
+                  value={overrideDraft.reason}
+                  onChange={(event) => setOverrideDraft((current) => ({ ...current, reason: event.target.value }))}
+                  rows={4}
+                  placeholder="Why this local run needs temporary fast-path execution"
                 />
               </SettingsField>
-            ) : null}
-            <SettingsField label="Duration">
-              <select
-                className="mc-next-settings-input"
-                value={overrideDraft.ttlSeconds}
-                onChange={(event) =>
-                  setOverrideDraft((current) => ({ ...current, ttlSeconds: Number(event.target.value) }))
-                }
-              >
-                <option value={300}>5 minutes</option>
-                <option value={600}>10 minutes</option>
-                <option value={1800}>30 minutes</option>
-                <option value={3600}>60 minutes</option>
-              </select>
-            </SettingsField>
-            <label className="mc-next-settings-check">
-              <input
-                type="checkbox"
-                checked={overrideAcknowledged}
-                onChange={(event) => setOverrideAcknowledged(event.target.checked)}
-                disabled={Boolean(localOperatorOverrideRestriction)}
+              <SettingsField label="Scope">
+                <select
+                  className="mc-next-settings-input"
+                  value={overrideDraft.scope}
+                  onChange={(event) =>
+                    setOverrideDraft((current) => {
+                      const scope = event.target.value as LocalOperatorOverrideScope;
+                      return {
+                        ...current,
+                        scope,
+                        scopeRef: resetLocalOperatorOverrideScopeRefForScope(scope, activeWorkspaceId),
+                      };
+                    })
+                  }
+                >
+                  {LOCAL_OPERATOR_OVERRIDE_SCOPE_OPTIONS.map((scope) => (
+                    <option key={scope} value={scope}>
+                      {labelForLocalOperatorOverrideScope(scope)}
+                    </option>
+                  ))}
+                </select>
+              </SettingsField>
+              {overrideDraft.scope !== "operator" ? (
+                <SettingsField label={overrideDraft.scope === "workspace" ? "Workspace" : "Target id"}>
+                  <input
+                    className="mc-next-settings-input"
+                    value={overrideDraft.scope === "workspace" ? activeWorkspaceId : (overrideDraft.scopeRef ?? "")}
+                    onChange={(event) => setOverrideDraft((current) => ({ ...current, scopeRef: event.target.value }))}
+                    disabled={overrideDraft.scope === "workspace"}
+                    placeholder={overrideDraft.scope === "session" ? "session id" : "run id"}
+                  />
+                </SettingsField>
+              ) : null}
+              <SettingsField label="Duration">
+                <select
+                  className="mc-next-settings-input"
+                  value={overrideDraft.ttlSeconds}
+                  onChange={(event) =>
+                    setOverrideDraft((current) => ({ ...current, ttlSeconds: Number(event.target.value) }))
+                  }
+                >
+                  <option value={300}>5 minutes</option>
+                  <option value={600}>10 minutes</option>
+                  <option value={1800}>30 minutes</option>
+                  <option value={3600}>60 minutes</option>
+                </select>
+              </SettingsField>
+              <label className="mc-next-settings-check">
+                <input
+                  type="checkbox"
+                  checked={overrideAcknowledged}
+                  onChange={(event) => setOverrideAcknowledged(event.target.checked)}
+                  disabled={Boolean(localOperatorOverrideRestriction)}
+                />
+                <span>
+                  I understand this grants broad local tool access and skips normal prompts for the selected scope. Deny
+                  rules, auth, path, network, disabled-capability, Code Mode policy, and artifact checks still apply.
+                </span>
+              </label>
+              <SettingsButtonRow>
+                <NativeButton
+                  variant="destructive"
+                  disabled={Boolean(localOperatorOverrideRestriction) || !overrideAcknowledged}
+                  onClick={() => void handleStartOverride()}
+                >
+                  <AlertTriangle size={16} />
+                  Start temporary override
+                </NativeButton>
+              </SettingsButtonRow>
+            </NativeCard>
+            <NativeDisclosureCard
+              id="permissions-autonomy"
+              title="Autonomous activation grants"
+              subtitle="Expiring operator grants that may permit agentic activation after policy, auth, path, provenance, and health checks still pass."
+              defaultOpen={Boolean(
+                data.autonomyGrants?.some((grant) => ["active", "pending", "degraded"].includes(grant.status)),
+              )}
+            >
+              <p className="mc-next-settings-field-note">
+                {activeAutonomyGrants.length} active of {data.autonomyGrants?.length ?? 0} recorded grants.
+              </p>
+              <SettingsActionList
+                items={(data.autonomyGrants ?? []).map((grant) => ({
+                  label: grant.grantId,
+                  description: `${grant.workspaceId} · ${formatPermissionContextList(grant.surfaces)} · ${grant.activationKinds.join(", ")} · ${grant.reason}`,
+                  meta: `${grant.status} · max ${grant.maxRiskLevel} · ${grant.usedActivations}/${grant.maxActivations ?? "unlimited"} used · expires ${formatDateTime(grant.expiresAt)}${
+                    hasLegacyOnlyPermissionContexts(grant.surfaces)
+                      ? " · Compatibility warning: this legacy-only grant does not govern current Chat; reissue it for Chat or All policy contexts if intended."
+                      : ""
+                  }`,
+                  onClick: grant.status === "active" ? () => setPendingRevokeGrantId(grant.grantId) : undefined,
+                  actionLabel: grant.status === "active" ? "Revoke" : undefined,
+                }))}
+                emptyLabel="No autonomous activation grants recorded."
               />
-              <span>
-                I understand this grants broad local tool access and skips normal prompts for the selected scope. Deny
-                rules, auth, path, network, disabled-capability, Code Mode policy, and artifact checks still apply.
-              </span>
-            </label>
-            <SettingsButtonRow>
-              <NativeButton
-                variant="destructive"
-                disabled={Boolean(localOperatorOverrideRestriction) || !overrideAcknowledged}
-                onClick={() => void handleStartOverride()}
-              >
-                <AlertTriangle size={16} />
-                Start temporary override
-              </NativeButton>
-            </SettingsButtonRow>
-          </NativeCard>
-          <NativeCard
-            density="compact"
-            className="mc-next-settings-panel"
-            title="Autonomous activation grants"
-            subtitle="Expiring operator grants that may permit agentic activation after policy, auth, path, provenance, and health checks still pass."
-            stats={[
-              { label: "Active", value: String(activeAutonomyGrants.length) },
-              { label: "Total", value: String(data.autonomyGrants?.length ?? 0) },
-            ]}
-          >
-            <SettingsActionList
-              items={(data.autonomyGrants ?? []).map((grant) => ({
-                label: grant.grantId,
-                description: `${grant.workspaceId} · ${formatPermissionContextList(grant.surfaces)} · ${grant.activationKinds.join(", ")} · ${grant.reason}`,
-                meta: `${grant.status} · max ${grant.maxRiskLevel} · ${grant.usedActivations}/${grant.maxActivations ?? "unlimited"} used · expires ${formatDateTime(grant.expiresAt)}${
-                  hasLegacyOnlyPermissionContexts(grant.surfaces)
-                    ? " · Compatibility warning: this legacy-only grant does not govern current Chat; reissue it for Chat or All policy contexts if intended."
-                    : ""
-                }`,
-                onClick: grant.status === "active" ? () => setPendingRevokeGrantId(grant.grantId) : undefined,
-                actionLabel: grant.status === "active" ? "Revoke" : undefined,
-              }))}
-              emptyLabel="No autonomous activation grants recorded."
-            />
-          </NativeCard>
-        </SettingsGrid>
+            </NativeDisclosureCard>
+          </SettingsGrid>
+        </>
       ) : null}
       <ConfirmModal
         open={pendingArchiveProfile !== null}

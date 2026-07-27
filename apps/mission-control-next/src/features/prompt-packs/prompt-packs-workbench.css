@@ -665,6 +665,18 @@
   flex-wrap: wrap;
 }
 
+.mc-pp-filter-scroller {
+  min-width: 0;
+}
+
+.mc-pp-filter-hint {
+  display: none;
+  margin-top: 0.2rem;
+  color: var(--text-muted);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+}
+
 .mc-pp-filter-chip {
   display: inline-flex;
   align-items: center;
@@ -694,6 +706,11 @@
   border-color: color-mix(in oklab, var(--mc-area-color) 34%, var(--border));
   background: color-mix(in oklab, var(--mc-area-color) 12%, var(--card));
   color: var(--foreground);
+}
+
+.mc-pp-filter-chip:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 
 .mc-pp-test-row {
@@ -1186,6 +1203,15 @@
     padding-inline-end: var(--mc-scrollbar-safe-gutter);
     padding-bottom: 0.2rem;
     scrollbar-gutter: stable;
+  }
+
+  .mc-pp-filter-scroller .mc-pp-filter-row {
+    -webkit-mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 2rem), transparent 100%);
+    mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 2rem), transparent 100%);
+  }
+
+  .mc-pp-filter-hint {
+    display: block;
   }
 
   .mc-pp-review-row {

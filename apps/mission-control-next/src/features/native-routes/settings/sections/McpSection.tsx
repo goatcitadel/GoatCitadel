@@ -45,7 +45,7 @@ import {
   useAsyncLoad,
 } from "../SettingsShared";
 import { DiagnosticsPanel } from "./DiagnosticsPanel";
-import { NativeCard } from "../../NativeRoutePageLayout";
+import { NativeCard, NativeDisclosureCard, NativeSectionIndex } from "../../NativeRoutePageLayout";
 import { NativeButton, NativeMetricGrid, NativeSelectableList } from "../../primitives";
 import { useDraftTransitionGuard, useFormDirty } from "../../library/use-form-dirty";
 import {
@@ -286,383 +286,82 @@ export function McpSection(_props: SettingsSectionProps) {
     <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
       {notice ? <SettingsNotice notice={notice} /> : null}
       {data ? (
-        <SettingsGrid variant="detail-wide">
-          <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
-          <SettingsStack>
-            <NativeCard
-              density="compact"
-              className="mc-next-settings-panel"
-              title="MCP servers"
-              subtitle="Connected and disconnected MCP servers available to the operator."
-              scrollBody
-              bodyMaxHeight="min(48vh, 28rem)"
-              stats={[
-                { label: "Servers", value: String(data.servers?.length ?? 0) },
-                { label: "Templates", value: String(data.templates?.length ?? 0) },
-                { label: "Pending prompts", value: String(data.pendingElicitations?.length ?? 0) },
-              ]}
-            >
-              <NativeSelectableList
-                items={(data.servers ?? []).map((item) => ({
-                  id: item.serverId,
-                  title: item.label,
-                  meta: item.status,
-                  body: `${item.transport} · ${item.enabled ? "enabled" : "disabled"}`,
-                }))}
-                selectedId={selectedServerId}
-                onSelect={(serverId) => {
-                  if (serverId === selectedServerId) {
-                    return;
-                  }
-                  serverSelectionGuard.requestTransition(serverId);
-                }}
-                emptyLabel="No MCP servers configured."
-                maxHeight="min(38vh, 22rem)"
-              />
-            </NativeCard>
-            <NativeCard
-              density="compact"
-              className="mc-next-settings-panel"
-              title="Create MCP server"
-              subtitle="Set up a local stdio MCP server or use a runtime-supported template."
-            >
-              <SettingsFieldGrid>
-                <SettingsField label="Label">
-                  <input
-                    className="mc-next-settings-input"
-                    value={createForm.label}
-                    onChange={(event) => setCreateForm((current) => ({ ...current, label: event.target.value }))}
-                  />
-                </SettingsField>
-                <SettingsField label="Transport">
-                  <input className="mc-next-settings-input" value={createForm.transport} readOnly />
-                </SettingsField>
-                {createForm.transport === "stdio" ? (
-                  <SettingsField label="Command" span={2}>
-                    <input
-                      className="mc-next-settings-input"
-                      value={createForm.command}
-                      onChange={(event) => setCreateForm((current) => ({ ...current, command: event.target.value }))}
-                    />
-                  </SettingsField>
-                ) : (
-                  <SettingsField label="URL" span={2}>
-                    <input
-                      className="mc-next-settings-input"
-                      value={createForm.url}
-                      onChange={(event) => setCreateForm((current) => ({ ...current, url: event.target.value }))}
-                    />
-                  </SettingsField>
-                )}
-                <SettingsField label="Enabled" group>
-                  <label className="mc-next-settings-toggle">
-                    <input
-                      type="checkbox"
-                      checked={createForm.enabled}
-                      disabled={!isRuntimeInvokableMcpServer(createForm)}
-                      onChange={(event) => setCreateForm((current) => ({ ...current, enabled: event.target.checked }))}
-                    />
-                    <span>
-                      {isRuntimeInvokableMcpServer(createForm)
-                        ? "Enable immediately after create"
-                        : "Configured only until supported auth and URL are present"}
-                    </span>
-                  </label>
-                </SettingsField>
-              </SettingsFieldGrid>
-              <SettingsNotice
-                notice={{
-                  tone: "info",
-                  message:
-                    "Runtime invocation supports local stdio, the built-in Approval Inbox, and governed remote http/sse servers with no auth, explicit token env-key policy, or connected OAuth token state.",
-                }}
-              />
-              <SettingsButtonRow>
-                <NativeButton variant="default" onClick={() => void handleCreate()}>
-                  <Plus size={16} />
-                  Create MCP server
-                </NativeButton>
-              </SettingsButtonRow>
-              {data.templates?.length ? (
-                <SettingsActionList
-                  items={data.templates.slice(0, 6).map((item) => ({
-                    label: item.label,
-                    description: item.description,
-                    meta: item.installed
-                      ? "installed"
-                      : isRuntimeInvokableMcpServer(item)
-                        ? item.transport
-                        : "configured only",
-                    onClick: () =>
-                      setCreateForm({
-                        label: item.label,
-                        transport: item.transport,
-                        command: item.command ?? "",
-                        url: item.url ?? "",
-                        authType: item.authType,
-                        oauth: item.oauth,
-                        enabled: item.enabledByDefault,
-                      }),
-                    actionLabel: "Use",
+        <>
+          <NativeSectionIndex
+            items={[
+              { id: "mcp-servers", label: "Servers" },
+              { id: "mcp-create", label: "Create" },
+              { id: "mcp-inbox", label: "Inbox" },
+              { id: "mcp-detail", label: "Selected server" },
+              { id: "mcp-previews", label: "Previews" },
+            ]}
+          />
+          <SettingsGrid variant="detail-wide">
+            <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
+            <SettingsStack>
+              <NativeCard
+                id="mcp-servers"
+                density="compact"
+                className="mc-next-settings-panel"
+                title="MCP servers"
+                subtitle="Connected and disconnected MCP servers available to the operator."
+                scrollBody
+                bodyMaxHeight="min(48vh, 28rem)"
+                stats={[
+                  { label: "Servers", value: String(data.servers?.length ?? 0) },
+                  { label: "Templates", value: String(data.templates?.length ?? 0) },
+                  { label: "Pending prompts", value: String(data.pendingElicitations?.length ?? 0) },
+                ]}
+              >
+                <NativeSelectableList
+                  items={(data.servers ?? []).map((item) => ({
+                    id: item.serverId,
+                    title: item.label,
+                    meta: item.status,
+                    body: `${item.transport} · ${item.enabled ? "enabled" : "disabled"}`,
                   }))}
+                  selectedId={selectedServerId}
+                  onSelect={(serverId) => {
+                    if (serverId === selectedServerId) {
+                      return;
+                    }
+                    serverSelectionGuard.requestTransition(serverId);
+                  }}
+                  emptyLabel="No MCP servers configured."
+                  maxHeight="min(38vh, 22rem)"
                 />
-              ) : null}
-            </NativeCard>
-            <NativeCard
-              density="compact"
-              className="mc-next-settings-panel"
-              title="MCP elicitation inbox"
-              subtitle="Pending operator prompts requested through the Gateway-owned MCP elicitation route."
-              scrollBody
-              bodyMaxHeight="min(44vh, 26rem)"
-            >
-              <NativeMetricGrid
-                items={[
-                  {
-                    label: "Pending",
-                    value: String(data.pendingElicitations?.length ?? 0),
-                    meta: "operator responses",
-                  },
-                  {
-                    label: "Boundary",
-                    value: "Gateway",
-                    meta: "policy and audit enforced",
-                  },
-                ]}
-              />
-              {data.pendingElicitations?.length ? (
-                <div className="mc-next-settings-stack">
-                  {data.pendingElicitations.map((item) => (
-                    <div className="mc-next-settings-panel-body" key={item.elicitationId}>
-                      <NativeMetricGrid
-                        items={[
-                          { label: "Status", value: item.status, meta: item.elicitationId },
-                          { label: "Source", value: item.source.sourceType, meta: item.source.serverId ?? "gateway" },
-                          {
-                            label: "Prompt",
-                            value: `${item.prompt.charLength}/${item.prompt.maxChars}`,
-                            meta: item.prompt.truncated ? "truncated" : "bounded",
-                          },
-                          {
-                            label: "Schema",
-                            value: `${item.requestedSchema.byteLength}/${item.requestedSchema.maxBytes}`,
-                            meta:
-                              item.requestedSchema.redactedSecretCount > 0
-                                ? `${item.requestedSchema.redactedSecretCount} redacted`
-                                : "bounded",
-                          },
-                        ]}
-                      />
-                      <SettingsActionList
-                        items={[
-                          {
-                            label: item.prompt.text,
-                            description: formatMcpElicitationMeta(item),
-                            meta: item.audit.auditEventIds.at(-1) ?? item.createdAt,
-                          },
-                        ]}
-                      />
-                      <SettingsCodeBlock label="Requested response schema">
-                        {formatJson(item.requestedSchema.value)}
-                      </SettingsCodeBlock>
-                      <SettingsField label="Accept response JSON">
-                        <textarea
-                          className="mc-next-settings-textarea"
-                          rows={4}
-                          value={elicitationDrafts[item.elicitationId] ?? "{}"}
-                          onChange={(event) =>
-                            setElicitationDrafts((current) => ({
-                              ...current,
-                              [item.elicitationId]: event.target.value,
-                            }))
-                          }
-                        />
-                      </SettingsField>
-                      <SettingsButtonRow>
-                        <NativeButton variant="default" onClick={() => void handleElicitationResponse(item, "accept")}>
-                          <CheckCircle2 size={16} />
-                          Accept
-                        </NativeButton>
-                        <NativeButton
-                          variant="secondary"
-                          onClick={() => void handleElicitationResponse(item, "decline")}
-                        >
-                          <Square size={16} />
-                          Decline
-                        </NativeButton>
-                        <NativeButton
-                          variant="secondary"
-                          onClick={() => void handleElicitationResponse(item, "cancel")}
-                        >
-                          <RotateCcw size={16} />
-                          Cancel
-                        </NativeButton>
-                      </SettingsButtonRow>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <SettingsEmptyState label="No pending MCP elicitations." />
-              )}
-            </NativeCard>
-            <NativeCard
-              density="compact"
-              className="mc-next-settings-panel"
-              title="Server mode preview"
-              subtitle="Operator-authenticated export posture for agents that may call GoatCitadel in the future."
-            >
-              <NativeMetricGrid
-                items={[
-                  {
-                    label: "Runtime",
-                    value: data.serverMode.runtimeSupport?.replaceAll("_", " ") ?? "unknown",
-                    meta: data.serverMode.status,
-                  },
-                  {
-                    label: "Descriptors",
-                    value: String(data.serverMode.summary?.exportedToolDescriptors ?? 0),
-                    meta: `${data.serverMode.summary?.blockedDescriptors ?? 0} blocked`,
-                  },
-                  {
-                    label: "Call preview",
-                    value: data.serverMode.runtime?.callPreview?.supported ? "available" : "not available",
-                    meta: data.serverMode.runtime?.callPreview?.readOnlyOnly ? "read-only only" : "not scoped",
-                  },
-                ]}
-              />
-              <SettingsNotice
-                notice={{
-                  tone: data.serverMode.runtime?.callPreview?.supported ? "success" : "info",
-                  message: data.serverMode.runtime?.callPreview?.supported
-                    ? "Read-only, closed-world descriptors can re-enter Gateway policy through the server-mode stdio proxy or HTTP call preview."
-                    : "The MCP stdio proxy can expose the manifest, but tools/call remains unavailable until Gateway tool invocation services are present.",
-                }}
-              />
-              <SettingsActionList
-                items={(data.serverMode.tools ?? []).slice(0, 8).map((item) => ({
-                  label: item.name,
-                  meta: `${item.serverModeState.replaceAll("_", " ")} · ${item.capabilityKind}`,
-                  description: `${item.title} · ${item.blockers[0] ?? item.governance[0] ?? "No blocker recorded."}`,
-                }))}
-                emptyLabel="No callable capability descriptors are exported."
-              />
-            </NativeCard>
-            <NativeCard
-              density="compact"
-              className="mc-next-settings-panel"
-              title="Remote MCP preview"
-              subtitle="Read-only posture for http/sse MCP records, runtime support, auth, trust, and invocation state."
-            >
-              <NativeMetricGrid
-                items={[
-                  {
-                    label: "Remote servers",
-                    value: String(data.remotePreview.summary?.remoteServers ?? 0),
-                    meta: "configured records",
-                  },
-                  {
-                    label: "Remote templates",
-                    value: String(data.remotePreview.summary?.remoteTemplates ?? 0),
-                    meta: "catalog entries",
-                  },
-                  {
-                    label: "Callable",
-                    value: String(data.remotePreview.summary?.runtimeSupported ?? 0),
-                    meta: data.remotePreview.runtimeSupport?.replaceAll("_", " ") ?? "unknown",
-                  },
-                  {
-                    label: "Blocked",
-                    value: String(data.remotePreview.summary?.blocked ?? 0),
-                    meta: data.remotePreview.experimentalRemoteRecordsAllowed ? "experimental records" : "default",
-                  },
-                  {
-                    label: "Not callable",
-                    value: String(data.remotePreview.summary?.notCallable ?? 0),
-                    meta: `${data.remotePreview.summary?.quarantined ?? 0} quarantined`,
-                  },
-                  {
-                    label: "Needs auth",
-                    value: String(data.remotePreview.summary?.needsAuth ?? 0),
-                    meta: `${data.remotePreview.summary?.experimentalRecords ?? 0} experimental`,
-                  },
-                ]}
-              />
-              <SettingsNotice
-                notice={{
-                  tone: "info",
-                  message:
-                    "Remote http/sse MCP can invoke through the governed Gateway bridge when auth is supported and resolved. OAuth servers show needs-auth until Gateway has a connected token.",
-                }}
-              />
-              <SettingsActionList
-                items={(data.remotePreview.items ?? []).map((item) => ({
-                  label: item.label,
-                  meta: [
-                    item.source,
-                    item.transport,
-                    item.invocationState.replaceAll("_", " "),
-                    item.transportRuntimeSupported ? "transport supported" : "no runtime bridge",
-                  ].join(" · "),
-                  description: formatMcpRemotePreviewItem(item),
-                  actionLabel: item.runtimeSupported ? "Runtime path" : "Preview only",
-                }))}
-                emptyLabel="No remote MCP records or templates are visible."
-              />
-            </NativeCard>
-          </SettingsStack>
-          <NativeCard
-            density="compact"
-            className="mc-next-settings-panel"
-            title={selectedServer?.label ?? "Server detail"}
-            subtitle="Edit, connect, diagnose, or delete the selected MCP server."
-            scrollBody
-            bodyMaxHeight="min(72vh, 42rem)"
-          >
-            {selectedServer ? (
-              <>
+              </NativeCard>
+              <NativeDisclosureCard
+                id="mcp-create"
+                title="Create MCP server"
+                subtitle="Set up a local stdio MCP server or use a runtime-supported template."
+                defaultOpen={(data.servers?.length ?? 0) === 0}
+              >
                 <SettingsFieldGrid>
                   <SettingsField label="Label">
                     <input
                       className="mc-next-settings-input"
-                      value={editForm.label}
-                      onChange={(event) => setEditForm((current) => ({ ...current, label: event.target.value }))}
+                      value={createForm.label}
+                      onChange={(event) => setCreateForm((current) => ({ ...current, label: event.target.value }))}
                     />
                   </SettingsField>
-                  <SettingsField label="Category">
-                    <select
-                      className="mc-next-settings-input"
-                      value={editForm.category}
-                      onChange={(event) =>
-                        setEditForm((current) => ({
-                          ...current,
-                          category: event.target.value as McpServerRecord["category"],
-                        }))
-                      }
-                    >
-                      <option value="development">development</option>
-                      <option value="browser">browser</option>
-                      <option value="automation">automation</option>
-                      <option value="research">research</option>
-                      <option value="data">data</option>
-                      <option value="creative">creative</option>
-                      <option value="orchestration">orchestration</option>
-                      <option value="other">other</option>
-                    </select>
+                  <SettingsField label="Transport">
+                    <input className="mc-next-settings-input" value={createForm.transport} readOnly />
                   </SettingsField>
-                  {selectedServer.transport === "stdio" ? (
+                  {createForm.transport === "stdio" ? (
                     <SettingsField label="Command" span={2}>
                       <input
                         className="mc-next-settings-input"
-                        value={editForm.command}
-                        onChange={(event) => setEditForm((current) => ({ ...current, command: event.target.value }))}
+                        value={createForm.command}
+                        onChange={(event) => setCreateForm((current) => ({ ...current, command: event.target.value }))}
                       />
                     </SettingsField>
                   ) : (
                     <SettingsField label="URL" span={2}>
                       <input
                         className="mc-next-settings-input"
-                        value={editForm.url}
-                        onChange={(event) => setEditForm((current) => ({ ...current, url: event.target.value }))}
+                        value={createForm.url}
+                        onChange={(event) => setCreateForm((current) => ({ ...current, url: event.target.value }))}
                       />
                     </SettingsField>
                   )}
@@ -670,143 +369,460 @@ export function McpSection(_props: SettingsSectionProps) {
                     <label className="mc-next-settings-toggle">
                       <input
                         type="checkbox"
-                        checked={editForm.enabled}
-                        disabled={!selectedServerRuntimeReady}
-                        onChange={(event) => setEditForm((current) => ({ ...current, enabled: event.target.checked }))}
+                        checked={createForm.enabled}
+                        disabled={!isRuntimeInvokableMcpServer(createForm)}
+                        onChange={(event) =>
+                          setCreateForm((current) => ({ ...current, enabled: event.target.checked }))
+                        }
                       />
                       <span>
-                        {selectedServerRuntimeReady
-                          ? "Server can be used by the operator."
-                          : "Configured only; runtime actions are disabled."}
+                        {isRuntimeInvokableMcpServer(createForm)
+                          ? "Enable immediately after create"
+                          : "Configured only until supported auth and URL are present"}
                       </span>
                     </label>
                   </SettingsField>
                 </SettingsFieldGrid>
-                {!selectedServerRuntimeReady ? (
-                  <SettingsNotice
-                    notice={{
-                      tone: "warning",
-                      message: selectedRemotePreviewItem
-                        ? `${selectedRemotePreviewItem.operatorNextAction} ${selectedRemotePreviewItem.blockers[0] ?? ""}`.trim()
-                        : "This MCP server is configured for visibility only until its transport, URL, auth, and trust posture are runtime-supported.",
-                    }}
+                <SettingsNotice
+                  notice={{
+                    tone: "info",
+                    message:
+                      "Runtime invocation supports local stdio, the built-in Approval Inbox, and governed remote http/sse servers with no auth, explicit token env-key policy, or connected OAuth token state.",
+                  }}
+                />
+                <SettingsButtonRow>
+                  <NativeButton variant="default" onClick={() => void handleCreate()}>
+                    <Plus size={16} />
+                    Create MCP server
+                  </NativeButton>
+                </SettingsButtonRow>
+                {data.templates?.length ? (
+                  <SettingsActionList
+                    items={data.templates.slice(0, 6).map((item) => ({
+                      label: item.label,
+                      description: item.description,
+                      meta: item.installed
+                        ? "installed"
+                        : isRuntimeInvokableMcpServer(item)
+                          ? item.transport
+                          : "configured only",
+                      onClick: () =>
+                        setCreateForm({
+                          label: item.label,
+                          transport: item.transport,
+                          command: item.command ?? "",
+                          url: item.url ?? "",
+                          authType: item.authType,
+                          oauth: item.oauth,
+                          enabled: item.enabledByDefault,
+                        }),
+                      actionLabel: "Use",
+                    }))}
                   />
                 ) : null}
+              </NativeDisclosureCard>
+              <NativeDisclosureCard
+                id="mcp-inbox"
+                title="MCP elicitation inbox"
+                subtitle="Pending operator prompts requested through the Gateway-owned MCP elicitation route."
+                defaultOpen={Boolean(data.pendingElicitations?.length)}
+              >
                 <NativeMetricGrid
                   items={[
-                    { label: "Transport", value: selectedServer.transport, meta: selectedServer.authType },
                     {
-                      label: "Auth readiness",
-                      value:
-                        selectedRemotePreviewItem?.authReadiness ??
-                        selectedServer.authState?.readiness ??
-                        "not_required",
-                      meta: selectedServer.authState?.tokenExpiresAt
-                        ? `Expires ${formatDateTime(selectedServer.authState.tokenExpiresAt)}`
-                        : selectedServer.oauth?.tokenUrl
-                          ? "OAuth metadata configured"
-                          : "No OAuth token metadata",
+                      label: "Pending",
+                      value: String(data.pendingElicitations?.length ?? 0),
+                      meta: "operator responses",
                     },
                     {
-                      label: "Status",
-                      value: selectedServer.status,
-                      meta: selectedServer.lastError || "No recent error",
-                    },
-                    {
-                      label: "Invocation",
-                      value: selectedRemotePreviewItem
-                        ? (selectedRemotePreviewItem.invocationState?.replaceAll("_", " ") ?? "unknown")
-                        : selectedServerRuntimeReady
-                          ? "runtime invokable"
-                          : "not callable",
-                      meta: selectedRemotePreviewItem?.runtimePath?.replaceAll("_", " ") ?? "local stdio",
+                      label: "Boundary",
+                      value: "Gateway",
+                      meta: "policy and audit enforced",
                     },
                   ]}
                 />
-                <SettingsButtonRow>
-                  <NativeButton variant="default" onClick={() => void handleSave()}>
-                    <Save size={16} />
-                    Save changes
-                  </NativeButton>
-                  <NativeButton
-                    variant="secondary"
-                    onClick={() =>
-                      void runServerAction(async () => {
-                        const flow = await startMcpOAuth(selectedServer.serverId);
-                        window.open(flow.authorizeUrl, "_blank", "noopener,noreferrer");
-                      }, "MCP OAuth authorization opened.")
-                    }
-                    disabled={
-                      selectedServer.authType !== "oauth2" ||
-                      !selectedServer.oauth?.authorizationUrl ||
-                      !selectedServer.oauth.tokenUrl
-                    }
-                  >
-                    <KeyRound size={16} />
-                    OAuth
-                  </NativeButton>
-                  <NativeButton
-                    variant="secondary"
-                    onClick={() =>
-                      void runServerAction(
-                        () => connectMcpServer(selectedServer.serverId),
-                        "MCP server connect requested.",
-                      )
-                    }
-                    disabled={!selectedServerRuntimeReady}
-                  >
-                    <Plug2 size={16} />
-                    Connect
-                  </NativeButton>
-                  <NativeButton
-                    variant="secondary"
-                    onClick={() =>
-                      void runServerAction(
-                        () => disconnectMcpServer(selectedServer.serverId),
-                        "MCP server disconnect requested.",
-                      )
-                    }
-                  >
-                    <Square size={16} />
-                    Disconnect
-                  </NativeButton>
-                  <NativeButton
-                    variant="secondary"
-                    onClick={() =>
-                      void runServerAction(
-                        async () => setHealthReport(await runMcpServerHealthCheck(selectedServer.serverId)),
-                        "MCP health check complete.",
-                      )
-                    }
-                    disabled={!selectedServerRuntimeReady}
-                  >
-                    <RefreshCw size={16} />
-                    Health check
-                  </NativeButton>
-                  <NativeButton
-                    variant="destructive"
-                    onClick={() =>
-                      setPendingDeleteServer({ serverId: selectedServer.serverId, label: selectedServer.label })
-                    }
-                  >
-                    <Trash2 size={16} />
-                    Delete
-                  </NativeButton>
-                </SettingsButtonRow>
-                <SettingsActionList
-                  items={tools.map((item) => ({
-                    label: item.toolName,
-                    description: item.description || "Registered MCP tool",
-                  }))}
-                  emptyLabel="No tools reported for this server."
+                {data.pendingElicitations?.length ? (
+                  <div className="mc-next-settings-stack">
+                    {data.pendingElicitations.map((item) => (
+                      <div className="mc-next-settings-panel-body" key={item.elicitationId}>
+                        <NativeMetricGrid
+                          items={[
+                            { label: "Status", value: item.status, meta: item.elicitationId },
+                            { label: "Source", value: item.source.sourceType, meta: item.source.serverId ?? "gateway" },
+                            {
+                              label: "Prompt",
+                              value: `${item.prompt.charLength}/${item.prompt.maxChars}`,
+                              meta: item.prompt.truncated ? "truncated" : "bounded",
+                            },
+                            {
+                              label: "Schema",
+                              value: `${item.requestedSchema.byteLength}/${item.requestedSchema.maxBytes}`,
+                              meta:
+                                item.requestedSchema.redactedSecretCount > 0
+                                  ? `${item.requestedSchema.redactedSecretCount} redacted`
+                                  : "bounded",
+                            },
+                          ]}
+                        />
+                        <SettingsActionList
+                          items={[
+                            {
+                              label: item.prompt.text,
+                              description: formatMcpElicitationMeta(item),
+                              meta: item.audit.auditEventIds.at(-1) ?? item.createdAt,
+                            },
+                          ]}
+                        />
+                        <SettingsCodeBlock label="Requested response schema">
+                          {formatJson(item.requestedSchema.value)}
+                        </SettingsCodeBlock>
+                        <SettingsField label="Accept response JSON">
+                          <textarea
+                            className="mc-next-settings-textarea"
+                            rows={4}
+                            value={elicitationDrafts[item.elicitationId] ?? "{}"}
+                            onChange={(event) =>
+                              setElicitationDrafts((current) => ({
+                                ...current,
+                                [item.elicitationId]: event.target.value,
+                              }))
+                            }
+                          />
+                        </SettingsField>
+                        <SettingsButtonRow>
+                          <NativeButton
+                            variant="default"
+                            onClick={() => void handleElicitationResponse(item, "accept")}
+                          >
+                            <CheckCircle2 size={16} />
+                            Accept
+                          </NativeButton>
+                          <NativeButton
+                            variant="secondary"
+                            onClick={() => void handleElicitationResponse(item, "decline")}
+                          >
+                            <Square size={16} />
+                            Decline
+                          </NativeButton>
+                          <NativeButton
+                            variant="secondary"
+                            onClick={() => void handleElicitationResponse(item, "cancel")}
+                          >
+                            <RotateCcw size={16} />
+                            Cancel
+                          </NativeButton>
+                        </SettingsButtonRow>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <SettingsEmptyState label="No pending MCP elicitations." />
+                )}
+              </NativeDisclosureCard>
+              <NativeDisclosureCard
+                id="mcp-previews"
+                title="Server mode preview"
+                subtitle="Operator-authenticated export posture for agents that may call GoatCitadel in the future."
+              >
+                <NativeMetricGrid
+                  items={[
+                    {
+                      label: "Runtime",
+                      value: data.serverMode.runtimeSupport?.replaceAll("_", " ") ?? "unknown",
+                      meta: data.serverMode.status,
+                    },
+                    {
+                      label: "Descriptors",
+                      value: String(data.serverMode.summary?.exportedToolDescriptors ?? 0),
+                      meta: `${data.serverMode.summary?.blockedDescriptors ?? 0} blocked`,
+                    },
+                    {
+                      label: "Call preview",
+                      value: data.serverMode.runtime?.callPreview?.supported ? "available" : "not available",
+                      meta: data.serverMode.runtime?.callPreview?.readOnlyOnly ? "read-only only" : "not scoped",
+                    },
+                  ]}
                 />
-                {healthReport ? <DiagnosticsPanel report={healthReport} /> : null}
-              </>
-            ) : (
-              <SettingsEmptyState label="Select a server or create a new one." />
-            )}
-          </NativeCard>
-        </SettingsGrid>
+                <SettingsNotice
+                  notice={{
+                    tone: data.serverMode.runtime?.callPreview?.supported ? "success" : "info",
+                    message: data.serverMode.runtime?.callPreview?.supported
+                      ? "Read-only, closed-world descriptors can re-enter Gateway policy through the server-mode stdio proxy or HTTP call preview."
+                      : "The MCP stdio proxy can expose the manifest, but tools/call remains unavailable until Gateway tool invocation services are present.",
+                  }}
+                />
+                <SettingsActionList
+                  items={(data.serverMode.tools ?? []).slice(0, 8).map((item) => ({
+                    label: item.name,
+                    meta: `${item.serverModeState.replaceAll("_", " ")} · ${item.capabilityKind}`,
+                    description: `${item.title} · ${item.blockers[0] ?? item.governance[0] ?? "No blocker recorded."}`,
+                  }))}
+                  emptyLabel="No callable capability descriptors are exported."
+                />
+              </NativeDisclosureCard>
+              <NativeDisclosureCard
+                id="mcp-remote-preview"
+                title="Remote MCP preview"
+                subtitle="Read-only posture for http/sse MCP records, runtime support, auth, trust, and invocation state."
+              >
+                <NativeMetricGrid
+                  items={[
+                    {
+                      label: "Remote servers",
+                      value: String(data.remotePreview.summary?.remoteServers ?? 0),
+                      meta: "configured records",
+                    },
+                    {
+                      label: "Remote templates",
+                      value: String(data.remotePreview.summary?.remoteTemplates ?? 0),
+                      meta: "catalog entries",
+                    },
+                    {
+                      label: "Callable",
+                      value: String(data.remotePreview.summary?.runtimeSupported ?? 0),
+                      meta: data.remotePreview.runtimeSupport?.replaceAll("_", " ") ?? "unknown",
+                    },
+                    {
+                      label: "Blocked",
+                      value: String(data.remotePreview.summary?.blocked ?? 0),
+                      meta: data.remotePreview.experimentalRemoteRecordsAllowed ? "experimental records" : "default",
+                    },
+                    {
+                      label: "Not callable",
+                      value: String(data.remotePreview.summary?.notCallable ?? 0),
+                      meta: `${data.remotePreview.summary?.quarantined ?? 0} quarantined`,
+                    },
+                    {
+                      label: "Needs auth",
+                      value: String(data.remotePreview.summary?.needsAuth ?? 0),
+                      meta: `${data.remotePreview.summary?.experimentalRecords ?? 0} experimental`,
+                    },
+                  ]}
+                />
+                <SettingsNotice
+                  notice={{
+                    tone: "info",
+                    message:
+                      "Remote http/sse MCP can invoke through the governed Gateway bridge when auth is supported and resolved. OAuth servers show needs-auth until Gateway has a connected token.",
+                  }}
+                />
+                <SettingsActionList
+                  items={(data.remotePreview.items ?? []).map((item) => ({
+                    label: item.label,
+                    meta: [
+                      item.source,
+                      item.transport,
+                      item.invocationState.replaceAll("_", " "),
+                      item.transportRuntimeSupported ? "transport supported" : "no runtime bridge",
+                    ].join(" · "),
+                    description: formatMcpRemotePreviewItem(item),
+                    actionLabel: item.runtimeSupported ? "Runtime path" : "Preview only",
+                  }))}
+                  emptyLabel="No remote MCP records or templates are visible."
+                />
+              </NativeDisclosureCard>
+            </SettingsStack>
+            <NativeCard
+              id="mcp-detail"
+              density="compact"
+              className="mc-next-settings-panel"
+              title={selectedServer?.label ?? "Server detail"}
+              subtitle="Edit, connect, diagnose, or delete the selected MCP server."
+              scrollBody
+              bodyMaxHeight="min(72vh, 42rem)"
+            >
+              {selectedServer ? (
+                <>
+                  <SettingsFieldGrid>
+                    <SettingsField label="Label">
+                      <input
+                        className="mc-next-settings-input"
+                        value={editForm.label}
+                        onChange={(event) => setEditForm((current) => ({ ...current, label: event.target.value }))}
+                      />
+                    </SettingsField>
+                    <SettingsField label="Category">
+                      <select
+                        className="mc-next-settings-input"
+                        value={editForm.category}
+                        onChange={(event) =>
+                          setEditForm((current) => ({
+                            ...current,
+                            category: event.target.value as McpServerRecord["category"],
+                          }))
+                        }
+                      >
+                        <option value="development">development</option>
+                        <option value="browser">browser</option>
+                        <option value="automation">automation</option>
+                        <option value="research">research</option>
+                        <option value="data">data</option>
+                        <option value="creative">creative</option>
+                        <option value="orchestration">orchestration</option>
+                        <option value="other">other</option>
+                      </select>
+                    </SettingsField>
+                    {selectedServer.transport === "stdio" ? (
+                      <SettingsField label="Command" span={2}>
+                        <input
+                          className="mc-next-settings-input"
+                          value={editForm.command}
+                          onChange={(event) => setEditForm((current) => ({ ...current, command: event.target.value }))}
+                        />
+                      </SettingsField>
+                    ) : (
+                      <SettingsField label="URL" span={2}>
+                        <input
+                          className="mc-next-settings-input"
+                          value={editForm.url}
+                          onChange={(event) => setEditForm((current) => ({ ...current, url: event.target.value }))}
+                        />
+                      </SettingsField>
+                    )}
+                    <SettingsField label="Enabled" group>
+                      <label className="mc-next-settings-toggle">
+                        <input
+                          type="checkbox"
+                          checked={editForm.enabled}
+                          disabled={!selectedServerRuntimeReady}
+                          onChange={(event) =>
+                            setEditForm((current) => ({ ...current, enabled: event.target.checked }))
+                          }
+                        />
+                        <span>
+                          {selectedServerRuntimeReady
+                            ? "Server can be used by the operator."
+                            : "Configured only; runtime actions are disabled."}
+                        </span>
+                      </label>
+                    </SettingsField>
+                  </SettingsFieldGrid>
+                  {!selectedServerRuntimeReady ? (
+                    <SettingsNotice
+                      notice={{
+                        tone: "warning",
+                        message: selectedRemotePreviewItem
+                          ? `${selectedRemotePreviewItem.operatorNextAction} ${selectedRemotePreviewItem.blockers[0] ?? ""}`.trim()
+                          : "This MCP server is configured for visibility only until its transport, URL, auth, and trust posture are runtime-supported.",
+                      }}
+                    />
+                  ) : null}
+                  <NativeMetricGrid
+                    items={[
+                      { label: "Transport", value: selectedServer.transport, meta: selectedServer.authType },
+                      {
+                        label: "Auth readiness",
+                        value:
+                          selectedRemotePreviewItem?.authReadiness ??
+                          selectedServer.authState?.readiness ??
+                          "not_required",
+                        meta: selectedServer.authState?.tokenExpiresAt
+                          ? `Expires ${formatDateTime(selectedServer.authState.tokenExpiresAt)}`
+                          : selectedServer.oauth?.tokenUrl
+                            ? "OAuth metadata configured"
+                            : "No OAuth token metadata",
+                      },
+                      {
+                        label: "Status",
+                        value: selectedServer.status,
+                        meta: selectedServer.lastError || "No recent error",
+                      },
+                      {
+                        label: "Invocation",
+                        value: selectedRemotePreviewItem
+                          ? (selectedRemotePreviewItem.invocationState?.replaceAll("_", " ") ?? "unknown")
+                          : selectedServerRuntimeReady
+                            ? "runtime invokable"
+                            : "not callable",
+                        meta: selectedRemotePreviewItem?.runtimePath?.replaceAll("_", " ") ?? "local stdio",
+                      },
+                    ]}
+                  />
+                  <SettingsButtonRow>
+                    <NativeButton variant="default" onClick={() => void handleSave()}>
+                      <Save size={16} />
+                      Save changes
+                    </NativeButton>
+                    <NativeButton
+                      variant="secondary"
+                      onClick={() =>
+                        void runServerAction(async () => {
+                          const flow = await startMcpOAuth(selectedServer.serverId);
+                          window.open(flow.authorizeUrl, "_blank", "noopener,noreferrer");
+                        }, "MCP OAuth authorization opened.")
+                      }
+                      disabled={
+                        selectedServer.authType !== "oauth2" ||
+                        !selectedServer.oauth?.authorizationUrl ||
+                        !selectedServer.oauth.tokenUrl
+                      }
+                    >
+                      <KeyRound size={16} />
+                      OAuth
+                    </NativeButton>
+                    <NativeButton
+                      variant="secondary"
+                      onClick={() =>
+                        void runServerAction(
+                          () => connectMcpServer(selectedServer.serverId),
+                          "MCP server connect requested.",
+                        )
+                      }
+                      disabled={!selectedServerRuntimeReady}
+                    >
+                      <Plug2 size={16} />
+                      Connect
+                    </NativeButton>
+                    <NativeButton
+                      variant="secondary"
+                      onClick={() =>
+                        void runServerAction(
+                          () => disconnectMcpServer(selectedServer.serverId),
+                          "MCP server disconnect requested.",
+                        )
+                      }
+                    >
+                      <Square size={16} />
+                      Disconnect
+                    </NativeButton>
+                    <NativeButton
+                      variant="secondary"
+                      onClick={() =>
+                        void runServerAction(
+                          async () => setHealthReport(await runMcpServerHealthCheck(selectedServer.serverId)),
+                          "MCP health check complete.",
+                        )
+                      }
+                      disabled={!selectedServerRuntimeReady}
+                    >
+                      <RefreshCw size={16} />
+                      Health check
+                    </NativeButton>
+                    <NativeButton
+                      variant="destructive"
+                      onClick={() =>
+                        setPendingDeleteServer({ serverId: selectedServer.serverId, label: selectedServer.label })
+                      }
+                    >
+                      <Trash2 size={16} />
+                      Delete
+                    </NativeButton>
+                  </SettingsButtonRow>
+                  <SettingsActionList
+                    items={tools.map((item) => ({
+                      label: item.toolName,
+                      description: item.description || "Registered MCP tool",
+                    }))}
+                    emptyLabel="No tools reported for this server."
+                  />
+                  {healthReport ? <DiagnosticsPanel report={healthReport} /> : null}
+                </>
+              ) : (
+                <SettingsEmptyState label="Select a server or create a new one." />
+              )}
+            </NativeCard>
+          </SettingsGrid>
+        </>
       ) : null}
       <ConfirmModal
         open={serverSelectionGuard.pendingTransition !== null}

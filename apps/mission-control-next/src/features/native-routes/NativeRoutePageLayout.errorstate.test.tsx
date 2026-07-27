@@ -2,7 +2,7 @@
 import { act } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { describe, expect, it, vi } from "vitest";
-import { NativePageFrame } from "./NativeRoutePageLayout";
+import { NativeDisclosureCard, NativePageFrame, NativeSectionIndex } from "./NativeRoutePageLayout";
 
 vi.mock("@goatcitadel/mission-control-shared/state/dev-diagnostics-store", () => ({
   recordClientDiagnostic: vi.fn(),
@@ -59,5 +59,75 @@ describe("NativePageFrame error state (STATE-01)", () => {
     // operator can't tell a real fetch failure from genuinely-empty data.
     expect(renderer.root.findAllByProps({ "data-testid": "stale-children" })).toHaveLength(0);
     expect(JSON.stringify(renderer.toJSON())).not.toContain("No Charter found.");
+  });
+
+  it("keeps machine errors in technical details and renders a secondary access action", () => {
+    const onConfigure = vi.fn();
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        <NativePageFrame
+          kicker="Ops"
+          title="Saved Boards"
+          description="Operator boards"
+          loading={false}
+          error="API error 403: authenticated operator required"
+          errorSecondaryAction={
+            <button type="button" onClick={onConfigure}>
+              Configure access
+            </button>
+          }
+        >
+          <div />
+        </NativePageFrame>,
+      );
+    });
+
+    const primaryCopy = renderer.root.findByProps({ className: "mc-next-error-state-copy" });
+    expect(primaryCopy.findByProps({ className: "mc-next-error-state-title" }).children.join("")).toContain(
+      "Operator authentication required",
+    );
+    expect(primaryCopy.findByProps({ className: "mc-next-error-state-description" }).children.join("")).not.toContain(
+      "API error 403",
+    );
+    expect(renderer.root.findByType("details").props.children).toBeTruthy();
+    const configureButton = renderer.root
+      .findAllByType("button")
+      .find((button) => button.children.join("") === "Configure access");
+    act(() => configureButton?.props.onClick());
+    expect(onConfigure).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Native long-page navigation", () => {
+  it("keeps section links and disclosure summaries in the keyboard tab order", () => {
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        <>
+          <NativeSectionIndex
+            items={[
+              { id: "runtime-posture", label: "Runtime posture" },
+              { id: "diagnostics", label: "Diagnostics" },
+            ]}
+          />
+          <NativeDisclosureCard
+            id="diagnostics"
+            title="Diagnostics"
+            subtitle="Technical evidence and recovery detail."
+            defaultOpen={false}
+          >
+            <p>Technical evidence</p>
+          </NativeDisclosureCard>
+        </>,
+      );
+    });
+
+    const links = renderer.root.findAllByType("a");
+    expect(links.map((link) => link.props.href)).toEqual(["#runtime-posture", "#diagnostics"]);
+    expect(links.every((link) => link.props.tabIndex !== -1)).toBe(true);
+    const summary = renderer.root.findByType("summary");
+    expect(summary.props.id).toBe("diagnostics");
+    expect(summary.props.tabIndex).not.toBe(-1);
   });
 });

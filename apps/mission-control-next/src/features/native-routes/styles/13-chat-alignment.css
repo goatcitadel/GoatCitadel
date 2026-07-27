@@ -240,7 +240,10 @@
     display: none;
   }
 
-  .mc-next-directory-head-metrics,
+  .mc-next-directory-head-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .mc-next-directory-head-actions {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -252,4 +255,44 @@
     width: 100%;
     justify-content: center;
   }
+
+  .mc-next-citadel-template-grid,
+  .mc-next-citadel-default-card-promoted .mc-next-citadel-template-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mc-next-citadel-template-card,
+  .mc-next-citadel-template-card > *,
+  .mc-next-local-ai-hardware-card,
+  .mc-next-local-ai-hardware-card > * {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .mc-next-local-ai-hardware-card .mc-next-settings-action-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mc-next-local-ai-hardware-card .mc-next-settings-action-copy,
+  .mc-next-local-ai-hardware-card .mc-next-settings-action-copy strong,
+  .mc-next-local-ai-hardware-card .mc-next-settings-action-copy p,
+  .mc-next-local-ai-hardware-card .mc-next-settings-action-copy span,
+  .mc-next-local-ai-hardware-card .mc-next-metric-card span,
+  .mc-next-local-ai-hardware-card .mc-next-metric-card strong {
+    min-width: 0;
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .mc-next-local-ai-hardware-card .mc-next-status-chip {
+    justify-self: start;
+  }
+}
+
+.mc-next-directory-head-metric-label,
+.mc-next-directory-stats strong {
+  word-break: normal;
+  overflow-wrap: normal;
 }

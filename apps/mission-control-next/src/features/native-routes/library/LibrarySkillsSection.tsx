@@ -27,7 +27,7 @@ import type {
   CuratorReviewItem,
   ImprovementCandidateLifecycleAction,
 } from "@goatcitadel/mission-control-shared/api/client";
-import { NativeCard, QuickJumpCard } from "../NativeRoutePageLayout";
+import { NativeCard, NativeDisclosureCard, NativeSectionIndex, QuickJumpCard } from "../NativeRoutePageLayout";
 import type { NativeRoutePagesProps } from "../types";
 import {
   formatDateTime,
@@ -159,12 +159,21 @@ export function LibrarySkillsSection({ route, navigate, activeWorkspaceId }: Nat
     <LibrarySectionShell loading={loading} error={error} onRetry={reload}>
       {notice ? <LibraryNotice notice={notice} /> : null}
       <LibraryLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
+      <NativeSectionIndex
+        items={[
+          { id: "skills-installed", label: "Installed" },
+          { id: "skills-detail", label: "Skill detail" },
+          { id: "skills-discovery", label: "Discovery" },
+          { id: "skills-related", label: "Related routes" },
+        ]}
+      />
       <SkillHubOperatorPanel
         workspaceId={activeWorkspaceId}
         onOpenApproval={(approvalId) => navigate({ area: "ops", section: "approvals", approvalId, theme: route.theme })}
       />
       <div className="mc-next-settings-grid">
         <NativeCard
+          id="skills-installed"
           title="Installed skills"
           subtitle="Reusable behavior you can inspect and change from the native library."
           stats={[
@@ -217,6 +226,7 @@ export function LibrarySkillsSection({ route, navigate, activeWorkspaceId }: Nat
         </NativeCard>
         <div className="mc-next-settings-stack">
           <NativeCard
+            id="skills-detail"
             title={selectedSkill?.name ?? "Skill detail"}
             subtitle={selectedSkill?.source ?? "Select a skill to inspect its instruction, tools, and lifecycle."}
           >
@@ -327,7 +337,8 @@ export function LibrarySkillsSection({ route, navigate, activeWorkspaceId }: Nat
               <LibraryEmptyState label="Select a skill to inspect it." />
             )}
           </NativeCard>
-          <NativeCard
+          <NativeDisclosureCard
+            id="skills-discovery"
             title="Discovery and import posture"
             subtitle="Sources and recent import history stay visible in Library."
           >
@@ -376,18 +387,24 @@ export function LibrarySkillsSection({ route, navigate, activeWorkspaceId }: Nat
               }))}
               emptyLabel="No import history yet."
             />
-          </NativeCard>
-          <QuickJumpCard
+          </NativeDisclosureCard>
+          <NativeDisclosureCard
+            id="skills-related"
             title="Related routes"
             subtitle="Keep adjacent Library surfaces within reach."
-            actions={[
-              { label: "Agents", route: { area: "library", section: "agents", theme: route.theme } },
-              { label: "Capabilities", route: { area: "library", section: "capabilities", theme: route.theme } },
-              { label: "Memory", route: { area: "library", section: "memory", theme: route.theme } },
-              { label: "Prompt packs", route: { area: "library", section: "prompt-packs", theme: route.theme } },
-            ]}
-            navigate={navigate}
-          />
+          >
+            <QuickJumpCard
+              title="Library routes"
+              subtitle="Open another governed Library surface."
+              actions={[
+                { label: "Agents", route: { area: "library", section: "agents", theme: route.theme } },
+                { label: "Capabilities", route: { area: "library", section: "capabilities", theme: route.theme } },
+                { label: "Memory", route: { area: "library", section: "memory", theme: route.theme } },
+                { label: "Prompt packs", route: { area: "library", section: "prompt-packs", theme: route.theme } },
+              ]}
+              navigate={navigate}
+            />
+          </NativeDisclosureCard>
         </div>
       </div>
     </LibrarySectionShell>

@@ -31,7 +31,6 @@ import {
   SettingsField,
   SettingsFieldGrid,
   SettingsGrid,
-  SettingsLoadWarnings,
   SettingsNotice,
   type SettingsSectionProps,
   SettingsSectionShell,
@@ -39,13 +38,14 @@ import {
   useAsyncLoad,
 } from "../SettingsShared";
 import { NativeCard } from "../../NativeRoutePageLayout";
-import { NativeButton, NativeMetricGrid } from "../../primitives";
+import { ErrorState, NativeButton, NativeMetricGrid } from "../../primitives";
 import { deriveLlamaCppAlias } from "../../SettingsNativePage";
+import type { NativeLoadIssue } from "../../shared/native-helpers";
 
 const VISUAL_REGRESSION_MODE =
   (import.meta.env.VITE_GOATCITADEL_VISUAL_REGRESSION_MODE as string | undefined)?.trim().toLowerCase() === "true";
 
-export function RuntimeSection(_props: SettingsSectionProps) {
+export function RuntimeSection(props: SettingsSectionProps) {
   const load = useCallback(async () => {
     const settings = await fetchSettings();
     const shouldLoadNpuModels =
@@ -246,14 +246,37 @@ export function RuntimeSection(_props: SettingsSectionProps) {
   };
 
   return (
-    <SettingsSectionShell loading={loading} error={error} onRetry={reload}>
+    <SettingsSectionShell
+      loading={loading}
+      error={error}
+      onRetry={reload}
+      errorContext={{
+        resourceLabel: "Runtime settings",
+        unavailableDescription:
+          "Mission Control could not reach the Gateway runtime settings owner. Check runtime health, then retry.",
+      }}
+      errorSecondaryAction={
+        error ? (
+          <NativeButton
+            variant="outline"
+            onClick={() => props.navigate({ area: "ops", section: "runtime", theme: props.route.theme })}
+          >
+            Open Ops Runtime
+          </NativeButton>
+        ) : undefined
+      }
+    >
       {notice ? <SettingsNotice notice={notice} /> : null}
       {data ? (
         <SettingsStack>
-          <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
-          {data.llamaModelsWarning ? (
-            <SettingsNotice notice={{ tone: "info", message: data.llamaModelsWarning }} />
-          ) : null}
+          <RuntimeLoadWarnings
+            issues={[
+              ...data.issues,
+              ...(data.llamaModelsWarning ? [{ label: "llama.cpp models", message: data.llamaModelsWarning }] : []),
+            ]}
+            onRetry={reload}
+            onOpenOps={() => props.navigate({ area: "ops", section: "runtime", theme: props.route.theme })}
+          />
           <NativeCard
             density="compact"
             className="mc-next-settings-panel"
@@ -707,4 +730,37 @@ function formatLifecycleLabel(value: string): string {
 function formatRuntimeEvidenceTime(value: string): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "time unavailable" : date.toLocaleString();
+}
+
+function RuntimeLoadWarnings({
+  issues,
+  onRetry,
+  onOpenOps,
+}: {
+  issues: NativeLoadIssue[];
+  onRetry: () => void;
+  onOpenOps: () => void;
+}) {
+  if (issues.length === 0) {
+    return null;
+  }
+  const subsystemLabel = issues.map((issue) => issue.label).join(", ");
+  return (
+    <ErrorState
+      title="Runtime settings unavailable"
+      description={`${subsystemLabel} could not be read from the Gateway. The remaining runtime settings are still available.`}
+      technicalDetails={issues.map((issue) => `${issue.label}: ${issue.message}`).join("\n")}
+      primaryAction={
+        <NativeButton variant="secondary" onClick={() => void onRetry()}>
+          <RefreshCw size={16} />
+          Retry
+        </NativeButton>
+      }
+      secondaryActions={
+        <NativeButton variant="outline" onClick={onOpenOps}>
+          Open Ops Runtime
+        </NativeButton>
+      }
+    />
+  );
 }
