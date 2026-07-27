@@ -86,6 +86,7 @@ describe("loadGatewayConfig", () => {
     const config = await loadGatewayConfig(rootDir);
     expect(config.assistant.features.computerUseGuardrailsV1Enabled).toBe(true);
     expect(config.assistant.features.unifiedComposerPaletteV1Enabled).toBe(true);
+    expect(config.assistant.features.attachedContextToolsV1Enabled).toBe(true);
   });
 
   it("defaults Firecrawl and Docker digest posture to shipped fail-closed values", async () => {

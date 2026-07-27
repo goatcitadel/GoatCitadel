@@ -33,6 +33,11 @@ import {
 } from "./tool-executor/background-processes.js";
 import { executeArtifactTool, isArtifactToolName } from "./tool-executor/artifact-executor.js";
 import { executeCommsTool } from "./tool-executor/comms-executor.js";
+import {
+  executeRoutedContextTool,
+  isRoutedContextToolName,
+  listAvailableRoutedContextTools,
+} from "./tool-executor/context-executor.js";
 import { executeFilesystemTool, isFilesystemToolName } from "./tool-executor/filesystem-executor.js";
 import { executeKnowledgeTool, isKnowledgeToolName } from "./tool-executor/knowledge-executor.js";
 import { executeScheduleManage, executeSubagentFanout } from "./tool-executor/schedule-agent-executor.js";
@@ -214,9 +219,25 @@ export async function executeTool(
   if (isKnowledgeToolName(request.toolName)) {
     return finalizeToolResult(await executeKnowledgeFamily(request, config, storage, runtimeHooks));
   }
+  if (isRoutedContextToolName(request.toolName)) {
+    return finalizeToolResult(
+      await executeRoutedContextTool(request, storage, {
+        ...(runtimeHooks.acquireLocalEmbeddingLease
+          ? { acquireLocalEmbeddingLease: runtimeHooks.acquireLocalEmbeddingLease }
+          : {}),
+        ...(runtimeHooks.prepareEmbeddingUsageDispatch
+          ? { prepareEmbeddingUsageDispatch: runtimeHooks.prepareEmbeddingUsageDispatch }
+          : {}),
+      }),
+    );
+  }
   switch (request.toolName) {
     case "session.status":
-      return finalizeToolResult({ sessionId: request.sessionId, status: "ok" });
+      return finalizeToolResult({
+        sessionId: request.sessionId,
+        status: "ok",
+        attachedContextTools: listAvailableRoutedContextTools(request, storage),
+      });
     case "time.now":
       return finalizeToolResult(timeNow());
     case "http.get":

@@ -44,6 +44,7 @@ import type {
 } from "@goatcitadel/contracts";
 import {
   canonicalJsonString,
+  CHAT_ROUTED_CONTEXT_TOOL_NAMES,
   buildToolEffectEvidence,
   classifyToolEffectPotential,
   getChatTurnRecoveryAction,
@@ -522,6 +523,8 @@ export interface ChatTurnAgentRunnerInput {
   subagentPolicy?: "off" | "ask_when_useful" | "auto_when_useful";
   normalizationProfile?: ChatNormalizationProfile;
   toolAutonomy: "safe_auto" | "manual";
+  /** Server-authored intent signal; attached bytes are resolved only after capability freeze. */
+  routedContextRequested?: boolean;
   operatorId?: string;
   authActorId?: string;
   authActorSource?: ToolPolicyActorContext["authActorSource"];
@@ -877,6 +880,7 @@ export interface ChatTurnAgentRunnerDeps {
    * true forces the historical strictly-serial path.
    */
   parallelToolExecutionV1Disabled?: () => boolean;
+  attachedContextToolsV1Enabled?: () => boolean;
   /**
    * R3-8 `agent.fanout` kill switch (`subagentFanoutV1Disabled`). Read live
    * like the gates above. Absent or returning false (default) ⇒ the spawn tool
@@ -1088,6 +1092,50 @@ export class ChatTurnAgentRunner {
       modelToCanonical,
       canonicalToModel,
       policyDecisions,
+    };
+  }
+
+  private filterRoutedContextCapabilityToolSchema(
+    input: ChatTurnAgentRunnerInput,
+    schema: ResolvedChatTurnToolSchema,
+  ): ResolvedChatTurnToolSchema {
+    const contextToolNames = new Set<string>(CHAT_ROUTED_CONTEXT_TOOL_NAMES);
+    const binding = input.serverContextUsageAttribution;
+    let available = this.deps.attachedContextToolsV1Enabled?.() === true && Boolean(binding);
+    if (available && binding) {
+      const snapshot = this.deps.storage.routedContextSnapshots.findByTurn(input.turnId);
+      const workspaceId = this.deps.storage.chatSessionMeta.get(input.sessionId)?.workspaceId;
+      available = Boolean(
+        snapshot &&
+        workspaceId &&
+        snapshot.snapshotId === binding.contextSnapshotId &&
+        snapshot.snapshotHash === binding.contextResolutionHash &&
+        snapshot.turnId === input.turnId &&
+        snapshot.sessionId === input.sessionId &&
+        snapshot.workspaceId === workspaceId &&
+        snapshot.entries.some(
+          (entry) =>
+            (entry.disposition === "included" || entry.disposition === "truncated") &&
+            entry.admittedBytes > 0 &&
+            entry.admittedText.length > 0,
+        ),
+      );
+    }
+    if (available) return schema;
+    const canonicalToModel = new Map(
+      [...schema.canonicalToModel].filter(([canonicalName]) => !contextToolNames.has(canonicalName)),
+    );
+    const modelToCanonical = new Map(
+      [...schema.modelToCanonical].filter(([, canonicalName]) => !contextToolNames.has(canonicalName)),
+    );
+    return {
+      tools: schema.tools.filter((tool) => {
+        const modelName = extractProviderToolName(tool);
+        return Boolean(modelName && modelToCanonical.has(modelName));
+      }),
+      modelToCanonical,
+      canonicalToModel,
+      policyDecisions: schema.policyDecisions.filter((decision) => !contextToolNames.has(decision.toolName)),
     };
   }
 
@@ -1644,7 +1692,8 @@ export class ChatTurnAgentRunner {
           this.deps.listCapabilityCatalog?.("callable"),
         )
       : await this.resolveCapabilityToolSchema(input);
-    const toolSchema = this.filterSystemHeartbeatCapabilityToolSchema(input, admittedToolSchema);
+    const routedContextToolSchema = this.filterRoutedContextCapabilityToolSchema(input, admittedToolSchema);
+    const toolSchema = this.filterSystemHeartbeatCapabilityToolSchema(input, routedContextToolSchema);
     const catalogToolNames = this.deps.listToolCatalog().map((tool) => tool.toolName);
     const promptLabConcreteReadToolName = promptLabShouldInspectFilesForTurn
       ? resolvePromptLabConcreteReadToolName(toolSchema.canonicalToModel, catalogToolNames)
@@ -4750,6 +4799,7 @@ export class ChatTurnAgentRunner {
       | "policyRunId"
       | "policyTaskId"
       | "subagentPolicy"
+      | "routedContextRequested"
       | "capabilityProfile"
       | "serverOnlyPosture"
     >,
@@ -4843,6 +4893,8 @@ export class ChatTurnAgentRunner {
       input.subagentPolicy === "auto_when_useful" &&
       !restrictedAutonomousProfile &&
       this.deps.subagentFanoutV1Disabled?.() !== true;
+    const routedContextToolsEligible =
+      input.routedContextRequested === true && this.deps.attachedContextToolsV1Enabled?.() === true;
     for (const tool of catalog) {
       if (quickWebProfile && !QUICK_WEB_ALLOWED_TOOL_NAMES.has(tool.toolName)) {
         continue;
@@ -4859,6 +4911,12 @@ export class ChatTurnAgentRunner {
         continue;
       }
       if (tool.toolName === SUBAGENT_FANOUT_TOOL_NAME && !subagentFanoutEligible) {
+        continue;
+      }
+      if (
+        CHAT_ROUTED_CONTEXT_TOOL_NAMES.includes(tool.toolName as (typeof CHAT_ROUTED_CONTEXT_TOOL_NAMES)[number]) &&
+        !routedContextToolsEligible
+      ) {
         continue;
       }
       if (
@@ -4993,6 +5051,7 @@ export class ChatTurnAgentRunner {
       projectBound,
       suppressLocalPathTools,
       subagentFanoutEligible,
+      routedContextToolsEligible,
     });
     const toolTokenEstimateCache = new Map<string, number>();
     function cachedEstimateToolTokens(toolJson: string, toolName: string): number {
@@ -5772,6 +5831,10 @@ export class ChatTurnAgentRunner {
           args: preflight.args,
           agentId: "assistant",
           sessionId: input.input.sessionId,
+          turnId: input.turnId,
+          workspaceId: input.input.capabilityProfile?.identity.workspaceId,
+          routedContextSnapshotId: input.input.serverContextUsageAttribution?.contextSnapshotId,
+          routedContextSnapshotHash: input.input.serverContextUsageAttribution?.contextResolutionHash,
           taskId: input.input.policyTaskId,
           runId: input.input.policyRunId,
           surface: input.input.mode,
@@ -7254,6 +7317,7 @@ function buildEssentialToolSet(input: {
   projectBound: boolean;
   suppressLocalPathTools?: boolean;
   subagentFanoutEligible?: boolean;
+  routedContextToolsEligible?: boolean;
 }): string[] {
   if (input.quickWebProfile) {
     return input.webMode === "off" ? [] : ["browser.search"];
@@ -7264,6 +7328,9 @@ function buildEssentialToolSet(input: {
     // cannot anticipate when the model will want to fan out, so exposure is
     // pinned here rather than left to the score/token-budget race.
     tools.add(SUBAGENT_FANOUT_TOOL_NAME);
+  }
+  if (input.routedContextToolsEligible) {
+    for (const toolName of CHAT_ROUTED_CONTEXT_TOOL_NAMES) tools.add(toolName);
   }
   if (
     input.memoryLookupIntent ||
@@ -8235,7 +8302,35 @@ function inferCitationsFromToolResult(toolRun: ChatToolRunRecord): ChatCitationR
   }
   const result = toolRun.result as Record<string, unknown>;
   const items: ChatCitationRecord[] = [];
-  if (Array.isArray(result.results)) {
+  if (CHAT_ROUTED_CONTEXT_TOOL_NAMES.includes(toolRun.toolName as (typeof CHAT_ROUTED_CONTEXT_TOOL_NAMES)[number])) {
+    const candidates = Array.isArray(result.matches)
+      ? result.matches
+      : result.receipt && typeof result.receipt === "object"
+        ? [{ receipt: result.receipt, text: result.text }]
+        : [];
+    let rank = 0;
+    for (const raw of candidates) {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+      const candidate = raw as Record<string, unknown>;
+      if (!candidate.receipt || typeof candidate.receipt !== "object" || Array.isArray(candidate.receipt)) continue;
+      const receipt = candidate.receipt as Record<string, unknown>;
+      const snapshotId = typeof receipt.snapshotId === "string" ? receipt.snapshotId : undefined;
+      const sourceRef = typeof receipt.sourceRef === "string" ? receipt.sourceRef : undefined;
+      const entryIndex = typeof receipt.entryIndex === "number" ? receipt.entryIndex : undefined;
+      const startLine = typeof receipt.startLine === "number" ? receipt.startLine : undefined;
+      const endLine = typeof receipt.endLine === "number" ? receipt.endLine : undefined;
+      if (!snapshotId || !sourceRef || entryIndex === undefined || !startLine || !endLine) continue;
+      const sourceLabel = typeof receipt.sourceLabel === "string" ? receipt.sourceLabel : sourceRef;
+      items.push({
+        citationId: `${toolRun.toolRunId}-${rank}`,
+        title: `${sourceLabel} · lines ${startLine}-${endLine}`,
+        url: `goatcitadel://context/${encodeURIComponent(snapshotId)}/${entryIndex}#L${startLine}-L${endLine}`,
+        snippet: typeof candidate.text === "string" ? truncatePlainText(candidate.text, 220) : undefined,
+        sourceType: "tool",
+      });
+      rank += 1;
+    }
+  } else if (Array.isArray(result.results)) {
     let rank = 0;
     for (const raw of result.results) {
       const value = raw as Record<string, unknown>;

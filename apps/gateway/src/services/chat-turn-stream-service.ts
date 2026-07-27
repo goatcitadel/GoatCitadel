@@ -2304,6 +2304,7 @@ export async function* streamPreparedAgentChatTurn(
                 prepared.prefs.subagentPolicy,
               normalizationProfile: prepared.normalized.normalizationProfile,
               toolAutonomy: prepared.capabilityProfile?.selection.toolAutonomy ?? prepared.effectiveToolAutonomy,
+              routedContextRequested: Boolean(prepared.routedContextSnapshot),
               operatorId: prepared.capabilityProfile
                 ? prepared.capabilityProfile.identity.operatorId
                 : input.operatorId,

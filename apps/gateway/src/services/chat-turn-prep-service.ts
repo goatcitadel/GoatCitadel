@@ -243,6 +243,7 @@ export interface ChatTurnPrepHost {
     normalized: NormalizedAgentInputFromSend;
     effectiveMode: ChatMode;
     effectiveToolAutonomy: "safe_auto" | "manual";
+    routedContextRequested: boolean;
     routeResolution: ResolvedChatRouteDescriptor;
     historyMessages: ChatCompletionRequest["messages"];
     request: ChatSendMessageRequest;
@@ -948,6 +949,7 @@ export async function prepareAgentChatTurn(
         normalized,
         effectiveMode,
         effectiveToolAutonomy,
+        routedContextRequested: hasRoutedContextRefs,
         routeResolution: effectiveProviderRoute,
         historyMessages,
         request: input,

@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { NotFoundError } from "@goatcitadel/contracts";
+import { CHAT_ROUTED_CONTEXT_TOOL_NAMES, NotFoundError } from "@goatcitadel/contracts";
 import { assertWritePathInJail } from "@goatcitadel/policy-engine";
 import { createAgentsRoutePort } from "./agents-route-service.js";
 import * as chatAttachmentService from "./chat-attachment-service.js";
@@ -403,7 +403,17 @@ export function composeChatRouteDependencies(
       ) {
         throw new NotFoundError({ entity: "Chat routed context snapshot", id: turnId });
       }
-      return { ...envelope, routedContext };
+      const contextToolNames = new Set<string>(CHAT_ROUTED_CONTEXT_TOOL_NAMES);
+      const snapshotHasEligibleText = (snapshot.entries ?? []).some(
+        (entry) =>
+          (entry.disposition === "included" || entry.disposition === "truncated") &&
+          entry.admittedBytes > 0 &&
+          entry.admittedText.length > 0,
+      );
+      const availableContextTools = snapshotHasEligibleText
+        ? profile.selection.tools.map((tool) => tool.canonicalName).filter((toolName) => contextToolNames.has(toolName))
+        : [];
+      return { ...envelope, routedContext, availableContextTools };
     },
     getTurnContextManifestForSession: (sessionId, turnId) =>
       chatMessageRouteRuntime.getTurnContextManifestForSession(chatMessageRouteRuntimeHost, sessionId, turnId),
