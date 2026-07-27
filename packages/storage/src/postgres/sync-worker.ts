@@ -5,7 +5,7 @@ import type { PostgresWorkerRequest, PostgresWorkerResponse } from "./protocol.j
 import { sanitizeParamsForServerEncoding } from "./server-encoding.js";
 import { buildPostgresConnectionStringStartupConfig, buildPostgresStartupOptions } from "./startup-options.js";
 
-types.setTypeParser(20, (value) => Number(value));
+types.setTypeParser(20, parsePostgresInt8);
 types.setTypeParser(21, (value) => Number(value));
 types.setTypeParser(23, (value) => Number(value));
 types.setTypeParser(1700, parsePostgresNumeric);
@@ -14,6 +14,19 @@ types.setTypeParser(701, (value) => Number(value));
 
 export function parsePostgresNumeric(value: string): number {
   return Number(value);
+}
+
+/**
+ * OID 20 is int8 (64-bit bigint) — revision counters, sequences, and row
+ * counts. `Number()` silently loses precision past `MAX_SAFE_INTEGER`, so
+ * fail loud instead of returning a corrupted value.
+ */
+export function parsePostgresInt8(value: string): number {
+  const parsed = BigInt(value);
+  if (parsed < BigInt(Number.MIN_SAFE_INTEGER) || parsed > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new RangeError(`PostgreSQL int8 value is outside the JavaScript safe integer range: ${value}`);
+  }
+  return Number(parsed);
 }
 
 export interface PostgresSyncWorkerQueryExecutor {

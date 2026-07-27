@@ -16,6 +16,7 @@ import {
   fetchRemoteWorkerReconciliation,
 } from "@goatcitadel/mission-control-shared/api/remote-workers";
 import { useRemoteWorkerRegistry } from "@goatcitadel/mission-control-shared/hooks/useRemoteWorkerRegistry";
+import { routeKicker } from "@next/app/route-model";
 import { NativePageFrame } from "../NativeRoutePageLayout";
 import { EmptyState, ErrorState, NativeButton, StatusChip, type StatusChipTone } from "../primitives";
 import type { NativeRoutePagesProps } from "../types";
@@ -464,7 +465,7 @@ function RemoteWorkersWorkspaceRoutePage(props: NativeRoutePagesProps) {
   return (
     <NativePageFrame
       area="ops"
-      kicker="Observe"
+      kicker={routeKicker(props.route)}
       title="Remote workers"
       description="Operator-visible remote-worker registry, assignments, events, and reconciliation."
       loading={registry.loading && !registry.page}

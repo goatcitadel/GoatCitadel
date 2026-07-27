@@ -88,7 +88,9 @@
   --z-popover: 80;
   --z-modal: 1000;
 
-  /* Shared dimming veil behind drawers, sheets, and mobile overlays. */
+  /* Shared dimming veil behind drawers, sheets, and mobile overlays.
+     Dark theme overrides this below: a 32% near-black veil is imperceptible
+     on the #080f11 app background, so drawers read as un-layered. */
   --bg-scrim: rgba(15, 23, 42, 0.32);
 }
 
@@ -96,6 +98,9 @@
    content portaled to document.body inherits the canonical surface palette too.
    See mission-control-next-theme-bridge.css for the rationale. */
 .theme-signal-noir {
+  /* Opaque-enough veil for overlays on the near-black app background. */
+  --bg-scrim: rgba(0, 0, 0, 0.58);
+
   /* Widened, monotonic elevation ramp: app darkened so cards (surface-1) read
      as distinct panels on the page; surface-2 lifted above surface-1 (was an
      inverted #10141a well); elevated capped where muted text still clears AA.

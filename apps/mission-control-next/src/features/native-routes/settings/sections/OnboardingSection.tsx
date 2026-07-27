@@ -22,6 +22,7 @@ import {
 import type { AppRoute } from "@next/app/route-model";
 import {
   getErrorMessage,
+  humanizeEnumToken,
   type Notice,
   SettingsActionList,
   SettingsButtonRow,
@@ -482,7 +483,7 @@ function DemoStartPanel({
       title="Start Here"
       subtitle="Create a safe local demo workspace with sample Work and memory data."
       stats={[
-        { label: "Demo", value: loading ? "Checking" : (data?.status ?? "Unknown") },
+        { label: "Demo", value: loading ? "Checking" : humanizeEnumToken(data?.status) || "Unknown" },
         { label: "Workspace", value: workspaceLabel },
         { label: "Credentials", value: "Not required" },
       ]}
@@ -560,7 +561,7 @@ function FirstOutcomePathPanel({
       title="First trusted outcome"
       subtitle="Follow one path from provider readiness to a proof-backed Work result."
       stats={[
-        { label: "Path state", value: pathState },
+        { label: "Path state", value: humanizeEnumToken(pathState) },
         { label: "Progress", value: `${completeCount}/${items.length}` },
         { label: "Next", value: nextItem?.label ?? "Ready" },
         { label: "Evidence", value: items.at(-1)?.state === "complete" ? "Produced" : "Needed" },

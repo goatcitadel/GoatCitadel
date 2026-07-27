@@ -231,6 +231,7 @@ export function ShellTopbar({
           <span>Workspace</span>
           <select
             aria-label="Active Workspace"
+            title={activeWorkspaceName}
             value={activeWorkspaceId}
             onChange={(event) => handleSelectWorkspace(event.target.value)}
           >
@@ -778,7 +779,9 @@ export function formatRuntimeIdentityChip(
   const compactProof = releaseVerified ? "verified" : "unverified";
   return {
     value: [kind, version, sha, integrity, proof].filter(Boolean).join(" · "),
-    compactValue: [compactKind, version, sha, integrity, compactProof].filter(Boolean).join("/"),
+    /* Verification status leads: on narrow strips ellipsis eats the tail, and
+       "Src/version unknown/SHA unk…" carried none of the meaning. */
+    compactValue: [compactProof, compactKind, version, sha, integrity].filter(Boolean).join("/"),
     status: releaseVerified ? "verified" : "unverified",
   };
 }

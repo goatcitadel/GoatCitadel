@@ -40,6 +40,7 @@ import { ConfigFormBuilder } from "@goatcitadel/mission-control-shared/component
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import {
   getErrorMessage,
+  humanizeEnumToken,
   nativeLoad,
   nativeLoadIssues,
   type Notice,
@@ -560,7 +561,7 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
               {selectedCatalog ? (
                 <NativeMetricGrid
                   items={[
-                    { label: "Kind", value: selectedCatalog.kind, meta: selectedCatalog.key },
+                    { label: "Kind", value: humanizeEnumToken(selectedCatalog.kind), meta: selectedCatalog.key },
                     {
                       label: "Capabilities",
                       value: String(selectedCatalog.capabilities.length),

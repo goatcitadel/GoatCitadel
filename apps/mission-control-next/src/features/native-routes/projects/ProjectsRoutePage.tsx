@@ -545,9 +545,12 @@ export function ProjectsRoutePage({
           <span>{projectHome.healthLabel}</span>
         </div>
         <p>
-          {`Last activity ${projectHome.lastActivityLabel} · ${projectHome.activeCount} active ${
-            projectHome.activeCount === 1 ? "thread" : "threads"
-          } · ${selectedProject.description?.trim() || selectedProject.workspacePath}`}
+          {/* "No activity yet" reads as a full phrase; only real timestamps get the "Last activity" prefix. */}
+          {`${projectHome.lastActivityLabel === "No activity yet" ? "" : "Last activity "}${projectHome.lastActivityLabel} · ${
+            projectHome.activeCount
+          } active ${projectHome.activeCount === 1 ? "thread" : "threads"} · ${
+            selectedProject.description?.trim() || selectedProject.workspacePath
+          }`}
         </p>
         <div className="mc-next-settings-button-row">
           <NativeButton
@@ -650,7 +653,7 @@ export function ProjectsRoutePage({
   return (
     <NativePageFrame
       area="projects"
-      kicker="Citadel > Workspace > Project"
+      kicker="Projects · Containers"
       title="Project containers"
       description={`Project chat threads inside ${(activeCitadelName ?? activeCitadelId) || "the active Citadel"} > ${activeWorkspaceName}.`}
       loading={state.loading}

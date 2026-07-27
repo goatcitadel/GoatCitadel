@@ -442,7 +442,7 @@
 .mc-next-council-remove-reason {
   flex-basis: 100%;
   color: var(--text-muted);
-  font-size: var(--text-2xs);
+  font-size: var(--text-xs);
   line-height: 1.35;
 }
 
@@ -501,7 +501,10 @@
   background: color-mix(in oklab, var(--foreground) 4%, transparent);
   font-size: var(--text-2xs);
   line-height: 1.5;
-  white-space: pre;
+  /* Charter prose values were clipped mid-word at the right edge with no
+     visible scroll affordance; this preview is read-only prose, so wrap. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .mc-next-blueprint-actions {

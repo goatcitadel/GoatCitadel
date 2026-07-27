@@ -1227,7 +1227,7 @@ describe("SettingsNativePage broad native sections", () => {
 
     const access = await mount("access");
     const authMode = access.root.findAllByType("select").find((select) => collectText(select).includes("Basic"))!;
-    const token = access.root.findByProps({ placeholder: "Only enter a new token when rotating credentials" });
+    const token = access.root.findByProps({ placeholder: "New token (only when rotating)" });
     await change(authMode, "basic");
     await change(token, "local-token");
     await click(findButton(access.root, "Save access settings"));
@@ -1247,7 +1247,7 @@ describe("SettingsNativePage broad native sections", () => {
       .findAllByType("select")
       .find((select) => collectText(select).includes("Basic"))!;
     const refreshedToken = access.root.findByProps({
-      placeholder: "Only enter a new token when rotating credentials",
+      placeholder: "New token (only when rotating)",
     });
     expect(refreshedAuthMode.props.value).toBe("basic");
     expect(refreshedToken.props.value).toBe("local-token");
@@ -1677,10 +1677,7 @@ describe("SettingsNativePage broad native sections", () => {
     expect(collectText(access.root)).toContain("Gateway access");
     expect(collectText(access.root)).toContain("Desktop/mobile continuity");
     expect(collectText(access.root)).toContain("Mobile approval path");
-    await change(
-      access.root.findByProps({ placeholder: "Only enter a new token when rotating credentials" }),
-      "new-token",
-    );
+    await change(access.root.findByProps({ placeholder: "New token (only when rotating)" }), "new-token");
     await click(findButton(access.root, "Save access settings"));
     expect(settingsMocks.patchSettings).toHaveBeenCalledWith({
       expectedRevision: 29,

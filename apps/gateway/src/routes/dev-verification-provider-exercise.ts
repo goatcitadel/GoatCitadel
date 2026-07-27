@@ -72,7 +72,7 @@ export function registerDevVerificationProviderExerciseRoute(
           requestedProviderId: payload.providerId ?? null,
           requestedModel: payload.model ?? null,
           providerId: readNonEmptyString(routing?.effectiveProviderId) ?? null,
-          model: returnedModel ?? null,
+          model: returnedModel,
           scenario: parsed.data.scenario,
           elapsedMs: Date.now() - startedAt,
           chunkCount,

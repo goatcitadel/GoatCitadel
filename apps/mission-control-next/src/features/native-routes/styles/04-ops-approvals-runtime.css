@@ -37,6 +37,14 @@
   background: color-mix(in oklab, var(--mc-surface-2) 94%, transparent);
 }
 
+/* The status chip shares the auto-fit button grid; in the ~33rem inspector
+   column its 9rem cell crushed "awaiting approval / shell.exec" to
+   "awaiti… / shell.e" beside full-size buttons. Give it the whole row. */
+.mc-next-approvals-decision-shell .mc-next-approvals-actions .mc-next-chip-3 {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
 @container approval-detail (min-width: 46rem) {
   .mc-next-approvals-decision-shell {
     grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
@@ -574,7 +582,7 @@
   grid-column: 1 / -1;
 }
 
-.mc-next-ops-runtime-page-runtime .mc-next-native-grid > .mc-next-section-index {
+.mc-next-ops-runtime-page-runtime .mc-next-directory-grid-native > .mc-next-section-index {
   order: -2;
 }
 

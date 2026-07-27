@@ -291,8 +291,13 @@
   }
 }
 
-.mc-next-directory-head-metric-label,
-.mc-next-directory-stats strong {
+.mc-next-directory-head-metric-label {
   word-break: normal;
   overflow-wrap: normal;
 }
+
+/* Keep long unbroken stat values (workspace/session ids) wrappable: resetting
+   overflow-wrap here let ids overflow into the neighboring stat tile on
+   Library Artifacts and Ops Browser Sessions. Head labels above stay
+   non-breaking; stat values keep the 03-shared-native-primitives.css
+   overflow-wrap: anywhere. */

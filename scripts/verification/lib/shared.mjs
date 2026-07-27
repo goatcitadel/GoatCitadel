@@ -299,7 +299,9 @@ function createBoundedCapture(maxBytes) {
   return {
     append(value) {
       const chunk = Buffer.from(value);
-      if (chunk.byteLength >= maxBytes) {
+      // Strictly greater: a chunk of exactly maxBytes fits without discarding
+      // the buffered tail below.
+      if (chunk.byteLength > maxBytes) {
         chunks.length = 0;
         chunks.push(chunk.subarray(chunk.byteLength - maxBytes));
         totalBytes = maxBytes;

@@ -319,6 +319,16 @@ async function main() {
       await runOperatorProofLane(context, { profile });
       await runDurableRecoveryLane(context, { profile });
       await runUsageReconciliationLane(context, { profile });
+      // "all" means every registered lane: these were silently missing, so a
+      // green `verify:all` under-reported the verified surface.
+      await runExtensionsPackageLane(context);
+      await runRoutedContextSnapshotsLane(context, { profile });
+      await runModelCouncilLane(context, { profile });
+      await runSkillLearningLane(context, { profile });
+      await runSessionControlLane(context, { profile });
+      await runVertexFireworksProvidersLane(context, { profile });
+      await runReasoningProfilesLane(context, { profile });
+      await runDesktopLane(context);
       await runAccessibilitySmokeLane(context, { profile });
       await runSurfaceRegressionLane(context, { profile });
       await runVisualRegressionLane(context, { profile, updateBaselines: false });

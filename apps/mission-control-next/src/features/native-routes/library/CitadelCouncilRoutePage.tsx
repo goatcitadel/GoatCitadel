@@ -8,6 +8,7 @@ import {
   unassignCitadelCouncilAgent,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
+import { NativeButton } from "../primitives/NativeButton";
 import { getErrorMessage } from "../shared/native-helpers";
 import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
@@ -123,6 +124,7 @@ export function CitadelCouncilRoutePage({
                 <span>Council agent</span>
                 <select
                   id={selectAgentId}
+                  className="mc-next-settings-input"
                   value={selectedAgentId}
                   onChange={(event) => setSelectedAgentId(event.target.value)}
                 >
@@ -134,12 +136,13 @@ export function CitadelCouncilRoutePage({
                   ))}
                 </select>
               </label>
-              <button type="button" onClick={handleSeatAgent} disabled={!selectedAgentId}>
+              <NativeButton type="button" variant="secondary" onClick={handleSeatAgent} disabled={!selectedAgentId}>
                 <Plus size={16} aria-hidden="true" />
                 Seat
-              </button>
-              <button
+              </NativeButton>
+              <NativeButton
                 type="button"
+                variant="secondary"
                 className="mc-next-council-remove"
                 onClick={handleRemoveSeat}
                 disabled={removeDisabled}
@@ -147,7 +150,7 @@ export function CitadelCouncilRoutePage({
               >
                 <Trash2 size={16} aria-hidden="true" />
                 Remove
-              </button>
+              </NativeButton>
               {removeDisabled ? (
                 <span id={removeReasonId} className="mc-next-council-remove-reason">
                   {removeDisabledReason}

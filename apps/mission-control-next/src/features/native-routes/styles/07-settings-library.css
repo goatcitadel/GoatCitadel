@@ -206,6 +206,16 @@
   gap: 0.48rem;
 }
 
+/* Card action rows (council seat controls, retry rows). Wrapping flex so
+   full-width helper text (flex-basis: 100%, e.g. the council remove reason)
+   drops to its own line instead of jamming against the last button. */
+.mc-next-settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.48rem;
+}
+
 .mc-next-settings-field {
   display: grid;
   gap: 0.22rem;
@@ -218,13 +228,23 @@
 
 .mc-next-settings-field > span,
 .mc-next-settings-code-block > span,
-.mc-next-settings-action-copy span,
 .mc-next-settings-metric span {
   color: var(--text-muted);
   font-size: var(--text-2xs);
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+/* Action-row meta carries verbatim evidence (file paths, shell commands,
+   URLs) — uppercasing misrepresents case-sensitive identifiers, so keep the
+   muted micro style without the transform. */
+.mc-next-settings-action-copy span {
+  color: var(--text-muted);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  overflow-wrap: anywhere;
 }
 
 .mc-next-settings-input,
@@ -406,6 +426,7 @@
 .mc-next-settings-metric {
   display: grid;
   gap: 0.16rem;
+  min-width: 0;
   padding: 0.48rem 0.52rem;
   border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
   border-radius: var(--r-sm);
@@ -426,6 +447,10 @@
   color: var(--text-secondary);
   font-size: var(--text-2xs);
   line-height: 1.45;
+  /* Meta can carry unbroken tokens (absolute skill dirs); without this the
+     grid track's min-content is the whole path and the card blows out past
+     the viewport. */
+  overflow-wrap: anywhere;
 }
 
 .mc-next-settings-wizard {
@@ -587,6 +612,12 @@
   line-height: 1.2;
   text-transform: uppercase;
   overflow-wrap: anywhere;
+}
+
+/* em is the verbatim meta slot (workspace bindings, template paths) — never
+   uppercase real paths/ids. */
+.mc-next-library-action-card em {
+  text-transform: none;
 }
 
 .mc-next-library-action-card strong {
@@ -1201,7 +1232,9 @@
   font-weight: 800;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  white-space: nowrap;
+  /* No nowrap: "EPISODIC 0 RECORDS"-length badges overflow the ~140px
+     auto-fit coverage cells and clip mid-glyph; let the badge wrap under
+     the kind label instead. */
 }
 
 .mc-next-provenance-coverage-item p {

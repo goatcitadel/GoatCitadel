@@ -60,7 +60,7 @@ describe("shell build identity chip", () => {
 
     expect(absent).toEqual({
       value: "Packaged · v1.0.0 · aaaaaaaa · proof unverified",
-      compactValue: "Pkg/v1.0.0/aaaaaaaa/unverified",
+      compactValue: "unverified/Pkg/v1.0.0/aaaaaaaa",
       status: "unverified",
     });
     expect(malformed.value).toContain("proof unverified");
@@ -107,7 +107,7 @@ describe("shell build identity chip", () => {
     );
     expect(value).toEqual({
       value: "Dev · v1.0.0 · aaaaaaaa · modified · proof unverified",
-      compactValue: "Dev/v1.0.0/aaaaaaaa/modified/unverified",
+      compactValue: "unverified/Dev/v1.0.0/aaaaaaaa/modified",
       status: "unverified",
     });
   });

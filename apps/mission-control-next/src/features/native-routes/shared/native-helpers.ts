@@ -373,6 +373,23 @@ function isErrorRecord(error: unknown): error is Record<string, unknown> {
   return typeof error === "object" && error !== null;
 }
 
+/**
+ * Humanizes machine enum tokens for operator-facing text: "not_started" ->
+ * "Not started", "provider-ready" -> "Provider ready", "hybrid_guarded" ->
+ * "Hybrid guarded". Leaves already-human values untouched apart from the
+ * leading capital.
+ */
+export function humanizeEnumToken(value: string | null | undefined): string {
+  if (!value) {
+    return "";
+  }
+  const spaced = value.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!spaced) {
+    return "";
+  }
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
 export function getErrorMessage(error: unknown): string {
   const errorMessage = error instanceof Error ? readErrorString(error.message) : null;
   if (errorMessage) {

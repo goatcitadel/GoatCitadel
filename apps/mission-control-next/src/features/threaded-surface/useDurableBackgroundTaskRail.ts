@@ -4,6 +4,7 @@ import {
   controlDurableBackgroundTask,
   fetchDurableBackgroundTaskRail,
 } from "@goatcitadel/mission-control-shared/api/durable";
+import { isApiRequestError } from "@goatcitadel/mission-control-shared/api/client";
 
 const ACTIVE_POLL_INTERVAL_MS = 3_000;
 
@@ -48,7 +49,19 @@ export function useDurableBackgroundTaskRail(input: {
       setError(null);
     } catch (caught) {
       if (requestId !== requestSequence.current || activeScopeKey.current !== scopeKey) return;
-      setError(caught instanceof Error ? caught.message : "Background-task state could not be loaded.");
+      // A valid parent run with no child watchers returns a successful empty
+      // rail; a 404 means the run is missing or outside this workspace/session
+      // scope, so it MUST stay an error — but as an operator sentence, not the
+      // raw API envelope JSON.
+      if (isApiRequestError(caught)) {
+        setError(
+          caught.status === 404
+            ? "No background-task rail exists for this run in the active workspace/session scope."
+            : `Background-task state could not be loaded (HTTP ${caught.status ?? "error"}).`,
+        );
+      } else {
+        setError(caught instanceof Error ? caught.message : "Background-task state could not be loaded.");
+      }
     } finally {
       if (requestId === requestSequence.current && activeScopeKey.current === scopeKey) {
         setLoading(false);

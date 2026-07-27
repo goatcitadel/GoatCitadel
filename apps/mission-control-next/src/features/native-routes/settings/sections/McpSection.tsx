@@ -27,6 +27,7 @@ import {
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import {
   getErrorMessage,
+  humanizeEnumToken,
   nativeLoad,
   nativeLoadIssues,
   type Notice,
@@ -712,10 +713,11 @@ export function McpSection(_props: SettingsSectionProps) {
                       { label: "Transport", value: selectedServer.transport, meta: selectedServer.authType },
                       {
                         label: "Auth readiness",
-                        value:
+                        value: humanizeEnumToken(
                           selectedRemotePreviewItem?.authReadiness ??
-                          selectedServer.authState?.readiness ??
-                          "not_required",
+                            selectedServer.authState?.readiness ??
+                            "not_required",
+                        ),
                         meta: selectedServer.authState?.tokenExpiresAt
                           ? `Expires ${formatDateTime(selectedServer.authState.tokenExpiresAt)}`
                           : selectedServer.oauth?.tokenUrl

@@ -74,9 +74,7 @@ try {
     });
   }
   if (containerName && runtimeRoot) {
-    if (!containerImage) {
-      containerImage = tryInspectContainerImage(containerName);
-    }
+    containerImage = tryInspectContainerImage(containerName);
     await removeReviewContainer(containerName, runtimeRoot).catch((error) => {
       process.stderr.write(
         `[bundled-postgres-restart] cleanup refused or failed for ${containerName}: ${formatError(error)}\n`,

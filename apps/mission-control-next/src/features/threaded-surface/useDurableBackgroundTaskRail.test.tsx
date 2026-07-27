@@ -5,6 +5,7 @@ import {
   controlDurableBackgroundTask,
   fetchDurableBackgroundTaskRail,
 } from "@goatcitadel/mission-control-shared/api/durable";
+import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/client";
 import { useDurableBackgroundTaskRail } from "./useDurableBackgroundTaskRail";
 
 vi.mock("@goatcitadel/mission-control-shared/api/durable", () => ({
@@ -99,6 +100,22 @@ describe("useDurableBackgroundTaskRail", () => {
       renderer = create(<Harness parentRunId="run-a" />);
     });
     expect(text(renderer)).toBe("scope unavailable");
+  });
+
+  it("keeps a rail 404 as an error but renders an operator sentence, not the API envelope", async () => {
+    mockedFetch.mockRejectedValue(
+      new ApiRequestError('API error 404: {"error":"Durable background-task rail run-a not found"}', {
+        kind: "http",
+        method: "GET",
+        path: "/api/v1/chat/runs/run-a/background-tasks",
+        status: 404,
+      }),
+    );
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness parentRunId="run-a" />);
+    });
+    expect(text(renderer)).toBe("No background-task rail exists for this run in the active workspace/session scope.");
   });
 
   it("keeps polling after all children finish while the parent is still synthesizing", async () => {

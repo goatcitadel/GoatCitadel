@@ -111,7 +111,11 @@
 }
 
 .mc-next-settings-field-grid {
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr));
+  /* 16rem floor, not 11rem: a span-2 sibling (URL/Description) pins the
+     auto-fit track count at its maximum, so with an 11rem floor wide panels
+     resolved 4 phantom tracks and single-track fields (MCP Label, workspace
+     Name) clipped their own values while half the row sat empty. */
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
 }
 
 .mc-next-directory-card {
@@ -280,7 +284,7 @@
   scroll-margin-top: 5rem;
 }
 
-.mc-next-native-grid > .mc-next-section-index {
+.mc-next-directory-grid-native > .mc-next-section-index {
   grid-column: 1 / -1;
 }
 

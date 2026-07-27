@@ -392,7 +392,10 @@
 .mc-next-threaded-surface.unified .mc-next-threaded-composer-card {
   min-width: 0;
   padding: 8px 18px 14px;
-  background: linear-gradient(to top, var(--background) 72%, transparent);
+  /* Fixed-height fade (matches timeline-frame.css): a %-stop scales with the
+     card, and the blocked composer is tall enough that a 28%-of-height fade
+     leaves timeline text half-visible through the sticky card. */
+  background: linear-gradient(to top, var(--background) calc(100% - 14px), transparent);
 }
 
 .mc-next-threaded-surface.unified .mc-next-composer {

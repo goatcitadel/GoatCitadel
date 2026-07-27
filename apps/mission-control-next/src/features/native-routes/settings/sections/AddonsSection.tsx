@@ -33,6 +33,7 @@ import {
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import {
   getErrorMessage,
+  humanizeEnumToken,
   type LoadState,
   nativeLoad,
   nativeLoadIssues,
@@ -495,20 +496,24 @@ export function AddonsSection(_props: SettingsSectionProps) {
                 <SettingsCodeBlock label="Description">{selectedAddon.description}</SettingsCodeBlock>
                 <NativeMetricGrid
                   items={[
-                    { label: "Trust tier", value: selectedAddon.trustTier, meta: selectedAddon.owner },
+                    {
+                      label: "Trust tier",
+                      value: humanizeEnumToken(selectedAddon.trustTier),
+                      meta: selectedAddon.owner,
+                    },
                     {
                       label: "Runtime",
-                      value: selectedAddonRuntimeStatus,
-                      meta: selectedAddon.runtimeType,
+                      value: humanizeEnumToken(selectedAddonRuntimeStatus),
+                      meta: humanizeEnumToken(selectedAddon.runtimeType),
                     },
                     {
                       label: "Lifecycle",
-                      value: selectedAddonInstalled ? (selectedAddonEnabled ? "enabled" : "disabled") : "not installed",
+                      value: selectedAddonInstalled ? (selectedAddonEnabled ? "Enabled" : "Disabled") : "Not installed",
                       meta: selectedInstalledRecord?.updatedAt ?? "No installed record",
                     },
                     {
                       label: "Web entry",
-                      value: selectedAddon.webEntryMode,
+                      value: humanizeEnumToken(selectedAddon.webEntryMode),
                       meta: selectedAddon.launchUrl ?? "No launch URL",
                     },
                   ]}

@@ -277,6 +277,9 @@
   font: 600 var(--text-xl)/1.22 var(--mc-font-sans);
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
+  /* Head metrics can carry unbroken ids (active workspace); without a wrap
+     escape they overflow the tile and paint over the neighboring panel. */
+  overflow-wrap: anywhere;
 }
 
 .mc-next-directory-head-metric-delta {
