@@ -49,12 +49,16 @@ export function useDurableBackgroundTaskRail(input: {
       setError(null);
     } catch (caught) {
       if (requestId !== requestSequence.current || activeScopeKey.current !== scopeKey) return;
-      if (isApiRequestError(caught) && caught.status === 404) {
-        // A parent run without a durable rail is a normal state, not a
-        // failure — surfacing the raw 404 envelope here painted an API error
-        // JSON blob into the Background tasks panel.
-        setSnapshot(null);
-        setError(null);
+      // A valid parent run with no child watchers returns a successful empty
+      // rail; a 404 means the run is missing or outside this workspace/session
+      // scope, so it MUST stay an error — but as an operator sentence, not the
+      // raw API envelope JSON.
+      if (isApiRequestError(caught)) {
+        setError(
+          caught.status === 404
+            ? "No background-task rail exists for this run in the active workspace/session scope."
+            : `Background-task state could not be loaded (HTTP ${caught.status ?? "error"}).`,
+        );
       } else {
         setError(caught instanceof Error ? caught.message : "Background-task state could not be loaded.");
       }

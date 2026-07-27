@@ -227,14 +227,13 @@
   --text-primary: var(--foreground);
   --text-secondary: color-mix(in oklab, var(--foreground) 82%, var(--muted-foreground));
   --text-muted: var(--muted-foreground);
-  --border-default: var(--border);
-  /* Do NOT re-declare --border-subtle here: --mc-border-subtle above is
-     defined as var(--border-subtle) on this same element, so aliasing back
-     creates a custom-property cycle that makes BOTH guaranteed-invalid and
-     empties --border/--border-default/--line shell-wide (every
-     `var(--border)` border silently computes to none). The canonical
-     .theme-* declaration in mission-control-next-tokens.css already applies
-     to this element via its theme class. */
+  /* Do NOT re-declare --border-default or --border-subtle here. The light
+     block sets `--border: var(--border-default)`, so aliasing either back to
+     var(--border) on this same element is a custom-property cycle that makes
+     both guaranteed-invalid and empties --border/--border-default/--line
+     shell-wide (every `var(--border)` border silently computes to none).
+     The canonical .theme-* declarations in mission-control-next-tokens.css
+     already apply to this element via its theme class. */
   --border-emphasis: var(--mc-border-strong);
   --accent-primary: var(--primary);
   --accent-strong: var(--brand);
@@ -292,14 +291,13 @@
   --text-primary: var(--foreground);
   --text-secondary: color-mix(in oklab, var(--foreground) 84%, var(--muted-foreground));
   --text-muted: var(--muted-foreground);
-  --border-default: var(--border);
-  /* Do NOT re-declare --border-subtle here: --mc-border-subtle above is
-     defined as var(--border-subtle) on this same element, so aliasing back
-     creates a custom-property cycle that makes BOTH guaranteed-invalid and
-     empties --border/--border-default/--line shell-wide (every
-     `var(--border)` border silently computes to none). The canonical
-     .theme-* declaration in mission-control-next-tokens.css already applies
-     to this element via its theme class. */
+  /* Do NOT re-declare --border-default or --border-subtle here. The light
+     block sets `--border: var(--border-default)`, so aliasing either back to
+     var(--border) on this same element is a custom-property cycle that makes
+     both guaranteed-invalid and empties --border/--border-default/--line
+     shell-wide (every `var(--border)` border silently computes to none).
+     The canonical .theme-* declarations in mission-control-next-tokens.css
+     already apply to this element via its theme class. */
   --border-emphasis: var(--mc-border-strong);
   --accent-primary: var(--primary);
   --accent-strong: color-mix(in oklab, var(--mc-area-color) 62%, oklch(0.4 0.02 255));

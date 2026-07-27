@@ -163,6 +163,7 @@ describe("CitadelOverviewRoutePage", () => {
     expect(tree).toContain("sealed");
     // Gatehouse enums are humanized for operators (was raw "approval_required").
     expect(tree).toContain("Approval required");
+    expect(tree).not.toContain("approval_required");
   });
 
   it("shows the staged setup state without fetching detail when the active Citadel has no Charter", async () => {

@@ -226,8 +226,8 @@ export function CitadelOverviewRoutePage({
             stats={
               charter
                 ? [
-                    { label: "Kind", value: charter.kind },
-                    { label: "Posture", value: charter.riskPosture },
+                    { label: "Kind", value: humanizeEnumToken(charter.kind) },
+                    { label: "Posture", value: humanizeEnumToken(charter.riskPosture) },
                   ]
                 : undefined
             }

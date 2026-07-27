@@ -19,7 +19,8 @@ Full-matrix visual/UX review of every release surface ahead of 1.0, with fixes a
   produced 64 candidate findings; every bug candidate was adversarially re-verified against the live
   app (computed styles, `getBoundingClientRect`, cascade inspection) before any fix.
 - Console health: **zero console errors, warnings, or page errors across all 456 route loads** (after
-  installing the missing `@fontsource-variable/hanken-grotesk` dependency locally).
+  repairing local dependency drift: `@fontsource-variable/hanken-grotesk` is declared and imported in
+  the repo but was absent from this machine's `node_modules` until `pnpm install`).
 - Gates after fixes: `perf:check` (legacy/token-drift/typography/buttons/icons/contrast/budgets) green,
   `tsc -b` green, eslint green (three packages), vitest green: mission-control-next 885,
   mission-control-shared 825, threaded-surface-core 425.
@@ -74,9 +75,10 @@ render as designed.
 | 28 | Gateway access gate | Collapsed "Technical details" had no disclosure affordance; primary CTA identical to secondary; light-theme switch off-track invisible | Chevron per the repo disclosure idiom; `.active` emphasis on Connect/Retry; surface-3 switch track |
 | 29 | Settings Access | Token placeholder guidance truncated mid-word in every variant | Shortened to "New token (only when rotating)" |
 
-Also: installed the missing `@fontsource-variable/hanken-grotesk` dependency locally (declared in
-`package.json` since the last release commit but absent from `node_modules` — fresh checkouts were
-fine; only pre-existing local trees needed `pnpm install`).
+Also: repaired local dependency drift for `@fontsource-variable/hanken-grotesk` — the package is
+correctly declared in `package.json` and imported by the foundation stylesheet (no repository or
+build defect); it was merely absent from this machine's pre-existing `node_modules` until
+`pnpm install`. Fresh checkouts are unaffected.
 
 ## Verified non-issues
 
