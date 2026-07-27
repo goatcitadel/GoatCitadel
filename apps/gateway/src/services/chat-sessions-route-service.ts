@@ -14,6 +14,7 @@ export const chatSessionsRouteMethods = [
   "exportChatSessionWorkbenchPatch",
   "getChatGeneratedArtifact",
   "getChatSessionBinding",
+  "getChatSessionStatus",
   "getChatSessionWorkbench",
   "getChatSessionWorkbenchDiff",
   "getChatSessionWorkbenchFile",

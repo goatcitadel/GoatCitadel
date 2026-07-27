@@ -432,6 +432,10 @@ export function shouldExecuteLocalChatCommand(action: OutboundQueueItem["action"
   return action === "send" && content.trim().startsWith("/");
 }
 
+export function isLocalChatStatusCommand(content: string): boolean {
+  return content.trim().toLowerCase() === "/status";
+}
+
 /**
  * Parsed representation of a `/btw` command.
  *

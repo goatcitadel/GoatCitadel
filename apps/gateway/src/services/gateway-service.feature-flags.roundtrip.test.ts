@@ -27,6 +27,7 @@ const ALL_FLAGS_SET: Required<FeatureFlagsConfig> = {
   chatThinkingStreamV1Enabled: true,
   unifiedComposerPaletteV1Enabled: true,
   attachedContextToolsV1Enabled: true,
+  chatSessionStatusV1Enabled: true,
   channelVoiceInboundV1Enabled: true,
   signalInboundV1Enabled: true,
   plannerFastPathV1Disabled: true,

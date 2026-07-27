@@ -307,6 +307,19 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     });
   });
 
+  fastify.get("/api/v1/chat/sessions/:sessionId/status", async (request, reply) => {
+    const params = sessionParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      reply.header("cache-control", "private, no-store");
+      return reply.send(fastify.services.chatSessions.getChatSessionStatus(params.data.sessionId));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
   fastify.patch("/api/v1/chat/sessions/:sessionId", async (request, reply) => {
     const params = sessionParamsSchema.safeParse(request.params);
     const body = updateSessionSchema.safeParse(request.body);

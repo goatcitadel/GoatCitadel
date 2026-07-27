@@ -22,6 +22,7 @@ import type { BackupRetentionService } from "./backup-retention-service.js";
 import type { CapabilityPackService } from "./capability-pack-service.js";
 import type { CapabilitySystemService } from "./capability-system-service.js";
 import type { ChatProjectService } from "./chat-project-service.js";
+import type { ChatSessionStatusService } from "./chat-session-status-service.js";
 import type { ChatProactiveService } from "./chat-proactive-service.js";
 import type { ChatSteerService } from "./chat-steer-service.js";
 import type { ChatCompactionBreakerActionService } from "./chat-compaction-breaker-action-service.js";
@@ -81,6 +82,7 @@ export interface GatewayRouteCompositionPort {
   readonly chatCompactionBreakerActionService: ChatCompactionBreakerActionService;
   readonly chatProactiveService: ChatProactiveService;
   readonly chatProjectService: ChatProjectService;
+  readonly chatSessionStatusService: ChatSessionStatusService;
   readonly chatMessageRouteRuntimeHost: chatMessageRouteRuntime.ChatMessageRouteRuntimeHost;
   readonly chatTurnRuntime: ChatTurnRuntimeService;
   readonly steerService: ChatSteerService;
@@ -304,6 +306,7 @@ export function createGatewayRouteCompositionPort(
     chatCompactionBreakerActionService: privateDependencies.chatCompactionBreakerActionService,
     chatMessageRouteRuntimeHost: privateDependencies.chatMessageRouteRuntimeHost,
     chatProjectService: privateDependencies.chatProjectService,
+    chatSessionStatusService: gateway.chatSessionStatusService,
     chatTurnRuntime: privateDependencies.chatTurnRuntime,
     databaseCutoverService: privateDependencies.databaseCutoverService,
     devDiagnostics: privateDependencies.devDiagnostics,

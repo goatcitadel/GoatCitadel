@@ -5,6 +5,7 @@ import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import type {
   BrowserSessionAccessCheck,
+  ChatSessionStatusModelProjection,
   ToolGrantRecord,
   ToolInvokeRequest,
   ToolPolicyActorContext,
@@ -111,6 +112,8 @@ export interface ToolExecutorRuntimeHooks {
    * unfulfillable and `agent.fanout` raises a clear error.
    */
   subagentFanout?: (request: ToolInvokeRequest) => Promise<Record<string, unknown>>;
+  /** Gateway-owned canonical status projection used by the model-safe `session.status` tool. */
+  getChatSessionStatus?: (sessionId: string) => ChatSessionStatusModelProjection;
 }
 
 export type ToolProcessSpawnName = "shell.exec" | "shell.exec_background" | "tests.run" | "lint.run" | "build.run";
@@ -233,11 +236,16 @@ export async function executeTool(
   }
   switch (request.toolName) {
     case "session.status":
-      return finalizeToolResult({
-        sessionId: request.sessionId,
-        status: "ok",
-        attachedContextTools: listAvailableRoutedContextTools(request, storage),
-      });
+      return finalizeToolResult(
+        runtimeHooks.getChatSessionStatus
+          ? { ...runtimeHooks.getChatSessionStatus(request.sessionId) }
+          : {
+              sessionId: request.sessionId,
+              status: "unavailable",
+              reason: "Gateway session status service is unavailable.",
+              attachedContextTools: listAvailableRoutedContextTools(request, storage),
+            },
+      );
     case "time.now":
       return finalizeToolResult(timeNow());
     case "http.get":
