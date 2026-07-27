@@ -78,6 +78,9 @@ test("Mission Control Next shell interaction targets Route details instead of Ch
   let inspectorVisible = false;
   let requestedName;
   const routeDetailsButton = {
+    async isVisible() {
+      return true;
+    },
     async waitFor() {},
     async textContent() {
       return inspectorVisible ? "Hide Route details" : "Open Route details";
@@ -111,6 +114,63 @@ test("Mission Control Next shell interaction targets Route details instead of Ch
   assert.equal(requestedName.test("Open Route details"), true);
   assert.equal(requestedName.test("Hide Route details"), true);
   assert.equal(requestedName.test("Open Context"), false);
+});
+
+test("Mission Control Next shell interaction reaches Route details through the topbar overflow menu", async () => {
+  let menuOpen = false;
+  let inspectorVisible = false;
+  let requestedMenuItemName;
+  const overflowButton = {
+    async waitFor() {},
+    async click() {
+      menuOpen = true;
+    },
+  };
+  const routeDetailsMenuItem = {
+    async waitFor() {
+      assert.equal(menuOpen, true, "the overflow menu must be open before its items are addressed");
+    },
+    async click() {
+      assert.equal(menuOpen, true, "Route details must be selected from the open overflow menu");
+      inspectorVisible = true;
+    },
+  };
+  const page = {
+    getByRole(role, options) {
+      if (role === "menuitem") {
+        requestedMenuItemName = options.name;
+        return { first: () => routeDetailsMenuItem };
+      }
+      assert.equal(role, "button");
+      if (options.name.test("More controls")) {
+        return { first: () => overflowButton };
+      }
+      // The shell collapsed Route details into the overflow menu, so the standalone
+      // control is absent from the topbar.
+      assert.equal(options.name.test("Open Route details"), true);
+      return { first: () => ({ isVisible: async () => false }) };
+    },
+    locator(selector) {
+      assert.equal(selector, ".mc-next-shell-inspector");
+      return {
+        async waitFor({ state }) {
+          assert.equal(state, "visible");
+          assert.equal(inspectorVisible, true);
+        },
+      };
+    },
+    async waitForTimeout() {},
+    async waitForSelector() {
+      assert.fail("the overflow path should open the inspector without fallback waiting");
+    },
+  };
+
+  await performVerificationInteraction(page, "open-inspector", "@goatcitadel/mission-control-next");
+
+  assert.equal(inspectorVisible, true);
+  assert.equal(requestedMenuItemName.test("Open Route details"), true);
+  assert.equal(requestedMenuItemName.test("Hide Route details"), true);
+  assert.equal(requestedMenuItemName.test("Open Context"), false);
 });
 
 test("mobile Chat proof rejects shell inspector ownership and opens threaded Working Context", async () => {
