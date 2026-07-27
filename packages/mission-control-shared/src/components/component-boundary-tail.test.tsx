@@ -11,7 +11,7 @@ import { GoatLoader } from "./GoatLoader";
 import { InlineHelp } from "./InlineHelp";
 import { NotificationStack, upsertNotificationItem, type NotificationItem } from "./NotificationStack";
 import { OfficeCanvasErrorBoundary } from "./OfficeCanvasErrorBoundary";
-import { PageErrorBoundary } from "./PageErrorBoundary";
+import { isModuleLoadError, PageErrorBoundary } from "./PageErrorBoundary";
 import { ShellPageFrame } from "./ShellPageFrame";
 import { ChatStreamStatusBar } from "./chat/ChatStreamStatusBar";
 import { formatWorkProviderModelSummary, formatWorkloadSummaryDescriptor } from "../pages/chat/work-trust";
@@ -39,9 +39,14 @@ function ThrowWhen({ active }: { active: boolean }) {
   return <span>Recovered child</span>;
 }
 
+function ThrowModuleError({ error }: { error: Error }) {
+  throw error;
+}
+
 describe("shared boundary and presentation tail components", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("recovers page render failures through retry and reset-key changes", () => {
@@ -93,6 +98,38 @@ describe("shared boundary and presentation tail components", () => {
       </PageErrorBoundary>,
     );
     expect(textOf(renderer.toJSON())).toContain("Recovered child");
+  });
+
+  it("reloads the document when React has cached a failed lazy module import", () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const reload = vi.fn();
+    vi.stubGlobal("location", { reload });
+    const moduleError = new TypeError(
+      "Failed to fetch dynamically imported module: http://localhost:5173/ThreadedSurfaceRoute.tsx",
+    );
+
+    expect(isModuleLoadError(null)).toBe(false);
+    expect(isModuleLoadError(new Error("ordinary render failure"))).toBe(false);
+    expect(isModuleLoadError(moduleError)).toBe(true);
+    expect(isModuleLoadError(Object.assign(new Error("chunk unavailable"), { name: "ChunkLoadError" }))).toBe(true);
+    expect(isModuleLoadError(new Error("Importing a module script failed"))).toBe(true);
+    expect(isModuleLoadError(new Error("Loading chunk vendor-react failed"))).toBe(true);
+
+    const renderer = create(
+      <PageErrorBoundary resetKey="one" pageLabel="Work" onReturnToChat={vi.fn()}>
+        <ThrowModuleError error={moduleError} />
+      </PageErrorBoundary>,
+    );
+
+    act(() => {
+      renderer.root
+        .findAllByType("button")
+        .find((button) => textOf(button.props.children).includes("Retry page"))!
+        .props.onClick();
+    });
+
+    expect(reload).toHaveBeenCalledOnce();
+    expect(textOf(renderer.toJSON())).toContain("hit a render failure");
   });
 
   it("reports office canvas failures and resets on a new scene key", () => {

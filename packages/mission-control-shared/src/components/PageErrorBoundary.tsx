@@ -9,15 +9,27 @@ interface PageErrorBoundaryProps {
 
 interface PageErrorBoundaryState {
   hasError: boolean;
+  error: Error | null;
+}
+
+const MODULE_LOAD_ERROR_PATTERN =
+  /Failed to fetch dynamically imported module|Importing a module script failed|Loading chunk [\w-]+ failed/i;
+
+export function isModuleLoadError(error: Error | null): boolean {
+  if (!error) {
+    return false;
+  }
+  return error.name === "ChunkLoadError" || MODULE_LOAD_ERROR_PATTERN.test(error.message);
 }
 
 export class PageErrorBoundary extends Component<PageErrorBoundaryProps, PageErrorBoundaryState> {
   public override state: PageErrorBoundaryState = {
     hasError: false,
+    error: null,
   };
 
-  public static getDerivedStateFromError(): PageErrorBoundaryState {
-    return { hasError: true };
+  public static getDerivedStateFromError(error: Error): PageErrorBoundaryState {
+    return { hasError: true, error };
   }
 
   public override componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
@@ -31,12 +43,16 @@ export class PageErrorBoundary extends Component<PageErrorBoundaryProps, PageErr
 
   public override componentDidUpdate(prevProps: PageErrorBoundaryProps): void {
     if (this.state.hasError && prevProps.resetKey !== this.props.resetKey) {
-      this.setState({ hasError: false });
+      this.setState({ hasError: false, error: null });
     }
   }
 
   private readonly handleRetry = () => {
-    this.setState({ hasError: false });
+    if (isModuleLoadError(this.state.error) && typeof globalThis.location?.reload === "function") {
+      globalThis.location.reload();
+      return;
+    }
+    this.setState({ hasError: false, error: null });
   };
 
   public override render(): ReactNode {
