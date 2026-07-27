@@ -321,6 +321,7 @@ async function main() {
       await runUsageReconciliationLane(context, { profile });
       // "all" means every registered lane: these were silently missing, so a
       // green `verify:all` under-reported the verified surface.
+      await runExtensionsPackageLane(context);
       await runRoutedContextSnapshotsLane(context, { profile });
       await runModelCouncilLane(context, { profile });
       await runSkillLearningLane(context, { profile });
