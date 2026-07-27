@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowRight, ChevronDown, FlaskConical, Minus, RefreshCw, TrendingDown, TrendingUp } from "lucide-react";
 import { Virtuoso } from "react-virtuoso";
 import { BlocksShuffleLoader } from "../../components/BlocksShuffleLoader";
@@ -291,6 +291,15 @@ export function NativeSectionIndex({
   items: NativeSectionIndexItem[];
   label?: string;
 }) {
+  const itemIds = items.map((item) => item.id).join("|");
+  useEffect(() => {
+    const hash = globalThis.location?.hash.replace(/^#/, "") ?? "";
+    if (!hash || !itemIds.split("|").includes(hash)) {
+      return;
+    }
+    globalThis.document?.getElementById(hash)?.scrollIntoView?.({ block: "start" });
+  }, [itemIds]);
+
   if (items.length < 2) {
     return null;
   }
@@ -316,6 +325,7 @@ export function NativeDisclosureCard({
   stats,
   defaultOpen = false,
   className,
+  revealOnOpen = false,
 }: {
   id: string;
   title: string;
@@ -324,13 +334,29 @@ export function NativeDisclosureCard({
   stats?: Array<{ label: string; value: string }>;
   defaultOpen?: boolean;
   className?: string;
+  revealOnOpen?: boolean;
 }) {
+  const [isOpen, setIsOpen] = useState(defaultOpen);
+  useEffect(() => {
+    if (defaultOpen) {
+      setIsOpen(true);
+    }
+  }, [defaultOpen]);
+
   return (
     <details
+      id={id}
       className={["mc-next-disclosure-card", className ?? ""].filter(Boolean).join(" ")}
-      open={defaultOpen || undefined}
+      open={isOpen}
+      onToggle={(event) => {
+        const nextOpen = event.currentTarget.open;
+        setIsOpen(nextOpen);
+        if (revealOnOpen && nextOpen) {
+          event.currentTarget.scrollIntoView({ block: "nearest" });
+        }
+      }}
     >
-      <summary id={id}>
+      <summary>
         <span>
           <strong>{title}</strong>
           <small>{subtitle}</small>

@@ -33,23 +33,23 @@
 }
 
 .mc-next-provider-detail-card {
-  order: 0;
+  order: 4;
 }
 
 .mc-next-provider-routing-card {
-  order: 1;
+  order: 0;
 }
 
 .mc-next-provider-oauth-card {
-  order: 2;
-}
-
-.mc-next-provider-editor-card {
   order: 3;
 }
 
+.mc-next-provider-editor-card {
+  order: 2;
+}
+
 .mc-next-provider-model-picker-card {
-  order: 4;
+  order: 1;
 }
 
 .mc-next-provider-advice-card {

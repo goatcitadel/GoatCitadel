@@ -3397,7 +3397,7 @@ describe("SettingsNativePage providers", () => {
     expect(text).toContain("ChatGPT login");
     expect(text).toContain("OpenAI approval");
     expect(text).toContain("OAuth missing");
-    expect(text).toContain("Done");
+    expect(text).toContain("Chat routing");
     expect(text).toContain("Start ChatGPT login");
     expect(text).toContain("No API key goes here.");
     expect(text).toContain("ChatGPT login is managed by the setup card above.");
@@ -3430,6 +3430,77 @@ describe("SettingsNativePage providers", () => {
     expect(
       renderer!.root.findAll((node) => node.type === "button" && collectText(node).includes("Get a new code")),
     ).toHaveLength(1);
+  });
+
+  it("shows truthful empty routing controls and populates models after a provider is chosen", async () => {
+    mocks.providerCatalogState.config = {
+      ...mocks.providerCatalogState.config,
+      activeProviderId: "",
+      activeModel: "",
+    };
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = renderPage();
+    });
+
+    const routingProvider = renderer!.root
+      .findAllByType("select")
+      .find((select) => collectText(select).includes("Choose a provider"))!;
+    const routingModel = renderer!.root
+      .findAllByType("select")
+      .find((select) => collectText(select).includes("Choose a model"))!;
+
+    expect(routingProvider.props.value).toBe("");
+    expect(routingModel.props.value).toBe("");
+    expect(routingModel.props.disabled).toBe(true);
+    expect(findButton(renderer!.root, "Save routing").props.disabled).toBe(true);
+    expect(collectText(renderer!.root)).toContain("No active Chat route is configured");
+
+    await act(async () => {
+      routingProvider.props.onChange({ target: { value: "openai" } });
+    });
+
+    expect(routingProvider.props.value).toBe("openai");
+    expect(routingModel.props.value).toBe("gpt-5.4-mini");
+    expect(routingModel.props.disabled).toBe(false);
+    expect(findButton(renderer!.root, "Save routing").props.disabled).toBe(false);
+  });
+
+  it("activates a connected ChatGPT provider with one explicit action", async () => {
+    setCodexProviderCatalogState({ hasApiKey: false });
+    mocks.providerCatalogState.config = {
+      ...mocks.providerCatalogState.config,
+      activeProviderId: "",
+      activeModel: "",
+    };
+    mocks.fetchOpenAICodexOAuthStatus.mockResolvedValue({
+      providerId: "openai-codex",
+      available: true,
+      connected: true,
+      accountLabel: "user@example.com",
+      requiresReauth: false,
+    } as any);
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = renderPage();
+    });
+    await flushAsyncUpdates();
+
+    expect(collectText(renderer!.root)).toContain("it is not active for Chat yet");
+    await act(async () => {
+      findButton(renderer!.root, "Use for Chat").props.onClick();
+    });
+    await flushAsyncUpdates();
+
+    expect(mocks.patchSettings).toHaveBeenCalledWith({
+      expectedRevision: 43,
+      llm: {
+        activeProviderId: "openai-codex",
+        activeModel: "gpt-5.5",
+      },
+    });
   });
 
   it("renders the browser callback ChatGPT OAuth flow when OpenAI does not return a device code", async () => {

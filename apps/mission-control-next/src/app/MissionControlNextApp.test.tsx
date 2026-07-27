@@ -491,6 +491,22 @@ describe("MissionControlNextApp", () => {
     expect(css).toContain(".mc-next-status-details summary > span {\n    display: inline;");
   });
 
+  it("keeps non-work routes inside the bounded stage scroller", () => {
+    const css = readFileSync(new URL("../styles/mission-control-next.css", import.meta.url), "utf8").replaceAll(
+      "\r\n",
+      "\n",
+    );
+
+    expect(css).toContain(".mc-next-body:not(.is-work-area) {\n  align-items: stretch;\n  overflow: hidden;\n}");
+    expect(css).toContain(
+      ".mc-next-stage:not(.mc-next-stage-work) {\n  background: color-mix(in oklab, var(--background) 94%, var(--mc-surface-2));\n  height: 100%;\n  overflow: hidden;\n}",
+    );
+    expect(css).toContain(
+      ".mc-next-stage:not(.mc-next-stage-work) .mc-next-stage-scroll {\n  height: 100%;\n  padding: 0.85rem 0.85rem 2.75rem;\n  overflow: auto;",
+    );
+    expect(css).toContain("scrollbar-gutter: stable;");
+  });
+
   it("keeps the build identity action in compact shell chrome and links it to Ops proof", async () => {
     appMocks.isCompactTopbar = true;
     appMocks.isMobileNav = true;

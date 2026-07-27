@@ -191,6 +191,8 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
   const hasOrphanCodexOAuthCredential = !hasCodexOAuthProvider && hasCodexOAuthCredential;
   const codexOAuthFlowUserCode = codexOAuthFlow?.userCode?.trim() ?? "";
   const codexOAuthExpiryLabel = useMemo(() => formatOpenAICodexOAuthExpiry(codexOAuthFlow), [codexOAuthFlow]);
+  const codexRoutingModel = codexOAuthProvider?.defaultModel || codexOAuthProvider?.models?.[0] || "";
+  const codexIsActiveRouting = config?.activeProviderId === "openai-codex" && Boolean(config.activeModel?.trim());
   const refreshCodexOAuthStatus = useCallback(async () => {
     const requestId = codexOAuthStatusRequestIdRef.current + 1;
     codexOAuthStatusRequestIdRef.current = requestId;
@@ -240,20 +242,29 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
             : ("pending" as const),
       },
       {
-        label: "Done",
-        description: codexOAuthConnected
-          ? "GoatCitadel can use the connected ChatGPT/Codex plan."
-          : codexOAuthFlow
-            ? "GoatCitadel is checking automatically; this tab can stay open."
-            : "After approval, GoatCitadel confirms the connection here.",
-        state: codexOAuthConnected
+        label: "Chat routing",
+        description: codexIsActiveRouting
+          ? `OpenAI Codex is active for Chat with ${config?.activeModel}.`
+          : codexOAuthConnected
+            ? "Choose Use for Chat, or save OpenAI Codex in Active routing."
+            : codexOAuthFlow
+              ? "Finish the login before activating this provider for Chat."
+              : "Connect ChatGPT, then activate this provider for Chat.",
+        state: codexIsActiveRouting
           ? ("complete" as const)
-          : codexOAuthFlow
+          : codexOAuthConnected
             ? ("active" as const)
             : ("pending" as const),
       },
     ],
-    [codexOAuthConnected, codexOAuthFlow, codexOAuthFlowUserCode, hasCodexOAuthProvider],
+    [
+      codexIsActiveRouting,
+      codexOAuthConnected,
+      codexOAuthFlow,
+      codexOAuthFlowUserCode,
+      config?.activeModel,
+      hasCodexOAuthProvider,
+    ],
   );
   const selectedProviderRuntimePosture = selectedProvider
     ? selectedProviderIsLocal
@@ -468,31 +479,36 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
     setProviderTransportBaselineDraft(nextTransportDraft);
   }, [editorMode, providerEditorDirty, selectedProvider, selectedProviderConfig]);
 
-  const handleSaveRouting = async () => {
-    if (!routingProviderId.trim() || !routingModel.trim()) {
+  const persistRouting = async (providerId: string, model: string) => {
+    const normalizedProviderId = providerId.trim();
+    const normalizedModel = model.trim();
+    if (!normalizedProviderId || !normalizedModel) {
       setNotice({ tone: "warning", message: "Choose both a provider and a model before saving routing." });
-      return;
+      return false;
     }
     if (!config) {
       setNotice({ tone: "warning", message: "Reload provider settings before saving routing." });
-      return;
+      return false;
     }
+    const nextProvider = providers.find((provider) => provider.providerId === normalizedProviderId);
+    const usesFallbackModels = nextProvider?.modelProbeState === "fallback";
     try {
       await patchSettings({
         expectedRevision: config.revision,
         llm: {
-          activeProviderId: routingProviderId,
-          activeModel: routingModel,
+          activeProviderId: normalizedProviderId,
+          activeModel: normalizedModel,
         },
       });
       setNotice({
-        tone: routingUsesFallbackModels ? "warning" : "success",
-        message: routingUsesFallbackModels
+        tone: usesFallbackModels ? "warning" : "success",
+        message: usesFallbackModels
           ? "Provider routing updated with a suggested model that has not been account-verified."
           : "Provider routing updated.",
       });
-      setRoutingBaseline({ providerId: routingProviderId, model: routingModel });
+      setRoutingBaseline({ providerId: normalizedProviderId, model: normalizedModel });
       await reload();
+      return true;
     } catch (saveError) {
       if (isApiRequestError(saveError) && saveError.status === 409) {
         await reload();
@@ -501,10 +517,27 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
           message:
             "Provider settings changed elsewhere. Your routing draft is preserved; review the current settings, then save again to retry.",
         });
-        return;
+        return false;
       }
       setNotice({ tone: "error", message: getErrorMessage(saveError) });
+      return false;
     }
+  };
+
+  const handleSaveRouting = async () => persistRouting(routingProviderId, routingModel);
+
+  const handleUseCodexForChat = async () => {
+    if (!codexOAuthConnected) {
+      setNotice({ tone: "warning", message: "Connect ChatGPT before activating OpenAI Codex for Chat." });
+      return;
+    }
+    if (!codexRoutingModel) {
+      setNotice({ tone: "warning", message: "Refresh OpenAI Codex models before activating it for Chat." });
+      return;
+    }
+    setRoutingProviderId("openai-codex");
+    setRoutingModel(codexRoutingModel);
+    await persistRouting("openai-codex", codexRoutingModel);
   };
 
   const handleLoadProviderAdvice = async () => {
@@ -941,6 +974,7 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
           { id: "providers-directory", label: "Directory" },
           { id: "providers-routing", label: "Active routing" },
           { id: "providers-models", label: "Model picker" },
+          { id: "providers-advice", label: "Provider advice" },
           { id: "providers-editor", label: "Editor" },
           { id: "providers-oauth", label: "OAuth" },
         ]}
@@ -1016,6 +1050,7 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                     providerTransitionGuard.requestTransition({ kind: "routing", providerId: nextProviderId });
                   }}
                 >
+                  <option value="">Choose a provider</option>
                   {providers.map((item) => (
                     <option key={item.providerId} value={item.providerId}>
                       {item.label}
@@ -1028,7 +1063,9 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                   className="mc-next-settings-input"
                   value={routingModel}
                   onChange={(event) => setRoutingModel(event.target.value)}
+                  disabled={!routingProviderId}
                 >
+                  <option value="">Choose a model</option>
                   {(providers.find((item) => item.providerId === routingProviderId)?.models ?? []).map((modelId) => (
                     <option key={modelId} value={modelId}>
                       {modelId}
@@ -1038,6 +1075,17 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
               </SettingsField>
             </SettingsFieldGrid>
             <SettingsConfigSourceLegend />
+            {!config?.activeProviderId || !config.activeModel ? (
+              <SettingsNotice
+                notice={{
+                  tone: routingProviderId && routingModel ? "info" : "warning",
+                  message:
+                    routingProviderId && routingModel
+                      ? "No active Chat route is saved yet. Save this provider and model to enable Chat."
+                      : "No active Chat route is configured. Choose a provider and model, then save routing.",
+                }}
+              />
+            ) : null}
             {routingUsesFallbackModels ? (
               <SettingsNotice
                 notice={{
@@ -1048,7 +1096,11 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
               />
             ) : null}
             <SettingsButtonRow>
-              <NativeButton variant="default" onClick={() => void handleSaveRouting()}>
+              <NativeButton
+                variant="default"
+                disabled={!routingProviderId.trim() || !routingModel.trim()}
+                onClick={() => void handleSaveRouting()}
+              >
                 <Save size={16} />
                 Save routing
               </NativeButton>
@@ -1126,8 +1178,10 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
           </NativeCard>
           <NativeDisclosureCard
             id="providers-advice"
+            className="mc-next-provider-advice-card"
             title="Provider advice"
             subtitle="Advisory routing guidance only; no provider configuration is mutated."
+            revealOnOpen
           >
             <p className="mc-next-settings-field-note">
               {providerAdvice.data?.candidates?.length ?? 0} advisory candidates · no configuration mutation
@@ -1182,6 +1236,7 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
           </NativeDisclosureCard>
           <NativeDisclosureCard
             id="providers-oauth"
+            className="mc-next-provider-oauth-card"
             title="OpenAI Codex ChatGPT login"
             subtitle="Connect the OpenAI Codex provider through ChatGPT OAuth. No API key needed."
             defaultOpen={Boolean(
@@ -1223,8 +1278,10 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
             ) : codexOAuthConnected ? (
               <SettingsNotice
                 notice={{
-                  tone: "success",
-                  message: `Done. ChatGPT OAuth is connected${codexOAuthStatus?.accountLabel ? ` as ${codexOAuthStatus.accountLabel}` : ""}.`,
+                  tone: codexIsActiveRouting ? "success" : "warning",
+                  message: codexIsActiveRouting
+                    ? `Done. ChatGPT OAuth is connected${codexOAuthStatus?.accountLabel ? ` as ${codexOAuthStatus.accountLabel}` : ""}, and OpenAI Codex is active for Chat.`
+                    : `ChatGPT OAuth is connected${codexOAuthStatus?.accountLabel ? ` as ${codexOAuthStatus.accountLabel}` : ""}, but it is not active for Chat yet. Choose Use for Chat below.`,
                 }}
               />
             ) : codexOAuthFlow ? (
@@ -1264,6 +1321,16 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
               </SettingsFieldGrid>
             ) : null}
             <SettingsButtonRow>
+              {codexOAuthConnected && !codexIsActiveRouting ? (
+                <NativeButton
+                  variant="default"
+                  onClick={() => void handleUseCodexForChat()}
+                  disabled={codexOAuthBusy || !codexRoutingModel}
+                >
+                  <Save size={16} />
+                  Use for Chat
+                </NativeButton>
+              ) : null}
               {!hasCodexOAuthProvider ? (
                 <NativeButton
                   variant="default"
@@ -1280,7 +1347,7 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                 </NativeButton>
               ) : (
                 <NativeButton
-                  variant="default"
+                  variant={codexOAuthConnected ? "secondary" : "default"}
                   onClick={() => void handleStartCodexOAuth(true)}
                   disabled={codexOAuthBusy}
                 >

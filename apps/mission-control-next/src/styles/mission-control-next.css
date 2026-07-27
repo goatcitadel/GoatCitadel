@@ -1084,6 +1084,11 @@
   overflow: hidden;
 }
 
+.mc-next-body:not(.is-work-area) {
+  align-items: stretch;
+  overflow: hidden;
+}
+
 .mc-next-shell.ui-mode-simple .mc-next-body {
   grid-template-columns: 176px minmax(0, 1fr);
 }
@@ -1881,14 +1886,17 @@
 
 .mc-next-stage:not(.mc-next-stage-work) {
   background: color-mix(in oklab, var(--background) 94%, var(--mc-surface-2));
+  height: 100%;
+  overflow: hidden;
 }
 
 .mc-next-stage:not(.mc-next-stage-work) .mc-next-stage-scroll {
-  padding: 0.85rem;
+  height: 100%;
+  padding: 0.85rem 0.85rem 2.75rem;
   overflow: auto;
   overscroll-behavior: contain;
-  scroll-padding-bottom: 2.25rem;
-  padding-bottom: 2.25rem;
+  scroll-padding-bottom: 3rem;
+  scrollbar-gutter: stable;
 }
 
 .mc-next-surface-host:not(.mc-next-surface-host-work) {

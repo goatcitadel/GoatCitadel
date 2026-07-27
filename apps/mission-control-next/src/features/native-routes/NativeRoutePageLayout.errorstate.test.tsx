@@ -116,6 +116,7 @@ describe("Native long-page navigation", () => {
             title="Diagnostics"
             subtitle="Technical evidence and recovery detail."
             defaultOpen={false}
+            revealOnOpen
           >
             <p>Technical evidence</p>
           </NativeDisclosureCard>
@@ -126,8 +127,21 @@ describe("Native long-page navigation", () => {
     const links = renderer.root.findAllByType("a");
     expect(links.map((link) => link.props.href)).toEqual(["#runtime-posture", "#diagnostics"]);
     expect(links.every((link) => link.props.tabIndex !== -1)).toBe(true);
+    const disclosure = renderer.root.findByType("details");
+    expect(disclosure.props.id).toBe("diagnostics");
+    const scrollIntoView = vi.fn();
+    act(() => {
+      disclosure.props.onToggle({ currentTarget: { open: true, scrollIntoView } });
+    });
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
+    expect(renderer.root.findByType("details").props.open).toBe(true);
+    act(() => {
+      renderer.root.findByType("details").props.onToggle({ currentTarget: { open: false, scrollIntoView } });
+    });
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(renderer.root.findByType("details").props.open).toBe(false);
     const summary = renderer.root.findByType("summary");
-    expect(summary.props.id).toBe("diagnostics");
+    expect(summary.props.id).toBeUndefined();
     expect(summary.props.tabIndex).not.toBe(-1);
   });
 });
