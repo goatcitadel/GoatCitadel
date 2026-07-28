@@ -13,6 +13,7 @@ config/*.json
 .vscode
 *.log
 coverage
+coverage-*/
 .tmp/
 artifacts/
 vf-art/
