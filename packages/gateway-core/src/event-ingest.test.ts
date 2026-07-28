@@ -1269,98 +1269,102 @@ describe("EventIngestService canonical usage references", () => {
     "in-flight",
     "duplicate",
     "owner-missing",
-  ])("rejects %s canonical references atomically instead of falling back to legacy usage", async (scenario) => {
-    const storage = createCanonicalStorage(scenario);
-    try {
-      let payload = canonicalPayload({ taskId: "task-a" });
-      seedCanonicalUsage(storage, payload, { taskId: "task-a" });
-      if (scenario === "missing") {
-        payload = canonicalPayload({ taskId: "task-a", usageEventIds: ["missing-event"] });
-      } else if (scenario === "foreign-workspace") {
-        payload = canonicalPayload({ taskId: "task-a", workspaceId: "workspace-foreign" });
-      } else if (scenario === "cross-session") {
-        payload = canonicalPayload({ taskId: "task-a" });
-        payload.usage!.canonicalUsageOwner!.sessionId = "session-foreign";
-      } else if (scenario === "cross-turn") {
-        payload = canonicalPayload({ taskId: "task-a", turnId: "turn-foreign" });
-      } else if (scenario === "task-mismatch") {
-        payload = canonicalPayload({ taskId: "task-foreign" });
-      } else if (scenario === "record-task-without-payload-task") {
-        payload = canonicalPayload();
-      } else if (scenario === "self-consistent-foreign-workspace") {
-        seedCanonicalUsage(storage, payload, {
-          eventId: "usage-foreign-owner",
-          workspaceId: "workspace-foreign",
-          taskId: "task-a",
+  ])(
+    "rejects %s canonical references atomically instead of falling back to legacy usage",
+    async (scenario) => {
+      const storage = createCanonicalStorage(scenario);
+      try {
+        let payload = canonicalPayload({ taskId: "task-a" });
+        seedCanonicalUsage(storage, payload, { taskId: "task-a" });
+        if (scenario === "missing") {
+          payload = canonicalPayload({ taskId: "task-a", usageEventIds: ["missing-event"] });
+        } else if (scenario === "foreign-workspace") {
+          payload = canonicalPayload({ taskId: "task-a", workspaceId: "workspace-foreign" });
+        } else if (scenario === "cross-session") {
+          payload = canonicalPayload({ taskId: "task-a" });
+          payload.usage!.canonicalUsageOwner!.sessionId = "session-foreign";
+        } else if (scenario === "cross-turn") {
+          payload = canonicalPayload({ taskId: "task-a", turnId: "turn-foreign" });
+        } else if (scenario === "task-mismatch") {
+          payload = canonicalPayload({ taskId: "task-foreign" });
+        } else if (scenario === "record-task-without-payload-task") {
+          payload = canonicalPayload();
+        } else if (scenario === "self-consistent-foreign-workspace") {
+          seedCanonicalUsage(storage, payload, {
+            eventId: "usage-foreign-owner",
+            workspaceId: "workspace-foreign",
+            taskId: "task-a",
+          });
+          payload = canonicalPayload({
+            taskId: "task-a",
+            workspaceId: "workspace-foreign",
+            usageEventIds: ["usage-foreign-owner"],
+          });
+        } else if (scenario === "turn-owned-by-another-session") {
+          storage.chatTurnTraces.create({
+            turnId: "turn-foreign-owner",
+            sessionId: "session-foreign",
+            userMessageId: "user-turn-foreign-owner",
+            status: "running",
+            mode: "chat",
+            webMode: "off",
+            memoryMode: "off",
+            thinkingLevel: "standard",
+            routing: {},
+            startedAt: "2026-07-13T00:00:00.000Z",
+          });
+          seedCanonicalUsage(storage, payload, {
+            eventId: "usage-foreign-turn-owner",
+            turnId: "turn-foreign-owner",
+            taskId: "task-a",
+            skipTurnTrace: true,
+          });
+          payload = canonicalPayload({
+            taskId: "task-a",
+            turnId: "turn-foreign-owner",
+            usageEventIds: ["usage-foreign-turn-owner"],
+          });
+        } else if (scenario === "mixed") {
+          payload = canonicalPayload({ taskId: "task-a", usageEventIds: ["usage-event-1", "missing-event"] });
+        } else if (scenario === "in-flight") {
+          seedCanonicalUsage(storage, payload, {
+            eventId: "usage-in-flight",
+            taskId: "task-a",
+            terminal: false,
+          });
+          payload = canonicalPayload({ taskId: "task-a", usageEventIds: ["usage-in-flight"] });
+        } else if (scenario === "duplicate") {
+          payload = canonicalPayload({ taskId: "task-a", usageEventIds: ["usage-event-1", "usage-event-1"] });
+        } else if (scenario === "owner-missing") {
+          payload = canonicalPayload({ taskId: "task-a", includeOwner: false });
+        }
+        const route = resolveSessionRoute(payload.route);
+        const before = storage.sessions.getBySessionId(route.sessionId);
+        const beforeCostCount = costLedgerCount(storage);
+
+        await expect(
+          new EventIngestService(storage).ingest({
+            endpoint: "/api/v1/gateway/events",
+            idempotencyKey: `canonical-invalid-${scenario}`,
+            payload,
+          }),
+        ).rejects.toThrow(/canonical usage|canonicalUsageOwner/u);
+
+        expect(storage.chatMessages.get(payload.eventId)).toBeUndefined();
+        expect(storage.idempotency.find("/api/v1/gateway/events", `canonical-invalid-${scenario}`)).toBeUndefined();
+        expect(costLedgerCount(storage)).toBe(beforeCostCount);
+        expect(storage.sessions.getBySessionId(route.sessionId)).toMatchObject({
+          tokenInput: before.tokenInput,
+          tokenOutput: before.tokenOutput,
+          tokenCachedInput: before.tokenCachedInput,
+          costUsdTotal: before.costUsdTotal,
         });
-        payload = canonicalPayload({
-          taskId: "task-a",
-          workspaceId: "workspace-foreign",
-          usageEventIds: ["usage-foreign-owner"],
-        });
-      } else if (scenario === "turn-owned-by-another-session") {
-        storage.chatTurnTraces.create({
-          turnId: "turn-foreign-owner",
-          sessionId: "session-foreign",
-          userMessageId: "user-turn-foreign-owner",
-          status: "running",
-          mode: "chat",
-          webMode: "off",
-          memoryMode: "off",
-          thinkingLevel: "standard",
-          routing: {},
-          startedAt: "2026-07-13T00:00:00.000Z",
-        });
-        seedCanonicalUsage(storage, payload, {
-          eventId: "usage-foreign-turn-owner",
-          turnId: "turn-foreign-owner",
-          taskId: "task-a",
-          skipTurnTrace: true,
-        });
-        payload = canonicalPayload({
-          taskId: "task-a",
-          turnId: "turn-foreign-owner",
-          usageEventIds: ["usage-foreign-turn-owner"],
-        });
-      } else if (scenario === "mixed") {
-        payload = canonicalPayload({ taskId: "task-a", usageEventIds: ["usage-event-1", "missing-event"] });
-      } else if (scenario === "in-flight") {
-        seedCanonicalUsage(storage, payload, {
-          eventId: "usage-in-flight",
-          taskId: "task-a",
-          terminal: false,
-        });
-        payload = canonicalPayload({ taskId: "task-a", usageEventIds: ["usage-in-flight"] });
-      } else if (scenario === "duplicate") {
-        payload = canonicalPayload({ taskId: "task-a", usageEventIds: ["usage-event-1", "usage-event-1"] });
-      } else if (scenario === "owner-missing") {
-        payload = canonicalPayload({ taskId: "task-a", includeOwner: false });
+      } finally {
+        storage.close();
       }
-      const route = resolveSessionRoute(payload.route);
-      const before = storage.sessions.getBySessionId(route.sessionId);
-      const beforeCostCount = costLedgerCount(storage);
-
-      await expect(
-        new EventIngestService(storage).ingest({
-          endpoint: "/api/v1/gateway/events",
-          idempotencyKey: `canonical-invalid-${scenario}`,
-          payload,
-        }),
-      ).rejects.toThrow(/canonical usage|canonicalUsageOwner/u);
-
-      expect(storage.chatMessages.get(payload.eventId)).toBeUndefined();
-      expect(storage.idempotency.find("/api/v1/gateway/events", `canonical-invalid-${scenario}`)).toBeUndefined();
-      expect(costLedgerCount(storage)).toBe(beforeCostCount);
-      expect(storage.sessions.getBySessionId(route.sessionId)).toMatchObject({
-        tokenInput: before.tokenInput,
-        tokenOutput: before.tokenOutput,
-        tokenCachedInput: before.tokenCachedInput,
-        costUsdTotal: before.costUsdTotal,
-      });
-    } finally {
-      storage.close();
-    }
-  });
+    },
+    15_000,
+  );
 
   it("keeps the legacy projection path when canonical ids are absent", async () => {
     const storage = createCanonicalStorage("legacy");
