@@ -22,6 +22,11 @@ export interface PromptPackBenchmarkRunRow {
   claim_heartbeat_at: string | null;
   claim_expires_at: string | null;
   execution_style: string | null;
+  pack_content_sha256?: string | null;
+  policy_hash?: string | null;
+  test_snapshot_json?: string | null;
+  test_snapshot_sha256?: string | null;
+  scoring_snapshot_json?: string | null;
   error: string | null;
   started_at: string;
   finished_at: string | null;
@@ -109,6 +114,10 @@ export function mapPromptPackBenchmarkRunRow(row: PromptPackBenchmarkRunRow): Pr
     testCodes: safeJsonParse<string[]>(row.test_codes_json, []),
     providers: safeJsonParse<PromptPackBenchmarkProviderInput[]>(row.providers_json, []),
     executionStyle: resolvePromptPackExecutionStyle(row.execution_style),
+    packContentSha256: row.pack_content_sha256 ?? undefined,
+    policyHash: row.policy_hash ?? undefined,
+    testSnapshotSha256: row.test_snapshot_sha256 ?? undefined,
+    scoringSnapshot: safeJsonParse<Record<string, string>>(row.scoring_snapshot_json ?? "", {}),
     error: row.error ?? undefined,
     startedAt: row.started_at,
     finishedAt: row.finished_at ?? undefined,

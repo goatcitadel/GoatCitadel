@@ -6,6 +6,17 @@ export interface ScheduleAgentToolExecutorHooks {
     policyContext: ToolPolicyActorContext | undefined,
   ) => Promise<Record<string, unknown>>;
   subagentFanout?: (request: ToolInvokeRequest) => Promise<Record<string, unknown>>;
+  submitWorkResult?: (request: ToolInvokeRequest) => Promise<Record<string, unknown>>;
+}
+
+export async function executeSubmitWorkResult(
+  request: ToolInvokeRequest,
+  runtimeHooks: ScheduleAgentToolExecutorHooks,
+): Promise<Record<string, unknown>> {
+  if (!runtimeHooks.submitWorkResult) {
+    throw new Error("submit_work_result is not available in this runtime (no submitWorkResult hook configured).");
+  }
+  return runtimeHooks.submitWorkResult(request);
 }
 
 /**

@@ -606,6 +606,7 @@ import {
   type ToolInvocationRuntimeOptions,
 } from "./tool-invocation-coordinator-service.js";
 import { WorkspacePathBridgeRuntime } from "./workspace-path-bridge-runtime.js";
+import { buildDelegatedFilesystemScopeControl, DelegatedWorkResultService } from "./delegated-work-result-service.js";
 import { PluginToolOverrideService } from "./plugin-tool-override-service.js";
 import { CapabilityPackService } from "./capability-pack-service.js";
 import { ContinuationGateService } from "./continuation-gate-service.js";
@@ -711,6 +712,7 @@ import type { BaseAgentPromptSkill, BaseAgentPromptToolset } from "./base-agent-
 import { TaskLifecycleService } from "./task-lifecycle-service.js";
 import { BrowserSessionRuntimeService } from "./browser-session-runtime-service.js";
 import { ReviewReadinessService } from "./review-readiness-service.js";
+import { EngineeringLearningService } from "./engineering-learning-service.js";
 import { resolvePackagedRuntimeAppDir, RuntimeReleaseTrustService } from "./runtime-release-trust-service.js";
 import { RuntimeAuthorityProjectionService } from "./runtime-authority-projection-service.js";
 import { createDefaultArtifactProbers, createDurableTaskAutoBlockBridge } from "./gateway-kanban-wiring.js";
@@ -1307,9 +1309,11 @@ export class GatewayService {
   public readonly mcpRequesterScopedRuntime: McpRequesterScopedComposedRuntime;
   private readonly toolInvocationCoordinator: ToolInvocationCoordinatorService;
   private readonly workspacePathBridgeRuntime: WorkspacePathBridgeRuntime;
+  private readonly delegatedWorkResultService: DelegatedWorkResultService;
   private readonly runtimeLifecycleReadService: RuntimeLifecycleReadService;
   private readonly chatLearnedMemoryService: ChatLearnedMemoryService;
   private readonly promptPackService: PromptPackService;
+  public readonly engineeringLearningService: EngineeringLearningService;
   public readonly chatProactiveService: ChatProactiveService;
   private readonly improvementService: ImprovementService;
   private readonly curatorService: CuratorService;
@@ -1538,6 +1542,15 @@ export class GatewayService {
       dataDir: config.assistant.dataDir,
       writeJailRoots: config.toolPolicy.sandbox.writeJailRoots,
     });
+    this.delegatedWorkResultService = new DelegatedWorkResultService({
+      storage: this.storage,
+      writeJailRoots: config.toolPolicy.sandbox.writeJailRoots,
+      isEnabled: () => this.isFeatureEnabled("delegationScopeExpansionV1Enabled"),
+      createApproval: (input) => this.createApproval(input),
+      appendAudit: (payload) => {
+        void this.storage.audit.append("approvals", payload);
+      },
+    });
     this.policyEngine = new ToolPolicyEngine(config.toolPolicy, this.storage, undefined, {
       // Tool-policy approval creation must enter the canonical lifecycle. A
       // direct policy-engine storage write would omit the durable wait run and
@@ -1561,6 +1574,7 @@ export class GatewayService {
       // services populate. Same contract as scheduleManage: policy/approval/
       // audit fire first in `engine.invoke`.
       subagentFanout: (request) => this.subagentFanout.execute(request),
+      submitWorkResult: (request) => this.delegatedWorkResultService.execute(request),
     });
     const secretStore = new SecretStoreService();
     this.secretStore = secretStore;
@@ -1618,6 +1632,17 @@ export class GatewayService {
         this.publishRealtime(eventType, source, payload);
       },
     });
+    this.engineeringLearningService = new EngineeringLearningService({
+      storage: this.storage,
+      rootDir: config.rootDir,
+      isEnabled: () => this.isFeatureEnabled("engineeringLearningsV1Enabled"),
+      createApproval: (input) => this.createApproval(input),
+      resolveSourceRoot: (input) => this.resolveEngineeringLearningSourceRoot(input),
+      resolveProjectId: (sessionId) => this.storage.chatSessionProjects.get(sessionId)?.projectId,
+      appendAudit: (payload) => {
+        void this.storage.audit.append("approvals", payload);
+      },
+    });
     this.capabilitySystemService = new CapabilitySystemService({
       rootDir: config.rootDir,
       runtimeConfig: config.assistant.capabilities,
@@ -1643,6 +1668,9 @@ export class GatewayService {
       runChatSessionWorkbenchCommand: (sessionId, input) =>
         this.routeServices.chatSessions.runChatSessionWorkbenchCommand(sessionId, input),
       flushTranscriptOutbox: () => this.eventIngestService.flushPendingTranscriptOutbox(),
+      onVerifiedCodeModeRun: (response) => {
+        this.engineeringLearningService.proposeFromVerifiedCodeModeRun(response);
+      },
     });
     this.skillLearningService = new SkillLearningService({
       rootDir: config.rootDir,
@@ -1690,6 +1718,15 @@ export class GatewayService {
       runtimeAppDir: packagedRuntimeAppDir,
       runtimeCwd,
       releaseTrust: this.runtimeReleaseTrustService,
+      structuredReviews: this.storage.structuredReviews,
+      requireFeatureEnabled: (flag) => this.requireFeatureEnabled(flag),
+      isFeatureEnabled: (flag) => this.isFeatureEnabled(flag),
+      createAssemblyRun: (input) => this.assemblyService.createRun(input),
+      getAssemblyRunDetail: (runId) => this.assemblyService.getRunDetail(runId),
+      createCodeModeRun: (input) => this.capabilitySystemService.createCodeModeRun(input),
+      appendAudit: (payload) => {
+        void this.storage.audit.append("approvals", payload);
+      },
       taskLifecycleService: this.taskLifecycleService,
     });
     this.orchestrationEngine = new OrchestrationEngine();
@@ -1817,6 +1854,7 @@ export class GatewayService {
       chatThinkingStreamV1Enabled: () => this.isFeatureEnabled("chatThinkingStreamV1Enabled"),
       parallelToolExecutionV1Disabled: () => this.isFeatureEnabled("parallelToolExecutionV1Disabled"),
       subagentFanoutV1Disabled: () => this.isFeatureEnabled("subagentFanoutV1Disabled"),
+      delegationScopeExpansionV1Enabled: () => this.isFeatureEnabled("delegationScopeExpansionV1Enabled"),
     });
     this.researchService = new ResearchService({
       storage: this.storage,
@@ -2029,6 +2067,9 @@ export class GatewayService {
       recordImprovementRegressionSignal: (input) => {
         this.improvementService.recordPromptLabRegressionCompletionSignal(input);
       },
+      appendAudit: (payload) => {
+        void this.storage.audit.append("approvals", payload);
+      },
     });
     this.chatProactiveService = new ChatProactiveService(serviceCtx, {
       listChatSessions: (query) => this.listChatSessions(query),
@@ -2095,6 +2136,8 @@ export class GatewayService {
       // claim -> external callback -> exact re-inspection.
       executeApprovedImprovementLifecycleMutation: (input) =>
         this.improvementService.executeApprovedImprovementLifecycleMutation(input),
+      executeApprovedEngineeringLearningLifecycle: (approvalId) =>
+        this.engineeringLearningService.applyApprovedAction(approvalId),
       enqueueAfterHooks: (input) => this.hooksService.enqueueAfterHooks(input),
       resolveApprovalHookWorkspaceId: (payload) => this.resolveApprovalHookWorkspaceId(payload),
       resolvePostCommitEligibility: (sessionId) => this.resolvePostCommitEligibility(sessionId),
@@ -2197,6 +2240,10 @@ export class GatewayService {
           : this.createChatSession(input),
       inheritDelegatedSessionToolGrants: (parentSessionId, childSessionId) =>
         this.inheritDelegatedSessionToolGrants(parentSessionId, childSessionId),
+      ensureSessionInternalToolGrant: (sessionId, toolName, reason) =>
+        this.ensureSessionInternalToolGrant(sessionId, toolName, reason),
+      resolveDelegatedFilesystemScope: (parentSessionId, dispatchGeneration, current) =>
+        this.resolveDelegatedFilesystemScope(parentSessionId, dispatchGeneration, current),
       updateChatSessionPrefs: (sessionId, input) => this.updateChatSessionPrefs(sessionId, input),
       resolveToolPolicyContext: (input) => this.resolveToolPolicyContext(input),
       agentSendChatMessage: (sessionId, input, options) =>
@@ -2263,7 +2310,7 @@ export class GatewayService {
           request.workspaceId ??
           this.storage.chatSessionMeta.get(request.sessionId)?.workspaceId ??
           DEFAULT_WORKSPACE_ID;
-        return this.enrichToolPolicyContext(
+        const normalizedRequest = this.enrichToolPolicyContext(
           this.applyRuntimeBrowserBackendDefaults(
             this.resolveToolInvokeRequestPaths({
               ...request,
@@ -2279,6 +2326,8 @@ export class GatewayService {
             }),
           ),
         );
+        this.delegatedWorkResultService.assertToolRequestWithinApprovedScope(normalizedRequest);
+        return normalizedRequest;
       },
       isValidToolName: (name) => isValidToolName(name),
       evaluateToolDeploymentGuard: (request) =>
@@ -4018,6 +4067,13 @@ export class GatewayService {
         run: () =>
           this.tryRunWithSharedHostWork("worker", "memory-evaluation", () =>
             this.memoryLifecycleService.runDueEvaluation(),
+          ),
+      },
+      {
+        label: "engineering learning freshness",
+        run: () =>
+          this.tryRunWithSharedHostWork("worker", "engineering-learning-freshness", () =>
+            this.engineeringLearningService.refreshAll(),
           ),
       },
       {
@@ -9973,6 +10029,81 @@ export class GatewayService {
       return result.result ?? {};
     }
     return result;
+  }
+
+  /** @internal */ public resolveDelegatedFilesystemScope(
+    parentSessionId: string,
+    dispatchMarker: string,
+    current?: ChatDelegationStepRecord["scopeControl"],
+  ): ChatDelegationStepRecord["scopeControl"] | undefined {
+    if (!this.isFeatureEnabled("delegationScopeExpansionV1Enabled")) {
+      return undefined;
+    }
+    const projectId = this.storage.chatSessionProjects.get(parentSessionId)?.projectId;
+    const project = projectId ? this.storage.chatProjects.find(projectId) : undefined;
+    if (!project) {
+      return undefined;
+    }
+    const workspaceRoot = path.resolve(this.config.rootDir, this.config.assistant.workspaceDir);
+    const projectPath = fsSync.realpathSync(path.resolve(workspaceRoot, project.workspacePath));
+    const sourceRepoRoot = fsSync.realpathSync(
+      execFileSync("git", ["rev-parse", "--show-toplevel"], {
+        cwd: projectPath,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim(),
+    );
+    const sourceScope = path.relative(sourceRepoRoot, projectPath).replaceAll("\\", "/") || ".";
+    const workbench = this.storage.chatSessionWorkbench.get(parentSessionId);
+    const worktreePath =
+      workbench?.worktreeStatus === "ready" && workbench.worktreePath && workbench.worktreePath !== "[outside-root]"
+        ? path.resolve(this.config.rootDir, workbench.worktreePath.replace(/^\.\//, ""))
+        : undefined;
+    const rootPath = fsSync.realpathSync(worktreePath ?? sourceRepoRoot);
+    const scopedTarget = sourceScope === "." ? rootPath : path.resolve(rootPath, sourceScope);
+    assertWritePathInJail(rootPath, this.config.toolPolicy.sandbox.writeJailRoots);
+    assertWritePathInJail(scopedTarget, this.config.toolPolicy.sandbox.writeJailRoots);
+    const sameRoot = current && path.resolve(current.rootPath).toLowerCase() === path.resolve(rootPath).toLowerCase();
+    return buildDelegatedFilesystemScopeControl({
+      rootPath,
+      approvedPaths: sameRoot ? current.approvedPaths : [sourceScope],
+      dispatchGeneration: createHash("sha256").update(dispatchMarker, "utf8").digest("hex"),
+    });
+  }
+
+  /** @internal */ public resolveEngineeringLearningSourceRoot(input: {
+    sessionId?: string;
+    projectId?: string;
+  }): string | undefined {
+    if (input.sessionId) {
+      const workbench = this.storage.chatSessionWorkbench.get(input.sessionId);
+      if (
+        workbench?.worktreeStatus === "ready" &&
+        workbench.worktreePath &&
+        workbench.worktreePath !== "[outside-root]"
+      ) {
+        const worktreePath = path.resolve(this.config.rootDir, workbench.worktreePath.replace(/^\.\//, ""));
+        if (fsSync.existsSync(worktreePath)) return fsSync.realpathSync(worktreePath);
+      }
+    }
+    const projectId =
+      input.projectId ??
+      (input.sessionId ? this.storage.chatSessionProjects.get(input.sessionId)?.projectId : undefined);
+    const project = projectId ? this.storage.chatProjects.find(projectId) : undefined;
+    if (!project) return undefined;
+    const workspaceRoot = path.resolve(this.config.rootDir, this.config.assistant.workspaceDir);
+    const projectPath = fsSync.realpathSync(path.resolve(workspaceRoot, project.workspacePath));
+    try {
+      return fsSync.realpathSync(
+        execFileSync("git", ["rev-parse", "--show-toplevel"], {
+          cwd: projectPath,
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+        }).trim(),
+      );
+    } catch {
+      return projectPath;
+    }
   }
 
   /** @internal */ public ensureSessionInternalToolGrant(sessionId: string, toolName: string, createdBy: string): void {

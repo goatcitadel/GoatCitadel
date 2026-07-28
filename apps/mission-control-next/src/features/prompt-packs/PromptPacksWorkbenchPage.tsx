@@ -132,6 +132,7 @@ export function PromptPacksWorkbenchPage({
 
         <div className="mc-pp-command-secondary">
           <AdvancedQualityOpsPanel
+            retuneEnabled={state.retuneEnabled}
             benchmarkTestCodes={state.benchmarkTestCodes}
             benchmarkProvidersInput={state.benchmarkProvidersInput}
             selectedPackId={state.selectedPackId}
@@ -149,6 +150,10 @@ export function PromptPacksWorkbenchPage({
             confirmResetArmed={state.confirmResetArmed}
             resetting={state.resetting}
             exportInfo={state.exportInfo}
+            retuneCampaign={state.retuneCampaign}
+            retuneRepeatCount={state.retuneRepeatCount}
+            retuneHypothesis={state.retuneHypothesis}
+            retunePending={state.retunePending}
             onSetBenchmarkTestCodes={state.setBenchmarkTestCodes}
             onSetBenchmarkProvidersInput={state.setBenchmarkProvidersInput}
             onRunBenchmark={() => void state.runBenchmark()}
@@ -163,6 +168,14 @@ export function PromptPacksWorkbenchPage({
             onArmResetConfirm={() => state.setConfirmResetArmed(true)}
             onConfirmResetPack={() => void state.confirmResetPack()}
             onCancelResetConfirm={() => state.setConfirmResetArmed(false)}
+            onSetRetuneRepeatCount={state.setRetuneRepeatCount}
+            onSetRetuneHypothesis={state.setRetuneHypothesis}
+            onCreateRetuneCampaign={() => void state.createRetuneCampaign()}
+            onMeasureRetuneNoise={() => void state.measureRetuneNoise()}
+            onRunRetuneCandidate={() => void state.runRetuneCandidate()}
+            onRefreshRetuneCampaign={() => void state.refreshRetuneCampaign()}
+            onCancelRetuneCampaign={() => void state.cancelRetune()}
+            onDispositionRetunePass={(passId, disposition) => void state.dispositionRetunePass(passId, disposition)}
           />
 
           {!state.isOpsVariant ? (
@@ -263,6 +276,8 @@ export function PromptPacksWorkbenchPage({
                     trendSeries={state.trendSeries}
                     benchmarkStatus={state.benchmarkStatus}
                     regressionStatus={state.regressionStatus}
+                    retuneEnabled={state.retuneEnabled}
+                    retuneCampaign={state.retuneCampaign}
                   />
                 </details>
               </div>

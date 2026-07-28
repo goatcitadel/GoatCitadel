@@ -470,6 +470,10 @@ export interface PromptPackBenchmarkRunRecord {
   testCodes: string[];
   providers: PromptPackBenchmarkProviderInput[];
   executionStyle?: PromptPackExecutionStyle;
+  packContentSha256?: string;
+  policyHash?: string;
+  testSnapshotSha256?: string;
+  scoringSnapshot?: Record<string, string>;
   startedAt: string;
   finishedAt?: string;
   error?: string;
@@ -523,6 +527,84 @@ export interface PromptPackBenchmarkStatusRecord {
   modelSummaries: PromptPackBenchmarkModelSummary[];
 }
 
+export type PromptRetuneCampaignStatus =
+  | "draft"
+  | "measuring_noise"
+  | "ready"
+  | "running"
+  | "completed"
+  | "cancelled"
+  | "failed";
+
+export type PromptRetunePassDisposition = "pending" | "kept" | "rejected" | "inconclusive";
+
+export interface PromptRetuneSuccessBar {
+  minWeightedScoreDelta: number;
+  requirePassRateNonRegression: boolean;
+  maxFailureRateDelta: number;
+  maxLatencyDeltaMs?: number;
+  /** Existing Prompt Pack quality threshold frozen into campaign preregistration. */
+  minAverageWeightedScore?: number;
+  /** Absolute pass-rate floor in addition to non-regression. */
+  minPassRate?: number;
+  /** Absolute failure-rate ceiling in addition to delta-based non-regression. */
+  maxFailureRate?: number;
+  /** Optional absolute latency ceiling. */
+  maxAverageLatencyMs?: number;
+}
+
+export interface PromptRetuneMetrics {
+  averageWeightedScore: number;
+  passRate: number;
+  failureRate: number;
+  averageLatencyMs: number;
+}
+
+export interface PromptRetuneNoiseFloor {
+  weightedScore: number;
+  passRate: number;
+  failureRate: number;
+  latencyMs: number;
+}
+
+export interface PromptRetunePassRecord {
+  passId: string;
+  campaignId: string;
+  kind: "noise" | "candidate";
+  hypothesis: string;
+  contentSha256: string;
+  benchmarkRunIds: string[];
+  disposition: PromptRetunePassDisposition;
+  metrics?: PromptRetuneMetrics;
+  eligibility?: "eligible" | "inconclusive" | "regressed";
+  notes?: string;
+  createdAt: string;
+  finishedAt?: string;
+}
+
+export interface PromptRetuneCampaignRecord {
+  campaignId: string;
+  packId: string;
+  status: PromptRetuneCampaignStatus;
+  baselineContentSha256: string;
+  policyHash: string;
+  scoringSnapshot: Record<string, string>;
+  testCodes: string[];
+  providers: PromptPackBenchmarkProviderInput[];
+  executionStyle: PromptPackExecutionStyle;
+  repeatCount: number;
+  maxBenchmarkRuns: number;
+  successBar: PromptRetuneSuccessBar;
+  noiseFloor?: PromptRetuneNoiseFloor;
+  baselineMetrics?: PromptRetuneMetrics;
+  activePassId?: string;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+  finishedAt?: string;
+  passes: PromptRetunePassRecord[];
+}
+
 export interface ReplayRegressionRun {
   regressionRunId: string;
   packId: string;
@@ -530,6 +612,8 @@ export interface ReplayRegressionRun {
   testCodes: string[];
   /** ISO-8601 timestamp selecting the latest scored baseline run at or before this instant. */
   baselineRef?: string;
+  /** Exact benchmark authority. Preferred over the deprecated timestamp selector. */
+  baselineBenchmarkRunId?: string;
   startedAt: string;
   finishedAt?: string;
   error?: string;

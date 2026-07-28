@@ -103,6 +103,10 @@ export interface RuntimeSettings {
     codeModeV1Enabled: boolean;
     improvementLedgerV1Enabled: boolean;
     improvementActivationV1Enabled: boolean;
+    promptRetuneCampaignV1Enabled: boolean;
+    structuredReviewV2Enabled: boolean;
+    delegationScopeExpansionV1Enabled: boolean;
+    engineeringLearningsV1Enabled: boolean;
     /** Kill switch for the P0 cowork runtime-quality layer (base prompt, answer-recovery, tool-call repair). Absent/false ⇒ features ON. */
     coworkRuntimeQualityV1Disabled?: boolean;
     /** Kill switch for S1 live terminal-synthesizer token streaming. Absent/false ⇒ feature ON; `true` reverts cowork/code to buffered delivery. */

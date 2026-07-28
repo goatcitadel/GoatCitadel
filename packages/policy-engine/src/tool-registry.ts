@@ -25,6 +25,9 @@ export interface ToolDefinition {
  */
 export const SUBAGENT_FANOUT_TOOL_NAME = "agent.fanout";
 
+/** Delegated-worker completion/scope-request envelope. The gateway owns fulfillment. */
+export const SUBMIT_WORK_RESULT_TOOL_NAME = "submit_work_result";
+
 /** Hard cap on subtasks per `agent.fanout` call (and thus on child concurrency). */
 export const SUBAGENT_FANOUT_MAX_SUBTASKS = 3;
 
@@ -112,6 +115,41 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     usageHints: [
       "Use when the user references something from earlier in the conversation that you can no longer see.",
       "Defaults to this session; scope:'all' remains confined to the active workspace.",
+    ],
+  },
+  {
+    name: SUBMIT_WORK_RESULT_TOOL_NAME,
+    category: "session",
+    riskLevel: "caution",
+    requiresApproval: false,
+    description:
+      "Submit a typed delegated-work result, including an approval-gated request for additional filesystem scope when the current scope is insufficient.",
+    argSchema: {
+      type: "object",
+      properties: {
+        disposition: { type: "string", enum: ["completed", "blocked", "scope_expansion"] },
+        summary: { type: "string", maxLength: 8_000 },
+        changedFiles: { type: "array", maxItems: 1_000, items: { type: "string" } },
+        evidenceRefs: { type: "array", maxItems: 1_000, items: { type: "string" } },
+        scopeExpansion: {
+          type: "object",
+          properties: {
+            requestedPaths: { type: "array", minItems: 1, maxItems: 100, items: { type: "string" } },
+            reason: { type: "string", maxLength: 2_000 },
+          },
+          required: ["requestedPaths", "reason"],
+        },
+      },
+      required: ["disposition", "summary", "changedFiles", "evidenceRefs"],
+    },
+    pack: "core",
+    deterministic: true,
+    codeModeAllowed: true,
+    recommendedContexts: ["code", "project_bound"],
+    preferredForIntents: ["delegation", "implementation"],
+    usageHints: [
+      "Use once when delegated filesystem/code work completes or is blocked.",
+      "A scope_expansion request records requested paths but never grants access; wait for operator approval.",
     ],
   },
   {

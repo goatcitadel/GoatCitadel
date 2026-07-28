@@ -7,7 +7,12 @@ const runTraceHarness = vi.hoisted(() => ({
   fetchEvidenceReceipt: vi.fn(),
   fetchObserveRunTrace: vi.fn(),
   fetchOrchestrationRunTrace: vi.fn(),
+  fetchStructuredReviewRun: vi.fn(),
   verifyEvidenceReceipt: vi.fn(),
+}));
+
+vi.mock("@goatcitadel/mission-control-shared/api/review-readiness", () => ({
+  fetchStructuredReviewRun: runTraceHarness.fetchStructuredReviewRun,
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
@@ -29,8 +34,10 @@ beforeEach(() => {
   runTraceHarness.fetchEvidenceReceipt.mockReset();
   runTraceHarness.fetchObserveRunTrace.mockReset();
   runTraceHarness.fetchOrchestrationRunTrace.mockReset();
+  runTraceHarness.fetchStructuredReviewRun.mockReset();
   runTraceHarness.verifyEvidenceReceipt.mockReset();
   runTraceHarness.fetchOrchestrationRunTrace.mockRejectedValue(new Error("not an orchestration run"));
+  runTraceHarness.fetchStructuredReviewRun.mockRejectedValue(new Error("not a structured review"));
   Object.defineProperty(globalThis.navigator, "clipboard", {
     configurable: true,
     value: {
@@ -40,6 +47,57 @@ beforeEach(() => {
 });
 
 describe("RunDetailRoutePage", () => {
+  it("surfaces persisted structured findings for review run ids", async () => {
+    runTraceHarness.fetchObserveRunTrace.mockRejectedValueOnce(new Error("not an observe run"));
+    runTraceHarness.fetchStructuredReviewRun.mockResolvedValueOnce({
+      reviewRunId: "review-1",
+      source: "native",
+      status: "completed",
+      rootPath: "F:/code/personal-ai",
+      reviewedSha: "abcdef1234567890",
+      diffHash: "diff-hash",
+      changedFiles: ["apps/gateway/src/app.ts"],
+      reviewerRoster: ["general_correctness", "test_coverage"],
+      preflight: {
+        participantCount: 2,
+        reviewerLensCount: 2,
+        estimatedReviewCalls: 2,
+        tokenBudget: 50000,
+        costBudgetUsd: 10,
+      },
+      modelReceipts: [],
+      findings: [
+        {
+          findingId: "finding-1",
+          reviewRunId: "review-1",
+          source: "assembly",
+          component: "gateway",
+          title: "Approval bypass",
+          files: ["apps/gateway/src/app.ts"],
+          severity: "p1",
+          whyItMatters: "A mutation could bypass operator approval.",
+          confidence: 100,
+          evidence: [{ path: "apps/gateway/src/app.ts", startLine: 10 }],
+          preExisting: false,
+          fixClass: "approval_gated",
+          ownerRole: "Coder",
+          suggestedFix: "Restore the approval gate.",
+          requiresVerification: true,
+          testingGaps: [],
+          residualRisks: [],
+          status: "open",
+          createdAt: "2026-07-27T00:00:00.000Z",
+          updatedAt: "2026-07-27T00:00:00.000Z",
+        },
+      ],
+      createdAt: "2026-07-27T00:00:00.000Z",
+      finishedAt: "2026-07-27T00:01:00.000Z",
+    });
+    const text = await renderText("review-1");
+    expect(text).toContain("Structured review findings");
+    expect(text).toContain("P1 · Approval bypass");
+    expect(text).toContain("2 calls / $10.00 cap");
+  });
   it("handles traces with no memory or context evidence", async () => {
     runTraceHarness.fetchObserveRunTrace.mockResolvedValueOnce({
       runId: "run-no-memory",

@@ -20,6 +20,11 @@ export function buildUpdatedFeatureFlags(
     codeModeV1Enabled: patch.codeModeV1Enabled ?? current.codeModeV1Enabled,
     improvementLedgerV1Enabled: patch.improvementLedgerV1Enabled ?? current.improvementLedgerV1Enabled,
     improvementActivationV1Enabled: patch.improvementActivationV1Enabled ?? current.improvementActivationV1Enabled,
+    promptRetuneCampaignV1Enabled: patch.promptRetuneCampaignV1Enabled ?? current.promptRetuneCampaignV1Enabled,
+    structuredReviewV2Enabled: patch.structuredReviewV2Enabled ?? current.structuredReviewV2Enabled,
+    delegationScopeExpansionV1Enabled:
+      patch.delegationScopeExpansionV1Enabled ?? current.delegationScopeExpansionV1Enabled,
+    engineeringLearningsV1Enabled: patch.engineeringLearningsV1Enabled ?? current.engineeringLearningsV1Enabled,
     // Optional flags must be carried through: updateFeatureFlags does a full
     // system_settings write, so omitting them would silently wipe stored values.
     coworkRuntimeQualityV1Disabled: patch.coworkRuntimeQualityV1Disabled ?? current.coworkRuntimeQualityV1Disabled,
@@ -63,6 +68,11 @@ export function resolveGatewayFeatureFlags(
     codeModeV1Enabled: stored?.codeModeV1Enabled ?? fromConfig.codeModeV1Enabled,
     improvementLedgerV1Enabled: stored?.improvementLedgerV1Enabled ?? fromConfig.improvementLedgerV1Enabled,
     improvementActivationV1Enabled: stored?.improvementActivationV1Enabled ?? fromConfig.improvementActivationV1Enabled,
+    promptRetuneCampaignV1Enabled: stored?.promptRetuneCampaignV1Enabled ?? fromConfig.promptRetuneCampaignV1Enabled,
+    structuredReviewV2Enabled: stored?.structuredReviewV2Enabled ?? fromConfig.structuredReviewV2Enabled,
+    delegationScopeExpansionV1Enabled:
+      stored?.delegationScopeExpansionV1Enabled ?? fromConfig.delegationScopeExpansionV1Enabled,
+    engineeringLearningsV1Enabled: stored?.engineeringLearningsV1Enabled ?? fromConfig.engineeringLearningsV1Enabled,
     coworkRuntimeQualityV1Disabled: stored?.coworkRuntimeQualityV1Disabled ?? fromConfig.coworkRuntimeQualityV1Disabled,
     orchestrationFinalStreamingV1Disabled:
       stored?.orchestrationFinalStreamingV1Disabled ?? fromConfig.orchestrationFinalStreamingV1Disabled,

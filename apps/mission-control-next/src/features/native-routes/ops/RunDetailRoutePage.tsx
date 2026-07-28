@@ -16,6 +16,7 @@ import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
 import { formatDateTime, nativeLoad, nativeLoadIssues, truncateText, useAsyncLoad } from "../shared/native-helpers";
 import { LibraryCodeBlock, LibraryLoadWarnings, LibraryMetricGrid } from "../shared/library-primitives";
+import { fetchStructuredReviewRun } from "@goatcitadel/mission-control-shared/api/review-readiness";
 
 type NativeListItem = { title: string; meta?: string; body?: string };
 type RunTracePayload = Record<string, unknown>;
@@ -91,10 +92,14 @@ export function RunDetailRoutePage({ route, activeWorkspaceId, activeWorkspaceNa
     const orchestrationTrace = await fetchOrchestrationRunTrace(runId, { workspaceId: activeWorkspaceId }).catch(
       () => null,
     );
+    const structuredReview = runId.startsWith("review-")
+      ? await fetchStructuredReviewRun(runId).catch(() => null)
+      : null;
     return {
       issues: nativeLoadIssues([trace]),
       trace: trace.data,
       orchestrationTrace,
+      structuredReview,
     };
   }, [activeWorkspaceId, runId]);
   const detail = buildRunDetailModel(
@@ -225,6 +230,45 @@ export function RunDetailRoutePage({ route, activeWorkspaceId, activeWorkspaceNa
       {exportNotice ? <NoticeBanner tone="success" message={exportNotice} /> : null}
       {exportError ? <ErrorState size="inline" description={exportError} /> : null}
       <NativeGrid className="mc-next-run-detail-grid">
+        {data?.structuredReview ? (
+          <NativeCard
+            title="Structured review findings"
+            subtitle="Read-only reviewer output tied to the frozen SHA and diff hash. Fixes still require an approved Code Mode run and follow-up review evidence."
+            stats={[
+              { label: "Status", value: data.structuredReview.status },
+              { label: "Findings", value: String(data.structuredReview.findings.length) },
+              { label: "Reviewed SHA", value: data.structuredReview.reviewedSha.slice(0, 12) },
+              {
+                label: "Preflight",
+                value: data.structuredReview.preflight
+                  ? `${data.structuredReview.preflight.estimatedReviewCalls} calls / $${data.structuredReview.preflight.costBudgetUsd.toFixed(2)} cap`
+                  : "External import",
+              },
+            ]}
+          >
+            <NativeList
+              density="compact"
+              items={data.structuredReview.findings.map((finding) => ({
+                title: `${finding.severity.toUpperCase()} · ${finding.title}`,
+                meta: `${finding.status} · confidence ${finding.confidence}% · ${finding.fixClass} · owner ${finding.ownerRole ?? "unassigned"}`,
+                body: [
+                  finding.whyItMatters,
+                  finding.suggestedFix ? `Suggested fix: ${finding.suggestedFix}` : undefined,
+                  finding.verificationEvidence?.length
+                    ? `Verification: ${finding.verificationEvidence.join(", ")}`
+                    : finding.requiresVerification
+                      ? "Verification evidence required before closure."
+                      : undefined,
+                  finding.followUpReviewRunId ? `Follow-up review: ${finding.followUpReviewRunId}` : undefined,
+                ]
+                  .filter(Boolean)
+                  .join(" "),
+              }))}
+              emptyLabel="The review completed without persisted findings."
+              maxHeight="min(52vh, 32rem)"
+            />
+          </NativeCard>
+        ) : null}
         <NativeCard
           title="Request"
           subtitle="The requested work and runtime linkage when the trace projection includes it."

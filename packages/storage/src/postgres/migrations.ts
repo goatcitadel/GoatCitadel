@@ -13229,6 +13229,116 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ADD CONSTRAINT skill_aggregate_revisions_updated_at_check CHECK(char_length(BTRIM(updated_at)) > 0);
     `,
   },
+  {
+    version: 124,
+    name: "compound_engineering_foundation",
+    sql: `
+      ALTER TABLE prompt_pack_benchmark_runs ADD COLUMN IF NOT EXISTS pack_content_sha256 TEXT;
+      ALTER TABLE prompt_pack_benchmark_runs ADD COLUMN IF NOT EXISTS policy_hash TEXT;
+      ALTER TABLE prompt_pack_benchmark_runs ADD COLUMN IF NOT EXISTS test_snapshot_json TEXT;
+      ALTER TABLE prompt_pack_benchmark_runs ADD COLUMN IF NOT EXISTS test_snapshot_sha256 TEXT;
+      ALTER TABLE prompt_pack_benchmark_runs ADD COLUMN IF NOT EXISTS scoring_snapshot_json TEXT;
+      ALTER TABLE replay_regression_runs ADD COLUMN IF NOT EXISTS baseline_benchmark_run_id TEXT;
+      ALTER TABLE chat_delegation_steps ADD COLUMN IF NOT EXISTS work_result_json TEXT;
+      ALTER TABLE chat_delegation_steps ADD COLUMN IF NOT EXISTS scope_control_json TEXT;
+
+      CREATE TABLE IF NOT EXISTS prompt_retune_campaigns (
+        campaign_id TEXT PRIMARY KEY,
+        pack_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        baseline_content_sha256 TEXT NOT NULL,
+        policy_hash TEXT NOT NULL,
+        scoring_snapshot_json TEXT NOT NULL,
+        test_codes_json TEXT NOT NULL,
+        providers_json TEXT NOT NULL,
+        execution_style TEXT NOT NULL,
+        repeat_count BIGINT NOT NULL,
+        max_benchmark_runs BIGINT NOT NULL,
+        success_bar_json TEXT NOT NULL,
+        noise_floor_json TEXT,
+        baseline_metrics_json TEXT,
+        active_pass_id TEXT,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        finished_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_prompt_retune_campaigns_pack_updated
+        ON prompt_retune_campaigns(pack_id, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_prompt_retune_campaigns_status
+        ON prompt_retune_campaigns(status, updated_at ASC);
+
+      CREATE TABLE IF NOT EXISTS prompt_retune_passes (
+        pass_id TEXT PRIMARY KEY,
+        campaign_id TEXT NOT NULL REFERENCES prompt_retune_campaigns(campaign_id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        hypothesis TEXT NOT NULL,
+        content_sha256 TEXT NOT NULL,
+        benchmark_run_ids_json TEXT NOT NULL,
+        disposition TEXT NOT NULL,
+        metrics_json TEXT,
+        eligibility TEXT,
+        notes TEXT,
+        created_at TEXT NOT NULL,
+        finished_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_prompt_retune_passes_campaign_created
+        ON prompt_retune_passes(campaign_id, created_at ASC);
+
+      CREATE TABLE IF NOT EXISTS structured_review_runs (
+        review_run_id TEXT PRIMARY KEY,
+        source TEXT NOT NULL,
+        status TEXT NOT NULL,
+        root_path TEXT NOT NULL,
+        reviewed_sha TEXT NOT NULL,
+        diff_hash TEXT NOT NULL,
+        changed_files_json TEXT NOT NULL,
+        reviewer_roster_json TEXT NOT NULL,
+        preflight_json TEXT NOT NULL DEFAULT '{}',
+        model_receipts_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        finished_at TEXT,
+        error TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_structured_review_runs_created
+        ON structured_review_runs(created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS structured_review_findings (
+        finding_id TEXT PRIMARY KEY,
+        review_run_id TEXT NOT NULL REFERENCES structured_review_runs(review_run_id) ON DELETE CASCADE,
+        record_json TEXT NOT NULL,
+        status TEXT NOT NULL,
+        linked_task_id TEXT,
+        fix_approval_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_structured_review_findings_run
+        ON structured_review_findings(review_run_id, created_at ASC);
+      CREATE INDEX IF NOT EXISTS idx_structured_review_findings_status
+        ON structured_review_findings(status, updated_at DESC);
+
+      CREATE TABLE IF NOT EXISTS engineering_learnings (
+        learning_id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        project_id TEXT,
+        status TEXT NOT NULL,
+        title TEXT NOT NULL,
+        fingerprint TEXT NOT NULL,
+        record_json TEXT NOT NULL,
+        source_run_id TEXT NOT NULL,
+        supersedes_learning_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_engineering_learnings_run_once
+        ON engineering_learnings(workspace_id, source_run_id);
+      CREATE INDEX IF NOT EXISTS idx_engineering_learnings_scope_status
+        ON engineering_learnings(workspace_id, project_id, status, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_engineering_learnings_fingerprint
+        ON engineering_learnings(workspace_id, fingerprint);
+    `,
+  },
 ];
 
 function buildWorkspacePathBridgePosixFlavorPostgresSql(): string {

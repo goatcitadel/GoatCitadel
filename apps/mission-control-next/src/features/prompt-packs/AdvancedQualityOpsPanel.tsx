@@ -7,11 +7,12 @@ import {
   RefreshCcw,
   RotateCcw,
 } from "lucide-react";
-import type { PromptPackExportRecord } from "@goatcitadel/contracts";
+import type { PromptPackExportRecord, PromptRetuneCampaignRecord } from "@goatcitadel/contracts";
 import { formatDateTime } from "@goatcitadel/mission-control-shared/pages/prompt-lab/prompt-lab-helpers";
 import { NativeButton } from "@next/features/native-routes/primitives";
 
 export interface AdvancedQualityOpsPanelProps {
+  retuneEnabled: boolean;
   benchmarkTestCodes: string;
   benchmarkProvidersInput: string;
   selectedPackId: string | null;
@@ -29,6 +30,10 @@ export interface AdvancedQualityOpsPanelProps {
   confirmResetArmed: boolean;
   resetting: boolean;
   exportInfo: PromptPackExportRecord | null;
+  retuneCampaign: PromptRetuneCampaignRecord | null;
+  retuneRepeatCount: number;
+  retuneHypothesis: string;
+  retunePending: boolean;
   onSetBenchmarkTestCodes: (value: string) => void;
   onSetBenchmarkProvidersInput: (value: string) => void;
   onRunBenchmark: () => void;
@@ -43,9 +48,18 @@ export interface AdvancedQualityOpsPanelProps {
   onArmResetConfirm: () => void;
   onConfirmResetPack: () => void;
   onCancelResetConfirm: () => void;
+  onSetRetuneRepeatCount: (value: number) => void;
+  onSetRetuneHypothesis: (value: string) => void;
+  onCreateRetuneCampaign: () => void;
+  onMeasureRetuneNoise: () => void;
+  onRunRetuneCandidate: () => void;
+  onRefreshRetuneCampaign: () => void;
+  onCancelRetuneCampaign: () => void;
+  onDispositionRetunePass: (passId: string, disposition: "kept" | "rejected" | "inconclusive") => void;
 }
 
 export function AdvancedQualityOpsPanel({
+  retuneEnabled,
   benchmarkTestCodes,
   benchmarkProvidersInput,
   selectedPackId,
@@ -63,6 +77,10 @@ export function AdvancedQualityOpsPanel({
   confirmResetArmed,
   resetting,
   exportInfo,
+  retuneCampaign,
+  retuneRepeatCount,
+  retuneHypothesis,
+  retunePending,
   onSetBenchmarkTestCodes,
   onSetBenchmarkProvidersInput,
   onRunBenchmark,
@@ -77,6 +95,14 @@ export function AdvancedQualityOpsPanel({
   onArmResetConfirm,
   onConfirmResetPack,
   onCancelResetConfirm,
+  onSetRetuneRepeatCount,
+  onSetRetuneHypothesis,
+  onCreateRetuneCampaign,
+  onMeasureRetuneNoise,
+  onRunRetuneCandidate,
+  onRefreshRetuneCampaign,
+  onCancelRetuneCampaign,
+  onDispositionRetunePass,
 }: AdvancedQualityOpsPanelProps) {
   return (
     <details className="mc-pp-panel mc-pp-panel-collapsible">
@@ -114,11 +140,7 @@ export function AdvancedQualityOpsPanel({
             {benchmarkPending ? <LoaderCircle size={16} className="mc-spin" /> : <FlaskConical size={16} />}
             Start benchmark
           </NativeButton>
-          <NativeButton
-            variant="secondary"
-            onClick={onStopBenchmark}
-            disabled={!benchmarkActive || benchmarkStopping}
-          >
+          <NativeButton variant="secondary" onClick={onStopBenchmark} disabled={!benchmarkActive || benchmarkStopping}>
             {benchmarkStopping ? <LoaderCircle size={16} className="mc-spin" /> : <RotateCcw size={16} />}
             Stop
           </NativeButton>
@@ -140,11 +162,7 @@ export function AdvancedQualityOpsPanel({
           </NativeButton>
         </div>
         <div className="mc-pp-inline-actions wrap">
-          <NativeButton
-            variant="secondary"
-            onClick={onExportReport}
-            disabled={!selectedPackId || exporting || running}
-          >
+          <NativeButton variant="secondary" onClick={onExportReport} disabled={!selectedPackId || exporting || running}>
             {exporting ? <LoaderCircle size={16} className="mc-spin" /> : <Download size={16} />}
             Export report
           </NativeButton>
@@ -153,6 +171,124 @@ export function AdvancedQualityOpsPanel({
             Copy saved log path
           </NativeButton>
         </div>
+        {retuneEnabled ? (
+          <div className="mc-pp-reset-box">
+            <div>
+              <h5>Measurement-first retuning</h5>
+              <p className="mc-pp-note">
+                Freeze this matrix, measure A/A noise, then require candidate gains to clear the preregistered bar. No
+                prompt is edited or promoted automatically.
+              </p>
+            </div>
+            <label className="mc-pp-field">
+              <span>Repetitions (2–10)</span>
+              <input
+                type="number"
+                min={2}
+                max={10}
+                value={retuneRepeatCount}
+                disabled={Boolean(retuneCampaign)}
+                onChange={(event) => onSetRetuneRepeatCount(Math.max(2, Math.min(10, Number(event.target.value))))}
+              />
+            </label>
+            {!retuneCampaign ? (
+              <p className="mc-pp-note">
+                Preflight: A/A uses {retuneRepeatCount} benchmark runs and approximately{" "}
+                {retuneRepeatCount *
+                  Math.max(1, benchmarkTestCodes.split(/[\s,]+/).filter(Boolean).length) *
+                  Math.max(1, benchmarkProvidersInput.split(/\r?\n/).filter((line) => line.trim()).length)}{" "}
+                provider/test cases. The campaign cap is {Math.max(4, retuneRepeatCount * 4)} benchmark runs; exact
+                currency depends on current provider pricing and remains subject to Gateway budgets.
+              </p>
+            ) : null}
+            {retuneCampaign ? (
+              <>
+                <p className="mc-pp-note">
+                  <strong>{retuneCampaign.status}</strong> · {retuneCampaign.repeatCount} repeats · budget{" "}
+                  {retuneCampaign.maxBenchmarkRuns} benchmark runs · {retuneCampaign.passes.length} pass(es)
+                  {retuneCampaign.noiseFloor
+                    ? ` · score noise ${retuneCampaign.noiseFloor.weightedScore.toFixed(2)}`
+                    : ""}
+                </p>
+                <label className="mc-pp-field">
+                  <span>Candidate hypothesis</span>
+                  <input
+                    value={retuneHypothesis}
+                    onChange={(event) => onSetRetuneHypothesis(event.target.value)}
+                    placeholder="What changed, and why should it improve the frozen benchmark?"
+                  />
+                </label>
+                <div className="mc-pp-inline-actions wrap">
+                  <NativeButton
+                    variant="secondary"
+                    onClick={onMeasureRetuneNoise}
+                    disabled={retunePending || retuneCampaign.status !== "draft"}
+                  >
+                    Measure A/A noise
+                  </NativeButton>
+                  <NativeButton
+                    variant="secondary"
+                    onClick={onRunRetuneCandidate}
+                    disabled={retunePending || retuneCampaign.status !== "ready" || !retuneHypothesis.trim()}
+                  >
+                    Run candidate
+                  </NativeButton>
+                  <NativeButton variant="ghost" onClick={onRefreshRetuneCampaign} disabled={retunePending}>
+                    Refresh campaign
+                  </NativeButton>
+                  <NativeButton
+                    variant="ghost"
+                    onClick={onCancelRetuneCampaign}
+                    disabled={retunePending || ["completed", "cancelled", "failed"].includes(retuneCampaign.status)}
+                  >
+                    Cancel
+                  </NativeButton>
+                </div>
+                {retuneCampaign.passes
+                  .filter((pass) => pass.kind === "candidate")
+                  .map((pass) => (
+                    <div className="mc-pp-note" key={pass.passId}>
+                      <strong>{pass.eligibility ?? "measuring"}</strong> · {pass.hypothesis} · {pass.disposition}
+                      {pass.finishedAt && pass.disposition === "pending" ? (
+                        <div className="mc-pp-inline-actions wrap">
+                          <NativeButton
+                            variant="secondary"
+                            onClick={() => onDispositionRetunePass(pass.passId, "kept")}
+                            disabled={retunePending || pass.eligibility !== "eligible"}
+                          >
+                            Keep
+                          </NativeButton>
+                          <NativeButton
+                            variant="ghost"
+                            onClick={() => onDispositionRetunePass(pass.passId, "rejected")}
+                            disabled={retunePending}
+                          >
+                            Reject
+                          </NativeButton>
+                          <NativeButton
+                            variant="ghost"
+                            onClick={() => onDispositionRetunePass(pass.passId, "inconclusive")}
+                            disabled={retunePending}
+                          >
+                            Inconclusive
+                          </NativeButton>
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+              </>
+            ) : (
+              <NativeButton
+                variant="secondary"
+                onClick={onCreateRetuneCampaign}
+                disabled={!selectedPackId || retunePending}
+              >
+                {retunePending ? <LoaderCircle size={16} className="mc-spin" /> : <FlaskConical size={16} />}
+                Create frozen campaign
+              </NativeButton>
+            )}
+          </div>
+        ) : null}
         <div className="mc-pp-reset-box">
           <div className="mc-pp-reset-options">
             <label className="mc-pp-toggle">
@@ -173,11 +309,7 @@ export function AdvancedQualityOpsPanel({
             </label>
           </div>
           {!confirmResetArmed ? (
-            <NativeButton
-              variant="destructive"
-              onClick={onArmResetConfirm}
-              disabled={!selectedPackId || resetting}
-            >
+            <NativeButton variant="destructive" onClick={onArmResetConfirm} disabled={!selectedPackId || resetting}>
               <AlertTriangle size={16} />
               Reset pack
             </NativeButton>

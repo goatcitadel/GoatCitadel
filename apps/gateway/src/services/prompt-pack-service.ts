@@ -67,6 +67,10 @@ import type {
   PromptPackSecurityQualityGatesResponse,
   PromptPackTestRecord,
   PromptPackPromptfooImportPreviewResponse,
+  PromptRetuneCampaignRecord,
+  PromptRetuneMetrics,
+  PromptRetunePassRecord,
+  PromptRetuneSuccessBar,
   PromptPackToolTier,
   PromptPackVerdict,
   RealtimeEvent,
@@ -156,6 +160,12 @@ import {
   toPromptPackBenchmarkRunRows,
   type PromptPackBenchmarkRunRow,
 } from "./prompt-pack/benchmark-helpers.js";
+import {
+  averagePromptRetuneMetrics,
+  calculatePromptRetuneNoiseFloor,
+  defaultPromptRetuneSuccessBar,
+  evaluatePromptRetuneCandidate,
+} from "./prompt-pack/retune-campaign.js";
 import {
   buildPromptfooExportPayload,
   parsePromptfooLikeConfig,
@@ -308,6 +318,7 @@ export interface PromptPackServiceContext {
     | "promptPackRuns"
     | "promptPacks"
     | "promptPackScores"
+    | "promptRetunes"
     | "toolGrants"
     | "chatSessionProjects"
     | "chatSessionMeta"
@@ -445,6 +456,7 @@ export interface PromptPackServiceDeps {
     latencyDeltaMs: number;
     capability: string;
   }) => void;
+  appendAudit?: (payload: Record<string, unknown>) => void;
 }
 
 /**
@@ -1292,6 +1304,16 @@ export class PromptPackService {
       throw new Error("Benchmark requires at least one provider/model pair.");
     }
     const executionStyle = resolvePromptPackExecutionStyle(input.executionStyle);
+    const testSnapshotJson = JSON.stringify(selectedTests);
+    const testSnapshotSha256 = createHash("sha256").update(testSnapshotJson, "utf8").digest("hex");
+    const packContentSha256 = pack.contentSha256 ?? testSnapshotSha256;
+    const policyHash = pack.policyHash ?? hashPromptPackPolicyV2(pack.policyV2 ?? DEFAULT_PROMPT_PACK_POLICY_V2);
+    const scoringSnapshot = {
+      scoringSchemaVersion: "v3",
+      scorerVersion: PROMPT_PACK_V3_SCORER_VERSION,
+      judgeRubricVersion: PROMPT_PACK_V3_JUDGE_RUBRIC_VERSION,
+      policyHash,
+    };
 
     const benchmarkRunId = `ppb-${randomUUID()}`;
     const startedAt = new Date().toISOString();
@@ -1301,10 +1323,12 @@ export class PromptPackService {
         `
       INSERT INTO prompt_pack_benchmark_runs (
         benchmark_run_id, pack_id, status, test_codes_json, providers_json,
-        total_items, completed_items, execution_style, error, started_at, finished_at
+        total_items, completed_items, execution_style, pack_content_sha256, policy_hash,
+        test_snapshot_json, test_snapshot_sha256, scoring_snapshot_json, error, started_at, finished_at
       ) VALUES (
         @benchmarkRunId, @packId, @status, @testCodesJson, @providersJson,
-        @totalItems, @completedItems, @executionStyle, NULL, @startedAt, NULL
+        @totalItems, @completedItems, @executionStyle, @packContentSha256, @policyHash,
+        @testSnapshotJson, @testSnapshotSha256, @scoringSnapshotJson, NULL, @startedAt, NULL
       )
     `,
       )
@@ -1317,6 +1341,11 @@ export class PromptPackService {
         totalItems,
         completedItems: 0,
         executionStyle,
+        packContentSha256,
+        policyHash,
+        testSnapshotJson,
+        testSnapshotSha256,
+        scoringSnapshotJson: JSON.stringify(scoringSnapshot),
         startedAt,
       });
 
@@ -1350,6 +1379,169 @@ export class PromptPackService {
       },
       modelSummaries,
     };
+  }
+
+  createPromptRetuneCampaign(
+    packId: string,
+    input: {
+      testCodes: string[];
+      providers: PromptPackBenchmarkProviderInput[];
+      executionStyle?: PromptPackExecutionStyle;
+      repeatCount?: number;
+      maxBenchmarkRuns?: number;
+      successBar?: Partial<PromptRetuneSuccessBar>;
+    },
+  ): PromptRetuneCampaignRecord {
+    this.ctx.requireFeatureEnabled("promptRetuneCampaignV1Enabled");
+    const pack = this.ctx.storage.promptPacks.getPack(packId);
+    const tests = this.ctx.storage.promptPacks.listTests(packId, 5000);
+    const knownCodes = new Set(tests.map((test) => test.code.toUpperCase()));
+    const testCodes = Array.from(new Set(input.testCodes.map((code) => code.trim().toUpperCase()).filter(Boolean)));
+    if (testCodes.length < 1 || testCodes.some((code) => !knownCodes.has(code))) {
+      throw new Error("Retune campaign requires known prompt-pack test codes.");
+    }
+    const providers = dedupeBenchmarkProviders(input.providers).slice(0, PROMPT_PACK_BENCHMARK_MAX_PROVIDERS);
+    if (providers.length < 1) {
+      throw new Error("Retune campaign requires at least one provider/model pair.");
+    }
+    const repeatCount = Math.max(2, Math.min(10, Math.floor(input.repeatCount ?? 3)));
+    const maxBenchmarkRuns = Math.max(repeatCount * 2, Math.floor(input.maxBenchmarkRuns ?? repeatCount * 4));
+    const successBar = { ...defaultPromptRetuneSuccessBar(), ...(input.successBar ?? {}) };
+    const contentSha256 = resolvePromptPackContentSha256(pack, tests);
+    const policyHash = pack.policyHash ?? hashPromptPackPolicyV2(pack.policyV2 ?? DEFAULT_PROMPT_PACK_POLICY_V2);
+    const scoringSnapshot = {
+      scoringSchemaVersion: "v3",
+      scorerVersion: PROMPT_PACK_V3_SCORER_VERSION,
+      judgeRubricVersion: PROMPT_PACK_V3_JUDGE_RUBRIC_VERSION,
+      policyHash,
+    };
+    const campaignId = `pprt-${randomUUID()}`;
+    const now = new Date().toISOString();
+    this.ctx.storage.promptRetunes.createCampaign({
+      campaignId,
+      packId,
+      status: "draft",
+      baselineContentSha256: contentSha256,
+      policyHash,
+      scoringSnapshot,
+      testCodes,
+      providers,
+      executionStyle: resolvePromptPackExecutionStyle(input.executionStyle),
+      repeatCount,
+      maxBenchmarkRuns,
+      successBar,
+      createdAt: now,
+      updatedAt: now,
+      passes: [],
+    });
+    this.deps.appendAudit?.({
+      event: "prompt_retune.campaign_created",
+      campaignId,
+      packId,
+      repeatCount,
+      maxBenchmarkRuns,
+      providers,
+      testCodes,
+      baselineContentSha256: contentSha256,
+      policyHash,
+    });
+    return this.getPromptRetuneCampaign(campaignId);
+  }
+
+  listPromptRetuneCampaigns(packId: string): { items: PromptRetuneCampaignRecord[] } {
+    this.ctx.requireFeatureEnabled("promptRetuneCampaignV1Enabled");
+    this.ctx.storage.promptPacks.getPack(packId);
+    return {
+      items: this.ctx.storage.promptRetunes
+        .listCampaigns(packId, 100)
+        .map((campaign) => this.refreshAndMapPromptRetuneCampaign(campaign.campaignId)),
+    };
+  }
+
+  getPromptRetuneCampaign(campaignId: string): PromptRetuneCampaignRecord {
+    this.ctx.requireFeatureEnabled("promptRetuneCampaignV1Enabled");
+    return this.refreshAndMapPromptRetuneCampaign(campaignId);
+  }
+
+  startPromptRetuneNoise(campaignId: string): PromptRetuneCampaignRecord {
+    const campaign = this.getPromptRetuneCampaign(campaignId);
+    if (campaign.status !== "draft") {
+      return campaign;
+    }
+    const currentHash = this.resolveCurrentPromptRetuneContentHash(campaign.packId);
+    if (currentHash !== campaign.baselineContentSha256) {
+      throw new Error("Prompt pack changed after campaign registration; create a new campaign.");
+    }
+    return this.startPromptRetunePass(campaign, {
+      kind: "noise",
+      hypothesis: "A/A null experiment",
+      contentSha256: currentHash,
+      status: "measuring_noise",
+    });
+  }
+
+  startPromptRetuneCandidate(campaignId: string, input: { hypothesis: string }): PromptRetuneCampaignRecord {
+    const campaign = this.getPromptRetuneCampaign(campaignId);
+    if (campaign.status !== "ready") {
+      throw new Error("Retune campaign must finish noise measurement before a candidate pass starts.");
+    }
+    const pack = this.ctx.storage.promptPacks.getPack(campaign.packId);
+    const currentPolicyHash = pack.policyHash ?? hashPromptPackPolicyV2(pack.policyV2 ?? DEFAULT_PROMPT_PACK_POLICY_V2);
+    if (currentPolicyHash !== campaign.policyHash) {
+      throw new Error("Prompt Pack scoring policy drifted after campaign registration; create a new campaign.");
+    }
+    return this.startPromptRetunePass(campaign, {
+      kind: "candidate",
+      hypothesis: input.hypothesis.trim(),
+      contentSha256: this.resolveCurrentPromptRetuneContentHash(campaign.packId),
+      status: "running",
+    });
+  }
+
+  setPromptRetunePassDisposition(
+    campaignId: string,
+    passId: string,
+    input: { disposition: "kept" | "rejected" | "inconclusive"; notes?: string },
+  ): PromptRetuneCampaignRecord {
+    const campaign = this.getPromptRetuneCampaign(campaignId);
+    const pass = campaign.passes.find((item) => item.passId === passId);
+    if (!pass || pass.kind !== "candidate" || !pass.finishedAt) {
+      throw new Error("Only a finished candidate pass can be dispositioned.");
+    }
+    if (input.disposition === "kept" && pass.eligibility !== "eligible") {
+      throw new Error("Candidate cannot be kept because it did not clear the preregistered success bar.");
+    }
+    const now = new Date().toISOString();
+    this.ctx.storage.promptRetunes.dispositionCandidate({
+      campaignId,
+      passId,
+      disposition: input.disposition,
+      notes: input.notes,
+      updatedAt: now,
+    });
+    this.deps.appendAudit?.({
+      event: "prompt_retune.pass_dispositioned",
+      campaignId,
+      passId,
+      disposition: input.disposition,
+      eligibility: pass.eligibility,
+    });
+    return this.getPromptRetuneCampaign(campaignId);
+  }
+
+  cancelPromptRetuneCampaign(campaignId: string): PromptRetuneCampaignRecord {
+    const campaign = this.getPromptRetuneCampaign(campaignId);
+    if (["completed", "cancelled", "failed"].includes(campaign.status)) {
+      return campaign;
+    }
+    const active = campaign.passes.find((pass) => pass.passId === campaign.activePassId);
+    for (const benchmarkRunId of active?.benchmarkRunIds ?? []) {
+      this.cancelPromptPackBenchmark(benchmarkRunId);
+    }
+    const now = new Date().toISOString();
+    this.ctx.storage.promptRetunes.cancelCampaign(campaignId, now);
+    this.deps.appendAudit?.({ event: "prompt_retune.campaign_cancelled", campaignId });
+    return this.getPromptRetuneCampaign(campaignId);
   }
 
   private resumePromptPackBenchmarkRunIfStale(benchmarkRunId: string): void {
@@ -1439,6 +1631,7 @@ export class PromptPackService {
     input: {
       testCodes: string[];
       baselineRef?: string;
+      baselineBenchmarkRunId?: string;
     },
   ): { regressionRunId: string } {
     this.ctx.requireFeatureEnabled("replayRegressionV1Enabled");
@@ -1456,18 +1649,35 @@ export class PromptPackService {
         throw new Error(`Unknown test code ${code} for prompt pack ${packId}`);
       }
     }
-    if (input.baselineRef && Number.isNaN(Date.parse(input.baselineRef))) {
+    if (input.baselineRef && input.baselineBenchmarkRunId) {
+      throw new Error("Specify baselineBenchmarkRunId or baselineRef, not both.");
+    }
+    if (input.baselineRef && !isValidIsoTimestamp(input.baselineRef)) {
       throw new Error("baselineRef must be an ISO timestamp.");
     }
+    const baselineBenchmark = input.baselineBenchmarkRunId
+      ? this.getPromptPackBenchmarkStatus(input.baselineBenchmarkRunId)
+      : undefined;
+    if (baselineBenchmark && baselineBenchmark.run.packId !== packId) {
+      throw new Error("baselineBenchmarkRunId must belong to the same prompt pack.");
+    }
+    if (baselineBenchmark && baselineBenchmark.run.status !== "completed") {
+      throw new Error("baselineBenchmarkRunId must reference a completed benchmark.");
+    }
+    const baselineBenchmarkItems = baselineBenchmark
+      ? this.listPromptPackBenchmarkItems(baselineBenchmark.run.benchmarkRunId)
+      : [];
     const regressionRunId = `ppr-${randomUUID()}`;
     const now = new Date().toISOString();
     this.ctx.gatewaySql
       .prepare(
         `
       INSERT INTO replay_regression_runs (
-        regression_run_id, pack_id, status, test_codes_json, baseline_ref, summary_json, started_at, finished_at
+        regression_run_id, pack_id, status, test_codes_json, baseline_ref, baseline_benchmark_run_id,
+        summary_json, started_at, finished_at
       ) VALUES (
-        @regressionRunId, @packId, 'running', @testCodesJson, @baselineRef, @summaryJson, @startedAt, NULL
+        @regressionRunId, @packId, 'running', @testCodesJson, @baselineRef, @baselineBenchmarkRunId,
+        @summaryJson, @startedAt, NULL
       )
     `,
       )
@@ -1476,6 +1686,7 @@ export class PromptPackService {
         packId,
         testCodesJson: JSON.stringify(selectedCodes),
         baselineRef: input.baselineRef ?? null,
+        baselineBenchmarkRunId: input.baselineBenchmarkRunId ?? null,
         summaryJson: JSON.stringify({}),
         startedAt: now,
       });
@@ -1510,12 +1721,30 @@ export class PromptPackService {
         omittedTests.push(`${test.code}:no_scored_run`);
         continue;
       }
-      const baselineScore = pickReplayBaselineScore(scoredRuns, currentScore, input.baselineRef);
+      const currentRun = runById.get(currentScore.runId);
+      const benchmarkCandidates = baselineBenchmarkItems.filter((item) => item.testCode.toUpperCase() === code);
+      const matchingBenchmarkItems = currentRun
+        ? benchmarkCandidates.filter(
+            (item) => item.providerId === currentRun.providerId && item.model === currentRun.model,
+          )
+        : [];
+      const benchmarkItem =
+        matchingBenchmarkItems.length === 1
+          ? matchingBenchmarkItems[0]
+          : benchmarkCandidates.length === 1
+            ? benchmarkCandidates[0]
+            : undefined;
+      if (baselineBenchmark && !benchmarkItem) {
+        omittedTests.push(`${test.code}:ambiguous_baseline_model`);
+        continue;
+      }
+      const baselineScore = benchmarkItem?.scoreId
+        ? this.ctx.storage.promptPackScores.get(benchmarkItem.scoreId)
+        : pickReplayBaselineScore(scoredRuns, currentScore, input.baselineRef);
       if (!baselineScore) {
         omittedTests.push(`${test.code}:no_baseline`);
         continue;
       }
-      const currentRun = runById.get(currentScore.runId);
       const baselineRun = runById.get(baselineScore.runId);
       const currentPass = currentScore.totalScore >= PROMPT_PACK_PASS_THRESHOLD ? 1 : 0;
       const baselinePass = baselineScore.totalScore >= PROMPT_PACK_PASS_THRESHOLD ? 1 : 0;
@@ -1594,7 +1823,8 @@ export class PromptPackService {
     const row = this.ctx.gatewaySql
       .prepare(
         `
-      SELECT regression_run_id, pack_id, status, test_codes_json, baseline_ref, started_at, finished_at, error_text
+      SELECT regression_run_id, pack_id, status, test_codes_json, baseline_ref, baseline_benchmark_run_id,
+             started_at, finished_at, error_text
       FROM replay_regression_runs
       WHERE regression_run_id = ?
     `,
@@ -1606,6 +1836,7 @@ export class PromptPackService {
           status: ReplayRegressionRun["status"];
           test_codes_json: string;
           baseline_ref: string | null;
+          baseline_benchmark_run_id: string | null;
           started_at: string;
           finished_at: string | null;
           error_text: string | null;
@@ -1640,6 +1871,7 @@ export class PromptPackService {
         status: row.status,
         testCodes: safeJsonParse<string[]>(row.test_codes_json, []),
         baselineRef: row.baseline_ref ?? undefined,
+        baselineBenchmarkRunId: row.baseline_benchmark_run_id ?? undefined,
         startedAt: row.started_at,
         finishedAt: row.finished_at ?? undefined,
         error: row.error_text ?? undefined,
@@ -1780,7 +2012,6 @@ export class PromptPackService {
         deletedRuns = this.ctx.storage.promptPackRuns.deleteByPack(packId);
       }
     });
-
     const exportPath = this.resolvePromptPackExportPath(pack);
     if (clearRuns) {
       try {
@@ -1858,6 +2089,202 @@ export class PromptPackService {
 
   // ── private helpers ────────────────────────────────────────────────
 
+  private startPromptRetunePass(
+    campaign: PromptRetuneCampaignRecord,
+    input: {
+      kind: PromptRetunePassRecord["kind"];
+      hypothesis: string;
+      contentSha256: string;
+      status: PromptRetuneCampaignRecord["status"];
+    },
+  ): PromptRetuneCampaignRecord {
+    if (!input.hypothesis) {
+      throw new Error("Retune pass requires a hypothesis.");
+    }
+    const usedRuns = campaign.passes.reduce((sum, pass) => sum + pass.benchmarkRunIds.length, 0);
+    if (usedRuns + campaign.repeatCount > campaign.maxBenchmarkRuns) {
+      throw new Error("Retune campaign benchmark budget is exhausted.");
+    }
+    if (campaign.activePassId) {
+      throw new Error("Retune campaign already has an active pass.");
+    }
+    const passId = `pprtp-${randomUUID()}`;
+    const now = new Date().toISOString();
+    this.ctx.storage.promptRetunes.createPassAndActivate(
+      {
+        passId,
+        campaignId: campaign.campaignId,
+        kind: input.kind,
+        hypothesis: input.hypothesis,
+        contentSha256: input.contentSha256,
+        benchmarkRunIds: [],
+        disposition: "pending",
+        createdAt: now,
+      },
+      input.status,
+    );
+    this.deps.appendAudit?.({
+      event: "prompt_retune.pass_started",
+      campaignId: campaign.campaignId,
+      passId,
+      kind: input.kind,
+      hypothesis: input.hypothesis,
+      contentSha256: input.contentSha256,
+      repeatCount: campaign.repeatCount,
+    });
+
+    const benchmarkRunIds: string[] = [];
+    try {
+      for (let index = 0; index < campaign.repeatCount; index += 1) {
+        benchmarkRunIds.push(
+          this.runPromptPackBenchmark(campaign.packId, {
+            testCodes: campaign.testCodes,
+            providers: campaign.providers,
+            executionStyle: campaign.executionStyle,
+          }).benchmarkRunId,
+        );
+      }
+      this.ctx.storage.promptRetunes.setPassBenchmarkRunIds(passId, benchmarkRunIds);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      for (const benchmarkRunId of benchmarkRunIds) {
+        this.cancelPromptPackBenchmark(benchmarkRunId);
+      }
+      this.ctx.storage.promptRetunes.failPassAndCampaign({
+        campaignId: campaign.campaignId,
+        passId,
+        benchmarkRunIds,
+        error: message,
+        finishedAt: now,
+      });
+      this.deps.appendAudit?.({
+        event: "prompt_retune.campaign_failed",
+        campaignId: campaign.campaignId,
+        passId,
+        error: message,
+        benchmarkRunIds,
+      });
+    }
+    return this.refreshAndMapPromptRetuneCampaign(campaign.campaignId);
+  }
+
+  private refreshAndMapPromptRetuneCampaign(campaignId: string): PromptRetuneCampaignRecord {
+    const campaign = this.ctx.storage.promptRetunes.getCampaign(campaignId);
+    if (!campaign) {
+      throw new Error(`Prompt retune campaign not found: ${campaignId}`);
+    }
+    if (!campaign.activePassId || !["measuring_noise", "running"].includes(campaign.status)) {
+      return campaign;
+    }
+    const pass = campaign.passes.find((item) => item.passId === campaign.activePassId);
+    if (!pass) {
+      throw new Error(`Active retune pass not found: ${campaign.activePassId}`);
+    }
+    const benchmarkRunIds = pass.benchmarkRunIds;
+    if (benchmarkRunIds.length !== campaign.repeatCount) {
+      return campaign;
+    }
+    const statuses = benchmarkRunIds.map((runId) => this.getPromptPackBenchmarkStatus(runId));
+    const failed = statuses.find((status) => status.run.status === "failed" || status.run.status === "cancelled");
+    if (failed) {
+      const now = new Date().toISOString();
+      const message = failed.run.error ?? `Benchmark ${failed.run.benchmarkRunId} did not complete.`;
+      this.ctx.storage.promptRetunes.failPassAndCampaign({
+        campaignId,
+        passId: pass.passId,
+        benchmarkRunIds,
+        error: message,
+        finishedAt: now,
+      });
+      this.deps.appendAudit?.({
+        event: "prompt_retune.campaign_failed",
+        campaignId,
+        passId: pass.passId,
+        error: message,
+        benchmarkRunIds,
+      });
+      return this.ctx.storage.promptRetunes.getCampaign(campaignId)!;
+    }
+    if (statuses.some((status) => status.run.status !== "completed")) {
+      return campaign;
+    }
+
+    const metricsByRun = statuses.map((status) => this.calculatePromptRetuneBenchmarkMetrics(status));
+    const metrics = averagePromptRetuneMetrics(metricsByRun);
+    const now = new Date().toISOString();
+    if (pass.kind === "noise") {
+      const noiseFloor = calculatePromptRetuneNoiseFloor(metricsByRun);
+      this.ctx.storage.promptRetunes.completeNoise({
+        campaignId,
+        passId: pass.passId,
+        metrics,
+        noiseFloor,
+        finishedAt: now,
+      });
+      this.deps.appendAudit?.({
+        event: "prompt_retune.noise_measured",
+        campaignId,
+        passId: pass.passId,
+        noiseFloor,
+        benchmarkRunIds,
+      });
+    } else {
+      if (!campaign.baselineMetrics || !campaign.noiseFloor) {
+        throw new Error("Retune campaign is missing baseline noise evidence.");
+      }
+      const eligibility = evaluatePromptRetuneCandidate({
+        baseline: campaign.baselineMetrics,
+        candidate: metrics,
+        noiseFloor: campaign.noiseFloor,
+        successBar: campaign.successBar,
+      });
+      this.ctx.storage.promptRetunes.completeCandidate({
+        campaignId,
+        passId: pass.passId,
+        metrics,
+        eligibility,
+        finishedAt: now,
+      });
+      this.deps.appendAudit?.({
+        event: "prompt_retune.candidate_measured",
+        campaignId,
+        passId: pass.passId,
+        eligibility,
+        contentSha256: pass.contentSha256,
+        benchmarkRunIds,
+      });
+    }
+    return this.ctx.storage.promptRetunes.getCampaign(campaignId)!;
+  }
+
+  private calculatePromptRetuneBenchmarkMetrics(status: PromptPackBenchmarkStatusRecord): PromptRetuneMetrics {
+    const items = this.listPromptPackBenchmarkItems(status.run.benchmarkRunId);
+    const scored = items.filter((item) => typeof item.weightedScore === "number");
+    const runById = new Map(
+      this.ctx.storage.promptPackRuns.listByPack(status.run.packId, 10_000).map((run) => [run.runId, run] as const),
+    );
+    const latencies = items
+      .map((item) => (item.runId ? runById.get(item.runId) : undefined))
+      .filter((run): run is PromptPackRunRecord => Boolean(run?.finishedAt))
+      .map((run) => Math.max(0, Date.parse(run.finishedAt!) - Date.parse(run.startedAt)))
+      .filter(Number.isFinite);
+    return {
+      averageWeightedScore:
+        scored.length > 0 ? scored.reduce((sum, item) => sum + (item.weightedScore ?? 0), 0) / scored.length : 0,
+      passRate: items.length > 0 ? items.filter((item) => item.verdict === "pass").length / items.length : 0,
+      failureRate: items.length > 0 ? items.filter((item) => item.runStatus !== "completed").length / items.length : 1,
+      averageLatencyMs:
+        latencies.length > 0 ? latencies.reduce((sum, latency) => sum + latency, 0) / latencies.length : 0,
+    };
+  }
+
+  private resolveCurrentPromptRetuneContentHash(packId: string): string {
+    return resolvePromptPackContentSha256(
+      this.ctx.storage.promptPacks.getPack(packId),
+      this.ctx.storage.promptPacks.listTests(packId, 5000),
+    );
+  }
+
   private async runPromptPackBenchmarkTask(benchmarkRunId: string, signal?: AbortSignal): Promise<void> {
     throwIfPromptPackBenchmarkAborted(signal ?? new AbortController().signal, benchmarkRunId);
     const claimedRow = this.claimPromptPackBenchmarkRun(benchmarkRunId);
@@ -1879,7 +2306,8 @@ export class PromptPackService {
         return;
       }
 
-      const tests = this.ctx.storage.promptPacks.listTests(run.packId, 5000);
+      const snapshottedTests = parsePromptPackTestSnapshot(claimedRow.test_snapshot_json);
+      const tests = snapshottedTests ?? this.ctx.storage.promptPacks.listTests(run.packId, 5000);
       const codeToTest = new Map(tests.map((test) => [test.code.toUpperCase(), test]));
       const selectedTests = run.testCodes
         .map((code) => codeToTest.get(code.toUpperCase()))
@@ -6294,4 +6722,47 @@ function isPromptPackV2FlagEnabled(name: string, defaultValue = true): boolean {
     return defaultValue;
   }
   return !["0", "false", "off", "no", "disabled"].includes(raw);
+}
+
+function resolvePromptPackContentSha256(pack: PromptPackRecord, tests: PromptPackTestRecord[]): string {
+  if (pack.contentSha256) {
+    return pack.contentSha256;
+  }
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        packId: pack.packId,
+        name: pack.name,
+        sourceLabel: pack.sourceLabel,
+        policyHash: pack.policyHash,
+        tests,
+      }),
+      "utf8",
+    )
+    .digest("hex");
+}
+
+function parsePromptPackTestSnapshot(raw: string | null | undefined): PromptPackTestRecord[] | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = safeJsonParse<unknown>(raw, undefined);
+  if (!Array.isArray(parsed)) {
+    return undefined;
+  }
+  const tests = parsed.filter(
+    (item): item is PromptPackTestRecord =>
+      Boolean(item) &&
+      typeof item === "object" &&
+      typeof (item as PromptPackTestRecord).testId === "string" &&
+      typeof (item as PromptPackTestRecord).code === "string",
+  );
+  return tests.length === parsed.length ? tests : undefined;
+}
+
+function isValidIsoTimestamp(value: string): boolean {
+  return (
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/.test(value) &&
+    Number.isFinite(Date.parse(value))
+  );
 }

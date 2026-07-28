@@ -110,6 +110,15 @@ import {
 } from "./session-control-service.js";
 import { readToolDomainExecutionFailure, type ToolDomainExecutionFailure } from "./tool-domain-result-truth.js";
 import type { SharedHostLifecycleAdmissionPort, SharedHostWorkReservation } from "./shared-host-lifecycle-service.js";
+import {
+  DELEGATION_SCOPE_EXPANSION_APPROVAL_KIND,
+  DELEGATION_SCOPE_EXPANSION_EFFECT_KIND,
+  hashDelegatedScope,
+} from "./delegated-work-result-service.js";
+import {
+  ENGINEERING_LEARNING_APPROVAL_KIND,
+  ENGINEERING_LEARNING_EFFECT_KIND,
+} from "./engineering-learning-service.js";
 
 export type ApprovalObservabilityEffectInput = ApprovalObservabilityEffectInputContract;
 
@@ -410,6 +419,11 @@ export interface ApprovalEffectsServiceDeps {
     workspaceId: string;
     approvalId: string;
   }): ImprovementLifecycleApplyResult;
+  executeApprovedEngineeringLearningLifecycle?(approvalId: string): {
+    learningId: string;
+    action: string;
+    status: string;
+  };
   enqueueAfterHooks(input: {
     workspaceId: string;
     trigger: "approval.resolve.after" | "approval.response.after";
@@ -713,6 +727,12 @@ export class ApprovalEffectsService {
     }
     if (approval.kind === IMPROVEMENT_LIFECYCLE_APPROVAL_KIND && input.decision === "approve") {
       enqueued.push(this.enqueueImprovementLifecycleApply(approval));
+    }
+    if (approval.kind === DELEGATION_SCOPE_EXPANSION_APPROVAL_KIND) {
+      enqueued.push(this.enqueueDelegationScopeExpansionApply(approval, input, options));
+    }
+    if (approval.kind === ENGINEERING_LEARNING_APPROVAL_KIND && input.decision === "approve") {
+      enqueued.push(this.enqueueEngineeringLearningLifecycleApply(approval));
     }
     enqueued.push(
       this.ctx.storage.approvalEffects.upsert({
@@ -1087,6 +1107,57 @@ export class ApprovalEffectsService {
     });
   }
 
+  private enqueueDelegationScopeExpansionApply(
+    approval: ApprovalRequest,
+    input: ApprovalResolveInput,
+    options: ApprovalResolutionEffectEnqueueOptions,
+  ): ApprovalEffectRecord {
+    const payload = approval.payload;
+    const stepId = asOptionalString(payload.stepId);
+    const dispatchGeneration = asOptionalString(payload.dispatchGeneration);
+    const scopeHash = asOptionalString(payload.scopeHash);
+    const requestedPaths = asStringArray(payload.requestedPaths);
+    if (!stepId || !dispatchGeneration || !scopeHash || requestedPaths.length < 1) {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: `Approval ${approval.approvalId} has no canonical delegation scope-expansion binding.`,
+      });
+    }
+    return this.ctx.storage.approvalEffects.upsert({
+      approvalId: approval.approvalId,
+      effectKind: DELEGATION_SCOPE_EXPANSION_EFFECT_KIND,
+      targetKind: "delegation_step",
+      targetId: stepId,
+      payload: {
+        stepId,
+        dispatchGeneration,
+        scopeHash,
+        requestedPaths,
+        decision: options.allowExpired ? "expired" : input.decision === "approve" ? "approved" : "rejected",
+        resolvedBy: input.resolvedBy,
+      },
+    });
+  }
+
+  private enqueueEngineeringLearningLifecycleApply(approval: ApprovalRequest): ApprovalEffectRecord {
+    const learningId = asOptionalString(approval.payload.learningId);
+    const action = asOptionalString(approval.payload.action);
+    const expectedProvenanceHash = asOptionalString(approval.payload.expectedProvenanceHash);
+    if (!learningId || !action || !expectedProvenanceHash) {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: `Approval ${approval.approvalId} has no canonical engineering-learning binding.`,
+      });
+    }
+    return this.ctx.storage.approvalEffects.upsert({
+      approvalId: approval.approvalId,
+      effectKind: ENGINEERING_LEARNING_EFFECT_KIND,
+      targetKind: "engineering_learning",
+      targetId: learningId,
+      payload: { learningId, action, expectedProvenanceHash },
+    });
+  }
+
   public enqueueApprovalWaitMaterialization(approval: ApprovalRequest): ApprovalEffectRecord | undefined {
     const runId = asOptionalString(approval.linkage?.durableRunId);
     if (!runId) {
@@ -1339,6 +1410,12 @@ export class ApprovalEffectsService {
       case IMPROVEMENT_LIFECYCLE_EFFECT_KIND:
         this.handleImprovementLifecycleApply(effect);
         return;
+      case DELEGATION_SCOPE_EXPANSION_EFFECT_KIND:
+        this.handleDelegationScopeExpansionApply(effect);
+        return;
+      case ENGINEERING_LEARNING_EFFECT_KIND:
+        this.handleEngineeringLearningLifecycleApply(effect);
+        return;
       case "approval_inbox_follow_up":
         await this.handleApprovalInboxFollowUp(effect);
         return;
@@ -1554,6 +1631,126 @@ export class ApprovalEffectsService {
       this.deferClaimedEffectForRetry(effect, this.workerId, error, {
         deliveryState: "retry_scheduled",
         approvalId: effect.approvalId,
+      });
+    }
+  }
+
+  private handleDelegationScopeExpansionApply(effect: ApprovalEffectRecord): void {
+    const stepId = asOptionalString(effect.payload.stepId);
+    const expectedGeneration = asOptionalString(effect.payload.dispatchGeneration);
+    const expectedScopeHash = asOptionalString(effect.payload.scopeHash);
+    const requestedPaths = asStringArray(effect.payload.requestedPaths);
+    const decision = asOptionalString(effect.payload.decision) as "approved" | "rejected" | "expired" | undefined;
+    if (!stepId || !expectedGeneration || !expectedScopeHash || requestedPaths.length < 1 || !decision) {
+      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+        lastError: "Delegation scope-expansion effect is missing its immutable binding.",
+        result: { stepId, decision },
+      });
+      return;
+    }
+    try {
+      const step = this.ctx.storage.chatDelegationSteps.get(stepId);
+      const scope = step.scopeControl;
+      const request = step.workResult?.scopeExpansion;
+      const stale =
+        !scope ||
+        !request ||
+        request.approvalId !== effect.approvalId ||
+        scope.dispatchGeneration !== expectedGeneration ||
+        scope.scopeHash !== expectedScopeHash ||
+        request.scopeHash !== expectedScopeHash;
+      const resolvedAt = new Date().toISOString();
+      if (stale || decision !== "approved") {
+        const terminalDecision = stale ? "rejected" : decision;
+        this.ctx.storage.chatDelegationSteps.patch(stepId, {
+          status: "failed",
+          error: stale
+            ? "Delegated scope expansion approval became stale before it could be applied."
+            : `Delegated scope expansion was ${terminalDecision}.`,
+          finishedAt: resolvedAt,
+          workResult: {
+            disposition: "blocked",
+            summary: stale
+              ? "Scope expansion was blocked because its dispatch generation or scope hash changed."
+              : `Scope expansion was ${terminalDecision}; the original filesystem scope was retained.`,
+            changedFiles: step.workResult?.changedFiles ?? [],
+            evidenceRefs: step.workResult?.evidenceRefs ?? [],
+            ...(request ? { scopeExpansion: { ...request, decision: terminalDecision, resolvedAt } } : {}),
+          },
+        });
+        const completed = this.ctx.storage.approvalEffects.completeEffect(
+          effect.effectId,
+          this.workerId,
+          effect.version,
+          { result: { applied: false, stale, decision: terminalDecision, stepId } },
+        );
+        if (!completed) throw new Error(`Delegation scope effect ${effect.effectId} lost its completion lease.`);
+        return;
+      }
+      const approvedPaths = [...new Set([...scope.approvedPaths, ...requestedPaths])].sort();
+      const nextScope = {
+        ...scope,
+        approvedPaths,
+        scopeHash: hashDelegatedScope({
+          rootPath: scope.rootPath,
+          approvedPaths,
+          dispatchGeneration: scope.dispatchGeneration,
+        }),
+        updatedAt: resolvedAt,
+      };
+      this.ctx.storage.chatDelegationSteps.patch(stepId, {
+        scopeControl: nextScope,
+        workResult: {
+          ...step.workResult!,
+          scopeExpansion: { ...request, decision: "approved", resolvedAt },
+        },
+      });
+      const completed = this.ctx.storage.approvalEffects.completeEffect(
+        effect.effectId,
+        this.workerId,
+        effect.version,
+        { result: { applied: true, decision: "approved", stepId, scopeHash: nextScope.scopeHash, approvedPaths } },
+      );
+      if (!completed) throw new Error(`Delegation scope effect ${effect.effectId} lost its completion lease.`);
+      void this.ctx.storage.audit.append("approvals", {
+        event: "delegation.scope_expansion_resolved",
+        approvalId: effect.approvalId,
+        stepId,
+        decision: "approved",
+        scopeHash: nextScope.scopeHash,
+      });
+    } catch (error) {
+      if (!this.isEffectStillClaimed(effect.effectId)) return;
+      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+        lastError: error instanceof Error ? error.message : String(error),
+        result: { stepId, decision },
+      });
+    }
+  }
+
+  private handleEngineeringLearningLifecycleApply(effect: ApprovalEffectRecord): void {
+    const execute = this.deps.executeApprovedEngineeringLearningLifecycle;
+    if (!execute) {
+      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+        lastError: "Engineering-learning lifecycle effect has no configured executor.",
+        result: { configured: false },
+      });
+      return;
+    }
+    try {
+      const applied = execute(effect.approvalId);
+      const completed = this.ctx.storage.approvalEffects.completeEffect(
+        effect.effectId,
+        this.workerId,
+        effect.version,
+        { result: applied },
+      );
+      if (!completed) throw new Error(`Engineering-learning effect ${effect.effectId} lost its completion lease.`);
+    } catch (error) {
+      if (!this.isEffectStillClaimed(effect.effectId)) return;
+      this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+        lastError: error instanceof Error ? error.message : String(error),
+        result: { learningId: effect.targetId },
       });
     }
   }
@@ -4420,6 +4617,14 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function asOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function requireObservabilityIdentifier(value: unknown, fieldName: string): string {

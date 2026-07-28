@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Prompt Pack workbench state keeps benchmark and retune campaign transitions in one route-owned coordinator. */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   PromptPackBenchmarkStatusRecord,
@@ -5,6 +6,7 @@ import type {
   PromptPackExportRecord,
   PromptPackLatestAssessmentRecordV2,
   PromptPackReportRecord,
+  PromptRetuneCampaignRecord,
   PromptPackRunRecord,
   PromptPackTestRecord,
 } from "@goatcitadel/contracts";
@@ -13,6 +15,9 @@ import {
   autoScorePromptPackBatch,
   autoScorePromptPackTest,
   cancelPromptPackBenchmark,
+  cancelPromptRetuneCampaign,
+  createPromptRetuneCampaign,
+  dispositionPromptRetunePass,
   exportPromptPackReport,
   fetchPromptPackBenchmark,
   fetchPromptPackExport,
@@ -21,12 +26,16 @@ import {
   fetchPromptPacks,
   fetchPromptPackTests,
   fetchPromptPackTrends,
+  fetchPromptRetuneCampaign,
+  fetchSettings,
   importPromptPack,
   resetPromptPack,
   runPromptPackBenchmark,
   runPromptPackReplayRegression,
   runPromptPackTest,
   scorePromptPackTest,
+  startPromptRetuneCandidate,
+  startPromptRetuneNoise,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { useProviderModelCatalog } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
 import { useRefreshSubscription } from "@goatcitadel/mission-control-shared/hooks/useRefreshSubscription";
@@ -122,6 +131,11 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
   const [regressionStatus, setRegressionStatus] = useState<Awaited<
     ReturnType<typeof fetchPromptPackReplayRegressionStatus>
   > | null>(null);
+  const [retuneCampaign, setRetuneCampaign] = useState<PromptRetuneCampaignRecord | null>(null);
+  const [retuneEnabled, setRetuneEnabled] = useState(false);
+  const [retuneRepeatCount, setRetuneRepeatCount] = useState(3);
+  const [retuneHypothesis, setRetuneHypothesis] = useState("");
+  const [retunePending, setRetunePending] = useState(false);
   const [trendSeries, setTrendSeries] = useState<Awaited<ReturnType<typeof fetchPromptPackTrends>>["items"]>([]);
   const [exportInfo, setExportInfo] = useState<PromptPackExportRecord | null>(null);
   const [scoreDraft, setScoreDraft] = useState<ScoreDraft>(DEFAULT_SCORE_DRAFT);
@@ -208,7 +222,12 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
       }
 
       try {
-        const response = await fetchPromptPacks();
+        const [response, runtimeSettings] = await Promise.all([fetchPromptPacks(), fetchSettings().catch(() => null)]);
+        const nextRetuneEnabled = runtimeSettings?.features?.promptRetuneCampaignV1Enabled === true;
+        setRetuneEnabled(nextRetuneEnabled);
+        if (!nextRetuneEnabled) {
+          setRetuneCampaign(null);
+        }
         setPacks(
           response.items.map((item) => ({
             packId: item.packId,
@@ -798,7 +817,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
     try {
       const started = await runPromptPackReplayRegression(selectedPackId, {
         testCodes,
-        baselineRef: benchmarkRunId ?? undefined,
+        baselineBenchmarkRunId: benchmarkRunId ?? undefined,
       });
       setRegressionRunId(started.regressionRunId);
       await loadRegressionStatus(started.regressionRunId);
@@ -841,6 +860,108 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
     }
     void loadRegressionStatus(regressionRunId).catch((err: Error) => setError(err.message));
   }, [loadRegressionStatus, regressionRunId]);
+
+  const createRetuneCampaign = useCallback(async () => {
+    if (!retuneEnabled || !selectedPackId) return;
+    const testCodes = parseBenchmarkTestCodes(benchmarkTestCodes);
+    const providers = parseBenchmarkProviders(benchmarkProvidersInput);
+    if (testCodes.length < 1 || providers.length < 1) {
+      setError("Retuning needs at least one test code and one provider/model entry.");
+      return;
+    }
+    setRetunePending(true);
+    setError(null);
+    try {
+      const campaign = await createPromptRetuneCampaign(selectedPackId, {
+        testCodes,
+        providers,
+        executionStyle,
+        repeatCount: retuneRepeatCount,
+        maxBenchmarkRuns: Math.max(4, retuneRepeatCount * 4),
+      });
+      setRetuneCampaign(campaign);
+      setSuccess(`Retune campaign ${campaign.campaignId} created with frozen inputs.`);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setRetunePending(false);
+    }
+  }, [benchmarkProvidersInput, benchmarkTestCodes, executionStyle, retuneEnabled, retuneRepeatCount, selectedPackId]);
+
+  const refreshRetuneCampaign = useCallback(async () => {
+    if (!retuneCampaign) return;
+    setRetunePending(true);
+    setError(null);
+    try {
+      setRetuneCampaign(await fetchPromptRetuneCampaign(retuneCampaign.campaignId));
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setRetunePending(false);
+    }
+  }, [retuneCampaign]);
+
+  const measureRetuneNoise = useCallback(async () => {
+    if (!retuneCampaign) return;
+    setRetunePending(true);
+    setError(null);
+    try {
+      setRetuneCampaign(await startPromptRetuneNoise(retuneCampaign.campaignId));
+      setSuccess("A/A measurement started against identical frozen prompt bytes.");
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setRetunePending(false);
+    }
+  }, [retuneCampaign]);
+
+  const runRetuneCandidate = useCallback(async () => {
+    if (!retuneCampaign || !retuneHypothesis.trim()) return;
+    setRetunePending(true);
+    setError(null);
+    try {
+      setRetuneCampaign(
+        await startPromptRetuneCandidate(retuneCampaign.campaignId, { hypothesis: retuneHypothesis.trim() }),
+      );
+      setRetuneHypothesis("");
+      setSuccess("Candidate measurement started. Prompt promotion remains a manual decision.");
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setRetunePending(false);
+    }
+  }, [retuneCampaign, retuneHypothesis]);
+
+  const cancelRetune = useCallback(async () => {
+    if (!retuneCampaign) return;
+    setRetunePending(true);
+    setError(null);
+    try {
+      setRetuneCampaign(await cancelPromptRetuneCampaign(retuneCampaign.campaignId));
+      setSuccess("Retune campaign cancelled.");
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setRetunePending(false);
+    }
+  }, [retuneCampaign]);
+
+  const dispositionRetunePass = useCallback(
+    async (passId: string, disposition: "kept" | "rejected" | "inconclusive") => {
+      if (!retuneCampaign) return;
+      setRetunePending(true);
+      setError(null);
+      try {
+        setRetuneCampaign(await dispositionPromptRetunePass(retuneCampaign.campaignId, passId, { disposition }));
+        setSuccess(`Candidate marked ${disposition}. Prompt content was not changed.`);
+      } catch (err) {
+        setError((err as Error).message);
+      } finally {
+        setRetunePending(false);
+      }
+    },
+    [retuneCampaign],
+  );
 
   useEffect(() => {
     if (!selectedPackId) {
@@ -983,6 +1104,11 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
     regressionRunId,
     regressionPending,
     regressionStatus,
+    retuneEnabled,
+    retuneCampaign,
+    retuneRepeatCount,
+    retuneHypothesis,
+    retunePending,
     trendSeries,
     exportInfo,
     scoreDraft,
@@ -1024,6 +1150,8 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
     setExecutionStyle,
     setBenchmarkTestCodes,
     setBenchmarkProvidersInput,
+    setRetuneRepeatCount,
+    setRetuneHypothesis,
     setResetClearRuns,
     setResetClearScores,
     setConfirmResetArmed,
@@ -1042,6 +1170,12 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
     refreshBenchmark,
     runRegression,
     refreshRegression,
+    createRetuneCampaign,
+    refreshRetuneCampaign,
+    measureRetuneNoise,
+    runRetuneCandidate,
+    cancelRetune,
+    dispositionRetunePass,
     exportReport,
     copyExportPath,
     confirmResetPack,

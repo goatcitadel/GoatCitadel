@@ -6,6 +6,7 @@ import {
   type ChatThreadSystemNoticeRecord,
   type ChatThreadTurnRecord,
 } from "@goatcitadel/contracts";
+import type { DelegatedFilesystemScopeControl, DelegatedWorkResult } from "@goatcitadel/contracts";
 import { Badge } from "../ui";
 import { AssistantMessageRenderer, type AssistantStreamPresentationMode } from "./AssistantMessageRenderer";
 import { ChatAttachmentPreviewStack } from "./ChatAttachmentPreviewStack";
@@ -49,6 +50,8 @@ export interface ChatDelegationStepView {
   durableRunId?: string;
   childSessionId?: string;
   childTurnId?: string;
+  workResult?: DelegatedWorkResult;
+  scopeControl?: DelegatedFilesystemScopeControl;
 }
 
 export interface ChatDelegationRunView {
@@ -730,6 +733,45 @@ function ChatDelegationStepEvidence({
       {step.summary ? <p>{step.summary}</p> : null}
       {step.failureGuidance ? <p>{step.failureGuidance}</p> : null}
       {step.error ? <p>{step.error}</p> : null}
+      {step.scopeControl ? (
+        <details className="mc-next-thread-step-output-details">
+          <summary>Filesystem scope and approval lineage</summary>
+          <dl className="mc-next-thread-subagent-evidence-grid">
+            <div>
+              <dt>Approved scope</dt>
+              <dd>{step.scopeControl.approvedPaths.join(", ") || "none"}</dd>
+            </div>
+            <div>
+              <dt>Scope hash</dt>
+              <dd>{step.scopeControl.scopeHash}</dd>
+            </div>
+            <div>
+              <dt>Dispatch</dt>
+              <dd>{step.scopeControl.dispatchGeneration}</dd>
+            </div>
+            {step.workResult?.scopeExpansion ? (
+              <>
+                <div>
+                  <dt>Requested</dt>
+                  <dd>{step.workResult.scopeExpansion.requestedPaths.join(", ")}</dd>
+                </div>
+                <div>
+                  <dt>Resolved</dt>
+                  <dd>{step.workResult.scopeExpansion.resolvedPaths?.join(", ") || "pending"}</dd>
+                </div>
+                <div>
+                  <dt>Approval</dt>
+                  <dd>{step.workResult.scopeExpansion.approvalId ?? "pending"}</dd>
+                </div>
+                <div>
+                  <dt>Decision</dt>
+                  <dd>{step.workResult.scopeExpansion.decision ?? "waiting for approval"}</dd>
+                </div>
+              </>
+            ) : null}
+          </dl>
+        </details>
+      ) : null}
       {step.childTurnId && onOpenStepDetails ? (
         <button
           type="button"

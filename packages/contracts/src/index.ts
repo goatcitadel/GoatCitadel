@@ -115,6 +115,7 @@ export * from "./commitments.js";
 export * from "./operator-profile.js";
 export * from "./autonomy-audit.js";
 export * from "./learned-memory.js";
+export * from "./engineering-learning.js";
 export * from "./improvement.js";
 export * from "./workspaces.js";
 export * from "./workspace-path-bridge.js";

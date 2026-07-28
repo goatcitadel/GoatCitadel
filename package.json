@@ -96,6 +96,8 @@
     "verify:providers:vertex-fireworks": "node scripts/verification/run.mjs providers-vertex-fireworks",
     "verify:reasoning:profiles": "node scripts/verification/run.mjs reasoning-profiles",
     "verify:runtime:truth": "node scripts/verification/run.mjs runtime-truth",
+    "verify:prompt-retune": "pnpm --filter @goatcitadel/gateway exec vitest run src/services/prompt-pack/retune-campaign.test.ts src/services/prompt-pack-service.execution.test.ts && pnpm --filter @goatcitadel/storage exec tsx --test src/compound-engineering-repos.test.ts",
+    "verify:engineering-learnings": "pnpm --filter @goatcitadel/gateway exec vitest run src/services/engineering-learning-service.test.ts src/services/delegated-work-result-service.test.ts src/services/structured-review-v2.test.ts",
     "verify:orchestration:perf": "node scripts/verification/run.mjs orchestration-performance",
     "verify:orchestration:perf:raw": "corepack pnpm --filter @goatcitadel/gateway exec tsx src/orchestration/performance-gates-cli.ts",
     "verify:auth:matrix": "node scripts/verification/run.mjs auth-matrix",
