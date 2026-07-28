@@ -17,13 +17,13 @@
 
 .mc-next-chat-status__header h2 {
   margin: 0.15rem 0 0;
-  font-size: 1rem;
+  font-size: var(--text-md);
 }
 
 .mc-next-chat-status__header span,
 .mc-next-chat-status__section > span:first-child {
   color: var(--mc-text-muted, #91a2ad);
-  font-size: 0.72rem;
+  font-size: var(--text-2xs);
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }

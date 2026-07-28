@@ -90,7 +90,9 @@ function invokeFetch<T>(
   return { pending, handle: reservation.accept() };
 }
 
-describe("ModelUsageAccountingService", () => {
+// Every case uses a real SQLite database. Concurrent package coverage on the
+// hosted runner can push setup and teardown beyond Vitest's 5-second default.
+describe("ModelUsageAccountingService", { timeout: 20_000 }, () => {
   it("makes successful terminal settlement faults authoritative and never reclassifies them", async () => {
     const { storage, accounting } = createHarness();
     const originalFinalize = storage.modelUsageEvents.finalizeAndProject.bind(storage.modelUsageEvents);

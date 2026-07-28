@@ -119,7 +119,7 @@ export async function assertProviderAnchorAndAdviceContract(page) {
     (stageSelector) => {
       const stage = document.querySelector(stageSelector);
       const details = document.getElementById("providers-advice");
-      if (!(stage instanceof HTMLElement) || !(details instanceof HTMLDetailsElement) || !details.open) {
+      if (!(stage instanceof HTMLElement) || !(details instanceof globalThis.HTMLDetailsElement) || !details.open) {
         return false;
       }
       const body = details.querySelector(".mc-next-disclosure-card-body");
