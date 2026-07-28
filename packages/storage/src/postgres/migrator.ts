@@ -13,6 +13,8 @@ import {
   assertPostgresHistoryRepairTempRelationAvailable,
   assertPostgresHistoryRepairTempViewOwnsResolution,
   assertPostgresHistoryRepairRegistryIntegrity,
+  assertLegacyCompoundV124Catalog,
+  assertLegacyCompoundV124LedgerRepairResult,
   assertPostgresMigrationCurrentSchemaIsDurable,
   assertPostgresMigrationLedgerNotShadowed,
   assertPostgresMigrationSessionIsIdle,
@@ -28,6 +30,9 @@ import {
   buildPostgresQualifiedMigrationLedger,
   buildPostgresMigrationLedgerTempShadowPreflightSql,
   buildPostgresHistoryRepairTempViewSql,
+  buildPostgresLegacyCompoundLedgerRepairLockSql,
+  buildPostgresLegacyCompoundLedgerRepairSql,
+  classifyLegacyCompoundV124Ledger,
   isPostgresHistoryRepairMigration,
   normalizePostgresMigrationLedgerForHistoricalRepair,
   parsePostgresMigrationActiveTransactionIds,
@@ -36,6 +41,8 @@ import {
   POSTGRES_HISTORY_REPAIR_TEMP_RELATION_PREFLIGHT_SQL,
   POSTGRES_HISTORY_REPAIR_TEMP_VIEW_DROP_SQL,
   POSTGRES_HISTORY_REPAIR_TEMP_VIEW_RESOLUTION_SQL,
+  POSTGRES_LEGACY_COMPOUND_V124_CATALOG_SQL,
+  POSTGRES_LEGACY_COMPOUND_V124_RELATION_LOCK_SQL,
   PostgresMigrationSessionContaminationError,
   POSTGRES_MIGRATION_ACTIVE_TRANSACTION_PREFLIGHT_SQL,
   POSTGRES_MIGRATION_SESSION_TRANSACTION_CHECK_SQL,
@@ -70,7 +77,13 @@ export async function runPostgresMigrations(
     await client.awaitMigrationSchemaQuiescence(pinnedClient);
     const { applied, compatibility } = await client.transaction(async (tx) => {
       await client.configureMigrationTransaction(tx, migrationSchema, false);
-      const appliedRows = await client.getAppliedMigrationRows(tx, migrationSchema);
+      const appliedRows = await reconcileLegacyCompoundV124Ledger(
+        client,
+        tx,
+        migrationSchema,
+        migrations,
+        await client.getAppliedMigrationRows(tx, migrationSchema),
+      );
       const normalizedCompatibility = normalizePostgresMigrationLedgerForHistoricalRepair({
         definitions: migrations,
         appliedRows,
@@ -127,6 +140,52 @@ export async function runPostgresMigrations(
       latestVersion: migrations[migrations.length - 1]?.version ?? 0,
     };
   });
+}
+
+async function reconcileLegacyCompoundV124Ledger(
+  client: PostgresDatabaseClient,
+  tx: PoolClient,
+  migrationSchema: PostgresMigrationSchemaIdentity,
+  migrations: readonly PostgresMigration[],
+  appliedRows: readonly { version: number; name: string }[],
+): Promise<Array<{ version: number; name: string }>> {
+  const initialClassification = classifyLegacyCompoundV124Ledger({ definitions: migrations, appliedRows });
+  if (initialClassification === "none") {
+    return [...appliedRows];
+  }
+  if (initialClassification === "invalid-candidate") {
+    throw new Error(
+      "Postgres legacy compound-engineering v124 ledger claim is not the exact repairable deployed state; refusing automatic reconciliation.",
+    );
+  }
+
+  const qualifiedMigrationsTable = buildPostgresQualifiedMigrationLedger(
+    migrationSchema,
+    client.getMigrationsTableName(),
+  );
+  await tx.query(buildPostgresLegacyCompoundLedgerRepairLockSql(qualifiedMigrationsTable));
+  const lockedRows = await client.getAppliedMigrationRows(tx, migrationSchema);
+  const lockedClassification = classifyLegacyCompoundV124Ledger({ definitions: migrations, appliedRows: lockedRows });
+  if (lockedClassification === "none") {
+    return lockedRows;
+  }
+  if (lockedClassification !== "exact-candidate") {
+    throw new Error(
+      "Postgres legacy compound-engineering v124 ledger changed while the repair lock was acquired; refusing automatic reconciliation.",
+    );
+  }
+
+  const catalogBeforeLock = await tx.query<{ matches_expected: boolean }>(POSTGRES_LEGACY_COMPOUND_V124_CATALOG_SQL);
+  assertLegacyCompoundV124Catalog(catalogBeforeLock.rows[0]);
+  await tx.query(POSTGRES_LEGACY_COMPOUND_V124_RELATION_LOCK_SQL);
+  const catalogAfterLock = await tx.query<{ matches_expected: boolean }>(POSTGRES_LEGACY_COMPOUND_V124_CATALOG_SQL);
+  assertLegacyCompoundV124Catalog(catalogAfterLock.rows[0]);
+  const repair = await tx.query(buildPostgresLegacyCompoundLedgerRepairSql(qualifiedMigrationsTable, "$1"), [
+    "compound_engineering_foundation",
+  ]);
+  assertLegacyCompoundV124LedgerRepairResult(repair.rows);
+  await client.assertMigrationSchemaIdentity(tx, migrationSchema);
+  return client.getAppliedMigrationRows(tx, migrationSchema);
 }
 
 async function executePostgresAtomicMigration(
@@ -444,10 +503,16 @@ function applyPostgresMigrationsSyncLocked(
         );
       `);
     }
-    const appliedRows = db.prepare(`SELECT version, name FROM ${migrationLedger} ORDER BY version ASC`).all() as Array<{
-      version: number;
-      name: string;
-    }>;
+    const appliedRows = reconcileLegacyCompoundV124LedgerSync(
+      db,
+      migrationSchema,
+      migrationsTable,
+      migrations,
+      db.prepare(`SELECT version, name FROM ${migrationLedger} ORDER BY version ASC`).all() as Array<{
+        version: number;
+        name: string;
+      }>,
+    );
     const normalizedAppliedRows = appliedRows.map((row) => ({ version: Number(row.version), name: row.name }));
     const normalizedCompatibility =
       db.dialect === "postgres"
@@ -495,6 +560,65 @@ function applyPostgresMigrationsSyncLocked(
       assertPostgresMigrationTransactionSchemaIdentitySync(db, migrationSchema);
     });
   }
+}
+
+function reconcileLegacyCompoundV124LedgerSync(
+  db: DatabaseClient,
+  migrationSchema: PostgresMigrationSchemaIdentity | undefined,
+  migrationsTable: string,
+  migrations: readonly PostgresMigration[],
+  appliedRows: readonly { version: number; name: string }[],
+): Array<{ version: number; name: string }> {
+  if (db.dialect !== "postgres") {
+    return [...appliedRows];
+  }
+  if (!migrationSchema) {
+    throw new PostgresMigrationSessionContaminationError(
+      "Postgres migration transaction is missing its validated durable schema.",
+    );
+  }
+
+  const initialClassification = classifyLegacyCompoundV124Ledger({ definitions: migrations, appliedRows });
+  if (initialClassification === "none") {
+    return [...appliedRows];
+  }
+  if (initialClassification === "invalid-candidate") {
+    throw new Error(
+      "Postgres legacy compound-engineering v124 ledger claim is not the exact repairable deployed state; refusing automatic reconciliation.",
+    );
+  }
+
+  const qualifiedMigrationsTable = buildPostgresQualifiedMigrationLedger(migrationSchema, migrationsTable);
+  db.exec(buildPostgresLegacyCompoundLedgerRepairLockSql(qualifiedMigrationsTable));
+  const lockedRows = db
+    .prepare(`SELECT version, name FROM ${qualifiedMigrationsTable} ORDER BY version ASC`)
+    .all() as Array<{ version: number; name: string }>;
+  const lockedClassification = classifyLegacyCompoundV124Ledger({ definitions: migrations, appliedRows: lockedRows });
+  if (lockedClassification === "none") {
+    return lockedRows;
+  }
+  if (lockedClassification !== "exact-candidate") {
+    throw new Error(
+      "Postgres legacy compound-engineering v124 ledger changed while the repair lock was acquired; refusing automatic reconciliation.",
+    );
+  }
+
+  assertLegacyCompoundV124Catalog(
+    db.prepare(POSTGRES_LEGACY_COMPOUND_V124_CATALOG_SQL).get<{ matches_expected: boolean }>(),
+  );
+  db.exec(POSTGRES_LEGACY_COMPOUND_V124_RELATION_LOCK_SQL);
+  assertLegacyCompoundV124Catalog(
+    db.prepare(POSTGRES_LEGACY_COMPOUND_V124_CATALOG_SQL).get<{ matches_expected: boolean }>(),
+  );
+  const repairedRows = db
+    .prepare(buildPostgresLegacyCompoundLedgerRepairSql(qualifiedMigrationsTable, "@legacyName"))
+    .all({ legacyName: "compound_engineering_foundation" });
+  assertLegacyCompoundV124LedgerRepairResult(repairedRows);
+  assertPostgresMigrationTransactionSchemaIdentitySync(db, migrationSchema);
+  return db.prepare(`SELECT version, name FROM ${qualifiedMigrationsTable} ORDER BY version ASC`).all() as Array<{
+    version: number;
+    name: string;
+  }>;
 }
 
 function markMigrationAppliedSync(

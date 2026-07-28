@@ -276,6 +276,19 @@ export function buildAppendOnlyStorageMigrationManifest({ manifest, sqlite, post
   return createStorageMigrationManifest({ sqlite, postgres });
 }
 
+export function findStorageMigrationLineageErrors({ baseManifest, sqlite, postgres }) {
+  try {
+    buildAppendOnlyStorageMigrationManifest({ manifest: baseManifest, sqlite, postgres });
+    return [];
+  } catch (error) {
+    return [
+      `Storage migration lineage diverged from the immutable base manifest: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    ];
+  }
+}
+
 export function findStorageMigrationSemanticOwnershipErrors({
   postgresMigrationsSource,
   runtimeSchemaSource,

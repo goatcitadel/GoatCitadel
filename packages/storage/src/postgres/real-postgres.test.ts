@@ -4,7 +4,11 @@ import { randomUUID } from "node:crypto";
 import { Worker } from "node:worker_threads";
 import { Pool, type PoolClient } from "pg";
 import { PostgresDatabaseClient } from "./client.js";
-import { quotePostgresIdentifier } from "./migration-ledger-compatibility.js";
+import {
+  assertLegacyCompoundV124Catalog,
+  POSTGRES_LEGACY_COMPOUND_V124_CATALOG_SQL,
+  quotePostgresIdentifier,
+} from "./migration-ledger-compatibility.js";
 import { applyPostgresMigrationsSync, runPostgresMigrations } from "./migrator.js";
 import { POSTGRES_MIGRATIONS, type PostgresMigration } from "./migrations.js";
 import { PostgresSyncDatabaseClient } from "./sync.js";
@@ -3350,6 +3354,73 @@ test(
     } finally {
       syncClient?.close();
       await asyncClient.close();
+      await adminPool.query(`DROP SCHEMA IF EXISTS ${quotedSchema} CASCADE`);
+      await adminPool.end();
+    }
+  },
+);
+
+test(
+  "real Postgres rejects malformed legacy compound catalogs before ledger reconciliation",
+  { skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane" },
+  async () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+    const schemaName = `coverage_migration_v124_catalog_${suffix}`;
+    const quotedSchema = quotePostgresIdentifier(schemaName);
+    const adminPool = new Pool({ connectionString });
+    const scopedUrl = new URL(connectionString);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
+    const scopedPool = new Pool({ connectionString: scopedUrl.toString(), max: 1 });
+    const legacyCompound = POSTGRES_MIGRATIONS.find((migration) => migration.version === 129);
+    assert.equal(legacyCompound?.name, "compound_engineering_foundation");
+    let session: PoolClient | undefined;
+
+    const readCatalog = async (): Promise<{ matches_expected: boolean }> => {
+      assert.ok(session);
+      const result = await session.query<{ matches_expected: boolean }>(POSTGRES_LEGACY_COMPOUND_V124_CATALOG_SQL);
+      const row = result.rows[0];
+      assert.ok(row);
+      return row;
+    };
+
+    const assertCatalogMutationRejected = async (sql: string): Promise<void> => {
+      assert.ok(session);
+      await session.query("BEGIN");
+      try {
+        await session.query(sql);
+        const row = await readCatalog();
+        assert.equal(row.matches_expected, false);
+        assert.throws(() => assertLegacyCompoundV124Catalog(row), /catalog does not match/);
+      } finally {
+        await session.query("ROLLBACK");
+      }
+    };
+
+    try {
+      await adminPool.query(`CREATE SCHEMA ${quotedSchema}`);
+      session = await scopedPool.connect();
+      await session.query(`
+        CREATE TABLE prompt_pack_benchmark_runs (probe_id TEXT PRIMARY KEY);
+        CREATE TABLE replay_regression_runs (probe_id TEXT PRIMARY KEY);
+        CREATE TABLE chat_delegation_steps (probe_id TEXT PRIMARY KEY);
+      `);
+      await session.query(legacyCompound!.sql);
+
+      const exactCatalog = await readCatalog();
+      assert.equal(exactCatalog.matches_expected, true);
+      assert.doesNotThrow(() => assertLegacyCompoundV124Catalog(exactCatalog));
+
+      await assertCatalogMutationRejected(
+        "ALTER TABLE prompt_retune_campaigns ALTER COLUMN repeat_count TYPE TEXT USING repeat_count::text",
+      );
+      await assertCatalogMutationRejected("ALTER TABLE prompt_retune_campaigns ALTER COLUMN status DROP NOT NULL");
+      await assertCatalogMutationRejected(
+        "ALTER TABLE structured_review_runs ALTER COLUMN preflight_json DROP DEFAULT",
+      );
+    } finally {
+      session?.release();
+      await scopedPool.end();
       await adminPool.query(`DROP SCHEMA IF EXISTS ${quotedSchema} CASCADE`);
       await adminPool.end();
     }

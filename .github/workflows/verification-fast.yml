@@ -27,6 +27,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Storage migration lineage compares the candidate manifest with the
+          # immutable PR/push base object, so that object must be available.
+          fetch-depth: 0
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -56,6 +60,8 @@ jobs:
         run: pnpm verify:workflows
 
       - name: Run fast verification checks
+        env:
+          GOATCITADEL_STORAGE_MIGRATION_BASE_REF: ${{ github.event.pull_request.base.sha || (github.ref == 'refs/heads/main' && github.event.before) || '' }}
         run: >-
           pnpm verify:fast --commands=fast.skills-catalog,fast.repo-hygiene,fast.storage-migration-parity,fast.extensions-sdk-build,fast.extensions-sdk-package,fast.typecheck,fast.coverage.gateway.smoke,fast.coverage.gateway.exercise,fast.smoke,fast.build,fast.docs
 

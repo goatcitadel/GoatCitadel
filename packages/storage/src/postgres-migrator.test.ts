@@ -9,6 +9,8 @@ import { createDatabase } from "./sqlite.js";
 import type { DatabaseClient, DbRunResult, DbStatement } from "./db.js";
 import { PostgresDatabaseClient } from "./postgres/client.js";
 import {
+  assertLegacyCompoundV124Catalog,
+  assertLegacyCompoundV124LedgerRepairResult,
   assertPostgresMigrationCurrentSchemaIsDurable,
   assertPostgresMigrationSessionIsIdle,
   assertPostgresMigrationTransactionProbeAcquired,
@@ -16,6 +18,7 @@ import {
   buildPostgresMigrationLedgerTempShadowPreflightSql,
   buildPostgresMigrationSchemaIdentityCheckSql,
   buildPostgresMigrationTransactionDatabaseClassificationSql,
+  classifyLegacyCompoundV124Ledger,
   classifyPostgresMigrationTransactionDatabase,
   normalizePostgresMigrationLedgerForHistoricalRepair,
   parsePostgresMigrationActiveTransactionIds,
@@ -773,6 +776,79 @@ describe("Postgres migration ledger compatibility", () => {
       assert.equal(result.requiresHistoryRepairValidation, false);
       assert.equal(result.appliedRows[0]?.name, "cron_jobs_workdir_and_context_from");
     }
+  });
+
+  it("classifies only the exact deployed compound-engineering v124 ledger for repair", () => {
+    const canonicalPrefix = POSTGRES_MIGRATIONS.filter((migration) => migration.version <= 123).map((migration) => ({
+      version: migration.version,
+      name: migration.name,
+    }));
+    const exactCandidate = [...canonicalPrefix, { version: 124, name: "compound_engineering_foundation" }];
+    const originalRows = exactCandidate.map((row) => ({ ...row }));
+
+    assert.equal(
+      classifyLegacyCompoundV124Ledger({ definitions: POSTGRES_MIGRATIONS, appliedRows: exactCandidate }),
+      "exact-candidate",
+    );
+    assert.deepEqual(exactCandidate, originalRows, "classification must not mutate the ledger snapshot");
+    assert.equal(
+      classifyLegacyCompoundV124Ledger({
+        definitions: POSTGRES_MIGRATIONS,
+        appliedRows: POSTGRES_MIGRATIONS.filter((migration) => migration.version <= 124).map((migration) => ({
+          version: migration.version,
+          name: migration.name,
+        })),
+      }),
+      "none",
+    );
+
+    for (const appliedRows of [
+      exactCandidate.slice(1),
+      [...exactCandidate, { version: 125, name: "notification_routing" }],
+      exactCandidate.map((row) => (row.version === 123 ? { ...row, name: "drifted-prefix" } : row)),
+    ]) {
+      assert.equal(
+        classifyLegacyCompoundV124Ledger({ definitions: POSTGRES_MIGRATIONS, appliedRows }),
+        "invalid-candidate",
+      );
+    }
+
+    assert.equal(
+      classifyLegacyCompoundV124Ledger({
+        definitions: POSTGRES_MIGRATIONS.map((migration) =>
+          migration.version === 129 ? { ...migration, sql: `${migration.sql}\nSELECT 1;` } : migration,
+        ),
+        appliedRows: exactCandidate,
+      }),
+      "invalid-candidate",
+    );
+    assert.equal(
+      classifyLegacyCompoundV124Ledger({
+        definitions: POSTGRES_MIGRATIONS.map((migration) =>
+          migration.batchedStatements
+            ? {
+                ...migration,
+                batchedStatements: migration.batchedStatements.map((statement, index) =>
+                  index === 0 ? { ...statement, sql: `${statement.sql}\n-- drift` } : statement,
+                ),
+              }
+            : migration,
+        ),
+        appliedRows: exactCandidate,
+      }),
+      "invalid-candidate",
+    );
+  });
+
+  it("fails closed on malformed legacy compound catalog and CAS repair results", () => {
+    assert.doesNotThrow(() => assertLegacyCompoundV124Catalog({ matches_expected: true }));
+    assert.throws(() => assertLegacyCompoundV124Catalog({ matches_expected: false }), /catalog does not match/);
+    assert.doesNotThrow(() =>
+      assertLegacyCompoundV124LedgerRepairResult([
+        { version: 129, name: "compound_engineering_foundation", applied_at: "2026-07-28T00:00:00Z" },
+      ]),
+    );
+    assert.throws(() => assertLegacyCompoundV124LedgerRepairResult([]), /did not update exactly one canonical row/);
   });
 });
 

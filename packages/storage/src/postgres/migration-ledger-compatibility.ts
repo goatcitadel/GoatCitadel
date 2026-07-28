@@ -1,9 +1,14 @@
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import type { AppliedMigrationLedgerRow } from "../migration-ledger-validation.js";
 import { POSTGRES_MIGRATIONS, type PostgresMigration } from "./migrations.js";
 
 export const DEFAULT_POSTGRES_MIGRATIONS_TABLE = "schema_migrations";
 const HISTORY_REPAIR_VERSION = 47;
+const LEGACY_COMPOUND_VERSION = 124;
+const CANONICAL_COMPOUND_VERSION = 129;
+const LEGACY_COMPOUND_NAME = "compound_engineering_foundation";
+const LEGACY_COMPOUND_RUNTIME_SHA256 = "32ef1642dd77337d9f0d7d54196ebec23b1447fa6793791323d387949f314018";
 
 const HISTORICAL_LEDGER_ALIASES = [
   {
@@ -21,6 +26,247 @@ const HISTORICAL_LEDGER_ALIASES = [
 const CANONICAL_HISTORY_REPAIR_MIGRATIONS = HISTORICAL_LEDGER_ALIASES.map((alias) =>
   POSTGRES_MIGRATIONS.find((migration) => migration.version === alias.version),
 ).concat(POSTGRES_MIGRATIONS.find((migration) => migration.version === HISTORY_REPAIR_VERSION));
+
+export type LegacyCompoundV124LedgerClassification = "none" | "exact-candidate" | "invalid-candidate";
+
+/**
+ * Catalog proof for the short-lived branch build that shipped compound engineering as
+ * PostgreSQL v124. The migration was atomic; this fingerprint proves its complete DDL is
+ * present and that none of the canonical v124-v128 effects have already been mixed in.
+ */
+export const POSTGRES_LEGACY_COMPOUND_V124_CATALOG_SQL = `
+  WITH expected_table_columns(table_name, column_names) AS (
+    VALUES
+      ('prompt_retune_campaigns', ARRAY['campaign_id','pack_id','status','baseline_content_sha256','policy_hash','scoring_snapshot_json','test_codes_json','providers_json','execution_style','repeat_count','max_benchmark_runs','success_bar_json','noise_floor_json','baseline_metrics_json','active_pass_id','error','created_at','updated_at','finished_at']::pg_catalog.text[]),
+      ('prompt_retune_passes', ARRAY['pass_id','campaign_id','kind','hypothesis','content_sha256','benchmark_run_ids_json','disposition','metrics_json','eligibility','notes','created_at','finished_at']::pg_catalog.text[]),
+      ('structured_review_runs', ARRAY['review_run_id','source','status','root_path','reviewed_sha','diff_hash','changed_files_json','reviewer_roster_json','preflight_json','model_receipts_json','created_at','finished_at','error']::pg_catalog.text[]),
+      ('structured_review_findings', ARRAY['finding_id','review_run_id','record_json','status','linked_task_id','fix_approval_id','created_at','updated_at']::pg_catalog.text[]),
+      ('engineering_learnings', ARRAY['learning_id','workspace_id','project_id','status','title','fingerprint','record_json','source_run_id','supersedes_learning_id','created_at','updated_at']::pg_catalog.text[])
+  ),
+  expected_nullable_columns(table_name, column_name) AS (
+    VALUES
+      ('prompt_retune_campaigns','noise_floor_json'),
+      ('prompt_retune_campaigns','baseline_metrics_json'),
+      ('prompt_retune_campaigns','active_pass_id'),
+      ('prompt_retune_campaigns','error'),
+      ('prompt_retune_campaigns','finished_at'),
+      ('prompt_retune_passes','metrics_json'),
+      ('prompt_retune_passes','eligibility'),
+      ('prompt_retune_passes','notes'),
+      ('prompt_retune_passes','finished_at'),
+      ('structured_review_runs','finished_at'),
+      ('structured_review_runs','error'),
+      ('structured_review_findings','linked_task_id'),
+      ('structured_review_findings','fix_approval_id'),
+      ('engineering_learnings','project_id'),
+      ('engineering_learnings','supersedes_learning_id')
+  ),
+  expected_bigint_columns(table_name, column_name) AS (
+    VALUES
+      ('prompt_retune_campaigns','repeat_count'),
+      ('prompt_retune_campaigns','max_benchmark_runs')
+  ),
+  actual_table_columns AS (
+    SELECT columns.table_name::pg_catalog.text AS table_name,
+           pg_catalog.array_agg(columns.column_name::pg_catalog.text ORDER BY columns.ordinal_position) AS column_names
+    FROM information_schema.columns AS columns
+    WHERE columns.table_schema OPERATOR(pg_catalog.=) pg_catalog.current_schema()
+      AND columns.table_name IN (SELECT expected.table_name FROM expected_table_columns AS expected)
+    GROUP BY columns.table_name
+  ),
+  expected_added_columns(table_name, column_name) AS (
+    VALUES
+      ('prompt_pack_benchmark_runs','pack_content_sha256'),
+      ('prompt_pack_benchmark_runs','policy_hash'),
+      ('prompt_pack_benchmark_runs','test_snapshot_json'),
+      ('prompt_pack_benchmark_runs','test_snapshot_sha256'),
+      ('prompt_pack_benchmark_runs','scoring_snapshot_json'),
+      ('replay_regression_runs','baseline_benchmark_run_id'),
+      ('chat_delegation_steps','work_result_json'),
+      ('chat_delegation_steps','scope_control_json')
+  ),
+  expected_constraints(table_name, constraint_type, definition) AS (
+    VALUES
+      ('prompt_retune_campaigns','p','PRIMARY KEY (campaign_id)'),
+      ('prompt_retune_passes','p','PRIMARY KEY (pass_id)'),
+      ('prompt_retune_passes','f','FOREIGN KEY (campaign_id) REFERENCES prompt_retune_campaigns(campaign_id) ON DELETE CASCADE'),
+      ('structured_review_runs','p','PRIMARY KEY (review_run_id)'),
+      ('structured_review_findings','p','PRIMARY KEY (finding_id)'),
+      ('structured_review_findings','f','FOREIGN KEY (review_run_id) REFERENCES structured_review_runs(review_run_id) ON DELETE CASCADE'),
+      ('engineering_learnings','p','PRIMARY KEY (learning_id)')
+  ),
+  actual_constraints AS (
+    SELECT relation.relname::pg_catalog.text AS table_name,
+           constraint_record.contype::pg_catalog.text AS constraint_type,
+           pg_catalog.pg_get_constraintdef(constraint_record.oid) AS definition
+    FROM pg_catalog.pg_constraint AS constraint_record
+    JOIN pg_catalog.pg_class AS relation ON relation.oid OPERATOR(pg_catalog.=) constraint_record.conrelid
+    JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid OPERATOR(pg_catalog.=) relation.relnamespace
+    WHERE namespace.nspname OPERATOR(pg_catalog.=) pg_catalog.current_schema()
+      AND relation.relname IN (SELECT expected.table_name FROM expected_table_columns AS expected)
+  ),
+  expected_indexes(index_name, table_name, is_unique, key_columns, descending_keys) AS (
+    VALUES
+      ('idx_prompt_retune_campaigns_pack_updated','prompt_retune_campaigns',FALSE,ARRAY['pack_id','updated_at']::pg_catalog.text[],ARRAY[FALSE,TRUE]::pg_catalog.bool[]),
+      ('idx_prompt_retune_campaigns_status','prompt_retune_campaigns',FALSE,ARRAY['status','updated_at']::pg_catalog.text[],ARRAY[FALSE,FALSE]::pg_catalog.bool[]),
+      ('idx_prompt_retune_passes_campaign_created','prompt_retune_passes',FALSE,ARRAY['campaign_id','created_at']::pg_catalog.text[],ARRAY[FALSE,FALSE]::pg_catalog.bool[]),
+      ('idx_structured_review_runs_created','structured_review_runs',FALSE,ARRAY['created_at']::pg_catalog.text[],ARRAY[TRUE]::pg_catalog.bool[]),
+      ('idx_structured_review_findings_run','structured_review_findings',FALSE,ARRAY['review_run_id','created_at']::pg_catalog.text[],ARRAY[FALSE,FALSE]::pg_catalog.bool[]),
+      ('idx_structured_review_findings_status','structured_review_findings',FALSE,ARRAY['status','updated_at']::pg_catalog.text[],ARRAY[FALSE,TRUE]::pg_catalog.bool[]),
+      ('idx_engineering_learnings_run_once','engineering_learnings',TRUE,ARRAY['workspace_id','source_run_id']::pg_catalog.text[],ARRAY[FALSE,FALSE]::pg_catalog.bool[]),
+      ('idx_engineering_learnings_scope_status','engineering_learnings',FALSE,ARRAY['workspace_id','project_id','status','updated_at']::pg_catalog.text[],ARRAY[FALSE,FALSE,FALSE,TRUE]::pg_catalog.bool[]),
+      ('idx_engineering_learnings_fingerprint','engineering_learnings',FALSE,ARRAY['workspace_id','fingerprint']::pg_catalog.text[],ARRAY[FALSE,FALSE]::pg_catalog.bool[])
+  ),
+  actual_indexes AS (
+    SELECT index_relation.relname::pg_catalog.text AS index_name,
+           table_relation.relname::pg_catalog.text AS table_name,
+           index.indisunique AS is_unique,
+           index.indisvalid,
+           index.indisready,
+           index.indpred IS NULL AS has_no_predicate,
+           index.indexprs IS NULL AS has_no_expressions,
+           ARRAY(
+             SELECT pg_catalog.pg_get_indexdef(index.indexrelid, key_position, TRUE)
+             FROM pg_catalog.generate_series(1, index.indnkeyatts) AS key_position
+             ORDER BY key_position
+           )::pg_catalog.text[] AS key_columns,
+           ARRAY(
+             SELECT (index.indoption[key_position - 1] OPERATOR(pg_catalog.&) 1) OPERATOR(pg_catalog.=) 1
+             FROM pg_catalog.generate_series(1, index.indnkeyatts) AS key_position
+             ORDER BY key_position
+           )::pg_catalog.bool[] AS descending_keys
+    FROM pg_catalog.pg_index AS index
+    JOIN pg_catalog.pg_class AS index_relation ON index_relation.oid OPERATOR(pg_catalog.=) index.indexrelid
+    JOIN pg_catalog.pg_class AS table_relation ON table_relation.oid OPERATOR(pg_catalog.=) index.indrelid
+    JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid OPERATOR(pg_catalog.=) table_relation.relnamespace
+    WHERE namespace.nspname OPERATOR(pg_catalog.=) pg_catalog.current_schema()
+      AND index_relation.relname IN (SELECT expected.index_name FROM expected_indexes AS expected)
+  )
+  SELECT
+    NOT EXISTS (
+      SELECT 1
+      FROM expected_table_columns AS expected
+      LEFT JOIN actual_table_columns AS actual USING (table_name)
+      WHERE actual.column_names IS DISTINCT FROM expected.column_names
+    )
+    AND NOT EXISTS (
+      SELECT 1
+      FROM pg_catalog.pg_class AS relation
+      JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid OPERATOR(pg_catalog.=) relation.relnamespace
+      WHERE namespace.nspname OPERATOR(pg_catalog.=) pg_catalog.current_schema()
+        AND relation.relname IN (SELECT expected.table_name FROM expected_table_columns AS expected)
+        AND (relation.relkind IS DISTINCT FROM 'r' OR relation.relpersistence IS DISTINCT FROM 'p' OR relation.relowner IS DISTINCT FROM pg_catalog.to_regrole(CURRENT_USER)::pg_catalog.oid OR relation.relrowsecurity)
+    )
+    AND (SELECT pg_catalog.count(*) FROM pg_catalog.pg_class AS relation JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid OPERATOR(pg_catalog.=) relation.relnamespace WHERE namespace.nspname OPERATOR(pg_catalog.=) pg_catalog.current_schema() AND relation.relname IN (SELECT expected.table_name FROM expected_table_columns AS expected)) OPERATOR(pg_catalog.=) 5
+    AND NOT EXISTS (
+      SELECT 1
+      FROM information_schema.columns AS columns
+      WHERE columns.table_schema OPERATOR(pg_catalog.=) pg_catalog.current_schema()
+        AND columns.table_name IN (SELECT expected.table_name FROM expected_table_columns AS expected)
+        AND (
+          columns.data_type IS DISTINCT FROM CASE
+            WHEN EXISTS (
+              SELECT 1 FROM expected_bigint_columns AS expected
+              WHERE expected.table_name OPERATOR(pg_catalog.=) columns.table_name
+                AND expected.column_name OPERATOR(pg_catalog.=) columns.column_name
+            ) THEN 'bigint'
+            ELSE 'text'
+          END
+          OR columns.is_nullable IS DISTINCT FROM CASE
+            WHEN EXISTS (
+              SELECT 1 FROM expected_nullable_columns AS expected
+              WHERE expected.table_name OPERATOR(pg_catalog.=) columns.table_name
+                AND expected.column_name OPERATOR(pg_catalog.=) columns.column_name
+            ) THEN 'YES'
+            ELSE 'NO'
+          END
+          OR columns.column_default IS DISTINCT FROM CASE
+            WHEN columns.table_name OPERATOR(pg_catalog.=) 'structured_review_runs'
+              AND columns.column_name OPERATOR(pg_catalog.=) 'preflight_json'
+            THEN '''{}''::text'
+            ELSE NULL
+          END
+          OR columns.is_identity IS DISTINCT FROM 'NO'
+          OR columns.is_generated IS DISTINCT FROM 'NEVER'
+          OR columns.collation_name IS NOT NULL
+        )
+    )
+    AND NOT EXISTS (
+      SELECT 1
+      FROM expected_added_columns AS expected
+      LEFT JOIN information_schema.columns AS actual
+        ON actual.table_schema OPERATOR(pg_catalog.=) pg_catalog.current_schema()
+       AND actual.table_name OPERATOR(pg_catalog.=) expected.table_name
+       AND actual.column_name OPERATOR(pg_catalog.=) expected.column_name
+      WHERE actual.column_name IS NULL
+        OR actual.data_type IS DISTINCT FROM 'text'
+        OR actual.is_nullable IS DISTINCT FROM 'YES'
+        OR actual.column_default IS NOT NULL
+        OR actual.is_identity IS DISTINCT FROM 'NO'
+        OR actual.is_generated IS DISTINCT FROM 'NEVER'
+        OR actual.collation_name IS NOT NULL
+    )
+    AND NOT EXISTS (SELECT * FROM expected_constraints EXCEPT SELECT * FROM actual_constraints)
+    AND NOT EXISTS (SELECT * FROM actual_constraints EXCEPT SELECT * FROM expected_constraints)
+    AND NOT EXISTS (
+      SELECT 1
+      FROM expected_indexes AS expected
+      LEFT JOIN actual_indexes AS actual USING (index_name, table_name)
+      WHERE actual.index_name IS NULL
+         OR actual.is_unique IS DISTINCT FROM expected.is_unique
+         OR actual.key_columns IS DISTINCT FROM expected.key_columns
+         OR actual.descending_keys IS DISTINCT FROM expected.descending_keys
+         OR NOT actual.indisvalid OR NOT actual.indisready OR NOT actual.has_no_predicate OR NOT actual.has_no_expressions
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM pg_catalog.pg_policy AS policy
+      JOIN pg_catalog.pg_class AS relation ON relation.oid OPERATOR(pg_catalog.=) policy.polrelid
+      JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid OPERATOR(pg_catalog.=) relation.relnamespace
+      WHERE namespace.nspname OPERATOR(pg_catalog.=) pg_catalog.current_schema()
+        AND relation.relname IN (SELECT expected.table_name FROM expected_table_columns AS expected)
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM pg_catalog.pg_trigger AS trigger
+      JOIN pg_catalog.pg_class AS relation ON relation.oid OPERATOR(pg_catalog.=) trigger.tgrelid
+      JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid OPERATOR(pg_catalog.=) relation.relnamespace
+      WHERE namespace.nspname OPERATOR(pg_catalog.=) pg_catalog.current_schema()
+        AND relation.relname IN (SELECT expected.table_name FROM expected_table_columns AS expected)
+        AND NOT trigger.tgisinternal
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM pg_catalog.pg_class AS relation
+      JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid OPERATOR(pg_catalog.=) relation.relnamespace
+      WHERE namespace.nspname OPERATOR(pg_catalog.=) pg_catalog.current_schema()
+        AND relation.relname IN ('chat_session_fork_manifests','notification_targets','notification_rules','notification_presence_leases','notification_events','notification_deliveries','chat_timers','chat_session_run_variable_bindings','personal_ops_note_revisions','document_patch_proposals')
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM information_schema.columns AS columns
+      WHERE columns.table_schema OPERATOR(pg_catalog.=) pg_catalog.current_schema()
+        AND ((columns.table_name OPERATOR(pg_catalog.=) 'prompt_packs' AND columns.column_name IN ('run_variable_schema_json','run_variable_schema_hash'))
+          OR (columns.table_name OPERATOR(pg_catalog.=) 'prompt_pack_runs' AND columns.column_name OPERATOR(pg_catalog.=) 'run_variables_json')
+          OR (columns.table_name OPERATOR(pg_catalog.=) 'personal_ops_notes' AND columns.column_name OPERATOR(pg_catalog.=) 'revision'))
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM pg_catalog.pg_constraint AS constraint_record
+      JOIN pg_catalog.pg_class AS relation ON relation.oid OPERATOR(pg_catalog.=) constraint_record.conrelid
+      JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid OPERATOR(pg_catalog.=) relation.relnamespace
+      WHERE namespace.nspname OPERATOR(pg_catalog.=) pg_catalog.current_schema()
+        AND constraint_record.conname OPERATOR(pg_catalog.=) 'chat_routed_context_snapshots_schema_version_v2_check'
+    ) AS matches_expected
+`;
+
+export const POSTGRES_LEGACY_COMPOUND_V124_RELATION_LOCK_SQL = `
+  LOCK TABLE
+    prompt_pack_benchmark_runs,
+    replay_regression_runs,
+    chat_delegation_steps,
+    prompt_retune_campaigns,
+    prompt_retune_passes,
+    structured_review_runs,
+    structured_review_findings,
+    engineering_learnings
+  IN ACCESS SHARE MODE
+`;
 
 export const POSTGRES_HISTORY_REPAIR_TEMP_RELATION_PREFLIGHT_SQL =
   "SELECT pg_catalog.to_regclass('pg_temp.schema_migrations')::pg_catalog.text AS relation";
@@ -475,6 +721,98 @@ export interface PostgresMigrationLedgerCompatibilityResult {
   requiresHistoryRepairValidation: boolean;
 }
 
+export function classifyLegacyCompoundV124Ledger(input: {
+  definitions: readonly PostgresMigration[];
+  appliedRows: readonly AppliedMigrationLedgerRow[];
+}): LegacyCompoundV124LedgerClassification {
+  const hasLegacyClaim = input.appliedRows.some(
+    (row) => row.version === LEGACY_COMPOUND_VERSION && row.name === LEGACY_COMPOUND_NAME,
+  );
+  if (!hasLegacyClaim) {
+    return "none";
+  }
+
+  const canonicalThroughCompound = POSTGRES_MIGRATIONS.filter(
+    (migration) => migration.version <= CANONICAL_COMPOUND_VERSION,
+  );
+  const candidateThroughCompound = input.definitions.filter(
+    (migration) => migration.version <= CANONICAL_COMPOUND_VERSION,
+  );
+  const definitionsMatch =
+    candidateThroughCompound.length === canonicalThroughCompound.length &&
+    canonicalThroughCompound.every((canonical, index) => {
+      const candidate = candidateThroughCompound[index];
+      return candidate !== undefined && hasExactCompleteMigrationDefinition(candidate, canonical);
+    });
+  const canonicalCompound = canonicalThroughCompound.find(
+    (migration) => migration.version === CANONICAL_COMPOUND_VERSION,
+  );
+  const compoundHashMatches =
+    canonicalCompound !== undefined &&
+    createHash("sha256")
+      .update(`atomic\n${canonicalCompound.sql.replace(/\r\n/g, "\n").trim()}`)
+      .digest("hex") === LEGACY_COMPOUND_RUNTIME_SHA256;
+  const ledgerMatches =
+    input.appliedRows.length === LEGACY_COMPOUND_VERSION &&
+    input.appliedRows.every((row, index) => {
+      const expectedVersion = index + 1;
+      if (expectedVersion === LEGACY_COMPOUND_VERSION) {
+        return row.version === LEGACY_COMPOUND_VERSION && row.name === LEGACY_COMPOUND_NAME;
+      }
+      const canonical = canonicalThroughCompound[index];
+      return canonical !== undefined && row.version === expectedVersion && row.name === canonical.name;
+    });
+
+  return definitionsMatch && compoundHashMatches && ledgerMatches ? "exact-candidate" : "invalid-candidate";
+}
+
+export function assertLegacyCompoundV124Catalog(row: unknown): void {
+  const matchesExpected =
+    typeof row === "object" && row !== null && "matches_expected" in row
+      ? (row as { matches_expected?: unknown }).matches_expected
+      : undefined;
+  if (matchesExpected !== true) {
+    throw new Error(
+      "Postgres legacy compound-engineering v124 ledger repair was refused because the database catalog does not match the exact deployed migration state.",
+    );
+  }
+}
+
+export function buildPostgresLegacyCompoundLedgerRepairLockSql(qualifiedMigrationsTable: string): string {
+  return `LOCK TABLE ${qualifiedMigrationsTable} IN SHARE ROW EXCLUSIVE MODE`;
+}
+
+export function buildPostgresLegacyCompoundLedgerRepairSql(
+  qualifiedMigrationsTable: string,
+  legacyNameParameter: string,
+): string {
+  return `
+    UPDATE ${qualifiedMigrationsTable} AS ledger
+    SET version = ${CANONICAL_COMPOUND_VERSION}
+    WHERE ledger.version = ${LEGACY_COMPOUND_VERSION}
+      AND ledger.name OPERATOR(pg_catalog.=) ${legacyNameParameter}::pg_catalog.text
+      AND NOT EXISTS (
+        SELECT 1 FROM ${qualifiedMigrationsTable} AS target
+        WHERE target.version = ${CANONICAL_COMPOUND_VERSION}
+      )
+    RETURNING version, name, applied_at
+  `;
+}
+
+export function assertLegacyCompoundV124LedgerRepairResult(rows: readonly unknown[]): void {
+  const row = rows[0];
+  const version =
+    typeof row === "object" && row !== null && "version" in row
+      ? Number((row as { version?: unknown }).version)
+      : undefined;
+  const name = typeof row === "object" && row !== null && "name" in row ? (row as { name?: unknown }).name : undefined;
+  if (rows.length !== 1 || version !== CANONICAL_COMPOUND_VERSION || name !== LEGACY_COMPOUND_NAME) {
+    throw new Error(
+      "Postgres legacy compound-engineering v124 ledger repair did not update exactly one canonical row.",
+    );
+  }
+}
+
 export function normalizePostgresMigrationLedgerForHistoricalRepair(input: {
   definitions: readonly PostgresMigration[];
   appliedRows: readonly AppliedMigrationLedgerRow[];
@@ -619,6 +957,32 @@ function hasExactMigrationDefinition(left: PostgresMigration, right: PostgresMig
     left.integritySha256 === right.integritySha256 &&
     left.batchedStatements === undefined &&
     right.batchedStatements === undefined
+  );
+}
+
+function hasExactCompleteMigrationDefinition(left: PostgresMigration, right: PostgresMigration): boolean {
+  if (
+    left.version !== right.version ||
+    left.name !== right.name ||
+    left.sql !== right.sql ||
+    left.integritySha256 !== right.integritySha256 ||
+    (left.batchedStatements === undefined) !== (right.batchedStatements === undefined)
+  ) {
+    return false;
+  }
+  if (left.batchedStatements === undefined || right.batchedStatements === undefined) {
+    return true;
+  }
+  return (
+    left.batchedStatements.length === right.batchedStatements.length &&
+    left.batchedStatements.every((statement, index) => {
+      const canonicalStatement = right.batchedStatements?.[index];
+      return (
+        canonicalStatement !== undefined &&
+        statement.name === canonicalStatement.name &&
+        statement.sql === canonicalStatement.sql
+      );
+    })
   );
 }
 

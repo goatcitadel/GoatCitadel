@@ -7,9 +7,11 @@ import {
   findMigrationParityErrors,
   findPostgresRuntimeIntegrityErrors,
   findStorageMigrationManifestErrors,
+  findStorageMigrationLineageErrors,
   findStorageMigrationSemanticOwnershipErrors,
   loadStorageTypeScriptSourceFiles,
 } from "./verification/lib/storage-migration-manifest.mjs";
+import { loadStorageMigrationBaseManifest } from "./verification/lib/storage-migration-lineage.mjs";
 
 const repoRoot = process.cwd();
 const paths = {
@@ -38,12 +40,17 @@ export async function verifyStorageMigrationParity() {
     sourceFiles,
   });
   const manifest = JSON.parse(manifestSource);
+  const base = await loadStorageMigrationBaseManifest({
+    repoRoot,
+    explicitRef: process.env.GOATCITADEL_STORAGE_MIGRATION_BASE_REF,
+  });
   const errors = [
     ...findMigrationParityErrors(
       sqlite.migrations.map((migration) => migration.name),
       postgres.migrations.map((migration) => migration.name),
     ),
     ...findStorageMigrationManifestErrors({ manifest, sqlite, postgres }),
+    ...(base ? findStorageMigrationLineageErrors({ baseManifest: base.manifest, sqlite, postgres }) : []),
     ...findPostgresRuntimeIntegrityErrors(postgres),
     ...findStorageMigrationSemanticOwnershipErrors({
       postgresMigrationsSource: postgresSource,
@@ -51,7 +58,7 @@ export async function verifyStorageMigrationParity() {
       runtimeSchemaInternalSource,
     }),
   ];
-  return { errors, sqlite, postgres };
+  return { errors, sqlite, postgres, baseRef: base?.ref };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -65,7 +72,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       process.exitCode = 1;
     } else {
       console.log(
-        `Storage migration parity check passed (${result.sqlite.migrations.length} SQLite migrations, ${result.postgres.migrations.length} Postgres migrations).`,
+        `Storage migration parity check passed (${result.sqlite.migrations.length} SQLite migrations, ${result.postgres.migrations.length} Postgres migrations${result.baseRef ? `; lineage base ${result.baseRef}` : ""}).`,
       );
     }
   } catch (error) {

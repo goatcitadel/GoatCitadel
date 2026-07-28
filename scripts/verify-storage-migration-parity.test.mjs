@@ -10,6 +10,7 @@ import {
   findMigrationParityErrors,
   findPostgresRuntimeIntegrityErrors,
   findStorageMigrationManifestErrors,
+  findStorageMigrationLineageErrors,
   findStorageMigrationSemanticOwnershipErrors,
   loadStorageTypeScriptSourceFiles,
 } from "./verification/lib/storage-migration-manifest.mjs";
@@ -829,10 +830,61 @@ test("current registries and checked-in manifest cover every migration exactly",
     "ef8cc376dbcba14eb6dd496d5cf14be19183096bafcab2ae57395dedae76df74",
   );
   assert.deepEqual(findStorageMigrationManifestErrors({ manifest, sqlite, postgres }), []);
+
+  const publishedCompoundV124Manifest = structuredClone(manifest);
+  publishedCompoundV124Manifest.sources.postgres.migrations = [
+    ...publishedCompoundV124Manifest.sources.postgres.migrations.filter((record) => record.version < 124),
+    {
+      version: 124,
+      name: "compound_engineering_foundation",
+      definitionSha256: "32428972c5367e170437582e8387523a113ce61421487ac948ed6ac51a695ee1",
+      sqlPayloadSha256: "49dee07d50a51c8160ab41f5e854f83cf0c92256f893ea3ceabf6b4701c1fa52",
+    },
+  ];
+  publishedCompoundV124Manifest.sources.postgres.expectedCount = 124;
+  publishedCompoundV124Manifest.sources.postgres.expectedLastVersion = 124;
+  publishedCompoundV124Manifest.sources.sqlite.migrations = [
+    ...publishedCompoundV124Manifest.sources.sqlite.migrations.filter((record) => record.version < 181),
+    {
+      version: 181,
+      name: "compound_engineering_foundation",
+      groupName: "canonical",
+      definitionSha256: "7106cb1b51eb515a2328b183f40b53e532f9bf71d86b97d9930f28ec0195140d",
+      implementationSha256: "940ebc26dcd2dd5ce4eefdc9eb5f1eeee6144b70287a86bad81e32ebde8719e0",
+    },
+  ];
+  publishedCompoundV124Manifest.sources.sqlite.expectedCount = 181;
+  publishedCompoundV124Manifest.sources.sqlite.expectedLastVersion = 181;
+
+  const lineageErrors = findStorageMigrationLineageErrors({
+    baseManifest: publishedCompoundV124Manifest,
+    sqlite,
+    postgres,
+  });
+  assert.equal(lineageErrors.length, 1);
+  assert.match(lineageErrors[0], /Existing SQLite migration v181 drifted/);
+  assert.match(lineageErrors[0], /immutable base manifest/);
+
+  const publishedPostgresV124Manifest = structuredClone(manifest);
+  publishedPostgresV124Manifest.sources.postgres = structuredClone(publishedCompoundV124Manifest.sources.postgres);
+  const postgresLineageErrors = findStorageMigrationLineageErrors({
+    baseManifest: publishedPostgresV124Manifest,
+    sqlite,
+    postgres,
+  });
+  assert.equal(postgresLineageErrors.length, 1);
+  assert.match(postgresLineageErrors[0], /Existing Postgres migration v124 drifted/);
+  assert.match(postgresLineageErrors[0], /immutable base manifest/);
 });
 
 test("package scripts expose verification and an append-only manifest updater", async () => {
-  const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  const [packageJsonSource, workflowSource, verifierSource, updaterSource] = await Promise.all([
+    readFile(new URL("../package.json", import.meta.url), "utf8"),
+    readFile(new URL("../.github/workflows/verification-fast.yml", import.meta.url), "utf8"),
+    readFile(new URL("./verify-storage-migration-parity.mjs", import.meta.url), "utf8"),
+    readFile(new URL("./update-storage-migration-manifest.mjs", import.meta.url), "utf8"),
+  ]);
+  const packageJson = JSON.parse(packageJsonSource);
   const verifyCommand = packageJson.scripts?.["verify:storage:migration-parity"];
   const updateCommand = packageJson.scripts?.["update:storage:migration-manifest"];
 
@@ -844,4 +896,9 @@ test("package scripts expose verification and an append-only manifest updater", 
   assert.ok(buildIndex >= 0, "migration parity must build the contracts runtime dependency");
   assert.ok(sourceTestIndex > buildIndex, "contracts must be built before the source-level integrity test");
   assert.match(verifyCommand, /tsx --test src\/postgres-runtime-schema\.test\.ts/);
+  assert.match(workflowSource, /fetch-depth:\s*0/);
+  assert.match(workflowSource, /GOATCITADEL_STORAGE_MIGRATION_BASE_REF/);
+  assert.match(workflowSource, /github\.ref == 'refs\/heads\/main'/);
+  assert.match(verifierSource, /findStorageMigrationLineageErrors/);
+  assert.match(updaterSource, /findStorageMigrationLineageErrors/);
 });

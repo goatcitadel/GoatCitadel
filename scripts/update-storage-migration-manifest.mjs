@@ -6,9 +6,11 @@ import {
   extractSqliteMigrationRegistry,
   findMigrationParityErrors,
   findPostgresRuntimeIntegrityErrors,
+  findStorageMigrationLineageErrors,
   findStorageMigrationSemanticOwnershipErrors,
   loadStorageTypeScriptSourceFiles,
 } from "./verification/lib/storage-migration-manifest.mjs";
+import { loadStorageMigrationBaseManifest } from "./verification/lib/storage-migration-lineage.mjs";
 
 const repoRoot = process.cwd();
 const paths = {
@@ -35,12 +37,17 @@ const postgres = extractPostgresMigrationRegistry(postgresSource, {
   sqliteSource,
   sourceFiles,
 });
+const base = await loadStorageMigrationBaseManifest({
+  repoRoot,
+  explicitRef: process.env.GOATCITADEL_STORAGE_MIGRATION_BASE_REF,
+});
 const safetyErrors = [
   ...findMigrationParityErrors(
     sqlite.migrations.map((migration) => migration.name),
     postgres.migrations.map((migration) => migration.name),
   ),
   ...findPostgresRuntimeIntegrityErrors(postgres),
+  ...(base ? findStorageMigrationLineageErrors({ baseManifest: base.manifest, sqlite, postgres }) : []),
   ...findStorageMigrationSemanticOwnershipErrors({
     postgresMigrationsSource: postgresSource,
     runtimeSchemaSource,
