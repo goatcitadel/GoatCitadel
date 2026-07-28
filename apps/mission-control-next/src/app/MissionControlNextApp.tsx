@@ -53,6 +53,7 @@ import {
   getRouteReleaseScope,
   isExperimentalRoute,
   isHiddenRoute,
+  isPrimaryRailRoute,
   normalizeAppRoute,
   type AppRoute,
   RAIL_GROUPS,
@@ -375,9 +376,10 @@ export function MissionControlNextApp() {
     () =>
       buildRailSections(
         route.area,
-        // NAV-02: keep experimental surfaces out of the primary rails. They stay
-        // reachable via direct URL, the command palette, and their stage badge.
-        currentRailItems.filter((item) => !isExperimentalRoute(item) && !isHiddenRoute(item)),
+        // NAV-02: release-aware rail visibility keeps most experimental surfaces
+        // in the palette while exposing the personality catalog users need in
+        // order to inspect available presets.
+        currentRailItems.filter((item) => isPrimaryRailRoute(item)),
       ),
     [route.area, currentRailItems],
   );

@@ -717,6 +717,11 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
   const personality = getComposerPersonality(props);
   const plusActions = [
     {
+      label: "Browse personalities",
+      disabled: !props.onOpenPersonalitiesSettings,
+      onSelect: () => props.onOpenPersonalitiesSettings?.(),
+    },
+    {
       label: props.planningMode === "advisory" ? "Plan mode on" : "Plan mode",
       disabled: composerActionDisabled,
       active: props.planningMode === "advisory",

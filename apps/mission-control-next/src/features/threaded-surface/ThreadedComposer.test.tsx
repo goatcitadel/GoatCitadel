@@ -405,6 +405,20 @@ describe("ThreadedComposer", () => {
     ).not.toContain("mc-next-personality-chip");
   });
 
+  it("keeps the personality catalog discoverable when no personality is active", async () => {
+    const onOpenPersonalitiesSettings = vi.fn();
+    const renderer = await renderComposer({ onOpenPersonalitiesSettings });
+
+    await act(async () => {
+      renderer.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Browse personalities"))
+        ?.props.onClick();
+    });
+
+    expect(onOpenPersonalitiesSettings).toHaveBeenCalledTimes(1);
+  });
+
   it("opens personality settings through the host callback instead of a raw link", async () => {
     const onOpenPersonalitiesSettings = vi.fn();
     const renderer = await renderComposer({

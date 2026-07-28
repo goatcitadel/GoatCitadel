@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { isExperimentalRoute, isHiddenRoute } from "./route-model";
+import { isExperimentalRoute, isHiddenRoute, isPrimaryRailRoute } from "./route-model";
 
 describe("isExperimentalRoute (NAV-02 rail gating)", () => {
-  it("flags every experimental surface that is gated out of the primary rails", () => {
+  it("flags every experimental surface independently of its navigation treatment", () => {
     const experimental = [
       { area: "library", section: "journey" },
       { area: "library", section: "curator" },
@@ -66,5 +66,20 @@ describe("isHiddenRoute (release-only navigation gating)", () => {
 
   it("fails closed when a route is missing release metadata", () => {
     expect(isHiddenRoute({ area: "settings", section: "not-a-real-section" as never })).toBe(true);
+  });
+});
+
+describe("isPrimaryRailRoute", () => {
+  it("keeps the experimental personality catalog discoverable without promoting its release status", () => {
+    const personalities = { area: "settings", section: "personalities" } as const;
+
+    expect(isExperimentalRoute(personalities)).toBe(true);
+    expect(isPrimaryRailRoute(personalities)).toBe(true);
+    expect(isPrimaryRailRoute({ area: "settings", section: "addons" })).toBe(false);
+  });
+
+  it("includes shipped routes and excludes direct-URL-only routes", () => {
+    expect(isPrimaryRailRoute({ area: "settings", section: "providers" })).toBe(true);
+    expect(isPrimaryRailRoute({ area: "settings", section: "workspace-capabilities" })).toBe(false);
   });
 });

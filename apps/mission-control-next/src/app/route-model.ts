@@ -1396,13 +1396,29 @@ export function getRouteReleaseScope(route: AppRoute): RouteReleaseScope {
 }
 
 /**
- * True when a route is flagged `experimental` in ROUTE_RELEASE_SCOPE. Used to
- * keep experimental surfaces out of the primary navigation rails while leaving
- * them fully reachable via direct URL, the command palette, and their
+ * True when a route is flagged `experimental` in ROUTE_RELEASE_SCOPE. Most
+ * experimental surfaces stay out of the primary navigation rails while
+ * remaining reachable via direct URL, the command palette, and their
  * "Experimental" stage badge.
  */
 export function isExperimentalRoute(route: { area: PrimaryArea; section?: AppRoute["section"] }): boolean {
   return ROUTE_RELEASE_SCOPE_BY_KEY.get(getRouteReleaseKey(route))?.status === "experimental";
+}
+
+/**
+ * Primary-rail visibility is release-aware, with a narrow discoverability
+ * exception for the personality catalog. Personalities remain explicitly
+ * experimental on-surface, but hiding the only catalog leaves first-time users
+ * with no way to inspect what is available before choosing a preset.
+ */
+export function isPrimaryRailRoute(route: { area: PrimaryArea; section?: AppRoute["section"] }): boolean {
+  if (isHiddenRoute(route)) {
+    return false;
+  }
+  if (!isExperimentalRoute(route)) {
+    return true;
+  }
+  return route.area === "settings" && route.section === "personalities";
 }
 
 /**
