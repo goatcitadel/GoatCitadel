@@ -116,7 +116,8 @@ export class ChatTimerService {
         try {
           const settled = this.deps.storage.chatTimers.markFailed(timer.timerId, this.deps.ownerId, message);
           this.publishChanged(settled, "chat_timer_failed");
-        } catch {
+        } catch (settlementError) {
+          void settlementError;
           // A lost claim is canonical repository truth; another worker owns settlement.
         }
       }
