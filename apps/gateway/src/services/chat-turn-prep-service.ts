@@ -164,6 +164,7 @@ export interface ChatTurnPrepHost {
     payload: GatewayEventInput,
     options?: { onCommit?: () => void; afterCommit?: () => void },
   ): Promise<unknown>;
+  onUserMessageCommitted?(sessionId: string, messageId: string): void;
   patchSessionAutonomyPrefs(
     sessionId: string,
     input: Partial<
@@ -627,7 +628,10 @@ export async function prepareAgentChatTurn(
           userIngestAdmissionChecked = true;
           options?.mutationLifecycle?.commitAlongsideCanonicalWrite?.();
         },
-        afterCommit: () => options?.mutationLifecycle?.markCommitted(),
+        afterCommit: () => {
+          options?.mutationLifecycle?.markCommitted();
+          host.onUserMessageCommitted?.(sessionId, userEventId);
+        },
       },
     );
     assertPrepTurnAdmission(host, options?.turnAdmission);

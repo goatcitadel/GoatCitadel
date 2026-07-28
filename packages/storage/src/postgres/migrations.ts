@@ -13284,6 +13284,42 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
       CREATE INDEX IF NOT EXISTS idx_notification_deliveries_workspace ON notification_deliveries(workspace_id, created_at DESC);
     `,
   },
+  {
+    version: 126,
+    name: "chat_timers",
+    sql: `
+      CREATE TABLE IF NOT EXISTS chat_timers (
+        timer_id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        session_id TEXT NOT NULL REFERENCES chat_session_meta(session_id) ON DELETE CASCADE,
+        revision BIGINT NOT NULL DEFAULT 1,
+        due_at TEXT NOT NULL,
+        timezone TEXT NOT NULL,
+        message TEXT NOT NULL,
+        notification_rule_id TEXT,
+        cancel_on_next_reply BIGINT NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'active',
+        created_by TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        claimed_by TEXT,
+        claim_expires_at TEXT,
+        notice_message_id TEXT,
+        notification_event_id TEXT,
+        notification_delivery_status TEXT,
+        fired_at TEXT,
+        cancelled_at TEXT,
+        cancelled_by_message_id TEXT,
+        failure TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_chat_timers_due
+        ON chat_timers(status, due_at, claim_expires_at);
+      CREATE INDEX IF NOT EXISTS idx_chat_timers_session
+        ON chat_timers(session_id, status, due_at);
+      CREATE INDEX IF NOT EXISTS idx_chat_timers_workspace
+        ON chat_timers(workspace_id, status, due_at);
+    `,
+  },
 ];
 
 function buildWorkspacePathBridgePosixFlavorPostgresSql(): string {

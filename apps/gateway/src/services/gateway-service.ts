@@ -713,6 +713,8 @@ import { TaskLifecycleService } from "./task-lifecycle-service.js";
 import { BrowserSessionRuntimeService } from "./browser-session-runtime-service.js";
 import { ReviewReadinessService } from "./review-readiness-service.js";
 import { ChatSessionStatusService } from "./chat-session-status-service.js";
+import { ChatTimerService } from "./chat-timer-service.js";
+import { createNotificationRoutingServiceForGateway } from "./gateway-route-composition-integrations.js";
 import { resolvePackagedRuntimeAppDir, RuntimeReleaseTrustService } from "./runtime-release-trust-service.js";
 import { RuntimeAuthorityProjectionService } from "./runtime-authority-projection-service.js";
 import { createDefaultArtifactProbers, createDurableTaskAutoBlockBridge } from "./gateway-kanban-wiring.js";
@@ -803,6 +805,7 @@ export const UPDATE_REVIEW_DAILY_SCHEDULE_LABEL = "15 4 * * * America/Los_Angele
 const BACKGROUND_REVIEW_TURNS_SINCE_SETTING_KEY = "background_review_turns_since_v1";
 const BACKGROUND_REVIEW_TURN_INTERVAL = 5;
 const IMPROVEMENT_SCHEDULER_INTERVAL_MS = 60_000;
+const CHAT_TIMER_SCHEDULER_INTERVAL_MS = 1_000;
 const maintenanceSchedulerDisabled =
   process.env.GOATCITADEL_DISABLE_MAINTENANCE_SCHEDULER?.trim().toLowerCase() === "true";
 // Orphaned orchestration worktrees (no live/active run) accumulate unbounded
@@ -1346,6 +1349,7 @@ export class GatewayService {
   public readonly browserSessionRuntimeService: BrowserSessionRuntimeService;
   public readonly reviewReadinessService: ReviewReadinessService;
   public readonly chatSessionStatusService: ChatSessionStatusService;
+  public readonly chatTimerService: ChatTimerService;
   private readonly runtimeReleaseTrustService: RuntimeReleaseTrustService;
   public readonly runtimeAuthorityProjectionService: RuntimeAuthorityProjectionService;
   private readonly guidanceService: GuidanceService;
@@ -1375,6 +1379,7 @@ export class GatewayService {
   public readonly operatorSummaryCache = new OperatorSummaryCache(15_000);
   public readonly onboardingMarkerPath: string;
   private maintenanceScheduler?: BackgroundIntervalHandle;
+  private chatTimerScheduler?: BackgroundIntervalHandle;
   private orchestrationWorktreeReapScheduler?: BackgroundIntervalHandle;
   private closing = false;
   public onboardingMarker: { completedAt?: string; completedBy?: string } = {};
@@ -1728,6 +1733,15 @@ export class GatewayService {
       storage: this.storage,
       getModelContextWindow: (providerId, model) => this.llmService.getModelContextWindow(providerId, model),
       getRuntimeIdentity: () => this.reviewReadinessService.getRuntimeIdentity(),
+    });
+    this.chatTimerService = new ChatTimerService({
+      storage: this.storage,
+      ownerId: `gateway:${config.assistant.mesh.nodeId}:chat-timers`,
+      normalizeWorkspaceId: (workspaceId) => this.normalizeWorkspaceId(workspaceId),
+      dispatchNotificationEvent: (workspaceId, input) =>
+        createNotificationRoutingServiceForGateway(this.getRouteCompositionPort()).dispatch(workspaceId, input),
+      publishRealtime: (eventType, source, payload, options) =>
+        this.publishRealtime(eventType, source, payload, options),
     });
     this.assemblyService = new AssemblyService({
       storage: this.storage,
@@ -2904,6 +2918,11 @@ export class GatewayService {
       inheritDelegatedSessionToolGrants: (sessionId, delegatedSessionId) =>
         this.inheritDelegatedSessionToolGrants(sessionId, delegatedSessionId),
       ingestEvent: (idempotencyKey, payload, options) => this.ingestEvent(idempotencyKey, payload, options),
+      onUserMessageCommitted: (sessionId, messageId) => {
+        if (this.isFeatureEnabled("chatTimersV1Enabled")) {
+          this.chatTimerService.cancelOnCommittedReply(sessionId, messageId);
+        }
+      },
       isFeatureEnabled: (flag) => this.isFeatureEnabled(flag as keyof RuntimeSettings["features"]),
       isReplayScratchSession: (sessionId) => this.isReplayScratchSession(sessionId),
       listLlmModels: (providerId) => this.listLlmModels(providerId),
@@ -3354,6 +3373,7 @@ export class GatewayService {
     this.startProactiveScheduler();
     if (!maintenanceSchedulerDisabled) {
       this.startMaintenanceScheduler();
+      this.startChatTimerScheduler();
       this.startOrchestrationWorktreeReapScheduler();
     }
     // Convert chat turns stranded by the previous process death into honest
@@ -4003,6 +4023,22 @@ export class GatewayService {
       isClosing: () => this.closing,
       registerInflight: (task) => this.registerBackgroundTask(task),
       onError: (error) => log.error("maintenance scheduler tick failed", error),
+    });
+  }
+
+  private startChatTimerScheduler(): void {
+    if (this.chatTimerScheduler) return;
+    this.chatTimerScheduler = startBackgroundInterval({
+      label: "chat timer scheduler",
+      intervalMs: CHAT_TIMER_SCHEDULER_INTERVAL_MS,
+      bootDelayMs: 250,
+      task: async () => {
+        if (!this.isFeatureEnabled("chatTimersV1Enabled")) return;
+        await this.tryRunWithSharedHostWork("cron", "chat-timer-due-sweep", () => this.chatTimerService.runDue());
+      },
+      isClosing: () => this.closing,
+      registerInflight: (task) => this.registerBackgroundTask(task),
+      onError: (error) => log.error("chat timer scheduler tick failed", error),
     });
   }
 
@@ -9946,6 +9982,10 @@ export class GatewayService {
       this.maintenanceScheduler.stop();
       this.maintenanceScheduler = undefined;
     }
+    if (this.chatTimerScheduler) {
+      this.chatTimerScheduler.stop();
+      this.chatTimerScheduler = undefined;
+    }
     if (this.orchestrationWorktreeReapScheduler) {
       this.orchestrationWorktreeReapScheduler.stop();
       this.orchestrationWorktreeReapScheduler = undefined;
@@ -9979,6 +10019,10 @@ export class GatewayService {
     if (this.maintenanceScheduler) {
       this.maintenanceScheduler.stop();
       this.maintenanceScheduler = undefined;
+    }
+    if (this.chatTimerScheduler) {
+      this.chatTimerScheduler.stop();
+      this.chatTimerScheduler = undefined;
     }
     if (this.orchestrationWorktreeReapScheduler) {
       this.orchestrationWorktreeReapScheduler.stop();

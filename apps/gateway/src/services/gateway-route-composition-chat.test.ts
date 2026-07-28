@@ -333,10 +333,21 @@ function createGateway() {
       triggerChatSessionProactive: fn((sessionId: string, input: unknown) => ({ sessionId, input })),
       updateChatSessionProactivePolicy: fn((sessionId: string, input: unknown) => ({ sessionId, input })),
     },
+    chatTimerService: {
+      create: fn((sessionId: string, input: unknown, actorId: string) => ({ sessionId, input, actorId })),
+      list: fn((sessionId: string) => [{ sessionId, timerId: "timer-1" }]),
+      cancel: fn((sessionId: string, timerId: string, expectedRevision: number) => ({
+        sessionId,
+        timerId,
+        expectedRevision,
+        status: "cancelled",
+      })),
+    },
     researchService: {
       getRun: fn((sessionId: string, runId: string) => ({ sessionId, runId })),
     },
     normalizeWorkspaceId: fn((workspaceId?: string) => `normalized:${workspaceId?.trim() ?? "default"}`),
+    isFeatureEnabled: fn(() => true),
     getSession: fn((sessionId: string) => ({ sessionId })),
     requireChatSession: fn((sessionId: string) => ({ sessionId, required: true })),
     ensureChatSessionRuntimeGrants: fn((sessionId: string) => ({ sessionId, granted: true })),
@@ -588,6 +599,10 @@ describe("composeChatRouteDependencies", () => {
     expect(deps.chatSessions.createChatGeneratedArtifactFromTurn({ turnId: "turn-1" })).toMatchObject({
       session: { required: true },
     });
+    expect(deps.chatSessions.createChatTimer("session-1", { message: "Reminder" }, "operator")).toMatchObject({
+      sessionId: "session-1",
+      actorId: "operator",
+    });
     expect(deps.chatSessions.createChatSessionWorkbenchWorktree("session-1", { branch: "main" })).toMatchObject({
       sessionId: "session-1",
     });
@@ -609,6 +624,7 @@ describe("composeChatRouteDependencies", () => {
       items: [{ sessionId: "session-1" }],
     });
     expect(deps.chatSessions.listChatSessions({ limit: 1 })).toMatchObject({ items: [{ limit: 1 }] });
+    expect(deps.chatSessions.listChatTimers("session-1")).toEqual([{ sessionId: "session-1", timerId: "timer-1" }]);
     expect(deps.chatSessions.searchChatSessions({ query: "deploy" })).toMatchObject({
       query: "deploy",
       items: [{ query: "deploy" }],
@@ -644,6 +660,10 @@ describe("composeChatRouteDependencies", () => {
     expect(deps.chatSessions.unpinChatSession("session-1")).toMatchObject({ pinned: false });
     expect(deps.chatSessions.updateChatSession("session-1", { title: "Updated" })).toMatchObject({
       input: { title: "Updated" },
+    });
+    expect(deps.chatSessions.cancelChatTimer("session-1", "timer-1", 2)).toMatchObject({
+      status: "cancelled",
+      expectedRevision: 2,
     });
 
     expect(deps.chatDelegate.acceptChatDelegation("session-1", { accepted: true })).toMatchObject({ accepted: true });

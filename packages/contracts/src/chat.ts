@@ -2000,7 +2000,7 @@ export interface ChatThreadTurnRecord {
  * persisted or synthetic user message and never participates in branch state.
  */
 export interface ChatThreadSystemNoticeRecord {
-  kind: "system_heartbeat";
+  kind: "system_heartbeat" | "timer_due";
   noticeId: string;
   turnId: string;
   message: ChatMessageRecord;

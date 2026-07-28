@@ -56,6 +56,8 @@ import { KnowledgeRepository } from "./knowledge-repo.js";
 import { CommsDeliveryRepository } from "./comms-delivery-repo.js";
 import { NotificationRoutingRepository } from "./notification-routing-repo.js";
 export { NotificationRoutingRepository } from "./notification-routing-repo.js";
+import { ChatTimerRepository } from "./chat-timer-repo.js";
+export { ChatTimerRepository } from "./chat-timer-repo.js";
 import { ChatProjectRepository } from "./chat-project-repo.js";
 import { ChatSessionRevisionRepository } from "./chat-session-revision-repo.js";
 import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
@@ -286,6 +288,7 @@ export class Storage {
   public readonly knowledge: KnowledgeRepository;
   public readonly commsDeliveries: CommsDeliveryRepository;
   public readonly notificationRouting: NotificationRoutingRepository;
+  public readonly chatTimers: ChatTimerRepository;
   public readonly chatProjects: ChatProjectRepository;
   public readonly chatSessionRevisions: ChatSessionRevisionRepository;
   public readonly chatSessionMeta: ChatSessionMetaRepository;
@@ -438,6 +441,7 @@ export class Storage {
     this.knowledge = new KnowledgeRepository(this.db);
     this.commsDeliveries = new CommsDeliveryRepository(this.db);
     this.notificationRouting = new NotificationRoutingRepository(this.db);
+    this.chatTimers = new ChatTimerRepository(this.db);
     this.chatProjects = new ChatProjectRepository(this.db);
     this.chatSessionRevisions = new ChatSessionRevisionRepository(this.db);
     this.chatSessionLifecycles = new ChatSessionLifecycleRepository(this.db);

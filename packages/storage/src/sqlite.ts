@@ -6839,11 +6839,54 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
           createNotificationRoutingSchema(db);
         },
       },
+      {
+        version: 183,
+        name: "chat_timers",
+        up: (db) => {
+          createChatTimerSchema(db);
+        },
+      },
     ],
   },
 ];
 
 const SCHEMA_MIGRATIONS = createSqliteMigrationRegistry(SCHEMA_MIGRATION_GROUPS);
+
+function createChatTimerSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS chat_timers (
+      timer_id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      revision INTEGER NOT NULL DEFAULT 1,
+      due_at TEXT NOT NULL,
+      timezone TEXT NOT NULL,
+      message TEXT NOT NULL,
+      notification_rule_id TEXT,
+      cancel_on_next_reply INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      claimed_by TEXT,
+      claim_expires_at TEXT,
+      notice_message_id TEXT,
+      notification_event_id TEXT,
+      notification_delivery_status TEXT,
+      fired_at TEXT,
+      cancelled_at TEXT,
+      cancelled_by_message_id TEXT,
+      failure TEXT,
+      FOREIGN KEY (session_id) REFERENCES chat_session_meta(session_id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_chat_timers_due
+      ON chat_timers(status, due_at, claim_expires_at);
+    CREATE INDEX IF NOT EXISTS idx_chat_timers_session
+      ON chat_timers(session_id, status, due_at);
+    CREATE INDEX IF NOT EXISTS idx_chat_timers_workspace
+      ON chat_timers(workspace_id, status, due_at);
+  `);
+}
 
 function createNotificationRoutingSchema(db: DatabaseSync): void {
   db.exec(`

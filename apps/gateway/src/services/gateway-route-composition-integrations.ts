@@ -71,14 +71,7 @@ export function composeIntegrationChannelRouteDependencies(
     reviewStates: gateway.storage.externalConnectorReviewStates,
     createCapabilityProposal: (input) => gateway.capabilitySystemService.createProposal(input),
   });
-  const notificationRouting = new NotificationRoutingService({
-    repository: gateway.storage.notificationRouting,
-    normalizeWorkspaceId: (workspaceId) => gateway.normalizeWorkspaceId(workspaceId),
-    getIntegrationConnection: (connectionId) => integrationChannel.getIntegrationConnection(connectionId),
-    deliver: (target, event, idempotencyKey) => deliverNotificationForGateway(gateway, target, event, idempotencyKey),
-    publishRealtime: (eventType, source, payload, options) =>
-      gateway.publishRealtime(eventType, source, payload, options),
-  });
+  const notificationRouting = createNotificationRoutingServiceForGateway(gateway);
   const channelSetupDeps: channelSetupService.ChannelSetupHost = {
     storage: gateway.storage,
     recentChannelSetupTests: gateway.recentChannelSetupTests,
@@ -320,6 +313,20 @@ export function composeIntegrationChannelRouteDependencies(
     }),
     obsidian,
   };
+}
+
+export function createNotificationRoutingServiceForGateway(
+  gateway: GatewayRouteCompositionPort,
+): NotificationRoutingService {
+  const integrationChannel = createIntegrationChannelServiceForGateway(gateway);
+  return new NotificationRoutingService({
+    repository: gateway.storage.notificationRouting,
+    normalizeWorkspaceId: (workspaceId) => gateway.normalizeWorkspaceId(workspaceId),
+    getIntegrationConnection: (connectionId) => integrationChannel.getIntegrationConnection(connectionId),
+    deliver: (target, event, idempotencyKey) => deliverNotificationForGateway(gateway, target, event, idempotencyKey),
+    publishRealtime: (eventType, source, payload, options) =>
+      gateway.publishRealtime(eventType, source, payload, options),
+  });
 }
 
 async function deliverNotificationForGateway(

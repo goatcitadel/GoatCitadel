@@ -330,17 +330,20 @@ export function ChatThreadNotices({ notices }: { notices: ChatThreadNotice[] }) 
 }
 
 export function ChatThreadSystemNoticeCard({ notice }: { notice: ChatThreadSystemNoticeRecord }) {
+  const isTimer = notice.kind === "timer_due";
+  const label = isTimer ? "Timer due" : "Heartbeat";
   return (
     <section
       className="mc-next-thread-system-notice"
-      aria-label="Heartbeat notification"
+      aria-label={`${label} notification`}
       data-notice-id={notice.noticeId}
+      data-notice-kind={notice.kind}
     >
       <div className="mc-next-thread-bubble assistant">
         <p className="mc-next-thread-meta">
           <strong>GoatCitadel</strong> · <ActorTimestamp timestamp={notice.message.timestamp} />{" "}
           <Badge variant="outline" className="align-middle">
-            Heartbeat
+            {label}
           </Badge>
         </p>
         <AssistantMessageRenderer role="assistant" content={notice.message.content} />

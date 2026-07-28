@@ -156,7 +156,7 @@ export class NotificationRoutingService {
 
   public async dispatch(
     workspaceId: string | undefined,
-    input: Omit<NotifyRequest, "targetIds"> & { source: string; eventId?: string },
+    input: Omit<NotifyRequest, "targetIds"> & { source: string; eventId?: string; ruleId?: string },
   ): Promise<NotificationDispatchResult> {
     const normalizedWorkspaceId = this.workspace(workspaceId);
     validateEvent(input);
@@ -167,7 +167,12 @@ export class NotificationRoutingService {
     const deliveries: NotificationDeliveryRecord[] = [];
     const rules = this.deps.repository
       .listRules(normalizedWorkspaceId)
-      .filter((rule) => rule.lifecycleState === "active" && rule.eventTypes.includes(event.eventType));
+      .filter(
+        (rule) =>
+          rule.lifecycleState === "active" &&
+          rule.eventTypes.includes(event.eventType) &&
+          (!input.ruleId || rule.ruleId === input.ruleId),
+      );
     const isPresent = this.deps.repository.hasActivePresence(normalizedWorkspaceId, this.isoNow());
 
     for (const rule of rules) {

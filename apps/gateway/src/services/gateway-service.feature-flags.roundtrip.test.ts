@@ -30,6 +30,7 @@ const ALL_FLAGS_SET: Required<FeatureFlagsConfig> = {
   chatSessionStatusV1Enabled: true,
   conversationForksV1Enabled: true,
   notificationRoutingV1Enabled: true,
+  chatTimersV1Enabled: true,
   channelVoiceInboundV1Enabled: true,
   signalInboundV1Enabled: true,
   plannerFastPathV1Disabled: true,

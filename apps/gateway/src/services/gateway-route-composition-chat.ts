@@ -143,6 +143,12 @@ export function composeChatRouteDependencies(
       chatGeneratedArtifactService.createChatGeneratedArtifactFromTurn(ChatGeneratedArtifactDependencies, input),
     createChatSideChat: (sessionId, input) =>
       chatSessionService.createChatSideChat(ChatSessionDependencies, sessionId, input),
+    createChatTimer: (sessionId, input, actorId) => {
+      if (!gateway.isFeatureEnabled("chatTimersV1Enabled")) {
+        throw new NotFoundError({ entity: "Chat timer", id: sessionId });
+      }
+      return gateway.chatTimerService.create(sessionId, input, actorId);
+    },
     createChatSession: (input) => {
       const { citadelId, ...sessionInput } = input ?? {};
       const scope = resolveChatRuntimeScope(gateway, {
@@ -221,6 +227,12 @@ export function composeChatRouteDependencies(
         workspaceId: scope.workspaceId,
       });
     },
+    listChatTimers: (sessionId) => {
+      if (!gateway.isFeatureEnabled("chatTimersV1Enabled")) {
+        throw new NotFoundError({ entity: "Chat timer", id: sessionId });
+      }
+      return gateway.chatTimerService.list(sessionId);
+    },
     listChatThreadKnowledgeAttachments: (sessionId) =>
       chatThreadKnowledgeService.listChatThreadKnowledgeAttachments(ChatThreadKnowledgeDependencies, sessionId),
     listRecentCrossProjectSessions: (input) => {
@@ -270,6 +282,12 @@ export function composeChatRouteDependencies(
       chatSessionService.unpinChatSession(ChatSessionDependencies, sessionId, expectedRevision),
     updateChatSession: (sessionId, input, expectedRevision) =>
       chatSessionService.updateChatSession(ChatSessionDependencies, sessionId, input, expectedRevision),
+    cancelChatTimer: (sessionId, timerId, expectedRevision) => {
+      if (!gateway.isFeatureEnabled("chatTimersV1Enabled")) {
+        throw new NotFoundError({ entity: "Chat timer", id: timerId });
+      }
+      return gateway.chatTimerService.cancel(sessionId, timerId, expectedRevision);
+    },
   };
   const chatDelegate: GatewayRouteServiceDependencies["chatDelegate"] = {
     acceptChatDelegation: (sessionId, input) => gateway.acceptChatDelegation(sessionId, input),

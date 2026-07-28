@@ -227,6 +227,8 @@ describe("chat command runtime dispatch", () => {
     expect(commands.has("/subagents")).toBe(true);
     expect(commands.has("/learn")).toBe(true);
     expect(commands.has("/undo")).toBe(true);
+    expect(commands.has("/status")).toBe(true);
+    expect(commands.has("/timer")).toBe(true);
   });
 
   it("dispatches preference, workflow, skill, mcp, project, and approval commands through deps", async () => {

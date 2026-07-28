@@ -6,6 +6,7 @@ import {
   groupDelegatedSessionsForRail,
   isConfirmableCapabilityAction,
   isLocalChatStatusCommand,
+  isLocalChatTimerCommand,
   parseBtwCommand,
   resolveChatRefreshPlan,
   resolveOptimisticChatPrefs,
@@ -19,6 +20,11 @@ describe("chat-page-pure-helpers coverage", () => {
   it("recognizes only the local status command", () => {
     expect(isLocalChatStatusCommand(" /STATUS ")).toBe(true);
     expect(isLocalChatStatusCommand("/status explain")).toBe(false);
+  });
+
+  it("recognizes only the local timer command", () => {
+    expect(isLocalChatTimerCommand(" /TIMER ")).toBe(true);
+    expect(isLocalChatTimerCommand("/timer tomorrow")).toBe(false);
   });
 
   it("builds compact stable suggestion sync keys without full-object serialization", () => {

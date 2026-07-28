@@ -52,6 +52,9 @@ import type {
   ChatSessionSearchMode,
   ChatSessionSearchResponse,
   ChatSessionStatusResponse,
+  ChatTimerListResponse,
+  ChatTimerMutationResponse,
+  CreateChatTimerInput,
   ChatSpecialistCandidatePatchInput,
   ChatSpecialistCandidateRecord,
   ChatSpecialistCandidateSuggestionRecord,
@@ -371,6 +374,33 @@ export async function fetchChatSessionStatus(sessionId: string): Promise<ChatSes
   return request<ChatSessionStatusResponse>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/status`, {
     cache: "no-store",
   });
+}
+
+export async function fetchChatTimers(sessionId: string): Promise<ChatTimerListResponse> {
+  return request<ChatTimerListResponse>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/timers`, {
+    cache: "no-store",
+  });
+}
+
+export async function createChatTimer(
+  sessionId: string,
+  input: CreateChatTimerInput,
+): Promise<ChatTimerMutationResponse> {
+  return request<ChatTimerMutationResponse>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/timers`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function cancelChatTimer(
+  sessionId: string,
+  timerId: string,
+  expectedRevision: number,
+): Promise<ChatTimerMutationResponse> {
+  return request<ChatTimerMutationResponse>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/timers/${encodeURIComponent(timerId)}`,
+    { method: "DELETE", body: JSON.stringify({ expectedRevision }) },
+  );
 }
 
 export async function deleteChatSession(

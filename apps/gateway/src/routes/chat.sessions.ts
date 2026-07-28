@@ -109,6 +109,21 @@ const sessionRevisionSchema = z.object({
   expectedRevision: z.number().int().positive(),
 });
 
+const createChatTimerSchema = z
+  .object({
+    dueAt: z.string().datetime({ offset: true }),
+    timezone: z.string().trim().min(1).max(128),
+    message: z.string().trim().min(1).max(4_000),
+    notificationRuleId: z.string().trim().min(1).max(256).optional(),
+    cancelOnNextReply: z.boolean().optional(),
+  })
+  .strict();
+
+const timerParamsSchema = z.object({
+  sessionId: z.string().min(1),
+  timerId: z.string().min(1),
+});
+
 const deleteSessionQuerySchema = z.object({
   mode: z.literal("hard"),
   expectedRevision: z.coerce.number().int().positive(),
@@ -344,6 +359,64 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     try {
       reply.header("cache-control", "private, no-store");
       return reply.send(fastify.services.chatSessions.getChatSessionStatus(params.data.sessionId));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.get("/api/v1/chat/sessions/:sessionId/timers", async (request, reply) => {
+    const params = sessionParamsSchema.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    try {
+      reply.header("cache-control", "private, no-store");
+      return reply.send({ items: fastify.services.chatSessions.listChatTimers(params.data.sessionId) });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/chat/sessions/:sessionId/timers", async (request, reply) => {
+    const params = sessionParamsSchema.safeParse(request.params);
+    const body = createChatTimerSchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      const item = fastify.services.chatSessions.createChatTimer(
+        params.data.sessionId,
+        body.data,
+        request.authActorId || "operator",
+      );
+      return reply.code(201).send({ item });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.delete("/api/v1/chat/sessions/:sessionId/timers/:timerId", async (request, reply) => {
+    const params = timerParamsSchema.safeParse(request.params);
+    const body = sessionRevisionSchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.send({
+        item: fastify.services.chatSessions.cancelChatTimer(
+          params.data.sessionId,
+          params.data.timerId,
+          body.data.expectedRevision,
+        ),
+      });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }

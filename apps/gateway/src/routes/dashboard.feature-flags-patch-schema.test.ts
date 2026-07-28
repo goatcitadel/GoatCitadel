@@ -34,6 +34,7 @@ const EXPECTED_PATCH_TOGGLEABLE: Record<keyof FeatureFlagsConfig, true> = {
   chatSessionStatusV1Enabled: true,
   conversationForksV1Enabled: true,
   notificationRoutingV1Enabled: true,
+  chatTimersV1Enabled: true,
   channelVoiceInboundV1Enabled: true,
   channelVoiceReplyV1Enabled: true,
   signalInboundV1Enabled: true,

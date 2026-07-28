@@ -7,6 +7,7 @@ import type {
   ChatOrchestrationReviewDepth,
   ChatSessionRecord,
   ChatSessionStatusResponse,
+  ChatTimerRecord,
   ChatThinkingLevel,
   ChatThreadResponse,
   ChatWebMode,
@@ -114,6 +115,26 @@ export interface MissionControlActiveSessionSurfaceProps {
     error: string | null;
     status: ChatSessionStatusResponse | null;
     onRefresh: () => void;
+    onClose: () => void;
+  };
+  chatTimerPanel?: {
+    open: boolean;
+    busy: boolean;
+    error: string | null;
+    dueAt: string;
+    timezone: string;
+    message: string;
+    notificationRuleId: string;
+    cancelOnNextReply: boolean;
+    rules: Array<{ ruleId: string; label: string }>;
+    timers: ChatTimerRecord[];
+    onDueAtChange: (value: string) => void;
+    onTimezoneChange: (value: string) => void;
+    onMessageChange: (value: string) => void;
+    onNotificationRuleChange: (value: string) => void;
+    onCancelOnNextReplyChange: (value: boolean) => void;
+    onCreate: () => void;
+    onCancelTimer: (timerId: string, revision: number) => void;
     onClose: () => void;
   };
   /**

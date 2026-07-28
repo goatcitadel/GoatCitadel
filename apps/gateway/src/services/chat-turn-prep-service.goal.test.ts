@@ -182,6 +182,7 @@ describe("prepareAgentChatTurn stream mutation commit truth", () => {
   it("signals commit only after user-event ingestion commits before a post-commit projection failure escapes", async () => {
     const markCommitted = vi.fn();
     const commitAlongsideCanonicalWrite = vi.fn();
+    const onUserMessageCommitted = vi.fn();
     const ingestEvent = vi.fn(async (_key, _payload, options?: { onCommit?: () => void; afterCommit?: () => void }) => {
       options?.onCommit?.();
       options?.afterCommit?.();
@@ -219,6 +220,7 @@ describe("prepareAgentChatTurn stream mutation commit truth", () => {
         turnLineageById: new Map(),
       })),
       ingestEvent,
+      onUserMessageCommitted,
     } as never;
 
     await expect(
@@ -234,6 +236,7 @@ describe("prepareAgentChatTurn stream mutation commit truth", () => {
 
     expect(commitAlongsideCanonicalWrite).toHaveBeenCalledTimes(1);
     expect(markCommitted).toHaveBeenCalledTimes(1);
+    expect(onUserMessageCommitted).toHaveBeenCalledWith("session-1", expect.any(String));
     expect(ingestEvent).toHaveBeenCalledWith(expect.any(String), expect.any(Object), {
       onCommit: expect.any(Function),
       afterCommit: expect.any(Function),
@@ -243,6 +246,7 @@ describe("prepareAgentChatTurn stream mutation commit truth", () => {
   it("does not signal commit when user-event ingestion rolls back", async () => {
     const markCommitted = vi.fn();
     const commitAlongsideCanonicalWrite = vi.fn();
+    const onUserMessageCommitted = vi.fn();
     const ingestEvent = vi.fn(async (_key, _payload, options?: { onCommit?: () => void; afterCommit?: () => void }) => {
       options?.onCommit?.();
       throw new Error("usage write failed inside ingest transaction");
@@ -279,6 +283,7 @@ describe("prepareAgentChatTurn stream mutation commit truth", () => {
         turnLineageById: new Map(),
       })),
       ingestEvent,
+      onUserMessageCommitted,
     } as never;
 
     await expect(
@@ -294,6 +299,7 @@ describe("prepareAgentChatTurn stream mutation commit truth", () => {
 
     expect(commitAlongsideCanonicalWrite).toHaveBeenCalledTimes(1);
     expect(markCommitted).not.toHaveBeenCalled();
+    expect(onUserMessageCommitted).not.toHaveBeenCalled();
     expect(ingestEvent).toHaveBeenCalledWith(expect.any(String), expect.any(Object), {
       onCommit: expect.any(Function),
       afterCommit: expect.any(Function),

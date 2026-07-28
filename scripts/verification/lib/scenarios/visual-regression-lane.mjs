@@ -149,6 +149,15 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
                     }
                   });
                   await page.waitForTimeout(1000);
+                  // Some native routes mount their heading before the data effect
+                  // enters its loading state. Reassert readiness after the settle
+                  // window so the screenshot cannot capture that transient frame.
+                  await waitForVerificationRouteReady(
+                    page,
+                    route,
+                    verificationTarget.packageName,
+                    VISUAL_ROUTE_READY_TIMEOUT_MS,
+                  );
                   await stabilizeVisualRegressionSnapshot(page);
                   await assertMobileVisualGeometry(page, route, variant);
                   await assertNoFooterStatusCollision(page, { route, variant });

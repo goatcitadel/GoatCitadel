@@ -436,6 +436,10 @@ export function isLocalChatStatusCommand(content: string): boolean {
   return content.trim().toLowerCase() === "/status";
 }
 
+export function isLocalChatTimerCommand(content: string): boolean {
+  return content.trim().toLowerCase() === "/timer";
+}
+
 /**
  * Parsed representation of a `/btw` command.
  *
