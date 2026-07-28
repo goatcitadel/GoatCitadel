@@ -2,8 +2,17 @@ import type {
   ChatRoutedContextInspection,
   ChatTurnCapabilityProfilePreview,
   ChatTurnCapabilityProfileRecord,
+  WorkPassportBaseline,
+  WorkPassportDomain,
+  WorkPassportRecord,
 } from "@goatcitadel/contracts";
+import { WORK_PASSPORT_DOMAINS } from "@goatcitadel/contracts";
 import type { ChatCapabilityProfileInspection } from "@goatcitadel/threaded-surface-core";
+import {
+  fetchWorkPassportBaseline,
+  updateWorkPassportBaseline,
+} from "@goatcitadel/mission-control-shared/api/work-passport";
+import { useEffect, useState } from "react";
 import { StatusChip } from "../native-routes/primitives";
 
 function shortHash(value: string | undefined, size = 12): string {
@@ -25,7 +34,15 @@ function readinessTone(status: "ready" | "missing" | "blocked" | "unknown") {
   return status === "ready" ? "success" : status === "missing" || status === "blocked" ? "critical" : "muted";
 }
 
-export function ChatCapabilityProfilePreflight({ profile }: { profile: ChatTurnCapabilityProfilePreview }) {
+export function ChatCapabilityProfilePreflight({
+  profile,
+  workspaceId,
+  onBaselineUpdated,
+}: {
+  profile: ChatTurnCapabilityProfilePreview;
+  workspaceId?: string;
+  onBaselineUpdated?: () => Promise<void>;
+}) {
   const blocked = profile.blockedReasons.length > 0;
   const blockedReadiness = profile.authReadiness.filter(
     (item) => item.status === "missing" || item.status === "blocked",
@@ -49,6 +66,13 @@ export function ChatCapabilityProfilePreflight({ profile }: { profile: ChatTurnC
             : " · no selected tool approvals"}
         </p>
       </div>
+      {profile.workPassport ? (
+        <WorkPassportPanel
+          passport={profile.workPassport}
+          workspaceId={workspaceId}
+          onBaselineUpdated={onBaselineUpdated}
+        />
+      ) : null}
       <details className="mc-next-capability-profile-disclosure">
         <summary>Inspect proposed profile</summary>
         <div className="mc-next-capability-profile-detail">
@@ -186,6 +210,7 @@ function VerifiedCapabilityProfile({
             : `${profile.selection.allowedFallbacks.length} fallbacks`}
         </StatusChip>
       </div>
+      {profile.selection.workPassport ? <WorkPassportPanel passport={profile.selection.workPassport} /> : null}
       {routedContext ? <RoutedContextReceipt routedContext={routedContext} /> : null}
       <details className="mc-next-capability-profile-disclosure">
         <summary>Inspect frozen selections and governance</summary>
@@ -284,6 +309,166 @@ function VerifiedCapabilityProfile({
               ))}
             </div>
           </section>
+        </div>
+      </details>
+    </section>
+  );
+}
+
+function WorkPassportPanel({
+  passport,
+  workspaceId,
+  onBaselineUpdated,
+}: {
+  passport: WorkPassportRecord;
+  workspaceId?: string;
+  onBaselineUpdated?: () => Promise<void>;
+}) {
+  const [baseline, setBaseline] = useState<WorkPassportBaseline>(passport.baseline);
+  const [roleLabel, setRoleLabel] = useState(passport.baseline.roleLabel ?? "");
+  const [domains, setDomains] = useState<WorkPassportDomain[]>(passport.baseline.primaryDomains);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    setBaseline(passport.baseline);
+    setRoleLabel(passport.baseline.roleLabel ?? "");
+    setDomains(passport.baseline.primaryDomains);
+  }, [passport.baseline]);
+
+  useEffect(() => {
+    if (!workspaceId) return;
+    let cancelled = false;
+    void fetchWorkPassportBaseline(workspaceId)
+      .then((response) => {
+        if (cancelled) return;
+        setBaseline(response.baseline);
+        setRoleLabel(response.baseline.roleLabel ?? "");
+        setDomains(response.baseline.primaryDomains);
+      })
+      .catch(() => {
+        if (!cancelled) setMessage("Could not refresh the workspace baseline.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId]);
+
+  const saveBaseline = async () => {
+    if (!workspaceId) return;
+    setBusy(true);
+    setMessage(null);
+    let saved = false;
+    try {
+      const response = await updateWorkPassportBaseline({
+        workspaceId,
+        roleLabel: roleLabel.trim() || undefined,
+        primaryDomains: domains,
+      });
+      setBaseline(response.baseline);
+      saved = true;
+      await onBaselineUpdated?.();
+      setMessage("Baseline saved. The turn profile was refreshed.");
+    } catch (cause) {
+      const detail = cause instanceof Error ? cause.message : String(cause);
+      setMessage(saved ? `Baseline saved, but the turn profile refresh failed: ${detail}` : detail);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleDomain = (domain: WorkPassportDomain) => {
+    setDomains((current) =>
+      current.includes(domain) ? current.filter((item) => item !== domain) : [...current, domain].slice(0, 8),
+    );
+  };
+
+  return (
+    <section className="mc-next-work-passport" aria-label="Work Passport">
+      <div className="mc-next-work-passport-summary">
+        <div>
+          <p className="mc-next-panel-kicker">Work Passport</p>
+          <strong>{formatLabel(passport.boundary)}</strong>
+          <span>
+            {passport.taskSignals.length > 0
+              ? passport.taskSignals.map((signal) => formatLabel(signal.domain)).join(" · ")
+              : "Task domain is unclear"}
+          </span>
+        </div>
+        <div className="mc-next-capability-profile-chip-row">
+          <StatusChip
+            tone={
+              passport.consequence === "high" ? "critical" : passport.consequence === "moderate" ? "warning" : "muted"
+            }
+          >
+            {passport.consequence} consequence
+          </StatusChip>
+          <StatusChip tone={passport.review.posture === "self_check" ? "success" : "warning"}>
+            {formatLabel(passport.review.posture)}
+          </StatusChip>
+        </div>
+      </div>
+      <p>{passport.review.reason}</p>
+      <details className="mc-next-capability-profile-disclosure mc-next-work-passport-disclosure">
+        <summary>Review evidence and correct baseline</summary>
+        <div className="mc-next-work-passport-detail">
+          <section aria-label="Work Passport evidence requirements">
+            <h5>Before relying on this work</h5>
+            <ul>
+              {passport.evidenceRequirements.map((requirement) => (
+                <li key={requirement}>{requirement}</li>
+              ))}
+            </ul>
+          </section>
+          <section aria-label="Work Passport baseline">
+            <h5>Operator-defined baseline</h5>
+            <p>
+              {baseline.configured
+                ? `${baseline.roleLabel ?? "Workspace role"} · ${baseline.primaryDomains.map(formatLabel).join(", ") || "no primary domains"}`
+                : `${baseline.roleLabel ? `${baseline.roleLabel} · ` : ""}Choose at least one primary domain. Until then, GoatCitadel will not claim a boundary crossing.`}
+            </p>
+            {workspaceId ? (
+              <div className="mc-next-work-passport-editor">
+                <label>
+                  Role label
+                  <input
+                    type="text"
+                    value={roleLabel}
+                    maxLength={120}
+                    placeholder="e.g. Product engineer"
+                    onChange={(event) => setRoleLabel(event.currentTarget.value)}
+                  />
+                </label>
+                <fieldset>
+                  <legend>Primary work domains</legend>
+                  <div className="mc-next-work-passport-domain-grid">
+                    {WORK_PASSPORT_DOMAINS.map((domain) => (
+                      <label key={domain}>
+                        <input
+                          type="checkbox"
+                          checked={domains.includes(domain)}
+                          onChange={() => toggleDomain(domain)}
+                        />
+                        {formatLabel(domain)}
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+                <div className="mc-next-work-passport-actions">
+                  <button
+                    type="button"
+                    className="mc-next-composer-inline-button"
+                    disabled={busy}
+                    onClick={() => void saveBaseline()}
+                  >
+                    {busy ? "Saving…" : "Save baseline"}
+                  </button>
+                  <span aria-live="polite">{message}</span>
+                </div>
+              </div>
+            ) : null}
+          </section>
+          <p className="mc-next-work-passport-limitation">{passport.limitations.join(" ")}</p>
         </div>
       </details>
     </section>

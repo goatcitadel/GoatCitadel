@@ -3,6 +3,7 @@
 import { createHash } from "node:crypto";
 import {
   CHAT_TURN_CAPABILITY_PROFILE_VERSION,
+  assertWorkPassportRecord,
   assertMcpRequesterResolutionBinding,
   canonicalJsonString,
   isToolEffectPotentialRecord,
@@ -500,6 +501,9 @@ function assertValidProfile(input: ChatTurnCapabilityProfileRecord): void {
   }
   if (!(["safe_auto", "manual"] as const).includes(input.selection.toolAutonomy)) {
     throw new Error("Capability profile tool autonomy is invalid.");
+  }
+  if (input.selection.workPassport !== undefined) {
+    assertWorkPassportRecord(input.selection.workPassport);
   }
   assertSafeString(input.selection.memory.retrievalMode, "selection.memory.retrievalMode", 128);
   if (!(["standard", "layered"] as const).includes(input.selection.memory.retrievalMode)) {

@@ -22,6 +22,7 @@ import {
   type McpRequesterResolutionBinding,
   type McpRequesterScopeAuthActorSource,
   type ToolPolicyActorContext,
+  type WorkPassportRecord,
 } from "@goatcitadel/contracts";
 import {
   sealChatTurnCapabilityProfile,
@@ -131,6 +132,8 @@ export interface ChatTurnCapabilityProfileResolveDeps {
         local: boolean;
       }
     | undefined;
+  /** Gateway-owned, operator-correctable task-boundary classification. */
+  classifyWorkPassport?(workspaceId: string, content: string): WorkPassportRecord;
   resolveToolRuntimeOwnerBinding?(toolName: string): ChatTurnCapabilityToolRuntimeOwnerBinding;
   /**
    * Gateway-owned profile-freeze seam. Implementations may return only the
@@ -368,6 +371,7 @@ export async function resolveChatTurnCapabilityProfile(
   const providerReadiness = buildProviderReadiness(deps, input);
   const source = buildChatTurnCapabilityProfileSourceScope(input.route);
   const contentHash = digest(input.content);
+  const workPassport = deps.classifyWorkPassport?.(input.workspaceId, input.content);
   const memory = {
     mode: input.memoryMode,
     retrievalMode: input.retrievalMode,
@@ -401,6 +405,7 @@ export async function resolveChatTurnCapabilityProfile(
     tools,
     modelNameAllowMap,
     trustedSkills,
+    ...(workPassport ? { workPassport } : {}),
   } satisfies ChatTurnCapabilityProfileRecord["selection"];
   const governance = {
     activeGrants,
@@ -487,6 +492,7 @@ export async function resolveChatTurnCapabilityProfile(
     approval: governance.approval,
     authReadiness: governance.authReadiness,
     blockedReasons,
+    ...(workPassport ? { workPassport } : {}),
   };
   return { profile, catalogSnapshot, preview };
 }

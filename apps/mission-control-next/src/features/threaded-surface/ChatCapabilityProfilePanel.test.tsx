@@ -190,6 +190,37 @@ function renderedText(renderer: ReactTestRenderer): string {
 }
 
 describe("ChatCapabilityProfilePanel", () => {
+  it("shows the task boundary and accountable review posture without presenting a worker score", () => {
+    const profile = preview();
+    profile.workPassport = {
+      passportId: "work-passport-test",
+      schemaVersion: "work.passport.v1",
+      classificationMode: "deterministic_local_v1",
+      baseline: { configured: true, roleLabel: "Engineer", primaryDomains: ["engineering"], revision: 2 },
+      taskSignals: [{ domain: "legal", strength: "medium", reasons: ["legal and contract cues"] }],
+      boundary: "cross_domain",
+      consequence: "high",
+      review: {
+        posture: "domain_expert_required",
+        reason: "The task combines consequential action with a high-stakes domain.",
+        requirements: ["Obtain accountable domain review."],
+      },
+      evidenceRequirements: ["Cite current primary sources for material factual claims."],
+      actionPosture: "approval_before_external_action",
+      limitations: ["Not an occupation, competence, legal, or performance assessment."],
+      operatorCorrectionAllowed: true,
+    };
+
+    const renderer = render(<ChatCapabilityProfilePreflight profile={profile} />);
+    const text = renderedText(renderer);
+    expect(text).toContain("Work Passport");
+    expect(text).toContain("cross domain");
+    expect(text).toContain("domain expert required");
+    expect(text).toContain("Not an occupation");
+    expect(text).not.toContain("worker score");
+    act(() => renderer.unmount());
+  });
+
   it("shows a compact preflight chip with progressively disclosed exact selections", () => {
     const renderer = render(<ChatCapabilityProfilePreflight profile={preview()} />);
     const text = renderedText(renderer);

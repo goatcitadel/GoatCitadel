@@ -100,6 +100,25 @@ Notes:
 
 Chat planning freezes a server-authored `effectPotential` of `none` or `unknown`, one secret-safe binding for every enabled `tool.call.before`, `tool.call.after`, `tool.call.error`, and `after_tool_call` hook, and the exact built-in/plugin runtime-owner generation into the immutable capability profile. `chat_tool_runs` owns recovery `effectDisposition` plus operator-facing `effectOutcomeKind`/`effectEvidence`; the runner durably crosses an auxiliary-effect fence immediately before hook delivery/materialization and a separate main-executor fence immediately before the admitted built-in, plugin, MCP, or browser-fallback owner. This separation preserves a legitimate approval reached after a hook as `approval_wait_after_auxiliary_dispatch` while suppressing an approval reported only after the main executor crossed its boundary. Only a proven pre-dispatch block, approval wait, skip, reuse, or trusted built-in safe read may settle `none`; opaque legacy invokers, hook or owner drift, browser/shell/MCP/plugin/remote/mutating paths, interruption after either effect boundary, approval-resume execution, and post-dispatch output rejection remain `unknown`/`uncertain`, carry inspect-before-retry guidance, and are never automatically replayed. A `concrete` outcome requires a typed out-of-band receipt whose Chat tool-run, tool, scope, and idempotency correlation exactly match a completed canonical owner; result payload IDs are never evidence. Chat tool cards, expanded trace detail, ordinary decision traces, and trusted Ops Run Detail project the same fields but withhold raw receipt IDs until a dedicated server-verified owner projection exists; expert raw JSON is explicitly diagnostic and non-canonical. These internal classifications are stripped at the shared complete/stream provider-send boundary.
 
+### Work Passport
+
+Definition:
+A server-authored, operator-correctable task-boundary and review contract for one Chat turn.
+
+Authority:
+- Contract shape: `packages/contracts/src/work-passport.ts`
+- Baseline owner: workspace-scoped operator profile facts under the reserved `work-passport:` source namespace
+- Classification owner: `apps/gateway/src/services/work-passport-service.ts`
+- Per-turn canonical record: `ChatTurnCapabilityProfileSelection.workPassport`
+
+Notes:
+- The workspace baseline is created or replaced only by an explicit operator route. The runtime does not infer or learn a person's occupation.
+- The current task classifier is local, deterministic, versioned, bounded, and secret-free. Its reasons describe generic cues rather than copying task text.
+- The complete Work Passport is covered by the capability profile's immutable JSON, selection hash, preflight fingerprint, profile hash, and persisted integrity verification.
+- Mission Control may project and correct the baseline, but the Gateway owns persistence and classification. A successful correction forces a fresh preflight.
+- Review and action posture are advisory governance context. They do not grant tools, bypass deny-wins policy, satisfy approvals, or prove that review occurred.
+- Profiles created before Work Passport remain valid with the optional field absent.
+
 ### A2A Task Binding
 
 Definition:

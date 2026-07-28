@@ -613,6 +613,7 @@ import { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
 import { RuntimeDecisionRecorder } from "./runtime-decision-recorder.js";
 import { MemoryWriteGateService } from "./memory-write-gate-service.js";
 import { OperatorProfileService } from "./operator-profile-service.js";
+import { WorkPassportService } from "./work-passport-service.js";
 import { AutonomyControlService } from "./autonomy-control-service.js";
 import {
   ChatTurnExecutionRegistry,
@@ -1321,6 +1322,7 @@ export class GatewayService {
   private readonly capabilityPackService: CapabilityPackService;
   private readonly memoryWriteGateService: MemoryWriteGateService;
   private readonly operatorProfileService: OperatorProfileService;
+  public readonly workPassportService: WorkPassportService;
   private readonly autonomyControlService: AutonomyControlService;
   private readonly capabilitySystemService: CapabilitySystemService;
   /** HX-408 M1: authenticated mesh capability publication owner. */
@@ -1452,6 +1454,7 @@ export class GatewayService {
       isFeatureEnabled: (flag) => this.isFeatureEnabled(flag as keyof RuntimeSettings["features"]),
       memoryWriteGate: this.memoryWriteGateService,
     });
+    this.workPassportService = new WorkPassportService(this.operatorProfileService);
     this.enforceDurableExecutionBaseline();
     this.onboardingMarkerPath = path.resolve(config.rootDir, config.assistant.dataDir, "onboarding-state.json");
     this.devDiagnostics = new GatewayDevDiagnosticsService(
@@ -5522,6 +5525,7 @@ export class GatewayService {
             );
           return { configured: Boolean(provider.hasApiKey), local };
         },
+        classifyWorkPassport: (workspaceId, content) => this.workPassportService.classify(workspaceId, content),
       },
       {
         sessionId: input.sessionId,

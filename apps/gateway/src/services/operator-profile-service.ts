@@ -23,11 +23,7 @@
  * captured); secrets are blocked regardless of autonomy; auto-apply respects the
  * master autonomy kill switch (`autonomyV1Disabled`).
  */
-import type {
-  MemoryWriteAuthority,
-  OperatorProfileFact,
-  OperatorProfileRecord,
-} from "@goatcitadel/contracts";
+import type { MemoryWriteAuthority, OperatorProfileFact, OperatorProfileRecord } from "@goatcitadel/contracts";
 import {
   MAX_OPERATOR_PROFILE_FACT_LENGTH,
   MAX_OPERATOR_PROFILE_FACTS,
@@ -66,6 +62,12 @@ export interface RecordOperatorProfileFactsResult {
   priorSnapshot?: OperatorProfileRecord;
   /** Facts being held for review when `outcome === "proposed"`. */
   proposedFacts?: OperatorProfileFact[];
+}
+
+export interface ReplaceOperatorProfileFactsInput {
+  /** Namespace owned by the caller, for example `work-passport:`. */
+  sourceRefPrefix: string;
+  facts: OperatorProfileFact[];
 }
 
 interface CachedDigest {
@@ -223,6 +225,64 @@ export class OperatorProfileService {
       record: write.record,
       outcome: "applied",
       blockedFacts,
+      ...(write.priorSnapshot ? { priorSnapshot: write.priorSnapshot } : {}),
+    };
+  }
+
+  /** Read the current profile without creating or stamping one. */
+  public findOperatorProfile(workspaceId: string): OperatorProfileRecord | undefined {
+    return this.readProfile(normalizeWorkspaceId(workspaceId));
+  }
+
+  /**
+   * Replace one explicitly operator-managed fact namespace while preserving all
+   * other profile facts. This is a trusted UI path, not a learned-memory path:
+   * secrets still fail closed and the prior revision remains recoverable.
+   */
+  public replaceOperatorManagedFacts(
+    workspaceId: string,
+    input: ReplaceOperatorProfileFactsInput,
+  ): RecordOperatorProfileFactsResult {
+    const normalizedWorkspaceId = normalizeWorkspaceId(workspaceId);
+    const prefix = input.sourceRefPrefix.trim();
+    if (!prefix || prefix.length > 80) {
+      throw new Error("Operator-managed fact namespace is invalid.");
+    }
+    const profile = this.ensureOperatorProfile(normalizedWorkspaceId);
+    const accepted: OperatorProfileFact[] = [];
+    const blockedFacts: OperatorProfileFact[] = [];
+    for (const fact of normalizeFacts(input.facts)) {
+      if (!fact.sourceRef?.startsWith(prefix)) {
+        throw new Error(`Operator-managed fact source must start with ${prefix}.`);
+      }
+      const decision = this.gate.evaluate({ authority: "operator", content: fact.content });
+      if (decision.decision === "blocked") {
+        blockedFacts.push(fact);
+      } else {
+        accepted.push(fact);
+      }
+    }
+    if (blockedFacts.length > 0) {
+      return { record: profile, outcome: "applied", blockedFacts };
+    }
+    const preserved = profile.facts.filter((fact) => !fact.sourceRef?.startsWith(prefix));
+    if (preserved.length + accepted.length > MAX_OPERATOR_PROFILE_FACTS) {
+      throw new Error("Operator profile is full; remove an existing fact before configuring this feature.");
+    }
+    const write = this.storage.operatorProfiles.upsertCapturingPrior(
+      {
+        operatorProfileId: profile.operatorProfileId,
+        workspaceId: normalizedWorkspaceId,
+        summary: profile.summary,
+        facts: [...preserved, ...accepted],
+      },
+      this.now(),
+    );
+    this.digestCache.delete(normalizedWorkspaceId);
+    return {
+      record: write.record,
+      outcome: "applied",
+      blockedFacts: [],
       ...(write.priorSnapshot ? { priorSnapshot: write.priorSnapshot } : {}),
     };
   }

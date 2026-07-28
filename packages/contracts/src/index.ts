@@ -79,6 +79,7 @@ export * from "./ui-forms.js";
 export * from "./chat.js";
 export * from "./chat-history.js";
 export * from "./chat-capability-profile.js";
+export * from "./work-passport.js";
 export * from "./routed-context.js";
 export * from "./canonical-json.js";
 export * from "./admin.js";

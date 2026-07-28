@@ -196,6 +196,8 @@ export interface MissionControlActiveSessionSurfaceProps {
   routePreflight: RoutingPreflightResult | null;
   routePreflightLoading: boolean;
   routePreflightError: string | null;
+  /** Recompute the frozen preflight after an explicit Work Passport correction. */
+  onWorkPassportBaselineChanged?: () => Promise<void>;
   routeBoundaryAckRequired: boolean;
   routeBoundaryAcknowledged: boolean;
   sending: boolean;

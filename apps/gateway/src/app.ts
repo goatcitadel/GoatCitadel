@@ -44,6 +44,7 @@ import { mobileRoutes } from "./routes/mobile.js";
 import { onboardingRoutes } from "./routes/onboarding.js";
 import { demoRoutes } from "./routes/demo.js";
 import { memoryRoutes } from "./routes/memory.js";
+import { workPassportRoutes } from "./routes/work-passport.js";
 import { journeyRoutes } from "./routes/journey.js";
 import { npuRoutes } from "./routes/npu.js";
 import { uiChangeRiskRoutes } from "./routes/ui-change-risk.js";
@@ -398,6 +399,7 @@ export async function buildApp() {
     await app.register(onboardingRoutes);
     await app.register(demoRoutes);
     await app.register(memoryRoutes);
+    await app.register(workPassportRoutes);
     await app.register(journeyRoutes);
     await app.register(npuRoutes);
     await app.register(uiChangeRiskRoutes);

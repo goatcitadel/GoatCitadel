@@ -11,6 +11,7 @@ import {
   type McpRequesterResolutionBinding,
   type McpRequesterResolutionBindingMaterial,
   type ToolPolicyActorContext,
+  type WorkPassportRecord,
 } from "@goatcitadel/contracts";
 import { verifyChatTurnCapabilityProfile } from "@goatcitadel/storage";
 import {
@@ -289,6 +290,38 @@ function configureSafeRead(deps: ChatTurnCapabilityProfileResolveDeps): void {
 }
 
 describe("resolveChatTurnCapabilityProfile", () => {
+  it("freezes the Work Passport into preview, selection, and integrity verification", async () => {
+    const { deps } = buildDeps();
+    const workPassport: WorkPassportRecord = {
+      passportId: "work-passport-test",
+      schemaVersion: "work.passport.v1",
+      classificationMode: "deterministic_local_v1",
+      baseline: { configured: true, roleLabel: "Engineer", primaryDomains: ["engineering"], revision: 2 },
+      taskSignals: [{ domain: "legal", strength: "medium", reasons: ["legal and contract cues"] }],
+      boundary: "cross_domain",
+      consequence: "high",
+      review: {
+        posture: "domain_expert_required",
+        reason: "Consequential work in a high-stakes domain.",
+        requirements: ["Obtain accountable domain review."],
+      },
+      evidenceRequirements: ["Cite current primary sources."],
+      actionPosture: "approval_before_external_action",
+      limitations: ["Not an occupation or competence assessment."],
+      operatorCorrectionAllowed: true,
+    };
+    deps.classifyWorkPassport = vi.fn(() => workPassport);
+
+    const resolution = await resolveChatTurnCapabilityProfile(deps, buildInput());
+
+    expect(resolution.profile.selection.workPassport).toEqual(workPassport);
+    expect(resolution.preview.workPassport).toEqual(workPassport);
+    expect(() => verifyChatTurnCapabilityProfile(resolution.profile)).not.toThrow();
+    const tampered = structuredClone(resolution.profile);
+    if (tampered.selection.workPassport) tampered.selection.workPassport.boundary = "within_baseline";
+    expect(() => verifyChatTurnCapabilityProfile(tampered)).toThrow(/selectionHash verification/);
+  });
+
   it("freezes the exact canonical callable set, effective route, provenance, policy, and readiness", async () => {
     const { deps, inspectable, callable, listCapabilityCatalog, resolveToolSchema } = buildDeps();
     const resolution = await resolveChatTurnCapabilityProfile(deps, buildInput());

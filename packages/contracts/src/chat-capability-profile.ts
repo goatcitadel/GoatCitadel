@@ -11,6 +11,7 @@ import type { ToolGrantConstraints, ToolGrantDecision, ToolGrantScope, ToolGrant
 import type { ToolApprovalMode } from "./policy.js";
 import type { CapabilityCategory, SkillLifecycleState } from "./capabilities.js";
 import type { McpRequesterResolutionBinding } from "./mcp.js";
+import type { WorkPassportRecord } from "./work-passport.js";
 
 export const CHAT_TURN_CAPABILITY_PROFILE_VERSION = "chat.turn.capability-profile.v1" as const;
 
@@ -155,6 +156,8 @@ export interface ChatTurnCapabilityProfileSelection {
   tools: ChatTurnCapabilityToolDefinition[];
   modelNameAllowMap: ChatTurnCapabilityModelNameBinding[];
   trustedSkills: ChatTurnCapabilityTrustedSkill[];
+  /** Frozen task-boundary and review contract. It never grants capabilities. */
+  workPassport?: WorkPassportRecord;
 }
 
 export interface ChatTurnCapabilityGrantSnapshot {
@@ -245,6 +248,7 @@ export interface ChatTurnCapabilityProfilePreview {
   approval: ChatTurnCapabilityApprovalPosture;
   authReadiness: ChatTurnCapabilityAuthReadiness[];
   blockedReasons: string[];
+  workPassport?: WorkPassportRecord;
   /** Stable provider/model/capability-selection dimension used for history compaction. */
   compactionDimensionHash?: string;
 }

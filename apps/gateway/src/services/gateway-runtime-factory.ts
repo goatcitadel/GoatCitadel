@@ -8,6 +8,7 @@ import type { ReviewReadinessService } from "./review-readiness-service.js";
 import type { RuntimeAuthorityProjectionService } from "./runtime-authority-projection-service.js";
 import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
 import type { SharedHostLifecycleAdmissionPort } from "./shared-host-lifecycle-service.js";
+import type { WorkPassportService } from "./work-passport-service.js";
 
 type GatewayLogger = {
   debug: (...args: unknown[]) => void;
@@ -21,6 +22,7 @@ export interface GatewayRuntimePort {
   readonly mutationIdempotencyStore: MutationIdempotencyStore;
   readonly reviewReadinessService: ReviewReadinessService;
   readonly runtimeAuthorityProjectionService: RuntimeAuthorityProjectionService;
+  readonly workPassportService: WorkPassportService;
   readonly routeServices: GatewayRouteServices;
   attachDevDiagnosticsLogger(logger: GatewayLogger): void;
   init(): Promise<void>;
@@ -120,6 +122,9 @@ function createGatewayRuntimeFacade(gateway: GatewayService): GatewayRuntimeInst
     },
     get runtimeAuthorityProjectionService() {
       return gateway.runtimeAuthorityProjectionService;
+    },
+    get workPassportService() {
+      return gateway.workPassportService;
     },
     get routeServices() {
       return gateway.routeServices;

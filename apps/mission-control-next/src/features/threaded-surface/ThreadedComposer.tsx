@@ -796,7 +796,13 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
         </div>
       ) : null}
 
-      {capabilityProfile ? <ChatCapabilityProfilePreflight profile={capabilityProfile} /> : null}
+      {capabilityProfile ? (
+        <ChatCapabilityProfilePreflight
+          profile={capabilityProfile}
+          workspaceId={props.workspaceId}
+          onBaselineUpdated={props.onWorkPassportBaselineChanged}
+        />
+      ) : null}
 
       {props.routeBoundaryAckRequired && !props.routeBoundaryAcknowledged ? (
         <div className="mc-next-composer-banner warning">

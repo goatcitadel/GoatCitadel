@@ -3765,6 +3765,14 @@ export function MissionThreadedControllerHost({
         routePreflight: currentRoutePreflight,
         routePreflightLoading: routePreflight.loading,
         routePreflightError: routePreflight.error,
+        onWorkPassportBaselineChanged: async () => {
+          await routePreflight.ensureFreshPreflight({
+            action: editingTurnId ? "edit" : "send",
+            turnId: editingTurnId,
+            content: draft,
+            force: true,
+          });
+        },
         routeBoundaryAckRequired,
         routeBoundaryAcknowledged: currentRouteBoundaryAcknowledged,
         sending,

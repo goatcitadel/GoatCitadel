@@ -176,6 +176,76 @@
   word-break: break-all;
 }
 
+.mc-next-work-passport {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.65rem;
+  border: 1px solid color-mix(in oklab, var(--gc-risk-safe) 34%, var(--mc-border-subtle));
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--gc-risk-safe) 6%, var(--mc-surface-1));
+}
+
+.mc-next-work-passport-summary,
+.mc-next-work-passport-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.mc-next-work-passport-summary > div:first-child,
+.mc-next-work-passport-detail,
+.mc-next-work-passport-editor {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.mc-next-work-passport-summary span,
+.mc-next-work-passport-actions span,
+.mc-next-work-passport-limitation {
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+}
+
+.mc-next-work-passport-detail section,
+.mc-next-work-passport-editor fieldset {
+  margin: 0;
+  padding: 0.65rem;
+  border: 1px solid var(--mc-border-subtle);
+  border-radius: var(--r-xs);
+}
+
+.mc-next-work-passport-editor > label {
+  display: grid;
+  gap: 0.35rem;
+  font-size: var(--text-xs);
+}
+
+.mc-next-work-passport-editor input[type="text"] {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--mc-border-subtle);
+  border-radius: var(--r-xs);
+  color: var(--foreground);
+  background: var(--mc-surface-2);
+}
+
+.mc-next-work-passport-domain-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.38rem 0.7rem;
+  margin-top: 0.5rem;
+}
+
+.mc-next-work-passport-domain-grid label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  text-transform: capitalize;
+}
+
 @media (width < 720px) {
   .mc-next-capability-profile-head {
     display: grid;
@@ -189,5 +259,15 @@
 
   .mc-next-capability-profile-preflight {
     padding-inline: 0.52rem;
+  }
+
+  .mc-next-work-passport-summary,
+  .mc-next-work-passport-actions {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .mc-next-work-passport-domain-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

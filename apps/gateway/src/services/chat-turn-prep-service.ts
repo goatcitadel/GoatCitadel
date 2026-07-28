@@ -1355,11 +1355,19 @@ export function upsertChatCapabilityProfileSystemInstruction(
   );
   const toolNames = profile.selection.tools.map((tool) => tool.canonicalName);
   const skillIds = profile.selection.trustedSkills.map((skill) => skill.skillId);
+  const passport = profile.selection.workPassport;
   const instruction = [
     `Server-owned capability profile: ${profile.profileId} (${profile.hashes.profileHash}).`,
     `Callable tools for this turn: ${toolNames.length > 0 ? toolNames.join(", ") : "none"}.`,
     `Trusted skills for this turn: ${skillIds.length > 0 ? skillIds.join(", ") : "none"}.`,
     `Memory scope: ${profile.selection.memory.mode}/${profile.selection.memory.retrievalMode}.`,
+    ...(passport
+      ? [
+          `Work Passport: boundary=${passport.boundary}; consequence=${passport.consequence}; review=${passport.review.posture}; action=${passport.actionPosture}.`,
+          `Work Passport requirements: ${passport.evidenceRequirements.join(" ") || "Check material facts and assumptions."}`,
+          "Treat the Work Passport as an advisory task/review contract, not an assessment of the operator. State material uncertainty and do not represent review as completed unless evidence shows it.",
+        ]
+      : []),
     "Treat this profile as an immutable upper bound. Capabilities not listed here are unavailable for this turn.",
   ].join("\n");
   const insertionIndex = withoutPriorBinding.findIndex((message) => message.role !== "system");
