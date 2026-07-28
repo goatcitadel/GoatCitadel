@@ -143,9 +143,76 @@ export interface ReviewFindingInput {
   priority?: TaskPriority;
   summary?: string;
   evidenceRef?: string;
+  severity?: ReviewFindingSeverity;
+  whyItMatters?: string;
+  confidence?: ReviewFindingConfidence;
+  evidence?: ReviewFindingEvidence[];
+  preExisting?: boolean;
+  fixClass?: ReviewFindingFixClass;
+  ownerRole?: string;
+  suggestedFix?: string;
+  requiresVerification?: boolean;
+  testingGaps?: string[];
+  residualRisks?: string[];
+}
+
+export type ReviewFindingSeverity = "p0" | "p1" | "p2" | "p3";
+export type ReviewFindingConfidence = 0 | 25 | 50 | 75 | 100;
+export type ReviewFindingFixClass = "approval_gated" | "manual" | "advisory";
+export type ReviewRunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+
+export interface ReviewFindingEvidence {
+  path?: string;
+  startLine?: number;
+  endLine?: number;
+  quote?: string;
+  artifactRef?: string;
+}
+
+export interface ReviewFindingRecord extends ReviewFindingInput {
+  findingId: string;
+  reviewRunId: string;
+  severity: ReviewFindingSeverity;
+  confidence: ReviewFindingConfidence;
+  preExisting: boolean;
+  fixClass: ReviewFindingFixClass;
+  requiresVerification: boolean;
+  status: "open" | "accepted" | "dismissed" | "fix_requested" | "verified" | "closed";
+  linkedTaskId?: string;
+  fixApprovalId?: string;
+  fixedByCodeModeRunId?: string;
+  followUpReviewRunId?: string;
+  verificationEvidence?: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ReviewRunRecord {
+  reviewRunId: string;
+  source: "native" | "external_import";
+  status: ReviewRunStatus;
+  rootPath: string;
+  reviewedSha: string;
+  diffHash: string;
+  changedFiles: string[];
+  reviewerRoster: string[];
+  preflight?: {
+    participantCount: number;
+    reviewerLensCount: number;
+    estimatedReviewCalls: number;
+    tokenBudget: number;
+    costBudgetUsd: number;
+  };
+  modelReceipts: Array<{ role: string; providerId?: string; model?: string; runId?: string }>;
+  assemblyRunId?: string;
+  findings: ReviewFindingRecord[];
+  createdAt: string;
+  finishedAt?: string;
+  error?: string;
 }
 
 export interface ReviewFindingImportResult {
+  reviewRunId?: string;
   importedAt: string;
   created: TaskRecord[];
   updated: TaskRecord[];

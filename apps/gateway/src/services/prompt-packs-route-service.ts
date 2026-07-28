@@ -17,6 +17,13 @@ export interface PromptPacksRoutePort {
   runPromptPackBenchmark: PromptPackService["runPromptPackBenchmark"];
   getPromptPackBenchmarkStatus: PromptPackService["getPromptPackBenchmarkStatus"];
   cancelPromptPackBenchmark: PromptPackService["cancelPromptPackBenchmark"];
+  createPromptRetuneCampaign: PromptPackService["createPromptRetuneCampaign"];
+  listPromptRetuneCampaigns: PromptPackService["listPromptRetuneCampaigns"];
+  getPromptRetuneCampaign: PromptPackService["getPromptRetuneCampaign"];
+  startPromptRetuneNoise: PromptPackService["startPromptRetuneNoise"];
+  startPromptRetuneCandidate: PromptPackService["startPromptRetuneCandidate"];
+  setPromptRetunePassDisposition: PromptPackService["setPromptRetunePassDisposition"];
+  cancelPromptRetuneCampaign: PromptPackService["cancelPromptRetuneCampaign"];
   runPromptPackReplayRegression: PromptPackService["runPromptPackReplayRegression"];
   getPromptPackReplayRegressionStatus: PromptPackService["getPromptPackReplayRegressionStatus"];
   getPromptPackCapabilityTrends: PromptPackService["getPromptPackCapabilityTrends"];
@@ -98,6 +105,44 @@ export class PromptPacksRouteService {
 
   public cancelPromptPackBenchmark(benchmarkRunId: string) {
     return this.promptPacks.cancelPromptPackBenchmark(benchmarkRunId);
+  }
+
+  public createPromptRetuneCampaign(
+    packId: string,
+    input: Parameters<PromptPacksRoutePort["createPromptRetuneCampaign"]>[1],
+  ) {
+    return this.promptPacks.createPromptRetuneCampaign(packId, input);
+  }
+
+  public listPromptRetuneCampaigns(packId: string) {
+    return this.promptPacks.listPromptRetuneCampaigns(packId);
+  }
+
+  public getPromptRetuneCampaign(campaignId: string) {
+    return this.promptPacks.getPromptRetuneCampaign(campaignId);
+  }
+
+  public startPromptRetuneNoise(campaignId: string) {
+    return this.promptPacks.startPromptRetuneNoise(campaignId);
+  }
+
+  public startPromptRetuneCandidate(
+    campaignId: string,
+    input: Parameters<PromptPacksRoutePort["startPromptRetuneCandidate"]>[1],
+  ) {
+    return this.promptPacks.startPromptRetuneCandidate(campaignId, input);
+  }
+
+  public setPromptRetunePassDisposition(
+    campaignId: string,
+    passId: string,
+    input: Parameters<PromptPacksRoutePort["setPromptRetunePassDisposition"]>[2],
+  ) {
+    return this.promptPacks.setPromptRetunePassDisposition(campaignId, passId, input);
+  }
+
+  public cancelPromptRetuneCampaign(campaignId: string) {
+    return this.promptPacks.cancelPromptRetuneCampaign(campaignId);
   }
 
   public runPromptPackReplayRegression(

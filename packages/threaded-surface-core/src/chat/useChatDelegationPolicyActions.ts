@@ -101,6 +101,8 @@ export interface ActiveChatDelegationStep {
   durableRunId?: string;
   childSessionId?: string;
   childTurnId?: string;
+  workResult?: ChatDelegationStepRecord["workResult"];
+  scopeControl?: ChatDelegationStepRecord["scopeControl"];
 }
 
 export interface ActiveChatDelegationRun {
@@ -133,6 +135,8 @@ function toActiveDelegationStep(step: ChatDelegationStepRecord): ActiveChatDeleg
     durableRunId: step.durableRunId,
     childSessionId: step.childSessionId,
     childTurnId: step.childTurnId,
+    workResult: step.workResult,
+    scopeControl: step.scopeControl,
   };
 }
 

@@ -1,4 +1,8 @@
-import type { PromptPackBenchmarkStatusRecord, PromptPackReportRecord } from "@goatcitadel/contracts";
+import type {
+  PromptPackBenchmarkStatusRecord,
+  PromptPackReportRecord,
+  PromptRetuneCampaignRecord,
+} from "@goatcitadel/contracts";
 import type {
   fetchPromptPackReplayRegressionStatus,
   fetchPromptPackTrends,
@@ -23,6 +27,8 @@ export interface InsightsTabProps {
   trendSeries: TrendSeries;
   benchmarkStatus: PromptPackBenchmarkStatusRecord | null;
   regressionStatus: RegressionStatus;
+  retuneEnabled: boolean;
+  retuneCampaign: PromptRetuneCampaignRecord | null;
 }
 
 export function InsightsTab({
@@ -32,6 +38,8 @@ export function InsightsTab({
   trendSeries,
   benchmarkStatus,
   regressionStatus,
+  retuneEnabled,
+  retuneCampaign,
 }: InsightsTabProps) {
   const { blockers: readinessBlockers, complete: readyForFullPass } = computePassReadiness(report?.summary);
 
@@ -148,6 +156,48 @@ export function InsightsTab({
                       <td>{Math.round(item.latencyDeltaMs)} ms</td>
                     </tr>
                   ))}
+                </tbody>
+              </table>
+            </div>
+          </details>
+        ) : null}
+        {retuneEnabled && retuneCampaign ? (
+          <details className="mc-pp-evidence-details" open>
+            <summary>Retune campaign evidence</summary>
+            <p className="mc-pp-note">
+              Status: <strong>{retuneCampaign.status}</strong> · frozen prompt{" "}
+              {retuneCampaign.baselineContentSha256.slice(0, 12)} · {retuneCampaign.repeatCount} repetitions
+              {retuneCampaign.noiseFloor
+                ? ` · weighted-score noise ${retuneCampaign.noiseFloor.weightedScore.toFixed(2)}`
+                : " · A/A noise pending"}
+            </p>
+            <div className="mc-pp-table-wrap">
+              <table className="mc-pp-table">
+                <thead>
+                  <tr>
+                    <th>Pass</th>
+                    <th>Hypothesis</th>
+                    <th>Benchmarks</th>
+                    <th>Eligibility</th>
+                    <th>Disposition</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {retuneCampaign.passes.length > 0 ? (
+                    retuneCampaign.passes.map((pass) => (
+                      <tr key={pass.passId}>
+                        <td>{pass.kind === "noise" ? "A/A noise" : "Candidate"}</td>
+                        <td>{pass.hypothesis}</td>
+                        <td>{pass.benchmarkRunIds.length}</td>
+                        <td>{pass.eligibility ?? "pending"}</td>
+                        <td>{pass.disposition}</td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={5}>No measurement pass has started.</td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>

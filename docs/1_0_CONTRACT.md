@@ -132,6 +132,8 @@ That means:
 
 ## Release Gates
 
+The compound-engineering capabilities documented in [docs/COMPOUND_ENGINEERING.md](./COMPOUND_ENGINEERING.md) are additive, default-off experiments. Their presence does not expand the `1.0` claim until their focused proof lanes, storage parity, packaged UI evidence, and an explicit flag-enablement decision are recorded.
+
 GoatCitadel may not claim `1.0` until all of these are true:
 
 The gate list below is the runtime/product readiness contract. Release-certificate-only evidence such as

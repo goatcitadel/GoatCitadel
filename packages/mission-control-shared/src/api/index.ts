@@ -25,3 +25,4 @@ export * from "./model-comparisons.js";
 export * from "./personal-ops.js";
 export * from "./ops-saved-boards.js";
 export * from "./work-passport.js";
+export * from "./engineering-learnings.js";

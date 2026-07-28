@@ -1593,6 +1593,8 @@ export interface ChatDelegationStepRecord {
   childSessionId?: string;
   childTurnId?: string;
   citations?: ChatCitationRecord[];
+  workResult?: import("./agentic-runtime.js").DelegatedWorkResult;
+  scopeControl?: import("./agentic-runtime.js").DelegatedFilesystemScopeControl;
 }
 
 export interface ChatDelegationRunRecord {

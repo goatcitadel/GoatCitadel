@@ -1,5 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
-import { downloadFile, fetchMemoryFiles, fetchMemoryQmdStats } from "@goatcitadel/mission-control-shared/api/client";
+import {
+  downloadFile,
+  fetchMemoryFiles,
+  fetchMemoryQmdStats,
+  fetchSettings,
+} from "@goatcitadel/mission-control-shared/api/client";
+import {
+  fetchEngineeringLearnings,
+  requestEngineeringLearningAction,
+} from "@goatcitadel/mission-control-shared/api/client";
+import type { EngineeringLearningStatus } from "@goatcitadel/contracts";
 import { NativeCard } from "../NativeRoutePageLayout";
 import type { NativeRoutePagesProps } from "../types";
 import {
@@ -41,22 +51,36 @@ export function LibraryKnowledgeSection(props: NativeRoutePagesProps) {
   const { activeWorkspaceId, activeWorkspaceName } = props;
   const [selectedFilePath, setSelectedFilePath] = useState("");
   const [search, setSearch] = useState("");
+  const [learningStatus, setLearningStatus] = useState<EngineeringLearningStatus | "all">("all");
+  const [selectedLearningId, setSelectedLearningId] = useState("");
+  const [learningActionMessage, setLearningActionMessage] = useState("");
   const [preview, setPreview] = useState<LoadState<{ content: string; contentType: string }>>({
     loading: false,
     error: null,
     data: null,
   });
   const { loading, error, data, reload } = useAsyncLoad(async () => {
-    const [files, qmd] = await Promise.all([
+    const settings = await nativeLoad("Runtime settings", fetchSettings(), null);
+    const learningsEnabled = settings.data?.features.engineeringLearningsV1Enabled === true;
+    const [files, qmd, learnings] = await Promise.all([
       nativeLoad("Memory files", fetchMemoryFiles("memory"), { items: [] }),
       nativeLoad("QMD stats", fetchMemoryQmdStats(undefined, undefined, 8), null),
+      learningsEnabled
+        ? nativeLoad(
+            "Engineering learnings",
+            fetchEngineeringLearnings({ workspaceId: activeWorkspaceId, limit: 200 }),
+            { items: [] },
+          )
+        : Promise.resolve({ data: { items: [] }, issue: null }),
     ]);
     return {
-      issues: nativeLoadIssues([files, qmd]),
+      issues: nativeLoadIssues([settings, files, qmd, learnings]),
       files: files.data.items,
       qmd: qmd.data,
+      learnings: learnings.data.items,
+      learningsEnabled,
     };
-  }, []);
+  }, [activeWorkspaceId]);
 
   const visibleFiles = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -64,6 +88,12 @@ export function LibraryKnowledgeSection(props: NativeRoutePagesProps) {
   }, [data?.files, search]);
   const selectedFile = visibleFiles.find((item) => item.relativePath === selectedFilePath) ?? null;
   const citationCount = data?.qmd?.recent.reduce((total, item) => total + item.citations.length, 0) ?? 0;
+  const visibleLearnings = useMemo(
+    () => (data?.learnings ?? []).filter((item) => learningStatus === "all" || item.status === learningStatus),
+    [data?.learnings, learningStatus],
+  );
+  const selectedLearning =
+    visibleLearnings.find((item) => item.learningId === selectedLearningId) ?? visibleLearnings[0] ?? null;
 
   useEffect(() => {
     if (!visibleFiles.length) {
@@ -74,6 +104,23 @@ export function LibraryKnowledgeSection(props: NativeRoutePagesProps) {
       visibleFiles.some((item) => item.relativePath === current) ? current : (visibleFiles[0]?.relativePath ?? ""),
     );
   }, [visibleFiles]);
+
+  useEffect(() => {
+    setSelectedLearningId((current) =>
+      visibleLearnings.some((item) => item.learningId === current) ? current : (visibleLearnings[0]?.learningId ?? ""),
+    );
+  }, [visibleLearnings]);
+
+  async function requestLearningAction(action: "activate" | "reject" | "archive") {
+    if (!selectedLearning) return;
+    setLearningActionMessage("Requesting approval…");
+    try {
+      const approval = await requestEngineeringLearningAction(selectedLearning.learningId, { action });
+      setLearningActionMessage(`Approval ${approval.approvalId} is pending.`);
+    } catch (actionError) {
+      setLearningActionMessage(actionError instanceof Error ? actionError.message : String(actionError));
+    }
+  }
 
   useEffect(() => {
     if (!selectedFilePath) {
@@ -288,6 +335,139 @@ export function LibraryKnowledgeSection(props: NativeRoutePagesProps) {
           </NativeCard>
         </div>
       </div>
+      {data?.learningsEnabled ? (
+        <div className="mc-next-settings-grid">
+          <NativeCard
+            title="Engineering learnings"
+            subtitle="Source-grounded code-work lessons stay proposed until approval and are excluded when stale."
+            stats={[
+              { label: "Records", value: String(data?.learnings.length ?? 0) },
+              {
+                label: "Active",
+                value: String((data?.learnings ?? []).filter((item) => item.status === "active").length),
+              },
+            ]}
+          >
+            <label className="mc-next-settings-field">
+              <span>Status</span>
+              <select
+                className="mc-next-settings-input"
+                value={learningStatus}
+                onChange={(event) => setLearningStatus(event.target.value as EngineeringLearningStatus | "all")}
+              >
+                <option value="all">All</option>
+                {(["proposed", "active", "stale", "superseded", "rejected", "archived"] as const).map((status) => (
+                  <option key={status} value={status}>
+                    {status}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <LibrarySelectableList
+              items={visibleLearnings.map((item) => ({
+                id: item.learningId,
+                title: item.title,
+                meta: `${item.status} · ${item.applicablePaths.length} path(s)`,
+                body: truncateText(item.problem, 150),
+              }))}
+              selectedId={selectedLearning?.learningId ?? ""}
+              onSelect={setSelectedLearningId}
+              emptyLabel="No engineering learnings match this workspace and status."
+            />
+          </NativeCard>
+          <NativeCard
+            title={selectedLearning?.title ?? "Learning evidence"}
+            subtitle={
+              selectedLearning
+                ? `${selectedLearning.status} · source run ${selectedLearning.source.runId}`
+                : "Select a learning."
+            }
+          >
+            {selectedLearning ? (
+              <>
+                <LibraryMetricGrid
+                  items={[
+                    {
+                      label: "Freshness",
+                      value: selectedLearning.status === "stale" ? "stale" : "current",
+                      meta: selectedLearning.staleReasons?.join(", ") ?? "Recorded hashes still match.",
+                    },
+                    {
+                      label: "Evidence",
+                      value: String(selectedLearning.verificationEvidence.length),
+                      meta: selectedLearning.verificationEvidence.join(", ") || "No evidence",
+                    },
+                    {
+                      label: "Paths",
+                      value: String(selectedLearning.applicablePaths.length),
+                      meta: selectedLearning.applicablePaths.join(", "),
+                    },
+                  ]}
+                />
+                <LibraryActionList
+                  items={[
+                    {
+                      id: "problem",
+                      label: "Problem",
+                      description: selectedLearning.problem,
+                      meta: `Root cause: ${selectedLearning.rootCause}`,
+                    },
+                    {
+                      id: "resolution",
+                      label: "Resolution",
+                      description: selectedLearning.resolution,
+                      meta: `Prevention: ${selectedLearning.prevention}`,
+                    },
+                  ]}
+                />
+                <div className="mc-next-settings-button-row">
+                  {selectedLearning.status === "proposed" ? (
+                    <button
+                      type="button"
+                      className="mc-next-settings-filter"
+                      onClick={() => void requestLearningAction("activate")}
+                    >
+                      Request activation
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="mc-next-settings-filter"
+                    onClick={() => void requestLearningAction("reject")}
+                  >
+                    Reject
+                  </button>
+                  <button
+                    type="button"
+                    className="mc-next-settings-filter"
+                    onClick={() => void requestLearningAction("archive")}
+                  >
+                    Archive
+                  </button>
+                  <button
+                    type="button"
+                    className="mc-next-settings-filter"
+                    onClick={() =>
+                      props.navigate({
+                        area: "ops",
+                        section: "sessions",
+                        view: "run-detail",
+                        runId: selectedLearning.source.runId,
+                        theme: props.route.theme,
+                      })
+                    }
+                  >
+                    Open source run
+                  </button>
+                </div>
+                {learningActionMessage ? <p>{learningActionMessage}</p> : null}
+              </>
+            ) : (
+              <LibraryEmptyState label="Select a learning to inspect provenance and freshness." />
+            )}
+          </NativeCard>
+        </div>
+      ) : null}
       <LibraryExternalSourcesSection
         workspaceId={activeWorkspaceId}
         onConfigureAccess={() => props.navigate({ area: "settings", section: "access", theme: props.route.theme })}

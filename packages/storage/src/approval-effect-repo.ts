@@ -164,12 +164,14 @@ export class ApprovalEffectRepository {
         CASE effect_kind
           WHEN 'approval_wait_materialize' THEN 0
           WHEN 'approval_resolution_signals' THEN 1
-          WHEN 'pending_action_execute' THEN 2
-          WHEN 'approval_wait_wake' THEN 3
-          WHEN 'proactive_run_wake' THEN 4
-          WHEN 'linked_chat_turn_wake' THEN 5
-          WHEN 'orchestration_parent_wake' THEN 6
-          ELSE 7
+          WHEN 'delegation_scope_expansion_apply' THEN 2
+          WHEN 'engineering_learning_lifecycle_apply' THEN 2
+          WHEN 'pending_action_execute' THEN 3
+          WHEN 'approval_wait_wake' THEN 4
+          WHEN 'proactive_run_wake' THEN 5
+          WHEN 'linked_chat_turn_wake' THEN 6
+          WHEN 'orchestration_parent_wake' THEN 7
+          ELSE 8
         END ASC,
         created_at ASC,
         effect_id ASC

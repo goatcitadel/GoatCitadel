@@ -4,6 +4,8 @@ import type {
   ChatDelegationStepRecord,
   ChatDelegationStepStatus,
   ChatSessionDelegationParentRecord,
+  DelegatedFilesystemScopeControl,
+  DelegatedWorkResult,
 } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
@@ -30,6 +32,8 @@ interface ChatDelegationStepRow {
   dispatch_claim_expires_at: string | null;
   citations_json: string | null;
   degraded_handoff_step_ids_json: string | null;
+  work_result_json: string | null;
+  scope_control_json: string | null;
   started_at: string;
   finished_at: string | null;
   duration_ms: number | null;
@@ -99,11 +103,13 @@ export class ChatDelegationStepRepository {
       INSERT INTO chat_delegation_steps (
         step_id, run_id, role, label, step_index, status, parallelizable, depends_on_step_ids_json,
         provider_id, model, summary, output, error, started_at, finished_at, duration_ms
-        , failure_guidance, durable_run_id, child_session_id, child_turn_id, citations_json, degraded_handoff_step_ids_json
+        , failure_guidance, durable_run_id, child_session_id, child_turn_id, citations_json, degraded_handoff_step_ids_json,
+        work_result_json, scope_control_json
       ) VALUES (
         @stepId, @runId, @role, @label, @index, @status, @parallelizable, @dependsOnStepIdsJson,
         @providerId, @model, @summary, @output, @error, @startedAt, @finishedAt, @durationMs,
-        @failureGuidance, @durableRunId, @childSessionId, @childTurnId, @citationsJson, @degradedHandoffStepIdsJson
+        @failureGuidance, @durableRunId, @childSessionId, @childTurnId, @citationsJson, @degradedHandoffStepIdsJson,
+        @workResultJson, @scopeControlJson
       )
     `);
     this.patchStmt = db.prepare(`
@@ -132,6 +138,8 @@ export class ChatDelegationStepRepository {
         END,
         citations_json = @citationsJson,
         degraded_handoff_step_ids_json = @degradedHandoffStepIdsJson,
+        work_result_json = @workResultJson,
+        scope_control_json = @scopeControlJson,
         started_at = @startedAt,
         finished_at = @finishedAt,
         duration_ms = @durationMs
@@ -147,6 +155,7 @@ export class ChatDelegationStepRepository {
         failure_guidance = @failureGuidance,
         durable_run_id = COALESCE(@durableRunId, durable_run_id),
         citations_json = @citationsJson,
+        work_result_json = @workResultJson,
         finished_at = @finishedAt,
         duration_ms = @durationMs,
         dispatch_claim_token = NULL,
@@ -297,6 +306,7 @@ export class ChatDelegationStepRepository {
               durable_run_id = COALESCE(CAST(@durableRunId AS TEXT), durable_run_id),
               child_turn_id = @childTurnId,
               citations_json = @citationsJson,
+              work_result_json = @workResultJson,
               finished_at = @finishedAt,
               duration_ms = @durationMs,
               dispatch_claim_token = CASE WHEN @status = 'running' THEN dispatch_claim_token ELSE NULL END,
@@ -322,6 +332,7 @@ export class ChatDelegationStepRepository {
               durable_run_id = COALESCE(@durableRunId, durable_run_id),
               child_turn_id = @childTurnId,
               citations_json = @citationsJson,
+              work_result_json = @workResultJson,
               finished_at = @finishedAt,
               duration_ms = @durationMs,
               dispatch_claim_token = CASE WHEN @status = 'running' THEN dispatch_claim_token ELSE NULL END,
@@ -443,6 +454,8 @@ export class ChatDelegationStepRepository {
     childTurnId?: string;
     citations?: ChatCitationRecord[];
     degradedHandoffStepIds?: string[];
+    workResult?: DelegatedWorkResult;
+    scopeControl?: DelegatedFilesystemScopeControl;
     startedAt?: string;
     finishedAt?: string;
     durationMs?: number;
@@ -468,6 +481,8 @@ export class ChatDelegationStepRepository {
       citationsJson: input.citations ? JSON.stringify(input.citations) : null,
       degradedHandoffStepIdsJson:
         input.degradedHandoffStepIds !== undefined ? JSON.stringify(input.degradedHandoffStepIds) : null,
+      workResultJson: input.workResult ? JSON.stringify(input.workResult) : null,
+      scopeControlJson: input.scopeControl ? JSON.stringify(input.scopeControl) : null,
       startedAt: input.startedAt ?? new Date().toISOString(),
       finishedAt: input.finishedAt ?? null,
       durationMs: input.durationMs ?? null,
@@ -493,6 +508,8 @@ export class ChatDelegationStepRepository {
       childTurnId?: string | null;
       citations?: ChatCitationRecord[];
       degradedHandoffStepIds?: string[];
+      workResult?: DelegatedWorkResult;
+      scopeControl?: DelegatedFilesystemScopeControl;
       startedAt?: string;
       finishedAt?: string;
       durationMs?: number;
@@ -529,6 +546,18 @@ export class ChatDelegationStepRepository {
             : current.degradedHandoffStepIds !== undefined
               ? JSON.stringify(current.degradedHandoffStepIds)
               : null,
+        workResultJson:
+          input.workResult !== undefined
+            ? JSON.stringify(input.workResult)
+            : current.workResult
+              ? JSON.stringify(current.workResult)
+              : null,
+        scopeControlJson:
+          input.scopeControl !== undefined
+            ? JSON.stringify(input.scopeControl)
+            : current.scopeControl
+              ? JSON.stringify(current.scopeControl)
+              : null,
         startedAt: input.startedAt ?? current.startedAt,
         finishedAt: input.finishedAt !== undefined ? input.finishedAt : (current.finishedAt ?? null),
         durationMs: input.durationMs !== undefined ? input.durationMs : (current.durationMs ?? null),
@@ -552,6 +581,7 @@ export class ChatDelegationStepRepository {
     failureGuidance?: string;
     durableRunId?: string;
     citations: ChatCitationRecord[];
+    workResult?: DelegatedWorkResult;
     finishedAt: string;
     durationMs?: number;
   }): ChatDelegationApprovalMaterializationResult {
@@ -586,6 +616,7 @@ export class ChatDelegationStepRepository {
         failureGuidance: input.failureGuidance ?? null,
         durableRunId: input.durableRunId ?? null,
         citationsJson: JSON.stringify(input.citations),
+        workResultJson: input.workResult ? JSON.stringify(input.workResult) : null,
         finishedAt: input.finishedAt,
         durationMs: durationMs === undefined ? null : Math.max(0, Math.floor(durationMs)),
       });
@@ -762,6 +793,7 @@ export class ChatDelegationStepRepository {
     failureGuidance?: string;
     durableRunId?: string;
     citations: ChatCitationRecord[];
+    workResult?: DelegatedWorkResult;
     finishedAt?: string;
     durationMs?: number;
   }): ChatDelegationStepRecord | undefined {
@@ -780,6 +812,7 @@ export class ChatDelegationStepRepository {
       failureGuidance: input.failureGuidance ?? null,
       durableRunId: input.durableRunId ?? null,
       citationsJson: JSON.stringify(input.citations),
+      workResultJson: input.workResult ? JSON.stringify(input.workResult) : null,
       finishedAt: input.finishedAt ?? null,
       durationMs: input.durationMs === undefined ? null : Math.max(0, Math.floor(input.durationMs)),
     });
@@ -907,6 +940,12 @@ function isChatDelegationStepRow(value: unknown): value is ChatDelegationStepRow
     (typeof value.degraded_handoff_step_ids_json === "string" ||
       value.degraded_handoff_step_ids_json === null ||
       value.degraded_handoff_step_ids_json === undefined) &&
+    (typeof value.work_result_json === "string" ||
+      value.work_result_json === null ||
+      value.work_result_json === undefined) &&
+    (typeof value.scope_control_json === "string" ||
+      value.scope_control_json === null ||
+      value.scope_control_json === undefined) &&
     typeof value.started_at === "string" &&
     (typeof value.finished_at === "string" || value.finished_at === null) &&
     (typeof value.duration_ms === "number" || value.duration_ms === null)
@@ -956,7 +995,41 @@ function mapRow(row: ChatDelegationStepRow): ChatDelegationStepRecord {
     childTurnId: row.child_turn_id ?? undefined,
     citations: parseCitations(row.citations_json),
     degradedHandoffStepIds: parseStringArray(row.degraded_handoff_step_ids_json),
+    workResult: parseWorkResult(row.work_result_json),
+    scopeControl: parseScopeControl(row.scope_control_json),
   };
+}
+
+function parseScopeControl(raw: string | null | undefined): DelegatedFilesystemScopeControl | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = safeJsonParse<unknown>(raw, undefined);
+  if (
+    !isRecord(parsed) ||
+    typeof parsed.rootPath !== "string" ||
+    !Array.isArray(parsed.approvedPaths) ||
+    typeof parsed.scopeHash !== "string" ||
+    typeof parsed.dispatchGeneration !== "string" ||
+    typeof parsed.updatedAt !== "string"
+  ) {
+    return undefined;
+  }
+  return parsed as unknown as DelegatedFilesystemScopeControl;
+}
+
+function parseWorkResult(raw: string | null | undefined): DelegatedWorkResult | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = safeJsonParse<unknown>(raw, undefined);
+  if (!isRecord(parsed)) {
+    return undefined;
+  }
+  if (!["completed", "blocked", "scope_expansion"].includes(String(parsed.disposition))) {
+    return undefined;
+  }
+  return parsed as unknown as DelegatedWorkResult;
 }
 
 function parseCitations(raw: string | null): ChatCitationRecord[] | undefined {

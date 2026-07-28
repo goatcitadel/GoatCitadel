@@ -1,16 +1,26 @@
+/* eslint-disable max-lines -- Review readiness keeps roster selection, persisted findings, and follow-up verification in one audited service boundary. */
 import fs from "node:fs";
 import path from "node:path";
+import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import type {
+  AssemblyParticipantModel,
+  AssemblyRunDetailResponse,
+  AssemblyRunRecord,
+  CodeModeRunRecord,
+  CreateAssemblyRunInput,
   ReleaseIdentityReasonCode,
   ReviewFindingImportResult,
   ReviewFindingInput,
+  ReviewFindingRecord,
+  ReviewRunRecord,
   ReviewReadinessLane,
   ReviewReadinessSummary,
   RuntimeBuildIdentity,
   TaskRecord,
 } from "@goatcitadel/contracts";
 import { redactStructuredSecrets } from "@goatcitadel/contracts";
+import type { StructuredReviewRepository } from "@goatcitadel/storage";
 import type { TaskLifecycleService } from "./task-lifecycle-service.js";
 import type { RuntimeReleaseTrustReader, RuntimeReleaseTrustSnapshot } from "./runtime-release-trust-service.js";
 import {
@@ -35,6 +45,20 @@ export interface ReviewReadinessServiceDependencies {
   runtimeEnv?: Readonly<Record<string, string | undefined>>;
   gitRunner?: (args: string[], cwd: string) => string | undefined;
   releaseTrust?: RuntimeReleaseTrustReader;
+  structuredReviews?: StructuredReviewRepository;
+  requireFeatureEnabled?: (flag: "structuredReviewV2Enabled") => void;
+  isFeatureEnabled?: (flag: "structuredReviewV2Enabled") => boolean;
+  createAssemblyRun?: (input: CreateAssemblyRunInput) => Promise<AssemblyRunRecord>;
+  getAssemblyRunDetail?: (runId: string) => AssemblyRunDetailResponse;
+  createCodeModeRun?: (input: {
+    language: "typescript";
+    source: string;
+    originSurface: "chat";
+    operatorId?: string;
+    requestedOutputIntent: string;
+    aider: { requestMarkdown: string; repositoryRootRelPath?: string };
+  }) => Promise<CodeModeRunRecord>;
+  appendAudit?: (payload: Record<string, unknown>) => void;
   taskLifecycleService: Pick<
     TaskLifecycleService,
     "appendTaskActivity" | "appendTaskDeliverable" | "createTask" | "listTasks" | "updateTask"
@@ -54,6 +78,8 @@ const MAX_JSON_BYTES = 2 * 1024 * 1024;
 const MAX_CERTIFICATE_ITEMS = 256;
 const FULL_GIT_SHA = /^[a-f0-9]{40}$/i;
 const SHA256 = /^[a-f0-9]{64}$/i;
+const MAX_STRUCTURED_REVIEW_DIFF_BYTES = 512 * 1024;
+const STRUCTURED_REVIEW_BASE_ROSTER = ["general_correctness", "test_coverage"] as const;
 export const REQUIRED_RELEASE_PROOF_LANE_NAMES = [
   "verify:fast",
   "verify:runtime:truth",
@@ -117,14 +143,24 @@ export class ReviewReadinessService {
     const created: TaskRecord[] = [];
     const updated: TaskRecord[] = [];
     const skipped: ReviewFindingInput[] = [];
-    const existingByKey = new Map(this.listReviewTasks().map((task) => [extractReviewKey(task), task]));
-
+    const normalizedFindings: ReviewFindingInput[] = [];
     for (const finding of input.findings) {
       const normalized = normalizeFinding(finding);
-      if (!normalized) {
+      if (!normalized || !validateStructuredFinding(normalized)) {
         skipped.push(finding);
-        continue;
+      } else {
+        normalizedFindings.push(normalized);
       }
+    }
+    const reviewRunId =
+      normalizedFindings.length > 0 &&
+      this.deps.structuredReviews &&
+      this.deps.isFeatureEnabled?.("structuredReviewV2Enabled")
+        ? this.createExternalReviewRun(normalizedFindings, importedAt)
+        : undefined;
+    const existingByKey = new Map(this.listReviewTasks().map((task) => [extractReviewKey(task), task]));
+
+    for (const normalized of normalizedFindings) {
       const key = buildFindingKey(normalized);
       const existing = existingByKey.get(key);
       if (existing) {
@@ -142,6 +178,9 @@ export class ReviewReadinessService {
         appendEvidenceDeliverable(this.deps.taskLifecycleService, task.taskId, normalized);
         updated.push(task);
         existingByKey.set(key, task);
+        if (reviewRunId) {
+          this.persistStructuredFinding(reviewRunId, normalized, task.taskId, importedAt);
+        }
         continue;
       }
       const task = this.deps.taskLifecycleService.createTask({
@@ -160,9 +199,252 @@ export class ReviewReadinessService {
       appendEvidenceDeliverable(this.deps.taskLifecycleService, task.taskId, normalized);
       created.push(task);
       existingByKey.set(key, task);
+      if (reviewRunId) {
+        this.persistStructuredFinding(reviewRunId, normalized, task.taskId, importedAt);
+      }
     }
 
-    return { importedAt, created, updated, skipped };
+    this.deps.appendAudit?.({
+      event: "structured_review.findings_imported",
+      reviewRunId,
+      findingCount: normalizedFindings.length,
+      skippedCount: skipped.length,
+      actorId: input.actorId,
+    });
+    return { reviewRunId, importedAt, created, updated, skipped };
+  }
+
+  public async startStructuredReview(input: {
+    participants: AssemblyParticipantModel[];
+    actorId?: string;
+    workspaceId?: string;
+    sourceSessionId?: string;
+    sourceTaskId?: string;
+    costBudgetUsd?: number;
+    tokenBudget?: number;
+  }): Promise<ReviewRunRecord> {
+    this.requireStructuredReviewFeature();
+    if (!this.deps.structuredReviews || !this.deps.createAssemblyRun) {
+      throw new Error("Structured review runtime is unavailable.");
+    }
+    if (input.participants.length < 1 || input.participants.length > 6) {
+      throw new Error("Structured review requires between one and six Assembly participants.");
+    }
+    const reviewedSha = this.git(["rev-parse", "HEAD"]) || "unknown";
+    const diff = this.readFrozenReviewDiff();
+    const changedFiles = this.readChangedFileInventory();
+    if (changedFiles.length < 1) {
+      throw new Error("Structured review requires a non-empty diff inventory.");
+    }
+    const diffHash = sha256(diff);
+    const reviewerRoster = buildStructuredReviewRoster(changedFiles);
+    const tokenBudget = Math.max(1_000, Math.min(250_000, input.tokenBudget ?? 50_000));
+    const costBudgetUsd = Math.max(0, Math.min(1_000, input.costBudgetUsd ?? 10));
+    const preflight: NonNullable<ReviewRunRecord["preflight"]> = {
+      participantCount: input.participants.length,
+      reviewerLensCount: reviewerRoster.length,
+      estimatedReviewCalls: input.participants.length,
+      tokenBudget,
+      costBudgetUsd,
+    };
+    const reviewRunId = `review-${randomUUID()}`;
+    const createdAt = new Date().toISOString();
+    this.deps.structuredReviews.createRun({
+      reviewRunId,
+      source: "native",
+      status: "queued",
+      rootPath: this.deps.rootDir,
+      reviewedSha,
+      diffHash,
+      changedFiles,
+      reviewerRoster,
+      preflight,
+      modelReceipts: [],
+      findings: [],
+      createdAt,
+    });
+
+    try {
+      const assembly = await this.deps.createAssemblyRun({
+        workspaceId: input.workspaceId,
+        sourceSessionId: input.sourceSessionId,
+        sourceTaskId: input.sourceTaskId,
+        title: `Structured code review ${reviewedSha.slice(0, 8)}`,
+        prompt: buildStructuredReviewPrompt({ reviewedSha, diffHash, changedFiles, reviewerRoster, diff }),
+        contextRefs: changedFiles.map((file) => ({ kind: "file" as const, ref: file, label: file })),
+        settings: {
+          mode: "critique",
+          participantModels: input.participants,
+          maxRounds: 1,
+          maxCritiquePasses: 1,
+          maxInterModelExchanges: Math.max(1, input.participants.length * 2),
+          convergenceThreshold: 0.8,
+          stagnationWindow: 1,
+          timeBudgetMs: 300_000,
+          tokenBudget,
+          costBudgetUsd,
+          domainPreset: "coding",
+          synthesisStyle: "detailed",
+          exportTargets: ["artifact"],
+        },
+        adversarialSettings: {
+          enabled: true,
+          reviewerCount: Math.min(2, input.participants.length),
+          selectionStrategy: "rotate_among_participants",
+          strictness: "balanced",
+          requireMitigations: true,
+          requireEvidenceTags: true,
+          defenseRoundEnabled: false,
+          repetitiveObjectionCutoff: true,
+          minorityReportRequired: true,
+        },
+      });
+      const modelReceipts = reviewerRoster.flatMap((role, index) => {
+        const participant = input.participants[index % input.participants.length];
+        return participant
+          ? [{ role, providerId: participant.providerId, model: participant.model, runId: assembly.runId }]
+          : [];
+      });
+      this.deps.structuredReviews.updateRun(reviewRunId, { status: "running", modelReceipts });
+      this.deps.appendAudit?.({
+        event: "structured_review.started",
+        reviewRunId,
+        assemblyRunId: assembly.runId,
+        reviewedSha,
+        diffHash,
+        reviewerRoster,
+        actorId: input.actorId,
+      });
+    } catch (error) {
+      this.deps.structuredReviews.updateRun(reviewRunId, {
+        status: "failed",
+        modelReceipts: [],
+        error: error instanceof Error ? error.message : String(error),
+        finishedAt: new Date().toISOString(),
+      });
+    }
+    return this.getStructuredReviewRun(reviewRunId);
+  }
+
+  public listStructuredReviewRuns(limit = 50): { items: ReviewRunRecord[] } {
+    this.requireStructuredReviewFeature();
+    if (!this.deps.structuredReviews) {
+      return { items: [] };
+    }
+    return { items: this.deps.structuredReviews.listRuns(limit).map((run) => this.refreshStructuredReviewRun(run)) };
+  }
+
+  public getStructuredReviewRun(reviewRunId: string): ReviewRunRecord {
+    this.requireStructuredReviewFeature();
+    const run = this.deps.structuredReviews?.getRun(reviewRunId);
+    if (!run) {
+      throw new Error(`Structured review run not found: ${reviewRunId}`);
+    }
+    return this.refreshStructuredReviewRun(run);
+  }
+
+  public acceptStructuredReviewFinding(
+    findingId: string,
+    input: { actorId?: string; mirrorToTask?: boolean } = {},
+  ): ReviewFindingRecord {
+    this.requireStructuredReviewFeature();
+    const finding = this.readStructuredReviewFinding(findingId);
+    if (!finding) {
+      throw new Error(`Structured review finding not found: ${findingId}`);
+    }
+    let linkedTaskId = finding.linkedTaskId;
+    if (input.mirrorToTask !== false && !linkedTaskId) {
+      linkedTaskId = this.createTaskForStructuredFinding(finding, input.actorId).taskId;
+    }
+    return this.updateStructuredReviewFinding(finding, {
+      status: "accepted",
+      linkedTaskId,
+    });
+  }
+
+  public dismissStructuredReviewFinding(findingId: string, actorId?: string): ReviewFindingRecord {
+    this.requireStructuredReviewFeature();
+    const finding = this.readStructuredReviewFinding(findingId);
+    if (!finding) {
+      throw new Error(`Structured review finding not found: ${findingId}`);
+    }
+    this.deps.appendAudit?.({ event: "structured_review.finding_dismissed", findingId, actorId });
+    return this.updateStructuredReviewFinding(finding, { status: "dismissed" });
+  }
+
+  public async requestStructuredReviewFix(findingId: string, actorId?: string): Promise<ReviewFindingRecord> {
+    this.requireStructuredReviewFeature();
+    if (!this.deps.createCodeModeRun) {
+      throw new Error("Code Mode runtime is unavailable.");
+    }
+    const finding = this.readStructuredReviewFinding(findingId);
+    if (!finding) {
+      throw new Error(`Structured review finding not found: ${findingId}`);
+    }
+    if (finding.fixClass === "advisory") {
+      throw new Error("Advisory findings cannot enter the fix workflow.");
+    }
+    const reviewRun = this.getStructuredReviewRun(finding.reviewRunId);
+    const currentDiffHash = sha256(this.readFrozenReviewDiff());
+    if (currentDiffHash !== reviewRun.diffHash) {
+      throw new Error("The reviewed diff changed; run a fresh structured review before requesting a fix.");
+    }
+    const run = await this.deps.createCodeModeRun({
+      language: "typescript",
+      source: "export const structuredReviewFixRequest = true;\n",
+      originSurface: "chat",
+      operatorId: actorId,
+      requestedOutputIntent: `Fix structured review finding ${finding.findingId}`,
+      aider: {
+        repositoryRootRelPath: ".",
+        requestMarkdown: buildStructuredReviewFixRequest(finding, reviewRun),
+      },
+    });
+    const updated = this.updateStructuredReviewFinding(finding, {
+      status: "fix_requested",
+      fixApprovalId: run.approvalId,
+      fixedByCodeModeRunId: run.runId,
+    });
+    this.deps.appendAudit?.({
+      event: "structured_review.fix_requested",
+      findingId,
+      reviewRunId: finding.reviewRunId,
+      codeModeRunId: run.runId,
+      approvalId: run.approvalId,
+      actorId,
+    });
+    return updated;
+  }
+
+  public closeStructuredReviewFinding(
+    findingId: string,
+    input: { verificationEvidence: string[]; followUpReviewRunId: string; actorId?: string },
+  ): ReviewFindingRecord {
+    this.requireStructuredReviewFeature();
+    const finding = this.readStructuredReviewFinding(findingId);
+    if (!finding) {
+      throw new Error(`Structured review finding not found: ${findingId}`);
+    }
+    const evidence = input.verificationEvidence.map((item) => item.trim()).filter(Boolean);
+    if (evidence.length < 1) {
+      throw new Error("Closing a review finding requires verification evidence.");
+    }
+    const followUp = this.getStructuredReviewRun(input.followUpReviewRunId);
+    if (followUp.status !== "completed") {
+      throw new Error("Closing a review finding requires a completed follow-up review.");
+    }
+    const updated = this.updateStructuredReviewFinding(finding, {
+      status: "closed",
+      verificationEvidence: evidence,
+      followUpReviewRunId: followUp.reviewRunId,
+    });
+    this.deps.appendAudit?.({
+      event: "structured_review.finding_closed",
+      findingId,
+      followUpReviewRunId: followUp.reviewRunId,
+      actorId: input.actorId,
+    });
+    return updated;
   }
 
   public getRuntimeIdentity(): RuntimeBuildIdentity {
@@ -172,6 +454,151 @@ export class ReviewReadinessService {
   public async refreshRuntimeReleaseTrust(): Promise<ReviewReadinessSummary> {
     await this.deps.releaseTrust?.requestRefresh({ force: true, reason: "operator" });
     return this.getReadiness();
+  }
+
+  private requireStructuredReviewFeature(): void {
+    this.deps.requireFeatureEnabled?.("structuredReviewV2Enabled");
+  }
+
+  private createExternalReviewRun(findings: ReviewFindingInput[], createdAt: string): string {
+    const reviewRunId = `review-${randomUUID()}`;
+    const reviewedSha = this.git(["rev-parse", "HEAD"]) || "unknown";
+    const changedFiles = Array.from(new Set(findings.flatMap((finding) => finding.files))).sort();
+    const diffHash = sha256(JSON.stringify(findings));
+    this.deps.structuredReviews!.createRun({
+      reviewRunId,
+      source: "external_import",
+      status: "completed",
+      rootPath: this.deps.rootDir,
+      reviewedSha,
+      diffHash,
+      changedFiles,
+      reviewerRoster: ["external_import"],
+      preflight: undefined,
+      modelReceipts: [],
+      findings: [],
+      createdAt,
+      finishedAt: createdAt,
+    });
+    return reviewRunId;
+  }
+
+  private persistStructuredFinding(
+    reviewRunId: string,
+    input: ReviewFindingInput,
+    linkedTaskId: string | undefined,
+    createdAt = new Date().toISOString(),
+    status: ReviewFindingRecord["status"] = "accepted",
+  ): ReviewFindingRecord {
+    if (!this.deps.structuredReviews) {
+      throw new Error("Structured review storage is unavailable.");
+    }
+    const record = materializeStructuredReviewFinding(reviewRunId, input, createdAt, status, linkedTaskId);
+    return this.deps.structuredReviews.createFinding(record);
+  }
+
+  private refreshStructuredReviewRun(run: ReviewRunRecord): ReviewRunRecord {
+    if ((run.status !== "queued" && run.status !== "running") || !this.deps.getAssemblyRunDetail) {
+      return run;
+    }
+    const assemblyRunId = run.modelReceipts.find((receipt) => receipt.runId)?.runId;
+    if (!assemblyRunId) {
+      return run;
+    }
+    let detail: AssemblyRunDetailResponse;
+    try {
+      detail = this.deps.getAssemblyRunDetail(assemblyRunId);
+    } catch {
+      return run;
+    }
+    if (detail.run.status === "queued" || detail.run.status === "running") {
+      return run;
+    }
+    const finishedAt = detail.run.finishedAt ?? new Date().toISOString();
+    const status: ReviewRunRecord["status"] =
+      detail.run.status === "completed" ? "completed" : detail.run.status === "stopped" ? "cancelled" : "failed";
+    if (status === "completed" && this.listStructuredReviewFindings(run.reviewRunId).length === 0) {
+      for (const finding of extractAssemblyReviewFindings(detail)) {
+        if (validateStructuredFinding(finding)) {
+          this.persistStructuredFinding(run.reviewRunId, finding, undefined, finishedAt, "open");
+        }
+      }
+    }
+    return this.deps.structuredReviews!.updateRun(run.reviewRunId, {
+      status,
+      modelReceipts: run.modelReceipts,
+      finishedAt,
+      error: status === "failed" ? (detail.run.error ?? "Assembly review failed.") : undefined,
+    })!;
+  }
+
+  private listStructuredReviewFindings(reviewRunId: string): ReviewFindingRecord[] {
+    if (!this.deps.structuredReviews) {
+      return [];
+    }
+    return this.deps.structuredReviews.listFindings(reviewRunId);
+  }
+
+  private readStructuredReviewFinding(findingId: string): ReviewFindingRecord | undefined {
+    return this.deps.structuredReviews?.getFinding(findingId);
+  }
+
+  private updateStructuredReviewFinding(
+    finding: ReviewFindingRecord,
+    patch: Partial<ReviewFindingRecord>,
+  ): ReviewFindingRecord {
+    if (!this.deps.structuredReviews) {
+      throw new Error("Structured review storage is unavailable.");
+    }
+    const updated: ReviewFindingRecord = {
+      ...finding,
+      ...patch,
+      findingId: finding.findingId,
+      reviewRunId: finding.reviewRunId,
+      updatedAt: new Date().toISOString(),
+    };
+    return this.deps.structuredReviews.updateFinding(updated);
+  }
+
+  private createTaskForStructuredFinding(finding: ReviewFindingRecord, actorId?: string): TaskRecord {
+    const key = buildFindingKey(finding);
+    const task = this.deps.taskLifecycleService.createTask({
+      title: finding.title,
+      description: renderFindingDescription(key, finding),
+      status: "review",
+      priority: finding.priority ?? mapReviewSeverityToTaskPriority(finding.severity),
+      createdBy: "review-readiness",
+    });
+    this.deps.taskLifecycleService.appendTaskActivity(task.taskId, {
+      activityType: "diagnostic",
+      agentId: actorId,
+      message: `Structured review finding accepted from ${finding.reviewRunId}.`,
+      metadata: { reviewFindingKey: key, reviewRunId: finding.reviewRunId, findingId: finding.findingId },
+    });
+    appendEvidenceDeliverable(this.deps.taskLifecycleService, task.taskId, finding);
+    return task;
+  }
+
+  private readFrozenReviewDiff(): string {
+    const diff = this.git(["diff", "--no-ext-diff", "--unified=20", "HEAD", "--"]) ?? "";
+    const status = this.git(["status", "--porcelain=v1", "--untracked-files=all"]) ?? "";
+    const frozen = `${diff}\n\nUNTRACKED-AND-STATUS-INVENTORY\n${status}`;
+    return Buffer.byteLength(frozen, "utf8") > MAX_STRUCTURED_REVIEW_DIFF_BYTES
+      ? `${frozen.slice(0, MAX_STRUCTURED_REVIEW_DIFF_BYTES)}\n[diff truncated]`
+      : frozen;
+  }
+
+  private readChangedFileInventory(): string[] {
+    const status = this.git(["status", "--porcelain=v1", "--untracked-files=all"]) ?? "";
+    return Array.from(
+      new Set(
+        status
+          .split(/\r?\n/)
+          .map((line) => line.slice(3).trim())
+          .map((file) => (file.includes(" -> ") ? file.split(" -> ").at(-1)!.trim() : file))
+          .filter(Boolean),
+      ),
+    ).sort();
   }
 
   private resolveRuntimeIdentity(releaseTrustSnapshot?: RuntimeReleaseTrustSnapshot): RuntimeBuildIdentity {
@@ -845,6 +1272,208 @@ function isRegularFile(filePath: string): boolean {
   }
 }
 
+function sha256(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function materializeStructuredReviewFinding(
+  reviewRunId: string,
+  input: ReviewFindingInput,
+  createdAt: string,
+  status: ReviewFindingRecord["status"],
+  linkedTaskId?: string,
+): ReviewFindingRecord {
+  const severity = input.severity ?? mapTaskPriorityToReviewSeverity(input.priority);
+  return {
+    ...input,
+    findingId: `finding-${randomUUID()}`,
+    reviewRunId,
+    severity,
+    priority: input.priority ?? mapReviewSeverityToTaskPriority(severity),
+    confidence: input.confidence ?? 50,
+    preExisting: input.preExisting ?? false,
+    fixClass: input.fixClass ?? "approval_gated",
+    requiresVerification: input.requiresVerification ?? (severity === "p0" || severity === "p1"),
+    status,
+    linkedTaskId,
+    createdAt,
+    updatedAt: createdAt,
+  };
+}
+
+function mapTaskPriorityToReviewSeverity(
+  priority: TaskRecord["priority"] | undefined,
+): ReviewFindingRecord["severity"] {
+  return priority === "urgent" ? "p0" : priority === "high" ? "p1" : priority === "low" ? "p3" : "p2";
+}
+
+function mapReviewSeverityToTaskPriority(severity: ReviewFindingRecord["severity"]): TaskRecord["priority"] {
+  return severity === "p0" ? "urgent" : severity === "p1" ? "high" : severity === "p3" ? "low" : "normal";
+}
+
+export function validateStructuredFinding(finding: ReviewFindingInput): boolean {
+  const evidence = finding.evidence ?? [];
+  const hasConcreteEvidence =
+    evidence.some((item) => Boolean(item.artifactRef?.trim() || item.path?.trim() || item.quote?.trim())) ||
+    Boolean(finding.evidenceRef?.trim());
+  if ((finding.confidence ?? 0) >= 75 && !hasConcreteEvidence) {
+    return false;
+  }
+  if (finding.severity === "p0" || finding.severity === "p1") {
+    return Boolean(hasConcreteEvidence && finding.whyItMatters?.trim() && finding.requiresVerification);
+  }
+  return true;
+}
+
+export function buildStructuredReviewRoster(changedFiles: string[]): string[] {
+  const inventory = changedFiles.join("\n").toLowerCase();
+  const roster = [...STRUCTURED_REVIEW_BASE_ROSTER] as string[];
+  if (/(auth|policy|secret|network|tool|security|permission|allowlist)/.test(inventory)) {
+    roster.push("security");
+  }
+  if (/(storage|schema|migration|repository|repo\.|database|sqlite|postgres)/.test(inventory)) {
+    roster.push("storage");
+  }
+  if (/(route|component|\.tsx?$|\.css$|styles?|mission-control|accessibility|a11y)/.test(inventory)) {
+    roster.push("ui_accessibility");
+  }
+  if (/(orchestration|approval|capabilit|memory|delegat|durable|agentic|assembly)/.test(inventory)) {
+    roster.push("agentic_runtime");
+  }
+  if (/(config|packag|installer|deploy|docker|workflow|release|desktop|electron)/.test(inventory)) {
+    roster.push("ops_release");
+  }
+  return [...new Set(roster)];
+}
+
+function buildStructuredReviewPrompt(input: {
+  reviewedSha: string;
+  diffHash: string;
+  changedFiles: string[];
+  reviewerRoster: string[];
+  diff: string;
+}): string {
+  return [
+    "Perform a read-only structured code review. Do not propose or execute edits.",
+    `Reviewed SHA: ${input.reviewedSha}`,
+    `Frozen diff hash: ${input.diffHash}`,
+    `Required reviewer lenses: ${input.reviewerRoster.join(", ")}`,
+    `Changed files: ${input.changedFiles.join(", ")}`,
+    "Return the final recommendation as strict JSON with a top-level findings array.",
+    "Each finding must contain source, component, title, files, severity (p0-p3), whyItMatters, confidence (0/25/50/75/100), evidence, preExisting, fixClass (approval_gated/manual/advisory), ownerRole, suggestedFix, requiresVerification, testingGaps, and residualRisks.",
+    "Confidence 75+ requires concrete file/line/quote or artifact evidence. P0/P1 require concrete evidence, impact, and verification requirements. Return an empty findings array when no evidence-backed defects exist.",
+    "Frozen diff follows:",
+    input.diff,
+  ].join("\n\n");
+}
+
+function extractAssemblyReviewFindings(detail: AssemblyRunDetailResponse): ReviewFindingInput[] {
+  const candidates = [
+    detail.run.result?.recommendation,
+    ...detail.artifacts.flatMap((artifact) => {
+      const payload = artifact.payload as unknown as Record<string, unknown>;
+      return [payload.proposedSolution, payload.recommendation, payload.reasoning];
+    }),
+  ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+  for (const candidate of candidates) {
+    const parsed = parseStructuredReviewPayload(candidate);
+    if (parsed.length > 0 || /"findings"\s*:\s*\[\s*\]/.test(candidate)) {
+      return parsed;
+    }
+  }
+  return [];
+}
+
+function parseStructuredReviewPayload(raw: string): ReviewFindingInput[] {
+  const trimmed = raw
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/, "");
+  const attempts = [trimmed];
+  const objectStart = trimmed.indexOf("{");
+  const objectEnd = trimmed.lastIndexOf("}");
+  if (objectStart >= 0 && objectEnd > objectStart) {
+    attempts.push(trimmed.slice(objectStart, objectEnd + 1));
+  }
+  for (const attempt of attempts) {
+    try {
+      const parsed = JSON.parse(attempt) as unknown;
+      const items = Array.isArray(parsed)
+        ? parsed
+        : parsed && typeof parsed === "object" && Array.isArray((parsed as { findings?: unknown }).findings)
+          ? (parsed as { findings: unknown[] }).findings
+          : [];
+      return items.map(parseStructuredReviewFindingInput).filter((item): item is ReviewFindingInput => Boolean(item));
+    } catch {
+      continue;
+    }
+  }
+  return [];
+}
+
+function parseStructuredReviewFindingInput(value: unknown): ReviewFindingInput | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const confidence = [0, 25, 50, 75, 100].includes(Number(record.confidence))
+    ? (Number(record.confidence) as ReviewFindingRecord["confidence"])
+    : 50;
+  const severity = ["p0", "p1", "p2", "p3"].includes(String(record.severity))
+    ? (record.severity as ReviewFindingRecord["severity"])
+    : "p2";
+  const fixClass = ["approval_gated", "manual", "advisory"].includes(String(record.fixClass))
+    ? (record.fixClass as ReviewFindingRecord["fixClass"])
+    : "approval_gated";
+  const evidence = Array.isArray(record.evidence)
+    ? record.evidence
+        .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+        .map((item) => ({
+          path: typeof item.path === "string" ? item.path : undefined,
+          startLine: typeof item.startLine === "number" ? item.startLine : undefined,
+          endLine: typeof item.endLine === "number" ? item.endLine : undefined,
+          quote: typeof item.quote === "string" ? item.quote : undefined,
+          artifactRef: typeof item.artifactRef === "string" ? item.artifactRef : undefined,
+        }))
+    : [];
+  return normalizeFinding({
+    source: typeof record.source === "string" ? record.source : "assembly",
+    component: typeof record.component === "string" ? record.component : "code-review",
+    title: typeof record.title === "string" ? record.title : "Untitled review finding",
+    files: Array.isArray(record.files) ? record.files.filter((item): item is string => typeof item === "string") : [],
+    summary: typeof record.summary === "string" ? record.summary : undefined,
+    severity,
+    whyItMatters: typeof record.whyItMatters === "string" ? record.whyItMatters : undefined,
+    confidence,
+    evidence,
+    preExisting: record.preExisting === true,
+    fixClass,
+    ownerRole: typeof record.ownerRole === "string" ? record.ownerRole : undefined,
+    suggestedFix: typeof record.suggestedFix === "string" ? record.suggestedFix : undefined,
+    requiresVerification: record.requiresVerification === true,
+    testingGaps: Array.isArray(record.testingGaps)
+      ? record.testingGaps.filter((item): item is string => typeof item === "string")
+      : [],
+    residualRisks: Array.isArray(record.residualRisks)
+      ? record.residualRisks.filter((item): item is string => typeof item === "string")
+      : [],
+  });
+}
+
+function buildStructuredReviewFixRequest(finding: ReviewFindingRecord, run: ReviewRunRecord): string {
+  return [
+    `Fix structured review finding ${finding.findingId}.`,
+    `Reviewed SHA: ${run.reviewedSha}`,
+    `Frozen diff hash: ${run.diffHash}`,
+    `Severity: ${finding.severity}; confidence: ${finding.confidence}.`,
+    `Why it matters: ${finding.whyItMatters ?? finding.summary ?? finding.title}`,
+    `Files in scope: ${finding.files.join(", ")}`,
+    `Suggested fix: ${finding.suggestedFix ?? "Apply the smallest correct fix."}`,
+    `Required verification: ${finding.requiresVerification ? "yes" : "no"}.`,
+    "Keep the diff scoped to the listed files and return verification evidence. Do not bypass policy, approvals, or path jails.",
+  ].join("\n\n");
+}
+
 function normalizeFinding(input: ReviewFindingInput): ReviewFindingInput | undefined {
   const title = input.title.trim();
   const source = input.source.trim();
@@ -864,6 +1493,18 @@ function normalizeFinding(input: ReviewFindingInput): ReviewFindingInput | undef
     files,
     summary: input.summary?.trim() || undefined,
     evidenceRef: input.evidenceRef?.trim() || undefined,
+    whyItMatters: input.whyItMatters?.trim() || undefined,
+    ownerRole: input.ownerRole?.trim() || undefined,
+    suggestedFix: input.suggestedFix?.trim() || undefined,
+    evidence: input.evidence?.map((item) => ({
+      path: item.path?.trim() || undefined,
+      startLine: item.startLine,
+      endLine: item.endLine,
+      quote: item.quote?.trim() || undefined,
+      artifactRef: item.artifactRef?.trim() || undefined,
+    })),
+    testingGaps: input.testingGaps?.map((item) => item.trim()).filter(Boolean),
+    residualRisks: input.residualRisks?.map((item) => item.trim()).filter(Boolean),
   };
 }
 
@@ -880,6 +1521,10 @@ function renderFindingDescription(key: string, finding: ReviewFindingInput): str
     `Source: ${finding.source}`,
     `Component: ${finding.component}`,
     `Files: ${finding.files.join(", ")}`,
+    finding.severity ? `Severity: ${finding.severity}` : undefined,
+    finding.confidence !== undefined ? `Confidence: ${finding.confidence}` : undefined,
+    finding.whyItMatters ? `Why it matters: ${finding.whyItMatters}` : undefined,
+    finding.suggestedFix ? `Suggested fix: ${finding.suggestedFix}` : undefined,
     finding.evidenceRef ? `Evidence: ${finding.evidenceRef}` : undefined,
   ]
     .filter(Boolean)

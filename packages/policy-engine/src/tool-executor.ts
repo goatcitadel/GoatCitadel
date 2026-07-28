@@ -43,7 +43,11 @@ import {
 } from "./tool-executor/context-executor.js";
 import { executeFilesystemTool, isFilesystemToolName } from "./tool-executor/filesystem-executor.js";
 import { executeKnowledgeTool, isKnowledgeToolName } from "./tool-executor/knowledge-executor.js";
-import { executeScheduleManage, executeSubagentFanout } from "./tool-executor/schedule-agent-executor.js";
+import {
+  executeScheduleManage,
+  executeSubagentFanout,
+  executeSubmitWorkResult,
+} from "./tool-executor/schedule-agent-executor.js";
 export { killAllBackgroundProcesses, killBackgroundProcess } from "./tool-executor/background-processes.js";
 export { resolveFixedOutboundHostsForTool } from "./tool-executor/fixed-outbound-hosts.js";
 const execFileAsync = promisify(execFile);
@@ -123,6 +127,8 @@ export interface ToolExecutorRuntimeHooks {
     request: ToolInvokeRequest,
     input: DocumentPatchProposalToolInput,
   ) => Promise<Record<string, unknown>>;
+  /** Record a delegated worker result or approval-gated filesystem scope request. */
+  submitWorkResult?: (request: ToolInvokeRequest) => Promise<Record<string, unknown>>;
 }
 
 export type ToolProcessSpawnName = "shell.exec" | "shell.exec_background" | "tests.run" | "lint.run" | "build.run";
@@ -306,6 +312,8 @@ export async function executeTool(
       return finalizeToolResult(await executeScheduleManage(request, runtimeHooks));
     case "agent.fanout":
       return finalizeToolResult(await executeSubagentFanout(request, runtimeHooks));
+    case "submit_work_result":
+      return finalizeToolResult(await executeSubmitWorkResult(request, runtimeHooks));
     case "channel.send":
     case "channel.react":
     case "channel.unsend":

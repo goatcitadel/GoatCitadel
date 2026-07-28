@@ -9,6 +9,8 @@ import type {
   PromptPackHumanReviewRecordV2,
   PromptPackRecord,
   PromptPackReportRecord,
+  PromptRetuneCampaignRecord,
+  PromptRetuneSuccessBar,
   PromptPackRunRecord,
   PromptPackSecurityEvalPacksResponse,
   PromptPackSecurityQualityGatesResponse,
@@ -204,6 +206,7 @@ export async function runPromptPackReplayRegression(
   input: {
     testCodes: string[];
     baselineRef?: string;
+    baselineBenchmarkRunId?: string;
   },
 ): Promise<{ regressionRunId: string }> {
   return request<{ regressionRunId: string }>(
@@ -212,6 +215,68 @@ export async function runPromptPackReplayRegression(
       method: "POST",
       body: JSON.stringify(input),
     },
+  );
+}
+
+export async function createPromptRetuneCampaign(
+  packId: string,
+  input: {
+    testCodes: string[];
+    providers: Array<{ providerId: string; model: string }>;
+    executionStyle?: PromptPackExecutionStyle;
+    repeatCount?: number;
+    maxBenchmarkRuns?: number;
+    successBar?: Partial<PromptRetuneSuccessBar>;
+  },
+): Promise<PromptRetuneCampaignRecord> {
+  return request<PromptRetuneCampaignRecord>(`/api/v1/prompt-packs/${encodeURIComponent(packId)}/retune-campaigns`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function fetchPromptRetuneCampaigns(packId: string): Promise<{ items: PromptRetuneCampaignRecord[] }> {
+  return request<{ items: PromptRetuneCampaignRecord[] }>(
+    `/api/v1/prompt-packs/${encodeURIComponent(packId)}/retune-campaigns`,
+  );
+}
+
+export async function fetchPromptRetuneCampaign(campaignId: string): Promise<PromptRetuneCampaignRecord> {
+  return request<PromptRetuneCampaignRecord>(`/api/v1/prompt-packs/retune-campaigns/${encodeURIComponent(campaignId)}`);
+}
+
+export async function startPromptRetuneNoise(campaignId: string): Promise<PromptRetuneCampaignRecord> {
+  return request<PromptRetuneCampaignRecord>(
+    `/api/v1/prompt-packs/retune-campaigns/${encodeURIComponent(campaignId)}/noise`,
+    { method: "POST" },
+  );
+}
+
+export async function startPromptRetuneCandidate(
+  campaignId: string,
+  input: { hypothesis: string },
+): Promise<PromptRetuneCampaignRecord> {
+  return request<PromptRetuneCampaignRecord>(
+    `/api/v1/prompt-packs/retune-campaigns/${encodeURIComponent(campaignId)}/candidates`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export async function dispositionPromptRetunePass(
+  campaignId: string,
+  passId: string,
+  input: { disposition: "kept" | "rejected" | "inconclusive"; notes?: string },
+): Promise<PromptRetuneCampaignRecord> {
+  return request<PromptRetuneCampaignRecord>(
+    `/api/v1/prompt-packs/retune-campaigns/${encodeURIComponent(campaignId)}/passes/${encodeURIComponent(passId)}/disposition`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export async function cancelPromptRetuneCampaign(campaignId: string): Promise<PromptRetuneCampaignRecord> {
+  return request<PromptRetuneCampaignRecord>(
+    `/api/v1/prompt-packs/retune-campaigns/${encodeURIComponent(campaignId)}/cancel`,
+    { method: "POST" },
   );
 }
 

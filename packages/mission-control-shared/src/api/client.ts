@@ -647,6 +647,8 @@ export {
   autoScorePromptPackBatch,
   autoScorePromptPackTest,
   cancelPromptPackBenchmark,
+  cancelPromptRetuneCampaign,
+  createPromptRetuneCampaign,
   exportPromptPackReport,
   fetchPromptPackBuiltins,
   fetchPromptPackBenchmark,
@@ -657,6 +659,8 @@ export {
   fetchPromptPacks,
   fetchPromptPackTests,
   fetchPromptPackTrends,
+  fetchPromptRetuneCampaign,
+  fetchPromptRetuneCampaigns,
   importBuiltinPromptPack,
   importPromptPack,
   previewPromptPackImport,
@@ -665,7 +669,19 @@ export {
   runPromptPackReplayRegression,
   runPromptPackTest,
   scorePromptPackTest,
+  startPromptRetuneCandidate,
+  startPromptRetuneNoise,
+  dispositionPromptRetunePass,
 } from "./prompt-packs.js";
+export {
+  fetchEngineeringLearning,
+  fetchEngineeringLearningContext,
+  fetchEngineeringLearningOverlaps,
+  fetchEngineeringLearnings,
+  refreshEngineeringLearningFreshness,
+  requestEngineeringLearningAction,
+  submitEngineeringLearningProposal,
+} from "./engineering-learnings.js";
 export {
   activateImprovementCandidate,
   approveImprovementAutoTune,

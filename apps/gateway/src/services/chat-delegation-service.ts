@@ -223,6 +223,7 @@ export interface ChatDelegationServiceHost {
         failureGuidance?: string;
         durableRunId?: string;
         citations: ChatCitationRecord[];
+        workResult?: ChatDelegationStepRecord["workResult"];
         finishedAt?: string;
         durationMs?: number;
       }): ChatDelegationStepRecord | undefined;
@@ -356,6 +357,12 @@ export interface ChatDelegationServiceHost {
     mode?: ChatMode;
   }): ChatSessionRecord;
   inheritDelegatedSessionToolGrants(parentSessionId: string, childSessionId: string): void;
+  ensureSessionInternalToolGrant?(sessionId: string, toolName: string, reason: string): void;
+  resolveDelegatedFilesystemScope?(
+    parentSessionId: string,
+    dispatchGeneration: string,
+    current?: ChatDelegationStepRecord["scopeControl"],
+  ): ChatDelegationStepRecord["scopeControl"] | undefined;
   updateChatSessionPrefs(sessionId: string, patch: Partial<ChatSessionPrefsRecord>): ChatSessionPrefsRecord;
   resolveToolPolicyContext?(input: {
     operatorId?: string;
@@ -783,6 +790,15 @@ export class ChatDelegationService {
         registeredAgentSessionId = agentSessionId;
         childSessionId = agentSessionId;
         deps.inheritDelegatedSessionToolGrants(sessionId, agentSessionId);
+        const delegatedScope = deps.resolveDelegatedFilesystemScope?.(
+          sessionId,
+          dispatchLease.dispatchMarker,
+          runningStep.scopeControl,
+        );
+        if (delegatedScope) {
+          runningStep = deps.storage.chatDelegationSteps.patch(step.stepId, { scopeControl: delegatedScope });
+          deps.ensureSessionInternalToolGrant?.(agentSessionId, "submit_work_result", "delegated-work-result-envelope");
+        }
         deps.updateChatSessionPrefs(agentSessionId, {
           mode: executionMode,
           planningMode: "off",
@@ -912,13 +928,28 @@ export class ChatDelegationService {
           throw new Error(`Delegated child ${agentSessionId} returned without a canonical turn identity.`);
         }
         const traceStatus = response.trace?.status;
-        const waitingForApproval = traceStatus === "waiting_for_approval";
+        const latestStep = deps.storage.chatDelegationSteps.get(step.stepId);
+        const submittedWorkResult = latestStep.workResult;
+        const currentScopedWorkResult =
+          !latestStep.scopeControl ||
+          (submittedWorkResult?.scopeHash === latestStep.scopeControl.scopeHash &&
+            submittedWorkResult.dispatchGeneration === latestStep.scopeControl.dispatchGeneration);
+        const pendingScopeExpansion =
+          currentScopedWorkResult &&
+          submittedWorkResult?.disposition === "scope_expansion" &&
+          submittedWorkResult.scopeExpansion?.decision === undefined;
+        const blockedWorkResult = currentScopedWorkResult && submittedWorkResult?.disposition === "blocked";
+        const waitingForApproval = traceStatus === "waiting_for_approval" || pendingScopeExpansion;
         const waitingForUserInput = traceStatus === "waiting_for_user_input";
         const stillActive = traceStatus === "queued" || traceStatus === "running" || traceStatus === "waiting_for_tool";
         const waiting = waitingForApproval || waitingForUserInput || stillActive;
         const traceFailure = response.trace?.failure;
         const degradedFailure = !waiting && isIncompleteDelegatedTraceFailure(traceFailure);
-        const failed = traceStatus === "failed" || degradedFailure;
+        const missingScopedTerminalResult =
+          Boolean(latestStep.scopeControl) &&
+          !waiting &&
+          (!currentScopedWorkResult || submittedWorkResult?.disposition !== "completed");
+        const failed = traceStatus === "failed" || degradedFailure || blockedWorkResult || missingScopedTerminalResult;
         const cancelled = traceStatus === "cancelled";
         const incomplete = failed || cancelled;
         const stepStatus: ChatDelegationStepRecord["status"] = waiting
@@ -952,12 +983,17 @@ export class ChatDelegationService {
           label: step.role,
           summary: truncateSummaryLine(output, 180),
           output,
-          error: incomplete ? (response.trace?.failure?.message ?? output) : undefined,
+          error: missingScopedTerminalResult
+            ? "Delegated code work ended without a current submit_work_result completion envelope."
+            : incomplete
+              ? (response.trace?.failure?.message ?? output)
+              : undefined,
           failureGuidance: incomplete
             ? buildIncompleteDelegatedTraceFailureGuidance(traceFailure, output, step.role)
             : undefined,
           durableRunId: response.trace?.durable?.runId,
           citations: response.citations ?? [],
+          workResult: submittedWorkResult,
           ...(waiting
             ? {}
             : {
@@ -983,6 +1019,15 @@ export class ChatDelegationService {
           : incomplete
             ? "failed"
             : "completed";
+        const waitingProjectionStatus = pendingScopeExpansion
+          ? ("waiting_for_approval" as const)
+          : traceStatus === "queued" ||
+              traceStatus === "running" ||
+              traceStatus === "waiting_for_approval" ||
+              traceStatus === "waiting_for_tool" ||
+              traceStatus === "waiting_for_user_input"
+            ? traceStatus
+            : ("running" as const);
         const subagentPatch = {
           status: subagentStatus,
           ...(waiting ? {} : { endedAt: observedAt }),
@@ -999,7 +1044,7 @@ export class ChatDelegationService {
             handoffEvidence,
             waiting: waiting
               ? {
-                  status: traceStatus,
+                  status: waitingProjectionStatus,
                   reason: output,
                   childTurnId: responseTurnId,
                   durableRunId: response.trace?.durable?.runId,

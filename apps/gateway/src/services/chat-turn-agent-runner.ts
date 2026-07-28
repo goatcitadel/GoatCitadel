@@ -175,7 +175,11 @@ import {
   normalizeFailureSignature,
   rememberToolLoopHistory,
 } from "./chat-tool-loop.js";
-import { listReadOnlyBuiltinToolNames, SUBAGENT_FANOUT_TOOL_NAME } from "@goatcitadel/policy-engine";
+import {
+  listReadOnlyBuiltinToolNames,
+  SUBAGENT_FANOUT_TOOL_NAME,
+  SUBMIT_WORK_RESULT_TOOL_NAME,
+} from "@goatcitadel/policy-engine";
 import { MAX_PARALLEL_TOOL_CALLS, decideToolBatchParallelism } from "./chat-tool-parallelism.js";
 import {
   compactToolResultForExecutionProfile,
@@ -891,6 +895,8 @@ export interface ChatTurnAgentRunnerDeps {
    * an in-flight call cannot slip through a mid-turn flag flip).
    */
   subagentFanoutV1Disabled?: () => boolean;
+  /** Default-off delegated result/scope-expansion envelope exposure gate. */
+  delegationScopeExpansionV1Enabled?: () => boolean;
   /** Override only for deterministic liveness tests; production defaults to 5 seconds. */
   toolActivityHeartbeatMs?: number;
 }
@@ -4804,6 +4810,7 @@ export class ChatTurnAgentRunner {
       | "routedContextRequested"
       | "capabilityProfile"
       | "serverOnlyPosture"
+      | "parentDelegationStepId"
     >,
     intents: {
       liveData: boolean;
@@ -4897,6 +4904,11 @@ export class ChatTurnAgentRunner {
       this.deps.subagentFanoutV1Disabled?.() !== true;
     const routedContextToolsEligible =
       input.routedContextRequested === true && this.deps.attachedContextToolsV1Enabled?.() === true;
+    const delegatedWorkResultEligible =
+      input.mode === "chat" &&
+      Boolean(input.parentDelegationStepId?.trim()) &&
+      !restrictedAutonomousProfile &&
+      this.deps.delegationScopeExpansionV1Enabled?.() === true;
     for (const tool of catalog) {
       if (quickWebProfile && !QUICK_WEB_ALLOWED_TOOL_NAMES.has(tool.toolName)) {
         continue;
@@ -4913,6 +4925,9 @@ export class ChatTurnAgentRunner {
         continue;
       }
       if (tool.toolName === SUBAGENT_FANOUT_TOOL_NAME && !subagentFanoutEligible) {
+        continue;
+      }
+      if (tool.toolName === SUBMIT_WORK_RESULT_TOOL_NAME && !delegatedWorkResultEligible) {
         continue;
       }
       if (
@@ -5054,6 +5069,7 @@ export class ChatTurnAgentRunner {
       suppressLocalPathTools,
       subagentFanoutEligible,
       routedContextToolsEligible,
+      delegatedWorkResultEligible,
     });
     const toolTokenEstimateCache = new Map<string, number>();
     function cachedEstimateToolTokens(toolJson: string, toolName: string): number {
@@ -7320,6 +7336,7 @@ function buildEssentialToolSet(input: {
   suppressLocalPathTools?: boolean;
   subagentFanoutEligible?: boolean;
   routedContextToolsEligible?: boolean;
+  delegatedWorkResultEligible?: boolean;
 }): string[] {
   if (input.quickWebProfile) {
     return input.webMode === "off" ? [] : ["browser.search"];
@@ -7333,6 +7350,9 @@ function buildEssentialToolSet(input: {
   }
   if (input.routedContextToolsEligible) {
     for (const toolName of CHAT_ROUTED_CONTEXT_TOOL_NAMES) tools.add(toolName);
+  }
+  if (input.delegatedWorkResultEligible) {
+    tools.add(SUBMIT_WORK_RESULT_TOOL_NAME);
   }
   if (
     input.memoryLookupIntent ||

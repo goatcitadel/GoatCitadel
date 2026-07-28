@@ -6,6 +6,9 @@ const promptPackMocks = vi.hoisted(() => ({
   autoScorePromptPackBatch: vi.fn(),
   autoScorePromptPackTest: vi.fn(),
   cancelPromptPackBenchmark: vi.fn(),
+  cancelPromptRetuneCampaign: vi.fn(),
+  createPromptRetuneCampaign: vi.fn(),
+  dispositionPromptRetunePass: vi.fn(),
   exportPromptPackReport: vi.fn(),
   fetchPromptPackBenchmark: vi.fn(),
   fetchPromptPackExport: vi.fn(),
@@ -14,6 +17,8 @@ const promptPackMocks = vi.hoisted(() => ({
   fetchPromptPacks: vi.fn(),
   fetchPromptPackTests: vi.fn(),
   fetchPromptPackTrends: vi.fn(),
+  fetchPromptRetuneCampaign: vi.fn(),
+  fetchSettings: vi.fn(),
   importPromptPack: vi.fn(),
   loadModelsForProvider: vi.fn(),
   refreshCallback: undefined as undefined | (() => Promise<void>),
@@ -23,6 +28,8 @@ const promptPackMocks = vi.hoisted(() => ({
   runPromptPackReplayRegression: vi.fn(),
   runPromptPackTest: vi.fn(),
   scorePromptPackTest: vi.fn(),
+  startPromptRetuneCandidate: vi.fn(),
+  startPromptRetuneNoise: vi.fn(),
   providerCatalog: {
     config: { activeProviderId: "openai" },
     providers: [
@@ -36,6 +43,9 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   autoScorePromptPackBatch: promptPackMocks.autoScorePromptPackBatch,
   autoScorePromptPackTest: promptPackMocks.autoScorePromptPackTest,
   cancelPromptPackBenchmark: promptPackMocks.cancelPromptPackBenchmark,
+  cancelPromptRetuneCampaign: promptPackMocks.cancelPromptRetuneCampaign,
+  createPromptRetuneCampaign: promptPackMocks.createPromptRetuneCampaign,
+  dispositionPromptRetunePass: promptPackMocks.dispositionPromptRetunePass,
   exportPromptPackReport: promptPackMocks.exportPromptPackReport,
   fetchPromptPackBenchmark: promptPackMocks.fetchPromptPackBenchmark,
   fetchPromptPackExport: promptPackMocks.fetchPromptPackExport,
@@ -44,12 +54,16 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchPromptPacks: promptPackMocks.fetchPromptPacks,
   fetchPromptPackTests: promptPackMocks.fetchPromptPackTests,
   fetchPromptPackTrends: promptPackMocks.fetchPromptPackTrends,
+  fetchPromptRetuneCampaign: promptPackMocks.fetchPromptRetuneCampaign,
+  fetchSettings: promptPackMocks.fetchSettings,
   importPromptPack: promptPackMocks.importPromptPack,
   resetPromptPack: promptPackMocks.resetPromptPack,
   runPromptPackBenchmark: promptPackMocks.runPromptPackBenchmark,
   runPromptPackReplayRegression: promptPackMocks.runPromptPackReplayRegression,
   runPromptPackTest: promptPackMocks.runPromptPackTest,
   scorePromptPackTest: promptPackMocks.scorePromptPackTest,
+  startPromptRetuneCandidate: promptPackMocks.startPromptRetuneCandidate,
+  startPromptRetuneNoise: promptPackMocks.startPromptRetuneNoise,
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog", () => ({
@@ -77,6 +91,28 @@ const pack = {
   testCount: 3,
   createdAt: "2026-04-22T00:00:00.000Z",
   updatedAt: "2026-04-22T00:10:00.000Z",
+};
+
+const retuneCampaign = {
+  campaignId: "retune-1",
+  packId: "pack-1",
+  status: "draft",
+  baselineContentSha256: "prompt-hash",
+  policyHash: "policy-hash",
+  scoringSnapshot: { schemaVersion: "v3" },
+  testCodes: ["TEST-03", "TEST-06", "TEST-10", "TEST-12", "TEST-15", "TEST-28"],
+  providers: [{ providerId: "openai", model: "gpt-5" }],
+  executionStyle: "single_turn_harness",
+  repeatCount: 3,
+  maxBenchmarkRuns: 12,
+  successBar: {
+    minWeightedScoreDelta: 0,
+    requirePassRateNonRegression: true,
+    maxFailureRateDelta: 0,
+  },
+  passes: [],
+  createdAt: "2026-04-22T00:00:00.000Z",
+  updatedAt: "2026-04-22T00:00:00.000Z",
 };
 
 const tests = [
@@ -389,6 +425,9 @@ function buildReport() {
 }
 
 function setupApiSuccess() {
+  promptPackMocks.fetchSettings.mockResolvedValue({
+    features: { promptRetuneCampaignV1Enabled: false },
+  });
   promptPackMocks.fetchPromptPacks.mockResolvedValue({
     items: [
       pack,
@@ -446,6 +485,8 @@ function setupApiSuccess() {
   });
   promptPackMocks.runPromptPackReplayRegression.mockResolvedValue({ regressionRunId: "reg-1" });
   promptPackMocks.fetchPromptPackReplayRegressionStatus.mockResolvedValue(regressionStatus);
+  promptPackMocks.createPromptRetuneCampaign.mockResolvedValue(retuneCampaign);
+  promptPackMocks.fetchPromptRetuneCampaign.mockResolvedValue(retuneCampaign);
   promptPackMocks.resetPromptPack.mockResolvedValue({ deletedRuns: 3, deletedScores: 2 });
   promptPackMocks.importPromptPack.mockResolvedValue({
     pack: { ...pack, packId: "pack-imported", name: "Imported pack" },
@@ -585,6 +626,29 @@ describe("PromptPacksWorkbenchPage", () => {
     expect(readNodeText(renderer.root)).toContain("Assistant output");
     expect(readNodeText(renderer.root)).toContain("Assessment summary");
     expect(readNodeText(renderer.root)).toContain("Manual review");
+    expect(readNodeText(renderer.root)).not.toContain("Measurement-first retuning");
+  });
+
+  it("shows retune controls only when the runtime feature flag is enabled", async () => {
+    promptPackMocks.fetchSettings.mockResolvedValue({
+      features: { promptRetuneCampaignV1Enabled: true },
+    });
+    const renderer = await renderWorkbench();
+
+    expect(readNodeText(renderer.root)).toContain("Measurement-first retuning");
+    await click(findButton(renderer, "Create frozen campaign"));
+
+    expect(promptPackMocks.createPromptRetuneCampaign).toHaveBeenCalledWith(
+      "pack-1",
+      expect.objectContaining({
+        repeatCount: 3,
+        executionStyle: "single_turn_harness",
+        maxBenchmarkRuns: 12,
+      }),
+    );
+    expect(readNodeText(renderer.root)).toContain("Retune campaign retune-1 created with frozen inputs.");
+    expect(readNodeText(renderer.root)).toContain("Retune campaign evidence");
+    expect(readNodeText(renderer.root)).toContain("No measurement pass has started.");
   });
 
   it("drives the prompt-pack workbench through run, review, ops, reset, import, and refresh flows", async () => {
@@ -669,7 +733,7 @@ describe("PromptPacksWorkbenchPage", () => {
 
     await click(findButton(renderer, "Replay regression"));
     expect(promptPackMocks.runPromptPackReplayRegression).toHaveBeenCalledWith("pack-1", {
-      baselineRef: "bench-1",
+      baselineBenchmarkRunId: "bench-1",
       testCodes: ["TEST-03", "TEST-06", "TEST-10", "TEST-12", "TEST-15", "TEST-28"],
     });
     expect(readNodeText(renderer.root)).toContain("Replay regression completed");

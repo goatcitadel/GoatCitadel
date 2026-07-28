@@ -189,6 +189,7 @@ export interface CapabilitySystemServiceOptions {
     input: ChatSessionWorkbenchCommandRunRequest,
   ) => Promise<ChatSessionWorkbenchCommandRunResponse>;
   flushTranscriptOutbox?: () => Promise<number>;
+  onVerifiedCodeModeRun?: (response: CodeModeRunVerificationResponse) => void | Promise<void>;
   spawnCodeModeChild?: typeof spawn;
 }
 
@@ -1344,10 +1345,14 @@ export class CapabilitySystemService {
     }
     const run = this.getCodeModeRunInScope(runId, scope);
     const recorded = await this.codeModeVerification.verifyRun(run, request.commandName, operatorId);
-    return {
+    const response = {
       ...recorded,
       run: this.hydrateCodeModeRunForRead(recorded.run),
     };
+    if (response.evidence.status === "verified") {
+      await this.options.onVerifiedCodeModeRun?.(response);
+    }
+    return response;
   }
 
   public listCodeModeRunVerificationEvidence(

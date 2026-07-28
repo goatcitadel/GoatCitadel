@@ -134,6 +134,8 @@ export type ApprovalEffectKind =
   | "skill_lifecycle_apply"
   | "capability_lifecycle_apply"
   | "improvement_lifecycle_apply"
+  | "delegation_scope_expansion_apply"
+  | "engineering_learning_lifecycle_apply"
   | "approval_observability";
 
 export type ApprovalObservabilityAuditStream = "tool_invocations" | "policy_blocks" | "approvals" | "hooks";
@@ -195,7 +197,9 @@ export type ApprovalEffectTargetKind =
   | "memory_record"
   | "skill_state"
   | "capability_candidate"
-  | "improvement_operation";
+  | "improvement_operation"
+  | "delegation_step"
+  | "engineering_learning";
 
 export interface ApprovalEffectRecord {
   effectId: string;

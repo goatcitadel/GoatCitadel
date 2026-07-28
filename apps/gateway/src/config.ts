@@ -79,6 +79,10 @@ export interface FeatureFlagsConfig {
   codeModeV1Enabled: boolean;
   improvementLedgerV1Enabled: boolean;
   improvementActivationV1Enabled: boolean;
+  promptRetuneCampaignV1Enabled: boolean;
+  structuredReviewV2Enabled: boolean;
+  delegationScopeExpansionV1Enabled: boolean;
+  engineeringLearningsV1Enabled: boolean;
   coworkRuntimeQualityV1Disabled?: boolean;
   orchestrationFinalStreamingV1Disabled?: boolean;
   autonomyV1Disabled?: boolean;
@@ -757,6 +761,10 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
     ["codeModeV1Enabled", process.env.GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED],
     ["improvementLedgerV1Enabled", process.env.GOATCITADEL_FEATURE_IMPROVEMENT_LEDGER_V1_ENABLED],
     ["improvementActivationV1Enabled", process.env.GOATCITADEL_FEATURE_IMPROVEMENT_ACTIVATION_V1_ENABLED],
+    ["promptRetuneCampaignV1Enabled", process.env.GOATCITADEL_FEATURE_PROMPT_RETUNE_CAMPAIGN_V1_ENABLED],
+    ["structuredReviewV2Enabled", process.env.GOATCITADEL_FEATURE_STRUCTURED_REVIEW_V2_ENABLED],
+    ["delegationScopeExpansionV1Enabled", process.env.GOATCITADEL_FEATURE_DELEGATION_SCOPE_EXPANSION_V1_ENABLED],
+    ["engineeringLearningsV1Enabled", process.env.GOATCITADEL_FEATURE_ENGINEERING_LEARNINGS_V1_ENABLED],
     ["coworkRuntimeQualityV1Disabled", process.env.GOATCITADEL_FEATURE_COWORK_RUNTIME_QUALITY_V1_DISABLED],
     [
       "orchestrationFinalStreamingV1Disabled",
@@ -1313,6 +1321,10 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       codeModeV1Enabled: featuresInput.codeModeV1Enabled ?? false,
       improvementLedgerV1Enabled: featuresInput.improvementLedgerV1Enabled ?? false,
       improvementActivationV1Enabled: featuresInput.improvementActivationV1Enabled ?? false,
+      promptRetuneCampaignV1Enabled: featuresInput.promptRetuneCampaignV1Enabled ?? false,
+      structuredReviewV2Enabled: featuresInput.structuredReviewV2Enabled ?? false,
+      delegationScopeExpansionV1Enabled: featuresInput.delegationScopeExpansionV1Enabled ?? false,
+      engineeringLearningsV1Enabled: featuresInput.engineeringLearningsV1Enabled ?? false,
       coworkRuntimeQualityV1Disabled: featuresInput.coworkRuntimeQualityV1Disabled ?? false,
       // Kill switch for S1 (live terminal-synthesizer token streaming). `*Disabled`
       // + `?? false` means the feature is ON by default unless explicitly disabled.

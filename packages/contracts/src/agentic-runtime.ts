@@ -148,6 +148,39 @@ export interface AgenticHandoffEvidence {
   createdAt: string;
 }
 
+export type DelegatedWorkResultDisposition = "completed" | "blocked" | "scope_expansion";
+
+export interface DelegatedScopeExpansionRequest {
+  requestedPaths: string[];
+  resolvedPaths?: string[];
+  reason: string;
+  scopeHash: string;
+  approvalId?: string;
+  requestedAt: string;
+  resolvedAt?: string;
+  decision?: "approved" | "rejected" | "expired";
+}
+
+export interface DelegatedFilesystemScopeControl {
+  rootPath: string;
+  approvedPaths: string[];
+  scopeHash: string;
+  dispatchGeneration: string;
+  updatedAt: string;
+}
+
+export interface DelegatedWorkResult {
+  disposition: DelegatedWorkResultDisposition;
+  summary: string;
+  changedFiles: string[];
+  evidenceRefs: string[];
+  /** Server-owned scope authority under which this result was submitted. */
+  scopeHash?: string;
+  /** Server-owned dispatch generation under which this result was submitted. */
+  dispatchGeneration?: string;
+  scopeExpansion?: DelegatedScopeExpansionRequest;
+}
+
 export interface AgenticWorkspaceScope {
   kind: AgenticWorkspaceKind;
   rootPath?: string;

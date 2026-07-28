@@ -46,6 +46,7 @@ import { onboardingRoutes } from "./routes/onboarding.js";
 import { demoRoutes } from "./routes/demo.js";
 import { memoryRoutes } from "./routes/memory.js";
 import { workPassportRoutes } from "./routes/work-passport.js";
+import { engineeringLearningRoutes } from "./routes/engineering-learnings.js";
 import { journeyRoutes } from "./routes/journey.js";
 import { npuRoutes } from "./routes/npu.js";
 import { uiChangeRiskRoutes } from "./routes/ui-change-risk.js";
@@ -415,6 +416,7 @@ export async function buildApp() {
     }
     await app.register(opsSavedBoardRoutes, { service: app.services.opsSavedBoards });
     await app.register(knowledgeRoutes);
+    await app.register(engineeringLearningRoutes);
     await app.register(chatRoutes);
     await app.register(promptPackRoutes);
     await app.register(modelComparisonRoutes);

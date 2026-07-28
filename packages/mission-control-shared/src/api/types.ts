@@ -587,6 +587,10 @@ export interface RuntimeSettingsResponse {
     codeModeV1Enabled?: boolean;
     improvementLedgerV1Enabled?: boolean;
     improvementActivationV1Enabled?: boolean;
+    promptRetuneCampaignV1Enabled?: boolean;
+    structuredReviewV2Enabled?: boolean;
+    delegationScopeExpansionV1Enabled?: boolean;
+    engineeringLearningsV1Enabled?: boolean;
     coworkRuntimeQualityV1Disabled?: boolean;
     orchestrationFinalStreamingV1Disabled?: boolean;
     autonomyV1Disabled?: boolean;

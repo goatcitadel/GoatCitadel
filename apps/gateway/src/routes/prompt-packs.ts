@@ -116,13 +116,63 @@ const promptPackBenchmarkParamsSchema = z.object({
   benchmarkRunId: z.string().min(1),
 });
 
-const promptPackReplayRegressionRunBodySchema = z.object({
-  testCodes: z.array(z.string().min(1)).min(1).max(200),
-  baselineRef: z.string().optional(),
-});
+const promptPackReplayRegressionRunBodySchema = z
+  .object({
+    testCodes: z.array(z.string().min(1)).min(1).max(200),
+    baselineRef: z.string().datetime({ offset: true }).optional(),
+    baselineBenchmarkRunId: z.string().min(1).optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.baselineRef && value.baselineBenchmarkRunId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Specify baselineBenchmarkRunId or baselineRef, not both.",
+      });
+    }
+  });
 
 const promptPackReplayRegressionParamsSchema = z.object({
   runId: z.string().min(1),
+});
+
+const promptRetuneCampaignParamsSchema = z.object({
+  campaignId: z.string().min(1),
+});
+
+const promptRetunePassParamsSchema = promptRetuneCampaignParamsSchema.extend({
+  passId: z.string().min(1),
+});
+
+const promptRetuneCampaignCreateSchema = z.object({
+  testCodes: z.array(z.string().min(1)).min(1).max(200),
+  providers: z
+    .array(z.object({ providerId: z.string().min(1), model: z.string().min(1) }))
+    .min(1)
+    .max(10),
+  executionStyle: z.enum(["single_turn_harness", "agentic_surface"]).optional(),
+  repeatCount: z.coerce.number().int().min(2).max(10).optional(),
+  maxBenchmarkRuns: z.coerce.number().int().min(4).max(1_000).optional(),
+  successBar: z
+    .object({
+      minWeightedScoreDelta: z.number().min(0).max(100).optional(),
+      requirePassRateNonRegression: z.boolean().optional(),
+      maxFailureRateDelta: z.number().min(0).max(1).optional(),
+      maxLatencyDeltaMs: z.number().min(0).optional(),
+      minAverageWeightedScore: z.number().min(0).max(100).optional(),
+      minPassRate: z.number().min(0).max(1).optional(),
+      maxFailureRate: z.number().min(0).max(1).optional(),
+      maxAverageLatencyMs: z.number().min(0).optional(),
+    })
+    .optional(),
+});
+
+const promptRetuneCandidateSchema = z.object({
+  hypothesis: z.string().trim().min(1).max(4_000),
+});
+
+const promptRetuneDispositionSchema = z.object({
+  disposition: z.enum(["kept", "rejected", "inconclusive"]),
+  notes: z.string().trim().max(8_000).optional(),
 });
 
 export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
@@ -413,6 +463,113 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.send(promptPacks.cancelPromptPackBenchmark(params.data.benchmarkRunId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/prompt-packs/:packId/retune-campaigns", async (request, reply) => {
+    const params = promptPackParamsSchema.safeParse(request.params);
+    const body = promptRetuneCampaignCreateSchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.code(201).send(promptPacks.createPromptRetuneCampaign(params.data.packId, body.data));
+    } catch (error) {
+      return reply.code(409).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.get("/api/v1/prompt-packs/:packId/retune-campaigns", async (request, reply) => {
+    const params = promptPackParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(promptPacks.listPromptRetuneCampaigns(params.data.packId));
+    } catch (error) {
+      return reply.code(404).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.get("/api/v1/prompt-packs/retune-campaigns/:campaignId", async (request, reply) => {
+    const params = promptRetuneCampaignParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(promptPacks.getPromptRetuneCampaign(params.data.campaignId));
+    } catch (error) {
+      return reply.code(404).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/prompt-packs/retune-campaigns/:campaignId/noise", async (request, reply) => {
+    const params = promptRetuneCampaignParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(promptPacks.startPromptRetuneNoise(params.data.campaignId));
+    } catch (error) {
+      return reply.code(409).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/prompt-packs/retune-campaigns/:campaignId/candidates", async (request, reply) => {
+    const params = promptRetuneCampaignParamsSchema.safeParse(request.params);
+    const body = promptRetuneCandidateSchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.send(promptPacks.startPromptRetuneCandidate(params.data.campaignId, body.data));
+    } catch (error) {
+      return reply.code(409).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post(
+    "/api/v1/prompt-packs/retune-campaigns/:campaignId/passes/:passId/disposition",
+    async (request, reply) => {
+      const params = promptRetunePassParamsSchema.safeParse(request.params);
+      const body = promptRetuneDispositionSchema.safeParse(request.body ?? {});
+      if (!params.success || !body.success) {
+        return reply.code(400).send({
+          error: {
+            params: params.success ? undefined : params.error.flatten(),
+            body: body.success ? undefined : body.error.flatten(),
+          },
+        });
+      }
+      try {
+        return reply.send(
+          promptPacks.setPromptRetunePassDisposition(params.data.campaignId, params.data.passId, body.data),
+        );
+      } catch (error) {
+        return reply.code(409).send({ error: (error as Error).message });
+      }
+    },
+  );
+
+  fastify.post("/api/v1/prompt-packs/retune-campaigns/:campaignId/cancel", async (request, reply) => {
+    const params = promptRetuneCampaignParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(promptPacks.cancelPromptRetuneCampaign(params.data.campaignId));
+    } catch (error) {
+      return reply.code(409).send({ error: (error as Error).message });
     }
   });
 
