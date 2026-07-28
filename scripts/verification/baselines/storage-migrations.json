@@ -5,9 +5,9 @@
     "sqlite": {
       "path": "packages/storage/src/sqlite.ts",
       "registryName": "SCHEMA_MIGRATION_GROUPS",
-      "expectedCount": 181,
+      "expectedCount": 182,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 181,
+      "expectedLastVersion": 182,
       "migrations": [
         {
           "version": 1,
@@ -1275,15 +1275,22 @@
           "groupName": "canonical",
           "definitionSha256": "3d76a864ef29938aa5fd5a8eed3f272c4c9c30379246636051000864e77176f7",
           "implementationSha256": "5bd7f85f08da1cbcb8122a6116a58390593de0eef635307cc241cc295fabaf7d"
+        },
+        {
+          "version": 182,
+          "name": "notification_routing",
+          "groupName": "canonical",
+          "definitionSha256": "957e26cd36221c51dd9d22ff3d026976d13b19c15058b325ac8a37d1ea573609",
+          "implementationSha256": "096bd7b599d4cdc4853a5f3cd74d99e1d6317c8b92407ab79099c11cdf2857ea"
         }
       ]
     },
     "postgres": {
       "path": "packages/storage/src/postgres/migrations.ts",
       "registryName": "POSTGRES_MIGRATIONS",
-      "expectedCount": 124,
+      "expectedCount": 125,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 124,
+      "expectedLastVersion": 125,
       "migrations": [
         {
           "version": 1,
@@ -2029,6 +2036,12 @@
           "name": "chat_session_fork_manifests",
           "definitionSha256": "57aae6344711d057af18567ac5acd0034464684d806f077f094b8dd274382dee",
           "sqlPayloadSha256": "7e75e4a6a12a88d1e67039d2a3f414f169aa1d16ce77eb85237da9d768d178c1"
+        },
+        {
+          "version": 125,
+          "name": "notification_routing",
+          "definitionSha256": "2545fa6c263731b872745ea22804a58cb43a6b06d4ae472e430f290088a3c897",
+          "sqlPayloadSha256": "9317ba5f4868ee29fe377cadd93247041831fbed4d7d0ce5cde53ebe655d7a86"
         }
       ]
     }

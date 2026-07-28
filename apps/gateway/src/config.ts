@@ -104,6 +104,7 @@ export interface FeatureFlagsConfig {
   /** Gateway-owned operator and model-safe Chat session status projections. */
   chatSessionStatusV1Enabled?: boolean;
   conversationForksV1Enabled?: boolean;
+  notificationRoutingV1Enabled?: boolean;
   /**
    * Competitive-gap program phase B2b: TTS voice replies to audio-capable
    * channels (Telegram voice notes in v1). Absent/false (default) ⇒ the reply
@@ -764,6 +765,7 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
     ["attachedContextToolsV1Enabled", process.env.GOATCITADEL_FEATURE_ATTACHED_CONTEXT_TOOLS_V1_ENABLED],
     ["chatSessionStatusV1Enabled", process.env.GOATCITADEL_FEATURE_CHAT_SESSION_STATUS_V1_ENABLED],
     ["conversationForksV1Enabled", process.env.GOATCITADEL_FEATURE_CONVERSATION_FORKS_V1_ENABLED],
+    ["notificationRoutingV1Enabled", process.env.GOATCITADEL_FEATURE_NOTIFICATION_ROUTING_V1_ENABLED],
     ["channelVoiceInboundV1Enabled", process.env.GOATCITADEL_FEATURE_CHANNEL_VOICE_INBOUND_V1_ENABLED],
     ["signalInboundV1Enabled", process.env.GOATCITADEL_FEATURE_SIGNAL_INBOUND_V1_ENABLED],
     ["plannerFastPathV1Disabled", process.env.GOATCITADEL_FEATURE_PLANNER_FAST_PATH_V1_DISABLED],
@@ -1327,6 +1329,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       // canonical status service and fail unavailable when evidence is absent.
       chatSessionStatusV1Enabled: featuresInput.chatSessionStatusV1Enabled ?? true,
       conversationForksV1Enabled: featuresInput.conversationForksV1Enabled ?? true,
+      notificationRoutingV1Enabled: featuresInput.notificationRoutingV1Enabled ?? true,
       // Channel voice inbound (B2a): default OFF. `?? false` keeps inbound
       // Telegram/WhatsApp voice handling byte-identical unless an operator opts in.
       channelVoiceInboundV1Enabled: featuresInput.channelVoiceInboundV1Enabled ?? false,

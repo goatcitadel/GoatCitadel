@@ -42,6 +42,7 @@ export * from "./connectors.js";
 export * from "./external-connectors.js";
 export * from "./external-sources.js";
 export * from "./integrations.js";
+export * from "./notifications.js";
 export * from "./citadels.js";
 export * from "./citadel-blueprints.js";
 export * from "./citadel-vault.js";

@@ -6832,11 +6832,52 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
           createChatSessionForkManifestSchema(db);
         },
       },
+      {
+        version: 182,
+        name: "notification_routing",
+        up: (db) => {
+          createNotificationRoutingSchema(db);
+        },
+      },
     ],
   },
 ];
 
 const SCHEMA_MIGRATIONS = createSqliteMigrationRegistry(SCHEMA_MIGRATION_GROUPS);
+
+function createNotificationRoutingSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS notification_targets (
+      target_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1,
+      label TEXT NOT NULL, kind TEXT NOT NULL, channel_connection_id TEXT, webhook_url_secret_ref TEXT,
+      credential_secret_ref TEXT, lifecycle_state TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_notification_targets_workspace ON notification_targets(workspace_id, lifecycle_state, updated_at DESC);
+    CREATE TABLE IF NOT EXISTS notification_rules (
+      rule_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1,
+      label TEXT NOT NULL, event_types_json TEXT NOT NULL, target_ids_json TEXT NOT NULL,
+      delivery_policy TEXT NOT NULL DEFAULT 'always', lifecycle_state TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_notification_rules_workspace ON notification_rules(workspace_id, lifecycle_state, updated_at DESC);
+    CREATE TABLE IF NOT EXISTS notification_presence_leases (
+      lease_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, client_id TEXT NOT NULL, session_id TEXT,
+      focused INTEGER NOT NULL DEFAULT 0, visible INTEGER NOT NULL DEFAULT 0, expires_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_notification_presence_active ON notification_presence_leases(workspace_id, expires_at DESC);
+    CREATE TABLE IF NOT EXISTS notification_events (
+      event_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, event_type TEXT NOT NULL, session_id TEXT, turn_id TEXT,
+      title TEXT NOT NULL, message TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_notification_events_workspace ON notification_events(workspace_id, created_at DESC);
+    CREATE TABLE IF NOT EXISTS notification_deliveries (
+      delivery_id TEXT PRIMARY KEY, event_id TEXT NOT NULL, rule_id TEXT NOT NULL, target_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL, idempotency_key TEXT NOT NULL UNIQUE, status TEXT NOT NULL,
+      attempt_count INTEGER NOT NULL DEFAULT 0, last_error TEXT, external_side_effect_run_id TEXT,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_notification_deliveries_workspace ON notification_deliveries(workspace_id, created_at DESC);
+  `);
+}
 
 function createChatSessionForkManifestSchema(db: DatabaseSync): void {
   db.exec(`

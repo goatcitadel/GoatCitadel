@@ -82,6 +82,44 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     pack: "core",
   },
   {
+    name: "notify.request",
+    category: "comms",
+    riskLevel: "caution",
+    requiresApproval: true,
+    description:
+      "Request operator attention through the canonical notification stream. External delivery is selected only by operator-authored rules; raw destinations are never accepted.",
+    argSchema: {
+      type: "object",
+      properties: {
+        eventType: {
+          type: "string",
+          enum: [
+            "turn.completed",
+            "turn.failed",
+            "turn.blocked",
+            "approval.requested",
+            "user_input.requested",
+            "durable.attention_required",
+            "timer.due",
+            "scheduled_turn.completed",
+            "scheduled_turn.failed",
+          ],
+        },
+        title: { type: "string", minLength: 1, maxLength: 120 },
+        message: { type: "string", minLength: 1, maxLength: 4000 },
+      },
+      required: ["eventType", "title", "message"],
+      additionalProperties: false,
+    },
+    pack: "comms",
+    recommendedContexts: ["chat"],
+    preferredForIntents: ["request_attention", "notify_operator"],
+    usageHints: [
+      "Do not provide webhook URLs, credentials, or target ids; Settings rules own destinations.",
+      "The tool is governed because an approved rule may cause an external side effect.",
+    ],
+  },
+  {
     name: "context.list",
     category: "knowledge",
     riskLevel: "safe",

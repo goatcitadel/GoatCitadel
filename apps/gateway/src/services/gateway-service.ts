@@ -176,6 +176,7 @@ import type {
   MemoryMaintenanceStatusRecord,
   MemorySearchQuery,
   MemoryWriteInput,
+  NotifyRequest,
   CronAgentTurnConfig,
   CronJobRecord,
   CronRunExecutionToken,
@@ -1561,6 +1562,7 @@ export class GatewayService {
       // audit fire first in `engine.invoke`.
       subagentFanout: (request) => this.subagentFanout.execute(request),
       getChatSessionStatus: (sessionId) => this.chatSessionStatusService.getModelProjection(sessionId),
+      requestNotification: (request, input) => this.requestNotificationFromTool(request.sessionId, input),
     });
     const secretStore = new SecretStoreService();
     this.secretStore = secretStore;
@@ -10080,7 +10082,124 @@ export class GatewayService {
     payload: Record<string, unknown>,
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
   ): RealtimeEvent {
-    return this.realtimeEventService.publishRealtime(eventType, source, payload, options);
+    const event = this.realtimeEventService.publishRealtime(eventType, source, payload, options);
+    this.maybeRouteCanonicalNotification(event);
+    return event;
+  }
+
+  private maybeRouteCanonicalNotification(event: RealtimeEvent): void {
+    if (event.source === "notifications" || !this.isFeatureEnabled("notificationRoutingV1Enabled")) return;
+    const services = Reflect.get(this, "routeServices") as GatewayRouteServices | undefined;
+    if (!services) return;
+    const notification = this.projectNotificationEvent(event);
+    if (!notification) return;
+    const hasMatchingRule = this.storage.notificationRouting
+      .listRules(notification.workspaceId)
+      .some((rule) => rule.lifecycleState === "active" && rule.eventTypes.includes(notification.input.eventType));
+    if (!hasMatchingRule) return;
+    void services.integrations
+      .dispatchNotificationEvent(notification.workspaceId, notification.input)
+      .catch((error: unknown) => {
+        this.recordDevDiagnostic({
+          level: "warn",
+          category: "runtime",
+          event: "notification.routing.failed",
+          message: error instanceof Error ? error.message : "Canonical notification routing failed.",
+          context: { realtimeEventId: event.eventId, eventType: notification.input.eventType },
+        });
+      });
+  }
+
+  private projectNotificationEvent(event: RealtimeEvent):
+    | {
+        workspaceId: string;
+        input: Omit<NotifyRequest, "targetIds"> & { source: string; eventId: string };
+      }
+    | undefined {
+    const type = typeof event.payload.type === "string" ? event.payload.type : "";
+    if (event.eventType === "chat_thread_updated" && type === "chat_thread_turn_appended") {
+      const sessionId = typeof event.payload.sessionId === "string" ? event.payload.sessionId : undefined;
+      const turnId = typeof event.payload.turnId === "string" ? event.payload.turnId : undefined;
+      if (!sessionId || !turnId) return undefined;
+      let trace: ChatTurnTraceRecord;
+      try {
+        trace = this.storage.chatTurnTraces.get(turnId);
+      } catch {
+        return undefined;
+      }
+      const eventType =
+        trace.status === "waiting_for_approval"
+          ? "approval.requested"
+          : trace.status === "waiting_for_user_input"
+            ? "user_input.requested"
+            : trace.status === "failed" && trace.failure?.failureClass === "tool_blocked"
+              ? "turn.blocked"
+              : trace.status === "failed"
+                ? "turn.failed"
+                : trace.status === "completed" || trace.status === "partial"
+                  ? "turn.completed"
+                  : undefined;
+      if (!eventType) return undefined;
+      const titleByType = {
+        "approval.requested": "Approval requested",
+        "user_input.requested": "Input requested",
+        "turn.blocked": "Chat turn blocked",
+        "turn.failed": "Chat turn failed",
+        "turn.completed": "Chat turn completed",
+      } as const;
+      return {
+        workspaceId: this.storage.chatSessionMeta.get(sessionId)?.workspaceId ?? DEFAULT_WORKSPACE_ID,
+        input: {
+          eventId: `notification:${event.eventId}`,
+          eventType,
+          sessionId,
+          turnId,
+          title: titleByType[eventType],
+          message:
+            trace.failure?.message ??
+            this.storage.chatSessionMeta.get(sessionId)?.title ??
+            "A GoatCitadel Chat turn changed state.",
+          source: "chat.turn",
+        },
+      };
+    }
+    if (
+      event.eventType === "cron_job_run" &&
+      (type === "cron_agent_turn_completed" || type === "cron_agent_turn_terminal")
+    ) {
+      const status = typeof event.payload.status === "string" ? event.payload.status : "failed";
+      const eventType = status === "completed" ? "scheduled_turn.completed" : "scheduled_turn.failed";
+      const jobId = typeof event.payload.jobId === "string" ? event.payload.jobId : undefined;
+      const sessionId = jobId ? this.storage.cronJobs.get(jobId)?.actionConfig?.agentTurn?.sessionId : undefined;
+      return {
+        workspaceId: sessionId
+          ? (this.storage.chatSessionMeta.get(sessionId)?.workspaceId ?? DEFAULT_WORKSPACE_ID)
+          : DEFAULT_WORKSPACE_ID,
+        input: {
+          eventId: `notification:${event.eventId}`,
+          eventType,
+          ...(sessionId ? { sessionId } : {}),
+          title: status === "completed" ? "Scheduled agent turn completed" : "Scheduled agent turn failed",
+          message: `Scheduled run ${String(event.payload.runId ?? "unknown")} settled as ${status}.`,
+          source: "scheduled.agent_turn",
+        },
+      };
+    }
+    return undefined;
+  }
+
+  private async requestNotificationFromTool(sessionId: string, input: NotifyRequest): Promise<Record<string, unknown>> {
+    this.requireFeatureEnabled("notificationRoutingV1Enabled");
+    const workspaceId = this.storage.chatSessionMeta.get(sessionId)?.workspaceId ?? DEFAULT_WORKSPACE_ID;
+    const result = await this.routeServices.integrations.requestNotification(workspaceId, {
+      ...input,
+      sessionId,
+    });
+    return {
+      event: result.event,
+      deliveries: result.deliveries,
+      status: result.status,
+    };
   }
 
   /** @internal */ public createCheckpoint(

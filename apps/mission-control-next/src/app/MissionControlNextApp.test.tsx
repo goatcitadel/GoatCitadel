@@ -36,6 +36,7 @@ const appMocks = vi.hoisted(() => ({
   setNotificationSoundMode: vi.fn(),
   setNotificationToastsEnabled: vi.fn(),
   setTheme: vi.fn(),
+  upsertNotificationPresence: vi.fn(async (input) => input),
   playOperatorAttentionSound: vi.fn(),
   threadedRouteProps: null as null | Record<string, unknown>,
   streamCallbacks: {} as {
@@ -58,6 +59,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchHealthSummary: appMocks.fetchHealthSummary,
   listCitadels: appMocks.listCitadels,
   fetchRuntimeLifecycleExport: appMocks.fetchRuntimeLifecycleExport,
+  upsertNotificationPresence: appMocks.upsertNotificationPresence,
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/review-readiness", () => ({
