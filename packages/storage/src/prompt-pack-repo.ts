@@ -6,8 +6,13 @@ import type {
   PromptPackPolicyV2,
   PromptPackRecord,
   PromptPackTestRecord,
+  RunVariableSchema,
 } from "@goatcitadel/contracts";
-import { DEFAULT_PROMPT_PACK_POLICY_V2 } from "@goatcitadel/contracts";
+import {
+  DEFAULT_PROMPT_PACK_POLICY_V2,
+  hashRunVariableSchema,
+  normalizeRunVariableSchema,
+} from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
 import { hashPromptPackPolicyV2, parsePromptPackPolicyV2, stringifyPromptPackPolicyV2 } from "./prompt-pack-policy.js";
 
@@ -20,6 +25,8 @@ interface PromptPackRow {
   policy_v2_hash: string | null;
   policy_v2_source: string | null;
   content_sha256?: string | null;
+  run_variable_schema_json?: string | null;
+  run_variable_schema_hash?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -57,13 +64,13 @@ export class PromptPackRepository {
       INSERT INTO prompt_packs (
         pack_id, name, source_label, test_count,
         policy_v2_json, policy_v2_hash, policy_v2_source,
-        content_sha256,
+        content_sha256, run_variable_schema_json, run_variable_schema_hash,
         created_at, updated_at
       )
       VALUES (
         @packId, @name, @sourceLabel, @testCount,
         @policyV2Json, @policyV2Hash, @policyV2Source,
-        @contentSha256,
+        @contentSha256, @runVariableSchemaJson, @runVariableSchemaHash,
         @createdAt, @updatedAt
       )
       ON CONFLICT(pack_id) DO UPDATE SET
@@ -74,6 +81,8 @@ export class PromptPackRepository {
         policy_v2_hash = excluded.policy_v2_hash,
         policy_v2_source = excluded.policy_v2_source,
         content_sha256 = COALESCE(excluded.content_sha256, prompt_packs.content_sha256),
+        run_variable_schema_json = excluded.run_variable_schema_json,
+        run_variable_schema_hash = excluded.run_variable_schema_hash,
         updated_at = excluded.updated_at
     `);
     this.deleteTestsByPackStmt = db.prepare("DELETE FROM prompt_pack_tests WHERE pack_id = ?");
@@ -145,6 +154,7 @@ export class PromptPackRepository {
     }>;
     policyV2?: PromptPackPolicyV2;
     policySource?: PromptPackPolicySource;
+    runVariableSchema?: RunVariableSchema;
   }): {
     pack: PromptPackRecord;
     tests: PromptPackTestRecord[];
@@ -159,6 +169,7 @@ export class PromptPackRepository {
       input.policyV2 ??
       (resolvedSource === "pack_override" ? existingPolicy : DEFAULT_PROMPT_PACK_POLICY_V2) ??
       DEFAULT_PROMPT_PACK_POLICY_V2;
+    const runVariableSchema = input.runVariableSchema ? normalizeRunVariableSchema(input.runVariableSchema) : undefined;
     this.db.transaction("immediate", () => {
       this.upsertPackStmt.run({
         packId,
@@ -169,6 +180,8 @@ export class PromptPackRepository {
         policyV2Hash: hashPromptPackPolicyV2(resolvedPolicy),
         policyV2Source: resolvedSource,
         contentSha256: input.contentSha256 ?? null,
+        runVariableSchemaJson: runVariableSchema ? JSON.stringify(runVariableSchema) : null,
+        runVariableSchemaHash: runVariableSchema ? hashRunVariableSchema(runVariableSchema) : null,
         createdAt: existing?.created_at ?? now,
         updatedAt: now,
       });
@@ -217,6 +230,10 @@ function mapPackRow(row: PromptPackRow): PromptPackRecord {
     policyHash,
     policySource,
     contentSha256: row.content_sha256 ?? undefined,
+    runVariableSchema: row.run_variable_schema_json
+      ? safeJsonParse<RunVariableSchema | undefined>(row.run_variable_schema_json, undefined)
+      : undefined,
+    runVariableSchemaHash: row.run_variable_schema_hash ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -267,6 +284,12 @@ function isPromptPackRow(value: unknown): value is PromptPackRow {
     (typeof value.policy_v2_source === "string" || value.policy_v2_source === null) &&
     // Tolerate a missing column (pre-migration DB) but reject wrong types.
     (typeof value.content_sha256 === "string" || value.content_sha256 === null || value.content_sha256 === undefined) &&
+    (typeof value.run_variable_schema_json === "string" ||
+      value.run_variable_schema_json === null ||
+      value.run_variable_schema_json === undefined) &&
+    (typeof value.run_variable_schema_hash === "string" ||
+      value.run_variable_schema_hash === null ||
+      value.run_variable_schema_hash === undefined) &&
     typeof value.created_at === "string" &&
     typeof value.updated_at === "string"
   );

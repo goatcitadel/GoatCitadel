@@ -188,6 +188,17 @@ const mobileContextSchema = z.object({
 
 const sendMessageSchema = z.object({
   content: z.string().min(1),
+  templateInvocation: z
+    .object({
+      ownerKind: z.enum(["prompt_pack", "agent_preset"]),
+      ownerId: z.string().min(1),
+      ownerRevision: z.string().min(1),
+      templateId: z.string().min(1).optional(),
+      schemaHash: z.string().regex(/^[a-f0-9]{64}$/u),
+      values: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])),
+    })
+    .strict()
+    .optional(),
   parts: z
     .array(
       z.union([
@@ -280,11 +291,11 @@ const sendMessageSchema = z.object({
   sideChatContext: sideChatContextSchema.optional(),
 });
 
-const retryTurnSchema = sendMessageSchema.partial().extend({
+const retryTurnSchema = sendMessageSchema.omit({ templateInvocation: true }).partial().extend({
   content: z.string().optional(),
 });
 
-const editTurnSchema = sendMessageSchema;
+const editTurnSchema = sendMessageSchema.omit({ templateInvocation: true });
 
 function stampChatOperatorContext<TInput extends Partial<ChatSendMessageRequest>>(
   request: FastifyRequest,

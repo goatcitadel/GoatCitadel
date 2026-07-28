@@ -5,9 +5,9 @@
     "sqlite": {
       "path": "packages/storage/src/sqlite.ts",
       "registryName": "SCHEMA_MIGRATION_GROUPS",
-      "expectedCount": 183,
+      "expectedCount": 184,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 183,
+      "expectedLastVersion": 184,
       "migrations": [
         {
           "version": 1,
@@ -1289,15 +1289,22 @@
           "groupName": "canonical",
           "definitionSha256": "4fe2ccc582480837d8bf3c547b761388a78f7fdf738ef2395ef50c7834de699d",
           "implementationSha256": "4c6560f16295cde1a202209ab87c464e56ca4c4e9b42010170e47b285eaaee6e"
+        },
+        {
+          "version": 184,
+          "name": "typed_run_variables",
+          "groupName": "canonical",
+          "definitionSha256": "81880e78a13e09db73b149d460e22a5825cde3ee7f49fd0efa6beb96f97dd705",
+          "implementationSha256": "c7d21e7b3581232f968f77dba0e9fea3b595b9f8cf5a94842e8fc045c7014c35"
         }
       ]
     },
     "postgres": {
       "path": "packages/storage/src/postgres/migrations.ts",
       "registryName": "POSTGRES_MIGRATIONS",
-      "expectedCount": 126,
+      "expectedCount": 127,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 126,
+      "expectedLastVersion": 127,
       "migrations": [
         {
           "version": 1,
@@ -2055,6 +2062,12 @@
           "name": "chat_timers",
           "definitionSha256": "f4405cd268420126a139a600337710ec6616b089447a262c36907f070dcc9e06",
           "sqlPayloadSha256": "48598824fea88157373865ed985f21196f1e07a6706c0b65023baecc9e0ef824"
+        },
+        {
+          "version": 127,
+          "name": "typed_run_variables",
+          "definitionSha256": "3d93387e94cb81df965c547e1816477b43c0b66e12545a75ff03792edf583d68",
+          "sqlPayloadSha256": "901205590418a0237c9ce44bee452f7315f6cf1fa07aee1a5ab582405884a75e"
         }
       ]
     }

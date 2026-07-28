@@ -714,6 +714,7 @@ import { BrowserSessionRuntimeService } from "./browser-session-runtime-service.
 import { ReviewReadinessService } from "./review-readiness-service.js";
 import { ChatSessionStatusService } from "./chat-session-status-service.js";
 import { ChatTimerService } from "./chat-timer-service.js";
+import { resolveChatRunVariableRequest } from "./chat-run-variable-service.js";
 import { createNotificationRoutingServiceForGateway } from "./gateway-route-composition-integrations.js";
 import { resolvePackagedRuntimeAppDir, RuntimeReleaseTrustService } from "./runtime-release-trust-service.js";
 import { RuntimeAuthorityProjectionService } from "./runtime-authority-projection-service.js";
@@ -6028,10 +6029,14 @@ export class GatewayService {
     input: ChatSendMessageRequest,
     options?: { abortSignal?: AbortSignal },
   ): Promise<ChatSendMessageResponse> {
-    return this.chatTurnRuntime.agentSendChatMessage(sessionId, input, options);
+    return this.chatTurnRuntime.agentSendChatMessage(
+      sessionId,
+      this.resolveChatRunVariableInput(sessionId, input),
+      options,
+    );
   }
 
-  public agentSendChatMessageStream(
+  public async *agentSendChatMessageStream(
     sessionId: string,
     input: ChatSendMessageRequest,
     options?: {
@@ -6039,7 +6044,19 @@ export class GatewayService {
       mutationLifecycle?: import("./chat-turn-types.js").ChatStreamMutationLifecycle;
     },
   ): AsyncGenerator<ChatStreamChunk> {
-    return this.chatTurnRuntime.agentSendChatMessageStream(sessionId, input, options);
+    yield* this.chatTurnRuntime.agentSendChatMessageStream(
+      sessionId,
+      this.resolveChatRunVariableInput(sessionId, input),
+      options,
+    );
+  }
+
+  public resolveChatRunVariableInput(sessionId: string, input: ChatSendMessageRequest): ChatSendMessageRequest {
+    if (!input.templateInvocation) return input;
+    if (!this.isFeatureEnabled("typedRunVariablesV1Enabled")) {
+      throw new NotFoundError({ entity: "Typed run-variable invocation", id: input.templateInvocation.ownerId });
+    }
+    return resolveChatRunVariableRequest(this.storage, sessionId, input);
   }
 
   private async retryChatTurnInScratchSession(

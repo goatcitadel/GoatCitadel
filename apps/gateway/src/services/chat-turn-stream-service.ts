@@ -1820,6 +1820,7 @@ export async function* streamPreparedAgentChatTurn(
             effectiveModel:
               modeOrchestration.orchestrationPlan.steps.at(0)?.model ?? input.model ?? prepared.prefs.model,
             modelRouter: prepared.modelRouterDecision,
+            ...(input.runVariableEvidence ? { runVariables: input.runVariableEvidence } : {}),
           },
         }),
       );
@@ -1879,6 +1880,7 @@ export async function* streamPreparedAgentChatTurn(
                   input.model ??
                   prepared.prefs.model,
                 modelRouter: prepared.modelRouterDecision,
+                ...(input.runVariableEvidence ? { runVariables: input.runVariableEvidence } : {}),
               },
             }),
           );
@@ -1998,6 +2000,7 @@ export async function* streamPreparedAgentChatTurn(
             input.model ??
             prepared.prefs.model,
           modelRouter: prepared.modelRouterDecision,
+          ...(input.runVariableEvidence ? { runVariables: input.runVariableEvidence } : {}),
         },
         retrieval: prepared.retrievalTrace,
         reflection: {
@@ -2325,6 +2328,7 @@ export async function* streamPreparedAgentChatTurn(
               fullWebAccess: input.fullWebAccess,
               historyMessages: historyWithSteers,
               modelRouter: prepared.modelRouterDecision,
+              runVariableEvidence: input.runVariableEvidence,
               signal: controller.signal,
               canonicalWriteFence,
               capabilityProfile: prepared.capabilityProfile,

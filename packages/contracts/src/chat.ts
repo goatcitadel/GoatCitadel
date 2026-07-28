@@ -1489,6 +1489,7 @@ export interface ChatTurnTraceRecord {
       toolRunHashes: string[];
       approvalHashes: string[];
     };
+    runVariables?: import("./run-variables.js").RunVariableEvidence;
   };
   retrieval?: {
     l0Used: boolean;
@@ -1809,6 +1810,9 @@ export interface ChatSendMessageRequest {
   parts?: ChatInputPart[];
   /** Structured Gateway-resolved refs. Raw file paths, URLs, git refs, and shell expressions are not accepted. */
   contextRefs?: import("./routed-context.js").ChatRoutedContextRef[];
+  templateInvocation?: import("./run-variables.js").RunTemplateInvocation;
+  /** Server-stamped after revalidation; clients cannot submit this field. */
+  runVariableEvidence?: import("./run-variables.js").RunVariableEvidence;
   mobileContext?: MobileContextEnvelope[];
   providerId?: string;
   model?: string;

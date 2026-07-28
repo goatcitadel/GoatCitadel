@@ -91,6 +91,7 @@ describe("loadGatewayConfig", () => {
     expect(config.assistant.features.conversationForksV1Enabled).toBe(true);
     expect(config.assistant.features.notificationRoutingV1Enabled).toBe(true);
     expect(config.assistant.features.chatTimersV1Enabled).toBe(true);
+    expect(config.assistant.features.typedRunVariablesV1Enabled).toBe(true);
   });
 
   it("defaults Firecrawl and Docker digest posture to shipped fail-closed values", async () => {

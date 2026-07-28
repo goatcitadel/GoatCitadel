@@ -13320,6 +13320,28 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ON chat_timers(workspace_id, status, due_at);
     `,
   },
+  {
+    version: 127,
+    name: "typed_run_variables",
+    sql: `
+      ALTER TABLE prompt_packs ADD COLUMN IF NOT EXISTS run_variable_schema_json TEXT;
+      ALTER TABLE prompt_packs ADD COLUMN IF NOT EXISTS run_variable_schema_hash TEXT;
+      ALTER TABLE prompt_pack_runs ADD COLUMN IF NOT EXISTS run_variables_json TEXT;
+      CREATE TABLE IF NOT EXISTS chat_session_run_variable_bindings (
+        session_id TEXT NOT NULL REFERENCES chat_session_meta(session_id) ON DELETE CASCADE,
+        owner_kind TEXT NOT NULL,
+        owner_id TEXT NOT NULL,
+        owner_revision TEXT NOT NULL,
+        schema_hash TEXT NOT NULL,
+        bindings_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (session_id, owner_kind, owner_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_chat_session_run_variables_session
+        ON chat_session_run_variable_bindings(session_id, updated_at DESC);
+    `,
+  },
 ];
 
 function buildWorkspacePathBridgePosixFlavorPostgresSql(): string {

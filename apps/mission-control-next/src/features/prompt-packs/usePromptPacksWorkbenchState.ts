@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Prompt Lab workbench state remains a single orchestration owner while its tabs are incrementally extracted. */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   PromptPackBenchmarkStatusRecord,
@@ -5,9 +6,13 @@ import type {
   PromptPackExportRecord,
   PromptPackLatestAssessmentRecordV2,
   PromptPackReportRecord,
+  PromptPackRecord,
   PromptPackRunRecord,
   PromptPackTestRecord,
+  RunVariableBindings,
+  RunVariableValue,
 } from "@goatcitadel/contracts";
+import { validateRunVariableBindings } from "@goatcitadel/contracts";
 import type { ChatModelProviderOption } from "@goatcitadel/mission-control-shared/components/ChatModelPicker";
 import {
   autoScorePromptPackBatch,
@@ -64,6 +69,11 @@ import {
   isPromptPackV2UiEnabled,
   summarizePromptPackTestOutcomes,
 } from "./PromptPacksWorkbenchPage.helpers";
+import {
+  buildPromptLabRunVariableSessionKey,
+  loadPromptLabRunVariableSession,
+  savePromptLabRunVariableSession,
+} from "./prompt-run-variable-session";
 
 export interface UsePromptPacksWorkbenchStateOptions {
   variant: "library" | "ops";
@@ -94,11 +104,12 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const [packs, setPacks] = useState<Array<{ packId: string; name: string; testCount: number }>>([]);
+  const [packs, setPacks] = useState<PromptPackRecord[]>([]);
   const [selectedPackId, setSelectedPackId] = useState<string | null>(null);
   const [tests, setTests] = useState<PromptPackTestRecord[]>([]);
   const [importText, setImportText] = useState("");
   const [placeholderValues, setPlaceholderValues] = useState<Record<string, string>>({});
+  const [runVariableBindings, setRunVariableBindings] = useState<RunVariableBindings>({});
   const [selectedTestId, setSelectedTestId] = useState<string | null>(null);
   const [testResultFilter, setTestResultFilter] = useState<TestResultFilter>("all");
   const [report, setReport] = useState<{
@@ -209,13 +220,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
 
       try {
         const response = await fetchPromptPacks();
-        setPacks(
-          response.items.map((item) => ({
-            packId: item.packId,
-            name: item.name,
-            testCount: item.testCount,
-          })),
-        );
+        setPacks(response.items);
         const currentSelectedPackId = selectedPackIdRef.current;
         const requestedPackId = initialPackId?.trim();
         const resolvedPackId =
@@ -280,6 +285,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
     [report?.latestAssessments],
   );
 
+  const selectedPack = packs.find((pack) => pack.packId === selectedPackId) ?? null;
   const selectedTest = tests.find((item) => item.testId === selectedTestId) ?? null;
   const selectedRun = selectedTest ? latestRunByTest.get(selectedTest.testId) : undefined;
   const selectedAssessment = selectedTest ? latestAssessmentByTest.get(selectedTest.testId) : undefined;
@@ -300,11 +306,54 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
     () => (selectedTest ? extractPromptPlaceholders(selectedTest.prompt) : []),
     [selectedTest],
   );
-  const selectedMissingPlaceholders = useMemo(
-    () =>
-      selectedPlaceholders.filter((token) => !(placeholderValues[normalizePromptPlaceholderKey(token)] ?? "").trim()),
-    [placeholderValues, selectedPlaceholders],
-  );
+  const promptLabBindingsStorageKey =
+    selectedPackId && selectedTestId ? buildPromptLabRunVariableSessionKey(selectedPackId, selectedTestId) : null;
+  const skipNextBindingsPersistRef = useRef(false);
+  useEffect(() => {
+    if (!promptLabBindingsStorageKey) {
+      setRunVariableBindings({});
+      setPlaceholderValues({});
+      return;
+    }
+    const stored = loadPromptLabRunVariableSession(
+      window.sessionStorage,
+      promptLabBindingsStorageKey,
+      selectedPack?.runVariableSchema,
+    );
+    skipNextBindingsPersistRef.current = true;
+    setRunVariableBindings(stored.bindings);
+    setPlaceholderValues(stored.placeholders);
+  }, [promptLabBindingsStorageKey, selectedPack?.runVariableSchema]);
+  useEffect(() => {
+    if (!promptLabBindingsStorageKey) return;
+    if (skipNextBindingsPersistRef.current) {
+      skipNextBindingsPersistRef.current = false;
+      return;
+    }
+    try {
+      savePromptLabRunVariableSession(window.sessionStorage, promptLabBindingsStorageKey, {
+        bindings: runVariableBindings,
+        placeholders: placeholderValues,
+      });
+    } catch {
+      // Session-only values are best effort when browser storage is disabled.
+    }
+  }, [placeholderValues, promptLabBindingsStorageKey, runVariableBindings]);
+  const selectedMissingPlaceholders = useMemo(() => {
+    if (selectedPack?.runVariableSchema) {
+      return selectedPack.runVariableSchema.fields
+        .filter(
+          (field) =>
+            field.required &&
+            (!Object.prototype.hasOwnProperty.call(runVariableBindings, field.id) ||
+              runVariableBindings[field.id] === ""),
+        )
+        .map((field) => field.label);
+    }
+    return selectedPlaceholders.filter(
+      (token) => !(placeholderValues[normalizePromptPlaceholderKey(token)] ?? "").trim(),
+    );
+  }, [placeholderValues, runVariableBindings, selectedPack?.runVariableSchema, selectedPlaceholders]);
 
   const lastSuccessfulModel = useMemo(() => {
     for (const run of report?.runs ?? []) {
@@ -419,9 +468,27 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
         model?: string;
         executionStyle?: PromptPackExecutionStyle;
         placeholderValues?: Record<string, string>;
+        runVariableBindings?: RunVariableBindings;
+        runVariableSchemaHash?: string;
       };
       missingPlaceholders: string[];
     } => {
+      const schema = selectedPack?.runVariableSchema;
+      if (schema) {
+        const validation = validateRunVariableBindings(schema, runVariableBindings, { allowMissingRequired: true });
+        const missingPlaceholders = validation.schema.fields
+          .filter((field) => field.required && !Object.prototype.hasOwnProperty.call(validation.bindings, field.id))
+          .map((field) => field.label);
+        return {
+          input: {
+            ...selectedRunModel,
+            executionStyle,
+            runVariableBindings: validation.bindings,
+            runVariableSchemaHash: validation.schemaHash,
+          },
+          missingPlaceholders,
+        };
+      }
       const placeholders = extractPromptPlaceholders(test.prompt);
       const missingPlaceholders: string[] = [];
       const resolvedPlaceholderValues: Record<string, string> = {};
@@ -445,7 +512,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
         missingPlaceholders,
       };
     },
-    [executionStyle, placeholderValues, selectedRunModel],
+    [executionStyle, placeholderValues, runVariableBindings, selectedPack?.runVariableSchema, selectedRunModel],
   );
 
   const savePromptPackSnapshot = useCallback(async (packId: string): Promise<PromptPackExportRecord> => {
@@ -877,7 +944,6 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
     }
   }, [importText, isOpsVariant, load, selectPack]);
 
-  const selectedPack = packs.find((pack) => pack.packId === selectedPackId) ?? null;
   const selectedCategory = classifyTestResultCategory(selectedRun, selectedAssessment);
   const completedDraftDimensions = DIMENSION_ROWS.filter(({ key }) => scoreDraft[key] !== null).length;
   const draftWeightedScore = computeDraftWeightedScore(scoreDraft);
@@ -966,6 +1032,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
     tests,
     importText,
     placeholderValues,
+    runVariableBindings,
     selectedTestId,
     testResultFilter,
     report,
@@ -1029,6 +1096,13 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
     setConfirmResetArmed,
     setImportText,
     setPlaceholderValues,
+    setRunVariableBindings: (fieldId: string, value: RunVariableValue | undefined) =>
+      setRunVariableBindings(
+        (current) =>
+          Object.fromEntries(
+            Object.entries({ ...current, [fieldId]: value }).filter(([, fieldValue]) => fieldValue !== undefined),
+          ) as RunVariableBindings,
+      ),
     setTestResultFilter,
     setSelectedTestId,
     setScoreDraft,

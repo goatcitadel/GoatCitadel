@@ -1153,6 +1153,54 @@ describe("MissionThreadedControllerHost", () => {
     ).toEqual([]);
   });
 
+  it("hydrates bounded template invocations and rejects arbitrary or edit-time injection", () => {
+    const baseItem = {
+      id: "queue-template",
+      action: "send",
+      sessionId: "session-1",
+      content: "Explain leases",
+      attachments: [],
+      createdAt: "2026-05-01T00:00:00.000Z",
+      requestPrefs: outboundRequestPrefs,
+    };
+    const templateInvocation = {
+      ownerKind: "prompt_pack",
+      ownerId: "pack-1",
+      ownerRevision: "revision-1",
+      templateId: "test-1",
+      schemaHash: "a".repeat(64),
+      values: { topic: "leases", count: 2, public: false },
+    };
+    const parsed = parseHydratedOutboundQueue(JSON.stringify([{ ...baseItem, templateInvocation }]), {
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+    });
+    expect(parsed[0]?.templateInvocation).toEqual(templateInvocation);
+    expect(Object.isFrozen(parsed[0]?.templateInvocation)).toBe(true);
+    for (const malicious of [
+      { ...templateInvocation, rawUrl: "https://attacker.test" },
+      { ...templateInvocation, schemaHash: "not-a-hash" },
+      { ...templateInvocation, values: { secret: { nested: "payload" } } },
+      {
+        ...templateInvocation,
+        values: Object.fromEntries(Array.from({ length: 33 }, (_, index) => [`f${index}`, "x"])),
+      },
+    ]) {
+      expect(
+        parseHydratedOutboundQueue(JSON.stringify([{ ...baseItem, templateInvocation: malicious }]), {
+          workspaceId: "workspace-1",
+          sessionId: "session-1",
+        }),
+      ).toEqual([]);
+    }
+    expect(
+      parseHydratedOutboundQueue(
+        JSON.stringify([{ ...baseItem, action: "edit", targetTurnId: "turn-1", templateInvocation }]),
+        { workspaceId: "workspace-1", sessionId: "session-1" },
+      ),
+    ).toEqual([]);
+  });
+
   it("wires the external-source hook into orchestration, outbound execution, and the composer surface", async () => {
     const degradedState = buildExternalSourceAttachmentsState();
     useExternalSourceAttachmentsMock.mockReturnValue(degradedState);

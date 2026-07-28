@@ -42,6 +42,8 @@ const presetDefaultsSchema = z.object({
   toolsPosture: z.enum(["safe_auto", "manual"]).optional(),
   knowledgeAttachmentIds: z.array(z.string().min(1)).optional(),
   promptFraming: z.string().min(1).optional(),
+  runVariableSchema: z.unknown().optional(),
+  runVariableDefaults: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
 });
 
 const createSchema = z.object({

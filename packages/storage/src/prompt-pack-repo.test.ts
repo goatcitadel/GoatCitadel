@@ -7,7 +7,12 @@ import { randomUUID } from "node:crypto";
 import { createDatabase } from "./sqlite.js";
 import { hashPromptPackPolicyV2 } from "./prompt-pack-policy.js";
 import { PromptPackRepository } from "./prompt-pack-repo.js";
-import { DEFAULT_PROMPT_PACK_POLICY_V2, type PromptPackPolicyV2 } from "@goatcitadel/contracts";
+import {
+  DEFAULT_PROMPT_PACK_POLICY_V2,
+  RUN_VARIABLE_SCHEMA_VERSION,
+  hashRunVariableSchema,
+  type PromptPackPolicyV2,
+} from "@goatcitadel/contracts";
 
 const createdFiles: string[] = [];
 
@@ -31,6 +36,25 @@ function createRepo(): PromptPackRepository {
 }
 
 describe("PromptPackRepository", () => {
+  it("round-trips a normalized versioned run-variable schema and hash", () => {
+    const repo = createRepo();
+    const schema = {
+      version: RUN_VARIABLE_SCHEMA_VERSION,
+      fields: [{ id: "topic", label: "Topic", type: "text" as const, required: true }],
+    };
+    const replaced = repo.replacePackTests({
+      packId: "typed-pack",
+      name: "Typed pack",
+      runVariableSchema: schema,
+      tests: [{ code: "TYPED-1", title: "Typed", prompt: "Explain {{topic}}", orderIndex: 0 }],
+    });
+    assert.deepEqual(replaced.pack.runVariableSchema, {
+      ...schema,
+      fields: [{ ...schema.fields[0], maxLength: 4000 }],
+    });
+    assert.equal(replaced.pack.runVariableSchemaHash, hashRunVariableSchema(schema));
+  });
+
   it("uses the current default policy for inherited_default packs on replacement", () => {
     const repo = createRepo();
     const legacyInheritedPolicy: PromptPackPolicyV2 = {

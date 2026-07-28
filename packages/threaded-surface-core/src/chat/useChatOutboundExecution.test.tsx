@@ -171,6 +171,7 @@ function Harness(props: {
   setCapabilitySuggestionsOverride?: (...args: unknown[]) => void;
   /** HX-407 C3: success-only consumer for queue-frozen external context refs. */
   onExternalContextSent?: (item: unknown) => void;
+  onTemplateInvocationSent?: (item: unknown) => void;
 }) {
   const [thread, setThread] = useState<ChatThreadResponse | null>(
     props.initialThread === undefined ? makeThread() : props.initialThread,
@@ -297,7 +298,14 @@ function Harness(props: {
       ensureFreshRoutePreflight,
       isRoutePreflightAcknowledged: props.isRoutePreflightAcknowledged ?? (() => false),
     },
-    ...(props.onExternalContextSent ? { externalContext: { onExternalContextSent: props.onExternalContextSent } } : {}),
+    ...(props.onExternalContextSent || props.onTemplateInvocationSent
+      ? {
+          externalContext: {
+            onExternalContextSent: props.onExternalContextSent,
+            onTemplateInvocationSent: props.onTemplateInvocationSent,
+          },
+        }
+      : {}),
   });
 
   latest = {
@@ -3202,5 +3210,34 @@ describe("useChatOutboundExecution", () => {
       expect(editPayload).not.toHaveProperty("contextRefs");
       expect(onExternalContextSent).not.toHaveBeenCalled();
     });
+  });
+
+  it("sends and consumes a queue-frozen template invocation only after success", async () => {
+    const onTemplateInvocationSent = vi.fn();
+    await act(async () => {
+      create(<Harness onTemplateInvocationSent={onTemplateInvocationSent} />);
+    });
+    const item = {
+      id: "queue-template-send",
+      action: "send" as const,
+      content: "Explain leases",
+      attachments: [],
+      createdAt: "2026-05-03T12:45:00.000Z",
+      templateInvocation: {
+        ownerKind: "prompt_pack" as const,
+        ownerId: "pack-1",
+        ownerRevision: "revision-1",
+        templateId: "test-1",
+        schemaHash: "a".repeat(64),
+        values: { topic: "leases" },
+      },
+    };
+    await act(async () => latest!.execute(item));
+    expect(sendAgentChatMessageMock).toHaveBeenCalledWith(
+      "session-1",
+      expect.objectContaining({ templateInvocation: item.templateInvocation }),
+      { originSurface: "chat" },
+    );
+    expect(onTemplateInvocationSent).toHaveBeenCalledWith(item);
   });
 });

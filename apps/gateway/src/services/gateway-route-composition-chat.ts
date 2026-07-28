@@ -48,6 +48,7 @@ export function composeChatRouteDependencies(
     createChatSessionSpecialistCandidate: (sessionId, input) =>
       gateway.createChatSessionSpecialistCandidate(sessionId, input),
     publishRealtime: (eventType, source, payload) => gateway.publishRealtime(eventType, source, payload ?? {}),
+    requireTypedRunVariables: () => gateway.requireFeatureEnabled("typedRunVariablesV1Enabled"),
   });
   const chatAttachmentHost: chatAttachmentService.ChatAttachmentHost = {
     config: gateway.config,
@@ -317,7 +318,7 @@ export function composeChatRouteDependencies(
     agentSendChatMessage: (sessionId, input, authenticatedOperator, externalCompanion) =>
       gateway.chatTurnRuntime.agentSendChatMessage(
         sessionId,
-        input,
+        gateway.resolveChatRunVariableInput(sessionId, input),
         authenticatedOperator || externalCompanion
           ? {
               ...(authenticatedOperator ? { authenticatedOperator } : {}),
@@ -333,12 +334,16 @@ export function composeChatRouteDependencies(
       authenticatedOperator?,
       externalCompanion?,
     ) =>
-      gateway.chatTurnRuntime.agentSendChatMessageStream(sessionId, input, {
-        abortSignal: signal,
-        ...(mutationLifecycle ? { mutationLifecycle } : {}),
-        ...(authenticatedOperator ? { authenticatedOperator } : {}),
-        ...(externalCompanion ? { externalCompanion } : {}),
-      }),
+      gateway.chatTurnRuntime.agentSendChatMessageStream(
+        sessionId,
+        gateway.resolveChatRunVariableInput(sessionId, input),
+        {
+          abortSignal: signal,
+          ...(mutationLifecycle ? { mutationLifecycle } : {}),
+          ...(authenticatedOperator ? { authenticatedOperator } : {}),
+          ...(externalCompanion ? { externalCompanion } : {}),
+        },
+      ),
     answerChatUserInputPrompt: (sessionId, turnId, promptId, input, responder) =>
       chatMessageRouteRuntime.answerChatUserInputPrompt(
         chatMessageRouteRuntimeHost,

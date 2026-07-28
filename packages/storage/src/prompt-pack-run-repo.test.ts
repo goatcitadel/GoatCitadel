@@ -29,6 +29,29 @@ function createRepo(): PromptPackRunRepository {
 }
 
 describe("PromptPackRunRepository", () => {
+  it("round-trips validated run-variable evidence", () => {
+    const repo = createRepo();
+    const evidence = {
+      ownerKind: "prompt_pack" as const,
+      ownerId: "pack-1",
+      ownerRevision: "revision-1",
+      templateId: "test-1",
+      schemaHash: "a".repeat(64),
+      bindingsHash: "b".repeat(64),
+      bindings: { topic: "leases" },
+      resolvedInputHash: "c".repeat(64),
+    };
+    const created = repo.create({
+      runId: "run-variables-1",
+      packId: "pack-1",
+      testId: "test-1",
+      status: "running",
+      runVariables: evidence,
+      startedAt: "2026-07-28T00:00:00.000Z",
+    });
+    assert.deepEqual(created.runVariables, evidence);
+  });
+
   it("patch updates only provided fields without clobbering others", () => {
     const repo = createRepo();
     repo.create({
@@ -117,10 +140,7 @@ describe("PromptPackRunRepository", () => {
 
     assert.equal(patched.responseText, "Raw weak transcript.");
     assert.equal(patched.finalResponseText, "Updated score-facing answer.");
-    assert.deepEqual(patched.finalResponseSignals, [
-      "prompt_lab_score_facing_normalization",
-      "trace_backed_repair",
-    ]);
+    assert.deepEqual(patched.finalResponseSignals, ["prompt_lab_score_facing_normalization", "trace_backed_repair"]);
   });
 
   it("round-trips execution style and diagnostic metadata through create and patch", () => {

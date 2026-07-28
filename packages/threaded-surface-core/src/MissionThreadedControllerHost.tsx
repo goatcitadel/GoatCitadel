@@ -31,10 +31,19 @@ import type {
   ChatSessionWorkbenchTreeResponse,
   ChatSessionPrefsPatch,
   ChatThreadResponse,
+  RunTemplateInvocation,
+  RunVariableBindings,
+  RunVariableSchema,
+  RunVariableValue,
   ThreadKnowledgeAttachmentRecord,
   ThreadKnowledgeRetrievalMode,
 } from "@goatcitadel/contracts";
-import { isChatTurnActiveStatus } from "@goatcitadel/contracts";
+import {
+  isChatTurnActiveStatus,
+  resolveLegacyRunVariableTemplate,
+  resolveRunVariableTemplate,
+  validateRunVariableBindings,
+} from "@goatcitadel/contracts";
 import {
   ApiRequestError,
   attachThreadKnowledgeAttachment,
@@ -462,6 +471,44 @@ function parseHydratedExternalContextRefs(
   return Object.freeze(refs);
 }
 
+function parseHydratedTemplateInvocation(value: unknown, action: unknown): RunTemplateInvocation | null {
+  if (
+    action !== "send" ||
+    !isPlainRecord(value) ||
+    !hasOnlyKeys(value, ["ownerKind", "ownerId", "ownerRevision", "templateId", "schemaHash", "values"]) ||
+    !["prompt_pack", "agent_preset"].includes(value.ownerKind as string) ||
+    !isSafeIdentifier(value.ownerId) ||
+    !isBoundedString(value.ownerRevision, 256) ||
+    (hasOwn(value, "templateId") && !isSafeIdentifier(value.templateId)) ||
+    typeof value.schemaHash !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(value.schemaHash) ||
+    !isPlainRecord(value.values) ||
+    Object.keys(value.values).length > 32
+  ) {
+    return null;
+  }
+  for (const [fieldId, fieldValue] of Object.entries(value.values)) {
+    if (
+      !/^[a-z][a-z0-9_]{0,63}$/u.test(fieldId) ||
+      !(
+        typeof fieldValue === "boolean" ||
+        (typeof fieldValue === "number" && Number.isFinite(fieldValue)) ||
+        isBoundedString(fieldValue, 100_000, true)
+      )
+    ) {
+      return null;
+    }
+  }
+  return Object.freeze({
+    ownerKind: value.ownerKind,
+    ownerId: value.ownerId,
+    ownerRevision: value.ownerRevision,
+    ...(typeof value.templateId === "string" ? { templateId: value.templateId } : {}),
+    schemaHash: value.schemaHash,
+    values: Object.freeze({ ...value.values }),
+  }) as RunTemplateInvocation;
+}
+
 /** Fail-closed parser for browser-persisted attachment references. */
 export function parseHydratedChatAttachments(
   raw: string | null,
@@ -510,6 +557,7 @@ export function parseHydratedOutboundQueue(
           "modelCouncil",
           "requestPrefs",
           "externalContextRefs",
+          "templateInvocation",
         ]) ||
         !isSafeIdentifier(candidate.id) ||
         queueIds.has(candidate.id) ||
@@ -553,6 +601,12 @@ export function parseHydratedOutboundQueue(
       if (hasOwn(candidate, "externalContextRefs") && !externalContextRefs) {
         return [];
       }
+      const templateInvocation = hasOwn(candidate, "templateInvocation")
+        ? parseHydratedTemplateInvocation(candidate.templateInvocation, candidate.action)
+        : undefined;
+      if (hasOwn(candidate, "templateInvocation") && !templateInvocation) {
+        return [];
+      }
       queueIds.add(candidate.id);
       parsed.push(
         Object.freeze({
@@ -567,6 +621,7 @@ export function parseHydratedOutboundQueue(
           ...(hasOwn(candidate, "modelCouncil") ? { modelCouncil: Object.freeze({ enabled: true as const }) } : {}),
           requestPrefs,
           ...(externalContextRefs ? { externalContextRefs } : {}),
+          ...(templateInvocation ? { templateInvocation } : {}),
         }) as OutboundQueueItem,
       );
     }
@@ -921,6 +976,18 @@ export function MissionThreadedControllerHost({
     rules: [] as Array<{ ruleId: string; label: string }>,
     timers: [] as ChatTimerRecord[],
   });
+  const [runVariablePanel, setRunVariablePanel] = useState<{
+    open: boolean;
+    title: string;
+    invocation: Omit<RunTemplateInvocation, "values">;
+    schema: RunVariableSchema;
+    template: string;
+    values: RunVariableBindings;
+  } | null>(null);
+  const [pendingTemplateInvocation, setPendingTemplateInvocation] = useState<{
+    invocation: RunTemplateInvocation;
+    resolvedContent: string;
+  } | null>(null);
   const [workbenchDiscardConfirm, setWorkbenchDiscardConfirm] = useState<{
     title: string;
     message: string;
@@ -1099,6 +1166,23 @@ export function MissionThreadedControllerHost({
   const currentSessionMode: ChatMode = "chat";
   const sessionStatusEnabled = settings?.features?.chatSessionStatusV1Enabled === true;
   const chatTimersEnabled = settings?.features?.chatTimersV1Enabled === true;
+  const typedRunVariablesEnabled = settings?.features?.typedRunVariablesV1Enabled === true;
+  const runVariableResolution = useMemo(() => {
+    if (!runVariablePanel) return { preview: "", error: null as string | null };
+    try {
+      const validation = validateRunVariableBindings(runVariablePanel.schema, runVariablePanel.values);
+      const typed = resolveRunVariableTemplate(runVariablePanel.template, runVariablePanel.schema, validation.bindings);
+      return {
+        preview: resolveLegacyRunVariableTemplate(typed, runVariablePanel.schema, validation.bindings).trim(),
+        error: null,
+      };
+    } catch (resolutionError) {
+      return {
+        preview: "",
+        error: resolutionError instanceof Error ? resolutionError.message : String(resolutionError),
+      };
+    }
+  }, [runVariablePanel]);
   const refreshSessionStatus = useCallback(async () => {
     if (!selectedSessionId || !sessionStatusEnabled) return;
     setSessionStatusPanel((current) => ({ ...current, open: true, loading: true, error: null }));
@@ -1118,6 +1202,8 @@ export function MissionThreadedControllerHost({
   useEffect(() => {
     setSessionStatusPanel({ open: false, loading: false, error: null, status: null });
     setChatTimerPanel((current) => ({ ...current, open: false, error: null, timers: [] }));
+    setRunVariablePanel(null);
+    setPendingTemplateInvocation(null);
   }, [selectedSessionId]);
 
   const refreshChatTimers = useCallback(async () => {
@@ -1563,6 +1649,12 @@ export function MissionThreadedControllerHost({
     consumeModelCouncilArming,
     captureOutboundRequestPrefs: () => outboundRequestPrefsSnapshotRef.current,
     captureOutboundExternalContextRefs: externalSourceAttachments.captureOutboundExternalContextRefs,
+    captureOutboundTemplateInvocation: () => {
+      if (!pendingTemplateInvocation || pendingTemplateInvocation.resolvedContent.trim() !== draft.trim()) {
+        return undefined;
+      }
+      return pendingTemplateInvocation.invocation;
+    },
     loadSessionCoreStateRef,
     abortActiveChatStream,
   });
@@ -1646,6 +1738,7 @@ export function MissionThreadedControllerHost({
     projects: composerPaletteProjects,
     knowledgeAttachments: composerPaletteKnowledge,
     externalSourcesAvailable: externalSourceAttachments.supported === true,
+    typedRunVariablesEnabled,
   });
   const effectiveCommandSuggestions = composerPaletteEnabled ? composerPalette.items : commandSuggestions;
   useEffect(() => {
@@ -1945,6 +2038,7 @@ export function MissionThreadedControllerHost({
     },
     externalContext: {
       onExternalContextSent: externalSourceAttachments.handleOutboundExternalContextSent,
+      onTemplateInvocationSent: () => setPendingTemplateInvocation(null),
     },
   });
   const {
@@ -3330,6 +3424,20 @@ export function MissionThreadedControllerHost({
           case "launch_external_source":
             pushLocalNotice("Opened the governed external-source attachment flow.");
             break;
+          case "open_template_form": {
+            const initial = validateRunVariableBindings(item.action.schema, item.action.defaults ?? {}, {
+              allowMissingRequired: true,
+            });
+            setRunVariablePanel({
+              open: true,
+              title: item.command,
+              invocation: item.action.invocation,
+              schema: initial.schema,
+              template: item.action.template,
+              values: initial.bindings,
+            });
+            break;
+          }
         }
       } catch (cause) {
         setUiError(cause instanceof Error ? cause.message : "Unable to apply the palette action.");
@@ -3346,6 +3454,29 @@ export function MissionThreadedControllerHost({
       setUiError,
     ],
   );
+  const handleRunVariableValueChange = useCallback((fieldId: string, value: RunVariableValue | undefined) => {
+    setRunVariablePanel((current) =>
+      current
+        ? {
+            ...current,
+            values: Object.fromEntries(
+              Object.entries({ ...current.values, [fieldId]: value }).filter(
+                ([, fieldValue]) => fieldValue !== undefined,
+              ),
+            ) as RunVariableBindings,
+          }
+        : current,
+    );
+  }, []);
+  const handleApplyRunVariables = useCallback(() => {
+    if (!runVariablePanel || runVariableResolution.error || !runVariableResolution.preview) return;
+    const validation = validateRunVariableBindings(runVariablePanel.schema, runVariablePanel.values);
+    const invocation = { ...runVariablePanel.invocation, values: validation.bindings } satisfies RunTemplateInvocation;
+    setPendingTemplateInvocation({ invocation, resolvedContent: runVariableResolution.preview });
+    setDraft(runVariableResolution.preview);
+    setRunVariablePanel(null);
+    globalThis.setTimeout(() => composerRef.current?.focus(), 0);
+  }, [runVariablePanel, runVariableResolution]);
 
   const handleRevealSelectedTurnDetails = useCallback(() => {
     if (!selectedTurn) {
@@ -3946,6 +4077,20 @@ export function MissionThreadedControllerHost({
               onClose: () => setChatTimerPanel((current) => ({ ...current, open: false })),
             }
           : undefined,
+        runVariablePanel:
+          typedRunVariablesEnabled && runVariablePanel
+            ? {
+                open: runVariablePanel.open,
+                title: runVariablePanel.title,
+                schema: runVariablePanel.schema,
+                values: runVariablePanel.values,
+                preview: runVariableResolution.preview,
+                error: runVariableResolution.error,
+                onValueChange: handleRunVariableValueChange,
+                onApply: handleApplyRunVariables,
+                onClose: () => setRunVariablePanel(null),
+              }
+            : undefined,
         followOutput: followThreadOutput,
         streamStatus: streamStatus as ChatStreamStatus,
         visualStreamMode,

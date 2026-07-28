@@ -325,7 +325,7 @@ function hasPromptPackDiagnosticMetadata(metadata: PromptPackDiagnosticMetadata)
   );
 }
 
-function extractPromptPlaceholders(prompt: string): string[] {
+export function extractPromptPlaceholders(prompt: string): string[] {
   const matches = prompt.match(/<[^<>\n]{3,160}>/g) ?? [];
   const unique = new Set<string>();
   for (const match of matches) {

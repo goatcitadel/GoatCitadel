@@ -8,6 +8,9 @@ import type {
   ChatSessionRecord,
   ChatSessionStatusResponse,
   ChatTimerRecord,
+  RunVariableBindings,
+  RunVariableSchema,
+  RunVariableValue,
   ChatThinkingLevel,
   ChatThreadResponse,
   ChatWebMode,
@@ -135,6 +138,17 @@ export interface MissionControlActiveSessionSurfaceProps {
     onCancelOnNextReplyChange: (value: boolean) => void;
     onCreate: () => void;
     onCancelTimer: (timerId: string, revision: number) => void;
+    onClose: () => void;
+  };
+  runVariablePanel?: {
+    open: boolean;
+    title: string;
+    schema: RunVariableSchema;
+    values: RunVariableBindings;
+    preview: string;
+    error: string | null;
+    onValueChange: (fieldId: string, value: RunVariableValue | undefined) => void;
+    onApply: () => void;
     onClose: () => void;
   };
   /**
