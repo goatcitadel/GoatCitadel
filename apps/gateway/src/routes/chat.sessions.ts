@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Chat session route registration stays centralized so revision, fork, timer, variable, and document-editing admission rules remain auditable together. */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { sendRouteError } from "./_error-handler.js";
@@ -61,6 +62,39 @@ const artifactWorkspaceQuerySchema = z.object({
   citadelId: z.string().min(1).optional(),
   workspaceId: z.string().min(1),
 });
+
+const createArtifactVersionSchema = z
+  .object({
+    workspaceId: z.string().trim().min(1).max(120),
+    baseContentHash: z.string().regex(/^[a-f0-9]{64}$/u),
+    content: z.string().max(256 * 1024),
+    title: z.string().trim().min(1).max(300).optional(),
+  })
+  .strict();
+
+const documentPatchProposalQuerySchema = z.object({
+  workspaceId: z.string().trim().min(1).max(120),
+  sessionId: z.string().trim().min(1).optional(),
+  state: z.enum(["pending", "applied", "rejected", "conflicted"]).optional(),
+});
+
+const createDocumentPatchProposalSchema = z
+  .object({
+    workspaceId: z.string().trim().min(1).max(120),
+    sessionId: z.string().trim().min(1).optional(),
+    targetKind: z.enum(["personal_note", "generated_artifact"]),
+    targetId: z.string().trim().min(1).max(256),
+    baseRevision: z.number().int().positive().optional(),
+    baseContentHash: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/u)
+      .optional(),
+    proposedContent: z.string().max(256 * 1024),
+  })
+  .strict();
+
+const documentPatchProposalParamsSchema = z.object({ proposalId: z.string().trim().min(1) });
+const documentPatchProposalActionSchema = z.object({ workspaceId: z.string().trim().min(1).max(120) }).strict();
 
 const createSessionSchema = z.object({
   citadelId: z.string().min(1).optional(),
@@ -945,6 +979,84 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     }
   });
 
+  fastify.post("/api/v1/chat/generated-artifacts/:artifactId/versions", async (request, reply) => {
+    const params = artifactParamsSchema.safeParse(request.params);
+    const body = createArtifactVersionSchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.code(201).send({
+        item: projectChatGeneratedArtifactForPublic(
+          fastify.services.chatSessions.createChatGeneratedArtifactVersion(params.data.artifactId, body.data),
+        ),
+      });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.get("/api/v1/chat/document-patch-proposals", async (request, reply) => {
+    const query = documentPatchProposalQuerySchema.safeParse(request.query ?? {});
+    if (!query.success) return reply.code(400).send({ error: query.error.flatten() });
+    try {
+      return reply.send(fastify.services.chatSessions.listDocumentPatchProposals(query.data));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/chat/document-patch-proposals", async (request, reply) => {
+    const body = createDocumentPatchProposalSchema.safeParse(request.body ?? {});
+    if (!body.success) return reply.code(400).send({ error: body.error.flatten() });
+    try {
+      return reply
+        .code(201)
+        .send({ item: fastify.services.chatSessions.createDocumentPatchProposal(body.data, resolveActorId(request)) });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/chat/document-patch-proposals/:proposalId/apply", async (request, reply) => {
+    const params = documentPatchProposalParamsSchema.safeParse(request.params);
+    const body = documentPatchProposalActionSchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid proposal apply request." });
+    try {
+      return reply.send({
+        item: fastify.services.chatSessions.applyDocumentPatchProposal(
+          params.data.proposalId,
+          body.data.workspaceId,
+          resolveActorId(request),
+        ),
+      });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/chat/document-patch-proposals/:proposalId/reject", async (request, reply) => {
+    const params = documentPatchProposalParamsSchema.safeParse(request.params);
+    const body = documentPatchProposalActionSchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid proposal rejection request." });
+    try {
+      return reply.send({
+        item: fastify.services.chatSessions.rejectDocumentPatchProposal(
+          params.data.proposalId,
+          body.data.workspaceId,
+          resolveActorId(request),
+        ),
+      });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
   fastify.get("/api/v1/chat/sessions/:sessionId/knowledge-attachments", async (request, reply) => {
     const params = sessionParamsSchema.safeParse(request.params);
     if (!params.success) {
@@ -1000,4 +1112,8 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: (error as Error).message });
     }
   });
+}
+
+function resolveActorId(request: { authActorId?: string }): string {
+  return request.authActorId?.trim() || "operator";
 }

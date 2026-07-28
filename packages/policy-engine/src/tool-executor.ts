@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import type {
   BrowserSessionAccessCheck,
   ChatSessionStatusModelProjection,
+  DocumentPatchProposalToolInput,
   NotifyRequest,
   ToolGrantRecord,
   ToolInvokeRequest,
@@ -117,6 +118,11 @@ export interface ToolExecutorRuntimeHooks {
   getChatSessionStatus?: (sessionId: string) => ChatSessionStatusModelProjection;
   /** Gateway-owned governed attention request; operator-authored rules select external targets. */
   requestNotification?: (request: ToolInvokeRequest, input: NotifyRequest) => Promise<Record<string, unknown>>;
+  /** Gateway-bound assistant proposal. The model cannot supply runtime identity or apply the document mutation. */
+  proposeDocumentPatch?: (
+    request: ToolInvokeRequest,
+    input: DocumentPatchProposalToolInput,
+  ) => Promise<Record<string, unknown>>;
 }
 
 export type ToolProcessSpawnName = "shell.exec" | "shell.exec_background" | "tests.run" | "lint.run" | "build.run";
@@ -256,6 +262,14 @@ export async function executeTool(
       const input = readNotifyRequest(request.args);
       return finalizeToolResult(await runtimeHooks.requestNotification(request, input));
     }
+    case "document.propose_patch": {
+      if (!runtimeHooks.proposeDocumentPatch) {
+        throw new Error("Document patch proposals are unavailable in this runtime.");
+      }
+      return finalizeToolResult(
+        await runtimeHooks.proposeDocumentPatch(request, readDocumentPatchProposal(request.args)),
+      );
+    }
     case "time.now":
       return finalizeToolResult(timeNow());
     case "http.get":
@@ -347,6 +361,38 @@ function readNotifyRequest(args: Record<string, unknown>): NotifyRequest {
     throw new Error("notify.request requires eventType, title, and message.");
   }
   return { eventType: eventType as NotifyRequest["eventType"], title, message };
+}
+
+function readDocumentPatchProposal(args: Record<string, unknown>): DocumentPatchProposalToolInput {
+  const targetKind = args.targetKind;
+  const targetId = args.targetId;
+  const proposedContent = args.proposedContent;
+  if (
+    (targetKind !== "personal_note" && targetKind !== "generated_artifact") ||
+    typeof targetId !== "string" ||
+    !targetId.trim() ||
+    typeof proposedContent !== "string"
+  ) {
+    throw new Error("document.propose_patch requires targetKind, targetId, and proposedContent.");
+  }
+  const baseRevision = args.baseRevision;
+  if (baseRevision !== undefined && (!Number.isInteger(baseRevision) || (baseRevision as number) < 1)) {
+    throw new Error("document.propose_patch baseRevision must be a positive integer.");
+  }
+  const baseContentHash = args.baseContentHash;
+  if (
+    baseContentHash !== undefined &&
+    (typeof baseContentHash !== "string" || !/^[a-f0-9]{64}$/u.test(baseContentHash))
+  ) {
+    throw new Error("document.propose_patch baseContentHash must be a SHA-256 hash.");
+  }
+  return {
+    targetKind,
+    targetId: targetId.trim(),
+    proposedContent,
+    ...(baseRevision === undefined ? {} : { baseRevision: baseRevision as number }),
+    ...(baseContentHash === undefined ? {} : { baseContentHash }),
+  };
 }
 
 function isFullWebAccessEligibleTool(toolName: string): boolean {

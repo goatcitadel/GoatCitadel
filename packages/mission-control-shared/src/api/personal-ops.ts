@@ -4,6 +4,7 @@ import type {
   MailDraftRecord,
   NoteMutationInput,
   NoteRecord,
+  NoteRevisionRecord,
   ReminderMutationInput,
   ReminderRecord,
 } from "@goatcitadel/contracts";
@@ -20,11 +21,23 @@ export async function createNote(input: NoteMutationInput): Promise<NoteRecord> 
   });
 }
 
-export async function updateNote(noteId: string, input: Partial<NoteMutationInput>): Promise<NoteRecord> {
+export async function updateNote(
+  noteId: string,
+  input: Partial<NoteMutationInput> & { expectedRevision?: number },
+): Promise<NoteRecord> {
   return request<NoteRecord>(`/api/v1/notes/${encodeURIComponent(noteId)}`, {
     method: "PATCH",
     body: JSON.stringify(input),
   });
+}
+
+export async function listNoteRevisions(
+  noteId: string,
+  workspaceId = "default",
+): Promise<{ items: NoteRevisionRecord[] }> {
+  return request<{ items: NoteRevisionRecord[] }>(
+    `/api/v1/notes/${encodeURIComponent(noteId)}/history?workspaceId=${encodeURIComponent(workspaceId)}`,
+  );
 }
 
 export async function archiveNote(noteId: string): Promise<NoteRecord> {

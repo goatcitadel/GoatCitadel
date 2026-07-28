@@ -157,6 +157,22 @@ export class ChatGeneratedArtifactRepository {
     return rows.map(mapRow);
   }
 
+  public findDirectSuccessor(artifactId: string): ChatGeneratedArtifactRecord | undefined {
+    const row = toChatGeneratedArtifactRow(
+      this.db
+        .prepare(
+          `
+        SELECT * FROM chat_generated_artifacts
+        WHERE supersedes_artifact_id = ?
+        ORDER BY version DESC, created_at DESC, artifact_id DESC
+        LIMIT 1
+      `,
+        )
+        .get(sanitizeRequired(artifactId, "artifactId")),
+    );
+    return row ? mapRow(row) : undefined;
+  }
+
   public updateProjectForSession(sessionId: string, projectId?: string, updatedAt = new Date().toISOString()): number {
     const result = this.updateProjectForSessionStmt.run({
       sessionId: sanitizeRequired(sessionId, "sessionId"),

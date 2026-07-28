@@ -2,6 +2,9 @@ import type {
   ChatCapabilityUpgradeSuggestion,
   ChatDelegationSuggestionRecord,
   ChatGeneratedArtifactRecord,
+  ChatRoutedContextRef,
+  DocumentPatchProposalRecord,
+  NoteRecord,
   ChatModePresetRecord,
   ChatOrchestrationSummary,
   ChatSessionBindingRecord,
@@ -68,6 +71,28 @@ export interface ChatContextDockPanelsProps {
   selectedTurn: ChatThreadTurnRecord | null;
   capabilityProfileInspection: ChatCapabilityProfileInspection;
   activeGeneratedArtifact?: ChatGeneratedArtifactRecord | null;
+  documents?: {
+    enabled: boolean;
+    loading: boolean;
+    notes: NoteRecord[];
+    artifacts: ChatGeneratedArtifactRecord[];
+    proposals: DocumentPatchProposalRecord[];
+    includedRefs: ChatRoutedContextRef[];
+    onRefresh: () => Promise<void>;
+    onToggleInclude: (ref: ChatRoutedContextRef) => void;
+    onSaveNote: (note: NoteRecord, body: string) => Promise<NoteRecord>;
+    onSaveArtifact: (artifact: ChatGeneratedArtifactRecord, content: string) => Promise<ChatGeneratedArtifactRecord>;
+    onCreateProposal: (input: {
+      targetKind: "personal_note" | "generated_artifact";
+      targetId: string;
+      baseRevision?: number;
+      baseContentHash?: string;
+      proposedContent: string;
+      turnId?: string;
+    }) => Promise<DocumentPatchProposalRecord>;
+    onApplyProposal: (proposalId: string) => Promise<DocumentPatchProposalRecord>;
+    onRejectProposal: (proposalId: string) => Promise<DocumentPatchProposalRecord>;
+  };
   routePreflight?: RoutingPreflightResult | null;
   trust?: WorkTrustDescriptor;
   providerLabelById?: Map<string, string>;

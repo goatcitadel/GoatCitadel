@@ -1,11 +1,15 @@
 import type {
   AgentProfileRecord,
+  ChatGeneratedArtifactRecord,
   ChatProjectRecord,
+  NoteRecord,
   SkillListItem,
   ThreadKnowledgeAttachmentRecord,
 } from "@goatcitadel/contracts";
 import { hashRunVariableSchema } from "@goatcitadel/contracts";
 import { fetchFilesList, fetchPromptPacks, fetchPromptPackTests } from "@goatcitadel/mission-control-shared/api/client";
+import { fetchChatGeneratedArtifacts } from "@goatcitadel/mission-control-shared/api/chat";
+import { listNotes } from "@goatcitadel/mission-control-shared/api/personal-ops";
 import type { ChatModelProviderOption } from "@goatcitadel/mission-control-shared/components/ChatModelPicker";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CommandCatalogItem } from "./useChatSessionData";
@@ -39,6 +43,8 @@ interface BuildSourcesInput {
   knowledgeAttachments: ThreadKnowledgeAttachmentRecord[];
   externalSourcesAvailable: boolean;
   typedRunVariablesEnabled: boolean;
+  documentEditingEnabled?: boolean;
+  sessionId?: string;
   loadFiles?: typeof fetchFilesList;
 }
 
@@ -235,6 +241,62 @@ export function buildChatComposerPaletteSources(input: BuildSourcesInput): Compo
     },
   ];
 
+  if (input.documentEditingEnabled) {
+    sources.push({
+      id: "documents",
+      label: "Notes and artifacts",
+      load: async ({ workspaceId }) => {
+        const settled = await Promise.allSettled([
+          listNotes(workspaceId),
+          fetchChatGeneratedArtifacts({ workspaceId, sessionId: input.sessionId, limit: 200 }),
+        ]);
+        const notes = settled[0]?.status === "fulfilled" ? settled[0].value.items : [];
+        const artifacts = settled[1]?.status === "fulfilled" ? settled[1].value.items : [];
+        if (settled.every((result) => result.status === "rejected")) {
+          throw settled[0]?.status === "rejected" ? settled[0].reason : new Error("Document sources unavailable");
+        }
+        return [
+          ...notes.map(
+            (note: NoteRecord): ComposerPaletteItem => ({
+              key: `note-${note.noteId}`,
+              command: note.title,
+              description: note.body.slice(0, 180),
+              applyValue: note.noteId,
+              source: "documents",
+              sourceLabel: "Personal note",
+              availabilityLabel: `Revision ${note.revision}`,
+              action: {
+                type: "attach_document",
+                documentKind: "personal_note",
+                documentId: note.noteId,
+                label: note.title,
+              },
+              keywords: note.tags,
+            }),
+          ),
+          ...artifacts.map(
+            (artifact: ChatGeneratedArtifactRecord): ComposerPaletteItem => ({
+              key: `artifact-${artifact.artifactId}`,
+              command: artifact.title,
+              description: `${artifact.kind} artifact · version ${artifact.version}`,
+              applyValue: artifact.artifactId,
+              source: "documents",
+              sourceLabel: "Generated artifact",
+              availabilityLabel: "Include in next turn",
+              action: {
+                type: "attach_document",
+                documentKind: "generated_artifact",
+                documentId: artifact.artifactId,
+                label: artifact.title,
+              },
+              keywords: [artifact.kind, artifact.language ?? ""],
+            }),
+          ),
+        ];
+      },
+    });
+  }
+
   if (input.externalSourcesAvailable) {
     sources.push({
       id: "external_sources",
@@ -282,6 +344,8 @@ export function useChatComposerPaletteController(
       input.projects,
       input.providerOptions,
       input.typedRunVariablesEnabled,
+      input.documentEditingEnabled,
+      input.sessionId,
     ],
   );
 

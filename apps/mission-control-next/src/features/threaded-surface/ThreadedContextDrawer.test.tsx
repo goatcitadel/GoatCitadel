@@ -111,6 +111,69 @@ function baseProps(overrides: Record<string, unknown> = {}) {
 }
 
 describe("ThreadedContextDrawer", () => {
+  it("keeps documents explicit, edits notes optimistically, and leaves code artifacts read-only", async () => {
+    const onToggleInclude = vi.fn();
+    const onSaveNote = vi.fn(async (note, body) => ({ ...note, body, revision: note.revision + 1 }));
+    const documents = {
+      enabled: true,
+      loading: false,
+      notes: [
+        {
+          noteId: "note-1",
+          workspaceId: "default",
+          title: "Release note",
+          body: "before",
+          tags: [],
+          sourceRefs: [],
+          lifecycleStatus: "active",
+          revision: 1,
+          createdAt: "2026-07-27T00:00:00.000Z",
+          updatedAt: "2026-07-27T00:00:00.000Z",
+        },
+      ],
+      artifacts: [
+        {
+          artifactId: "artifact-code",
+          sessionId: "session-1",
+          workspaceId: "default",
+          turnId: "turn-1",
+          title: "Script",
+          kind: "code",
+          content: "alert(1)",
+          sourceSurface: "chat",
+          version: 1,
+          contentHash: "a".repeat(64),
+          createdAt: "2026-07-27T00:00:00.000Z",
+          updatedAt: "2026-07-27T00:00:00.000Z",
+        },
+      ],
+      proposals: [],
+      includedRefs: [],
+      onRefresh: vi.fn(async () => undefined),
+      onToggleInclude,
+      onSaveNote,
+      onSaveArtifact: vi.fn(),
+      onCreateProposal: vi.fn(),
+      onApplyProposal: vi.fn(),
+      onRejectProposal: vi.fn(),
+    };
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(<ThreadedContextDrawer surface="chat" props={baseProps({ documents })} />);
+    });
+    const root = renderer!.root;
+    await act(async () => findButton(root, "Documents").props.onClick());
+    await act(async () => findButton(root, "Release note").props.onClick());
+    const textarea = root.findByType("textarea");
+    await act(async () => textarea.props.onChange({ target: { value: "after" } }));
+    await act(async () => findButton(root, "Include in next turn").props.onClick());
+    await act(async () => findButton(root, "Save directly").props.onClick());
+    expect(onToggleInclude).toHaveBeenCalledWith({ kind: "personal_note", ref: "note-1", label: "Release note" });
+    expect(onSaveNote).toHaveBeenCalledWith(expect.objectContaining({ noteId: "note-1", revision: 1 }), "after");
+    await act(async () => findButton(root, "Script").props.onClick());
+    expect(root.findAllByType("textarea")).toHaveLength(0);
+    expect(collectText(root)).toContain("is read-only");
+  });
   it("shows canonical preference truth separately from a retryable conflict draft", async () => {
     const onRetryPreferenceConflictDraft = vi.fn(async () => undefined);
     const onDiscardPreferenceConflictDraft = vi.fn();

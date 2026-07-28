@@ -1210,11 +1210,12 @@ describe("MissionThreadedControllerHost", () => {
     // Degraded (pre-C4): the surface receives no external controls at all.
     expect(latestSurfaceInput?.activeSessionSurfaceProps?.externalSourceControls).toBeNull();
     const orchestrationInput = useChatSurfaceOrchestrationMock.mock.calls.at(-1)?.[0] as any;
-    expect(orchestrationInput?.captureOutboundExternalContextRefs).toBe(
-      degradedState.captureOutboundExternalContextRefs,
-    );
+    expect(orchestrationInput?.captureOutboundExternalContextRefs()).toEqual([]);
+    expect(degradedState.captureOutboundExternalContextRefs).toHaveBeenCalledOnce();
     const outboundInput = useChatOutboundExecutionMock.mock.calls.at(-1)?.[0] as any;
-    expect(outboundInput?.externalContext?.onExternalContextSent).toBe(degradedState.handleOutboundExternalContextSent);
+    const sentItem = { externalContextRefs: [] };
+    outboundInput?.externalContext?.onExternalContextSent(sentItem);
+    expect(degradedState.handleOutboundExternalContextSent).toHaveBeenCalledWith(sentItem);
 
     await cleanupRenderedHosts();
     setupMocks();

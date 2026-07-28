@@ -1,4 +1,10 @@
-import type { NoteMutationInput, NoteRecord, ReminderMutationInput, ReminderRecord } from "@goatcitadel/contracts";
+import type {
+  NoteMutationInput,
+  NoteRecord,
+  NoteRevisionRecord,
+  ReminderMutationInput,
+  ReminderRecord,
+} from "@goatcitadel/contracts";
 
 export interface PersonalOpsWorkspaceAccess {
   workspaceId?: string;
@@ -17,7 +23,12 @@ export interface PersonalOpsReminderListInput {
 export interface PersonalOpsRepositoryPort {
   listNotes(input?: PersonalOpsNoteListInput): NoteRecord[];
   createNote(input: NoteMutationInput): NoteRecord;
-  updateNote(noteId: string, input: Partial<NoteMutationInput>, access?: PersonalOpsWorkspaceAccess): NoteRecord;
+  listNoteRevisions(noteId: string, access?: PersonalOpsWorkspaceAccess): NoteRevisionRecord[];
+  updateNote(
+    noteId: string,
+    input: Partial<NoteMutationInput> & { expectedRevision?: number; actorId?: string },
+    access?: PersonalOpsWorkspaceAccess,
+  ): NoteRecord;
   archiveNote(noteId: string, access?: PersonalOpsWorkspaceAccess): NoteRecord;
   listReminders(input?: PersonalOpsReminderListInput): ReminderRecord[];
   createReminder(input: ReminderMutationInput): ReminderRecord;
@@ -45,12 +56,16 @@ export class PersonalOpsService {
 
   public updateNote(
     noteId: string,
-    input: Partial<NoteMutationInput>,
+    input: Partial<NoteMutationInput> & { expectedRevision?: number; actorId?: string },
     access: PersonalOpsWorkspaceAccess = {},
   ): NoteRecord {
     const scopedWorkspaceId = input.workspaceId ?? access.workspaceId;
     const { workspaceId: _workspaceId, ...patch } = input;
     return this.repository.updateNote(noteId, patch, { workspaceId: scopedWorkspaceId });
+  }
+
+  public listNoteRevisions(noteId: string, access: PersonalOpsWorkspaceAccess = {}): { items: NoteRevisionRecord[] } {
+    return { items: this.repository.listNoteRevisions(noteId, access) };
   }
 
   public archiveNote(noteId: string, access: PersonalOpsWorkspaceAccess = {}): NoteRecord {

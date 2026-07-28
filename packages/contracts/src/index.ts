@@ -84,6 +84,7 @@ export * from "./work-passport.js";
 export * from "./chat-session-status.js";
 export * from "./chat-timers.js";
 export * from "./run-variables.js";
+export * from "./document-editing.js";
 export * from "./chat-fork.js";
 export * from "./routed-context.js";
 export * from "./canonical-json.js";

@@ -107,6 +107,7 @@ export interface FeatureFlagsConfig {
   notificationRoutingV1Enabled?: boolean;
   chatTimersV1Enabled?: boolean;
   typedRunVariablesV1Enabled?: boolean;
+  documentEditingV1Enabled?: boolean;
   /**
    * Competitive-gap program phase B2b: TTS voice replies to audio-capable
    * channels (Telegram voice notes in v1). Absent/false (default) ⇒ the reply
@@ -770,6 +771,7 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
     ["notificationRoutingV1Enabled", process.env.GOATCITADEL_FEATURE_NOTIFICATION_ROUTING_V1_ENABLED],
     ["chatTimersV1Enabled", process.env.GOATCITADEL_FEATURE_CHAT_TIMERS_V1_ENABLED],
     ["typedRunVariablesV1Enabled", process.env.GOATCITADEL_FEATURE_TYPED_RUN_VARIABLES_V1_ENABLED],
+    ["documentEditingV1Enabled", process.env.GOATCITADEL_FEATURE_DOCUMENT_EDITING_V1_ENABLED],
     ["channelVoiceInboundV1Enabled", process.env.GOATCITADEL_FEATURE_CHANNEL_VOICE_INBOUND_V1_ENABLED],
     ["signalInboundV1Enabled", process.env.GOATCITADEL_FEATURE_SIGNAL_INBOUND_V1_ENABLED],
     ["plannerFastPathV1Disabled", process.env.GOATCITADEL_FEATURE_PLANNER_FAST_PATH_V1_DISABLED],
@@ -1336,6 +1338,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       notificationRoutingV1Enabled: featuresInput.notificationRoutingV1Enabled ?? true,
       chatTimersV1Enabled: featuresInput.chatTimersV1Enabled ?? true,
       typedRunVariablesV1Enabled: featuresInput.typedRunVariablesV1Enabled ?? true,
+      documentEditingV1Enabled: featuresInput.documentEditingV1Enabled ?? true,
       // Channel voice inbound (B2a): default OFF. `?? false` keeps inbound
       // Telegram/WhatsApp voice handling byte-identical unless an operator opts in.
       channelVoiceInboundV1Enabled: featuresInput.channelVoiceInboundV1Enabled ?? false,

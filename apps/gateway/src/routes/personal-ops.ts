@@ -29,6 +29,7 @@ const updateNoteSchema = z
     body: noteTextSchema,
     tags: z.array(noteTagSchema).max(32).optional(),
     sourceRefs: z.array(sourceRefSchema).max(50).optional(),
+    expectedRevision: z.number().int().positive().optional(),
   })
   .refine((value) => Object.keys(value).some((key) => key !== "workspaceId"), {
     message: "At least one note field is required.",
@@ -71,8 +72,7 @@ export const personalOpsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const lifecycleStatus =
-        parsed.data.lifecycleStatus ?? (parsed.data.includeArchived === true ? "all" : "active");
+      const lifecycleStatus = parsed.data.lifecycleStatus ?? (parsed.data.includeArchived === true ? "all" : "active");
       return reply.send(
         getPersonalOpsRouteService(fastify).listNotes({
           workspaceId: parsed.data.workspaceId,
@@ -112,6 +112,18 @@ export const personalOpsRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply.send(
         getPersonalOpsRouteService(fastify).updateNote(params.data.noteId, body.data, readWorkspaceAccess(request)),
+      );
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.get("/api/v1/notes/:noteId/history", async (request, reply) => {
+    const params = noteParamsSchema.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    try {
+      return reply.send(
+        getPersonalOpsRouteService(fastify).listNoteRevisions(params.data.noteId, readWorkspaceAccess(request)),
       );
     } catch (error) {
       return sendRouteError(reply, error, request.log);

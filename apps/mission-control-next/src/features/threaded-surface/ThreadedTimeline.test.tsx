@@ -934,7 +934,7 @@ describe("ThreadedTimeline", () => {
     const next = renderer.root.findByProps({ "aria-label": "Show next variant for turn turn-1" });
     const details = renderer.root.find((node) => node.type === "button" && node.children.join("") === "Run details");
     const retry = renderer.root.find((node) => node.type === "button" && node.children.join("") === "Retry run step");
-    const startThread = renderer.root.findByProps({ "aria-label": "Start a new thread from turn turn-1" });
+    const startThread = renderer.root.findByProps({ "aria-label": "Fork conversation from turn turn-1" });
     TestRenderer.act(() => {
       previous.props.onClick();
       next.props.onClick();

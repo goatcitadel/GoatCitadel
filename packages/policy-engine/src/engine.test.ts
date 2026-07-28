@@ -1261,7 +1261,7 @@ describe("ToolPolicyEngine invocation coverage", () => {
         policyReason: "allowed_via_approval:apr-direct",
         result: {
           sessionId: "session",
-          status: "ok",
+          status: "unavailable",
         },
       });
       expect(storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(
@@ -2368,7 +2368,7 @@ describe("ToolPolicyEngine policy edge coverage", () => {
         outcome: "executed",
         result: {
           sessionId: "session",
-          status: "ok",
+          status: "unavailable",
         },
       });
 
@@ -4462,7 +4462,7 @@ describe("ToolPolicyEngine outside-root read access", () => {
         policyReason: "allowed_via_approval:apr-session",
         result: {
           sessionId: "session",
-          status: "ok",
+          status: "unavailable",
         },
       });
       expect(storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(

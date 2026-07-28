@@ -7,6 +7,7 @@ import {
   CHAT_ROUTED_CONTEXT_MAX_REFS,
   CHAT_ROUTED_CONTEXT_MAX_SNAPSHOT_BYTES,
   CHAT_ROUTED_CONTEXT_SNAPSHOT_VERSION,
+  CHAT_ROUTED_CONTEXT_LEGACY_SNAPSHOT_VERSION,
   NotFoundError,
   canonicalJsonString,
   type ChatRoutedContextInspection,
@@ -224,7 +225,10 @@ export function verifyChatRoutedContextSnapshot(input: ChatRoutedContextSnapshot
   assertBoundedIdentifier(input.capabilityProfileId, "capabilityProfileId", 256);
   assertBoundedIdentifier(input.budget.effectiveProviderId, "effectiveProviderId", 128);
   assertBoundedIdentifier(input.budget.effectiveModel, "effectiveModel", 256);
-  if (input.schemaVersion !== CHAT_ROUTED_CONTEXT_SNAPSHOT_VERSION) {
+  if (
+    input.schemaVersion !== CHAT_ROUTED_CONTEXT_SNAPSHOT_VERSION &&
+    input.schemaVersion !== CHAT_ROUTED_CONTEXT_LEGACY_SNAPSHOT_VERSION
+  ) {
     throw new Error(`Routed context snapshot ${input.snapshotId} has an unsupported schema version.`);
   }
   if (
@@ -295,8 +299,20 @@ export function verifyChatRoutedContextSnapshot(input: ChatRoutedContextSnapshot
       throw new Error(`Routed context snapshot ${input.snapshotId} has malformed entry fields.`);
     }
     assertBoundedIdentifier(entry.ref, `entries[${index}].ref`, CHAT_ROUTED_CONTEXT_MAX_REF_LENGTH);
-    if (entry.kind !== "attachment" && entry.kind !== "memory_item" && entry.kind !== "external_attachment") {
+    if (
+      entry.kind !== "attachment" &&
+      entry.kind !== "memory_item" &&
+      entry.kind !== "external_attachment" &&
+      entry.kind !== "personal_note" &&
+      entry.kind !== "generated_artifact"
+    ) {
       throw new Error(`Routed context snapshot ${input.snapshotId} has an invalid entry kind.`);
+    }
+    if (
+      input.schemaVersion === CHAT_ROUTED_CONTEXT_LEGACY_SNAPSHOT_VERSION &&
+      (entry.kind === "personal_note" || entry.kind === "generated_artifact")
+    ) {
+      throw new Error(`Routed context snapshot ${input.snapshotId} uses a v2 entry kind under the v1 schema.`);
     }
     assertEntryExternalProvenance(input.snapshotId, entry);
     if (

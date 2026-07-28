@@ -20,6 +20,12 @@ export type ComposerPaletteAction =
   | { type: "switch_project"; projectId: string; projectName: string }
   | { type: "attach_file"; relativePath: string }
   | { type: "attach_context"; attachmentId: string }
+  | {
+      type: "attach_document";
+      documentKind: "personal_note" | "generated_artifact";
+      documentId: string;
+      label: string;
+    }
   | { type: "attach_url"; url: string }
   | { type: "launch_external_source" }
   | {
@@ -88,6 +94,7 @@ const MODE_SOURCE_PRIORITY: Record<ComposerPaletteMode, readonly ComposerPalette
     "projects",
     "files",
     "knowledge",
+    "documents",
     "urls",
     "external_sources",
   ],
@@ -97,6 +104,7 @@ const MODE_SOURCE_PRIORITY: Record<ComposerPaletteMode, readonly ComposerPalette
     "projects",
     "files",
     "knowledge",
+    "documents",
     "urls",
     "external_sources",
     "skills",
@@ -112,6 +120,7 @@ const MODE_SOURCE_PRIORITY: Record<ComposerPaletteMode, readonly ComposerPalette
     "projects",
     "files",
     "knowledge",
+    "documents",
     "urls",
     "external_sources",
   ],
@@ -124,6 +133,7 @@ const MODE_SOURCE_PRIORITY: Record<ComposerPaletteMode, readonly ComposerPalette
     "projects",
     "files",
     "knowledge",
+    "documents",
     "urls",
     "external_sources",
   ],

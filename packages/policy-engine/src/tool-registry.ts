@@ -120,6 +120,34 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     ],
   },
   {
+    name: "document.propose_patch",
+    category: "knowledge",
+    riskLevel: "safe",
+    requiresApproval: false,
+    description:
+      "Create a reviewable full-replacement proposal for an editable personal note or generated Markdown/text artifact. This never applies the edit.",
+    argSchema: {
+      type: "object",
+      properties: {
+        targetKind: { type: "string", enum: ["personal_note", "generated_artifact"] },
+        targetId: { type: "string", minLength: 1, maxLength: 256 },
+        baseRevision: { type: "integer", minimum: 1 },
+        baseContentHash: { type: "string", pattern: "^[a-f0-9]{64}$" },
+        proposedContent: { type: "string", maxLength: 262144 },
+      },
+      required: ["targetKind", "targetId", "proposedContent"],
+      additionalProperties: false,
+    },
+    pack: "core",
+    recommendedContexts: ["chat"],
+    preferredForIntents: ["edit_note", "edit_artifact", "propose_document_patch"],
+    usageHints: [
+      "Use the active document's exact target id and base revision or content hash.",
+      "The operator must review and apply the proposal; this tool cannot mutate the target document.",
+      "Workspace, session, turn, and assistant provenance are bound by the Gateway and cannot be supplied in arguments.",
+    ],
+  },
+  {
     name: "context.list",
     category: "knowledge",
     riskLevel: "safe",

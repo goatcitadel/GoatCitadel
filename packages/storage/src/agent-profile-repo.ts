@@ -382,12 +382,14 @@ function parsePresetDefaults(value: string | null): AgentPresetDefaults | undefi
     toolsPosture: parsed.toolsPosture,
     knowledgeAttachmentIds: parsed.knowledgeAttachmentIds?.map((item) => item.trim()).filter(Boolean) ?? [],
     promptFraming: sanitizeOptional(parsed.promptFraming) ?? undefined,
-    runVariableSchema: parsed.runVariableSchema ? normalizeRunVariableSchema(parsed.runVariableSchema) : undefined,
-    runVariableDefaults: parsed.runVariableSchema
-      ? validateRunVariableBindings(parsed.runVariableSchema, parsed.runVariableDefaults ?? {}, {
-          allowMissingRequired: true,
-        }).bindings
-      : undefined,
+    ...(parsed.runVariableSchema
+      ? {
+          runVariableSchema: normalizeRunVariableSchema(parsed.runVariableSchema),
+          runVariableDefaults: validateRunVariableBindings(parsed.runVariableSchema, parsed.runVariableDefaults ?? {}, {
+            allowMissingRequired: true,
+          }).bindings,
+        }
+      : {}),
   };
 }
 
