@@ -121,6 +121,7 @@ export interface RuntimeSettings {
     notificationRoutingV1Enabled?: boolean;
     chatTimersV1Enabled?: boolean;
     typedRunVariablesV1Enabled?: boolean;
+    documentEditingV1Enabled?: boolean;
     /** Inbound channel voice ingestion (B2a). Absent/false (default) ⇒ Telegram/WhatsApp voice keeps today's placeholder/drop behavior. */
     channelVoiceInboundV1Enabled?: boolean;
     /** Deprecated compatibility value; true emits a blocked-setting diagnostic but never enables Signal receive. */

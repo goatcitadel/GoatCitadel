@@ -52,10 +52,24 @@ describe("personal ops routes", () => {
       payload: {
         workspaceId: "alpha",
         title: "Updated note",
+        expectedRevision: alphaNote.revision,
       },
     });
     expect(updated.statusCode).toBe(200);
     expect(updated.json().title).toBe("Updated note");
+    expect(updated.json().revision).toBe(2);
+    const history = await app.inject({
+      method: "GET",
+      url: `/api/v1/notes/${encodeURIComponent(alphaNote.noteId)}/history?workspaceId=alpha`,
+    });
+    expect(history.statusCode).toBe(200);
+    expect(history.json().items.map((item: { revision: number }) => item.revision)).toEqual([2, 1]);
+    const stale = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/notes/${encodeURIComponent(alphaNote.noteId)}`,
+      payload: { workspaceId: "alpha", body: "stale", expectedRevision: 1 },
+    });
+    expect(stale.statusCode).toBe(409);
 
     const archive = await app.inject({
       method: "POST",

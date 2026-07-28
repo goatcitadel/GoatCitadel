@@ -13342,6 +13342,99 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ON chat_session_run_variable_bindings(session_id, updated_at DESC);
     `,
   },
+  {
+    version: 128,
+    name: "document_editing",
+    sql: `
+      DO $routed_context_v2$
+      DECLARE constraint_name TEXT;
+      BEGIN
+        IF to_regclass('public.chat_routed_context_snapshots') IS NOT NULL THEN
+          FOR constraint_name IN
+            SELECT conname FROM pg_constraint
+            WHERE conrelid = 'public.chat_routed_context_snapshots'::regclass
+              AND contype = 'c' AND pg_get_constraintdef(oid) LIKE '%schema_version%'
+          LOOP
+            EXECUTE format('ALTER TABLE public.chat_routed_context_snapshots DROP CONSTRAINT %I', constraint_name);
+          END LOOP;
+          ALTER TABLE public.chat_routed_context_snapshots
+            ADD CONSTRAINT chat_routed_context_snapshots_schema_version_v2_check
+            CHECK(schema_version IN ('chat.routed-context-snapshot.v1', 'chat.routed-context-snapshot.v2'));
+        END IF;
+      END
+      $routed_context_v2$;
+      CREATE TABLE IF NOT EXISTS personal_ops_notes (
+        note_id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        body TEXT NOT NULL,
+        tags_json TEXT NOT NULL,
+        source_refs_json TEXT NOT NULL,
+        lifecycle_status TEXT NOT NULL,
+        revision BIGINT NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        archived_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_personal_ops_notes_workspace_updated
+        ON personal_ops_notes(workspace_id, updated_at);
+      ALTER TABLE personal_ops_notes ADD COLUMN IF NOT EXISTS revision BIGINT NOT NULL DEFAULT 1;
+      CREATE TABLE IF NOT EXISTS personal_ops_note_revisions (
+        note_id TEXT NOT NULL,
+        workspace_id TEXT NOT NULL,
+        revision BIGINT NOT NULL,
+        title TEXT NOT NULL,
+        body TEXT NOT NULL,
+        tags_json TEXT NOT NULL,
+        source_refs_json TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        actor_id TEXT NOT NULL,
+        source TEXT NOT NULL,
+        proposal_id TEXT,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (note_id, revision)
+      );
+      INSERT INTO personal_ops_note_revisions (
+        note_id, workspace_id, revision, title, body, tags_json, source_refs_json,
+        content_hash, actor_id, source, created_at
+      )
+      SELECT note_id, workspace_id, 1, title, body, tags_json, source_refs_json,
+             'legacy-import:' || note_id, 'migration', 'migration', updated_at
+      FROM personal_ops_notes
+      ON CONFLICT (note_id, revision) DO NOTHING;
+      CREATE INDEX IF NOT EXISTS idx_personal_ops_note_revisions_workspace
+        ON personal_ops_note_revisions(workspace_id, note_id, revision DESC);
+
+      CREATE TABLE IF NOT EXISTS document_patch_proposals (
+        proposal_id TEXT PRIMARY KEY,
+        schema_version TEXT NOT NULL,
+        workspace_id TEXT NOT NULL,
+        session_id TEXT,
+        target_kind TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        base_revision BIGINT,
+        base_content_hash TEXT,
+        proposed_content TEXT NOT NULL,
+        derived_diff TEXT NOT NULL,
+        author_kind TEXT NOT NULL,
+        author_id TEXT NOT NULL,
+        turn_id TEXT,
+        state TEXT NOT NULL,
+        applied_target_id TEXT,
+        applied_revision BIGINT,
+        applied_content_hash TEXT,
+        conflict_reason TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        resolved_at TEXT,
+        resolved_by TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_document_patch_proposals_scope
+        ON document_patch_proposals(workspace_id, session_id, state, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_document_patch_proposals_target
+        ON document_patch_proposals(workspace_id, target_kind, target_id, created_at DESC);
+    `,
+  },
 ];
 
 function buildWorkspacePathBridgePosixFlavorPostgresSql(): string {

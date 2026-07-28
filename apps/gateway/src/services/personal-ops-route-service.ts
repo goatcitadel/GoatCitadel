@@ -7,7 +7,14 @@ import type {
 
 export type PersonalOpsRoutePort = Pick<
   PersonalOpsService,
-  "archiveNote" | "completeReminder" | "createNote" | "createReminder" | "listNotes" | "listReminders" | "updateNote"
+  | "archiveNote"
+  | "completeReminder"
+  | "createNote"
+  | "createReminder"
+  | "listNoteRevisions"
+  | "listNotes"
+  | "listReminders"
+  | "updateNote"
 >;
 
 export class PersonalOpsRouteService {
@@ -19,6 +26,10 @@ export class PersonalOpsRouteService {
 
   public createNote(input: Parameters<PersonalOpsRoutePort["createNote"]>[0], access?: PersonalOpsWorkspaceAccess) {
     return this.personalOps.createNote(input, access);
+  }
+
+  public listNoteRevisions(noteId: string, access?: PersonalOpsWorkspaceAccess) {
+    return this.personalOps.listNoteRevisions(noteId, access);
   }
 
   public updateNote(

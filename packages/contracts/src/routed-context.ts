@@ -1,4 +1,8 @@
-export const CHAT_ROUTED_CONTEXT_SNAPSHOT_VERSION = "chat.routed-context-snapshot.v1" as const;
+export const CHAT_ROUTED_CONTEXT_SNAPSHOT_VERSION = "chat.routed-context-snapshot.v2" as const;
+export const CHAT_ROUTED_CONTEXT_LEGACY_SNAPSHOT_VERSION = "chat.routed-context-snapshot.v1" as const;
+export type ChatRoutedContextSnapshotVersion =
+  | typeof CHAT_ROUTED_CONTEXT_LEGACY_SNAPSHOT_VERSION
+  | typeof CHAT_ROUTED_CONTEXT_SNAPSHOT_VERSION;
 export const CHAT_ROUTED_CONTEXT_BUDGET_POLICY_VERSION = "chat.routed-context-budget.v1" as const;
 export const CHAT_ROUTED_CONTEXT_ESTIMATOR_VERSION = "gc-approx-tokens.v1" as const;
 export const CHAT_ROUTED_CONTEXT_MAX_REFS = 16;
@@ -19,7 +23,12 @@ export const CHAT_ROUTED_CONTEXT_REF_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u;
 const CHAT_ROUTED_CONTEXT_CONTROL_SOURCE = `[${String.fromCharCode(0)}-${String.fromCharCode(0x1f)}${String.fromCharCode(0x7f)}]`;
 export const CHAT_ROUTED_CONTEXT_CONTROL_PATTERN = new RegExp(CHAT_ROUTED_CONTEXT_CONTROL_SOURCE, "u");
 
-export type ChatRoutedContextKind = "attachment" | "memory_item" | "external_attachment";
+export type ChatRoutedContextKind =
+  | "attachment"
+  | "memory_item"
+  | "external_attachment"
+  | "personal_note"
+  | "generated_artifact";
 export type ChatRoutedContextSourceScope = "workspace" | "global";
 export type ChatRoutedContextDisposition = "included" | "truncated" | "omitted" | "already_attached";
 
@@ -82,7 +91,7 @@ export interface ChatRoutedContextSnapshotEntry {
 
 export interface ChatRoutedContextSnapshotRecord {
   snapshotId: string;
-  schemaVersion: typeof CHAT_ROUTED_CONTEXT_SNAPSHOT_VERSION;
+  schemaVersion: ChatRoutedContextSnapshotVersion;
   turnId: string;
   sessionId: string;
   workspaceId: string;

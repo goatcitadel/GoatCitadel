@@ -15,12 +15,15 @@ import type {
   AgentProfileRecord,
   ChatAttachmentRecord,
   ChatGeneratedArtifactRecord,
+  ChatRoutedContextRef,
   ChatMode,
   ChatModePresetRecord,
   ChatSessionRecord,
   ChatSessionSearchHitRecord,
   ChatSessionStatusResponse,
   ChatTimerRecord,
+  DocumentPatchProposalRecord,
+  NoteRecord,
   ChatSessionWorkbenchCommandRunRequest,
   ChatSessionWorkbenchDiffResponse,
   ChatSessionWorkbenchFileDiffResponse,
@@ -71,6 +74,14 @@ import {
   updateChatSessionPrefs,
   uploadChatAttachment,
 } from "@goatcitadel/mission-control-shared/api/client";
+import {
+  applyDocumentPatchProposal,
+  createChatGeneratedArtifactVersion,
+  createDocumentPatchProposal,
+  listDocumentPatchProposals,
+  rejectDocumentPatchProposal,
+} from "@goatcitadel/mission-control-shared/api/chat";
+import { listNotes, updateNote } from "@goatcitadel/mission-control-shared/api/personal-ops";
 import {
   controlAgenticRun,
   fetchAgenticRuns,
@@ -430,7 +441,8 @@ const MAX_HYDRATED_EXTERNAL_CONTEXT_REFS = 16;
 
 /**
  * Fail-closed parser for HX-407 queue-frozen external context refs. Only send
- * items may carry them, every ref is a safe `external_attachment` identifier,
+ * items may carry them, every ref is a safe external or explicitly selected
+ * document identifier,
  * and any drift rejects the whole persisted queue (matching the envelope's
  * all-or-nothing hydration posture).
  */
@@ -446,13 +458,13 @@ function parseHydratedExternalContextRefs(
   ) {
     return null;
   }
-  const refs: Array<{ kind: "external_attachment"; ref: string; label?: string }> = [];
+  const refs: ChatRoutedContextRef[] = [];
   const seen = new Set<string>();
   for (const candidate of value) {
     if (
       !isPlainRecord(candidate) ||
       !hasOnlyKeys(candidate, ["kind", "ref", "label"]) ||
-      candidate.kind !== "external_attachment" ||
+      !["external_attachment", "personal_note", "generated_artifact"].includes(candidate.kind as string) ||
       !isSafeIdentifier(candidate.ref) ||
       seen.has(candidate.ref) ||
       (hasOwn(candidate, "label") && !isBoundedString(candidate.label, 160))
@@ -462,7 +474,7 @@ function parseHydratedExternalContextRefs(
     seen.add(candidate.ref);
     refs.push(
       Object.freeze({
-        kind: "external_attachment",
+        kind: candidate.kind as ChatRoutedContextRef["kind"],
         ref: candidate.ref,
         ...(typeof candidate.label === "string" ? { label: candidate.label } : {}),
       }),
@@ -1167,6 +1179,7 @@ export function MissionThreadedControllerHost({
   const sessionStatusEnabled = settings?.features?.chatSessionStatusV1Enabled === true;
   const chatTimersEnabled = settings?.features?.chatTimersV1Enabled === true;
   const typedRunVariablesEnabled = settings?.features?.typedRunVariablesV1Enabled === true;
+  const documentEditingEnabled = settings?.features?.documentEditingV1Enabled === true;
   const runVariableResolution = useMemo(() => {
     if (!runVariablePanel) return { preview: "", error: null as string | null };
     try {
@@ -1617,6 +1630,43 @@ export function MissionThreadedControllerHost({
     sessionId: selectedSessionId,
     pushLocalNotice,
   });
+  const documentWorkspaceId = selectedSession?.workspaceId ?? workspaceId;
+  const [documentNotes, setDocumentNotes] = useState<NoteRecord[]>([]);
+  const [documentProposals, setDocumentProposals] = useState<DocumentPatchProposalRecord[]>([]);
+  const [documentLoading, setDocumentLoading] = useState(false);
+  const [pendingDocumentContextRefs, setPendingDocumentContextRefs] = useState<ChatRoutedContextRef[]>([]);
+  const refreshDocuments = useCallback(async () => {
+    if (!documentEditingEnabled || !selectedSessionId) {
+      setDocumentNotes([]);
+      setDocumentProposals([]);
+      return;
+    }
+    setDocumentLoading(true);
+    try {
+      const [notesResponse, proposalsResponse] = await Promise.all([
+        listNotes(documentWorkspaceId),
+        listDocumentPatchProposals({ workspaceId: documentWorkspaceId, sessionId: selectedSessionId }),
+      ]);
+      setDocumentNotes(notesResponse.items);
+      setDocumentProposals(proposalsResponse.items);
+    } finally {
+      setDocumentLoading(false);
+    }
+  }, [documentEditingEnabled, documentWorkspaceId, selectedSessionId]);
+  useEffect(() => {
+    setPendingDocumentContextRefs([]);
+    void refreshDocuments().catch((error: unknown) => {
+      setUiError(error instanceof Error ? error.message : "Unable to load Chat documents.");
+    });
+  }, [refreshDocuments, selectedSessionId, setUiError]);
+  const toggleDocumentContext = useCallback((ref: ChatRoutedContextRef) => {
+    setPendingDocumentContextRefs((current) => {
+      const key = `${ref.kind}:${ref.ref}`;
+      return current.some((item) => `${item.kind}:${item.ref}` === key)
+        ? current.filter((item) => `${item.kind}:${item.ref}` !== key)
+        : [...current, ref];
+    });
+  }, []);
 
   const {
     queuedOutbound,
@@ -1648,7 +1698,10 @@ export function MissionThreadedControllerHost({
     onOutboundContextConsumed: handleOutboundContextConsumed,
     consumeModelCouncilArming,
     captureOutboundRequestPrefs: () => outboundRequestPrefsSnapshotRef.current,
-    captureOutboundExternalContextRefs: externalSourceAttachments.captureOutboundExternalContextRefs,
+    captureOutboundExternalContextRefs: () => [
+      ...externalSourceAttachments.captureOutboundExternalContextRefs(),
+      ...pendingDocumentContextRefs.map((ref) => ({ ...ref })),
+    ],
     captureOutboundTemplateInvocation: () => {
       if (!pendingTemplateInvocation || pendingTemplateInvocation.resolvedContent.trim() !== draft.trim()) {
         return undefined;
@@ -1739,6 +1792,8 @@ export function MissionThreadedControllerHost({
     knowledgeAttachments: composerPaletteKnowledge,
     externalSourcesAvailable: externalSourceAttachments.supported === true,
     typedRunVariablesEnabled,
+    documentEditingEnabled,
+    sessionId: selectedSessionId ?? undefined,
   });
   const effectiveCommandSuggestions = composerPaletteEnabled ? composerPalette.items : commandSuggestions;
   useEffect(() => {
@@ -2037,7 +2092,19 @@ export function MissionThreadedControllerHost({
       isRoutePreflightAcknowledged: (hash) => Boolean(acknowledgedRoutePreflightHashes[hash]),
     },
     externalContext: {
-      onExternalContextSent: externalSourceAttachments.handleOutboundExternalContextSent,
+      onExternalContextSent: (item) => {
+        externalSourceAttachments.handleOutboundExternalContextSent(item);
+        const sentDocuments = new Set(
+          (item.externalContextRefs ?? [])
+            .filter((ref) => ref.kind === "personal_note" || ref.kind === "generated_artifact")
+            .map((ref) => `${ref.kind}:${ref.ref}`),
+        );
+        if (sentDocuments.size > 0) {
+          setPendingDocumentContextRefs((current) =>
+            current.filter((ref) => !sentDocuments.has(`${ref.kind}:${ref.ref}`)),
+          );
+        }
+      },
       onTemplateInvocationSent: () => setPendingTemplateInvocation(null),
     },
   });
@@ -3418,6 +3485,14 @@ export function MissionThreadedControllerHost({
           case "attach_context":
             pushLocalNotice("This knowledge attachment is available to the next turn.", "success");
             break;
+          case "attach_document":
+            toggleDocumentContext({
+              kind: item.action.documentKind,
+              ref: item.action.documentId,
+              label: item.action.label,
+            });
+            pushLocalNotice(`Included ${item.action.label} in the next turn.`, "success");
+            break;
           case "attach_url":
             await handleAttachKnowledgeUrlValue(item.action.url);
             break;
@@ -3452,6 +3527,7 @@ export function MissionThreadedControllerHost({
       handleAttachPaletteFile,
       pushLocalNotice,
       setUiError,
+      toggleDocumentContext,
     ],
   );
   const handleRunVariableValueChange = useCallback((fieldId: string, value: RunVariableValue | undefined) => {
@@ -4686,6 +4762,58 @@ export function MissionThreadedControllerHost({
           selectedTurn,
           capabilityProfileInspection,
           activeGeneratedArtifact,
+          documents: {
+            enabled: documentEditingEnabled,
+            loading: documentLoading,
+            notes: documentNotes,
+            artifacts: generatedArtifacts?.items ?? [],
+            proposals: documentProposals,
+            includedRefs: pendingDocumentContextRefs,
+            onRefresh: refreshDocuments,
+            onToggleInclude: toggleDocumentContext,
+            onSaveNote: async (note, body) => {
+              const updated = await updateNote(note.noteId, {
+                workspaceId: documentWorkspaceId,
+                body,
+                expectedRevision: note.revision,
+              });
+              await refreshDocuments();
+              return updated;
+            },
+            onSaveArtifact: async (artifact, content) => {
+              if (!artifact.contentHash) throw new Error("Artifact content hash is unavailable.");
+              const response = await createChatGeneratedArtifactVersion(artifact.artifactId, {
+                workspaceId: documentWorkspaceId,
+                baseContentHash: artifact.contentHash,
+                content,
+              });
+              await loadSessionSecondaryState(selectedSession.sessionId, { background: true });
+              setActiveGeneratedArtifact(response.item);
+              return response.item;
+            },
+            onCreateProposal: async (input) => {
+              const response = await createDocumentPatchProposal({
+                ...input,
+                workspaceId: documentWorkspaceId,
+                sessionId: selectedSession.sessionId,
+              });
+              await refreshDocuments();
+              return response.item;
+            },
+            onApplyProposal: async (proposalId) => {
+              const response = await applyDocumentPatchProposal(proposalId, documentWorkspaceId);
+              await Promise.all([
+                refreshDocuments(),
+                loadSessionSecondaryState(selectedSession.sessionId, { background: true }),
+              ]);
+              return response.item;
+            },
+            onRejectProposal: async (proposalId) => {
+              const response = await rejectDocumentPatchProposal(proposalId, documentWorkspaceId);
+              await refreshDocuments();
+              return response.item;
+            },
+          },
           routePreflight: currentRoutePreflight,
           trust: sessionTrust,
           providerLabelById,

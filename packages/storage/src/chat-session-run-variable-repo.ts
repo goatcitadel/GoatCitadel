@@ -74,11 +74,12 @@ export class ChatSessionRunVariableRepository {
 }
 
 function mapRow(row: Row): ChatSessionRunVariableBindingRecord {
-  let bindings: RunVariableBindings = {};
+  let bindings: RunVariableBindings;
   try {
     bindings = JSON.parse(row.bindings_json) as RunVariableBindings;
   } catch {
     // Corrupt bindings never become template input.
+    bindings = {};
   }
   return {
     sessionId: row.session_id,

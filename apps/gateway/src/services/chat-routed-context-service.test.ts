@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
-import type { ChatAttachmentRecord, ChatTurnCapabilityProfileRecord, MemoryItemRecord } from "@goatcitadel/contracts";
+import type {
+  ChatAttachmentRecord,
+  ChatGeneratedArtifactRecord,
+  ChatTurnCapabilityProfileRecord,
+  MemoryItemRecord,
+  NoteRecord,
+} from "@goatcitadel/contracts";
 import { canonicalJsonString } from "@goatcitadel/contracts";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -111,6 +117,8 @@ function deps(
   input: {
     attachments?: Record<string, { record: ChatAttachmentRecord; text: string; delay?: number }>;
     memories?: Record<string, MemoryItemRecord>;
+    notes?: Record<string, NoteRecord>;
+    artifacts?: Record<string, ChatGeneratedArtifactRecord>;
   } = {},
 ): ChatRoutedContextSourceDeps {
   return {
@@ -126,10 +134,65 @@ function deps(
       return { record: value.record, bytes: Buffer.from(value.text, "utf8") };
     }),
     getActiveMemoryItem: vi.fn((id) => input.memories?.[id]),
+    getPersonalNote: vi.fn((id) => {
+      const item = input.notes?.[id];
+      if (!item) throw new Error(`missing ${id}`);
+      return item;
+    }),
+    getGeneratedArtifact: vi.fn((id) => {
+      const item = input.artifacts?.[id];
+      if (!item) throw new Error(`missing ${id}`);
+      return item;
+    }),
   };
 }
 
 describe("chat routed context service", () => {
+  it("freezes personal notes and generated artifacts with revision and hash provenance", async () => {
+    const note: NoteRecord = {
+      noteId: "note-1",
+      workspaceId: "workspace-1",
+      title: "Plan",
+      body: "note bytes",
+      tags: [],
+      sourceRefs: [],
+      lifecycleStatus: "active",
+      revision: 3,
+      createdAt: "2026-07-27T00:00:00.000Z",
+      updatedAt: "2026-07-27T00:01:00.000Z",
+    };
+    const artifact: ChatGeneratedArtifactRecord = {
+      artifactId: "artifact-1",
+      sessionId: "session-1",
+      workspaceId: "workspace-1",
+      turnId: "turn-old",
+      title: "Draft",
+      kind: "markdown",
+      content: "artifact bytes",
+      sourceSurface: "chat",
+      version: 2,
+      contentHash: hash("artifact bytes"),
+      createdAt: "2026-07-27T00:00:00.000Z",
+      updatedAt: "2026-07-27T00:00:00.000Z",
+    };
+    const resolved = await resolveChatRoutedContextSources(
+      deps({ notes: { "note-1": note }, artifacts: { "artifact-1": artifact } }),
+      {
+        refs: [
+          { kind: "personal_note", ref: "note-1", label: "Plan" },
+          { kind: "generated_artifact", ref: "artifact-1", label: "Draft" },
+        ],
+        sessionId: "session-1",
+        workspaceId: "workspace-1",
+        memoryMode: "on",
+        allowGlobalMemory: false,
+      },
+    );
+    expect(resolved.sources.map((source) => source.text)).toEqual(["note bytes", "artifact bytes"]);
+    expect(resolved.sources[0]?.sourceVersion).toContain("revision:3");
+    expect(resolved.sources[1]?.sourceVersion).toContain("version:2");
+    expect(resolved.sources.every((source) => source.sourceWorkspaceId === "workspace-1")).toBe(true);
+  });
   it("rejects unknown ref fields and duplicate normalized sources before any source read", async () => {
     const host = deps();
     await expect(

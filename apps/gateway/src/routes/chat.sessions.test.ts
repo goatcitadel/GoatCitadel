@@ -60,6 +60,57 @@ describe("chat session routes", () => {
         payload: { title: "New", mode: "cowork", tags: ["ops"], includeInHistory: false },
       }),
     ).resolves.toMatchObject({ statusCode: 201 });
+    await expect(
+      app.inject({
+        method: "POST",
+        url: "/api/v1/chat/generated-artifacts/artifact-1/versions",
+        payload: { workspaceId: "default", baseContentHash: "a".repeat(64), content: "updated" },
+      }),
+    ).resolves.toMatchObject({ statusCode: 201 });
+    expect(chatSessions.createChatGeneratedArtifactVersion).toHaveBeenCalledWith("artifact-1", {
+      workspaceId: "default",
+      baseContentHash: "a".repeat(64),
+      content: "updated",
+    });
+    await expect(
+      app.inject({
+        method: "POST",
+        url: "/api/v1/chat/document-patch-proposals",
+        payload: {
+          workspaceId: "default",
+          sessionId: "sess-1",
+          targetKind: "personal_note",
+          targetId: "note-1",
+          baseRevision: 1,
+          proposedContent: "next",
+        },
+      }),
+    ).resolves.toMatchObject({ statusCode: 201 });
+    expect(chatSessions.createDocumentPatchProposal).toHaveBeenCalledWith(
+      expect.objectContaining({ targetId: "note-1" }),
+      "operator",
+    );
+    await expect(
+      app.inject({
+        method: "POST",
+        url: "/api/v1/chat/document-patch-proposals",
+        payload: {
+          workspaceId: "default",
+          targetKind: "personal_note",
+          targetId: "note-1",
+          baseRevision: 1,
+          proposedContent: "forged",
+          turnId: "turn-forged",
+        },
+      }),
+    ).resolves.toMatchObject({ statusCode: 400 });
+    await expect(
+      app.inject({
+        method: "POST",
+        url: "/api/v1/chat/document-patch-proposals/proposal-1/apply",
+        payload: { workspaceId: "default" },
+      }),
+    ).resolves.toMatchObject({ statusCode: 200 });
     expect(chatSessions.createChatSession).toHaveBeenCalledWith({
       title: "New",
       mode: "chat",
@@ -584,6 +635,12 @@ function createChatSessionsService(overrides: Record<string, unknown> = {}) {
     listChatGeneratedArtifacts: vi.fn(() => [{ artifactId: "artifact-1" }]),
     getChatGeneratedArtifact: vi.fn(() => ({ artifactId: "artifact-1" })),
     createChatGeneratedArtifactFromTurn: vi.fn(() => ({ artifactId: "artifact-2" })),
+    createChatGeneratedArtifactVersion: vi.fn(() => ({ artifactId: "artifact-v2" })),
+    createDocumentPatchProposal: vi.fn(() => ({ proposalId: "proposal-1", state: "pending" })),
+    createAssistantDocumentPatchProposal: vi.fn(() => ({ proposalId: "proposal-assistant", state: "pending" })),
+    listDocumentPatchProposals: vi.fn(() => ({ items: [] })),
+    applyDocumentPatchProposal: vi.fn(() => ({ proposalId: "proposal-1", state: "applied" })),
+    rejectDocumentPatchProposal: vi.fn(() => ({ proposalId: "proposal-1", state: "rejected" })),
     listChatThreadKnowledgeAttachments: vi.fn(() => [{ attachmentId: "attachment-1" }]),
     attachChatThreadKnowledgeAttachment: vi.fn(async () => ({ attachmentId: "attachment-2" })),
     removeChatThreadKnowledgeAttachment: vi.fn(() => ({ removed: true })),

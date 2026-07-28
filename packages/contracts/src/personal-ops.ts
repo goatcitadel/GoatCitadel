@@ -8,9 +8,26 @@ export interface NoteRecord {
   tags: string[];
   sourceRefs: string[];
   lifecycleStatus: PersonalOpsLifecycleStatus;
+  /** Monotonic optimistic-concurrency revision. */
+  revision: number;
   createdAt: string;
   updatedAt: string;
   archivedAt?: string;
+}
+
+export interface NoteRevisionRecord {
+  noteId: string;
+  workspaceId: string;
+  revision: number;
+  title: string;
+  body: string;
+  tags: string[];
+  sourceRefs: string[];
+  contentHash: string;
+  actorId: string;
+  source: "operator" | "proposal" | "migration";
+  proposalId?: string;
+  createdAt: string;
 }
 
 export interface ReminderRecord {
@@ -123,6 +140,12 @@ export interface NoteMutationInput {
   body?: string;
   tags?: string[];
   sourceRefs?: string[];
+}
+
+export interface NoteUpdateInput extends Partial<NoteMutationInput> {
+  expectedRevision: number;
+  actorId?: string;
+  proposalId?: string;
 }
 
 export interface ReminderMutationInput {

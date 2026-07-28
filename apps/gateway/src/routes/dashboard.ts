@@ -281,6 +281,7 @@ export const updateSettingsSchema = z.object({
       notificationRoutingV1Enabled: z.boolean().optional(),
       chatTimersV1Enabled: z.boolean().optional(),
       typedRunVariablesV1Enabled: z.boolean().optional(),
+      documentEditingV1Enabled: z.boolean().optional(),
       utilityModelRoutingV1Enabled: z.boolean().optional(),
       cronEvidenceV1Enabled: z.boolean().optional(),
       memoryConsolidationV1Enabled: z.boolean().optional(),

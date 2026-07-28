@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { MissionThreadedContextDockProps } from "@goatcitadel/threaded-surface-core";
 import type {
   ChatMode,
@@ -11,11 +11,12 @@ import type {
 import { ChatTraceCard } from "@goatcitadel/mission-control-shared/components/ChatTraceCard";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { GeneratedArtifactViewer } from "@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactViewer";
+import { AssistantMessageRenderer } from "@goatcitadel/mission-control-shared/components/chat/AssistantMessageRenderer";
 import { StatusChip } from "../native-routes/primitives";
 import { shortId } from "./workflow/format";
 import { ChatCapabilityProfileRunDetail } from "./ChatCapabilityProfilePanel";
 
-type DrawerTab = "context" | "trace" | "assist" | "session";
+type DrawerTab = "context" | "documents" | "trace" | "assist" | "session";
 
 const SUBAGENT_AUTO_ACK_STORAGE_PREFIX = "mc-next:subagent-auto-ack:";
 
@@ -111,6 +112,226 @@ function formatPreferenceDraftFields(patch: ChatSessionPrefsPatch): string {
   return fields.length > 0 ? fields.join(", ") : "session preferences";
 }
 
+function ThreadedDocumentsPanel({ props }: { props: MissionThreadedContextDockProps }) {
+  const documents = props.documents;
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const selectedNote = documents?.notes.find((note) => `personal_note:${note.noteId}` === selectedKey);
+  const selectedArtifact = documents?.artifacts.find(
+    (artifact) => `generated_artifact:${artifact.artifactId}` === selectedKey,
+  );
+  const editable = Boolean(selectedNote || selectedArtifact?.kind === "markdown" || selectedArtifact?.kind === "text");
+  const selectedRef = selectedNote
+    ? { kind: "personal_note" as const, ref: selectedNote.noteId, label: selectedNote.title }
+    : selectedArtifact
+      ? { kind: "generated_artifact" as const, ref: selectedArtifact.artifactId, label: selectedArtifact.title }
+      : null;
+  const included = selectedRef
+    ? documents?.includedRefs.some((ref) => ref.kind === selectedRef.kind && ref.ref === selectedRef.ref) === true
+    : false;
+
+  useEffect(() => {
+    setDraft(selectedNote?.body ?? selectedArtifact?.content ?? "");
+    setError(null);
+  }, [selectedArtifact?.artifactId, selectedArtifact?.content, selectedNote?.body, selectedNote?.noteId]);
+
+  if (!documents?.enabled) {
+    return <p className="mc-next-context-empty">Document editing is unavailable in this runtime.</p>;
+  }
+
+  const run = async (action: () => Promise<unknown>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await action();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The document action failed.");
+      await documents.onRefresh().catch(() => undefined);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mc-next-context-section-stack">
+      <section className="mc-next-context-card">
+        <div className="mc-next-context-card-title-row">
+          <div>
+            <p className="mc-next-panel-kicker">Documents</p>
+            <h4>Notes and generated artifacts</h4>
+          </div>
+          <button
+            type="button"
+            className="mc-next-panel-button"
+            disabled={documents.loading}
+            onClick={() => void documents.onRefresh()}
+          >
+            Refresh
+          </button>
+        </div>
+        <p>Opening a document never adds it to model context. Use “Include in next turn” explicitly.</p>
+        <div className="mc-next-context-actions" role="list" aria-label="Chat documents">
+          {documents.notes.map((note) => (
+            <button
+              key={note.noteId}
+              type="button"
+              className="mc-next-panel-button"
+              aria-pressed={selectedKey === `personal_note:${note.noteId}`}
+              onClick={() => setSelectedKey(`personal_note:${note.noteId}`)}
+            >
+              Note · {note.title} · r{note.revision}
+            </button>
+          ))}
+          {documents.artifacts.map((artifact) => (
+            <button
+              key={artifact.artifactId}
+              type="button"
+              className="mc-next-panel-button"
+              aria-pressed={selectedKey === `generated_artifact:${artifact.artifactId}`}
+              onClick={() => setSelectedKey(`generated_artifact:${artifact.artifactId}`)}
+            >
+              Artifact · {artifact.title} · {artifact.kind} v{artifact.version}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      {selectedRef ? (
+        <section className="mc-next-context-card">
+          <p className="mc-next-panel-kicker">{selectedNote ? "Personal note" : "Generated artifact"}</p>
+          <h4>{selectedRef.label}</h4>
+          <div className="mc-next-context-actions">
+            <button
+              type="button"
+              className="mc-next-panel-button"
+              aria-pressed={included}
+              onClick={() => documents.onToggleInclude(selectedRef)}
+            >
+              {included ? "Included in next turn" : "Include in next turn"}
+            </button>
+          </div>
+          {editable ? (
+            <>
+              <label className="mc-next-context-field">
+                <span>Document content</span>
+                <textarea
+                  value={draft}
+                  rows={12}
+                  maxLength={256 * 1024}
+                  disabled={busy}
+                  onChange={(event) => setDraft(event.target.value)}
+                />
+              </label>
+              <div className="mc-next-context-actions">
+                <button
+                  type="button"
+                  className="mc-next-panel-button"
+                  disabled={busy}
+                  onClick={() =>
+                    void run(async () => {
+                      if (selectedNote) await documents.onSaveNote(selectedNote, draft);
+                      else if (selectedArtifact) {
+                        const saved = await documents.onSaveArtifact(selectedArtifact, draft);
+                        setSelectedKey(`generated_artifact:${saved.artifactId}`);
+                      }
+                    })
+                  }
+                >
+                  Save directly
+                </button>
+                <button
+                  type="button"
+                  className="mc-next-panel-button"
+                  disabled={busy}
+                  onClick={() =>
+                    void run(async () => {
+                      await documents.onCreateProposal({
+                        targetKind: selectedNote ? "personal_note" : "generated_artifact",
+                        targetId: selectedRef.ref,
+                        baseRevision: selectedNote?.revision,
+                        baseContentHash: selectedArtifact?.contentHash,
+                        proposedContent: draft,
+                      });
+                    })
+                  }
+                >
+                  Create review proposal
+                </button>
+              </div>
+            </>
+          ) : (
+            <p role="status">
+              {selectedArtifact?.kind ?? "This document"} is read-only. Only notes and generated Markdown/text artifacts
+              can be edited.
+            </p>
+          )}
+          <details className="mc-next-context-detail-disclosure" open>
+            <summary>Safe preview</summary>
+            {selectedNote ? <AssistantMessageRenderer role="assistant" content={draft} /> : null}
+            {selectedArtifact ? (
+              <GeneratedArtifactViewer artifact={{ ...selectedArtifact, content: draft }} compact />
+            ) : null}
+          </details>
+          {error ? <p role="alert">{error}</p> : null}
+        </section>
+      ) : null}
+
+      {documents.proposals.length > 0 ? (
+        <section className="mc-next-context-card">
+          <p className="mc-next-panel-kicker">Patch proposals</p>
+          <h4>Review before apply</h4>
+          {documents.proposals.map((proposal) => (
+            <details key={proposal.proposalId} className="mc-next-context-detail-disclosure">
+              <summary>
+                {proposal.targetKind} · {proposal.state}
+              </summary>
+              <p>
+                {proposal.authorKind} provenance · {proposal.turnId ?? proposal.authorId}
+              </p>
+              <pre className="generated-artifact-code-block">{proposal.derivedDiff}</pre>
+              {proposal.conflictReason ? <p role="alert">{proposal.conflictReason}</p> : null}
+              {proposal.state === "pending" ? (
+                <div className="mc-next-context-actions">
+                  <button
+                    type="button"
+                    className="mc-next-panel-button"
+                    disabled={busy}
+                    onClick={() => void run(() => documents.onApplyProposal(proposal.proposalId))}
+                  >
+                    Apply
+                  </button>
+                  <button
+                    type="button"
+                    className="mc-next-panel-button"
+                    disabled={busy}
+                    onClick={() => void run(() => documents.onRejectProposal(proposal.proposalId))}
+                  >
+                    Reject
+                  </button>
+                </div>
+              ) : null}
+              {proposal.state === "conflicted" ? (
+                <button
+                  type="button"
+                  className="mc-next-panel-button"
+                  onClick={() => {
+                    setSelectedKey(`${proposal.targetKind}:${proposal.targetId}`);
+                    setDraft(proposal.proposedContent);
+                  }}
+                >
+                  Load for rebase
+                </button>
+              ) : null}
+            </details>
+          ))}
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
 export function ThreadedContextDrawer({
   surface,
   props,
@@ -153,7 +374,7 @@ export function ThreadedContextDrawer({
         <h3>Thread grounding</h3>
       </div>
       <div className="mc-next-panel-tab-row" role="tablist" aria-label="Context drawer panels">
-        {(["context", "trace", "assist", "session"] as DrawerTab[]).map((tab) => (
+        {(["context", "documents", "trace", "assist", "session"] as DrawerTab[]).map((tab) => (
           <button
             key={tab}
             type="button"
@@ -162,7 +383,15 @@ export function ThreadedContextDrawer({
             className={`mc-next-panel-tab${activeTab === tab ? " active" : ""}`}
             onClick={() => setActiveTab(tab)}
           >
-            {tab === "context" ? "Context" : tab === "trace" ? "Trace" : tab === "assist" ? "Assist" : "Session"}
+            {tab === "context"
+              ? "Context"
+              : tab === "documents"
+                ? "Documents"
+                : tab === "trace"
+                  ? "Trace"
+                  : tab === "assist"
+                    ? "Assist"
+                    : "Session"}
           </button>
         ))}
       </div>
@@ -348,6 +577,8 @@ export function ThreadedContextDrawer({
           ) : null}
         </div>
       ) : null}
+
+      {activeTab === "documents" ? <ThreadedDocumentsPanel props={props} /> : null}
 
       {activeTab === "trace" ? (
         <div className="mc-next-context-section-stack">

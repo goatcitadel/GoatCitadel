@@ -20,6 +20,8 @@ import {
   type ChatTurnCapabilityProfileRecord,
   type ExternalSessionAttachmentRecord,
   type MemoryItemRecord,
+  type NoteRecord,
+  type ChatGeneratedArtifactRecord,
 } from "@goatcitadel/contracts";
 import { estimateTokensFromText } from "@goatcitadel/memory-core";
 import {
@@ -84,6 +86,8 @@ export interface ChatRoutedContextSourceDeps {
     workspaceId: string,
     options: { allowGlobal: boolean },
   ): MemoryItemRecord | undefined;
+  getPersonalNote?(noteId: string): NoteRecord;
+  getGeneratedArtifact?(artifactId: string): ChatGeneratedArtifactRecord;
   /**
    * Governed exact-byte read for one live `read_only_external` attachment.
    * Absent in compositions that have not enabled the external-source runtime:
@@ -135,6 +139,36 @@ export async function resolveChatRoutedContextSources(
     }
     if (ref.kind === "external_attachment") {
       return { type: "external" as const, ref };
+    }
+    if (ref.kind === "personal_note") {
+      if (!deps.getPersonalNote)
+        throw new ConflictError({ message: `Personal note ${ref.ref} is unavailable in this runtime.` });
+      const note = deps.getPersonalNote(ref.ref);
+      if (note.noteId !== ref.ref || note.workspaceId !== input.workspaceId || note.lifecycleStatus !== "active") {
+        throw new ConflictError({ message: `Personal note ${ref.ref} is unavailable in the effective workspace.` });
+      }
+      assertExactUtf8(note.body, `personal note ${ref.ref}`);
+      const bytes = Buffer.byteLength(note.body, "utf8");
+      assertSourceSize(ref.ref, bytes);
+      return { type: "note" as const, ref, note, bytes };
+    }
+    if (ref.kind === "generated_artifact") {
+      if (!deps.getGeneratedArtifact)
+        throw new ConflictError({ message: `Generated artifact ${ref.ref} is unavailable in this runtime.` });
+      const artifact = deps.getGeneratedArtifact(ref.ref);
+      if (artifact.artifactId !== ref.ref || (artifact.workspaceId ?? "default") !== input.workspaceId) {
+        throw new ConflictError({
+          message: `Generated artifact ${ref.ref} is unavailable in the effective workspace.`,
+        });
+      }
+      assertExactUtf8(artifact.content, `generated artifact ${ref.ref}`);
+      const bytes = Buffer.byteLength(artifact.content, "utf8");
+      assertSourceSize(ref.ref, bytes);
+      const contentHash = digestText(artifact.content);
+      if (artifact.contentHash && artifact.contentHash !== contentHash) {
+        throw new ConflictError({ message: `Generated artifact ${ref.ref} failed its immutable content hash check.` });
+      }
+      return { type: "artifact" as const, ref, artifact, bytes, contentHash };
     }
     const item = deps.getActiveMemoryItem(ref.ref, input.workspaceId, {
       allowGlobal: input.allowGlobalMemory,
@@ -205,6 +239,31 @@ export async function resolveChatRoutedContextSources(
           sourceHash,
           originalBytes: item.bytes,
           text: item.item.content,
+          alreadyAttached: false,
+        };
+      }
+      if (item.type === "note") {
+        const sourceHash = digestText(item.note.body);
+        return {
+          ...item.ref,
+          sourceScope: "workspace",
+          sourceWorkspaceId: input.workspaceId,
+          sourceVersion: `revision:${item.note.revision}:sha256:${sourceHash}`,
+          sourceHash,
+          originalBytes: item.bytes,
+          text: item.note.body,
+          alreadyAttached: false,
+        };
+      }
+      if (item.type === "artifact") {
+        return {
+          ...item.ref,
+          sourceScope: "workspace",
+          sourceWorkspaceId: input.workspaceId,
+          sourceVersion: `version:${item.artifact.version}:sha256:${item.contentHash}`,
+          sourceHash: item.contentHash,
+          originalBytes: item.bytes,
+          text: item.artifact.content,
           alreadyAttached: false,
         };
       }
@@ -447,7 +506,13 @@ function normalizeRefs(value: unknown): NormalizedRef[] {
       throw new ValidationError({ message: `contextRefs[${index}] has an unsupported shape.` });
     }
     const ref = raw as Record<string, unknown>;
-    if (ref.kind !== "attachment" && ref.kind !== "memory_item" && ref.kind !== "external_attachment") {
+    if (
+      ref.kind !== "attachment" &&
+      ref.kind !== "memory_item" &&
+      ref.kind !== "external_attachment" &&
+      ref.kind !== "personal_note" &&
+      ref.kind !== "generated_artifact"
+    ) {
       throw new ValidationError({ message: `contextRefs[${index}].kind is unsupported.` });
     }
     if (
@@ -485,7 +550,11 @@ function normalizeRefs(value: unknown): NormalizedRef[] {
             ? `Attachment ${index + 1}`
             : ref.kind === "external_attachment"
               ? `External source ${index + 1}`
-              : `Memory item ${index + 1}`,
+              : ref.kind === "personal_note"
+                ? `Personal note ${index + 1}`
+                : ref.kind === "generated_artifact"
+                  ? `Generated artifact ${index + 1}`
+                  : `Memory item ${index + 1}`,
     };
   });
 }

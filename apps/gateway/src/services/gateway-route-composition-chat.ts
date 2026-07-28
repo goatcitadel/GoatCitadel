@@ -18,6 +18,7 @@ import {
 import * as chatThreadKnowledgeService from "./chat-thread-knowledge-service.js";
 import * as chatToolArtifactService from "./chat-tool-artifact-service.js";
 import * as chatWorkbenchService from "./chat-workbench-service.js";
+import { DocumentEditingService } from "./document-editing-service.js";
 import { resolveEffectiveRuntimeScopeFromStorage } from "./effective-runtime-scope-service.js";
 import { createSessionControlRouteService } from "./session-control-route-service.js";
 import { getSessionControlRuntimeOwner } from "./session-control-runtime-owner.js";
@@ -105,6 +106,14 @@ export function composeChatRouteDependencies(
     storage: gateway.storage,
     requireChatSession: (sessionId) => gateway.requireChatSession(sessionId),
   };
+  let documentEditing: DocumentEditingService | undefined;
+  const getDocumentEditing = (): DocumentEditingService => {
+    documentEditing ??= new DocumentEditingService({
+      storage: gateway.storage,
+      requireChatSession: (sessionId) => gateway.requireChatSession(sessionId),
+    });
+    return documentEditing;
+  };
   const ChatWorkbenchDependencies: chatWorkbenchService.ChatWorkbenchDependencies = {
     config: gateway.config,
     storage: gateway.storage,
@@ -142,6 +151,22 @@ export function composeChatRouteDependencies(
       chatThreadKnowledgeService.attachChatThreadKnowledgeAttachment(ChatThreadKnowledgeDependencies, sessionId, input),
     createChatGeneratedArtifactFromTurn: (input) =>
       chatGeneratedArtifactService.createChatGeneratedArtifactFromTurn(ChatGeneratedArtifactDependencies, input),
+    createChatGeneratedArtifactVersion: (artifactId, input) => {
+      gateway.requireFeatureEnabled("documentEditingV1Enabled");
+      return getDocumentEditing().createArtifactVersion(artifactId, input);
+    },
+    createDocumentPatchProposal: (input, actorId) => {
+      gateway.requireFeatureEnabled("documentEditingV1Enabled");
+      return getDocumentEditing().createProposal(input, actorId);
+    },
+    createAssistantDocumentPatchProposal: (input, binding) => {
+      gateway.requireFeatureEnabled("documentEditingV1Enabled");
+      return getDocumentEditing().createAssistantProposal(input, binding);
+    },
+    applyDocumentPatchProposal: (proposalId, workspaceId, actorId) => {
+      gateway.requireFeatureEnabled("documentEditingV1Enabled");
+      return getDocumentEditing().applyProposal(proposalId, workspaceId, actorId);
+    },
     createChatSideChat: (sessionId, input) =>
       chatSessionService.createChatSideChat(ChatSessionDependencies, sessionId, input),
     createChatTimer: (sessionId, input, actorId) => {
@@ -216,6 +241,10 @@ export function composeChatRouteDependencies(
         workspaceId: scope.workspaceId,
       });
     },
+    listDocumentPatchProposals: (input) => {
+      gateway.requireFeatureEnabled("documentEditingV1Enabled");
+      return getDocumentEditing().listProposals(input);
+    },
     listChatSessions: (query) => {
       const { citadelId, ...sessionQuery } = query ?? {};
       const scope = resolveChatRuntimeScope(gateway, {
@@ -255,6 +284,10 @@ export function composeChatRouteDependencies(
         sessionId,
         attachmentId,
       ),
+    rejectDocumentPatchProposal: (proposalId, workspaceId, actorId) => {
+      gateway.requireFeatureEnabled("documentEditingV1Enabled");
+      return getDocumentEditing().rejectProposal(proposalId, workspaceId, actorId);
+    },
     restoreChatSession: (sessionId, expectedRevision) =>
       chatSessionService.restoreChatSession(ChatSessionDependencies, sessionId, expectedRevision),
     revertChatSessionWorkbenchChanges: (sessionId) =>

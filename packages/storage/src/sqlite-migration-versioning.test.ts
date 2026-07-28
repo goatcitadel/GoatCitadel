@@ -42,8 +42,8 @@ describe("sqlite schema migrations", () => {
     assert.deepEqual(
       { ...rows.at(-1) },
       {
-        version: 180,
-        name: "workspace_path_bridge_posix_flavor",
+        version: 185,
+        name: "document_editing",
       },
     );
     db.close();

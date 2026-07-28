@@ -17,6 +17,8 @@ const CHAT_ROUTED_CONTEXT_KIND_VALUES = [
   "attachment",
   "memory_item",
   "external_attachment",
+  "personal_note",
+  "generated_artifact",
 ] as const satisfies readonly ChatRoutedContextKind[];
 
 const routedContextRefSchema = z

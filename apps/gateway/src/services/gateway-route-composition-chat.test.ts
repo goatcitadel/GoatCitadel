@@ -158,6 +158,7 @@ function fn<TArgs extends unknown[] = unknown[], TResult = unknown>(impl: (...ar
 
 function createGateway() {
   const gateway = {
+    resolveChatRunVariableInput: fn((_sessionId: string, input: unknown) => input),
     config: {
       rootDir: "F:/code/personal-ai",
       assistant: {

@@ -33,6 +33,7 @@ import {
   type Storage,
   type SessionAutonomyPrefsPatchInput,
   type SessionAutonomyPrefsRecord,
+  PersonalOpsStorageRepository,
 } from "@goatcitadel/storage";
 import {
   buildChatModePrefsPatch,
@@ -177,6 +178,7 @@ import type {
   MemorySearchQuery,
   MemoryWriteInput,
   NotifyRequest,
+  DocumentPatchProposalToolInput,
   CronAgentTurnConfig,
   CronJobRecord,
   CronRunExecutionToken,
@@ -1569,6 +1571,7 @@ export class GatewayService {
       subagentFanout: (request) => this.subagentFanout.execute(request),
       getChatSessionStatus: (sessionId) => this.chatSessionStatusService.getModelProjection(sessionId),
       requestNotification: (request, input) => this.requestNotificationFromTool(request.sessionId, input),
+      proposeDocumentPatch: (request, input) => this.proposeDocumentPatchFromTool(request, input),
     });
     const secretStore = new SecretStoreService();
     this.secretStore = secretStore;
@@ -5650,6 +5653,8 @@ export class GatewayService {
         },
         getActiveMemoryItem: (itemId, workspaceId, options) =>
           this.memoryLifecycleService.getActiveMemoryItemForRoutedContext(itemId, workspaceId, options),
+        getPersonalNote: (noteId) => new PersonalOpsStorageRepository(this.storage.db).getNote(noteId),
+        getGeneratedArtifact: (artifactId) => this.storage.chatGeneratedArtifacts.get(artifactId),
         // HX-407 C4: the governed exact-byte read for live read_only_external
         // attachments. Absent when the external-source chat composition is not
         // live, in which case external refs fail closed in the resolver.
@@ -7330,19 +7335,22 @@ export class GatewayService {
   }
 
   public listToolCatalog(): ToolCatalogEntry[] {
-    return this.policyEngine.listCatalog().map((tool) => ({
-      ...tool,
-      // The policy registry is the Gateway-owned built-in registry. Recompute
-      // this field instead of trusting any caller-supplied readOnly hint.
-      effectPotential: classifyToolEffectPotential({
-        toolName: tool.toolName,
-        trustedBuiltin: true,
-        category: tool.category,
-        riskLevel: tool.riskLevel,
-        requiresApproval: tool.requiresApproval,
-        readOnly: tool.readOnly,
-      }),
-    }));
+    return this.policyEngine
+      .listCatalog()
+      .filter((tool) => tool.toolName !== "document.propose_patch" || this.isFeatureEnabled("documentEditingV1Enabled"))
+      .map((tool) => ({
+        ...tool,
+        // The policy registry is the Gateway-owned built-in registry. Recompute
+        // this field instead of trusting any caller-supplied readOnly hint.
+        effectPotential: classifyToolEffectPotential({
+          toolName: tool.toolName,
+          trustedBuiltin: true,
+          category: tool.category,
+          riskLevel: tool.riskLevel,
+          requiresApproval: tool.requiresApproval,
+          readOnly: tool.readOnly,
+        }),
+      }));
   }
 
   public evaluateToolAccess(input: ToolAccessEvaluateRequest): ToolAccessEvaluateResponse {
@@ -10149,6 +10157,12 @@ export class GatewayService {
   }
 
   private maybeRouteCanonicalNotification(event: RealtimeEvent): void {
+    // Partial host facades used by pure composition/coverage tests do not own
+    // runtime settings or notification repositories. Production Storage always
+    // provides both; fail closed before consulting a feature gate otherwise.
+    if (!(this.storage as Partial<Storage>).systemSettings || !(this.storage as Partial<Storage>).notificationRouting) {
+      return;
+    }
     if (event.source === "notifications" || !this.isFeatureEnabled("notificationRoutingV1Enabled")) return;
     const services = Reflect.get(this, "routeServices") as GatewayRouteServices | undefined;
     if (!services) return;
@@ -10260,6 +10274,36 @@ export class GatewayService {
       event: result.event,
       deliveries: result.deliveries,
       status: result.status,
+    };
+  }
+
+  private async proposeDocumentPatchFromTool(
+    request: ToolInvokeRequest,
+    input: DocumentPatchProposalToolInput,
+  ): Promise<Record<string, unknown>> {
+    this.requireFeatureEnabled("documentEditingV1Enabled");
+    const turnId = request.turnId?.trim();
+    if (!turnId) throw new ValidationError({ message: "Document patch proposals require an active Chat turn." });
+    const session = this.requireChatSession(request.sessionId);
+    const workspaceId = session.workspaceId ?? DEFAULT_WORKSPACE_ID;
+    const proposal = this.routeServices.chatSessions.createAssistantDocumentPatchProposal(input, {
+      workspaceId,
+      sessionId: session.sessionId,
+      turnId,
+      authorId: request.agentId || "assistant",
+    });
+    return {
+      proposalId: proposal.proposalId,
+      state: proposal.state,
+      targetKind: proposal.targetKind,
+      targetId: proposal.targetId,
+      baseRevision: proposal.baseRevision,
+      baseContentHash: proposal.baseContentHash,
+      derivedDiff: proposal.derivedDiff,
+      authorKind: proposal.authorKind,
+      turnId: proposal.turnId,
+      createdAt: proposal.createdAt,
+      requiresOperatorApply: true,
     };
   }
 

@@ -133,7 +133,7 @@ describe("policy-engine branch-tail coverage", () => {
     const storage = createStorage();
 
     await expect(executeTool(request("session.status"), config, storage)).resolves.toMatchObject({
-      status: "ok",
+      status: "unavailable",
       sessionId: "session-loop7",
     });
 

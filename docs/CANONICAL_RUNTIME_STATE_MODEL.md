@@ -52,9 +52,11 @@ An immutable, insert-only record of the exact structured context admitted for on
 Authority:
 - Request contract: `packages/contracts/src/routed-context.ts` and `ChatSendMessageRequest.contextRefs`
 - Resolution, attestation, and budget owner: `apps/gateway/src/services/chat-routed-context-service.ts`
+- Snapshot v2 admits operator-selected `personal_note` and `generated_artifact` refs. Note revision and artifact hash/version are source provenance; the snapshot owns the admitted bytes after turn preparation, so later document edits cannot change durable replay.
 - Persistence and content-free inspection projection: `packages/storage/src/routed-context-snapshot-repo.ts`
 - Durable replay verification: `apps/gateway/src/services/durable-execution-service.ts`
 - Snapshot-bound tool execution: `packages/policy-engine/src/tool-executor/context-executor.ts`
+- Assistant document proposals: `document.propose_patch` persists proposal-only state through the Gateway-owned document editing service. Its workspace, session, turn, and assistant author are server-bound from the active invocation; the public proposal route cannot manufacture assistant provenance, and only a later operator apply mutates a note or creates an artifact successor.
 
 Canonical bindings:
 - Snapshot identity is bound to `turnId`, `sessionId`, `workspaceId`, `capabilityProfileId`, and `capabilityProfileHash`.
@@ -80,6 +82,7 @@ Notes:
 - `notify.request` is an approval-gated model-callable attention request. The Gateway binds it to the active session/workspace and rejects model-supplied target IDs, raw URLs, and credentials. Its internal retained signal may be projected locally, while external delivery exists only when an active operator-authored rule selects a target.
 - Status availability is explicit. A section with missing canonical evidence is `unavailable` with a reason; absence is not projected as zero, idle, healthy, or verified. Runtime build identity is available only when its source and integrity can be resolved. `/status` is a local Chat action and performs no provider call.
 - Independent conversation forks are Gateway-owned materialized copies. `POST /api/v1/chat/sessions/:sessionId/turns/:turnId/fork` copies only the selected root-to-turn path after every turn is terminal and settled. Messages receive new IDs while retaining visible content and timestamps; attachments receive independently stored bytes; generated artifacts receive new version chains.
+- Personal notes remain owned by `personal_ops_notes` plus append-only `personal_ops_note_revisions`. Generated artifacts remain insert-only rows linked by `supersedes_artifact_id`. `document_patch_proposals` owns pending/applied/rejected/conflicted review state and complete replacement content; it is not execution evidence. Mission Control calls Gateway APIs and never writes these tables directly.
 - `chat_session_fork_manifests` is the immutable relationship/provenance authority. It retains source-to-copy mappings, transcript and evidence hashes, routed-context snapshot hashes, and actor/time even if the source session is deleted. Imported traces contain hashed read-only source provenance but never clone durable runs, approvals, tool invocations, or side effects as newly executed evidence. The server-authored `conversationForksV1Enabled` gate owns availability.
 
 ### Durable Run

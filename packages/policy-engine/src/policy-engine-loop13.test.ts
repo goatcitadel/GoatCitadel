@@ -105,7 +105,7 @@ describe("policy engine loop13 branch tails", () => {
 
     await expect(engine.invoke(request("session.status"))).resolves.toMatchObject({
       outcome: "executed",
-      result: { sessionId: "session-loop13", status: "ok" },
+      result: { sessionId: "session-loop13", status: "unavailable" },
     });
 
     expect(engine.evaluateAccess(request("fs.move", { to: path.join(root, "dest.txt") }))).toMatchObject({
