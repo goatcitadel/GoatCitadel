@@ -57,6 +57,7 @@ import {
   useAsyncLoad,
 } from "../SettingsShared";
 import { DiagnosticsPanel } from "./DiagnosticsPanel";
+import { NotificationRoutingPanel } from "./NotificationRoutingPanel";
 import {
   DormantExternalConnectorsPanel,
   ExternalSideEffectLedgerPanel,
@@ -102,6 +103,7 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
       ]),
       catalog: (catalog.data.items ?? []).filter((item) => item.kind !== "channel"),
       connections: (connections.data.items ?? []).filter((item) => item.kind !== "channel"),
+      channelConnections: (connections.data.items ?? []).filter((item) => item.kind === "channel"),
       plugins: plugins.data.items,
       meetStatus: meetStatus.data,
       meetSessions: Array.isArray(meetSessions.data) ? meetSessions.data : [],
@@ -640,6 +642,7 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
               lastReplayAuditRunId={lastReplayAuditRunId}
               onOpenReplayAudit={(runId) => navigate({ area: "ops", section: "sessions", view: "run-detail", runId })}
             />
+            <NotificationRoutingPanel workspaceId={activeWorkspaceId} channels={data.channelConnections} />
             <GoogleMeetStatusPanel
               status={data.meetStatus}
               sessions={data.meetSessions}
@@ -687,6 +690,7 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
                     <label className="mc-next-settings-toggle">
                       <input
                         type="checkbox"
+                        aria-label="Integration connection enabled"
                         checked={detailForm.enabled}
                         onChange={(event) =>
                           setDetailForm((current) => ({ ...current, enabled: event.target.checked }))

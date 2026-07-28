@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import type {
   BrowserSessionAccessCheck,
   ChatSessionStatusModelProjection,
+  NotifyRequest,
   ToolGrantRecord,
   ToolInvokeRequest,
   ToolPolicyActorContext,
@@ -114,6 +115,8 @@ export interface ToolExecutorRuntimeHooks {
   subagentFanout?: (request: ToolInvokeRequest) => Promise<Record<string, unknown>>;
   /** Gateway-owned canonical status projection used by the model-safe `session.status` tool. */
   getChatSessionStatus?: (sessionId: string) => ChatSessionStatusModelProjection;
+  /** Gateway-owned governed attention request; operator-authored rules select external targets. */
+  requestNotification?: (request: ToolInvokeRequest, input: NotifyRequest) => Promise<Record<string, unknown>>;
 }
 
 export type ToolProcessSpawnName = "shell.exec" | "shell.exec_background" | "tests.run" | "lint.run" | "build.run";
@@ -246,6 +249,13 @@ export async function executeTool(
               attachedContextTools: listAvailableRoutedContextTools(request, storage),
             },
       );
+    case "notify.request": {
+      if (!runtimeHooks.requestNotification) {
+        throw new Error("Notification routing is unavailable in this runtime.");
+      }
+      const input = readNotifyRequest(request.args);
+      return finalizeToolResult(await runtimeHooks.requestNotification(request, input));
+    }
     case "time.now":
       return finalizeToolResult(timeNow());
     case "http.get":
@@ -327,6 +337,16 @@ export async function executeTool(
     default:
       throw new Error(`Unsupported tool executor: ${request.toolName}`);
   }
+}
+
+function readNotifyRequest(args: Record<string, unknown>): NotifyRequest {
+  const eventType = args.eventType;
+  const title = args.title;
+  const message = args.message;
+  if (typeof eventType !== "string" || typeof title !== "string" || typeof message !== "string") {
+    throw new Error("notify.request requires eventType, title, and message.");
+  }
+  return { eventType: eventType as NotifyRequest["eventType"], title, message };
 }
 
 function isFullWebAccessEligibleTool(toolName: string): boolean {

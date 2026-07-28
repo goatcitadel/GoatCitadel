@@ -307,6 +307,69 @@ describe("additional shared API wrappers", () => {
       "/api/v1/integrations/external-side-effects?workspaceId=workspace%2F1&connectionId=connection%2F1&limit=500",
     );
     await expectCall(
+      integrations.fetchNotificationTargets("workspace/1", true),
+      "/api/v1/notifications/targets?workspaceId=workspace%2F1&includeArchived=true",
+    );
+    await expectCall(
+      integrations.createNotificationTarget("workspace/1", {
+        label: "Ops",
+        kind: "channel_connection",
+        channelConnectionId: "channel/1",
+      }),
+      "/api/v1/notifications/targets",
+      { method: "POST" },
+    );
+    await expectCall(
+      integrations.updateNotificationTarget("workspace/1", "target/1", 2, {
+        label: "Ops",
+        kind: "channel_connection",
+        channelConnectionId: "channel/1",
+      }),
+      "/api/v1/notifications/targets/target%2F1",
+      { method: "PATCH" },
+    );
+    await expectCall(
+      integrations.sendTestNotification("workspace/1", "target/1"),
+      "/api/v1/notifications/targets/target%2F1/test",
+      { method: "POST" },
+    );
+    await expectCall(
+      integrations.fetchNotificationRules("workspace/1"),
+      "/api/v1/notifications/rules?workspaceId=workspace%2F1",
+    );
+    await expectCall(
+      integrations.createNotificationRule("workspace/1", {
+        label: "Failures",
+        eventTypes: ["turn.failed"],
+        targetIds: ["target/1"],
+      }),
+      "/api/v1/notifications/rules",
+      { method: "POST" },
+    );
+    await expectCall(
+      integrations.updateNotificationRule("workspace/1", "rule/1", 3, {
+        label: "Failures",
+        eventTypes: ["turn.failed"],
+        targetIds: ["target/1"],
+      }),
+      "/api/v1/notifications/rules/rule%2F1",
+      { method: "PATCH" },
+    );
+    await expectCall(
+      integrations.upsertNotificationPresence({
+        workspaceId: "workspace/1",
+        clientId: "client-1",
+        focused: true,
+        visible: true,
+      }),
+      "/api/v1/notifications/presence",
+      { method: "PUT" },
+    );
+    await expectCall(
+      integrations.fetchNotificationDeliveries("workspace/1", 25),
+      "/api/v1/notifications/deliveries?workspaceId=workspace%2F1&limit=25",
+    );
+    await expectCall(
       browserSessions.fetchBrowserSessions({ workspaceId: "workspace/1", status: "active", limit: 999 }),
       "/api/v1/browser-sessions?workspaceId=workspace%2F1&status=active&limit=500",
     );

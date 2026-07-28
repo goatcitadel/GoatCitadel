@@ -37,6 +37,7 @@ import { turnsRoutes } from "./routes/turns.js";
 import { localAiRoutes } from "./routes/local-ai.js";
 import { llamaCppRoutes } from "./routes/llamacpp.js";
 import { integrationsRoutes } from "./routes/integrations.js";
+import { notificationRoutes } from "./routes/notifications.js";
 import { integrationWebhookRoutes } from "./routes/integration-webhooks.js";
 import { meshRoutes } from "./routes/mesh.js";
 import { meshCapabilityRoutes } from "./routes/mesh-capabilities.js";
@@ -386,6 +387,7 @@ export async function buildApp() {
     await app.register(localAiRoutes);
     await app.register(llamaCppRoutes);
     await app.register(integrationsRoutes);
+    await app.register(notificationRoutes);
     await app.register(integrationWebhookRoutes);
     await app.register(meshRoutes);
     // HX-408 M1: authenticated mesh capability publication surface. The

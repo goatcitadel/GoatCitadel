@@ -68,6 +68,7 @@ import { requestChatComposerPaletteOpen } from "./composer-palette-events";
 import { useShellNotifications } from "./use-shell-notifications";
 import { useEventStream } from "./use-event-stream";
 import { useShellInspector } from "./use-shell-inspector";
+import { useNotificationPresenceLease } from "../hooks/useNotificationPresenceLease";
 import { EmptyState, ErrorState, NativeButton } from "@next/features/native-routes/primitives";
 import {
   countDashboardSessions,
@@ -184,6 +185,7 @@ export function MissionControlNextApp() {
   } = useUiPreferences();
   const effectiveEffectsMode = useMemo(() => resolveEffectiveEffectsMode(effectsMode), [effectsMode]);
   const [route, setRoute] = useState<AppRoute>(() => resolveRouteFromLocation(window.location.href));
+  useNotificationPresenceLease(activeWorkspaceId, route.area === "chat" ? route.sessionId : undefined);
   const [navOpen, setNavOpen] = useState(false);
   // H-7 (ship punchlist): shell-level command palette opened via Cmd/Ctrl+K
   // and routed by useShellKeyboardManager. State stays here because Esc

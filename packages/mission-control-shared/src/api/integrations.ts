@@ -41,6 +41,13 @@ import type {
   IntegrationPluginRecord,
   ObsidianIntegrationConfig,
   ObsidianIntegrationStatus,
+  NotificationClientPresenceLease,
+  NotificationDeliveryRecord,
+  NotificationDispatchResult,
+  NotificationRule,
+  NotificationRuleInput,
+  NotificationTarget,
+  NotificationTargetInput,
   ToolInvokeResult,
   PersonalityPreset,
 } from "@goatcitadel/contracts";
@@ -225,6 +232,93 @@ export async function fetchExternalSideEffectRuns(
   }
   const suffix = params.size > 0 ? `?${params.toString()}` : "";
   return request<ExternalSideEffectRunListResponse>(`/api/v1/integrations/external-side-effects${suffix}`);
+}
+
+export async function fetchNotificationTargets(
+  workspaceId: string,
+  includeArchived = false,
+): Promise<{ items: NotificationTarget[] }> {
+  const params = new URLSearchParams({ workspaceId });
+  if (includeArchived) params.set("includeArchived", "true");
+  return request(`/api/v1/notifications/targets?${params.toString()}`);
+}
+
+export async function createNotificationTarget(
+  workspaceId: string,
+  target: NotificationTargetInput,
+): Promise<NotificationTarget> {
+  return request("/api/v1/notifications/targets", {
+    method: "POST",
+    body: JSON.stringify({ workspaceId, target }),
+  });
+}
+
+export async function updateNotificationTarget(
+  workspaceId: string,
+  targetId: string,
+  expectedRevision: number,
+  target: NotificationTargetInput,
+): Promise<NotificationTarget> {
+  return request(`/api/v1/notifications/targets/${encodeURIComponent(targetId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ workspaceId, expectedRevision, target }),
+  });
+}
+
+export async function sendTestNotification(workspaceId: string, targetId: string): Promise<NotificationDispatchResult> {
+  return request(`/api/v1/notifications/targets/${encodeURIComponent(targetId)}/test`, {
+    method: "POST",
+    body: JSON.stringify({ workspaceId }),
+  });
+}
+
+export async function fetchNotificationRules(workspaceId: string): Promise<{ items: NotificationRule[] }> {
+  return request(`/api/v1/notifications/rules?workspaceId=${encodeURIComponent(workspaceId)}`);
+}
+
+export async function createNotificationRule(
+  workspaceId: string,
+  rule: NotificationRuleInput,
+): Promise<NotificationRule> {
+  return request("/api/v1/notifications/rules", {
+    method: "POST",
+    body: JSON.stringify({ workspaceId, rule }),
+  });
+}
+
+export async function updateNotificationRule(
+  workspaceId: string,
+  ruleId: string,
+  expectedRevision: number,
+  rule: NotificationRuleInput,
+): Promise<NotificationRule> {
+  return request(`/api/v1/notifications/rules/${encodeURIComponent(ruleId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ workspaceId, expectedRevision, rule }),
+  });
+}
+
+export async function upsertNotificationPresence(input: {
+  workspaceId: string;
+  leaseId?: string;
+  clientId: string;
+  sessionId?: string;
+  focused: boolean;
+  visible: boolean;
+  ttlMs?: number;
+}): Promise<NotificationClientPresenceLease> {
+  return request("/api/v1/notifications/presence", {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function fetchNotificationDeliveries(
+  workspaceId: string,
+  limit = 50,
+): Promise<{ items: NotificationDeliveryRecord[] }> {
+  const params = new URLSearchParams({ workspaceId, limit: String(limit) });
+  return request(`/api/v1/notifications/deliveries?${params.toString()}`);
 }
 
 export async function fetchExternalConnectorSources(): Promise<{ items: ExternalConnectorSourceSnapshot[] }> {

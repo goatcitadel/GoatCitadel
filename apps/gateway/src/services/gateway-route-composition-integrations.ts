@@ -3,6 +3,8 @@ import type {
   IntegrationCatalogEntry,
   IntegrationConnection,
   IntegrationKind,
+  NotificationEventRecord,
+  NotificationTarget,
 } from "@goatcitadel/contracts";
 import { createChannelSetupRoutePort } from "./channel-setup-route-service.js";
 import { createCommsRoutePort } from "./comms-route-service.js";
@@ -39,6 +41,14 @@ import { ChannelVoiceInboundService } from "./channel-voice-inbound-service.js";
 import { IntegrationDiagnosticsService } from "./integration-diagnostics-service.js";
 import { buildGatewayConnectorRecords, filterConnectorRecords } from "./connector-registry.js";
 import { ExternalConnectorCatalogService } from "./external-connector-catalog-service.js";
+import {
+  NotificationRoutingService,
+  accountFromNotificationSecretRef,
+  notificationDestinationFingerprint,
+  parseAllowedNotificationWebhookUrl,
+  type NotificationDeliveryAdapterResult,
+} from "./notification-routing-service.js";
+import { runIdempotentExternalSideEffect } from "./external-side-effect-runner-service.js";
 import * as channelSetupService from "./channel-setup-service.js";
 import * as connectorDiagnosticsHelpers from "./connector-diagnostics-helpers.js";
 import type { GatewayRouteCompositionPort, RouteDependencyDomain } from "./gateway-route-composition-port.js";
@@ -60,6 +70,14 @@ export function composeIntegrationChannelRouteDependencies(
   const externalConnectorCatalog = new ExternalConnectorCatalogService({
     reviewStates: gateway.storage.externalConnectorReviewStates,
     createCapabilityProposal: (input) => gateway.capabilitySystemService.createProposal(input),
+  });
+  const notificationRouting = new NotificationRoutingService({
+    repository: gateway.storage.notificationRouting,
+    normalizeWorkspaceId: (workspaceId) => gateway.normalizeWorkspaceId(workspaceId),
+    getIntegrationConnection: (connectionId) => integrationChannel.getIntegrationConnection(connectionId),
+    deliver: (target, event, idempotencyKey) => deliverNotificationForGateway(gateway, target, event, idempotencyKey),
+    publishRealtime: (eventType, source, payload, options) =>
+      gateway.publishRealtime(eventType, source, payload, options),
   });
   const channelSetupDeps: channelSetupService.ChannelSetupHost = {
     storage: gateway.storage,
@@ -174,6 +192,50 @@ export function composeIntegrationChannelRouteDependencies(
     listIntegrationCatalog,
     listIntegrationConnections: (kind, limit) => integrationChannel.listIntegrationConnections(kind, limit),
     listIntegrationPlugins: () => integrationChannel.listIntegrationPlugins(),
+    listNotificationDeliveries: (workspaceId, limit) => {
+      gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
+      return notificationRouting.listDeliveries(workspaceId, limit);
+    },
+    listNotificationRules: (workspaceId, includeArchived) => {
+      gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
+      return notificationRouting.listRules(workspaceId, includeArchived);
+    },
+    listNotificationTargets: (workspaceId, includeArchived) => {
+      gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
+      return notificationRouting.listTargets(workspaceId, includeArchived);
+    },
+    createNotificationRule: (workspaceId, input) => {
+      gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
+      return notificationRouting.createRule(workspaceId, input);
+    },
+    createNotificationTarget: (workspaceId, input) => {
+      gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
+      return notificationRouting.createTarget(workspaceId, input);
+    },
+    dispatchNotificationEvent: (workspaceId, input) => {
+      gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
+      return notificationRouting.dispatch(workspaceId, input);
+    },
+    requestNotification: (workspaceId, input) => {
+      gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
+      return notificationRouting.request(workspaceId, input);
+    },
+    sendTestNotification: (workspaceId, targetId) => {
+      gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
+      return notificationRouting.sendTest(workspaceId, targetId);
+    },
+    updateNotificationRule: (workspaceId, ruleId, expectedRevision, input) => {
+      gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
+      return notificationRouting.updateRule(workspaceId, ruleId, expectedRevision, input);
+    },
+    updateNotificationTarget: (workspaceId, targetId, expectedRevision, input) => {
+      gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
+      return notificationRouting.updateTarget(workspaceId, targetId, expectedRevision, input);
+    },
+    upsertNotificationPresence: (input) => {
+      gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
+      return notificationRouting.upsertPresence(input);
+    },
     reconnectDiscordRuntime: (connectionId) => integrationChannel.reconnectDiscordRuntime(connectionId),
     revokeDiscordPairing: (connectionId, pairingId) => integrationChannel.revokeDiscordPairing(connectionId, pairingId),
     runIntegrationConnectionDiagnostics: (connectionId) =>
@@ -258,6 +320,163 @@ export function composeIntegrationChannelRouteDependencies(
     }),
     obsidian,
   };
+}
+
+async function deliverNotificationForGateway(
+  gateway: GatewayRouteCompositionPort,
+  target: NotificationTarget,
+  event: NotificationEventRecord,
+  idempotencyKey: string,
+): Promise<NotificationDeliveryAdapterResult> {
+  if (target.kind === "channel_connection") {
+    return deliverNotificationToChannel(gateway, target, event, idempotencyKey);
+  }
+  return deliverNotificationToWebhook(gateway, target, event, idempotencyKey);
+}
+
+async function deliverNotificationToChannel(
+  gateway: GatewayRouteCompositionPort,
+  target: NotificationTarget,
+  event: NotificationEventRecord,
+  idempotencyKey: string,
+): Promise<NotificationDeliveryAdapterResult> {
+  const connectionId = target.channelConnectionId;
+  if (!connectionId) return { status: "failed", lastError: "Channel connection is unavailable." };
+  const connection = gateway.storage.integrationConnections.get(connectionId);
+  if (connection.workspaceId && connection.workspaceId !== event.workspaceId) {
+    return { status: "failed", lastError: "Channel connection belongs to another workspace." };
+  }
+  const channelTarget = readConfiguredChannelTarget(connection.config);
+  if (!channelTarget) return { status: "failed", lastError: "Channel connection has no configured destination." };
+  const result = await gateway.commsSend({
+    connectionId,
+    target: channelTarget,
+    message: `${event.title}\n\n${event.message}`,
+    workspaceId: event.workspaceId,
+    sessionId: event.sessionId,
+    taskId: event.turnId,
+    operatorId: "notification-routing",
+    effectId: idempotencyKey,
+    surface: "settings",
+  });
+  const status = readResultStatus(result);
+  if (status === "failed" || status === "blocked") {
+    return { status: "failed", attemptCount: 1, lastError: "Channel delivery was rejected or failed." };
+  }
+  if (status === "queued" || status === "pending") return { status: "pending", attemptCount: 1 };
+  return { status: "delivered", attemptCount: 1 };
+}
+
+async function deliverNotificationToWebhook(
+  gateway: GatewayRouteCompositionPort,
+  target: NotificationTarget,
+  event: NotificationEventRecord,
+  idempotencyKey: string,
+): Promise<NotificationDeliveryAdapterResult> {
+  const secretStore = gateway.secretStore;
+  if (!secretStore?.isAvailable()) return { status: "failed", lastError: "OS keychain is unavailable." };
+  if (!target.webhookUrlSecretRef) return { status: "failed", lastError: "Webhook destination is unavailable." };
+  const urlValue = secretStore.getSecret(accountFromNotificationSecretRef(target.webhookUrlSecretRef));
+  if (!urlValue) return { status: "failed", lastError: "Webhook destination secret is unavailable." };
+  const url = parseAllowedNotificationWebhookUrl(urlValue, (candidate) =>
+    gateway.isConnectionUrlAllowlisted(candidate),
+  );
+  const credential = target.credentialSecretRef
+    ? secretStore.getSecret(accountFromNotificationSecretRef(target.credentialSecretRef))
+    : undefined;
+
+  const maxAttempts = 3;
+  let lastRunId: string | undefined;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const result = await runIdempotentExternalSideEffect({
+      mutationStore: gateway.mutationIdempotencyStore,
+      sideEffectRunStore: gateway.storage.externalSideEffectRuns,
+      runClaimTransaction: (work) => gateway.storage.runImmediateTransaction(work),
+      requireDurableBoundaryRecord: true,
+      requireMutationClaimOwnership: true,
+      workspaceId: event.workspaceId,
+      boundary: "notification_webhook",
+      catalogId: "notification.https_webhook",
+      connectionId: target.targetId,
+      actionId: "notification.deliver",
+      checkedAt: new Date().toISOString(),
+      externalDestinationFingerprint: notificationDestinationFingerprint(url.origin + url.pathname),
+      idempotencyKey: `${idempotencyKey}:attempt:${attempt}`,
+      actorScope: `workspace:${event.workspaceId}`,
+      payload: { eventId: event.eventId, eventType: event.eventType, targetId: target.targetId, attempt },
+      label: "Notification webhook delivery",
+      execute: async (claim) => {
+        claim.markExternalCallStarted();
+        const response = await gateway.fetchWithDiagnosticsTimeout(url.toString(), {
+          method: "POST",
+          redirect: "manual",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": idempotencyKey,
+            ...(credential ? { authorization: `Bearer ${credential}` } : {}),
+          },
+          body: JSON.stringify({
+            eventId: event.eventId,
+            eventType: event.eventType,
+            sessionId: event.sessionId,
+            turnId: event.turnId,
+            title: event.title,
+            message: event.message,
+            createdAt: event.createdAt,
+          }),
+        });
+        return { ok: response.ok, status: response.status };
+      },
+    });
+    lastRunId = result.claim.sideEffectRunId;
+    if (result.status === "executed" && result.value.ok) {
+      return { status: "delivered", attemptCount: attempt, externalSideEffectRunId: lastRunId };
+    }
+    if (result.status === "failed" && result.claim.resumeState === "manual_review_unknown_external_outcome") {
+      return {
+        status: "unknown_after_send",
+        attemptCount: attempt,
+        externalSideEffectRunId: lastRunId,
+        lastError: "Webhook outcome is unknown after send; automatic retry stopped.",
+      };
+    }
+    if (result.status === "blocked") {
+      return {
+        status: "failed",
+        attemptCount: attempt,
+        externalSideEffectRunId: lastRunId,
+        lastError: "Webhook delivery was blocked by idempotency or policy.",
+      };
+    }
+  }
+  return {
+    status: "failed",
+    attemptCount: maxAttempts,
+    externalSideEffectRunId: lastRunId,
+    lastError: "Webhook returned an unsuccessful response after retry attempts.",
+  };
+}
+
+function readConfiguredChannelTarget(config: Record<string, unknown>): string | undefined {
+  for (const key of ["defaultTarget", "target", "channelId", "chatId", "roomId"]) {
+    const value = config[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+function readResultStatus(result: unknown): string | undefined {
+  if (!result || typeof result !== "object") return undefined;
+  const outcome = Reflect.get(result, "outcome");
+  if (typeof outcome === "string") return outcome;
+  const direct = Reflect.get(result, "status");
+  if (typeof direct === "string") return direct;
+  const nested = Reflect.get(result, "result");
+  if (nested && typeof nested === "object") {
+    const nestedStatus = Reflect.get(nested, "status");
+    if (typeof nestedStatus === "string") return nestedStatus;
+  }
+  return undefined;
 }
 
 export function createIntegrationDiagnosticsServiceForGateway(
