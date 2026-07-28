@@ -85,6 +85,7 @@ export function abortActiveChatStream(stream: ActiveChatStreamState | null): voi
  */
 export interface UseChatOutboundExternalContext {
   onExternalContextSent?: (item: OutboundQueueItem) => void;
+  onTemplateInvocationSent?: (item: OutboundQueueItem) => void;
 }
 
 type OutboundExecutionPrefsSource = Pick<
@@ -132,6 +133,8 @@ export function useChatOutboundExecution(
   // executeOutboundItem dependency list (the standard pattern in this hook).
   const onExternalContextSentRef = useRef(input.externalContext?.onExternalContextSent);
   onExternalContextSentRef.current = input.externalContext?.onExternalContextSent;
+  const onTemplateInvocationSentRef = useRef(input.externalContext?.onTemplateInvocationSent);
+  onTemplateInvocationSentRef.current = input.externalContext?.onTemplateInvocationSent;
   const { surfaceMode, selectedSessionId, selectedSession, prefs, fullWebAccess, selectedProviderId, selectedModel } =
     sessionConfig;
   const { streamEnabled, visualStreamMode = "smooth", activeStreamRef } = streamConfig;
@@ -427,6 +430,8 @@ export function useChatOutboundExecution(
           ? item.externalContextRefs.map((ref) => ({ ...ref }))
           : undefined;
       const externalContextOptIn = externalContextRefs ? { contextRefs: externalContextRefs } : {};
+      const templateInvocationOptIn =
+        item.action === "send" && item.templateInvocation ? { templateInvocation: item.templateInvocation } : {};
       const currentPrefs = prefsRef.current;
       const requestPrefs =
         item.requestPrefs ??
@@ -872,6 +877,7 @@ export function useChatOutboundExecution(
                     content: trimmedContent,
                     attachments: attachmentIds,
                     ...externalContextOptIn,
+                    ...templateInvocationOptIn,
                     ...outboundPrefs,
                     mode: shouldAutoRoute ? undefined : effectiveMode,
                     ...(shouldAutoRoute ? { autoRoute: true as const } : {}),
@@ -954,6 +960,7 @@ export function useChatOutboundExecution(
                       content: trimmedContent,
                       attachments: attachmentIds,
                       ...externalContextOptIn,
+                      ...templateInvocationOptIn,
                       ...outboundPrefs,
                       mode: shouldAutoRoute ? undefined : effectiveMode,
                       ...(shouldAutoRoute ? { autoRoute: true as const } : {}),
@@ -980,6 +987,9 @@ export function useChatOutboundExecution(
         // return without reaching here, so failed sends retain it.
         if (externalContextRefs) {
           onExternalContextSentRef.current?.(item);
+        }
+        if (item.templateInvocation) {
+          onTemplateInvocationSentRef.current?.(item);
         }
         const completedSessionId = session.sessionId;
         void loadSidebar(undefined, { bypassCache: true, preferredSessionId: completedSessionId }).catch(

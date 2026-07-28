@@ -6846,6 +6846,31 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
           createChatTimerSchema(db);
         },
       },
+      {
+        version: 184,
+        name: "typed_run_variables",
+        up: (db) => {
+          addColumnIfMissingIfTableExists(db, "prompt_packs", "run_variable_schema_json", "TEXT");
+          addColumnIfMissingIfTableExists(db, "prompt_packs", "run_variable_schema_hash", "TEXT");
+          addColumnIfMissingIfTableExists(db, "prompt_pack_runs", "run_variables_json", "TEXT");
+          db.exec(`
+            CREATE TABLE IF NOT EXISTS chat_session_run_variable_bindings (
+              session_id TEXT NOT NULL,
+              owner_kind TEXT NOT NULL,
+              owner_id TEXT NOT NULL,
+              owner_revision TEXT NOT NULL,
+              schema_hash TEXT NOT NULL,
+              bindings_json TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              PRIMARY KEY (session_id, owner_kind, owner_id),
+              FOREIGN KEY (session_id) REFERENCES chat_session_meta(session_id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_chat_session_run_variables_session
+              ON chat_session_run_variable_bindings(session_id, updated_at DESC);
+          `);
+        },
+      },
     ],
   },
 ];

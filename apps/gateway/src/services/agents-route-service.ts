@@ -49,6 +49,7 @@ export interface AgentsRoutePortDependencies {
     },
   ) => ChatSpecialistCandidateRecord;
   publishRealtime: (eventType: string, source: string, payload?: Record<string, unknown>) => void;
+  requireTypedRunVariables: () => void;
 }
 
 export function createAgentsRoutePort(deps: AgentsRoutePortDependencies): AgentsRoutePort {
@@ -122,6 +123,7 @@ export function createAgentsRoutePort(deps: AgentsRoutePortDependencies): Agents
       return agent;
     },
     createAgentProfile: (input: AgentProfileCreateInput): AgentProfileRecord => {
+      if (input.presetDefaults?.runVariableSchema) deps.requireTypedRunVariables();
       const created = deps.storage.agentProfiles.create(input);
       const agent = getAgent(created.agentId);
       deps.publishRealtime("system", "agents", {
@@ -237,6 +239,7 @@ export function createAgentsRoutePort(deps: AgentsRoutePortDependencies): Agents
       return agent;
     },
     updateAgentProfile: (agentId: string, input: AgentProfileUpdateInput): AgentProfileRecord => {
+      if (input.presetDefaults?.runVariableSchema) deps.requireTypedRunVariables();
       const updated = deps.storage.agentProfiles.update(agentId, input);
       const agent = getAgent(updated.agentId);
       deps.publishRealtime("system", "agents", {

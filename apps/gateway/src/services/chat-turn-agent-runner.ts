@@ -537,6 +537,7 @@ export interface ChatTurnAgentRunnerInput {
   historyMessages: ChatCompletionRequest["messages"];
   outputMessageId?: string;
   modelRouter?: ChatTurnTraceRecord["routing"]["modelRouter"];
+  runVariableEvidence?: import("@goatcitadel/contracts").RunVariableEvidence;
   signal?: AbortSignal;
   canonicalWriteFence?: <T>(work: () => T) => T;
   /** Server-authored immutable upper bound for this governed turn. */
@@ -1620,6 +1621,7 @@ export class ChatTurnAgentRunner {
           executionProfile,
           liveDataIntent: intents.liveData,
           ...(input.modelRouter ? { modelRouter: input.modelRouter } : {}),
+          ...(input.runVariableEvidence ? { runVariables: input.runVariableEvidence } : {}),
         },
         loopGuard: createLoopGuardTrace(loopGuardState),
         startedAt: now,

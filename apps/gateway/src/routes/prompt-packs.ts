@@ -42,6 +42,11 @@ const promptPackRunBodySchema = z.object({
   memoryMode: z.enum(["off", "on", "auto"]).optional(),
   thinkingLevel: z.enum(["off", "minimal", "standard", "extended", "deep", "max", "ultra"]).optional(),
   placeholderValues: z.record(z.string(), z.string()).optional(),
+  runVariableBindings: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
+  runVariableSchemaHash: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/u)
+    .optional(),
 });
 
 const promptPackReviewBodySchema = z.object({

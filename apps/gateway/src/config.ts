@@ -106,6 +106,7 @@ export interface FeatureFlagsConfig {
   conversationForksV1Enabled?: boolean;
   notificationRoutingV1Enabled?: boolean;
   chatTimersV1Enabled?: boolean;
+  typedRunVariablesV1Enabled?: boolean;
   /**
    * Competitive-gap program phase B2b: TTS voice replies to audio-capable
    * channels (Telegram voice notes in v1). Absent/false (default) ⇒ the reply
@@ -768,6 +769,7 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
     ["conversationForksV1Enabled", process.env.GOATCITADEL_FEATURE_CONVERSATION_FORKS_V1_ENABLED],
     ["notificationRoutingV1Enabled", process.env.GOATCITADEL_FEATURE_NOTIFICATION_ROUTING_V1_ENABLED],
     ["chatTimersV1Enabled", process.env.GOATCITADEL_FEATURE_CHAT_TIMERS_V1_ENABLED],
+    ["typedRunVariablesV1Enabled", process.env.GOATCITADEL_FEATURE_TYPED_RUN_VARIABLES_V1_ENABLED],
     ["channelVoiceInboundV1Enabled", process.env.GOATCITADEL_FEATURE_CHANNEL_VOICE_INBOUND_V1_ENABLED],
     ["signalInboundV1Enabled", process.env.GOATCITADEL_FEATURE_SIGNAL_INBOUND_V1_ENABLED],
     ["plannerFastPathV1Disabled", process.env.GOATCITADEL_FEATURE_PLANNER_FAST_PATH_V1_DISABLED],
@@ -1333,6 +1335,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       conversationForksV1Enabled: featuresInput.conversationForksV1Enabled ?? true,
       notificationRoutingV1Enabled: featuresInput.notificationRoutingV1Enabled ?? true,
       chatTimersV1Enabled: featuresInput.chatTimersV1Enabled ?? true,
+      typedRunVariablesV1Enabled: featuresInput.typedRunVariablesV1Enabled ?? true,
       // Channel voice inbound (B2a): default OFF. `?? false` keeps inbound
       // Telegram/WhatsApp voice handling byte-identical unless an operator opts in.
       channelVoiceInboundV1Enabled: featuresInput.channelVoiceInboundV1Enabled ?? false,

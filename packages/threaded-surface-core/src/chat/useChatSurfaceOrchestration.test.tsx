@@ -82,6 +82,7 @@ function Harness(props: {
   initialCouncilArmed?: boolean;
   initialRequestPrefs?: OutboundRequestPrefsSnapshot;
   captureOutboundExternalContextRefs?: () => NonNullable<OutboundQueueItem["externalContextRefs"]>;
+  captureOutboundTemplateInvocation?: () => NonNullable<OutboundQueueItem["templateInvocation"]>;
 }) {
   const [draft, setDraft] = useState(props.initialDraft ?? "");
   const [pendingAttachments, setPendingAttachments] = useState<unknown[]>(props.initialAttachments ?? []);
@@ -129,6 +130,7 @@ function Harness(props: {
     },
     captureOutboundRequestPrefs: () => requestPrefs,
     captureOutboundExternalContextRefs: props.captureOutboundExternalContextRefs,
+    captureOutboundTemplateInvocation: props.captureOutboundTemplateInvocation,
     loadSessionCoreStateRef: loadSessionCoreState,
     abortActiveChatStream: abortActiveChatStream.current,
   });
@@ -590,5 +592,21 @@ describe("useChatSurfaceOrchestration", () => {
     expect(item.action).toBe("edit");
     expect(item.externalContextRefs).toBeUndefined();
     expect(captureOutboundExternalContextRefs).not.toHaveBeenCalled();
+  });
+
+  it("freezes a structured template invocation only onto a new send", async () => {
+    const invocation = {
+      ownerKind: "prompt_pack" as const,
+      ownerId: "pack-1",
+      ownerRevision: "revision-1",
+      templateId: "test-1",
+      schemaHash: "a".repeat(64),
+      values: { topic: "leases" },
+    };
+    const captureOutboundTemplateInvocation = vi.fn(() => invocation);
+    mountHarness({ initialDraft: "Explain leases", captureOutboundTemplateInvocation });
+    await act(async () => latest!.controller.handleSend());
+    expect((latest!.executeOutbound.mock.calls[0]?.[0] as OutboundQueueItem).templateInvocation).toEqual(invocation);
+    expect(captureOutboundTemplateInvocation).toHaveBeenCalledTimes(1);
   });
 });

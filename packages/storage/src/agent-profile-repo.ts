@@ -10,6 +10,7 @@ import type {
   BuiltinAgentProfileSeed,
 } from "@goatcitadel/contracts";
 import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
+import { normalizeRunVariableSchema, validateRunVariableBindings } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 
 interface AgentProfileRow {
@@ -351,6 +352,12 @@ function serializePresetDefaults(value?: AgentPresetDefaults): string | null {
     toolsPosture: value.toolsPosture,
     knowledgeAttachmentIds: value.knowledgeAttachmentIds?.map((item) => item.trim()).filter(Boolean),
     promptFraming: sanitizeOptional(value.promptFraming) ?? undefined,
+    runVariableSchema: value.runVariableSchema ? normalizeRunVariableSchema(value.runVariableSchema) : undefined,
+    runVariableDefaults: value.runVariableSchema
+      ? validateRunVariableBindings(value.runVariableSchema, value.runVariableDefaults ?? {}, {
+          allowMissingRequired: true,
+        }).bindings
+      : undefined,
   };
   if (Object.values(normalized).every((item) => item === undefined || (Array.isArray(item) && item.length === 0))) {
     return null;
@@ -375,6 +382,12 @@ function parsePresetDefaults(value: string | null): AgentPresetDefaults | undefi
     toolsPosture: parsed.toolsPosture,
     knowledgeAttachmentIds: parsed.knowledgeAttachmentIds?.map((item) => item.trim()).filter(Boolean) ?? [],
     promptFraming: sanitizeOptional(parsed.promptFraming) ?? undefined,
+    runVariableSchema: parsed.runVariableSchema ? normalizeRunVariableSchema(parsed.runVariableSchema) : undefined,
+    runVariableDefaults: parsed.runVariableSchema
+      ? validateRunVariableBindings(parsed.runVariableSchema, parsed.runVariableDefaults ?? {}, {
+          allowMissingRequired: true,
+        }).bindings
+      : undefined,
   };
 }
 

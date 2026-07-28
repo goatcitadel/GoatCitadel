@@ -21,7 +21,14 @@ export type ComposerPaletteAction =
   | { type: "attach_file"; relativePath: string }
   | { type: "attach_context"; attachmentId: string }
   | { type: "attach_url"; url: string }
-  | { type: "launch_external_source" };
+  | { type: "launch_external_source" }
+  | {
+      type: "open_template_form";
+      invocation: Omit<import("@goatcitadel/contracts").RunTemplateInvocation, "values">;
+      schema: import("@goatcitadel/contracts").RunVariableSchema;
+      template: string;
+      defaults?: import("@goatcitadel/contracts").RunVariableBindings;
+    };
 
 export interface ComposerPaletteItem {
   key: string;
@@ -72,10 +79,54 @@ const DEFAULT_CACHE_TTL_MS = 5 * 60_000;
 const DEFAULT_RESULT_LIMIT = 24;
 
 const MODE_SOURCE_PRIORITY: Record<ComposerPaletteMode, readonly ComposerPaletteSourceId[]> = {
-  commands: ["commands", "models", "skills", "agents", "projects", "files", "knowledge", "urls", "external_sources"],
-  context: ["agents", "projects", "files", "knowledge", "urls", "external_sources", "skills", "models", "commands"],
-  skills: ["skills", "commands", "agents", "models", "projects", "files", "knowledge", "urls", "external_sources"],
-  all: ["commands", "models", "agents", "skills", "projects", "files", "knowledge", "urls", "external_sources"],
+  commands: [
+    "commands",
+    "models",
+    "prompt_packs",
+    "skills",
+    "agents",
+    "projects",
+    "files",
+    "knowledge",
+    "urls",
+    "external_sources",
+  ],
+  context: [
+    "agents",
+    "prompt_packs",
+    "projects",
+    "files",
+    "knowledge",
+    "urls",
+    "external_sources",
+    "skills",
+    "models",
+    "commands",
+  ],
+  skills: [
+    "skills",
+    "commands",
+    "agents",
+    "prompt_packs",
+    "models",
+    "projects",
+    "files",
+    "knowledge",
+    "urls",
+    "external_sources",
+  ],
+  all: [
+    "commands",
+    "models",
+    "agents",
+    "prompt_packs",
+    "skills",
+    "projects",
+    "files",
+    "knowledge",
+    "urls",
+    "external_sources",
+  ],
 };
 
 export class ComposerPaletteSourceRegistry {

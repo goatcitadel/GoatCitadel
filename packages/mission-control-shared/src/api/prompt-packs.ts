@@ -80,6 +80,8 @@ export async function runPromptPackTest(
     model?: string;
     executionStyle?: PromptPackExecutionStyle;
     placeholderValues?: Record<string, string>;
+    runVariableBindings?: import("@goatcitadel/contracts").RunVariableBindings;
+    runVariableSchemaHash?: string;
   },
 ): Promise<PromptPackRunRecord> {
   return request<PromptPackRunRecord>(

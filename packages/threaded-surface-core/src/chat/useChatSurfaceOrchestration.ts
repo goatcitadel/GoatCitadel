@@ -4,6 +4,7 @@ import type {
   ChatRoutedContextRef,
   ChatSessionPrefsRecord,
   ChatThreadResponse,
+  RunTemplateInvocation,
 } from "@goatcitadel/contracts";
 import { cancelChatTurn } from "@goatcitadel/mission-control-shared/api/client";
 import { recordClientDiagnostic } from "@goatcitadel/mission-control-shared/state/dev-diagnostics-store";
@@ -56,6 +57,8 @@ export interface OutboundQueueItem {
    * the selection. Selection state itself clears only after a successful send.
    */
   externalContextRefs?: readonly ChatRoutedContextRef[];
+  /** Structured template invocation frozen with the exact resolved draft. */
+  templateInvocation?: RunTemplateInvocation;
 }
 
 export interface OutboundRequestPrefsSnapshot {
@@ -120,6 +123,7 @@ export function useChatSurfaceOrchestration(input: {
    * queue item on send. Absent (pre-C4 or degraded surface) means no refs.
    */
   captureOutboundExternalContextRefs?: () => readonly ChatRoutedContextRef[];
+  captureOutboundTemplateInvocation?: () => RunTemplateInvocation | undefined;
   loadSessionCoreStateRef: RefObject<
     (sessionId: string, options?: { background?: boolean; includeThread?: boolean }) => Promise<void>
   >;
@@ -172,6 +176,7 @@ export function useChatSurfaceOrchestration(input: {
     // Freeze the explicit external-source selection with the item (send only):
     // the selection itself is cleared later by the execution success path.
     const externalContextRefs = action === "send" ? (input.captureOutboundExternalContextRefs?.() ?? []) : [];
+    const templateInvocation = action === "send" ? input.captureOutboundTemplateInvocation?.() : undefined;
     const nextItem: OutboundQueueItem = {
       id: createQueueItemId(),
       action,
@@ -183,6 +188,7 @@ export function useChatSurfaceOrchestration(input: {
       requestPrefs,
       ...(modelCouncil ? { modelCouncil } : {}),
       ...(externalContextRefs.length > 0 ? { externalContextRefs } : {}),
+      ...(templateInvocation ? { templateInvocation } : {}),
     };
     input.setDraft("");
     input.setPendingAttachments([]);

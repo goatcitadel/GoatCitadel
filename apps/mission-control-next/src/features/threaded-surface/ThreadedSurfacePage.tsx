@@ -54,6 +54,7 @@ import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMedi
 import { ThreadedComposer, computeUsageTotals, formatCostLabel, formatTokenLabel } from "./ThreadedComposer";
 import { ChatSessionStatusPanel } from "./ChatSessionStatusPanel";
 import { ChatTimerPanel } from "./ChatTimerPanel";
+import { RunVariablePanel } from "./RunVariablePanel";
 import { SessionControlBanner } from "./SessionControlBanner";
 import { ThreadedBtwSideChatPanel } from "./ThreadedBtwSideChatPanel";
 import { ThreadedContextDrawer } from "./ThreadedContextDrawer";
@@ -78,6 +79,7 @@ import "./styles/background-task-rail.css";
 import "./styles/session-control-banner.css";
 import "./styles/chat-session-status.css";
 import "./styles/chat-timer.css";
+import "./styles/run-variables.css";
 
 const LazyThreadedWorkflowPanel = lazy(async () => {
   const module = await import("./ThreadedWorkflowPanel");
@@ -1009,6 +1011,7 @@ function ThreadConversationSurface({
         {props.sessionControlBanner ? <SessionControlBanner {...props.sessionControlBanner} /> : null}
         {props.sessionStatusPanel ? <ChatSessionStatusPanel panel={props.sessionStatusPanel} /> : null}
         {props.chatTimerPanel ? <ChatTimerPanel panel={props.chatTimerPanel} /> : null}
+        {props.runVariablePanel ? <RunVariablePanel panel={props.runVariablePanel} /> : null}
         <div className="mc-next-threaded-thread-card">
           {props.historicalWindow || props.historicalWindowLoading || props.historicalWindowError ? (
             <HistoricalConversationView props={props} />

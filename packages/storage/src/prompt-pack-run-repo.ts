@@ -5,6 +5,7 @@ import type {
   PromptPackDiagnosticMetadata,
   PromptPackRunIntegrityRecord,
   PromptPackRunRecord,
+  RunVariableEvidence,
 } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
 
@@ -24,6 +25,7 @@ interface PromptPackRunRow {
   thinking_level: PromptPackRunRecord["thinkingLevel"] | null;
   execution_style: PromptPackRunRecord["executionStyle"] | null;
   diagnostic_metadata_json: string | null;
+  run_variables_json: string | null;
   response_text: string | null;
   final_response_text: string | null;
   final_response_signals_json: string | null;
@@ -51,12 +53,12 @@ export class PromptPackRunRepository {
       INSERT INTO prompt_pack_runs (
         run_id, pack_id, test_id, session_id, status, provider_id, model,
         mode, tool_tier, tool_autonomy, web_mode, memory_mode, thinking_level,
-        execution_style, diagnostic_metadata_json, response_text, final_response_text, final_response_signals_json, derived_response_text, derived_response_signals_json,
+        execution_style, diagnostic_metadata_json, run_variables_json, response_text, final_response_text, final_response_signals_json, derived_response_text, derived_response_signals_json,
         trace_json, citations_json, integrity_json, error, started_at, finished_at
       ) VALUES (
         @runId, @packId, @testId, @sessionId, @status, @providerId, @model,
         @mode, @toolTier, @toolAutonomy, @webMode, @memoryMode, @thinkingLevel,
-        @executionStyle, @diagnosticMetadataJson, @responseText, @finalResponseText, @finalResponseSignalsJson, @derivedResponseText, @derivedResponseSignalsJson,
+        @executionStyle, @diagnosticMetadataJson, @runVariablesJson, @responseText, @finalResponseText, @finalResponseSignalsJson, @derivedResponseText, @derivedResponseSignalsJson,
         @traceJson, @citationsJson, @integrityJson, @error, @startedAt, @finishedAt
       )
     `);
@@ -123,6 +125,7 @@ export class PromptPackRunRepository {
     thinkingLevel?: PromptPackRunRecord["thinkingLevel"];
     executionStyle?: PromptPackRunRecord["executionStyle"];
     diagnosticMetadata?: PromptPackDiagnosticMetadata;
+    runVariables?: RunVariableEvidence;
     responseText?: string;
     finalResponseText?: string;
     finalResponseSignals?: string[];
@@ -151,6 +154,7 @@ export class PromptPackRunRepository {
       thinkingLevel: input.thinkingLevel ?? null,
       executionStyle: input.executionStyle ?? null,
       diagnosticMetadataJson: input.diagnosticMetadata ? JSON.stringify(input.diagnosticMetadata) : null,
+      runVariablesJson: input.runVariables ? JSON.stringify(input.runVariables) : null,
       responseText: input.responseText ?? null,
       finalResponseText: input.finalResponseText ?? null,
       finalResponseSignalsJson: input.finalResponseSignals ? JSON.stringify(input.finalResponseSignals) : null,
@@ -283,6 +287,9 @@ function mapRow(row: PromptPackRunRow): PromptPackRunRecord {
     diagnosticMetadata: row.diagnostic_metadata_json
       ? safeJsonParse<PromptPackDiagnosticMetadata | undefined>(row.diagnostic_metadata_json, undefined)
       : undefined,
+    runVariables: row.run_variables_json
+      ? safeJsonParse<RunVariableEvidence | undefined>(row.run_variables_json, undefined)
+      : undefined,
     responseText: row.response_text ?? undefined,
     finalResponseText: row.final_response_text ?? undefined,
     finalResponseSignals: row.final_response_signals_json
@@ -339,6 +346,7 @@ function isPromptPackRunRow(value: unknown): value is PromptPackRunRow {
     (typeof value.thinking_level === "string" || value.thinking_level === null) &&
     (typeof value.execution_style === "string" || value.execution_style === null) &&
     (typeof value.diagnostic_metadata_json === "string" || value.diagnostic_metadata_json === null) &&
+    (typeof value.run_variables_json === "string" || value.run_variables_json === null) &&
     (typeof value.response_text === "string" || value.response_text === null) &&
     (typeof value.final_response_text === "string" || value.final_response_text === null) &&
     (typeof value.final_response_signals_json === "string" || value.final_response_signals_json === null) &&

@@ -1,4 +1,5 @@
 import type { ChatMode } from "./chat.js";
+import type { RunVariableBindings, RunVariableSchema } from "./run-variables.js";
 
 export type AgentRuntimeStatus = "active" | "idle";
 export type AgentLifecycleStatus = "active" | "archived";
@@ -16,6 +17,8 @@ export interface AgentPresetDefaults {
   toolsPosture?: "safe_auto" | "manual";
   knowledgeAttachmentIds?: string[];
   promptFraming?: string;
+  runVariableSchema?: RunVariableSchema;
+  runVariableDefaults?: RunVariableBindings;
 }
 
 export interface AgentProfileRecord {

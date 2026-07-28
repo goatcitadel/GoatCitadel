@@ -4,7 +4,8 @@ import type {
   SkillListItem,
   ThreadKnowledgeAttachmentRecord,
 } from "@goatcitadel/contracts";
-import { fetchFilesList } from "@goatcitadel/mission-control-shared/api/client";
+import { hashRunVariableSchema } from "@goatcitadel/contracts";
+import { fetchFilesList, fetchPromptPacks, fetchPromptPackTests } from "@goatcitadel/mission-control-shared/api/client";
 import type { ChatModelProviderOption } from "@goatcitadel/mission-control-shared/components/ChatModelPicker";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CommandCatalogItem } from "./useChatSessionData";
@@ -37,6 +38,7 @@ interface BuildSourcesInput {
   projects: ChatProjectRecord[];
   knowledgeAttachments: ThreadKnowledgeAttachmentRecord[];
   externalSourcesAvailable: boolean;
+  typedRunVariablesEnabled: boolean;
   loadFiles?: typeof fetchFilesList;
 }
 
@@ -105,9 +107,59 @@ export function buildChatComposerPaletteSources(input: BuildSourcesInput): Compo
             source: "agents",
             sourceLabel: "Agent preset",
             availabilityLabel: agent.status === "active" ? "Active" : "Available",
-            action: { type: "select_preset", agentId: agent.agentId },
+            action:
+              input.typedRunVariablesEnabled &&
+              agent.presetDefaults?.runVariableSchema &&
+              agent.presetDefaults.promptFraming
+                ? {
+                    type: "open_template_form" as const,
+                    invocation: {
+                      ownerKind: "agent_preset" as const,
+                      ownerId: agent.agentId,
+                      ownerRevision: agent.updatedAt,
+                      schemaHash: hashRunVariableSchema(agent.presetDefaults.runVariableSchema),
+                    },
+                    schema: agent.presetDefaults.runVariableSchema,
+                    template: agent.presetDefaults.promptFraming,
+                    defaults: agent.presetDefaults.runVariableDefaults,
+                  }
+                : { type: "select_preset" as const, agentId: agent.agentId },
             keywords: [agent.agentId, agent.name, agent.title, ...agent.aliases, ...agent.specialties],
           })),
+    },
+    {
+      id: "prompt_packs",
+      label: "Prompt packs",
+      load: async () => {
+        const packs = (await fetchPromptPacks(200)).items.filter((pack) => Boolean(pack.runVariableSchema));
+        const testsByPack = await Promise.all(
+          packs.map(async (pack) => ({ pack, tests: (await fetchPromptPackTests(pack.packId, 2000)).items })),
+        );
+        return testsByPack.flatMap(({ pack, tests }) =>
+          tests.map((test) => ({
+            key: `prompt-pack-${pack.packId}-${test.testId}`,
+            command: `${pack.name}: ${test.title}`,
+            description: test.prompt.slice(0, 180),
+            applyValue: test.testId,
+            source: "prompt_packs" as const,
+            sourceLabel: "Prompt pack",
+            availabilityLabel: "Validated form",
+            action: {
+              type: "open_template_form" as const,
+              invocation: {
+                ownerKind: "prompt_pack" as const,
+                ownerId: pack.packId,
+                ownerRevision: pack.updatedAt,
+                templateId: test.testId,
+                schemaHash: pack.runVariableSchemaHash ?? hashRunVariableSchema(pack.runVariableSchema!),
+              },
+              schema: pack.runVariableSchema!,
+              template: test.prompt,
+            },
+            keywords: [pack.packId, test.code],
+          })),
+        );
+      },
     },
     {
       id: "skills",
@@ -202,7 +254,7 @@ export function buildChatComposerPaletteSources(input: BuildSourcesInput): Compo
       ],
     });
   }
-  return sources;
+  return input.typedRunVariablesEnabled ? sources : sources.filter((source) => source.id !== "prompt_packs");
 }
 
 export function useChatComposerPaletteController(
@@ -229,6 +281,7 @@ export function useChatComposerPaletteController(
       input.loadFiles,
       input.projects,
       input.providerOptions,
+      input.typedRunVariablesEnabled,
     ],
   );
 

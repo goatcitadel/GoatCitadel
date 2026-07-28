@@ -1,5 +1,6 @@
 import type { ChatCitationRecord, ChatMode, ChatTurnTraceRecord } from "./chat.js";
 import type { ChatMemoryMode, ChatThinkingLevel, ChatWebMode } from "./chat.js";
+import type { RunVariableEvidence, RunVariableSchema } from "./run-variables.js";
 
 export type PromptPackToolTier = "no-tools" | "implicit-tools" | "explicit-tools";
 
@@ -126,6 +127,8 @@ export interface PromptPackRecord {
   policySource?: PromptPackPolicySource;
   /** sha256 of the imported markdown; detects file-vs-DB drift. Absent on packs imported before it existed. */
   contentSha256?: string;
+  runVariableSchema?: RunVariableSchema;
+  runVariableSchemaHash?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -237,6 +240,7 @@ export interface PromptPackRunRecord {
   thinkingLevel?: ChatThinkingLevel;
   executionStyle?: PromptPackExecutionStyle;
   diagnosticMetadata?: PromptPackDiagnosticMetadata;
+  runVariables?: RunVariableEvidence;
   /** Raw canonical assistant output captured from the turn transcript. */
   responseText?: string;
   /** Historical fabrication artifact — no longer written. Retained on old run records for audit only; scoring always uses responseText. */

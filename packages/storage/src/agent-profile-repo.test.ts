@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
-import { BUILTIN_AGENT_PROFILES } from "@goatcitadel/contracts";
+import { BUILTIN_AGENT_PROFILES, RUN_VARIABLE_SCHEMA_VERSION } from "@goatcitadel/contracts";
 import { createDatabase } from "./sqlite.js";
 import { AgentProfileRepository } from "./agent-profile-repo.js";
 
@@ -176,6 +176,11 @@ describe("AgentProfileRepository", () => {
         preferredModel: " gpt-5 ",
         knowledgeAttachmentIds: [" doc-1 ", "", "doc-2"],
         promptFraming: "  Be strict ",
+        runVariableSchema: {
+          version: RUN_VARIABLE_SCHEMA_VERSION,
+          fields: [{ id: "scope", label: "Scope", type: "text", required: true }],
+        },
+        runVariableDefaults: { scope: "runtime" },
       },
     });
     assert.deepEqual(realDefaults.presetDefaults, {
@@ -187,6 +192,11 @@ describe("AgentProfileRepository", () => {
       toolsPosture: undefined,
       knowledgeAttachmentIds: ["doc-1", "doc-2"],
       promptFraming: "Be strict",
+      runVariableSchema: {
+        version: RUN_VARIABLE_SCHEMA_VERSION,
+        fields: [{ id: "scope", label: "Scope", type: "text", required: true, maxLength: 4000 }],
+      },
+      runVariableDefaults: { scope: "runtime" },
     });
 
     db.prepare(

@@ -72,8 +72,18 @@ import type {
   RealtimeEvent,
   ReplayRegressionResult,
   ReplayRegressionRun,
+  RunVariableBindings,
+  RunVariableEvidence,
 } from "@goatcitadel/contracts";
-import { DEFAULT_PROMPT_PACK_POLICY_V2, DEFAULT_PROMPT_PACK_POLICY_V3 } from "@goatcitadel/contracts";
+import {
+  buildRunVariableEvidence,
+  DEFAULT_PROMPT_PACK_POLICY_V2,
+  DEFAULT_PROMPT_PACK_POLICY_V3,
+  legacyPlaceholderSchema,
+  resolveRunVariableTemplate,
+  resolveLegacyRunVariableTemplate,
+  validateRunVariableBindings,
+} from "@goatcitadel/contracts";
 import { hashPromptPackPolicyV2, hashPromptPackPolicyV3, type Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
@@ -178,10 +188,15 @@ import { createUtilityModelUsageAttribution } from "./utility-model-usage-attrib
 import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
 import {
   applyPromptPlaceholderValues,
+  extractPromptPlaceholders,
   extractPromptPackVersionLabel,
   parsePromptPackTests,
   validatePromptPackStructure,
 } from "./prompt-pack/parser.js";
+import {
+  parsePromptPackRunVariableSchema,
+  renderPromptPackRunVariableSchema,
+} from "./prompt-pack/run-variable-markdown.js";
 import {
   buildPromptPackCapabilitySeriesV2,
   buildPromptPackReviewRateSeries,
@@ -495,6 +510,12 @@ export class PromptPackService {
       throw new Error(`Prompt pack structure validation failed: ${structureIssues.join("; ")}`);
     }
     const packVersionLabel = extractPromptPackVersionLabel(input.content);
+    const declaredRunVariableSchema = parsePromptPackRunVariableSchema(input.content);
+    if (declaredRunVariableSchema) this.ctx.requireFeatureEnabled("typedRunVariablesV1Enabled");
+    const legacyPlaceholders = [...new Set(tests.flatMap((test) => extractPromptPlaceholders(test.prompt)))];
+    const runVariableSchema =
+      declaredRunVariableSchema ??
+      (legacyPlaceholders.length > 0 ? legacyPlaceholderSchema(legacyPlaceholders) : undefined);
     const name = input.name?.trim() || packVersionLabel || inferPromptPackName(input.sourceLabel);
     const imported = this.ctx.storage.promptPacks.replacePackTests({
       packId: input.packId,
@@ -502,6 +523,7 @@ export class PromptPackService {
       sourceLabel: input.sourceLabel?.trim() || packVersionLabel,
       contentSha256: createHash("sha256").update(input.content, "utf8").digest("hex"),
       tests,
+      runVariableSchema,
     });
     this.refreshPromptPackExportFileBestEffort(imported.pack.packId, "import_prompt_pack");
     return imported;
@@ -579,8 +601,13 @@ export class PromptPackService {
       thinkingLevel?: ChatThinkingLevel;
       executionStyle?: PromptPackExecutionStyle;
       placeholderValues?: Record<string, string>;
+      runVariableBindings?: RunVariableBindings;
+      runVariableSchemaHash?: string;
     },
   ): Promise<PromptPackRunRecord> {
+    if (input?.runVariableBindings || input?.runVariableSchemaHash) {
+      this.ctx.requireFeatureEnabled("typedRunVariablesV1Enabled");
+    }
     const pack = this.ctx.storage.promptPacks.getPack(packId);
     const test = this.ctx.storage.promptPacks.getTest(testId);
     if (test.packId !== pack.packId) {
@@ -596,7 +623,15 @@ export class PromptPackService {
     });
     const executionStyle = resolvePromptPackExecutionStyle(input?.executionStyle);
     this.assertDurablePreflight(executionProfile);
-    const resolvedPrompt = applyPromptPlaceholderValues(test.prompt, input?.placeholderValues);
+    const runVariableResolution = resolvePromptPackRunVariables(pack, test.prompt, {
+      bindings: input?.runVariableBindings,
+      schemaHash: input?.runVariableSchemaHash,
+      legacyValues: input?.placeholderValues,
+    });
+    const resolvedPrompt = applyPromptPlaceholderValues(runVariableResolution.prompt, {
+      ...input?.placeholderValues,
+      ...runVariableResolution.legacyPlaceholderValues,
+    });
     if (resolvedPrompt.missingPlaceholders.length > 0) {
       throw new Error(`Missing placeholder values for ${test.code}: ${resolvedPrompt.missingPlaceholders.join(", ")}.`);
     }
@@ -638,6 +673,7 @@ export class PromptPackService {
       thinkingLevel: executionProfile.thinkingLevel,
       executionStyle,
       diagnosticMetadata: test.diagnosticMetadata,
+      runVariables: runVariableResolution.evidence,
     });
 
     try {
@@ -3142,6 +3178,81 @@ function promptPackRuntimeSignalDeps(): PromptPackRuntimeSignalDeps {
   };
 }
 
+export function resolvePromptPackRunVariables(
+  pack: PromptPackRecord,
+  prompt: string,
+  input: {
+    bindings?: RunVariableBindings;
+    schemaHash?: string;
+    legacyValues?: Record<string, string>;
+  },
+): { prompt: string; evidence?: RunVariableEvidence; legacyPlaceholderValues?: Record<string, string> } {
+  const schema = pack.runVariableSchema;
+  if (!schema) {
+    if (input.bindings || input.schemaHash) throw new TypeError("This prompt pack has no run-variable schema.");
+    return { prompt };
+  }
+  const legacyById = new Map(
+    Object.entries(input.legacyValues ?? {}).map(
+      ([key, value]) => [normalizeLegacyRunVariableKey(key), value] as const,
+    ),
+  );
+  const submitted: Record<string, unknown> = input.bindings
+    ? { ...input.bindings }
+    : Object.fromEntries(
+        schema.fields.flatMap((field) => {
+          const value = legacyById.get(field.id);
+          return value === undefined ? [] : [[field.id, coerceLegacyRunVariableValue(field.type, value)]];
+        }),
+      );
+  const validation = validateRunVariableBindings(schema, submitted);
+  if (input.schemaHash && input.schemaHash !== validation.schemaHash) {
+    throw new TypeError("Run-variable schema changed; reopen the form.");
+  }
+  const typedResolved = resolveRunVariableTemplate(prompt, schema, validation.bindings);
+  const resolved = resolveLegacyRunVariableTemplate(typedResolved, schema, validation.bindings);
+  const evidence = buildRunVariableEvidence(
+    {
+      ownerKind: "prompt_pack",
+      ownerId: pack.packId,
+      ownerRevision: pack.updatedAt,
+      schemaHash: validation.schemaHash,
+      values: validation.bindings,
+    },
+    schema,
+    resolved,
+  );
+  return {
+    prompt: resolved,
+    evidence,
+    legacyPlaceholderValues: Object.fromEntries(
+      schema.fields.flatMap((field) =>
+        Object.prototype.hasOwnProperty.call(validation.bindings, field.id)
+          ? [[field.id, String(validation.bindings[field.id])]]
+          : [],
+      ),
+    ),
+  };
+}
+
+function normalizeLegacyRunVariableKey(value: string): string {
+  return value
+    .replace(/^<|>$/gu, "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, "_")
+    .replace(/^_+|_+$/gu, "");
+}
+
+function coerceLegacyRunVariableValue(type: string, value: string): string | number | boolean {
+  if (type === "number") {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : value;
+  }
+  if (type === "boolean") return value.trim().toLowerCase() === "true";
+  return value;
+}
+
 export function renderPromptPackMarkdownReport(
   report: PromptPackReportRecord,
   options: { generatedAt?: string } = {},
@@ -3228,6 +3339,11 @@ export function renderPromptPackMarkdownReport(
   }
   if (report.pack.contentSha256) {
     lines.push(`- Pack content sha256: \`${report.pack.contentSha256.slice(0, 12)}\``);
+  }
+  if (report.pack.runVariableSchema) {
+    lines.push("");
+    lines.push(...renderPromptPackRunVariableSchema(report.pack.runVariableSchema));
+    lines.push("");
   }
   lines.push(`- Generated: ${generatedAt}`);
   lines.push(`- Export model lane: \`${formatPromptPackReportProviderModelLabel(report)}\``);

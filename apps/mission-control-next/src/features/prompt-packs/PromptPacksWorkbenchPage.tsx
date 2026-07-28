@@ -218,6 +218,8 @@ export function PromptPacksWorkbenchPage({
                   selectedPlaceholders={state.selectedPlaceholders}
                   selectedMissingPlaceholders={state.selectedMissingPlaceholders}
                   placeholderValues={state.placeholderValues}
+                  runVariableSchema={state.selectedPack?.runVariableSchema}
+                  runVariableBindings={state.runVariableBindings}
                   selectedDiagnosticMetadata={state.selectedDiagnosticMetadata}
                   onPlaceholderChange={(key, value) =>
                     state.setPlaceholderValues((current) => ({
@@ -225,6 +227,7 @@ export function PromptPacksWorkbenchPage({
                       [key]: value,
                     }))
                   }
+                  onRunVariableChange={state.setRunVariableBindings}
                 />
 
                 <OutputTab

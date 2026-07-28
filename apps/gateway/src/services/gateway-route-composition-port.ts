@@ -71,6 +71,10 @@ type RouteDependencyMethod<
 > = GatewayRouteServiceDependencies[TDomain][TMethod];
 
 export interface GatewayRouteCompositionPort {
+  resolveChatRunVariableInput(
+    sessionId: string,
+    input: import("@goatcitadel/contracts").ChatSendMessageRequest,
+  ): import("@goatcitadel/contracts").ChatSendMessageRequest;
   readonly addonsService: AddonsService;
   readonly addonSlotService: AddonSlotService;
   readonly approvalEffectsService: ApprovalEffectsService;
@@ -324,6 +328,7 @@ export function createGatewayRouteCompositionPort(
     promptPackService: privateDependencies.promptPackService,
     realtimeEventService: privateDependencies.realtimeEventService,
     researchService: privateDependencies.researchService,
+    resolveChatRunVariableInput: gateway.resolveChatRunVariableInput.bind(gateway),
     runtimeLifecycleReadService: privateDependencies.runtimeLifecycleReadService,
     taskLifecycleService: privateDependencies.taskLifecycleService,
     toolInvocationCoordinator: privateDependencies.toolInvocationCoordinator,

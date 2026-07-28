@@ -82,6 +82,7 @@ export * from "./chat-history.js";
 export * from "./chat-capability-profile.js";
 export * from "./chat-session-status.js";
 export * from "./chat-timers.js";
+export * from "./run-variables.js";
 export * from "./chat-fork.js";
 export * from "./routed-context.js";
 export * from "./canonical-json.js";

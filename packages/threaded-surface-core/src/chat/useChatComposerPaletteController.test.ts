@@ -44,6 +44,7 @@ describe("chat composer palette sources", () => {
       ] as never,
       knowledgeAttachments: [],
       externalSourcesAvailable: false,
+      typedRunVariablesEnabled: false,
       loadFiles: loadFiles as never,
     });
     const context = { sessionKey: "session-1", workspaceId: "workspace-1" };
