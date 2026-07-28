@@ -1,3 +1,4 @@
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayRuntimeConfig } from "./config.js";
 
@@ -107,8 +108,8 @@ describe("createGatewayStorage", () => {
     expect(mocks.storageInputs).toHaveLength(1);
     expect(mocks.storageInputs[0]).toMatchObject({
       db: expect.any(mocks.FakePostgresSyncDatabaseClient),
-      transcriptsDir: expect.stringContaining("data\\transcripts"),
-      auditDir: expect.stringContaining("data\\audit"),
+      transcriptsDir: expect.stringContaining(path.join("data", "transcripts")),
+      auditDir: expect.stringContaining(path.join("data", "audit")),
     });
   });
 });
