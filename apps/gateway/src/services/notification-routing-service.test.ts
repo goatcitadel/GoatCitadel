@@ -44,6 +44,42 @@ function harness(statuses: Array<"delivered" | "failed" | "unknown_after_send"> 
 }
 
 describe("NotificationRoutingService", () => {
+  it("can restrict a canonical event to one operator-authored rule id", async () => {
+    const { service, deliver } = harness(["delivered", "delivered"]);
+    const firstTarget = service.createTarget("workspace-1", {
+      label: "First",
+      kind: "https_webhook",
+      webhookUrlSecretRef: "keychain:goatcitadel:notification-webhook:first",
+    });
+    const secondTarget = service.createTarget("workspace-1", {
+      label: "Second",
+      kind: "https_webhook",
+      webhookUrlSecretRef: "keychain:goatcitadel:notification-webhook:second",
+    });
+    const selected = service.createRule("workspace-1", {
+      label: "Selected timer rule",
+      eventTypes: ["timer.due"],
+      targetIds: [firstTarget.targetId],
+    });
+    service.createRule("workspace-1", {
+      label: "Other timer rule",
+      eventTypes: ["timer.due"],
+      targetIds: [secondTarget.targetId],
+    });
+
+    const result = await service.dispatch("workspace-1", {
+      eventId: "timer-event",
+      eventType: "timer.due",
+      title: "Timer due",
+      message: "Review proof",
+      source: "chat.timer",
+      ruleId: selected.ruleId,
+    });
+    expect(result.deliveries).toHaveLength(1);
+    expect(result.deliveries[0]?.targetId).toBe(firstTarget.targetId);
+    expect(deliver).toHaveBeenCalledTimes(1);
+  });
+
   it("filters rules, suppresses when present, and treats expired presence as away", async () => {
     const { service, deliver, advance } = harness();
     const target = service.createTarget("workspace-1", {

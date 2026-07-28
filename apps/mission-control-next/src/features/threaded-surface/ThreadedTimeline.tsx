@@ -592,7 +592,7 @@ export function ThreadedTimeline({
                   return (
                     <div key={item.key} className="mc-next-thread-window-gap">
                       <span>
-                        {item.hiddenCount} earlier heartbeat notification{item.hiddenCount === 1 ? "" : "s"} hidden for
+                        {item.hiddenCount} earlier system notice{item.hiddenCount === 1 ? "" : "s"} hidden for
                         performance.
                       </span>
                     </div>

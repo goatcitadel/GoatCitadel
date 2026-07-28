@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ConflictError, ValidationError } from "@goatcitadel/contracts";
 import type {
   ChatMessageRecord,
+  ChatTimerRecord,
   ChatTurnTraceRecord,
   ChatUserInputPromptResponse,
   DurableCheckpointRecord,
@@ -104,6 +105,50 @@ describe("chat-message-route-runtime", () => {
     });
     await expect(selectChatBranchTurn(runtime, "sess-1", heartbeat.trace.turnId)).rejects.toThrow("not found");
     expect(runtime.storage.chatSessionBranchState.setActiveLeaf).toHaveBeenCalledTimes(1);
+  });
+
+  it("projects only settled provider-free timer notices", async () => {
+    const state = createThreadState();
+    const timerMessage: ChatMessageRecord = {
+      messageId: "timer-notice-timer-1",
+      sessionId: "sess-1",
+      role: "assistant",
+      actorType: "system",
+      actorId: "chat-timer",
+      content: "Review the proof.",
+      timestamp: "2026-07-28T01:00:00.000Z",
+    };
+    const timer = {
+      timerId: "timer-1",
+      workspaceId: "workspace-1",
+      sessionId: "sess-1",
+      revision: 3,
+      dueAt: "2026-07-28T01:00:00.000Z",
+      timezone: "UTC",
+      message: "Review the proof.",
+      cancelOnNextReply: false,
+      status: "fired",
+      createdBy: "operator",
+      createdAt: "2026-07-28T00:00:00.000Z",
+      updatedAt: "2026-07-28T01:00:00.000Z",
+      noticeMessageId: timerMessage.messageId,
+      notificationEventId: "timer-due-timer-1",
+      notificationDeliveryStatus: "no_targets",
+      firedAt: "2026-07-28T01:00:00.000Z",
+    } satisfies ChatTimerRecord;
+    const runtime = createRuntime({
+      state,
+      chatTimers: [timer],
+      canonicalMessageOverrides: new Map([[timerMessage.messageId, timerMessage]]),
+    });
+
+    const thread = await getChatThread(runtime, "sess-1");
+    expect(thread.systemNotices).toContainEqual({
+      kind: "timer_due",
+      noticeId: timerMessage.messageId,
+      turnId: "timer:timer-1",
+      message: timerMessage,
+    });
   });
 
   it("reloads a notice-only session through canonical message hydration without creating a branch", async () => {
@@ -557,6 +602,7 @@ function createRuntime(input: {
   durableCheckpoint?: DurableCheckpointRecord;
   heartbeatOccurrence?: HeartbeatOccurrenceRecord;
   terminalHandoff?: VerifiedTerminalTurnWriteHandoff;
+  chatTimers?: ChatTimerRecord[];
   canonicalMessageOverrides?: Map<string, ChatMessageRecord>;
   resolveOutcome?: {
     disposition: "resolved" | "replayed";
@@ -569,6 +615,9 @@ function createRuntime(input: {
     storage: {
       chatGeneratedArtifacts: {
         listByTurnIds: vi.fn(() => new Map()),
+      },
+      chatTimers: {
+        listFiredBySession: vi.fn(() => input.chatTimers ?? []),
       },
       chatSessionBranchState: {
         setActiveLeaf: vi.fn(),

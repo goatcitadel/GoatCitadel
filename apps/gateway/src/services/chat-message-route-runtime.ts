@@ -1,5 +1,6 @@
 import type {
   ChatThreadSystemNoticeRecord,
+  ChatTimerRecord,
   ChatTurnTraceRecord,
   ChatThreadResponse,
   ChatUserInputPromptAnswerResponse,
@@ -282,10 +283,15 @@ function buildChatThreadFromState(
   const renderableTraces = state.traces.filter(
     (trace) => state.messagesById.has(trace.userMessageId) && !heartbeatTurnIds.has(trace.turnId),
   );
-  const systemNotices = state.traces
+  const heartbeatNotices = state.traces
     .filter((trace) => heartbeatTurnIds.has(trace.turnId))
     .map((trace) => projectExactSystemHeartbeatNotice(runtime, sessionId, state, trace))
     .filter((notice): notice is ChatThreadSystemNoticeRecord => Boolean(notice));
+  const timerNotices = runtime.storage.chatTimers
+    .listFiredBySession(sessionId)
+    .map((timer) => projectChatTimerNotice(runtime, sessionId, timer))
+    .filter((notice): notice is ChatThreadSystemNoticeRecord => Boolean(notice));
+  const systemNotices = [...heartbeatNotices, ...timerNotices];
   const generatedArtifactsByTurnId = runtime.storage.chatGeneratedArtifacts.listByTurnIds(
     renderableTraces.map((trace) => trace.turnId),
   );
@@ -304,6 +310,45 @@ function buildChatThreadFromState(
       ),
     })),
   });
+}
+
+function projectChatTimerNotice(
+  runtime: ChatMessageRouteRuntimeHost,
+  sessionId: string,
+  timer: ChatTimerRecord,
+): ChatThreadSystemNoticeRecord | undefined {
+  try {
+    if (
+      timer.sessionId !== sessionId ||
+      timer.status !== "fired" ||
+      !timer.firedAt ||
+      !timer.noticeMessageId ||
+      !timer.notificationEventId
+    ) {
+      return undefined;
+    }
+    const message = runtime.storage.chatMessages.get(timer.noticeMessageId);
+    if (
+      !message ||
+      message.sessionId !== sessionId ||
+      message.role !== "assistant" ||
+      message.actorType !== "system" ||
+      message.actorId !== "chat-timer" ||
+      message.content !== timer.message
+    ) {
+      return undefined;
+    }
+    const projected = projectChatMessageForPublic(message);
+    if (!projected) return undefined;
+    return {
+      kind: "timer_due",
+      noticeId: timer.noticeMessageId,
+      turnId: `timer:${timer.timerId}`,
+      message: projected,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function hasExactSystemHeartbeatRunIdentity(runtime: ChatMessageRouteRuntimeHost, trace: ChatTurnTraceRecord): boolean {

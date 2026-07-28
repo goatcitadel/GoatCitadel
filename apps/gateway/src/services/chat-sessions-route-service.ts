@@ -8,6 +8,7 @@ export const chatSessionsRouteMethods = [
   "attachChatThreadKnowledgeAttachment",
   "createChatGeneratedArtifactFromTurn",
   "createChatSideChat",
+  "createChatTimer",
   "createChatSession",
   "createChatSessionWorkbenchWorktree",
   "deleteChatSession",
@@ -25,6 +26,7 @@ export const chatSessionsRouteMethods = [
   "getChatSideChat",
   "listChatGeneratedArtifacts",
   "listChatSessions",
+  "listChatTimers",
   "listChatThreadKnowledgeAttachments",
   "listRecentCrossProjectSessions",
   "pinChatSession",
@@ -39,6 +41,7 @@ export const chatSessionsRouteMethods = [
   "setChatSessionBinding",
   "unpinChatSession",
   "updateChatSession",
+  "cancelChatTimer",
 ] as const;
 
 export type ChatSessionsRouteMethod = (typeof chatSessionsRouteMethods)[number];

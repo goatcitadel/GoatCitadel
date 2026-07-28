@@ -356,6 +356,16 @@ export function listChatCommandCatalog(): ChatCommandCatalogItem[] {
     },
     { command: "/dream", usage: "/dream", description: "Run workspace memory maintenance now." },
     { command: "/dream", usage: "/dream status", description: "Show workspace memory maintenance status." },
+    {
+      command: "/status",
+      usage: "/status",
+      description: "Open canonical session status without sending a model turn.",
+    },
+    {
+      command: "/timer",
+      usage: "/timer",
+      description: "Create a provider-free Chat reminder with an explicit confirmation form.",
+    },
     { command: "/undo", usage: "/undo [N]", description: "Remove the last N completed turns from this session." },
     {
       command: "/think",

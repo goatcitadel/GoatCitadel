@@ -114,6 +114,26 @@ describe("ChatThreadPrimitives", () => {
     expect(renderer.root.findByProps({ "data-notice-id": "assistant-heartbeat-1" })).toBeTruthy();
   });
 
+  it("labels provider-free timer notices distinctly", () => {
+    const notice = {
+      kind: "timer_due",
+      noticeId: "timer-notice-1",
+      turnId: "timer:timer-1",
+      message: {
+        messageId: "timer-notice-1",
+        sessionId: "session-1",
+        role: "assistant",
+        actorType: "system",
+        actorId: "chat-timer",
+        content: "Review the release checklist.",
+        timestamp: "2026-07-28T01:00:00.000Z",
+      },
+    } as ChatThreadSystemNoticeRecord;
+    const renderer = TestRenderer.create(<ChatThreadSystemNoticeCard notice={notice} />);
+    expect(renderedText(renderer)).toContain("Timer due");
+    expect(renderer.root.findByProps({ "data-notice-kind": "timer_due" })).toBeTruthy();
+  });
+
   it("handles branch switching, surface activation, nested interactive guards, context, and citation slots", () => {
     const onSelectTurn = vi.fn();
     const onSwitchBranch = vi.fn();

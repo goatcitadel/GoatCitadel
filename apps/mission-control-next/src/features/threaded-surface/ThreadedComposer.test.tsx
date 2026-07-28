@@ -724,6 +724,7 @@ describe("ThreadedComposer", () => {
       placeholder: "Commands, models, agents, skills, projects, files, URLs…",
     });
     const paletteText = collectText(renderer.root).replace(/\s+/gu, " ");
+    expect(renderer.root.findByProps({ role: "dialog", "aria-label": "Command Palette" })).toBeTruthy();
     expect(paletteText).toContain("Model · Available");
     expect(paletteText).toContain("Workspace files unavailable; other sources remain available.");
 

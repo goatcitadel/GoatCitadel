@@ -73,6 +73,41 @@ describe("chat session routes", () => {
     expect(status.json()).toMatchObject({ schemaVersion: "chat.session-status.v1", sessionId: "sess-1" });
     expect(chatSessions.getChatSessionStatus).toHaveBeenCalledWith("sess-1");
 
+    const timers = await app.inject({ method: "GET", url: "/api/v1/chat/sessions/sess-1/timers" });
+    expect(timers.statusCode).toBe(200);
+    expect(timers.json()).toEqual({ items: [{ timerId: "timer-1", status: "active" }] });
+    expect(chatSessions.listChatTimers).toHaveBeenCalledWith("sess-1");
+
+    const createdTimer = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/timers",
+      payload: {
+        dueAt: "2026-07-29T00:00:00.000Z",
+        timezone: "America/Los_Angeles",
+        message: "Review proof",
+        cancelOnNextReply: true,
+      },
+    });
+    expect(createdTimer.statusCode).toBe(201);
+    expect(chatSessions.createChatTimer).toHaveBeenCalledWith(
+      "sess-1",
+      {
+        dueAt: "2026-07-29T00:00:00.000Z",
+        timezone: "America/Los_Angeles",
+        message: "Review proof",
+        cancelOnNextReply: true,
+      },
+      "operator",
+    );
+
+    const cancelledTimer = await app.inject({
+      method: "DELETE",
+      url: "/api/v1/chat/sessions/sess-1/timers/timer-1",
+      payload: { expectedRevision: 3 },
+    });
+    expect(cancelledTimer.statusCode).toBe(200);
+    expect(chatSessions.cancelChatTimer).toHaveBeenCalledWith("sess-1", "timer-1", 3);
+
     const forked = await app.inject({
       method: "POST",
       url: "/api/v1/chat/sessions/sess-1/turns/turn-2/fork",
@@ -525,6 +560,9 @@ function createChatSessionsService(overrides: Record<string, unknown> = {}) {
     setChatSessionBinding: vi.fn(() => ({ sessionId: "sess-1", transport: "integration" })),
     getChatSessionBinding: vi.fn(() => ({ sessionId: "sess-1", transport: "integration" })),
     getChatSessionStatus: vi.fn(() => ({ schemaVersion: "chat.session-status.v1", sessionId: "sess-1" })),
+    listChatTimers: vi.fn(() => [{ timerId: "timer-1", status: "active" }]),
+    createChatTimer: vi.fn(() => ({ timerId: "timer-created", status: "active" })),
+    cancelChatTimer: vi.fn(() => ({ timerId: "timer-1", status: "cancelled" })),
     forkChatSessionFromTurn: vi.fn(async () => ({
       session: { sessionId: "sess-fork", revision: 1, updatedAt: "2026-05-14T00:00:00.000Z" },
       manifest: { forkId: "fork-1" },

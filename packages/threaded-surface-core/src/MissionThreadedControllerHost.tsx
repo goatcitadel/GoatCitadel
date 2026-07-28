@@ -20,6 +20,7 @@ import type {
   ChatSessionRecord,
   ChatSessionSearchHitRecord,
   ChatSessionStatusResponse,
+  ChatTimerRecord,
   ChatSessionWorkbenchCommandRunRequest,
   ChatSessionWorkbenchDiffResponse,
   ChatSessionWorkbenchFileDiffResponse,
@@ -38,6 +39,8 @@ import {
   ApiRequestError,
   attachThreadKnowledgeAttachment,
   clearChatSessionGoal,
+  cancelChatTimer,
+  createChatTimer,
   createChatGeneratedArtifact,
   forkChatSessionFromTurn,
   downloadFile,
@@ -46,6 +49,8 @@ import {
   fetchChatSessionGoal,
   fetchChatSessionPrefs,
   fetchChatSessionStatus,
+  fetchChatTimers,
+  fetchNotificationRules,
   fetchMcpServers,
   fetchMcpTemplates,
   fetchRuntimeLifecycleExport,
@@ -84,6 +89,7 @@ import type { ChatContextDockPanelsProps } from "./chat/ChatContextDockPanels.ty
 import type { ChatVisualStreamMode } from "./chat/chat-streaming-preview";
 import type { MissionControlActiveSessionSurfaceProps } from "./chat/MissionControlActiveSessionSurface";
 import { describeChatUiError, type ChatErrorSource } from "./chat/chat-error-copy";
+import { toDateTimeLocalValue, zonedDateTimeToIso } from "./chat/chat-timer-form";
 import type { OutboundContextBlock } from "./chat/useChatSurfaceOrchestration";
 import { useChatCapabilityProfileInspection } from "./chat/useChatCapabilityProfileInspection";
 import { formatCommandResult } from "./chat/chat-page-derivations";
@@ -133,6 +139,7 @@ import {
   shouldApplyFetchedMessagesAfterStream,
   shouldExecuteLocalChatCommand,
   isLocalChatStatusCommand,
+  isLocalChatTimerCommand,
 } from "./chat/chat-page-pure-helpers";
 import { resolveOutboundSurfaceMode } from "./pure-helpers";
 import {
@@ -902,6 +909,18 @@ export function MissionThreadedControllerHost({
     error: string | null;
     status: ChatSessionStatusResponse | null;
   }>({ open: false, loading: false, error: null, status: null });
+  const [chatTimerPanel, setChatTimerPanel] = useState({
+    open: false,
+    busy: false,
+    error: null as string | null,
+    dueAt: "",
+    timezone: "UTC",
+    message: "",
+    notificationRuleId: "",
+    cancelOnNextReply: false,
+    rules: [] as Array<{ ruleId: string; label: string }>,
+    timers: [] as ChatTimerRecord[],
+  });
   const [workbenchDiscardConfirm, setWorkbenchDiscardConfirm] = useState<{
     title: string;
     message: string;
@@ -1079,6 +1098,7 @@ export function MissionThreadedControllerHost({
   } = sessionData;
   const currentSessionMode: ChatMode = "chat";
   const sessionStatusEnabled = settings?.features?.chatSessionStatusV1Enabled === true;
+  const chatTimersEnabled = settings?.features?.chatTimersV1Enabled === true;
   const refreshSessionStatus = useCallback(async () => {
     if (!selectedSessionId || !sessionStatusEnabled) return;
     setSessionStatusPanel((current) => ({ ...current, open: true, loading: true, error: null }));
@@ -1097,7 +1117,90 @@ export function MissionThreadedControllerHost({
 
   useEffect(() => {
     setSessionStatusPanel({ open: false, loading: false, error: null, status: null });
+    setChatTimerPanel((current) => ({ ...current, open: false, error: null, timers: [] }));
   }, [selectedSessionId]);
+
+  const refreshChatTimers = useCallback(async () => {
+    if (!selectedSessionId || !chatTimersEnabled) return;
+    try {
+      const [timersResult, rulesResult] = await Promise.allSettled([
+        fetchChatTimers(selectedSessionId),
+        fetchNotificationRules(workspaceId),
+      ]);
+      if (timersResult.status === "rejected") throw timersResult.reason;
+      const rules = rulesResult.status === "fulfilled" ? rulesResult.value.items : [];
+      setChatTimerPanel((current) => ({
+        ...current,
+        timers: timersResult.value.items,
+        rules: rules
+          .filter((rule) => rule.lifecycleState === "active" && rule.eventTypes.includes("timer.due"))
+          .map((rule) => ({ ruleId: rule.ruleId, label: rule.label })),
+        error: null,
+      }));
+    } catch (error) {
+      setChatTimerPanel((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : "Unable to load Chat timers.",
+      }));
+    }
+  }, [chatTimersEnabled, selectedSessionId, workspaceId]);
+
+  const openChatTimerPanel = useCallback(() => {
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    setChatTimerPanel((current) => ({
+      ...current,
+      open: true,
+      error: null,
+      dueAt: toDateTimeLocalValue(new Date(Date.now() + 10 * 60_000)),
+      timezone,
+      message: "",
+      notificationRuleId: "",
+      cancelOnNextReply: false,
+    }));
+    void refreshChatTimers();
+  }, [refreshChatTimers]);
+
+  const submitChatTimer = useCallback(async () => {
+    if (!selectedSessionId) return;
+    setChatTimerPanel((current) => ({ ...current, busy: true, error: null }));
+    try {
+      const dueAt = zonedDateTimeToIso(chatTimerPanel.dueAt, chatTimerPanel.timezone);
+      await createChatTimer(selectedSessionId, {
+        dueAt,
+        timezone: chatTimerPanel.timezone,
+        message: chatTimerPanel.message,
+        ...(chatTimerPanel.notificationRuleId ? { notificationRuleId: chatTimerPanel.notificationRuleId } : {}),
+        cancelOnNextReply: chatTimerPanel.cancelOnNextReply,
+      });
+      setChatTimerPanel((current) => ({ ...current, busy: false, open: false }));
+      pushLocalNotice("Chat timer created. It will fire without invoking a model.", "success");
+    } catch (error) {
+      setChatTimerPanel((current) => ({
+        ...current,
+        busy: false,
+        error: error instanceof Error ? error.message : "Unable to create Chat timer.",
+      }));
+    }
+  }, [chatTimerPanel, pushLocalNotice, selectedSessionId]);
+
+  const cancelExistingChatTimer = useCallback(
+    async (timerId: string, revision: number) => {
+      if (!selectedSessionId) return;
+      setChatTimerPanel((current) => ({ ...current, busy: true, error: null }));
+      try {
+        await cancelChatTimer(selectedSessionId, timerId, revision);
+        await refreshChatTimers();
+        setChatTimerPanel((current) => ({ ...current, busy: false }));
+      } catch (error) {
+        setChatTimerPanel((current) => ({
+          ...current,
+          busy: false,
+          error: error instanceof Error ? error.message : "Unable to cancel Chat timer.",
+        }));
+      }
+    },
+    [refreshChatTimers, selectedSessionId],
+  );
 
   useEffect(() => {
     if (sessionStatusPanel.open && sessionStatusEnabled) void refreshSessionStatus();
@@ -1110,6 +1213,10 @@ export function MissionThreadedControllerHost({
     sessionStatusPanel.open,
     thread,
   ]);
+
+  useEffect(() => {
+    if (chatTimerPanel.open && chatTimersEnabled) void refreshChatTimers();
+  }, [chatTimerPanel.open, chatTimersEnabled, eventStreamStatus.state, refreshChatTimers, thread]);
 
   const lastEmittedModeRef = useRef<ChatMode | null>(null);
   useEffect(() => {
@@ -1475,8 +1582,13 @@ export function MissionThreadedControllerHost({
       void refreshSessionStatus();
       return Promise.resolve();
     }
+    if (chatTimersEnabled && selectedSessionId && isLocalChatTimerCommand(draft)) {
+      setDraft("");
+      openChatTimerPanel();
+      return Promise.resolve();
+    }
     return composerSendHandlerRef.current();
-  }, [draft, refreshSessionStatus, selectedSessionId, sessionStatusEnabled]);
+  }, [chatTimersEnabled, draft, openChatTimerPanel, refreshSessionStatus, selectedSessionId, sessionStatusEnabled]);
 
   useEffect(() => {
     queuedOutboundSetterRef.current = setQueuedOutbound;
@@ -3817,6 +3929,21 @@ export function MissionThreadedControllerHost({
               ...sessionStatusPanel,
               onRefresh: () => void refreshSessionStatus(),
               onClose: () => setSessionStatusPanel((current) => ({ ...current, open: false })),
+            }
+          : undefined,
+        chatTimerPanel: chatTimersEnabled
+          ? {
+              ...chatTimerPanel,
+              onDueAtChange: (value) => setChatTimerPanel((current) => ({ ...current, dueAt: value })),
+              onTimezoneChange: (value) => setChatTimerPanel((current) => ({ ...current, timezone: value })),
+              onMessageChange: (value) => setChatTimerPanel((current) => ({ ...current, message: value })),
+              onNotificationRuleChange: (value) =>
+                setChatTimerPanel((current) => ({ ...current, notificationRuleId: value })),
+              onCancelOnNextReplyChange: (value) =>
+                setChatTimerPanel((current) => ({ ...current, cancelOnNextReply: value })),
+              onCreate: () => void submitChatTimer(),
+              onCancelTimer: (timerId, revision) => void cancelExistingChatTimer(timerId, revision),
+              onClose: () => setChatTimerPanel((current) => ({ ...current, open: false })),
             }
           : undefined,
         followOutput: followThreadOutput,

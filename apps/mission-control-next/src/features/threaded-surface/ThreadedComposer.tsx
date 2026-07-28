@@ -1114,7 +1114,12 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
       </div>
 
       {composerPaletteVisible ? (
-        <div className={`mc-next-command-popover${props.composerPalette?.globalOpen ? " palette-sheet" : ""}`}>
+        <div
+          className={`mc-next-command-popover${props.composerPalette?.globalOpen ? " palette-sheet" : ""}`}
+          role={props.composerPalette?.globalOpen ? "dialog" : undefined}
+          aria-label={props.composerPalette?.globalOpen ? "Command Palette" : undefined}
+          aria-modal={props.composerPalette?.globalOpen ? "true" : undefined}
+        >
           {props.composerPalette?.globalOpen ? (
             <div className="mc-next-composer-palette-search" role="search">
               <label htmlFor={`${composerInstanceId}-palette-query`}>Search commands and context</label>

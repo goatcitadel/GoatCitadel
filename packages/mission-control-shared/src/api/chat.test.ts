@@ -126,6 +126,31 @@ describe("chat API origin surface headers", () => {
     });
   });
 
+  it("uses focused session timer endpoints without sending a chat turn", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ item: { timerId: "timer-1" }, items: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { cancelChatTimer, createChatTimer, fetchChatTimers } = await import("./chat");
+
+    await fetchChatTimers("session/1");
+    await createChatTimer("session/1", {
+      dueAt: "2026-07-29T00:00:00.000Z",
+      timezone: "UTC",
+      message: "Review proof",
+    });
+    await cancelChatTimer("session/1", "timer 1", 2);
+
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      expect.stringContaining("/api/v1/chat/sessions/session%2F1/timers"),
+      expect.stringContaining("/api/v1/chat/sessions/session%2F1/timers"),
+      expect.stringContaining("/api/v1/chat/sessions/session%2F1/timers/timer%201"),
+    ]);
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "POST" });
+    expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({
+      method: "DELETE",
+      body: JSON.stringify({ expectedRevision: 2 }),
+    });
+  });
+
   it(
     "normalizes legacy Cowork origin surface to Chat",
     async () => {

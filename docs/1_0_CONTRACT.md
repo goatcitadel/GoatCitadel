@@ -91,6 +91,7 @@ The repo must not claim these at `1.0` unless separately proven and documented:
 
 - REST and SSE contract changes are additive unless a separately documented migration window is announced.
 - Chat conversation forks are independent materialized sessions, not context links. Forking is limited to settled terminal paths, uses revision CAS when supplied, copies attachment bytes and generated artifact versions, and retains immutable source provenance without replaying or duplicating execution evidence.
+- Chat timers are durable, provider-free reminders owned by the Gateway. `/timer` opens an explicit confirmation form, and firing appends a retained `timer_due` system notice plus one canonical notification event without invoking a model. Explicit cancellation uses revision CAS; optional reply cancellation occurs only after a new user message commits. Timers are bounded to a five-second minimum, one-year horizon, 25 active timers per Chat session, and 100 per workspace. `/schedule` remains the distinct model-running scheduled-turn path.
 - Config evolution continues to flow through the managed GoatCitadel config sync path.
 - Storage migrations are forward-upgrade paths. Rollback across schema changes is not promised; restore from a verified backup is the supported recovery path.
 - Backup create, list, and verify are shipped through the admin API/CLI surface.

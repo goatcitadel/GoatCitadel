@@ -593,6 +593,7 @@ export interface RuntimeSettingsResponse {
     chatThinkingStreamV1Enabled?: boolean;
     unifiedComposerPaletteV1Enabled?: boolean;
     chatSessionStatusV1Enabled?: boolean;
+    chatTimersV1Enabled?: boolean;
     channelVoiceInboundV1Enabled?: boolean;
     /** @deprecated Signal is outbound-only; true is retained only for blocked legacy-posture evidence. */
     signalInboundV1Enabled?: boolean;
