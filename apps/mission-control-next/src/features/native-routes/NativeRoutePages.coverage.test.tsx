@@ -31,6 +31,8 @@ const routeMocks = vi.hoisted(() => {
     fetchImportedAgentCatalog: fn(),
     fetchMemoryFiles: fn(),
     fetchMemoryQmdStats: fn(),
+    fetchEngineeringLearnings: fn(),
+    fetchSettings: fn(),
     fetchOperators: fn(),
     fetchAgenticRuns: fn(),
     fetchSkillActivationPolicies: fn(),
@@ -46,6 +48,7 @@ const routeMocks = vi.hoisted(() => {
     previewSkillEvaluation: fn(),
     promoteImprovementCandidate: fn(),
     rejectImprovementCandidate: fn(),
+    requestEngineeringLearningAction: fn(),
     reloadSkills: fn(),
     restoreAgentProfile: fn(),
     restoreTask: fn(),
@@ -79,6 +82,8 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchImportedAgentCatalog: routeMocks.fetchImportedAgentCatalog,
   fetchMemoryFiles: routeMocks.fetchMemoryFiles,
   fetchMemoryQmdStats: routeMocks.fetchMemoryQmdStats,
+  fetchEngineeringLearnings: routeMocks.fetchEngineeringLearnings,
+  fetchSettings: routeMocks.fetchSettings,
   fetchOperators: routeMocks.fetchOperators,
   fetchAgenticRuns: routeMocks.fetchAgenticRuns,
   fetchSkillActivationPolicies: routeMocks.fetchSkillActivationPolicies,
@@ -92,6 +97,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   previewSkillEvaluation: routeMocks.previewSkillEvaluation,
   promoteImprovementCandidate: routeMocks.promoteImprovementCandidate,
   rejectImprovementCandidate: routeMocks.rejectImprovementCandidate,
+  requestEngineeringLearningAction: routeMocks.requestEngineeringLearningAction,
   reloadSkills: routeMocks.reloadSkills,
   restoreAgentProfile: routeMocks.restoreAgentProfile,
   restoreTask: routeMocks.restoreTask,
@@ -213,6 +219,8 @@ const curatorReview = {
 };
 
 function setupResponses() {
+  routeMocks.fetchSettings.mockResolvedValue({ features: { engineeringLearningsV1Enabled: false } });
+  routeMocks.fetchEngineeringLearnings.mockResolvedValue({ items: [] });
   routeMocks.fetchAgents.mockResolvedValue({ items: [agent] });
   routeMocks.fetchImportedAgentCatalog.mockResolvedValue({
     workspaceId: "default",

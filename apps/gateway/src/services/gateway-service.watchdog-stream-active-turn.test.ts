@@ -267,6 +267,7 @@ describe("GatewayService maintenance scheduler facade behavior", () => {
     const runCommitmentSweep = vi.fn(async () => undefined);
     const runHeartbeatSweep = vi.fn(async () => undefined);
     const runDueEvaluation = vi.fn(async () => undefined);
+    const refreshEngineeringLearnings = vi.fn(async () => undefined);
     const drainDueChannelDeliveries = vi.fn(async () => []);
     const gateway = createGatewayHarness({
       closing: true,
@@ -276,6 +277,7 @@ describe("GatewayService maintenance scheduler facade behavior", () => {
       runCommitmentSweep,
       runHeartbeatSweep,
       memoryLifecycleService: { runDueEvaluation },
+      engineeringLearningService: { refreshAll: refreshEngineeringLearnings },
       drainDueChannelDeliveries,
     });
 
@@ -291,6 +293,7 @@ describe("GatewayService maintenance scheduler facade behavior", () => {
     expect(runCommitmentSweep).toHaveBeenCalledTimes(1);
     expect(runHeartbeatSweep).toHaveBeenCalledTimes(1);
     expect(runDueEvaluation).toHaveBeenCalledTimes(1);
+    expect(refreshEngineeringLearnings).toHaveBeenCalledTimes(1);
     expect(drainDueChannelDeliveries).toHaveBeenCalledTimes(1);
   });
 

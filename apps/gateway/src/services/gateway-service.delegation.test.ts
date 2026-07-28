@@ -147,6 +147,7 @@ function createDelegationHarness() {
   gateway.getSession = vi.fn(() => ({ sessionId: "sess-1" }));
   gateway.ensureChatSessionModelDefaults = vi.fn((_sessionId: string, nextPrefs: ChatSessionPrefsRecord) => nextPrefs);
   gateway.normalizeWorkspaceId = vi.fn((workspaceId?: string) => workspaceId ?? "default");
+  gateway.resolveDelegatedFilesystemScope = vi.fn(() => undefined);
   const appendTaskActivity = vi.fn();
   const appendTaskDeliverable = vi.fn();
   gateway.taskLifecycleService = {

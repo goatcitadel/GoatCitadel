@@ -61,7 +61,7 @@ export function LibraryKnowledgeSection(props: NativeRoutePagesProps) {
   });
   const { loading, error, data, reload } = useAsyncLoad(async () => {
     const settings = await nativeLoad("Runtime settings", fetchSettings(), null);
-    const learningsEnabled = settings.data?.features.engineeringLearningsV1Enabled === true;
+    const learningsEnabled = settings.data?.features?.engineeringLearningsV1Enabled === true;
     const [files, qmd, learnings] = await Promise.all([
       nativeLoad("Memory files", fetchMemoryFiles("memory"), { items: [] }),
       nativeLoad("QMD stats", fetchMemoryQmdStats(undefined, undefined, 8), null),
