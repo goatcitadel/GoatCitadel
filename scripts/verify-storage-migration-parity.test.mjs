@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { test } from "node:test";
+import { promisify } from "node:util";
 import {
   POSTGRES_V2_DYNAMIC_BOOTSTRAP_EXCEPTION,
   buildAppendOnlyStorageMigrationManifest,
@@ -14,6 +18,9 @@ import {
   findStorageMigrationSemanticOwnershipErrors,
   loadStorageTypeScriptSourceFiles,
 } from "./verification/lib/storage-migration-manifest.mjs";
+import { loadStorageMigrationBaseManifest } from "./verification/lib/storage-migration-lineage.mjs";
+
+const execFileAsync = promisify(execFile);
 
 function postgresSource(entries) {
   return `
@@ -901,4 +908,43 @@ test("package scripts expose verification and an append-only manifest updater", 
   assert.match(workflowSource, /github\.ref == 'refs\/heads\/main'/);
   assert.match(verifierSource, /findStorageMigrationLineageErrors/);
   assert.match(updaterSource, /findStorageMigrationLineageErrors/);
+});
+
+test("lineage loader avoids comparing the candidate manifest to itself", async () => {
+  const repo = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-lineage-"));
+  const manifestPath = path.join(repo, "scripts", "verification", "baselines", "storage-migrations.json");
+  const git = (args) => execFileAsync("git", args, { cwd: repo, encoding: "utf8", windowsHide: true });
+  const writeManifest = async (marker) => {
+    await mkdir(path.dirname(manifestPath), { recursive: true });
+    await writeFile(manifestPath, `${JSON.stringify({ marker })}\n`, "utf8");
+  };
+
+  try {
+    await git(["init"]);
+    await git(["config", "user.email", "lineage@example.test"]);
+    await git(["config", "user.name", "Lineage Test"]);
+    await writeManifest("base");
+    await git(["add", "."]);
+    await git(["commit", "-m", "base"]);
+    const { stdout: baseStdout } = await git(["rev-parse", "HEAD"]);
+    const baseSha = baseStdout.trim();
+
+    await writeManifest("candidate");
+    await git(["add", "."]);
+    await git(["commit", "-m", "candidate"]);
+    const { stdout: headStdout } = await git(["rev-parse", "HEAD"]);
+    const headSha = headStdout.trim();
+    await git(["update-ref", "refs/remotes/origin/main", headSha]);
+
+    const fallback = await loadStorageMigrationBaseManifest({ repoRoot: repo });
+    assert.equal(fallback?.ref, baseSha);
+    assert.equal(fallback?.manifest.marker, "base");
+
+    await assert.rejects(
+      loadStorageMigrationBaseManifest({ repoRoot: repo, explicitRef: headSha }),
+      /resolves to the candidate HEAD/,
+    );
+  } finally {
+    await rm(repo, { recursive: true, force: true });
+  }
 });

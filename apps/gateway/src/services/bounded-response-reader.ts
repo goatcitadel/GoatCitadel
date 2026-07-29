@@ -4,7 +4,14 @@ export interface BoundedResponseReadOptions {
   label?: string;
 }
 
-export type BoundedResponseReadErrorCode = "body_limit" | "body_timeout" | "body_parse" | "body_missing";
+export type BoundedResponseReadErrorCode =
+  | "body_limit"
+  | "body_timeout"
+  | "body_parse"
+  | "body_missing"
+  | "body_incomplete"
+  | "body_no_payload"
+  | "body_event_limit";
 
 export class BoundedResponseReadError extends Error {
   public constructor(

@@ -24,6 +24,7 @@ import {
   parsePostgresMigrationActiveTransactionIds,
   selectPostgresMigrationPreexistingTransactionIds,
   POSTGRES_HISTORY_REPAIR_TEMP_VIEW_RESOLUTION_SQL,
+  POSTGRES_LEGACY_COMPOUND_V124_CATALOG_SQL,
   POSTGRES_MIGRATION_CURRENT_SCHEMA_PREFLIGHT_SQL,
   POSTGRES_MIGRATION_ACTIVE_TRANSACTION_PREFLIGHT_SQL,
   POSTGRES_MIGRATION_SESSION_TRANSACTION_CHECK_SQL,
@@ -841,6 +842,8 @@ describe("Postgres migration ledger compatibility", () => {
   });
 
   it("fails closed on malformed legacy compound catalog and CAS repair results", () => {
+    assert.match(POSTGRES_LEGACY_COMPOUND_V124_CATALOG_SQL, /personal_ops_notes/);
+    assert.match(POSTGRES_LEGACY_COMPOUND_V124_CATALOG_SQL, /idx_personal_ops_notes_workspace_updated/);
     assert.doesNotThrow(() => assertLegacyCompoundV124Catalog({ matches_expected: true }));
     assert.throws(() => assertLegacyCompoundV124Catalog({ matches_expected: false }), /catalog does not match/);
     assert.doesNotThrow(() =>

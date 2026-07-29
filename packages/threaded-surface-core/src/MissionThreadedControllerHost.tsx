@@ -3893,6 +3893,12 @@ export function MissionThreadedControllerHost({
     const webMode = prefs?.webMode ?? "auto";
     const researchModeActive = webMode === "quick" || webMode === "deep";
     const reviewModeActive = (prefs?.orchestrationReviewDepth ?? "off") !== "off";
+    const hasArmedPerTurnContext =
+      Boolean(activeOutboundContext) ||
+      externalSourceAttachments.selectedAttachmentIds.length > 0 ||
+      pendingDocumentContextRefs.length > 0 ||
+      knowledgeUrlDraft.trim().length > 0 ||
+      Boolean(pendingTemplateInvocation && pendingTemplateInvocation.resolvedContent.trim() === draft.trim());
     const shouldAutoGenerateImage =
       messageMode === "chat" &&
       planningMode !== "advisory" &&
@@ -3901,6 +3907,7 @@ export function MissionThreadedControllerHost({
       !modelCouncilEnabledRef.current &&
       !editingTurnId &&
       pendingAttachments.length === 0 &&
+      !hasArmedPerTurnContext &&
       detectImageGenerationIntent(draft);
     if (shouldAutoGenerateImage) {
       if (imageBusy) {
@@ -3930,14 +3937,19 @@ export function MissionThreadedControllerHost({
     consumeModelCouncilArming,
     draft,
     editingTurnId,
+    activeOutboundContext,
+    externalSourceAttachments.selectedAttachmentIds.length,
     handleGenerateImage,
     handleSteerMidTurn,
     imageBusy,
     imageGenerationAvailable,
+    knowledgeUrlDraft,
     messageMode,
     openBtwSideChat,
     pendingAttachments.length,
     pendingAttachments,
+    pendingDocumentContextRefs.length,
+    pendingTemplateInvocation,
     planningMode,
     prefs?.orchestrationReviewDepth,
     prefs?.webMode,

@@ -3418,6 +3418,7 @@ test(
       await assertCatalogMutationRejected(
         "ALTER TABLE structured_review_runs ALTER COLUMN preflight_json DROP DEFAULT",
       );
+      await assertCatalogMutationRejected("CREATE TABLE personal_ops_notes (note_id TEXT PRIMARY KEY)");
     } finally {
       session?.release();
       await scopedPool.end();

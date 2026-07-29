@@ -1520,17 +1520,23 @@ export class LlmService {
     ];
 
     for (let index = 0; index < count; index += 1) {
-      const dispatched = await this.postTrackedJsonRequest({
-        resolved,
-        model,
-        requestedProviderId: attribution.requestedProviderId ?? request.providerId,
-        requestedModelId: attribution.requestedModelId ?? request.model,
-        attribution,
-        transportAttemptIndex: index,
-        target,
-        payload: buildOpenAICodexImagePayload(request, model, content),
-        timeoutMs,
-      });
+      let dispatched: LlmTrackedJsonDispatch;
+      try {
+        dispatched = await this.postTrackedJsonRequest({
+          resolved,
+          model,
+          requestedProviderId: attribution.requestedProviderId ?? request.providerId,
+          requestedModelId: attribution.requestedModelId ?? request.model,
+          attribution,
+          transportAttemptIndex: index,
+          target,
+          payload: buildOpenAICodexImagePayload(request, model, content),
+          timeoutMs,
+        });
+      } catch (error) {
+        if (error instanceof ModelUsageSettlementError) throw error;
+        throw normalizeOpenAICodexImageResponseError(error);
+      }
       if (dispatched.usage) eventIds.push(dispatched.usage.eventId);
       try {
         if (isRedirect(dispatched.response.status)) {
@@ -5320,7 +5326,11 @@ async function adaptOpenAICodexImageResponse(
   }
   const completedEvent = events.find((event) => event.type === "response.completed" && isRecord(event.response));
   if (!completedEvent || !isRecord(completedEvent.response)) {
-    throw new Error(`OpenAI Codex image generation for ${model} ended before response.completed.`);
+    throw new BoundedResponseReadError(
+      "body_incomplete",
+      `OpenAI Codex image generation for ${model} ended before response.completed.`,
+      OPENAI_CODEX_IMAGE_RESPONSE_LABEL,
+    );
   }
 
   try {
@@ -5345,7 +5355,11 @@ async function adaptOpenAICodexImageResponse(
 
     const results = outputItemImages.length > 0 ? outputItemImages : completedImages;
     if (results.length === 0) {
-      throw new Error(`OpenAI Codex image generation returned no images for ${model}.`);
+      throw new BoundedResponseReadError(
+        "body_no_payload",
+        `OpenAI Codex image generation returned no images for ${model}.`,
+        OPENAI_CODEX_IMAGE_RESPONSE_LABEL,
+      );
     }
     return {
       data: results.slice(0, 4),
@@ -5385,7 +5399,11 @@ function parseOpenAICodexImageEvents(body: string): Array<Record<string, unknown
       );
     }
     if (events.length > MAX_CODEX_IMAGE_SSE_EVENTS) {
-      throw new Error("OpenAI Codex image generation response exceeded event limit.");
+      throw new BoundedResponseReadError(
+        "body_event_limit",
+        "OpenAI Codex image generation response exceeded event limit.",
+        OPENAI_CODEX_IMAGE_RESPONSE_LABEL,
+      );
     }
   }
   return events;
@@ -5424,6 +5442,21 @@ function toOpenAICodexImageExternalServiceError(code: BoundedResponseReadErrorCo
       message: "OpenAI Codex image generation returned an empty response.",
       reason: "response_body_missing",
       retryable: true,
+    },
+    body_incomplete: {
+      message: "OpenAI Codex image generation returned an incomplete response.",
+      reason: "response_body_incomplete",
+      retryable: true,
+    },
+    body_no_payload: {
+      message: "OpenAI Codex image generation returned no image payload.",
+      reason: "response_body_no_payload",
+      retryable: true,
+    },
+    body_event_limit: {
+      message: "OpenAI Codex image generation returned too many response events.",
+      reason: "response_body_event_limit",
+      retryable: false,
     },
   };
   const failure = failureByCode[code];

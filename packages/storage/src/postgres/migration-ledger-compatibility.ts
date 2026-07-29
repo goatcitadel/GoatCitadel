@@ -237,7 +237,7 @@ export const POSTGRES_LEGACY_COMPOUND_V124_CATALOG_SQL = `
       SELECT 1 FROM pg_catalog.pg_class AS relation
       JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid OPERATOR(pg_catalog.=) relation.relnamespace
       WHERE namespace.nspname OPERATOR(pg_catalog.=) pg_catalog.current_schema()
-        AND relation.relname IN ('chat_session_fork_manifests','notification_targets','notification_rules','notification_presence_leases','notification_events','notification_deliveries','chat_timers','chat_session_run_variable_bindings','personal_ops_note_revisions','document_patch_proposals')
+        AND relation.relname IN ('chat_session_fork_manifests','notification_targets','notification_rules','notification_presence_leases','notification_events','notification_deliveries','chat_timers','chat_session_run_variable_bindings','personal_ops_notes','idx_personal_ops_notes_workspace_updated','personal_ops_note_revisions','document_patch_proposals')
     )
     AND NOT EXISTS (
       SELECT 1 FROM information_schema.columns AS columns

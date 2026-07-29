@@ -3451,6 +3451,34 @@ describe("MissionThreadedControllerHost", () => {
     expect(latestSurfaceInput?.activeSessionSurfaceProps?.onSendRetainedPromptAsChat).toBeUndefined();
   });
 
+  it("keeps image-adjacent prompts with armed per-turn context on the Chat path", async () => {
+    const handleGenerateImage = vi.fn(async () => generatedArtifact);
+    const handleSend = vi.fn(async () => undefined);
+    useChatSurfaceOrchestrationMock.mockReturnValue({
+      ...useChatSurfaceOrchestrationMock(),
+      handleSend,
+    });
+    useChatMultimodalControlsMock.mockReturnValue({
+      ...useChatMultimodalControlsMock(),
+      handleGenerateImage,
+    });
+
+    await renderHost();
+    await selectDefaultSession();
+    await act(async () => {
+      latestSurfaceInput?.activeSessionSurfaceProps?.onToggleContextTurn("turn-1");
+      await flushEffects(8);
+    });
+    await commitDraft("generate an image of this selected launch-plan context");
+    await act(async () => {
+      latestSurfaceInput?.activeSessionSurfaceProps?.onSend();
+      await flushEffects(8);
+    });
+
+    expect(handleGenerateImage).not.toHaveBeenCalled();
+    expect(handleSend).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps Plan, Research, Review, and Council sends on the normal Chat path", async () => {
     const cases = [
       { planningMode: "advisory" as const },
