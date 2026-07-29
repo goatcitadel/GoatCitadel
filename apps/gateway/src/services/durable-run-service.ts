@@ -48,6 +48,7 @@ import {
   CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY,
   HEARTBEAT_DECISION_RAW_OUTPUT_METADATA_KEY,
   HEARTBEAT_DECISION_RECEIPT_METADATA_KEY,
+  buildHeartbeatDecisionReceipt,
   buildChatTurnRuntimeAuthoritySeal,
   hashChatTurnRuntimeAuthorityValue,
   readChatTurnRuntimeAuthoritySeal,
@@ -1325,6 +1326,7 @@ export class DurableRunService {
     ) {
       throw new Error(`Autonomous Chat post-commit ${run.runId} has no matching general generation.`);
     }
+    if (this.verifyCompletedSystemHeartbeatOutputBinding(run, authority, checkpoint)) return;
     const terminalOutput = authority.material.terminalOutput;
     if (
       !terminalOutput ||
@@ -1517,6 +1519,7 @@ export class DurableRunService {
     const terminalOutput = authority.material.terminalOutput;
     const payload = run.payload as { sessionId?: unknown } | undefined;
     const checkpoint = this.ctx.storage.durableRuns.getLatestCheckpointByKind(run.runId, "run_completed");
+    if (checkpoint && this.verifyCompletedSystemHeartbeatOutputBinding(run, authority, checkpoint)) return;
     if (
       !terminalOutput ||
       !checkpoint ||
@@ -1546,6 +1549,147 @@ export class DurableRunService {
     ) {
       throw new Error(`Durable Chat run ${run.runId} canonical assistant output no longer matches its authority.`);
     }
+  }
+
+  private verifyCompletedSystemHeartbeatOutputBinding(
+    run: DurableRunRecord,
+    authority: ChatTurnRuntimeAuthoritySealV1,
+    checkpoint: DurableCheckpointRecord,
+  ): boolean {
+    const payload = run.payload as
+      | {
+          sessionId?: unknown;
+          assistantMessageId?: unknown;
+          heartbeatOccurrenceId?: unknown;
+          heartbeatClaimSha256?: unknown;
+          heartbeatEvaluatedPolicySha256?: unknown;
+          heartbeatFrozenObjectiveSha256?: unknown;
+          requestActor?: unknown;
+        }
+      | undefined;
+    const heartbeatFields = [
+      payload?.heartbeatOccurrenceId,
+      payload?.heartbeatClaimSha256,
+      payload?.heartbeatEvaluatedPolicySha256,
+      payload?.heartbeatFrozenObjectiveSha256,
+    ];
+    if (heartbeatFields.every((value) => value === undefined)) {
+      if (
+        run.metadata?.[HEARTBEAT_DECISION_RECEIPT_METADATA_KEY] !== undefined ||
+        run.metadata?.[HEARTBEAT_DECISION_RAW_OUTPUT_METADATA_KEY] !== undefined ||
+        authority.material.heartbeatDecisionReceipt !== undefined ||
+        checkpoint.state[HEARTBEAT_DECISION_RECEIPT_METADATA_KEY] !== undefined ||
+        checkpoint.state[HEARTBEAT_DECISION_RAW_OUTPUT_METADATA_KEY] !== undefined
+      ) {
+        throw new Error(`Non-heartbeat Chat run ${run.runId} contains heartbeat decision evidence.`);
+      }
+      return false;
+    }
+
+    const requestActor =
+      payload?.requestActor && typeof payload.requestActor === "object" && !Array.isArray(payload.requestActor)
+        ? (payload.requestActor as Record<string, unknown>)
+        : undefined;
+    const autonomous =
+      run.metadata?.autonomous && typeof run.metadata.autonomous === "object" && !Array.isArray(run.metadata.autonomous)
+        ? (run.metadata.autonomous as Record<string, unknown>)
+        : undefined;
+    if (
+      typeof payload?.sessionId !== "string" ||
+      !payload.sessionId.trim() ||
+      typeof payload.assistantMessageId !== "string" ||
+      !payload.assistantMessageId.trim() ||
+      typeof payload.heartbeatOccurrenceId !== "string" ||
+      !payload.heartbeatOccurrenceId.trim() ||
+      typeof payload.heartbeatClaimSha256 !== "string" ||
+      !/^[a-f0-9]{64}$/u.test(payload.heartbeatClaimSha256) ||
+      typeof payload.heartbeatEvaluatedPolicySha256 !== "string" ||
+      !/^[a-f0-9]{64}$/u.test(payload.heartbeatEvaluatedPolicySha256) ||
+      typeof payload.heartbeatFrozenObjectiveSha256 !== "string" ||
+      !/^[a-f0-9]{64}$/u.test(payload.heartbeatFrozenObjectiveSha256) ||
+      requestActor?.actorKind !== "system" ||
+      requestActor.actorId !== "system-heartbeat" ||
+      autonomous?.kind !== "heartbeat" ||
+      autonomous.systemActorId !== "system-heartbeat"
+    ) {
+      throw new Error(`Durable Chat run ${run.runId} has malformed system-heartbeat identity evidence.`);
+    }
+
+    const rawOutput = run.metadata?.[HEARTBEAT_DECISION_RAW_OUTPUT_METADATA_KEY];
+    const observedReceipt = run.metadata?.[HEARTBEAT_DECISION_RECEIPT_METADATA_KEY];
+    if (typeof rawOutput !== "string" || observedReceipt === undefined) {
+      throw new Error(`Completed system heartbeat ${run.runId} has no exact decision evidence.`);
+    }
+    const decision = buildHeartbeatDecisionReceipt({
+      occurrenceId: payload.heartbeatOccurrenceId,
+      claimSha256: payload.heartbeatClaimSha256,
+      rawOutput,
+    });
+    const systemHeartbeatPostCommitEligibility: PostCommitEligibility = {
+      version: 1,
+      autonomyEnabledAtParentSettlement: false,
+      evalIntegrityTurn: false,
+      humanSession: false,
+    };
+    if (
+      authority.material.durableStatus !== "completed" ||
+      authority.material.traceStatus !== "completed" ||
+      canonicalJsonString(observedReceipt) !== canonicalJsonString(decision.receipt) ||
+      canonicalJsonString(authority.material.heartbeatDecisionReceipt) !== canonicalJsonString(decision.receipt) ||
+      canonicalJsonString(checkpoint.state[HEARTBEAT_DECISION_RECEIPT_METADATA_KEY]) !==
+        canonicalJsonString(decision.receipt) ||
+      checkpoint.state[HEARTBEAT_DECISION_RAW_OUTPUT_METADATA_KEY] !== rawOutput ||
+      canonicalJsonString(authority.material.postCommitEligibility) !==
+        canonicalJsonString(systemHeartbeatPostCommitEligibility)
+    ) {
+      throw new Error(`System heartbeat ${run.runId} decision evidence drifted from its runtime authority.`);
+    }
+
+    const metadata = run.metadata ?? {};
+    const terminalOutput = authority.material.terminalOutput;
+    const message = this.ctx.storage.chatMessages.get(payload.assistantMessageId);
+    if (!decision.decision.notify) {
+      if (
+        terminalOutput ||
+        message ||
+        CHAT_TERMINAL_OUTPUT_METADATA_KEYS.some((key) => metadata[key] !== undefined) ||
+        ["assistantMessageId", ...CHAT_TERMINAL_OUTPUT_METADATA_KEYS].some((key) => checkpoint.state[key] !== undefined)
+      ) {
+        throw new Error(`Silent system heartbeat ${run.runId} contains visible output.`);
+      }
+      return true;
+    }
+
+    const normalizedMessage = decision.decision.normalizedMessage;
+    if (
+      !terminalOutput ||
+      terminalOutput.assistantMessageId !== payload.assistantMessageId ||
+      metadata.outputText !== normalizedMessage ||
+      metadata.outputSummary !== normalizedMessage ||
+      metadata.finalOutput !== normalizedMessage ||
+      metadata.finalSummary !== normalizedMessage ||
+      metadata.outputMessageId !== undefined ||
+      metadata.outputTraceStatus !== undefined ||
+      hashChatTurnRuntimeAuthorityValue(normalizedMessage) !== terminalOutput.outputTextSha256 ||
+      hashChatTurnRuntimeAuthorityValue(normalizedMessage) !== terminalOutput.outputSummarySha256 ||
+      checkpoint.state.assistantMessageId !== terminalOutput.assistantMessageId ||
+      checkpoint.state.outputText !== normalizedMessage ||
+      checkpoint.state.outputSummary !== normalizedMessage ||
+      checkpoint.state.finalOutput !== undefined ||
+      checkpoint.state.finalSummary !== undefined ||
+      checkpoint.state.outputMessageId !== undefined ||
+      checkpoint.state.outputTraceStatus !== undefined ||
+      !message ||
+      message.messageId !== terminalOutput.assistantMessageId ||
+      message.sessionId !== payload.sessionId ||
+      message.role !== "assistant" ||
+      message.actorType !== "system" ||
+      message.actorId !== "system-heartbeat" ||
+      message.content !== normalizedMessage
+    ) {
+      throw new Error(`Notifying system heartbeat ${run.runId} output drifted from its runtime authority.`);
+    }
+    return true;
   }
 
   private claimAutonomousChatPostCommit(
@@ -1780,11 +1924,37 @@ export class DurableRunService {
         throw new Error(`Durable Chat post-commit ${runId} cannot settle before its prior finalizers.`);
       }
       const currentEffects = new Set(readGeneralChatPostCommitCompletedEffects(current));
-      const missingEffects = GENERAL_CHAT_POST_COMMIT_EFFECTS.filter(
-        (effect) =>
-          !currentEffects.has(effect) &&
-          (!isGeneralChatPostCommitDurableEffect(effect) || !currentMarker.durableEffectRunIds[effect]),
-      );
+      const currentPayload = current.payload as {
+        heartbeatOccurrenceId?: unknown;
+        requestActor?: unknown;
+      };
+      const requestActor =
+        currentPayload.requestActor &&
+        typeof currentPayload.requestActor === "object" &&
+        !Array.isArray(currentPayload.requestActor)
+          ? (currentPayload.requestActor as Record<string, unknown>)
+          : undefined;
+      const autonomous =
+        current.metadata?.autonomous &&
+        typeof current.metadata.autonomous === "object" &&
+        !Array.isArray(current.metadata.autonomous)
+          ? (current.metadata.autonomous as Record<string, unknown>)
+          : undefined;
+      const systemHeartbeatTerminal =
+        typeof currentPayload.heartbeatOccurrenceId === "string" &&
+        Boolean(currentPayload.heartbeatOccurrenceId.trim()) &&
+        requestActor?.actorKind === "system" &&
+        requestActor.actorId === "system-heartbeat" &&
+        autonomous?.kind === "heartbeat" &&
+        autonomous.systemActorId === "system-heartbeat";
+      if (systemHeartbeatTerminal) currentEffects.clear();
+      const missingEffects = systemHeartbeatTerminal
+        ? []
+        : GENERAL_CHAT_POST_COMMIT_EFFECTS.filter(
+            (effect) =>
+              !currentEffects.has(effect) &&
+              (!isGeneralChatPostCommitDurableEffect(effect) || !currentMarker.durableEffectRunIds[effect]),
+          );
       if (missingEffects.length > 0) {
         throw new Error(
           `Durable Chat post-commit ${runId} returned before reconciling effects: ${missingEffects.join(", ")}.`,
@@ -2381,11 +2551,17 @@ export class DurableRunService {
     if (admission.status !== "active") {
       if (
         admission.terminalAuthorityKind === "authority_superseded" ||
-        admission.terminalAuthorityKind === "lifecycle_delete" ||
-        (admission.terminalAuthorityKind === "durable_terminal" &&
-          admission.terminalDurableRunId === run.runId &&
-          admission.terminalDurableRunStatus === run.status)
+        admission.terminalAuthorityKind === "lifecycle_delete"
       ) {
+        if (retryExhaustion) this.projectChatRetryExhaustionDeadLetter(run, retryExhaustion);
+        return;
+      }
+      if (
+        admission.terminalAuthorityKind === "durable_terminal" &&
+        admission.terminalDurableRunId === run.runId &&
+        admission.terminalDurableRunStatus === run.status
+      ) {
+        this.settleSystemHeartbeatOccurrenceIfPresent(run, admission);
         if (retryExhaustion) this.projectChatRetryExhaustionDeadLetter(run, retryExhaustion);
         return;
       }
@@ -2413,7 +2589,49 @@ export class DurableRunService {
       idempotencyKey: `chat-turn-handoff:${run.runId}`,
       correlationId: run.runId,
     });
+    this.settleSystemHeartbeatOccurrenceIfPresent(run, admission);
     if (retryExhaustion) this.projectChatRetryExhaustionDeadLetter(run, retryExhaustion);
+  }
+
+  private settleSystemHeartbeatOccurrenceIfPresent(
+    run: DurableRunRecord,
+    admission: SessionMutationAdmissionRecord & { turnId: string },
+  ): void {
+    const payload = run.payload as {
+      heartbeatOccurrenceId?: unknown;
+      capabilityProfileId?: unknown;
+      capabilityProfileHash?: unknown;
+    };
+    if (payload.heartbeatOccurrenceId === undefined) return;
+    const occurrences = (this.ctx.storage as Partial<Storage>).heartbeatOccurrences;
+    if (!occurrences) {
+      if (process.env.NODE_ENV === "test") return;
+      throw new Error("Heartbeat occurrence repository is unavailable during terminal Chat handoff.");
+    }
+    if (
+      typeof payload.heartbeatOccurrenceId !== "string" ||
+      !payload.heartbeatOccurrenceId.trim() ||
+      typeof payload.capabilityProfileId !== "string" ||
+      !payload.capabilityProfileId.trim() ||
+      typeof payload.capabilityProfileHash !== "string" ||
+      !payload.capabilityProfileHash.trim()
+    ) {
+      throw new Error(`System heartbeat ${run.runId} has no exact occurrence settlement identity.`);
+    }
+    const settlement = occurrences.markTerminal({
+      occurrenceId: payload.heartbeatOccurrenceId,
+      workspaceId: admission.workspaceId,
+      sessionId: admission.sessionId,
+      sessionIncarnationId: admission.sessionIncarnationId,
+      admissionId: admission.admissionId,
+      turnId: admission.turnId,
+      durableRunId: run.runId,
+      capabilityProfileId: payload.capabilityProfileId,
+      capabilityProfileHash: payload.capabilityProfileHash,
+    });
+    if (settlement.disposition === "still_bound") {
+      throw new Error(`System heartbeat ${run.runId} terminal handoff did not settle its occurrence.`);
+    }
   }
 
   private projectChatRetryExhaustionDeadLetter(
@@ -4741,6 +4959,7 @@ export class DurableRunService {
       postCommitEligibility,
       generationId,
     );
+    delete metadata.waitForEvent;
     metadata.linkedFinalizationPending = linkedFinalizationPending;
     if (options.retryExhaustion) {
       readChatRetryExhaustionDeadLetterPending(options.retryExhaustion);

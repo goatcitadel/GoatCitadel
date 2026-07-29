@@ -4997,6 +4997,36 @@ describe("exact system-heartbeat durable runtime", () => {
     expect(harness.host.persistChatStreamChunk).not.toHaveBeenCalled();
     expect(harness.getMessages().size).toBe(0);
   });
+
+  it("repairs a prematurely completed heartbeat trace while terminalizing an exhausted decision", async () => {
+    const run = buildExactSystemHeartbeatRun();
+    const harness = createExactSystemHeartbeatRuntimeHarness(run);
+    harness.host.storage.chatTurnTraces.patch(harness.payload.turnId, {
+      status: "completed",
+      finishedAt: "2026-07-15T20:00:00.000Z",
+      completion: {
+        status: "complete",
+        repaired: false,
+        repair: { applied: false },
+        finishReason: "stop",
+        providerCallCount: 1,
+      },
+    });
+
+    await markDurableWorkflowUnrecoverable(harness.host as never, run, "heartbeat decision remained incomplete");
+
+    expect(harness.getTrace()).toMatchObject({
+      status: "failed",
+      failure: {
+        message: "heartbeat decision remained incomplete",
+        retryable: false,
+      },
+      completion: { status: "interrupted" },
+      durable: { runId: run.runId, status: "failed" },
+    });
+    expect(harness.host.persistChatStreamChunk).not.toHaveBeenCalled();
+    expect(harness.getMessages().size).toBe(0);
+  });
 });
 
 function buildTestPostCommitProgress(targetTraceStatus: ChatTurnTraceRecord["status"], generationId: string) {

@@ -2774,6 +2774,9 @@ export function executeGeneralChatPostCommit(
   if (heartbeatIdentity && userMessage) {
     throw new Error(`System heartbeat ${run.runId} post-commit found a persisted input message.`);
   }
+  if (heartbeatIdentity) {
+    repairIncompleteSystemHeartbeatFailedTrace(host, run, payload);
+  }
   const recoveryTrace = validateCommittedDurableChatTurnRecoveryTrace(host, payload, run.runId, userMessage, run);
   if (recoveryTrace.outcome !== "valid") {
     throw new Error(
@@ -3721,13 +3724,26 @@ function markDurableChatTurnUnrecoverable(
     if (!matchesDurableChatTraceLink(trace, payload, run.runId)) {
       return;
     }
-    if (!CHAT_TURN_ACTIVE_STATUSES.includes(trace.status as (typeof CHAT_TURN_ACTIVE_STATUSES)[number])) {
+    const repairIncompleteHeartbeatCompletion =
+      systemHeartbeat &&
+      trace.status === "completed" &&
+      !host.storage.chatMessages.get(payload.userMessageId) &&
+      !host.storage.chatMessages.get(payload.assistantMessageId) &&
+      run.metadata?.[HEARTBEAT_DECISION_RECEIPT_METADATA_KEY] === undefined &&
+      run.metadata?.[HEARTBEAT_DECISION_RAW_OUTPUT_METADATA_KEY] === undefined;
+    if (
+      !repairIncompleteHeartbeatCompletion &&
+      !CHAT_TURN_ACTIVE_STATUSES.includes(trace.status as (typeof CHAT_TURN_ACTIVE_STATUSES)[number])
+    ) {
       host.storage.chatTurnTraces.patchIfStatus(payload.turnId, [trace.status], {
         durable: durableFailure,
       });
       return;
     }
-    const failedTrace = host.storage.chatTurnTraces.patchIfStatus(payload.turnId, CHAT_TURN_ACTIVE_STATUSES, {
+    const failureOwnerStatuses = repairIncompleteHeartbeatCompletion
+      ? (["completed"] as const)
+      : CHAT_TURN_ACTIVE_STATUSES;
+    const failedTrace = host.storage.chatTurnTraces.patchIfStatus(payload.turnId, failureOwnerStatuses, {
       status: "failed",
       finishedAt: new Date().toISOString(),
       failure: {
@@ -3765,6 +3781,65 @@ function markDurableChatTurnUnrecoverable(
         },
         run.runId,
       );
+    }
+  });
+}
+
+function repairIncompleteSystemHeartbeatFailedTrace(
+  host: DurableChatTurnWorkflowHost,
+  run: DurableRunRecord,
+  payload: DurableChatTurnExecutionPayload,
+): void {
+  if (
+    run.status !== "failed" ||
+    run.metadata?.[HEARTBEAT_DECISION_RECEIPT_METADATA_KEY] !== undefined ||
+    run.metadata?.[HEARTBEAT_DECISION_RAW_OUTPUT_METADATA_KEY] !== undefined ||
+    host.storage.chatMessages.get(payload.userMessageId) ||
+    host.storage.chatMessages.get(payload.assistantMessageId)
+  ) {
+    return;
+  }
+  const observedTrace = host.storage.chatTurnTraces.get(payload.turnId);
+  if (observedTrace.status !== "completed" && run.metadata?.waitForEvent !== null) {
+    return;
+  }
+  host.storage.runImmediateTransaction(() => {
+    const trace = host.storage.chatTurnTraces.getForUpdate(payload.turnId);
+    if (!matchesDurableChatTraceLink(trace, payload, run.runId)) {
+      return;
+    }
+    if (trace.status === "completed") {
+      host.storage.chatTurnTraces.patchIfStatus(payload.turnId, ["completed"], {
+        status: "failed",
+        finishedAt: run.finishedAt ?? new Date().toISOString(),
+        failure: {
+          failureClass: "unknown",
+          message: run.lastError ?? "System heartbeat decision did not commit.",
+          retryable: false,
+        },
+        completion: {
+          finishReason: trace.completion?.finishReason,
+          status: "interrupted",
+          repaired: Boolean(trace.completion?.repaired),
+        },
+        durable: {
+          runId: run.runId,
+          status: "failed",
+          checkpointKind: "run_failed",
+        },
+      });
+    }
+    const currentRun = host.storage.durableRuns.getRunForUpdate(run.runId);
+    if (currentRun.status === "failed" && currentRun.metadata?.waitForEvent === null) {
+      const metadata = { ...(currentRun.metadata ?? {}) };
+      delete metadata.waitForEvent;
+      host.storage.durableRuns.updateRun({
+        runId: currentRun.runId,
+        status: "failed",
+        metadata,
+        updatedAt: new Date().toISOString(),
+        expectedVersion: currentRun.version,
+      });
     }
   });
 }

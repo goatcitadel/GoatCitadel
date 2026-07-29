@@ -4714,12 +4714,14 @@ export class ChatTurnAgentRunner {
       ...(degradedOutcome ? { degraded: degradedOutcome } : {}),
       ...(failedFileMutations.length > 0 ? { failedFileMutations } : {}),
     };
+    const deferSystemHeartbeatTerminalCommit =
+      finalStatus === "completed" && isExactSystemHeartbeatRunnerPosture(input);
     const updatedTrace = this.patchTurnTrace(input, input.turnId, {
-      status: finalStatus,
+      ...(deferSystemHeartbeatTerminalCommit ? {} : { status: finalStatus }),
       model: assistantModel,
       citations,
       failure: finalFailure,
-      completion: finalizedCompletionWithRuntime,
+      ...(deferSystemHeartbeatTerminalCommit ? {} : { completion: finalizedCompletionWithRuntime }),
       routing: {
         ...routingState,
         liveDataIntent: intents.liveData,
@@ -4727,7 +4729,7 @@ export class ChatTurnAgentRunner {
         effectiveModel: routingState.effectiveModel ?? assistantModel,
       },
       loopGuard: createLoopGuardTrace(loopGuardState),
-      finishedAt,
+      ...(deferSystemHeartbeatTerminalCommit ? {} : { finishedAt }),
       ...(pendingUserInput ? { pendingUserInput } : {}),
     });
     const hydratedTrace = {

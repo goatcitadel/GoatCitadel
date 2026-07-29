@@ -771,11 +771,14 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
       })),
     });
 
-    await runner.run(buildHeartbeatInput(profile));
+    const result = await runner.run(buildHeartbeatInput(profile));
 
     expect(completionRequests[0]?.tools).toBeUndefined();
     expect(invokeTool).not.toHaveBeenCalled();
     expect(storage.chatToolRuns.listByTurn("turn-frozen")).toEqual([]);
+    expect(result.turnTrace.status).toBe("running");
+    expect(result.turnTrace).not.toHaveProperty("completion");
+    expect(result.turnTrace).not.toHaveProperty("finishedAt");
   });
 
   it.each([

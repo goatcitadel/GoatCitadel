@@ -20,7 +20,11 @@ import {
 } from "./chat-durable-run-service.js";
 import { executeGeneralChatPostCommit } from "./durable-execution-service.js";
 import {
+  buildAutonomousChatAdmissionMetadataMaterial,
   buildChatTurnRuntimeAuthoritySeal,
+  buildHeartbeatDecisionReceipt,
+  hashChatTurnRuntimeAuthorityValue,
+  sealAutonomousChatAdmissionMetadata,
   withChatTurnRuntimeAuthority,
   withChatTurnRuntimeAuthorityCheckpoint,
 } from "./chat-durable-runtime-authority.js";
@@ -36,6 +40,13 @@ const TEST_POST_COMMIT_ELIGIBILITY = {
   autonomyEnabledAtParentSettlement: true,
   evalIntegrityTurn: false,
   humanSession: true,
+};
+
+const TEST_HEARTBEAT_POST_COMMIT_ELIGIBILITY = {
+  version: 1 as const,
+  autonomyEnabledAtParentSettlement: false,
+  evalIntegrityTurn: false,
+  humanSession: false,
 };
 
 describe("DurableRunService", () => {
@@ -893,6 +904,149 @@ describe("DurableRunService", () => {
 
     expect(await service.reconcileGeneralChatPostCommit(run.runId)).toBe(true);
     expect(onGeneralChatPostCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it("boot-recovers a completed silent system heartbeat through terminal admission and occurrence handoff", async () => {
+    const fixture = createCompletedHeartbeatPostCommitFixture("run-heartbeat-silent-boot-recovery");
+    const recovery = createHeartbeatBootRecoveryHarness(fixture);
+
+    recovery.service.startWorker();
+    await Promise.all([...recovery.backgroundTasks]);
+    recovery.service.stopWorker();
+
+    const recovered = recovery.runs.get(fixture.run.runId)!;
+    expect(recovered.metadata).not.toHaveProperty("autonomousChatPostCommitPending");
+    expect(recovered.metadata).not.toHaveProperty("generalChatPostCommitPending");
+    expect(recovered.metadata).toMatchObject({
+      autonomousChatPostCommit: {
+        delivery: { status: "skipped", reason: "silent_heartbeat" },
+        heartbeatCleanup: { status: "not_required" },
+        generationId: fixture.generationId,
+      },
+      generalChatPostCommit: {
+        generationId: fixture.generationId,
+        settlementStatus: "completed",
+        completedEffects: [],
+        durableEffectRunIds: {},
+      },
+      chatTurnAdmissionHandoff: {
+        admissionId: fixture.admission.admissionId,
+        parentRunId: fixture.run.runId,
+        postCommitGenerationId: fixture.generationId,
+        childRunIds: [],
+      },
+    });
+    expect(recovered.metadata).not.toHaveProperty("outputText");
+    expect(recovered.metadata).not.toHaveProperty("outputSummary");
+    expect(recovery.onAutonomousChatPostCommit).toHaveBeenCalledTimes(1);
+    expect(recovery.onGeneralChatPostCommit).toHaveBeenCalledTimes(1);
+    expect(recovery.getMessage).toHaveBeenCalledWith(fixture.run.payload.assistantMessageId);
+    expect(recovery.closeTurnWrite).toHaveBeenCalledTimes(1);
+    expect(fixture.admission).toMatchObject({
+      status: "completed",
+      terminalAuthorityKind: "durable_terminal",
+      terminalDurableRunId: fixture.run.runId,
+      terminalDurableRunStatus: "completed",
+    });
+    expect(recovery.markTerminal).toHaveBeenCalledWith({
+      occurrenceId: fixture.run.payload.heartbeatOccurrenceId,
+      workspaceId: fixture.admission.workspaceId,
+      sessionId: fixture.admission.sessionId,
+      sessionIncarnationId: fixture.admission.sessionIncarnationId,
+      admissionId: fixture.admission.admissionId,
+      turnId: fixture.admission.turnId,
+      durableRunId: fixture.run.runId,
+      capabilityProfileId: fixture.run.payload.capabilityProfileId,
+      capabilityProfileHash: fixture.run.payload.capabilityProfileHash,
+    });
+    expect(recovery.getOccurrenceState()).toBe("terminal");
+  });
+
+  it("boot-recovers an exact notifying system heartbeat from its system assistant output", async () => {
+    const fixture = createCompletedHeartbeatPostCommitFixture("run-heartbeat-notifying-boot-recovery", {
+      rawOutput: '{"notify":true,"message":"  Check the backup now.  "}',
+    });
+    const recovery = createHeartbeatBootRecoveryHarness(fixture);
+
+    recovery.service.startWorker();
+    await Promise.all([...recovery.backgroundTasks]);
+    recovery.service.stopWorker();
+
+    const recovered = recovery.runs.get(fixture.run.runId)!;
+    expect(fixture.assistantMessage).toMatchObject({
+      role: "assistant",
+      actorType: "system",
+      actorId: "system-heartbeat",
+      content: "Check the backup now.",
+    });
+    expect(recovered.metadata).not.toHaveProperty("autonomousChatPostCommitPending");
+    expect(recovered.metadata).not.toHaveProperty("generalChatPostCommitPending");
+    expect(recovered.metadata).toMatchObject({
+      outputText: "Check the backup now.",
+      finalOutput: "Check the backup now.",
+      outputSummary: "Check the backup now.",
+      finalSummary: "Check the backup now.",
+      autonomousChatPostCommit: { generationId: fixture.generationId },
+      generalChatPostCommit: {
+        generationId: fixture.generationId,
+        settlementStatus: "completed",
+      },
+      chatTurnAdmissionHandoff: {
+        admissionId: fixture.admission.admissionId,
+        parentRunId: fixture.run.runId,
+      },
+      chatTurnRuntimeAuthority: {
+        material: {
+          terminalOutput: { assistantMessageId: fixture.run.payload.assistantMessageId },
+        },
+      },
+    });
+    expect(recovery.getMessage).toHaveBeenCalledWith(fixture.run.payload.assistantMessageId);
+    expect(recovery.onAutonomousChatPostCommit).toHaveBeenCalledTimes(1);
+    expect(recovery.onGeneralChatPostCommit).toHaveBeenCalledTimes(1);
+    expect(recovery.closeTurnWrite).toHaveBeenCalledTimes(1);
+    expect(recovery.markTerminal).toHaveBeenCalled();
+    expect(recovery.getOccurrenceState()).toBe("terminal");
+  });
+
+  it("rejects tampered silent heartbeat raw output during boot recovery and retains both pending finalizers", async () => {
+    const fixture = createCompletedHeartbeatPostCommitFixture("run-heartbeat-silent-tampered-boot", {
+      metadataRawOutput: '{ "notify": false }',
+    });
+    const recovery = createHeartbeatBootRecoveryHarness(fixture);
+
+    recovery.service.startWorker();
+    await Promise.all([...recovery.backgroundTasks]);
+    recovery.service.stopWorker();
+
+    const retained = recovery.runs.get(fixture.run.runId)!;
+    expect(retained.metadata).toMatchObject({
+      heartbeatDecisionReceipt: fixture.receipt,
+      heartbeatDecisionRawOutput: '{ "notify": false }',
+      autonomousChatPostCommitPending: {
+        generationId: fixture.generationId,
+      },
+      generalChatPostCommitPending: {
+        generationId: fixture.generationId,
+      },
+    });
+    expect(retained.metadata).not.toHaveProperty("autonomousChatPostCommit");
+    expect(retained.metadata).not.toHaveProperty("generalChatPostCommit");
+    expect(retained.metadata).not.toHaveProperty("chatTurnAdmissionHandoff");
+    expect(recovery.recoveryError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: fixture.run.runId,
+        error: expect.stringContaining("decision evidence drifted from its runtime authority"),
+      }),
+      "durable run recovery failed; continuing with other runs",
+    );
+    expect(recovery.onAutonomousChatPostCommit).not.toHaveBeenCalled();
+    expect(recovery.onGeneralChatPostCommit).not.toHaveBeenCalled();
+    expect(recovery.settleTurnWriteAuthority).not.toHaveBeenCalled();
+    expect(recovery.closeTurnWrite).not.toHaveBeenCalled();
+    expect(recovery.markTerminal).not.toHaveBeenCalled();
+    expect(fixture.admission.status).toBe("active");
+    expect(recovery.getOccurrenceState()).toBe("durable_bound");
   });
 
   it("resumes after a later general Chat consumer fails without repeating earlier committed effects", async () => {
@@ -2074,6 +2228,100 @@ describe("DurableRunService", () => {
     expect(closeHeartbeatOccurrence).toHaveBeenCalledTimes(1);
     expect(executeWorkflow).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["authority_superseded", "lifecycle_delete"] as const)(
+    "does not terminalize an already-abandoned heartbeat occurrence after %s closes admission",
+    async (terminalAuthorityKind) => {
+      const baseRun = createQueuedHeartbeatWorkerRun(`run-heartbeat-${terminalAuthorityKind}`);
+      const payload = {
+        ...(baseRun.payload as Record<string, unknown>),
+        capabilityProfileId: "heartbeat-restricted",
+        capabilityProfileHash: "f".repeat(64),
+      };
+      const generationId = `generation:${terminalAuthorityKind}`;
+      const settledAt = "2026-03-14T00:00:01.000Z";
+      const run = {
+        ...baseRun,
+        status: "failed" as const,
+        payload,
+        metadata: {
+          ...baseRun.metadata,
+          chatTurnAdmissionHandoff: {
+            version: 1,
+            admissionId: payload.admissionId,
+            sessionIncarnationId: payload.sessionIncarnationId,
+            turnId: payload.turnId,
+            parentRunId: baseRun.runId,
+            postCommitGenerationId: generationId,
+            parentLocalEffectsStatus: "settled",
+            childRunIds: [],
+            childRunIdsSha256: hashChatTurnRuntimeAuthorityValue([]),
+            committedAt: settledAt,
+          },
+          generalChatPostCommit: {
+            generationId,
+            traceStatus: "failed",
+            requestedAt: settledAt,
+            postCommitEligibility: {
+              version: 1,
+              autonomyEnabledAtParentSettlement: false,
+              evalIntegrityTurn: false,
+              humanSession: false,
+            },
+            parentLocalEffectsStatus: "settled",
+            parentLocalEffectsSettledAt: settledAt,
+            completedEffects: [],
+            durableEffectRunIds: {},
+            durableEffectOutcomes: {},
+            childOutcomeAuthority: "child_durable_runs",
+            settlementStatus: "completed",
+            completedAt: settledAt,
+          },
+        },
+        finishedAt: settledAt,
+      } satisfies DurableRunRecord;
+      const admission = {
+        admissionId: payload.admissionId,
+        admissionKind: "turn_write",
+        status: "cancelled",
+        sessionIncarnationId: payload.sessionIncarnationId,
+        workspaceId: payload.workspaceId,
+        sessionId: payload.sessionId,
+        turnId: payload.turnId,
+        aggregateRevision: payload.admissionAggregateRevision,
+        controllerGeneration: payload.admissionControllerGeneration,
+        actorKind: "system",
+        actorId: "system-heartbeat",
+        operation: "chat_system_heartbeat",
+        materialSha256: payload.admissionMaterialSha256,
+        terminalAuthorityKind,
+      };
+      const markTerminal = vi.fn(() => {
+        throw new Error("Only a durable-bound heartbeat can settle terminal.");
+      });
+      const context = createContext(new Map([[run.runId, run]]), [], []);
+      Object.assign(context.storage, {
+        heartbeatOccurrences: { markTerminal },
+        sessionMutationAdmissions: {
+          require: () => admission,
+          settleTurnWriteAuthority: vi.fn(),
+          closeTurnWrite: vi.fn(),
+        },
+      });
+      const service = new DurableRunService(context as unknown as ServiceContext, {
+        backgroundTasks: new Set(),
+        workflowRegistry: {
+          executeWorkflow: vi.fn(),
+          isWorkflowRecoverable: () => ({ recoverable: true }),
+          markWorkflowUnrecoverable: vi.fn(),
+        },
+        onGeneralChatPostCommit: vi.fn(async () => ({})),
+      });
+
+      await expect(service.reconcileGeneralChatPostCommit(run.runId)).resolves.toBe(true);
+      expect(markTerminal).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects a running retry after the worker lease expired", () => {
     const run = {
@@ -4375,6 +4623,286 @@ function installAdmittedChatRuntimeFixture(
   });
   recordTransitionEvidence(fixture);
   return { recordTransitionEvidence };
+}
+
+function createCompletedHeartbeatPostCommitFixture(
+  runId: string,
+  options?: { rawOutput?: string; metadataRawOutput?: string },
+) {
+  const workspaceId = "default";
+  const sessionId = `session:${runId}`;
+  const sessionIncarnationId = `incarnation:${runId}`;
+  const turnId = `turn:${runId}`;
+  const userMessageId = `user:${runId}`;
+  const assistantMessageId = `assistant:${runId}`;
+  const admissionId = `admission:${runId}`;
+  const occurrenceId = `occurrence:${runId}`;
+  const claimSha256 = "c".repeat(64);
+  const capabilityProfileId = "heartbeat-restricted";
+  const capabilityProfileHash = "f".repeat(64);
+  const capabilitySnapshotId = `snapshot:${runId}`;
+  const generationId = `generation:${runId}`;
+  const transitionAt = "2026-03-14T00:00:01.000Z";
+  const rawOutput = options?.rawOutput ?? '{"notify":false}';
+  const request = {
+    content: "Perform the bounded heartbeat check and return the exact decision object.",
+    permissionProfileId: capabilityProfileId,
+    policyRunId: runId,
+  };
+  const admissionMaterialSha256 = computeFrozenChatTurnAdmissionMaterialSha256(request as never);
+  const payload = {
+    version: "chat.turn.execute.v2" as const,
+    admissionId,
+    sessionIncarnationId,
+    workspaceId,
+    sessionId,
+    turnId,
+    userMessageId,
+    assistantMessageId,
+    branchKind: "new",
+    threadEventType: "chat_thread_turn_appended",
+    admissionMaterialSha256,
+    effectiveRequestMaterialSha256: computeEffectiveChatTurnRequestMaterialSha256(
+      admissionMaterialSha256,
+      request as never,
+    ),
+    admissionAggregateRevision: 7,
+    admissionControllerGeneration: 2,
+    requestActor: { actorKind: "system", actorId: "system-heartbeat" },
+    request,
+    capabilityProfileId,
+    capabilityProfileHash,
+    heartbeatOccurrenceId: occurrenceId,
+    heartbeatClaimSha256: claimSha256,
+    heartbeatEvaluatedPolicySha256: "d".repeat(64),
+    heartbeatFrozenObjectiveSha256: "e".repeat(64),
+  };
+  const autonomous = {
+    kind: "heartbeat" as const,
+    systemActorId: "system-heartbeat",
+    sourceRunId: runId,
+    reason: `heartbeat self-wake:${sessionId}`,
+    deliverMode: "on_notify" as const,
+  };
+  const autonomousAdmission = sealAutonomousChatAdmissionMetadata(
+    buildAutonomousChatAdmissionMetadataMaterial({
+      identity: { userMessageId, turnId, assistantMessageId, durableRunId: runId },
+      sessionId,
+      objective: request.content,
+      autonomous,
+      payload,
+      capabilitySnapshotId,
+    }),
+  );
+  const decision = buildHeartbeatDecisionReceipt({ occurrenceId, claimSha256, rawOutput });
+  const receipt = decision.receipt;
+  const normalizedMessage = decision.decision.notify ? decision.decision.normalizedMessage : undefined;
+  const authority = buildChatTurnRuntimeAuthoritySeal({
+    runId,
+    turnId,
+    transitionKind: "terminal",
+    durableStatus: "completed",
+    traceStatus: "completed",
+    transitionAt,
+    postCommitGenerationId: generationId,
+    postCommitEligibility: TEST_HEARTBEAT_POST_COMMIT_ELIGIBILITY,
+    heartbeatDecisionReceipt: receipt,
+    ...(normalizedMessage
+      ? {
+          terminalOutput: {
+            assistantMessageId,
+            outputText: normalizedMessage,
+            outputSummary: normalizedMessage,
+          },
+        }
+      : {}),
+    requiredFinalizers: ["autonomous", "general"],
+  });
+  const metadata = withChatTurnRuntimeAuthority(
+    {
+      retryPolicy: { ...DURABLE_RETRY_POLICY_DEFAULT },
+      objective: request.content,
+      autonomous,
+      autonomousAdmission,
+      capabilityProfileId,
+      capabilityProfileHash,
+      heartbeatDecisionReceipt: receipt,
+      heartbeatDecisionRawOutput: options?.metadataRawOutput ?? rawOutput,
+      ...(normalizedMessage
+        ? {
+            outputText: normalizedMessage,
+            finalOutput: normalizedMessage,
+            outputSummary: normalizedMessage,
+            finalSummary: normalizedMessage,
+          }
+        : {}),
+      autonomousChatPostCommitPending: {
+        version: 1,
+        generationId,
+        requestedAt: transitionAt,
+      },
+      generalChatPostCommitPending: {
+        version: 1,
+        generationId,
+        traceStatus: "completed",
+        requestedAt: transitionAt,
+        postCommitEligibility: TEST_HEARTBEAT_POST_COMMIT_ELIGIBILITY,
+        completedEffects: [],
+        durableEffectRunIds: {},
+      },
+    },
+    authority,
+  );
+  const checkpointState = withChatTurnRuntimeAuthorityCheckpoint(
+    {
+      heartbeatDecisionReceipt: receipt,
+      heartbeatDecisionRawOutput: rawOutput,
+      ...(normalizedMessage
+        ? {
+            assistantMessageId,
+            outputText: normalizedMessage,
+            outputSummary: normalizedMessage,
+          }
+        : {}),
+    },
+    authority,
+  );
+  const admission: AdmittedChatRuntimeFixture["admission"] & {
+    workspaceId: string;
+    sessionId: string;
+    sessionIncarnationId: string;
+    turnId: string;
+    terminalAuthorityKind?: string;
+    terminalDurableRunId?: string;
+    terminalDurableRunStatus?: string;
+  } = {
+    admissionId,
+    admissionKind: "turn_write",
+    status: "active",
+    sessionIncarnationId,
+    workspaceId,
+    sessionId,
+    turnId,
+    aggregateRevision: 7,
+    controllerGeneration: 2,
+    actorKind: "system",
+    actorId: "system-heartbeat",
+    operation: "chat_system_heartbeat",
+    materialSha256: admissionMaterialSha256,
+  };
+  const trace = {
+    turnId,
+    sessionId,
+    userMessageId,
+    assistantMessageId,
+    status: "completed",
+    capabilitySnapshotId,
+    capabilityProfileId,
+    capabilityProfileHash,
+  } as ChatTurnTraceRecord;
+  const assistantMessage = normalizedMessage
+    ? {
+        messageId: assistantMessageId,
+        sessionId,
+        role: "assistant" as const,
+        actorType: "system" as const,
+        actorId: "system-heartbeat",
+        content: normalizedMessage,
+        timestamp: transitionAt,
+      }
+    : undefined;
+  const run = {
+    ...createRun(runId, "completed", "chat.turn.execute"),
+    payload,
+    metadata,
+    finishedAt: transitionAt,
+    updatedAt: transitionAt,
+  } satisfies DurableRunRecord;
+  return { run, admission, trace, checkpointState, generationId, receipt, assistantMessage };
+}
+
+function createHeartbeatBootRecoveryHarness(fixture: ReturnType<typeof createCompletedHeartbeatPostCommitFixture>) {
+  const runs = new Map<string, DurableRunRecord>([[fixture.run.runId, fixture.run]]);
+  const backgroundTasks = new Set<Promise<void>>();
+  const recoveryError = vi.fn();
+  const context = createContext(runs, [], [], {
+    logger: {
+      info: vi.fn(),
+      debug: vi.fn(),
+      warn: vi.fn(),
+      error: recoveryError,
+    },
+  });
+  const getMessage = vi.fn((messageId: string) =>
+    messageId === fixture.assistantMessage?.messageId ? fixture.assistantMessage : undefined,
+  );
+  const settleTurnWriteAuthority = vi.fn(() => ({ disposition: "current", admission: fixture.admission }));
+  const closeTurnWrite = vi.fn((input: { status: "completed" | "cancelled"; correlationId: string }) => {
+    fixture.admission.status = input.status;
+    fixture.admission.terminalAuthorityKind = "durable_terminal";
+    fixture.admission.terminalDurableRunId = input.correlationId;
+    fixture.admission.terminalDurableRunStatus = input.status;
+    return fixture.admission;
+  });
+  let occurrenceState: "durable_bound" | "terminal" = "durable_bound";
+  const markTerminal = vi.fn(() => {
+    if (occurrenceState === "terminal") {
+      return { disposition: "replayed", occurrence: { state: occurrenceState } };
+    }
+    occurrenceState = "terminal";
+    return { disposition: "terminal", occurrence: { state: occurrenceState } };
+  });
+  Object.assign(context.storage, {
+    heartbeatOccurrences: { markTerminal },
+    sessionMutationAdmissions: {
+      require: (admissionId: string) => {
+        if (admissionId !== fixture.admission.admissionId) {
+          throw new Error(`Unknown admission ${admissionId}`);
+        }
+        return fixture.admission;
+      },
+      settleTurnWriteAuthority,
+      closeTurnWrite,
+    },
+    chatTurnTraces: {
+      get: (turnId: string) => (turnId === fixture.trace.turnId ? fixture.trace : undefined),
+    },
+    chatMessages: { get: getMessage },
+  });
+  context.storage.durableRuns.createCheckpoint({
+    runId: fixture.run.runId,
+    checkpointKind: "run_completed",
+    state: fixture.checkpointState,
+    createdAt: fixture.run.finishedAt,
+  });
+  const onAutonomousChatPostCommit = vi.fn(async () => ({
+    delivery: { status: "skipped", reason: "silent_heartbeat" },
+    heartbeatCleanup: { status: "not_required" },
+  }));
+  const onGeneralChatPostCommit = vi.fn(async () => ({ status: "completed" }));
+  const service = new DurableRunService(context as unknown as ServiceContext, {
+    backgroundTasks,
+    workflowRegistry: {
+      executeWorkflow: vi.fn(),
+      isWorkflowRecoverable: () => ({ recoverable: true }),
+      markWorkflowUnrecoverable: vi.fn(),
+    },
+    onAutonomousChatPostCommit,
+    onGeneralChatPostCommit,
+  });
+  return {
+    runs,
+    backgroundTasks,
+    service,
+    recoveryError,
+    getMessage,
+    settleTurnWriteAuthority,
+    closeTurnWrite,
+    markTerminal,
+    onAutonomousChatPostCommit,
+    onGeneralChatPostCommit,
+    getOccurrenceState: () => occurrenceState,
+  };
 }
 
 function createQueuedHeartbeatWorkerRun(

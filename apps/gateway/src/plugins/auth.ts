@@ -127,7 +127,7 @@ export const authPlugin = fp(async (fastify) => {
     if (request.method === "OPTIONS") {
       return;
     }
-    if (request.url.startsWith("/health")) {
+    if (request.url.startsWith("/health") || request.url.split("?", 1)[0] === "/livez") {
       return;
     }
     if (request.url.startsWith("/api/v1/auth/device-requests")) {

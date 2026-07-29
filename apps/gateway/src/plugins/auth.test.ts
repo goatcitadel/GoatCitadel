@@ -215,6 +215,10 @@ async function buildApp(
     actorSource: request.authActorSource,
     principalPurpose: request.authPrincipalPurpose ?? null,
   }));
+  app.get("/livez", async (request) => ({
+    ok: true,
+    actorSource: request.authActorSource,
+  }));
 
   // A tracked (/api/v1), replay-persisting, non-control mutating route. The
   // policy classifier resolves it to the operator class, and the purpose guard
@@ -268,6 +272,24 @@ describe("auth plugin", () => {
       await app.close();
       app = null;
     }
+  });
+
+  it("keeps the supervisor liveness probe public in token mode", async () => {
+    app = await buildApp({
+      mode: "token",
+      token: { value: "alpha-token", queryParam: "access_token" },
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/livez?probe=supervisor",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      ok: true,
+      actorSource: "none",
+    });
   });
 
   it("accepts valid bearer token in token mode", async () => {

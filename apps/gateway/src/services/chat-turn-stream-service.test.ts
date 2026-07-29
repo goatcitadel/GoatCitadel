@@ -538,6 +538,57 @@ describe("streamPreparedAgentChatTurn", () => {
     );
   });
 
+  it("commits the minimal terminal completion when a system-heartbeat runner leaves the trace active", async () => {
+    const host = createHost();
+    host.turnRuntime.runStream = vi.fn(async function* () {
+      yield {
+        type: "message_done",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "assistant-1",
+        content: '{"notify":false}',
+      };
+      expect(host.storage.chatTurnTraces.get("turn-1").status).toBe("running");
+    }) as never;
+    const prepared = createPreparedTurn() as unknown as Record<string, unknown>;
+    prepared.serverOnlyPosture = {
+      kind: "system_heartbeat",
+      actorId: "system-heartbeat",
+      operation: "chat_system_heartbeat",
+      occurrenceId: "heartbeat-occurrence-1",
+      claimSha256: "a".repeat(64),
+      durableRunId: "run-1",
+    };
+
+    for await (const _chunk of streamPreparedAgentChatTurn(
+      host,
+      "session-1",
+      { content: "heartbeat", mode: "chat", permissionProfileId: HEARTBEAT_PERMISSION_PROFILE_ID } as never,
+      prepared as never,
+      "chat_thread_turn_appended",
+    )) {
+      // drain
+    }
+
+    expect(host.turnRuntime.runStream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        serverOnlyPosture: prepared.serverOnlyPosture,
+      }),
+    );
+    expect(host.storage.chatTurnTraces.get("turn-1")).toMatchObject({
+      status: "completed",
+      assistantMessageId: "assistant-1",
+    });
+    expect(host.storage.chatTurnTraces.get("turn-1").completion).toEqual({
+      status: "complete",
+      repaired: false,
+    });
+    expect(Object.keys(host.storage.chatTurnTraces.get("turn-1").completion ?? {}).sort()).toEqual([
+      "repaired",
+      "status",
+    ]);
+  });
+
   it("rethrows durable control aborts without marking the Chat turn cancelled", async () => {
     const host = createHost();
     const abortController = new AbortController();

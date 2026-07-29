@@ -2631,7 +2631,14 @@ export async function* streamPreparedAgentChatTurn(
                 repair: streamLayerRepair,
               },
             }
-          : {}),
+          : prepared.serverOnlyPosture?.kind === "system_heartbeat"
+            ? {
+                completion: {
+                  status: "complete",
+                  repaired: false,
+                },
+              }
+            : {}),
         finishedAt: new Date().toISOString(),
         retrieval: prepared.retrievalTrace,
         reflection: {
