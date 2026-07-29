@@ -184,6 +184,27 @@ describe("assertDeploymentProfileStartupSafety", () => {
   });
 });
 
+describe("request diagnostic severity", () => {
+  it.each([
+    ["GET", "/api/v1/dashboard/state", 401],
+    ["GET", "/api/v1/events/stream", 401],
+    ["GET", "/api/v1/observe/health", 401],
+    ["GET", "/api/v1/review/identity", 401],
+    ["GET", "/health", 503],
+  ])("keeps expected shell and readiness control responses at debug level", (method, route, statusCode) => {
+    expect(__internal.classifyRequestFinishDiagnosticLevel(method, route, statusCode)).toBe("debug");
+  });
+
+  it.each([
+    ["POST", "/api/v1/dashboard/state", 401, "warn"],
+    ["GET", "/api/v1/chat/sessions", 401, "warn"],
+    ["GET", "/api/v1/observe/health", 500, "error"],
+    ["GET", "/api/v1/dashboard/state", 503, "error"],
+  ])("preserves actionable %s %s %i responses as %s", (method, route, statusCode, expected) => {
+    expect(__internal.classifyRequestFinishDiagnosticLevel(method, route, statusCode)).toBe(expected);
+  });
+});
+
 describe("gateway app config helpers", () => {
   const originalAllowedOrigins = process.env.GOATCITADEL_ALLOWED_ORIGINS;
 

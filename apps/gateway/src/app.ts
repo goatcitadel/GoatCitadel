@@ -105,6 +105,12 @@ const MUTATING_HTTP_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const BROWSER_MUTATION_INTENT_HEADER = "x-goatcitadel-browser-intent";
 const BROWSER_MUTATION_INTENT_VALUE = "mutation";
 const DEFAULT_FASTIFY_PLUGIN_TIMEOUT_MS = 120_000;
+const AUTHENTICATED_SHELL_POLL_ROUTES = new Set([
+  "/api/v1/dashboard/state",
+  "/api/v1/events/stream",
+  "/api/v1/observe/health",
+  "/api/v1/review/identity",
+]);
 
 /**
  * Baseline Content-Security-Policy applied to responses that do not set their
@@ -265,7 +271,7 @@ export async function buildApp() {
       const durationMs = calculateRequestDurationMs(requestState);
       const diagnosticRoute = stripDiagnosticUrlQuery(request.routeOptions.url || request.url);
       app.gatewayRuntime?.recordDevDiagnostic({
-        level: reply.statusCode >= 500 ? "error" : reply.statusCode >= 400 ? "warn" : "debug",
+        level: classifyRequestFinishDiagnosticLevel(request.method, diagnosticRoute, reply.statusCode),
         category: "api",
         event: "request.finish",
         message: `${request.method} ${diagnosticRoute} -> ${reply.statusCode}`,
@@ -678,6 +684,25 @@ function stripDiagnosticUrlQuery(url: string | undefined): string {
   return value.slice(0, end) || "/";
 }
 
+function classifyRequestFinishDiagnosticLevel(
+  method: string,
+  route: string,
+  statusCode: number,
+): "debug" | "warn" | "error" {
+  const normalizedMethod = method.toUpperCase();
+  if (
+    normalizedMethod === "GET" &&
+    ((statusCode === 401 && AUTHENTICATED_SHELL_POLL_ROUTES.has(route)) || (statusCode === 503 && route === "/health"))
+  ) {
+    // These responses are expected control signals rather than runtime faults:
+    // an old shell can poll briefly after its credential expires, and readiness
+    // returns 503 while the live process is still starting. Keep both in the
+    // diagnostics ring at debug level without flooding production warning logs.
+    return "debug";
+  }
+  return statusCode >= 500 ? "error" : statusCode >= 400 ? "warn" : "debug";
+}
+
 export const __internal = {
   isLoopbackRateLimitAllowlisted,
   normalizeConfiguredOrigin,
@@ -686,5 +711,6 @@ export const __internal = {
   applyBaselineSecurityHeaders,
   calculateRequestDurationMs,
   stripDiagnosticUrlQuery,
+  classifyRequestFinishDiagnosticLevel,
   BASELINE_CONTENT_SECURITY_POLICY,
 };
