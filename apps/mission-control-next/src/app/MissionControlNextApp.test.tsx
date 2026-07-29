@@ -317,6 +317,20 @@ async function flush() {
   });
 }
 
+/*
+ * Every root rendered by `renderApp` is tracked so `afterEach` can unmount it.
+ * A root left mounted keeps running: its shell notification hook holds live
+ * `AUTO_DISMISS_TOAST_MS` (6s) timers, and when one fires during a *later* test
+ * the dead root re-renders and its `LazyThreadedSurfaceRoute` mock overwrites
+ * the module-global `appMocks.threadedRouteProps` with that dead root's props.
+ * A test reading a callback off that handle then drives the dead tree, so the
+ * notification never reaches the renderer under assertion. That only reproduces
+ * once the file's wall clock passes 6s, which is why it stayed green locally and
+ * flaked on loaded CI hosts. Unmounting runs the effect cleanups that clear
+ * those timers, so no retired root can touch shared state.
+ */
+const mountedRenderers = new Set<ReactTestRenderer>();
+
 async function renderApp(href = "http://localhost:5173/chat?sessionId=session-1&turnId=turn-1") {
   installBrowser(href);
   vi.resetModules();
@@ -325,6 +339,7 @@ async function renderApp(href = "http://localhost:5173/chat?sessionId=session-1&
   await act(async () => {
     renderer = create(createElement(MissionControlNextApp));
   });
+  mountedRenderers.add(renderer);
   await flush();
   return renderer;
 }
@@ -438,6 +453,16 @@ describe("MissionControlNextApp", () => {
   });
 
   afterEach(() => {
+    // Retire every root this test mounted before the stubbed globals go away,
+    // so cleanup effects still see `window`/`document` and their toast timers
+    // cannot fire into a later test. Unmounting twice is a no-op, so tests that
+    // already unmount explicitly stay valid.
+    act(() => {
+      for (const renderer of mountedRenderers) {
+        renderer.unmount();
+      }
+    });
+    mountedRenderers.clear();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
