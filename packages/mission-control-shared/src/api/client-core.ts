@@ -30,6 +30,7 @@ const AUTH_STORAGE_KEY = "goatcitadel.gateway.auth";
 const AUTH_STORAGE_MODE_KEY = "goatcitadel.gateway.auth.storageMode";
 const LAST_ROUTE_STORAGE_KEY = "goatcitadel.shell.last-route";
 const inFlightGetRequests = new Map<string, Promise<unknown>>();
+const gatewayAuthRejectionListeners = new Set<(rejection: GatewayAuthRejection) => void>();
 let volatileGatewayBasicAuth: Pick<GatewayAuthState, "mode" | "username" | "password"> | undefined;
 const PROTECTED_GATEWAY_HEADER_NAMES = new Set([
   "authorization",
@@ -45,6 +46,12 @@ export interface GatewayAuthState {
   username?: string;
   password?: string;
   tokenQueryParam?: string;
+}
+
+export interface GatewayAuthRejection {
+  authMode: "token" | "basic";
+  path: string;
+  status: 401;
 }
 
 export type GatewayAuthStorageMode = "session" | "persistent";
@@ -173,6 +180,7 @@ async function requestUncoalesced<T>(path: string, init: RequestInit | undefined
       if (!res.ok) {
         const text = await res.text();
         const parsed = parseApiError(text);
+        handleGatewayAuthRejectionResponse(res.status, text, path);
         lastError = new ApiRequestError(`API error ${res.status}: ${text}`, {
           kind: "http",
           method,
@@ -458,6 +466,34 @@ export function clearGatewayAuthState(): void {
   window.sessionStorage.removeItem(AUTH_STORAGE_KEY);
   window.localStorage.removeItem(AUTH_STORAGE_KEY);
   window.localStorage.removeItem(LAST_ROUTE_STORAGE_KEY);
+}
+
+export function subscribeGatewayAuthRejection(listener: (rejection: GatewayAuthRejection) => void): () => void {
+  gatewayAuthRejectionListeners.add(listener);
+  return () => gatewayAuthRejectionListeners.delete(listener);
+}
+
+export function handleGatewayAuthRejectionResponse(status: number, bodyText: string, path: string): boolean {
+  if (status !== 401) {
+    return false;
+  }
+  const parsed = parseApiError(bodyText);
+  if (parsed.authMode !== "token" && parsed.authMode !== "basic") {
+    return false;
+  }
+  clearGatewayAuthState();
+  notifyGatewayAuthRejected({
+    authMode: parsed.authMode,
+    path,
+    status: 401,
+  });
+  return true;
+}
+
+function notifyGatewayAuthRejected(rejection: GatewayAuthRejection): void {
+  for (const listener of gatewayAuthRejectionListeners) {
+    listener(rejection);
+  }
 }
 
 export function readStoredGatewayAuthState(): GatewayAuthState | undefined {

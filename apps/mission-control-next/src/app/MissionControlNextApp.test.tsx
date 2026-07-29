@@ -6,6 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const appMocks = vi.hoisted(() => ({
   activeCitadelId: "personal",
   activeWorkspaceId: "workspace-1",
+  authRejectionListener: undefined as
+    | ((rejection: { authMode: "token" | "basic"; path: string; status: 401 }) => void)
+    | undefined,
   closeEventStream: vi.fn(),
   connectEventStream: vi.fn(),
   consumeGatewayAccessBootstrapFromLocation: vi.fn(),
@@ -26,6 +29,7 @@ const appMocks = vi.hoisted(() => ({
   publishChannelActivityFromRealtimeEvent: vi.fn(),
   resetEventStreamStatus: vi.fn(),
   resetChannelActivitySnapshots: vi.fn(),
+  subscribeGatewayAuthRejection: vi.fn(),
   setActiveCitadelId: vi.fn(),
   setActiveScope: vi.fn(),
   setActiveWorkspaceId: vi.fn(),
@@ -52,6 +56,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/shell-client", () => ({
   fetchWorkspaces: appMocks.fetchWorkspaces,
   getGatewayApiBaseUrl: appMocks.getGatewayApiBaseUrl,
   preflightGatewayAccess: appMocks.preflightGatewayAccess,
+  subscribeGatewayAuthRejection: appMocks.subscribeGatewayAuthRejection,
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
@@ -378,6 +383,7 @@ describe("MissionControlNextApp", () => {
     appMocks.isCompactTopbar = false;
     appMocks.isMobileNav = false;
     appMocks.threadedRouteProps = null;
+    appMocks.authRejectionListener = undefined;
     appMocks.closeEventStream.mockReset();
     appMocks.connectEventStream.mockImplementation((onEvent, onStateChange, onStatusChange) => {
       appMocks.streamCallbacks.onEvent = onEvent;
@@ -386,6 +392,12 @@ describe("MissionControlNextApp", () => {
       return appMocks.closeEventStream;
     });
     appMocks.consumeGatewayAccessBootstrapFromLocation.mockReturnValue({ consumed: false });
+    appMocks.subscribeGatewayAuthRejection.mockImplementation((listener) => {
+      appMocks.authRejectionListener = listener;
+      return () => {
+        appMocks.authRejectionListener = undefined;
+      };
+    });
     appMocks.deriveRealtimeRefresh.mockReturnValue({
       topics: ["surface", "approvals"],
       signalReason: "test-refresh",
@@ -758,6 +770,25 @@ describe("MissionControlNextApp", () => {
     });
     expect(appMocks.setActiveCitadelId).toHaveBeenCalledWith("company");
     expect(JSON.stringify(renderer.toJSON())).toContain("Loading Personal workspaces");
+  });
+
+  it("returns to the access gate and closes realtime when active credentials are rejected", async () => {
+    const renderer = await renderApp();
+    expect(appMocks.connectEventStream).toHaveBeenCalled();
+    expect(appMocks.authRejectionListener).toBeTypeOf("function");
+
+    act(() => {
+      appMocks.authRejectionListener?.({
+        authMode: "token",
+        path: "/api/v1/dashboard/state",
+        status: 401,
+      });
+    });
+
+    const gate = renderer.root.findByProps({ className: "mock-gateway-access" });
+    expect(gate.props["data-status"]).toBe("needs-auth");
+    expect(readNodeText(gate)).toContain("Gateway credentials were rejected");
+    expect(appMocks.closeEventStream).toHaveBeenCalled();
   });
 
   it("pauses scoped routes when the active Citadel has no workspaces", async () => {

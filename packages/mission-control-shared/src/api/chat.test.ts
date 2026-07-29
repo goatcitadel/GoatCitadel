@@ -634,6 +634,33 @@ describe("chat API origin surface headers", () => {
     },
     CHAT_API_TEST_TIMEOUT_MS,
   );
+
+  it("invalidates shell access when a direct Chat stream receives a Gateway-auth 401", async () => {
+    const core = await import("./client-core");
+    const chat = await import("./chat");
+    core.persistGatewayAuthState({ mode: "token", token: "stale-token" });
+    const listener = vi.fn();
+    const unsubscribe = core.subscribeGatewayAuthRejection(listener);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: "Unauthorized", authMode: "token" }), {
+          status: 401,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+
+    await expect(
+      chat.streamRetryChatTurn("session-1", "turn-1", { content: "retry" } as never, () => undefined),
+    ).rejects.toThrow("API error 401");
+
+    expect(core.readStoredGatewayAuthState()).toBeUndefined();
+    expect(listener).toHaveBeenCalledWith(
+      expect.objectContaining({ authMode: "token", path: expect.stringContaining("/retry/stream"), status: 401 }),
+    );
+    unsubscribe();
+  });
 });
 
 describe("chat stream terminal diagnostics", () => {

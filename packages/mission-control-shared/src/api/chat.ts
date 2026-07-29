@@ -88,7 +88,13 @@ import type {
 export type { ChatProjectImportResult } from "@goatcitadel/contracts";
 
 import { createCorrelationId, recordClientDiagnostic } from "../state/dev-diagnostics-store";
-import { buildGatewayHeaders, buildGatewayUrl, readGatewayAuthHeaders, request } from "./client-core.js";
+import {
+  buildGatewayHeaders,
+  buildGatewayUrl,
+  handleGatewayAuthRejectionResponse,
+  readGatewayAuthHeaders,
+  request,
+} from "./client-core.js";
 import { consumeSseResponse, iterateSsePayloads, parseSseJson } from "./streaming.js";
 
 export interface ChatRequestSurfaceOptions {
@@ -1004,6 +1010,7 @@ export async function streamAgentChatMessage(
     });
     if (!response.ok || !response.body) {
       const text = await response.text();
+      handleGatewayAuthRejectionResponse(response.status, text, path);
       recordClientDiagnostic({
         level: "error",
         category: "chat",
@@ -1144,6 +1151,7 @@ export async function streamRetryChatTurn(
   });
   if (!response.ok || !response.body) {
     const text = await response.text();
+    handleGatewayAuthRejectionResponse(response.status, text, path);
     throw new Error(`API error ${response.status}: ${text}`);
   }
   await consumeSseResponse(response.body, onChunk, options.signal);
@@ -1185,6 +1193,7 @@ export async function streamEditChatTurn(
   });
   if (!response.ok || !response.body) {
     const text = await response.text();
+    handleGatewayAuthRejectionResponse(response.status, text, path);
     throw new Error(`API error ${response.status}: ${text}`);
   }
   await consumeSseResponse(response.body, onChunk, options.signal);
@@ -1215,6 +1224,7 @@ export async function resumeChatTurnStream(
   });
   if (!response.ok || !response.body) {
     const text = await response.text();
+    handleGatewayAuthRejectionResponse(response.status, text, path);
     throw new Error(`API error ${response.status}: ${text}`);
   }
   await consumeSseResponse(response.body, onChunk, options.signal);
@@ -1614,6 +1624,7 @@ export async function streamChatDelegation(
   });
   if (!response.ok || !response.body) {
     const text = await response.text();
+    handleGatewayAuthRejectionResponse(response.status, text, path);
     throw new Error(`API error ${response.status}: ${text}`);
   }
   let streamError: string | null = null;

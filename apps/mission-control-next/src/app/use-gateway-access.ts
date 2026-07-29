@@ -3,6 +3,7 @@ import {
   consumeGatewayAccessBootstrapFromLocation,
   getGatewayApiBaseUrl,
   preflightGatewayAccess,
+  subscribeGatewayAuthRejection,
   type GatewayAccessPreflightResult,
 } from "@goatcitadel/mission-control-shared/api/shell-client";
 
@@ -69,6 +70,22 @@ export function useGatewayAccess(): UseGatewayAccessResult {
   useEffect(() => {
     void retryGatewayAccess();
   }, [retryGatewayAccess]);
+
+  useEffect(
+    () =>
+      subscribeGatewayAuthRejection((rejection) => {
+        setGatewayBusy(false);
+        setGatewayAccess({
+          status: "needs-auth",
+          message: "Gateway credentials were rejected. Re-enter them to continue.",
+          healthDetail: `Gateway authentication failed for ${rejection.path} (401).`,
+          authMode: rejection.authMode,
+          rejectedStoredAuth: true,
+          bootstrapTokenRejected: false,
+        });
+      }),
+    [],
+  );
 
   // Self-heal from transient gateway restarts without a manual retry click.
   useEffect(() => {

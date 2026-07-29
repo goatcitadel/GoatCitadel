@@ -11,6 +11,7 @@ import type { EventStreamConnectionState, EventStreamStatus } from "./client.js"
 import type {
   GatewayAccessPreflightResult,
   GatewayAccessPreflightStatus,
+  GatewayAuthRejection,
   GatewayAuthState,
   GatewayAuthStorageMode,
   GatewayBootstrapResult,
@@ -27,6 +28,7 @@ import {
   readStoredGatewayAuthState,
   request,
   setGatewayAuthStorageMode,
+  subscribeGatewayAuthRejection,
 } from "./client-core.js";
 import { connectEventStream } from "./client.js";
 import { isTrustedGatewayHost } from "./http-internal.js";
@@ -41,6 +43,7 @@ export type {
   GatewayAccessPreflightStatus,
   GatewayStartupPhaseTiming,
   GatewayStartupTiming,
+  GatewayAuthRejection,
 };
 export type { EventStreamConnectionState, EventStreamStatus };
 export {
@@ -54,6 +57,7 @@ export {
   preflightGatewayAccess,
   readStoredGatewayAuthState,
   setGatewayAuthStorageMode,
+  subscribeGatewayAuthRejection,
 };
 
 export interface WorkspacesResponse {

@@ -15,6 +15,7 @@ import {
   request,
   runUiAction,
   setGatewayAuthStorageMode,
+  subscribeGatewayAuthRejection,
 } from "./client-core";
 import { ApiRequestError } from "./http-internal";
 
@@ -188,6 +189,40 @@ describe("client-core", () => {
     clearGatewayAuthState();
     expect(readStoredGatewayAuthState()).toBeUndefined();
     expect(window.localStorage.getItem("goatcitadel.shell.last-route")).toBeNull();
+  });
+
+  it("clears stored credentials and reports gateway-auth 401 responses", async () => {
+    persistGatewayAuthState({ mode: "token", token: "stale-token" }, "persistent");
+    const listener = vi.fn();
+    const unsubscribe = subscribeGatewayAuthRejection(listener);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    fetchMock.mockResolvedValueOnce(jsonResponse({ error: "Unauthorized", authMode: "token" }, { status: 401 }));
+
+    await expect(request("/api/v1/dashboard/state")).rejects.toMatchObject({ status: 401 });
+
+    expect(readStoredGatewayAuthState()).toBeUndefined();
+    expect(listener).toHaveBeenCalledWith({
+      authMode: "token",
+      path: "/api/v1/dashboard/state",
+      status: 401,
+    });
+    unsubscribe();
+  });
+
+  it("does not invalidate gateway access for route-level 401 responses", async () => {
+    persistGatewayAuthState({ mode: "token", token: "current-token" }, "session");
+    const listener = vi.fn();
+    const unsubscribe = subscribeGatewayAuthRejection(listener);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    fetchMock.mockResolvedValueOnce(jsonResponse({ error: "A specific operator is required" }, { status: 401 }));
+
+    await expect(request("/api/v1/specialized-action")).rejects.toMatchObject({ status: 401 });
+
+    expect(readStoredGatewayAuthState()).toMatchObject({ token: "current-token" });
+    expect(listener).not.toHaveBeenCalled();
+    unsubscribe();
   });
 
   it("consumes one-time bootstrap tokens from the URL fragment", () => {
