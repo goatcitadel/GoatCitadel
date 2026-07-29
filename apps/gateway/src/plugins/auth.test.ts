@@ -406,6 +406,22 @@ describe("auth plugin", () => {
     );
   });
 
+  it("marks primary operator credential rejections for request diagnostics", async () => {
+    app = await buildApp({
+      mode: "token",
+      token: { value: "alpha-token", queryParam: "access_token" },
+    });
+    let operatorAuthRejected = false;
+    app.addHook("onResponse", async (request) => {
+      operatorAuthRejected = request.operatorAuthRejected;
+    });
+
+    const response = await app.inject({ method: "GET", url: "/protected" });
+
+    expect(response.statusCode).toBe(401);
+    expect(operatorAuthRejected).toBe(true);
+  });
+
   it("handles long token comparisons via timing-safe flow", async () => {
     const longToken = "t".repeat(3000);
     app = await buildApp({

@@ -186,22 +186,24 @@ describe("assertDeploymentProfileStartupSafety", () => {
 
 describe("request diagnostic severity", () => {
   it.each([
-    ["GET", "/api/v1/dashboard/state", 401],
-    ["GET", "/api/v1/events/stream", 401],
-    ["GET", "/api/v1/observe/health", 401],
-    ["GET", "/api/v1/review/identity", 401],
-    ["GET", "/health", 503],
-  ])("keeps expected shell and readiness control responses at debug level", (method, route, statusCode) => {
-    expect(__internal.classifyRequestFinishDiagnosticLevel(method, route, statusCode)).toBe("debug");
-  });
+    ["GET", "/api/v1/dashboard/state", 401, true],
+    ["GET", "/api/v1/onboarding/startup", 401, true],
+    ["PUT", "/api/v1/notifications/presence", 401, true],
+    ["GET", "/health", 503, false],
+  ])(
+    "keeps expected auth and readiness control responses at debug level",
+    (method, route, statusCode, authRejected) => {
+      expect(__internal.classifyRequestFinishDiagnosticLevel(method, route, statusCode, authRejected)).toBe("debug");
+    },
+  );
 
   it.each([
-    ["POST", "/api/v1/dashboard/state", 401, "warn"],
-    ["GET", "/api/v1/chat/sessions", 401, "warn"],
-    ["GET", "/api/v1/observe/health", 500, "error"],
-    ["GET", "/api/v1/dashboard/state", 503, "error"],
-  ])("preserves actionable %s %s %i responses as %s", (method, route, statusCode, expected) => {
-    expect(__internal.classifyRequestFinishDiagnosticLevel(method, route, statusCode)).toBe(expected);
+    ["POST", "/api/v1/integrations/webhook", 401, false, "warn"],
+    ["GET", "/api/v1/chat/sessions", 401, false, "warn"],
+    ["GET", "/api/v1/observe/health", 500, false, "error"],
+    ["GET", "/api/v1/dashboard/state", 503, false, "error"],
+  ])("preserves actionable %s %s %i responses as %s", (method, route, statusCode, authRejected, expected) => {
+    expect(__internal.classifyRequestFinishDiagnosticLevel(method, route, statusCode, authRejected)).toBe(expected);
   });
 });
 

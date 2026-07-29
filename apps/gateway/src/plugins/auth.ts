@@ -37,6 +37,8 @@ declare module "fastify" {
       | "companion"
       | "a2a_peer"
       | "mesh_node";
+    /** Set only when the Gateway's primary operator credential boundary emits a 401. */
+    operatorAuthRejected: boolean;
     authDeviceId?: string;
     authGrantId?: string;
     authCompanionSessionId?: string;
@@ -80,6 +82,7 @@ export const authPlugin = fp(async (fastify) => {
   const configuredQueryParam = fastify.gatewayConfig.assistant.auth.token.queryParam?.trim();
   fastify.decorateRequest("authActorId", "anonymous");
   fastify.decorateRequest("authActorSource", "none");
+  fastify.decorateRequest("operatorAuthRejected", false);
   fastify.decorateRequest("authDeviceId", undefined);
   fastify.decorateRequest("authGrantId", undefined);
   fastify.decorateRequest("authCompanionSessionId", undefined);
@@ -118,6 +121,7 @@ export const authPlugin = fp(async (fastify) => {
 
   fastify.addHook("onRequest", async (request, reply) => {
     setAuthActor(request, "anonymous", "none");
+    request.operatorAuthRejected = false;
     request.authDeviceId = undefined;
     request.authGrantId = undefined;
     request.authCompanionSessionId = undefined;
@@ -305,6 +309,7 @@ export const authPlugin = fp(async (fastify) => {
       const provided = providedBearerToken ?? readHeaderToken(request.headers["x-goatcitadel-token"]);
 
       if (!provided || !timingSafeStringEqual(provided, configuredToken)) {
+        request.operatorAuthRejected = true;
         return reply.code(401).send({
           error: "Unauthorized",
           authMode: "token",
@@ -328,6 +333,7 @@ export const authPlugin = fp(async (fastify) => {
       const passwordMatches = credentials ? timingSafeStringEqual(credentials.password, password) : false;
       const credentialsMatch = usernameMatches && passwordMatches;
       if (!credentialsMatch) {
+        request.operatorAuthRejected = true;
         reply.header("WWW-Authenticate", 'Basic realm="GoatCitadel Gateway"');
         return reply.code(401).send({
           error: "Unauthorized",

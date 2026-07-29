@@ -105,12 +105,6 @@ const MUTATING_HTTP_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const BROWSER_MUTATION_INTENT_HEADER = "x-goatcitadel-browser-intent";
 const BROWSER_MUTATION_INTENT_VALUE = "mutation";
 const DEFAULT_FASTIFY_PLUGIN_TIMEOUT_MS = 120_000;
-const AUTHENTICATED_SHELL_POLL_ROUTES = new Set([
-  "/api/v1/dashboard/state",
-  "/api/v1/events/stream",
-  "/api/v1/observe/health",
-  "/api/v1/review/identity",
-]);
 
 /**
  * Baseline Content-Security-Policy applied to responses that do not set their
@@ -271,7 +265,12 @@ export async function buildApp() {
       const durationMs = calculateRequestDurationMs(requestState);
       const diagnosticRoute = stripDiagnosticUrlQuery(request.routeOptions.url || request.url);
       app.gatewayRuntime?.recordDevDiagnostic({
-        level: classifyRequestFinishDiagnosticLevel(request.method, diagnosticRoute, reply.statusCode),
+        level: classifyRequestFinishDiagnosticLevel(
+          request.method,
+          diagnosticRoute,
+          reply.statusCode,
+          request.operatorAuthRejected,
+        ),
         category: "api",
         event: "request.finish",
         message: `${request.method} ${diagnosticRoute} -> ${reply.statusCode}`,
@@ -688,16 +687,17 @@ function classifyRequestFinishDiagnosticLevel(
   method: string,
   route: string,
   statusCode: number,
+  operatorAuthRejected = false,
 ): "debug" | "warn" | "error" {
   const normalizedMethod = method.toUpperCase();
   if (
-    normalizedMethod === "GET" &&
-    ((statusCode === 401 && AUTHENTICATED_SHELL_POLL_ROUTES.has(route)) || (statusCode === 503 && route === "/health"))
+    (statusCode === 401 && operatorAuthRejected) ||
+    (normalizedMethod === "GET" && statusCode === 503 && route === "/health")
   ) {
     // These responses are expected control signals rather than runtime faults:
-    // an old shell can poll briefly after its credential expires, and readiness
+    // the primary auth boundary tells a client to re-authenticate, and readiness
     // returns 503 while the live process is still starting. Keep both in the
-    // diagnostics ring at debug level without flooding production warning logs.
+    // diagnostics ring at debug level without treating them as runtime faults.
     return "debug";
   }
   return statusCode >= 500 ? "error" : statusCode >= 400 ? "warn" : "debug";
