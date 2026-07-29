@@ -3679,7 +3679,17 @@ describe("LlmService", () => {
           prompt: "Generate a bounded response proof",
           responseFormat: "b64_json",
         }),
-      ).rejects.toThrow("OpenAI Codex image generation response body exceeded 67108864 bytes");
+      ).rejects.toMatchObject({
+        code: "EXTERNAL_SERVICE_FAILED",
+        httpStatus: 502,
+        message: "OpenAI Codex image generation returned a response larger than the supported limit.",
+        details: {
+          service: "openai-codex",
+          operation: "image_generation",
+          reason: "response_body_limit",
+          retryable: false,
+        },
+      });
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -3712,7 +3722,150 @@ describe("LlmService", () => {
           prompt: "Generate malformed response proof",
           responseFormat: "b64_json",
         }),
-      ).rejects.toThrow("OpenAI Codex image generation for gpt-image-2 ended before response.completed");
+      ).rejects.toMatchObject({
+        code: "EXTERNAL_SERVICE_FAILED",
+        httpStatus: 502,
+        message: "OpenAI Codex image generation returned a malformed response.",
+        details: {
+          reason: "response_body_malformed",
+          retryable: true,
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("uses the configured OpenAI Codex image timeout while reading the response body", async () => {
+    const secretStore = createTrackedSecretStore({
+      "provider:openai-codex:oauth": JSON.stringify({
+        accessToken: "codex-access-token",
+        refreshToken: "codex-refresh-token",
+        expiresAt: Date.now() + 10 * 60_000,
+        updatedAt: Date.now(),
+      }),
+    });
+    const service = new LlmService(createCodexConfig(), process.env, { secretStore });
+    const originalFetch = globalThis.fetch;
+
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start() {
+              // Intentionally leave the body open so the configured reader deadline owns the failure.
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          },
+        ),
+    ) as unknown as typeof fetch;
+
+    try {
+      await expect(
+        service.generateImage({
+          providerId: "openai-codex",
+          prompt: "Generate timeout response proof",
+          responseFormat: "b64_json",
+          timeoutMs: 20,
+        }),
+      ).rejects.toMatchObject({
+        code: "EXTERNAL_SERVICE_FAILED",
+        httpStatus: 502,
+        message: "OpenAI Codex image generation timed out before the provider finished sending the response.",
+        details: {
+          reason: "response_body_timeout",
+          retryable: true,
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("maps empty OpenAI Codex image response bodies to a typed provider failure", async () => {
+    const secretStore = createTrackedSecretStore({
+      "provider:openai-codex:oauth": JSON.stringify({
+        accessToken: "codex-access-token",
+        refreshToken: "codex-refresh-token",
+        expiresAt: Date.now() + 10 * 60_000,
+        updatedAt: Date.now(),
+      }),
+    });
+    const service = new LlmService(createCodexConfig(), process.env, { secretStore });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response("", {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        }),
+    ) as unknown as typeof fetch;
+
+    try {
+      await expect(
+        service.generateImage({
+          providerId: "openai-codex",
+          prompt: "Generate empty response proof",
+          responseFormat: "b64_json",
+        }),
+      ).rejects.toMatchObject({
+        code: "EXTERNAL_SERVICE_FAILED",
+        httpStatus: 502,
+        message: "OpenAI Codex image generation returned an empty response.",
+        details: {
+          reason: "response_body_missing",
+          retryable: true,
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("maps an aborted OpenAI Codex image response read to the same typed timeout", async () => {
+    const secretStore = createTrackedSecretStore({
+      "provider:openai-codex:oauth": JSON.stringify({
+        accessToken: "codex-access-token",
+        refreshToken: "codex-refresh-token",
+        expiresAt: Date.now() + 10 * 60_000,
+        updatedAt: Date.now(),
+      }),
+    });
+    const service = new LlmService(createCodexConfig(), process.env, { secretStore });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              queueMicrotask(() => controller.error(new DOMException("The operation timed out", "TimeoutError")));
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          },
+        ),
+    ) as unknown as typeof fetch;
+
+    try {
+      await expect(
+        service.generateImage({
+          providerId: "openai-codex",
+          prompt: "Generate aborted response proof",
+          responseFormat: "b64_json",
+        }),
+      ).rejects.toMatchObject({
+        code: "EXTERNAL_SERVICE_FAILED",
+        httpStatus: 502,
+        details: {
+          reason: "response_body_timeout",
+          retryable: true,
+        },
+      });
     } finally {
       globalThis.fetch = originalFetch;
     }

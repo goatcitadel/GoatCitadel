@@ -273,6 +273,7 @@ export interface MissionControlActiveSessionSurfaceProps {
   onRemoveQueuedItem: (id: string) => void;
   onCancelEdit: () => void;
   onDismissError: () => void;
+  onSendRetainedPromptAsChat?: () => void;
   onAcknowledgeRouteBoundary: () => void;
   onTogglePlanningMode: () => void;
   onToggleResearchMode: () => void;

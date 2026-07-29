@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import { ExternalServiceError } from "@goatcitadel/contracts";
 import { llmRoutes } from "./llm.js";
 
 describe("llm routes", () => {
@@ -738,6 +739,41 @@ describe("llm routes", () => {
         taskId: expect.stringMatching(/^http:llm:image:/),
       }),
     );
+  });
+
+  it("returns sanitized typed image provider failures as HTTP 502", async () => {
+    const generateImage = vi.fn(async () => {
+      throw new ExternalServiceError(
+        "OpenAI Codex image generation timed out before the provider finished sending the response.",
+        {
+          service: "openai-codex",
+          operation: "image_generation",
+          reason: "response_body_timeout",
+          retryable: true,
+        },
+      );
+    });
+    app = Fastify();
+    app.decorate("services", { llm: { generateImage } } as never);
+    await app.register(llmRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/llm/images",
+      payload: { prompt: "Generate timeout proof" },
+    });
+
+    expect(response.statusCode).toBe(502);
+    expect(response.json()).toEqual({
+      error: "OpenAI Codex image generation timed out before the provider finished sending the response.",
+      code: "EXTERNAL_SERVICE_FAILED",
+      details: {
+        service: "openai-codex",
+        operation: "image_generation",
+        reason: "response_body_timeout",
+        retryable: true,
+      },
+    });
   });
 
   it.each([

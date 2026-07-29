@@ -37,6 +37,29 @@ function extractProviderMessage(value: string): string | null {
   return null;
 }
 
+function extractTypedExternalServiceError(value: string): { message: string; reason?: string } | null {
+  const jsonStart = value.indexOf("{");
+  if (jsonStart < 0) {
+    return null;
+  }
+  try {
+    const payload = JSON.parse(value.slice(jsonStart)) as {
+      code?: unknown;
+      error?: unknown;
+      details?: { reason?: unknown };
+    };
+    if (payload.code !== "EXTERNAL_SERVICE_FAILED" || typeof payload.error !== "string") {
+      return null;
+    }
+    return {
+      message: cleanProviderMessage(payload.error),
+      ...(typeof payload.details?.reason === "string" ? { reason: payload.details.reason } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
 function looksLikePolicyRejection(value: string): boolean {
   const normalized = value.toLowerCase();
   return (
@@ -65,6 +88,7 @@ export function describeChatUiError(
   }
   const normalized = value.toLowerCase();
   const retryNote = shouldIncludeRetryNote(source) ? RETRY_NOTE : "";
+  const externalServiceError = extractTypedExternalServiceError(value);
   let summary = value;
   if (
     normalized.includes("organization must be verified") ||
@@ -72,6 +96,10 @@ export function describeChatUiError(
   ) {
     summary =
       "OpenAI blocked image generation because this API organization is not verified for gpt-image-2. Verify the organization in OpenAI Platform Settings > Organization > General, then wait a bit and retry.";
+  } else if (externalServiceError?.reason === "response_body_timeout" && source === "image_generate") {
+    summary = `Image generation timed out before the provider finished sending the response.${retryNote}`;
+  } else if (externalServiceError) {
+    summary = `${externalServiceError.message}${retryNote}`;
   } else if (normalized.startsWith("api error")) {
     const providerMessage = extractProviderMessage(value);
     if (providerMessage && looksLikePolicyRejection(providerMessage)) {

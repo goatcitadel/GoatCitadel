@@ -917,6 +917,10 @@ export function MissionThreadedControllerHost({
   }, []);
   const [error, setError] = useState<string | null>(null);
   const [errorSource, setErrorSource] = useState<ChatErrorSource | null>(null);
+  const [failedAutoImageRecovery, setFailedAutoImageRecovery] = useState<{
+    prompt: string;
+    sessionId: string | null;
+  } | null>(null);
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachmentRecord[]>([]);
   const [folderName, setFolderName] = useState("");
   const [tagsValue, setTagsValue] = useState("");
@@ -952,7 +956,18 @@ export function MissionThreadedControllerHost({
   const setUiError = useCallback((value: string | null, source: ChatErrorSource = "other") => {
     setError(value);
     setErrorSource(value ? source : null);
+    if (!value || source !== "image_generate") {
+      setFailedAutoImageRecovery(null);
+    }
   }, []);
+  useEffect(() => {
+    if (
+      failedAutoImageRecovery &&
+      (failedAutoImageRecovery.sessionId !== selectedSessionId || failedAutoImageRecovery.prompt !== draft)
+    ) {
+      setFailedAutoImageRecovery(null);
+    }
+  }, [draft, failedAutoImageRecovery, selectedSessionId]);
   const [presetProfiles, setPresetProfiles] = useState<
     Array<{
       agentId: string;
@@ -3601,7 +3616,7 @@ export function MissionThreadedControllerHost({
     handleDragOver,
     handleDragLeave,
     handleDrop,
-    handleDismissError,
+    handleDismissError: dismissComposerError,
     handleCancelEdit,
     handleCreateCurrentModeSession,
     handleArchiveWorkspace,
@@ -3645,6 +3660,10 @@ export function MissionThreadedControllerHost({
       ? (item) => void handleComposerPaletteSelect(item as ComposerPaletteItem)
       : undefined,
   });
+  const handleDismissError = useCallback(() => {
+    setFailedAutoImageRecovery(null);
+    dismissComposerError();
+  }, [dismissComposerError]);
   const handleToggleDock = useCallback(() => {
     handleDockOpenChange(!dockOpen);
   }, [dockOpen, handleDockOpenChange]);
@@ -3805,6 +3824,19 @@ export function MissionThreadedControllerHost({
     [pushLocalNotice, selectedSessionId, setUiError],
   );
 
+  const sendDraftAsChat = useCallback(async () => {
+    try {
+      // Sending a message is an explicit "show me the answer" intent: re-arm
+      // auto-follow so the new turn and its streamed response stay in view
+      // even if the operator had scrolled up earlier in the session.
+      setFollowThreadOutput(true);
+      await attachPendingKnowledgeSources();
+      await handleSend();
+    } catch (cause) {
+      setUiError(cause instanceof Error ? cause.message : "Unable to prepare thread knowledge.");
+    }
+  }, [attachPendingKnowledgeSources, handleSend, setFollowThreadOutput, setUiError]);
+
   const handleSendWithKnowledge = useCallback(async () => {
     const queueCommand = parseQueueCommand(draft);
     const btwCommand = parseBtwCommand(draft);
@@ -3858,15 +3890,27 @@ export function MissionThreadedControllerHost({
       return;
     }
 
+    const webMode = prefs?.webMode ?? "auto";
+    const researchModeActive = webMode === "quick" || webMode === "deep";
+    const reviewModeActive = (prefs?.orchestrationReviewDepth ?? "off") !== "off";
     const shouldAutoGenerateImage =
-      messageMode === "chat" && !editingTurnId && pendingAttachments.length === 0 && detectImageGenerationIntent(draft);
+      messageMode === "chat" &&
+      planningMode !== "advisory" &&
+      !researchModeActive &&
+      !reviewModeActive &&
+      !modelCouncilEnabledRef.current &&
+      !editingTurnId &&
+      pendingAttachments.length === 0 &&
+      detectImageGenerationIntent(draft);
     if (shouldAutoGenerateImage) {
       if (imageBusy) {
-        setUiError("Image generation is already running.");
+        setFailedAutoImageRecovery({ prompt: draft, sessionId: selectedSessionId });
+        setUiError("Image generation is already running.", "image_generate");
         return;
       }
       if (!imageGenerationAvailable) {
-        setUiError("This looks like an image request, but no image generation route is available.");
+        setFailedAutoImageRecovery({ prompt: draft, sessionId: selectedSessionId });
+        setUiError("This looks like an image request, but no image generation route is available.", "image_generate");
         return;
       }
       const generated = await handleGenerateImage({
@@ -3874,28 +3918,19 @@ export function MissionThreadedControllerHost({
         trigger: "auto_send",
       });
       if (generated) {
+        setFailedAutoImageRecovery(null);
         return;
       }
+      setFailedAutoImageRecovery({ prompt: draft, sessionId: selectedSessionId });
       return;
     }
 
-    try {
-      // Sending a message is an explicit "show me the answer" intent: re-arm
-      // auto-follow so the new turn and its streamed response stay in view
-      // even if the operator had scrolled up earlier in the session.
-      setFollowThreadOutput(true);
-      await attachPendingKnowledgeSources();
-      await handleSend();
-    } catch (cause) {
-      setUiError(cause instanceof Error ? cause.message : "Unable to prepare thread knowledge.");
-    }
+    await sendDraftAsChat();
   }, [
-    attachPendingKnowledgeSources,
     consumeModelCouncilArming,
     draft,
     editingTurnId,
     handleGenerateImage,
-    handleSend,
     handleSteerMidTurn,
     imageBusy,
     imageGenerationAvailable,
@@ -3903,14 +3938,30 @@ export function MissionThreadedControllerHost({
     openBtwSideChat,
     pendingAttachments.length,
     pendingAttachments,
+    planningMode,
+    prefs?.orchestrationReviewDepth,
+    prefs?.webMode,
     pushLocalNotice,
     selectedSessionId,
+    sendDraftAsChat,
     setDraft,
-    setFollowThreadOutput,
     setPendingAttachments,
     setQueuedOutbound,
     setUiError,
   ]);
+
+  const handleSendRetainedPromptAsChat = useCallback(async () => {
+    if (
+      !failedAutoImageRecovery ||
+      failedAutoImageRecovery.sessionId !== selectedSessionId ||
+      failedAutoImageRecovery.prompt !== draft
+    ) {
+      return;
+    }
+    setFailedAutoImageRecovery(null);
+    setUiError(null);
+    await sendDraftAsChat();
+  }, [draft, failedAutoImageRecovery, selectedSessionId, sendDraftAsChat, setUiError]);
 
   useEffect(() => {
     composerSendHandlerRef.current = async () => {
@@ -4371,6 +4422,12 @@ export function MissionThreadedControllerHost({
         },
         onCancelEdit: handleCancelEdit,
         onDismissError: handleDismissError,
+        onSendRetainedPromptAsChat:
+          failedAutoImageRecovery?.sessionId === selectedSessionId && failedAutoImageRecovery.prompt === draft
+            ? () => {
+                if (!blockHistoricalMutation()) void handleSendRetainedPromptAsChat();
+              }
+            : undefined,
         onAcknowledgeRouteBoundary: acknowledgeCurrentRouteBoundary,
         onTogglePlanningMode: () => {
           if (!blockHistoricalMutation()) handleTogglePlanningMode();

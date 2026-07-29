@@ -12,7 +12,11 @@ import {
   type ModelUsageAttemptHandle,
 } from "@goatcitadel/gateway-core";
 import { assertExistingPathRealpathAllowed, assertHostAllowed } from "@goatcitadel/policy-engine";
-import { readBoundedResponseText } from "./bounded-response-reader.js";
+import {
+  BoundedResponseReadError,
+  type BoundedResponseReadErrorCode,
+  readBoundedResponseText,
+} from "./bounded-response-reader.js";
 import { parseProviderJsonResponse } from "./llm-response-parsing.js";
 import { extractProviderOwnedOutputCapErrorText, resolveOutputCapRecovery } from "./llm-output-cap-recovery.js";
 import { Agent, ProxyAgent } from "undici";
@@ -45,6 +49,7 @@ import type {
 } from "@goatcitadel/contracts";
 import {
   canonicalJsonString,
+  ExternalServiceError,
   findProviderTemplate,
   inferProviderForModelId,
   providerAllowsForeignModelIds,
@@ -1534,7 +1539,7 @@ export class LlmService {
         if (!dispatched.response.ok) {
           throw new Error(await buildHttpError("OpenAI Codex image generation", dispatched.response));
         }
-        const adapted = await adaptOpenAICodexImageResponse(dispatched.response, model);
+        const adapted = await adaptOpenAICodexImageResponse(dispatched.response, model, timeoutMs);
         data.push(...adapted.data);
         effectiveModel = adapted.model ?? effectiveModel;
         observeProviderPayloadUsage(dispatched.usage, adapted.usage, adapted.model, {
@@ -1544,12 +1549,13 @@ export class LlmService {
         dispatched.usage?.succeed();
       } catch (error) {
         if (error instanceof ModelUsageSettlementError) throw error;
-        observeProviderFailureUsage(dispatched.usage, error, {
+        const surfacedError = normalizeOpenAICodexImageResponseError(error);
+        observeProviderFailureUsage(dispatched.usage, surfacedError, {
           providerId: resolved.provider.providerId,
           model,
         });
-        dispatched.usage?.fail(error);
-        throw error;
+        dispatched.usage?.fail(surfacedError);
+        throw surfacedError;
       }
     }
 
@@ -5237,8 +5243,8 @@ function decodeImageAssetToBlob(input: { bytesBase64: string; mimeType?: string 
 
 const OPENAI_CODEX_IMAGE_RESPONSES_MODEL = "gpt-5.4";
 const OPENAI_CODEX_IMAGE_INSTRUCTIONS = "You are an image generation assistant.";
+const OPENAI_CODEX_IMAGE_RESPONSE_LABEL = "OpenAI Codex image generation";
 const MAX_CODEX_IMAGE_SSE_BYTES = 64 * 1024 * 1024;
-const CODEX_IMAGE_RESPONSE_READ_TIMEOUT_MS = 60_000;
 const MAX_CODEX_IMAGE_SSE_EVENTS = 512;
 const MAX_CODEX_IMAGE_BASE64_CHARS = 64 * 1024 * 1024;
 const MAX_IMAGE_DATA_URL_BASE64_CHARS = 64 * 1024 * 1024;
@@ -5283,12 +5289,20 @@ function toImageDataUrl(image: ImageAssetInput): string {
 async function adaptOpenAICodexImageResponse(
   response: Response,
   model: string,
+  timeoutMs: number,
 ): Promise<{ data: ImageGenerationResponse["data"]; usage?: Record<string, unknown>; model?: string }> {
   const body = await readBoundedResponseText(response, {
     maxBytes: MAX_CODEX_IMAGE_SSE_BYTES,
-    timeoutMs: CODEX_IMAGE_RESPONSE_READ_TIMEOUT_MS,
-    label: "OpenAI Codex image generation",
+    timeoutMs,
+    label: OPENAI_CODEX_IMAGE_RESPONSE_LABEL,
   });
+  if (!body.trim()) {
+    throw new BoundedResponseReadError(
+      "body_missing",
+      `${OPENAI_CODEX_IMAGE_RESPONSE_LABEL} response body was empty.`,
+      OPENAI_CODEX_IMAGE_RESPONSE_LABEL,
+    );
+  }
   const events = parseOpenAICodexImageEvents(body);
   const failure = events.find((event) => event.type === "response.failed" || event.type === "error");
   if (failure) {
@@ -5364,13 +5378,61 @@ function parseOpenAICodexImageEvents(body: string): Array<Record<string, unknown
         events.push(parsed);
       }
     } catch {
-      continue;
+      throw new BoundedResponseReadError(
+        "body_parse",
+        `${OPENAI_CODEX_IMAGE_RESPONSE_LABEL} response body contained malformed SSE JSON.`,
+        OPENAI_CODEX_IMAGE_RESPONSE_LABEL,
+      );
     }
     if (events.length > MAX_CODEX_IMAGE_SSE_EVENTS) {
       throw new Error("OpenAI Codex image generation response exceeded event limit.");
     }
   }
   return events;
+}
+
+function normalizeOpenAICodexImageResponseError(error: unknown): unknown {
+  if (error instanceof BoundedResponseReadError) {
+    return toOpenAICodexImageExternalServiceError(error.code);
+  }
+  if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+    // OpenAI Codex image dispatch does not accept a caller cancellation signal;
+    // an abort while reading this response is therefore the governed request deadline.
+    return toOpenAICodexImageExternalServiceError("body_timeout");
+  }
+  return error;
+}
+
+function toOpenAICodexImageExternalServiceError(code: BoundedResponseReadErrorCode): ExternalServiceError {
+  const failureByCode: Record<BoundedResponseReadErrorCode, { message: string; reason: string; retryable: boolean }> = {
+    body_timeout: {
+      message: "OpenAI Codex image generation timed out before the provider finished sending the response.",
+      reason: "response_body_timeout",
+      retryable: true,
+    },
+    body_limit: {
+      message: "OpenAI Codex image generation returned a response larger than the supported limit.",
+      reason: "response_body_limit",
+      retryable: false,
+    },
+    body_parse: {
+      message: "OpenAI Codex image generation returned a malformed response.",
+      reason: "response_body_malformed",
+      retryable: true,
+    },
+    body_missing: {
+      message: "OpenAI Codex image generation returned an empty response.",
+      reason: "response_body_missing",
+      retryable: true,
+    },
+  };
+  const failure = failureByCode[code];
+  return new ExternalServiceError(failure.message, {
+    service: "openai-codex",
+    operation: "image_generation",
+    reason: failure.reason,
+    retryable: failure.retryable,
+  });
 }
 
 function toOpenAICodexImageResult(item: Record<string, unknown>): ImageGenerationResponse["data"][number] | undefined {

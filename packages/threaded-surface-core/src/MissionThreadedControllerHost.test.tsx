@@ -3423,6 +3423,11 @@ describe("MissionThreadedControllerHost", () => {
     await cleanupRenderedHosts();
     setupMocks();
     const nullImage = vi.fn(async () => null);
+    const fallbackSend = vi.fn(async () => undefined);
+    useChatSurfaceOrchestrationMock.mockReturnValue({
+      ...useChatSurfaceOrchestrationMock(),
+      handleSend: fallbackSend,
+    });
     useChatMultimodalControlsMock.mockReturnValue({
       ...useChatMultimodalControlsMock(),
       handleGenerateImage: nullImage,
@@ -3435,6 +3440,100 @@ describe("MissionThreadedControllerHost", () => {
       await flushEffects(8);
     });
     expect(nullImage).toHaveBeenCalled();
+    expect(latestSurfaceInput?.activeSessionSurfaceProps?.onSendRetainedPromptAsChat).toEqual(expect.any(Function));
+
+    await act(async () => {
+      latestSurfaceInput?.activeSessionSurfaceProps?.onSendRetainedPromptAsChat?.();
+      await flushEffects(8);
+    });
+    expect(fallbackSend).toHaveBeenCalledTimes(1);
+    expect(nullImage).toHaveBeenCalledTimes(1);
+    expect(latestSurfaceInput?.activeSessionSurfaceProps?.onSendRetainedPromptAsChat).toBeUndefined();
+  });
+
+  it("keeps Plan, Research, Review, and Council sends on the normal Chat path", async () => {
+    const cases = [
+      { planningMode: "advisory" as const },
+      { webMode: "quick" as const },
+      { webMode: "deep" as const },
+      { orchestrationReviewDepth: "standard" as const },
+      { orchestrationReviewDepth: "strict" as const },
+    ];
+
+    for (const prefsPatch of cases) {
+      await cleanupRenderedHosts();
+      setupMocks();
+      useChatSessionDataMock.mockReturnValue({
+        ...useChatSessionDataMock(),
+        prefs: { ...prefs, ...prefsPatch },
+      });
+      const handleGenerateImage = vi.fn(async () => generatedArtifact);
+      useChatMultimodalControlsMock.mockReturnValue({
+        ...useChatMultimodalControlsMock(),
+        handleGenerateImage,
+      });
+      const handleSend = vi.fn(async () => undefined);
+      useChatSurfaceOrchestrationMock.mockReturnValue({
+        ...useChatSurfaceOrchestrationMock(),
+        handleSend,
+      });
+
+      await renderHost();
+      await selectDefaultSession();
+      await commitDraft("generate an image of a clean command console");
+      await act(async () => {
+        latestSurfaceInput?.activeSessionSurfaceProps?.onSend();
+        await flushEffects(8);
+      });
+
+      expect(handleGenerateImage).not.toHaveBeenCalled();
+      expect(handleSend).toHaveBeenCalledTimes(1);
+    }
+
+    await cleanupRenderedHosts();
+    setupMocks();
+    const handleGenerateImage = vi.fn(async () => generatedArtifact);
+    useChatMultimodalControlsMock.mockReturnValue({
+      ...useChatMultimodalControlsMock(),
+      handleGenerateImage,
+    });
+    const handleSend = vi.fn(async () => undefined);
+    useChatSurfaceOrchestrationMock.mockReturnValue({
+      ...useChatSurfaceOrchestrationMock(),
+      handleSend,
+    });
+    await renderHost();
+    await selectDefaultSession();
+    await commitDraft("generate an image of a clean command console");
+    await act(async () => {
+      latestSurfaceInput?.activeSessionSurfaceProps?.onToggleModelCouncil?.();
+      await flushEffects(4);
+      latestSurfaceInput?.activeSessionSurfaceProps?.onSend();
+      await flushEffects(8);
+    });
+
+    expect(handleGenerateImage).not.toHaveBeenCalled();
+    expect(handleSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("removes failed auto-image recovery after the retained draft changes", async () => {
+    const nullImage = vi.fn(async () => null);
+    useChatMultimodalControlsMock.mockReturnValue({
+      ...useChatMultimodalControlsMock(),
+      handleGenerateImage: nullImage,
+    });
+    await renderHost();
+    await selectDefaultSession();
+    await commitDraft("generate an image of a clean command console");
+    await act(async () => {
+      latestSurfaceInput?.activeSessionSurfaceProps?.onSend();
+      await flushEffects(8);
+    });
+    expect(latestSurfaceInput?.activeSessionSurfaceProps?.onSendRetainedPromptAsChat).toEqual(expect.any(Function));
+
+    await commitDraft("generate an image of a different command console");
+
+    expect(latestSurfaceInput?.activeSessionSurfaceProps?.onSendRetainedPromptAsChat).toBeUndefined();
   });
 
   it("covers final host edge callbacks and state fallbacks", async () => {

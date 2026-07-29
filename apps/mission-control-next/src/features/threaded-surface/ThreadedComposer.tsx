@@ -863,9 +863,21 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
             <strong>{mappedError?.summary ?? props.streamError}</strong>
             {mappedError?.raw ? <p>{mappedError.raw}</p> : null}
           </div>
-          <button type="button" className="mc-next-composer-inline-button" onClick={props.onDismissError}>
-            Dismiss
-          </button>
+          <div className="mc-next-composer-action-row">
+            {props.onSendRetainedPromptAsChat ? (
+              <button
+                type="button"
+                className="mc-next-composer-inline-button primary"
+                disabled={props.sending || !props.canSend}
+                onClick={props.onSendRetainedPromptAsChat}
+              >
+                Send as chat
+              </button>
+            ) : null}
+            <button type="button" className="mc-next-composer-inline-button" onClick={props.onDismissError}>
+              Dismiss
+            </button>
+          </div>
         </div>
       ) : null}
 

@@ -41,6 +41,17 @@ describe("describeChatUiError", () => {
     });
   });
 
+  it("maps typed image response timeouts to safe recovery copy", () => {
+    const raw =
+      'API error 502: {"error":"OpenAI Codex image generation timed out before the provider finished sending the response.","code":"EXTERNAL_SERVICE_FAILED","details":{"service":"openai-codex","operation":"image_generation","reason":"response_body_timeout","retryable":true}}';
+
+    expect(describeChatUiError(raw, "image_generate")).toEqual({
+      summary:
+        "Image generation timed out before the provider finished sending the response. Your prompt was kept in the composer so you can edit and resend it.",
+      raw,
+    });
+  });
+
   it("maps common operator-facing errors to stable copy", () => {
     expect(describeChatUiError(null)).toBeNull();
     expect(formatChatUiError("organization must be verified for gpt-image-2", "image_generate")).toContain(

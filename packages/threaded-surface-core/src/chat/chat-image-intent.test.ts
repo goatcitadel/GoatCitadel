@@ -22,6 +22,12 @@ describe("detectImageGenerationIntent", () => {
     "Create an image carousel component in React.",
     "Make an image download button easier to find.",
     "Draw conclusions from this image.",
+    "Can you please do some research into designing a plan to teach someone how to draw step by step with instructions?",
+    "Teach me how to draw a tiny robot step by step.",
+    "Plan a tutorial for painting a landscape.",
+    "Plan how to create an image of a watercolor landscape.",
+    "Research and generate a picture-based lesson outline.",
+    "Research how illustrators sketch believable hands.",
     "/help create image",
     "Can you explain what gpt-image-2 is?",
   ])("does not reroute image-adjacent text requests: %s", (draft) => {

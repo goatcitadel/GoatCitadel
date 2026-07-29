@@ -288,6 +288,20 @@ describe("ThreadedComposer", () => {
     expect(markup).toContain("Your prompt was kept in the composer so you can edit and resend it.");
   });
 
+  it("offers the retained-prompt Chat recovery only when the host provides it", async () => {
+    const onSendRetainedPromptAsChat = vi.fn();
+    const renderer = await renderComposer({
+      draft: "Generate an image of a launch console",
+      streamError: "Image generation timed out.",
+      streamErrorSource: "image_generate",
+      onSendRetainedPromptAsChat,
+    });
+
+    await click(findButton(renderer.root, "Send as chat"));
+
+    expect(onSendRetainedPromptAsChat).toHaveBeenCalledTimes(1);
+  });
+
   it("surfaces route preflight failures before send", () => {
     const markup = buildMarkup({
       canSend: false,
