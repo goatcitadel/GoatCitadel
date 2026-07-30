@@ -14,7 +14,11 @@ import {
   collectVerificationSecretEnvKeys,
   countUsabilitySurfaces,
 } from "./usability-coverage.mjs";
-import { normalizeNodeJunitActionReport, normalizeVitestActionReport } from "./usability-action-evidence.mjs";
+import {
+  normalizeNodeJunitActionReport,
+  normalizeVitestActionReport,
+  runUsabilityActionProofScenarios,
+} from "./usability-action-evidence.mjs";
 import {
   BROWSER_ACTION_BUNDLES,
   BROWSER_ACTION_STEP_REGISTRY,
@@ -548,6 +552,188 @@ test("node:test JUnit action reports bind exact file and title", () => {
   const normalized = normalizeNodeJunitActionReport(junit, [assertion], "9".repeat(40), process.cwd());
   assert.equal(normalized.runnerSuccess, true);
   assert.equal(normalized.assertionResults[0].status, "passed");
+});
+
+test("node:test JUnit action reports use a missing-file fallback only for the exact command-owned source", () => {
+  const file = "packages/storage/src/citadel-repo.test.ts";
+  const title = "creates chambers and lists them scoped to a citadel";
+  const assertion = {
+    assertionId: `${file}::${title}`,
+    stepId: "route.citadel.chambers",
+    file,
+    title,
+    contract: title,
+  };
+  const junit = `<?xml version="1.0"?><testsuites><testcase name="${title}"/><!-- pass 1 --><!-- fail 0 --></testsuites>`;
+  const normalized = normalizeNodeJunitActionReport(junit, [assertion], "a".repeat(40), process.cwd(), {
+    commandOwnedFile: file,
+  });
+  assert.equal(normalized.runnerSuccess, true);
+  assert.equal(normalized.assertionResults[0].status, "passed");
+  assert.equal(normalized.assertionResults[0].occurrences, 1);
+
+  const wrongAbsoluteFile = path.join(process.cwd(), "packages/storage/src/other.test.ts").replaceAll("&", "&amp;");
+  const wrongExplicitFile = normalizeNodeJunitActionReport(
+    `<?xml version="1.0"?><testsuites><testcase name="${title}" file="${wrongAbsoluteFile}"/><!-- pass 1 --><!-- fail 0 --></testsuites>`,
+    [assertion],
+    "a".repeat(40),
+    process.cwd(),
+    { commandOwnedFile: file },
+  );
+  assert.equal(wrongExplicitFile.assertionResults[0].status, "failed");
+  assert.equal(wrongExplicitFile.assertionResults[0].runnerStatus, "missing");
+
+  const duplicate = normalizeNodeJunitActionReport(
+    `<?xml version="1.0"?><testsuites><testcase name="${title}"/><testcase name="${title}"/><!-- pass 2 --><!-- fail 0 --></testsuites>`,
+    [assertion],
+    "a".repeat(40),
+    process.cwd(),
+    { commandOwnedFile: file },
+  );
+  assert.equal(duplicate.assertionResults[0].status, "failed");
+  assert.equal(duplicate.assertionResults[0].runnerStatus, "duplicate");
+
+  const failed = normalizeNodeJunitActionReport(
+    `<?xml version="1.0"?><testsuites><testcase name="${title}"><failure message="boom"/></testcase><!-- pass 0 --><!-- fail 1 --></testsuites>`,
+    [assertion],
+    "a".repeat(40),
+    process.cwd(),
+    { commandOwnedFile: file },
+  );
+  assert.equal(failed.runnerSuccess, false);
+  assert.equal(failed.assertionResults[0].status, "failed");
+  assert.equal(failed.assertionResults[0].runnerStatus, "failed");
+});
+
+test("node:test JUnit missing-file fallback rejects ambiguous or mismatched command ownership", () => {
+  const file = "packages/storage/src/citadel-repo.test.ts";
+  const title = "creates chambers and lists them scoped to a citadel";
+  const assertion = {
+    assertionId: `${file}::${title}`,
+    stepId: "route.citadel.chambers",
+    file,
+    title,
+    contract: title,
+  };
+  const otherFile = "packages/storage/src/chat-message-repo.search.test.ts";
+  const otherAssertion = {
+    assertionId: `${otherFile}::search boundary`,
+    stepId: "route.settings.workspace-isolation",
+    file: otherFile,
+    title: "search boundary",
+    contract: "search boundary",
+  };
+  const junit = `<?xml version="1.0"?><testsuites><testcase name="${title}"/><!-- pass 1 --><!-- fail 0 --></testsuites>`;
+  assert.throws(
+    () =>
+      normalizeNodeJunitActionReport(junit, [assertion, otherAssertion], "b".repeat(40), process.cwd(), {
+        commandOwnedFile: file,
+      }),
+    /fallback is ambiguous/u,
+  );
+  assert.throws(
+    () =>
+      normalizeNodeJunitActionReport(junit, [assertion], "b".repeat(40), process.cwd(), {
+        commandOwnedFile: otherFile,
+      }),
+    /fallback is ambiguous/u,
+  );
+});
+
+test("node:test action proofs run one command per source and retain distinct command artifacts", async () => {
+  const artifactRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-node-action-proofs-"));
+  try {
+    const calls = [];
+    const writes = [];
+    let storageOutcome;
+    const forcedExitCodes = new Map();
+    const titlesByPackageFile = new Map([
+      [
+        "src/citadel-repo.test.ts",
+        [
+          "creates chambers and lists them scoped to a citadel",
+          "adds, lists, and removes wards scoped to a citadel",
+          "assigns existing agents to a citadel council idempotently and unassigns them",
+          "stores, lists (metadata only), reveals, and deletes vault secrets scoped to a citadel",
+        ],
+      ],
+      [
+        "src/chat-message-repo.search.test.ts",
+        ["searchMessages never crosses workspace boundaries and excludes hidden sessions by default"],
+      ],
+    ]);
+    const executeStorageActionProofs = async () => {
+      await runUsabilityActionProofScenarios(
+        { artifactRoot },
+        {
+          baseSha: "c".repeat(40),
+          secretEnvKeys: ["OPENAI_API_KEY"],
+          deps: {
+            repoRoot: process.cwd(),
+            pnpmCommand: () => "pnpm",
+            runScenario: async (_context, scenario, execute) => {
+              if (scenario.id === "usability.action-proofs.storage") storageOutcome = await execute();
+            },
+            runCommand: async (command, args, options) => {
+              calls.push({ command, args, options });
+              const packageFile = args.at(-1);
+              const titles = titlesByPackageFile.get(packageFile);
+              assert.ok(titles, `unexpected storage action-proof source ${packageFile}`);
+              const testcases = titles
+                .map((title) => `<testcase name="${title.replaceAll("&", "&amp;").replaceAll('"', "&quot;")}"/>`)
+                .join("");
+              const stdout = `<?xml version="1.0"?><testsuites>${testcases}<!-- pass ${titles.length} --><!-- fail 0 --></testsuites>`;
+              const stdoutPath = path.join(options.artifactRoot, `${options.logName}.stdout.log`);
+              const stderrPath = path.join(options.artifactRoot, `${options.logName}.stderr.log`);
+              await fs.mkdir(options.artifactRoot, { recursive: true });
+              await fs.writeFile(stdoutPath, stdout);
+              await fs.writeFile(stderrPath, "");
+              return { code: forcedExitCodes.get(packageFile) ?? 0, stdout, stderr: "", stdoutPath, stderrPath };
+            },
+            writeJson: async (file, value) => {
+              writes.push({ file, value });
+              await fs.mkdir(path.dirname(file), { recursive: true });
+              await fs.writeFile(file, `${JSON.stringify(value, null, 2)}\n`);
+            },
+            relativeToRun: (context, file) => path.relative(context.artifactRoot, file).replaceAll("\\", "/"),
+          },
+        },
+      );
+    };
+    await executeStorageActionProofs();
+
+    assert.equal(calls.length, 2);
+    assert.deepEqual(new Set(calls.map((call) => call.args.at(-1))), new Set(titlesByPackageFile.keys()));
+    assert.ok(calls.every((call) => call.args.filter((arg) => arg.endsWith(".test.ts")).length === 1));
+    assert.ok(calls.every((call) => call.options.omitEnv.includes("OPENAI_API_KEY")));
+    assert.equal(new Set(calls.map((call) => call.options.logName)).size, 2);
+    const citadelCall = calls.find((call) => call.args.at(-1) === "src/citadel-repo.test.ts");
+    assert.ok(citadelCall.args.some((arg) => arg.includes("creates chambers and lists them")));
+    assert.ok(citadelCall.args.every((arg) => !arg.includes("searchMessages never crosses")));
+    assert.equal(storageOutcome.status, "passed");
+    assert.equal(storageOutcome.metrics.expectedAssertions, 5);
+    assert.equal(storageOutcome.metrics.passedAssertions, 5);
+    assert.equal(storageOutcome.artifacts.logs.length, 4);
+    assert.equal(new Set(storageOutcome.artifacts.logs).size, 4);
+    assert.ok(storageOutcome.artifacts.logs.every((file) => fsSync.existsSync(path.join(artifactRoot, file))));
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0].value.runnerSuccess, true);
+    assert.equal(writes[0].value.assertionResults.length, 5);
+
+    calls.length = 0;
+    writes.length = 0;
+    storageOutcome = undefined;
+    forcedExitCodes.set("src/citadel-repo.test.ts", 1);
+    await executeStorageActionProofs();
+    assert.equal(storageOutcome.status, "failed");
+    assert.match(storageOutcome.error, /citadel-repo\.test\.ts/u);
+    assert.equal(storageOutcome.metrics.passedAssertions, 5);
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0].value.runnerSuccess, false);
+    assert.equal(writes[0].value.assertionResults.length, 5);
+  } finally {
+    await fs.rm(artifactRoot, { recursive: true, force: true });
+  }
 });
 
 test("live capability rows require direct, activation, named-journey, or denial evidence rather than catalog membership", () => {

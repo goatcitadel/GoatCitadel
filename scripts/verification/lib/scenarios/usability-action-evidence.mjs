@@ -740,14 +740,15 @@ function normalizeActionRows(reporterRows, assertions) {
   });
 }
 
-export function normalizeNodeJunitActionReport(junit, assertions, baseSha, repoRoot) {
+export function normalizeNodeJunitActionReport(junit, assertions, baseSha, repoRoot, options = {}) {
+  const commandOwnedFile = resolveNodeTestCommandOwnedFile(assertions, repoRoot, options.commandOwnedFile);
   const reporterRows = [];
   const testcasePattern = /<testcase\s+([^>]*?)(?:\/>|>([\s\S]*?)<\/testcase>)/gu;
   for (const match of String(junit ?? "").matchAll(testcasePattern)) {
     const attributes = parseXmlAttributes(match[1]);
     const body = match[2] ?? "";
     reporterRows.push({
-      file: normalizeReporterFile(attributes.file, repoRoot),
+      file: attributes.file ? normalizeReporterFile(attributes.file, repoRoot) : commandOwnedFile,
       title: attributes.name,
       status: /<(?:failure|error)\b/iu.test(body) ? "failed" : /<skipped\b/iu.test(body) ? "skipped" : "passed",
       failureMessages: body ? [body] : [],
@@ -799,11 +800,18 @@ async function runActionProofGroup(context, { assertions, baseSha, deps, runnerC
     "diagnostics",
     `usability-action-proofs-${runnerConfig.id}.json`,
   );
-  const files = [...new Set(assertions.map((assertion) => assertion.file.slice(runnerConfig.filePrefix.length)))];
-  const titlePattern = `(?:${[...new Set(assertions.map((assertion) => escapeRegExp(assertion.title)))].join("|")})$`;
-  const commandArgs =
-    runnerConfig.kind === "node-test"
-      ? [
+  let rawReport;
+  let normalized;
+  let commandRuns;
+  if (runnerConfig.kind === "node-test") {
+    commandRuns = [];
+    const assertionGroups = groupAssertionsByFile(assertions);
+    for (const [index, group] of assertionGroups.entries()) {
+      const titlePattern = buildTitlePattern(group.assertions);
+      const packageFile = group.file.slice(runnerConfig.filePrefix.length);
+      const result = await deps.runCommand(
+        deps.pnpmCommand(),
+        [
           "--filter",
           runnerConfig.packageName,
           "exec",
@@ -811,34 +819,58 @@ async function runActionProofGroup(context, { assertions, baseSha, deps, runnerC
           "--test",
           `--test-name-pattern=${titlePattern}`,
           "--test-reporter=junit",
-          ...files,
-        ]
-      : [
-          "--filter",
-          runnerConfig.packageName,
-          "exec",
-          "vitest",
-          "run",
-          ...files,
-          "--testNamePattern",
-          titlePattern,
-          "--reporter=json",
-          `--outputFile=${rawPath}`,
-          "--maxWorkers=4",
-        ];
-  const result = await deps.runCommand(deps.pnpmCommand(), commandArgs, {
-    cwd: deps.repoRoot,
-    artifactRoot: path.join(context.artifactRoot, "diagnostics"),
-    logName: `usability-action-proofs-${runnerConfig.id}`,
-    env: runnerConfig.env,
-    omitEnv: secretEnvKeys,
-  });
-  let rawReport;
-  let normalized;
-  if (runnerConfig.kind === "node-test") {
-    rawReport = { success: result.code === 0 };
-    normalized = normalizeNodeJunitActionReport(result.stdout, assertions, baseSha, deps.repoRoot);
+          packageFile,
+        ],
+        {
+          cwd: deps.repoRoot,
+          artifactRoot: path.join(context.artifactRoot, "diagnostics"),
+          logName: `usability-action-proofs-${runnerConfig.id}-${String(index + 1).padStart(2, "0")}-${sanitizeLogPart(
+            path.basename(group.file),
+          )}`,
+          env: runnerConfig.env,
+          omitEnv: secretEnvKeys,
+        },
+      );
+      commandRuns.push({
+        file: group.file,
+        result,
+        normalized: normalizeNodeJunitActionReport(result.stdout, group.assertions, baseSha, deps.repoRoot, {
+          commandOwnedFile: group.file,
+        }),
+      });
+    }
+    normalized = aggregateNodeJunitActionReports(commandRuns, assertions, baseSha);
+    rawReport = {
+      success:
+        commandRuns.length > 0 && commandRuns.every((run) => run.result.code === 0 && run.normalized.runnerSuccess),
+    };
   } else {
+    const files = [...new Set(assertions.map((assertion) => assertion.file.slice(runnerConfig.filePrefix.length)))];
+    const titlePattern = buildTitlePattern(assertions);
+    const result = await deps.runCommand(
+      deps.pnpmCommand(),
+      [
+        "--filter",
+        runnerConfig.packageName,
+        "exec",
+        "vitest",
+        "run",
+        ...files,
+        "--testNamePattern",
+        titlePattern,
+        "--reporter=json",
+        `--outputFile=${rawPath}`,
+        "--maxWorkers=4",
+      ],
+      {
+        cwd: deps.repoRoot,
+        artifactRoot: path.join(context.artifactRoot, "diagnostics"),
+        logName: `usability-action-proofs-${runnerConfig.id}`,
+        env: runnerConfig.env,
+        omitEnv: secretEnvKeys,
+      },
+    );
+    commandRuns = [{ result }];
     try {
       rawReport = JSON.parse(await fs.readFile(rawPath, "utf8"));
     } catch (error) {
@@ -848,16 +880,17 @@ async function runActionProofGroup(context, { assertions, baseSha, deps, runnerC
   }
   await deps.writeJson(normalizedPath, normalized);
   const failed = normalized.assertionResults.filter((row) => row.status !== "passed");
+  const failedCommands = commandRuns.filter((run) => run.result.code !== 0);
   return {
-    status: result.code === 0 && rawReport.success === true && failed.length === 0 ? "passed" : "failed",
+    status: failedCommands.length === 0 && rawReport.success === true && failed.length === 0 ? "passed" : "failed",
     error:
-      result.code !== 0
-        ? `exact action assertion runner exited ${result.code}`
+      failedCommands.length > 0
+        ? `exact action assertion runner exited nonzero for ${failedCommands.map((run) => run.file ?? runnerConfig.id).join(", ")}`
         : failed.length > 0
           ? `missing, duplicate, or failing action assertions: ${failed.map((row) => row.assertionId).join(", ")}`
           : rawReport.success === true
             ? undefined
-            : "Vitest action assertion report did not declare success",
+            : `${runnerConfig.kind === "node-test" ? "node:test" : "Vitest"} action assertion report did not declare success`,
     metrics: {
       baseSha,
       expectedAssertions: normalized.assertionResults.length,
@@ -871,11 +904,78 @@ async function runActionProofGroup(context, { assertions, baseSha, deps, runnerC
       ],
       screenshots: [],
       traces: [],
-      logs: [deps.relativeToRun(context, result.stdoutPath), deps.relativeToRun(context, result.stderrPath)],
+      logs: commandRuns.flatMap(({ result }) => [
+        deps.relativeToRun(context, result.stdoutPath),
+        deps.relativeToRun(context, result.stderrPath),
+      ]),
       perf: [],
       playwright: [],
     },
   };
+}
+
+function groupAssertionsByFile(assertions) {
+  const groups = new Map();
+  for (const assertion of assertions) {
+    const group = groups.get(assertion.file) ?? [];
+    group.push(assertion);
+    groups.set(assertion.file, group);
+  }
+  return [...groups.entries()].map(([file, groupedAssertions]) => ({ file, assertions: groupedAssertions }));
+}
+
+function buildTitlePattern(assertions) {
+  return `(?:${[...new Set(assertions.map((assertion) => escapeRegExp(assertion.title)))].join("|")})$`;
+}
+
+function aggregateNodeJunitActionReports(commandRuns, assertions, baseSha) {
+  const rows = commandRuns.flatMap((run) => run.normalized.assertionResults);
+  return {
+    schemaVersion: 1,
+    generatedAt: new Date().toISOString(),
+    baseSha,
+    runnerSuccess:
+      commandRuns.length > 0 && commandRuns.every((run) => run.result.code === 0 && run.normalized.runnerSuccess),
+    assertionResults: assertions.map((assertion) => {
+      const matches = rows.filter((row) => row.assertionId === assertion.assertionId);
+      if (matches.length === 1) return matches[0];
+      return {
+        assertionId: assertion.assertionId,
+        stepId: assertion.stepId,
+        file: assertion.file,
+        title: assertion.title,
+        contract: assertion.contract,
+        status: "failed",
+        occurrences: matches.reduce((total, row) => total + row.occurrences, 0),
+        runnerStatus: matches.length === 0 ? "missing" : "duplicate",
+        failureMessages: matches.flatMap((row) => row.failureMessages),
+      };
+    }),
+  };
+}
+
+function resolveNodeTestCommandOwnedFile(assertions, repoRoot, commandOwnedFile) {
+  if (commandOwnedFile === undefined) return "";
+  if (typeof commandOwnedFile !== "string" || commandOwnedFile.trim().length === 0) {
+    throw new Error("node:test JUnit fallback requires one non-empty command-owned source file");
+  }
+  const normalizedCommandFile = normalizeCommandOwnedFile(commandOwnedFile, repoRoot);
+  const assertionFiles = new Set(assertions.map((assertion) => assertion.file));
+  if (assertionFiles.size !== 1 || !assertionFiles.has(normalizedCommandFile)) {
+    throw new Error(
+      `node:test JUnit fallback is ambiguous: command owns ${normalizedCommandFile}, assertions own ${[...assertionFiles].join(",")}`,
+    );
+  }
+  return normalizedCommandFile;
+}
+
+function normalizeCommandOwnedFile(value, repoRoot) {
+  const absolute = path.isAbsolute(value) ? path.resolve(value) : path.resolve(repoRoot, value);
+  return path.relative(repoRoot, absolute).replaceAll("\\", "/");
+}
+
+function sanitizeLogPart(value) {
+  return value.replace(/[^A-Za-z0-9_.-]+/gu, "-");
 }
 
 function normalizeReporterFile(value, repoRoot) {
