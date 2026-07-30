@@ -10,7 +10,11 @@ import {
 const days: SpendDay[] = [
   { isoDate: "2026-05-19", shortLabel: "Tue", segments: [{ providerKey: "openai", label: "OpenAI", costUsd: 1 }] },
   { isoDate: "2026-05-20", shortLabel: "Wed", segments: [{ providerKey: "openai", label: "OpenAI", costUsd: 1 }] },
-  { isoDate: "2026-05-21", shortLabel: "Thu", segments: [{ providerKey: "anthropic", label: "Anthropic", costUsd: 5 }] },
+  {
+    isoDate: "2026-05-21",
+    shortLabel: "Thu",
+    segments: [{ providerKey: "anthropic", label: "Anthropic", costUsd: 5 }],
+  },
   { isoDate: "2026-05-22", shortLabel: "Fri", segments: [{ providerKey: "openai", label: "OpenAI", costUsd: 1 }] },
 ];
 
@@ -30,5 +34,22 @@ describe("RuntimeSpendChart", () => {
 
     expect(markup).toContain("No spend history available");
     expect(markup).toContain("Seven-day spend chart, no data available.");
+  });
+
+  it("retains meaningful precision for positive sub-cent ticks and values", () => {
+    const subCentDays: SpendDay[] = [
+      {
+        isoDate: "2026-05-19",
+        shortLabel: "Tue",
+        segments: [{ providerKey: "openai", label: "OpenAI", costUsd: 0.0026 }],
+      },
+    ];
+    const model = computeSpendChartModel(subCentDays, 1.5);
+    const markup = renderToStaticMarkup(<RuntimeSpendChart days={subCentDays} />);
+
+    expect(buildSpendChartAriaLabel(model)).toContain("Total $0.0026");
+    expect(markup).toContain("$0.00125");
+    expect(markup).toContain("$0.0026");
+    expect(markup).not.toContain("Total $0.00 across");
   });
 });

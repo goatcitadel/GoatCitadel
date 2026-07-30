@@ -196,6 +196,7 @@ describe("CostLedgerRepository", () => {
     assert.equal(series[0]?.isoDate, "2026-02-20");
     assert.equal(series[3]?.isoDate, "2026-02-23");
     assert.equal(series[1]?.segments[0]?.providerKey, "openai");
+    assert.equal(series[1]?.segments[0]?.label, "OpenAI");
     assert.deepEqual(series[1]?.segments[0]?.models, ["gpt-5"]);
     assert.deepEqual(series[1]?.segments[0]?.metricAvailability, COMPLETE_METRICS);
     assert.equal(series[3]?.costUsd, 5.2);
@@ -204,6 +205,26 @@ describe("CostLedgerRepository", () => {
       series[3]?.segments.map((segment) => segment.providerKey),
       ["anthropic", "unattributed"],
     );
+  });
+
+  it("preserves the OpenAI acronym inside compound provider labels", () => {
+    const repo = createRepo();
+    repo.insert({
+      sessionId: "s-openai-codex",
+      agentId: "assistant",
+      providerId: "openai-codex",
+      modelId: "gpt-5",
+      tokenInput: 10,
+      tokenOutput: 5,
+      tokenCachedInput: 0,
+      costUsd: 0.0026,
+      createdAt: "2026-02-23T10:00:00.000Z",
+    });
+
+    const series = repo.dailySeries("2026-02-23T00:00:00.000Z", "2026-02-23T23:59:59.999Z");
+
+    assert.equal(series[0]?.segments[0]?.providerKey, "openai-codex");
+    assert.equal(series[0]?.segments[0]?.label, "OpenAI Codex");
   });
 
   it("uses the exact requested timestamp window for daily totals and coverage", () => {

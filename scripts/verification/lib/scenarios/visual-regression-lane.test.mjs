@@ -3,9 +3,150 @@ import { test } from "node:test";
 
 import {
   assertMobileVisualGeometry,
+  assertVisualTraceRetentionProbeScope,
+  parseVisualTraceRetentionProbe,
   prepareVisualScenarioState,
   runVisualRegressionLane,
 } from "./visual-regression-lane.mjs";
+
+test("visual trace-retention probe is bounded to one update-disabled scenario", () => {
+  assert.doesNotThrow(() =>
+    assertVisualTraceRetentionProbeScope({
+      enabled: true,
+      updateBaselines: false,
+      routeCount: 1,
+      variantCount: 1,
+    }),
+  );
+  assert.throws(
+    () =>
+      assertVisualTraceRetentionProbeScope({
+        enabled: true,
+        updateBaselines: true,
+        routeCount: 1,
+        variantCount: 1,
+      }),
+    /cannot run while updating baselines/u,
+  );
+  assert.throws(
+    () =>
+      assertVisualTraceRetentionProbeScope({
+        enabled: true,
+        updateBaselines: false,
+        routeCount: 2,
+        variantCount: 1,
+      }),
+    /requires exactly one filtered route and one filtered variant/u,
+  );
+});
+
+test("visual trace-retention probe rejects malformed boolean input", () => {
+  assert.equal(parseVisualTraceRetentionProbe(undefined), false);
+  assert.equal(parseVisualTraceRetentionProbe(true), true);
+  assert.equal(parseVisualTraceRetentionProbe("OFF"), false);
+  assert.equal(parseVisualTraceRetentionProbe(" yes "), true);
+  assert.throws(() => parseVisualTraceRetentionProbe(""), /must be an explicit true\/false boolean/u);
+  assert.throws(() => parseVisualTraceRetentionProbe("tru"), /must be an explicit true\/false boolean/u);
+});
+
+test("visual trace-retention probe forces one successful comparison to retain failure evidence", async () => {
+  const results = [];
+  let retainCount = 0;
+  const route = { slug: "chat", href: "/chat" };
+  const variant = { slug: "desktop-dark", viewport: { width: 1440, height: 1024 }, colorScheme: "dark" };
+  const trace = {
+    async retain() {
+      retainCount += 1;
+      return "playwright/visual-regression-chat-desktop-dark-trace.zip";
+    },
+    async discard() {},
+  };
+  const page = {
+    async goto() {},
+    async evaluate() {},
+    async waitForTimeout() {},
+  };
+  const browserContext = {
+    async newPage() {
+      return page;
+    },
+    async close() {},
+  };
+
+  await runVisualRegressionLane(
+    { artifactRoot: "artifacts" },
+    { traceRetentionProbe: "true" },
+    {
+      VISUAL_DIFF_RATIO_THRESHOLD: 0.04,
+      VISUAL_ROUTE_READY_TIMEOUT_MS: 100,
+      appendTraceArtifact: (artifacts, traceArtifact) => ({
+        ...artifacts,
+        traces: traceArtifact ? [traceArtifact] : [],
+        playwright: traceArtifact ? [...artifacts.playwright, traceArtifact] : artifacts.playwright,
+      }),
+      assertBrowserConsoleHealthy: () => ({ consoleErrors: [], pageErrors: [] }),
+      async assertNextVisualScenarioChrome() {},
+      async assertNoFooterStatusCollision() {},
+      async assertVisualBaselineCoverage() {},
+      attachBrowserLogging: () => ({ mark: () => ({ consoleMessages: 0, pageErrors: 0 }) }),
+      buildVerificationUiUrl: (base, href) => `${base}${href}`,
+      captureBrowserArtifacts: async (_context, input) => ({
+        diagnostics: [`diagnostics/${input.slug}.json`],
+        screenshots: [`screenshots/${input.slug}.png`],
+        traces: [],
+        logs: [`playwright/${input.slug}-console.json`],
+        perf: [],
+        playwright: [`playwright/${input.slug}-console.json`],
+      }),
+      async captureRouteReadyFailure() {
+        throw new Error("route-ready failure was not expected");
+      },
+      chromium: {
+        launch: async () => ({
+          async newContext() {
+            return browserContext;
+          },
+          async close() {},
+        }),
+      },
+      async compareVisualBaseline() {
+        return { diffRatio: 0, changedPixels: 0, screenshots: [], diagnostics: [] };
+      },
+      async ensureOnboardingComplete() {},
+      filterVisualItemsBySlug: (items) => items,
+      async installMissionControlNextBrowserState() {},
+      maybeParseBool: () => false,
+      async pinVisualRegressionProvider() {},
+      resolveVerificationTargetContext: () => ({
+        isNext: false,
+        packageName: "@goatcitadel/mission-control-next",
+        visualRoutes: [route],
+        visualVariants: [variant],
+      }),
+      resolveVisualRouteHref: (item) => item.href,
+      runScenario: async (_context, _definition, fn) => {
+        const result = await fn({ correlationId: "correlation-1" });
+        results.push(result);
+        return result;
+      },
+      async seedMissionControlNextFixture() {},
+      async setBrowserCorrelation() {},
+      async stabilizeVisualRegressionSnapshot() {},
+      startBrowserTrace: async () => trace,
+      startVerificationStack: async () => ({ gatewayUrl: "http://gateway", uiUrl: "http://ui" }),
+      async stopVerificationStack() {},
+      async waitForVerificationRouteReady() {},
+      async writeMissionControlNextManualProofChecklist() {},
+    },
+  );
+
+  assert.equal(results.length, 1);
+  assert.equal(results[0].status, "failed");
+  assert.equal(results[0].metrics.traceRetentionProbe, true);
+  assert.match(results[0].error, /forced a controlled failure/u);
+  assert.deepEqual(results[0].artifacts.traces, ["playwright/visual-regression-chat-desktop-dark-trace.zip"]);
+  assert.equal(retainCount, 1);
+});
 
 test("composer palette visual state opens through the keyboard contract", async () => {
   const calls = [];
@@ -131,7 +272,7 @@ test("visual regression returns failure evidence when a browser assertion throws
 
   await runVisualRegressionLane(
     { artifactRoot: "artifacts" },
-    {},
+    { secretEnvKeys: ["OPENAI_API_KEY", "SLACK_BOT_TOKEN"] },
     {
       VISUAL_DIFF_RATIO_THRESHOLD: 0.04,
       VISUAL_ROUTE_READY_TIMEOUT_MS: 100,
@@ -199,6 +340,9 @@ test("visual regression returns failure evidence when a browser assertion throws
   assert.equal(stackOptions.gatewayEnv.GOATCITADEL_AUTH_TOKEN, "verification-visual-regression-operator-token");
   assert.equal(stackOptions.gatewayEnv.GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS, "true");
   assert.equal(stackOptions.gatewayEnv.GOATCITADEL_DISABLE_MAINTENANCE_SCHEDULER, "true");
+  assert.equal(stackOptions.gatewayEnv.OPENAI_API_KEY, "sk-visual-regression");
+  assert.deepEqual(stackOptions.gatewayEnvOmit, ["OPENAI_API_KEY", "SLACK_BOT_TOKEN"]);
+  assert.deepEqual(stackOptions.uiEnvOmit, ["OPENAI_API_KEY", "SLACK_BOT_TOKEN"]);
   assert.notEqual(stackOptions.gatewayEnv.GOATCITADEL_AUTH_MODE, "none");
   assert.equal(results[0].status, "failed");
   assert.match(results[0].error, /page errors: render crashed/);

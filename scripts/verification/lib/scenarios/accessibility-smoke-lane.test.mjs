@@ -153,6 +153,7 @@ test("accessibility smoke retains browser evidence and a failure-only trace for 
   await runAccessibilitySmokeLane(
     { artifactRoot: "artifacts" },
     {
+      secretEnvKeys: ["OPENAI_API_KEY", "SLACK_BOT_TOKEN"],
       scenarios: [
         {
           id: "chat",
@@ -243,6 +244,8 @@ test("accessibility smoke retains browser evidence and a failure-only trace for 
   assert.equal(stackOptions.gatewayEnv.GOATCITADEL_AUTH_TOKEN, "verification-accessibility-smoke-operator-token");
   assert.equal(stackOptions.gatewayEnv.GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS, "true");
   assert.equal(stackOptions.gatewayEnv.GOATCITADEL_VERIFY_STUB_LLM_KEY, "verification-accessibility-smoke-stub-key");
+  assert.deepEqual(stackOptions.gatewayEnvOmit, ["OPENAI_API_KEY", "SLACK_BOT_TOKEN"]);
+  assert.deepEqual(stackOptions.uiEnvOmit, ["OPENAI_API_KEY", "SLACK_BOT_TOKEN"]);
   assert.equal(stackOptions.runtimeRoot, "runtime-root");
   assert.equal(restored, true);
 });

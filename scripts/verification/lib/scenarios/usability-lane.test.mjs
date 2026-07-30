@@ -1676,3 +1676,41 @@ test("usability orchestration guards source before prerequisites and completes i
   assert.match(failureBranch, /combineUsabilityPrimaryAndIntegrityErrors\(error, integrityError\)/u);
   assert.equal(source.slice(usabilityEnd).includes("runUsabilityDiskCapacityPreflight"), false);
 });
+
+test("direct browser lane orchestration collects and forwards secret environment keys", async () => {
+  const source = await fs.readFile(new URL("../../run.mjs", import.meta.url), "utf8");
+  const scrubLaneSetStart = source.indexOf("const DIRECT_BROWSER_SECRET_SCRUB_LANES");
+  const scrubLaneSetEnd = source.indexOf("]);", scrubLaneSetStart);
+  const scrubLaneSet = source.slice(scrubLaneSetStart, scrubLaneSetEnd);
+  for (const lane of ["accessibility-smoke", "surface-regression", "visual-regression", "visual-rebaseline", "all"]) {
+    assert.match(scrubLaneSet, new RegExp(`"${lane}"`, "u"));
+  }
+
+  assert.match(
+    source,
+    /DIRECT_BROWSER_SECRET_SCRUB_LANES\.has\(lane\)[\s\S]*?collectVerificationSecretEnvKeys\(path\.join\(repoRoot, "config"\)\)/u,
+  );
+
+  const accessibilityStart = source.indexOf('} else if (lane === "accessibility-smoke") {');
+  const surfaceStart = source.indexOf('} else if (lane === "surface-regression") {', accessibilityStart);
+  const visualStart = source.indexOf('} else if (lane === "visual-regression") {', surfaceStart);
+  const rebaselineStart = source.indexOf('} else if (lane === "visual-rebaseline") {', visualStart);
+  const backupStart = source.indexOf('} else if (lane === "backup-roundtrip") {', rebaselineStart);
+  const allStart = source.indexOf('} else if (lane === "all") {', backupStart);
+  const allEnd = source.indexOf("\n    manifest = await finalizeRunContext", allStart);
+
+  assert.match(
+    source.slice(accessibilityStart, surfaceStart),
+    /runAccessibilitySmokeLane\(context, \{ profile, secretEnvKeys: directBrowserSecretEnvKeys \}\)/u,
+  );
+  assert.match(
+    source.slice(surfaceStart, visualStart),
+    /runSurfaceRegressionLane\(context, \{ profile, secretEnvKeys: directBrowserSecretEnvKeys \}\)/u,
+  );
+  assert.match(source.slice(visualStart, rebaselineStart), /secretEnvKeys: directBrowserSecretEnvKeys/u);
+  assert.match(source.slice(rebaselineStart, backupStart), /secretEnvKeys: directBrowserSecretEnvKeys/u);
+  assert.match(
+    source.slice(allStart, allEnd),
+    /runVisualRegressionLane\(context, \{[\s\S]*?secretEnvKeys: directBrowserSecretEnvKeys/u,
+  );
+});

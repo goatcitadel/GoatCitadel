@@ -685,7 +685,7 @@ function formatProviderLabel(providerKey: string): string {
   return providerKey
     .split(/[-_:/.]+/g)
     .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .map((part) => (part.toLowerCase() === "openai" ? "OpenAI" : part.charAt(0).toUpperCase() + part.slice(1)))
     .join(" ");
 }
 

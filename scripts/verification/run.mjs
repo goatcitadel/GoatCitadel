@@ -122,6 +122,14 @@ const VALID_LANES = new Set([
   "all",
 ]);
 
+const DIRECT_BROWSER_SECRET_SCRUB_LANES = new Set([
+  "accessibility-smoke",
+  "surface-regression",
+  "visual-regression",
+  "visual-rebaseline",
+  "all",
+]);
+
 const USABILITY_FAST_EVIDENCE_COMMAND_IDS = Object.freeze(
   FAST_LANE_COMMANDS.map((command) => command.id).filter(
     (id) =>
@@ -239,6 +247,9 @@ async function main() {
   let manifest;
   let usabilitySourceState;
   try {
+    const directBrowserSecretEnvKeys = DIRECT_BROWSER_SECRET_SCRUB_LANES.has(lane)
+      ? await collectVerificationSecretEnvKeys(path.join(repoRoot, "config"))
+      : undefined;
     if (lane === "usability" || lane === "all") {
       usabilitySourceState = beginUsabilitySourceGuard(repoRoot, process.env.GOATCITADEL_USABILITY_SOURCE_MODE);
     }
@@ -315,13 +326,21 @@ async function main() {
       for (const key of scrubbedSecretEnvKeys) delete process.env[key];
       await runUsabilityCoreLane(context, { profile });
     } else if (lane === "accessibility-smoke") {
-      await runAccessibilitySmokeLane(context, { profile });
+      await runAccessibilitySmokeLane(context, { profile, secretEnvKeys: directBrowserSecretEnvKeys });
     } else if (lane === "surface-regression") {
-      await runSurfaceRegressionLane(context, { profile });
+      await runSurfaceRegressionLane(context, { profile, secretEnvKeys: directBrowserSecretEnvKeys });
     } else if (lane === "visual-regression") {
-      await runVisualRegressionLane(context, { profile, updateBaselines: false });
+      await runVisualRegressionLane(context, {
+        profile,
+        updateBaselines: false,
+        secretEnvKeys: directBrowserSecretEnvKeys,
+      });
     } else if (lane === "visual-rebaseline") {
-      await runVisualRegressionLane(context, { profile, updateBaselines: true });
+      await runVisualRegressionLane(context, {
+        profile,
+        updateBaselines: true,
+        secretEnvKeys: directBrowserSecretEnvKeys,
+      });
     } else if (lane === "backup-roundtrip") {
       await runBackupRoundtripLane(context, { profile });
     } else if (lane === "soak") {
@@ -392,7 +411,11 @@ async function main() {
       await runVertexFireworksProvidersLane(context, { profile });
       await runReasoningProfilesLane(context, { profile });
       await runDesktopLane(context);
-      await runVisualRegressionLane(context, { profile, updateBaselines: false });
+      await runVisualRegressionLane(context, {
+        profile,
+        updateBaselines: false,
+        secretEnvKeys: directBrowserSecretEnvKeys,
+      });
       await runBackupRoundtripLane(context, { profile });
       await runRuntimeTruthLane(context, { profile });
       await runAuthMatrixLane(context, { profile });

@@ -95,11 +95,12 @@ function formatUsdCompact(value: number): string {
   if (!Number.isFinite(value) || value <= 0) {
     return "$0.00";
   }
+  const maximumFractionDigits = value < 0.01 ? 6 : 2;
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
     minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
+    maximumFractionDigits,
   }).format(value);
 }
 

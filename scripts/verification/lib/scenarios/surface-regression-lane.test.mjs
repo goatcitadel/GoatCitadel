@@ -130,7 +130,7 @@ test("surface regression returns failure evidence when a browser assertion throw
 
   await runSurfaceRegressionLane(
     { artifactRoot: "artifacts" },
-    {},
+    { secretEnvKeys: ["OPENAI_API_KEY", "SLACK_BOT_TOKEN"] },
     {
       appendTraceArtifact: (artifacts, traceArtifact) => ({
         ...artifacts,
@@ -185,6 +185,8 @@ test("surface regression returns failure evidence when a browser assertion throw
   assert.equal(stackOptions.gatewayEnv.GOATCITADEL_AUTH_MODE, "token");
   assert.equal(stackOptions.gatewayEnv.GOATCITADEL_AUTH_TOKEN, "verification-surface-regression-operator-token");
   assert.equal(stackOptions.gatewayEnv.GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS, "true");
+  assert.deepEqual(stackOptions.gatewayEnvOmit, ["OPENAI_API_KEY", "SLACK_BOT_TOKEN"]);
+  assert.deepEqual(stackOptions.uiEnvOmit, ["OPENAI_API_KEY", "SLACK_BOT_TOKEN"]);
   assert.notEqual(stackOptions.gatewayEnv.GOATCITADEL_AUTH_MODE, "none");
   assert.equal(results[0].status, "failed");
   assert.match(results[0].error, /console errors: route crashed/);
