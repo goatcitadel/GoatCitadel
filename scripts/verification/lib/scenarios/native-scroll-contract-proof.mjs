@@ -1,6 +1,10 @@
 const STANDARD_STAGE_SELECTOR = ".mc-next-stage:not(.mc-next-stage-work) .mc-next-stage-scroll";
 const NESTED_SCROLL_SELECTOR = "[data-native-scroll='true']";
 const STATUS_STRIP_SELECTOR = ".mc-next-status-strip";
+const STABLE_BOTTOM_TIMEOUT_MS = 5_000;
+const STABLE_BOTTOM_MINIMUM_OBSERVATION_MS = 1_000;
+const STABLE_BOTTOM_POLL_INTERVAL_MS = 50;
+const STABLE_BOTTOM_REQUIRED_SAMPLES = 6;
 
 export const NATIVE_SCROLL_HANDOFF_ROUTE_SLUGS = new Set([
   "projects",
@@ -50,29 +54,12 @@ export async function assertNativeStageScrollContract(page, { label, probeNested
   const initial = await readStageSnapshot(page, false);
   validateNativeStageSnapshot(initial, routeLabel);
 
-  let bottomSnapshot = initial;
-  if (initial.maxScrollTop > 1) {
-    await page.evaluate((selector) => {
-      const stage = document.querySelector(selector);
-      if (stage instanceof HTMLElement) {
-        stage.scrollTop = stage.scrollHeight;
-      }
-    }, STANDARD_STAGE_SELECTOR);
-    await page.waitForFunction(
-      (selector) => {
-        const stage = document.querySelector(selector);
-        if (!(stage instanceof HTMLElement)) {
-          return false;
-        }
-        const maxScrollTop = Math.max(0, stage.scrollHeight - stage.clientHeight);
-        return Math.abs(stage.scrollTop - maxScrollTop) <= 2;
-      },
-      STANDARD_STAGE_SELECTOR,
-      { timeout: 5000 },
-    );
-    bottomSnapshot = await readStageSnapshot(page, true);
-    validateNativeStageSnapshot(bottomSnapshot, routeLabel);
-  }
+  // A route's primary loader can leave before route-owned secondary reads
+  // (for example a file preview or project recents) finish rendering. Keep
+  // following bounded layout growth to the current bottom, then require a
+  // short stable window so a one-shot scroll cannot certify an obsolete max.
+  const bottomSnapshot = await driveNativeStageToStableBottom(page, { label: routeLabel });
+  validateNativeStageSnapshot(bottomSnapshot, routeLabel);
 
   let nestedHandoff = "not_requested";
   if (probeNestedBoundary) {
@@ -87,11 +74,79 @@ export async function assertNativeStageScrollContract(page, { label, probeNested
   }, STANDARD_STAGE_SELECTOR);
 
   return {
-    overflowed: initial.maxScrollTop > 1,
-    maxScrollTop: Math.round(initial.maxScrollTop),
-    reachedBottom: initial.maxScrollTop <= 1 || bottomSnapshot.atBottom,
+    overflowed: bottomSnapshot.maxScrollTop > 1,
+    maxScrollTop: Math.round(bottomSnapshot.maxScrollTop),
+    reachedBottom: bottomSnapshot.atBottom,
     nestedHandoff,
   };
+}
+
+export async function driveNativeStageToStableBottom(
+  page,
+  {
+    label = "native route",
+    timeoutMs = STABLE_BOTTOM_TIMEOUT_MS,
+    minimumObservationMs = STABLE_BOTTOM_MINIMUM_OBSERVATION_MS,
+    pollIntervalMs = STABLE_BOTTOM_POLL_INTERVAL_MS,
+    requiredStableSamples = STABLE_BOTTOM_REQUIRED_SAMPLES,
+    now = monotonicNow,
+  } = {},
+) {
+  const boundedTimeoutMs = Math.max(1, timeoutMs);
+  const boundedMinimumObservationMs = Math.max(0, minimumObservationMs);
+  const boundedPollIntervalMs = Math.max(1, Math.floor(pollIntervalMs));
+  const boundedRequiredSamples = Math.max(1, Math.floor(requiredStableSamples));
+  const startedAt = now();
+  const deadline = startedAt + boundedTimeoutMs;
+  let previousGeometry = null;
+  let stableSamples = 0;
+  let lastSnapshot = null;
+  let sampleCount = 0;
+
+  while (now() < deadline) {
+    // Sampling and actuation must remain separate: only a later observation
+    // that is already at the current bottom can contribute to stability.
+    const snapshot = await readStageSnapshot(page, true);
+    sampleCount += 1;
+    lastSnapshot = snapshot;
+    const sampledAt = now();
+    if (!snapshot.found) {
+      throw new Error(`${label}: standard route stage scroller disappeared while proving its bottom`);
+    }
+    if (sampledAt >= deadline) {
+      break;
+    }
+
+    const geometry = `${snapshot.clientHeight}:${snapshot.scrollHeight}:${snapshot.maxScrollTop}`;
+    if (snapshot.atBottom) {
+      stableSamples = geometry === previousGeometry ? stableSamples + 1 : 1;
+      previousGeometry = geometry;
+    } else {
+      stableSamples = 0;
+      previousGeometry = null;
+      await driveStageToCurrentBottom(page);
+      if (now() >= deadline) {
+        break;
+      }
+    }
+
+    if (stableSamples >= boundedRequiredSamples && sampledAt - startedAt >= boundedMinimumObservationMs) {
+      return snapshot;
+    }
+
+    const remainingMs = deadline - now();
+    if (remainingMs <= 0) {
+      break;
+    }
+    await page.waitForTimeout(Math.min(boundedPollIntervalMs, remainingMs));
+  }
+
+  const numericSnapshot = lastSnapshot
+    ? `samples=${sampleCount},elapsedMs=${boundedNumber(now() - startedAt)},clientHeight=${boundedNumber(lastSnapshot.clientHeight)},scrollHeight=${boundedNumber(lastSnapshot.scrollHeight)},scrollTop=${boundedNumber(lastSnapshot.scrollTop)},maxScrollTop=${boundedNumber(lastSnapshot.maxScrollTop)},stableSamples=${stableSamples}`
+    : `clientHeight=0,scrollHeight=0,scrollTop=0,maxScrollTop=0,stableSamples=${stableSamples}`;
+  throw new Error(
+    `${label}: stage bottom did not stabilize within ${boundedNumber(boundedTimeoutMs)} ms (${numericSnapshot})`,
+  );
 }
 
 export async function assertProviderAnchorAndAdviceContract(page) {
@@ -188,6 +243,24 @@ async function readStageSnapshot(page, atBottom) {
     },
     { stageSelector: STANDARD_STAGE_SELECTOR, statusSelector: STATUS_STRIP_SELECTOR, atBottom },
   );
+}
+
+async function driveStageToCurrentBottom(page) {
+  await page.evaluate((selector) => {
+    const stage = document.querySelector(selector);
+    if (stage instanceof HTMLElement) {
+      stage.scrollTop = stage.scrollHeight;
+    }
+  }, STANDARD_STAGE_SELECTOR);
+}
+
+function monotonicNow() {
+  return globalThis.performance?.now() ?? Date.now();
+}
+
+function boundedNumber(value) {
+  const finite = Number.isFinite(value) ? value : 0;
+  return Math.round(Math.max(-1_000_000_000, Math.min(1_000_000_000, finite)));
 }
 
 async function assertNestedScrollHandoff(page, label) {
