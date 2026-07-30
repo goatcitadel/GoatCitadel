@@ -427,6 +427,9 @@ describe("ProjectsRoutePage", () => {
     });
 
     act(() => {
+      expect(renderer.root.findByProps({ "aria-label": "New project name" })).toBeTruthy();
+      expect(renderer.root.findByProps({ "aria-label": "New project workspace path" })).toBeTruthy();
+      expect(renderer.root.findByProps({ "aria-label": "New project description" })).toBeTruthy();
       findInputByPlaceholder(renderer.root, "Release readiness").props.onChange({
         target: { value: "Created" },
       });

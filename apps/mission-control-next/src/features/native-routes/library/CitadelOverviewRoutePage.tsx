@@ -315,6 +315,7 @@ export function CitadelOverviewRoutePage({
                   <label className="mc-next-mason-field">
                     <span>Purpose</span>
                     <textarea
+                      aria-label="Purpose"
                       className="mc-next-settings-textarea"
                       value={charterPurpose}
                       rows={3}

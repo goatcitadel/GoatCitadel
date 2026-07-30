@@ -760,6 +760,9 @@ describe("PromptPacksWorkbenchPage", () => {
       clearScores: true,
     });
 
+    expect(renderer.root.findByProps({ "aria-label": "Test codes" }).type).toBe("textarea");
+    expect(renderer.root.findByProps({ "aria-label": "Benchmark matrix" }).type).toBe("textarea");
+    expect(renderer.root.findByProps({ "aria-label": "Prompt-pack markdown" })).toBeTruthy();
     await change(findTextarea(renderer, "Paste prompt-pack markdown here..."), "# New Prompt Pack");
     await click(findButton(renderer, "Import pack"));
     expect(promptPackMocks.importPromptPack).toHaveBeenCalledWith({

@@ -47,6 +47,29 @@ describe("SettingsField semantics", () => {
     );
     expect(markup).toContain("<label");
     expect(markup).not.toContain('role="group"');
+    expect(markup).toMatch(/<span id="([^"]+)">Name<\/span><input aria-labelledby="\1" name="name"\/>/u);
+  });
+
+  it("keeps help text and prefilled values out of the direct control's accessible name", () => {
+    const markup = renderToStaticMarkup(
+      <SettingsField label="Mode">
+        <select defaultValue="power">
+          <option value="power">Power</option>
+        </select>
+        <p>Changes the runtime cost posture.</p>
+      </SettingsField>,
+    );
+    expect(markup).toMatch(/<span id="([^"]+)">Mode<\/span><select aria-labelledby="\1">/u);
+  });
+
+  it("preserves an explicit accessible name on a direct control", () => {
+    const markup = renderToStaticMarkup(
+      <SettingsField label="Name">
+        <input aria-label="New workspace name" />
+      </SettingsField>,
+    );
+    expect(markup).toContain('aria-label="New workspace name"');
+    expect(markup).not.toContain("aria-labelledby");
   });
 
   it("uses a labelled group instead of nesting labels for composite controls", () => {

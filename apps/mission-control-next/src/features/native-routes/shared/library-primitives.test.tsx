@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { LibraryActionList, LibrarySectionShell } from "./library-primitives";
+import { LibraryActionList, LibraryField, LibrarySectionShell } from "./library-primitives";
 
 describe("LibrarySectionShell error branch (F-M12)", () => {
   it("renders the ErrorState primitive with role=alert and a wired retry", () => {
@@ -50,5 +50,16 @@ describe("LibraryActionList keyboard scrolling", () => {
     expect(markup).toContain('role="region"');
     expect(markup).toContain('aria-label="Skill import history"');
     expect(markup).toContain('tabindex="0"');
+  });
+});
+
+describe("LibraryField semantics", () => {
+  it("gives a prefilled direct control the concise visible label as its stable accessible name", () => {
+    const markup = renderToStaticMarkup(
+      <LibraryField label="Edit body">
+        <textarea defaultValue="Existing note body" />
+      </LibraryField>,
+    );
+    expect(markup).toMatch(/<span id="([^"]+)">Edit body<\/span><textarea aria-labelledby="\1">/u);
   });
 });

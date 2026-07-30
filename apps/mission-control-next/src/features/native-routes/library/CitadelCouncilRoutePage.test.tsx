@@ -106,8 +106,8 @@ describe("CitadelCouncilRoutePage", () => {
     expect(label).toBeDefined();
     expect(treeString(renderer!)).toContain("Council agent");
 
-    // The accessible name now comes from the associated <label>, so the select
-    // no longer needs (and should not carry a conflicting) aria-label.
-    expect(select.props["aria-label"]).toBeUndefined();
+    // A selected option is nested inside the wrapping label, so keep the
+    // concise control name stable instead of letting its value join the name.
+    expect(select.props["aria-label"]).toBe("Council agent");
   });
 });

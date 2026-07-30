@@ -13,6 +13,7 @@ import {
 } from "../primitives";
 import type { NativeLoadIssue, Notice } from "./native-helpers";
 import { normalizeNativeRouteError, type NativeRouteError, type NativeRouteErrorContext } from "./native-route-errors";
+import { labelDirectFormControls } from "./field-accessibility";
 
 export function LibrarySectionShell({
   loading,
@@ -77,10 +78,11 @@ export function LibraryFieldGrid({ children }: { children: ReactNode }) {
 }
 
 export function LibraryField({ label, children, span = 1 }: { label: string; children: ReactNode; span?: 1 | 2 }) {
+  const labelId = useId();
   return (
     <label className={`mc-next-settings-field${span === 2 ? " span-2" : ""}`}>
-      <span>{label}</span>
-      {children}
+      <span id={labelId}>{label}</span>
+      {labelDirectFormControls(children, labelId)}
     </label>
   );
 }

@@ -439,6 +439,19 @@ test("Chat and Projects Chromium contracts retain exact fixture sessions and com
   ]);
 
   const crud = operations("route.projects.workspace-project-crud");
+  assert.deepEqual(crud.slice(0, 3), [
+    { kind: "fill", label: "New project name", value: "Usability browser project" },
+    {
+      kind: "fill",
+      label: "New project workspace path",
+      value: "workspace/verification/usability-browser-project",
+    },
+    {
+      kind: "fill",
+      label: "New project description",
+      value: "Created by the isolated Chromium usability journey.",
+    },
+  ]);
   assert.deepEqual(
     crud.filter((operation) => operation.kind === "click").map((operation) => operation.name),
     [

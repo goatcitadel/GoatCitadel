@@ -24,6 +24,7 @@ import type { fetchSettings } from "@goatcitadel/mission-control-shared/api/clie
 import type { AppRoute, ReleaseSurfaceStatus } from "@next/app/route-model";
 import { BlocksShuffleLoader } from "../../../components/BlocksShuffleLoader";
 import { NativeCard, NativePageFrame } from "../NativeRoutePageLayout";
+import { labelDirectFormControls } from "../shared/field-accessibility";
 import {
   ThreePartChip,
   EmptyState,
@@ -403,8 +404,8 @@ export function SettingsField({
   }
   return (
     <label className={className}>
-      <span>{label}</span>
-      {children}
+      <span id={labelId}>{label}</span>
+      {labelDirectFormControls(children, labelId)}
     </label>
   );
 }

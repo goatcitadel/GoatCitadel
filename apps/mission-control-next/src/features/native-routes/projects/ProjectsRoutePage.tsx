@@ -878,6 +878,7 @@ export function ProjectsRoutePage({
               <label className="mc-next-settings-field">
                 <span>Name</span>
                 <input
+                  aria-label="New project name"
                   ref={createProjectNameRef}
                   className="mc-next-settings-input"
                   value={createDraft.name}
@@ -888,6 +889,7 @@ export function ProjectsRoutePage({
               <label className="mc-next-settings-field">
                 <span>Workspace path</span>
                 <input
+                  aria-label="New project workspace path"
                   className="mc-next-settings-input"
                   value={createDraft.workspacePath}
                   onChange={(event) => setCreateDraft((current) => ({ ...current, workspacePath: event.target.value }))}
@@ -897,6 +899,7 @@ export function ProjectsRoutePage({
               <label className="mc-next-settings-field">
                 <span>Description</span>
                 <textarea
+                  aria-label="New project description"
                   className="mc-next-settings-textarea"
                   value={createDraft.description}
                   onChange={(event) => setCreateDraft((current) => ({ ...current, description: event.target.value }))}

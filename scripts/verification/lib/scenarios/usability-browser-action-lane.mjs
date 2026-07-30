@@ -3355,50 +3355,46 @@ async function interactiveLocator(page, name, exact) {
   return await firstVisibleLocator(page, locator, `interactive control not found: ${name}`);
 }
 
-async function editableLocator(page, label) {
-  const fuzzy = new RegExp(escapeRegExp(label), "iu");
-  const candidates = [
-    page.getByLabel(label, { exact: true }),
-    page.getByPlaceholder(label, { exact: true }),
-    page.getByLabel(fuzzy),
-    page.getByPlaceholder(fuzzy),
-  ];
-  const deadline = Date.now() + ACTION_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    for (const candidate of candidates) {
-      const locator = await resolveUniqueEditableLocatorCandidate(candidate, label);
-      if (locator) return locator;
-    }
-    await page.waitForTimeout(50);
+export async function editableLocator(page, label, { timeoutMs = ACTION_TIMEOUT_MS, pollIntervalMs = 50 } = {}) {
+  const candidate = page.getByLabel(label, { exact: true });
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() <= deadline) {
+    const locator = await resolveUniqueEditableLocatorCandidate(candidate, label);
+    if (locator) return locator;
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) break;
+    await page.waitForTimeout(Math.min(pollIntervalMs, remainingMs));
   }
-  throw new Error(`editable control not found: ${label}`);
+  throw new Error(`editable control with exact accessible label not found or not visible: ${label}`);
 }
 
 export async function resolveUniqueEditableLocatorCandidate(candidate, label) {
-  const visibleEditable = [];
   const count = await candidate.count();
-  for (let index = 0; index < count; index += 1) {
-    const locator = candidate.nth(index);
-    const editable = await locator
-      .evaluate((element) => {
-        const tagName = element.tagName.toLowerCase();
-        const role = element.getAttribute("role");
-        return (
-          tagName === "input" ||
-          tagName === "textarea" ||
-          tagName === "select" ||
-          element.getAttribute("contenteditable") === "true" ||
-          role === "textbox" ||
-          role === "combobox"
-        );
-      })
-      .catch(() => false);
-    if (editable && (await locator.isVisible().catch(() => false))) visibleEditable.push(locator);
+  if (count > 1) {
+    throw new Error(`ambiguous editable control: ${label} matched ${count} controls by exact accessible label`);
   }
-  if (visibleEditable.length > 1) {
-    throw new Error(`ambiguous editable control: ${label} matched ${visibleEditable.length} visible editable controls`);
+  if (count === 0) return undefined;
+
+  const editable = await candidate.evaluate((element) => {
+    const tagName = element.tagName.toLowerCase();
+    const role = element.getAttribute("role");
+    return (
+      tagName === "input" ||
+      tagName === "textarea" ||
+      tagName === "select" ||
+      element.getAttribute("contenteditable") === "true" ||
+      role === "textbox" ||
+      role === "combobox"
+    );
+  });
+  if (!editable) {
+    throw new Error(`exact accessible label does not identify an editable control: ${label}`);
   }
-  return visibleEditable[0];
+  if (!(await candidate.isVisible())) return undefined;
+
+  // Return the strict locator itself. An ordinal locator can silently change targets if
+  // lazy rendering inserts another match between resolution and the browser action.
+  return candidate;
 }
 
 async function firstVisibleLocator(page, locator, errorMessage, timeoutMs = ACTION_TIMEOUT_MS) {

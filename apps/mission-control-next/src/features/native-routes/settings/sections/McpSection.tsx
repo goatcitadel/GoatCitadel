@@ -637,6 +637,7 @@ export function McpSection(props: SettingsSectionProps) {
                   <SettingsFieldGrid>
                     <SettingsField label="Label">
                       <input
+                        aria-label="MCP server label"
                         className="mc-next-settings-input"
                         value={editForm.label}
                         onChange={(event) => setEditForm((current) => ({ ...current, label: event.target.value }))}
@@ -644,6 +645,7 @@ export function McpSection(props: SettingsSectionProps) {
                     </SettingsField>
                     <SettingsField label="Category">
                       <select
+                        aria-label="MCP server category"
                         className="mc-next-settings-input"
                         value={editForm.category}
                         onChange={(event) =>
@@ -666,6 +668,7 @@ export function McpSection(props: SettingsSectionProps) {
                     {selectedServer.transport === "stdio" ? (
                       <SettingsField label="Command" span={2}>
                         <input
+                          aria-label="MCP server command"
                           className="mc-next-settings-input"
                           value={editForm.command}
                           onChange={(event) => setEditForm((current) => ({ ...current, command: event.target.value }))}
@@ -674,6 +677,7 @@ export function McpSection(props: SettingsSectionProps) {
                     ) : (
                       <SettingsField label="URL" span={2}>
                         <input
+                          aria-label="MCP server URL"
                           className="mc-next-settings-input"
                           value={editForm.url}
                           onChange={(event) => setEditForm((current) => ({ ...current, url: event.target.value }))}
@@ -683,6 +687,7 @@ export function McpSection(props: SettingsSectionProps) {
                     <SettingsField label="Enabled" group>
                       <label className="mc-next-settings-toggle">
                         <input
+                          aria-label="MCP server enabled"
                           type="checkbox"
                           checked={editForm.enabled}
                           disabled={!selectedServerRuntimeReady}

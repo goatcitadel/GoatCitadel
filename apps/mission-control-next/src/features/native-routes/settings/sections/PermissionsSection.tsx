@@ -521,6 +521,7 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
                   subtitle="Update or archive the selected profile."
                 >
                   <PermissionProfileDraftFields
+                    accessibleNamePrefix="Edit profile"
                     draft={profileEditDraft}
                     bypassUnavailableReason={promptSkippingProfileRestriction ?? undefined}
                     setDraft={setProfileEditDraft}

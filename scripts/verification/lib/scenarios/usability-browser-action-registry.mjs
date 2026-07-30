@@ -218,9 +218,9 @@ const STEPS = [
   ]),
 
   step("projects-workspaces", "route.projects.workspace-project-crud", "projects", [
-    fill("Release readiness", "Usability browser project"),
-    fill("Local project path", "workspace/verification/usability-browser-project"),
-    fill("What this project is for.", "Created by the isolated Chromium usability journey."),
+    fill("New project name", "Usability browser project"),
+    fill("New project workspace path", "workspace/verification/usability-browser-project"),
+    fill("New project description", "Created by the isolated Chromium usability journey."),
     click("Create project from form"),
     text("Usability browser project"),
     fill("Edit project description", "Updated by the visible project edit flow."),
@@ -780,7 +780,7 @@ const STEPS = [
       fill("Deny patterns", "fs.write"),
       click("Create profile"),
       text("Permission profile created."),
-      fill("Description", "Updated deterministic Settings permission profile."),
+      fill("Edit profile description", "Updated deterministic Settings permission profile."),
       click("Save profile"),
       text("Permission profile updated."),
     ],
@@ -875,7 +875,7 @@ const STEPS = [
     "settings-mcp",
     [
       clickPattern("Verification local MCP"),
-      fill("Label", "Verification local MCP updated"),
+      fill("MCP server label", "Verification local MCP updated"),
       click("Save changes"),
       text("MCP server updated."),
       click("Connect"),

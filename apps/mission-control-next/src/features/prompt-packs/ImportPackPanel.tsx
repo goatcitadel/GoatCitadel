@@ -21,6 +21,7 @@ export function ImportPackPanel({ importText, importing, onSetImportText, onImpo
       <label className="mc-pp-field">
         <span>Prompt-pack markdown</span>
         <textarea
+          aria-label="Prompt-pack markdown"
           rows={7}
           placeholder="Paste prompt-pack markdown here..."
           value={importText}

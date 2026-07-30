@@ -15,6 +15,7 @@ import {
   buildDelegationPromptReplyRules,
   buildPromptPackBenchmarkReplyRules,
   decodeBrowserFixtureFile,
+  editableLocator,
   evaluateSseConnectionRecovery,
   filterExpectedBrowserConsoleMessages,
   pollSseConnectionRecoveryEvidence,
@@ -47,47 +48,136 @@ import {
   withOperatorAuth,
 } from "./usability-browser-action-lane.mjs";
 
-function editableCandidate(elements) {
-  return {
+function strictEditableCandidate(states) {
+  let stateIndex = 0;
+  let nthCalls = 0;
+  const controls = [{ value: "" }, { value: "" }];
+  const current = () => states[Math.min(stateIndex, states.length - 1)];
+  const candidate = {
     async count() {
-      return elements.length;
+      return current().count;
     },
-    nth(index) {
-      const element = elements[index];
-      return {
-        async evaluate(predicate) {
-          const node = {
-            tagName: element.tagName ?? "INPUT",
-            getAttribute(name) {
-              if (name === "role") return element.role ?? null;
-              if (name === "contenteditable") return element.contenteditable ?? null;
-              return null;
-            },
-          };
-          return predicate(node);
-        },
-        async isVisible() {
-          return element.visible !== false;
+    async evaluate(predicate) {
+      const state = current();
+      if (state.count !== 1) throw new Error(`strict locator matched ${state.count} controls`);
+      const node = {
+        tagName: state.tagName ?? "INPUT",
+        getAttribute(name) {
+          if (name === "role") return state.role ?? null;
+          if (name === "contenteditable") return state.contenteditable ?? null;
+          return null;
         },
       };
+      return predicate(node);
+    },
+    async isVisible() {
+      const state = current();
+      if (state.count !== 1) throw new Error(`strict locator matched ${state.count} controls`);
+      return state.visible !== false;
+    },
+    async fill(value) {
+      const state = current();
+      if (state.count !== 1) throw new Error(`strict locator matched ${state.count} controls`);
+      controls[0].value = value;
+    },
+    nth() {
+      nthCalls += 1;
+      throw new Error("strict editable resolution must not construct an ordinal locator");
+    },
+  };
+  return {
+    candidate,
+    controls,
+    advance() {
+      stateIndex = Math.min(stateIndex + 1, states.length - 1);
+    },
+    replaceState(state) {
+      states[stateIndex] = state;
+    },
+    nthCalls() {
+      return nthCalls;
     },
   };
 }
 
-test("editable locator candidates fail closed instead of choosing the first fuzzy match", async () => {
-  const unique = await resolveUniqueEditableLocatorCandidate(
-    editableCandidate([{ tagName: "INPUT" }, { tagName: "DIV" }, { tagName: "TEXTAREA", visible: false }]),
-    "New workspace name",
+function strictEditablePage(model) {
+  const labelCalls = [];
+  return {
+    labelCalls,
+    getByLabel(label, options) {
+      labelCalls.push({ label, options });
+      return model.candidate;
+    },
+    getByPlaceholder() {
+      throw new Error("editable resolution must not fall back to placeholder matching");
+    },
+    async waitForTimeout() {
+      model.advance();
+    },
+  };
+}
+
+test("editable locator waits for an exact accessible label without consulting a fuzzy or placeholder fallback", async () => {
+  const model = strictEditableCandidate([{ count: 0 }, { count: 0 }, { count: 1, tagName: "INPUT" }]);
+  const page = strictEditablePage(model);
+  const locator = await editableLocator(page, "New workspace name", { timeoutMs: 100, pollIntervalMs: 1 });
+  assert.equal(locator, model.candidate);
+  assert.deepEqual(page.labelCalls, [{ label: "New workspace name", options: { exact: true } }]);
+  assert.equal(model.nthCalls(), 0);
+});
+
+test("editable locator waits for an exact hidden control to become visible", async () => {
+  const model = strictEditableCandidate([
+    { count: 1, tagName: "INPUT", visible: false },
+    { count: 1, tagName: "INPUT", visible: false },
+    { count: 1, tagName: "INPUT", visible: true },
+  ]);
+  const locator = await editableLocator(strictEditablePage(model), "New workspace name", {
+    timeoutMs: 100,
+    pollIntervalMs: 1,
+  });
+  assert.equal(locator, model.candidate);
+  assert.equal(model.nthCalls(), 0);
+});
+
+test("editable locator fails closed for duplicate exact accessible labels", async () => {
+  const model = strictEditableCandidate([{ count: 2, tagName: "INPUT" }]);
+  await assert.rejects(
+    editableLocator(strictEditablePage(model), "Name", { timeoutMs: 100, pollIntervalMs: 1 }),
+    /ambiguous editable control: Name matched 2 controls by exact accessible label/u,
   );
-  assert.ok(unique);
+  assert.equal(model.nthCalls(), 0);
+});
+
+test("editable locator fails closed when the exact accessible label names a noneditable control", async () => {
+  const model = strictEditableCandidate([{ count: 1, tagName: "DIV" }]);
+  await assert.rejects(
+    editableLocator(strictEditablePage(model), "Name", { timeoutMs: 100, pollIntervalMs: 1 }),
+    /exact accessible label does not identify an editable control: Name/u,
+  );
+  assert.equal(model.nthCalls(), 0);
+});
+
+test("editable locator returns a strict base locator that rejects a duplicate inserted before fill", async () => {
+  const model = strictEditableCandidate([{ count: 1, tagName: "INPUT" }]);
+  const locator = await editableLocator(strictEditablePage(model), "Name", { timeoutMs: 100, pollIntervalMs: 1 });
+  model.replaceState({ count: 2, tagName: "INPUT" });
+  await assert.rejects(locator.fill("wrong target"), /strict locator matched 2 controls/u);
+  assert.deepEqual(
+    model.controls.map((control) => control.value),
+    ["", ""],
+  );
+  assert.equal(model.nthCalls(), 0);
+});
+
+test("exact editable candidate resolution returns the strict base locator without nth selection", async () => {
+  const model = strictEditableCandidate([{ count: 1, tagName: "TEXTAREA" }]);
+  assert.equal(await resolveUniqueEditableLocatorCandidate(model.candidate, "Description"), model.candidate);
   assert.equal(
-    await resolveUniqueEditableLocatorCandidate(editableCandidate([{ tagName: "DIV" }]), "Missing field"),
+    await resolveUniqueEditableLocatorCandidate(strictEditableCandidate([{ count: 0 }]).candidate, "Missing field"),
     undefined,
   );
-  await assert.rejects(
-    resolveUniqueEditableLocatorCandidate(editableCandidate([{ tagName: "INPUT" }, { tagName: "INPUT" }]), "Name"),
-    /ambiguous editable control: Name matched 2 visible editable controls/u,
-  );
+  assert.equal(model.nthCalls(), 0);
 });
 
 test("browser action registry fails closed without terminal readback or a verified download", () => {
@@ -1460,6 +1550,19 @@ test("Settings bundles use live control names and execute the seeded MCP grant l
   assert.equal(operationNames.includes("Test notification"), false);
   assert.equal(operationNames.includes("Run Local AI readiness"), false);
 
+  const permissionCrud = settingsSteps.find(
+    (step) => step.stepId === "route.settings-permissions.permission-profile-crud",
+  );
+  assert.ok(permissionCrud);
+  assert.ok(
+    permissionCrud.operations.some(
+      (operation) =>
+        operation.kind === "fill" &&
+        operation.label === "Edit profile description" &&
+        operation.value === "Updated deterministic Settings permission profile.",
+    ),
+  );
+
   const oauthStatus = settingsSteps.find(
     (step) => step.stepId === "route.settings-providers.oauth-status-and-invalid-credential",
   );
@@ -1499,6 +1602,14 @@ test("Settings bundles use live control names and execute the seeded MCP grant l
       "click:Revoke",
       "confirm:Revoke",
     ],
+  );
+  assert.ok(
+    mcpLifecycle.operations.some(
+      (operation) =>
+        operation.kind === "fill" &&
+        operation.label === "MCP server label" &&
+        operation.value === "Verification local MCP updated",
+    ),
   );
   assert.ok(
     mcpLifecycle.operations.some(
