@@ -138,6 +138,8 @@ const ROUTE_ACCESS_POLICIES: Array<{ prefix: string; accessClass: RouteAccessCla
   { prefix: "/api/v1/calendar", accessClass: "operator" },
   { prefix: "/api/v1/notes", accessClass: "operator" },
   { prefix: "/api/v1/reminders", accessClass: "operator" },
+  { prefix: "/api/v1/notifications", accessClass: "operator" },
+  { prefix: "/api/v1/engineering-learnings", accessClass: "operator" },
   { prefix: "/api/v1/guidance", accessClass: "operator" },
   { prefix: "/api/v1/dev/diagnostics/stream", accessClass: "sse-read" },
   { prefix: "/api/v1/dev", accessClass: "operator" },

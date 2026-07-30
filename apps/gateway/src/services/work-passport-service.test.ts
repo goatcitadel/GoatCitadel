@@ -66,6 +66,22 @@ describe("WorkPassportService", () => {
     );
   });
 
+  it("classifies mixed engineering and finance work for independent review", async () => {
+    const { service, workspaceId } = await createHarness();
+    service.updateBaseline({ workspaceId, roleLabel: "Engineer", primaryDomains: ["engineering"] });
+
+    const passport = service.classify(workspaceId, "Debug the software API and compare the tax and investment data.");
+
+    expect(passport.taskSignals.map((signal) => signal.domain)).toEqual(
+      expect.arrayContaining(["engineering", "finance"]),
+    );
+    expect(passport.boundary).toBe("mixed");
+    expect(passport.consequence).toBe("moderate");
+    expect(passport.review.posture).toBe("independent_review");
+    expect(passport.actionPosture).toBe("ready_for_review");
+    expect(() => assertWorkPassportRecord(passport)).not.toThrow();
+  });
+
   it("requires expert review for consequential high-stakes work and never grants action authority", async () => {
     const { service, workspaceId } = await createHarness();
     service.updateBaseline({ workspaceId, roleLabel: "Engineer", primaryDomains: ["engineering"] });

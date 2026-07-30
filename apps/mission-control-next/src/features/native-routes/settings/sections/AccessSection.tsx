@@ -174,6 +174,7 @@ export function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
             >
               {data.settings.auth?.plan?.warnings?.length ? (
                 <SettingsActionList
+                  ariaLabel="Gateway access warnings"
                   items={(data.settings.auth?.plan?.warnings ?? []).map((warning) => ({
                     label: "Auth warning",
                     description: warning,
@@ -296,6 +297,7 @@ export function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
               ]}
             >
               <SettingsActionList
+                ariaLabel="Desktop and mobile continuity checks"
                 items={continuityItems.map((item) => ({
                   id: item.id,
                   label: item.label,
@@ -315,6 +317,7 @@ export function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
             stats={[{ label: "Grants", value: String(data.grants?.length ?? 0) }]}
           >
             <SettingsActionList
+              ariaLabel="Approved device grants"
               items={(data.grants ?? []).map((grant) => ({
                 id: grant.grantId,
                 label: grant.deviceLabel || grant.grantId,

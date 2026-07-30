@@ -4,7 +4,7 @@ import type { ConnectorDiagnosticReport } from "@goatcitadel/contracts";
 import { SettingsActionList, SettingsCodeBlock } from "../SettingsShared";
 import { NativeCard } from "../../NativeRoutePageLayout";
 
-export function DiagnosticsPanel({ report }: { report: ConnectorDiagnosticReport }) {
+export function DiagnosticsPanel({ report, ariaLabel }: { report: ConnectorDiagnosticReport; ariaLabel: string }) {
   return (
     <NativeCard
       density="compact"
@@ -13,6 +13,7 @@ export function DiagnosticsPanel({ report }: { report: ConnectorDiagnosticReport
       subtitle={`Status: ${report.status}`}
     >
       <SettingsActionList
+        ariaLabel={ariaLabel}
         items={report.checks.map((check) => ({
           label: check.key,
           description: check.message,

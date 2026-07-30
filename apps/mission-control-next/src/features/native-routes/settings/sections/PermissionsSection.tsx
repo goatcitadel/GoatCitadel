@@ -416,6 +416,7 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
                 {selectedProfile ? (
                   <>
                     <SettingsActionList
+                      ariaLabel={`${selectedProfile.label} tool patterns`}
                       items={selectedProfile.toolPatterns.map((pattern) => ({
                         label: pattern,
                         description: "Profile tool pattern",
@@ -423,6 +424,7 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
                       emptyLabel="This profile does not add tool patterns."
                     />
                     <SettingsActionList
+                      ariaLabel={`${selectedProfile.label} policy details`}
                       items={[
                         {
                           label: "Allow",
@@ -572,6 +574,7 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
               subtitle="Chat includes conversation, agentic work, and Chat-launched Code Mode. Direct tools and MCP remain separate policy contexts."
             >
               <SettingsActionList
+                ariaLabel="Effective primary policy contexts"
                 items={primaryEffectiveContexts.map((item) => ({
                   id: item.surface,
                   label: formatPermissionContextLabel(item.surface),
@@ -594,6 +597,7 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
                   They are not separate Mission Control surfaces and do not govern current Chat.
                 </p>
                 <SettingsActionList
+                  ariaLabel="Legacy compatibility policy contexts"
                   items={legacyEffectiveContexts.map((item) => ({
                     id: item.surface,
                     label: formatPermissionContextLabel(item.surface),
@@ -633,6 +637,7 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
             >
               {activeOverrides.length ? (
                 <SettingsActionList
+                  ariaLabel="Active local operator overrides"
                   items={activeOverrides.map((override) => ({
                     label: override.overrideId,
                     description: `${override.reason} · started by ${override.createdBy} · operator ${override.operatorId}`,
@@ -734,6 +739,7 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
                 {activeAutonomyGrants.length} active of {data.autonomyGrants?.length ?? 0} recorded grants.
               </p>
               <SettingsActionList
+                ariaLabel="Autonomous activation grants"
                 items={(data.autonomyGrants ?? []).map((grant) => ({
                   label: grant.grantId,
                   description: `${grant.workspaceId} · ${formatPermissionContextList(grant.surfaces)} · ${grant.activationKinds.join(", ")} · ${grant.reason}`,

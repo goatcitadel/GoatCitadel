@@ -1,4 +1,4 @@
-import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 import type { UiEffectsMode } from "./effects-mode";
 import type { OperatorAttentionSoundMode } from "./operator-attention";
 import type { ShellNavMode } from "../components/ShellNavRail";
@@ -108,6 +108,24 @@ export function UiPreferencesProvider(props: { children: ReactNode }) {
   const [notifications, setNotificationsState] = useState<UiNotificationPreferences>(() =>
     readNotificationPreferencesFromStorage(),
   );
+  const setActiveCitadelId = useCallback((citadelId: string) => {
+    const normalized = normalizeCitadelId(citadelId);
+    setActiveCitadelIdState(normalized);
+    writeStorage(CITADEL_KEY, normalized);
+  }, []);
+  const setActiveWorkspaceId = useCallback((workspaceId: string) => {
+    const normalized = normalizeWorkspaceId(workspaceId);
+    setActiveWorkspaceIdState(normalized);
+    writeStorage(WORKSPACE_KEY, normalized);
+  }, []);
+  const setActiveScope = useCallback((scope: { citadelId: string; workspaceId: string }) => {
+    const normalizedCitadelId = normalizeCitadelId(scope.citadelId);
+    const normalizedWorkspaceId = normalizeWorkspaceId(scope.workspaceId);
+    setActiveCitadelIdState(normalizedCitadelId);
+    setActiveWorkspaceIdState(normalizedWorkspaceId);
+    writeStorage(CITADEL_KEY, normalizedCitadelId);
+    writeStorage(WORKSPACE_KEY, normalizedWorkspaceId);
+  }, []);
 
   const value = useMemo<UiPreferencesValue>(
     () => ({
@@ -150,25 +168,10 @@ export function UiPreferencesProvider(props: { children: ReactNode }) {
         writeStorage(STATUS_CENTER_EXPANDED_KEY, String(enabled));
       },
       activeCitadelId,
-      setActiveCitadelId: (citadelId) => {
-        const normalized = normalizeCitadelId(citadelId);
-        setActiveCitadelIdState(normalized);
-        writeStorage(CITADEL_KEY, normalized);
-      },
+      setActiveCitadelId,
       activeWorkspaceId,
-      setActiveWorkspaceId: (workspaceId) => {
-        const normalized = normalizeWorkspaceId(workspaceId);
-        setActiveWorkspaceIdState(normalized);
-        writeStorage(WORKSPACE_KEY, normalized);
-      },
-      setActiveScope: (scope) => {
-        const normalizedCitadelId = normalizeCitadelId(scope.citadelId);
-        const normalizedWorkspaceId = normalizeWorkspaceId(scope.workspaceId);
-        setActiveCitadelIdState(normalizedCitadelId);
-        setActiveWorkspaceIdState(normalizedWorkspaceId);
-        writeStorage(CITADEL_KEY, normalizedCitadelId);
-        writeStorage(WORKSPACE_KEY, normalizedWorkspaceId);
-      },
+      setActiveWorkspaceId,
+      setActiveScope,
       theme,
       setTheme: (nextTheme) => {
         setThemeState(nextTheme);
@@ -202,6 +205,9 @@ export function UiPreferencesProvider(props: { children: ReactNode }) {
       statusCenterExpanded,
       activeCitadelId,
       activeWorkspaceId,
+      setActiveCitadelId,
+      setActiveWorkspaceId,
+      setActiveScope,
       theme,
       notifications,
     ],

@@ -556,6 +556,16 @@ describe("MissionControlNextApp", () => {
     expect(css).toMatch(/\.mc-next-shell-inspector\.side-inspector-drawer\s*\{[\s\S]*?overscroll-behavior: contain;/);
   });
 
+  it("keeps passive notification copy from blocking operator controls", () => {
+    const css = readFileSync(new URL("../styles/mission-control-next.css", import.meta.url), "utf8").replaceAll(
+      "\r\n",
+      "\n",
+    );
+
+    expect(css).toMatch(/\.notification-stack\s*\{[\s\S]*?pointer-events: none;/u);
+    expect(css).toMatch(/\.notification-dismiss\s*\{[\s\S]*?pointer-events: auto;/u);
+  });
+
   it("keeps the build identity action in compact shell chrome and links it to Ops proof", async () => {
     appMocks.isCompactTopbar = true;
     appMocks.isMobileNav = true;
@@ -1249,6 +1259,55 @@ describe("MissionControlNextApp", () => {
     renderer = await renderApp("http://localhost:5173/code?sessionId=code-session");
     expect(appMocks.threadedRouteProps).toMatchObject({ surface: "chat", lockSurface: false });
     renderer.unmount();
+  });
+
+  it.each([
+    {
+      href: "http://localhost:5173/cowork?sessionId=session-1&turnId=turn-1#composer",
+      expectedPath: "/chat",
+      expectedSearch: "?sessionId=session-1&turnId=turn-1",
+      expectedHash: "#composer",
+    },
+    {
+      href: "http://localhost:5173/code?sessionId=code-session#run-detail",
+      expectedPath: "/chat",
+      expectedSearch: "?sessionId=code-session",
+      expectedHash: "#run-detail",
+    },
+    {
+      href: "http://localhost:5173/settings/safety?view=advanced#trust-policy",
+      expectedPath: "/settings/permissions",
+      expectedSearch: "?view=advanced",
+      expectedHash: "#trust-policy",
+    },
+  ])("replaces direct compatibility URL $href with its canonical path", async (input) => {
+    const renderer = await renderApp(input.href);
+
+    expect(window.location.pathname).toBe(input.expectedPath);
+    expect(window.location.search).toBe(input.expectedSearch);
+    expect(window.location.hash).toBe(input.expectedHash);
+    expect(window.history.replaceState).toHaveBeenCalled();
+
+    renderer.unmount();
+  });
+
+  it("canonicalizes a direct compatibility alias reached through browser history", async () => {
+    const renderer = await renderApp("http://localhost:5173/settings/general");
+    const popstateListener = (window.addEventListener as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([eventName]) => eventName === "popstate",
+    )?.[1] as (() => void) | undefined;
+    expect(popstateListener).toBeTypeOf("function");
+
+    window.history.pushState({}, "", "/code?sessionId=history-session#run-detail");
+    await act(async () => {
+      popstateListener?.();
+      await Promise.resolve();
+    });
+
+    expect(window.location.pathname).toBe("/chat");
+    expect(window.location.search).toBe("?sessionId=history-session");
+    expect(window.location.hash).toBe("#run-detail");
+    expect(JSON.stringify(renderer.toJSON())).toContain("Threaded chat");
   });
 
   it("covers shell realtime fallback, redirect, and status failure branches", async () => {

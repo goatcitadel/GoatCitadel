@@ -24,6 +24,7 @@ public sealed partial class MainWindow : Window
     private readonly EventStreamService _eventStreamService;
     private readonly NotificationService _notificationService;
     private readonly TrayService _trayService = new();
+    private readonly DeferredRouteDeliveryQueue _deferredRoutes = new();
 
     private AppWindow? _appWindow;
     private DesktopRuntimeStatus? _lastRuntime;
@@ -63,6 +64,8 @@ public sealed partial class MainWindow : Window
         Activate();
     }
 
+    internal void ShowActivationDiagnostic(string diagnostic) => ShowToast(diagnostic);
+
     public void OpenRoutePath(string routePath)
     {
         if (!NavigationPolicy.IsAllowedLocalRoute(routePath))
@@ -71,23 +74,11 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        if (_lastRuntime is null || string.IsNullOrWhiteSpace(_lastRuntime.UiUrl))
-        {
-            ShowToast("Mission Control is not ready yet.");
-            return;
-        }
-
-        var target = $"{_lastRuntime.UiUrl.TrimEnd('/')}{routePath}";
-        if (!NavigationPolicy.TryValidateBrowserTarget(target, out var uri, out var error))
-        {
-            ShowToast(error);
-            return;
-        }
-
         ShowAndFocus();
-        MissionWebView.Source = uri;
-        StartupPanel.Visibility = Visibility.Collapsed;
-        MissionWebView.Visibility = Visibility.Visible;
+        if (!_deferredRoutes.Submit(routePath, TryDeliverLocalRoute))
+        {
+            ShowToast("Mission Control is starting. This link will open when ready.");
+        }
     }
 
     private void ConfigureWindow()
@@ -172,10 +163,13 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            var userDataFolder = Path.Join(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "GoatCitadel",
-                "WebView2");
+            var configuredUserDataFolder = Environment.GetEnvironmentVariable("WEBVIEW2_USER_DATA_FOLDER");
+            var userDataFolder = string.IsNullOrWhiteSpace(configuredUserDataFolder)
+                ? Path.Join(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "GoatCitadel",
+                    "WebView2")
+                : Path.GetFullPath(configuredUserDataFolder);
             Directory.CreateDirectory(userDataFolder);
             Environment.SetEnvironmentVariable("WEBVIEW2_USER_DATA_FOLDER", userDataFolder, EnvironmentVariableTarget.Process);
             await MissionWebView.EnsureCoreWebView2Async();
@@ -222,6 +216,7 @@ public sealed partial class MainWindow : Window
 
     private async Task LaunchRuntimeAsync()
     {
+        _deferredRoutes.MarkUnavailable();
         StopRuntimeStatusPolling();
         StopEventStream();
         RenderStarting();
@@ -235,6 +230,7 @@ public sealed partial class MainWindow : Window
             }
             else
             {
+                _deferredRoutes.MarkUnavailable();
                 RenderRuntime(result);
                 RenderRecovery($"Runtime is {result.Status}. Gateway and Mission Control did not both become ready.");
                 StartRuntimeStatusPolling();
@@ -269,11 +265,14 @@ public sealed partial class MainWindow : Window
         await EnsureWebViewReadyAsync();
         if (!_webViewReady)
         {
+            _deferredRoutes.MarkUnavailable();
             RenderRecovery("WebView2 is not ready yet. Use Retry after the desktop webview finishes initializing.");
             return;
         }
 
-        if (!NavigateToRuntimeTarget(result))
+        _deferredRoutes.MarkReady();
+        var deliveredDeferredRoute = _deferredRoutes.Flush(TryDeliverLocalRoute);
+        if (!deliveredDeferredRoute && !NavigateToRuntimeTarget(result))
         {
             return;
         }
@@ -286,6 +285,13 @@ public sealed partial class MainWindow : Window
 
     private async Task RefreshRuntimeStatusAsync(bool notify, bool syncShell)
     {
+        if (syncShell)
+        {
+            // Do not dispatch through the last successful status while the fresh
+            // health read is in flight. The runtime may have died between polls.
+            _deferredRoutes.MarkUnavailable();
+        }
+
         try
         {
             var result = await _runtimeStatusService.ReadStatusAsync();
@@ -307,6 +313,8 @@ public sealed partial class MainWindow : Window
                 {
                     RenderRuntime(result);
                     EnsureEventStream(result);
+                    _deferredRoutes.MarkReady();
+                    _deferredRoutes.Flush(TryDeliverLocalRoute);
                 }
                 else
                 {
@@ -315,6 +323,7 @@ public sealed partial class MainWindow : Window
             }
             else
             {
+                _deferredRoutes.MarkUnavailable();
                 RenderRuntime(result);
                 RenderRecovery(message);
             }
@@ -350,6 +359,7 @@ public sealed partial class MainWindow : Window
 
     private async Task StopRuntimeAsync()
     {
+        _deferredRoutes.MarkUnavailable();
         StopEventStream();
         try
         {
@@ -409,6 +419,30 @@ public sealed partial class MainWindow : Window
         }
 
         MissionWebView.Source = uri;
+        return true;
+    }
+
+    private bool TryDeliverLocalRoute(string routePath)
+    {
+        var runtime = _lastRuntime;
+        if (!_webViewReady || runtime is null || !runtime.IsReady || string.IsNullOrWhiteSpace(runtime.UiUrl))
+        {
+            return false;
+        }
+
+        var target = $"{runtime.UiUrl.TrimEnd('/')}{routePath}";
+        if (!NavigationPolicy.TryValidateBrowserTarget(target, out var uri, out var error))
+        {
+            // The route itself was validated before submission. Retain it if the
+            // runtime reported an unusable URL so a successful restart can retry it.
+            ShowToast(error);
+            return false;
+        }
+
+        ShowAndFocus();
+        MissionWebView.Source = uri;
+        StartupPanel.Visibility = Visibility.Collapsed;
+        MissionWebView.Visibility = Visibility.Visible;
         return true;
     }
 
@@ -583,12 +617,17 @@ public sealed partial class MainWindow : Window
 
     private void RenderWebViewRecovery(Exception error)
     {
+        _deferredRoutes.MarkUnavailable();
         _webViewReady = false;
         _webViewInitializationTask = null;
         RenderRecovery($"WebView2 initialization failed: {error.Message}");
     }
 
-    private void RenderRuntimeRecovery(Exception error) => RenderRecovery(error.Message);
+    private void RenderRuntimeRecovery(Exception error)
+    {
+        _deferredRoutes.MarkUnavailable();
+        RenderRecovery(error.Message);
+    }
 
     private void RenderRuntimeStatusFailure(Exception error, bool notify, bool syncShell)
     {
@@ -599,6 +638,7 @@ public sealed partial class MainWindow : Window
 
         if (syncShell)
         {
+            _deferredRoutes.MarkUnavailable();
             RenderRecovery($"Runtime status check failed: {error.Message}");
         }
     }

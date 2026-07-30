@@ -589,6 +589,137 @@ describe("streamPreparedAgentChatTurn", () => {
     ]);
   });
 
+  it("persists linked assistant output after an earlier retry branch was selected before dispatch", async () => {
+    const host = createHost();
+    let activeLeafTurnId = "turn-1";
+    host.updateActiveLeafOrThrow = vi.fn((_sessionId, expectedActiveLeafTurnId, nextActiveLeafTurnId) => {
+      if (activeLeafTurnId === nextActiveLeafTurnId) return;
+      if (activeLeafTurnId !== expectedActiveLeafTurnId) {
+        throw new Error("retry branch selection drifted after provider dispatch");
+      }
+      activeLeafTurnId = nextActiveLeafTurnId;
+    });
+    host.turnRuntime.runStream = vi.fn(async function* () {
+      yield {
+        type: "message_done",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "assistant-1",
+        content: "RETRY_OK",
+      };
+    }) as never;
+    const prepared = createPreparedTurn() as ReturnType<typeof createPreparedTurn> & {
+      branchSelectionBaseTurnId?: string;
+    };
+    prepared.branchKind = "retry";
+    prepared.sourceTurnId = "turn-earlier-source";
+    prepared.parentTurnId = "turn-source-parent";
+    prepared.branchSelectionBaseTurnId = "turn-later-active-leaf";
+    // Durable admission has already persisted the retry trace and selected it
+    // as the active leaf before this worker is allowed to call the provider.
+    host.storage.chatTurnTraces.patch("turn-1", {
+      branchKind: prepared.branchKind,
+      sourceTurnId: prepared.sourceTurnId,
+      parentTurnId: prepared.parentTurnId,
+    });
+
+    const chunks = [];
+    for await (const chunk of streamPreparedAgentChatTurn(
+      host,
+      "session-1",
+      { content: "Retry the earlier prompt.", mode: "chat" } as never,
+      prepared,
+      "chat_thread_turn_retried",
+    )) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: "message_done",
+        turnId: "turn-1",
+        messageId: "assistant-1",
+        content: "RETRY_OK",
+      }),
+    );
+    expect(chunks.filter((chunk) => chunk.type === "delta")).toEqual([
+      expect.objectContaining({
+        type: "delta",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "assistant-1",
+        delta: "RETRY_OK",
+      }),
+    ]);
+    expect(host.ingestEvent).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        eventId: "assistant-1",
+        message: { role: "assistant", content: "RETRY_OK" },
+      }),
+      expect.objectContaining({ onCommit: expect.any(Function) }),
+    );
+    expect(host.storage.chatTurnTraces.get("turn-1")).toMatchObject({
+      status: "completed",
+      assistantMessageId: "assistant-1",
+      branchKind: "retry",
+      sourceTurnId: "turn-earlier-source",
+      parentTurnId: "turn-source-parent",
+    });
+    expect(activeLeafTurnId).toBe("turn-1");
+    expect(host.updateActiveLeafOrThrow).toHaveBeenCalledWith("session-1", "turn-source-parent", "turn-1");
+  });
+
+  it("places streamed delegated canonical usage task ownership on the ingest payload", async () => {
+    const host = createHost();
+    host.turnRuntime.runStream = vi.fn(async function* () {
+      yield {
+        type: "usage",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        usage: { inputTokens: 2, outputTokens: 3, cachedInputTokens: 0, costUsd: 0.01 },
+        modelUsageEventIds: ["usage-child-stream-1"],
+      };
+      yield {
+        type: "message_done",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "assistant-1",
+        content: "Delegated stream answer.",
+      };
+    }) as never;
+
+    for await (const _chunk of streamPreparedAgentChatTurn(
+      host,
+      "session-1",
+      {
+        content: "delegated stream work",
+        mode: "chat",
+        policyTaskId: "chat-orchestration:parent-turn",
+      } as never,
+      createPreparedTurn(),
+      "chat_thread_turn_appended",
+    )) {
+      // Drain the stream so the canonical assistant ingest commits.
+    }
+
+    const payload = vi.mocked(host.ingestEvent).mock.calls[0]?.[1];
+    expect(payload).toEqual(
+      expect.objectContaining({
+        taskId: "chat-orchestration:parent-turn",
+        usage: expect.objectContaining({
+          canonicalUsageEventIds: ["usage-child-stream-1"],
+          canonicalUsageOwner: {
+            workspaceId: "default",
+            sessionId: "session-1",
+            turnId: "turn-1",
+          },
+        }),
+      }),
+    );
+    expect(payload?.usage?.canonicalUsageOwner).not.toHaveProperty("taskId");
+  });
+
   it("rethrows durable control aborts without marking the Chat turn cancelled", async () => {
     const host = createHost();
     const abortController = new AbortController();

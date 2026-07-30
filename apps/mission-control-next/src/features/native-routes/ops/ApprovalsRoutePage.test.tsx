@@ -382,6 +382,7 @@ describe("ApprovalsRoutePage", () => {
     });
     modal = renderer!.root.findByType(ConfirmModal);
     expect(modal.props.title).toBe("Reject this request?");
+    expect(modal.props.confirmLabel).toBe("Confirm rejection");
     expect(modal.props.danger).toBe(true);
     await act(async () => {
       await modal.props.onConfirm();

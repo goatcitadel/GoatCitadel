@@ -242,13 +242,16 @@ export async function runCommand(command, args, options = {}) {
     const stderrStream = createWriteStream(stderrPath);
     const child = spawnVerificationProcess(command, args, {
       cwd: options.cwd ?? repoRoot,
-      env: {
-        ...process.env,
-        TMPDIR: tempDir,
-        TMP: tempDir,
-        TEMP: tempDir,
-        ...(options.env ?? {}),
-      },
+      env: buildVerificationCommandEnv(
+        process.env,
+        {
+          TMPDIR: tempDir,
+          TMP: tempDir,
+          TEMP: tempDir,
+          ...(options.env ?? {}),
+        },
+        options.omitEnv,
+      ),
       stdio: ["ignore", "pipe", "pipe"],
     });
     let outputPipelineError;
@@ -280,6 +283,14 @@ export async function runCommand(command, args, options = {}) {
       });
     });
   });
+}
+
+export function buildVerificationCommandEnv(baseEnv, extraEnv = {}, omitEnv = []) {
+  const env = { ...baseEnv };
+  for (const key of omitEnv ?? []) {
+    if (typeof key === "string" && key) delete env[key];
+  }
+  return { ...env, ...extraEnv };
 }
 
 async function ensureShortVerificationTempDir(requestedTempDir) {

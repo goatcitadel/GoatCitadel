@@ -22,7 +22,7 @@ import {
   useAsyncLoad,
 } from "../SettingsShared";
 import { NativeCard } from "../../NativeRoutePageLayout";
-import { NativeMetricGrid } from "../../primitives";
+import { NativeButton, NativeMetricGrid } from "../../primitives";
 
 export function LocalAiSection(_props: SettingsSectionProps) {
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -34,6 +34,8 @@ export function LocalAiSection(_props: SettingsSectionProps) {
     };
   }, []);
   const topRecommendation = data?.readiness?.recommendations?.[0] ?? null;
+  const hasDetectedRuntime = data?.readiness?.hardware?.runtimes?.some((runtime) => runtime.detected) ?? false;
+  const hasRegisteredEndpoint = (data?.readiness?.endpoints?.length ?? 0) > 0;
 
   const handleQueueDownload = async () => {
     if (!topRecommendation) {
@@ -100,6 +102,7 @@ export function LocalAiSection(_props: SettingsSectionProps) {
             ]}
           />
           <SettingsActionList
+            ariaLabel="Detected local runtimes"
             items={(data?.readiness?.hardware?.runtimes ?? []).map((runtime) => ({
               id: runtime.backend,
               label: runtime.backend,
@@ -109,6 +112,21 @@ export function LocalAiSection(_props: SettingsSectionProps) {
             }))}
             emptyLabel="No local runtimes were detected."
           />
+          {data?.readiness && !hasRegisteredEndpoint ? (
+            <SettingsNotice
+              notice={{
+                tone: "info",
+                message: hasDetectedRuntime
+                  ? "Local AI is not configured: a runtime was detected, but no local AI endpoint is registered."
+                  : "Local AI is not configured: no supported local runtime was detected and no endpoint is registered.",
+              }}
+            />
+          ) : null}
+          <SettingsButtonRow>
+            <NativeButton variant="secondary" onClick={() => void reload()}>
+              Refresh readiness
+            </NativeButton>
+          </SettingsButtonRow>
         </NativeCard>
         <SettingsStack>
           <NativeCard
@@ -118,6 +136,7 @@ export function LocalAiSection(_props: SettingsSectionProps) {
             subtitle="Conservative recommendations; no download starts without approval."
           >
             <SettingsActionList
+              ariaLabel="Local model recommendations"
               items={(data?.readiness?.recommendations ?? []).slice(0, 6).map((item) => ({
                 id: `${item.modelId}-${item.backend}`,
                 label: item.modelId,

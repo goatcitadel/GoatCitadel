@@ -2369,7 +2369,6 @@ export async function* streamPreparedAgentChatTurn(
       }
       if (chunk.type === "message_done") {
         if (chunk.content.trim() && !hasStreamedDelta) {
-          finalText = chunk.content;
           for (const slice of splitIntoChunks(chunk.content, 120)) {
             yield {
               type: "delta",
@@ -2673,6 +2672,7 @@ export async function* streamPreparedAgentChatTurn(
             role: "assistant",
             content: finalText,
           },
+          ...(input.policyTaskId ? { taskId: input.policyTaskId } : {}),
           usage:
             assistantUsage || (assistantModelUsageEventIds?.length ?? 0) > 0
               ? {
@@ -2684,7 +2684,6 @@ export async function* streamPreparedAgentChatTurn(
                           workspaceId: prepared.workspaceId,
                           sessionId,
                           turnId,
-                          ...(input.policyTaskId ? { taskId: input.policyTaskId } : {}),
                         },
                       }
                     : {}),

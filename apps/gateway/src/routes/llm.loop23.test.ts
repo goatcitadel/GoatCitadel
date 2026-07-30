@@ -91,6 +91,30 @@ describe("llm route validation and error mapping loop 23", () => {
     expect(updateLlmConfig).toHaveBeenCalledOnce();
   });
 
+  it("maps generation-fenced LLM config reads to a structured retryable conflict", async () => {
+    const getLlmConfigWithDetails = vi.fn(() => {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: "Settings are temporarily unavailable while runtime owners reconcile a config generation.",
+        details: { currentRevision: 5, transactionState: "committed" },
+      });
+    });
+    app = buildApp({ getLlmConfigWithDetails });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/llm/config",
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({
+      error: "Settings are temporarily unavailable while runtime owners reconcile a config generation.",
+      code: "STATE_CONFLICT",
+      details: { currentRevision: 5, transactionState: "committed" },
+    });
+    expect(getLlmConfigWithDetails).toHaveBeenCalledOnce();
+  });
+
   it("validates model preview auth, OAuth polling, and maps model discovery failures", async () => {
     const previewLlmModels = vi.fn();
     const pollOpenAICodexOAuthDeviceFlow = vi.fn();

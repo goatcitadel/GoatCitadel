@@ -6,21 +6,27 @@ import { CitadelOverviewRoutePage } from "./CitadelOverviewRoutePage";
 import type { NativeRoutePagesProps } from "../types";
 
 const apiMocks = vi.hoisted(() => ({
+  archiveCitadel: vi.fn(),
   createCitadelFromTemplate: vi.fn(),
   getCitadel: vi.fn(),
   getCitadelGatehouse: vi.fn(),
   isApiRequestError: vi.fn(),
   listCitadels: vi.fn(),
   listCitadelTemplates: vi.fn(),
+  restoreCitadel: vi.fn(),
+  upsertCitadelCharter: vi.fn(),
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
+  archiveCitadel: apiMocks.archiveCitadel,
   createCitadelFromTemplate: apiMocks.createCitadelFromTemplate,
   getCitadel: apiMocks.getCitadel,
   getCitadelGatehouse: apiMocks.getCitadelGatehouse,
   isApiRequestError: apiMocks.isApiRequestError,
   listCitadels: apiMocks.listCitadels,
   listCitadelTemplates: apiMocks.listCitadelTemplates,
+  restoreCitadel: apiMocks.restoreCitadel,
+  upsertCitadelCharter: apiMocks.upsertCitadelCharter,
 }));
 
 function makeProps(navigate = vi.fn()): NativeRoutePagesProps {
@@ -58,6 +64,16 @@ function readNodeText(node: { children?: unknown[] } | string | number | null | 
 
 const CITADEL = {
   citadelId: "default",
+  record: {
+    citadelId: "default",
+    name: "Acme",
+    slug: "default",
+    kind: "company",
+    lifecycleStatus: "active",
+    hasCharter: true,
+    createdAt: "t",
+    updatedAt: "t",
+  },
   charter: {
     citadelId: "default",
     purpose: "Run the company",
@@ -138,9 +154,24 @@ describe("CitadelOverviewRoutePage", () => {
     );
     apiMocks.listCitadelTemplates.mockResolvedValue(TEMPLATES);
     apiMocks.listCitadels.mockResolvedValue({
-      items: [{ citadelId: "default", name: "Acme", slug: "default", kind: "company", hasCharter: true }],
+      items: [CITADEL.record],
     });
     apiMocks.createCitadelFromTemplate.mockResolvedValue(PERSONAL_CITADEL);
+    apiMocks.upsertCitadelCharter.mockImplementation(async (_citadelId: string, input: object) => ({
+      ...CITADEL.charter,
+      ...input,
+      updatedAt: "t2",
+    }));
+    apiMocks.archiveCitadel.mockResolvedValue({
+      ...CITADEL.record,
+      lifecycleStatus: "archived",
+      archivedAt: "t2",
+      updatedAt: "t2",
+    });
+    apiMocks.restoreCitadel.mockResolvedValue({
+      ...CITADEL.record,
+      updatedAt: "t3",
+    });
   });
 
   it("renders the Citadel header while loading", () => {
@@ -164,6 +195,50 @@ describe("CitadelOverviewRoutePage", () => {
     // Gatehouse enums are humanized for operators (was raw "approval_required").
     expect(tree).toContain("Approval required");
     expect(tree).not.toContain("approval_required");
+  });
+
+  it("saves Charter purpose and explicitly archives then restores the Citadel", async () => {
+    apiMocks.getCitadel.mockResolvedValue(CITADEL);
+    apiMocks.getCitadelGatehouse.mockResolvedValue(GATEHOUSE);
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(<CitadelOverviewRoutePage {...makeProps()} />);
+    });
+
+    await act(async () => {
+      renderer!.root.findByType("textarea").props.onChange({
+        target: { value: "Govern the verification Citadel." },
+      });
+    });
+    await act(async () => {
+      buttonContaining(renderer!, "Save charter").props.onClick();
+      await Promise.resolve();
+    });
+    expect(apiMocks.upsertCitadelCharter).toHaveBeenCalledWith(
+      "default",
+      expect.objectContaining({
+        purpose: "Govern the verification Citadel.",
+        kind: "company",
+        goals: ["Ship v1"],
+        boundaries: ["No prod writes without approval"],
+      }),
+    );
+    expect(treeString(renderer!)).toContain("Citadel Charter saved");
+
+    await act(async () => {
+      buttonContaining(renderer!, "Archive Citadel").props.onClick();
+      await Promise.resolve();
+    });
+    expect(apiMocks.archiveCitadel).toHaveBeenCalledWith("default");
+    expect(treeString(renderer!)).toContain("Citadel archived");
+    expect(buttonContaining(renderer!, "Restore Citadel")).toBeDefined();
+
+    await act(async () => {
+      buttonContaining(renderer!, "Restore Citadel").props.onClick();
+      await Promise.resolve();
+    });
+    expect(apiMocks.restoreCitadel).toHaveBeenCalledWith("default");
+    expect(treeString(renderer!)).toContain("Citadel restored");
   });
 
   it("shows the staged setup state without fetching detail when the active Citadel has no Charter", async () => {

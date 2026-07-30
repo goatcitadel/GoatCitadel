@@ -92,7 +92,7 @@ const llmProviderRequestSchema = z.object({
 const bootstrapSchema = z.object({
   expectedRevision: z.number().int().positive(),
   toolApprovalMode: z.enum(["approve_all", "approve_risky", "bypass"]).optional(),
-  defaultToolProfile: z.enum(["minimal", "standard", "coding", "ops", "research", "danger"]).optional(),
+  defaultToolProfile: z.enum(["minimal", "standard", "coding", "ops", "research", "chat-agent", "danger"]).optional(),
   budgetMode: z.enum(["saver", "balanced", "power"]).optional(),
   networkAllowlist: z.array(z.string().min(1)).optional(),
   auth: z
@@ -149,25 +149,33 @@ const completeSchema = z.object({
 });
 
 export const onboardingRoutes: FastifyPluginAsync = async (fastify) => {
-  fastify.get("/api/v1/onboarding/startup", async (_request, reply) => {
-    return reply.send(fastify.services.onboarding.getOnboardingStartupState());
+  fastify.get("/api/v1/onboarding/startup", async (request, reply) => {
+    try {
+      return reply.send(fastify.services.onboarding.getOnboardingStartupState());
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
   });
 
   fastify.get("/api/v1/onboarding/state", async (request, reply) => {
-    const startedAt = Date.now();
-    const state = fastify.services.onboarding.getOnboardingState();
-    const afterState = Date.now();
-    if (onboardingTimingEnabled) {
-      request.log.info(
-        {
-          route: "onboarding.state",
-          totalMs: afterState - startedAt,
-          gatewayMs: afterState - startedAt,
-        },
-        "onboarding route timing",
-      );
+    try {
+      const startedAt = Date.now();
+      const state = fastify.services.onboarding.getOnboardingState();
+      const afterState = Date.now();
+      if (onboardingTimingEnabled) {
+        request.log.info(
+          {
+            route: "onboarding.state",
+            totalMs: afterState - startedAt,
+            gatewayMs: afterState - startedAt,
+          },
+          "onboarding route timing",
+        );
+      }
+      return reply.send(state);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
     }
-    return reply.send(state);
   });
 
   fastify.post("/api/v1/onboarding/bootstrap", async (request, reply) => {

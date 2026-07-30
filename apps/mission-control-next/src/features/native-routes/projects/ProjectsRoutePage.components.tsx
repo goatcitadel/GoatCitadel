@@ -1,6 +1,9 @@
 import type { ReactNode } from "react";
 import { MessageSquarePlus } from "lucide-react";
-import type { ChatMode } from "@goatcitadel/contracts";
+import type { ChatMode, ChatSessionRecord } from "@goatcitadel/contracts";
+import { EmptyState } from "../primitives";
+import type { NativeRoutePagesProps } from "../types";
+import { formatDateTime } from "./ProjectsRoutePage.helpers";
 import type { ProjectFilterView } from "./use-project-pin-archive";
 
 export function filterEmptyLabel(view: ProjectFilterView): string {
@@ -80,5 +83,57 @@ export function NewSessionButton({
       <MessageSquarePlus size={16} />
       {label}
     </button>
+  );
+}
+
+export function ProjectThreadGroup({
+  mode,
+  label,
+  sessions,
+  route,
+  navigate,
+}: {
+  mode: ChatMode;
+  label: string;
+  sessions: ChatSessionRecord[];
+  route: NativeRoutePagesProps["route"];
+  navigate: NativeRoutePagesProps["navigate"];
+}) {
+  void mode;
+  return (
+    <section className="mc-next-directory-lane">
+      <div className="mc-next-directory-lane-head">
+        <strong>{label}</strong>
+        <span>{sessions.length}</span>
+      </div>
+      {sessions.length ? (
+        <div className="mc-next-directory-lane-list">
+          {sessions.map((session) => (
+            <button
+              key={session.sessionId}
+              type="button"
+              className="mc-next-directory-lane-item"
+              onClick={() =>
+                navigate({
+                  area: "chat",
+                  sessionId: session.sessionId,
+                  projectId: session.projectId,
+                  theme: route.theme,
+                })
+              }
+            >
+              <div className="mc-next-directory-lane-meta">
+                <span>{session.lifecycleStatus}</span>
+                <span>{formatDateTime(session.lastActivityAt)}</span>
+              </div>
+              <strong>{session.title?.trim() || session.sessionKey}</strong>
+              <p>{session.tags?.length ? session.tags.join(", ") : "No tags yet."}</p>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <EmptyState size="compact" title={`No ${label.toLowerCase()} threads in this project.`} />
+      )}
+    </section>
   );
 }

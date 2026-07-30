@@ -2026,6 +2026,11 @@
   display: grid;
   gap: 0.65rem;
   width: min(16rem, calc(100vw - 2rem));
+  pointer-events: none;
+}
+
+.notification-dismiss {
+  pointer-events: auto;
 }
 
 :root[data-visual-regression="true"] .notification-stack {

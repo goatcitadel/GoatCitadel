@@ -235,6 +235,7 @@ describe("useMissionControlSurfaceState", () => {
       effectiveToolAutonomy: "manual",
       selectedProjectBindingCandidateId: "project-1",
       selectedProjectBindingCandidateName: "GoatCitadel",
+      codeModeNeedsProjectBinding: true,
       showTracePanel: true,
       showSuggestionsPanel: true,
       showLearnedMemoryPanel: true,
@@ -247,6 +248,56 @@ describe("useMissionControlSurfaceState", () => {
       { label: "Mission", value: "3" },
       { label: "Queue", value: "7" },
     ]);
+  });
+
+  it("projects cancelled turns to retry without changing persisted failure recovery", async () => {
+    let state: ReturnType<typeof useMissionControlSurfaceState> | null = null;
+    function Harness(props: { thread: ChatThreadResponse }) {
+      state = useMissionControlSurfaceState({
+        lockSurface: false,
+        prefs: { sessionId: "session-abcdef", mode: "chat", toolAutonomy: "safe_auto" } as any,
+        selectedTurnId: "turn-1",
+        thread: props.thread,
+        selectedSession: makeSession(),
+        selectedProjectId: "all",
+        projects: [],
+        projectsCount: 0,
+        missionSessionCount: 1,
+        externalSessionCount: 0,
+        boundMissionSessionCount: 0,
+        planningMode: "off",
+        chatSubtitle: "Fast chat",
+        capabilitySuggestionCount: 0,
+        specialistSuggestionCount: 0,
+        specialistCandidateCount: 0,
+        proactiveSuggestionCount: 0,
+        hasDelegationSuggestion: false,
+        learnedMemoryCount: 0,
+      });
+      return null;
+    }
+
+    let renderer: ReturnType<typeof create>;
+    await act(async () => {
+      renderer = create(React.createElement(Harness, { thread: makeThread("cancelled") }));
+    });
+    expect(state?.selectedTurnRecovery).toEqual(expect.objectContaining({ action: "retry", label: "Retry the turn" }));
+
+    await act(async () => {
+      renderer.update(
+        React.createElement(Harness, {
+          thread: makeThread("failed", { failure: { recommendedAction: "switch_to_deep_mode" } }),
+        }),
+      );
+    });
+    expect(state?.selectedTurnRecovery).toEqual(
+      expect.objectContaining({ action: "switch_to_deep_mode", label: "Switch to Deep mode" }),
+    );
+
+    await act(async () => {
+      renderer.update(React.createElement(Harness, { thread: makeThread("completed") }));
+    });
+    expect(state?.selectedTurnRecovery).toBeNull();
   });
 
   it("normalizes legacy cowork and code surfaces to Chat summaries", async () => {
@@ -289,6 +340,7 @@ describe("useMissionControlSurfaceState", () => {
     expect(states[0]).toMatchObject({
       messageMode: "chat",
       isCoworkSurface: false,
+      codeModeNeedsProjectBinding: false,
       surfaceHeaderSubtitle: "Fast chat",
       effectiveToolAutonomy: "manual",
     });
@@ -300,7 +352,7 @@ describe("useMissionControlSurfaceState", () => {
     expect(states[1]).toMatchObject({
       messageMode: "chat",
       isCodeSurface: false,
-      codeModeNeedsProjectBinding: false,
+      codeModeNeedsProjectBinding: true,
     });
     expect(states[1]?.workspaceSummaryCards).toEqual([
       { label: "Projects", value: "5" },

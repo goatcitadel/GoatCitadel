@@ -1,13 +1,25 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import type { NoteRevisionRecord } from "@goatcitadel/contracts";
 import {
+  archiveNote,
   createNote,
   createReminder,
+  listNoteRevisions,
   listNotes,
   listReminders,
+  updateNote,
 } from "@goatcitadel/mission-control-shared/api/personal-ops";
 import { NativeCard } from "../NativeRoutePageLayout";
 import type { NativeRoutePagesProps } from "../types";
-import { getErrorMessage, nativeLoad, nativeLoadIssues, useAsyncLoad, type Notice } from "../shared/native-helpers";
+import {
+  formatDateTime,
+  getErrorMessage,
+  nativeLoad,
+  nativeLoadIssues,
+  useAsyncLoad,
+  type LoadState,
+  type Notice,
+} from "../shared/native-helpers";
 import {
   LibraryActionCardGrid,
   LibraryButtonRow,
@@ -25,6 +37,14 @@ export function LibraryNotesSection({ activeWorkspaceId, activeWorkspaceName }: 
   const [body, setBody] = useState("");
   const [reminderTitle, setReminderTitle] = useState("");
   const [dueAt, setDueAt] = useState("");
+  const [selectedNoteId, setSelectedNoteId] = useState("");
+  const [editTitle, setEditTitle] = useState("");
+  const [editBody, setEditBody] = useState("");
+  const [history, setHistory] = useState<LoadState<NoteRevisionRecord[]>>({
+    loading: false,
+    error: null,
+    data: null,
+  });
   const [notice, setNotice] = useState<Notice | null>(null);
   const [noteSaving, setNoteSaving] = useState(false);
   const { loading, error, data, reload } = useAsyncLoad(async () => {
@@ -41,6 +61,40 @@ export function LibraryNotesSection({ activeWorkspaceId, activeWorkspaceName }: 
 
   const latestNotes = useMemo(() => data?.notes.slice(0, 40) ?? [], [data?.notes]);
   const upcomingReminders = useMemo(() => data?.reminders.slice(0, 20) ?? [], [data?.reminders]);
+  const selectedNote = latestNotes.find((note) => note.noteId === selectedNoteId) ?? null;
+
+  useEffect(() => {
+    if (!latestNotes.length) {
+      setSelectedNoteId("");
+      return;
+    }
+    setSelectedNoteId((current) =>
+      latestNotes.some((note) => note.noteId === current) ? current : (latestNotes[0]?.noteId ?? ""),
+    );
+  }, [latestNotes]);
+
+  useEffect(() => {
+    if (!selectedNote) {
+      setEditTitle("");
+      setEditBody("");
+      setHistory({ loading: false, error: null, data: null });
+      return;
+    }
+    setEditTitle(selectedNote.title);
+    setEditBody(selectedNote.body);
+    let cancelled = false;
+    setHistory({ loading: true, error: null, data: null });
+    void listNoteRevisions(selectedNote.noteId, activeWorkspaceId)
+      .then((result) => {
+        if (!cancelled) setHistory({ loading: false, error: null, data: result.items });
+      })
+      .catch((historyError: unknown) => {
+        if (!cancelled) setHistory({ loading: false, error: getErrorMessage(historyError), data: null });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeWorkspaceId, selectedNote]);
 
   const handleCreateNote = async () => {
     setNoteSaving(true);
@@ -69,6 +123,43 @@ export function LibraryNotesSection({ activeWorkspaceId, activeWorkspaceName }: 
     }
   };
 
+  const handleUpdateNote = async () => {
+    if (!selectedNote) return;
+    setNoteSaving(true);
+    try {
+      const updated = await updateNote(selectedNote.noteId, {
+        workspaceId: activeWorkspaceId,
+        title: editTitle,
+        body: editBody,
+        expectedRevision: selectedNote.revision,
+      });
+      setNotice({ tone: "success", message: `${updated.title} updated at revision ${updated.revision}.` });
+      await reload();
+    } catch (updateError) {
+      setNotice({
+        tone: "error",
+        message: `${getErrorMessage(updateError)} Your draft is preserved; reload the canonical note before retrying.`,
+      });
+    } finally {
+      setNoteSaving(false);
+    }
+  };
+
+  const handleArchiveNote = async () => {
+    if (!selectedNote) return;
+    setNoteSaving(true);
+    try {
+      await archiveNote(selectedNote.noteId, activeWorkspaceId);
+      setNotice({ tone: "success", message: `${selectedNote.title} archived.` });
+      setSelectedNoteId("");
+      await reload();
+    } catch (archiveError) {
+      setNotice({ tone: "error", message: getErrorMessage(archiveError) });
+    } finally {
+      setNoteSaving(false);
+    }
+  };
+
   return (
     <LibrarySectionShell loading={loading} error={error} onRetry={reload}>
       {notice ? <LibraryNotice notice={notice} /> : null}
@@ -89,12 +180,71 @@ export function LibraryNotesSection({ activeWorkspaceId, activeWorkspaceName }: 
               meta: note.tags.join(", ") || note.updatedAt,
               body: note.body || "No body text yet.",
             }))}
-            selectedId=""
-            onSelect={() => undefined}
+            selectedId={selectedNoteId}
+            onSelect={setSelectedNoteId}
             emptyLabel="No notes in this workspace yet."
           />
         </NativeCard>
         <div className="mc-next-settings-stack">
+          <NativeCard
+            title={selectedNote ? `Edit ${selectedNote.title}` : "Note detail"}
+            subtitle={
+              selectedNote
+                ? `Optimistic revision ${selectedNote.revision}; conflicts preserve the local draft.`
+                : "Select a note to edit, archive, or inspect its immutable history."
+            }
+          >
+            {selectedNote ? (
+              <>
+                <LibraryFieldGrid>
+                  <LibraryField label="Edit title">
+                    <input
+                      className="mc-next-settings-input"
+                      value={editTitle}
+                      onChange={(event) => setEditTitle(event.target.value)}
+                    />
+                  </LibraryField>
+                  <LibraryField label="Edit body" span={2}>
+                    <textarea
+                      className="mc-next-settings-input"
+                      value={editBody}
+                      onChange={(event) => setEditBody(event.target.value)}
+                      rows={5}
+                    />
+                  </LibraryField>
+                </LibraryFieldGrid>
+                <LibraryButtonRow>
+                  <NativeButton
+                    onClick={() => void handleUpdateNote()}
+                    disabled={noteSaving || !editTitle.trim() || !editBody.trim()}
+                  >
+                    {noteSaving ? "Saving changes..." : "Save changes"}
+                  </NativeButton>
+                  <NativeButton variant="secondary" onClick={() => void reload()} disabled={noteSaving}>
+                    Reload canonical
+                  </NativeButton>
+                  <NativeButton variant="destructive" onClick={() => void handleArchiveNote()} disabled={noteSaving}>
+                    Archive note
+                  </NativeButton>
+                </LibraryButtonRow>
+                {history.loading ? <p role="status">Loading note history…</p> : null}
+                {history.error ? <LibraryNotice notice={{ tone: "error", message: history.error }} /> : null}
+                <LibraryActionCardGrid
+                  items={(history.data ?? []).map((revision) => ({
+                    id: `${revision.noteId}:${revision.revision}`,
+                    label: `Revision ${revision.revision}`,
+                    value: revision.source,
+                    description: revision.title,
+                    meta: `${formatDateTime(revision.createdAt)} · ${revision.actorId}`,
+                    tone: revision.revision === selectedNote.revision ? "success" : "neutral",
+                  }))}
+                  emptyLabel={history.loading ? "Loading history…" : "No note history is available."}
+                />
+              </>
+            ) : (
+              <p>No note selected.</p>
+            )}
+          </NativeCard>
           <NativeCard title="Capture note" subtitle="Save reusable context without promoting it to durable memory.">
             <LibraryFieldGrid>
               <LibraryField label="Title">

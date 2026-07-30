@@ -14,6 +14,7 @@ export async function runAuthMatrixLane(context, _options = {}, deps) {
     probeAuthMatrixRoute,
     relativeToRun,
     requestJson,
+    restartGatewayProcess,
     runScenario,
     selectRepresentativeManifestRoute,
     startVerificationStack,
@@ -25,6 +26,19 @@ export async function runAuthMatrixLane(context, _options = {}, deps) {
   const operatorHeaders = {
     Authorization: `Bearer ${operatorToken}`,
   };
+  const basicUsername = "verification-basic-operator";
+  const basicPassword = "verification-basic-password";
+  const basicHeaders = {
+    Authorization: `Basic ${Buffer.from(`${basicUsername}:${basicPassword}`, "utf8").toString("base64")}`,
+  };
+  const basicGatewayEnv = {
+    GOATCITADEL_AUTH_MODE: "basic",
+    GOATCITADEL_AUTH_BASIC_USERNAME: basicUsername,
+    GOATCITADEL_AUTH_BASIC_PASSWORD: basicPassword,
+    GOATCITADEL_REMOTE_APPROVAL_CREATE_TOKEN: approvalCreateToken,
+    GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS: "false",
+  };
+  let deviceAndCompanion;
   const stack = await startVerificationStack(context, {
     includeUi: false,
     gatewayEnv: {
@@ -50,7 +64,7 @@ export async function runAuthMatrixLane(context, _options = {}, deps) {
         });
         assertOk(manifestResponse, "fetch route-access manifest");
 
-        const deviceAndCompanion = await createAuthMatrixCredentials(stack.gatewayUrl, operatorHeaders);
+        deviceAndCompanion = await createAuthMatrixCredentials(stack.gatewayUrl, operatorHeaders);
         const sseToken = await issueOperatorSseToken(stack.gatewayUrl, operatorHeaders);
         // Session-scoped representatives (…/:sessionId/…) need a real session so
         // the allowed caller can reach 2xx instead of a not-found error.
@@ -153,7 +167,136 @@ export async function runAuthMatrixLane(context, _options = {}, deps) {
         };
       },
     );
+
+    await runScenario(
+      context,
+      {
+        id: "auth-matrix.basic-restart-device-revocation",
+        lane: "auth-matrix",
+        title: "Basic operator access and device revocation persist across owned Gateway restarts",
+        subsystem: "gateway",
+      },
+      async () => {
+        if (!deviceAndCompanion?.deviceToken) {
+          throw new Error("auth-matrix route scenario did not publish an approved device credential");
+        }
+
+        const activeBeforeRestart = await requestJson(stack.gatewayUrl, "/api/v1/events?limit=1", {
+          headers: { Authorization: `Bearer ${deviceAndCompanion.deviceToken}` },
+        });
+        assertOk(activeBeforeRestart, "read authenticated events with active device before restart");
+        const gatewayPidToken = stack.gateway?.child?.pid;
+
+        stack.gateway = await restartGatewayProcess(context, stack, basicGatewayEnv);
+        const gatewayPidBasic = stack.gateway?.child?.pid;
+        assertDistinctOwnedRestart(gatewayPidToken, gatewayPidBasic, "token-to-basic");
+
+        const basicOperator = await requestJson(stack.gatewayUrl, "/api/v1/admin/retention", {
+          headers: basicHeaders,
+        });
+        assertOk(basicOperator, "read operator route with Basic credentials after restart");
+        const staleToken = await requestJson(stack.gatewayUrl, "/api/v1/admin/retention", {
+          headers: operatorHeaders,
+        });
+        if (staleToken.status !== 401) {
+          throw new Error(`token from the prior auth mode was not rejected after Basic restart (${staleToken.status})`);
+        }
+        const persistedDevice = await requestJson(stack.gatewayUrl, "/api/v1/events?limit=1", {
+          headers: { Authorization: `Bearer ${deviceAndCompanion.deviceToken}` },
+        });
+        assertOk(persistedDevice, "read authenticated events with persisted device after Basic restart");
+
+        const grants = await requestJson(stack.gatewayUrl, "/api/v1/auth/devices?view=all", {
+          headers: basicHeaders,
+        });
+        assertOk(grants, "list device grants with Basic operator credentials");
+        const deviceGrant = Array.isArray(grants.body?.items)
+          ? grants.body.items.find((item) => item?.deviceLabel === "Auth Matrix Device" && !item?.revokedAt)
+          : undefined;
+        if (!deviceGrant?.grantId) {
+          throw new Error("persisted Auth Matrix Device grant was not visible after Basic restart");
+        }
+        const revoked = await requestJson(
+          stack.gatewayUrl,
+          `/api/v1/auth/devices/${encodeURIComponent(deviceGrant.grantId)}/revoke`,
+          {
+            method: "POST",
+            headers: basicHeaders,
+            body: {},
+          },
+        );
+        assertOk(revoked, "revoke persisted device grant with Basic operator credentials");
+        const deniedImmediately = await requestJson(stack.gatewayUrl, "/api/v1/events?limit=1", {
+          headers: { Authorization: `Bearer ${deviceAndCompanion.deviceToken}` },
+        });
+        if (deniedImmediately.status !== 401) {
+          throw new Error(`revoked device credential was not denied immediately (${deniedImmediately.status})`);
+        }
+
+        stack.gateway = await restartGatewayProcess(context, stack, basicGatewayEnv);
+        const gatewayPidBasicRestarted = stack.gateway?.child?.pid;
+        assertDistinctOwnedRestart(gatewayPidBasic, gatewayPidBasicRestarted, "basic-revocation-persistence");
+        const basicOperatorAfterRestart = await requestJson(stack.gatewayUrl, "/api/v1/admin/retention", {
+          headers: basicHeaders,
+        });
+        assertOk(basicOperatorAfterRestart, "read operator route with Basic credentials after second restart");
+        const deniedAfterRestart = await requestJson(stack.gatewayUrl, "/api/v1/events?limit=1", {
+          headers: { Authorization: `Bearer ${deviceAndCompanion.deviceToken}` },
+        });
+        if (deniedAfterRestart.status !== 401) {
+          throw new Error(`revoked device credential did not stay denied after restart (${deniedAfterRestart.status})`);
+        }
+
+        const outPath = path.join(context.artifactRoot, "diagnostics", "auth-matrix-basic-restart.json");
+        await writeJson(outPath, {
+          gateway: {
+            endpoint: stack.gatewayUrl,
+            tokenModePid: gatewayPidToken,
+            basicModePid: gatewayPidBasic,
+            basicRestartedPid: gatewayPidBasicRestarted,
+          },
+          checks: {
+            activeDeviceBeforeRestart: activeBeforeRestart.status,
+            basicOperatorAfterRestart: basicOperator.status,
+            staleTokenAfterModeChange: staleToken.status,
+            persistedDeviceAfterRestart: persistedDevice.status,
+            revokeStatus: revoked.status,
+            revokedDeviceImmediately: deniedImmediately.status,
+            basicOperatorAfterSecondRestart: basicOperatorAfterRestart.status,
+            revokedDeviceAfterSecondRestart: deniedAfterRestart.status,
+          },
+          grant: {
+            grantId: deviceGrant.grantId,
+            deviceLabel: deviceGrant.deviceLabel,
+            persistedBeforeRevoke: true,
+            revokedAcrossRestart: true,
+          },
+        });
+        return {
+          status: "passed",
+          metrics: {
+            ownedGatewayRestarts: 2,
+            basicOperatorStatus: basicOperatorAfterRestart.status,
+            persistedDeviceStatus: persistedDevice.status,
+            revokedDeviceStatus: deniedAfterRestart.status,
+          },
+          artifacts: emptyArtifacts({ diagnostics: [relativeToRun(context, outPath)] }),
+        };
+      },
+    );
   } finally {
     await stopVerificationStack(stack);
+  }
+}
+
+function assertDistinctOwnedRestart(beforePid, afterPid, label) {
+  if (
+    !Number.isSafeInteger(beforePid) ||
+    beforePid <= 0 ||
+    !Number.isSafeInteger(afterPid) ||
+    afterPid <= 0 ||
+    beforePid === afterPid
+  ) {
+    throw new Error(`auth-matrix ${label} did not replace the owned Gateway process (${beforePid} -> ${afterPid})`);
   }
 }

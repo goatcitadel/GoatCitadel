@@ -14,7 +14,7 @@ const updateSchema = z.object({
   primaryDomains: z.array(z.enum(WORK_PASSPORT_DOMAINS)).max(8),
 });
 
-export const workPassportRoutes: FastifyPluginAsync = async (fastify) => {
+export const workPassportRoutes: FastifyPluginAsync = async (fastify, _opts) => {
   const operatorOnly = withRouteAccess(fastify, "operator");
 
   fastify.get("/api/v1/work-passport/baseline", operatorOnly, async (request, reply) => {

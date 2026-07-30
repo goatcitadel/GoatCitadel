@@ -8,6 +8,9 @@ import { __resetFormDirtyRegistryForTests } from "./library/use-form-dirty";
 const mocks = vi.hoisted(() => ({
   fetchSettings: vi.fn(async () => ({
     revision: 41,
+    features: {
+      connectorDiagnosticsV1Enabled: true,
+    },
     auth: {
       mode: "none",
       allowLoopbackBypass: true,
@@ -1114,6 +1117,17 @@ function renderPage(section = "providers", navigate = vi.fn()): ReactTestRendere
   );
 }
 
+function collectRegionLandmarkNames(root: ReactTestInstance): string[] {
+  return root
+    .findAll((node) => node.props?.role === "region")
+    .map((node) =>
+      String(node.props["aria-label"] ?? "")
+        .trim()
+        .replace(/\s+/g, " "),
+    )
+    .filter(Boolean);
+}
+
 function findButton(root: ReactTestInstance, label: string): ReactTestInstance {
   const match = root.findAll((node) => node.type === "button" && collectText(node).includes(label))[0];
   if (!match) {
@@ -1184,6 +1198,9 @@ function findLoopbackCheckbox(root: ReactTestInstance): ReactTestInstance {
 function mockSettingsLoopback(allowLoopbackBypass: boolean) {
   mocks.fetchSettings.mockResolvedValueOnce({
     revision: 41,
+    features: {
+      connectorDiagnosticsV1Enabled: true,
+    },
     auth: {
       mode: "none",
       allowLoopbackBypass,
@@ -1311,6 +1328,9 @@ beforeEach(async () => {
   vi.clearAllMocks();
   mocks.fetchSettings.mockResolvedValue({
     revision: 41,
+    features: {
+      connectorDiagnosticsV1Enabled: true,
+    },
     auth: {
       mode: "none",
       allowLoopbackBypass: true,
@@ -1898,6 +1918,11 @@ describe("SettingsNativePage permissions", () => {
     expect(text).toContain("MCP");
     expect(text).toContain("Legacy compatibility contexts");
     expect(text).toContain("not separate Mission Control surfaces");
+    const regionNames = collectRegionLandmarkNames(renderer!.root);
+    expect(regionNames).toEqual(
+      expect.arrayContaining(["Safe tool patterns", "Safe policy details", "Effective primary policy contexts"]),
+    );
+    expect(new Set(regionNames.map((name) => name.toLocaleLowerCase("en-US"))).size).toBe(regionNames.length);
     expect(activationLabels.some((label) => label.includes("use for") && label.includes("chat"))).toBe(true);
     expect(activationLabels.some((label) => label.includes("use for") && label.includes("direct tools"))).toBe(true);
     expect(activationLabels.some((label) => label.includes("use for") && label.includes("mcp"))).toBe(true);

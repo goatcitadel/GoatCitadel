@@ -581,6 +581,12 @@ describe("MemoryRoutePage", () => {
     );
 
     expect(markup).toContain("Memory items");
+    const searchControl = markup.match(
+      /<label[^>]*for="([^"]+)"[^>]*><span[^>]*>Search memory<\/span><input id="([^"]+)"[^>]*type="search"[^>]*\/><\/label>/u,
+    );
+    expect(searchControl).not.toBeNull();
+    expect(searchControl?.[1]).toBe(searchControl?.[2]);
+    expect(searchControl?.[0]).not.toContain("aria-label=");
     expect(markup).toContain("Memory model");
     expect(markup).toContain("Working");
     expect(markup).toContain("Episodic");
@@ -593,6 +599,10 @@ describe("MemoryRoutePage", () => {
     expect(markup).toContain("Workspace");
     expect(markup).toContain("default");
     expect(markup).not.toContain("workspace-b");
+    expect(markup).toContain('<dl class="mc-next-memory-provenance-list">');
+    const provenanceMarkup = markup.match(/<dl class="mc-next-memory-provenance-list">.*?<\/dl>/u)?.[0] ?? "";
+    expect(provenanceMarkup).not.toContain('role="presentation"');
+    expect(provenanceMarkup).toMatch(/<dt>Namespace<\/dt><dd><span[^>]*aria-hidden="true"[^>]*> · <\/span>/u);
     expect(markup).toContain("release checklist, verification cadence");
     expect(markup).toContain("Lifecycle");
     expect(markup).toContain("Run maintenance now");

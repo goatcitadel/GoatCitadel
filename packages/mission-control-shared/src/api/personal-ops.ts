@@ -40,10 +40,10 @@ export async function listNoteRevisions(
   );
 }
 
-export async function archiveNote(noteId: string): Promise<NoteRecord> {
+export async function archiveNote(noteId: string, workspaceId?: string): Promise<NoteRecord> {
   return request<NoteRecord>(`/api/v1/notes/${encodeURIComponent(noteId)}/archive`, {
     method: "POST",
-    body: JSON.stringify({}),
+    body: JSON.stringify(workspaceId ? { workspaceId } : {}),
   });
 }
 

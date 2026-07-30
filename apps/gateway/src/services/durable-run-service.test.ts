@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import {
   NotFoundError,
@@ -7,6 +8,7 @@ import {
 } from "@goatcitadel/contracts";
 import type { ServiceContext } from "./service-context.js";
 import {
+  buildDurableLocalProcessLeaseOwnerId,
   computeDurableBaselineDrift,
   DurableRunService,
   DurableWorkerInterruptionError,
@@ -409,6 +411,283 @@ describe("DurableRunService", () => {
     expect(runs.get("run-1")?.lastError).toBeUndefined();
     expect(checkpoints.map((item) => item.checkpointKind)).toContain("run_started");
     expect(timeline.map((item) => item.eventType)).toContain("run_started");
+  });
+
+  it("reclaims a fresh same-host lease only after its exact local process is confirmed dead", async () => {
+    const leaseOwnerId = buildDurableLocalProcessLeaseOwnerId({ pid: 987_654, nonce: randomUUID() });
+    const run = {
+      ...createRun("run-dead-local-owner", "running", "connector.delivery"),
+      leaseOwnerId,
+      leaseHeartbeatAt: "2026-07-30T00:00:00.000Z",
+      leaseExpiresAt: "2099-07-30T00:02:00.000Z",
+    };
+    const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const timeline: Array<{ runId: string; eventType: string }> = [];
+    const backgroundTasks = new Set<Promise<void>>();
+    const executeWorkflow = vi.fn(async (claimed: DurableRunRecord) => {
+      updateRun(runs, claimed.runId, { status: "completed", clearLease: true });
+    });
+    const lifecycle = new SharedHostLifecycleService({ enabled: false });
+    const service = new DurableRunService(createContext(runs, [], timeline) as unknown as ServiceContext, {
+      backgroundTasks,
+      sharedHostLifecycle: lifecycle,
+      isLocalProcessAlive: vi.fn(() => false),
+      workflowRegistry: {
+        executeWorkflow,
+        isWorkflowRecoverable: () => ({ recoverable: true }),
+        markWorkflowUnrecoverable: vi.fn(),
+      },
+    });
+
+    service.startWorker();
+    await Promise.all([...backgroundTasks]);
+    service.stopWorker();
+
+    expect(executeWorkflow).toHaveBeenCalledTimes(1);
+    expect(runs.get(run.runId)?.status).toBe("completed");
+    expect(timeline.map((event) => event.eventType)).toEqual(
+      expect.arrayContaining(["run_incomplete_worker_exit", "run_reclaimed", "run_started"]),
+    );
+  });
+
+  it("finalizes an unrecoverable fresh same-host lease after its exact local process is confirmed dead", async () => {
+    const leaseOwnerId = buildDurableLocalProcessLeaseOwnerId({ pid: 987_655, nonce: randomUUID() });
+    const run = {
+      ...createRun("run-dead-local-unrecoverable", "running", "connector.delivery"),
+      leaseOwnerId,
+      leaseHeartbeatAt: "2026-07-30T00:00:00.000Z",
+      leaseExpiresAt: "2099-07-30T00:02:00.000Z",
+    };
+    const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const timeline: Array<{ runId: string; eventType: string }> = [];
+    const backgroundTasks = new Set<Promise<void>>();
+    const markWorkflowUnrecoverable = vi.fn(async () => undefined);
+    const service = new DurableRunService(createContext(runs, [], timeline) as unknown as ServiceContext, {
+      backgroundTasks,
+      sharedHostLifecycle: new SharedHostLifecycleService({ enabled: false }),
+      isLocalProcessAlive: vi.fn(() => false),
+      workflowRegistry: {
+        executeWorkflow: vi.fn(),
+        isWorkflowRecoverable: () => ({ recoverable: false, reason: "retained output forbids replay" }),
+        markWorkflowUnrecoverable,
+      },
+    });
+
+    service.startWorker();
+    await Promise.all([...backgroundTasks]);
+    service.stopWorker();
+
+    expect(runs.get(run.runId)).toMatchObject({
+      status: "failed",
+      leaseOwnerId: undefined,
+      lastError: "retained output forbids replay",
+    });
+    expect(markWorkflowUnrecoverable).toHaveBeenCalledTimes(1);
+    expect(timeline.map((event) => event.eventType)).toEqual(
+      expect.arrayContaining(["run_incomplete_worker_exit", "run_failed"]),
+    );
+  });
+
+  it("fails closed instead of replacing conflicting runtime authority on a dead admitted Chat owner", async () => {
+    const baseFixture = createAdmittedChatRuntimeFixture({
+      runId: "run-dead-local-conflicting-authority",
+      status: "running",
+    });
+    const conflictingAuthority = { material: { transitionKind: "waiting" }, materialSha256: "f".repeat(64) };
+    const run = {
+      ...baseFixture.run,
+      metadata: {
+        ...baseFixture.run.metadata,
+        chatTurnRuntimeAuthority: conflictingAuthority,
+        waitForEvent: null,
+      },
+      leaseOwnerId: buildDurableLocalProcessLeaseOwnerId({ pid: 987_655, nonce: randomUUID() }),
+      leaseHeartbeatAt: "2026-07-30T00:00:00.000Z",
+      leaseExpiresAt: "2099-07-30T00:02:00.000Z",
+    };
+    const fixture = { ...baseFixture, run };
+    const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const backgroundTasks = new Set<Promise<void>>();
+    const markWorkflowUnrecoverable = vi.fn(async () => undefined);
+    const context = createContext(runs, [], []);
+    installAdmittedChatRuntimeFixture(context, fixture);
+    const service = new DurableRunService(context as unknown as ServiceContext, {
+      backgroundTasks,
+      sharedHostLifecycle: new SharedHostLifecycleService({ enabled: false }),
+      isLocalProcessAlive: vi.fn(() => false),
+      workflowRegistry: {
+        executeWorkflow: vi.fn(),
+        isWorkflowRecoverable: () => ({ recoverable: false, reason: "retained output forbids replay" }),
+        markWorkflowUnrecoverable,
+      },
+    });
+
+    service.startWorker();
+    await Promise.all([...backgroundTasks]);
+    service.stopWorker();
+
+    expect(runs.get(run.runId)).toMatchObject({
+      status: "running",
+      metadata: { chatTurnRuntimeAuthority: conflictingAuthority, waitForEvent: null },
+    });
+    expect(markWorkflowUnrecoverable).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "current process",
+      leaseOwnerId: buildDurableLocalProcessLeaseOwnerId({ pid: process.pid, nonce: randomUUID() }),
+      isAlive: false,
+      sharedHost: false,
+    },
+    {
+      name: "live same-host process",
+      leaseOwnerId: buildDurableLocalProcessLeaseOwnerId({ pid: 987_656, nonce: randomUUID() }),
+      isAlive: true,
+      sharedHost: false,
+    },
+    { name: "legacy owner", leaseOwnerId: "worker-old", isAlive: false, sharedHost: false },
+    {
+      name: "remote-host owner",
+      leaseOwnerId: buildDurableLocalProcessLeaseOwnerId({
+        hostFingerprint: "f".repeat(16),
+        pid: 987_657,
+        nonce: randomUUID(),
+      }),
+      isAlive: false,
+      sharedHost: false,
+    },
+    {
+      name: "shared-host mode",
+      leaseOwnerId: buildDurableLocalProcessLeaseOwnerId({ pid: 987_658, nonce: randomUUID() }),
+      isAlive: false,
+      sharedHost: true,
+    },
+  ])("leaves a fresh $name lease untouched until database-clock expiry", async (fixture) => {
+    const run = {
+      ...createRun(`run-${fixture.name}`, "running", "connector.delivery"),
+      leaseOwnerId: fixture.leaseOwnerId,
+      leaseHeartbeatAt: "2026-07-30T00:00:00.000Z",
+      leaseExpiresAt: "2099-07-30T00:02:00.000Z",
+    };
+    const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const backgroundTasks = new Set<Promise<void>>();
+    const executeWorkflow = vi.fn();
+    const lifecycle = new SharedHostLifecycleService({ enabled: fixture.sharedHost });
+    lifecycle.markAccepting();
+    const service = new DurableRunService(createContext(runs, [], []) as unknown as ServiceContext, {
+      backgroundTasks,
+      sharedHostLifecycle: lifecycle,
+      isLocalProcessAlive: vi.fn(() => fixture.isAlive),
+      workflowRegistry: {
+        executeWorkflow,
+        isWorkflowRecoverable: () => ({ recoverable: true }),
+        markWorkflowUnrecoverable: vi.fn(),
+      },
+    });
+
+    service.startWorker();
+    await Promise.all([...backgroundTasks]);
+    service.stopWorker();
+
+    expect(executeWorkflow).not.toHaveBeenCalled();
+    expect(runs.get(run.runId)).toMatchObject({ status: "running", leaseOwnerId: fixture.leaseOwnerId });
+  });
+
+  it("loses the fresh-lease recovery race when exact owner fencing no longer matches", async () => {
+    const leaseOwnerId = buildDurableLocalProcessLeaseOwnerId({ pid: 987_659, nonce: randomUUID() });
+    const run = {
+      ...createRun("run-dead-owner-race", "running", "connector.delivery"),
+      leaseOwnerId,
+      leaseHeartbeatAt: "2026-07-30T00:00:00.000Z",
+      leaseExpiresAt: "2099-07-30T00:02:00.000Z",
+    };
+    const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const backgroundTasks = new Set<Promise<void>>();
+    const context = createContext(runs, [], []);
+    const lockFreshActiveLeaseForUpdate = vi.fn(() => undefined);
+    Object.assign(context.storage.durableRuns, { lockFreshActiveLeaseForUpdate });
+    const executeWorkflow = vi.fn();
+    const service = new DurableRunService(context as unknown as ServiceContext, {
+      backgroundTasks,
+      sharedHostLifecycle: new SharedHostLifecycleService({ enabled: false }),
+      isLocalProcessAlive: vi.fn(() => false),
+      workflowRegistry: {
+        executeWorkflow,
+        isWorkflowRecoverable: () => ({ recoverable: true }),
+        markWorkflowUnrecoverable: vi.fn(),
+      },
+    });
+
+    service.startWorker();
+    await Promise.all([...backgroundTasks]);
+    service.stopWorker();
+
+    expect(lockFreshActiveLeaseForUpdate).toHaveBeenCalledWith(run.runId, leaseOwnerId);
+    expect(executeWorkflow).not.toHaveBeenCalled();
+    expect(runs.get(run.runId)).toMatchObject({ status: "running", leaseOwnerId });
+  });
+
+  it("isolates one terminal Chat reconciliation failure and continues the shared queue", async () => {
+    const first = createRun("run-terminal-reconcile-poison", "queued", "connector.delivery");
+    const second = createRun("run-terminal-reconcile-next", "queued", "connector.delivery");
+    const runs = new Map<string, DurableRunRecord>([
+      [first.runId, first],
+      [second.runId, second],
+    ]);
+    const backgroundTasks = new Set<Promise<void>>();
+    const logger: DurableRunServiceLogger = {
+      info: vi.fn(),
+      debug: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    const publishRealtime = vi.fn();
+    const context = createContext(runs, [], [], { logger, publishRealtime });
+    const executeWorkflow = vi.fn(async (run: DurableRunRecord) => {
+      const terminal = createAdmittedChatRuntimeFixture({ runId: run.runId, status: "completed" }).run;
+      runs.set(run.runId, terminal);
+    });
+    const service = new DurableRunService(context as unknown as ServiceContext, {
+      backgroundTasks,
+      workflowRegistry: {
+        executeWorkflow,
+        isWorkflowRecoverable: () => ({ recoverable: true }),
+        markWorkflowUnrecoverable: vi.fn(),
+      },
+    });
+    const reconcile = vi.spyOn(service, "reconcileGeneralChatPostCommit").mockImplementation(async (runId: string) => {
+      if (runId === first.runId) {
+        throw new Error("UNIQUE constraint failed: durable_run_events.run_id, durable_run_events.sequence");
+      }
+      return true;
+    });
+
+    try {
+      service.startWorker();
+      await Promise.all([...backgroundTasks]);
+
+      expect(executeWorkflow.mock.calls.map(([run]) => run.runId)).toEqual([first.runId, second.runId]);
+      expect(reconcile).toHaveBeenCalledWith(first.runId);
+      expect(reconcile).toHaveBeenCalledWith(second.runId);
+      expect(runs.get(first.runId)?.status).toBe("completed");
+      expect(runs.get(second.runId)?.status).toBe("completed");
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId: first.runId,
+          error: expect.stringContaining("durable_run_events.run_id"),
+        }),
+        "durable run recovery failed; continuing with other runs",
+      );
+      expect(publishRealtime).not.toHaveBeenCalledWith(
+        "system",
+        "durable",
+        expect.objectContaining({ type: "durable_worker_background_failure" }),
+        expect.anything(),
+      );
+    } finally {
+      service.stopWorker();
+    }
   });
 
   it("does not claim queued worker work after shared-host pause closes admission", async () => {
@@ -904,6 +1183,390 @@ describe("DurableRunService", () => {
 
     expect(await service.reconcileGeneralChatPostCommit(run.runId)).toBe(true);
     expect(onGeneralChatPostCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it("expires a stalled general Chat post-commit owner so a later attempt can reconcile", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-07-11T00:00:00.000Z"));
+      const fixture = createAdmittedChatRuntimeFixture({
+        runId: "run-general-post-commit-owner-expiry",
+        status: "completed",
+        generationId: "generation-general-post-commit-owner-expiry",
+        traceStatus: "completed",
+      });
+      const runs = new Map<string, DurableRunRecord>([[fixture.run.runId, fixture.run]]);
+      const context = createContext(runs, [], []);
+      installAdmittedChatRuntimeFixture(context, fixture);
+      let attempt = 0;
+      const onGeneralChatPostCommit = vi.fn(async (_run: DurableRunRecord, progress: GeneralChatPostCommitProgress) => {
+        attempt += 1;
+        if (attempt === 1) {
+          return new Promise<Record<string, unknown>>(() => undefined);
+        }
+        for (const effect of GENERAL_CHAT_POST_COMMIT_EFFECTS) {
+          progress.runEffect(effect, () => undefined);
+        }
+        return { status: "completed" };
+      });
+      const service = new DurableRunService(context as unknown as ServiceContext, {
+        backgroundTasks: new Set(),
+        workflowRegistry: {
+          executeWorkflow: vi.fn(),
+          isWorkflowRecoverable: () => ({ recoverable: true }),
+          markWorkflowUnrecoverable: vi.fn(),
+        },
+        onGeneralChatPostCommit,
+      });
+
+      const stalled = service.reconcileGeneralChatPostCommit(fixture.run.runId);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onGeneralChatPostCommit).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(stalled).resolves.toBe(false);
+      await expect(service.reconcileGeneralChatPostCommit(fixture.run.runId)).resolves.toBe(true);
+
+      expect(onGeneralChatPostCommit).toHaveBeenCalledTimes(2);
+      expect(runs.get(fixture.run.runId)?.metadata).not.toHaveProperty("generalChatPostCommitPending");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("continues the pending general Chat post-commit sweep while another run is stalled", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-07-11T00:00:00.000Z"));
+      const stalledRun = {
+        ...createRun("run-general-post-commit-sweep-a-stalled", "completed", "chat.turn.execute"),
+        metadata: { generalChatPostCommitPending: { version: 1, requestedAt: "2026-07-11T00:00:00.000Z" } },
+      };
+      const healthyRun = {
+        ...createRun("run-general-post-commit-sweep-b-healthy", "completed", "chat.turn.execute"),
+        metadata: { generalChatPostCommitPending: { version: 1, requestedAt: "2026-07-11T00:00:00.000Z" } },
+      };
+      const runs = new Map<string, DurableRunRecord>([
+        [stalledRun.runId, stalledRun],
+        [healthyRun.runId, healthyRun],
+      ]);
+      const service = new DurableRunService(createContext(runs, [], []) as unknown as ServiceContext, {
+        backgroundTasks: new Set(),
+        workflowRegistry: {
+          executeWorkflow: vi.fn(),
+          isWorkflowRecoverable: () => ({ recoverable: true }),
+          markWorkflowUnrecoverable: vi.fn(),
+        },
+        onGeneralChatPostCommit: vi.fn(async () => ({})),
+      });
+      let healthyCompleted = false;
+      const reconcile = vi.spyOn(service, "reconcileGeneralChatPostCommit").mockImplementation(async (runId) => {
+        if (runId === stalledRun.runId) {
+          return new Promise<boolean>(() => undefined);
+        }
+        healthyCompleted = true;
+        return true;
+      });
+
+      const sweep = (
+        service as unknown as { reconcilePendingGeneralChatPostCommits(): Promise<void> }
+      ).reconcilePendingGeneralChatPostCommits();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(reconcile).toHaveBeenCalledWith(stalledRun.runId);
+      expect(reconcile).toHaveBeenCalledWith(healthyRun.runId);
+      expect(healthyCompleted).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(sweep).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let a stale in-flight ownership generation clear its replacement", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-07-11T00:00:00.000Z"));
+      const fixture = createAdmittedChatRuntimeFixture({
+        runId: "run-general-post-commit-owner-generation",
+        status: "completed",
+        generationId: "generation-general-post-commit-owner-generation",
+        traceStatus: "completed",
+      });
+      const runs = new Map<string, DurableRunRecord>([[fixture.run.runId, fixture.run]]);
+      const context = createContext(runs, [], []);
+      installAdmittedChatRuntimeFixture(context, fixture);
+      const attempts: Array<{
+        progress: GeneralChatPostCommitProgress;
+        resolve: (resolution: Record<string, unknown>) => void;
+      }> = [];
+      const onGeneralChatPostCommit = vi.fn(
+        (_run: DurableRunRecord, progress: GeneralChatPostCommitProgress) =>
+          new Promise<Record<string, unknown>>((resolve) => {
+            attempts.push({ progress, resolve });
+          }),
+      );
+      const service = new DurableRunService(context as unknown as ServiceContext, {
+        backgroundTasks: new Set(),
+        workflowRegistry: {
+          executeWorkflow: vi.fn(),
+          isWorkflowRecoverable: () => ({ recoverable: true }),
+          markWorkflowUnrecoverable: vi.fn(),
+        },
+        onGeneralChatPostCommit,
+      });
+
+      const stale = service.reconcileGeneralChatPostCommit(fixture.run.runId);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(stale).resolves.toBe(false);
+
+      const current = service.reconcileGeneralChatPostCommit(fixture.run.runId);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onGeneralChatPostCommit).toHaveBeenCalledTimes(2);
+
+      const staleEffect = vi.fn();
+      expect(attempts[0]!.progress.runEffect("agent_end", staleEffect)).toBe(false);
+      expect(staleEffect).not.toHaveBeenCalled();
+      attempts[0]!.resolve({ status: "stale" });
+      await vi.advanceTimersByTimeAsync(0);
+      const coalesced = service.reconcileGeneralChatPostCommit(fixture.run.runId);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onGeneralChatPostCommit).toHaveBeenCalledTimes(2);
+
+      for (const effect of GENERAL_CHAT_POST_COMMIT_EFFECTS) {
+        attempts[1]!.progress.runEffect(effect, () => undefined);
+      }
+      attempts[1]!.resolve({ status: "completed" });
+
+      await expect(Promise.all([current, coalesced])).resolves.toEqual([true, true]);
+      expect(runs.get(fixture.run.runId)?.metadata).not.toHaveProperty("generalChatPostCommitPending");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("wakes a settled ordinary admitted-v2 Chat wait through checkpoint-anchored authority", async () => {
+    const fixture = createAdmittedChatRuntimeFixture({
+      runId: "run-ordinary-admitted-wake",
+      status: "waiting",
+      generationId: "generation-ordinary-admitted-wake",
+      traceStatus: "waiting_for_approval",
+    });
+    const runs = new Map<string, DurableRunRecord>([[fixture.run.runId, fixture.run]]);
+    const context = createContext(runs, [], []);
+    installAdmittedChatRuntimeFixture(context, fixture);
+    const service = new DurableRunService(context as unknown as ServiceContext, {
+      backgroundTasks: new Set(),
+      workflowRegistry: {
+        executeWorkflow: vi.fn(),
+        isWorkflowRecoverable: () => ({ recoverable: true }),
+        markWorkflowUnrecoverable: vi.fn(),
+      },
+      onGeneralChatPostCommit: async (_run, progress) => {
+        for (const effect of GENERAL_CHAT_POST_COMMIT_EFFECTS) progress.runEffect(effect, () => undefined);
+        return { status: "waiting_for_approval" };
+      },
+    });
+    const waitForEvent = fixture.run.metadata?.waitForEvent as {
+      eventKey: string;
+      correlationId: string;
+    };
+
+    expect(service.wakeDurableRun(fixture.run.runId, waitForEvent)).toMatchObject({
+      outcome: "failed",
+      detail: expect.stringContaining("waiting generation settles"),
+    });
+    expect(runs.get(fixture.run.runId)?.status).toBe("waiting");
+
+    await expect(service.reconcileGeneralChatPostCommit(fixture.run.runId)).resolves.toBe(true);
+    expect(service.wakeDurableRun(fixture.run.runId, waitForEvent)).toMatchObject({
+      outcome: "woke",
+      run: { status: "queued" },
+    });
+    expect(runs.get(fixture.run.runId)?.metadata).not.toHaveProperty("waitForEvent");
+    expect(runs.get(fixture.run.runId)?.metadata).not.toHaveProperty("chatTurnRuntimeAuthority");
+  });
+
+  it.each(["missing", "tampered-checkpoint"] as const)(
+    "fails closed when ordinary admitted-v2 waiting authority is %s",
+    async (failureKind) => {
+      const fixture = createAdmittedChatRuntimeFixture({
+        runId: `run-ordinary-admitted-${failureKind}`,
+        status: "waiting",
+        generationId: `generation-ordinary-admitted-${failureKind}`,
+        traceStatus: "waiting_for_approval",
+      });
+      if (failureKind === "missing") {
+        const metadata = { ...(fixture.run.metadata ?? {}) };
+        delete metadata.chatTurnRuntimeAuthority;
+        fixture.run.metadata = metadata;
+      } else {
+        fixture.checkpointState = {
+          ...(fixture.checkpointState ?? {}),
+          chatTurnRuntimeAuthority: {
+            ...((fixture.checkpointState?.chatTurnRuntimeAuthority as Record<string, unknown>) ?? {}),
+            materialSha256: "0".repeat(64),
+          },
+        };
+      }
+      const runs = new Map<string, DurableRunRecord>([[fixture.run.runId, fixture.run]]);
+      const context = createContext(runs, [], []);
+      installAdmittedChatRuntimeFixture(context, fixture);
+      const service = new DurableRunService(context as unknown as ServiceContext, {
+        backgroundTasks: new Set(),
+        workflowRegistry: {
+          executeWorkflow: vi.fn(),
+          isWorkflowRecoverable: () => ({ recoverable: true }),
+          markWorkflowUnrecoverable: vi.fn(),
+        },
+        onGeneralChatPostCommit: async (_run, progress) => {
+          for (const effect of GENERAL_CHAT_POST_COMMIT_EFFECTS) progress.runEffect(effect, () => undefined);
+          return { status: "waiting_for_approval" };
+        },
+      });
+      const waitForEvent = fixture.run.metadata?.waitForEvent as {
+        eventKey: string;
+        correlationId: string;
+      };
+      expect(service.wakeDurableRun(fixture.run.runId, waitForEvent)).toMatchObject({ outcome: "failed" });
+      expect(runs.get(fixture.run.runId)?.status).toBe("waiting");
+    },
+  );
+
+  it.each([
+    { durableStatus: "completed" as const, traceStatus: "completed" as const },
+    { durableStatus: "failed" as const, traceStatus: "failed" as const },
+    { durableStatus: "cancelled" as const, traceStatus: "cancelled" as const },
+  ])(
+    "holds terminal delivery through delayed $durableStatus post-commit settlement and releases admission",
+    async ({ durableStatus, traceStatus }) => {
+      const fixture = createAdmittedChatRuntimeFixture({
+        runId: `run-terminal-delivery-${durableStatus}`,
+        status: durableStatus,
+        generationId: `generation-terminal-delivery-${durableStatus}`,
+        traceStatus,
+      });
+      const runs = new Map<string, DurableRunRecord>([[fixture.run.runId, fixture.run]]);
+      const context = createContext(runs, [], []);
+      installAdmittedChatRuntimeFixture(context, fixture);
+      let releasePostCommit!: () => void;
+      const postCommitGate = new Promise<void>((resolve) => {
+        releasePostCommit = resolve;
+      });
+      const onGeneralChatPostCommit = vi.fn(async (_run: DurableRunRecord, progress: GeneralChatPostCommitProgress) => {
+        await postCommitGate;
+        for (const effect of GENERAL_CHAT_POST_COMMIT_EFFECTS) progress.runEffect(effect, () => undefined);
+        return { status: durableStatus };
+      });
+      const service = new DurableRunService(context as unknown as ServiceContext, {
+        backgroundTasks: new Set(),
+        workflowRegistry: {
+          executeWorkflow: vi.fn(),
+          isWorkflowRecoverable: () => ({ recoverable: true }),
+          markWorkflowUnrecoverable: vi.fn(),
+        },
+        onGeneralChatPostCommit,
+      });
+
+      const pending = service.awaitTerminalChatAdmissionRelease({
+        runId: fixture.run.runId,
+        sessionId: fixture.admission.sessionId,
+        turnId: fixture.admission.turnId,
+        timeoutMs: 1_000,
+      });
+      await vi.waitFor(() => expect(onGeneralChatPostCommit).toHaveBeenCalledOnce());
+      expect(fixture.admission.status).toBe("active");
+
+      releasePostCommit();
+
+      await expect(pending).resolves.toMatchObject({
+        recoveryOutcome: "released",
+        durableRunId: fixture.run.runId,
+        durableRunStatus: durableStatus,
+        admissionId: fixture.admission.admissionId,
+      });
+      expect(fixture.admission).toMatchObject({
+        status: durableStatus === "completed" ? "completed" : "cancelled",
+        terminalAuthorityKind: "durable_terminal",
+        terminalDurableRunId: fixture.run.runId,
+        terminalDurableRunStatus: durableStatus,
+      });
+    },
+  );
+
+  it("returns a bounded non-release outcome while canonical durable admission remains active", async () => {
+    const fixture = createAdmittedChatRuntimeFixture({
+      runId: "run-terminal-delivery-active",
+      status: "running",
+    });
+    const runs = new Map<string, DurableRunRecord>([[fixture.run.runId, fixture.run]]);
+    const context = createContext(runs, [], []);
+    installAdmittedChatRuntimeFixture(context, fixture);
+    const service = new DurableRunService(context as unknown as ServiceContext, {
+      backgroundTasks: new Set(),
+      workflowRegistry: {
+        executeWorkflow: vi.fn(),
+        isWorkflowRecoverable: () => ({ recoverable: true }),
+        markWorkflowUnrecoverable: vi.fn(),
+      },
+      onGeneralChatPostCommit: vi.fn(async () => ({})),
+    });
+
+    await expect(
+      service.awaitTerminalChatAdmissionRelease({
+        runId: fixture.run.runId,
+        sessionId: fixture.admission.sessionId,
+        turnId: fixture.admission.turnId,
+        timeoutMs: 10,
+      }),
+    ).resolves.toMatchObject({
+      recoveryOutcome: "not_terminal",
+      durableRunId: fixture.run.runId,
+      durableRunStatus: "running",
+      remainingBudgetMs: 0,
+    });
+    expect(fixture.admission.status).toBe("active");
+  });
+
+  it("bounds a stalled terminal post-commit reconciler and leaves admission active", async () => {
+    const fixture = createAdmittedChatRuntimeFixture({
+      runId: "run-terminal-delivery-stalled-post-commit",
+      status: "completed",
+      generationId: "generation-terminal-delivery-stalled-post-commit",
+      traceStatus: "completed",
+    });
+    const runs = new Map<string, DurableRunRecord>([[fixture.run.runId, fixture.run]]);
+    const context = createContext(runs, [], []);
+    installAdmittedChatRuntimeFixture(context, fixture);
+    const onGeneralChatPostCommit = vi.fn(() => new Promise<Record<string, unknown>>(() => undefined));
+    const service = new DurableRunService(context as unknown as ServiceContext, {
+      backgroundTasks: new Set(),
+      workflowRegistry: {
+        executeWorkflow: vi.fn(),
+        isWorkflowRecoverable: () => ({ recoverable: true }),
+        markWorkflowUnrecoverable: vi.fn(),
+      },
+      onGeneralChatPostCommit,
+    });
+
+    await expect(
+      service.awaitTerminalChatAdmissionRelease({
+        runId: fixture.run.runId,
+        sessionId: fixture.admission.sessionId,
+        turnId: fixture.admission.turnId,
+        timeoutMs: 10,
+      }),
+    ).resolves.toMatchObject({
+      recoveryOutcome: "reconciliation_pending",
+      durableRunId: fixture.run.runId,
+      durableRunStatus: "completed",
+      admissionStatus: "active",
+      remainingBudgetMs: 0,
+    });
+    expect(onGeneralChatPostCommit).toHaveBeenCalledOnce();
+    expect(fixture.admission.status).toBe("active");
   });
 
   it("boot-recovers a completed silent system heartbeat through terminal admission and occurrence handoff", async () => {
@@ -2467,7 +3130,7 @@ describe("DurableRunService", () => {
     );
   });
 
-  it("finalizes an admitted v2 Chat failure before projecting retry exhaustion to dead letter", async () => {
+  it("finalizes an admitted v2 Chat failure, releases admission, and admits the next turn", async () => {
     const admissionMaterialSha256 = "a".repeat(64);
     const run = {
       ...createRun("run-chat-retry-exhausted", "running", "chat.turn.execute"),
@@ -2514,17 +3177,44 @@ describe("DurableRunService", () => {
       actorId: "system:test",
       materialSha256: admissionMaterialSha256,
     } as Record<string, unknown>;
+    let activeAdmission: Record<string, unknown> | undefined = admission;
+    const closeTurnWrite = vi.fn(() => {
+      admission.status = "cancelled";
+      admission.terminalAuthorityKind = "durable_terminal";
+      admission.terminalDurableRunId = run.runId;
+      admission.terminalDurableRunStatus = "failed";
+      activeAdmission = undefined;
+      return admission;
+    });
+    const admit = vi.fn((input: { turnId: string; materialSha256: string }) => {
+      if (activeAdmission) throw new Error("An active turn already owns the session.");
+      activeAdmission = {
+        ...admission,
+        admissionId: "admission-chat-next",
+        status: "active",
+        turnId: input.turnId,
+        materialSha256: input.materialSha256,
+        terminalAuthorityKind: undefined,
+        terminalDurableRunId: undefined,
+        terminalDurableRunStatus: undefined,
+      };
+      return { disposition: "created" as const, admission: activeAdmission };
+    });
     Object.assign(context.storage, {
       sessionMutationAdmissions: {
+        admit,
         require: () => admission,
+        findDurableRunBinding: () => ({
+          admissionId: admission.admissionId,
+          sessionIncarnationId: admission.sessionIncarnationId,
+          workspaceId: admission.workspaceId,
+          sessionId: admission.sessionId,
+          turnId: admission.turnId,
+          durableRunId: run.runId,
+          createdAt: "2026-07-29T00:00:00.000Z",
+        }),
         settleTurnWriteAuthority: () => ({ disposition: "current", admission }),
-        closeTurnWrite: () => {
-          admission.status = "cancelled";
-          admission.terminalAuthorityKind = "durable_terminal";
-          admission.terminalDurableRunId = run.runId;
-          admission.terminalDurableRunStatus = "failed";
-          return admission;
-        },
+        closeTurnWrite,
       },
       chatSessionMeta: {
         get: () => ({ sessionId: "session-chat", workspaceId: "default", revision: 7, origin: "system" }),
@@ -2553,13 +3243,48 @@ describe("DurableRunService", () => {
     });
     expect(deadLetters.size).toBe(0);
 
-    expect(await service.reconcileGeneralChatPostCommit(run.runId)).toBe(true);
+    await expect(service.reconcileTerminalChatAdmission(admission as never)).resolves.toMatchObject({
+      recoveryOutcome: "released",
+      durableRunId: run.runId,
+      admissionId: admission.admissionId,
+      admissionStatus: "cancelled",
+    });
     expect(runs.get(run.runId)).toMatchObject({ status: "dead_lettered", attemptCount: 4 });
     expect(admission).toMatchObject({
       status: "cancelled",
       terminalAuthorityKind: "durable_terminal",
       terminalDurableRunStatus: "failed",
     });
+    expect(closeTurnWrite).toHaveBeenCalledOnce();
+    expect(closeTurnWrite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        admissionId: "admission-chat",
+        turnId: "turn-chat",
+        status: "cancelled",
+        correlationId: run.runId,
+      }),
+    );
+    const nextTurn = context.storage.sessionMutationAdmissions.admit({
+      workspaceId: "default",
+      sessionId: "session-chat",
+      expectedSessionIncarnationId: "incarnation-chat",
+      turnId: "turn-chat-next",
+      runtimeOwnerId: "runtime-chat-next",
+      admissionKind: "turn_write",
+      aggregateRevision: 7,
+      controllerGeneration: 2,
+      actorKind: "operator",
+      actorId: "operator-next",
+      operation: "chat_turn",
+      materialSha256: "b".repeat(64),
+      idempotencyKey: "admission-chat-next",
+      correlationId: "turn-chat-next",
+    });
+    expect(nextTurn).toMatchObject({
+      disposition: "created",
+      admission: { admissionId: "admission-chat-next", status: "active", turnId: "turn-chat-next" },
+    });
+    expect(admit).toHaveBeenCalledOnce();
     expect(deadLetters.size).toBe(1);
     expect(timeline.map((entry) => entry.eventType)).toEqual(
       expect.arrayContaining(["run_failed", "run_retry_budget_exhausted", "run_dead_lettered"]),
@@ -3226,6 +3951,9 @@ describe("DurableRunService", () => {
           traceStatus: "cancelled",
         },
       });
+      expect(runs.get(run.runId)?.metadata).not.toHaveProperty("waitForEvent");
+      expect(runs.get(run.runId)?.metadata).not.toHaveProperty("generalChatPostCommit");
+      expect(runs.get(run.runId)?.metadata).not.toHaveProperty("chatTurnAdmissionHandoff");
       expect(checkpoints).toContainEqual({ runId: run.runId, checkpointKind: "run_cancelled" });
       expect(lockOrder.slice(0, 2)).toEqual(["durable", "trace"]);
 
@@ -4403,6 +5131,10 @@ interface AdmittedChatRuntimeFixture {
   run: DurableRunRecord;
   admission: Record<string, unknown> & {
     admissionId: string;
+    sessionIncarnationId: string;
+    workspaceId: string;
+    sessionId: string;
+    turnId: string;
     status: "active" | "completed" | "cancelled";
   };
   checkpointKind?: "run_waiting" | "run_completed" | "run_failed" | "run_cancelled";
@@ -4602,12 +5334,24 @@ function installAdmittedChatRuntimeFixture(
         if (admissionId !== admission.admissionId) throw new Error(`Unknown admission ${admissionId}`);
         return admission;
       },
+      findDurableRunBinding: (identity: { admissionId: string; turnId: string }) =>
+        identity.admissionId === admission.admissionId && identity.turnId === admission.turnId
+          ? {
+              admissionId: admission.admissionId,
+              sessionIncarnationId: admission.sessionIncarnationId,
+              workspaceId: admission.workspaceId,
+              sessionId: admission.sessionId,
+              turnId: admission.turnId,
+              durableRunId: fixture.run.runId,
+              createdAt: fixture.run.createdAt,
+            }
+          : undefined,
       settleTurnWriteAuthority: () => ({ disposition: "current", admission }),
       closeTurnWrite: (input: { status: "completed" | "cancelled"; correlationId: string }) => {
         admission.status = input.status;
         admission.terminalAuthorityKind = "durable_terminal";
         admission.terminalDurableRunId = input.correlationId;
-        admission.terminalDurableRunStatus = input.status === "completed" ? "completed" : "cancelled";
+        admission.terminalDurableRunStatus = context.storage.durableRuns.getRun(input.correlationId).status;
         return admission;
       },
     },

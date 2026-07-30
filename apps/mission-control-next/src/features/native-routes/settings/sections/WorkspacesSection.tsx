@@ -423,9 +423,9 @@ export function WorkspacesSection({
           >
             <SettingsFilterBar
               options={[
-                { id: "all", label: "All" },
-                { id: "active", label: "Active" },
-                { id: "archived", label: "Archived" },
+                { id: "all", label: "All", ariaLabel: "All Citadels" },
+                { id: "active", label: "Active", ariaLabel: "Active Citadels" },
+                { id: "archived", label: "Archived", ariaLabel: "Archived Citadels" },
               ]}
               value={citadelView}
               onChange={(next) => {
@@ -544,7 +544,11 @@ export function WorkspacesSection({
                   </SettingsField>
                 </SettingsFieldGrid>
                 <SettingsButtonRow>
-                  <NativeButton variant="default" onClick={() => setActiveCitadelId?.(selectedCitadel.citadelId)}>
+                  <NativeButton
+                    variant="default"
+                    aria-label={`Make active Citadel ${selectedCitadel.name}`}
+                    onClick={() => setActiveCitadelId?.(selectedCitadel.citadelId)}
+                  >
                     <CheckCircle2 size={16} />
                     Make active
                   </NativeButton>
@@ -553,13 +557,18 @@ export function WorkspacesSection({
                     Save Citadel
                   </NativeButton>
                   {selectedCitadel.lifecycleStatus === "archived" ? (
-                    <NativeButton variant="secondary" onClick={() => void handleRestoreCitadel()}>
+                    <NativeButton
+                      variant="secondary"
+                      aria-label={`Restore Citadel ${selectedCitadel.name}`}
+                      onClick={() => void handleRestoreCitadel()}
+                    >
                       <RotateCcw size={16} />
                       Restore
                     </NativeButton>
                   ) : (
                     <NativeButton
                       variant="destructive"
+                      aria-label={`Archive Citadel ${selectedCitadel.name}`}
                       onClick={() =>
                         setPendingArchive({
                           kind: "citadel",
@@ -635,9 +644,9 @@ export function WorkspacesSection({
           >
             <SettingsFilterBar
               options={[
-                { id: "all", label: "All" },
-                { id: "active", label: "Active" },
-                { id: "archived", label: "Archived" },
+                { id: "all", label: "All", ariaLabel: "All workspaces" },
+                { id: "active", label: "Active", ariaLabel: "Active workspaces" },
+                { id: "archived", label: "Archived", ariaLabel: "Archived workspaces" },
               ]}
               value={view}
               onChange={(next) => {
@@ -724,18 +733,27 @@ export function WorkspacesSection({
                   <Save size={16} />
                   Save changes
                 </NativeButton>
-                <NativeButton variant="secondary" onClick={() => setActiveWorkspaceId(selectedWorkspace.workspaceId)}>
+                <NativeButton
+                  variant="secondary"
+                  aria-label={`Make active workspace ${selectedWorkspace.name}`}
+                  onClick={() => setActiveWorkspaceId(selectedWorkspace.workspaceId)}
+                >
                   <CheckCircle2 size={16} />
                   Make active
                 </NativeButton>
                 {selectedWorkspace.lifecycleStatus === "archived" ? (
-                  <NativeButton variant="secondary" onClick={() => void handleRestore()}>
+                  <NativeButton
+                    variant="secondary"
+                    aria-label={`Restore workspace ${selectedWorkspace.name}`}
+                    onClick={() => void handleRestore()}
+                  >
                     <RotateCcw size={16} />
                     Restore
                   </NativeButton>
                 ) : (
                   <NativeButton
                     variant="destructive"
+                    aria-label={`Archive workspace ${selectedWorkspace.name}`}
                     onClick={() =>
                       setPendingArchive({
                         kind: "workspace",
@@ -782,7 +800,7 @@ export function WorkspacesSection({
         pending={archiveBusy}
         title={`Archive ${pendingArchive?.kind === "citadel" ? "Citadel" : "workspace"}?`}
         message={`Archive ${pendingArchive?.label ?? "this item"}? It remains available from the archived view.`}
-        confirmLabel="Archive"
+        confirmLabel={pendingArchive?.kind === "citadel" ? "Confirm archive Citadel" : "Confirm archive workspace"}
         onCancel={() => setPendingArchive(null)}
         onConfirm={() => void handleConfirmArchive()}
       />

@@ -13,8 +13,44 @@ import { StreamIdleTimeoutError } from "./stream-idle-watchdog.js";
 import type { HooksService } from "./hooks-service.js";
 
 export const CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT = 3;
+export const CHAT_COMPLETION_MIN_SECONDARY_ATTEMPT_WINDOW_MS = 5_000;
 export { isAuthoritativeModelUsageAccountingError };
 const MAX_CHAT_COMPLETION_TIMEOUT_MS = 30 * 60_000;
+const CHAT_COMPLETION_FAILURE_CONTEXT = Symbol("goatcitadel.chat-completion-failure-context");
+
+export interface ChatCompletionFailureContext {
+  readonly deadlineAtMs: number | undefined;
+  readonly remainingBudgetMs: number | undefined;
+  readonly emittedOutput: boolean;
+  readonly failureClass: ProviderFailureClass;
+  readonly toolProtocolError: boolean;
+}
+
+type ChatCompletionFailureError = Error & {
+  [CHAT_COMPLETION_FAILURE_CONTEXT]?: ChatCompletionFailureContext;
+};
+
+export function attachChatCompletionFailureContext(
+  error: Error,
+  input: { deadlineAtMs: number | undefined; emittedOutput: boolean },
+): Error {
+  const context = Object.freeze({
+    deadlineAtMs: input.deadlineAtMs,
+    remainingBudgetMs: getRemainingChatCompletionBudgetMs(input.deadlineAtMs),
+    emittedOutput: input.emittedOutput,
+    failureClass: classifyProviderFailure(error),
+    toolProtocolError: shouldRetryToolProtocolError(error),
+  }) satisfies ChatCompletionFailureContext;
+  Object.defineProperty(error, CHAT_COMPLETION_FAILURE_CONTEXT, {
+    configurable: true,
+    value: context,
+  });
+  return error;
+}
+
+export function readChatCompletionFailureContext(error: unknown): ChatCompletionFailureContext | undefined {
+  return error instanceof Error ? (error as ChatCompletionFailureError)[CHAT_COMPLETION_FAILURE_CONTEXT] : undefined;
+}
 
 export function extractPromptFromMessages(messages: ChatCompletionRequest["messages"]): string {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -106,18 +142,53 @@ function countLeadingSystemMessages(messages: ChatCompletionRequest["messages"])
 
 export function shouldRetryToolProtocolError(error: Error): boolean {
   if (isAuthoritativeModelUsageAccountingError(error)) return false;
-  const message = error.message.toLowerCase();
+  const providerFailure = (
+    error as Error & {
+      providerFailure?: { code?: unknown; message?: unknown; type?: unknown };
+    }
+  ).providerFailure;
+  const nativeMarkers = [providerFailure?.code, providerFailure?.type]
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim().toLowerCase());
+  if (
+    nativeMarkers.some((marker) =>
+      /^(?:invalid_(?:tool|function)_(?:call|arguments|parameters|choice)|(?:tool|function)_(?:call_)?validation_error|tool_protocol_error)$/u.test(
+        marker,
+      ),
+    )
+  ) {
+    return true;
+  }
+
+  const message = [error.message, providerFailure?.message]
+    .filter((value): value is string => typeof value === "string")
+    .join(" ")
+    .toLowerCase();
+  const schemaFailureAfterSubject =
+    /\b(?:function|tool)[_\s.-]?(?:name|arguments|parameters|schema|choice|output|result)\b.{0,80}\b(?:invalid|malformed|missing|required|must|unexpected|unsupported|not (?:found|provided)|not valid)\b/u;
+  const schemaFailureBeforeSubject =
+    /\b(?:invalid|malformed|missing|required|unexpected|unsupported)\b.{0,80}\b(?:function|tool)[_\s.-]?(?:name|arguments|parameters|schema|choice|output|result)\b/u;
+  const protocolFieldFailure =
+    /\b(?:tool[_\s.-]?choice|tool[_\s.-]?call[_\s.-]?id|tool[_\s.-]?use[_\s.-]?id|reasoning_content|tools\s*\[\d+\]|tool_calls\s*\[\d+\])\b.{0,80}\b(?:invalid|malformed|missing|required|must|unexpected|unsupported|not (?:found|provided)|not valid)\b/u;
+  const reverseProtocolFieldFailure =
+    /\b(?:invalid|malformed|missing|required|unexpected|unsupported)\b.{0,80}\b(?:tool[_\s.-]?choice|tool[_\s.-]?call[_\s.-]?id|tool[_\s.-]?use[_\s.-]?id|reasoning_content|tools\s*\[\d+\]|tool_calls\s*\[\d+\])\b/u;
+  const explicitlyInvalidCall = /\b(?:invalid|malformed)\s+(?:tool|function)[_\s.-]?call\b/u;
   return (
-    message.includes("invalid_request_error") ||
-    message.includes("function name is invalid") ||
-    message.includes("reasoning_content is missing") ||
-    message.includes("tool call") ||
-    message.includes("tool_calls")
+    schemaFailureAfterSubject.test(message) ||
+    schemaFailureBeforeSubject.test(message) ||
+    protocolFieldFailure.test(message) ||
+    reverseProtocolFieldFailure.test(message) ||
+    explicitlyInvalidCall.test(message)
   );
 }
 
 export function shouldRetryTransientProviderError(error: Error): boolean {
   if (isAuthoritativeModelUsageAccountingError(error)) return false;
+  if (error instanceof StreamIdleTimeoutError) return true;
+  const providerFailure = (error as Error & { providerFailure?: { code?: unknown } }).providerFailure;
+  if (providerFailure?.code === "server_error") {
+    return true;
+  }
   const message = error.message.toLowerCase();
   const statusMatch = error.message.match(/\((\d{3})(?:\s|[)])?/);
   const status = statusMatch ? Number(statusMatch[1]) : undefined;
@@ -228,16 +299,52 @@ export function buildProviderRetryCooldownExhaustedError(
 
 export async function delayChatCompletionRetry(
   deadline: number | undefined,
-  timeoutMs: number | undefined,
+  _timeoutMs: number | undefined,
   retryIndex: number,
-): Promise<void> {
-  const delayMs = retryIndex === 0 ? 250 : 750;
-  if (deadline !== undefined && Date.now() + delayMs >= deadline) {
-    throw buildChatCompletionTimeoutError(timeoutMs);
+  signal?: AbortSignal,
+): Promise<boolean> {
+  if (signal?.aborted) {
+    return false;
   }
-  await new Promise((resolve) => {
-    setTimeout(resolve, delayMs);
+  const delayMs = chatCompletionRetryDelayMs(retryIndex);
+  if (!hasChatCompletionSecondaryAttemptBudget(deadline, retryIndex)) {
+    return false;
+  }
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, delayMs);
+    signal?.addEventListener("abort", finish, { once: true });
+    if (signal?.aborted) {
+      finish();
+    }
   });
+  return (
+    !signal?.aborted &&
+    (deadline === undefined || deadline - Date.now() >= CHAT_COMPLETION_MIN_SECONDARY_ATTEMPT_WINDOW_MS)
+  );
+}
+
+export function getRemainingChatCompletionBudgetMs(deadline: number | undefined): number | undefined {
+  return deadline === undefined ? undefined : Math.max(0, deadline - Date.now());
+}
+
+export function hasChatCompletionSecondaryAttemptBudget(deadline: number | undefined, retryIndex: number): boolean {
+  const remainingBudgetMs = getRemainingChatCompletionBudgetMs(deadline);
+  return (
+    remainingBudgetMs === undefined ||
+    remainingBudgetMs >= chatCompletionRetryDelayMs(retryIndex) + CHAT_COMPLETION_MIN_SECONDARY_ATTEMPT_WINDOW_MS
+  );
+}
+
+function chatCompletionRetryDelayMs(retryIndex: number): number {
+  return retryIndex === 0 ? 250 : 750;
 }
 
 export function normalizeToolProtocolRetryRequest(

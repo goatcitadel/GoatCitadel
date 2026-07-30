@@ -272,7 +272,7 @@ export function ThreadedSurfacePage({
   const workflowPanel = input.workflowPanel;
   const activeMode: ChatMode = "chat";
   const modeMeta = MODE_META[activeMode];
-  const [codeWorkbenchOpen, setCodeWorkbenchOpen] = useState(true);
+  const [codeWorkbenchOpen, setCodeWorkbenchOpen] = useState(false);
   const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
   const workflowPanelOpen = Boolean(workflowPanel && (workflowPanel.kind !== "code" || codeWorkbenchOpen));
   const missionSessionGroups = useMemo(
@@ -386,6 +386,12 @@ export function ThreadedSurfacePage({
     }
     input.onSessionRailOpenChange(true);
   }, [input, railDrawerLayout]);
+  const handleCreateSessionFromRail = useCallback(() => {
+    input.sessionRail.onCreateSession();
+    if (railDrawerLayout) {
+      closeSessionRail();
+    }
+  }, [closeSessionRail, input.sessionRail, railDrawerLayout]);
   const handleArchiveWorkspace = () => {
     if (
       !input.sessionRail.archiveWorkspaceEnabled ||
@@ -495,7 +501,7 @@ export function ThreadedSurfacePage({
         </div>
 
         <div className="mc-next-threaded-rail-actions">
-          <button type="button" className="mc-next-threaded-primary" onClick={input.sessionRail.onCreateSession}>
+          <button type="button" className="mc-next-threaded-primary" onClick={handleCreateSessionFromRail}>
             <MessageSquareText size={16} />
             <span>New thread</span>
           </button>
@@ -943,7 +949,11 @@ function ThreadConversationSurface({
               Work Record
             </button>
             {onToggleCodeWorkbench ? (
-              <button type="button" className="mc-next-threaded-secondary" onClick={onToggleCodeWorkbench}>
+              <button
+                type="button"
+                className="mc-next-threaded-secondary mc-next-threaded-build-editor"
+                onClick={onToggleCodeWorkbench}
+              >
                 {codeWorkbenchOpen ? "Hide build editor" : "Build editor"}
               </button>
             ) : null}

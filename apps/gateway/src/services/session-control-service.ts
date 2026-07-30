@@ -117,6 +117,27 @@ export class DecisionCommittedHeartbeatAdmissionError extends ConflictError {
   }
 }
 
+export class ActiveTurnNotPreemptibleError extends ConflictError {
+  public readonly recoveryOutcome = "not_preemptible" as const;
+  public readonly activeAdmission: SessionMutationAdmissionRecord;
+
+  public constructor(activeAdmission: SessionMutationAdmissionRecord) {
+    super({
+      code: "STATE_CONFLICT",
+      message: "The active Chat turn is not a preemptible system heartbeat; reconnect to that turn before retrying.",
+      details: {
+        recoveryOutcome: "not_preemptible",
+        mutated: false,
+        activeAdmissionId: activeAdmission.admissionId,
+        activeTurnId: activeAdmission.turnId,
+        activeActorKind: activeAdmission.actorKind,
+        activeOperation: activeAdmission.operation,
+      },
+    });
+    this.activeAdmission = activeAdmission;
+  }
+}
+
 export function createAuthenticatedOperatorAdmissionContext(input: {
   actorId: string;
   authActorSource: NonNullable<ChatSendMessageRequest["authActorSource"]>;
@@ -451,33 +472,51 @@ export class SessionControlService {
       });
     }
 
-    const meta = this.storage.chatSessionMeta.get(input.sessionId);
-    if (!meta) {
-      throw new NotFoundError({ entity: "Chat session", id: input.sessionId });
-    }
-    const observedControl = this.storage.sessionControls.getControl(meta.workspaceId, input.sessionId);
-    const control = this.storage.sessionControls.resolveMutationAuthority({
-      actorKind: "operator",
-      workspaceId: meta.workspaceId,
-      sessionId: input.sessionId,
-      expectedGeneration: observedControl.generation,
-    });
     const admittedRequest = freezeChatTurnExecutionRequest(input.request);
     const requestActor = freezeChatTurnRequestActor(input.request, { actorKind: "operator", actorId });
     const materialSha256 = computeFrozenChatTurnAdmissionMaterialSha256(admittedRequest);
-    const outcome = this.storage.sessionMutationAdmissions.preemptHeartbeatAndAdmitOperatorTurn({
-      workspaceId: meta.workspaceId,
-      sessionId: input.sessionId,
-      turnId: input.turnId,
-      runtimeOwnerId: input.runtimeOwnerId,
-      aggregateRevision: meta.revision,
-      expectedControllerGeneration: control.generation,
-      operatorActorId: actorId,
-      operation: "chat_turn",
-      materialSha256,
-      idempotencyKey: input.idempotencyKey,
-      correlationId: input.correlationId,
-    });
+    let outcome: PreemptHeartbeatAndAdmitOperatorTurnOutcome | undefined;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const meta = this.storage.chatSessionMeta.get(input.sessionId);
+      if (!meta) {
+        throw new NotFoundError({ entity: "Chat session", id: input.sessionId });
+      }
+      const observedControl = this.storage.sessionControls.getControl(meta.workspaceId, input.sessionId);
+      const control = this.storage.sessionControls.resolveMutationAuthority({
+        actorKind: "operator",
+        workspaceId: meta.workspaceId,
+        sessionId: input.sessionId,
+        expectedGeneration: observedControl.generation,
+      });
+      try {
+        outcome = this.storage.sessionMutationAdmissions.preemptHeartbeatAndAdmitOperatorTurn({
+          workspaceId: meta.workspaceId,
+          sessionId: input.sessionId,
+          turnId: input.turnId,
+          runtimeOwnerId: input.runtimeOwnerId,
+          aggregateRevision: meta.revision,
+          expectedControllerGeneration: control.generation,
+          operatorActorId: actorId,
+          operation: "chat_turn",
+          materialSha256,
+          idempotencyKey: input.idempotencyKey,
+          correlationId: input.correlationId,
+        });
+        break;
+      } catch (error) {
+        if (attempt > 0 || !isRetryablePreemptionRace(error)) throw error;
+        // A restart/concurrent settlement can invalidate the transaction's
+        // candidate after it was selected. Re-read canonical active authority
+        // and retry once; the repository remains the only preemption owner.
+        const active = this.storage.sessionMutationAdmissions.listActive(meta.workspaceId, input.sessionId);
+        if (active.length === 1 && !isExactHeartbeatAdmission(active[0]!)) {
+          throw new ActiveTurnNotPreemptibleError(active[0]!);
+        }
+      }
+    }
+    if (!outcome) {
+      throw new ConflictError({ message: "Operator Chat admission could not resolve canonical active-turn state." });
+    }
     if (outcome.disposition === "decision_committed") {
       throw new DecisionCommittedHeartbeatAdmissionError({
         workspaceId: outcome.workspaceId,
@@ -488,6 +527,9 @@ export class SessionControlService {
         heartbeatAdmissionId: outcome.heartbeatAdmissionId,
         durableRunId: outcome.durableRunId,
       });
+    }
+    if (outcome.disposition === "not_preemptible") {
+      throw new ActiveTurnNotPreemptibleError(outcome.activeAdmission);
     }
     return activeAdmissionFromRecord(outcome.admission, materialSha256, admittedRequest, requestActor, true);
   }
@@ -1073,6 +1115,24 @@ export class SessionControlService {
 
 function sessionControlConflict(code: SessionControlConflictCode, message: string): ConflictError {
   return new ConflictError({ code: "STATE_CONFLICT", message, details: { sessionControlCode: code } });
+}
+
+function isRetryablePreemptionRace(error: unknown): error is ConflictError {
+  if (!(error instanceof ConflictError) || error.code !== "STATE_CONFLICT") return false;
+  const details = error.details as { sessionMutationAdmissionCode?: unknown } | undefined;
+  return [
+    "SESSION_MUTATION_ADMISSION_AUTHORITY_CHANGED",
+    "SESSION_MUTATION_HEARTBEAT_PREEMPTION_CONFLICT",
+    "SESSION_MUTATION_ADMISSION_STALE",
+  ].includes(String(details?.sessionMutationAdmissionCode ?? ""));
+}
+
+function isExactHeartbeatAdmission(admission: SessionMutationAdmissionRecord): boolean {
+  return (
+    admission.actorKind === "system" &&
+    admission.actorId === "system-heartbeat" &&
+    admission.operation === "chat_system_heartbeat"
+  );
 }
 
 function requireOperatorControlActor(actor: SessionControlProtocolActor): SessionControlOperatorActor {

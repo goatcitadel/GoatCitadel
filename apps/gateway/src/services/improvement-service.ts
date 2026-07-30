@@ -22,6 +22,7 @@ import { logger } from "@goatcitadel/gateway-core";
 import type { Storage } from "@goatcitadel/storage";
 import type { CronSpecMutationOwner } from "./cron-config-generation-owner.js";
 import { assertNoAssembledPromptInjection } from "./assembled-prompt-injection-guard.js";
+import { trackBackgroundTask } from "./background-scheduler.js";
 import { IMPROVEMENT_WEEKLY_JOB_ID } from "./gateway/cron-job-ids.js";
 
 const log = logger.child("improvement-service");
@@ -569,13 +570,18 @@ export class ImprovementService {
     this.scheduler = setInterval(() => {
       const task = this.runSchedulerTick().catch((error) => {
         log.error("scheduler tick failed", { error: error instanceof Error ? error.message : String(error) });
-        this.ctx.publishRealtime("system", "improvement", {
-          type: "improvement_scheduler_error",
-          message: (error as Error).message,
-        });
+        try {
+          this.ctx.publishRealtime("system", "improvement", {
+            type: "improvement_scheduler_error",
+            message: error instanceof Error ? error.message : String(error),
+          });
+        } catch (reportingError) {
+          log.error("scheduler failure realtime projection failed", {
+            error: reportingError instanceof Error ? reportingError.message : String(reportingError),
+          });
+        }
       });
-      this.callbacks.backgroundTasks.add(task);
-      task.finally(() => this.callbacks.backgroundTasks.delete(task));
+      trackBackgroundTask(this.callbacks.backgroundTasks, task);
     }, IMPROVEMENT_SCHEDULER_INTERVAL_MS);
     // Don't let the scheduler timer keep the process/test-runner alive in paths that
     // don't call stopScheduler() (matches the shared background-scheduler helper).

@@ -1,7 +1,48 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { navigateSurfaceRoute, runSurfaceRegressionLane } from "./surface-regression-lane.mjs";
+import {
+  buildSurfaceCompatibilityInputs,
+  navigateSurfaceRoute,
+  runSurfaceRegressionLane,
+} from "./surface-regression-lane.mjs";
+
+test("surface regression gives legacy-query and direct-path compatibility distinct proof identities", () => {
+  const inputs = buildSurfaceCompatibilityInputs({
+    redirectRoutes: [{ slug: "legacy-surface-code", href: "/?surface=code", expectedPath: "/chat" }],
+    directCompatibilityRoutes: [
+      { slug: "direct-cowork", href: "/cowork", expectedPath: "/chat" },
+      { slug: "direct-code", href: "/code", expectedPath: "/chat" },
+      {
+        slug: "direct-settings-safety",
+        href: "/settings/safety",
+        expectedPath: "/settings/permissions",
+      },
+    ],
+  });
+
+  assert.deepEqual(
+    inputs.map(({ compatibilityKind, scenarioId }) => ({ compatibilityKind, scenarioId })),
+    [
+      {
+        compatibilityKind: "legacy-query-input",
+        scenarioId: "surface-regression.redirect.legacy-surface-code",
+      },
+      {
+        compatibilityKind: "direct-path",
+        scenarioId: "surface-regression.direct-compatibility.direct-cowork",
+      },
+      {
+        compatibilityKind: "direct-path",
+        scenarioId: "surface-regression.direct-compatibility.direct-code",
+      },
+      {
+        compatibilityKind: "direct-path",
+        scenarioId: "surface-regression.direct-compatibility.direct-settings-safety",
+      },
+    ],
+  );
+});
 
 test("first surface navigation retries once after a bounded cold-start readiness timeout", async () => {
   let gotoCalls = 0;

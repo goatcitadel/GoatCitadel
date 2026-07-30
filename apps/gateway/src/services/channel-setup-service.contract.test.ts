@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelSetupDraft, IntegrationConnection } from "@goatcitadel/contracts";
+import { describeChannelCapabilities } from "@goatcitadel/gateway-core";
+import { buildChannelCapabilityDiagnosticChecks } from "./channel-capability-diagnostic-checks.js";
 import {
   createChannelSetupDraft,
   finalizeChannelSetupDraft,
@@ -195,6 +197,48 @@ describe("channel-setup-service contract behavior", () => {
     });
     expect(() => host.storage.channelSetupDrafts.get(created.draftId)).toThrow(/Missing draft/);
     expect(host.recentChannelSetupTests.has(created.draftId)).toBe(false);
+  });
+
+  it("finalizes an outbound-only ntfy draft when its sandbox send and setup checks pass", async () => {
+    const host = createHost();
+    host.buildIntegrationConnectionChecks = vi.fn((connection) =>
+      buildChannelCapabilityDiagnosticChecks(describeChannelCapabilities(connection.key, connection.config)),
+    );
+    host.runIntegrationConnectionLiveChecks = vi.fn(async () => ({
+      checks: [
+        {
+          key: "ntfy_sandbox_send",
+          status: "pass" as const,
+          message: "Sandbox notification was accepted.",
+        },
+      ],
+    }));
+    const created = createChannelSetupDraft(host, {
+      catalogId: "channel.ntfy",
+      lifecycleMode: "create",
+    });
+    host.storage.channelSetupDrafts.update(created.draftId, {
+      label: "ntfy Sandbox",
+      draft: {
+        baseUrl: "https://ntfy.sh",
+        topic: "goatcitadel-preqa",
+        dryRun: true,
+      },
+    });
+
+    const result = await finalizeChannelSetupDraft(host, created.draftId);
+
+    expect(result.validation.status).toBe("ok");
+    expect(result.test).toMatchObject({ status: "ok", issues: [] });
+    expect(result.connection).toMatchObject({
+      key: "ntfy",
+      status: "connected",
+      config: {
+        baseUrl: "https://ntfy.sh",
+        topic: "goatcitadel-preqa",
+        dryRun: true,
+      },
+    });
   });
 
   it("reconciles public draft placeholders while leaving the internal raw update path unchanged", () => {

@@ -1,4 +1,6 @@
 // @vitest-environment happy-dom
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
@@ -6,6 +8,14 @@ import { FilterPill } from "./FilterPill";
 import { FilterPillGroup, type FilterPillOption } from "./FilterPillGroup";
 
 describe("FilterPill", () => {
+  it("keeps each pill at least 24px tall for touch input", () => {
+    const primitivesCss = readFileSync(
+      resolve(process.cwd(), "src/features/native-routes/primitives/primitives.css"),
+      "utf8",
+    );
+    expect(primitivesCss).toMatch(/\.mc-next-filter-pill\s*\{[^}]*min-height:\s*24px;/u);
+  });
+
   it("renders label, count, and selected state", () => {
     const markup = renderToStaticMarkup(
       <FilterPill label="knowledge" count={22} selected={true} tabIndex={0} onSelect={() => {}} />,

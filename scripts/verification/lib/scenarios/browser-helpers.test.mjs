@@ -1,10 +1,17 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { appendTraceArtifact, captureBrowserArtifacts, startBrowserTrace } from "./browser-helpers.mjs";
+import {
+  appendTraceArtifact,
+  attachBrowserLogging,
+  captureBrowserArtifacts,
+  readBrowserSseDiagnostics,
+  startBrowserTrace,
+} from "./browser-helpers.mjs";
 
 test("browser artifact capture keeps screenshot, console, and diagnostic evidence when the gateway is unavailable", async () => {
   const artifactRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-browser-artifacts-"));
@@ -82,3 +89,101 @@ test("failure traces are retained once and attached to both trace and Playwright
     await fs.rm(artifactRoot, { recursive: true, force: true });
   }
 });
+
+test("browser logging retains bounded exact event-stream network recovery evidence", () => {
+  const page = new EventEmitter();
+  const browserLog = attachBrowserLogging(page);
+  const cursor = browserLog.mark();
+
+  page.emit("requestfailed", failedRequest("http://127.0.0.1/api/v1/other", "net::ERR_CONNECTION_FAILED"));
+  page.emit("requestfailed", failedRequest("http://127.0.0.1/api/v1/events/stream", "net::ERR_ABORTED"));
+  page.emit(
+    "requestfailed",
+    failedRequest("http://127.0.0.1/api/v1/events/stream?afterCursor=fixture", "net::ERR_CONNECTION_FAILED"),
+  );
+  page.emit("response", response("http://127.0.0.1/api/v1/other", 200));
+  page.emit("response", response("http://127.0.0.1/api/v1/events/stream?afterCursor=fixture", 503));
+  page.emit("response", response("http://127.0.0.1/api/v1/events/stream?afterCursor=fixture", 200));
+
+  const snapshot = browserLog.getSnapshot(cursor);
+  assert.equal(snapshot.eventStreamEvidenceTruncated, false);
+  assert.deepEqual(
+    snapshot.eventStreamRequestFailures.map(({ url, errorText }) => ({ url, errorText })),
+    [{ url: "/api/v1/events/stream", errorText: "net::ERR_CONNECTION_FAILED" }],
+  );
+  assert.deepEqual(
+    snapshot.eventStreamResponses.map(({ url, status }) => ({ url, status })),
+    [
+      { url: "/api/v1/events/stream", status: 503 },
+      { url: "/api/v1/events/stream", status: 200 },
+    ],
+  );
+});
+
+test("browser logging fails closed when bounded event-stream evidence is truncated", () => {
+  const page = new EventEmitter();
+  const browserLog = attachBrowserLogging(page);
+  const cursor = browserLog.mark();
+  for (let index = 0; index < 33; index += 1) {
+    page.emit("requestfailed", failedRequest("http://127.0.0.1/api/v1/events/stream", "net::ERR_CONNECTION_FAILED"));
+  }
+  const snapshot = browserLog.getSnapshot(cursor);
+  assert.equal(snapshot.eventStreamRequestFailures.length, 32);
+  assert.equal(snapshot.eventStreamEvidenceTruncated, true);
+});
+
+test("client SSE diagnostics expose only bounded recovery fields", async () => {
+  const page = {
+    async evaluate() {
+      return {
+        available: true,
+        records: [
+          {
+            category: "sse",
+            event: "open",
+            level: "info",
+            timestamp: "2026-07-30T12:26:16.692Z",
+            context: { secret: "must-not-leak" },
+            message: "Realtime event stream connected",
+          },
+        ],
+      };
+    },
+  };
+  assert.deepEqual(await readBrowserSseDiagnostics(page), {
+    available: true,
+    records: [
+      {
+        category: "sse",
+        event: "open",
+        level: "info",
+        timestamp: "2026-07-30T12:26:16.692Z",
+      },
+    ],
+  });
+});
+
+test("client SSE diagnostics fail closed when the diagnostics bridge is unavailable", async () => {
+  assert.deepEqual(
+    await readBrowserSseDiagnostics({
+      async evaluate() {
+        return { available: false, records: [] };
+      },
+    }),
+    { available: false, records: [] },
+  );
+});
+
+function failedRequest(url, errorText) {
+  return {
+    url: () => url,
+    failure: () => ({ errorText }),
+  };
+}
+
+function response(url, status) {
+  return {
+    url: () => url,
+    status: () => status,
+  };
+}

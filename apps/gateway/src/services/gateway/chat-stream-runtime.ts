@@ -19,6 +19,7 @@ export interface GatewayChatStreamRuntimeHost {
   storage: Storage;
   chatTurnExecutionRegistry: ChatTurnExecutionRegistry;
   createHydratedChatTurnTrace(turnId: string, trace: ChatTurnTraceRecord): ChatTurnTraceRecord;
+  beforeDeliverTerminalChatStreamEvent?(input: { runId: string; sessionId: string; turnId: string }): Promise<boolean>;
   persistChatStreamChunk?(
     chunk: PersistableChatStreamChunk,
     runId?: string,
@@ -159,11 +160,16 @@ export class GatewayChatStreamRuntime {
     if (options?.sinceEventId) {
       const priorEvent = this.host.storage.chatStreamEvents.getByEventId(options.sinceEventId);
       if (priorEvent?.turnId === turnId) {
-        afterSequence = priorEvent.sequence;
+        const priorPayload = toChatStreamChunk(priorEvent.payload);
+        // A client can receive the retained terminal id together with a
+        // recovery notice while durable admission is still active. Re-evaluate
+        // that exact persisted done event on reconnect so the barrier remains
+        // authoritative and the canonical cursor stays resolvable.
+        afterSequence = priorPayload?.type === "done" ? Math.max(0, priorEvent.sequence - 1) : priorEvent.sequence;
       } else {
-        yield* this.streamTurnStateFallback(sessionId, turnId);
+        const terminalFallback = yield* this.streamTurnStateFallback(sessionId, turnId, options.sinceEventId);
         afterSequence = this.host.storage.chatStreamEvents.getLatestSequence(turnId);
-        if (!options?.liveTail) {
+        if (terminalFallback || !options?.liveTail) {
           return;
         }
       }
@@ -180,6 +186,29 @@ export class GatewayChatStreamRuntime {
           const payload = toChatStreamChunk(event.payload);
           if (!payload) {
             continue;
+          }
+          if (payload.type === "done" && event.runId) {
+            // A persisted terminal event is a delivery signal, not durable
+            // completion authority. Let the canonical durable owner settle the
+            // exact run/admission handoff before any live or reconnect reader
+            // observes the stream as complete.
+            const released = await this.host.beforeDeliverTerminalChatStreamEvent?.({
+              runId: event.runId,
+              sessionId,
+              turnId,
+            });
+            if (released === false) {
+              yield {
+                type: "error",
+                eventId: event.eventId,
+                sequence: event.sequence,
+                sessionId,
+                turnId,
+                error:
+                  "Chat output reached a terminal event, but its durable admission is still active. Reconnect after runtime recovery completes.",
+              };
+              return;
+            }
           }
           if (
             (payload.type === "delta" || payload.type === "thinking_delta") &&
@@ -350,12 +379,42 @@ export class GatewayChatStreamRuntime {
     }
   }
 
-  public async *streamTurnStateFallback(sessionId: string, turnId: string): AsyncGenerator<ChatStreamChunk> {
+  public async *streamTurnStateFallback(
+    sessionId: string,
+    turnId: string,
+    recoveryEventId?: string,
+  ): AsyncGenerator<ChatStreamChunk, boolean> {
     const trace = this.host.storage.chatTurnTraces.get(turnId);
     if (trace.sessionId !== sessionId) {
-      return;
+      return true;
     }
     const hydratedTrace = this.host.createHydratedChatTurnTrace(turnId, trace);
+    const terminalRunId = hydratedTrace.durable?.runId;
+    const assistantMessage = trace.assistantMessageId
+      ? this.host.storage.chatMessages.get(trace.assistantMessageId)
+      : undefined;
+    if (assistantMessage && terminalRunId) {
+      const released = await this.host.beforeDeliverTerminalChatStreamEvent?.({
+        runId: terminalRunId,
+        sessionId,
+        turnId,
+      });
+      if (released === false) {
+        // Preserve the caller's existing cursor. Normal barrier recovery uses
+        // the canonical persisted done id; legacy synthetic or stale cursors
+        // remain on the gated fallback path until admission releases.
+        yield {
+          type: "error",
+          eventId: recoveryEventId ?? "",
+          sequence: this.host.storage.chatStreamEvents.getLatestSequence(turnId),
+          sessionId,
+          turnId,
+          error:
+            "Chat output reached a terminal event, but its durable admission is still active. Reconnect after runtime recovery completes.",
+        };
+        return true;
+      }
+    }
     const persist = this.host.persistChatStreamChunk ?? ((chunk, runId) => this.persistChatStreamChunk(chunk, runId));
     yield persist(
       {
@@ -366,31 +425,30 @@ export class GatewayChatStreamRuntime {
       } as PersistableChatStreamChunk,
       hydratedTrace.durable?.runId,
     );
-    if (trace.assistantMessageId) {
-      const assistantMessage = this.host.storage.chatMessages.get(trace.assistantMessageId);
-      if (assistantMessage) {
-        yield persist(
-          {
-            type: "message_done",
-            sessionId,
-            turnId,
-            messageId: assistantMessage.messageId,
-            content: assistantMessage.content,
-            repaired: Boolean(hydratedTrace.completion?.repaired),
-          } as PersistableChatStreamChunk,
-          hydratedTrace.durable?.runId,
-        );
-        yield persist(
-          {
-            type: "done",
-            sessionId,
-            turnId,
-            messageId: assistantMessage.messageId,
-          } as PersistableChatStreamChunk,
-          hydratedTrace.durable?.runId,
-        );
-      }
+    if (assistantMessage) {
+      yield persist(
+        {
+          type: "message_done",
+          sessionId,
+          turnId,
+          messageId: assistantMessage.messageId,
+          content: assistantMessage.content,
+          repaired: Boolean(hydratedTrace.completion?.repaired),
+        } as PersistableChatStreamChunk,
+        hydratedTrace.durable?.runId,
+      );
+      yield persist(
+        {
+          type: "done",
+          sessionId,
+          turnId,
+          messageId: assistantMessage.messageId,
+        } as PersistableChatStreamChunk,
+        hydratedTrace.durable?.runId,
+      );
+      return true;
     }
+    return false;
   }
 }
 

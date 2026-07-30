@@ -1291,9 +1291,9 @@
 /*
   Memory provenance list — semantically a <dl> of label/value pairs.
   Mirrors the inline "<strong>label</strong> · value" look that the prior
-  <ul>/<li> markup produced. The "·" separator lives in JSX wrapped in
-  aria-hidden so screen readers don't announce "middle dot" (a11y H-8),
-  while sighted users keep the visual rhythm.
+  <ul>/<li> markup produced. The "·" separator lives inside the <dd> and is
+  aria-hidden so the <dl> contains only valid grouped <dt>/<dd> semantics and
+  screen readers don't announce "middle dot" (a11y H-8).
 */
 .mc-next-memory-provenance-list {
   display: grid;

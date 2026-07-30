@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { FileText, RefreshCw, Waypoints, Workflow } from "lucide-react";
+import { Download, FileText, RefreshCw, Waypoints, Workflow } from "lucide-react";
 import type { ChatGeneratedArtifactRecord } from "@goatcitadel/contracts";
 import { fetchChatGeneratedArtifacts } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard } from "../NativeRoutePageLayout";
@@ -252,6 +252,10 @@ export function LibraryArtifactsSection({
                   ]}
                 />
                 <LibraryButtonRow>
+                  <NativeButton variant="outline" onClick={() => downloadArtifact(selectedArtifact)}>
+                    <Download size={16} />
+                    Download artifact
+                  </NativeButton>
                   <NativeButton
                     variant="default"
                     onClick={() =>
@@ -318,6 +322,41 @@ export function LibraryArtifactsSection({
       </div>
     </LibrarySectionShell>
   );
+}
+
+function downloadArtifact(artifact: ChatGeneratedArtifactRecord) {
+  if (typeof document === "undefined" || typeof URL === "undefined" || typeof URL.createObjectURL !== "function") {
+    throw new Error("Browser downloads are unavailable in this environment.");
+  }
+  const objectUrl = URL.createObjectURL(new Blob([artifact.content], { type: artifactContentType(artifact.kind) }));
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = `${sanitizeArtifactFilename(artifact.title)}.${artifactExtension(artifact.kind)}`;
+  anchor.click();
+  URL.revokeObjectURL(objectUrl);
+}
+
+function sanitizeArtifactFilename(title: string) {
+  const filename = [...title.trim()]
+    .map((character) => (character.charCodeAt(0) <= 0x1f ? "-" : character))
+    .join("")
+    .replace(/[<>:"/\\|?*]/gu, "-")
+    .replace(/\s+/gu, " ");
+  return filename.slice(0, 120) || "artifact";
+}
+
+function artifactExtension(kind: ChatGeneratedArtifactRecord["kind"]) {
+  if (kind === "markdown") return "md";
+  if (kind === "code") return "txt";
+  if (kind === "html") return "html";
+  if (kind === "mermaid") return "mmd";
+  return "txt";
+}
+
+function artifactContentType(kind: ChatGeneratedArtifactRecord["kind"]) {
+  if (kind === "markdown") return "text/markdown;charset=utf-8";
+  if (kind === "html") return "text/html;charset=utf-8";
+  return "text/plain;charset=utf-8";
 }
 
 function describeArtifactViewer(kind: ChatGeneratedArtifactRecord["kind"]) {

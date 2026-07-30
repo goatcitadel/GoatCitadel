@@ -1,5 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
-import { composeRuntimeAdminRouteDependencies } from "./gateway-route-composition-runtime.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  composeRuntimeAdminRouteDependencies,
+  resolveDevVerificationVaultKey,
+} from "./gateway-route-composition-runtime.js";
 
 const mocks = vi.hoisted(() => ({
   createCronRoutePort: vi.fn((service: { ping: () => string }) => ({
@@ -157,6 +160,63 @@ vi.mock("./gateway-route-composition-shared.js", () => ({
 vi.mock("./security-utils.js", () => ({ serializePathWithinRoot: mocks.serializePathWithinRoot }));
 
 describe("composeRuntimeAdminRouteDependencies", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("accepts an exact deterministic Vault key only in dev-verification mode", () => {
+    const encodedKey = Buffer.alloc(32, 0x76).toString("base64");
+
+    expect(resolveDevVerificationVaultKey(true, encodedKey)).toEqual(Buffer.alloc(32, 0x76));
+    expect(resolveDevVerificationVaultKey(false, encodedKey)).toBeUndefined();
+    expect(resolveDevVerificationVaultKey(false, "not-a-key")).toBeUndefined();
+    expect(() => resolveDevVerificationVaultKey(true, "not-a-key")).toThrow(/canonical base64-encoded 32-byte key/u);
+  });
+
+  it("uses verifier Vault key precedence only while dev verification is enabled and returns defensive copies", () => {
+    const expected = Buffer.alloc(32, 0x76);
+    vi.stubEnv("GOATCITADEL_VERIFY_VAULT_KEY_BASE64", expected.toString("base64"));
+    const gateway = createGateway();
+    const getSecret = vi.fn(() => Buffer.alloc(32, 0x55).toString("base64"));
+    const setSecret = vi.fn();
+    (gateway as any).secretStore = { isAvailable: vi.fn(() => true), getSecret, setSecret };
+    const deps = composeRuntimeAdminRouteDependencies(gateway as never) as any;
+
+    const first = deps.vaultKey("citadel-a") as Buffer;
+    expect(first).toEqual(expected);
+    first[0] = 0;
+    expect(deps.vaultKey("citadel-a")).toEqual(expected);
+    expect(getSecret).not.toHaveBeenCalled();
+    expect(setSecret).not.toHaveBeenCalled();
+  });
+
+  it("ignores the verifier Vault key when dev verification is disabled and preserves keychain fallback/fail-closed behavior", () => {
+    vi.stubEnv("GOATCITADEL_VERIFY_VAULT_KEY_BASE64", Buffer.alloc(32, 0x76).toString("base64"));
+    const storedKey = Buffer.alloc(32, 0x55);
+    const gateway = createGateway();
+    gateway.devDiagnostics.isEnabled.mockReturnValue(false);
+    const getSecret = vi.fn(() => storedKey.toString("base64"));
+    const setSecret = vi.fn();
+    (gateway as any).secretStore = { isAvailable: vi.fn(() => true), getSecret, setSecret };
+    const deps = composeRuntimeAdminRouteDependencies(gateway as never) as any;
+
+    expect(deps.vaultKey("citadel-a")).toEqual(storedKey);
+    expect(getSecret).toHaveBeenCalledWith("citadel:citadel-a:vault_master_key");
+    expect(setSecret).not.toHaveBeenCalled();
+
+    const unavailableGateway = createGateway();
+    unavailableGateway.devDiagnostics.isEnabled.mockReturnValue(false);
+    const unavailableGetSecret = vi.fn();
+    (unavailableGateway as any).secretStore = {
+      isAvailable: vi.fn(() => false),
+      getSecret: unavailableGetSecret,
+      setSecret: vi.fn(),
+    };
+    const unavailableDeps = composeRuntimeAdminRouteDependencies(unavailableGateway as never) as any;
+    expect(unavailableDeps.vaultKey("citadel-a")).toBeUndefined();
+    expect(unavailableGetSecret).not.toHaveBeenCalled();
+  });
+
   it("wires runtime/admin route domains to the gateway facade and extracted route ports", async () => {
     const gateway = createGateway();
     const deps = composeRuntimeAdminRouteDependencies(gateway as never) as any;

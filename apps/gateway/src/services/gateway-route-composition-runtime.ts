@@ -31,6 +31,27 @@ import {
 } from "./gateway-route-composition-shared.js";
 import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
 
+const DEV_VERIFICATION_VAULT_KEY_ENV = "GOATCITADEL_VERIFY_VAULT_KEY_BASE64";
+const VAULT_KEY_BYTES = 32;
+
+export function resolveDevVerificationVaultKey(
+  devVerificationEnabled: boolean,
+  encodedKey: string | undefined,
+): Buffer | undefined {
+  if (!devVerificationEnabled || encodedKey === undefined || encodedKey.trim() === "") {
+    return undefined;
+  }
+  const normalized = encodedKey.trim();
+  if (!/^[A-Za-z0-9+/]{43}=$/u.test(normalized)) {
+    throw new Error(`${DEV_VERIFICATION_VAULT_KEY_ENV} must be a canonical base64-encoded 32-byte key.`);
+  }
+  const key = Buffer.from(normalized, "base64");
+  if (key.byteLength !== VAULT_KEY_BYTES || key.toString("base64") !== normalized) {
+    throw new Error(`${DEV_VERIFICATION_VAULT_KEY_ENV} must be a canonical base64-encoded 32-byte key.`);
+  }
+  return key;
+}
+
 export function composeRuntimeAdminRouteDependencies(
   gateway: GatewayRouteCompositionPort,
 ): RouteDependencyDomain<
@@ -70,6 +91,10 @@ export function composeRuntimeAdminRouteDependencies(
   const settingsAuthDeps = createSettingsAuthRuntimeDependenciesForGateway(gateway);
   const workspaces = createWorkspacesRoutePortForGateway(gateway);
   const onboardingStateHost = gateway.onboardingStateHost;
+  const devVerificationVaultKey = resolveDevVerificationVaultKey(
+    gateway.devDiagnostics.isEnabled(),
+    process.env[DEV_VERIFICATION_VAULT_KEY_ENV],
+  );
   const workflowRecipes = new WorkflowRecipeService({
     listSkills: () => gateway.listSkills(),
     listToolNames: () => {
@@ -153,6 +178,12 @@ export function composeRuntimeAdminRouteDependencies(
       }
     },
     vaultKey: (citadelId: string): Buffer | undefined => {
+      // The deterministic key is accepted only while the private dev-verification
+      // surface is enabled. It keeps exact usability proof hermetic without
+      // reading or writing the operator's OS keychain.
+      if (devVerificationVaultKey) {
+        return Buffer.from(devVerificationVaultKey);
+      }
       // The per-Citadel master key lives in the OS keychain. If the secret store
       // is unavailable, the Vault fails closed (never a plaintext fallback).
       const store = gateway.secretStore;
@@ -211,6 +242,7 @@ export function composeRuntimeAdminRouteDependencies(
       listDevDiagnostics: (input) => gateway.devDiagnostics.list(input),
       publishRealtime: (eventType, source, payload, options) =>
         gateway.publishRealtime(eventType, source, payload, options),
+      reconcileGeneralChatPostCommit: (runId) => gateway.reconcileGeneralChatPostCommit(runId),
     },
     durable: gateway.durableOperatorService,
     files: createFilesRoutePort({

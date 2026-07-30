@@ -10,6 +10,8 @@ import type {
   TaskActivityRecord,
   TaskRecord,
   TaskSubagentSession,
+  ToolGrantCreateInput,
+  ToolGrantRecord,
 } from "@goatcitadel/contracts";
 import { GatewayService } from "./gateway-service.js";
 import { ChatDelegationService } from "./chat-delegation-service.js";
@@ -18,6 +20,62 @@ vi.mock("node:sqlite", () => ({
   DatabaseSync: class DatabaseSync {},
   StatementSync: class StatementSync {},
 }));
+
+class InMemoryToolGrantRepository {
+  readonly #rows: ToolGrantRecord[];
+
+  public constructor(rows: ToolGrantRecord[] = []) {
+    this.#rows = structuredClone(rows);
+  }
+
+  public create(input: ToolGrantCreateInput, now = new Date().toISOString()): ToolGrantRecord {
+    const record: ToolGrantRecord = {
+      grantId: `grant-${this.#rows.length + 1}`,
+      toolPattern: input.toolPattern,
+      decision: input.decision,
+      scope: input.scope,
+      scopeRef: input.scopeRef ?? (input.scope === "global" ? "global" : ""),
+      grantType: input.grantType ?? "persistent",
+      constraints: input.constraints,
+      createdBy: input.createdBy,
+      createdAt: now,
+      expiresAt: input.expiresAt,
+      usesRemaining: input.usesRemaining,
+    };
+    this.#rows.push(record);
+    return structuredClone(record);
+  }
+
+  public createTtlForDuration(
+    input: Omit<ToolGrantCreateInput, "grantType" | "expiresAt" | "usesRemaining">,
+    ttlMs: number,
+  ): ToolGrantRecord {
+    const now = new Date();
+    return this.create(
+      {
+        ...input,
+        grantType: "ttl",
+        expiresAt: new Date(now.getTime() + ttlMs).toISOString(),
+      },
+      now.toISOString(),
+    );
+  }
+
+  public listActive(scope?: ToolGrantRecord["scope"], scopeRef?: string, now = new Date().toISOString()) {
+    const nowMs = Date.parse(now);
+    return this.#rows
+      .filter((grant) => !scope || grant.scope === scope)
+      .filter((grant) => !scopeRef || grant.scopeRef === scopeRef)
+      .filter((grant) => !grant.revokedAt)
+      .filter((grant) => !grant.expiresAt || Date.parse(grant.expiresAt) > nowMs)
+      .filter((grant) => grant.usesRemaining === undefined || grant.usesRemaining > 0)
+      .map((grant) => structuredClone(grant));
+  }
+
+  public reconstruct(): InMemoryToolGrantRepository {
+    return new InMemoryToolGrantRepository(this.#rows);
+  }
+}
 
 function buildPrefs(): ChatSessionPrefsRecord {
   return {
@@ -57,6 +115,7 @@ function createDelegationHarness() {
   const activityReceipts = new Map<string, TaskActivityRecord>();
   const sessionRoles = new Map<string, string>();
   const databaseNow = "2026-04-19T00:00:00.000Z";
+  const toolGrantRepository = new InMemoryToolGrantRepository();
   let childSessionCounter = 0;
 
   const createStepRecord = (
@@ -148,6 +207,13 @@ function createDelegationHarness() {
   gateway.ensureChatSessionModelDefaults = vi.fn((_sessionId: string, nextPrefs: ChatSessionPrefsRecord) => nextPrefs);
   gateway.normalizeWorkspaceId = vi.fn((workspaceId?: string) => workspaceId ?? "default");
   gateway.resolveDelegatedFilesystemScope = vi.fn(() => undefined);
+  gateway.publishRealtime = vi.fn();
+  gateway.approvalRuntime = {
+    createToolGrant: (input: ToolGrantCreateInput) => toolGrantRepository.create(input),
+  };
+  gateway.ensureSessionInternalToolGrant = vi.fn((sessionId: string, toolName: string, reason: string) =>
+    GatewayService.prototype.ensureSessionInternalToolGrant.call(gateway, sessionId, toolName, reason),
+  );
   const appendTaskActivity = vi.fn();
   const appendTaskDeliverable = vi.fn();
   gateway.taskLifecycleService = {
@@ -312,7 +378,9 @@ function createDelegationHarness() {
     sessionRoles.set(sessionId, role);
     return { sessionId };
   });
-  gateway.inheritDelegatedSessionToolGrants = vi.fn();
+  gateway.inheritDelegatedSessionToolGrants = vi.fn((parentSessionId: string, childSessionId: string) =>
+    GatewayService.prototype.inheritDelegatedSessionToolGrants.call(gateway, parentSessionId, childSessionId),
+  );
   gateway.updateChatSessionPrefs = vi.fn();
   gateway.agentSendChatMessage = vi.fn(async (childSessionId: string): Promise<ChatSendMessageResponse> => {
     const role = sessionRoles.get(childSessionId) ?? "delegate";
@@ -324,7 +392,9 @@ function createDelegationHarness() {
     },
     chatSessionMeta: {
       ensure: vi.fn(() => ({ workspaceId: "default" })),
+      get: vi.fn(() => ({ workspaceId: "default" })),
     },
+    toolGrants: toolGrantRepository,
     chatSessionProjects: {
       get: vi.fn(() => ({ projectId: "proj-1" })),
     },
@@ -708,6 +778,7 @@ function createDelegationHarness() {
       };
     },
     steps,
+    toolGrantRepository,
     sessionRoles,
     buildResponse,
   };
@@ -769,6 +840,66 @@ describe("GatewayService.runChatDelegation", () => {
         childTurnId: "child-turn-architect",
         durableRunId: "durable-architect",
       }),
+    );
+  });
+
+  it("persists delegated filesystem scope and grants the child submit_work_result", async () => {
+    const { gateway, service, toolGrantRepository } = createDelegationHarness();
+    toolGrantRepository.create({
+      toolPattern: "browser.search",
+      decision: "allow",
+      scope: "session",
+      scopeRef: "sess-1",
+      grantType: "persistent",
+      constraints: { allowedHosts: ["docs.example.test"] },
+      createdBy: "operator-fixture",
+    });
+    const delegatedScope = {
+      rootPath: "C:/workspace",
+      approvedPaths: ["C:/workspace/src"],
+      scopeHash: "scope-hash-1",
+      dispatchGeneration: "delegation-dispatch-generation-1",
+      updatedAt: "2026-04-19T00:00:00.000Z",
+    };
+    gateway.resolveDelegatedFilesystemScope = vi.fn(() => delegatedScope);
+
+    const result = (await service.runChatDelegation("sess-1", {
+      objective: "Implement the scoped change",
+      roles: ["coder"],
+      mode: "sequential",
+    })) as ChatDelegateResponse;
+
+    expect(gateway.resolveDelegatedFilesystemScope).toHaveBeenCalledWith(
+      "sess-1",
+      expect.stringMatching(/^delegation-dispatch:/),
+      undefined,
+    );
+    expect(gateway.storage.chatDelegationSteps.patch).toHaveBeenCalledWith(result.steps[0]!.stepId, {
+      scopeControl: delegatedScope,
+    });
+    expect(result.steps[0]?.scopeControl).toEqual(delegatedScope);
+    expect(gateway.ensureSessionInternalToolGrant).toHaveBeenCalledWith(
+      "delegate-session-1",
+      "submit_work_result",
+      "delegated-work-result-envelope",
+    );
+    const restartedRepository = toolGrantRepository.reconstruct();
+    expect(restartedRepository.listActive("session", "delegate-session-1")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          toolPattern: "browser.search",
+          decision: "allow",
+          grantType: "persistent",
+          constraints: { allowedHosts: ["docs.example.test"] },
+          createdBy: "system-delegated-session-inherit",
+        }),
+        expect.objectContaining({
+          toolPattern: "submit_work_result",
+          decision: "allow",
+          grantType: "ttl",
+          createdBy: "delegated-work-result-envelope",
+        }),
+      ]),
     );
   });
 

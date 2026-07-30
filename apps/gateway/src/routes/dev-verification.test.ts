@@ -7,6 +7,10 @@ import Fastify, { type FastifyInstance } from "fastify";
 const storageUpsertMany = vi.fn();
 const storageTurnCreate = vi.fn();
 const storageSetActiveLeaf = vi.fn();
+const storageCostInsert = vi.fn();
+const storageCandidateFind = vi.fn();
+const storageCandidateUpsert = vi.fn((record: unknown) => record);
+const storageCandidateRevisionCreate = vi.fn((_kind: string, _id: string, mutation: () => unknown) => mutation());
 const storageClose = vi.fn();
 
 vi.mock("@goatcitadel/storage", () => ({
@@ -21,6 +25,20 @@ vi.mock("@goatcitadel/storage", () => ({
 
     chatSessionBranchState = {
       setActiveLeaf: storageSetActiveLeaf,
+    };
+
+    costLedger = {
+      insert: storageCostInsert,
+    };
+
+    candidateSkillVersions = {
+      find: storageCandidateFind,
+      upsert: storageCandidateUpsert,
+    };
+
+    skillAggregateRevisions = {
+      createWithInitialRevision: storageCandidateRevisionCreate,
+      ensure: vi.fn(),
     };
 
     close() {
@@ -45,6 +63,10 @@ describe("dev verification routes", () => {
     storageUpsertMany.mockReset();
     storageTurnCreate.mockReset();
     storageSetActiveLeaf.mockReset();
+    storageCostInsert.mockReset();
+    storageCandidateFind.mockReset();
+    storageCandidateUpsert.mockClear();
+    storageCandidateRevisionCreate.mockClear();
     storageClose.mockReset();
     if (app) {
       await app.close();
@@ -171,10 +193,34 @@ describe("dev verification routes", () => {
       sessionId: "session-3",
       sessionIds: ["session-1", "session-2", "session-3"],
       sessionTitle: "Verification Demo Session",
+      candidateId: "usability-browser-candidate",
+      candidateVersionId: "usability-browser-candidate-v1",
     });
     expect(storageUpsertMany).toHaveBeenCalledTimes(1);
     expect(storageTurnCreate).toHaveBeenCalled();
     expect(storageSetActiveLeaf).toHaveBeenCalledWith("session-3", expect.any(String));
+    expect(storageCostInsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-3",
+        providerId: "verification-stub",
+        modelId: "verification-model",
+        costUsd: 0.0026,
+      }),
+    );
+    expect(storageCandidateRevisionCreate).toHaveBeenCalledWith(
+      "candidate_skill",
+      "usability-browser-candidate",
+      expect.any(Function),
+      "2026-07-29T00:00:00.000Z",
+    );
+    expect(storageCandidateUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        candidateId: "usability-browser-candidate",
+        versionId: "usability-browser-candidate-v1",
+        lifecycleState: "candidate",
+        sourceKind: "manual",
+      }),
+    );
     expect(storageClose).toHaveBeenCalledTimes(1);
   });
 
@@ -190,7 +236,12 @@ describe("dev verification routes", () => {
       expiresAt: "2026-04-10T00:10:00.000Z",
       explanationStatus: "not_requested",
     }));
-    const durableCreateRun = vi.fn(() => ({ runId: "durable-turn-1" }));
+    const seedDurableChatWait = vi.fn(() => ({
+      runId: "durable-turn-1",
+      assistantMessageId: "assistant-1",
+      version: 1,
+    }));
+    const settleDurableChatWait = vi.fn(async () => undefined);
     const inlineUpsert = vi.fn();
     const chatMessageUpsert = vi.fn();
     const branchSetActiveLeaf = vi.fn();
@@ -199,15 +250,16 @@ describe("dev verification routes", () => {
 
     app = Fastify();
     app.decorate("routeAccessManifest", []);
+    app.decorateRequest("authActorId", "loopback:verification-route-test");
+    app.decorateRequest("authActorSource", "loopback");
     decorateDevVerification(app, {
       isDevDiagnosticsEnabled: () => true,
       createApproval,
+      seedDurableChatWait,
+      settleDurableChatWait,
       storage: {
         approvalWaitRuns: {
           getRunId: approvalWaitGetRunId,
-        },
-        durableRuns: {
-          createRun: durableCreateRun,
         },
         chatMessages: {
           upsert: chatMessageUpsert,
@@ -252,26 +304,22 @@ describe("dev verification routes", () => {
         }),
       }),
     );
-    expect(durableCreateRun).toHaveBeenCalledWith(
+    expect(seedDurableChatWait).toHaveBeenCalledWith(
       expect.objectContaining({
-        workflowKey: "approval.wait",
-        status: "waiting",
-        payload: expect.objectContaining({
-          version: "approval.wait.v1",
-          approvalId: "approval-1",
-        }),
-        metadata: {
-          surface: "chat",
-          waitForEvent: {
-            eventKey: "approval.resolved",
-            correlationId: "approval-1",
-          },
-        },
+        workspaceId: "workspace-1",
+        sessionId: "session-1",
+        turnId: expect.any(String),
+        userMessageId: expect.any(String),
+        authActorId: "loopback:verification-route-test",
+        authActorSource: "loopback",
+        traceStatus: "waiting_for_approval",
+        waitForEvent: { eventKey: "approval.resolved", correlationId: "approval-1" },
       }),
     );
     expect(storageTurnCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: "session-1",
+        assistantMessageId: "assistant-1",
         status: "waiting_for_approval",
         durable: expect.objectContaining({ runId: "durable-turn-1" }),
       }),
@@ -297,12 +345,173 @@ describe("dev verification routes", () => {
       }),
     );
     expect(branchSetActiveLeaf).toHaveBeenCalledWith("session-1", expect.any(String));
+    expect(settleDurableChatWait).toHaveBeenCalledWith("durable-turn-1");
     expect(response.json()).toMatchObject({
       sessionId: "session-1",
       workspaceId: "workspace-1",
       approvalId: "approval-1",
       approvalWaitRunId: "approval-wait-1",
       chatTurnDurableRunId: "durable-turn-1",
+    });
+  });
+
+  it("seeds deterministic Chat attachment evidence only through the enabled private fixture", async () => {
+    const seedChatAttachmentEvidence = vi.fn(() => ({
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      citationId: "citation-1",
+      toolRunId: "tool-run-1",
+      sourceAttachmentId: "source-1",
+      sourceUrl: "https://fixture.example.invalid/usability-attachment-source",
+    }));
+    app = Fastify();
+    app.decorate("routeAccessManifest", []);
+    decorateDevVerification(app, {
+      isDevDiagnosticsEnabled: () => true,
+      seedChatAttachmentEvidence,
+    });
+    app.decorate("gatewayConfig", { rootDir: "f:/tmp/goatcitadel-dev" } as never);
+    await app.register(devVerificationRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/dev/verification/chat-attachment-evidence-scenario",
+      payload: { sessionId: "session-1", workspaceId: "workspace-1" },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(seedChatAttachmentEvidence).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      workspaceId: "workspace-1",
+    });
+    expect(response.json()).toMatchObject({
+      turnId: "turn-1",
+      citationId: "citation-1",
+      toolRunId: "tool-run-1",
+      sourceAttachmentId: "source-1",
+    });
+  });
+
+  it("seeds a durable admitted Chat user-input continuation", async () => {
+    const seedDurableChatWait = vi.fn(() => ({
+      runId: "durable-input-1",
+      assistantMessageId: "assistant-input-1",
+      version: 1,
+    }));
+    const settleDurableChatWait = vi.fn(async () => undefined);
+    const chatMessageUpsert = vi.fn();
+    const branchSetActiveLeaf = vi.fn();
+    app = Fastify();
+    app.decorate("routeAccessManifest", []);
+    app.decorateRequest("authActorId", "loopback:verification-route-test");
+    app.decorateRequest("authActorSource", "loopback");
+    decorateDevVerification(app, {
+      isDevDiagnosticsEnabled: () => true,
+      seedDurableChatWait,
+      settleDurableChatWait,
+      storage: {
+        chatMessages: { upsert: chatMessageUpsert },
+        chatTurnTraces: { create: storageTurnCreate },
+        chatSessionBranchState: { setActiveLeaf: branchSetActiveLeaf },
+      },
+    });
+    app.decorate("gatewayConfig", { rootDir: "f:/tmp/goatcitadel-dev" } as never);
+    await app.register(devVerificationRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/dev/verification/chat-user-input-scenario",
+      payload: { sessionId: "session-input", workspaceId: "workspace-1" },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(seedDurableChatWait).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: "workspace-1",
+        sessionId: "session-input",
+        authActorId: "loopback:verification-route-test",
+        authActorSource: "loopback",
+        traceStatus: "waiting_for_user_input",
+        waitForEvent: {
+          eventKey: "chat.user_input.resolved",
+          correlationId: expect.any(String),
+        },
+      }),
+    );
+    expect(storageTurnCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-input",
+        assistantMessageId: "assistant-input-1",
+        status: "waiting_for_user_input",
+        durable: expect.objectContaining({ runId: "durable-input-1" }),
+      }),
+    );
+    expect(settleDurableChatWait).toHaveBeenCalledWith("durable-input-1");
+    expect(response.json()).toMatchObject({
+      sessionId: "session-input",
+      workspaceId: "workspace-1",
+      chatTurnDurableRunId: "durable-input-1",
+    });
+  });
+
+  it("links deterministic fixture tasks to stable agentic run identities", async () => {
+    const getTask = vi.fn((taskId: string) => ({
+      taskId,
+      revision: 3,
+      workspaceId: "workspace-1",
+      title: "Fixture task",
+      status: "blocked",
+      priority: "normal",
+      createdAt: "2026-07-29T00:00:00.000Z",
+      updatedAt: "2026-07-29T00:00:00.000Z",
+    }));
+    const updateTaskWithRevision = vi.fn((_taskId, update) => ({ taskId: _taskId, revision: 4, ...update }));
+    app = Fastify();
+    app.decorate("routeAccessManifest", []);
+    app.decorate("services", {
+      devVerification: { isDevDiagnosticsEnabled: () => true },
+      tasks: { getTask, updateTaskWithRevision },
+    } as never);
+    app.decorate("gatewayConfig", { rootDir: "f:/tmp/goatcitadel-dev" } as never);
+    await app.register(devVerificationRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/dev/verification/agentic-task-seed",
+      payload: {
+        workspaceId: "workspace-1",
+        tasks: [
+          {
+            taskId: "task-1",
+            runId: "verification-agentic-task-1",
+            status: "approval_required",
+            surface: "chat",
+            parentSessionId: "session-1",
+          },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(getTask).toHaveBeenCalledWith("task-1", { workspaceId: "workspace-1" });
+    expect(updateTaskWithRevision).toHaveBeenCalledWith(
+      "task-1",
+      {
+        agenticContext: {
+          runId: "verification-agentic-task-1",
+          status: "approval_required",
+          surface: "chat",
+          contextMode: "isolated",
+          parentSessionId: "session-1",
+        },
+      },
+      3,
+      { workspaceId: "workspace-1" },
+    );
+    expect(response.json().items[0]).toMatchObject({
+      taskId: "task-1",
+      agenticContext: { runId: "verification-agentic-task-1", status: "approval_required" },
     });
   });
 

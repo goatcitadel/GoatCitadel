@@ -1,21 +1,26 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatCompletionRequest, MemoryContextPack } from "@goatcitadel/contracts";
 import {
+  attachChatCompletionFailureContext,
   buildMemoryContextSystemMessage,
   calculateSavings,
   createChatCompletionDeadline,
   delayChatCompletionRetry,
   extractPromptFromMessages,
+  getRemainingChatCompletionBudgetMs,
   getRemainingChatCompletionTimeoutMs,
+  hasChatCompletionSecondaryAttemptBudget,
   insertMemoryContextMessage,
   classifyProviderFailure,
   normalizeChatCompletionAttemptError,
   normalizeToolProtocolRetryRequest,
+  readChatCompletionFailureContext,
   shouldAttemptCrossProviderFallback,
   shouldRetryToolProtocolError,
   shouldRetryTransientProviderError,
 } from "./llm-completion-helpers.js";
 import { ChatTurnCancelledError } from "./chat-turn-helpers.js";
+import { StreamIdleTimeoutError } from "./stream-idle-watchdog.js";
 
 describe("llm-completion-helpers", () => {
   afterEach(() => {
@@ -140,15 +145,79 @@ describe("llm-completion-helpers", () => {
   it("classifies tool-protocol and transient provider failures without retrying auth denials blindly", () => {
     expect(shouldRetryToolProtocolError(new Error("invalid_request_error: function name is invalid"))).toBe(true);
     expect(shouldRetryToolProtocolError(new Error("reasoning_content is missing for tool_calls"))).toBe(true);
+    expect(shouldRetryToolProtocolError(new Error("invalid_request_error: model not found"))).toBe(false);
+    expect(shouldRetryToolProtocolError(new Error("tool call timed out while the provider was unavailable"))).toBe(
+      false,
+    );
+    expect(shouldRetryToolProtocolError(new Error("tool call failed while upstream was unavailable"))).toBe(false);
+    expect(shouldRetryToolProtocolError(new Error("function call rejected by rate limit"))).toBe(false);
+    expect(shouldRetryToolProtocolError(new Error("tool output failed because of a network error"))).toBe(false);
+    expect(
+      shouldRetryToolProtocolError(
+        Object.assign(new Error("tool call failed while upstream was unavailable"), {
+          providerFailure: {
+            code: "server_error",
+            type: "provider_error",
+            message: "function call rejected by rate limit",
+          },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      shouldRetryToolProtocolError(
+        Object.assign(new Error("provider rejected the request"), {
+          providerFailure: {
+            code: "invalid_tool_call",
+            type: "invalid_request_error",
+            message: "function arguments are malformed",
+          },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      shouldRetryToolProtocolError(
+        Object.assign(new Error("provider rejected the request"), {
+          providerFailure: { code: "invalid_function_arguments" },
+        }),
+      ),
+    ).toBe(true);
+    expect(shouldRetryToolProtocolError(new Error("tools[0].function.arguments must be valid JSON"))).toBe(true);
     expect(shouldRetryToolProtocolError(new Error("quota exhausted"))).toBe(false);
 
     expect(shouldRetryTransientProviderError(new Error("request failed (429 Too Many Requests)"))).toBe(true);
     expect(shouldRetryTransientProviderError(new Error("request failed (503 Service Unavailable)"))).toBe(true);
     expect(shouldRetryTransientProviderError(new Error("fetch failed: ECONNRESET"))).toBe(true);
+    const providerServerError = Object.assign(new Error("responses stream failed: server_error - retry later"), {
+      providerFailure: { code: "server_error", message: "retry later" },
+    });
+    expect(shouldRetryTransientProviderError(providerServerError)).toBe(true);
+    expect(classifyProviderFailure(providerServerError)).toBe("transient");
+    expect(shouldRetryTransientProviderError(new StreamIdleTimeoutError(5_000))).toBe(true);
     expect(shouldRetryTransientProviderError(new Error("request failed (401 Unauthorized)"))).toBe(false);
     expect(
       shouldRetryTransientProviderError(new Error("request failed (403): upstream proxy temporarily unavailable")),
     ).toBe(true);
+  });
+
+  it("carries the exact completion deadline and output boundary on terminal errors", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-29T20:00:00.000Z"));
+    const error = Object.assign(new Error("responses stream failed: server_error"), {
+      providerFailure: { code: "server_error" },
+    });
+    const deadlineAtMs = Date.now() + 4_551;
+
+    expect(
+      readChatCompletionFailureContext(
+        attachChatCompletionFailureContext(error, { deadlineAtMs, emittedOutput: false }),
+      ),
+    ).toEqual({
+      deadlineAtMs,
+      remainingBudgetMs: 4_551,
+      emittedOutput: false,
+      failureClass: "transient",
+      toolProtocolError: false,
+    });
   });
 
   it("classifies provider denials and blocks unsafe cross-provider fallback classes", () => {
@@ -296,11 +365,18 @@ describe("llm-completion-helpers", () => {
     expect(normalizeChatCompletionAttemptError("plain failure", undefined)).toEqual(new Error("plain failure"));
   });
 
-  it("delays retries unless the backoff would consume the remaining deadline", async () => {
+  it("delays retries only when backoff leaves a five-second secondary attempt window", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-14T12:00:00.000Z"));
 
-    const firstDelay = delayChatCompletionRetry(Date.now() + 1000, 1000, 0);
+    expect(getRemainingChatCompletionBudgetMs(undefined)).toBeUndefined();
+    expect(getRemainingChatCompletionBudgetMs(Date.now() + 5_250)).toBe(5_250);
+    expect(hasChatCompletionSecondaryAttemptBudget(Date.now() + 5_249, 0)).toBe(false);
+    expect(hasChatCompletionSecondaryAttemptBudget(Date.now() + 5_250, 0)).toBe(true);
+    expect(hasChatCompletionSecondaryAttemptBudget(Date.now() + 5_749, 1)).toBe(false);
+    expect(hasChatCompletionSecondaryAttemptBudget(Date.now() + 5_750, 1)).toBe(true);
+
+    const firstDelay = delayChatCompletionRetry(Date.now() + 5_250, 5_250, 0);
     await vi.advanceTimersByTimeAsync(249);
     let settled = false;
     firstDelay.then(() => {
@@ -308,10 +384,19 @@ describe("llm-completion-helpers", () => {
     });
     expect(settled).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
-    await expect(firstDelay).resolves.toBeUndefined();
+    await expect(firstDelay).resolves.toBe(true);
 
-    await expect(delayChatCompletionRetry(Date.now() + 500, 1000, 1)).rejects.toThrow(
-      "Chat completion timed out after 1000ms.",
-    );
+    await expect(delayChatCompletionRetry(Date.now() + 5_749, 5_749, 1)).resolves.toBe(false);
+  });
+
+  it("ends retry backoff immediately when the owning turn is cancelled", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const retry = delayChatCompletionRetry(undefined, undefined, 1, controller.signal);
+
+    controller.abort(new ChatTurnCancelledError("turn-cancelled"));
+
+    await expect(retry).resolves.toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

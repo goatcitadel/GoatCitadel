@@ -439,6 +439,26 @@ describe("ThreadedSurfacePage", () => {
     expect(renderer!.root.findByProps({ className: "mc-next-threaded-scrim open" }).props.tabIndex).toBe(0);
   });
 
+  it("closes the mobile session drawer after starting a new thread", async () => {
+    setMediaQuery("(width < 1180px)", true);
+    const input = buildInput() as any;
+    input.sessionRailOpen = true;
+    input.onSessionRailOpenChange = vi.fn();
+    input.sessionRail.onCreateSession = vi.fn();
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(<ThreadedSurfacePage surface="chat" input={input} />);
+    });
+
+    await act(async () => {
+      findButton(renderer!.root, "New thread").props.onClick();
+    });
+
+    expect(input.sessionRail.onCreateSession).toHaveBeenCalledTimes(1);
+    expect(input.onSessionRailOpenChange).toHaveBeenCalledWith(false);
+  });
+
   it("closes the mobile drawer with Escape or scrim and restores focus to the opener", async () => {
     setMediaQuery("(width < 1180px)", true);
     const addEventListener = vi.fn();
@@ -563,6 +583,22 @@ describe("ThreadedSurfacePage", () => {
     expect(block).toContain("position: static");
     expect(block).toContain(".mc-next-cowork-checkpoint-list summary");
     expect(block).toContain("grid-template-columns: minmax(0, 1fr)");
+  });
+
+  it("keeps the compact turn-context label at the mobile touch-target floor", () => {
+    const css = readFileSync(new URL("./styles/conversation-workspace.css", import.meta.url), "utf8");
+
+    expect(css).toMatch(
+      /\.mc-next-threaded-surface\.unified \.mc-next-thread-context-toggle\s*\{[\s\S]*?min-height: 1\.5rem;/u,
+    );
+  });
+
+  it("keeps the Chat build editor visible in the unified desktop header", () => {
+    const css = readFileSync(new URL("./styles/conversation-workspace.css", import.meta.url), "utf8");
+
+    expect(css).toContain(
+      "> .mc-next-threaded-secondary:not(.mc-next-threaded-work-record):not(.mc-next-threaded-build-editor),",
+    );
   });
 
   it("formats archive labels and session relative-time fallbacks", () => {
@@ -1073,7 +1109,7 @@ describe("ThreadedSurfacePage", () => {
     expect(modeControl[0]!.props["data-mode"]).toBe("chat");
   });
 
-  it("toggles the code workbench from mobile and conversation controls", async () => {
+  it("keeps the Chat build editor closed by default and opens it from the conversation control", async () => {
     vi.stubGlobal("HTMLElement", class HTMLElement {});
     vi.stubGlobal("window", {
       matchMedia: vi.fn((query: string) => ({
@@ -1083,13 +1119,13 @@ describe("ThreadedSurfacePage", () => {
       })),
     });
     const activeProps = buildActiveSessionProps({
-      mode: "code",
+      mode: "chat",
       onNavigateSurface: vi.fn(),
       onExportRunBundle: vi.fn(),
     });
     const input = {
       ...buildInput(),
-      messageMode: "code",
+      messageMode: "chat",
       activeSessionSurfaceProps: activeProps,
       emptyStateProps: null,
       workflowPanel: {
@@ -1108,22 +1144,23 @@ describe("ThreadedSurfacePage", () => {
 
     let renderer: ReactTestRenderer | null = null;
     await act(async () => {
-      renderer = create(<ThreadedSurfacePage surface="code" input={input} />);
+      renderer = create(<ThreadedSurfacePage surface="chat" input={input} />);
       await Promise.resolve();
     });
 
-    expect(collectText(renderer!.root)).toContain("Hide build editor");
-    await act(async () => {
-      findButton(renderer!.root, "Hide build editor").props.onClick();
-    });
     expect(collectText(renderer!.root)).toContain("Build editor");
+    expect(collectText(renderer!.root)).not.toContain("Hide build editor");
 
     await act(async () => {
       const conversationWorkbenchButton = findExactButtons(renderer!.root, "Build editor").find(
-        (button) => button.props.className === "mc-next-threaded-secondary",
+        (button) => button.props.className === "mc-next-threaded-secondary mc-next-threaded-build-editor",
       );
       expect(conversationWorkbenchButton).toBeDefined();
       conversationWorkbenchButton!.props.onClick();
+    });
+    expect(collectText(renderer!.root)).toContain("Hide build editor");
+
+    await act(async () => {
       findButton(renderer!.root, "Hide context").props.onClick();
       findButton(renderer!.root, "Export run bundle").props.onClick();
     });

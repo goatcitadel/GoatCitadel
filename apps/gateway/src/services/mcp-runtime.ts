@@ -40,7 +40,6 @@ const MCP_HTTP_RESPONSE_READ_TIMEOUT_MS = DEFAULT_STDIO_TIMEOUT_MS;
 const MCP_TERMINATE_GRACE_MS = 3000;
 const PLAYWRIGHT_SERVER_PATTERN = /\b(playwright)\b/i;
 const BROWSER_SERVER_PATTERN = /\b(browser|chrome|chromium|cdp|devtools)\b/i;
-const FETCH_SERVER_PATTERN = /\b(fetch|http|web)\b/i;
 
 interface JsonRpcEnvelope {
   jsonrpc: "2.0";
@@ -122,21 +121,6 @@ class McpToolOutcomeUnknownError extends Error {
     );
     this.name = "McpToolOutcomeUnknownError";
   }
-}
-
-export function inferMcpToolsForServer(server: McpServerRecord, existingTools: McpToolRecord[]): McpToolRecord[] {
-  if (existingTools.length > 0) {
-    return existingTools;
-  }
-  const now = new Date().toISOString();
-  const seeds = inferToolSeedNames(server);
-  return seeds.map((toolName) => ({
-    serverId: server.serverId,
-    toolName,
-    description: `Inferred ${toolName} capability for ${server.label}.`,
-    enabled: true,
-    updatedAt: now,
-  }));
 }
 
 export async function discoverMcpTools(
@@ -691,7 +675,20 @@ function buildRequesterScopedFailure(
 }
 
 function normalizeDiscoveredTools(server: McpServerRecord, response: JsonRpcEnvelope): McpToolRecord[] {
-  const tools = Array.isArray(response.result?.tools) ? (response.result?.tools as Array<Record<string, unknown>>) : [];
+  if (response.error) {
+    const detail = stringifyUnknown(response.error.data);
+    throw new Error(
+      sanitizeMcpRuntimeError(
+        [`MCP tools/list failed for ${server.label}`, response.error.message, detail ? `details: ${detail}` : undefined]
+          .filter(Boolean)
+          .join(": "),
+      ),
+    );
+  }
+  if (!Array.isArray(response.result?.tools)) {
+    throw new Error(sanitizeMcpRuntimeError(`MCP tools/list for ${server.label} did not return a tools array.`));
+  }
+  const tools = response.result.tools as Array<Record<string, unknown>>;
   const updatedAt = new Date().toISOString();
   const discovered: McpToolRecord[] = [];
   for (const tool of tools) {
@@ -1044,18 +1041,6 @@ function scoreToolCapability(
     return 2;
   }
   return 0;
-}
-
-function inferToolSeedNames(server: McpServerRecord): string[] {
-  const haystack =
-    `${server.label} ${server.command ?? ""} ${(server.args ?? []).join(" ")} ${server.category}`.toLowerCase();
-  if (PLAYWRIGHT_SERVER_PATTERN.test(haystack) || BROWSER_SERVER_PATTERN.test(haystack)) {
-    return ["browser.search", "browser.navigate", "browser.extract"];
-  }
-  if (FETCH_SERVER_PATTERN.test(haystack) || server.category === "research") {
-    return ["browser.search", "browser.extract", "http.get"];
-  }
-  return ["search", "fetch"];
 }
 
 /** Max bytes of stderr to retain per MCP child process invocation. */

@@ -273,6 +273,23 @@ describe("ui preferences", () => {
     hook.renderer.unmount();
   });
 
+  it("keeps scope setters stable while unrelated preferences change", () => {
+    const hook = renderPreferences();
+    const initialSetActiveCitadelId = hook.result.setActiveCitadelId;
+    const initialSetActiveWorkspaceId = hook.result.setActiveWorkspaceId;
+    const initialSetActiveScope = hook.result.setActiveScope;
+
+    act(() => {
+      hook.result.setDensity("compact");
+      hook.result.setNotificationSoundMode("subtle");
+    });
+
+    expect(hook.result.setActiveCitadelId).toBe(initialSetActiveCitadelId);
+    expect(hook.result.setActiveWorkspaceId).toBe(initialSetActiveWorkspaceId);
+    expect(hook.result.setActiveScope).toBe(initialSetActiveScope);
+    hook.renderer.unmount();
+  });
+
   it("falls back for invalid stored enum values and infers details from advanced mode", () => {
     const storage = installWindow();
     storage.setItem("goatcitadel.ui.mode.v1", "advanced");

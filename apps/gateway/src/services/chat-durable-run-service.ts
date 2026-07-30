@@ -315,6 +315,8 @@ export interface ChatDurableRunBeginDeps {
   skillLifecycle?: Pick<Storage["skillLifecycle"], "list">;
   assertTurnAdmissionWrite?(prepared: PreparedAgentChatTurn): void;
   bindTurnAdmissionToDurableRun?(prepared: PreparedAgentChatTurn, durableRunId: string): void;
+  /** Selects retry/edit sibling branches inside the durable admission transaction. */
+  activatePreparedBranch?(prepared: PreparedAgentChatTurn): void;
   onDurableRunCommitted?(run: DurableRunRecord): void;
   requestDurableRunProcessing(runId: string): void;
 }
@@ -465,6 +467,17 @@ export function beginDurableChatRun(
     }
     if (deps.chatTurnTraces) {
       persistInitialDurableChatTurnTrace({ chatTurnTraces: deps.chatTurnTraces }, prepared, input, run);
+    }
+    if (prepared.branchKind === "retry" || prepared.branchKind === "edit") {
+      // A retry/edit's lineage parent is the source turn's parent, while its
+      // branch-selection CAS must start from the leaf observed at preparation.
+      // Claim the new sibling branch before scheduling any provider work. A
+      // stale leaf therefore rolls this whole durable admission back instead
+      // of producing output for a completion that can never commit.
+      if (!deps.activatePreparedBranch) {
+        throw new Error(`Durable Chat ${prepared.branchKind} turn ${prepared.turnId} cannot select its branch.`);
+      }
+      deps.activatePreparedBranch(prepared);
     }
     beforeStreamPersist?.();
     deps.persistChatStreamChunk(

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { NotFoundError } from "@goatcitadel/contracts";
 import type {
   ChatSendMessageRequest,
   ChatStreamChunkDraft,
@@ -145,6 +146,108 @@ describe("chat-durable-run-service", () => {
     expect(requestedRunIds).toEqual(["run-1"]);
   });
 
+  it.each(["retry", "edit"] as const)(
+    "atomically selects an earlier %s sibling branch before durable provider scheduling",
+    (branchKind) => {
+      const events: string[] = [];
+      const prepared = createPreparedTurn({
+        turnAdmission: undefined,
+        turnId: `turn-${branchKind}`,
+        assistantMessageId: `assistant-${branchKind}`,
+        branchKind,
+        sourceTurnId: "turn-earlier-source",
+        parentTurnId: "turn-source-parent",
+        branchSelectionBaseTurnId: "turn-later-active-leaf",
+      });
+      const run = createRun(`run-${branchKind}`, "queued");
+
+      beginDurableChatRun(
+        {
+          shouldUseDurableExecution: true,
+          runImmediateTransaction: (work) => {
+            events.push("transaction:start");
+            const result = work();
+            events.push("transaction:commit");
+            return result;
+          },
+          createDurableRun: () => {
+            events.push("run");
+            return run;
+          },
+          buildDurablePayloadRecord: () => ({}),
+          persistChatStreamChunk: () => events.push("message_start"),
+          chatTurnTraces: {
+            get: () => {
+              throw new NotFoundError({ entity: "chat turn trace", id: prepared.turnId });
+            },
+            create: (input) => {
+              events.push("trace");
+              return input as ChatTurnTraceRecord;
+            },
+          },
+          activatePreparedBranch: (selected) => {
+            events.push("branch");
+            expect(selected).toMatchObject({
+              branchKind,
+              parentTurnId: "turn-source-parent",
+              branchSelectionBaseTurnId: "turn-later-active-leaf",
+              turnId: `turn-${branchKind}`,
+            });
+          },
+          requestDurableRunProcessing: () => events.push("provider:scheduled"),
+        },
+        prepared,
+        createSendRequest(),
+        branchKind === "retry" ? "chat_thread_turn_retried" : "chat_thread_turn_edited",
+        { runId: run.runId },
+      );
+
+      expect(events).toEqual([
+        "transaction:start",
+        "run",
+        "trace",
+        "branch",
+        "message_start",
+        "transaction:commit",
+        "provider:scheduled",
+      ]);
+    },
+  );
+
+  it("fails a stale retry branch before stream publication or provider scheduling", () => {
+    const persistChatStreamChunk = vi.fn();
+    const requestDurableRunProcessing = vi.fn();
+    const prepared = createPreparedTurn({
+      turnAdmission: undefined,
+      branchKind: "retry",
+      sourceTurnId: "turn-earlier-source",
+      parentTurnId: "turn-source-parent",
+      branchSelectionBaseTurnId: "turn-stale-leaf",
+    });
+
+    expect(() =>
+      beginDurableChatRun(
+        {
+          shouldUseDurableExecution: true,
+          runImmediateTransaction: (work) => work(),
+          createDurableRun: () => createRun("run-stale-retry", "queued"),
+          buildDurablePayloadRecord: () => ({}),
+          persistChatStreamChunk,
+          activatePreparedBranch: () => {
+            throw new Error("active leaf changed before retry branch admission");
+          },
+          requestDurableRunProcessing,
+        },
+        prepared,
+        createSendRequest(),
+        "chat_thread_turn_retried",
+        { runId: "run-stale-retry" },
+      ),
+    ).toThrow(/active leaf changed before retry branch admission/i);
+    expect(persistChatStreamChunk).not.toHaveBeenCalled();
+    expect(requestDurableRunProcessing).not.toHaveBeenCalled();
+  });
+
   it("skips durable run creation when the flow stays synchronous", () => {
     const prepared = createPreparedTurn();
     const input = createSendRequest();
@@ -182,6 +285,7 @@ describe("chat-durable-run-service", () => {
           persistChatStreamChunk: () => {
             throw new Error("stream chunk persistence unavailable");
           },
+          activatePreparedBranch: vi.fn(),
           requestDurableRunProcessing: vi.fn(),
         },
         createPreparedTurn({ turnAdmission: undefined }),

@@ -19,6 +19,7 @@
 
 import { randomUUID } from "node:crypto";
 import {
+  CHAT_TURN_ACTIVE_STATUSES,
   buildToolEffectEvidence,
   isDurableRunTerminal,
   NotFoundError,
@@ -104,16 +105,7 @@ export function reconcileInterruptedChatTurns(
   deps: ChatTurnInterruptionRecoveryDeps,
 ): ChatTurnInterruptionRecoveryResult {
   const now = deps.now ? deps.now() : new Date().toISOString();
-  const result: ChatTurnInterruptionRecoveryResult = {
-    interruptedTurnIds: [],
-    synthesizedTurnIds: [],
-    skippedDurableOwnedTurnIds: [],
-    restoredFinalTurnIds: [],
-    preservedPartialTurnIds: [],
-    transcriptEventsEnqueued: 0,
-    reconciledToolRunIds: [],
-    unknownEffectToolRunIds: [],
-  };
+  const result = createInterruptionRecoveryResult();
 
   let activeCursor: { startedAt: string; turnId: string } | undefined;
   while (true) {
@@ -126,62 +118,7 @@ export function reconcileInterruptedChatTurns(
       break;
     }
     for (const trace of page) {
-      try {
-        if (isOwnedByLiveDurableRun(deps, trace)) {
-          result.skippedDurableOwnedTurnIds.push(trace.turnId);
-          continue;
-        }
-        reconcileDanglingToolRuns(deps, trace, now, result);
-        const recoveredSource = resolveRecoveredAssistantSource(deps.storage, trace);
-        if (recoveredSource) {
-          const enqueued = persistRecoveredAssistantSource(deps, trace, recoveredSource, now);
-          result.transcriptEventsEnqueued += enqueued ? 1 : 0;
-          if (recoveredSource.final) {
-            result.restoredFinalTurnIds.push(trace.turnId);
-          } else {
-            result.preservedPartialTurnIds.push(trace.turnId);
-          }
-          announceInterruptedTurn(
-            deps,
-            trace.sessionId,
-            trace.turnId,
-            recoveredSource.final
-              ? "chat.turn.final_source_restored_after_restart"
-              : "chat.turn.partial_prefix_preserved_after_restart",
-            {
-              previousStatus: trace.status,
-              assistantMessageId: recoveredSource.messageId,
-              recoveredBytes: Buffer.byteLength(recoveredSource.content, "utf8"),
-              finalSource: recoveredSource.final,
-              sourceIncomplete: Boolean(recoveredSource.sourceIncomplete),
-            },
-          );
-          continue;
-        }
-      } catch (error) {
-        recordInterruptionRecoveryFailure(deps, trace, error, "recovered assistant output");
-      }
-      try {
-        deps.storage.chatTurnTraces.patch(trace.turnId, {
-          status: "failed",
-          failure: buildInterruptedByRestartFailure(),
-          completion: {
-            finishReason: trace.completion?.finishReason,
-            status: "interrupted",
-            repaired: Boolean(trace.completion?.repaired),
-          },
-          // A waiting_for_user_input turn can never collect its answer after the
-          // process died; clear the prompt so it doesn't sit on a terminal row.
-          pendingUserInput: null,
-          finishedAt: now,
-        });
-        result.interruptedTurnIds.push(trace.turnId);
-        announceInterruptedTurn(deps, trace.sessionId, trace.turnId, "chat.turn.interrupted_by_restart", {
-          previousStatus: trace.status,
-        });
-      } catch (error) {
-        recordInterruptionRecoveryFailure(deps, trace, error, "interrupted trace fallback");
-      }
+      reconcileActiveInterruptedTrace(deps, trace, now, result);
     }
     const last = page.at(-1)!;
     activeCursor = { startedAt: last.startedAt, turnId: last.turnId };
@@ -193,6 +130,122 @@ export function reconcileInterruptedChatTurns(
   reconcileOrphanedUserMessages(deps, now, result);
 
   return result;
+}
+
+/**
+ * Reconcile one exact durable Chat turn after its lease owner has been fenced
+ * and the durable run has reached terminal failure. Keeping this exact avoids a
+ * second process-wide scan and prevents a shared host from touching unrelated
+ * active turns while still reusing the canonical prefix/transcript repair.
+ */
+export function reconcileInterruptedDurableChatTurn(
+  deps: ChatTurnInterruptionRecoveryDeps,
+  input: { runId: string; turnId: string },
+): ChatTurnInterruptionRecoveryResult {
+  const result = createInterruptionRecoveryResult();
+  let trace: ChatTurnTraceRecord;
+  try {
+    trace = deps.storage.chatTurnTraces.get(input.turnId);
+  } catch (error) {
+    if (error instanceof NotFoundError) {
+      return result;
+    }
+    throw error;
+  }
+  if (
+    trace.durable?.runId !== input.runId ||
+    !CHAT_TURN_ACTIVE_STATUSES.includes(trace.status as (typeof CHAT_TURN_ACTIVE_STATUSES)[number])
+  ) {
+    return result;
+  }
+  reconcileActiveInterruptedTrace(deps, trace, deps.now ? deps.now() : new Date().toISOString(), result, {
+    durableTerminalFailure: true,
+  });
+  return result;
+}
+
+function createInterruptionRecoveryResult(): ChatTurnInterruptionRecoveryResult {
+  return {
+    interruptedTurnIds: [],
+    synthesizedTurnIds: [],
+    skippedDurableOwnedTurnIds: [],
+    restoredFinalTurnIds: [],
+    preservedPartialTurnIds: [],
+    transcriptEventsEnqueued: 0,
+    reconciledToolRunIds: [],
+    unknownEffectToolRunIds: [],
+  };
+}
+
+function reconcileActiveInterruptedTrace(
+  deps: ChatTurnInterruptionRecoveryDeps,
+  trace: ChatTurnTraceRecord,
+  now: string,
+  result: ChatTurnInterruptionRecoveryResult,
+  options: { durableTerminalFailure?: boolean } = {},
+): void {
+  try {
+    if (isOwnedByLiveDurableRun(deps, trace)) {
+      result.skippedDurableOwnedTurnIds.push(trace.turnId);
+      return;
+    }
+    reconcileDanglingToolRuns(deps, trace, now, result);
+    const recoveredSource = resolveRecoveredAssistantSource(deps.storage, trace);
+    if (recoveredSource) {
+      const enqueued = persistRecoveredAssistantSource(
+        deps,
+        trace,
+        recoveredSource,
+        now,
+        options.durableTerminalFailure ? "failed" : "partial",
+      );
+      result.transcriptEventsEnqueued += enqueued ? 1 : 0;
+      if (recoveredSource.final) {
+        result.restoredFinalTurnIds.push(trace.turnId);
+      } else {
+        result.preservedPartialTurnIds.push(trace.turnId);
+      }
+      announceInterruptedTurn(
+        deps,
+        trace.sessionId,
+        trace.turnId,
+        recoveredSource.final
+          ? "chat.turn.final_source_restored_after_restart"
+          : "chat.turn.partial_prefix_preserved_after_restart",
+        {
+          previousStatus: trace.status,
+          assistantMessageId: recoveredSource.messageId,
+          recoveredBytes: Buffer.byteLength(recoveredSource.content, "utf8"),
+          finalSource: recoveredSource.final,
+          sourceIncomplete: Boolean(recoveredSource.sourceIncomplete),
+        },
+      );
+      return;
+    }
+  } catch (error) {
+    recordInterruptionRecoveryFailure(deps, trace, error, "recovered assistant output");
+  }
+  try {
+    deps.storage.chatTurnTraces.patch(trace.turnId, {
+      status: "failed",
+      failure: buildInterruptedByRestartFailure(),
+      completion: {
+        finishReason: trace.completion?.finishReason,
+        status: "interrupted",
+        repaired: Boolean(trace.completion?.repaired),
+      },
+      // A waiting_for_user_input turn can never collect its answer after the
+      // process died; clear the prompt so it doesn't sit on a terminal row.
+      pendingUserInput: null,
+      finishedAt: now,
+    });
+    result.interruptedTurnIds.push(trace.turnId);
+    announceInterruptedTurn(deps, trace.sessionId, trace.turnId, "chat.turn.interrupted_by_restart", {
+      previousStatus: trace.status,
+    });
+  } catch (error) {
+    recordInterruptionRecoveryFailure(deps, trace, error, "interrupted trace fallback");
+  }
 }
 
 function recordInterruptionRecoveryFailure(
@@ -477,6 +530,7 @@ function persistRecoveredAssistantSource(
   trace: ChatTurnTraceRecord,
   source: RecoveredAssistantSource,
   now: string,
+  interruptedStatus: "partial" | "failed" = "partial",
 ): boolean {
   const session = deps.storage.sessions.getBySessionId(trace.sessionId);
   const message: ChatMessageRecord = {
@@ -506,7 +560,7 @@ function persistRecoveredAssistantSource(
     deps.storage.transcriptOutbox.enqueue(transcriptEvent, now);
     deps.storage.chatTurnTraces.patch(trace.turnId, {
       assistantMessageId: source.messageId,
-      status: source.final ? "completed" : "partial",
+      status: source.final ? "completed" : interruptedStatus,
       failure: source.final ? undefined : buildInterruptedByRestartFailure(true),
       completion: {
         status: source.final ? "complete" : "interrupted",

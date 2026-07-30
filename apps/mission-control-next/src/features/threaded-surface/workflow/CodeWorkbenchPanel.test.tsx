@@ -344,6 +344,95 @@ describe("NextCodeWorkbenchPanel Code Mode verification truth", () => {
     expect(renderedText(renderer!.root)).toContain("Fresh named proof passed: pnpm run typecheck (targeted scope)");
     expect(renderedText(renderer!.root)).toContain("does not establish hostile-code sandboxing");
   });
+
+  it("refreshes the run ledger after the helper submission settles", async () => {
+    const approvalPendingRun: CodeModeRunRecord = {
+      ...buildCompletedCodeModeRun(),
+      runId: "run-pending",
+      status: "approval_pending",
+      approvalId: "approval-pending",
+      requestedOutputIntent: "workbench_helper",
+      startedAt: undefined,
+      finishedAt: undefined,
+    };
+    let resolveHelperSubmission: () => void = () => undefined;
+    const helperSubmission = new Promise<void>((resolve) => {
+      resolveHelperSubmission = resolve;
+    });
+    const onRunHelperSnippet = vi.fn(() => helperSubmission);
+    vi.mocked(fetchCodeModeRuns)
+      .mockResolvedValueOnce({ items: [] })
+      .mockResolvedValue({ items: [approvalPendingRun] });
+    vi.mocked(fetchCodeModeRun).mockResolvedValue(approvalPendingRun);
+    vi.mocked(fetchCodeModeRunVerificationEvidence).mockResolvedValue({ items: [] });
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(
+        <NextCodeWorkbenchPanel
+          panel={buildCodePanel({
+            selectedTurn: {
+              turnId: "turn-a",
+              userMessage: { content: "Run this helper." },
+              assistantMessage: { content: "```ts\nconsole.log('snippet');\n```" },
+              trace: { sessionId: "session-a", toolRuns: [] },
+            },
+            workbenchState: {
+              sessionId: "session-a",
+              worktreeStatus: "ready",
+              validationStatus: "idle",
+              createdAt: "2026-07-30T00:00:00.000Z",
+              updatedAt: "2026-07-30T00:00:00.000Z",
+            },
+            onRunHelperSnippet,
+          })}
+        />,
+      );
+      await flushPromises();
+    });
+    expect(fetchCodeModeRuns).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      renderer!.root
+        .findAllByProps({ role: "tab" })
+        .find((tab) => renderedText(tab) === "Snippets")!
+        .props.onClick();
+      await flushPromises();
+    });
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => renderedText(button) === "Run helper snippet")!
+        .props.onClick();
+      await flushPromises();
+    });
+
+    expect(onRunHelperSnippet).toHaveBeenCalledWith("ts", "console.log('snippet');");
+    expect(fetchCodeModeRuns).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveHelperSubmission();
+      await flushPromises();
+    });
+
+    expect(fetchCodeModeRuns).toHaveBeenCalledTimes(2);
+    expect(fetchCodeModeRuns).toHaveBeenLastCalledWith({
+      sessionId: "session-a",
+      workspaceId: "default",
+      turnId: "turn-a",
+      limit: 25,
+    });
+    await act(async () => {
+      renderer!.root
+        .findAllByProps({ role: "tab" })
+        .find((tab) => renderedText(tab) === "Run log")!
+        .props.onClick();
+      await flushPromises();
+    });
+    expect(renderedText(renderer!.root)).toContain("1 Code Mode runs");
+    expect(renderedText(renderer!.root)).toContain("approval_pending");
+    expect(renderedText(renderer!.root)).toContain("workbench_helper");
+  });
 });
 
 function buildCompletedCodeModeRun(): CodeModeRunRecord {

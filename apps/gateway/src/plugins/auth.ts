@@ -392,7 +392,7 @@ export const authPlugin = fp(async (fastify) => {
 });
 
 function isOnboardingRecoveryRoute(url: string): boolean {
-  const pathname = url.split("?", 1)[0] ?? url;
+  const pathname = url.split("?", 1)[0];
   return (
     pathname === "/api/v1/onboarding/startup" ||
     pathname === "/api/v1/onboarding/state" ||
@@ -403,7 +403,7 @@ function isOnboardingRecoveryRoute(url: string): boolean {
 }
 
 function getSseTokenScopeForPath(url: string): "events:stream" | "dev:diagnostics:stream" | null {
-  const pathname = url.split("?", 1)[0] ?? url;
+  const pathname = url.split("?", 1)[0];
   if (pathname === "/api/v1/events/stream") {
     return "events:stream";
   }
@@ -594,12 +594,15 @@ function enforceSseTokenCapacity(
   actorId: string,
   maxItemsPerActor: number,
 ): void {
-  while (countSseTokensForActor(store, actorId) >= maxItemsPerActor) {
-    const oldestActorKey = findOldestSseTokenKey(store, actorId);
-    if (!oldestActorKey) {
-      break;
+  const actorKeys: string[] = [];
+  for (const [key, record] of store.entries()) {
+    if (record.actorId === actorId) {
+      actorKeys.push(key);
     }
-    store.delete(oldestActorKey);
+  }
+  const actorEvictionCount = Math.max(0, actorKeys.length - maxItemsPerActor + 1);
+  for (const key of actorKeys.slice(0, actorEvictionCount)) {
+    store.delete(key);
   }
   while (store.size >= maxItems) {
     const oldestKey = store.keys().next().value as string | undefined;
@@ -608,25 +611,6 @@ function enforceSseTokenCapacity(
     }
     store.delete(oldestKey);
   }
-}
-
-function countSseTokensForActor(store: Map<string, SseTokenRecord>, actorId: string): number {
-  let count = 0;
-  for (const record of store.values()) {
-    if (record.actorId === actorId) {
-      count += 1;
-    }
-  }
-  return count;
-}
-
-function findOldestSseTokenKey(store: Map<string, SseTokenRecord>, actorId: string): string | undefined {
-  for (const [key, record] of store.entries()) {
-    if (record.actorId === actorId) {
-      return key;
-    }
-  }
-  return undefined;
 }
 
 function setAuthActor(

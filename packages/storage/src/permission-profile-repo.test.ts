@@ -115,6 +115,41 @@ describe("PermissionProfileRepository", () => {
     );
   });
 
+  it("updates a custom profile with only parameters owned by the update statement", () => {
+    const { repo } = createStore();
+    const custom = repo.createProfile({
+      label: "Initial profile",
+      description: "Before update",
+      scope: "workspace",
+      scopeRef: "workspace-a",
+      approvalMode: "approve_all",
+      toolPatterns: ["session.status"],
+      createdBy: "operator-a",
+    });
+
+    const updated = repo.updateProfile(custom.profileId, {
+      label: "Updated profile",
+      description: "After update",
+      approvalMode: "approve_risky",
+      toolPatterns: ["session.status", "fs.write"],
+      allow: ["fs.*"],
+      deny: ["fs.write"],
+      readAccessMode: "roots_only",
+      defaultForSurfaces: ["chat", "tools"],
+      updatedBy: "operator-a",
+    });
+
+    assert.equal(updated.label, "Updated profile");
+    assert.equal(updated.description, "After update");
+    assert.equal(updated.approvalMode, "approve_risky");
+    assert.deepEqual(updated.toolPatterns, ["session.status", "fs.write"]);
+    assert.deepEqual(updated.allow, ["fs.*"]);
+    assert.deepEqual(updated.deny, ["fs.write"]);
+    assert.equal(updated.readAccessMode, "roots_only");
+    assert.deepEqual(updated.defaultForSurfaces, ["chat", "tools"]);
+    assert.equal(updated.builtin, false);
+  });
+
   it("does not let stored rows shadow builtin restricted permission profiles", () => {
     const { db, repo } = createStore();
     db.prepare(

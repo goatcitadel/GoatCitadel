@@ -11,9 +11,9 @@ export function recordConnectorHealthRun(host: ConnectorDiagnosticsHost, report:
     .prepare(
       `
       INSERT INTO connector_health_runs (
-        health_run_id, connector_type, connector_id, status, checks_json, recommendation, checked_at
+        health_run_id, connector_type, connector_id, status, summary_json, created_at
       ) VALUES (
-        @healthRunId, @connectorType, @connectorId, @status, @checksJson, @recommendation, @checkedAt
+        @healthRunId, @connectorType, @connectorId, @status, @summaryJson, @createdAt
       )
     `,
     )
@@ -22,9 +22,8 @@ export function recordConnectorHealthRun(host: ConnectorDiagnosticsHost, report:
       connectorType: report.connectorType,
       connectorId: report.connectorId,
       status: report.status,
-      checksJson: JSON.stringify(report.checks),
-      recommendation: report.recommendedNextAction ?? null,
-      checkedAt: report.checkedAt,
+      summaryJson: JSON.stringify(report),
+      createdAt: report.checkedAt,
     });
 }
 

@@ -291,6 +291,7 @@ export function LibraryKnowledgeSection(props: NativeRoutePagesProps) {
               ]}
             />
             <LibraryActionList
+              ariaLabel="Memory usage citations"
               items={(data?.qmd?.recent ?? []).flatMap((item) =>
                 item.citations
                   .slice(0, 3)
@@ -324,6 +325,7 @@ export function LibraryKnowledgeSection(props: NativeRoutePagesProps) {
               ]}
             />
             <LibraryActionList
+              ariaLabel="Recent context pack records"
               items={(data?.qmd?.recent ?? []).map((item) => ({
                 id: item.contextId,
                 label: item.contextId,
@@ -405,6 +407,7 @@ export function LibraryKnowledgeSection(props: NativeRoutePagesProps) {
                   ]}
                 />
                 <LibraryActionList
+                  ariaLabel="Selected engineering learning evidence"
                   items={[
                     {
                       id: "problem",

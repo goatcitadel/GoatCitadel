@@ -390,6 +390,46 @@ describe("HeartbeatOccurrenceRepository SQLite", () => {
     db.close();
   });
 
+  it("returns a structured no-mutation outcome for a normal active turn", () => {
+    const db = createDatabase({ dbPath: ":memory:" });
+    const fixture = seedHeartbeatSession(db, "operator-active-noop");
+    const admissions = new SessionMutationAdmissionRepository(db);
+    const active = admissions.admit({
+      workspaceId: fixture.workspaceId,
+      sessionId: fixture.sessionId,
+      expectedSessionIncarnationId: fixture.sessionIncarnationId,
+      turnId: "normal-active-turn",
+      runtimeOwnerId: "normal-active-runtime",
+      admissionKind: "turn_write",
+      aggregateRevision: fixture.aggregateRevision,
+      controllerGeneration: 1,
+      actorKind: "operator",
+      actorId: "operator-heartbeat",
+      operation: "chat_turn",
+      materialSha256: sha256("normal-active-material"),
+      idempotencyKey: "normal-active-admission",
+      correlationId: "normal-active-turn",
+    }).admission;
+    const before = admissions.require(active.admissionId);
+
+    const outcome = admissions.preemptHeartbeatAndAdmitOperatorTurn(
+      operatorTurnAdmissionInput(fixture, "operator-active-noop", 1),
+    );
+
+    assert.deepEqual(outcome, {
+      disposition: "not_preemptible",
+      preemptionDisposition: "not_preemptible",
+      recoveryOutcome: "not_preemptible",
+      mutated: false,
+      controllerGeneration: 1,
+      activeAdmission: before,
+    });
+    assert.deepEqual(admissions.require(active.admissionId), before);
+    assert.equal(readHeartbeatPreemptionEventCount(db, fixture.sessionId), 0);
+    assert.equal(readCountForSession(db, "chat_session_mutation_admissions", fixture.sessionId), 1);
+    db.close();
+  });
+
   it("reclaims and preempts an admitted heartbeat before atomically admitting the operator", () => {
     const db = createDatabase({ dbPath: ":memory:" });
     const fixture = createClaimedHeartbeatFixture(db, "operator-prebind-preempt");

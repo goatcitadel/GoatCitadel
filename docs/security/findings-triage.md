@@ -190,8 +190,15 @@ If the query is empty and local `pipeline(...)` call sites are visibly awaited o
 
 **Code Quality is a different product from code scanning.** Findings under
 `https://github.com/goatcitadel/GoatCitadel/security/quality` are *not* returned by the
-`code-scanning/alerts` REST API, and there is no GraphQL surface for them either. Probing
-`repos/.../code-quality/alerts` returns 404. The only way to enumerate them is the web UI:
+`code-scanning/alerts` REST API. Standard findings are available through the versioned Code
+Quality endpoint introduced in the 2026-03-10 GitHub API:
+
+```powershell
+gh api --paginate -H "X-GitHub-Api-Version: 2026-03-10" "repos/goatcitadel/GoatCitadel/code-quality/findings"
+```
+
+Use that response, plus the web UI when inspecting or dismissing an individual Standard finding.
+AI findings still have no API surface and must be enumerated in an authenticated GitHub web UI:
 
 - Standard findings (full CodeQL scan): `/security/quality`, then `/security/quality/rules/<url-encoded rule id>`
 - AI findings (recently-changed files): `/security/quality/ai-findings`
@@ -230,6 +237,7 @@ would have broken a passing test:
 | `capability-system-service.test.ts` — "the second run reuses the first run's approval" | The harness `approvals` Map is keyed by `approvalId`, so the second `createApproval` overwrites the entry; the second execute resolves the second run. The offered diff also reads `.value.id`, a field that does not exist (the field is `approvalId`, and an async mock's `mock.results[].value` is a Promise). |
 | `llm-service.test.ts` — "`/v1` should not be appended to a path-carrying base URL" | `shouldAppendV1` appends `/v1` to every path that is not already version-suffixed; bare roots are one case, not the only one. The expectation matches intended behaviour. |
 | `run-ts7-workspace.mjs` — "`mode` never alters the command" | Correct observation, intended design. The comment above `runTypeScriptCommand` explains that composite project references reject `--noEmit`. The offered diff also removed `--force` from build mode, which is a behaviour change. |
+| `verify-storage-migration-parity.test.mjs` — derive migration count and head assertions from the generated manifest | Rejected on 2026-07-29. The reviewed SQLite/Postgres count, first-version, and last-version literals are an independent tripwire. Deriving them from the manifest would let an accidental registry-plus-manifest edit self-certify and weaken append-only drift detection. The literals remain, with an intention-revealing comment. |
 
 The one accepted suggestion was a genuine naming/semantics issue: `dedupeProjects` was being reused
 to deduplicate group *names* while applying path separator normalization. It was split into a
@@ -250,6 +258,10 @@ Therefore **this document is the dismissal record.** When you reject an AI findi
 table above with the evidence, because the UI will keep showing it and the next reader has no other
 way to learn it was already triaged. Do not open the offered pull request just to make the entry
 disappear.
+
+The AI findings page does not need to be empty for a quality closeout. Remaining entries are
+acceptable only when every one is an evidence-backed false positive recorded here, every confirmed
+finding has been fixed, and the post-fix rescan has been reviewed.
 
 ---
 

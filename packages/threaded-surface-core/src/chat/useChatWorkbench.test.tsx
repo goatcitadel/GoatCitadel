@@ -198,6 +198,31 @@ describe("useChatWorkbench", () => {
     );
   });
 
+  it("rehydrates a ready workbench and changed files after a reload remount", async () => {
+    let renderer: ReturnType<typeof create>;
+    await act(async () => {
+      renderer = create(<Harness />);
+      await flushAsyncEffects();
+    });
+
+    expect(latest!.workbenchState).toEqual(workbenchState);
+    expect(latest!.workbenchTree?.changedFiles).toEqual(["src/index.ts", "README.md"]);
+
+    await act(async () => {
+      renderer.unmount();
+      await flushAsyncEffects();
+    });
+    await act(async () => {
+      renderer = create(<Harness />);
+      await flushAsyncEffects();
+    });
+
+    expect(apiMocks.fetchChatSessionWorkbench).toHaveBeenCalledTimes(2);
+    expect(apiMocks.fetchChatSessionWorkbench).toHaveBeenLastCalledWith("session-1");
+    expect(latest!.workbenchState?.worktreeStatus).toBe("ready");
+    expect(latest!.workbenchTree?.changedFiles).toEqual(["src/index.ts", "README.md"]);
+  });
+
   it("normalizes workbench action error causes", () => {
     expect(describeWorkbenchActionError(new Error("specific failure"), "fallback")).toBe("specific failure");
     expect(describeWorkbenchActionError("string failure", "fallback")).toBe("fallback");
@@ -248,9 +273,9 @@ describe("useChatWorkbench", () => {
         state: workbenchState,
         patch: "diff --git exported",
       });
-      await expect(
-        latest!.runWorkbenchFileOperation({ operation: "create_file", path: "src/new.ts" }),
-      ).resolves.toBe(true);
+      await expect(latest!.runWorkbenchFileOperation({ operation: "create_file", path: "src/new.ts" })).resolves.toBe(
+        true,
+      );
       await expect(latest!.revertWorkbenchFile()).resolves.toBe(true);
       await expect(latest!.revertWorkbenchFile("README.md")).resolves.toBe(true);
       await expect(latest!.revertWorkbenchAll()).resolves.toBe(true);

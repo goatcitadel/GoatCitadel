@@ -479,6 +479,8 @@ describe("PostgresSyncDatabaseClient statement adapter", () => {
       release: mock.fn(() => {
         released.push("released");
       }),
+      on: mock.fn(() => undefined),
+      off: mock.fn(() => undefined),
     };
     const runtime: PostgresSyncWorkerRuntime = {
       pool: {
@@ -491,10 +493,12 @@ describe("PostgresSyncDatabaseClient statement adapter", () => {
         }),
         connect: mock.fn(async () => transactionClient),
         end: mock.fn(async () => undefined),
+        on: mock.fn(() => undefined),
       },
       transactions: new Map([["tx-existing", transactionClient]]),
       transactionSessionIds: new Map(),
       sessions: new Map(),
+      checkedOutClients: new Map(),
     };
 
     assert.deepEqual(

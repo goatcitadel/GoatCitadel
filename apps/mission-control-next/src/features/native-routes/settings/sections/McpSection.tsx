@@ -86,7 +86,7 @@ function areMcpDraftsEqual(a: object, b: object): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-export function McpSection(_props: SettingsSectionProps) {
+export function McpSection(props: SettingsSectionProps) {
   const load = useCallback(async () => {
     const [servers, templates, remotePreview, serverMode, pendingElicitations] = await Promise.all([
       nativeLoad("MCP servers", fetchMcpServers(), { items: [] }),
@@ -397,6 +397,7 @@ export function McpSection(_props: SettingsSectionProps) {
                 </SettingsButtonRow>
                 {data.templates?.length ? (
                   <SettingsActionList
+                    ariaLabel="MCP server templates"
                     items={data.templates.slice(0, 6).map((item) => ({
                       label: item.label,
                       description: item.description,
@@ -464,6 +465,7 @@ export function McpSection(_props: SettingsSectionProps) {
                           ]}
                         />
                         <SettingsActionList
+                          ariaLabel={`MCP elicitation ${item.elicitationId}`}
                           items={[
                             {
                               label: item.prompt.text,
@@ -551,6 +553,7 @@ export function McpSection(_props: SettingsSectionProps) {
                   }}
                 />
                 <SettingsActionList
+                  ariaLabel="MCP server-mode capability descriptors"
                   items={(data.serverMode.tools ?? []).slice(0, 8).map((item) => ({
                     label: item.name,
                     meta: `${item.serverModeState.replaceAll("_", " ")} · ${item.capabilityKind}`,
@@ -606,6 +609,7 @@ export function McpSection(_props: SettingsSectionProps) {
                   }}
                 />
                 <SettingsActionList
+                  ariaLabel="Remote MCP server preview"
                   items={(data.remotePreview.items ?? []).map((item) => ({
                     label: item.label,
                     meta: [
@@ -797,6 +801,13 @@ export function McpSection(_props: SettingsSectionProps) {
                       Health check
                     </NativeButton>
                     <NativeButton
+                      variant="secondary"
+                      onClick={() => props.navigate({ area: "settings", section: "tools", theme: props.route.theme })}
+                    >
+                      <CheckCircle2 size={16} />
+                      Manage tool grants
+                    </NativeButton>
+                    <NativeButton
                       variant="destructive"
                       onClick={() =>
                         setPendingDeleteServer({ serverId: selectedServer.serverId, label: selectedServer.label })
@@ -807,13 +818,16 @@ export function McpSection(_props: SettingsSectionProps) {
                     </NativeButton>
                   </SettingsButtonRow>
                   <SettingsActionList
+                    ariaLabel={`${selectedServer.label} tools`}
                     items={tools.map((item) => ({
                       label: item.toolName,
                       description: item.description || "Registered MCP tool",
                     }))}
                     emptyLabel="No tools reported for this server."
                   />
-                  {healthReport ? <DiagnosticsPanel report={healthReport} /> : null}
+                  {healthReport ? (
+                    <DiagnosticsPanel report={healthReport} ariaLabel={`${selectedServer.label} health checks`} />
+                  ) : null}
                 </>
               ) : (
                 <SettingsEmptyState label="Select a server or create a new one." />

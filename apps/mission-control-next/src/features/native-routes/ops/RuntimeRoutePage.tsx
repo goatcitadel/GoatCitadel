@@ -12,9 +12,11 @@ import type {
 } from "@goatcitadel/contracts";
 import {
   createCronJob,
+  deleteCronJob,
   draftAutomationRecipe,
   exportActivepiecesWorkflowTemplate,
   exportN8nWorkflowTemplate,
+  runCronJobNow,
 } from "@goatcitadel/mission-control-shared/api/client";
 import {
   fetchReviewReadiness,
@@ -67,6 +69,7 @@ import { RuntimeSpendChart, type SpendDay } from "./RuntimeSpendChart";
 import { RuntimeAuthorityPanel } from "./RuntimeAuthorityPanel";
 import { MeshCapabilityPanel } from "./MeshCapabilityPanel";
 import { SessionControlPanel } from "./SessionControlPanel";
+import { NotificationRoutingPanel } from "../settings/sections/NotificationRoutingPanel";
 import type { NativeRoutePagesProps } from "../types";
 import "../native-routes.css";
 
@@ -112,13 +115,19 @@ export function RuntimeRoutePage({
   const runtime = useOpsRuntimeSnapshot(section);
   const data = runtime.data;
   const [activityFilter, setActivityFilter] = useState<"all" | "errors" | "approvals" | "runtime">("all");
+  const [costProviderFilter, setCostProviderFilter] = useState("all");
+  const [diagnosticsNotice, setDiagnosticsNotice] = useState<string | null>(null);
   const [scheduleDraft, setScheduleDraft] = useState({
     name: "",
     schedule: "0 9 * * *",
     action: "task" as CronActionOption,
   });
   const [scheduleCreating, setScheduleCreating] = useState(false);
-  const [scheduleNotice, setScheduleNotice] = useState<string | null>(null);
+  const [scheduleBusy, setScheduleBusy] = useState<{ jobId: string; action: "run" | "cancel" } | null>(null);
+  const [schedulePendingCancelId, setSchedulePendingCancelId] = useState<string | null>(null);
+  const [scheduleNotice, setScheduleNotice] = useState<{ tone: "info" | "success" | "error"; message: string } | null>(
+    null,
+  );
   const [automationDraft, setAutomationDraft] = useState({
     taskDescription: "",
     trigger: "",
@@ -167,6 +176,30 @@ export function RuntimeRoutePage({
     await loadReviewReadiness(true);
   }, [loadReviewReadiness]);
 
+  const handleExportDiagnostics = useCallback(() => {
+    if (!data || typeof document === "undefined" || typeof URL.createObjectURL !== "function") {
+      setDiagnosticsNotice("Diagnostics export is unavailable in this environment.");
+      return;
+    }
+    const payload = {
+      schemaVersion: 1,
+      generatedAt: new Date().toISOString(),
+      workspaceId: activeWorkspaceId,
+      sourceStatus: data.sourceStatus,
+      daemonLogs: data.health?.daemonLogs?.items ?? [],
+      daemonDiagnostics: readDaemonRuntimeDiagnostics(data),
+    };
+    const url = URL.createObjectURL(
+      new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: "application/json;charset=utf-8" }),
+    );
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "goatcitadel-ops-diagnostics.json";
+    anchor.click();
+    URL.revokeObjectURL(url);
+    setDiagnosticsNotice("Diagnostics export downloaded.");
+  }, [activeWorkspaceId, data]);
+
   useEffect(() => {
     if (section === "diagnostics") {
       void loadReviewReadiness();
@@ -177,7 +210,7 @@ export function RuntimeRoutePage({
     const name = scheduleDraft.name.trim();
     const schedule = scheduleDraft.schedule.trim();
     if (!name || !schedule) {
-      setScheduleNotice("Name and schedule are required.");
+      setScheduleNotice({ tone: "error", message: "Name and schedule are required." });
       return;
     }
     setScheduleCreating(true);
@@ -198,11 +231,14 @@ export function RuntimeRoutePage({
         action: scheduleDraft.action,
       });
       setScheduleDraft({ name: "", schedule: "0 9 * * *", action: "task" });
-      setScheduleNotice("Schedule created.");
+      setScheduleNotice({ tone: "success", message: "Schedule created." });
       await runtime.reload();
     } catch (error) {
       if (isMounted()) {
-        setScheduleNotice(error instanceof Error ? error.message : "Could not create schedule.");
+        setScheduleNotice({
+          tone: "error",
+          message: error instanceof Error ? error.message : "Could not create schedule.",
+        });
       }
     } finally {
       if (isMounted()) {
@@ -210,6 +246,55 @@ export function RuntimeRoutePage({
       }
     }
   }, [isMounted, runtime, scheduleDraft.action, scheduleDraft.name, scheduleDraft.schedule]);
+
+  const handleRunSchedule = useCallback(
+    async (jobId: string) => {
+      setScheduleBusy({ jobId, action: "run" });
+      setScheduleNotice(null);
+      try {
+        const run = await runCronJobNow(jobId);
+        if (!isMounted()) return;
+        recordRouteAction("ops/schedules", "schedule.run_now", { jobId, runId: run.runId, status: run.status });
+        setScheduleNotice({ tone: "success", message: `${jobId} queued as run ${run.runId}.` });
+        await runtime.reload();
+      } catch (error) {
+        if (isMounted()) {
+          setScheduleNotice({
+            tone: "error",
+            message: error instanceof Error ? error.message : "Could not run schedule.",
+          });
+        }
+      } finally {
+        if (isMounted()) setScheduleBusy(null);
+      }
+    },
+    [isMounted, runtime],
+  );
+
+  const handleCancelSchedule = useCallback(
+    async (jobId: string, revision: number) => {
+      setScheduleBusy({ jobId, action: "cancel" });
+      setScheduleNotice(null);
+      try {
+        await deleteCronJob(jobId, revision);
+        if (!isMounted()) return;
+        recordRouteAction("ops/schedules", "schedule.cancelled", { jobId, revision });
+        setSchedulePendingCancelId(null);
+        setScheduleNotice({ tone: "success", message: `${jobId} cancelled.` });
+        await runtime.reload();
+      } catch (error) {
+        if (isMounted()) {
+          setScheduleNotice({
+            tone: "error",
+            message: error instanceof Error ? error.message : "Could not cancel schedule.",
+          });
+        }
+      } finally {
+        if (isMounted()) setScheduleBusy(null);
+      }
+    },
+    [isMounted, runtime],
+  );
 
   const handleDraftAutomation = useCallback(async () => {
     const taskDescription = automationDraft.taskDescription.trim();
@@ -500,6 +585,51 @@ export function RuntimeRoutePage({
                   ]
                     .filter(Boolean)
                     .join(" · "),
+                  actions: (
+                    <>
+                      <NativeButton
+                        variant="outline"
+                        onClick={() => void handleRunSchedule(item.jobId)}
+                        disabled={scheduleBusy !== null}
+                        aria-label={`Run ${item.name} now`}
+                      >
+                        {scheduleBusy?.jobId === item.jobId && scheduleBusy.action === "run" ? "Running..." : "Run now"}
+                      </NativeButton>
+                      {schedulePendingCancelId === item.jobId ? (
+                        <>
+                          <NativeButton
+                            variant="destructive"
+                            onClick={() => void handleCancelSchedule(item.jobId, item.revision)}
+                            disabled={scheduleBusy !== null || !Number.isInteger(item.revision)}
+                            aria-label={`Confirm cancel ${item.name}`}
+                          >
+                            {scheduleBusy?.jobId === item.jobId && scheduleBusy.action === "cancel"
+                              ? "Cancelling..."
+                              : "Confirm cancel"}
+                          </NativeButton>
+                          <NativeButton
+                            variant="ghost"
+                            onClick={() => setSchedulePendingCancelId(null)}
+                            disabled={scheduleBusy !== null}
+                          >
+                            Keep schedule
+                          </NativeButton>
+                        </>
+                      ) : (
+                        <NativeButton
+                          variant="outline"
+                          onClick={() => setSchedulePendingCancelId(item.jobId)}
+                          disabled={scheduleBusy !== null || !Number.isInteger(item.revision)}
+                          title={
+                            Number.isInteger(item.revision) ? undefined : "Canonical schedule revision unavailable"
+                          }
+                          aria-label={`Cancel ${item.name}`}
+                        >
+                          Cancel schedule
+                        </NativeButton>
+                      )}
+                    </>
+                  ),
                 }))}
                 emptyLabel="No scheduled jobs."
                 density="compact"
@@ -512,7 +642,7 @@ export function RuntimeRoutePage({
               subtitle="Create a cron-backed job without leaving the schedules route."
               density="compact"
             >
-              {scheduleNotice ? <NoticeBanner tone="info" message={scheduleNotice} /> : null}
+              {scheduleNotice ? <NoticeBanner tone={scheduleNotice.tone} message={scheduleNotice.message} /> : null}
               <div className="mc-next-settings-field-grid">
                 <label className="mc-next-settings-field">
                   <span>Name</span>
@@ -792,6 +922,10 @@ export function RuntimeRoutePage({
       case "costs": {
         const spendDays = readSpendDays(data);
         const providerSpendRows = readProviderSpendRows(data);
+        const visibleProviderSpendRows =
+          costProviderFilter === "all"
+            ? providerSpendRows
+            : providerSpendRows.filter((item) => item.providerKey === costProviderFilter);
         const costCoverage = data.cost?.usageAvailability?.metricAvailability?.costUsd;
         const costProjectionIncomplete = hasIncompleteCostProjection(data);
         const daySpendCompleteness = readCurrentDayCostCompleteness(data);
@@ -828,6 +962,29 @@ export function RuntimeRoutePage({
                 { label: "Tracked", value: formatAvailabilityCount(data.cost?.usageAvailability?.trackedEvents) },
               ]}
             >
+              <div className="mc-next-settings-filter-bar" role="radiogroup" aria-label="Provider spend filter">
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={costProviderFilter === "all"}
+                  className={`mc-next-settings-filter${costProviderFilter === "all" ? " active" : ""}`}
+                  onClick={() => setCostProviderFilter("all")}
+                >
+                  All providers
+                </button>
+                {providerSpendRows.map((item) => (
+                  <button
+                    key={item.providerKey}
+                    type="button"
+                    role="radio"
+                    aria-checked={costProviderFilter === item.providerKey}
+                    className={`mc-next-settings-filter${costProviderFilter === item.providerKey ? " active" : ""}`}
+                    onClick={() => setCostProviderFilter(item.providerKey)}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
               <MetricGrid
                 items={[
                   {
@@ -854,7 +1011,7 @@ export function RuntimeRoutePage({
               />
               <NativeTable
                 ariaLabel="Provider spend breakdown"
-                rows={providerSpendRows.slice(0, 10)}
+                rows={visibleProviderSpendRows.slice(0, 10)}
                 getRowKey={(item) => item.providerKey}
                 emptyLabel="No spend breakdown available."
                 columns={[
@@ -876,6 +1033,14 @@ export function RuntimeRoutePage({
               {providerSpendRows.length > 10 ? (
                 <ResultCount shown={10} total={providerSpendRows.length} noun="providers" />
               ) : null}
+              <div className="mc-next-runtime-actions">
+                <NativeButton
+                  variant="outline"
+                  onClick={() => navigate({ area: "settings", section: "budget", theme: route.theme })}
+                >
+                  Open budget controls
+                </NativeButton>
+              </div>
             </NativeCard>
             <NativeCard
               title="Quality and QMD signal"
@@ -1219,11 +1384,17 @@ export function RuntimeRoutePage({
             <NativeCard
               title="Diagnostics directory"
               subtitle="System vitals, daemon logs, and MCP runtime posture in one diagnostics view."
+              actions={
+                <NativeButton variant="outline" onClick={handleExportDiagnostics}>
+                  Export diagnostics
+                </NativeButton>
+              }
               stats={[
                 { label: "CPU", value: String(data.health?.systemVitals?.cpuCount ?? 0) },
                 { label: "Load", value: formatLoadAverage(data.health?.systemVitals?.loadAverage ?? []) },
               ]}
             >
+              {diagnosticsNotice ? <NoticeBanner tone="success" message={diagnosticsNotice} /> : null}
               <MetricGrid
                 items={[
                   {
@@ -1251,6 +1422,19 @@ export function RuntimeRoutePage({
                 }))}
                 emptyLabel="No daemon logs available."
               />
+              <div className="mc-next-runtime-diagnostic-details" aria-label="Runtime source diagnostics">
+                {Object.entries(data.sourceStatus).map(([source, status]) => (
+                  <details key={source}>
+                    <summary role="button" aria-label={`Inspect diagnostic ${source}`}>
+                      {source}
+                    </summary>
+                    <p>
+                      <strong>Diagnostic detail:</strong>{" "}
+                      {status.status === "ok" ? "Source loaded successfully." : status.message}
+                    </p>
+                  </details>
+                ))}
+              </div>
             </NativeCard>
             <ReleaseProofDashboardPanel
               summary={reviewReadiness}
@@ -1264,6 +1448,21 @@ export function RuntimeRoutePage({
               error={reviewReadinessError}
               onRefresh={loadReviewReadiness}
             />
+            <NativeCard
+              title="Backup and recovery"
+              subtitle="Backup posture is visible in Ops; restore remains an offline, operator-run procedure."
+            >
+              <NoticeBanner
+                tone="info"
+                message="Offline restore is intentionally not launched from the browser. Verify a backup, stop the runtime, and follow the operator-run recovery procedure."
+              />
+              <NativeButton
+                variant="outline"
+                onClick={() => navigate({ area: "ops", section: "runtime", theme: route.theme })}
+              >
+                Open backup posture
+              </NativeButton>
+            </NativeCard>
             <QuickJumpCard
               title="Diagnostics routes"
               subtitle="Jump between diagnostics and related operator routes."
@@ -1309,6 +1508,7 @@ export function RuntimeRoutePage({
             >
               <NativeList items={notificationSignals} emptyLabel="No operator notification signals." />
             </NativeCard>
+            <NotificationRoutingPanel workspaceId={activeWorkspaceId} channels={[]} defaultTargetKind="https_webhook" />
             <QuickJumpCard
               title="Act on exception"
               subtitle="Review the canonical surface before approving repair, schedule, or runtime mutation."
@@ -1375,16 +1575,24 @@ export function RuntimeRoutePage({
                       key={item.eventId ?? `${item.eventType}-${item.timestamp ?? "no-ts"}-${index}`}
                       className="mc-next-activity-feed-row"
                     >
-                      <ThreePartChip
-                        tone={toneForActivityEvent(item.eventType, item.eventClass)}
-                        state={humanizeEventLabel(item.eventType)}
-                        mid={humanizeEventLabel(item.eventClass ?? item.source ?? "")}
-                        age={formatDateTime(item.timestamp)}
-                      />
-                      <span className="mc-next-activity-feed-source">
-                        {item.eventType}
-                        {item.source ? ` / ${item.source}` : ""}
-                      </span>
+                      <details>
+                        <summary role="button" aria-label={`Inspect activity event ${item.eventType}`}>
+                          <ThreePartChip
+                            tone={toneForActivityEvent(item.eventType, item.eventClass)}
+                            state={humanizeEventLabel(item.eventType)}
+                            mid={humanizeEventLabel(item.eventClass ?? item.source ?? "")}
+                            age={formatDateTime(item.timestamp)}
+                          />
+                          <span className="mc-next-activity-feed-source">
+                            {item.eventType}
+                            {item.source ? ` / ${item.source}` : ""}
+                          </span>
+                        </summary>
+                        <p>
+                          <strong>Activity event detail:</strong> source {item.source || "unknown"}; class{" "}
+                          {item.eventClass || "unspecified"}; timestamp {formatDateTime(item.timestamp)}.
+                        </p>
+                      </details>
                     </li>
                   ))}
                 </ul>
@@ -1430,11 +1638,16 @@ export function RuntimeRoutePage({
     automationPreview,
     automationTemplateExport,
     automationTemplateExporting,
+    costProviderFilter,
     data,
+    diagnosticsNotice,
+    handleCancelSchedule,
     handleCreateSchedule,
     handleDraftAutomation,
     handleExportActivepiecesTemplate,
+    handleExportDiagnostics,
     handleExportN8nTemplate,
+    handleRunSchedule,
     navigate,
     pendingApprovals,
     route.theme,
@@ -1445,9 +1658,11 @@ export function RuntimeRoutePage({
     loadReviewReadiness,
     refreshReleaseProof,
     runtime,
+    scheduleBusy,
     scheduleCreating,
     scheduleDraft,
     scheduleNotice,
+    schedulePendingCancelId,
     section,
   ]);
 

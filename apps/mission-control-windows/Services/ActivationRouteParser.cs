@@ -28,6 +28,10 @@ public static class ActivationRouteParser
         return false;
     }
 
+    internal static bool ContainsGoatcitadelProtocolToken(string? commandLine) =>
+        !string.IsNullOrWhiteSpace(commandLine) &&
+        Tokenize(commandLine).Any(token => token.StartsWith("goatcitadel:", StringComparison.OrdinalIgnoreCase));
+
     public static bool TryGetRouteFromProtocolUri(Uri? uri, out string route)
     {
         route = "";

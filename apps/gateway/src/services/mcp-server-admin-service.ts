@@ -13,7 +13,7 @@ import { resolveMcpServerConnectionMode } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import type { ToolPolicyActorContext } from "@goatcitadel/contracts";
 import { inferMcpCategory, normalizeMcpPolicy } from "./mcp-server-policy.js";
-import { discoverMcpTools, inferMcpToolsForServer } from "./mcp-runtime.js";
+import { discoverMcpTools } from "./mcp-runtime.js";
 import { createInternalMcpApprovalInboxTools, isInternalMcpApprovalInboxServer } from "./mcp-approval-inbox.js";
 import { createInternalMcpDurableTasksTools, isInternalMcpDurableTasksServer } from "./mcp-durable-tasks.js";
 import {
@@ -169,9 +169,9 @@ export async function connectMcpServer(host: McpServerAdminHost, serverId: strin
     const tools = host.readMcpTools();
     const existing = tools.filter((item) => item.serverId === serverId);
     const resolvedTools = await host.resolveConnectedMcpTools(connecting, existing);
-    if (resolvedTools.length > 0) {
-      host.writeMcpTools([...tools.filter((item) => item.serverId !== serverId), ...resolvedTools]);
-    }
+    // Live discovery is authoritative, including a valid empty catalog. Always
+    // replace this server's cache so removed tools cannot survive reconnect.
+    host.writeMcpTools([...tools.filter((item) => item.serverId !== serverId), ...resolvedTools]);
     return host.patchMcpServerState(serverId, {
       status: "connected",
       lastConnectedAt: new Date().toISOString(),
@@ -302,16 +302,15 @@ export interface ResolveConnectedMcpToolsDeps {
 
 /**
  * Resolve the live tool list for a connecting MCP server: internal servers get
- * their synthesized tools, stdio/http/sse servers get real discovery (with the
- * sandbox network allowlist + OAuth token resolver applied to remote
- * transports), and anything undiscoverable falls back to inference over the
- * previously known tools. Verbatim move from GatewayService; the gateway keeps
- * a thin delegator for the route-composition port.
+ * their synthesized tools, while stdio/http/sse servers get exact live
+ * discovery (with the sandbox network allowlist + OAuth token resolver applied
+ * to remote transports). A valid empty catalog stays empty; guessed or stale
+ * tools are never substituted for authoritative discovery.
  */
 export async function resolveConnectedMcpTools(
   deps: ResolveConnectedMcpToolsDeps,
   server: McpServerRecord,
-  existingTools: McpToolRecord[],
+  _existingTools: McpToolRecord[],
   actorContext?: ToolPolicyActorContext,
 ): Promise<McpToolRecord[]> {
   // HX-415 defense in depth: requester-scoped discovery is ephemeral and
@@ -327,20 +326,14 @@ export async function resolveConnectedMcpTools(
     return createInternalMcpDurableTasksTools(server.serverId);
   }
   if (server.transport === "stdio") {
-    const discovered = await discoverMcpTools(server, undefined, { actorContext });
-    if (discovered.length > 0) {
-      return discovered;
-    }
+    return discoverMcpTools(server, undefined, { actorContext });
   }
   if (server.transport === "http" || server.transport === "sse") {
-    const discovered = await discoverMcpTools(server, undefined, {
+    return discoverMcpTools(server, undefined, {
       networkAllowlist: deps.networkAllowlist,
       oauthAccessTokenResolver: deps.resolveOAuthAccessToken,
       actorContext,
     });
-    if (discovered.length > 0) {
-      return discovered;
-    }
   }
-  return inferMcpToolsForServer(server, existingTools);
+  return [];
 }

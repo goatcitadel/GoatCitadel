@@ -28,9 +28,19 @@ import {
 
 const runtimeApiMocks = vi.hoisted(() => ({
   createCronJob: vi.fn(),
+  createNotificationRule: vi.fn(),
+  createNotificationTarget: vi.fn(),
+  deleteCronJob: vi.fn(),
   draftAutomationRecipe: vi.fn(),
   exportActivepiecesWorkflowTemplate: vi.fn(),
   exportN8nWorkflowTemplate: vi.fn(),
+  fetchNotificationDeliveries: vi.fn(async () => ({ items: [] })),
+  fetchNotificationRules: vi.fn(async () => ({ items: [] })),
+  fetchNotificationTargets: vi.fn(async () => ({ items: [] })),
+  runCronJobNow: vi.fn(),
+  sendTestNotification: vi.fn(),
+  updateNotificationRule: vi.fn(),
+  updateNotificationTarget: vi.fn(),
 }));
 
 const reviewReadinessApiMocks = vi.hoisted(() => ({
@@ -95,9 +105,19 @@ const runtimeSnapshotOverrides = vi.hoisted(() => ({
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   createCronJob: runtimeApiMocks.createCronJob,
+  createNotificationRule: runtimeApiMocks.createNotificationRule,
+  createNotificationTarget: runtimeApiMocks.createNotificationTarget,
+  deleteCronJob: runtimeApiMocks.deleteCronJob,
   draftAutomationRecipe: runtimeApiMocks.draftAutomationRecipe,
   exportActivepiecesWorkflowTemplate: runtimeApiMocks.exportActivepiecesWorkflowTemplate,
   exportN8nWorkflowTemplate: runtimeApiMocks.exportN8nWorkflowTemplate,
+  fetchNotificationDeliveries: runtimeApiMocks.fetchNotificationDeliveries,
+  fetchNotificationRules: runtimeApiMocks.fetchNotificationRules,
+  fetchNotificationTargets: runtimeApiMocks.fetchNotificationTargets,
+  runCronJobNow: runtimeApiMocks.runCronJobNow,
+  sendTestNotification: runtimeApiMocks.sendTestNotification,
+  updateNotificationRule: runtimeApiMocks.updateNotificationRule,
+  updateNotificationTarget: runtimeApiMocks.updateNotificationTarget,
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/review-readiness", () => ({
@@ -156,6 +176,7 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot", () =>
                 jobs: [
                   {
                     jobId: "job-1",
+                    revision: 7,
                     name: "Daily review",
                     enabled: true,
                     action: "review",
@@ -529,9 +550,11 @@ describe("RuntimeRoutePage", () => {
     runtimeSnapshotOverrides.lastFetchedAt = null;
     runtimeSnapshotOverrides.isStale = false;
     runtimeApiMocks.createCronJob.mockReset();
+    runtimeApiMocks.deleteCronJob.mockReset();
     runtimeApiMocks.draftAutomationRecipe.mockReset();
     runtimeApiMocks.exportActivepiecesWorkflowTemplate.mockReset();
     runtimeApiMocks.exportN8nWorkflowTemplate.mockReset();
+    runtimeApiMocks.runCronJobNow.mockReset();
     reviewReadinessApiMocks.fetchReviewReadiness.mockClear();
     reviewReadinessApiMocks.refreshRuntimeReleaseTrust.mockClear();
     runtimeSnapshotOverrides.reload.mockClear();
@@ -585,6 +608,10 @@ describe("RuntimeRoutePage", () => {
       />,
     );
     expect(diagnosticsMarkup).not.toContain("Runtime authority map");
+    expect(diagnosticsMarkup).toContain("Export diagnostics");
+    expect(diagnosticsMarkup).toContain('<summary role="button" aria-label="Inspect diagnostic health">');
+    expect(diagnosticsMarkup).toContain("Backup and recovery");
+    expect(diagnosticsMarkup).toContain("Offline restore");
   });
 
   it("renders external idle-pending llama.cpp ownership without implying process control", () => {
@@ -1068,6 +1095,41 @@ describe("RuntimeRoutePage", () => {
     expect(collectText(renderer!.root)).toContain("Schedule created.");
   });
 
+  it("runs and explicitly confirms cancellation of a scheduled job", async () => {
+    runtimeApiMocks.runCronJobNow.mockResolvedValue({ jobId: "job-1", runId: "run-manual-1", status: "ok" });
+    runtimeApiMocks.deleteCronJob.mockResolvedValue({ deleted: true, jobId: "job-1" });
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = create(
+        <RuntimeRoutePage
+          route={{ area: "ops", section: "schedules", theme: "ops" } as any}
+          activeWorkspaceId="default"
+          activeWorkspaceName="Default"
+          pendingApprovals={2}
+          navigate={vi.fn()}
+          setActiveWorkspaceId={vi.fn()}
+        />,
+      );
+    });
+
+    await act(async () => {
+      findButton(renderer!.root, "Run now").props.onClick();
+    });
+    expect(runtimeApiMocks.runCronJobNow).toHaveBeenCalledWith("job-1");
+    expect(collectText(renderer!.root)).toContain("run-manual-1");
+
+    await act(async () => {
+      findButton(renderer!.root, "Cancel schedule").props.onClick();
+    });
+    expect(runtimeApiMocks.deleteCronJob).not.toHaveBeenCalled();
+    await act(async () => {
+      findButton(renderer!.root, "Confirm cancel").props.onClick();
+    });
+    expect(runtimeApiMocks.deleteCronJob).toHaveBeenCalledWith("job-1", 7);
+    expect(collectText(renderer!.root)).toContain("job-1 cancelled.");
+  });
+
   it("previews automation recipes without creating cron jobs", async () => {
     runtimeApiMocks.draftAutomationRecipe.mockResolvedValue({
       recipe: {
@@ -1461,6 +1523,8 @@ describe("RuntimeRoutePage", () => {
     expect(markup).toContain("2");
     expect(markup).toContain("Needs attention");
     expect(markup).toContain("Notification signals");
+    expect(markup).toContain("Notification routing");
+    expect(markup).toContain("Keychain HTTPS webhook");
     expect(markup).not.toContain("approval.created");
   });
 
@@ -1572,6 +1636,13 @@ describe("RuntimeRoutePage", () => {
       role: "radio",
       "aria-checked": true,
     });
+    expect(
+      renderer!.root
+        .findAllByType("summary")
+        .some(
+          (node) => node.props.role === "button" && node.props["aria-label"] === "Inspect activity event tool.failed",
+        ),
+    ).toBe(true);
 
     await act(async () => findExactButton(renderer!.root, "Errors").props.onClick());
     expect(collectText(renderer!.root)).toContain("Tool failed");

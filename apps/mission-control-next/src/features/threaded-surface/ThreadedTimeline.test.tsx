@@ -1024,6 +1024,20 @@ describe("ThreadedTimeline", () => {
     expect(onOpenGeneratedArtifact).toHaveBeenCalledWith("turn-1");
   });
 
+  it("forwards the canonical edit-and-resend action to each turn card", () => {
+    const onEditTurn = vi.fn();
+    const renderer = TestRenderer.create(<ThreadedTimeline props={buildProps({ onEditTurn }) as any} />);
+    const editButton = renderer.root.find(
+      (node) => node.type === "button" && node.props["aria-label"] === "Edit and resend turn turn-1",
+    );
+
+    TestRenderer.act(() => {
+      editButton.props.onClick();
+    });
+
+    expect(onEditTurn).toHaveBeenCalledWith("turn-1");
+  });
+
   it("renders non-cowork delegation lineage and follows output to the bottom marker", () => {
     const onBottomStateChange = vi.fn();
     const scrollIntoView = vi.fn();

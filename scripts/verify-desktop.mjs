@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { createDesktopVerificationIsolation, runIsolatedLauncherStatus } from "./lib/desktop-verification-isolation.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
@@ -87,39 +88,62 @@ const cargoTest = spawnSync("cargo", ["test"], {
 });
 assertSuccessfulSpawn(cargoTest, "Desktop cargo test");
 
-const launcherStatus = spawnSync(process.execPath, [path.join(repoRoot, "bin", "goatcitadel.mjs"), "status", "--json"], {
-  cwd: repoRoot,
-  env: {
-    ...process.env,
-    GOATCITADEL_HOME: repoRoot,
-  },
-  encoding: "utf8",
-});
-
-if (launcherStatus.error) {
-  throw launcherStatus.error;
-}
-if (launcherStatus.status !== 0) {
-  fail(`Launcher status contract failed: ${launcherStatus.stderr || launcherStatus.stdout}`);
-}
-
-let parsed;
-try {
-  parsed = JSON.parse(launcherStatus.stdout);
-} catch (error) {
-  fail(`Launcher status did not return JSON: ${error.message}`);
-}
-
-for (const key of ["status", "gatewayUrl", "uiUrl", "targetUrl", "runtimeRoot", "pidFiles", "logFiles"]) {
-  if (!(key in parsed)) {
-    fail(`Launcher status JSON is missing ${key}`);
-  }
-}
-if (parsed.status === "ready" && parsed.desktopEventStream && parsed.desktopEventStream.error) {
-  fail(`Desktop SSE credential status returned an error: ${parsed.desktopEventStream.error}`);
+const launcherStatusError = await verifyIsolatedLauncherStatus();
+if (launcherStatusError) {
+  fail(launcherStatusError);
 }
 
 console.log("Desktop verification passed.");
+
+async function verifyIsolatedLauncherStatus() {
+  let isolation;
+  try {
+    isolation = await createDesktopVerificationIsolation();
+    const launcherStatus = await runIsolatedLauncherStatus(
+      repoRoot,
+      isolation.buildLauncherEnvironment(process.env, repoRoot),
+    );
+
+    if (launcherStatus.error) {
+      return `Launcher status contract failed to start: ${launcherStatus.error.message}`;
+    }
+    if (launcherStatus.status !== 0) {
+      return `Launcher status contract failed: ${launcherStatus.stderr || launcherStatus.stdout}`;
+    }
+
+    let parsed;
+    try {
+      parsed = JSON.parse(launcherStatus.stdout);
+    } catch (error) {
+      return `Launcher status did not return JSON: ${error.message}`;
+    }
+
+    for (const key of ["status", "gatewayUrl", "uiUrl", "targetUrl", "runtimeRoot", "pidFiles", "logFiles"]) {
+      if (!(key in parsed)) {
+        return `Launcher status JSON is missing ${key}`;
+      }
+    }
+    if (parsed.gatewayUrl !== isolation.gatewayUrl || parsed.uiUrl !== isolation.uiUrl) {
+      return "Launcher status ignored the desktop verification lane's isolated endpoints.";
+    }
+    if (parsed.status !== "stopped" || parsed.readiness?.gateway !== false || parsed.readiness?.ui !== false) {
+      return `Launcher status accepted a runtime not owned by the desktop verification lane: ${launcherStatus.stdout.trim()}`;
+    }
+    if (parsed.pids?.gateway?.state !== "missing" || parsed.pids?.ui?.state !== "missing") {
+      return `Launcher status found unexpected process ownership in its isolated runtime root: ${launcherStatus.stdout.trim()}`;
+    }
+    if (parsed.desktopEventStream !== undefined) {
+      return "Launcher requested a desktop SSE credential without an owned ready Gateway.";
+    }
+    return undefined;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  } finally {
+    if (isolation) {
+      await isolation.dispose();
+    }
+  }
+}
 
 function assertDotnet10Sdk() {
   const result = spawnSync("dotnet", ["--list-sdks"], {

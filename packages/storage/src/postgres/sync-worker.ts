@@ -41,11 +41,14 @@ export interface PostgresSyncWorkerQueryExecutor {
 
 export interface PostgresSyncWorkerTransactionClient extends PostgresSyncWorkerQueryExecutor {
   release(destroy?: boolean): void;
+  on(event: "error", listener: (error: Error) => void): unknown;
+  off(event: "error", listener: (error: Error) => void): unknown;
 }
 
 export interface PostgresSyncWorkerPool extends PostgresSyncWorkerQueryExecutor {
   connect(): Promise<PostgresSyncWorkerTransactionClient>;
   end(): Promise<void>;
+  on(event: "error", listener: (error: Error) => void): unknown;
 }
 
 export interface PostgresSyncWorkerRuntime {
@@ -53,21 +56,167 @@ export interface PostgresSyncWorkerRuntime {
   transactions: Map<string, PostgresSyncWorkerTransactionClient>;
   transactionSessionIds: Map<string, string>;
   sessions: Map<string, PostgresSyncWorkerTransactionClient>;
+  checkedOutClients: Map<PostgresSyncWorkerTransactionClient, PostgresSyncWorkerCheckedOutClientState>;
+  onCheckedOutClientError?: (error: Error, owner: PostgresSyncWorkerCheckedOutClientOwner) => void;
   serverEncodingPromise?: Promise<string | undefined>;
+}
+
+export interface PostgresSyncWorkerCheckedOutClientOwner {
+  kind: "session" | "transaction";
+  id: string;
+}
+
+interface PostgresSyncWorkerCheckedOutClientState {
+  owner: PostgresSyncWorkerCheckedOutClientOwner;
+  listener: (error: Error) => void;
+  error?: Error;
 }
 
 export function createPostgresSyncWorkerRuntime(
   options: PostgresConnectionOptions,
   input: {
     pool?: PostgresSyncWorkerPool;
+    onPoolError?: (error: Error) => void;
+    onCheckedOutClientError?: (error: Error, owner: PostgresSyncWorkerCheckedOutClientOwner) => void;
   } = {},
 ): PostgresSyncWorkerRuntime {
+  const pool =
+    input.pool ?? (new Pool(buildPostgresSyncWorkerPoolConfig(options)) as unknown as PostgresSyncWorkerPool);
+  pool.on("error", (error) => {
+    reportPostgresSyncWorkerPoolError(error, input.onPoolError);
+  });
   return {
-    pool: input.pool ?? (new Pool(buildPostgresSyncWorkerPoolConfig(options)) as unknown as PostgresSyncWorkerPool),
+    pool,
     transactions: new Map(),
     transactionSessionIds: new Map(),
     sessions: new Map(),
+    checkedOutClients: new Map(),
+    onCheckedOutClientError: input.onCheckedOutClientError,
   };
+}
+
+/**
+ * `pg.Pool` emits `error` when an idle connection fails in the background. An
+ * error listener is mandatory: without one, EventEmitter terminates the sync
+ * worker and the Gateway's synchronous storage client remains permanently
+ * fatal even after Postgres is reachable again. The pool has already removed
+ * the failed idle client before this callback and reconnects on a later query.
+ */
+export function reportPostgresSyncWorkerPoolError(error: Error, reporter?: (error: Error) => void): void {
+  if (reporter) {
+    try {
+      reporter(error);
+      return;
+    } catch (reportingError) {
+      emitPostgresSyncWorkerPoolWarning(error, reportingError);
+      return;
+    }
+  }
+  emitPostgresSyncWorkerPoolWarning(error);
+}
+
+function emitPostgresSyncWorkerPoolWarning(error: Error, reportingError?: unknown): void {
+  const databaseCode = readPostgresErrorCode(error);
+  const reportingSuffix = reportingError
+    ? `; custom reporter failed: ${reportingError instanceof Error ? reportingError.message : String(reportingError)}`
+    : "";
+  process.emitWarning(
+    `Postgres sync pool discarded a failed idle connection${databaseCode ? ` (${databaseCode})` : ""}: ${error.message}${reportingSuffix}`,
+    { code: "GOATCITADEL_POSTGRES_IDLE_CONNECTION_ERROR" },
+  );
+}
+
+function readPostgresErrorCode(error: Error): string | undefined {
+  const code = (error as Error & { code?: unknown }).code;
+  return typeof code === "string" && code.length > 0 ? code : undefined;
+}
+
+/**
+ * A checked-out pg client no longer has the pool's idle error listener. Own an
+ * explicit listener for the full pinned-session/transaction checkout so a
+ * restart cannot surface as an unhandled EventEmitter `error` in the worker.
+ * Transactions are never replayed: a failed checkout is fenced, destroyed on
+ * release, and a later independent request may obtain a fresh pool client.
+ */
+export function ownPostgresSyncWorkerCheckedOutClient(
+  runtime: PostgresSyncWorkerRuntime,
+  client: PostgresSyncWorkerTransactionClient,
+  owner: PostgresSyncWorkerCheckedOutClientOwner,
+): void {
+  if (runtime.checkedOutClients.has(client)) {
+    return;
+  }
+  const state: PostgresSyncWorkerCheckedOutClientState = {
+    owner,
+    listener: (error) => {
+      state.error = error;
+      reportPostgresSyncWorkerCheckedOutClientError(error, owner, runtime.onCheckedOutClientError);
+    },
+  };
+  runtime.checkedOutClients.set(client, state);
+  try {
+    client.on("error", state.listener);
+  } catch (error) {
+    runtime.checkedOutClients.delete(client);
+    client.release(true);
+    throw error;
+  }
+}
+
+export function releasePostgresSyncWorkerCheckedOutClient(
+  runtime: PostgresSyncWorkerRuntime,
+  client: PostgresSyncWorkerTransactionClient,
+  destroy?: boolean,
+): void {
+  const state = runtime.checkedOutClients.get(client);
+  let destroyClient = destroy === true || state?.error !== undefined;
+  if (state) {
+    try {
+      client.off("error", state.listener);
+    } catch (error) {
+      destroyClient = true;
+      reportPostgresSyncWorkerCheckedOutClientError(
+        error instanceof Error ? error : new Error(String(error)),
+        state.owner,
+        runtime.onCheckedOutClientError,
+      );
+    } finally {
+      runtime.checkedOutClients.delete(client);
+    }
+  }
+  client.release(destroyClient ? true : destroy);
+}
+
+export function reportPostgresSyncWorkerCheckedOutClientError(
+  error: Error,
+  owner: PostgresSyncWorkerCheckedOutClientOwner,
+  reporter?: (error: Error, owner: PostgresSyncWorkerCheckedOutClientOwner) => void,
+): void {
+  if (reporter) {
+    try {
+      reporter(error, owner);
+      return;
+    } catch (reportingError) {
+      emitPostgresSyncWorkerCheckedOutClientWarning(error, owner, reportingError);
+      return;
+    }
+  }
+  emitPostgresSyncWorkerCheckedOutClientWarning(error, owner);
+}
+
+function emitPostgresSyncWorkerCheckedOutClientWarning(
+  error: Error,
+  owner: PostgresSyncWorkerCheckedOutClientOwner,
+  reportingError?: unknown,
+): void {
+  const databaseCode = readPostgresErrorCode(error);
+  const reportingSuffix = reportingError
+    ? `; custom reporter failed: ${reportingError instanceof Error ? reportingError.message : String(reportingError)}`
+    : "";
+  process.emitWarning(
+    `Postgres sync worker fenced failed checked-out ${owner.kind} ${owner.id}${databaseCode ? ` (${databaseCode})` : ""}: ${error.message}${reportingSuffix}`,
+    { code: "GOATCITADEL_POSTGRES_CHECKED_OUT_CONNECTION_ERROR" },
+  );
 }
 
 export interface PostgresSyncWorkerMessageSource {
@@ -157,6 +306,7 @@ export async function handlePostgresSyncWorkerRequest(
         throw new Error(`Postgres pinned session ${request.sessionId} is already active`);
       }
       const client = await runtime.pool.connect();
+      ownPostgresSyncWorkerCheckedOutClient(runtime, client, { kind: "session", id: request.sessionId });
       runtime.sessions.set(request.sessionId, client);
       return true;
     }
@@ -166,7 +316,7 @@ export async function handlePostgresSyncWorkerRequest(
         throw new Error(`Postgres pinned session ${request.sessionId} still owns an active transaction`);
       }
       runtime.sessions.delete(request.sessionId);
-      client.release(request.destroy);
+      releasePostgresSyncWorkerCheckedOutClient(runtime, client, request.destroy);
       return true;
     }
     case "tx_begin": {
@@ -176,6 +326,10 @@ export async function handlePostgresSyncWorkerRequest(
       const client = request.sessionId
         ? getPinnedSessionClient(runtime, request.sessionId)
         : await runtime.pool.connect();
+      if (!request.sessionId) {
+        ownPostgresSyncWorkerCheckedOutClient(runtime, client, { kind: "transaction", id: request.txId });
+      }
+      assertPostgresSyncWorkerCheckedOutClientUsable(runtime, client);
       if (request.sessionId) {
         // Reserve ownership before BEGIN yields. Otherwise session_end can run
         // concurrently, release the pinned client, and leave a late BEGIN as an
@@ -191,7 +345,7 @@ export async function handlePostgresSyncWorkerRequest(
         if (request.sessionId) {
           runtime.transactionSessionIds.delete(request.txId);
         } else {
-          client.release();
+          releasePostgresSyncWorkerCheckedOutClient(runtime, client);
         }
         throw error;
       }
@@ -200,47 +354,72 @@ export async function handlePostgresSyncWorkerRequest(
     }
     case "tx_commit": {
       const client = getTransactionClient(runtime, request.txId);
+      let destroyClient = false;
       try {
+        assertPostgresSyncWorkerCheckedOutClientUsable(runtime, client);
         await client.query("COMMIT");
+      } catch (error) {
+        destroyClient = true;
+        markPostgresSyncWorkerCheckedOutClientFailed(runtime, client, error);
+        throw error;
       } finally {
         const isPinnedSessionTransaction = runtime.transactionSessionIds.delete(request.txId);
         runtime.transactions.delete(request.txId);
         if (!isPinnedSessionTransaction) {
-          client.release();
+          releasePostgresSyncWorkerCheckedOutClient(runtime, client, destroyClient);
         }
       }
       return true;
     }
     case "tx_rollback": {
       const client = getTransactionClient(runtime, request.txId);
+      let destroyClient = false;
       try {
+        assertPostgresSyncWorkerCheckedOutClientUsable(runtime, client);
         await client.query("ROLLBACK");
+      } catch (error) {
+        destroyClient = true;
+        markPostgresSyncWorkerCheckedOutClientFailed(runtime, client, error);
+        throw error;
       } finally {
         const isPinnedSessionTransaction = runtime.transactionSessionIds.delete(request.txId);
         runtime.transactions.delete(request.txId);
         if (!isPinnedSessionTransaction) {
-          client.release();
+          releasePostgresSyncWorkerCheckedOutClient(runtime, client, destroyClient);
         }
       }
       return true;
     }
     case "close": {
+      let closeError: unknown;
       for (const [txId, client] of runtime.transactions.entries()) {
+        let destroyClient = false;
         try {
+          assertPostgresSyncWorkerCheckedOutClientUsable(runtime, client);
           await client.query("ROLLBACK");
+        } catch (error) {
+          destroyClient = true;
+          closeError ??= error;
         } finally {
           const isPinnedSessionTransaction = runtime.transactionSessionIds.delete(txId);
           runtime.transactions.delete(txId);
           if (!isPinnedSessionTransaction) {
-            client.release();
+            releasePostgresSyncWorkerCheckedOutClient(runtime, client, destroyClient);
           }
         }
       }
       for (const [sessionId, client] of runtime.sessions.entries()) {
         runtime.sessions.delete(sessionId);
-        client.release(true);
+        releasePostgresSyncWorkerCheckedOutClient(runtime, client, true);
       }
-      await runtime.pool.end();
+      try {
+        await runtime.pool.end();
+      } catch (error) {
+        closeError ??= error;
+      }
+      if (closeError !== undefined) {
+        throw closeError;
+      }
       return true;
     }
   }
@@ -252,12 +431,37 @@ function getRequestExecutor(
   sessionId: string | undefined,
 ): PostgresSyncWorkerQueryExecutor {
   if (txId) {
-    return getTransactionClient(runtime, txId);
+    const client = getTransactionClient(runtime, txId);
+    assertPostgresSyncWorkerCheckedOutClientUsable(runtime, client);
+    return client;
   }
   if (sessionId) {
-    return getPinnedSessionClient(runtime, sessionId);
+    const client = getPinnedSessionClient(runtime, sessionId);
+    assertPostgresSyncWorkerCheckedOutClientUsable(runtime, client);
+    return client;
   }
   return runtime.pool;
+}
+
+function assertPostgresSyncWorkerCheckedOutClientUsable(
+  runtime: PostgresSyncWorkerRuntime,
+  client: PostgresSyncWorkerTransactionClient,
+): void {
+  const failure = runtime.checkedOutClients.get(client)?.error;
+  if (failure) {
+    throw failure;
+  }
+}
+
+function markPostgresSyncWorkerCheckedOutClientFailed(
+  runtime: PostgresSyncWorkerRuntime,
+  client: PostgresSyncWorkerTransactionClient,
+  error: unknown,
+): void {
+  const state = runtime.checkedOutClients.get(client);
+  if (state && state.error === undefined) {
+    state.error = error instanceof Error ? error : new Error(String(error));
+  }
 }
 
 function getTransactionClient(runtime: PostgresSyncWorkerRuntime, txId: string): PostgresSyncWorkerTransactionClient {

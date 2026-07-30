@@ -5,6 +5,23 @@ import fs from "node:fs";
 import { randomBytes, randomUUID } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import readline from "node:readline/promises";
+import {
+  atomicCompareAndPublishJson,
+  atomicCompareAndRemove,
+  inspectProcessBinding,
+  queryProcessCreationIdentity,
+  readManagedStateFile,
+  withManagedLifecycleLock,
+} from "../scripts/lib/managed-runtime-lifecycle.mjs";
+import {
+  assessLauncherEndpointOwnership,
+  assessManagedStopSafety,
+  buildEndpointOwnershipDiagnostic,
+  formatManagedEndpointCollision,
+  parseManagedProcessMetadata,
+  resolveLauncherEndpoint,
+  safeEndpointOrigin,
+} from "../scripts/lib/managed-runtime-ownership.mjs";
 import { resolveUiTarget } from "../scripts/lib/ui-target.mjs";
 
 const defaultRepoUrl = process.env.GOATCITADEL_REPO_URL || "https://github.com/goatcitadel/GoatCitadel.git";
@@ -52,6 +69,10 @@ const managedLocalConfigPaths = [
   "config/private-beta.profile.json",
 ];
 const WINDOWS_CMD_PATH = "C:\\Windows\\System32\\cmd.exe";
+const MANAGED_METADATA_MAX_BYTES = 4096;
+const MANAGED_HEALTH_MAX_BYTES = 8192;
+const MANAGED_OWNERSHIP_PROBE_TIMEOUT_MS = 2_000;
+const MANAGED_LIFECYCLE_LOCK_TIMEOUT_MS = 190_000;
 
 const args = process.argv.slice(2);
 const command = args[0] || "help";
@@ -558,8 +579,7 @@ function doctor(extraArgs = []) {
 
 async function launchGoatCitadel(extraArgs = []) {
   const launchOptions = parseLaunchOptions(extraArgs);
-  const gatewayUrl = process.env.GOATCITADEL_GATEWAY_URL || defaultGatewayUrl;
-  const uiUrl = process.env.GOATCITADEL_MISSION_CONTROL_URL || defaultUiUrl;
+  const endpoints = resolveLauncherRuntimeEndpoints();
 
   const result = await withJsonCleanStdout(launchOptions.json, async () => {
     ensureLaunchRuntimeDirectories();
@@ -569,33 +589,33 @@ async function launchGoatCitadel(extraArgs = []) {
       const nodeExecutable = resolvePackagedNodeExecutable();
       await ensureGatewayReady({
         packaged: true,
-        gatewayUrl,
+        endpoint: endpoints.gateway,
         nodeExecutable,
       });
       await ensureUiReady({
         packaged: true,
-        gatewayUrl,
-        uiUrl,
+        gatewayEndpoint: endpoints.gateway,
+        endpoint: endpoints.ui,
         nodeExecutable,
       });
     } else {
       ensureWorkspaceRuntimeBuilds();
       await ensureGatewayReady({
         packaged: false,
-        gatewayUrl,
+        endpoint: endpoints.gateway,
       });
       await ensureUiReady({
         packaged: false,
-        gatewayUrl,
-        uiUrl,
+        gatewayEndpoint: endpoints.gateway,
+        endpoint: endpoints.ui,
       });
     }
 
-    return readRuntimeStatus({
-      gatewayUrl,
-      uiUrl,
-      assumeReady: true,
-    });
+    const status = await readRuntimeStatus({ endpoints });
+    if (!status.readiness.gateway || !status.readiness.ui) {
+      throw new Error("Gateway and Mission Control did not retain accepted endpoint ownership after launch.");
+    }
+    return status;
   });
 
   if (!launchOptions.noOpen) {
@@ -628,15 +648,198 @@ function ensureLaunchRuntimeDirectories() {
   fs.mkdirSync(runtimeLogDir, { recursive: true });
 }
 
+function resolveLauncherRuntimeEndpoints() {
+  return {
+    gateway: {
+      service: "gateway",
+      serviceLabel: "Gateway",
+      overrideEnvKey: "GOATCITADEL_GATEWAY_URL",
+      defaultUrl: defaultGatewayUrl,
+      healthPath: "/health",
+      pidPath: gatewayPidPath,
+      lockPath: path.join(runtimeStateDir, "locks", "gateway.lifecycle.lock"),
+      ...resolveLauncherEndpoint({
+        defaultUrl: defaultGatewayUrl,
+        overrideValue: process.env.GOATCITADEL_GATEWAY_URL,
+      }),
+    },
+    ui: {
+      service: "mission-control",
+      serviceLabel: "Mission Control",
+      overrideEnvKey: "GOATCITADEL_MISSION_CONTROL_URL",
+      defaultUrl: defaultUiUrl,
+      healthPath: "/health",
+      pidPath: uiPidPath,
+      lockPath: path.join(runtimeStateDir, "locks", "mission-control.lifecycle.lock"),
+      ...resolveLauncherEndpoint({
+        defaultUrl: defaultUiUrl,
+        overrideValue: process.env.GOATCITADEL_MISSION_CONTROL_URL,
+      }),
+    },
+  };
+}
+
+async function inspectLauncherRuntimeOwnershipWithLocks(endpoints, timeoutMs) {
+  const inspect = async (endpoint) => {
+    if (endpoint.attachmentMode === "external_override") {
+      return inspectLauncherEndpointOwnership(endpoint, timeoutMs);
+    }
+    try {
+      return await withManagedLifecycleLock(
+        {
+          lockPath: endpoint.lockPath,
+          service: endpoint.service,
+          timeoutMs: 1_500,
+        },
+        () => inspectLauncherEndpointOwnership(endpoint, timeoutMs, { bindServingIdentity: true }),
+      );
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("lifecycle lock")) {
+        return inspectLauncherEndpointOwnership(endpoint, timeoutMs);
+      }
+      throw error;
+    }
+  };
+  const [gateway, ui] = await Promise.all([inspect(endpoints.gateway), inspect(endpoints.ui)]);
+  return { gateway, ui };
+}
+
+async function inspectLauncherEndpointOwnership(endpoint, timeoutMs, options = {}) {
+  const metadataRecord = readManagedProcessMetadata(endpoint.pidPath, endpoint.service);
+  let pidInfo = metadataRecord.info;
+  const health = await probeEndpointHealth(`${endpoint.url}${endpoint.healthPath}`, timeoutMs);
+  let identityMatched = false;
+  let processBinding;
+
+  if (endpoint.attachmentMode === "managed" && pidInfo.state === "running") {
+    const markerMatched =
+      health.managedInstanceId === pidInfo.instanceId &&
+      health.service === pidInfo.service &&
+      Number.isSafeInteger(health.managedProcessId) &&
+      health.managedProcessId > 0;
+    if (markerMatched) {
+      processBinding = inspectProcessBinding({ rootPid: pidInfo.pid, servingPid: health.managedProcessId });
+      if (processBinding.status === "unavailable") {
+        pidInfo = { ...pidInfo, state: "unverified", reason: "process_identity_unavailable" };
+      } else if (processBinding.status !== "verified") {
+        pidInfo = classifyManagedRootProcess(pidInfo);
+      } else if (processBinding.rootIdentity !== pidInfo.processIdentity) {
+        pidInfo = { ...pidInfo, state: "reused", reason: "process_identity_mismatch" };
+      } else {
+        const servingIdentityMatched =
+          pidInfo.servingPid === health.managedProcessId &&
+          pidInfo.servingProcessIdentity === processBinding.servingIdentity;
+        if (!servingIdentityMatched && options.bindServingIdentity === true) {
+          const publish = atomicCompareAndPublishJson({
+            filePath: endpoint.pidPath,
+            expectedFingerprint: metadataRecord.fingerprint,
+            value: managedMetadataValue(pidInfo, {
+              servingPid: health.managedProcessId,
+              servingProcessIdentity: processBinding.servingIdentity,
+            }),
+          });
+          if (publish.published) {
+            return inspectLauncherEndpointOwnership(endpoint, timeoutMs, { bindServingIdentity: false });
+          }
+          return inspectLauncherEndpointOwnership(endpoint, timeoutMs, { bindServingIdentity: false });
+        }
+        identityMatched = servingIdentityMatched;
+      }
+    } else if (!health.responded && pidInfo.servingPid && pidInfo.servingProcessIdentity) {
+      // A temporary health failure must not make an otherwise exact managed
+      // process impossible to stop. The persisted serving identity plus the
+      // current OS ancestry still proves ownership without trusting the port.
+      processBinding = inspectProcessBinding({ rootPid: pidInfo.pid, servingPid: pidInfo.servingPid });
+      if (processBinding.status === "unavailable") {
+        pidInfo = { ...pidInfo, state: "unverified", reason: "process_identity_unavailable" };
+      } else if (processBinding.status !== "verified") {
+        pidInfo = classifyManagedRootProcess(pidInfo);
+      } else if (processBinding.rootIdentity !== pidInfo.processIdentity) {
+        pidInfo = { ...pidInfo, state: "reused", reason: "process_identity_mismatch" };
+      } else {
+        identityMatched = processBinding.servingIdentity === pidInfo.servingProcessIdentity;
+      }
+    } else {
+      pidInfo = classifyManagedRootProcess(pidInfo);
+    }
+  }
+  return {
+    endpoint,
+    pidInfo,
+    metadataRecord: { ...metadataRecord, info: pidInfo },
+    health,
+    processBinding,
+    assessment: assessLauncherEndpointOwnership({
+      attachmentMode: endpoint.attachmentMode,
+      pidState: pidInfo.state,
+      endpointResponded: health.responded,
+      endpointHealthy: health.healthy,
+      identityMatched,
+    }),
+  };
+}
+
+function classifyManagedRootProcess(pidInfo) {
+  const current = queryProcessCreationIdentity(pidInfo.pid);
+  if (current.status === "unavailable") {
+    return { ...pidInfo, state: "unverified", reason: "process_identity_unavailable" };
+  }
+  if (current.status !== "running") {
+    return { ...pidInfo, state: "stale", reason: "process_exited" };
+  }
+  if (current.identity !== pidInfo.processIdentity) {
+    return { ...pidInfo, state: "reused", reason: "process_identity_mismatch" };
+  }
+  return pidInfo;
+}
+
+function managedMetadataValue(pidInfo, overrides = {}) {
+  return {
+    pid: pidInfo.pid,
+    processIdentity: pidInfo.processIdentity,
+    instanceId: pidInfo.instanceId,
+    service: pidInfo.service,
+    startedAt: pidInfo.startedAt,
+    ...(pidInfo.servingPid && pidInfo.servingProcessIdentity
+      ? { servingPid: pidInfo.servingPid, servingProcessIdentity: pidInfo.servingProcessIdentity }
+      : {}),
+    ...overrides,
+  };
+}
+
+function throwForManagedEndpointCollision(snapshot) {
+  if (snapshot.assessment.collision) {
+    throw new Error(managedEndpointCollisionMessage(snapshot));
+  }
+}
+
+function managedEndpointCollisionMessage(snapshot) {
+  return formatManagedEndpointCollision({
+    serviceLabel: snapshot.endpoint.serviceLabel,
+    defaultUrl: snapshot.endpoint.defaultUrl,
+    overrideEnvKey: snapshot.endpoint.overrideEnvKey,
+    assessment: snapshot.assessment,
+  });
+}
+
+function endpointOwnershipDiagnostic(snapshot) {
+  return {
+    ...buildEndpointOwnershipDiagnostic(snapshot.assessment),
+    ...(snapshot.pidInfo.reason ? { metadataReason: snapshot.pidInfo.reason } : {}),
+  };
+}
+
 async function readRuntimeStatus(options = {}) {
-  const gatewayUrl = options.gatewayUrl || process.env.GOATCITADEL_GATEWAY_URL || defaultGatewayUrl;
-  const uiUrl = options.uiUrl || process.env.GOATCITADEL_MISSION_CONTROL_URL || defaultUiUrl;
+  const endpoints = options.endpoints || resolveLauncherRuntimeEndpoints();
+  const gatewayUrl = endpoints.gateway.url;
+  const uiUrl = endpoints.ui.url;
   ensureLaunchRuntimeDirectories();
 
-  const gatewayPid = readManagedPid(gatewayPidPath);
-  const uiPid = readManagedPid(uiPidPath);
-  const gatewayReady = options.assumeReady === true || (await waitForHttp(`${gatewayUrl}/health`, 750, 1));
-  const uiReady = options.assumeReady === true || (await waitForHttp(`${uiUrl}/health`, 750, 1));
+  const ownership = await inspectLauncherRuntimeOwnershipWithLocks(endpoints, MANAGED_OWNERSHIP_PROBE_TIMEOUT_MS);
+  const gatewayPid = ownership.gateway.pidInfo;
+  const uiPid = ownership.ui.pidInfo;
+  const gatewayReady = ownership.gateway.assessment.readinessAccepted;
+  const uiReady = ownership.ui.assessment.readinessAccepted;
   const startupState = gatewayReady
     ? await fetchJson(`${gatewayUrl}/api/v1/onboarding/startup`).catch(() => undefined)
     : undefined;
@@ -647,14 +850,7 @@ async function readRuntimeStatus(options = {}) {
   const anyAlive = pidStates.includes("running");
   const anyStale = pidStates.includes("stale");
   const anyReady = gatewayReady || uiReady;
-  const status =
-    gatewayReady && uiReady
-      ? "ready"
-      : anyAlive || anyReady
-        ? "degraded"
-        : anyStale
-          ? "stale"
-          : "stopped";
+  const status = gatewayReady && uiReady ? "ready" : anyAlive || anyReady ? "degraded" : anyStale ? "stale" : "stopped";
 
   return buildRuntimeCommandResult({
     status,
@@ -667,37 +863,147 @@ async function readRuntimeStatus(options = {}) {
     uiReady,
     gatewayPid,
     uiPid,
+    endpointOwnership: {
+      gateway: endpointOwnershipDiagnostic(ownership.gateway),
+      ui: endpointOwnershipDiagnostic(ownership.ui),
+    },
     desktopEventStream,
   });
 }
 
 async function stopGoatCitadelRuntime() {
   ensureLaunchRuntimeDirectories();
-  const before = await readRuntimeStatus();
+  const endpoints = resolveLauncherRuntimeEndpoints();
+  const before = await readRuntimeStatus({ endpoints });
   const stopped = [];
   const stale = [];
+  const notStopped = [];
 
   for (const item of [
-    { label: "ui", path: uiPidPath },
-    { label: "gateway", path: gatewayPidPath },
+    { label: "ui", endpoint: endpoints.ui },
+    { label: "gateway", endpoint: endpoints.gateway },
   ]) {
-    const pidInfo = readManagedPid(item.path);
-    if (pidInfo.state === "running" && pidInfo.pid) {
-      stopManagedProcess(pidInfo.pid);
-      stopped.push({ label: item.label, pid: pidInfo.pid });
-    } else if (pidInfo.state === "stale") {
-      stale.push({ label: item.label, pid: pidInfo.pid });
+    const outcome =
+      item.endpoint.attachmentMode === "external_override"
+        ? await stopManagedLauncherEndpoint(item)
+        : await withManagedLifecycleLock(
+            {
+              lockPath: item.endpoint.lockPath,
+              service: item.endpoint.service,
+              timeoutMs: MANAGED_LIFECYCLE_LOCK_TIMEOUT_MS,
+            },
+            () => stopManagedLauncherEndpoint(item),
+          );
+    if (outcome.stopped) {
+      stopped.push(outcome.stopped);
     }
-    fs.rmSync(item.path, { force: true });
+    if (outcome.stale) {
+      stale.push(outcome.stale);
+    }
+    if (outcome.notStopped) {
+      notStopped.push(outcome.notStopped);
+    }
   }
 
-  const after = await readRuntimeStatus();
+  const after = await readRuntimeStatus({ endpoints });
   return {
     ...after,
     action: "stop",
     previousStatus: before.status,
     stopped,
     stale,
+    notStopped,
+  };
+}
+
+async function stopManagedLauncherEndpoint(item) {
+  const snapshot = await inspectLauncherEndpointOwnership(item.endpoint, MANAGED_OWNERSHIP_PROBE_TIMEOUT_MS, {
+    bindServingIdentity: true,
+  });
+  const stopSafety = managedStopSafety(item.endpoint, snapshot);
+  if (!stopSafety.allowed || !snapshot.pidInfo.pid) {
+    if (
+      item.endpoint.attachmentMode === "managed" &&
+      snapshot.pidInfo.state === "missing" &&
+      !snapshot.health.responded
+    ) {
+      return {};
+    }
+    return {
+      ...(snapshot.pidInfo.state === "stale" ? { stale: { label: item.label, pid: snapshot.pidInfo.pid } } : {}),
+      notStopped: buildManagedStopDiagnostic(item, snapshot, stopSafety.reason),
+    };
+  }
+
+  // Re-read health, the OS process tree, and the compare token immediately
+  // before termination. A PID or serving-child transition after the first
+  // decision therefore fails closed instead of targeting the new owner.
+  const verified = await inspectLauncherEndpointOwnership(item.endpoint, MANAGED_OWNERSHIP_PROBE_TIMEOUT_MS, {
+    bindServingIdentity: true,
+  });
+  const verifiedSafety = managedStopSafety(item.endpoint, verified);
+  const canonicalMetadata = readManagedProcessMetadata(item.endpoint.pidPath, item.endpoint.service);
+  if (
+    !verifiedSafety.allowed ||
+    verified.pidInfo.instanceId !== snapshot.pidInfo.instanceId ||
+    canonicalMetadata.fingerprint !== verified.metadataRecord.fingerprint
+  ) {
+    return {
+      notStopped: buildManagedStopDiagnostic(item, verified, "identity_changed_before_stop"),
+    };
+  }
+
+  stopManagedProcess(verified.pidInfo.pid);
+  let rootCurrent = queryProcessCreationIdentity(verified.pidInfo.pid);
+  let servingCurrent = queryProcessCreationIdentity(verified.pidInfo.servingPid);
+  if (
+    servingCurrent.status === "running" &&
+    servingCurrent.identity === verified.pidInfo.servingProcessIdentity &&
+    (rootCurrent.status !== "running" || rootCurrent.identity !== verified.pidInfo.processIdentity)
+  ) {
+    stopManagedProcess(verified.pidInfo.servingPid);
+    servingCurrent = queryProcessCreationIdentity(verified.pidInfo.servingPid);
+  }
+  rootCurrent = queryProcessCreationIdentity(verified.pidInfo.pid);
+  const rootStopped = rootCurrent.status !== "running" || rootCurrent.identity !== verified.pidInfo.processIdentity;
+  const servingStopped =
+    servingCurrent.status !== "running" || servingCurrent.identity !== verified.pidInfo.servingProcessIdentity;
+  if (!rootStopped || !servingStopped) {
+    return {
+      notStopped: buildManagedStopDiagnostic(item, verified, "stop_incomplete"),
+    };
+  }
+
+  const remove = atomicCompareAndRemove({
+    filePath: item.endpoint.pidPath,
+    expectedFingerprint: verified.metadataRecord.fingerprint,
+  });
+  return {
+    stopped: { label: item.label, pid: verified.pidInfo.pid },
+    ...(!remove.removed ? { notStopped: buildManagedStopDiagnostic(item, verified, `metadata_${remove.reason}`) } : {}),
+  };
+}
+
+function managedStopSafety(endpoint, snapshot) {
+  return assessManagedStopSafety({
+    attachmentMode: endpoint.attachmentMode,
+    pidState: snapshot.pidInfo.state,
+    identityMatched: snapshot.assessment.identityMatched,
+  });
+}
+
+function buildManagedStopDiagnostic(item, snapshot, reason) {
+  return {
+    label: item.label,
+    ...(snapshot.pidInfo.pid ? { pid: snapshot.pidInfo.pid } : {}),
+    reason:
+      item.endpoint.attachmentMode === "managed" && snapshot.pidInfo.state === "invalid"
+        ? (snapshot.pidInfo.reason ?? reason)
+        : reason,
+    attachmentMode: item.endpoint.attachmentMode,
+    pidState: snapshot.pidInfo.state,
+    endpointResponded: snapshot.health.responded,
+    identityVerified: snapshot.assessment.identityMatched,
   };
 }
 
@@ -712,6 +1018,7 @@ function buildRuntimeCommandResult({
   uiReady,
   gatewayPid,
   uiPid,
+  endpointOwnership,
   desktopEventStream,
 }) {
   return {
@@ -730,6 +1037,7 @@ function buildRuntimeCommandResult({
       gateway: gatewayPid,
       ui: uiPid,
     },
+    endpointOwnership,
     logFiles: {
       gatewayStdout: path.join(runtimeLogDir, "gateway.stdout.log"),
       gatewayStderr: path.join(runtimeLogDir, "gateway.stderr.log"),
@@ -748,15 +1056,19 @@ function buildRuntimeCommandResult({
 
 async function issueDesktopEventStreamToken(gatewayUrl) {
   try {
-    const response = await fetchWithTimeout(`${gatewayUrl}/api/v1/auth/sse-token`, LAUNCHER_GATEWAY_REQUEST_TIMEOUT_MS, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Idempotency-Key": `desktop-sse-token:${randomUUID()}`,
-        ...readLauncherOperatorAuthHeaders(),
+    const response = await fetchWithTimeout(
+      `${gatewayUrl}/api/v1/auth/sse-token`,
+      LAUNCHER_GATEWAY_REQUEST_TIMEOUT_MS,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": `desktop-sse-token:${randomUUID()}`,
+          ...readLauncherOperatorAuthHeaders(),
+        },
+        body: JSON.stringify({ scope: "events:stream" }),
       },
-      body: JSON.stringify({ scope: "events:stream" }),
-    });
+    );
     const payload = await response.json().catch(() => ({}));
     if (response.ok && payload?.token) {
       return {
@@ -809,8 +1121,7 @@ async function runMcpServerModeStdio(argv) {
       `mcp-stdio-${process.pid}-${Date.now().toString(36)}`,
     workspaceId: options.workspaceId || process.env.GOATCITADEL_MCP_WORKSPACE_ID,
     permissionProfileId: options.permissionProfileId || process.env.GOATCITADEL_MCP_PERMISSION_PROFILE_ID,
-    localOperatorOverrideId:
-      options.localOperatorOverrideId || process.env.GOATCITADEL_MCP_LOCAL_OPERATOR_OVERRIDE_ID,
+    localOperatorOverrideId: options.localOperatorOverrideId || process.env.GOATCITADEL_MCP_LOCAL_OPERATOR_OVERRIDE_ID,
   };
   process.stderr.write(
     `[goatcitadel:mcp-server] Gateway-backed stdio proxy started for ${state.gatewayUrl}. Tools remain Gateway-governed.\n`,
@@ -1025,9 +1336,7 @@ async function launcherGatewayRequest(state, apiPath, init = {}) {
       "Content-Type": "application/json",
       "x-goatcitadel-origin-surface": "mcp",
       "x-goatcitadel-correlation-id": `mcp-stdio:${randomUUID()}`,
-      ...(fetchInit.method && fetchInit.method !== "GET"
-        ? { "Idempotency-Key": `mcp-stdio:${randomUUID()}` }
-        : {}),
+      ...(fetchInit.method && fetchInit.method !== "GET" ? { "Idempotency-Key": `mcp-stdio:${randomUUID()}` } : {}),
       ...readLauncherOperatorAuthHeaders(),
       ...(fetchInit.headers ?? {}),
     },
@@ -1057,9 +1366,10 @@ function normalizeMcpToolCallParams(params) {
   if (!name) {
     throw new Error("tools/call params.name is required.");
   }
-  const args = params.arguments && typeof params.arguments === "object" && !Array.isArray(params.arguments)
-    ? params.arguments
-    : {};
+  const args =
+    params.arguments && typeof params.arguments === "object" && !Array.isArray(params.arguments)
+      ? params.arguments
+      : {};
   return { name, arguments: args };
 }
 
@@ -1154,18 +1464,23 @@ function normalizeLauncherGatewayUrl(value) {
   return trimmed.endsWith("/") ? trimmed.slice(0, -1) : trimmed;
 }
 
-function readManagedPid(filePath) {
-  if (!fs.existsSync(filePath)) {
-    return { state: "missing" };
+function readManagedProcessMetadata(filePath, expectedService) {
+  const record = readManagedStateFile(filePath, MANAGED_METADATA_MAX_BYTES);
+  if (!record.exists) {
+    return { info: { state: "missing" }, fingerprint: null };
   }
-  const raw = fs.readFileSync(filePath, "utf8").trim();
-  const pid = Number.parseInt(raw, 10);
-  if (!Number.isFinite(pid) || pid <= 0) {
-    return { state: "invalid", raw };
+  if (record.oversized) {
+    return { info: { state: "invalid", reason: "metadata_too_large" }, fingerprint: record.fingerprint };
+  }
+  if (record.unreadable || typeof record.raw !== "string") {
+    return { info: { state: "invalid", reason: "metadata_unreadable" }, fingerprint: record.fingerprint };
   }
   return {
-    pid,
-    state: isProcessAlive(pid) ? "running" : "stale",
+    info: parseManagedProcessMetadata(record.raw, {
+      expectedService,
+      isProcessAlive,
+    }),
+    fingerprint: record.fingerprint,
   };
 }
 
@@ -1184,12 +1499,12 @@ function stopManagedProcess(pid) {
     if (isProcessAlive(pid)) {
       spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore" });
     }
-    return;
+    return !isProcessAlive(pid);
   }
   try {
     process.kill(pid, "SIGTERM");
   } catch {
-    return;
+    return !isProcessAlive(pid);
   }
   const start = Date.now();
   while (Date.now() - start < 2500 && isProcessAlive(pid)) {
@@ -1202,6 +1517,7 @@ function stopManagedProcess(pid) {
       // Best effort stop.
     }
   }
+  return !isProcessAlive(pid);
 }
 
 async function printRuntimeCommandResult(fn, args) {
@@ -1212,6 +1528,11 @@ async function printRuntimeCommandResult(fn, args) {
     return;
   }
   console.log(`${result.status}: ${result.targetUrl}`);
+  for (const item of result.notStopped ?? []) {
+    console.log(
+      `Not stopped: ${item.label} (${item.reason}; managed identity verified: ${item.identityVerified === true ? "yes" : "no"}).`,
+    );
+  }
 }
 
 function parseLaunchOptions(args) {
@@ -1312,139 +1633,333 @@ function resolvePackagedNodeExecutable() {
   return fs.existsSync(packagedNodeExecutable) ? packagedNodeExecutable : process.execPath;
 }
 
-async function ensureGatewayReady({ packaged, gatewayUrl, nodeExecutable }) {
-  if (await waitForHttp(`${gatewayUrl}/health`, 1500, 2)) {
+async function ensureGatewayReady({ packaged, endpoint, nodeExecutable }) {
+  const outcome = await establishLauncherEndpointReadiness({
+    endpoint,
+    timeoutMs: 180000,
+    startManaged: (expectedFingerprint) => {
+      if (packaged) {
+        startPackagedGateway(nodeExecutable, endpoint.url, expectedFingerprint);
+      } else {
+        startSourceGateway(endpoint.url, expectedFingerprint);
+      }
+    },
+  });
+  if (outcome.ready) {
     return;
   }
-  if (packaged) {
-    startPackagedGateway(nodeExecutable, gatewayUrl);
-  } else {
-    startSourceGateway(gatewayUrl);
-  }
-  if (!(await waitForHttp(`${gatewayUrl}/health`, 180000))) {
-    const live = await waitForHttp(`${gatewayUrl}/livez`, 1500, 1);
+  const live = (await probeEndpointHealth(`${endpoint.url}/livez`, 1500)).healthy;
+  throw new Error(
+    [
+      describeEndpointReadinessFailure(endpoint, outcome),
+      live ? "Gateway process answered /livez but /health did not pass." : "Gateway process did not answer /livez.",
+      buildRuntimeLogSummary("gateway"),
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  );
+}
+
+async function ensureUiReady({ packaged, gatewayEndpoint, endpoint, nodeExecutable }) {
+  const outcome = await establishLauncherEndpointReadiness({
+    endpoint,
+    timeoutMs: 180000,
+    startManaged: (expectedFingerprint) => {
+      if (packaged) {
+        startPackagedUi(nodeExecutable, endpoint.url, expectedFingerprint);
+      } else {
+        startSourceUi(gatewayEndpoint.url, endpoint.url, expectedFingerprint);
+      }
+    },
+  });
+  if (!outcome.ready) {
     throw new Error(
-      [
-        `Gateway did not become healthy at ${gatewayUrl}`,
-        live ? "Gateway process answered /livez but /health did not pass." : "Gateway process did not answer /livez.",
-        buildRuntimeLogSummary("gateway"),
-      ]
+      [describeEndpointReadinessFailure(endpoint, outcome), buildRuntimeLogSummary("mission-control")]
         .filter(Boolean)
         .join("\n"),
     );
   }
 }
 
-async function ensureUiReady({ packaged, gatewayUrl, uiUrl, nodeExecutable }) {
-  if (await waitForHttp(`${uiUrl}/health`, 1500, 2)) {
-    return;
+async function establishLauncherEndpointReadiness({ endpoint, timeoutMs, startManaged }) {
+  if (endpoint.attachmentMode === "external_override") {
+    return establishLauncherEndpointReadinessUnlocked({ endpoint, timeoutMs, startManaged });
   }
-  if (packaged) {
-    startPackagedUi(nodeExecutable, uiUrl);
-  } else {
-    startSourceUi(gatewayUrl, uiUrl);
+  return withManagedLifecycleLock(
+    {
+      lockPath: endpoint.lockPath,
+      service: endpoint.service,
+      timeoutMs: Math.max(MANAGED_LIFECYCLE_LOCK_TIMEOUT_MS, timeoutMs + 10_000),
+    },
+    () => establishLauncherEndpointReadinessUnlocked({ endpoint, timeoutMs, startManaged }),
+  );
+}
+
+async function establishLauncherEndpointReadinessUnlocked({ endpoint, timeoutMs, startManaged }) {
+  const deadline = Date.now() + timeoutMs;
+  let snapshot = await inspectLauncherEndpointOwnership(endpoint, Math.min(1500, timeoutMs), {
+    bindServingIdentity: true,
+  });
+  throwForManagedEndpointCollision(snapshot);
+  if (snapshot.assessment.readinessAccepted) {
+    return { ready: true, started: false, snapshot };
   }
-  if (!(await waitForHttp(`${uiUrl}/health`, 180000))) {
-    throw new Error(
-      [`Mission Control did not become healthy at ${uiUrl}`, buildRuntimeLogSummary("mission-control")]
-        .filter(Boolean)
-        .join("\n"),
-    );
+
+  if (snapshot.assessment.launchAction === "wait_external") {
+    const waited = await waitForLauncherEndpointDecision(endpoint, deadline);
+    throwForManagedEndpointCollision(waited.snapshot);
+    return {
+      ready: waited.kind === "ready",
+      started: false,
+      failure: waited.kind === "timeout" ? "external_unavailable" : waited.kind,
+      snapshot: waited.snapshot,
+    };
+  }
+
+  if (snapshot.assessment.launchAction === "wait_managed") {
+    const waited = await waitForLauncherEndpointDecision(endpoint, deadline);
+    throwForManagedEndpointCollision(waited.snapshot);
+    if (waited.kind === "ready") {
+      return { ready: true, started: false, snapshot: waited.snapshot };
+    }
+    if (waited.kind === "timeout") {
+      return { ready: false, started: false, failure: "managed_process_not_ready", snapshot: waited.snapshot };
+    }
+    snapshot = waited.snapshot;
+  }
+
+  if (snapshot.assessment.launchAction !== "spawn") {
+    return { ready: false, started: false, failure: "managed_endpoint_unavailable", snapshot };
+  }
+
+  startManaged(snapshot.metadataRecord.fingerprint);
+  const waited = await waitForLauncherEndpointDecision(endpoint, deadline);
+  throwForManagedEndpointCollision(waited.snapshot);
+  if (waited.kind === "ready") {
+    return { ready: true, started: true, snapshot: waited.snapshot };
+  }
+  return {
+    ready: false,
+    started: true,
+    failure: waited.kind === "spawnable" ? "managed_process_exited" : "managed_endpoint_unavailable",
+    snapshot: waited.snapshot,
+  };
+}
+
+async function waitForLauncherEndpointDecision(endpoint, deadline) {
+  let snapshot = await inspectLauncherEndpointOwnership(
+    endpoint,
+    Math.min(1500, Math.max(250, deadline - Date.now())),
+    { bindServingIdentity: true },
+  );
+  while (true) {
+    if (snapshot.assessment.readinessAccepted) {
+      return { kind: "ready", snapshot };
+    }
+    if (snapshot.assessment.collision) {
+      return { kind: "collision", snapshot };
+    }
+    if (snapshot.assessment.launchAction === "spawn") {
+      return { kind: "spawnable", snapshot };
+    }
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      return { kind: "timeout", snapshot };
+    }
+    await sleep(Math.min(1000, Math.max(100, remainingMs)));
+    snapshot = await inspectLauncherEndpointOwnership(endpoint, Math.min(1500, Math.max(250, deadline - Date.now())), {
+      bindServingIdentity: true,
+    });
   }
 }
 
-function startPackagedGateway(nodeExecutable, gatewayUrl) {
+function describeEndpointReadinessFailure(endpoint, outcome) {
+  const safeEndpoint = safeEndpointOrigin(endpoint.url);
+  if (endpoint.attachmentMode === "external_override") {
+    return (
+      `Configured external ${endpoint.serviceLabel} did not become healthy at ${safeEndpoint}. ` +
+      `Start that runtime or clear ${endpoint.overrideEnvKey} to use GoatCitadel's managed default.`
+    );
+  }
+  if (outcome.failure === "managed_process_not_ready") {
+    const pid = outcome.snapshot.pidInfo.pid ? ` (PID ${outcome.snapshot.pidInfo.pid})` : "";
+    return `Managed ${endpoint.serviceLabel} process${pid} did not become healthy; no duplicate process was spawned.`;
+  }
+  if (outcome.failure === "managed_process_exited") {
+    return `Managed ${endpoint.serviceLabel} process exited before ${safeEndpoint} became healthy.`;
+  }
+  return `Managed ${endpoint.serviceLabel} did not become healthy at ${safeEndpoint}.`;
+}
+
+function startPackagedGateway(nodeExecutable, gatewayUrl, expectedFingerprint) {
   const port = String(new URL(gatewayUrl).port || "8787");
-  writePidFile(
-    gatewayPidPath,
-    spawnDetachedProcess({
-      cmd: nodeExecutable,
-      args: [packagedGatewayEntry],
-      cwd: packagedGatewayDir,
-      env: {
-        ...runtimeProcessEnv,
-        GOATCITADEL_APP_DIR: appDir,
-        GOATCITADEL_ROOT_DIR: packagedRuntimeRoot,
-        GOATCITADEL_DATABASE_DRIVER: "sqlite",
-        GATEWAY_HOST: "127.0.0.1",
-        GATEWAY_PORT: port,
-      },
-      stdoutPath: path.join(runtimeLogDir, "gateway.stdout.log"),
-      stderrPath: path.join(runtimeLogDir, "gateway.stderr.log"),
-    }),
-  );
+  startManagedDetachedProcess({
+    pidPath: gatewayPidPath,
+    service: "gateway",
+    expectedFingerprint,
+    cmd: nodeExecutable,
+    args: [packagedGatewayEntry],
+    cwd: packagedGatewayDir,
+    env: {
+      ...runtimeProcessEnv,
+      GOATCITADEL_APP_DIR: appDir,
+      GOATCITADEL_ROOT_DIR: packagedRuntimeRoot,
+      GOATCITADEL_DATABASE_DRIVER: "sqlite",
+      GATEWAY_HOST: "127.0.0.1",
+      GATEWAY_PORT: port,
+    },
+    stdoutPath: path.join(runtimeLogDir, "gateway.stdout.log"),
+    stderrPath: path.join(runtimeLogDir, "gateway.stderr.log"),
+  });
 }
 
-function startPackagedUi(nodeExecutable, uiUrl) {
+function startPackagedUi(nodeExecutable, uiUrl, expectedFingerprint) {
   const port = String(new URL(uiUrl).port || "5173");
-  writePidFile(
-    uiPidPath,
-    spawnDetachedProcess({
-      cmd: nodeExecutable,
-      args: [packagedUiServerEntry],
-      cwd: appDir,
-      env: {
-        ...runtimeProcessEnv,
-        GOATCITADEL_UI_DIST_DIR: packagedUiDistDir,
-        GOATCITADEL_UI_HOST: "127.0.0.1",
-        GOATCITADEL_UI_PORT: port,
-      },
-      stdoutPath: path.join(runtimeLogDir, "mission-control.stdout.log"),
-      stderrPath: path.join(runtimeLogDir, "mission-control.stderr.log"),
-    }),
-  );
+  startManagedDetachedProcess({
+    pidPath: uiPidPath,
+    service: "mission-control",
+    expectedFingerprint,
+    cmd: nodeExecutable,
+    args: [packagedUiServerEntry],
+    cwd: appDir,
+    env: {
+      ...runtimeProcessEnv,
+      GOATCITADEL_UI_DIST_DIR: packagedUiDistDir,
+      GOATCITADEL_UI_HOST: "127.0.0.1",
+      GOATCITADEL_UI_PORT: port,
+    },
+    stdoutPath: path.join(runtimeLogDir, "mission-control.stdout.log"),
+    stderrPath: path.join(runtimeLogDir, "mission-control.stderr.log"),
+  });
 }
 
-function startSourceGateway(gatewayUrl) {
+function startSourceGateway(gatewayUrl, expectedFingerprint) {
   const runner = resolvePnpmRunner();
   const port = String(new URL(gatewayUrl).port || "8787");
-  writePidFile(
-    gatewayPidPath,
-    spawnDetachedProcess({
-      cmd: runner.cmd,
-      args: [...runner.prefix, "--dir", appDir, "dev:gateway"],
-      cwd: appDir,
-      env: {
-        ...runtimeProcessEnv,
-        GATEWAY_HOST: "127.0.0.1",
-        GATEWAY_PORT: port,
-      },
-      stdoutPath: path.join(runtimeLogDir, "gateway.stdout.log"),
-      stderrPath: path.join(runtimeLogDir, "gateway.stderr.log"),
-    }),
-  );
+  startManagedDetachedProcess({
+    pidPath: gatewayPidPath,
+    service: "gateway",
+    expectedFingerprint,
+    cmd: runner.cmd,
+    args: [...runner.prefix, "--dir", appDir, "dev:gateway"],
+    cwd: appDir,
+    env: {
+      ...runtimeProcessEnv,
+      GATEWAY_HOST: "127.0.0.1",
+      GATEWAY_PORT: port,
+    },
+    stdoutPath: path.join(runtimeLogDir, "gateway.stdout.log"),
+    stderrPath: path.join(runtimeLogDir, "gateway.stderr.log"),
+  });
 }
 
-function startSourceUi(gatewayUrl, uiUrl) {
+function startSourceUi(gatewayUrl, uiUrl, expectedFingerprint) {
   const runner = resolvePnpmRunner();
   const port = String(new URL(uiUrl).port || "5173");
   const uiTarget = resolveUiTarget(appDir, runtimeProcessEnv);
-  writePidFile(
-    uiPidPath,
-    spawnDetachedProcess({
-      cmd: runner.cmd,
-      args: [
-        ...runner.prefix,
-        "--dir",
-        appDir,
-        "--filter",
-        uiTarget.packageName,
-        "exec",
-        "vite",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        port,
-      ],
-      cwd: appDir,
-      env: {
-        ...runtimeProcessEnv,
-        VITE_GATEWAY_URL: gatewayUrl,
-      },
-      stdoutPath: path.join(runtimeLogDir, "mission-control.stdout.log"),
-      stderrPath: path.join(runtimeLogDir, "mission-control.stderr.log"),
-    }),
-  );
+  startManagedDetachedProcess({
+    pidPath: uiPidPath,
+    service: "mission-control",
+    expectedFingerprint,
+    cmd: runner.cmd,
+    args: [
+      ...runner.prefix,
+      "--dir",
+      appDir,
+      "--filter",
+      uiTarget.packageName,
+      "exec",
+      "vite",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      port,
+      "--strictPort",
+    ],
+    cwd: appDir,
+    env: {
+      ...runtimeProcessEnv,
+      VITE_GATEWAY_URL: gatewayUrl,
+    },
+    stdoutPath: path.join(runtimeLogDir, "mission-control.stdout.log"),
+    stderrPath: path.join(runtimeLogDir, "mission-control.stderr.log"),
+  });
+}
+
+function startManagedDetachedProcess({
+  pidPath,
+  service,
+  expectedFingerprint,
+  cmd,
+  args,
+  cwd,
+  env,
+  stdoutPath,
+  stderrPath,
+}) {
+  const metadata = {
+    instanceId: randomUUID(),
+    service,
+    startedAt: new Date().toISOString(),
+  };
+  const pid = spawnDetachedProcess({
+    cmd,
+    args,
+    cwd,
+    env: {
+      ...env,
+      GOATCITADEL_MANAGED_INSTANCE_ID: metadata.instanceId,
+      GOATCITADEL_MANAGED_SERVICE: metadata.service,
+    },
+    stdoutPath,
+    stderrPath,
+  });
+  if (!pid) {
+    throw new Error(`Managed ${service} process did not expose a process ID.`);
+  }
+  const processIdentity = waitForProcessCreationIdentity(pid, 5_000);
+  if (!processIdentity) {
+    stopNewManagedProcess(pid);
+    throw new Error(`Managed ${service} process creation identity could not be established.`);
+  }
+  try {
+    const publish = atomicCompareAndPublishJson({
+      filePath: pidPath,
+      expectedFingerprint,
+      value: { pid, processIdentity, ...metadata },
+    });
+    if (!publish.published) {
+      throw new Error(`Managed ${service} metadata changed during launch (${publish.reason}).`);
+    }
+  } catch (error) {
+    stopNewManagedProcess(pid, processIdentity);
+    throw error;
+  }
+}
+
+function waitForProcessCreationIdentity(pid, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const current = queryProcessCreationIdentity(pid);
+    if (current.status === "running") {
+      return current.identity;
+    }
+    if (Date.now() >= deadline) {
+      break;
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+  }
+  return undefined;
+}
+
+function stopNewManagedProcess(pid, expectedIdentity) {
+  if (expectedIdentity) {
+    const current = queryProcessCreationIdentity(pid);
+    if (current.status !== "running" || current.identity !== expectedIdentity) {
+      return false;
+    }
+  }
+  return stopManagedProcess(pid);
 }
 
 function spawnDetachedProcess({ cmd, args, cwd, env, stdoutPath, stderrPath }) {
@@ -1471,34 +1986,70 @@ function spawnDetachedProcess({ cmd, args, cwd, env, stdoutPath, stderrPath }) {
   return child.pid ?? 0;
 }
 
-function writePidFile(filePath, pid) {
-  if (!pid) {
-    return;
+async function probeEndpointHealth(url, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    const body = await readBoundedJsonBody(response, MANAGED_HEALTH_MAX_BYTES);
+    if (!body.completed) {
+      return { responded: true, healthy: false };
+    }
+    const payload = body.payload;
+    return {
+      responded: true,
+      healthy: response.ok,
+      ...(typeof payload?.service === "string" && payload.service.length <= 64 ? { service: payload.service } : {}),
+      ...(typeof payload?.managedInstanceId === "string" && payload.managedInstanceId.length <= 128
+        ? { managedInstanceId: payload.managedInstanceId }
+        : {}),
+      ...(Number.isSafeInteger(payload?.managedProcessId) && payload.managedProcessId > 0
+        ? { managedProcessId: payload.managedProcessId }
+        : {}),
+    };
+  } catch {
+    return { responded: false, healthy: false };
+  } finally {
+    clearTimeout(timer);
   }
-  fs.writeFileSync(filePath, String(pid), "utf8");
 }
 
-async function waitForHttp(url, timeoutMs, attempts = 120) {
-  const startedAt = Date.now();
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const remainingMs = timeoutMs - (Date.now() - startedAt);
-    if (remainingMs <= 0) {
-      break;
-    }
-    try {
-      const response = await fetchWithTimeout(url, Math.min(5000, Math.max(250, remainingMs)));
-      if (response.ok) {
-        return true;
-      }
-    } catch {
-      // keep waiting
-    }
-    if (Date.now() - startedAt >= timeoutMs) {
-      break;
-    }
-    await sleep(Math.min(1500, Math.max(250, Math.floor(timeoutMs / Math.max(1, attempts)))));
+async function readBoundedJsonBody(response, maxBytes) {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    return { completed: true, payload: undefined };
   }
-  return false;
+  const chunks = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        return { completed: false };
+      }
+      chunks.push(Buffer.from(value));
+    }
+    const raw = Buffer.concat(chunks, totalBytes).toString("utf8");
+    let payload;
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      return { completed: true, payload: undefined };
+    }
+    return {
+      completed: true,
+      payload: payload && typeof payload === "object" && !Array.isArray(payload) ? payload : undefined,
+    };
+  } catch {
+    return { completed: false };
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 async function fetchWithTimeout(url, timeoutMs, init = {}) {
@@ -1888,7 +2439,11 @@ function spawnPnpmCommand(args, options = {}) {
 }
 
 function run(cmd, cmdArgs, options = {}) {
-  const result = spawnCommandSync(cmd, cmdArgs, jsonStdoutMode ? jsonSafeSpawnOptions(options) : { stdio: "inherit", ...options });
+  const result = spawnCommandSync(
+    cmd,
+    cmdArgs,
+    jsonStdoutMode ? jsonSafeSpawnOptions(options) : { stdio: "inherit", ...options },
+  );
   if (jsonStdoutMode && result.stdout) {
     process.stderr.write(result.stdout);
   }

@@ -1,6 +1,14 @@
 #!/usr/bin/env node
 import path from "node:path";
 import { generateVerificationReview, loadManifestForReview, validateExplicitReviewTarget } from "./lib/review.mjs";
+import { collectVerificationSecretEnvKeys } from "./lib/scenarios/usability-coverage.mjs";
+import { runUsabilityDiskCapacityPreflight } from "./lib/scenarios/usability-disk-preflight.mjs";
+import {
+  beginUsabilitySourceGuard,
+  combineUsabilityPrimaryAndIntegrityErrors,
+  completeUsabilityFinalIntegrity,
+} from "./lib/scenarios/usability-final-integrity.mjs";
+import { assertNamedScenarioProofs } from "./lib/scenario-artifact-evidence.mjs";
 import {
   runArchitectureMetricsLane,
   runAgenticChannelsRuntimeLane,
@@ -31,6 +39,7 @@ import {
   runSessionControlLane,
   runReasoningProfilesLane,
   runVertexFireworksProvidersLane,
+  FAST_LANE_COMMANDS,
   runFastLane,
   runExtensionsPackageLane,
   runSkillsCatalogLane,
@@ -45,6 +54,8 @@ import {
   runSurfaceRegressionLane,
   runSoakLane,
   runUiParityLane,
+  runUsabilityCoreLane,
+  runUsabilityLane,
 } from "./lib/scenarios.mjs";
 import {
   artifactsRoot,
@@ -55,6 +66,7 @@ import {
   parseCliArgs,
   parseLatestRunPointer,
   readJson as readRunJson,
+  repoRoot,
 } from "./lib/shared.mjs";
 
 const VALID_LANES = new Set([
@@ -78,6 +90,8 @@ const VALID_LANES = new Set([
   "session-control",
   "providers-vertex-fireworks",
   "reasoning-profiles",
+  "usability",
+  "usability-core",
   "accessibility-smoke",
   "surface-regression",
   "visual-regression",
@@ -108,6 +122,17 @@ const VALID_LANES = new Set([
   "all",
 ]);
 
+const USABILITY_FAST_EVIDENCE_COMMAND_IDS = Object.freeze(
+  FAST_LANE_COMMANDS.map((command) => command.id).filter(
+    (id) =>
+      id.startsWith("fast.test.gateway.") ||
+      id === "fast.test.storage" ||
+      id === "fast.test.mission-control-next" ||
+      id === "fast.test.policy-engine" ||
+      id === "fast.test.libraries",
+  ),
+);
+
 const REVIEW_LANES = new Set([
   "desktop",
   "extensions-package",
@@ -128,6 +153,8 @@ const REVIEW_LANES = new Set([
   "session-control",
   "providers-vertex-fireworks",
   "reasoning-profiles",
+  "usability",
+  "usability-core",
   "accessibility-smoke",
   "surface-regression",
   "visual-regression",
@@ -210,7 +237,11 @@ async function main() {
   });
 
   let manifest;
+  let usabilitySourceState;
   try {
+    if (lane === "usability" || lane === "all") {
+      usabilitySourceState = beginUsabilitySourceGuard(repoRoot, process.env.GOATCITADEL_USABILITY_SOURCE_MODE);
+    }
     if (lane === "fast") {
       await runFastLane(context, fastOptions);
     } else if (lane === "desktop") {
@@ -251,6 +282,38 @@ async function main() {
       await runVertexFireworksProvidersLane(context, { profile });
     } else if (lane === "reasoning-profiles") {
       await runReasoningProfilesLane(context, { profile });
+    } else if (lane === "usability") {
+      await runUsabilityDiskCapacityPreflight(context, { repoRoot });
+      const scrubbedSecretEnvKeys = await collectVerificationSecretEnvKeys(path.join(repoRoot, "config"));
+      for (const key of scrubbedSecretEnvKeys) delete process.env[key];
+      const evidenceStartIndex = context.manifest.scenarios.length;
+      await runFastLane(context, {
+        ...fastOptions,
+        failFast: true,
+        serial: true,
+        commands: USABILITY_FAST_EVIDENCE_COMMAND_IDS.join(","),
+      });
+      assertScenarioSlicePassed(context, evidenceStartIndex, "usability focused regression prerequisites");
+      const authStartIndex = context.manifest.scenarios.length;
+      await runAuthMatrixLane(context, { profile });
+      assertScenarioSlicePassed(context, authStartIndex, "usability authentication foundations");
+      await runBackupRoundtripLane(context, { profile });
+      await runRuntimeTruthLane(context, { profile });
+      await runRealtimeTruthLane(context, { profile });
+      assertNamedScenarioProofs(
+        context,
+        [
+          "backup-roundtrip.runtime.config-restore",
+          "runtime-truth.approval-restart-durable-truth",
+          "realtime-truth.disconnect-reconnect-resubscribe",
+        ],
+        "usability isolated restart, backup, and realtime-reconnect foundations",
+      );
+      await runUsabilityLane(context, { profile, sourceState: usabilitySourceState });
+    } else if (lane === "usability-core") {
+      const scrubbedSecretEnvKeys = await collectVerificationSecretEnvKeys(path.join(repoRoot, "config"));
+      for (const key of scrubbedSecretEnvKeys) delete process.env[key];
+      await runUsabilityCoreLane(context, { profile });
     } else if (lane === "accessibility-smoke") {
       await runAccessibilitySmokeLane(context, { profile });
     } else if (lane === "surface-regression") {
@@ -329,8 +392,6 @@ async function main() {
       await runVertexFireworksProvidersLane(context, { profile });
       await runReasoningProfilesLane(context, { profile });
       await runDesktopLane(context);
-      await runAccessibilitySmokeLane(context, { profile });
-      await runSurfaceRegressionLane(context, { profile });
       await runVisualRegressionLane(context, { profile, updateBaselines: false });
       await runBackupRoundtripLane(context, { profile });
       await runRuntimeTruthLane(context, { profile });
@@ -339,6 +400,10 @@ async function main() {
       await runMemoryTruthLane(context, { profile });
       await runRealtimeTruthLane(context, { profile });
       await runArchitectureMetricsLane(context);
+      // Usability runs last because its route/action ledger joins exact
+      // evidence scenarios produced by the broader campaign. It composes the
+      // surface and accessibility browser passes so `all` executes each once.
+      await runUsabilityLane(context, { profile, sourceState: usabilitySourceState });
       if (includeSoak) {
         await runSoakLane(context, { durationMs });
       }
@@ -351,6 +416,9 @@ async function main() {
         reviewGatewayUrl: options["review-gateway-url"],
       });
     }
+    if (usabilitySourceState) {
+      await completeUsabilityFinalIntegrity(context, usabilitySourceState, { repoRoot });
+    }
   } catch (error) {
     manifest = await finalizeRunContext(context, "failed");
     if (shouldGenerateReview(lane)) {
@@ -358,6 +426,16 @@ async function main() {
         manifest,
         reviewGatewayUrl: options["review-gateway-url"],
       }).catch(() => undefined);
+    }
+    if (usabilitySourceState) {
+      try {
+        // Failed runs retain the richest traces and logs, so they must pass the
+        // same exact-root leakage scan and completion source check after their
+        // failed manifest and best-effort review are durable.
+        await completeUsabilityFinalIntegrity(context, usabilitySourceState, { repoRoot });
+      } catch (integrityError) {
+        throw combineUsabilityPrimaryAndIntegrityErrors(error, integrityError);
+      }
     }
     throw error;
   }
@@ -373,6 +451,15 @@ main().catch((error) => {
   console.error(error instanceof Error ? (error.stack ?? error.message) : String(error));
   process.exitCode = 1;
 });
+
+function assertScenarioSlicePassed(context, startIndex, label) {
+  const scenarios = context.manifest.scenarios.slice(startIndex);
+  const failed = scenarios.filter((scenario) => scenario.status !== "passed");
+  if (scenarios.length === 0) throw new Error(`${label} produced no scenarios`);
+  if (failed.length > 0) {
+    throw new Error(`${label} failed: ${failed.map((scenario) => scenario.id).join(", ")}`);
+  }
+}
 
 function shouldGenerateReview(lane) {
   return REVIEW_LANES.has(lane);

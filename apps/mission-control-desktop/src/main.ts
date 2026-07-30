@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import "./styles.css";
 
-type ManagedPidState = "missing" | "invalid" | "running" | "stale";
+type ManagedPidState = "missing" | "invalid" | "running" | "stale" | "reused" | "unverified";
 type DesktopRuntimeStatusValue = "ready" | "degraded" | "stopped" | "stale";
 
 interface ManagedPidInfo {

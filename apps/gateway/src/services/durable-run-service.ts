@@ -1,5 +1,6 @@
 /* eslint-disable max-lines -- Durable run lifecycle service intentionally centralizes lease, recovery, timeline, and diagnostics behavior. */
 import { createHash, randomUUID } from "node:crypto";
+import { hostname } from "node:os";
 import type {
   ChatTurnTraceRecord,
   DurableChildWatcherCatchUpResult,
@@ -40,6 +41,7 @@ import {
 } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
+import { trackBackgroundTask } from "./background-scheduler.js";
 import type { DurableWorkflowExecutorRegistry } from "./durable-execution-service.js";
 import type { EvidenceEnvelopeCreateRequest } from "./evidence-envelope-service.js";
 import type { SharedHostLifecycleAdmissionPort } from "./shared-host-lifecycle-service.js";
@@ -88,6 +90,7 @@ import {
   readAutonomousChatPostCommitPendingMarker,
   readGeneralChatPostCommitCompletedEffects,
   readGeneralChatPostCommitPendingMarker,
+  resetChatTurnRuntimeTransitionMetadata,
 } from "./chat-durable-run-service.js";
 
 export interface DurableRunServiceContext {
@@ -126,6 +129,31 @@ const DURABLE_EVENT_LOOP_LAG_WARN_MS = 1_000;
 const DURABLE_EVENT_LOOP_LAG_PAUSE_MS = 2_000;
 const DURABLE_CHECKPOINT_KEEP_PER_RUN_DEFAULT = 50;
 const DURABLE_CHECKPOINT_DISK_BUDGET_BYTES_DEFAULT = 64 * 1024 * 1024;
+const TERMINAL_CHAT_ADMISSION_RELEASE_POLL_MS = 25;
+const TERMINAL_CHAT_ADMISSION_RECOVERY_TIMEOUT_MS = 5_000;
+const DURABLE_LOCAL_PROCESS_LEASE_VERSION = "local-process-v1";
+const DURABLE_LOCAL_HOST_FINGERPRINT = createHash("sha256")
+  .update(hostname().trim().toLowerCase(), "utf8")
+  .digest("hex")
+  .slice(0, 16);
+
+export interface TerminalChatAdmissionReleaseOutcome {
+  recoveryOutcome:
+    | "released"
+    | "already_released"
+    | "not_bound"
+    | "not_terminal"
+    | "reconciliation_pending"
+    | "lineage_mismatch"
+    | "recovery_failed";
+  durableRunId?: string;
+  durableRunStatus?: DurableRunRecord["status"];
+  admissionId?: string;
+  admissionStatus?: SessionMutationAdmissionRecord["status"];
+  elapsedMs: number;
+  remainingBudgetMs: number;
+  error?: string;
+}
 
 function readExactSystemHeartbeatFailurePayload(
   run: DurableRunRecord,
@@ -434,6 +462,19 @@ const LINKED_FINALIZATION_CLAIM_TTL_MS = 30_000;
 const LINKED_FINALIZATION_TIMEOUT_MS = 60_000;
 const AUTONOMOUS_CHAT_POST_COMMIT_CLAIM_TTL_MS = 30_000;
 const AUTONOMOUS_CHAT_POST_COMMIT_TIMEOUT_MS = 60_000;
+// General Chat post-commit effects are locally receipt/idempotency guarded, but
+// their composite callback does not expose a safely propagated AbortSignal.
+// Bound only the process-local attempt ownership so a hung callback can be
+// retried without allowing its stale completion to release a newer owner.
+const GENERAL_CHAT_POST_COMMIT_IN_FLIGHT_TTL_MS = TERMINAL_CHAT_ADMISSION_RECOVERY_TIMEOUT_MS;
+const GENERAL_CHAT_POST_COMMIT_SWEEP_CONCURRENCY = 8;
+
+interface GeneralChatPostCommitInFlight {
+  ownershipGeneration: string;
+  marker: GeneralChatPostCommitPendingMarker | undefined;
+  expiresAtMs: number;
+  work: Promise<boolean>;
+}
 
 export interface AutonomousChatPostCommitContext {
   claimId: string;
@@ -591,9 +632,9 @@ export class DurableRunService {
   private workerRequested = false;
   private workerStopped = false;
   private pollTimer: ReturnType<typeof setTimeout> | undefined;
-  private readonly workerId = randomUUID();
+  private readonly workerId = buildDurableLocalProcessLeaseOwnerId();
   private readonly activeRunAbortControllers = new Map<string, { controller: AbortController; leaseOwnerId: string }>();
-  private readonly generalChatPostCommitInFlight = new Map<string, { work: Promise<boolean> }>();
+  private readonly generalChatPostCommitInFlight = new Map<string, GeneralChatPostCommitInFlight>();
   private lastEventLoopLagMs = 0;
   private lastEventLoopLagAt: string | undefined;
   private leaseAcquisitionPausedUntilMs = 0;
@@ -623,6 +664,7 @@ export class DurableRunService {
         autoBlockOnIncompleteExit(taskId: string, runId: string): unknown;
       };
       sharedHostLifecycle?: SharedHostLifecycleAdmissionPort;
+      isLocalProcessAlive?: (pid: number) => boolean;
     },
   ) {}
 
@@ -873,13 +915,13 @@ export class DurableRunService {
           }
         }),
       )
+      .catch((error) => {
+        this.reportWorkerBackgroundFailure("run_processing", error);
+      })
       .finally(() => {
         this.workerActive = false;
       });
-    backgroundTasks.add(bootTask);
-    void bootTask.finally(() => {
-      backgroundTasks.delete(bootTask);
-    });
+    trackBackgroundTask(backgroundTasks, bootTask);
     this.ensurePollLoop();
   }
 
@@ -1027,9 +1069,8 @@ export class DurableRunService {
       })
       .finally(() => {
         this.workerActive = false;
-        backgroundTasks.delete(task);
       });
-    backgroundTasks.add(task);
+    trackBackgroundTask(backgroundTasks, task);
   }
 
   private async runWithSharedHostWorkerAdmission(work: () => Promise<void>): Promise<void> {
@@ -1772,8 +1813,9 @@ export class DurableRunService {
   }
 
   async reconcileGeneralChatPostCommit(runId: string): Promise<boolean> {
+    let observed: DurableRunRecord;
     try {
-      let observed = this.ctx.storage.durableRuns.getRun(runId);
+      observed = this.ctx.storage.durableRuns.getRun(runId);
       if (readLinkedFinalizationPending(observed)) {
         await this.finalizePendingLinkedState(observed);
         observed = this.ctx.storage.durableRuns.getRun(runId);
@@ -1792,28 +1834,290 @@ export class DurableRunService {
       this.reportDurableRunRecoveryFailure(runId, error);
       return false;
     }
+    const nowMs = Date.now();
+    const marker = readGeneralChatPostCommitPendingMarker(observed);
     const inFlight = this.generalChatPostCommitInFlight.get(runId);
-    if (inFlight) {
-      return inFlight.work;
+    if (
+      inFlight &&
+      inFlight.expiresAtMs > nowMs &&
+      ((inFlight.marker === undefined && marker === undefined) ||
+        (inFlight.marker !== undefined &&
+          marker !== undefined &&
+          sameGeneralChatPostCommitGeneration(inFlight.marker, marker)))
+    ) {
+      return this.awaitGeneralChatPostCommitInFlight(runId, inFlight);
     }
-    const work = this.reconcileGeneralChatPostCommitInternal(runId);
-    const inFlightEntry = { work };
+    if (inFlight) {
+      this.releaseGeneralChatPostCommitInFlight(runId, inFlight.ownershipGeneration);
+    }
+    const ownershipGeneration = randomUUID();
+    // Schedule internal work for the next microtask so ownership is visible
+    // before a synchronous progress callback can attempt its first effect.
+    const work = Promise.resolve().then(() => this.reconcileGeneralChatPostCommitInternal(runId, ownershipGeneration));
+    const inFlightEntry: GeneralChatPostCommitInFlight = {
+      ownershipGeneration,
+      marker,
+      expiresAtMs: nowMs + GENERAL_CHAT_POST_COMMIT_IN_FLIGHT_TTL_MS,
+      work,
+    };
     this.generalChatPostCommitInFlight.set(runId, inFlightEntry);
-    try {
-      return await work;
-    } finally {
-      if (this.generalChatPostCommitInFlight.get(runId) === inFlightEntry) {
-        this.generalChatPostCommitInFlight.delete(runId);
-      }
+    return this.awaitGeneralChatPostCommitInFlight(runId, inFlightEntry);
+  }
+
+  private awaitGeneralChatPostCommitInFlight(runId: string, inFlight: GeneralChatPostCommitInFlight): Promise<boolean> {
+    const remainingMs = Math.max(0, inFlight.expiresAtMs - Date.now());
+    if (remainingMs === 0) {
+      this.releaseGeneralChatPostCommitInFlight(runId, inFlight.ownershipGeneration);
+      return Promise.resolve(false);
+    }
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const settle = (result: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(expiryTimer);
+        this.releaseGeneralChatPostCommitInFlight(runId, inFlight.ownershipGeneration);
+        resolve(result);
+      };
+      const expiryTimer = setTimeout(() => settle(false), remainingMs);
+      expiryTimer.unref?.();
+      void inFlight.work.then(
+        (result) => settle(result),
+        () => settle(false),
+      );
+    });
+  }
+
+  private releaseGeneralChatPostCommitInFlight(runId: string, ownershipGeneration: string): void {
+    if (this.generalChatPostCommitInFlight.get(runId)?.ownershipGeneration === ownershipGeneration) {
+      this.generalChatPostCommitInFlight.delete(runId);
     }
   }
 
-  private async reconcileGeneralChatPostCommitInternal(runId: string): Promise<boolean> {
+  private ownsGeneralChatPostCommitInFlight(runId: string, ownershipGeneration: string): boolean {
+    const current = this.generalChatPostCommitInFlight.get(runId);
+    return Boolean(current && current.ownershipGeneration === ownershipGeneration && current.expiresAtMs > Date.now());
+  }
+
+  /**
+   * Terminal stream delivery is not completion authority. Hold a durable `done`
+   * projection until the exact bound run reaches a representable terminal state
+   * and its canonical post-commit handoff closes the turn admission. The wait is
+   * bounded so reconnect/live-tail subscribers cannot hang forever on a broken
+   * finalizer.
+   */
+  async awaitTerminalChatAdmissionRelease(input: {
+    runId: string;
+    workspaceId?: string;
+    sessionId: string;
+    turnId: string;
+    timeoutMs: number;
+  }): Promise<TerminalChatAdmissionReleaseOutcome> {
+    return this.reconcileExactTerminalChatAdmission({
+      runId: input.runId,
+      expectedWorkspaceId: input.workspaceId,
+      expectedSessionId: input.sessionId,
+      expectedTurnId: input.turnId,
+      timeoutMs: input.timeoutMs,
+    });
+  }
+
+  /**
+   * Admission fallback for the narrow race where a canonical terminal durable
+   * run still owns the session. Unlike stream delivery this never waits for, or
+   * infers authority from, a persisted terminal event: the immutable binding and
+   * durable terminal status must already exist before reconciliation is tried.
+   */
+  async reconcileTerminalChatAdmission(
+    activeAdmission: SessionMutationAdmissionRecord,
+  ): Promise<TerminalChatAdmissionReleaseOutcome> {
+    const startedAt = Date.now();
+    if (activeAdmission.admissionKind !== "turn_write" || !activeAdmission.turnId) {
+      return terminalChatAdmissionOutcome("not_bound", startedAt, 0, {
+        admissionId: activeAdmission.admissionId,
+        admissionStatus: activeAdmission.status,
+      });
+    }
+    try {
+      const canonical = this.ctx.storage.sessionMutationAdmissions.require(activeAdmission.admissionId);
+      if (!sameTurnAdmissionIdentity(canonical, activeAdmission)) {
+        return terminalChatAdmissionOutcome("lineage_mismatch", startedAt, 0, {
+          admissionId: canonical.admissionId,
+          admissionStatus: canonical.status,
+        });
+      }
+      const binding = this.ctx.storage.sessionMutationAdmissions.findDurableRunBinding({
+        admissionId: canonical.admissionId,
+        workspaceId: canonical.workspaceId,
+        sessionId: canonical.sessionId,
+        sessionIncarnationId: canonical.sessionIncarnationId,
+        turnId: canonical.turnId!,
+      });
+      if (!binding) {
+        return terminalChatAdmissionOutcome("not_bound", startedAt, 0, {
+          admissionId: canonical.admissionId,
+          admissionStatus: canonical.status,
+        });
+      }
+      const run = this.ctx.storage.durableRuns.getRun(binding.durableRunId);
+      if (!isTerminalChatRunRecoveryCandidate(run)) {
+        return terminalChatAdmissionOutcome("not_terminal", startedAt, 0, {
+          durableRunId: run.runId,
+          durableRunStatus: run.status,
+          admissionId: canonical.admissionId,
+          admissionStatus: canonical.status,
+        });
+      }
+      return this.reconcileExactTerminalChatAdmission({
+        runId: run.runId,
+        expectedWorkspaceId: canonical.workspaceId,
+        expectedSessionId: canonical.sessionId,
+        expectedTurnId: canonical.turnId!,
+        expectedAdmissionId: canonical.admissionId,
+        timeoutMs: TERMINAL_CHAT_ADMISSION_RECOVERY_TIMEOUT_MS,
+      });
+    } catch (error) {
+      return terminalChatAdmissionOutcome("recovery_failed", startedAt, 0, {
+        admissionId: activeAdmission.admissionId,
+        admissionStatus: activeAdmission.status,
+        error: safeRecoveryError(error),
+      });
+    }
+  }
+
+  private async reconcileExactTerminalChatAdmission(input: {
+    runId: string;
+    expectedWorkspaceId?: string;
+    expectedSessionId: string;
+    expectedTurnId: string;
+    expectedAdmissionId?: string;
+    timeoutMs: number;
+  }): Promise<TerminalChatAdmissionReleaseOutcome> {
+    const startedAt = Date.now();
+    const timeoutMs = Math.max(0, Math.min(input.timeoutMs, 30_000));
+    const deadline = startedAt + timeoutMs;
+    let observedActive = false;
+    try {
+      while (true) {
+        const run = this.ctx.storage.durableRuns.getRun(input.runId);
+        if (!isExactChatRunProjection(run, input)) {
+          return terminalChatAdmissionOutcome("lineage_mismatch", startedAt, deadline, {
+            durableRunId: run.runId,
+            durableRunStatus: run.status,
+          });
+        }
+        if (!isTerminalChatRunRecoveryCandidate(run)) {
+          if (Date.now() >= deadline) {
+            return terminalChatAdmissionOutcome("not_terminal", startedAt, deadline, {
+              durableRunId: run.runId,
+              durableRunStatus: run.status,
+            });
+          }
+          await waitForTerminalChatAdmissionPoll(deadline);
+          continue;
+        }
+
+        const admission = this.requireExactParentTurnAdmission(run, { requireActive: false });
+        if (input.expectedAdmissionId !== undefined && admission.admissionId !== input.expectedAdmissionId) {
+          return terminalChatAdmissionOutcome("lineage_mismatch", startedAt, deadline, {
+            durableRunId: run.runId,
+            durableRunStatus: run.status,
+            admissionId: admission.admissionId,
+            admissionStatus: admission.status,
+          });
+        }
+        const binding = this.ctx.storage.sessionMutationAdmissions.findDurableRunBinding({
+          admissionId: admission.admissionId,
+          workspaceId: admission.workspaceId,
+          sessionId: admission.sessionId,
+          sessionIncarnationId: admission.sessionIncarnationId,
+          turnId: admission.turnId,
+        });
+        if (!binding) {
+          return terminalChatAdmissionOutcome("not_bound", startedAt, deadline, {
+            durableRunId: run.runId,
+            durableRunStatus: run.status,
+            admissionId: admission.admissionId,
+            admissionStatus: admission.status,
+          });
+        }
+        if (binding.durableRunId !== run.runId) {
+          return terminalChatAdmissionOutcome("lineage_mismatch", startedAt, deadline, {
+            durableRunId: run.runId,
+            durableRunStatus: run.status,
+            admissionId: admission.admissionId,
+            admissionStatus: admission.status,
+          });
+        }
+        if (admission.status !== "active") {
+          const exactTerminalRelease = isExactDurableTerminalAdmissionRelease(admission, run);
+          return terminalChatAdmissionOutcome(
+            exactTerminalRelease ? (observedActive ? "released" : "already_released") : "lineage_mismatch",
+            startedAt,
+            deadline,
+            {
+              durableRunId: run.runId,
+              durableRunStatus: run.status,
+              admissionId: admission.admissionId,
+              admissionStatus: admission.status,
+            },
+          );
+        }
+        observedActive = true;
+        const reconciliationSettled = await settleTerminalChatReconciliationBeforeDeadline(
+          this.reconcileGeneralChatPostCommit(run.runId),
+          deadline,
+        );
+        if (!reconciliationSettled) {
+          return terminalChatAdmissionOutcome("reconciliation_pending", startedAt, deadline, {
+            durableRunId: run.runId,
+            durableRunStatus: run.status,
+            admissionId: admission.admissionId,
+            admissionStatus: admission.status,
+          });
+        }
+        const settledAdmission = this.ctx.storage.sessionMutationAdmissions.require(admission.admissionId);
+        if (settledAdmission.status !== "active") {
+          const reconciledRun = this.ctx.storage.durableRuns.getRun(run.runId);
+          return terminalChatAdmissionOutcome(
+            isExactDurableTerminalAdmissionRelease(settledAdmission, reconciledRun) ? "released" : "lineage_mismatch",
+            startedAt,
+            deadline,
+            {
+              durableRunId: reconciledRun.runId,
+              durableRunStatus: reconciledRun.status,
+              admissionId: settledAdmission.admissionId,
+              admissionStatus: settledAdmission.status,
+            },
+          );
+        }
+        if (Date.now() >= deadline) {
+          return terminalChatAdmissionOutcome("reconciliation_pending", startedAt, deadline, {
+            durableRunId: run.runId,
+            durableRunStatus: run.status,
+            admissionId: settledAdmission.admissionId,
+            admissionStatus: settledAdmission.status,
+          });
+        }
+        await waitForTerminalChatAdmissionPoll(deadline);
+      }
+    } catch (error) {
+      return terminalChatAdmissionOutcome("recovery_failed", startedAt, deadline, {
+        durableRunId: input.runId,
+        error: safeRecoveryError(error),
+      });
+    }
+  }
+
+  private async reconcileGeneralChatPostCommitInternal(runId: string, ownershipGeneration: string): Promise<boolean> {
     if (!this.deps?.onGeneralChatPostCommit) {
       return false;
     }
     try {
       for (let generationAttempt = 0; generationAttempt < 8; generationAttempt += 1) {
+        if (!this.ownsGeneralChatPostCommitInFlight(runId, ownershipGeneration)) {
+          return false;
+        }
         const observed = this.ctx.storage.durableRuns.getRun(runId);
         const marker = readGeneralChatPostCommitPendingMarker(observed);
         if (!marker) {
@@ -1845,13 +2149,22 @@ export class DurableRunService {
           targetTraceStatus: marker.traceStatus,
           completedEffects: [...completedEffects],
           runEffect: (effect, callback) =>
-            this.runGeneralChatPostCommitEffect(runId, marker, effect, callback, completedEffects),
+            this.ownsGeneralChatPostCommitInFlight(runId, ownershipGeneration)
+              ? this.runGeneralChatPostCommitEffect(runId, marker, effect, callback, completedEffects)
+              : false,
           publishEffect: (effect, callback) =>
-            this.publishGeneralChatPostCommitEffect(runId, marker, effect, callback, completedEffects),
+            this.ownsGeneralChatPostCommitInFlight(runId, ownershipGeneration)
+              ? this.publishGeneralChatPostCommitEffect(runId, marker, effect, callback, completedEffects)
+              : false,
           enqueueDurableEffect: (input) =>
-            this.enqueueGeneralChatPostCommitEffect(runId, marker, input, completedEffects),
+            this.ownsGeneralChatPostCommitInFlight(runId, ownershipGeneration)
+              ? this.enqueueGeneralChatPostCommitEffect(runId, marker, input, completedEffects)
+              : undefined,
         };
         const resolution = await this.deps.onGeneralChatPostCommit(observed, progress);
+        if (!this.ownsGeneralChatPostCommitInFlight(runId, ownershipGeneration)) {
+          return false;
+        }
         const reconciled = this.ctx.storage.durableRuns.getRun(runId);
         const reconciledMarker = readGeneralChatPostCommitPendingMarker(reconciled);
         if (!reconciledMarker) {
@@ -1875,6 +2188,9 @@ export class DurableRunService {
       }
       throw new Error(`Durable Chat post-commit ${runId} changed generations too many times to reconcile safely.`);
     } catch (error) {
+      if (!this.ownsGeneralChatPostCommitInFlight(runId, ownershipGeneration)) {
+        return false;
+      }
       if (error instanceof DurableChatParentAuthoritySupersededError) {
         this.settleAuthoritySupersededGeneralChatPostCommit(runId);
         return true;
@@ -2989,12 +3305,13 @@ export class DurableRunService {
     const metadata = { ...(run.metadata ?? {}) };
     const payload = run.payload as { version?: unknown; turnId?: unknown } | undefined;
     const hasAutonomousAdmission = metadata.autonomousAdmission !== undefined;
-    const admittedAutonomousV2 = payload?.version === "chat.turn.execute.v2" && hasAutonomousAdmission;
+    const admittedV2 = isAdmittedV2ChatRun(run);
+    const admittedAutonomousV2 = admittedV2 && hasAutonomousAdmission;
     if (admittedAutonomousV2) this.verifyCanonicalAutonomousChatAdmission(run);
     const carriesWaitingAuthority =
       metadata[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY] !== undefined ||
       (metadata.waitForEvent !== undefined && metadata.waitForEvent !== null);
-    if (admittedAutonomousV2 && (transition === "wake" || carriesWaitingAuthority)) {
+    if (admittedV2 && (transition === "wake" || carriesWaitingAuthority)) {
       const authority = readChatTurnRuntimeAuthoritySeal(metadata[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY]);
       if (
         !authority ||
@@ -3003,25 +3320,25 @@ export class DurableRunService {
         authority.material.runId !== run.runId ||
         authority.material.turnId !== payload?.turnId
       ) {
-        throw new Error(`Autonomous Chat run ${run.runId} has no exact waiting runtime authority.`);
+        throw new Error(`Admitted Chat run ${run.runId} has no exact waiting runtime authority.`);
       }
       if (canonicalJsonString(metadata.waitForEvent) !== canonicalJsonString(authority.material.waitForEvent)) {
-        throw new Error(`Autonomous Chat run ${run.runId} wait registration drifted from its runtime authority.`);
+        throw new Error(`Admitted Chat run ${run.runId} wait registration drifted from its runtime authority.`);
       }
       const waitingCheckpoint = this.ctx.storage.durableRuns.getLatestCheckpointByKind(run.runId, "run_waiting");
       if (!waitingCheckpoint) {
-        throw new Error(`Autonomous Chat run ${run.runId} has no authority-anchored waiting checkpoint.`);
+        throw new Error(`Admitted Chat run ${run.runId} has no authority-anchored waiting checkpoint.`);
       }
       verifyCheckpointAnchoredChatTurnRuntimeAuthority(metadata, waitingCheckpoint.state);
       if (metadata[GENERAL_CHAT_POST_COMMIT_PENDING_METADATA_KEY] !== undefined) {
-        throw new Error(`Autonomous Chat run ${run.runId} cannot queue before its waiting generation settles.`);
+        throw new Error(`Admitted Chat run ${run.runId} cannot queue before its waiting generation settles.`);
       }
       if (
         metadata[AUTONOMOUS_CHAT_POST_COMMIT_PENDING_METADATA_KEY] !== undefined ||
         metadata.linkedFinalizationPending !== undefined ||
         metadata.chatTurnAdmissionHandoff !== undefined
       ) {
-        throw new Error(`Autonomous Chat run ${run.runId} carries terminal finalization evidence while waiting.`);
+        throw new Error(`Admitted Chat run ${run.runId} carries terminal finalization evidence while waiting.`);
       }
       const settlement = readExactGeneralChatPostCommitSettlement(metadata.generalChatPostCommit);
       if (
@@ -3034,11 +3351,11 @@ export class DurableRunService {
         canonicalJsonString(settlement.postCommitEligibility) !==
           canonicalJsonString(authority.material.postCommitEligibility)
       ) {
-        throw new Error(`Autonomous Chat run ${run.runId} has no exact settled waiting generation.`);
+        throw new Error(`Admitted Chat run ${run.runId} has no exact settled waiting generation.`);
       }
       delete metadata[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY];
-    } else if (!admittedAutonomousV2 && metadata[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY] !== undefined) {
-      throw new Error(`Durable run ${run.runId} carries runtime authority without an admitted autonomous Chat run.`);
+    } else if (!admittedV2 && metadata[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY] !== undefined) {
+      throw new Error(`Durable run ${run.runId} carries runtime authority without an admitted v2 Chat run.`);
     }
     delete metadata.waitForEvent;
     return metadata;
@@ -3142,7 +3459,9 @@ export class DurableRunService {
         const generationId = randomUUID();
         const eligibility = this.resolvePostCommitEligibility(chatLink.sessionId);
         cancellationMetadata = markGeneralChatPostCommitPending(
-          mergeCanonicalDurableChatTerminalOutputMetadata(lockedCurrent.metadata, undefined),
+          resetChatTurnRuntimeTransitionMetadata(
+            mergeCanonicalDurableChatTerminalOutputMetadata(lockedCurrent.metadata, undefined),
+          ),
           now,
           "cancelled",
           eligibility,
@@ -3725,8 +4044,8 @@ export class DurableRunService {
       return 0;
     }
     this.reconcileDurableChildWatchers();
-    let reclaimedCount = 0;
     const recoveryObservedAt = new Date().toISOString();
+    let reclaimedCount = await this.reconcileExitedLocalProcessRuns(recoveryObservedAt);
     const runningRunIds = this.ctx.storage.durableRuns.listExpiredRunningRunIds(recoveryObservedAt);
     for (const runId of runningRunIds) {
       try {
@@ -3737,7 +4056,7 @@ export class DurableRunService {
         const recoverability = this.deps.workflowRegistry.isWorkflowRecoverable(run);
         if (!recoverability.recoverable) {
           const reason = recoverability.reason ?? "Run could not be recovered after restart.";
-          await this.transitionExpiredRunToPendingFinalization(run, reason, recoveryObservedAt);
+          await this.transitionRunToPendingFinalization(run, reason, recoveryObservedAt, { kind: "expired" });
           continue;
         }
         let reclaimedByThisPass = false;
@@ -3780,6 +4099,65 @@ export class DurableRunService {
     return reclaimedCount;
   }
 
+  private async reconcileExitedLocalProcessRuns(recoveryObservedAt: string): Promise<number> {
+    if (this.deps?.sharedHostLifecycle?.snapshot().mode !== "local_always_available") {
+      return 0;
+    }
+    let reclaimedCount = 0;
+    for (const runId of this.ctx.storage.durableRuns.listRunIdsByStatus("running")) {
+      try {
+        const observed = this.ctx.storage.durableRuns.getRun(runId);
+        if (!this.isConfirmedExitedLocalProcessOwner(observed.leaseOwnerId)) {
+          continue;
+        }
+        const recoverability = this.deps.workflowRegistry.isWorkflowRecoverable(observed);
+        if (!recoverability.recoverable) {
+          await this.transitionRunToPendingFinalization(
+            observed,
+            recoverability.reason ?? "Run could not be recovered after its local worker process exited.",
+            recoveryObservedAt,
+            { kind: "exited_local_process", leaseOwnerId: observed.leaseOwnerId! },
+          );
+          continue;
+        }
+        let reclaimedByThisPass = false;
+        this.ctx.storage.runImmediateTransaction(() => {
+          const current = this.lockFreshLeaseOwnerForTransition(observed.runId, observed.leaseOwnerId!);
+          if (!current || !this.isConfirmedExitedLocalProcessOwner(current.leaseOwnerId)) {
+            return;
+          }
+          this.recordDurableTimelineEvent(current.runId, "run_incomplete_worker_exit", {
+            leaseOwnerId: current.leaseOwnerId,
+            leaseHeartbeatAt: current.leaseHeartbeatAt,
+            leaseExpiresAt: current.leaseExpiresAt,
+            recovery: "confirmed_dead_local_process",
+          });
+          const reclaimed = this.ctx.storage.durableRuns.updateRun({
+            runId: current.runId,
+            status: "queued",
+            clearFinishedAt: true,
+            clearLease: true,
+            clearLastError: true,
+            updatedAt: recoveryObservedAt,
+            expectedVersion: current.version,
+          });
+          reclaimedByThisPass = true;
+          this.recordDurableTimelineEvent(reclaimed.runId, "run_reclaimed", {
+            previousLeaseOwnerId: current.leaseOwnerId,
+            previousLeaseExpiresAt: current.leaseExpiresAt,
+            recovery: "confirmed_dead_local_process",
+          });
+        });
+        if (reclaimedByThisPass) {
+          reclaimedCount += 1;
+        }
+      } catch (error) {
+        this.reportDurableRunRecoveryFailure(runId, error);
+      }
+    }
+    return reclaimedCount;
+  }
+
   private reconcileDurableChildWatchers(): void {
     try {
       this.ctx.storage.durableChildWatchers.catchUpAttached({
@@ -3796,23 +4174,39 @@ export class DurableRunService {
     }
   }
 
-  private async transitionExpiredRunToPendingFinalization(
+  private async transitionRunToPendingFinalization(
     observed: DurableRunRecord,
     reason: string,
     recoveryObservedAt: string,
+    recovery: { kind: "expired" } | { kind: "exited_local_process"; leaseOwnerId: string },
   ): Promise<DurableRunRecord | undefined> {
     const safeReason = redactRawRemoteApprovalBearerText(reason);
     let transitioned = false;
     let failed = observed;
     this.ctx.storage.runImmediateTransaction(() => {
-      const current = this.lockExpiredExecutionLeaseForRecovery(observed);
+      const current =
+        recovery.kind === "expired"
+          ? this.lockExpiredExecutionLeaseForRecovery(observed)
+          : this.lockFreshLeaseOwnerForTransition(observed.runId, recovery.leaseOwnerId);
       if (!current) {
         return;
       }
-      this.recordDurableTimelineEvent(current.runId, "run_lease_expired", {
-        leaseOwnerId: current.leaseOwnerId,
-        leaseExpiresAt: current.leaseExpiresAt,
-      });
+      if (recovery.kind === "exited_local_process") {
+        if (!this.isConfirmedExitedLocalProcessOwner(current.leaseOwnerId)) {
+          return;
+        }
+        this.recordDurableTimelineEvent(current.runId, "run_incomplete_worker_exit", {
+          leaseOwnerId: current.leaseOwnerId,
+          leaseHeartbeatAt: current.leaseHeartbeatAt,
+          leaseExpiresAt: current.leaseExpiresAt,
+          recovery: "confirmed_dead_local_process",
+        });
+      } else {
+        this.recordDurableTimelineEvent(current.runId, "run_lease_expired", {
+          leaseOwnerId: current.leaseOwnerId,
+          leaseExpiresAt: current.leaseExpiresAt,
+        });
+      }
       this.assertExactAdmittedChatRetryAuthority(current);
       const priorMetadata = {
         ...(mergeCanonicalDurableChatTerminalOutputMetadata(current.metadata, undefined) ?? {}),
@@ -3840,6 +4234,10 @@ export class DurableRunService {
         typeof payload.turnId === "string" &&
         payload.turnId.trim()
       ) {
+        if (priorMetadata[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY] !== undefined) {
+          throw new Error(`Running admitted Chat run ${current.runId} carries conflicting runtime authority.`);
+        }
+        delete (metadata as { waitForEvent?: unknown }).waitForEvent;
         const generationId = randomUUID();
         const postCommitEligibility = this.resolvePostCommitEligibility(payload.sessionId);
         metadata = markGeneralChatPostCommitPending(
@@ -3936,9 +4334,26 @@ export class DurableRunService {
     let afterRunId: string | undefined;
     while (true) {
       const runIds = this.ctx.storage.durableRuns.listPendingGeneralChatPostCommitRunIds?.(batchSize, afterRunId) ?? [];
-      for (const runId of runIds) {
-        await this.reconcileGeneralChatPostCommit(runId);
-      }
+      let nextIndex = 0;
+      const reconcileNext = async () => {
+        while (nextIndex < runIds.length) {
+          const runId = runIds[nextIndex++];
+          if (!runId) continue;
+          try {
+            await settleTerminalChatReconciliationBeforeDeadline(
+              this.reconcileGeneralChatPostCommit(runId),
+              Date.now() + GENERAL_CHAT_POST_COMMIT_IN_FLIGHT_TTL_MS,
+            );
+          } catch (error) {
+            this.reportDurableRunRecoveryFailure(runId, error);
+          }
+        }
+      };
+      await Promise.all(
+        Array.from({ length: Math.min(GENERAL_CHAT_POST_COMMIT_SWEEP_CONCURRENCY, runIds.length) }, () =>
+          reconcileNext(),
+        ),
+      );
       if (runIds.length < batchSize) {
         return;
       }
@@ -4272,6 +4687,31 @@ export class DurableRunService {
             }
           }
         }
+        const finalized = this.ctx.storage.durableRuns.getRun(run.runId);
+        if (
+          !preserveForLeaseRecovery &&
+          isRepresentableTerminalChatRun(finalized) &&
+          isExactChatRunProjection(finalized, {
+            expectedSessionId: String(finalized.payload?.sessionId ?? ""),
+            expectedTurnId: String(finalized.payload?.turnId ?? ""),
+          })
+        ) {
+          // The persisted terminal stream event can be observed before the
+          // workflow handler returns. Start canonical post-commit settlement in
+          // this same worker pass so admission release is not deferred until a
+          // later poll/restart recovery sweep.
+          try {
+            await settleTerminalChatReconciliationBeforeDeadline(
+              this.reconcileGeneralChatPostCommit(finalized.runId),
+              Date.now() + TERMINAL_CHAT_ADMISSION_RECOVERY_TIMEOUT_MS,
+            );
+          } catch (error) {
+            // Terminal reconciliation is owned by this run and remains
+            // recoverable on a later sweep. One corrupt/incomplete run must not
+            // abort the shared drain before unrelated queued work can execute.
+            this.reportDurableRunRecoveryFailure(finalized.runId, error);
+          }
+        }
       }
     }
   }
@@ -4523,7 +4963,7 @@ export class DurableRunService {
         return this.ctx.storage.durableRuns.updateRun({
           runId,
           status: current.status,
-          leaseOwnerId: randomUUID(),
+          leaseOwnerId: buildDurableLocalProcessLeaseOwnerId(),
           leaseHeartbeatAt: current.leaseHeartbeatAt,
           leaseExpiresAt: current.leaseExpiresAt,
           updatedAt: new Date().toISOString(),
@@ -4731,7 +5171,7 @@ export class DurableRunService {
         this.reportDurableRunRecoveryFailure(runId, error);
         continue;
       }
-      const leaseOwnerId = randomUUID();
+      const leaseOwnerId = buildDurableLocalProcessLeaseOwnerId();
       this.ctx.storage.runImmediateTransaction(() => {
         run = this.tryClaimQueuedRunWithDatabaseClock({
           runId,
@@ -5134,6 +5574,14 @@ export class DurableRunService {
     throw new Error("Durable run repository is missing the database-clock recovery fence");
   }
 
+  private isConfirmedExitedLocalProcessOwner(leaseOwnerId: string | undefined): boolean {
+    const identity = parseDurableLocalProcessLeaseOwnerId(leaseOwnerId);
+    if (!identity || identity.hostFingerprint !== DURABLE_LOCAL_HOST_FINGERPRINT || identity.pid === process.pid) {
+      return false;
+    }
+    return !(this.deps?.isLocalProcessAlive ?? isLocalProcessAlive)(identity.pid);
+  }
+
   private hasActiveLeaseOwner(
     current: DurableRunRecord,
     expectedLeaseOwnerId: string | undefined,
@@ -5211,6 +5659,106 @@ export class DurableRunService {
   }
 }
 
+function terminalChatAdmissionOutcome(
+  recoveryOutcome: TerminalChatAdmissionReleaseOutcome["recoveryOutcome"],
+  startedAt: number,
+  deadline: number,
+  detail: Omit<TerminalChatAdmissionReleaseOutcome, "recoveryOutcome" | "elapsedMs" | "remainingBudgetMs"> = {},
+): TerminalChatAdmissionReleaseOutcome {
+  const now = Date.now();
+  return {
+    recoveryOutcome,
+    ...detail,
+    elapsedMs: Math.max(0, now - startedAt),
+    remainingBudgetMs: Math.max(0, deadline - now),
+  };
+}
+
+function isRepresentableTerminalChatRun(run: DurableRunRecord): boolean {
+  return run.status === "completed" || run.status === "failed" || run.status === "cancelled";
+}
+
+function isTerminalChatRunRecoveryCandidate(run: DurableRunRecord): boolean {
+  return isRepresentableTerminalChatRun(run) || run.status === "dead_lettered";
+}
+
+function isExactDurableTerminalAdmissionRelease(
+  admission: SessionMutationAdmissionRecord,
+  run: DurableRunRecord,
+): boolean {
+  const terminalStatus = admission.terminalDurableRunStatus;
+  return (
+    admission.terminalAuthorityKind === "durable_terminal" &&
+    admission.terminalDurableRunId === run.runId &&
+    (terminalStatus === "completed" || terminalStatus === "failed" || terminalStatus === "cancelled") &&
+    (run.status === terminalStatus || (run.status === "dead_lettered" && terminalStatus === "failed"))
+  );
+}
+
+function isExactChatRunProjection(
+  run: DurableRunRecord,
+  expected: {
+    expectedWorkspaceId?: string;
+    expectedSessionId: string;
+    expectedTurnId: string;
+  },
+): boolean {
+  const payload = run.payload as { version?: unknown; workspaceId?: unknown; sessionId?: unknown; turnId?: unknown };
+  return (
+    run.workflowKey === "chat.turn.execute" &&
+    payload.version === "chat.turn.execute.v2" &&
+    (expected.expectedWorkspaceId === undefined || payload.workspaceId === expected.expectedWorkspaceId) &&
+    payload.sessionId === expected.expectedSessionId &&
+    payload.turnId === expected.expectedTurnId
+  );
+}
+
+function sameTurnAdmissionIdentity(
+  left: SessionMutationAdmissionRecord,
+  right: SessionMutationAdmissionRecord,
+): boolean {
+  return (
+    left.admissionId === right.admissionId &&
+    left.workspaceId === right.workspaceId &&
+    left.sessionId === right.sessionId &&
+    left.sessionIncarnationId === right.sessionIncarnationId &&
+    left.turnId === right.turnId
+  );
+}
+
+async function waitForTerminalChatAdmissionPoll(deadline: number): Promise<void> {
+  const remainingMs = Math.max(0, deadline - Date.now());
+  if (remainingMs === 0) return;
+  await new Promise<void>((resolve) =>
+    setTimeout(resolve, Math.min(TERMINAL_CHAT_ADMISSION_RELEASE_POLL_MS, remainingMs)),
+  );
+}
+
+async function settleTerminalChatReconciliationBeforeDeadline(
+  work: Promise<unknown>,
+  deadline: number,
+): Promise<boolean> {
+  const remainingMs = Math.max(0, deadline - Date.now());
+  if (remainingMs === 0) return false;
+  return new Promise<boolean>((resolve, reject) => {
+    const timer = setTimeout(() => resolve(false), remainingMs);
+    void work.then(
+      () => {
+        clearTimeout(timer);
+        resolve(true);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
+  });
+}
+
+function safeRecoveryError(error: unknown): string {
+  return redactRawRemoteApprovalBearerText(error instanceof Error ? error.message : String(error));
+}
+
 export function resolveDurableWorkflowTimeoutMs(_run: DurableRunRecord, defaultTimeoutMs: number): number | undefined {
   return defaultTimeoutMs;
 }
@@ -5254,6 +5802,48 @@ function isAutonomousDurableRunForKillSwitch(run: DurableRunRecord): boolean {
     (typeof autonomous === "object" && autonomous !== null) ||
     metadata?.deliveryKind === "autonomous.assistant_message"
   );
+}
+
+interface DurableLocalProcessLeaseOwnerIdentity {
+  hostFingerprint: string;
+  pid: number;
+}
+
+export function buildDurableLocalProcessLeaseOwnerId(input?: {
+  hostFingerprint?: string;
+  pid?: number;
+  nonce?: string;
+}): string {
+  const hostFingerprint = input?.hostFingerprint ?? DURABLE_LOCAL_HOST_FINGERPRINT;
+  const pid = input?.pid ?? process.pid;
+  const nonce = input?.nonce ?? randomUUID();
+  return `${DURABLE_LOCAL_PROCESS_LEASE_VERSION}:${hostFingerprint}:${pid}:${nonce}`;
+}
+
+function parseDurableLocalProcessLeaseOwnerId(
+  leaseOwnerId: string | undefined,
+): DurableLocalProcessLeaseOwnerIdentity | undefined {
+  if (!leaseOwnerId) {
+    return undefined;
+  }
+  const match = /^local-process-v1:([0-9a-f]{16}):(\d+):([0-9a-f-]{36})$/u.exec(leaseOwnerId);
+  if (!match) {
+    return undefined;
+  }
+  const pid = Number(match[2]);
+  if (!Number.isSafeInteger(pid) || pid <= 0) {
+    return undefined;
+  }
+  return { hostFingerprint: match[1]!, pid };
+}
+
+function isLocalProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
 }
 
 function isDurableRunUpdateConflict(error: unknown): boolean {

@@ -893,6 +893,7 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
   const [runList, setRunList] = useState<CodeModeRunRecord[]>([]);
   const [runListLoading, setRunListLoading] = useState(false);
   const [runListError, setRunListError] = useState<string | null>(null);
+  const [runListRefreshRevision, setRunListRefreshRevision] = useState(0);
   const [executionBackends, setExecutionBackends] = useState<CodeModeExecutionBackendsResponse | null>(null);
   const [executionBackendsError, setExecutionBackendsError] = useState<string | null>(null);
   const [runDetail, setRunDetail] = useState<CodeModeRunRecord | null>(null);
@@ -1467,7 +1468,15 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
     return () => {
       cancelled = true;
     };
-  }, [codeLedgerSessionId, codeLedgerTurnId, codeLedgerWorkspaceId]);
+  }, [codeLedgerSessionId, codeLedgerTurnId, codeLedgerWorkspaceId, runListRefreshRevision]);
+
+  const handleRunHelperSnippet = useCallback(
+    async (language: string, source: string) => {
+      await onRunHelperSnippet(language, source);
+      setRunListRefreshRevision((current) => current + 1);
+    },
+    [onRunHelperSnippet],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -2915,7 +2924,7 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
                     <button
                       type="button"
                       className="mc-next-panel-button primary"
-                      onClick={() => onRunHelperSnippet(activeBlock.language, activeBlock.content)}
+                      onClick={() => void handleRunHelperSnippet(activeBlock.language, activeBlock.content)}
                     >
                       Run helper snippet
                     </button>

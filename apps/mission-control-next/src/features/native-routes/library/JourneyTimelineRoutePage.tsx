@@ -112,8 +112,12 @@ export function JourneyTimelineRoutePage({ route, activeWorkspaceId }: NativeRou
   const distinctSessions = new Set(page.items.flatMap((item) => (item.sessionId ? [item.sessionId] : []))).size;
 
   return (
-    <LibrarySectionShell loading={loading} error={error} onRetry={() => void load()}>
-      <ReleaseScopeBadge status={getRouteReleaseScope(route).status} />
+    <LibrarySectionShell
+      loading={loading}
+      error={error}
+      onRetry={() => void load()}
+      persistentHeader={<ReleaseScopeBadge status={getRouteReleaseScope(route).status} />}
+    >
       <div className="mc-next-settings-grid">
         <NativeCard
           title="Journey timeline"
@@ -302,6 +306,7 @@ function EvidenceRows({ title, rows }: { title: string; rows: Array<readonly [st
     <section aria-label={title}>
       <h3 className="mc-next-settings-subtitle">{title}</h3>
       <LibraryActionList
+        ariaLabel={`${title} entries`}
         items={rows.map(([label, value], index) => ({
           id: `${label}-${index}`,
           label: humanizeAction(label),

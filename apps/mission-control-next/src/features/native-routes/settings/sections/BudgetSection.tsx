@@ -91,6 +91,7 @@ export function BudgetSection({ route, navigate }: SettingsSectionProps) {
       subtitle="Inspect the runtime signals that explain spend, routing, and provider behavior."
     >
       <SettingsActionList
+        ariaLabel="Budget evidence routes"
         items={[
           {
             label: "Open cost telemetry",

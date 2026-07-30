@@ -20,6 +20,7 @@ export function LibrarySectionShell({
   onRetry,
   errorSecondaryAction,
   errorContext,
+  persistentHeader,
   children,
 }: {
   loading: boolean;
@@ -28,32 +29,47 @@ export function LibrarySectionShell({
   onRetry?: () => void;
   errorSecondaryAction?: ReactNode;
   errorContext?: NativeRouteErrorContext;
+  /** Route-truth content such as an Experimental badge that must survive loading and error states. */
+  persistentHeader?: ReactNode;
   children: ReactNode;
 }) {
   if (loading) {
-    return <BlocksShuffleLoader compact label="Loading current route data…" />;
+    return (
+      <>
+        {persistentHeader}
+        <BlocksShuffleLoader compact label="Loading current route data…" />
+      </>
+    );
   }
   if (error) {
     const presentation = normalizeNativeRouteError(error, errorContext);
     return (
-      <ErrorState
-        size="inline"
-        title={presentation.title}
-        description={presentation.description}
-        technicalDetails={presentation.technicalDetail}
-        primaryAction={
-          onRetry ? (
-            <NativeButton variant="outline" onClick={() => onRetry()}>
-              <RefreshCw size={16} />
-              Retry
-            </NativeButton>
-          ) : undefined
-        }
-        secondaryActions={errorSecondaryAction}
-      />
+      <>
+        {persistentHeader}
+        <ErrorState
+          size="inline"
+          title={presentation.title}
+          description={presentation.description}
+          technicalDetails={presentation.technicalDetail}
+          primaryAction={
+            onRetry ? (
+              <NativeButton variant="outline" onClick={() => onRetry()}>
+                <RefreshCw size={16} />
+                Retry
+              </NativeButton>
+            ) : undefined
+          }
+          secondaryActions={errorSecondaryAction}
+        />
+      </>
     );
   }
-  return <>{children}</>;
+  return (
+    <>
+      {persistentHeader}
+      {children}
+    </>
+  );
 }
 
 export function LibraryFieldGrid({ children }: { children: ReactNode }) {
@@ -111,6 +127,7 @@ export function LibraryActionList({
   emptyLabel = "Nothing here yet.",
   maxHeight = "min(50vh, 30rem)",
   compact = true,
+  ariaLabel,
 }: {
   items: Array<{
     id?: string;
@@ -123,6 +140,8 @@ export function LibraryActionList({
   emptyLabel?: string;
   maxHeight?: string;
   compact?: boolean;
+  /** Contextual landmark name. Required so pages with multiple lists never emit duplicate generic regions. */
+  ariaLabel: string;
 }) {
   if (!items.length) {
     return <LibraryEmptyState label={emptyLabel} />;
@@ -133,6 +152,9 @@ export function LibraryActionList({
         .filter(Boolean)
         .join(" ")}
       data-native-scroll={maxHeight ? "true" : undefined}
+      role={maxHeight ? "region" : undefined}
+      aria-label={maxHeight ? ariaLabel : undefined}
+      tabIndex={maxHeight ? 0 : undefined}
       style={maxHeight ? { maxHeight } : undefined}
     >
       {items.map((item) => (

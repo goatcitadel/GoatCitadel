@@ -4,6 +4,8 @@ import type { ConfigGenerationHealthSnapshot } from "../services/config-generati
 import type { SharedHostLifecycleSnapshot } from "../services/shared-host-lifecycle-service.js";
 import { withRouteAccess } from "./route-access.js";
 
+const MANAGED_INSTANCE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+
 export const healthRoute: FastifyPluginAsync = async (fastify) => {
   fastify.get("/health", async (_request, reply) => {
     const [database, configGeneration] = await Promise.all([
@@ -13,11 +15,15 @@ export const healthRoute: FastifyPluginAsync = async (fastify) => {
     const lifecycle = readSharedHostLifecycleSnapshot(fastify);
     const ready =
       isDatabaseReady(database) && isConfigGenerationReady(configGeneration) && isSharedHostLifecycleReady(lifecycle);
-    return reply.code(ready ? 200 : 503).send({
-      status: ready ? "ok" : "degraded",
-      readiness: ready ? "ready" : "degraded",
-      service: "gateway",
-    });
+    return reply
+      .header("Cache-Control", "no-store, max-age=0, must-revalidate")
+      .code(ready ? 200 : 503)
+      .send({
+        status: ready ? "ok" : "degraded",
+        readiness: ready ? "ready" : "degraded",
+        service: "gateway",
+        ...buildManagedHealthIdentity("gateway"),
+      });
   });
 
   fastify.get("/api/v1/ops/readiness", withRouteAccess(fastify, "operator"), async (_request, reply) => {
@@ -114,6 +120,18 @@ function isSharedHostLifecycleReady(lifecycle?: SharedHostLifecycleSnapshot): bo
   return !lifecycle || lifecycle.readiness === "ready";
 }
 
+function buildManagedHealthIdentity(
+  service: string,
+  env: Record<string, string | undefined> = process.env,
+): { managedInstanceId?: string; managedProcessId?: number } {
+  const instanceId = env.GOATCITADEL_MANAGED_INSTANCE_ID?.trim();
+  if (env.GOATCITADEL_MANAGED_SERVICE !== service || !instanceId || !MANAGED_INSTANCE_ID_PATTERN.test(instanceId)) {
+    return {};
+  }
+  return { managedInstanceId: instanceId, managedProcessId: process.pid };
+}
+
 export const __internal = {
   buildAuthenticatedReadinessSnapshot,
+  buildManagedHealthIdentity,
 };

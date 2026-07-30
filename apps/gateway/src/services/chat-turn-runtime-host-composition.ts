@@ -269,6 +269,7 @@ function composeEntryExtras(
   | "persistChatSessionMode"
   | "recordSurfaceRouteOverrideSignal"
   | "recoverDecisionCommittedHeartbeat"
+  | "reconcileTerminalChatAdmission"
   | "subagentFanout"
 > {
   return {
@@ -289,6 +290,7 @@ function composeEntryExtras(
     persistChatSessionMode: source.persistChatSessionMode,
     recordSurfaceRouteOverrideSignal: source.recordSurfaceRouteOverrideSignal,
     recoverDecisionCommittedHeartbeat: (identity) => source.recoverDecisionCommittedHeartbeat(identity),
+    reconcileTerminalChatAdmission: (activeAdmission) => source.reconcileTerminalChatAdmission(activeAdmission),
     // R3-8: the turn services register turn-scoped agent.fanout executors on
     // this registry; dropping it here silently kills the tool in production
     // (the member is optional, so the compiler cannot catch the omission).

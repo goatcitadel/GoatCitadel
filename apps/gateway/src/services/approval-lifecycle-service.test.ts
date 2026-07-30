@@ -2749,15 +2749,33 @@ describe("approval lifecycle service", () => {
       upsert: chatMessagesUpsert,
     } as never;
     const chatTurnTracesPatch = vi.fn();
-    host.storage.chatTurnTraces.get = vi.fn(() => ({
+    let chatTurnTrace: {
+      turnId: string;
+      sessionId: string;
+      status: "waiting_for_approval" | "running";
+      durable: { runId: string };
+    } = {
       turnId: "turn-1",
       sessionId: "session-1",
       status: "waiting_for_approval",
       durable: {
         runId: "durable-turn-1",
       },
-    })) as never;
+    };
+    host.storage.chatTurnTraces.get = vi.fn(() => chatTurnTrace) as never;
     host.storage.chatTurnTraces.patch = chatTurnTracesPatch as never;
+    host.storage.chatTurnTraces.patchIfStatus = vi.fn(
+      (turnId: string, expectedStatuses: readonly string[], patch: { status?: "waiting_for_approval" | "running" }) => {
+        if (turnId !== chatTurnTrace.turnId || !expectedStatuses.includes(chatTurnTrace.status)) {
+          return undefined;
+        }
+        chatTurnTrace = {
+          ...chatTurnTrace,
+          ...(patch.status ? { status: patch.status } : {}),
+        };
+        return chatTurnTrace;
+      },
+    ) as never;
     host.storage.durableRuns = {
       getRun: vi.fn((runId: string) => {
         const current = runStates.get(runId);

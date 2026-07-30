@@ -1131,6 +1131,7 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
               />
             </SettingsField>
             <SettingsActionList
+              ariaLabel="Universal model choices"
               items={universalModelOptions.slice(0, 12).map((item) => ({
                 id: item.id,
                 label: item.label,
@@ -1493,6 +1494,7 @@ export function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                   </SettingsField>
                 </SettingsFieldGrid>
                 <SettingsActionList
+                  ariaLabel={`${selectedProvider.label} smoke evidence`}
                   items={selectedProviderSmokeEvidenceItems.map((item) => ({
                     ...item,
                     onClick:

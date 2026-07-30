@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChatCompletionRequest, ModelUsageAttributionContext } from "@goatcitadel/contracts";
 import { ModelUsageDispatchPersistenceError, ModelUsageDispatchUncertainError } from "@goatcitadel/gateway-core";
+import { ChatTurnCancelledError } from "./chat-turn-helpers.js";
 import { createChatCompletion, createChatCompletionStream, type LlmCompletionHost } from "./llm-completion-service.js";
 
 vi.mock("node:sqlite", () => ({
@@ -219,6 +220,7 @@ describe("createChatCompletionStream", () => {
     const result = await collectStream(createChatCompletionStream(host, createRequest()));
 
     expect(calls.every((call) => call === "primary:primary-model")).toBe(true);
+    expect(calls).toHaveLength(1);
     expect(calls).not.toContain("backup:backup-model");
     expect(result.chunks).toEqual([
       {
@@ -226,6 +228,134 @@ describe("createChatCompletionStream", () => {
       },
     ]);
     expect(result.error?.message).toContain("fetch failed");
+  });
+
+  it("retries an exact provider server_error before output and then streams successfully", async () => {
+    let calls = 0;
+    const host = createHost(async function* () {
+      calls += 1;
+      if (calls === 1) {
+        throw Object.assign(new Error("responses stream failed: server_error - temporary provider failure"), {
+          providerFailure: { code: "server_error", message: "temporary provider failure" },
+        });
+      }
+      yield { choices: [{ delta: { content: "recovered" } }] };
+    }, []);
+
+    const result = await collectStream(
+      createChatCompletionStream(host, {
+        ...createRequest(),
+        memory: {
+          enabled: false,
+          sessionId: "session-server-error",
+          turnId: "turn-server-error",
+          runId: "run-server-error",
+        },
+      }),
+    );
+
+    expect(calls).toBe(2);
+    expect(result.error).toBeUndefined();
+    expect(result.chunks[0]).toEqual({ choices: [{ delta: { content: "recovered" } }] });
+    expect(host.recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "chat.completion_stream.attempt_failed",
+        context: expect.objectContaining({
+          emittedOutput: false,
+          failureClass: "transient",
+          sessionId: "session-server-error",
+          turnId: "turn-server-error",
+          durableRunId: "run-server-error",
+        }),
+      }),
+    );
+  });
+
+  it("does not dispatch a transient retry after the operator cancels during pre-output backoff", async () => {
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      const cancellation = new ChatTurnCancelledError("turn-cancelled", "Chat turn cancelled by operator.");
+      let calls = 0;
+      const host = createHost(async function* () {
+        calls += 1;
+        if (calls > 1) {
+          yield { choices: [{ delta: { content: "must not dispatch" } }] };
+          return;
+        }
+        throw Object.assign(new Error("responses stream failed: server_error - temporary provider failure"), {
+          providerFailure: { code: "server_error", message: "temporary provider failure" },
+        });
+      }, []);
+
+      const resultPromise = collectStream(
+        createChatCompletionStream(host, {
+          ...createRequest(),
+          signal: controller.signal,
+          memory: {
+            enabled: false,
+            sessionId: "session-cancelled",
+            turnId: "turn-cancelled",
+            runId: "run-cancelled",
+          },
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toBe(1);
+
+      controller.abort(cancellation);
+      await vi.runAllTimersAsync();
+      const result = await resultPromise;
+
+      expect(calls).toBe(1);
+      expect(result.chunks).toEqual([]);
+      expect(result.error).toBe(cancellation);
+      expect(host.resolveFallbackTargets).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("suppresses every secondary dispatch when 4551ms cannot fund backoff plus the minimum window", async () => {
+    let calls = 0;
+    const failure = Object.assign(new Error("responses stream failed: server_error - temporary provider failure"), {
+      providerFailure: { code: "server_error", message: "temporary provider failure" },
+    });
+    const host = createHost(async function* () {
+      calls += 1;
+      yield* [];
+      throw failure;
+    });
+
+    const result = await collectStream(
+      createChatCompletionStream(host, {
+        ...createRequest(),
+        timeoutMs: 4_551,
+        memory: {
+          enabled: false,
+          sessionId: "session-near-expiry",
+          turnId: "turn-near-expiry",
+          runId: "run-near-expiry",
+        },
+      }),
+    );
+
+    expect(calls).toBe(1);
+    expect(result.error).toBe(failure);
+    expect(host.resolveFallbackTargets).toHaveBeenCalledOnce();
+    expect(host.recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "chat.completion_stream.failed",
+        context: expect.objectContaining({
+          emittedOutput: false,
+          failureClass: "transient",
+          remainingBudgetMs: expect.any(Number),
+          sessionId: "session-near-expiry",
+          turnId: "turn-near-expiry",
+          durableRunId: "run-near-expiry",
+        }),
+      }),
+    );
   });
 
   it("emits lifecycle hook events around streaming prompt build, request, and completion", async () => {
@@ -789,18 +919,13 @@ describe("createChatCompletion", () => {
     });
 
     expect(response.modelUsageEventIds).toEqual(["usage-fallback"]);
-    expect(attributions).toHaveLength(4);
-    expect(attributions.map((item) => item.operationId)).toEqual(Array(4).fill("operation-1"));
-    expect(attributions.map((item) => item.dispatchGeneration)).toEqual(Array(4).fill("generation-1"));
-    expect(attributions.map((item) => item.attemptIndex)).toEqual([0, 1, 2, 3]);
-    expect(attributions.map((item) => item.repairIndex)).toEqual([0, 1, 2, 2]);
-    expect(attributions.map((item) => item.fallbackIndex)).toEqual([0, 0, 0, 1]);
-    expect(attributions.map((item) => item.callKind)).toEqual([
-      "chat_initial",
-      "chat_repair",
-      "chat_repair",
-      "chat_fallback",
-    ]);
+    expect(attributions).toHaveLength(2);
+    expect(attributions.map((item) => item.operationId)).toEqual(Array(2).fill("operation-1"));
+    expect(attributions.map((item) => item.dispatchGeneration)).toEqual(Array(2).fill("generation-1"));
+    expect(attributions.map((item) => item.attemptIndex)).toEqual([0, 1]);
+    expect(attributions.map((item) => item.repairIndex)).toEqual([0, 0]);
+    expect(attributions.map((item) => item.fallbackIndex)).toEqual([0, 1]);
+    expect(attributions.map((item) => item.callKind)).toEqual(["chat_initial", "chat_fallback"]);
     expect(attributions.every((item) => item.requestedProviderId === "primary")).toBe(true);
     expect(attributions.every((item) => item.requestedModelId === "primary-model")).toBe(true);
     expect(attributions.every((item) => item.reasoningDisposition === "honored")).toBe(true);
@@ -1106,7 +1231,19 @@ describe("createChatCompletion", () => {
       },
     });
 
-    await expect(createChatCompletion(host, createRequest())).rejects.toThrow("provider exhausted");
+    await expect(
+      createChatCompletion(host, {
+        ...createRequest(),
+        memory: {
+          enabled: false,
+          sessionId: "session-terminal",
+          turnId: "turn-terminal",
+          runId: "run-terminal",
+        },
+      }),
+    ).rejects.toThrow("provider exhausted");
+
+    expect(host.llmService.chatCompletions).toHaveBeenCalledTimes(1);
 
     expect(host.recordDevDiagnostic).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1115,9 +1252,92 @@ describe("createChatCompletion", () => {
         runtimeError: expect.objectContaining({
           message: "provider exhausted",
         }),
+        context: expect.objectContaining({
+          emittedOutput: false,
+          sessionId: "session-terminal",
+          turnId: "turn-terminal",
+          durableRunId: "run-terminal",
+        }),
       }),
     );
     expect(host.publishRealtime).not.toHaveBeenCalled();
+  });
+
+  it("uses compatibility retries only for an actual tool-protocol failure", async () => {
+    const requests: ChatCompletionRequest[] = [];
+    const host = createCompletionHost({
+      fallbacks: [],
+      completion: async (request) => {
+        requests.push(request);
+        if (requests.length === 1) {
+          throw new Error("invalid_request_error: function name is invalid");
+        }
+        return {
+          model: "primary-model",
+          choices: [{ index: 0, message: { role: "assistant", content: "repaired" }, finish_reason: "stop" }],
+        };
+      },
+    });
+    const request = {
+      ...createRequest(),
+      tools: [{ type: "function" as const, function: { name: "bad tool.name" } }],
+    };
+
+    await expect(createChatCompletion(host, request)).resolves.toEqual(
+      expect.objectContaining({ choices: [expect.objectContaining({ finish_reason: "stop" })] }),
+    );
+
+    expect(requests).toHaveLength(2);
+    expect((requests[0]?.tools?.[0] as { function?: { name?: string } }).function?.name).toBe("bad tool.name");
+    expect((requests[1]?.tools?.[0] as { function?: { name?: string } }).function?.name).toBe("bad_tool_name");
+  });
+
+  it("does not compatibility-retry a generic provider invalid-request failure", async () => {
+    const requests: ChatCompletionRequest[] = [];
+    const host = createCompletionHost({
+      fallbacks: [],
+      completion: async (request) => {
+        requests.push(request);
+        throw new Error("invalid_request_error: model not found");
+      },
+    });
+
+    await expect(createChatCompletion(host, createRequest())).rejects.toThrow("model not found");
+
+    expect(requests).toHaveLength(1);
+  });
+
+  it("keeps tool-protocol normalization across a transient fallback-provider retry", async () => {
+    const requests: ChatCompletionRequest[] = [];
+    let fallbackCalls = 0;
+    const host = createCompletionHost({
+      completion: async (request) => {
+        requests.push(request);
+        if ((request.providerId ?? "primary") === "primary") {
+          throw new Error("invalid_request_error: function name is invalid");
+        }
+        fallbackCalls += 1;
+        if (fallbackCalls === 1) throw new Error("fetch failed: ECONNRESET");
+        return {
+          model: "backup-model",
+          choices: [{ index: 0, message: { role: "assistant", content: "repaired" }, finish_reason: "stop" }],
+        };
+      },
+    });
+    const request = {
+      ...createRequest(),
+      tools: [{ type: "function" as const, function: { name: "bad tool.name" } }],
+    };
+
+    await expect(createChatCompletion(host, request)).resolves.toEqual(
+      expect.objectContaining({ choices: [expect.objectContaining({ finish_reason: "stop" })] }),
+    );
+
+    const fallbackRequests = requests.filter((candidate) => candidate.providerId === "backup");
+    expect(fallbackRequests).toHaveLength(2);
+    expect(
+      fallbackRequests.map((candidate) => (candidate.tools?.[0] as { function?: { name?: string } }).function?.name),
+    ).toEqual(["bad_tool_name", "bad_tool_name"]);
   });
 
   it("reports completion retry/cooldown exhaustion explicitly for rate limits", async () => {

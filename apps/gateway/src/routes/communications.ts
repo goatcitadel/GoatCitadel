@@ -1,5 +1,5 @@
-import type { FastifyPluginAsync } from "fastify";
-import type { CalendarEventRecord } from "@goatcitadel/contracts";
+import type { FastifyInstance, FastifyPluginAsync } from "fastify";
+import type { CalendarEventRecord, IntegrationConnection } from "@goatcitadel/contracts";
 import { z } from "zod";
 import { createCommunicationsDashboardService } from "../services/communications-dashboard-service.js";
 
@@ -35,13 +35,49 @@ const calendarEventSchema = z.object({
   externalId: z.string().min(1).optional(),
 });
 
+const communicationsVerificationFixtureSchema = z.object({
+  schemaVersion: z.literal(1),
+  mode: z.literal("uncredentialed-read-only"),
+  messages: z.array(
+    z.object({
+      id: z.string().min(1),
+      threadId: z.string().min(1).optional(),
+      from: z.string().email(),
+      to: z.array(z.string().email()),
+      subject: z.string().min(1),
+      snippet: z.string().min(1),
+      receivedAt: z.string().datetime(),
+      labels: z.array(z.string()).optional(),
+    }),
+  ),
+  events: z.array(
+    z.object({
+      id: z.string().min(1),
+      calendarId: z.string().min(1).optional(),
+      title: z.string().min(1),
+      description: z.string().optional(),
+      startIso: z.string().datetime(),
+      endIso: z.string().datetime(),
+      attendees: z.array(z.string().email()).optional(),
+      location: z.string().optional(),
+    }),
+  ),
+});
+
+type CommunicationsVerificationFixture = z.infer<typeof communicationsVerificationFixtureSchema>;
+
 export const communicationsRoutes: FastifyPluginAsync = async (fastify) => {
   const service = createCommunicationsDashboardService({
     createApproval: (input) => fastify.services.approvals.createApproval(input),
-    listIntegrationConnections: (kind, limit) =>
-      fastify.services.integrations.listIntegrationConnections(kind, limit),
-    commsGmailRead: (input) => fastify.services.comms.commsGmailRead(input),
-    commsCalendarList: (input) => fastify.services.comms.commsCalendarList(input),
+    listIntegrationConnections: (kind, limit) => fastify.services.integrations.listIntegrationConnections(kind, limit),
+    commsGmailRead: (input) => {
+      const fixture = resolveCommunicationsVerificationFixture(fastify, input.connectionId);
+      return fixture ? Promise.resolve({ messages: fixture.messages }) : fastify.services.comms.commsGmailRead(input);
+    },
+    commsCalendarList: (input) => {
+      const fixture = resolveCommunicationsVerificationFixture(fastify, input.connectionId);
+      return fixture ? Promise.resolve({ items: fixture.events }) : fastify.services.comms.commsCalendarList(input);
+    },
   });
 
   fastify.get("/api/v1/communications", async (request, reply) => {
@@ -78,3 +114,31 @@ export const communicationsRoutes: FastifyPluginAsync = async (fastify) => {
 };
 
 type CalendarEventDraftInput = Omit<CalendarEventRecord, "eventId" | "createdAt" | "updatedAt">;
+
+function resolveCommunicationsVerificationFixture(
+  fastify: FastifyInstance,
+  connectionId: string,
+): CommunicationsVerificationFixture | undefined {
+  if (fastify.services.devVerification?.isDevDiagnosticsEnabled?.() !== true) {
+    return undefined;
+  }
+  const connection = fastify.services.integrations
+    .listIntegrationConnections(undefined, 200)
+    .find((candidate: IntegrationConnection) => candidate.connectionId === connectionId);
+  if (!isUncredentialedVerificationConnection(connection)) {
+    return undefined;
+  }
+  const parsed = communicationsVerificationFixtureSchema.safeParse(connection.config.verificationCommunicationsFixture);
+  return parsed.success ? parsed.data : undefined;
+}
+
+function isUncredentialedVerificationConnection(
+  connection: IntegrationConnection | undefined,
+): connection is IntegrationConnection {
+  return Boolean(
+    connection &&
+    connection.catalogId === "automation.gmail" &&
+    connection.enabled === false &&
+    connection.status === "disconnected",
+  );
+}

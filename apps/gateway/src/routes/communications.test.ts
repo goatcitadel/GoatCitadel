@@ -126,4 +126,109 @@ describe("communications routes", () => {
     );
     expect(gmailSend).not.toHaveBeenCalled();
   });
+
+  it("uses a disabled uncredentialed fixture only in dev verification without provider calls", async () => {
+    const commsGmailRead = vi.fn(async () => ({ messages: [{ id: "real-message" }] }));
+    const commsCalendarList = vi.fn(async () => ({ items: [{ id: "real-event" }] }));
+    const connection = {
+      connectionId: "33333333-3333-4333-8333-333333333333",
+      catalogId: "automation.gmail",
+      kind: "automation",
+      key: "gmail",
+      label: "Verification uncredentialed communications",
+      enabled: false,
+      status: "disconnected",
+      config: {
+        address: "verification-inbox@example.invalid",
+        verificationCommunicationsFixture: {
+          schemaVersion: 1,
+          mode: "uncredentialed-read-only",
+          messages: [
+            {
+              id: "fixture-message-1",
+              from: "fixture-sender@example.invalid",
+              to: ["verification-inbox@example.invalid"],
+              subject: "Fixture inbox readiness",
+              snippet: "Deterministic inbox content; no provider credential was configured.",
+              receivedAt: "2026-07-29T15:00:00.000Z",
+            },
+          ],
+          events: [
+            {
+              id: "fixture-event-1",
+              title: "Fixture usability agenda",
+              description: "Deterministic calendar content from the isolated verification fixture.",
+              startIso: "2026-07-30T16:00:00.000Z",
+              endIso: "2026-07-30T16:30:00.000Z",
+              attendees: ["verification-inbox@example.invalid"],
+            },
+          ],
+        },
+      },
+      createdAt: "2026-07-29T14:00:00.000Z",
+      updatedAt: "2026-07-29T14:00:00.000Z",
+    };
+    app = Fastify();
+    decorateServices(app, {
+      integrations: { listIntegrationConnections: vi.fn(() => [connection]) },
+      approvals: { createApproval: vi.fn() },
+      comms: { commsGmailRead, commsCalendarList },
+      devVerification: { isDevDiagnosticsEnabled: () => true },
+    });
+    await app.register(communicationsRoutes);
+
+    const response = await app.inject({ method: "GET", url: "/api/v1/communications?workspaceId=workspace-1" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      mailAccounts: [
+        {
+          accountId: connection.connectionId,
+          address: "verification-inbox@example.invalid",
+          syncStatus: "not_configured",
+        },
+      ],
+      messages: [
+        {
+          messageId: "fixture-message-1",
+          subject: "Fixture inbox readiness",
+          from: "fixture-sender@example.invalid",
+        },
+      ],
+      events: [
+        {
+          eventId: "fixture-event-1",
+          title: "Fixture usability agenda",
+          startIso: "2026-07-30T16:00:00.000Z",
+        },
+      ],
+    });
+    expect(commsGmailRead).not.toHaveBeenCalled();
+    expect(commsCalendarList).not.toHaveBeenCalled();
+    expect(JSON.stringify(connection.config)).not.toMatch(/token|secret|password|apiKey/u);
+
+    await app.close();
+    app = null;
+    commsGmailRead.mockClear();
+    commsCalendarList.mockClear();
+    app = Fastify();
+    decorateServices(app, {
+      integrations: { listIntegrationConnections: vi.fn(() => [connection]) },
+      approvals: { createApproval: vi.fn() },
+      comms: { commsGmailRead, commsCalendarList },
+      devVerification: { isDevDiagnosticsEnabled: () => false },
+    });
+    await app.register(communicationsRoutes);
+
+    const disabledResponse = await app.inject({
+      method: "GET",
+      url: "/api/v1/communications?workspaceId=workspace-1",
+    });
+
+    expect(disabledResponse.statusCode).toBe(200);
+    expect(commsGmailRead).toHaveBeenCalledWith(expect.objectContaining({ connectionId: connection.connectionId }));
+    expect(commsCalendarList).toHaveBeenCalledWith(expect.objectContaining({ connectionId: connection.connectionId }));
+    expect(disabledResponse.body).not.toContain("Fixture inbox readiness");
+    expect(disabledResponse.body).not.toContain("Fixture usability agenda");
+  });
 });

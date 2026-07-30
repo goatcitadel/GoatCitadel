@@ -6,6 +6,7 @@ import {
   createPostgresSyncWorkerRuntime,
   handlePostgresSyncWorkerRequest,
   registerPostgresSyncWorkerMessageHandler,
+  reportPostgresSyncWorkerPoolError,
   respondToPostgresSyncWorkerMessage,
   serializePostgresSyncWorkerError,
   type PostgresSyncWorkerPool,
@@ -115,6 +116,75 @@ test("builds Postgres worker pool config for connection strings and discrete opt
       ssl: { rejectUnauthorized: false },
     },
   );
+});
+
+test("contains an idle pool connection failure and keeps later queries recoverable", async () => {
+  let poolErrorListener: ((error: Error) => void) | undefined;
+  const reported: Error[] = [];
+  let queryCount = 0;
+  const pool: PostgresSyncWorkerPool = {
+    ...createFakePool({
+      onQuery: async (sql) => {
+        queryCount += 1;
+        if (sql.includes("current_setting")) {
+          return { rowCount: 1, rows: [{ server_encoding: "UTF8" }] };
+        }
+        return { rowCount: 1, rows: [{ recovered: true }] };
+      },
+    }),
+    on(event, listener) {
+      assert.equal(event, "error");
+      poolErrorListener = listener;
+      return pool;
+    },
+  };
+  const runtime = createPostgresSyncWorkerRuntime(
+    { database: "goatcitadel" },
+    {
+      pool,
+      onPoolError: (error) => reported.push(error),
+    },
+  );
+  const connectionFailure = Object.assign(new Error("terminating connection due to administrator command"), {
+    code: "57P01",
+  });
+
+  assert.ok(poolErrorListener);
+  assert.doesNotThrow(() => poolErrorListener?.(connectionFailure));
+  assert.deepEqual(reported, [connectionFailure]);
+  assert.deepEqual(
+    await handlePostgresSyncWorkerRequest(runtime, {
+      kind: "query",
+      sql: "SELECT true AS recovered",
+      params: [],
+      mode: "one",
+    }),
+    { recovered: true },
+  );
+  assert.equal(queryCount, 2);
+});
+
+test("keeps pool failure reporter errors contained while preserving the original diagnostic", async () => {
+  let resolveWarning!: (warning: Error) => void;
+  const warningObserved = new Promise<Error>((resolve) => {
+    resolveWarning = resolve;
+  });
+  const onWarning = (warning: Error): void => resolveWarning(warning);
+  process.once("warning", onWarning);
+  try {
+    const connectionFailure = Object.assign(new Error("connection reset"), { code: "ECONNRESET" });
+    assert.doesNotThrow(() =>
+      reportPostgresSyncWorkerPoolError(connectionFailure, () => {
+        throw new Error("reporter unavailable");
+      }),
+    );
+    const warning = await warningObserved;
+    assert.equal((warning as Error & { code?: string }).code, "GOATCITADEL_POSTGRES_IDLE_CONNECTION_ERROR");
+    assert.match(warning.message, /connection reset/);
+    assert.match(warning.message, /reporter unavailable/);
+  } finally {
+    process.off("warning", onWarning);
+  }
 });
 
 test("handles query modes with cached server encoding and pool execution", async () => {
@@ -372,6 +442,108 @@ test("pins queries and independently committed transactions to one worker sessio
       "UPDATE pinned",
       "COMMIT",
     ],
+  );
+});
+
+test("fences a failed checked-out pinned session and reconnects through the pool after release", async () => {
+  const pinnedClient = createFakeTransactionClient([{ source: "pinned" }], 1);
+  const observed: Array<{ error: Error; owner: { kind: "session" | "transaction"; id: string } }> = [];
+  const runtime = createPostgresSyncWorkerRuntime(
+    { database: "goatcitadel" },
+    {
+      pool: createFakePool({
+        onConnect: async () => pinnedClient,
+        onQuery: async (sql) =>
+          sql.includes("current_setting")
+            ? { rowCount: 1, rows: [{ server_encoding: "UTF8" }] }
+            : { rowCount: 1, rows: [{ recovered: true }] },
+      }),
+      onCheckedOutClientError: (error, owner) => observed.push({ error, owner }),
+    },
+  );
+
+  assert.equal(await handlePostgresSyncWorkerRequest(runtime, { kind: "session_begin", sessionId: "session-1" }), true);
+  assert.equal(pinnedClient.errorListenerCount(), 1);
+  const connectionFailure = Object.assign(new Error("terminating connection due to administrator command"), {
+    code: "57P01",
+  });
+  pinnedClient.emitError(connectionFailure);
+
+  assert.deepEqual(observed, [{ error: connectionFailure, owner: { kind: "session", id: "session-1" } }]);
+  await assert.rejects(
+    handlePostgresSyncWorkerRequest(runtime, {
+      kind: "query",
+      sql: "SELECT pinned",
+      params: [],
+      mode: "one",
+      sessionId: "session-1",
+    }),
+    connectionFailure,
+  );
+  assert.equal(
+    await handlePostgresSyncWorkerRequest(runtime, { kind: "session_end", sessionId: "session-1", destroy: false }),
+    true,
+  );
+  assert.deepEqual(pinnedClient.releaseArguments, [true]);
+  assert.equal(pinnedClient.errorListenerCount(), 0);
+  assert.deepEqual(
+    await handlePostgresSyncWorkerRequest(runtime, {
+      kind: "query",
+      sql: "SELECT true AS recovered",
+      params: [],
+      mode: "one",
+    }),
+    { recovered: true },
+  );
+});
+
+test("fails a checked-out transaction without replay and permits a later pool query", async () => {
+  const transactionClient = createFakeTransactionClient();
+  const runtime = createPostgresSyncWorkerRuntime(
+    { database: "goatcitadel" },
+    {
+      pool: createFakePool({
+        onConnect: async () => transactionClient,
+        onQuery: async (sql) =>
+          sql.includes("current_setting")
+            ? { rowCount: 1, rows: [{ server_encoding: "UTF8" }] }
+            : { rowCount: 1, rows: [{ recovered: true }] },
+      }),
+      onCheckedOutClientError: () => undefined,
+    },
+  );
+
+  assert.equal(
+    await handlePostgresSyncWorkerRequest(runtime, { kind: "tx_begin", txId: "tx-restart", mode: "immediate" }),
+    true,
+  );
+  assert.equal(transactionClient.errorListenerCount(), 1);
+  const connectionFailure = new Error("connection terminated while checked out");
+  transactionClient.emitError(connectionFailure);
+  await assert.rejects(
+    handlePostgresSyncWorkerRequest(runtime, {
+      kind: "query",
+      sql: "UPDATE work SET state = 'done'",
+      params: [],
+      mode: "run",
+      txId: "tx-restart",
+    }),
+    connectionFailure,
+  );
+  await assert.rejects(
+    handlePostgresSyncWorkerRequest(runtime, { kind: "tx_rollback", txId: "tx-restart" }),
+    connectionFailure,
+  );
+  assert.deepEqual(transactionClient.releaseArguments, [true]);
+  assert.equal(transactionClient.errorListenerCount(), 0);
+  assert.deepEqual(
+    await handlePostgresSyncWorkerRequest(runtime, {
+      kind: "query",
+      sql: "SELECT true AS recovered",
+      params: [],
+      mode: "one",
+    }),
+    { recovered: true },
   );
 });
 
@@ -933,6 +1105,9 @@ function createFakePool(
       return input.onConnect?.() ?? createFakeTransactionClient();
     },
     async end() {},
+    on() {
+      return undefined;
+    },
   };
 }
 
@@ -943,7 +1118,10 @@ function createFakeTransactionClient(
   calls: Array<{ sql: string; params?: unknown[] }>;
   released: boolean;
   releaseArguments: Array<boolean | undefined>;
+  emitError(error: Error): void;
+  errorListenerCount(): number;
 } {
+  const errorListeners = new Set<(error: Error) => void>();
   const client = {
     calls: [] as Array<{ sql: string; params?: unknown[] }>,
     released: false,
@@ -955,6 +1133,22 @@ function createFakeTransactionClient(
     release(destroy?: boolean) {
       client.released = true;
       client.releaseArguments.push(destroy);
+    },
+    on(event: "error", listener: (error: Error) => void) {
+      assert.equal(event, "error");
+      errorListeners.add(listener);
+      return client;
+    },
+    off(event: "error", listener: (error: Error) => void) {
+      assert.equal(event, "error");
+      errorListeners.delete(listener);
+      return client;
+    },
+    emitError(error: Error) {
+      for (const listener of errorListeners) listener(error);
+    },
+    errorListenerCount() {
+      return errorListeners.size;
     },
   };
   return client;

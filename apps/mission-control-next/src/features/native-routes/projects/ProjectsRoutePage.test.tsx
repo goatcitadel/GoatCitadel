@@ -152,6 +152,16 @@ function findInputByPlaceholder(root: ReactTestInstance, placeholder: string): R
   return match;
 }
 
+function findFieldByAriaLabel(root: ReactTestInstance, label: string): ReactTestInstance {
+  const match = root.findAll(
+    (node) => (node.type === "input" || node.type === "textarea") && node.props["aria-label"] === label,
+  )[0];
+  if (!match) {
+    throw new Error(`Unable to find field with aria-label: ${label}`);
+  }
+  return match;
+}
+
 function renderedText(renderer: ReactTestRenderer): string {
   return JSON.stringify(renderer.toJSON());
 }
@@ -219,7 +229,9 @@ describe("ProjectsRoutePage", () => {
     mockedCreateChatSession.mockResolvedValue({ sessionId: "new-chat-session" } as any);
     mockedCreateChatProject.mockResolvedValue(project({ projectId: "project-created", name: "Created" }));
     mockedUpdateChatProject.mockResolvedValue(project({ projectId: "project-alpha", name: "Alpha renamed" }));
-    mockedArchiveChatProject.mockResolvedValue(project({ projectId: "project-alpha", lifecycleStatus: "archived" }));
+    mockedArchiveChatProject.mockResolvedValue(
+      project({ projectId: "project-alpha", name: "Alpha renamed", lifecycleStatus: "archived" }),
+    );
     mockedRestoreChatProject.mockResolvedValue(project({ projectId: "project-archived", lifecycleStatus: "active" }));
   });
 
@@ -435,8 +447,10 @@ describe("ProjectsRoutePage", () => {
     });
     expect(navigate).toHaveBeenCalledWith({ area: "projects", projectId: "project-created", theme: "ops" });
 
-    const alphaNameInput = renderer.root.findAll((node) => node.type === "input" && node.props.value === "Alpha")[0];
+    const alphaNameInput = findFieldByAriaLabel(renderer.root, "Edit project name");
     expect(alphaNameInput).toBeDefined();
+    expect(findFieldByAriaLabel(renderer.root, "Edit project workspace path")).toBeDefined();
+    expect(findFieldByAriaLabel(renderer.root, "Edit project description")).toBeDefined();
     act(() => {
       alphaNameInput!.props.onChange({ target: { value: "Alpha renamed" } });
     });
@@ -460,15 +474,32 @@ describe("ProjectsRoutePage", () => {
     });
     expect(mockedArchiveChatProject).toHaveBeenCalledWith("project-alpha", 7);
     expect(navigate).toHaveBeenCalledWith({ area: "projects", theme: "ops" }, { replace: true });
+
+    act(() => {
+      findButton(renderer.root, "Archived").props.onClick();
+    });
+    mockedRestoreChatProject.mockResolvedValueOnce(
+      project({ projectId: "project-alpha", name: "Alpha renamed", lifecycleStatus: "active" }),
+    );
+    await act(async () => {
+      findButtonByAriaLabel(renderer.root, "Unarchive project Alpha renamed").props.onClick({
+        stopPropagation: vi.fn(),
+      });
+      await Promise.resolve();
+    });
+    expect(mockedRestoreChatProject).toHaveBeenCalledWith("project-alpha", 7);
+    expect(pageText(renderer)).toContain("No archived projects in this workspace.");
   });
 
   it("preserves a project draft, reloads the current revision, and retries after a 409", async () => {
     const renderer = await renderPage(
       defaultProps({ route: { area: "projects", projectId: "project-alpha", theme: "ops" } }),
     );
-    const localNameInput = renderer.root.findAll((node) => node.type === "input" && node.props.value === "Alpha")[0]!;
+    const localDescriptionInput = findFieldByAriaLabel(renderer.root, "Edit project description");
     act(() => {
-      localNameInput.props.onChange({ target: { value: "Local draft" } });
+      localDescriptionInput.props.onChange({
+        target: { value: "Local draft preserved across the revision conflict." },
+      });
     });
 
     const staleError = new ApiRequestError("stale project", {
@@ -478,12 +509,16 @@ describe("ProjectsRoutePage", () => {
       status: 409,
       body: { code: "WRITE_CONFLICT", details: { expectedRevision: 7, currentRevision: 8 } },
     });
-    mockedUpdateChatProject
-      .mockRejectedValueOnce(staleError)
-      .mockResolvedValueOnce(project({ projectId: "project-alpha", revision: 9, name: "Local draft" }));
+    mockedUpdateChatProject.mockRejectedValueOnce(staleError).mockResolvedValueOnce(
+      project({
+        projectId: "project-alpha",
+        revision: 9,
+        description: "Local draft preserved across the revision conflict.",
+      }),
+    );
     mockedFetchChatProjects.mockResolvedValueOnce({
       items: [
-        project({ projectId: "project-alpha", revision: 8, name: "Remote update" }),
+        project({ projectId: "project-alpha", revision: 8, description: "Concurrent fixture edit." }),
         project({ projectId: "project-beta", revision: 2, name: "Beta" }),
       ],
     } as any);
@@ -499,12 +534,16 @@ describe("ProjectsRoutePage", () => {
     expect(mockedUpdateChatProject).toHaveBeenNthCalledWith(
       1,
       "project-alpha",
-      expect.objectContaining({ expectedRevision: 7, name: "Local draft" }),
+      expect.objectContaining({
+        expectedRevision: 7,
+        description: "Local draft preserved across the revision conflict.",
+      }),
     );
     expect(mockedFetchChatProjects).toHaveBeenCalledTimes(2);
+    expect(pageText(renderer)).toContain("changed elsewhere");
     expect(pageText(renderer)).toContain("current revision was reloaded and your draft was preserved");
-    expect(renderer.root.findAll((node) => node.type === "input" && node.props.value === "Local draft")).toHaveLength(
-      1,
+    expect(findFieldByAriaLabel(renderer.root, "Edit project description").props.value).toBe(
+      "Local draft preserved across the revision conflict.",
     );
 
     await act(async () => {
@@ -515,7 +554,10 @@ describe("ProjectsRoutePage", () => {
     expect(mockedUpdateChatProject).toHaveBeenNthCalledWith(
       2,
       "project-alpha",
-      expect.objectContaining({ expectedRevision: 8, name: "Local draft" }),
+      expect.objectContaining({
+        expectedRevision: 8,
+        description: "Local draft preserved across the revision conflict.",
+      }),
     );
   });
 

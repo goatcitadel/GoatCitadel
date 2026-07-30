@@ -14,6 +14,7 @@ import {
   redactStructuredSecrets,
 } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
+import { allocateDurableRunEventSequence } from "./durable-run-event-repo.js";
 import { safeJsonParse } from "./safe-json.js";
 
 interface DurableChildWatcherRow {
@@ -96,7 +97,6 @@ export class DurableChildWatcherRepository {
   private readonly listChildEventsStmt;
   private readonly hasChildEventsAfterStmt;
   private readonly getParentEventStmt;
-  private readonly allocateParentSequenceStmt;
   private readonly insertParentEventStmt;
 
   public constructor(private readonly db: DatabaseClient) {
@@ -191,13 +191,6 @@ export class DurableChildWatcherRepository {
       SELECT event_id
       FROM durable_run_events
       WHERE event_id = ?
-    `);
-    this.allocateParentSequenceStmt = db.prepare(`
-      INSERT INTO durable_run_event_sequences (run_id, last_sequence)
-      VALUES (?, 1)
-      ON CONFLICT(run_id) DO UPDATE SET
-        last_sequence = durable_run_event_sequences.last_sequence + 1
-      RETURNING last_sequence
     `);
     this.insertParentEventStmt = db.prepare(`
       INSERT INTO durable_run_events (
@@ -656,12 +649,7 @@ export class DurableChildWatcherRepository {
   }
 
   private allocateParentSequence(parentRunId: string): number {
-    const row = this.allocateParentSequenceStmt.get<{ last_sequence: number | string }>(parentRunId);
-    const sequence = Number(row?.last_sequence);
-    if (!Number.isSafeInteger(sequence) || sequence < 1) {
-      throw new Error(`Failed to allocate a durable timeline sequence for parent run ${parentRunId}`);
-    }
-    return sequence;
+    return allocateDurableRunEventSequence(this.db, parentRunId);
   }
 }
 

@@ -796,7 +796,8 @@ export class ChatDelegationService {
           runningStep.scopeControl,
         );
         if (delegatedScope) {
-          runningStep = deps.storage.chatDelegationSteps.patch(step.stepId, { scopeControl: delegatedScope });
+          // The durable patch is the authority; its returned projection is intentionally unused after scope setup.
+          deps.storage.chatDelegationSteps.patch(step.stepId, { scopeControl: delegatedScope });
           deps.ensureSessionInternalToolGrant?.(agentSessionId, "submit_work_result", "delegated-work-result-envelope");
         }
         deps.updateChatSessionPrefs(agentSessionId, {

@@ -7,7 +7,15 @@ test("fails when the seeded thread has no artifact turn", async () => {
   const requestJson = async (_gatewayUrl, path) => {
     requests.push(path);
     if (path === "/api/v1/dev/verification/seed") {
-      return { ok: true, body: { workspaceId: "workspace-1", sessionId: "session-1" } };
+      return {
+        ok: true,
+        body: {
+          workspaceId: "workspace-1",
+          sessionId: "session-1",
+          candidateId: "usability-browser-candidate",
+          candidateVersionId: "usability-browser-candidate-v1",
+        },
+      };
     }
     return { ok: true, body: { turns: [] } };
   };
@@ -36,6 +44,8 @@ test("seeds the complete fixture and returns its identifiers", async () => {
   let agentIndex = 0;
   let taskIndex = 0;
   let opsBoardRequest;
+  let agenticTaskSeedRequest;
+  let kanbanDeliverableRequest;
   const settingsPatchRequests = [];
   const retryDelays = [];
   const requestJson = async (_gatewayUrl, path, options) => {
@@ -47,6 +57,8 @@ test("seeds the complete fixture and returns its identifiers", async () => {
           workspaceId: "workspace-1",
           sessionId: "session-1",
           sessionIds: ["session-1", "session-2"],
+          candidateId: "usability-browser-candidate",
+          candidateVersionId: "usability-browser-candidate-v1",
         },
       };
     }
@@ -60,6 +72,14 @@ test("seeds the complete fixture and returns its identifiers", async () => {
     if (path === "/api/v1/tasks") {
       taskIndex += 1;
       return { ok: true, body: { taskId: `task-${taskIndex}` } };
+    }
+    if (path === "/api/v1/dev/verification/agentic-task-seed") {
+      agenticTaskSeedRequest = options;
+      return { ok: true, body: { items: [] } };
+    }
+    if (path === "/api/v1/tasks/task-3/deliverables") {
+      kanbanDeliverableRequest = options;
+      return { ok: true, body: { deliverableId: "deliverable-1" } };
     }
     if (path === "/api/v1/files/upload") {
       return { ok: true, body: { fullPath: "workspace/verification/mission-control-next-proof.md" } };
@@ -126,9 +146,56 @@ test("seeds the complete fixture and returns its identifiers", async () => {
     taskIds: ["task-1", "task-2", "task-3", "task-4"],
     opsBoardId: "board-1",
     memoryItemId: "memory-1",
+    candidateId: "usability-browser-candidate",
+    candidateVersionId: "usability-browser-candidate-v1",
   });
   assert.deepEqual(stabilizedPaths, ["workspace/verification/mission-control-next-proof.md"]);
   assert.ok(requests.includes("/api/v1/prompt-packs/import"));
+  assert.deepEqual(agenticTaskSeedRequest, {
+    method: "POST",
+    body: {
+      workspaceId: "workspace-1",
+      tasks: [
+        {
+          taskId: "task-1",
+          runId: "verification-agentic-task-1",
+          status: "queued",
+          surface: "chat",
+          parentSessionId: "session-1",
+        },
+        {
+          taskId: "task-2",
+          runId: "verification-agentic-task-2",
+          status: "failed",
+          surface: "chat",
+          parentSessionId: "session-1",
+        },
+        {
+          taskId: "task-3",
+          runId: "verification-agentic-task-3",
+          status: "running",
+          surface: "chat",
+          parentSessionId: "session-1",
+        },
+        {
+          taskId: "task-4",
+          runId: "verification-agentic-task-4",
+          status: "approval_required",
+          surface: "chat",
+          parentSessionId: "session-1",
+        },
+      ],
+    },
+  });
+  assert.deepEqual(kanbanDeliverableRequest, {
+    method: "POST",
+    body: {
+      workspaceId: "workspace-1",
+      deliverableType: "artifact",
+      title: "Verification prompt-pack quality evidence",
+      description: "Deterministic evidence that permits the Kanban close journey.",
+    },
+  });
   assert.ok(requests.indexOf("/api/v1/ops/boards") > requests.lastIndexOf("/api/v1/tasks"));
   assert.deepEqual(opsBoardRequest, {
     method: "POST",

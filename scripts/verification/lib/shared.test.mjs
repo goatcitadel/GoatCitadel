@@ -3,7 +3,34 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { buildFastLanePerfPayload, finalizeRunContext } from "./shared.mjs";
+import { buildFastLanePerfPayload, finalizeRunContext, runCommand } from "./shared.mjs";
+
+test("verification commands omit inherited secrets while retaining explicit safe values", async () => {
+  const artifactRoot = await fs.mkdtemp(path.join(os.tmpdir(), "gc-command-env-"));
+  const previousSecret = process.env.GOATCITADEL_VERIFY_SENTINEL_SECRET;
+  process.env.GOATCITADEL_VERIFY_SENTINEL_SECRET = "must-not-reach-child";
+  try {
+    const result = await runCommand(
+      process.execPath,
+      [
+        "-e",
+        "process.stdout.write(JSON.stringify({secret:process.env.GOATCITADEL_VERIFY_SENTINEL_SECRET,safe:process.env.GOATCITADEL_VERIFY_SAFE}))",
+      ],
+      {
+        artifactRoot,
+        logName: "environment-scrub",
+        omitEnv: ["GOATCITADEL_VERIFY_SENTINEL_SECRET"],
+        env: { GOATCITADEL_VERIFY_SAFE: "retained" },
+      },
+    );
+    assert.equal(result.code, 0);
+    assert.deepEqual(JSON.parse(result.stdout), { safe: "retained" });
+  } finally {
+    if (previousSecret === undefined) delete process.env.GOATCITADEL_VERIFY_SENTINEL_SECRET;
+    else process.env.GOATCITADEL_VERIFY_SENTINEL_SECRET = previousSecret;
+    await fs.rm(artifactRoot, { recursive: true, force: true });
+  }
+});
 
 test("fast test budget measures the observed test-phase elapsed time", () => {
   const scenarios = [

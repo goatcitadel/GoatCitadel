@@ -511,7 +511,7 @@ describe("auth plugin", () => {
     });
   });
 
-  it("allows loopback onboarding recovery when token auth is enabled without a token", async () => {
+  it("allows query-bearing loopback onboarding recovery when token auth is enabled without a token", async () => {
     app = await buildApp({
       mode: "token",
       allowLoopbackBypass: false,
@@ -520,7 +520,7 @@ describe("auth plugin", () => {
 
     const response = await app.inject({
       method: "GET",
-      url: "/api/v1/onboarding/startup",
+      url: "/api/v1/onboarding/startup?step=credentials",
       remoteAddress: "127.0.0.1",
     });
 
@@ -672,6 +672,38 @@ describe("auth plugin", () => {
     });
     expect(newest.statusCode).toBe(200);
     expect(newest.json()).toMatchObject({ actorSource: "sse" });
+  });
+
+  it("keeps mixed actors isolated while evicting the oldest token for the actor at capacity", async () => {
+    app = await buildApp({
+      mode: "token",
+      token: { value: "sse-bearer", queryParam: "access_token" },
+    });
+
+    const oldestActorAToken = app.issueSseToken("events:stream", 30_000, "token:actor-a");
+    const actorBTokens = [
+      app.issueSseToken("events:stream", 30_000, "token:actor-b"),
+      app.issueSseToken("events:stream", 30_000, "token:actor-b"),
+    ];
+    const retainedActorATokens = Array.from({ length: 49 }, () =>
+      app!.issueSseToken("events:stream", 30_000, "token:actor-a"),
+    );
+    app.issueSseToken("events:stream", 30_000, "token:actor-a");
+
+    const evicted = await app.inject({
+      method: "GET",
+      url: `/api/v1/events/stream?sse_token=${encodeURIComponent(oldestActorAToken.token)}`,
+    });
+    expect(evicted.statusCode).toBe(401);
+
+    for (const issued of [retainedActorATokens[0]!, ...actorBTokens]) {
+      const response = await app.inject({
+        method: "GET",
+        url: `/api/v1/events/stream?sse_token=${encodeURIComponent(issued.token)}`,
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ actorSource: "sse" });
+    }
   });
 
   it("accepts approved device bearer tokens across auth modes", async () => {

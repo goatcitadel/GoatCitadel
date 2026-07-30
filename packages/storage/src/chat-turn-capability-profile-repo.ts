@@ -90,6 +90,18 @@ interface ChatTurnCapabilityProfileRow {
   created_at: string;
 }
 
+type ChatTurnCapabilityProfileScopeRow = Pick<
+  ChatTurnCapabilityProfileRow,
+  | "profile_id"
+  | "turn_id"
+  | "session_id"
+  | "workspace_id"
+  | "durable_run_id"
+  | "operator_id"
+  | "auth_actor_id"
+  | "profile_hash"
+>;
+
 export interface ChatTurnCapabilityProfileScope {
   profileId: string;
   turnId: string;
@@ -184,19 +196,7 @@ export class ChatTurnCapabilityProfileRepository {
 
   /** Read only the authorization binding; never materializes provider definitions or source references. */
   public findScopeByTurn(turnId: string): ChatTurnCapabilityProfileScope | undefined {
-    const row = this.findScopeByTurnStmt.get(turnId) as
-      | Pick<
-          ChatTurnCapabilityProfileRow,
-          | "profile_id"
-          | "turn_id"
-          | "session_id"
-          | "workspace_id"
-          | "durable_run_id"
-          | "operator_id"
-          | "auth_actor_id"
-          | "profile_hash"
-        >
-      | undefined;
+    const row = toScopeRow(this.findScopeByTurnStmt.get(turnId));
     if (!row) {
       return undefined;
     }
@@ -205,9 +205,9 @@ export class ChatTurnCapabilityProfileRepository {
       turnId: row.turn_id,
       sessionId: row.session_id,
       workspaceId: row.workspace_id,
-      ...(row.durable_run_id ? { durableRunId: row.durable_run_id } : {}),
-      ...(row.operator_id ? { operatorId: row.operator_id } : {}),
-      ...(row.auth_actor_id ? { authActorId: row.auth_actor_id } : {}),
+      ...(row.durable_run_id !== null ? { durableRunId: row.durable_run_id } : {}),
+      ...(row.operator_id !== null ? { operatorId: row.operator_id } : {}),
+      ...(row.auth_actor_id !== null ? { authActorId: row.auth_actor_id } : {}),
       profileHash: row.profile_hash,
     };
   }
@@ -1124,10 +1124,34 @@ function toRow(value: unknown): ChatTurnCapabilityProfileRow | undefined {
   if (required.some((key) => typeof value[key] !== "string")) {
     return undefined;
   }
-  if (value.durable_run_id !== null && typeof value.durable_run_id !== "string") {
+  if (
+    !isNullableString(value.durable_run_id) ||
+    !isNullableString(value.operator_id) ||
+    !isNullableString(value.auth_actor_id)
+  ) {
     return undefined;
   }
   return value as unknown as ChatTurnCapabilityProfileRow;
+}
+
+function toScopeRow(value: unknown): ChatTurnCapabilityProfileScopeRow | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const required = ["profile_id", "turn_id", "session_id", "workspace_id", "profile_hash"];
+  if (
+    required.some((key) => typeof value[key] !== "string") ||
+    !isNullableString(value.durable_run_id) ||
+    !isNullableString(value.operator_id) ||
+    !isNullableString(value.auth_actor_id)
+  ) {
+    return undefined;
+  }
+  return value as unknown as ChatTurnCapabilityProfileScopeRow;
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

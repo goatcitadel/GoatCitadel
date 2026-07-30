@@ -43,10 +43,10 @@ export function validateNativeNestedScrollerSnapshot(snapshot, label) {
 
 export async function assertNativeStageScrollContract(page, { label, probeNestedBoundary = false } = {}) {
   const routeLabel = label || "native route";
-  await page
-    .locator(".mc-next-blocks-loader-label", { hasText: "Loading current route data" })
-    .first()
-    .waitFor({ state: "hidden", timeout: 15000 });
+  // Route owners use both the shared "Loading current route data" label and
+  // owner-specific labels such as "Loading Workspaces". Measure geometry only
+  // after the shared loader component has left the page, regardless of copy.
+  await page.locator(".mc-next-blocks-loader").first().waitFor({ state: "hidden", timeout: 15000 });
   const initial = await readStageSnapshot(page, false);
   validateNativeStageSnapshot(initial, routeLabel);
 

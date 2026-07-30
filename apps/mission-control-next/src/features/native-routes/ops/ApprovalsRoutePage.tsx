@@ -437,7 +437,7 @@ function buildApprovalConfirmationCopy(confirmation: ApprovalConfirmation): {
   return {
     title: "Reject this request?",
     message: "This rejects the selected approval and keeps the linked action stopped.",
-    confirmLabel: "Reject",
+    confirmLabel: "Confirm rejection",
     pendingLabel: "Rejecting...",
   };
 }

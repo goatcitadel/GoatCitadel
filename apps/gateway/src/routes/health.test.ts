@@ -1,9 +1,51 @@
 import { describe, expect, it, vi } from "vitest";
 import Fastify from "fastify";
-import { healthRoute } from "./health.js";
+import { __internal, healthRoute } from "./health.js";
 import { SharedHostLifecycleService } from "../services/shared-host-lifecycle-service.js";
 
 describe("health route", () => {
+  it("adds the exact managed launcher identity to public health only for the gateway service", async () => {
+    const instanceId = "123e4567-e89b-42d3-a456-426614174000";
+    vi.stubEnv("GOATCITADEL_MANAGED_INSTANCE_ID", instanceId);
+    vi.stubEnv("GOATCITADEL_MANAGED_SERVICE", "gateway");
+    const app = Fastify();
+    app.decorate("services", {
+      health: {
+        getDatabaseHealthSnapshot: vi.fn(async () => ({
+          driver: "sqlite" as const,
+          configured: true,
+          reachable: true,
+          issues: [],
+        })),
+        getConfigGenerationHealthSnapshot: vi.fn(async () => readyConfigGeneration()),
+      },
+    } as never);
+    app.decorate("requireOperatorAuth", async () => undefined);
+    await app.register(healthRoute);
+
+    try {
+      const response = await app.inject({ method: "GET", url: "/health" });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["cache-control"]).toContain("no-store");
+      expect(response.json()).toEqual({
+        status: "ok",
+        readiness: "ready",
+        service: "gateway",
+        managedInstanceId: instanceId,
+        managedProcessId: process.pid,
+      });
+      expect(
+        __internal.buildManagedHealthIdentity("gateway", {
+          GOATCITADEL_MANAGED_INSTANCE_ID: instanceId,
+          GOATCITADEL_MANAGED_SERVICE: "mission-control",
+        }),
+      ).toEqual({});
+    } finally {
+      await app.close();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("keeps detailed readiness behind operator authentication while public health stays sanitized", async () => {
     const app = Fastify();
     const getDatabaseHealthSnapshot = vi.fn(async () => ({

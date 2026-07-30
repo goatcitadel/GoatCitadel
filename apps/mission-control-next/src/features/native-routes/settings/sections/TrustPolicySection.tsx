@@ -173,6 +173,7 @@ export function TrustPolicySection({ activeWorkspaceId, route, navigate }: Setti
             subtitle="This page does not replace the existing editors; it keeps their trust signals together."
           >
             <SettingsActionList
+              ariaLabel="Trust and policy owner routes"
               items={[
                 {
                   label: "Permissions",

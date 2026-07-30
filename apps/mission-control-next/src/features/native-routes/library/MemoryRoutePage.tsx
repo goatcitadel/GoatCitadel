@@ -524,7 +524,6 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
                 placeholder="Namespace, title, or content"
-                aria-label="Search memories by namespace, title, or content"
                 aria-describedby={memoryListCountId}
               />
             </label>
@@ -1884,12 +1883,14 @@ function MemoryProvenancePanel({ item, writeEnvelopeCount }: { item: MemoryItemR
       */}
       <dl className="mc-next-memory-provenance-list">
         {provenanceRows.map((row) => (
-          <div key={row.label} role="presentation">
+          <div key={row.label}>
             <dt>{row.label}</dt>
-            <span aria-hidden="true" className="mc-next-memory-provenance-sep">
-              {" · "}
-            </span>
-            <dd>{row.value}</dd>
+            <dd>
+              <span aria-hidden="true" className="mc-next-memory-provenance-sep">
+                {" · "}
+              </span>
+              {row.value}
+            </dd>
           </div>
         ))}
       </dl>

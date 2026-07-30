@@ -17,7 +17,8 @@ public partial class App : Application
         _window = new MainWindow();
         ActivationService.RegisterWindow(
             route => _window.DispatcherQueue.TryEnqueue(() => _window.OpenRoutePath(route)),
-            () => _window.DispatcherQueue.TryEnqueue(_window.ShowAndFocus));
+            () => _window.DispatcherQueue.TryEnqueue(_window.ShowAndFocus),
+            diagnostic => _window.DispatcherQueue.TryEnqueue(() => _window.ShowActivationDiagnostic(diagnostic)));
         _window.Activate();
         ActivationService.FlushPendingActivation();
     }

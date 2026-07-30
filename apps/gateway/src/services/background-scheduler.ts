@@ -69,6 +69,29 @@ export interface BackgroundIntervalHandle {
 }
 
 /**
+ * Tracks one owned background promise without creating a second, unobserved
+ * rejecting branch. Calling `promise.finally(cleanup)` and ignoring the
+ * returned promise mirrors the original rejection and can therefore turn an
+ * otherwise observed transient failure into an unhandled rejection.
+ *
+ * The rejection handler here is intentionally limited to ownership cleanup.
+ * Task owners remain responsible for classifying and reporting failures in the
+ * task chain itself; the original promise also remains available to shutdown
+ * drains through `backgroundTasks` until it settles.
+ */
+export function trackBackgroundTask<T>(backgroundTasks: Set<Promise<T>>, task: Promise<T>): void {
+  backgroundTasks.add(task);
+  void task.then(
+    () => {
+      backgroundTasks.delete(task);
+    },
+    () => {
+      backgroundTasks.delete(task);
+    },
+  );
+}
+
+/**
  * Starts a recurring background scheduler with optional post-boot pass.
  *
  * Returns a {@link BackgroundIntervalHandle} whose `stop()` clears both timers.

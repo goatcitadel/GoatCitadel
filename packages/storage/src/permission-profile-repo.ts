@@ -345,7 +345,7 @@ export class PermissionProfileRepository {
       defaultForSurfaces: normalizeSurfaces(input.defaultForSurfaces ?? existing.defaultForSurfaces),
       updatedAt,
     };
-    const result = this.updateProfileStmt.run(toProfileParams(next));
+    const result = this.updateProfileStmt.run(toProfileUpdateParams(next));
     if (Number(result.changes ?? 0) === 0) {
       throw new NotFoundError({ entity: "permission profile", id: profileId });
     }
@@ -617,6 +617,22 @@ function toProfileParams(profile: PermissionProfileRecord): Record<string, unkno
     defaultForSurfacesJson: JSON.stringify(profile.defaultForSurfaces ?? []),
     createdBy: profile.createdBy,
     createdAt: profile.createdAt,
+    updatedAt: profile.updatedAt,
+  };
+}
+
+function toProfileUpdateParams(profile: PermissionProfileRecord): Record<string, unknown> {
+  return {
+    profileId: profile.profileId,
+    label: profile.label,
+    description: profile.description ?? null,
+    approvalMode: profile.approvalMode,
+    legacyToolProfile: profile.legacyToolProfile ?? null,
+    toolPatternsJson: JSON.stringify(profile.toolPatterns),
+    allowJson: JSON.stringify(profile.allow),
+    denyJson: JSON.stringify(profile.deny),
+    readAccessMode: profile.readAccessMode ?? null,
+    defaultForSurfacesJson: JSON.stringify(profile.defaultForSurfaces ?? []),
     updatedAt: profile.updatedAt,
   };
 }

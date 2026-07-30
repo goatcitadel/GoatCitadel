@@ -35,9 +35,10 @@ describe("durable background-task API", () => {
     };
     const responseRail = rail("parent/run", "workspace-a", "session-1");
     responseRail.coverage.watchers.observedCount = 1;
+    const watcherId = "delegation-child:step-1";
     responseRail.tasks = [
       {
-        watcherId: "watcher/1",
+        watcherId,
         watcherRevision: 8,
         watcherState: "attached",
         watcherUpdatedAt: "2026-07-13T00:00:00.000Z",
@@ -76,16 +77,16 @@ describe("durable background-task API", () => {
     apiMocks.request.mockResolvedValue({
       version: "durable.background_task_control.v1",
       action: "cancel",
-      watcherId: "watcher/1",
+      watcherId,
       childRunId: "child-1",
       outcome: "applied",
       rail: responseRail,
     });
 
-    await controlDurableBackgroundTask("parent/run", "watcher/1", input);
+    await controlDurableBackgroundTask("parent/run", watcherId, input);
 
     expect(apiMocks.request).toHaveBeenCalledWith(
-      "/api/v1/durable/runs/parent%2Frun/background-tasks/watcher%2F1/control",
+      "/api/v1/durable/runs/parent%2Frun/background-tasks/delegation-child%3Astep-1/control",
       { method: "POST", body: JSON.stringify(input) },
     );
   });

@@ -97,6 +97,109 @@ describe("BackupRetentionService", () => {
     );
   });
 
+  it("skips config atomic-write staging paths before stat while preserving committed config", async () => {
+    const rootDir = await createRuntimeFixture();
+    const backupDir = await makeTempDir("gc-backups-config-atomic-race-");
+    vi.stubEnv("GOATCITADEL_BACKUP_DIR", backupDir);
+    const configDir = path.join(rootDir, "config");
+    const generationTempPath = path.join(configDir, ".goatcitadel-11111111-2222-4333-8444-555555555555.tmp");
+    const configSyncTempPath = path.join(configDir, "llm-providers.json.tmp-42-mabc123-abcdef");
+    const stagingDir = path.join(configDir, ".generations", "staging", "66666666-7777-4888-8999-aaaaaaaaaaaa");
+    const committedHiddenPath = path.join(configDir, ".operator-metadata.json");
+    await fs.mkdir(stagingDir, { recursive: true });
+    await fs.writeFile(generationTempPath, '{"state":"uncommitted"}\n', "utf8");
+    await fs.writeFile(configSyncTempPath, '{"state":"uncommitted"}\n', "utf8");
+    await fs.writeFile(path.join(stagingDir, "assistant.config.json"), '{"state":"staged"}\n', "utf8");
+    await fs.writeFile(committedHiddenPath, '{"state":"committed"}\n', "utf8");
+
+    const originalCp = fs.cp.bind(fs);
+    let disappearingTempWasFiltered = false;
+    vi.spyOn(fs, "cp").mockImplementation(async (source, destination, options) => {
+      if (source === configDir && options?.filter) {
+        const originalFilter = options.filter;
+        await originalCp(source, destination, {
+          ...options,
+          filter: async (candidateSource, candidateDestination) => {
+            const included = await originalFilter(candidateSource, candidateDestination);
+            if (candidateSource === generationTempPath) {
+              disappearingTempWasFiltered = !included;
+              // Model the production race exactly: the atomic writer renames
+              // the enumerated temp file before fs.cp would lstat it.
+              await fs.rm(generationTempPath, { force: true });
+            }
+            return included;
+          },
+        });
+        return;
+      }
+      await originalCp(source, destination, options);
+    });
+
+    const service = new BackupRetentionService({
+      storage: createStorageMock({ sqliteSourcePath: path.join(rootDir, "data", "index.db") }),
+      config: createConfig(rootDir),
+    });
+    const created = await service.createBackup({ name: "config-atomic-race" });
+    const configPaths = created.manifest.files.map((file) => file.path).filter((file) => file.startsWith("config/"));
+
+    expect(disappearingTempWasFiltered).toBe(true);
+    expect(configPaths).toContain("config/assistant.config.json");
+    expect(configPaths).toContain("config/.operator-metadata.json");
+    expect(configPaths).not.toEqual(
+      expect.arrayContaining([
+        "config/.goatcitadel-11111111-2222-4333-8444-555555555555.tmp",
+        "config/llm-providers.json.tmp-42-mabc123-abcdef",
+        "config/.generations/staging/66666666-7777-4888-8999-aaaaaaaaaaaa/assistant.config.json",
+      ]),
+    );
+    await expect(service.verifyBackup({ filePath: created.outputPath })).resolves.toMatchObject({
+      verified: true,
+      contractVerified: true,
+      issues: [],
+    });
+  });
+
+  it("fails backup creation when a committed config file disappears during the snapshot", async () => {
+    const rootDir = await createRuntimeFixture();
+    const backupDir = await makeTempDir("gc-backups-config-canonical-race-");
+    vi.stubEnv("GOATCITADEL_BACKUP_DIR", backupDir);
+    const configDir = path.join(rootDir, "config");
+    const canonicalConfigPath = path.join(configDir, "assistant.config.json");
+    const originalCp = fs.cp.bind(fs);
+    let canonicalRaceInjected = false;
+    vi.spyOn(fs, "cp").mockImplementation(async (source, destination, options) => {
+      if (source === configDir && options?.filter) {
+        const originalFilter = options.filter;
+        await originalCp(source, destination, {
+          ...options,
+          filter: async (candidateSource, candidateDestination) => {
+            const included = await originalFilter(candidateSource, candidateDestination);
+            if (!canonicalRaceInjected && candidateSource === canonicalConfigPath) {
+              canonicalRaceInjected = true;
+              expect(included).toBe(true);
+              await fs.rm(canonicalConfigPath, { force: true });
+            }
+            return included;
+          },
+        });
+        return;
+      }
+      await originalCp(source, destination, options);
+    });
+
+    const service = new BackupRetentionService({
+      storage: createStorageMock({ sqliteSourcePath: path.join(rootDir, "data", "index.db") }),
+      config: createConfig(rootDir),
+    });
+
+    await expect(service.createBackup({ name: "canonical-config-race" })).rejects.toMatchObject({
+      code: "ENOENT",
+      path: canonicalConfigPath,
+    });
+    expect(canonicalRaceInjected).toBe(true);
+    await expect(fs.readdir(backupDir)).resolves.toEqual([]);
+  });
+
   it("rejects a published backup path swap and cleans its private inspection staging", async () => {
     const rootDir = await createRuntimeFixture();
     const backupDir = await makeTempDir("gc-backups-path-swap-");

@@ -4,9 +4,18 @@ import path from "node:path";
 import { requestJson } from "../runtime.mjs";
 import { writeJson } from "../shared.mjs";
 
+const EVENT_STREAM_PATH = "/api/v1/events/stream";
+const MAX_EVENT_STREAM_NETWORK_RECORDS = 32;
+
 export function attachBrowserLogging(page) {
   const consoleMessages = [];
   const pageErrors = [];
+  const eventStreamRequestFailures = [];
+  const eventStreamResponses = [];
+  let requestFailureSequence = 0;
+  let responseSequence = 0;
+  let droppedRequestFailures = 0;
+  let droppedResponses = 0;
   page.on("console", (message) => {
     consoleMessages.push({
       type: message.type(),
@@ -21,16 +30,90 @@ export function attachBrowserLogging(page) {
       timestamp: new Date().toISOString(),
     });
   });
+  page.on("requestfailed", (request) => {
+    if (networkPath(request.url()) !== EVENT_STREAM_PATH) {
+      return;
+    }
+    const failureText = request.failure()?.errorText;
+    if (failureText !== "net::ERR_CONNECTION_FAILED") {
+      return;
+    }
+    requestFailureSequence += 1;
+    droppedRequestFailures += appendBoundedNetworkRecord(eventStreamRequestFailures, {
+      sequence: requestFailureSequence,
+      url: EVENT_STREAM_PATH,
+      errorText: failureText,
+      timestamp: new Date().toISOString(),
+    });
+  });
+  page.on("response", (response) => {
+    if (networkPath(response.url()) !== EVENT_STREAM_PATH) {
+      return;
+    }
+    responseSequence += 1;
+    droppedResponses += appendBoundedNetworkRecord(eventStreamResponses, {
+      sequence: responseSequence,
+      url: EVENT_STREAM_PATH,
+      status: response.status(),
+      timestamp: new Date().toISOString(),
+    });
+  });
   return {
     mark: () => ({
       consoleMessages: consoleMessages.length,
       pageErrors: pageErrors.length,
+      eventStreamRequestFailures: requestFailureSequence,
+      eventStreamResponses: responseSequence,
+      droppedEventStreamRequestFailures: droppedRequestFailures,
+      droppedEventStreamResponses: droppedResponses,
     }),
     getSnapshot: (cursor = null) => ({
       consoleMessages: [...consoleMessages.slice(cursor?.consoleMessages ?? 0)],
       pageErrors: [...pageErrors.slice(cursor?.pageErrors ?? 0)],
+      eventStreamRequestFailures: eventStreamRequestFailures.filter(
+        (record) => record.sequence > (cursor?.eventStreamRequestFailures ?? 0),
+      ),
+      eventStreamResponses: eventStreamResponses.filter(
+        (record) => record.sequence > (cursor?.eventStreamResponses ?? 0),
+      ),
+      eventStreamEvidenceTruncated:
+        droppedRequestFailures > (cursor?.droppedEventStreamRequestFailures ?? 0) ||
+        droppedResponses > (cursor?.droppedEventStreamResponses ?? 0),
     }),
   };
+}
+
+export async function readBrowserSseDiagnostics(page) {
+  try {
+    const evidence = await page.evaluate((limit) => {
+      const diagnostics = window.__goatcitadelDevDiagnostics;
+      if (!diagnostics) {
+        return { available: false, records: [] };
+      }
+      return { available: true, records: diagnostics.list({ category: "sse", limit }) };
+    }, MAX_EVENT_STREAM_NETWORK_RECORDS);
+    if (evidence?.available !== true || !Array.isArray(evidence.records)) {
+      return { available: false, records: [] };
+    }
+    return {
+      available: true,
+      records: evidence.records
+        .filter((record) => record && typeof record === "object")
+        .slice(0, MAX_EVENT_STREAM_NETWORK_RECORDS)
+        .map((record) => ({
+          category: typeof record.category === "string" ? record.category : undefined,
+          event: typeof record.event === "string" ? record.event : undefined,
+          level: typeof record.level === "string" ? record.level : undefined,
+          timestamp: typeof record.timestamp === "string" ? record.timestamp : undefined,
+        })),
+    };
+  } catch (error) {
+    return {
+      available: false,
+      records: [],
+      captureError: serializeError(error),
+    };
+  }
 }
 
 export async function setBrowserCorrelation(page, correlationId, sessionId) {
@@ -156,6 +239,23 @@ function disabledTrace() {
 
 function serializeError(error) {
   return error instanceof Error ? { message: error.message, stack: error.stack } : { message: String(error) };
+}
+
+function appendBoundedNetworkRecord(records, record) {
+  records.push(record);
+  if (records.length <= MAX_EVENT_STREAM_NETWORK_RECORDS) {
+    return 0;
+  }
+  records.splice(0, records.length - MAX_EVENT_STREAM_NETWORK_RECORDS);
+  return 1;
+}
+
+function networkPath(value) {
+  try {
+    return new URL(value).pathname;
+  } catch {
+    return undefined;
+  }
 }
 
 function relativeToRun(context, filePath) {

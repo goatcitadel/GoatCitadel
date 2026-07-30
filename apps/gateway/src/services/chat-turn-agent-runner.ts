@@ -215,6 +215,13 @@ import { isDurableControlError } from "./durable-control-error.js";
 import { INTERNAL_TOOL_EFFECT_POTENTIAL_KEY } from "./chat-message-sanitize.js";
 import type { ToolCallBeforeHookInterpositionBinding } from "./tool-runtime-interposition.js";
 import {
+  classifyProviderFailure,
+  getRemainingChatCompletionBudgetMs,
+  hasChatCompletionSecondaryAttemptBudget,
+  readChatCompletionFailureContext,
+  shouldRetryToolProtocolError,
+} from "./llm-completion-helpers.js";
+import {
   classifyBrowserToolResult,
   extractBrowserToolUrl,
   findReusableBrowserToolResult,
@@ -1771,6 +1778,7 @@ export class ChatTurnAgentRunner {
     const canonicalUsageEventIds = new Set<string>();
     const trustedUsageWorkspaceId = this.deps.storage.chatSessionMeta?.get(input.sessionId)?.workspaceId;
     const workerUsageAttribution = resolveDelegatedWorkerUsageAttribution(this.deps.storage, input);
+    const durableRunId = input.policyRunId ?? workerUsageAttribution?.delegationRunId;
     const completionUsageAttribution = (
       logicalCall: string,
       callKind: NonNullable<ModelUsageAttributionContext["callKind"]>,
@@ -1784,7 +1792,7 @@ export class ChatTurnAgentRunner {
       workspaceId: trustedUsageWorkspaceId,
       sessionId: input.sessionId,
       turnId: input.turnId,
-      durableRunId: input.policyRunId ?? workerUsageAttribution?.delegationRunId,
+      durableRunId,
       taskId: input.policyTaskId,
       agentId: workerUsageAttribution?.agentId ?? "goatherder",
       workerId: workerUsageAttribution?.workerId,
@@ -3296,6 +3304,8 @@ export class ChatTurnAgentRunner {
               mode: input.memoryMode === "off" ? "off" : "qmd",
               turnId: input.turnId,
               sessionId: input.sessionId,
+              taskId: input.policyTaskId,
+              runId: durableRunId,
             },
             tools: toolsForCompletion.length > 0 ? toolsForCompletion : undefined,
             tool_choice: toolsForCompletion.length > 0 ? "auto" : undefined,
@@ -3304,9 +3314,12 @@ export class ChatTurnAgentRunner {
           let completion: ChatCompletionResponse;
           let completedFirstProviderRequest = false;
           const completionStartedAt = Date.now();
+          const completionDeadlineAt =
+            completionRequest.timeoutMs === undefined ? undefined : completionStartedAt + completionRequest.timeoutMs;
           try {
             if (this.deps.createChatCompletionStream) {
               let streamYieldedVisibleChunk = false;
+              let streamYieldedProviderOutput = false;
               let streamWasFirstProviderRequest = false;
               try {
                 const aggregate = createCompletionStreamAggregate();
@@ -3319,6 +3332,11 @@ export class ChatTurnAgentRunner {
                   },
                   completionUsageAttribution(`loop:${loop}:stream`, loop === 0 ? "chat_initial" : "chat_tool_loop"),
                 )) {
+                  // Any provider-emitted frame can carry semantic state (for
+                  // example, a tool-call delta). Once observed, replaying the
+                  // request on another transport can duplicate that state even
+                  // when no user-visible text was rendered.
+                  streamYieldedProviderOutput = true;
                   const streamed = absorbCompletionStreamChunk(aggregate, rawChunk);
                   if (streamed.delta && !streamed.sawToolCall) {
                     streamYieldedVisibleChunk = true;
@@ -3340,18 +3358,42 @@ export class ChatTurnAgentRunner {
                 if (streamWasFirstProviderRequest) {
                   markFirstProviderRequestFailed();
                 }
+                const failureContext = readChatCompletionFailureContext(error);
+                const failureClass =
+                  failureContext?.failureClass ?? (error instanceof Error ? classifyProviderFailure(error) : "unknown");
+                const toolProtocolError =
+                  failureContext?.toolProtocolError ?? (error instanceof Error && shouldRetryToolProtocolError(error));
+                const fallbackDeadlineAt = failureContext?.deadlineAtMs ?? completionDeadlineAt;
+                const fallbackHasBudget = hasChatCompletionSecondaryAttemptBudget(fallbackDeadlineAt, 0);
+                const providerEmittedOutput =
+                  streamYieldedProviderOutput || streamYieldedVisibleChunk || failureContext?.emittedOutput === true;
+                // The provider service already exhausts transient retries and
+                // cross-provider fallback under the shared deadline. The only
+                // runner-level transport compatibility retry is an explicitly
+                // classified tool-protocol failure; unknown errors fail closed.
+                const fallbackSemanticallyAllowed = toolProtocolError;
+                const fallbackDisposition = providerEmittedOutput
+                  ? "suppressed_after_output"
+                  : !fallbackSemanticallyAllowed
+                    ? `suppressed_for_${failureClass}`
+                    : !fallbackHasBudget
+                      ? "suppressed_insufficient_shared_budget"
+                      : "non_streaming_completion";
                 log.warn("completion stream failed", {
                   providerId: input.providerId,
                   model: input.model,
                   sessionId: input.sessionId,
                   turnId: input.turnId,
-                  fallback: streamYieldedVisibleChunk ? "suppressed_after_partial_output" : "non_streaming_completion",
+                  fallback: fallbackDisposition,
+                  emittedOutput: providerEmittedOutput,
+                  providerFailureClass: failureClass,
+                  remainingBudgetMs: getRemainingChatCompletionBudgetMs(fallbackDeadlineAt),
+                  toolProtocolError,
                   error: error instanceof Error ? { name: error.name, message: error.message } : String(error),
                 });
-                if (streamYieldedVisibleChunk && !promptLabEvalIntegrityTurn) {
-                  // Live chat: re-sending after the user saw partial output would
-                  // double-render. Headless eval runs have no viewer, so they fall
-                  // through to the non-streaming retry instead of failing the run.
+                if (providerEmittedOutput) {
+                  // A stream that crossed the provider-output boundary is never
+                  // replayable, even when the yielded frames were tool-only.
                   suppressIncompleteCompletionRepair = true;
                   throw new Error(
                     "Streaming completion failed after partial output; non-streaming fallback suppressed.",
@@ -3360,10 +3402,25 @@ export class ChatTurnAgentRunner {
                     },
                   );
                 }
-                beginProviderRequest(completionRequest);
+                if (!fallbackSemanticallyAllowed || !fallbackHasBudget) {
+                  suppressIncompleteCompletionRepair = true;
+                  throw error;
+                }
+                const fallbackRemainingBudgetMs = getRemainingChatCompletionBudgetMs(fallbackDeadlineAt);
+                const fallbackRequest =
+                  fallbackRemainingBudgetMs === undefined
+                    ? completionRequest
+                    : {
+                        ...completionRequest,
+                        timeoutMs: Math.max(
+                          1,
+                          Math.min(completionRequest.timeoutMs ?? fallbackRemainingBudgetMs, fallbackRemainingBudgetMs),
+                        ),
+                      };
+                beginProviderRequest(fallbackRequest);
                 this.assertExternalDispatch(input);
                 completion = await this.deps.createChatCompletion(
-                  completionRequest,
+                  fallbackRequest,
                   completionUsageAttribution(
                     `loop:${loop}:stream-recovery`,
                     loop === 0 ? "chat_initial" : "chat_tool_loop",
@@ -6945,6 +7002,11 @@ export class ChatTurnAgentRunner {
       : input.turnBudgetDeadline
         ? Math.min(FINAL_PASS_COMPLETION_TIMEOUT_MS, Math.max(3000, input.turnBudgetDeadline - Date.now()))
         : FINAL_PASS_COMPLETION_TIMEOUT_MS;
+    const synthesisUsageAttribution = this.buildTurnModelUsageAttribution(
+      input.input,
+      "final-synthesis",
+      "chat_repair",
+    );
     let providerCalls = 0;
     let usage: ChatStreamUsageRecord | null = null;
     try {
@@ -6962,6 +7024,8 @@ export class ChatTurnAgentRunner {
             mode: "off",
             turnId: input.input.turnId,
             sessionId: input.input.sessionId,
+            taskId: synthesisUsageAttribution.taskId,
+            runId: synthesisUsageAttribution.durableRunId,
           },
           messages: [
             {
@@ -6991,7 +7055,7 @@ export class ChatTurnAgentRunner {
             },
           ],
         },
-        this.buildTurnModelUsageAttribution(input.input, "final-synthesis", "chat_repair"),
+        synthesisUsageAttribution,
       );
       usage = parseUsageFromCompletion(completion);
       const message = completion.choices?.[0]?.message as Record<string, unknown> | undefined;
@@ -7040,6 +7104,7 @@ export class ChatTurnAgentRunner {
       ? Math.min(FINAL_PASS_COMPLETION_TIMEOUT_MS, Math.max(3000, input.turnBudgetDeadline - Date.now()))
       : FINAL_PASS_COMPLETION_TIMEOUT_MS;
     const toolSummary = summarizeToolRunsForSynthesis(projectToolRunsForModel(input.toolRuns), input.input.content);
+    const repairUsageAttribution = this.buildTurnModelUsageAttribution(input.input, "incomplete-repair", "chat_repair");
     const ignoreDraft = looksLikeUserSafeFailureMessage(input.partialAssistantContent);
     let providerCalls = 0;
     let usage: ChatStreamUsageRecord | null = null;
@@ -7058,6 +7123,8 @@ export class ChatTurnAgentRunner {
             mode: "off",
             turnId: input.input.turnId,
             sessionId: input.input.sessionId,
+            taskId: repairUsageAttribution.taskId,
+            runId: repairUsageAttribution.durableRunId,
           },
           max_tokens: constrainedLocalRepair ? 520 : undefined,
           temperature: constrainedLocalRepair ? 0 : undefined,
@@ -7096,7 +7163,7 @@ export class ChatTurnAgentRunner {
             },
           ],
         },
-        this.buildTurnModelUsageAttribution(input.input, "incomplete-repair", "chat_repair"),
+        repairUsageAttribution,
       );
       usage = parseUsageFromCompletion(completion);
       const message = completion.choices?.[0]?.message as Record<string, unknown> | undefined;

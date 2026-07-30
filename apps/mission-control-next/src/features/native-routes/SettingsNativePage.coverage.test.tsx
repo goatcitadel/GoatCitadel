@@ -333,6 +333,9 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog", asy
 
 const settings = {
   revision: 29,
+  features: {
+    connectorDiagnosticsV1Enabled: true,
+  },
   auth: {
     mode: "token",
     allowLoopbackBypass: false,
@@ -1144,10 +1147,6 @@ function findExactButton(root: ReactTestInstance, label: string) {
   return match;
 }
 
-function exactButtons(root: ReactTestInstance, label: string) {
-  return root.findAll((node) => node.type === "button" && collectText(node).trim() === label);
-}
-
 async function click(button: ReactTestInstance) {
   await act(async () => {
     button.props.onClick();
@@ -1789,6 +1788,10 @@ describe("SettingsNativePage broad native sections", () => {
     const workspaceSetter = vi.fn();
     const workspacesPage = await mount("workspaces", { setActiveWorkspaceId: workspaceSetter });
     expect(collectText(workspacesPage.root)).toContain("Workspace directory");
+    expect(workspacesPage.root.findByProps({ "aria-label": "Archived Citadels" })).toBeTruthy();
+    expect(workspacesPage.root.findByProps({ "aria-label": "Archived workspaces" })).toBeTruthy();
+    expect(workspacesPage.root.findByProps({ "aria-label": "Make active workspace Default" })).toBeTruthy();
+    expect(workspacesPage.root.findByProps({ "aria-label": "Archive workspace Default" })).toBeTruthy();
     const initialWorkspaceInputs = workspacesPage.root.findAllByType("input");
     const initialWorkspaceTextareas = workspacesPage.root.findAllByType("textarea");
     await change(initialWorkspaceInputs[8]!, "Default edited");
@@ -1801,18 +1804,19 @@ describe("SettingsNativePage broad native sections", () => {
       slug: "default-edited",
       description: "Updated default workspace description",
     });
-    await click(exactButtons(workspacesPage.root, "Make active")[1]!);
+    await click(workspacesPage.root.findByProps({ "aria-label": "Make active workspace Default" }));
     expect(workspaceSetter).toHaveBeenCalledWith("default");
-    await click(exactButtons(workspacesPage.root, "Archive")[1]!);
+    await click(workspacesPage.root.findByProps({ "aria-label": "Archive workspace Default" }));
     let archiveModal = workspacesPage.root
       .findAllByType(ConfirmModal)
       .find((modal) => modal.props.title === "Archive workspace?");
     expect(archiveModal?.props.open).toBe(true);
+    expect(archiveModal?.props.confirmLabel).toBe("Confirm archive workspace");
     await act(async () => {
       archiveModal?.props.onCancel();
     });
     expect(settingsMocks.archiveWorkspace).not.toHaveBeenCalled();
-    await click(exactButtons(workspacesPage.root, "Archive")[1]!);
+    await click(workspacesPage.root.findByProps({ "aria-label": "Archive workspace Default" }));
     archiveModal = workspacesPage.root
       .findAllByType(ConfirmModal)
       .find((modal) => modal.props.title === "Archive workspace?");
@@ -1821,8 +1825,8 @@ describe("SettingsNativePage broad native sections", () => {
     });
     await flush();
     expect(settingsMocks.archiveWorkspace).toHaveBeenCalledWith("default", 11);
-    await click(buttons(workspacesPage.root, "Archived")[1]!);
-    await click(findExactButton(workspacesPage.root, "Restore"));
+    await click(workspacesPage.root.findByProps({ "aria-label": "Archived workspaces" }));
+    await click(workspacesPage.root.findByProps({ "aria-label": "Restore workspace Archive" }));
     expect(settingsMocks.restoreWorkspace).toHaveBeenCalledWith("archive-1", 13);
     const workspaceInputs = workspacesPage.root.findAllByType("input");
     const workspaceTextareas = workspacesPage.root.findAllByType("textarea");
@@ -2059,8 +2063,10 @@ describe("SettingsNativePage broad native sections", () => {
         .find((textarea) => String(textarea.props.value).includes("GITHUB_TOKEN"))!,
       '{\n  "tokenEnv": "GH_DETAIL"\n}',
     );
+    expect(findButton(integrations.root, "Run diagnostics").props.disabled).toBe(false);
     await click(findButton(integrations.root, "Run diagnostics"));
     expect(settingsMocks.fetchIntegrationConnectionDiagnostics).toHaveBeenCalledWith("conn-1");
+    expect(collectText(integrations.root)).toContain("Diagnostics refreshed.");
     await click(findButton(integrations.root, "Save changes"));
     expect(settingsMocks.updateIntegrationConnection).toHaveBeenCalledWith(
       "conn-1",
@@ -2098,6 +2104,61 @@ describe("SettingsNativePage broad native sections", () => {
     expect(collectText(general.root)).toContain("mcp offline");
     await click(findButton(general.root, "Retry"));
     expect(settingsMocks.fetchMcpServers).toHaveBeenCalled();
+  });
+
+  it("explains and disables integration diagnostics when the runtime capability is off", async () => {
+    settingsMocks.fetchIntegrationCatalog.mockResolvedValueOnce({
+      items: [
+        {
+          catalogId: "github",
+          key: "github",
+          label: "GitHub",
+          description: "GitHub issues and pulls",
+          kind: "service",
+          capabilities: ["issues"],
+          authMethods: ["token"],
+          operatorActions: [],
+        },
+      ],
+    });
+    settingsMocks.fetchSettings.mockResolvedValueOnce({
+      ...settings,
+      features: {
+        ...settings.features,
+        connectorDiagnosticsV1Enabled: false,
+      },
+    });
+
+    const integrations = await mount("integrations");
+
+    expect(findButton(integrations.root, "Run diagnostics").props.disabled).toBe(true);
+    const text = collectText(integrations.root);
+    expect(text).toContain("Connector diagnostics are not enabled in Runtime settings.");
+    expect(text).toContain("diagnostics remain unavailable until enabled in Runtime settings");
+    expect(text).not.toContain("Save changes and run diagnostics here");
+    expect(settingsMocks.fetchIntegrationConnectionDiagnostics).not.toHaveBeenCalled();
+  });
+
+  it("retains run-diagnostics guidance for an enabled integration without operator actions", async () => {
+    settingsMocks.fetchIntegrationCatalog.mockResolvedValueOnce({
+      items: [
+        {
+          catalogId: "github",
+          key: "github",
+          label: "GitHub",
+          description: "GitHub issues and pulls",
+          kind: "service",
+          capabilities: ["issues"],
+          authMethods: ["token"],
+          operatorActions: [],
+        },
+      ],
+    });
+
+    const integrations = await mount("integrations");
+
+    expect(findButton(integrations.root, "Run diagnostics").props.disabled).toBe(false);
+    expect(collectText(integrations.root)).toContain("Save changes and run diagnostics here");
   });
 
   it("covers onboarding defaults, navigation actions, and fallback demo routing branches", async () => {
@@ -2339,7 +2400,8 @@ describe("SettingsNativePage broad native sections", () => {
       recommendedNextAction: "Ready.",
     });
 
-    const mcp = await mount("mcp");
+    const navigate = vi.fn();
+    const mcp = await mount("mcp", { navigate });
     await click(findButton(mcp.root, "Create MCP server"));
     expect(collectText(mcp.root)).toContain("Server label is required.");
 
@@ -2406,6 +2468,9 @@ describe("SettingsNativePage broad native sections", () => {
     expect(settingsMocks.runMcpServerHealthCheck).toHaveBeenCalledWith("srv-1");
     expect(collectText(mcp.root)).toContain("Inspect pending approvals");
     expect(collectText(mcp.root)).toContain("Ready.");
+
+    await click(findButton(mcp.root, "Manage tool grants"));
+    expect(navigate).toHaveBeenCalledWith({ area: "settings", section: "tools", theme: "ops" });
 
     await click(findButton(mcp.root, "Delete"));
     let mcpDeleteModal = mcp.root
@@ -3002,10 +3067,45 @@ describe("SettingsNativePage partial gateway responses", () => {
 
     const localAi = await mount("local-ai");
 
-    const text = collectText(localAi.root);
-    expect(text).toContain("Hardware readiness");
-    expect(text).toContain("Unknown");
-    expect(text).toContain("Serve jobs");
+    expect(collectText(localAi.root)).toContain("Hardware readiness");
+    expect(collectText(localAi.root)).toContain("Unknown");
+    expect(collectText(localAi.root)).toContain("Serve jobs");
+    expect(collectText(localAi.root)).toContain("Local AI is not configured");
+
+    await click(findButton(localAi.root, "Refresh readiness"));
+    expect(settingsMocks.fetchLocalAiReadiness).toHaveBeenCalledTimes(2);
+  });
+
+  it("distinguishes a detected runtime from a registered Local AI endpoint", async () => {
+    settingsMocks.fetchLocalAiReadiness.mockResolvedValue({
+      hardware: {
+        checkedAt: "2026-07-29T00:00:00.000Z",
+        os: { platform: "win32", arch: "x64" },
+        cpu: { logicalCores: 8 },
+        memory: { totalBytes: 16 * 1024 * 1024 * 1024 },
+        gpu: [],
+        disk: {},
+        runtimes: [
+          {
+            backend: "ollama",
+            detected: true,
+            command: "ollama.exe",
+            platformSupport: "native",
+          },
+        ],
+      },
+      catalog: [],
+      recommendations: [],
+      downloads: [],
+      serveJobs: [],
+      endpoints: [],
+    });
+
+    const localAi = await mount("local-ai");
+
+    expect(collectText(localAi.root)).toContain(
+      "Local AI is not configured: a runtime was detected, but no local AI endpoint is registered.",
+    );
   });
 
   it("renders the general section when the settings payload is empty", async () => {

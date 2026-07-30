@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import { canonicalJsonString, ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
+import { allocateDurableRunEventSequence } from "./durable-run-event-repo.js";
 
 export type SessionMutationAdmissionKind = "synchronous" | "turn_write";
 export type SessionMutationAdmissionStatus = "active" | "completed" | "cancelled";
@@ -145,6 +146,14 @@ export type PreemptHeartbeatAndAdmitOperatorTurnOutcome =
       occurrenceId: string;
       heartbeatAdmissionId: string;
       durableRunId: string;
+    }
+  | {
+      disposition: "not_preemptible";
+      preemptionDisposition: "not_preemptible";
+      recoveryOutcome: "not_preemptible";
+      mutated: false;
+      controllerGeneration: number;
+      activeAdmission: SessionMutationAdmissionRecord;
     };
 
 export interface AbandonAdmittedHeartbeatForExecutionDisabledInput {
@@ -1078,10 +1087,21 @@ export class SessionMutationAdmissionRepository {
             admission_material_sha256: string;
             claim_sha256: string;
           }>({ admissionId: activeAdmission.admission_id });
+        const activeAdmissionIsHeartbeat =
+          activeAdmission.actor_kind === "system" &&
+          activeAdmission.actor_id === "system-heartbeat" &&
+          activeAdmission.operation === "chat_system_heartbeat";
+        if (!activeAdmissionIsHeartbeat) {
+          return {
+            disposition: "not_preemptible",
+            preemptionDisposition: "not_preemptible",
+            recoveryOutcome: "not_preemptible",
+            mutated: false,
+            controllerGeneration: expectedControllerGeneration,
+            activeAdmission: mapAdmission(activeAdmission),
+          };
+        }
         if (
-          activeAdmission.actor_kind !== "system" ||
-          activeAdmission.actor_id !== "system-heartbeat" ||
-          activeAdmission.operation !== "chat_system_heartbeat" ||
           asPositiveInteger(activeAdmission.controller_generation) !== expectedControllerGeneration ||
           !occurrence ||
           !["admitted", "durable_bound"].includes(occurrence.state) ||
@@ -1669,6 +1689,35 @@ export class SessionMutationAdmissionRepository {
     } catch (error) {
       throw normalizeAdmissionWriteError(error);
     }
+  }
+
+  /**
+   * Resolve the immutable durable binding for one exact turn admission. This is
+   * intentionally identity-complete: recovery callers must never infer durable
+   * ownership from a turn id or a stream event alone.
+   */
+  public findDurableRunBinding(input: TurnWriteAdmissionIdentity): TurnWriteDurableRunBindingRecord | undefined {
+    const normalized = normalizeTurnWriteIdentity(input);
+    const row = this.db
+      .prepare(
+        `SELECT * FROM chat_turn_mutation_admission_durable_bindings
+         WHERE admission_id = @admissionId AND turn_id = @turnId`,
+      )
+      .get<DurableBindingRow>({ admissionId: normalized.admissionId, turnId: normalized.turnId });
+    if (!row) return undefined;
+    if (
+      row.admission_id !== normalized.admissionId ||
+      row.workspace_id !== normalized.workspaceId ||
+      row.session_id !== normalized.sessionId ||
+      row.session_incarnation_id !== normalized.sessionIncarnationId ||
+      row.turn_id !== normalized.turnId
+    ) {
+      throw admissionConflict(
+        "SESSION_MUTATION_DURABLE_BINDING_CONFLICT",
+        "Turn admission durable-run binding conflicts.",
+      );
+    }
+    return mapDurableBinding(row);
   }
 
   public findVerifiedTerminalTurnWriteHandoff(
@@ -4633,13 +4682,7 @@ export class SessionMutationAdmissionRepository {
   }
 
   private appendDurableChatUserInputResolvedEvent(seal: DurableChatUserInputContinuationSealRecord): void {
-    const sequenceRow = this.db
-      .prepare(
-        `SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence
-         FROM durable_run_events WHERE run_id = @durableRunId`,
-      )
-      .get<{ next_sequence: number | bigint | string }>({ durableRunId: seal.durableRunId });
-    const sequence = asPositiveInteger(sequenceRow?.next_sequence ?? 1);
+    const sequence = allocateDurableRunEventSequence(this.db, seal.durableRunId);
     this.db
       .prepare(
         `INSERT INTO durable_run_events (

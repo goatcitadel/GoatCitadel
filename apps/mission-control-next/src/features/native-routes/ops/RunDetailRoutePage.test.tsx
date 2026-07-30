@@ -125,6 +125,30 @@ describe("RunDetailRoutePage", () => {
     expect(text).toContain("Expert raw trace");
   });
 
+  it("does not probe orchestration trace storage for a durable Chat run", async () => {
+    runTraceHarness.fetchObserveRunTrace.mockResolvedValueOnce({
+      version: "observe.run_trace.v1",
+      generatedAt: "2026-07-30T03:43:03.857Z",
+      runId: "durable-chat-1",
+      run: {
+        runId: "durable-chat-1",
+        workflowKey: "chat.turn.execute",
+        status: "completed",
+        payload: { version: "chat.turn.execute.v2" },
+      },
+      artifacts: [],
+      timeline: [],
+      tools: [],
+      approvals: [],
+      sideEffects: [],
+      errors: [],
+    });
+
+    await renderText("durable-chat-1", "workspace-chat");
+
+    expect(runTraceHarness.fetchOrchestrationRunTrace).not.toHaveBeenCalled();
+  });
+
   it("handles runs with no artifacts", async () => {
     runTraceHarness.fetchObserveRunTrace.mockResolvedValueOnce({
       runId: "run-no-artifacts",
@@ -404,9 +428,19 @@ describe("RunDetailRoutePage", () => {
 
   it("surfaces orchestration decision trace evidence outside raw JSON", async () => {
     runTraceHarness.fetchObserveRunTrace.mockResolvedValueOnce({
-      runId: "orch-run-1",
+      runId: "durable-orch-1",
       status: "paused",
       mode: "orchestration.plan.execute",
+      run: {
+        runId: "durable-orch-1",
+        workflowKey: "orchestration.plan.execute",
+        status: "paused",
+        payload: {
+          version: "orchestration.plan.execute.v1",
+          orchestrationRunId: "orch-run-1",
+          workspaceId: "workspace-ops",
+        },
+      },
       request: { summary: "Run a durable Cowork orchestration.", requestedAt: "2026-05-02T19:00:00.000Z" },
       artifacts: [],
       timeline: [],
@@ -501,7 +535,7 @@ describe("RunDetailRoutePage", () => {
       ],
     });
 
-    const text = await renderText("orch-run-1", "workspace-ops");
+    const text = await renderText("durable-orch-1", "workspace-ops");
 
     expect(runTraceHarness.fetchOrchestrationRunTrace).toHaveBeenCalledWith("orch-run-1", {
       workspaceId: "workspace-ops",

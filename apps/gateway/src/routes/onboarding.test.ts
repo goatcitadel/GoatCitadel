@@ -67,6 +67,36 @@ describe("onboarding routes", () => {
     expect(getOnboardingStartupState).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ["startup", "getOnboardingStartupState"],
+    ["state", "getOnboardingState"],
+  ] as const)("maps the onboarding %s config-generation read fence to a retryable conflict", async (route, method) => {
+    const generationFence = new ConflictError({
+      code: "STATE_CONFLICT",
+      message: "Settings are temporarily unavailable while runtime owners reconcile a config generation.",
+      details: { currentRevision: 3, transactionState: "committed" },
+    });
+    const read = vi.fn(() => {
+      throw generationFence;
+    });
+    app = Fastify();
+    app.decorate("services", { onboarding: { [method]: read } } as never);
+    await app.register(onboardingRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/v1/onboarding/${route}`,
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      code: "STATE_CONFLICT",
+      error: "Settings are temporarily unavailable while runtime owners reconcile a config generation.",
+      details: { currentRevision: 3, transactionState: "committed" },
+    });
+    expect(read).toHaveBeenCalledOnce();
+  });
+
   it("validates bootstrap payloads", async () => {
     const bootstrapOnboarding = vi.fn();
     app = Fastify();
@@ -89,6 +119,28 @@ describe("onboarding routes", () => {
 
     expect(response.statusCode).toBe(400);
     expect(bootstrapOnboarding).not.toHaveBeenCalled();
+  });
+
+  it("accepts the shipped chat-agent tool profile in bootstrap payloads", async () => {
+    const bootstrapOnboarding = vi.fn((input) => input);
+    app = Fastify();
+    app.decorate("services", { onboarding: { bootstrapOnboarding } } as never);
+    await app.register(onboardingRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/onboarding/bootstrap",
+      payload: {
+        expectedRevision: 6,
+        defaultToolProfile: "chat-agent",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(bootstrapOnboarding).toHaveBeenCalledWith({
+      expectedRevision: 6,
+      defaultToolProfile: "chat-agent",
+    });
   });
 
   it("rejects invalid TLS combinations in bootstrap payloads", async () => {

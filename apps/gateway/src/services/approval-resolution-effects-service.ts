@@ -84,6 +84,7 @@ import {
 import type { ExternalSourceRequestActor } from "./external-source-service.js";
 import { materializeApprovedSkillHubIntent, type SkillHubLifecycleApplyResult } from "./skill-hub-lifecycle-service.js";
 import type { ApprovalRemoteTokenSecretService } from "./approval-remote-token-secret.js";
+import { trackBackgroundTask } from "./background-scheduler.js";
 import {
   AUTONOMOUS_CHAT_POST_COMMIT_PENDING_METADATA_KEY,
   GENERAL_CHAT_POST_COMMIT_PENDING_METADATA_KEY,
@@ -559,7 +560,6 @@ export class ApprovalEffectsService {
           this.publishWorkerFailure("action", error);
         } finally {
           this.workerActive = false;
-          backgroundTasks.delete(task);
           if (this.actionWorkerTask === task) {
             this.actionWorkerTask = undefined;
           }
@@ -568,7 +568,7 @@ export class ApprovalEffectsService {
       }),
     );
     this.actionWorkerTask = task;
-    backgroundTasks.add(task);
+    trackBackgroundTask(backgroundTasks, task);
   }
 
   private requestObservabilityEffectProcessing(): void {
@@ -598,12 +598,11 @@ export class ApprovalEffectsService {
           this.publishWorkerFailure("observability", error);
         } finally {
           this.observabilityWorkerActive = false;
-          backgroundTasks.delete(task);
           reservation?.release();
         }
       }),
     );
-    backgroundTasks.add(task);
+    trackBackgroundTask(backgroundTasks, task);
   }
 
   private reserveWorker(label: string): SharedHostWorkReservation | undefined | null {
@@ -2236,6 +2235,9 @@ export class ApprovalEffectsService {
         runId,
       });
       const recovered = buildRecoveredWakeResult(wakeResult, wakeResultRecord);
+      if (wakeResult.outcome === "woke" || recovered) {
+        this.markLinkedChatTurnResumed(effect.targetId, runId);
+      }
       const explicitNonWake = recovered
         ? undefined
         : buildExplicitNonWakeResult(wakeResult, wakeResultRecord, this.buildAlreadyRunningWakeProof(effect));
@@ -2282,6 +2284,29 @@ export class ApprovalEffectsService {
     }
     if (result.outcome === "failed") {
       return;
+    }
+  }
+
+  private markLinkedChatTurnResumed(turnId: string, runId: string): void {
+    const observed = this.ctx.storage.chatTurnTraces.get(turnId);
+    if (observed.turnId !== turnId || observed.durable?.runId !== runId) {
+      throw new Error(`Linked Chat wake ${runId} does not match turn ${turnId}.`);
+    }
+    if (observed.status === "running") {
+      return;
+    }
+    if (observed.status !== "waiting_for_approval") {
+      throw new Error(`Linked Chat wake ${runId} cannot resume turn ${turnId} from ${observed.status}.`);
+    }
+    const resumed = this.ctx.storage.chatTurnTraces.patchIfStatus(turnId, ["waiting_for_approval"], {
+      status: "running",
+    });
+    if (resumed) {
+      return;
+    }
+    const canonical = this.ctx.storage.chatTurnTraces.get(turnId);
+    if (canonical.status !== "running" || canonical.durable?.runId !== runId) {
+      throw new Error(`Linked Chat wake ${runId} lost the turn ${turnId} resume race.`);
     }
   }
 

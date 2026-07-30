@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
+import ts from "typescript";
 import {
   POSTGRES_V2_DYNAMIC_BOOTSTRAP_EXCEPTION,
   buildAppendOnlyStorageMigrationManifest,
@@ -69,6 +70,86 @@ function sqliteSource(entries) {
   `;
 }
 
+function appendSyntheticSqliteMigrationGroup(
+  source,
+  { version, name = "synthetic_append_only_test", groupName = "synthetic_append_only_group" },
+) {
+  const sourceFile = ts.createSourceFile(
+    "packages/storage/src/sqlite.ts",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const registries = [];
+  for (const statement of sourceFile.statements) {
+    if (!ts.isVariableStatement(statement)) {
+      continue;
+    }
+    for (const declaration of statement.declarationList.declarations) {
+      if (!ts.isIdentifier(declaration.name) || declaration.name.text !== "SCHEMA_MIGRATION_GROUPS") {
+        continue;
+      }
+      if (!declaration.initializer || !ts.isArrayLiteralExpression(declaration.initializer)) {
+        throw new Error("Top-level SCHEMA_MIGRATION_GROUPS must be initialized with an array literal.");
+      }
+      registries.push(declaration.initializer);
+    }
+  }
+  if (registries.length !== 1) {
+    throw new Error(`Expected exactly one top-level SCHEMA_MIGRATION_GROUPS array, found ${registries.length}.`);
+  }
+
+  const registry = registries[0];
+  const closingBracketIndex = registry.end - 1;
+  if (source[closingBracketIndex] !== "]") {
+    throw new Error("SCHEMA_MIGRATION_GROUPS array did not end at a closing bracket.");
+  }
+  const closingLineStart = source.lastIndexOf("\n", closingBracketIndex - 1) + 1;
+  const registryIndent = source.slice(closingLineStart, closingBracketIndex);
+  if (!/^[\t ]*$/u.test(registryIndent)) {
+    throw new Error("SCHEMA_MIGRATION_GROUPS closing bracket must be on its own indented line.");
+  }
+
+  const firstElement = registry.elements[0];
+  const firstElementStart = firstElement?.getStart(sourceFile, false);
+  const firstElementLineStart =
+    firstElementStart === undefined ? -1 : source.lastIndexOf("\n", firstElementStart - 1) + 1;
+  const observedGroupIndent =
+    firstElementStart === undefined ? "" : source.slice(firstElementLineStart, firstElementStart);
+  const groupIndent =
+    /^[\t ]+$/u.test(observedGroupIndent) && observedGroupIndent.startsWith(registryIndent)
+      ? observedGroupIndent
+      : `${registryIndent}  `;
+  const indentUnit = groupIndent.slice(registryIndent.length) || "  ";
+  const propertyIndent = `${groupIndent}${indentUnit}`;
+  const migrationIndent = `${propertyIndent}${indentUnit}`;
+  const fieldIndent = `${migrationIndent}${indentUnit}`;
+  const newline = source.includes("\r\n") ? "\r\n" : "\n";
+  const syntheticGroup = [
+    `${groupIndent}{`,
+    `${propertyIndent}name: ${JSON.stringify(groupName)},`,
+    `${propertyIndent}migrations: [`,
+    `${migrationIndent}{`,
+    `${fieldIndent}version: ${version},`,
+    `${fieldIndent}name: ${JSON.stringify(name)},`,
+    `${fieldIndent}up: () => {},`,
+    `${migrationIndent}},`,
+    `${propertyIndent}],`,
+    `${groupIndent}},`,
+    "",
+  ].join(newline);
+
+  const lastElement = registry.elements.at(-1);
+  const needsSeparator = lastElement !== undefined && !registry.elements.hasTrailingComma;
+  const sourceWithSeparator = needsSeparator
+    ? `${source.slice(0, lastElement.end)},${source.slice(lastElement.end)}`
+    : source;
+  const adjustedClosingLineStart = closingLineStart + (needsSeparator ? 1 : 0);
+
+  return `${sourceWithSeparator.slice(0, adjustedClosingLineStart)}${syntheticGroup}${sourceWithSeparator.slice(adjustedClosingLineStart)}`;
+}
+
 test("extracts only direct registry entries and keeps migrations after comments", () => {
   const records = extractPostgresMigrationRegistry(
     `
@@ -109,6 +190,95 @@ test("extracts direct SQLite entries from SCHEMA_MIGRATION_GROUPS", () => {
       { version: 2, name: "two_parity", groupName: "canonical" },
     ],
   );
+});
+
+test("AST helper appends a migration group across indentation, CRLF, and tail comments", () => {
+  const cases = [
+    {
+      newline: "\n",
+      registryIndent: "",
+      groupIndent: "  ",
+      indentUnit: "  ",
+      tailComment: "  // preserve registry tail",
+    },
+    {
+      newline: "\r\n",
+      registryIndent: "\t",
+      groupIndent: "\t\t",
+      indentUnit: "\t",
+      tailComment: "\t\t/* preserve CRLF tail */",
+    },
+    {
+      newline: "\n",
+      registryIndent: "    ",
+      groupIndent: "      ",
+      indentUnit: "  ",
+      tailComment: "      // preserve custom indent",
+    },
+  ];
+
+  for (const { newline, registryIndent, groupIndent, indentUnit, tailComment } of cases) {
+    const source = [
+      "function nestedDecoy() {",
+      "  const SCHEMA_MIGRATION_GROUPS = [];",
+      "}",
+      "const createOne = () => {};",
+      `${registryIndent}const SCHEMA_MIGRATION_GROUPS = [`,
+      `${groupIndent}{`,
+      `${groupIndent}${indentUnit}name: "canonical",`,
+      `${groupIndent}${indentUnit}migrations: [{ version: 1, name: "one", up: createOne }],`,
+      `${groupIndent}},`,
+      tailComment,
+      `${registryIndent}];`,
+      "",
+    ].join(newline);
+    const appended = appendSyntheticSqliteMigrationGroup(source, { version: 2 });
+    const registry = extractSqliteMigrationRegistry(appended);
+
+    assert.equal(registry.migrations.length, 2);
+    assert.deepEqual(
+      registry.migrations.map(({ version, name, groupName }) => ({ version, name, groupName })),
+      [
+        { version: 1, name: "one", groupName: "canonical" },
+        { version: 2, name: "synthetic_append_only_test", groupName: "synthetic_append_only_group" },
+      ],
+    );
+    assert.ok(appended.includes(tailComment));
+    assert.ok(
+      appended.includes(
+        `${newline}${groupIndent}{${newline}${groupIndent}${indentUnit}name: "synthetic_append_only_group",`,
+      ),
+    );
+    if (newline === "\r\n") {
+      assert.equal(appended.replaceAll("\r\n", "").includes("\n"), false, "helper must preserve CRLF endings");
+    }
+  }
+
+  assert.throws(
+    () =>
+      appendSyntheticSqliteMigrationGroup("const SCHEMA_MIGRATION_GROUPS = []; const SCHEMA_MIGRATION_GROUPS = [];", {
+        version: 1,
+      }),
+    /exactly one top-level SCHEMA_MIGRATION_GROUPS array/u,
+  );
+});
+
+test("AST helper inserts a separator when the prior migration group has no trailing comma", () => {
+  const source = [
+    "const createOne = () => {};",
+    "const SCHEMA_MIGRATION_GROUPS = [",
+    "  {",
+    '    name: "canonical",',
+    '    migrations: [{ version: 1, name: "one", up: createOne }],',
+    "  }",
+    "];",
+    "",
+  ].join("\n");
+
+  const appended = appendSyntheticSqliteMigrationGroup(source, { version: 2 });
+  const registry = extractSqliteMigrationRegistry(appended);
+  assert.equal(registry.migrations.length, 2);
+  assert.ok(appended.includes("\n  },\n  {"));
 });
 
 test("definition hashes ignore comments and formatting but detect code changes", () => {
@@ -681,16 +851,10 @@ test("Postgres v2 owner closure treats the independently manifested SQLite group
     sourceFiles,
   });
   const manifest = createStorageMigrationManifest({ sqlite, postgres });
-  const registryEndMarker = "    ],\n  },\n];\n\nconst SCHEMA_MIGRATIONS";
-  const registryEndIndex = sqliteSourceText.lastIndexOf(registryEndMarker);
-  assert.ok(registryEndIndex > 0, "test must locate the canonical SQLite migration registry tail");
   const syntheticVersion = sqlite.lastVersion + 1;
-  const appendedSqliteSource = `${sqliteSourceText.slice(0, registryEndIndex)}      {
-        version: ${syntheticVersion},
-        name: "synthetic_append_only_test",
-        up: () => {},
-      },
-${sqliteSourceText.slice(registryEndIndex)}`;
+  const appendedSqliteSource = appendSyntheticSqliteMigrationGroup(sqliteSourceText, {
+    version: syntheticVersion,
+  });
   const appendedSourceFiles = new Map(sourceFiles);
   appendedSourceFiles.set("packages/storage/src/sqlite.ts", appendedSqliteSource);
   const appendedSqlite = extractSqliteMigrationRegistry(appendedSqliteSource, {
@@ -704,11 +868,25 @@ ${sqliteSourceText.slice(registryEndIndex)}`;
   });
 
   assert.deepEqual(unchangedOwnerPostgres.v2OwnerProvenance, postgres.v2OwnerProvenance);
+  assert.equal(appendedSqlite.migrations.length, sqlite.migrations.length + 1);
+  assert.deepEqual(
+    appendedSqlite.migrations.at(-1) && {
+      version: appendedSqlite.migrations.at(-1).version,
+      name: appendedSqlite.migrations.at(-1).name,
+      groupName: appendedSqlite.migrations.at(-1).groupName,
+    },
+    {
+      version: syntheticVersion,
+      name: "synthetic_append_only_test",
+      groupName: "synthetic_append_only_group",
+    },
+  );
   const updated = buildAppendOnlyStorageMigrationManifest({
     manifest,
     sqlite: appendedSqlite,
     postgres: unchangedOwnerPostgres,
   });
+  assert.equal(updated.sources.sqlite.expectedCount, manifest.sources.sqlite.expectedCount + 1);
   assert.equal(updated.sources.sqlite.expectedLastVersion, syntheticVersion);
   assert.deepEqual(updated.exceptions[0].ownerProvenance, manifest.exceptions[0].ownerProvenance);
 });
@@ -809,6 +987,8 @@ test("current registries and checked-in manifest cover every migration exactly",
   });
   const manifest = JSON.parse(manifestText);
 
+  // These reviewed literals are intentionally independent from the generated
+  // manifest so an accidental registry-plus-manifest edit cannot self-certify.
   assert.equal(sqlite.migrations.length, 186);
   assert.deepEqual([sqlite.firstVersion, sqlite.lastVersion], [1, 186]);
   assert.equal(postgres.migrations.length, 129);

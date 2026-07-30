@@ -285,6 +285,12 @@ export interface PreparedAgentChatTurn {
   serverOnlyPosture?: Readonly<SystemHeartbeatTurnPrepPosture>;
   assistantMessageId: string;
   parentTurnId?: string;
+  /**
+   * Canonical active leaf observed while this turn was prepared. Retry/edit
+   * lineage points at the source turn's parent, so it cannot also serve as the
+   * compare-and-set base used to select the new sibling branch.
+   */
+  branchSelectionBaseTurnId?: string;
   /** Canonical delegation lineage. Unlike parentTurnId, this is absent on normal branch appends. */
   parentDelegationStepId?: string;
   branchKind: ChatTurnBranchKind;
@@ -1158,6 +1164,7 @@ export async function prepareAgentChatTurn(
     ...(systemHeartbeatPosture ? { serverOnlyPosture: Object.freeze({ ...systemHeartbeatPosture }) } : {}),
     assistantMessageId: options?.assistantMessageId ?? `assistant-${randomUUID()}`,
     parentTurnId,
+    branchSelectionBaseTurnId: sessionState.activeLeafTurnId,
     parentDelegationStepId: userMessage.parentDelegationStepId ?? input.parentDelegationStepId,
     branchKind,
     sourceTurnId: options?.sourceTurnId,

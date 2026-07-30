@@ -81,6 +81,98 @@ async function waitForOperation<T>(operation: Promise<T>, description: string, t
 }
 
 test(
+  "real Postgres sync worker reconnects after its idle backend is terminated",
+  { skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane" },
+  async () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+    const adminPool = new Pool({ connectionString });
+    const syncClient = new PostgresSyncDatabaseClient({
+      connectionString,
+      database: "goatcitadel_test",
+      applicationName: `reconnect-proof-${suffix}`,
+      pool: { max: 1, connectionTimeoutMs: 2_000 },
+    });
+    try {
+      const first = syncClient.prepare("SELECT pg_backend_pid() AS pid").get<{ pid: number }>();
+      assert.equal(typeof first?.pid, "number");
+      const terminated = await adminPool.query<{ terminated: boolean }>(
+        "SELECT pg_terminate_backend($1) AS terminated",
+        [first!.pid],
+      );
+      assert.equal(terminated.rows[0]?.terminated, true);
+
+      // The pool's idle-client error arrives asynchronously from the socket.
+      // A brief bounded poll permits one degraded query while proving that the
+      // same worker reconnects instead of entering a permanent fatal state.
+      const deadline = Date.now() + 5_000;
+      let recovered: { pid: number } | undefined;
+      let lastError: unknown;
+      while (Date.now() < deadline && !recovered) {
+        try {
+          recovered = syncClient.prepare("SELECT pg_backend_pid() AS pid").get<{ pid: number }>();
+        } catch (error) {
+          lastError = error;
+          await new Promise<void>((resolve) => setTimeout(resolve, 50));
+        }
+      }
+      assert.ok(recovered, lastError instanceof Error ? lastError.message : "sync worker did not reconnect");
+      assert.notEqual(recovered.pid, first!.pid);
+    } finally {
+      syncClient.close();
+      await adminPool.end();
+    }
+  },
+);
+
+test(
+  "real Postgres sync worker contains a checked-out pinned-session termination and later reconnects",
+  { skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane" },
+  () => {
+    assert.ok(connectionString);
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+    const client = new PostgresSyncDatabaseClient({
+      connectionString,
+      database: "goatcitadel_test",
+      applicationName: `checked-out-reconnect-proof-${suffix}`,
+      pool: { max: 1, connectionTimeoutMs: 2_000 },
+    });
+    const terminator = new PostgresSyncDatabaseClient({
+      connectionString,
+      database: "goatcitadel_test",
+      applicationName: `checked-out-reconnect-terminator-${suffix}`,
+      pool: { max: 1, connectionTimeoutMs: 2_000 },
+    });
+    try {
+      let checkedOutPid = 0;
+      client.withPinnedSession(() => {
+        checkedOutPid = client.prepare("SELECT pg_backend_pid() AS pid").get<{ pid: number }>()?.pid ?? 0;
+        assert.ok(checkedOutPid > 0);
+        const terminated = terminator
+          .prepare("SELECT pg_terminate_backend(?) AS terminated")
+          .get<{ terminated: boolean }>(checkedOutPid);
+        assert.equal(terminated?.terminated, true);
+
+        // Let the checked-out client's worker receive the socket error while
+        // the host still owns the pinned session and no query is in flight.
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)), 0, 0, 100);
+        assert.throws(
+          () => client.prepare("SELECT true AS must_not_replay").get(),
+          /terminating connection|connection terminated|57P01/i,
+        );
+      });
+
+      const recovered = client.prepare("SELECT pg_backend_pid() AS pid").get<{ pid: number }>();
+      assert.equal(typeof recovered?.pid, "number");
+      assert.notEqual(recovered!.pid, checkedOutPid);
+    } finally {
+      client.close();
+      terminator.close();
+    }
+  },
+);
+
+test(
   "real Postgres canonical usage ownership reads hold deletion fences until commit",
   { skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane" },
   async () => {

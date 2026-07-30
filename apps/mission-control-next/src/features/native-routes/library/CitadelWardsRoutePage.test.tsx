@@ -170,7 +170,7 @@ describe("CitadelWardsRoutePage", () => {
     expect(treeString(renderer!)).toContain("Delete this Ward?");
     await act(async () => {
       const confirmButtons = renderer!.root.findAll(
-        (node) => node.type === "button" && instanceText(node).includes("Delete Ward"),
+        (node) => node.type === "button" && instanceText(node).includes("Confirm delete Ward"),
       );
       confirmButtons.at(-1)?.props.onClick();
       await Promise.resolve();

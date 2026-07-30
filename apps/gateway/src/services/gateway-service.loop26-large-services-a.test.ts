@@ -567,6 +567,11 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
   });
 
   it("falls back to durable turn state when a resume cursor belongs to another turn", async () => {
+    const awaitTerminalChatAdmissionRelease = vi.fn(async (input: { runId: string }) => ({
+      recoveryOutcome: "already_released" as const,
+      durableRunId: input.runId,
+      durableRunStatus: "completed" as const,
+    }));
     const trace = {
       turnId: "turn-1",
       sessionId: "session-1",
@@ -587,7 +592,9 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
     };
     const gateway = createGatewayHarness({
       createHydratedChatTurnTrace: vi.fn((_turnId: string, input: unknown) => input),
+      durableRunService: { awaitTerminalChatAdmissionRelease },
       lastChatStreamPurgeAt: Date.now(),
+      recordDevDiagnostic: vi.fn(),
       storage: {
         chatMessages: {
           get: vi.fn(() => ({
@@ -627,6 +634,12 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
       expect.objectContaining({ type: "done", turnId: "turn-1", messageId: "assistant-1", runId: "run-1" }),
     ]);
     expect(gateway.storage.chatStreamEvents.listByTurn).not.toHaveBeenCalled();
+    expect(awaitTerminalChatAdmissionRelease).toHaveBeenCalledWith({
+      runId: "run-1",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      timeoutMs: 10_000,
+    });
   });
 
   it("detects durable live-tail state from stream rows and trace fallback", () => {

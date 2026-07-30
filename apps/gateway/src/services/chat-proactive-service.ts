@@ -39,6 +39,7 @@ import type {
 } from "@goatcitadel/contracts";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import { buildAutonomousTurnContext } from "./gateway/autonomous-turn-policy.js";
+import { trackBackgroundTask } from "./background-scheduler.js";
 import { isWithinActiveHours } from "./gateway/commitment-sweep-service.js";
 import {
   type DeNovoPlanContext,
@@ -406,8 +407,7 @@ export class ChatProactiveService {
           message: (error as Error).message,
         });
       });
-      this.callbacks.backgroundTasks.add(task);
-      task.finally(() => this.callbacks.backgroundTasks.delete(task));
+      trackBackgroundTask(this.callbacks.backgroundTasks, task);
     }, PROACTIVE_SCHEDULER_INTERVAL_MS);
     // Don't let the scheduler timer keep the process/test-runner alive in paths that
     // don't call stopScheduler() (matches the shared background-scheduler helper).

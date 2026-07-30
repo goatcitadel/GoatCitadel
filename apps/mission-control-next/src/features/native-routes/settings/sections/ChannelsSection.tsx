@@ -355,6 +355,7 @@ export function ChannelsSection(_props: SettingsSectionProps) {
                 </NativeButton>
               </SettingsButtonRow>
               <SettingsActionList
+                ariaLabel="Channel setup definitions"
                 items={(data.definitions ?? []).map((item) => ({
                   label: item.catalog.label,
                   description: item.catalog.description,
@@ -470,6 +471,7 @@ export function ChannelsSection(_props: SettingsSectionProps) {
                 </SettingsButtonRow>
                 {selectedDefinition ? (
                   <SettingsActionList
+                    ariaLabel="Channel setup field guidance"
                     items={collectDefinitionFieldHints(selectedDefinition).map((item) => ({
                       label: item.label,
                       description: item.explanation,

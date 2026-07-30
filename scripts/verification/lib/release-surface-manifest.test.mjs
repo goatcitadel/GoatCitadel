@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  NEXT_DIRECT_COMPATIBILITY_MANIFEST,
   NEXT_LEGACY_REDIRECT_MANIFEST,
   NEXT_RELEASE_SURFACE_MANIFEST,
   RELEASE_SURFACE_VARIANTS,
+  resolveDirectCompatibilityManifest,
 } from "./release-surface-manifest.mjs";
 
 test("desktop-narrow visual proof renders inside the less-than-1180 compact boundary", () => {
@@ -48,6 +50,7 @@ test("Chat owns threaded Working Context while non-Chat routes retain the shell 
 });
 
 test("legacy redirects landing on Chat never request the generic Route details inspector", () => {
+  assert.equal(NEXT_LEGACY_REDIRECT_MANIFEST.length, 20, "legacy query-input count must remain independently frozen");
   const chatRedirects = NEXT_LEGACY_REDIRECT_MANIFEST.filter((route) => route.expectedPath === "/chat");
   assert.deepEqual(chatRedirects.map((route) => route.slug).sort(), [
     "legacy-space-code",
@@ -66,4 +69,24 @@ test("legacy redirects landing on Chat never request the generic Route details i
   for (const route of nonChatRedirects) {
     assert.equal(route.interaction, "open-inspector", `${route.slug} should exercise Route details`);
   }
+});
+
+test("direct compatibility paths remain separate from the legacy query-input manifest", () => {
+  assert.deepEqual(
+    NEXT_DIRECT_COMPATIBILITY_MANIFEST.map(({ slug, href, expectedPath }) => ({ slug, href, expectedPath })),
+    [
+      { slug: "direct-cowork", href: "/cowork", expectedPath: "/chat" },
+      { slug: "direct-code", href: "/code", expectedPath: "/chat" },
+      {
+        slug: "direct-settings-safety",
+        href: "/settings/safety",
+        expectedPath: "/settings/permissions",
+      },
+    ],
+  );
+  assert.equal(NEXT_DIRECT_COMPATIBILITY_MANIFEST.length, 3);
+  assert.ok(NEXT_LEGACY_REDIRECT_MANIFEST.every((route) => route.href.includes("?")));
+  assert.ok(NEXT_DIRECT_COMPATIBILITY_MANIFEST.every((route) => !route.href.includes("?")));
+  assert.equal(resolveDirectCompatibilityManifest("@goatcitadel/mission-control-next").length, 3);
+  assert.deepEqual(resolveDirectCompatibilityManifest("@goatcitadel/mission-control"), []);
 });

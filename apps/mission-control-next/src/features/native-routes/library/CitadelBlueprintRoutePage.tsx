@@ -60,6 +60,7 @@ export function CitadelBlueprintRoutePage({
   });
   const [importText, setImportText] = useState("");
   const [importState, setImportState] = useState<ImportState>(INITIAL_IMPORT);
+  const [exportNotice, setExportNotice] = useState<string | null>(null);
   const exportProofItems = buildBlueprintProofItems(exportState.json, activeCitadelId);
 
   useEffect(() => {
@@ -128,6 +129,22 @@ export function CitadelBlueprintRoutePage({
 
   const canApply = importState.validation?.ok === true && !importState.busy;
 
+  const loadExportForImport = useCallback(() => {
+    if (!exportState.json) {
+      return;
+    }
+    setImportText(exportState.json);
+    setImportState(INITIAL_IMPORT);
+  }, [exportState.json]);
+
+  const downloadExport = useCallback(() => {
+    if (!exportState.json) {
+      return;
+    }
+    downloadBlueprint(exportState.json, activeCitadelId);
+    setExportNotice("Blueprint downloaded as a secret-free JSON file.");
+  }, [activeCitadelId, exportState.json]);
+
   return (
     <NativePageFrame
       icon={Download}
@@ -143,6 +160,17 @@ export function CitadelBlueprintRoutePage({
           {exportState.staged && exportState.json ? (
             <>
               <NativeList items={exportProofItems} emptyLabel="No export proof available." density="compact" />
+              <div className="mc-next-blueprint-actions">
+                <NativeButton variant="default" onClick={downloadExport}>
+                  <Download size={16} />
+                  Download blueprint
+                </NativeButton>
+                <NativeButton variant="outline" onClick={loadExportForImport}>
+                  <Upload size={16} />
+                  Load export for import
+                </NativeButton>
+              </div>
+              {exportNotice ? <NoticeBanner tone="success" message={exportNotice} /> : null}
               <pre className="mc-next-blueprint-json" aria-label="Exported Blueprint">
                 {exportState.json}
               </pre>
@@ -207,6 +235,28 @@ export function CitadelBlueprintRoutePage({
       </NativeGrid>
     </NativePageFrame>
   );
+}
+
+export function downloadBlueprint(exportedJson: string, citadelId: string): void {
+  if (typeof document === "undefined" || typeof URL === "undefined" || typeof URL.createObjectURL !== "function") {
+    throw new Error("Browser downloads are unavailable in this environment.");
+  }
+  const objectUrl = URL.createObjectURL(new Blob([exportedJson], { type: "application/json;charset=utf-8" }));
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = `${sanitizeBlueprintFilename(citadelId)}-blueprint.json`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  globalThis.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+}
+
+function sanitizeBlueprintFilename(value: string): string {
+  const normalized = value
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/gu, "-")
+    .replace(/^-+|-+$/gu, "");
+  return normalized.slice(0, 80) || "citadel";
 }
 
 export function buildBlueprintProofItems(

@@ -41,6 +41,7 @@ export function LibraryCapabilitiesSection({ route, navigate }: NativeRoutePages
     return {
       issues: nativeLoadIssues([inspectable, callable]),
       capabilities: merged,
+      inspectableCount: inspectable.data.items.length,
       callableCount: callable.data.items.length,
     };
   }, []);
@@ -80,6 +81,7 @@ export function LibraryCapabilitiesSection({ route, navigate }: NativeRoutePages
           subtitle="Plain-language visibility into the skills, tools, providers, MCP entries, and generated capabilities GoatCitadel can inspect or use when callable."
           stats={[
             { label: "Total", value: String(data?.capabilities.length ?? 0) },
+            { label: "Inspectable", value: String(data?.inspectableCount ?? 0) },
             { label: "Callable", value: String(data?.callableCount ?? 0) },
             { label: "Needs attention", value: String(statusCounts.degraded + statusCounts.unavailable) },
           ]}

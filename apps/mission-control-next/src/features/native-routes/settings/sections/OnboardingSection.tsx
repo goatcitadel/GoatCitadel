@@ -231,6 +231,7 @@ export function OnboardingSection({ route, navigate, setActiveWorkspaceId }: Set
                   }))}
                 />
                 <SettingsActionList
+                  ariaLabel="Setup readiness checks"
                   items={(data.setupReadiness.items ?? []).map((item) => ({
                     id: item.id,
                     label: item.label,
@@ -271,6 +272,7 @@ export function OnboardingSection({ route, navigate, setActiveWorkspaceId }: Set
               />
               {data.firstRunChecklist?.length ? (
                 <SettingsActionList
+                  ariaLabel="First-run checklist"
                   items={data.firstRunChecklist.map((item) => ({
                     id: item.id,
                     label: item.label,
@@ -283,6 +285,7 @@ export function OnboardingSection({ route, navigate, setActiveWorkspaceId }: Set
                 />
               ) : null}
               <SettingsActionList
+                ariaLabel="First-run settings routes"
                 items={[
                   {
                     label: "Configure providers",
@@ -512,6 +515,7 @@ function DemoStartPanel({
         ]}
       />
       <SettingsActionList
+        ariaLabel="Starter prompt samples"
         items={promptPreview.map((prompt) => ({
           id: `${prompt.surface}-${prompt.title}`,
           label: prompt.title,
@@ -575,6 +579,7 @@ function FirstOutcomePathPanel({
         }))}
       />
       <SettingsActionList
+        ariaLabel="First trusted outcome routes"
         items={items.map((item) => ({
           id: item.id,
           label: item.label,
@@ -621,6 +626,7 @@ function ProviderSmokeEvidencePanel({
         }))}
       />
       <SettingsActionList
+        ariaLabel="Provider smoke evidence"
         items={[
           {
             id: "provider-smoke-settings",
@@ -673,6 +679,7 @@ function SetupCenterPanel({
     >
       <SettingsWizardSteps steps={items.map(({ label, description, state }) => ({ label, description, state }))} />
       <SettingsActionList
+        ariaLabel="Setup Center routes"
         items={[
           {
             label: "Provider connection checks",
@@ -725,6 +732,7 @@ function EcosystemProofLanePanel({
       ]}
     >
       <SettingsActionList
+        ariaLabel="Ecosystem proof routes"
         items={items.map((item) => ({
           ...item,
           onClick: () => navigate({ ...item.route, theme: route.theme }),

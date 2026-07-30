@@ -2,7 +2,28 @@ const INITIAL_ROUTE_NAVIGATION_MAX_ATTEMPTS = 2;
 const INITIAL_ROUTE_READINESS_GRACE_MS = 5_000;
 const INITIAL_ROUTE_TIMEOUT_REASON = "initial_navigation_timeout";
 
-export async function runSurfaceRegressionLane(context, _options = {}, deps) {
+export function buildSurfaceCompatibilityInputs(verificationTarget) {
+  const legacyRedirects = verificationTarget?.redirectRoutes ?? [];
+  const directCompatibility = verificationTarget?.directCompatibilityRoutes ?? [];
+  return [
+    ...legacyRedirects.map((route) => ({
+      ...route,
+      compatibilityKind: "legacy-query-input",
+      scenarioId: `surface-regression.redirect.${route.slug}`,
+      scenarioTitle: `${route.slug} redirects into Mission Control Next`,
+      artifactSlug: `surface-regression-redirect-${route.slug}`,
+    })),
+    ...directCompatibility.map((route) => ({
+      ...route,
+      compatibilityKind: "direct-path",
+      scenarioId: `surface-regression.direct-compatibility.${route.slug}`,
+      scenarioTitle: `${route.slug} direct compatibility path resolves in Mission Control Next`,
+      artifactSlug: `surface-regression-direct-compatibility-${route.slug}`,
+    })),
+  ];
+}
+
+export async function runSurfaceRegressionLane(context, options = {}, deps) {
   const {
     appendTraceArtifact,
     assertBrowserConsoleHealthy,
@@ -32,6 +53,9 @@ export async function runSurfaceRegressionLane(context, _options = {}, deps) {
   const surfaceOperatorToken = "verification-surface-regression-operator-token";
   const stack = await startVerificationStack(context, {
     includeUi: true,
+    processLogPrefix: options.processLogPrefix,
+    gatewayEnvOmit: options.secretEnvKeys,
+    uiEnvOmit: options.secretEnvKeys,
     gatewayEnv: {
       GOATCITADEL_AUTH_MODE: "token",
       GOATCITADEL_AUTH_TOKEN: surfaceOperatorToken,
@@ -87,6 +111,9 @@ export async function runSurfaceRegressionLane(context, _options = {}, deps) {
                 allowInitialColdStartRecovery: routeIndex === 0,
               });
               await waitForVerificationRouteReady(page, route, verificationTarget.packageName);
+              if (verificationTarget.isNext && route.releaseStatus === "experimental") {
+                await assertExperimentalSurfaceLabel(page, route.slug);
+              }
               await setBrowserCorrelation(page, correlationId, fixture?.sessionId);
               let nativeScrollEvidence = null;
               if (verificationTarget.isNext && route.slug !== "chat" && route.slug !== "library-prompt-packs") {
@@ -113,6 +140,31 @@ export async function runSurfaceRegressionLane(context, _options = {}, deps) {
                 correlationId,
                 logCursor: browserLogCursor,
               });
+              let degradedStateEvidence = null;
+              if (verificationTarget.isNext && route.releaseStatus === "experimental") {
+                const degradedLogCursor = browserLog.mark();
+                degradedStateEvidence = await assertExperimentalSurfaceDegradedState(page, {
+                  gatewayUrl: stack.gatewayUrl,
+                  routeHref,
+                  routeSlug: route.slug,
+                });
+                await setBrowserCorrelation(page, correlationId, fixture?.sessionId);
+                const degradedLog = browserLog.getSnapshot(degradedLogCursor);
+                if (degradedLog.pageErrors.length > 0) {
+                  throw new Error(
+                    `experimental route ${route.slug} raised page errors under a deterministic Gateway outage`,
+                  );
+                }
+                const degradedArtifacts = await captureBrowserArtifacts(context, {
+                  slug: `${artifactSlug}-degraded`,
+                  page,
+                  browserLog,
+                  gatewayUrl: stack.gatewayUrl,
+                  correlationId,
+                  logCursor: degradedLogCursor,
+                });
+                artifacts = mergeArtifactSets(artifacts, degradedArtifacts);
+              }
               return {
                 status: "passed",
                 metrics: {
@@ -122,6 +174,7 @@ export async function runSurfaceRegressionLane(context, _options = {}, deps) {
                   navigationAttempts: navigationEvidence.attempts,
                   navigationRecoveryReason: navigationEvidence.recoveryReason,
                   navigationRecoveryDisposition: navigationEvidence.recoveryDisposition,
+                  ...(degradedStateEvidence ?? {}),
                   ...(nativeScrollEvidence
                     ? {
                         nativeStageOverflowed: nativeScrollEvidence.overflowed,
@@ -134,7 +187,7 @@ export async function runSurfaceRegressionLane(context, _options = {}, deps) {
               };
             } catch (error) {
               navigationEvidence = navigationEvidenceFromError(error) ?? navigationEvidence;
-              artifacts ??= await captureBrowserArtifacts(context, {
+              const failureArtifacts = await captureBrowserArtifacts(context, {
                 slug: `${artifactSlug}-failure`,
                 page,
                 browserLog,
@@ -142,6 +195,7 @@ export async function runSurfaceRegressionLane(context, _options = {}, deps) {
                 correlationId,
                 logCursor: browserLogCursor,
               });
+              artifacts = mergeArtifactSets(artifacts, failureArtifacts);
               const traceArtifact = await trace.retain().catch(() => null);
               return {
                 status: "failed",
@@ -161,7 +215,7 @@ export async function runSurfaceRegressionLane(context, _options = {}, deps) {
         );
       }
 
-      for (const redirect of verificationTarget.redirectRoutes) {
+      for (const redirect of buildSurfaceCompatibilityInputs(verificationTarget)) {
         const targetHref = redirect.targetHref ?? redirect.expectedPath;
         const route = verificationTarget.routeByHref.get(targetHref);
         if (!route) {
@@ -170,14 +224,14 @@ export async function runSurfaceRegressionLane(context, _options = {}, deps) {
         await runScenario(
           context,
           {
-            id: `surface-regression.redirect.${redirect.slug}`,
+            id: redirect.scenarioId,
             lane: "surface-regression",
-            title: `${redirect.slug} redirects into Mission Control Next`,
+            title: redirect.scenarioTitle,
             subsystem: "mission-control",
           },
           async ({ correlationId }) => {
             const browserLogCursor = browserLog.mark();
-            const artifactSlug = `surface-regression-redirect-${redirect.slug}`;
+            const artifactSlug = redirect.artifactSlug;
             const trace = await startBrowserTrace(context, { page, slug: artifactSlug });
             let artifacts;
             try {
@@ -210,6 +264,7 @@ export async function runSurfaceRegressionLane(context, _options = {}, deps) {
                   href: redirect.href,
                   expectedPath: redirect.expectedPath,
                   targetHref,
+                  compatibilityKind: redirect.compatibilityKind,
                   consoleErrors: browserSanity.consoleErrors.length,
                   pageErrors: browserSanity.pageErrors.length,
                 },
@@ -228,7 +283,12 @@ export async function runSurfaceRegressionLane(context, _options = {}, deps) {
               return {
                 status: "failed",
                 error: formatBrowserFailure(error),
-                metrics: { href: redirect.href, expectedPath: redirect.expectedPath, targetHref },
+                metrics: {
+                  href: redirect.href,
+                  expectedPath: redirect.expectedPath,
+                  targetHref,
+                  compatibilityKind: redirect.compatibilityKind,
+                },
                 artifacts: appendTraceArtifact(artifacts, traceArtifact),
               };
             } finally {
@@ -256,6 +316,132 @@ export async function runSurfaceRegressionLane(context, _options = {}, deps) {
   } finally {
     await stopVerificationStack(stack);
   }
+}
+
+export async function assertExperimentalSurfaceLabel(page, routeSlug) {
+  const badge = page.locator('main .mc-next-experimental-badge[data-release-status="experimental"][role="note"]');
+  await badge.waitFor({ state: "visible", timeout: 60_000 });
+  if ((await badge.count()) !== 1 || !(await badge.isVisible())) {
+    throw new Error(`experimental route ${routeSlug} has no unique visible on-surface Experimental badge`);
+  }
+  const [label, text] = await Promise.all([badge.getAttribute("aria-label"), badge.innerText()]);
+  if (label !== "Experimental" || text.trim().toLocaleLowerCase() !== "experimental") {
+    throw new Error(`experimental route ${routeSlug} has a malformed on-surface Experimental badge`);
+  }
+}
+
+export async function assertExperimentalSurfaceDegradedState(page, input) {
+  const apiPattern = `${input.gatewayUrl}/api/v1/**`;
+  const targetPath = experimentalDegradedApiPath(input.routeSlug);
+  let degradedApiRequests = 0;
+  const rejectGatewayRequest = async (route) => {
+    if (!new URL(route.request().url()).pathname.startsWith(targetPath)) {
+      await route.continue();
+      return;
+    }
+    degradedApiRequests += 1;
+    await route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({ error: { code: "USABILITY_FIXTURE_UNAVAILABLE", message: "Deterministic outage" } }),
+    });
+  };
+  await page.route(apiPattern, rejectGatewayRequest);
+  try {
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await assertExperimentalSurfaceLabel(page, input.routeSlug);
+    const main = page.locator("main");
+    if (!(await main.isVisible())) throw new Error(`experimental route ${input.routeSlug} lost its main surface`);
+    // Route loaders also use role=status. Waiting on the first live region can
+    // therefore certify the transient "Loading..." projection before the
+    // deterministic 503 reaches the route owner. Only a non-loader live region
+    // can satisfy the degraded-state contract.
+    const degradedStatus = main
+      .locator('[role="alert"]:not(.mc-next-blocks-loader), [role="status"]:not(.mc-next-blocks-loader)')
+      .first();
+    await degradedStatus.waitFor({ state: "visible", timeout: 15_000 });
+    const degradedMessage = (await degradedStatus.innerText()).trim();
+    if (!degradedMessage) {
+      throw new Error(`experimental route ${input.routeSlug} exposed no operator-readable outage message`);
+    }
+    const retry = main.getByRole("button", { name: /^retry$/iu });
+    if ((await retry.count()) !== 1 || !(await retry.isVisible()) || !(await retry.isEnabled())) {
+      throw new Error(`experimental route ${input.routeSlug} exposed no truthful enabled Retry action`);
+    }
+    const enabledMutations = await collectEnabledExperimentalMutations(main, input.routeSlug);
+    if (enabledMutations.length > 0) {
+      throw new Error(
+        `experimental route ${input.routeSlug} left mutation controls enabled during outage: ${enabledMutations.join(", ")}`,
+      );
+    }
+    const mainText = (await main.innerText()).trim();
+    if (mainText.length === 0) throw new Error(`experimental route ${input.routeSlug} rendered an empty main surface`);
+    if ((await page.locator("vite-error-overlay").count()) > 0) {
+      throw new Error(`experimental route ${input.routeSlug} rendered the Vite error overlay`);
+    }
+    if (/\b(?:TypeError|ReferenceError|Cannot read properties of|at [A-Za-z0-9_$]+ \()\b/u.test(mainText)) {
+      throw new Error(`experimental route ${input.routeSlug} exposed an implementation error under degradation`);
+    }
+    if (degradedApiRequests === 0) {
+      throw new Error(`experimental route ${input.routeSlug} did not exercise the deterministic Gateway outage`);
+    }
+    const currentUrl = new URL(page.url());
+    const expectedUrl = new URL(input.routeHref, currentUrl.origin);
+    if (currentUrl.pathname !== expectedUrl.pathname) {
+      throw new Error(
+        `experimental route ${input.routeSlug} escaped its route under degradation (${currentUrl.pathname})`,
+      );
+    }
+    return {
+      degradedApiRequests,
+      degradedState: "operator_visible_error",
+      degradedMessage,
+      degradedRole: await degradedStatus.getAttribute("role"),
+      retryVisible: true,
+      enabledMutations,
+    };
+  } finally {
+    await page.unroute(apiPattern, rejectGatewayRequest);
+  }
+}
+
+async function collectEnabledExperimentalMutations(main, routeSlug) {
+  const patternsBySlug = {
+    "library-journey": [],
+    "library-curator": [/run dry-run/iu, /^archive\b/iu, /^prune\b/iu],
+    "ops-improvement": [/approve/iu, /reject/iu, /apply/iu, /activate/iu],
+    "ops-kanban": [/^unblock$/iu, /^retry selected/iu, /^close$/iu],
+    "settings-personalities": [/save/iu, /delete/iu, /reset/iu, /make default/iu],
+    // Staging a bundled local review pack does not depend on the failed add-on
+    // catalog/installed-state reads. Keep that independent, reversible action
+    // available while blocking mutations that require the unavailable owner.
+    "settings-addons": [/install/iu, /update/iu, /disable/iu, /launch/iu, /^stop$/iu, /uninstall/iu],
+  };
+  const patterns = patternsBySlug[routeSlug];
+  if (!patterns) throw new Error(`no degraded mutation policy is registered for ${routeSlug}`);
+  if (patterns.length === 0) return [];
+  const candidates = await main.getByRole("button").all();
+  const enabled = [];
+  for (const candidate of candidates) {
+    if (!(await candidate.isVisible()) || !(await candidate.isEnabled())) continue;
+    const name = (await candidate.innerText()).trim().replace(/\s+/gu, " ");
+    if (name && patterns.some((pattern) => pattern.test(name))) enabled.push(name);
+  }
+  return enabled;
+}
+
+function experimentalDegradedApiPath(routeSlug) {
+  const targetBySlug = {
+    "library-journey": "/api/v1/journey/",
+    "library-curator": "/api/v1/curator/",
+    "ops-improvement": "/api/v1/observe/timeline",
+    "ops-kanban": "/api/v1/agentic/runs",
+    "settings-personalities": "/api/v1/personalities",
+    "settings-addons": "/api/v1/addons/",
+  };
+  const target = targetBySlug[routeSlug];
+  if (!target) throw new Error(`no deterministic degraded API target is registered for ${routeSlug}`);
+  return target;
 }
 
 export async function navigateSurfaceRoute(page, url, options = {}) {
@@ -335,4 +521,12 @@ function isNavigationTimeoutError(error) {
 
 function formatBrowserFailure(error) {
   return error instanceof Error ? (error.stack ?? error.message) : String(error);
+}
+
+function mergeArtifactSets(left, right) {
+  const merged = {};
+  for (const key of ["diagnostics", "screenshots", "traces", "logs", "perf", "playwright"]) {
+    merged[key] = [...new Set([...(left?.[key] ?? []), ...(right?.[key] ?? [])])];
+  }
+  return merged;
 }
