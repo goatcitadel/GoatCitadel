@@ -23,6 +23,7 @@ import {
   resolveNotificationArchiveFixture,
   resolveSelectOption,
   resolveThreadDurableCorrelation,
+  resolveUniqueEditableLocatorCandidate,
   startSettingsBrowserFixtureServer,
   USABILITY_BROWSER_ACTION_GATEWAY_ENV,
   USABILITY_LOCAL_MCP_POLICY,
@@ -45,6 +46,49 @@ import {
   validateVerifiedCodeModeNamedProof,
   withOperatorAuth,
 } from "./usability-browser-action-lane.mjs";
+
+function editableCandidate(elements) {
+  return {
+    async count() {
+      return elements.length;
+    },
+    nth(index) {
+      const element = elements[index];
+      return {
+        async evaluate(predicate) {
+          const node = {
+            tagName: element.tagName ?? "INPUT",
+            getAttribute(name) {
+              if (name === "role") return element.role ?? null;
+              if (name === "contenteditable") return element.contenteditable ?? null;
+              return null;
+            },
+          };
+          return predicate(node);
+        },
+        async isVisible() {
+          return element.visible !== false;
+        },
+      };
+    },
+  };
+}
+
+test("editable locator candidates fail closed instead of choosing the first fuzzy match", async () => {
+  const unique = await resolveUniqueEditableLocatorCandidate(
+    editableCandidate([{ tagName: "INPUT" }, { tagName: "DIV" }, { tagName: "TEXTAREA", visible: false }]),
+    "New workspace name",
+  );
+  assert.ok(unique);
+  assert.equal(
+    await resolveUniqueEditableLocatorCandidate(editableCandidate([{ tagName: "DIV" }]), "Missing field"),
+    undefined,
+  );
+  await assert.rejects(
+    resolveUniqueEditableLocatorCandidate(editableCandidate([{ tagName: "INPUT" }, { tagName: "INPUT" }]), "Name"),
+    /ambiguous editable control: Name matched 2 visible editable controls/u,
+  );
+});
 
 test("browser action registry fails closed without terminal readback or a verified download", () => {
   for (const step of Object.values(BROWSER_ACTION_STEP_REGISTRY)) {

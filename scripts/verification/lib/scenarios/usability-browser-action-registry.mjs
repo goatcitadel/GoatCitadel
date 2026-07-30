@@ -248,7 +248,7 @@ const STEPS = [
     "route.settings-workspaces.workspace-create-select-archive-restore",
     "settings-workspaces",
     [
-      fill("Name", "Usability browser workspace"),
+      fill("New workspace name", "Usability browser workspace"),
       click("Create workspace"),
       clickPattern("Make active workspace Usability browser workspace"),
       clickPattern("Archive workspace Usability browser workspace"),

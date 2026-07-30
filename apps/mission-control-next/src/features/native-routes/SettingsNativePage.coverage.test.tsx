@@ -1792,6 +1792,7 @@ describe("SettingsNativePage broad native sections", () => {
     expect(workspacesPage.root.findByProps({ "aria-label": "Archived workspaces" })).toBeTruthy();
     expect(workspacesPage.root.findByProps({ "aria-label": "Make active workspace Default" })).toBeTruthy();
     expect(workspacesPage.root.findByProps({ "aria-label": "Archive workspace Default" })).toBeTruthy();
+    expect(workspacesPage.root.findByProps({ "aria-label": "New workspace name" })).toBeTruthy();
     const initialWorkspaceInputs = workspacesPage.root.findAllByType("input");
     const initialWorkspaceTextareas = workspacesPage.root.findAllByType("textarea");
     await change(initialWorkspaceInputs[8]!, "Default edited");
@@ -1830,7 +1831,7 @@ describe("SettingsNativePage broad native sections", () => {
     expect(settingsMocks.restoreWorkspace).toHaveBeenCalledWith("archive-1", 13);
     const workspaceInputs = workspacesPage.root.findAllByType("input");
     const workspaceTextareas = workspacesPage.root.findAllByType("textarea");
-    await change(workspaceInputs[6]!, "Created workspace");
+    await change(workspacesPage.root.findByProps({ "aria-label": "New workspace name" }), "Created workspace");
     await change(workspaceInputs[7]!, "created-workspace");
     await change(workspaceTextareas[0]!, "Created workspace description");
     await click(findButton(workspacesPage.root, "Create workspace"));

@@ -472,7 +472,7 @@ test("Chat and Projects Chromium contracts retain exact fixture sessions and com
   assert.deepEqual(conflict.at(-1), { kind: "api", probe: "project-revision-persisted" });
 
   assert.deepEqual(operations("route.settings-workspaces.workspace-create-select-archive-restore"), [
-    { kind: "fill", label: "Name", value: "Usability browser workspace" },
+    { kind: "fill", label: "New workspace name", value: "Usability browser workspace" },
     { kind: "click", name: "Create workspace", exact: true },
     { kind: "click-pattern", namePattern: "Make active workspace Usability browser workspace" },
     { kind: "click-pattern", namePattern: "Archive workspace Usability browser workspace" },

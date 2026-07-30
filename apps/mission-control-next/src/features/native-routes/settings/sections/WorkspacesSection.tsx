@@ -604,6 +604,7 @@ export function WorkspacesSection({
             <SettingsFieldGrid>
               <SettingsField label="Name">
                 <input
+                  aria-label="New workspace name"
                   className="mc-next-settings-input"
                   value={createForm.name}
                   onChange={(event) => setCreateForm((current) => ({ ...current, name: event.target.value }))}

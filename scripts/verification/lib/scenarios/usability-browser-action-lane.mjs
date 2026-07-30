@@ -3366,29 +3366,39 @@ async function editableLocator(page, label) {
   const deadline = Date.now() + ACTION_TIMEOUT_MS;
   while (Date.now() < deadline) {
     for (const candidate of candidates) {
-      const count = await candidate.count();
-      for (let index = 0; index < count; index += 1) {
-        const locator = candidate.nth(index);
-        const editable = await locator
-          .evaluate((element) => {
-            const tagName = element.tagName.toLowerCase();
-            const role = element.getAttribute("role");
-            return (
-              tagName === "input" ||
-              tagName === "textarea" ||
-              tagName === "select" ||
-              element.getAttribute("contenteditable") === "true" ||
-              role === "textbox" ||
-              role === "combobox"
-            );
-          })
-          .catch(() => false);
-        if (editable && (await locator.isVisible().catch(() => false))) return locator;
-      }
+      const locator = await resolveUniqueEditableLocatorCandidate(candidate, label);
+      if (locator) return locator;
     }
     await page.waitForTimeout(50);
   }
   throw new Error(`editable control not found: ${label}`);
+}
+
+export async function resolveUniqueEditableLocatorCandidate(candidate, label) {
+  const visibleEditable = [];
+  const count = await candidate.count();
+  for (let index = 0; index < count; index += 1) {
+    const locator = candidate.nth(index);
+    const editable = await locator
+      .evaluate((element) => {
+        const tagName = element.tagName.toLowerCase();
+        const role = element.getAttribute("role");
+        return (
+          tagName === "input" ||
+          tagName === "textarea" ||
+          tagName === "select" ||
+          element.getAttribute("contenteditable") === "true" ||
+          role === "textbox" ||
+          role === "combobox"
+        );
+      })
+      .catch(() => false);
+    if (editable && (await locator.isVisible().catch(() => false))) visibleEditable.push(locator);
+  }
+  if (visibleEditable.length > 1) {
+    throw new Error(`ambiguous editable control: ${label} matched ${visibleEditable.length} visible editable controls`);
+  }
+  return visibleEditable[0];
 }
 
 async function firstVisibleLocator(page, locator, errorMessage, timeoutMs = ACTION_TIMEOUT_MS) {
