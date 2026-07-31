@@ -71,7 +71,10 @@ describe("RuntimeReleaseTrustService", () => {
     );
     const service = createService(fixture, port);
     const refresh = service.requestRefresh({ reason: "startup" });
-    await vi.waitFor(() => expect(fetchOnlineTrustedRoot).toHaveBeenCalledTimes(1));
+    // Reaching the online fetch is this case's precondition, not its assertion. A
+    // loaded host needs more than vi.waitFor's one-second default to schedule the
+    // background task; the close/refresh deadlines asserted below stay untouched.
+    await vi.waitFor(() => expect(fetchOnlineTrustedRoot).toHaveBeenCalledTimes(1), { timeout: 15_000 });
 
     await expect(settlesWithin(service.close(), 500)).resolves.toBeUndefined();
     await expect(settlesWithin(refresh, 500)).resolves.toBeUndefined();
