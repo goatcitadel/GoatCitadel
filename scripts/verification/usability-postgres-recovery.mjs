@@ -146,7 +146,7 @@ export async function runUsabilityPostgresRecoveryVerification(options = {}, dep
     await completeFinalIntegrity(context, sourceState, { repoRoot: sourceRepoRoot });
   } catch (error) {
     const safePrimaryError = sanitizeVerificationError(error, connection.sensitiveValues);
-    manifest = await finalizeContext(context, "failed");
+    await finalizeContext(context, "failed");
     try {
       await completeFinalIntegrity(context, sourceState, { repoRoot: sourceRepoRoot });
     } catch (integrityError) {
