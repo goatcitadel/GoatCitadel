@@ -62,16 +62,23 @@ vi.mock("@goatcitadel/storage", () => ({
 }));
 
 vi.mock("./postgres-runtime-config.js", () => ({
+  AUTO_NATIVE_BIN_DIR: "auto",
   isBundledPostgresMode: mocks.isBundledPostgresMode,
   resolveGatewayPostgresConnectionOptions: mocks.resolveGatewayPostgresConnectionOptions,
 }));
 
-import { buildBundledDockerContainerName, ensureBundledPostgresRuntime } from "./bundled-postgres-runtime.js";
+import {
+  __bundledPostgresRuntimeInternals,
+  buildBundledDockerContainerName,
+  ensureBundledPostgresRuntime,
+} from "./bundled-postgres-runtime.js";
 import { NonRetryableStartupError } from "./startup-errors.js";
 
 const tempDirs: string[] = [];
+let savedPathEnv: string | undefined;
 
 beforeEach(() => {
+  savedPathEnv = process.env.PATH;
   mocks.clients.length = 0;
   mocks.closedClients = 0;
   mocks.dbScripts.length = 0;
@@ -117,6 +124,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  process.env.PATH = savedPathEnv;
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -313,11 +321,95 @@ describe("bundled postgres runtime lifecycle", () => {
       return "";
     });
 
-    await expect(ensureBundledPostgresRuntime(buildConfig(rootDir))).rejects.toThrow(
-      "no managed runtime backend is available",
+    const action = ensureBundledPostgresRuntime(buildConfig(rootDir));
+
+    await expect(action).rejects.toThrow("no managed runtime backend is available");
+    // Neither backend can appear without operator action, so the dev supervisor
+    // must stop instead of burning its restart budget on a retry loop.
+    await expect(action).rejects.toBeInstanceOf(NonRetryableStartupError);
+    // Docker is the default backend, not a prerequisite. Operators without it
+    // must be told about every escape hatch, not just binDir.
+    await expect(action).rejects.toThrow("bundledPostgres.binDir");
+    await expect(action).rejects.toThrow('postgres.mode to "managed"');
+    await expect(action).rejects.toThrow('driver to "sqlite"');
+  });
+
+  it("auto-discovers a local PostgreSQL install for a fresh data directory instead of using Docker", async () => {
+    const rootDir = await makeTempDir();
+    await putFakePostgresInstallOnPath();
+    mocks.dbScripts.push(
+      { queryOne: new Error("ECONNREFUSED") },
+      { queryOne: { data_directory: path.resolve(rootDir, "data", "postgres") } },
+      { queryOne: { present: 1 } },
+    );
+
+    const handle = await ensureBundledPostgresRuntime(buildConfig(rootDir, { binDir: "auto" }));
+
+    expect(handle?.strategy).toBe("native");
+    expect(mocks.execFileSync).not.toHaveBeenCalledWith("docker", expect.arrayContaining(["run"]), expect.anything());
+  });
+
+  it("initialises an auto-discovered cluster with password auth rather than trust", async () => {
+    const rootDir = await makeTempDir();
+    await putFakePostgresInstallOnPath();
+    mocks.dbScripts.push(
+      { queryOne: new Error("ECONNREFUSED") },
+      { queryOne: { data_directory: path.resolve(rootDir, "data", "postgres") } },
+      { queryOne: { present: 1 } },
+    );
+
+    await ensureBundledPostgresRuntime(buildConfig(rootDir, { binDir: "auto" }));
+
+    const initdbArgs = mocks.execFileSync.mock.calls.find(([command]) => String(command).includes("initdb"))?.[1] as
+      | string[]
+      | undefined;
+    expect(initdbArgs).toEqual(expect.arrayContaining(["-A", "scram-sha-256"]));
+    expect(initdbArgs).not.toEqual(expect.arrayContaining(["trust"]));
+    // The generated superuser password must actually be handed to initdb,
+    // otherwise scram-sha-256 leaves the cluster unusable.
+    expect(initdbArgs).toEqual(expect.arrayContaining(["--pwfile"]));
+  });
+
+  it("leaves an already-initialised (Docker-created) cluster to Docker instead of adopting it natively", async () => {
+    const rootDir = await makeTempDir();
+    await putFakePostgresInstallOnPath();
+    // A cluster initialised by postgres:16-alpine cannot be started by a native
+    // host binary, so auto-discovery must stand down and let Docker keep it.
+    const dataDir = path.resolve(rootDir, "data", "postgres");
+    await fs.mkdir(dataDir, { recursive: true });
+    await fs.writeFile(path.join(dataDir, "PG_VERSION"), "16", "utf8");
+    mockHardenedRunningDockerContainer(rootDir);
+    mocks.dbScripts.push(
+      { queryOne: new Error("ECONNREFUSED") },
+      { queryOne: { data_directory: "/var/lib/postgresql/data" } },
+      { queryOne: { present: 1 } },
+    );
+    mocks.dockerStates.push("", "running");
+
+    const handle = await ensureBundledPostgresRuntime(buildConfig(rootDir, { binDir: "auto" }));
+
+    expect(handle?.strategy).toBe("docker");
+    expect(mocks.execFileSync).not.toHaveBeenCalledWith(
+      expect.stringContaining("initdb"),
+      expect.anything(),
+      expect.anything(),
     );
   });
 
+  it("keeps an explicit binDir fail-closed instead of silently falling back to Docker", async () => {
+    const rootDir = await makeTempDir();
+    const binDir = await writeFakePostgresInstall(path.join(await makeTempDir(), "bin"));
+    mocks.dbScripts.push({ queryOne: new Error("ECONNREFUSED") }, { queryOne: new Error("ECONNREFUSED") });
+    mocks.execFileSync.mockImplementation((command: string) => {
+      if (String(command).includes("pg_ctl")) {
+        throw new Error("pg_ctl refused to start");
+      }
+      return "";
+    });
+
+    await expect(ensureBundledPostgresRuntime(buildConfig(rootDir, { binDir }))).rejects.toThrow();
+    expect(mocks.execFileSync).not.toHaveBeenCalledWith("docker", expect.arrayContaining(["run"]), expect.anything());
+  });
   it("accepts native pg_ctl startup failures when the fallback probe reaches the expected data directory", async () => {
     const rootDir = await makeTempDir();
     const binDir = path.join(rootDir, "pg-bin");
@@ -349,7 +441,18 @@ describe("bundled postgres runtime lifecycle", () => {
     expect(handle?.strategy).toBe("native");
     expect(mocks.execFileSync).toHaveBeenCalledWith(
       initdb,
-      ["-D", path.resolve(rootDir, "data", "postgres"), "-U", "postgres", "-A", "trust", "--encoding", "UTF8"],
+      [
+        "-D",
+        path.resolve(rootDir, "data", "postgres"),
+        "-U",
+        "postgres",
+        "-A",
+        "scram-sha-256",
+        "--pwfile",
+        path.resolve(rootDir, "data/secrets/postgres-bundled-password"),
+        "--encoding",
+        "UTF8",
+      ],
       expect.any(Object),
     );
 
@@ -474,10 +577,77 @@ describe("bundled postgres runtime lifecycle", () => {
   });
 });
 
+describe("native postgres discovery", () => {
+  it("derives Windows install roots from the environment", () => {
+    const roots = __bundledPostgresRuntimeInternals.nativePostgresInstallRoots("win32", {
+      ProgramFiles: "C:\\Program Files",
+    });
+
+    expect(roots).toContain(path.join("C:\\Program Files", "PostgreSQL"));
+  });
+
+  it("covers the standard Linux and macOS install locations", () => {
+    expect(__bundledPostgresRuntimeInternals.nativePostgresInstallRoots("linux", {})).toContain("/usr/lib/postgresql");
+    expect(__bundledPostgresRuntimeInternals.nativePostgresInstallRoots("darwin", {})).toContain("/opt/homebrew/opt");
+  });
+
+  it("prefers the highest major version among discovered installs", async () => {
+    const root = await makeTempDir();
+    await writeFakePostgresInstall(path.join(root, "14", "bin"));
+    await writeFakePostgresInstall(path.join(root, "16", "bin"));
+
+    const found = __bundledPostgresRuntimeInternals.highestVersionedNativePostgresCommands([root], process.platform);
+
+    expect(found?.initdb.startsWith(path.join(root, "16"))).toBe(true);
+  });
+
+  it("ignores client-only installs that ship initdb without pg_ctl", async () => {
+    const root = await makeTempDir();
+    const bin = path.join(root, "16", "bin");
+    await fs.mkdir(bin, { recursive: true });
+    await fs.writeFile(path.join(bin, nativeExecutableName("initdb")), "", "utf8");
+
+    expect(
+      __bundledPostgresRuntimeInternals.highestVersionedNativePostgresCommands([root], process.platform),
+    ).toBeUndefined();
+  });
+
+  it("parses the major version from every mainstream install directory name", () => {
+    const { parseNativePostgresMajor } = __bundledPostgresRuntimeInternals;
+
+    expect(parseNativePostgresMajor("16")).toBe(16);
+    expect(parseNativePostgresMajor("pgsql-16")).toBe(16);
+    expect(parseNativePostgresMajor("postgresql@16")).toBe(16);
+    expect(parseNativePostgresMajor("local")).toBe(0);
+  });
+});
+
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "gc-bundled-pg-runtime-"));
   tempDirs.push(dir);
   return dir;
+}
+
+function nativeExecutableName(base: string): string {
+  return process.platform === "win32" ? `${base}.exe` : base;
+}
+
+async function writeFakePostgresInstall(binDir: string): Promise<string> {
+  await fs.mkdir(binDir, { recursive: true });
+  await fs.writeFile(path.join(binDir, nativeExecutableName("initdb")), "", "utf8");
+  await fs.writeFile(path.join(binDir, nativeExecutableName("pg_ctl")), "", "utf8");
+  return binDir;
+}
+
+/**
+ * Replace PATH wholesale with a directory holding a stub install. Discovery
+ * reads the real filesystem, so a PostgreSQL package installed on the host
+ * (or CI image) would otherwise make these assertions non-deterministic.
+ */
+async function putFakePostgresInstallOnPath(): Promise<string> {
+  const binDir = await writeFakePostgresInstall(path.join(await makeTempDir(), "bin"));
+  process.env.PATH = binDir;
+  return binDir;
 }
 
 function mockHardenedRunningDockerContainer(rootDir: string): void {

@@ -23,6 +23,7 @@ import { normalizeFirecrawlApiKeyEnvName } from "@goatcitadel/policy-engine";
 import { ZodError, type ZodType } from "zod";
 import { materializeConfigFilesFromExamples } from "./config-files.js";
 import { syncUnifiedConfig } from "./config-sync-lib.js";
+import { AUTO_NATIVE_BIN_DIR } from "./postgres-runtime-config.js";
 import { isVerboseLoggingEnabled } from "./runtime-ux.js";
 import { recoverLastGoodConfigGeneration } from "./services/config-generation-service.js";
 import { DEFAULT_LLAMACPP_ALIAS } from "./services/llama-cpp-runtime-service.js";
@@ -1293,7 +1294,9 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
         enabled: bundledPostgresInput.enabled ?? true,
         dataDir: bundledPostgresInput.dataDir ?? "./data/postgres",
         port: clampInt(bundledPostgresInput.port, 45_432, 1, 65_535),
-        binDir: bundledPostgresInput.binDir,
+        // Default to auto-discovering a local PostgreSQL install so a stock
+        // machine needs no Docker. Docker stays as the fallback backend.
+        binDir: bundledPostgresInput.binDir ?? AUTO_NATIVE_BIN_DIR,
         autoStart: bundledPostgresInput.autoStart ?? true,
         startTimeoutMs: clampInt(bundledPostgresInput.startTimeoutMs, 90_000, 1_000, 120_000),
       },

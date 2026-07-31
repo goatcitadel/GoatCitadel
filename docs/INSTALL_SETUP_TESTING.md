@@ -288,6 +288,35 @@ docker compose up --build
 
 For Tailnet-style hosts, the shipped frontend defaults already allow `.ts.net`.
 
+### Bundled Postgres backends (Docker is not required)
+
+With `assistant.database.postgres.mode` set to `bundled` (the default), GoatCitadel picks a
+backend in this order:
+
+1. **Native local PostgreSQL — the default.** `assistant.database.bundledPostgres.binDir`
+   defaults to `auto`, which discovers a PostgreSQL server install on `PATH` and then in the
+   standard locations (`C:\Program Files\PostgreSQL\<major>`, `/usr/lib/postgresql/<major>`,
+   `/usr/pgsql-<major>`, Homebrew's `postgresql@<major>`, Postgres.app), preferring the highest
+   major version. Only installs providing **both** `initdb` and `pg_ctl` qualify, so client-only
+   packages are ignored.
+2. **Docker fallback.** Used when no local install is found. Requires a running Docker daemon.
+
+Auto-discovery only adopts a data directory that has not been initialized yet. If
+`data/postgres` already holds a cluster, GoatCitadel leaves it to the backend that created it —
+a cluster written by the Docker image (`postgres:16-alpine`, a Linux cluster) cannot be started
+by a native host binary, so existing installs keep working unchanged after upgrading.
+
+To pin a specific install, set `binDir` to the directory containing `initdb` and `pg_ctl`. A
+pinned `binDir` fails closed: if that install cannot start, startup stops rather than silently
+falling back to Docker. Set `binDir` to an empty string to disable the native backend entirely.
+
+New native clusters are initialized with `scram-sha-256` against the generated superuser
+password in `data/secrets/postgres-bundled-password`, and listen on `127.0.0.1` only.
+
+If neither backend is available, startup fails with a non-retryable error (exit code 78) listing
+every option, and `pnpm dev` stops instead of retrying — no backend can appear without operator
+action.
+
 ### SQLite fallback
 
 SQLite remains supported, but it is now a fallback rather than the default recommendation.

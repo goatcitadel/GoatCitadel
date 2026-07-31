@@ -7,7 +7,20 @@ import { execFileSync } from "node:child_process";
 import { PostgresDatabaseClient } from "@goatcitadel/storage";
 import { isBootTrackerVerbose, setBootCheckpoint } from "./boot-tracker.js";
 import type { GatewayRuntimeConfig } from "./config.js";
-import { isBundledPostgresMode, resolveGatewayPostgresConnectionOptions } from "./postgres-runtime-config.js";
+import {
+  type NativePostgresCommands,
+  discoverNativePostgresCommands,
+  highestVersionedNativePostgresCommands,
+  nativePostgresCommandsFromPathEnv,
+  nativePostgresCommandsInBinDir,
+  nativePostgresInstallRoots,
+  parseNativePostgresMajor,
+} from "./native-postgres-discovery.js";
+import {
+  AUTO_NATIVE_BIN_DIR,
+  isBundledPostgresMode,
+  resolveGatewayPostgresConnectionOptions,
+} from "./postgres-runtime-config.js";
 import { NonRetryableStartupError } from "./startup-errors.js";
 
 export const POSTGRES_IMAGE = "postgres:16-alpine";
@@ -154,9 +167,9 @@ export async function ensureBundledPostgresRuntime(
     if (nativeConfigured) {
       throw normalizeError(error);
     }
-    // Native binaries were not configured; the error here means we did
-    // not even attempt native startup. Fall through to Docker as a
-    // best-effort default.
+    // No binDir was pinned, so native was either skipped outright or
+    // auto-discovered and failed. Either way the operator did not commit to
+    // the native backend, so fall through to Docker as a best-effort default.
   }
 
   const dockerRuntime = await tryStartDockerBundledPostgres(config);
@@ -166,13 +179,37 @@ export async function ensureBundledPostgresRuntime(
     return dockerRuntime;
   }
 
-  throw new Error(
-    "Bundled Postgres is enabled but no managed runtime backend is available. Configure assistant.database.bundledPostgres.binDir with Postgres binaries or start Docker Desktop.",
+  // Neither a native binDir nor a reachable Docker daemon exists. Nothing about
+  // that changes by restarting the gateway, so surface it as non-retryable and
+  // let the dev supervisor stop with operator advice instead of burning its
+  // restart budget on a loop that can never succeed.
+  throw new NonRetryableStartupError(
+    [
+      "Bundled Postgres is enabled but no managed runtime backend is available.",
+      "Docker is NOT required — a local PostgreSQL install is the preferred backend, but none",
+      "was found on this host and the Docker fallback is unavailable too. Choose one:",
+      "  1. Install PostgreSQL (the server package, which provides initdb and pg_ctl).",
+      "     It is discovered automatically on PATH and in the standard install locations.",
+      "  2. Point at an install in a non-standard location: set",
+      "     assistant.database.bundledPostgres.binDir to the directory holding initdb and pg_ctl.",
+      '  3. Use a Postgres you already run: set assistant.database.postgres.mode to "managed" and',
+      "     supply connectionString (or host/port/user/password). GoatCitadel then manages no",
+      "     database process at all.",
+      '  4. Fall back to SQLite: set assistant.database.driver to "sqlite".',
+      "  5. Or start Docker Desktop to use the containerised fallback backend.",
+    ].join("\n"),
   );
 }
 
+/**
+ * True only when the operator pinned an explicit binDir. Auto-discovery is
+ * deliberately excluded: a pinned path is a deliberate choice that must fail
+ * closed (see the security note at the call site), whereas a discovered
+ * install is best-effort and may fall back to Docker.
+ */
 function isNativeBundledPostgresConfigured(config: GatewayRuntimeConfig): boolean {
-  return Boolean(config.assistant.database.bundledPostgres.binDir?.trim());
+  const binDir = config.assistant.database.bundledPostgres.binDir?.trim();
+  return Boolean(binDir) && binDir !== AUTO_NATIVE_BIN_DIR;
 }
 
 /**
@@ -222,22 +259,54 @@ async function tryStartNativeBundledPostgres(
   config: GatewayRuntimeConfig,
 ): Promise<BundledPostgresRuntimeHandle | undefined> {
   setBootCheckpoint("native-pg:resolveCommands");
-  const commands = resolveNativePostgresCommands(config);
+  const dataDir = path.resolve(config.rootDir, config.assistant.database.bundledPostgres.dataDir);
+  const initialized = bundledClusterIsInitialized(dataDir);
+
+  // An explicit binDir always wins. Auto-discovery only adopts a host install
+  // for a data directory we have not initialised yet: an existing cluster may
+  // have been created by the Docker backend (postgres:16-alpine writes a Linux
+  // cluster that a native host binary cannot start), so silently switching
+  // backends under it would break working installs.
+  let commands = resolveNativePostgresCommands(config);
+  if (!commands && config.assistant.database.bundledPostgres.binDir?.trim() === AUTO_NATIVE_BIN_DIR && !initialized) {
+    commands = discoverNativePostgresCommands();
+    if (commands) {
+      setBootCheckpoint(`native-pg:auto-discovered (${path.dirname(commands.initdb)})`);
+    }
+  }
   if (!commands) {
     setBootCheckpoint("native-pg:no-commands-skipping");
     return undefined;
   }
 
   setBootCheckpoint("native-pg:mkdir-dataDir");
-  const dataDir = path.resolve(config.rootDir, config.assistant.database.bundledPostgres.dataDir);
   await fs.mkdir(dataDir, { recursive: true });
-  const initialized = fsSync.existsSync(path.join(dataDir, "PG_VERSION"));
   if (!initialized) {
+    // Initialise with scram-sha-256 against the generated superuser password
+    // rather than trust auth. Native clusters bind loopback-only, but native is
+    // now the default backend, so this must not be weaker than the Docker path
+    // (which actively refuses trust-auth containers).
+    await ensureBundledPostgresPassword(config);
     setBootCheckpoint("native-pg:initdb-running (SYNC)");
-    execFileSync(commands.initdb, ["-D", dataDir, "-U", "postgres", "-A", "trust", "--encoding", "UTF8"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    execFileSync(
+      commands.initdb,
+      [
+        "-D",
+        dataDir,
+        "-U",
+        "postgres",
+        "-A",
+        "scram-sha-256",
+        "--pwfile",
+        bundledPostgresPasswordFilePath(config),
+        "--encoding",
+        "UTF8",
+      ],
+      {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
     setBootCheckpoint("native-pg:initdb-returned");
   }
 
@@ -525,19 +594,17 @@ async function ensureDatabaseExists(config: GatewayRuntimeConfig): Promise<void>
   }
 }
 
-function resolveNativePostgresCommands(config: GatewayRuntimeConfig): { initdb: string; pgCtl: string } | undefined {
+function resolveNativePostgresCommands(config: GatewayRuntimeConfig): NativePostgresCommands | undefined {
   const configuredBinDir = config.assistant.database.bundledPostgres.binDir?.trim();
-  if (!configuredBinDir) {
+  if (!configuredBinDir || configuredBinDir === AUTO_NATIVE_BIN_DIR) {
     return undefined;
   }
   const binDir = path.isAbsolute(configuredBinDir) ? configuredBinDir : path.resolve(config.rootDir, configuredBinDir);
-  const exe = process.platform === "win32" ? ".exe" : "";
-  const initdb = path.join(binDir, `initdb${exe}`);
-  const pgCtl = path.join(binDir, `pg_ctl${exe}`);
-  if (!fsSync.existsSync(initdb) || !fsSync.existsSync(pgCtl)) {
-    return undefined;
-  }
-  return { initdb, pgCtl };
+  return nativePostgresCommandsInBinDir(binDir, process.platform);
+}
+
+function bundledClusterIsInitialized(dataDir: string): boolean {
+  return fsSync.existsSync(path.join(dataDir, "PG_VERSION"));
 }
 
 async function canReachExpectedBundledPostgres(
@@ -1068,6 +1135,11 @@ function wait(ms: number): Promise<void> {
 }
 
 export const __bundledPostgresRuntimeInternals = {
+  discoverNativePostgresCommands,
+  highestVersionedNativePostgresCommands,
+  nativePostgresInstallRoots,
+  nativePostgresCommandsFromPathEnv,
+  parseNativePostgresMajor,
   isDockerPostgresDataDirectory,
   parseDockerPostgresSecurityInspection,
   parseWindowsTcpPortExclusions,

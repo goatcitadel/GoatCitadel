@@ -3,6 +3,18 @@ import path from "node:path";
 import type { PostgresConnectionOptions } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "./config.js";
 
+/**
+ * Sentinel `bundledPostgres.binDir` value (and the shipped default) meaning
+ * "discover a PostgreSQL install on this host". Native is the preferred
+ * bundled backend so a stock machine needs no Docker; Docker is the fallback.
+ * An explicit path keeps stricter fail-closed behaviour; an empty value
+ * disables the native backend entirely.
+ *
+ * Declared here rather than in bundled-postgres-runtime.ts so that config
+ * loading does not have to pull in the whole Postgres runtime module.
+ */
+export const AUTO_NATIVE_BIN_DIR = "auto";
+
 export interface GatewayPostgresResolveOptions {
   applicationName?: string;
   connectionStringOverride?: string;
