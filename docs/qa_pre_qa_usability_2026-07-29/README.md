@@ -22,7 +22,7 @@ The complete final-mode campaign passed at `4846b885f8a4b1c7f2209200a7f895044038
 
 - `pnpm verify:usability` — **120/120 scenarios passed** in 33m50.8s with zero failed, degraded, skipped, or not-configured rows, at `artifacts/verification/2026-07-31T01-25-11-233Z-usability-bc5563b0`.
 - Harness self-proof — 131/131 immediately before the campaign.
-- Second clean-profile core smoke — passed at `artifacts/verification/2026-07-31T01-59-33-345Z-usability-core-7e6a1cbd`, run immediately after.
+- Second clean-profile core smoke — passed at `artifacts/verification/2026-07-31T01-59-33-345Z-usability-core-7e6a1cbd`, run immediately after. Its `diagnostics/usability-core-source-state.json` independently records `mode=final`, `baseSha=4846b885f8a4b1c7f2209200a7f89504403871bb`, `sourceModified=false`, `changedPathCount=0`, and an identical `diffSha256` at both `started` and `completed`, matching the campaign's own source proof.
 - Source immutability — `diagnostics/usability-source-state.json` records `mode=final`, `sourceModified=false`, `changedPathCount=0`, and an identical `diffSha256` at both `started` and `completed`, so the tree did not drift across the run.
 - Secret leakage — the in-process exact-root gate passed after full finalization.
 
@@ -122,7 +122,7 @@ Defect status such as `Fixed locally; final regression pending` means the implem
 - Final source SHA: `4846b885f8a4b1c7f2209200a7f89504403871bb` (merged to `main` as `98a0a9810`; follow-up `4e4a72049`)
 - Windows x64 installer SHA-256: **Pending** — candidate not built at the final SHA
 - Installed candidate version: **Pending** — candidate not installed or verified
-- Ready-to-merge PR URL and head SHA: [PR #239](https://github.com/goatcitadel/GoatCitadel/pull/239) at head `4846b885f`, merged on operator instruction
+- Merged PR URL and head SHA: [PR #239](https://github.com/goatcitadel/GoatCitadel/pull/239) at head `4846b885f`, merged on operator instruction. The plan's own field name was "ready-to-merge PR URL and head SHA"; it is renamed here because the PR is merged, and the deviation from the not-merged requirement is recorded above and in `Gate Results.csv`.
 - Standard/AI queue state and final rescan: **Partial** — open code-scanning alerts returned zero; two Code Quality findings raised on #239, one fixed in #240 and one declined with rationale and left unresolved. The authenticated AI queue rescan is still pending.
 - GitHub Code Quality and CodeQL checks: **Passed** on the #239 head (all 20 checks green)
 
