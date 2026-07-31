@@ -119,6 +119,19 @@ function findRequiredButton(renderer: ReactTestRenderer, label: string): ReactTe
 }
 
 describe("KanbanRoutePage", () => {
+  it("offers a working retry when the canonical run list is unavailable", async () => {
+    fetchAgenticRuns.mockRejectedValueOnce(new Error("run list offline")).mockResolvedValueOnce({ items: baseRuns });
+    const renderer = await renderPage();
+    expect(collectText(renderer.root)).toContain("run list offline");
+    await act(async () => {
+      findRequiredButton(renderer, "retry").props.onClick();
+      await Promise.resolve();
+    });
+    expect(fetchAgenticRuns).toHaveBeenCalledTimes(2);
+    expect(collectText(renderer.root)).toContain("Queued run");
+    act(() => renderer.unmount());
+  });
+
   it("renders run-state columns and groups agentic runs correctly", async () => {
     const renderer = await renderPage();
     const text = collectText(renderer.root);

@@ -148,6 +148,7 @@ function createRunningTraceForActiveStreamCancellation(
     turnId,
     sessionId,
     userMessageId: payload.userMessageId,
+    assistantMessageId: payload.assistantMessageId,
     parentTurnId: payload.parentTurnId,
     branchKind: payload.branchKind,
     sourceTurnId: payload.sourceTurnId,

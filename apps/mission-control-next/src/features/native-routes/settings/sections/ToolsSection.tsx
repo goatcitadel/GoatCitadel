@@ -405,6 +405,7 @@ export function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
               <SettingsEmptyState label="Choose a tool from the catalog to inspect it." />
             )}
             <SettingsActionList
+              ariaLabel={selectedTool ? `${selectedTool.toolName} grants` : "Tool grants"}
               items={(data.grants ?? [])
                 .filter((item) => (selectedTool ? matchesToolGrant(item, selectedTool.toolName) : true))
                 .map((item) => ({

@@ -1126,6 +1126,42 @@ describe("prepareAgentChatTurn personality overlay", () => {
     );
   });
 
+  it.each(["retry", "edit"] as const)(
+    "separates an earlier %s turn's lineage parent from the active-leaf branch-selection base",
+    async (branchKind) => {
+      const harness = createHost("chat");
+      vi.mocked(harness.host.loadChatTurnSessionState).mockResolvedValue({
+        activeLeafTurnId: "turn-later-active-leaf",
+        traces: [],
+        tracesById: new Map(),
+        messages: [],
+        messagesById: new Map(),
+        childrenByTurnId: new Map(),
+        turnLineageById: new Map([["turn-source-parent", { turnId: "turn-source-parent" }]]),
+      } as never);
+
+      const prepared = await prepareAgentChatTurn(
+        harness.host,
+        "session-1",
+        { content: "Create a sibling branch from the earlier turn." },
+        {
+          branchKind,
+          sourceTurnId: "turn-earlier-source",
+          parentTurnId: "turn-source-parent",
+          turnId: `turn-${branchKind}`,
+          assistantMessageId: `assistant-${branchKind}`,
+        },
+      );
+
+      expect(prepared).toMatchObject({
+        branchKind,
+        sourceTurnId: "turn-earlier-source",
+        parentTurnId: "turn-source-parent",
+        branchSelectionBaseTurnId: "turn-later-active-leaf",
+      });
+    },
+  );
+
   it("skips missing branch traces while preparing retry context", async () => {
     const harness = createHost("chat");
     vi.mocked(harness.host.loadChatTurnSessionState).mockResolvedValue({

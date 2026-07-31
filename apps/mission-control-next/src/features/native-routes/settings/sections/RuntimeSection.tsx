@@ -608,6 +608,7 @@ export function RuntimeSection(props: SettingsSectionProps) {
                 ) : null}
               </SettingsButtonRow>
               <SettingsActionList
+                ariaLabel="Voice model catalog"
                 items={(data.voiceRuntime?.catalog ?? []).slice(0, 8).map((item) => ({
                   label: item.label,
                   description: `${item.languageScope} · ${item.approxSizeLabel}`,
@@ -665,6 +666,7 @@ function LlamaCppLeaseDiagnostics({ diagnostics }: { diagnostics?: LlamaCppRunti
         ]}
       />
       <SettingsActionList
+        ariaLabel="llama.cpp lease diagnostics"
         items={evidence}
         emptyLabel="No probe, exit, or restart evidence recorded yet."
         maxHeight="min(24vh, 12rem)"

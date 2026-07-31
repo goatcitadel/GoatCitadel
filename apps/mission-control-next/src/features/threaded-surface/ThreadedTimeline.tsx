@@ -386,6 +386,7 @@ export function ThreadedTimeline({
   const onStartNewThreadFromTurn = useStableHandler(props.onStartNewThreadFromTurn);
   const onSwitchBranch = useStableHandler(props.onSwitchBranch);
   const onRetryTurn = useStableHandler(props.onRetryTurn);
+  const onEditTurn = useStableHandler(props.onEditTurn);
   const onOpenRunDetails = useStableHandler(props.onOpenRunDetails);
   const onOpenGeneratedArtifact = useStableHandler(props.onOpenGeneratedArtifact);
   const onCreateGeneratedArtifact = useStableHandler(props.onCreateGeneratedArtifact);
@@ -621,6 +622,7 @@ export function ThreadedTimeline({
                     onStartNewThreadFromTurn={onStartNewThreadFromTurn}
                     onSwitchBranch={onSwitchBranch}
                     onRetryTurn={onRetryTurn}
+                    onEditTurn={onEditTurn}
                     onOpenRunDetails={onOpenRunDetails}
                     onOpenUniversalRunDetail={onOpenUniversalRunDetailStable}
                     onOpenGeneratedArtifact={onOpenGeneratedArtifact}

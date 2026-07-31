@@ -20,10 +20,11 @@
 //     all-combos (requiredPassed 4) + >0-steps honesty guard, so a flow that
 //     crashes before printing, drops a combo, or executes nothing can never
 //     pass;
-//   * the live-PostgreSQL check must EXECUTE (provisioned hermetically or via
-//     GOATCITADEL_TEST_POSTGRES_URL). An unset URL with no local cluster is a
-//     lane FAILURE — the closure packet calls it "an explicit C4 HOLD, not an
-//     accepted skip".
+//   * the live-PostgreSQL check must EXECUTE against the lane-provisioned
+//     hermetic cluster. Inherited database URLs are deliberately scrubbed so
+//     personal or shared runtime data can never satisfy this proof. Failure to
+//     provision the isolated cluster is a lane FAILURE — the closure packet
+//     calls it "an explicit C4 HOLD, not an accepted skip".
 //
 // C4c NOTE (2026-07-22): the C4b BLOCKED state is resolved. C4c widened the
 // chat.messages.ts contextRefs kind gate to the full C1 contract
@@ -261,7 +262,7 @@ export function buildExternalSourcesLaneChecks() {
     {
       id: "external-sources.live-postgres",
       title:
-        "Live PostgreSQL: isolated-schema replay + racing-applies proof (hermetic cluster provisioned by the lane unless GOATCITADEL_TEST_POSTGRES_URL is provided; never an accepted skip)",
+        "Live PostgreSQL: isolated-schema replay + racing-applies proof on the lane-provisioned hermetic cluster; inherited database URLs are ignored and failure is never an accepted skip",
       kind: "live-postgres",
       count: "node-test",
       requireAllExecuted: true,

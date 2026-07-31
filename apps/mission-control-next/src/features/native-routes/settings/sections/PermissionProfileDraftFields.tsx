@@ -57,17 +57,22 @@ const READ_ACCESS_MODE_OPTIONS = ["", "roots_only", "approval_required", "full_d
 export function PermissionProfileDraftFields({
   draft,
   bypassUnavailableReason,
+  accessibleNamePrefix,
   setDraft,
 }: {
   draft: PermissionProfileEditorDraft;
   bypassUnavailableReason?: string;
+  accessibleNamePrefix?: string;
   setDraft: Dispatch<SetStateAction<PermissionProfileEditorDraft>>;
 }) {
   const bypassUnavailable = Boolean(bypassUnavailableReason);
+  const accessibleName = (label: string) =>
+    accessibleNamePrefix ? `${accessibleNamePrefix} ${label.toLocaleLowerCase()}` : undefined;
   return (
     <SettingsFieldGrid>
       <SettingsField label="Name">
         <input
+          aria-label={accessibleName("Name")}
           className="mc-next-settings-input"
           value={draft.label}
           onChange={(event) => setDraft((current) => ({ ...current, label: event.target.value }))}
@@ -76,6 +81,7 @@ export function PermissionProfileDraftFields({
       </SettingsField>
       <SettingsField label="Approval behavior">
         <select
+          aria-label={accessibleName("Approval behavior")}
           className="mc-next-settings-input"
           value={draft.approvalMode}
           onChange={(event) => {
@@ -101,6 +107,7 @@ export function PermissionProfileDraftFields({
       </SettingsField>
       <SettingsField label="Description" span={2}>
         <textarea
+          aria-label={accessibleName("Description")}
           className="mc-next-settings-input"
           value={draft.description}
           onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))}
@@ -110,6 +117,7 @@ export function PermissionProfileDraftFields({
       </SettingsField>
       <SettingsField label="Read access">
         <select
+          aria-label={accessibleName("Read access")}
           className="mc-next-settings-input"
           value={draft.readAccessMode}
           onChange={(event) =>
@@ -152,6 +160,7 @@ export function PermissionProfileDraftFields({
       </SettingsField>
       <SettingsField label="Tool patterns" span={2}>
         <textarea
+          aria-label={accessibleName("Tool patterns")}
           className="mc-next-settings-input"
           value={draft.toolPatterns}
           onChange={(event) => setDraft((current) => ({ ...current, toolPatterns: event.target.value }))}
@@ -161,6 +170,7 @@ export function PermissionProfileDraftFields({
       </SettingsField>
       <SettingsField label="Allow patterns">
         <textarea
+          aria-label={accessibleName("Allow patterns")}
           className="mc-next-settings-input"
           value={draft.allow}
           onChange={(event) => setDraft((current) => ({ ...current, allow: event.target.value }))}
@@ -170,6 +180,7 @@ export function PermissionProfileDraftFields({
       </SettingsField>
       <SettingsField label="Deny patterns">
         <textarea
+          aria-label={accessibleName("Deny patterns")}
           className="mc-next-settings-input"
           value={draft.deny}
           onChange={(event) => setDraft((current) => ({ ...current, deny: event.target.value }))}

@@ -1,3 +1,6 @@
+const ACCESSIBILITY_STUB_REPLY = "KEYBOARD_OK";
+const ACCESSIBILITY_STUB_KEY = "verification-accessibility-smoke-stub-key";
+
 const ACCESSIBILITY_SMOKE_SCENARIOS = [
   {
     id: "chat-working-context",
@@ -50,8 +53,118 @@ const ACCESSIBILITY_SMOKE_SCENARIOS = [
       expectedSection: "root",
     },
     async prepare(page) {
-      await page.getByRole("button", { name: "Open navigation" }).click();
-      await page.getByLabel("Active scope and commands").waitFor();
+      const opener = page.getByRole("button", { name: "Open navigation" });
+      const drawer = page.getByLabel("Active scope and commands");
+      await opener.click();
+      await drawer.waitFor();
+      await page.keyboard.press("Escape");
+      await drawer.waitFor({ state: "hidden" });
+      const restoredName = await page.evaluate(() => document.activeElement?.getAttribute("aria-label"));
+      if (restoredName !== "Open navigation") {
+        throw new Error(`mobile navigation did not restore focus to its opener (received ${restoredName ?? "none"})`);
+      }
+      await opener.click();
+      await drawer.waitFor();
+    },
+  },
+  {
+    id: "mobile-chat-virtual-keyboard",
+    title: "Mobile Chat virtual-keyboard geometry and composer focus",
+    href: "/chat",
+    viewport: { width: 390, height: 844 },
+    colorScheme: "light",
+    hasTouch: true,
+    route: {
+      readySelector: '.mc-next-threaded-surface[data-mode="chat"]',
+      expectedArea: "chat",
+      expectedSection: "root",
+    },
+    async prepare(page) {
+      // Start from a clean provider-backed thread. The seeded accessibility
+      // fixture intentionally contains a blocking approval, so measuring that
+      // persisted thread would conflate blocker geometry with virtual-keyboard
+      // behavior.
+      await page.getByRole("button", { name: "Sessions", exact: true }).click();
+      await page.getByRole("button", { name: "New thread", exact: true }).click();
+      await page.getByLabel("Sessions", { exact: true }).waitFor({ state: "hidden" });
+      await page.locator(".mc-next-composer-blocking-prompt").waitFor({ state: "hidden" });
+      const composer = page.getByLabel("Message composer", { exact: true });
+      await composer.waitFor({ state: "visible" });
+      await composer.fill("Reply with exactly: KEYBOARD_OK");
+      await page.getByRole("button", { name: "Send", exact: true }).click();
+      await page.getByText(ACCESSIBILITY_STUB_REPLY, { exact: true }).waitFor();
+      await composer.click();
+      await page.setViewportSize({ width: 390, height: 500 });
+      await page.evaluate(
+        () =>
+          new Promise((resolve) =>
+            window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve(undefined))),
+          ),
+      );
+      const layout = await page.evaluate(() => {
+        const element = document.activeElement;
+        const rect = element instanceof HTMLElement ? element.getBoundingClientRect() : null;
+        return {
+          activeLabel: element instanceof HTMLElement ? element.getAttribute("aria-label") : null,
+          providerReplyVisible: document.body.textContent?.includes("KEYBOARD_OK") === true,
+          viewportWidth: window.innerWidth,
+          viewportHeight: window.innerHeight,
+          composerRect: rect
+            ? {
+                top: rect.top,
+                right: rect.right,
+                bottom: rect.bottom,
+                left: rect.left,
+                width: rect.width,
+                height: rect.height,
+              }
+            : null,
+        };
+      });
+      assertVirtualKeyboardComposerVisible(layout);
+      return layout;
+    },
+  },
+  {
+    id: "tablet-landscape-memory-reduced-motion",
+    title: "Tablet landscape Memory reflow and reduced-motion accessibility",
+    href: "/library/memory",
+    viewport: { width: 1024, height: 768 },
+    colorScheme: "light",
+    reducedMotion: "reduce",
+    hasTouch: true,
+    route: {
+      readyText: "Mission Control Next shell posture",
+      expectedArea: "library",
+      expectedSection: "memory",
+    },
+  },
+  {
+    id: "mobile-landscape-access-touch",
+    title: "Mobile landscape Access reflow and touch-target accessibility",
+    href: "/settings/access",
+    viewport: { width: 844, height: 390 },
+    colorScheme: "dark",
+    reducedMotion: "reduce",
+    deviceScaleFactor: 2,
+    hasTouch: true,
+    route: {
+      readyText: "Access",
+      expectedArea: "settings",
+      expectedSection: "access",
+    },
+  },
+  {
+    id: "chat-zoom-reflow",
+    title: "Chat 200 percent zoom-equivalent reflow accessibility",
+    href: "/chat",
+    viewport: { width: 640, height: 800 },
+    colorScheme: "dark",
+    reducedMotion: "reduce",
+    route: {
+      readySelector: '.mc-next-threaded-surface[data-mode="chat"]',
+      expectedArea: "chat",
+      expectedSection: "root",
     },
   },
 ];
@@ -74,21 +187,36 @@ export async function runAccessibilitySmokeLane(context, options = {}, deps) {
     installMissionControlNextBrowserState,
     path,
     probeKeyboardFocus,
+    prepareVerificationRuntime,
     relativeToRun,
     runScenario,
     seedMissionControlNextFixture,
     setBrowserCorrelation,
     startBrowserTrace,
+    startDeterministicLlmStub,
     startVerificationStack,
     stopVerificationStack,
     waitForVerificationRouteReady,
+    writeDeterministicLlmProviderConfig,
     writeJson,
   } = deps;
   const restoreUiPackage = forceVerificationUiPackage(NEXT_UI_PACKAGE);
   let stack;
+  let runtimeRoot;
+  let stub;
   try {
+    stub = await startDeterministicLlmStub({
+      replyText: ACCESSIBILITY_STUB_REPLY,
+      expectedAuthorization: `Bearer ${ACCESSIBILITY_STUB_KEY}`,
+    });
+    runtimeRoot = await prepareVerificationRuntime(`${context.runId}-accessibility-smoke`);
+    await writeDeterministicLlmProviderConfig(runtimeRoot, stub.baseUrl);
     stack = await startVerificationStack(context, {
+      runtimeRoot,
       includeUi: true,
+      processLogPrefix: options.processLogPrefix,
+      gatewayEnvOmit: options.secretEnvKeys,
+      uiEnvOmit: options.secretEnvKeys,
       gatewayEnv: {
         GOATCITADEL_AUTH_MODE: "token",
         GOATCITADEL_AUTH_TOKEN: "verification-accessibility-smoke-operator-token",
@@ -96,6 +224,7 @@ export async function runAccessibilitySmokeLane(context, options = {}, deps) {
         GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
         GOATCITADEL_CODE_MODE_SANDBOX_REQUIRED: "false",
         GOATCITADEL_MESH_NODE_ID: "build-main",
+        GOATCITADEL_VERIFY_STUB_LLM_KEY: ACCESSIBILITY_STUB_KEY,
       },
       uiEnv: {
         VITE_GOATCITADEL_VISUAL_REGRESSION_MODE: "true",
@@ -117,7 +246,10 @@ export async function runAccessibilitySmokeLane(context, options = {}, deps) {
           async ({ correlationId }) => {
             const browserContext = await browser.newContext({
               viewport: scenario.viewport,
-              colorScheme: "dark",
+              colorScheme: scenario.colorScheme ?? "dark",
+              reducedMotion: scenario.reducedMotion ?? "no-preference",
+              hasTouch: scenario.hasTouch ?? false,
+              deviceScaleFactor: scenario.deviceScaleFactor ?? 1,
             });
             await installMissionControlNextBrowserState(browserContext, fixture.workspaceId, fixture.citadelId);
             const page = await browserContext.newPage();
@@ -131,16 +263,26 @@ export async function runAccessibilitySmokeLane(context, options = {}, deps) {
               await page.goto(buildVerificationUiUrl(stack.uiUrl, scenario.href), { waitUntil: "domcontentloaded" });
               await waitForVerificationRouteReady(page, scenario.route, NEXT_UI_PACKAGE);
               await setBrowserCorrelation(page, correlationId, fixture.sessionId);
-              await scenario.prepare?.(page);
+              const preparationEvidence = await scenario.prepare?.(page);
               await page.addScriptTag({ path: axeSourcePath });
               const axeReport = await auditPageAccessibility(page);
               const focusReport = await probeKeyboardFocus(page);
+              const crossCuttingReport = await probeCrossCuttingAccessibility(page, {
+                expectReducedMotion: scenario.reducedMotion === "reduce",
+                expectTouchTargets: scenario.hasTouch === true,
+              });
               const auditPayload = {
                 scenarioId: scenario.id,
                 href: scenario.href,
                 viewport: scenario.viewport,
+                effectiveViewport: {
+                  width: crossCuttingReport.viewportWidth,
+                  height: crossCuttingReport.viewportHeight,
+                },
+                preparationEvidence: preparationEvidence ?? null,
                 axe: axeReport,
                 keyboardFocus: focusReport,
+                crossCutting: crossCuttingReport,
               };
               const auditPath = path.join(context.artifactRoot, "diagnostics", `${artifactSlug}-accessibility.json`);
               await writeJson(auditPath, auditPayload);
@@ -168,15 +310,25 @@ export async function runAccessibilitySmokeLane(context, options = {}, deps) {
               if (!focusReport.passed) {
                 throw new Error(formatFocusFailure(focusReport));
               }
+              if (!crossCuttingReport.passed) {
+                throw new Error(
+                  `cross-cutting accessibility contract failed: ${crossCuttingReport.failures.join("; ")}`,
+                );
+              }
 
               return {
                 status: "passed",
                 metrics: {
                   route: scenario.href,
                   viewportWidth: scenario.viewport.width,
+                  effectiveViewportWidth: crossCuttingReport.viewportWidth,
+                  effectiveViewportHeight: crossCuttingReport.viewportHeight,
                   axeViolations: axeReport.violations.length,
                   blockingAxeViolations: 0,
                   focusTargetsSampled: focusReport.observations.length,
+                  horizontalOverflowPx: crossCuttingReport.horizontalOverflowPx,
+                  undersizedTouchTargets: crossCuttingReport.undersizedTouchTargets.length,
+                  semanticMainCount: crossCuttingReport.semanticMainCount,
                   consoleErrors: browserSanity.consoleErrors.length,
                   pageErrors: browserSanity.pageErrors.length,
                 },
@@ -217,7 +369,10 @@ export async function runAccessibilitySmokeLane(context, options = {}, deps) {
   } finally {
     if (stack) {
       await stopVerificationStack(stack);
+    } else if (runtimeRoot) {
+      await stopVerificationStack({ runtimeRoot });
     }
+    await stub?.close().catch(() => undefined);
     restoreUiPackage();
   }
 }
@@ -328,6 +483,205 @@ export async function probeKeyboardFocus(page, steps = 8) {
     unnamedTargets,
     focusIndicatorFound,
   };
+}
+
+export async function probeCrossCuttingAccessibility(page, options = {}) {
+  const measurements = await page.evaluate(({ expectReducedMotion, expectTouchTargets }) => {
+    const root = document.documentElement;
+    const horizontalOverflowPx = Math.max(0, root.scrollWidth - root.clientWidth);
+    const semanticMainCount = document.querySelectorAll("main").length;
+    const headingCount = document.querySelectorAll("h1").length;
+    const liveRegions = Array.from(document.querySelectorAll('[aria-live], [role="status"], [role="alert"]')).map(
+      (element) => ({
+        role: element.getAttribute("role") || "region",
+        politeness: element.getAttribute("aria-live") || "implicit",
+        name:
+          element.getAttribute("aria-label")?.trim() ||
+          element.getAttribute("title")?.trim() ||
+          element.textContent?.trim().replace(/\s+/g, " ").slice(0, 160) ||
+          "",
+      }),
+    );
+    const liveRegionCount = liveRegions.length;
+    const screenReaderSignalCount = liveRegions.filter((region) => region.name.length > 0).length;
+    const reducedMotionMatches = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const unexpectedMotion = expectReducedMotion
+      ? document
+          .getAnimations()
+          .map((animation) => ({
+            playState: animation.playState,
+            duration: Number(animation.effect?.getTiming().duration ?? 0),
+            iterations: Number(animation.effect?.getTiming().iterations ?? 1),
+          }))
+          .filter(
+            (animation) =>
+              animation.playState === "running" &&
+              (animation.duration > 250 || !Number.isFinite(animation.iterations) || animation.iterations > 1),
+          )
+      : [];
+    const touchTargets = expectTouchTargets
+      ? Array.from(
+          document.querySelectorAll(
+            'a[href], button, input, select, summary, textarea, [role="button"], [role="tab"], [tabindex]:not([tabindex="-1"])',
+          ),
+        )
+          .filter((element) => element instanceof HTMLElement && !element.hasAttribute("disabled"))
+          .map((element) => {
+            const associatedLabels =
+              "labels" in element && element.labels
+                ? Array.from(element.labels).filter((label) => label instanceof HTMLElement)
+                : [];
+            const targets = [element, ...associatedLabels];
+            const target = targets
+              .map((candidate) => ({ candidate, rect: candidate.getBoundingClientRect() }))
+              .sort((left, right) => right.rect.width * right.rect.height - left.rect.width * left.rect.height)[0];
+            const rect = target?.rect ?? element.getBoundingClientRect();
+            return {
+              name:
+                element.getAttribute("aria-label")?.trim() ||
+                associatedLabels
+                  .map((label) => label.textContent?.trim() ?? "")
+                  .filter(Boolean)
+                  .join(" ") ||
+                element.getAttribute("title")?.trim() ||
+                element.textContent?.trim().replace(/\s+/g, " ").slice(0, 80) ||
+                element.tagName.toLowerCase(),
+              // Keep sub-pixel measurements intact. Rounding 23.5px up to
+              // 24px would turn an undersized native control into a pass.
+              width: rect.width,
+              height: rect.height,
+              visible:
+                rect.width > 0 &&
+                rect.height > 0 &&
+                rect.bottom > 0 &&
+                rect.right > 0 &&
+                rect.top < window.innerHeight &&
+                rect.left < window.innerWidth,
+            };
+          })
+      : [];
+    const regionLandmarkNames = Array.from(
+      document.querySelectorAll(
+        '[role="region"], section[aria-label], section[aria-labelledby], aside[aria-label], aside[aria-labelledby]',
+      ),
+    )
+      .map((element) => {
+        const labelledBy = element.getAttribute("aria-labelledby");
+        const labelledByText = labelledBy
+          ? labelledBy
+              .split(/\s+/)
+              .map((id) => document.getElementById(id)?.textContent?.trim() ?? "")
+              .filter(Boolean)
+              .join(" ")
+          : "";
+        return (element.getAttribute("aria-label")?.trim() || labelledByText).replace(/\s+/g, " ");
+      })
+      .filter(Boolean);
+    return {
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      horizontalOverflowPx,
+      semanticMainCount,
+      headingCount,
+      liveRegionCount,
+      liveRegions,
+      screenReaderSignalCount,
+      reducedMotionMatches,
+      unexpectedMotion,
+      touchTargets,
+      regionLandmarkNames,
+    };
+  }, options);
+
+  return buildCrossCuttingAccessibilityReport(measurements, options);
+}
+
+export function assertVirtualKeyboardComposerVisible(layout) {
+  if (layout?.providerReplyVisible !== true) {
+    throw new Error("virtual-keyboard scenario did not prove the deterministic provider-backed turn");
+  }
+  if (layout?.activeLabel !== "Message composer") {
+    throw new Error(`virtual-keyboard resize lost composer focus (received ${layout?.activeLabel ?? "none"})`);
+  }
+  if (
+    !Number.isFinite(layout?.viewportWidth) ||
+    !Number.isFinite(layout?.viewportHeight) ||
+    layout.viewportWidth <= 0 ||
+    layout.viewportHeight <= 0
+  ) {
+    throw new Error("virtual-keyboard resize did not retain a valid effective viewport");
+  }
+  const rect = layout.composerRect;
+  if (
+    !rect ||
+    ![rect.top, rect.right, rect.bottom, rect.left, rect.width, rect.height].every(Number.isFinite) ||
+    rect.width <= 0 ||
+    rect.height <= 0
+  ) {
+    throw new Error("virtual-keyboard resize left the composer without visible geometry");
+  }
+  if (
+    rect.left < -2 ||
+    rect.right > layout.viewportWidth + 2 ||
+    rect.top < -2 ||
+    rect.bottom > layout.viewportHeight + 2
+  ) {
+    throw new Error(
+      `virtual-keyboard resize obscured the composer (${rect.left},${rect.top})-(${rect.right},${rect.bottom}) inside ${layout.viewportWidth}x${layout.viewportHeight}`,
+    );
+  }
+}
+
+export function buildCrossCuttingAccessibilityReport(measurements, options = {}) {
+  const undersizedTouchTargets = options.expectTouchTargets
+    ? measurements.touchTargets.filter((target) => isUndersizedTouchTarget(target))
+    : [];
+  const regionNameCounts = new Map();
+  for (const name of measurements.regionLandmarkNames) {
+    const normalizedName = name.normalize("NFKC").trim().replace(/\s+/g, " ").toLocaleLowerCase("en-US");
+    const current = regionNameCounts.get(normalizedName);
+    regionNameCounts.set(normalizedName, {
+      name: current?.name ?? name,
+      count: (current?.count ?? 0) + 1,
+    });
+  }
+  const duplicateRegionLandmarkNames = [...regionNameCounts.values()]
+    .filter((entry) => entry.count > 1)
+    .sort((left, right) => left.name.localeCompare(right.name));
+  const failures = [];
+  if (measurements.horizontalOverflowPx > 2)
+    failures.push(`document overflows horizontally by ${measurements.horizontalOverflowPx}px`);
+  if (measurements.semanticMainCount !== 1)
+    failures.push(`expected one main landmark, received ${measurements.semanticMainCount}`);
+  if (measurements.headingCount < 1) failures.push("no level-one heading is present");
+  if (measurements.liveRegionCount < 1) failures.push("no live status or alert region is present");
+  if (measurements.screenReaderSignalCount < 1)
+    failures.push("no live status or alert region exposes an operator-readable announcement");
+  if (options.expectReducedMotion && !measurements.reducedMotionMatches)
+    failures.push("reduced-motion media query is not active");
+  if (measurements.unexpectedMotion.length > 0)
+    failures.push(`${measurements.unexpectedMotion.length} long/repeating animation(s) remain active`);
+  if (undersizedTouchTargets.length > 0) {
+    failures.push(`${undersizedTouchTargets.length} touch target(s) are smaller than 24px in width or height`);
+  }
+  if (duplicateRegionLandmarkNames.length > 0) {
+    failures.push(
+      `region landmark names must be unique: ${duplicateRegionLandmarkNames
+        .map((entry) => `"${entry.name}" appears ${entry.count} times`)
+        .join(", ")}`,
+    );
+  }
+  return {
+    ...measurements,
+    passed: failures.length === 0,
+    failures,
+    undersizedTouchTargets,
+    duplicateRegionLandmarkNames,
+  };
+}
+
+export function isUndersizedTouchTarget(target, minimumSize = 24) {
+  return target.visible && (target.width < minimumSize || target.height < minimumSize);
 }
 
 function appendDiagnosticArtifact(artifacts, diagnosticArtifact) {

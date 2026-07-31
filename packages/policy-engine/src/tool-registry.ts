@@ -618,6 +618,14 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     riskLevel: "safe",
     requiresApproval: false,
     description: "Read file or directory metadata.",
+    argSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", minLength: 1 },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
     pack: "devops",
     readOnly: true,
     deterministic: true,
@@ -1145,6 +1153,31 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     riskLevel: "safe",
     requiresApproval: false,
     description: "Build citation bundle from gathered sources.",
+    argSchema: {
+      type: "object",
+      properties: {
+        sources: {
+          type: "array",
+          minItems: 1,
+          maxItems: 100,
+          items: {
+            type: "object",
+            properties: {
+              citationId: { type: "string", minLength: 1 },
+              title: { type: "string" },
+              url: { type: "string", minLength: 1 },
+              snippet: { type: "string" },
+              description: { type: "string" },
+              sourceType: { type: "string", minLength: 1 },
+            },
+            required: ["url"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["sources"],
+      additionalProperties: false,
+    },
     pack: "core",
   },
   {
@@ -1175,6 +1208,16 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     requiresApproval: false,
     description: "Search indexed memory and return ranked snippets.",
     pack: "knowledge",
+    argSchema: {
+      type: "object",
+      properties: {
+        namespace: { type: "string" },
+        query: { type: "string", minLength: 1 },
+        limit: { type: "integer", minimum: 1, maximum: 100 },
+      },
+      required: ["query"],
+      additionalProperties: false,
+    },
     recommendedContexts: ["chat", "cowork", "code"],
     preferredForIntents: ["memory_lookup", "project_context"],
     usageHints: ["Use before re-asking the same project or user-context question."],

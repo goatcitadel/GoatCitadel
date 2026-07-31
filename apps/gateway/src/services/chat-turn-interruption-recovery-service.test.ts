@@ -7,6 +7,7 @@ import type { ChatMessageRecord, ChatTurnTraceCreateInput } from "@goatcitadel/c
 import { TOOL_EFFECT_CLASSIFICATION_VERSION } from "@goatcitadel/contracts";
 import {
   INTERRUPTED_BY_RESTART_MESSAGE,
+  reconcileInterruptedDurableChatTurn,
   reconcileInterruptedChatTurns,
   type ChatTurnInterruptionRecoveryDeps,
 } from "./chat-turn-interruption-recovery-service.js";
@@ -279,6 +280,64 @@ describe("reconcileInterruptedChatTurns", () => {
     });
     expect(storage.transcriptOutbox.get("msg-assistant")?.event.payload).toMatchObject({
       message: { content: "completed prefix" },
+    });
+  });
+
+  it("preserves an exact durable prefix while keeping the authority-compatible terminal failed trace", () => {
+    const storage = createStorage();
+    seedSession(storage);
+    const created = storage.durableRuns.createRun({ workflowKey: "chat.turn.execute", status: "running" });
+    storage.durableRuns.updateRun({ runId: created.runId, status: "failed", clearLease: true });
+    storage.chatMessages.upsert(userMessage());
+    storage.chatTurnTraces.create(
+      activeTrace({
+        assistantMessageId: "msg-assistant",
+        durable: { runId: created.runId, status: "running" },
+      }),
+    );
+    appendStreamChunk(
+      storage,
+      1,
+      {
+        type: "message_start",
+        sessionId: "session-a",
+        turnId: "turn-active",
+        messageId: "msg-assistant",
+      },
+      created.runId,
+    );
+    appendStreamChunk(
+      storage,
+      2,
+      {
+        type: "delta",
+        sessionId: "session-a",
+        turnId: "turn-active",
+        messageId: "msg-assistant",
+        delta: "STREAMING_BEFORE_RESTART ",
+      },
+      created.runId,
+    );
+
+    const result = reconcileInterruptedDurableChatTurn(buildDeps(storage), {
+      runId: created.runId,
+      turnId: "turn-active",
+    });
+
+    expect(result.preservedPartialTurnIds).toEqual(["turn-active"]);
+    expect(result.transcriptEventsEnqueued).toBe(1);
+    expect(storage.chatMessages.get("msg-assistant")?.content).toBe("STREAMING_BEFORE_RESTART ");
+    expect(storage.chatTurnTraces.get("turn-active")).toMatchObject({
+      status: "failed",
+      failure: {
+        failureClass: "interrupted_by_restart",
+        recommendedAction: "continue_from_partial",
+      },
+      completion: { status: "interrupted" },
+      durable: { runId: created.runId, status: "running" },
+    });
+    expect(storage.transcriptOutbox.get("msg-assistant")?.event.payload).toMatchObject({
+      message: { content: "STREAMING_BEFORE_RESTART " },
     });
   });
 

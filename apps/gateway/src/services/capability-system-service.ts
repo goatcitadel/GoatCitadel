@@ -91,6 +91,7 @@ import {
 } from "./skill-governance-journey-producer.js";
 import type { CapabilityRuntimeConfig, CodeModeDockerBackendConfig, FeatureFlagsConfig } from "../config.js";
 import { CODE_MODE_CHILD_SOURCE } from "./code-mode-child-source.js";
+import { trackBackgroundTask } from "./background-scheduler.js";
 import {
   CodeModeExecutionBackendUnavailableError,
   createCodeModeExecutionBackendRunner,
@@ -3971,8 +3972,7 @@ export class CapabilitySystemService {
           });
         }
       })();
-      activeWrapperTasks.add(wrapperTask);
-      void wrapperTask.finally(() => activeWrapperTasks.delete(wrapperTask));
+      trackBackgroundTask(activeWrapperTasks, wrapperTask);
     };
 
     if (launchTransport === "node_ipc") {

@@ -24,6 +24,7 @@ import {
 import {
   buildVisualBaselineFileName,
   NEXT_RELEASE_SURFACE_MANIFEST,
+  resolveDirectCompatibilityManifest,
   resolveLegacyRedirectManifest,
   resolveShellContract,
   resolveSurfaceRegressionManifest,
@@ -73,6 +74,12 @@ import {
   runVertexFireworksProvidersLane as runVertexFireworksProvidersLaneImpl,
 } from "./scenarios/provider-reasoning-lanes.mjs";
 import { runSurfaceRegressionLane as runSurfaceRegressionLaneImpl } from "./scenarios/surface-regression-lane.mjs";
+import {
+  runUsabilityCoreLane as runUsabilityCoreLaneImpl,
+  runUsabilityLane as runUsabilityLaneImpl,
+} from "./scenarios/usability-lane.mjs";
+import { runUsabilityBrowserActionLane as runUsabilityBrowserActionLaneImpl } from "./scenarios/usability-browser-action-lane.mjs";
+import { startDeterministicLlmStub, writeDeterministicLlmProviderConfig } from "./scenarios/deterministic-llm-stub.mjs";
 import {
   assertNativeStageScrollContract,
   assertProviderAnchorAndAdviceContract,
@@ -176,6 +183,7 @@ function verificationLaneDeps() {
     performVerificationInteraction,
     pinVisualRegressionProvider,
     probeKeyboardFocus,
+    prepareVerificationRuntime,
     pnpmCommand,
     randomUUID,
     probeAuthMatrixRoute,
@@ -199,6 +207,7 @@ function verificationLaneDeps() {
     stabilizeVisualRegressionSnapshot,
     stabilizeMissionControlNextFileFixtureMtime,
     startVerificationStack,
+    startDeterministicLlmStub,
     startVerificationUiProcess,
     startBrowserTrace,
     stopProcess,
@@ -207,6 +216,7 @@ function verificationLaneDeps() {
     waitForMissionControlShell,
     waitForVerificationRouteReady,
     writeJson,
+    writeDeterministicLlmProviderConfig,
     writeMissionControlNextManualProofChecklist,
   };
 }
@@ -363,6 +373,7 @@ function resolveVerificationTargetContext() {
     visualRoutes: resolveVisualRegressionManifest(),
     visualVariants: resolveVisualRegressionVariants(),
     redirectRoutes: resolveLegacyRedirectManifest(packageName),
+    directCompatibilityRoutes: resolveDirectCompatibilityManifest(packageName),
     routeByHref: new Map(surfaceRoutes.map((route) => [route.href, route])),
   };
 }
@@ -2176,6 +2187,18 @@ export async function runSurfaceRegressionLane(context, options = {}) {
   return await runSurfaceRegressionLaneImpl(context, options, verificationLaneDeps());
 }
 
+export async function runUsabilityLane(context, options = {}) {
+  return await runUsabilityLaneImpl(context, options, verificationLaneDeps());
+}
+
+export async function runUsabilityBrowserActionBundles(context, options = {}) {
+  return await runUsabilityBrowserActionLaneImpl(context, options, verificationLaneDeps());
+}
+
+export async function runUsabilityCoreLane(context, options = {}) {
+  return await runUsabilityCoreLaneImpl(context, options, verificationLaneDeps());
+}
+
 export async function runAccessibilitySmokeLane(context, options = {}) {
   return await runAccessibilitySmokeLaneImpl(context, options, verificationLaneDeps());
 }
@@ -3008,7 +3031,9 @@ async function assertHighRiskRouteFamiliesAreOperatorGated(gatewayUrl, manifestI
   const representatives = [
     { family: "mcp", method: "GET", url: "/api/v1/mcp/servers" },
     { family: "tools", method: "GET", url: "/api/v1/tools/catalog" },
-    { family: "llm", method: "GET", url: "/api/v1/llm/config" },
+    // Provider summaries exercise the same operator-only /api/v1/llm policy
+    // without coupling the auth proof to an in-flight config-generation reconciliation.
+    { family: "llm", method: "GET", url: "/api/v1/llm/providers" },
     { family: "integrations", method: "GET", url: "/api/v1/integrations/catalog" },
     { family: "addons", method: "GET", url: "/api/v1/addons/catalog" },
     { family: "capabilities", method: "GET", url: "/api/v1/capabilities/catalog" },
@@ -3549,14 +3574,15 @@ export async function runMemoryTruthLane(context, _options = {}) {
 export async function runRealtimeTruthLane(context, _options = {}) {
   let stack;
   const restoreUiPackage = forceVerificationUiPackage(NEXT_UI_PACKAGE);
+  const realtimeGatewayEnv = {
+    GOATCITADEL_AUTH_MODE: "token",
+    GOATCITADEL_AUTH_TOKEN: "verification-realtime-truth-operator-token",
+    GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS: "true",
+  };
   try {
     stack = await startVerificationStack(context, {
       includeUi: true,
-      gatewayEnv: {
-        GOATCITADEL_AUTH_MODE: "token",
-        GOATCITADEL_AUTH_TOKEN: "verification-realtime-truth-operator-token",
-        GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS: "true",
-      },
+      gatewayEnv: realtimeGatewayEnv,
     });
     await ensureOnboardingComplete(stack.gatewayUrl, "verification-realtime-truth");
     const fixture = await seedMissionControlNextFixture(stack.gatewayUrl);
@@ -3702,6 +3728,155 @@ export async function runRealtimeTruthLane(context, _options = {}) {
             artifacts: {
               ...artifacts,
               diagnostics: [...artifacts.diagnostics, relativeToRun(context, outPath)],
+            },
+          };
+        } finally {
+          await browser.close();
+        }
+      },
+    );
+
+    await runScenario(
+      context,
+      {
+        id: "realtime-truth.disconnect-reconnect-resubscribe",
+        lane: "realtime-truth",
+        title: "Mission Control visibly degrades, reconnects, and consumes a post-restart realtime event",
+        subsystem: "mission-control",
+      },
+      async ({ correlationId }) => {
+        const browser = await chromium.launch({ headless: true });
+        try {
+          const browserContext = await browser.newContext({
+            viewport: { width: 1440, height: 1024 },
+            colorScheme: "dark",
+          });
+          await installMissionControlNextBrowserState(browserContext, fixture.workspaceId);
+          const page = await browserContext.newPage();
+          const browserLog = attachBrowserLogging(page);
+
+          await page.goto(buildVerificationUiUrl(stack.uiUrl, "/ops/activity"), {
+            waitUntil: "domcontentloaded",
+          });
+          await waitForVerificationRouteReady(
+            page,
+            {
+              expectedArea: "ops",
+              expectedSection: "activity",
+              readyText: "Activity feed",
+            },
+            NEXT_UI_PACKAGE,
+          );
+          await setBrowserCorrelation(page, correlationId, fixture.sessionId);
+          await page.locator('[aria-label="Live updates: Streaming"]').first().waitFor({ timeout: 15000 });
+
+          const screenshotDir = path.join(context.artifactRoot, "screenshots");
+          await fs.mkdir(screenshotDir, { recursive: true });
+          const beforeScreenshot = path.join(screenshotDir, "realtime-disconnect-reconnect-before.png");
+          const degradedScreenshot = path.join(screenshotDir, "realtime-disconnect-reconnect-degraded.png");
+          const recoveredScreenshot = path.join(screenshotDir, "realtime-disconnect-reconnect-recovered.png");
+          await page.screenshot({ path: beforeScreenshot, fullPage: false });
+
+          const beforeState = await page.evaluate(() => ({
+            clientId: window.localStorage.getItem("goatcitadel.events.client.v1"),
+            cursor: window.localStorage.getItem("goatcitadel.events.cursor.v1"),
+          }));
+          const gatewayPidBefore = stack.gateway?.child?.pid;
+          const outageLogCursor = browserLog.mark();
+          await stopProcess(stack.gateway);
+          await page.locator('[aria-label="Live updates: Polling fallback"]').first().waitFor({ timeout: 15000 });
+          await page.screenshot({ path: degradedScreenshot, fullPage: false });
+
+          stack.gateway = await restartGatewayProcess(context, stack, realtimeGatewayEnv);
+          const gatewayPidAfter = stack.gateway?.child?.pid;
+          if (
+            !Number.isSafeInteger(gatewayPidBefore) ||
+            !Number.isSafeInteger(gatewayPidAfter) ||
+            gatewayPidBefore === gatewayPidAfter
+          ) {
+            throw new Error(
+              `realtime reconnect expected a new owned Gateway process, got ${String(gatewayPidBefore)} -> ${String(gatewayPidAfter)}`,
+            );
+          }
+          await page.locator('[aria-label="Live updates: Streaming"]').first().waitFor({ timeout: 30000 });
+          const recoveryLogCursor = browserLog.mark();
+
+          const seeded = await requestJson(stack.gatewayUrl, "/api/v1/dev/verification/realtime-truth-seed", {
+            method: "POST",
+            body: {},
+          });
+          assertOk(seeded, "seed post-reconnect realtime event");
+          const expectedSequence = Number(seeded.body?.compatibilityEvent?.sequence);
+          if (!Number.isSafeInteger(expectedSequence) || expectedSequence <= 0) {
+            throw new Error("post-reconnect realtime seed returned no valid terminal sequence");
+          }
+          await page.waitForFunction(
+            (sequence) => Number(window.localStorage.getItem("goatcitadel.events.cursor.v1")) >= sequence,
+            expectedSequence,
+            { timeout: 15000 },
+          );
+          const afterState = await page.evaluate(() => ({
+            clientId: window.localStorage.getItem("goatcitadel.events.client.v1"),
+            cursor: window.localStorage.getItem("goatcitadel.events.cursor.v1"),
+          }));
+          if (!beforeState.clientId || afterState.clientId !== beforeState.clientId) {
+            throw new Error(
+              `realtime reconnect changed the browser client identity (${beforeState.clientId ?? "missing"} -> ${afterState.clientId ?? "missing"})`,
+            );
+          }
+
+          await page.getByLabel("Refresh Ops runtime data").click();
+          await page.getByText("verification_memory_refresh", { exact: false }).first().waitFor({ timeout: 15000 });
+          await page.screenshot({ path: recoveredScreenshot, fullPage: false });
+          const browserSanity = assertBrowserConsoleHealthy(browserLog, recoveryLogCursor, NEXT_UI_PACKAGE);
+          const artifacts = await captureBrowserArtifacts(context, {
+            slug: "realtime-disconnect-reconnect-resubscribe",
+            page,
+            browserLog,
+            gatewayUrl: stack.gatewayUrl,
+            correlationId,
+            logCursor: recoveryLogCursor,
+          });
+          const outPath = path.join(
+            context.artifactRoot,
+            "diagnostics",
+            "realtime-disconnect-reconnect-resubscribe.json",
+          );
+          await writeJson(outPath, {
+            gateway: {
+              beforePid: gatewayPidBefore,
+              afterPid: gatewayPidAfter,
+              endpoint: stack.gatewayUrl,
+            },
+            browser: {
+              before: beforeState,
+              after: afterState,
+              outageDiagnostics: browserLog.getSnapshot(outageLogCursor),
+            },
+            postReconnectEvent: {
+              eventId: seeded.body?.compatibilityEvent?.eventId,
+              eventType: seeded.body?.compatibilityEvent?.eventType,
+              sequence: expectedSequence,
+            },
+          });
+          return {
+            status: "passed",
+            metrics: {
+              gatewayPidBefore,
+              gatewayPidAfter,
+              postReconnectSequence: expectedSequence,
+              consoleErrorsAfterRecovery: browserSanity.consoleErrors.length,
+              pageErrorsAfterRecovery: browserSanity.pageErrors.length,
+            },
+            artifacts: {
+              ...artifacts,
+              diagnostics: [...artifacts.diagnostics, relativeToRun(context, outPath)],
+              screenshots: [
+                relativeToRun(context, beforeScreenshot),
+                relativeToRun(context, degradedScreenshot),
+                relativeToRun(context, recoveredScreenshot),
+                ...artifacts.screenshots,
+              ],
             },
           };
         } finally {
@@ -4131,32 +4306,68 @@ function assertOk(response, label) {
   }
 }
 
-async function ensureOnboardingComplete(gatewayUrl, completedBy, headers = {}) {
-  let onboardingStateResponse = await requestJson(gatewayUrl, "/api/v1/onboarding/state", {
-    headers,
-  });
-  assertOk(onboardingStateResponse, "read onboarding state");
-  if (onboardingStateResponse.body?.completed) {
+const ONBOARDING_RECONCILIATION_CONFLICT_MESSAGE =
+  "Settings are temporarily unavailable while runtime owners reconcile a config generation.";
+const ONBOARDING_RECONCILIATION_ATTEMPTS = 120;
+const ONBOARDING_RECONCILIATION_RETRY_MS = 250;
+
+export async function ensureOnboardingComplete(gatewayUrl, completedBy, headers = {}, options = {}) {
+  const request = options.requestJson ?? requestJson;
+  const wait = options.delay ?? delay;
+  const attempts = options.reconciliationAttempts ?? ONBOARDING_RECONCILIATION_ATTEMPTS;
+  const retryMs = options.reconciliationRetryMs ?? ONBOARDING_RECONCILIATION_RETRY_MS;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    let onboardingStateResponse = await request(gatewayUrl, "/api/v1/onboarding/state", {
+      headers,
+    });
+    if (isOnboardingReconciliationConflict(onboardingStateResponse) && attempt < attempts) {
+      await wait(retryMs);
+      continue;
+    }
+    assertOk(onboardingStateResponse, "read onboarding state");
+    if (onboardingStateResponse.body?.completed) {
+      return onboardingStateResponse.body;
+    }
+
+    const completeResponse = await request(gatewayUrl, "/api/v1/onboarding/complete", {
+      method: "POST",
+      headers,
+      body: {
+        completedBy,
+      },
+    });
+    if (isOnboardingReconciliationConflict(completeResponse) && attempt < attempts) {
+      await wait(retryMs);
+      continue;
+    }
+    assertOk(completeResponse, "complete onboarding");
+
+    onboardingStateResponse = await request(gatewayUrl, "/api/v1/onboarding/state", {
+      headers,
+    });
+    if (isOnboardingReconciliationConflict(onboardingStateResponse) && attempt < attempts) {
+      await wait(retryMs);
+      continue;
+    }
+    assertOk(onboardingStateResponse, "re-read onboarding state");
+    if (!onboardingStateResponse.body?.completed) {
+      throw new Error(
+        `verification onboarding completion did not persist: ${JSON.stringify(onboardingStateResponse.body)}`,
+      );
+    }
     return onboardingStateResponse.body;
   }
-  const completeResponse = await requestJson(gatewayUrl, "/api/v1/onboarding/complete", {
-    method: "POST",
-    headers,
-    body: {
-      completedBy,
-    },
-  });
-  assertOk(completeResponse, "complete onboarding");
-  onboardingStateResponse = await requestJson(gatewayUrl, "/api/v1/onboarding/state", {
-    headers,
-  });
-  assertOk(onboardingStateResponse, "re-read onboarding state");
-  if (!onboardingStateResponse.body?.completed) {
-    throw new Error(
-      `verification onboarding completion did not persist: ${JSON.stringify(onboardingStateResponse.body)}`,
-    );
-  }
-  return onboardingStateResponse.body;
+
+  throw new Error("verification onboarding config-generation reconciliation retry budget was exhausted");
+}
+
+function isOnboardingReconciliationConflict(response) {
+  return (
+    response?.status === 409 &&
+    response.body?.code === "STATE_CONFLICT" &&
+    response.body?.error === ONBOARDING_RECONCILIATION_CONFLICT_MESSAGE
+  );
 }
 
 function buildCompanionSignedHeaders({ token, privateKey, path, nonce, body, timestamp = new Date().toISOString() }) {

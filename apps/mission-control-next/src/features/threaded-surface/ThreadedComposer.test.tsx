@@ -907,6 +907,36 @@ describe("ThreadedComposer", () => {
     );
   });
 
+  it("keeps retry and a fresh next send available after a cancelled turn", async () => {
+    const onRetryTurn = vi.fn();
+    const onSend = vi.fn();
+    const renderer = await renderComposer({
+      draft: "Start a different next turn",
+      selectedTurn: {
+        turnId: "turn-cancelled",
+        trace: { status: "cancelled" },
+      },
+      selectedTurnRecovery: {
+        action: "retry",
+        label: "Retry the turn",
+        summary: "Run the same turn again once.",
+      },
+      canSend: true,
+      onRetryTurn,
+      onSend,
+    });
+
+    const retryButton = findButton(renderer.root, "Retry turn");
+    const sendButton = findButton(renderer.root, "Send");
+    expect(retryButton.props.disabled).not.toBe(true);
+    expect(sendButton.props.disabled).toBe(false);
+
+    await click(retryButton);
+    await click(sendButton);
+    expect(onRetryTurn).toHaveBeenCalledWith("turn-cancelled");
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
   it("wires queue, draft, suggestion, recovery, editing, and attachment actions", async () => {
     const callbacks = {
       onResumeAll: vi.fn(),

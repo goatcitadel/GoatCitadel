@@ -440,6 +440,7 @@
     opacity var(--motion-fast) var(--motion-ease);
 }
 
+.mc-next-shell.ui-hide-technical .mc-next-thread-turn.selected .mc-next-thread-actions,
 .mc-next-shell.ui-hide-technical .mc-next-thread-turn:hover .mc-next-thread-actions,
 .mc-next-shell.ui-hide-technical .mc-next-thread-turn:focus-within .mc-next-thread-actions {
   max-height: 8rem;

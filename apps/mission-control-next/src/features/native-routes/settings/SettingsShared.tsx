@@ -24,6 +24,7 @@ import type { fetchSettings } from "@goatcitadel/mission-control-shared/api/clie
 import type { AppRoute, ReleaseSurfaceStatus } from "@next/app/route-model";
 import { BlocksShuffleLoader } from "../../../components/BlocksShuffleLoader";
 import { NativeCard, NativePageFrame } from "../NativeRoutePageLayout";
+import { labelDirectFormControls } from "../shared/field-accessibility";
 import {
   ThreePartChip,
   EmptyState,
@@ -106,26 +107,29 @@ export function SettingsLoadWarnings({ issues, onRetry }: { issues: NativeLoadIs
     return null;
   }
   return (
-    <NativeCard
-      density="compact"
-      className="mc-next-settings-panel"
-      title="Some data could not load"
-      subtitle="The rest of this settings page is still usable."
-    >
-      <SettingsActionList
-        items={issues.map((issue) => ({
-          label: issue.label,
-          description: issue.message,
-          tone: "warning",
-        }))}
-      />
-      <div className="mc-next-settings-actions">
-        <NativeButton variant="secondary" onClick={() => void onRetry()}>
-          <RefreshCw size={16} />
-          Retry
-        </NativeButton>
-      </div>
-    </NativeCard>
+    <div role="status" aria-live="polite">
+      <NativeCard
+        density="compact"
+        className="mc-next-settings-panel"
+        title="Some data could not load"
+        subtitle="The rest of this settings page is still usable."
+      >
+        <SettingsActionList
+          ariaLabel="Settings load warnings"
+          items={issues.map((issue) => ({
+            label: issue.label,
+            description: issue.message,
+            tone: "warning",
+          }))}
+        />
+        <div className="mc-next-settings-actions">
+          <NativeButton variant="secondary" onClick={() => void onRetry()}>
+            <RefreshCw size={16} />
+            Retry
+          </NativeButton>
+        </div>
+      </NativeCard>
+    </div>
   );
 }
 
@@ -400,8 +404,8 @@ export function SettingsField({
   }
   return (
     <label className={className}>
-      <span>{label}</span>
-      {children}
+      <span id={labelId}>{label}</span>
+      {labelDirectFormControls(children, labelId)}
     </label>
   );
 }
@@ -448,6 +452,7 @@ export function SettingsActionList({
   emptyLabel = "Nothing here yet.",
   maxHeight = "min(50vh, 30rem)",
   compact = true,
+  ariaLabel,
 }: {
   items: Array<{
     id?: string;
@@ -460,6 +465,8 @@ export function SettingsActionList({
   emptyLabel?: string;
   maxHeight?: string;
   compact?: boolean;
+  /** Contextual landmark name. Required so pages with multiple lists never emit duplicate generic regions. */
+  ariaLabel: string;
 }) {
   if (!items.length) {
     return <SettingsEmptyState label={emptyLabel} />;
@@ -470,6 +477,9 @@ export function SettingsActionList({
         .filter(Boolean)
         .join(" ")}
       data-native-scroll={maxHeight ? "true" : undefined}
+      role={maxHeight ? "region" : undefined}
+      aria-label={maxHeight ? ariaLabel : undefined}
+      tabIndex={maxHeight ? 0 : undefined}
       style={maxHeight ? { maxHeight } : undefined}
     >
       {items.map((item) => (
@@ -480,7 +490,11 @@ export function SettingsActionList({
             {item.meta ? <span>{item.meta}</span> : null}
           </div>
           {item.onClick ? (
-            <NativeButton variant="secondary" onClick={item.onClick}>
+            <NativeButton
+              variant="secondary"
+              onClick={item.onClick}
+              aria-label={item.actionLabel ? undefined : `Open ${item.label}`}
+            >
               {item.actionLabel ?? "Open"}
             </NativeButton>
           ) : item.actionLabel ? (
@@ -498,7 +512,7 @@ export function SettingsFilterBar({
   onChange,
   label = "Filter settings records",
 }: {
-  options: Array<{ id: string; label: string }>;
+  options: Array<{ id: string; label: string; ariaLabel?: string }>;
   value: string;
   onChange: (value: string) => void;
   label?: string;
@@ -509,7 +523,7 @@ export function SettingsFilterBar({
       label={label}
       idPrefix={`settings-filter-${filterId}`}
       value={value}
-      options={options.map((item) => ({ value: item.id, label: item.label }))}
+      options={options.map((item) => ({ value: item.id, label: item.label, ariaLabel: item.ariaLabel }))}
       onChange={onChange}
     />
   );

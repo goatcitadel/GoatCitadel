@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
         tags: ["launch"],
         sourceRefs: ["run-1"],
         lifecycleStatus: "active",
+        revision: 2,
         createdAt: "2026-06-01T10:00:00.000Z",
         updatedAt: "2026-06-01T11:00:00.000Z",
       },
@@ -33,6 +34,34 @@ const mocks = vi.hoisted(() => ({
     ...input,
   })),
   archiveNote: vi.fn(async (noteId: string) => ({ noteId, lifecycleStatus: "archived" })),
+  listNoteRevisions: vi.fn(async () => ({
+    items: [
+      {
+        noteId: "note-1",
+        workspaceId: "default",
+        revision: 2,
+        title: "Launch checklist",
+        body: "Confirm store copy and release proof.",
+        tags: ["launch"],
+        sourceRefs: ["run-1"],
+        contentHash: "hash-note-1-v2",
+        actorId: "operator",
+        source: "operator",
+        createdAt: "2026-06-01T11:00:00.000Z",
+      },
+    ],
+  })),
+  updateNote: vi.fn(async (noteId: string, input: any) => ({
+    noteId,
+    workspaceId: "default",
+    lifecycleStatus: "active",
+    revision: 3,
+    tags: ["launch"],
+    sourceRefs: ["run-1"],
+    createdAt: "2026-06-01T10:00:00.000Z",
+    updatedAt: "2026-06-01T12:00:00.000Z",
+    ...input,
+  })),
   listReminders: vi.fn(async () => ({
     items: [
       {
@@ -194,8 +223,10 @@ vi.mock("@goatcitadel/mission-control-shared/api/personal-ops", () => ({
   createReminder: mocks.createReminder,
   fetchCommunicationsDashboard: mocks.fetchCommunicationsDashboard,
   listNotes: mocks.listNotes,
+  listNoteRevisions: mocks.listNoteRevisions,
   listReminders: mocks.listReminders,
   sendMailDraft: mocks.sendMailDraft,
+  updateNote: mocks.updateNote,
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/model-comparisons", () => ({
@@ -229,6 +260,35 @@ describe("NativeRoutePages odysseus library sections", () => {
     expect(mocks.createNote).toHaveBeenCalledWith(
       expect.objectContaining({ workspaceId: "default", title: "Operator recap" }),
     );
+
+    const editTitle = renderer!.root.findAll(
+      (node) => node.type === "input" && node.props.value === "Launch checklist",
+    )[0]!;
+    const editBody = renderer!.root.findAll(
+      (node) => node.type === "textarea" && node.props.value === "Confirm store copy and release proof.",
+    )[0]!;
+    await act(async () => {
+      editTitle.props.onChange({ target: { value: "Updated launch checklist" } });
+      editBody.props.onChange({ target: { value: "Updated body" } });
+    });
+    await act(async () => {
+      await findButton(renderer!.root, "Save changes").props.onClick();
+    });
+    expect(mocks.updateNote).toHaveBeenCalledWith(
+      "note-1",
+      expect.objectContaining({
+        workspaceId: "default",
+        expectedRevision: 2,
+        title: "Updated launch checklist",
+        body: "Updated body",
+      }),
+    );
+    expect(mocks.listNoteRevisions).toHaveBeenCalledWith("note-1", "default");
+
+    await act(async () => {
+      await findButton(renderer!.root, "Archive note").props.onClick();
+    });
+    expect(mocks.archiveNote).toHaveBeenCalledWith("note-1", "default");
   });
 
   it("renders communications and creates a governed mail draft", async () => {

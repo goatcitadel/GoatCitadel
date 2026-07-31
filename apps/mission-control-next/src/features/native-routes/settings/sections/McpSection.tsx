@@ -86,7 +86,7 @@ function areMcpDraftsEqual(a: object, b: object): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-export function McpSection(_props: SettingsSectionProps) {
+export function McpSection(props: SettingsSectionProps) {
   const load = useCallback(async () => {
     const [servers, templates, remotePreview, serverMode, pendingElicitations] = await Promise.all([
       nativeLoad("MCP servers", fetchMcpServers(), { items: [] }),
@@ -397,6 +397,7 @@ export function McpSection(_props: SettingsSectionProps) {
                 </SettingsButtonRow>
                 {data.templates?.length ? (
                   <SettingsActionList
+                    ariaLabel="MCP server templates"
                     items={data.templates.slice(0, 6).map((item) => ({
                       label: item.label,
                       description: item.description,
@@ -464,6 +465,7 @@ export function McpSection(_props: SettingsSectionProps) {
                           ]}
                         />
                         <SettingsActionList
+                          ariaLabel={`MCP elicitation ${item.elicitationId}`}
                           items={[
                             {
                               label: item.prompt.text,
@@ -551,6 +553,7 @@ export function McpSection(_props: SettingsSectionProps) {
                   }}
                 />
                 <SettingsActionList
+                  ariaLabel="MCP server-mode capability descriptors"
                   items={(data.serverMode.tools ?? []).slice(0, 8).map((item) => ({
                     label: item.name,
                     meta: `${item.serverModeState.replaceAll("_", " ")} · ${item.capabilityKind}`,
@@ -606,6 +609,7 @@ export function McpSection(_props: SettingsSectionProps) {
                   }}
                 />
                 <SettingsActionList
+                  ariaLabel="Remote MCP server preview"
                   items={(data.remotePreview.items ?? []).map((item) => ({
                     label: item.label,
                     meta: [
@@ -633,6 +637,7 @@ export function McpSection(_props: SettingsSectionProps) {
                   <SettingsFieldGrid>
                     <SettingsField label="Label">
                       <input
+                        aria-label="MCP server label"
                         className="mc-next-settings-input"
                         value={editForm.label}
                         onChange={(event) => setEditForm((current) => ({ ...current, label: event.target.value }))}
@@ -640,6 +645,7 @@ export function McpSection(_props: SettingsSectionProps) {
                     </SettingsField>
                     <SettingsField label="Category">
                       <select
+                        aria-label="MCP server category"
                         className="mc-next-settings-input"
                         value={editForm.category}
                         onChange={(event) =>
@@ -662,6 +668,7 @@ export function McpSection(_props: SettingsSectionProps) {
                     {selectedServer.transport === "stdio" ? (
                       <SettingsField label="Command" span={2}>
                         <input
+                          aria-label="MCP server command"
                           className="mc-next-settings-input"
                           value={editForm.command}
                           onChange={(event) => setEditForm((current) => ({ ...current, command: event.target.value }))}
@@ -670,6 +677,7 @@ export function McpSection(_props: SettingsSectionProps) {
                     ) : (
                       <SettingsField label="URL" span={2}>
                         <input
+                          aria-label="MCP server URL"
                           className="mc-next-settings-input"
                           value={editForm.url}
                           onChange={(event) => setEditForm((current) => ({ ...current, url: event.target.value }))}
@@ -679,6 +687,7 @@ export function McpSection(_props: SettingsSectionProps) {
                     <SettingsField label="Enabled" group>
                       <label className="mc-next-settings-toggle">
                         <input
+                          aria-label="MCP server enabled"
                           type="checkbox"
                           checked={editForm.enabled}
                           disabled={!selectedServerRuntimeReady}
@@ -797,6 +806,13 @@ export function McpSection(_props: SettingsSectionProps) {
                       Health check
                     </NativeButton>
                     <NativeButton
+                      variant="secondary"
+                      onClick={() => props.navigate({ area: "settings", section: "tools", theme: props.route.theme })}
+                    >
+                      <CheckCircle2 size={16} />
+                      Manage tool grants
+                    </NativeButton>
+                    <NativeButton
                       variant="destructive"
                       onClick={() =>
                         setPendingDeleteServer({ serverId: selectedServer.serverId, label: selectedServer.label })
@@ -807,13 +823,16 @@ export function McpSection(_props: SettingsSectionProps) {
                     </NativeButton>
                   </SettingsButtonRow>
                   <SettingsActionList
+                    ariaLabel={`${selectedServer.label} tools`}
                     items={tools.map((item) => ({
                       label: item.toolName,
                       description: item.description || "Registered MCP tool",
                     }))}
                     emptyLabel="No tools reported for this server."
                   />
-                  {healthReport ? <DiagnosticsPanel report={healthReport} /> : null}
+                  {healthReport ? (
+                    <DiagnosticsPanel report={healthReport} ariaLabel={`${selectedServer.label} health checks`} />
+                  ) : null}
                 </>
               ) : (
                 <SettingsEmptyState label="Select a server or create a new one." />

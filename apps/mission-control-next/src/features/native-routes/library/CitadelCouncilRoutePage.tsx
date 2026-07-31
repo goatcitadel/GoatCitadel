@@ -123,6 +123,7 @@ export function CitadelCouncilRoutePage({
               <label className="mc-next-mason-field" htmlFor={selectAgentId}>
                 <span>Council agent</span>
                 <select
+                  aria-label="Council agent"
                   id={selectAgentId}
                   className="mc-next-settings-input"
                   value={selectedAgentId}

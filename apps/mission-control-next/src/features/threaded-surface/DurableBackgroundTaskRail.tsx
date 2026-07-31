@@ -253,12 +253,22 @@ function BackgroundTaskCard({
       <SemanticLinks links={task.links} onOpen={onOpenSemanticLink} />
       <div className="mc-next-background-task__actions">
         {task.controls.detach.enabled ? (
-          <button type="button" disabled={pending} onClick={() => void onControl("detach")}>
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => void onControl("detach")}
+            aria-label={`Detach background task ${task.childRunId}`}
+          >
             Detach
           </button>
         ) : null}
         {task.controls.reattach.enabled ? (
-          <button type="button" disabled={pending} onClick={() => void onControl("reattach")}>
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => void onControl("reattach")}
+            aria-label={`Reattach background task ${task.childRunId}`}
+          >
             Reattach
           </button>
         ) : null}

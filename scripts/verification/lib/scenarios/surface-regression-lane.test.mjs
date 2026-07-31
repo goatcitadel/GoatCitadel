@@ -1,7 +1,48 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { navigateSurfaceRoute, runSurfaceRegressionLane } from "./surface-regression-lane.mjs";
+import {
+  buildSurfaceCompatibilityInputs,
+  navigateSurfaceRoute,
+  runSurfaceRegressionLane,
+} from "./surface-regression-lane.mjs";
+
+test("surface regression gives legacy-query and direct-path compatibility distinct proof identities", () => {
+  const inputs = buildSurfaceCompatibilityInputs({
+    redirectRoutes: [{ slug: "legacy-surface-code", href: "/?surface=code", expectedPath: "/chat" }],
+    directCompatibilityRoutes: [
+      { slug: "direct-cowork", href: "/cowork", expectedPath: "/chat" },
+      { slug: "direct-code", href: "/code", expectedPath: "/chat" },
+      {
+        slug: "direct-settings-safety",
+        href: "/settings/safety",
+        expectedPath: "/settings/permissions",
+      },
+    ],
+  });
+
+  assert.deepEqual(
+    inputs.map(({ compatibilityKind, scenarioId }) => ({ compatibilityKind, scenarioId })),
+    [
+      {
+        compatibilityKind: "legacy-query-input",
+        scenarioId: "surface-regression.redirect.legacy-surface-code",
+      },
+      {
+        compatibilityKind: "direct-path",
+        scenarioId: "surface-regression.direct-compatibility.direct-cowork",
+      },
+      {
+        compatibilityKind: "direct-path",
+        scenarioId: "surface-regression.direct-compatibility.direct-code",
+      },
+      {
+        compatibilityKind: "direct-path",
+        scenarioId: "surface-regression.direct-compatibility.direct-settings-safety",
+      },
+    ],
+  );
+});
 
 test("first surface navigation retries once after a bounded cold-start readiness timeout", async () => {
   let gotoCalls = 0;
@@ -89,7 +130,7 @@ test("surface regression returns failure evidence when a browser assertion throw
 
   await runSurfaceRegressionLane(
     { artifactRoot: "artifacts" },
-    {},
+    { secretEnvKeys: ["OPENAI_API_KEY", "SLACK_BOT_TOKEN"] },
     {
       appendTraceArtifact: (artifacts, traceArtifact) => ({
         ...artifacts,
@@ -144,6 +185,8 @@ test("surface regression returns failure evidence when a browser assertion throw
   assert.equal(stackOptions.gatewayEnv.GOATCITADEL_AUTH_MODE, "token");
   assert.equal(stackOptions.gatewayEnv.GOATCITADEL_AUTH_TOKEN, "verification-surface-regression-operator-token");
   assert.equal(stackOptions.gatewayEnv.GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS, "true");
+  assert.deepEqual(stackOptions.gatewayEnvOmit, ["OPENAI_API_KEY", "SLACK_BOT_TOKEN"]);
+  assert.deepEqual(stackOptions.uiEnvOmit, ["OPENAI_API_KEY", "SLACK_BOT_TOKEN"]);
   assert.notEqual(stackOptions.gatewayEnv.GOATCITADEL_AUTH_MODE, "none");
   assert.equal(results[0].status, "failed");
   assert.match(results[0].error, /console errors: route crashed/);

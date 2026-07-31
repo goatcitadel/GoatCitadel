@@ -21,7 +21,39 @@ export function isSuspiciousEncodedPath(rawUrl: string): boolean {
   }
 
   const segments = normalized.split("/").filter(Boolean);
-  return segments.some((segment) => hasNtfsAlternateDataStream(segment) || isWindowsReservedDeviceSegment(segment));
+  return segments.some(
+    (segment, index) =>
+      !isOpaqueDurableWatcherIdSegment(segments, index) &&
+      (hasNtfsAlternateDataStream(segment) || isWindowsReservedDeviceSegment(segment)),
+  );
+}
+
+/**
+ * Durable watcher IDs are opaque database keys rather than filesystem names.
+ * Their canonical producers use colon-delimited provenance, so the exact
+ * watcher-control route segments must not be mistaken for NTFS alternate data
+ * streams. Encoded separators, nulls, traversal, and every non-watcher segment
+ * remain governed by the checks above and below.
+ */
+function isOpaqueDurableWatcherIdSegment(segments: string[], index: number): boolean {
+  const isBackgroundTaskControl =
+    segments.length === 8 &&
+    segments[0] === "api" &&
+    segments[1] === "v1" &&
+    segments[2] === "durable" &&
+    segments[3] === "runs" &&
+    segments[5] === "background-tasks" &&
+    segments[7] === "control" &&
+    index === 6;
+  const isDirectWatcherControl =
+    segments.length === 6 &&
+    segments[0] === "api" &&
+    segments[1] === "v1" &&
+    segments[2] === "durable" &&
+    segments[3] === "child-watchers" &&
+    ["detach", "reattach", "close"].includes(segments[5] ?? "") &&
+    index === 4;
+  return isBackgroundTaskControl || isDirectWatcherControl;
 }
 
 function decodePathSafely(value: string): string | undefined {

@@ -8,6 +8,7 @@ import {
   FAST_LANE_COMMANDS,
   buildOrchestrationPerformanceScenarioResult,
   deriveProviderStatus,
+  ensureOnboardingComplete,
   exerciseMissionControlNextMobileRail,
   getNextCoreNavigationRoutes,
   openMissionControlNextThreadedContext,
@@ -51,6 +52,65 @@ test("autonomy-grant verification override drops the stale unified-config genera
   assert.deepEqual(unified.toolPolicy, split);
   assert.equal(unified.toolPolicy.tools.profile, "danger");
   assert.equal(unified.toolPolicy.tools.approvalMode, "bypass");
+});
+
+test("verification onboarding retries only the exact transient config-generation conflict", async () => {
+  const transientConflict = {
+    ok: false,
+    status: 409,
+    body: {
+      code: "STATE_CONFLICT",
+      error: "Settings are temporarily unavailable while runtime owners reconcile a config generation.",
+    },
+  };
+  const responses = [
+    transientConflict,
+    { ok: true, status: 200, body: { completed: false } },
+    transientConflict,
+    { ok: true, status: 200, body: { completed: false } },
+    { ok: true, status: 200, body: { completed: true } },
+    { ok: true, status: 200, body: { completed: true, completedBy: "verification-test" } },
+  ];
+  const calls = [];
+  const waits = [];
+  const result = await ensureOnboardingComplete("http://127.0.0.1:12345", "verification-test", {}, {
+    requestJson: async (_gatewayUrl, route, options = {}) => {
+      calls.push({ route, method: options.method ?? "GET" });
+      return responses.shift();
+    },
+    delay: async (retryMs) => waits.push(retryMs),
+    reconciliationAttempts: 4,
+    reconciliationRetryMs: 7,
+  });
+
+  assert.deepEqual(result, { completed: true, completedBy: "verification-test" });
+  assert.deepEqual(waits, [7, 7]);
+  assert.deepEqual(calls, [
+    { route: "/api/v1/onboarding/state", method: "GET" },
+    { route: "/api/v1/onboarding/state", method: "GET" },
+    { route: "/api/v1/onboarding/complete", method: "POST" },
+    { route: "/api/v1/onboarding/state", method: "GET" },
+    { route: "/api/v1/onboarding/complete", method: "POST" },
+    { route: "/api/v1/onboarding/state", method: "GET" },
+  ]);
+
+  let nonRetryWaits = 0;
+  await assert.rejects(
+    ensureOnboardingComplete("http://127.0.0.1:12345", "verification-test", {}, {
+      requestJson: async () => ({
+        ok: false,
+        status: 409,
+        body: { code: "STATE_CONFLICT", error: "A different state conflict." },
+      }),
+      delay: async () => {
+        nonRetryWaits += 1;
+      },
+      reconciliationAttempts: 4,
+      reconciliationRetryMs: 7,
+    }),
+    /read onboarding state failed \(409\).*A different state conflict/u,
+  );
+  assert.equal(nonRetryWaits, 0);
 });
 
 test("deep-core navigation follows the one-chat release surface", () => {

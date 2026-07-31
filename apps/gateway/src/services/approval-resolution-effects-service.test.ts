@@ -100,6 +100,78 @@ describe("approval-resolution-effects-service", () => {
     });
   });
 
+  it("moves a woken approval-blocked Chat trace to running before dispatch is requested", async () => {
+    const effect = createEffect({
+      effectKind: "linked_chat_turn_wake",
+      targetKind: "chat_turn",
+      targetId: "turn-resumed",
+      status: "running",
+      payload: { runId: "durable-resumed" },
+    });
+    let trace: ChatTurnTraceRecord = {
+      ...createWaitingChildTrace("session-resumed", effect.targetId),
+      durable: { runId: "durable-resumed", status: "waiting", checkpointKind: "run_waiting" },
+    };
+    const patchIfStatus = vi.fn(
+      (
+        turnId: string,
+        expectedStatuses: readonly ChatTurnTraceRecord["status"][],
+        patch: { status?: ChatTurnTraceRecord["status"] },
+      ) => {
+        if (turnId !== trace.turnId || !expectedStatuses.includes(trace.status)) return undefined;
+        trace = { ...trace, ...patch };
+        return trace;
+      },
+    );
+    const completeEffect = vi.fn(() => ({ ...effect, status: "completed" as const }));
+    const requestRunProcessing = vi.fn();
+    const service = new ApprovalEffectsService(
+      {
+        storage: {
+          approvalEffects: {
+            completeEffect,
+            failEffect: vi.fn(),
+            skipEffect: vi.fn(),
+          },
+          chatTurnTraces: {
+            get: vi.fn(() => trace),
+            patchIfStatus,
+          },
+          runImmediateTransaction: <T>(work: () => T): T => work(),
+        },
+        publishRealtime: vi.fn(),
+      } as unknown as ServiceContext,
+      {
+        ...createApprovalEffectDeps(),
+        wakeDurableRun: vi.fn(() => ({
+          runId: "durable-resumed",
+          eventKey: "approval.resolved",
+          correlationId: effect.approvalId,
+          outcome: "woke" as const,
+          run: { runId: "durable-resumed", status: "queued" as const },
+        })),
+        requestRunProcessing,
+      },
+    );
+
+    await (
+      service as unknown as {
+        handleLinkedChatTurnWake(currentEffect: ApprovalEffectRecord): Promise<void>;
+      }
+    ).handleLinkedChatTurnWake(effect);
+
+    expect(patchIfStatus).toHaveBeenCalledWith(effect.targetId, ["waiting_for_approval"], { status: "running" });
+    expect(trace.status).toBe("running");
+    expect(completeEffect).toHaveBeenCalledWith(
+      effect.effectId,
+      expect.any(String),
+      effect.version,
+      expect.objectContaining({ result: expect.objectContaining({ outcome: "woke" }) }),
+    );
+    expect(patchIfStatus.mock.invocationCallOrder[0]).toBeLessThan(completeEffect.mock.invocationCallOrder[0]!);
+    expect(requestRunProcessing).toHaveBeenCalledWith("durable-resumed");
+  });
+
   it("captures attribution and delegates observability allocation to the atomic repository batch", () => {
     const effect = createEffect({
       effectId: "observability-effect-1",

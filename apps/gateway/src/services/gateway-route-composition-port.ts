@@ -210,6 +210,7 @@ export interface GatewayRouteCompositionPort {
   mcpOAuth: Pick<GatewayMcpOAuthService, "exchangeAuthorizationCode">;
   patchSessionAutonomyPrefs: chatSessionService.ChatSessionDependencies["patchSessionAutonomyPrefs"];
   publishRealtime: RouteDependencyMethod<"devVerification", "publishRealtime">;
+  reconcileGeneralChatPostCommit(runId: string): Promise<boolean>;
   readConnectionConfigValue: IntegrationChannelServicePort["readConnectionConfigValue"];
   readDiscordPairings: IntegrationChannelServicePort["readDiscordPairings"];
   readFeatureFlags: settingsAuthService.SettingsRuntimeDependencies["readFeatureFlags"];
@@ -432,6 +433,7 @@ export function createGatewayRouteCompositionPort(
     mcpOAuth: gateway.mcpOAuth,
     patchSessionAutonomyPrefs: gateway.patchSessionAutonomyPrefs.bind(gateway),
     publishRealtime: gateway.publishRealtime.bind(gateway),
+    reconcileGeneralChatPostCommit: gateway.reconcileGeneralChatPostCommit.bind(gateway),
     readConnectionConfigValue: gateway.readConnectionConfigValue.bind(gateway),
     readDiscordPairings: gateway.readDiscordPairings.bind(gateway),
     readFeatureFlags: gateway.readFeatureFlags.bind(gateway),

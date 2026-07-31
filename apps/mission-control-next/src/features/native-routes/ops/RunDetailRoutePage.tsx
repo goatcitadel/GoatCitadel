@@ -89,9 +89,10 @@ export function RunDetailRoutePage({ route, activeWorkspaceId, activeWorkspaceNa
       fetchObserveRunTrace(runId).then((value) => value as unknown as RunTracePayload),
       buildEmptyRunTrace(runId),
     );
-    const orchestrationTrace = await fetchOrchestrationRunTrace(runId, { workspaceId: activeWorkspaceId }).catch(
-      () => null,
-    );
+    const orchestrationRunId = getLinkedOrchestrationRunId(trace.data);
+    const orchestrationTrace = orchestrationRunId
+      ? await fetchOrchestrationRunTrace(orchestrationRunId, { workspaceId: activeWorkspaceId }).catch(() => null)
+      : null;
     const structuredReview = runId.startsWith("review-")
       ? await fetchStructuredReviewRun(runId).catch(() => null)
       : null;
@@ -582,6 +583,16 @@ function buildEmptyRunTrace(runId: string): RunTracePayload {
       summary: "Trace projection is not available yet.",
     },
   };
+}
+
+function getLinkedOrchestrationRunId(trace: RunTracePayload): string | undefined {
+  const run = readRecord(trace, "run") ?? readRecord(trace, "durableRun");
+  if (readString(run?.workflowKey) !== "orchestration.plan.execute") {
+    return undefined;
+  }
+  const payload = readRecord(run, "payload");
+  const orchestrationMetadata = readRecord(readRecord(run, "metadata"), "orchestration");
+  return readString(payload?.orchestrationRunId) ?? readString(orchestrationMetadata?.runId);
 }
 
 function buildRunDetailModel(raw: unknown, fallbackRunId: string, orchestrationRaw: unknown = null): RunDetailModel {

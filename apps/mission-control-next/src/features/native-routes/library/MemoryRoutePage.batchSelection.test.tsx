@@ -165,7 +165,11 @@ function findBatchToolbar(root: ReactTestInstance): ReactTestInstance | undefine
 
 function findSearchInput(root: ReactTestInstance): ReactTestInstance {
   const input = root.findAll(
-    (node) => node.type === "input" && node.props["aria-label"] === "Search memories by namespace, title, or content",
+    (node) =>
+      node.type === "input" &&
+      node.props.type === "search" &&
+      node.props.placeholder === "Namespace, title, or content" &&
+      node.props["aria-label"] === undefined,
   )[0];
   if (!input) {
     throw new Error("Unable to find memory search input");

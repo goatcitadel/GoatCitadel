@@ -31,7 +31,13 @@ afterEach(async () => {
   }
 });
 
-describe("SkillHubReviewService", () => {
+// Each case builds a real harness over Storage, the CAS artifact store, and a
+// temporary filesystem root. Under v8 coverage the suite measured between 42 and
+// 138 seconds across runs on the same host, and several cases exceed the
+// 15-second default on their own. The budget below covers that observed spread so
+// a loaded host cannot turn instrumentation cost into a false coverage-lane
+// failure, while still bounding a genuine hang.
+describe("SkillHubReviewService", { timeout: 120_000 }, () => {
   it("admits exact validated bytes as an inactive candidate snapshot and replays or conflicts canonically", async () => {
     const harness = await createHarness();
     const input = sourceReviewInput();

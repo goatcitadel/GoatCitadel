@@ -300,6 +300,63 @@ describe("ChatTurnCapabilityProfileRepository", () => {
     db.close();
   });
 
+  it("round-trips profiles whose optional durable and actor bindings are all null", () => {
+    const { db, repo } = createStore();
+    const draft = buildDraft();
+    delete draft.identity.durableRunId;
+    delete draft.identity.operatorId;
+    delete draft.identity.authActorId;
+    const profile = sealChatTurnCapabilityProfile(draft);
+
+    assert.deepEqual(createWithFrozenIncarnation(db, repo, profile), profile);
+    assert.deepEqual(repo.get(profile.profileId), profile);
+    assert.deepEqual(repo.findScopeByTurn(profile.identity.turnId), {
+      profileId: profile.profileId,
+      turnId: profile.identity.turnId,
+      sessionId: profile.identity.sessionId,
+      workspaceId: profile.identity.workspaceId,
+      profileHash: profile.hashes.profileHash,
+    });
+    const persistedBindings = db
+      .prepare(
+        `SELECT durable_run_id, operator_id, auth_actor_id
+         FROM chat_turn_capability_profiles
+         WHERE profile_id = ?`,
+      )
+      .get<{ durable_run_id: unknown; operator_id: unknown; auth_actor_id: unknown }>(profile.profileId);
+    assert.equal(persistedBindings?.durable_run_id, null);
+    assert.equal(persistedBindings?.operator_id, null);
+    assert.equal(persistedBindings?.auth_actor_id, null);
+    db.close();
+  });
+
+  it("fails closed instead of returning malformed optional authority bindings", () => {
+    for (const column of ["durable_run_id", "operator_id", "auth_actor_id"] as const) {
+      const { db, repo } = createStore();
+      const profile = sealChatTurnCapabilityProfile(buildDraft());
+      createWithFrozenIncarnation(db, repo, profile);
+      db.exec("DROP TRIGGER trg_chat_turn_capability_profiles_no_update");
+      db.prepare(
+        `UPDATE chat_turn_capability_profiles
+         SET ${column} = X'01'
+         WHERE profile_id = ?`,
+      ).run(profile.profileId);
+
+      const raw = db
+        .prepare(`SELECT ${column} AS malformed_value FROM chat_turn_capability_profiles WHERE profile_id = ?`)
+        .get<{ malformed_value: unknown }>(profile.profileId);
+      assert.notEqual(raw?.malformed_value, null, `${column} fixture must not be null`);
+      assert.notEqual(typeof raw?.malformed_value, "string", `${column} fixture must not be a string`);
+      assert.equal(repo.findByTurn(profile.identity.turnId), undefined, `${column} must fail the full-row decoder`);
+      assert.equal(
+        repo.findScopeByTurn(profile.identity.turnId),
+        undefined,
+        `${column} must never escape through the narrow authorization-scope read`,
+      );
+      db.close();
+    }
+  });
+
   it("round-trips only a secret-free exact requester-scoped MCP binding", () => {
     const { db, repo } = createStore();
     const draft = buildDraftWithProviderDefinition(

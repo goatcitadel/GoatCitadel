@@ -296,7 +296,7 @@ export function CitadelWardsRoutePage({
             ? `${pendingDeleteWard.name} will stop governing ${pendingDeleteWard.actionPattern}. This cannot be undone.`
             : "This Ward will be deleted."
         }
-        confirmLabel={deleteBusy ? "Deleting…" : "Delete Ward"}
+        confirmLabel={deleteBusy ? "Deleting…" : "Confirm delete Ward"}
         danger
         pending={deleteBusy}
         cancelDisabled={deleteBusy}

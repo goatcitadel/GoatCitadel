@@ -823,8 +823,14 @@ describe("GatewayService retained stream facade behavior", () => {
   });
 
   it("streams persisted chunks, falls back from mismatched cursors, and envelopes ephemeral chunks", async () => {
+    const awaitTerminalChatAdmissionRelease = vi.fn(async (input: { runId: string }) => ({
+      recoveryOutcome: "already_released" as const,
+      durableRunId: input.runId,
+      durableRunStatus: "completed" as const,
+    }));
     const gateway = createGatewayHarness({
       chatTurnExecutionRegistry: new ChatTurnExecutionRegistry(),
+      durableRunService: { awaitTerminalChatAdmissionRelease },
       storage: {
         chatStreamEvents: {
           getByEventId: vi.fn(() => undefined),
@@ -908,6 +914,12 @@ describe("GatewayService retained stream facade behavior", () => {
       { type: "message_done", content: "final answer", repaired: true, runId: "run-fallback" },
       { type: "done", messageId: "assistant-message-1", runId: "run-fallback" },
     ]);
+    expect(awaitTerminalChatAdmissionRelease).toHaveBeenCalledWith({
+      runId: "run-fallback",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      timeoutMs: 10_000,
+    });
 
     gateway.storage.chatStreamEvents.getByEventId = vi.fn(() => ({ turnId: "turn-1", sequence: 2 }));
     gateway.storage.chatStreamEvents.listByTurn = vi.fn((_turnId: string, afterSequence: number) =>

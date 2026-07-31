@@ -257,7 +257,11 @@ export function useMissionControlSurfaceState(input: {
   );
 
   const selectedTurnRecovery = useMemo(() => {
-    const action = selectedTurn?.trace.failure?.recommendedAction;
+    // Retrying a terminal cancellation uses the existing retry branch path,
+    // which admits a new turn from the source instead of replaying its dispatch.
+    const action =
+      selectedTurn?.trace.failure?.recommendedAction ??
+      (selectedTurn?.trace.status === "cancelled" ? "retry" : undefined);
     if (!action) {
       return null;
     }
@@ -292,7 +296,7 @@ export function useMissionControlSurfaceState(input: {
     ],
   );
 
-  const codeModeNeedsProjectBinding = isCodeSurface && !input.selectedSession?.projectId;
+  const codeModeNeedsProjectBinding = Boolean(input.selectedSession && !input.selectedSession.projectId);
   const selectedProjectBindingCandidateId =
     input.selectedProjectId !== "all" && input.selectedProjectId !== "none" ? input.selectedProjectId : undefined;
   const selectedProjectBindingCandidateName = selectedProjectBindingCandidateId

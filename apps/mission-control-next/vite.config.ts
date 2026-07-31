@@ -24,6 +24,7 @@ const RESTORED_TEST_EXCLUDE = [
 const DEFAULT_ALLOWED_HOSTS = ["localhost", "127.0.0.1", "::1", ".ts.net"];
 export const DEV_OPTIMIZE_DEPS_ESBUILD_TARGET = "esnext";
 const MONACO_PUBLIC_BASE = "/vendor/monaco/vs";
+const MANAGED_INSTANCE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const CONTENT_TYPES = new Map<string, string>([
   [".css", "text/css; charset=utf-8"],
   [".html", "text/html; charset=utf-8"],
@@ -131,6 +132,43 @@ function monacoAmdAssetsPlugin(packageRoot: string): Plugin {
   };
 }
 
+export function buildManagedUiHealthPayload(env: Record<string, string | undefined> = process.env): {
+  status: "ok";
+  service: "mission-control";
+  managedInstanceId?: string;
+  managedProcessId?: number;
+} {
+  const instanceId = env.GOATCITADEL_MANAGED_INSTANCE_ID?.trim();
+  return {
+    status: "ok",
+    service: "mission-control",
+    ...(env.GOATCITADEL_MANAGED_SERVICE === "mission-control" &&
+    instanceId &&
+    MANAGED_INSTANCE_ID_PATTERN.test(instanceId)
+      ? { managedInstanceId: instanceId, managedProcessId: process.pid }
+      : {}),
+  };
+}
+
+export function managedUiHealthPlugin(env: Record<string, string | undefined> = process.env): Plugin {
+  const payload = buildManagedUiHealthPayload(env);
+  return {
+    name: "goatcitadel-managed-ui-health",
+    configureServer(server: ViteDevServer) {
+      server.middlewares.use((req, res, next) => {
+        if ((req.url?.split("?", 1)[0] ?? "") !== "/health") {
+          next();
+          return;
+        }
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "application/json; charset=utf-8");
+        res.setHeader("Cache-Control", "no-store, max-age=0, must-revalidate");
+        res.end(JSON.stringify(payload));
+      });
+    },
+  };
+}
+
 export function resolveViteAllowedHosts(env: Record<string, string | undefined> = process.env): string[] {
   const raw = env.GOATCITADEL_VITE_ALLOWED_HOSTS?.trim();
   if (!raw) {
@@ -155,7 +193,9 @@ export default defineConfig(({ mode }) => {
     define: {
       __GC_BUILD_ID__: JSON.stringify(buildId),
     },
-    plugins: [monacoAmdAssetsPlugin(configDir), tailwindcss(), react()],
+    // Managed ownership is a per-process launch identity. Do not let a repo
+    // .env file replace the environment injected into this Vite process.
+    plugins: [managedUiHealthPlugin(process.env), monacoAmdAssetsPlugin(configDir), tailwindcss(), react()],
     resolve: {
       dedupe: ["react", "react-dom"],
       alias: [

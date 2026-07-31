@@ -141,6 +141,7 @@ export function GeneralSection({ activeCitadelId, activeWorkspaceName, route, na
             subtitle="Begin with the configuration that unlocks useful work; keep deep controls available after that."
           >
             <SettingsActionList
+              ariaLabel="Setup pathways"
               compact={false}
               maxHeight=""
               items={[
@@ -166,6 +167,7 @@ export function GeneralSection({ activeCitadelId, activeWorkspaceName, route, na
             subtitle="Jump straight into the settings surfaces that actually change behavior."
           >
             <SettingsActionList
+              ariaLabel="Quick settings routes"
               items={[
                 {
                   label: "Start Here",

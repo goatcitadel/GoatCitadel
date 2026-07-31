@@ -131,7 +131,7 @@ function writeConsoleLine(stream, args) {
   if (!stream.write(text + "\n")) {
     const drain = new Promise((resolve) => stream.once("drain", resolve));
     pendingConsoleDrains.add(drain);
-    drain.finally(() => pendingConsoleDrains.delete(drain));
+    void drain.then(() => pendingConsoleDrains.delete(drain));
   }
 }
 

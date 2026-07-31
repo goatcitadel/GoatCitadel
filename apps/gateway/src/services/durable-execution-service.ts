@@ -79,6 +79,7 @@ import {
   type HeartbeatDecisionReceipt,
 } from "./chat-durable-runtime-authority.js";
 import { buildChatTurnRealtimeOptions } from "./chat-turn-realtime.js";
+import { reconcileInterruptedDurableChatTurn } from "./chat-turn-interruption-recovery-service.js";
 import { enqueueAgentEndHook } from "./chat-turn-stream-events.js";
 import type {
   ActiveTurnAdmission,
@@ -111,14 +112,20 @@ type DurableExecutionStorage = chatTurnDispatchService.ChatTurnDispatchHost["sto
     | "approvals"
     | "audit"
     | "chatMessages"
+    | "chatSessionBranchState"
+    | "chatSessionPrefs"
+    | "chatStreamEvents"
     | "chatTurnCapabilityProfiles"
+    | "chatTurnRecovery"
     | "capabilityCatalogSnapshots"
     | "externalSideEffectRuns"
     | "mutationIdempotency"
     | "remoteActionTokens"
     | "routedContextSnapshots"
     | "runImmediateTransaction"
+    | "sessions"
     | "skillLifecycle"
+    | "transcriptOutbox"
   >;
 
 /** Channel routing recorded on an autonomous turn's `metadata.autonomous`. */
@@ -3469,6 +3476,12 @@ function isDurableChatTurnRecoverable(
     return { recoverable: false, reason: recoveryTrace.reason };
   }
   const trace = recoveryTrace.trace;
+  if (hasRetainedDurableChatOutput(host, payload, run.runId)) {
+    return {
+      recoverable: false,
+      reason: "Durable Chat output was emitted before interruption and cannot be safely replayed.",
+    };
+  }
   if (!trace) {
     return { recoverable: true };
   }
@@ -3503,6 +3516,49 @@ function isDurableChatTurnRecoverable(
     };
   }
   return { recoverable: true };
+}
+
+function hasRetainedDurableChatOutput(
+  host: DurableChatTurnWorkflowHost,
+  payload: DurableChatTurnExecutionPayload,
+  runId: string,
+): boolean {
+  const streamEvents = host.storage.chatStreamEvents;
+  if (!streamEvents || typeof streamEvents.listByTurn !== "function") {
+    return false;
+  }
+  let afterSequence = 0;
+  while (true) {
+    const page = streamEvents.listByTurn(payload.turnId, afterSequence, 5_000);
+    if (page.length === 0) {
+      return false;
+    }
+    for (const event of page) {
+      if (event.sessionId !== payload.sessionId || (event.runId !== undefined && event.runId !== runId)) {
+        continue;
+      }
+      const eventType = typeof event.payload.type === "string" ? event.payload.type : event.chunkType;
+      if (
+        (eventType === "delta" || eventType === "thinking_delta") &&
+        typeof event.payload.delta === "string" &&
+        event.payload.delta.length > 0
+      ) {
+        return true;
+      }
+      if (
+        eventType === "message_done" &&
+        typeof event.payload.content === "string" &&
+        event.payload.content.length > 0
+      ) {
+        return true;
+      }
+    }
+    const nextSequence = page.at(-1)?.sequence ?? afterSequence;
+    if (nextSequence <= afterSequence || page.length < 5_000) {
+      return false;
+    }
+    afterSequence = nextSequence;
+  }
 }
 
 function isDurableConnectorDeliveryRecoverable(
@@ -3711,6 +3767,17 @@ function markDurableChatTurnUnrecoverable(
     status: "failed" as const,
     checkpointKind: "run_failed",
   };
+  if (!systemHeartbeat) {
+    reconcileInterruptedDurableChatTurn(
+      {
+        storage: host.storage,
+        publishRealtime: (eventType, source, payload, options) =>
+          host.publishRealtime(eventType, source, payload, options),
+        recordDevDiagnostic: (input) => host.recordDevDiagnostic(input),
+      },
+      { runId: run.runId, turnId: payload.turnId },
+    );
+  }
   host.storage.runImmediateTransaction(() => {
     let trace: ChatTurnTraceRecord;
     try {
@@ -3747,7 +3814,7 @@ function markDurableChatTurnUnrecoverable(
       status: "failed",
       finishedAt: new Date().toISOString(),
       failure: {
-        failureClass: "unknown",
+        failureClass: systemHeartbeat ? "unknown" : "interrupted_by_restart",
         message: reason,
         retryable: !systemHeartbeat,
         ...(!systemHeartbeat ? { recommendedAction: "retry" as const } : {}),

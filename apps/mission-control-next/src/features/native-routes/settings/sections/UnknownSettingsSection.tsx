@@ -11,6 +11,7 @@ export function UnknownSettingsSection({ section, route, navigate }: SettingsSec
         subtitle={`No settings section is registered for "${String(section)}".`}
       >
         <SettingsActionList
+          ariaLabel="Settings recovery routes"
           items={[
             {
               label: "Open General",

@@ -358,7 +358,8 @@ describe("gateway service host guard", () => {
     // Bumped to 173 for explicit Skill Hub review and rollback-review owners.
     // Bumped to 174 for the Gateway-owned Chat session status read service.
     // Bumped to 178 for server-owned timer, fork, typed-variable, and document-proposal boundaries.
-    expect(portMemberCount).toBeLessThanOrEqual(178);
+    // Bumped to 179 for exact terminal Chat post-commit reconciliation.
+    expect(portMemberCount).toBeLessThanOrEqual(179);
     const portFactory = portSource.slice(
       portSource.indexOf("export function createGatewayRouteCompositionPort"),
       portSource.indexOf("export type RouteDependencyDomain"),

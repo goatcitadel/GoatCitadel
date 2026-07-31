@@ -22,8 +22,12 @@ export async function seedMissionControlNextFixture(gatewayUrl, options = {}, de
 
   const workspaceId = seedResponse.body?.workspaceId;
   const sessionId = seedResponse.body?.sessionId;
-  if (!workspaceId || !sessionId) {
-    throw new Error("mission-control-next verification seed did not return workspaceId/sessionId");
+  const candidateId = seedResponse.body?.candidateId;
+  const candidateVersionId = seedResponse.body?.candidateVersionId;
+  if (!workspaceId || !sessionId || !candidateId || !candidateVersionId) {
+    throw new Error(
+      "mission-control-next verification seed did not return workspaceId/sessionId/candidateId/candidateVersionId",
+    );
   }
 
   const threadResponse = await requestJson(gatewayUrl, `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/thread`);
@@ -207,6 +211,39 @@ export async function seedMissionControlNextFixture(gatewayUrl, options = {}, de
     tasks.push(response.body);
   }
 
+  const agenticStatuses = ["queued", "failed", "running", "approval_required"];
+  assertOk(
+    await requestJson(gatewayUrl, "/api/v1/dev/verification/agentic-task-seed", {
+      method: "POST",
+      body: {
+        workspaceId,
+        tasks: tasks.map((task, index) => ({
+          taskId: task.taskId,
+          runId: `verification-agentic-${task.taskId}`,
+          status: agenticStatuses[index],
+          surface: "chat",
+          parentSessionId: sessionId,
+        })),
+      },
+    }),
+    "link mission-control-next tasks to deterministic agentic runs",
+  );
+
+  if (tasks[2]?.taskId) {
+    assertOk(
+      await requestJson(gatewayUrl, `/api/v1/tasks/${encodeURIComponent(tasks[2].taskId)}/deliverables`, {
+        method: "POST",
+        body: {
+          workspaceId,
+          deliverableType: "artifact",
+          title: "Verification prompt-pack quality evidence",
+          description: "Deterministic evidence that permits the Kanban close journey.",
+        },
+      }),
+      "add mission-control-next closeable Kanban deliverable",
+    );
+  }
+
   if (tasks[0]?.taskId) {
     const taskId = tasks[0].taskId;
     assertOk(
@@ -381,6 +418,8 @@ export async function seedMissionControlNextFixture(gatewayUrl, options = {}, de
     taskIds: tasks.map((task) => task?.taskId).filter(Boolean),
     opsBoardId,
     memoryItemId,
+    candidateId,
+    candidateVersionId,
   };
 }
 

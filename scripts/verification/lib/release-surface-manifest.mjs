@@ -645,6 +645,35 @@ export const NEXT_LEGACY_REDIRECT_MANIFEST = [
   },
 ];
 
+/**
+ * Direct path compatibility is release-bearing browser behavior, but it is not
+ * part of the frozen 20-entry legacy query-input manifest above. Keep these
+ * paths independently counted so adding `/cowork`, `/code`, or the historical
+ * Settings safety alias cannot make the query-input invariant look complete by
+ * accident.
+ */
+export const NEXT_DIRECT_COMPATIBILITY_MANIFEST = [
+  {
+    slug: "direct-cowork",
+    href: "/cowork",
+    expectedPath: "/chat",
+    targetHref: "/chat",
+  },
+  {
+    slug: "direct-code",
+    href: "/code",
+    expectedPath: "/chat",
+    targetHref: "/chat",
+  },
+  {
+    slug: "direct-settings-safety",
+    href: "/settings/safety",
+    expectedPath: "/settings/permissions",
+    targetHref: "/settings/permissions",
+    interaction: "open-inspector",
+  },
+];
+
 function withReleaseSurfaceStatus(routes) {
   return routes.map((route) => ({
     ...route,
@@ -692,4 +721,8 @@ export function resolveVisualBaselineNamespace(packageName) {
 
 export function resolveLegacyRedirectManifest(packageName) {
   return packageName === "@goatcitadel/mission-control-next" ? NEXT_LEGACY_REDIRECT_MANIFEST : [];
+}
+
+export function resolveDirectCompatibilityManifest(packageName) {
+  return packageName === "@goatcitadel/mission-control-next" ? NEXT_DIRECT_COMPATIBILITY_MANIFEST : [];
 }

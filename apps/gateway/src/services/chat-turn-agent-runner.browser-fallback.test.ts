@@ -7740,6 +7740,8 @@ describe("ChatTurnAgentRunner browser fallback behavior", () => {
     );
     expect(result.assistantContent).not.toContain("This turn failed before completion.");
     expect(result.turnTrace.status).toBe("completed");
+    expect(result.turnTrace.failure).toMatchObject({ failureClass: "network_interrupted", message: "socket hang up" });
+    expect(result.turnTrace.completion).toMatchObject({ status: "complete", repaired: true });
     expect(createChatCompletion).toHaveBeenCalledTimes(2);
   });
 

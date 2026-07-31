@@ -253,6 +253,28 @@ const WINDOWS_RESERVED_SEGMENT_PATTERN = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])
 
 type UnknownRecord = Record<string, unknown>;
 
+function normalizeThreadKnowledgeUrlKey(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  try {
+    const parsed = new URL(trimmed);
+    parsed.protocol = parsed.protocol.toLowerCase();
+    parsed.hostname = parsed.hostname.toLowerCase();
+    if (
+      (parsed.protocol === "https:" && parsed.port === "443") ||
+      (parsed.protocol === "http:" && parsed.port === "80")
+    ) {
+      parsed.port = "";
+    }
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return trimmed;
+  }
+}
+
 function isPlainRecord(value: unknown): value is UnknownRecord {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -775,7 +797,7 @@ export interface MissionThreadedCodeWorkflowPanelProps {
   onExportPatch?: () => Promise<void>;
   onRevertFile?: (relativePath?: string) => void;
   onRevertAll?: () => void;
-  onRunHelperSnippet: (language: string, source: string) => void;
+  onRunHelperSnippet: (language: string, source: string) => void | Promise<void>;
   onOpenApprovals?: (approvalId?: string) => void;
 }
 
@@ -2513,7 +2535,7 @@ export function MissionThreadedControllerHost({
   );
   const guardWorkbenchNavigation = useCallback(
     (action: () => void, message: string) => {
-      if (!(messageMode === "code" && hasDirtyWorkbenchDraft)) {
+      if (!hasDirtyWorkbenchDraft) {
         action();
         return;
       }
@@ -2526,7 +2548,7 @@ export function MissionThreadedControllerHost({
         },
       });
     },
-    [discardWorkbenchDraft, hasDirtyWorkbenchDraft, messageMode],
+    [discardWorkbenchDraft, hasDirtyWorkbenchDraft],
   );
 
   useEffect(() => {
@@ -2852,11 +2874,7 @@ export function MissionThreadedControllerHost({
           artifactId: nextArtifactId,
         });
 
-      if (
-        messageMode === "code" &&
-        hasDirtyWorkbenchDraft &&
-        (nextSurface !== messageMode || nextSessionId !== selectedSessionId)
-      ) {
+      if (hasDirtyWorkbenchDraft && (nextSurface !== messageMode || nextSessionId !== selectedSessionId)) {
         setWorkbenchDiscardConfirm({
           title: "Discard unsaved workbench changes?",
           message: "Switching surfaces will discard the unsaved editor changes in the current Code workbench file.",
@@ -3299,7 +3317,7 @@ export function MissionThreadedControllerHost({
       (threadKnowledgeAttachments?.items ?? []).map((item) =>
         item.chatAttachmentId
           ? `${item.chatAttachmentId}:${item.retrievalMode}`
-          : `url:${item.sourceRef.trim().toLowerCase()}:${item.retrievalMode}`,
+          : `url:${normalizeThreadKnowledgeUrlKey(item.sourceRef)}:${item.retrievalMode}`,
       ),
     );
     const nextItems: ThreadKnowledgeAttachmentRecord[] = [...(threadKnowledgeAttachments?.items ?? [])];
@@ -3329,7 +3347,7 @@ export function MissionThreadedControllerHost({
     }
 
     if (normalizedKnowledgeUrl) {
-      const urlKey = `url:${normalizedKnowledgeUrl.toLowerCase()}:${knowledgeUrlMode}`;
+      const urlKey = `url:${normalizeThreadKnowledgeUrlKey(normalizedKnowledgeUrl)}:${knowledgeUrlMode}`;
       if (!existingKeys.has(urlKey)) {
         const response = await attachThreadKnowledgeAttachment(session.sessionId, {
           url: normalizedKnowledgeUrl,
@@ -3365,7 +3383,10 @@ export function MissionThreadedControllerHost({
           retrievalMode: knowledgeUrlMode,
         });
         setThreadKnowledgeAttachments((current) => ({
-          items: [response.item, ...(current?.items ?? [])],
+          items: [
+            response.item,
+            ...(current?.items ?? []).filter((item) => item.attachmentId !== response.item.attachmentId),
+          ],
         }));
         if (knowledgeUrlDraft.trim() === normalizedKnowledgeUrl) setKnowledgeUrlDraft("");
         pushLocalNotice("Attached a thread knowledge source.", "success");
@@ -4673,7 +4694,10 @@ export function MissionThreadedControllerHost({
             agenticControlStatus,
           },
         }
-      : selectedSession && isCodeSurface
+      : // Code capability stays composed inside the canonical Chat surface. The
+        // renderer keeps its workbench closed until the operator chooses Build
+        // editor; legacy code-mode inputs remain compatible without a second UI.
+        selectedSession && (isCodeSurface || isChatSurface)
         ? {
             kind: "code",
             props: {
@@ -4759,8 +4783,8 @@ export function MissionThreadedControllerHost({
               onRevertAll: () => {
                 if (!blockHistoricalMutation()) void revertWorkbenchAll();
               },
-              onRunHelperSnippet: (language, source) => {
-                if (!blockHistoricalMutation()) void handleRunCodeHelper(language, source);
+              onRunHelperSnippet: async (language, source) => {
+                if (!blockHistoricalMutation()) await handleRunCodeHelper(language, source);
               },
               onOpenApprovals,
             },

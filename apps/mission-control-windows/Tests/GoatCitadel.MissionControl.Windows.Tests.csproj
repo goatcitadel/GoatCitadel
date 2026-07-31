@@ -19,6 +19,7 @@
     <Compile Include="..\Models\DesktopEventStreamCredential.cs" Link="Models\DesktopEventStreamCredential.cs" />
     <Compile Include="..\Models\DesktopRuntimeStatus.cs" Link="Models\DesktopRuntimeStatus.cs" />
     <Compile Include="..\Models\OperatorAttentionPayload.cs" Link="Models\OperatorAttentionPayload.cs" />
+    <Compile Include="..\Services\ActivationDeliveryQueue.cs" Link="Services\ActivationDeliveryQueue.cs" />
     <Compile Include="..\Services\ActivationRouteParser.cs" Link="Services\ActivationRouteParser.cs" />
     <Compile Include="..\Services\EventStreamService.cs" Link="Services\EventStreamService.cs" />
     <Compile Include="..\Services\LauncherService.cs" Link="Services\LauncherService.cs" />

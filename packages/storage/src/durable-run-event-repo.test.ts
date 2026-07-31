@@ -142,4 +142,43 @@ describe("DurableRunEventRepository", () => {
       ],
     );
   });
+
+  it("heals a legacy sequence ledger behind persisted events before allocating", () => {
+    const { db, events, runs } = createRepos();
+    runs.createRun({
+      runId: "run-stale-ledger",
+      workflowKey: "chat.turn.execute",
+      now: "2026-07-30T00:00:00.000Z",
+    });
+    events.append({
+      eventId: "event-ledger-one",
+      runId: "run-stale-ledger",
+      eventType: "run_waiting",
+      createdAt: "2026-07-30T00:00:01.000Z",
+    });
+    db.prepare(
+      `INSERT INTO durable_run_events (
+         event_id, run_id, sequence, event_type, step_key, payload_json, created_at
+       ) VALUES (?, ?, 2, 'run_woken', NULL, '{}', ?)`,
+    ).run("event-direct-two", "run-stale-ledger", "2026-07-30T00:00:02.000Z");
+
+    const healed = events.append({
+      eventId: "event-healed-three",
+      runId: "run-stale-ledger",
+      eventType: "run_started",
+      createdAt: "2026-07-30T00:00:03.000Z",
+    });
+
+    assert.equal(healed.sequence, 3);
+    assert.equal(
+      db
+        .prepare("SELECT last_sequence FROM durable_run_event_sequences WHERE run_id = ?")
+        .get<{ last_sequence: number }>("run-stale-ledger")?.last_sequence,
+      3,
+    );
+    assert.deepEqual(
+      events.listByRun("run-stale-ledger").map((event) => event.sequence),
+      [1, 2, 3],
+    );
+  });
 });

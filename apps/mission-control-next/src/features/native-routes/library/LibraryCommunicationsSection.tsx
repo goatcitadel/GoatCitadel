@@ -6,13 +6,7 @@ import {
 } from "@goatcitadel/mission-control-shared/api/personal-ops";
 import { NativeCard } from "../NativeRoutePageLayout";
 import type { NativeRoutePagesProps } from "../types";
-import {
-  getErrorMessage,
-  nativeLoad,
-  nativeLoadIssues,
-  useAsyncLoad,
-  type Notice,
-} from "../shared/native-helpers";
+import { getErrorMessage, nativeLoad, nativeLoadIssues, useAsyncLoad, type Notice } from "../shared/native-helpers";
 import {
   LibraryActionCardGrid,
   LibraryActionList,
@@ -56,7 +50,10 @@ export function LibraryCommunicationsSection({ activeWorkspaceId, activeWorkspac
     try {
       const draft = await createMailDraft({
         accountId: primaryAccount.accountId,
-        to: to.split(",").map((item) => item.trim()).filter(Boolean),
+        to: to
+          .split(",")
+          .map((item) => item.trim())
+          .filter(Boolean),
         subject,
         bodyText,
       });
@@ -97,6 +94,7 @@ export function LibraryCommunicationsSection({ activeWorkspaceId, activeWorkspac
             emptyLabel="No mail accounts are connected."
           />
           <LibraryActionList
+            ariaLabel="Inbox messages"
             items={inboxItems.map((message) => ({
               id: message.messageId,
               label: message.subject ?? "Untitled message",
@@ -109,6 +107,7 @@ export function LibraryCommunicationsSection({ activeWorkspaceId, activeWorkspac
         <div className="mc-next-settings-stack">
           <NativeCard title="Agenda" subtitle="Calendar items surfaced through governed connections.">
             <LibraryActionList
+              ariaLabel="Agenda events"
               items={agendaItems.map((event) => ({
                 id: event.eventId,
                 label: event.title,

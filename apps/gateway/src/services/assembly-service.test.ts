@@ -765,6 +765,37 @@ describe("AssemblyService", () => {
     expect(storage.assembly.getRun(run.runId)).toMatchObject({ status: "queued" });
   });
 
+  it("contains a failed Assembly task when its persistence reporter also fails", async () => {
+    const storage = createStorage();
+    const connectionFailure = new Error("postgres connection terminated");
+    storage.assembly.updateRun.mockImplementation(() => {
+      throw connectionFailure;
+    });
+    const service = new AssemblyService({
+      storage: storage as never,
+      rootDir: ".",
+      createChatCompletion: vi.fn(),
+      publishRealtime: vi.fn(),
+      runBackgroundWork: vi.fn(async () => {
+        throw new Error("assembly execution failed");
+      }),
+    });
+    const unhandled: unknown[] = [];
+    const onUnhandled = (error: unknown): void => {
+      unhandled.push(error);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      await service.createRun(createRunInput());
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await service.close();
+
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
   it.each([
     {
       name: "blank",

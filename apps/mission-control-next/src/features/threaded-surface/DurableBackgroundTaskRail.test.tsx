@@ -227,7 +227,14 @@ describe("DurableBackgroundTaskRail", () => {
     expect(text).toContain("detached");
     expect(text).not.toContain('"canonicalStatus"');
     expect(renderer.root.findAll((node) => node.props["data-link-kind"] === "durable_run")).not.toHaveLength(0);
-    expect(button(renderer, "Reattach")).toBeDefined();
+    const detach = renderer.root.findByProps({ "aria-label": "Detach background task child-running" });
+    const reattach = renderer.root.findByProps({ "aria-label": "Reattach background task child-terminal" });
+    expect(detach).toBeDefined();
+    expect(reattach).toBeDefined();
+    act(() => detach.props.onClick());
+    expect(control).toHaveBeenCalledWith("watcher-running", "detach", undefined);
+    act(() => reattach.props.onClick());
+    expect(control).toHaveBeenCalledWith("watcher-terminal", "reattach", undefined);
     act(() => button(renderer, "Child run")!.props.onClick());
     expect(onOpenSemanticLink).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "durable_run", id: "child-running" }),

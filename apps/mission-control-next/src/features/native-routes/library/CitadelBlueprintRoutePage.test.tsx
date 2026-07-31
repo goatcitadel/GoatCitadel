@@ -2,7 +2,7 @@ import { act, create, type ReactTestInstance, type ReactTestRenderer } from "rea
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { buildBlueprintProofItems, CitadelBlueprintRoutePage } from "./CitadelBlueprintRoutePage";
+import { buildBlueprintProofItems, CitadelBlueprintRoutePage, downloadBlueprint } from "./CitadelBlueprintRoutePage";
 import type { NativeRoutePagesProps } from "../types";
 
 const apiMocks = vi.hoisted(() => ({
@@ -104,6 +104,63 @@ describe("CitadelBlueprintRoutePage", () => {
     expect(apiMocks.importCitadelBlueprint).toHaveBeenCalledWith("default", {
       schemaVersion: "goatcitadel.blueprint.v1",
     });
+  });
+
+  it("loads the staged export into the governed import flow", async () => {
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(<CitadelBlueprintRoutePage {...makeProps()} />);
+    });
+
+    await act(async () => {
+      buttonByLabel(renderer!, "Load export for import").props.onClick();
+    });
+    expect(renderer!.root.findByType("textarea").props.value).toContain("goatcitadel.blueprint.v1");
+
+    await act(async () => {
+      buttonByLabel(renderer!, "Validate").props.onClick();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      buttonByLabel(renderer!, "Import").props.onClick();
+      await Promise.resolve();
+    });
+    expect(apiMocks.validateCitadelBlueprint).toHaveBeenCalledWith({
+      schemaVersion: "goatcitadel.blueprint.v1",
+      name: "Acme",
+    });
+    expect(apiMocks.importCitadelBlueprint).toHaveBeenCalledWith("default", {
+      schemaVersion: "goatcitadel.blueprint.v1",
+      name: "Acme",
+    });
+  });
+
+  it("downloads a secret-free Blueprint with a safe filename", () => {
+    vi.useFakeTimers();
+    const click = vi.fn();
+    const remove = vi.fn();
+    const appendChild = vi.fn();
+    const createObjectURL = vi.fn(() => "blob:blueprint");
+    const revokeObjectURL = vi.fn();
+    const anchor = { href: "", download: "", click, remove };
+    vi.stubGlobal("document", {
+      createElement: vi.fn(() => anchor),
+      body: { appendChild },
+    });
+    vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
+    try {
+      downloadBlueprint('{"schemaVersion":"goatcitadel.blueprint.v1"}', "Acme / Operations");
+      expect(createObjectURL).toHaveBeenCalledOnce();
+      expect(anchor.download).toBe("Acme-Operations-blueprint.json");
+      expect(appendChild).toHaveBeenCalledWith(anchor);
+      expect(click).toHaveBeenCalledOnce();
+      expect(remove).toHaveBeenCalledOnce();
+      vi.runAllTimers();
+      expect(revokeObjectURL).toHaveBeenCalledWith("blob:blueprint");
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
   });
 
   it("reports a not-staged workspace as nothing to export", async () => {

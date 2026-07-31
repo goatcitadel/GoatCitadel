@@ -30,6 +30,7 @@ import {
 import { listSkillExportTargets, renderSkillExportPreview, SkillsService } from "@goatcitadel/skills";
 import {
   type PostCommitEligibility,
+  type SessionMutationAdmissionRecord,
   type Storage,
   type SessionAutonomyPrefsPatchInput,
   type SessionAutonomyPrefsRecord,
@@ -52,7 +53,7 @@ import {
 import { buildUnifiedConfigPayload } from "../config-sync-lib.js";
 import { createGatewayStorage } from "../storage-factory.js";
 import { DatabaseCutoverService } from "./database-cutover-service.js";
-import { startBackgroundInterval, type BackgroundIntervalHandle } from "./background-scheduler.js";
+import { startBackgroundInterval, trackBackgroundTask, type BackgroundIntervalHandle } from "./background-scheduler.js";
 import { PersonalityCatalogService } from "./channel-personalities.js";
 import { ApprovalRuntimeService } from "./approval-runtime-service.js";
 import type { ApprovalCreateCommitHook } from "./approval-lifecycle-service.js";
@@ -782,6 +783,7 @@ const FEATURE_FLAGS_SETTING_KEY = "feature_flags_v1";
 // (updateFeatureFlags) primes the cache, so this TTL only bounds staleness for any
 // hypothetical out-of-band settings write.
 const FEATURE_FLAGS_CACHE_TTL_MS = 1_000;
+const TERMINAL_CHAT_STREAM_ADMISSION_RELEASE_TIMEOUT_MS = 10_000;
 import { DeviceTokenVault } from "./device-token-vault.js";
 
 export const MEMORY_ITEM_STATUS_VALUES = new Set(["active", "forgotten"]);
@@ -2071,6 +2073,26 @@ export class GatewayService {
         await this.durableRunService.reconcileAutonomousChatPostCommit(runId);
         await this.durableRunService.reconcileGeneralChatPostCommit(runId);
       },
+      recordRecoveryDiagnostic: ({ level, recoveryOutcome, remainingBudgetMs, identity, error }) => {
+        this.recordDevDiagnostic({
+          level,
+          category: "chat",
+          event: "chat.heartbeat.operator_preemption_recovery",
+          message: "Reconciled decision-committed heartbeat before operator admission",
+          sessionId: identity.sessionId,
+          turnId: identity.turnId,
+          runtimeKind: "durable.run",
+          runtimeStatus: recoveryOutcome === "failed" ? "degraded" : "completed",
+          context: {
+            recoveryOutcome,
+            remainingBudgetMs,
+            occurrenceId: identity.occurrenceId,
+            admissionId: identity.heartbeatAdmissionId,
+            durableRunId: identity.durableRunId,
+            error,
+          },
+        });
+      },
     });
     this.hooksService = new HooksService(serviceCtx, {
       createDurableRun: (input, options) => this.durableRunService.createDurableRun(input, options),
@@ -2995,6 +3017,7 @@ export class GatewayService {
       recordRuntimeDecision: (input) => this.recordRuntimeDecision(input),
       recoverDecisionCommittedHeartbeat: (identity) =>
         this.heartbeatOccurrenceService.recoverDecisionCommittedForOperatorPreemption(identity),
+      reconcileTerminalChatAdmission: (activeAdmission) => this.reconcileTerminalChatAdmission(activeAdmission),
       publishRealtime: (channel, topic, payload, options) => this.publishRealtime(channel, topic, payload, options),
       recordCapabilityGapFromTrace: (input) => this.recordCapabilityGapFromTrace(input),
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
@@ -3271,14 +3294,7 @@ export class GatewayService {
       throw error;
     });
     this.deferredInitPromise = task;
-    this.backgroundTasks.add(task);
-    void task
-      .catch((error) => {
-        log.debug("deferred startup failure observed by background task tracker", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      })
-      .finally(() => this.backgroundTasks.delete(task));
+    trackBackgroundTask(this.backgroundTasks, task);
     return task;
   }
 
@@ -4025,8 +4041,10 @@ export class GatewayService {
 
   /** Tracks an in-flight background task so {@link close} can await its drain. */
   private registerBackgroundTask(task: Promise<void>): void {
-    this.backgroundTasks.add(task);
-    task.finally(() => this.backgroundTasks.delete(task));
+    const observedTask = task.catch((error) => {
+      log.error("registered background task failed", error);
+    });
+    trackBackgroundTask(this.backgroundTasks, observedTask);
   }
 
   private async runWithSharedHostWork<T>(
@@ -4741,12 +4759,67 @@ export class GatewayService {
         storage: this.storage,
         chatTurnExecutionRegistry: this.chatTurnExecutionRegistry,
         createHydratedChatTurnTrace: (turnId, trace) => this.createHydratedChatTurnTrace(turnId, trace),
+        beforeDeliverTerminalChatStreamEvent: (input) => this.beforeDeliverTerminalChatStreamEvent(input),
         persistChatStreamChunk: (chunk, runId, streamRegistration) =>
           this.persistChatStreamChunk(chunk, runId, streamRegistration),
         initialLastChatStreamPurgeAt: typeof legacyInitialPurgeAt === "number" ? legacyInitialPurgeAt : undefined,
       });
     }
     return this.chatStreamRuntime;
+  }
+
+  private async beforeDeliverTerminalChatStreamEvent(input: {
+    runId: string;
+    sessionId: string;
+    turnId: string;
+  }): Promise<boolean> {
+    const outcome = await this.durableRunService.awaitTerminalChatAdmissionRelease({
+      ...input,
+      timeoutMs: TERMINAL_CHAT_STREAM_ADMISSION_RELEASE_TIMEOUT_MS,
+    });
+    const released = outcome.recoveryOutcome === "released" || outcome.recoveryOutcome === "already_released";
+    this.recordDevDiagnostic({
+      level: released ? "info" : "warn",
+      category: "chat",
+      event: "chat.turn.terminal_delivery_admission_recovery",
+      message: released
+        ? "Released canonical durable turn admission before terminal stream delivery"
+        : "Terminal stream delivery reached its bounded admission recovery outcome",
+      sessionId: input.sessionId,
+      turnId: input.turnId,
+      runId: input.runId,
+      runtimeKind: "durable.run",
+      runtimeStatus: released ? "completed" : "degraded",
+      context: {
+        ...outcome,
+        correlationId: input.runId,
+      },
+    });
+    return released;
+  }
+
+  private async reconcileTerminalChatAdmission(activeAdmission: SessionMutationAdmissionRecord): Promise<boolean> {
+    const outcome = await this.durableRunService.reconcileTerminalChatAdmission(activeAdmission);
+    const released = outcome.recoveryOutcome === "released" || outcome.recoveryOutcome === "already_released";
+    this.recordDevDiagnostic({
+      level: released ? "info" : "warn",
+      category: "chat",
+      event: "chat.turn.terminal_admission_recovery",
+      message: released
+        ? "Reconciled an exact terminal durable turn before operator admission retry"
+        : "Skipped terminal turn recovery because canonical durable authority was not releasable",
+      sessionId: activeAdmission.sessionId,
+      turnId: activeAdmission.turnId,
+      runId: outcome.durableRunId,
+      runtimeKind: "durable.run",
+      runtimeStatus: released ? "completed" : "degraded",
+      context: {
+        ...outcome,
+        activeAdmissionId: activeAdmission.admissionId,
+        correlationId: activeAdmission.correlationId,
+      },
+    });
+    return released;
   }
 
   private syncLegacyChatStreamPurgeState(runtime: GatewayChatStreamRuntime): void {
@@ -5442,6 +5515,10 @@ export class GatewayService {
     },
   ): DurableWakeResult {
     return this.durableOperatorService.wakeRun(runId, event);
+  }
+
+  /** @internal */ public reconcileGeneralChatPostCommit(runId: string): Promise<boolean> {
+    return this.durableRunService.reconcileGeneralChatPostCommit(runId);
   }
 
   public recoverDurableDeadLetter(
@@ -6897,6 +6974,12 @@ export class GatewayService {
           }
           this.sessionControlRuntimeOwner.bindDurableRun(preparedTurn.turnAdmission, durableRunId);
         },
+        activatePreparedBranch: (preparedTurn) =>
+          this.updateActiveLeafOrThrow(
+            preparedTurn.session.sessionId,
+            preparedTurn.branchSelectionBaseTurnId,
+            preparedTurn.turnId,
+          ),
         onDurableRunCommitted: (run) =>
           this.publishRealtime("system", "durable", {
             type: "durable_run_created",
@@ -10463,32 +10546,27 @@ export class GatewayService {
 
     const task = this.tryRunWithSharedHostWork("agent", `approval-explanation:${approval.approvalId}`, () =>
       this.approvalExplainer.explainApproval(approval),
-    )
-      .catch((error) => {
-        if (this.closing) {
-          return;
-        }
-        this.publishRealtime(
-          "system",
-          "approvals",
-          {
-            type: "approval_explainer_error",
-            approvalId: approval.approvalId,
-            error: (error as Error).message,
-          },
-          {
-            eventClass: "operational_signal",
-            eventAuthority: "retained_stream",
-            links: this.buildApprovalRealtimeLinks(approval),
-          },
-        );
-      })
-      .finally(() => {
-        this.backgroundTasks.delete(task);
-      });
+    ).catch((error) => {
+      if (this.closing) {
+        return;
+      }
+      this.publishRealtime(
+        "system",
+        "approvals",
+        {
+          type: "approval_explainer_error",
+          approvalId: approval.approvalId,
+          error: (error as Error).message,
+        },
+        {
+          eventClass: "operational_signal",
+          eventAuthority: "retained_stream",
+          links: this.buildApprovalRealtimeLinks(approval),
+        },
+      );
+    });
 
-    this.backgroundTasks.add(task);
-    void task;
+    trackBackgroundTask(this.backgroundTasks, task);
   }
 
   /** @internal */ public scheduleApprovalExplanationById(approvalId: string): void {
@@ -10570,13 +10648,9 @@ export class GatewayService {
             },
           },
         );
-      })
-      .finally(() => {
-        this.backgroundTasks.delete(task);
       });
 
-    this.backgroundTasks.add(task);
-    void task;
+    trackBackgroundTask(this.backgroundTasks, task);
   }
 
   private async readTranscriptOrEmpty(sessionId: string) {

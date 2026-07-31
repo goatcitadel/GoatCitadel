@@ -116,6 +116,7 @@ export function AdvancedQualityOpsPanel({
         <label className="mc-pp-field">
           <span>Test codes</span>
           <textarea
+            aria-label="Test codes"
             rows={2}
             value={benchmarkTestCodes}
             onChange={(event) => onSetBenchmarkTestCodes(event.target.value)}
@@ -125,6 +126,7 @@ export function AdvancedQualityOpsPanel({
         <label className="mc-pp-field">
           <span>Benchmark matrix</span>
           <textarea
+            aria-label="Benchmark matrix"
             rows={4}
             value={benchmarkProvidersInput}
             onChange={(event) => onSetBenchmarkProvidersInput(event.target.value)}

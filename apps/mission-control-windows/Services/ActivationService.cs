@@ -6,8 +6,7 @@ namespace GoatCitadel.MissionControl.Windows.Services;
 public static class ActivationService
 {
     private static readonly object Gate = new();
-    private static readonly List<string> PendingRoutes = new();
-    private static Action<string>? routeHandler;
+    private static readonly ActivationDeliveryQueue DeliveryQueue = new();
     private static Action? focusHandler;
 
     public static void SetInitialActivationArguments(AppActivationArguments args) =>
@@ -19,99 +18,59 @@ public static class ActivationService
         QueueRouteFromActivation(args);
     }
 
-    public static void RegisterWindow(Action<string> routeAction, Action focusAction)
+    public static void RegisterWindow(
+        Action<string> routeAction,
+        Action focusAction,
+        Action<string> diagnosticAction)
     {
+        DeliveryQueue.Register(routeAction, diagnosticAction);
         lock (Gate)
         {
-            routeHandler = routeAction;
             focusHandler = focusAction;
         }
     }
 
-    public static void FlushPendingActivation()
-    {
-        List<string> routes;
-        Action<string>? handler;
-        lock (Gate)
-        {
-            routes = PendingRoutes.ToList();
-            PendingRoutes.Clear();
-            handler = routeHandler;
-        }
-
-        foreach (var route in routes)
-        {
-            handler?.Invoke(route);
-        }
-    }
+    public static void FlushPendingActivation() => DeliveryQueue.FlushPending();
 
     public static bool TryGetRouteFromProtocolUri(Uri uri, out string route)
         => ActivationRouteParser.TryGetRouteFromProtocolUri(uri, out route);
 
     private static void QueueRouteFromActivation(AppActivationArguments args)
     {
-        if (!TryGetRouteFromActivation(args, out var route))
-        {
-            return;
-        }
-
-        Action<string>? handler;
-        lock (Gate)
-        {
-            handler = routeHandler;
-            if (handler is null)
-            {
-                PendingRoutes.Add(route);
-                return;
-            }
-        }
-
-        handler(route);
+        DeliveryQueue.Enqueue(ResolveActivation(args));
     }
 
-    private static bool TryGetRouteFromActivation(AppActivationArguments args, out string route)
+    private static ActivationDelivery ResolveActivation(AppActivationArguments args)
     {
-        route = "";
         if (args.Kind != ExtendedActivationKind.Protocol)
         {
-            return TryGetRouteFromLaunchArguments(args, out route);
+            return ResolveLaunchActivation(args);
         }
 
         if (args.Data is IProtocolActivatedEventArgs protocolArgs)
         {
-            return TryGetRouteFromProtocolUri(protocolArgs.Uri, out route);
+            return ActivationRequestResolver.ResolveProtocolUri(protocolArgs.Uri);
         }
 
         var uriProperty = args.Data?.GetType().GetProperty("Uri");
-        return uriProperty?.GetValue(args.Data) is Uri uri && TryGetRouteFromProtocolUri(uri, out route);
+        return ActivationRequestResolver.ResolveProtocolUri(uriProperty?.GetValue(args.Data) as Uri);
     }
 
     // Non-MSIX installs route goatcitadel:// deep links through the HKCU shell\open\command
     // registration, which arrives as a raw Launch-kind activation rather than Protocol-kind.
-    private static bool TryGetRouteFromLaunchArguments(AppActivationArguments args, out string route)
+    private static ActivationDelivery ResolveLaunchActivation(AppActivationArguments args)
     {
-        route = "";
         if (args.Kind != ExtendedActivationKind.Launch)
         {
-            return false;
+            return ActivationDelivery.None;
         }
 
-        if (args.Data is ILaunchActivatedEventArgs launchArgs &&
-            ActivationRouteParser.TryGetRouteFromCommandLineArguments(launchArgs.Arguments, out route))
-        {
-            return true;
-        }
-
+        var launchArguments = (args.Data as ILaunchActivatedEventArgs)?.Arguments;
         var argumentsProperty = args.Data?.GetType().GetProperty("Arguments");
-        if (argumentsProperty?.GetValue(args.Data) is string rawArguments &&
-            ActivationRouteParser.TryGetRouteFromCommandLineArguments(rawArguments, out route))
-        {
-            return true;
-        }
-
-        return ActivationRouteParser.TryGetRouteFromCommandLineArguments(
-            Environment.CommandLine,
-            out route);
+        var reflectedArguments = argumentsProperty?.GetValue(args.Data) as string;
+        return ActivationRequestResolver.ResolveLaunchArguments(
+            launchArguments,
+            reflectedArguments,
+            Environment.CommandLine);
     }
-
 }

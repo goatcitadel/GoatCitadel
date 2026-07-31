@@ -68,7 +68,7 @@ describe("costs routes", () => {
             segments: [
               {
                 providerKey: "openai",
-                label: "Openai",
+                label: "OpenAI",
                 tokenInput: 20,
                 tokenOutput: 10,
                 tokenCachedInput: 0,

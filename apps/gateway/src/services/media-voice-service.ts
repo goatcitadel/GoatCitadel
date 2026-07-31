@@ -41,6 +41,7 @@ import {
   normalizeRealtimeVoice,
 } from "./openai-realtime-voice-service.js";
 import { buildVoiceControlStartFailure } from "./voice-control-guard.js";
+import { trackBackgroundTask } from "./background-scheduler.js";
 import type { GatewaySqlRepository, SystemSettingsRepository } from "@goatcitadel/storage";
 
 // ---------------------------------------------------------------------------
@@ -1497,43 +1498,38 @@ export class MediaVoiceService {
             return this.runMediaJob(jobId, signal);
           })
         : this.runMediaJob(jobId)
-    )
-      .catch((error) => {
-        const now = new Date().toISOString();
-        if (workSignal?.aborted) {
-          this.deps.gatewaySql
-            .prepare(
-              `
-          UPDATE media_jobs
-          SET status = 'queued', error = NULL, updated_at = @updatedAt, completed_at = NULL
-          WHERE job_id = @jobId
-        `,
-            )
-            .run({ updatedAt: now, jobId });
-          return;
-        }
-        const errorMessage =
-          error instanceof Error ? error.message : typeof error === "string" ? error : JSON.stringify(error);
+    ).catch((error) => {
+      const now = new Date().toISOString();
+      if (workSignal?.aborted) {
         this.deps.gatewaySql
           .prepare(
             `
           UPDATE media_jobs
-          SET status = 'failed', error = @error, updated_at = @updatedAt, completed_at = @completedAt
+          SET status = 'queued', error = NULL, updated_at = @updatedAt, completed_at = NULL
           WHERE job_id = @jobId
         `,
           )
-          .run({
-            error: errorMessage,
-            updatedAt: now,
-            completedAt: now,
-            jobId,
-          });
-      })
-      .finally(() => {
-        this.deps.backgroundTasks.delete(task);
-      });
-    this.deps.backgroundTasks.add(task);
-    void task;
+          .run({ updatedAt: now, jobId });
+        return;
+      }
+      const errorMessage =
+        error instanceof Error ? error.message : typeof error === "string" ? error : JSON.stringify(error);
+      this.deps.gatewaySql
+        .prepare(
+          `
+          UPDATE media_jobs
+          SET status = 'failed', error = @error, updated_at = @updatedAt, completed_at = @completedAt
+          WHERE job_id = @jobId
+        `,
+        )
+        .run({
+          error: errorMessage,
+          updatedAt: now,
+          completedAt: now,
+          jobId,
+        });
+    });
+    trackBackgroundTask(this.deps.backgroundTasks, task);
   }
 
   private async runMediaJob(jobId: string, signal?: AbortSignal): Promise<void> {

@@ -90,20 +90,32 @@ describe("chat turn dispatch durable ownership", () => {
     });
     getTrace.mockImplementation(readExisting);
     const markCommitted = vi.fn();
+    const prepared = createPrepared("chat", { normalizationProfile: "quick_web" });
+    prepared.branchKind = "retry";
+    prepared.sourceTurnId = "turn-earlier-source";
+    prepared.parentTurnId = "turn-source-parent";
+    prepared.branchSelectionBaseTurnId = "turn-later-active-leaf";
 
     launchPreparedAgentChatTurnStream(
       host,
       "session-1",
       { content: "quick retry", mode: "chat" },
-      createPrepared("chat", { normalizationProfile: "quick_web" }),
+      prepared,
       "chat_thread_turn_retried",
       undefined,
       { mutationLifecycle: { markCommitted } },
     );
 
     expect(host.storage.chatTurnTraces.create).toHaveBeenCalledWith(
-      expect.objectContaining({ turnId: "turn-1", status: "running" }),
+      expect.objectContaining({
+        turnId: "turn-1",
+        status: "running",
+        branchKind: "retry",
+        sourceTurnId: "turn-earlier-source",
+        parentTurnId: "turn-source-parent",
+      }),
     );
+    expect(host.updateActiveLeafOrThrow).toHaveBeenCalledWith("session-1", "turn-later-active-leaf", "turn-1");
     expect(markCommitted).toHaveBeenCalledTimes(1);
     await Promise.allSettled([...host.backgroundTasks]);
   });

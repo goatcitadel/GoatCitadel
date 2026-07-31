@@ -27,6 +27,7 @@ import {
   fetchIntegrationConnections,
   fetchIntegrationFormSchema,
   fetchIntegrationPlugins,
+  fetchSettings,
   type IntegrationConnection,
   invokeIntegrationConnectionAction,
   stageExternalConnectorAction,
@@ -71,26 +72,35 @@ import { applyIntegrationDefaults, formatDateTime, formatJson, parseJsonObject }
 
 export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionProps) {
   const load = useCallback(async () => {
-    const [catalog, connections, plugins, meetStatus, meetSessions, sideEffectRuns, externalConnectors] =
-      await Promise.all([
-        nativeLoad("Integration catalog", fetchIntegrationCatalog(), { items: [] }),
-        nativeLoad("Integration connections", fetchIntegrationConnections(), { items: [] }),
-        nativeLoad("Integration plugins", fetchIntegrationPlugins(), { items: [] }),
-        nativeLoad("Google Meet prerequisites", fetchGoogleMeetPrerequisiteStatus(), null),
-        nativeLoad("Google Meet sessions", fetchGoogleMeetSessions(6), []),
-        nativeLoad(
-          "External side-effect runs",
-          fetchExternalSideEffectRuns({ workspaceId: activeWorkspaceId, limit: 25 }),
-          {
-            items: [],
-          },
-        ),
-        nativeLoad(
-          "Dormant external connector catalog",
-          fetchExternalConnectorServices({ workspaceId: activeWorkspaceId, includeActions: true, limit: 50 }),
-          { items: [] },
-        ),
-      ]);
+    const [
+      catalog,
+      connections,
+      plugins,
+      meetStatus,
+      meetSessions,
+      sideEffectRuns,
+      externalConnectors,
+      runtimeSettings,
+    ] = await Promise.all([
+      nativeLoad("Integration catalog", fetchIntegrationCatalog(), { items: [] }),
+      nativeLoad("Integration connections", fetchIntegrationConnections(), { items: [] }),
+      nativeLoad("Integration plugins", fetchIntegrationPlugins(), { items: [] }),
+      nativeLoad("Google Meet prerequisites", fetchGoogleMeetPrerequisiteStatus(), null),
+      nativeLoad("Google Meet sessions", fetchGoogleMeetSessions(6), []),
+      nativeLoad(
+        "External side-effect runs",
+        fetchExternalSideEffectRuns({ workspaceId: activeWorkspaceId, limit: 25 }),
+        {
+          items: [],
+        },
+      ),
+      nativeLoad(
+        "Dormant external connector catalog",
+        fetchExternalConnectorServices({ workspaceId: activeWorkspaceId, includeActions: true, limit: 50 }),
+        { items: [] },
+      ),
+      nativeLoad("Runtime settings", fetchSettings(), null),
+    ]);
     return {
       issues: nativeLoadIssues([
         catalog,
@@ -100,6 +110,7 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
         meetSessions,
         sideEffectRuns,
         externalConnectors,
+        runtimeSettings,
       ]),
       catalog: (catalog.data.items ?? []).filter((item) => item.kind !== "channel"),
       connections: (connections.data.items ?? []).filter((item) => item.kind !== "channel"),
@@ -110,6 +121,7 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
       sideEffectRuns: sideEffectRuns.data.items,
       sideEffectSummary: sideEffectRuns.data.summary,
       externalConnectorServices: externalConnectors.data.items,
+      connectorDiagnosticsEnabled: runtimeSettings.data?.features?.connectorDiagnosticsV1Enabled === true,
     };
   }, [activeWorkspaceId]);
   const { loading, error, data, reload } = useAsyncLoad(load, [load]);
@@ -307,6 +319,13 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
 
   const handleDiagnostics = async () => {
     if (!selectedConnection) {
+      return;
+    }
+    if (!data?.connectorDiagnosticsEnabled) {
+      setNotice({
+        tone: "warning",
+        message: "Connector diagnostics are not enabled in Runtime settings.",
+      });
       return;
     }
     try {
@@ -730,7 +749,11 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
                     <Save size={16} />
                     Save changes
                   </NativeButton>
-                  <NativeButton variant="secondary" onClick={() => void handleDiagnostics()}>
+                  <NativeButton
+                    variant="secondary"
+                    disabled={!data.connectorDiagnosticsEnabled}
+                    onClick={() => void handleDiagnostics()}
+                  >
                     <RefreshCw size={16} />
                     Run diagnostics
                   </NativeButton>
@@ -751,6 +774,11 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
                     Delete
                   </NativeButton>
                 </SettingsButtonRow>
+                {!data.connectorDiagnosticsEnabled ? (
+                  <p className="mc-next-settings-field-note">
+                    Connector diagnostics are not enabled in Runtime settings.
+                  </p>
+                ) : null}
                 {selectedCatalog?.operatorActions?.length ? (
                   <div className="mc-next-settings-stack">
                     {selectedCatalog.operatorActions.map((action) => {
@@ -806,16 +834,20 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
                   <SettingsNotice
                     notice={{
                       tone: "info",
-                      message:
-                        "This integration has no advertised operator action. Save changes and run diagnostics here; runtime use stays blocked until a catalog action exists.",
+                      message: data.connectorDiagnosticsEnabled
+                        ? "This integration has no advertised operator action. Save changes and run diagnostics here; runtime use stays blocked until a catalog action exists."
+                        : "This integration has no advertised operator action. Save changes here; runtime use stays blocked until a catalog action exists, and diagnostics remain unavailable until enabled in Runtime settings.",
                     }}
                   />
                 )}
                 {lastOperatorActionResult ? <OperatorActionResultPanel result={lastOperatorActionResult} /> : null}
-                {diagnostics ? <DiagnosticsPanel report={diagnostics} /> : null}
+                {diagnostics ? (
+                  <DiagnosticsPanel report={diagnostics} ariaLabel="Integration connection diagnostic checks" />
+                ) : null}
               </>
             ) : (
               <SettingsActionList
+                ariaLabel="Integration catalog entries"
                 items={data.catalog.map((item) => {
                   const reviewOnly = item.kind === "external_connector";
                   return {

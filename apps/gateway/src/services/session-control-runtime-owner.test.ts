@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ActiveTurnAdmission } from "./chat-turn-types.js";
 import {
+  ActiveTurnNotPreemptibleError,
   DecisionCommittedHeartbeatAdmissionError,
   createAuthenticatedOperatorAdmissionContext,
   type SessionControlService,
@@ -92,6 +93,62 @@ describe("SessionControlRuntimeOwner", () => {
 
     expect(admitOperatorChatTurn).toHaveBeenCalledTimes(1);
     expect(recover).toHaveBeenCalledOnce();
+  });
+
+  it("waits for exact terminal admission release and retries the identical operator admission once", async () => {
+    const activeAdmission = normalActiveAdmission();
+    const conflict = new ActiveTurnNotPreemptibleError(activeAdmission);
+    const admission = { identity: { admissionId: "operator-admission" } } as never;
+    const admitOperatorChatTurn = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw conflict;
+      })
+      .mockReturnValueOnce(admission);
+    let release!: () => void;
+    const releaseGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const recoverTerminal = vi.fn(async () => {
+      await releaseGate;
+      return true;
+    });
+    const owner = new SessionControlRuntimeOwner({ admitOperatorChatTurn } as unknown as SessionControlService);
+
+    const pending = owner.admitAuthenticatedOperatorChatTurnWithHeartbeatRecovery(
+      authenticatedOperatorInput(),
+      vi.fn(async () => undefined),
+      recoverTerminal,
+    );
+    await vi.waitFor(() => expect(recoverTerminal).toHaveBeenCalledWith(activeAdmission));
+    expect(admitOperatorChatTurn).toHaveBeenCalledTimes(1);
+
+    release();
+
+    await expect(pending).resolves.toBe(admission);
+    expect(admitOperatorChatTurn).toHaveBeenCalledTimes(2);
+    expect(admitOperatorChatTurn.mock.calls[1]?.[0]).toEqual(admitOperatorChatTurn.mock.calls[0]?.[0]);
+  });
+
+  it("does not retry or preempt a genuine active normal turn", async () => {
+    const activeAdmission = normalActiveAdmission();
+    const conflict = new ActiveTurnNotPreemptibleError(activeAdmission);
+    const admitOperatorChatTurn = vi.fn(() => {
+      throw conflict;
+    });
+    const recoverTerminal = vi.fn(async () => false);
+    const owner = new SessionControlRuntimeOwner({ admitOperatorChatTurn } as unknown as SessionControlService);
+
+    await expect(
+      owner.admitAuthenticatedOperatorChatTurnWithHeartbeatRecovery(
+        authenticatedOperatorInput(),
+        vi.fn(async () => undefined),
+        recoverTerminal,
+      ),
+    ).rejects.toBe(conflict);
+
+    expect(admitOperatorChatTurn).toHaveBeenCalledOnce();
+    expect(recoverTerminal).toHaveBeenCalledWith(activeAdmission);
   });
 
   it("passes an explicit system actor through the generic admission owner", () => {
@@ -384,5 +441,27 @@ function decisionCommittedRecoveryIdentity() {
     occurrenceId: "heartbeat-occurrence-1",
     heartbeatAdmissionId: "heartbeat-admission-1",
     durableRunId: "heartbeat-run-1",
+  };
+}
+
+function normalActiveAdmission() {
+  return {
+    admissionId: "active-admission-1",
+    sessionIncarnationId: "incarnation-1",
+    workspaceId: "workspace-1",
+    sessionId: "session-1",
+    turnId: "active-turn-1",
+    admissionKind: "turn_write" as const,
+    aggregateRevision: 1,
+    controllerGeneration: 1,
+    actorKind: "operator" as const,
+    actorId: "operator-prior",
+    operation: "chat_turn",
+    materialSha256: "a".repeat(64),
+    status: "active" as const,
+    idempotencyKey: "active-admission-1",
+    requestSha256: "b".repeat(64),
+    correlationId: "active-turn-1",
+    createdAt: "2026-07-29T00:00:00.000Z",
   };
 }

@@ -13,6 +13,8 @@ export const VerificationFailureFamilySchema = z.enum([
   "provider_outage",
   "client_render",
   "sse",
+  "backup_runtime",
+  "route_compatibility",
   "refresh_storm",
   "orchestration_route_mismatch",
   "install_failure",

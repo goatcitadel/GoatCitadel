@@ -15,6 +15,7 @@ import type {
   Storage,
 } from "@goatcitadel/storage";
 import {
+  ActiveTurnNotPreemptibleError,
   DecisionCommittedHeartbeatAdmissionError,
   SessionControlService,
   computeChatTurnAdmissionMaterialSha256,
@@ -330,6 +331,127 @@ describe("SessionControlService", () => {
       durableRunId: "heartbeat-run-1",
     });
     expect(storage.sessionMutationAdmissions.admit).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a structured no-mutation outcome when the active turn is not a heartbeat", () => {
+    const request = {
+      ...BASE_REQUEST,
+      operatorId: "operator-1",
+      authActorId: "operator-1",
+      authActorSource: "loopback" as const,
+    };
+    const activeAdmission = record({ turnId: "active-turn-1", operation: "chat_turn" });
+    const storage = {
+      chatSessionMeta: { get: vi.fn(() => ({ sessionId: "session-1", workspaceId: "workspace-1", revision: 7 })) },
+      sessionControls: {
+        getControl: vi.fn(() => ({ generation: 3 })),
+        resolveMutationAuthority: vi.fn(() => ({ generation: 3 })),
+      },
+      sessionMutationAdmissions: {
+        preemptHeartbeatAndAdmitOperatorTurn: vi.fn(() => ({
+          disposition: "not_preemptible" as const,
+          preemptionDisposition: "not_preemptible" as const,
+          recoveryOutcome: "not_preemptible" as const,
+          mutated: false as const,
+          controllerGeneration: 3,
+          activeAdmission,
+        })),
+      },
+    };
+    const service = new SessionControlService(storage as unknown as Storage);
+
+    let observed: unknown;
+    try {
+      service.admitOperatorChatTurn({
+        sessionId: "session-1",
+        turnId: "operator-turn-1",
+        request,
+        runtimeOwnerId: "runtime-1",
+        actorId: "operator-1",
+        idempotencyKey: "admit-operator-turn-1",
+        correlationId: "operator-turn-1",
+        authenticatedOperator: createAuthenticatedOperatorAdmissionContext({
+          actorId: "operator-1",
+          authActorSource: "loopback",
+        }),
+      });
+    } catch (error) {
+      observed = error;
+    }
+
+    expect(observed).toBeInstanceOf(ActiveTurnNotPreemptibleError);
+    expect((observed as ActiveTurnNotPreemptibleError).recoveryOutcome).toBe("not_preemptible");
+    expect((observed as ConflictError).details).toEqual(
+      expect.objectContaining({
+        recoveryOutcome: "not_preemptible",
+        mutated: false,
+        activeAdmissionId: activeAdmission.admissionId,
+        activeTurnId: "active-turn-1",
+      }),
+    );
+  });
+
+  it("re-reads canonical authority and retries once after a preemption race", () => {
+    const request = {
+      ...BASE_REQUEST,
+      operatorId: "operator-1",
+      authActorId: "operator-1",
+      authActorSource: "loopback" as const,
+    };
+    const materialSha256 = computeChatTurnAdmissionMaterialSha256(request);
+    const admission = record({ materialSha256 });
+    const heartbeatAdmission = record({
+      admissionId: "heartbeat-admission-1",
+      turnId: "heartbeat-turn-1",
+      actorKind: "system",
+      actorId: "system-heartbeat",
+      operation: "chat_system_heartbeat",
+    });
+    const preemptHeartbeatAndAdmitOperatorTurn = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new ConflictError({
+          code: "STATE_CONFLICT",
+          message: "Heartbeat occurrence changed during preemption.",
+          details: { sessionMutationAdmissionCode: "SESSION_MUTATION_HEARTBEAT_PREEMPTION_CONFLICT" },
+        });
+      })
+      .mockReturnValueOnce({
+        disposition: "created",
+        preemptionDisposition: "not_required",
+        controllerGeneration: 3,
+        admission,
+      });
+    const storage = {
+      chatSessionMeta: { get: vi.fn(() => ({ sessionId: "session-1", workspaceId: "workspace-1", revision: 7 })) },
+      sessionControls: {
+        getControl: vi.fn(() => ({ generation: 3 })),
+        resolveMutationAuthority: vi.fn(() => ({ generation: 3 })),
+      },
+      sessionMutationAdmissions: {
+        listActive: vi.fn(() => [heartbeatAdmission]),
+        preemptHeartbeatAndAdmitOperatorTurn,
+      },
+    };
+    const service = new SessionControlService(storage as unknown as Storage);
+
+    expect(
+      service.admitOperatorChatTurn({
+        sessionId: "session-1",
+        turnId: "operator-turn-1",
+        request,
+        runtimeOwnerId: "runtime-1",
+        actorId: "operator-1",
+        idempotencyKey: "admit-operator-turn-1",
+        correlationId: "operator-turn-1",
+        authenticatedOperator: createAuthenticatedOperatorAdmissionContext({
+          actorId: "operator-1",
+          authActorSource: "loopback",
+        }),
+      }),
+    ).toEqual(expect.objectContaining({ identity: expect.objectContaining({ admissionId: admission.admissionId }) }));
+    expect(storage.sessionMutationAdmissions.listActive).toHaveBeenCalledWith("workspace-1", "session-1");
+    expect(preemptHeartbeatAndAdmitOperatorTurn).toHaveBeenCalledTimes(2);
   });
 
   it("replays the same authenticated admission after committed heartbeat preemption advances control to N+1", () => {

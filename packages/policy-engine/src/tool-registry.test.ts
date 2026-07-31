@@ -192,6 +192,56 @@ describe("tool registry", () => {
     // Offered to interactive surfaces only (never auto-offered to scheduled turns).
     expect(tool?.recommendedContexts).toEqual(["chat", "cowork"]);
   });
+
+  it("publishes complete argument contracts for deterministic pre-QA capability probes", () => {
+    const byName = new Map(
+      createDefaultToolRegistry()
+        .toCatalog()
+        .map((tool) => [tool.toolName, tool]),
+    );
+
+    expect(byName.get("fs.stat")?.argSchema).toEqual({
+      type: "object",
+      properties: { path: { type: "string", minLength: 1 } },
+      required: ["path"],
+      additionalProperties: false,
+    });
+    expect(byName.get("memory.search")?.argSchema).toEqual({
+      type: "object",
+      properties: {
+        namespace: { type: "string" },
+        query: { type: "string", minLength: 1 },
+        limit: { type: "integer", minimum: 1, maximum: 100 },
+      },
+      required: ["query"],
+      additionalProperties: false,
+    });
+    expect(byName.get("citations.build")?.argSchema).toEqual({
+      type: "object",
+      properties: {
+        sources: {
+          type: "array",
+          minItems: 1,
+          maxItems: 100,
+          items: {
+            type: "object",
+            properties: {
+              citationId: { type: "string", minLength: 1 },
+              title: { type: "string" },
+              url: { type: "string", minLength: 1 },
+              snippet: { type: "string" },
+              description: { type: "string" },
+              sourceType: { type: "string", minLength: 1 },
+            },
+            required: ["url"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["sources"],
+      additionalProperties: false,
+    });
+  });
 });
 
 describe("listReadOnlyBuiltinToolNames", () => {

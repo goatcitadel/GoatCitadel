@@ -108,6 +108,14 @@ async function main() {
     path.join(repoRoot, "scripts", "lib", "ui-target.mjs"),
     path.join(appRoot, "scripts", "lib", "ui-target.mjs"),
   );
+  copyFile(
+    path.join(repoRoot, "scripts", "lib", "managed-runtime-ownership.mjs"),
+    path.join(appRoot, "scripts", "lib", "managed-runtime-ownership.mjs"),
+  );
+  copyFile(
+    path.join(repoRoot, "scripts", "lib", "managed-runtime-lifecycle.mjs"),
+    path.join(appRoot, "scripts", "lib", "managed-runtime-lifecycle.mjs"),
+  );
   copyIfExists(path.join(repoRoot, "pnpm-lock.yaml"), path.join(appRoot, "pnpm-lock.yaml"));
   copyDirectory(uiTarget.distDir, missionControlDistDir);
   writeUiTargetManifest(appRoot);

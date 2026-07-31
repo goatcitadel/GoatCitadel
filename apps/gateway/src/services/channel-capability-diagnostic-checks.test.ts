@@ -19,7 +19,7 @@ describe("buildChannelCapabilityDiagnosticChecks", () => {
         },
         {
           key: "runtime_posture",
-          status: "warn",
+          status: "pass",
           message:
             "Runtime posture: Outbound-only webhook delivery; no inbound runtime or pairing session is available.",
         },
@@ -32,6 +32,31 @@ describe("buildChannelCapabilityDiagnosticChecks", () => {
           key: "setup_ready",
           status: "pass",
           message: "Setup posture: ready.",
+        },
+      ]),
+    );
+  });
+
+  it("warns when an inbound-capable channel has unsupported inbound runtime posture", () => {
+    const checks = buildChannelCapabilityDiagnosticChecks(
+      createCapabilities({
+        inboundModes: ["gateway"],
+        runtimePosture: {
+          outboundTransport: "api",
+          inboundTransport: "gateway",
+          lifecycle: "persistent",
+          inboundReadiness: "unsupported",
+          operatorSummary: "Gateway inbound mode is configured, but its runtime is unavailable.",
+        },
+      }),
+    );
+
+    expect(checks).toEqual(
+      expect.arrayContaining([
+        {
+          key: "runtime_posture",
+          status: "warn",
+          message: "Runtime posture: Gateway inbound mode is configured, but its runtime is unavailable.",
         },
       ]),
     );

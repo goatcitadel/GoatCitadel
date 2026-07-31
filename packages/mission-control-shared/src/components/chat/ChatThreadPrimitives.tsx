@@ -1155,7 +1155,7 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
       {showActions ? (
         <div className="mc-next-thread-actions">
           {showActionMenu ? (
-            <details className="mc-next-thread-action-menu">
+            <details className="mc-next-thread-action-menu" open={selected}>
               <summary className="mc-next-thread-inline-button mc-next-thread-action-menu-summary">Actions</summary>
               <div className="mc-next-thread-action-menu-body">
                 <div className="mc-next-thread-action-row">

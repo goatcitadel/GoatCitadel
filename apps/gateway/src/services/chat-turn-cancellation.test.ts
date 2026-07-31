@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ChatTurnTraceRecord } from "@goatcitadel/contracts";
+import { NotFoundError, type ChatTurnTraceRecord } from "@goatcitadel/contracts";
 import { markChatTurnCancelled, type ChatTurnCancellationDeps } from "./chat-turn-cancellation.js";
 
 describe("markChatTurnCancelled terminal ownership", () => {
@@ -45,6 +45,54 @@ describe("markChatTurnCancelled terminal ownership", () => {
     expect(patchIfStatus).toHaveBeenCalledTimes(2);
     expect(deps.recordDevDiagnostic).toHaveBeenCalledTimes(1);
     expect(deps.publishRealtime).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves the admitted assistant identity when reconstructing a missing active trace", () => {
+    const createdTrace = createTrace("running");
+    const create = vi.fn(() => createdTrace);
+    const patchIfStatus = vi.fn(
+      (_turnId: string, _expected: readonly ChatTurnTraceRecord["status"][], input: Partial<ChatTurnTraceRecord>) =>
+        ({ ...createdTrace, ...input }) as ChatTurnTraceRecord,
+    );
+    const deps: ChatTurnCancellationDeps = {
+      storage: {
+        chatTurnTraces: {
+          get: vi.fn(() => {
+            throw new NotFoundError({ entity: "Chat turn", id: "turn-1" });
+          }),
+          create,
+          patchIfStatus,
+        },
+        durableRuns: {
+          getRun: vi.fn(() => ({ runId: "run-1", status: "running" })),
+        },
+        chatSessionPrefs: { get: vi.fn(() => undefined) },
+      } as never,
+      getActiveChatTurnStream: vi.fn(() => ({
+        registrationId: "registration-1",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        runId: "run-1",
+        startedAt: "2026-07-10T00:00:00.000Z",
+      })),
+      parseDurableChatTurnPayload: vi.fn(
+        () =>
+          ({
+            sessionId: "session-1",
+            turnId: "turn-1",
+            userMessageId: "user-1",
+            assistantMessageId: "assistant-1",
+            branchKind: "append",
+            request: {},
+          }) as never,
+      ),
+      createHydratedChatTurnTrace: vi.fn((_turnId, trace) => trace),
+      recordDevDiagnostic: vi.fn(),
+      publishRealtime: vi.fn(() => ({}) as never),
+    };
+
+    expect(markChatTurnCancelled(deps, "session-1", "turn-1", "operator").status).toBe("cancelled");
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ assistantMessageId: "assistant-1" }));
   });
 });
 

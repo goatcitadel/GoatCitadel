@@ -622,7 +622,7 @@
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  height: 1.45rem;
+  min-height: 24px;
   padding: 0 0.55rem;
   border-radius: var(--r-pill);
   border: 1px solid var(--border-subtle, var(--mc-border-subtle));

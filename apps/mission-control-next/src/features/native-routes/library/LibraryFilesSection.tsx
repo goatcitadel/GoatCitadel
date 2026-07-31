@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { FileText } from "lucide-react";
+import { Download, FileText, Upload } from "lucide-react";
 import {
   createFileFromTemplate,
   downloadFile,
   fetchFileTemplates,
   fetchFilesList,
+  uploadFile,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard } from "../NativeRoutePageLayout";
 import type { NativeRoutePagesProps } from "../types";
@@ -42,9 +43,12 @@ export function LibraryFilesSection({
   const [selectedFilePath, setSelectedFilePath] = useState("");
   const [selectedTemplateId, setSelectedTemplateId] = useState("");
   const [targetPath, setTargetPath] = useState("");
+  const [uploadPath, setUploadPath] = useState("");
+  const [uploadContent, setUploadContent] = useState("");
+  const [uploading, setUploading] = useState(false);
   const [search, setSearch] = useState("");
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [preview, setPreview] = useState<LoadState<{ content: string; contentType: string }>>({
+  const [preview, setPreview] = useState<LoadState<{ content: string; contentType: string; encoding: string }>>({
     loading: false,
     error: null,
     data: null,
@@ -105,6 +109,7 @@ export function LibraryFilesSection({
             data: {
               content: file.content,
               contentType: file.contentType,
+              encoding: file.encoding,
             },
           });
         }
@@ -136,6 +141,32 @@ export function LibraryFilesSection({
     } catch (createError) {
       setNotice({ tone: "error", message: getErrorMessage(createError) });
     }
+  };
+
+  const handleUpload = async () => {
+    if (!uploadPath.trim() || !uploadContent) {
+      setNotice({ tone: "warning", message: "Upload path and text content are required." });
+      return;
+    }
+    setUploading(true);
+    try {
+      const uploaded = await uploadFile(uploadPath.trim(), uploadContent);
+      setNotice({ tone: "success", message: `${uploaded.relativePath} uploaded.` });
+      setUploadPath("");
+      setUploadContent("");
+      await reload();
+      setSelectedFilePath(uploaded.relativePath);
+    } catch (uploadError) {
+      setNotice({ tone: "error", message: getErrorMessage(uploadError) });
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleDownload = () => {
+    if (!selectedFilePath || !preview.data) return;
+    downloadBrowserFile(selectedFilePath, preview.data);
+    setNotice({ tone: "success", message: `${selectedFilePath} downloaded.` });
   };
 
   return (
@@ -206,11 +237,10 @@ export function LibraryFilesSection({
                   {
                     id: "import-upload",
                     label: "Import / upload",
-                    value: "Template-first",
-                    description:
-                      "This route can create files from governed templates; arbitrary upload/import is not exposed here yet.",
-                    actionLabel: "Use template",
-                    tone: "neutral",
+                    value: "Available",
+                    description: "Upload a path-jailed UTF-8 text fixture or create a file from a governed template.",
+                    actionLabel: "Use upload form",
+                    tone: "success",
                   },
                   {
                     id: "project-link",
@@ -225,11 +255,54 @@ export function LibraryFilesSection({
               />
             ) : null}
             {!preview.loading && !preview.error && preview.data ? (
-              <LibraryCodeBlock label="Preview">{truncateText(preview.data.content, 2600)}</LibraryCodeBlock>
+              <>
+                <LibraryButtonRow>
+                  <button type="button" className="mc-next-settings-filter" onClick={handleDownload}>
+                    <Download size={16} />
+                    Download file
+                  </button>
+                </LibraryButtonRow>
+                <LibraryCodeBlock label="Preview">{truncateText(preview.data.content, 2600)}</LibraryCodeBlock>
+              </>
             ) : null}
             {!preview.loading && !preview.error && !preview.data ? (
               <LibraryEmptyState label="Select a file to preview it." />
             ) : null}
+          </NativeCard>
+          <NativeCard
+            title="Upload text file"
+            subtitle="Writes through the Gateway path jail into the isolated workspace."
+          >
+            <LibraryFieldGrid>
+              <LibraryField label="Upload path">
+                <input
+                  className="mc-next-settings-input"
+                  value={uploadPath}
+                  onChange={(event) => setUploadPath(event.target.value)}
+                  placeholder="notes/usability-fixture.txt"
+                />
+              </LibraryField>
+              <LibraryField label="Upload content" span={2}>
+                <textarea
+                  className="mc-next-settings-input"
+                  value={uploadContent}
+                  onChange={(event) => setUploadContent(event.target.value)}
+                  placeholder="Deterministic fixture content"
+                  rows={5}
+                />
+              </LibraryField>
+            </LibraryFieldGrid>
+            <LibraryButtonRow>
+              <button
+                type="button"
+                className="mc-next-settings-filter"
+                onClick={() => void handleUpload()}
+                disabled={uploading || !uploadPath.trim() || !uploadContent}
+              >
+                <Upload size={16} />
+                {uploading ? "Uploading..." : "Upload file"}
+              </button>
+            </LibraryButtonRow>
           </NativeCard>
           <NativeCard
             title="Create from template"
@@ -259,6 +332,7 @@ export function LibraryFilesSection({
               </LibraryField>
             </LibraryFieldGrid>
             <LibraryActionList
+              ariaLabel="File templates"
               items={(data?.templates ?? []).slice(0, 4).map((item) => ({
                 id: item.templateId,
                 label: item.title,
@@ -278,4 +352,20 @@ export function LibraryFilesSection({
       </div>
     </LibrarySectionShell>
   );
+}
+
+function downloadBrowserFile(relativePath: string, file: { content: string; contentType: string; encoding: string }) {
+  if (typeof document === "undefined" || typeof URL === "undefined" || typeof URL.createObjectURL !== "function") {
+    throw new Error("Browser downloads are unavailable in this environment.");
+  }
+  const content =
+    file.encoding === "base64"
+      ? Uint8Array.from(atob(file.content), (character) => character.charCodeAt(0))
+      : file.content;
+  const objectUrl = URL.createObjectURL(new Blob([content], { type: file.contentType || "application/octet-stream" }));
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = relativePath.split(/[\\/]/u).at(-1) || "download";
+  anchor.click();
+  URL.revokeObjectURL(objectUrl);
 }

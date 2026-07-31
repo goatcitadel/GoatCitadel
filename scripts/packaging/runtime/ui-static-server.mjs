@@ -9,6 +9,7 @@ const port = Number(process.env.GOATCITADEL_UI_PORT || 5173);
 const distDir = process.env.GOATCITADEL_UI_DIST_DIR
   ? path.resolve(process.env.GOATCITADEL_UI_DIST_DIR)
   : path.resolve(process.cwd(), "mission-control", "dist");
+const managedInstanceId = resolveManagedInstanceId(process.env, "mission-control");
 
 const contentTypes = {
   ".css": "text/css; charset=utf-8",
@@ -32,7 +33,11 @@ const server = http.createServer((request, response) => {
   const requestUrl = new URL(request.url || "/", `http://${host}:${port}`);
 
   if (requestUrl.pathname === "/health") {
-    return sendJson(response, 200, { status: "ok" });
+    return sendJson(response, 200, {
+      status: "ok",
+      service: "mission-control",
+      ...(managedInstanceId ? { managedInstanceId, managedProcessId: process.pid } : {}),
+    });
   }
 
   const decodedPathname = decodeRequestPathname(requestUrl.pathname);
@@ -62,8 +67,22 @@ const server = http.createServer((request, response) => {
 });
 
 server.listen(port, host, () => {
-  process.stdout.write(`[goatcitadel] Mission Control static server listening on http://${host}:${port}\n`);
+  const address = server.address();
+  const listeningPort = address && typeof address !== "string" ? address.port : port;
+  process.stdout.write(`[goatcitadel] Mission Control static server listening on http://${host}:${listeningPort}\n`);
 });
+
+function resolveManagedInstanceId(env, expectedService) {
+  const instanceId = env.GOATCITADEL_MANAGED_INSTANCE_ID?.trim();
+  if (
+    env.GOATCITADEL_MANAGED_SERVICE !== expectedService ||
+    !instanceId ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(instanceId)
+  ) {
+    return undefined;
+  }
+  return instanceId;
+}
 
 function resolveStaticPath(candidatePath) {
   if (fs.existsSync(candidatePath) && fs.statSync(candidatePath).isFile()) {

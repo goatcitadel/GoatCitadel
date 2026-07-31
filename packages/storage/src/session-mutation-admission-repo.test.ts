@@ -8,6 +8,7 @@ import { Worker } from "node:worker_threads";
 import { canonicalJsonString } from "@goatcitadel/contracts";
 import { createDatabase } from "./sqlite.js";
 import { ChatSessionLifecycleRepository } from "./chat-session-lifecycle-repo.js";
+import { DurableRunEventRepository } from "./durable-run-event-repo.js";
 import { SessionControlRepository } from "./session-control-repo.js";
 import {
   SessionMutationAdmissionRepository,
@@ -89,6 +90,20 @@ describe("SessionMutationAdmissionRepository SQLite", () => {
     assert.deepEqual(
       repo.listEvents(created.admission.admissionId).map((event) => event.eventType),
       ["admitted", "completed"],
+    );
+    const nextTurn = repo.admit({
+      ...input,
+      turnId: "turn-two",
+      runtimeOwnerId: "runtime-owner-two",
+      materialSha256: "c".repeat(64),
+      idempotencyKey: "admission:session-a:turn-b",
+      correlationId: "correlation:session-a:turn-b",
+    });
+    assert.equal(nextTurn.disposition, "created");
+    assert.equal(nextTurn.admission.status, "active");
+    assert.deepEqual(
+      repo.listActive("workspace-a", "session-a").map((admission) => admission.admissionId),
+      [nextTurn.admission.admissionId],
     );
     assert.throws(
       () =>
@@ -400,6 +415,16 @@ describe("SessionMutationAdmissionRepository SQLite", () => {
   it("atomically resolves durable user input and replays from the immutable seal after later run progress", () => {
     const db = createDatabase({ dbPath: ":memory:" });
     const fixture = createContinuationFixture(db);
+    const events = new DurableRunEventRepository(db);
+    assert.equal(
+      events.append({
+        eventId: "event-continuation-waiting",
+        runId: fixture.runId,
+        eventType: "run_waiting",
+        createdAt: "2026-07-30T00:00:00.000Z",
+      }).sequence,
+      1,
+    );
 
     const resolved = fixture.repo.resolveDurableChatUserInput(fixture.resolution);
     assert.equal(resolved.disposition, "resolved");
@@ -415,6 +440,26 @@ describe("SessionMutationAdmissionRepository SQLite", () => {
       },
       { status: "running", pending_user_input_json: null },
     );
+    assert.equal(
+      events.append({
+        eventId: "event-continuation-started",
+        runId: fixture.runId,
+        eventType: "run_started",
+        createdAt: "2026-07-30T00:00:02.000Z",
+      }).sequence,
+      3,
+    );
+    assert.deepEqual(
+      events.listByRun(fixture.runId).map((event) => [event.eventType, event.sequence]),
+      [
+        ["run_waiting", 1],
+        ["run_woken", 2],
+        ["run_started", 3],
+      ],
+    );
+    const sequenceBeforeReplay = db
+      .prepare("SELECT last_sequence FROM durable_run_event_sequences WHERE run_id = @runId")
+      .get<{ last_sequence: number }>({ runId: fixture.runId })?.last_sequence;
 
     db.prepare(
       `UPDATE durable_runs
@@ -433,6 +478,12 @@ describe("SessionMutationAdmissionRepository SQLite", () => {
     assert.deepEqual(replayed.run, { runId: fixture.runId, status: "running", version: 4 });
     assert.deepEqual(replayed.responseRecord, resolved.responseRecord);
     assert.deepEqual(replayed.seal, resolved.seal);
+    assert.equal(
+      db
+        .prepare("SELECT last_sequence FROM durable_run_event_sequences WHERE run_id = @runId")
+        .get<{ last_sequence: number }>({ runId: fixture.runId })?.last_sequence,
+      sequenceBeforeReplay,
+    );
     assert.throws(
       () =>
         fixture.repo.resolveDurableChatUserInput({
@@ -725,6 +776,29 @@ describe("SessionMutationAdmissionRepository SQLite", () => {
   it("atomically fences and receipts parent-local post-commit stages", () => {
     const db = createDatabase({ dbPath: ":memory:" });
     const fixture = createParentLocalPostCommitFixture(db);
+    const durableBinding = fixture.repo.findDurableRunBinding(fixture.input.parentAdmission);
+    assert.ok(durableBinding);
+    assert.deepEqual(
+      { ...durableBinding, createdAt: undefined },
+      {
+        admissionId: fixture.input.parentAdmission.admissionId,
+        sessionIncarnationId: fixture.input.parentAdmission.sessionIncarnationId,
+        workspaceId: fixture.input.parentAdmission.workspaceId,
+        sessionId: fixture.input.parentAdmission.sessionId,
+        turnId: fixture.input.parentAdmission.turnId,
+        durableRunId: fixture.input.parentRunId,
+        createdAt: undefined,
+      },
+    );
+    assert.match(durableBinding.createdAt, /T.*Z$/u);
+    assert.throws(
+      () =>
+        fixture.repo.findDurableRunBinding({
+          ...fixture.input.parentAdmission,
+          workspaceId: "workspace-wrong",
+        }),
+      /binding conflicts/iu,
+    );
     let callbackCount = 0;
     const allowed = fixture.repo.runParentLocalPostCommitStage(
       { ...fixture.input, effect: "capability_gap" },

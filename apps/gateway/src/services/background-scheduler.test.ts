@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { startBackgroundInterval } from "./background-scheduler.js";
+import { startBackgroundInterval, trackBackgroundTask } from "./background-scheduler.js";
 
 interface HarnessOptions {
   readonly intervalMs?: number;
@@ -170,5 +170,30 @@ describe("startBackgroundInterval", () => {
     await drain(inflight);
     await vi.advanceTimersByTimeAsync(1000);
     expect(task).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("trackBackgroundTask", () => {
+  it("observes a rejected task without creating an unhandled finally branch", async () => {
+    const failure = new Error("postgres connection terminated");
+    const backgroundTasks = new Set<Promise<void>>();
+    const unhandled: unknown[] = [];
+    const onUnhandled = (error: unknown): void => {
+      unhandled.push(error);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const task = Promise.reject(failure);
+      trackBackgroundTask(backgroundTasks, task);
+
+      expect(backgroundTasks.has(task)).toBe(true);
+      await expect(task).rejects.toBe(failure);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(backgroundTasks.size).toBe(0);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
   });
 });

@@ -207,6 +207,7 @@ export function LibraryAgentsSection({ activeWorkspaceId, route, navigate }: Nat
             density="compact"
           >
             <LibraryActionList
+              ariaLabel="Imported agent catalog"
               items={(data?.catalog ?? []).map((item) => ({
                 id: item.entryId,
                 label: item.definition.frontmatter.name,

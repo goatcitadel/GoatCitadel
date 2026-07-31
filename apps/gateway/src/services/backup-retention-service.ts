@@ -22,6 +22,8 @@ import { resolveGatewayPostgresConnectionString } from "../postgres-runtime-conf
 import { resolveBackupDirectory, resolveBackupPathWithinDirectory } from "./backup-paths.js";
 
 const RETENTION_SETTINGS_KEY = "retention_policy";
+const CONFIG_GENERATION_TEMP_FILE_PATTERN = /^\..+-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\.tmp$/iu;
+const CONFIG_SYNC_TEMP_FILE_PATTERN = /\.tmp-\d+-[a-z0-9]+-[a-z0-9]+$/iu;
 
 const DEFAULT_RETENTION_POLICY: RetentionPolicy = {
   realtimeEventsDays: 14,
@@ -225,14 +227,14 @@ export class BackupRetentionService {
         for (const includePath of this.buildBackupIncludePaths()) {
           const source = path.resolve(this.config.rootDir, includePath);
           const target = path.join(payloadDir, includePath);
-          await copyPathIfExists(source, target);
+          await copyPathIfExists(source, target, buildBackupCopyFilter(includePath, source));
         }
       } else {
         await this.snapshotSqliteDatabase(payloadDir);
         for (const includePath of this.buildBackupIncludePaths()) {
           const source = path.resolve(this.config.rootDir, includePath);
           const target = path.join(payloadDir, includePath);
-          await copyPathIfExists(source, target);
+          await copyPathIfExists(source, target, buildBackupCopyFilter(includePath, source));
         }
       }
 
@@ -646,16 +648,45 @@ async function pruneFilesOlderThan(
   return { files, bytes };
 }
 
-async function copyPathIfExists(source: string, target: string): Promise<void> {
+type BackupCopyFilter = (sourcePath: string, destinationPath: string) => boolean;
+
+function buildBackupCopyFilter(includePath: string, sourceRoot: string): BackupCopyFilter | undefined {
+  if (includePath.replaceAll("\\", "/") !== "config") {
+    return undefined;
+  }
+  return (sourcePath) => shouldCopyRuntimeConfigPath(sourceRoot, sourcePath);
+}
+
+function shouldCopyRuntimeConfigPath(configRoot: string, sourcePath: string): boolean {
+  const relativePath = path.relative(configRoot, sourcePath).replaceAll("\\", "/");
+  if (!relativePath) {
+    return true;
+  }
+  if (relativePath === ".generations/staging" || relativePath.startsWith(".generations/staging/")) {
+    return false;
+  }
+
+  const fileName = path.posix.basename(relativePath);
+  // ConfigGenerationService writes hidden, UUID-suffixed files before an
+  // atomic rename. Config sync uses the second same-directory temp convention.
+  // Neither represents committed runtime state, and excluding it in fs.cp's
+  // pre-stat filter prevents a completed rename from becoming a false ENOENT.
+  return !CONFIG_GENERATION_TEMP_FILE_PATTERN.test(fileName) && !CONFIG_SYNC_TEMP_FILE_PATTERN.test(fileName);
+}
+
+async function copyPathIfExists(source: string, target: string, filter?: BackupCopyFilter): Promise<void> {
   let stats: fsSync.Stats;
   try {
     stats = await fs.stat(source);
-  } catch {
-    return;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return;
+    }
+    throw error;
   }
   if (stats.isDirectory()) {
     await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.cp(source, target, { recursive: true, force: true });
+    await fs.cp(source, target, { recursive: true, force: true, filter });
     return;
   }
   if (stats.isFile()) {

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type {
+  ChatCompletionRequest,
   ChatCompletionResponse,
   ChatStreamUsageRecord,
   ChatToolRunRecord,
@@ -8,6 +9,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { ChatTurnAgentRunner, type ChatTurnAgentRunnerInput } from "./chat-turn-agent-runner.js";
 import { createMockStorage, createToolCatalog } from "./chat-turn-agent-runner-test-fixtures.js";
+import { attachChatCompletionFailureContext } from "./llm-completion-helpers.js";
 
 type SynthesizeToolOutcomeFallback = (input: {
   input: ChatTurnAgentRunnerInput;
@@ -97,6 +99,10 @@ describe("ChatTurnAgentRunner secondary-call usage accounting", () => {
         };
       },
     );
+    const streamToolProtocolError = attachChatCompletionFailureContext(
+      new Error("invalid_request_error: function name is invalid"),
+      { deadlineAtMs: Date.now() + 60_000, emittedOutput: false },
+    );
     const createChatCompletionStream = async function* (
       _request: unknown,
       attribution?: ModelUsageAttributionContext,
@@ -104,7 +110,7 @@ describe("ChatTurnAgentRunner secondary-call usage accounting", () => {
       if (attribution) attributions.push(attribution);
       const unreachableChunks: Record<string, unknown>[] = [];
       yield* unreachableChunks;
-      throw new Error("force the pre-token non-stream recovery path");
+      throw streamToolProtocolError;
     };
     const orchestrator = new ChatTurnAgentRunner({
       storage: createMockStorage() as never,
@@ -162,10 +168,44 @@ describe("ChatTurnAgentRunner secondary-call usage accounting", () => {
     expect(Object.keys(unroutedAttributions[0]!).filter((key) => key.startsWith("context"))).toEqual([]);
   });
 
+  it("carries direct durable run and task bindings into completion diagnostics", async () => {
+    const requests: ChatCompletionRequest[] = [];
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => [],
+      createChatCompletion: vi.fn(async (request: ChatCompletionRequest) => {
+        requests.push(request);
+        return {
+          model: "glm-5",
+          choices: [{ index: 0, message: { role: "assistant", content: "Bound response." }, finish_reason: "stop" }],
+        };
+      }),
+      invokeTool: vi.fn(),
+    });
+
+    await orchestrator.run({
+      ...baseTurnInput(),
+      policyRunId: "durable-run-direct-1",
+      policyTaskId: "durable-task-direct-1",
+    });
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.memory).toMatchObject({
+      sessionId: "sess-synth-unit-1",
+      runId: "durable-run-direct-1",
+      taskId: "durable-task-direct-1",
+    });
+  });
+
   it("attributes delegated worker calls to the persisted step and preserves worker identity on repair", async () => {
     const attributions: ModelUsageAttributionContext[] = [];
+    const requests: ChatCompletionRequest[] = [];
     const createChatCompletion = vi.fn(
-      async (_request: unknown, attribution?: ModelUsageAttributionContext): Promise<ChatCompletionResponse> => {
+      async (
+        request: ChatCompletionRequest,
+        attribution?: ModelUsageAttributionContext,
+      ): Promise<ChatCompletionResponse> => {
+        requests.push(request);
         if (attribution) attributions.push(attribution);
         if (attributions.length === 1) {
           return {
@@ -242,6 +282,14 @@ describe("ChatTurnAgentRunner secondary-call usage accounting", () => {
       workerId: "delegation-step-1",
       parentOperationId: "delegation-run:delegation-run-1:step:delegation-step-1",
     });
+    expect(requests).toHaveLength(2);
+    for (const request of requests) {
+      expect(request.memory).toMatchObject({
+        sessionId: "worker-session-1",
+        runId: "delegation-run-1",
+        taskId: "task-1",
+      });
+    }
   });
 
   it("fails delegated usage attribution closed when the persisted step belongs to another child session", async () => {
@@ -683,6 +731,10 @@ describe("ChatTurnAgentRunner secondary-call usage accounting", () => {
       ],
       usage: fallbackUsage,
     });
+    const streamToolProtocolError = attachChatCompletionFailureContext(
+      new Error("reasoning_content is missing for tool_calls"),
+      { deadlineAtMs: Date.now() + 60_000, emittedOutput: false },
+    );
     const orchestrator = new ChatTurnAgentRunner({
       storage: createMockStorage() as never,
       listToolCatalog: () => [],
@@ -690,7 +742,7 @@ describe("ChatTurnAgentRunner secondary-call usage accounting", () => {
       createChatCompletionStream: async function* () {
         const unreachableChunks: Record<string, unknown>[] = [];
         yield* unreachableChunks;
-        throw new Error("stream failed before usage");
+        throw streamToolProtocolError;
       },
       invokeTool: vi.fn(),
     });

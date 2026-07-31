@@ -286,24 +286,26 @@ export async function closeDurableChildWatcher(watcherId: string): Promise<Durab
   });
 }
 
-export async function pauseDurableRun(runId: string, actorId?: string): Promise<DurableRunRecord> {
+export async function pauseDurableRun(runId: string, _actorId?: string): Promise<DurableRunRecord> {
   return request<DurableRunRecord>(`/api/v1/durable/runs/${encodeURIComponent(runId)}/pause`, {
     method: "POST",
-    body: JSON.stringify({ actorId }),
+    // The Gateway derives the actor from the authenticated principal. Never
+    // let a browser-supplied actor override that authority boundary.
+    body: "{}",
   });
 }
 
-export async function resumeDurableRun(runId: string, actorId?: string): Promise<DurableRunRecord> {
+export async function resumeDurableRun(runId: string, _actorId?: string): Promise<DurableRunRecord> {
   return request<DurableRunRecord>(`/api/v1/durable/runs/${encodeURIComponent(runId)}/resume`, {
     method: "POST",
-    body: JSON.stringify({ actorId }),
+    body: "{}",
   });
 }
 
-export async function cancelDurableRun(runId: string, actorId?: string): Promise<DurableRunRecord> {
+export async function cancelDurableRun(runId: string, _actorId?: string): Promise<DurableRunRecord> {
   return request<DurableRunRecord>(`/api/v1/durable/runs/${encodeURIComponent(runId)}/cancel`, {
     method: "POST",
-    body: JSON.stringify({ actorId }),
+    body: "{}",
   });
 }
 

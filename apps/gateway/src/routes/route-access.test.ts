@@ -4,8 +4,10 @@ import { adminRoutes } from "./admin.js";
 import { approvalsRoutes } from "./approvals.js";
 import { authRoutes } from "./auth.js";
 import { durableRoutes } from "./durable.js";
+import { engineeringLearningRoutes } from "./engineering-learnings.js";
 import { eventsRoutes } from "./events.js";
 import { memoryRoutes } from "./memory.js";
+import { notificationRoutes } from "./notifications.js";
 import { orchestrationRoutes } from "./orchestration.js";
 import { installRouteAccessTracking, listMissingTrackedRouteAccessClasses, withRouteAccess } from "./route-access.js";
 
@@ -49,6 +51,7 @@ describe("route access manifest", () => {
     await app.register(approvalsRoutes);
     await app.register(authRoutes);
     await app.register(durableRoutes);
+    await app.register(engineeringLearningRoutes);
     await app.register(eventsRoutes);
     await app.register(memoryRoutes);
     await app.register(orchestrationRoutes);
@@ -80,6 +83,24 @@ describe("route access manifest", () => {
       classificationSource: "explicit",
       tracked: true,
     });
+
+    const engineeringLearningManifest = app.routeAccessManifest.filter(
+      (entry) => entry.method !== "HEAD" && entry.url.startsWith("/api/v1/engineering-learnings"),
+    );
+    expect(engineeringLearningManifest).toHaveLength(7);
+    expect(engineeringLearningManifest).toEqual(
+      expect.arrayContaining(
+        engineeringLearningManifest.map((entry) =>
+          expect.objectContaining({
+            method: entry.method,
+            url: entry.url,
+            accessClass: "operator",
+            classificationSource: "policy",
+            tracked: true,
+          }),
+        ),
+      ),
+    );
   });
 
   it("classifies the full api surface even when routes do not opt in locally", async () => {
@@ -172,6 +193,130 @@ describe("route access manifest", () => {
       classificationSource: "default",
       tracked: true,
     });
+  });
+
+  it("classifies every notification route as operator-only and rejects non-operator principals", async () => {
+    app = Fastify();
+    installRouteAccessTracking(app);
+    app.decorate("gatewayConfig", {
+      assistant: {
+        auth: {
+          mode: "token",
+          allowLoopbackBypass: false,
+        },
+      },
+    } as never);
+    app.decorate(
+      "requireOperatorAuth",
+      vi.fn(async (request, reply) => {
+        if (request.authActorSource === "token") {
+          return;
+        }
+        return reply.code(403).send({
+          error: "Operator authentication is required for this control-plane route.",
+        });
+      }),
+    );
+    app.addHook("onRequest", async (request) => {
+      const source = request.headers["x-auth-source"];
+      request.authActorSource = source === "token" || source === "companion" ? source : "device";
+    });
+    const integrations = {
+      listNotificationTargets: vi.fn(() => []),
+      createNotificationTarget: vi.fn(() => ({ targetId: "target-1" })),
+      updateNotificationTarget: vi.fn(() => ({ targetId: "target-1", revision: 2 })),
+      sendTestNotification: vi.fn(async () => ({ event: { eventId: "event-1" }, deliveries: [] })),
+      listNotificationRules: vi.fn(() => []),
+      createNotificationRule: vi.fn(() => ({ ruleId: "rule-1" })),
+      updateNotificationRule: vi.fn(() => ({ ruleId: "rule-1", revision: 2 })),
+      upsertNotificationPresence: vi.fn((input) => ({ ...input, leaseId: "lease-1" })),
+      listNotificationDeliveries: vi.fn(() => []),
+      requestNotification: vi.fn(async () => ({ event: { eventId: "event-1" }, deliveries: [] })),
+    };
+    app.decorate("services", { integrations } as never);
+    await app.register(notificationRoutes);
+    await app.ready();
+
+    const notificationManifest = app.routeAccessManifest.filter(
+      (entry) => entry.method !== "HEAD" && entry.url.startsWith("/api/v1/notifications"),
+    );
+    expect(notificationManifest).toHaveLength(10);
+    expect(notificationManifest).toEqual(
+      expect.arrayContaining(
+        notificationManifest.map((entry) =>
+          expect.objectContaining({
+            method: entry.method,
+            url: entry.url,
+            accessClass: "operator",
+            classificationSource: "policy",
+            tracked: true,
+          }),
+        ),
+      ),
+    );
+    expect(listMissingTrackedRouteAccessClasses(app)).toEqual([]);
+
+    const nonOperatorRequests = [
+      { method: "GET", url: "/api/v1/notifications/targets" },
+      {
+        method: "POST",
+        url: "/api/v1/notifications/targets",
+        payload: { target: { label: "Ops", kind: "channel_connection", channelConnectionId: "channel-1" } },
+      },
+      {
+        method: "PATCH",
+        url: "/api/v1/notifications/targets/target-1",
+        payload: {
+          expectedRevision: 1,
+          target: { label: "Ops", kind: "channel_connection", channelConnectionId: "channel-1" },
+        },
+      },
+      { method: "POST", url: "/api/v1/notifications/targets/target-1/test", payload: {} },
+      { method: "GET", url: "/api/v1/notifications/rules" },
+      {
+        method: "POST",
+        url: "/api/v1/notifications/rules",
+        payload: { rule: { label: "Failures", eventTypes: ["turn.failed"], targetIds: ["target-1"] } },
+      },
+      {
+        method: "PATCH",
+        url: "/api/v1/notifications/rules/rule-1",
+        payload: {
+          expectedRevision: 1,
+          rule: { label: "Failures", eventTypes: ["turn.failed"], targetIds: ["target-1"] },
+        },
+      },
+      {
+        method: "PUT",
+        url: "/api/v1/notifications/presence",
+        payload: { clientId: "client-1", focused: true, visible: true },
+      },
+      { method: "GET", url: "/api/v1/notifications/deliveries" },
+      {
+        method: "POST",
+        url: "/api/v1/notifications/requests",
+        payload: { eventType: "turn.failed", title: "Failure", message: "A turn failed." },
+      },
+    ] as const;
+
+    for (const source of ["device", "companion"] as const) {
+      for (const request of nonOperatorRequests) {
+        const response = await app.inject({
+          ...request,
+          headers: { "x-auth-source": source },
+        });
+        expect(response.statusCode, `${source}: ${request.method} ${request.url}`).toBe(403);
+      }
+    }
+    expect(Object.values(integrations).every((handler) => handler.mock.calls.length === 0)).toBe(true);
+
+    const operatorResponse = await app.inject({
+      method: "GET",
+      url: "/api/v1/notifications/targets",
+      headers: { "x-auth-source": "token" },
+    });
+    expect(operatorResponse.statusCode).toBe(200);
+    expect(integrations.listNotificationTargets).toHaveBeenCalledOnce();
   });
 
   it("fails closed when an operator route is registered without the auth decorator", async () => {

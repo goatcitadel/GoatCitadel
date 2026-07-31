@@ -210,7 +210,7 @@
 
 .mc-next-threaded-surface.unified
   .mc-next-threaded-action-row
-  > .mc-next-threaded-secondary:not(.mc-next-threaded-work-record),
+  > .mc-next-threaded-secondary:not(.mc-next-threaded-work-record):not(.mc-next-threaded-build-editor),
 .mc-next-threaded-surface.unified .mc-next-threaded-action-row > .mc-next-threaded-archive {
   display: none;
 }
@@ -363,7 +363,9 @@
 }
 
 .mc-next-threaded-surface.unified .mc-next-thread-context-toggle {
-  min-height: 1.35rem;
+  /* Keep the full associated label at the WCAG 2.2 AA touch-target floor.
+     The compact 1.35rem override measured 21.6px on a real mobile Chat turn. */
+  min-height: 1.5rem;
   padding: 0 0.28rem;
   border: 0;
   background: transparent;

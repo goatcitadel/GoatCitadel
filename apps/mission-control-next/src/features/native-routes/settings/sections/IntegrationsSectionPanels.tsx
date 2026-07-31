@@ -99,6 +99,7 @@ export function PluginTrustPanel({ plugins }: { plugins: IntegrationPluginRecord
       ]}
     >
       <SettingsActionList
+        ariaLabel="Installed integration plugins"
         items={plugins.map((plugin) => {
           const source = plugin.sourceMetadata;
           const warnings = plugin.trustWarnings ?? [];
@@ -354,6 +355,7 @@ export function ExternalSideEffectLedgerPanel({
         ]}
       />
       <SettingsActionList
+        ariaLabel="External side-effect runs"
         items={visibleRuns.map((run) => {
           const workflowEvidence = formatActivepiecesWorkflowEvidence(run);
           return {
@@ -682,6 +684,7 @@ export function GoogleMeetStatusPanel({
             ]}
           />
           <SettingsActionList
+            ariaLabel="Google Meet prerequisites"
             items={(status.prerequisites ?? []).map((item) => ({
               id: item.id,
               label: labelForMeetPrerequisite(item.id),
@@ -691,6 +694,7 @@ export function GoogleMeetStatusPanel({
             }))}
           />
           <SettingsActionList
+            ariaLabel="Google Meet sessions"
             items={sessions.map((session) => ({
               id: session.sessionId,
               label: session.displayName ?? session.meetingUrl,

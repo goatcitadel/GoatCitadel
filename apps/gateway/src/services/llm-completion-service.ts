@@ -13,14 +13,18 @@ import type {
   ModelUsageAttributionContext,
 } from "@goatcitadel/contracts";
 import { shouldAllowCrossProviderFallback } from "./chat-session-utils.js";
+import { ChatTurnCancelledError, isChatTurnCancelledError } from "./chat-turn-helpers.js";
 import {
   CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT,
   applyNonStreamingTransformLlmOutput,
   applyStreamingTransformLlmOutput,
+  attachChatCompletionFailureContext,
   buildProviderRetryCooldownExhaustedError,
   calculateSavings,
+  classifyProviderFailure,
   createChatCompletionDeadline,
   delayChatCompletionRetry,
+  getRemainingChatCompletionBudgetMs,
   getRemainingChatCompletionTimeoutMs,
   normalizeChatCompletionAttemptError,
   normalizeToolProtocolRetryRequest,
@@ -260,6 +264,7 @@ export async function createChatCompletion(
       transientRetryIndex += 1
     ) {
       try {
+        throwIfChatCompletionRequestAborted(attemptRequest.signal, memoryInput?.turnId);
         const attemptTimeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, hookableRequest.timeoutMs);
         response = await host.llmService.chatCompletions(
           {
@@ -272,6 +277,7 @@ export async function createChatCompletion(
             dispatchedReasoningEffort: attemptRequest.reasoning?.effort,
           }),
         );
+        throwIfChatCompletionRequestAborted(attemptRequest.signal, memoryInput?.turnId);
         routing.effectiveProviderId = attemptRequest.providerId ?? primaryProviderId;
         routing.effectiveModel = response.model ?? attemptRequest.model ?? primaryModel;
         routing.effectiveApiStyle = host.llmService.resolveExecutionApiStyle(
@@ -291,7 +297,9 @@ export async function createChatCompletion(
         }
         break attemptLoop;
       } catch (error) {
-        lastError = normalizeChatCompletionAttemptError(error, hookableRequest.timeoutMs);
+        lastError =
+          resolveChatCompletionRequestAbortError(attemptRequest.signal, memoryInput?.turnId) ??
+          normalizeChatCompletionAttemptError(error, hookableRequest.timeoutMs);
         host.recordDevDiagnostic({
           level: "warn",
           category: "chat",
@@ -313,6 +321,12 @@ export async function createChatCompletion(
             error: lastError.message,
             retryIndex: index,
             transientRetryIndex,
+            remainingBudgetMs: getRemainingChatCompletionBudgetMs(completionDeadline),
+            emittedOutput: false,
+            failureClass: classifyProviderFailure(lastError),
+            sessionId: memoryInput?.sessionId,
+            turnId: memoryInput?.turnId,
+            durableRunId: memoryInput?.runId,
           },
         });
 
@@ -324,37 +338,62 @@ export async function createChatCompletion(
           transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT - 1 &&
           shouldRetryTransientProviderError(lastError)
         ) {
-          await delayChatCompletionRetry(completionDeadline, hookableRequest.timeoutMs, transientRetryIndex);
-          continue;
+          if (
+            await delayChatCompletionRetry(
+              completionDeadline,
+              hookableRequest.timeoutMs,
+              transientRetryIndex,
+              attemptRequest.signal,
+            )
+          ) {
+            continue;
+          }
+          lastError = resolveChatCompletionRequestAbortError(attemptRequest.signal, memoryInput?.turnId) ?? lastError;
+          break attemptLoop;
         }
         if (index < retryAttempts.length - 1 && shouldRetryToolProtocolError(lastError)) {
-          continue attemptLoop;
+          if (
+            await delayChatCompletionRetry(completionDeadline, hookableRequest.timeoutMs, index, attemptRequest.signal)
+          ) {
+            continue attemptLoop;
+          }
+          lastError = resolveChatCompletionRequestAbortError(attemptRequest.signal, memoryInput?.turnId) ?? lastError;
         }
-        if (index < retryAttempts.length - 1 && index === 0) {
-          continue attemptLoop;
-        }
-        break;
+        break attemptLoop;
       }
     }
   }
 
+  lastError = resolveChatCompletionRequestAbortError(hookableRequest.signal, memoryInput?.turnId) ?? lastError;
   if (!response && allowCrossProviderFallback && (!lastError || shouldAttemptCrossProviderFallback(lastError))) {
+    const fallbackRequiresToolProtocolNormalization = Boolean(lastError && shouldRetryToolProtocolError(lastError));
     const fallbacks = filterCrossProviderFallbackTargets(
       host.resolveFallbackTargets(runtime, primaryProviderId, primaryModel),
       primaryProviderId,
     );
     fallbackLoop: for (const [fallbackOrdinal, fallback] of fallbacks.entries()) {
+      if (
+        !(await delayChatCompletionRetry(
+          completionDeadline,
+          hookableRequest.timeoutMs,
+          fallbackOrdinal,
+          hookableRequest.signal,
+        ))
+      ) {
+        lastError = resolveChatCompletionRequestAbortError(hookableRequest.signal, memoryInput?.turnId) ?? lastError;
+        break;
+      }
       for (
         let transientRetryIndex = 0;
         transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT;
         transientRetryIndex += 1
       ) {
         try {
+          throwIfChatCompletionRequestAborted(hookableRequest.signal, memoryInput?.turnId);
           const attemptTimeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, hookableRequest.timeoutMs);
-          const fallbackRequest = normalizeToolProtocolRetryRequest(
-            hookableRequest,
-            TOOL_PROTOCOL_RETRY_MINIMAL_THINKING,
-          );
+          const fallbackRequest = fallbackRequiresToolProtocolNormalization
+            ? normalizeToolProtocolRetryRequest(hookableRequest, TOOL_PROTOCOL_RETRY_MINIMAL_THINKING)
+            : hookableRequest;
           response = await host.llmService.chatCompletions(
             {
               ...fallbackRequest,
@@ -365,10 +404,11 @@ export async function createChatCompletion(
             usageAttribution.next({
               callKind: "chat_fallback",
               fallbackIndex: fallbackOrdinal + 1,
-              repairIndex: TOOL_PROTOCOL_RETRY_MINIMAL_THINKING,
+              repairIndex: fallbackRequiresToolProtocolNormalization ? TOOL_PROTOCOL_RETRY_MINIMAL_THINKING : 0,
               dispatchedReasoningEffort: fallbackRequest.reasoning?.effort,
             }),
           );
+          throwIfChatCompletionRequestAborted(hookableRequest.signal, memoryInput?.turnId);
           host.recordDevDiagnostic({
             level: "info",
             category: "chat",
@@ -395,7 +435,9 @@ export async function createChatCompletion(
           routing.effectiveApiStyle = routing.fallbackApiStyle;
           break;
         } catch (error) {
-          lastError = normalizeChatCompletionAttemptError(error, hookableRequest.timeoutMs);
+          lastError =
+            resolveChatCompletionRequestAbortError(hookableRequest.signal, memoryInput?.turnId) ??
+            normalizeChatCompletionAttemptError(error, hookableRequest.timeoutMs);
           if (isAuthoritativeModelUsageAccountingError(lastError)) {
             break fallbackLoop;
           }
@@ -403,9 +445,21 @@ export async function createChatCompletion(
             transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT - 1 &&
             shouldRetryTransientProviderError(lastError)
           ) {
-            await delayChatCompletionRetry(completionDeadline, hookableRequest.timeoutMs, transientRetryIndex);
-            continue;
+            if (
+              await delayChatCompletionRetry(
+                completionDeadline,
+                hookableRequest.timeoutMs,
+                transientRetryIndex,
+                hookableRequest.signal,
+              )
+            ) {
+              continue;
+            }
+            lastError =
+              resolveChatCompletionRequestAbortError(hookableRequest.signal, memoryInput?.turnId) ?? lastError;
+            break fallbackLoop;
           }
+          break;
         }
       }
       if (response) {
@@ -442,10 +496,19 @@ export async function createChatCompletion(
       context: {
         error: finalError?.message,
         retryCooldownExhausted: Boolean(lastError && finalError !== lastError),
+        remainingBudgetMs: getRemainingChatCompletionBudgetMs(completionDeadline),
+        emittedOutput: false,
+        failureClass: finalError ? classifyProviderFailure(finalError) : "unknown",
+        sessionId: memoryInput?.sessionId,
+        turnId: memoryInput?.turnId,
+        durableRunId: memoryInput?.runId,
       },
     });
     recordFailedChatRuntime(host, request, primaryRuntimeTarget, completionStartedAt, completedAt, finalError?.message);
-    throw finalError ?? new Error("chat completion failed");
+    throw attachChatCompletionFailureContext(finalError ?? new Error("chat completion failed"), {
+      deadlineAtMs: completionDeadline,
+      emittedOutput: false,
+    });
   }
   const completionCompletedAt = Date.now();
   host.recordDevDiagnostic({
@@ -694,6 +757,7 @@ export async function* createChatCompletionStream(
     ) {
       let attemptStreamed = false;
       try {
+        throwIfChatCompletionRequestAborted(attemptRequest.signal, memoryInput?.turnId);
         const attemptTimeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, withContext.timeoutMs);
         // Round-3 idle watchdog: a hung provider read becomes an in-band
         // stream failure (abort + throw) instead of an indefinite spinner —
@@ -740,6 +804,7 @@ export async function* createChatCompletionStream(
             });
         let returnedModel: string | undefined;
         for await (const chunk of attemptStream) {
+          throwIfChatCompletionRequestAborted(attemptRequest.signal, memoryInput?.turnId);
           attemptStreamed = true;
           streamed = true;
           returnedModel = readReturnedStreamModel(chunk) ?? returnedModel;
@@ -751,6 +816,7 @@ export async function* createChatCompletionStream(
             yield chunk;
           }
         }
+        throwIfChatCompletionRequestAborted(attemptRequest.signal, memoryInput?.turnId);
         routing.effectiveProviderId = attemptRequest.providerId ?? primaryProviderId;
         routing.effectiveModel = returnedModel ?? attemptRequest.model ?? primaryModel;
         routing.effectiveApiStyle = host.llmService.resolveExecutionApiStyle(
@@ -770,7 +836,9 @@ export async function* createChatCompletionStream(
         }
         break attemptLoop;
       } catch (error) {
-        lastError = normalizeChatCompletionAttemptError(error, withContext.timeoutMs);
+        lastError =
+          resolveChatCompletionRequestAbortError(attemptRequest.signal, memoryInput?.turnId) ??
+          normalizeChatCompletionAttemptError(error, withContext.timeoutMs);
         host.recordDevDiagnostic({
           level: "warn",
           category: "chat",
@@ -793,6 +861,11 @@ export async function* createChatCompletionStream(
             retryIndex: index,
             transientRetryIndex,
             emittedOutput: attemptStreamed,
+            remainingBudgetMs: getRemainingChatCompletionBudgetMs(completionDeadline),
+            failureClass: classifyProviderFailure(lastError),
+            sessionId: memoryInput?.sessionId,
+            turnId: memoryInput?.turnId,
+            durableRunId: memoryInput?.runId,
           },
         });
         if (isAuthoritativeModelUsageAccountingError(lastError)) {
@@ -807,16 +880,31 @@ export async function* createChatCompletionStream(
           transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT - 1 &&
           shouldRetryTransientProviderError(lastError)
         ) {
-          await delayChatCompletionRetry(completionDeadline, withContext.timeoutMs, transientRetryIndex);
-          continue;
+          if (
+            await delayChatCompletionRetry(
+              completionDeadline,
+              withContext.timeoutMs,
+              transientRetryIndex,
+              attemptRequest.signal,
+            )
+          ) {
+            continue;
+          }
+          lastError = resolveChatCompletionRequestAbortError(attemptRequest.signal, memoryInput?.turnId) ?? lastError;
+          break attemptLoop;
         }
         if (index < retryAttempts.length - 1 && shouldRetryToolProtocolError(lastError)) {
-          continue attemptLoop;
+          if (await delayChatCompletionRetry(completionDeadline, withContext.timeoutMs, index, attemptRequest.signal)) {
+            continue attemptLoop;
+          }
+          lastError = resolveChatCompletionRequestAbortError(attemptRequest.signal, memoryInput?.turnId) ?? lastError;
         }
-        break;
+        break attemptLoop;
       }
     }
   }
+
+  lastError = resolveChatCompletionRequestAbortError(withContext.signal, memoryInput?.turnId) ?? lastError;
 
   if (streamFailedAfterEmit) {
     const completedAt = Date.now();
@@ -839,6 +927,14 @@ export async function* createChatCompletionStream(
             retryable: false,
           }
         : undefined,
+      context: {
+        remainingBudgetMs: getRemainingChatCompletionBudgetMs(completionDeadline),
+        emittedOutput: true,
+        failureClass: lastError ? classifyProviderFailure(lastError) : "unknown",
+        sessionId: memoryInput?.sessionId,
+        turnId: memoryInput?.turnId,
+        durableRunId: memoryInput?.runId,
+      },
     });
     recordStreamRuntime(
       host,
@@ -850,15 +946,33 @@ export async function* createChatCompletionStream(
       "partial",
       lastError?.message,
     );
-    throw lastError ?? new Error("chat completion stream failed after emitting output");
+    throw attachChatCompletionFailureContext(
+      lastError ?? new Error("chat completion stream failed after emitting output"),
+      {
+        deadlineAtMs: completionDeadline,
+        emittedOutput: true,
+      },
+    );
   }
 
   if (!streamed && allowCrossProviderFallback && (!lastError || shouldAttemptCrossProviderFallback(lastError))) {
+    const fallbackRequiresToolProtocolNormalization = Boolean(lastError && shouldRetryToolProtocolError(lastError));
     const fallbacks = filterCrossProviderFallbackTargets(
       host.resolveFallbackTargets(runtime, primaryProviderId, primaryModel),
       primaryProviderId,
     );
     fallbackLoop: for (const [fallbackOrdinal, fallback] of fallbacks.entries()) {
+      if (
+        !(await delayChatCompletionRetry(
+          completionDeadline,
+          withContext.timeoutMs,
+          fallbackOrdinal,
+          withContext.signal,
+        ))
+      ) {
+        lastError = resolveChatCompletionRequestAbortError(withContext.signal, memoryInput?.turnId) ?? lastError;
+        break;
+      }
       for (
         let transientRetryIndex = 0;
         transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT;
@@ -866,11 +980,11 @@ export async function* createChatCompletionStream(
       ) {
         let attemptStreamed = false;
         try {
+          throwIfChatCompletionRequestAborted(withContext.signal, memoryInput?.turnId);
           const attemptTimeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, withContext.timeoutMs);
-          const fallbackRetryRequest = normalizeToolProtocolRetryRequest(
-            withContext,
-            TOOL_PROTOCOL_RETRY_MINIMAL_THINKING,
-          );
+          const fallbackRetryRequest = fallbackRequiresToolProtocolNormalization
+            ? normalizeToolProtocolRetryRequest(withContext, TOOL_PROTOCOL_RETRY_MINIMAL_THINKING)
+            : withContext;
           const idleAbort = new AbortController();
           const fallbackSignal = idleWatchdogDisabled
             ? fallbackRetryRequest.signal
@@ -889,7 +1003,7 @@ export async function* createChatCompletionStream(
             usageAttribution.next({
               callKind: "chat_fallback",
               fallbackIndex: fallbackOrdinal + 1,
-              repairIndex: TOOL_PROTOCOL_RETRY_MINIMAL_THINKING,
+              repairIndex: fallbackRequiresToolProtocolNormalization ? TOOL_PROTOCOL_RETRY_MINIMAL_THINKING : 0,
               dispatchedReasoningEffort: fallbackRetryRequest.reasoning?.effort,
             }),
           );
@@ -916,6 +1030,7 @@ export async function* createChatCompletionStream(
               });
           let returnedModel: string | undefined;
           for await (const chunk of fallbackStream) {
+            throwIfChatCompletionRequestAborted(withContext.signal, memoryInput?.turnId);
             attemptStreamed = true;
             streamed = true;
             returnedModel = readReturnedStreamModel(chunk) ?? returnedModel;
@@ -927,6 +1042,7 @@ export async function* createChatCompletionStream(
               yield chunk;
             }
           }
+          throwIfChatCompletionRequestAborted(withContext.signal, memoryInput?.turnId);
           routing.fallbackUsed = true;
           routing.fallbackProviderId = fallback.providerId;
           routing.fallbackModel = returnedModel ?? fallback.model;
@@ -937,7 +1053,9 @@ export async function* createChatCompletionStream(
           routing.effectiveApiStyle = routing.fallbackApiStyle;
           break;
         } catch (error) {
-          lastError = normalizeChatCompletionAttemptError(error, withContext.timeoutMs);
+          lastError =
+            resolveChatCompletionRequestAbortError(withContext.signal, memoryInput?.turnId) ??
+            normalizeChatCompletionAttemptError(error, withContext.timeoutMs);
           host.recordDevDiagnostic({
             level: "warn",
             category: "chat",
@@ -958,6 +1076,11 @@ export async function* createChatCompletionStream(
             context: {
               error: lastError.message,
               emittedOutput: attemptStreamed,
+              remainingBudgetMs: getRemainingChatCompletionBudgetMs(completionDeadline),
+              failureClass: classifyProviderFailure(lastError),
+              sessionId: memoryInput?.sessionId,
+              turnId: memoryInput?.turnId,
+              durableRunId: memoryInput?.runId,
             },
           });
           if (isAuthoritativeModelUsageAccountingError(lastError)) {
@@ -972,9 +1095,20 @@ export async function* createChatCompletionStream(
             transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT - 1 &&
             shouldRetryTransientProviderError(lastError)
           ) {
-            await delayChatCompletionRetry(completionDeadline, withContext.timeoutMs, transientRetryIndex);
-            continue;
+            if (
+              await delayChatCompletionRetry(
+                completionDeadline,
+                withContext.timeoutMs,
+                transientRetryIndex,
+                withContext.signal,
+              )
+            ) {
+              continue;
+            }
+            lastError = resolveChatCompletionRequestAbortError(withContext.signal, memoryInput?.turnId) ?? lastError;
+            break fallbackLoop;
           }
+          break;
         }
       }
       if (streamed) {
@@ -1004,6 +1138,14 @@ export async function* createChatCompletionStream(
             retryable: false,
           }
         : undefined,
+      context: {
+        remainingBudgetMs: getRemainingChatCompletionBudgetMs(completionDeadline),
+        emittedOutput: true,
+        failureClass: lastError ? classifyProviderFailure(lastError) : "unknown",
+        sessionId: memoryInput?.sessionId,
+        turnId: memoryInput?.turnId,
+        durableRunId: memoryInput?.runId,
+      },
     });
     recordStreamRuntime(
       host,
@@ -1015,7 +1157,13 @@ export async function* createChatCompletionStream(
       "partial",
       lastError?.message,
     );
-    throw lastError ?? new Error("chat completion stream failed after emitting output");
+    throw attachChatCompletionFailureContext(
+      lastError ?? new Error("chat completion stream failed after emitting output"),
+      {
+        deadlineAtMs: completionDeadline,
+        emittedOutput: true,
+      },
+    );
   }
 
   if (!streamed) {
@@ -1043,7 +1191,15 @@ export async function* createChatCompletionStream(
             retryable: false,
           }
         : undefined,
-      context: { retryCooldownExhausted: Boolean(lastError && finalError !== lastError) },
+      context: {
+        retryCooldownExhausted: Boolean(lastError && finalError !== lastError),
+        remainingBudgetMs: getRemainingChatCompletionBudgetMs(completionDeadline),
+        emittedOutput: false,
+        failureClass: finalError ? classifyProviderFailure(finalError) : "unknown",
+        sessionId: memoryInput?.sessionId,
+        turnId: memoryInput?.turnId,
+        durableRunId: memoryInput?.runId,
+      },
     });
     recordStreamRuntime(
       host,
@@ -1055,7 +1211,10 @@ export async function* createChatCompletionStream(
       "failed",
       finalError?.message,
     );
-    throw finalError ?? new Error("chat completion stream failed");
+    throw attachChatCompletionFailureContext(finalError ?? new Error("chat completion stream failed"), {
+      deadlineAtMs: completionDeadline,
+      emittedOutput: false,
+    });
   }
 
   // Buffered: assembled content exposed to mutate hooks (synthetic chunks returned). Passthrough: veto-only.
@@ -1283,6 +1442,29 @@ function readReturnedStreamModel(chunk: Record<string, unknown>): string | undef
   if (typeof chunk.model !== "string") return undefined;
   const normalized = chunk.model.trim();
   return normalized && normalized.length <= 512 ? normalized : undefined;
+}
+
+function resolveChatCompletionRequestAbortError(
+  signal: AbortSignal | undefined,
+  turnId: string | undefined,
+): Error | undefined {
+  if (!signal?.aborted) return undefined;
+  const reason = signal.reason;
+  if (reason instanceof Error && isChatTurnCancelledError(reason)) {
+    return reason;
+  }
+  const message =
+    reason instanceof Error
+      ? reason.message
+      : typeof reason === "string" && reason.trim()
+        ? reason.trim()
+        : "Chat turn cancelled.";
+  return new ChatTurnCancelledError(turnId?.trim() || "unknown", message);
+}
+
+function throwIfChatCompletionRequestAborted(signal: AbortSignal | undefined, turnId: string | undefined): void {
+  const error = resolveChatCompletionRequestAbortError(signal, turnId);
+  if (error) throw error;
 }
 
 function filterCrossProviderFallbackTargets(

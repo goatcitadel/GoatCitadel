@@ -91,6 +91,7 @@ import {
 import { hashPromptPackPolicyV2, hashPromptPackPolicyV3, type Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
+import { trackBackgroundTask } from "./background-scheduler.js";
 import { parseLooseJsonRecord } from "./json-record-parser.js";
 import { parsePromptJudgeScoreRecord } from "./prompt-pack-judge-score-parser.js";
 import {
@@ -2905,10 +2906,8 @@ export class PromptPackService {
       .finally(() => {
         this.activeBenchmarkRunIds.delete(benchmarkRunId);
         this.cancelledBenchmarkRunIds.delete(benchmarkRunId);
-        this.deps.backgroundTasks.delete(task);
       });
-    this.deps.backgroundTasks.add(task);
-    void task;
+    trackBackgroundTask(this.deps.backgroundTasks, task);
   }
 
   private isPromptPackBenchmarkCancelled(benchmarkRunId: string): boolean {

@@ -346,6 +346,37 @@ test("launcher source documents the macOS Application Support default", () => {
   assert.match(source, /GOATCITADEL_APP_DIR/);
 });
 
+test("release bundle wires managed-runtime identity through launcher and both health owners", () => {
+  const launcher = fs.readFileSync(path.join(repoRoot, "bin", "goatcitadel.mjs"), "utf8");
+  const bundleBuilder = fs.readFileSync(path.join(repoRoot, "scripts", "packaging", "build-bundle.mjs"), "utf8");
+  const packagedUiServer = fs.readFileSync(
+    path.join(repoRoot, "scripts", "packaging", "runtime", "ui-static-server.mjs"),
+    "utf8",
+  );
+  const sourceUiConfig = fs.readFileSync(path.join(repoRoot, "apps", "mission-control-next", "vite.config.ts"), "utf8");
+  const gatewayHealth = fs.readFileSync(path.join(repoRoot, "apps", "gateway", "src", "routes", "health.ts"), "utf8");
+
+  assert.match(launcher, /\.\.\/scripts\/lib\/managed-runtime-ownership\.mjs/);
+  assert.match(launcher, /\.\.\/scripts\/lib\/managed-runtime-lifecycle\.mjs/);
+  assert.match(launcher, /GOATCITADEL_MANAGED_INSTANCE_ID/);
+  assert.match(launcher, /GOATCITADEL_MANAGED_SERVICE/);
+  assert.match(launcher, /atomicCompareAndPublishJson/);
+  assert.match(launcher, /withManagedLifecycleLock/);
+  assert.match(bundleBuilder, /scripts", "lib", "managed-runtime-ownership\.mjs"/);
+  assert.match(bundleBuilder, /scripts", "lib", "managed-runtime-lifecycle\.mjs"/);
+  assert.ok(
+    (bundleBuilder.match(/managed-runtime-ownership\.mjs/g) ?? []).length >= 2,
+    "bundle builder must name both the source and packaged helper paths",
+  );
+  assert.match(bundleBuilder, /runtime", "ui-static-server\.mjs"/);
+  assert.match(packagedUiServer, /managedInstanceId/);
+  assert.match(packagedUiServer, /service:\s*"mission-control"/);
+  assert.match(sourceUiConfig, /goatcitadel-managed-ui-health/);
+  assert.match(sourceUiConfig, /managedInstanceId/);
+  assert.match(gatewayHealth, /buildManagedHealthIdentity\("gateway"\)/);
+  assert.match(launcher, /"--strictPort"/);
+});
+
 test("release workflow carries experimental macOS and Linux packaging promotion lanes", () => {
   const workflow = fs.readFileSync(path.join(repoRoot, ".github", "workflows", "release-installers.yml"), "utf8");
   assert.match(workflow, /name:\s*Release Installers and Bundles/);

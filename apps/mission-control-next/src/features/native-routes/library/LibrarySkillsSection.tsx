@@ -370,6 +370,7 @@ export function LibrarySkillsSection({ route, navigate, activeWorkspaceId }: Nat
               ]}
             />
             <LibraryActionList
+              ariaLabel="Skill source matches"
               items={(data?.sources ?? []).slice(0, 5).map((item) => ({
                 id: item.sourceUrl,
                 label: item.name,
@@ -379,6 +380,7 @@ export function LibrarySkillsSection({ route, navigate, activeWorkspaceId }: Nat
               emptyLabel="No skill source matches are available right now."
             />
             <LibraryActionList
+              ariaLabel="Skill import history"
               items={(data?.history ?? []).slice(0, 5).map((item) => ({
                 id: item.importId,
                 label: item.sourceRef,
@@ -855,6 +857,7 @@ function SkillEvaluationWorkbench({ skill, onNotice }: { skill: SkillListItem; o
         />
       ) : null}
       <LibraryActionList
+        ariaLabel="Stored skill evaluations"
         items={runs.slice(0, 5).map((run) => ({
           id: run.runId,
           label: `${formatPercent(run.baselineResult.score.passRate)} → ${
@@ -979,6 +982,7 @@ function ProposalTrustReviewPanel({
       <LibraryCodeBlock label="Callable boundary">{notCallableCopy}</LibraryCodeBlock>
       <LibraryCodeBlock label="Rollback">{rollbackRef}</LibraryCodeBlock>
       <LibraryActionList
+        ariaLabel="Proposal evidence references"
         items={evidence.slice(0, 8).map((item) => ({
           id: `${item.refType}:${item.refId}`,
           label: item.refType,

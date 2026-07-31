@@ -120,9 +120,9 @@ describe("useChatDockWorkbenchController", () => {
     hookMocks.useChatWorkbench.mockReturnValue(workbenchReturn);
   });
 
-  it("passes workbench enablement through mode and selected session state", async () => {
+  it("enables workbench hydration for a selected session in canonical Chat", async () => {
     await act(async () => {
-      create(<Harness messageMode="code" selectedSessionId="session-1" />);
+      create(<Harness messageMode="chat" selectedSessionId="session-1" />);
     });
 
     expect(hookMocks.useChatWorkbench).toHaveBeenCalledWith({
@@ -148,7 +148,7 @@ describe("useChatDockWorkbenchController", () => {
     expect(latest!.orchestrationRun).toBeNull();
   });
 
-  it("resets dock state when the message mode changes and disables workbench outside work surfaces", async () => {
+  it("resets dock state when the message mode changes and disables workbench without a selected session", async () => {
     let renderer!: ReactTestRenderer;
     await act(async () => {
       renderer = create(<Harness messageMode="code" selectedSessionId={null} />);

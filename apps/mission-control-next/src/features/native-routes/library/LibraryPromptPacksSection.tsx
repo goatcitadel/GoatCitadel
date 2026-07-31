@@ -209,6 +209,7 @@ export function LibraryPromptPacksSection({ route, navigate }: NativeRoutePagesP
                       ]}
                     />
                     <LibraryActionList
+                      ariaLabel="Model comparison safety notes"
                       items={selectedComparison.advisory.safetyNotes.map((note, index) => ({
                         id: `advisory-note-${index}`,
                         label: index === 0 ? "Comparison boundary" : index === 1 ? "Runtime effect" : "Execution path",
@@ -231,6 +232,7 @@ export function LibraryPromptPacksSection({ route, navigate }: NativeRoutePagesP
                   emptyLabel="No candidates were recorded for this comparison."
                 />
                 <LibraryActionList
+                  ariaLabel="Selected test model results"
                   items={selectedResults.map((result) => ({
                     id: result.resultId,
                     label: labelForResult(result.candidateId, selectedComparison),
@@ -325,6 +327,7 @@ export function LibraryPromptPacksSection({ route, navigate }: NativeRoutePagesP
                   </NativeButton>
                 </LibraryButtonRow>
                 <LibraryActionList
+                  ariaLabel="Saved comparison judgments"
                   items={selectedComparison.judgments.map((judgment) => ({
                     id: judgment.judgmentId,
                     label: judgment.testId,

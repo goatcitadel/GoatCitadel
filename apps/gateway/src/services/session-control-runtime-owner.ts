@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { ChatSendMessageRequest } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import type { SessionMutationAdmissionRecord, Storage } from "@goatcitadel/storage";
 import type { HeartbeatOccurrenceAdmissionRequest, HeartbeatOccurrenceRecord } from "@goatcitadel/storage";
 import type {
   ActiveTurnAdmission,
@@ -11,6 +11,7 @@ import type {
   TurnAdmissionIdentity,
 } from "./chat-turn-types.js";
 import {
+  ActiveTurnNotPreemptibleError,
   DecisionCommittedHeartbeatAdmissionError,
   SessionControlService,
   type AuthenticatedOperatorAdmissionContext,
@@ -45,6 +46,7 @@ export interface TurnAdmissionHeartbeatHandle {
 }
 
 export type RecoverDecisionCommittedHeartbeat = (identity: DecisionCommittedHeartbeatRecoveryIdentity) => Promise<void>;
+export type RecoverTerminalChatAdmission = (activeAdmission: SessionMutationAdmissionRecord) => Promise<boolean>;
 
 /**
  * An admission with no request lease has nothing to renew, so it gets a handle
@@ -80,6 +82,7 @@ export class SessionControlRuntimeOwner {
   public async admitAuthenticatedOperatorChatTurnWithHeartbeatRecovery(
     input: AdmitRuntimeOwnedChatTurnInput & { authenticatedOperator: AuthenticatedOperatorAdmissionContext },
     recover: RecoverDecisionCommittedHeartbeat,
+    recoverTerminalAdmission?: RecoverTerminalChatAdmission,
   ): Promise<ActiveTurnAdmission> {
     const ownedInput = Object.freeze({
       ...input,
@@ -88,8 +91,19 @@ export class SessionControlRuntimeOwner {
     try {
       return this.service.admitOperatorChatTurn(ownedInput);
     } catch (error) {
-      if (!(error instanceof DecisionCommittedHeartbeatAdmissionError)) throw error;
-      await recover(error.recovery);
+      if (error instanceof DecisionCommittedHeartbeatAdmissionError) {
+        await recover(error.recovery);
+      } else if (
+        error instanceof ActiveTurnNotPreemptibleError &&
+        recoverTerminalAdmission &&
+        (await recoverTerminalAdmission(error.activeAdmission))
+      ) {
+        // Exact terminal durable authority was reconciled and released. Retry
+        // the byte-identical request owner once below; all other normal turns
+        // remain non-preemptible.
+      } else {
+        throw error;
+      }
     }
     try {
       return this.service.admitOperatorChatTurn(ownedInput);

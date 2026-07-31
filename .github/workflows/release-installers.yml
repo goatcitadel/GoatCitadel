@@ -153,6 +153,18 @@ jobs:
           $hash = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLowerInvariant()
           Set-Content -LiteralPath "$installer.sha256" -Value "$hash *$(Split-Path $installer -Leaf)"
 
+      - name: Smoke install unsigned Windows installer
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.allow_unsigned == 'true' }}
+        shell: pwsh
+        timeout-minutes: 30
+        run: |
+          $packageVersion = node -e "process.stdout.write(require('./package.json').version)"
+          & ./scripts/packaging/smoke-windows-installer.ps1 `
+            -InstallerPath "artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe" `
+            -ExpectedReleaseManifestPath "artifacts/installers/bundles/GoatCitadel-$packageVersion-${{ matrix.target }}/app/release-manifest.json" `
+            -Target "${{ matrix.target }}" `
+            -TrustMode unsigned
+
       - name: Upload unsigned Windows convenience artifact
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.allow_unsigned == 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -521,6 +533,9 @@ jobs:
           - target: windows-arm64
             runner: windows-11-arm
     steps:
+      - name: Checkout installer smoke owner
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
       - name: Download exact signed Windows release input
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -553,208 +568,15 @@ jobs:
             throw "Signed identity manifest mismatch."
           }
 
-      - name: Smoke install Windows installer
+      - name: Smoke install signed Windows installer
         shell: pwsh
         timeout-minutes: 30
         run: |
-          $installer = Resolve-Path "artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe"
-          $installDir = Join-Path $env:RUNNER_TEMP "GoatCitadel-${{ matrix.target }}"
-          $install = Start-Process -FilePath $installer -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=$installDir") -Wait -PassThru
-          if ($install.ExitCode -ne 0) { throw "Installer exited with $($install.ExitCode)" }
-          $desktop = Join-Path $installDir "app/desktop/GoatCitadel-Mission-Control-Windows.exe"
-          if (!(Test-Path $desktop)) { throw "Installed desktop executable was not found at $desktop" }
-          $identityPackage = Join-Path $installDir "app/identity/GoatCitadel-Mission-Control-Windows-Identity.msix"
-          if (Test-Path $identityPackage) {
-            $identity = Get-AppxPackage GoatCitadel.MissionControl.Windows
-            if (-not $identity) { throw "GoatCitadel package identity was not registered." }
-            $identityManifest = (Get-AppxPackageManifest -Package $identity.PackageFullName).OuterXml
-            if ($identityManifest -notmatch 'goatcitadel') { throw "Registered package identity manifest does not include goatcitadel protocol." }
-          }
-          # Launch smoke: prove the installed host actually starts and presents its window.
-          # The assertions above only proved files exist and identity (un)registers. A WinUI 3
-          # unpackaged publish that drops the app resources.pri / compiled XAML crashes at
-          # startup with 0xC000027B (STATUS_STOWED_EXCEPTION) while loading App.xaml — it
-          # shipped dead-on-arrival in v1.0.0 and a file-only smoke could never catch it.
-          $launchDir = Split-Path -Parent $desktop
-          $hostProc = Start-Process -FilePath $desktop -WorkingDirectory $launchDir -PassThru
-          if (-not $hostProc) { throw "Failed to start the desktop host at $desktop" }
-          $windowTitle = $null
-          $deadline = (Get-Date).AddSeconds(40)
-          while ((Get-Date) -lt $deadline) {
-            $hostProc.Refresh()
-            if ($hostProc.HasExited) {
-              $hex = "0x{0:X8}" -f $hostProc.ExitCode
-              throw "Desktop host exited during launch smoke with code $hex before presenting a window (0xC000027B indicates the WinUI startup resource crash: missing resources.pri or compiled XAML)."
-            }
-            if ($hostProc.MainWindowHandle -ne 0 -and -not [string]::IsNullOrWhiteSpace($hostProc.MainWindowTitle)) {
-              $windowTitle = $hostProc.MainWindowTitle
-              break
-            }
-            Start-Sleep -Milliseconds 500
-          }
-          # Tear down the host and its runtime / WebView2 child processes before uninstall so no
-          # file handle under the install dir is held when the uninstall-cleanup asserts run.
-          if (-not $hostProc.HasExited) {
-            & taskkill.exe /PID $hostProc.Id /T /F | Out-Null
-          }
-          # Backstop: kill any process still running from inside the install dir (e.g. a
-          # detached runtime/gateway that escaped the host process tree) so nothing holds a
-          # file lock when the uninstall-cleanup assertions run. Path-scoped so it never
-          # touches the runner's own node/pwsh.
-          Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-            Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($installDir, [System.StringComparison]::OrdinalIgnoreCase) } |
-            ForEach-Object { Write-Host "Backstop kill after host smoke: PID $($_.ProcessId) $($_.Name) ($($_.ExecutablePath))"; & taskkill.exe /PID $_.ProcessId /T /F 2>$null | Out-Null }
-          Start-Sleep -Seconds 2
-          if (-not $windowTitle) {
-            throw "Desktop host did not present a top-level window within 40s; it started but never reached its UI."
-          }
-          if ($windowTitle -ne "GoatCitadel Mission Control") {
-            throw "Desktop host window title was '$windowTitle'; expected 'GoatCitadel Mission Control'."
-          }
-          Write-Host "Launch smoke passed: host presented window '$windowTitle'."
-          # ---------------------------------------------------------------------------
-          # Runtime readiness smoke: prove the local runtime actually reaches "ready",
-          # not just that the host window paints. v1.0.0 shipped two DOA packaging bugs
-          # where the host opened but hung forever on "Starting the local runtime…":
-          #   1. pnpm deploy produced a symlinked gateway node_modules that the installer's
-          #      tar + lowest-privilege extract dereferenced, stranding policy-engine deps
-          #      (docx, playwright, …) -> the gateway crashed with ERR_MODULE_NOT_FOUND.
-          #   2. apps/gateway statically imports `typescript` at startup but did not declare
-          #      it as a prod dependency, so the --prod deploy excluded it -> second crash.
-          # Both were invisible because the smoke only proved the WinUI window rendered,
-          # never that the gateway became healthy. Drive the SAME launcher the desktop host
-          # uses against the installed gateway binary + bundled Node + installed node_modules;
-          # `launch` starts the gateway + UI, polls each /health, and exits non-zero if either
-          # never passes. We then independently re-poll via `status --json` and assert the
-          # runtime status is "ready". Pids/logs/runtime-root are redirected to a throwaway
-          # base via GOATCITADEL_HOME so the install dir stays pristine for the
-          # uninstall-cleanup assertions below, while GOATCITADEL_APP_DIR keeps the gateway
-          # and UI resolving from the installed files.
-          $bundledNode = Join-Path $installDir "app/runtime/node/node.exe"
-          $launcher = Join-Path $installDir "app/bin/goatcitadel.mjs"
-          if (!(Test-Path $bundledNode)) { throw "Bundled Node runtime was not installed at $bundledNode" }
-          if (!(Test-Path $launcher)) { throw "Launcher was not installed at $launcher" }
-          $appHome = Join-Path $installDir "app"
-          $runtimeBase = Join-Path $env:RUNNER_TEMP "GoatCitadel-runtime-${{ matrix.target }}"
-          $runtimeLogDir = Join-Path $runtimeBase "runtime/logs"
-          $launchStdout = Join-Path $env:RUNNER_TEMP "goatcitadel-launch-${{ matrix.target }}.out.json"
-          $launchStderr = Join-Path $env:RUNNER_TEMP "goatcitadel-launch-${{ matrix.target }}.err.txt"
-          $statusStdout = Join-Path $env:RUNNER_TEMP "goatcitadel-status-${{ matrix.target }}.out.json"
-          $statusStderr = Join-Path $env:RUNNER_TEMP "goatcitadel-status-${{ matrix.target }}.err.txt"
-          $env:GOATCITADEL_HOME = $runtimeBase
-          $env:GOATCITADEL_APP_DIR = $appHome
-          function Redact-DiagnosticLine([string]$line) {
-            return ($line `
-              -replace '("token"\s*:\s*")[^"]+(")', '$1[REDACTED]$2' `
-              -replace '("authorization"\s*:\s*")[^"]+(")', '$1[REDACTED]$2' `
-              -replace '(?i)(Bearer\s+)[A-Za-z0-9._~+/=-]{12,}', '$1[REDACTED]')
-          }
-          function Write-RedactedContent([string]$path, [int]$tail = 0) {
-            $contentArgs = @{ LiteralPath = $path; ErrorAction = "SilentlyContinue" }
-            if ($tail -gt 0) { $contentArgs["Tail"] = $tail }
-            Get-Content @contentArgs | ForEach-Object { Write-Host (Redact-DiagnosticLine $_) }
-          }
-          function Show-RuntimeLogs {
-            Write-Host "::group::GoatCitadel runtime logs"
-            foreach ($capture in @($launchStdout, $launchStderr, $statusStdout, $statusStderr)) {
-              if (Test-Path $capture) {
-                Write-Host "----- $(Split-Path $capture -Leaf) -----"
-                Write-RedactedContent $capture
-              }
-            }
-            foreach ($name in @("gateway.stderr.log", "gateway.stdout.log", "mission-control.stderr.log", "mission-control.stdout.log")) {
-              $logPath = Join-Path $runtimeLogDir $name
-              if (Test-Path $logPath) {
-                Write-Host "----- $name (tail) -----"
-                Write-RedactedContent $logPath 80
-              }
-            }
-            Write-Host "::endgroup::"
-          }
-          Write-Host "Runtime readiness smoke: launching packaged gateway + UI via $launcher"
-          $launch = Start-Process -FilePath $bundledNode `
-            -ArgumentList @($launcher, "launch", "--no-open", "--wait", "--json") `
-            -WorkingDirectory $appHome `
-            -RedirectStandardOutput $launchStdout `
-            -RedirectStandardError $launchStderr `
-            -NoNewWindow -PassThru
-          # Bound the launch wait ourselves. If `launch` hangs, letting the step
-          # timeout kill the runner destroys all evidence (the 0.1.0-rc.1 readiness
-          # hang shipped zero logs this way). Dump launcher output, runtime logs,
-          # and listener/process state, then fail explicitly.
-          if (-not $launch.WaitForExit(600000)) {
-            Show-RuntimeLogs
-            Write-Host "::group::Readiness hang diagnostics"
-            netstat -ano | Select-String ":8787|:5173" | ForEach-Object { Write-Host $_ }
-            Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-              Where-Object { ($_.ExecutablePath -and $_.ExecutablePath.StartsWith($installDir, [System.StringComparison]::OrdinalIgnoreCase)) -or ($_.CommandLine -match "goatcitadel") } |
-              ForEach-Object { Write-Host "PID $($_.ProcessId) $($_.Name): $($_.CommandLine)" }
-            Write-Host "::endgroup::"
-            & taskkill.exe /PID $launch.Id /T /F 2>$null | Out-Null
-            throw "Runtime readiness smoke failed: 'goatcitadel launch --wait' did not exit within 10 minutes. Launcher output, runtime logs, and listener/process state are printed above."
-          }
-          if ($launch.ExitCode -ne 0) {
-            Show-RuntimeLogs
-            throw "Runtime readiness smoke failed: 'goatcitadel launch' exited $($launch.ExitCode) before the gateway/UI became healthy. The installed host would hang on 'Starting the local runtime…'. A gateway boot crash (e.g. ERR_MODULE_NOT_FOUND from stranded policy-engine deps, or a missing prod dependency such as typescript) surfaces here."
-          }
-          # Independently re-poll both /health endpoints. `launch` reports an assumed-ready
-          # status, so this real `status` poll is what actually proves the gateway and
-          # Mission Control answer their /health checks.
-          $status = Start-Process -FilePath $bundledNode `
-            -ArgumentList @($launcher, "status", "--json") `
-            -WorkingDirectory $appHome `
-            -RedirectStandardOutput $statusStdout `
-            -RedirectStandardError $statusStderr `
-            -NoNewWindow -Wait -PassThru
-          $statusLine = $null
-          if (Test-Path $statusStdout) {
-            $statusLine = Get-Content -LiteralPath $statusStdout -ErrorAction SilentlyContinue |
-              Where-Object { $_.TrimStart().StartsWith("{") } |
-              Select-Object -Last 1
-          }
-          if ($status.ExitCode -ne 0 -or -not $statusLine) {
-            Show-RuntimeLogs
-            throw "Runtime readiness smoke failed: 'goatcitadel status --json' exited $($status.ExitCode) without a JSON status line."
-          }
-          $runtimeStatus = $statusLine | ConvertFrom-Json
-          if ($runtimeStatus.status -ne "ready" -or -not ($runtimeStatus.readiness.gateway -and $runtimeStatus.readiness.ui)) {
-            Show-RuntimeLogs
-            throw "Runtime readiness smoke failed: runtime status is '$($runtimeStatus.status)' (gateway healthy=$($runtimeStatus.readiness.gateway), ui healthy=$($runtimeStatus.readiness.ui)); expected 'ready' with both the gateway and Mission Control answering /health."
-          }
-          Write-Host "Runtime readiness smoke passed: gateway + Mission Control reached status=ready (gateway $($runtimeStatus.gatewayUrl)/health, ui $($runtimeStatus.uiUrl)/health)."
-          # Stop the runtime we started and kill anything still running from the install dir
-          # so no file handle is held when the uninstall-cleanup assertions run.
-          & $bundledNode $launcher stop --json 1>$null 2>$null
-          Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-            Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($installDir, [System.StringComparison]::OrdinalIgnoreCase) } |
-            ForEach-Object { & taskkill.exe /PID $_.ProcessId /T /F 2>$null | Out-Null }
-          Start-Sleep -Seconds 2
-          $uninstaller = Join-Path $installDir "unins000.exe"
-          if (Test-Path $uninstaller) {
-            $uninstall = Start-Process -FilePath $uninstaller -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -Wait -PassThru
-            if ($uninstall.ExitCode -ne 0) { throw "Uninstaller exited with $($uninstall.ExitCode)" }
-          }
-          if (Get-AppxPackage GoatCitadel.MissionControl.Windows) { throw "GoatCitadel package identity remained registered after uninstall." }
-          if (Test-Path $desktop) { throw "Installed desktop executable remained after uninstall at $desktop" }
-          # The uninstaller removes the immutable payload (app/, bin/) and deliberately
-          # preserves mutable operator state (runtime-root/, config/, data/, workspaces/):
-          # the packaged home lives inside the install dir, and uninstall must never
-          # destroy user data. The desktop-host phase above seeds that state on first
-          # boot, so an install-dir-must-be-empty assert only ever passed when the host
-          # was killed before seeding finished. Assert the immutable payload is gone;
-          # list preserved state for transparency, then scrub it for runner hygiene.
-          foreach ($payloadEntry in @("app", "bin")) {
-            $payloadPath = Join-Path $installDir $payloadEntry
-            if (Test-Path $payloadPath) {
-              $sample = (Get-ChildItem -LiteralPath $payloadPath -Recurse -Force -File -ErrorAction SilentlyContinue | Select-Object -First 5 -ExpandProperty FullName) -join "`n"
-              throw "Uninstall left immutable payload at $payloadPath`n$sample"
-            }
-          }
-          if (Test-Path $installDir) {
-            Get-ChildItem -LiteralPath $installDir -Force -ErrorAction SilentlyContinue |
-              ForEach-Object { Write-Host "Mutable state preserved by uninstall (expected): $($_.FullName)" }
-            Remove-Item -LiteralPath $installDir -Recurse -Force -ErrorAction SilentlyContinue
-          }
+          & ./scripts/packaging/smoke-windows-installer.ps1 `
+            -InstallerPath "artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe" `
+            -ExpectedReleaseManifestPath "artifacts/installers/windows/app/release-manifest.json" `
+            -Target "${{ matrix.target }}" `
+            -TrustMode signed
 
       - name: Write SHA-256 checksum
         if: ${{ !cancelled() }}

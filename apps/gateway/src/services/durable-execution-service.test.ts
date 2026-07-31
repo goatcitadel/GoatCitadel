@@ -3574,6 +3574,9 @@ describe("durable-execution-service orchestration workflow", () => {
         chatToolRuns: {
           listByTurn: vi.fn(() => []),
         },
+        chatStreamEvents: {
+          listByTurn: vi.fn(() => []),
+        },
       },
       prepareAgentChatTurn,
       registerActiveChatTurnStream: vi.fn(() => ({
@@ -4017,6 +4020,9 @@ describe("durable-execution-service orchestration workflow", () => {
         chatToolRuns: {
           listByTurn: vi.fn(() => []),
         },
+        chatStreamEvents: {
+          listByTurn: vi.fn(() => []),
+        },
       },
     };
     const run = buildRunWithPayload("chat.turn.execute", {
@@ -4040,6 +4046,78 @@ describe("durable-execution-service orchestration workflow", () => {
       status: "running",
     });
     expect(isDurableWorkflowRecoverable(host as never, run)).toEqual({ recoverable: true });
+
+    host.storage.chatTurnTraces.get.mockReturnValueOnce({
+      turnId: "turn-1",
+      sessionId: "session-1",
+      userMessageId: "user-1",
+      assistantMessageId: "assistant-1",
+      status: "running",
+    });
+    host.storage.chatStreamEvents.listByTurn.mockReturnValueOnce([
+      {
+        eventId: "event-visible-delta",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        runId: run.runId,
+        sequence: 2,
+        chunkType: "delta",
+        payload: { type: "delta", delta: "visible prefix" },
+        createdAt: "2026-07-30T00:00:00.000Z",
+      },
+    ]);
+    expect(isDurableWorkflowRecoverable(host as never, run)).toEqual({
+      recoverable: false,
+      reason: "Durable Chat output was emitted before interruption and cannot be safely replayed.",
+    });
+
+    host.storage.chatTurnTraces.get.mockReturnValueOnce({
+      turnId: "turn-1",
+      sessionId: "session-1",
+      userMessageId: "user-1",
+      assistantMessageId: "assistant-1",
+      status: "running",
+    });
+    host.storage.chatStreamEvents.listByTurn.mockReturnValueOnce([
+      {
+        eventId: "event-visible-thinking-delta",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        runId: run.runId,
+        sequence: 3,
+        chunkType: "thinking_delta",
+        payload: { type: "thinking_delta", delta: "visible reasoning prefix" },
+        createdAt: "2026-07-30T00:00:00.000Z",
+      },
+    ]);
+    expect(isDurableWorkflowRecoverable(host as never, run)).toEqual({
+      recoverable: false,
+      reason: "Durable Chat output was emitted before interruption and cannot be safely replayed.",
+    });
+
+    host.storage.chatTurnTraces.get.mockReturnValueOnce({
+      turnId: "turn-1",
+      sessionId: "session-1",
+      userMessageId: "user-1",
+      assistantMessageId: "assistant-1",
+      status: "running",
+    });
+    host.storage.chatStreamEvents.listByTurn.mockReturnValueOnce([
+      {
+        eventId: "event-visible-message-done",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        runId: run.runId,
+        sequence: 4,
+        chunkType: "message_done",
+        payload: { type: "message_done", content: "visible completed response" },
+        createdAt: "2026-07-30T00:00:00.000Z",
+      },
+    ]);
+    expect(isDurableWorkflowRecoverable(host as never, run)).toEqual({
+      recoverable: false,
+      reason: "Durable Chat output was emitted before interruption and cannot be safely replayed.",
+    });
 
     host.storage.chatTurnTraces.get.mockReturnValueOnce({
       turnId: "turn-1",

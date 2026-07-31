@@ -146,6 +146,16 @@ function sameResolvedPath(left, right) {
 
 function classifyFailureFamily(item) {
   const haystack = `${item.title} ${item.error ?? ""} ${item.notes.join(" ")} ${item.subsystem}`.toLowerCase();
+  if (item.lane === "backup-roundtrip" || item.id.startsWith("backup-roundtrip.")) {
+    return "backup_runtime";
+  }
+  if (
+    item.lane === "surface-regression" &&
+    (item.id.startsWith("surface-regression.redirect.") ||
+      item.id.startsWith("surface-regression.direct-compatibility."))
+  ) {
+    return "route_compatibility";
+  }
   if (/accessibility|axe-core|\baxe\b|wcag|focus-visible/.test(haystack)) {
     return "accessibility";
   }
@@ -158,7 +168,7 @@ function classifyFailureFamily(item) {
   if (/blank|render|locator|selector|thread|dom|visible/.test(haystack)) {
     return "client_render";
   }
-  if (/sse|stream|event stream|reconnect/.test(haystack)) {
+  if (/\bsse\b|stream|event stream|reconnect/.test(haystack)) {
     return "sse";
   }
   if (/refresh/.test(haystack)) {
@@ -201,6 +211,12 @@ function classifySeverity(item, family) {
   if (["provider_outage", "visual_perf_regression"].includes(family)) {
     return "medium";
   }
+  if (family === "backup_runtime") {
+    return "medium";
+  }
+  if (family === "route_compatibility") {
+    return "medium";
+  }
   return "low";
 }
 
@@ -216,6 +232,14 @@ function deriveLikelySurfaces(item, family) {
   if (family === "sse") {
     surfaces.add("apps/mission-control-next/src/main.tsx");
     surfaces.add("apps/gateway/src/routes/gateway-events.ts");
+  }
+  if (family === "backup_runtime") {
+    surfaces.add("apps/gateway/src/services/backup-retention-service.ts");
+  }
+  if (family === "route_compatibility") {
+    surfaces.add("apps/mission-control-next/src/app/MissionControlNextApp.tsx");
+    surfaces.add("apps/mission-control-next/src/app/legacy-route-adapter.ts");
+    surfaces.add("apps/mission-control-next/src/app/route-model.ts");
   }
   if (family === "provider_auth" || family === "provider_outage") {
     surfaces.add("apps/gateway/src/services/llm-service.ts");
@@ -234,12 +258,14 @@ function deriveLikelySurfaces(item, family) {
 
 function collectArtifactRefs(artifacts) {
   return [
-    ...artifacts.diagnostics,
-    ...artifacts.screenshots,
-    ...artifacts.logs,
-    ...artifacts.perf,
-    ...artifacts.playwright,
-    ...artifacts.traces,
+    ...new Set([
+      ...artifacts.diagnostics,
+      ...artifacts.screenshots,
+      ...artifacts.logs,
+      ...artifacts.perf,
+      ...artifacts.playwright,
+      ...artifacts.traces,
+    ]),
   ];
 }
 
@@ -256,6 +282,16 @@ function buildChecklist(item, family) {
   }
   if (family === "sse") {
     checklist.push("Inspect SSE lifecycle, reconnect logic, and refresh-bus emissions.");
+  }
+  if (family === "backup_runtime") {
+    checklist.push(
+      "Inspect backup snapshot, manifest, and atomic-publication behavior; keep canonical state fail-closed while handling only recognized transient writer state.",
+    );
+  }
+  if (family === "route_compatibility") {
+    checklist.push(
+      "Verify the address bar is replaced with the canonical path while preserving supported route parameters and avoiding an extra history entry.",
+    );
   }
   if (family === "voice_runtime_failure") {
     checklist.push("Verify managed voice runtime state, selected model, and helper binaries.");
@@ -335,7 +371,11 @@ async function buildRepairPlan(context, manifest, review, options) {
 function deriveRecommendedReruns(items) {
   const reruns = new Set();
   for (const item of items) {
-    if (item.subsystem === "fast") {
+    if (item.family === "backup_runtime") {
+      reruns.add("pnpm verify:backup:roundtrip");
+    } else if (item.family === "route_compatibility") {
+      reruns.add("pnpm verify:surface:regression");
+    } else if (item.subsystem === "fast") {
       reruns.add("pnpm verify:fast");
     } else if (item.subsystem === "core-browser" || item.subsystem === "chat" || item.subsystem === "shell") {
       reruns.add("pnpm verify:deep:core");

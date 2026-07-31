@@ -60,7 +60,9 @@ export function useChatDockWorkbenchController(input: {
     revertWorkbenchAll,
   } = useChatWorkbench({
     sessionId: input.selectedSessionId,
-    enabled: Boolean(input.selectedSession && (input.messageMode === "code" || input.messageMode === "cowork")),
+    // Chat is the canonical home for the build editor. Keeping this keyed only
+    // to the selected session also preserves legacy Code/Cowork compatibility.
+    enabled: Boolean(input.selectedSession),
   });
 
   useEffect(() => {

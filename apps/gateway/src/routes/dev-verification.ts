@@ -1,8 +1,9 @@
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
-import type { ChatMessageRecord } from "@goatcitadel/contracts";
+import type { CandidateSkillVersionRecord, CapabilityArtifactRecord, ChatMessageRecord } from "@goatcitadel/contracts";
 import { Storage } from "@goatcitadel/storage";
 import { listMissingTrackedRouteAccessClasses } from "./route-access.js";
 import { registerDevVerificationProviderExerciseRoute } from "./dev-verification-provider-exercise.js";
@@ -32,6 +33,11 @@ const chatUserInputScenarioSchema = z.object({
   workspaceId: z.string().trim().min(1),
 });
 
+const chatAttachmentEvidenceScenarioSchema = z.object({
+  sessionId: z.string().trim().min(1),
+  workspaceId: z.string().trim().min(1),
+});
+
 const memoryItemSeedSchema = z.object({
   workspaceId: z.string().trim().min(1),
   namespace: z.string().trim().min(1),
@@ -39,6 +45,22 @@ const memoryItemSeedSchema = z.object({
   content: z.string().trim().min(1),
   metadata: z.record(z.unknown()).optional(),
   pinned: z.boolean().optional(),
+});
+
+const agenticTaskSeedSchema = z.object({
+  workspaceId: z.string().trim().min(1),
+  tasks: z
+    .array(
+      z.object({
+        taskId: z.string().trim().min(1),
+        runId: z.string().trim().min(1),
+        status: z.enum(["queued", "planning", "running", "approval_required", "paused", "completed", "failed"]),
+        surface: z.enum(["chat", "cowork", "code"]).default("chat"),
+        parentSessionId: z.string().trim().min(1).optional(),
+      }),
+    )
+    .min(1)
+    .max(20),
 });
 
 export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
@@ -215,6 +237,18 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       if (activeLeafTurnId) {
         storage.chatSessionBranchState.setActiveLeaf(session.sessionId, activeLeafTurnId);
       }
+      storage.costLedger.insert({
+        sessionId: session.sessionId,
+        agentId: "goatherder",
+        providerId: "verification-stub",
+        modelId: "verification-model",
+        tokenInput: 160,
+        tokenOutput: 110,
+        tokenCachedInput: 0,
+        costUsd: 0.0026,
+        createdAt: new Date(now - 75_000).toISOString(),
+      });
+      await seedVerificationCapabilityCandidate(storage, fastify.gatewayConfig.rootDir);
     } finally {
       storage.close();
     }
@@ -224,6 +258,8 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       sessionId: session.sessionId,
       sessionIds: sessions.map((item) => item.sessionId),
       sessionTitle: parsed.data.sessionTitle,
+      candidateId: VERIFICATION_CAPABILITY_CANDIDATE_ID,
+      candidateVersionId: VERIFICATION_CAPABILITY_CANDIDATE_VERSION_ID,
     });
   });
 
@@ -261,23 +297,19 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       },
     });
     const approvalWaitRunId = storage.approvalWaitRuns.getRunId(approval.approvalId);
-    const chatTurnDurableRun = storage.durableRuns.createRun({
-      workflowKey: "approval.wait",
-      status: "waiting",
-      payload: {
-        version: "approval.wait.v1",
-        approvalId: approval.approvalId,
-        approvalKind: approval.kind,
-        createdAt: approval.createdAt,
+    const chatTurnDurableWait = fastify.services.devVerification.seedDurableChatWait({
+      workspaceId: parsed.data.workspaceId,
+      sessionId: parsed.data.sessionId,
+      turnId,
+      userMessageId,
+      content: "Run the governed verification command.",
+      authActorId: request.authActorId,
+      authActorSource: request.authActorSource,
+      traceStatus: "waiting_for_approval",
+      waitForEvent: {
+        eventKey: "approval.resolved",
+        correlationId: approval.approvalId,
       },
-      metadata: {
-        surface: "chat",
-        waitForEvent: {
-          eventKey: "approval.resolved",
-          correlationId: approval.approvalId,
-        },
-      },
-      startedAt: now,
       now,
     });
 
@@ -294,13 +326,14 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       turnId,
       sessionId: parsed.data.sessionId,
       userMessageId,
+      assistantMessageId: chatTurnDurableWait.assistantMessageId,
       status: "waiting_for_approval",
       mode: "chat",
       webMode: "auto",
       memoryMode: "auto",
       thinkingLevel: "standard",
       durable: {
-        runId: chatTurnDurableRun.runId,
+        runId: chatTurnDurableWait.runId,
         status: "waiting",
         checkpointKind: "run_waiting",
       },
@@ -344,6 +377,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       createdAt: now,
     });
     storage.chatSessionBranchState.setActiveLeaf(parsed.data.sessionId, turnId);
+    await fastify.services.devVerification.settleDurableChatWait(chatTurnDurableWait.runId);
 
     return reply.code(201).send({
       sessionId: parsed.data.sessionId,
@@ -352,8 +386,23 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       userMessageId,
       approvalId: approval.approvalId,
       approvalWaitRunId,
-      chatTurnDurableRunId: chatTurnDurableRun.runId,
+      chatTurnDurableRunId: chatTurnDurableWait.runId,
     });
+  });
+
+  fastify.post("/api/v1/dev/verification/chat-attachment-evidence-scenario", async (request, reply) => {
+    if (!devVerificationEnabled()) {
+      return reply.code(404).send({ error: "Development verification endpoints are disabled." });
+    }
+    const parsed = chatAttachmentEvidenceScenarioSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.code(201).send(fastify.services.devVerification.seedChatAttachmentEvidence(parsed.data));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
   });
 
   fastify.post("/api/v1/dev/verification/chat-user-input-scenario", async (request, reply) => {
@@ -370,6 +419,22 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
     const userMessageId = randomUUID();
     const promptId = randomUUID();
     const storage = fastify.services.devVerification.storage;
+    const content = "Help me choose the next verification step for this run.";
+    const chatTurnDurableWait = fastify.services.devVerification.seedDurableChatWait({
+      workspaceId: parsed.data.workspaceId,
+      sessionId: parsed.data.sessionId,
+      turnId,
+      userMessageId,
+      content,
+      authActorId: request.authActorId,
+      authActorSource: request.authActorSource,
+      traceStatus: "waiting_for_user_input",
+      waitForEvent: {
+        eventKey: "chat.user_input.resolved",
+        correlationId: promptId,
+      },
+      now,
+    });
 
     storage.chatMessages.upsert({
       messageId: userMessageId,
@@ -377,13 +442,14 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       role: "user",
       actorType: "user",
       actorId: "verification-operator",
-      content: "Help me choose the next verification step for this run.",
+      content,
       timestamp: now,
     });
     storage.chatTurnTraces.create({
       turnId,
       sessionId: parsed.data.sessionId,
       userMessageId,
+      assistantMessageId: chatTurnDurableWait.assistantMessageId,
       status: "waiting_for_user_input",
       mode: "chat",
       webMode: "auto",
@@ -411,9 +477,15 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
           },
         ],
       },
+      durable: {
+        runId: chatTurnDurableWait.runId,
+        status: "waiting",
+        checkpointKind: "run_waiting",
+      },
       startedAt: now,
     });
     storage.chatSessionBranchState.setActiveLeaf(parsed.data.sessionId, turnId);
+    await fastify.services.devVerification.settleDurableChatWait(chatTurnDurableWait.runId);
 
     return reply.code(201).send({
       sessionId: parsed.data.sessionId,
@@ -421,7 +493,37 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       turnId,
       userMessageId,
       promptId,
+      chatTurnDurableRunId: chatTurnDurableWait.runId,
     });
+  });
+
+  fastify.post("/api/v1/dev/verification/agentic-task-seed", async (request, reply) => {
+    if (!devVerificationEnabled()) {
+      return reply.code(404).send({ error: "Development verification endpoints are disabled." });
+    }
+    const parsed = agenticTaskSeedSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    const items = parsed.data.tasks.map((item) => {
+      const current = fastify.services.tasks.getTask(item.taskId, { workspaceId: parsed.data.workspaceId });
+      return fastify.services.tasks.updateTaskWithRevision(
+        item.taskId,
+        {
+          agenticContext: {
+            ...(current.agenticContext ?? {}),
+            runId: item.runId,
+            status: item.status,
+            surface: item.surface,
+            contextMode: "isolated",
+            parentSessionId: item.parentSessionId,
+          },
+        },
+        current.revision,
+        { workspaceId: parsed.data.workspaceId },
+      );
+    });
+    return reply.code(201).send({ items });
   });
 
   fastify.post("/api/v1/dev/verification/memory-item-seed", async (request, reply) => {
@@ -697,5 +799,105 @@ function createRequestAbortScope(
       request.raw.off("aborted", abort);
       reply.raw.off("close", abort);
     },
+  };
+}
+
+const VERIFICATION_CAPABILITY_CANDIDATE_ID = "usability-browser-candidate";
+const VERIFICATION_CAPABILITY_CANDIDATE_VERSION_ID = "usability-browser-candidate-v1";
+const VERIFICATION_CAPABILITY_CANDIDATE_CREATED_AT = "2026-07-29T00:00:00.000Z";
+
+async function seedVerificationCapabilityCandidate(storage: Storage, rootDir: string): Promise<void> {
+  const bundleRoot = `data/capability-candidates/${VERIFICATION_CAPABILITY_CANDIDATE_ID}/${VERIFICATION_CAPABILITY_CANDIDATE_VERSION_ID}`;
+  const manifestArtifact = await writeVerificationCandidateArtifact(
+    rootDir,
+    bundleRoot,
+    "manifest.json",
+    JSON.stringify(
+      {
+        schemaVersion: 1,
+        candidateId: VERIFICATION_CAPABILITY_CANDIDATE_ID,
+        versionId: VERIFICATION_CAPABILITY_CANDIDATE_VERSION_ID,
+      },
+      null,
+      2,
+    ),
+    "application/json",
+  );
+  const instructionArtifact = await writeVerificationCandidateArtifact(
+    rootDir,
+    bundleRoot,
+    "SKILL.md",
+    [
+      "---",
+      "name: usability-browser-candidate",
+      "description: Deterministic inspect-only capability candidate for isolated usability verification.",
+      "---",
+      "",
+      "# Usability browser candidate",
+      "",
+      "This fixture remains inactive and must never enter the callable catalog without governance.",
+      "",
+    ].join("\n"),
+    "text/markdown",
+  );
+  const proofArtifact = await writeVerificationCandidateArtifact(
+    rootDir,
+    bundleRoot,
+    "proof.json",
+    JSON.stringify({ fixture: true, callable: false, lifecycleState: "candidate" }, null, 2),
+    "application/json",
+  );
+  const record: CandidateSkillVersionRecord = {
+    candidateId: VERIFICATION_CAPABILITY_CANDIDATE_ID,
+    versionId: VERIFICATION_CAPABILITY_CANDIDATE_VERSION_ID,
+    sourceKind: "manual",
+    title: "Usability browser candidate",
+    summary: "Deterministic inspect-only capability candidate for isolated usability verification.",
+    bundleRoot,
+    lifecycleState: "candidate",
+    manifestArtifact,
+    instructionArtifact,
+    proofArtifact,
+    createdAt: VERIFICATION_CAPABILITY_CANDIDATE_CREATED_AT,
+    updatedAt: VERIFICATION_CAPABILITY_CANDIDATE_CREATED_AT,
+  };
+  const existing = storage.candidateSkillVersions.find(VERIFICATION_CAPABILITY_CANDIDATE_VERSION_ID);
+  if (existing) {
+    if (existing.candidateId !== VERIFICATION_CAPABILITY_CANDIDATE_ID || existing.lifecycleState !== "candidate") {
+      throw new Error("verification capability candidate identity or lifecycle state conflicts with canonical storage");
+    }
+    storage.skillAggregateRevisions.ensure(
+      "candidate_skill",
+      VERIFICATION_CAPABILITY_CANDIDATE_ID,
+      VERIFICATION_CAPABILITY_CANDIDATE_CREATED_AT,
+    );
+    return;
+  }
+  storage.skillAggregateRevisions.createWithInitialRevision(
+    "candidate_skill",
+    VERIFICATION_CAPABILITY_CANDIDATE_ID,
+    () => ({ value: storage.candidateSkillVersions.upsert(record), changed: true }),
+    VERIFICATION_CAPABILITY_CANDIDATE_CREATED_AT,
+  );
+}
+
+async function writeVerificationCandidateArtifact(
+  rootDir: string,
+  bundleRoot: string,
+  filename: string,
+  content: string,
+  mimeType: string,
+): Promise<CapabilityArtifactRecord> {
+  const relPath = `${bundleRoot}/${filename}`;
+  const targetPath = path.resolve(rootDir, ...relPath.split("/"));
+  await mkdir(path.dirname(targetPath), { recursive: true });
+  await writeFile(targetPath, content, "utf8");
+  return {
+    artifactId: `usability-browser-candidate-${filename.replaceAll(/[^a-z0-9]+/giu, "-").replace(/^-|-$/gu, "")}`,
+    relPath,
+    sha256: createHash("sha256").update(content, "utf8").digest("hex"),
+    bytes: Buffer.byteLength(content, "utf8"),
+    mimeType,
+    createdAt: VERIFICATION_CAPABILITY_CANDIDATE_CREATED_AT,
   };
 }

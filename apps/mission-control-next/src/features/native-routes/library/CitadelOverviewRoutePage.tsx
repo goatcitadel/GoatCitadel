@@ -1,13 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
-import { Castle, Hammer, Lock, Shield, Sparkles } from "lucide-react";
+import { Archive, Castle, Hammer, Lock, RotateCcw, Save, Shield, Sparkles } from "lucide-react";
 import type { Citadel, CitadelGatehouseSummary, CitadelTemplate } from "@goatcitadel/contracts";
 import {
+  archiveCitadel,
   createCitadelFromTemplate,
   getCitadel,
   getCitadelGatehouse,
   isApiRequestError,
   listCitadels,
   listCitadelTemplates,
+  restoreCitadel,
+  upsertCitadelCharter,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
 import { EmptyState, NativeButton, NoticeBanner } from "../primitives";
@@ -63,6 +66,9 @@ export function CitadelOverviewRoutePage({
 }: NativeRoutePagesProps) {
   const [state, setState] = useState<OverviewState>(INITIAL);
   const [templateState, setTemplateState] = useState<TemplateState>(INITIAL_TEMPLATES);
+  const [charterPurpose, setCharterPurpose] = useState("");
+  const [lifecycleAction, setLifecycleAction] = useState<"save" | "archive" | "restore" | null>(null);
+  const [actionNotice, setActionNotice] = useState<{ tone: "success" | "error"; message: string } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -77,7 +83,13 @@ export function CitadelOverviewRoutePage({
           getCitadel(activeCitadelId),
           getCitadelGatehouse(activeCitadelId),
         ]);
-        return { citadel, gatehouse };
+        return {
+          citadel: {
+            ...citadel,
+            record: citadel.record ?? listed,
+          },
+          gatehouse,
+        };
       })
       .then((loaded) => {
         if (!cancelled) {
@@ -128,6 +140,10 @@ export function CitadelOverviewRoutePage({
     };
   }, []);
 
+  useEffect(() => {
+    setCharterPurpose(state.citadel?.charter.purpose ?? "");
+  }, [state.citadel?.charter.purpose]);
+
   const { citadel, gatehouse } = state;
   const defaultTemplates = useMemo(() => selectDefaultTemplates(templateState.items), [templateState.items]);
   const charter = citadel?.charter ?? null;
@@ -156,6 +172,62 @@ export function CitadelOverviewRoutePage({
       setTemplateState((current) => ({ ...current, error: getErrorMessage(error) }));
     } finally {
       setTemplateState((current) => ({ ...current, busyTemplateId: null }));
+    }
+  };
+
+  const handleSaveCharter = async () => {
+    if (!charter || charterPurpose.trim().length === 0) {
+      return;
+    }
+    setLifecycleAction("save");
+    setActionNotice(null);
+    try {
+      const saved = await upsertCitadelCharter(activeCitadelId, {
+        purpose: charterPurpose.trim(),
+        kind: charter.kind,
+        goals: charter.goals,
+        boundaries: charter.boundaries,
+        successDefinition: charter.successDefinition,
+        defaultChamberId: charter.defaultChamberId,
+        riskPosture: charter.riskPosture,
+        modelPolicyDefault: charter.modelPolicyDefault,
+      });
+      setState((current) =>
+        current.citadel ? { ...current, citadel: { ...current.citadel, charter: saved } } : current,
+      );
+      setActionNotice({ tone: "success", message: "Citadel Charter saved." });
+    } catch (error) {
+      setActionNotice({ tone: "error", message: getErrorMessage(error) });
+    } finally {
+      setLifecycleAction(null);
+    }
+  };
+
+  const handleArchive = async () => {
+    setLifecycleAction("archive");
+    setActionNotice(null);
+    try {
+      const record = await archiveCitadel(activeCitadelId);
+      setState((current) => (current.citadel ? { ...current, citadel: { ...current.citadel, record } } : current));
+      setActionNotice({ tone: "success", message: "Citadel archived. Restore it before using it for new work." });
+    } catch (error) {
+      setActionNotice({ tone: "error", message: getErrorMessage(error) });
+    } finally {
+      setLifecycleAction(null);
+    }
+  };
+
+  const handleRestore = async () => {
+    setLifecycleAction("restore");
+    setActionNotice(null);
+    try {
+      const record = await restoreCitadel(activeCitadelId);
+      setState((current) => (current.citadel ? { ...current, citadel: { ...current.citadel, record } } : current));
+      setActionNotice({ tone: "success", message: "Citadel restored." });
+    } catch (error) {
+      setActionNotice({ tone: "error", message: getErrorMessage(error) });
+    } finally {
+      setLifecycleAction(null);
     }
   };
 
@@ -219,68 +291,113 @@ export function CitadelOverviewRoutePage({
           </NativeCard>
         </div>
       ) : (
-        <NativeGrid>
-          <NativeCard
-            title="Charter"
-            subtitle="The purpose and boundaries that define this Citadel."
-            stats={
-              charter
-                ? [
-                    { label: "Kind", value: humanizeEnumToken(charter.kind) },
-                    { label: "Posture", value: humanizeEnumToken(charter.riskPosture) },
-                  ]
-                : undefined
-            }
-          >
-            {charter ? (
-              <>
-                <p className="mc-next-citadel-purpose">{charter.purpose}</p>
-                <NativeList items={charterRows} emptyLabel="No goals or boundaries captured yet." density="compact" />
-              </>
-            ) : (
-              <EmptyState size="compact" title="No Charter found." />
-            )}
-          </NativeCard>
-
-          <NativeCard
-            title="Chambers"
-            subtitle="Areas of work, each with its own sensitivity. Sealed Chambers stay restricted."
-            stats={[
-              { label: "Chambers", value: String(gatehouse?.chamberCount ?? citadel?.chambers.length ?? 0) },
-              { label: "Sealed", value: String(gatehouse?.sealedChamberCount ?? 0) },
-            ]}
-          >
-            <NativeList
-              items={(citadel?.chambers ?? []).map((chamber) => ({
-                title: chamber.name,
-                meta: chamber.sealed ? `${chamber.sensitivity} · sealed` : chamber.sensitivity,
-              }))}
-              emptyLabel="No Chambers yet."
-              density="compact"
-            />
-          </NativeCard>
-
-          {gatehouse ? (
+        <>
+          {actionNotice ? <NoticeBanner tone={actionNotice.tone} message={actionNotice.message} /> : null}
+          <NativeGrid>
             <NativeCard
-              title="Gatehouse"
-              subtitle="The default posture every Chamber inherits until a Ward overrides it."
+              title="Charter"
+              subtitle="The purpose and boundaries that define this Citadel."
+              stats={
+                charter
+                  ? [
+                      { label: "Kind", value: humanizeEnumToken(charter.kind) },
+                      { label: "Posture", value: humanizeEnumToken(charter.riskPosture) },
+                      {
+                        label: "Lifecycle",
+                        value: humanizeEnumToken(citadel?.record?.lifecycleStatus ?? "active"),
+                      },
+                    ]
+                  : undefined
+              }
+            >
+              {charter ? (
+                <>
+                  <label className="mc-next-mason-field">
+                    <span>Purpose</span>
+                    <textarea
+                      aria-label="Purpose"
+                      className="mc-next-settings-textarea"
+                      value={charterPurpose}
+                      rows={3}
+                      onChange={(event) => setCharterPurpose(event.target.value)}
+                    />
+                  </label>
+                  <div className="mc-next-settings-button-row">
+                    <NativeButton
+                      variant="default"
+                      disabled={lifecycleAction !== null || charterPurpose.trim().length === 0}
+                      onClick={() => void handleSaveCharter()}
+                    >
+                      <Save size={16} />
+                      {lifecycleAction === "save" ? "Saving…" : "Save charter"}
+                    </NativeButton>
+                    {citadel?.record?.lifecycleStatus === "archived" ? (
+                      <NativeButton
+                        variant="outline"
+                        disabled={lifecycleAction !== null}
+                        onClick={() => void handleRestore()}
+                      >
+                        <RotateCcw size={16} />
+                        {lifecycleAction === "restore" ? "Restoring…" : "Restore Citadel"}
+                      </NativeButton>
+                    ) : (
+                      <NativeButton
+                        variant="destructive"
+                        disabled={lifecycleAction !== null}
+                        onClick={() => void handleArchive()}
+                      >
+                        <Archive size={16} />
+                        {lifecycleAction === "archive" ? "Archiving…" : "Archive Citadel"}
+                      </NativeButton>
+                    )}
+                  </div>
+                  <NativeList items={charterRows} emptyLabel="No goals or boundaries captured yet." density="compact" />
+                </>
+              ) : (
+                <EmptyState size="compact" title="No Charter found." />
+              )}
+            </NativeCard>
+
+            <NativeCard
+              title="Chambers"
+              subtitle="Areas of work, each with its own sensitivity. Sealed Chambers stay restricted."
               stats={[
-                { label: "Wards", value: String(gatehouse.wardCount) },
-                { label: "Sealed", value: String(gatehouse.sealedChamberCount) },
+                { label: "Chambers", value: String(gatehouse?.chamberCount ?? citadel?.chambers.length ?? 0) },
+                { label: "Sealed", value: String(gatehouse?.sealedChamberCount ?? 0) },
               ]}
             >
               <NativeList
-                items={[
-                  { title: "Risk posture", body: humanizeEnumToken(gatehouse.riskPosture) },
-                  { title: "Model policy", body: humanizeEnumToken(gatehouse.modelPolicyDefault) },
-                  { title: "Sharing", body: humanizeEnumToken(gatehouse.sharingDefault) },
-                  { title: "External writes", body: humanizeEnumToken(gatehouse.externalWritesDefault) },
-                ]}
+                items={(citadel?.chambers ?? []).map((chamber) => ({
+                  title: chamber.name,
+                  meta: chamber.sealed ? `${chamber.sensitivity} · sealed` : chamber.sensitivity,
+                }))}
+                emptyLabel="No Chambers yet."
                 density="compact"
               />
             </NativeCard>
-          ) : null}
-        </NativeGrid>
+
+            {gatehouse ? (
+              <NativeCard
+                title="Gatehouse"
+                subtitle="The default posture every Chamber inherits until a Ward overrides it."
+                stats={[
+                  { label: "Wards", value: String(gatehouse.wardCount) },
+                  { label: "Sealed", value: String(gatehouse.sealedChamberCount) },
+                ]}
+              >
+                <NativeList
+                  items={[
+                    { title: "Risk posture", body: humanizeEnumToken(gatehouse.riskPosture) },
+                    { title: "Model policy", body: humanizeEnumToken(gatehouse.modelPolicyDefault) },
+                    { title: "Sharing", body: humanizeEnumToken(gatehouse.sharingDefault) },
+                    { title: "External writes", body: humanizeEnumToken(gatehouse.externalWritesDefault) },
+                  ]}
+                  density="compact"
+                />
+              </NativeCard>
+            ) : null}
+          </NativeGrid>
+        </>
       )}
 
       {/* Rendered outside the posture grid: as a spanning (grid-column 1/-1)

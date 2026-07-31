@@ -81,6 +81,13 @@ export interface HeartbeatOccurrenceServiceDeps {
   enqueuePreclaimedHeartbeat(input: EnqueuePreclaimedHeartbeatInput): Promise<boolean>;
   getDurableRun(runId: string): DurableRunRecord;
   recoverDurableRun(runId: string): Promise<void>;
+  recordRecoveryDiagnostic?(input: {
+    level: "info" | "warn";
+    recoveryOutcome: "already_settled" | "recovered" | "retrying" | "failed";
+    remainingBudgetMs: number;
+    identity: DecisionCommittedHeartbeatRecoveryIdentity;
+    error?: string;
+  }): void;
 }
 
 /**
@@ -203,14 +210,33 @@ export class HeartbeatOccurrenceService {
     const deadlineMs = Date.now() + OPERATOR_PREEMPTION_RECOVERY_TIMEOUT_MS;
     for (;;) {
       const current = this.readExactDecisionCommittedRecoveryState(identity);
-      if (current.settled) return;
+      if (current.settled) {
+        this.recordOperatorRecoveryDiagnostic("info", "already_settled", identity, deadlineMs);
+        return;
+      }
       const remainingMs = deadlineMs - Date.now();
       if (remainingMs <= 0) {
+        this.recordOperatorRecoveryDiagnostic("warn", "failed", identity, deadlineMs, "recovery deadline expired");
         throw decisionCommittedRecoveryTimeout(identity);
       }
-      await this.recoverOccurrenceBeforeDeadline(current.occurrence, identity, deadlineMs);
+      this.recordOperatorRecoveryDiagnostic("info", "retrying", identity, deadlineMs);
+      try {
+        await this.recoverOccurrenceBeforeDeadline(current.occurrence, identity, deadlineMs);
+      } catch (error) {
+        this.recordOperatorRecoveryDiagnostic(
+          "warn",
+          "failed",
+          identity,
+          deadlineMs,
+          error instanceof Error ? error.message : String(error),
+        );
+        throw error;
+      }
       const recovered = this.readExactDecisionCommittedRecoveryState(identity);
-      if (recovered.settled) return;
+      if (recovered.settled) {
+        this.recordOperatorRecoveryDiagnostic("info", "recovered", identity, deadlineMs);
+        return;
+      }
       const delayMs = Math.min(OPERATOR_PREEMPTION_RECOVERY_POLL_MS, deadlineMs - Date.now());
       if (delayMs <= 0) {
         throw decisionCommittedRecoveryTimeout(identity);
@@ -220,6 +246,22 @@ export class HeartbeatOccurrenceService {
         timer.unref?.();
       });
     }
+  }
+
+  private recordOperatorRecoveryDiagnostic(
+    level: "info" | "warn",
+    recoveryOutcome: "already_settled" | "recovered" | "retrying" | "failed",
+    identity: DecisionCommittedHeartbeatRecoveryIdentity,
+    deadlineMs: number,
+    error?: string,
+  ): void {
+    this.deps.recordRecoveryDiagnostic?.({
+      level,
+      recoveryOutcome,
+      remainingBudgetMs: Math.max(0, deadlineMs - Date.now()),
+      identity,
+      ...(error ? { error } : {}),
+    });
   }
 
   private readExactDecisionCommittedRecoveryState(identity: DecisionCommittedHeartbeatRecoveryIdentity): {

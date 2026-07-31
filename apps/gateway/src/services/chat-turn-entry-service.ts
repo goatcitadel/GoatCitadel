@@ -26,7 +26,7 @@ import type {
   ProactiveRunRecord,
 } from "@goatcitadel/contracts";
 import { ConflictError, isChatTurnActiveStatus, isChatTurnTerminalStatus, NotFoundError } from "@goatcitadel/contracts";
-import type { SessionAutonomyPrefsRecord, Storage } from "@goatcitadel/storage";
+import type { SessionAutonomyPrefsRecord, SessionMutationAdmissionRecord, Storage } from "@goatcitadel/storage";
 import { looksLowConfidenceResponse } from "./learned-memory-utils.js";
 import {
   preflightChatRoute,
@@ -57,6 +57,7 @@ import type { SurfaceRouteRequest } from "./surface-router-service.js";
 import type { SurfaceRouteOverrideSignalInput } from "./improvement-service.js";
 import {
   assertExternalCompanionAdmissionContext,
+  ActiveTurnNotPreemptibleError,
   computeChatTurnAdmissionMaterialSha256,
   resolveChatTurnAdmissionActorId,
   type AuthenticatedOperatorAdmissionContext,
@@ -151,6 +152,7 @@ export interface ChatTurnEntryHost
   readonly storage: ChatTurnEntryStorage;
   readonly turnRuntime: Pick<TurnRuntime, "run" | "runStream">;
   recoverDecisionCommittedHeartbeat(identity: DecisionCommittedHeartbeatRecoveryIdentity): Promise<void>;
+  reconcileTerminalChatAdmission(activeAdmission: SessionMutationAdmissionRecord): Promise<boolean>;
   prepareAgentChatTurn(
     sessionId: string,
     input: ChatSendMessageRequest,
@@ -238,10 +240,33 @@ async function admitEntryOperatorChatTurn(
   if (!authenticatedOperator) {
     return host.sessionControlRuntimeOwner.admitOperatorChatTurn(input);
   }
-  return host.sessionControlRuntimeOwner.admitAuthenticatedOperatorChatTurnWithHeartbeatRecovery(
-    { ...input, authenticatedOperator },
-    (identity) => host.recoverDecisionCommittedHeartbeat(identity),
-  );
+  try {
+    return await host.sessionControlRuntimeOwner.admitAuthenticatedOperatorChatTurnWithHeartbeatRecovery(
+      { ...input, authenticatedOperator },
+      (identity) => host.recoverDecisionCommittedHeartbeat(identity),
+      (activeAdmission) => host.reconcileTerminalChatAdmission(activeAdmission),
+    );
+  } catch (error) {
+    if (error instanceof ActiveTurnNotPreemptibleError) {
+      host.recordDevDiagnostic({
+        level: "info",
+        category: "chat",
+        event: "chat.turn.recovery_noop",
+        message: "Skipped heartbeat preemption because the canonical active turn is not a heartbeat",
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        context: {
+          recoveryOutcome: error.recoveryOutcome,
+          activeAdmissionId: error.activeAdmission.admissionId,
+          activeTurnId: error.activeAdmission.turnId,
+          activeActorKind: error.activeAdmission.actorKind,
+          activeOperation: error.activeAdmission.operation,
+          correlationId: input.correlationId,
+        },
+      });
+    }
+    throw error;
+  }
 }
 
 /**
@@ -1089,6 +1114,7 @@ async function runAgentSendChatMessageLlmPath(
           role: "assistant",
           content: assistantText,
         },
+        ...(input.policyTaskId ? { taskId: input.policyTaskId } : {}),
         usage:
           assistantUsage || (turnResult.modelUsageEventIds?.length ?? 0) > 0
             ? {
@@ -1100,7 +1126,6 @@ async function runAgentSendChatMessageLlmPath(
                         workspaceId: prepared.workspaceId,
                         sessionId,
                         turnId,
-                        ...(input.policyTaskId ? { taskId: input.policyTaskId } : {}),
                       },
                     }
                   : {}),

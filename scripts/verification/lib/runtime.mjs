@@ -28,7 +28,10 @@ export async function prepareVerificationRuntime(runId) {
 }
 
 export async function startVerificationStack(context, options = {}) {
-  await ensureGatewayWorkspaceBuild(context);
+  await ensureGatewayWorkspaceBuild(context, {
+    omitEnv: options.gatewayEnvOmit,
+    processLogPrefix: options.processLogPrefix,
+  });
   const uiTarget = resolveUiTarget(repoRoot, process.env);
   const runtimeRoot = options.runtimeRoot ?? (await prepareVerificationRuntime(context.runId));
   const gatewayPort = await resolveAvailablePort(Number(options.gatewayPort ?? 0));
@@ -47,8 +50,22 @@ export async function startVerificationStack(context, options = {}) {
 
   const gateway =
     options.gatewayMode === "built"
-      ? await startProcess(context, "gateway", [process.execPath, path.join(repoRoot, "apps", "gateway", "dist", "main.js")], gatewayEnv)
-      : await startProcess(context, "gateway", [pnpmCommand(), "--dir", repoRoot, "dev:gateway"], gatewayEnv);
+      ? await startProcess(
+          context,
+          buildVerificationProcessLogName("gateway", options.processLogPrefix),
+          [process.execPath, path.join(repoRoot, "apps", "gateway", "dist", "main.js")],
+          gatewayEnv,
+          { omitEnv: options.gatewayEnvOmit },
+        )
+      : await startProcess(
+          context,
+          buildVerificationProcessLogName("gateway", options.processLogPrefix),
+          [pnpmCommand(), "--dir", repoRoot, "dev:gateway"],
+          gatewayEnv,
+          {
+            omitEnv: options.gatewayEnvOmit,
+          },
+        );
   let ui;
   let uiPort;
   let uiUrl;
@@ -64,42 +81,17 @@ export async function startVerificationStack(context, options = {}) {
         ...options.uiEnv,
       };
       if (options.uiMode === "preview") {
-        await ensureVerificationUiBuild(context, uiTarget.packageName, uiEnv);
+        await ensureVerificationUiBuild(context, uiTarget.packageName, uiEnv, {
+          omitEnv: options.uiEnvOmit,
+          processLogPrefix: options.processLogPrefix,
+        });
       }
       ui = await startProcess(
         context,
-        "ui",
-        options.uiMode === "preview"
-          ? [
-              pnpmCommand(),
-              "--dir",
-              repoRoot,
-              "--filter",
-              uiTarget.packageName,
-              "exec",
-              "vite",
-              "preview",
-              "--host",
-              "127.0.0.1",
-              "--port",
-              String(uiPort),
-              "--strictPort",
-            ]
-          : [
-              pnpmCommand(),
-              "--dir",
-              repoRoot,
-              "--filter",
-              uiTarget.packageName,
-              "exec",
-              "vite",
-              "--host",
-              "127.0.0.1",
-              "--port",
-              String(uiPort),
-              "--strictPort",
-            ],
+        buildVerificationProcessLogName("ui", options.processLogPrefix),
+        buildVerificationUiCommand(uiTarget.packageName, uiPort, options.uiMode),
         uiEnv,
+        { omitEnv: options.uiEnvOmit },
       );
       await waitForHttp(uiUrl, `${uiTarget.displayName} UI`, 180000, ui);
     }
@@ -154,7 +146,7 @@ export async function waitForHttp(url, label, timeoutMs = 180000, handle = null)
   throw new Error(`${label} did not become ready in time: ${url}`);
 }
 
-export async function startProcess(context, name, commandArgs, extraEnv) {
+export async function startProcess(context, name, commandArgs, extraEnv, options = {}) {
   const [command, ...args] = commandArgs;
   const stdoutPath = path.join(context.artifactRoot, "diagnostics", `${name}.stdout.log`);
   const stderrPath = path.join(context.artifactRoot, "diagnostics", `${name}.stderr.log`);
@@ -162,10 +154,7 @@ export async function startProcess(context, name, commandArgs, extraEnv) {
   const stderrChunks = [];
   const child = spawnVerificationProcess(command, args, {
     cwd: repoRoot,
-    env: {
-      ...process.env,
-      ...extraEnv,
-    },
+    env: buildVerificationProcessEnv(process.env, extraEnv, options.omitEnv),
     stdio: ["ignore", "pipe", "pipe"],
   });
   const handle = {
@@ -205,6 +194,39 @@ export async function startProcess(context, name, commandArgs, extraEnv) {
     child.once("error", flush);
   });
   return handle;
+}
+
+export function buildVerificationProcessEnv(baseEnv, extraEnv = {}, omitEnv = []) {
+  const env = { ...baseEnv };
+  for (const key of omitEnv ?? []) {
+    if (typeof key === "string" && key) {
+      delete env[key];
+    }
+  }
+  return { ...env, ...extraEnv };
+}
+
+export function buildVerificationProcessLogName(name, processLogPrefix) {
+  const prefix = typeof processLogPrefix === "string" ? sanitizeFilePart(processLogPrefix.trim()) : "";
+  return prefix ? `${prefix}-${name}` : name;
+}
+
+export function buildVerificationUiCommand(packageName, port, uiMode) {
+  return [
+    pnpmCommand(),
+    "--dir",
+    repoRoot,
+    "--filter",
+    packageName,
+    "exec",
+    "vite",
+    ...(uiMode === "preview" ? ["preview"] : ["--force"]),
+    "--host",
+    "127.0.0.1",
+    "--port",
+    String(port),
+    "--strictPort",
+  ];
 }
 
 export async function stopProcess(handle) {
@@ -271,7 +293,24 @@ export function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export async function ensureGatewayWorkspaceBuild(context) {
+export function buildVerificationWorkspaceRefreshCommands() {
+  return {
+    gateway: ["--dir", repoRoot, "--filter", "@goatcitadel/gateway...", "build"],
+    threadedSurfaceCore: [
+      "--dir",
+      repoRoot,
+      "--filter",
+      "@goatcitadel/threaded-surface-core",
+      "exec",
+      "tsc",
+      "-b",
+      "tsconfig.json",
+      "--force",
+    ],
+  };
+}
+
+export async function ensureGatewayWorkspaceBuild(context, options = {}) {
   if (gatewayWorkspaceBuildEnsured) {
     return;
   }
@@ -303,6 +342,7 @@ export async function ensureGatewayWorkspaceBuild(context) {
   );
   const missingWorkspacePackages = workspacePackages.filter(({ outputPath }) => !existsSync(outputPath));
 
+  const refreshCommands = buildVerificationWorkspaceRefreshCommands();
   const logLines = [
     "verification startup refreshes gateway workspace builds to avoid stale package outputs.",
     missingWorkspacePackages.length > 0 ? "" : "all expected workspace outputs already existed before refresh.",
@@ -313,11 +353,22 @@ export async function ensureGatewayWorkspaceBuild(context) {
     "$ pnpm --dir <repoRoot> --filter @goatcitadel/gateway... build",
     "",
   ];
-  const result = runPnpmSync(["--dir", repoRoot, "--filter", "@goatcitadel/gateway...", "build"]);
+  const result = runPnpmSync(refreshCommands.gateway, options.omitEnv);
   logLines.push(
     result.stdout ?? "",
     result.stderr ?? "",
     result.error ? `${result.error.name}: ${result.error.message}` : "",
+    "",
+    "$ pnpm --dir <repoRoot> --filter @goatcitadel/threaded-surface-core exec tsc -b tsconfig.json --force",
+    "",
+  );
+  const threadedSurfaceCoreResult = runPnpmSync(refreshCommands.threadedSurfaceCore, options.omitEnv);
+  logLines.push(
+    threadedSurfaceCoreResult.stdout ?? "",
+    threadedSurfaceCoreResult.stderr ?? "",
+    threadedSurfaceCoreResult.error
+      ? `${threadedSurfaceCoreResult.error.name}: ${threadedSurfaceCoreResult.error.message}`
+      : "",
   );
 
   let remainingMissingPackages = missingWorkspacePackages.filter(({ outputPath }) => !existsSync(outputPath));
@@ -327,40 +378,47 @@ export async function ensureGatewayWorkspaceBuild(context) {
       `$ pnpm --dir <repoRoot> --filter ${missingPackage.dependency} exec tsc -b tsconfig.json --force`,
       "",
     );
-    const forcedResult = runPnpmSync([
-      "--dir",
-      repoRoot,
-      "--filter",
-      missingPackage.dependency,
-      "exec",
-      "tsc",
-      "-b",
-      "tsconfig.json",
-      "--force",
-    ]);
+    const forcedResult = runPnpmSync(
+      ["--dir", repoRoot, "--filter", missingPackage.dependency, "exec", "tsc", "-b", "tsconfig.json", "--force"],
+      options.omitEnv,
+    );
     logLines.push(
       forcedResult.stdout ?? "",
       forcedResult.stderr ?? "",
       forcedResult.error ? `${forcedResult.error.name}: ${forcedResult.error.message}` : "",
     );
     if (forcedResult.error || forcedResult.status !== 0) {
-      const buildLogPath = path.join(context.artifactRoot, "diagnostics", "workspace-build.log");
+      const buildLogPath = path.join(
+        context.artifactRoot,
+        "diagnostics",
+        `${buildVerificationProcessLogName("workspace-build", options.processLogPrefix)}.log`,
+      );
       await writeText(buildLogPath, logLines.join("\n"));
       throw new Error(`Failed to build gateway workspace dependencies. See ${buildLogPath}`);
     }
   }
 
   remainingMissingPackages = missingWorkspacePackages.filter(({ outputPath }) => !existsSync(outputPath));
-  const buildLogPath = path.join(context.artifactRoot, "diagnostics", "workspace-build.log");
+  const buildLogPath = path.join(
+    context.artifactRoot,
+    "diagnostics",
+    `${buildVerificationProcessLogName("workspace-build", options.processLogPrefix)}.log`,
+  );
   await writeText(buildLogPath, logLines.join("\n"));
-  if (result.error || result.status !== 0 || remainingMissingPackages.length > 0) {
+  if (
+    result.error ||
+    result.status !== 0 ||
+    threadedSurfaceCoreResult.error ||
+    threadedSurfaceCoreResult.status !== 0 ||
+    remainingMissingPackages.length > 0
+  ) {
     throw new Error(`Failed to build gateway workspace dependencies. See ${buildLogPath}`);
   }
 
   gatewayWorkspaceBuildEnsured = true;
 }
 
-async function ensureVerificationUiBuild(context, packageName, uiEnv) {
+async function ensureVerificationUiBuild(context, packageName, uiEnv, options = {}) {
   const buildKey = JSON.stringify({
     packageName,
     gatewayUrl: uiEnv.VITE_GATEWAY_URL,
@@ -376,7 +434,7 @@ async function ensureVerificationUiBuild(context, packageName, uiEnv) {
     `$ pnpm --dir <repoRoot> --filter ${packageName} build`,
     "",
   ];
-  const result = runPnpmSyncWithEnv(["--dir", repoRoot, "--filter", packageName, "build"], uiEnv);
+  const result = runPnpmSyncWithEnv(["--dir", repoRoot, "--filter", packageName, "build"], uiEnv, options.omitEnv);
   logLines.push(
     result.stdout ?? "",
     result.stderr ?? "",
@@ -386,7 +444,7 @@ async function ensureVerificationUiBuild(context, packageName, uiEnv) {
   const buildLogPath = path.join(
     context.artifactRoot,
     "diagnostics",
-    `ui-build-${sanitizeFilePart(packageName)}.log`,
+    `${buildVerificationProcessLogName(`ui-build-${sanitizeFilePart(packageName)}`, options.processLogPrefix)}.log`,
   );
   await writeText(buildLogPath, logLines.join("\n"));
   if (result.error || result.status !== 0) {
@@ -396,15 +454,12 @@ async function ensureVerificationUiBuild(context, packageName, uiEnv) {
   uiBuildKeys.add(buildKey);
 }
 
-function runPnpmSync(args) {
-  return runPnpmSyncWithEnv(args, process.env);
+function runPnpmSync(args, omitEnv = []) {
+  return runPnpmSyncWithEnv(args, {}, omitEnv);
 }
 
-function runPnpmSyncWithEnv(args, extraEnv) {
-  const env = {
-    ...process.env,
-    ...extraEnv,
-  };
+function runPnpmSyncWithEnv(args, extraEnv, omitEnv = []) {
+  const env = buildVerificationProcessEnv(process.env, extraEnv, omitEnv);
   if (process.platform === "win32") {
     return spawnSync(WINDOWS_CMD_PATH, ["/d", "/s", "/c", pnpmCommand(), ...args], {
       cwd: repoRoot,

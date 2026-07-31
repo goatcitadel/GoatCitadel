@@ -205,6 +205,7 @@ export function KanbanRoutePage(props: NativeRoutePagesProps) {
       // stay non-fatal: the board data is still valid and the operator's selection must
       // remain visible, so it renders as an inline banner below instead of nuking the board.
       error={error}
+      onRetry={() => void load()}
       releaseStatus={getRouteReleaseScope(props.route).status}
       actions={
         <NativeButton

@@ -311,6 +311,7 @@ describe("agentSendChatMessage abort signal coverage", () => {
           },
         },
         storage: {
+          runImmediateTransaction: <T>(work: () => T): T => work(),
           chatTurnTraces: {
             create: vi.fn(() => traceState),
             patch: vi.fn(() => traceState),

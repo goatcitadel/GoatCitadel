@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,7 +10,8 @@ import {
   type GeneralChatPostCommitEffectWorkflowPayload,
   type GeneralChatPostCommitProgress,
 } from "./chat-durable-run-service.js";
-import { DurableRunService } from "./durable-run-service.js";
+import { isDurableWorkflowRecoverable, markDurableWorkflowUnrecoverable } from "./durable-execution-service.js";
+import { buildDurableLocalProcessLeaseOwnerId, DurableRunService } from "./durable-run-service.js";
 import { DURABLE_RETRY_POLICY_DEFAULT } from "./durable-retry-policy.js";
 import {
   buildChatTurnRuntimeAuthoritySeal,
@@ -18,6 +20,7 @@ import {
 } from "./chat-durable-runtime-authority.js";
 import { IDEMPOTENT_REALTIME_ENVELOPE_KEY, RealtimeEventService } from "./realtime-event-service.js";
 import type { ServiceContext } from "./service-context.js";
+import { SharedHostLifecycleService } from "./shared-host-lifecycle-service.js";
 import {
   computeEffectiveChatTurnRequestMaterialSha256,
   computeFrozenChatTurnAdmissionMaterialSha256,
@@ -44,6 +47,113 @@ afterEach(() => {
 });
 
 describe("DurableRunService general Chat post-commit integration", () => {
+  it("preserves a dead local worker prefix and releases the exact durable admission before its lease TTL", async () => {
+    const harness = createStorageHarness();
+    const seeded = seedRunningRetainedPrefix(harness.storage);
+    const backgroundTasks = new Set<Promise<void>>();
+    const executeWorkflow = vi.fn(async () => undefined);
+    const workflowHost = {
+      storage: harness.storage,
+      publishRealtime: vi.fn(),
+      recordDevDiagnostic: vi.fn(),
+      persistChatStreamChunk: vi.fn(),
+    };
+    const service = new DurableRunService(
+      {
+        storage: harness.storage,
+        config: {
+          assistant: { durable: { enabled: true, workflowTimeoutMs: 30_000 }, mesh: { nodeId: "test-node" } },
+        },
+        publishRealtime: () => undefined,
+        requireFeatureEnabled: () => undefined,
+        isFeatureEnabled: () => true,
+        logger: { info: () => undefined, debug: () => undefined, warn: () => undefined, error: () => undefined },
+      } as unknown as ServiceContext,
+      {
+        backgroundTasks,
+        sharedHostLifecycle: new SharedHostLifecycleService({ enabled: false }),
+        isLocalProcessAlive: vi.fn(() => false),
+        workflowRegistry: {
+          executeWorkflow,
+          isWorkflowRecoverable: (run) => isDurableWorkflowRecoverable(workflowHost as never, run),
+          markWorkflowUnrecoverable: (run, reason, context) =>
+            markDurableWorkflowUnrecoverable(workflowHost as never, run, reason, context),
+        },
+        onGeneralChatPostCommit: async (_run, progress) => {
+          for (const effect of GENERAL_CHAT_POST_COMMIT_EFFECTS) {
+            progress.runEffect(effect, () => undefined);
+          }
+          return { status: "failed" };
+        },
+      },
+    );
+    services.push(service);
+
+    service.startWorker();
+    await waitFor(
+      () => harness.storage.sessionMutationAdmissions.require(seeded.admissionId).status === "cancelled",
+      () =>
+        JSON.stringify({
+          run: harness.storage.durableRuns.getRun(seeded.runId),
+          trace: harness.storage.chatTurnTraces.get(seeded.turnId),
+          admission: harness.storage.sessionMutationAdmissions.require(seeded.admissionId),
+        }),
+    );
+
+    const failedRun = harness.storage.durableRuns.getRun(seeded.runId);
+    expect(executeWorkflow).not.toHaveBeenCalled();
+    expect(failedRun).toMatchObject({
+      status: "failed",
+      leaseOwnerId: undefined,
+      lastError: "Durable Chat output was emitted before interruption and cannot be safely replayed.",
+      metadata: {
+        linkedFinalization: expect.any(Object),
+        generalChatPostCommit: expect.objectContaining({ settlementStatus: "completed" }),
+        chatTurnRuntimeAuthority: expect.any(Object),
+      },
+    });
+    expect(failedRun.metadata).not.toHaveProperty("waitForEvent");
+    expect(failedRun.metadata).toMatchObject({ operatorNote: "preserve-during-restart-finalization" });
+    expect(harness.storage.chatMessages.get(seeded.assistantMessageId)?.content).toBe(seeded.visiblePrefix);
+    expect(harness.storage.chatTurnTraces.get(seeded.turnId)).toMatchObject({
+      status: "failed",
+      failure: {
+        failureClass: "interrupted_by_restart",
+        recommendedAction: "continue_from_partial",
+      },
+      completion: { status: "interrupted" },
+      durable: { runId: seeded.runId, status: "failed", checkpointKind: "run_failed" },
+    });
+    expect(harness.storage.sessionMutationAdmissions.require(seeded.admissionId)).toMatchObject({
+      status: "cancelled",
+      terminalAuthorityKind: "durable_terminal",
+      terminalDurableRunId: seeded.runId,
+      terminalDurableRunStatus: "failed",
+    });
+
+    const nextRequest = { content: "Reply with exactly: CHAT_OK" };
+    const nextAdmission = harness.storage.sessionMutationAdmissions.admit({
+      workspaceId: seeded.workspaceId,
+      sessionId: seeded.sessionId,
+      expectedSessionIncarnationId: seeded.sessionIncarnationId,
+      turnId: `${seeded.turnId}:next`,
+      runtimeOwnerId: "integration:restart-next-turn",
+      admissionKind: "turn_write",
+      aggregateRevision: harness.storage.chatSessionMeta.get(seeded.sessionId)!.revision,
+      controllerGeneration: seeded.controllerGeneration,
+      actorKind: "operator",
+      actorId: "operator:restart-next-turn",
+      operation: "chat_send",
+      materialSha256: computeFrozenChatTurnAdmissionMaterialSha256(nextRequest),
+      idempotencyKey: `admission:${seeded.turnId}:next`,
+      correlationId: `${seeded.turnId}:next`,
+    });
+    expect(nextAdmission).toMatchObject({
+      disposition: "created",
+      admission: { status: "active", turnId: `${seeded.turnId}:next` },
+    });
+  }, 30_000);
+
   it("atomically enqueues deterministic async children, survives restart, and never repeats committed receipts", async () => {
     const harness = createStorageHarness();
     const parent = seedParent(harness.storage, "generation-restart");
@@ -433,6 +543,179 @@ function createService(
   );
   services.push(service);
   return service;
+}
+
+function seedRunningRetainedPrefix(storage: Storage): {
+  runId: string;
+  admissionId: string;
+  sessionIncarnationId: string;
+  controllerGeneration: number;
+  workspaceId: string;
+  sessionId: string;
+  turnId: string;
+  assistantMessageId: string;
+  visiblePrefix: string;
+} {
+  const runId = "restart-prefix-parent";
+  const now = "2026-07-30T14:00:00.000Z";
+  const workspaceId = "workspace-restart-prefix";
+  const sessionId = "session-restart-prefix";
+  const turnId = "turn-restart-prefix";
+  const userMessageId = "user-restart-prefix";
+  const assistantMessageId = "assistant-restart-prefix";
+  const visiblePrefix = "STREAMING_BEFORE_RESTART ";
+  const request = { content: "Synthetic restart during an active provider stream proof." };
+  const requestActor = { actorKind: "operator" as const, actorId: "operator:restart-prefix" };
+  storage.sessions.upsert({
+    sessionId,
+    sessionKey: `mission:${requestActor.actorId}:${sessionId}`,
+    kind: "dm",
+    channel: "mission",
+    account: requestActor.actorId,
+    timestamp: now,
+  });
+  const lifecycle = storage.chatSessionLifecycles.ensureActive({
+    workspaceId,
+    sessionId,
+    actorId: requestActor.actorId,
+    idempotencyKey: `lifecycle:${sessionId}`,
+    correlationId: `lifecycle:${sessionId}`,
+    metadataTimestamp: now,
+  });
+  const sessionMeta = storage.chatSessionMeta.get(sessionId)!;
+  const admissionMaterialSha256 = computeFrozenChatTurnAdmissionMaterialSha256(request);
+  const admission = storage.sessionMutationAdmissions.admit({
+    workspaceId,
+    sessionId,
+    expectedSessionIncarnationId: lifecycle.intent.sessionIncarnationId,
+    turnId,
+    runtimeOwnerId: `integration:${runId}`,
+    admissionKind: "turn_write",
+    aggregateRevision: sessionMeta.revision,
+    controllerGeneration: lifecycle.generation,
+    actorKind: requestActor.actorKind,
+    actorId: requestActor.actorId,
+    operation: "chat_send",
+    materialSha256: admissionMaterialSha256,
+    idempotencyKey: `admission:${runId}`,
+    correlationId: `admission:${runId}`,
+  }).admission;
+  const payload = {
+    version: "chat.turn.execute.v2",
+    admissionId: admission.admissionId,
+    sessionIncarnationId: admission.sessionIncarnationId,
+    admissionMaterialSha256,
+    effectiveRequestMaterialSha256: computeEffectiveChatTurnRequestMaterialSha256(admissionMaterialSha256, request),
+    policyRunIdDerivation: { version: 1 as const, kind: "durable_run_id" as const, runId },
+    workspaceId,
+    admissionAggregateRevision: admission.aggregateRevision,
+    admissionControllerGeneration: admission.controllerGeneration,
+    requestActor,
+    sessionId,
+    turnId,
+    userMessageId,
+    assistantMessageId,
+    branchKind: "append",
+    threadEventType: "chat_thread_turn_appended",
+    request,
+  };
+  let run = storage.durableRuns.createRun({
+    runId,
+    workflowKey: "chat.turn.execute",
+    status: "queued",
+    maxAttempts: DURABLE_RETRY_POLICY_DEFAULT.maxAttempts,
+    payload,
+    metadata: {
+      retryPolicy: { ...DURABLE_RETRY_POLICY_DEFAULT },
+      // This is the real pre-fix persisted shape. Terminalization must remove
+      // the null waiting marker before sealing checkpoint-anchored authority.
+      waitForEvent: null,
+      operatorNote: "preserve-during-restart-finalization",
+    },
+    now,
+  });
+  storage.sessionMutationAdmissions.bindDurableRun({
+    admissionId: admission.admissionId,
+    sessionIncarnationId: admission.sessionIncarnationId,
+    workspaceId,
+    sessionId,
+    turnId,
+    durableRunId: runId,
+    requestRuntimeClaim: {
+      runtimeOwnerId: admission.runtimeOwnerId!,
+      leaseRevision: admission.runtimeLeaseRevision!,
+    },
+  });
+  run = storage.durableRuns.updateRun({
+    runId,
+    status: "running",
+    leaseOwnerId: buildDurableLocalProcessLeaseOwnerId({ pid: 987_660, nonce: randomUUID() }),
+    leaseHeartbeatAt: now,
+    leaseExpiresAt: "2099-07-30T14:02:00.000Z",
+    startedAt: now,
+    updatedAt: now,
+    expectedVersion: run.version,
+  });
+  storage.durableRuns.createCheckpoint({
+    runId,
+    checkpointKind: "run_started",
+    state: { workflowKey: run.workflowKey, status: "running" },
+    createdAt: now,
+  });
+  storage.chatMessages.upsert({
+    messageId: userMessageId,
+    sessionId,
+    role: "user",
+    actorType: "user",
+    actorId: requestActor.actorId,
+    content: request.content,
+    timestamp: now,
+  });
+  storage.chatTurnTraces.create({
+    turnId,
+    sessionId,
+    userMessageId,
+    assistantMessageId,
+    status: "running",
+    mode: "chat",
+    webMode: "off",
+    memoryMode: "off",
+    thinkingLevel: "off",
+    routing: {},
+    durable: { runId, status: "running", checkpointKind: "run_started" },
+    startedAt: now,
+  });
+  storage.chatStreamEvents.append({
+    eventId: "restart-prefix-message-start",
+    sessionId,
+    turnId,
+    runId,
+    sequence: 1,
+    chunkType: "message_start",
+    payload: { type: "message_start", sessionId, turnId, messageId: assistantMessageId },
+    createdAt: now,
+  });
+  storage.chatStreamEvents.append({
+    eventId: "restart-prefix-visible-delta",
+    sessionId,
+    turnId,
+    runId,
+    sequence: 2,
+    chunkType: "delta",
+    payload: { type: "delta", sessionId, turnId, messageId: assistantMessageId, delta: visiblePrefix },
+    createdAt: "2026-07-30T14:00:00.001Z",
+  });
+  return {
+    runId,
+    admissionId: admission.admissionId,
+    sessionIncarnationId: admission.sessionIncarnationId,
+    controllerGeneration: lifecycle.generation,
+    workspaceId,
+    sessionId,
+    turnId,
+    assistantMessageId,
+    visiblePrefix,
+  };
 }
 
 function seedParent(

@@ -4,13 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { McpServerRecord } from "@goatcitadel/contracts";
-import {
-  __internal,
-  collectMcpBrowserFallbackTargets,
-  discoverMcpTools,
-  inferMcpToolsForServer,
-  invokeMcpRuntimeTool,
-} from "./mcp-runtime.js";
+import { __internal, collectMcpBrowserFallbackTargets, discoverMcpTools, invokeMcpRuntimeTool } from "./mcp-runtime.js";
 
 function createTestServer(script: string, extraArgs: string[] = []): McpServerRecord {
   const now = new Date().toISOString();
@@ -132,6 +126,58 @@ rl.on("line", (line) => {
         textSnippet: "Example page content",
       },
     });
+  }
+});
+`;
+
+const MCP_TOOL_LIST_ERROR_SCRIPT = String.raw`
+const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+function result(id, value) {
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result: value }) + "\n");
+}
+rl.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") {
+    result(message.id, {
+      protocolVersion: "2024-11-05",
+      capabilities: { tools: {} },
+      serverInfo: { name: "error-mcp", version: "1.0.0" },
+    });
+    return;
+  }
+  if (message.method === "tools/list") {
+    process.stdout.write(JSON.stringify({
+      jsonrpc: "2.0",
+      id: message.id,
+      error: {
+        code: -32603,
+        message: "Gateway manifest request failed with HTTP 401",
+        data: { token: "secret-token-value-1234567890" },
+      },
+    }) + "\n");
+  }
+});
+`;
+
+const MCP_TOOL_LIST_MALFORMED_SCRIPT = String.raw`
+const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+function result(id, value) {
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result: value }) + "\n");
+}
+rl.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") {
+    result(message.id, {
+      protocolVersion: "2024-11-05",
+      capabilities: { tools: {} },
+      serverInfo: { name: "malformed-mcp", version: "1.0.0" },
+    });
+    return;
+  }
+  if (message.method === "tools/list") {
+    result(message.id, { unexpected: [] });
   }
 });
 `;
@@ -460,41 +506,6 @@ rl.on("line", (line) => {
 `;
 
 describe("mcp runtime", () => {
-  it("infers browser and research tool records when discovery has not populated tools yet", () => {
-    const now = new Date().toISOString();
-    const browserServer = {
-      ...createTestServer(""),
-      label: "Chrome DevTools Bridge",
-      command: "npx",
-      args: ["@modelcontextprotocol/server-playwright"],
-      category: "browser",
-      createdAt: now,
-      updatedAt: now,
-    };
-    const researchServer = {
-      ...browserServer,
-      serverId: "srv-fetch",
-      label: "HTTP Fetch MCP",
-      command: "fetch-mcp",
-      args: [],
-      category: "research",
-    };
-
-    expect(inferMcpToolsForServer(browserServer, []).map((tool) => tool.toolName)).toEqual([
-      "browser.search",
-      "browser.navigate",
-      "browser.extract",
-    ]);
-    expect(inferMcpToolsForServer(researchServer, []).map((tool) => tool.toolName)).toEqual([
-      "browser.search",
-      "browser.extract",
-      "http.get",
-    ]);
-    expect(
-      inferMcpToolsForServer(browserServer, [{ ...inferMcpToolsForServer(browserServer, [])[0]!, toolName: "custom" }]),
-    ).toEqual([expect.objectContaining({ toolName: "custom" })]);
-  });
-
   it("resolves package-manager stdio commands for Windows shims and Linux container bins", () => {
     expect(__internal.resolveSpawnCommand("npx", "win32", () => false)).toBe("npx.cmd");
     expect(__internal.resolveSpawnCommand("npm", "linux", (candidate) => candidate === "/usr/local/bin/npm")).toBe(
@@ -655,6 +666,68 @@ describe("mcp runtime", () => {
     const tools = await discoverMcpTools(server);
 
     expect(tools.map((tool) => tool.toolName)).toEqual(["browser.navigate", "browser.extract"]);
+  });
+
+  it("fails closed when stdio tools/list returns a JSON-RPC error", async () => {
+    let error: Error | undefined;
+    try {
+      await discoverMcpTools(createTestServer(MCP_TOOL_LIST_ERROR_SCRIPT));
+    } catch (candidate) {
+      error = candidate as Error;
+    }
+
+    expect(error?.message).toContain("MCP tools/list failed");
+    expect(error?.message).toContain("HTTP 401");
+    expect(error?.message).toContain("[REDACTED]");
+    expect(error?.message).not.toContain("secret-token-value-1234567890");
+  });
+
+  it("fails closed when stdio tools/list omits its tools array", async () => {
+    await expect(discoverMcpTools(createTestServer(MCP_TOOL_LIST_MALFORMED_SCRIPT))).rejects.toThrow(
+      "did not return a tools array",
+    );
+  });
+
+  it("fails closed when remote tools/list returns a JSON-RPC error", async () => {
+    await withRemoteMcpHttpServer(
+      ({ message, response }) => {
+        if (message.method === "initialize") {
+          response
+            .writeHead(200, {
+              "content-type": "application/json",
+              "mcp-session-id": "remote-error-session",
+            })
+            .end(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                id: message.id,
+                result: {
+                  protocolVersion: "2025-06-18",
+                  capabilities: { tools: {} },
+                  serverInfo: { name: "remote-error", version: "1.0.0" },
+                },
+              }),
+            );
+          return;
+        }
+        if (message.method === "notifications/initialized") {
+          response.writeHead(202).end();
+          return;
+        }
+        response.writeHead(200, { "content-type": "application/json" }).end(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: message.id,
+            error: { code: -32603, message: "remote discovery denied" },
+          }),
+        );
+      },
+      async (url) => {
+        await expect(
+          discoverMcpTools(createRemoteTestServer(url), 1000, { networkAllowlist: [new URL(url).host] }),
+        ).rejects.toThrow("remote discovery denied");
+      },
+    );
   });
 
   it("discovers tools from a remote streamable HTTP MCP server through the network allowlist", async () => {

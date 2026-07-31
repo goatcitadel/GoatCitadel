@@ -33,6 +33,9 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
   const verificationTarget = resolveVerificationTargetContext();
   const visualOperatorToken = "verification-visual-regression-operator-token";
   const updateBaselines = maybeParseBool(options.updateBaselines, false);
+  const traceRetentionProbe = parseVisualTraceRetentionProbe(
+    options.traceRetentionProbe ?? process.env.GOATCITADEL_VERIFY_VISUAL_TRACE_RETENTION_PROBE,
+  );
   const scenarioLane = updateBaselines ? "visual-rebaseline" : "visual-regression";
   const scenarioTitleSuffix = updateBaselines ? "baseline refresh" : "baseline renders";
   const visualRoutes = filterVisualItemsBySlug(
@@ -45,6 +48,12 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
     process.env.GOATCITADEL_VERIFY_VISUAL_VARIANT_SLUGS,
     "visual variant",
   );
+  assertVisualTraceRetentionProbeScope({
+    enabled: traceRetentionProbe,
+    updateBaselines,
+    routeCount: visualRoutes.length,
+    variantCount: visualVariants.length,
+  });
   if (!updateBaselines) {
     await assertVisualBaselineCoverage(context, { packageName: verificationTarget.packageName });
   }
@@ -52,6 +61,8 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
     includeUi: true,
     gatewayMode: "built",
     uiMode: "preview",
+    gatewayEnvOmit: options.secretEnvKeys,
+    uiEnvOmit: options.secretEnvKeys,
     gatewayEnv: {
       GOATCITADEL_AUTH_MODE: "token",
       GOATCITADEL_AUTH_TOKEN: visualOperatorToken,
@@ -174,7 +185,8 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
                     updateBaselines,
                     packageName: verificationTarget.packageName,
                   });
-                  const failed = comparison.diffRatio > VISUAL_DIFF_RATIO_THRESHOLD;
+                  const thresholdExceeded = comparison.diffRatio > VISUAL_DIFF_RATIO_THRESHOLD;
+                  const failed = thresholdExceeded || traceRetentionProbe;
                   const comparisonArtifacts = {
                     ...artifacts,
                     screenshots: [...artifacts.screenshots, ...comparison.screenshots],
@@ -183,14 +195,17 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
                   const traceArtifact = failed ? await trace.retain().catch(() => null) : null;
                   return {
                     status: failed ? "failed" : "passed",
-                    error: failed
-                      ? `visual diff ratio ${comparison.diffRatio.toFixed(4)} exceeded threshold ${VISUAL_DIFF_RATIO_THRESHOLD}`
-                      : undefined,
+                    error: traceRetentionProbe
+                      ? `visual trace-retention probe forced a controlled failure after diff ratio ${comparison.diffRatio.toFixed(4)}`
+                      : thresholdExceeded
+                        ? `visual diff ratio ${comparison.diffRatio.toFixed(4)} exceeded threshold ${VISUAL_DIFF_RATIO_THRESHOLD}`
+                        : undefined,
                     metrics: {
                       route: route.href,
                       variant: variant.slug,
                       diffRatio: comparison.diffRatio,
                       changedPixels: comparison.changedPixels,
+                      traceRetentionProbe,
                       consoleErrors: browserSanity.consoleErrors.length,
                       pageErrors: browserSanity.pageErrors.length,
                     },
@@ -239,6 +254,37 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
   } finally {
     await stopVerificationStack(stack);
   }
+}
+
+export function assertVisualTraceRetentionProbeScope({ enabled, updateBaselines, routeCount, variantCount }) {
+  if (!enabled) {
+    return;
+  }
+  if (updateBaselines) {
+    throw new Error("visual trace-retention probe cannot run while updating baselines");
+  }
+  if (routeCount !== 1 || variantCount !== 1) {
+    throw new Error("visual trace-retention probe requires exactly one filtered route and one filtered variant");
+  }
+}
+
+export function parseVisualTraceRetentionProbe(value) {
+  if (value === undefined || value === null) {
+    return false;
+  }
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["1", "true", "yes", "on"].includes(normalized)) {
+      return true;
+    }
+    if (["0", "false", "no", "off"].includes(normalized)) {
+      return false;
+    }
+  }
+  throw new Error("GOATCITADEL_VERIFY_VISUAL_TRACE_RETENTION_PROBE must be an explicit true/false boolean");
 }
 
 export async function prepareVisualScenarioState(page, route) {

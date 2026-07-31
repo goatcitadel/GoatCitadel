@@ -28,11 +28,13 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
     forceVerificationUiPackage,
     installMissionControlNextBrowserState,
     path,
+    prepareVerificationRuntime,
     relativeToRun,
     requestJson,
     restartGatewayProcess,
     runScenario,
     setBrowserCorrelation,
+    startDeterministicLlmStub,
     startVerificationStack,
     startVerificationUiProcess,
     stopProcess,
@@ -40,22 +42,33 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
     waitForDurableRunStatus,
     waitForVerificationRouteReady,
     writeJson,
+    writeDeterministicLlmProviderConfig,
   } = deps;
 
   let stack;
+  let runtimeRoot;
+  let llmStub;
   const restoreUiPackage = forceVerificationUiPackage(NEXT_UI_PACKAGE);
   // Identifiers recovered by the backend-truth scenario and consumed by the
   // (conditional) shell cross-check scenario, which asserts against the SAME
   // recovered approval it would have observed inline.
   let durableTruth = null;
   try {
+    runtimeRoot = await prepareVerificationRuntime(`${context.runId}-runtime-truth`);
+    llmStub = await startDeterministicLlmStub({
+      replyText: "Verification restart reply.",
+      expectedAuthorization: `Bearer ${VERIFICATION_STUB_LLM_KEY}`,
+    });
+    await writeDeterministicLlmProviderConfig(runtimeRoot, llmStub.baseUrl);
     stack = await startVerificationStack(context, {
       includeUi: false,
+      runtimeRoot,
       gatewayEnv: {
         GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
         GOATCITADEL_DURABLE_FOUNDATION_ENABLED: "true",
         GOATCITADEL_FEATURE_DURABLE_KERNEL_V1_ENABLED: "true",
         GOATCITADEL_CODE_MODE_SANDBOX_REQUIRED: "false",
+        GOATCITADEL_VERIFY_STUB_LLM_KEY: VERIFICATION_STUB_LLM_KEY,
       },
     });
     await ensureOnboardingComplete(stack.gatewayUrl, "verification-runtime-truth");
@@ -105,12 +118,18 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
         );
         assertOk(beforeRestart, "read runtime-truth durable run before restart");
 
+        const providerDispatchesBeforeRestart = llmStub.completionDispatches();
+        const gatewayBeforeRestart = ownedGatewayProcessIdentity(stack);
+
         stack.gateway = await restartGatewayProcess(context, stack, {
           GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
           GOATCITADEL_DURABLE_FOUNDATION_ENABLED: "true",
           GOATCITADEL_FEATURE_DURABLE_KERNEL_V1_ENABLED: "true",
           GOATCITADEL_CODE_MODE_SANDBOX_REQUIRED: "false",
+          GOATCITADEL_VERIFY_STUB_LLM_KEY: VERIFICATION_STUB_LLM_KEY,
         });
+        const gatewayAfterRestart = ownedGatewayProcessIdentity(stack);
+        assertOwnedGatewayRestart(gatewayBeforeRestart, gatewayAfterRestart);
 
         const approved = await requestJson(stack.gatewayUrl, "/api/v1/chat/tools/approve", {
           method: "POST",
@@ -127,7 +146,14 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
           );
         }
 
-        const durableRun = await waitForDurableRunStatus(stack.gatewayUrl, durableRunId, ["running", "completed"]);
+        const durableRun = await waitForDurableRunStatus(stack.gatewayUrl, durableRunId, ["completed"]);
+        const providerDispatchesAfterResume = llmStub.completionDispatches();
+        const resumedProviderDispatches = providerDispatchesAfterResume - providerDispatchesBeforeRestart;
+        if (resumedProviderDispatches < 1) {
+          throw new Error(
+            `runtime-truth expected a deterministic provider dispatch after resume, observed ${resumedProviderDispatches}`,
+          );
+        }
         const lifecycle = await requestJson(
           stack.gatewayUrl,
           `/api/v1/runtime/lifecycle?approvalId=${encodeURIComponent(approvalId)}`,
@@ -143,9 +169,23 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
           seeded: seeded.body,
           approvalSeed: approvalSeed.body,
           beforeRestart: beforeRestart.body,
+          gatewayRestart: {
+            before: gatewayBeforeRestart,
+            after: gatewayAfterRestart,
+            sameLoopbackEndpoint: gatewayBeforeRestart.gatewayUrl === gatewayAfterRestart.gatewayUrl,
+          },
           approved: approved.body,
           durableRun: durableRun.body,
           lifecycle: lifecycle.body,
+          deterministicProvider: {
+            providerId: llmStub.providerId,
+            model: llmStub.model,
+            baseUrl: llmStub.baseUrl,
+            completionDispatchesBeforeRestart: providerDispatchesBeforeRestart,
+            completionDispatchesAfterResume: providerDispatchesAfterResume,
+            resumedCompletionDispatches: resumedProviderDispatches,
+            requests: llmStub.requestSummaries(),
+          },
         });
 
         // Publish the recovered identifiers + the acceptable-status set frozen
@@ -155,13 +195,16 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
           sessionId,
           approvalId,
           durableRunId,
-          acceptableStatuses: [...new Set([durableRun.body?.status, "running", "completed"].filter(Boolean))],
+          acceptableStatuses: ["completed"],
         };
 
         return {
           status: "passed",
           metrics: {
             durableStatus: durableRun.body?.status,
+            gatewayPidBefore: gatewayBeforeRestart.pid,
+            gatewayPidAfter: gatewayAfterRestart.pid,
+            resumedProviderDispatches,
           },
           artifacts: {
             diagnostics: [relativeToRun(context, outPath)],
@@ -302,8 +345,37 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
   } finally {
     if (stack) {
       await stopVerificationStack(stack);
+    } else if (runtimeRoot) {
+      await stopVerificationStack({ runtimeRoot });
     }
+    await llmStub?.close().catch(() => undefined);
     restoreUiPackage();
+  }
+}
+
+const VERIFICATION_STUB_LLM_KEY = "verification-stub-key";
+
+function ownedGatewayProcessIdentity(stack) {
+  return {
+    pid: stack?.gateway?.child?.pid,
+    gatewayUrl: stack?.gatewayUrl,
+  };
+}
+
+export function assertOwnedGatewayRestart(before, after) {
+  if (!Number.isSafeInteger(before?.pid) || before.pid <= 0) {
+    throw new Error("runtime-truth did not capture the owned Gateway process before restart");
+  }
+  if (!Number.isSafeInteger(after?.pid) || after.pid <= 0) {
+    throw new Error("runtime-truth did not capture the owned Gateway process after restart");
+  }
+  if (before.pid === after.pid) {
+    throw new Error(`runtime-truth Gateway restart reused process ${before.pid}`);
+  }
+  if (!before.gatewayUrl || before.gatewayUrl !== after.gatewayUrl) {
+    throw new Error(
+      `runtime-truth Gateway restart changed endpoint from ${before?.gatewayUrl ?? "unknown"} to ${after?.gatewayUrl ?? "unknown"}`,
+    );
   }
 }
 

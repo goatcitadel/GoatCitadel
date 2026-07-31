@@ -318,7 +318,11 @@ function attachInput(harness: Harness, itemId = "item-1") {
   };
 }
 
-describe("HX-407 C4 external source route-service composition", () => {
+// These cases compose the production route factory over real storage, CAS reads,
+// and approval snapshots. Under v8 coverage the file runs about 46 seconds and its
+// individual cases exceed the 15-second default, so the suite carries an explicit
+// budget rather than failing the coverage lane on instrumentation cost.
+describe("HX-407 C4 external source route-service composition", { timeout: 120_000 }, () => {
   it("composes attach, durable incarnation-bearing reload, exact-byte reads, and CAS detach over the production factory", async () => {
     const harness = await createHarness();
     expect(harness.service.supportsChatAttachments()).toBe(true);

@@ -532,6 +532,37 @@ describe("GatewayService loop 22 durable and async lifecycle helpers", () => {
     expect(gateway.approvalExplainer.explainApproval).toHaveBeenCalledTimes(1);
   });
 
+  it("contains an approval failure whose realtime error projection also throws", async () => {
+    const failure = new Error("postgres connection terminated");
+    const gateway = createGatewayHarness({
+      approvalExplainer: {
+        explainApproval: vi.fn(async () => {
+          throw failure;
+        }),
+      },
+      buildApprovalRealtimeLinks: vi.fn(() => ({ approvalId: "approval-pg" })),
+      publishRealtime: vi.fn(() => {
+        throw failure;
+      }),
+    });
+    const unhandled: unknown[] = [];
+    const onUnhandled = (error: unknown): void => {
+      unhandled.push(error);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      GatewayService.prototype.scheduleApprovalExplanation.call(gateway, {
+        approvalId: "approval-pg",
+      } as ApprovalRequest);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(gateway.backgroundTasks.size).toBe(0);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
   it("schedules orchestration memory context and reports context composition failures", async () => {
     const phase = {
       phaseId: "phase-1",

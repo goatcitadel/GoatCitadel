@@ -9,6 +9,7 @@ import type { DatabaseClient } from "./db.js";
 import { createDatabase } from "./sqlite.js";
 import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
 import { ChatDelegationStepRepository } from "./chat-delegation-step-repo.js";
+import { ToolGrantRepository } from "./tool-grant-repo.js";
 
 const createdFiles: string[] = [];
 
@@ -24,11 +25,11 @@ afterEach(() => {
   }
 });
 
-function createStore(): { db: DatabaseClient; repo: ChatDelegationStepRepository } {
+function createStore(): { db: DatabaseClient; dbPath: string; repo: ChatDelegationStepRepository } {
   const dbPath = path.join(os.tmpdir(), `goatcitadel-chat-delegation-step-${randomUUID()}.db`);
   createdFiles.push(dbPath);
   const db = createDatabase({ dbPath });
-  return { db, repo: new ChatDelegationStepRepository(db) };
+  return { db, dbPath, repo: new ChatDelegationStepRepository(db) };
 }
 
 function citation(): ChatCitationRecord {
@@ -167,6 +168,77 @@ describe("ChatDelegationStepRepository", () => {
     );
     assert.throws(() => repo.get("missing-step"), /Delegation step missing-step not found/);
     assert.throws(() => repo.patch("missing-step", { status: "failed" }), /Delegation step missing-step not found/);
+  });
+
+  it("reconstructs delegated scope and child tool grants from durable SQLite state", () => {
+    const { db, dbPath, repo } = createStore();
+    const grants = new ToolGrantRepository(db);
+    const childSessionId = "child-scope-restart";
+    const delegatedScope = {
+      rootPath: "C:/workspace",
+      approvedPaths: ["C:/workspace/src"],
+      scopeHash: "scope-hash-restart",
+      dispatchGeneration: "delegation-dispatch-generation-restart",
+      updatedAt: "2026-04-19T00:00:00.000Z",
+    };
+
+    repo.create({
+      stepId: "step-scope-restart",
+      runId: "run-scope-restart",
+      role: "Coder",
+      index: 0,
+      status: "running",
+      childSessionId,
+      startedAt: "2026-04-19T00:00:00.000Z",
+    });
+    repo.patch("step-scope-restart", { scopeControl: delegatedScope });
+    grants.create({
+      toolPattern: "browser.search",
+      decision: "allow",
+      scope: "session",
+      scopeRef: childSessionId,
+      grantType: "persistent",
+      constraints: { allowedHosts: ["docs.example.test"] },
+      createdBy: "system-delegated-session-inherit",
+    });
+    grants.createTtlForDuration(
+      {
+        toolPattern: "submit_work_result",
+        decision: "allow",
+        scope: "session",
+        scopeRef: childSessionId,
+        createdBy: "delegated-work-result-envelope",
+      },
+      5 * 60 * 1000,
+    );
+    db.close();
+
+    const restartedDb = createDatabase({ dbPath });
+    try {
+      const rawScope = restartedDb
+        .prepare("SELECT scope_control_json FROM chat_delegation_steps WHERE step_id = ?")
+        .get("step-scope-restart") as { scope_control_json: string } | undefined;
+      assert.equal(rawScope?.scope_control_json, JSON.stringify(delegatedScope));
+
+      const restartedSteps = new ChatDelegationStepRepository(restartedDb);
+      assert.deepEqual(restartedSteps.get("step-scope-restart").scopeControl, delegatedScope);
+
+      const restartedGrants = new ToolGrantRepository(restartedDb).listActive("session", childSessionId);
+      const inheritedGrant = restartedGrants.find((grant) => grant.toolPattern === "browser.search");
+      assert.ok(inheritedGrant);
+      assert.equal(inheritedGrant.decision, "allow");
+      assert.equal(inheritedGrant.grantType, "persistent");
+      assert.deepEqual(inheritedGrant.constraints, { allowedHosts: ["docs.example.test"] });
+      assert.equal(inheritedGrant.createdBy, "system-delegated-session-inherit");
+
+      const resultGrant = restartedGrants.find((grant) => grant.toolPattern === "submit_work_result");
+      assert.ok(resultGrant);
+      assert.equal(resultGrant.decision, "allow");
+      assert.equal(resultGrant.grantType, "ttl");
+      assert.equal(resultGrant.createdBy, "delegated-work-result-envelope");
+    } finally {
+      restartedDb.close();
+    }
   });
 
   it("preserves a disjoint writer that commits between a generic patch read and write", () => {

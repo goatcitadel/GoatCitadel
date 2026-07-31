@@ -11,13 +11,13 @@
 // test); this entrypoint owns process spawning, the hermetic PostgreSQL
 // lifecycle, the artifact, and the honest exit code.
 //
-// Live PostgreSQL is EXECUTED, never skipped: the lane honors a provided
-// GOATCITADEL_TEST_POSTGRES_URL, otherwise it provisions a hermetic cluster
-// (initdb/pg_ctl/psql; PGDATA in the OS temp directory, random identity-checked
-// port, detached start, readiness-polled, fast-stopped and removed on
-// teardown). If neither a URL nor local PostgreSQL binaries exist, the live-PG
-// check FAILS — the closure packet calls an unset URL "an explicit C4 HOLD,
-// not an accepted skip".
+// Live PostgreSQL is EXECUTED, never skipped: the lane provisions its own
+// hermetic cluster (initdb/pg_ctl/psql; PGDATA in the OS temp directory,
+// random identity-checked port, detached start, readiness-polled, fast-stopped
+// and removed on teardown). Inherited database URLs are scrubbed with every
+// other credential-bearing environment variable; only this owning process may
+// pass its just-created loopback URL to the isolated storage proof. If local
+// PostgreSQL binaries do not exist, the live-PG check FAILS rather than skips.
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
@@ -35,6 +35,7 @@ import {
   scanForProductionProofGate,
   stripAnsi,
 } from "./lib/scenarios/external-sources-lane.mjs";
+import { createExternalSourcesStandaloneIsolation } from "./lib/scenarios/external-sources-environment.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
 const isWindows = process.platform === "win32";
@@ -48,17 +49,22 @@ const artifactRoot = path.join(
 );
 const logsRoot = path.join(artifactRoot, "logs");
 fs.mkdirSync(logsRoot, { recursive: true });
+const standaloneIsolation = await createExternalSourcesStandaloneIsolation();
+const isolatedChildEnv = standaloneIsolation.buildChildEnv();
 
 function pnpmCommandName() {
   return isWindows ? "pnpm.cmd" : "pnpm";
 }
 
-function spawnChecked(command, args, envOverride = {}) {
+function spawnChecked(command, args, options = {}) {
   const spawnCommand = isWindows && /\.(cmd|bat)$/i.test(command) ? windowsCmdPath : command;
   const spawnArgs = isWindows && /\.(cmd|bat)$/i.test(command) ? ["/d", "/s", "/c", command, ...args] : args;
+  const env = options.hermeticPostgresUrl
+    ? standaloneIsolation.buildHermeticPostgresChildEnv(options.hermeticPostgresUrl)
+    : isolatedChildEnv;
   return spawnSync(spawnCommand, spawnArgs, {
     cwd: repoRoot,
-    env: { ...process.env, ...envOverride },
+    env,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
     windowsHide: true,
@@ -148,7 +154,11 @@ function resolvePostgresBinDir() {
   for (const candidate of candidates) {
     if (fs.existsSync(path.join(candidate, isWindows ? "pg_ctl.exe" : "pg_ctl"))) return candidate;
   }
-  const onPath = spawnSync(isWindows ? "where" : "which", ["pg_ctl"], { encoding: "utf8", windowsHide: true });
+  const onPath = spawnSync(isWindows ? "where" : "which", ["pg_ctl"], {
+    env: isolatedChildEnv,
+    encoding: "utf8",
+    windowsHide: true,
+  });
   if (onPath.status === 0) {
     const first = String(onPath.stdout ?? "")
       .split(/\r?\n/)
@@ -187,6 +197,7 @@ function provisionHermeticPostgres() {
   const teardownFailedCluster = (postmasterStarted) => {
     if (postmasterStarted) {
       spawnSync(tool("pg_ctl"), ["-D", dataDir, "-m", "immediate", "stop"], {
+        env: isolatedChildEnv,
         encoding: "utf8",
         windowsHide: true,
         timeout: 30_000,
@@ -195,6 +206,7 @@ function provisionHermeticPostgres() {
     removeDataDir();
   };
   const initdb = spawnSync(tool("initdb"), ["-D", dataDir, "-U", "gcproof", "-A", "trust", "-E", "UTF8"], {
+    env: isolatedChildEnv,
     encoding: "utf8",
     windowsHide: true,
   });
@@ -208,7 +220,7 @@ function provisionHermeticPostgres() {
   const started = spawn(
     tool("pg_ctl"),
     ["-D", dataDir, "-o", `-p ${port} -c listen_addresses=127.0.0.1`, "-l", path.join(dataDir, "log.txt"), "start"],
-    { detached: true, stdio: "ignore", windowsHide: true },
+    { detached: true, env: isolatedChildEnv, stdio: "ignore", windowsHide: true },
   );
   started.unref();
   const psqlArgs = (sql) => [
@@ -230,7 +242,11 @@ function provisionHermeticPostgres() {
     // Identity-checked readiness: the responding server must be OUR cluster
     // (data_directory equals the just-initialized PGDATA), not a stale
     // postmaster that happens to hold the same port.
-    const probe = spawnSync(tool("psql"), psqlArgs("SHOW data_directory"), { encoding: "utf8", windowsHide: true });
+    const probe = spawnSync(tool("psql"), psqlArgs("SHOW data_directory"), {
+      env: isolatedChildEnv,
+      encoding: "utf8",
+      windowsHide: true,
+    });
     if (probe.status === 0) {
       const reported = String(probe.stdout ?? "")
         .trim()
@@ -245,7 +261,10 @@ function provisionHermeticPostgres() {
         error: `port 127.0.0.1:${port} is answered by a foreign PostgreSQL (data_directory ${reported}); refusing to run the proof against it.`,
       };
     }
-    spawnSync(process.execPath, ["-e", "setTimeout(() => process.exit(0), 1000)"], { windowsHide: true });
+    spawnSync(process.execPath, ["-e", "setTimeout(() => process.exit(0), 1000)"], {
+      env: isolatedChildEnv,
+      windowsHide: true,
+    });
   }
   if (!ready) {
     teardownFailedCluster(true);
@@ -255,6 +274,7 @@ function provisionHermeticPostgres() {
     url: `postgresql://gcproof@127.0.0.1:${port}/postgres`,
     stop: () => {
       spawnSync(tool("pg_ctl"), ["-D", dataDir, "-m", "fast", "stop"], {
+        env: isolatedChildEnv,
         encoding: "utf8",
         windowsHide: true,
         timeout: 60_000,
@@ -275,9 +295,9 @@ function recordResult(check, result) {
   checkResults.set(check.id, { id: check.id, title: check.title, ...result });
 }
 
-function runSpawnCheck(check, envOverride = {}) {
+function runSpawnCheck(check, spawnOptions = {}) {
   const checkStartedAt = Date.now();
-  const result = spawnChecked(pnpmCommandName(), check.args, envOverride);
+  const result = spawnChecked(pnpmCommandName(), check.args, spawnOptions);
   writeCheckLogs(check.id, result.stdout, result.stderr);
   if (result.error) {
     recordResult(check, { status: "failed", error: String(result.error), durationMs: Date.now() - checkStartedAt });
@@ -347,7 +367,11 @@ for (const [index, check] of checks.entries()) {
     };
     try {
       const { runExternalSourcesBrowserFlow } = await import("./lib/scenarios/external-sources-browser-flow.mjs");
-      const flowResult = await runExternalSourcesBrowserFlow({ artifactRoot, log: capture });
+      const flowResult = await runExternalSourcesBrowserFlow({
+        artifactRoot,
+        log: capture,
+        secretEnvKeys: standaloneIsolation.scrubbedSecretEnvKeys,
+      });
       exitCode = flowResult.combosFailed === 0 && flowResult.combosPassed === flowResult.combosPlanned ? 0 : 1;
     } catch (error) {
       exitCode = 1;
@@ -387,7 +411,6 @@ for (const [index, check] of checks.entries()) {
     continue;
   }
   if (check.kind === "live-postgres") {
-    const providedUrl = process.env.GOATCITADEL_TEST_POSTGRES_URL?.trim();
     const storageTestArgs = [
       "--filter",
       "@goatcitadel/storage",
@@ -402,36 +425,30 @@ for (const [index, check] of checks.entries()) {
     // proof failure. Genuine assertion failures never match and never retry.
     const connectionResetPattern =
       /ECONNRESET|Connection terminated|server closed the connection|terminated unexpectedly/iu;
-    const maxAttempts = providedUrl ? 1 : 2;
+    const maxAttempts = 2;
     let attempt = 0;
     let outcome;
     while (attempt < maxAttempts) {
       attempt += 1;
-      let url = providedUrl;
-      if (url) {
-        livePostgresMode = "provided_env_url";
-        process.stdout.write("  using provided GOATCITADEL_TEST_POSTGRES_URL\n");
-      } else {
-        process.stdout.write(`  provisioning hermetic PostgreSQL cluster (attempt ${attempt}/${maxAttempts})...\n`);
-        const provisioned = provisionHermeticPostgres();
-        if (provisioned.error) {
-          recordResult(check, {
-            status: "failed",
-            failureNote:
-              `${provisioned.error} The closure packet treats an unexecuted live-PostgreSQL proof as an explicit ` +
-              "C4 HOLD, not an accepted skip: provide GOATCITADEL_TEST_POSTGRES_URL or local PostgreSQL binaries.",
-          });
-          process.stdout.write(`  -> FAIL (${provisioned.error})\n`);
-          outcome = { status: "failed", combined: "" };
-          break;
-        }
-        url = provisioned.url;
-        hermeticStop = provisioned.stop;
-        livePostgresMode = "hermetic_cluster";
-        process.stdout.write(`  hermetic cluster ready at ${url}\n`);
+      process.stdout.write(`  provisioning hermetic PostgreSQL cluster (attempt ${attempt}/${maxAttempts})...\n`);
+      const provisioned = provisionHermeticPostgres();
+      if (provisioned.error) {
+        recordResult(check, {
+          status: "failed",
+          failureNote:
+            `${provisioned.error} The closure packet treats an unexecuted live-PostgreSQL proof as an explicit ` +
+            "C4 HOLD, not an accepted skip: install local PostgreSQL binaries.",
+        });
+        process.stdout.write(`  -> FAIL (${provisioned.error})\n`);
+        outcome = { status: "failed", combined: "" };
+        break;
       }
+      const url = provisioned.url;
+      hermeticStop = provisioned.stop;
+      livePostgresMode = "hermetic_cluster";
+      process.stdout.write(`  hermetic cluster ready at ${url}\n`);
       try {
-        outcome = runSpawnCheck({ ...check, args: storageTestArgs }, { GOATCITADEL_TEST_POSTGRES_URL: url });
+        outcome = runSpawnCheck({ ...check, args: storageTestArgs }, { hermeticPostgresUrl: url });
       } finally {
         if (hermeticStop) {
           try {
@@ -495,6 +512,7 @@ const manifest = {
   startedAt: startedAt.toISOString(),
   finishedAt: new Date().toISOString(),
   livePostgres: livePostgresMode,
+  scrubbedSecretEnvKeyCount: standaloneIsolation.scrubbedSecretEnvKeys.length,
   migrationChange: "none",
   currentDependencyMigrationHeads: staticDetail?.currentDependencyMigrationHeads,
   rowCompletionMatrix: rowStatuses,

@@ -866,6 +866,37 @@ describe("agentSendChatMessage", () => {
     expect(host.endActiveChatTurnExecution).toHaveBeenCalled();
   });
 
+  it("places delegated canonical usage task ownership on the ingest payload", async () => {
+    const host = createHost({
+      assistantContent: "Delegated answer.",
+      assistantModel: "primary-model",
+      modelUsageEventIds: ["usage-child-1"],
+      turnTrace: createTrace({ status: "completed" }),
+    });
+
+    await agentSendChatMessage(host, "session-1", {
+      content: "delegated work",
+      mode: "chat",
+      policyTaskId: "chat-orchestration:parent-turn",
+    });
+
+    const payload = vi.mocked(host.ingestEvent).mock.calls[0]?.[1];
+    expect(payload).toEqual(
+      expect.objectContaining({
+        taskId: "chat-orchestration:parent-turn",
+        usage: expect.objectContaining({
+          canonicalUsageEventIds: ["usage-child-1"],
+          canonicalUsageOwner: {
+            workspaceId: "default",
+            sessionId: "session-1",
+            turnId: expect.any(String),
+          },
+        }),
+      }),
+    );
+    expect(payload?.usage?.canonicalUsageOwner).not.toHaveProperty("taskId");
+  });
+
   it("does not run legacy provider schedulers for delegated-child non-stream turns", async () => {
     const host = createHost({
       assistantContent: "Child answer.",

@@ -15,7 +15,12 @@ import {
   parseAppRoute,
   type ReleaseSurfaceStatus,
 } from "./route-model";
-import { adaptLegacyUrl, coerceLegacyHrefToNext, resolveRouteFromLocation } from "./legacy-route-adapter";
+import {
+  adaptLegacyUrl,
+  coerceCompatibilityHrefToNext,
+  coerceLegacyHrefToNext,
+  resolveRouteFromLocation,
+} from "./legacy-route-adapter";
 
 describe("legacy route adapter", () => {
   it("maps legacy work surface tabs into the new areas", () => {
@@ -123,6 +128,27 @@ describe("legacy route adapter", () => {
     ).toBe("/chat?sessionId=s-1&turnId=t-2&runId=r-3&artifactId=a-4&approvalId=ap-5&projectId=p-6");
     expect(coerceLegacyHrefToNext("http://goatcitadel.local/")).toBeNull();
     expect(adaptLegacyUrl(new URL("http://goatcitadel.local/?surface=unknown"))).toMatchObject({ area: "chat" });
+  });
+
+  it("canonicalizes direct compatibility paths while preserving supported route state and fragments", () => {
+    expect(
+      coerceCompatibilityHrefToNext("http://goatcitadel.local/cowork?sessionId=session-1&turnId=turn-1#composer"),
+    ).toBe("/chat?sessionId=session-1&turnId=turn-1#composer");
+    expect(coerceCompatibilityHrefToNext("http://goatcitadel.local/code/?sessionId=code-1#run-detail")).toBe(
+      "/chat?sessionId=code-1#run-detail",
+    );
+    expect(coerceCompatibilityHrefToNext("http://goatcitadel.local/settings/safety?view=advanced#trust-policy")).toBe(
+      "/settings/permissions?view=advanced#trust-policy",
+    );
+    expect(coerceCompatibilityHrefToNext("http://goatcitadel.local/chat?sessionId=session-1#composer")).toBeNull();
+  });
+
+  it("preserves fragments while consuming legacy routing parameters", () => {
+    expect(
+      coerceCompatibilityHrefToNext(
+        "http://goatcitadel.local/?space=operate&page=surface&surface=chat&sessionId=session-1#composer",
+      ),
+    ).toBe("/chat?sessionId=session-1#composer");
   });
 });
 

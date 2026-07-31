@@ -10,6 +10,7 @@ import { POSTGRES_MIGRATIONS } from "./postgres/migrations.js";
 import { PostgresSyncDatabaseClient } from "./postgres/sync.js";
 import { ChatSessionLifecycleRepository } from "./chat-session-lifecycle-repo.js";
 import { ChatMessageRepository } from "./chat-message-repo.js";
+import { DurableRunEventRepository } from "./durable-run-event-repo.js";
 import { DurableRunRepository } from "./durable-run-repo.js";
 import { SessionControlRepository } from "./session-control-repo.js";
 import { SessionMutationAdmissionRepository } from "./session-mutation-admission-repo.js";
@@ -181,6 +182,28 @@ describe("SessionMutationAdmissionRepository live PostgreSQL", () => {
             recovered.listEvents(winningId).map((event) => event.eventSequence),
             [1, 2],
           );
+          const nextTurn = recovered.admit({
+            workspaceId: active.workspaceId,
+            sessionId: active.sessionId,
+            expectedSessionIncarnationId: active.sessionIncarnationId,
+            turnId: `turn-${suffix}-next`,
+            runtimeOwnerId: `runtime-${suffix}-next`,
+            admissionKind: "turn_write",
+            aggregateRevision: active.aggregateRevision,
+            controllerGeneration: active.controllerGeneration,
+            actorKind: "operator",
+            actorId: "operator-a",
+            operation: "chat.turn.execute",
+            materialSha256: "c".repeat(64),
+            idempotencyKey: `admission:${sessionId}:next`,
+            correlationId: `correlation:admission:${sessionId}:next`,
+          });
+          assert.equal(nextTurn.disposition, "created");
+          assert.equal(nextTurn.admission.status, "active");
+          assert.deepEqual(
+            recovered.listActive(active.workspaceId, active.sessionId).map((admission) => admission.admissionId),
+            [nextTurn.admission.admissionId],
+          );
 
           const completedSessionId = `${sessionId}-completed`;
           new ChatSessionLifecycleRepository(recoveredDb).initialize({
@@ -316,6 +339,26 @@ describe("SessionMutationAdmissionRepository live PostgreSQL", () => {
               leaseRevision: completedAdmission.runtimeLeaseRevision!,
             },
           });
+          const recoveredDurableBinding = recovered.findDurableRunBinding({
+            admissionId: completedAdmission.admissionId,
+            workspaceId: completedAdmission.workspaceId,
+            sessionId: completedAdmission.sessionId,
+            sessionIncarnationId: completedAdmission.sessionIncarnationId,
+            turnId: completedAdmission.turnId!,
+          });
+          assert.ok(recoveredDurableBinding);
+          assert.equal(recoveredDurableBinding.durableRunId, completedRunId);
+          assert.equal(recoveredDurableBinding.admissionId, completedAdmission.admissionId);
+          assert.equal(recoveredDurableBinding.sessionIncarnationId, completedAdmission.sessionIncarnationId);
+          assert.throws(() =>
+            recovered.findDurableRunBinding({
+              admissionId: completedAdmission.admissionId,
+              workspaceId: "workspace-wrong",
+              sessionId: completedAdmission.sessionId,
+              sessionIncarnationId: completedAdmission.sessionIncarnationId,
+              turnId: completedAdmission.turnId!,
+            }),
+          );
           const childRunIds: string[] = [];
           const completedAt = "2026-07-15T00:02:00.000Z";
           const postCommitGenerationId = `generation-${suffix}-completed`;
@@ -473,6 +516,107 @@ describe("SessionMutationAdmissionRepository live PostgreSQL", () => {
         }
       } finally {
         setupDb?.close();
+        await migrations.close();
+        await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
+        await adminPool.end();
+      }
+    },
+  );
+
+  postgresIt(
+    "keeps raced durable user-input wake events on the shared sequence ledger",
+    { timeout: 300_000 },
+    async () => {
+      assert.ok(connectionString);
+      const suffix = randomUUID().replaceAll("-", "");
+      const schemaName = `hx411_continuation_sequence_${suffix}`;
+      const adminPool = new Pool({ connectionString, max: 2 });
+      const scopedUrl = new URL(connectionString);
+      scopedUrl.searchParams.set("options", `-csearch_path=${schemaName}`);
+      const database = decodeURIComponent(scopedUrl.pathname.replace(/^\//u, "")) || "postgres";
+      const pool = new Pool({ connectionString: scopedUrl.toString(), max: 2 });
+      const migrations = new PostgresDatabaseClient({ connectionString: scopedUrl.toString(), database }, { pool });
+      let db: PostgresSyncDatabaseClient | undefined;
+      try {
+        await adminPool.query(`CREATE SCHEMA ${schemaName}`);
+        await runPostgresMigrations(migrations, POSTGRES_MIGRATIONS);
+        db = new PostgresSyncDatabaseClient({
+          connectionString: scopedUrl.toString(),
+          database,
+          applicationName: `hx411-continuation-sequence-${suffix}`,
+          pool: { max: 1, connectionTimeoutMs: 10_000 },
+        });
+        db.exec(`SET search_path TO ${schemaName}`);
+        const fixture = createPostgresContinuationFixture(db, `sequence-${suffix}`);
+        const events = new DurableRunEventRepository(db);
+        assert.equal(
+          events.append({
+            eventId: `event-waiting-${suffix}`,
+            runId: fixture.runId,
+            eventType: "run_waiting",
+            createdAt: "2026-07-30T00:00:00.000Z",
+          }).sequence,
+          1,
+        );
+
+        const race = await runPostgresContinuationRace(scopedUrl.toString(), database, schemaName, fixture.resolution);
+        assert.deepEqual(
+          race.map((result) => result.disposition).sort(),
+          ["replayed", "resolved"],
+          JSON.stringify(race),
+        );
+        assert.equal(
+          events.append({
+            eventId: `event-started-${suffix}`,
+            runId: fixture.runId,
+            eventType: "run_started",
+            createdAt: "2026-07-30T00:00:02.000Z",
+          }).sequence,
+          3,
+        );
+        assert.deepEqual(
+          events.listByRun(fixture.runId).map((event) => [event.eventType, event.sequence]),
+          [
+            ["run_waiting", 1],
+            ["run_woken", 2],
+            ["run_started", 3],
+          ],
+        );
+        assert.equal(
+          db
+            .prepare(
+              `SELECT COUNT(*) AS count FROM durable_run_events
+               WHERE run_id = @runId AND event_type = 'run_woken'`,
+            )
+            .get<{ count: number }>({ runId: fixture.runId })?.count,
+          1,
+        );
+        db.prepare(
+          `INSERT INTO durable_run_events (
+             event_id, run_id, sequence, event_type, step_key, payload_json, created_at
+           ) VALUES (@eventId, @runId, 4, 'run_waiting', NULL, '{}', @createdAt)`,
+        ).run({
+          eventId: `event-legacy-direct-${suffix}`,
+          runId: fixture.runId,
+          createdAt: "2026-07-30T00:00:03.000Z",
+        });
+        assert.equal(
+          events.append({
+            eventId: `event-healed-${suffix}`,
+            runId: fixture.runId,
+            eventType: "run_started",
+            createdAt: "2026-07-30T00:00:04.000Z",
+          }).sequence,
+          5,
+        );
+        assert.equal(
+          db
+            .prepare("SELECT last_sequence FROM durable_run_event_sequences WHERE run_id = @runId")
+            .get<{ last_sequence: number }>({ runId: fixture.runId })?.last_sequence,
+          5,
+        );
+      } finally {
+        db?.close();
         await migrations.close();
         await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`);
         await adminPool.end();
@@ -834,6 +978,87 @@ interface AdmissionWorkerResult {
   error?: string;
 }
 
+interface ContinuationWorkerResult {
+  ok: boolean;
+  disposition?: "resolved" | "replayed";
+  error?: string;
+}
+
+async function runPostgresContinuationRace(
+  connectionString: string,
+  database: string,
+  schemaName: string,
+  resolution: ReturnType<typeof createPostgresContinuationFixture>["resolution"],
+): Promise<[ContinuationWorkerResult, ContinuationWorkerResult]> {
+  const startSignal = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+  const workers = ["left", "right"].map((contender) =>
+    runPostgresContinuationWorker(connectionString, database, schemaName, resolution, contender, startSignal),
+  ) as [ReturnType<typeof runPostgresContinuationWorker>, ReturnType<typeof runPostgresContinuationWorker>];
+  await Promise.all(workers.map((worker) => worker.ready));
+  const state = new Int32Array(startSignal);
+  Atomics.store(state, 0, 1);
+  Atomics.notify(state, 0, workers.length);
+  return Promise.all(workers.map((worker) => worker.result)) as Promise<
+    [ContinuationWorkerResult, ContinuationWorkerResult]
+  >;
+}
+
+function runPostgresContinuationWorker(
+  connectionString: string,
+  database: string,
+  schemaName: string,
+  resolution: ReturnType<typeof createPostgresContinuationFixture>["resolution"],
+  contender: string,
+  startSignal: SharedArrayBuffer,
+): { ready: Promise<void>; result: Promise<ContinuationWorkerResult> } {
+  const extension = import.meta.url.endsWith(".js") ? ".js" : ".ts";
+  const worker = new Worker(POSTGRES_CONTINUATION_WORKER_SOURCE, {
+    eval: true,
+    workerData: {
+      connectionOptions: {
+        connectionString,
+        database,
+        applicationName: `hx411-continuation-${contender}`,
+        pool: { max: 1, connectionTimeoutMs: 10_000 },
+      },
+      schemaName,
+      resolution,
+      startSignal,
+      repositoryModuleUrl: new URL(`./session-mutation-admission-repo${extension}`, import.meta.url).href,
+      postgresModuleUrl: new URL(`./postgres/sync${extension}`, import.meta.url).href,
+      tsxApiUrl: import.meta.resolve("tsx/esm/api"),
+    },
+  });
+  let resolveReady!: () => void;
+  let rejectReady!: (error: unknown) => void;
+  let resolveResult!: (value: ContinuationWorkerResult) => void;
+  let rejectResult!: (error: unknown) => void;
+  const ready = new Promise<void>((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
+  const result = new Promise<ContinuationWorkerResult>((resolve, reject) => {
+    resolveResult = resolve;
+    rejectResult = reject;
+  });
+  worker.on("message", (message: { kind: "ready" } | { kind: "result"; result: ContinuationWorkerResult }) => {
+    if (message.kind === "ready") resolveReady();
+    else resolveResult(message.result);
+  });
+  worker.once("error", (error) => {
+    rejectReady(error);
+    rejectResult(error);
+  });
+  worker.once("exit", (code) => {
+    if (code !== 0) {
+      const error = new Error(`PostgreSQL continuation worker exited with code ${code}`);
+      rejectReady(error);
+      rejectResult(error);
+    }
+  });
+  return { ready, result };
+}
+
 async function runPostgresAdmissionRace(
   connectionString: string,
   database: string,
@@ -912,6 +1137,41 @@ function runPostgresAdmissionWorker(
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
+
+const POSTGRES_CONTINUATION_WORKER_SOURCE = String.raw`
+  const { parentPort, workerData } = require("node:worker_threads");
+  void (async () => {
+    let db;
+    try {
+      const { tsImport } = await import(workerData.tsxApiUrl);
+      const { SessionMutationAdmissionRepository } = await tsImport(
+        workerData.repositoryModuleUrl,
+        workerData.repositoryModuleUrl,
+      );
+      const { PostgresSyncDatabaseClient } = await tsImport(
+        workerData.postgresModuleUrl,
+        workerData.postgresModuleUrl,
+      );
+      db = new PostgresSyncDatabaseClient(workerData.connectionOptions);
+      db.exec("SET search_path TO " + workerData.schemaName);
+      parentPort.postMessage({ kind: "ready" });
+      const state = new Int32Array(workerData.startSignal);
+      Atomics.wait(state, 0, 0);
+      const value = new SessionMutationAdmissionRepository(db).resolveDurableChatUserInput(workerData.resolution);
+      parentPort.postMessage({
+        kind: "result",
+        result: { ok: true, disposition: value.disposition },
+      });
+    } catch (error) {
+      parentPort.postMessage({
+        kind: "result",
+        result: { ok: false, error: error instanceof Error ? error.message : String(error) },
+      });
+    } finally {
+      if (db) db.close();
+    }
+  })();
+`;
 
 const POSTGRES_ADMISSION_WORKER_SOURCE = String.raw`
   const { parentPort, workerData } = require("node:worker_threads");

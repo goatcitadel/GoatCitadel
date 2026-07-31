@@ -20,18 +20,39 @@
 // an explicitly supported local-inference posture (llm-service SSRF policy).
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
-import { createServer } from "node:http";
 import path from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { randomBytes, randomUUID } from "node:crypto";
 import { chromium } from "playwright";
-import { prepareVerificationRuntime, requestJson, startVerificationStack, stopVerificationStack } from "../runtime.mjs";
+import {
+  buildVerificationProcessEnv,
+  prepareVerificationRuntime,
+  requestJson,
+  startVerificationStack,
+  stopVerificationStack,
+} from "../runtime.mjs";
 import { repoRoot } from "../shared.mjs";
+import {
+  appendTraceArtifact,
+  attachBrowserLogging,
+  captureBrowserArtifacts,
+  setBrowserCorrelation,
+  startBrowserTrace,
+} from "./browser-helpers.mjs";
+import {
+  DETERMINISTIC_LLM_DEFAULT_REPLY,
+  DETERMINISTIC_LLM_KEY_ENV,
+  DETERMINISTIC_LLM_MODEL,
+  DETERMINISTIC_LLM_PROVIDER_ID,
+  startDeterministicLlmStub,
+  writeDeterministicLlmProviderConfig,
+} from "./deterministic-llm-stub.mjs";
+import { resolveExternalSourcesSecretEnvKeys } from "./external-sources-environment.mjs";
 
-const STUB_PROVIDER_ID = "verification-stub";
-const STUB_MODEL = "verification-stub-chat";
-const STUB_REPLY_TEXT = "Verification stub reply.";
-const STUB_KEY_ENV = "GOATCITADEL_VERIFY_STUB_LLM_KEY";
+const STUB_PROVIDER_ID = DETERMINISTIC_LLM_PROVIDER_ID;
+const STUB_MODEL = DETERMINISTIC_LLM_MODEL;
+const STUB_REPLY_TEXT = DETERMINISTIC_LLM_DEFAULT_REPLY;
+const STUB_KEY_ENV = DETERMINISTIC_LLM_KEY_ENV;
 const KNOWLEDGE_APPROVAL_KIND = "external_source.knowledge_snapshot";
 
 /** Closure-packet row 3: light/dark × desktop/mobile. */
@@ -53,14 +74,17 @@ export function formatBrowserFlowSummary(result) {
 export async function runExternalSourcesBrowserFlow({
   artifactRoot,
   log = (line) => process.stdout.write(`${line}\n`),
+  secretEnvKeys,
+  processLogPrefix,
 }) {
+  const resolvedSecretEnvKeys = await resolveExternalSourcesBrowserFlowSecretEnvKeys(secretEnvKeys);
   const runId = `external-sources-browser-${randomBytes(4).toString("hex")}`;
   const context = { artifactRoot, runId };
   await fs.mkdir(path.join(artifactRoot, "diagnostics"), { recursive: true });
   await fs.mkdir(path.join(artifactRoot, "screenshots"), { recursive: true });
 
   const fixtures = await importSyntheticFixtures();
-  const stub = await startStubLlmServer();
+  const stub = await startDeterministicLlmStub();
   let runtimeRoot;
   let stack;
   let browser;
@@ -73,28 +97,23 @@ export async function runExternalSourcesBrowserFlow({
     // dependency graph and drop the Vite dep-optimizer cache so the browser
     // proof always runs against the current sources, never a stale dist (the
     // documented shared-package staleness hazard).
-    ensureUiWorkspaceDependenciesBuilt();
+    ensureUiWorkspaceDependenciesBuilt(resolvedSecretEnvKeys);
     await fs.rm(path.join(repoRoot, "apps", "mission-control-next", "node_modules", ".vite"), {
       recursive: true,
       force: true,
     });
 
     runtimeRoot = await prepareVerificationRuntime(runId);
-    // Run with NO runtime skills: the repo ships a bundled skill whose
-    // frontmatter name (with spaces, `skills/bundled/
-    // goatcitadel-native-safe-self-improvement/SKILL.md`) becomes its skillId,
-    // and the sealed capability profile rejects `skill:<id with spaces>`
-    // capability ids — every routed-context send REQUIRES the sealed profile,
-    // so the send leg fails closed with that skill loaded. This flow proves
-    // the external-sources closure, not the skill hub; the underlying skill
-    // data/loader gap is reported separately by the C4c report.
-    await fs.rm(path.join(runtimeRoot, "skills"), { recursive: true, force: true });
-    await writeStubProviderConfig(runtimeRoot, stub.baseUrl);
+    // Keep the repository's bundled runtime skills in place. The usability
+    // campaign must exercise the same inspectable/callable catalog that ships;
+    // deleting skills here would hide capability-id or sealing regressions.
+    await writeDeterministicLlmProviderConfig(runtimeRoot, stub.baseUrl);
     log(`[browser-flow] stub LLM provider listening at ${stub.baseUrl}`);
 
     stack = await startVerificationStack(context, {
       runtimeRoot,
       includeUi: true,
+      ...buildExternalSourcesProcessOptions({ secretEnvKeys: resolvedSecretEnvKeys, processLogPrefix }),
       gatewayEnv: {
         GOATCITADEL_RATE_LIMIT_ENABLED: "false",
         // The external-sources routes require a SPECIFIC authenticated
@@ -175,8 +194,11 @@ export async function runExternalSourcesBrowserFlow({
       colorScheme: combo.colorScheme,
     });
     const page = await browserContext.newPage();
-    const pageErrors = [];
-    page.on("pageerror", (error) => pageErrors.push(String(error?.message ?? error)));
+    const browserLog = attachBrowserLogging(page);
+    const logCursor = browserLog.mark();
+    const correlationId = `external-sources-${combo.id}-${randomUUID()}`;
+    const failureSlug = `external-sources-flow-${combo.id}-failure`;
+    const trace = await startBrowserTrace(context, { page, slug: failureSlug });
     page.setDefaultTimeout(30_000);
 
     const step = async (name, fn) => {
@@ -191,17 +213,13 @@ export async function runExternalSourcesBrowserFlow({
           durationMs: Date.now() - startedAt,
           error: error instanceof Error ? error.message : String(error),
         });
-        await page
-          .screenshot({
-            path: path.join(root, "screenshots", `external-sources-flow-${combo.id}-FAILED.png`),
-            fullPage: true,
-          })
-          .catch(() => undefined);
         throw error;
       }
     };
 
     let comboError;
+    let failureArtifacts;
+    let artifactCaptureError;
     try {
       await step("seed-fixture-and-session", async () => {
         // The fixture root must live INSIDE the gateway's workspace root
@@ -503,10 +521,23 @@ export async function runExternalSourcesBrowserFlow({
       });
     } catch (error) {
       comboError = error instanceof Error ? error.message : String(error);
+      const retained = await retainExternalSourcesFailureEvidence(context, {
+        page,
+        browserLog,
+        gatewayUrl: activeStack.gatewayUrl,
+        correlationId,
+        logCursor,
+        slug: failureSlug,
+        trace,
+      });
+      failureArtifacts = retained.artifacts;
+      artifactCaptureError = retained.captureError;
     } finally {
+      await trace.discard().catch(() => undefined);
       await browserContext.close().catch(() => undefined);
     }
 
+    const browserSnapshot = browserLog.getSnapshot(logCursor);
     return {
       combo: combo.id,
       viewport: `${combo.viewport.width}x${combo.viewport.height}`,
@@ -514,7 +545,10 @@ export async function runExternalSourcesBrowserFlow({
       status: comboError ? "failed" : "passed",
       ...(comboError ? { error: comboError } : {}),
       steps,
-      pageErrors,
+      pageErrors: browserSnapshot.pageErrors.map((error) => error.message),
+      correlationId,
+      ...(failureArtifacts ? { artifacts: failureArtifacts } : {}),
+      ...(artifactCaptureError ? { artifactCaptureError } : {}),
       sessionId: comboState.sessionId,
       approvalId: comboState.approvalId,
     };
@@ -537,8 +571,54 @@ export async function runExternalSourcesBrowserFlow({
           { timeout: 60_000 },
         )
         .catch(() => undefined);
+      await setBrowserCorrelation(activePage, correlationId, comboState.sessionId);
     }
   }
+}
+
+export async function resolveExternalSourcesBrowserFlowSecretEnvKeys(secretEnvKeys, options, deps) {
+  return await resolveExternalSourcesSecretEnvKeys({ secretEnvKeys, ...options }, deps);
+}
+
+export function buildExternalSourcesProcessOptions({ secretEnvKeys = [], processLogPrefix } = {}) {
+  const omitEnv = [...new Set(secretEnvKeys.filter((key) => typeof key === "string" && key.length > 0))];
+  return {
+    gatewayEnvOmit: omitEnv,
+    uiEnvOmit: omitEnv,
+    ...(typeof processLogPrefix === "string" && processLogPrefix.trim()
+      ? { processLogPrefix: processLogPrefix.trim() }
+      : {}),
+  };
+}
+
+export async function retainExternalSourcesFailureEvidence(
+  context,
+  input,
+  deps = { appendTraceArtifact, captureBrowserArtifacts },
+) {
+  let artifacts = {
+    diagnostics: [],
+    screenshots: [],
+    traces: [],
+    logs: [],
+    perf: [],
+    playwright: [],
+  };
+  const captureErrors = [];
+  try {
+    artifacts = await deps.captureBrowserArtifacts(context, input);
+  } catch (error) {
+    captureErrors.push(`browser/Gateway bundle: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  try {
+    artifacts = deps.appendTraceArtifact(artifacts, await input.trace.retain());
+  } catch (error) {
+    captureErrors.push(`Playwright trace: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return {
+    artifacts,
+    ...(captureErrors.length > 0 ? { captureError: captureErrors.join("; ") } : {}),
+  };
 }
 
 /**
@@ -599,17 +679,23 @@ function hostPathFlavor() {
   return process.platform === "win32" ? "windows_native" : "windows_forward";
 }
 
-function ensureUiWorkspaceDependenciesBuilt() {
+function ensureUiWorkspaceDependenciesBuilt(secretEnvKeys = []) {
   const args = ["--dir", repoRoot, "--filter", "@goatcitadel/mission-control-next^...", "build"];
   const isWindows = process.platform === "win32";
   const cmdPath = path.join(process.env.SystemRoot ?? "C:/Windows", "System32", "cmd.exe");
   const result = isWindows
     ? spawnSync(cmdPath, ["/d", "/s", "/c", "pnpm.cmd", ...args], {
         cwd: repoRoot,
+        env: buildVerificationProcessEnv(process.env, {}, secretEnvKeys),
         encoding: "utf8",
         windowsHide: true,
       })
-    : spawnSync("pnpm", args, { cwd: repoRoot, encoding: "utf8", windowsHide: true });
+    : spawnSync("pnpm", args, {
+        cwd: repoRoot,
+        env: buildVerificationProcessEnv(process.env, {}, secretEnvKeys),
+        encoding: "utf8",
+        windowsHide: true,
+      });
   if (result.error || result.status !== 0) {
     throw new Error(
       `UI workspace dependency build failed (${result.status ?? "spawn error"}): ${String(result.stderr ?? result.error ?? "").slice(-600)}`,
@@ -638,59 +724,6 @@ async function importSyntheticFixtures() {
   }
 }
 
-async function writeStubProviderConfig(runtimeRoot, baseUrl) {
-  const llmConfig = {
-    activeProviderId: STUB_PROVIDER_ID,
-    activeModel: STUB_MODEL,
-    providers: [
-      {
-        providerId: STUB_PROVIDER_ID,
-        label: "Verification stub (loopback)",
-        baseUrl,
-        apiStyle: "openai-chat-completions",
-        defaultModel: STUB_MODEL,
-        apiKeyEnv: STUB_KEY_ENV,
-      },
-    ],
-  };
-  // The unified config/goatcitadel.json is AUTHORITATIVE: the gateway's config
-  // sync overwrites a newer split llm-providers.json with the unified `llm`
-  // section ("unified config values are being applied"). Write the stub
-  // provider into both so the sync converges on it in either direction.
-  const unifiedPath = path.join(runtimeRoot, "config", "goatcitadel.json");
-  try {
-    const unified = JSON.parse(await fs.readFile(unifiedPath, "utf8"));
-    unified.llm = llmConfig;
-    // The unified file carries a tamper-check `generation` digest over its
-    // sections; editing `llm` invalidates it and the gateway refuses to boot.
-    // An ABSENT generation is explicitly tolerated (fresh-install path) and
-    // re-stamped at boot, so drop it.
-    delete unified.generation;
-    await fs.writeFile(unifiedPath, `${JSON.stringify(unified, null, 2)}\n`, "utf8");
-  } catch (error) {
-    if (error?.code !== "ENOENT") {
-      throw error;
-    }
-  }
-  await fs.writeFile(
-    path.join(runtimeRoot, "config", "llm-providers.json"),
-    `${JSON.stringify(llmConfig, null, 2)}\n`,
-    "utf8",
-  );
-  // Routed context (C4c send leg) freezes a token budget from TRUSTED model
-  // metadata and validates the dispatched reasoning effort against the model's
-  // declared capability — without this entry the send 409s with "lacks trusted
-  // context-window metadata" before the resolver runs.
-  const metadataPath = path.join(runtimeRoot, "config", "llm-model-metadata.json");
-  const metadata = JSON.parse(await fs.readFile(metadataPath, "utf8"));
-  metadata.entries[`${STUB_PROVIDER_ID}/${STUB_MODEL}`] = {
-    contextWindow: 128000,
-    outputTokenLimit: 16000,
-    reasoning: { supportedEfforts: ["low", "medium", "high"] },
-  };
-  await fs.writeFile(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
-}
-
 async function ensureOnboardingComplete(gatewayUrl) {
   const state = await requestJson(gatewayUrl, "/api/v1/onboarding/state");
   if (state.ok && state.body?.completed) {
@@ -703,102 +736,6 @@ async function ensureOnboardingComplete(gatewayUrl) {
   if (!completed.ok) {
     throw new Error(`onboarding completion failed: ${JSON.stringify(completed.body)}`);
   }
-}
-
-/**
- * Minimal OpenAI-compatible chat-completions stub (loopback): answers model
- * discovery and both streaming and non-streaming completions with a fixed
- * content-only reply so every LLM call a real chat turn makes completes
- * deterministically. Tools are acknowledged but never invoked — the turn ends
- * in one round.
- */
-async function startStubLlmServer() {
-  const requestPaths = [];
-  const server = createServer(async (request, response) => {
-    const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    const chunks = [];
-    for await (const chunk of request) {
-      chunks.push(Buffer.from(chunk));
-    }
-    const rawBody = Buffer.concat(chunks).toString("utf8");
-    let body = {};
-    try {
-      body = rawBody.trim() ? JSON.parse(rawBody) : {};
-    } catch {
-      body = {};
-    }
-    requestPaths.push(`${request.method} ${url.pathname}`);
-
-    if (request.method === "GET" && url.pathname === "/v1/models") {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(
-        JSON.stringify({ data: [{ id: STUB_MODEL, object: "model", owned_by: "goatcitadel-verification" }] }),
-      );
-      return;
-    }
-    if (request.method === "POST" && url.pathname === "/v1/chat/completions") {
-      if (body.stream === true) {
-        response.writeHead(200, { "cache-control": "no-cache", "content-type": "text/event-stream" });
-        const frames = [
-          {
-            id: "stub-stream",
-            object: "chat.completion.chunk",
-            model: STUB_MODEL,
-            choices: [{ index: 0, delta: { role: "assistant", content: "Verification stub " } }],
-          },
-          {
-            id: "stub-stream",
-            object: "chat.completion.chunk",
-            model: STUB_MODEL,
-            choices: [{ index: 0, delta: { content: "reply." }, finish_reason: "stop" }],
-            usage: { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16 },
-          },
-        ];
-        for (const frame of frames) {
-          response.write(`data: ${JSON.stringify(frame)}\n\n`);
-        }
-        response.write("data: [DONE]\n\n");
-        response.end();
-        return;
-      }
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(
-        JSON.stringify({
-          id: "stub-completion",
-          object: "chat.completion",
-          model: body.model ?? STUB_MODEL,
-          choices: [
-            {
-              index: 0,
-              message: { role: "assistant", content: STUB_REPLY_TEXT },
-              finish_reason: "stop",
-            },
-          ],
-          usage: { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16 },
-        }),
-      );
-      return;
-    }
-    response.writeHead(404, { "content-type": "application/json" });
-    response.end(JSON.stringify({ error: { message: `no stub route for ${request.method} ${url.pathname}` } }));
-  });
-
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => resolve(undefined));
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("stub LLM server did not expose an address");
-  }
-  return {
-    baseUrl: `http://127.0.0.1:${address.port}/v1`,
-    requestPaths: () => [...requestPaths],
-    close: () =>
-      new Promise((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve(undefined)));
-      }),
-  };
 }
 
 // Standalone execution for development: node scripts/verification/lib/scenarios/external-sources-browser-flow.mjs

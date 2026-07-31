@@ -60,7 +60,7 @@ import {
   type PrimaryArea,
   type RailItem,
 } from "./route-model";
-import { coerceLegacyHrefToNext, resolveRouteFromLocation } from "./legacy-route-adapter";
+import { coerceCompatibilityHrefToNext, resolveRouteFromLocation } from "./legacy-route-adapter";
 import { SHELL_ROUTE_SHORTCUT_LETTERS, useShellKeyboardManager } from "./use-shell-keyboard-manager";
 import { ShortcutsOverlay } from "./ShortcutsOverlay";
 import { useGatewayAccess } from "./use-gateway-access";
@@ -717,8 +717,8 @@ export function MissionControlNextApp() {
   const soundEnabled = notificationPreferences.soundMode !== "off";
 
   useEffect(() => {
-    const nextHref = coerceLegacyHrefToNext(window.location.href);
-    if (nextHref && nextHref !== `${window.location.pathname}${window.location.search}`) {
+    const nextHref = coerceCompatibilityHrefToNext(window.location.href);
+    if (nextHref && nextHref !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
       window.history.replaceState({}, "", nextHref);
       setRoute(resolveRouteFromLocation(window.location.href));
       return;
@@ -743,6 +743,10 @@ export function MissionControlNextApp() {
 
   useEffect(() => {
     const handlePopState = () => {
+      const nextHref = coerceCompatibilityHrefToNext(window.location.href);
+      if (nextHref && nextHref !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
+        window.history.replaceState({}, "", nextHref);
+      }
       // Match `navigate`: keep the current surface mounted while a lazy route
       // chunk loads instead of flashing the Suspense fallback on browser back.
       startTransition(() => {

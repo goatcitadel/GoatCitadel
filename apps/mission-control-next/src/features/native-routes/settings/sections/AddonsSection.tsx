@@ -438,6 +438,7 @@ export function AddonsSection(_props: SettingsSectionProps) {
               stats={productPosture.stats}
             >
               <SettingsActionList
+                ariaLabel="Add-on readiness criteria"
                 items={productPosture.criteria.map((item) => ({
                   id: item.id,
                   label: item.label,
@@ -598,6 +599,7 @@ export function AddonsSection(_props: SettingsSectionProps) {
                   </NativeButton>
                 </SettingsButtonRow>
                 <SettingsActionList
+                  ariaLabel="Add-on install commands"
                   items={selectedAddon.installCommands.map((item) => ({
                     label: item.command,
                     description: item.note || "Install command",
@@ -606,6 +608,7 @@ export function AddonsSection(_props: SettingsSectionProps) {
                 />
                 {status.data?.healthChecks?.length ? (
                   <SettingsActionList
+                    ariaLabel="Add-on health checks"
                     items={status.data.healthChecks.map((item) => ({
                       label: item.key,
                       description: item.message,
@@ -668,6 +671,7 @@ export function AddonsSection(_props: SettingsSectionProps) {
                       ]}
                     />
                     <SettingsActionList
+                      ariaLabel="Capability pack install plan"
                       items={(packPreview.data.installPlan ?? []).map((item) => ({
                         label: `${item.kind}: ${item.assetId}`,
                         description: item.reason,
@@ -676,6 +680,7 @@ export function AddonsSection(_props: SettingsSectionProps) {
                       emptyLabel="No installable assets in this pack."
                     />
                     <SettingsActionList
+                      ariaLabel="Capability pack warnings"
                       items={(packPreview.data.manifest?.installWarnings ?? []).map((warning, index) => ({
                         id: `${packPreview.data?.manifest?.packId}-warning-${index}`,
                         label: "Warning",
@@ -725,6 +730,7 @@ export function AddonsSection(_props: SettingsSectionProps) {
               <SettingsEmptyState label="Choose a capability pack to preview." />
             )}
             <SettingsActionList
+              ariaLabel="Staged capability pack evidence"
               items={(data.stagedPacks ?? []).map((item) => ({
                 id: item.evidenceEnvelopeId ?? item.packId,
                 label: item.name,
@@ -739,6 +745,7 @@ export function AddonsSection(_props: SettingsSectionProps) {
               maxHeight="min(24vh, 14rem)"
             />
             <SettingsActionList
+              ariaLabel="Capability pack materialization boundary"
               items={[
                 {
                   id: "pack-materialization-evidence-only",
@@ -819,6 +826,7 @@ export function AddonsSection(_props: SettingsSectionProps) {
                   ]}
                 />
                 <SettingsActionList
+                  ariaLabel="Portable pack install plan"
                   items={(localPackPreview.data.installPlan ?? []).map((item) => ({
                     label: `${item.kind}: ${item.assetId}`,
                     description: item.reason,
@@ -827,6 +835,7 @@ export function AddonsSection(_props: SettingsSectionProps) {
                   emptyLabel="No staged assets in this portable pack."
                 />
                 <SettingsActionList
+                  ariaLabel="Portable pack warnings"
                   items={(localPackPreview.data.manifest?.installWarnings ?? []).map((warning, index) => ({
                     id: `${localPackPreview.data?.manifest?.packId}-local-warning-${index}`,
                     label: "Warning",

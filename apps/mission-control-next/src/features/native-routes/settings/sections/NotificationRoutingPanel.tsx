@@ -33,6 +33,7 @@ import {
 interface NotificationRoutingPanelProps {
   workspaceId: string;
   channels: IntegrationConnection[];
+  defaultTargetKind?: NotificationTargetKind;
 }
 
 const DEFAULT_EVENT_TYPES: NotificationEventType[] = [
@@ -45,7 +46,11 @@ const DEFAULT_EVENT_TYPES: NotificationEventType[] = [
   "scheduled_turn.failed",
 ];
 
-export function NotificationRoutingPanel({ workspaceId, channels }: NotificationRoutingPanelProps) {
+export function NotificationRoutingPanel({
+  workspaceId,
+  channels,
+  defaultTargetKind = "channel_connection",
+}: NotificationRoutingPanelProps) {
   const [targets, setTargets] = useState<NotificationTarget[]>([]);
   const [rules, setRules] = useState<NotificationRule[]>([]);
   const [deliveries, setDeliveries] = useState<Awaited<ReturnType<typeof fetchNotificationDeliveries>>["items"]>([]);
@@ -54,7 +59,7 @@ export function NotificationRoutingPanel({ workspaceId, channels }: Notification
   const [notice, setNotice] = useState<Notice | null>(null);
   const [targetForm, setTargetForm] = useState({
     label: "",
-    kind: "channel_connection" as NotificationTargetKind,
+    kind: defaultTargetKind,
     channelConnectionId: "",
     webhookUrlSecretRef: "",
     credentialSecretRef: "",
@@ -307,6 +312,7 @@ export function NotificationRoutingPanel({ workspaceId, channels }: Notification
                     variant="secondary"
                     disabled={busyId === `test:${target.targetId}` || target.lifecycleState !== "active"}
                     onClick={() => void handleTest(target)}
+                    aria-label={`Test notification destination ${target.label}`}
                   >
                     <Send size={15} /> Test
                   </NativeButton>
@@ -314,6 +320,7 @@ export function NotificationRoutingPanel({ workspaceId, channels }: Notification
                     variant="ghost"
                     disabled={busyId === target.targetId}
                     onClick={() => void handleTargetState(target, "disabled")}
+                    aria-label={`Disable notification destination ${target.label}`}
                   >
                     Disable
                   </NativeButton>
@@ -321,6 +328,7 @@ export function NotificationRoutingPanel({ workspaceId, channels }: Notification
                     variant="ghost"
                     disabled={busyId === target.targetId}
                     onClick={() => void handleTargetState(target, "archived")}
+                    aria-label={`Archive notification destination ${target.label}`}
                   >
                     <Trash2 size={15} /> Archive
                   </NativeButton>
@@ -409,6 +417,7 @@ export function NotificationRoutingPanel({ workspaceId, channels }: Notification
                   variant="ghost"
                   disabled={busyId === rule.ruleId}
                   onClick={() => void handleArchiveRule(rule)}
+                  aria-label={`Archive notification rule ${rule.label}`}
                 >
                   <Trash2 size={15} /> Archive
                 </NativeButton>

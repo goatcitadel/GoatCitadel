@@ -380,7 +380,7 @@ export function NativeDisclosureCard({
   );
 }
 
-export type NativeListItem = { title: string; meta?: string; body?: string };
+export type NativeListItem = { title: string; meta?: string; body?: string; actions?: ReactNode };
 
 const NATIVE_LIST_DEFAULT_WINDOW_THRESHOLD = 50;
 
@@ -396,6 +396,7 @@ function renderNativeListItem(item: NativeListItem): ReactNode {
         {item.meta ? <span>{item.meta}</span> : null}
       </div>
       {item.body ? <p>{item.body}</p> : null}
+      {item.actions ? <div className="mc-next-runtime-actions">{item.actions}</div> : null}
     </>
   );
 }

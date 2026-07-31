@@ -382,6 +382,36 @@ describe("HeartbeatOccurrenceRepository live PostgreSQL", () => {
         assert.equal(lostResponseReplay.preemptionDisposition, "replayed");
         assertRawPostgresHeartbeatPreemptionEventGuard(db, prebindSeed, 2, suffix);
 
+        const normalSeed = seedHeartbeatSession(db, `normal-active-${suffix}`);
+        const normalAdmissions = new SessionMutationAdmissionRepository(db);
+        const normalActive = normalAdmissions.admit({
+          workspaceId: normalSeed.workspaceId,
+          sessionId: normalSeed.sessionId,
+          expectedSessionIncarnationId: normalSeed.sessionIncarnationId,
+          turnId: `normal-active-turn-${suffix}`,
+          runtimeOwnerId: `normal-active-runtime-${suffix}`,
+          admissionKind: "turn_write",
+          aggregateRevision: normalSeed.aggregateRevision,
+          controllerGeneration: 1,
+          actorKind: "operator",
+          actorId: "operator-heartbeat",
+          operation: "chat_turn",
+          materialSha256: sha256(`normal-active-material:${suffix}`),
+          idempotencyKey: `normal-active-admission:${suffix}`,
+          correlationId: `normal-active-turn-${suffix}`,
+        }).admission;
+        const normalBefore = normalAdmissions.require(normalActive.admissionId);
+        const normalOutcome = normalAdmissions.preemptHeartbeatAndAdmitOperatorTurn(
+          postgresOperatorTurnAdmissionInput(normalSeed, `normal-active-${suffix}`, 1),
+        );
+        assert.equal(normalOutcome.disposition, "not_preemptible");
+        assert.equal(normalOutcome.preemptionDisposition, "not_preemptible");
+        assert.equal(normalOutcome.recoveryOutcome, "not_preemptible");
+        assert.equal(normalOutcome.mutated, false);
+        assert.deepEqual(normalOutcome.activeAdmission, normalBefore);
+        assert.deepEqual(normalAdmissions.require(normalActive.admissionId), normalBefore);
+        assert.equal(readPostgresHeartbeatPreemptionEventCount(db, normalSeed.sessionId), 0);
+
         const delayedSeed = seedHeartbeatSession(db, `delayed-${suffix}`);
         const delayedOccurrence = claimHeartbeat(db, delayedSeed);
         forcePostgresAdmissionLeaseExpired(db, delayedOccurrence.admissionId);

@@ -93,9 +93,42 @@ describe("JourneyTimelineRoutePage HX-402", () => {
     expect(text).toContain("Required, missing");
     expect(text).not.toContain("Promote now");
     expect(text).not.toContain("Activate now");
+    const regionNames = renderer!.root
+      .findAll((node) => node.props?.role === "region")
+      .map((node) =>
+        String(node.props["aria-label"] ?? "")
+          .trim()
+          .replace(/\s+/g, " "),
+      )
+      .filter(Boolean);
+    expect(regionNames).toEqual(
+      expect.arrayContaining(["Evidence references entries", "Provenance entries", "Event summary entries"]),
+    );
+    expect(new Set(regionNames.map((name) => name.toLocaleLowerCase("en-US"))).size).toBe(regionNames.length);
     expect(api.fetchJourneyTimeline).toHaveBeenCalledWith(
       expect.objectContaining({ workspaceId: "workspace-1", limit: 50 }),
     );
+  });
+
+  it("retains its Experimental scope badge when route data fails", async () => {
+    api.fetchJourneyTimeline.mockRejectedValueOnce(new Error("fixture unavailable"));
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <JourneyTimelineRoutePage
+          route={{ area: "library", section: "journey" as never }}
+          activeWorkspaceId="workspace-1"
+          activeWorkspaceName="Workspace One"
+          pendingApprovals={0}
+          navigate={vi.fn()}
+          setActiveWorkspaceId={vi.fn()}
+        />,
+      );
+    });
+    const text = JSON.stringify(renderer!.toJSON());
+    expect(text).toContain('"data-release-status":"experimental"');
+    expect(text).toContain("This section could not load");
+    expect(text).toContain("fixture unavailable");
   });
 
   it("maps bounded event-family filters and formats evidence status", () => {

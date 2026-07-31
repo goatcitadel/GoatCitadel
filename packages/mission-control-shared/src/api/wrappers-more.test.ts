@@ -218,9 +218,16 @@ describe("additional shared API wrappers", () => {
     );
     await expectCall(durable.pauseDurableRun("run/1", "operator"), "/api/v1/durable/runs/run%2F1/pause", {
       method: "POST",
+      body: "{}",
     });
-    await expectCall(durable.resumeDurableRun("run/1"), "/api/v1/durable/runs/run%2F1/resume", { method: "POST" });
-    await expectCall(durable.cancelDurableRun("run/1"), "/api/v1/durable/runs/run%2F1/cancel", { method: "POST" });
+    await expectCall(durable.resumeDurableRun("run/1", "spoofed-actor"), "/api/v1/durable/runs/run%2F1/resume", {
+      method: "POST",
+      body: "{}",
+    });
+    await expectCall(durable.cancelDurableRun("run/1", "spoofed-actor"), "/api/v1/durable/runs/run%2F1/cancel", {
+      method: "POST",
+      body: "{}",
+    });
     await expectCall(durable.retryDurableRun("run/1", { reason: "retry" }), "/api/v1/durable/runs/run%2F1/retry", {
       method: "POST",
     });

@@ -942,9 +942,9 @@ export const ROUTE_RELEASE_SCOPE = [
     section: "citadel-overview",
     status: "ship",
     releaseAction:
-      "Inspect how the active workspace is governed as a Citadel — Charter, Chambers, and Gatehouse posture.",
+      "Inspect and update the active Citadel Charter, review Chambers and Gatehouse posture, and explicitly archive or restore the Citadel.",
     verification: "verify:surface:regression",
-    note: "Citadel overview is a release-bearing read-only governance view of the active workspace.",
+    note: "Citadel overview is release-bearing for Charter purpose edits and explicit identity lifecycle actions; Chamber and Gatehouse posture remain inspectable here.",
   },
   {
     area: "library",
@@ -958,9 +958,9 @@ export const ROUTE_RELEASE_SCOPE = [
     area: "library",
     section: "citadel-council",
     status: "ship",
-    releaseAction: "Inspect the agents seated in the Citadel by reference to the existing agents catalog.",
+    releaseAction: "Inspect, seat, and remove agents in the Citadel by reference to the existing agents catalog.",
     verification: "verify:surface:regression",
-    note: "Council seating is release-bearing as a read-only view of seated agents; per-seat grant-ceiling enforcement is a tracked follow-on.",
+    note: "Council seating and removal are release-bearing reference mutations; per-seat grant-ceiling enforcement is a tracked follow-on.",
   },
   {
     area: "library",

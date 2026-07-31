@@ -13,6 +13,26 @@ import {
   type McpServerAdminHost,
 } from "./mcp-server-admin-service.js";
 
+const EMPTY_TOOLS_MCP_SCRIPT = String.raw`
+const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+function reply(id, result) {
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n");
+}
+rl.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") {
+    reply(message.id, {
+      protocolVersion: "2024-11-05",
+      capabilities: { tools: {} },
+      serverInfo: { name: "empty-tools", version: "1.0.0" },
+    });
+    return;
+  }
+  if (message.method === "tools/list") reply(message.id, { tools: [] });
+});
+`;
+
 describe("mcp-server-admin-service", () => {
   it("creates stdio server records with normalized policy and emits realtime", () => {
     const host = createHost();
@@ -222,6 +242,22 @@ describe("mcp-server-admin-service", () => {
     });
   });
 
+  it("clears only the target server cache when live discovery returns an empty catalog", async () => {
+    const host = createHost({
+      servers: [createServer({ serverId: "server-1" })],
+      tools: [createTool("server-1", "stale.tool"), createTool("server-other", "other.tool")],
+      resolveConnectedMcpTools: vi.fn(async () => []),
+    });
+
+    const connected = await connectMcpServer(host, "server-1");
+
+    expect(connected.status).toBe("connected");
+    expect(host.writeMcpTools).toHaveBeenCalledWith([
+      expect.objectContaining({ serverId: "server-other", toolName: "other.tool" }),
+    ]);
+    expect(host.tools).toEqual([expect.objectContaining({ serverId: "server-other", toolName: "other.tool" })]);
+  });
+
   it("refuses to connect unsupported remote auth before mutating connection state", async () => {
     const remote = createServer({
       serverId: "remote-1",
@@ -283,6 +319,23 @@ describe("mcp-server-admin-service", () => {
     );
 
     // No inferred/static tool fallback for a requester-scoped server.
+    expect(tools).toEqual([]);
+  });
+
+  it("keeps an authoritative empty stdio catalog empty even when CLI context names a browser", async () => {
+    const server = createServer({
+      label: "Generic local adapter",
+      command: process.execPath,
+      args: ["-e", EMPTY_TOOLS_MCP_SCRIPT, "--", "--agent-id", "verification-usability-browser"],
+      category: "other",
+    });
+
+    const tools = await resolveConnectedMcpTools(
+      { networkAllowlist: [], resolveOAuthAccessToken: async () => undefined },
+      server,
+      [createTool(server.serverId, "stale.tool")],
+    );
+
     expect(tools).toEqual([]);
   });
 

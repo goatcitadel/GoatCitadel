@@ -28,9 +28,13 @@ import {
   updateChatProject,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { RecentCrossProjectSessionsRow } from "./RecentCrossProjectSessionsRow";
-import { NewSessionButton, ProjectGlyphButton, filterEmptyLabel } from "./ProjectsRoutePage.components";
+import {
+  NewSessionButton,
+  ProjectGlyphButton,
+  ProjectThreadGroup,
+  filterEmptyLabel,
+} from "./ProjectsRoutePage.components";
 import { ProjectHomeBasePanel } from "./ProjectHomeBasePanel";
-import type { AppRoute } from "@next/app/route-model";
 import { useIsMounted } from "@next/hooks/use-is-mounted";
 import { NativeCard, NativeDisclosureCard, NativeGrid, NativePageFrame } from "../NativeRoutePageLayout";
 import { EmptyState, FilterPillGroup, NativeButton, NativeSelectableList, NoticeBanner } from "../primitives";
@@ -41,7 +45,6 @@ import {
   createEmptyCounts,
   dateValue,
   deriveProjectHome,
-  formatDateTime,
   getErrorMessage,
   labelForMode,
   normalizeMode,
@@ -875,6 +878,7 @@ export function ProjectsRoutePage({
               <label className="mc-next-settings-field">
                 <span>Name</span>
                 <input
+                  aria-label="New project name"
                   ref={createProjectNameRef}
                   className="mc-next-settings-input"
                   value={createDraft.name}
@@ -885,6 +889,7 @@ export function ProjectsRoutePage({
               <label className="mc-next-settings-field">
                 <span>Workspace path</span>
                 <input
+                  aria-label="New project workspace path"
                   className="mc-next-settings-input"
                   value={createDraft.workspacePath}
                   onChange={(event) => setCreateDraft((current) => ({ ...current, workspacePath: event.target.value }))}
@@ -894,13 +899,18 @@ export function ProjectsRoutePage({
               <label className="mc-next-settings-field">
                 <span>Description</span>
                 <textarea
+                  aria-label="New project description"
                   className="mc-next-settings-textarea"
                   value={createDraft.description}
                   onChange={(event) => setCreateDraft((current) => ({ ...current, description: event.target.value }))}
                   placeholder="What this project is for."
                 />
               </label>
-              <NativeButton disabled={projectActionBusy === "create"} onClick={() => void handleCreateProject()}>
+              <NativeButton
+                aria-label="Create project from form"
+                disabled={projectActionBusy === "create"}
+                onClick={() => void handleCreateProject()}
+              >
                 <FolderPlus size={16} />
                 {projectActionBusy === "create" ? "Creating..." : "Create project"}
               </NativeButton>
@@ -916,6 +926,7 @@ export function ProjectsRoutePage({
                   <span>Name</span>
                   <input
                     className="mc-next-settings-input"
+                    aria-label="Edit project name"
                     value={editDraft.name}
                     onChange={(event) => setEditDraft((current) => ({ ...current, name: event.target.value }))}
                   />
@@ -924,6 +935,7 @@ export function ProjectsRoutePage({
                   <span>Workspace path</span>
                   <input
                     className="mc-next-settings-input"
+                    aria-label="Edit project workspace path"
                     value={editDraft.workspacePath}
                     onChange={(event) => setEditDraft((current) => ({ ...current, workspacePath: event.target.value }))}
                   />
@@ -932,6 +944,7 @@ export function ProjectsRoutePage({
                   <span>Description</span>
                   <textarea
                     className="mc-next-settings-textarea"
+                    aria-label="Edit project description"
                     value={editDraft.description}
                     onChange={(event) => setEditDraft((current) => ({ ...current, description: event.target.value }))}
                   />
@@ -953,58 +966,6 @@ export function ProjectsRoutePage({
       </NativeGrid>
       <RecentCrossProjectSessionsRow workspaceId={activeWorkspaceId} route={route} navigate={navigate} />
     </NativePageFrame>
-  );
-}
-
-function ProjectThreadGroup({
-  mode,
-  label,
-  sessions,
-  route,
-  navigate,
-}: {
-  mode: ChatMode;
-  label: string;
-  sessions: ChatSessionRecord[];
-  route: AppRoute;
-  navigate: NativeRoutePagesProps["navigate"];
-}) {
-  void mode;
-  return (
-    <section className="mc-next-directory-lane">
-      <div className="mc-next-directory-lane-head">
-        <strong>{label}</strong>
-        <span>{sessions.length}</span>
-      </div>
-      {sessions.length ? (
-        <div className="mc-next-directory-lane-list">
-          {sessions.map((session) => (
-            <button
-              key={session.sessionId}
-              type="button"
-              className="mc-next-directory-lane-item"
-              onClick={() =>
-                navigate({
-                  area: "chat",
-                  sessionId: session.sessionId,
-                  projectId: session.projectId,
-                  theme: route.theme,
-                })
-              }
-            >
-              <div className="mc-next-directory-lane-meta">
-                <span>{session.lifecycleStatus}</span>
-                <span>{formatDateTime(session.lastActivityAt)}</span>
-              </div>
-              <strong>{session.title?.trim() || session.sessionKey}</strong>
-              <p>{session.tags?.length ? session.tags.join(", ") : "No tags yet."}</p>
-            </button>
-          ))}
-        </div>
-      ) : (
-        <EmptyState size="compact" title={`No ${label.toLowerCase()} threads in this project.`} />
-      )}
-    </section>
   );
 }
 

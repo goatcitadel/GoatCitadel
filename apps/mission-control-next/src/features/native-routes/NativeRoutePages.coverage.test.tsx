@@ -717,6 +717,7 @@ describe("NativeRoutePages library coverage", () => {
     const capabilities = await mount("library", "capabilities");
     expect(collectText(capabilities.root)).toContain("Capability browser");
     expect(collectText(capabilities.root)).toContain("can inspect or use when callable");
+    expect(collectText(capabilities.root)).toContain("2 Inspectable");
     expect(collectText(capabilities.root)).toContain("Why this state");
     expect(collectText(capabilities.root)).toContain("Activation path");
     await click(findButton(capabilities.root, "Degraded"));

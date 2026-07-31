@@ -645,6 +645,7 @@ describe("HeartbeatOccurrenceService", () => {
       currentOccurrence = terminal;
       return { disposition: "terminal" as const, occurrence: terminal };
     });
+    const recordRecoveryDiagnostic = vi.fn();
     const service = new HeartbeatOccurrenceService(
       buildDeps({
         find: vi.fn(() => currentOccurrence),
@@ -653,6 +654,7 @@ describe("HeartbeatOccurrenceService", () => {
         markTerminal,
         recoverDurableRun,
         getDurableRun: vi.fn(() => ({ runId: bound.durableRunId, workflowKey: "chat.turn.execute" })),
+        recordRecoveryDiagnostic,
       }),
     );
 
@@ -662,6 +664,21 @@ describe("HeartbeatOccurrenceService", () => {
 
     expect(recoverDurableRun).toHaveBeenCalledOnce();
     expect(markTerminal).toHaveBeenCalledOnce();
+    expect(recordRecoveryDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "info",
+        recoveryOutcome: "retrying",
+        remainingBudgetMs: expect.any(Number),
+        identity: expect.objectContaining({ durableRunId: bound.durableRunId }),
+      }),
+    );
+    expect(recordRecoveryDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "info",
+        recoveryOutcome: "recovered",
+        remainingBudgetMs: expect.any(Number),
+      }),
+    );
   });
 
   it("fails closed when canonical recovery rejects decision evidence after the storage outcome", async () => {
@@ -738,6 +755,7 @@ function buildDeps(
     recoverDurableRun: ReturnType<typeof vi.fn>;
     getAdmission: ReturnType<typeof vi.fn>;
     canEnqueueHeartbeat: () => boolean;
+    recordRecoveryDiagnostic: ReturnType<typeof vi.fn>;
   }> = {},
 ): HeartbeatOccurrenceServiceDeps {
   return {
@@ -763,6 +781,7 @@ function buildDeps(
     enqueuePreclaimedHeartbeat: overrides.enqueuePreclaimedHeartbeat ?? vi.fn(async () => false),
     getDurableRun: overrides.getDurableRun ?? vi.fn(() => ({ runId: "hbr_child_1", workflowKey: "chat.turn.execute" })),
     recoverDurableRun: overrides.recoverDurableRun ?? vi.fn(async () => undefined),
+    recordRecoveryDiagnostic: overrides.recordRecoveryDiagnostic,
   } as unknown as HeartbeatOccurrenceServiceDeps;
 }
 

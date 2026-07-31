@@ -49,6 +49,7 @@ import type {
   ChatTurnStreamLifecycleControl,
 } from "./chat-turn-runtime-collaborators.js";
 import { DurableWorkerInterruptionError } from "./durable-run-service.js";
+import { trackBackgroundTask } from "./background-scheduler.js";
 
 export interface ChatTurnDispatchHost
   extends
@@ -192,6 +193,15 @@ export async function consumePreparedAgentChatTurn(
       resolvedOrchestration,
       options,
     );
+  } else {
+    options?.assertDispatchOwnership?.();
+    const admit = () => {
+      persistPreparedChatCapabilityAdmission(host.storage, prepared);
+      persistInitialChatTurnTrace({ chatTurnTraces: host.storage.chatTurnTraces }, prepared, input);
+      activatePreparedAlternativeBranch(host, prepared);
+    };
+    host.storage.runImmediateTransaction(admit);
+    options?.mutationLifecycle?.markCommitted();
   }
   // Wire the external abort signal to both the in-process turn controller
   // (used by the inline orchestration path that registers via
@@ -202,9 +212,6 @@ export async function consumePreparedAgentChatTurn(
   // the parent's await-loop bail out promptly via `ChatTurnCancelledError`.
   const detachAbortListener = bindConsumeAbortToTurn(host, prepared.turnId, launchedDurableRunId, options?.abortSignal);
   try {
-    if (!useDurableExecution) {
-      options?.assertDispatchOwnership?.();
-    }
     const source: AsyncGenerator<InspectableChatStreamChunk> = useDurableExecution
       ? host.streamPersistedChatTurnEvents(sessionId, prepared.turnId, {
           liveTail: true,
@@ -807,6 +814,7 @@ export function launchPreparedAgentChatTurnStream(
     const admit = () => {
       persistPreparedChatCapabilityAdmission(host.storage, prepared);
       persistInitialChatTurnTrace({ chatTurnTraces: host.storage.chatTurnTraces }, prepared, input);
+      activatePreparedAlternativeBranch(host, prepared);
     };
     if (admissionWriteFence) {
       admissionWriteFence(admit);
@@ -847,11 +855,7 @@ export function launchPreparedAgentChatTurnStream(
       ...(options?.mutationLifecycle ? { mutationLifecycle: options.mutationLifecycle } : {}),
     },
   );
-  const removeBackgroundTask = (): void => {
-    backgroundTasks.delete(task);
-  };
-  void task.then(removeBackgroundTask, removeBackgroundTask);
-  backgroundTasks.add(task);
+  trackBackgroundTask(backgroundTasks, task);
   return undefined;
 }
 
@@ -994,6 +998,7 @@ export async function sendPreparedIntegrationChatTurn(
         },
         startedAt,
       });
+      activatePreparedAlternativeBranch(host, prepared);
     };
     if (canonicalWriteFence) {
       canonicalWriteFence(admit);
@@ -1231,6 +1236,13 @@ export async function sendPreparedIntegrationChatTurn(
     detachAbortListener?.();
     host.endActiveChatTurnExecution(prepared.turnId, controller);
   }
+}
+
+function activatePreparedAlternativeBranch(host: ChatTurnDispatchHost, prepared: PreparedAgentChatTurn): void {
+  if (prepared.branchKind !== "retry" && prepared.branchKind !== "edit") {
+    return;
+  }
+  host.updateActiveLeafOrThrow(prepared.session.sessionId, prepared.branchSelectionBaseTurnId, prepared.turnId);
 }
 
 function recordChatDispatchDiagnosticSafely(

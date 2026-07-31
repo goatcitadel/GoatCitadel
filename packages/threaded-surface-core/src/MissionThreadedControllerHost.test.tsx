@@ -2074,8 +2074,8 @@ describe("MissionThreadedControllerHost", () => {
       await props?.onExportPatch();
       props?.onRevertFile("src/index.ts");
       props?.onRevertAll();
-      props?.onRunHelperSnippet("python", "print('x')");
-      props?.onRunHelperSnippet("ts", "export const x = 1;");
+      await props?.onRunHelperSnippet("python", "print('x')");
+      await props?.onRunHelperSnippet("ts", "export const x = 1;");
       await flushEffects();
     });
 
@@ -2359,9 +2359,9 @@ describe("MissionThreadedControllerHost", () => {
     expect(setDevDiagnosticsLatestTraceSummaryMock).toHaveBeenCalledWith(undefined);
   });
 
-  it("handles compact drawers, dirty workbench confirms, and route acknowledgement guards", async () => {
+  it("handles compact drawers, canonical Chat dirty workbench confirms, and route acknowledgement guards", async () => {
     mockCompact = true;
-    mockSurfaceMode = "code";
+    mockSurfaceMode = "chat";
     const navigateSurface = vi.fn();
     const dirtyDock = {
       ...useChatDockWorkbenchControllerMock(),
@@ -2388,7 +2388,7 @@ describe("MissionThreadedControllerHost", () => {
       ensureFreshPreflight: vi.fn(async () => null),
     });
 
-    const { renderer } = await renderHost({ lockSurface: true, surface: "code", onNavigateSurface: navigateSurface });
+    const { renderer } = await renderHost({ lockSurface: true, surface: "chat", onNavigateSurface: navigateSurface });
     await selectDefaultSession();
 
     await act(async () => {
@@ -2411,15 +2411,27 @@ describe("MissionThreadedControllerHost", () => {
       await flushEffects();
     });
     expect(dirtyDock.discardWorkbenchDraft).toHaveBeenCalled();
+    const discardCallsBeforeRailNavigation = dirtyDock.discardWorkbenchDraft.mock.calls.length;
 
     await act(async () => {
       latestSurfaceInput?.sessionRail.onSelectSession("session-2", { turnId: "turn-2" });
       await flushEffects();
     });
+    const railDiscardModal = confirmModalProps
+      .filter((props) => props.open && props.title === "Discard unsaved workbench changes?")
+      .at(-1);
+    expect(railDiscardModal).toBeDefined();
+    expect(dirtyDock.discardWorkbenchDraft).toHaveBeenCalledTimes(discardCallsBeforeRailNavigation);
+
+    await act(async () => {
+      railDiscardModal?.onConfirm();
+      await flushEffects();
+    });
+    expect(dirtyDock.discardWorkbenchDraft).toHaveBeenCalledTimes(discardCallsBeforeRailNavigation + 1);
 
     setupMocks();
     mockCompact = true;
-    mockSurfaceMode = "code";
+    mockSurfaceMode = "chat";
     useChatDockWorkbenchControllerMock.mockReturnValue({
       ...useChatDockWorkbenchControllerMock(),
       hasDirtyWorkbenchDraft: false,
@@ -2433,7 +2445,7 @@ describe("MissionThreadedControllerHost", () => {
           workspaceName="Mission Workspace"
           approvalsCount={2}
           lockSurface
-          surface="code"
+          surface="chat"
           onNavigateSurface={navigateSurface}
           renderSurface={(input) => {
             latestSurfaceInput = input;
@@ -2895,6 +2907,8 @@ describe("MissionThreadedControllerHost", () => {
     await renderHost();
     await selectDefaultSession();
     expect(latestSurfaceInput?.activeSessionSurfaceProps?.queueItems[0]?.label).toBe("Turn abcdef");
+    expect(latestSurfaceInput?.messageMode).toBe("chat");
+    expect(latestSurfaceInput?.workflowPanel?.kind).toBe("code");
 
     await act(async () => {
       latestSurfaceInput?.activeSessionSurfaceProps?.onSelectTurn("turn-1");
@@ -3220,6 +3234,16 @@ describe("MissionThreadedControllerHost", () => {
       await flushEffects(4);
     });
     expect(knowledgeState.items[0]?.attachmentId).toBe("knowledge-url");
+
+    await act(async () => {
+      latestSurfaceInput?.activeSessionSurfaceProps?.onKnowledgeUrlDraftChange?.("https://docs.example.test/new");
+      await flushEffects(2);
+    });
+    await act(async () => {
+      await latestSurfaceInput?.activeSessionSurfaceProps?.onAttachKnowledgeUrl?.();
+      await flushEffects(4);
+    });
+    expect(knowledgeState.items.filter((item) => item.attachmentId === "knowledge-url")).toHaveLength(1);
 
     await act(async () => {
       latestSurfaceInput?.activeSessionSurfaceProps?.onPresetChange?.("agent-1");

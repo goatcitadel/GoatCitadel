@@ -45,6 +45,7 @@ import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-c
 import { estimateTokensFromText } from "@goatcitadel/memory-core";
 import type { Storage } from "@goatcitadel/storage";
 import { resolveAnthropicEffort, resolveAnthropicMaxTokensForVisibleOutput } from "./anthropic-reasoning-budget.js";
+import { trackBackgroundTask } from "./background-scheduler.js";
 import { resolveChatReasoningEffort } from "./chat-reasoning-controls.js";
 
 interface StructuredInvocationInput {
@@ -1276,30 +1277,26 @@ export class AssemblyService {
             return this.executeRun(run.runId, signal);
           })
         : this.executeRun(run.runId)
-    )
-      .catch((error) => {
-        if (workSignal?.aborted) {
-          this.options.publishRealtime("assembly_run_parked", "assembly", {
-            runId: run.runId,
-            reason: "shared_host_drain",
-          });
-          return;
-        }
-        this.options.storage.assembly.updateRun(run.runId, {
-          status: "failed",
-          error: (error as Error).message,
-          finishedAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        });
-        this.options.publishRealtime("assembly_run_failed", "assembly", {
+    ).catch((error) => {
+      if (workSignal?.aborted) {
+        this.options.publishRealtime("assembly_run_parked", "assembly", {
           runId: run.runId,
-          error: (error as Error).message,
+          reason: "shared_host_drain",
         });
-      })
-      .finally(() => {
-        this.backgroundTasks.delete(task);
+        return;
+      }
+      this.options.storage.assembly.updateRun(run.runId, {
+        status: "failed",
+        error: (error as Error).message,
+        finishedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
       });
-    this.backgroundTasks.add(task);
+      this.options.publishRealtime("assembly_run_failed", "assembly", {
+        runId: run.runId,
+        error: (error as Error).message,
+      });
+    });
+    trackBackgroundTask(this.backgroundTasks, task);
     return run;
   }
 

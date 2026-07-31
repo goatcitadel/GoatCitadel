@@ -3,6 +3,10 @@ import type { ChannelCapabilities, ConnectorDiagnosticReport } from "@goatcitade
 export function buildChannelCapabilityDiagnosticChecks(
   capabilities: ChannelCapabilities,
 ): ConnectorDiagnosticReport["checks"] {
+  const expectedOutboundOnlyPosture =
+    capabilities.inboundModes.length === 1 &&
+    capabilities.inboundModes[0] === "none" &&
+    capabilities.runtimePosture.inboundReadiness === "unsupported";
   const checks: ConnectorDiagnosticReport["checks"] = [
     {
       key: "inbound_mode",
@@ -11,7 +15,7 @@ export function buildChannelCapabilityDiagnosticChecks(
     },
     {
       key: "runtime_posture",
-      status: capabilities.runtimePosture.inboundReadiness === "ready" ? "pass" : "warn",
+      status: capabilities.runtimePosture.inboundReadiness === "ready" || expectedOutboundOnlyPosture ? "pass" : "warn",
       message: `Runtime posture: ${capabilities.runtimePosture.operatorSummary}`,
     },
     {

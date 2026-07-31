@@ -115,6 +115,32 @@ export function coerceLegacyHrefToNext(input: string | URL): string | null {
   return route ? buildAppHref(route) : null;
 }
 
+/**
+ * Returns the canonical URL for release-bearing compatibility inputs.
+ *
+ * Legacy query inputs intentionally consume their old routing parameters.
+ * Direct path aliases are parsed through the current route model so supported
+ * route state (for example, a focused session/turn) survives the redirect.
+ * Fragments are browser-local state, so preserve them for either form.
+ */
+export function coerceCompatibilityHrefToNext(input: string | URL): string | null {
+  const url = typeof input === "string" ? new URL(input, "http://goatcitadel.local") : input;
+  const route = adaptLegacyUrl(url) ?? adaptDirectCompatibilityUrl(url);
+  return route ? `${buildAppHref(route)}${url.hash}` : null;
+}
+
+function adaptDirectCompatibilityUrl(url: URL): AppRoute | null {
+  const path = url.pathname.length > 1 ? url.pathname.replace(/\/+$/u, "") : url.pathname;
+  switch (path.toLowerCase()) {
+    case "/cowork":
+    case "/code":
+    case "/settings/safety":
+      return parseAppRoute(url);
+    default:
+      return null;
+  }
+}
+
 function translateLegacyTab(
   tab: string,
   querySurface?: string,

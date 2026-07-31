@@ -7,6 +7,7 @@ import type {
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
 import { ChatTurnAgentRunner, type ChatTurnAgentRunnerDeps } from "./chat-turn-agent-runner.js";
+import { attachChatCompletionFailureContext } from "./llm-completion-helpers.js";
 import {
   createMockStorage,
   createToolCatalog,
@@ -61,7 +62,7 @@ describe("ChatTurnAgentRunner stream and tool-loop behavior", () => {
     expect(result.modelUsageEventIds).toEqual(["usage-stream-first", "usage-stream-second"]);
   });
 
-  it("falls back to non-streaming completion when the stream fails before visible output", async () => {
+  it("uses non-streaming compatibility recovery only for an explicit tool-protocol failure", async () => {
     const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
       model: "glm-5",
       choices: [
@@ -74,10 +75,14 @@ describe("ChatTurnAgentRunner stream and tool-loop behavior", () => {
         },
       ],
     });
+    const toolProtocolError = attachChatCompletionFailureContext(
+      new Error("invalid_request_error: function name is invalid"),
+      { deadlineAtMs: Date.now() + 60_000, emittedOutput: false },
+    );
     async function* createChatCompletionStream() {
       const unreachableChunks: Record<string, unknown>[] = [];
       yield* unreachableChunks;
-      throw new Error("stream unavailable");
+      throw toolProtocolError;
     }
     const orchestrator = new ChatTurnAgentRunner({
       storage: createMockStorage() as never,
@@ -106,19 +111,90 @@ describe("ChatTurnAgentRunner stream and tool-loop behavior", () => {
     expect(createChatCompletion).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to non-streaming completion when a tool-call-only stream fails", async () => {
-    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
-      model: "glm-5",
-      choices: [
-        {
-          index: 0,
-          message: {
-            role: "assistant",
-            content: "Recovered after tool-call-only stream.",
-          },
-        },
-      ],
+  it("fails closed instead of replaying an unclassified stream failure", async () => {
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>();
+    async function* createChatCompletionStream() {
+      const unreachableChunks: Record<string, unknown>[] = [];
+      yield* unreachableChunks;
+      throw new Error("stream unavailable");
+    }
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => [],
+      createChatCompletion,
+      createChatCompletionStream,
+      invokeTool: vi.fn(),
     });
+
+    const chunks: ChatStreamChunkDraft[] = [];
+    for await (const chunk of orchestrator.runStream({
+      sessionId: "sess-stream-unknown-before-output",
+      turnId: randomUUID(),
+      userMessageId: "msg-stream-unknown-before-output",
+      content: "Answer directly.",
+      mode: "chat",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "manual",
+      historyMessages: [{ role: "user", content: "Answer directly." }],
+    })) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks.some((chunk) => chunk.type === "error")).toBe(true);
+    expect(createChatCompletion).not.toHaveBeenCalled();
+  });
+
+  it("does not replay a transient stream failure when the shared deadline has only 4551ms left", async () => {
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>();
+    const nativeServerError = Object.assign(
+      new Error("responses stream failed: server_error - synthetic near-expiry failure"),
+      { providerFailure: { code: "server_error", message: "synthetic near-expiry failure" } },
+    );
+    attachChatCompletionFailureContext(nativeServerError, {
+      deadlineAtMs: Date.now() + 4_551,
+      emittedOutput: false,
+    });
+    async function* createChatCompletionStream() {
+      const unreachableChunks: Record<string, unknown>[] = [];
+      yield* unreachableChunks;
+      throw nativeServerError;
+    }
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => [],
+      createChatCompletion,
+      createChatCompletionStream,
+      invokeTool: vi.fn(),
+    });
+
+    const chunks: ChatStreamChunkDraft[] = [];
+    for await (const chunk of orchestrator.runStream({
+      sessionId: "sess-stream-near-expiry",
+      turnId: randomUUID(),
+      userMessageId: "msg-stream-near-expiry",
+      content: "Answer directly.",
+      mode: "chat",
+      providerId: "openai",
+      model: "gpt-5-verification",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "off",
+      toolAutonomy: "manual",
+      historyMessages: [{ role: "user", content: "Answer directly." }],
+    })) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks.some((chunk) => chunk.type === "error")).toBe(true);
+    expect(createChatCompletion).not.toHaveBeenCalled();
+  });
+
+  it("does not replay after a tool-call-only provider chunk", async () => {
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>();
     async function* createChatCompletionStream() {
       yield {
         id: "stream-tool-call-only",
@@ -151,7 +227,8 @@ describe("ChatTurnAgentRunner stream and tool-loop behavior", () => {
       invokeTool: vi.fn(),
     });
 
-    const result = await orchestrator.run({
+    const chunks: ChatStreamChunkDraft[] = [];
+    for await (const chunk of orchestrator.runStream({
       sessionId: "sess-stream-fallback-tool-call-only",
       turnId: randomUUID(),
       userMessageId: "msg-stream-fallback-tool-call-only",
@@ -164,10 +241,12 @@ describe("ChatTurnAgentRunner stream and tool-loop behavior", () => {
       thinkingLevel: "standard",
       toolAutonomy: "safe_auto",
       historyMessages: [{ role: "user", content: "Search current news." }],
-    });
+    })) {
+      chunks.push(chunk);
+    }
 
-    expect(result.assistantContent).toContain("Recovered after tool-call-only stream.");
-    expect(createChatCompletion).toHaveBeenCalledTimes(1);
+    expect(chunks.some((chunk) => chunk.type === "error")).toBe(true);
+    expect(createChatCompletion).not.toHaveBeenCalled();
   });
 
   it("does not silently replace partial streamed output when the stream fails", async () => {
