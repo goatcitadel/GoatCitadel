@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ChatCompletionRequest, ModelUsageAttributionContext } from "@goatcitadel/contracts";
 import { ModelUsageDispatchPersistenceError, ModelUsageDispatchUncertainError } from "@goatcitadel/gateway-core";
 import { ChatTurnCancelledError } from "./chat-turn-helpers.js";
+import { CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT } from "./llm-completion-helpers.js";
 import { createChatCompletion, createChatCompletionStream, type LlmCompletionHost } from "./llm-completion-service.js";
 
 vi.mock("node:sqlite", () => ({
@@ -650,6 +651,30 @@ describe("createChatCompletionStream", () => {
         }),
       }),
     );
+    expect(host.publishRealtime).not.toHaveBeenCalled();
+    // A burst rate limit is worth re-attempting inside the ladder.
+    expect(vi.mocked(host.llmService.chatCompletionsStream)).toHaveBeenCalledTimes(
+      CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT,
+    );
+  });
+
+  it("dispatches an exhausted provider quota exactly once instead of walking the retry ladder", async () => {
+    const host = createHost(async function* () {
+      yield* [] as Iterable<never>;
+      throw new Error(
+        'responses request failed (429 Too Many Requests): {"error":{"type":"usage_limit_reached",' +
+          '"message":"The usage limit has been reached","plan_type":"pro","resets_at":1785929657,' +
+          '"eligible_promo":null,"resets_in_seconds":393613}}',
+      );
+    }, []);
+
+    const result = await collectStream(createChatCompletionStream(host, createRequest()));
+
+    // The quota resets in ~4.5 days; every extra dispatch is spent against a wall.
+    expect(vi.mocked(host.llmService.chatCompletionsStream)).toHaveBeenCalledTimes(1);
+    expect(result.chunks).toEqual([]);
+    expect(result.error?.name).toBe("ProviderRetryCooldownExhaustedError");
+    expect(result.error?.message).toContain("usage_limit_reached");
     expect(host.publishRealtime).not.toHaveBeenCalled();
   });
 

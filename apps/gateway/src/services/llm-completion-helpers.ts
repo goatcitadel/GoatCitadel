@@ -182,9 +182,42 @@ export function shouldRetryToolProtocolError(error: Error): boolean {
   );
 }
 
+/**
+ * The inline retry ladder waits 250ms then 750ms — roughly a second end to end.
+ * A provider quota that resets further out than this cannot clear inside the
+ * ladder, so retrying the same provider only burns latency and, on metered
+ * plans, spends more rejected requests against the limiter.
+ */
+export const PROVIDER_QUOTA_INLINE_RETRY_MAX_RESET_SECONDS = 5;
+
+const PROVIDER_QUOTA_RESET_SECONDS_PATTERN = /"resets_in_seconds"\s*:\s*(\d+)/i;
+const PROVIDER_QUOTA_EXHAUSTED_TYPE_PATTERN = /"type"\s*:\s*"(usage_limit_reached|insufficient_quota)"/i;
+
+export function readProviderQuotaResetSeconds(message: string): number | undefined {
+  const match = message.match(PROVIDER_QUOTA_RESET_SECONDS_PATTERN);
+  if (!match) return undefined;
+  const seconds = Number(match[1]);
+  return Number.isFinite(seconds) ? seconds : undefined;
+}
+
+/**
+ * True when the provider reported an exhausted usage quota that will not clear
+ * within the inline retry window. Classification stays `rate_limited`, so
+ * cross-provider fallback still applies — a different provider carries a
+ * different quota.
+ */
+export function isProviderQuotaExhaustedError(error: Error): boolean {
+  const resetSeconds = readProviderQuotaResetSeconds(error.message);
+  if (resetSeconds !== undefined) {
+    return resetSeconds > PROVIDER_QUOTA_INLINE_RETRY_MAX_RESET_SECONDS;
+  }
+  return PROVIDER_QUOTA_EXHAUSTED_TYPE_PATTERN.test(error.message);
+}
+
 export function shouldRetryTransientProviderError(error: Error): boolean {
   if (isAuthoritativeModelUsageAccountingError(error)) return false;
   if (error instanceof StreamIdleTimeoutError) return true;
+  if (isProviderQuotaExhaustedError(error)) return false;
   const providerFailure = (error as Error & { providerFailure?: { code?: unknown } }).providerFailure;
   if (providerFailure?.code === "server_error") {
     return true;

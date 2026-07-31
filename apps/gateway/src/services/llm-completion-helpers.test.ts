@@ -12,6 +12,8 @@ import {
   hasChatCompletionSecondaryAttemptBudget,
   insertMemoryContextMessage,
   classifyProviderFailure,
+  isProviderQuotaExhaustedError,
+  readProviderQuotaResetSeconds,
   normalizeChatCompletionAttemptError,
   normalizeToolProtocolRetryRequest,
   readChatCompletionFailureContext,
@@ -197,6 +199,32 @@ describe("llm-completion-helpers", () => {
     expect(
       shouldRetryTransientProviderError(new Error("request failed (403): upstream proxy temporarily unavailable")),
     ).toBe(true);
+  });
+
+  it("stops inline retries for an exhausted provider quota but keeps cross-provider fallback", () => {
+    // Verbatim shape emitted by the openai-codex responses API on plan exhaustion.
+    const quotaExhausted = new Error(
+      'responses request failed (429 Too Many Requests): {"error":{"type":"usage_limit_reached",' +
+        '"message":"The usage limit has been reached","plan_type":"pro","resets_at":1785929657,' +
+        '"eligible_promo":null,"resets_in_seconds":393613}}',
+    );
+
+    expect(readProviderQuotaResetSeconds(quotaExhausted.message)).toBe(393_613);
+    expect(isProviderQuotaExhaustedError(quotaExhausted)).toBe(true);
+    // Retrying the same provider cannot clear a 4.5-day reset window.
+    expect(shouldRetryTransientProviderError(quotaExhausted)).toBe(false);
+    // A different provider carries a different quota, so fallback must survive.
+    expect(classifyProviderFailure(quotaExhausted)).toBe("rate_limited");
+    expect(shouldAttemptCrossProviderFallback(quotaExhausted)).toBe(true);
+
+    // A burst limit that clears inside the ladder stays retryable.
+    const shortReset = new Error('request failed (429 Too Many Requests): {"resets_in_seconds":2}');
+    expect(isProviderQuotaExhaustedError(shortReset)).toBe(false);
+    expect(shouldRetryTransientProviderError(shortReset)).toBe(true);
+
+    // No reset hint at all: fall back to the quota type marker.
+    expect(isProviderQuotaExhaustedError(new Error('failed (429): {"type":"insufficient_quota"}'))).toBe(true);
+    expect(isProviderQuotaExhaustedError(new Error("request failed (429 Too Many Requests)"))).toBe(false);
   });
 
   it("carries the exact completion deadline and output boundary on terminal errors", () => {
