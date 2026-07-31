@@ -18,7 +18,16 @@ This dated workbook is the execution record for the pre-QA usability, reliabilit
 
 ## Final campaign result
 
-The complete final-mode campaign passed at `4846b885f8a4b1c7f2209200a7f89504403871bb`.
+Recertified at `bef4e39687af2656eb2832e36e31c7dc37977671` after the `GC-HARNESS-073` scratch-root fix.
+
+- `pnpm verify:usability` — **120/120 scenarios passed** in 39m40.1s at `artifacts/verification/2026-07-31T13-59-23-155Z-usability-0e895996`, zero failed, degraded, skipped, or not-configured.
+- Second clean-profile core smoke — passed at `artifacts/verification/2026-07-31T14-39-46-271Z-usability-core-283063f0`.
+- Source immutability — the campaign, the smoke, and the PostgreSQL run each record `sourceModified=false`, `changedPathCount=0`, and an identical `diffSha256` at `started` and `completed`.
+- **PostgreSQL parity and restart** — passed 1/1 at `artifacts/verification/2026-07-31T15-34-52-502Z-usability-postgres-recovery-93444deb` against an isolated loopback PostgreSQL 16 container, with `storage=postgres` confirmed in the recorded metrics rather than a SQLite fallback, 9/9 steps, and exactly 12 fault-target dispatches.
+- `GC-HARNESS-073` proven end to end: zero surviving `fast.test.*` scratch roots after a full campaign, against 889 files and 4.97 GB previously, and 2.8 GiB of disk consumed against roughly 26 GiB before.
+- **Visual regression is deliberately not certified.** Two full 408-scenario runs produced **zero pixel diffs across 814 scenario executions** — every baseline comparison that ran, passed — but each fell short of a clean sweep on non-visual causes recorded as `GC-ENV-007` and `GC-HARNESS-074`. No baseline was refreshed.
+
+The equivalent campaign pass at `4846b885f8a4b1c7f2209200a7f89504403871bb` is retained below as history.
 
 - `pnpm verify:usability` — **120/120 scenarios passed** in 33m50.8s with zero failed, degraded, skipped, or not-configured rows, at `artifacts/verification/2026-07-31T01-25-11-233Z-usability-bc5563b0`.
 - Harness self-proof — 131/131 immediately before the campaign.
