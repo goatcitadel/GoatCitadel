@@ -329,29 +329,37 @@ async function runFastLaneCommand(context, command, options = {}) {
           artifacts: emptyArtifacts(),
         };
       }
-      const env = await resolveFastLaneCommandEnv(context, command);
-      const result = await runCommand(pnpmCommand(), command.args, {
-        cwd: repoRoot,
-        artifactRoot: path.join(context.artifactRoot, "diagnostics"),
-        logName: command.id,
-        env,
-      });
-      return {
-        status: result.code === 0 ? "passed" : "failed",
-        error: result.code === 0 ? undefined : clampString(result.stderr || result.stdout, 1200),
-        metrics: {
-          exitCode: result.code,
-          durationMs: result.durationMs,
-        },
-        artifacts: {
-          diagnostics: [],
-          screenshots: [],
-          traces: [],
-          logs: [relativeToRun(context, result.stdoutPath), relativeToRun(context, result.stderrPath)],
-          perf: [],
-          playwright: [],
-        },
-      };
+      const commandTempRoot = await resolveFastLaneCommandTempRoot(context, command);
+      const env = await resolveFastLaneCommandEnv(context, command, commandTempRoot);
+      try {
+        const result = await runCommand(pnpmCommand(), command.args, {
+          cwd: repoRoot,
+          artifactRoot: path.join(context.artifactRoot, "diagnostics"),
+          logName: command.id,
+          env,
+        });
+        return {
+          status: result.code === 0 ? "passed" : "failed",
+          error: result.code === 0 ? undefined : clampString(result.stderr || result.stdout, 1200),
+          metrics: {
+            exitCode: result.code,
+            durationMs: result.durationMs,
+          },
+          artifacts: {
+            diagnostics: [],
+            screenshots: [],
+            traces: [],
+            logs: [relativeToRun(context, result.stdoutPath), relativeToRun(context, result.stderrPath)],
+            perf: [],
+            playwright: [],
+          },
+        };
+      } finally {
+        // Scratch only. Command evidence lives under the artifact root, so this
+        // runs on the failing path too rather than leaving the largest roots behind
+        // exactly when a run is most likely to be retried.
+        await removeFastLaneCommandTempRoot(commandTempRoot);
+      }
     },
   );
 }
@@ -401,10 +409,32 @@ export async function runA2AFullLane(context) {
   }
 }
 
-async function resolveFastLaneCommandEnv(context, command) {
+export async function resolveFastLaneCommandTempRoot(context, command) {
   const tempBaseRoot = await resolveFastLaneTempBaseRoot(context);
-  const commandTempRoot = path.join(tempBaseRoot, sanitizeFilePart(command.id));
+  return path.join(tempBaseRoot, sanitizeFilePart(command.id));
+}
+
+// Removing a command's scratch root is best effort. The storage suite alone creates
+// roughly 1200 SQLite databases per run, so leaving these roots behind accumulates
+// gigabytes and measurably slows every later run on the same host. A lingering child
+// still holding a Windows file handle must never convert a passing command into a
+// lane failure, so a removal that cannot complete is reported rather than thrown.
+export async function removeFastLaneCommandTempRoot(commandTempRoot, deps = {}) {
+  const rm = deps.rm ?? fs.rm;
+  try {
+    await rm(commandTempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function resolveFastLaneCommandEnv(context, command, commandTempRoot) {
   const npmCacheRoot = path.join(commandTempRoot, "npm-cache");
+  // A crashed or killed earlier run leaves its scratch behind, and the Windows base
+  // root is the shared user temp directory rather than a per-run path. Start from an
+  // empty root so residue cannot carry across runs.
+  await removeFastLaneCommandTempRoot(commandTempRoot);
   await fs.mkdir(commandTempRoot, { recursive: true });
   await fs.mkdir(npmCacheRoot, { recursive: true });
   const tempEnv = {
