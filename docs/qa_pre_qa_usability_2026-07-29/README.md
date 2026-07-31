@@ -1,6 +1,6 @@
 # GoatCitadel Pre-QA Usability Workbook — 2026-07-29
 
-Status: **active campaign; not yet cleared for manual QA**
+Status: **campaign passed at `4846b885f`; QA-ready verdict still blocked on the packaged Windows candidate**
 
 This dated workbook is the execution record for the pre-QA usability, reliability, and quality closure campaign. Earlier QA plans and spreadsheets remain historical artifacts; they are not inputs to route coverage or release claims in this campaign.
 
@@ -16,9 +16,25 @@ This dated workbook is the execution record for the pre-QA usability, reliabilit
 - Current generated usability proof counts: 154 static required rows plus 225 live capability rows (379 required and 2 optional; 381 total), 83 route-action rows, and 76 exact Chromium registry entries
 - Native mobile repository: excluded; responsive Mission Control and companion/device boundaries remain included
 
+## Final campaign result
+
+The complete final-mode campaign passed at `4846b885f8a4b1c7f2209200a7f89504403871bb`.
+
+- `pnpm verify:usability` — **120/120 scenarios passed** in 33m50.8s with zero failed, degraded, skipped, or not-configured rows, at `artifacts/verification/2026-07-31T01-25-11-233Z-usability-bc5563b0`.
+- Harness self-proof — 131/131 immediately before the campaign.
+- Second clean-profile core smoke — passed at `artifacts/verification/2026-07-31T01-59-33-345Z-usability-core-7e6a1cbd`, run immediately after. Its `diagnostics/usability-core-source-state.json` independently records `mode=final`, `baseSha=4846b885f8a4b1c7f2209200a7f89504403871bb`, `sourceModified=false`, `changedPathCount=0`, and an identical `diffSha256` at both `started` and `completed`, matching the campaign's own source proof.
+- Source immutability — `diagnostics/usability-source-state.json` records `mode=final`, `sourceModified=false`, `changedPathCount=0`, and an identical `diffSha256` at both `started` and `completed`, so the tree did not drift across the run.
+- Secret leakage — the in-process exact-root gate passed after full finalization.
+
+Four earlier final-mode attempts at `a486932d1` failed in the fast-lane prerequisite before reaching a single usability scenario. None were product defects: see `GC-ENV-006` (one transient SQLite open failure, non-reproducible), `GC-HARNESS-072` (two suites exceeding the default test timeout under v8 coverage, fixed in `4846b885f`), and `GC-HARNESS-073` (the fast lane never cleaning its per-command temporary roots, worked around by hand and still unfixed).
+
+The branch shipped as [PR #239](https://github.com/goatcitadel/GoatCitadel/pull/239) with all 20 checks green, and was squash-merged to `main` as `98a0a9810` on explicit operator instruction. The campaign plan specified a ready-to-merge PR that is *not* merged; that deviation is deliberate and recorded in `Gate Results.csv`. Because the merge was squashed, the certified SHA `4846b885f` does not appear in `main`'s history, though the merged tree is identical. Follow-up [PR #240](https://github.com/goatcitadel/GoatCitadel/pull/240) merged as `4e4a72049`.
+
+**This is not the QA-ready verdict.** The gates below remain unproven at a final SHA: `verify:all`, install, the named durable-recovery / agentic-proof / memory-truth lanes, the full 408-scenario visual rerun, desktop, managed launcher ownership, Postgres parity, the live ChatGPT provider pack, and the authenticated AI queue rescan. The packaged Windows candidate (`GC-USAB-019`) is the blocker the stop rules below name explicitly.
+
 ## Interim evidence snapshot
 
-This is the active branch snapshot, not the final handoff. The latest completed final-mode attempt ran at `edd88625d81e4043c48adc95b795f1dec4ec3975`; the strict editable-locator and accessible-control identity closure it exposed is committed at `3841fb8f5191ef73ce6a11419b5e77f3464483c2` and focused-proofed, but its documentation-inclusive candidate still needs the complete clean-SHA rerun. After correcting `GC-HARNESS-065`, the fresh complete exploratory campaign at `artifacts/verification/2026-07-30T14-52-57-590Z-usability-aeec8486` passed 120/120 scenarios with zero failed, degraded, skipped, or not-configured rows, including all registered browser actions, surface/accessibility coverage, four external-source profiles, the live Gateway fault journey, final source-state proof, and the exact-root redaction gate. The independent post-run scan also passed. A second fresh-profile core smoke passed at `artifacts/verification/2026-07-30T15-29-30-881Z-usability-core-b5282435`. The isolated PostgreSQL parity and same-database restart/no-replay proof also passed at `artifacts/verification/2026-07-30T15-50-14-675Z-usability-postgres-recovery-3a1a4dae`. The repaired packaged candidate, final clean-SHA regressions, PR, and GitHub queue verdict remain pending; exploratory or stopped-run evidence is not the QA-ready verdict.
+The entries below are the branch's historical progression, retained as the record of how each defect was found and closed. They predate the final campaign above, and their "pending" language describes that earlier state rather than the current one. The latest completed final-mode attempt before the final campaign ran at `edd88625d81e4043c48adc95b795f1dec4ec3975`; the strict editable-locator and accessible-control identity closure it exposed is committed at `3841fb8f5191ef73ce6a11419b5e77f3464483c2` and focused-proofed, but its documentation-inclusive candidate still needs the complete clean-SHA rerun. After correcting `GC-HARNESS-065`, the fresh complete exploratory campaign at `artifacts/verification/2026-07-30T14-52-57-590Z-usability-aeec8486` passed 120/120 scenarios with zero failed, degraded, skipped, or not-configured rows, including all registered browser actions, surface/accessibility coverage, four external-source profiles, the live Gateway fault journey, final source-state proof, and the exact-root redaction gate. The independent post-run scan also passed. A second fresh-profile core smoke passed at `artifacts/verification/2026-07-30T15-29-30-881Z-usability-core-b5282435`. The isolated PostgreSQL parity and same-database restart/no-replay proof also passed at `artifacts/verification/2026-07-30T15-50-14-675Z-usability-postgres-recovery-3a1a4dae`. The repaired packaged candidate, final clean-SHA regressions, PR, and GitHub queue verdict remain pending; exploratory or stopped-run evidence is not the QA-ready verdict.
 
 - The current auth matrix passed at `artifacts/verification/2026-07-29T19-20-11-850Z-auth-matrix-618e9c0a`.
 - Earlier surface, visual, and accessibility focused runs passed at `artifacts/verification/2026-07-29T19-21-12-655Z-surface-regression-818d64d0`, `artifacts/verification/2026-07-29T19-49-10-337Z-visual-regression-63f3ab1f`, and `artifacts/verification/2026-07-29T20-28-56-960Z-accessibility-smoke-68c6b387`.
@@ -103,12 +119,12 @@ Defect status such as `Fixed locally; final regression pending` means the implem
 
 ## Final handoff placeholders
 
-- Final source SHA: **Pending**
-- Windows x64 installer SHA-256: **Pending**
-- Installed candidate version: **Pending**
-- Ready-to-merge PR URL and head SHA: **Pending**
-- Standard/AI queue state and final rescan: **Pending**
-- GitHub Code Quality and CodeQL checks: **Pending**
+- Final source SHA: `4846b885f8a4b1c7f2209200a7f89504403871bb` (merged to `main` as `98a0a9810`; follow-up `4e4a72049`)
+- Windows x64 installer SHA-256: **Pending** — candidate not built at the final SHA
+- Installed candidate version: **Pending** — candidate not installed or verified
+- Merged PR URL and head SHA: [PR #239](https://github.com/goatcitadel/GoatCitadel/pull/239) at head `4846b885f`, merged on operator instruction. The plan's own field name was "ready-to-merge PR URL and head SHA"; it is renamed here because the PR is merged, and the deviation from the not-merged requirement is recorded above and in `Gate Results.csv`.
+- Standard/AI queue state and final rescan: **Partial** — open code-scanning alerts returned zero; two Code Quality findings raised on #239, one fixed in #240 and one declined with rationale and left unresolved. The authenticated AI queue rescan is still pending.
+- GitHub Code Quality and CodeQL checks: **Passed** on the #239 head (all 20 checks green)
 
 ## Triage and stop rules
 
@@ -118,4 +134,4 @@ Defect status such as `Fixed locally; final regression pending` means the implem
 - Journey-interrupting or cheap adjacent P3 findings are repaired; other P3 observations remain explicit.
 - Environment failures are recorded separately and never converted into product passes.
 
-The QA-ready verdict requires one full campaign with no new P0–P2 findings, followed by a second clean-profile core smoke. The locally repaired packaged-launcher P1 cannot be closed for handoff until the exact candidate passes the packaged lifecycle, so the QA-ready verdict remains blocked. Any packaged-runtime failure triggers restoration of the pre-test `%LOCALAPPDATA%\GoatCitadel` snapshot.
+The QA-ready verdict requires one full campaign with no new P0–P2 findings, followed by a second clean-profile core smoke. **Both are now satisfied at `4846b885f`.** The locally repaired packaged-launcher P1 still cannot be closed for handoff until the exact candidate passes the packaged lifecycle, so the QA-ready verdict remains blocked on that alone. Any packaged-runtime failure triggers restoration of the pre-test `%LOCALAPPDATA%\GoatCitadel` snapshot.
