@@ -1,6 +1,6 @@
 # GoatCitadel Pre-QA Usability Workbook — 2026-07-29
 
-Status: **campaign passed at `4846b885f`; QA-ready verdict still blocked on the packaged Windows candidate**
+Status: **campaign recertified at `bef4e3968`; QA-ready verdict still blocked on the packaged Windows candidate**
 
 This dated workbook is the execution record for the pre-QA usability, reliability, and quality closure campaign. Earlier QA plans and spreadsheets remain historical artifacts; they are not inputs to route coverage or release claims in this campaign.
 
@@ -39,7 +39,7 @@ Four earlier final-mode attempts at `a486932d1` failed in the fast-lane prerequi
 
 The branch shipped as [PR #239](https://github.com/goatcitadel/GoatCitadel/pull/239) with all 20 checks green, and was squash-merged to `main` as `98a0a9810` on explicit operator instruction. The campaign plan specified a ready-to-merge PR that is *not* merged; that deviation is deliberate and recorded in `Gate Results.csv`. Because the merge was squashed, the certified SHA `4846b885f` does not appear in `main`'s history, though the merged tree is identical. Follow-up [PR #240](https://github.com/goatcitadel/GoatCitadel/pull/240) merged as `4e4a72049`.
 
-**This is not the QA-ready verdict.** The gates below remain unproven at a final SHA: `verify:all`, install, the named durable-recovery / agentic-proof / memory-truth lanes, the full 408-scenario visual rerun, desktop, managed launcher ownership, Postgres parity, the live ChatGPT provider pack, and the authenticated AI queue rescan. The packaged Windows candidate (`GC-USAB-019`) is the blocker the stop rules below name explicitly.
+**This is not the QA-ready verdict.** These gates remain unproven at a final SHA: `verify:all`, install, the named durable-recovery / agentic-proof / memory-truth lanes, desktop, and managed launcher ownership. Visual regression ran twice at `bef4e3968` with zero pixel diffs but is deliberately not certified, per `GC-ENV-007` and `GC-HARNESS-074`. The live ChatGPT provider pack and the authenticated AI queue rescan are blocked on an authenticated operator session rather than merely unstarted. Postgres parity is proven at `bef4e3968`. The packaged Windows candidate (`GC-USAB-019`) is the blocker the stop rules below name explicitly.
 
 ## Interim evidence snapshot
 
@@ -128,7 +128,7 @@ Defect status such as `Fixed locally; final regression pending` means the implem
 
 ## Final handoff placeholders
 
-- Final source SHA: `4846b885f8a4b1c7f2209200a7f89504403871bb` (merged to `main` as `98a0a9810`; follow-up `4e4a72049`)
+- Final source SHA: `bef4e39687af2656eb2832e36e31c7dc37977671` (merged to `main` as `bef4e3968` via PR #242). The earlier certified SHA `4846b885f8a4b1c7f2209200a7f89504403871bb` merged as `98a0a9810` and is historical.
 - Windows x64 installer SHA-256: **Pending** — candidate not built at the final SHA
 - Installed candidate version: **Pending** — candidate not installed or verified
 - Merged PR URL and head SHA: [PR #239](https://github.com/goatcitadel/GoatCitadel/pull/239) at head `4846b885f`, merged on operator instruction. The plan's own field name was "ready-to-merge PR URL and head SHA"; it is renamed here because the PR is merged, and the deviation from the not-merged requirement is recorded above and in `Gate Results.csv`.
@@ -143,4 +143,4 @@ Defect status such as `Fixed locally; final regression pending` means the implem
 - Journey-interrupting or cheap adjacent P3 findings are repaired; other P3 observations remain explicit.
 - Environment failures are recorded separately and never converted into product passes.
 
-The QA-ready verdict requires one full campaign with no new P0–P2 findings, followed by a second clean-profile core smoke. **Both are now satisfied at `4846b885f`.** The locally repaired packaged-launcher P1 still cannot be closed for handoff until the exact candidate passes the packaged lifecycle, so the QA-ready verdict remains blocked on that alone. Any packaged-runtime failure triggers restoration of the pre-test `%LOCALAPPDATA%\GoatCitadel` snapshot.
+The QA-ready verdict requires one full campaign with no new P0–P2 findings, followed by a second clean-profile core smoke. **Both are now satisfied at `bef4e3968`.** The locally repaired packaged-launcher P1 still cannot be closed for handoff until the exact candidate passes the packaged lifecycle, so the QA-ready verdict remains blocked on that alone. Any packaged-runtime failure triggers restoration of the pre-test `%LOCALAPPDATA%\GoatCitadel` snapshot.
