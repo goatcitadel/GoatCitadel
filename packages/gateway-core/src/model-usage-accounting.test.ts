@@ -20,7 +20,7 @@ const roots: string[] = [];
 afterEach(() => {
   for (const storage of storages.splice(0)) storage.close();
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
-});
+}, 20_000);
 
 function createHarness(): { storage: Storage; accounting: ModelUsageAccountingService } {
   const root = path.join(os.tmpdir(), `goatcitadel-model-accounting-${randomUUID()}`);

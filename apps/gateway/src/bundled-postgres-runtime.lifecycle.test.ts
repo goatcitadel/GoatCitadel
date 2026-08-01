@@ -349,6 +349,58 @@ describe("bundled postgres runtime lifecycle", () => {
     expect(mocks.execFileSync).not.toHaveBeenCalledWith("docker", expect.arrayContaining(["run"]), expect.anything());
   });
 
+  it("restarts an auto-discovered native-owned cluster natively instead of falling through to Docker", async () => {
+    const rootDir = await makeTempDir();
+    await putFakePostgresInstallOnPath();
+    const dataDir = path.resolve(rootDir, "data", "postgres");
+    mocks.dbScripts.push(
+      { queryOne: new Error("ECONNREFUSED") },
+      { queryOne: { data_directory: dataDir } },
+      { queryOne: { present: 1 } },
+    );
+
+    const firstHandle = await ensureBundledPostgresRuntime(buildConfig(rootDir, { binDir: "auto" }));
+
+    expect(firstHandle?.strategy).toBe("native");
+    await expect(fs.readFile(path.join(dataDir, ".goatcitadel-native-bundled-postgres"), "utf8")).resolves.toContain(
+      "backend=native",
+    );
+
+    await fs.writeFile(path.join(dataDir, "PG_VERSION"), "16", "utf8");
+    mocks.execFileSync.mockClear();
+    mocks.dbScripts.push(
+      { queryOne: new Error("ECONNREFUSED") },
+      { queryOne: { data_directory: dataDir } },
+      { queryOne: { present: 1 } },
+    );
+
+    const secondHandle = await ensureBundledPostgresRuntime(buildConfig(rootDir, { binDir: "auto" }));
+
+    expect(secondHandle?.strategy).toBe("native");
+    expect(mocks.execFileSync).toHaveBeenCalledWith(
+      expect.stringContaining(nativeExecutableName("pg_ctl")),
+      expect.arrayContaining(["start"]),
+      expect.anything(),
+    );
+    expect(mocks.execFileSync).not.toHaveBeenCalledWith("docker", expect.arrayContaining(["run"]), expect.anything());
+  });
+
+  it("stops an auto-started native runtime when readiness fails before returning the handle", async () => {
+    const rootDir = await makeTempDir();
+    await putFakePostgresInstallOnPath();
+    mocks.dbScripts.push({ queryOne: new Error("ECONNREFUSED") }, { queryOne: new Error("still not ready") });
+
+    const action = ensureBundledPostgresRuntime(buildConfig(rootDir, { binDir: "auto", startTimeoutMs: 1 }));
+
+    await expect(action).rejects.toThrow("Bundled Postgres did not become reachable");
+    expect(mocks.execFileSync).toHaveBeenCalledWith(
+      expect.stringContaining(nativeExecutableName("pg_ctl")),
+      expect.arrayContaining(["stop"]),
+      expect.anything(),
+    );
+    expect(mocks.execFileSync).not.toHaveBeenCalledWith("docker", expect.arrayContaining(["run"]), expect.anything());
+  });
+
   it("initialises an auto-discovered cluster with password auth rather than trust", async () => {
     const rootDir = await makeTempDir();
     await putFakePostgresInstallOnPath();
@@ -410,6 +462,20 @@ describe("bundled postgres runtime lifecycle", () => {
     await expect(ensureBundledPostgresRuntime(buildConfig(rootDir, { binDir }))).rejects.toThrow();
     expect(mocks.execFileSync).not.toHaveBeenCalledWith("docker", expect.arrayContaining(["run"]), expect.anything());
   });
+
+  it("fails closed when an explicit binDir does not contain server commands", async () => {
+    const rootDir = await makeTempDir();
+    const binDir = path.join(rootDir, "missing-pg-bin");
+    mocks.dbScripts.push({ queryOne: new Error("ECONNREFUSED") });
+
+    const action = ensureBundledPostgresRuntime(buildConfig(rootDir, { binDir }));
+
+    await expect(action).rejects.toBeInstanceOf(NonRetryableStartupError);
+    await expect(action).rejects.toThrow("native backend is required but unavailable");
+    await expect(action).rejects.toThrow(binDir);
+    expect(mocks.execFileSync).not.toHaveBeenCalledWith("docker", expect.arrayContaining(["run"]), expect.anything());
+  });
+
   it("accepts native pg_ctl startup failures when the fallback probe reaches the expected data directory", async () => {
     const rootDir = await makeTempDir();
     const binDir = path.join(rootDir, "pg-bin");
@@ -661,6 +727,7 @@ function buildConfig(
   options: {
     autoStart?: boolean;
     binDir?: string;
+    startTimeoutMs?: number;
   } = {},
 ) {
   return {
@@ -675,7 +742,7 @@ function buildConfig(
           binDir: options.binDir,
           dataDir: "data/postgres",
           port: 45432,
-          startTimeoutMs: 10_000,
+          startTimeoutMs: options.startTimeoutMs ?? 10_000,
         },
       },
     },

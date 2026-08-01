@@ -188,7 +188,7 @@ export function shouldRetryToolProtocolError(error: Error): boolean {
  * ladder, so retrying the same provider only burns latency and, on metered
  * plans, spends more rejected requests against the limiter.
  */
-export const PROVIDER_QUOTA_INLINE_RETRY_MAX_RESET_SECONDS = 5;
+export const PROVIDER_QUOTA_INLINE_RETRY_MAX_RESET_SECONDS = 1;
 
 const PROVIDER_QUOTA_RESET_SECONDS_PATTERN = /"resets_in_seconds"\s*:\s*(\d+)/i;
 const PROVIDER_QUOTA_EXHAUSTED_TYPE_PATTERN = /"type"\s*:\s*"(usage_limit_reached|insufficient_quota)"/i;
@@ -270,6 +270,9 @@ export function classifyProviderFailure(error: Error): ProviderFailureClass {
   }
   if (isChatTurnCancelledError(error)) {
     return "cancelled";
+  }
+  if (isProviderQuotaExhaustedError(error)) {
+    return "rate_limited";
   }
   const message = error.message.toLowerCase();
   const statusMatch = error.message.match(/\((\d{3})(?:\s|[)])?/);

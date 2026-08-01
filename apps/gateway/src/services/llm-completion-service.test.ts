@@ -678,6 +678,34 @@ describe("createChatCompletionStream", () => {
     expect(host.publishRealtime).not.toHaveBeenCalled();
   });
 
+  it("reports the fallback target when fallback stream quota is terminal", async () => {
+    const host = createHost(async function* (request) {
+      yield* [] as Iterable<never>;
+      if ((request.providerId ?? "primary") === "primary") {
+        throw new Error("primary hard fail");
+      }
+      throw new Error(
+        'responses request failed (429 Too Many Requests): {"error":{"type":"usage_limit_reached",' +
+          '"resets_in_seconds":393613}}',
+      );
+    });
+
+    const result = await collectStream(createChatCompletionStream(host, createRequest()));
+
+    expect(result.chunks).toEqual([]);
+    expect(result.error?.message).toContain("Provider retry/cooldown budget exhausted for backup/backup-model");
+    expect(host.recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "chat.completion_stream.failed",
+        providerId: "backup",
+        modelId: "backup-model",
+        runtimeError: expect.objectContaining({
+          name: "ProviderRetryCooldownExhaustedError",
+        }),
+      }),
+    );
+  });
+
   it("blocks streaming chat completion when gateway.dispatch.before intercepts", async () => {
     const host = createHost(async function* () {
       yield {
@@ -1182,6 +1210,34 @@ describe("createChatCompletion", () => {
     );
   });
 
+  it("uses cross-provider fallback for provider quota exhaustion without a status wrapper", async () => {
+    const calls: string[] = [];
+    const host = createCompletionHost({
+      completion: async (request) => {
+        const providerId = request.providerId ?? "primary";
+        const model = request.model ?? (providerId === "primary" ? "primary-model" : "backup-model");
+        calls.push(`${providerId}:${model}`);
+        if (providerId === "primary") {
+          throw new Error('provider failed: {"type":"insufficient_quota"}');
+        }
+        return {
+          model,
+          choices: [{ index: 0, message: { role: "assistant", content: "fallback" }, finish_reason: "stop" }],
+        };
+      },
+    });
+
+    const response = await createChatCompletion(host, createRequest());
+
+    expect(calls).toEqual(["primary:primary-model", "backup:backup-model"]);
+    expect(response.routing).toEqual(
+      expect.objectContaining({
+        fallbackUsed: true,
+        fallbackProviderId: "backup",
+      }),
+    );
+  });
+
   it("skips same-provider completion fallback candidates", async () => {
     const calls: string[] = [];
     const host = createCompletionHost({
@@ -1391,6 +1447,35 @@ describe("createChatCompletion", () => {
       }),
     );
     expect(host.publishRealtime).not.toHaveBeenCalled();
+  });
+
+  it("reports the fallback target when fallback completion quota is terminal", async () => {
+    const host = createCompletionHost({
+      completion: async (request) => {
+        if ((request.providerId ?? "primary") === "primary") {
+          throw new Error("primary offline");
+        }
+        throw new Error(
+          'responses request failed (429 Too Many Requests): {"error":{"type":"usage_limit_reached",' +
+            '"resets_in_seconds":393613}}',
+        );
+      },
+    });
+
+    await expect(createChatCompletion(host, createRequest())).rejects.toThrow(
+      "Provider retry/cooldown budget exhausted for backup/backup-model",
+    );
+
+    expect(host.recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "chat.completion.failed",
+        providerId: "backup",
+        modelId: "backup-model",
+        runtimeError: expect.objectContaining({
+          name: "ProviderRetryCooldownExhaustedError",
+        }),
+      }),
+    );
   });
 
   it("fires gateway.dispatch.before before llm.request.before", async () => {

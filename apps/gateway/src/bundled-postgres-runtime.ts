@@ -26,6 +26,7 @@ import { NonRetryableStartupError } from "./startup-errors.js";
 export const POSTGRES_IMAGE = "postgres:16-alpine";
 const READY_POLL_MS = 500;
 const STARTUP_PROBE_HEARTBEAT_MS = 5_000;
+const NATIVE_BACKEND_MARKER_FILENAME = ".goatcitadel-native-bundled-postgres";
 // SECURITY (codex finding #2): Path (relative to gateway rootDir) where the
 // generated bundled-Postgres superuser password is persisted. File is
 // written with mode 0o600. Existing data directories that were initialised
@@ -152,19 +153,30 @@ export async function ensureBundledPostgresRuntime(
   // closed instead and surface the native error.
   const nativeConfigured = isNativeBundledPostgresConfigured(config);
   setBootCheckpoint(`bundled-pg:try-native-start (nativeConfigured=${nativeConfigured})`);
+  let nativeRuntime: BundledPostgresRuntimeHandle | undefined;
   try {
-    const nativeRuntime = await tryStartNativeBundledPostgres(config);
+    nativeRuntime = await tryStartNativeBundledPostgres(config);
     setBootCheckpoint(`bundled-pg:try-native-returned (got-runtime=${Boolean(nativeRuntime)})`);
     if (nativeRuntime) {
-      setBootCheckpoint("bundled-pg:waitForBundledPostgres");
-      await waitForBundledPostgres(config);
-      setBootCheckpoint("bundled-pg:ensureDatabaseExists");
-      await ensureDatabaseExists(config);
-      setBootCheckpoint("bundled-pg:native-path-complete");
-      return nativeRuntime;
+      try {
+        setBootCheckpoint("bundled-pg:waitForBundledPostgres");
+        await waitForBundledPostgres(config);
+        setBootCheckpoint("bundled-pg:ensureDatabaseExists");
+        await ensureDatabaseExists(config);
+        setBootCheckpoint("bundled-pg:native-path-complete");
+        return nativeRuntime;
+      } catch (error) {
+        await nativeRuntime.stop().catch(() => {
+          // Startup is already failing; preserve the readiness/setup error.
+        });
+        throw error;
+      }
+    }
+    if (nativeConfigured || isNativeBundledPostgresOwnedCluster(config)) {
+      throw new NonRetryableStartupError(buildNativeCommandsUnavailableMessage(config));
     }
   } catch (error) {
-    if (nativeConfigured) {
+    if (nativeConfigured || isNativeBundledPostgresOwnedCluster(config)) {
       throw normalizeError(error);
     }
     // No binDir was pinned, so native was either skipped outright or
@@ -268,7 +280,11 @@ async function tryStartNativeBundledPostgres(
   // cluster that a native host binary cannot start), so silently switching
   // backends under it would break working installs.
   let commands = resolveNativePostgresCommands(config);
-  if (!commands && config.assistant.database.bundledPostgres.binDir?.trim() === AUTO_NATIVE_BIN_DIR && !initialized) {
+  if (
+    !commands &&
+    config.assistant.database.bundledPostgres.binDir?.trim() === AUTO_NATIVE_BIN_DIR &&
+    (!initialized || nativeBackendMarkerExists(dataDir))
+  ) {
     commands = discoverNativePostgresCommands();
     if (commands) {
       setBootCheckpoint(`native-pg:auto-discovered (${path.dirname(commands.initdb)})`);
@@ -308,6 +324,7 @@ async function tryStartNativeBundledPostgres(
       },
     );
     setBootCheckpoint("native-pg:initdb-returned");
+    await markNativeBundledPostgresBackend(dataDir);
   }
 
   // Keep the native Postgres log outside PGDATA on Windows. When the log file
@@ -325,6 +342,7 @@ async function tryStartNativeBundledPostgres(
   if (livePid !== undefined) {
     process.stderr.write(`[bundled-pg] postmaster.pid points to live PID ${livePid}; skipping pg_ctl start\n`);
     setBootCheckpoint("native-pg:reuse-existing-postgres");
+    await markNativeBundledPostgresBackend(dataDir);
     return {
       strategy: "native",
       // We did NOT start this postgres (it was already running when we
@@ -385,6 +403,8 @@ async function tryStartNativeBundledPostgres(
       throw await buildNativeStartError(config, logFile, error);
     }
   }
+
+  await markNativeBundledPostgresBackend(dataDir);
 
   return {
     strategy: "native",
@@ -605,6 +625,41 @@ function resolveNativePostgresCommands(config: GatewayRuntimeConfig): NativePost
 
 function bundledClusterIsInitialized(dataDir: string): boolean {
   return fsSync.existsSync(path.join(dataDir, "PG_VERSION"));
+}
+
+function nativeBackendMarkerPath(dataDir: string): string {
+  return path.join(dataDir, NATIVE_BACKEND_MARKER_FILENAME);
+}
+
+function nativeBackendMarkerExists(dataDir: string): boolean {
+  return fsSync.existsSync(nativeBackendMarkerPath(dataDir));
+}
+
+function isNativeBundledPostgresOwnedCluster(config: GatewayRuntimeConfig): boolean {
+  const dataDir = path.resolve(config.rootDir, config.assistant.database.bundledPostgres.dataDir);
+  return nativeBackendMarkerExists(dataDir);
+}
+
+async function markNativeBundledPostgresBackend(dataDir: string): Promise<void> {
+  await fs.writeFile(
+    nativeBackendMarkerPath(dataDir),
+    "backend=native\nowner=goatcitadel-bundled-postgres\npurpose=prevents-auto-native-clusters-from-being-restarted-with-docker\n",
+    "utf8",
+  );
+}
+
+function buildNativeCommandsUnavailableMessage(config: GatewayRuntimeConfig): string {
+  const binDir = config.assistant.database.bundledPostgres.binDir?.trim();
+  const dataDir = path.resolve(config.rootDir, config.assistant.database.bundledPostgres.dataDir);
+  const detail =
+    binDir && binDir !== AUTO_NATIVE_BIN_DIR
+      ? `Configured bundledPostgres.binDir did not contain both initdb and pg_ctl: ${binDir}.`
+      : `Bundled Postgres dataDir was initialized by the native backend but no local PostgreSQL server tools were found: ${dataDir}.`;
+  return [
+    "Bundled Postgres native backend is required but unavailable.",
+    detail,
+    "Install PostgreSQL server tools, set assistant.database.bundledPostgres.binDir to their bin directory, or move this dataDir aside before choosing Docker fallback.",
+  ].join("\n");
 }
 
 async function canReachExpectedBundledPostgres(

@@ -218,7 +218,6 @@ export async function createChatCompletion(
   const primaryProviderId = hookableRequest.providerId ?? runtime.activeProviderId;
   const primaryProvider = runtime.providers.find((item) => item.providerId === primaryProviderId);
   const primaryModel = hookableRequest.model ?? primaryProvider?.defaultModel ?? runtime.activeModel;
-  const primaryRuntimeTarget = { providerId: primaryProviderId, model: primaryModel, provider: primaryProvider };
   const primaryApiStyle = host.llmService.resolveExecutionApiStyle(primaryProviderId, primaryModel);
   const usageAttribution = createCompletionUsageAttribution({
     input: attributionInput,
@@ -247,6 +246,12 @@ export async function createChatCompletion(
     model: routing.effectiveModel ?? primaryModel,
     providers: runtime.providers,
   });
+  let lastAttemptTarget = { providerId: primaryProviderId, model: primaryModel };
+  const lastAttemptRuntimeTarget = () => ({
+    providerId: lastAttemptTarget.providerId,
+    model: lastAttemptTarget.model,
+    providers: runtime.providers,
+  });
 
   const retryAttempts = [
     hookableRequest,
@@ -263,6 +268,10 @@ export async function createChatCompletion(
       transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT;
       transientRetryIndex += 1
     ) {
+      lastAttemptTarget = {
+        providerId: attemptRequest.providerId ?? primaryProviderId,
+        model: attemptRequest.model ?? primaryModel,
+      };
       try {
         throwIfChatCompletionRequestAborted(attemptRequest.signal, memoryInput?.turnId);
         const attemptTimeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, hookableRequest.timeoutMs);
@@ -394,6 +403,7 @@ export async function createChatCompletion(
           const fallbackRequest = fallbackRequiresToolProtocolNormalization
             ? normalizeToolProtocolRetryRequest(hookableRequest, TOOL_PROTOCOL_RETRY_MINIMAL_THINKING)
             : hookableRequest;
+          lastAttemptTarget = { providerId: fallback.providerId, model: fallback.model };
           response = await host.llmService.chatCompletions(
             {
               ...fallbackRequest,
@@ -472,7 +482,7 @@ export async function createChatCompletion(
     const completedAt = Date.now();
     const finalError =
       lastError && shouldReportProviderRetryCooldownExhausted(lastError)
-        ? buildProviderRetryCooldownExhaustedError(lastError, { providerId: primaryProviderId, model: primaryModel })
+        ? buildProviderRetryCooldownExhaustedError(lastError, lastAttemptTarget)
         : lastError;
     host.recordDevDiagnostic({
       level: "error",
@@ -481,8 +491,8 @@ export async function createChatCompletion(
       message: "Chat completion failed",
       sessionId: request.memory?.sessionId,
       taskId: request.memory?.taskId,
-      providerId: primaryProviderId,
-      modelId: primaryModel,
+      providerId: lastAttemptTarget.providerId,
+      modelId: lastAttemptTarget.model,
       durationMs: Date.now() - completionStartedAt,
       runtimeKind: "model.call",
       runtimeStatus: "failed",
@@ -504,7 +514,14 @@ export async function createChatCompletion(
         durableRunId: memoryInput?.runId,
       },
     });
-    recordFailedChatRuntime(host, request, primaryRuntimeTarget, completionStartedAt, completedAt, finalError?.message);
+    recordFailedChatRuntime(
+      host,
+      request,
+      lastAttemptRuntimeTarget(),
+      completionStartedAt,
+      completedAt,
+      finalError?.message,
+    );
     throw attachChatCompletionFailureContext(finalError ?? new Error("chat completion failed"), {
       deadlineAtMs: completionDeadline,
       emittedOutput: false,
@@ -702,7 +719,6 @@ export async function* createChatCompletionStream(
   const primaryProviderId = withContext.providerId ?? runtime.activeProviderId;
   const primaryProvider = runtime.providers.find((item) => item.providerId === primaryProviderId);
   const primaryModel = withContext.model ?? primaryProvider?.defaultModel ?? runtime.activeModel;
-  const primaryRuntimeTarget = { providerId: primaryProviderId, model: primaryModel, provider: primaryProvider };
   const primaryApiStyle = host.llmService.resolveExecutionApiStyle(primaryProviderId, primaryModel);
   const usageAttribution = createCompletionUsageAttribution({
     input: attributionInput,
@@ -731,6 +747,12 @@ export async function* createChatCompletionStream(
     model: routing.effectiveModel ?? primaryModel,
     providers: runtime.providers,
   });
+  let lastAttemptTarget = { providerId: primaryProviderId, model: primaryModel };
+  const lastAttemptRuntimeTarget = () => ({
+    providerId: lastAttemptTarget.providerId,
+    model: lastAttemptTarget.model,
+    providers: runtime.providers,
+  });
 
   const shouldBufferForTransform = host.hooksService.hasMutateHook(chatHookWorkspaceId, "transform_llm_output");
   const bufferedChunks: Array<Record<string, unknown>> = [];
@@ -756,6 +778,10 @@ export async function* createChatCompletionStream(
       transientRetryIndex += 1
     ) {
       let attemptStreamed = false;
+      lastAttemptTarget = {
+        providerId: attemptRequest.providerId ?? primaryProviderId,
+        model: attemptRequest.model ?? primaryModel,
+      };
       try {
         throwIfChatCompletionRequestAborted(attemptRequest.signal, memoryInput?.turnId);
         const attemptTimeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, withContext.timeoutMs);
@@ -915,8 +941,8 @@ export async function* createChatCompletionStream(
       message: "Chat completion stream failed after emitting output",
       sessionId: memoryInput?.sessionId,
       taskId: memoryInput?.taskId,
-      providerId: routing.effectiveProviderId ?? primaryProviderId,
-      modelId: routing.effectiveModel ?? primaryModel,
+      providerId: lastAttemptTarget.providerId,
+      modelId: lastAttemptTarget.model,
       durationMs: Date.now() - completionStartedAt,
       runtimeKind: "model.call",
       runtimeStatus: "failed",
@@ -939,7 +965,7 @@ export async function* createChatCompletionStream(
     recordStreamRuntime(
       host,
       memoryInput,
-      effectiveRuntimeTarget(),
+      lastAttemptRuntimeTarget(),
       telemetryChunks,
       completionStartedAt,
       completedAt,
@@ -985,6 +1011,7 @@ export async function* createChatCompletionStream(
           const fallbackRetryRequest = fallbackRequiresToolProtocolNormalization
             ? normalizeToolProtocolRetryRequest(withContext, TOOL_PROTOCOL_RETRY_MINIMAL_THINKING)
             : withContext;
+          lastAttemptTarget = { providerId: fallback.providerId, model: fallback.model };
           const idleAbort = new AbortController();
           const fallbackSignal = idleWatchdogDisabled
             ? fallbackRetryRequest.signal
@@ -1126,8 +1153,8 @@ export async function* createChatCompletionStream(
       message: "Chat completion stream failed after emitting output",
       sessionId: memoryInput?.sessionId,
       taskId: memoryInput?.taskId,
-      providerId: routing.effectiveProviderId ?? primaryProviderId,
-      modelId: routing.effectiveModel ?? primaryModel,
+      providerId: lastAttemptTarget.providerId,
+      modelId: lastAttemptTarget.model,
       durationMs: Date.now() - completionStartedAt,
       runtimeKind: "model.call",
       runtimeStatus: "failed",
@@ -1150,7 +1177,7 @@ export async function* createChatCompletionStream(
     recordStreamRuntime(
       host,
       memoryInput,
-      effectiveRuntimeTarget(),
+      lastAttemptRuntimeTarget(),
       telemetryChunks,
       completionStartedAt,
       completedAt,
@@ -1170,7 +1197,7 @@ export async function* createChatCompletionStream(
     const completedAt = Date.now();
     const finalError =
       lastError && shouldReportProviderRetryCooldownExhausted(lastError)
-        ? buildProviderRetryCooldownExhaustedError(lastError, { providerId: primaryProviderId, model: primaryModel })
+        ? buildProviderRetryCooldownExhaustedError(lastError, lastAttemptTarget)
         : lastError;
     host.recordDevDiagnostic({
       level: "error",
@@ -1179,8 +1206,8 @@ export async function* createChatCompletionStream(
       message: "Chat completion stream failed",
       sessionId: memoryInput?.sessionId,
       taskId: memoryInput?.taskId,
-      providerId: primaryProviderId,
-      modelId: primaryModel,
+      providerId: lastAttemptTarget.providerId,
+      modelId: lastAttemptTarget.model,
       durationMs: Date.now() - completionStartedAt,
       runtimeKind: "model.call",
       runtimeStatus: "failed",
@@ -1204,7 +1231,7 @@ export async function* createChatCompletionStream(
     recordStreamRuntime(
       host,
       memoryInput,
-      primaryRuntimeTarget,
+      lastAttemptRuntimeTarget(),
       telemetryChunks,
       completionStartedAt,
       completedAt,

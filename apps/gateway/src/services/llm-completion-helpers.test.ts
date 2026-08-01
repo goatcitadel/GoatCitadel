@@ -217,13 +217,16 @@ describe("llm-completion-helpers", () => {
     expect(classifyProviderFailure(quotaExhausted)).toBe("rate_limited");
     expect(shouldAttemptCrossProviderFallback(quotaExhausted)).toBe(true);
 
-    // A burst limit that clears inside the ladder stays retryable.
-    const shortReset = new Error('request failed (429 Too Many Requests): {"resets_in_seconds":2}');
+    // A burst limit that clears inside the roughly-one-second ladder stays retryable.
+    const shortReset = new Error('request failed (429 Too Many Requests): {"resets_in_seconds":1}');
     expect(isProviderQuotaExhaustedError(shortReset)).toBe(false);
     expect(shouldRetryTransientProviderError(shortReset)).toBe(true);
 
     // No reset hint at all: fall back to the quota type marker.
-    expect(isProviderQuotaExhaustedError(new Error('failed (429): {"type":"insufficient_quota"}'))).toBe(true);
+    const insufficientQuota = new Error('provider failed: {"type":"insufficient_quota"}');
+    expect(isProviderQuotaExhaustedError(insufficientQuota)).toBe(true);
+    expect(classifyProviderFailure(insufficientQuota)).toBe("rate_limited");
+    expect(shouldAttemptCrossProviderFallback(insufficientQuota)).toBe(true);
     expect(isProviderQuotaExhaustedError(new Error("request failed (429 Too Many Requests)"))).toBe(false);
   });
 

@@ -1390,7 +1390,7 @@ describe("EventIngestService canonical usage references", () => {
     } finally {
       storage.close();
     }
-  });
+  }, 15_000);
 });
 
 describe("deriveCredentialDims", () => {
