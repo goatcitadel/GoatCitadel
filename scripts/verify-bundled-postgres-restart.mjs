@@ -147,6 +147,12 @@ function buildSupervisorEnv(rootDir, gatewayPort, postgresPort) {
     GOATCITADEL_BUNDLED_POSTGRES_ENABLED: "true",
     GOATCITADEL_BUNDLED_POSTGRES_AUTOSTART: "true",
     GOATCITADEL_BUNDLED_POSTGRES_DATA_DIR: "./data/postgres",
+    // This lane exercises the Docker-container stop/restart recovery path, so
+    // pin the Docker backend. An empty binDir disables native discovery; without
+    // this the "auto" default would auto-discover the CI runner's preinstalled
+    // PostgreSQL, initialise a native cluster in the data dir, and never engage
+    // the Docker container this test stops and inspects.
+    GOATCITADEL_BUNDLED_POSTGRES_BIN_DIR: "",
     GOATCITADEL_BUNDLED_POSTGRES_PORT: String(postgresPort),
     GOATCITADEL_BUNDLED_POSTGRES_START_TIMEOUT_MS: "120000",
     GOATCITADEL_DISABLE_SECRET_STORE: "true",

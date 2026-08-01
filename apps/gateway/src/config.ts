@@ -920,9 +920,13 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
       65_535,
     );
   }
-  const bundledPostgresBinDir = process.env.GOATCITADEL_BUNDLED_POSTGRES_BIN_DIR?.trim();
-  if (bundledPostgresBinDir) {
-    assistant.database.bundledPostgres.binDir = bundledPostgresBinDir;
+  // An explicitly provided GOATCITADEL_BUNDLED_POSTGRES_BIN_DIR wins even when it
+  // is empty: per the binDir contract an empty value disables the native backend
+  // entirely (Docker-only), a path pins native, and an unset var keeps the
+  // "auto" discover-then-fallback default. Distinguish "unset" from "set empty".
+  const bundledPostgresBinDir = process.env.GOATCITADEL_BUNDLED_POSTGRES_BIN_DIR;
+  if (bundledPostgresBinDir !== undefined) {
+    assistant.database.bundledPostgres.binDir = bundledPostgresBinDir.trim();
   }
   const bundledPostgresAutoStart = parseBooleanEnv(process.env.GOATCITADEL_BUNDLED_POSTGRES_AUTOSTART);
   if (bundledPostgresAutoStart !== undefined) {

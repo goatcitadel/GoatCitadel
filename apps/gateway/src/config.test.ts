@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { ConfigValidationError } from "@goatcitadel/contracts";
 import { loadGatewayConfig } from "./config.js";
+import { AUTO_NATIVE_BIN_DIR } from "./postgres-runtime-config.js";
 import { syncUnifiedConfig } from "./config-sync-lib.js";
 import { ConfigGenerationService } from "./services/config-generation-service.js";
 
@@ -207,5 +208,53 @@ describe("loadGatewayConfig", () => {
     expect(loaded.assistant.auth.mode).toBe("none");
     expect(repairedMirror).toEqual(before.assistant);
     expect(after.generation).toEqual(before.generation);
+  });
+
+  describe("GOATCITADEL_BUNDLED_POSTGRES_BIN_DIR override", () => {
+    const ENV_KEY = "GOATCITADEL_BUNDLED_POSTGRES_BIN_DIR";
+    let previous: string | undefined;
+
+    afterEach(() => {
+      if (previous === undefined) {
+        delete process.env[ENV_KEY];
+      } else {
+        process.env[ENV_KEY] = previous;
+      }
+    });
+
+    function stashAndSet(value: string | undefined): void {
+      previous = process.env[ENV_KEY];
+      if (value === undefined) {
+        delete process.env[ENV_KEY];
+      } else {
+        process.env[ENV_KEY] = value;
+      }
+    }
+
+    it("keeps the auto discover default when the env var is unset", async () => {
+      const { rootDir } = await createConfigFixture();
+      stashAndSet(undefined);
+
+      const config = await loadGatewayConfig(rootDir);
+      expect(config.assistant.database.bundledPostgres.binDir).toBe(AUTO_NATIVE_BIN_DIR);
+    });
+
+    it("disables the native backend (Docker-only) when the env var is set empty", async () => {
+      const { rootDir } = await createConfigFixture();
+      stashAndSet("");
+
+      const config = await loadGatewayConfig(rootDir);
+      // An empty string is authoritative: native discovery is skipped entirely so
+      // the container-restart lane exercises the Docker fallback deterministically.
+      expect(config.assistant.database.bundledPostgres.binDir).toBe("");
+    });
+
+    it("pins an explicit binDir path when the env var provides one", async () => {
+      const { rootDir } = await createConfigFixture();
+      stashAndSet("  /opt/postgres/bin  ");
+
+      const config = await loadGatewayConfig(rootDir);
+      expect(config.assistant.database.bundledPostgres.binDir).toBe("/opt/postgres/bin");
+    });
   });
 });
