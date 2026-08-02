@@ -31,6 +31,12 @@ test("uninstaller payload deletes are guarded by the install marker", () => {
   assert.match(iss, /procedure RemoveGoatCitadelPayload\(\);/);
   assert.match(iss, /if not GoatCitadelInstallMarkerExists\(\) then/);
   assert.match(iss, /WriteGoatCitadelInstallMarker\(\);/);
+
+  const uninstallRun = iss.match(/\[UninstallRun\][\s\S]*?\[UninstallDelete\]/)?.[0] ?? "";
+  assert.match(uninstallRun, /RunOnceId: "goatcitadel-remove-identity"/);
+  assert.match(uninstallRun, /RunOnceId: "goatcitadel-remove-payload"/);
+  assert.match(uninstallRun, /catch \{\{\}; try \{\{[\s\S]*?catch \{\{\};[\s\S]*?exit 0/);
+  assert.doesNotMatch(uninstallRun, /catch \{\{\}\}/);
 });
 
 test("unconditional app/bin filesandordirs deletes are removed", () => {

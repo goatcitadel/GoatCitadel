@@ -985,8 +985,8 @@ begin
 end;
 
 [UninstallRun]
-Filename: "powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command ""Get-AppxPackage {#MyIdentityPackageName} | Remove-AppxPackage -ErrorAction SilentlyContinue"""; Flags: waituntilterminated runhidden
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""try {{ [System.IO.Directory]::Delete('\\\\?\\{app}\\app', $true) }} catch {{}}; try {{ [System.IO.Directory]::Delete('\\\\?\\{app}\\bin', $true) }} catch {{}}; Remove-Item -LiteralPath '\\\\?\\{app}\\app' -Recurse -Force -ErrorAction SilentlyContinue; Remove-Item -LiteralPath '\\\\?\\{app}\\bin' -Recurse -Force -ErrorAction SilentlyContinue"""; Flags: waituntilterminated runhidden; Check: GoatCitadelInstallMarkerExists
+Filename: "powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command ""Get-AppxPackage {#MyIdentityPackageName} | Remove-AppxPackage -ErrorAction SilentlyContinue"""; Flags: waituntilterminated runhidden; RunOnceId: "goatcitadel-remove-identity"
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""try {{ [System.IO.Directory]::Delete('\\\\?\\{app}\\app', $true) } catch {{}; try {{ [System.IO.Directory]::Delete('\\\\?\\{app}\\bin', $true) } catch {{}; Remove-Item -LiteralPath '\\\\?\\{app}\\app' -Recurse -Force -ErrorAction SilentlyContinue; Remove-Item -LiteralPath '\\\\?\\{app}\\bin' -Recurse -Force -ErrorAction SilentlyContinue; exit 0"""; Flags: waituntilterminated runhidden; Check: GoatCitadelInstallMarkerExists; RunOnceId: "goatcitadel-remove-payload"
 
 [UninstallDelete]
 Type: dirifempty; Name: "{app}\\app"
