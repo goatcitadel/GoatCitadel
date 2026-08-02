@@ -1,7 +1,7 @@
 Gate,Required,Status,Final SHA,Command,Evidence or blocker
 Focused repair contracts,Yes,Passed dirty candidate,Pending,"Focused Node tests; ESLint; Prettier; package typecheck/test; targeted Vitest","70 harness tests; 450 shared Chat tests; focused durable test"
 verify:fast,Yes,Passed focused candidate,Pending,pnpm verify:fast,artifacts/verification/2026-08-02T01-49-47-378Z-fast-78096a45
-verify:usability,Yes,Passed first clean candidate; final rerun pending,Pending,pnpm verify:usability,artifacts/verification/2026-08-02T02-22-44-587Z-usability-ed932e0c
+verify:usability,Yes,"Passed first clean candidate; first final-SHA rerun stopped on GC-HARNESS-083; repair rerun pending",Pending,pnpm verify:usability,"artifacts/verification/2026-08-02T02-22-44-587Z-usability-ed932e0c; artifacts/verification/2026-08-02T04-46-22-485Z-usability-4c393de6"
 Second clean-profile core smoke,Yes,Passed first clean candidate; final rerun pending,Pending,pnpm verify:usability:core,artifacts/verification/2026-08-02T02-56-30-673Z-usability-core-6b281d67
 verify:all,Yes,"Failed first aggregate; four defects fixed; final rerun pending",Pending,pnpm verify:all,artifacts/verification/2026-08-02T03-32-33-685Z-all-430979ac
 Auth matrix,Yes,Passed focused candidate,Pending,pnpm verify:auth:matrix,artifacts/verification/2026-08-02T02-17-38-946Z-auth-matrix-b3dfc32a
