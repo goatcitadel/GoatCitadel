@@ -1143,7 +1143,10 @@ describe("executeTool", () => {
       cwd: packageDir,
     });
     expect(String(result.stdout ?? "")).toContain(packageDir);
-  }, 15_000);
+    // Keep the real npm boundary: under the full Windows V8 coverage wave its
+    // cold process startup can exceed 15 seconds even though the restricted
+    // runner remains inside its independent 120-second production deadline.
+  }, 45_000);
 
   it("uses cmd.exe to resolve restricted package-manager commands on Windows", () => {
     const resolved = resolveRestrictedCommand("pnpm", ["--filter", "workspace/pkg", "run", "test"], "win32");
