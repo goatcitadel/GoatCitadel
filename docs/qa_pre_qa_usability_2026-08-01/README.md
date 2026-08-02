@@ -34,6 +34,7 @@ The August campaign begins by repairing evidence defects found while reviewing t
 - `GC-HARNESS-082`: refresh the architecture debt tripwire from the reviewed post-`#239` Gateway source after the prior baseline became stale.
 - `GC-HARNESS-083`: keep the remote-worker deadline proof independent of whether saturated process startup emits a ready frame before the absolute deadline.
 - `GC-HARNESS-084`: set the five-second provider idle watchdog in authoritative `goatcitadel.json` as well as the compatibility assistant file so boot sync cannot silently restore the 120-second production default.
+- `GC-HARNESS-085`: automatically unmount React test renderers after each Mission Control test and make listener effects remove handlers from the exact registration target, preventing aggregate worker-shutdown console races.
 - Standard Code Quality `#1688` and `#1689`: remove the two analyzer-confirmed dead assignments without weakening recovery behavior.
 - Standard Code Quality `#1687`: retain the explicit bounded activation-resolution loop; its early-return and `out`-parameter semantics are clearer than a LINQ allocation/indirection and its rejection is recorded in the security triage guide.
 
@@ -63,6 +64,8 @@ Proof completed on the first clean implementation candidate `0c39a37b4120cc68668
 - Agentic, memory, realtime, backup, desktop-source, external-source, and isolated Docker/PostgreSQL recovery/parity lanes passed.
 - The first aggregate `verify:all` correctly failed on a persisted-mobile Vite module connection, an operator-proof provider-fixture mismatch, credential-bearing auth evidence, and a stale architecture baseline. Those four defects are repaired; focused operator proof, exact-root redaction, and architecture proof now pass. Final clean-SHA recertification remains pending.
 - The next full-usability rerun exposed two more harness defects: a saturated scanner assertion coupled to a pre-deadline ready frame and a Gateway fault fixture that wrote its five-second watchdog only to a boot-overwritten compatibility file. Both are repaired. The focused real-Gateway fault journey now passes all 9/9 steps with 16 loopback dispatches, including terminal timeout reconciliation and next-turn admission.
+- The repaired full usability campaign passed on `01581a74900f41e6b4aad0954ab713b228c4b7fc` with 148 assertions and no required skip, followed by a passing second clean-profile core smoke and isolated PostgreSQL recovery/parity run with 30/30 storage contracts. Exact artifacts are recorded in `Gate Results.csv`.
+- The next aggregate passed 650 scenarios and every one of its 951 Mission Control assertions, but Vitest reported six late console-RPC rejections from renderers left mounted at worker shutdown. Automatic renderer cleanup exposed five listener effects that dereferenced replaced `window` or `document` globals during teardown. Those owners now retain the exact event target, a sequential cleanup regression passes, and the complete Mission Control suite passes 123 files and 953 tests with coverage. Final clean-commit aggregate recertification remains pending.
 
 These results are intentionally marked focused. The final result files are updated only after clean-SHA execution.
 

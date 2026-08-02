@@ -145,9 +145,10 @@ function useComposerV2Enabled(): boolean {
     if (typeof window === "undefined" || typeof window.addEventListener !== "function") {
       return;
     }
+    const eventTarget = window;
     const handle = () => setEnabled(readComposerV2());
-    window.addEventListener("storage", handle);
-    return () => window.removeEventListener("storage", handle);
+    eventTarget.addEventListener("storage", handle);
+    return () => eventTarget.removeEventListener("storage", handle);
   }, []);
   return enabled;
 }
@@ -636,12 +637,13 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
   useEffect(() => {
     const palette = props.composerPalette;
     if (!palette?.enabled || typeof window === "undefined") return;
+    const eventTarget = window;
     const handlePaletteRequest = (event: Event) => {
       event.preventDefault();
       palette.onOpen();
     };
-    window.addEventListener(OPEN_CHAT_COMPOSER_PALETTE_EVENT, handlePaletteRequest);
-    return () => window.removeEventListener(OPEN_CHAT_COMPOSER_PALETTE_EVENT, handlePaletteRequest);
+    eventTarget.addEventListener(OPEN_CHAT_COMPOSER_PALETTE_EVENT, handlePaletteRequest);
+    return () => eventTarget.removeEventListener(OPEN_CHAT_COMPOSER_PALETTE_EVENT, handlePaletteRequest);
   }, [props.composerPalette]);
   useEffect(() => {
     if (props.composerPalette?.globalOpen) paletteSearchRef.current?.focus();

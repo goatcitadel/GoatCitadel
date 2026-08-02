@@ -45,6 +45,7 @@ export function useEscapeToStopStream(input: { enabled: boolean; onStop: () => v
       return undefined;
     }
 
+    const eventTarget = document;
     let torndown = false;
 
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -76,10 +77,10 @@ export function useEscapeToStopStream(input: { enabled: boolean; onStop: () => v
       });
     };
 
-    document.addEventListener("keydown", handleKeyDown);
+    eventTarget.addEventListener("keydown", handleKeyDown);
     return () => {
       torndown = true;
-      document.removeEventListener("keydown", handleKeyDown);
+      eventTarget.removeEventListener("keydown", handleKeyDown);
     };
   }, [enabled, onStop]);
 }
