@@ -55,7 +55,11 @@ import {
 } from "./scenarios/browser-helpers.mjs";
 import { seedMissionControlNextFixture as seedMissionControlNextFixtureImpl } from "./scenarios/fixture-seeding.mjs";
 import { collectVisualBaselineCoverage } from "./visual-baseline-coverage.mjs";
-import { captureConfigJsonSnapshots, findBackupConfigSnapshotDrift } from "./backup-snapshot-stability.mjs";
+import {
+  captureConfigJsonSnapshots,
+  findBackupConfigSnapshotDrift,
+  removeBackupMutationFileWithRetry,
+} from "./backup-snapshot-stability.mjs";
 import {
   API_COMPAT_ALLOWLIST_PATH,
   API_COMPAT_BASELINE_PATH,
@@ -2483,6 +2487,11 @@ export async function runBackupRoundtripLane(context, _options = {}) {
 
         await stopProcess(stack.gateway);
         const configMutationSummary = {};
+        const mutationRemovalAttempts = {};
+        const removeMutationFile = async (targetPath) => {
+          const relativePath = path.relative(runtimeRoot, targetPath).replaceAll("\\", "/");
+          mutationRemovalAttempts[relativePath] = await removeBackupMutationFileWithRetry(targetPath);
+        };
         for (const [index, snapshot] of configSnapshots.entries()) {
           if (snapshot.relativePath === "config/llm-providers.json") {
             const mutatedConfig = {
@@ -2516,17 +2525,17 @@ export async function runBackupRoundtripLane(context, _options = {}) {
             };
             continue;
           }
-          await fs.rm(snapshot.absolutePath, { force: true });
+          await removeMutationFile(snapshot.absolutePath);
           configMutationSummary[snapshot.relativePath] = {
             mutation: "deleted",
             mutated: !(await exists(snapshot.absolutePath)),
           };
         }
-        await fs.rm(dbPath, { force: true });
-        await fs.rm(dbWalPath, { force: true });
-        await fs.rm(dbShmPath, { force: true });
-        await fs.rm(transcriptPath, { force: true });
-        await fs.rm(auditPath, { force: true });
+        await removeMutationFile(dbPath);
+        await removeMutationFile(dbWalPath);
+        await removeMutationFile(dbShmPath);
+        await removeMutationFile(transcriptPath);
+        await removeMutationFile(auditPath);
         const dbMissing = !(await exists(dbPath));
         const transcriptMissing = !(await exists(transcriptPath));
         const auditMissing = !(await exists(auditPath));
@@ -2658,6 +2667,7 @@ export async function runBackupRoundtripLane(context, _options = {}) {
           auditPath,
           originalConfigLabel: originalLabel,
           backupSnapshotAttempts,
+          mutationRemovalAttempts,
           createdRetentionPolicy: createdRetentionPolicy.body,
           createdBackup: createdBackup.body,
           mutatedConfigLabel: `${originalLabel}${mutatedMarker}`,

@@ -55,3 +55,25 @@ export async function findBackupConfigSnapshotDrift(configSnapshots, backupPaylo
   }
   return drift.sort((left, right) => left.localeCompare(right));
 }
+
+export async function removeBackupMutationFileWithRetry(filePath, options = {}) {
+  const attempts = options.attempts ?? 8;
+  const retryDelayMs = options.retryDelayMs ?? 250;
+  const remove = options.remove ?? ((targetPath) => fs.rm(targetPath, { force: true }));
+  const wait = options.wait ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
+  if (!Number.isInteger(attempts) || attempts < 1) throw new Error("backup mutation removal attempts must be positive");
+  if (!Number.isInteger(retryDelayMs) || retryDelayMs < 0) {
+    throw new Error("backup mutation removal retry delay must be a nonnegative integer");
+  }
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      await remove(filePath);
+      return attempt;
+    } catch (error) {
+      const transient = error?.code === "EBUSY" || error?.code === "EPERM" || error?.code === "EACCES";
+      if (!transient || attempt === attempts) throw error;
+      await wait(retryDelayMs);
+    }
+  }
+  throw new Error("backup mutation removal exhausted without an outcome");
+}
