@@ -1234,6 +1234,72 @@ describe("DurableRunService", () => {
     }
   });
 
+  it("retires terminal v1 post-commit markers without replaying legacy side effects", async () => {
+    const run = {
+      ...createRun("run-legacy-terminal-post-commit", "completed", "chat.turn.execute"),
+      payload: { version: "chat.turn.execute.v1" },
+      metadata: {
+        generalChatPostCommitPending: {
+          version: 1,
+          generationId: "generation-legacy-terminal",
+          traceStatus: "completed",
+          requestedAt: "2026-07-11T00:00:00.000Z",
+          completedEffects: [
+            "capability_gap",
+            "learned_memory_user",
+            "learned_memory_assistant",
+            "memory_prewarm",
+            "realtime",
+            "agent_end",
+          ],
+          durableEffectRunIds: {
+            commitments: "legacy-commitments",
+            background_review: "legacy-background-review",
+            memory_maintenance: "legacy-memory-maintenance",
+          },
+        },
+      },
+    } satisfies DurableRunRecord;
+    const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const logger = {
+      info: vi.fn(),
+      debug: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    } satisfies DurableRunServiceLogger;
+    const onGeneralChatPostCommit = vi.fn();
+    const service = new DurableRunService(createContext(runs, [], [], { logger }) as unknown as ServiceContext, {
+      backgroundTasks: new Set(),
+      workflowRegistry: {
+        executeWorkflow: vi.fn(),
+        isWorkflowRecoverable: () => ({ recoverable: true }),
+        markWorkflowUnrecoverable: vi.fn(),
+      },
+      onGeneralChatPostCommit,
+    });
+
+    await expect(service.reconcileGeneralChatPostCommit(run.runId)).resolves.toBe(true);
+
+    const retired = runs.get(run.runId)!;
+    expect(retired.metadata).not.toHaveProperty("generalChatPostCommitPending");
+    expect(retired.metadata).not.toHaveProperty("generalChatPostCommit");
+    expect(retired.metadata).toMatchObject({
+      legacyGeneralChatPostCommitSettlement: {
+        version: "chat.post_commit.legacy-settlement.v1",
+        disposition: "terminal_v1_effects_not_replayed",
+        generationId: "generation-legacy-terminal",
+        traceStatus: "completed",
+        pendingMarkerSha256: expect.stringMatching(/^[0-9a-f]{64}$/u),
+        retiredAt: expect.any(String),
+      },
+    });
+    expect(onGeneralChatPostCommit).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledTimes(1);
+
+    await expect(service.reconcileGeneralChatPostCommit(run.runId)).resolves.toBe(true);
+    expect(logger.info).toHaveBeenCalledTimes(1);
+  });
+
   it("continues the pending general Chat post-commit sweep while another run is stalled", async () => {
     vi.useFakeTimers();
     try {

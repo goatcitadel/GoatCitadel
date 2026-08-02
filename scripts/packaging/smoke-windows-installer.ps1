@@ -78,12 +78,22 @@ if (-not (Test-Path -LiteralPath $payloadValidatorPath -PathType Leaf)) {
 $previousGoatCitadelHome = [Environment]::GetEnvironmentVariable("GOATCITADEL_HOME", "Process")
 $previousGoatCitadelAppDir = [Environment]::GetEnvironmentVariable("GOATCITADEL_APP_DIR", "Process")
 $previousWebViewDataFolder = [Environment]::GetEnvironmentVariable("WEBVIEW2_USER_DATA_FOLDER", "Process")
+$previousWebViewBrowserArguments = [Environment]::GetEnvironmentVariable("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "Process")
 $previousDesktopLauncher = [Environment]::GetEnvironmentVariable("GOATCITADEL_DESKTOP_LAUNCHER", "Process")
 $previousGatewayUrl = [Environment]::GetEnvironmentVariable("GOATCITADEL_GATEWAY_URL", "Process")
 $previousMissionControlUrl = [Environment]::GetEnvironmentVariable("GOATCITADEL_MISSION_CONTROL_URL", "Process")
+$debugPortListener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+try {
+  $debugPortListener.Start()
+  $webViewDebugPort = ([System.Net.IPEndPoint]$debugPortListener.LocalEndpoint).Port
+}
+finally {
+  $debugPortListener.Stop()
+}
 $env:GOATCITADEL_HOME = $runtimeBase
 $env:GOATCITADEL_APP_DIR = $appHome
 $env:WEBVIEW2_USER_DATA_FOLDER = $webViewDataDir
+$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=$webViewDebugPort"
 Remove-Item Env:GOATCITADEL_DESKTOP_LAUNCHER -ErrorAction SilentlyContinue
 Remove-Item Env:GOATCITADEL_GATEWAY_URL -ErrorAction SilentlyContinue
 Remove-Item Env:GOATCITADEL_MISSION_CONTROL_URL -ErrorAction SilentlyContinue
@@ -304,6 +314,45 @@ try {
     Start-Sleep -Milliseconds 500
   }
 
+  $webViewTarget = $null
+  $webViewTargets = @()
+  $webViewDeadline = (Get-Date).AddSeconds(40)
+  while ((Get-Date) -lt $webViewDeadline) {
+    $hostProc.Refresh()
+    if ($hostProc.HasExited) {
+      $hex = "0x{0:X8}" -f $hostProc.ExitCode
+      throw "Desktop host exited during embedded Mission Control smoke with code $hex."
+    }
+    try {
+      $webViewTargets = @(
+        Invoke-RestMethod -Uri "http://127.0.0.1:$webViewDebugPort/json/list" -TimeoutSec 2 -ErrorAction Stop
+      )
+      $webViewTarget = $webViewTargets |
+        Where-Object { $_.type -eq "page" -and $_.url -ne "about:blank" } |
+        Select-Object -First 1
+    }
+    catch {
+      $webViewTarget = $null
+    }
+    if ($webViewTarget) {
+      break
+    }
+    Start-Sleep -Milliseconds 500
+  }
+
+  if (-not $webViewTarget) {
+    $observedTargets = ($webViewTargets | ForEach-Object { "$($_.type):$($_.url)" }) -join ", "
+    throw "Desktop host presented a titled window but its embedded Mission Control target remained blank. Observed WebView targets: $observedTargets"
+  }
+  $webViewUri = [Uri]$webViewTarget.url
+  if ($webViewUri.Scheme -notin @("http", "https") -or
+      $webViewUri.Host -notin @("127.0.0.1", "localhost", "::1", "[::1]")) {
+    throw "Embedded Mission Control navigated outside the allowed loopback boundary: $($webViewTarget.url)"
+  }
+  if ($webViewTarget.title -ne "GoatCitadel Mission Control Next") {
+    throw "Embedded Mission Control page title was '$($webViewTarget.title)'; expected 'GoatCitadel Mission Control Next'."
+  }
+
   # Tear down the host and its WebView/runtime descendants before readiness and
   # uninstall checks so no file handle under the install directory remains open.
   if (-not $hostProc.HasExited) {
@@ -327,6 +376,7 @@ try {
     throw "Desktop host window title was '$windowTitle'; expected 'GoatCitadel Mission Control'."
   }
   Write-Host "Launch smoke passed: host presented window '$windowTitle'."
+  Write-Host "Embedded Mission Control smoke passed: WebView navigated to $($webViewTarget.url)."
 
   # Drive the same packaged launcher used by the desktop host. This proves the
   # installed gateway and Mission Control become healthy with bundled production deps.
@@ -528,6 +578,12 @@ finally {
   }
   else {
     $env:WEBVIEW2_USER_DATA_FOLDER = $previousWebViewDataFolder
+  }
+  if ($null -eq $previousWebViewBrowserArguments) {
+    Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS -ErrorAction SilentlyContinue
+  }
+  else {
+    $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = $previousWebViewBrowserArguments
   }
   if ($null -eq $previousDesktopLauncher) {
     Remove-Item Env:GOATCITADEL_DESKTOP_LAUNCHER -ErrorAction SilentlyContinue

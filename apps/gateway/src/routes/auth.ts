@@ -121,8 +121,9 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.post("/api/v1/auth/sse-token", operatorAuthRoute, async (request, reply) => {
     const authMode = fastify.gatewayConfig.assistant.auth.mode;
     if (authMode === "none") {
-      return reply.code(400).send({
-        error: "SSE token bridge is not needed when auth mode is none",
+      return reply.send({
+        scope: "events:stream",
+        authMode: "none",
       });
     }
     const parsed = sseTokenIssueSchema.safeParse(request.body ?? {});

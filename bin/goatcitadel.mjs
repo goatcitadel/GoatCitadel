@@ -1077,6 +1077,15 @@ async function issueDesktopEventStreamToken(gatewayUrl) {
         expiresAt: payload.expiresAt,
       };
     }
+    if (response.ok && payload?.authMode === "none") {
+      return {
+        scope: payload.scope || "events:stream",
+        authMode: "none",
+      };
+    }
+    // Compatibility with older Gateways that represented the tokenless mode
+    // as a 400 response. New Gateways return the success shape above so normal
+    // desktop status polling does not generate warning logs.
     if (response.status === 400 && /not needed/i.test(String(payload?.error ?? ""))) {
       return {
         scope: "events:stream",

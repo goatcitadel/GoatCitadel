@@ -57,6 +57,7 @@ import {
   readExactAutonomousChatPostCommitSettlement,
   readExactChatTurnAdmissionHandoff,
   readExactGeneralChatPostCommitSettlement,
+  readExactLegacyGeneralChatPostCommitPendingMarker,
   readExactLinkedFinalizationPendingMarker,
   readExactLinkedFinalizationSettlement,
   selectCanonicalGeneralChatPostCommitResolution,
@@ -128,6 +129,8 @@ const DURABLE_LEASE_HEARTBEAT_MAX_CONSECUTIVE_FAILURES = 3;
 const DURABLE_EVENT_LOOP_LAG_WARN_MS = 1_000;
 const DURABLE_EVENT_LOOP_LAG_PAUSE_MS = 2_000;
 const DURABLE_CHECKPOINT_KEEP_PER_RUN_DEFAULT = 50;
+const LEGACY_GENERAL_CHAT_POST_COMMIT_SETTLEMENT_METADATA_KEY = "legacyGeneralChatPostCommitSettlement" as const;
+const LEGACY_GENERAL_CHAT_POST_COMMIT_SETTLEMENT_VERSION = "chat.post_commit.legacy-settlement.v1" as const;
 const DURABLE_CHECKPOINT_DISK_BUDGET_BYTES_DEFAULT = 64 * 1024 * 1024;
 const TERMINAL_CHAT_ADMISSION_RELEASE_POLL_MS = 25;
 const TERMINAL_CHAT_ADMISSION_RECOVERY_TIMEOUT_MS = 5_000;
@@ -1816,6 +1819,13 @@ export class DurableRunService {
     let observed: DurableRunRecord;
     try {
       observed = this.ctx.storage.durableRuns.getRun(runId);
+      const legacySettlement = this.settleLegacyGeneralChatPostCommit(observed);
+      if (legacySettlement) {
+        return true;
+      }
+      // A concurrent owner may have retired or upgraded the marker after our
+      // initial read. Continue from canonical storage, never the stale v1 row.
+      observed = this.ctx.storage.durableRuns.getRun(runId);
       if (readLinkedFinalizationPending(observed)) {
         await this.finalizePendingLinkedState(observed);
         observed = this.ctx.storage.durableRuns.getRun(runId);
@@ -1862,6 +1872,84 @@ export class DurableRunService {
     };
     this.generalChatPostCommitInFlight.set(runId, inFlightEntry);
     return this.awaitGeneralChatPostCommitInFlight(runId, inFlightEntry);
+  }
+
+  private settleLegacyGeneralChatPostCommit(observed: DurableRunRecord): DurableRunRecord | undefined {
+    const legacyMarker = readExactLegacyGeneralChatPostCommitPendingMarker(
+      observed.metadata?.[GENERAL_CHAT_POST_COMMIT_PENDING_METADATA_KEY],
+    );
+    if (!legacyMarker) return undefined;
+    const payloadVersion = (observed.payload as { version?: unknown } | undefined)?.version;
+    if (
+      observed.workflowKey !== "chat.turn.execute" ||
+      payloadVersion !== "chat.turn.execute.v1" ||
+      !isRepresentableTerminalChatRun(observed) ||
+      observed.metadata?.[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY] !== undefined ||
+      observed.metadata?.[AUTONOMOUS_CHAT_POST_COMMIT_PENDING_METADATA_KEY] !== undefined ||
+      observed.metadata?.linkedFinalizationPending !== undefined ||
+      observed.metadata?.generalChatPostCommit !== undefined ||
+      observed.metadata?.[LEGACY_GENERAL_CHAT_POST_COMMIT_SETTLEMENT_METADATA_KEY] !== undefined
+    ) {
+      throw new Error(
+        `Legacy Durable Chat post-commit ${observed.runId} has conflicting authority or settlement evidence.`,
+      );
+    }
+
+    const expectedMarkerSha256 = hashChatTurnRuntimeAuthorityValue(legacyMarker);
+    let retired = false;
+    const settled = this.retryDurableRunUpdate(observed.runId, (current) => {
+      retired = false;
+      const currentMarker = readExactLegacyGeneralChatPostCommitPendingMarker(
+        current.metadata?.[GENERAL_CHAT_POST_COMMIT_PENDING_METADATA_KEY],
+      );
+      if (!currentMarker) return current;
+      if (
+        current.workflowKey !== "chat.turn.execute" ||
+        (current.payload as { version?: unknown } | undefined)?.version !== "chat.turn.execute.v1" ||
+        !isRepresentableTerminalChatRun(current) ||
+        current.metadata?.[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY] !== undefined ||
+        current.metadata?.[AUTONOMOUS_CHAT_POST_COMMIT_PENDING_METADATA_KEY] !== undefined ||
+        current.metadata?.linkedFinalizationPending !== undefined ||
+        current.metadata?.generalChatPostCommit !== undefined ||
+        current.metadata?.[LEGACY_GENERAL_CHAT_POST_COMMIT_SETTLEMENT_METADATA_KEY] !== undefined ||
+        hashChatTurnRuntimeAuthorityValue(currentMarker) !== expectedMarkerSha256
+      ) {
+        throw new Error(`Legacy Durable Chat post-commit ${current.runId} changed before safe retirement.`);
+      }
+      const retiredAt = new Date().toISOString();
+      const metadata = { ...(current.metadata ?? {}) };
+      delete metadata[GENERAL_CHAT_POST_COMMIT_PENDING_METADATA_KEY];
+      metadata[LEGACY_GENERAL_CHAT_POST_COMMIT_SETTLEMENT_METADATA_KEY] = {
+        version: LEGACY_GENERAL_CHAT_POST_COMMIT_SETTLEMENT_VERSION,
+        disposition: "terminal_v1_effects_not_replayed",
+        generationId: currentMarker.generationId,
+        traceStatus: currentMarker.traceStatus,
+        requestedAt: currentMarker.requestedAt,
+        completedEffects: [...currentMarker.completedEffects],
+        durableEffectRunIds: { ...currentMarker.durableEffectRunIds },
+        pendingMarkerSha256: expectedMarkerSha256,
+        retiredAt,
+      };
+      retired = true;
+      return this.ctx.storage.durableRuns.updateRun({
+        runId: current.runId,
+        status: current.status,
+        metadata,
+        updatedAt: retiredAt,
+        expectedVersion: current.version,
+      });
+    });
+    if (!retired) return undefined;
+    this.resolveLogger().info(
+      {
+        runId: settled.runId,
+        generationId: legacyMarker.generationId,
+        completedEffectCount: legacyMarker.completedEffects.length,
+        durableEffectCount: Object.keys(legacyMarker.durableEffectRunIds).length,
+      },
+      "retired terminal legacy Chat post-commit marker without replaying side effects",
+    );
+    return settled;
   }
 
   private awaitGeneralChatPostCommitInFlight(runId: string, inFlight: GeneralChatPostCommitInFlight): Promise<boolean> {
