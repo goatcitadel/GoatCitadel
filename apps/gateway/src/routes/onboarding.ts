@@ -197,8 +197,12 @@ export const onboardingRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
 
-    return reply.send({
-      state: fastify.services.onboarding.markOnboardingComplete(parsed.data.completedBy),
-    });
+    try {
+      return reply.send({
+        state: fastify.services.onboarding.markOnboardingComplete(parsed.data.completedBy),
+      });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
   });
 };
