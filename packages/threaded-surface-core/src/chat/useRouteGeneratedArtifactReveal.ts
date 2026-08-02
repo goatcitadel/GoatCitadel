@@ -8,25 +8,26 @@ export function useRouteGeneratedArtifactReveal(input: {
   revealGeneratedArtifact: (artifact: ChatGeneratedArtifactRecord) => Promise<void> | void;
   setActiveGeneratedArtifact: (artifact: ChatGeneratedArtifactRecord | null) => void;
 }): void {
+  const { revealGeneratedArtifact, routeArtifactId, setActiveGeneratedArtifact, workspaceId } = input;
   useEffect(() => {
-    if (!input.routeArtifactId) {
-      input.setActiveGeneratedArtifact(null);
+    if (!routeArtifactId) {
+      setActiveGeneratedArtifact(null);
       return;
     }
     let cancelled = false;
-    void fetchChatGeneratedArtifact(input.routeArtifactId, input.workspaceId)
+    void fetchChatGeneratedArtifact(routeArtifactId, workspaceId)
       .then((response) => {
         if (!cancelled) {
-          void input.revealGeneratedArtifact(response.item);
+          void revealGeneratedArtifact(response.item);
         }
       })
       .catch(() => {
         if (!cancelled) {
-          input.setActiveGeneratedArtifact(null);
+          setActiveGeneratedArtifact(null);
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [input.revealGeneratedArtifact, input.routeArtifactId, input.setActiveGeneratedArtifact, input.workspaceId]);
+  }, [revealGeneratedArtifact, routeArtifactId, setActiveGeneratedArtifact, workspaceId]);
 }

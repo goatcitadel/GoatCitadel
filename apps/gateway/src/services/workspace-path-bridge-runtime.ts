@@ -337,10 +337,11 @@ export class FilePosixProjectGitBindingStore implements PosixProjectGitBindingSt
         fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0),
         0o600,
       );
-      let stagedIdentity: fs.Stats;
+      let stagedIdentity: fs.BigIntStats;
       try {
-        stagedIdentity = fs.fstatSync(stagedFd);
-        if (!isSafeEvidenceFileStat(stagedIdentity, 0)) return false;
+        const stagedStat = fs.fstatSync(stagedFd);
+        stagedIdentity = fs.fstatSync(stagedFd, { bigint: true });
+        if (!isSafeEvidenceFileStat(stagedStat, 0)) return false;
       } finally {
         fs.closeSync(stagedFd);
       }
@@ -356,7 +357,10 @@ export class FilePosixProjectGitBindingStore implements PosixProjectGitBindingSt
       );
       try {
         const reopened = fs.fstatSync(stagedWriteFd);
-        if (!sameFileIdentity(stagedIdentity, reopened) || !isSafeEvidenceFileStat(reopened, 0)) return false;
+        const reopenedIdentity = fs.fstatSync(stagedWriteFd, { bigint: true });
+        if (!sameNativeFileIdentity(stagedIdentity, reopenedIdentity) || !isSafeEvidenceFileStat(reopened, 0)) {
+          return false;
+        }
         writeExactBytes(stagedWriteFd, expectedBytes);
         fs.fsyncSync(stagedWriteFd);
         if (!isSafeEvidenceFileStat(fs.fstatSync(stagedWriteFd), expectedBytes.byteLength)) return false;
@@ -403,7 +407,12 @@ export class FilePosixProjectGitBindingStore implements PosixProjectGitBindingSt
       if (directoryFd !== undefined) {
         try {
           const cleanupRoot = this.resolveStableDirectoryReference(directoryFd);
-          if (sameFileIdentity(fs.statSync(cleanupRoot), fs.fstatSync(directoryFd))) {
+          if (
+            sameNativeFileIdentity(
+              fs.statSync(cleanupRoot, { bigint: true }),
+              fs.fstatSync(directoryFd, { bigint: true }),
+            )
+          ) {
             if (stagedName) safeUnlink(joinPath(cleanupRoot, stagedName));
             if (publishedByThisCall && !completed && evidenceName) {
               // Only remove a failed publication through a reference that is
@@ -428,10 +437,15 @@ export class FilePosixProjectGitBindingStore implements PosixProjectGitBindingSt
       (this.options.resolveStableDirectoryReference
         ? [this.options.resolveStableDirectoryReference(this.evidenceRoot, directoryFd)]
         : [`/proc/self/fd/${directoryFd}`, `/dev/fd/${directoryFd}`]);
-    const directoryIdentity = fs.fstatSync(directoryFd);
+    const directoryIdentity = fs.fstatSync(directoryFd, { bigint: true });
     for (const candidate of candidates) {
       try {
-        if (isAbsolutePath(candidate) && sameFileIdentity(fs.statSync(candidate), directoryIdentity)) return candidate;
+        if (
+          isAbsolutePath(candidate) &&
+          sameNativeFileIdentity(fs.statSync(candidate, { bigint: true }), directoryIdentity)
+        ) {
+          return candidate;
+        }
       } catch {
         // Try the next directory-handle projection.
         continue;
@@ -468,7 +482,7 @@ export interface FilePosixProjectGitBindingStoreOptions {
 
 interface EvidencePathIdentity {
   path: string;
-  stat: fs.Stats;
+  stat: fs.BigIntStats;
 }
 
 interface EvidenceRootIdentity {
@@ -479,7 +493,7 @@ interface EvidenceRootIdentity {
 function captureEvidenceRootIdentity(evidenceRoot: string): EvidenceRootIdentity | undefined {
   try {
     const ancestors = listNativeAncestors(evidenceRoot).map((candidate): EvidencePathIdentity => {
-      const stat = fs.lstatSync(candidate);
+      const stat = fs.lstatSync(candidate, { bigint: true });
       if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("Unsafe evidence-root ancestor.");
       if (!sameNativePath(normalizePath(fs.realpathSync(candidate)), candidate)) {
         throw new Error("Evidence-root ancestor is not canonical.");
@@ -506,14 +520,14 @@ function verifyEvidenceRootIdentity(
     !current.ancestors.every(
       (entry, index) =>
         sameNativePath(entry.path, expected.ancestors[index]?.path ?? "") &&
-        sameFileIdentity(entry.stat, expected.ancestors[index]?.stat),
+        sameNativeFileIdentity(entry.stat, expected.ancestors[index]?.stat),
     ) ||
-    !sameFileIdentity(expected.root.stat, fs.fstatSync(directoryFd))
+    !sameNativeFileIdentity(expected.root.stat, fs.fstatSync(directoryFd, { bigint: true }))
   ) {
     return false;
   }
   try {
-    return sameFileIdentity(expected.root.stat, fs.statSync(stableDirectoryReference));
+    return sameNativeFileIdentity(expected.root.stat, fs.statSync(stableDirectoryReference, { bigint: true }));
   } catch {
     return false;
   }
@@ -538,10 +552,10 @@ function listNativeAncestors(target: string): string[] {
   return ancestors;
 }
 
-function hasSafeEvidenceRootPermissions(stat: fs.Stats): boolean {
+function hasSafeEvidenceRootPermissions(stat: fs.BigIntStats): boolean {
   if (process.platform === "win32") return true;
-  if ((stat.mode & 0o077) !== 0) return false;
-  return typeof process.getuid !== "function" || stat.uid === process.getuid();
+  if ((stat.mode & 0o077n) !== 0n) return false;
+  return typeof process.getuid !== "function" || stat.uid === BigInt(process.getuid());
 }
 
 function isSafeEvidenceFileStat(stat: fs.Stats, exactSize: number): boolean {
@@ -555,7 +569,10 @@ function isSafeEvidenceFileStat(stat: fs.Stats, exactSize: number): boolean {
   );
 }
 
-function sameFileIdentity(left: fs.Stats, right: fs.Stats | undefined): boolean {
+export function sameNativeFileIdentity(
+  left: Pick<fs.BigIntStats, "dev" | "ino">,
+  right: Pick<fs.BigIntStats, "dev" | "ino"> | undefined,
+): boolean {
   return right !== undefined && left.dev === right.dev && left.ino === right.ino;
 }
 
@@ -572,6 +589,7 @@ function readExactSafeEvidence(evidencePath: string, expectedBytes: Buffer): boo
   const fileDescriptor = fs.openSync(evidencePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
   try {
     const initial = fs.fstatSync(fileDescriptor);
+    const initialIdentity = fs.fstatSync(fileDescriptor, { bigint: true });
     if (!isSafeEvidenceFileStat(initial, expectedBytes.byteLength)) return false;
     const actual = Buffer.alloc(expectedBytes.byteLength);
     let offset = 0;
@@ -581,9 +599,10 @@ function readExactSafeEvidence(evidencePath: string, expectedBytes: Buffer): boo
       offset += read;
     }
     const named = fs.lstatSync(evidencePath);
+    const namedIdentity = fs.lstatSync(evidencePath, { bigint: true });
     return (
       isSafeEvidenceFileStat(named, expectedBytes.byteLength) &&
-      sameFileIdentity(initial, named) &&
+      sameNativeFileIdentity(initialIdentity, namedIdentity) &&
       actual.equals(expectedBytes)
     );
   } finally {

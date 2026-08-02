@@ -515,7 +515,8 @@ export async function pollSseConnectionRecoveryEvidence(input) {
     pollCount += 1;
     snapshot = input.getSnapshot();
     clientSseDiagnostics = await input.readClientSseDiagnostics();
-    recovery = evaluateSseConnectionRecovery(snapshot, clientSseDiagnostics);
+    // Standard #1688: polling eligibility reads the current evidence directly;
+    // retain only the final recovery evaluation below.
     if (!isPollableSseRecoveryCandidate(snapshot, clientSseDiagnostics)) {
       break;
     }
@@ -4034,7 +4035,9 @@ async function waitForExactCompletedChatTurn(
   expectedAssistantContent = DETERMINISTIC_LLM_DEFAULT_REPLY,
 ) {
   const deadline = Date.now() + ACTION_TIMEOUT_MS;
-  let latestStatus = "missing";
+  // Standard #1689: the do/while body always performs one canonical thread read
+  // before this value is consumed by the timeout diagnostic.
+  let latestStatus;
   do {
     const thread = await checkedRequest(
       state.gatewayUrl,

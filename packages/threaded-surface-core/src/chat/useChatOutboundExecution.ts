@@ -135,8 +135,7 @@ export function useChatOutboundExecution(
   onExternalContextSentRef.current = input.externalContext?.onExternalContextSent;
   const onTemplateInvocationSentRef = useRef(input.externalContext?.onTemplateInvocationSent);
   onTemplateInvocationSentRef.current = input.externalContext?.onTemplateInvocationSent;
-  const { surfaceMode, selectedSessionId, selectedSession, prefs, fullWebAccess, selectedProviderId, selectedModel } =
-    sessionConfig;
+  const { selectedSessionId, selectedSession, prefs, fullWebAccess, selectedProviderId, selectedModel } = sessionConfig;
   const { streamEnabled, visualStreamMode = "smooth", activeStreamRef } = streamConfig;
   const { sending, error, queuedOutbound, thread, messages } = stateConfig;
   const {
@@ -365,7 +364,7 @@ export function useChatOutboundExecution(
       commitThreadUpdate(nextThread);
       return true;
     },
-    [commitThreadUpdate, messageMutationVersionRef],
+    [activeStreamRef, commitThreadUpdate, finalizedStreamMessageRef, messageMutationVersionRef],
   );
   // These callback refs are intentionally refreshed during render so sibling
   // orchestration hooks can call the current implementation before effects run.
@@ -1077,9 +1076,12 @@ export function useChatOutboundExecution(
     [
       clearStreamingPreview,
       commitThreadUpdate,
+      activeStreamRef,
       ensureSession,
       ensureFreshRoutePreflight,
+      finalizedStreamMessageRef,
       finishOutboundExecution,
+      getOutboundErrorSource,
       getStreamingPreviewBuffer,
       handleCommandExecution,
       fullWebAccess,
@@ -1090,13 +1092,14 @@ export function useChatOutboundExecution(
       scheduleStreamMessageReconciliation,
       selectedModel,
       selectedProviderId,
-      surfaceMode,
       setCapabilitySuggestions,
       setSpecialistSuggestions,
       setDraft,
       setEditingTurnId,
       setError,
       setPendingAttachments,
+      setPendingApproval,
+      setPendingUserInput,
       streamEnabled,
       pushLocalNotice,
     ],

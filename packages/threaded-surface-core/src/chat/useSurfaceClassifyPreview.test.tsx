@@ -122,18 +122,13 @@ describe("useSurfaceClassifyPreview", () => {
     classifySurfaceMode.mockRejectedValue(new Error("network down"));
 
     let latest: ReturnType<typeof useSurfaceClassifyPreview> | undefined;
-    let caughtError: unknown = null;
 
     function Harness() {
-      try {
-        latest = useSurfaceClassifyPreview({
-          draft: "write a python script",
-          enabled: true,
-          hasBoundProject: false,
-        });
-      } catch (e) {
-        caughtError = e;
-      }
+      latest = useSurfaceClassifyPreview({
+        draft: "write a python script",
+        enabled: true,
+        hasBoundProject: false,
+      });
       return null;
     }
 
@@ -148,7 +143,6 @@ describe("useSurfaceClassifyPreview", () => {
     });
 
     expect(classifySurfaceMode).toHaveBeenCalledTimes(1);
-    expect(caughtError).toBeNull();
     expect(latest).toBeUndefined();
   });
 });

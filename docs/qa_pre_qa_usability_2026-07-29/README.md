@@ -1,5 +1,7 @@
 # GoatCitadel Pre-QA Usability Workbook — 2026-07-29
 
+Historical artifact: this workbook is superseded by [`../qa_pre_qa_usability_2026-08-01/README.md`](../qa_pre_qa_usability_2026-08-01/README.md). Its results remain an immutable record of the July campaign and are not the current QA handoff.
+
 Status: **campaign recertified at `bef4e3968`; QA-ready verdict still blocked on the packaged Windows candidate**
 
 This dated workbook is the execution record for the pre-QA usability, reliability, and quality closure campaign. Earlier QA plans and spreadsheets remain historical artifacts; they are not inputs to route coverage or release claims in this campaign.

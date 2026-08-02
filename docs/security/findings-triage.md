@@ -1,6 +1,6 @@
 # GitHub Security Findings — Triage Reference
 
-Last updated: 2026-07-25
+Last updated: 2026-08-01
 
 This document explains how to triage the recurring categories of GitHub Security findings against this repo and how to fix them **once** without rediscovering the same root cause every time. New AI agents (Claude, Codex, Copilot review bots) and human contributors should read this before opening a PR that touches rate-limit configuration, stream pipeline error handling, Dependabot alerts, the secret-scanning allowlist, or the synthetic-token fixtures used by the secret-redaction tests.
 
@@ -219,6 +219,24 @@ Applied examples live in [`apps/gateway/src/services/chat-message-history-servic
 
 Each fixed site carries an inline comment naming the rule, so a later "cleanup" pass does not
 silently revert the analyzer-visible form back into the flagged one. Preserve those comments.
+
+### 2026-08-01 Standard queue snapshot
+
+The current endpoint returned three open findings before the August pre-QA closure branch:
+
+- `#1688` and `#1689`, both `js/useless-assignment-to-local`, are confirmed and repaired on
+  `codex/pre-qa-closure-2026-08-01`. The recovery evaluator call remains load-bearing; only its
+  unused intermediate assignment was removed. The overwritten `latestStatus` initializer was
+  removed without changing terminal status handling.
+- `#1687`, `cs/linq/missed-where`, is rejected as non-actionable. The input is a tiny bounded
+  command-line activation set, and the explicit loop couples validation, `out`-parameter route
+  extraction, and immediate first-valid-route return. Converting it to LINQ would add allocation
+  or indirection and obscure the queue's security-sensitive early-return semantics without a
+  correctness, performance, or readability improvement. The existing activation tests remain
+  the behavioral evidence.
+
+Re-read the endpoint after every push. A source repair is not considered cleared until the
+finding disappears or an evidence-backed non-actionable finding is dismissed/recorded.
 
 ---
 

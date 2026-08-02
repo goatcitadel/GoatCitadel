@@ -2748,7 +2748,7 @@ describe("MissionThreadedControllerHost", () => {
       setupMocks();
       mockSurfaceMode = item.mode;
       useChatThreadControllerMock.mockReturnValue({
-        ...useChatThreadControllerMock(),
+        ...useChatThreadControllerMock.getMockImplementation()?.(),
         selectedSession: null,
         selectedProject: null,
         messages: [],
@@ -3516,17 +3516,17 @@ describe("MissionThreadedControllerHost", () => {
       await cleanupRenderedHosts();
       setupMocks();
       useChatSessionDataMock.mockReturnValue({
-        ...useChatSessionDataMock(),
+        ...useChatSessionDataMock.getMockImplementation()?.(),
         prefs: { ...prefs, ...prefsPatch },
       });
       const handleGenerateImage = vi.fn(async () => generatedArtifact);
       useChatMultimodalControlsMock.mockReturnValue({
-        ...useChatMultimodalControlsMock(),
+        ...useChatMultimodalControlsMock.getMockImplementation()?.(),
         handleGenerateImage,
       });
       const handleSend = vi.fn(async () => undefined);
       useChatSurfaceOrchestrationMock.mockReturnValue({
-        ...useChatSurfaceOrchestrationMock(),
+        ...useChatSurfaceOrchestrationMock.getMockImplementation()?.(),
         handleSend,
       });
 
@@ -4401,7 +4401,7 @@ describe("MissionThreadedControllerHost", () => {
     // autoRouteActive is true, and point the thread controller at a session
     // whose projectId reflects the desired bound/unbound state.
     function setupEmptyThread(options: { hasBoundProject: boolean }) {
-      const base = useChatSessionDataMock();
+      const base = useChatSessionDataMock.getMockImplementation()?.();
       useChatSessionDataMock.mockReturnValue({
         ...base,
         thread: { sessionId: "session-1", selectedTurnId: null, activeLeafTurnId: null, turns: [] },

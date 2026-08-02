@@ -180,13 +180,14 @@ export default tseslint.config(
     },
   },
   // React Hooks correctness for the shipped Mission Control surfaces. Scoped to
-  // mission-control-next + mission-control-shared (the retired legacy app is excluded).
+  // mission-control-next and its two shared React owners (the retired legacy app is excluded).
   // The CI lint gate uses --max-warnings 0, so both hook correctness lanes must
   // fail loudly instead of producing warning-only async guard drift.
   {
     files: [
       "apps/mission-control-next/**/*.{ts,tsx}",
       "packages/mission-control-shared/**/*.{ts,tsx}",
+      "packages/threaded-surface-core/**/*.{ts,tsx}",
     ],
     plugins: { "react-hooks": reactHooks },
     rules: {

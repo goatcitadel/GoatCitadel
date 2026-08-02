@@ -1,0 +1,7 @@
+Queue,Finding,Disposition,Status,Evidence,Next action
+Standard,#1688 js/useless-assignment-to-local,"Remove only the unused recovery assignment; preserve exact recovery evaluation outside the polling loop",Fixed locally,scripts/verification/lib/scenarios/usability-browser-action-lane.mjs,Rescan after push
+Standard,#1689 js/useless-assignment-to-local,"Remove the overwritten initial latestStatus value",Fixed locally,scripts/verification/lib/scenarios/usability-browser-action-lane.mjs,Rescan after push
+Standard,#1687 cs/linq/missed-where,"Reject as non-actionable: explicit bounded loop preserves early return and out-parameter route extraction without LINQ allocation or obscured control flow",Documented rejection,apps/mission-control-windows/Services/ActivationDeliveryQueue.cs,Dismiss with evidence if API/UI permits
+CodeQL,Open alerts,No open alerts in current API snapshot,Passed snapshot,gh code-scanning alerts query,Re-read at PR head
+AI,Authenticated AI findings,"Every item must be fixed or documented with source/test evidence",Pending authenticated snapshot,GitHub security quality AI findings page,Review now and once more after final fix push
+PR checks,Code Quality and CodeQL,Must pass at exact PR head,Pending,PR not opened,Run after push

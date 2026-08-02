@@ -412,11 +412,12 @@ export function useChatOperatorPrompts({
   );
 
   useEffect(() => {
+    const approvalRefreshTimers = approvalRefreshTimersRef.current;
     return () => {
-      for (const timer of approvalRefreshTimersRef.current) {
+      for (const timer of approvalRefreshTimers) {
         clearTimeout(timer);
       }
-      approvalRefreshTimersRef.current.clear();
+      approvalRefreshTimers.clear();
     };
   }, [selectedSessionId]);
 

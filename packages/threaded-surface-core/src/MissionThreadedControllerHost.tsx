@@ -1391,7 +1391,7 @@ export function MissionThreadedControllerHost({
     });
     const runId = response.items[0]?.runId;
     return runId ? fetchAgenticRunTree(runId, { workspaceId }) : null;
-  }, [currentSessionMode, selectedSessionId, workspaceId]);
+  }, [selectedSessionId, workspaceId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2531,6 +2531,7 @@ export function MissionThreadedControllerHost({
       pushLocalNotice,
       refreshOrchestrationRun,
       resolveAgenticRunTree,
+      workspaceId,
     ],
   );
   const guardWorkbenchNavigation = useCallback(
@@ -3086,7 +3087,7 @@ export function MissionThreadedControllerHost({
         }
       });
     },
-    [pushLocalNotice, refreshWorkbench, selectedSessionId, selectedTurn?.turnId],
+    [pushLocalNotice, refreshWorkbench, selectedSessionId, selectedTurn?.turnId, setUiError],
   );
 
   const applyPrefPatchToSession = useCallback(
@@ -3147,7 +3148,7 @@ export function MissionThreadedControllerHost({
         throw err;
       }
     },
-    [prefsRef, refreshChatSessionAggregate, selectedSession, setPrefs],
+    [prefsRef, refreshChatSessionAggregate, selectedSession, setPrefs, setUiError],
   );
   const handlePrefPatch = useCallback(
     async (patch: ChatSessionPrefsPatch) => {
@@ -3228,6 +3229,7 @@ export function MissionThreadedControllerHost({
       setHistoryView,
       setSelectedSessionId,
       setThread,
+      setUiError,
       thread,
     ],
   );
@@ -3259,7 +3261,7 @@ export function MissionThreadedControllerHost({
         }
       });
     },
-    [applyPrefPatchToSession, selectedSession],
+    [applyPrefPatchToSession, selectedSession, setUiError],
   );
   const requestThreadModelPatch = useCallback(
     (patch: ChatSessionPrefsPatch) => {
@@ -3967,7 +3969,6 @@ export function MissionThreadedControllerHost({
     knowledgeUrlDraft,
     messageMode,
     openBtwSideChat,
-    pendingAttachments.length,
     pendingAttachments,
     pendingDocumentContextRefs.length,
     pendingTemplateInvocation,
@@ -4111,6 +4112,7 @@ export function MissionThreadedControllerHost({
       archiveWorkspacePending,
       availableFolders,
       blockHistoricalMutation,
+      creatingSessionMode,
       deferredSearch,
       externalSessions,
       handleArchiveWorkspace,
@@ -4138,6 +4140,7 @@ export function MissionThreadedControllerHost({
       setSelectedFolderId,
       setSelectedProjectId,
       setSelectedTag,
+      setShowProjectCreate,
       showProjectCreate,
       sidebarLoadingMore,
       sidebarNextCursor,

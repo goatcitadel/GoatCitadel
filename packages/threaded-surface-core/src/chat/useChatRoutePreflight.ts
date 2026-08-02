@@ -153,7 +153,7 @@ export function useChatRoutePreflight(input: {
         clearTimeout(debounce);
       }
     };
-  }, [displayKey, displayRequest, enabled, fetchPreflight]);
+  }, [displayKey, displayRequest, enabled, fetchPreflight, sessionId]);
 
   const ensureFreshPreflight = useCallback(
     async (override: {

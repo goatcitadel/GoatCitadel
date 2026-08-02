@@ -299,7 +299,15 @@ export function useChatCapabilityProfileInspection(input: {
     return () => {
       stale = true;
     };
-  }, [expectedProfileHash, expectedProfileId, input.sessionId, input.workspaceId, selectionSignature, turnId]);
+  }, [
+    expectedProfileHash,
+    expectedProfileId,
+    input.sessionId,
+    input.turn,
+    input.workspaceId,
+    selectionSignature,
+    turnId,
+  ]);
 
   return inspection;
 }

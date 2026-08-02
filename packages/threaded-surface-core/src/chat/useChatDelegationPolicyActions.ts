@@ -457,6 +457,7 @@ export function useChatDelegationPolicyActions(input: {
       cancelled = true;
     };
   }, [
+    activeDelegationRun,
     activeDelegationRun?.attachedTurnId,
     activeDelegationRun?.runId,
     activeDelegationRun?.status,
@@ -506,7 +507,6 @@ export function useChatDelegationPolicyActions(input: {
     activeDelegationRun?.taskId,
     activeDelegationRun?.runId,
     activeWorkflowTurn?.trace.orchestration?.runId,
-    activeWorkflowTurn?.turnId,
     surfaceMode,
     pushLocalNotice,
     runtimeBlockerActiveRef,
@@ -755,7 +755,6 @@ export function useChatDelegationPolicyActions(input: {
       activeDelegationRun?.taskId,
       activeDelegationRun?.runId,
       activeWorkflowTurn?.trace.orchestration?.runId,
-      activeWorkflowTurn?.turnId,
       fullWebAccess,
       prefs,
       selectedModel,

@@ -49,6 +49,7 @@ import {
   appendTraceArtifact,
   attachBrowserLogging,
   captureBrowserArtifacts,
+  readBrowserSseDiagnostics,
   setBrowserCorrelation,
   startBrowserTrace,
 } from "./scenarios/browser-helpers.mjs";
@@ -78,7 +79,11 @@ import {
   runUsabilityCoreLane as runUsabilityCoreLaneImpl,
   runUsabilityLane as runUsabilityLaneImpl,
 } from "./scenarios/usability-lane.mjs";
-import { runUsabilityBrowserActionLane as runUsabilityBrowserActionLaneImpl } from "./scenarios/usability-browser-action-lane.mjs";
+import {
+  filterExpectedBrowserConsoleMessages,
+  pollSseConnectionRecoveryEvidence,
+  runUsabilityBrowserActionLane as runUsabilityBrowserActionLaneImpl,
+} from "./scenarios/usability-browser-action-lane.mjs";
 import { startDeterministicLlmStub, writeDeterministicLlmProviderConfig } from "./scenarios/deterministic-llm-stub.mjs";
 import {
   assertNativeStageScrollContract,
@@ -173,6 +178,7 @@ function verificationLaneDeps() {
     ensureGatewayWorkspaceBuild,
     ensureOnboardingComplete,
     filterVisualItemsBySlug,
+    filterExpectedBrowserConsoleMessages,
     forceVerificationUiPackage,
     installMissionControlNextBrowserState,
     isAllowedStatus,
@@ -183,9 +189,11 @@ function verificationLaneDeps() {
     performVerificationInteraction,
     pinVisualRegressionProvider,
     probeKeyboardFocus,
+    pollSseConnectionRecoveryEvidence,
     prepareVerificationRuntime,
     pnpmCommand,
     randomUUID,
+    readBrowserSseDiagnostics,
     probeAuthMatrixRoute,
     readArchitectureMetricsBaseline,
     readJson,

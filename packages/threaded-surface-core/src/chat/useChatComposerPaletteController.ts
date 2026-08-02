@@ -331,21 +331,51 @@ export function useChatComposerPaletteController(
 ): ChatComposerPaletteState {
   const [state, setState] = useState<ChatComposerPaletteState>({ items: [], failures: [], loading: false });
   const generationRef = useRef(0);
+  const {
+    agents,
+    commandCatalog,
+    documentEditingEnabled,
+    externalSourcesAvailable,
+    inlineCommandSuggestions,
+    installedSkills,
+    knowledgeAttachments,
+    loadFiles,
+    projects,
+    providerOptions,
+    sessionId,
+    typedRunVariablesEnabled,
+  } = input;
   const registry = useMemo(
-    () => new ComposerPaletteSourceRegistry(buildChatComposerPaletteSources(input)),
+    () =>
+      new ComposerPaletteSourceRegistry(
+        buildChatComposerPaletteSources({
+          agents,
+          commandCatalog,
+          documentEditingEnabled,
+          externalSourcesAvailable,
+          inlineCommandSuggestions,
+          installedSkills,
+          knowledgeAttachments,
+          loadFiles,
+          projects,
+          providerOptions,
+          sessionId,
+          typedRunVariablesEnabled,
+        }),
+      ),
     [
-      input.agents,
-      input.commandCatalog,
-      input.externalSourcesAvailable,
-      input.inlineCommandSuggestions,
-      input.installedSkills,
-      input.knowledgeAttachments,
-      input.loadFiles,
-      input.projects,
-      input.providerOptions,
-      input.typedRunVariablesEnabled,
-      input.documentEditingEnabled,
-      input.sessionId,
+      agents,
+      commandCatalog,
+      documentEditingEnabled,
+      externalSourcesAvailable,
+      inlineCommandSuggestions,
+      installedSkills,
+      knowledgeAttachments,
+      loadFiles,
+      projects,
+      providerOptions,
+      sessionId,
+      typedRunVariablesEnabled,
     ],
   );
 

@@ -45,14 +45,16 @@ export function useChatThreadController(input: {
 }) {
   const appliedRouteSelectionKeyRef = useRef<string | null>(null);
   const pendingRouteTurnSelectionRef = useRef<string | null>(null);
+  const { routeSearch, selectedSessionId, setFollowThreadOutput, setSelectedSessionId, setSelectedTurnId, thread } =
+    input;
 
   useEffect(() => {
-    if (!input.routeSearch) {
+    if (!routeSearch) {
       appliedRouteSelectionKeyRef.current = null;
       pendingRouteTurnSelectionRef.current = null;
       return;
     }
-    const params = new URLSearchParams(input.routeSearch);
+    const params = new URLSearchParams(routeSearch);
     const routeSessionId = params.get("sessionId")?.trim() || "";
     const routeTurnId = params.get("turnId")?.trim() || "";
     if (!routeSessionId) {
@@ -66,24 +68,24 @@ export function useChatThreadController(input: {
     }
     appliedRouteSelectionKeyRef.current = routeSelectionKey;
     pendingRouteTurnSelectionRef.current = routeTurnId || null;
-    input.setSelectedSessionId(routeSessionId);
-    input.setSelectedTurnId(routeTurnId || null);
-  }, [input.routeSearch, input.sessions, input.setSelectedSessionId, input.setSelectedTurnId]);
+    setSelectedSessionId(routeSessionId);
+    setSelectedTurnId(routeTurnId || null);
+  }, [routeSearch, setSelectedSessionId, setSelectedTurnId]);
 
   useEffect(() => {
-    input.setSelectedTurnId((current) => {
+    setSelectedTurnId((current) => {
       const pendingRouteTurnId = pendingRouteTurnSelectionRef.current;
-      const nextTurnId = resolveSelectedTurnId(input.thread, current, pendingRouteTurnId);
-      if (input.thread?.turns.length && pendingRouteTurnId) {
+      const nextTurnId = resolveSelectedTurnId(thread, current, pendingRouteTurnId);
+      if (thread?.turns.length && pendingRouteTurnId) {
         pendingRouteTurnSelectionRef.current = null;
       }
       return nextTurnId;
     });
-  }, [input.setSelectedTurnId, input.thread]);
+  }, [setSelectedTurnId, thread]);
 
   useEffect(() => {
-    input.setFollowThreadOutput(true);
-  }, [input.selectedSessionId, input.setFollowThreadOutput]);
+    setFollowThreadOutput(true);
+  }, [selectedSessionId, setFollowThreadOutput]);
 
   const selectedSession = useMemo(
     () => input.sessions?.find((item) => item.sessionId === input.selectedSessionId) ?? null,

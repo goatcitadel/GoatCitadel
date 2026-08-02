@@ -204,7 +204,7 @@ export function useChatSurfaceOrchestration(input: {
       return;
     }
     await input.executeOutboundItemRef.current?.(nextItem);
-  }, [editingTurnId, input]);
+  }, [editingTurnId, input, setQueuedOutbound]);
 
   const handleRetryTurn = useCallback(
     async (turnId: string) => {
@@ -228,7 +228,7 @@ export function useChatSurfaceOrchestration(input: {
       }
       await input.executeOutboundItemRef.current?.(nextItem);
     },
-    [input],
+    [input, setQueuedOutbound],
   );
 
   const handleStopActiveTurn = useCallback(async () => {
@@ -285,7 +285,7 @@ export function useChatSurfaceOrchestration(input: {
       },
     });
     setQueuedOutbound((current) => current.map((item) => ({ ...item, paused: false })));
-  }, [input.selectedSessionId, input.pushLocalNoticeRef, queuedOutbound.length]);
+  }, [input.selectedSessionId, queuedOutbound.length, setQueuedOutbound]);
 
   const handleRemoveQueuedItem = useCallback(
     (id: string) => {
@@ -299,7 +299,7 @@ export function useChatSurfaceOrchestration(input: {
       });
       setQueuedOutbound((current) => current.filter((item) => item.id !== id));
     },
-    [input.selectedSessionId],
+    [input.selectedSessionId, setQueuedOutbound],
   );
 
   useEffect(() => {
@@ -330,6 +330,7 @@ export function useChatSurfaceOrchestration(input: {
     input.tryBeginOutboundExecutionRef,
     queueDrainSignal,
     queuedOutbound,
+    setQueuedOutbound,
   ]);
 
   return {

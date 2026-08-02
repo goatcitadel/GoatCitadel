@@ -1,0 +1,26 @@
+Gate,Required,Status,Final SHA,Command,Evidence or blocker
+Focused repair contracts,Yes,Passed dirty candidate,Pending,"Focused Node tests; ESLint; Prettier; package typecheck/test; targeted Vitest","70 harness tests; 450 shared Chat tests; focused durable test"
+verify:fast,Yes,Passed focused candidate,Pending,pnpm verify:fast,artifacts/verification/2026-08-02T01-49-47-378Z-fast-78096a45
+verify:usability,Yes,Pending,Pending,pnpm verify:usability,Pending
+Second clean-profile core smoke,Yes,Pending,Pending,pnpm verify:usability:core,Pending
+verify:all,Yes,Pending,Pending,pnpm verify:all,Pending
+Auth matrix,Yes,Passed focused candidate,Pending,pnpm verify:auth:matrix,artifacts/verification/2026-08-02T02-17-38-946Z-auth-matrix-b3dfc32a
+Runtime truth,Yes,Passed focused candidate,Pending,pnpm verify:runtime:truth,artifacts/verification/2026-08-02T02-18-32-644Z-runtime-truth-03a75743
+Durable recovery,Yes,Passed focused candidate,Pending,pnpm verify:durable:recovery,artifacts/verification/2026-08-02T02-19-15-144Z-durable-recovery-fb6a8194
+Agentic proof,Yes,Pending,Pending,pnpm verify:agentic:proof,Pending
+Memory truth,Yes,Pending,Pending,pnpm verify:memory:truth,Pending
+Realtime truth,Yes,Pending,Pending,pnpm verify:realtime:truth,Pending
+Surface regression,Yes,Pending,Pending,pnpm verify:surface:regression,Pending
+Visual regression,Yes,Pending,Pending,pnpm verify:visual:regression,"GC-ENV-007 focused reproduction pending"
+Accessibility smoke,Yes,Pending,Pending,pnpm verify:accessibility:smoke,Pending
+Backup roundtrip,Yes,Pending,Pending,pnpm verify:backup:roundtrip,Pending
+Desktop,Yes,Pending,Pending,pnpm verify:desktop,Pending
+External sources,Yes,Pending,Pending,pnpm verify:external-sources,Pending
+PostgreSQL restart/parity,Yes,Pending,Pending,pnpm verify:usability:postgres-recovery,Pending
+Windows x64 packaged lifecycle,Yes,Pending,Pending,Repository install/desktop/package lanes,"Snapshot hash version lifecycle pending"
+Artifact secret scan,Yes,Pending,Pending,Exact-root redaction scanner,Pending
+Standard Code Quality,Yes,Pending post-push,Pending,GitHub Code Quality API,"#1688/#1689 fixed locally; #1687 documented non-actionable"
+AI quality findings,Yes,Pending authenticated rescan,Pending,Authenticated GitHub UI,"No API; final rescan required after final push"
+CodeQL and PR checks,Yes,Pending,Pending,gh pr checks,PR not opened
+Ready-to-merge PR not merged,Yes,Pending,Pending,gh pr create,Pending
+QA-ready verdict,Yes,Blocked,Pending,All gates above,"Do not resume manual QA"
