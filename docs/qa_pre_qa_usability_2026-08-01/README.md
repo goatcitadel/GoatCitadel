@@ -32,6 +32,8 @@ The August campaign begins by repairing evidence defects found while reviewing t
 - `GC-HARNESS-080`: configure the operator approval-resume proof with the isolated loopback provider that its frozen durable request names.
 - `GC-HARNESS-081`: project operator auth-boundary evidence onto a credential-free issuance/denial schema instead of retaining one-time device and companion credentials.
 - `GC-HARNESS-082`: refresh the architecture debt tripwire from the reviewed post-`#239` Gateway source after the prior baseline became stale.
+- `GC-HARNESS-083`: keep the remote-worker deadline proof independent of whether saturated process startup emits a ready frame before the absolute deadline.
+- `GC-HARNESS-084`: set the five-second provider idle watchdog in authoritative `goatcitadel.json` as well as the compatibility assistant file so boot sync cannot silently restore the 120-second production default.
 - Standard Code Quality `#1688` and `#1689`: remove the two analyzer-confirmed dead assignments without weakening recovery behavior.
 - Standard Code Quality `#1687`: retain the explicit bounded activation-resolution loop; its early-return and `out`-parameter semantics are clearer than a LINQ allocation/indirection and its rejection is recorded in the security triage guide.
 
@@ -60,6 +62,7 @@ Proof completed on the first clean implementation candidate `0c39a37b4120cc68668
 - Full visual regression passed all 408 route/viewport/theme scenarios without updating baselines; surface and accessibility regressions also passed.
 - Agentic, memory, realtime, backup, desktop-source, external-source, and isolated Docker/PostgreSQL recovery/parity lanes passed.
 - The first aggregate `verify:all` correctly failed on a persisted-mobile Vite module connection, an operator-proof provider-fixture mismatch, credential-bearing auth evidence, and a stale architecture baseline. Those four defects are repaired; focused operator proof, exact-root redaction, and architecture proof now pass. Final clean-SHA recertification remains pending.
+- The next full-usability rerun exposed two more harness defects: a saturated scanner assertion coupled to a pre-deadline ready frame and a Gateway fault fixture that wrote its five-second watchdog only to a boot-overwritten compatibility file. Both are repaired. The focused real-Gateway fault journey now passes all 9/9 steps with 16 loopback dispatches, including terminal timeout reconciliation and next-turn admission.
 
 These results are intentionally marked focused. The final result files are updated only after clean-SHA execution.
 

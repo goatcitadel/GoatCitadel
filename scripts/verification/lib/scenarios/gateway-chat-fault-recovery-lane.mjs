@@ -249,7 +249,7 @@ export async function runGatewayChatFaultRecoveryJourney(context, options = {}, 
 
   try {
     runtimeRoot = await prepareVerificationRuntime(`${context.runId}-gateway-chat-faults`);
-    await configureVerificationAssistant(runtimeRoot);
+    await configureGatewayChatFaultAssistant(runtimeRoot);
     await writeDeterministicLlmProviderConfig(runtimeRoot, stub.baseUrl, {
       apiStyle: PROVIDER_API_STYLE,
       providerId: stub.providerId,
@@ -1080,8 +1080,19 @@ function projectGatewayDiagnostics(diagnostics, steps) {
     }));
 }
 
-async function configureVerificationAssistant(runtimeRoot) {
+export async function configureGatewayChatFaultAssistant(runtimeRoot) {
   const configDir = path.join(runtimeRoot, "config");
+  const unifiedPath = path.join(configDir, "goatcitadel.json");
+  const unified = JSON.parse(await fs.readFile(unifiedPath, "utf8"));
+  if (!unified.assistant || typeof unified.assistant !== "object" || Array.isArray(unified.assistant)) {
+    throw new Error("Gateway Chat fault fixture requires an authoritative assistant config object");
+  }
+  unified.assistant.streamIdleTimeoutMs = STREAM_IDLE_TIMEOUT_MS;
+  // Boot seals the unified file and projects it into the compatibility files.
+  // Clear the old seal whenever this isolated fixture changes authoritative data.
+  delete unified.generation;
+  await fs.writeFile(unifiedPath, `${JSON.stringify(unified, null, 2)}\n`, "utf8");
+
   const target = path.join(configDir, "assistant.config.json");
   const source = path.join(configDir, "assistant.config.example.json");
   let config;
