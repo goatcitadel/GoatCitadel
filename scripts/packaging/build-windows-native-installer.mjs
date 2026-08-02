@@ -302,6 +302,40 @@ begin
   end;
 end;
 
+// Setup and uninstall expose different progress-form globals. Calling a helper that touches
+// WizardForm from the generated uninstaller raises "Could not call proc" before Exec runs, so
+// keep the uninstall variants separate and reachable only from uninstall-owned procedures.
+procedure RunUninstallOrFail(FileName: String; Parameters: String; WorkingDir: String; StatusText: String);
+var
+  ResultCode: Integer;
+begin
+  UninstallProgressForm.StatusLabel.Caption := StatusText;
+  if not Exec(FileName, Parameters, WorkingDir, SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  begin
+    RaiseException('Failed to start ' + FileName + ' while ' + StatusText);
+  end;
+  if ResultCode <> 0 then
+  begin
+    RaiseException(FileName + ' exited with code ' + IntToStr(ResultCode) + ' while ' + StatusText);
+  end;
+end;
+
+procedure RunUninstallBestEffort(FileName: String; Parameters: String; WorkingDir: String; StatusText: String);
+var
+  ResultCode: Integer;
+begin
+  UninstallProgressForm.StatusLabel.Caption := StatusText;
+  if not Exec(FileName, Parameters, WorkingDir, SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  begin
+    Log('GoatCitadel: failed to start ' + FileName + ' while ' + StatusText + ' (optional step, continuing)');
+    Exit;
+  end;
+  if ResultCode <> 0 then
+  begin
+    Log('GoatCitadel: ' + FileName + ' exited with code ' + IntToStr(ResultCode) + ' while ' + StatusText + ' (optional step, continuing)');
+  end;
+end;
+
 function GoatCitadelInstallMarkerPath(): String;
 begin
   Result := ExpandConstant('{app}\\{#MyInstallMarker}');
@@ -341,7 +375,7 @@ begin
   end;
 end;
 
-procedure StopExistingGoatCitadelRuntime();
+procedure StopExistingGoatCitadelRuntime(DuringUninstall: Boolean);
 var
   LauncherPath: String;
 begin
@@ -354,15 +388,27 @@ begin
   begin
     Exit;
   end;
-  RunBestEffort(
-    'powershell.exe',
-    ExpandConstant('-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command "& ''{app}\\bin\\goatcitadel.cmd'' stop --json"'),
-    ExpandConstant('{app}'),
-    'Stopping the existing GoatCitadel runtime...'
-  );
+  if DuringUninstall then
+  begin
+    RunUninstallBestEffort(
+      'powershell.exe',
+      ExpandConstant('-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command "& ''{app}\\bin\\goatcitadel.cmd'' stop --json"'),
+      ExpandConstant('{app}'),
+      'Stopping the existing GoatCitadel runtime...'
+    );
+  end
+  else
+  begin
+    RunBestEffort(
+      'powershell.exe',
+      ExpandConstant('-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command "& ''{app}\\bin\\goatcitadel.cmd'' stop --json"'),
+      ExpandConstant('{app}'),
+      'Stopping the existing GoatCitadel runtime...'
+    );
+  end;
 end;
 
-procedure StopExistingGoatCitadelPayloadProcesses();
+procedure StopExistingGoatCitadelPayloadProcesses(DuringUninstall: Boolean);
 var
   PayloadRoot: String;
   Parameters: String;
@@ -380,12 +426,24 @@ begin
   // executable lives in this marker-owned app\\ payload, including an orphaned launch --wait
   // supervisor that would otherwise keep the bundled node.exe locked.
   Parameters := '-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command "& { param($payloadRoot) $processes = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($payloadRoot, [System.StringComparison]::OrdinalIgnoreCase) }); if ($processes.Count -gt 0) { $processes | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; $processes | ForEach-Object { Wait-Process -Id $_.ProcessId -Timeout 10 -ErrorAction SilentlyContinue } } }" ' + AddQuotes(PayloadRoot);
-  RunBestEffort(
-    'powershell.exe',
-    Parameters,
-    ExpandConstant('{app}'),
-    'Closing existing GoatCitadel payload processes...'
-  );
+  if DuringUninstall then
+  begin
+    RunUninstallBestEffort(
+      'powershell.exe',
+      Parameters,
+      ExpandConstant('{app}'),
+      'Closing existing GoatCitadel payload processes...'
+    );
+  end
+  else
+  begin
+    RunBestEffort(
+      'powershell.exe',
+      Parameters,
+      ExpandConstant('{app}'),
+      'Closing existing GoatCitadel payload processes...'
+    );
+  end;
   // Self-contained .NET/WinUI DLL handles can outlive process enumeration very briefly.
   Sleep(1500);
 end;
@@ -405,7 +463,7 @@ begin
   DelTree(BinPayloadPath, True, True, True);
   if DirExists(AppPayloadPath) or DirExists(BinPayloadPath) then
   begin
-    RunOrFail(
+    RunUninstallOrFail(
       'powershell.exe',
       ExpandConstant('-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command "try {{ [System.IO.Directory]::Delete(''\\\\?\\{app}\\app'', $true) }} catch {{}}; try {{ [System.IO.Directory]::Delete(''\\\\?\\{app}\\bin'', $true) }} catch {{}}; Remove-Item -LiteralPath ''\\\\?\\{app}\\app'' -Recurse -Force -ErrorAction SilentlyContinue; Remove-Item -LiteralPath ''\\\\?\\{app}\\bin'' -Recurse -Force -ErrorAction SilentlyContinue; exit 0"'),
       '',
@@ -879,8 +937,8 @@ begin
     // The bundle was already extracted and hash-validated under the same-volume transaction
     // stage. Promote before Inno begins its managed install transaction so any later Inno
     // failure reaches DeinitializeSetup with the old payload backup still available.
-    StopExistingGoatCitadelRuntime();
-    StopExistingGoatCitadelPayloadProcesses();
+    StopExistingGoatCitadelRuntime(False);
+    StopExistingGoatCitadelPayloadProcesses(False);
     PromoteStagedGoatCitadelPayload();
     // Selected runtime components are part of install truth, not advisory extras. Install them
     // fail-hard while the old payload backup is retained; DeinitializeSetup restores on error.
@@ -915,8 +973,8 @@ begin
   begin
     // Stop the packaged runtime before removing its payload. Only delete the payload trees if
     // this directory carries our install marker.
-    StopExistingGoatCitadelRuntime();
-    StopExistingGoatCitadelPayloadProcesses();
+    StopExistingGoatCitadelRuntime(True);
+    StopExistingGoatCitadelPayloadProcesses(True);
     RemoveGoatCitadelPayload();
   end;
   if CurUninstallStep = usPostUninstall then

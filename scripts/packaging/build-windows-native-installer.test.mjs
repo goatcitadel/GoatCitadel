@@ -50,15 +50,15 @@ test("unconditional app/bin filesandordirs deletes are removed", () => {
 test("installer promotes during ssInstall before Inno managed state can commit", () => {
   const iss = renderSample();
 
-  assert.match(iss, /procedure StopExistingGoatCitadelRuntime\(\);/);
+  assert.match(iss, /procedure StopExistingGoatCitadelRuntime\(DuringUninstall: Boolean\);/);
   assert.match(iss, /goatcitadel\.cmd'' stop --json/);
   const curSteps = iss.match(/procedure CurStepChanged\(CurStep: TSetupStep\);[\s\S]*?procedure CurUninstallStepChanged/)?.[0] ?? "";
   const postInstallIndex = curSteps.indexOf("if CurStep = ssPostInstall then");
   assert.ok(postInstallIndex > 0);
   const installStep = curSteps.slice(0, postInstallIndex);
   const postInstallStep = curSteps.slice(postInstallIndex);
-  const stopRuntimeIndex = installStep.indexOf("StopExistingGoatCitadelRuntime();");
-  const stopPayloadIndex = installStep.indexOf("StopExistingGoatCitadelPayloadProcesses();");
+  const stopRuntimeIndex = installStep.indexOf("StopExistingGoatCitadelRuntime(False);");
+  const stopPayloadIndex = installStep.indexOf("StopExistingGoatCitadelPayloadProcesses(False);");
   const promoteIndex = installStep.indexOf("PromoteStagedGoatCitadelPayload();");
   const chromiumIndex = installStep.indexOf("InstallChromiumRuntime();");
   const voiceIndex = installStep.indexOf("InstallVoiceRuntime();");
@@ -83,7 +83,7 @@ test("installer updates close the running desktop host without double-restarting
   assert.match(iss, /procedure RegisterExtraCloseApplicationsResources;/);
   assert.ok(iss.includes("RegisterExtraCloseApplicationsResource(False, ExpandConstant('{app}\\{#MyDesktopExe}'));"));
   assert.match(iss, /Flags: nowait postinstall skipifsilent/);
-  assert.match(iss, /procedure StopExistingGoatCitadelPayloadProcesses\(\);/);
+  assert.match(iss, /procedure StopExistingGoatCitadelPayloadProcesses\(DuringUninstall: Boolean\);/);
   assert.match(iss, /param\(\$payloadRoot\)/);
   assert.match(iss, /ExecutablePath\.StartsWith\(\$payloadRoot, \[System\.StringComparison\]::OrdinalIgnoreCase\)/);
   assert.match(iss, /Stop-Process -Id \$_\.ProcessId -Force/);
@@ -199,8 +199,17 @@ test("uninstall stops the packaged runtime before removing its payload", () => {
 
   assert.match(
     iss,
-    /if CurUninstallStep = usUninstall then[\s\S]*?StopExistingGoatCitadelRuntime\(\);[\s\S]*?StopExistingGoatCitadelPayloadProcesses\(\);[\s\S]*?RemoveGoatCitadelPayload\(\);/,
+    /if CurUninstallStep = usUninstall then[\s\S]*?StopExistingGoatCitadelRuntime\(True\);[\s\S]*?StopExistingGoatCitadelPayloadProcesses\(True\);[\s\S]*?RemoveGoatCitadelPayload\(\);/,
   );
+
+  const uninstallHelpers = iss.match(
+    /procedure RunUninstallOrFail[\s\S]*?procedure RunUninstallBestEffort[\s\S]*?function GoatCitadelInstallMarkerPath/,
+  )?.[0] ?? "";
+  assert.match(uninstallHelpers, /UninstallProgressForm\.StatusLabel\.Caption := StatusText/);
+  assert.doesNotMatch(uninstallHelpers, /WizardForm/);
+  const removePayload = iss.match(/procedure RemoveGoatCitadelPayload\(\);[\s\S]*?procedure WriteTransactionMarker/)?.[0] ?? "";
+  assert.match(removePayload, /RunUninstallOrFail\(/);
+  assert.doesNotMatch(removePayload, /RunOrFail\(/);
 });
 
 test("installer consumes only the exact adjacent release-evidence files", () => {
