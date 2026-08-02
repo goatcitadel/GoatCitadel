@@ -182,6 +182,38 @@ describe("dashboard settings routes", () => {
     expect(updateSettings).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    ["/api/v1/settings", "getSettings"],
+    ["/api/v1/auth/settings", "getSettings"],
+    ["/api/v1/auth/settings", "getAuthRuntimeSettings"],
+  ] as const)("maps the %s config-generation read fence on %s to a retryable conflict", async (url, method) => {
+    const fence = () => {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: "Settings are temporarily unavailable while runtime owners reconcile a config generation.",
+        details: { currentRevision: 3, transactionState: "committed" },
+      });
+    };
+    const settings: Record<string, unknown> = {
+      getSettings: vi.fn(() => ({ revision: 3 })),
+      getAuthRuntimeSettings: vi.fn(() => ({})),
+    };
+    settings[method] = vi.fn(fence);
+
+    app = Fastify();
+    app.decorate("services", { settings } as never);
+    await app.register(dashboardRoutes);
+
+    const response = await app.inject({ method: "GET", url });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      code: "STATE_CONFLICT",
+      error: "Settings are temporarily unavailable while runtime owners reconcile a config generation.",
+      details: { currentRevision: 3, transactionState: "committed" },
+    });
+  });
+
   it("rejects dangerous settings payload keys before runtime mutation", async () => {
     const updateSettings = vi.fn((input: Record<string, unknown>) => input);
 

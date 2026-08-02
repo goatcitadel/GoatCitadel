@@ -100,6 +100,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # The a2a-full lane runs verify:storage:migration-parity, whose lineage
+          # guard compares the candidate manifest against an immutable base object.
+          # A shallow checkout leaves origin/main pointing at HEAD with no parent
+          # commit to fall back to, which fails the guard closed. Matches
+          # verification-fast.yml.
+          fetch-depth: 0
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4

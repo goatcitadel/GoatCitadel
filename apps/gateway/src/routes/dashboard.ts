@@ -709,8 +709,12 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send({ items });
   });
 
-  fastify.get("/api/v1/settings", async (_request, reply) => {
-    return reply.send(projectSettingsPublicValue(fastify.services.settings.getSettings()));
+  fastify.get("/api/v1/settings", async (request, reply) => {
+    try {
+      return reply.send(projectSettingsPublicValue(fastify.services.settings.getSettings()));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
   });
 
   fastify.patch("/api/v1/settings", async (request, reply) => {
@@ -730,12 +734,16 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.get("/api/v1/auth/settings", async (_request, reply) => {
-    const settings = fastify.services.settings.getSettings();
-    return reply.send({
-      revision: settings.revision,
-      ...fastify.services.settings.getAuthRuntimeSettings(),
-    });
+  fastify.get("/api/v1/auth/settings", async (request, reply) => {
+    try {
+      const settings = fastify.services.settings.getSettings();
+      return reply.send({
+        revision: settings.revision,
+        ...fastify.services.settings.getAuthRuntimeSettings(),
+      });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
   });
 
   fastify.patch("/api/v1/auth/settings", async (request, reply) => {
