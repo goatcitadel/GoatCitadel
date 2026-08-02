@@ -286,6 +286,35 @@ test("browser action registry fails closed without terminal readback or a verifi
   );
 });
 
+test("Kanban bulk lifecycle waits for each visible mutation completion before changing selection", () => {
+  const operations = BROWSER_ACTION_STEP_REGISTRY["route.ops-kanban.task-board-lifecycle"].operations;
+  assert.deepEqual(
+    operations.map((operation) =>
+      operation.kind === "check-pattern"
+        ? `${operation.kind}:${operation.namePattern}`
+        : operation.kind === "click"
+          ? `${operation.kind}:${operation.name}`
+          : operation.kind === "assert-text"
+            ? `${operation.kind}:${operation.value}`
+            : operation.kind === "api"
+              ? `${operation.kind}:${operation.probe}`
+              : operation.kind,
+    ),
+    [
+      "check-pattern:Select Watch runtime approvals and costs",
+      "click:Unblock",
+      "assert-text:1 selected task updated.",
+      "check-pattern:Select Review task board and agent board cohesion",
+      "click:Retry",
+      "assert-text:1 selected task updated.",
+      "check-pattern:Select Capture prompt-pack quality posture",
+      "click:Close",
+      "assert-text:1 selected task updated.",
+      "api:kanban-task-lifecycle-readback",
+    ],
+  );
+});
+
 test("notification archive journey ends with an archive-bound canonical readback and access denial", () => {
   const notificationStep = BROWSER_ACTION_BUNDLES["ops-governance-reliability"].find(
     (step) => step.stepId === "route.ops-notifications.notification-test-and-operator-policy",

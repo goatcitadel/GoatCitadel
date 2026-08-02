@@ -605,10 +605,13 @@ const STEPS = [
   step("ops-work", "route.ops-kanban.task-board-lifecycle", "ops-kanban", [
     checkPattern("Select Watch runtime approvals and costs"),
     click("Unblock"),
+    text("1 selected task updated."),
     checkPattern("Select Review task board and agent board cohesion"),
     click("Retry"),
+    text("1 selected task updated."),
     checkPattern("Select Capture prompt-pack quality posture"),
     click("Close"),
+    text("1 selected task updated."),
     api("kanban-task-lifecycle-readback"),
   ]),
 
