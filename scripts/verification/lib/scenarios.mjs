@@ -84,7 +84,11 @@ import {
   pollSseConnectionRecoveryEvidence,
   runUsabilityBrowserActionLane as runUsabilityBrowserActionLaneImpl,
 } from "./scenarios/usability-browser-action-lane.mjs";
-import { startDeterministicLlmStub, writeDeterministicLlmProviderConfig } from "./scenarios/deterministic-llm-stub.mjs";
+import {
+  DETERMINISTIC_LLM_KEY_ENV,
+  startDeterministicLlmStub,
+  writeDeterministicLlmProviderConfig,
+} from "./scenarios/deterministic-llm-stub.mjs";
 import {
   assertNativeStageScrollContract,
   assertProviderAnchorAndAdviceContract,
@@ -1623,16 +1627,25 @@ export async function runOperatorProofLane(context, _options = {}) {
     },
   );
 
-  const stack = await startVerificationStack(context, {
-    includeUi: false,
-    gatewayEnv: {
-      GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
-      GOATCITADEL_DURABLE_FOUNDATION_ENABLED: "true",
-      GOATCITADEL_FEATURE_DURABLE_KERNEL_V1_ENABLED: "true",
-      GOATCITADEL_CODE_MODE_SANDBOX_REQUIRED: "false",
-    },
+  const operatorStub = await startDeterministicLlmStub({
+    replyText: "Verification operator approval resumed.",
   });
+  let operatorRuntimeRoot;
+  let stack;
   try {
+    operatorRuntimeRoot = await prepareVerificationRuntime(`${context.runId}-operator-proof`);
+    await writeDeterministicLlmProviderConfig(operatorRuntimeRoot, operatorStub.baseUrl);
+    stack = await startVerificationStack(context, {
+      runtimeRoot: operatorRuntimeRoot,
+      includeUi: false,
+      gatewayEnv: {
+        GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
+        GOATCITADEL_DURABLE_FOUNDATION_ENABLED: "true",
+        GOATCITADEL_FEATURE_DURABLE_KERNEL_V1_ENABLED: "true",
+        GOATCITADEL_CODE_MODE_SANDBOX_REQUIRED: "false",
+        [DETERMINISTIC_LLM_KEY_ENV]: "verification-stub-key",
+      },
+    });
     const seedResponse = await requestJson(stack.gatewayUrl, "/api/v1/dev/verification/seed", {
       method: "POST",
       body: {
@@ -1833,7 +1846,12 @@ export async function runOperatorProofLane(context, _options = {}) {
       },
     );
   } finally {
-    await stopVerificationStack(stack);
+    if (stack) {
+      await stopVerificationStack(stack);
+    } else if (operatorRuntimeRoot) {
+      await fs.rm(operatorRuntimeRoot, { recursive: true, force: true }).catch(() => undefined);
+    }
+    await operatorStub.close().catch(() => undefined);
   }
 
   const operatorToken = "verification-operator-token";
@@ -2133,18 +2151,16 @@ export async function runOperatorProofLane(context, _options = {}) {
         }
 
         const outPath = path.join(context.artifactRoot, "diagnostics", "operator-proof-auth-boundary.json");
-        await writeJson(outPath, {
-          deviceRequest: deviceRequest.body,
-          resolvedApproval: resolvedApproval.body,
-          approvedStatus: approvedStatus.body,
-          companionExchange: exchange.body,
-          deniedChecks: deniedChecks.map((entry) => ({
-            actor: entry.actor,
-            route: entry.route,
-            status: entry.response.status,
-            body: entry.response.body,
-          })),
-        });
+        await writeJson(
+          outPath,
+          projectOperatorAuthBoundaryEvidence({
+            deviceRequest: deviceRequest.body,
+            resolvedApproval: resolvedApproval.body,
+            approvedStatus: approvedStatus.body,
+            companionExchange: exchange.body,
+            deniedChecks,
+          }),
+        );
         return {
           status: "passed",
           metrics: {
@@ -2157,6 +2173,95 @@ export async function runOperatorProofLane(context, _options = {}) {
   } finally {
     await stopVerificationStack(authStack);
   }
+}
+
+export function projectOperatorAuthBoundaryEvidence(input) {
+  const approval = input.resolvedApproval?.approval;
+  const resolutionEffects = input.resolvedApproval?.resolutionEffects;
+  return {
+    deviceRequest: {
+      requestId: input.deviceRequest?.requestId,
+      approvalId: input.deviceRequest?.approvalId,
+      status: input.deviceRequest?.status,
+      expiresAt: input.deviceRequest?.expiresAt,
+    },
+    resolvedApproval: {
+      approval: approval
+        ? {
+            approvalId: approval.approvalId,
+            kind: approval.kind,
+            riskLevel: approval.riskLevel,
+            status: approval.status,
+            createdAt: approval.createdAt,
+            resolvedAt: approval.resolvedAt,
+            explanationStatus: approval.explanationStatus,
+          }
+        : null,
+      effects: Array.isArray(input.resolvedApproval?.effects)
+        ? input.resolvedApproval.effects.map((effect) => ({
+            effectId: effect.effectId,
+            effectKind: effect.effectKind,
+            targetKind: effect.targetKind,
+            targetId: effect.targetId,
+            status: effect.status,
+            attemptCount: effect.attemptCount,
+            version: effect.version,
+          }))
+        : [],
+      durableRunId: input.resolvedApproval?.durableRunId,
+      resolutionEffects: resolutionEffects
+        ? {
+            approvalWaitDurableRunId: resolutionEffects.approvalWaitDurableRunId,
+            proactiveRunCount: Array.isArray(resolutionEffects.proactiveRunIds)
+              ? resolutionEffects.proactiveRunIds.length
+              : 0,
+            chatTurnResume: resolutionEffects.chatTurnResume
+              ? {
+                  resumed: resolutionEffects.chatTurnResume.resumed === true,
+                  resumedTurnId: resolutionEffects.chatTurnResume.resumedTurnId,
+                  resumedRunId: resolutionEffects.chatTurnResume.resumedRunId,
+                }
+              : null,
+          }
+        : null,
+    },
+    approvedStatus: {
+      requestId: input.approvedStatus?.requestId,
+      approvalId: input.approvedStatus?.approvalId,
+      status: input.approvedStatus?.status,
+      expiresAt: input.approvedStatus?.expiresAt,
+      resolvedAt: input.approvedStatus?.resolvedAt,
+      deviceCredentialIssued:
+        typeof input.approvedStatus?.deviceToken === "string" && input.approvedStatus.deviceToken.length > 0,
+      credentialExpiresAt: input.approvedStatus?.deviceTokenExpiresAt,
+      message: input.approvedStatus?.message,
+    },
+    companionExchange: {
+      contractId: input.companionExchange?.contractId,
+      sessionId: input.companionExchange?.sessionId,
+      grantId: input.companionExchange?.grantId,
+      actorId: input.companionExchange?.actorId,
+      deviceLabel: input.companionExchange?.deviceLabel,
+      deviceType: input.companionExchange?.deviceType,
+      platform: input.companionExchange?.platform,
+      accessCredentialIssued:
+        typeof input.companionExchange?.accessToken === "string" && input.companionExchange.accessToken.length > 0,
+      accessCredentialExpiresAt: input.companionExchange?.accessTokenExpiresAt,
+      refreshCredentialIssued:
+        typeof input.companionExchange?.refreshToken === "string" && input.companionExchange.refreshToken.length > 0,
+      refreshCredentialExpiresAt: input.companionExchange?.refreshTokenExpiresAt,
+      issuedAt: input.companionExchange?.issuedAt,
+      signatureAlgorithm: input.companionExchange?.signatureAlgorithm,
+      principalPurpose: input.companionExchange?.principalPurpose,
+    },
+    deniedChecks: input.deniedChecks.map((entry) => ({
+      actor: entry.actor,
+      route: entry.route,
+      status: entry.response.status,
+      error: typeof entry.response.body?.error === "string" ? entry.response.body.error : undefined,
+      code: typeof entry.response.body?.code === "string" ? entry.response.body.code : undefined,
+    })),
+  };
 }
 
 export async function runDurableRecoveryLane(context, options = {}) {
