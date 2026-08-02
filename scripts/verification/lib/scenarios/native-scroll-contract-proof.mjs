@@ -1,6 +1,7 @@
 const STANDARD_STAGE_SELECTOR = ".mc-next-stage:not(.mc-next-stage-work) .mc-next-stage-scroll";
 const NESTED_SCROLL_SELECTOR = "[data-native-scroll='true']";
 const STATUS_STRIP_SELECTOR = ".mc-next-status-strip";
+const NATIVE_STAGE_PROOF_TIMEOUT_MS = 5_000;
 const STABLE_BOTTOM_TIMEOUT_MS = 5_000;
 const STABLE_BOTTOM_MINIMUM_OBSERVATION_MS = 1_000;
 const STABLE_BOTTOM_POLL_INTERVAL_MS = 50;
@@ -51,14 +52,22 @@ export async function assertNativeStageScrollContract(page, { label, probeNested
   // owner-specific labels such as "Loading Workspaces". Measure geometry only
   // after the shared loader component has left the page, regardless of copy.
   await page.locator(".mc-next-blocks-loader").first().waitFor({ state: "hidden", timeout: 15000 });
-  const initial = await readStageSnapshot(page, false);
+  const proofStartedAt = monotonicNow();
+  const proofDeadline = proofStartedAt + NATIVE_STAGE_PROOF_TIMEOUT_MS;
+  const initial = await waitForVisibleNativeStageSnapshot(page, {
+    label: routeLabel,
+    deadline: proofDeadline,
+  });
   validateNativeStageSnapshot(initial, routeLabel);
 
   // A route's primary loader can leave before route-owned secondary reads
   // (for example a file preview or project recents) finish rendering. Keep
   // following bounded layout growth to the current bottom, then require a
   // short stable window so a one-shot scroll cannot certify an obsolete max.
-  const bottomSnapshot = await driveNativeStageToStableBottom(page, { label: routeLabel });
+  const bottomSnapshot = await driveNativeStageToStableBottom(page, {
+    label: routeLabel,
+    timeoutMs: Math.max(1, proofDeadline - monotonicNow()),
+  });
   validateNativeStageSnapshot(bottomSnapshot, routeLabel);
 
   let nestedHandoff = "not_requested";
@@ -79,6 +88,47 @@ export async function assertNativeStageScrollContract(page, { label, probeNested
     reachedBottom: bottomSnapshot.atBottom,
     nestedHandoff,
   };
+}
+
+export async function waitForVisibleNativeStageSnapshot(
+  page,
+  {
+    label = "native route",
+    deadline,
+    timeoutMs = NATIVE_STAGE_PROOF_TIMEOUT_MS,
+    pollIntervalMs = STABLE_BOTTOM_POLL_INTERVAL_MS,
+    now = monotonicNow,
+  } = {},
+) {
+  const startedAt = now();
+  const boundedTimeoutMs = Math.max(1, timeoutMs);
+  const boundedPollIntervalMs = Math.max(1, Math.floor(pollIntervalMs));
+  const resolvedDeadline = Number.isFinite(deadline) ? deadline : startedAt + boundedTimeoutMs;
+  let lastSnapshot = null;
+  let sampleCount = 0;
+
+  while (true) {
+    lastSnapshot = await readStageSnapshot(page, false);
+    sampleCount += 1;
+    const sampledAt = now();
+    if (lastSnapshot?.found && lastSnapshot.clientHeight > 0) {
+      return lastSnapshot;
+    }
+    if (sampledAt >= resolvedDeadline) {
+      break;
+    }
+    await page.waitForTimeout(Math.min(boundedPollIntervalMs, resolvedDeadline - sampledAt));
+  }
+
+  const elapsedMs = boundedNumber(now() - startedAt);
+  if (!lastSnapshot?.found) {
+    throw new Error(
+      `${label}: standard route stage scroller was not found before the layout deadline (samples=${sampleCount},elapsedMs=${elapsedMs})`,
+    );
+  }
+  throw new Error(
+    `${label}: stage scroller had no visible height before the layout deadline (samples=${sampleCount},elapsedMs=${elapsedMs},clientHeight=${boundedNumber(lastSnapshot.clientHeight)})`,
+  );
 }
 
 export async function driveNativeStageToStableBottom(
