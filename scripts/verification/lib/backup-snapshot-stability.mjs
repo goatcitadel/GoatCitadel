@@ -8,7 +8,14 @@ function normalizeRelativePath(value) {
 async function listJsonFiles(rootDir) {
   try {
     return (await fs.readdir(rootDir, { recursive: true }))
-      .filter((entry) => entry.toLowerCase().endsWith(".json"))
+      .filter((entry) => {
+        const normalized = normalizeRelativePath(entry);
+        return (
+          normalized.toLowerCase().endsWith(".json") &&
+          normalized !== ".generations/staging" &&
+          !normalized.startsWith(".generations/staging/")
+        );
+      })
       .sort((left, right) => left.localeCompare(right));
   } catch (error) {
     if (error?.code === "ENOENT") return [];

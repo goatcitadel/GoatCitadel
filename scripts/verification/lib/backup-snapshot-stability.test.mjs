@@ -16,13 +16,29 @@ async function createFixture(t) {
   const payloadRoot = path.join(runtimeRoot, "backup", "payload");
   await fs.mkdir(path.join(configDir, "generations"), { recursive: true });
   await fs.mkdir(path.join(payloadRoot, "config", "generations"), { recursive: true });
+  await fs.mkdir(path.join(configDir, ".generations", "staging", "source-generation"), { recursive: true });
+  await fs.mkdir(path.join(payloadRoot, "config", ".generations", "staging", "backup-generation"), {
+    recursive: true,
+  });
   await fs.writeFile(path.join(configDir, "root.json"), '{"root":true}\n');
   await fs.writeFile(path.join(configDir, "generations", "receipt.json"), '{"generation":1}\n');
+  await fs.writeFile(
+    path.join(configDir, ".generations", "staging", "source-generation", "assistant.config.json"),
+    '{"state":"source-staging"}\n',
+  );
   await fs.cp(configDir, path.join(payloadRoot, "config"), { recursive: true, force: true });
+  await fs.rm(path.join(payloadRoot, "config", ".generations", "staging"), { recursive: true, force: true });
+  await fs.mkdir(path.join(payloadRoot, "config", ".generations", "staging", "backup-generation"), {
+    recursive: true,
+  });
+  await fs.writeFile(
+    path.join(payloadRoot, "config", ".generations", "staging", "backup-generation", "assistant.config.json"),
+    '{"state":"backup-staging"}\n',
+  );
   return { runtimeRoot, configDir, payloadRoot };
 }
 
-test("config snapshot pairing accepts the exact recursive path set and bytes", async (t) => {
+test("config snapshot pairing accepts exact committed paths and bytes while excluding atomic staging", async (t) => {
   const fixture = await createFixture(t);
   const snapshots = await captureConfigJsonSnapshots(fixture.configDir, fixture.runtimeRoot);
 

@@ -185,6 +185,9 @@ test("surface regression returns failure evidence when a browser assertion throw
   assert.equal(stackOptions.gatewayEnv.GOATCITADEL_AUTH_MODE, "token");
   assert.equal(stackOptions.gatewayEnv.GOATCITADEL_AUTH_TOKEN, "verification-surface-regression-operator-token");
   assert.equal(stackOptions.gatewayEnv.GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS, "true");
+  assert.equal(stackOptions.gatewayEnv.GOATCITADEL_DISABLE_MAINTENANCE_SCHEDULER, "true");
+  assert.equal(stackOptions.gatewayMode, "built");
+  assert.equal(stackOptions.uiMode, "preview");
   assert.deepEqual(stackOptions.gatewayEnvOmit, ["OPENAI_API_KEY", "SLACK_BOT_TOKEN"]);
   assert.deepEqual(stackOptions.uiEnvOmit, ["OPENAI_API_KEY", "SLACK_BOT_TOKEN"]);
   assert.notEqual(stackOptions.gatewayEnv.GOATCITADEL_AUTH_MODE, "none");
