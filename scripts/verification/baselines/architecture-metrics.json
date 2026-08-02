@@ -161,7 +161,7 @@
     "apps/gateway/src/services/workflow-recipe-service.ts": 4,
     "apps/gateway/src/services/gateway/chat-stream-runtime.ts": 24
   },
-  "totalDependencyMemberAccesses": 9060,
+  "totalDependencyMemberAccesses": 9061,
   "dependencyMemberAccessesByFile": {
     "apps/gateway/src/services/a2a-grpc-client.ts": 2,
     "apps/gateway/src/services/a2a-grpc-outbound-service.ts": 10,
@@ -290,7 +290,7 @@
     "apps/gateway/src/services/dry-run-commit-service.ts": 8,
     "apps/gateway/src/services/durable-execution-service.ts": 162,
     "apps/gateway/src/services/durable-operator-service.ts": 31,
-    "apps/gateway/src/services/durable-run-service.ts": 227,
+    "apps/gateway/src/services/durable-run-service.ts": 228,
     "apps/gateway/src/services/effective-runtime-scope-service.ts": 9,
     "apps/gateway/src/services/engineering-learning-service.ts": 19,
     "apps/gateway/src/services/evidence-envelope-service.ts": 5,

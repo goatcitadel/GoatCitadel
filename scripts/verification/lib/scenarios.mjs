@@ -55,6 +55,7 @@ import {
 } from "./scenarios/browser-helpers.mjs";
 import { seedMissionControlNextFixture as seedMissionControlNextFixtureImpl } from "./scenarios/fixture-seeding.mjs";
 import { collectVisualBaselineCoverage } from "./visual-baseline-coverage.mjs";
+import { captureConfigJsonSnapshots, findBackupConfigSnapshotDrift } from "./backup-snapshot-stability.mjs";
 import {
   API_COMPAT_ALLOWLIST_PATH,
   API_COMPAT_BASELINE_PATH,
@@ -2356,7 +2357,6 @@ export async function runBackupRoundtripLane(context, _options = {}) {
         subsystem: "runtime",
       },
       async () => {
-        const runtimeRelativePath = (targetPath) => path.relative(runtimeRoot, targetPath).replaceAll("\\", "/");
         const configDir = path.join(runtimeRoot, "config");
         const configPath = path.join(configDir, "llm-providers.json");
         const configSentinelPath = path.join(configDir, "verification-backup-roundtrip.json");
@@ -2391,38 +2391,6 @@ export async function runBackupRoundtripLane(context, _options = {}) {
         )}\n`;
 
         await fs.writeFile(configSentinelPath, configSentinelRaw, "utf8");
-        // Config generations are part of the minimum recoverable set. Walk the
-        // tree rather than only the split-file root so the proof mutates,
-        // restores, and compares canonical generation receipts byte-for-byte.
-        const configFileNames = (await fs.readdir(configDir, { recursive: true }))
-          .filter((entry) => entry.toLowerCase().endsWith(".json"))
-          .sort((left, right) => left.localeCompare(right));
-        const configSnapshots = await Promise.all(
-          configFileNames.map(async (fileName) => {
-            const absolutePath = path.join(configDir, fileName);
-            return {
-              absolutePath,
-              relativePath: runtimeRelativePath(absolutePath),
-              raw: await fs.readFile(absolutePath, "utf8"),
-            };
-          }),
-        );
-        const providerConfigSnapshot = configSnapshots.find(
-          (item) => item.relativePath === "config/llm-providers.json",
-        );
-        if (!providerConfigSnapshot) {
-          throw new Error("backup roundtrip expected config/llm-providers.json in the runtime root");
-        }
-        const originalConfigRaw = providerConfigSnapshot.raw;
-        const originalConfig = JSON.parse(originalConfigRaw);
-        const targetProvider = Array.isArray(originalConfig.providers)
-          ? (originalConfig.providers.find((item) => item?.providerId === "openai") ?? originalConfig.providers[0])
-          : null;
-        if (!targetProvider) {
-          throw new Error("backup roundtrip config mutation could not find a provider entry");
-        }
-        const originalLabel = String(targetProvider.label ?? "OpenAI");
-        const mutatedMarker = " (mutated after backup)";
         const dbSentinelPolicy = {
           realtimeEventsDays: 11,
           backupsKeep: 17,
@@ -2447,17 +2415,60 @@ export async function runBackupRoundtripLane(context, _options = {}) {
           throw new Error("DB-backed retention policy sentinel was not visible before backup");
         }
 
-        const createdBackup = await requestJson(stack.gatewayUrl, "/api/v1/admin/backups/create", {
-          method: "POST",
-          body: {
-            name: "verification-backup-roundtrip",
-          },
-        });
-        assertOk(createdBackup, "create runtime backup");
-        const backupPath = path.basename(String(createdBackup.body?.outputPath ?? ""));
-        if (!backupPath) {
-          throw new Error("backup create response did not include an outputPath");
+        // A live config owner can finish an atomic generation write between a
+        // filesystem read and the backup request. Pair the exact recursive
+        // config bytes with the completed backup before destructive mutation.
+        // This bounded precondition retry preserves byte-for-byte restore proof
+        // without classifying legitimate owner completion as restore drift.
+        const maxBackupSnapshotAttempts = 8;
+        let backupSnapshotAttempts = 0;
+        let configSnapshots = [];
+        let createdBackup;
+        let backupPath = "";
+        let snapshotDrift = [];
+        while (backupSnapshotAttempts < maxBackupSnapshotAttempts) {
+          backupSnapshotAttempts += 1;
+          configSnapshots = await captureConfigJsonSnapshots(configDir, runtimeRoot);
+          createdBackup = await requestJson(stack.gatewayUrl, "/api/v1/admin/backups/create", {
+            method: "POST",
+            body: {
+              name: "verification-backup-roundtrip",
+            },
+          });
+          assertOk(createdBackup, "create runtime backup");
+          backupPath = path.basename(String(createdBackup.body?.outputPath ?? ""));
+          if (!backupPath) {
+            throw new Error("backup create response did not include an outputPath");
+          }
+          snapshotDrift = await findBackupConfigSnapshotDrift(
+            configSnapshots,
+            path.join(backupRoot, backupPath, "payload"),
+          );
+          if (snapshotDrift.length === 0) break;
+          if (backupSnapshotAttempts < maxBackupSnapshotAttempts) await delay(250);
         }
+        if (!createdBackup || snapshotDrift.length > 0) {
+          throw new Error(
+            `backup config snapshot did not stabilize after ${backupSnapshotAttempts} attempts: ${snapshotDrift.join(", ")}`,
+          );
+        }
+
+        const providerConfigSnapshot = configSnapshots.find(
+          (item) => item.relativePath === "config/llm-providers.json",
+        );
+        if (!providerConfigSnapshot) {
+          throw new Error("backup roundtrip expected config/llm-providers.json in the runtime root");
+        }
+        const originalConfigRaw = providerConfigSnapshot.raw;
+        const originalConfig = JSON.parse(originalConfigRaw);
+        const targetProvider = Array.isArray(originalConfig.providers)
+          ? (originalConfig.providers.find((item) => item?.providerId === "openai") ?? originalConfig.providers[0])
+          : null;
+        if (!targetProvider) {
+          throw new Error("backup roundtrip config mutation could not find a provider entry");
+        }
+        const originalLabel = String(targetProvider.label ?? "OpenAI");
+        const mutatedMarker = " (mutated after backup)";
 
         const verifiedBackup = await requestJson(stack.gatewayUrl, "/api/v1/admin/backups/verify", {
           method: "POST",
@@ -2646,6 +2657,7 @@ export async function runBackupRoundtripLane(context, _options = {}) {
           transcriptPath,
           auditPath,
           originalConfigLabel: originalLabel,
+          backupSnapshotAttempts,
           createdRetentionPolicy: createdRetentionPolicy.body,
           createdBackup: createdBackup.body,
           mutatedConfigLabel: `${originalLabel}${mutatedMarker}`,

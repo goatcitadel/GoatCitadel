@@ -1820,12 +1820,13 @@ export class DurableRunService {
     try {
       observed = this.ctx.storage.durableRuns.getRun(runId);
       const legacySettlement = this.settleLegacyGeneralChatPostCommit(observed);
-      if (legacySettlement) {
+      if (legacySettlement?.retired) {
         return true;
       }
       // A concurrent owner may have retired or upgraded the marker after our
-      // initial read. Continue from canonical storage, never the stale v1 row.
-      observed = this.ctx.storage.durableRuns.getRun(runId);
+      // initial read. Continue from the canonical row returned by the bounded
+      // update loop, never the stale v1 row or a redundant storage reread.
+      if (legacySettlement) observed = legacySettlement.run;
       if (readLinkedFinalizationPending(observed)) {
         await this.finalizePendingLinkedState(observed);
         observed = this.ctx.storage.durableRuns.getRun(runId);
@@ -1874,7 +1875,9 @@ export class DurableRunService {
     return this.awaitGeneralChatPostCommitInFlight(runId, inFlightEntry);
   }
 
-  private settleLegacyGeneralChatPostCommit(observed: DurableRunRecord): DurableRunRecord | undefined {
+  private settleLegacyGeneralChatPostCommit(
+    observed: DurableRunRecord,
+  ): { run: DurableRunRecord; retired: boolean } | undefined {
     const legacyMarker = readExactLegacyGeneralChatPostCommitPendingMarker(
       observed.metadata?.[GENERAL_CHAT_POST_COMMIT_PENDING_METADATA_KEY],
     );
@@ -1939,7 +1942,7 @@ export class DurableRunService {
         expectedVersion: current.version,
       });
     });
-    if (!retired) return undefined;
+    if (!retired) return { run: settled, retired: false };
     this.resolveLogger().info(
       {
         runId: settled.runId,
@@ -1949,7 +1952,7 @@ export class DurableRunService {
       },
       "retired terminal legacy Chat post-commit marker without replaying side effects",
     );
-    return settled;
+    return { run: settled, retired: true };
   }
 
   private awaitGeneralChatPostCommitInFlight(runId: string, inFlight: GeneralChatPostCommitInFlight): Promise<boolean> {
