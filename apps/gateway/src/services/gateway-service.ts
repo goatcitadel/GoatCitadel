@@ -783,7 +783,7 @@ const FEATURE_FLAGS_SETTING_KEY = "feature_flags_v1";
 // (updateFeatureFlags) primes the cache, so this TTL only bounds staleness for any
 // hypothetical out-of-band settings write.
 const FEATURE_FLAGS_CACHE_TTL_MS = 1_000;
-const TERMINAL_CHAT_STREAM_ADMISSION_RELEASE_TIMEOUT_MS = 10_000;
+const TERMINAL_CHAT_STREAM_ADMISSION_RELEASE_TIMEOUT_MS = 30_000; // Covers multiple post-commit ownership epochs.
 import { DeviceTokenVault } from "./device-token-vault.js";
 
 export const MEMORY_ITEM_STATUS_VALUES = new Set(["active", "forgotten"]);

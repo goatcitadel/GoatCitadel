@@ -638,7 +638,7 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
       runId: "run-1",
       sessionId: "session-1",
       turnId: "turn-1",
-      timeoutMs: 10_000,
+      timeoutMs: 30_000,
     });
   });
 

@@ -1639,6 +1639,66 @@ describe("DurableRunService", () => {
     expect(fixture.admission.status).toBe("active");
   });
 
+  it("releases terminal delivery after provider-backed post-commit work crosses multiple ownership epochs", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-07-11T00:00:00.000Z"));
+      const fixture = createAdmittedChatRuntimeFixture({
+        runId: "run-terminal-delivery-multiple-reconciliation-epochs",
+        status: "completed",
+        generationId: "generation-terminal-delivery-multiple-reconciliation-epochs",
+        traceStatus: "completed",
+      });
+      const runs = new Map<string, DurableRunRecord>([[fixture.run.runId, fixture.run]]);
+      const context = createContext(runs, [], []);
+      installAdmittedChatRuntimeFixture(context, fixture);
+      let invocation = 0;
+      const onGeneralChatPostCommit = vi.fn(async (_run: DurableRunRecord, progress: GeneralChatPostCommitProgress) => {
+        invocation += 1;
+        if (invocation < 3) {
+          await new Promise<void>(() => undefined);
+        }
+        for (const effect of GENERAL_CHAT_POST_COMMIT_EFFECTS) progress.runEffect(effect, () => undefined);
+        return { status: "completed" };
+      });
+      const service = new DurableRunService(context as unknown as ServiceContext, {
+        backgroundTasks: new Set(),
+        workflowRegistry: {
+          executeWorkflow: vi.fn(),
+          isWorkflowRecoverable: () => ({ recoverable: true }),
+          markWorkflowUnrecoverable: vi.fn(),
+        },
+        onGeneralChatPostCommit,
+      });
+
+      const pending = service.awaitTerminalChatAdmissionRelease({
+        runId: fixture.run.runId,
+        sessionId: fixture.admission.sessionId,
+        turnId: fixture.admission.turnId,
+        timeoutMs: 30_000,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onGeneralChatPostCommit).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(10_500);
+
+      await expect(pending).resolves.toMatchObject({
+        recoveryOutcome: "released",
+        durableRunId: fixture.run.runId,
+        durableRunStatus: "completed",
+        admissionId: fixture.admission.admissionId,
+      });
+      expect(onGeneralChatPostCommit).toHaveBeenCalledTimes(3);
+      expect(fixture.admission).toMatchObject({
+        status: "completed",
+        terminalAuthorityKind: "durable_terminal",
+        terminalDurableRunId: fixture.run.runId,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("boot-recovers a completed silent system heartbeat through terminal admission and occurrence handoff", async () => {
     const fixture = createCompletedHeartbeatPostCommitFixture("run-heartbeat-silent-boot-recovery");
     const recovery = createHeartbeatBootRecoveryHarness(fixture);
