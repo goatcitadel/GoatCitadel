@@ -93,7 +93,10 @@ test("unsigned trust mode permits omitted or unsigned identity without weakening
   assert.match(smokeScript, /expected 'GoatCitadel Mission Control'/);
   assert.match(smokeScript, /embedded Mission Control target remained blank/);
   assert.match(smokeScript, /WebView navigated to/);
-  assert.match(smokeScript, /GoatCitadel Mission Control Next/);
+  assert.match(smokeScript, /\$expectedWebViewPath = "\/settings\/onboarding"/);
+  assert.match(smokeScript, /GoatCitadel Start Here/);
+  assert.match(smokeScript, /did not place Gateway and Mission Control logs under the isolated runtime home/);
+  assert.match(smokeScript, /wrote mutable runtime logs under the immutable install root/);
   assert.match(smokeScript, /WaitForExit\(600000\)/);
   assert.match(
     smokeScript,
@@ -129,6 +132,7 @@ test("shared installer smoke bounds destructive cleanup to its validated scratch
   assert.match(smokeScript, /Refusing to overwrite an existing goatcitadel protocol registration/);
   assert.match(smokeScript, /Refusing to replace an existing GoatCitadel package identity/);
   assert.match(smokeScript, /StartsWith\(\$installPrefix/);
+  assert.match(smokeScript, /Installed process teardown did not complete within 15 seconds/);
   assert.doesNotMatch(smokeScript, /CommandLine -match "goatcitadel"/);
 });
 
@@ -189,9 +193,11 @@ test("failure cleanup verifies owned registrations before deleting recovery payl
   );
   assert.match(
     smokeScript,
-    /if \(\$cleanupFailures\.Count -eq 0 -and \(Test-Path -LiteralPath \$smokeRoot\)\)[\s\S]*?Remove-Item -LiteralPath \$smokeRoot -Recurse -Force -ErrorAction Stop/,
+    /if \(\$null -eq \$primaryFailure -and[\s\S]*?\$cleanupFailures\.Count -eq 0 -and[\s\S]*?Test-Path -LiteralPath \$smokeRoot[\s\S]*?Remove-Item -LiteralPath \$smokeRoot -Recurse -Force -ErrorAction Stop/,
   );
   assert.match(smokeScript, /Installer smoke scratch root remained after cleanup/);
   assert.match(smokeScript, /Preserving installer smoke recovery payload/);
   assert.match(smokeScript, /Installer smoke cleanup failed:/);
+  assert.match(smokeScript, /Installer smoke failed: \$primaryFailure/);
+  assert.match(smokeScript, /Cleanup also failed:/);
 });

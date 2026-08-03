@@ -216,6 +216,8 @@ test("uninstall stops the packaged runtime before removing its payload", () => {
   const removePayload = iss.match(/procedure RemoveGoatCitadelPayload\(\);[\s\S]*?procedure WriteTransactionMarker/)?.[0] ?? "";
   assert.match(removePayload, /RunUninstallOrFail\(/);
   assert.doesNotMatch(removePayload, /RunOrFail\(/);
+  assert.match(removePayload, /try \{\{ \[System\.IO\.Directory\]::Delete[\s\S]*?\} catch \{\{\}; try \{\{/);
+  assert.doesNotMatch(removePayload, /\} catch \{\{\}\}/);
 });
 
 test("installer consumes only the exact adjacent release-evidence files", () => {

@@ -102,6 +102,7 @@ $hostProc = $null
 $installed = $false
 $uninstalled = $false
 $cleanupFailures = [System.Collections.Generic.List[string]]::new()
+$primaryFailure = $null
 
 function Redact-DiagnosticLine([string]$Line) {
   return ($Line `
@@ -143,6 +144,16 @@ function Show-RuntimeLogs {
   Write-Host "::endgroup::"
 }
 
+function Get-InstalledProcesses {
+  return @(
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+      Where-Object {
+        $_.ExecutablePath -and
+        $_.ExecutablePath.StartsWith($installPrefix, [System.StringComparison]::OrdinalIgnoreCase)
+      }
+  )
+}
+
 function Stop-InstalledProcesses {
   if ($null -ne $hostProc) {
     try {
@@ -167,15 +178,24 @@ function Stop-InstalledProcesses {
     }
   }
 
-  Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-    Where-Object {
-      $_.ExecutablePath -and
-      $_.ExecutablePath.StartsWith($installPrefix, [System.StringComparison]::OrdinalIgnoreCase)
-    } |
+  Get-InstalledProcesses |
     ForEach-Object {
       Write-Host "Backstop kill after installer smoke: PID $($_.ProcessId) $($_.Name) ($($_.ExecutablePath))"
       & taskkill.exe /PID $_.ProcessId /T /F 2>$null | Out-Null
     }
+
+  $stopDeadline = (Get-Date).AddSeconds(15)
+  do {
+    $remainingProcesses = @(Get-InstalledProcesses)
+    if ($remainingProcesses.Count -eq 0) {
+      return
+    }
+    Start-Sleep -Milliseconds 250
+  } while ((Get-Date) -lt $stopDeadline)
+
+  $remainingSummary = ($remainingProcesses |
+      ForEach-Object { "PID $($_.ProcessId) $($_.Name) ($($_.ExecutablePath))" }) -join "; "
+  throw "Installed process teardown did not complete within 15 seconds: $remainingSummary"
 }
 
 try {
@@ -316,6 +336,8 @@ try {
 
   $webViewTarget = $null
   $webViewTargets = @()
+  $expectedWebViewPath = "/settings/onboarding"
+  $expectedWebViewTitle = "GoatCitadel Start Here"
   $webViewDeadline = (Get-Date).AddSeconds(40)
   while ((Get-Date) -lt $webViewDeadline) {
     $hostProc.Refresh()
@@ -335,7 +357,16 @@ try {
       $webViewTarget = $null
     }
     if ($webViewTarget) {
-      break
+      try {
+        $candidateWebViewUri = [Uri]$webViewTarget.url
+        if ($candidateWebViewUri.AbsolutePath -eq $expectedWebViewPath -and
+            $webViewTarget.title -eq $expectedWebViewTitle) {
+          break
+        }
+      }
+      catch {
+        # Retain the candidate for the bounded, operator-readable failure below.
+      }
     }
     Start-Sleep -Milliseconds 500
   }
@@ -349,8 +380,23 @@ try {
       $webViewUri.Host -notin @("127.0.0.1", "localhost", "::1", "[::1]")) {
     throw "Embedded Mission Control navigated outside the allowed loopback boundary: $($webViewTarget.url)"
   }
-  if ($webViewTarget.title -ne "GoatCitadel Mission Control Next") {
-    throw "Embedded Mission Control page title was '$($webViewTarget.title)'; expected 'GoatCitadel Mission Control Next'."
+  if ($webViewUri.AbsolutePath -ne $expectedWebViewPath) {
+    throw "Embedded Mission Control first launch navigated to '$($webViewUri.AbsolutePath)'; expected '$expectedWebViewPath'."
+  }
+  if ($webViewTarget.title -ne $expectedWebViewTitle) {
+    throw "Embedded Mission Control page title was '$($webViewTarget.title)'; expected '$expectedWebViewTitle'."
+  }
+
+  $nativeRuntimeEvidence = @(
+    "gateway.stdout.log",
+    "mission-control.stdout.log"
+  ) | ForEach-Object { Join-Path $runtimeLogDir $_ } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
+  if ($nativeRuntimeEvidence.Count -ne 2) {
+    throw "Native desktop did not place Gateway and Mission Control logs under the isolated runtime home '$runtimeBase'."
+  }
+  $installRuntimeLogDir = Join-Path $installDir "runtime/logs"
+  if (Test-Path -LiteralPath $installRuntimeLogDir) {
+    throw "Native desktop wrote mutable runtime logs under the immutable install root '$installRuntimeLogDir'."
   }
 
   # Tear down the host and its WebView/runtime descendants before readiness and
@@ -482,8 +528,16 @@ try {
 
   Write-Host "Windows installer lifecycle smoke passed for $Target in $TrustMode trust mode."
 }
+catch {
+  $primaryFailure = $_.Exception.Message
+}
 finally {
-  Stop-InstalledProcesses
+  try {
+    Stop-InstalledProcesses
+  }
+  catch {
+    $cleanupFailures.Add("Installed process cleanup failed: $($_.Exception.Message)")
+  }
 
   $uninstaller = Join-Path $installDir "unins000.exe"
   if (-not $uninstalled -and (Test-Path -LiteralPath $uninstaller -PathType Leaf)) {
@@ -546,7 +600,9 @@ finally {
     $cleanupFailures.Add("Candidate protocol registration remained after cleanup.")
   }
 
-  if ($cleanupFailures.Count -eq 0 -and (Test-Path -LiteralPath $smokeRoot)) {
+  if ($null -eq $primaryFailure -and
+      $cleanupFailures.Count -eq 0 -and
+      (Test-Path -LiteralPath $smokeRoot)) {
     try {
       Remove-Item -LiteralPath $smokeRoot -Recurse -Force -ErrorAction Stop
     }
@@ -555,7 +611,7 @@ finally {
     }
   }
   if (Test-Path -LiteralPath $smokeRoot) {
-    if ($cleanupFailures.Count -eq 0) {
+    if ($null -eq $primaryFailure -and $cleanupFailures.Count -eq 0) {
       $cleanupFailures.Add("Installer smoke scratch root remained after cleanup.")
     }
     Write-Warning "Preserving installer smoke recovery payload at $smokeRoot"
@@ -602,6 +658,13 @@ finally {
   }
   else {
     $env:GOATCITADEL_MISSION_CONTROL_URL = $previousMissionControlUrl
+  }
+  if ($null -ne $primaryFailure) {
+    $failureMessage = "Installer smoke failed: $primaryFailure"
+    if ($cleanupFailures.Count -gt 0) {
+      $failureMessage += " Cleanup also failed: $($cleanupFailures -join ' ')"
+    }
+    throw $failureMessage
   }
   if ($cleanupFailures.Count -gt 0) {
     throw "Installer smoke cleanup failed: $($cleanupFailures -join ' ')"

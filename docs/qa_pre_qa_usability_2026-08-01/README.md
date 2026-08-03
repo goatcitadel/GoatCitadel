@@ -48,6 +48,8 @@ The August campaign begins by repairing evidence defects found while reviewing t
 - `GC-HARNESS-093`: preserve the real npm restricted-tool working-directory integration while giving its Windows V8 coverage process-start boundary a 45-second test budget beneath the independent 120-second production deadline.
 - `GC-HARNESS-094`: give the two Code Mode candidate child-execution and committed-I/O integration cases a 45-second Windows coverage budget while preserving every product timeout, rollback, immutable replay, and artifact assertion.
 - `GC-HARNESS-095`: let the native route proof observe a transient zero-height stage within its existing shared five-second layout deadline, while preserving fail-closed persistent-collapse diagnostics and stable-bottom certification.
+- `GC-USAB-076`: correct the code-driven Windows long-path uninstall fallback so Inno expands valid PowerShell braces and a deep Gateway dependency tree cannot abort uninstall.
+- `GC-HARNESS-096`: make packaged lifecycle proof use a genuinely separate mutable runtime home and immutable app directory, follow the route-derived Start Here title, await process teardown, and retain the primary failure alongside cleanup diagnostics.
 - Standard Code Quality `#1688` and `#1689`: remove the two analyzer-confirmed dead assignments without weakening recovery behavior.
 - Standard Code Quality `#1687`: retain the explicit bounded activation-resolution loop; its early-return and `out`-parameter semantics are clearer than a LINQ allocation/indirection and its rejection is recorded in the security triage guide.
 
