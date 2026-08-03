@@ -388,9 +388,11 @@ try {
   }
 
   $nativeRuntimeEvidence = @(
-    "gateway.stdout.log",
-    "mission-control.stdout.log"
-  ) | ForEach-Object { Join-Path $runtimeLogDir $_ } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
+    @(
+      "gateway.stdout.log",
+      "mission-control.stdout.log"
+    ) | ForEach-Object { Join-Path $runtimeLogDir $_ } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
+  )
   if ($nativeRuntimeEvidence.Count -ne 2) {
     throw "Native desktop did not place Gateway and Mission Control logs under the isolated runtime home '$runtimeBase'."
   }

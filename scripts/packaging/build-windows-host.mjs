@@ -33,6 +33,8 @@ const outArtifactPath = path.join(outDir, targetInfo.desktopArtifactName);
 const configuration = args.configuration || "Release";
 const msbuildPlatform = targetInfo.arch === "arm64" ? "ARM64" : "x64";
 const msixPublisher = args.msixPublisher ?? process.env.GOATCITADEL_WINDOWS_MSIX_PUBLISHER ?? DEFAULT_MSIX_PUBLISHER;
+const sourceCommit = resolveSourceCommit();
+const sourceModified = resolveSourceModified();
 
 await main();
 
@@ -167,6 +169,8 @@ function writeDesktopManifest() {
   const files = listFiles(outDir).map((filePath) => path.relative(outDir, filePath).replaceAll("\\", "/"));
   const manifest = {
     target,
+    sourceCommit,
+    sourceModified,
     rid: targetInfo.windowsRid,
     platform: msbuildPlatform,
     hostKind: targetInfo.windowsHostKind,
@@ -181,6 +185,34 @@ function writeDesktopManifest() {
     files,
   };
   fs.writeFileSync(path.join(outDir, "desktop-manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
+}
+
+function resolveSourceCommit() {
+  const fromCi = process.env.GITHUB_SHA?.trim();
+  const result = spawnSync("git", ["-C", repoRoot, "rev-parse", "HEAD"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  const candidate = String(result.stdout ?? "").trim();
+  if (result.status !== 0 || !/^[a-f0-9]{40}$/iu.test(candidate)) {
+    throw new Error("Windows host source commit could not be resolved to a full Git SHA.");
+  }
+  const normalizedHead = candidate.toLowerCase();
+  if (fromCi !== undefined && (!/^[a-f0-9]{40}$/iu.test(fromCi) || fromCi.toLowerCase() !== normalizedHead)) {
+    throw new Error("Windows host checkout HEAD does not match GITHUB_SHA.");
+  }
+  return normalizedHead;
+}
+
+function resolveSourceModified() {
+  const result = spawnSync("git", ["-C", repoRoot, "status", "--porcelain"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    throw new Error("Windows host source modification state could not be resolved.");
+  }
+  return String(result.stdout ?? "").trim().length > 0;
 }
 
 function pruneRetiredWindowsAiPayload() {

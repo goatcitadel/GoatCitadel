@@ -96,6 +96,10 @@ test("unsigned trust mode permits omitted or unsigned identity without weakening
   assert.match(smokeScript, /\$expectedWebViewPath = "\/settings\/onboarding"/);
   assert.match(smokeScript, /GoatCitadel Start Here/);
   assert.match(smokeScript, /did not place Gateway and Mission Control logs under the isolated runtime home/);
+  assert.match(
+    smokeScript,
+    /\$nativeRuntimeEvidence = @\([\s\S]*?gateway\.stdout\.log[\s\S]*?mission-control\.stdout\.log[\s\S]*?\| Where-Object[\s\S]*?\)\s*if \(\$nativeRuntimeEvidence\.Count -ne 2\)/,
+  );
   assert.match(smokeScript, /wrote mutable runtime logs under the immutable install root/);
   assert.match(smokeScript, /WaitForExit\(600000\)/);
   assert.match(

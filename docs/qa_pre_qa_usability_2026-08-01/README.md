@@ -53,6 +53,8 @@ The August campaign begins by repairing evidence defects found while reviewing t
 - `GC-USAB-077`: map expected config-generation conflicts from both settings read routes through the shared HTTP 409 error boundary so startup clients can retry truthfully.
 - `GC-ENV-008`: keep an unsupported verifier help probe and its orphaned coverage shard classified as an environment failure; kill the exact owned process tree and require a clean serial rerun.
 - `GC-HARNESS-097`: prove the packaged launcher stall spans the production health deadline while allowing bounded cold-child startup overhead in the repository-wide Windows gate; the 2-second product abort remains unchanged.
+- `GC-HARNESS-098`: bind every copied Windows desktop host to the bundle's exact source commit and dirty-state truth so a clean JavaScript rebuild cannot silently ship a stale native binary.
+- `GC-HARNESS-099`: keep native runtime-log evidence array-shaped under PowerShell strict mode so a missing log reports the intended isolation failure instead of a scalar `.Count` exception.
 - Standard Code Quality `#1688` and `#1689`: remove the two analyzer-confirmed dead assignments without weakening recovery behavior.
 - Standard Code Quality `#1687`: retain the explicit bounded activation-resolution loop; its early-return and `out`-parameter semantics are clearer than a LINQ allocation/indirection and its rejection is recorded in the security triage guide.
 
