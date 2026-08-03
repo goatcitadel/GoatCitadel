@@ -1,7 +1,7 @@
 Gate,Required,Status,Final SHA,Command,Evidence or blocker
 Focused repair contracts,Yes,Passed dirty candidate,Pending,"Focused Node tests; ESLint; Prettier; package typecheck/test; targeted Vitest","70 harness tests; 450 shared Chat tests; focused durable test"
 verify:fast,Yes,Passed focused candidate,Pending,pnpm verify:fast,artifacts/verification/2026-08-02T01-49-47-378Z-fast-78096a45
-verify:usability,Yes,"Passed 120/120 on the provisional terminal-effects candidate with no required skip or not_configured row; frozen-SHA rerun pending",Pending,pnpm verify:usability,artifacts/verification/2026-08-03T13-53-22-472Z-usability-d9db329f
+verify:usability,Yes,"Frozen SHA 08d9ec8 passed all 34 preceding scenarios and all 8 Settings actions but failed console health on GC-HARNESS-102; exact harness repair and strict rerun pending",Pending,pnpm verify:usability,artifacts/verification/2026-08-03T17-02-49-725Z-usability-d6333f1e
 Second clean-profile core smoke,Yes,"Passed the provisional terminal-effects candidate; frozen-SHA rerun pending",Pending,pnpm verify:usability:core,artifacts/verification/2026-08-03T14-27-29-210Z-usability-core-ea910942
 verify:all,Yes,"Passed 651/651 on provisional source head 51ae1805; the later AI quality batch requires one final frozen-SHA aggregate",Pending,pnpm verify:all,artifacts/verification/2026-08-03T15-35-54-730Z-all-1b48553e
 Auth matrix,Yes,Passed focused candidate,Pending,pnpm verify:auth:matrix,artifacts/verification/2026-08-02T02-17-38-946Z-auth-matrix-b3dfc32a

@@ -1322,6 +1322,128 @@ test("one exact event-stream connection failure is acknowledged only with bounde
   });
 });
 
+test("registered navigation teardown can recover without a Playwright requestfailed event", () => {
+  const snapshot = navigationRecoveredSseSnapshot();
+  const browserActionSteps = [recoveredNavigationStep()];
+  const result = filterExpectedBrowserConsoleMessages(snapshot, browserActionSteps, {
+    clientSseDiagnostics: recoveredSseDiagnostics(),
+  });
+
+  assert.equal(result.acknowledgedCount, 1);
+  assert.equal(result.acknowledgedSseRecoveryCount, 1);
+  assert.deepEqual(
+    result.snapshot.consoleMessages.filter((message) => message.type === "error"),
+    [],
+  );
+  assert.deepEqual(result.sseRecovery, {
+    acknowledged: true,
+    reason:
+      "registered navigation teardown recovered with bounded close/error/retry diagnostics, a 200 response, and current client SSE open proof",
+    failedUrl: "/api/v1/events/stream",
+    failureTimestamp: "2026-07-30T12:26:15.187Z",
+    responseTimestamp: "2026-07-30T12:26:16.689Z",
+    clientOpenTimestamp: "2026-07-30T12:26:16.692Z",
+    currentClientOpenTimestamp: "2026-07-30T12:26:16.692Z",
+    recoveryMs: 1505,
+    navigationStepId: "route.settings-access.token-basic-device-grants",
+    requestFailureCount: 0,
+    responseCount: 1,
+    clientDiagnosticCount: 1,
+  });
+});
+
+test("request-failure-free navigation recovery stays fatal outside the exact bounded evidence contract", () => {
+  const valid = navigationRecoveredSseSnapshot();
+  const validSteps = [recoveredNavigationStep()];
+  const diagnostics = recoveredSseDiagnostics();
+  const cases = [
+    { name: "no registered navigation", snapshot: valid, steps: [] },
+    {
+      name: "failed navigation step",
+      snapshot: valid,
+      steps: [{ ...validSteps[0], status: "failed" }],
+    },
+    {
+      name: "outside navigation trigger window",
+      snapshot: valid,
+      steps: [{ ...validSteps[0], startedAt: "2026-07-30T12:26:09.000Z" }],
+    },
+    {
+      name: "missing close diagnostic",
+      snapshot: {
+        ...valid,
+        consoleMessages: valid.consoleMessages.filter((message) => !message.text.includes("event: close")),
+      },
+      steps: validSteps,
+    },
+    {
+      name: "missing retry diagnostic",
+      snapshot: {
+        ...valid,
+        consoleMessages: valid.consoleMessages.filter((message) => !message.text.includes("event: retry")),
+      },
+      steps: validSteps,
+    },
+    {
+      name: "missing console open diagnostic",
+      snapshot: {
+        ...valid,
+        consoleMessages: valid.consoleMessages.filter((message) => !message.text.includes("event: open")),
+      },
+      steps: validSteps,
+    },
+    {
+      name: "missing current-page open proof",
+      snapshot: valid,
+      steps: validSteps,
+      diagnostics: { available: true, records: [] },
+    },
+    {
+      name: "truncated event-stream evidence",
+      snapshot: { ...valid, eventStreamEvidenceTruncated: true },
+      steps: validSteps,
+    },
+  ];
+
+  for (const fixture of cases) {
+    const recovery = evaluateSseConnectionRecovery(fixture.snapshot, fixture.diagnostics ?? diagnostics, {
+      browserActionSteps: fixture.steps,
+    });
+    assert.equal(recovery.acknowledged, false, fixture.name);
+    const filtered = filterExpectedBrowserConsoleMessages(fixture.snapshot, fixture.steps, {
+      clientSseDiagnostics: fixture.diagnostics ?? diagnostics,
+    });
+    assert.equal(filtered.acknowledgedSseRecoveryCount, 0, fixture.name);
+    assert.equal(
+      filtered.snapshot.consoleMessages.some(
+        (message) => message.type === "error" && message.text === "Failed to load resource: net::ERR_CONNECTION_FAILED",
+      ),
+      true,
+      fixture.name,
+    );
+  }
+});
+
+test("navigation-scoped recovery survives the lane polling handoff without waiting", async () => {
+  const snapshot = navigationRecoveredSseSnapshot();
+  let waited = false;
+  const result = await pollSseConnectionRecoveryEvidence({
+    snapshot,
+    clientSseDiagnostics: recoveredSseDiagnostics(),
+    browserActionSteps: [recoveredNavigationStep()],
+    getSnapshot: () => snapshot,
+    readClientSseDiagnostics: async () => recoveredSseDiagnostics(),
+    wait: async () => {
+      waited = true;
+    },
+  });
+
+  assert.equal(waited, false);
+  assert.equal(result.pollCount, 0);
+  assert.equal(result.recovery.acknowledged, true);
+  assert.equal(result.recovery.navigationStepId, "route.settings-access.token-basic-device-grants");
+});
+
 test("event-stream console recovery acknowledgement stays fatal for wrong, repeated, truncated, or unrecovered evidence", () => {
   const valid = recoveredSseSnapshot();
   const diagnostics = recoveredSseDiagnostics();
@@ -1564,6 +1686,44 @@ function recoveredSseDiagnostics() {
         timestamp: "2026-07-30T12:26:16.692Z",
       },
     ],
+  };
+}
+
+function navigationRecoveredSseSnapshot() {
+  const snapshot = recoveredSseSnapshot();
+  snapshot.eventStreamRequestFailures = [];
+  snapshot.consoleMessages = [
+    {
+      type: "debug",
+      text: "[goatcitadel:dev-diagnostics] {level: info, category: sse, event: close}",
+      timestamp: "2026-07-30T12:26:15.000Z",
+    },
+    {
+      type: "debug",
+      text: "[goatcitadel:dev-diagnostics] {level: warn, category: sse, event: error}",
+      timestamp: "2026-07-30T12:26:15.001Z",
+    },
+    {
+      type: "debug",
+      text: "[goatcitadel:dev-diagnostics] {level: warn, category: sse, event: retry}",
+      timestamp: "2026-07-30T12:26:15.002Z",
+    },
+    snapshot.consoleMessages[0],
+    {
+      type: "debug",
+      text: "[goatcitadel:dev-diagnostics] {level: info, category: sse, event: open}",
+      timestamp: "2026-07-30T12:26:16.692Z",
+    },
+  ];
+  return snapshot;
+}
+
+function recoveredNavigationStep() {
+  return {
+    stepId: "route.settings-access.token-basic-device-grants",
+    status: "passed",
+    startedAt: "2026-07-30T12:26:14.900Z",
+    finishedAt: "2026-07-30T12:26:17.000Z",
   };
 }
 
