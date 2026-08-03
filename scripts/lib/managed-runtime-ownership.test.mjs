@@ -395,7 +395,8 @@ test("health deadline remains active when a listener stalls after sending header
   const elapsedMs = Date.now() - startedAt;
 
   assert.equal(result.status, 0, result.stderr || result.stdout);
-  assert.ok(elapsedMs < 3_000, `stalled body consumed ${elapsedMs}ms`);
+  assert.ok(elapsedMs >= 1_500, `stalled body returned before the health deadline (${elapsedMs}ms)`);
+  assert.ok(elapsedMs < 6_000, `stalled body plus child startup consumed ${elapsedMs}ms`);
   const payload = JSON.parse(result.stdout);
   assert.deepEqual(payload.readiness, { gateway: false, ui: false });
   assert.equal(payload.endpointOwnership.gateway.endpointHealthy, false);

@@ -52,6 +52,7 @@ The August campaign begins by repairing evidence defects found while reviewing t
 - `GC-HARNESS-096`: make packaged lifecycle proof use a genuinely separate mutable runtime home and immutable app directory, follow the route-derived Start Here title, await process teardown, and retain the primary failure alongside cleanup diagnostics.
 - `GC-USAB-077`: map expected config-generation conflicts from both settings read routes through the shared HTTP 409 error boundary so startup clients can retry truthfully.
 - `GC-ENV-008`: keep an unsupported verifier help probe and its orphaned coverage shard classified as an environment failure; kill the exact owned process tree and require a clean serial rerun.
+- `GC-HARNESS-097`: prove the packaged launcher stall spans the production health deadline while allowing bounded cold-child startup overhead in the repository-wide Windows gate; the 2-second product abort remains unchanged.
 - Standard Code Quality `#1688` and `#1689`: remove the two analyzer-confirmed dead assignments without weakening recovery behavior.
 - Standard Code Quality `#1687`: retain the explicit bounded activation-resolution loop; its early-return and `out`-parameter semantics are clearer than a LINQ allocation/indirection and its rejection is recorded in the security triage guide.
 
