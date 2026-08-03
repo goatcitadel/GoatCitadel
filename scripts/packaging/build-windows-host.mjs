@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { assertDesktopArtifactProvenance } from "./lib/desktop-artifact-provenance.mjs";
 import { PACKAGING_TARGETS, requirePackagingTarget } from "./lib/packaging-targets.mjs";
 import { removeDirectorySafely } from "./safe-cleanup.mjs";
 
@@ -83,6 +84,16 @@ async function main() {
   if (!fs.existsSync(outArtifactPath)) {
     throw new Error(`WinUI host executable was not produced: ${outArtifactPath}`);
   }
+  if (args.skipBuild) {
+    assertDesktopArtifactProvenance(path.join(outDir, "desktop-manifest.json"), {
+      target,
+      sourceCommit,
+      sourceModified,
+    });
+    console.log(`Reused verified GoatCitadel Windows host: ${outArtifactPath}`);
+    return;
+  }
+
   pruneRetiredWindowsAiPayload();
   writeDesktopManifest();
   console.log(`Built GoatCitadel Windows host: ${outArtifactPath}`);
