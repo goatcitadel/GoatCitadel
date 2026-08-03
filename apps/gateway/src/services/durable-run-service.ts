@@ -5832,7 +5832,20 @@ async function settleTerminalChatReconciliationBeforeDeadline(
   const remainingMs = Math.max(0, deadline - Date.now());
   if (remainingMs === 0) return false;
   return new Promise<boolean>((resolve, reject) => {
-    const timer = setTimeout(() => resolve(false), remainingMs);
+    // Node timers can fire a fraction early relative to the requested delay; if we
+    // resolved on that early tick the caller would recompute a non-zero
+    // `remainingBudgetMs` even though the deadline was reached. Re-arm until the
+    // wall clock has actually crossed the deadline so budget exhaustion is exact.
+    let timer: ReturnType<typeof setTimeout>;
+    const armDeadline = () => {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        resolve(false);
+        return;
+      }
+      timer = setTimeout(armDeadline, remaining);
+    };
+    armDeadline();
     void work.then(
       () => {
         clearTimeout(timer);

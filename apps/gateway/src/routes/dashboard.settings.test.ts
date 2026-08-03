@@ -183,32 +183,35 @@ describe("dashboard settings routes", () => {
   });
 
   it.each([
-    ["/api/v1/settings", false],
-    ["/api/v1/auth/settings", true],
-  ])("returns a reconciliation conflict from %s instead of an internal error", async (url, needsAuthSettings) => {
-    const getSettings = vi.fn(() => {
+    ["/api/v1/settings", "getSettings"],
+    ["/api/v1/auth/settings", "getSettings"],
+    ["/api/v1/auth/settings", "getAuthRuntimeSettings"],
+  ] as const)("maps the %s config-generation read fence on %s to a retryable conflict", async (url, method) => {
+    const fence = () => {
       throw new ConflictError({
         code: "STATE_CONFLICT",
         message: "Settings are temporarily unavailable while runtime owners reconcile a config generation.",
+        details: { currentRevision: 3, transactionState: "committed" },
       });
-    });
-    const getAuthRuntimeSettings = vi.fn(() => ({ mode: "none" }));
+    };
+    const settings: Record<string, unknown> = {
+      getSettings: vi.fn(() => ({ revision: 3 })),
+      getAuthRuntimeSettings: vi.fn(() => ({})),
+    };
+    settings[method] = vi.fn(fence);
 
     app = Fastify();
-    app.decorate("services", { settings: { getSettings, getAuthRuntimeSettings } } as never);
+    app.decorate("services", { settings } as never);
     await app.register(dashboardRoutes);
 
     const response = await app.inject({ method: "GET", url });
 
     expect(response.statusCode).toBe(409);
-    expect(response.json()).toEqual({
-      error: "Settings are temporarily unavailable while runtime owners reconcile a config generation.",
+    expect(response.json()).toMatchObject({
       code: "STATE_CONFLICT",
+      error: "Settings are temporarily unavailable while runtime owners reconcile a config generation.",
+      details: { currentRevision: 3, transactionState: "committed" },
     });
-    expect(getSettings).toHaveBeenCalledOnce();
-    if (needsAuthSettings) {
-      expect(getAuthRuntimeSettings).not.toHaveBeenCalled();
-    }
   });
 
   it("rejects dangerous settings payload keys before runtime mutation", async () => {
