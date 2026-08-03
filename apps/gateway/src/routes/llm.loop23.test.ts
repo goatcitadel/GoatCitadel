@@ -179,6 +179,7 @@ function buildApp(llmOverrides: Record<string, unknown>): FastifyInstance {
       ...llmOverrides,
     },
   } as never);
+  // Fastify registration is synchronous and chainable; awaited inject() owns boot and propagates setup errors.
   void next.register(llmRoutes);
   return next;
 }

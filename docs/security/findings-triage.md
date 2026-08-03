@@ -261,6 +261,23 @@ The one accepted suggestion was a genuine naming/semantics issue: `dedupeProject
 to deduplicate group *names* while applying path separator normalization. It was split into a
 generic `dedupeValues` plus a path-normalizing `dedupeProjects`.
 
+### 2026-08-03 AI queue snapshot
+
+The authenticated AI view reported three findings in three files from the most recent default-branch
+pushes. Each was checked against the current implementation instead of applying the generated diff:
+
+| Reported | Disposition and evidence |
+|---|---|
+| `apps/gateway/src/routes/llm.loop23.test.ts` — await `register()` so setup errors are not swallowed | Rejected as a false positive. Fastify `register()` is synchronous and chainable; the awaited `inject()` calls boot the application and surface plugin-registration failures. Converting this one helper to async would add ceremony without changing that error boundary, while adjacent route harnesses intentionally use the same `void register(...)` form. An inline comment now records the ownership and the focused route suite is the behavioral evidence. |
+| `apps/mission-control-next/src/app/legacy-route-adapter.test.ts` — unexplained route-count literals | Accepted. The independent `42` shipped and `6` experimental inventory tripwires remain literal, with comments explaining that they are reviewed route-classification baselines rather than values to derive from the manifest under test. |
+| `packages/gateway-core/src/model-usage-accounting.test.ts` — missing cancel-first terminal idempotency case | Accepted. A deterministic reverse-order regression now proves that cancellation remains the canonical terminal record when later failure or success settlement is attempted, including that late usage cannot mutate the persisted terminal projection. |
+
+GitHub [documents that this AI analysis refreshes after pushes to the default branch](https://docs.github.com/en/code-security/how-tos/maintain-quality-code/fix-findings-in-recent-merges). The AI view has no
+manual rescan action and no API, so a ready-to-merge branch cannot obtain an exact-head AI rescan without
+violating the no-merge boundary. Before merge, re-read and triage the live default-branch queue and require
+the PR's rule-based Code Quality check; after merge, review the next default-branch AI wave. Do not report
+that post-merge wave as completed from a pre-merge PR.
+
 Confirm a suggestion by reading the implementation it describes — and, for test findings, by
 running the test — before opening the offered pull request.
 

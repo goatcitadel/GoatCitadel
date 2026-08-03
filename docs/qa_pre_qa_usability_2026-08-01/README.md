@@ -55,8 +55,13 @@ The August campaign begins by repairing evidence defects found while reviewing t
 - `GC-HARNESS-097`: prove the packaged launcher stall spans the production health deadline while allowing bounded cold-child startup overhead in the repository-wide Windows gate; the 2-second product abort remains unchanged.
 - `GC-HARNESS-098`: bind every copied Windows desktop host to the bundle's exact source commit and dirty-state truth so a clean JavaScript rebuild cannot silently ship a stale native binary.
 - `GC-HARNESS-099`: keep native runtime-log evidence array-shaped under PowerShell strict mode so a missing log reports the intended isolation failure instead of a scalar `.Count` exception.
+- `GC-USAB-078`: let stream admission wait within the existing 30-second terminal-effects cap so load-bearing durable child completions can settle without turning completed provider output into a false branch-send failure.
 - Standard Code Quality `#1688` and `#1689`: remove the two analyzer-confirmed dead assignments without weakening recovery behavior.
 - Standard Code Quality `#1687`: retain the explicit bounded activation-resolution loop; its early-return and `out`-parameter semantics are clearer than a LINQ allocation/indirection and its rejection is recorded in the security triage guide.
+- AI Code Quality `llm.loop23.test.ts`: retain synchronous Fastify registration and document that awaited `inject()` owns boot and setup-error propagation; the generated async rewrite is rejected as non-actionable.
+- AI Code Quality `legacy-route-adapter.test.ts`: explain the independent reviewed `42` shipped and `6` experimental route-inventory literals without deriving them from the table under test.
+- AI Code Quality `model-usage-accounting.test.ts`: prove cancel-first terminal idempotency against later failure and success attempts, including persisted usage immutability.
+- AI rescan boundary: GitHub refreshes AI findings only after default-branch pushes and offers no manual rescan/API, so the exact ready-to-merge branch can be checked by PR Code Quality but its next AI wave is necessarily post-merge.
 
 ## Stop rules and evidence boundary
 
@@ -97,6 +102,8 @@ Proof completed on the first clean implementation candidate `0c39a37b4120cc68668
 - Clean commit `4e9bbeec1573253c8a41e00a246bb7dab23ff14b` passed all 149 strict-usability self-tests, Gateway coverage, storage coverage, and Mission Control coverage before the policy-engine prerequisite stopped on one Windows process-start timing bound. The real npm restricted-tool cwd case passes focused; its 15-second test ceiling is widened to 45 seconds while the production restricted-run timeout remains unchanged at 120 seconds. Two consecutive complete policy-engine coverage runs pass 60/60 files and 796/796 tests; full final-SHA recertification remains pending.
 - Clean commit `fa5c8a80981cb93cbeda8eac715537b0d7c19e74` passed all 149 strict-usability self-tests before Gateway coverage shard 1 stopped on two late Code Mode candidate tests that crossed Vitest's 15-second default under four-worker V8 coverage. Both pass focused in under four seconds; their child-execution and committed-filesystem integration budgets are widened to 45 seconds without changing product timeouts or assertions. The harness-isolated exact shard now passes 221/221 files and 2,095/2,095 tests; final-SHA recertification remains pending.
 - Clean commit `5133309f94d5f71bebbed8d90a9ca67440ab9cb3` passed the repaired Gateway and policy coverage prerequisites, backup/runtime foundations, and 61 strict-usability scenarios before Settings Workspaces produced one zero-height native-stage sample 246 ms after navigation. The page and APIs were healthy with no console or page errors. The geometry owner now waits within the same absolute layout deadline, charges the remainder to stable-bottom proof, and still rejects a persistently collapsed stage. All 11 native-scroll contracts, the complete surface regression, and exact-root artifact redaction pass; final clean-SHA recertification remains pending.
+- Provisional source head `51ae180564e1bf21da047b0dbb9da42cf41d89b2` passed the 651-scenario aggregate with zero failures after the Gateway terminal-effects admission repair. The same functional repair passed strict usability, the second clean-profile core smoke, isolated PostgreSQL restart/parity, and the disposable Sol/Terra/Luna provider pack on its pre-comment candidate. These artifacts are not reused as frozen-head proof after the AI quality batch.
+- The authenticated 2026-08-03 AI queue contained three findings in three files. The route-inventory explanation and cancel-first settlement regression were accepted and pass 18/18 and 15/15 focused tests; the Fastify async rewrite was rejected with source and 4/4 route-test evidence. Exact dispositions and the default-branch-only rescan boundary are recorded in `docs/security/findings-triage.md`.
 
 These results are intentionally marked focused. The final result files are updated only after clean-SHA execution.
 
@@ -117,6 +124,6 @@ These results are intentionally marked focused. The final result files are updat
 - Installed version: pending
 - Full route/action coverage: passed on the first clean candidate; pending final-SHA rerun
 - Standard queue rescan: pending post-push
-- AI queue rescan: pending authenticated browser review
-- Live provider pack: pending credential availability; only disposable `Reply with exactly: CHAT_OK` probes are allowed
+- AI queue review: current default-branch queue triaged; exact branch AI wave is post-merge by GitHub design
+- Live provider pack: passed provisionally with disposable probes; frozen-SHA rerun pending
 - QA-ready verdict: **blocked until every required gate in `Gate Results.csv` passes**
