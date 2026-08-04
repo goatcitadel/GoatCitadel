@@ -124,6 +124,10 @@ test("native host navigates the initialized WebView controller and smoke rejects
   assert.match(smokeScript, /WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS/);
   assert.match(smokeScript, /json\/list/);
   assert.match(smokeScript, /embedded Mission Control target remained blank/);
+  assert.match(
+    smokeScript,
+    /if \(-not \$hostProc\.HasExited\) \{[\s\S]*?taskkill\.exe \/PID \$hostProc\.Id \/T \/F 2>\$null[\s\S]*?Get-CimInstance Win32_Process/,
+  );
 });
 
 test("packaged status accepts the Gateway tokenless SSE success contract", () => {

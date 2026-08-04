@@ -404,7 +404,10 @@ try {
   # Tear down the host and its WebView/runtime descendants before readiness and
   # uninstall checks so no file handle under the install directory remains open.
   if (-not $hostProc.HasExited) {
-    & taskkill.exe /PID $hostProc.Id /T /F | Out-Null
+    # A child can exit between taskkill's tree snapshot and termination. Ignore
+    # that native stderr here; the exact installed-path reread below remains the
+    # authoritative cleanup check and kills any process that actually survived.
+    & taskkill.exe /PID $hostProc.Id /T /F 2>$null | Out-Null
   }
   Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
     Where-Object {
