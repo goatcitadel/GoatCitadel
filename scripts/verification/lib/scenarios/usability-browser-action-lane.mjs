@@ -28,7 +28,7 @@ const OPERATOR_TOKEN = "verification-usability-browser-actions-operator-token";
 const ACTION_TIMEOUT_MS = 30_000;
 const SSE_RECOVERY_WINDOW_MS = 5_000;
 const NAVIGATION_TEARDOWN_WINDOW_MS = 5_000;
-const NAVIGATION_TEARDOWN_DIAGNOSTIC_LEAD_MS = 1_000;
+const SSE_DIAGNOSTIC_LEAD_MS = 1_000;
 const EVENT_STREAM_PATH = "/api/v1/events/stream";
 const CONNECTION_FAILED_CONSOLE_TEXT = "Failed to load resource: net::ERR_CONNECTION_FAILED";
 const MAX_BROWSER_DOWNLOAD_BYTES = 16 * 1024 * 1024;
@@ -443,6 +443,16 @@ export function evaluateSseConnectionRecovery(snapshot, clientSseDiagnostics, op
   }
 
   if (requestFailures.length === 0) {
+    if (clientSseDiagnostics?.available !== true) {
+      return rejectedSseRecovery("client SSE diagnostics were unavailable", [], responses, diagnostics);
+    }
+    const initialConnectRecovery = evaluateInitialSseConnectRecovery(
+      snapshot,
+      diagnostics,
+      options.browserActionSteps ?? [],
+      exactConsoleErrors[0],
+    );
+    if (initialConnectRecovery.acknowledged) return initialConnectRecovery;
     return evaluateNavigationTeardownRecovery(
       snapshot,
       diagnostics,
@@ -506,6 +516,137 @@ export function evaluateSseConnectionRecovery(snapshot, clientSseDiagnostics, op
   };
 }
 
+function evaluateInitialSseConnectRecovery(snapshot, diagnostics, browserActionSteps, consoleError) {
+  const responses = snapshot.eventStreamResponses ?? [];
+  const failedAtMs = parseEvidenceTimestamp(consoleError?.timestamp);
+  if (failedAtMs === undefined) {
+    return rejectedSseRecovery("console error timestamp was invalid", [], responses, diagnostics);
+  }
+
+  const firstStep = browserActionSteps[0];
+  const stepStartedAtMs = parseEvidenceTimestamp(firstStep?.startedAt);
+  const stepFinishedAtMs = parseEvidenceTimestamp(firstStep?.finishedAt);
+  if (
+    firstStep?.status !== "passed" ||
+    stepStartedAtMs === undefined ||
+    stepFinishedAtMs === undefined ||
+    failedAtMs < stepStartedAtMs ||
+    failedAtMs > stepFinishedAtMs ||
+    failedAtMs - stepStartedAtMs > SSE_RECOVERY_WINDOW_MS
+  ) {
+    return rejectedSseRecovery(
+      "initial connection recovery was not scoped to the first successful registered page step",
+      [],
+      responses,
+      diagnostics,
+    );
+  }
+
+  const consoleDiagnostics = extractConsoleSseDiagnostics(snapshot.consoleMessages ?? []).sort(
+    (left, right) => left.timestampMs - right.timestampMs,
+  );
+  const initialConnect = consoleDiagnostics[0];
+  if (
+    initialConnect?.event !== "connect" ||
+    initialConnect.timestampMs > failedAtMs ||
+    failedAtMs - initialConnect.timestampMs > SSE_DIAGNOSTIC_LEAD_MS
+  ) {
+    return rejectedSseRecovery(
+      "initial connection recovery did not begin with a bounded SSE connect diagnostic",
+      [],
+      responses,
+      diagnostics,
+    );
+  }
+
+  const successfulResponses = responses
+    .filter((record) => record?.url === EVENT_STREAM_PATH && record?.status === 200)
+    .map((record) => ({ record, timestampMs: parseEvidenceTimestamp(record.timestamp) }));
+  if (successfulResponses.some((candidate) => candidate.timestampMs === undefined)) {
+    return rejectedSseRecovery("event-stream response timestamp was invalid", [], responses, diagnostics);
+  }
+  if (successfulResponses.some((candidate) => candidate.timestampMs <= failedAtMs)) {
+    return rejectedSseRecovery(
+      "initial connection failure occurred after an event stream had already opened",
+      [],
+      responses,
+      diagnostics,
+    );
+  }
+  const response = successfulResponses
+    .filter((candidate) => candidate.timestampMs - failedAtMs <= SSE_RECOVERY_WINDOW_MS)
+    .sort((left, right) => left.timestampMs - right.timestampMs)[0];
+  if (!response) {
+    return rejectedSseRecovery(
+      "initial connection failure had no later 200 event-stream response within 5 seconds",
+      [],
+      responses,
+      diagnostics,
+    );
+  }
+
+  const consoleOpen = consoleDiagnostics.find(
+    (record) =>
+      record.event === "open" &&
+      record.timestampMs >= response.timestampMs &&
+      record.timestampMs - failedAtMs <= SSE_RECOVERY_WINDOW_MS,
+  );
+  if (!consoleOpen) {
+    return rejectedSseRecovery(
+      "initial connection failure had no later console SSE open diagnostic within 5 seconds",
+      [],
+      responses,
+      diagnostics,
+    );
+  }
+  if (
+    consoleDiagnostics.some(
+      (record) =>
+        record.timestampMs > initialConnect.timestampMs &&
+        record.timestampMs < consoleOpen.timestampMs &&
+        ["connect", "close", "error", "retry"].includes(record.event),
+    )
+  ) {
+    return rejectedSseRecovery(
+      "initial connection recovery contained an intervening SSE lifecycle diagnostic",
+      [],
+      responses,
+      diagnostics,
+    );
+  }
+
+  const currentClientOpen = diagnostics
+    .filter((record) => record?.category === "sse" && record?.event === "open")
+    .map((record) => ({ record, timestampMs: parseEvidenceTimestamp(record.timestamp) }))
+    .filter((candidate) => candidate.timestampMs !== undefined && candidate.timestampMs >= consoleOpen.timestampMs)
+    .sort((left, right) => right.timestampMs - left.timestampMs)[0];
+  if (!currentClientOpen) {
+    return rejectedSseRecovery(
+      "current page did not retain a later client SSE open diagnostic",
+      [],
+      responses,
+      diagnostics,
+    );
+  }
+
+  return {
+    acknowledged: true,
+    recoveryKind: "initial-connect",
+    reason:
+      "initial registered-page SSE connect recovered with a 200 response, console open, and current client SSE open proof",
+    failedUrl: EVENT_STREAM_PATH,
+    failureTimestamp: consoleError.timestamp,
+    responseTimestamp: response.record.timestamp,
+    clientOpenTimestamp: consoleOpen.record.timestamp,
+    currentClientOpenTimestamp: currentClientOpen.record.timestamp,
+    recoveryMs: consoleOpen.timestampMs - failedAtMs,
+    browserActionStepId: firstStep.stepId,
+    requestFailureCount: 0,
+    responseCount: responses.length,
+    clientDiagnosticCount: diagnostics.length,
+  };
+}
+
 function evaluateNavigationTeardownRecovery(snapshot, diagnostics, browserActionSteps, consoleError) {
   const responses = snapshot.eventStreamResponses ?? [];
   const failedAtMs = parseEvidenceTimestamp(consoleError?.timestamp);
@@ -535,7 +676,7 @@ function evaluateNavigationTeardownRecovery(snapshot, diagnostics, browserAction
   }
 
   const consoleDiagnostics = extractConsoleSseDiagnostics(snapshot.consoleMessages ?? []);
-  const precedingWindowStartMs = failedAtMs - NAVIGATION_TEARDOWN_DIAGNOSTIC_LEAD_MS;
+  const precedingWindowStartMs = failedAtMs - SSE_DIAGNOSTIC_LEAD_MS;
   for (const event of ["close", "error", "retry"]) {
     if (
       !consoleDiagnostics.some(
@@ -604,6 +745,7 @@ function evaluateNavigationTeardownRecovery(snapshot, diagnostics, browserAction
 
   return {
     acknowledged: true,
+    recoveryKind: "navigation-teardown",
     reason:
       "registered navigation teardown recovered with bounded close/error/retry diagnostics, a 200 response, and current client SSE open proof",
     failedUrl: EVENT_STREAM_PATH,
