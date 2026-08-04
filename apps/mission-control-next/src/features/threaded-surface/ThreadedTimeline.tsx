@@ -568,15 +568,6 @@ export function ThreadedTimeline({
           </div>
         ) : (
           <div className="mc-next-thread-view">
-            <ChatStreamStatusBar
-              mode={props.mode}
-              status={props.streamStatus}
-              queuedCount={props.queuedCount}
-              error={props.streamError}
-              announce={false}
-              activitySessionId={sessionId}
-              suppressStallIndicator={Boolean(props.pendingApproval || props.pendingUserInput)}
-            />
             <div className="mc-next-thread-list">
               <ChatThreadDelegationSummary
                 delegationRun={props.delegationRun ?? null}
@@ -632,6 +623,15 @@ export function ThreadedTimeline({
                   />
                 );
               })}
+              <ChatStreamStatusBar
+                mode={props.mode}
+                status={props.streamStatus}
+                queuedCount={props.queuedCount}
+                error={props.streamError}
+                announce={false}
+                activitySessionId={sessionId}
+                suppressStallIndicator={Boolean(props.pendingApproval || props.pendingUserInput)}
+              />
               <ChatThreadNotices notices={props.notices} />
               <div ref={threadEndRef} aria-hidden="true" />
             </div>

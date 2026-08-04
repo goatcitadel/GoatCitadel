@@ -446,6 +446,11 @@ describe("ThreadedTimeline", () => {
     expect(renderer.root.findByProps({ "aria-label": "Citations for this answer" })).toBeTruthy();
     expect(renderer.root.findByProps({ className: "mc-next-thread-live-region" }).props["aria-live"]).toBe("polite");
     expect(renderer.root.findByProps({ className: "chat-stream-status-bar tone-active" }).props.role).toBeUndefined();
+    const markup = renderToStaticMarkup(<ThreadedTimeline props={props as any} />);
+    const assistantAnswerIndex = markup.indexOf("Main synthesized answer.");
+    const streamStatusIndex = markup.indexOf("chat-stream-status-bar tone-active");
+    expect(assistantAnswerIndex).toBeGreaterThanOrEqual(0);
+    expect(streamStatusIndex).toBeGreaterThan(assistantAnswerIndex);
     // Exactly one element owns the streaming-status announcement: the dedicated live
     // region. The embedded status bar is silenced (announce=false) and no other node in
     // the streaming surface carries role="status" / aria-live for that announcement.

@@ -1941,7 +1941,7 @@ describe("useChatOutboundExecution", () => {
     );
   });
 
-  it("preserves queue-sourced approval when a reconciled thread cannot confirm the approval toolRun", async () => {
+  it("preserves queue-sourced approval when a reconciled thread cannot confirm the approval state", async () => {
     fetchChatPendingApprovalsMock.mockResolvedValueOnce({
       activeApprovalId: "approval-queue",
       remainingCount: 1,
@@ -1994,6 +1994,32 @@ describe("useChatOutboundExecution", () => {
 
     await act(async () => {
       latest?.applyFetchedThread(threadMissingToolRun, null);
+      await Promise.resolve();
+    });
+
+    expect(latest?.getSnapshot().pendingApproval).toEqual(
+      expect.objectContaining({ approvalId: "approval-queue", toolName: "shell.exec" }),
+    );
+
+    const repairedCompletedThread = {
+      ...threadMissingToolRun,
+      turns: [
+        {
+          ...threadMissingToolRun.turns[0],
+          trace: {
+            ...threadMissingToolRun.turns[0].trace,
+            status: "completed",
+            completion: {
+              status: "complete",
+              repaired: true,
+            },
+          },
+        },
+      ],
+    } as unknown as ChatThreadResponse;
+
+    await act(async () => {
+      latest?.applyFetchedThread(repairedCompletedThread, null);
       await Promise.resolve();
     });
 

@@ -349,10 +349,10 @@ function DemoTurnCard({
         )}
       </div>
       <div className="mc-next-thread-strip">
-        <span className="mc-next-status-chip" data-tone="success" data-size="sm">
-          <span className="mc-next-status-chip-label">completed</span>
+        <span className="mc-next-status-chip" data-tone={turn.streaming ? "info" : "success"} data-size="sm">
+          <span className="mc-next-status-chip-label">{turn.streaming ? "running" : "completed"}</span>
         </span>
-        <span>used claude-sonnet-4-6</span>
+        <span>{turn.streaming ? "using" : "used"} claude-sonnet-4-6</span>
         {turn.citations && turn.citations.length > 0 ? <span>{turn.citations.length} citations</span> : null}
         <button type="button" className="mc-next-thread-inline-button">
           Details
@@ -379,7 +379,7 @@ function ChatDemo() {
     const newTurnId = `stream-${Date.now()}`;
     setStreamStatus("streaming");
     setTurns((prev) => [
-      ...prev.filter((t) => !t.id.startsWith("stream-")),
+      ...prev.filter((t) => !t.id.startsWith("stream-") && !t.id.startsWith("user-stream-")),
       {
         id: `user-${newTurnId}`,
         role: "user",
@@ -482,17 +482,26 @@ function ChatDemo() {
     <div className={`mc-next-shell ${theme} demo-shell`}>
       <header className="demo-header">
         <span className="demo-header-title">Chat display polish — live preview</span>
-        <span className="demo-header-theme">{theme.replace("theme-", "")}</span>
+        <div className="demo-header-actions">
+          <span className="demo-header-theme">{theme.replace("theme-", "")}</span>
+          <button
+            type="button"
+            className="mc-next-thread-inline-button"
+            onClick={streamStatus === "idle" ? startStream : stopStream}
+          >
+            {streamStatus === "idle" ? "Start streaming" : "Stop streaming"}
+          </button>
+        </div>
       </header>
       <div className="demo-stage">
         <div className="demo-card">
-          <ChatStreamStatusBar mode="chat" status={streamStatus} queuedCount={0} error={null} />
           <div ref={scrollRef} className="mc-next-thread-scroll" data-thread-hydrated="true">
             <div className="mc-next-thread-view">
               <div className="mc-next-thread-list">
                 {turns.map((turn) => (
                   <DemoTurnCard key={turn.id} turn={turn} onSelect={handleSelectTurn} onOpenLightbox={setLightbox} />
                 ))}
+                <ChatStreamStatusBar mode="chat" status={streamStatus} queuedCount={0} error={null} />
               </div>
             </div>
             {showJumpButton ? (

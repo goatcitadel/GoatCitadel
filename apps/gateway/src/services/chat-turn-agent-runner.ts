@@ -4487,6 +4487,29 @@ export class ChatTurnAgentRunner {
       if (syntheticRun.userInputPrompt) {
         finalStatus = "waiting_for_user_input";
         pendingUserInput = syntheticRun.userInputPrompt;
+      } else if (syntheticRun.record.status === "approval_required" && syntheticRun.record.approvalId) {
+        finalStatus = "waiting_for_approval";
+        finalFailure = {
+          failureClass: "approval_required",
+          message: "Approval required by policy.",
+          retryable: true,
+          recommendedAction: getChatTurnRecoveryAction("approval_required"),
+        };
+        approvalPayload = {
+          approvalId: syntheticRun.record.approvalId,
+          toolName: syntheticRun.record.toolName,
+          reason: "Approval required by policy.",
+          expiresAt: syntheticRun.approvalExpiresAt,
+        };
+        this.upsertInlineApproval(input, {
+          approvalId: syntheticRun.record.approvalId,
+          sessionId: input.sessionId,
+          turnId: input.turnId,
+          toolName: syntheticRun.record.toolName,
+          status: "pending",
+          reason: "Approval required by policy.",
+          expiresAt: syntheticRun.approvalExpiresAt,
+        });
       } else {
         const preRepairContent = assistantContent;
         assistantContent = mergePresentationArtifactDeliveryContent(assistantContent, syntheticRun.record);
@@ -4540,6 +4563,29 @@ export class ChatTurnAgentRunner {
       if (syntheticRun.userInputPrompt) {
         finalStatus = "waiting_for_user_input";
         pendingUserInput = syntheticRun.userInputPrompt;
+      } else if (syntheticRun.record.status === "approval_required" && syntheticRun.record.approvalId) {
+        finalStatus = "waiting_for_approval";
+        finalFailure = {
+          failureClass: "approval_required",
+          message: "Approval required by policy.",
+          retryable: true,
+          recommendedAction: getChatTurnRecoveryAction("approval_required"),
+        };
+        approvalPayload = {
+          approvalId: syntheticRun.record.approvalId,
+          toolName: syntheticRun.record.toolName,
+          reason: "Approval required by policy.",
+          expiresAt: syntheticRun.approvalExpiresAt,
+        };
+        this.upsertInlineApproval(input, {
+          approvalId: syntheticRun.record.approvalId,
+          sessionId: input.sessionId,
+          turnId: input.turnId,
+          toolName: syntheticRun.record.toolName,
+          status: "pending",
+          reason: "Approval required by policy.",
+          expiresAt: syntheticRun.approvalExpiresAt,
+        });
       } else {
         const preRepairContent = assistantContent;
         assistantContent = mergeDocumentArtifactDeliveryContent(assistantContent, syntheticRun.record);

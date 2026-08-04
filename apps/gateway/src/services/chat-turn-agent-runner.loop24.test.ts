@@ -491,6 +491,73 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
     expect(result.assistantContent).toContain(".pdf");
   });
 
+  it.each([
+    {
+      toolName: "presentations.create",
+      content: "Create a real PowerPoint .pptx presentation about daily walking.",
+      modelContent: "I can outline the deck, but I did not create a PowerPoint file.",
+    },
+    {
+      toolName: "documents.create",
+      content: "Create a real PDF report file about daily walking.",
+      modelContent: "I can draft the report, but I did not create a document file.",
+    },
+  ])("parks a synthetic $toolName fallback when artifact creation needs approval", async (scenario) => {
+    const approvalId = `approval-${scenario.toolName}`;
+    const storage = createMockStorage() as {
+      chatInlineApprovals: { upsert: ReturnType<typeof vi.fn> };
+    };
+    storage.chatInlineApprovals.upsert = vi.fn();
+    const createChatCompletion = vi.fn(async (): Promise<ChatCompletionResponse> => completion(scenario.modelContent));
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "approval_required",
+      policyReason: "Artifact creation requires operator approval",
+      auditEventId: `audit-${scenario.toolName}`,
+      approvalId,
+    });
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: storage as never,
+      listToolCatalog: () => createToolCatalog([scenario.toolName]),
+      createChatCompletion,
+      invokeTool,
+      evaluateToolAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
+    });
+
+    const chunks = [];
+    for await (const chunk of orchestrator.runStream(
+      turnInput({
+        mode: "cowork",
+        content: scenario.content,
+        historyMessages: [{ role: "user", content: scenario.content }],
+      }),
+    )) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks.find((chunk) => chunk.type === "approval_required")).toMatchObject({
+      type: "approval_required",
+      approval: {
+        approvalId,
+        toolName: scenario.toolName,
+      },
+    });
+    expect(chunks.filter((chunk) => chunk.type === "trace_update").at(-1)).toMatchObject({
+      trace: expect.objectContaining({
+        status: "waiting_for_approval",
+        completion: expect.objectContaining({ status: "backgrounded", repaired: false }),
+      }),
+    });
+    expect(chunks.some((chunk) => chunk.type === "message_done" || chunk.type === "done")).toBe(false);
+    expect(storage.chatInlineApprovals.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalId,
+        sessionId: "sess-loop24",
+        toolName: scenario.toolName,
+        status: "pending",
+      }),
+    );
+  });
+
   it("blocks delegated non-code Prompt Lab local file calls before runtime invocation", async () => {
     const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>();
     const executeToolCall = createExecuteToolCall({ invokeTool });

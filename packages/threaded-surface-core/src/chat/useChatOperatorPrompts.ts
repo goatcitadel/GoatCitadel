@@ -173,15 +173,10 @@ export function useChatOperatorPrompts({
         if (!current) {
           return null;
         }
-        const selectedTurn = thread
-          ? (thread.turns.find((turn) => turn.turnId === (thread.selectedTurnId ?? thread.activeLeafTurnId)) ??
-            thread.turns.at(-1) ??
-            null)
-          : null;
-        if (selectedTurn?.trace.status === "waiting_for_approval") {
-          return current;
-        }
-        return null;
+        // The persisted approval queue is authoritative. A repaired or briefly
+        // stale thread snapshot can say `completed` while the approval remains
+        // pending, so do not hide an actionable prompt from the same session.
+        return current.sessionId && current.sessionId !== selectedSessionId ? null : current;
       });
     }
 
@@ -412,11 +407,12 @@ export function useChatOperatorPrompts({
   );
 
   useEffect(() => {
+    const approvalRefreshTimers = approvalRefreshTimersRef.current;
     return () => {
-      for (const timer of approvalRefreshTimersRef.current) {
+      for (const timer of approvalRefreshTimers) {
         clearTimeout(timer);
       }
-      approvalRefreshTimersRef.current.clear();
+      approvalRefreshTimers.clear();
     };
   }, [selectedSessionId]);
 

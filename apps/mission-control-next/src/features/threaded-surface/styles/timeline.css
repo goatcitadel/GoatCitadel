@@ -1511,15 +1511,18 @@
 
 /* ============================================================
    ChatStreamStatusBar (.chat-stream-status-bar)
-   Rendered inside the timeline by ThreadedTimeline.tsx.
+   Rendered at the live edge of the timeline by ThreadedTimeline.tsx so the
+   response status follows the active turn instead of preceding its prompt.
    r4-ux CHAT-013 flagged the bare class as having no rule in
    next-app CSS; add a minimal surface look so operators can
    still distinguish idle / pending / active / error states.
    ============================================================ */
 .chat-stream-status-bar {
   display: inline-flex;
+  justify-self: start;
   align-items: center;
   gap: 0.5rem;
+  max-width: 100%;
   min-height: 1.65rem;
   padding: 0.18rem 0.6rem;
   border-radius: var(--r-pill);
