@@ -2,7 +2,7 @@
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { normalizeBootstrapMode, resolveBootstrapPlan } from "./lib/dev-bootstrap.mjs";
+import { createPnpmBootstrapArgs, normalizeBootstrapMode, resolveBootstrapPlan } from "./lib/dev-bootstrap.mjs";
 import { resolveUiTarget } from "./lib/ui-target.mjs";
 
 const DEFAULT_DEV_UI_PACKAGE = "@goatcitadel/mission-control-next";
@@ -143,14 +143,14 @@ function isTruthyEnv(value) {
 }
 
 function runPnpmBootstrap(packages) {
-  const bootstrapArgs = packages.flatMap((pkg) => ["--filter", pkg]);
+  const bootstrapArgs = createPnpmBootstrapArgs(packages);
   return process.platform === "win32"
     ? spawnSync(
         process.env.ComSpec || "cmd.exe",
-        ["/d", "/s", "/c", buildWindowsCommand(["pnpm", ...bootstrapArgs, "build"])],
+        ["/d", "/s", "/c", buildWindowsCommand(["pnpm", ...bootstrapArgs])],
         { stdio: "inherit", cwd: repoRoot },
       )
-    : spawnSync("pnpm", [...bootstrapArgs, "build"], { stdio: "inherit", cwd: repoRoot });
+    : spawnSync("pnpm", bootstrapArgs, { stdio: "inherit", cwd: repoRoot });
 }
 
 function buildWindowsCommand(parts) {

@@ -1,6 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
 
+export function createPnpmBootstrapArgs(packageNames) {
+  // `tsc -b` trusts tsbuildinfo even when ignored dist outputs were deleted, so
+  // force a real re-emit. Serialize overlapping project-reference graphs to
+  // keep dependents from racing while they rewrite shared declaration outputs.
+  return [
+    "--workspace-concurrency=1",
+    ...packageNames.flatMap((packageName) => ["--filter", packageName]),
+    "build",
+    "--force",
+  ];
+}
+
 export function normalizeBootstrapMode(value, warn = console.warn) {
   const normalized = value?.trim().toLowerCase();
   if (!normalized) {

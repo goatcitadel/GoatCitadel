@@ -4,10 +4,23 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  createPnpmBootstrapArgs,
   normalizeBootstrapMode,
   readWorkspacePackageFreshness,
   resolveBootstrapPlan,
 } from "./lib/dev-bootstrap.mjs";
+
+test("createPnpmBootstrapArgs serializes forced re-emits for shared TypeScript project references", () => {
+  assert.deepEqual(createPnpmBootstrapArgs(["@test/one", "@test/two"]), [
+    "--workspace-concurrency=1",
+    "--filter",
+    "@test/one",
+    "--filter",
+    "@test/two",
+    "build",
+    "--force",
+  ]);
+});
 
 test("normalizeBootstrapMode accepts documented aliases and warns for unknown values", () => {
   const warnings = [];
