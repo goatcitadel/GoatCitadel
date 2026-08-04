@@ -436,13 +436,25 @@ try {
   }
   Write-Host "Runtime readiness smoke: launching packaged gateway + UI via $launcher"
   $quotedLauncher = '"' + $launcher + '"'
-  $launch = Start-Process -FilePath $bundledNode `
-    -ArgumentList @($quotedLauncher, "launch", "--no-open", "--wait", "--json") `
-    -WorkingDirectory $appHome `
-    -RedirectStandardOutput $launchStdout `
-    -RedirectStandardError $launchStderr `
-    -NoNewWindow -PassThru
-  if (-not $launch.WaitForExit(600000)) {
+  # Windows PowerShell 5.1 reconstructs a redirected Start-Process result by
+  # PID and loses the owned process handle after exit, leaving ExitCode null.
+  # Own the Process directly while draining both streams asynchronously so the
+  # timeout and the fail-closed integer exit-code check remain authoritative.
+  $launchStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
+  $launchStartInfo.FileName = $bundledNode
+  $launchStartInfo.Arguments = "$quotedLauncher launch --no-open --wait --json"
+  $launchStartInfo.WorkingDirectory = $appHome
+  $launchStartInfo.UseShellExecute = $false
+  $launchStartInfo.CreateNoWindow = $true
+  $launchStartInfo.RedirectStandardOutput = $true
+  $launchStartInfo.RedirectStandardError = $true
+  $launch = [System.Diagnostics.Process]::new()
+  $launch.StartInfo = $launchStartInfo
+  [void]$launch.Start()
+  $launchStdoutTask = $launch.StandardOutput.ReadToEndAsync()
+  $launchStderrTask = $launch.StandardError.ReadToEndAsync()
+  $launchExited = $launch.WaitForExit(600000)
+  if (-not $launchExited) {
     Show-RuntimeLogs
     Write-Host "::group::Readiness hang diagnostics"
     netstat -ano | Select-String ":8787|:5173" | ForEach-Object { Write-Host $_ }
@@ -454,11 +466,19 @@ try {
       ForEach-Object { Write-Host "PID $($_.ProcessId) $($_.Name): $(Redact-DiagnosticLine ([string]$_.CommandLine))" }
     Write-Host "::endgroup::"
     & taskkill.exe /PID $launch.Id /T /F 2>$null | Out-Null
+  }
+  $launch.WaitForExit()
+  $utf8WithoutBom = [System.Text.UTF8Encoding]::new($false)
+  [System.IO.File]::WriteAllText($launchStdout, $launchStdoutTask.Result, $utf8WithoutBom)
+  [System.IO.File]::WriteAllText($launchStderr, $launchStderrTask.Result, $utf8WithoutBom)
+  if (-not $launchExited) {
+    Show-RuntimeLogs
     throw "Runtime readiness smoke failed: 'goatcitadel launch --wait' did not exit within 10 minutes. Launcher output, runtime logs, and listener/process state are printed above."
   }
-  if ($launch.ExitCode -ne 0) {
+  $launchExitCode = $launch.ExitCode
+  if ($launchExitCode -ne 0) {
     Show-RuntimeLogs
-    throw "Runtime readiness smoke failed: 'goatcitadel launch' exited $($launch.ExitCode) before the gateway/UI became healthy. The installed host would hang on 'Starting the local runtime…'. A gateway boot crash (for example ERR_MODULE_NOT_FOUND from stranded production dependencies) surfaces here."
+    throw "Runtime readiness smoke failed: 'goatcitadel launch' exited $launchExitCode before the gateway/UI became healthy. The installed host would hang on 'Starting the local runtime…'. A gateway boot crash (for example ERR_MODULE_NOT_FOUND from stranded production dependencies) surfaces here."
   }
 
   # Re-poll both /health endpoints independently; this is the canonical ready assertion.

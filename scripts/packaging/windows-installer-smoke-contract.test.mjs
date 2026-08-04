@@ -104,6 +104,14 @@ test("unsigned trust mode permits omitted or unsigned identity without weakening
   assert.match(smokeScript, /WaitForExit\(600000\)/);
   assert.match(
     smokeScript,
+    /\$launchStartInfo = \[System\.Diagnostics\.ProcessStartInfo\]::new\(\)[\s\S]*?RedirectStandardOutput = \$true[\s\S]*?RedirectStandardError = \$true[\s\S]*?\$launch = \[System\.Diagnostics\.Process\]::new\(\)/,
+  );
+  assert.match(smokeScript, /ReadToEndAsync\(\)[\s\S]*?WaitForExit\(600000\)[\s\S]*?\$launch\.WaitForExit\(\)/);
+  assert.match(smokeScript, /WriteAllText\(\$launchStdout, \$launchStdoutTask\.Result/);
+  assert.match(smokeScript, /WriteAllText\(\$launchStderr, \$launchStderrTask\.Result/);
+  assert.match(smokeScript, /if \(\$launchExitCode -ne 0\)/);
+  assert.match(
+    smokeScript,
     /\$runtimeStatus\.status -ne "ready"[\s\S]*?\$runtimeStatus\.readiness\.gateway[\s\S]*?\$runtimeStatus\.readiness\.ui/,
   );
   assert.match(smokeScript, /GoatCitadel package identity remained registered after uninstall/);
@@ -181,7 +189,7 @@ test("installer lifecycle binds and removes the exact protocol handler", () => {
 test("installer and bundled launcher preserve scratch paths containing spaces", () => {
   assert.match(smokeScript, /"\/DIR=`\"\$installDir`\""/);
   assert.match(smokeScript, /\$quotedLauncher = '\"' \+ \$launcher \+ '\"'/);
-  assert.match(smokeScript, /ArgumentList @\(\$quotedLauncher, "launch"/);
+  assert.match(smokeScript, /Arguments = "\$quotedLauncher launch --no-open --wait --json"/);
   assert.match(smokeScript, /ArgumentList @\(\$quotedLauncher, "status"/);
 });
 
