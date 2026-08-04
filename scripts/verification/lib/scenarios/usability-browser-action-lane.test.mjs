@@ -1326,7 +1326,7 @@ test("registered navigation teardown can recover without a Playwright requestfai
   const snapshot = navigationRecoveredSseSnapshot();
   const browserActionSteps = [recoveredNavigationStep()];
   const result = filterExpectedBrowserConsoleMessages(snapshot, browserActionSteps, {
-    clientSseDiagnostics: recoveredSseDiagnostics(),
+    clientSseDiagnostics: navigationSseDiagnostics(),
   });
 
   assert.equal(result.acknowledgedCount, 1);
@@ -1349,7 +1349,7 @@ test("registered navigation teardown can recover without a Playwright requestfai
     navigationStepId: "route.settings-access.token-basic-device-grants",
     requestFailureCount: 0,
     responseCount: 1,
-    clientDiagnosticCount: 1,
+    clientDiagnosticCount: 4,
   });
 });
 
@@ -1369,8 +1369,7 @@ test("initial registered-page SSE connect can recover without a Playwright reque
   assert.deepEqual(result.sseRecovery, {
     acknowledged: true,
     recoveryKind: "initial-connect",
-    reason:
-      "initial registered-page SSE connect recovered with a 200 response, console open, and current client SSE open proof",
+    reason: "initial registered-page SSE connect recovered with a 200 response and client SSE open proof",
     failedUrl: "/api/v1/events/stream",
     failureTimestamp: "2026-08-04T00:06:16.033Z",
     responseTimestamp: "2026-08-04T00:06:16.283Z",
@@ -1380,7 +1379,7 @@ test("initial registered-page SSE connect can recover without a Playwright reque
     browserActionStepId: "route.settings-permissions.permission-profile-crud",
     requestFailureCount: 0,
     responseCount: 1,
-    clientDiagnosticCount: 1,
+    clientDiagnosticCount: 2,
   });
 });
 
@@ -1402,25 +1401,28 @@ test("initial registered-page SSE recovery stays fatal outside the exact bounded
     },
     {
       name: "first diagnostic was not connect",
-      snapshot: {
-        ...valid,
-        consoleMessages: [
+      snapshot: valid,
+      diagnostics: {
+        available: true,
+        records: [
           {
-            type: "debug",
-            text: "[goatcitadel:dev-diagnostics] {level: warn, category: sse, event: retry}",
+            category: "sse",
+            event: "retry",
+            level: "warn",
             timestamp: "2026-08-04T00:06:15.900Z",
           },
-          ...valid.consoleMessages,
+          ...diagnostics.records,
         ],
       },
       steps: validSteps,
     },
     {
       name: "connect was not bounded",
-      snapshot: {
-        ...valid,
-        consoleMessages: valid.consoleMessages.map((message) =>
-          message.text.includes("event: connect") ? { ...message, timestamp: "2026-08-04T00:06:14.000Z" } : message,
+      snapshot: valid,
+      diagnostics: {
+        available: true,
+        records: diagnostics.records.map((record) =>
+          record.event === "connect" ? { ...record, timestamp: "2026-08-04T00:06:14.000Z" } : record,
         ),
       },
       steps: validSteps,
@@ -1438,16 +1440,18 @@ test("initial registered-page SSE recovery stays fatal outside the exact bounded
     },
     {
       name: "intervening lifecycle diagnostic",
-      snapshot: {
-        ...valid,
-        consoleMessages: [
-          ...valid.consoleMessages.slice(0, 2),
+      snapshot: valid,
+      diagnostics: {
+        available: true,
+        records: [
+          diagnostics.records[0],
           {
-            type: "debug",
-            text: "[goatcitadel:dev-diagnostics] {level: warn, category: sse, event: retry}",
+            category: "sse",
+            event: "retry",
+            level: "warn",
             timestamp: "2026-08-04T00:06:16.100Z",
           },
-          ...valid.consoleMessages.slice(2),
+          diagnostics.records[1],
         ],
       },
       steps: validSteps,
@@ -1505,7 +1509,7 @@ test("initial registered-page SSE recovery stays fatal outside the exact bounded
 test("request-failure-free navigation recovery stays fatal outside the exact bounded evidence contract", () => {
   const valid = navigationRecoveredSseSnapshot();
   const validSteps = [recoveredNavigationStep()];
-  const diagnostics = recoveredSseDiagnostics();
+  const diagnostics = navigationSseDiagnostics();
   const cases = [
     { name: "no registered navigation", snapshot: valid, steps: [] },
     {
@@ -1520,26 +1524,26 @@ test("request-failure-free navigation recovery stays fatal outside the exact bou
     },
     {
       name: "missing close diagnostic",
-      snapshot: {
-        ...valid,
-        consoleMessages: valid.consoleMessages.filter((message) => !message.text.includes("event: close")),
-      },
+      snapshot: valid,
+      diagnostics: { available: true, records: diagnostics.records.filter((record) => record.event !== "close") },
+      steps: validSteps,
+    },
+    {
+      name: "missing error diagnostic",
+      snapshot: valid,
+      diagnostics: { available: true, records: diagnostics.records.filter((record) => record.event !== "error") },
       steps: validSteps,
     },
     {
       name: "missing retry diagnostic",
-      snapshot: {
-        ...valid,
-        consoleMessages: valid.consoleMessages.filter((message) => !message.text.includes("event: retry")),
-      },
+      snapshot: valid,
+      diagnostics: { available: true, records: diagnostics.records.filter((record) => record.event !== "retry") },
       steps: validSteps,
     },
     {
-      name: "missing console open diagnostic",
-      snapshot: {
-        ...valid,
-        consoleMessages: valid.consoleMessages.filter((message) => !message.text.includes("event: open")),
-      },
+      name: "missing client open diagnostic",
+      snapshot: valid,
+      diagnostics: { available: true, records: diagnostics.records.filter((record) => record.event !== "open") },
       steps: validSteps,
     },
     {
@@ -1579,10 +1583,10 @@ test("navigation-scoped recovery survives the lane polling handoff without waiti
   let waited = false;
   const result = await pollSseConnectionRecoveryEvidence({
     snapshot,
-    clientSseDiagnostics: recoveredSseDiagnostics(),
+    clientSseDiagnostics: navigationSseDiagnostics(),
     browserActionSteps: [recoveredNavigationStep()],
     getSnapshot: () => snapshot,
-    readClientSseDiagnostics: async () => recoveredSseDiagnostics(),
+    readClientSseDiagnostics: async () => navigationSseDiagnostics(),
     wait: async () => {
       waited = true;
     },
@@ -1839,32 +1843,22 @@ function recoveredSseDiagnostics() {
   };
 }
 
+function navigationSseDiagnostics() {
+  return {
+    available: true,
+    records: [
+      { category: "sse", event: "close", level: "info", timestamp: "2026-07-30T12:26:15.000Z" },
+      { category: "sse", event: "error", level: "warn", timestamp: "2026-07-30T12:26:15.001Z" },
+      { category: "sse", event: "retry", level: "warn", timestamp: "2026-07-30T12:26:15.002Z" },
+      { category: "sse", event: "open", level: "info", timestamp: "2026-07-30T12:26:16.692Z" },
+    ],
+  };
+}
+
 function navigationRecoveredSseSnapshot() {
   const snapshot = recoveredSseSnapshot();
   snapshot.eventStreamRequestFailures = [];
-  snapshot.consoleMessages = [
-    {
-      type: "debug",
-      text: "[goatcitadel:dev-diagnostics] {level: info, category: sse, event: close}",
-      timestamp: "2026-07-30T12:26:15.000Z",
-    },
-    {
-      type: "debug",
-      text: "[goatcitadel:dev-diagnostics] {level: warn, category: sse, event: error}",
-      timestamp: "2026-07-30T12:26:15.001Z",
-    },
-    {
-      type: "debug",
-      text: "[goatcitadel:dev-diagnostics] {level: warn, category: sse, event: retry}",
-      timestamp: "2026-07-30T12:26:15.002Z",
-    },
-    snapshot.consoleMessages[0],
-    {
-      type: "debug",
-      text: "[goatcitadel:dev-diagnostics] {level: info, category: sse, event: open}",
-      timestamp: "2026-07-30T12:26:16.692Z",
-    },
-  ];
+  snapshot.consoleMessages = [snapshot.consoleMessages[0]];
   return snapshot;
 }
 
@@ -1880,18 +1874,8 @@ function initialConnectRecoveredSseSnapshot() {
   ];
   snapshot.consoleMessages = [
     {
-      type: "debug",
-      text: "[goatcitadel:dev-diagnostics] {level: info, category: sse, event: connect}",
-      timestamp: "2026-08-04T00:06:15.983Z",
-    },
-    {
       ...snapshot.consoleMessages[0],
       timestamp: "2026-08-04T00:06:16.033Z",
-    },
-    {
-      type: "debug",
-      text: "[goatcitadel:dev-diagnostics] {level: info, category: sse, event: open}",
-      timestamp: "2026-08-04T00:06:16.283Z",
     },
   ];
   return snapshot;
@@ -1901,6 +1885,12 @@ function initialConnectDiagnostics() {
   return {
     available: true,
     records: [
+      {
+        category: "sse",
+        event: "connect",
+        level: "info",
+        timestamp: "2026-08-04T00:06:15.983Z",
+      },
       {
         category: "sse",
         event: "open",

@@ -8,6 +8,24 @@ import { afterEach, beforeEach, vi } from "vitest";
 const originalConsoleError = console.error.bind(console);
 const activeTestRenderers = new Set<ReactTestRenderer>();
 
+export function cleanupTestRenderers(renderers: Set<Pick<ReactTestRenderer, "unmount">>): void {
+  let cleanupError: unknown;
+  try {
+    for (const renderer of [...renderers]) {
+      try {
+        renderer.unmount();
+      } catch (error) {
+        cleanupError ??= error;
+      }
+    }
+  } finally {
+    renderers.clear();
+  }
+  if (cleanupError) {
+    throw cleanupError;
+  }
+}
+
 console.error = ((...args: unknown[]) => {
   const [firstArg] = args;
   if (typeof firstArg === "string" && firstArg.includes("react-test-renderer is deprecated")) {
@@ -142,8 +160,5 @@ afterEach(() => {
   // A mounted renderer can retain polling effects and report React warnings
   // after Vitest begins closing the worker console channel. Tests may still
   // unmount explicitly; this closes only renderers they leave behind.
-  for (const renderer of [...activeTestRenderers]) {
-    renderer.unmount();
-  }
-  activeTestRenderers.clear();
+  cleanupTestRenderers(activeTestRenderers);
 });

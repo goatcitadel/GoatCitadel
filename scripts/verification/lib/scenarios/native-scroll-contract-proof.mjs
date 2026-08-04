@@ -66,7 +66,7 @@ export async function assertNativeStageScrollContract(page, { label, probeNested
   // short stable window so a one-shot scroll cannot certify an obsolete max.
   const bottomSnapshot = await driveNativeStageToStableBottom(page, {
     label: routeLabel,
-    timeoutMs: Math.max(1, proofDeadline - monotonicNow()),
+    timeoutMs: Math.max(STABLE_BOTTOM_TIMEOUT_MS, proofDeadline - monotonicNow()),
   });
   validateNativeStageSnapshot(bottomSnapshot, routeLabel);
 

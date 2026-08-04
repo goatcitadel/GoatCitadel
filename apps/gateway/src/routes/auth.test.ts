@@ -513,16 +513,15 @@ describe("auth routes", () => {
     expect(source).toMatch(/fastify\.get\("\/api\/v1\/auth\/device-requests\/:requestId\/status", publicAuthRoute/);
   });
 
-  it("returns a tokenless success for the SSE bridge in auth mode none", async () => {
+  it("returns the compatibility error for the SSE bridge in auth mode none", async () => {
     app = await buildApp("none");
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/auth/sse-token",
     });
-    expect(response.statusCode).toBe(200);
+    expect(response.statusCode).toBe(400);
     expect(response.json()).toMatchObject({
-      scope: "events:stream",
-      authMode: "none",
+      error: "SSE token bridge is not needed when auth mode is none",
     });
   });
 

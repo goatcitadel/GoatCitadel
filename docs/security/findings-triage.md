@@ -1,6 +1,6 @@
 # GitHub Security Findings — Triage Reference
 
-Last updated: 2026-08-01
+Last updated: 2026-08-04
 
 This document explains how to triage the recurring categories of GitHub Security findings against this repo and how to fix them **once** without rediscovering the same root cause every time. New AI agents (Claude, Codex, Copilot review bots) and human contributors should read this before opening a PR that touches rate-limit configuration, stream pipeline error handling, Dependabot alerts, the secret-scanning allowlist, or the synthetic-token fixtures used by the secret-redaction tests.
 
