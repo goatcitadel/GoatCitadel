@@ -11,7 +11,7 @@ overrides:
   brace-expansion@^5.0.0: 5.0.9
   dompurify: 3.4.12
   esbuild: 0.28.1
-  express-rate-limit@8.3.2>ip-address: 10.3.1
+  ip-address: 10.3.1
   fast-uri: 3.1.5
   '@hono/node-server': 2.0.11
   hono: 4.12.27
@@ -4772,10 +4772,6 @@ packages:
   internmap@2.0.3:
     resolution: {integrity: sha512-5Hh7Y1wQbvY5ooGgPbDaL5iYLAPzMTUrjMulskHLH6wnv/A+1q5rgEaiuqEjB+oxGXIVZs1FF+R/KPN3ZSQYYg==}
     engines: {node: '>=12'}
-
-  ip-address@10.1.1:
-    resolution: {integrity: sha512-1FMu8/N15Ck1BL551Jf42NYIoin2unWjLQ2Fze/DXryJRl5twqtwNHlO39qERGbIOcKYWHdgRryhOC+NG4eaLw==}
-    engines: {node: '>= 12'}
 
   ip-address@10.3.1:
     resolution: {integrity: sha512-1e9d3kb97NHJTIJDZW9rKqW2h6+dFa50Dy0fpPSMQp2ADje5gvKsXmdiK6dwY5t76TaTt5+P5N1Y/LoToIxP6g==}
@@ -11289,8 +11285,6 @@ snapshots:
 
   internmap@2.0.3: {}
 
-  ip-address@10.1.1: {}
-
   ip-address@10.3.1: {}
 
   ipaddr.js@1.9.1: {}
@@ -13180,7 +13174,7 @@ snapshots:
 
   socks@2.8.9:
     dependencies:
-      ip-address: 10.1.1
+      ip-address: 10.3.1
       smart-buffer: 4.2.0
 
   sonic-boom@4.2.1:
