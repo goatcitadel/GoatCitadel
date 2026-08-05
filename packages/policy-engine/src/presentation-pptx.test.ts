@@ -43,7 +43,7 @@ describe("presentation PPTX layout selection", () => {
     ).toBe("image-text");
   });
 
-  it("keeps two-column rendering for dense slides", () => {
+  it("alternates stacked and two-column rendering for dense slides", () => {
     const design = createArtifactDesignPlan({
       kind: "presentation",
       format: "pptx",
@@ -60,7 +60,7 @@ describe("presentation PPTX layout selection", () => {
           "Follow-up work should stay scoped to the operator-visible runtime",
         ],
       }),
-    ).toBe("two-column");
+    ).toBe("stacked-list");
     expect(
       resolveContentSlideRenderer(design, 1, {
         title: "Operating Detail",
@@ -161,7 +161,12 @@ describe("presentation PPTX layout selection", () => {
 
     const quality = analyzePresentationDeckQuality(design, deckSlides);
 
-    expect(quality.rendererCounts).toEqual({ "image-text": 4, "two-column": 0, "stat-callout": 0 });
+    expect(quality.rendererCounts).toEqual({
+      "image-text": 4,
+      "two-column": 0,
+      "stacked-list": 0,
+      "stat-callout": 0,
+    });
     expect(quality.templateWarnings).toEqual([expect.stringContaining("Layout variety is low")]);
     expect(quality.contentWarnings).toEqual([expect.stringContaining("very brief bullets")]);
   });
@@ -239,6 +244,95 @@ describe("presentation PPTX layout selection", () => {
     });
     expect(visuals[1]?.source).toBe("local-renderer");
     expect(visuals[1]?.dataUri).not.toBe(visuals[0]?.dataUri);
+  });
+
+  it("places ephemeral generated assets on their mapped section slides", async () => {
+    const design = createArtifactDesignPlan({ kind: "presentation", format: "pptx", title: "Mapped Visuals" });
+    const deckSlides = [
+      { title: "Mapped Visuals", bullets: [] },
+      { title: "Context", bullets: ["Grounded context"] },
+      { title: "Decision", bullets: ["Grounded decision"] },
+    ];
+    const layoutPlan = resolvePresentationDeckLayoutPlan(design, deckSlides);
+    const visuals = await buildPresentationSlideVisuals("Mapped Visuals", deckSlides, design, layoutPlan, undefined, [
+      { slideIndex: 0, asset: { bytesBase64: "cover-bytes", source: "openai", sourceModel: "gpt-image-2" } },
+      { slideIndex: 2, asset: { bytesBase64: "section-bytes", source: "openai", sourceModel: "gpt-image-2" } },
+    ]);
+
+    expect(visuals[0]?.dataUri).toContain("cover-bytes");
+    expect(visuals[1]?.source).toBe("local-renderer");
+    expect(visuals[2]).toMatchObject({
+      dataUri: "data:image/png;base64,section-bytes",
+      source: "openai:gpt-image-2",
+    });
+    const mappedLayoutPlan = resolvePresentationDeckLayoutPlan(design, deckSlides, new Set([2]));
+    expect(mappedLayoutPlan[2]).toMatchObject({
+      renderer: "image-text",
+      reason: expect.stringContaining("approved section visual"),
+    });
+  });
+
+  it("renders a mapped visual even when the section content is dense", async () => {
+    const imageObjects: Array<Record<string, unknown>> = [];
+    vi.doMock("sharp", () => ({
+      default: () => ({ png: () => ({ toBuffer: async () => Buffer.from("mock-png") }) }),
+    }));
+    vi.doMock("pptxgenjs", () => ({
+      default: class MockPptxGen {
+        public layout = "";
+        public author = "";
+        public company = "";
+        public subject = "";
+        public title = "";
+        public theme = {};
+        public ShapeType = { rect: "rect", roundRect: "roundRect" };
+
+        public addSlide() {
+          const slide: Record<string, unknown> = {};
+          slide.addShape = () => slide;
+          slide.addImage = (options: Record<string, unknown>) => {
+            imageObjects.push(options);
+            return slide;
+          };
+          slide.addText = () => slide;
+          slide.addNotes = () => slide;
+          return slide;
+        }
+
+        public async write() {
+          return Buffer.from("PKmock");
+        }
+      },
+    }));
+
+    await createPresentationPptxWithDiagnostics({
+      title: "Mapped Dense Section",
+      slides: [
+        {
+          title: "Storage",
+          bullets: [
+            "Keep cold food at safe temperatures and verify the appliance with a thermometer.",
+            "Freeze short-lived food before it spoils and label each package clearly.",
+            "Use product-specific storage guidance when shelf life varies.",
+            "Rotate newly purchased products behind older ones.",
+            "Store produce according to its temperature and humidity needs.",
+          ],
+        },
+      ],
+      visualAssets: [
+        {
+          slideIndex: 1,
+          asset: { bytesBase64: "mapped-section-bytes", source: "openai", sourceModel: "gpt-image-2" },
+        },
+      ],
+    });
+
+    expect(imageObjects).toContainEqual(
+      expect.objectContaining({
+        data: "data:image/png;base64,mapped-section-bytes",
+        objectName: "GoatCitadel section visual",
+      }),
+    );
   });
 
   it("keeps renderer provenance and local visual labels out of visible slide content", async () => {

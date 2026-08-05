@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { ToolPolicyConfig } from "@goatcitadel/contracts";
+import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import {
   buildArtifactDesignReport,
   createArtifactDesignPlan,
@@ -20,6 +20,7 @@ import {
   type PresentationSlide,
   type PresentationVisualAsset,
 } from "../presentation-pptx.js";
+import type { PreparePresentationVisuals, PreparedPresentationVisuals } from "../presentation-visual-runtime.js";
 import { assertWritePathInJail } from "../sandbox/path-jail.js";
 
 const ARTIFACT_TOOL_NAMES = new Set(["artifacts.create", "documents.create", "presentations.create"]);
@@ -32,6 +33,7 @@ export async function executeArtifactTool(
   toolName: string,
   args: Record<string, unknown>,
   config: ToolPolicyConfig,
+  runtime: { request?: ToolInvokeRequest; preparePresentationVisuals?: PreparePresentationVisuals } = {},
 ): Promise<Record<string, unknown>> {
   switch (toolName) {
     case "artifacts.create":
@@ -39,7 +41,7 @@ export async function executeArtifactTool(
     case "documents.create":
       return documentsCreate(args, config);
     case "presentations.create":
-      return presentationsCreate(args, config);
+      return presentationsCreate(args, config, runtime);
     default:
       throw new Error(`Unsupported artifact tool executor: ${toolName}`);
   }
@@ -139,7 +141,11 @@ async function documentsCreate(args: Record<string, unknown>, config: ToolPolicy
   };
 }
 
-async function presentationsCreate(args: Record<string, unknown>, config: ToolPolicyConfig) {
+async function presentationsCreate(
+  args: Record<string, unknown>,
+  config: ToolPolicyConfig,
+  runtime: { request?: ToolInvokeRequest; preparePresentationVisuals?: PreparePresentationVisuals },
+) {
   const requestedPath = required(args.path, "path");
   const p = ensurePptxPath(requestedPath);
   assertWritePathInJail(p, config.sandbox.writeJailRoots);
@@ -166,14 +172,17 @@ async function presentationsCreate(args: Record<string, unknown>, config: ToolPo
     },
     ...slides,
   ];
-  const deckQuality = analyzePresentationDeckQuality(design, deckSlides);
   const visualAsset = normalizePresentationVisualAsset(args.visualAsset);
+  const preparedVisuals = await preparePresentationVisuals(runtime);
+  const mappedVisualSlideIndexes = new Set(preparedVisuals.assets.map((item) => item.slideIndex));
+  const deckQuality = analyzePresentationDeckQuality(design, deckSlides, mappedVisualSlideIndexes);
   const pptx = await createPresentationPptxWithDiagnostics({
     title,
     subtitle: subtitle || undefined,
     slides,
     design,
     visualAsset,
+    visualAssets: preparedVisuals.assets.map((item) => ({ slideIndex: item.slideIndex, asset: item.asset })),
   });
   const full = path.resolve(p);
   await fs.mkdir(path.dirname(full), { recursive: true });
@@ -185,7 +194,7 @@ async function presentationsCreate(args: Record<string, unknown>, config: ToolPo
     title,
     slideCount: slides.length + 1,
     renderer: pptx.renderer,
-    warnings: pptx.warnings,
+    warnings: [...preparedVisuals.warnings, ...pptx.warnings],
     visualAsset: visualAsset
       ? {
           source: visualAsset.source,
@@ -193,22 +202,51 @@ async function presentationsCreate(args: Record<string, unknown>, config: ToolPo
           mimeType: visualAsset.mimeType,
         }
       : undefined,
+    visualAssets: preparedVisuals.assets.map((item) => ({
+      slideIndex: item.slideIndex,
+      source: item.asset.source,
+      sourceModel: item.asset.sourceModel,
+      mimeType: item.asset.mimeType,
+      promptSha256: item.promptSha256,
+    })),
+    visualPlan: preparedVisuals.plan,
+    visualProviderCalls: preparedVisuals.providerCalls,
     designReport: buildArtifactDesignReport(design, {
       localPath: full,
       usedAssetIds: pptx.usedAssetIds,
       validationResults: presentationValidationResults(deckQuality, pptx),
-      residualRisks: buildPresentationResidualRisks(pptx.warnings, [
-        ...repair.findings,
-        ...presentationQualityFindings(deckQuality),
-        ...presentationAssetSpecificityFindings(visualAsset, design.mode),
-      ]),
+      residualRisks: buildPresentationResidualRisks(
+        [...preparedVisuals.warnings, ...pptx.warnings],
+        [
+          ...repair.findings,
+          ...presentationQualityFindings(deckQuality),
+          ...presentationAssetSpecificityFindings(visualAsset, preparedVisuals.assets.length, design.mode),
+        ],
+      ),
       designQuality: {
         retryAttempted: design.mode !== "minimal" && design.mode !== "plain",
         findings: [
           ...repair.findings,
           ...presentationQualityFindings(deckQuality),
-          ...presentationAssetSpecificityFindings(visualAsset, design.mode),
+          ...presentationAssetSpecificityFindings(visualAsset, preparedVisuals.assets.length, design.mode),
         ],
+        runtimeInstructions: {
+          status: runtime.request?.runtimeSkillApplications?.length ? "injected" : "not_injected",
+          skills: runtime.request?.runtimeSkillApplications ?? [],
+        },
+        contentGrounding: {
+          status: runtime.request?.presentationGrounding ? "passed" : "warning",
+          detail: runtime.request?.presentationGrounding
+            ? `The Gateway content-quality gate admitted this deck before artifact dispatch (${runtime.request.presentationGrounding.matchedSourceTermCount}/${runtime.request.presentationGrounding.sourceTermCount} bounded source concepts represented${runtime.request.presentationGrounding.sourceUrlCount !== undefined ? `; ${runtime.request.presentationGrounding.matchedSourceUrlCount}/${runtime.request.presentationGrounding.sourceUrlCount} source URLs preserved` : ""}).`
+            : "No Gateway presentation-grounding receipt was attached to this direct artifact invocation.",
+        },
+        visualLayout: {
+          status: preparedVisuals.warnings.length > 0 || pptx.warnings.length > 0 ? "warning" : "passed",
+          detail:
+            preparedVisuals.warnings.length > 0 || pptx.warnings.length > 0
+              ? [...preparedVisuals.warnings, ...pptx.warnings].join(" ")
+              : `Rendered ${slides.length + 1} slides with ${preparedVisuals.assets.length + (visualAsset ? 1 : 0)} provider visual(s) and content-aware native layouts.`,
+        },
       },
     }),
   };
@@ -248,7 +286,7 @@ function presentationValidationResults(
       status: contentDensityStatus,
       detail:
         contentDensityStatus === "passed"
-          ? `Checked ${quality.contentSlideCount} content slide(s); sparse slides avoid forced columns and dense slides use column layouts.`
+          ? `Checked ${quality.contentSlideCount} content slide(s); sparse slides avoid forced columns and dense slides use spacious native layouts.`
           : contentWarnings.join(" "),
     },
   };
@@ -293,6 +331,7 @@ function repairPresentationDesignQuality(input: { title: string; subtitle: strin
       .map((bullet) => repairVisibleArtifactText(bullet, "", findings))
       .filter((bullet) => bullet.length > 0),
     speakerNotes: slide.speakerNotes,
+    visualBrief: slide.visualBrief,
   }));
   return {
     title,
@@ -355,9 +394,10 @@ function presentationQualityFindings(quality: PresentationDeckQualitySummary): A
 
 function presentationAssetSpecificityFindings(
   visualAsset: PresentationVisualAsset | undefined,
+  preparedVisualCount: number,
   mode: string,
 ): ArtifactDesignQualityFinding[] {
-  if (visualAsset || mode === "minimal" || mode === "plain") {
+  if (visualAsset || preparedVisualCount > 0 || mode === "minimal" || mode === "plain") {
     return [];
   }
   return [
@@ -369,6 +409,16 @@ function presentationAssetSpecificityFindings(
       repaired: false,
     },
   ];
+}
+
+async function preparePresentationVisuals(input: {
+  request?: ToolInvokeRequest;
+  preparePresentationVisuals?: PreparePresentationVisuals;
+}): Promise<PreparedPresentationVisuals> {
+  if (!input.request || !input.preparePresentationVisuals) {
+    return { plan: [], assets: [], warnings: [], providerCalls: 0 };
+  }
+  return input.preparePresentationVisuals(input.request);
 }
 
 function documentAssetSpecificityFindings(
@@ -533,6 +583,7 @@ function normalizePresentationSlides(
         title,
         bullets,
         speakerNotes: truncateText(asString(slide.speakerNotes) ?? "", 600) || undefined,
+        visualBrief: truncateText(asString(slide.visualBrief) ?? "", 600) || undefined,
       } satisfies PresentationSlide;
     })
     .filter((slide) => slide.title || slide.bullets.length > 0)

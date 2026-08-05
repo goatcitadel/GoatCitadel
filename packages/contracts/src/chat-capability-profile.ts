@@ -125,6 +125,31 @@ export interface ChatTurnCapabilityTrustedSkill {
   contentBytes?: number;
 }
 
+export interface ChatTurnCapabilityActivatedSkillModule {
+  /** Stable logical module name used in operator-visible provenance. */
+  name: string;
+  /** Skill-root-relative path; absolute host paths are never persisted. */
+  relativePath: string;
+  sha256: string;
+  bytes: number;
+}
+
+/**
+ * Immutable receipt for runtime skill instructions admitted into one turn.
+ * The instruction bytes remain in the prompt only; the profile retains the
+ * exact hashes needed to reproduce and fail-closed revalidate that prompt.
+ */
+export interface ChatTurnCapabilityActivatedSkill {
+  capabilityId: string;
+  skillId: string;
+  confidence: number;
+  reasons: string[];
+  treeSha256: string;
+  instructionSha256: string;
+  instructionBytes: number;
+  modules: ChatTurnCapabilityActivatedSkillModule[];
+}
+
 export interface ChatTurnCapabilityRouteTarget {
   providerId: string;
   model: string;
@@ -156,6 +181,8 @@ export interface ChatTurnCapabilityProfileSelection {
   tools: ChatTurnCapabilityToolDefinition[];
   modelNameAllowMap: ChatTurnCapabilityModelNameBinding[];
   trustedSkills: ChatTurnCapabilityTrustedSkill[];
+  /** Exact governed skill instructions selected for this turn. */
+  activatedSkills?: ChatTurnCapabilityActivatedSkill[];
   /** Frozen task-boundary and review contract. It never grants capabilities. */
   workPassport?: WorkPassportRecord;
 }

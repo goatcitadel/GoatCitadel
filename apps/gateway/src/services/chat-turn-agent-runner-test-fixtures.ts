@@ -588,6 +588,7 @@ export function createExecuteToolCallForTest(input: {
   listMcpBrowserFallbackTargets?: NonNullable<ChatTurnAgentRunnerDeps["listMcpBrowserFallbackTargets"]>;
   recordRuntimeDecision?: NonNullable<ChatTurnAgentRunnerDeps["recordRuntimeDecision"]>;
   safeWriteFallbackDir?: string;
+  evaluateToolAccess?: NonNullable<ChatTurnAgentRunnerDeps["evaluateToolAccess"]>;
 }): (input: ExecuteToolCallInput) => Promise<ExecuteToolCallResult> {
   const orchestrator = new ChatTurnAgentRunner({
     storage: input.storage ?? (createMockStorage() as never),
@@ -603,6 +604,7 @@ export function createExecuteToolCallForTest(input: {
     recordRuntimeDecision: input.recordRuntimeDecision,
     persistToolArtifact: input.persistToolArtifact,
     safeWriteFallbackDir: input.safeWriteFallbackDir,
+    evaluateToolAccess: input.evaluateToolAccess,
   });
   const executeToolCall = (
     orchestrator as unknown as {

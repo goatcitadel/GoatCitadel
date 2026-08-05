@@ -1411,6 +1411,10 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
                 items: { type: "string" },
               },
               speakerNotes: { type: "string" },
+              visualBrief: {
+                type: "string",
+                description: "Optional subject-specific direction for a generated visual on this slide.",
+              },
             },
             required: ["title"],
           },

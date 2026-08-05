@@ -88,6 +88,19 @@ describe("artifact design brief selection", () => {
     const report = buildArtifactDesignReport(plan, {
       localPath: "deck.pptx",
       usedAssetIds: ["renderer-generated-visual", "built-in-shapes-icons"],
+      designQuality: {
+        runtimeInstructions: {
+          status: "injected",
+          skills: [
+            {
+              skillId: "bundled:design-intelligence",
+              treeSha256: "1".repeat(64),
+              instructionSha256: "2".repeat(64),
+              modules: ["main", "enforcement", "layout", "taste", "assets", "audit"],
+            },
+          ],
+        },
+      },
     });
 
     expect(report.assetSources.find((asset) => asset.id === "renderer-generated-visual")?.status).toBe("used");
@@ -103,6 +116,22 @@ describe("artifact design brief selection", () => {
       status: "applied",
       retryAttempted: true,
       findings: [],
+    });
+  });
+
+  it("does not treat a renderer plan or compatibility skill hint as runtime skill evidence", () => {
+    const plan = createArtifactDesignPlan({
+      kind: "presentation",
+      format: "pptx",
+      title: "Quarterly Pitch",
+      design: { skillId: "design-intelligence" },
+    });
+    const report = buildArtifactDesignReport(plan, { localPath: "deck.pptx" });
+
+    expect(report.designQuality).toMatchObject({ status: "warning" });
+    expect(report.validation.find((check) => check.id === "design-skill-applied")).toMatchObject({
+      status: "warning",
+      detail: expect.stringContaining("no governed runtime design-instruction receipt"),
     });
   });
 

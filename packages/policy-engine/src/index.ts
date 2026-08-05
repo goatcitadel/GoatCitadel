@@ -3,6 +3,7 @@ export * from "./policy-resolver.js";
 export * from "./approval-gate.js";
 export * from "./engine.js";
 export * from "./tool-executor.js";
+export * from "./presentation-visual-runtime.js";
 export * from "./tool-security.js";
 export * from "./browser-content-guard.js";
 export { describeBrowserSessionState } from "./browser-tools.js";

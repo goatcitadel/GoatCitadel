@@ -368,6 +368,27 @@ export interface ToolInvokeRequest {
   policyContext?: ToolPolicyActorContext;
   dryRun?: boolean;
   externalRuntime?: boolean;
+  /** Server-authored receipts for governed skill instructions injected into the owning turn. */
+  runtimeSkillApplications?: Array<{
+    skillId: string;
+    treeSha256: string;
+    instructionSha256: string;
+    modules: string[];
+  }>;
+  /** Server-authored evidence that only the write destination was repaired before policy replay. */
+  writePathRepair?: {
+    originalPath: string;
+    repairedPath: string;
+    originalReasonCodes: string[];
+    repairedReasonCodes: string[];
+  };
+  /** Server-owned semantic gate receipt for an admitted presentation payload. */
+  presentationGrounding?: {
+    sourceTermCount: number;
+    matchedSourceTermCount: number;
+    sourceUrlCount?: number;
+    matchedSourceUrlCount?: number;
+  };
 }
 
 export interface ToolInvokeResult {

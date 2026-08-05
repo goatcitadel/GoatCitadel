@@ -5,7 +5,7 @@ export interface PresentationSlideContent {
   bullets: string[];
 }
 
-export type ContentSlideRenderer = "image-text" | "two-column" | "stat-callout";
+export type ContentSlideRenderer = "image-text" | "two-column" | "stacked-list" | "stat-callout";
 export type PresentationDeckRenderer = "hero" | ContentSlideRenderer;
 type SlideDensity = "empty" | "sparse" | "balanced" | "dense";
 
@@ -35,6 +35,7 @@ export interface PresentationDeckQualitySummary {
 export function resolvePresentationDeckLayoutPlan(
   design: ArtifactDesignPlan,
   slides: PresentationSlideContent[],
+  mappedVisualSlideIndexes: ReadonlySet<number> = new Set<number>(),
 ): PresentationSlideLayoutDecision[] {
   return slides.map((slide, index) => {
     const density = classifySlideDensity(slide.bullets);
@@ -45,6 +46,15 @@ export function resolvePresentationDeckLayoutPlan(
         density,
         bulletCount: slide.bullets.length,
         reason: "Title slide uses the deck hero template.",
+      };
+    }
+    if (mappedVisualSlideIndexes.has(index)) {
+      return {
+        slideIndex: index,
+        renderer: "image-text",
+        density,
+        bulletCount: slide.bullets.length,
+        reason: "An approved section visual takes precedence and is composed with the complete slide content.",
       };
     }
     const renderer = resolveContentSlideRenderer(design, index, slide);
@@ -61,12 +71,14 @@ export function resolvePresentationDeckLayoutPlan(
 export function analyzePresentationDeckQuality(
   design: ArtifactDesignPlan,
   deckSlides: PresentationSlideContent[],
+  mappedVisualSlideIndexes: ReadonlySet<number> = new Set<number>(),
 ): PresentationDeckQualitySummary {
-  const layoutPlan = resolvePresentationDeckLayoutPlan(design, deckSlides);
+  const layoutPlan = resolvePresentationDeckLayoutPlan(design, deckSlides, mappedVisualSlideIndexes);
   const contentSlides = deckSlides.slice(1);
   const rendererCounts: Record<ContentSlideRenderer, number> = {
     "image-text": 0,
     "two-column": 0,
+    "stacked-list": 0,
     "stat-callout": 0,
   };
   layoutPlan.slice(1).forEach((decision) => {
@@ -131,7 +143,10 @@ export function resolveContentSlideRenderer(
   const bulletCount = content.bullets.length;
   const layout = design.layouts[index % design.layouts.length]?.name ?? "title-body";
   if (shouldUseTwoColumn(content.bullets, layout)) {
-    return "two-column";
+    // Dense decks should not collapse into the same split-card template on
+    // every slide. Alternating with a full-width stacked treatment preserves
+    // readable line length while giving the deck a visible rhythm.
+    return index % 2 === 0 ? "stacked-list" : "two-column";
   }
   if (bulletCount > 0 && shouldUseCallout(content, layout)) {
     return "stat-callout";
@@ -207,6 +222,9 @@ function describeRendererChoice(
 ): string {
   if (renderer === "two-column") {
     return "High-density slide content uses two balanced columns to prevent text overflow.";
+  }
+  if (renderer === "stacked-list") {
+    return "High-density slide content uses full-width stacked rows to vary the deck while preserving readable line length.";
   }
   if (renderer === "stat-callout") {
     return "Concise takeaway content uses a callout layout for stronger hierarchy.";

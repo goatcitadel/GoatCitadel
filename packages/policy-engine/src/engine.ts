@@ -2692,6 +2692,9 @@ function asToolInvokeRequest(value: Record<string, unknown>): ToolInvokeRequest 
       : undefined;
   const dryRun = typeof value.dryRun === "boolean" ? value.dryRun : undefined;
   const externalRuntime = typeof value.externalRuntime === "boolean" ? value.externalRuntime : undefined;
+  const runtimeSkillApplications = parseRuntimeSkillApplications(value.runtimeSkillApplications);
+  const writePathRepair = parseWritePathRepair(value.writePathRepair);
+  const presentationGrounding = parsePresentationGrounding(value.presentationGrounding);
 
   if (!toolName || !agentId || !sessionId) {
     throw new Error("Invalid pending action request payload");
@@ -2702,6 +2705,7 @@ function asToolInvokeRequest(value: Record<string, unknown>): ToolInvokeRequest 
     args,
     agentId,
     sessionId,
+    turnId: typeof value.turnId === "string" && value.turnId.trim() ? value.turnId : undefined,
     workspaceId,
     taskId,
     runId,
@@ -2726,7 +2730,92 @@ function asToolInvokeRequest(value: Record<string, unknown>): ToolInvokeRequest 
         : undefined,
     dryRun,
     externalRuntime,
+    runtimeSkillApplications,
+    writePathRepair,
+    presentationGrounding,
   };
+}
+
+function parseRuntimeSkillApplications(value: unknown): ToolInvokeRequest["runtimeSkillApplications"] {
+  if (!Array.isArray(value)) return undefined;
+  const parsed = value
+    .map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return undefined;
+      const record = item as Record<string, unknown>;
+      if (
+        typeof record.skillId !== "string" ||
+        typeof record.treeSha256 !== "string" ||
+        typeof record.instructionSha256 !== "string" ||
+        !Array.isArray(record.modules) ||
+        !record.modules.every((module) => typeof module === "string")
+      ) {
+        return undefined;
+      }
+      return {
+        skillId: record.skillId,
+        treeSha256: record.treeSha256,
+        instructionSha256: record.instructionSha256,
+        modules: [...record.modules] as string[],
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => Boolean(item));
+  return parsed.length > 0 ? parsed : undefined;
+}
+
+function parseWritePathRepair(value: unknown): ToolInvokeRequest["writePathRepair"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.originalPath !== "string" ||
+    typeof record.repairedPath !== "string" ||
+    !Array.isArray(record.originalReasonCodes) ||
+    !record.originalReasonCodes.every((code) => typeof code === "string") ||
+    !Array.isArray(record.repairedReasonCodes) ||
+    !record.repairedReasonCodes.every((code) => typeof code === "string")
+  ) {
+    return undefined;
+  }
+  return {
+    originalPath: record.originalPath,
+    repairedPath: record.repairedPath,
+    originalReasonCodes: [...record.originalReasonCodes] as string[],
+    repairedReasonCodes: [...record.repairedReasonCodes] as string[],
+  };
+}
+
+function parsePresentationGrounding(value: unknown): ToolInvokeRequest["presentationGrounding"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.sourceTermCount !== "number" ||
+    !Number.isSafeInteger(record.sourceTermCount) ||
+    record.sourceTermCount < 0 ||
+    typeof record.matchedSourceTermCount !== "number" ||
+    !Number.isSafeInteger(record.matchedSourceTermCount) ||
+    record.matchedSourceTermCount < 0 ||
+    record.matchedSourceTermCount > record.sourceTermCount
+  ) {
+    return undefined;
+  }
+  const sourceUrlCount = parseOptionalNonNegativeInteger(record.sourceUrlCount);
+  const matchedSourceUrlCount = parseOptionalNonNegativeInteger(record.matchedSourceUrlCount);
+  if (
+    (record.sourceUrlCount !== undefined && sourceUrlCount === undefined) ||
+    (record.matchedSourceUrlCount !== undefined && matchedSourceUrlCount === undefined) ||
+    (sourceUrlCount === undefined) !== (matchedSourceUrlCount === undefined) ||
+    (sourceUrlCount !== undefined && matchedSourceUrlCount !== undefined && matchedSourceUrlCount > sourceUrlCount)
+  ) {
+    return undefined;
+  }
+  return {
+    sourceTermCount: record.sourceTermCount,
+    matchedSourceTermCount: record.matchedSourceTermCount,
+    ...(sourceUrlCount !== undefined ? { sourceUrlCount, matchedSourceUrlCount } : {}),
+  };
+}
+
+function parseOptionalNonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
 function toPendingApprovalRequestRecord(value: unknown): Record<string, unknown> {

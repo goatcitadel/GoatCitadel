@@ -7,7 +7,6 @@ import type {
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
 import type { ChatTurnAgentRunnerDeps, ChatTurnAgentRunnerInput } from "./chat-turn-agent-runner.js";
-import { attachGeneratedPresentationVisual } from "./chat-turn-agent-runner/artifact-write-helpers.js";
 import {
   EffectAwareChatTurnAgentRunner as ChatTurnAgentRunner,
   createEffectAwareInvokeToolForTest,
@@ -16,6 +15,29 @@ import {
   createToolCatalog,
   namedToolCallCompletion,
 } from "./chat-turn-agent-runner-test-fixtures.js";
+
+const WALKING_RESEARCH = [
+  "# Daily Walking",
+  "## Health benefits",
+  "- Regular walking supports cardiovascular health, mobility, energy, and mood when it becomes a repeatable habit.",
+  "- Gradual duration increases help people establish a sustainable routine without unnecessary starting friction.",
+  "## Practical routine",
+  "- Choose a consistent time, comfortable route, supportive shoes, and a realistic duration that fits the day.",
+  "- Track consistency and how the walk feels rather than treating speed as the only sign of progress.",
+  "## Safety and progression",
+  "- Increase duration gradually, adapt for weather and mobility needs, and seek medical guidance when symptoms make exercise unsafe.",
+].join("\n");
+
+const FREE_TIME_RESEARCH = [
+  "# Top 10 Things To Do In Free Time",
+  "## Active and restorative options",
+  "- Walk outdoors, exercise, read, cook, learn a skill, make art, volunteer, call a friend, explore locally, and rest deliberately.",
+  "## Choosing well",
+  "- Match the activity to available time, energy, budget, weather, and whether solitude or company would feel restorative.",
+  "- Rotate familiar favorites with low-risk experiments and notice which activities improve energy afterward.",
+  "## Making it repeatable",
+  "- Keep a short menu of low-friction choices, schedule ambitious options, and review what actually felt worthwhile.",
+].join("\n");
 
 describe("ChatTurnAgentRunner loop 24 coverage", () => {
   it("repairs content-filter interrupted direct completions through the repair pass", async () => {
@@ -157,12 +179,14 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
     const result = await orchestrator.run(
       turnInput({
         mode: "cowork",
-        content: "Create a real PowerPoint .pptx presentation about the top 10 things to do in free time.",
+        content: "Put all that information into a real PowerPoint presentation.",
         historyMessages: [
           {
             role: "user",
-            content: "Create a real PowerPoint .pptx presentation about the top 10 things to do in free time.",
+            content: "Research the top 10 things to do in free time.",
           },
+          { role: "assistant", content: FREE_TIME_RESEARCH },
+          { role: "user", content: "Put all that information into a real PowerPoint presentation." },
         ],
       }),
     );
@@ -181,7 +205,7 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
         toolName: "presentations.create",
         args: expect.objectContaining({
           path: expect.stringContaining("top-10-things-to-do-in-free-time"),
-          title: "Top 10 Things To Do In Free Time",
+          title: "Top 10 Things to Do in Free Time",
           design: expect.objectContaining({
             mode: "polished",
             skillId: "design-intelligence",
@@ -193,7 +217,7 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
     expect(result.assistantContent).toContain(".pptx");
   });
 
-  it("attaches a gpt-image-2 visual asset to synthetic presentation fallbacks when image generation is available", async () => {
+  it("defers synthetic presentation visuals until after policy authorization", async () => {
     const createChatCompletion = vi.fn(async (): Promise<ChatCompletionResponse> => {
       return completion("Here is an outline, but I did not create a deck.");
     });
@@ -232,47 +256,21 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
       policyRunId: "durable-presentation-visual",
       policyTaskId: "task-presentation-visual",
       mode: "cowork",
-      content: "Create a real PowerPoint .pptx presentation about daily walking.",
-      historyMessages: [{ role: "user", content: "Create a real PowerPoint .pptx presentation about daily walking." }],
+      content: "Put all that information into a real PowerPoint presentation.",
+      historyMessages: [
+        { role: "user", content: "Research the benefits and practical routine for daily walking." },
+        { role: "assistant", content: WALKING_RESEARCH },
+        { role: "user", content: "Put all that information into a real PowerPoint presentation." },
+      ],
     });
     await orchestrator.run(visualTurn);
 
-    expect(generateImage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        providerId: "openai",
-        model: "gpt-image-2",
-        outputFormat: "png",
-        responseFormat: "b64_json",
-      }),
-      expect.objectContaining({
-        operationId: "chat-turn:turn-presentation-visual:artifact-image-0",
-        dispatchGeneration: "chat-turn:turn-presentation-visual:artifact-image-0:generation-1",
-        callKind: "image_generation",
-        workspaceId: "workspace-loop24",
-        sessionId: "sess-loop24",
-        turnId: "turn-presentation-visual",
-        durableRunId: "durable-presentation-visual",
-        taskId: "task-presentation-visual",
-        agentId: "goatherder",
-        attemptIndex: 0,
-      }),
-    );
+    expect(generateImage).not.toHaveBeenCalled();
     expect(invokeTool).toHaveBeenCalledWith(
       expect.objectContaining({
         toolName: "presentations.create",
         args: expect.objectContaining({
-          slides: expect.arrayContaining([
-            expect.objectContaining({ title: "Daily Walking" }),
-            expect.objectContaining({
-              title: "Key Points",
-              bullets: expect.arrayContaining([expect.stringContaining("daily walking")]),
-            }),
-          ]),
-          visualAsset: expect.objectContaining({
-            bytesBase64: "generated-image-base64",
-            source: "openai",
-            sourceModel: "gpt-image-2",
-          }),
+          slides: expect.arrayContaining([expect.objectContaining({ title: "Health Benefits" })]),
           design: expect.objectContaining({
             mode: "polished",
             skillId: "design-intelligence",
@@ -281,31 +279,50 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
       }),
     );
     const presentationArgs = invokeTool.mock.calls[0]?.[0].args;
-    expect(JSON.stringify(presentationArgs?.slides ?? [])).not.toContain("starting friction");
+    expect(JSON.stringify(presentationArgs)).not.toContain("generated-image-base64");
   });
 
-  it("surfaces canonical usage persistence failures from best-effort presentation visuals", async () => {
-    const settlementError = new Error("canonical image usage settlement failed");
-    settlementError.name = "ModelUsageSettlementError";
-
-    await expect(
-      attachGeneratedPresentationVisual(
-        { title: "Usage Truth", slides: [] },
-        { content: "Create a deck about usage truth." },
-        async () => {
-          throw settlementError;
+  it("retries a generic model deck once and writes no file when the retry is still ungrounded", async () => {
+    const genericArgs = {
+      path: "./workspace/goatcitadel_out/generic.pptx",
+      title: "Presentation",
+      slides: [
+        {
+          title: "Presentation",
+          bullets: ["Summarizes the requested topic", "Keeps the deck concise"],
         },
-      ),
-    ).rejects.toBe(settlementError);
-  });
-
-  it("keeps ordinary presentation image failures best-effort", async () => {
-    const args = { title: "Best Effort", slides: [] };
-    await expect(
-      attachGeneratedPresentationVisual(args, { content: "Create a deck." }, async () => {
-        throw new Error("image provider unavailable");
+      ],
+    };
+    const createChatCompletion = vi
+      .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(namedToolCallCompletion("presentations.create", genericArgs))
+      .mockResolvedValueOnce(namedToolCallCompletion("presentations.create", genericArgs))
+      .mockResolvedValueOnce(completion("I could not produce a grounded deck from that generic draft."));
+    const invokeTool = vi.fn();
+    const runner = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["presentations.create"]),
+      createChatCompletion,
+      invokeTool,
+    });
+    const result = await runner.run(
+      turnInput({
+        mode: "cowork",
+        content: "Put all that information into a real PowerPoint presentation.",
+        historyMessages: [
+          { role: "user", content: "Research the benefits and practical routine for daily walking." },
+          { role: "assistant", content: WALKING_RESEARCH },
+          { role: "user", content: "Put all that information into a real PowerPoint presentation." },
+        ],
       }),
-    ).resolves.toEqual({ args, providerCalls: 1 });
+    );
+
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(
+      result.turnTrace.toolRuns.filter(
+        (run) => run.toolName === "presentations.create" && run.error?.includes("content quality gate"),
+      ),
+    ).toHaveLength(2);
   });
 
   it("uses the configured workspace artifact directory for write-jail fallbacks", async () => {
@@ -343,7 +360,17 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
       rawArgs: {
         path: "F:\\Users\\operator\\Desktop\\deck.pptx",
         title: "Walking Deck",
-        slides: [{ title: "Start", bullets: ["Walk daily"] }],
+        slides: [
+          { title: "Health", bullets: ["Regular walking supports cardiovascular health, mobility, energy, and mood."] },
+          {
+            title: "Routine",
+            bullets: ["A consistent time, comfortable route, and realistic duration make the habit easier to sustain."],
+          },
+          {
+            title: "Progression",
+            bullets: ["Increase duration gradually and adapt the plan for weather, symptoms, and mobility needs."],
+          },
+        ],
       },
     });
 
@@ -356,6 +383,179 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
     });
   });
 
+  it("repairs a structurally blocked frozen-profile path before approval without changing the deck payload", async () => {
+    const safeWriteFallbackDir = "F:\\code\\personal-ai\\workspace\\goatcitadel_out";
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "approval_required",
+      policyReason: "approval required",
+      auditEventId: "audit-repaired-approval",
+      approvalId: "approval-repaired-deck",
+    });
+    const evaluateToolAccess = vi.fn((request: { args?: Record<string, unknown> }) => {
+      const requestedPath = String(request.args?.path ?? "");
+      return requestedPath.startsWith(safeWriteFallbackDir)
+        ? { allowed: true, requiresApproval: true, reasonCodes: ["approval_required"] }
+        : { allowed: false, requiresApproval: true, reasonCodes: ["structural_safety_block"] };
+    });
+    const executeToolCall = createExecuteToolCallForTest({
+      invokeTool,
+      invokeToolWithEffectTruth: createEffectAwareInvokeToolForTest(invokeTool),
+      toolNames: ["presentations.create"],
+      safeWriteFallbackDir,
+      evaluateToolAccess,
+    });
+    const originalArgs = {
+      path: "/workspace/artifacts/research-deck.pptx",
+      title: "Research Findings",
+      subtitle: "Evidence and practical implications",
+      slides: [
+        { title: "Context", bullets: ["The source establishes the decision context and the operator constraints."] },
+        {
+          title: "Evidence",
+          bullets: ["The strongest evidence supports the proposed direction and preserves citations."],
+          speakerNotes: "Source note",
+        },
+        {
+          title: "Decision",
+          bullets: ["Proceed with the bounded option and validate the remaining uncertainty."],
+          visualBrief: "A precise decision-path visual",
+        },
+      ],
+      design: { mode: "polished", preset: "editorial", skillId: "compatibility-hint-only" },
+      destination: { kind: "local" },
+    };
+    const profile = {
+      profileId: "profile-path-repair",
+      identity: { workspaceId: "workspace-loop24" },
+      catalog: {
+        snapshotId: "snapshot-path-repair",
+        inspectableHash: "1".repeat(64),
+        callableHash: "2".repeat(64),
+        inspectableCount: 1,
+        callableCount: 1,
+      },
+      selection: { tools: [], activatedSkills: [] },
+      governance: {
+        policyDecisions: [
+          {
+            toolName: "presentations.create",
+            allowed: true,
+            requiresApproval: true,
+            reasonCodes: ["frozen_approval_required"],
+          },
+        ],
+      },
+    } as unknown as ChatTurnAgentRunnerInput["capabilityProfile"];
+    const result = await executeToolCall({
+      input: turnInput({ capabilityProfile: profile }),
+      turnId: "turn-path-repair",
+      toolName: "presentations.create",
+      rawArgs: originalArgs,
+    });
+
+    expect(result.record.status, JSON.stringify(result.record)).toBe("approval_required");
+    expect(evaluateToolAccess).toHaveBeenCalledTimes(2);
+    const repairedArgs = invokeTool.mock.calls[0]?.[0].args;
+    expect(invokeTool.mock.calls[0]?.[0].writePathRepair).toEqual({
+      originalPath: originalArgs.path,
+      repairedPath: expect.stringContaining(safeWriteFallbackDir),
+      originalReasonCodes: ["structural_safety_block"],
+      repairedReasonCodes: ["approval_required"],
+    });
+    expect(repairedArgs.path).toContain(safeWriteFallbackDir);
+    const { path: _originalPath, ...originalPayload } = originalArgs;
+    const { path: _repairedPath, ...repairedPayload } = repairedArgs;
+    expect(repairedPayload).toEqual(originalPayload);
+    expect(result.record.result).toMatchObject({
+      fallbackApplied: true,
+      originalPath: originalArgs.path,
+      fallbackPath: expect.stringContaining(safeWriteFallbackDir),
+      policyRevalidation: {
+        status: "repaired",
+        originalReasonCodes: ["structural_safety_block"],
+        repairedReasonCodes: ["approval_required"],
+      },
+    });
+  });
+
+  it("records both policy decisions and requests a destination when the repaired path is also denied", async () => {
+    const safeWriteFallbackDir = "F:\\code\\personal-ai\\workspace\\goatcitadel_out";
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>();
+    const evaluateToolAccess = vi.fn((request: { args?: Record<string, unknown> }) => {
+      const requestedPath = String(request.args?.path ?? "");
+      return requestedPath.startsWith(safeWriteFallbackDir)
+        ? { allowed: false, requiresApproval: false, reasonCodes: ["permission_profile_denied"] }
+        : { allowed: false, requiresApproval: false, reasonCodes: ["structural_safety_block"] };
+    });
+    const executeToolCall = createExecuteToolCallForTest({
+      invokeTool,
+      invokeToolWithEffectTruth: createEffectAwareInvokeToolForTest(invokeTool),
+      toolNames: ["presentations.create"],
+      safeWriteFallbackDir,
+      evaluateToolAccess,
+    });
+    const profile = {
+      profileId: "profile-path-repair-denied",
+      identity: { workspaceId: "workspace-loop24" },
+      catalog: {
+        snapshotId: "snapshot-path-repair-denied",
+        inspectableHash: "1".repeat(64),
+        callableHash: "2".repeat(64),
+        inspectableCount: 1,
+        callableCount: 1,
+      },
+      selection: { tools: [] },
+      governance: {
+        policyDecisions: [
+          {
+            toolName: "presentations.create",
+            allowed: true,
+            requiresApproval: true,
+            reasonCodes: ["frozen_approval_required"],
+          },
+        ],
+      },
+    } as unknown as ChatTurnAgentRunnerInput["capabilityProfile"];
+    const result = await executeToolCall({
+      input: turnInput({ capabilityProfile: profile }),
+      turnId: "turn-path-repair-denied",
+      toolName: "presentations.create",
+      rawArgs: {
+        path: "/workspace/artifacts/research-deck.pptx",
+        title: "Research Findings",
+        slides: [
+          { title: "Context", bullets: ["The source establishes the decision context and operator constraints."] },
+          {
+            title: "Evidence",
+            bullets: ["The strongest evidence supports the proposed direction and preserves citations."],
+          },
+          { title: "Decision", bullets: ["Proceed with the bounded option and validate the remaining uncertainty."] },
+        ],
+      },
+    });
+
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(evaluateToolAccess).toHaveBeenCalledTimes(2);
+    expect(result.record).toMatchObject({
+      status: "blocked",
+      result: {
+        policyRevalidation: {
+          status: "blocked_after_path_repair",
+          reasonCodes: ["permission_profile_denied"],
+          originalPath: "/workspace/artifacts/research-deck.pptx",
+          repairedPath: expect.stringContaining(safeWriteFallbackDir),
+          originalReasonCodes: ["structural_safety_block"],
+          repairedReasonCodes: ["permission_profile_denied"],
+        },
+      },
+    });
+    expect(result.userInputPrompt).toMatchObject({
+      kind: "text",
+      title: "Choose artifact destination",
+      placeholder: "Enter an allowed destination path",
+    });
+  });
+
   it("pauses for a destination prompt when requested and fallback artifact paths are both blocked", async () => {
     const safeWriteFallbackDir = "F:\\code\\personal-ai\\workspace\\goatcitadel_out";
     const createChatCompletion = vi
@@ -364,7 +564,20 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
         namedToolCallCompletion("presentations.create", {
           path: "F:\\Users\\operator\\Desktop\\daily-walking.pptx",
           title: "Benefits of Daily Walking",
-          slides: [{ title: "Physical Health", bullets: ["Supports heart health"] }],
+          slides: [
+            {
+              title: "Physical Health",
+              bullets: ["Regular walking supports cardiovascular health, mobility, and daily energy."],
+            },
+            {
+              title: "Practical Routine",
+              bullets: ["Use a consistent time, comfortable route, and realistic starting duration."],
+            },
+            {
+              title: "Safe Progression",
+              bullets: ["Increase duration gradually and adapt for weather, symptoms, and mobility needs."],
+            },
+          ],
         }),
       );
     const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValue({
@@ -401,7 +614,7 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
         kind: "text",
         title: "Choose artifact destination",
         question: expect.stringContaining("outside the configured write jail"),
-        placeholder: expect.stringContaining(safeWriteFallbackDir),
+        placeholder: "Enter an allowed destination path",
       }),
     });
     expect(invokeTool).toHaveBeenCalledWith(
@@ -494,13 +707,19 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
   it.each([
     {
       toolName: "presentations.create",
-      content: "Create a real PowerPoint .pptx presentation about daily walking.",
+      content: "Put all that information into a real PowerPoint presentation.",
       modelContent: "I can outline the deck, but I did not create a PowerPoint file.",
+      historyMessages: [
+        { role: "user" as const, content: "Research the benefits and practical routine for daily walking." },
+        { role: "assistant" as const, content: WALKING_RESEARCH },
+        { role: "user" as const, content: "Put all that information into a real PowerPoint presentation." },
+      ],
     },
     {
       toolName: "documents.create",
       content: "Create a real PDF report file about daily walking.",
       modelContent: "I can draft the report, but I did not create a document file.",
+      historyMessages: undefined,
     },
   ])("parks a synthetic $toolName fallback when artifact creation needs approval", async (scenario) => {
     const approvalId = `approval-${scenario.toolName}`;
@@ -528,7 +747,7 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
       turnInput({
         mode: "cowork",
         content: scenario.content,
-        historyMessages: [{ role: "user", content: scenario.content }],
+        historyMessages: scenario.historyMessages ?? [{ role: "user", content: scenario.content }],
       }),
     )) {
       chunks.push(chunk);

@@ -146,7 +146,7 @@ import {
   extractProviderFailureRecord,
 } from "./chat-turn-agent-runner/failure-records.js";
 import {
-  attachGeneratedPresentationVisual,
+  analyzePresentationContentQuality,
   buildSafeWriteFallbackPath,
   buildSafeWritePath,
   buildSyntheticDocumentCreateArgs,
@@ -154,6 +154,7 @@ import {
   buildWriteDestinationUserInputPrompt,
   detectDocumentArtifactIntent,
   detectPresentationArtifactIntent,
+  isWriteDestinationTool,
   isWriteJailBlockReason,
   mergeDocumentArtifactDeliveryContent,
   mergePresentationArtifactDeliveryContent,
@@ -2827,6 +2828,7 @@ export class ChatTurnAgentRunner {
     if (
       !assistantContent &&
       !approvalPayload &&
+      !pendingUserInput &&
       quickWebProfile &&
       !promptLabEvalIntegrityTurn &&
       !promptLabContract.toolUseSuppressed &&
@@ -2995,6 +2997,7 @@ export class ChatTurnAgentRunner {
     if (
       !assistantContent &&
       !approvalPayload &&
+      !pendingUserInput &&
       !promptLabEvalIntegrityTurn &&
       !quickWebProfile &&
       input.toolAutonomy !== "manual" &&
@@ -4242,7 +4245,7 @@ export class ChatTurnAgentRunner {
                     : "Tool execution skipped.",
           );
 
-          if (approvalPayload) {
+          if (approvalPayload || pendingUserInput) {
             break;
           }
 
@@ -4437,27 +4440,26 @@ export class ChatTurnAgentRunner {
 
     if (
       !approvalPayload &&
+      !pendingUserInput &&
       finalStatus !== "cancelled" &&
       !promptLabEvalIntegrityTurn &&
       input.toolAutonomy !== "manual" &&
       intents.presentationArtifact &&
       toolSchema.canonicalToModel.has("presentations.create") &&
       !toolRuns.some((run) => run.toolName === "presentations.create" && run.status === "executed") &&
+      toolRuns.filter(
+        (run) =>
+          run.toolName === "presentations.create" &&
+          run.status === "blocked" &&
+          run.error?.includes("presentation content quality gate"),
+      ).length < 2 &&
       toolRunCount < executionBudget.maxToolRunsPerTurn
     ) {
       throwIfChatTurnCancelled(input);
-      const presentationVisual = await attachGeneratedPresentationVisual(
-        buildSyntheticPresentationCreateArgs(input, this.deps.safeWriteFallbackDir),
-        input,
-        this.deps.generateImage,
-        {
-          ...completionUsageAttribution("artifact-image-0", "image_generation"),
-          dispatchGeneration: `chat-turn:${input.turnId}:artifact-image-0:generation-1`,
-          attemptIndex: 0,
-        },
-      );
-      providerCallCount += presentationVisual.providerCalls;
-      const rawArgs = presentationVisual.args;
+      // Visual generation is intentionally deferred to the authorized policy
+      // executor hook. Approval persistence therefore contains only this deck
+      // payload and never image bytes.
+      const rawArgs = buildSyntheticPresentationCreateArgs(input, this.deps.safeWriteFallbackDir);
       this.patchTurnTrace(input, input.turnId, {
         status: "waiting_for_tool",
       });
@@ -4524,6 +4526,7 @@ export class ChatTurnAgentRunner {
 
     if (
       !approvalPayload &&
+      !pendingUserInput &&
       finalStatus !== "cancelled" &&
       !promptLabEvalIntegrityTurn &&
       input.toolAutonomy !== "manual" &&
@@ -4600,6 +4603,7 @@ export class ChatTurnAgentRunner {
 
     if (
       !approvalPayload &&
+      !pendingUserInput &&
       !quickWebProfile &&
       finalStatus !== "cancelled" &&
       toolRuns.length > 0 &&
@@ -4649,6 +4653,7 @@ export class ChatTurnAgentRunner {
     const incompleteRepairThreshold = readRetryRepairThreshold(this.deps.storage.systemSettings);
     if (
       !approvalPayload &&
+      !pendingUserInput &&
       finalStatus !== "cancelled" &&
       shouldAttemptIncompleteCompletionRepair({
         completionIsIncomplete: completionState.status !== "complete",
@@ -4683,7 +4688,7 @@ export class ChatTurnAgentRunner {
       }
     }
 
-    if (!approvalPayload && finalStatus !== "cancelled" && assistantContent.trim().length === 0) {
+    if (!approvalPayload && !pendingUserInput && finalStatus !== "cancelled" && assistantContent.trim().length === 0) {
       const synthesizedFallback = await this.synthesizeToolOutcomeFallback({
         input,
         toolRuns,
@@ -5250,21 +5255,27 @@ export class ChatTurnAgentRunner {
     return mapping.get(toolName) ?? toProviderToolFunctionName(toolName);
   }
 
-  private resolveCapabilityProfileInvocationBlock(
+  private resolveCapabilityProfileInvocationDecision(
     input: ChatTurnAgentRunnerInput,
     tool: { toolName: string; args: Record<string, unknown> },
-  ): string | undefined {
+  ): { blockedReason?: string; reasonCodes: string[] } {
     if (!input.capabilityProfile) {
-      return undefined;
+      return { reasonCodes: [] };
     }
     const frozen = input.capabilityProfile.governance.policyDecisions.find(
       (decision) => decision.toolName === tool.toolName,
     );
     if (!frozen?.allowed) {
-      return `Capability profile ${input.capabilityProfile.profileId} does not authorize ${tool.toolName}.`;
+      return {
+        blockedReason: `Capability profile ${input.capabilityProfile.profileId} does not authorize ${tool.toolName}.`,
+        reasonCodes: frozen?.reasonCodes ? [...frozen.reasonCodes] : ["capability_profile_not_authorized"],
+      };
     }
     if (!this.deps.evaluateToolAccess) {
-      return "Current tool policy cannot be evaluated against the frozen capability profile.";
+      return {
+        blockedReason: "Current tool policy cannot be evaluated against the frozen capability profile.",
+        reasonCodes: ["policy_evaluation_unavailable"],
+      };
     }
     let current: ReturnType<NonNullable<ChatTurnAgentRunnerDeps["evaluateToolAccess"]>>;
     try {
@@ -5281,16 +5292,32 @@ export class ChatTurnAgentRunner {
         policyContext: buildTurnToolPolicyContext(input),
       });
     } catch {
-      return "Current tool policy evaluation failed after capability admission.";
+      return {
+        blockedReason: "Current tool policy evaluation failed after capability admission.",
+        reasonCodes: ["policy_evaluation_failed"],
+      };
     }
     if (!current.allowed) {
-      return `Current deny-wins policy narrowed ${tool.toolName} after capability admission.`;
+      const structuralWriteBlock =
+        isWriteDestinationTool(tool.toolName) && current.reasonCodes.includes("structural_safety_block");
+      return {
+        blockedReason: structuralWriteBlock
+          ? `The requested output path for ${tool.toolName} is outside the configured write jail.`
+          : `Current deny-wins policy narrowed ${tool.toolName} after capability admission.`,
+        reasonCodes: [...current.reasonCodes],
+      };
     }
     if (isExactSystemHeartbeatRunnerPosture(input) && current.requiresApproval) {
-      return `System heartbeat tool ${tool.toolName} is blocked because heartbeat_interactive_approval_forbidden.`;
+      return {
+        blockedReason: `System heartbeat tool ${tool.toolName} is blocked because heartbeat_interactive_approval_forbidden.`,
+        reasonCodes: [...current.reasonCodes, "heartbeat_interactive_approval_forbidden"],
+      };
     }
     if (frozen.requiresApproval && !current.requiresApproval) {
-      return `Current policy would broaden ${tool.toolName} beyond the profile's frozen approval posture.`;
+      return {
+        blockedReason: `Current policy would broaden ${tool.toolName} beyond the profile's frozen approval posture.`,
+        reasonCodes: [...current.reasonCodes, "frozen_approval_posture_broadened"],
+      };
     }
     // HX-408 M2/M3: a mesh-published callable re-verifies its frozen
     // activation snapshot immediately before dispatch and stays fail-closed
@@ -5316,20 +5343,36 @@ export class ChatTurnAgentRunner {
         !preDispatchGate ||
         !this.deps.dispatchMeshCapabilityInvocation
       ) {
-        return `Mesh-published tool ${tool.toolName} is blocked because ${block}.`;
+        return {
+          blockedReason: `Mesh-published tool ${tool.toolName} is blocked because ${block}.`,
+          reasonCodes: [...current.reasonCodes, block],
+        };
       }
       if (isExactSystemHeartbeatRunnerPosture(input)) {
-        return `Mesh-published tool ${tool.toolName} is blocked because mesh_capability_heartbeat_dispatch_forbidden.`;
+        return {
+          blockedReason: `Mesh-published tool ${tool.toolName} is blocked because mesh_capability_heartbeat_dispatch_forbidden.`,
+          reasonCodes: [...current.reasonCodes, "mesh_capability_heartbeat_dispatch_forbidden"],
+        };
       }
       if (current.requiresApproval) {
         // The packet requires the approvals check to PASS before an intent is
         // created; no mesh approval-replay surface exists in M3, so an
         // approval-gated posture stays fail-closed instead of bypassing it.
-        return `Mesh-published tool ${tool.toolName} is blocked because mesh_capability_approval_dispatch_deferred.`;
+        return {
+          blockedReason: `Mesh-published tool ${tool.toolName} is blocked because mesh_capability_approval_dispatch_deferred.`,
+          reasonCodes: [...current.reasonCodes, "mesh_capability_approval_dispatch_deferred"],
+        };
       }
-      return undefined;
+      return { reasonCodes: [...current.reasonCodes] };
     }
-    return undefined;
+    return { reasonCodes: [...current.reasonCodes] };
+  }
+
+  private resolveCapabilityProfileInvocationBlock(
+    input: ChatTurnAgentRunnerInput,
+    tool: { toolName: string; args: Record<string, unknown> },
+  ): string | undefined {
+    return this.resolveCapabilityProfileInvocationDecision(input, tool).blockedReason;
   }
 
   /**
@@ -5639,7 +5682,7 @@ export class ChatTurnAgentRunner {
     chunk?: ChatStreamChunkDraft;
     userInputPrompt?: ChatUserInputPromptRecord;
   }> {
-    const preflight = this.preflightToolInvocation({
+    let preflight = this.preflightToolInvocation({
       toolName: input.toolName,
       rawArgs: input.rawArgs,
       userContent: input.input.content,
@@ -5658,6 +5701,67 @@ export class ChatTurnAgentRunner {
       toolName: preflight.toolName,
       args: preflight.args,
     });
+    let capabilityProfileDecision = this.resolveCapabilityProfileInvocationDecision(input.input, {
+      toolName: preflight.toolName,
+      args: preflight.args,
+    });
+    let preDispatchPathRepair:
+      | {
+          status: "repaired" | "blocked";
+          originalPath: string;
+          fallbackPath: string;
+          originalReasonCodes: string[];
+          repairedReasonCodes: string[];
+        }
+      | undefined;
+    if (
+      capabilityProfileDecision.blockedReason &&
+      capabilityProfileDecision.reasonCodes.includes("structural_safety_block") &&
+      isWriteDestinationTool(preflight.toolName)
+    ) {
+      const originalPath = typeof preflight.args.path === "string" ? preflight.args.path : undefined;
+      const fallbackPath = buildSafeWriteFallbackPath(
+        input.input.sessionId,
+        preflight.toolName,
+        originalPath,
+        this.deps.safeWriteFallbackDir,
+      );
+      if (
+        originalPath &&
+        fallbackPath &&
+        normalizePathForComparison(originalPath) !== normalizePathForComparison(fallbackPath)
+      ) {
+        const fallbackArgs = { ...preflight.args, path: fallbackPath };
+        const fallbackDecision = this.resolveCapabilityProfileInvocationDecision(input.input, {
+          toolName: preflight.toolName,
+          args: fallbackArgs,
+        });
+        if (!fallbackDecision.blockedReason) {
+          preflight = { ...preflight, args: fallbackArgs };
+          const originalReasonCodes = [...capabilityProfileDecision.reasonCodes];
+          capabilityProfileDecision = fallbackDecision;
+          preDispatchPathRepair = {
+            status: "repaired",
+            originalPath,
+            fallbackPath,
+            originalReasonCodes,
+            repairedReasonCodes: [...fallbackDecision.reasonCodes],
+          };
+        } else {
+          preDispatchPathRepair = {
+            status: "blocked",
+            originalPath,
+            fallbackPath,
+            originalReasonCodes: [...capabilityProfileDecision.reasonCodes],
+            repairedReasonCodes: [...fallbackDecision.reasonCodes],
+          };
+          capabilityProfileDecision = {
+            blockedReason: `The configured safe destination for ${preflight.toolName} was also denied after the original path was blocked by the write jail. Choose a destination inside an allowed write root.`,
+            reasonCodes: [...fallbackDecision.reasonCodes],
+          };
+        }
+      }
+    }
     const startedAt = new Date().toISOString();
     const toolRunId = randomUUID();
     let effectPotential = this.resolveToolEffectPotential(input.input, preflight.toolName);
@@ -5722,10 +5826,7 @@ export class ChatTurnAgentRunner {
       };
     }
 
-    const capabilityProfileBlock = this.resolveCapabilityProfileInvocationBlock(input.input, {
-      toolName: preflight.toolName,
-      args: preflight.args,
-    });
+    const capabilityProfileBlock = capabilityProfileDecision.blockedReason;
     if (capabilityProfileBlock) {
       if (isExactSystemHeartbeatRunnerPosture(input.input)) {
         throwSystemHeartbeatToolInvocationBlocked(preflight.toolName);
@@ -5733,6 +5834,20 @@ export class ChatTurnAgentRunner {
       const updated = this.patchToolRun(input.input, created.toolRunId, {
         status: "blocked",
         ...this.buildToolEffectPatch({ potential: effectPotential, phase: "pre_dispatch_blocked" }),
+        result: {
+          policyRevalidation: {
+            status: preDispatchPathRepair?.status === "blocked" ? "blocked_after_path_repair" : "blocked",
+            reasonCodes: [...capabilityProfileDecision.reasonCodes],
+            ...(preDispatchPathRepair
+              ? {
+                  originalPath: preDispatchPathRepair.originalPath,
+                  repairedPath: preDispatchPathRepair.fallbackPath,
+                  originalReasonCodes: preDispatchPathRepair.originalReasonCodes,
+                  repairedReasonCodes: preDispatchPathRepair.repairedReasonCodes,
+                }
+              : {}),
+          },
+        },
         error: capabilityProfileBlock,
         failureGuidance: buildToolFailureGuidance({
           toolName: preflight.toolName,
@@ -5751,6 +5866,19 @@ export class ChatTurnAgentRunner {
           turnId: input.turnId,
           toolRun: updated,
         },
+        userInputPrompt:
+          preDispatchPathRepair?.status === "blocked" ||
+          capabilityProfileDecision.reasonCodes.includes("structural_safety_block")
+            ? buildWriteDestinationUserInputPrompt({
+                sessionId: input.input.sessionId,
+                turnId: input.turnId,
+                toolName: preflight.toolName,
+                requestedPath: preDispatchPathRepair?.originalPath ?? preflight.args.path,
+                fallbackPath: "",
+                policyReason: capabilityProfileBlock,
+                safeWriteFallbackDir: this.deps.safeWriteFallbackDir,
+              })
+            : undefined,
       };
     }
 
@@ -5971,6 +6099,23 @@ export class ChatTurnAgentRunner {
             reason: `chat mode ${input.input.mode}`,
           },
           policyContext: buildTurnToolPolicyContext(input.input),
+          runtimeSkillApplications: (input.input.capabilityProfile?.selection.activatedSkills ?? []).map((skill) => ({
+            skillId: skill.skillId,
+            treeSha256: skill.treeSha256,
+            instructionSha256: skill.instructionSha256,
+            modules: skill.modules.map((module) => module.name),
+          })),
+          ...(preDispatchPathRepair?.status === "repaired"
+            ? {
+                writePathRepair: {
+                  originalPath: preDispatchPathRepair.originalPath,
+                  repairedPath: preDispatchPathRepair.fallbackPath,
+                  originalReasonCodes: preDispatchPathRepair.originalReasonCodes,
+                  repairedReasonCodes: preDispatchPathRepair.repairedReasonCodes,
+                },
+              }
+            : {}),
+          ...(preflight.presentationGrounding ? { presentationGrounding: preflight.presentationGrounding } : {}),
         },
         {
           effectContext: effectInvocationContext,
@@ -5988,7 +6133,7 @@ export class ChatTurnAgentRunner {
         effectReceipts,
         effectInvocationContext,
       );
-      const persistedToolResult = await this.persistToolArtifactsIfNeeded({
+      const basePersistedToolResult = await this.persistToolArtifactsIfNeeded({
         turnInput: input.input,
         sessionId: input.input.sessionId,
         turnId: input.turnId,
@@ -5998,6 +6143,21 @@ export class ChatTurnAgentRunner {
         normalizationProfile: input.input.normalizationProfile,
         priorToolRuns: input.priorToolRuns,
       });
+      const persistedToolResult =
+        preDispatchPathRepair?.status === "repaired"
+          ? {
+              ...(basePersistedToolResult ?? {}),
+              fallbackApplied: true,
+              originalPath: preDispatchPathRepair.originalPath,
+              fallbackPath: preDispatchPathRepair.fallbackPath,
+              policyRevalidation: {
+                status: "repaired",
+                originalReasonCodes: preDispatchPathRepair.originalReasonCodes,
+                repairedReasonCodes: preDispatchPathRepair.repairedReasonCodes,
+              },
+              note: `Requested write path was outside the configured write jail; preserved the original payload and repaired only the destination to ${preDispatchPathRepair.fallbackPath}`,
+            }
+          : basePersistedToolResult;
 
       if (result.outcome === "approval_required") {
         if (mainExecutorDispatchStarted) {
@@ -6186,7 +6346,7 @@ export class ChatTurnAgentRunner {
                   turnId: input.turnId,
                   toolName: preflight.toolName,
                   requestedPath: preflight.args.path,
-                  fallbackPath: writeFallback.fallbackPath,
+                  fallbackPath: "",
                   policyReason: fallbackError,
                   safeWriteFallbackDir: this.deps.safeWriteFallbackDir,
                 }),
@@ -6726,8 +6886,22 @@ export class ChatTurnAgentRunner {
     args: Record<string, unknown>;
     failureReason?: string;
     blockedReason?: string;
+    presentationGrounding?: {
+      sourceTermCount: number;
+      matchedSourceTermCount: number;
+      sourceUrlCount?: number;
+      matchedSourceUrlCount?: number;
+    };
   } {
     const args = { ...input.rawArgs };
+    let presentationGrounding:
+      | {
+          sourceTermCount: number;
+          matchedSourceTermCount: number;
+          sourceUrlCount?: number;
+          matchedSourceUrlCount?: number;
+        }
+      | undefined;
     let effectiveToolName = input.toolName;
     if (input.webMode === "off" && isWebToolName(input.toolName)) {
       return {
@@ -6913,6 +7087,27 @@ export class ChatTurnAgentRunner {
       };
     }
 
+    if (input.toolName === "presentations.create" && !input.evalIntegrityTurn) {
+      const quality = analyzePresentationContentQuality({
+        args,
+        content: input.userContent,
+        historyMessages: input.historyMessages,
+      });
+      if (!quality.passed) {
+        return {
+          toolName: effectiveToolName,
+          args,
+          blockedReason: `presentation content quality gate blocked this deck before writing: ${quality.findings.join(" ")}`,
+        };
+      }
+      presentationGrounding = {
+        sourceTermCount: quality.sourceTermCount,
+        matchedSourceTermCount: quality.matchedSourceTermCount,
+        sourceUrlCount: quality.sourceUrlCount,
+        matchedSourceUrlCount: quality.matchedSourceUrlCount,
+      };
+    }
+
     const promptLabBroadSearchBlock = describePromptLabBroadLocalSearchBlock({
       toolName: input.toolName,
       args,
@@ -6927,7 +7122,7 @@ export class ChatTurnAgentRunner {
       };
     }
 
-    return { toolName: effectiveToolName, args };
+    return { toolName: effectiveToolName, args, ...(presentationGrounding ? { presentationGrounding } : {}) };
   }
 
   private async tryWriteJailFallback(input: {
@@ -7579,7 +7774,8 @@ function attachArtifactDesignSkillArgs(toolName: string, args: Record<string, un
   args.design = {
     ...rawDesign,
     mode: existingMode ?? "polished",
-    skillId: "design-intelligence",
+    skillId:
+      typeof rawDesign.skillId === "string" && rawDesign.skillId.trim() ? rawDesign.skillId : "design-intelligence",
   };
 }
 
@@ -7897,6 +8093,9 @@ function buildToolFailureGuidanceBase(input: {
 
   if (normalizedError.includes("write jail") || normalizedError.includes("outside write")) {
     return "Use a safe fallback path inside the workspace write jail.";
+  }
+  if (normalizedError.includes("presentation content quality gate")) {
+    return "Regenerate the deck from the substantive conversation context. Use a specific title and topic-grounded slides; do not repeat the request or presentation-template instructions as content.";
   }
   if (input.toolName.startsWith("shell.") && normalizedError.includes("requires approval")) {
     return "Use a safer restricted tool or request approval for the risky shell command.";

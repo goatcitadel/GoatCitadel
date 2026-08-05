@@ -368,6 +368,30 @@ describe("resolveChatTurnCapabilityProfile", () => {
     );
   });
 
+  it("binds activated skill instruction receipts into profile and compaction-relevant selection hashes", async () => {
+    const { deps } = buildDeps();
+    deps.resolveActivatedSkills = vi.fn(({ trustedSkills }) => [
+      {
+        capabilityId: trustedSkills[0]!.capabilityId,
+        skillId: trustedSkills[0]!.skillId,
+        confidence: 0.96,
+        reasons: ["routing_keyword"],
+        treeSha256: trustedSkills[0]!.treeSha256!,
+        instructionSha256: "b".repeat(64),
+        instructionBytes: 4096,
+        modules: [{ name: "main", relativePath: "SKILL.md", sha256: "c".repeat(64), bytes: 4096 }],
+      },
+    ]);
+    const resolution = await resolveChatTurnCapabilityProfile(deps, buildInput());
+
+    expect(resolution.profile.selection.activatedSkills).toEqual([
+      expect.objectContaining({ skillId: "repo-review", instructionSha256: "b".repeat(64) }),
+    ]);
+    const tampered = structuredClone(resolution.profile);
+    tampered.selection.activatedSkills![0]!.instructionSha256 = "d".repeat(64);
+    expect(() => verifyChatTurnCapabilityProfile(tampered)).toThrow(/selectionHash verification/);
+  });
+
   it("uses a server-owned policy context verbatim and produces deterministic admission fingerprints", async () => {
     const first = buildDeps();
     const input = buildInput();

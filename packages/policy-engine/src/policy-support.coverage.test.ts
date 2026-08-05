@@ -95,6 +95,39 @@ describe("approval bypass support", () => {
     expect(hasVerifiedApprovalBypass(request, storage)).toBe(true);
   });
 
+  it("binds governed skill, path-repair, and grounding receipts to the approved request", () => {
+    const storedRequest = createToolInvokeRequest({
+      turnId: "turn-1",
+      runtimeSkillApplications: [
+        {
+          skillId: "bundled:design-intelligence",
+          treeSha256: "1".repeat(64),
+          instructionSha256: "2".repeat(64),
+          modules: ["main", "layout"],
+        },
+      ],
+      writePathRepair: {
+        originalPath: "/workspace/deck.pptx",
+        repairedPath: "workspace/deck.pptx",
+        originalReasonCodes: ["structural_safety_block"],
+        repairedReasonCodes: ["approval_required"],
+      },
+      presentationGrounding: { sourceTermCount: 8, matchedSourceTermCount: 6 },
+    });
+    const storage = createStorageWithPendingApproval({
+      request: storedRequest as unknown as Record<string, unknown>,
+    });
+
+    expect(hasVerifiedApprovalBypass(storedRequest, storage)).toBe(true);
+    expect(hasVerifiedApprovalBypass({ ...storedRequest, runtimeSkillApplications: [] }, storage)).toBe(false);
+    expect(
+      hasVerifiedApprovalBypass(
+        { ...storedRequest, presentationGrounding: { sourceTermCount: 8, matchedSourceTermCount: 7 } },
+        storage,
+      ),
+    ).toBe(false);
+  });
+
   it("rejects no-expiry pending approvals with malformed creation dates", () => {
     const request = createToolInvokeRequest();
     const storage = createStorageWithPendingApproval({

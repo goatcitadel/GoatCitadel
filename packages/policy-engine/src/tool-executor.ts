@@ -35,6 +35,7 @@ import {
   terminateShellProcessTree,
 } from "./tool-executor/background-processes.js";
 import { executeArtifactTool, isArtifactToolName } from "./tool-executor/artifact-executor.js";
+import type { PreparePresentationVisuals } from "./presentation-visual-runtime.js";
 import { executeCommsTool } from "./tool-executor/comms-executor.js";
 import {
   executeRoutedContextTool,
@@ -129,6 +130,8 @@ export interface ToolExecutorRuntimeHooks {
   ) => Promise<Record<string, unknown>>;
   /** Record a delegated worker result or approval-gated filesystem scope request. */
   submitWorkResult?: (request: ToolInvokeRequest) => Promise<Record<string, unknown>>;
+  /** Post-authorization, Gateway-owned presentation image generation hook. */
+  preparePresentationVisuals?: PreparePresentationVisuals;
 }
 
 export type ToolProcessSpawnName = "shell.exec" | "shell.exec_background" | "tests.run" | "lint.run" | "build.run";
@@ -232,7 +235,12 @@ export async function executeTool(
     );
   }
   if (isArtifactToolName(request.toolName)) {
-    return finalizeToolResult(await executeArtifactTool(request.toolName, request.args, config));
+    return finalizeToolResult(
+      await executeArtifactTool(request.toolName, request.args, config, {
+        request,
+        preparePresentationVisuals: runtimeHooks.preparePresentationVisuals,
+      }),
+    );
   }
   if (isKnowledgeToolName(request.toolName)) {
     return finalizeToolResult(await executeKnowledgeFamily(request, config, storage, runtimeHooks));

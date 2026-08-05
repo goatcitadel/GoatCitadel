@@ -249,6 +249,8 @@ export interface ChatTurnPrepHost {
     historyMessages: ChatCompletionRequest["messages"];
     request: ChatSendMessageRequest;
   }): Promise<ChatTurnCapabilityProfileResolution>;
+  /** Rehydrates and exact-byte revalidates the skill instructions frozen in the profile. */
+  resolveActivatedSkillInstructions?(profile: ChatTurnCapabilityProfileRecord): string | undefined;
   resolveChatRoutedContextSources(
     input: ResolveChatRoutedContextSourcesInput,
   ): Promise<ResolvedChatRoutedContextSources>;
@@ -417,6 +419,18 @@ export function buildChatCompactionDimension(input: {
             skillId: skill.skillId,
             lifecycleState: skill.lifecycleState,
             treeSha256: skill.treeSha256,
+          })),
+          activatedSkills: (input.profile.selection.activatedSkills ?? []).map((skill) => ({
+            capabilityId: skill.capabilityId,
+            skillId: skill.skillId,
+            treeSha256: skill.treeSha256,
+            instructionSha256: skill.instructionSha256,
+            modules: skill.modules.map((module) => ({
+              name: module.name,
+              relativePath: module.relativePath,
+              sha256: module.sha256,
+              bytes: module.bytes,
+            })),
           })),
         },
         governance: {
@@ -1043,6 +1057,8 @@ export async function prepareAgentChatTurn(
   }
   if (capabilityProfile) {
     history = upsertChatCapabilityProfileSystemInstruction(history, capabilityProfile);
+    const activatedSkillInstructions = host.resolveActivatedSkillInstructions?.(capabilityProfile);
+    history = upsertChatActivatedSkillSystemInstruction(history, activatedSkillInstructions);
   }
   if (hasRoutedContextRefs) {
     if (!capabilityProfile || !effectiveProviderRoute) {
@@ -1385,6 +1401,22 @@ export function upsertChatCapabilityProfileSystemInstruction(
   ].join("\n");
   const insertionIndex = withoutPriorBinding.findIndex((message) => message.role !== "system");
   const next = [...withoutPriorBinding];
+  next.splice(insertionIndex < 0 ? next.length : insertionIndex, 0, { role: "system", content: instruction });
+  return next;
+}
+
+export function upsertChatActivatedSkillSystemInstruction(
+  history: ChatCompletionRequest["messages"],
+  instruction: string | undefined,
+): ChatCompletionRequest["messages"] {
+  const marker = "Server-owned governed runtime skill instructions follow.";
+  const withoutPrior = history.filter(
+    (message) =>
+      !(message.role === "system" && typeof message.content === "string" && message.content.startsWith(marker)),
+  );
+  if (!instruction?.trim()) return withoutPrior;
+  const insertionIndex = withoutPrior.findIndex((message) => message.role !== "system");
+  const next = [...withoutPrior];
   next.splice(insertionIndex < 0 ? next.length : insertionIndex, 0, { role: "system", content: instruction });
   return next;
 }

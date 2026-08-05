@@ -574,6 +574,11 @@ import {
   resolveChatTurnCapabilityProfile as resolveServerOwnedChatTurnCapabilityProfile,
   type ChatTurnCapabilityProfileResolution,
 } from "./chat-turn-capability-profile-service.js";
+import {
+  buildGovernedActivatedSkillReceipts,
+  renderGovernedActivatedSkillInstructions,
+} from "./governed-skill-instruction-service.js";
+import { prepareApprovedPresentationVisuals } from "./presentation-visual-executor.js";
 import { normalizeAgentInputFromSend } from "./chat-agent-input-normalization.js";
 import * as chatTurnTraceHydration from "./chat-turn-trace-hydration.js";
 import { markChatTurnCancelled } from "./chat-turn-cancellation.js";
@@ -1591,6 +1596,11 @@ export class GatewayService {
       requestNotification: (request, input) => this.requestNotificationFromTool(request.sessionId, input),
       proposeDocumentPatch: (request, input) => this.proposeDocumentPatchFromTool(request, input),
       submitWorkResult: (request) => this.delegatedWorkResultService.execute(request),
+      preparePresentationVisuals: (request) =>
+        prepareApprovedPresentationVisuals({
+          request,
+          generateImage: (imageRequest, attribution) => this.llmService.generateImage(imageRequest, attribution),
+        }),
     });
     const secretStore = new SecretStoreService();
     this.secretStore = secretStore;
@@ -5729,6 +5739,13 @@ export class GatewayService {
           return { configured: Boolean(provider.hasApiKey), local };
         },
         classifyWorkPassport: (workspaceId, content) => this.workPassportService.classify(workspaceId, content),
+        resolveActivatedSkills: ({ content, trustedSkills }) =>
+          buildGovernedActivatedSkillReceipts({
+            content,
+            decision: this.resolveSkillActivationForRuntime({ text: content }, false),
+            trustedSkills,
+            lifecycleRows: this.storage.skillLifecycle.list(),
+          }),
       },
       {
         sessionId: input.sessionId,
@@ -5810,6 +5827,14 @@ export class GatewayService {
       },
       input,
     );
+  }
+
+  public resolveActivatedSkillInstructions(profile: ChatTurnCapabilityProfileRecord): string | undefined {
+    return renderGovernedActivatedSkillInstructions({
+      profile,
+      loadedSkills: this.skillsService.list(),
+      lifecycleRows: this.storage.skillLifecycle.list(),
+    });
   }
 
   public resolveChatTurnEffectiveRoute(sessionId: string, request: ChatSendMessageRequest) {
@@ -8552,6 +8577,10 @@ export class GatewayService {
   }
 
   public resolveSkillActivation(input: SkillResolveInput) {
+    return this.resolveSkillActivationForRuntime(input, true);
+  }
+
+  private resolveSkillActivationForRuntime(input: SkillResolveInput, recordUsage: boolean) {
     const policy = this.getSkillActivationPolicy();
     const base = resolveCallableSkillActivation({
       request: input,
@@ -8613,7 +8642,9 @@ export class GatewayService {
       });
     }
 
-    this.skillStateService.recordSkillUsage(selected.map((skill) => skill.skillId));
+    if (recordUsage) {
+      this.skillStateService.recordSkillUsage(selected.map((skill) => skill.skillId));
+    }
 
     return {
       ...base,

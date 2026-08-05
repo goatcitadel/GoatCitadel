@@ -4493,6 +4493,135 @@ describe("ToolPolicyEngine outside-root read access", () => {
     }
   });
 
+  it("generates presentation visuals only during a single approved replay", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-approved-presentation-"));
+    tempRoots.push(root);
+    const storage = createStorageStub();
+    let pending: PendingApprovalAction | undefined;
+    vi.mocked(storage.pendingApprovalActions.find).mockImplementation(() => pending);
+    vi.mocked(storage.pendingApprovalActions.markResolved).mockImplementation((approvalId, status, result) => {
+      if (!pending || pending.approvalId !== approvalId) {
+        throw new Error(`pending approval ${approvalId} is unavailable`);
+      }
+      pending = { ...pending, resolutionStatus: status, result, resolvedAt: new Date().toISOString() };
+      return pending;
+    });
+    const preparePresentationVisuals = vi.fn(async () => ({
+      plan: [
+        {
+          slideIndex: 0,
+          slideTitle: "Approval-Safe Presentation",
+          kind: "cover" as const,
+          promptSha256: "c".repeat(64),
+        },
+      ],
+      assets: [
+        {
+          slideIndex: 0,
+          promptSha256: "c".repeat(64),
+          asset: {
+            bytesBase64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+            mimeType: "image/png" as const,
+            source: "openai",
+            sourceModel: "gpt-image-2",
+          },
+        },
+      ],
+      warnings: [],
+      providerCalls: 1,
+    }));
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        sandbox: { ...policyConfig.sandbox, writeJailRoots: [root] },
+      },
+      storage,
+      undefined,
+      { preparePresentationVisuals },
+    );
+    const deckPath = path.join(root, "approval-safe.pptx");
+    const request: ToolInvokeRequest = {
+      toolName: "presentations.create",
+      args: {
+        path: deckPath,
+        title: "Approval-Safe Presentation",
+        slides: [
+          {
+            title: "Grounded Findings",
+            bullets: ["The approved deck preserves source-backed findings and writes only after authorization."],
+          },
+        ],
+      },
+      agentId: "assistant",
+      sessionId: "session-approved-presentation",
+      turnId: "turn-approved-presentation",
+      runtimeSkillApplications: [
+        {
+          skillId: "bundled:design-intelligence",
+          treeSha256: "a".repeat(64),
+          instructionSha256: "b".repeat(64),
+          modules: ["main", "enforcement", "layout", "taste", "assets", "audit"],
+        },
+      ],
+      writePathRepair: {
+        originalPath: "/workspace/artifacts/approval-safe.pptx",
+        repairedPath: deckPath,
+        originalReasonCodes: ["structural_safety_block"],
+        repairedReasonCodes: ["approval_required"],
+      },
+      presentationGrounding: { sourceTermCount: 8, matchedSourceTermCount: 6 },
+    };
+
+    const waiting = await engine.invoke(request);
+
+    expect(waiting).toMatchObject({ outcome: "approval_required", approvalId: "approval-1" });
+    expect(preparePresentationVisuals).not.toHaveBeenCalled();
+    expect(JSON.stringify(vi.mocked(storage.approvals.createWithTtlDuration).mock.calls[0]?.[0].payload)).not.toContain(
+      "iVBORw0KGgo",
+    );
+    const pendingInput = vi.mocked(storage.pendingApprovalActions.upsertPending).mock.calls[0]?.[0];
+    expect(pendingInput?.request).toMatchObject({
+      toolName: request.toolName,
+      args: request.args,
+      runtimeSkillApplications: request.runtimeSkillApplications,
+      writePathRepair: request.writePathRepair,
+      presentationGrounding: request.presentationGrounding,
+    });
+    pending = createPendingApprovalAction({
+      approvalId: pendingInput?.approvalId ?? "approval-1",
+      request: pendingInput?.request ?? {},
+      expiresAt: pendingInput?.expiresAt,
+    });
+
+    const executed = await engine.executeApprovedAction("approval-1");
+    const duplicateReplay = await engine.executeApprovedAction("approval-1");
+
+    expect(executed, JSON.stringify(executed)).toMatchObject({
+      outcome: "executed",
+      result: {
+        path: path.resolve(deckPath),
+        designReport: {
+          designQuality: {
+            runtimeInstructions: { status: "injected" },
+            contentGrounding: { status: "passed" },
+          },
+        },
+      },
+    });
+    await expect(fs.stat(deckPath)).resolves.toMatchObject({ isFile: expect.any(Function) });
+    expect(preparePresentationVisuals).toHaveBeenCalledTimes(1);
+    expect(preparePresentationVisuals).toHaveBeenCalledWith(
+      expect.objectContaining({
+        turnId: request.turnId,
+        runtimeSkillApplications: request.runtimeSkillApplications,
+        writePathRepair: request.writePathRepair,
+        presentationGrounding: request.presentationGrounding,
+      }),
+    );
+    expect(JSON.stringify(executed)).not.toContain("iVBORw0KGgo");
+    expect(duplicateReplay).toBeUndefined();
+  }, 20_000);
+
   it("can defer approved external-runtime resolution to the caller", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-21T00:05:00.000Z"));

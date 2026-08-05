@@ -59,6 +59,7 @@ function requestMatchesPendingApproval(
     storedRequest.toolName === request.toolName &&
     storedRequest.agentId === request.agentId &&
     storedRequest.sessionId === request.sessionId &&
+    (storedRequest.turnId ?? undefined) === ((request as Partial<ToolInvokeRequest>).turnId ?? undefined) &&
     (storedRequest.workspaceId ?? undefined) === (request.workspaceId ?? undefined) &&
     (storedRequest.taskId ?? undefined) === (request.taskId ?? undefined) &&
     (storedRequest.runId ?? undefined) === (request.runId ?? undefined) &&
@@ -72,6 +73,12 @@ function requestMatchesPendingApproval(
       stableStringify((request as Partial<ToolInvokeRequest>).authContext ?? {}) &&
     (storedRequest.dryRun ?? undefined) === ((request as ToolInvokeRequest).dryRun ?? undefined) &&
     (storedRequest.externalRuntime ?? undefined) === ((request as ToolInvokeRequest).externalRuntime ?? undefined) &&
+    stableStringify(storedRequest.runtimeSkillApplications ?? []) ===
+      stableStringify((request as Partial<ToolInvokeRequest>).runtimeSkillApplications ?? []) &&
+    stableStringify(storedRequest.writePathRepair ?? {}) ===
+      stableStringify((request as Partial<ToolInvokeRequest>).writePathRepair ?? {}) &&
+    stableStringify(storedRequest.presentationGrounding ?? {}) ===
+      stableStringify((request as Partial<ToolInvokeRequest>).presentationGrounding ?? {}) &&
     stableStringify(storedRequest.args ?? {}) === stableStringify(request.args ?? {})
   );
 }

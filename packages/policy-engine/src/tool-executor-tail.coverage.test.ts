@@ -334,10 +334,10 @@ describe("tool executor tail coverage", () => {
     expect(designReport.validation?.find((check) => check.id === "pptx-package")?.status).toBe("passed");
     expect(designReport.validation?.find((check) => check.id === "presentation-template")?.status).toBe("passed");
     expect(designReport.validation?.find((check) => check.id === "content-density")?.status).toBe("passed");
-    expect(designReport.validation?.find((check) => check.id === "design-skill-applied")?.status).toBe("passed");
+    expect(designReport.validation?.find((check) => check.id === "design-skill-applied")?.status).toBe("warning");
     expect(designReport.designQuality).toMatchObject({
       skillId: "design-intelligence",
-      status: "applied",
+      status: "warning",
       retryAttempted: true,
     });
     expect(deck.subarray(0, 2).toString("utf8")).toBe("PK");
@@ -346,6 +346,77 @@ describe("tool executor tail coverage", () => {
     expect(deck.includes("ppt/media/")).toBe(true);
     expect(deck.includes("ppt/notesSlides/")).toBe(true);
     expect(JSON.stringify(created)).toContain("renderer-generated-visual");
+  }, 20_000);
+
+  it("keeps post-approval visual bytes ephemeral while reporting mappings and skill provenance", async () => {
+    const root = createRoot();
+    const config = createConfig(root);
+    const storage = createKnowledgeStorage();
+    const deckPath = path.join(root, "mapped-visuals.pptx");
+    const invokeRequest = request("presentations.create", {
+      path: deckPath,
+      title: "Mapped Visuals",
+      slides: [{ title: "Grounded Section", bullets: ["Specific source-backed finding"] }],
+    });
+    invokeRequest.runtimeSkillApplications = [
+      {
+        skillId: "bundled:design-intelligence",
+        treeSha256: "a".repeat(64),
+        instructionSha256: "b".repeat(64),
+        modules: ["main", "enforcement", "layout", "taste", "assets", "audit"],
+      },
+    ];
+    invokeRequest.presentationGrounding = { sourceTermCount: 8, matchedSourceTermCount: 6 };
+    const created = await executeTool(invokeRequest, config, storage, {
+      preparePresentationVisuals: async () => ({
+        plan: [
+          {
+            slideIndex: 1,
+            slideTitle: "Grounded Section",
+            kind: "section",
+            promptSha256: "c".repeat(64),
+          },
+        ],
+        assets: [
+          {
+            slideIndex: 1,
+            promptSha256: "c".repeat(64),
+            asset: {
+              bytesBase64:
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+              mimeType: "image/png",
+              source: "openai",
+              sourceModel: "gpt-image-2",
+            },
+          },
+        ],
+        warnings: [],
+        providerCalls: 1,
+      }),
+    });
+
+    expect(created).toMatchObject({
+      visualAssets: [
+        {
+          slideIndex: 1,
+          source: "openai",
+          sourceModel: "gpt-image-2",
+          promptSha256: "c".repeat(64),
+        },
+      ],
+      visualProviderCalls: 1,
+      designReport: {
+        designQuality: {
+          runtimeInstructions: {
+            status: "injected",
+            skills: [expect.objectContaining({ skillId: "bundled:design-intelligence" })],
+          },
+          contentGrounding: { status: "passed" },
+          visualLayout: { status: "passed" },
+        },
+      },
+    });
+    expect(JSON.stringify(created)).not.toContain("iVBORw0KGgo");
   }, 20_000);
 
   it("creates real document artifacts inside the write jail", async () => {

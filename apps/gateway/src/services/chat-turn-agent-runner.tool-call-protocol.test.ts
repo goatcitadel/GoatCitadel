@@ -701,7 +701,20 @@ describe("ChatTurnAgentRunner tool-call message protocol", () => {
                     arguments: JSON.stringify({
                       path: "F:\\Users\\operator\\Desktop\\walking-overview.pptx",
                       title: "Benefits of Daily Walking",
-                      slides: [{ title: "Physical Health", bullets: ["Supports heart health"] }],
+                      slides: [
+                        {
+                          title: "Physical Health",
+                          bullets: ["Regular walking supports cardiovascular health, mobility, and daily energy."],
+                        },
+                        {
+                          title: "Mental Well-Being",
+                          bullets: ["A repeatable walking habit can reduce stress and support mood and focus."],
+                        },
+                        {
+                          title: "Safe Progression",
+                          bullets: ["Increase duration gradually and adapt for symptoms, weather, and mobility needs."],
+                        },
+                      ],
                     }),
                   },
                 },
@@ -713,7 +726,22 @@ describe("ChatTurnAgentRunner tool-call message protocol", () => {
                     arguments: JSON.stringify({
                       path: "F:\\Users\\operator\\Desktop\\walking-details.pptx",
                       title: "Walking Routine Details",
-                      slides: [{ title: "Routine", bullets: ["Walk 30 minutes daily"] }],
+                      slides: [
+                        {
+                          title: "Choose a Time",
+                          bullets: ["Use a consistent time that fits the day and has a safe, comfortable route."],
+                        },
+                        {
+                          title: "Start Realistically",
+                          bullets: ["Begin with a manageable duration and prioritize consistency over speed."],
+                        },
+                        {
+                          title: "Review and Adapt",
+                          bullets: [
+                            "Track how the walk feels and adjust duration for recovery, weather, and symptoms.",
+                          ],
+                        },
+                      ],
                     }),
                   },
                 },

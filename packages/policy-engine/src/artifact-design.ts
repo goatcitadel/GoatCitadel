@@ -99,12 +99,19 @@ export interface ArtifactDesignQualityFinding {
 }
 
 export interface ArtifactDesignQualityReport {
+  /** Compatibility design-quality namespace; runtimeInstructions is the authoritative application receipt. */
   skillId: "design-intelligence";
   register: ArtifactDesignQualityRegister;
   lifecycle: ArtifactDesignQualityLifecycle;
   status: ArtifactDesignQualityStatus;
   retryAttempted: boolean;
   findings: ArtifactDesignQualityFinding[];
+  runtimeInstructions?: {
+    status: "injected" | "not_injected";
+    skills: Array<{ skillId: string; treeSha256: string; instructionSha256: string; modules: string[] }>;
+  };
+  contentGrounding?: { status: "passed" | "warning" | "blocked"; detail: string };
+  visualLayout?: { status: "passed" | "warning"; detail: string };
 }
 
 export interface ArtifactGoogleImportStatus {
@@ -549,9 +556,9 @@ function buildValidationChecks(
     },
     {
       id: "design-skill-applied",
-      label: "Design skill application",
+      label: "Governed design instruction application",
       status: plainDesign ? "skipped" : "planned",
-      detail: "Non-plain artifacts should apply GoatCitadel design-intelligence / Design Quality V1.",
+      detail: "Non-plain artifacts should disclose whether governed design-intelligence instructions were injected.",
     },
     {
       id: "visible-placeholder-copy",
@@ -716,13 +723,23 @@ function buildArtifactDesignQualityReport(
   const findings = override.findings ?? [];
   const hasSeriousFinding = findings.some((finding) => finding.severity === "P0" || finding.severity === "P1");
   const hasWarningFinding = findings.length > 0;
+  const missingRuntimeInstructions = override.runtimeInstructions?.status !== "injected";
   return {
     skillId: "design-intelligence",
     register,
     lifecycle: override.lifecycle ?? (skipped ? "Maintain" : "Polish"),
-    status: override.status ?? (skipped ? "skipped" : hasSeriousFinding || hasWarningFinding ? "warning" : "applied"),
+    status:
+      override.status ??
+      (skipped
+        ? "skipped"
+        : hasSeriousFinding || hasWarningFinding || missingRuntimeInstructions
+          ? "warning"
+          : "applied"),
     retryAttempted: override.retryAttempted ?? !skipped,
     findings,
+    ...(override.runtimeInstructions ? { runtimeInstructions: override.runtimeInstructions } : {}),
+    ...(override.contentGrounding ? { contentGrounding: override.contentGrounding } : {}),
+    ...(override.visualLayout ? { visualLayout: override.visualLayout } : {}),
   };
 }
 
@@ -751,11 +768,13 @@ function buildArtifactDesignQualityValidationResults(
       "artifact-audit": { status: "skipped", detail },
     };
   }
-  const detailPrefix = `Applied GoatCitadel design-intelligence / Design Quality V1 (${designQuality.register}, ${designQuality.lifecycle}).`;
+  const runtimeInstructionsInjected = designQuality.runtimeInstructions?.status === "injected";
   return {
     "design-skill-applied": {
-      status: "passed",
-      detail: `${detailPrefix} No external design runtime was invoked.`,
+      status: runtimeInstructionsInjected ? "passed" : "warning",
+      detail: runtimeInstructionsInjected
+        ? `Injected governed GoatCitadel design-intelligence instructions (${designQuality.register}, ${designQuality.lifecycle}); no external design runtime was invoked.`
+        : "Renderer design defaults ran, but no governed runtime design-instruction receipt was attached.",
     },
     "visible-placeholder-copy": validationStatusForFinding(
       designQuality,
@@ -784,7 +803,7 @@ function buildArtifactDesignQualityValidationResults(
       detail:
         designQuality.status === "warning"
           ? `Artifact design audit completed with ${designQuality.findings.length} warning finding(s).`
-          : `${detailPrefix} Artifact design audit completed without warning findings.`,
+          : `Artifact design audit completed without warning findings (${designQuality.register}, ${designQuality.lifecycle}).`,
     },
   };
 }

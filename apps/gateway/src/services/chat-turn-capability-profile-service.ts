@@ -136,6 +136,11 @@ export interface ChatTurnCapabilityProfileResolveDeps {
     | undefined;
   /** Gateway-owned, operator-correctable task-boundary classification. */
   classifyWorkPassport?(workspaceId: string, content: string): WorkPassportRecord;
+  /** Gateway-owned governed runtime-skill activation and exact-byte receipt builder. */
+  resolveActivatedSkills?(input: {
+    content: string;
+    trustedSkills: ChatTurnCapabilityProfileRecord["selection"]["trustedSkills"];
+  }): ChatTurnCapabilityProfileRecord["selection"]["activatedSkills"];
   resolveToolRuntimeOwnerBinding?(toolName: string): ChatTurnCapabilityToolRuntimeOwnerBinding;
   /**
    * Gateway-owned profile-freeze seam. Implementations may return only the
@@ -344,6 +349,7 @@ export async function resolveChatTurnCapabilityProfile(
   );
   const modelNameAllowMap = tools.map(({ modelName, canonicalName }) => ({ modelName, canonicalName }));
   const trustedSkills = buildTrustedSkillSnapshot(callableEntries, deps.storage.skillLifecycle.list());
+  const activatedSkills = deps.resolveActivatedSkills?.({ content: input.content, trustedSkills }) ?? [];
   const activeGrants = collectActiveGrants(deps.storage, input).map((grant) => ({
     grantId: grant.grantId,
     toolPattern: grant.toolPattern,
@@ -408,6 +414,7 @@ export async function resolveChatTurnCapabilityProfile(
     tools,
     modelNameAllowMap,
     trustedSkills,
+    ...(activatedSkills.length > 0 ? { activatedSkills } : {}),
     ...(workPassport ? { workPassport } : {}),
   } satisfies ChatTurnCapabilityProfileRecord["selection"];
   const governance = {
