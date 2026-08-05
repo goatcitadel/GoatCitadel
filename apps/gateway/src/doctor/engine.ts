@@ -1129,13 +1129,7 @@ async function checkDeepRuntime(
     };
   }
 
-  const tokenQueryParam = context.tokenQueryParam ?? "access_token";
-  const settings = await fetchGatewayJson(
-    context.gatewayBaseUrl,
-    "/api/v1/settings",
-    context.authToken,
-    tokenQueryParam,
-  );
+  const settings = await fetchGatewayJson(context.gatewayBaseUrl, "/api/v1/settings", context.authToken);
   if (!settings.ok) {
     repairs.push({
       checkId: id,
@@ -1154,12 +1148,7 @@ async function checkDeepRuntime(
     };
   }
 
-  const onboarding = await fetchGatewayJson(
-    context.gatewayBaseUrl,
-    "/api/v1/onboarding/state",
-    context.authToken,
-    tokenQueryParam,
-  );
+  const onboarding = await fetchGatewayJson(context.gatewayBaseUrl, "/api/v1/onboarding/state", context.authToken);
   const details: string[] = [];
   details.push("Runtime settings API reachable.");
   if (onboarding.ok) {
@@ -1192,12 +1181,7 @@ async function checkDeepRuntime(
     details.push(`Onboarding state unavailable: ${onboarding.detail}`);
   }
 
-  const voiceStatus = await fetchGatewayJson(
-    context.gatewayBaseUrl,
-    "/api/v1/voice/status",
-    context.authToken,
-    tokenQueryParam,
-  );
+  const voiceStatus = await fetchGatewayJson(context.gatewayBaseUrl, "/api/v1/voice/status", context.authToken);
   if (!voiceStatus.ok) {
     repairs.push({
       checkId: id,
@@ -1217,12 +1201,7 @@ async function checkDeepRuntime(
     };
   }
 
-  const voiceRuntime = await fetchGatewayJson(
-    context.gatewayBaseUrl,
-    "/api/v1/voice/runtime",
-    context.authToken,
-    tokenQueryParam,
-  );
+  const voiceRuntime = await fetchGatewayJson(context.gatewayBaseUrl, "/api/v1/voice/runtime", context.authToken);
   if (!voiceRuntime.ok) {
     repairs.push({
       checkId: id,
@@ -1328,13 +1307,7 @@ async function checkLlmActiveModelMetadata(
     };
   }
 
-  const tokenQueryParam = context.tokenQueryParam ?? "access_token";
-  const config = await fetchGatewayJson(
-    context.gatewayBaseUrl,
-    "/api/v1/llm/config",
-    context.authToken,
-    tokenQueryParam,
-  );
+  const config = await fetchGatewayJson(context.gatewayBaseUrl, "/api/v1/llm/config", context.authToken);
   if (!config.ok) {
     repairs.push({
       checkId: id,
@@ -1785,12 +1758,8 @@ async function fetchGatewayJson(
   baseUrl: string,
   endpoint: string,
   authToken?: string,
-  tokenQueryParam = "access_token",
 ): Promise<{ ok: boolean; detail: string; payload?: unknown }> {
   const url = new URL(endpoint, `${baseUrl}/`);
-  if (authToken?.trim()) {
-    url.searchParams.set(tokenQueryParam, authToken.trim());
-  }
   const headers: Record<string, string> = {
     Accept: "application/json",
   };

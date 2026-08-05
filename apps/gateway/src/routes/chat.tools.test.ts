@@ -25,7 +25,7 @@ describe("chat tool routes", () => {
   }
 
   it("lists pending approvals with the active approval summary", async () => {
-    const listChatPendingApprovals = vi.fn(() => [
+    const listChatPendingApprovals = vi.fn(async () => [
       { approvalId: "stale-approval", stale: true },
       { approvalId: "active-approval" },
       { approvalId: "queued-approval", stale: false },

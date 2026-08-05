@@ -357,8 +357,9 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
+    const cronReviewQueueEnabled = await fastify.services.dashboard.isFeatureEnabled("cronReviewQueueV1Enabled");
     const [reviewQueue, realtimeEvents, sessions, cronJobs, improvementReports, replayRuns] = await Promise.all([
-      fastify.services.dashboard.isFeatureEnabled("cronReviewQueueV1Enabled")
+      cronReviewQueueEnabled
         ? fastify.services.cron.listCronReviewQueue(parsed.data.cronReviewLimit)
         : Promise.resolve([]),
       fastify.services.dashboard.listRealtimeEvents(parsed.data.eventLimit),

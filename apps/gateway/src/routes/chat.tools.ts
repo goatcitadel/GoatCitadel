@@ -30,9 +30,9 @@ export function registerChatToolRoutes(fastify: FastifyInstance): void {
     if (!query.success) {
       return reply.code(400).send({ error: query.error.flatten() });
     }
-    const items = fastify.services.chatTools.listChatPendingApprovals(
+    const items = (await fastify.services.chatTools.listChatPendingApprovals(
       query.data.sessionId,
-    ) as CodeModeApprovalQueueItem[];
+    )) as CodeModeApprovalQueueItem[];
     const activeItems = items.filter((item) => !item.stale);
     return reply.send({
       items,

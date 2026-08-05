@@ -131,14 +131,19 @@ describe("doctor engine loop24 diagnostics coverage", () => {
     expect(report.summary.exitCode).toBe(0);
   });
 
-  it("warns when deep runtime settings cannot be loaded and preserves token query auth", async () => {
+  it("warns when deep runtime settings cannot be loaded without leaking bearer auth into the query", async () => {
     const rootDir = await createDoctorFixture();
     const seenUrls: string[] = [];
+    const seenAuthorizationHeaders: string[] = [];
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (input: string | URL | Request) => {
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
         const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
         seenUrls.push(url);
+        const authorization = new Headers(init?.headers).get("Authorization");
+        if (authorization) {
+          seenAuthorizationHeaders.push(authorization);
+        }
         if (url.includes("/health")) {
           return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
         }
@@ -158,7 +163,9 @@ describe("doctor engine loop24 diagnostics coverage", () => {
       tokenQueryParam: "gateway_token",
     });
 
-    expect(seenUrls).toContain("http://127.0.0.1:8787/api/v1/settings?gateway_token=token+with+spaces");
+    expect(seenUrls).toContain("http://127.0.0.1:8787/api/v1/settings");
+    expect(seenUrls.some((url) => url.includes("gateway_token"))).toBe(false);
+    expect(seenAuthorizationHeaders).toContain("Bearer token with spaces");
     expect(report.checks.find((check) => check.id === "gateway.deep-runtime")).toMatchObject({
       status: "warn",
       detail: expect.stringContaining("Deep check could not load /api/v1/settings: HTTP 503"),

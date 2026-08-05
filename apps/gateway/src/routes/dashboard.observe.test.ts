@@ -19,7 +19,7 @@ describe("dashboard observe aggregate routes", () => {
     app = Fastify();
     app.decorate("services", {
       dashboard: {
-        isFeatureEnabled: vi.fn(() => true),
+        isFeatureEnabled: vi.fn(async () => true),
         listRealtimeEvents: vi.fn(() => [{ eventId: "evt-1", sequence: 1 }]),
         listSessions: vi.fn(() => [{ sessionId: "session-1" }]),
       },
@@ -63,7 +63,7 @@ describe("dashboard observe aggregate routes", () => {
     app = Fastify();
     app.decorate("services", {
       dashboard: {
-        isFeatureEnabled: vi.fn((flag: string) => flag !== "cronReviewQueueV1Enabled"),
+        isFeatureEnabled: vi.fn(async (flag: string) => flag !== "cronReviewQueueV1Enabled"),
         listRealtimeEvents: vi.fn(() => [{ eventId: "evt-1", sequence: 1 }]),
         listSessions: vi.fn(() => [{ sessionId: "session-1" }]),
       },

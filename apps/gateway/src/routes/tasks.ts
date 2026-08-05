@@ -559,15 +559,21 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/agentic/availability", async (_request, reply) => {
     const generatedAt = new Date().toISOString();
     try {
+      const [providers, plugins, channelCatalog, channelConnections] = await Promise.all([
+        fastify.services.llm.listLlmProviders(),
+        fastify.services.integrations.listIntegrationPlugins(),
+        fastify.services.integrations.listIntegrationCatalog("channel"),
+        fastify.services.integrations.listIntegrationConnections("channel"),
+      ]);
       return reply.send(
         projectProviderRuntimePublicValue(
           buildAgenticRuntimeAvailability({
             generatedAt,
             harnesses: probeAgenticHarnessAvailability(buildAgenticHarnessProbeOptions(generatedAt)),
-            providers: fastify.services.llm.listLlmProviders(),
-            plugins: fastify.services.integrations.listIntegrationPlugins(),
-            channelCatalog: await fastify.services.integrations.listIntegrationCatalog("channel"),
-            channelConnections: fastify.services.integrations.listIntegrationConnections("channel"),
+            providers,
+            plugins,
+            channelCatalog,
+            channelConnections,
             a2a: fastify.services.a2a.getStatus({ checkedAt: generatedAt }),
           }),
         ),

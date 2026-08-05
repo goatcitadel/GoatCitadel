@@ -1271,7 +1271,7 @@ function buildApp(
       ]),
     },
     integrations: {
-      listIntegrationPlugins: vi.fn(() => [
+      listIntegrationPlugins: vi.fn(async () => [
         {
           pluginId: "plugin-corrupt",
           label: "Corrupt Plugin",
@@ -1302,7 +1302,7 @@ function buildApp(
           capabilities: ["channel.send"],
         },
       ]),
-      listIntegrationConnections: vi.fn(() => [
+      listIntegrationConnections: vi.fn(async () => [
         {
           connectionId: "conn-telegram",
           catalogId: "channel.telegram",

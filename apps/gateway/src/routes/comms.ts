@@ -172,7 +172,8 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    const deliveryRecords = fastify.services.comms.listChannelDeliveryRuntime() as ChannelDeliveryRuntimeRecord[];
+    const deliveryRecords =
+      (await fastify.services.comms.listChannelDeliveryRuntime()) as ChannelDeliveryRuntimeRecord[];
     const deliveries = deliveryRecords
       .filter((record) => !parsed.data.connectionId || record.connectionId === parsed.data.connectionId)
       .slice(0, parsed.data.limit)

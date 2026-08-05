@@ -257,7 +257,7 @@ describe("comms routes", () => {
   });
 
   it("lists channel delivery runtime records with retry and stale state visible", async () => {
-    const listChannelDeliveryRuntime = vi.fn(() => [
+    const listChannelDeliveryRuntime = vi.fn(async () => [
       {
         deliveryId: "delivery-retry",
         connectionId: "11111111-1111-4111-8111-111111111111",
@@ -356,7 +356,7 @@ describe("comms routes", () => {
   });
 
   it("filters channel delivery runtime records by connection id and caps the limit", async () => {
-    const listChannelDeliveryRuntime = vi.fn(() => [
+    const listChannelDeliveryRuntime = vi.fn(async () => [
       {
         deliveryId: "delivery-one",
         connectionId: "11111111-1111-4111-8111-111111111111",
