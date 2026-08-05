@@ -14,14 +14,14 @@ overrides:
   ip-address: 10.3.1
   fast-uri: 3.1.5
   '@hono/node-server': 2.0.11
-  hono: 4.12.27
+  hono: 4.12.34
   lodash: 4.18.1
   find-my-way: 9.7.0
-  postcss: 8.5.18
+  postcss: 8.5.23
   qs: 6.15.2
   shell-quote: 1.9.0
   tar: 7.5.18
-  undici: 6.27.0
+  undici: 6.28.0
   uuid: 14.0.0
   ws@^8.0.0: 8.21.0
   '@babel/core@^7.0.0': 7.29.6
@@ -185,8 +185,8 @@ importers:
         specifier: npm:@typescript/typescript6@6.0.2
         version: '@typescript/typescript6@6.0.2'
       undici:
-        specifier: 6.27.0
-        version: 6.27.0
+        specifier: 6.28.0
+        version: 6.28.0
       zod:
         specifier: 3.25.76
         version: 3.25.76
@@ -600,8 +600,8 @@ importers:
         specifier: 0.35.3
         version: 0.35.3(@types/node@22.19.19)
       undici:
-        specifier: 6.27.0
-        version: 6.27.0
+        specifier: 6.28.0
+        version: 6.28.0
       unpdf:
         specifier: 1.6.2
         version: 1.6.2
@@ -1379,7 +1379,7 @@ packages:
     resolution: {integrity: sha512-bjD221KPLoJTWUwso1J6fGKiTXEUFedG/s0visavY4zakFPkeGURMRNly+FhBHs7T8Dz4qHaZIMX9ZoJHSJtKA==}
     engines: {node: '>=20'}
     peerDependencies:
-      hono: 4.12.27
+      hono: 4.12.34
 
   '@humanfs/core@0.19.1':
     resolution: {integrity: sha512-5DyQ4+1JEUzejeK1JGICcideyfUbGixgS9jNgex5nqkW+cY7WZhxBigmieN5Qnw9ZosSNVC9KQKyb+GUaGyKUA==}
@@ -4669,8 +4669,8 @@ packages:
   hoist-non-react-statics@3.3.2:
     resolution: {integrity: sha512-/gGivxi8JPKWNm/W0jSmzcMPpfpPLc3dY/6GxhX2hQ9iGj3aDfklV4ET7NjKpSinLpJ5vafa9iiGIEZg10SfBw==}
 
-  hono@4.12.27:
-    resolution: {integrity: sha512-1yrb/+w6HWQJrUCLkJ2IF5jNIPvvFkblV5RNOYl6bV+OA6p9GLcMpHFFGTosSvHvcAUibuUukRqhlYI4z32C7Q==}
+  hono@4.12.34:
+    resolution: {integrity: sha512-GqXJqY/xJkJmuloTrnV1ZEXG3fqte+VjkUqoRNZXcrUidiUOP4fMSIHHY4tsqZBK++kVyWmt/AAfSUuy57/eSA==}
     engines: {node: '>=16.9.0'}
 
   hosted-git-info@9.0.3:
@@ -5797,8 +5797,8 @@ packages:
     resolution: {integrity: sha512-orRsuYpJVw8LdAwqqLykBj9ecS5/cRHlI5+nvTo8LcCKmzDmqVORXtOIYEEQuL9D4BxtA1lm5isAqzQZCoQ6Eg==}
     engines: {node: '>=4'}
 
-  postcss@8.5.18:
-    resolution: {integrity: sha512-xdB1oSLHbz1vRWgCDalrCqEFTWzFlhqFC5tIHLMOSUIjhm3XXQ1qrFy8S/ESr1JYRRXqM3c1QFiMZUJdUTqyMQ==}
+  postcss@8.5.23:
+    resolution: {integrity: sha512-g50586zr4bZmwFiTlflMu8E0bDTb5I5gertgwAKmsdUlTQIhZtunzUlD1WSzwcVWPoAVpsrA6vlfCD7oXvRwgg==}
     engines: {node: ^10 || ^12 || >=14}
 
   postgres-array@2.0.0:
@@ -6581,8 +6581,8 @@ packages:
   undici-types@7.24.6:
     resolution: {integrity: sha512-WRNW+sJgj5OBN4/0JpHFqtqzhpbnV0GuB+OozA9gCL7a993SmU+1JBZCzLNxYsbMfIeDL+lTsphD5jN5N+n0zg==}
 
-  undici@6.27.0:
-    resolution: {integrity: sha512-YmfV3YnEDzXRC5lZ2jWtWWHKGUm1zIt8AhesR1tens+HTNv+YZlN/dp6G727LOvMJ8xjP9Be7Y2Sdr96LDm+pg==}
+  undici@6.28.0:
+    resolution: {integrity: sha512-LIY910g9TI13YS95lrMFrs8Rm/u/irgHeTWoKCoteeJ04CUJ92eEfj0rVn+7VKMPBpUPiUoBKfhNyLI23EE/KA==}
     engines: {node: '>=18.17'}
 
   unicorn-magic@0.3.0:
@@ -7511,7 +7511,7 @@ snapshots:
       ssri: 13.0.1
       tar: 7.5.18
       treeverse: 3.0.0
-      undici: 6.27.0
+      undici: 6.28.0
       walk-up-path: 4.0.0
       xml-js: 1.6.11
       yaml: 2.9.0
@@ -7571,7 +7571,7 @@ snapshots:
       discord-api-types: 0.38.43
       magic-bytes.js: 1.13.0
       tslib: 2.8.1
-      undici: 6.27.0
+      undici: 6.28.0
 
   '@discordjs/util@1.2.0':
     dependencies:
@@ -7802,9 +7802,9 @@ snapshots:
       protobufjs: 7.6.5
       yargs: 17.7.2
 
-  '@hono/node-server@2.0.11(hono@4.12.27)':
+  '@hono/node-server@2.0.11(hono@4.12.34)':
     dependencies:
-      hono: 4.12.27
+      hono: 4.12.34
 
   '@humanfs/core@0.19.1': {}
 
@@ -8133,7 +8133,7 @@ snapshots:
 
   '@modelcontextprotocol/sdk@1.29.0(zod@3.25.76)':
     dependencies:
-      '@hono/node-server': 2.0.11(hono@4.12.27)
+      '@hono/node-server': 2.0.11(hono@4.12.34)
       ajv: 8.18.0
       ajv-formats: 3.0.1(ajv@8.18.0)
       content-type: 1.0.5
@@ -8143,7 +8143,7 @@ snapshots:
       eventsource-parser: 3.0.6
       express: 5.2.1
       express-rate-limit: 8.3.2(express@5.2.1)
-      hono: 4.12.27
+      hono: 4.12.34
       jose: 6.2.2
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
@@ -10131,7 +10131,7 @@ snapshots:
       parse5: 7.3.0
       parse5-htmlparser2-tree-adapter: 7.1.0
       parse5-parser-stream: 7.1.2
-      undici: 6.27.0
+      undici: 6.28.0
       whatwg-mimetype: 4.0.0
 
   chownr@3.0.0: {}
@@ -10570,7 +10570,7 @@ snapshots:
       lodash.snakecase: 4.1.1
       magic-bytes.js: 1.13.0
       tslib: 2.8.1
-      undici: 6.27.0
+      undici: 6.28.0
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -11192,7 +11192,7 @@ snapshots:
     dependencies:
       react-is: 16.13.1
 
-  hono@4.12.27: {}
+  hono@4.12.34: {}
 
   hosted-git-info@9.0.3:
     dependencies:
@@ -11418,7 +11418,7 @@ snapshots:
       saxes: 6.0.0
       symbol-tree: 3.2.4
       tough-cookie: 6.0.1
-      undici: 6.27.0
+      undici: 6.28.0
       w3c-xmlserializer: 5.0.0
       webidl-conversions: 8.0.1
       whatwg-mimetype: 5.0.0
@@ -12543,7 +12543,7 @@ snapshots:
       cssesc: 3.0.0
       util-deprecate: 1.0.2
 
-  postcss@8.5.18:
+  postcss@8.5.23:
     dependencies:
       nanoid: 3.3.16
       picocolors: 1.1.1
@@ -13057,7 +13057,7 @@ snapshots:
       node-fetch: 3.3.2
       open: 11.0.0
       ora: 8.2.0
-      postcss: 8.5.18
+      postcss: 8.5.23
       postcss-selector-parser: 7.1.1
       prompts: 2.4.2
       recast: 0.23.11
@@ -13509,7 +13509,7 @@ snapshots:
 
   undici-types@7.24.6: {}
 
-  undici@6.27.0: {}
+  undici@6.28.0: {}
 
   unicorn-magic@0.3.0: {}
 
@@ -13649,7 +13649,7 @@ snapshots:
       esbuild: 0.28.1
       fdir: 6.5.0(picomatch@4.0.4)
       picomatch: 4.0.4
-      postcss: 8.5.18
+      postcss: 8.5.23
       rollup: 4.59.0
       tinyglobby: 0.2.15
     optionalDependencies:
@@ -13665,7 +13665,7 @@ snapshots:
       esbuild: 0.28.1
       fdir: 6.5.0(picomatch@4.0.4)
       picomatch: 4.0.4
-      postcss: 8.5.18
+      postcss: 8.5.23
       rollup: 4.59.0
       tinyglobby: 0.2.15
     optionalDependencies:
